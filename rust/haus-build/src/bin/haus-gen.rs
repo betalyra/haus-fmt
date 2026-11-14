@@ -1,13 +1,15 @@
 //! Code generation for languages without build scripts.
 //!
-//!     haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--package DIR=ALIAS]... [--codec ID=MODULE]...
-//!     haus-gen roc-package DIR [--out FILE] [--package DIR=ALIAS]...
+//!     haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--package DIR=ALIAS]... [--codec ID=MODULE]... [--json]
+//!     haus-gen roc-package DIR [--out FILE] [--package DIR=ALIAS]... [--json]
 //!
 //! `--package DIR=ALIAS`: a schema package (its directory), and the alias the
 //! Roc app or package imports its Roc package under. `--codec ID=MODULE`: the
 //! Roc module MODULE is the codec for the type with this id. Without `--out`,
 //! the module is written to standard output. `--without-attributes` leaves the
 //! schema's attributes out, for tests that they don't matter (spec §15).
+//! `--json` also generates each type's plain JSON reader and writer
+//! (`from_json_<name>`, `to_json_<name>`, spec §16.3).
 
 use haus_build::roc::RocConfig;
 use std::io::{self, Write};
@@ -16,8 +18,8 @@ use std::process::ExitCode;
 use std::{env, fs};
 
 const USAGE: &str =
-    "usage: haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--package DIR=ALIAS]... [--codec ID=MODULE]...
-       haus-gen roc-package DIR [--out FILE] [--package DIR=ALIAS]...";
+    "usage: haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--package DIR=ALIAS]... [--codec ID=MODULE]... [--json]
+       haus-gen roc-package DIR [--out FILE] [--package DIR=ALIAS]... [--json]";
 
 fn main() -> ExitCode {
     match run(&env::args().skip(1).collect::<Vec<_>>()) {
@@ -48,6 +50,10 @@ fn run(args: &[String]) -> Result<(), String> {
         if flag == "--without-attributes" {
             args.config = args.config.without_attributes();
             args.quiet = true;
+            continue;
+        }
+        if flag == "--json" {
+            args.config = args.config.json();
             continue;
         }
         let value = flags.next().ok_or_else(|| format!("{flag} needs a value"))?;

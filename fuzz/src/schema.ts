@@ -98,6 +98,8 @@ export async function run(argv: readonly string[]): Promise<number> {
   const perType = new Map(entries.map((e) => [`${e.suite}.${e.type}`, { total: 0, ok: 0 }]))
   const found = new Map<string, { case: SchemaCase; pattern: string; outcomes: Outcome[]; hits: number }>()
   const leaks = new Map<string, { case: SchemaCase; reason: string; leaked: string }>()
+  /** Per runner, the parts of secrets found to come from its own messages ("the value is not shown"). */
+  const templateWords = new Map<string, Set<string>>()
   let accepted = 0
   for (let done = 0; done < count; done += batch) {
     const cases = Array.from({ length: Math.min(batch, count - done) }, () => {
@@ -116,9 +118,14 @@ export async function run(argv: readonly string[]): Promise<number> {
       // An error inside a Secret must not show the value (spec §15).
       rs.forEach((o, k) => {
         if (o.kind !== "err" || !mentionsSecret(envs.get(c.suite)!, { ref: c.type })) return
-        const leaked = secretParts(envs.get(c.suite)!, c.type, c.text).find((x) => o.reason.includes(x))
         const key = `${runners[k]!.name} ${c.suite}.${c.type}`
-        if (leaked !== undefined && !leaks.has(key)) leaks.set(key, { case: c, reason: o.reason, leaked })
+        if (leaks.has(key)) return
+        const runner = runners[k]!
+        const rerun = (text: string) => runner.run(join(out, "secret.txt"), [{ ...c, text }])[0]!
+        const words = templateWords.get(runner.name) ?? new Set<string>()
+        templateWords.set(runner.name, words)
+        const leaked = shownSecret(c.text, o.reason, secretParts(envs.get(c.suite)!, c.type, c.text), rerun, words)
+        if (leaked !== undefined) leaks.set(key, { case: c, reason: o.reason, leaked })
       })
       const p = pattern(c, rs)
       if (!disagrees(p)) return
@@ -193,6 +200,41 @@ export function mentionsSecret(env: Env, t: Type, seen: Set<string> = new Set())
 }
 
 /**
+ * The first part of a secret that an error message shows, or undefined.
+ * A part the message contains is confirmed by running the case again with
+ * that part disguised (letters and digits shifted, same length): if the new
+ * message still contains it, it comes from the binding's message template
+ * (a key `value` against "the value is not shown"), not from the data, and
+ * is remembered in `template` for this runner. A part that can't be
+ * disguised (written with escapes) or whose new outcome isn't an error
+ * counts as shown.
+ */
+export function shownSecret(
+  text: string, reason: string, parts: readonly string[], rerun: (text: string) => Outcome, template: Set<string>,
+): string | undefined {
+  for (const part of parts) {
+    if (!reason.includes(part) || template.has(part)) continue
+    if (!text.includes(part)) return part
+    const again = rerun(text.split(part).join(disguise(part)))
+    if (again.kind === "err" && again.reason.includes(part)) {
+      template.add(part)
+      continue
+    }
+    return part
+  }
+  return undefined
+}
+
+/** Another string of the same shape: each letter and digit shifted by one (a digit never to 0, so a number stays one). */
+export const disguise = (s: string): string =>
+  s.replace(/[a-zA-Z0-9]/g, (c) => {
+    if (c >= "0" && c <= "9") return c === "9" ? "1" : String.fromCharCode(c.charCodeAt(0) + 1)
+    if (c === "z") return "a"
+    if (c === "Z") return "A"
+    return String.fromCharCode(c.charCodeAt(0) + 1)
+  })
+
+/**
  * The strings, numbers and keys at secret places of a case's value (at least
  * 5 characters, so that they don't turn up in a message by chance).
  */
@@ -246,7 +288,7 @@ type RecordFields = readonly { readonly key: string; readonly type: Type }[]
  * canonical form doesn't disagree (the spelling matters), slices of the text
  * are removed instead.
  */
-function shrinkCase(c: SchemaCase, p: string, patterns: (cs: readonly SchemaCase[]) => string[]): SchemaCase {
+export function shrinkCase(c: SchemaCase, p: string, patterns: (cs: readonly SchemaCase[]) => string[]): SchemaCase {
   const withText = (text: string) => ({ suite: c.suite, type: c.type, text })
   let value: Value | undefined
   try {

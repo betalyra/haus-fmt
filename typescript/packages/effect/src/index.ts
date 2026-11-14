@@ -34,6 +34,9 @@
  */
 import { HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Value } from "@haus-fmt/haus"
 import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus"
+import {
+  fromJson as valueOfJson, fromPlainJson, HausDecodeError, HausEncodeError, jsonDepth, MAX_DEPTH, parseJson, parseJsonLines, stringifyJson, toPlainJson, type Json, type JsonType,
+} from "@haus-fmt/haus"
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
 import { codec, entries, isCodec, setId, type AnyCodec, type Checked, type Decoded, type Named } from "./codec.js"
 import { withCodecs } from "./schema-file.js"
@@ -41,8 +44,9 @@ import {
   checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decodeBudget, DEFAULT_ENCODE_STEPS, guarded, isRedacted, NUMBER, POSITIONAL,
   PRELUDE_TAG, secretMessage, UNKNOWN_TAG, VALUE,
 } from "./convert.js"
+import { jsonTypeOf } from "./json.js"
 
-export type { Value }
+export type { Json, Value }
 
 // ── errors ───────────────────────────────────────────────────
 
@@ -397,38 +401,58 @@ class SourceFailure<E> {
   constructor(readonly error: E) {}
 }
 
+/** Decodes a source of text or bytes into a stream of values. */
+export interface SourceDecoder<A, R> {
+  (source: ChunkSource): Stream.Stream<A, HausError, R>
+  <E, R2>(source: Stream.Stream<string | Uint8Array, E, R2>): Stream.Stream<A, HausError | E, R | R2>
+}
+
+/**
+ * Items read from a source as they arrive (`read`: haus values, JSON
+ * lines), each decoded as it is emitted. The source's own errors pass
+ * through; syntax errors are HausParseErrors; anything else is a bug.
+ */
+const decodeSource = <X, A, R>(
+  read: (chunks: ChunkSource) => AsyncIterable<X>,
+  decodeItem: (item: X) => Effect.Effect<A, HausSchemaError, R>,
+  span: string,
+): SourceDecoder<A, R> => {
+  const decodeChunks = <E>(chunks: ChunkSource): Stream.Stream<A, HausError | E, R> =>
+    Stream.fromAsyncIterable(read(chunks), (e) => e).pipe(
+      Stream.catch((e): Stream.Stream<never, HausParseError | E> =>
+        e instanceof SourceFailure ? Stream.fail(e.error as E)
+        : Option.match(parseErrorOf(e), { onNone: () => Stream.die(e), onSome: Stream.fail })),
+      Stream.zipWithIndex,
+      Stream.mapEffect(([item, index]) =>
+        decodeItem(item).pipe(Effect.mapError(({ message, path }) => new HausSchemaError({ message, index, ...(path ? { path } : {}) })))),
+    )
+  function decode(source: ChunkSource): Stream.Stream<A, HausError, R>
+  function decode<E, R2>(source: Stream.Stream<string | Uint8Array, E, R2>): Stream.Stream<A, HausError | E, R | R2>
+  function decode<E, R2>(source: ChunkSource | Stream.Stream<string | Uint8Array, E, R2>): Stream.Stream<A, HausError | E, R | R2> {
+    const decoded = Stream.isStream(source)
+      ? Stream.unwrap(
+        Stream.toAsyncIterableEffect(
+          (source as Stream.Stream<string | Uint8Array, E, R2>).pipe(Stream.mapError((e) => new SourceFailure(e))),
+        ).pipe(Effect.map((chunks) => decodeChunks<E>(chunks))),
+      )
+      : decodeChunks<never>(source as ChunkSource)
+    return decoded.pipe(Stream.withSpan(span))
+  }
+  return decode
+}
+
 /**
  * Parse and decode a stream of values as they arrive. The source is an Effect
  * Stream of text or bytes (e.g. `FileSystem.stream(path)`; its errors pass
  * through), an async iterable or a web ReadableStream. Parsing stays in the
  * optimized core reader; each completed value is decoded as it is emitted.
  */
-export const decodeStream = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
-  type A = Decoded<S, C>
-  const fromValue = (decodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Value) => Effect.Effect<A, HausSchemaError, S["DecodingServices"]>)(schema, ...codecs)
-  const decodeChunks = <E>(chunks: ChunkSource): Stream.Stream<A, HausError | E, S["DecodingServices"]> =>
-    Stream.fromAsyncIterable(parseStream(chunks), (e) => e).pipe(
-      // The source's own errors pass through; syntax errors are HausParseErrors; anything else is a bug.
-      Stream.catch((e): Stream.Stream<never, HausParseError | E> =>
-        e instanceof SourceFailure ? Stream.fail(e.error as E)
-        : Option.match(parseErrorOf(e), { onNone: () => Stream.die(e), onSome: Stream.fail })),
-      Stream.zipWithIndex,
-      Stream.mapEffect(([value, index]) =>
-        fromValue(value).pipe(Effect.mapError(({ message, path }) => new HausSchemaError({ message, index, ...(path ? { path } : {}) })))),
-    )
-  function decode(source: ChunkSource): Stream.Stream<A, HausError, S["DecodingServices"]>
-  function decode<E, R>(source: Stream.Stream<string | Uint8Array, E, R>): Stream.Stream<A, HausError | E, S["DecodingServices"] | R>
-  function decode<E, R>(source: ChunkSource | Stream.Stream<string | Uint8Array, E, R>): Stream.Stream<A, HausError | E, S["DecodingServices"] | R> {
-    const decoded = Stream.isStream(source)
-      ? Stream.unwrap(
-        Stream.toAsyncIterableEffect(
-          (source as Stream.Stream<string | Uint8Array, E, R>).pipe(Stream.mapError((e) => new SourceFailure(e))),
-        ).pipe(Effect.map((chunks) => decodeChunks<E>(chunks))),
-      )
-      : decodeChunks<never>(source as ChunkSource)
-    return decoded.pipe(Stream.withSpan("Haus.decodeStream"))
-  }
-  return decode
+export const decodeStream = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(
+  schema: S,
+  ...codecs: C & Checked<S, C>
+): SourceDecoder<Decoded<S, C>, S["DecodingServices"]> => {
+  const fromValue = (decodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Value) => Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>)(schema, ...codecs)
+  return decodeSource((chunks) => parseStream(chunks), fromValue, "Haus.decodeStream")
 }
 
 // ── encoding ─────────────────────────────────────────────────
@@ -489,6 +513,109 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
       Stream.withSpan("Haus.encodeStream"),
     )
 }
+
+// ── JSON (spec §16) ──────────────────────────────────────────
+
+/** A JSON mapping error of the core (JSON that doesn't fit, a value without a JSON form) as a HausSchemaError. */
+const jsonErrorOf = (e: unknown): Option.Option<HausSchemaError> =>
+  e instanceof HausDecodeError || e instanceof HausEncodeError ? Option.some(conversionError({ message: e.reason, path: e.path })) : Option.none()
+
+/** The plain JSON form of a schema with codecs: the form of its encoded side. */
+const jsonForm = (schema: Schema.Top, codecs: ReadonlyArray<AnyCodec>): JsonType => jsonTypeOf(SchemaAST.toEncoded(target(schema, codecs).ast))
+
+/** JSON may nest this deeply: enough for every haus value within the default nesting limit (spec §7). */
+const JSON_LIMITS = { maxDepth: jsonDepth(MAX_DEPTH) }
+
+/**
+ * Encode a typed value as plain JSON (spec §16.3), a JSON value
+ * (`JsonNumber`s keep numbers exact; `Haus.toJson` writes the text).
+ */
+export const toJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
+  const type = jsonForm(schema, codecs)
+  const toValue = (encodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>) => Effect.Effect<Value, HausSchemaError, S["EncodingServices"]>)(schema, ...codecs)
+  return (value: Decoded<S, C>): Effect.Effect<Json, HausSchemaError, S["EncodingServices"]> =>
+    toValue(value).pipe(Effect.flatMap((v) => fromSync(() => toPlainJson(type, v), jsonErrorOf)))
+}
+
+/**
+ * Encode a typed value as plain JSON text (spec §16.3), compact: what a JSON
+ * consumer expects, with the schema saying what JSON can't. `BigInt` and the
+ * 64-bit integers of schema files are strings, decimals strings (`"19.90"`),
+ * bytes base64, an `Option` `null` or its value (tagged when its value can
+ * be `null`), literal unions strings, tagged structs `{"_tag": …, …}`.
+ *
+ *   yield* Haus.toJson(Order)(order)   // '{"id":1,"total":"19.90","note":null}'
+ */
+export const toJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
+  const toJsonOf = (toJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>) => Effect.Effect<Json, HausSchemaError, S["EncodingServices"]>)(schema, ...codecs)
+  return Effect.fn("Haus.toJson")(function* (value: Decoded<S, C>) {
+    const json = yield* toJsonOf(value)
+    return yield* fromSync(() => stringifyJson(json), jsonErrorOf)
+  })
+}
+
+/** Decode plain JSON (spec §16.3) that is already parsed (with `parseJson`, which keeps numbers exact). */
+export const fromJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
+  const type = jsonForm(schema, codecs)
+  const fromValue = (decodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Value) => Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>)(schema, ...codecs)
+  return (json: Json): Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]> =>
+    fromSync(() => fromPlainJson(type, json), jsonErrorOf).pipe(Effect.flatMap(fromValue))
+}
+
+/**
+ * Decode plain JSON text (spec §16.3): the forms `Haus.toJson` writes, with
+ * the rules of decoding haus (open structs ignore other members, integers
+ * must be whole numbers, an OpenUnion keeps other tags as `Unknown`).
+ * Text that isn't I-JSON (duplicate members, unpaired surrogates) fails with
+ * a HausParseError; JSON that doesn't fit the schema with a HausSchemaError.
+ */
+export const fromJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
+  const fromJsonOf = (fromJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (j: Json) => Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>)(schema, ...codecs)
+  return Effect.fn("Haus.fromJson")(function* (text: string) {
+    const json = yield* fromSync(() => parseJson(text, JSON_LIMITS), parseErrorOf)
+    return yield* fromJsonOf(json)
+  })
+}
+
+/**
+ * Decode a JSON Lines stream (one plain JSON text per line, spec §16) as the
+ * lines arrive, from the same sources as `Haus.decodeStream`. Errors carry
+ * the line's index.
+ */
+export const decodeJsonLines = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(
+  schema: S,
+  ...codecs: C & Checked<S, C>
+): SourceDecoder<Decoded<S, C>, S["DecodingServices"]> => {
+  const fromJsonOf = (fromJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (j: Json) => Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>)(schema, ...codecs)
+  return decodeSource((chunks) => parseJsonLines(chunks, { limits: JSON_LIMITS }), fromJsonOf, "Haus.decodeJsonLines")
+}
+
+/** Encode a stream of values as JSON Lines of their plain JSON (spec §16): one line per value, each ending in a line feed. */
+export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
+  const toJsonOf = (toJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>) => Effect.Effect<Json, HausSchemaError, S["EncodingServices"]>)(schema, ...codecs)
+  return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>): Stream.Stream<string, E | HausSchemaError, R | S["EncodingServices"]> =>
+    values.pipe(
+      Stream.zipWithIndex,
+      Stream.mapEffect(([value, index]) =>
+        toJsonOf(value).pipe(
+          Effect.flatMap((json) => fromSync(() => stringifyJson(json) + "\n", jsonErrorOf)),
+          Effect.mapError(({ message, path }) => new HausSchemaError({ message, index, ...(path ? { path } : {}) })),
+        )),
+      Stream.withSpan("Haus.encodeJsonLines"),
+    )
+}
+
+/**
+ * Read JSON text without a schema (spec §16.1), as a haus `Value`: objects
+ * as records, `true`/`false`/`null` as `True`/`False`/`None`, numbers exact.
+ * (For the lossless form of §16.2, use `Haus.Any`: `Haus.fromJson(Haus.Any)`
+ * and `Haus.toJson(Haus.Any)`.)
+ */
+export const valueFromJson = Effect.fn("Haus.valueFromJson")(function* (text: string) {
+  return yield* fromSync(() => valueOfJson(text), (e) => Option.orElse(parseErrorOf(e), () => jsonErrorOf(e)))
+})
+
+export { jsonTypeOf } from "./json.js"
 
 // ── codecs ───────────────────────────────────────────────────
 

@@ -1,0 +1,5 @@
+// For the JSON fuzzer (fuzz/README.md): a record payload with a field named
+// `_tag` has no plain JSON form (spec §16.3), and converters report it. Haus
+// decoding (§15) is unaffected.
+type Odd = < Odd { _tag: Int32, x?: String } | Even >
+type HasOdd = { odd?: Odd, n: Int32 }

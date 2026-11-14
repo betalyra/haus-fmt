@@ -22,12 +22,18 @@
 //! let wrong = haus::Value::Number("abc".into());
 //! assert_eq!(haus::to_string(&wrong).unwrap_err().to_string(), "not a number literal");
 //! ```
+//!
+//! [`json`] maps haus to JSON and back (spec §16): [`from_json`] reads any
+//! JSON, [`to_lossless_json`] / [`from_lossless_json`] carry every value
+//! unchanged, and generated types implement [`ToJson`] / [`FromJson`] for
+//! the plain JSON of their type.
 
 mod canonical;
 mod codec;
 pub mod de;
 mod error;
 mod float;
+pub mod json;
 mod parser;
 mod secret;
 pub mod ser;
@@ -41,6 +47,7 @@ pub use canonical::{canonical, compare, equals};
 pub use codec::{Codec, same_id};
 pub use de::{AnyTag, Bytes, Decimal, Decode, Int, Unknown};
 pub use error::{DecodeError, EncodeError, Error, Segment, SyntaxError};
+pub use json::{FromJson, Json, ToJson};
 pub use parser::{Limits, parse_with};
 pub use secret::Secret;
 pub use ser::Encode;
@@ -105,4 +112,31 @@ pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
         .enumerate()
         .map(|(i, v)| to_string(v).map(|line| line + ",\n").map_err(|e| e.within(Segment::Index(i))))
         .collect()
+}
+
+/// Read JSON without a schema (spec §16.1): an object as a record, an array
+/// as an array, a string as a string, a number as a number (its literal
+/// normalized: `1E+05` is `1e5`), `true` / `false` as `True` / `False`, and
+/// `null` as `None`.
+///
+/// ```
+/// let v = haus::from_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
+/// assert_eq!(haus::canonical(&v), "{note:None,paid:True,total:19.90}");
+/// ```
+pub fn from_json(text: &str) -> Result<Value, Error> {
+    json::value_from_str_with(text, &Limits::default())
+}
+
+/// Write a value in the lossless JSON form (spec §16.2): `19.90` is
+/// `{"num":"19.90"}`, `Some(1)` is `{"tag":"Some","args":[{"num":"1"}]}`.
+/// Fails, saying where, for a [`Value`] built in code that isn't a valid
+/// haus value within the limits.
+pub fn to_lossless_json(value: &Value) -> Result<String, EncodeError> {
+    json::to_string(value)
+}
+
+/// Read the lossless JSON form (spec §16.2), and nothing else: a bare number,
+/// `true`, `false`, `null` and objects with other members are errors.
+pub fn from_lossless_json(text: &str) -> Result<Value, Error> {
+    json::from_str(text)
 }

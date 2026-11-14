@@ -11,13 +11,14 @@
  * `Int32` etc. are JS numbers in their range, `Decimal` keeps the exact literal text.
  *
  * Every schema also encodes: `h.stringify(User, user)` writes haus text,
- * `h.encodeStream(Event, events)` writes a stream.
+ * `h.encodeStream(Event, events)` writes a stream. `h.toJson(User, user)`
+ * and `h.fromJson(User, json)` write and read plain JSON (spec §16.3).
  *
  * Decoding is linear in the input whatever the schema (spec §9.8): variants
  * dispatch on the tag, depth is limited, and every call has a work budget.
  * Types that contain themselves are declared with `h.Recursive`.
  */
-import { START } from "./errors.js"
+import { HausDecodeError, HausEncodeError, START, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
@@ -26,41 +27,15 @@ import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
+import { jsonDepthFor, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions } from "./json.js"
+import { fromPlainJson, toPlainJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-plain.js"
 import { Secret as SecretValue } from "./secret.js"
 
-export type { Value }
+export type { Json, JsonType, Value }
 
 // ── core ─────────────────────────────────────────────────────
 
-export type Path = readonly (string | number)[]
-
-export class HausDecodeError extends Error {
-  override readonly name = "HausDecodeError"
-
-  constructor(
-    /** Message without the path. */
-    readonly reason: string,
-    /** Where in the value the mismatch is, e.g. ["events", 2, "amount"]. */
-    readonly path: Path,
-  ) {
-    super(`${reason} at ${formatPath(path)}`)
-  }
-}
-
-/** A value that doesn't fit its schema when encoding (e.g. an Int that isn't a safe integer). */
-export class HausEncodeError extends Error {
-  override readonly name = "HausEncodeError"
-
-  constructor(
-    readonly reason: string,
-    readonly path: Path,
-  ) {
-    super(`${reason} at ${formatPath(path)}`)
-  }
-}
-
-export const formatPath = (path: Path) =>
-  "$" + path.map((p) => (typeof p === "number" ? `[${p}]` : /^[a-z_]\w*$/.test(p) ? `.${p}` : `[${JSON.stringify(p)}]`)).join("")
+export { formatPath, HausDecodeError, HausEncodeError, type Path } from "./errors.js"
 
 /**
  * Limits for one decode or encode call. They hold whatever the schema looks
@@ -249,7 +224,16 @@ export interface Schema<A> extends StandardSchemaV1<string | Value, A> {
    * `None` or any other value (spec §1).
    */
   readonly optional?: true | undefined
+  /**
+   * The plain JSON form of the type (spec §16.3), for `h.toJson` and
+   * `h.fromJson`. Every schema of this module has one; a schema written by
+   * hand without one has no plain JSON form.
+   */
+  readonly json?: JsonType | undefined
 }
+
+/** The plain JSON form of a schema: its own, or none. */
+export const jsonType = (schema: AnySchema): JsonType => schema.json ?? { kind: "none", expected: schema.expected }
 
 export type Infer<S> = S extends Schema<infer A> ? A : never
 
@@ -306,10 +290,11 @@ export const withStandard = <A, S extends Omit<Schema<A>, "~standard">>(schema: 
 }
 
 /** A schema from its decoder and encoder; every application counts one step. */
-const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: (value: A, at: At) => Value): Schema<A> => {
+const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: (value: A, at: At) => Value, json: JsonType): Schema<A> => {
   const self: Schema<A> = {
   "~standard": standard(() => self),
   expected,
+  json,
   decode: (v, at) => {
     at.step()
     return decode(v, at)
@@ -330,6 +315,7 @@ const string_ = make(
   "String",
   (v, p) => (v.kind === "string" ? v.value : mismatch("String", v, p)),
   (s, p) => (typeof s === "string" ? str(s) : invalid("a string", s, p)),
+  { kind: "string" },
 )
 
 const short = (text: string) => (text.length > 30 ? text.slice(0, 30) + "…" : text)
@@ -339,6 +325,7 @@ const int = make(
   "Int",
   (v, p) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : mismatch("Int", v, p)),
   (n, p) => (typeof n === "bigint" ? num(n.toString()) : invalid("a bigint", n, p)),
+  { kind: "integer", quoted: true },
 )
 
 /** A bounded integer as a JS number (Int8 … UInt32). Out of range is an error. */
@@ -347,7 +334,7 @@ const smallInt = (name: string, min: number, max: number) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return mismatch(name, v, p)
     const n = Number(v.text) + 0 // exact within these ranges (a longer literal is out of range anyway); + 0 turns -0 into 0
     return n >= min && n <= max ? n : p.fail(`${short(v.text)} is out of range for ${name} (${min} to ${max})`)
-  }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? num(String(n)) : invalid(`an integer from ${min} to ${max}`, n, p)))
+  }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? num(String(n)) : invalid(`an integer from ${min} to ${max}`, n, p)), { kind: "integer", quoted: false })
 
 /** A bounded integer as a bigint (Int64, UInt64). Out of range is an error. */
 const bigInt = (name: string, min: bigint, max: bigint) =>
@@ -355,7 +342,7 @@ const bigInt = (name: string, min: bigint, max: bigint) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return mismatch(name, v, p)
     const n = BigInt(v.text)
     return n >= min && n <= max ? n : p.fail(`${short(v.text)} is out of range for ${name} (${min} to ${max})`)
-  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? num(n.toString()) : invalid(`a bigint from ${min} to ${max}`, n, p)))
+  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? num(n.toString()) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true })
 
 const int8 = smallInt("Int8", -128, 127)
 const int16 = smallInt("Int16", -32768, 32767)
@@ -380,6 +367,7 @@ const float = (name: FloatType) => make(
     v.kind === "number" ? (toFloat(v.text, name) ?? p.fail(`${short(v.text)} is too large for ${name}`))
     : (specialFloat(v) ?? mismatch(name, v, p)),
   (n, p) => (typeof n === "number" ? (floatValue(n, name) ?? invalid(`a number within the range of ${name}`, n, p)) : invalid("a number", n, p)),
+  { kind: "float" },
 )
 
 const float64 = float("Float64")
@@ -394,6 +382,7 @@ const decimal = make(
   "Decimal",
   (v, p) => (v.kind === "number" ? v.text : mismatch("Decimal", v, p)),
   (d, p) => numberFromText(d, 'a decimal string like "19.90"', p),
+  { kind: "decimal" },
 )
 
 /**
@@ -415,6 +404,7 @@ const bool = make(
       ? v.tag === "True"
       : mismatch("Bool (True | False)", v, p),
   (b, p) => (typeof b === "boolean" ? variant(b ? "True" : "False") : invalid("a boolean", b, p)),
+  { kind: "bool" },
 )
 
 /** A byte string, `x"0b34ff"`, as a Uint8Array. */
@@ -422,6 +412,7 @@ const bytes_ = make(
   "Bytes",
   (v, p) => (v.kind === "bytes" ? v.bytes : mismatch("Bytes", v, p)),
   (b, p) => (b instanceof Uint8Array ? bytesValue(b) : invalid("a Uint8Array", b, p)),
+  { kind: "bytes" },
 )
 
 /** A prelude scalar: `Tag("text")` where the text must match `format`. */
@@ -437,7 +428,7 @@ const taggedString = <A>(tag: string, format: RegExp, convert: (s: string) => A 
     const text = toText(a)
     if (!format.test(text) || convert(text) === undefined) return invalid(`a valid ${tag}`, text, p)
     return variant(tag, [str(text)])
-  })
+  }, { kind: "time", tag })
 
 /** `Date("2026-11-07")`, returned as the validated ISO string. */
 const date = taggedString("Date", /^\d{4}-\d{2}-\d{2}$/, (s) => (checkStdTime("Date", s) === undefined ? s : undefined), (s) => s)
@@ -495,6 +486,7 @@ const array_ = <A>(item: Schema<A>): Schema<readonly A[]> =>
     `Array ${item.expected}`,
     (v, p) => (v.kind === "array" ? v.items.map((x, i) => item.decode(x, p.child(i))) : mismatch(`Array ${item.expected}`, v, p)),
     (xs, p) => (Array.isArray(xs) ? p.enter(xs, () => arr((xs as readonly A[]).map((x, i) => item.encode(x, p.child(i))))) : invalid("an array", xs, p)),
+    { kind: "array", item: jsonType(item) },
   )
 
 export { array_ as Array }
@@ -521,6 +513,7 @@ const map_ = <A>(value: Schema<A>): Schema<ReadonlyMap<string, A>> =>
         return [k, value.encode(x, p.child(k))] as const
       }))))
     },
+    { kind: "map", value: jsonType(value) },
   )
 
 export { map_ as Map }
@@ -558,6 +551,7 @@ const maybe_ = <A>(inner: Schema<A>): Schema<Maybe<A>> =>
       if (a._tag === "None") return variant("None")
       return p.enter(a, () => variant("Some", [inner.encode((a as { readonly value: A }).value, p.child(0))]))
     },
+    { kind: "maybe", item: jsonType(inner) },
   )
 
 export const Maybe = Object.assign(maybe_, {
@@ -609,6 +603,8 @@ export type RecordOf<F extends Fields> = Simplify<
 
 export interface RecordSchema<A> extends Schema<A> {
   readonly kind: "record"
+  /** The record's field names, in order. */
+  readonly keys: ReadonlyArray<string>
   readonly decodeRecord: (value: HRecord, at: At) => A
   readonly encodeRecord: (value: A, at: At) => HRecord
 }
@@ -648,10 +644,13 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
       return rec(out)
     })
   }
+  const json: JsonRecordType = { kind: "record", fields: new globalThis.Map(entries.map(([k, s]) => [k, jsonType(s)])), closed: options.closed ?? false }
   const self: RecordSchema<RecordOf<F>> = {
     "~standard": standard(() => self),
     kind: "record",
+    keys: entries.map(([k]) => k),
     expected,
+    json,
     decodeRecord,
     encodeRecord,
     decode: (v, at) => {
@@ -690,12 +689,14 @@ type Cases = Readonly<Record<string, Case>>
  * The decoded form of each case:
  *   Unit          → { _tag }
  *   Record({...}) → { _tag, ...fields }        (`Circle { radius: 5 }`)
+ *                   { _tag, value: { ...fields } } when one of the fields is
+ *                   named `_tag`, which can't go beside the tag (`Odd { _tag: 1 }`)
  *   Tuple(a, b)   → { _tag, values: [a, b] }    (`Point(1, 2)`)
  *   any schema    → { _tag, value }             (`Ok("done")`)
  */
 export type CaseOf<T extends string, C> =
   C extends typeof Unit ? { readonly _tag: T }
-  : C extends RecordSchema<infer A> ? { readonly _tag: T } & A
+  : C extends RecordSchema<infer A> ? ("_tag" extends keyof A ? { readonly _tag: T; readonly value: A } : { readonly _tag: T } & A)
   : C extends TupleSchema<infer S> ? { readonly _tag: T; readonly values: { readonly [I in keyof S]: Infer<S[I]> } }
   : C extends Schema<infer A> ? { readonly _tag: T; readonly value: A }
   : never
@@ -720,6 +721,10 @@ const isUnknown = (u: unknown): u is { readonly _tag: "@unknown"; readonly value
 const isRecordSchema = (c: Case): c is RecordSchema<any> => "kind" in c && c.kind === "record"
 const isTuple = (c: Case): c is TupleSchema<readonly AnySchema[]> => "kind" in c && c.kind === "tuple"
 
+/** A record payload with a field named `_tag`: its fields can't go beside the tag, so they are nested, `{ _tag, value: { … } }`. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const nestsPayload = (c: RecordSchema<any>): boolean => c.keys.includes("_tag")
+
 /** A list of tags for error messages, shortened for very large variants. */
 const tagList = (tags: readonly string[]) => (tags.length > 10 ? `${tags.slice(0, 10).join(" | ")} | … (${tags.length} tags)` : tags.join(" | "))
 
@@ -728,6 +733,7 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
   const expected = `< ${tagList(tags)}${open ? " | _" : ""} >`
   // Dispatch is one hash lookup on the tag: never "try each case and backtrack".
   const byTag = new Map<string, Case>(Object.entries(cases))
+  const json: JsonType = { kind: "variant", open, cases: new Map([...byTag].map(([tag, c]) => [tag, jsonCase(c)])) }
   return make(expected, (v, at) => {
     if (v.kind !== "variant") return mismatch(expected, v, at)
     const c = byTag.get(v.tag)
@@ -747,6 +753,7 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
       const arg = v.args[0]!
       if (arg.kind !== "record") return mismatch(`${v.tag} { … }`, arg, at.child(0))
       const out = c.decodeRecord(arg, at) as Record<string, unknown>
+      if (nestsPayload(c)) return { _tag: v.tag, value: out } as A
       return Object.defineProperties({ _tag: v.tag }, Object.getOwnPropertyDescriptors(out)) as A
     }
     if (isTuple(c)) {
@@ -773,6 +780,7 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
     return at.enter(obj, () => {
       const tag = obj._tag as string
       if (isRecordSchema(c)) {
+        if (nestsPayload(c)) return variant(tag, [c.encodeRecord(obj.value, at)])
         const { _tag, ...fields } = obj as Record<string, unknown>
         return variant(tag, [c.encodeRecord(fields, at)])
       }
@@ -783,7 +791,15 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
       }
       return variant(tag, [(c as AnySchema).encode(obj.value, at.child(0))])
     })
-  })
+  }, json)
+}
+
+/** The plain JSON form of a variant case: a record payload's fields go beside `_tag`, other payloads are positional. */
+const jsonCase = (c: Case): JsonCase => {
+  if (c === Unit) return { kind: "unit" }
+  if (isRecordSchema(c)) return c.json?.kind === "record" ? { kind: "record", record: c.json } : { kind: "positional", items: [jsonType(c)] }
+  if (isTuple(c)) return { kind: "positional", items: c.items.map(jsonType) }
+  return { kind: "positional", items: [jsonType(c as AnySchema)] }
 }
 
 const VALUE_KINDS: ReadonlySet<unknown> = new Set<Value["kind"]>(["number", "string", "bytes", "array", "record", "variant"])
@@ -870,6 +886,7 @@ export const Enum = <const T extends readonly string[]>(...tags: T): Schema<T[nu
         ? (v.tag as T[number])
         : mismatch(`one of ${tagList(tags)}`, v, at),
     (t, at) => (typeof t === "string" && known.has(t) ? variant(t) : invalid(`one of ${tagList(tags)}`, t, at)),
+    { kind: "variant", open: false, cases: new Map(tags.map((t) => [t, { kind: "unit" }])) },
   )
 }
 
@@ -885,6 +902,7 @@ export const AnyTag: Schema<string | Unknown> = make(
     typeof a === "string" ? (TAG.test(a) ? variant(a) : invalid("a tag name", a, at))
     : isUnknown(a) ? checkedValue(a.value, at)
     : invalid("a tag name or an Unknown", a, at),
+  { kind: "variant", open: true, cases: new Map() },
 )
 
 const TAG = /^[A-Z][A-Za-z0-9_]*$/
@@ -897,7 +915,7 @@ const TAG = /^[A-Z][A-Za-z0-9_]*$/
  * shape. Encoding writes it back unchanged, after checking that it is a haus
  * value within the limits. Treat its content as untrusted data.
  */
-const any_: Schema<Value> = make("Any", (v) => v, (a, at) => checkedValue(a, at))
+const any_: Schema<Value> = make("Any", (v) => v, (a, at) => checkedValue(a, at), { kind: "any" })
 
 export { any_ as Any }
 
@@ -936,6 +954,7 @@ export const Secret = Object.assign(
         // Not even a short description of what was given instead: it may be the secret itself.
         s instanceof SecretValue ? concealed(inner.expected, at, () => inner.encode(s.expose(), at))
         : at.fail(`expected a Secret (h.Secret.make(…)), got ${s === null ? "null" : Array.isArray(s) ? "an array" : typeof s}`),
+      { kind: "secret", item: jsonType(inner), expected: inner.expected },
     ),
   {
     /** A secret holding `value`, to encode. */
@@ -1008,9 +1027,12 @@ export const Recursive = <A>(name: string, build: (self: Schema<A>) => Schema<A>
       state.current = saved
     }
   }
+  let target: JsonType | undefined
   const self: Schema<A> = {
     "~standard": standard(() => self),
     expected: name,
+    // The same object every time, so that a recursive type's JSON form is a finite graph.
+    json: { kind: "lazy", get: () => (target ??= jsonType(force())) },
     decode: (v, at) => run(v, at, (b) => b.decode(v, at)),
     encode: (a, at) => run(a, at, (b) => b.encode(a, at)),
   }
@@ -1060,4 +1082,69 @@ export async function* encodeStream<A>(
   let i = 0
   // Streams default to compact: one item per line.
   for await (const v of values) yield stringifyValue(schema.encode(v, encodeAt(options, i++)), { style: "compact", ...options }) + ",\n"
+}
+
+// ── JSON (spec §16.3) ────────────────────────────────────────
+
+/**
+ * The plain JSON of a value (spec §16.3), as a JSON value: what a JSON
+ * consumer expects, with the schema saying what JSON can't (that a string is
+ * a date or a decimal). `Int`, `Int64` and `UInt64` are strings, `Bytes`
+ * base64, a `Maybe` `null` or its value (tagged when its value can be
+ * `null`), closed enums strings, other variants `{ "_tag": …, … }`.
+ */
+export const toJsonValue = <A>(schema: Schema<A>, value: A, limits: Limits = {}): Json =>
+  toPlainJson(jsonType(schema), encode(schema, value, limits), limits)
+
+/**
+ * The plain JSON text of a value (spec §16.3), compact.
+ *
+ *   h.toJson(User, { id: 1, name: "Ada", note: h.Maybe.none })   // '{"id":1,"name":"Ada","note":null}'
+ */
+export const toJson = <A>(schema: Schema<A>, value: A, limits: Limits = {}): string => stringifyJson(toJsonValue(schema, value, limits))
+
+/** Read the plain JSON of a value (spec §16.3) from a JSON value. Throws HausDecodeError. */
+export const fromJsonValue = <A>(schema: Schema<A>, json: Json, limits: Limits = {}): A =>
+  decode(schema, fromPlainJson(jsonType(schema), json, limits), limits)
+
+/**
+ * Read plain JSON text (spec §16.3) with a schema: the forms `h.toJson`
+ * writes, with the rules of decoding haus (an open record ignores members
+ * it doesn't list, an integer type takes only whole numbers, a float type
+ * rounds…). Throws HausSyntaxError for text that isn't I-JSON, and
+ * HausDecodeError for JSON that doesn't fit the schema.
+ */
+export const fromJson = <A>(schema: Schema<A>, text: string, limits: Limits = {}): A =>
+  fromJsonValue(schema, parseJson(text, jsonDepthFor(withDefaults(limits))), limits)
+
+/**
+ * Read a JSON Lines stream (one plain JSON text per line, spec §16) and
+ * decode each value as soon as its line is complete. Errors name the line's
+ * index. Limits apply per value.
+ */
+export async function* decodeJsonLines<A>(
+  schema: Schema<A>,
+  source: ChunkSource,
+  options: Limits & Omit<JsonLinesOptions, "limits"> = {},
+): AsyncGenerator<A, void, undefined> {
+  const type = jsonType(schema)
+  const limits = withDefaults(options)
+  yield* readLines(source, options, (text, origin, i) => {
+    const value = fromPlainJson(type, readJson(text, jsonDepthFor(limits), origin), options, Place.root(i))
+    return schema.decode(value, decodeAt(value, options, i))
+  })
+}
+
+/** Encode values as JSON Lines of their plain JSON (spec §16): one line per value, each ending in a line feed. */
+export async function* encodeJsonLines<A>(
+  schema: Schema<A>,
+  values: AsyncIterable<A> | Iterable<A>,
+  limits: Limits = {},
+): AsyncGenerator<string, void, undefined> {
+  const type = jsonType(schema)
+  let i = 0
+  for await (const v of values) {
+    const place = Place.root(i)
+    yield stringifyJson(toPlainJson(type, schema.encode(v, encodeAt(limits, i++)), limits, place)) + "\n"
+  }
 }

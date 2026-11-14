@@ -69,3 +69,20 @@ Conformance is tested with the default limits from the spec:
 
 `valid/limits-boundary.haus` sits exactly at the number limits, and
 `invalid/*-too-*.haus` goes one past them.
+
+## JSON suite
+
+`json/` tests the JSON mappings (spec §16). Each file holds cases written in
+haus, with JSON text in strings:
+
+- `plain.schema.haus` and `plain.cases.haus`: the plain mapping with a type.
+  `Ok { type, input, json }`: writing the decoded `input` gives `json`, and
+  reading `json` gives a value that encodes to `input` (or `output`).
+  `Read { type, json, output }`: reading `json` gives `output`.
+  `Err { type, json }`: reading fails.
+- `lossless.cases.haus`: the lossless mapping, without a type (`Ok { input, json }`, `Err { json }`).
+  Every `valid/NAME.json` is a lossless case too, a JSON array of the file's values.
+- `schemaless.cases.haus`: JSON read without a schema (`Read { json, output }`, `Err { json }`).
+
+JSON is compared as data: member order and whitespace don't matter, and
+numbers compare by their text.

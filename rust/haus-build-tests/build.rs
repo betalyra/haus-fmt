@@ -4,6 +4,11 @@
 //! encode the result. Each schema is also compiled without its attributes,
 //! as `<name>::bare`, which must give the same results (attributes don't
 //! matter, spec §15). tests/schema_conformance.rs runs the cases with both.
+//!
+//! For the JSON suite (test-suite/json, spec §16.3) it generates the types of
+//! plain.schema.haus, with `write` and `read`: a value decoded with a type
+//! written as plain JSON, and plain JSON read with a type and encoded.
+//! tests/json_conformance.rs runs its cases.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -34,7 +39,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
     let code = format!("{}{}", dispatch(&names), modules.concat());
     fs::write(Path::new(&env::var("OUT_DIR")?).join("schema_suite.rs"), code)?;
+
+    let plain = suite.join("../json/plain.schema.haus");
+    haus_build::Config::new().compile_as(&plain, "suite_json_plain")?;
+    fs::write(Path::new(&env::var("OUT_DIR")?).join("json_suite.rs"), json_module(&fs::read_to_string(&plain)?))?;
     Ok(())
+}
+
+/// `pub mod plain { <generated types> pub fn write(…) pub fn read(…) }`.
+fn json_module(text: &str) -> String {
+    let arms = |f: &str| -> String {
+        definitions(text).iter().map(|t| format!("            {t:?} => {f}::<{t}>(x),\n")).collect()
+    };
+    let (write, read) = (arms("write_as"), arms("read_as"));
+    format!(
+        r#"/// The types of test-suite/json/plain.schema.haus.
+pub mod plain {{
+    include!(concat!(env!("OUT_DIR"), "/suite_json_plain.rs"));
+
+    fn write_as<T: ::haus::Decode + ::haus::ToJson>(v: &::haus::Value) -> Result<String, String> {{
+        let x = T::decode(v).map_err(|e| format!("can't decode the input: {{e}}"))?;
+        ::haus::json::to_string(&x).map_err(|e| format!("can't write it as JSON: {{e}}"))
+    }}
+
+    fn read_as<T: ::haus::FromJson + ::haus::Encode>(json: &str) -> Result<::haus::Value, String> {{
+        ::haus::json::from_str::<T>(json).map(|x| ::haus::Encode::encode(&x)).map_err(|e| e.to_string())
+    }}
+
+    /// Decode `x` with the type `ty`, and write the result as plain JSON;
+    /// None if there is no such type.
+    pub fn write(ty: &str, x: &::haus::Value) -> Option<Result<String, String>> {{
+        Some(match ty {{
+{write}            _ => return None,
+        }})
+    }}
+
+    /// Read the plain JSON `x` with the type `ty`, and encode the result;
+    /// None if there is no such type.
+    pub fn read(ty: &str, x: &str) -> Option<Result<::haus::Value, String>> {{
+        Some(match ty {{
+{read}            _ => return None,
+        }})
+    }}
+}}
+"#
+    )
 }
 
 /// `numbers` for `numbers.schema.haus`.

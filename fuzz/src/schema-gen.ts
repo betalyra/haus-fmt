@@ -53,7 +53,7 @@ export function spellInt(r: Rng, n: bigint): string {
   return sign + "0b" + separated(r, abs.toString(2))
 }
 
-const RANGES: Readonly<Record<string, readonly [bigint, bigint]>> = {
+export const RANGES: Readonly<Record<string, readonly [bigint, bigint]>> = {
   Int8: [-(2n ** 7n), 2n ** 7n - 1n],
   Int16: [-(2n ** 15n), 2n ** 15n - 1n],
   Int32: [-(2n ** 31n), 2n ** 31n - 1n],
@@ -65,14 +65,14 @@ const RANGES: Readonly<Record<string, readonly [bigint, bigint]>> = {
 }
 
 /** Integers that sit on some edge: of a range, of 2^53, of the number limit (§7, §12). */
-const BIG_INTS: readonly bigint[] = [
+export const BIG_INTS: readonly bigint[] = [
   0n, 1n, -1n, 2n ** 53n - 1n, 2n ** 53n, 2n ** 53n + 1n, 2n ** 64n, -(2n ** 64n), 10n ** 30n, 10n ** 998n, -(10n ** 998n),
   10n ** 999n - 1n, 10n ** 999n, -(10n ** 999n) + 1n, -(10n ** 999n), 10n ** 1000n, 2n ** 3988n - 1n, -(2n ** 3988n - 1n),
   ...Object.values(RANGES).flatMap(([lo, hi]) => [lo, hi, lo - 1n, hi + 1n]),
 ]
 
 /** A random bigint below 2^bits. */
-function bits(r: Rng, n: number): bigint {
+export function bits(r: Rng, n: number): bigint {
   let x = 0n
   for (let i = 0; i < n; i += 30) x = (x << 30n) | big(r.int(1 << 30))
   return x & ((1n << big(n)) - 1n)
@@ -97,12 +97,12 @@ function integer(r: Rng, name: string): string {
 const NOT_INTEGERS = ["1.0", "1e3", "1E0", "0.0", "-0.0", "0e0", "1.5", "-1e-1", "1e-0", '"42"', "Some(1)", "True", "1.00e2", "NaN", "Infinity"]
 
 /** The exact decimal value of m · 2^e, as a literal. */
-function exact(m: bigint, e: number): { digits: bigint; exp: number } {
+export function exact(m: bigint, e: number): { digits: bigint; exp: number } {
   return e >= 0 ? { digits: m << big(e), exp: 0 } : { digits: m * 5n ** big(-e), exp: e }
 }
 
 /** A literal for digits · 10^exp in one of its spellings. */
-function decimalLiteral(r: Rng, digits: bigint, exp: number, negative: boolean): string {
+export function decimalLiteral(r: Rng, digits: bigint, exp: number, negative: boolean): string {
   const sign = negative ? "-" : ""
   const ds = digits.toString()
   let text: string
@@ -126,16 +126,16 @@ function decimalLiteral(r: Rng, digits: bigint, exp: number, negative: boolean):
   return sign + text
 }
 
-interface FloatFormat {
+export interface FloatFormat {
   readonly mant: number // explicit significand bits
   readonly emin: number // exponent of the smallest subnormal unit
   readonly emax: number // largest unbiased exponent
 }
-const F64: FloatFormat = { mant: 52, emin: -1074, emax: 1023 }
-const F32: FloatFormat = { mant: 23, emin: -149, emax: 127 }
+export const F64: FloatFormat = { mant: 52, emin: -1074, emax: 1023 }
+export const F32: FloatFormat = { mant: 23, emin: -149, emax: 127 }
 
 /** A float of the format as m · 2^e (m < 2^(mant+1)): random bits, edges, or simple values. */
-function randomFloat(r: Rng, f: FloatFormat): { m: bigint; e: number } {
+export function randomFloat(r: Rng, f: FloatFormat): { m: bigint; e: number } {
   const top = 1n << big(f.mant)
   const x = r.next()
   if (x < 0.25) {
@@ -246,10 +246,10 @@ const zone = (r: Rng) =>
 const duration = (r: Rng) =>
   r.pick(["PT0S", "P1D", "-P1Y2M", "PT1.5S", "P1W", "P1Y2M3DT4H5M6.789S", "PT36H", "-PT0S", "P", "PT", "P0D", "PT4294967296S", "P1M1W", "pt1s", "+P1D"])
 
-const TIME_TYPES = ["Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone"]
+export const TIME_TYPES = ["Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone"]
 
 /** The string of a std/time value: mostly well formed for its type. */
-function timeText(r: Rng, type: string): string {
+export function timeText(r: Rng, type: string): string {
   switch (type) {
     case "Date": return date(r)
     case "Time": return time(r)
@@ -286,7 +286,7 @@ const quote = (s: string) => JSON.stringify(s).replace(/\\u00([0-9a-f]{2})/g, (_
 const key = (r: Rng, k: string) => (BARE_KEY.test(k) && !r.chance(0.15) ? k : quote(k))
 
 // Keys whose order differs between code points and UTF-16 units (U+FF61 and U+E000 against 😀), and JavaScript's special names.
-const EXTRA_KEYS = ["extra", "x", "_", "id2", "zz", "x-y", "", "__proto__", "constructor", "Upper", "café", "😀", "\uFF61", "\uE000", "\u0000", "a b", "toString", "hasOwnProperty"]
+export const EXTRA_KEYS = ["extra", "x", "_", "id2", "zz", "x-y", "", "__proto__", "constructor", "Upper", "café", "😀", "\uFF61", "\uE000", "\u0000", "a b", "toString", "hasOwnProperty", "_tag", "value"]
 
 function list(r: Rng, open: string, close: string, items: readonly string[]): string {
   if (items.length === 0) return open + ws(r) + close
@@ -294,7 +294,7 @@ function list(r: Rng, open: string, close: string, items: readonly string[]): st
   return open + ws(r) + items.join(sep()) + (r.chance(0.2) ? sep() : ws(r)) + close
 }
 
-function shuffle<T>(r: Rng, xs: T[]): T[] {
+export function shuffle<T>(r: Rng, xs: T[]): T[] {
   for (let i = xs.length - 1; i > 0; i--) {
     const j = r.int(i + 1)
     ;[xs[i], xs[j]] = [xs[j]!, xs[i]!]
@@ -404,7 +404,7 @@ export class Generator {
       const tag = miss && v.cases.length && r.chance(0.3) ? r.pick(v.cases).tag : unknownTag()
       const n = r.pick([0, 0, 1, 2, 3])
       if (n === 0) return tag
-      if (n === 1 && r.chance(0.3)) return `${tag} ${list(r, "{", "}", [`a: ${anyValue(r, depth + 2)}`])}`
+      if (n === 1 && r.chance(0.3)) return `${tag} ${list(r, "{", "}", [`${r.pick(["a", "_tag", "args", "value"])}: ${anyValue(r, depth + 2)}`])}`
       return tag + list(r, "(", ")", Array.from({ length: n }, () => anyValue(r, depth + 2)))
     }
     // In deep mode, prefer cases that recurse.

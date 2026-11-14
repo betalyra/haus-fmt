@@ -224,7 +224,7 @@ fn deprecated_items_get_rust_attributes() {
         "{code}"
     );
     assert!(code.contains("#[deprecated]\n    Square(f64)"), "{code}");
-    assert_eq!(code.matches("#[allow(deprecated)]\nimpl").count(), 6, "{code}");
+    assert_eq!(code.matches("#[allow(deprecated)]\nimpl").count(), 10, "{code}");
 }
 
 #[test]

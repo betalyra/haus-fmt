@@ -45,6 +45,9 @@ jobs:
       - name: Schema suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema schema-suite.json
+      - name: JSON suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --json-suite ../../test-suite/json json-suite.json
 
   rust:
     name: Rust
@@ -95,7 +98,8 @@ jobs:
       - name: Lean schema types are up to date
         run: |
           node spec/lean/scripts/schema-types.ts > spec/lean/schema-suite.json
-          git diff --exit-code spec/lean/schema-suite.json
+          node spec/lean/scripts/schema-types.ts test-suite/json > spec/lean/json-suite.json
+          git diff --exit-code spec/lean/schema-suite.json spec/lean/json-suite.json
 
   roc:
     name: Roc
@@ -112,6 +116,7 @@ jobs:
         run: |
           python3 roc/scripts/gen_conformance.py
           python3 roc/scripts/gen_schema_conformance.py
+          python3 roc/scripts/gen_json_conformance.py
           sh roc/examples/gen.sh
           git diff --exit-code
       - name: Test
@@ -119,8 +124,10 @@ jobs:
         run: |
           (cd package && roc test ConformanceTest.roc && roc test TimeTest.roc)
           (cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Stream.roc && roc test Secret.roc && roc test Value.roc)
+          (cd package && roc test JsonValue.roc && roc test FromJson.roc && roc test ToJson.roc)
           (cd examples/shop && roc test main.roc)
           (cd schema-test && roc test main.roc)
+          (cd json-test && roc test main.roc)
 
   python:
     name: Python
@@ -175,13 +182,16 @@ jobs:
         id: budget
         run: |
           if [ "${{ github.event_name }}" = schedule ]; then
-            echo "parser=1000000" >> "$GITHUB_OUTPUT"; echo "time=20000000" >> "$GITHUB_OUTPUT"; echo "schema=500000" >> "$GITHUB_OUTPUT"
+            echo "parser=1000000" >> "$GITHUB_OUTPUT"; echo "time=20000000" >> "$GITHUB_OUTPUT"; echo "schema=500000" >> "$GITHUB_OUTPUT"; echo "json=50000" >> "$GITHUB_OUTPUT"
           else
-            echo "parser=100000" >> "$GITHUB_OUTPUT"; echo "time=2000000" >> "$GITHUB_OUTPUT"; echo "schema=20000" >> "$GITHUB_OUTPUT"
+            echo "parser=100000" >> "$GITHUB_OUTPUT"; echo "time=2000000" >> "$GITHUB_OUTPUT"; echo "schema=20000" >> "$GITHUB_OUTPUT"; echo "json=4000" >> "$GITHUB_OUTPUT"
           fi
           # A new seed every run, printed in the log.
           echo "seed=$(( ${{ github.run_id }} % 1000000 ))" >> "$GITHUB_OUTPUT"
+      - name: The fuzzers' own tests
+        run: node --test fuzz/src/
       - name: Parsers
+        if: ${{ !cancelled() }}
         run: node fuzz/src/main.ts --count ${{ steps.budget.outputs.parser }} --seed ${{ steps.budget.outputs.seed }}
       - name: Canonical forms
         if: ${{ !cancelled() }}
@@ -192,6 +202,9 @@ jobs:
       - name: Schema decoding
         if: ${{ !cancelled() }}
         run: node fuzz/src/main.ts --schema --count ${{ steps.budget.outputs.schema }} --seed ${{ steps.budget.outputs.seed }}
+      - name: JSON mappings
+        if: ${{ !cancelled() }}
+        run: node fuzz/src/main.ts --json --count ${{ steps.budget.outputs.json }} --seed ${{ steps.budget.outputs.seed }}
       - name: Keep the failures
         if: failure()
         uses: actions/upload-artifact@v4

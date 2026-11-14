@@ -2,7 +2,7 @@
 
 **A data format for humans: friendly to write, pleasant to read, and at home in your code.**
 
-> ⚠️ **Highly experimental.** This package has the parser, the stream reader, the canonical form and decoding with schemas. The formatter is on its way.
+> ⚠️ **Highly experimental.** This package has the parser, the stream reader, the canonical form, decoding with schemas and the JSON mappings. The formatter is on its way.
 
 ```sh
 pip install haus-fmt
@@ -79,6 +79,21 @@ with open("events.haus", "rb") as f:
 hasher.digest()  # == haus.hash_all(all events)
 ```
 
+## JSON
+
+Two mappings connect haus and JSON (spec §16). JSON is read strictly, as I-JSON within the limits: UTF-8 (a leading byte order mark is ignored; in JSON Lines only at the start of the stream), no duplicate member names, no unpaired surrogates, and numbers keep their exact text, never a float. Errors are `haus.HausJsonError`, a `ValueError` with `reason` and either `line` and `column` (text that isn't JSON) or `path` (JSON that isn't the expected form).
+
+```python
+haus.from_json('{"price": 19.90, "ok": true, "note": null}')  # any JSON as a haus value (§16.1)
+# Record(fields={'price': Number(text='19.90'), 'ok': Variant(tag='True', ...), 'note': Variant(tag='None', ...)})
+
+haus.to_lossless_json(haus.parse("Circle { r: 1.50 }"))  # every value, without a schema (§16.2)
+# '{"tag":"Circle","args":[{"rec":{"r":{"num":"1.50"}}}]}'
+haus.from_lossless_json('{"num": "19.90"}')  # Number(text='19.90'); any other form is an error
+```
+
+The lossless form carries haus through systems that only store JSON: every value has exactly one, and reading it gives an equal value. For the JSON an API consumer expects, use a schema type (below). Streams are JSON Lines, one JSON text per line: `haus.from_json_lines(source)`, `haus.to_lossless_json_lines(values)` and `haus.from_lossless_json_lines(source)` read a text, a file, or chunks split anywhere.
+
 ## Schemas
 
 `haus.schema` reads schema files (`.schema.haus`, spec §14), checks them, and decodes and encodes values with their types (spec §15):
@@ -151,6 +166,41 @@ Decoding is linear in the input whatever the schema (spec §9.8): a variant's ca
 
 `type Events = Stream Event` describes a file. `s["Events"].parse_stream(source)` reads it (a file or chunks, as `haus.parse_stream`) and decodes each value as it arrives; an error's path starts with the value's index. `encode_all(values)` writes stream items, each followed by `,\n`.
 
+### Plain JSON
+
+`to_json` and `from_json` map a type's values to the JSON a JSON consumer expects (spec §16.3). The schema carries what JSON can't say, so reading checks everything decoding does:
+
+```python
+s = schema.compile_schema("""
+    type Order = { id: Int64, qty: UInt16, total: Decimal, note?: Maybe String, shape: Shape }
+    type Shape = < Circle { r: Float64 } | Point Float64 Float64 | Empty >
+""")
+order = s["Order"].parse("{ id: 7, qty: 2, total: 44.40, note: None, shape: Point(1, 2) }")
+s["Order"].to_json(order)
+# '{"id":"7","qty":2,"total":"44.40","note":null,"shape":{"_tag":"Point","values":[1,2]}}'
+s["Order"].from_json('{"id": "7", "qty": 2, "total": "44.40", "shape": {"_tag": "Empty"}}')
+s["Order"].to_json_lines(orders)  # JSON Lines; from_json_lines(source) reads them
+```
+
+| Type | JSON |
+|---|---|
+| `String`, std/time types | a string |
+| `Bytes` | a string, base64 with padding |
+| `Bool` | `true` or `false` |
+| `Int8` … `Int32`, `UInt8` … `UInt32` | a number |
+| `Int`, `Int64`, `UInt64` | a string (`"-12"`): many JSON parsers round integers beyond 2⁵³ |
+| `Float32`, `Float64` | a number in the spelling of §15; `"NaN"`, `"Infinity"`, `"-Infinity"` |
+| `Decimal` | a string, the literal (`"19.90"`) |
+| `Any` | its lossless form |
+| `Secret a` | as `a`; errors never show the value |
+| `Array a`, `Map v`, records | an array, an object; a missing optional field is a missing member |
+| `Maybe a` | `null` or the value when `a`'s JSON can't be `null`; otherwise `{"_tag": "None"}`, `{"_tag": "Some", "value": …}` |
+| a closed variant without payloads | the tag as a string (`"Debug"`) |
+| other variants | `{"_tag": "Circle", "r": 1.5}`, `{"_tag": "Wrap", "value": 3}`, `{"_tag": "Point", "values": [1, 2]}` |
+| an unknown value | `{"_tag": "Hexagon", "args": [<lossless>, …]}` |
+
+Reading follows §15: an open record or payload ignores members it doesn't list and a closed one rejects them, an integer type accepts only whole numbers by spelling (`1.0` is not one), and an open variant reads a `"_tag"` it doesn't list as an `Unknown`: with `"args"` (lossless), or, from a newer writer's case, its other members as a record payload read without a schema (`{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`). A `Maybe` whose JSON would depend on itself (`type T = Maybe T`) is always tagged. A record payload with a field named `_tag` has no plain form: writing or reading it is an error.
+
 ### Imports and packages
 
 `import ./common (Address)` reads `common.schema.haus` next to the importing file. Python has no scoped package names, so schema packages are never searched for (spec §13.3): list the project's direct schema dependencies with their directories, each holding a `haus.package.haus` manifest. `installed_package` finds the directory of an installed Python package that ships one, without importing it:
@@ -195,7 +245,7 @@ A codec is any object with `decode(value)` and `encode(value)` working on the de
 
 ```sh
 uv sync
-uv run pytest            # unit tests and the shared conformance suite in ../test-suite
+uv run pytest            # unit tests and the shared conformance suites in ../test-suite (parser, schema, JSON)
 uv run ruff check . && uv run mypy && uv run pyright
 ```
 

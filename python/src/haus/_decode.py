@@ -1,6 +1,7 @@
 """Decoding and encoding with a schema (spec §15): the resolved types of a
 schema file (`_schema_file`) built into a tree of nodes, each with `decode`
-(haus `Value` → Python) and `encode` (Python → `Value`).
+(haus `Value` → Python) and `encode` (Python → `Value`), and the same with the
+type's plain JSON (spec §16.3): `read_json` and `write_json`.
 
 Linear whatever the schema (spec §9.8): a variant's case is one dict lookup
 on its tag, the nesting depth is limited (256 by default), and every call has
@@ -14,12 +15,24 @@ import json
 import math
 import re
 import struct
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from decimal import Decimal
-from typing import Final, Never, Protocol, cast
+from typing import Final, Never, Protocol, TypeVar, cast
 
+from ._errors import HausJsonError, PathKey, format_path
 from ._float import FloatKind, float_text, to_float32, to_float64
 from ._host import Nothing, Secret, Some, Tagged, Unknown
+from ._json import (
+    Json,
+    JsonNumber,
+    describe,
+    from_base64,
+    from_lossless,
+    json_number,
+    lossless,
+    schemaless,
+    to_base64,
+)
 from ._number import INTEGER, int_text, normalize_number, number_limit_issue, to_int
 from ._parser import Limits
 from ._schema_file import (
@@ -42,24 +55,15 @@ from ._schema_file import Instance as _Instance
 from ._time import check as check_time
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
-PathKey = str | int
-
-_KEY = re.compile(r"[a-z_][A-Za-z0-9_]*")
 _TAG = re.compile(r"[A-Z][A-Za-z0-9_]*")
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
+
+T = TypeVar("T")
+V = TypeVar("V")
 
 STEPS_PER_VALUE: Final = 16
 DEFAULT_ENCODE_STEPS: Final = 16 * 1024 * 1024
 _MAX_VALUES: Final = 64 * 1024 * 1024
-
-
-def format_path(path: Iterable[PathKey]) -> str:
-    """`$.items[2].price`, `$["x-y"]`."""
-    parts = (
-        f"[{p}]" if isinstance(p, int) else f".{p}" if _KEY.fullmatch(p) else f"[{json.dumps(p, ensure_ascii=False)}]"
-        for p in path
-    )
-    return "$" + "".join(parts)
 
 
 class HausDecodeError(ValueError):
@@ -116,6 +120,8 @@ class _Context:
 
 
 _NO_KEY: Final = object()
+_NOTHING: Final = object()
+"""`Nothing()` where a `Some`'s value is expected."""
 
 
 class _At:
@@ -133,6 +139,16 @@ class _At:
         if self.depth >= self.ctx.limits.max_depth:
             self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels", key)
         return _At(self.ctx, self, key, self.depth + 1)
+
+    def deeper(self) -> _At:
+        """One level deeper at the same place: `Some(x)` written as `x` in plain JSON."""
+        if self.depth >= self.ctx.limits.max_depth:
+            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels")
+        return _At(self.ctx, self, None, self.depth + 1)
+
+    def member(self, key: str) -> _At:
+        """A JSON member at the same level: the `"values"` array of a payload."""
+        return _At(self.ctx, self, key, self.depth)
 
     def container(self) -> None:
         """Encoding a record, array or payload here: it is one more level of nesting when written."""
@@ -221,6 +237,19 @@ def _invalid(what: str, x: object, at: _At) -> Never:
     at.fail(f"expected {what}, got {_describe_py(x)}")
 
 
+def _json_mismatch(expected: str, j: Json, at: _At) -> Never:
+    at.fail(f"expected {expected}, found {describe(j)}")
+
+
+def _from_lossless(j: Json, at: _At) -> Value:
+    """The value of a lossless form (spec §16.2) read at `at`; its errors as decode errors with the full path."""
+    try:
+        return from_lossless(j, at.ctx.limits, at.depth)
+    except HausJsonError as e:
+        reason, path = e.reason, e.path
+    raise HausDecodeError(reason, (*at.path(), *path))
+
+
 def _tag_list(tags: Iterable[str]) -> str:
     ts = list(tags)
     return " | ".join(ts) if len(ts) <= 10 else " | ".join(ts[:10]) + f" | … ({len(ts)} tags)"
@@ -293,6 +322,7 @@ def checked_value(raw: object, at: _At) -> Value:
         case Bytes(data):
             return raw if _checked_bytes(data, at) is data else Bytes(bytes(data))
         case Array(items):
+            at.container()  # an empty array is a level too, as in the parser
             new_items = _checked_items(raw, _sequence(items, at, "a tuple of items"), at)
             return raw if new_items is None else Array(new_items)
         case Record():
@@ -346,7 +376,10 @@ def _checked_record(raw: Record, at: _At) -> Record:
 
 
 class _Node:
-    """One type: `decode` a value at a place, `encode` a Python value. Each application is one step."""
+    """One type: `decode` a value at a place, `encode` a Python value. Each application is one step.
+
+    `read_json` and `write_json` do the same with the type's plain JSON (spec §16.3).
+    """
 
     __slots__ = ("expected",)
 
@@ -360,6 +393,12 @@ class _Node:
     def encode(self, x: object, at: _At) -> Value:
         raise NotImplementedError
 
+    def read_json(self, j: Json, at: _At) -> object:
+        raise NotImplementedError
+
+    def write_json(self, x: object, at: _At) -> Json:
+        raise NotImplementedError
+
 
 class _String(_Node):
     __slots__ = ()
@@ -371,8 +410,17 @@ class _String(_Node):
         _mismatch("String", v, at)
 
     def encode(self, x: object, at: _At) -> Value:
+        return String(self.write_json(x, at))
+
+    def read_json(self, j: Json, at: _At) -> object:
         at.step()
-        return String(_checked_string(x, at))
+        if isinstance(j, str):
+            return j
+        _json_mismatch("String (a string)", j, at)
+
+    def write_json(self, x: object, at: _At) -> str:
+        at.step()
+        return _checked_string(x, at)
 
 
 class _Bytes(_Node):
@@ -387,6 +435,16 @@ class _Bytes(_Node):
     def encode(self, x: object, at: _At) -> Value:
         at.step()
         return Bytes(_checked_bytes(x, at))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if not isinstance(j, str) or (data := from_base64(j)) is None:
+            _json_mismatch("Bytes (a string in base64 with padding)", j, at)
+        return _checked_bytes(data, at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        return to_base64(_checked_bytes(x, at))
 
 
 _TRUE, _FALSE = Variant("True"), Variant("False")
@@ -406,10 +464,24 @@ class _Bool(_Node):
                 _mismatch("Bool (True | False)", v, at)
 
     def encode(self, x: object, at: _At) -> Value:
+        return _TRUE if self.write_json(x, at) else _FALSE
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if isinstance(j, bool):
+            return j
+        _json_mismatch("Bool (true or false)", j, at)
+
+    def write_json(self, x: object, at: _At) -> bool:
         at.step()
         if not isinstance(x, bool):
             _invalid("a bool", x, at)
-        return _TRUE if x else _FALSE
+        return x
+
+
+_DECIMAL_INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*+)")
+_JSON_STRING_INTEGERS = frozenset({"Int", "Int64", "UInt64"})
+"""Integer types whose plain JSON is a string: many JSON parsers round integers beyond 2^53 (spec §16.3)."""
 
 
 class _Int(_Node):
@@ -425,20 +497,19 @@ class _Int(_Node):
     def _range(self) -> str:
         return f"{self.expected} ({self.low} to {self.high})"
 
-    def decode(self, v: Value, at: _At) -> object:
-        at.step()
-        if not isinstance(v, Number) or not INTEGER.fullmatch(v.text):
-            _mismatch(self.expected, v, at)
+    def _whole(self, text: str, at: _At) -> int | None:
+        """The integer of a normalized literal; None if it isn't a whole number. Out of range fails."""
+        if not INTEGER.fullmatch(text):
+            return None
         if self.low is not None and self.high is not None:
             # A literal longer than the bounds' can't be in range: no need to convert it.
-            n = to_int(v.text) if len(v.text) <= 21 else None
+            n = to_int(text) if len(text) <= 21 else None
             if n is None or not self.low <= n <= self.high:
-                at.fail(f"{_short(v.text)} is out of range for {self._range()}")
+                at.fail(f"{_short(text)} is out of range for {self._range()}")
             return n
-        return to_int(v.text)
+        return to_int(text)
 
-    def encode(self, x: object, at: _At) -> Value:
-        at.step()
+    def _text(self, x: object, at: _At) -> str:
         if not isinstance(x, int) or isinstance(x, bool):
             _invalid("an int", x, at)
         if self.low is not None and self.high is not None and not self.low <= x <= self.high:
@@ -446,10 +517,42 @@ class _Int(_Node):
         text = int_text(x)
         if (issue := number_limit_issue(text, at.ctx.limits)) is not None:
             at.fail(issue)
-        return Number(text)
+        return text
+
+    def decode(self, v: Value, at: _At) -> object:
+        at.step()
+        if not isinstance(v, Number) or (n := self._whole(v.text, at)) is None:
+            _mismatch(self.expected, v, at)
+        return n
+
+    def encode(self, x: object, at: _At) -> Value:
+        at.step()
+        return Number(self._text(x, at))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if self.expected in _JSON_STRING_INTEGERS:
+            if not isinstance(j, str) or not _DECIMAL_INTEGER.fullmatch(j):
+                _json_mismatch(f"{self.expected} (a string of a decimal integer)", j, at)
+            if (issue := number_limit_issue(j, at.ctx.limits)) is not None:
+                at.fail(issue)
+            text = j
+        elif isinstance(j, JsonNumber):
+            text = j.text
+        else:
+            _json_mismatch(f"{self.expected} (a number)", j, at)
+        if (n := self._whole(text, at)) is None:
+            _json_mismatch(f"{self.expected} (a whole number, without fraction or exponent)", j, at)
+        return n
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        text = self._text(x, at)
+        return text if self.expected in _JSON_STRING_INTEGERS else JsonNumber(text)
 
 
 _SPECIAL_FLOATS: Final = {"NaN": math.nan, "Infinity": math.inf, "NegInfinity": -math.inf}
+_JSON_SPECIAL_FLOATS: Final = {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}
 _NAN, _INFINITY, _NEG_INFINITY = Variant("NaN"), Variant("Infinity"), Variant("NegInfinity")
 _FLOAT32 = struct.Struct("<f")
 
@@ -463,21 +566,14 @@ class _Float(_Node):
         super().__init__(kind)
         self.kind: FloatKind = kind
 
-    def decode(self, v: Value, at: _At) -> object:
-        at.step()
-        match v:
-            case Number(text):
-                x = to_float32(text) if self.kind == "Float32" else to_float64(text)
-                if x is None:
-                    at.fail(f"{_short(text)} is too large for {self.kind}")
-                return x
-            case Variant(tag, ()) if tag in _SPECIAL_FLOATS:
-                return _SPECIAL_FLOATS[tag]
-            case _:
-                _mismatch(f"{self.kind} (a number, NaN, Infinity or NegInfinity)", v, at)
+    def _from_text(self, text: str, at: _At) -> float:
+        x = to_float32(text) if self.kind == "Float32" else to_float64(text)
+        if x is None:
+            at.fail(f"{_short(text)} is too large for {self.kind}")
+        return x
 
-    def encode(self, x: object, at: _At) -> Value:
-        at.step()
+    def _rounded(self, x: object, at: _At) -> float:
+        """A Python number as a float of the type (binary32 for `Float32`)."""
         if not isinstance(x, float | int) or isinstance(x, bool):
             _invalid("a float", x, at)
         try:
@@ -486,11 +582,45 @@ class _Float(_Node):
                 (f,) = _FLOAT32.unpack(_FLOAT32.pack(f))
         except OverflowError:
             _invalid(f"a float within the range of {self.kind}", x, at)
+        return f
+
+    def decode(self, v: Value, at: _At) -> object:
+        at.step()
+        match v:
+            case Number(text):
+                return self._from_text(text, at)
+            case Variant(tag, ()) if tag in _SPECIAL_FLOATS:
+                return _SPECIAL_FLOATS[tag]
+            case _:
+                _mismatch(f"{self.kind} (a number, NaN, Infinity or NegInfinity)", v, at)
+
+    def encode(self, x: object, at: _At) -> Value:
+        at.step()
+        f = self._rounded(x, at)
         if math.isnan(f):
             return _NAN
         if math.isinf(f):
             return _INFINITY if f > 0 else _NEG_INFINITY
         return Number(float_text(f, self.kind))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        match j:
+            case JsonNumber(text):
+                return self._from_text(text, at)
+            case str() if j in _JSON_SPECIAL_FLOATS:
+                return _JSON_SPECIAL_FLOATS[j]
+            case _:
+                _json_mismatch(f'{self.kind} (a number, "NaN", "Infinity" or "-Infinity")', j, at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        f = self._rounded(x, at)
+        if math.isnan(f):
+            return "NaN"
+        if math.isinf(f):
+            return "Infinity" if f > 0 else "-Infinity"
+        return JsonNumber(float_text(f, self.kind))
 
 
 class _Decimal(_Node):
@@ -505,12 +635,25 @@ class _Decimal(_Node):
         _mismatch("Decimal", v, at)
 
     def encode(self, x: object, at: _At) -> Value:
+        return Number(self.write_json(x, at))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        try:
+            text = json_number(j, at.ctx.limits) if isinstance(j, str) else None
+        except ValueError as e:
+            at.fail(str(e))
+        if text is None:
+            _json_mismatch("Decimal (a string of a JSON number)", j, at)
+        return text
+
+    def write_json(self, x: object, at: _At) -> str:
         at.step()
         if isinstance(x, Decimal):
             x = str(x)
         if not isinstance(x, str):
             _invalid('a decimal literal like "19.90"', x, at)
-        return Number(_checked_number(x, at, 'a decimal literal like "19.90"'))
+        return _checked_number(x, at, 'a decimal literal like "19.90"')
 
 
 class _StdTime(_Node):
@@ -518,26 +661,40 @@ class _StdTime(_Node):
 
     __slots__ = ()
 
+    def _checked(self, text: str, at: _At, child: PathKey | None = None) -> str:
+        if (reason := check_time(self.expected, text)) is not None:
+            if child is None:
+                at.fail(_short(reason, 200))
+            at.fail(_short(reason, 200), child)
+        return text
+
     def decode(self, v: Value, at: _At) -> object:
         at.step()
         match v:
             case Variant(tag, (String(text),)) if tag == self.expected:
-                if (reason := check_time(tag, text)) is not None:
-                    at.fail(_short(reason, 200), 0)
-                return text
+                return self._checked(text, at, 0)
             case _:
                 _mismatch(f'{self.expected}("…")', v, at)
 
     def encode(self, x: object, at: _At) -> Value:
+        return Variant(self.expected, (String(self.write_json(x, at)),))
+
+    def read_json(self, j: Json, at: _At) -> object:
         at.step()
-        text = _checked_string(x, at)
-        if (reason := check_time(self.expected, text)) is not None:
-            at.fail(_short(reason, 200))
-        return Variant(self.expected, (String(text),))
+        if isinstance(j, str):
+            return self._checked(j, at)
+        _json_mismatch(f"{self.expected} (a string)", j, at)
+
+    def write_json(self, x: object, at: _At) -> str:
+        at.step()
+        return self._checked(_checked_string(x, at), at)
 
 
 class _Any(_Node):
-    """`Any`: the parsed value, unchanged. Encoding checks it is a value within the limits."""
+    """`Any`: the parsed value, unchanged, in JSON its lossless form (spec §16.2).
+
+    Encoding checks it is a value within the limits.
+    """
 
     __slots__ = ()
 
@@ -547,6 +704,25 @@ class _Any(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         return checked_value(x, at)
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        return _from_lossless(j, at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        return lossless(checked_value(x, at))
+
+
+def _each_item(x: object, at: _At, write: Callable[[object, _At], T]) -> list[T]:
+    """`write` applied to each element of a list or tuple."""
+    xs = _sequence(x, at, "a list or tuple")
+    at.container()
+    at.enter(x)
+    out: list[T] = []
+    for i, y in enumerate(xs):
+        out.append(write(y, at.child(i)))
+    at.leave(x)
+    return out
 
 
 class _Array(_Node):
@@ -568,15 +744,34 @@ class _Array(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        xs = _sequence(x, at, "a list or tuple")
-        at.container()
-        at.enter(x)
+        return Array(tuple(_each_item(x, at, self.item.encode)))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if not isinstance(j, list):
+            _json_mismatch(f"{self.expected} (an array)", j, at)
         item = self.item
-        out: list[Value] = []
-        for i, y in enumerate(xs):
-            out.append(item.encode(y, at.child(i)))
-        at.leave(x)
-        return Array(tuple(out))
+        out: list[object] = []
+        for i, x in enumerate(j):
+            out.append(item.read_json(x, at.child(i)))
+        return tuple(out)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        return _each_item(x, at, self.item.write_json)
+
+
+def _each_entry(x: object, at: _At, write: Callable[[object, _At], T]) -> dict[str, T]:
+    """`write` applied to each value of a mapping with string keys."""
+    entries = _mapping(x, at, "a mapping")
+    at.container()
+    at.enter(x)
+    out: dict[str, T] = {}
+    for k, y in entries.items():
+        key = _checked_string(k, at, "string keys")
+        out[key] = write(y, at.child(key))
+    at.leave(x)
+    return out
 
 
 class _Map(_Node):
@@ -600,29 +795,45 @@ class _Map(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        entries = _mapping(x, at, "a mapping")
-        at.container()
-        at.enter(x)
+        return Record(_each_entry(x, at, self.value.encode))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if not isinstance(j, dict):
+            _json_mismatch(f"{self.expected} (an object)", j, at)
         value = self.value
-        out: dict[str, Value] = {}
-        for k, y in entries.items():
-            key = _checked_string(k, at, "string keys")
-            out[key] = value.encode(y, at.child(key))
-        at.leave(x)
-        return Record(out)
+        out: dict[str, object] = {}
+        for k, x in j.items():
+            out[k] = value.read_json(x, at.child(k))
+        return out
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        return _each_entry(x, at, self.value.write_json)
 
 
 _NONE = Variant("None")
 
 
 class _Maybe(_Node):
-    """`Maybe a`: `Nothing()` or `Some(value)`."""
+    """`Maybe a`: `Nothing()` or `Some(value)`.
 
-    __slots__ = ("item",)
+    In plain JSON (spec §16.3) `null` and the value when `a`'s JSON can't be `null`,
+    `{"_tag": "None"}` and `{"_tag": "Some", "value": …}` otherwise.
+    """
+
+    __slots__ = ("_uses_null", "item")
 
     def __init__(self, item: _Node) -> None:
         super().__init__(f"Maybe {_short(item.expected, 40)}")
         self.item = item
+        self._uses_null: bool | None = None
+        """Computed on first use, once the back references of recursive types are set."""
+
+    def uses_null(self) -> bool:
+        if self._uses_null is None:
+            self._uses_null = not _on_null_cycle(self) and not _json_nullable(self.item)
+        return self._uses_null
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
@@ -634,17 +845,42 @@ class _Maybe(_Node):
             case _:
                 _mismatch(f"None | Some({_short(self.item.expected, 40)})", v, at)
 
-    def encode(self, x: object, at: _At) -> Value:
-        at.step()
+    def _some(self, x: object, at: _At) -> object:
         match x:
             case Nothing():
-                return _NONE
+                return _NOTHING
             case Some():
                 at.container()
-                value: object = cast("Some[object]", x).value
-                return Variant("Some", (self.item.encode(value, at.child(0)),))
+                return cast("Some[object]", x).value
             case _:
                 _invalid("a Maybe (Some(value) or Nothing())", x, at)
+
+    def encode(self, x: object, at: _At) -> Value:
+        at.step()
+        if (value := self._some(x, at)) is _NOTHING:
+            return _NONE
+        return Variant("Some", (self.item.encode(value, at.child(0)),))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if self.uses_null():
+            return Nothing() if j is None else Some(self.item.read_json(j, at.deeper()))
+        match j:
+            case dict() if j == {"_tag": "None"}:
+                return Nothing()
+            case dict() if len(j) == 2 and j.get("_tag") == "Some" and "value" in j:
+                return Some(self.item.read_json(j["value"], at.child("value")))
+            case _:
+                _json_mismatch(f'{self.expected} ({{"_tag": "None"}} or {{"_tag": "Some", "value": …}})', j, at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        null = self.uses_null()
+        if (value := self._some(x, at)) is _NOTHING:
+            return None if null else {"_tag": "None"}
+        if null:
+            return self.item.write_json(value, at.deeper())
+        return {"_tag": "Some", "value": self.item.write_json(value, at.child("value"))}
 
 
 class _Secret(_Node):
@@ -659,6 +895,12 @@ class _Secret(_Node):
     def _concealed(self, at: _At) -> Never:
         at.fail(f"expected {_short(self.item.expected, 40)} (a Secret: the value is not shown)")
 
+    def _exposed(self, x: object, at: _At) -> object:
+        if not isinstance(x, Secret):
+            # Not even a short description of what was given instead: it may be the secret itself.
+            at.fail(f"expected a Secret, got a {type(x).__name__}")
+        return x.expose()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+
     def decode(self, v: Value, at: _At) -> object:
         at.step()
         try:
@@ -670,11 +912,26 @@ class _Secret(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        if not isinstance(x, Secret):
-            # Not even a short description of what was given instead: it may be the secret itself.
-            at.fail(f"expected a Secret, got a {type(x).__name__}")
+        value = self._exposed(x, at)
         try:
-            return self.item.encode(x.expose(), at)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+            return self.item.encode(value, at)
+        except HausEncodeError:
+            pass
+        self._concealed(at)
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        try:
+            return Secret(self.item.read_json(j, at))
+        except HausDecodeError:
+            pass
+        self._concealed(at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        value = self._exposed(x, at)
+        try:
+            return self.item.write_json(value, at)
         except HausEncodeError:
             pass
         self._concealed(at)
@@ -707,10 +964,16 @@ class _Record(_Node):
         return self.decode_fields(v.fields, at)
 
     def decode_fields(self, fields: Mapping[str, Value], at: _At) -> dict[str, object]:
+        return self.read_fields(fields, at, _decode_with)
+
+    def read_fields(
+        self, fields: Mapping[str, V], at: _At, read: Callable[[_Node, V, _At], object]
+    ) -> dict[str, object]:
+        """The listed fields of `fields` (haus values or JSON members), each read with its type."""
         out: dict[str, object] = {}
         for f in self.fields:
-            if (x := fields.get(f.key)) is not None:
-                out[f.key] = f.node.decode(x, at.child(f.key))
+            if f.key in fields:
+                out[f.key] = read(f.node, fields[f.key], at.child(f.key))
             elif not f.optional:
                 at.fail(f"missing field '{f.key}'")
         if self.closed:
@@ -724,13 +987,17 @@ class _Record(_Node):
         return Record(self.encode_fields(x, at))
 
     def encode_fields(self, x: object, at: _At) -> dict[str, Value]:
+        return self.write_fields(x, at, _encode_with)
+
+    def write_fields(self, x: object, at: _At, write: Callable[[_Node, object, _At], T]) -> dict[str, T]:
+        """The fields of a Python mapping, each written with its type: haus values or JSON."""
         given = _mapping(x, at, "a mapping of fields")
         at.container()
         at.enter(x)
-        out: dict[str, Value] = {}
+        out: dict[str, T] = {}
         for f in self.fields:
             if f.key in given:
-                out[f.key] = f.node.encode(given[f.key], at.child(f.key))
+                out[f.key] = write(f.node, given[f.key], at.child(f.key))
             elif not f.optional:
                 at.fail(f"missing field '{f.key}'")
         if self.closed:
@@ -740,14 +1007,44 @@ class _Record(_Node):
         at.leave(x)
         return out
 
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if not isinstance(j, dict):
+            _json_mismatch("a record (an object)", j, at)
+        return self.read_fields(j, at, _read_json_with)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        return self.write_fields(x, at, _write_json_with)
+
+
+def _decode_with(node: _Node, v: Value, at: _At) -> object:
+    return node.decode(v, at)
+
+
+def _encode_with(node: _Node, x: object, at: _At) -> Value:
+    return node.encode(x, at)
+
+
+def _read_json_with(node: _Node, j: Json, at: _At) -> object:
+    return node.read_json(j, at)
+
+
+def _write_json_with(node: _Node, x: object, at: _At) -> Json:
+    return node.write_json(x, at)
+
 
 _CasePayload = _Record | tuple[_Node, ...] | None
 
 
 class _Variant(_Node):
-    """`< … >`: a listed case is a `Tagged`; another tag is an `Unknown` in an open variant."""
+    """`< … >`: a listed case is a `Tagged`; another tag is an `Unknown` in an open variant.
 
-    __slots__ = ("cases", "open", "tags")
+    In plain JSON (spec §16.3) a closed variant whose cases have no payload is the tag as a
+    string; any other is an object with the tag as `"_tag"`.
+    """
+
+    __slots__ = ("as_string", "cases", "open", "tags")
 
     def __init__(self, cases: dict[str, _CasePayload], open: bool) -> None:
         self.tags = _tag_list(cases)
@@ -755,6 +1052,7 @@ class _Variant(_Node):
         # Dispatch is one lookup on the tag: never "try each case" (spec §9.8).
         self.cases = cases
         self.open = open
+        self.as_string = not open and all(p is None for p in cases.values())
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
@@ -783,35 +1081,46 @@ class _Variant(_Node):
             out.append(node.decode(args[i], at.child(i)))
         return Tagged(tag, tuple(out))
 
-    def encode(self, x: object, at: _At) -> Value:
-        at.step()
-        match x:
-            case Unknown(raw):
-                if not self.open:
-                    at.fail(f"an unknown value, but the variant is closed (one of {self.tags})")
-                raw_value = cast("object", raw)  # an Unknown built in code may hold anything
-                if not isinstance(raw_value, Variant):
-                    _invalid("a Variant in the Unknown", raw_value, at)
-                if raw_value.tag in self.cases:
-                    at.fail(f"an Unknown with the listed tag '{_short(raw_value.tag)}': write it as Tagged")
-                return checked_value(raw_value, at)
-            case Tagged(tag, payload):
-                pass
-            case _:
-                _invalid("a Tagged" + (" or an Unknown" if self.open else ""), x, at)
-        given: object = payload
+    def _unknown(self, raw: object, at: _At) -> Variant:
+        """The raw value of an `Unknown` to write: a variant this type doesn't list, within the limits."""
+        if not self.open:
+            at.fail(f"an unknown value, but the variant is closed (one of {self.tags})")
+        if not isinstance(raw, Variant):
+            _invalid("a Variant in the Unknown", raw, at)
+        if raw.tag in self.cases:
+            at.fail(f"an Unknown with the listed tag '{_short(raw.tag)}': write it as Tagged")
+        checked = checked_value(raw, at)
+        assert isinstance(checked, Variant)
+        return checked
+
+    def _tagged(self, x: object, at: _At) -> tuple[str, object, _CasePayload]:
+        """A `Tagged` to write: its tag, payload and case."""
+        if not isinstance(x, Tagged):
+            _invalid("a Tagged" + (" or an Unknown" if self.open else ""), x, at)
+        tag, given = x.tag, cast("object", x.payload)
         if tag not in self.cases:
             _invalid(f"one of {self.tags}", tag, at)
         case = self.cases[tag]
-        if case is None:
-            if given != ():
-                _invalid(f"no payload for {tag}", given, at)
-            return Variant(tag)
-        if isinstance(case, _Record):
-            return Variant(tag, (Record(case.encode_fields(given, at)),))
+        if case is None and given != ():
+            _invalid(f"no payload for {tag}", given, at)
+        return tag, given, case
+
+    def _arguments(self, tag: str, given: object, case: tuple[_Node, ...], at: _At) -> Sequence[object]:
         args = _sequence(given, at, f"a tuple of {len(case)} argument(s) for {tag}")
         if len(args) != len(case):
             _invalid(f"a tuple of {len(case)} argument(s) for {tag}", given, at)
+        return args
+
+    def encode(self, x: object, at: _At) -> Value:
+        at.step()
+        if isinstance(x, Unknown):
+            return self._unknown(cast("object", x.value), at)
+        tag, given, case = self._tagged(x, at)
+        if case is None:
+            return Variant(tag)
+        if isinstance(case, _Record):
+            return Variant(tag, (Record(case.encode_fields(given, at)),))
+        args = self._arguments(tag, given, case, at)
         at.container()
         at.enter(given)
         out: list[Value] = []
@@ -819,6 +1128,97 @@ class _Variant(_Node):
             out.append(node.encode(args[i], at.child(i)))
         at.leave(given)
         return Variant(tag, tuple(out))
+
+    def read_json(self, j: Json, at: _At) -> object:
+        at.step()
+        if self.as_string:
+            if isinstance(j, str) and j in self.cases:
+                return Tagged(j)
+            _json_mismatch(f"one of the strings {self.tags}", j, at)
+        if not isinstance(j, dict) or not isinstance(tag := j.get("_tag"), str):
+            _json_mismatch(f'an object with "_tag" ({self.tags})', j, at)
+        if tag not in self.cases:
+            if not self.open:
+                at.fail(f"unknown tag '{_short(tag)}', expected one of {self.tags}")
+            return Unknown(self._read_unknown(tag, j, at))
+        case = self.cases[tag]
+        if case is None:
+            if len(j) != 1:
+                at.fail(f"'{tag}' takes no payload: no members besides \"_tag\"")
+            return Tagged(tag)
+        if isinstance(case, _Record):
+            _check_payload_keys(case, at)
+            fields = {k: x for k, x in j.items() if k != "_tag"}
+            return Tagged(tag, case.read_fields(fields, at, _read_json_with))
+        if len(case) == 1:
+            if len(j) != 2 or "value" not in j:
+                at.fail(f"'{tag}' takes one argument, as \"value\" (and no other members)")
+            return Tagged(tag, (case[0].read_json(j["value"], at.child("value")),))
+        values = j.get("values")
+        if len(j) != 2 or not isinstance(values, list) or len(values) != len(case):
+            at.fail(f"'{tag}' takes {len(case)} arguments, as \"values\": an array (and no other members)")
+        values_at = at.member("values")
+        out: list[object] = []
+        for i, node in enumerate(case):
+            out.append(node.read_json(values[i], values_at.child(i)))
+        return Tagged(tag, tuple(out))
+
+    def _read_unknown(self, tag: str, j: dict[str, Json], at: _At) -> Variant:
+        """A tag this open variant doesn't list (spec §16.3).
+
+        `{"_tag": "<Tag>", "args": [<lossless>, …]}` is the form written; any other members are a
+        newer writer's case, read as a record payload without a schema (§16.1):
+        `{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`.
+        """
+        if not _TAG.fullmatch(tag):
+            at.fail("expected a tag ([A-Z][A-Za-z0-9_]*)", "_tag")
+        if len(j) == 1:
+            return Variant(tag)
+        if len(j) == 2 and "args" in j:
+            value = _from_lossless({"tag": tag, "args": j["args"]}, at)
+            assert isinstance(value, Variant)
+            return value
+        members: dict[str, Json] = {k: x for k, x in j.items() if k != "_tag"}
+        try:
+            # `Tag { … }` is one level, as in the parser.
+            payload = schemaless(members, at.ctx.limits.max_depth, at.depth)
+        except HausJsonError as e:
+            reason, path = e.reason, e.path
+        else:
+            return Variant(tag, (payload,))
+        raise HausDecodeError(reason, (*at.path(), *path))
+
+    def write_json(self, x: object, at: _At) -> Json:
+        at.step()
+        if isinstance(x, Unknown):
+            raw = self._unknown(cast("object", x.value), at)
+            if not raw.args:
+                return {"_tag": raw.tag}
+            return {"_tag": raw.tag, "args": [lossless(a) for a in raw.args]}
+        tag, given, case = self._tagged(x, at)
+        if case is None:
+            return tag if self.as_string else {"_tag": tag}
+        if isinstance(case, _Record):
+            _check_payload_keys(case, at)
+            return {"_tag": tag, **case.write_fields(given, at, _write_json_with)}
+        args = self._arguments(tag, given, case, at)
+        at.container()
+        at.enter(given)
+        if len(case) == 1:
+            out: Json = {"_tag": tag, "value": case[0].write_json(args[0], at.child("value"))}
+        else:
+            values_at = at.member("values")
+            values: list[Json] = []
+            for i, node in enumerate(case):
+                values.append(node.write_json(args[i], values_at.child(i)))
+            out = {"_tag": tag, "values": values}
+        at.leave(given)
+        return out
+
+
+def _check_payload_keys(case: _Record, at: _At) -> None:
+    if "_tag" in case.keys:
+        at.fail('a record payload with a field named "_tag" has no plain JSON form (spec §16.3)')
 
 
 class _BackRef(_Node):
@@ -830,13 +1230,21 @@ class _BackRef(_Node):
         super().__init__(name)
         self.target: _Node | None = None
 
-    def decode(self, v: Value, at: _At) -> object:
+    def resolved(self) -> _Node:
         assert self.target is not None
-        return self.target.decode(v, at)
+        return self.target
+
+    def decode(self, v: Value, at: _At) -> object:
+        return self.resolved().decode(v, at)
 
     def encode(self, x: object, at: _At) -> Value:
-        assert self.target is not None
-        return self.target.encode(x, at)
+        return self.resolved().encode(x, at)
+
+    def read_json(self, j: Json, at: _At) -> object:
+        return self.resolved().read_json(j, at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        return self.resolved().write_json(x, at)
 
 
 class _Coded(_Node):
@@ -850,23 +1258,69 @@ class _Coded(_Node):
         self.codec = codec
         self.id = id
 
-    def decode(self, v: Value, at: _At) -> object:
-        x = self.inner.decode(v, at)
+    def _decoded(self, x: object, at: _At) -> object:
         try:
             return self.codec.decode(x)
         except (ValueError, TypeError, OverflowError) as e:
             reason = _short(str(e), 100)
         at.fail(f"the codec for {self.id} rejects it: {reason}")
 
-    def encode(self, x: object, at: _At) -> Value:
+    def _encoded(self, x: object, at: _At) -> object:
         at.step()
         try:
-            y = self.codec.encode(x)
+            return self.codec.encode(x)
         except (ValueError, TypeError, OverflowError) as e:
             reason = _short(str(e), 100)
-        else:
-            return self.inner.encode(y, at)
         at.fail(f"the codec for {self.id} can't encode it: {reason}")
+
+    def decode(self, v: Value, at: _At) -> object:
+        return self._decoded(self.inner.decode(v, at), at)
+
+    def encode(self, x: object, at: _At) -> Value:
+        return self.inner.encode(self._encoded(x, at), at)
+
+    def read_json(self, j: Json, at: _At) -> object:
+        return self._decoded(self.inner.read_json(j, at), at)
+
+    def write_json(self, x: object, at: _At) -> Json:
+        return self.inner.write_json(self._encoded(x, at), at)
+
+
+def _null_step(node: _Node) -> _Node | None:
+    """The node whose JSON `node` writes in place, if any: through a `Maybe` (its `Some`), `Secret`, codec or name."""
+    match node:
+        case _Maybe() | _Secret():
+            return node.item
+        case _Coded():
+            return node.inner
+        case _BackRef():
+            return node.resolved()
+        case _:
+            return None
+
+
+def _json_nullable(node: _Node) -> bool:
+    """Whether a type's plain JSON can be `null`: a `Maybe` that uses `null`, directly or through `Secret` or a name."""
+    while not isinstance(node, _Maybe):
+        if (inner := _null_step(node)) is None:
+            return False
+        node = inner
+    return node.uses_null()
+
+
+def _on_null_cycle(maybe: _Maybe) -> bool:
+    """Whether `maybe` writes its own JSON in place, through Maybes, Secrets and names only (`type T = Maybe T`).
+
+    Such a `Maybe` can't decide on `null` from its content (spec §16.3 leaves it open), so it uses `_tag`.
+    """
+    seen: set[int] = set()
+    node: _Node | None = maybe.item
+    while node is not None and id(node) not in seen:
+        if node is maybe:
+            return True
+        seen.add(id(node))
+        node = _null_step(node)
+    return False
 
 
 # ── building nodes from resolved types ───────────────────────
@@ -1019,3 +1473,44 @@ def encode(node: _Node, x: object, limits: Limits, max_steps: int | None, key: P
     except RecursionError:
         pass
     _too_deep(at)
+
+
+def _count_json(root: Json) -> int:
+    """The values in a JSON tree (its depth is limited by the reader)."""
+    count = 0
+    stack: list[Json] = [root]
+    while stack:
+        j = stack.pop()
+        count += 1
+        if isinstance(j, list):
+            stack += j
+        elif isinstance(j, dict):
+            stack += j.values()
+    return count
+
+
+def from_plain_json(node: _Node, j: Json, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
+    """A type's plain JSON (spec §16.3) as its Python value; the budget is 16 steps per JSON value by default."""
+    steps = max_steps if max_steps is not None else STEPS_PER_VALUE * _count_json(j) + 1024
+    at = _At(_Context(decoding=True, limits=limits, max_steps=steps), None, key, 0)
+    try:
+        return node.read_json(j, at)
+    except RecursionError:
+        pass
+    _too_deep(at)
+
+
+def to_plain_json(node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> Json:
+    """A Python value of a type as its plain JSON (spec §16.3)."""
+    steps = DEFAULT_ENCODE_STEPS if max_steps is None else max_steps
+    at = _At(_Context(decoding=False, limits=limits, max_steps=steps), None, key, 0)
+    try:
+        return node.write_json(x, at)
+    except RecursionError:
+        pass
+    _too_deep(at)
+
+
+def checked(value: object, limits: Limits, key: PathKey | None = None) -> Value:
+    """A `Value` built in code, checked to be a haus value within `limits` (as `Any` encodes it)."""
+    return encode(_BUILTINS["Any"], value, limits, None, key)

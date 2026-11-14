@@ -2,7 +2,7 @@
 
 | Crate | What it is |
 |---|---|
-| [`haus-fmt`](haus) | Imported as `haus`. Parser, data model (`haus::Value`), `Decode`/`Encode`, std/time, codecs, compact writer. Passes the [conformance suite](../test-suite). |
+| [`haus-fmt`](haus) | Imported as `haus`. Parser, data model (`haus::Value`), `Decode`/`Encode`, std/time, codecs, compact writer, JSON (`haus::json`). Passes the [conformance suite](../test-suite), JSON suite included. |
 | [`haus-build`](haus-build) | Rust types from `.schema.haus` files, generated in `build.rs`. Also `haus-gen`, which generates the Roc modules. |
 | [`haus-build-tests`](haus-build-tests) | Tests of the generated code. |
 | [`haus-money`, `haus-geo`](../extensions) | The official schema packages, as crates. |
@@ -33,6 +33,8 @@ haus_build::Config::new()
 mod order { haus::include_schema!("order"); }
 let order: order::Root = haus::from_str(&text)?;          // checks every rule of the schema
 let text = haus::to_string(&order)?;                      // back to haus (compact)
+let json = haus::json::to_string(&order)?;                // plain JSON (spec §16.3)
+let order: order::Root = haus::json::from_str(&json)?;
 ```
 
 | haus | Rust |
@@ -83,6 +85,38 @@ the completed values), so an async adapter is a short loop around it.
 
 Without a schema, `haus::parse` reads any haus text into `Value`s: a parser in
 the sense of spec §13.1, which knows no types.
+
+## JSON
+
+The two JSON mappings of spec §16, with a strict reader (I-JSON: no duplicate
+member names, no unpaired surrogates, the limits of §7, number text kept
+exactly) and a writer, both in `haus::json`. No new dependencies.
+
+| | Function |
+|---|---|
+| JSON without a schema (§16.1) | `haus::from_json(text) -> Value` (`null` is `None`, `true` is `True`) |
+| Lossless (§16.2) | `haus::to_lossless_json(&value)`, `haus::from_lossless_json(text)`: `{"num": "19.90"}`, `{"tag": "Some", "args": […]}` |
+| Plain, with a type (§16.3) | `haus::json::to_string(&x)`, `haus::json::from_str::<T>(text)` for any `T: ToJson` / `FromJson` |
+| JSON Lines | `haus::json::to_string_all`, `from_str_all`, and `encode` / `decode` over `std::io` |
+| The JSON tree | `haus::Json` (numbers as text), `haus::json::parse`, `haus::json::write` |
+
+haus-build implements `ToJson` and `FromJson` for every generated type; the
+prelude types implement them in `haus`. `Int`, `Int64` and `UInt64` are
+strings (`"-12"`), `Decimal` a string with its scale (`"19.90"`), `Bytes`
+base64, floats in the spelling of §15 (`"NaN"`, `"Infinity"`, `"-Infinity"`
+as strings), a closed variant of tags without payload a string (`"Debug"`),
+other variants objects with `"_tag"` (`{"_tag": "Circle", "r": 1.5}`,
+`"value"`, `"values"`), unknown tags `{"_tag": …, "args": […]}` with the
+arguments in the lossless form, and `Any` its lossless form. A `Maybe` is
+`null` or the value when its inner JSON can't be `null`, and tagged otherwise:
+each type says so in `ToJson::NULLABLE`. A `Secret` is written in full, and a
+read error inside it names only its place and type. A record payload with a
+field named `_tag` has no plain form: writing or reading it is an error.
+
+JSON may nest 4·256 + 1 levels, so that the lossless form of a value at the
+depth limit is readable; the haus value that results is then checked against
+256 (`json::from_str` encodes the result to check it, so it needs `T: Encode`
+too). The reader and writer use no call stack per level.
 
 ```sh
 cargo test                                                   # everything, with the conformance suite

@@ -761,7 +761,7 @@ fn to_decimal(digits: &[u8], radix: u32) -> String {
 }
 
 /// The exponent of a decimal literal as its value (§2): `1e+05` is `1e5`, `1e-0` is `1e0`.
-fn normalize_exponent(text: String) -> String {
+pub(crate) fn normalize_exponent(text: String) -> String {
     let Some(at) = text.find('e') else { return text };
     let (mantissa, exponent) = text.split_at(at + 1);
     let negative = exponent.starts_with('-');

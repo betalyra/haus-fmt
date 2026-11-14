@@ -52,3 +52,12 @@ type Login = closed {
 // struct, so one #[deprecated] (Rust allows no more) with both messages.
 @deprecated("use Login")
 type Legacy = closed < @deprecated("removed in 2.0") Only Int >
+
+// Plain JSON (spec §16.3): a Maybe whose inner JSON can be null, through a
+// type parameter or a named type, is written in the tagged form.
+type Optional = Maybe Int32
+type Holder a = { held: Maybe a }
+type Nulls = { direct: Holder Int32, nested: Holder (Maybe Int32), named: Maybe Optional }
+
+// A record payload with a field named _tag has no plain JSON form.
+type Clash = < Tagged { _tag: String } | Fine Int32 >

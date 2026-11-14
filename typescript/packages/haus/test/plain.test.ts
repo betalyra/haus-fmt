@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { parseAll } from "../src/index.js"
-import { plainDeclarations, toPlain } from "../src/plain.js"
+import { parsePlain, plainDeclarations, toPlain } from "../src/plain.js"
 
 describe("plain view", () => {
   it("decodes every whole number as a bigint, whatever its size", () => {
@@ -39,5 +39,16 @@ describe("plain view: Maybe", () => {
     const text = `Some(1, 2),\nNone,`
     expect(toPlain(parseAll(text))).toEqual([{ _tag: "Some", values: [1n, 2n] }, { _tag: "None" }])
     expect(plainDeclarations(text)).not.toContain("Maybe")
+  })
+})
+
+describe("a payload field named _tag", () => {
+  it("is nested, so it can't replace the tag", () => {
+    expect(parsePlain("[Circle { _tag: 1, r: 2 }, Circle { r: 3 }]")).toEqual([
+      { _tag: "Circle", value: { _tag: 1n, r: 2n } },
+      { _tag: "Circle", value: { r: 3n } },
+    ])
+    expect(parsePlain("Square { side: 1 }")).toEqual({ _tag: "Square", side: 1n })
+    expect(plainDeclarations("[Circle { _tag: 1, r: 2 }]")).toContain('readonly value: {')
   })
 })

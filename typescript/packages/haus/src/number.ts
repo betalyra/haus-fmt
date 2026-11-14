@@ -15,6 +15,9 @@ export const INTEGER = /^-?\d+$/
  */
 const NORMALIZED = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:e(?:0|-?[1-9]\d*))?$/
 
+/** Whether `text` is a normalized literal, exactly as the parser writes one (spec §2). */
+export const isNormalizedNumber = (text: string): boolean => NORMALIZED.test(text)
+
 /**
  * The normalized text of a number literal (`1_000` → "1000", `0xFF` → "255",
  * `1E+05` → "1e5"), or undefined when `text` is not exactly one number

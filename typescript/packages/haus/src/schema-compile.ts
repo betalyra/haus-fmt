@@ -18,6 +18,7 @@
  *   < Debug | Info > → "Debug" | "Info"                                       (closed, only tags without payload)
  *   < Circle { r: Float64 } | Empty > → { _tag: "Circle"; r: number } | { _tag: "Empty" }
  *   < Point Float64 Float64 > → { _tag: "Point"; values: readonly [number, number] }
+ *   < Odd { _tag: Int32 } > → { _tag: "Odd"; value: { _tag: number } }        (a payload with a field _tag: nested)
  *   open variants → … | Unknown                                               (other tags kept as raw values)
  *   < > → string | Unknown                                                    (any tag: a bare tag as its name)
  *   Any → Value (the parsed value, unchanged)                                 Secret a → Secret<A> (shows <redacted>; expose())
@@ -108,7 +109,6 @@ export const fromSchemaFile = (file: SchemaFile): CompiledSchemaFile => {
             case "none":
               return [c.tag, h.Unit]
             case "record":
-              if (c.payload.record.fields.some((f) => f.key === "_tag")) throw new Error(`${c.tag}: a field named _tag can't be used in a variant payload`)
               return [c.tag, h.Record(fields(c.payload.record.fields), { closed: c.payload.record.closed })]
             case "positional":
               return [c.tag, h.Tuple(...c.payload.items.map(build))]
@@ -251,7 +251,9 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
           const tag = `${deprecatedDoc(c.attributes)}readonly _tag: ${JSON.stringify(c.tag)}`
           switch (c.payload.kind) {
             case "none": return `{ ${tag} }`
-            case "record": return `{ ${[tag, ...fieldList(c.payload.record.fields)].join("; ")} }`
+            // A payload with a field `_tag` is nested (h.Variant): its fields can't go beside the tag.
+            case "record": return c.payload.record.fields.some((f) => f.key === "_tag") ? `{ ${tag}; readonly value: ${record(c.payload.record.fields)} }`
+              : `{ ${[tag, ...fieldList(c.payload.record.fields)].join("; ")} }`
             case "positional": return `{ ${tag}; readonly values: readonly [${c.payload.items.map(print).join(", ")}] }`
           }
         })

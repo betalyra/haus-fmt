@@ -1,0 +1,25 @@
+// The lossless JSON mapping (spec §16.2), without a schema. Ok: writing
+// `input` gives `json` (compared as data), and reading `json` gives a value
+// equal to `input`. Err: reading `json` fails. Every valid/NAME.json of the
+// conformance suite is also a lossless case (a JSON array of the file's values).
+Ok { input: 19.90, json: "{\"num\": \"19.90\"}" },
+Ok { input: 0xFF, json: "{\"num\": \"255\"}" },
+Ok { input: x"0b34", json: "{\"bytes\": \"0b34\"}" },
+Ok { input: Circle { r: 1 }, json: "{\"tag\": \"Circle\", \"args\": [{\"rec\": {\"r\": {\"num\": \"1\"}}}]}" },
+Ok { input: None, json: "{\"tag\": \"None\"}" },
+Ok { input: [], json: "[]" },
+Ok { input: {}, json: "{\"rec\": {}}" },
+Err { json: "1" },
+Err { json: "true" },
+Err { json: "null" },
+Err { json: "{}" },
+Err { json: "{\"num\": \"01\"}" },
+Err { json: "{\"num\": 1}" },
+Err { json: "{\"num\": \"1\", \"x\": 2}" },
+Err { json: "{\"bytes\": \"0B34\"}" },
+Err { json: "{\"bytes\": \"0b3\"}" },
+Err { json: "{\"tag\": \"circle\"}" },
+Err { json: "{\"tag\": \"T\", \"args\": []}" },
+Err { json: "{\"rec\": {\"a\": 1}}" },
+Err { json: "{\"rec\": {\"a\": {\"num\": \"1\"}, \"a\": {\"num\": \"2\"}}}" },
+Err { json: "{\"num\": \"1E5\"}" },

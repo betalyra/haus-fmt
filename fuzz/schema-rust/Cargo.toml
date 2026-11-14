@@ -1,7 +1,7 @@
 [package]
 name = "haus-schema-fuzz"
 version = "0.0.0"
-description = "The Rust runner of the schema fuzzer (fuzz/README.md): decodes with the code haus-build generates"
+description = "The Rust runners of the schema and JSON fuzzers (fuzz/README.md): the code haus-build generates"
 edition = "2024"
 publish = false
 
@@ -11,6 +11,10 @@ publish = false
 [[bin]]
 name = "schema_runner"
 path = "src/main.rs"
+
+[[bin]]
+name = "json_runner"
+path = "src/json_runner.rs"
 
 [dependencies]
 haus = { package = "haus-fmt", path = "../../rust/haus" }

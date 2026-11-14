@@ -325,7 +325,7 @@ floats!(f32 => "Float32", f64 => "Float64");
 /// `num_bigint::BigInt` with the `bigint` feature. For a native integer that
 /// must fit, the schema says `Int64` (decoded as `i64`, out of range is an error).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Int(String);
+pub struct Int(pub(crate) String);
 
 impl Int {
     pub fn as_str(&self) -> &str {
@@ -389,7 +389,7 @@ impl Decode for Int {
 
 /// `Decimal`: an exact decimal as written, scale kept (`19.90` is not `19.9`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Decimal(String);
+pub struct Decimal(pub(crate) String);
 
 impl Decimal {
     /// The literal: `19.90`, `-1e10`.
