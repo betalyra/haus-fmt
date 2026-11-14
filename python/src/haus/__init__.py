@@ -13,7 +13,15 @@ types. `Date("2026-02-30")` is just a tag with a string.
 from __future__ import annotations
 
 from ._canonical import Hasher, canonical, compare, equals, hash, hash_all
-from ._errors import HausSyntaxError
+from ._errors import HausJsonError, HausSyntaxError
+from ._json_api import (
+    from_json,
+    from_json_lines,
+    from_lossless_json,
+    from_lossless_json_lines,
+    to_lossless_json,
+    to_lossless_json_lines,
+)
 from ._parser import DEFAULT_LIMITS, Limits, Parser
 from ._stream import DEFAULT_MAX_VALUE_LENGTH, Readable, StreamReader, parse_stream
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
@@ -26,6 +34,7 @@ __all__ = [
     "Array",
     "Bytes",
     "Hasher",
+    "HausJsonError",
     "HausSyntaxError",
     "Limits",
     "Number",
@@ -39,12 +48,18 @@ __all__ = [
     "canonical",
     "compare",
     "equals",
+    "from_json",
+    "from_json_lines",
+    "from_lossless_json",
+    "from_lossless_json_lines",
     "hash",
     "hash_all",
     "parse",
     "parse_all",
     "parse_bytes",
     "parse_stream",
+    "to_lossless_json",
+    "to_lossless_json_lines",
 ]
 
 

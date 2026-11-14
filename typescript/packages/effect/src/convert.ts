@@ -34,6 +34,14 @@ export const BARE_TAG = "hausBareTag"
 /** Annotation on a tagged struct `{ _tag, values }`: the variant's positional arguments are `values`. */
 export const VALUES = "hausValues"
 
+/**
+ * Annotation on a tagged struct `{ _tag, value }`: the variant's record payload
+ * is `value`, a struct of its own. A schema file's case whose record payload
+ * lists a field named `_tag` (`< Odd { _tag: Int32 } >`): its fields can't go
+ * beside the tag.
+ */
+export const NESTED = "hausNested"
+
 /** Annotation on a struct: a closed record `{| … |}`, other fields are an error. */
 export const CLOSED = "hausClosed"
 
@@ -213,9 +221,9 @@ export const generic: Converter = (v) => {
 
 // ── AST helpers ──────────────────────────────────────────────
 
-const resolve = (ast: AST): AST => (ast._tag === "Suspend" ? resolve(ast.thunk()) : ast)
+export const resolve = (ast: AST): AST => (ast._tag === "Suspend" ? resolve(ast.thunk()) : ast)
 
-const declarationId = (ast: SchemaAST.Declaration): Option.Option<unknown> =>
+export const declarationId = (ast: SchemaAST.Declaration): Option.Option<unknown> =>
   Option.fromNullishOr((ast.annotations?.["representation"] as { readonly id?: unknown } | undefined)?.id)
 
 /** Whether `ast` is a `Schema.Redacted`. */
@@ -228,7 +236,7 @@ export const secretMessage = (ast: AST): string => {
 }
 
 /** The `_tag` literal of a tagged-struct AST. */
-const tagOf = (ast: AST): Option.Option<string> => {
+export const tagOf = (ast: AST): Option.Option<string> => {
   const a = resolve(ast)
   return a._tag === "Objects"
     ? Arr.findFirst(a.propertySignatures, (p) => p.name === "_tag").pipe(
@@ -340,6 +348,7 @@ function compileObject(ast: SchemaAST.Objects): Converter {
   const positional = ast.propertySignatures.filter((p) => p.name !== "_tag").map((p) => String(p.name))
   const allowPositional = ast.annotations?.[POSITIONAL] === true
   const values = ast.annotations?.[VALUES] === true
+  const nested = ast.annotations?.[NESTED] === true
   const closed = ast.annotations?.[CLOSED] === true
   // `Map v`: a record with an index signature converts every field with its value schema.
   const rest = Arr.head(ast.indexSignatures).pipe(Option.map((i) => compile(i.type)), Option.getOrElse(() => generic))
@@ -354,6 +363,7 @@ function compileObject(ast: SchemaAST.Objects): Converter {
     if (v.kind !== "variant" || v.tag !== name) return mismatch(`the variant ${name}`, v)
     if (values) return [["values", vArr(v.args)]] // Point(1, 2) → { values: [1, 2] }
     const [first] = v.args
+    if (nested) return v.args.length === 1 && first?.kind === "record" ? [["value", first]] : mismatch(`${name} { … }`, v) // Odd { _tag: 1 } → { value: { _tag: 1 } }
     if (positional.length === 0) return v.args.length === 0 ? [] : mismatch(`${name} without a payload`, v) // Heartbeat
     if (v.args.length === 1 && first?.kind === "record") return [...first.fields] // Circle { radius: 5 }
     const record = `${name} { ${positional.map((n) => `${n}: …`).join(", ")} }`
@@ -367,7 +377,12 @@ function compileObject(ast: SchemaAST.Objects): Converter {
   return (v) => {
     const out: Record<string, unknown> = Option.match(tag, { onNone: () => ({}), onSome: (t) => ({ _tag: t }) })
     for (const [key, field] of fieldsOf(v)) {
-      if (key === "_tag" && Option.isSome(tag)) throw new ConversionError(`'${tag.value}' has a field named _tag, which would replace its tag`)
+      // A payload field `_tag` that the case doesn't list (its own `_tag` is the tag): an unlisted
+      // field like any other, ignored by an open record. A plain record's or a map's `_tag` is data.
+      if (key === "_tag" && Option.isSome(tag)) {
+        if (closed) throw new ConversionError(`unexpected field "_tag" in a closed record`, [key])
+        continue
+      }
       const prop = props.get(key)
       if (prop !== undefined) setOwn(out, key, at(key, () => prop.convert(field)))
       else if (closed) throw new ConversionError(`unexpected field ${JSON.stringify(key)} in a closed record`, [key])
@@ -378,7 +393,7 @@ function compileObject(ast: SchemaAST.Objects): Converter {
 }
 
 /** Members of nested unions, flattened: Union([Literals([…]), Unknown]). */
-const members = (ast: SchemaAST.Union): ReadonlyArray<AST> =>
+export const members = (ast: SchemaAST.Union): ReadonlyArray<AST> =>
   ast.types.flatMap((m) => {
     const r = resolve(m)
     return r._tag === "Union" ? members(r) : [r]
@@ -670,8 +685,11 @@ function encodeObject(ast: SchemaAST.Objects): Encoder {
   const tag = Option.getOrUndefined(tagOf(ast))
   const positional = ast.annotations?.[POSITIONAL] === true
   const values = ast.annotations?.[VALUES] === true
+  const nested = ast.annotations?.[NESTED] === true
+  // A tagged struct's `_tag` is its tag; a plain struct's `_tag` is a field like any other.
+  const isField = (key: string) => tag === undefined || key !== "_tag"
   const props = ast.propertySignatures
-    .filter((p) => p.name !== "_tag")
+    .filter((p) => isField(String(p.name)))
     .map((p) => ({ name: String(p.name), encode: compileEncoder(p.type) }))
   const declared = new Set(props.map((p) => p.name))
   const rest = Arr.head(ast.indexSignatures).pipe(Option.map((i) => compileEncoder(i.type)))
@@ -685,10 +703,14 @@ function encodeObject(ast: SchemaAST.Objects): Encoder {
       const items = props.find((p) => p.name === "values")?.encode(obj["values"])
       return vVariant(tag, items?.kind === "array" ? items.items : [])
     }
+    if (nested && tag !== undefined) {
+      const payload = props.find((p) => p.name === "value")?.encode(obj["value"])
+      return payload?.kind === "record" ? vVariant(tag, [payload]) : fail(`'${tag}' takes a record payload, its value`)
+    }
     const present: { name: string; encode: Encoder }[] = props.filter((p) => Object.hasOwn(obj, p.name) && obj[p.name] !== undefined)
     if (Option.isSome(rest)) {
       for (const key of Object.keys(obj)) {
-        if (!declared.has(key) && key !== "_tag" && obj[key] !== undefined) present.push({ name: key, encode: rest.value })
+        if (!declared.has(key) && isField(key) && obj[key] !== undefined) present.push({ name: key, encode: rest.value })
       }
     }
     if (tag === undefined) return vRec(new Map(present.map((p) => [p.name, p.encode(obj[p.name])])))

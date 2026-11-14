@@ -1,0 +1,34 @@
+// The plain JSON mapping (spec §16.3).
+import std/time (Date, Instant)
+
+type S = String
+type B = Bytes
+type Flag = Bool
+type Small = Int32
+type Byte = UInt8
+type Big = Int
+type I64 = Int64
+type F64 = Float64
+type F32 = Float32
+type Dec = Decimal
+type Day = Date
+type At = Instant
+type Raw = Any
+type Key = Secret String
+type Ints = Array Int32
+type Counts = Map Int32
+type Opt = Maybe Int32
+type Nested = Maybe (Maybe Int32)
+type OptBig = Maybe Int
+type Outcome = Result String Int32
+type Level = closed < Debug | Info >
+type Shape = < Circle { r: Float64 } | Point Float64 Float64 | Wrap Int32 | Empty >
+type User = { id: Int32, name: String, nick?: String, note?: Maybe String }
+type Strict = closed { id: Int32 }
+type Bits = closed < False | True >
+type Loop = Maybe Loop
+type BoxRec = { w: Int32 }
+type Boxed = < Box BoxRec >
+type MyMaybe a = closed < None | Some a >
+type Mine = MyMaybe Int32
+type OptLoop = Maybe Loop

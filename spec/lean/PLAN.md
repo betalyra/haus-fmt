@@ -33,8 +33,9 @@ prototype, …) is outside Lean and stays covered by tests.
 | 🟡 | **I. Schema decoding** (spec §14–15) | A reference decoder that passes the schema suite, then termination, the round trip and linear time, in steps I1–I7 (below). I1–I3 and I5 done, in [`Haus/Schema/`](Haus/Schema). | I1–I3: ~2 weeks; all: months |
 | 🟡 | **V. Versions** (spec §10) | `Extends old new`: a new version is a conservative extension of the old one (same values for every old text; canonical form, built-in types and schema decoding agree on what the old version can express). Defined, with `refl`, `trans` and `current_extends_self`, in [`Haus/Version.lean`](Haus/Version.lean); to be proven for each release. | days per release |
 | ✅ | **T. std/time** | A reference model of the profile (spec §13.2, `std/time.md`), the bindings' time checkers fuzzed against it, and its security and calendar properties proven | 1–3 weeks |
+| 🟡 | **J. JSON** (spec §16) | A reference for the JSON mappings (without a schema, lossless, plain) that passes the JSON suite, with the round trips and uniqueness proven, in steps J1–J7 (below). J1–J6 done, in [`Haus/Json/`](Haus/Json); fuzzing the bindings against it (J7) is open. | J1–J6: ~1 week |
 
-Order: A–H, T1–T6, I1–I3, I5 and the definition of V are done. Next:
+Order: A–H, T1–T6, I1–I3, I5, J1–J6 and the definition of V are done. Next:
 fuzzing the bindings' decoders against the Lean one (the rest of I3), then
 I4 and I6. P comes after the benchmarks' doubling
 tests and is needed only for I7.
@@ -195,6 +196,49 @@ design, and so outside the model.
 | ✅ | T5. The calendar is right | `date_iff`: a string is a valid `Date` exactly when it is the text of one of the days 0000-01-01 … 9999-12-31, one string per day. The days are counted with the standard day-count formula (365 days a year, leap rules by 4, 100, 400, month lengths from `(153·M + 2)/5`), which doesn't use `daysIn`; `next_dayNumber` shows that the day after every valid date gets the next number, so `daysIn` can't allow a day too many or too few anywhere. In [`Haus/Time/Calendar.lean`](Haus/Time/Calendar.lean). | ~1 week |
 | ✅ | T6. One spelling per value | For every type, two valid strings have the same value exactly when they differ at most in trailing zeros of the fraction (`time_same_iff`, `dateTime_same_iff`, `duration_same_iff`; for `Instant` and `ZonedDateTime` with the same offset: `instant_same_iff`, `zoned_same_iff`); `Date` and `YearMonth` have exactly one spelling (`date_same_iff`, `yearMonth_same_iff`). `duration_text`: formatting a duration's value gives back its text. Writing the proof found three more spellings, now rejected (`P01D`, `-P0D`, zero components such as `P1DT0S`). In [`Haus/Time/Spelling.lean`](Haus/Time/Spelling.lean). | ~1 week |
 
+
+## J. JSON
+
+Spec §16 maps haus to JSON two ways: **lossless** (every value, no schema)
+and **plain** (a schema type's values, as JSON consumers expect them), and
+reads any JSON as a haus value (§16.1). `test-suite/json` tests them. The
+model works on JSON as data (`JSON`: numbers keep their text, objects their
+member order); a strict text reader and a compact writer sit next to it.
+
+| | Step | Gives | Effort |
+|---|---|---|---|
+| ✅ | J1. JSON as data and as text | `JSON`, compared as data (`JSON.Equiv`: member order ignored, numbers by text) ([`Json/Data.lean`](Haus/Json/Data.lean)). `JSON.parse`: RFC 8259 restricted to I-JSON (no duplicate member names, no unpaired surrogates), a leading byte order mark ignored, the limits of §16 (number tokens as written, strings, nesting 4·d + 1); `JSON.parseLines` for JSON Lines; `JSON.write`, compact ([`Json/Text.lean`](Haus/Json/Text.lean)). A reference, tested by `#guard`s and the suite, **not proven**. | days |
+| ✅ | J2. Byte strings | Base64 with padding, strict (canonical only), and lowercase hex: each reader accepts exactly the writer's texts and reads them back (`base64_decode_encode`, `base64_encode_decode`, `hex_decode_encode`, `hex_encode_decode`, [`Json/Base64.lean`](Haus/Json/Base64.lean)). | ~1 day |
+| ✅ | J3. Without a schema and lossless (§16.1, §16.2) | `JSON.toValue`, `lossless`, `fromLossless` ([`Json/Lossless.lean`](Haus/Json/Lossless.lean)). `lossless_read_write`/`fromLossless_lossless`: reading the lossless form gives the value back; `lossless_unique`: every accepted JSON is, as data, the lossless form of what it reads; `lossless_equiv_iff`: two values have the same lossless form, as data, exactly when they are equal (§2), for every value. | days |
+| ✅ | J4. Plain (§16.3) | `toJson`/`fromJson` over the schema model, row by row ([`Json/Plain.lean`](Haus/Json/Plain.lean)). `plain_round_trip`: reading the plain JSON of a decoded value gives it back; `plain_injective`: two decoded values with the same plain JSON are the same; `toJson_error`: writing a decoded value fails only for a record payload with a field named `_tag` ([`Json/PlainRoundTrip.lean`](Haus/Json/PlainRoundTrip.lean)). Floats rest on `floatLaw`; `normalizeNumber_normal` ([`Json/Normal.lean`](Haus/Json/Normal.lean)) shows a `Decimal`'s literal reads back unchanged. | ~1 week |
+| ✅ | J5. Parsed values | The round trips assume a well-formed value (normalized numbers, tags); `parse_wf`: every value the reference parser returns is one ([`Json/WellFormed.lean`](Haus/Json/WellFormed.lean)), so `lossless_parsed` and `plain_parsed` hold for every value of every haus text ([`Json/Correct.lean`](Haus/Json/Correct.lean)). | days |
+| ✅ | J6. Conformance | `haus-ref --json-suite`: all cases of `test-suite/json` pass (plain, lossless, schemaless, and every `valid/NAME.json` as a lossless file), none skipped; in CI. Types from [`scripts/schema-types.ts`](scripts/schema-types.ts) → [`json-suite.json`](json-suite.json), checked up to date in CI. | days |
+| ⬜ | J7. Fuzzing | The Lean side exists: `--json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch`. Missing: runners per binding in `fuzz/`. | days |
+
+What is proven is about `JSON` as data. Not proven: that `JSON.parse`
+reads back what `JSON.write` writes (both are tested), the limits (checked
+on the value read, `Value.fits`, not part of the theorems), linear time, and
+JSON Lines.
+
+How the model follows §16 where it was clarified while writing it (all now
+in the spec, with vectors):
+
+- **The prelude's `Bool` and `Maybe`, by name.** The model's types have no
+  names, so the prelude's `Bool` is the reference `Bool` (`boolTy`), and each
+  use of the prelude's `Maybe` a definition of its own named `Maybe#k`
+  (`preludeMaybe`); `haus-ref` writes the resolved types that way for the
+  JSON modes. A schema's own `closed < False | True >` is a closed enum, and
+  its own `closed < None | Some a >` a tagged variant.
+- **A `Maybe` that reaches itself** (`type T = Maybe T`) uses the tagged
+  form, as §16.3 says. A `Maybe` is identified by the definition it is
+  written in and its type (`origin`), so with `type D = Maybe T`, `T` is
+  tagged and `D` uses `null` (D doesn't reach itself, and `T`'s JSON is never
+  `null`). The chain of `Maybe` arguments is followed with fuel
+  (`nullFuel`, the size of the types involved). The proofs hold for any
+  answer the chain gives (`usesNull` never lets a `null` arm hold a `null`).
+- **An unlisted tag without other members** reads as bare (`Hexagon`), not as
+  `Hexagon {}`; with only `args` losslessly, and `"args": []` is rejected;
+  otherwise its other members read as a record payload (§16.1).
 
 ## V. Versions
 

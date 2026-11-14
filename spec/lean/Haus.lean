@@ -42,3 +42,12 @@ import Haus.Schema.Rules
 import Haus.Schema.Correct
 import Haus.Schema.RoundTrip
 import Haus.Version
+import Haus.Json.Data
+import Haus.Json.Base64
+import Haus.Json.Text
+import Haus.Json.Lossless
+import Haus.Json.Normal
+import Haus.Json.Plain
+import Haus.Json.PlainRoundTrip
+import Haus.Json.WellFormed
+import Haus.Json.Correct

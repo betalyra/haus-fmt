@@ -244,7 +244,8 @@ export async function* parseStream(source: ChunkSource, options: StreamOptions =
   yield* reader.end()
 }
 
-async function* chunks(source: ChunkSource): AsyncGenerator<string | Uint8Array> {
+/** The chunks of a source, whatever its kind. */
+export async function* chunks(source: ChunkSource): AsyncGenerator<string | Uint8Array> {
   if (typeof ReadableStream !== "undefined" && source instanceof ReadableStream) {
     // Not every browser supports async iteration of ReadableStream yet.
     const r = source.getReader()

@@ -2,6 +2,7 @@
  * Resolves the schema suite's schema files for the Lean reference decoder.
  *
  *   node spec/lean/scripts/schema-types.ts [SUITE_DIR] > spec/lean/schema-suite.json
+ *   node spec/lean/scripts/schema-types.ts test-suite/json > spec/lean/json-suite.json
  *
  * Each `SUITE_DIR/NAME.schema.haus` (default: test-suite/schema) is parsed and
  * resolved by the TypeScript binding's schema-file parser

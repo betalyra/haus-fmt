@@ -4,9 +4,10 @@ Built against the Roc nightly compiler (2026-11-03) and basic-cli 0.26.0.
 
 | Path | Contents |
 |---|---|
-| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Stream` (reads a stream chunk by chunk), `Time` (the std/time profile) |
+| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Stream` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16) |
 | [`examples/`](examples) | The same examples as in TypeScript and Rust, on the same files in [`../examples`](../examples), plus `shop`, a Roc showcase |
 | [`schema-test/`](schema-test) | Generated: the schema conformance suite ([`../test-suite/schema`](../test-suite/schema)) as Roc tests |
+| [`json-test/`](json-test) | Generated: the JSON suite ([`../test-suite/json`](../test-suite/json)) as Roc tests |
 
 ## Examples
 
@@ -90,13 +91,57 @@ A codec is a Roc module with a `Target` type, `decode : Base -> Try(Target, Str)
 and `encode : Target -> Base` ([`Cents.roc`](examples/order/Cents.roc)), chosen
 with `--codec ID=MODULE` when generating.
 
+## JSON
+
+The two JSON mappings of spec §16. `JsonValue` is a JSON tree (numbers as
+text) with a strict reader (I-JSON: no duplicate member names, no unpaired
+surrogates, the limits of §7) and a writer. Roc has a builtin `Json`, so the
+type is called `JsonValue`.
+
+| | Function |
+|---|---|
+| JSON without a schema (§16.1) | `JsonValue.from_json(text)`: a `Value` (`null` is `None`) |
+| Lossless (§16.2) | `JsonValue.to_lossless_json(value)`, `JsonValue.from_lossless_json(text)` |
+| Plain, with a type (§16.3) | `ToJson.to_str(x, to_json_order)`, `FromJson.one(text, from_json_order)` |
+| JSON Lines | `ToJson.lines(xs, to_json_order)`, `FromJson.lines(text, from_json_order)` |
+| The JSON tree | `JsonValue.parse`, `JsonValue.to_str` |
+
+`haus-gen roc --json` adds `from_json_<name> : JsonValue -> Try(T, Decode.Error)`
+and `to_json_<name> : T -> Try(JsonValue, Encode.Error)` to each type, built
+from `FromJson` and `ToJson` as decoders are from `Decode` and `Encode`. The
+JSON is the same as in Rust and TypeScript: `Int`, `Int64` and `UInt64` as
+strings, `Decimal` as a string with its scale, `Bytes` as base64, a closed
+variant of tags without payload as a string, other variants as objects with
+`"_tag"`. A `Maybe` is `null` or the value when its inner JSON can't be
+`null`, and tagged otherwise; Roc has no traits, so haus-gen decides this
+from the schema, and a generic type takes a `Bool` for each parameter
+(`from_json_pair(j, from_json_a, nullable_a)`).
+
+JSON is opt-in for now: the examples and the schema packages in
+[`../extensions`](../extensions) are generated without it, and a module with
+JSON needs the packages it imports generated with `--json` too.
+
+A plain JSON text may nest 4·256 + 1 levels, as one haus level can take
+several JSON levels, and the value read must then nest at most 256 levels as
+a haus value (spec §16). `from_json_<name>` checks that by encoding what it
+read (`FromJson.within_depth`); `read_json_<name>`, which the readers of other
+types call, doesn't. A generic type's `from_json_pair` doesn't check either,
+as it can't encode its parameters: read through a type without parameters
+(`type Pairs = Pair Int`).
+
+What Roc can't do yet, or this binding doesn't: a schema package type is
+assumed not to be a `Maybe` when deciding whether a `Maybe` of it writes
+`null`.
+
 ## Tests
 
 ```sh
 cd package && roc test ConformanceTest.roc && roc test TimeTest.roc
 cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Stream.roc
+cd package && roc test JsonValue.roc && roc test FromJson.roc && roc test ToJson.roc
 cd examples/shop && roc test main.roc
 cd schema-test && roc test main.roc
+cd json-test && roc test main.roc
 ```
 
 `ConformanceTest.roc` is generated from `../test-suite` by
@@ -114,3 +159,10 @@ the suite or the generator:
 ```sh
 python3 scripts/gen_schema_conformance.py
 ```
+
+[`json-test/`](json-test) runs the JSON suite (`../test-suite/json`, spec §16)
+the same way: `scripts/gen_json_conformance.py` generates `Plain.roc` for
+`plain.schema.haus` with `haus-gen roc --json`, a JSON module for each schema
+of the schema suite (they only have to compile), and `JsonTest.roc` with one
+`expect` per plain, lossless and schemaless case and per `valid/NAME.json`
+(each a lossless case).

@@ -1,5 +1,6 @@
 //! Rust code from a schema: one item per named type, with `Decode` and
-//! `Encode` implementations that check every rule of the schema.
+//! `Encode` implementations that check every rule of the schema, and
+//! `FromJson` and `ToJson` for its plain JSON (spec §16.3).
 //!
 //! | haus                         | Rust                                     |
 //! |------------------------------|------------------------------------------|
@@ -78,6 +79,8 @@ pub fn generate(file: &File, input: &Input) -> Result<String, Error> {
     let mut g = Gen {
         input,
         reach: reach(&defs),
+        cyclic: cyclic_aliases(&defs),
+        tagged_maybes: tagged_maybes(&defs),
         defs,
         names: file.types.iter().map(|d| d.name.clone()).collect(),
         codecs,
@@ -158,6 +161,86 @@ fn reach<'a>(defs: &HashMap<&'a str, &'a TypeDef>) -> HashMap<&'a str, HashSet<&
     edges.keys().map(|&start| (start, reachable(start))).collect()
 }
 
+/// The named types a type expression refers to without passing through a
+/// record or variant (which are types of their own in Rust).
+fn aliased<'a>(ty: &'a Ty, out: &mut Vec<&'a str>) {
+    if let Ty::Name { name, args, .. } = ty {
+        out.push(name);
+        args.iter().for_each(|a| aliased(a, out));
+    }
+}
+
+/// Aliases (definitions that aren't a record or variant) that refer to
+/// themselves through other aliases: `type Loop = Maybe Loop`, `type N = Array N`.
+fn cyclic_aliases<'a>(defs: &HashMap<&'a str, &'a TypeDef>) -> HashSet<&'a str> {
+    let is_alias = |name: &str| defs.get(name).is_some_and(|d| matches!(d.ty, Ty::Name { .. }));
+    let refers = |name: &'a str| {
+        let mut out = vec![];
+        aliased(&defs[name].ty, &mut out);
+        out.into_iter().filter(|n| defs.contains_key(n)).collect::<Vec<_>>()
+    };
+    defs.keys()
+        .copied()
+        .filter(|&start| is_alias(start))
+        .filter(|&start| {
+            let (mut seen, mut todo) = (HashSet::new(), refers(start));
+            while let Some(n) = todo.pop() {
+                if n == start {
+                    return true;
+                }
+                if is_alias(n) && seen.insert(n) {
+                    todo.extend(refers(n));
+                }
+            }
+            false
+        })
+        .collect()
+}
+
+/// The positions of the `Maybe`s that reach themselves only through `Maybe`,
+/// `Secret` and names (`type T = Maybe T`): they always use the tagged form
+/// in JSON (spec §16.3), so the form never depends on where one starts.
+pub(crate) fn tagged_maybes(defs: &HashMap<&str, &TypeDef>) -> HashSet<usize> {
+    fn maybes(ty: &Ty, out: &mut Vec<(usize, Ty)>) {
+        match ty {
+            Ty::Name { name, args, pos } => {
+                if name == "Maybe"
+                    && let [arg] = args.as_slice()
+                {
+                    out.push((*pos, arg.clone()));
+                }
+                args.iter().for_each(|a| maybes(a, out));
+            }
+            Ty::Param { .. } => {}
+            Ty::Record { fields, .. } => fields.iter().for_each(|f| maybes(&f.ty, out)),
+            Ty::Variant { cases, .. } => cases.iter().flat_map(|c| &c.payload).for_each(|t| maybes(t, out)),
+        }
+    }
+    let mut all = vec![];
+    defs.values().for_each(|d| maybes(&d.ty, &mut all));
+    all.into_iter()
+        .filter(|(target, arg)| {
+            let (mut seen, mut todo) = (HashSet::new(), vec![arg.clone()]);
+            // Only names lead anywhere: records, variants and parameters end the search.
+            while let Some(Ty::Name { name, args, pos }) = todo.pop() {
+                match (name.as_str(), args.as_slice()) {
+                    ("Maybe", _) if pos == *target => return true,
+                    ("Maybe" | "Secret", [inner]) => todo.push(inner.clone()),
+                    (name, _) => {
+                        if let Some(def) = defs.get(name)
+                            && seen.insert(name.to_owned())
+                        {
+                            todo.push(def.ty.clone());
+                        }
+                    }
+                }
+            }
+            false
+        })
+        .map(|(pos, _)| pos)
+        .collect()
+}
+
 // ── Rust types and their (de)coding ──────────────────────────
 
 /// Decoding or encoding a value `x`: a function to call, or an expression in `x`.
@@ -185,36 +268,68 @@ impl Fun {
     }
 }
 
-/// A Rust type, how to decode it from `x: &Value`, and how to encode `x: &T`.
+/// A Rust type, how to decode it from `x: &Value` and encode `x: &T`, and
+/// how to read it from `x: &Json` and write `x: &T` as plain JSON.
 struct Rs {
     ty: TokenStream,
     de: Fun,
     en: Fun,
+    from_json: Fun,
+    to_json: Fun,
+    /// `ty` with every codec's target replaced by its base type: a type that
+    /// implements `FromJson` and `ToJson`, and says whether the JSON can be `null`.
+    shadow: TokenStream,
 }
 
 impl Rs {
-    /// A type that implements `Decode` and `Encode` itself.
+    /// A type that implements `Decode`, `Encode`, `FromJson` and `ToJson` itself.
     fn plain(ty: TokenStream) -> Rs {
-        Rs { de: Fun::Path(quote!(<#ty as ::haus::Decode>::decode)), en: Fun::Path(quote!(::haus::Encode::encode)), ty }
+        Rs::named(ty.clone(), ty)
     }
 
-    /// A container with helpers `::haus::de::<helper>` and `::haus::ser::<helper>`.
-    fn container(ty: TokenStream, helper: &str, items: &[&Rs]) -> Rs {
+    /// [`Rs::plain`], with the shadow type given.
+    fn named(ty: TokenStream, shadow: TokenStream) -> Rs {
+        Rs {
+            de: Fun::Path(quote!(<#ty as ::haus::Decode>::decode)),
+            en: Fun::Path(quote!(::haus::Encode::encode)),
+            from_json: Fun::Path(quote!(<#ty as ::haus::FromJson>::from_json)),
+            to_json: Fun::Path(quote!(::haus::ToJson::to_json)),
+            ty,
+            shadow,
+        }
+    }
+
+    /// Whether the JSON of this type can be `null`, in an implementation of `bound`.
+    fn nullable(&self, bound: &str) -> TokenStream {
+        let (shadow, bound) = (&self.shadow, format_ident!("{bound}"));
+        quote!(<#shadow as ::haus::#bound>::NULLABLE)
+    }
+
+    /// A container with helpers `::haus::de::<helper>`, `::haus::ser::<helper>`
+    /// and the same in `::haus::json`.
+    fn container(ty: TokenStream, shadow: TokenStream, helper: &str, items: &[&Rs]) -> Rs {
         let helper = format_ident!("{helper}");
         let (de, en): (Vec<_>, Vec<_>) = items.iter().map(|r| (r.de.value(), r.en.value())).unzip();
+        let (from, to): (Vec<_>, Vec<_>) = items.iter().map(|r| (r.from_json.value(), r.to_json.value())).unzip();
         Rs {
             ty,
             de: Fun::Expr(quote!(::haus::de::#helper(x, #(#de),*))),
             en: Fun::Expr(quote!(::haus::ser::#helper(x, #(#en),*))),
+            from_json: Fun::Expr(quote!(::haus::json::de::#helper(x, #(#from),*))),
+            to_json: Fun::Expr(quote!(::haus::json::ser::#helper(x, #(#to),*))),
+            shadow,
         }
     }
 
     fn boxed(self) -> Rs {
-        let (ty, de) = (self.ty, self.de.call(quote!(x)));
+        let (ty, shadow, de, from) = (self.ty, self.shadow, self.de.call(quote!(x)), self.from_json.call(quote!(x)));
         Rs {
             ty: quote!(::std::boxed::Box<#ty>),
             de: Fun::Expr(quote!(#de.map(::std::boxed::Box::new))),
             en: Fun::Expr(self.en.call(quote!(&**x))),
+            from_json: Fun::Expr(quote!(#from.map(::std::boxed::Box::new))),
+            to_json: Fun::Expr(self.to_json.call(quote!(&**x))),
+            shadow: quote!(::std::boxed::Box<#shadow>),
         }
     }
 }
@@ -241,7 +356,16 @@ impl FieldRs {
 
     /// `name: r.required("key", decode)?`.
     fn de(&self) -> TokenStream {
-        let (name, key, f) = (&self.name, &self.key, self.rs.de.value());
+        self.read(self.rs.de.value())
+    }
+
+    /// `name: r.required("key", from_json)?`, `r` being a JSON object.
+    fn read_json(&self) -> TokenStream {
+        self.read(self.rs.from_json.value())
+    }
+
+    fn read(&self, f: TokenStream) -> TokenStream {
+        let (name, key) = (&self.name, &self.key);
         let how = format_ident!("{}", if self.optional { "optional" } else { "required" });
         quote!(#name: r.#how(#key, #f)?)
     }
@@ -249,12 +373,21 @@ impl FieldRs {
     /// The entry for `ser::record`: `place` is the field (`self.name`), or a
     /// reference to it when `bound` by a pattern (`name`).
     fn en(&self, place: TokenStream, bound: bool) -> TokenStream {
+        self.write(&self.rs.en, place, bound)
+    }
+
+    /// The entry for `json::ser::object`, as [`FieldRs::en`].
+    fn write_json(&self, place: TokenStream, bound: bool) -> TokenStream {
+        self.write(&self.rs.to_json, place, bound)
+    }
+
+    fn write(&self, f: &Fun, place: TokenStream, bound: bool) -> TokenStream {
         let key = &self.key;
         if self.optional {
-            let f = self.rs.en.value();
+            let f = f.value();
             quote!((#key, #place.as_ref().map(#f)))
         } else {
-            let value = self.rs.en.call(if bound { place } else { quote!(&#place) });
+            let value = f.call(if bound { place } else { quote!(&#place) });
             quote!((#key, ::std::option::Option::Some(#value)))
         }
     }
@@ -273,6 +406,11 @@ struct Gen<'a> {
     input: &'a Input<'a>,
     defs: HashMap<&'a str, &'a TypeDef>,
     reach: HashMap<&'a str, HashSet<&'a str>>,
+    /// Aliases that refer to themselves (`type Loop = Maybe Loop`): Rust
+    /// type aliases can't, so they are newtypes.
+    cyclic: HashSet<&'a str>,
+    /// The `Maybe`s that always use the tagged form in JSON, by position.
+    tagged_maybes: HashSet<usize>,
     codecs: HashMap<&'a str, TokenStream>,
     /// Names of generated types, so names for inline types don't clash.
     names: HashSet<String>,
@@ -330,16 +468,24 @@ impl Item<'_> {
         quote!(#doc #deprecated)
     }
 
-    /// The type definition, after `header`, and its `Decode` and `Encode` implementations.
+    /// The type definition, after `header`, its `Decode` and `Encode`
+    /// implementations, and its `FromJson` and `ToJson` ones (`json`).
     fn implement(
         &self,
         header: TokenStream,
         definition: TokenStream,
         decode: TokenStream,
         encode: TokenStream,
+        json: Json,
     ) -> TokenStream {
         let (name, g) = (&self.name, self.generics());
         let (de_g, en_g) = (self.bounded("Decode"), self.bounded("Encode"));
+        let (from_g, to_g) = (self.bounded("FromJson"), self.bounded("ToJson"));
+        let Json { from, to, nullable } = json;
+        let (from_null, to_null) = match nullable {
+            Some((from, to)) => (quote!(const NULLABLE: bool = #from;), quote!(const NULLABLE: bool = #to;)),
+            None => (quote!(), quote!()),
+        };
         quote! {
             #header
             #[derive(Debug, Clone, PartialEq)]
@@ -359,8 +505,33 @@ impl Item<'_> {
                     #encode
                 }
             }
+
+            #[allow(deprecated)]
+            impl #from_g ::haus::FromJson for #name #g {
+                #from_null
+                #[allow(unused_variables)]
+                fn from_json(j: &::haus::Json) -> ::std::result::Result<Self, ::haus::DecodeError> {
+                    #from
+                }
+            }
+
+            #[allow(deprecated)]
+            impl #to_g ::haus::ToJson for #name #g {
+                #to_null
+                fn to_json(&self) -> ::std::result::Result<::haus::Json, ::haus::EncodeError> {
+                    #to
+                }
+            }
         }
     }
+}
+
+/// The bodies of `FromJson::from_json` (of `j: &Json`) and `ToJson::to_json`,
+/// and `NULLABLE` in each if it isn't false.
+struct Json {
+    from: TokenStream,
+    to: TokenStream,
+    nullable: Option<(TokenStream, TokenStream)>,
 }
 
 impl<'a> Gen<'a> {
@@ -399,6 +570,9 @@ impl<'a> Gen<'a> {
             }
             Ty::Variant { closed: true, cases, .. } if cases.len() == 1 => (self.single(item, &cases[0])?, true),
             Ty::Variant { closed, cases, .. } => (self.variant(item, *closed, cases)?, true),
+            ty if id.is_some() && self.cyclic.contains(item.name.to_string().as_str()) => {
+                (self.newtype(item, ty)?, true)
+            }
             ty => {
                 let target = self.lower(ty, &item.at)?.ty;
                 (quote! { #header #[allow(deprecated)] pub type #name #g = #target; }, false)
@@ -459,10 +633,17 @@ impl<'a> Gen<'a> {
                 ty: quote!(<#codec as ::haus::Codec>::Target),
                 de: Fun::Path(quote!(::haus::de::codec::<#codec>)),
                 en: Fun::Path(quote!(::haus::ser::codec::<#codec>)),
+                from_json: Fun::Path(quote!(::haus::json::de::codec::<#codec>)),
+                to_json: Fun::Path(quote!(::haus::json::ser::codec::<#codec>)),
+                shadow: quote!(<#codec as ::haus::Codec>::Base),
             });
         }
-        let args = args.iter().map(|a| self.lower(a, at).map(|r| r.ty)).collect::<Result<Vec<_>, _>>()?;
-        let rs = Rs::plain(if args.is_empty() { path } else { quote!(#path<#(#args),*>) });
+        let args = args.iter().map(|a| self.lower(a, at)).collect::<Result<Vec<_>, _>>()?;
+        let (tys, shadows) = (args.iter().map(|r| &r.ty), args.iter().map(|r| &r.shadow));
+        let rs = match args.is_empty() {
+            true => Rs::plain(path),
+            false => Rs::named(quote!(#path<#(#tys),*>), quote!(#path<#(#shadows),*>)),
+        };
         let recursive = self.reach.get(name).is_some_and(|r| r.contains(at.owner.name.as_str()));
         Ok(if recursive && !at.contained { rs.boxed() } else { rs })
     }
@@ -481,33 +662,62 @@ impl<'a> Gen<'a> {
             "Any" => scalar(quote!(::haus::Value)),
             "Secret" => {
                 let inner = self.lower(&args[0], at)?;
-                let (ty, de, en) = (&inner.ty, inner.de.value(), inner.en.value());
+                let (ty, shadow, de, en) = (&inner.ty, &inner.shadow, inner.de.value(), inner.en.value());
+                let (from, to) = (inner.from_json.value(), inner.to_json.value());
                 let what = format!("Secret {}", args[0]);
                 Ok(Rs {
                     ty: quote!(::haus::Secret<#ty>),
                     de: Fun::Expr(quote!(::haus::de::secret(x, #what, #de))),
                     en: Fun::Expr(quote!(::haus::ser::secret(x, #en))),
+                    from_json: Fun::Expr(quote!(::haus::json::de::secret(x, #what, #from))),
+                    to_json: Fun::Expr(quote!(::haus::json::ser::secret(x, #what, #to))),
+                    shadow: quote!(::haus::Secret<#shadow>),
                 })
             }
             "Array" => {
                 let item = self.lower(&args[0], &at.inner("Item").contained())?;
-                let ty = &item.ty;
-                Ok(Rs::container(quote!(::std::vec::Vec<#ty>), "array", &[&item]))
+                let (ty, shadow) = (&item.ty, &item.shadow);
+                Ok(Rs::container(quote!(::std::vec::Vec<#ty>), quote!(::std::vec::Vec<#shadow>), "array", &[&item]))
             }
             "Map" => {
                 let value = self.lower(&args[0], &at.inner("Value").contained())?;
-                let ty = &value.ty;
-                Ok(Rs::container(quote!(::std::collections::BTreeMap<::std::string::String, #ty>), "map", &[&value]))
+                let (ty, shadow) = (&value.ty, &value.shadow);
+                Ok(Rs::container(
+                    quote!(::std::collections::BTreeMap<::std::string::String, #ty>),
+                    quote!(::std::collections::BTreeMap<::std::string::String, #shadow>),
+                    "map",
+                    &[&value],
+                ))
             }
             "Maybe" => {
                 let some = self.lower(&args[0], at)?;
-                let ty = &some.ty;
-                Ok(Rs::container(quote!(::std::option::Option<#ty>), "maybe", &[&some]))
+                let (ty, shadow) = (&some.ty, &some.shadow);
+                let (from, to) = (some.from_json.value(), some.to_json.value());
+                // `true` forces the tagged form, as for an inner type whose JSON can be null.
+                let (from_null, to_null) = match self.tagged_maybes.contains(&pos) {
+                    true => (quote!(true), quote!(true)),
+                    false => (some.nullable("FromJson"), some.nullable("ToJson")),
+                };
+                Ok(Rs {
+                    from_json: Fun::Expr(quote!(::haus::json::de::maybe(x, #from_null, #from))),
+                    to_json: Fun::Expr(quote!(::haus::json::ser::maybe(x, #to_null, #to))),
+                    ..Rs::container(
+                        quote!(::std::option::Option<#ty>),
+                        quote!(::std::option::Option<#shadow>),
+                        "maybe",
+                        &[&some],
+                    )
+                })
             }
             "Result" => {
                 let (err, ok) = (self.lower(&args[0], &at.inner("Err"))?, self.lower(&args[1], &at.inner("Ok"))?);
-                let (e, a) = (&err.ty, &ok.ty);
-                Ok(Rs::container(quote!(::std::result::Result<#a, #e>), "result", &[&ok, &err]))
+                let (e, a, e_shadow, a_shadow) = (&err.ty, &ok.ty, &err.shadow, &ok.shadow);
+                Ok(Rs::container(
+                    quote!(::std::result::Result<#a, #e>),
+                    quote!(::std::result::Result<#a_shadow, #e_shadow>),
+                    "result",
+                    &[&ok, &err],
+                ))
             }
             _ => self.fail(pos, format!("{name} is only allowed as the whole type of a definition")),
         }
@@ -587,6 +797,12 @@ impl<'a> Gen<'a> {
             f.en(quote!(self.#n), false)
         });
         let bind = bind_record(quote!(::haus::de::Record::new(v, #label)), closed, fields);
+        let json_bind = bind_record(quote!(::haus::json::de::Object::new(j, #label)), closed, fields);
+        let read = fs.iter().map(FieldRs::read_json);
+        let written = fs.iter().map(|f| {
+            let n = &f.name;
+            f.write_json(quote!(self.#n), false)
+        });
         Ok(item.implement(
             item.header(&[]),
             quote!(pub struct #name #g { #(#decls),* }),
@@ -595,13 +811,62 @@ impl<'a> Gen<'a> {
                 ::std::result::Result::Ok(Self { #(#decoded),* })
             },
             quote!(::haus::ser::record([#(#entries),*])),
+            Json {
+                nullable: None,
+                from: quote! {
+                    #json_bind
+                    ::std::result::Result::Ok(Self { #(#read),* })
+                },
+                to: quote!(::haus::json::ser::object([#(#written),*])),
+            },
+        ))
+    }
+
+    /// An alias that refers to itself: a struct around the aliased type.
+    fn newtype(&mut self, item: &Item<'a>, ty: &'a Ty) -> Result<TokenStream, Error> {
+        let inner = self.lower(ty, &item.at)?;
+        let (name, g, inner_ty) = (&item.name, item.generics(), &inner.ty);
+        // Its JSON can be null only through a `Maybe` that doesn't reach itself.
+        let mut body = ty;
+        while let Ty::Name { name, args, .. } = body
+            && name == "Secret"
+        {
+            body = &args[0];
+        }
+        let nullable = match body {
+            Ty::Name { name, pos, .. } if name == "Maybe" && self.tagged_maybes.contains(pos) => None,
+            _ => Some((inner.nullable("FromJson"), inner.nullable("ToJson"))),
+        };
+        Ok(item.implement(
+            item.header(&[]),
+            quote!(pub struct #name #g (pub #inner_ty);),
+            {
+                let de = inner.de.call(quote!(v));
+                quote!(#de.map(Self))
+            },
+            inner.en.call(quote!(&self.0)),
+            Json {
+                from: {
+                    let from = inner.from_json.call(quote!(j));
+                    quote!(#from.map(Self))
+                },
+                to: inner.to_json.call(quote!(&self.0)),
+                nullable,
+            },
         ))
     }
 
     /// `closed < Tag … >`: a struct, checked for its tag.
     fn single(&mut self, item: &Item<'a>, case: &'a Case) -> Result<TokenStream, Error> {
         let (name, g, label, tag) = (&item.name, item.generics(), item.name.to_string(), &case.tag);
-        let (definition, decode, encode) = match self.payload(case, &item.at)? {
+        // Checks the tag a JSON object or string holds.
+        let check = quote! {
+            if tag != #tag {
+                return ::std::result::Result::Err(::haus::de::unknown_tag(tag, &[#tag]));
+            }
+        };
+        let tagged = quote!(let (tag, r) = ::haus::json::de::variant(j, #label)?; #check);
+        let (definition, decode, encode, json) = match self.payload(case, &item.at)? {
             Payload::None => (
                 quote!(pub struct #name;),
                 quote! {
@@ -609,18 +874,38 @@ impl<'a> Gen<'a> {
                     ::std::result::Result::Ok(Self)
                 },
                 quote!(::haus::ser::variant(#tag, ::std::vec![])),
+                // A closed variant whose tags have no payload: a string.
+                Json {
+                    nullable: None,
+                    from: quote! {
+                        let tag = ::haus::json::de::tag_name(j, #label)?;
+                        #check
+                        ::std::result::Result::Ok(Self)
+                    },
+                    to: quote!(::haus::json::ser::tag_name(#tag)),
+                },
             ),
             Payload::Tuple(items) => {
                 let tys = items.iter().map(|r| &r.ty);
                 let (bind, values) = tuple_de(&items);
+                let (json_bind, read) = tuple_from_json(&items);
                 let vars = vars(items.len());
                 let encoded = tuple_en(&items);
+                let written = tuple_to_json(&items);
                 (
                     quote!(pub struct #name #g (#(pub #tys),*);),
                     quote! { #bind ::std::result::Result::Ok(Self(#(#values),*)) },
                     quote! {
                         let Self(#(#vars),*) = self;
                         ::haus::ser::variant(#tag, ::std::vec![#(#encoded),*])
+                    },
+                    Json {
+                        nullable: None,
+                        from: quote! { #tagged #json_bind ::std::result::Result::Ok(Self(#(#read),*)) },
+                        to: quote! {
+                            let Self(#(#vars),*) = self;
+                            ::haus::json::ser::tagged(#tag, [#(#written),*])
+                        },
                     },
                 )
             }
@@ -632,6 +917,25 @@ impl<'a> Gen<'a> {
                     f.en(quote!(self.#n), false)
                 });
                 let bind = bind_record(quote!(::haus::de::payload(tag, args)), closed, fields);
+                let json = if fields.iter().any(|f| f.key == "_tag") {
+                    Json {
+                        nullable: None,
+                        from: quote! { #tagged ::std::result::Result::Err(::haus::json::de::no_plain_form(#tag)) },
+                        to: quote!(::haus::json::ser::no_plain_form(#tag)),
+                    }
+                } else {
+                    let read = rs.iter().map(FieldRs::read_json);
+                    let written = rs.iter().map(|f| {
+                        let n = &f.name;
+                        f.write_json(quote!(self.#n), false)
+                    });
+                    let json_bind = bind_payload(closed, fields);
+                    Json {
+                        nullable: None,
+                        from: quote! { #tagged #json_bind ::std::result::Result::Ok(Self { #(#read),* }) },
+                        to: quote!(::haus::json::ser::tagged_object(#tag, [#(#written),*])),
+                    }
+                };
                 (
                     quote!(pub struct #name #g { #(#decls),* }),
                     quote! {
@@ -639,6 +943,7 @@ impl<'a> Gen<'a> {
                         ::std::result::Result::Ok(Self { #(#decoded),* })
                     },
                     quote!(::haus::ser::variant(#tag, ::std::vec![::haus::ser::record([#(#entries),*])])),
+                    json,
                 )
             }
         };
@@ -653,6 +958,7 @@ impl<'a> Gen<'a> {
                 #decode
             },
             encode,
+            json,
         ))
     }
 
@@ -665,54 +971,96 @@ impl<'a> Gen<'a> {
             );
         }
         let (name, g, label) = (&item.name, item.generics(), item.name.to_string());
+        // A closed variant whose tags have no payload is a string in JSON.
+        let names_only = closed && cases.iter().all(|c| c.payload.is_empty());
         let arms = cases
             .iter()
             .map(|case| {
                 let (tag, v) = (&case.tag, format_ident!("{}", case.tag));
                 let deprecated = deprecated([case.attrs.as_slice()]);
                 Ok(match self.payload(case, &item.at)? {
-                    Payload::None => (
-                        quote!(#deprecated #v),
-                        quote!(#tag => { ::haus::de::args::<0>(tag, args)?; ::std::result::Result::Ok(Self::#v) }),
-                        quote!(Self::#v => ::haus::ser::variant(#tag, ::std::vec![])),
-                    ),
+                    Payload::None => Arm {
+                        decl: quote!(#deprecated #v),
+                        de: quote!(#tag => { ::haus::de::args::<0>(tag, args)?; ::std::result::Result::Ok(Self::#v) }),
+                        en: quote!(Self::#v => ::haus::ser::variant(#tag, ::std::vec![])),
+                        from_json: match names_only {
+                            true => quote!(#tag => ::std::result::Result::Ok(Self::#v),),
+                            false => quote!(#tag => { r.args::<0>()?; ::std::result::Result::Ok(Self::#v) }),
+                        },
+                        to_json: match names_only {
+                            true => quote!(Self::#v => ::haus::json::ser::tag_name(#tag)),
+                            false => quote!(Self::#v => ::haus::json::ser::tagged(#tag, [])),
+                        },
+                    },
                     Payload::Tuple(items) => {
                         let tys = items.iter().map(|r| &r.ty);
                         let (bind, values) = tuple_de(&items);
+                        let (json_bind, read) = tuple_from_json(&items);
                         let vars = vars(items.len());
                         let encoded = tuple_en(&items);
-                        (
-                            quote!(#deprecated #v(#(#tys),*)),
-                            quote!(#tag => { #bind ::std::result::Result::Ok(Self::#v(#(#values),*)) }),
-                            quote!(Self::#v(#(#vars),*) => ::haus::ser::variant(#tag, ::std::vec![#(#encoded),*])),
-                        )
+                        let written = tuple_to_json(&items);
+                        Arm {
+                            decl: quote!(#deprecated #v(#(#tys),*)),
+                            de: quote!(#tag => { #bind ::std::result::Result::Ok(Self::#v(#(#values),*)) }),
+                            en: quote!(Self::#v(#(#vars),*) => ::haus::ser::variant(#tag, ::std::vec![#(#encoded),*])),
+                            from_json: quote!(#tag => { #json_bind ::std::result::Result::Ok(Self::#v(#(#read),*)) }),
+                            to_json: quote!(Self::#v(#(#vars),*) => ::haus::json::ser::tagged(#tag, [#(#written),*])),
+                        }
                     }
                     Payload::Record { closed, fields, rs } => {
                         let decls = rs.iter().map(|f| f.decl(quote!()));
                         let decoded = rs.iter().map(FieldRs::de);
-                        let names = rs.iter().map(|f| &f.name);
+                        let names: Vec<_> = rs.iter().map(|f| &f.name).collect();
                         let entries = rs.iter().map(|f| {
                             let n = &f.name;
                             f.en(quote!(#n), true)
                         });
                         let bind = bind_record(quote!(::haus::de::payload(tag, args)), closed, fields);
-                        (
-                            quote!(#deprecated #v { #(#decls),* }),
-                            quote!(#tag => {
+                        let (from_json, to_json) = if fields.iter().any(|f| f.key == "_tag") {
+                            (
+                                quote!(#tag => ::std::result::Result::Err(::haus::json::de::no_plain_form(#tag)),),
+                                quote!(Self::#v { .. } => ::haus::json::ser::no_plain_form(#tag)),
+                            )
+                        } else {
+                            let read = rs.iter().map(FieldRs::read_json);
+                            let written = rs.iter().map(|f| {
+                                let n = &f.name;
+                                f.write_json(quote!(#n), true)
+                            });
+                            let json_bind = bind_payload(closed, fields);
+                            (
+                                quote!(#tag => { #json_bind ::std::result::Result::Ok(Self::#v { #(#read),* }) }),
+                                quote!(Self::#v { #(#names),* } => ::haus::json::ser::tagged_object(#tag, [#(#written),*])),
+                            )
+                        };
+                        Arm {
+                            decl: quote!(#deprecated #v { #(#decls),* }),
+                            de: quote!(#tag => {
                                 #bind
                                 ::std::result::Result::Ok(Self::#v { #(#decoded),* })
                             }),
-                            quote!(Self::#v { #(#names),* } => ::haus::ser::variant(#tag, ::std::vec![::haus::ser::record([#(#entries),*])])),
-                        )
+                            en: quote!(Self::#v { #(#names),* } => ::haus::ser::variant(#tag, ::std::vec![::haus::ser::record([#(#entries),*])])),
+                            from_json,
+                            to_json,
+                        }
                     }
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        let (decls, (decode, encode)): (Vec<_>, (Vec<_>, Vec<_>)) =
-            arms.into_iter().map(|(d, de, en)| (d, (de, en))).unzip();
+        let decls = arms.iter().map(|a| &a.decl);
+        let (decode, encode) = (arms.iter().map(|a| &a.de), arms.iter().map(|a| &a.en));
+        let (from_json, to_json) = (arms.iter().map(|a| &a.from_json), arms.iter().map(|a| &a.to_json));
         let tags = cases.iter().map(|c| &c.tag);
-        let (other_decl, other_de, other_en) = if closed {
-            (quote!(), quote!(_ => ::std::result::Result::Err(::haus::de::unknown_tag(tag, &[#(#tags),*]))), quote!())
+        let unknown_tag = quote!(::haus::de::unknown_tag(tag, &[#(#tags),*]));
+        let (other_decl, other_de, other_en, other_from_json, other_to_json) = if closed {
+            let at_tag = if names_only { quote!() } else { quote!(.field("_tag")) };
+            (
+                quote!(),
+                quote!(_ => ::std::result::Result::Err(#unknown_tag)),
+                quote!(),
+                quote!(_ => ::std::result::Result::Err(#unknown_tag #at_tag)),
+                quote!(),
+            )
         } else {
             (
                 quote! {
@@ -721,7 +1069,13 @@ impl<'a> Gen<'a> {
                 },
                 quote!(_ => ::std::result::Result::Ok(Self::Unknown(::haus::Unknown::new(tag, args)))),
                 quote!(Self::Unknown(u) => ::haus::Encode::encode(u),),
+                quote!(_ => ::std::result::Result::Ok(Self::Unknown(r.unknown(tag)?))),
+                quote!(Self::Unknown(u) => ::haus::json::ser::unknown(u),),
             )
+        };
+        let read_tag = match names_only {
+            true => quote!(let tag = ::haus::json::de::tag_name(j, #label)?;),
+            false => quote!(let (tag, r) = ::haus::json::de::variant(j, #label)?;),
         };
         Ok(item.implement(
             item.header(&[]),
@@ -739,8 +1093,34 @@ impl<'a> Gen<'a> {
                     #other_en
                 }
             },
+            Json {
+                nullable: None,
+                from: quote! {
+                    #read_tag
+                    match tag {
+                        #(#from_json)*
+                        #other_from_json
+                    }
+                },
+                to: quote! {
+                    match self {
+                        #(#to_json,)*
+                        #other_to_json
+                    }
+                },
+            },
         ))
     }
+}
+
+/// A case of an enum: its declaration, and its arms in `decode`, `encode`,
+/// `from_json` and `to_json`.
+struct Arm {
+    decl: TokenStream,
+    de: TokenStream,
+    en: TokenStream,
+    from_json: TokenStream,
+    to_json: TokenStream,
 }
 
 // ── helpers ──────────────────────────────────────────────────
@@ -769,6 +1149,36 @@ fn tuple_de(items: &[Rs]) -> (TokenStream, Vec<TokenStream>) {
 /// The encoded payload values `a0`, `a1`, ….
 fn tuple_en(items: &[Rs]) -> Vec<TokenStream> {
     items.iter().zip(vars(items.len())).map(|(r, var)| r.en.call(quote!(#var))).collect()
+}
+
+/// `let [a0, a1] = r.args::<2>()?;` (`r` a tag's JSON object) and the values read.
+fn tuple_from_json(items: &[Rs]) -> (TokenStream, Vec<TokenStream>) {
+    let (vars, n) = (vars(items.len()), Literal::usize_unsuffixed(items.len()));
+    let bind = quote!(let [#(#vars),*] = r.args::<#n>()?;);
+    let values = items
+        .iter()
+        .zip(&vars)
+        .enumerate()
+        .map(|(i, (r, var))| {
+            let (i, f) = (Literal::usize_unsuffixed(i), r.from_json.value());
+            quote!(::haus::json::de::arg::<#n, _>(#i, #var, #f)?)
+        })
+        .collect();
+    (bind, values)
+}
+
+/// The payload values `a0`, `a1`, … as JSON.
+fn tuple_to_json(items: &[Rs]) -> Vec<TokenStream> {
+    items.iter().zip(vars(items.len())).map(|(r, var)| r.to_json.call(quote!(#var))).collect()
+}
+
+/// `r.closed(&["_tag", "a"])?;` for a closed record payload in JSON (`r` the tag's object).
+fn bind_payload(closed: bool, fields: &[Field]) -> TokenStream {
+    let keys = fields.iter().map(|f| &f.key);
+    match closed {
+        true => quote! { r.closed(&[#(#keys),*])?; },
+        false => quote!(),
+    }
 }
 
 /// `let r = <record>?;`, then `r.closed(&["a", "b"])?;` for a closed record.

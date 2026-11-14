@@ -77,6 +77,46 @@ const events = Haus.decodeStream(Event)(response.body!)    // Stream<Event, Haus
 const text = Haus.encodeStream(Event)(events)               // Stream<string>, one value per chunk
 ```
 
+## JSON
+
+The same schemas read and write plain JSON (spec §16.3), the JSON a JSON
+consumer expects. The schema says what JSON can't: that a string is a date
+or a decimal.
+
+```ts
+const json = yield* Haus.toJson(Order)(order)     // '{"id":"1042","total":"19.90","status":{"_tag":"Pending"},"note":null}'
+const back = yield* Haus.fromJson(Order)(json)    // HausParseError (not I-JSON) | HausSchemaError (doesn't fit), with paths
+
+const lines = Haus.encodeJsonLines(Event)(events)            // Stream<string>, one JSON text per line
+const decoded = Haus.decodeJsonLines(Event)(response.body!)  // Stream<Event, HausError>, as lines arrive
+```
+
+| Effect schema | JSON |
+|---|---|
+| `String`, `Haus.Date` & co. | a string, std/time as written |
+| `Number`, `Haus.Float32` | a number in the one float spelling (spec §15); `"NaN"`, `"Infinity"`, `"-Infinity"` |
+| integers of schema files (`Int8` … `UInt32`) | a number |
+| `BigInt` (`Int`, `Int64`, `UInt64`) | a string, `"-12"`: many JSON parsers round integers beyond 2⁵³ |
+| `Haus.Decimal`, `BigDecimal` | a string, `"19.90"` |
+| `Boolean` | `true` / `false` |
+| `Uint8Array` | a string, base64 with padding |
+| `Option(X)` | `null` / the value; `{"_tag": "None"}` / `{"_tag": "Some", "value": …}` when X's JSON can be `null` |
+| `optionalKey(X)` | a missing member (never `null`) |
+| `Literals(["Debug", "Info"])` | a string, `"Debug"` |
+| tagged structs | `{"_tag": "Circle", "r": 1.5}`; `{"_tag": "Wrap", "value": 3}` and `{"_tag": "Point", "values": [1, 2]}` for positional ones |
+| an unknown tag in `Haus.OpenUnion` | `{"_tag": "Hexagon", "args": […]}`, the arguments lossless; read back from that form, or from a newer writer's `{"_tag": "Hexagon", "sides": 6}` as `Hexagon { sides: 6 }` |
+| `Haus.Any` | the lossless form: `{"num": "19.90"}`, `{"rec": {…}}`, `{"tag": "None"}`, … |
+| `Redacted(X)` | as X; errors inside never show the value |
+
+Numbers keep their exact text: the reader never rounds them through a float,
+and rejects text that isn't I-JSON (duplicate members, unpaired surrogates).
+A schema with no plain form (`Schema.Unknown`, a union that isn't tagged) is
+a `HausSchemaError` naming it. `Haus.toJsonValue` and `Haus.fromJsonValue`
+work on parsed JSON (`JsonNumber`s for numbers), `Haus.valueFromJson` reads
+JSON without a schema as a haus `Value` (spec §16.1), and
+`Haus.toJson(Haus.Any)` / `Haus.fromJson(Haus.Any)` are the lossless mapping
+(spec §16.2).
+
 ## Schema files
 
 ```ts
@@ -88,7 +128,10 @@ const order = yield* Haus.decode(schemas.Order!)(data)
 
 `Int` → `bigint`, `Decimal` → `string` (the exact text), `Maybe` → `Option`,
 std/time types → `string` (the text as written), `Any` → `Haus.Value`,
-`Secret a` → `Redacted<A>`. For `BigDecimal` and `DateTime`, pass the codecs
+`Secret a` → `Redacted<A>`. A variant case whose record payload has a field
+named `_tag` (`< Odd { _tag: Int32 } >`) can't put its fields beside the tag:
+it decodes nested, `{ _tag: "Odd", value: { _tag: 1 } }`, and has no plain
+JSON form (spec §16.3). For `BigDecimal` and `DateTime`, pass the codecs
 above. Attributes
 don't change decoding; `schemaDeclarations` marks `@deprecated` types, fields
 and tags with JSDoc `@deprecated`. With [`@haus-fmt/import`](../import) (target `"effect"`), you can

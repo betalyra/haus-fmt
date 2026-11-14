@@ -1,0 +1,11 @@
+// JSON without a schema (spec §16.1): reading `json` gives `output`.
+Read { json: "{\"a\": 1, \"b\": [true, false, null], \"c\": \"x\"}", output: { a: 1, b: [True, False, None], c: "x" } },
+Read { json: "1E+05", output: 1e5 },
+Read { json: "-0", output: -0 },
+Read { json: "19.90", output: 19.90 },
+Read { json: "\"\\ud83d\\ude00\"", output: "\u{1F600}" },
+Err { json: "{\"a\": 1, \"a\": 2}" },
+Err { json: "\"\\ud83d\"" },
+Err { json: "[1,]" },
+Err { json: "NaN" },
+Read { json: "\u{FEFF}[1]", output: [1] },

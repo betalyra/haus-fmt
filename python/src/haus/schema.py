@@ -1,4 +1,4 @@
-"""Schema files and decoding with a schema (spec §14, §15).
+"""Schema files, decoding with a schema, and the plain JSON of a type (spec §14, §15, §16.3).
 
     >>> from haus import schema
     >>> s = schema.compile_schema('''
@@ -9,6 +9,10 @@
     {'id': 1, 'name': 'Ada', 'note': Nothing()}
     >>> s["User"].canonical(user)
     '{id:1,name:"Ada",note:None}'
+    >>> s["User"].to_json(user)
+    '{"id":"1","name":"Ada","note":null}'
+    >>> s["User"].from_json('{"id": "1", "name": "Ada", "note": null}') == user
+    True
 
 Host types (the defaults keep the value, spec §13.4):
 
@@ -31,8 +35,10 @@ from typing import Any
 from . import _decode
 from ._canonical import canonical as _canonical
 from ._codecs import DateCodec, DecimalCodec, InstantCodec
-from ._decode import Codec, HausDecodeError, HausEncodeError, format_path
+from ._decode import Codec, HausDecodeError, HausEncodeError
+from ._errors import HausJsonError, format_path
 from ._host import Maybe, Nothing, Secret, Some, Tagged, Unknown
+from ._json import Json, mapped_depth, read_json, read_lines, write_json
 from ._parser import DEFAULT_LIMITS, Limits, Parser
 from ._resolve import MANIFEST, FileResolver, Manifest, identify, installed_package, read_manifest, read_module
 from ._schema_file import (
@@ -88,6 +94,7 @@ __all__ = [
     "FileResolver",
     "HausDecodeError",
     "HausEncodeError",
+    "HausJsonError",
     "HausSchemaFileError",
     "Instance",
     "InstantCodec",
@@ -191,6 +198,48 @@ class SchemaType:
         """Encode values as stream items, each in canonical form followed by `,\\n`."""
         for i, v in enumerate(values):
             yield _canonical(_decode.encode(self._node, v, limits, None, i)) + ",\n"
+
+    # ── JSON (spec §16.3) ──
+
+    def to_json(self, value: object, *, limits: Limits = DEFAULT_LIMITS, max_steps: int | None = None) -> str:
+        """A Python value as its plain JSON (spec §16.3), on one line. Raises `HausEncodeError`.
+
+        Integers beyond 32 bits, decimals and `NaN`/`Infinity` are strings, bytes are base64,
+        `Maybe` is `null` or the value where that is unambiguous, variants carry `"_tag"`.
+        """
+        return write_json(_decode.to_plain_json(self._node, value, limits, max_steps))
+
+    def from_json(self, text: str | bytes, *, limits: Limits = DEFAULT_LIMITS, max_steps: int | None = None) -> Any:
+        """Read a JSON text of this type's plain JSON (spec §16.3) as its Python value.
+
+        Raises `HausJsonError` for text that isn't I-JSON within the limits (duplicate names,
+        lone surrogates, numbers too long), `HausDecodeError` for JSON the type rejects.
+        Numbers are read from their text, never through a float unless the type is one.
+        """
+        j = read_json(text, limits, mapped_depth(limits))
+        return _decode.from_plain_json(self._node, j, limits, max_steps)
+
+    def to_json_lines(self, values: Iterable[object], *, limits: Limits = DEFAULT_LIMITS) -> Iterator[str]:
+        """Each value's plain JSON followed by a line feed: JSON Lines. Errors carry its index first in their path."""
+        for i, v in enumerate(values):
+            yield write_json(_decode.to_plain_json(self._node, v, limits, None, i)) + "\n"
+
+    def from_json_lines(
+        self,
+        source: str | bytes | Readable | Iterable[str | bytes],
+        *,
+        limits: Limits = DEFAULT_LIMITS,
+        max_line_length: int = DEFAULT_MAX_VALUE_LENGTH,
+    ) -> Iterator[Any]:
+        """Read JSON Lines (a text, a file, or chunks split anywhere) and decode each line as it arrives.
+
+        Syntax errors give the line number; decoding errors carry the line's index first in their path.
+        """
+
+        def convert(j: Json, i: int) -> Any:
+            return _decode.from_plain_json(self._node, j, limits, None, i)
+
+        return read_lines(source, limits, mapped_depth(limits), convert, max_line_length)
 
 
 @dataclass(frozen=True, slots=True)

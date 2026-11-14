@@ -87,6 +87,10 @@ const order = h.parse(schemas.Order!, data)
 | `Any` | `h.Any` | `Value`: the parsed value, unchanged |
 | `Secret a` | `h.Secret(a)` | `Secret<A>`: prints `<redacted>`, `expose()` gives the value |
 
+A case whose record payload has a field named `_tag` (`< Odd { _tag: Int32 } >`)
+can't put its fields beside the tag: it is nested, `{ _tag: "Odd"; value: { _tag: number } }`
+(and has no plain JSON form, spec §16.3).
+
 `h.Maybe<A>` is `{ _tag: "None" } | { _tag: "Some"; value: A }`, tagged like
 every other variant, so `Maybe (Maybe Int)` keeps `None` and `Some(None)`
 apart. A missing optional field stays missing (`b?:`), never `None`: an
@@ -116,6 +120,69 @@ as parsing: pass the parser's limits to both if you raise them,
 code are normalized as the parser would (`"1E5"` is written `1e5`).
 `h.stringify` writes for a reader with the limits it is given: an integer
 longer than `maxNumberLength` is written in hex, so that the reader takes it.
+
+## JSON
+
+Schemas also read and write plain JSON (spec §16.3), the JSON a JSON consumer
+expects, with the schema saying what JSON can't (that a string is a date or a
+decimal):
+
+```ts
+h.toJson(Order, order)    // '{"id":"1042","total":"19.90","status":{"_tag":"Pending"},"note":null}'
+h.fromJson(Order, json)   // the same Order again; HausSyntaxError (not I-JSON) or HausDecodeError (doesn't fit), with the path
+
+for await (const line of h.encodeJsonLines(Order, orders)) out.write(line)   // JSON Lines: one JSON text per line
+for await (const o of h.decodeJsonLines(Order, response.body!)) { … }
+```
+
+| type | JSON |
+|---|---|
+| `String`, std/time types | a string, std/time as written |
+| `Int8` … `UInt32` | a number |
+| `Int`, `Int64`, `UInt64` | a string, `"-12"`: many JSON parsers round integers beyond 2⁵³ |
+| `Float32`, `Float64` | a number in the one float spelling (spec §15); `"NaN"`, `"Infinity"`, `"-Infinity"` |
+| `Decimal` | a string, `"19.90"` |
+| `Bytes` | a string, base64 with padding |
+| `Bool` | `true` / `false` |
+| `Maybe a` | `null` / the value; `{"_tag": "None"}` / `{"_tag": "Some", "value": …}` when `a`'s JSON can be `null` (`Maybe (Maybe Int)`) |
+| `Array a`, `Map v`, records | arrays and objects; a missing optional field is a missing member, never `null` |
+| a closed variant of tags without payload (`h.Enum`) | a string, `"Debug"` |
+| other variants | `{"_tag": "Circle", "r": 1.5}`: a record payload's fields beside `_tag`, one argument as `"value"`, several as `"values"` |
+| an unknown value of an open variant | `{"_tag": "Hexagon", "args": […]}`, the arguments lossless |
+| `Any` | its lossless form (below) |
+| `Secret a` | as `a`; errors inside never show the value |
+
+Reading follows decoding: an open record ignores members it doesn't list, a
+closed one rejects them, an integer type takes only whole numbers (`1.0` is
+not one), an open variant reads a `"_tag"` it doesn't list as an unknown
+value (with `"args"` alone, read losslessly; with other members, those as a
+record payload read without a schema, so `{"_tag": "Hexagon", "sides": 6}` is
+`Hexagon { sides: 6 }`). A record payload with a field named `_tag` has no plain form. Every
+schema of `h.` has a JSON form; a schema written by hand (`h.withStandard`)
+declares one with `json` (a `JsonType`), or has none. `h.toJsonValue` and
+`h.fromJsonValue` work on parsed JSON instead of text.
+
+Without a schema:
+
+```ts
+import { fromJson, fromLosslessJson, parseJson, toLosslessJson } from "@haus-fmt/haus"
+
+fromJson(`{"total": 19.90, "ok": true, "note": null}`)   // JSON as haus (spec §16.1): { total: 19.90, ok: True, note: None }
+toLosslessJson(value)       // any haus value as JSON (spec §16.2): {"rec":{"total":{"num":"19.90"}}}
+fromLosslessJson(text)      // and back to an equal value; anything but a lossless form is an error
+parseJson(text)             // the strict I-JSON reader: numbers as JsonNumber (exact text), duplicate members rejected
+```
+
+All of them read RFC 8259 JSON restricted to I-JSON: no duplicate member
+names, no unpaired surrogates, and the limits of spec §7, number literals
+included. Numbers are never rounded through a binary float, except where the
+type says `Float32` or `Float64`. `stringifyJson` writes JSON values
+compactly, with numbers as their text; `JSON.stringify` does too where the
+engine has `JSON.rawJSON`. JSON Lines without a schema: `parseJsonLines`,
+`fromJsonLines`, `fromLosslessJsonLines` and `toLosslessJsonLines`. Readers of
+JSON Lines accept CR LF and a missing last line feed (`requireTerminator`
+makes it an error); an empty line is an error, and a byte order mark is
+ignored only at the start of the stream.
 
 ## Write haus
 

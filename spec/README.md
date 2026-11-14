@@ -514,3 +514,58 @@ Integers are written as decimal integers (in hex when longer than the number lim
   | otherwise | d₁, then `.` and d₂…d<sub>k</sub> if k > 1, then `e` and n − 1 | `1e21`, `1.5e-7` |
 
 - A negative float starts with `-`. Negative zero is `-0`.
+
+## 16. JSON
+
+Two mappings connect haus and JSON. **Lossless** maps every haus value to JSON without a schema, for carrying haus through systems that only store JSON. **Plain** maps the values of a schema type to the JSON a JSON consumer expects, for APIs and export; the schema carries what JSON can't say (that a string is a date or a decimal). Both are version 1 and never change; a different mapping would get a new name (§10).
+
+**JSON that is read.** Converters read JSON (RFC 8259) restricted to I-JSON (RFC 7493): UTF-8, no duplicate member names, no unpaired surrogates in `\u` escapes. A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a converter MUST NOT round them through a binary float, except where the plain mapping says a float. JSON is compared as data: member order and whitespace don't matter.
+
+**Limits.** The limits of §7 apply to the haus value that results (with a type: the value the decoded result encodes to), and the number limit also to JSON number tokens as written. A mapping can need several JSON levels for one haus level (`Tag { … }` is `{"tag": …, "args": [{"rec": {…}}]}`), so the JSON nesting is limited to 4·d + 1, where d is the depth limit of §7, and the depth of the resulting haus value is then checked against d. Without a schema (16.1), the JSON nesting is limited to d.
+
+**Streams.** A stream maps to JSON Lines: one JSON text per value, each followed by a line feed. Readers accept a missing line feed after the last value and CR LF line ends; an empty line is an error. A byte order mark is ignored only at the start of the stream, as in haus (§4), not at the start of each line.
+
+### 16.1 JSON without a schema
+
+Any JSON text reads as a haus value: an object as a record, an array as an array, a string as a string, a number as a number with its literal normalized (§2), `true` and `false` as `True` and `False`, and `null` as `None`.
+
+### 16.2 Lossless
+
+| haus | JSON |
+|---|---|
+| string | a string |
+| array | an array |
+| number | `{"num": "<normalized literal>"}`: `{"num": "19.90"}` |
+| bytes | `{"bytes": "<two lowercase hex digits per byte>"}` |
+| record | `{"rec": {<key>: <value>, …}}` |
+| variant | `{"tag": "<Tag>"}` without arguments, `{"tag": "<Tag>", "args": [<value>, …]}` with them; `Tag { … }` is `Tag({ … })` (§2) |
+
+Reading accepts exactly these forms and rejects every other JSON: a bare number, `true`, `false`, `null`, an object with other members, a `num` that isn't a normalized literal (`"1E5"` and `"01"` are rejected) or holds a number no haus literal can hold (an integer's normalized literal may exceed the number limit when its hex form fits, §12), uppercase hex, a `tag` that isn't a tag, an empty `args`. So every haus value has one lossless form, reading it gives an equal value (§2), and each accepted JSON text is the form of exactly one value. The conformance suite's `.json` files use this mapping, with a file's values in a JSON array.
+
+### 16.3 Plain
+
+With a schema type, the decoded value (§15) is written as:
+
+| Type | JSON |
+|---|---|
+| `String`, std/time types | a string; std/time values as written |
+| `Bytes` | a string, base64 with padding (RFC 4648 §4); readers accept only this canonical form: no whitespace, no URL alphabet, zero pad bits |
+| `Bool` | `true` or `false` (the prelude's `Bool` only; a schema's own `closed < False \| True >` is a closed enum like any other) |
+| `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32` | a number: the decimal integer |
+| `Int`, `Int64`, `UInt64` | a string: the decimal integer (`"-12"`), since many JSON parsers round integers beyond 2⁵³. Readers accept `-?(0|[1-9][0-9]*)` (`"-0"` is 0) whose value a haus literal can hold (§7, §12). |
+| `Float32`, `Float64` | a number in the spelling of §15; `NaN`, `Infinity` and `NegInfinity` as the strings `"NaN"`, `"Infinity"` and `"-Infinity"` |
+| `Decimal` | a string: the normalized literal (`"19.90"`), so that float parsers can't round it. Readers accept a JSON number literal in the string (`"1E+05"` is `1e5`), not hex or digit separators. |
+| `Any` | its lossless form (16.2) |
+| `Secret a` | as `a` |
+| `Array a` | an array |
+| `Map v`, records | an object; a missing optional field is a missing member |
+| `Maybe a` (the prelude's; a schema's own `closed < None \| Some a >` is a variant like any other) | `null` for `None` and the value for `Some(x)`, when `a`'s JSON can't be `null`; otherwise `{"_tag": "None"}` and `{"_tag": "Some", "value": x}` |
+| a closed variant whose tags have no payload (other than `Bool`) | a string: the tag (`"Debug"`) |
+| other variants (`Result` too) | an object with the tag as `"_tag"`: `{"_tag": "Empty"}`; for a case written `Tag { … }` in the schema, the fields beside it (`{"_tag": "Circle", "r": 1.5}`); one positional argument as `"value"`, even if it is a record (`Ok Order` writes `{"_tag": "Ok", "value": {…}}`); several as `"values"`, an array. The schema's case decides, not the value. |
+| an unknown value (§15) | `{"_tag": "<Tag>"}`, with `"args"`, the arguments' lossless forms, if it has any |
+
+A type's JSON can be `null` only if it is a `Maybe` that uses `null`, directly or through a named type or `Secret`. A `Maybe` that reaches itself only through `Maybe`, `Secret` and names (`type T = Maybe T`) always uses the tagged form, so the answer never depends on where one starts. A `Maybe` is identified by where it is written, not by its shape: with `type D = Maybe T`, `D` doesn't reach itself, `T`'s JSON can't be `null`, so `D` uses `null`. So `Maybe (Maybe Int32)` writes `None`, `Some(None)` and `Some(Some(5))` as `{"_tag": "None"}`, `{"_tag": "Some", "value": null}` and `{"_tag": "Some", "value": 5}`. The type decides the form, never the value. A record payload with a field named `_tag` has no plain form. The schema is still valid, and so are its other cases: converters report the error only when writing or reading a value of that case.
+
+**Reading** with a type accepts the forms above and the rules of §15 apply: an open record or record payload ignores members it doesn't list, a closed one rejects them, and every other object (a tagged `Maybe`, a case without payload or with positional arguments) rejects members besides its own; an integer type accepts only a whole number by spelling (`1.0` is not one); a float type rounds as in §15, and a number too large for it is an error; a `"_tag"` an open variant doesn't list reads as an unknown value, and MUST be a tag (§4): with no other member, the bare tag; with `"args"` and no other member, its arguments read losslessly (the form written above), and an `"args"` that isn't a non-empty array is an error; otherwise all its other members, `args` included, read as a record payload without a schema (16.1), so that a reader keeps a newer writer's case (`{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`). Anything else is an error.
+
+**Round trip.** For every value `v` that a type accepts, reading the plain JSON of `decode(v)` gives `decode(v)` back, and two different decoded values never have the same plain JSON.

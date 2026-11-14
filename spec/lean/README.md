@@ -17,8 +17,9 @@ and a reference parser that computes it.
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new` |
+| [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, JSON without a schema, lossless and plain JSON, and the proofs that they round-trip and are unique |
 | [`Main.lean`](Main.lean) | `haus-ref`, the parser on the command line |
-| [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json) | The schema suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` |
+| [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` and `--json-suite` |
 
 It needs [elan](https://github.com/leanprover/elan) (`brew install elan-init`);
 the Lean version is pinned in `lean-toolchain`. No Mathlib.
@@ -29,6 +30,7 @@ lake build
 .lake/build/bin/haus-ref --suite ../../test-suite # the conformance suite
 .lake/build/bin/haus-ref --time Date 2026-02-29     # a std/time check
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §15)
+.lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
 ```
 
 The schema suite's schema files are parsed by the TypeScript binding
@@ -37,6 +39,14 @@ The schema suite's schema files are parsed by the TypeScript binding
 define, resolved, to [`schema-suite.json`](schema-suite.json); run it again
 after changing a schema file (`node scripts/schema-types.ts > schema-suite.json`).
 `haus-ref --schema-batch TYPES FILE` decodes one value per line, for fuzzing.
+The JSON suite's types are written the same way, from `test-suite/json`
+(`node scripts/schema-types.ts ../../test-suite/json > json-suite.json`).
+For fuzzing the JSON mappings, one case per line: `--json-batch TYPES FILE`
+(`SUITE TYPE HEX`, a haus value: decode and write plain JSON),
+`--json-read-batch TYPES FILE` (`SUITE TYPE HEX`, JSON text: read with the
+type), `--lossless-batch FILE` (a haus value: its lossless JSON),
+`--lossless-read-batch FILE` and `--schemaless-read-batch FILE` (JSON text
+read as a haus value). Each prints `ok …` or `err …`.
 
 ## What is proven
 
@@ -157,6 +167,35 @@ the search for the shortest spelling always finds one within its 1100 tries
 and exponent it was given (`decBody_layout`). Rounding and spelling also
 matched JavaScript's `Number` and `toString` exactly on 20,000 random
 literals.
+
+**About JSON** (spec §16), in [`Haus/Json/`](Haus/Json). JSON is modelled
+as data (`JSON`): numbers keep their text, and `JSON.Equiv` compares as §16
+does, member order ignored and numbers by text. A strict reader for JSON text
+(I-JSON, the limits, a leading byte order mark, JSON Lines) and a compact
+writer are references, tested but not proven. All cases of
+`test-suite/json` pass, and every `valid/NAME.json` reads back as its file's
+values. A value is *well formed* (`Value.wf`) when its numbers are normalized
+literals and its tags are tags, as every parsed value is (`parse_wf`).
+
+| Theorem | Says |
+|---|---|
+| `lossless_read_write`, `fromLossless_lossless` | Reading the lossless JSON of a well-formed value gives the value back (§16.2) |
+| `lossless_unique` | Every JSON the lossless reader accepts is, as data, the lossless form of the value it reads |
+| `lossless_equiv_iff` | Two values have the same lossless JSON, as data, exactly when they are equal (§2); for every value |
+| `fromLossless_wf` | What the lossless reader returns is well formed |
+| `plain_round_trip` | If `decode env t v = .ok x` (`v` well formed) and `toJson env t x = .ok j`, then `fromJson env t j = .ok x` (§16.3) |
+| `plain_injective` | Two values decoded with `t` (from well-formed values) with the same plain JSON are the same |
+| `toJson_error` | Writing a decoded value fails only for a record payload with a field named `_tag` (§16.3) |
+| `base64_decode_encode`, `base64_encode_decode` | Base64 reads back, and only canonical base64 is read |
+| `hex_decode_encode`, `hex_encode_decode` | The same for lowercase hex (lossless `bytes`) |
+| `normalizeNumber_normal` | A normalized literal normalizes to itself, so a `Decimal` reads back unchanged |
+| `parse_wf`, `lossless_parsed`, `plain_parsed` | Every value the parser returns is well formed, so both round trips hold for every value of every haus text |
+
+The plain round trip goes by induction on the rules of decoding (`Dec`),
+with `floatLaw` for floats. A `Maybe` writes `None` as `null` only when its
+argument's JSON can't be `null` (`nullArg?_next`, `toJsonC_null`), whatever
+the rule for cycles of `Maybe`s decides, so `null` is never ambiguous.
+`#print axioms` shows only `propext`, `Classical.choice` and `Quot.sound`.
 
 **About versions** (spec §10), in [`Haus/Version.lean`](Haus/Version.lean).
 A `Version` is what a version fixes: its files, its canonical form, its

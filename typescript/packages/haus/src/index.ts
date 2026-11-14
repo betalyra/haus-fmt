@@ -2,7 +2,12 @@ import { HausSyntaxError } from "./errors.js"
 import { DEFAULT_LIMITS, Parser, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
-export { HausSyntaxError } from "./errors.js"
+export { formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, type Path } from "./errors.js"
+export {
+  equalsJson, fromJson, fromJsonLines, jsonDepth, fromJsonValue, fromLosslessJson, fromLosslessJsonLines, fromLosslessJsonValue, isJsonObject, jsonObject, JsonNumber,
+  parseJson, parseJsonLines, stringifyJson, toLosslessJson, toLosslessJsonLines, toLosslessJsonValue, type Json, type JsonLinesOptions, type JsonObject,
+} from "./json.js"
+export { fromBase64, fromPlainJson, toBase64, toPlainJson, type JsonCase, type JsonRecordType, type JsonType, type JsonVariantType } from "./json-plain.js"
 export { DEFAULT_LIMITS, MAX_DEPTH, type Limits } from "./parser.js"
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
 export * from "./value.js"

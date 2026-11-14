@@ -27,3 +27,9 @@ type Mixed = closed {
   at?: Instant,
   any?: Map Any,
 }
+// The member names the plain JSON mapping uses itself (spec §16.3): `_tag`,
+// `value` and `values` are fields like any other in a record, and the last
+// two in a record payload. (A record payload with a field named `_tag` is in
+// json/names.schema.haus, for the JSON fuzzer only.)
+type Names = < One { value: Int32 } | Many { values?: Array Int32 } | Pos Int32 >
+type NameKeys = { _tag: String, value?: Maybe Int32, args?: Any }

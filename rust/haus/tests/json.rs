@@ -1,0 +1,292 @@
+//! JSON (spec §16): the reader and writer, the prelude types' plain JSON,
+//! and the lossless form of values built in code.
+
+use haus::json::{self, Json, from_str, parse, to_string};
+use haus::{Bytes, Decimal, Error, Int, Limits, Secret, Value};
+use std::collections::BTreeMap;
+
+fn syntax_error(text: &str) -> String {
+    parse(text).unwrap_err().to_string()
+}
+
+fn read_error<T: haus::FromJson + haus::Encode + std::fmt::Debug>(json: &str) -> String {
+    match from_str::<T>(json) {
+        Err(Error::Decode(e)) => e.to_string(),
+        other => panic!("expected a decode error, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_reader_takes_i_json() {
+    let json = parse(" {\"a\": [1, -0.5e+3, true, false, null, \"\\u00e9\\ud83d\\ude00\\n\\/\"]}\r\n").unwrap();
+    let items = [
+        Json::Number("1".into()),
+        Json::Number("-0.5e+3".into()),
+        Json::Bool(true),
+        Json::Bool(false),
+        Json::Null,
+        Json::String("é😀\n/".into()),
+    ];
+    assert_eq!(json, Json::Object(vec![("a".into(), Json::Array(items.to_vec()))]));
+    // Numbers keep their text, however long.
+    let digits = "1".repeat(1000);
+    assert_eq!(parse(&digits).unwrap(), Json::Number(digits));
+    // Noncharacters and raw controls beyond U+001F are fine in JSON.
+    assert_eq!(parse("\"\u{10FFFF}\u{7F}\u{202E}\"").unwrap(), Json::String("\u{10FFFF}\u{7F}\u{202E}".into()));
+}
+
+#[test]
+fn the_reader_rejects_what_i_json_forbids() {
+    let cases = [
+        (r#"{"a": 1, "a": 2}"#, "duplicate member name \"a\" at 1:10"),
+        (r#""\ud83d""#, "unpaired surrogate in a \\u escape at 1:2"),
+        (r#""\ude00\ud83d""#, "unpaired surrogate in a \\u escape at 1:2"),
+        (r#""\ud83dA""#, "unpaired surrogate in a \\u escape at 1:2"),
+        ("\"a\u{1}\"", "raw control character U+0001 in a string (escape it) at 1:3"),
+        ("[1,]", "expected a JSON value, found ']' at 1:4"),
+        ("{\"a\":1,}", "expected a member name, found '}' at 1:8"),
+        ("01", "unexpected '1' after the JSON value at 1:2"),
+        ("1.", "invalid number: a digit must follow '.' at 1:1"),
+        ("1e", "invalid number: a digit must follow the exponent at 1:1"),
+        ("+1", "expected a JSON value, found '+' at 1:1"),
+        ("NaN", "expected a JSON value, found 'N' at 1:1"),
+        ("'a'", "expected a JSON value, found ''' at 1:1"),
+        ("1 2", "unexpected '2' after the JSON value at 1:3"),
+        ("", "expected a JSON value, found end of input at 1:1"),
+        ("[1", "expected ',' or ']', found end of input at 1:3"),
+        (r#""\x""#, "invalid escape: use \\\" \\\\ \\/ \\b \\f \\n \\r \\t or \\uXXXX at 1:2"),
+        (r#""\u12""#, "\\u takes four hex digits at 1:2"),
+        ("1e6145", "exponent larger than 6144 at 1:1"),
+    ];
+    for (text, error) in cases {
+        assert_eq!(syntax_error(text), error, "{text:?}");
+    }
+    assert_eq!(syntax_error(&"1".repeat(1001)), "number literal longer than 1000 characters at 1:1");
+    assert!(parse("1e6144").is_ok() && parse("1e-0006144").is_ok());
+    assert_eq!(json::parse_bytes(b"\"\xff\"").unwrap_err().to_string(), "invalid UTF-8 at 1:2");
+    // A byte order mark is ignored at the start, and only there.
+    assert_eq!(parse("\u{FEFF}1").unwrap(), Json::Number("1".into()));
+    assert_eq!(syntax_error("1\u{FEFF}"), "unexpected '\u{FEFF}' after the JSON value at 1:2");
+}
+
+#[test]
+fn the_reader_enforces_limits() {
+    let limits = Limits { max_depth: 2, max_string_length: 3, ..Limits::default() };
+    // JSON may nest 4·d + 1 levels: a mapping can take several JSON levels for one haus level.
+    let nested = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
+    assert!(json::parse_with(&nested(9), &limits).is_ok());
+    assert_eq!(json::parse_with(&nested(10), &limits).unwrap_err().reason, "JSON nested deeper than 9 levels");
+    // Then the haus value that results is checked against d.
+    let lossless = r#"{"tag":"T","args":[{"rec":{"a":{"rec":{}}}}]}"#;
+    assert_eq!(haus::from_lossless_json(lossless).unwrap(), haus::parse("T { a: {} }").unwrap()[0]);
+    let deeper = r#"{"tag":"T","args":[{"rec":{"a":{"rec":{"b":{"rec":{}}}}}}]}"#;
+    assert!(haus::from_lossless_json(deeper).is_ok());
+    let typed: Result<Vec<Vec<Vec<u8>>>, _> = json::from_str_with("[[[1]]]", &limits);
+    assert_eq!(typed.unwrap_err().to_string(), "nesting deeper than 2 levels");
+    // Without a schema, JSON nests d levels.
+    assert!(json::value_from_str_with("[[1]]", &limits).is_ok());
+    assert!(
+        json::value_from_str_with("[[[1]]]", &limits)
+            .unwrap_err()
+            .to_string()
+            .contains("JSON nested deeper than 2 levels")
+    );
+    assert!(json::parse_with("\"abc\"", &limits).is_ok());
+    assert_eq!(json::parse_with("\"abcd\"", &limits).unwrap_err().reason, "string longer than 3 characters");
+    // Without a schema, JSON nests as haus does.
+    assert!(haus::from_json(&format!("{}1{}", "[".repeat(256), "]".repeat(256))).is_ok());
+    let deep = format!("{}1{}", "[".repeat(257), "]".repeat(257));
+    assert_eq!(haus::from_json(&deep).unwrap_err().to_string(), "JSON nested deeper than 256 levels at 1:257");
+}
+
+#[test]
+fn the_writer_checks_what_it_writes() {
+    let text = json::write(&Json::String("\"\\\n\r\t\u{8}\u{c}\u{1}\u{7F}é".into())).unwrap();
+    assert_eq!(text, "\"\\\"\\\\\\n\\r\\t\\b\\f\\u0001\u{7F}é\"");
+    assert_eq!(parse(&text).unwrap(), Json::String("\"\\\n\r\t\u{8}\u{c}\u{1}\u{7F}é".into()));
+    for bad in ["1.", "01", "+1", "NaN", "0x1", ""] {
+        assert_eq!(json::write(&Json::Number(bad.into())).unwrap_err().to_string(), "not a JSON number", "{bad:?}");
+    }
+    let twice = Json::Object(vec![("a".into(), Json::Null), ("a".into(), Json::Null)]);
+    assert_eq!(json::write(&twice).unwrap_err().to_string(), "a member name is used twice in an object");
+    assert!(json::write(&(0..1025).fold(Json::Null, |j, _| Json::Array(vec![j]))).is_ok());
+    let deep = (0..1026).fold(Json::Null, |j, _| Json::Array(vec![j]));
+    assert_eq!(json::write(&deep).unwrap_err().to_string(), "JSON nested deeper than 1025 levels");
+}
+
+#[test]
+fn scalars() {
+    assert_eq!(to_string(&-12i32).unwrap(), "-12");
+    assert_eq!(from_str::<u8>("-0").unwrap(), 0);
+    assert_eq!(read_error::<i32>("1.0"), "expected a whole number (Int32), found 1.0");
+    assert_eq!(read_error::<i32>("2147483648"), "2147483648 is out of range for Int32 (-2147483648 to 2147483647)");
+    assert_eq!(read_error::<i32>("\"1\""), "expected a number (Int32), found a string");
+
+    // Int64, UInt64 and Int are strings.
+    assert_eq!(to_string(&i64::MIN).unwrap(), "\"-9223372036854775808\"");
+    assert_eq!(to_string(&u64::MAX).unwrap(), "\"18446744073709551615\"");
+    assert_eq!(from_str::<i64>("\"-0\"").unwrap(), 0);
+    assert_eq!(read_error::<u64>("\"-1\""), "-1 is out of range for UInt64 (0 to 18446744073709551615)");
+    for bad in ["\"+1\"", "\"1e3\"", "\" 1\"", "\"01\"", "\"\""] {
+        assert_eq!(read_error::<Int>(bad), "expected a decimal integer in a string (Int)", "{bad}");
+    }
+    // Within the number limit as haus writes it: in hex.
+    let big = "9".repeat(1200);
+    assert_eq!(from_str::<Int>(&format!("\"{big}\"")).unwrap().as_str(), big);
+
+    // Floats in the spelling of spec §15; NaN and the infinities as strings.
+    assert_eq!(to_string(&0.1f64).unwrap(), "0.1");
+    assert_eq!(to_string(&-0.0f64).unwrap(), "-0");
+    assert_eq!(to_string(&1e21f64).unwrap(), "1e21");
+    assert_eq!(to_string(&f32::MAX).unwrap(), "3.4028235e38");
+    assert_eq!(
+        to_string(&[f64::NAN, f64::INFINITY, f64::NEG_INFINITY][..]).unwrap(),
+        r#"["NaN","Infinity","-Infinity"]"#
+    );
+    assert!(from_str::<f64>("\"NaN\"").unwrap().is_nan());
+    assert_eq!(from_str::<f32>("16777217").unwrap(), 16777216.0);
+    assert_eq!(read_error::<f32>("1e39"), "1e39 is too large for Float32");
+    assert_eq!(from_str::<f64>("1e-400").unwrap().to_bits(), 0);
+    assert_eq!(from_str::<f64>("-1e-400").unwrap().to_bits(), (-0.0f64).to_bits());
+
+    // Decimal: a string holding a number, kept with its scale.
+    let price: Decimal = from_str("\"19.90\"").unwrap();
+    assert_eq!(price.as_str(), "19.90");
+    assert_eq!(from_str::<Decimal>("\"-1.5E+05\"").unwrap().as_str(), "-1.5e5");
+    assert_eq!(to_string(&price).unwrap(), "\"19.90\"");
+    for bad in ["\"0xFF\"", "\"1_000\"", "\".5\"", "\"19,90\""] {
+        assert_eq!(read_error::<Decimal>(bad), "expected a number in a string (Decimal)", "{bad}");
+    }
+
+    // Bytes: base64 with padding.
+    assert_eq!(to_string(&Bytes(vec![0xfb, 0xff])).unwrap(), "\"+/8=\"");
+    assert_eq!(from_str::<Bytes>("\"+/8=\"").unwrap(), Bytes(vec![0xfb, 0xff]));
+    assert_eq!(read_error::<Bytes>("\"-_8=\""), "not base64 with padding (Bytes)");
+
+    assert_eq!(to_string(&true).unwrap(), "true");
+    assert_eq!(read_error::<bool>("\"true\""), "expected true or false, found a string");
+
+    // std/time: the string, checked by the profile.
+    let day: haus::time::Date = from_str("\"2026-11-13\"").unwrap();
+    assert_eq!(to_string(&day).unwrap(), "\"2026-11-13\"");
+    assert!(from_str::<haus::time::Date>("\"2026-02-30\"").is_err());
+}
+
+#[test]
+fn containers() {
+    let map: BTreeMap<String, Option<u8>> = from_str(r#"{"b": null, "a": 1}"#).unwrap();
+    assert_eq!(to_string(&map).unwrap(), r#"{"a":1,"b":null}"#);
+    assert_eq!(read_error::<BTreeMap<String, u8>>(r#"{"a": [1]}"#), ".a: expected a number (UInt8), found an array");
+    assert_eq!(read_error::<Vec<u8>>("[1, 300]"), "[1]: 300 is out of range for UInt8 (0 to 255)");
+
+    // Maybe: null when the inner JSON can't be null; tagged otherwise.
+    assert_eq!(to_string(&Some(Some(5u8))).unwrap(), r#"{"_tag":"Some","value":5}"#);
+    assert_eq!(to_string(&Some(None::<u8>)).unwrap(), r#"{"_tag":"Some","value":null}"#);
+    assert_eq!(to_string(&None::<Option<u8>>).unwrap(), r#"{"_tag":"None"}"#);
+    // Three levels: the outer Maybe's inner JSON can't be null again.
+    type Three = Option<Option<Option<u8>>>;
+    let three: [(Three, &str); 4] = [
+        (None, "null"),
+        (Some(None), r#"{"_tag":"None"}"#),
+        (Some(Some(None)), r#"{"_tag":"Some","value":null}"#),
+        (Some(Some(Some(5))), r#"{"_tag":"Some","value":5}"#),
+    ];
+    for (value, json) in three {
+        assert_eq!(to_string(&value).unwrap(), json);
+        assert_eq!(from_str::<Three>(json).unwrap(), value);
+    }
+    // Secret and Box don't change the form.
+    assert_eq!(to_string(&Some(Secret::new(None::<u8>))).unwrap(), r#"{"_tag":"Some","value":null}"#);
+    assert_eq!(read_error::<Option<Option<u8>>>(r#"{"_tag":"Some"}"#), "missing member value");
+    assert_eq!(
+        read_error::<Option<Option<u8>>>(r#"{"_tag":"Maybe"}"#),
+        "._tag: unknown tag Maybe; expected one of None, Some"
+    );
+
+    // Result: tagged, with the value.
+    let ok: Result<u8, String> = from_str(r#"{"_tag": "Ok", "value": 1}"#).unwrap();
+    assert_eq!(ok, Ok(1));
+    assert_eq!(to_string(&Err::<u8, _>("no".to_owned())).unwrap(), r#"{"_tag":"Err","value":"no"}"#);
+    assert_eq!(
+        read_error::<Result<u8, String>>(r#"{"_tag": "Ok", "value": "x"}"#),
+        ".value: expected a number (UInt8), found a string"
+    );
+}
+
+#[test]
+fn any_and_unknown_values_are_lossless() {
+    let v = haus::parse(r#"{ a: [1.50, "x", x"ff", None, Point(1, 2)] }"#).unwrap().remove(0);
+    let json = to_string(&v).unwrap();
+    assert_eq!(
+        json,
+        r#"{"rec":{"a":[{"num":"1.50"},"x",{"bytes":"ff"},{"tag":"None"},{"tag":"Point","args":[{"num":"1"},{"num":"2"}]}]}}"#
+    );
+    assert_eq!(from_str::<Value>(&json).unwrap(), v);
+
+    let any = haus::AnyTag::Bare("EUR".into());
+    assert_eq!(to_string(&any).unwrap(), r#"{"_tag":"EUR"}"#);
+    assert_eq!(from_str::<haus::AnyTag>(r#"{"_tag":"EUR"}"#).unwrap(), any);
+}
+
+#[test]
+fn lossless_checks_values_built_in_code() {
+    let error = |v: Value| haus::to_lossless_json(&v).unwrap_err().to_string();
+    let number = |n: &str| Value::Number(n.into());
+    assert_eq!(haus::to_lossless_json(&number("1E+05")).unwrap(), r#"{"num":"1e5"}"#);
+    assert_eq!(haus::to_lossless_json(&number("0xFF")).unwrap(), r#"{"num":"255"}"#);
+    assert_eq!(error(Value::Array(vec![number("1"), number("abc")])), "[1]: not a number literal");
+    assert_eq!(
+        error(Value::Variant { tag: "x".into(), args: vec![] }),
+        "not a tag name: A to Z, then letters, digits and _"
+    );
+    let twice = Value::Record(vec![("a".into(), number("1")), ("a".into(), number("2"))]);
+    assert_eq!(error(twice), ".a: the key is used twice in this record");
+    let payload = Value::Variant { tag: "P".into(), args: vec![Value::Record(vec![("x".into(), number("-"))])] };
+    assert_eq!(error(payload), "(P).x: not a number literal");
+    let deep = (0..257).fold(number("1"), |v, _| Value::Array(vec![v]));
+    assert!(error(deep).ends_with("nesting deeper than 256 levels"));
+
+    // A haus integer longer than the number limit (written in hex there) is
+    // its decimal literal in lossless JSON, and reads back.
+    let big = haus::parse(&format!("0x{}", "f".repeat(998))).unwrap().remove(0);
+    let json = haus::to_lossless_json(&big).unwrap();
+    assert_eq!(haus::from_lossless_json(&json).unwrap(), big);
+    assert!(haus::from_lossless_json(&format!(r#"{{"num":"{}"}}"#, "9".repeat(1300))).is_err());
+}
+
+#[test]
+fn lossless_reads_one_form_per_value() {
+    let error = |json: &str| haus::from_lossless_json(json).unwrap_err().to_string();
+    assert_eq!(error(r#"{"num": "1E5"}"#), ".num: \"1E5\" is not a normalized number literal");
+    assert_eq!(error(r#"{"num": "1e+5"}"#), ".num: \"1e+5\" is not a normalized number literal");
+    assert_eq!(error(r#"{"num": "1e6145"}"#), ".num: exponent larger than 6144");
+    assert_eq!(error(r#"{"tag": "T", "args": 1}"#), ".args: expected an array, found the number 1");
+    assert_eq!(error(r#"[{"rec": {"a": 1}}]"#).split(": ").next(), Some("[0].rec.a"));
+    assert!(haus::from_lossless_json(r#"{"args": [{"num": "1"}], "tag": "T"}"#).is_ok());
+}
+
+#[test]
+fn json_lines() {
+    // A missing line feed after the last value and CR LF are fine.
+    let read = |text: &str| json::from_str_all::<u8>(text).map_err(|e| e.to_string());
+    assert_eq!(read("1\n2\n"), Ok(vec![1, 2]));
+    assert_eq!(read("1\r\n2"), Ok(vec![1, 2]));
+    assert_eq!(read(""), Ok(vec![]));
+    // A byte order mark only at the start of the stream.
+    assert_eq!(read("\u{FEFF}1\n2\n"), Ok(vec![1, 2]));
+    assert_eq!(read("1\n\u{FEFF}2\n"), Err("expected a JSON value, found '\u{FEFF}' at 2:1".into()));
+    // Empty lines are errors; errors say which line or value.
+    assert_eq!(read("1\n\n2\n"), Err("expected a JSON value, found end of input at 2:1".into()));
+    assert_eq!(read("1\n300\n"), Err("[1]: 300 is out of range for UInt8 (0 to 255)".into()));
+
+    let decoded: Result<Vec<u8>, _> = json::decode("\u{FEFF}1\r\n2".as_bytes()).collect();
+    assert_eq!(decoded.unwrap(), [1, 2]);
+    let e = json::decode::<u8, _>("1\n\u{FEFF}2\n".as_bytes()).find_map(Result::err).unwrap();
+    assert_eq!(e.to_string(), "expected a JSON value, found '\u{FEFF}' at 2:1");
+
+    // Lossless lines: a haus stream as JSON Lines.
+    let values = haus::parse("1, Some(\"a\"),").unwrap();
+    let lines = json::to_string_all(&values).unwrap();
+    assert_eq!(lines, "{\"num\":\"1\"}\n{\"tag\":\"Some\",\"args\":[\"a\"]}\n");
+    assert_eq!(json::from_str_all::<Value>(&lines).unwrap(), values);
+}

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the parsers, std/time checkers and schema decoders under test (fuzz/README.md).
+# Build the parsers, std/time checkers, schema decoders and JSON converters under test (fuzz/README.md).
 set -e
 cd "$(dirname "$0")/.."
 (cd spec/lean && lake build haus-ref)
@@ -12,4 +12,6 @@ mkdir -p fuzz/.build
 (cd roc/fuzz && roc build --output=../../fuzz/.build/roc-time-runner time_runner.roc >/dev/null)
 node fuzz/roc/gen_schemas.ts >/dev/null
 (cd fuzz/roc && roc build --output=../.build/roc-schema-runner schema_runner.roc >/dev/null)
+node fuzz/roc/gen_json_schemas.ts >/dev/null
+(cd fuzz/roc && roc build --output=../.build/roc-json-runner json_runner.roc >/dev/null)
 echo "built: lean, rust, typescript, effect, roc, python"

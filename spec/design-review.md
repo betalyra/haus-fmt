@@ -100,7 +100,7 @@ Ecosystem gotchas, documented in the examples:
 |---|---|
 | ✅ | **Canonical form** for hashing, signing and deduplication: spec §12, in every binding, proven in Lean (S9). `hashAll` hashes a whole file or stream, also while it is read (TypeScript, Rust, Python; proven in `HashAll.lean`). Features built on it are planned in [`plans/canonical-form.md`](../plans/canonical-form.md). |
 | ✅ | **Schema language:** spec §14 (schema files: spreads, open vs closed, `Stream`, generics; recursion and expressiveness in §9.9–10) and §15 (decoding with a schema), parser and checker in TypeScript and Rust, and a schema conformance suite that TypeScript, Effect, Rust and Roc pass. Proof phase I is planned in [`lean/PLAN.md`](lean/PLAN.md). |
-| ⬜ | **JSON interop:** a mapping both ways, defined in the spec with vectors, then `fromJson`/`toJson` in each binding. JSON → haus is mostly direct; the open decision is `null`, which haus doesn't have (a missing field, `None`, or an error). haus → JSON needs conventions for variants (`{"_tag": …}`), bytes (base64 or hex), big integers and exact decimals (numbers or strings) and std/time (strings). Two flavours: a lossless one that round-trips exactly, like the suite's `.json` encoding, and a plain one guided by a schema that gives natural JSON. |
+| ✅ | **JSON interop** (spec §16): JSON without a schema (`null` → `None`), a lossless mapping, and a plain mapping with a schema (large integers and decimals as strings, base64, a type-driven `Maybe`, `_tag` for variants, forward-compatible unknown tags). Vectors in `test-suite/json`, in TypeScript, Effect, Rust, Roc and Python, proven in Lean (phase J: lossless and plain round trips, injectivity), fuzzed against Lean in CI. |
 | ⬜ | **MIME type:** register `application/vnd.haus` in IANA's vendor tree: an online form with expert review, typically a few weeks. It needs the published spec, no parameters (always UTF-8), the security considerations of §9, interoperability notes, the extension `.haus` and a contact. `application/haus` (standards tree) needs an IETF document, as YAML's RFC 9512 did, so it waits for adoption. Optionally later: a `+haus` suffix (`application/vnd.acme.order+haus`), which has its own registry. Never `x-` names (RFC 6838, 6648). |
 | ✅ | **A parser that keeps comments and formatting**: `parseDocument` records comment and value positions; the formatter places comments and blank lines. |
 
@@ -169,13 +169,15 @@ Not planned: newtypes. A single-tag variant (`closed < UserId String >`) makes t
 
 ---
 
+**Open from JSON (§16):** Roc assumes a `Maybe` of a type from a schema package uses `null`, generates JSON functions only with `haus-gen roc --json` (so that the checked-in extension code stays unchanged), and checks the depth of plain JSON read with a generic type only through a concrete alias. Lean doesn't yet prove that the JSON text reader reads back what the writer writes, nor JSON Lines.
+
 **Open from the 1.0 spec changes:** an encode error inside a `Secret` that holds an `Any` can name a map key in its path in Rust and Roc, whose writer checks raw values without knowing the type (§15 now covers encoding too). Roc and the Effect adapter don't let users configure limits (§7). Rust and Roc encoders recurse over native values, so a native value nested millions of levels deep overflows the stack before the writer's depth check.
 
 ## 5. Remaining order
 
 Done: the 1.0 spec changes (versions, `Any`, `Secret a`, `@deprecated`) in every binding; proof phases I1–I3 and I5 (a Lean reference decoder that passes the schema suite in CI; the round trip proven, the float law included); lossless default host types everywhere (§13.4); schema decoding fuzzed in CI across Lean, TypeScript, Effect, Rust, Roc and Python; Python parity.
 
-1. **JSON interop** (spec mapping with vectors, `null` decided, bindings) and registering `application/vnd.haus`; decide whether the mapping ships with 1.0.
+1. **Register `application/vnd.haus`** (IANA vendor tree, a form to submit).
 2. **Agent readiness, launch part** (§3.4): cheat sheet, skill, llms.txt contents, error codes with fix hints, the "Why no min/max?" page, CLI `check` and `fmt`.
 3. **Roc gaps:** `hash`/`hashAll` (SHA-256 in Roc), configurable limits, the `Stream` module clash.
 4. **1.0 release** (§3.5): sign off the irreversible decisions, governance document, final review, tag the suite, register the MIME type, announce.

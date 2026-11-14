@@ -14,6 +14,7 @@
  *   < Debug | Info >           → "Debug" | "Info"                     (only tags without payload)
  *   < Circle { r: Float64 } | Empty > → { _tag: "Circle"; r: number } | { _tag: "Empty" }
  *   < Point Float64 Float64 > → { _tag: "Point"; values: readonly [number, number] }
+ *   < Odd { _tag: Int32 } >   → { _tag: "Odd"; value: { _tag: number } } (a payload with a field _tag: nested)
  *   open variants              → … | Unknown                          (other tags kept as raw values)
  *   < >                        → string | Unknown                     (any tag: bare tags as their name)
  *   std/time types → string, the text as written
@@ -36,7 +37,7 @@ import {
 } from "@haus-fmt/haus"
 import { Schema } from "effect"
 import { entries, idOf, setId, type AnyCodec, type CodecEntry } from "./codec.js"
-import { BARE_TAG, CLOSED, NUMBER, SECRET, STRICT, VALUES } from "./convert.js"
+import { BARE_TAG, CLOSED, NESTED, NUMBER, SECRET, STRICT, VALUES } from "./convert.js"
 // Circular import: only used when a schema file is compiled, after both modules have loaded.
 import * as Haus from "./index.js"
 
@@ -64,6 +65,12 @@ export const compileSchemaFile = (text: string, options: ParseSchemaOptions = {}
 const stdId = (name: StdType) => `std/time#${name}`
 
 const isEnum = (cases: readonly Case[]) => cases.length > 0 && cases.every((c) => c.payload.kind === "none")
+
+/**
+ * Whether a case's record payload has a field named `_tag`, which can't go
+ * beside the tag: its fields are then nested, `{ _tag: "Odd", value: { _tag: 1 } }`.
+ */
+const nestsPayload = (fs: readonly Field[]) => fs.some((f) => f.key === "_tag")
 
 const INTS: Partial<Record<Builtin, readonly [number, number]>> = {
   Int8: [-128, 127],
@@ -208,9 +215,11 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
             case "none":
               return Schema.TaggedStruct(c.tag, {})
             case "record": {
-              if (c.payload.record.fields.some((f) => f.key === "_tag")) throw new Error(`${c.tag}: a field named _tag can't be used in a variant payload`)
-              const s = Schema.TaggedStruct(c.tag, fields(c.payload.record.fields))
-              return c.payload.record.closed ? s.annotate({ [CLOSED]: true }) : s
+              const { record } = c.payload
+              const closed = (s: Schema.Top) => (record.closed ? s.annotate({ [CLOSED]: true }) : s)
+              // A payload with a field `_tag` can't put its fields beside the tag: they go in `value`.
+              if (nestsPayload(record.fields)) return Schema.TaggedStruct(c.tag, { value: closed(Schema.Struct(fields(record.fields))) }).annotate({ [NESTED]: true })
+              return closed(Schema.TaggedStruct(c.tag, fields(record.fields)))
             }
             case "positional":
               return Schema.TaggedStruct(c.tag, { values: Schema.Tuple(c.payload.items.map(build)) }).annotate({ [VALUES]: true })
@@ -372,7 +381,8 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
               case "none":
                 return `{ ${tag} }`
               case "record":
-                return `{ ${[tag, ...fieldList(c.payload.record.fields)].join("; ")} }`
+                return nestsPayload(c.payload.record.fields) ? `{ ${tag}; readonly value: ${record(c.payload.record.fields)} }`
+                  : `{ ${[tag, ...fieldList(c.payload.record.fields)].join("; ")} }`
               case "positional":
                 return `{ ${tag}; readonly values: readonly [${c.payload.items.map(print).join(", ")}] }`
             }

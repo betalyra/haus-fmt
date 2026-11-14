@@ -2,7 +2,8 @@
 
 Generated inputs go through every haus parser: the Lean reference parser
 (`spec/lean`), Rust, Roc and TypeScript (and, with `--schema`, through
-every schema decoder: see [Schema decoding](#schema-decoding)). They must agree on every input:
+every schema decoder: see [Schema decoding](#schema-decoding); with `--json`,
+through every JSON converter: see [JSON](#json)). They must agree on every input:
 accepted with the same values, or rejected. A disagreement is a bug in at
 least one of them, or a gap in the spec.
 
@@ -52,6 +53,10 @@ in `runners.ts`.
 | Rust stream reader crashed on input ending in `/` | design review S13 |
 | Stream readers accepted a byte order mark after a comma | design review S14 |
 | Roc's std/time check accepted durations with more than ~309 digits (too large for a float) | fixed: exact integers |
+| Effect dropped a record field or map key named `_tag` (`{ _tag: 1 }` as `Map Int` decodes and reads from JSON as `{}`) | fixed (`--schema`, `--json`) |
+| Effect rejected an open record payload with an unlisted field `_tag` (`Circle { _tag: 1, r: 1 }`) instead of ignoring it | fixed (`--schema`, `--json`) |
+| Roc's plain JSON readers didn't check the depth of the value read (257 nested `{"_tag": "Some", "value": …}` read as `Loop`) | fixed (`--json`) |
+| TypeScript and Effect rejected a schema file with a record payload field named `_tag` (`< Odd { _tag: Int32 } >`), where the others report only its JSON | fixed: the schema compiles, the case nests its payload as `value` (`--json`, [`json/names.schema.haus`](json/names.schema.haus)) |
 
 ## Canonical forms
 
@@ -124,7 +129,11 @@ code points and by UTF-16 units; `Any` gets arbitrary values; recursive
 types sometimes go down to the nesting limit (256) and past it. A case that
 disagrees is shrunk to the smallest value with the same pattern of
 disagreement. An error inside a `Secret` that shows a part of the value is
-reported too.
+reported too: a part of it (5 characters or more) in the message, unless the
+message still has it when the case is run again with that part disguised
+(then it is a word of the binding's own message, such as a key `value`
+against "the value is not shown"). [`src/secret.test.ts`](src/secret.test.ts)
+tests the check: `node --test fuzz/src/`.
 
 | Decoder | Runner (`FILE` of lines `SUITE TYPE HEX`, the value's text as hex UTF-8; prints `ok <canonical>` or `err …`) |
 |---|---|
@@ -138,6 +147,75 @@ reported too.
 Nothing is masked: every binding's default host types keep the value (spec
 §13.4), so every runner must agree with Lean exactly. Lossy host types (Effect's
 `BigDecimal` and `DateTime`) are opt-in codecs that the runners don't use.
+
+## JSON
+
+The same idea for the JSON mappings (spec §16): generated inputs go through
+the Lean reference converters and every binding's, in five directions, and
+must agree on accepting or rejecting and on the result.
+
+| Mode | Input | Does | Compared |
+|---|---|---|---|
+| `write` | haus text and a type | decode, write plain JSON (§16.3) | the JSON as data: member order doesn't matter, numbers compare by their text |
+| `read` | JSON text and a type | read plain JSON, encode | the canonical form (§12) |
+| `lossless-write` | haus text | the lossless form (§16.2) | the JSON as data |
+| `lossless-read` | JSON text | read the lossless form | the canonical form |
+| `schemaless` | JSON text | read JSON without a schema (§16.1) | the canonical form |
+
+```sh
+sh fuzz/build.sh                                   # also builds the JSON runners
+node fuzz/src/main.ts --json --count 4000          # cases per mode; two or three minutes
+node fuzz/src/main.ts --json --seed 7 --modes read,schemaless --runners lean,typescript,rust
+```
+
+The types are the schema fuzzer's, plus
+[`test-suite/json/plain.schema.haus`](../test-suite/json/plain.schema.haus)
+and [`json/names.schema.haus`](json/names.schema.haus) (a record payload with
+a field named `_tag`, which has no plain form). A schema file a binding
+rejects makes every case of it `err` for that binding.
+[`src/json-gen.ts`](src/json-gen.ts) generates the JSON:
+
+- `write` takes the schema fuzzer's values (above). `lossless-write` takes
+  random haus values, values of the schema types, the conformance suite's
+  valid files, and nesting at the depth limit (`[`, `{ a:`, `Some(`,
+  `T { a:`).
+- `read` takes plain JSON generated from the type, and the JSON Lean writes
+  for generated values (a third of the cases), then near misses: the wrong
+  kind of value; missing, extra and repeated members; `_tag` missing,
+  renamed, repeated, not a string, not a tag; `value` and `values` swapped
+  or of the wrong length; `null` for a `Maybe` that is tagged and the tagged
+  form for one that uses `null`, `null` for an optional field; unknown tags
+  bare, with `args` (empty, not an array) or with other members; base64
+  without padding, with the URL alphabet, whitespace or pad bits; integer
+  strings with `+`, leading zeros, exponents, separators, at the 64-bit and
+  number limits; decimal strings that aren't JSON numbers; floats exactly at
+  and halfway between floats, `"NaN"` and its misspellings; lone surrogates.
+- `lossless-read` takes lossless forms of random values and mutations of
+  them: bare numbers, `true`, `null`, `num`s that aren't normalized or are
+  past the number limit (and integers whose hex form fits), uppercase or odd
+  hex, tags that aren't tags, empty `args`, extra members, records of bare
+  values; and nesting at the JSON limit (4·256 + 1).
+- `schemaless` takes any JSON: numbers at the edges (`-0`, `1E+05`,
+  exponent and length limits), strings with escapes, duplicate names, and
+  nesting at the limit (256), as well as text that isn't JSON.
+
+All of it is written with varied whitespace and escapes (`\u` for any
+character, surrogate pairs, `\/`), sometimes with a byte order mark, and
+some of it is edited as text (characters deleted, inserted, duplicated, cut
+short) or isn't UTF-8. A disagreeing case is shrunk: JSON by removing
+members, elements and characters, haus as for schema decoding.
+
+| Converter | Runner (`MODE FILE`; lines `SUITE TYPE HEX` for `write` and `read`, `HEX` for the others) |
+|---|---|
+| Lean | `haus-ref --json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
+| TypeScript | in this process: `h.decode` and `h.toJson`, `h.fromJson` and `h.encode`, `toLosslessJson`, `fromLosslessJson`, `fromJson` |
+| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson` |
+| Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-build generates, `haus::json::to_string` and `from_str`, `haus::to_lossless_json`, `from_lossless_json`, `from_json` |
+| Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
+| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json` |
+
+The output of a run ends with the number of cases each mode accepted, and
+`fuzz/.out/json/coverage.txt` has it per type for `write` and `read`.
 
 ## When it finds something
 

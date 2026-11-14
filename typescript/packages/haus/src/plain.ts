@@ -104,7 +104,8 @@ class TypePrinter {
         for (const [tag, v] of s.variants) {
           const t = `readonly _tag: ${JSON.stringify(tag)}`
           if (v.bare) cases.push(`{ ${t} }`)
-          if (v.record) cases.push(`{ ${[t, ...this.fields(v.record)].join("; ")} }`)
+          // A payload with a field `_tag` is nested, so the field can't replace the tag.
+          if (v.record) cases.push(v.record.fields.has("_tag") ? `{ ${t}; readonly value: { ${this.fields(v.record).join("; ")} } }` : `{ ${[t, ...this.fields(v.record)].join("; ")} }`)
           if (v.positional.length) cases.push(`{ ${t}; readonly values: readonly [${v.positional.map((p) => this.type(p)).join(", ")}] }`)
         }
         return cases.join(" | ")
@@ -168,7 +169,11 @@ function plain(v: Value, shape: Shape): unknown {
         case "tagged": {
           const [first] = v.args
           if (v.args.length === 0) return { _tag: v.tag }
-          if (v.args.length === 1 && first!.kind === "record" && v.tag !== "Some") return { _tag: v.tag, ...fields(first!, vs.record!) }
+          if (v.args.length === 1 && first!.kind === "record" && v.tag !== "Some") {
+            // A payload with a field `_tag` (in any occurrence) is nested, so it can't replace the tag.
+            const payload = fields(first!, vs.record!)
+            return vs.record!.fields.has("_tag") ? { _tag: v.tag, value: payload } : { _tag: v.tag, ...payload }
+          }
           return { _tag: v.tag, values: v.args.map((a, i) => plain(a, vs.positional[i]!)) }
         }
       }

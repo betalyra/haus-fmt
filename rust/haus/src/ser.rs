@@ -298,7 +298,7 @@ impl Writer<'_> {
 }
 
 /// A tag name: `[A-Z][A-Za-z0-9_]*`.
-fn is_tag(tag: &str) -> bool {
+pub(crate) fn is_tag(tag: &str) -> bool {
     tag.starts_with(|c: char| c.is_ascii_uppercase()) && tag.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
 }
 
@@ -313,6 +313,18 @@ pub(crate) fn key(k: &str, out: &mut String) {
 /// can't be written: its normalized literal (spec §2), in hex if it is an
 /// integer longer than the number limit.
 fn number<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, String> {
+    let n = normalized(text, limits)?;
+    if n.len() <= limits.max_number_length {
+        return Ok(n);
+    }
+    // `normalized` let it through: an integer whose hex literal fits.
+    Ok(number_text(&n, limits.max_number_length).into_owned().into())
+}
+
+/// A number's normalized literal (spec §2), always in decimal, if it can be
+/// written for a reader with `limits` (an integer longer than the number
+/// limit in hex): `1E5` is `1e5`; `abc` is an error.
+pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, String> {
     let too_long = || format!("number literal longer than {} characters", limits.max_number_length);
     let n: Cow<str> = if is_normalized(text) {
         text.into()
@@ -336,16 +348,15 @@ fn number<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, String> {
     if !digits.bytes().all(|c| c.is_ascii_digit()) || hex_length_at_least(&n) > limits.max_number_length {
         return Err(too_long());
     }
-    let hex = number_text(&n, limits.max_number_length);
-    if hex.len() > limits.max_number_length {
+    if number_text(&n, limits.max_number_length).len() > limits.max_number_length {
         return Err(too_long());
     }
-    Ok(hex.into_owned().into())
+    Ok(n)
 }
 
 /// Whether `text` is a normalized literal (spec §2), as the parser gives it:
 /// `-?(0|[1-9][0-9]*)(.[0-9]+)?(e(0|-?[1-9][0-9]*))?`.
-fn is_normalized(text: &str) -> bool {
+pub(crate) fn is_normalized(text: &str) -> bool {
     fn whole(s: &str) -> bool {
         s == "0" || (s.starts_with(|c: char| ('1'..='9').contains(&c)) && s.bytes().all(|c| c.is_ascii_digit()))
     }
