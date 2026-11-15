@@ -45,6 +45,7 @@ import Haus.Version
 import Haus.Json.Data
 import Haus.Json.Base64
 import Haus.Json.Text
+import Haus.Json.TextRoundTrip
 import Haus.Json.Lossless
 import Haus.Json.Normal
 import Haus.Json.Plain

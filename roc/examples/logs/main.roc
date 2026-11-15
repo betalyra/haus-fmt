@@ -13,7 +13,7 @@ import pf.Path
 import pf.Stdout
 import haus.Decode
 import haus.Encode
-import haus.Stream
+import haus.Streaming
 import Logs
 
 main! : List(OsStr) => Try({}, _)
@@ -24,20 +24,20 @@ main! = |_args| {
 
 	# 1. Read the stream chunk by chunk (from a file here; a socket or stdin
 	#    work the same), and decode each entry as soon as its comma arrives.
-	var $stream = Stream.reader(Stream.defaults)
+	var $stream = Streaming.reader(Streaming.defaults)
 	var $index = 0
 	var $problems = []
 	var $more = True
 	while $more {
 		values = match reader.read_up_to!(1024) {
 			Ok(chunk) => {
-				(next, completed) = Stream.push($stream, chunk).map_err(|e| Syntax(e))?
+				(next, completed) = Streaming.push($stream, chunk).map_err(|e| Syntax(e))?
 				$stream = next
 				completed
 			}
 			Err(EndOfInput) => {
 				$more = False
-				Stream.finish($stream).map_err(|e| Syntax(e))?
+				Streaming.finish($stream).map_err(|e| Syntax(e))?
 			}
 			Err(FileErr(e)) => return Err(FileErr(e))
 		}

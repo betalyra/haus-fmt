@@ -82,7 +82,7 @@ fn the_reader_enforces_limits() {
     let deeper = r#"{"tag":"T","args":[{"rec":{"a":{"rec":{"b":{"rec":{}}}}}}]}"#;
     assert!(haus::from_lossless_json(deeper).is_ok());
     let typed: Result<Vec<Vec<Vec<u8>>>, _> = json::from_str_with("[[[1]]]", &limits);
-    assert_eq!(typed.unwrap_err().to_string(), "nesting deeper than 2 levels");
+    assert_eq!(typed.unwrap_err().to_string(), "[0][0]: nesting deeper than 2 levels");
     // Without a schema, JSON nests d levels.
     assert!(json::value_from_str_with("[[1]]", &limits).is_ok());
     assert!(

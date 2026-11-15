@@ -14,29 +14,31 @@ Value := [
 
 	## Parse a whole file into its top-level values.
 	parse_all : Str -> Try(List(Value), ParseError)
-	parse_all = |text| {
+	parse_all = |text| parse_all_with(text, default_limits)
+
+	## `parse_all` with your own limits.
+	parse_all_with : Str, Limits -> Try(List(Value), ParseError)
+	parse_all_with = |text, limits| {
 		src = text.to_utf8()
 		start = if (src.starts_with([0xEF, 0xBB, 0xBF])) 3 else 0
 		# Reserved for a version directive (spec §10): `#haus 2`.
 		if starts_at(src, start, "#haus") {
 			return Err(locate(src, { reason: newer_version_reason, pos: start }))
 		}
-		match parse_sequence(src, start) {
-			Ok(values) => Ok(values)
-			Err(f) => Err(locate(src, f))
-		}
+		parse_sequence(src, start, limits).map_err(|f| locate(src, f))
 	}
 
 	## The rest of a stream: like `parse_all`, but not at the start of the input,
 	## so a byte order mark is not skipped (the stream reader removes the one at
 	## the start).
 	parse_rest : Str -> Try(List(Value), ParseError)
-	parse_rest = |text| {
+	parse_rest = |text| parse_rest_with(text, default_limits)
+
+	## `parse_rest` with your own limits.
+	parse_rest_with : Str, Limits -> Try(List(Value), ParseError)
+	parse_rest_with = |text, limits| {
 		src = text.to_utf8()
-		match parse_sequence(src, 0) {
-			Ok(values) => Ok(values)
-			Err(f) => Err(locate(src, f))
-		}
+		parse_sequence(src, 0, limits).map_err(|f| locate(src, f))
 	}
 
 	## Whether a file that starts with `text` needs a newer version of haus:
@@ -50,20 +52,43 @@ Value := [
 
 	## Parse raw bytes, which must be valid UTF-8.
 	parse_bytes : List(U8) -> Try(List(Value), ParseError)
-	parse_bytes = |bytes| match Str.from_utf8(bytes) {
-		Ok(text) => parse_all(text)
+	parse_bytes = |bytes| parse_bytes_with(bytes, default_limits)
+
+	## `parse_bytes` with your own limits.
+	parse_bytes_with : List(U8), Limits -> Try(List(Value), ParseError)
+	parse_bytes_with = |bytes, limits| match Str.from_utf8(bytes) {
+		Ok(text) => parse_all_with(text, limits)
 		Err(_) => Err({ reason: "invalid UTF-8", line: 1, column: 1 })
 	}
 
 	## Parse a text that must contain exactly one value.
 	parse : Str -> Try(Value, ParseError)
-	parse = |text| {
-		values = parse_all(text)?
+	parse = |text| parse_with(text, default_limits)
+
+	## `parse` with your own limits.
+	parse_with : Str, Limits -> Try(Value, ParseError)
+	parse_with = |text, limits| {
+		values = parse_all_with(text, limits)?
 		match values {
 			[v] => Ok(v)
 			_ => Err({ reason: "expected exactly one value, found ${values.len().to_str()}", line: 1, column: 1 })
 		}
 	}
+
+	## Resource limits (spec §7), enforced while parsing: nesting depth (records,
+	## arrays and payloads), characters in one number literal, the largest
+	## absolute exponent (6144 allows `1e6144`, not `1e6145`), and characters
+	## (code points) in one decoded string or between the quotes of a byte
+	## string. A value of exactly a limit is accepted.
+	##
+	##     Value.parse_all_with(text, { ..Value.default_limits, max_depth: 64 })
+	Limits : { max_depth : U64, max_number_length : U64, max_exponent : U64, max_string_length : U64 }
+
+	## The spec's defaults: depth 256, number literals of 1000 characters,
+	## exponents up to 6144, strings of 16 Mi characters. Every reader must
+	## take what is within them.
+	default_limits : Limits
+	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024 }
 
 	## Encode in the conformance suite's JSON form (see test-suite/README.md).
 	to_test_json : Value -> Str
@@ -85,29 +110,15 @@ ParseError : { reason : Str, line : U64, column : U64 }
 
 Fail : { reason : Str, pos : U64 }
 
-# ── limits (spec defaults) ───────────────────────────────────
-
-max_depth : U64
-max_depth = 256
-
-max_number_length : U64
-max_number_length = 1000
-
-max_exponent : U64
-max_exponent = 6144
-
-max_string_length : U64
-max_string_length = 16 * 1024 * 1024
-
 # ── structure ────────────────────────────────────────────────
 
-parse_sequence : List(U8), U64 -> Try(List(Value), Fail)
-parse_sequence = |src, start| {
+parse_sequence : List(U8), U64, Value.Limits -> Try(List(Value), Fail)
+parse_sequence = |src, start, limits| {
 	var $out = []
 	var $pos = skip_trivia(src, start)?
 	var $done = $pos >= src.len()
 	while !$done {
-		(value, after) = parse_value(src, $pos, 0)?
+		(value, after) = parse_value(src, $pos, 0, limits)?
 		$out = $out.append(value)
 		p = skip_trivia(src, after)?
 		if p >= src.len() {
@@ -122,25 +133,25 @@ parse_sequence = |src, start| {
 	Ok($out)
 }
 
-parse_value : List(U8), U64, U64 -> Try((Value, U64), Fail)
-parse_value = |src, pos, depth| {
+parse_value : List(U8), U64, U64, Value.Limits -> Try((Value, U64), Fail)
+parse_value = |src, pos, depth, limits| {
 	c = at(src, pos)
 	if c == '{' {
-		(fields, after) = parse_record(src, pos, depth)?
+		(fields, after) = parse_record(src, pos, depth, limits)?
 		Ok((Rec(fields), after))
 	} else if c == '[' {
-		(items, after) = parse_list(src, pos, depth, ']')?
+		(items, after) = parse_list(src, pos, depth, ']', limits)?
 		Ok((Arr(items), after))
 	} else if c == '"' {
-		(s, after) = (if (starts_at(src, pos, "\"\"\"")) parse_block_string(src, pos) else parse_basic_string(src, pos))?
+		(s, after) = (if (starts_at(src, pos, "\"\"\"")) parse_block_string(src, pos, limits) else parse_basic_string(src, pos, limits))?
 		Ok((Text(s), after))
 	} else if c == 'x' and at(src, pos + 1) == '"' {
-		(bytes, after) = parse_bytes_literal(src, pos)?
+		(bytes, after) = parse_bytes_literal(src, pos, limits)?
 		Ok((Bytes(bytes), after))
 	} else if c == '-' or is_digit(c) {
-		parse_number(src, pos)
+		parse_number(src, pos, limits)
 	} else if is_upper(c) {
-		parse_variant(src, pos, depth)
+		parse_variant(src, pos, depth, limits)
 	} else if is_lower_start(c) {
 		(word, _) = read_ident(src, pos)
 		hint =
@@ -157,10 +168,10 @@ parse_value = |src, pos, depth| {
 	}
 }
 
-parse_record : List(U8), U64, U64 -> Try((List((Str, Value)), U64), Fail)
-parse_record = |src, open, depth| {
-	if depth + 1 > max_depth {
-		return Err({ reason: "nesting deeper than ${max_depth.to_str()} levels", pos: open })
+parse_record : List(U8), U64, U64, Value.Limits -> Try((List((Str, Value)), U64), Fail)
+parse_record = |src, open, depth, limits| {
+	if depth + 1 > limits.max_depth {
+		return Err({ reason: "nesting deeper than ${limits.max_depth.to_str()} levels", pos: open })
 	}
 	var $fields = []
 	var $seen = Set.empty()
@@ -170,12 +181,12 @@ parse_record = |src, open, depth| {
 			return Err({ reason: "unclosed '{'", pos: open })
 		}
 		key_pos = $pos
-		(key, after_key) = parse_key(src, $pos)?
+		(key, after_key) = parse_key(src, $pos, limits)?
 		colon = skip_trivia(src, after_key)?
 		if at(src, colon) != ':' {
 			return Err({ reason: "expected ':' after key '${key}', found ${describe(src, colon)}", pos: colon })
 		}
-		(value, after_value) = parse_value(src, skip_trivia(src, colon + 1)?, depth + 1)?
+		(value, after_value) = parse_value(src, skip_trivia(src, colon + 1)?, depth + 1, limits)?
 		if $seen.contains(key) {
 			return Err({ reason: "duplicate key '${key}'", pos: key_pos })
 		}
@@ -195,14 +206,14 @@ parse_record = |src, open, depth| {
 	Ok(($fields, $pos + 1))
 }
 
-parse_key : List(U8), U64 -> Try((Str, U64), Fail)
-parse_key = |src, pos| {
+parse_key : List(U8), U64, Value.Limits -> Try((Str, U64), Fail)
+parse_key = |src, pos, limits| {
 	c = at(src, pos)
 	if c == '"' {
 		if starts_at(src, pos, "\"\"\"") {
 			Err({ reason: "block strings can't be record keys", pos })
 		} else {
-			parse_basic_string(src, pos)
+			parse_basic_string(src, pos, limits)
 		}
 	} else if is_lower_start(c) {
 		Ok(read_ident(src, pos))
@@ -215,10 +226,10 @@ parse_key = |src, pos| {
 }
 
 ## `open value, value, ... close` with an optional trailing comma.
-parse_list : List(U8), U64, U64, U8 -> Try((List(Value), U64), Fail)
-parse_list = |src, open, depth, close| {
-	if depth + 1 > max_depth {
-		return Err({ reason: "nesting deeper than ${max_depth.to_str()} levels", pos: open })
+parse_list : List(U8), U64, U64, U8, Value.Limits -> Try((List(Value), U64), Fail)
+parse_list = |src, open, depth, close, limits| {
+	if depth + 1 > limits.max_depth {
+		return Err({ reason: "nesting deeper than ${limits.max_depth.to_str()} levels", pos: open })
 	}
 	open_str = byte_str(at(src, open))
 	var $items = []
@@ -227,7 +238,7 @@ parse_list = |src, open, depth, close| {
 		if $pos >= src.len() {
 			return Err({ reason: "unclosed '${open_str}'", pos: open })
 		}
-		(value, after) = parse_value(src, $pos, depth + 1)?
+		(value, after) = parse_value(src, $pos, depth + 1, limits)?
 		$items = $items.append(value)
 		p = skip_trivia(src, after)?
 		if at(src, p) == ',' {
@@ -243,8 +254,8 @@ parse_list = |src, open, depth, close| {
 	Ok(($items, $pos + 1))
 }
 
-parse_variant : List(U8), U64, U64 -> Try((Value, U64), Fail)
-parse_variant = |src, pos, depth| {
+parse_variant : List(U8), U64, U64, Value.Limits -> Try((Value, U64), Fail)
+parse_variant = |src, pos, depth, limits| {
 	(tag, after_tag) = read_ident(src, pos)
 	# The payload must follow on the same line: only spaces and tabs in between.
 	var $p = after_tag
@@ -253,14 +264,14 @@ parse_variant = |src, pos, depth| {
 	}
 	p = $p
 	if at(src, p) == '(' {
-		(args, after) = parse_list(src, p, depth, ')')?
+		(args, after) = parse_list(src, p, depth, ')', limits)?
 		if args.is_empty() {
 			Err({ reason: "empty payload: write '${tag}' without parentheses", pos: p })
 		} else {
 			Ok((Tag(tag, args), after))
 		}
 	} else if at(src, p) == '{' {
-		(fields, after) = parse_record(src, p, depth)?
+		(fields, after) = parse_record(src, p, depth, limits)?
 		Ok((Tag(tag, [Rec(fields)]), after))
 	} else {
 		Ok((Tag(tag, []), after_tag))
@@ -269,9 +280,9 @@ parse_variant = |src, pos, depth| {
 
 # ── numbers ──────────────────────────────────────────────────
 
-parse_number : List(U8), U64 -> Try((Value, U64), Fail)
-parse_number = |src, start| {
-	check_number_limits(src, start)?
+parse_number : List(U8), U64, Value.Limits -> Try((Value, U64), Fail)
+parse_number = |src, start, limits| {
+	check_number_limits(src, start, limits)?
 	neg = at(src, start) == '-'
 	digits_start = if (neg) start + 1 else start
 	(text, end) =
@@ -413,14 +424,14 @@ mul_add = |digits, factor, add| {
 }
 
 ## Checked before converting, so huge literals are rejected cheaply.
-check_number_limits : List(U8), U64 -> Try({}, Fail)
-check_number_limits = |src, start| {
+check_number_limits : List(U8), U64, Value.Limits -> Try({}, Fail)
+check_number_limits = |src, start, limits| {
 	var $end = start
 	while is_number_char(at(src, $end)) {
 		$end = $end + 1
 	}
-	if $end - start > max_number_length {
-		return Err({ reason: "number literal longer than ${max_number_length.to_str()} characters", pos: start })
+	if $end - start > limits.max_number_length {
+		return Err({ reason: "number literal longer than ${limits.max_number_length.to_str()} characters", pos: start })
 	}
 	digits_start = if (at(src, start) == '-') start + 1 else start
 	if starts_at(src, digits_start, "0x") or starts_at(src, digits_start, "0b") {
@@ -443,8 +454,8 @@ check_number_limits = |src, start| {
 		b = at(src, $p)
 		if is_digit(b) {
 			$exp = $exp * 10 + (b - '0').to_u64()
-			if $exp > max_exponent {
-				return Err({ reason: "exponent larger than ${max_exponent.to_str()}", pos: start })
+			if $exp > limits.max_exponent {
+				return Err({ reason: "exponent larger than ${limits.max_exponent.to_str()}", pos: start })
 			}
 		}
 		$p = $p + 1
@@ -490,19 +501,19 @@ control_error = |pos, place| { reason: "raw control character in ${place} (write
 bidi_error : U64 -> Fail
 bidi_error = |pos| { reason: "raw bidirectional control character (write it as an escape, e.g. \\u{202E})", pos }
 
-check_string_length : List(U8), U64 -> Try({}, Fail)
-check_string_length = |bytes, open| {
+check_string_length : List(U8), U64, Value.Limits -> Try({}, Fail)
+check_string_length = |bytes, open, limits| {
 	# Count code points: every byte that isn't a UTF-8 continuation byte.
 	chars = bytes.keep_if(|b| b < 0x80 or b >= 0xC0).len()
-	if chars > max_string_length {
-		Err({ reason: "string longer than ${max_string_length.to_str()} characters", pos: open })
+	if chars > limits.max_string_length {
+		Err({ reason: "string longer than ${limits.max_string_length.to_str()} characters", pos: open })
 	} else {
 		Ok({})
 	}
 }
 
-parse_basic_string : List(U8), U64 -> Try((Str, U64), Fail)
-parse_basic_string = |src, open| {
+parse_basic_string : List(U8), U64, Value.Limits -> Try((Str, U64), Fail)
+parse_basic_string = |src, open, limits| {
 	var $out = []
 	var $pos = open + 1
 	while at(src, $pos) != '"' {
@@ -527,7 +538,7 @@ parse_basic_string = |src, open| {
 			$pos = $pos + 1
 		}
 	}
-	check_string_length($out, open)?
+	check_string_length($out, open, limits)?
 	Ok((bytes_to_str($out), $pos + 1))
 }
 
@@ -568,8 +579,8 @@ read_escape = |src, start| {
 	}
 }
 
-parse_block_string : List(U8), U64 -> Try((Str, U64), Fail)
-parse_block_string = |src, open| {
+parse_block_string : List(U8), U64, Value.Limits -> Try((Str, U64), Fail)
+parse_block_string = |src, open, limits| {
 	var $p = open + 3
 	while at(src, $p) == ' ' or at(src, $p) == '\t' {
 		$p = $p + 1
@@ -633,7 +644,7 @@ parse_block_string = |src, open| {
 		$out = if ($first) $out.concat(decoded) else $out.append('\n').concat(decoded)
 		$first = False
 	}
-	check_string_length($out, open)?
+	check_string_length($out, open, limits)?
 	Ok((bytes_to_str($out), $close + 3))
 }
 
@@ -662,8 +673,8 @@ decode_block_line = |src, start, end| {
 # ── byte strings ─────────────────────────────────────────
 
 ## `x"9f86 d081"`: two hex digits per byte, spaces and tabs between bytes.
-parse_bytes_literal : List(U8), U64 -> Try((List(U8), U64), Fail)
-parse_bytes_literal = |src, start| {
+parse_bytes_literal : List(U8), U64, Value.Limits -> Try((List(U8), U64), Fail)
+parse_bytes_literal = |src, start, limits| {
 	open = start + 1
 	var $out = []
 	var $pos = open + 1
@@ -687,8 +698,8 @@ parse_bytes_literal = |src, start| {
 		}
 	}
 	# Same limit as strings, counted over the literal's characters (all ASCII).
-	if $pos - (open + 1) > max_string_length {
-		return Err({ reason: "byte string longer than ${max_string_length.to_str()} characters", pos: start })
+	if $pos - (open + 1) > limits.max_string_length {
+		return Err({ reason: "byte string longer than ${limits.max_string_length.to_str()} characters", pos: start })
 	}
 	Ok(($out, $pos + 1))
 }
@@ -907,3 +918,30 @@ hex_digit = |n| if (n < 10) '0' + n else 'a' + n - 10
 expect Value.parse_all("#haus 2\n{ a: 1 }").map_ok(|vs| vs.len()) == Err({ reason: "the file starts with a version directive (#haus): it needs a newer version of haus", line: 1, column: 1 })
 expect Value.parse_all("\u(FEFF)#haus 2\n1").map_ok(|vs| vs.len()) == Err({ reason: "the file starts with a version directive (#haus): it needs a newer version of haus", line: 1, column: 2 })
 expect Value.parse_all(" #haus 2").map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("expected a value, found '#'")
+
+# Your own limits (`parse_all_with`): each at the limit, and just past it.
+small : Value.Limits
+small = { max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
+
+within_small : Str -> Try(U64, Str)
+within_small = |text| Value.parse_all_with(text, small).map_ok(|vs| vs.len()).map_err(|e| "${e.reason} at ${e.line.to_str()}:${e.column.to_str()}")
+
+expect within_small("[[[1]]], { a: { b: [] } }, A(B(C(1))), A { b: B { c: [] } }") == Ok(4)
+expect within_small("[[[[1]]]]") == Err("nesting deeper than 3 levels at 1:4")
+expect within_small("A(B(C(D(1))))") == Err("nesting deeper than 3 levels at 1:8")
+expect within_small("{ a: { b: { c: {} } } }") == Err("nesting deeper than 3 levels at 1:16")
+expect within_small("12345678, -1234567, 1_234_56, 0xFFFFFF") == Ok(4)
+expect within_small("123456789") == Err("number literal longer than 8 characters at 1:1")
+expect within_small("1e99, 1e-99") == Ok(2)
+expect within_small("1e100") == Err("exponent larger than 99 at 1:1")
+expect within_small("\"abcd\", \"éééé\", \"a\\u{1F600}cd\", x\"abcd\", x\"ab\"") == Ok(5)
+expect within_small("\"abcde\"") == Err("string longer than 4 characters at 1:1")
+expect within_small("\"\"\"\n  abcde\n  \"\"\"") == Err("string longer than 4 characters at 1:1")
+# A byte string counts the characters between its quotes, spaces too.
+expect within_small("x\"abcdef\"") == Err("byte string longer than 4 characters at 1:1")
+expect within_small("x\"ab cd\"") == Err("byte string longer than 4 characters at 1:1")
+expect Value.parse_with("[[[1]]]", small).is_ok() and Value.parse_with("[[[[1]]]]", small).is_err()
+expect Value.parse_bytes_with("12345678".to_utf8(), small).is_ok() and Value.parse_bytes_with("123456789".to_utf8(), small).is_err()
+# Larger limits than the defaults.
+expect Value.parse_all_with("${"[".repeat(300)}${"]".repeat(300)}, 1e7000", { ..Value.default_limits, max_depth: 300, max_exponent: 7000 }).is_ok()
+expect Value.parse_all("${"[".repeat(256)}${"]".repeat(256)}").is_ok() and Value.parse_all("${"[".repeat(257)}${"]".repeat(257)}").is_err()

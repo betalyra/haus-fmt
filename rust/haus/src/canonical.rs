@@ -104,55 +104,72 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// `v`'s canonical form, appended to `out`. A stack rather than recursion,
+/// so that a value built in code, which may nest deeper than any limit,
+/// takes no call stack per level.
 fn write(v: &Value, out: &mut String) {
-    match v {
-        // The default number limit, whatever the reader's (spec §12).
-        Value::Number(n) => out.push_str(&number_text(n, crate::Limits::default().max_number_length)),
-        Value::String(s) => quote(s, out),
-        Value::Bytes(b) => {
-            out.push_str("x\"");
-            for x in b {
-                let _ = write!(out, "{x:02x}");
-            }
-            out.push('"');
-        }
-        Value::Array(items) => list('[', items, ']', out),
-        Value::Record(fields) => record(fields, out),
-        Value::Variant { tag, args } => {
-            out.push_str(tag);
-            match args.as_slice() {
-                [] => {}
-                [Value::Record(fields)] => record(fields, out),
-                _ => list('(', args, ')', out),
+    /// What is left to write, last first.
+    enum Next<'a> {
+        Value(&'a Value),
+        Key(&'a str),
+        Text(char),
+    }
+    /// `items` between `open` and `close`, separated by `,`.
+    fn list<'a>(open: char, items: &'a [Value], close: char, out: &mut String, todo: &mut Vec<Next<'a>>) {
+        out.push(open);
+        todo.push(Next::Text(close));
+        for (i, x) in items.iter().enumerate().rev() {
+            todo.push(Next::Value(x));
+            if i > 0 {
+                todo.push(Next::Text(','));
             }
         }
     }
-}
-
-fn list(open: char, items: &[Value], close: char, out: &mut String) {
-    out.push(open);
-    for (i, x) in items.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
+    /// Fields sorted by key. `str`'s order is the order of UTF-8 bytes, which
+    /// is the order of code points (spec §12).
+    fn record<'a>(fields: &'a [(String, Value)], out: &mut String, todo: &mut Vec<Next<'a>>) {
+        let mut sorted: Vec<&(String, Value)> = fields.iter().collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        out.push('{');
+        todo.push(Next::Text('}'));
+        for (i, (k, v)) in sorted.into_iter().enumerate().rev() {
+            todo.push(Next::Value(v));
+            todo.push(Next::Key(k));
+            if i > 0 {
+                todo.push(Next::Text(','));
+            }
         }
-        write(x, out);
     }
-    out.push(close);
-}
-
-/// Fields sorted by key. `str`'s order is the order of UTF-8 bytes, which is
-/// the order of code points (spec §12).
-fn record(fields: &[(String, Value)], out: &mut String) {
-    let mut sorted: Vec<&(String, Value)> = fields.iter().collect();
-    sorted.sort_by(|a, b| a.0.cmp(&b.0));
-    out.push('{');
-    for (i, (k, v)) in sorted.into_iter().enumerate() {
-        if i > 0 {
-            out.push(',');
+    let mut todo = vec![Next::Value(v)];
+    while let Some(next) = todo.pop() {
+        match next {
+            Next::Text(c) => out.push(c),
+            Next::Key(k) => {
+                key(k, out);
+                out.push(':');
+            }
+            // The default number limit, whatever the reader's (spec §12).
+            Next::Value(Value::Number(n)) => {
+                out.push_str(&number_text(n, crate::Limits::default().max_number_length));
+            }
+            Next::Value(Value::String(s)) => quote(s, out),
+            Next::Value(Value::Bytes(b)) => {
+                out.push_str("x\"");
+                for x in b {
+                    let _ = write!(out, "{x:02x}");
+                }
+                out.push('"');
+            }
+            Next::Value(Value::Array(items)) => list('[', items, ']', out, &mut todo),
+            Next::Value(Value::Record(fields)) => record(fields, out, &mut todo),
+            Next::Value(Value::Variant { tag, args }) => {
+                out.push_str(tag);
+                match args.as_slice() {
+                    [] => {}
+                    [Value::Record(fields)] => record(fields, out, &mut todo),
+                    _ => list('(', args, ')', out, &mut todo),
+                }
+            }
         }
-        key(k, out);
-        out.push(':');
-        write(v, out);
     }
-    out.push('}');
 }

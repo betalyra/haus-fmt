@@ -66,6 +66,6 @@ Logs := [].{
 	}
 
 	## haus type `logs#Root`.
-	# A stream of Entry: read it with Stream and decode_entry.
+	# A stream of Entry: read it with Streaming and decode_entry.
 
 }

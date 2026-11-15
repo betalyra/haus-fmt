@@ -1,1 +1,1 @@
-package [Decode, Encode, FromJson, Int, JsonValue, Secret, Stream, Time, ToJson, Value] {}
+package [Decode, Encode, FromJson, Int, JsonValue, Secret, Streaming, Time, ToJson, Value] {}

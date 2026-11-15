@@ -44,7 +44,7 @@ mod read;
 pub mod ser;
 
 use crate::error::Position;
-use crate::{DecodeError, Encode, EncodeError, Error, Limits, Segment, SyntaxError, Value};
+use crate::{DecodeError, Encode, EncodeError, Encoder, Error, Limits, Segment, SyntaxError, Value};
 use std::io::{self, BufRead, Read, Write};
 
 pub use lossless::{from_lossless, from_plain, to_lossless};
@@ -79,10 +79,19 @@ pub trait ToJson {
     /// `None` as `null` (§16.3). A `Maybe` of such a type writes the tagged form.
     const NULLABLE: bool = false;
 
-    /// The plain JSON. Fails only for a value that has none: a [`Value`](crate::Value)
-    /// built in code that isn't a valid haus value (the raw value of an `Any`
-    /// or an unknown variant), or a record payload with a field named `_tag`.
-    fn to_json(&self) -> Result<Json, EncodeError>;
+    /// The plain JSON, for a reader with `e`'s limits, at `e`'s depth. Fails
+    /// only for a value that has none: one nested deeper than the depth limit
+    /// as a haus value (checked before each container, so a deep value fails
+    /// instead of recursing on), a [`Value`](crate::Value) built in code that
+    /// isn't a valid haus value (the raw value of an `Any` or an unknown
+    /// variant), or a record payload with a field named `_tag`. An error inside
+    /// a `Secret` is reported at the secret (spec §15).
+    fn to_json_with(&self, e: Encoder) -> Result<Json, EncodeError>;
+
+    /// The plain JSON, for a reader with the default limits.
+    fn to_json(&self) -> Result<Json, EncodeError> {
+        self.to_json_with(Encoder::default())
+    }
 }
 
 /// A Rust type read from plain JSON (spec §16.3). haus-build implements it
@@ -264,28 +273,13 @@ pub fn from_str_with<T: FromJson + Encode>(text: &str, limits: &Limits) -> Resul
     typed(&parse_with(text, limits)?, limits)
 }
 
-/// `json` as a `T` whose haus value is within the depth limit of `limits`.
+/// `json` as a `T` whose haus value is within the depth limit of `limits`:
+/// it is encoded to check that, and an error encoding it is the error.
 fn typed<T: FromJson + Encode>(json: &Json, limits: &Limits) -> Result<T, Error> {
     let x = T::from_json(json)?;
-    match depth(&x.encode()) > limits.max_depth {
-        true => Err(DecodeError::new(format!("nesting deeper than {} levels", limits.max_depth)).into()),
-        false => Ok(x),
-    }
-}
-
-/// How deep a value nests, counted as the haus writer counts it (`Tag { … }`
-/// is one level).
-fn depth(v: &Value) -> usize {
-    let deepest = |items: &[Value]| items.iter().map(depth).max().unwrap_or(0);
-    match v {
-        Value::Array(items) => 1 + deepest(items),
-        Value::Record(fields) => 1 + fields.iter().map(|(_, v)| depth(v)).max().unwrap_or(0),
-        Value::Variant { args, .. } => match args.as_slice() {
-            [] => 0,
-            [record @ Value::Record(_)] => depth(record),
-            args => 1 + deepest(args),
-        },
-        _ => 0,
+    match x.encode_with(Encoder::new(limits)) {
+        Ok(_) => Ok(x),
+        Err(EncodeError { path, reason }) => Err(DecodeError { path, reason }.into()),
     }
 }
 
@@ -296,7 +290,7 @@ pub fn to_string<T: ToJson + ?Sized>(value: &T) -> Result<String, EncodeError> {
 
 /// [`to_string`], for a reader with `limits`.
 pub fn to_string_with<T: ToJson + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
-    write_with(&value.to_json()?, limits)
+    write_with(&value.to_json_with(Encoder::new(limits))?, limits)
 }
 
 // ── JSON Lines ────────────────────────────────────────────────

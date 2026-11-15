@@ -24,8 +24,9 @@ Limits (§16, "Limits"):
 A leading byte order mark is ignored (§16, as in haus). `parseLines` reads
 JSON Lines (§16, "Streams").
 
-The reader is a reference, not proven: what is proven about the mappings
-(`Haus.Json.Lossless`, `Haus.Json.Plain`) is about `JSON` as data.
+`Haus.Json.TextRoundTrip` proves that `parse` reads back what `write` writes,
+for exactly the values `parse` returns (well formed, within the limits), and
+the same for JSON Lines.
 -/
 
 namespace Haus.JSON

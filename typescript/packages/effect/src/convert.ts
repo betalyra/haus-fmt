@@ -9,7 +9,7 @@
  * the error with its path.
  */
 import {
-  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
+  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
   variant as vVariant, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
@@ -136,21 +136,36 @@ interface Guard {
   steps: number
   readonly maxSteps: number
   depth: number
+  /** Most nested converter calls (see `maxNesting`). */
+  readonly maxNesting: number
+  /** The call's limits, for checking raw values and decimals when encoding (spec §9.8). */
+  readonly limits: h.Limits
 }
 
-/** Nested converter calls: schema wrappers plus value levels, comfortably above the parser's 256 levels. */
-export const MAX_NESTING = 2048
+/** Nested converter calls per level of a value: schema wrappers plus the value's own level. */
+const NESTING_PER_LEVEL = 8
+/**
+ * Nested converter calls for values within `maxDepth` levels: at least 2048,
+ * comfortably above the parser's default 256 levels. A guard against cycles
+ * and runaway schemas: the depth itself is checked on the value (`decodeBudget`, `encoding`).
+ */
+const maxNesting = (maxDepth: number): number => Math.max(2048, NESTING_PER_LEVEL * maxDepth)
 /** Steps per input value when decoding: conversion stays linear in the input. */
-export const STEPS_PER_VALUE = 16
+const STEPS_PER_VALUE = 16
 /** Default budget when encoding, which also bounds objects shared many times (a DAG). */
-export const DEFAULT_ENCODE_STEPS = 16 * 1024 * 1024
+const DEFAULT_ENCODE_STEPS = 16 * 1024 * 1024
+/** Values beyond this are rejected (the parser's 64 Mi characters can't produce more). */
+const MAX_VALUES = 64 * 1024 * 1024
 
-let guard: Guard = { steps: 0, maxSteps: Infinity, depth: 0 }
+/** The nesting limit of a call (spec §7): `maxDepth`, 256 by default. */
+const depthOf = (limits: h.Limits): number => limits.maxDepth ?? MAX_DEPTH
 
-/** Run `f` with a fresh budget. */
-export const guarded = <R>(maxSteps: number, f: () => R): R => {
+let guard: Guard = { steps: 0, maxSteps: Infinity, depth: 0, maxNesting: maxNesting(MAX_DEPTH), limits: {} }
+
+/** Run `f` with a fresh budget of `maxSteps`, within `limits`. */
+const guarded = <R>(limits: h.Limits, maxSteps: number, f: () => R): R => {
   const saved = guard
-  guard = { steps: 0, maxSteps, depth: 0 }
+  guard = { steps: 0, maxSteps, depth: 0, maxNesting: maxNesting(depthOf(limits)), limits }
   try {
     return f()
   } finally {
@@ -160,7 +175,7 @@ export const guarded = <R>(maxSteps: number, f: () => R): R => {
 
 const enter = () => {
   if (++guard.steps > guard.maxSteps) throw new ConversionError(`conversion budget of ${guard.maxSteps} steps exceeded`)
-  if (guard.depth >= MAX_NESTING) throw new ConversionError(`value nested deeper than ${MAX_NESTING} levels (or cyclic)`)
+  if (guard.depth >= guard.maxNesting) throw new ConversionError(`value nested deeper than ${guard.maxNesting} levels (or cyclic)`)
   guard.depth++
 }
 
@@ -168,14 +183,23 @@ const leave = () => {
   guard.depth--
 }
 
-/** The decode budget for `value`: proportional to its size. Fails on values too deep or large to be parsed input. */
-export const decodeBudget = (value: Value): number => {
+/** Whether the parser counts `v` as a level of nesting: records, arrays and `Tag(…)`. */
+const isNested = (v: Value): boolean => v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0)
+
+/**
+ * Count the values in a tree, failing when it nests deeper than `maxDepth`
+ * levels (counted as the parser counts them) or has too many values. A
+ * parsed value is a tree within the parser's limits; a `Value` built in code
+ * might be deeper, share nodes (a DAG) or even contain itself.
+ */
+const countValues = (value: Value, maxDepth: number): number => {
   let count = 0
+  // Each value with the number of levels around it.
   const stack: [Value, number][] = [[value, 0]]
   while (stack.length > 0) {
     const [v, depth] = stack.pop()!
-    if (++count > 64 * 1024 * 1024) throw new ConversionError("value has too many nodes")
-    if (depth > 256) throw new ConversionError("value nested deeper than 256 levels (or cyclic)")
+    if (++count > MAX_VALUES) throw new ConversionError("value has too many nodes")
+    if (depth >= maxDepth && isNested(v)) throw new ConversionError(`value nested deeper than ${maxDepth} levels (or cyclic)`)
     if (v.kind === "array") for (const x of v.items) stack.push([x, depth + 1])
     else if (v.kind === "record") for (const x of v.fields.values()) stack.push([x, depth + 1])
     // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
@@ -185,7 +209,30 @@ export const decodeBudget = (value: Value): number => {
       else for (const x of v.args) stack.push([x, depth + 1])
     }
   }
-  return STEPS_PER_VALUE * count + 1024
+  return count
+}
+
+/**
+ * The decode budget for `value`: proportional to its size (or `maxSteps`).
+ * Fails on values too deep (beyond `maxDepth`) or too large to be parsed input.
+ */
+const decodeBudget = (value: Value, limits: h.Limits): number => {
+  const budget = STEPS_PER_VALUE * countValues(value, depthOf(limits)) + 1024
+  return limits.maxSteps ?? budget
+}
+
+/** Decode `value` with `convert`, within `limits` (see `decodeBudget`). */
+export const decoding = <R>(value: Value, limits: h.Limits, convert: (value: Value) => R): R =>
+  guarded(limits, decodeBudget(value, limits), () => convert(value))
+
+/**
+ * Encode with `encode`, within `limits`: a budget of `maxSteps` (16 Mi by
+ * default), and a value nested at most `maxDepth` levels, as the parser reads it.
+ */
+export const encoding = (limits: h.Limits, encode: () => Value): Value => {
+  const value = guarded(limits, limits.maxSteps ?? DEFAULT_ENCODE_STEPS, encode)
+  countValues(value, depthOf(limits))
+  return value
 }
 
 /** Schema-less conversion, used where the schema gives no guidance. */
@@ -549,7 +596,7 @@ export const decimalText = ({ value, scale }: BigDecimal.BigDecimal): string => 
 /** A decimal's text as a number value: a number literal within the limits (spec §9.8), normalized as the parser would. */
 const decimalValue = (text: string): Value => {
   try {
-    return h.encode(h.Decimal, text)
+    return h.encode(h.Decimal, text, guard.limits)
   } catch (e) {
     if (e instanceof h.HausEncodeError) throw new ConversionError(e.reason, e.path)
     throw e
@@ -643,7 +690,7 @@ export const compileEncoder = (ast: AST): Encoder => {
  */
 const encodeValue: Encoder = (js) => {
   try {
-    return h.encode(h.Any, js as Value)
+    return h.encode(h.Any, js as Value, guard.limits)
   } catch (e) {
     if (e instanceof h.HausEncodeError) throw new ConversionError(e.reason, e.path)
     throw e

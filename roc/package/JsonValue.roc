@@ -17,7 +17,8 @@
 ## The limits of spec §7 apply to the haus value that results. A mapping can
 ## take several JSON levels for one haus level, so JSON may nest 4·256 + 1 =
 ## 1025 levels, and the resulting value is then checked against 256. Without
-## a schema, JSON may nest 256 levels.
+## a schema, JSON may nest 256 levels. The `_with` functions take other
+## limits (`Value.Limits`); a depth limit d then allows 4·d + 1 JSON levels.
 ##
 ##     JsonValue.parse("{\"a\": [1, null]}")   # Ok(Object([("a", Array([Number("1"), Null]))]))
 ##     JsonValue.to_lossless_json(Num("19.90")) # Ok("{\"num\":\"19.90\"}")
@@ -40,7 +41,13 @@ JsonValue := [
 
 	## Read one JSON text.
 	parse : Str -> Try(JsonValue, Value.ParseError)
-	parse = |text| parse_with(text, max_json_depth, True)
+	parse = |text| parse_with(text, Value.default_limits)
+
+	## `parse` with your own limits (see `Value.Limits`): numbers and strings
+	## within them, and the JSON nested at most 4·d + 1 levels for a depth
+	## limit d.
+	parse_with : Str, Value.Limits -> Try(JsonValue, Value.ParseError)
+	parse_with = |text, limits| read_json(text, limits, json_depth(limits), True)
 
 	## Write JSON on one line, without spaces. A `JsonValue` built in code is checked
 	## as it is written: numbers must be JSON numbers within the number limits,
@@ -88,15 +95,19 @@ JsonValue := [
 	## normalized (`1E+05` is `1e5`), `true` / `false` as `True` / `False`, and
 	## `null` as `None`.
 	from_json : Str -> Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)])
-	from_json = |text| {
-		json = parse_with(text, max_depth, True).map_err(|e| Syntax(e))?
-		to_value(json).map_err(|e| Decode(e))
+	from_json = |text| from_json_with(text, Value.default_limits)
+
+	## `from_json` with your own limits: the JSON nests at most d levels.
+	from_json_with : Str, Value.Limits -> Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)])
+	from_json_with = |text, limits| {
+		json = read_json(text, limits, limits.max_depth, True).map_err(|e| Syntax(e))?
+		plain_value(json, 0, limits).map_err(|e| Decode(e))
 	}
 
 	## A `JsonValue` as a haus value, as `from_json` reads it. The value nests at
 	## most 256 levels.
 	to_value : JsonValue -> Try(Value, Decode.Error)
-	to_value = |json| plain_value(json, 0)
+	to_value = |json| plain_value(json, 0, Value.default_limits)
 
 	# ── lossless (§16.2) ────────────────────────────────────
 
@@ -108,9 +119,13 @@ JsonValue := [
 	## Read the lossless form, and nothing else: a bare number, `true`,
 	## `false`, `null` and objects with other members are errors.
 	from_lossless_json : Str -> Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)])
-	from_lossless_json = |text| {
-		json = parse(text).map_err(|e| Syntax(e))?
-		from_lossless(json).map_err(|e| Decode(e))
+	from_lossless_json = |text| from_lossless_json_with(text, Value.default_limits)
+
+	## `from_lossless_json` with your own limits, for the JSON and the value.
+	from_lossless_json_with : Str, Value.Limits -> Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)])
+	from_lossless_json_with = |text, limits| {
+		json = parse_with(text, limits).map_err(|e| Syntax(e))?
+		lossless_value(json, 0, limits).map_err(|e| Decode(e))
 	}
 
 	## The lossless form of a value: `{"num": "19.90"}`, `{"bytes": "0b34"}`,
@@ -129,7 +144,7 @@ JsonValue := [
 
 	## A value from its lossless form.
 	from_lossless : JsonValue -> Try(Value, Decode.Error)
-	from_lossless = |json| lossless_value(json, 0)
+	from_lossless = |json| lossless_value(json, 0, Value.default_limits)
 
 	# ── JSON Lines ──────────────────────────────────────────
 
@@ -138,7 +153,11 @@ JsonValue := [
 	## ignored at the start of the stream (not of each line); empty lines are
 	## errors. Errors give the line.
 	lines : Str -> Try(List(JsonValue), Value.ParseError)
-	lines = |text| {
+	lines = |text| lines_with(text, Value.default_limits)
+
+	## `lines` with your own limits (see `parse_with`), for each line.
+	lines_with : Str, Value.Limits -> Try(List(JsonValue), Value.ParseError)
+	lines_with = |text, limits| {
 		body = if (text.ends_with("\n")) text.drop_suffix("\n") else text
 		if body.is_empty() {
 			return Ok([])
@@ -146,7 +165,7 @@ JsonValue := [
 		var $out = []
 		var $line = 1.U64
 		for l in body.split_on("\n") {
-			json = parse_with(l, max_json_depth, $line == 1).map_err(|e| { reason: e.reason, line: $line, column: e.column })?
+			json = read_json(l, limits, json_depth(limits), $line == 1).map_err(|e| { reason: e.reason, line: $line, column: e.column })?
 			$out = $out.append(json)
 			$line = $line + 1
 		}
@@ -200,30 +219,18 @@ JsonValue := [
 
 Fail : { reason : Str, pos : U64 }
 
-# Spec §7 defaults, with JSON nesting 4·d + 1 levels (see the module doc).
-max_json_depth : U64
-max_json_depth = 4 * 256 + 1
-
-max_depth : U64
-max_depth = 256
-
-max_number_length : U64
-max_number_length = 1000
-
-max_exponent : U64
-max_exponent = 6144
-
-max_string_length : U64
-max_string_length = 16 * 1024 * 1024
+## How deep JSON may nest for haus values within `limits`: 4·d + 1 levels (see the module doc).
+json_depth : Value.Limits -> U64
+json_depth = |limits| 4 * limits.max_depth + 1
 
 # ── reading ──────────────────────────────────────────────────
 
-## One JSON text nested at most `max` levels; a byte order mark at the start is skipped if `bom`.
-parse_with : Str, U64, Bool -> Try(JsonValue, Value.ParseError)
-parse_with = |text, max, bom| {
+## One JSON text within `limits`, nested at most `max` levels; a byte order mark at the start is skipped if `bom`.
+read_json : Str, Value.Limits, U64, Bool -> Try(JsonValue, Value.ParseError)
+read_json = |text, limits, max, bom| {
 	src = text.to_utf8()
 	start = if (bom and src.starts_with([0xEF, 0xBB, 0xBF])) 3 else 0
-	(value, after) = read_value(src, skip_ws(src, start), 0, max).map_err(|f| locate(src, f))?
+	(value, after) = read_value(src, skip_ws(src, start), 0, max, limits).map_err(|f| locate(src, f))?
 	end = skip_ws(src, after)
 	if end < src.len() {
 		Err(locate(src, { reason: "unexpected ${describe(src, end)} after the JSON value", pos: end }))
@@ -232,18 +239,18 @@ parse_with = |text, max, bom| {
 	}
 }
 
-read_value : List(U8), U64, U64, U64 -> Try((JsonValue, U64), Fail)
-read_value = |src, pos, depth, max| {
+read_value : List(U8), U64, U64, U64, Value.Limits -> Try((JsonValue, U64), Fail)
+read_value = |src, pos, depth, max, limits| {
 	c = at(src, pos)
 	if c == '{' {
-		read_object(src, pos, depth, max)
+		read_object(src, pos, depth, max, limits)
 	} else if c == '[' {
-		read_array(src, pos, depth, max)
+		read_array(src, pos, depth, max, limits)
 	} else if c == '"' {
-		(s, after) = read_string(src, pos)?
+		(s, after) = read_string(src, pos, limits)?
 		Ok((String(s), after))
 	} else if c == '-' or is_digit(c) {
-		read_number(src, pos)
+		read_number(src, pos, limits)
 	} else if starts_at(src, pos, "true") {
 		Ok((Boolean(True), pos + 4))
 	} else if starts_at(src, pos, "false") {
@@ -255,8 +262,8 @@ read_value = |src, pos, depth, max| {
 	}
 }
 
-read_object : List(U8), U64, U64, U64 -> Try((JsonValue, U64), Fail)
-read_object = |src, open, depth, max| {
+read_object : List(U8), U64, U64, U64, Value.Limits -> Try((JsonValue, U64), Fail)
+read_object = |src, open, depth, max, limits| {
 	if depth + 1 > max {
 		return Err({ reason: "JSON nested deeper than ${max.to_str()} levels", pos: open })
 	}
@@ -269,7 +276,7 @@ read_object = |src, open, depth, max| {
 			return Err({ reason: "expected a member name, found ${describe(src, $pos)}", pos: $pos })
 		}
 		name_pos = $pos
-		(name, after_name) = read_string(src, $pos)?
+		(name, after_name) = read_string(src, $pos, limits)?
 		if $seen.contains(name) {
 			return Err({ reason: "duplicate member name ${quote_str(name)}", pos: name_pos })
 		}
@@ -278,7 +285,7 @@ read_object = |src, open, depth, max| {
 		if at(src, colon) != ':' {
 			return Err({ reason: "expected ':', found ${describe(src, colon)}", pos: colon })
 		}
-		(value, after_value) = read_value(src, skip_ws(src, colon + 1), depth + 1, max)?
+		(value, after_value) = read_value(src, skip_ws(src, colon + 1), depth + 1, max, limits)?
 		$members = $members.append((name, value))
 		p = skip_ws(src, after_value)
 		if at(src, p) == ',' {
@@ -293,8 +300,8 @@ read_object = |src, open, depth, max| {
 	Ok((Object($members), $pos + 1))
 }
 
-read_array : List(U8), U64, U64, U64 -> Try((JsonValue, U64), Fail)
-read_array = |src, open, depth, max| {
+read_array : List(U8), U64, U64, U64, Value.Limits -> Try((JsonValue, U64), Fail)
+read_array = |src, open, depth, max, limits| {
 	if depth + 1 > max {
 		return Err({ reason: "JSON nested deeper than ${max.to_str()} levels", pos: open })
 	}
@@ -302,7 +309,7 @@ read_array = |src, open, depth, max| {
 	var $pos = skip_ws(src, open + 1)
 	var $done = at(src, $pos) == ']'
 	while !$done {
-		(value, after) = read_value(src, $pos, depth + 1, max)?
+		(value, after) = read_value(src, $pos, depth + 1, max, limits)?
 		$items = $items.append(value)
 		p = skip_ws(src, after)
 		if at(src, p) == ',' {
@@ -348,16 +355,16 @@ number_end = |src, start| {
 }
 
 ## A JSON number's text within the number limits, or why not.
-check_number : List(U8) -> Try({}, Str)
-check_number = |b| {
-	if b.len() > max_number_length {
-		return Err("number literal longer than ${max_number_length.to_str()} characters")
+check_number : List(U8), Value.Limits -> Try({}, Str)
+check_number = |b, limits| {
+	if b.len() > limits.max_number_length {
+		return Err("number literal longer than ${limits.max_number_length.to_str()} characters")
 	}
 	match b.find_first_index(|c| c == 'e' or c == 'E') {
 		Ok(i) => {
 			digits = drop_leading_zeros(b.drop_first(i + 1).drop_if(|c| c == '+' or c == '-'))
-			if digits.len() > 4 or (U64.from_str(bytes_to_str(digits)) ?? 0) > max_exponent {
-				Err("exponent larger than ${max_exponent.to_str()}")
+			if digits.len() > 18 or (U64.from_str(bytes_to_str(digits)) ?? 0) > limits.max_exponent {
+				Err("exponent larger than ${limits.max_exponent.to_str()}")
 			} else {
 				Ok({})
 			}
@@ -366,16 +373,16 @@ check_number = |b| {
 	}
 }
 
-read_number : List(U8), U64 -> Try((JsonValue, U64), Fail)
-read_number = |src, start| {
+read_number : List(U8), U64, Value.Limits -> Try((JsonValue, U64), Fail)
+read_number = |src, start, limits| {
 	end = number_end(src, start).map_err(|reason| { reason, pos: start })?
 	text = src.sublist({ start, len: end - start })
-	check_number(text).map_err(|reason| { reason, pos: start })?
+	check_number(text, limits).map_err(|reason| { reason, pos: start })?
 	Ok((Number(bytes_to_str(text)), end))
 }
 
-read_string : List(U8), U64 -> Try((Str, U64), Fail)
-read_string = |src, open| {
+read_string : List(U8), U64, Value.Limits -> Try((Str, U64), Fail)
+read_string = |src, open, limits| {
 	var $out = []
 	var $pos = open + 1
 	var $done = False
@@ -396,8 +403,8 @@ read_string = |src, open| {
 			$pos = $pos + 1
 		}
 	}
-	if $out.len() > max_string_length and code_points($out) > max_string_length {
-		return Err({ reason: "string longer than ${max_string_length.to_str()} characters", pos: open })
+	if $out.len() > limits.max_string_length and code_points($out) > limits.max_string_length {
+		return Err({ reason: "string longer than ${limits.max_string_length.to_str()} characters", pos: open })
 	}
 	Ok((bytes_to_str($out), $pos + 1))
 }
@@ -481,7 +488,7 @@ write = |json, depth| match json {
 		if number_end(b, 0) != Ok(b.len()) {
 			fail("not a JSON number")
 		} else {
-			check_number(b).map_err(|reason| { reason, path: "" })?
+			check_number(b, Value.default_limits).map_err(|reason| { reason, path: "" })?
 			Ok(b)
 		}
 	}
@@ -512,7 +519,10 @@ write = |json, depth| match json {
 }
 
 open : U64 -> Try({}, Encode.Error)
-open = |depth| if (depth >= max_json_depth) fail("JSON nested deeper than ${max_json_depth.to_str()} levels") else Ok({})
+open = |depth| {
+	max = json_depth(Value.default_limits)
+	if (depth >= max) fail("JSON nested deeper than ${max.to_str()} levels") else Ok({})
+}
 
 fail : Str -> Try(a, Encode.Error)
 fail = |reason| Err({ reason, path: "" })
@@ -521,8 +531,9 @@ fail = |reason| Err({ reason, path: "" })
 quote : Str -> Try(List(U8), Encode.Error)
 quote = |s| {
 	b = s.to_utf8()
-	if b.len() > max_string_length and code_points(b) > max_string_length {
-		return fail("string longer than ${max_string_length.to_str()} characters")
+	max = Value.default_limits.max_string_length
+	if b.len() > max and code_points(b) > max {
+		return fail("string longer than ${max.to_str()} characters")
 	}
 	var $out = ['"']
 	for c in b {
@@ -553,35 +564,35 @@ quote = |s| {
 # ── values ───────────────────────────────────────────────────
 
 ## JSON read without a schema (§16.1), at `depth` haus levels.
-plain_value : JsonValue, U64 -> Try(Value, Decode.Error)
-plain_value = |json, depth| match json {
+plain_value : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
+plain_value = |json, depth, limits| match json {
 	Null => Ok(Tag("None", []))
 	Boolean(True) => Ok(Tag("True", []))
 	Boolean(False) => Ok(Tag("False", []))
 	Number(n) => Ok(Num(JsonValue.normalize_number(n)))
 	String(s) => Ok(Text(s))
 	Array(items) => {
-		enter(depth)?
+		enter(depth, limits)?
 		var $out = []
 		var $i = 0.U64
 		for x in items {
-			$out = $out.append(within(plain_value(x, depth + 1), "[${$i.to_str()}]")?)
+			$out = $out.append(within(plain_value(x, depth + 1, limits), "[${$i.to_str()}]")?)
 			$i = $i + 1
 		}
 		Ok(Arr($out))
 	}
 	Object(members) => {
-		enter(depth)?
+		enter(depth, limits)?
 		var $out = []
 		for (k, x) in members {
-			$out = $out.append((k, within(plain_value(x, depth + 1), ".${k}")?))
+			$out = $out.append((k, within(plain_value(x, depth + 1, limits), ".${k}")?))
 		}
 		Ok(Rec($out))
 	}
 }
 
-enter : U64 -> Try({}, Decode.Error)
-enter = |depth| if (depth >= max_depth) Decode.fail("nesting deeper than ${max_depth.to_str()} levels") else Ok({})
+enter : U64, Value.Limits -> Try({}, Decode.Error)
+enter = |depth, limits| if (depth >= limits.max_depth) Decode.fail("nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
 
 within : Try(a, Decode.Error), Str -> Try(a, Decode.Error)
 within = |result, segment| result.map_err(|{ reason, path }| { reason, path: "${segment}${path}" })
@@ -603,40 +614,40 @@ lossless_forms = "a lossless value: a string, an array, or an object {\"num\"}, 
 
 ## A value from its lossless form, at `depth` haus levels (counted as the haus
 ## writer counts them: `Tag { … }` is one level).
-lossless_value : JsonValue, U64 -> Try(Value, Decode.Error)
-lossless_value = |json, depth| match json {
+lossless_value : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
+lossless_value = |json, depth, limits| match json {
 	String(s) => Ok(Text(s))
 	Array(items) => {
-		enter(depth)?
-		Ok(Arr(lossless_items(items, depth + 1)?))
+		enter(depth, limits)?
+		Ok(Arr(lossless_items(items, depth + 1, limits)?))
 	}
-	Object([("num", n)]) => within(lossless_number(n), ".num")
+	Object([("num", n)]) => within(lossless_number(n, limits), ".num")
 	Object([("bytes", h)]) => within(lossless_bytes(h), ".bytes")
-	Object([("rec", r)]) => within(lossless_record(r, depth), ".rec")
+	Object([("rec", r)]) => within(lossless_record(r, depth, limits), ".rec")
 	Object([("tag", t)]) => Ok(Tag(lossless_tag(t)?, []))
-	Object([("tag", t), ("args", a)]) => lossless_variant(t, a, depth)
-	Object([("args", a), ("tag", t)]) => lossless_variant(t, a, depth)
+	Object([("tag", t), ("args", a)]) => lossless_variant(t, a, depth, limits)
+	Object([("args", a), ("tag", t)]) => lossless_variant(t, a, depth, limits)
 	_ => Decode.fail("expected ${lossless_forms}, found ${describe_json(json)}")
 }
 
-lossless_items : List(JsonValue), U64 -> Try(List(Value), Decode.Error)
-lossless_items = |items, depth| {
+lossless_items : List(JsonValue), U64, Value.Limits -> Try(List(Value), Decode.Error)
+lossless_items = |items, depth, limits| {
 	var $out = []
 	var $i = 0.U64
 	for x in items {
-		$out = $out.append(within(lossless_value(x, depth), "[${$i.to_str()}]")?)
+		$out = $out.append(within(lossless_value(x, depth, limits), "[${$i.to_str()}]")?)
 		$i = $i + 1
 	}
 	Ok($out)
 }
 
-## `"19.90"`: a normalized literal (spec §2) that a reader with the default limits takes.
-lossless_number : JsonValue -> Try(Value, Decode.Error)
-lossless_number = |json| match json {
+## `"19.90"`: a normalized literal (spec §2) that a reader with `limits` takes.
+lossless_number : JsonValue, Value.Limits -> Try(Value, Decode.Error)
+lossless_number = |json, limits| match json {
 	String(n) => {
 		# Writing it and reading it back gives the same text only if it is normalized.
-		same = match Encode.to_str(Num(n)) {
-			Ok(written) => match Value.parse(written) {
+		same = match Encode.to_str_with(Num(n), limits) {
+			Ok(written) => match Value.parse_with(written, limits) {
 				Ok(Num(m)) => m == n
 				_ => Bool.False
 			}
@@ -668,10 +679,10 @@ lossless_bytes = |json| match json {
 	_ => Decode.fail("expected a string, found ${describe_json(json)}")
 }
 
-lossless_record : JsonValue, U64 -> Try(Value, Decode.Error)
-lossless_record = |json, depth| match json {
+lossless_record : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
+lossless_record = |json, depth, limits| match json {
 	Object(members) => {
-		enter(depth)?
+		enter(depth, limits)?
 		var $seen = Set.empty()
 		var $out = []
 		for (k, x) in members {
@@ -679,7 +690,7 @@ lossless_record = |json, depth| match json {
 				return Decode.fail("the key ${quote_str(k)} is used twice")
 			}
 			$seen = $seen.insert(k)
-			$out = $out.append((k, within(lossless_value(x, depth + 1), ".${k}")?))
+			$out = $out.append((k, within(lossless_value(x, depth + 1, limits), ".${k}")?))
 		}
 		Ok(Rec($out))
 	}
@@ -694,16 +705,16 @@ lossless_tag = |json| match json {
 	_ => within(Decode.fail("expected a string, found ${describe_json(json)}"), ".tag")
 }
 
-lossless_variant : JsonValue, JsonValue, U64 -> Try(Value, Decode.Error)
-lossless_variant = |tag, args, depth| {
+lossless_variant : JsonValue, JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
+lossless_variant = |tag, args, depth, limits| {
 	name = lossless_tag(tag)?
 	values = match args {
 		Array([]) => return within(Decode.fail("a tag without arguments has no \"args\""), ".args")
 		# `Tag { … }`: the record is the payload's only level.
-		Array([Object([("rec", r)])]) => [within(within(lossless_record(r, depth), ".rec"), ".args[0]")?]
+		Array([Object([("rec", r)])]) => [within(within(lossless_record(r, depth, limits), ".rec"), ".args[0]")?]
 		Array(items) => {
-			within(enter(depth), ".args")?
-			within(lossless_items(items, depth + 1), ".args")?
+			within(enter(depth, limits), ".args")?
+			within(lossless_items(items, depth + 1, limits), ".args")?
 		}
 		_ => return within(Decode.fail("expected an array, found ${describe_json(args)}"), ".args")
 	}
@@ -954,3 +965,25 @@ expect JsonValue.lines("1\n{oops}\n").map_err(|e| (e.line, e.column)) == Err((2,
 expect JsonValue.lines("\u(FEFF)1\r\n2") == Ok([Number("1"), Number("2")])
 expect JsonValue.lines("1\n\u(FEFF)2").map_err(|e| e.line) == Err(2)
 expect JsonValue.lines("1\n\n2").map_err(|e| e.line) == Err(2)
+
+# Your own limits (`_with`): at each limit, and just past it.
+small : Value.Limits
+small = { max_depth: 2, max_number_length: 4, max_exponent: 9, max_string_length: 4 }
+
+expect JsonValue.parse_with("[\"abcd\", 1234, 1e9, [[[[[[[[0]]]]]]]]]", small).is_ok()
+expect JsonValue.parse_with("\"abcde\"", small).map_err(|e| e.reason) == Err("string longer than 4 characters")
+expect JsonValue.parse_with("12345", small).map_err(|e| e.reason) == Err("number literal longer than 4 characters")
+expect JsonValue.parse_with("1e10", small).map_err(|e| e.reason) == Err("exponent larger than 9")
+expect JsonValue.parse_with("[[[[[[[[[[0]]]]]]]]]]", small).map_err(|e| e.reason) == Err("JSON nested deeper than 9 levels")
+# Without a schema the JSON nests as deep as the value.
+expect JsonValue.from_json_with("[[0]]", small).is_ok() and JsonValue.from_json_with("[[[0]]]", small).is_err()
+expect JsonValue.lines_with("[[0]]\n\"abcd\"", small).is_ok() and JsonValue.lines_with("1\n\"abcde\"", small).map_err(|e| e.line) == Err(2)
+# Lossless: the value within the limits too.
+expect JsonValue.from_lossless_json_with("[[{\"num\": \"1e9\"}]]", small).is_ok()
+expect JsonValue.from_lossless_json_with("[[[\"a\"]]]", small).is_err()
+expect JsonValue.from_lossless_json_with("{\"num\": \"1e10\"}", small).map_ok(|_| {}).map_err(
+	|e| match e {
+		Decode(d) => Decode.message(d)
+		Syntax(_) => ""
+	},
+) == Err(".num: exponent larger than 9")

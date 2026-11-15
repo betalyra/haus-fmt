@@ -4,7 +4,7 @@ import Haus.Parser
 # The stream reader (spec §6)
 
 A model of the stream readers of the bindings (TypeScript `StreamReader`,
-Rust `StreamReader`, Roc `Stream`). They all work the same way:
+Rust `StreamReader`, Roc `Streaming`). They all work the same way:
 
 1. A small **scanner** finds the commas that separate top-level values. It
    tracks only what decides that: bracket depth, strings, block strings and

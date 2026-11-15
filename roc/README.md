@@ -4,7 +4,7 @@ Built against the Roc nightly compiler (2026-11-03) and basic-cli 0.26.0.
 
 | Path | Contents |
 |---|---|
-| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Stream` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16) |
+| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Streaming` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16) |
 | [`examples/`](examples) | The same examples as in TypeScript and Rust, on the same files in [`../examples`](../examples), plus `shop`, a Roc showcase |
 | [`schema-test/`](schema-test) | Generated: the schema conformance suite ([`../test-suite/schema`](../test-suite/schema)) as Roc tests |
 | [`json-test/`](json-test) | Generated: the JSON suite ([`../test-suite/json`](../test-suite/json)) as Roc tests |
@@ -91,6 +91,69 @@ A codec is a Roc module with a `Target` type, `decode : Base -> Try(Target, Str)
 and `encode : Target -> Base` ([`Cents.roc`](examples/order/Cents.roc)), chosen
 with `--codec ID=MODULE` when generating.
 
+## Streams
+
+`Streaming` reads a stream (spec §6) chunk by chunk and does no I/O: push
+bytes split anywhere and get every value whose comma has arrived; memory
+holds the current value, not the stream. See [`logs`](examples/logs).
+
+```roc
+var $reader = Streaming.reader(Streaming.defaults)
+(next, values) = Streaming.push($reader, chunk)?
+$reader = next
+# …
+last = Streaming.finish($reader)?
+```
+
+`Streaming.Options` has the parser's `limits`, `max_value_length` (64 Mi
+characters) and `require_terminator`. (The module isn't called `Stream`
+because Roc has a builtin `Stream`, which hides a package module of that name
+from the package's other modules.)
+
+## Canonical form and hashing
+
+`Encode.canonical(v)` is the canonical form (spec §12), `Encode.equals` and
+`Encode.compare` use it. `Encode.hash(v)` is the SHA-256 digest of the
+canonical form as 64 lowercase hex digits, and `Encode.hash_all(values)` the
+hash of a list, such as a file or a stream: the canonical forms joined by `,`
+(`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`.
+`Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read:
+
+```roc
+var $hash = Encode.HashAll.empty
+for value in values {
+    $hash = $hash.add(value)
+}
+$hash.digest() # == Encode.hash_all(values)
+```
+
+(It isn't called `Hasher`, as in TypeScript and Rust, because Roc has a
+builtin `Hasher`.)
+
+## Limits
+
+The parser enforces the limits of spec §7. The reading functions use the
+defaults (`Value.default_limits`: depth 256, number literals of 1000
+characters, exponents up to 6144, strings of 16 Mi characters); each has a
+`_with` version that takes a `Value.Limits` record:
+
+```roc
+limits = { ..Value.default_limits, max_depth: 64 }
+Value.parse_all_with(text, limits)
+```
+
+| Reading | With limits |
+|---|---|
+| haus text | `Value.parse_all_with`, `Value.parse_with`, `Value.parse_bytes_with`, `Decode.all_with`, `Decode.one_with` |
+| a stream | `Streaming.reader({ ..Streaming.defaults, limits })` |
+| JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.from_json_with`, `JsonValue.from_lossless_json_with`, `FromJson.one_with`, `FromJson.lines_with` |
+| writing for such a reader | `Encode.to_str_with`, `Encode.stream_with` |
+
+A generated `from_json_<name>` checks the depth of what it read against 256;
+for another depth limit, read with `read_json_<name>` and check with
+`FromJson.within_limits(result, encode_<name>, limits)`. The canonical form
+and the hash don't depend on limits.
+
 ## JSON
 
 The two JSON mappings of spec §16. `JsonValue` is a JSON tree (numbers as
@@ -137,7 +200,7 @@ assumed not to be a `Maybe` when deciding whether a `Maybe` of it writes
 
 ```sh
 cd package && roc test ConformanceTest.roc && roc test TimeTest.roc
-cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Stream.roc
+cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Streaming.roc && roc test Secret.roc && roc test Value.roc
 cd package && roc test JsonValue.roc && roc test FromJson.roc && roc test ToJson.roc
 cd examples/shop && roc test main.roc
 cd schema-test && roc test main.roc
@@ -145,8 +208,13 @@ cd json-test && roc test main.roc
 ```
 
 `ConformanceTest.roc` is generated from `../test-suite` by
-`scripts/gen_conformance.py`, and `TimeTest.roc` holds the same std/time
-cases as the TypeScript and Rust bindings.
+`scripts/gen_conformance.py`: for each valid file the values, the canonical
+forms, the hash (`.hash`, also computed with `Encode.HashAll` on the values
+streamed) and the stream reader giving the same values in chunks of any
+size; for each invalid file a rejection, also by the stream reader, whose
+error positions after a byte order mark are the whole-file parser's.
+`TimeTest.roc` holds the same std/time cases as the TypeScript and Rust
+bindings.
 
 [`schema-test/`](schema-test) runs the schema conformance suite
 (`../test-suite/schema`, spec §15): `scripts/gen_schema_conformance.py`

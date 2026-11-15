@@ -76,6 +76,22 @@ type Person = {
 
 type Root = Array Person
 `,
+`
+type Contact = <
+  | Email String
+  | Slack { workspace: String, user: String }
+  | Teams { tenant: String, user: String }
+>
+
+type Person = {
+  @deprecated("use displayName") name: String,
+  displayName?: String,
+  contact: Contact,
+  timezone?: String,
+}
+
+type Root = Array Person
+`,
 ];
 
 Your paging tool from the [tour](/docs/tour) now has a mobile app too. The server updates daily, the app whenever people install the update. Both read `team.haus`.
@@ -132,6 +148,16 @@ Renaming `name` would break every reader. Instead, add `displayName` next to it,
 
 </Step>
 
+<Step lang="haus-schema" label="team.schema.haus" code={steps[6]}>
+
+### Say what's going away
+
+`@deprecated("use displayName")` tells everyone while they move. Editors mark `name` with a hint wherever the data uses it, and generated code carries the language's marker: `#[deprecated]` in Rust, `@deprecated` in TypeScript.
+
+Reading and writing don't change: an attribute never changes what a schema accepts.
+
+</Step>
+
 </Story>
 
 ## Cheat sheet
@@ -144,5 +170,6 @@ Renaming `name` would break every reader. Instead, add `displayName` next to it,
 | Rename or remove a field or tag | major | break |
 | Change a field's type | major | break |
 | Make a type `closed` | major | break on anything new |
+| Mark a type, field or tag `@deprecated` | minor | read it as before |
 
 Next: [Logs and streams](/docs/tours/streams).

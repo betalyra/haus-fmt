@@ -25,8 +25,12 @@ Decode := [].{
 
 	## Parse a whole file and decode every top-level value (a stream).
 	all : Str, (Value -> Try(a, Error)) -> Try(List(a), [Syntax(Value.ParseError), Decode(Error)])
-	all = |text, decoder| {
-		values = Value.parse_all(text).map_err(|e| Syntax(e))?
+	all = |text, decoder| all_with(text, Value.default_limits, decoder)
+
+	## `all` with your own parser limits (see `Value.Limits`).
+	all_with : Str, Value.Limits, (Value -> Try(a, Error)) -> Try(List(a), [Syntax(Value.ParseError), Decode(Error)])
+	all_with = |text, limits, decoder| {
+		values = Value.parse_all_with(text, limits).map_err(|e| Syntax(e))?
 		var $out = []
 		var $i = 0.U64
 		for v in values {
@@ -38,8 +42,12 @@ Decode := [].{
 
 	## Parse a text holding exactly one value and decode it.
 	one : Str, (Value -> Try(a, Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Error)])
-	one = |text, decoder| {
-		v = Value.parse(text).map_err(|e| Syntax(e))?
+	one = |text, decoder| one_with(text, Value.default_limits, decoder)
+
+	## `one` with your own parser limits (see `Value.Limits`).
+	one_with : Str, Value.Limits, (Value -> Try(a, Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Error)])
+	one_with = |text, limits, decoder| {
+		v = Value.parse_with(text, limits).map_err(|e| Syntax(e))?
 		decoder(v).map_err(|e| Decode(e))
 	}
 
@@ -420,4 +428,13 @@ expect Decode.one("\"sk-1\"", |v| Decode.secret(v, "Secret String", Decode.str))
 expect {
 	pin = |v| Decode.field(Decode.record(v)?, "pin", |p| Decode.secret(p, "Secret UInt8", Decode.u8))
 	Decode.one("{ pin: 9999 }", pin).map_ok(|s| s.expose()) == Err(Decode({ reason: "not a valid Secret UInt8 (the value is hidden)", path: ".pin" }))
+}
+
+# Your own parser limits: at the limit, and just past it.
+expect {
+	limits = { ..Value.default_limits, max_depth: 2 }
+	Decode.one_with("[[1]]", limits, Decode.any).is_ok()
+		and Decode.one_with("[[[1]]]", limits, Decode.any).map_ok(|_| {}) == Err(Syntax({ reason: "nesting deeper than 2 levels", line: 1, column: 3 }))
+		and Decode.all_with("1, [[2]],", limits, Decode.any).map_ok(|vs| vs.len()) == Ok(2)
+		and Decode.all_with("1, [[[2]]],", limits, Decode.any).is_err()
 }

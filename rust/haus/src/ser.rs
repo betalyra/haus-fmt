@@ -8,112 +8,249 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 
 /// A Rust type that encodes to a haus value.
+///
+/// Encoding checks the value as it goes, for a writer with the limits of an
+/// [`Encoder`] (spec §7, §9.8): the nesting depth before each container, so
+/// that a value nested deeper than the limit fails with the writer's error
+/// instead of recursing on, and every number, string and raw [`Value`] in it.
+/// An error inside a [`Secret`] is reported at the secret (spec §15).
 pub trait Encode {
-    fn encode(&self) -> Value;
+    /// The haus value, checked for a writer with `e`'s limits, at `e`'s depth.
+    fn encode_with(&self, e: Encoder) -> R;
+
+    /// The haus value, checked for a writer with the default limits.
+    fn encode(&self) -> R {
+        self.encode_with(Encoder::default())
+    }
 }
 
-/// A variant value.
+type R = Result<Value, EncodeError>;
+
+/// Where a value is encoded: the limits of the reader it is for, and how
+/// many containers (records, arrays, payloads) it is inside, counted as the
+/// writer counts them. Encoding a container takes [`Encoder::nested`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Encoder {
+    limits: Limits,
+    depth: usize,
+}
+
+impl Encoder {
+    /// At the top, for a reader with `limits`.
+    pub fn new(limits: &Limits) -> Encoder {
+        Encoder { limits: *limits, depth: 0 }
+    }
+
+    pub fn limits(&self) -> &Limits {
+        &self.limits
+    }
+
+    /// How many containers the value is inside.
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Inside one more container, if the depth limit allows it.
+    pub fn nested(self) -> Result<Encoder, EncodeError> {
+        match self.depth >= self.limits.max_depth {
+            true => Err(EncodeError::new(format!("nesting deeper than {} levels", self.limits.max_depth))),
+            false => Ok(Encoder { depth: self.depth + 1, ..self }),
+        }
+    }
+
+    /// A number literal, if the writer takes it.
+    pub fn number(self, text: &str) -> R {
+        Ok(Value::Number(normalized(text, &self.limits).map_err(EncodeError::new)?.into_owned()))
+    }
+
+    /// A string, if it is within the string limit.
+    pub fn string(self, s: &str) -> R {
+        check_length(s, &self.limits)?;
+        Ok(Value::String(s.to_owned()))
+    }
+
+    /// A byte string, if it is within the string limit.
+    pub fn bytes(self, b: &[u8]) -> R {
+        check_bytes(b, &self.limits)?;
+        Ok(Value::Bytes(b.to_vec()))
+    }
+
+    /// A [`Value`] built in code, if the writer takes it here.
+    pub fn value(self, v: &Value) -> R {
+        self.check(v)?;
+        Ok(v.clone())
+    }
+
+    /// Whether the writer takes `v` here: it writes it, and drops the text.
+    fn check(self, v: &Value) -> Result<(), EncodeError> {
+        Writer { out: &mut String::new(), limits: &self.limits }.value(v, self.depth)
+    }
+}
+
+/// A variant value. Doesn't check `tag`.
 pub fn variant(tag: &str, args: Vec<Value>) -> Value {
     Value::Variant { tag: tag.to_owned(), args }
 }
 
-/// A record value from fields in order, leaving out missing optional ones.
-pub fn record<const N: usize>(fields: [(&str, Option<Value>); N]) -> Value {
-    Value::Record(fields.into_iter().filter_map(|(k, v)| Some((k.to_owned(), v?))).collect())
+/// A case with `N` positional values: `Empty`, `Wrap(3)`, `Point(1, 2)`.
+/// The values are encoded inside the payload, which is a level of its own.
+pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder) -> [R; N]) -> R {
+    if N == 0 {
+        return Ok(variant(tag, vec![]));
+    }
+    let args = values(e.nested()?)
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| v.map_err(|e| e.within(Segment::Index(i)).within(Segment::Tag(tag.to_owned()))))
+        .collect::<Result<_, _>>()?;
+    Ok(variant(tag, args))
 }
 
-pub fn array<T>(items: &[T], f: impl Fn(&T) -> Value) -> Value {
-    Value::Array(items.iter().map(f).collect())
+/// A case with a record payload: `Circle { r: 1.5 }`. The record is the
+/// payload's only level.
+pub fn tagged_record<'k, const N: usize>(
+    tag: &str,
+    e: Encoder,
+    fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N],
+) -> R {
+    let payload = record(e, fields).map_err(|e| e.within(Segment::Tag(tag.to_owned())))?;
+    Ok(variant(tag, vec![payload]))
 }
-pub fn map<T>(m: &BTreeMap<String, T>, f: impl Fn(&T) -> Value) -> Value {
-    Value::Record(m.iter().map(|(k, v)| (k.clone(), f(v))).collect())
+
+/// A record from fields in order, leaving out missing optional ones.
+pub fn record<'k, const N: usize>(e: Encoder, fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N]) -> R {
+    fields(e.nested()?)
+        .into_iter()
+        .filter_map(|(k, v)| Some(v?.map(|v| (k.to_owned(), v)).map_err(|e| e.within(Segment::Field(k.to_owned())))))
+        .collect::<Result<_, _>>()
+        .map(Value::Record)
 }
-pub fn maybe<T>(m: &Option<T>, f: impl FnOnce(&T) -> Value) -> Value {
+
+pub fn array<T>(items: &[T], e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
+    let inner = e.nested()?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, x)| f(x, inner).map_err(|e| e.within(Segment::Index(i))))
+        .collect::<Result<_, _>>()
+        .map(Value::Array)
+}
+
+pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
+    let inner = e.nested()?;
+    m.iter()
+        .map(|(k, v)| {
+            let within = |e: EncodeError| e.within(Segment::Field(k.clone()));
+            check_length(k, &inner.limits).map_err(within)?;
+            Ok((k.clone(), f(v, inner).map_err(within)?))
+        })
+        .collect::<Result<_, _>>()
+        .map(Value::Record)
+}
+
+pub fn maybe<T>(m: &Option<T>, e: Encoder, f: impl FnOnce(&T, Encoder) -> R) -> R {
     match m {
-        None => variant("None", vec![]),
-        Some(x) => variant("Some", vec![f(x)]),
+        None => Ok(variant("None", vec![])),
+        Some(x) => tagged("Some", e, |e| [f(x, e)]),
     }
 }
-pub fn result<A, E>(r: &Result<A, E>, ok: impl FnOnce(&A) -> Value, err: impl FnOnce(&E) -> Value) -> Value {
+
+pub fn result<A, E>(
+    r: &Result<A, E>,
+    e: Encoder,
+    ok: impl FnOnce(&A, Encoder) -> R,
+    err: impl FnOnce(&E, Encoder) -> R,
+) -> R {
     match r {
-        Ok(x) => variant("Ok", vec![ok(x)]),
-        Err(x) => variant("Err", vec![err(x)]),
+        Ok(x) => tagged("Ok", e, |e| [ok(x, e)]),
+        Err(x) => tagged("Err", e, |e| [err(x, e)]),
     }
 }
-/// `Secret a`: the value in full (the receiver needs it).
-pub fn secret<T>(s: &Secret<T>, f: impl FnOnce(&T) -> Value) -> Value {
-    f(s.expose())
+
+/// `Secret a`: the value in full (the receiver needs it). An error inside it
+/// is reported here, saying only that it isn't a valid `what`: never the
+/// value, nor where in it, since a key of a `Map` or an `Any` in the path
+/// could reveal it (spec §15).
+pub fn secret<T>(s: &Secret<T>, e: Encoder, what: &str, f: impl FnOnce(&T, Encoder) -> R) -> R {
+    f(s.expose(), e).map_err(|_| EncodeError::new(format!("not a valid {what} (the value is hidden)")))
 }
+
 /// A type with a codec: back to its base type, then encoded.
-pub fn codec<C: Codec>(x: &C::Target) -> Value {
-    C::encode(x).encode()
+pub fn codec<C: Codec>(x: &C::Target, e: Encoder) -> R {
+    C::encode(x).encode_with(e)
 }
 
 impl<T: Encode + ?Sized> Encode for &T {
-    fn encode(&self) -> Value {
-        (**self).encode()
+    fn encode_with(&self, e: Encoder) -> R {
+        (**self).encode_with(e)
     }
 }
 impl<T: Encode> Encode for Secret<T> {
-    fn encode(&self) -> Value {
-        secret(self, T::encode)
+    fn encode_with(&self, e: Encoder) -> R {
+        secret(self, e, "Secret", T::encode_with)
     }
 }
 impl<T: Encode> Encode for Box<T> {
-    fn encode(&self) -> Value {
-        (**self).encode()
+    fn encode_with(&self, e: Encoder) -> R {
+        (**self).encode_with(e)
     }
 }
 impl<T: Encode> Encode for Vec<T> {
-    fn encode(&self) -> Value {
-        array(self, T::encode)
+    fn encode_with(&self, e: Encoder) -> R {
+        array(self, e, T::encode_with)
+    }
+}
+impl<T: Encode> Encode for [T] {
+    fn encode_with(&self, e: Encoder) -> R {
+        array(self, e, T::encode_with)
     }
 }
 impl<T: Encode> Encode for BTreeMap<String, T> {
-    fn encode(&self) -> Value {
-        map(self, T::encode)
+    fn encode_with(&self, e: Encoder) -> R {
+        map(self, e, T::encode_with)
     }
 }
 impl<T: Encode> Encode for Option<T> {
-    fn encode(&self) -> Value {
-        maybe(self, T::encode)
+    fn encode_with(&self, e: Encoder) -> R {
+        maybe(self, e, T::encode_with)
     }
 }
 impl<A: Encode, E: Encode> Encode for Result<A, E> {
-    fn encode(&self) -> Value {
-        result(self, A::encode, E::encode)
+    fn encode_with(&self, e: Encoder) -> R {
+        result(self, e, A::encode_with, E::encode_with)
     }
 }
+/// `Any`: the value as it is, checked as the writer checks it.
 impl Encode for Value {
-    fn encode(&self) -> Value {
-        self.clone()
+    fn encode_with(&self, e: Encoder) -> R {
+        e.value(self)
     }
 }
 impl Encode for String {
-    fn encode(&self) -> Value {
-        Value::String(self.clone())
+    fn encode_with(&self, e: Encoder) -> R {
+        e.string(self)
     }
 }
 impl Encode for str {
-    fn encode(&self) -> Value {
-        Value::String(self.to_owned())
+    fn encode_with(&self, e: Encoder) -> R {
+        e.string(self)
     }
 }
 impl Encode for Bytes {
-    fn encode(&self) -> Value {
-        Value::Bytes(self.0.clone())
+    fn encode_with(&self, e: Encoder) -> R {
+        e.bytes(&self.0)
     }
 }
 impl Encode for bool {
-    fn encode(&self) -> Value {
-        variant(if *self { "True" } else { "False" }, vec![])
+    fn encode_with(&self, _: Encoder) -> R {
+        Ok(variant(if *self { "True" } else { "False" }, vec![]))
     }
 }
 macro_rules! integers {
     ($($t:ty),*) => {$(
         impl Encode for $t {
-            fn encode(&self) -> Value {
-                Value::Number(self.to_string())
+            fn encode_with(&self, e: Encoder) -> R {
+                e.number(&self.to_string())
             }
         }
     )*};
@@ -122,13 +259,13 @@ integers!(i8, i16, i32, i64, u8, u16, u32, u64);
 macro_rules! floats {
     ($($t:ty),*) => {$(
         impl Encode for $t {
-            fn encode(&self) -> Value {
+            fn encode_with(&self, e: Encoder) -> R {
                 if self.is_nan() {
-                    variant("NaN", vec![])
+                    Ok(variant("NaN", vec![]))
                 } else if self.is_infinite() {
-                    variant(if *self > 0.0 { "Infinity" } else { "NegInfinity" }, vec![])
+                    Ok(variant(if *self > 0.0 { "Infinity" } else { "NegInfinity" }, vec![]))
                 } else {
-                    Value::Number(crate::float::text(*self))
+                    e.number(&crate::float::text(*self))
                 }
             }
         }
@@ -136,25 +273,28 @@ macro_rules! floats {
 }
 floats!(f32, f64);
 impl Encode for Int {
-    fn encode(&self) -> Value {
-        Value::Number(self.as_str().to_owned())
+    fn encode_with(&self, e: Encoder) -> R {
+        e.number(self.as_str())
     }
 }
 impl Encode for Decimal {
-    fn encode(&self) -> Value {
-        Value::Number(self.as_str().to_owned())
+    fn encode_with(&self, e: Encoder) -> R {
+        e.number(self.as_str())
     }
 }
+/// An unknown variant: its tag and payload, checked as the writer checks them.
 impl Encode for Unknown {
-    fn encode(&self) -> Value {
-        variant(&self.tag, self.args.clone())
+    fn encode_with(&self, e: Encoder) -> R {
+        let v = variant(&self.tag, self.args.clone());
+        e.check(&v)?;
+        Ok(v)
     }
 }
 impl Encode for AnyTag {
-    fn encode(&self) -> Value {
+    fn encode_with(&self, e: Encoder) -> R {
         match self {
-            AnyTag::Bare(tag) => variant(tag, vec![]),
-            AnyTag::Other(u) => u.encode(),
+            AnyTag::Bare(tag) => e.value(&variant(tag, vec![])),
+            AnyTag::Other(u) => u.encode_with(e),
         }
     }
 }
@@ -194,16 +334,11 @@ impl Writer<'_> {
                 self.out.push_str(&text);
             }
             Value::String(s) => {
-                self.check_length(s)?;
+                check_length(s, self.limits)?;
                 quote(s, self.out);
             }
             Value::Bytes(b) => {
-                if b.len() > self.limits.max_string_length / 2 {
-                    return Err(EncodeError::new(format!(
-                        "byte string longer than {} characters",
-                        self.limits.max_string_length
-                    )));
-                }
+                check_bytes(b, self.limits)?;
                 self.out.push_str("x\"");
                 for x in b {
                     let _ = write!(self.out, "{x:02x}");
@@ -279,7 +414,7 @@ impl Writer<'_> {
                 self.out.push_str(", ");
             }
             let within = |e: EncodeError| e.within(Segment::Field(k.clone()));
-            self.check_length(k).map_err(within)?;
+            check_length(k, self.limits).map_err(within)?;
             key(k, self.out);
             self.out.push_str(": ");
             self.value(v, depth + 1).map_err(within)?;
@@ -287,14 +422,23 @@ impl Writer<'_> {
         self.out.push_str(" }");
         Ok(())
     }
+}
 
-    fn check_length(&self, s: &str) -> W {
-        let max = self.limits.max_string_length;
-        if s.len() > max && s.chars().count() > max {
-            return Err(EncodeError::new(format!("string longer than {max} characters")));
-        }
-        Ok(())
+/// Whether a string or key is within the string limit.
+fn check_length(s: &str, limits: &Limits) -> W {
+    let max = limits.max_string_length;
+    if s.len() > max && s.chars().count() > max {
+        return Err(EncodeError::new(format!("string longer than {max} characters")));
     }
+    Ok(())
+}
+
+/// Whether a byte string's hex is within the string limit.
+fn check_bytes(b: &[u8], limits: &Limits) -> W {
+    if b.len() > limits.max_string_length / 2 {
+        return Err(EncodeError::new(format!("byte string longer than {} characters", limits.max_string_length)));
+    }
+    Ok(())
 }
 
 /// A tag name: `[A-Z][A-Za-z0-9_]*`.

@@ -480,7 +480,7 @@ impl Gen<'_> {
                 [Ty::Name { name, .. }, ..] => name.as_str(),
                 _ => "",
             };
-            return Ok(format!("{doc}\t# A stream of {item}: read it with Stream and decode_{}.\n", snake(item)));
+            return Ok(format!("{doc}\t# A stream of {item}: read it with Streaming and decode_{}.\n", snake(item)));
         }
         let snake_name = snake(&def.name);
         // `Pair(a)`; records and other types that refer to themselves are nominal.
@@ -1269,6 +1269,7 @@ const BUILTIN_TYPES: &[&str] = &[
     "U128",
     "Stream",
     "Iter",
+    "Hasher",
     "Utf8Problem",
     "Num",
 ];

@@ -123,7 +123,7 @@ jobs:
         working-directory: roc
         run: |
           (cd package && roc test ConformanceTest.roc && roc test TimeTest.roc)
-          (cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Stream.roc && roc test Secret.roc && roc test Value.roc)
+          (cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Streaming.roc && roc test Secret.roc && roc test Value.roc)
           (cd package && roc test JsonValue.roc && roc test FromJson.roc && roc test ToJson.roc)
           (cd examples/shop && roc test main.roc)
           (cd schema-test && roc test main.roc)

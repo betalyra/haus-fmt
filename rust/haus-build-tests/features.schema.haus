@@ -48,6 +48,10 @@ type Login = closed {
   extra?: Any,
 }
 
+// A secret holding raw values: an error inside it names only the secret,
+// never one of its keys.
+type Vault = { owner: String, keys: Secret (Map Any) }
+
 // A deprecated `closed < Tag … >` whose only tag is deprecated too: one
 // struct, so one #[deprecated] (Rust allows no more) with both messages.
 @deprecated("use Login")

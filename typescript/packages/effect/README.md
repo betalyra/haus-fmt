@@ -117,6 +117,24 @@ JSON without a schema as a haus `Value` (spec §16.1), and
 `Haus.toJson(Haus.Any)` / `Haus.fromJson(Haus.Any)` are the lossless mapping
 (spec §16.2).
 
+## Limits
+
+Decoders take limits (spec §7) with their input, encoders with their value.
+They are the core's: `maxDepth` (256 by default), `maxNumberLength`,
+`maxExponent`, `maxStringLength`, and `maxSteps` for the conversion.
+
+```ts
+const order = yield* Haus.decode(Order)(text, { maxDepth: 64 })
+const events = Haus.decodeStream(Event)(response.body!, { maxDepth: 64 })
+const back = yield* Haus.fromJson(Order)(json, { maxDepth: 64 })    // JSON may nest jsonDepth(64) levels
+const text = yield* Haus.encode(Order)(order, { style: "compact", limits: { maxDepth: 64 } })
+```
+
+Encoders hold the value to `maxDepth` too, so what they write reads again
+with the same limits. The parser, Effect's decoder and the formatter recurse,
+so a raised `maxDepth` is bounded by the JavaScript stack: around a thousand
+levels, fewer for deeply wrapped schemas.
+
 ## Schema files
 
 ```ts
