@@ -1,4 +1,4 @@
-import @haus/money (Money)
+import @haus-fmt/money (Money)
 
 type Status = closed < Pending | Shipped { tracking: String } | Cancelled >
 

@@ -1,5 +1,5 @@
 //! The schema conformance suite (test-suite/schema, spec §15), run on the
-//! code haus-build generates for its schemas (see build.rs).
+//! code haus-fmt-build generates for its schemas (see build.rs).
 //!
 //! Each case is `Ok { type, input, output? }` or `Err { type, input }`. Ok:
 //! decoding `input` with `type` succeeds, and encoding the result gives a value
@@ -7,7 +7,7 @@
 //! schema twice: as written, and without its attributes, which must not
 //! change any result.
 //!
-//! `invalid/*.schema.haus` must be rejected by haus-build (spec §14).
+//! `invalid/*.schema.haus` must be rejected by haus-fmt-build (spec §14).
 
 mod suite {
     include!(concat!(env!("OUT_DIR"), "/schema_suite.rs"));

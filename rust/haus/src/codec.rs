@@ -20,13 +20,13 @@
 //! }
 //! ```
 //!
-//! haus-build replaces every use of the type `ID` with `Target`, and checks
+//! haus-fmt-build replaces every use of the type `ID` with `Target`, and checks
 //! at compile time that the schema has a type with that id.
 
 use crate::{Decode, Encode};
 
 pub trait Codec {
-    /// The id of the type this codec is for: `@haus/money@1#Money`, `std/time#Date`.
+    /// The id of the type this codec is for: `@haus-fmt/money@1#Money`, `std/time#Date`.
     const ID: &'static str;
     /// That type, as decoded without the codec.
     type Base: Decode + Encode;

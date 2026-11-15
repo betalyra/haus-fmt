@@ -1,7 +1,7 @@
 """Schema files (`.schema.haus`, spec §14): parse, resolve and check them.
 
     import std/time (Instant)            built in (spec §13.2)
-    import @haus/money (Money)           a schema package, found by a ModuleResolver
+    import @haus-fmt/money (Money)       a schema package, found by a ModuleResolver
     import ./common (Address)            a schema file next to this one
     type Comment = < Comment { author: String, at: Instant, replies: Array Comment } >
 
@@ -49,7 +49,7 @@ STD_MODULES: Mapping[str, tuple[str, ...]] = {"std/time": STD_TIME_TYPES}
 ATTRIBUTES: tuple[str, ...] = ("deprecated",)
 """The attributes this version defines (spec §14). Others are accepted, without meaning, with a warning."""
 
-_MOVED_MODULES = {"std/money": "@haus/money"}
+_MOVED_MODULES = {"std/money": "@haus-fmt/money"}
 _PRELUDE_GENERIC = {"Array": 1, "Map": 1, "Maybe": 1, "Result": 2, "Secret": 1, "Stream": 1}
 _MAX_NESTING = 128
 _MAX_INSTANCES = 10_000
@@ -187,7 +187,7 @@ class Definition:
 
     name: str
     id: str
-    """The type's identity, the same in every language: `@haus/money@1#Money`, `<file id>#Name`, or the name."""
+    """The type's identity, the same in every language: `@haus-fmt/money@1#Money`, `<file id>#Name`, or the name."""
     module: str | None
     """The identity of the file that defines it; None for the root file when it has no id."""
     params: tuple[str, ...]
@@ -291,7 +291,7 @@ class ResolvedModule:
     key: str
     """Unique for each file (e.g. its absolute path); passed back as `from_key` for its own imports."""
     id: str
-    """The file's identity: `@haus/money@1` for a package's schema, `<package>/<path>` for other files."""
+    """The file's identity: `@haus-fmt/money@1` for a package's schema, `<package>/<path>` for other files."""
     text: str
     version: str | None = None
     """The package version (semver), checked against an `@major` in the import."""
@@ -301,7 +301,7 @@ class ModuleResolver(Protocol):
     """Finds the schema files imports name, when the schema is built (never while data is parsed, §9.2)."""
 
     def resolve(self, module: str, from_key: str | None) -> ResolvedModule:
-        """`module` as written without `@major` (`@haus/money`, `./common`), imported by `from_key`.
+        """`module` as written without `@major` (`@haus-fmt/money`, `./common`), imported by `from_key`.
 
         Raise an exception with a readable message when it can't be found.
         """
@@ -1166,9 +1166,9 @@ class _Checker:
             self.fail(f"{name} needs {arity} argument{_plural(arity)}", pos)
         module = next((m for m, names in STD_MODULES.items() if name in names), None)
         if name in ("Money", "Currency"):
-            module = "@haus/money"
+            module = "@haus-fmt/money"
         if name in ("LatLng", "BBox"):
-            module = "@haus/geo"
+            module = "@haus-fmt/geo"
         self.fail(
             f"unknown type {name}; import it with: import {module} ({name})"
             + (f", and install {module} with your package manager" if module.startswith("@") else "")

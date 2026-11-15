@@ -1,5 +1,5 @@
 //! The plain JSON suite (test-suite/json/plain.cases.haus, spec §16.3), run
-//! on the code haus-build generates for plain.schema.haus (see build.rs).
+//! on the code haus-fmt-build generates for plain.schema.haus (see build.rs).
 //!
 //! - `Ok { type, input, json, output? }`: decoding `input` with `type` and
 //!   writing the result gives `json`, and reading `json` gives a value that

@@ -3,8 +3,8 @@ import haus.Value
 import haus.Decode
 import haus.Encode
 import haus.Int
-import money.HausMoney
-import geo.HausGeo
+import money.HausFmtMoney
+import geo.HausFmtGeo
 
 Order := [].{
 
@@ -53,15 +53,15 @@ Order := [].{
 	}
 
 	## haus type `order#Root`.
-	Root : { id : Int, customer : UserId, placed : Str, total : HausMoney.Money, deliver_to : HausGeo.LatLng, status : Status }
+	Root : { id : Int, customer : UserId, placed : Str, total : HausFmtMoney.Money, deliver_to : HausFmtGeo.LatLng, status : Status }
 
 	decode_root : Value -> Try(Root, Decode.Error)
 	decode_root = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", decode_user_id)?, placed: Decode.field(fs, "placed", Decode.time("Date"))?, total: Decode.field(fs, "total", HausMoney.decode_money)?, deliver_to: Decode.field(fs, "deliverTo", HausGeo.decode_lat_lng)?, status: Decode.field(fs, "status", decode_status)? })
+		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", decode_user_id)?, placed: Decode.field(fs, "placed", Decode.time("Date"))?, total: Decode.field(fs, "total", HausFmtMoney.decode_money)?, deliver_to: Decode.field(fs, "deliverTo", HausFmtGeo.decode_lat_lng)?, status: Decode.field(fs, "status", decode_status)? })
 	}
 
 	encode_root : Root -> Value
-	encode_root = |v| Encode.record([("id", Present(Encode.int(v.id))), ("customer", Present(encode_user_id(v.customer))), ("placed", Present(Encode.time("Date")(v.placed))), ("total", Present(HausMoney.encode_money(v.total))), ("deliverTo", Present(HausGeo.encode_lat_lng(v.deliver_to))), ("status", Present(encode_status(v.status)))])
+	encode_root = |v| Encode.record([("id", Present(Encode.int(v.id))), ("customer", Present(encode_user_id(v.customer))), ("placed", Present(Encode.time("Date")(v.placed))), ("total", Present(HausFmtMoney.encode_money(v.total))), ("deliverTo", Present(HausFmtGeo.encode_lat_lng(v.deliver_to))), ("status", Present(encode_status(v.status)))])
 
 }

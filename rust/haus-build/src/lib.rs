@@ -5,7 +5,7 @@
 //! ```no_run
 //! // build.rs
 //! haus_build::Config::new()
-//!     .codec("@haus/money@1#Money", "crate::codecs::Cents")
+//!     .codec("@haus-fmt/money@1#Money", "crate::codecs::Cents")
 //!     .compile("src/order.schema.haus")
 //!     .unwrap();
 //! ```
@@ -17,10 +17,10 @@
 //! ```
 //!
 //! A schema package (`haus.package.haus` next to `Cargo.toml`, and
-//! `links = "<crate name>"` in it) calls [`package`] instead. Crates that
+//! `links = "<library name>"` in it) calls [`package`] instead. Crates that
 //! depend on it directly can then `import @org/name (…)`: the package's
 //! types are its crate's types (`haus_money::Money`), and their ids are
-//! the same in every language (`@haus/money@1#Money`).
+//! the same in every language (`@haus-fmt/money@1#Money`).
 
 mod codegen;
 mod packages;
@@ -154,7 +154,10 @@ impl Config {
         self.emit(&schema, &manifest.id(), &stem(&schema))?;
         rerun_if_changed(&dir.join(MANIFEST));
         println!("cargo::metadata=haus_package={}", dir.display());
-        println!("cargo::metadata=haus_crate={}", var("CARGO_PKG_NAME")?.replace('-', "_"));
+        // The name code uses for this crate: its `links`, which is its library
+        // name (`haus_money` for haus-fmt-money), else its package name.
+        let krate = env::var("CARGO_MANIFEST_LINKS").or_else(|_| var("CARGO_PKG_NAME"))?;
+        println!("cargo::metadata=haus_crate={}", krate.replace('-', "_"));
         Ok(())
     }
 
@@ -220,7 +223,7 @@ fn resolve(imp: &schema::Import, packages: &Packages) -> Result<Vec<(String, Imp
             })
             .collect(),
         "std/money" => {
-            Err("std/money is no longer a standard module; it is the package @haus/money: import @haus/money (Money)"
+            Err("std/money is no longer a standard module; it is the package @haus-fmt/money: import @haus-fmt/money (Money)"
                 .into())
         }
         module if module.starts_with('@') => {
@@ -246,7 +249,7 @@ fn resolve(imp: &schema::Import, packages: &Packages) -> Result<Vec<(String, Imp
                 .collect()
         }
         module => {
-            Err(format!("can't import {module}: haus-build imports std/time and schema packages (@org/name) so far"))
+            Err(format!("can't import {module}: haus-fmt-build imports std/time and schema packages (@org/name) so far"))
         }
     }
 }
@@ -263,7 +266,7 @@ fn read(path: &Path) -> Result<String> {
 }
 
 fn var(key: &str) -> Result<String> {
-    env::var(key).map_err(|_| Error::new(format!("{key} is not set: haus-build runs in a build script")))
+    env::var(key).map_err(|_| Error::new(format!("{key} is not set: haus-fmt-build runs in a build script")))
 }
 
 /// `order` for `src/order.schema.haus`.

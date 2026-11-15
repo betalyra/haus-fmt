@@ -928,7 +928,7 @@ impl Expander {
         loop {
             let Some(def) = self.defs.get(&name).cloned() else {
                 let reason = if self.imported.contains(&name) {
-                    format!("{name} is imported; haus-build can spread only types defined in this file so far")
+                    format!("{name} is imported; haus-fmt-build can spread only types defined in this file so far")
                 } else {
                     format!("unknown type {name}")
                 };

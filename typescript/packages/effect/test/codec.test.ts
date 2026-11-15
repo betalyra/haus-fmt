@@ -6,30 +6,30 @@ import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
 
 const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
-const packages = { "@haus/money": repo("extensions/money"), "@haus/geo": repo("extensions/geo") }
+const packages = { "@haus-fmt/money": repo("extensions/money"), "@haus-fmt/geo": repo("extensions/geo") }
 const resolver = nodeResolver({ packages })
 
 // The schemas, typed as the content mapper declares them (see schemaDeclarations).
-type Currency<C = {}> = Haus.Lookup<C, "@haus/money@1#Currency", string | Haus.Unknown>
+type Currency<C = {}> = Haus.Lookup<C, "@haus-fmt/money@1#Currency", string | Haus.Unknown>
 type Decimal<C = {}> = Haus.Lookup<C, "prelude#Decimal", string>
-type Money<C = {}> = Haus.Lookup<C, "@haus/money@1#Money", { readonly _tag: "Money"; readonly values: readonly [Decimal<C>, Currency<C>] }>
-type LatLng<C = {}> = Haus.Lookup<C, "@haus/geo@1#LatLng", { readonly _tag: "LatLng"; readonly values: readonly [number, number] }>
+type Money<C = {}> = Haus.Lookup<C, "@haus-fmt/money@1#Money", { readonly _tag: "Money"; readonly values: readonly [Decimal<C>, Currency<C>] }>
+type LatLng<C = {}> = Haus.Lookup<C, "@haus-fmt/geo@1#LatLng", { readonly _tag: "LatLng"; readonly values: readonly [number, number] }>
 type Order<C = {}> = Haus.Lookup<C, "app/order#Order", { readonly total: Money<C>; readonly to: LatLng<C>; readonly day: Haus.Lookup<C, "std/time#Date", string> }>
 interface OrderF extends Haus.TypeLambda {
   readonly type: Order<this["C"]>
 }
-type OrderIds = "app/order#Order" | "@haus/money@1#Money" | "@haus/money@1#Currency" | "@haus/geo@1#LatLng" | "std/time#Date" | "prelude#Decimal"
+type OrderIds = "app/order#Order" | "@haus-fmt/money@1#Money" | "@haus-fmt/money@1#Currency" | "@haus-fmt/geo@1#LatLng" | "std/time#Date" | "prelude#Decimal"
 
 const order = Haus.compileSchemaFile(
   `import std/time (Date)
-   import @haus/money (Money)
-   import @haus/geo (LatLng)
+   import @haus-fmt/money (Money)
+   import @haus-fmt/geo (LatLng)
    type Order = { total: Money, to: LatLng, day: Date }`,
   { resolver, id: "app/order" },
 ).schemas
 const Order = order.Order as unknown as Haus.Named<Schema.Codec<Order>, "app/order#Order", OrderF, OrderIds>
 
-// The packages' own schema modules: what `import * as money from "@haus/money/money.schema.haus"` gives.
+// The packages' own schema modules: what `import * as money from "@haus-fmt/money/money.schema.haus"` gives.
 const moneyModule = Haus.compileSchemaFile(
   readFileSync(repo("extensions/money/money.schema.haus"), "utf8"),
   schemaOptions(repo("extensions/money/money.schema.haus")),
@@ -38,9 +38,9 @@ const geoModule = Haus.compileSchemaFile(
   readFileSync(repo("extensions/geo/geo.schema.haus"), "utf8"),
   schemaOptions(repo("extensions/geo/geo.schema.haus")),
 ).schemas
-const MoneySchema = moneyModule.Money as unknown as Haus.Named<Schema.Codec<Money>, "@haus/money@1#Money">
-const CurrencySchema = moneyModule.Currency as unknown as Haus.Named<Schema.Codec<Currency>, "@haus/money@1#Currency">
-const LatLngSchema = geoModule.LatLng as unknown as Haus.Named<Schema.Codec<LatLng>, "@haus/geo@1#LatLng">
+const MoneySchema = moneyModule.Money as unknown as Haus.Named<Schema.Codec<Money>, "@haus-fmt/money@1#Money">
+const CurrencySchema = moneyModule.Currency as unknown as Haus.Named<Schema.Codec<Currency>, "@haus-fmt/money@1#Currency">
+const LatLngSchema = geoModule.LatLng as unknown as Haus.Named<Schema.Codec<LatLng>, "@haus-fmt/geo@1#LatLng">
 
 // ── codecs ──
 
@@ -63,7 +63,7 @@ const cents = Haus.codec(MoneySchema, (base) =>
     encode: ({ minor, currency }) => Effect.succeed({ _tag: "Money" as const, values: [minorText(minor), currency] as const }),
   }))))
 
-/** Only the shape of ISO 4217 codes (the @haus/money/iso profile). */
+/** Only the shape of ISO 4217 codes (the @haus-fmt/money/iso profile). */
 const iso = Haus.codec(CurrencySchema, (base) =>
   base.pipe(Schema.check(Schema.makeFilter((c: string | Haus.Unknown) => (typeof c === "string" && /^[A-Z]{3}$/.test(c)) || "a currency is three letters A–Z"))))
 
@@ -126,7 +126,7 @@ describe("codecs", () => {
     const time = Haus.codec(Haus.Time, (b) => b)
     // @ts-expect-error the schema contains no std/time#Time
     void (() => Haus.decode(Order, time))
-    expect(() => Haus.decode(Order, cents, cents)).toThrow("two codecs for @haus/money@1#Money")
+    expect(() => Haus.decode(Order, cents, cents)).toThrow("two codecs for @haus-fmt/money@1#Money")
   })
 
   it("the lossy Effect types are codecs: Decimal as BigDecimal", () => {
@@ -159,7 +159,7 @@ describe("codecs", () => {
     }).pipe(Effect.runPromise))
 
   it("ids: named types know theirs", () => {
-    expect(Haus.idOf(MoneySchema)).toBe("@haus/money@1#Money")
+    expect(Haus.idOf(MoneySchema)).toBe("@haus-fmt/money@1#Money")
     expect(Haus.idOf(Haus.Date)).toBe("std/time#Date")
     expect(Haus.idOf(Order)).toBe("app/order#Order")
     expect(() => Haus.codec(Schema.String, (b) => b)).toThrow("named type")

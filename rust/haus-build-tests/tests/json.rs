@@ -1,4 +1,4 @@
-//! Plain JSON (spec §16.3) of the code haus-build generates (features.schema.haus).
+//! Plain JSON (spec §16.3) of the code haus-fmt-build generates (features.schema.haus).
 
 mod features {
     haus::include_schema!("features");

@@ -1,4 +1,4 @@
-//! `@haus/geo`: points and boxes on the earth, generated from
+//! `@haus-fmt/geo`: points and boxes on the earth, generated from
 //! `geo.schema.haus` (the same file as for every other language).
 //!
 //! ```

@@ -58,7 +58,7 @@ export const steps = [
 `,
 `
 import std/time (Date, Duration, Instant, ZonedDateTime)
-import @haus/money (Money)
+import @haus-fmt/money (Money)
 
 type Booking = { name: String, at: Instant, paid: Money }
 
@@ -121,7 +121,7 @@ A booking happened at one moment, wherever you look from: an `Instant`, in UTC. 
 
 ### Checked, not trusted
 
-Time types come from `std/time`, money from `@haus/money`. With a schema, `Date("2027-02-30")` is **an error**, not a date.
+Time types come from `std/time`, money from `@haus-fmt/money`. With a schema, `Date("2027-02-30")` is **an error**, not a date.
 
 </Step>
 

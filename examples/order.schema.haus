@@ -1,8 +1,8 @@
 // An order that uses all three kinds of types: std/time (built in), the
-// official extensions @haus/money and @haus/geo (schema packages), and its own.
+// official extensions @haus-fmt/money and @haus-fmt/geo (schema packages), and its own.
 import std/time (Date)
-import @haus/money (Money)
-import @haus/geo (LatLng)
+import @haus-fmt/money (Money)
+import @haus-fmt/geo (LatLng)
 
 type UserId = closed < UserId String >
 

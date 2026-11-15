@@ -267,15 +267,15 @@ Types come from four places:
 |---|---|---|---|
 | **Prelude** ([`prelude.schema.haus`](prelude.schema.haus)) | the data model: `Bool`, `Maybe`, `Result`, `String`, `Bytes`, `Array a`, `Map v`, records, `Int`, `Int8`…`UInt64`, `Float32`, `Float64`, `Decimal`, `Any`, `Secret a` | built in (ranges of `Int8`…) | MUST support |
 | **Standard modules** ([`std/`](std)) | [`std/time`](std/time.schema.haus) only | built in: the [std/time profile](std/time.md) | MUST support |
-| **Official extensions** ([`../extensions`](../extensions)) | schema packages `@haus/…`, e.g. `@haus/money`, `@haus/geo` | none; profiles for codecs | MAY offer codecs |
+| **Official extensions** ([`../extensions`](../extensions)) | schema packages `@haus-fmt/…`, e.g. `@haus-fmt/money`, `@haus-fmt/geo` | none; profiles for codecs | MAY offer codecs |
 | **Community packages** | schema packages of any other organisation | none | MAY offer codecs |
 
 The prelude is always in scope. Everything else is imported:
 
 ```
 import std/time (Date, Instant)     // a standard module
-import @haus/money (Money)          // a schema package
-import @haus/money@1 (Money)        // the same, asserting major version 1
+import @haus-fmt/money (Money)      // a schema package
+import @haus-fmt/money@1 (Money)    // the same, asserting major version 1
 import ./common (Address)           // a schema file next to this one (./common.schema.haus)
 ```
 
@@ -298,26 +298,26 @@ Standard modules ship with this specification and are versioned with it. A modul
 
 - [`std/time`](std/time.schema.haus): `Date`, `Time`, `DateTime`, `Instant`, `ZonedDateTime`, `Duration`, `YearMonth`, `TimeZone`, the model of JavaScript's Temporal and java.time. Values are a tag around a string; the strings a schema binding accepts are defined by the [std/time profile](std/time.md), a strict subset of RFC 3339, RFC 9557 and ISO 8601. Nothing in it depends on a registry: zone names are checked for their syntax, never looked up.
 
-A type belongs in a standard module only if it passes all three tests: the prelude can't express it (a plain string or number loses or blurs its meaning), nearly every domain needs it, and a fixed, published grammar defines it. Today only time passes. Money passes the second test only partly, and `Decimal` already prevents the loss of precision: it is the package `@haus/money`. Identifiers (UUIDs, ULIDs, …) lose nothing as strings. Units, currencies, countries and languages are registries that change.
+A type belongs in a standard module only if it passes all three tests: the prelude can't express it (a plain string or number loses or blurs its meaning), nearly every domain needs it, and a fixed, published grammar defines it. Today only time passes. Money passes the second test only partly, and `Decimal` already prevents the loss of precision: it is the package `@haus-fmt/money`. Identifiers (UUIDs, ULIDs, …) lose nothing as strings. Units, currencies, countries and languages are registries that change.
 
-Implementations SHOULD tell users of the former module `std/money` to import `@haus/money` instead.
+Implementations SHOULD tell users of the former module `std/money` to import `@haus-fmt/money` instead.
 
 ### 13.3 Schema packages
 
 A **schema package** is a directory with a manifest, `haus.package.haus`, next to its schema:
 
 ```
-{ name: "@haus/money", version: "1.2.0", schema: "money.schema.haus" }
+{ name: "@haus-fmt/money", version: "1.2.0", schema: "money.schema.haus" }
 ```
 
-- `name` is `@organisation/name`. `@haus/` is reserved for the official extensions maintained with haus.
+- `name` is `@organisation/name`. `@haus-fmt/` is reserved for the official extensions maintained with haus.
 - `version` is a semantic version (below).
-- Package schemas are ordinary schema files: shape only, like every schema. They change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus/money`.
+- Package schemas are ordinary schema files: shape only, like every schema. They change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus-fmt/money`.
 
 **Resolution.** An implementation finds packages where its language's package manager puts them (`node_modules` for JavaScript, …) and relative files next to the importing file. Resolution happens when a schema is built, never while data is parsed, and never over the network (§9.2). The exact version and content hash are pinned by the application's package manager (its lock file), not by the schema.
 
 - Where the package manager has scoped names (npm), `@org/name` resolves with its own name resolution, from the importing file. Elsewhere, an implementation looks only among the project's direct dependencies.
-- The manifest's `name` MUST equal the imported name, and the package manager's name where it is scoped (npm `@haus/money` holds `@haus/money`).
+- The manifest's `name` MUST equal the imported name, and the package manager's name where it is scoped (npm `@haus-fmt/money` holds `@haus-fmt/money`).
 
 **Distribution.** There is no haus registry. Authors publish schema packages however their users install dependencies: language registries (npm, crates.io, PyPI, …), private registries, git dependencies, workspaces, or copies in the project imported as relative files. Codec libraries for registries that reject git dependencies (crates.io, PyPI) can carry the schema text they target.
 
@@ -325,16 +325,16 @@ The reasons:
 
 - Package managers already provide hosting, mirrors, lock files, hashes, authentication and private registries.
 - A haus registry would be one more service to run and one more point of failure for every build.
-- Types are identified by manifest names (`@haus/money@1#Money`), not by a registry, so a registry or a catalog can be added later without breaking anything; removing one could not be done the same way.
+- Types are identified by manifest names (`@haus-fmt/money@1#Money`), not by a registry, so a registry or a catalog can be added later without breaking anything; removing one could not be done the same way.
 
 What this means for users:
 
-- **Names are claims.** A manifest name doesn't prove who wrote a package: trust comes from the dependency the application chose to add. Scopes make names reliable on npm, and less so on registries with unscoped names. `@haus/` is reserved by convention; on npm the `@haus` scope enforces it. Organisations SHOULD use a name they own: their domain or their code hosting organisation.
+- **Names are claims.** A manifest name doesn't prove who wrote a package: trust comes from the dependency the application chose to add. Scopes make names reliable on npm, and less so on registries with unscoped names. `@haus-fmt/` is reserved by convention; on npm the `@haus-fmt` scope enforces it. Organisations SHOULD use a name they own: their domain or their code hosting organisation.
 - **No install scripts.** A schema package is data and MUST NOT need code to install, such as npm `postinstall`. Codecs are code, and are trusted like any other library.
 - **Copies in several languages.** A package published to several registries SHOULD be published from one source, so that equal versions have equal files.
 - **Discovery.** There is no index. The official extensions are listed in [`../extensions`](../extensions).
 
-**Identity.** Every named type has an id, the same in every language: `@haus/money@1#Money` is the type `Money` of the package `@haus/money`, major version 1. Other files of a package are `@haus/money@1/path#Type`. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path). Codecs (§13.4) and tools refer to types by their id.
+**Identity.** Every named type has an id, the same in every language: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Other files of a package are `@haus-fmt/money@1/path#Type`. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path). Codecs (§13.4) and tools refer to types by their id.
 
 **Imports.** `import M (A, B)` makes the types `A` and `B` defined in `M` available under their names; a file can't re-export types it imports. Implementations MUST reject:
 
@@ -356,7 +356,7 @@ Errors inside an imported file are reported at the import, with their place in t
 
 An import names at most a major version. A minimum minor version would be redundant: the types it imports already fail against an older package that lacks them.
 
-**Profiles.** A package MAY define profiles: rules beyond its shape that codecs can implement, named like `@haus/money/iso`. A profile is defined by test vectors (`profiles/<name>.vectors.haus`): values a codec implementing it accepts, values it rejects, and values that encode back to the same text. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
+**Profiles.** A package MAY define profiles: rules beyond its shape that codecs can implement, named like `@haus-fmt/money/iso`. A profile is defined by test vectors (`profiles/<name>.vectors.haus`): values a codec implementing it accepts, values it rejects, and values that encode back to the same text. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
 
 ### 13.4 Codecs
 

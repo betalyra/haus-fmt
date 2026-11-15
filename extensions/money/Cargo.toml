@@ -1,15 +1,20 @@
 [package]
-name = "haus-money"
+name = "haus-fmt-money"
 version = "1.0.0"
-description = "@haus/money: Exact amounts with a currency (a haus schema package)"
+description = "@haus-fmt/money: Exact amounts with a currency (a haus schema package)"
 edition = "2024"
 license = "MIT"
-# Tells crates that depend on this one where its schema is (haus_build::package).
-links = "haus-money"
+# Its library name: tells crates that depend on this one where its schema is,
+# and which crate has its types (haus_build::package).
+links = "haus_money"
 include = ["Cargo.toml", "build.rs", "src", "haus.package.haus", "*.schema.haus", "profiles"]
+
+# Imported as haus_money (the crate is haus-fmt-money: crates.io has no scopes).
+[lib]
+name = "haus_money"
 
 [dependencies]
 haus = { package = "haus-fmt", path = "../../rust/haus", version = "0.1.0" }
 
 [build-dependencies]
-haus-build = { path = "../../rust/haus-build", version = "0.1.0" }
+haus-fmt-build = { path = "../../rust/haus-build", version = "0.1.0" }

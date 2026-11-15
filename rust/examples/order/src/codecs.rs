@@ -33,7 +33,7 @@ impl Codec for Cents {
     }
 }
 
-/// The @haus/money iso profile: a currency is three letters A–Z.
+/// The @haus-fmt/money iso profile: a currency is three letters A–Z.
 fn iso(currency: AnyTag) -> Result<String, String> {
     match currency {
         AnyTag::Bare(code) if code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase()) => Ok(code),

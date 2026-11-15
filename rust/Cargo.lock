@@ -63,41 +63,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "haus-build"
-version = "0.1.0"
-dependencies = [
- "haus-fmt",
- "prettyplease",
- "proc-macro2",
- "quote",
- "syn 3.0.10",
- "winnow",
-]
-
-[[package]]
 name = "haus-build-tests"
 version = "0.0.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
+ "haus-fmt-build",
 ]
 
 [[package]]
 name = "haus-example-logs"
 version = "0.0.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
+ "haus-fmt-build",
 ]
 
 [[package]]
 name = "haus-example-order"
 version = "0.0.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
- "haus-geo",
- "haus-money",
+ "haus-fmt-build",
+ "haus-fmt-geo",
+ "haus-fmt-money",
  "jiff",
 ]
 
@@ -105,8 +93,8 @@ dependencies = [
 name = "haus-example-quickstart"
 version = "0.0.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
+ "haus-fmt-build",
 ]
 
 [[package]]
@@ -120,19 +108,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "haus-geo"
-version = "1.0.0"
+name = "haus-fmt-build"
+version = "0.1.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.10",
+ "winnow",
 ]
 
 [[package]]
-name = "haus-money"
+name = "haus-fmt-geo"
 version = "1.0.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
+ "haus-fmt-build",
+]
+
+[[package]]
+name = "haus-fmt-money"
+version = "1.0.0"
+dependencies = [
+ "haus-fmt",
+ "haus-fmt-build",
 ]
 
 [[package]]

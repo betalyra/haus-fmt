@@ -36,8 +36,8 @@ def rejects(text: str, reason: str, **kwargs: object) -> HausSchemaFileError:
     [
         ("type A = B", "unknown type B"),
         ("type A = Date", "import it with: import std/time (Date)"),
-        ("type A = Money", "import @haus/money (Money)"),
-        ("type A = BBox", "import @haus/geo (BBox)"),
+        ("type A = Money", "import @haus-fmt/money (Money)"),
+        ("type A = BBox", "import @haus-fmt/geo (BBox)"),
         ("type A = Array", "Array needs 1 argument"),
         ("type A = Array Int Int", "Array needs 1 argument"),
         ("type A = Result Int", "Result needs 2 arguments"),
@@ -198,18 +198,18 @@ def test_imports() -> None:
     resolver = MemoryResolver(
         {
             "common": ("type Address = { city: String }\ntype Hidden = Int", None),
-            "@haus/money": ("type Money = < Money Decimal Currency >\ntype Currency = < >", "1.2.0"),
+            "@haus-fmt/money": ("type Money = < Money Decimal Currency >\ntype Currency = < >", "1.2.0"),
         }
     )
     s = compile_schema(
-        "import ./common (Address)\nimport @haus/money@1 (Money)\ntype Order = { to: Address, total: Money }",
+        "import ./common (Address)\nimport @haus-fmt/money@1 (Money)\ntype Order = { to: Address, total: Money }",
         resolver=resolver,
     )
     assert s["Order"].parse('{ to: { city: "Paris" }, total: Money(1.50, EUR) }') == {
         "to": {"city": "Paris"},
         "total": Tagged("Money", ("1.50", Unknown(Variant("EUR")))),
     }
-    assert s.file.imported["Money"].id == "@haus/money@1#Money"
+    assert s.file.imported["Money"].id == "@haus-fmt/money@1#Money"
     assert s.file.imported["Address"].id == "app/common#Address"
     assert s["Address"].id == "app/common#Address"
 
@@ -238,7 +238,7 @@ def test_import_errors() -> None:
     e = rejects("type X = Int\nimport ./broken (A)", "./broken (1:15): unknown type Nope", **r)
     assert (e.line, e.column) == (2, 1)  # at the import, with the place in the imported file
     rejects("import ./common (Address)", "no module resolver")
-    rejects("import std/money (Money)", "it is the package @haus/money")
+    rejects("import std/money (Money)", "it is the package @haus-fmt/money")
     rejects("import std/geo (Point)", "unknown standard module std/geo")
     rejects("import std/time (Moment)", "std/time has no type Moment")
     rejects("import std/time (Date)\nimport std/time (Date)", "Date is imported twice")
@@ -264,29 +264,31 @@ def test_load_schema_with_files_and_packages(tmp_path: Path) -> None:
     (app / "pyproject.toml").write_text('[project]\nname = "my-app"\n')
     (app / "schemas" / "common.schema.haus").write_text("type Address = { city: String }\n")
     (app / "schemas" / "order.schema.haus").write_text(
-        "import ./common (Address)\nimport @haus/money@1 (Money)\ntype Root = { to: Address, total: Money }\n"
+        "import ./common (Address)\nimport @haus-fmt/money@1 (Money)\ntype Root = { to: Address, total: Money }\n"
     )
     money = tmp_path / "vendor" / "money"
     money.mkdir(parents=True)
-    (money / "haus.package.haus").write_text('{ name: "@haus/money", version: "1.0.0", schema: "money.schema.haus" }')
+    (money / "haus.package.haus").write_text(
+        '{ name: "@haus-fmt/money", version: "1.0.0", schema: "money.schema.haus" }'
+    )
     (money / "money.schema.haus").write_text("type Money = < Money Decimal String >\n")
     (money / "extra.schema.haus").write_text("type X = Int\n")
 
-    s = load_schema(app / "schemas" / "order.schema.haus", packages={"@haus/money": money})
+    s = load_schema(app / "schemas" / "order.schema.haus", packages={"@haus-fmt/money": money})
     assert s["Root"].id == "my-app/schemas/order#Root"
-    assert s.file.imported["Money"].id == "@haus/money@1#Money"
+    assert s.file.imported["Money"].id == "@haus-fmt/money@1#Money"
     assert s.file.imported["Address"].id == "my-app/schemas/common#Address"
     assert s["Root"].parse('{ to: { city: "Paris" }, total: Money(1.50, "EUR") }')["total"] == Tagged(
         "Money", ("1.50", "EUR")
     )
-    assert identify(money / "extra.schema.haus") == "@haus/money@1/extra"
+    assert identify(money / "extra.schema.haus") == "@haus-fmt/money@1/extra"
 
     with pytest.raises(HausSchemaFileError, match="not among the packages"):
         load_schema(app / "schemas" / "order.schema.haus")
-    with pytest.raises(HausSchemaFileError, match="names the package @haus/money, not @haus/geo"):
+    with pytest.raises(HausSchemaFileError, match="names the package @haus-fmt/money, not @haus-fmt/geo"):
         compile_schema(
-            "import @haus/geo (Point)",
-            resolver=FileResolver(tmp_path, {"@haus/geo": money}),
+            "import @haus-fmt/geo (Point)",
+            resolver=FileResolver(tmp_path, {"@haus-fmt/geo": money}),
         )
     with pytest.raises(HausSchemaFileError, match="wants major version 2"):
-        compile_schema("import @haus/money@2 (Money)", resolver=FileResolver(tmp_path, {"@haus/money": money}))
+        compile_schema("import @haus-fmt/money@2 (Money)", resolver=FileResolver(tmp_path, {"@haus-fmt/money": money}))

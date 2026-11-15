@@ -68,7 +68,7 @@ export default { plugins: [haus({ target: "effect" })] }
 ```
 
 With Vite, data without a schema is baked into the bundle as JavaScript values,
-so no haus parser ships for it. Schema imports (`import @haus/money`) are resolved at
+so no haus parser ships for it. Schema imports (`import @haus-fmt/money`) are resolved at
 build time, and the schema files are watched.
 
 In VS Code, typed imports need the TypeScript native preview extension, a trusted

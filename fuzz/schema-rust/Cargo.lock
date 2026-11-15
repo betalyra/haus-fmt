@@ -3,7 +3,11 @@
 version = 4
 
 [[package]]
-name = "haus-build"
+name = "haus-fmt"
+version = "0.1.0"
+
+[[package]]
+name = "haus-fmt-build"
 version = "0.1.0"
 dependencies = [
  "haus-fmt",
@@ -15,15 +19,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "haus-fmt"
-version = "0.1.0"
-
-[[package]]
 name = "haus-schema-fuzz"
 version = "0.0.0"
 dependencies = [
- "haus-build",
  "haus-fmt",
+ "haus-fmt-build",
 ]
 
 [[package]]

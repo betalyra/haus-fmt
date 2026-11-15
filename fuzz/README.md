@@ -140,7 +140,7 @@ tests the check: `node --test fuzz/src/`.
 | Lean | `haus-ref --schema-batch TYPES FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
 | TypeScript | in this process: `compileSchemaFile`, `h.decode`, `h.encode` |
 | Effect | in this process: `Haus.compileSchemaFile`, `decodeValue`, `encodeValue` |
-| Rust | [`schema-rust`](schema-rust): the code haus-build generates for each schema |
+| Rust | [`schema-rust`](schema-rust): the code haus-fmt-build generates for each schema |
 | Roc | [`roc/schema_runner.roc`](roc/schema_runner.roc), with the modules `haus-gen roc` generates ([`roc/gen_schemas.ts`](roc/gen_schemas.ts)) |
 | Python | [`python/fuzz/schema_runner.py`](../python/fuzz/schema_runner.py): `haus.schema.compile_schema`, `decode`, `encode` |
 
@@ -210,7 +210,7 @@ members, elements and characters, haus as for schema decoding.
 | Lean | `haus-ref --json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
 | TypeScript | in this process: `h.decode` and `h.toJson`, `h.fromJson` and `h.encode`, `toLosslessJson`, `fromLosslessJson`, `fromJson` |
 | Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson` |
-| Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-build generates, `haus::json::to_string` and `from_str`, `haus::to_lossless_json`, `from_lossless_json`, `from_json` |
+| Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-fmt-build generates, `haus::json::to_string` and `from_str`, `haus::to_lossless_json`, `from_lossless_json`, `from_json` |
 | Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
 | Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json` |
 

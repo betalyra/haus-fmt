@@ -1,4 +1,4 @@
-// Every kind of type haus-build generates.
+// Every kind of type haus-fmt-build generates.
 import std/time (Date, Instant)
 
 // Recursion through a payload: Node holds Box<Tree>.

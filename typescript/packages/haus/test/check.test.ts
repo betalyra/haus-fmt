@@ -7,7 +7,7 @@ import { schemaOptions } from "../src/node.js"
 const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
 const read = (path: string) => readFileSync(repo(path), "utf8")
 /** Options for a schema file of the repo: official extensions come from extensions/. */
-const options = (path: string) => schemaOptions(repo(path), { packages: { "@haus/money": repo("extensions/money") } })
+const options = (path: string) => schemaOptions(repo(path), { packages: { "@haus-fmt/money": repo("extensions/money") } })
 
 /** Issues as "severity text-at-location: message". */
 const issues = (schema: string, data: string, type = "Root") =>
@@ -48,6 +48,13 @@ describe("checkData", () => {
       "error extra: extra is not a field of this closed record.",
       "hint Sepia: Sepia is not in the schema; a reader keeps it as an unknown value.",
     ])
+  })
+
+  it("< > means any tag: no hint for the tags it holds", () => {
+    const schema = `
+      type Currency = < >
+      type Root = { currency: Currency }`
+    expect(issues(schema, `{ currency: EUR }`)).toEqual([])
   })
 
   it("streams, positional payloads, Maybe and recursion", () => {

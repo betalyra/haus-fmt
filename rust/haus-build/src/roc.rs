@@ -118,8 +118,8 @@ impl RocConfig {
     }
 }
 
-/// `@haus/money` → `HausMoney`: the organisation too, so the module's name
-/// never clashes with a type in it (`HausMoney.Money`).
+/// `@haus-fmt/money` → `HausFmtMoney`: the organisation too, so the module's name
+/// never clashes with a type in it (`HausFmtMoney.Money`).
 fn package_module(name: &str) -> String {
     pascal(name)
 }

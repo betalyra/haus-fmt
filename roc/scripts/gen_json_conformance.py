@@ -48,7 +48,7 @@ def roc_str(s: str) -> str:
 def haus_gen(*args: str) -> str:
     """The module haus-gen writes for these arguments."""
     return subprocess.run(
-        ["cargo", "run", "-q", "--manifest-path", str(ROOT / "rust" / "Cargo.toml"), "-p", "haus-build", "--bin", "haus-gen", "--", *args],
+        ["cargo", "run", "-q", "--manifest-path", str(ROOT / "rust" / "Cargo.toml"), "-p", "haus-fmt-build", "--bin", "haus-gen", "--", *args],
         check=True,
         stdout=subprocess.PIPE,
         encoding="utf-8",

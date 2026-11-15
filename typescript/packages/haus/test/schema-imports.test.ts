@@ -25,16 +25,16 @@ describe("missing imports", () => {
     expect(date.offset).toBe(15)
 
     const geo = schemaError("type A = { at: LatLng }")
-    expect(geo.reason).toBe("unknown type LatLng; import it with: import @haus/geo (LatLng), and install @haus/geo with your package manager")
-    expect(geo.missingImport).toEqual({ module: "@haus/geo", name: "LatLng" })
+    expect(geo.reason).toBe("unknown type LatLng; import it with: import @haus-fmt/geo (LatLng), and install @haus-fmt/geo with your package manager")
+    expect(geo.missingImport).toEqual({ module: "@haus-fmt/geo", name: "LatLng" })
 
     expect(schemaError("type A = Strin").missingImport).toBeUndefined()
   })
 
   it("knows the standard modules and the official extensions", () => {
     expect(moduleOfType("Instant")).toBe("std/time")
-    expect(moduleOfType("Currency")).toBe("@haus/money")
-    expect(moduleOfType("BBox")).toBe("@haus/geo")
+    expect(moduleOfType("Currency")).toBe("@haus-fmt/money")
+    expect(moduleOfType("BBox")).toBe("@haus-fmt/geo")
     expect(moduleOfType("Strin")).toBeUndefined()
   })
 
@@ -65,19 +65,19 @@ describe("import edits", () => {
   })
 
   it("extends a versioned package import", () => {
-    expect(fixed("import @haus/money@1 (Money)\ntype A = Currency", "@haus/money", ["Currency"]))
-      .toBe("import @haus/money@1 (Money, Currency)\ntype A = Currency")
+    expect(fixed("import @haus-fmt/money@1 (Money)\ntype A = Currency", "@haus-fmt/money", ["Currency"]))
+      .toBe("import @haus-fmt/money@1 (Money, Currency)\ntype A = Currency")
   })
 
   it("adds a new import after the last one", () => {
-    expect(fixed("import std/time (Date) // when\ntype A = { at: Date, total: Money }", "@haus/money", ["Money"]))
-      .toBe("import std/time (Date) // when\nimport @haus/money (Money)\ntype A = { at: Date, total: Money }")
+    expect(fixed("import std/time (Date) // when\ntype A = { at: Date, total: Money }", "@haus-fmt/money", ["Money"]))
+      .toBe("import std/time (Date) // when\nimport @haus-fmt/money (Money)\ntype A = { at: Date, total: Money }")
   })
 
   it("adds a new import above the first type, after the file's header comment", () => {
     const text = "// Orders.\n\n// One order.\ntype Order = { at: Date, where: LatLng, box: BBox }\n"
-    expect(fixed(text, "@haus/geo", ["LatLng", "BBox"]))
-      .toBe("// Orders.\n\nimport @haus/geo (LatLng, BBox)\n\n// One order.\ntype Order = { at: Date, where: LatLng, box: BBox }\n")
+    expect(fixed(text, "@haus-fmt/geo", ["LatLng", "BBox"]))
+      .toBe("// Orders.\n\nimport @haus-fmt/geo (LatLng, BBox)\n\n// One order.\ntype Order = { at: Date, where: LatLng, box: BBox }\n")
     expect(fixed("type A = Date", "std/time", ["Date"])).toBe("import std/time (Date)\n\ntype A = Date")
   })
 

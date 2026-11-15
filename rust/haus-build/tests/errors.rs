@@ -25,11 +25,11 @@ fn rules() {
     assert_eq!(error("type A = Strin"), "1:10: unknown type Strin");
     assert_eq!(
         error("type A = { total: Money }"),
-        "1:19: unknown type Money (import it with: import @haus/money (Money), and install @haus/money with your package manager)"
+        "1:19: unknown type Money (import it with: import @haus-fmt/money (Money), and install @haus-fmt/money with your package manager)"
     );
     assert_eq!(
         error("type A = { at: LatLng }"),
-        "1:16: unknown type LatLng (import it with: import @haus/geo (LatLng), and install @haus/geo with your package manager)"
+        "1:16: unknown type LatLng (import it with: import @haus-fmt/geo (LatLng), and install @haus-fmt/geo with your package manager)"
     );
     assert_eq!(error("type A = Array"), "1:10: Array takes 1 argument(s), found 0");
     assert_eq!(error("type A = { a: b }"), "1:15: unknown type parameter b");
@@ -54,7 +54,7 @@ fn spreads() {
     );
     assert_eq!(
         error("import std/time (Date)\ntype B = < ...Date >"),
-        "2:15: Date is imported; haus-build can spread only types defined in this file so far"
+        "2:15: Date is imported; haus-fmt-build can spread only types defined in this file so far"
     );
 }
 

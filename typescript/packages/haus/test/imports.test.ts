@@ -22,7 +22,7 @@ const money = `
 
 const resolver = memory(
   { money, common: "type Address = { street: String, city: City }\ntype City = String", order: "import ./common (Address)\ntype Order = { to: Address }" },
-  { "@haus/money": { key: "money", id: "@haus/money@1", version: "1.2.0" } },
+  { "@haus-fmt/money": { key: "money", id: "@haus-fmt/money@1", version: "1.2.0" } },
 )
 
 const schemaError = (text: string, r: ModuleResolver | null = resolver): string => {
@@ -38,13 +38,13 @@ const schemaError = (text: string, r: ModuleResolver | null = resolver): string 
 describe("imports", () => {
   it("imports types from packages and files, with ids", () => {
     const file = parseSchemaFile(`
-      import @haus/money (Money)
+      import @haus-fmt/money (Money)
       import ./common (Address)
       type Root = { total: Money, to: Address }`, { resolver, id: "app/root" })
     expect(file.definitions.map((d) => d.id)).toEqual(["app/root#Root"])
-    expect(file.imported.get("Money")?.id).toBe("@haus/money@1#Money")
+    expect(file.imported.get("Money")?.id).toBe("@haus-fmt/money@1#Money")
     expect(file.imported.get("Address")?.id).toBe("app/common#Address")
-    expect(file.definition("Money")?.module).toBe("@haus/money@1")
+    expect(file.definition("Money")?.module).toBe("@haus-fmt/money@1")
     const values = parseWithLocations(`{ total: Money(19.99, EUR), to: { street: "Rua A", city: "Lisboa" } }`)
     expect(checkData(file, "Root", values).filter((i) => i.severity === "error")).toEqual([])
     const wrong = parseWithLocations(`{ total: Money(19.99), to: { street: 1, city: "Lisboa" } }`)
@@ -64,17 +64,17 @@ describe("imports", () => {
   })
 
   it("checks a major version in the import", () => {
-    expect(() => parseSchemaFile("import @haus/money@1 (Money)\ntype Root = Money", { resolver })).not.toThrow()
-    expect(schemaError("import @haus/money@2 (Money)\ntype Root = Money")).toContain("wants major version 2, but version 1.2.0 was found")
+    expect(() => parseSchemaFile("import @haus-fmt/money@1 (Money)\ntype Root = Money", { resolver })).not.toThrow()
+    expect(schemaError("import @haus-fmt/money@2 (Money)\ntype Root = Money")).toContain("wants major version 2, but version 1.2.0 was found")
   })
 
   it("reports what can't be imported", () => {
-    expect(schemaError("import @haus/money (Monee)")).toContain("@haus/money has no type Monee (it has Money, Currency)")
-    expect(schemaError("import @haus/nope (X)")).toContain("can't import @haus/nope: package not found")
+    expect(schemaError("import @haus-fmt/money (Monee)")).toContain("@haus-fmt/money has no type Monee (it has Money, Currency)")
+    expect(schemaError("import @haus-fmt/nope (X)")).toContain("can't import @haus-fmt/nope: package not found")
     expect(schemaError("import ./missing (X)")).toContain("can't import ./missing: file not found")
-    expect(schemaError("import @haus/money (Money)", null)).toContain("no module resolver")
-    expect(schemaError("import @haus/money (Money)\ntype Money = Int")).toContain("type Money is already imported")
-    expect(schemaError("import @haus/money (Money)\nimport @haus/money (Money)")).toContain("Money is imported twice")
+    expect(schemaError("import @haus-fmt/money (Money)", null)).toContain("no module resolver")
+    expect(schemaError("import @haus-fmt/money (Money)\ntype Money = Int")).toContain("type Money is already imported")
+    expect(schemaError("import @haus-fmt/money (Money)\nimport @haus-fmt/money (Money)")).toContain("Money is imported twice")
   })
 
   it("points errors in an imported file at the import, with their place there", () => {
@@ -97,8 +97,8 @@ describe("imports", () => {
     expect(() => parseSchemaFile("import ./order (Order)\nimport ./common (City)", { resolver, id: "app/root" })).not.toThrow()
   })
 
-  it("std/money moved to @haus/money", () => {
-    expect(schemaError("import std/money (Money)")).toContain("std/money is no longer a standard module; it is the package @haus/money: import @haus/money (Money)")
-    expect(schemaError("type Root = { price: Money }")).toContain("import it with: import @haus/money (Money)")
+  it("std/money moved to @haus-fmt/money", () => {
+    expect(schemaError("import std/money (Money)")).toContain("std/money is no longer a standard module; it is the package @haus-fmt/money: import @haus-fmt/money (Money)")
+    expect(schemaError("type Root = { price: Money }")).toContain("import it with: import @haus-fmt/money (Money)")
   })
 })

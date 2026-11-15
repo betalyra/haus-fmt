@@ -310,7 +310,10 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
     const c: Case | undefined = t.cases.find((x) => x.tag === v.tag)
     if (!c) {
       const hint = suggest(v.tag, t.cases.map((x) => x.tag))
-      if (t.open) report("hint", `${v.tag} is not in the schema; a reader keeps it as an unknown value.${hint}`, ...tagSpan(v))
+      // `< >` lists no tags: any tag is meant, so there is nothing to hint.
+      if (t.open) {
+        if (t.cases.length > 0) report("hint", `${v.tag} is not in the schema; a reader keeps it as an unknown value.${hint}`, ...tagSpan(v))
+      }
       else report("error", `${v.tag} is not allowed here: expected ${tags(t)}.${hint}`, ...tagSpan(v))
       return
     }

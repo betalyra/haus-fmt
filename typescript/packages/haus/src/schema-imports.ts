@@ -4,7 +4,7 @@
  *
  *   type Order = { placed: Date, total: Money }
  *
- *   missingImports(text)                     // Date from std/time, Money from @haus/money
+ *   missingImports(text)                     // Date from std/time, Money from @haus-fmt/money
  *   importEdits(text, "std/time", ["Date"])  // inserts `import std/time (Date)` above the first type
  *
  * A known type is one of a standard module or an official extension
@@ -23,7 +23,7 @@ export interface ImportEdit {
 
 type Import = SchemaOutline["imports"][number]
 
-/** `@haus/money@1` is the package `@haus/money`. */
+/** `@haus-fmt/money@1` is the package `@haus-fmt/money`. */
 const packageOf = (module: string) => module.replace(/@[0-9]+$/, "")
 
 /** The outline, or undefined when the file doesn't parse (the syntax error comes first). */

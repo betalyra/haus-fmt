@@ -12,7 +12,7 @@ use std::path::Path;
 
 pub const MANIFEST: &str = "haus.package.haus";
 
-/// `haus.package.haus`: `{ name: "@haus/money", version: "1.2.0", schema: "money.schema.haus" }`.
+/// `haus.package.haus`: `{ name: "@haus-fmt/money", version: "1.2.0", schema: "money.schema.haus" }`.
 pub struct Manifest {
     pub name: String,
     pub version: String,
@@ -38,7 +38,7 @@ impl Manifest {
         self.version.split('.').next().unwrap_or_default()
     }
 
-    /// `@haus/money@1`.
+    /// `@haus-fmt/money@1`.
     pub fn id(&self) -> String {
         format!("{}@{}", self.name, self.major())
     }

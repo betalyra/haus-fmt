@@ -1,4 +1,4 @@
-// Profile @haus/money/iso, version 1: Currency is three letters A–Z, the
+// Profile @haus-fmt/money/iso, version 1: Currency is three letters A–Z, the
 // shape of an ISO 4217 code. Whether the code is assigned is not checked
 // (the list changes; that is the application's business).
 //

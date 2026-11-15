@@ -2,7 +2,7 @@
  * Schema files (`.schema.haus`): parse, resolve and check them.
  *
  *   import std/time (Instant)            built in (spec §13)
- *   import @haus/money (Money)           a schema package, found by a ModuleResolver
+ *   import @haus-fmt/money (Money)       a schema package, found by a ModuleResolver
  *   import ./common (Address)            a schema file next to this one
  *   type Comment = < Comment { author: String, at: Instant, replies: Array Comment } >
  *   type Root = Comment
@@ -67,7 +67,7 @@ export const STD_MODULES = {
 } as const
 
 /** Modules that used to be standard, and where they went. */
-const MOVED_MODULES: Record<string, string> = { "std/money": "@haus/money" }
+const MOVED_MODULES: Record<string, string> = { "std/money": "@haus-fmt/money" }
 export type StdType = (typeof STD_MODULES)[keyof typeof STD_MODULES][number]
 
 /**
@@ -76,8 +76,8 @@ export type StdType = (typeof STD_MODULES)[keyof typeof STD_MODULES][number]
  * lets an unknown type say where it comes from.
  */
 export const OFFICIAL_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
-  "@haus/money": ["Money", "Currency"],
-  "@haus/geo": ["LatLng", "BBox"],
+  "@haus-fmt/money": ["Money", "Currency"],
+  "@haus-fmt/geo": ["LatLng", "BBox"],
 }
 
 /** The standard module or official extension that has a type of this name. */
@@ -209,7 +209,7 @@ export class Instance {
 export interface Definition {
   readonly name: string
   /**
-   * The type's identity, the same in every language: `@haus/money@1#Money`
+   * The type's identity, the same in every language: `@haus-fmt/money@1#Money`
    * for a type of a schema package, `<id>#Name` for a file with an id, or
    * just the name.
    */
@@ -808,7 +808,7 @@ export interface ResolvedModule {
   /** Unique for each file (e.g. its absolute path); passed back as `from` for the file's own imports. */
   readonly key: string
   /**
-   * The file's identity, the same in every language: `@haus/money@1` for a
+   * The file's identity, the same in every language: `@haus-fmt/money@1` for a
    * package's schema (from its manifest), `<package>/<path>` for other files.
    */
   readonly id: string
@@ -823,7 +823,7 @@ export interface ResolvedModule {
  * with a readable message when a module can't be found.
  */
 export interface ModuleResolver {
-  /** `module` as written (`@haus/money`, `@haus/money@1`, `./common`), imported by the file `from` (undefined: the root file without a key). */
+  /** `module` as written (`@haus-fmt/money`, `@haus-fmt/money@1`, `./common`), imported by the file `from` (undefined: the root file without a key). */
   resolve(module: string, from: string | undefined): ResolvedModule
 }
 

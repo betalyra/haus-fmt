@@ -1,6 +1,6 @@
-// @haus/money: exact amounts with a currency.
+// @haus-fmt/money: exact amounts with a currency.
 //
-//   import @haus/money (Money, Currency)
+//   import @haus-fmt/money (Money, Currency)
 //
 // An official extension: an ordinary schema, maintained with haus. It fixes
 // the shape only. Which currencies an application accepts (ISO 4217 codes, a
