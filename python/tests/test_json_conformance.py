@@ -28,6 +28,8 @@ class Case:
     type: str | None = None
     input: Value | None = None
     output: Value | None = None
+    code: str | None = None
+    """`Err`: the error code (spec §17) reading must fail with."""
 
     @property
     def name(self) -> str:
@@ -42,6 +44,8 @@ def load(name: str) -> list[Case]:
             case Variant(("Ok" | "Read" | "Err") as kind, (Record(fields),)) if isinstance(j := fields["json"], String):
                 t = fields.get("type")
                 input_ = fields.get("input")
+                code = fields.get("code")
+                assert (kind == "Err") == isinstance(code, String), f"an Err case has a code: {haus.canonical(v)}"
                 out.append(
                     Case(
                         kind,
@@ -49,6 +53,7 @@ def load(name: str) -> list[Case]:
                         t.value if isinstance(t, String) else None,
                         input_,
                         fields.get("output", input_),
+                        code.value if isinstance(code, String) else None,
                     )
                 )
             case _:
@@ -97,8 +102,9 @@ def test_plain(case: Case) -> None:
         case "Read":
             assert canonical(t.encode(t.from_json(case.json))) == canonical(case.output)
         case _:
-            with pytest.raises((HausDecodeError, HausJsonError)):
+            with pytest.raises((HausDecodeError, HausJsonError)) as e:
                 t.from_json(case.json)
+            assert e.value.code == case.code, e.value.reason
 
 
 # ── lossless (§16.2) ─────────────────────────────────────────
@@ -111,8 +117,9 @@ def test_lossless(case: Case) -> None:
         assert data(haus.to_lossless_json(case.input)) == data(case.json)
         assert haus.equals(haus.from_lossless_json(case.json), case.input)
     else:
-        with pytest.raises(HausJsonError):
+        with pytest.raises(HausJsonError) as e:
             haus.from_lossless_json(case.json)
+        assert e.value.code == case.code, e.value.reason
 
 
 VALID = sorted((SUITE / "valid").glob("*.haus"))
@@ -148,5 +155,6 @@ def test_schemaless(case: Case) -> None:
         assert case.output is not None
         assert haus.equals(haus.from_json(case.json), case.output)
     else:
-        with pytest.raises(HausJsonError):
+        with pytest.raises(HausJsonError) as e:
             haus.from_json(case.json)
+        assert e.value.code == case.code, e.value.reason

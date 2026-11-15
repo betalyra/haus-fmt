@@ -224,16 +224,19 @@ describe("decodeStream", () => {
 
 describe("errors", () => {
   it.effect.each([
-    { schema: Order, src: "{ id: \"1\" }", tag: "HausSchemaError", message: "Expected number" },
-    { schema: AppEvent, src: "Refunded { id: 1 }", tag: "HausSchemaError", message: "" },
-    { schema: Money, src: "Money(19.99, CHF)", tag: "HausSchemaError", message: 'Expected "EUR" | "USD" | "GBP"\n  at ["currency"]' },
-    { schema: Schema.Boolean, src: "true", tag: "HausParseError", message: "booleans are the variants True / False" },
-    { schema: Schema.Number, src: "1, 2", tag: "HausSchemaError", message: "exactly one value" },
-  ] as const)("$src", ({ schema, src, tag, message }) =>
+    { schema: Order, src: "{ id: \"1\" }", tag: "HausSchemaError", message: "Expected number", code: "type-mismatch" },
+    { schema: AppEvent, src: "Refunded { id: 1 }", tag: "HausSchemaError", message: "", code: "unknown-tag" },
+    { schema: Money, src: "Money(19.99, CHF)", tag: "HausSchemaError", message: 'got the tag CHF\n  at ["currency"]', code: "unknown-tag" },
+    { schema: Schema.Boolean, src: "true", tag: "HausParseError", message: "booleans are the variants True / False", code: "boolean-literal" },
+    { schema: Schema.Number, src: "1, 2", tag: "HausSchemaError", message: "exactly one value", code: "not-one-value" },
+  ] as const)("$src", ({ schema, src, tag, message, code }) =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(Haus.decode(schema as Schema.Top as Schema.Codec<unknown>)(src))
       expect(error._tag).toBe(tag)
       expect(error.message).toContain(message)
+      expect(error.code).toBe(code)
+      expect(error.docs).toBe(`https://haus-fmt.org/docs/errors#${code}`)
+      expect(Haus.errorJson(error)).toMatchObject({ code, hint: error.hint, docs: error.docs })
     }))
 })
 

@@ -18,7 +18,7 @@
 use crate::locate::{Lines, Node, locate};
 use crate::resolve::{Schema, tags};
 use crate::types::{Builtin, Case, Instance, Payload, Record, Type, Variant};
-use haus::{Encode, Encoder, Limits, Value};
+use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Value};
 use std::collections::HashSet;
 use std::fmt;
 use std::ops::Range;
@@ -68,9 +68,9 @@ pub struct Position {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Issue {
     pub severity: Severity,
-    /// The issue's code in the spec's catalogue of errors, once codes are
-    /// assigned to these issues. None for now.
-    pub code: Option<&'static str>,
+    /// Which mistake it is (spec §17): `missing-field`, or for a hint
+    /// `unlisted-field`, `unlisted-tag` or `deprecated`.
+    pub code: Code,
     /// The message, without the place.
     pub message: String,
     /// Where in the value: field names and indexes, outermost first.
@@ -82,8 +82,36 @@ pub struct Issue {
 }
 
 impl Issue {
-    fn new(severity: Severity, message: String, path: Vec<Segment>) -> Issue {
-        Issue { severity, code: None, message, path, span: None, position: None }
+    fn new(severity: Severity, code: Code, message: String, path: Vec<Segment>) -> Issue {
+        Issue { severity, code, message, path, span: None, position: None }
+    }
+
+    fn error((code, message): (Code, String)) -> Issue {
+        Issue::new(Severity::Error, code, message, vec![])
+    }
+
+    /// The catalogue's fix for the code (spec §17).
+    pub fn hint(&self) -> &'static str {
+        self.code.hint()
+    }
+
+    /// The documentation of the code: `https://haus-fmt.org/docs/errors#<code>`.
+    pub fn docs(&self) -> String {
+        self.code.docs()
+    }
+
+    /// The JSON form of spec §17: `{ code, message, line?, column?, path, hint, docs }`.
+    pub fn to_json(&self) -> String {
+        haus::ErrorJson {
+            code: self.code,
+            message: &self.message,
+            position: self.position.map(|p| (p.line, p.column)),
+            path: Some(&self.path_string()),
+            expected: None,
+            found: None,
+            hint: self.hint(),
+        }
+        .write()
     }
 
     /// The path as `$.items[2].price`.
@@ -173,7 +201,7 @@ impl Schema {
     /// [`Schema::decode`] for a reader with `limits` (depth, and the limits
     /// that raw values of an `Any` or an unknown tag are checked against).
     pub fn decode_with(&self, name: &str, value: &Value, limits: &Limits) -> Result<Value, Issue> {
-        let item = self.root(name).map_err(|m| Issue::new(Severity::Error, m, vec![]))?;
+        let item = self.root(name).map_err(Issue::error)?;
         self.decode_type(&item.body, value, limits)
     }
 
@@ -181,14 +209,14 @@ impl Schema {
     /// instance of a generic type).
     pub fn decode_type(&self, ty: &Type, value: &Value, limits: &Limits) -> Result<Value, Issue> {
         let mut w = Walker::new(self, *limits, Mode::Decode, None);
-        w.budget(std::slice::from_ref(value)).map_err(|m| Issue::new(Severity::Error, m, vec![]))?;
+        w.budget(std::slice::from_ref(value)).map_err(Issue::error)?;
         match w.value(value, ty, None) {
             Some(out) if w.issues.is_empty() => Ok(out),
             _ => Err(w
                 .issues
                 .into_iter()
                 .next()
-                .unwrap_or_else(|| Issue::new(Severity::Error, "not a valid value".into(), vec![]))),
+                .unwrap_or_else(|| Issue::error((Code::TypeMismatch, "not a valid value".into())))),
         }
     }
 
@@ -196,7 +224,7 @@ impl Schema {
     /// the type a `Stream` definition `name` holds (or with `name` itself, if
     /// it isn't one). An error names the value's index: `$[3].total`.
     pub fn decode_stream(&self, name: &str, values: &[Value]) -> Result<Vec<Value>, Issue> {
-        let item = self.root(name).map_err(|m| Issue::new(Severity::Error, m, vec![]))?;
+        let item = self.root(name).map_err(Issue::error)?;
         values
             .iter()
             .enumerate()
@@ -231,7 +259,7 @@ impl Schema {
                 return vec![Issue {
                     span: Some(e.offset..end.max(e.offset)),
                     position: Some(Position { line: e.line, column: e.column }),
-                    ..Issue::new(Severity::Error, e.reason, vec![])
+                    ..Issue::new(Severity::Error, e.code, e.reason, vec![])
                 }];
             }
         };
@@ -251,11 +279,11 @@ impl Schema {
     fn check_located(&self, name: &str, values: &[Value], nodes: Option<&[Node]>, limits: &Limits) -> Vec<Issue> {
         let root = match self.root(name) {
             Ok(root) => root,
-            Err(m) => return vec![Issue::new(Severity::Error, m, vec![])],
+            Err(e) => return vec![Issue::error(e)],
         };
         let mut w = Walker::new(self, *limits, Mode::Check, nodes);
-        if let Err(m) = w.budget(values) {
-            return vec![Issue::new(Severity::Error, m, vec![])];
+        if let Err(e) = w.budget(values) {
+            return vec![Issue::error(e)];
         }
         let node = |i: usize| nodes.and_then(|n| n.get(i));
         if root.stream {
@@ -267,7 +295,7 @@ impl Schema {
         } else if values.len() != 1 {
             let span = node(1).map(|n| n.start..n.end);
             let message = format!("expected one value ({name} is not a Stream), found {}", values.len());
-            w.report(Severity::Error, message, span);
+            w.report(Severity::Error, Code::NotOneValue, message, span);
         } else {
             w.value(&values[0], &root.body, node(0));
         }
@@ -275,10 +303,10 @@ impl Schema {
     }
 
     /// The instance a whole file is checked with: a definition without parameters.
-    fn root(&self, name: &str) -> Result<&Instance, String> {
-        let def = self.definition(name).ok_or_else(|| format!("the schema has no type {name}"))?;
+    fn root(&self, name: &str) -> Result<&Instance, (Code, String)> {
+        let def = self.definition(name).ok_or_else(|| (Code::UnknownType, format!("the schema has no type {name}")))?;
         if !def.params.is_empty() {
-            return Err(format!("{name} needs arguments, so it can't describe a whole file"));
+            return Err((Code::WrongArity, format!("{name} needs arguments, so it can't describe a whole file")));
         }
         Ok(self.instance(def.template))
     }
@@ -330,19 +358,19 @@ impl<'s> Walker<'s> {
     /// Sets the work budget: 16 steps per value of the input, and 1024.
     /// Fails for a value built in code that is deeper than the limit or has
     /// more than 64 Mi values.
-    fn budget(&mut self, values: &[Value]) -> Result<(), String> {
+    fn budget(&mut self, values: &[Value]) -> Result<(), (Code, String)> {
         let max = self.limits.max_depth;
         let mut count = 0usize;
         let mut stack: Vec<(&Value, usize)> = values.iter().map(|v| (v, 0)).collect();
         while let Some((v, depth)) = stack.pop() {
             count += 1;
             if count > MAX_VALUES {
-                return Err(format!("value has more than {MAX_VALUES} nodes"));
+                return Err((Code::TooManyNodes, format!("value has more than {MAX_VALUES} nodes")));
             }
             let container = matches!(v, Value::Array(_) | Value::Record(_))
                 || matches!(v, Value::Variant { args, .. } if !args.is_empty());
             if container && depth >= max {
-                return Err(format!("value nested deeper than {max} levels"));
+                return Err((Code::NestingTooDeep, format!("value nested deeper than {max} levels")));
             }
             match v {
                 Value::Array(items) => stack.extend(items.iter().map(|x| (x, depth + 1))),
@@ -369,23 +397,23 @@ impl<'s> Walker<'s> {
         self.fatal || self.issues.len() >= MAX_ISSUES || (self.decoding() && !self.issues.is_empty())
     }
 
-    fn report(&mut self, severity: Severity, message: String, span: Option<Range<usize>>) {
+    fn report(&mut self, severity: Severity, code: Code, message: String, span: Option<Range<usize>>) {
         if severity == Severity::Hint && self.decoding() {
             return;
         }
         if self.issues.len() < MAX_ISSUES {
             let span = span.filter(|_| self.located).map(|s| s.start..s.end.max(s.start + 1));
-            self.issues.push(Issue { span, ..Issue::new(severity, message, self.path.clone()) });
+            self.issues.push(Issue { span, ..Issue::new(severity, code, message, self.path.clone()) });
         }
     }
 
-    fn error<T>(&mut self, message: String, loc: Loc) -> Option<T> {
-        self.report(Severity::Error, message, span(loc));
+    fn error<T>(&mut self, code: Code, message: String, loc: Loc) -> Option<T> {
+        self.report(Severity::Error, code, message, span(loc));
         None
     }
 
-    fn fatal<T>(&mut self, message: String) -> Option<T> {
-        self.report(Severity::Error, message, None);
+    fn fatal<T>(&mut self, code: Code, message: String) -> Option<T> {
+        self.report(Severity::Error, code, message, None);
         self.fatal = true;
         None
     }
@@ -394,10 +422,13 @@ impl<'s> Walker<'s> {
     fn step(&mut self) -> Option<()> {
         self.steps += 1;
         match self.steps > self.max_steps {
-            true => self.fatal(format!(
-                "decode budget of {} steps exceeded (a schema doing more work than the input justifies)",
-                self.max_steps
-            )),
+            true => self.fatal(
+                Code::StepBudget,
+                format!(
+                    "decode budget of {} steps exceeded (a schema doing more work than the input justifies)",
+                    self.max_steps
+                ),
+            ),
             false => Some(()),
         }
     }
@@ -406,7 +437,7 @@ impl<'s> Walker<'s> {
     fn child<T>(&mut self, segment: Segment, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
         self.path.push(segment);
         let out = match self.depth >= self.limits.max_depth {
-            true => self.fatal(format!("nesting deeper than {} levels", self.limits.max_depth)),
+            true => self.fatal(Code::NestingTooDeep, format!("nesting deeper than {} levels", self.limits.max_depth)),
             false => {
                 self.depth += 1;
                 let out = f(self);
@@ -473,7 +504,7 @@ impl<'s> Walker<'s> {
                 _ => {
                     let message =
                         format!("expected None or Some(…) ({}), found {}", self.schema.describe(ty), found(v));
-                    self.error(message, loc)
+                    self.error(not_case(v, &["None", "Some"]), message, loc)
                 }
             },
             Type::Secret(item) => self.secret(v, item, loc),
@@ -495,8 +526,12 @@ impl<'s> Walker<'s> {
     }
 
     fn mismatch<T>(&mut self, v: &Value, ty: &Type, loc: Loc) -> Option<T> {
+        self.mismatch_as(Code::TypeMismatch, v, ty, loc)
+    }
+
+    fn mismatch_as<T>(&mut self, code: Code, v: &Value, ty: &Type, loc: Loc) -> Option<T> {
         let message = format!("expected {}, found {}", self.schema.describe(ty), found(v));
-        self.error(message, loc)
+        self.error(code, message, loc)
     }
 
     /// Check what's inside, then replace whatever was found there (messages
@@ -508,7 +543,7 @@ impl<'s> Walker<'s> {
         let inside: Vec<Issue> = self.issues.drain(before..).collect();
         if inside.iter().any(|i| i.severity == Severity::Error) {
             let message = format!("expected {} (a Secret: the value is not shown)", self.schema.describe(item));
-            return self.error(message, loc);
+            return self.error(Code::InvalidSecret, message, loc);
         }
         out
     }
@@ -526,6 +561,7 @@ impl<'s> Walker<'s> {
             {
                 Some(self.keep(v))
             }
+            (Builtin::Bool, Value::Variant { .. }) => self.mismatch_as(not_case(v, &["True", "False"]), v, ty, loc),
             (Builtin::Float64, Value::Number(text)) => self.float(text.parse::<f64>(), text, name, v, ty, loc),
             (Builtin::Float32, Value::Number(text)) => self.float(text.parse::<f32>(), text, name, v, ty, loc),
             (Builtin::Decimal, Value::Number(text)) => match Encoder::new(&self.limits).number(text) {
@@ -534,20 +570,27 @@ impl<'s> Walker<'s> {
             },
             (Builtin::Int, Value::Number(text)) => match whole(text) {
                 Some(n) => Some(self.out(|| Value::Number(n.to_owned()))),
-                None => self.error(format!("expected a whole number ({name}), found {}", short(text)), loc),
+                None => self.not_whole(name, text, loc),
             },
             (_, Value::Number(text)) if range(b).is_some() => {
                 let Some(n) = whole(text) else {
-                    return self.error(format!("expected a whole number ({name}), found {}", short(text)), loc);
+                    return self.not_whole(name, text, loc);
                 };
                 let (min, max) = range(b).unwrap_or((0, 0));
                 match n.parse::<i128>() {
                     Ok(x) if (min..=max).contains(&x) => Some(self.out(|| Value::Number(n.to_owned()))),
-                    _ => self.error(format!("{} is out of range for {name} ({min} to {max})", short(text)), loc),
+                    _ => {
+                        let message = format!("{} is out of range for {name} ({min} to {max})", short(text));
+                        self.error(Code::OutOfRange, message, loc)
+                    }
                 }
             }
             _ => self.mismatch(v, ty, loc),
         }
+    }
+
+    fn not_whole<T>(&mut self, name: &str, text: &str, loc: Loc) -> Option<T> {
+        self.error(Code::NotAnInteger, format!("expected a whole number ({name}), found {}", short(text)), loc)
     }
 
     /// A float: the nearest value of the type, written in its one spelling (spec §15).
@@ -564,11 +607,11 @@ impl<'s> Walker<'s> {
             Ok(x) if x.finite() => match self.decoding() {
                 true => match x.encode_with(Encoder::new(&self.limits)) {
                     Ok(out) => Some(out),
-                    Err(e) => self.error(e.to_string(), loc),
+                    Err(e) => self.encode_error(e, loc),
                 },
                 false => Some(NOTHING),
             },
-            Ok(_) => self.error(format!("{} is too large for {name}", short(text)), loc),
+            Ok(_) => self.error(Code::OutOfRange, format!("{} is too large for {name}", short(text)), loc),
             Err(_) => self.mismatch(v, ty, loc),
         }
     }
@@ -578,8 +621,15 @@ impl<'s> Walker<'s> {
     fn raw(&mut self, v: &Value, loc: Loc) -> Option<Value> {
         match Encoder::new(&self.limits).value(v) {
             Ok(_) => Some(self.keep(v)),
-            Err(e) => self.error(e.to_string(), loc),
+            Err(e) => self.encode_error(e, loc),
         }
+    }
+
+    /// A value a writer doesn't take: the writer's error, a decoding error
+    /// here (what a writer can't encode is of the wrong type for a reader).
+    fn encode_error<T>(&mut self, e: EncodeError, loc: Loc) -> Option<T> {
+        let code = if e.code == Code::CannotEncode { Code::TypeMismatch } else { e.code };
+        self.error(code, e.to_string(), loc)
     }
 
     fn time(&mut self, v: &Value, name: &str, ty: &Type, loc: Loc) -> Option<Value> {
@@ -588,7 +638,7 @@ impl<'s> Walker<'s> {
             return self.mismatch(v, ty, loc);
         }
         let [Value::String(s)] = args.as_slice() else {
-            return self.error(format!("write {name}(\"…\") with one string"), loc);
+            return self.error(Code::TypeMismatch, format!("write {name}(\"…\") with one string"), loc);
         };
         // The std/time profile (spec/std/time.md): built-in rules, like the ranges of Int8.
         match haus::time::check(name, s) {
@@ -599,7 +649,7 @@ impl<'s> Walker<'s> {
                     true => reason.replacen(&format!("{s:?}"), &json_quote(&shorten(s, 40)), 1),
                     false => reason,
                 };
-                self.child(Segment::Index(0), |w| w.error::<Value>(reason, item_of(loc, 0)));
+                self.child(Segment::Index(0), |w| w.error::<Value>(Code::InvalidTime, reason, item_of(loc, 0)));
                 None
             }
         }
@@ -617,7 +667,7 @@ impl<'s> Walker<'s> {
         if !missing.is_empty() {
             let s = if missing.len() > 1 { "s" } else { "" };
             let start = loc.map(|n| n.start..n.start + 1);
-            self.report(Severity::Error, format!("missing field{s} {}", missing.join(", ")), start);
+            self.report(Severity::Error, Code::MissingField, format!("missing field{s} {}", missing.join(", ")), start);
             ok = false;
         }
         let mut out = vec![];
@@ -630,7 +680,7 @@ impl<'s> Walker<'s> {
             match r.field(key) {
                 Some(f) => {
                     if let Some(d) = &f.deprecated {
-                        self.report(Severity::Hint, d.note(&quote_key(key)), key_span);
+                        self.report(Severity::Hint, Code::Deprecated, d.note(&quote_key(key)), key_span);
                     }
                     match self.child(Segment::Field(key.clone()), |w| w.value(x, &f.ty, at.map(|(_, n)| n))) {
                         Some(x) => out.push((key.clone(), x)),
@@ -645,13 +695,14 @@ impl<'s> Walker<'s> {
                     if r.closed {
                         self.report(
                             Severity::Error,
+                            Code::UnknownField,
                             format!("{} is not a field of this closed record.{hint}", quote_key(key)),
                             key_span,
                         );
                         ok = false;
                     } else {
                         let message = format!("{} is not in the schema; a reader ignores it.{hint}", quote_key(key));
-                        self.report(Severity::Hint, message, key_span);
+                        self.report(Severity::Hint, Code::UnlistedField, message, key_span);
                     }
                     self.path.pop();
                 }
@@ -672,15 +723,16 @@ impl<'s> Walker<'s> {
                 // `< >` lists no tags: any tag is meant, so there is nothing to hint.
                 if !var.cases.is_empty() {
                     let message = format!("{tag} is not in the schema; a reader keeps it as an unknown value.{hint}");
-                    self.report(Severity::Hint, message, tag_span);
+                    self.report(Severity::Hint, Code::UnlistedTag, message, tag_span);
                 }
                 return self.raw(v, loc);
             }
-            self.report(Severity::Error, format!("{tag} is not allowed here: expected {}.{hint}", tags(var)), tag_span);
+            let message = format!("{tag} is not allowed here: expected {}.{hint}", tags(var));
+            self.report(Severity::Error, Code::UnknownTag, message, tag_span);
             return None;
         };
         if let Some(d) = &case.deprecated {
-            self.report(Severity::Hint, d.note(tag), tag_span);
+            self.report(Severity::Hint, Code::Deprecated, d.note(tag), tag_span);
         }
         self.payload(tag, args, case, loc)
     }
@@ -688,21 +740,23 @@ impl<'s> Walker<'s> {
     fn payload(&mut self, tag: &str, args: &[Value], case: &Case, loc: Loc) -> Option<Value> {
         match &case.payload {
             Payload::None if args.is_empty() => Some(self.out(|| haus::ser::variant(tag, vec![]))),
-            Payload::None => self.error(format!("{tag} takes no payload"), loc),
+            Payload::None => self.error(Code::WrongPayload, format!("{tag} takes no payload"), loc),
             Payload::Record(r) => match args {
                 // `Tag { … }`: the record is at the variant's level and place.
                 [Value::Record(fields)] => {
                     let x = self.record(fields, r, item_of(loc, 0))?;
                     Some(self.out(|| haus::ser::variant(tag, vec![x])))
                 }
-                _ => self.error(format!("write {tag} {{ … }} with a record"), loc),
+                // One value that isn't a record: the payload has the wrong type.
+                [_] => self.error(Code::TypeMismatch, format!("write {tag} {{ … }} with a record"), loc),
+                _ => self.error(Code::WrongPayload, format!("write {tag} {{ … }} with a record"), loc),
             },
             Payload::Positional(items) if items.len() != args.len() => {
                 let n = items.len();
                 let described: Vec<String> = items.iter().map(|t| self.schema.describe(t)).collect();
                 let s = if n == 1 { "" } else { "s" };
                 let message = format!("{tag} takes {n} argument{s} ({}), found {}", described.join(", "), args.len());
-                self.error(message, loc)
+                self.error(Code::WrongPayload, message, loc)
             }
             Payload::Positional(items) => {
                 let out: Vec<Option<Value>> = args
@@ -728,6 +782,17 @@ impl FloatLike for f64 {
 impl FloatLike for f32 {
     fn finite(&self) -> bool {
         self.is_finite()
+    }
+}
+
+/// `v` isn't one of the cases of a closed variant with `tags` (`Bool`,
+/// `Maybe`): an unknown tag, a known tag with the wrong payload, or not a
+/// variant at all (spec §17).
+fn not_case(v: &Value, tags: &[&str]) -> Code {
+    match v {
+        Value::Variant { tag, .. } if tags.contains(&tag.as_str()) => Code::WrongPayload,
+        Value::Variant { .. } => Code::UnknownTag,
+        _ => Code::TypeMismatch,
     }
 }
 

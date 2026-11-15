@@ -3,7 +3,7 @@
 //! escapes pair their surrogates, and the limits of spec §7 apply.
 
 use super::Json;
-use crate::{Limits, SyntaxError};
+use crate::{ErrorCode as Code, Limits, SyntaxError};
 use std::collections::HashSet;
 
 type R<T> = Result<T, SyntaxError>;
@@ -20,7 +20,7 @@ pub(crate) fn max_depth(limits: &Limits) -> usize {
 /// levels. A byte order mark at the start is skipped if `bom`.
 pub(crate) fn parse(src: &str, limits: &Limits, max_depth: usize, bom: bool) -> R<Json> {
     if let Some(reason) = limits.unsupported() {
-        return Err(SyntaxError::at(src, 0, reason));
+        return Err(SyntaxError::at(src, 0, Code::UnsupportedDepth, reason));
     }
     let start = if bom && src.starts_with('\u{FEFF}') { 3 } else { 0 };
     let mut reader = Reader { src, b: src.as_bytes(), pos: start, depth: 0, limits, max_depth };
@@ -29,7 +29,7 @@ pub(crate) fn parse(src: &str, limits: &Limits, max_depth: usize, bom: bool) -> 
     reader.whitespace();
     match reader.peek() {
         None => Ok(value),
-        Some(_) => Err(reader.fail(format!("unexpected {} after the JSON value", reader.found()))),
+        Some(_) => Err(reader.fail(Code::JsonSyntax, format!("unexpected {} after the JSON value", reader.found()))),
     }
 }
 
@@ -96,7 +96,11 @@ impl Reader<'_> {
                                 break;
                             }
                             Some(false) => done = Json::Array(std::mem::take(items)),
-                            None => return Err(self.fail(format!("expected ',' or ']', found {}", self.found()))),
+                            None => {
+                                return Err(
+                                    self.fail(Code::JsonSyntax, format!("expected ',' or ']', found {}", self.found()))
+                                );
+                            }
                         }
                     }
                     Open::Object { members, seen, name } => {
@@ -108,7 +112,10 @@ impl Reader<'_> {
                                 break;
                             }
                             Some(false) => done = Json::Object(std::mem::take(members)),
-                            None => return Err(self.fail(format!("expected ',' or '}}', found {}", self.found()))),
+                            None => {
+                                return Err(self
+                                    .fail(Code::JsonSyntax, format!("expected ',' or '}}', found {}", self.found())));
+                            }
                         }
                     }
                 }
@@ -125,7 +132,7 @@ impl Reader<'_> {
             Some(b't') => self.literal("true", Json::Bool(true)),
             Some(b'f') => self.literal("false", Json::Bool(false)),
             Some(b'n') => self.literal("null", Json::Null),
-            _ => Err(self.fail(format!("expected a JSON value, found {}", self.found()))),
+            _ => Err(self.fail(Code::JsonSyntax, format!("expected a JSON value, found {}", self.found()))),
         }
     }
 
@@ -134,7 +141,7 @@ impl Reader<'_> {
             self.pos += word.len();
             Ok(value)
         } else {
-            Err(self.fail(format!("expected a JSON value, found {}", self.found())))
+            Err(self.fail(Code::JsonSyntax, format!("expected a JSON value, found {}", self.found())))
         }
     }
 
@@ -142,7 +149,7 @@ impl Reader<'_> {
         self.depth += 1;
         let max = self.max_depth;
         if self.depth > max {
-            return Err(self.fail(format!("JSON nested deeper than {max} levels")));
+            return Err(self.fail(Code::NestingTooDeep, format!("JSON nested deeper than {max} levels")));
         }
         Ok(())
     }
@@ -151,15 +158,15 @@ impl Reader<'_> {
     fn member_name(&mut self, seen: &mut HashSet<String>) -> R<String> {
         let at = self.pos;
         if self.peek() != Some(b'"') {
-            return Err(self.fail(format!("expected a member name, found {}", self.found())));
+            return Err(self.fail(Code::JsonSyntax, format!("expected a member name, found {}", self.found())));
         }
         let name = self.string()?;
         if !seen.insert(name.clone()) {
-            return Err(SyntaxError::at(self.src, at, format!("duplicate member name {name:?}")));
+            return Err(SyntaxError::at(self.src, at, Code::DuplicateKey, format!("duplicate member name {name:?}")));
         }
         self.whitespace();
         if !self.eat(b':') {
-            return Err(self.fail(format!("expected ':', found {}", self.found())));
+            return Err(self.fail(Code::JsonSyntax, format!("expected ':', found {}", self.found())));
         }
         self.whitespace();
         Ok(name)
@@ -172,11 +179,11 @@ impl Reader<'_> {
         match self.peek() {
             Some(b'0') => self.pos += 1,
             Some(b'1'..=b'9') => self.digits(),
-            _ => return Err(self.fail_at(start, "invalid number")),
+            _ => return Err(self.fail_at(start, Code::JsonSyntax, "invalid number")),
         }
         if self.eat(b'.') {
             if !matches!(self.peek(), Some(b'0'..=b'9')) {
-                return Err(self.fail_at(start, "invalid number: a digit must follow '.'"));
+                return Err(self.fail_at(start, Code::JsonSyntax, "invalid number: a digit must follow '.'"));
             }
             self.digits();
         }
@@ -188,7 +195,7 @@ impl Reader<'_> {
             }
             let digits = self.pos;
             if !matches!(self.peek(), Some(b'0'..=b'9')) {
-                return Err(self.fail_at(start, "invalid number: a digit must follow the exponent"));
+                return Err(self.fail_at(start, Code::JsonSyntax, "invalid number: a digit must follow the exponent"));
             }
             self.digits();
             exponent = Some(&self.src[digits..self.pos]);
@@ -196,12 +203,20 @@ impl Reader<'_> {
         let text = &self.src[start..self.pos];
         if text.len() > self.limits.max_number_length {
             let max = self.limits.max_number_length;
-            return Err(self.fail_at(start, format!("number literal longer than {max} characters")));
+            return Err(self.fail_at(
+                start,
+                Code::NumberTooLong,
+                format!("number literal longer than {max} characters"),
+            ));
         }
         if let Some(exp) = exponent.map(|e| e.trim_start_matches('0'))
             && (exp.len() > 19 || exp.parse::<u64>().unwrap_or(0) > self.limits.max_exponent)
         {
-            return Err(self.fail_at(start, format!("exponent larger than {}", self.limits.max_exponent)));
+            return Err(self.fail_at(
+                start,
+                Code::ExponentTooLarge,
+                format!("exponent larger than {}", self.limits.max_exponent),
+            ));
         }
         Ok(Json::Number(text.to_owned()))
     }
@@ -230,14 +245,17 @@ impl Reader<'_> {
                 }
                 Some(b'\\') => out.push(self.escape()?),
                 Some(c) => {
-                    return Err(self.fail(format!("raw control character U+{c:04X} in a string (escape it)")));
+                    return Err(self.fail(
+                        Code::ControlCharacter,
+                        format!("raw control character U+{c:04X} in a string (escape it)"),
+                    ));
                 }
-                None => return Err(self.fail_at(open, "unclosed string")),
+                None => return Err(self.fail_at(open, Code::UnterminatedString, "unclosed string")),
             }
         }
         let max = self.limits.max_string_length;
         if out.len() > max && out.chars().count() > max {
-            return Err(self.fail_at(open, format!("string longer than {max} characters")));
+            return Err(self.fail_at(open, Code::StringTooLong, format!("string longer than {max} characters")));
         }
         Ok(out)
     }
@@ -267,15 +285,26 @@ impl Reader<'_> {
                             })
                             .transpose()?
                             .filter(|low| (0xDC00..=0xDFFF).contains(low))
-                            .ok_or_else(|| self.fail_at(at, "unpaired surrogate in a \\u escape"))?;
+                            .ok_or_else(|| {
+                                self.fail_at(at, Code::UnpairedSurrogate, "unpaired surrogate in a \\u escape")
+                            })?;
                         0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00)
                     }
-                    0xDC00..=0xDFFF => return Err(self.fail_at(at, "unpaired surrogate in a \\u escape")),
+                    0xDC00..=0xDFFF => {
+                        return Err(self.fail_at(at, Code::UnpairedSurrogate, "unpaired surrogate in a \\u escape"));
+                    }
                     unit => unit,
                 };
-                char::from_u32(code).ok_or_else(|| self.fail_at(at, "invalid \\u escape"))?
+                char::from_u32(code)
+                    .ok_or_else(|| self.fail_at(at, Code::InvalidUnicodeEscape, "invalid \\u escape"))?
             }
-            _ => return Err(self.fail_at(at, "invalid escape: use \\\" \\\\ \\/ \\b \\f \\n \\r \\t or \\uXXXX")),
+            _ => {
+                return Err(self.fail_at(
+                    at,
+                    Code::InvalidEscape,
+                    "invalid escape: use \\\" \\\\ \\/ \\b \\f \\n \\r \\t or \\uXXXX",
+                ));
+            }
         };
         Ok(c)
     }
@@ -283,7 +312,7 @@ impl Reader<'_> {
     /// Four hex digits of a `\u` escape that starts at `at`.
     fn hex4(&mut self, at: usize) -> R<u32> {
         let digits = self.b.get(self.pos..self.pos + 4).filter(|d| d.iter().all(u8::is_ascii_hexdigit));
-        let digits = digits.ok_or_else(|| self.fail_at(at, "\\u takes four hex digits"))?;
+        let digits = digits.ok_or_else(|| self.fail_at(at, Code::InvalidUnicodeEscape, "\\u takes four hex digits"))?;
         self.pos += 4;
         Ok(digits.iter().fold(0, |n, &d| n * 16 + (d as char).to_digit(16).unwrap_or(0)))
     }
@@ -330,11 +359,11 @@ impl Reader<'_> {
         }
     }
 
-    fn fail(&self, reason: impl Into<String>) -> SyntaxError {
-        SyntaxError::at(self.src, self.pos, reason)
+    fn fail(&self, code: Code, reason: impl Into<String>) -> SyntaxError {
+        SyntaxError::at(self.src, self.pos, code, reason)
     }
 
-    fn fail_at(&self, at: usize, reason: impl Into<String>) -> SyntaxError {
-        SyntaxError::at(self.src, at, reason)
+    fn fail_at(&self, at: usize, code: Code, reason: impl Into<String>) -> SyntaxError {
+        SyntaxError::at(self.src, at, code, reason)
     }
 }

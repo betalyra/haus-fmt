@@ -30,6 +30,7 @@ pub mod roc;
 use haus_schema::{packages, syntax as schema};
 
 use codegen::{Imported, STD_TIME};
+use haus::ErrorCode as Code;
 use packages::{MANIFEST, Manifest};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,7 +94,7 @@ impl Config {
     pub fn compile_as(&self, schema: impl AsRef<Path>, name: &str) -> Result<()> {
         let schema = schema.as_ref();
         let crate_dir = PathBuf::from(var("CARGO_MANIFEST_DIR")?);
-        let path = crate_dir.join(schema).canonicalize().map_err(|e| Error::at(schema, e))?;
+        let path = crate_dir.join(schema).canonicalize().map_err(|e| Error::at(schema, Code::ImportNotFound, e))?;
         // A file in this crate: `<crate>/<path>`; elsewhere: its name (like the TypeScript binding).
         let relative = crate_dir.canonicalize().ok().and_then(|dir| path.strip_prefix(dir).ok().map(Path::to_path_buf));
         let id = match relative {
@@ -129,10 +130,12 @@ impl Config {
                 println!("cargo::warning={}:{w}", schema.display());
             }
         }
-        let code =
-            generate_file(&file, &text, id, &self.codecs, &Packages::from_env()?).map_err(|e| e.in_file(schema))?;
+        let packages = Packages::from_env()?;
+        // haus-fmt-schema never prints: the build script tells Cargo what it read.
+        packages.files().iter().for_each(|f| rerun_if_changed(f));
+        let code = generate_file(&file, &text, id, &self.codecs, &packages).map_err(|e| e.in_file(schema))?;
         let out = PathBuf::from(var("OUT_DIR")?).join(format!("{name}.rs"));
-        fs::write(&out, code).map_err(|e| Error::at(&out, e))
+        fs::write(&out, code).map_err(|e| Error::at(&out, Code::ImportNotFound, e))
     }
 }
 
@@ -156,45 +159,46 @@ fn generate_file(file: &schema::File, text: &str, id: &str, codecs: &[Codec], pa
     let imports = file
         .imports
         .iter()
-        .map(|imp| resolve(imp, packages).map_err(|reason| schema::error(text, imp.pos, reason).into()))
+        .map(|imp| resolve(imp, packages).map_err(|(code, reason)| schema::error(text, imp.pos, code, reason).into()))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .try_fold(HashMap::new(), |mut all, (name, t)| match all.insert(name.clone(), t) {
-            Some(_) => Err(Error::new(format!("{name} is imported twice"))),
+            Some(_) => Err(Error::new(Code::DuplicateImport, format!("{name} is imported twice"))),
             None => Ok(all),
         })?;
     Ok(codegen::generate(file, &codegen::Input { text, id, imports: &imports, codecs })?)
 }
 
 /// The types an import brings in, by name.
-fn resolve(imp: &schema::Import, packages: &Packages) -> Result<Vec<(String, Imported)>, String> {
+fn resolve(imp: &schema::Import, packages: &Packages) -> Result<Vec<(String, Imported)>, (Code, String)> {
     let names = imp.names.iter().map(|(n, _)| n.as_str());
     match imp.module.as_str() {
         "std/time" => names
             .map(|n| {
                 if !STD_TIME.contains(&n) {
-                    return Err(format!("std/time has no type {n} (it has {})", STD_TIME.join(", ")));
+                    return Err((Code::UnknownImport, format!("std/time has no type {n} (it has {})", STD_TIME.join(", "))));
                 }
                 let imported = Imported { id: format!("std/time#{n}"), path: format!("::haus::time::{n}"), params: 0 };
                 Ok((n.to_owned(), imported))
             })
             .collect(),
-        "std/money" => {
-            Err("std/money is no longer a standard module; it is the package @haus-fmt/money: import @haus-fmt/money (Money)"
-                .into())
-        }
+        "std/money" => Err((
+            Code::UnknownModule,
+            "std/money is no longer a standard module; it is the package @haus-fmt/money: import @haus-fmt/money (Money)"
+                .into(),
+        )),
         module if module.starts_with('@') => {
             let (name, major) = match module.rsplit_once('@').filter(|(n, _)| !n.is_empty()) {
                 Some((n, v)) => (n, Some(v)),
                 None => (module, None),
             };
-            let pkg = packages.find(name)?;
+            let pkg = packages.find(name).map_err(|e| (e.code(), e.reason().to_owned()))?;
             if let Some(major) = major.filter(|m| *m != pkg.manifest.major()) {
-                return Err(format!(
+                return Err((Code::ImportVersion, format!(
                     "{module} wants major version {major}, but version {} was found",
                     pkg.manifest.version
-                ));
+                )));
             }
             names
                 .map(|n| match pkg.types.get(n) {
@@ -202,13 +206,14 @@ fn resolve(imp: &schema::Import, packages: &Packages) -> Result<Vec<(String, Imp
                         let id = format!("{}#{n}", pkg.manifest.id());
                         Ok((n.to_owned(), Imported { id, path: format!("::{}::{n}", pkg.krate), params }))
                     }
-                    None => Err(format!("{name} has no type {n}")),
+                    None => Err((Code::UnknownImport, format!("{name} has no type {n}"))),
                 })
                 .collect()
         }
-        module => {
-            Err(format!("can't import {module}: haus-fmt-build imports std/time and schema packages (@org/name) so far"))
-        }
+        module => Err((
+            Code::ImportUnavailable,
+            format!("can't import {module}: haus-fmt-build imports std/time and schema packages (@org/name) so far"),
+        )),
     }
 }
 
@@ -220,11 +225,12 @@ fn rerun_if_changed(path: &Path) {
 }
 
 fn read(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|e| Error::at(path, e))
+    fs::read_to_string(path).map_err(|e| Error::at(path, Code::ImportNotFound, e))
 }
 
 fn var(key: &str) -> Result<String> {
-    env::var(key).map_err(|_| Error::new(format!("{key} is not set: haus-fmt-build runs in a build script")))
+    let reason = format!("{key} is not set: haus-fmt-build runs in a build script");
+    env::var(key).map_err(|_| Error::new(Code::ImportUnavailable, reason))
 }
 
 /// `order` for `src/order.schema.haus`.

@@ -44,8 +44,10 @@ mod read;
 pub mod ser;
 
 use crate::error::Position;
-use crate::{DecodeError, Decoder, Encode, EncodeError, Encoder, Error, Limits, Segment, SyntaxError, Value};
-use std::io::{self, BufRead, Read, Write};
+use crate::{
+    DecodeError, Decoder, Encode, EncodeError, Encoder, Error, ErrorCode, Limits, Segment, SyntaxError, Value,
+};
+use std::io::{BufRead, Read, Write};
 
 pub use lossless::{from_lossless, from_plain, to_lossless};
 
@@ -138,7 +140,7 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<Json, SyntaxError> {
         Ok(text) => parse(text),
         Err(e) => {
             let valid = std::str::from_utf8(&bytes[..e.valid_up_to()]).unwrap_or_default();
-            Err(SyntaxError::at(valid, e.valid_up_to(), "invalid UTF-8"))
+            Err(SyntaxError::at(valid, e.valid_up_to(), ErrorCode::InvalidUtf8, "invalid UTF-8"))
         }
     }
 }
@@ -179,13 +181,16 @@ pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
             Next::Value(Json::Null) => out.push_str("null"),
             Next::Value(Json::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
             Next::Value(Json::Number(n)) => {
-                check_number(n, limits).map_err(EncodeError::new)?;
+                check_number(n, limits)?;
                 out.push_str(n);
             }
             Next::Value(Json::String(s)) => quote(s, limits, &mut out)?,
             Next::Value(Json::Array(items)) => {
                 if depth >= max {
-                    return Err(EncodeError::new(format!("JSON nested deeper than {max} levels")));
+                    return Err(EncodeError::new(
+                        ErrorCode::NestingTooDeep,
+                        format!("JSON nested deeper than {max} levels"),
+                    ));
                 }
                 depth += 1;
                 out.push('[');
@@ -199,11 +204,14 @@ pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
             }
             Next::Value(Json::Object(members)) => {
                 if depth >= max {
-                    return Err(EncodeError::new(format!("JSON nested deeper than {max} levels")));
+                    return Err(EncodeError::new(
+                        ErrorCode::NestingTooDeep,
+                        format!("JSON nested deeper than {max} levels"),
+                    ));
                 }
                 let mut seen = std::collections::HashSet::with_capacity(members.len());
                 if !members.iter().all(|(k, _)| seen.insert(k.as_str())) {
-                    return Err(EncodeError::new("a member name is used twice in an object"));
+                    return Err(EncodeError::new(ErrorCode::DuplicateKey, "a member name is used twice in an object"));
                 }
                 depth += 1;
                 out.push('{');
@@ -222,16 +230,17 @@ pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
 }
 
 /// Whether `n` is a JSON number within the number limits.
-fn check_number(n: &str, limits: &Limits) -> Result<(), String> {
+fn check_number(n: &str, limits: &Limits) -> Result<(), EncodeError> {
     if !is_number(n) {
-        return Err("not a JSON number".into());
+        return Err(EncodeError::new(ErrorCode::CannotEncode, "not a JSON number"));
     }
     if n.len() > limits.max_number_length {
-        return Err(format!("number literal longer than {} characters", limits.max_number_length));
+        let reason = format!("number literal longer than {} characters", limits.max_number_length);
+        return Err(EncodeError::new(ErrorCode::NumberTooLong, reason));
     }
     match n.split_once(['e', 'E']).map(|(_, e)| e.trim_start_matches(['+', '-']).trim_start_matches('0')) {
         Some(e) if e.len() > 19 || e.parse::<u64>().unwrap_or(0) > limits.max_exponent => {
-            Err(format!("exponent larger than {}", limits.max_exponent))
+            Err(EncodeError::new(ErrorCode::ExponentTooLarge, format!("exponent larger than {}", limits.max_exponent)))
         }
         _ => Ok(()),
     }
@@ -252,8 +261,14 @@ pub(crate) fn is_number(n: &str) -> bool {
 fn quote(s: &str, limits: &Limits, out: &mut String) -> Result<(), EncodeError> {
     let max = limits.max_string_length;
     if s.len() > max && s.chars().count() > max {
-        return Err(EncodeError::new(format!("string longer than {max} characters")));
+        return Err(EncodeError::new(ErrorCode::StringTooLong, format!("string longer than {max} characters")));
     }
+    escape(s, out);
+    Ok(())
+}
+
+/// `s` as a JSON string, appended to `out`. Only what JSON requires is escaped.
+pub(crate) fn escape(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -269,7 +284,6 @@ fn quote(s: &str, limits: &Limits, out: &mut String) -> Result<(), EncodeError> 
         }
     }
     out.push('"');
-    Ok(())
 }
 
 // ── plain JSON with a type ────────────────────────────────────
@@ -292,7 +306,7 @@ fn typed<T: FromJson + Encode>(json: &Json, limits: &Limits) -> Result<T, Error>
     let x = T::from_json_with(json, Decoder::new(limits))?;
     match x.encode_with(Encoder::new(limits)) {
         Ok(_) => Ok(x),
-        Err(EncodeError { path, reason }) => Err(DecodeError { path, reason }.into()),
+        Err(e) => Err(e.into_decode().into()),
     }
 }
 
@@ -384,11 +398,11 @@ fn read_line<T: FromJson + Encode>(i: usize, line: &[u8], max: usize) -> Result<
     let at = Position { offset: 0, line: i + 1, column: 1 };
     let text = std::str::from_utf8(line).map_err(|e| {
         let valid = std::str::from_utf8(&line[..e.valid_up_to()]).unwrap_or_default();
-        SyntaxError::at(valid, e.valid_up_to(), "invalid UTF-8").from(at)
+        SyntaxError::at(valid, e.valid_up_to(), ErrorCode::InvalidUtf8, "invalid UTF-8").from(at)
     })?;
     if text.len() > max && text.chars().count() > max {
-        let e = io::Error::new(io::ErrorKind::InvalidData, format!("line {} is longer than {max} characters", i + 1));
-        return Err(e.into());
+        let reason = format!("JSON Lines: line {} is longer than {max} characters", i + 1);
+        return Err(SyntaxError::new(ErrorCode::ValueTooLong, reason, at).into());
     }
     line_value(i, text, &Limits::default())
 }

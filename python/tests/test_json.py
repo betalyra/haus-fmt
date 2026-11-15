@@ -67,6 +67,8 @@ def test_numbers_keep_their_text() -> None:
     assert haus.from_json("19.90") == Number("19.90")
     assert haus.from_json("1E+05") == Number("1e5")
     assert haus.from_json("2.5E-007") == Number("2.5e-7")
+    assert haus.from_json("1E-0") == Number("1e0")
+    assert haus.from_json("1e000") == Number("1e0")
     assert haus.from_json("-0") == Number("-0")
 
 

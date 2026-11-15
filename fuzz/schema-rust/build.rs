@@ -90,7 +90,7 @@ pub mod {name} {{
     }}
 
     fn encode<T: ::haus::Encode>(x: &T) -> Result<::haus::Value, ::haus::DecodeError> {{
-        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(format!("can't encode it again: {{e}}")))
+        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(e.code, format!("can't encode it again: {{e}}")))
     }}
 
     pub fn write(ty: &str, v: &::haus::Value) -> Option<Result<String, String>> {{

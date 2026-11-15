@@ -19,8 +19,9 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Final, Never, TypeAlias, TypeVar
 
+from ._error_codes import ErrorCode
 from ._errors import HausJsonError, PathKey
-from ._number import normalize_number, number_limit_issue
+from ._number import number_limit_issue
 from ._parser import Limits
 from ._stream import Readable
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
@@ -42,25 +43,30 @@ Json: TypeAlias = "bool | str | JsonNumber | list[Json] | dict[str, Json] | None
 
 _WHITESPACE = re.compile(r"[ \t\n\r]*+")
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:[eE][+-]?[0-9]++)?")
+_NUMBER_EXPONENT = re.compile(r"[eE]([+-]?)0*([0-9]+)$")
 _PLAIN_RUN = re.compile(r'[^"\\\x00-\x1f\ud800-\udfff]*+')
 _HEX4 = re.compile(r"[0-9A-Fa-f]{4}")
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
 _ESCAPES: Final = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
 
 
-def json_number(text: str, limits: Limits) -> str | None:
-    """The normalized literal (spec §2) of a JSON number `text` (`1E+05` → `1e5`), or None if it isn't one.
-
-    Raises `ValueError` with the reason if it is beyond the limits.
-    """
+def json_number(text: str) -> str | None:
+    """The normalized literal (spec §2) of a JSON number `text` (`1E+05` → `1e5`), or None if it isn't one."""
     if not _NUMBER.fullmatch(text):
         return None
-    normalized = normalize_number(text, limits)
-    if normalized is None:
-        raise ValueError(f"number literal longer than {limits.max_number_length} characters")
-    if (issue := number_limit_issue(normalized, limits)) is not None:
-        raise ValueError(issue)
-    return normalized
+    if (m := _NUMBER_EXPONENT.search(text)) is None:
+        return text
+    sign = "-" if m[1] == "-" and m[2] != "0" else ""
+    return f"{text[: m.start()]}e{sign}{m[2]}"
+
+
+def json_number_issue(text: str, limits: Limits) -> tuple[ErrorCode, str] | None:
+    """Why the JSON number literal `text` is beyond the limits of spec §7 (its length, its exponent), or None."""
+    if len(text) > limits.max_number_length:
+        return "number-too-long", f"number literal longer than {limits.max_number_length} characters"
+    if (m := _NUMBER_EXPONENT.search(text)) and (len(m[2]) > 15 or int(m[2]) > limits.max_exponent):
+        return "exponent-too-large", f"exponent larger than {limits.max_exponent}"
+    return None
 
 
 class _Container:
@@ -95,8 +101,24 @@ class _Reader:
         self.pos: int = 1 if bom and text.startswith("\ufeff") else 0
         """A leading byte order mark is ignored, as in haus (spec §16), where `bom` allows one."""
 
-    def fail(self, reason: str, pos: int | None = None) -> Never:
-        raise HausJsonError.at(self.text, self.pos if pos is None else pos, reason)
+    def fail(
+        self,
+        code: ErrorCode,
+        reason: str,
+        pos: int | None = None,
+        *,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> Never:
+        at = self.pos if pos is None else pos
+        raise HausJsonError.at(self.text, at, code, reason, expected=expected, found=found)
+
+    def syntax(self, expected: str, reason: str, pos: int | None = None) -> Never:
+        """Text that isn't JSON: `expected` should be at `pos` (here by default)."""
+        at = self.pos if pos is None else pos
+        c = self.text[at : at + 1]
+        found = "end of input" if c == "" else f"U+{ord(c):04X}" if c < " " else f"'{c}'"
+        self.fail("json-syntax", reason, at, expected=expected, found=found)
 
     def skip(self) -> None:
         m = _WHITESPACE.match(self.text, self.pos)
@@ -113,7 +135,7 @@ class _Reader:
             value: Json
             if c in ("{", "["):
                 if len(open_) >= self.max_depth:
-                    self.fail(f"nesting deeper than {self.max_depth} levels")
+                    self.fail("nesting-too-deep", f"nesting deeper than {self.max_depth} levels")
                 self.pos += 1
                 self.skip()
                 container = _Container({} if c == "{" else [])
@@ -132,7 +154,7 @@ class _Reader:
                 if not open_:
                     self.skip()
                     if self.pos < len(text):
-                        self.fail("unexpected text after the JSON value")
+                        self.syntax("the end of the JSON text", "unexpected text after the JSON value")
                     return value
                 top = open_[-1]
                 top.add(value)
@@ -145,20 +167,20 @@ class _Reader:
                         self.member_name(top)
                     break
                 if c != top.close:
-                    self.fail(f"expected ',' or '{top.close}'", self.pos - 1)
+                    self.syntax(f"',' or '{top.close}'", f"expected ',' or '{top.close}'", self.pos - 1)
                 value = open_.pop().items
 
     def member_name(self, container: _Container) -> None:
         """`"name":` in an object; the name must be new."""
         start = self.pos
         if not self.text.startswith('"', start):
-            self.fail("expected a member name (a string)")
+            self.syntax("a member name", "expected a member name (a string)")
         key = self.string()
         if key in container.items:
-            self.fail(f"duplicate member name {json.dumps(key, ensure_ascii=False)}", start)
+            self.fail("duplicate-key", f"duplicate member name {json.dumps(key, ensure_ascii=False)}", start)
         self.skip()
         if not self.text.startswith(":", self.pos):
-            self.fail("expected ':' after the member name")
+            self.syntax("':'", "expected ':' after the member name")
         self.pos += 1
         self.skip()
         container.key = key
@@ -180,20 +202,17 @@ class _Reader:
             case "-" | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9":
                 return self.number()
             case "":
-                self.fail("unexpected end of the JSON text, expected a value")
+                self.syntax("a JSON value", "unexpected end of the JSON text, expected a value")
             case _:
-                self.fail(f"unexpected {json.dumps(c)}, expected a JSON value")
+                self.syntax("a JSON value", f"unexpected {json.dumps(c)}, expected a JSON value")
 
     def number(self) -> JsonNumber:
         m = _NUMBER.match(self.text, self.pos)
         if m is None:
-            self.fail("invalid number")
-        if len(m[0]) > self.limits.max_number_length:
-            self.fail(f"number literal longer than {self.limits.max_number_length} characters")
-        try:
-            normalized = json_number(m[0], self.limits)
-        except ValueError as e:
-            self.fail(str(e))
+            self.syntax("a JSON value", "invalid number")
+        if (issue := json_number_issue(m[0], self.limits)) is not None:
+            self.fail(*issue)
+        normalized = json_number(m[0])
         assert normalized is not None
         self.pos = m.end()
         return JsonNumber(normalized)
@@ -219,15 +238,17 @@ class _Reader:
                 parts.append(self.escape())
                 length += 1
             elif c == "":
-                self.fail("unterminated string", start)
+                self.fail("unterminated-string", "unterminated string", start)
             elif _SURROGATE.match(c):
-                self.fail("a lone surrogate (not Unicode text)")
+                self.fail("unpaired-surrogate", "a lone surrogate (not Unicode text)")
             else:
-                self.fail(f"raw control character U+{ord(c):04X} in a string (write it as an escape)")
+                self.fail(
+                    "control-character", f"raw control character U+{ord(c):04X} in a string (write it as an escape)"
+                )
             if length > limit:
-                self.fail(f"string longer than {limit} characters", start)
+                self.fail("string-too-long", f"string longer than {limit} characters", start)
         if length > limit:
-            self.fail(f"string longer than {limit} characters", start)
+            self.fail("string-too-long", f"string longer than {limit} characters", start)
         return "".join(parts)
 
     def escape(self) -> str:
@@ -235,16 +256,16 @@ class _Reader:
         c = text[at + 1 : at + 2]
         if c != "u":
             if c not in _ESCAPES:
-                self.fail("invalid escape")
+                self.fail("invalid-escape", "invalid escape")
             self.pos += 2
             return _ESCAPES[c]
         unit = self.hex4(at + 2)
         if 0xDC00 <= unit <= 0xDFFF:
-            self.fail("an unpaired surrogate in a \\u escape")
+            self.fail("unpaired-surrogate", "an unpaired surrogate in a \\u escape")
         if 0xD800 <= unit <= 0xDBFF:
             low = self.hex4(at + 8) if text.startswith("\\u", at + 6) else -1
             if not 0xDC00 <= low <= 0xDFFF:
-                self.fail("an unpaired surrogate in a \\u escape")
+                self.fail("unpaired-surrogate", "an unpaired surrogate in a \\u escape")
             self.pos = at + 12
             return chr(0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00))
         self.pos = at + 6
@@ -252,7 +273,7 @@ class _Reader:
 
     def hex4(self, pos: int) -> int:
         if not _HEX4.match(self.text, pos):
-            self.fail("expected four hex digits after \\u", pos)
+            self.fail("invalid-unicode-escape", "expected four hex digits after \\u", pos)
         return int(self.text[pos : pos + 4], 16)
 
 
@@ -264,7 +285,7 @@ def json_text(data: str | bytes) -> str:
         return data.decode("utf-8")
     except UnicodeDecodeError as e:
         valid = data[: e.start].decode("utf-8")
-        raise HausJsonError.at(valid, len(valid), "invalid UTF-8") from None
+        raise HausJsonError.at(valid, len(valid), "invalid-utf8", "invalid UTF-8") from None
 
 
 def read_json(data: str | bytes, limits: Limits, max_depth: int | None = None, *, bom: bool = True) -> Json:
@@ -357,7 +378,7 @@ def schemaless(j: Json, max_depth: int | None = None, depth: int = 0, path: tupl
     without it, the reader has limited the nesting already.
     """
     if isinstance(j, list | dict) and max_depth is not None and depth >= max_depth:
-        raise HausJsonError(f"nesting deeper than {max_depth} levels", path=path)
+        raise HausJsonError(f"nesting deeper than {max_depth} levels", code="nesting-too-deep", path=path)
     match j:
         case None:
             return _NONE
@@ -422,13 +443,13 @@ class _Lossless:
         self.limits = limits
         self.prefix = prefix
 
-    def fail(self, reason: str, path: tuple[PathKey, ...]) -> Never:
-        raise HausJsonError(reason, path=(*self.prefix, *path))
+    def fail(self, reason: str, path: tuple[PathKey, ...], code: ErrorCode = "lossless-form") -> Never:
+        raise HausJsonError(reason, code=code, path=(*self.prefix, *path))
 
     def deeper(self, depth: int, path: tuple[PathKey, ...]) -> int:
         """Into a container (record, array or payload): one more level, at most `max_depth`."""
         if depth >= self.limits.max_depth:
-            self.fail(f"nesting deeper than {self.limits.max_depth} levels", path)
+            self.fail(f"nesting deeper than {self.limits.max_depth} levels", path, "nesting-too-deep")
         return depth + 1
 
     def value(self, j: Json, depth: int, path: tuple[PathKey, ...]) -> Value:
@@ -437,33 +458,44 @@ class _Lossless:
                 return String(j)
             case list():
                 return Array(self.items(j, self.deeper(depth, path), path))
-            case dict() if len(j) == 1 and "rec" in j:
-                return self.record(j["rec"], depth, path)
-            case dict() if len(j) == 1 and isinstance(text := j.get("num"), str):
-                if not _NORMALIZED.fullmatch(text):
-                    self.fail("expected a normalized number literal in 'num'", (*path, "num"))
+            case dict():
+                return self.object(j, depth, path)
+            case _:
+                self.fail(f"expected the lossless form of a haus value, found {describe(j)}", path)
+
+    def object(self, j: dict[str, Json], depth: int, path: tuple[PathKey, ...]) -> Value:
+        """`{"rec": …}`, `{"num": …}`, `{"bytes": …}`, `{"tag": …}` or `{"tag": …, "args": […]}`."""
+        match j:
+            case {"rec": fields} if len(j) == 1:
+                return self.record(fields, depth, path)
+            case {"num": text} if len(j) == 1:
+                if not isinstance(text, str) or not _NORMALIZED.fullmatch(text):
+                    self.fail("expected a normalized number literal in 'num'", (*path, "num"), "lossless-number")
                 if (issue := number_limit_issue(text, self.limits)) is not None:
-                    self.fail(issue, (*path, "num"))
+                    self.fail(issue[1], (*path, "num"), issue[0])
                 return Number(text)
-            case dict() if len(j) == 1 and isinstance(hex_digits := j.get("bytes"), str):
-                if not _HEX_BYTES.fullmatch(hex_digits):
-                    self.fail("expected two lowercase hex digits per byte in 'bytes'", (*path, "bytes"))
-                return Bytes(bytes.fromhex(hex_digits))
-            case dict() if len(j) == 1 and isinstance(tag := j.get("tag"), str):
+            case {"bytes": digits} if len(j) == 1:
+                if not isinstance(digits, str) or not _HEX_BYTES.fullmatch(digits):
+                    self.fail(
+                        "expected two lowercase hex digits per byte in 'bytes'", (*path, "bytes"), "lossless-bytes"
+                    )
+                if len(digits) > self.limits.max_string_length:
+                    limit = self.limits.max_string_length
+                    self.fail(f"byte string longer than {limit} characters", (*path, "bytes"), "string-too-long")
+                return Bytes(bytes.fromhex(digits))
+            case {"tag": tag} if len(j) == 1:
                 return Variant(self.tag(tag, path))
-            case dict() if (
-                len(j) == 2 and isinstance(tag := j.get("tag"), str) and isinstance(args := j.get("args"), list)
-            ):
-                tag = self.tag(tag, path)
+            case {"tag": tag, "args": args} if len(j) == 2:
+                name = self.tag(tag, path)
                 args_path = (*path, "args")
-                if not args:
-                    self.fail("a variant without arguments has no 'args'", args_path)
+                if not isinstance(args, list) or not args:
+                    self.fail("'args' must be a non-empty array (a tag without arguments has no 'args')", args_path)
                 match args:
                     case [dict() as only] if len(only) == 1 and "rec" in only:
                         # `Tag { … }` is one level, as in the parser.
-                        return Variant(tag, (self.record(only["rec"], depth, (*args_path, 0)),))
+                        return Variant(name, (self.record(only["rec"], depth, (*args_path, 0)),))
                     case _:
-                        return Variant(tag, self.items(args, self.deeper(depth, path), args_path))
+                        return Variant(name, self.items(args, self.deeper(depth, path), args_path))
             case _:
                 self.fail(f"expected the lossless form of a haus value, found {describe(j)}", path)
 
@@ -480,15 +512,16 @@ class _Lossless:
         out: dict[str, Value] = {}
         for k, x in fields.items():
             if len(k) > self.limits.max_string_length:
-                self.fail(f"key longer than {self.limits.max_string_length} characters", (*path, "rec"))
+                limit = self.limits.max_string_length
+                self.fail(f"key longer than {limit} characters", (*path, "rec"), "key-too-long")
             out[k] = self.value(x, d, (*path, "rec", k))
         return Record(out)
 
-    def tag(self, tag: str, path: tuple[PathKey, ...]) -> str:
-        if not _TAG.fullmatch(tag):
-            self.fail("expected a tag ([A-Z][A-Za-z0-9_]*) in 'tag'", (*path, "tag"))
+    def tag(self, tag: Json, path: tuple[PathKey, ...]) -> str:
+        if not isinstance(tag, str) or not _TAG.fullmatch(tag):
+            self.fail("expected a tag ([A-Z][A-Za-z0-9_]*) in 'tag'", (*path, "tag"), "invalid-tag")
         if len(tag) > self.limits.max_string_length:
-            self.fail(f"tag longer than {self.limits.max_string_length} characters", (*path, "tag"))
+            self.fail(f"tag longer than {self.limits.max_string_length} characters", (*path, "tag"), "tag-too-long")
         return tag
 
 
@@ -546,22 +579,28 @@ def json_lines(source: str | bytes | Readable | Iterable[str | bytes], max_line_
         try:
             text = decoder.decode(chunk) if isinstance(chunk, bytes) else chunk
         except UnicodeDecodeError:
-            raise HausJsonError("invalid UTF-8", line=line, column=len(pending) + 1) from None
+            raise HausJsonError("invalid UTF-8", code="invalid-utf8", line=line, column=len(pending) + 1) from None
         start = 0
         while (end := text.find("\n", start)) >= 0:
             if len(pending) + end - start > max_line_length:
-                raise HausJsonError(f"line longer than {max_line_length} characters", line=line, column=1)
+                raise HausJsonError(
+                    f"line longer than {max_line_length} characters", code="value-too-long", line=line, column=1
+                )
             yield pending + text[start:end]
             pending = ""
             start = end + 1
             line += 1
         pending += text[start:]
         if len(pending) > max_line_length:
-            raise HausJsonError(f"line longer than {max_line_length} characters", line=line, column=1)
+            raise HausJsonError(
+                f"line longer than {max_line_length} characters", code="value-too-long", line=line, column=1
+            )
     try:
         pending += decoder.decode(b"", final=True)
     except UnicodeDecodeError:
-        raise HausJsonError("invalid UTF-8 at the end", line=line, column=len(pending) + 1) from None
+        raise HausJsonError(
+            "invalid UTF-8 at the end", code="invalid-utf8", line=line, column=len(pending) + 1
+        ) from None
     if pending:
         yield pending
 
@@ -593,4 +632,4 @@ def read_lines(
         except HausJsonError as e:
             if e.line is None:
                 raise
-            raise HausJsonError(e.reason, line=i + 1, column=e.column) from None
+            raise e.with_line(i + 1) from None

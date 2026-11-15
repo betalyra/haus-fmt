@@ -63,7 +63,7 @@ impl<T: Decode> Decode for Secret<T> {
 #[cfg(test)]
 mod tests {
     use super::Secret;
-    use crate::{DecodeError, Error, Value, from_str};
+    use crate::{DecodeError, Error, ErrorCode, Value, from_str};
 
     #[test]
     fn printing_hides_the_value() {
@@ -84,7 +84,8 @@ mod tests {
         };
         for text in ["300", "1.5", "\"1234\"", "[1, 2]"] {
             let e = decode_error(text);
-            assert_eq!(e, DecodeError::new("not a valid Secret (the value is hidden)"), "{text}");
+            let hidden = DecodeError::new(ErrorCode::InvalidSecret, "not a valid Secret (the value is hidden)");
+            assert_eq!(e, hidden, "{text}");
         }
         let nested = crate::de::Record::new(&crate::parse("{ pin: 9999 }").unwrap()[0], "Config")
             .and_then(|r| r.required("pin", <Secret<u8> as crate::Decode>::decode))

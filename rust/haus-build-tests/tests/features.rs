@@ -75,10 +75,18 @@ fn errors_say_where() {
     assert_eq!(range.to_string(), ".scores.maths: 300 is out of range for Int8 (-128 to 127)");
 
     let closed = decode_error::<Person>(&ADA.replace("{ name", "{ age: 36, name"));
-    assert_eq!(closed.to_string(), "unknown field \"age\" in a closed record");
+    assert_eq!(closed.to_string(), ".age: unknown field \"age\" in a closed record");
+    assert_eq!((closed.code, closed.place().as_str()), (haus::ErrorCode::UnknownField, "$.age"));
 
     let missing = decode_error::<Person>(&ADA.replace("name: \"Ada\", ", ""));
     assert_eq!(missing.to_string(), "missing field name");
+    assert_eq!(missing.code, haus::ErrorCode::MissingField);
+    assert_eq!(unknown.code, haus::ErrorCode::UnknownTag);
+    assert_eq!((date.code, date.place().as_str()), (haus::ErrorCode::InvalidTime, "$.type.since[0]"));
+    assert_eq!(
+        (range.code, range.expected(), range.found()),
+        (haus::ErrorCode::OutOfRange, Some("Int8 (-128 to 127)"), Some("300"))
+    );
 
     let deep = decode_error::<Person>(&ADA.replace("Node(Leaf, Leaf)", "Node(Leaf, 1)"));
     assert_eq!(deep.to_string(), ".tree(Node)[1](Node)[1]: expected a variant (Tree), found the number 1");

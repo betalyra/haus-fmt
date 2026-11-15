@@ -22,7 +22,8 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Never, Protocol, TypeAlias, TypeVar
 
-from ._errors import HausSyntaxError
+from ._error_codes import ERROR_CODES, ErrorCode
+from ._errors import HausSyntaxError, error_docs
 from ._parser import Parser
 from ._time import STD_TIME_TYPES
 from ._value import String, Value
@@ -237,6 +238,32 @@ class SchemaWarning:
     line: int
     column: int
 
+    @property
+    def code(self) -> WarningKind:
+        """Its code (spec §17): the same as `kind`."""
+        return self.kind
+
+    @property
+    def hint(self) -> str:
+        """The catalogue's fix for the code."""
+        return ERROR_CODES[self.kind].hint
+
+    @property
+    def docs(self) -> str:
+        """`https://haus-fmt.org/docs/errors#<code>`"""
+        return error_docs(self.kind)
+
+    def to_json(self) -> dict[str, object]:
+        """The JSON form of spec §17: `{ code, message, line, column, hint, docs }`."""
+        return {
+            "code": self.kind,
+            "message": self.message,
+            "line": self.line,
+            "column": self.column,
+            "hint": self.hint,
+            "docs": self.docs,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class SchemaFile:
@@ -310,7 +337,22 @@ class ModuleResolver(Protocol):
 
 # ── lexer ────────────────────────────────────────────────────
 
-Fail: TypeAlias = Callable[[str, int], Never]
+
+class Fail(Protocol):
+    """Fails with an error at `pos` of a schema file."""
+
+    def __call__(
+        self,
+        code: ErrorCode,
+        reason: str,
+        pos: int,
+        *,
+        hint: str | None = None,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> Never: ...
+
+
 TokenKind: TypeAlias = Literal["upper", "lower", "string", "module", "attribute", "punct", "eof"]
 
 
@@ -351,7 +393,7 @@ class _Lexer:
                 start, depth = self.pos, 0
                 while True:
                     if self.pos >= len(s):
-                        self.fail("unterminated block comment", start)
+                        self.fail("unterminated-comment", "unterminated block comment", start)
                     if s.startswith("/*", self.pos):
                         depth, self.pos = depth + 1, self.pos + 2
                     elif s.startswith("*/", self.pos):
@@ -376,23 +418,23 @@ class _Lexer:
             return _Token("module", m[0], pos)
         if s[pos] == "@":
             if not (m := _ATTRIBUTE.match(s, pos)):
-                self.fail("expected an attribute name after '@', like @deprecated", pos)
+                self.fail("schema-syntax", "expected an attribute name after '@', like @deprecated", pos)
             self.pos = m.end()
             return _Token("attribute", m[1], pos)
         if s[pos] == '"':
             if s.startswith('"""', pos):
-                self.fail("block strings can't be field names", pos)
+                self.fail("block-string-key", "block strings can't be field names", pos)
             try:
                 value, self.pos = Parser(s).value_at(pos)
             except HausSyntaxError as e:
-                self.fail(e.reason, e.offset)
+                self.fail(e.code, e.reason, e.offset)
             assert isinstance(value, String)
             return _Token("string", value.value, pos)
         for p in _PUNCT:
             if s.startswith(p, pos):
                 self.pos = pos + len(p)
                 return _Token("punct", p, pos)
-        self.fail(f"unexpected character {json.dumps(s[pos], ensure_ascii=False)}", pos)
+        self.fail("schema-syntax", f"unexpected character {json.dumps(s[pos], ensure_ascii=False)}", pos)
 
 
 # ── syntax tree ──────────────────────────────────────────────
@@ -531,9 +573,9 @@ class _SchemaParser:
             self.unexpected(f"'{value}'")
         return self.advance()
 
-    def unexpected(self, what: str) -> Never:
+    def unexpected(self, what: str, code: ErrorCode = "schema-syntax") -> Never:
         found = "end of file" if self.kind() == "eof" else f"'{self.tok.value}'"
-        self.fail(f"expected {what}, found {found}", self.tok.pos)
+        self.fail(code, f"expected {what}, found {found}", self.tok.pos, expected=what, found=found)
 
     def keyword(self) -> str | None:
         t = self.tok
@@ -572,7 +614,7 @@ class _SchemaParser:
         args: tuple[Value, ...] = ()
         if self.is_("("):
             if self.tok.pos != name_end:
-                self.fail(f"no space is allowed between @{t.value} and '('", name_end)
+                self.fail("attribute-space", f"no space is allowed between @{t.value} and '('", name_end)
             args = self.parse_attribute_args(self.tok.pos)
         return _AttributeNode(Attribute(t.value, args), t.pos, self.last_end)
 
@@ -585,12 +627,16 @@ class _SchemaParser:
             self.warnings.append(_RawWarning("unknown-attribute", message, a.pos, a.end))
             return
         if any(b.attribute.name == name for b in before):
-            self.fail(f"@{name} appears twice here", a.pos)
+            self.fail("attribute-twice", f"@{name} appears twice here", a.pos)
         match a.attribute.args:
             case () | (String(),):
                 pass
             case _:
-                self.fail('@deprecated takes no argument or one string: @deprecated or @deprecated("use email")', a.pos)
+                self.fail(
+                    "attribute-arguments",
+                    '@deprecated takes no argument or one string: @deprecated or @deprecated("use email")',
+                    a.pos,
+                )
 
     def parse_attribute_args(self, open_: int) -> tuple[Value, ...]:
         """`( value, … )` at `open_`: haus values, read by the data parser."""
@@ -603,20 +649,24 @@ class _SchemaParser:
             c = text[lexer.pos : lexer.pos + 1]
             if c == ")":
                 if not values:
-                    self.fail("an attribute's ( … ) needs at least one value; write it without parentheses", open_)
+                    self.fail(
+                        "attribute-arguments",
+                        "an attribute's ( … ) needs at least one value; write it without parentheses",
+                        open_,
+                    )
                 break
             if c == "":
-                self.fail("unclosed '(' of an attribute", open_)
+                self.fail("unclosed-bracket", "unclosed '(' of an attribute", open_)
             try:
                 value, lexer.pos = data.value_at(lexer.pos)
             except HausSyntaxError as e:
-                self.fail(e.reason, e.offset)
+                self.fail(e.code, e.reason, e.offset)
             values.append(value)
             lexer.skip()
             if text.startswith(",", lexer.pos):
                 lexer.pos += 1
             elif not text.startswith(")", lexer.pos):
-                self.fail("expected ',' or ')' in the attribute's arguments", lexer.pos)
+                self.fail("missing-comma", "expected ',' or ')' in the attribute's arguments", lexer.pos)
         lexer.pos += 1
         self.last_end = lexer.pos
         self.tok = lexer.next()
@@ -640,16 +690,15 @@ class _SchemaParser:
             module = "/".join(parts)
         self.expect("(")
         names: list[tuple[str, int]] = []
-        while True:
+        while not self.is_(")"):
             if self.kind() != "upper":
                 self.unexpected("a type name")
             t = self.advance()
             names.append((t.value, t.pos))
-            if self.is_(")"):
-                break
-            self.expect(",")
-            if self.is_(")"):
-                break
+            if not self.is_(")"):
+                self.expect(",")
+        if not names:
+            self.unexpected("a type name (an import names at least one type)", "unknown-import")
         self.advance()
         return _ImportDecl(module, tuple(names), pos)
 
@@ -673,7 +722,7 @@ class _SchemaParser:
     def _nested(self, pos: int) -> None:
         self.depth += 1
         if self.depth > _MAX_NESTING:
-            self.fail(f"types nested deeper than {_MAX_NESTING} levels", pos)
+            self.fail("type-too-deep", f"types nested deeper than {_MAX_NESTING} levels", pos)
 
     def parse_app(self) -> _Node:
         """`Name atom*`, or a single atom."""
@@ -712,7 +761,9 @@ class _SchemaParser:
         if t.kind == "lower" and not self.keyword():
             if t.value == "_":
                 self.fail(
-                    "types are open by default, so there is no _: write < > for any tag, or a type parameter", t.pos
+                    "underscore-type",
+                    "types are open by default, so there is no _: write < > for any tag, or a type parameter",
+                    t.pos,
                 )
             self.advance()
             return _Var(t.value, t.pos)
@@ -739,7 +790,9 @@ class _SchemaParser:
         t = self.tok
         if t.kind == "lower" and not self.keyword():
             self.fail(
-                f"row parameters (...{t.value}) aren't supported; spread a named type instead: ...UserEvent", t.pos
+                "row-parameter",
+                f"row parameters (...{t.value}) aren't supported; spread a named type instead: ...UserEvent",
+                t.pos,
             )
         if t.kind != "upper":
             self.unexpected("a type name after '...': ...UserEvent")
@@ -749,7 +802,7 @@ class _SchemaParser:
     def parse_record(self, *, closed: bool) -> _RecordNode:
         pos = self.advance().pos
         if self.is_("|"):
-            self.fail("{| … |} is gone: write closed { … } for a closed record", self.tok.pos)
+            self.fail("schema-syntax", "{| … |} is gone: write closed { … } for a closed record", self.tok.pos)
         fields: list[_FieldNode] = []
         spreads: list[_Spread] = []
         while not self.is_("}"):
@@ -757,7 +810,9 @@ class _SchemaParser:
             if self.is_("..."):
                 if attributes:
                     self.fail(
-                        "attributes can't be put on a spread: the fields it copies keep their own", attributes[0].pos
+                        "attribute-on-spread",
+                        "attributes can't be put on a spread: the fields it copies keep their own",
+                        attributes[0].pos,
                     )
                 self.advance()
                 spreads.append(self.parse_spread(len(fields)))
@@ -800,7 +855,9 @@ class _SchemaParser:
             elif self.is_("..."):
                 if attributes:
                     self.fail(
-                        "attributes can't be put on a spread: the tags it copies keep their own", attributes[0].pos
+                        "attribute-on-spread",
+                        "attributes can't be put on a spread: the tags it copies keep their own",
+                        attributes[0].pos,
                     )
                 self.advance()
                 spreads.append(self.parse_spread(len(cases)))
@@ -811,7 +868,9 @@ class _SchemaParser:
             self.expect("|")
         self.advance()
         if closed and not cases and not spreads:
-            self.fail("a closed variant needs at least one tag (closed < > would accept nothing)", pos)
+            self.fail(
+                "closed-empty-variant", "a closed variant needs at least one tag (closed < > would accept nothing)", pos
+            )
         return _VariantNode(tuple(cases), tuple(spreads), closed, pos)
 
 
@@ -861,9 +920,17 @@ def _doc_comment(text: str, pos: int) -> tuple[int, str]:
 
 
 def _fail_in(text: str) -> Fail:
-    def fail(reason: str, pos: int) -> Never:
-        e = HausSyntaxError.at(text, pos, reason)
-        raise HausSchemaFileError(reason, e.offset, e.line, e.column)
+    def fail(
+        code: ErrorCode,
+        reason: str,
+        pos: int,
+        *,
+        hint: str | None = None,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> Never:
+        e = HausSyntaxError.at(text, pos, code, reason)
+        raise HausSchemaFileError(reason, e.offset, e.line, e.column, code, hint=hint, expected=expected, found=found)
 
     return fail
 
@@ -943,7 +1010,7 @@ class _Checker:
 
     def load(self, text: str, key: str | None, id: str | None, fail: Fail, *, root: bool) -> _Unit:
         if len(self.units) >= _MAX_FILES:
-            fail(f"more than {_MAX_FILES} schema files are imported", 0)
+            fail("too-many-files", f"more than {_MAX_FILES} schema files are imported", 0)
         parser = _SchemaParser(text, fail)
         imports, types = parser.parse_file()
         unit = _Unit(root, id, text, fail, parser.warnings)
@@ -966,7 +1033,7 @@ class _Checker:
 
         def check_new(name: str, pos: int) -> None:
             if name in unit.std or name in unit.scope:
-                fail(f"{name} is imported twice", pos)
+                fail("duplicate-import", f"{name} is imported twice", pos)
 
         if imp.module.startswith("std/"):
             names = STD_MODULES.get(imp.module)
@@ -974,6 +1041,7 @@ class _Checker:
                 listed = ", ".join(n for n, _ in imp.names)
                 moved = _MOVED_MODULES.get(imp.module)
                 fail(
+                    "unknown-module",
                     f"{imp.module} is no longer a standard module; it is the package {moved}: import {moved} ({listed})"
                     if moved
                     else f"unknown standard module {imp.module} (there is {', '.join(STD_MODULES)})",
@@ -981,66 +1049,87 @@ class _Checker:
                 )
             for name, pos in imp.names:
                 if name not in names:
-                    fail(f"{imp.module} has no type {name} (it has {', '.join(names)})", pos)
+                    fail("unknown-import", f"{imp.module} has no type {name} (it has {', '.join(names)})", pos)
                 check_new(name, pos)
                 unit.std[name] = name
             return
         if not _PACKAGE_OR_FILE.match(imp.module):
-            fail(f"unknown module {imp.module}: import std/…, a package @org/name or a file ./name", imp.pos)
+            fail(
+                "unknown-module",
+                f"unknown module {imp.module}: import std/…, a package @org/name or a file ./name",
+                imp.pos,
+            )
         dep = self.load_import(imp, key, fail)
         for name, pos in imp.names:
             if (d := dep.own.get(name)) is None:
                 has = f" (it has {', '.join(dep.own)})" if dep.own else ""
-                fail(f"{imp.module} has no type {name}{has}", pos)
+                fail("unknown-import", f"{imp.module} has no type {name}{has}", pos)
             check_new(name, pos)
             unit.scope[name] = d
 
     def load_import(self, imp: _ImportDecl, from_key: str | None, fail: Fail) -> _Unit:
         if self.resolver is None:
-            fail(f"can't import {imp.module}: no module resolver (only std modules can be imported here)", imp.pos)
+            fail(
+                "import-unavailable",
+                f"can't import {imp.module}: no module resolver (only std modules can be imported here)",
+                imp.pos,
+            )
         module = re.sub(r"@[0-9]+$", "", imp.module)
         try:
             r = self.resolver.resolve(module, from_key)
         except Exception as e:  # the resolver's own errors, reported at the import
-            fail(f"can't import {imp.module}: {e}", imp.pos)
+            fail("import-not-found", f"can't import {imp.module}: {e}", imp.pos)
         if (wanted := _WANTED_MAJOR.fullmatch(imp.module)) and r.version is not None:
             found = _MAJOR.match(r.version)
             if found is None or found[1] != wanted[1]:
-                fail(f"{imp.module} wants major version {wanted[1]}, but version {r.version} was found", imp.pos)
+                fail(
+                    "import-version",
+                    f"{imp.module} wants major version {wanted[1]}, but version {r.version} was found",
+                    imp.pos,
+                )
         if r.key in self.loading:
-            fail(f"import cycle: {imp.module} imports this file again", imp.pos)
+            fail("import-cycle", f"import cycle: {imp.module} imports this file again", imp.pos)
         if (cached := self.units.get(r.key)) is not None:
             return cached
         if r.id in self.ids and self.ids[r.id] != r.key:
             fail(
+                "duplicate-package",
                 f"{imp.module} is {r.id}, but another file already is: two copies or two packages with the same name"
                 f" ({r.key})",
                 imp.pos,
             )
 
         # Errors inside an imported file are reported at the import, with their place in that file.
-        def nested(reason: str, pos: int) -> Never:
-            at = HausSyntaxError.at(r.text, pos, reason)
-            fail(f"{imp.module} ({at.line}:{at.column}): {reason}", imp.pos)
+        def nested(
+            code: ErrorCode,
+            reason: str,
+            pos: int,
+            *,
+            hint: str | None = None,
+            expected: str | None = None,
+            found: str | None = None,
+        ) -> Never:
+            at = HausSyntaxError.at(r.text, pos, code, reason)
+            fail(code, f"{imp.module} ({at.line}:{at.column}): {reason}", imp.pos, hint=hint)
 
         return self.load(r.text, r.key, r.id, nested, root=False)
 
     def define(self, unit: _Unit, decl: _TypeDecl) -> None:
         fail = unit.fail
         if decl.name in unit.own:
-            fail(f"type {decl.name} is defined twice", decl.pos)
+            fail("duplicate-type", f"type {decl.name} is defined twice", decl.pos)
         if decl.name in unit.scope or decl.name in unit.std:
-            fail(f"type {decl.name} is already imported", decl.pos)
+            fail("duplicate-type", f"type {decl.name} is already imported", decl.pos)
         if decl.name in BUILTINS or decl.name in _PRELUDE_GENERIC:
-            fail(f"{decl.name} is a prelude type and can't be redefined", decl.pos)
+            fail("redefine-prelude", f"{decl.name} is a prelude type and can't be redefined", decl.pos)
         seen: set[str] = set()
         for p, pos in decl.params:
             if p == "_":
-                fail("_ can't be a parameter name", pos)
+                fail("invalid-parameter", "_ can't be a parameter name", pos)
             if not _PARAM.fullmatch(p):
-                fail(f"type parameter {p} must start with a lowercase letter", pos)
+                fail("invalid-parameter", f"type parameter {p} must start with a lowercase letter", pos)
             if p in seen:
-                fail(f"parameter {p} appears twice", pos)
+                fail("invalid-parameter", f"parameter {p} appears twice", pos)
             seen.add(p)
         d = _Def(decl, unit)
         unit.own[decl.name] = d
@@ -1053,7 +1142,7 @@ class _Checker:
         fail, params = d.unit.fail, d.params
         for n in _nodes(d.decl.body):
             if isinstance(n, _Var) and n.name not in params:
-                fail(f"unknown type parameter {n.name}", n.pos)
+                fail("unknown-parameter", f"unknown type parameter {n.name}", n.pos)
         # §9.10: a generic type refers to itself only with its own parameters.
         for n in _nodes(d.decl.body):
             if not isinstance(n, _App) or d.unit.scope.get(n.head) is not d:
@@ -1063,6 +1152,7 @@ class _Checker:
             ):
                 own = " ".join((d.decl.name, *params))
                 fail(
+                    "growing-recursion",
                     f"{d.decl.name} must refer to itself with its own parameters ({own}); "
                     "other arguments could grow without bound",
                     n.pos,
@@ -1075,8 +1165,8 @@ class _Checker:
         assert self.current is not None
         return self.current
 
-    def fail(self, reason: str, pos: int) -> Never:
-        self.unit.fail(reason, pos)
+    def fail(self, code: ErrorCode, reason: str, pos: int, *, hint: str | None = None) -> Never:
+        self.unit.fail(code, reason, pos, hint=hint)
 
     def definition_of(self, d: _Def) -> Definition:
         if d.definition is None:
@@ -1102,7 +1192,11 @@ class _Checker:
         if (inst := self.instances.get(key)) is not None:
             return inst
         if len(self.instances) >= _MAX_INSTANCES:
-            self.fail(f"more than {_MAX_INSTANCES} type instances: a generic type grows without bound", pos)
+            self.fail(
+                "growing-recursion",
+                f"more than {_MAX_INSTANCES} type instances: a generic type grows without bound",
+                pos,
+            )
         inst = Instance(self.definition_of(d), args, key)
         self.instances[key] = inst
         self.def_of[inst] = d
@@ -1115,7 +1209,9 @@ class _Checker:
             if inst.state == "done":
                 return
             if inst.state == "evaluating":
-                self.fail(f"type {d.decl.name} spreads itself (directly or through another type)", d.decl.pos)
+                self.fail(
+                    "spread-cycle", f"type {d.decl.name} spreads itself (directly or through another type)", d.decl.pos
+                )
             inst.state = "evaluating"
             env = dict(zip(d.params, inst.args, strict=True))
             match d.decl.body:
@@ -1123,7 +1219,7 @@ class _Checker:
                     inst.stream = True
                     inst.body = self.evaluate(item, env)
                 case _App("Stream", _, pos) | _Name("Stream", pos):
-                    self.fail("Stream needs 1 argument", pos)
+                    self.fail("wrong-arity", "Stream needs 1 argument", pos)
                 case body:
                     inst.body = self.evaluate(body, env)
             inst.state = "done"
@@ -1144,7 +1240,9 @@ class _Checker:
                 case RefType(inst):
                     if inst in seen:
                         self.fail(
-                            f"type {inst.name} refers to itself without a record, array or variant in between", pos
+                            "unguarded-recursion",
+                            f"type {inst.name} refers to itself without a record, array or variant in between",
+                            pos,
                         )
                     seen.add(inst)
                     t = self.body_of(inst)
@@ -1156,37 +1254,40 @@ class _Checker:
         if (d := unit.scope.get(name)) is not None:
             if d.params:
                 n = len(d.params)
-                self.fail(f"{name} needs {n} argument{_plural(n)} ({' '.join((name, *d.params))})", pos)
+                self.fail("wrong-arity", f"{name} needs {n} argument{_plural(n)} ({' '.join((name, *d.params))})", pos)
             return self.ref_to(self.instance(d, (), pos), pos)
         if name in unit.std:
             return StdType(name)
         if name in BUILTINS:
             return BuiltinType(name)
         if (arity := _PRELUDE_GENERIC.get(name)) is not None:
-            self.fail(f"{name} needs {arity} argument{_plural(arity)}", pos)
+            self.fail("wrong-arity", f"{name} needs {arity} argument{_plural(arity)}", pos)
         module = next((m for m, names in STD_MODULES.items() if name in names), None)
         if name in ("Money", "Currency"):
             module = "@haus-fmt/money"
         if name in ("LatLng", "BBox"):
             module = "@haus-fmt/geo"
-        self.fail(
-            f"unknown type {name}; import it with: import {module} ({name})"
-            + (f", and install {module} with your package manager" if module.startswith("@") else "")
-            if module
-            else f"unknown type {name}",
-            pos,
+        if module is None:
+            self.fail("unknown-type", f"unknown type {name}", pos)
+        how = f"import it with: import {module} ({name})" + (
+            f", and install {module} with your package manager" if module.startswith("@") else ""
         )
+        self.fail("unknown-type", f"unknown type {name}; {how}", pos, hint=f"I{how[1:]}.")
 
     def ref_to(self, inst: Instance, pos: int) -> RefType:
         if inst.state == "done" and inst.stream:
-            self.fail(f"{inst.name} is a Stream; a stream can only be the whole file, not part of a type", pos)
+            self.fail(
+                "misplaced-stream",
+                f"{inst.name} is a Stream; a stream can only be the whole file, not part of a type",
+                pos,
+            )
         self.pending_streams.append((inst, pos, self.unit))
         return RefType(inst)
 
     def evaluate(self, n: _Node, env: Mapping[str, Type]) -> Type:
         match n:
             case _Name("Stream", pos):
-                self.fail("Stream needs 1 argument", pos)
+                self.fail("wrong-arity", "Stream needs 1 argument", pos)
             case _Name(name, pos):
                 return self.lookup_name(name, pos)
             case _Var(name):
@@ -1201,7 +1302,7 @@ class _Checker:
     def apply(self, n: _App, env: Mapping[str, Type]) -> Type:
         if (arity := _PRELUDE_GENERIC.get(n.head)) is not None:
             if len(n.args) != arity:
-                self.fail(f"{n.head} needs {arity} argument{_plural(arity)}", n.pos)
+                self.fail("wrong-arity", f"{n.head} needs {arity} argument{_plural(arity)}", n.pos)
             args = [self.evaluate(x, env) for x in n.args]
             match n.head:
                 case "Array":
@@ -1218,16 +1319,22 @@ class _Checker:
                         open=False,
                     )
                 case _:
-                    self.fail("Stream can only be the whole type of a definition: type Events = Stream Event", n.pos)
+                    self.fail(
+                        "misplaced-stream",
+                        "Stream can only be the whole type of a definition: type Events = Stream Event",
+                        n.pos,
+                    )
         d = self.unit.scope.get(n.head)
         if d is None:
             if n.head in self.unit.std or n.head in BUILTINS:
-                self.fail(f"{n.head} takes no arguments", n.pos)
+                self.fail("wrong-arity", f"{n.head} takes no arguments", n.pos)
             return self.lookup_name(n.head, n.pos)
         if len(n.args) != len(d.params):
             own = " ".join((n.head, *d.params))
             self.fail(
-                f"{n.head} needs {len(d.params)} argument{_plural(len(d.params))} ({own}), got {len(n.args)}", n.pos
+                "wrong-arity",
+                f"{n.head} needs {len(d.params)} argument{_plural(len(d.params))} ({own}), got {len(n.args)}",
+                n.pos,
             )
         return self.ref_to(self.instance(d, tuple(self.evaluate(a, env) for a in n.args), n.pos), n.pos)
 
@@ -1236,21 +1343,25 @@ class _Checker:
         d = self.unit.scope.get(sp.name)
         if d is None:
             self.lookup_name(sp.name, sp.pos)  # reports unknown types, with an import hint
-            self.fail(f"{sp.name} can't be spread: only a named {want} can", sp.pos)
+            self.fail("invalid-spread", f"{sp.name} can't be spread: only a named {want} can", sp.pos)
         if d.params:
             own = " ".join((sp.name, *d.params))
-            self.fail(f"{sp.name} has parameters ({own}); only a type without parameters can be spread", sp.pos)
+            self.fail(
+                "invalid-spread",
+                f"{sp.name} has parameters ({own}); only a type without parameters can be spread",
+                sp.pos,
+            )
         inst = self.instance(d, (), sp.pos)
         t = self.resolve_ref(RefType(inst), sp.pos)
         if inst.stream:
-            self.fail(f"{sp.name} is a Stream and can't be spread", sp.pos)
+            self.fail("invalid-spread", f"{sp.name} is a Stream and can't be spread", sp.pos)
         match t:
             case RecordType() if want == "record":
                 return t
             case VariantType() if want == "variant":
                 return t
             case _:
-                self.fail(f"{sp.name} is not a {want}, so it can't be spread here", sp.pos)
+                self.fail("invalid-spread", f"{sp.name} is not a {want}, so it can't be spread here", sp.pos)
 
     def evaluate_record(self, n: _RecordNode, env: Mapping[str, Type]) -> RecordType:
         own = [(Field(f.key, f.optional, self.evaluate(f.type, env), f.attributes), "", f.pos) for f in n.fields]
@@ -1292,7 +1403,8 @@ class _Checker:
         for name, origin, pos in entries:
             if (before := seen.get(name)) is not None:
                 where = " and ".join(x for x in (before, origin) if x)
-                self.fail(f"{what} {name} appears twice" + (f" ({where})" if where else ""), pos)
+                code: ErrorCode = "duplicate-field" if what == "field" else "duplicate-tag"
+                self.fail(code, f"{what} {name} appears twice" + (f" ({where})" if where else ""), pos)
             seen[name] = origin
 
     # ── the whole check ──
@@ -1311,7 +1423,11 @@ class _Checker:
                 self.evaluate_instance(inst, owner)
         for inst, pos, unit in self.pending_streams:
             if inst.stream:
-                unit.fail(f"{inst.name} is a Stream; a stream can only be the whole file, not part of a type", pos)
+                unit.fail(
+                    "misplaced-stream",
+                    f"{inst.name} is a Stream; a stream can only be the whole file, not part of a type",
+                    pos,
+                )
         # §9.9: every cycle passes through a record, array or variant.
         for inst in list(self.instances.values()):
             self.current = self.def_of[inst].unit
@@ -1322,7 +1438,7 @@ class _Checker:
         imported = {name: self.definition_of(d) for name, d in root.scope.items() if d.unit is not root}
         instances = {name: templates[d] for name, d in root.scope.items()}
         located = (
-            (w, HausSyntaxError.at(text, w.pos, w.message))
+            (w, HausSyntaxError.at(text, w.pos, w.kind, w.message))
             for w in sorted([*root.warnings, *_deprecated_uses(root)], key=lambda w: w.pos)
         )
         warnings = tuple(SchemaWarning(w.kind, w.message, at.offset, w.end, at.line, at.column) for w, at in located)

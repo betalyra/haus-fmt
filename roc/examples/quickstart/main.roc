@@ -12,6 +12,7 @@ import pf.Stdout
 import haus.Decode
 import haus.Encode
 import haus.Int
+import haus.Value
 import Thread
 
 reply : Str
@@ -40,11 +41,11 @@ main! = |_args| {
 }
 
 ## What went wrong, with where.
-error : Try(a, [Decode(Decode.Error), Syntax({ reason : Str, line : U64, column : U64 })]) -> Str
+error : Try(a, [Decode(Decode.Error), Syntax(Value.ParseError)]) -> Str
 error = |result| match result {
 	Ok(_) => "no error"
 	Err(Decode(e)) => "error: ${Decode.message(e)}"
-	Err(Syntax({ reason, line, column })) => "error: ${line.to_str()}:${column.to_str()}: ${reason}"
+	Err(Syntax({ reason, line, column, .. })) => "error: ${line.to_str()}:${column.to_str()}: ${reason}"
 }
 
 author : Thread.Comment -> Str

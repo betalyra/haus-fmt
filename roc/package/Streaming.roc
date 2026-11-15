@@ -10,6 +10,7 @@
 ##     $reader = next
 ##     …
 ##     last = Streaming.finish($reader)?
+import ErrorCode
 import Value
 
 Streaming := [].{
@@ -79,7 +80,7 @@ Streaming := [].{
 		last = Value.parse_rest_with(text, rest.options.limits).map_err(|e| shift(e, rest.origin))?
 		if !last.is_empty() and rest.options.require_terminator {
 			end = after(rest.origin, rest.buf)
-			return Err({ reason: "stream ended without ',' after the last value (truncated?)", line: end.line, column: end.column })
+			return Err({ code: ErrorCode.stream_truncated, reason: "stream ended without ',' after the last value (truncated?)", line: end.line, column: end.column })
 		}
 		Ok(values.concat(last))
 	}
@@ -100,7 +101,7 @@ Streaming := [].{
 
 ## Whether this binding supports `limits` (spec §7), as an error at the start.
 supported : Value.Limits -> Try({}, Value.ParseError)
-supported = |limits| Value.check_limits(limits).map_err(|reason| { reason, line: 1, column: 1 })
+supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, line: 1, column: 1 })
 
 ## What the scanner is inside of. It only tracks what it needs to find the
 ## commas between values; the parser checks everything else.
@@ -117,7 +118,7 @@ scan = |start, last| {
 	var $go = True
 	while $go and $i < $s.buf.len() {
 		if $s.chars > $s.options.max_value_length {
-			return Err({ reason: "value longer than ${$s.options.max_value_length.to_str()} characters", line: $s.origin.line, column: $s.origin.column })
+			return Err({ code: ErrorCode.value_too_long, reason: "value longer than ${$s.options.max_value_length.to_str()} characters", line: $s.origin.line, column: $s.origin.column })
 		}
 		b = $s.buf
 		c = at(b, $i)
@@ -236,9 +237,9 @@ cut = |s, comma| {
 		Ok([v]) => v
 		Ok([]) => {
 			end = after(s.origin, piece)
-			return Err({ reason: "expected a value, found ','", line: end.line, column: end.column })
+			return Err({ code: ErrorCode.expected_value, reason: "expected a value, found ','", line: end.line, column: end.column })
 		}
-		Ok(_) => return Err({ reason: "expected ',' between top-level values", line: s.origin.line, column: s.origin.column })
+		Ok(_) => return Err({ code: ErrorCode.missing_comma, reason: "expected ',' between top-level values", line: s.origin.line, column: s.origin.column })
 		Err(e) => return Err(shift(e, s.origin))
 	}
 	origin = after(s.origin, piece.append(','))
@@ -256,7 +257,7 @@ unbalanced = |s, i| {
 				Err(e) => shift(e, s.origin)
 				Ok(_) => {
 					end = after(s.origin, s.buf.sublist({ start: 0, len: i }))
-					{ reason: "unexpected closing bracket", line: end.line, column: end.column }
+					{ code: ErrorCode.unexpected_closer, reason: "unexpected closing bracket", line: end.line, column: end.column }
 				}
 			}
 	}
@@ -268,20 +269,25 @@ unbalanced = |s, i| {
 directive : Str, Pos -> Try({}, Value.ParseError)
 directive = |text, origin|
 	if origin.line == 1 and origin.column <= 2 and Value.starts_with_directive(text) {
-		Err({ reason: Value.newer_version_reason, line: origin.line, column: origin.column })
+		Err({ code: ErrorCode.version_directive, reason: Value.newer_version_reason, line: origin.line, column: origin.column })
 	} else {
 		Ok({})
 	}
 
+## The text of `bytes`, or where they aren't UTF-8.
 utf8 : List(U8), Pos -> Try(Str, Value.ParseError)
 utf8 = |bytes, origin| match Str.from_utf8(bytes) {
 	Ok(text) => Ok(text)
-	Err(_) => Err({ reason: "invalid UTF-8", line: origin.line, column: origin.column })
+	Err(BadUtf8({ index, .. })) => {
+		end = after(origin, bytes.take_first(index))
+		Err({ code: ErrorCode.invalid_utf8, reason: "invalid UTF-8", line: end.line, column: end.column })
+	}
 }
 
 ## An error in a piece that starts at `origin` of the whole input.
 shift : Value.ParseError, Pos -> Value.ParseError
 shift = |e, origin| {
+	code: e.code,
 	reason: e.reason,
 	line: origin.line + e.line - 1,
 	column: if (e.line == 1) origin.column + e.column - 1 else e.column,
@@ -426,7 +432,7 @@ expect {
 }
 expect {
 	too_deep = { ..Streaming.defaults, limits: { ..Value.default_limits, max_depth: 1025 } }
-	error = { reason: "max_depth 1025 is more than the supported maximum, 1024", line: 1, column: 1 }
+	error = { code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", line: 1, column: 1 }
 	Streaming.push(Streaming.reader(too_deep), []).map_ok(|_| {}) == Err(error)
 		and Streaming.finish(Streaming.reader(too_deep)).map_ok(|_| {}) == Err(error)
 }
@@ -437,3 +443,23 @@ expect {
 	push = |text| Streaming.push(Streaming.reader(options), text.to_utf8()).map_ok(|(_, values)| values.len())
 	push("1234567890,\n 23456789,") == Ok(2) and push("12345678901,").is_err()
 }
+
+# Error codes (spec §17): the stream reader's own, and the parser's in each value.
+expect {
+	code = |chunks| Streaming.all(chunks.map(Str.to_utf8)).map_ok(|_| {}).map_err(|e| "${e.code} at ${e.line.to_str()}:${e.column.to_str()}")
+	code(["1,", ", 2,"]) == Err("expected-value at 1:3")
+		and code(["A,\nB\n", "(1),"]) == Err("payload-newline at 3:1")
+		and code(["1 ]", ","]) == Err("unexpected-closer at 1:3")
+		and code(["[1 2],"]) == Err("missing-comma at 1:4")
+		and code(["#haus 2,"]) == Err("version-directive at 1:1")
+		and code(["1,\n", "nul", "l,"]) == Err("null-literal at 2:1")
+}
+expect {
+	options = { ..Streaming.defaults, require_terminator: True, max_value_length: 3 }
+	finished = |text| match Streaming.push(Streaming.reader(options), text.to_utf8()) {
+		Ok((s, _)) => Streaming.finish(s).map_ok(|_| {}).map_err(|e| e.code)
+		Err(e) => Err(e.code)
+	}
+	finished("1,\n2") == Err("stream-truncated") and finished("1234,") == Err("value-too-long")
+}
+expect Streaming.all([[0x31, 0x2C, 0x0A, 0x22], [0xFF, 0x22, 0x2C]]).map_ok(|_| {}).map_err(|e| (e.code, e.line, e.column)) == Err(("invalid-utf8", 2, 2))

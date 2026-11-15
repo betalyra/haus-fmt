@@ -41,10 +41,13 @@ import {
 import type { Limits } from "@haus-fmt/haus/schema"
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
 import { codec, entries, isCodec, setId, type AnyCodec, type Checked, type Decoded, type Named } from "./codec.js"
+import {
+  atIndex as errorAt, CODE, conversionError, HausLimitsError, HausParseError, HausSchemaError, issueError, jsonError, limitsError, parseError, schemaErrorOf,
+  type HausError,
+} from "./errors.js"
 import { withCodecs } from "./schema-file.js"
 import {
-  checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decoding, encoding, isRedacted, NUMBER, POSITIONAL, PRELUDE_TAG,
-  secretMessage, UNKNOWN_TAG, VALUE,
+  checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decoding, encoding, NUMBER, POSITIONAL, PRELUDE_TAG, UNKNOWN_TAG, VALUE,
 } from "./convert.js"
 import { jsonTypeOf } from "./json.js"
 
@@ -74,70 +77,8 @@ export { MAX_SUPPORTED_DEPTH }
 
 // ── errors ───────────────────────────────────────────────────
 
-/** The text is not valid haus. */
-export class HausParseError extends Schema.TaggedError<HausParseError, { readonly brand: unique symbol }>()("HausParseError", {
-  message: Schema.String,
-  line: Schema.Int,
-  column: Schema.Int,
-}) {}
-
-/** Valid haus, but it doesn't match the schema. `index` is set for stream elements. */
-export class HausSchemaError extends Schema.TaggedError<HausSchemaError, { readonly brand: unique symbol }>()("HausSchemaError", {
-  message: Schema.String,
-  index: Schema.optionalKey(Schema.Int),
-  /** Where in the decoded value the error is: field names and array indexes (see `locateIssue`). */
-  path: Schema.optionalKey(Schema.Array(Schema.Union([Schema.String, Schema.Int]))),
-}) {}
-
-/** Limits that can't be used (spec §7): a `maxDepth` above `MAX_SUPPORTED_DEPTH` (512), or not a whole number. The message names the maximum. */
-export class HausLimitsError extends Schema.TaggedError<HausLimitsError, { readonly brand: unique symbol }>()("HausLimitsError", {
-  message: Schema.String,
-}) {}
-
-type Path = ReadonlyArray<string | number>
-
-/** The parts of an Effect schema issue read here. */
-interface IssueNode {
-  readonly path?: ReadonlyArray<PropertyKey>
-  readonly issue?: unknown
-  readonly issues?: ReadonlyArray<unknown>
-  readonly ast?: SchemaAST.AST
-}
-
-/** An issue, its first nested issue, and so on: the way to the first error. */
-function* firstIssues(issue: unknown): Generator<IssueNode> {
-  let node = issue as IssueNode | undefined
-  for (let i = 0; node && i < 1000; i++) {
-    yield node
-    node = (node.issue ?? node.issues?.[0]) as IssueNode | undefined
-  }
-}
-
-const keysOf = (node: IssueNode): Path => (node.path ?? []).filter((k): k is string | number => typeof k === "string" || typeof k === "number")
-
-/** The path of the first issue: the keys of nested Pointer issues. */
-const issuePath = (issue: unknown): Path => [...firstIssues(issue)].flatMap(keysOf)
-
-/**
- * An issue inside a `Schema.Redacted` (a `Secret`): its place, and a message
- * naming the type. Effect's own message there never shows the value, but
- * doesn't name the type either (spec §15 asks for both).
- */
-const secretIssue = (issue: unknown): Option.Option<{ readonly path: Path; readonly message: string }> => {
-  const path: Array<string | number> = []
-  for (const node of firstIssues(issue)) {
-    if (node.ast && isRedacted(node.ast)) return Option.some({ path, message: secretMessage(node.ast) })
-    path.push(...keysOf(node))
-  }
-  return Option.none()
-}
-
-/** An Effect schema error as a HausSchemaError, with its path. */
-const schemaError = (e: { readonly message: string; readonly issue: unknown }): HausSchemaError =>
-  Option.match(secretIssue(e.issue), {
-    onSome: conversionError,
-    onNone: () => new HausSchemaError({ message: e.message, path: [...issuePath(e.issue)] }),
-  })
+export { errorJson, HausLimitsError, HausParseError, HausSchemaError, type HausError } from "./errors.js"
+export type { ErrorCode, ErrorJson } from "@haus-fmt/haus"
 
 /**
  * Where a decode error is in the haus value: the innermost value the error's
@@ -152,10 +93,13 @@ export const locateIssue = (value: Value, path: ReadonlyArray<string | number>):
     else if (v.kind === "record") next = v.fields.get(String(key))
     else if (v.kind === "variant") {
       const [first] = v.args
-      if (key === "values" && typeof path[i + 1] === "number") next = v.args[path[++i] as number]
-      else if (v.args.length === 1 && first!.kind === "record") next = first!.fields.get(String(key))
-      else if (v.tag === "Some" && v.args.length === 1) (next = first), i--
+      const payload = v.args.length === 1 && first!.kind === "record" ? first! : undefined
+      if (v.tag === "Some" && v.args.length === 1 && key === "value") next = first
       else if (typeof key === "number") next = v.args[key]
+      else if (payload?.fields.has(key)) next = payload.fields.get(key)
+      else if (key === "values" && typeof path[i + 1] === "number") next = v.args[path[++i] as number]
+      // A payload `{ value: { … } }` (a record with a field `_tag`) is the record itself.
+      else if (payload !== undefined && key === "value") next = payload
     }
     if (next === undefined) return v
     v = next
@@ -163,12 +107,10 @@ export const locateIssue = (value: Value, path: ReadonlyArray<string | number>):
   return v
 }
 
-export type HausError = HausParseError | HausSchemaError | HausLimitsError
-
 /** Fail with a HausLimitsError for limits the binding can't honour (see `HausLimitsError`). */
 const checkLimits = (limits: Limits): Effect.Effect<void, HausLimitsError> => {
   const issue = limitsIssue(limits)
-  return issue === undefined ? Effect.void : Effect.fail(new HausLimitsError({ message: issue }))
+  return issue === undefined ? Effect.void : Effect.fail(limitsError(issue))
 }
 
 /** `effect`, after checking `limits`. */
@@ -176,8 +118,7 @@ const withLimits = <A, E, R>(limits: Limits, effect: Effect.Effect<A, E, R>): Ef
   Effect.andThen(checkLimits(limits), effect)
 
 /** Re-index a HausSchemaError of a stream element; other errors pass unchanged. */
-const atIndex = (index: number) => <E>(e: E | HausSchemaError): E | HausSchemaError =>
-  e instanceof HausSchemaError ? new HausSchemaError({ message: e.message, index, ...(e.path ? { path: e.path } : {}) }) : e
+const atIndex = (index: number) => <E>(e: E | HausSchemaError): E | HausSchemaError => (e instanceof HausSchemaError ? errorAt(e, index) : e)
 
 // ── Any ──────────────────────────────────────────────────────
 
@@ -189,12 +130,11 @@ const atIndex = (index: number) => <E>(e: E | HausSchemaError): E | HausSchemaEr
 export const Any = Schema.Any.annotate({ [VALUE]: true }) as unknown as Schema.Codec<Value>
 
 /** A syntax error of the core parser as a HausParseError. */
-const parseErrorOf = (e: unknown): Option.Option<HausParseError> =>
-  e instanceof HausSyntaxError ? Option.some(new HausParseError({ message: e.message, line: e.line, column: e.column })) : Option.none()
+const parseErrorOf = (e: unknown): Option.Option<HausParseError> => (e instanceof HausSyntaxError ? Option.some(parseError(e)) : Option.none())
 
-/** A conversion error as a HausSchemaError. */
-const conversionErrorOf = (e: unknown): Option.Option<HausSchemaError> =>
-  e instanceof ConversionError ? Option.some(conversionError(e)) : Option.none()
+/** A conversion error as a HausSchemaError, decoding `input` or encoding. */
+const conversionErrorOf = (input?: Value) => (e: unknown): Option.Option<HausSchemaError> =>
+  e instanceof ConversionError ? Option.some(conversionError(e, input)) : Option.none()
 
 /**
  * A synchronous step of the core or the converters (which report errors by
@@ -288,7 +228,7 @@ const stdTime = <S extends Schema.Top>(name: StdTimeType, schema: S) => setId(sc
 const timeString = <const Name extends StdTimeType>(name: Name) =>
   stdTime(
     name,
-    Schema.String.annotate({ [PRELUDE_TAG]: name }).check(Schema.makeFilter((s: string) => checkStdTime(name, s) ?? true)),
+    Schema.String.annotate({ [PRELUDE_TAG]: name }).check(Schema.makeFilter((s: string) => checkStdTime(name, s) ?? true, { [CODE]: "invalid-time" })),
   ) as Named<Schema.String, `std/time#${Name}`>
 
 /** `Date("2026-11-07")` as the ISO date string; encodes back to `Date("…")`. */
@@ -385,11 +325,6 @@ const target = <S extends Schema.Top>(schema: S, codecs: ReadonlyArray<AnyCodec>
   return withCodecs(schema, codecs) as S
 }
 
-/** A conversion error, with its path written as Effect writes it (`at ["items"][2]`). */
-const conversionError = ({ message, path }: { readonly message: string; readonly path: Path }): HausSchemaError =>
-  path.length === 0 ? new HausSchemaError({ message })
-  : new HausSchemaError({ message: `${message}\n  at ${path.map((k) => `[${JSON.stringify(k)}]`).join("")}`, path: [...path] })
-
 /**
  * Decode an already-parsed haus value. With codecs, their types replace the
  * named types they target (`Haus.decodeValue(Root, cents)`). The value is
@@ -405,9 +340,9 @@ export const decodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
     withLimits(
       limits,
       // Conversion work is bounded by the size of the input (see convert.ts).
-      fromSync(() => decoding(value, limits, convert), conversionErrorOf).pipe(
+      fromSync(() => decoding(value, limits, convert), conversionErrorOf(value)).pipe(
         Effect.flatMap((encoded) => decode(encoded, decodeOptions)),
-        Effect.mapError((e) => (e instanceof HausSchemaError ? e : schemaError(e))),
+        Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, value, "decode"))),
       ),
     ) as Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]>
 }
@@ -432,7 +367,7 @@ export const decode = <S extends Schema.Top, const C extends ReadonlyArray<AnyCo
     yield* checkLimits(limits)
     const values = yield* fromSync(() => parseAll(text, limits), parseErrorOf)
     if (values.length !== 1) {
-      return yield* new HausSchemaError({ message: `expected exactly one value, found ${values.length}` })
+      return yield* schemaErrorOf(`expected exactly one value, found ${values.length}`, "not-one-value")
     }
     return yield* fromValue(values[0]!, limits)
   })
@@ -447,8 +382,8 @@ export const convert = <S extends Schema.Top, const C extends ReadonlyArray<AnyC
   const decode = Schema.decodeUnknownEffect(target(schema, codecs))
   return (value: S["Type"]): Effect.Effect<Decoded<S, C>, HausSchemaError> =>
     encode(value).pipe(
-      Effect.flatMap((encoded) => decode(encoded, decodeOptions)),
-      Effect.mapError(schemaError),
+      Effect.mapError((e) => issueError(e, undefined, "encode")),
+      Effect.flatMap((encoded) => decode(encoded, decodeOptions).pipe(Effect.mapError((e) => issueError(e, undefined, "decode")))),
     ) as Effect.Effect<Decoded<S, C>, HausSchemaError>
 }
 
@@ -485,7 +420,7 @@ const decodeSource = <X, A, R>(
   function decode<E, R2>(source: Stream.Stream<string | Uint8Array, E, R2>, limits?: Limits): Stream.Stream<A, HausError | E, R | R2>
   function decode<E, R2>(source: ChunkSource | Stream.Stream<string | Uint8Array, E, R2>, limits: Limits = {}): Stream.Stream<A, HausError | E, R | R2> {
     const issue = limitsIssue(limits)
-    if (issue !== undefined) return Stream.fail(new HausLimitsError({ message: issue }))
+    if (issue !== undefined) return Stream.fail(limitsError(issue))
     const decoded = Stream.isStream(source)
       ? Stream.unwrap(
         Stream.toAsyncIterableEffect(
@@ -530,8 +465,8 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
     withLimits(
       limits,
       encode(value, { errors: "first" }).pipe(
-        Effect.mapError(schemaError),
-        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), conversionErrorOf)),
+        Effect.mapError((e) => issueError(e, undefined, "encode")),
+        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), conversionErrorOf())),
       ),
     ) as Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>
 }
@@ -594,13 +529,13 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
   return <E, R>(values: Stream.Stream<S["Type"], E, R>, options?: EncodeOptions): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
     const [format, limits] = withOptions(defaults, options)
     const issue = limitsIssue(limits)
-    if (issue !== undefined) return Stream.fail(new HausLimitsError({ message: issue }))
+    if (issue !== undefined) return Stream.fail(limitsError(issue))
     return values.pipe(
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toValue(value, limits).pipe(
           Effect.map((v) => stringify(v, { style: "compact", ...format }) + ",\n"),
-          Effect.mapError((e) => (e instanceof HausSchemaError ? new HausSchemaError({ message: e.message, index }) : e)),
+          Effect.mapError(atIndex(index)),
         )),
       Stream.withSpan("Haus.encodeStream"),
     )
@@ -611,7 +546,7 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
 
 /** A JSON mapping error of the core (JSON that doesn't fit, a value without a JSON form) as a HausSchemaError. */
 const jsonErrorOf = (e: unknown): Option.Option<HausSchemaError> =>
-  e instanceof HausDecodeError || e instanceof HausEncodeError ? Option.some(conversionError({ message: e.reason, path: e.path })) : Option.none()
+  e instanceof HausDecodeError || e instanceof HausEncodeError ? Option.some(jsonError(e)) : Option.none()
 
 /** The plain JSON form of a schema with codecs: the form of its encoded side. */
 const jsonForm = (schema: Schema.Top, codecs: ReadonlyArray<AnyCodec>): JsonType => jsonTypeOf(SchemaAST.toEncoded(target(schema, codecs).ast))
@@ -706,7 +641,7 @@ export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyAr
   const toJsonOf = jsonEncoder<S, C>(schema, codecs)
   return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, limits: Limits = {}): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
     const issue = limitsIssue(limits)
-    if (issue !== undefined) return Stream.fail(new HausLimitsError({ message: issue }))
+    if (issue !== undefined) return Stream.fail(limitsError(issue))
     return values.pipe(
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>

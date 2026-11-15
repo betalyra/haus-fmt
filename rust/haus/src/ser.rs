@@ -2,7 +2,7 @@
 //! (spec §11: one value per line, normal spacing), which checks what it writes.
 
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::{Codec, EncodeError, Limits, Secret, Segment, Value};
+use crate::{Codec, EncodeError, ErrorCode as Code, Limits, Secret, Segment, Value};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
@@ -76,7 +76,7 @@ impl Encoder {
 
     /// A number literal, if the writer takes it.
     pub fn number(self, text: &str) -> R {
-        Ok(Value::Number(normalized(text, &self.limits).map_err(EncodeError::new)?.into_owned()))
+        Ok(Value::Number(normalized(text, &self.limits)?.into_owned()))
     }
 
     /// A tag without a payload: `None`, `Circle`, if it is a tag name within
@@ -120,7 +120,7 @@ impl Encoder {
 pub(crate) fn open(limits: &Limits, depth: usize) -> Result<usize, EncodeError> {
     supported(limits)?;
     match depth >= limits.max_depth {
-        true => Err(EncodeError::new(format!("nesting deeper than {} levels", limits.max_depth))),
+        true => Err(EncodeError::new(Code::NestingTooDeep, format!("nesting deeper than {} levels", limits.max_depth))),
         false => Ok(depth + 1),
     }
 }
@@ -128,7 +128,7 @@ pub(crate) fn open(limits: &Limits, depth: usize) -> Result<usize, EncodeError> 
 /// Whether this binding supports `limits` (spec §7): an error naming
 /// [`crate::MAX_SUPPORTED_DEPTH`] if the depth limit is above it.
 pub(crate) fn supported(limits: &Limits) -> Result<(), EncodeError> {
-    limits.unsupported().map_or(Ok(()), |reason| Err(EncodeError::new(reason)))
+    limits.unsupported().map_or(Ok(()), |reason| Err(EncodeError::new(Code::UnsupportedDepth, reason)))
 }
 
 /// A variant value. Doesn't check `tag`.
@@ -223,7 +223,8 @@ pub fn result<A, E>(
 /// value, nor where in it, since a key of a `Map` or an `Any` in the path
 /// could reveal it (spec §15).
 pub fn secret<T>(s: &Secret<T>, e: Encoder, what: &str, f: impl FnOnce(&T, Encoder) -> R) -> R {
-    f(s.expose(), e).map_err(|_| EncodeError::new(format!("not a valid {what} (the value is hidden)")))
+    f(s.expose(), e)
+        .map_err(|_| EncodeError::new(Code::InvalidSecret, format!("not a valid {what} (the value is hidden)")))
 }
 
 /// A type with a codec: back to its base type, then encoded.
@@ -403,7 +404,7 @@ impl Writer<'_> {
     fn scalar(&mut self, v: &Value) -> W {
         match v {
             Value::Number(n) => {
-                let text = number(n, self.limits).map_err(EncodeError::new)?;
+                let text = number(n, self.limits)?;
                 self.out.push_str(&text);
             }
             Value::String(s) => {
@@ -476,42 +477,49 @@ impl Writer<'_> {
 pub(crate) fn unique_keys(fields: &[(String, Value)]) -> W {
     let mut seen = HashSet::with_capacity(fields.len());
     match fields.iter().find(|(k, _)| !seen.insert(k.as_str())) {
-        Some((k, _)) => Err(EncodeError::new("the key is used twice in this record").within(Segment::Field(k.clone()))),
+        Some((k, _)) => Err(EncodeError::new(Code::DuplicateKey, "the key is used twice in this record")
+            .within(Segment::Field(k.clone()))),
         None => Ok(()),
     }
 }
 
 /// Whether a record key is within the string limit (spec §7).
 pub(crate) fn check_key(k: &str, limits: &Limits) -> W {
-    check_text(k, "key", limits)
+    check_text(k, Code::KeyTooLong, limits)
 }
 
 /// Whether a tag is a tag name, within the string limit (spec §4, §7).
 pub(crate) fn check_tag(tag: &str, limits: &Limits) -> W {
     if !is_tag(tag) {
-        return Err(EncodeError::new("not a tag name: A to Z, then letters, digits and _"));
+        return Err(EncodeError::new(Code::InvalidTag, "not a tag name: A to Z, then letters, digits and _"));
     }
-    check_text(tag, "tag", limits)
+    check_text(tag, Code::TagTooLong, limits)
 }
 
-/// Whether a string, key or tag (`what`) is within the string limit.
-fn check_text(s: &str, what: &str, limits: &Limits) -> W {
+/// Whether a string, key or tag (`code` says which) is within the string limit.
+fn check_text(s: &str, code: Code, limits: &Limits) -> W {
     let max = limits.max_string_length;
     if s.len() > max && s.chars().count() > max {
-        return Err(EncodeError::new(format!("{what} longer than {max} characters")));
+        let what = match code {
+            Code::KeyTooLong => "key",
+            Code::TagTooLong => "tag",
+            _ => "string",
+        };
+        return Err(EncodeError::new(code, format!("{what} longer than {max} characters")));
     }
     Ok(())
 }
 
 /// Whether a string is within the string limit.
 fn check_length(s: &str, limits: &Limits) -> W {
-    check_text(s, "string", limits)
+    check_text(s, Code::StringTooLong, limits)
 }
 
 /// Whether a byte string's hex is within the string limit.
 fn check_bytes(b: &[u8], limits: &Limits) -> W {
     if b.len() > limits.max_string_length / 2 {
-        return Err(EncodeError::new(format!("byte string longer than {} characters", limits.max_string_length)));
+        let reason = format!("byte string longer than {} characters", limits.max_string_length);
+        return Err(EncodeError::new(Code::StringTooLong, reason));
     }
     Ok(())
 }
@@ -531,7 +539,7 @@ pub(crate) fn key(k: &str, out: &mut String) {
 /// The text a number is written as, for a reader with `limits`, or why it
 /// can't be written: its normalized literal (spec §2), in hex if it is an
 /// integer longer than the number limit.
-fn number<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, String> {
+fn number<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, EncodeError> {
     let n = normalized(text, limits)?;
     if n.len() <= limits.max_number_length {
         return Ok(n);
@@ -542,9 +550,12 @@ fn number<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, String> {
 
 /// A number's normalized literal (spec §2), always in decimal, if it can be
 /// written for a reader with `limits` (an integer longer than the number
-/// limit in hex): `1E5` is `1e5`; `abc` is an error.
-pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, String> {
-    let too_long = || format!("number literal longer than {} characters", limits.max_number_length);
+/// limit in hex): `1E5` is `1e5`; `abc` is an error (`cannot-encode`).
+pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, EncodeError> {
+    let too_long = || {
+        let reason = format!("number literal longer than {} characters", limits.max_number_length);
+        EncodeError::new(Code::NumberTooLong, reason)
+    };
     let n: Cow<str> = if is_normalized(text) {
         text.into()
     } else if text.len() > limits.max_number_length {
@@ -552,12 +563,17 @@ pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, s
     } else {
         // The exponent is checked below, on the normalized literal.
         let syntax = Limits { max_exponent: u64::MAX, ..*limits };
-        crate::parser::number_literal(text, &syntax).ok_or("not a number literal")?.into()
+        crate::parser::number_literal(text, &syntax)
+            .ok_or_else(|| EncodeError::new(Code::CannotEncode, "not a number literal"))?
+            .into()
     };
     if let Some((_, exp)) = n.split_once('e') {
         let digits = exp.trim_start_matches('-');
         if digits.len() > 19 || digits.parse::<u64>().map_or(true, |e| e > limits.max_exponent) {
-            return Err(format!("exponent larger than {}", limits.max_exponent));
+            return Err(EncodeError::new(
+                Code::ExponentTooLarge,
+                format!("exponent larger than {}", limits.max_exponent),
+            ));
         }
     }
     if n.len() <= limits.max_number_length {

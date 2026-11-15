@@ -1,14 +1,15 @@
 //! The schema conformance suite (test-suite/schema, spec §14, §15), run on
 //! the runtime checker.
 //!
-//! Each case is `Ok { type, input, output? }` or `Err { type, input }`. Ok:
-//! decoding `input` with `type` succeeds, giving a value equal to `output`
+//! Each case is `Ok { type, input, output? }` or `Err { type, input, code }`.
+//! Ok: decoding `input` with `type` succeeds, giving a value equal to `output`
 //! (or `input`) that the writer takes; checking it finds no error. Err:
-//! decoding fails, and checking finds an error. Every case runs on each
-//! schema twice: as written, and without its attributes, which must not
-//! change any result.
+//! decoding fails with the error code `code` (spec §17), and checking finds an
+//! error with that code. Every case runs on each schema twice: as written,
+//! and without its attributes, which must not change any result.
 //!
-//! `invalid/*.schema.haus` must be rejected (spec §14).
+//! `invalid/*.schema.haus` must be rejected (spec §14), with the code in
+//! `invalid/NAME.error`.
 
 use haus::{Value, canonical};
 use haus_schema::{Options, Schema, Severity};
@@ -21,6 +22,8 @@ struct Case {
     ty: String,
     input: Value,
     output: Value,
+    /// For an `Err`, the code it fails with.
+    code: String,
 }
 
 impl Case {
@@ -40,6 +43,11 @@ impl Case {
                 ty: ty.clone(),
                 input: input.clone(),
                 output: fields.get("output").unwrap_or(input).clone(),
+                code: match fields.get("code") {
+                    Some(Value::String(code)) => code.clone(),
+                    _ if ok => String::new(),
+                    _ => return Err(format!("an Err case without a code: {}", canonical(v))),
+                },
             }),
             _ => Err(format!("not a case: {}", canonical(v))),
         }
@@ -67,6 +75,12 @@ impl Case {
             (true, Err(e)) => Some(format!("failed to decode: {e}")),
             (false, Ok(out)) => Some(format!("decoded, expected an error (as {})", canonical(&out))),
             (false, Err(_)) if errors.is_empty() => Some("fails to decode, but the check finds no error".into()),
+            (false, Err(e)) if e.code.as_str() != self.code => {
+                Some(format!("fails with {} ({e}), expected {}", e.code, self.code))
+            }
+            (false, Err(_)) if errors.iter().all(|i| i.code.as_str() != self.code) => {
+                Some(format!("the check reports {}, expected {}", errors[0].code, self.code))
+            }
             (false, Err(_)) => None,
         }
     }
@@ -114,10 +128,19 @@ fn schema_conformance() {
 
 #[test]
 fn invalid_schemas_are_rejected() {
-    let accepted: Vec<String> = files(&suite().join("invalid"), ".schema.haus")
+    let failures: Vec<String> = files(&suite().join("invalid"), ".schema.haus")
         .iter()
-        .filter(|path| Schema::parse(&fs::read_to_string(path).unwrap()).is_ok())
-        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .filter_map(|path| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let expected = fs::read_to_string(path.with_extension("").with_extension("error")).unwrap();
+            match Schema::parse(&fs::read_to_string(path).unwrap()) {
+                Ok(_) => Some(format!("{name}: accepted")),
+                Err(e) if e.code().as_str() != expected.trim() => {
+                    Some(format!("{name}: {} ({e}), expected {}", e.code(), expected.trim()))
+                }
+                Err(_) => None,
+            }
+        })
         .collect();
-    assert!(accepted.is_empty(), "invalid schemas were accepted:\n{}", accepted.join("\n"));
+    assert!(failures.is_empty(), "invalid schemas:\n{}", failures.join("\n"));
 }

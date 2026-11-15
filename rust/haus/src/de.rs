@@ -4,7 +4,7 @@
 //! Decoding is linear in the input (spec §9): records are indexed once, and a
 //! variant's case is chosen by its tag, never by trying cases in turn.
 
-use crate::{Codec, DecodeError, Limits, Secret, Value};
+use crate::{Codec, DecodeError, ErrorCode as Code, Limits, Secret, Value};
 use std::collections::{BTreeMap, HashMap};
 
 type R<T> = Result<T, DecodeError>;
@@ -61,9 +61,27 @@ pub fn describe(v: &Value) -> String {
     }
 }
 
-/// `expected <what>, found <v>`.
+/// `expected <what>, found <v>`: a value of another kind (`type-mismatch`).
 pub fn mismatch(what: &str, v: &Value) -> DecodeError {
-    DecodeError::new(format!("expected {what}, found {}", describe(v)))
+    mismatch_as(Code::TypeMismatch, what, v)
+}
+
+/// `expected <what>, found <v>`, with `code`.
+fn mismatch_as(code: Code, what: &str, v: &Value) -> DecodeError {
+    let found = describe(v);
+    DecodeError::new(code, format!("expected {what}, found {found}")).with_expected_found(what, found)
+}
+
+/// `v` isn't one of the cases of a closed variant with `tags` (`Bool`,
+/// `Maybe`, `Result`): an unknown tag, a known tag with the wrong payload, or
+/// not a variant at all (spec §17).
+fn not_case(what: &str, v: &Value, tags: &[&str]) -> DecodeError {
+    let code = match v {
+        Value::Variant { tag, .. } if tags.contains(&tag.as_str()) => Code::WrongPayload,
+        Value::Variant { .. } => Code::UnknownTag,
+        _ => Code::TypeMismatch,
+    };
+    mismatch_as(code, what, v)
 }
 
 // ── records ──────────────────────────────────────────────────
@@ -97,7 +115,10 @@ impl<'a> Record<'a> {
     /// A closed record has only the fields listed.
     pub fn closed(&self, known: &[&str]) -> R<()> {
         match self.fields.iter().find(|(k, _)| !known.contains(&k.as_str())) {
-            Some((k, _)) => Err(self.at(DecodeError::new(format!("unknown field {k:?} in a closed record")))),
+            Some((k, _)) => {
+                let e = DecodeError::new(Code::UnknownField, format!("unknown field {k:?} in a closed record"));
+                Err(self.at(e.field(k)))
+            }
             None => Ok(()),
         }
     }
@@ -105,7 +126,10 @@ impl<'a> Record<'a> {
     pub fn required<T>(&self, key: &str, f: impl FnOnce(&Value) -> R<T>) -> R<T> {
         match self.index.get(key) {
             Some(v) => f(v).map_err(|e| self.at(e.field(key))),
-            None => Err(self.at(DecodeError::new(format!("missing field {key}")))),
+            None => {
+                let e = DecodeError::new(Code::MissingField, format!("missing field {key}"));
+                Err(self.at(e.with_expected(format!("the field '{key}'"))))
+            }
         }
     }
 
@@ -128,11 +152,13 @@ pub fn variant<'a>(v: &'a Value, what: &str) -> R<(&'a str, &'a [Value])> {
 /// The payload of `tag`: exactly `N` values.
 pub fn args<'a, const N: usize>(tag: &str, args: &'a [Value]) -> R<&'a [Value; N]> {
     args.try_into().map_err(|_| {
-        DecodeError::new(match N {
-            0 => format!("{tag} takes no payload"),
-            1 => format!("{tag} takes one value, found {}", args.len()),
-            n => format!("{tag} takes {n} values, found {}", args.len()),
-        })
+        let (reason, expected) = match N {
+            0 => (format!("{tag} takes no payload"), "no payload".to_owned()),
+            1 => (format!("{tag} takes one value, found {}", args.len()), "one value".to_owned()),
+            n => (format!("{tag} takes {n} values, found {}", args.len()), format!("{n} values")),
+        };
+        DecodeError::new(Code::WrongPayload, reason)
+            .with_expected_found(expected, format!("{} argument(s)", args.len()))
     })
 }
 
@@ -144,12 +170,17 @@ pub fn arg<T>(tag: &str, i: usize, v: &Value, f: impl FnOnce(&Value) -> R<T>) ->
 /// The record payload of `Tag { … }`.
 pub fn payload<'a>(tag: &'a str, args: &'a [Value]) -> R<Record<'a>> {
     let [v] = self::args::<1>(tag, args)?;
-    Record::new(v, tag).map(|r| Record { tag: Some(tag), ..r }).map_err(|e| e.tag(tag))
+    match v {
+        Value::Record(_) => Record::new(v, tag).map(|r| Record { tag: Some(tag), ..r }),
+        _ => Err(mismatch(&format!("a record ({tag} {{ … }})"), v).tag(tag)),
+    }
 }
 
 /// A tag a closed variant doesn't list.
 pub fn unknown_tag(tag: &str, known: &[&str]) -> DecodeError {
-    DecodeError::new(format!("unknown tag {tag}; expected one of {}", known.join(", ")))
+    let expected = format!("one of {}", known.join(", "));
+    DecodeError::new(Code::UnknownTag, format!("unknown tag {tag}; expected {expected}"))
+        .with_expected_found(expected, tag)
 }
 
 /// A tag an open variant doesn't list: kept as it was (spec §9: untrusted).
@@ -212,7 +243,7 @@ pub fn maybe<T>(v: &Value, f: impl FnOnce(&Value) -> R<T>) -> R<Option<T>> {
     match variant(v, "Maybe")? {
         ("None", []) => Ok(None),
         ("Some", [x]) => f(x).map(Some).map_err(|e| e.index(0).tag("Some")),
-        _ => Err(mismatch("None or Some(…)", v)),
+        _ => Err(not_case("None or Some(…)", v, &["None", "Some"])),
     }
 }
 
@@ -221,7 +252,7 @@ pub fn result<A, E>(v: &Value, ok: impl FnOnce(&Value) -> R<A>, err: impl FnOnce
     match variant(v, "Result")? {
         ("Ok", [x]) => ok(x).map(Ok).map_err(|e| e.index(0).tag("Ok")),
         ("Err", [x]) => err(x).map(Err).map_err(|e| e.index(0).tag("Err")),
-        _ => Err(mismatch("Ok(…) or Err(…)", v)),
+        _ => Err(not_case("Ok(…) or Err(…)", v, &["Ok", "Err"])),
     }
 }
 
@@ -229,12 +260,17 @@ pub fn result<A, E>(v: &Value, ok: impl FnOnce(&Value) -> R<A>, err: impl FnOnce
 /// isn't a valid `what` (`Secret String`), never what was found or where in
 /// it (spec §15). The path to the secret itself is added on the way out.
 pub fn secret<T>(v: &Value, what: &str, f: impl FnOnce(&Value) -> R<T>) -> R<Secret<T>> {
-    f(v).map(Secret::new).map_err(|_| DecodeError::new(format!("not a valid {what} (the value is hidden)")))
+    f(v).map(Secret::new).map_err(|_| hidden(what))
+}
+
+/// The error for a `Secret` (`what`) whose value doesn't decode: nothing of the value (spec §15).
+pub(crate) fn hidden(what: &str) -> DecodeError {
+    DecodeError::new(Code::InvalidSecret, format!("not a valid {what} (the value is hidden)"))
 }
 
 /// A type decoded by a codec: its base type first, then the codec (spec §13.4).
 pub fn codec<C: Codec>(v: &Value) -> R<C::Target> {
-    C::decode(C::Base::decode(v)?).map_err(DecodeError::new)
+    C::decode(C::Base::decode(v)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
 }
 
 impl<T: Decode> Decode for Vec<T> {
@@ -298,7 +334,7 @@ impl Decode for bool {
         match variant(v, "Bool")? {
             ("True", []) => Ok(true),
             ("False", []) => Ok(false),
-            _ => Err(mismatch("True or False", v)),
+            _ => Err(not_case("True or False", v, &["True", "False"])),
         }
     }
 }
@@ -311,17 +347,23 @@ fn whole(text: &str) -> Option<&str> {
     is_whole.then_some(if digits == "0" { digits } else { text })
 }
 
+/// A number with a fraction or an exponent where an integer type (`name`) is expected.
+fn not_whole(name: &str, text: &str) -> DecodeError {
+    DecodeError::new(Code::NotAnInteger, format!("expected a whole number ({name}), found {text}"))
+        .with_expected_found(name, text)
+}
+
 macro_rules! integers {
     ($($t:ty => $name:literal),*) => {$(
         impl Decode for $t {
             fn decode(v: &Value) -> R<Self> {
                 let Value::Number(text) = v else { return Err(mismatch(concat!("a number (", $name, ")"), v)) };
-                let Some(n) = whole(text) else {
-                    return Err(DecodeError::new(format!("expected a whole number ({}), found {text}", $name)));
-                };
-                n.parse().map_err(|_| DecodeError::new(format!(
-                    "{text} is out of range for {} ({} to {})", $name, <$t>::MIN, <$t>::MAX
-                )))
+                let Some(n) = whole(text) else { return Err(not_whole($name, text)) };
+                n.parse().map_err(|_| {
+                    let range = format!("{} ({} to {})", $name, <$t>::MIN, <$t>::MAX);
+                    DecodeError::new(Code::OutOfRange, format!("{text} is out of range for {range}"))
+                        .with_expected_found(range, text.as_str())
+                })
             }
         }
     )*};
@@ -340,8 +382,9 @@ macro_rules! floats {
                 match v {
                     Value::Number(text) => match text.parse::<$t>() {
                         Ok(x) if x.is_finite() => Ok(x),
-                        Ok(_) => Err(DecodeError::new(format!("{text} is too large for {}", $name))),
-                        Err(_) => Err(DecodeError::new(format!("{text} is not a {}", $name))),
+                        Ok(_) => Err(DecodeError::new(Code::OutOfRange, format!("{text} is too large for {}", $name))
+                            .with_expected_found($name, text.as_str())),
+                        Err(_) => Err(DecodeError::new(Code::TypeMismatch, format!("{text} is not a {}", $name))),
                     },
                     Value::Variant { tag, args } if args.is_empty() && tag == "NaN" => Ok(<$t>::NAN),
                     Value::Variant { tag, args } if args.is_empty() && tag == "Infinity" => Ok(<$t>::INFINITY),
@@ -414,7 +457,7 @@ impl Decode for Int {
         match v {
             Value::Number(text) => match whole(text) {
                 Some(n) => Ok(Int(n.to_owned())),
-                None => Err(DecodeError::new(format!("expected a whole number (Int), found {text}"))),
+                None => Err(not_whole("Int", text)),
             },
             _ => Err(mismatch("a number (Int)", v)),
         }

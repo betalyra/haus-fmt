@@ -62,9 +62,9 @@ pub mod plain {{
         ::haus::json::to_string(&x).map_err(|e| format!("can't write it as JSON: {{e}}"))
     }}
 
-    fn read_as<T: ::haus::FromJson + ::haus::Encode>(json: &str) -> Result<::haus::Value, String> {{
-        let x = ::haus::json::from_str::<T>(json).map_err(|e| e.to_string())?;
-        ::haus::Encode::encode(&x).map_err(|e| e.to_string())
+    fn read_as<T: ::haus::FromJson + ::haus::Encode>(json: &str) -> Result<::haus::Value, ::haus::Error> {{
+        let x = ::haus::json::from_str::<T>(json)?;
+        Ok(::haus::Encode::encode(&x)?)
     }}
 
     /// Decode `x` with the type `ty`, and write the result as plain JSON;
@@ -77,7 +77,7 @@ pub mod plain {{
 
     /// Read the plain JSON `x` with the type `ty`, and encode the result;
     /// None if there is no such type.
-    pub fn read(ty: &str, x: &str) -> Option<Result<::haus::Value, String>> {{
+    pub fn read(ty: &str, x: &str) -> Option<Result<::haus::Value, ::haus::Error>> {{
         Some(match ty {{
 {read}            _ => return None,
         }})
@@ -140,7 +140,7 @@ fn module(name: &str, text: &str) -> String {
         r#"    /// Encode a decoded value again: an error says so, as a decode error.
     #[allow(dead_code)]
     fn encode<T: ::haus::Encode>(x: &T) -> Result<::haus::Value, ::haus::DecodeError> {{
-        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(format!("can't encode it again: {{e}}")))
+        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(e.code, format!("can't encode it again: {{e}}")))
     }}
 
     /// Decode `v` with the type `ty`, then encode the result; None if the schema has no such type.

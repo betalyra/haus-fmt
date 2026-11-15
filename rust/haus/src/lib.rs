@@ -35,6 +35,8 @@ mod canonical;
 mod codec;
 pub mod de;
 mod error;
+#[rustfmt::skip]
+mod error_codes;
 mod float;
 mod formatter;
 pub mod json;
@@ -50,7 +52,7 @@ pub use canonical::{Hasher, hash, hash_all};
 pub use canonical::{canonical, compare, equals};
 pub use codec::{Codec, same_id};
 pub use de::{AnyTag, Bytes, Decimal, Decode, Decoder, Int, Unknown};
-pub use error::{DecodeError, EncodeError, Error, Segment, SyntaxError};
+pub use error::{DecodeError, EncodeError, Error, ErrorCategory, ErrorCode, ErrorJson, Segment, SyntaxError};
 pub use formatter::{FormatOptions, Style, format};
 pub use json::{FromJson, Json, ToJson};
 pub use parser::{Limits, MAX_SUPPORTED_DEPTH, parse_with};
@@ -78,7 +80,7 @@ pub fn parse_bytes(src: &[u8]) -> Result<Vec<Value>, SyntaxError> {
         Ok(s) => parse(s),
         Err(e) => {
             let valid = std::str::from_utf8(&src[..e.valid_up_to()]).unwrap_or_default();
-            Err(SyntaxError::at(valid, e.valid_up_to(), "invalid UTF-8"))
+            Err(SyntaxError::at(valid, e.valid_up_to(), ErrorCode::InvalidUtf8, "invalid UTF-8"))
         }
     }
 }
@@ -87,7 +89,9 @@ pub fn parse_bytes(src: &[u8]) -> Result<Vec<Value>, SyntaxError> {
 pub fn from_str<T: Decode>(src: &str) -> Result<T, Error> {
     match parse(src)?.as_slice() {
         [v] => Ok(T::decode(v)?),
-        vs => Err(DecodeError::new(format!("expected one value, found {}", vs.len())).into()),
+        vs => Err(DecodeError::new(ErrorCode::NotOneValue, format!("expected one value, found {}", vs.len()))
+            .with_expected_found("one value", format!("{} values", vs.len()))
+            .into()),
     }
 }
 

@@ -8,6 +8,10 @@
 ##
 ##     ToJson.to_str({ id: 1 }, |u| ToJson.object([("id", Present(ToJson.i32(u.id)))]))
 ##     # Ok("{\"id\":1}")
+##
+## Its errors have the codes of spec §17 (`ErrorCode`), like `Encode`'s, and
+## `no-json-form` for a record payload with a field named `_tag`.
+import ErrorCode
 import Int
 import JsonValue
 import Secret
@@ -27,7 +31,7 @@ ToJson := [].{
 	## `Value.max_supported_depth`.
 	to_str_with : a, (a -> Try(JsonValue, Encode.Error)), Value.Limits -> Try(Str, Encode.Error)
 	to_str_with = |x, writer, limits| {
-		Value.check_limits(limits).map_err(|reason| { reason, path: "" })?
+		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
 		JsonValue.to_str_with(writer(x)?, limits)
 	}
 
@@ -39,7 +43,7 @@ ToJson := [].{
 	## `lines` for a reader with other limits (see `to_str_with`).
 	lines_with : List(a), (a -> Try(JsonValue, Encode.Error)), Value.Limits -> Try(Str, Encode.Error)
 	lines_with = |values, writer, limits| {
-		Value.check_limits(limits).map_err(|reason| { reason, path: "" })?
+		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
 		var $out = []
 		var $i = 0.U64
 		for v in values {
@@ -107,7 +111,7 @@ ToJson := [].{
 		written = Encode.to_str(Num(text))?
 		match Value.parse(written) {
 			Ok(Num(n)) => Ok(String(n))
-			_ => Err({ reason: "not a number literal", path: "" })
+			_ => Err({ code: ErrorCode.cannot_encode, reason: "not a number literal", path: "" })
 		}
 	}
 
@@ -131,7 +135,7 @@ ToJson := [].{
 	secret : Secret(a), Str, (a -> Try(JsonValue, Encode.Error)) -> Try(JsonValue, Encode.Error)
 	secret = |s, what, writer| match writer(s.expose()) {
 		Ok(j) => Ok(j)
-		Err(_) => Err({ reason: "not a valid ${what} (the value is hidden)", path: "" })
+		Err(_) => Err({ code: ErrorCode.invalid_secret, reason: "not a valid ${what} (the value is hidden)", path: "" })
 	}
 
 	# ── containers ──────────────────────────────────────────
@@ -152,7 +156,7 @@ ToJson := [].{
 	map = |entries, writer| {
 		var $out = []
 		for (k, x) in entries {
-			$out = $out.append((k, within(writer(x), ".${k}")?))
+			$out = $out.append((k, within(writer(x), ErrorCode.path_key(k))?))
 		}
 		Ok(Object($out))
 	}
@@ -218,7 +222,7 @@ ToJson := [].{
 	unknown : Str, List(Value) -> Try(JsonValue, Encode.Error)
 	unknown = |tag, args| {
 		if !JsonValue.is_tag_name(tag) {
-			return Err({ reason: "not a tag name: A to Z, then letters, digits and _", path: "" })
+			return Err({ code: ErrorCode.invalid_tag, reason: "not a tag name: A to Z, then letters, digits and _", path: "" })
 		}
 		if args.is_empty() {
 			return Ok(Object([("_tag", String(tag))]))
@@ -234,11 +238,11 @@ ToJson := [].{
 
 	## A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
 	no_plain_form : Str -> Try(JsonValue, Encode.Error)
-	no_plain_form = |tag| Err({ reason: "${tag} has a field named _tag, so it has no plain JSON form", path: "" })
+	no_plain_form = |tag| Err({ code: ErrorCode.no_json_form, reason: "${tag} has a field named _tag, so it has no plain JSON form", path: "" })
 }
 
 within : Try(a, Encode.Error), Str -> Try(a, Encode.Error)
-within = |result, segment| result.map_err(|{ reason, path }| { reason, path: "${segment}${path}" })
+within = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
 
 ## The members of an object, leaving out missing optional fields.
 members : List((Str, [Missing, Present(Try(JsonValue, Encode.Error))])) -> Try(List((Str, JsonValue)), Encode.Error)
@@ -247,7 +251,7 @@ members = |fields| {
 	for (key, field) in fields {
 		match field {
 			Present(j) => {
-				$out = $out.append((key, within(j, ".${key}")?))
+				$out = $out.append((key, within(j, ErrorCode.path_key(key))?))
 			}
 			Missing => {}
 		}
@@ -276,15 +280,18 @@ expect ToJson.to_str(Some(5), |m| ToJson.maybe(m, False, ToJson.i32)) == Ok("5")
 expect ToJson.to_str(Ok(1), |r| ToJson.result(r, ToJson.i32, ToJson.str)) == Ok("{\"_tag\":\"Ok\",\"value\":1}")
 expect ToJson.to_str({ id: 1, nick: Missing }, |u| ToJson.object([("id", Present(ToJson.i32(u.id))), ("nick", ToJson.optional(u.nick, ToJson.str))])) == Ok("{\"id\":1}")
 expect ToJson.unknown("Hexagon", [Num("1")]).map_ok(JsonValue.to_str) == Ok(Ok("{\"_tag\":\"Hexagon\",\"args\":[{\"num\":\"1\"}]}"))
-expect ToJson.unknown("Hexagon", [Num("x")]) == Err({ reason: "not a number literal", path: ".args[0]" })
+expect ToJson.unknown("Hexagon", [Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: ".args[0]" })
 expect ToJson.lines([1, 2], ToJson.u8) == Ok("1\n2\n")
 
 # Writing for a reader with other limits.
 small : Value.Limits
 small = { ..Value.default_limits, max_depth: 2, max_string_length: 3 }
 
-expect ToJson.to_str_with("abc", ToJson.str, small) == Ok("\"abc\"") and ToJson.to_str_with("abcd", ToJson.str, small) == Err({ reason: "string longer than 3 characters", path: "" })
-expect ToJson.lines_with(["a", "abcd"], ToJson.str, small) == Err({ reason: "string longer than 3 characters", path: "[1]" })
+expect ToJson.to_str_with("abc", ToJson.str, small) == Ok("\"abc\"") and ToJson.to_str_with("abcd", ToJson.str, small) == Err({ code: "string-too-long", reason: "string longer than 3 characters", path: "" })
+expect ToJson.lines_with(["a", "abcd"], ToJson.str, small) == Err({ code: "string-too-long", reason: "string longer than 3 characters", path: "[1]" })
 expect ToJson.lines_with(["a", "b"], ToJson.str, small) == Ok("\"a\"\n\"b\"\n")
-expect ToJson.to_str_with("a", ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
-expect ToJson.lines_with([], ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect ToJson.to_str_with("a", ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect ToJson.lines_with([], ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect ToJson.unknown("hexagon", []).map_err(|e| e.code) == Err("invalid-tag") and ToJson.no_plain_form("Odd").map_err(|e| e.code) == Err("no-json-form")
+expect ToJson.to_str(Secret.new("x"), |s| ToJson.secret(s, "Secret Decimal", ToJson.decimal)).map_err(|e| (e.code, e.reason)) == Err(("invalid-secret", "not a valid Secret Decimal (the value is hidden)"))
+expect ToJson.to_str([("pt-BR", "1E5x")], |m| ToJson.map(m, ToJson.decimal)).map_err(|e| (e.code, ErrorCode.place(e.path))) == Err(("cannot-encode", "$[\"pt-BR\"]"))

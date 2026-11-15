@@ -1,7 +1,7 @@
 [package]
 name = "haus-schema-fuzz"
 version = "0.0.0"
-description = "The Rust runners of the schema and JSON fuzzers (fuzz/README.md): the code haus-fmt-build generates"
+description = "The Rust runners of the schema and JSON fuzzers (fuzz/README.md): the code haus-fmt-build generates, and haus-fmt-schema's runtime checker"
 edition = "2024"
 publish = false
 
@@ -16,8 +16,13 @@ path = "src/main.rs"
 name = "json_runner"
 path = "src/json_runner.rs"
 
+[[bin]]
+name = "check_runner"
+path = "src/check_runner.rs"
+
 [dependencies]
 haus = { package = "haus-fmt", path = "../../rust/haus" }
+haus-schema = { package = "haus-fmt-schema", path = "../../rust/haus-schema" }
 
 [build-dependencies]
 haus-fmt-build = { path = "../../rust/haus-build" }

@@ -5,7 +5,7 @@
 //!   writing the result gives `json`, and reading `json` gives a value that
 //!   encodes to `output` (or `input`).
 //! - `Read { type, json, output }`: reading `json` gives `output`.
-//! - `Err { type, json }`: reading `json` fails.
+//! - `Err { type, json, code }`: reading `json` fails with the error code `code` (spec §17).
 //!
 //! JSON is compared as data: member order and whitespace don't matter, and
 //! numbers compare by their text.
@@ -48,6 +48,8 @@ struct Case {
     json: String,
     input: Option<Value>,
     output: Option<Value>,
+    /// For an `Err`, the code it fails with.
+    code: Option<String>,
 }
 
 impl Case {
@@ -71,6 +73,7 @@ impl Case {
             json: text("json")?,
             input: fields.get("input").cloned(),
             output: fields.get("output").cloned(),
+            code: text("code").ok(),
         })
     }
 
@@ -108,6 +111,9 @@ impl Case {
             (Kind::Read, _, Some(output)) => expect_read(output),
             (Kind::Err, None, None) => match read() {
                 Ok(Ok(v)) => Some(format!("read as {}, expected an error", canonical(&v))),
+                Ok(Err(e)) if e.code().map(|c| c.as_str()) != self.code.as_deref() => {
+                    Some(format!("fails with {:?} ({e}), expected {:?}", e.code(), self.code))
+                }
                 Ok(Err(_)) => None,
                 Err(e) => Some(e),
             },

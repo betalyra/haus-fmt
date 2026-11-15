@@ -6,7 +6,7 @@
 
 use crate::de::{Decode, mismatch, variant};
 use crate::ser::{self, Encode};
-use crate::{DecodeError, Value};
+use crate::{DecodeError, ErrorCode, Value};
 use std::fmt;
 
 macro_rules! types {
@@ -39,8 +39,12 @@ macro_rules! types {
             fn decode(v: &Value) -> Result<Self, DecodeError> {
                 const NAME: &str = stringify!($name);
                 match variant(v, NAME)? {
-                    (NAME, [Value::String(s)]) => $name::new(s.as_str()).map_err(|e| DecodeError::new(e).index(0).tag(NAME)),
-                    (NAME, _) => Err(DecodeError::new(concat!("write ", stringify!($name), "(\"…\") with one string"))),
+                    (NAME, [Value::String(s)]) => $name::new(s.as_str())
+                        .map_err(|e| DecodeError::new(ErrorCode::InvalidTime, e).index(0).tag(NAME)),
+                    (NAME, _) => Err(DecodeError::new(
+                        ErrorCode::TypeMismatch,
+                        concat!("write ", stringify!($name), "(\"…\") with one string"),
+                    )),
                     _ => Err(mismatch(NAME, v)),
                 }
             }

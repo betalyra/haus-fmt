@@ -28,15 +28,15 @@ haus.parse_bytes(open("data.haus", "rb").read())  # UTF-8 checked, BOM skipped
 
 Values are `Number`, `String`, `Bytes`, `Array`, `Record` and `Variant`, frozen dataclasses you can `match` on. Equality follows the spec: record field order doesn't matter, `1.0 != 1`, and `Tag { … }` equals `Tag({ … })`.
 
-Errors are `haus.HausSyntaxError`, a `ValueError` with `reason`, `line` and `column`:
+Errors are `haus.HausSyntaxError`, a `ValueError` with a `code`, `reason`, `line` and `column` (see [Error codes](#error-codes)):
 
 ```python
 haus.parse("{ ok: true }")
 # HausSyntaxError: unexpected identifier 'true': lowercase identifiers can only be
-# record keys (booleans are the variants True / False) at 1:7
+# record keys (booleans are the variants True / False) at 1:7; its code is boolean-literal
 ```
 
-Limits are configurable with `haus.Limits(max_depth=…, max_number_length=…, max_exponent=…, max_string_length=…)` (spec §7); the string limit counts record keys and tags too. `max_depth` is at most `haus.MAX_SUPPORTED_DEPTH`, 512: a larger one is a `ValueError` naming the maximum when the `Limits` are made. The parser, the decoders and the JSON mappings recurse, a few Python frames per level, so they raise Python's recursion limit when it is too low for the depth (never lowering it): 512 levels work even when called from deep inside an application. The canonical form doesn't recurse.
+Limits are configurable with `haus.Limits(max_depth=…, max_number_length=…, max_exponent=…, max_string_length=…)` (spec §7); the string limit counts record keys and tags too. `max_depth` is at most `haus.MAX_SUPPORTED_DEPTH`, 512: a larger one is a `haus.HausLimitsError` (a `ValueError`, code `unsupported-depth`) naming the maximum when the `Limits` are made. The parser, the decoders and the JSON mappings recurse, a few Python frames per level, so they raise Python's recursion limit when it is too low for the depth (never lowering it): 512 levels work even when called from deep inside an application. The canonical form doesn't recurse.
 
 ## Streams
 
@@ -241,6 +241,46 @@ A codec is any object with `decode(value)` and `encode(value)` working on the de
 
 `schema.parse_schema_file(text, …)` gives the checked file without building decoders: its definitions (with `doc`, `source`, `attributes` and `id`), the resolved types, imports and warnings. `schema.without_attributes(text)` blanks every attribute out (positions stay), which never changes decoding (spec §15).
 
+## Error codes
+
+Every error has a **code** from the spec's catalogue (§17, [`errors.md`](https://github.com/betalyra/haus-fmt/tree/main/spec/errors.md)): a short name such as `payload-newline`, `null-literal` or `missing-field` that says which mistake was made. Messages are for people and may change; codes are for programs, tools and agents, never change and are the same in every haus binding. Match on them:
+
+```python
+try:
+    order = schema["Order"].parse(text)
+except haus.HausError as e:
+    if e.code == "missing-field":
+        ...
+    print(json.dumps(e.to_json()))
+```
+
+All errors derive from `haus.HausError` (a `ValueError`): `HausSyntaxError` (haus text, and `HausSchemaFileError` for schema files), `haus.HausJsonError` (JSON), `haus.schema.HausDecodeError` and `HausEncodeError` (values that don't fit a type), and `haus.HausLimitsError`. Each has
+
+| Attribute | |
+|---|---|
+| `code` | the code, e.g. `payload-newline` |
+| `reason` | what went wrong, without the position |
+| `line`, `column` | the position, for errors in text (haus, a schema file, JSON text) |
+| `path` | the place in the value, for decoding errors: `("items", 2, "price")`, written `$.items[2].price` |
+| `expected`, `found` | what should be there and what is, where that is natural (else `None`) |
+| `hint` | a concrete fix: the catalogue's fix for the code, or a better one for the case at hand |
+| `docs` | `https://haus-fmt.org/docs/errors#<code>` |
+
+and `to_json()`, the JSON form of §17, with the members that apply:
+
+```python
+try:
+    haus.parse_all("Heartbeat\n{ at: 1 }")  # a forgotten comma: the payload must be on the tag's line
+except haus.HausSyntaxError as e:
+    e.to_json()
+# {"code": "payload-newline", "message": "expected ',' between top-level values, found '{'",
+#  "line": 2, "column": 1, "expected": "','", "found": "'{'",
+#  "hint": "Put the payload on the same line as Heartbeat, or add a comma if they are two values.",
+#  "docs": "https://haus-fmt.org/docs/errors#payload-newline"}
+```
+
+An error inside a `Secret` has the code `invalid-secret` and nothing of the value in any member. Schema warnings (`SchemaWarning`) have a `code` (`unknown-attribute`, `deprecated`), `hint`, `docs` and `to_json()` too. `haus.ERROR_CODES` maps every code to its category and fix (`haus.ErrorCode` is their `Literal` type, `haus.is_error_code(s)` checks a string). It is generated from the catalogue's source, [`spec/errors.haus`](../spec/errors.haus): after changing that, run `uv run python tests/test_error_codes.py`; the tests fail while the table and the catalogue differ.
+
 ## Development
 
 ```sh
@@ -249,4 +289,4 @@ uv run pytest            # unit tests and the shared conformance suites in ../te
 uv run ruff check . && uv run mypy && uv run pyright
 ```
 
-The parser, the stream reader and `canonical` also run in the [differential fuzzer](../fuzz) against the Lean reference and the Rust, Roc and TypeScript bindings, and so do the std/time check (`node fuzz/src/time.ts`) and schema decoding (`node fuzz/src/main.ts --schema`, through [`fuzz/schema_runner.py`](fuzz/schema_runner.py)). The std/time profile (`haus._time`) and float rounding and spelling (`haus._float`, spec §15) are the building blocks of schema decoding; floats are rounded to binary32 exactly, from the decimal, never through binary64.
+The parser, the stream reader and `canonical` also run in the [differential fuzzer](../fuzz) against the Lean reference and the Rust, Roc and TypeScript bindings, error codes included, and so do the std/time check (`node fuzz/src/time.ts`) and schema decoding (`node fuzz/src/main.ts --schema`, through [`fuzz/schema_runner.py`](fuzz/schema_runner.py)). The std/time profile (`haus._time`) and float rounding and spelling (`haus._float`, spec §15) are the building blocks of schema decoding; floats are rounded to binary32 exactly, from the decimal, never through binary64.

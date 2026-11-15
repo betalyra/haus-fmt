@@ -19,7 +19,7 @@
 
 use crate::error::Position;
 use crate::parser::{parse_rest, parse_single};
-use crate::{Decode, Encode, Error, Limits, Segment, SyntaxError, Value, to_string_with};
+use crate::{Decode, Encode, Error, ErrorCode, Limits, Segment, SyntaxError, Value, to_string_with};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 
@@ -120,7 +120,7 @@ impl Reader {
         if !rest.is_empty() && self.options.require_terminator {
             let end = self.origin.after(text);
             let reason = "stream ended without ',' after the last value (truncated?)";
-            return Err(SyntaxError { reason: reason.into(), offset: end.offset, line: end.line, column: end.column });
+            return Err(SyntaxError::new(ErrorCode::StreamTruncated, reason, end).with_expected("','"));
         }
         out.extend(rest);
         Ok(out)
@@ -129,7 +129,7 @@ impl Reader {
     /// Whether this binding supports the limits (spec §7).
     fn supported(&self) -> Result<(), SyntaxError> {
         match self.options.limits.unsupported() {
-            Some(reason) => Err(SyntaxError::at("", 0, reason)),
+            Some(reason) => Err(SyntaxError::at("", 0, ErrorCode::UnsupportedDepth, reason)),
             None => Ok(()),
         }
     }
@@ -143,8 +143,7 @@ impl Reader {
         while i < self.buf.len() {
             if self.chars > self.options.max_value_length {
                 let reason = format!("value longer than {} characters", self.options.max_value_length);
-                let at = self.origin;
-                return Err(SyntaxError { reason, offset: at.offset, line: at.line, column: at.column });
+                return Err(SyntaxError::new(ErrorCode::ValueTooLong, reason, self.origin));
             }
             let c = self.buf[i];
             // `step` bytes are part of the value; 0: wait for more input.
@@ -262,7 +261,7 @@ impl Reader {
         std::str::from_utf8(bytes).map_err(|e| {
             let valid = std::str::from_utf8(&bytes[..e.valid_up_to()]).unwrap_or_default();
             let at = self.origin.after(valid);
-            SyntaxError { reason: "invalid UTF-8".into(), offset: at.offset, line: at.line, column: at.column }
+            SyntaxError::new(ErrorCode::InvalidUtf8, "invalid UTF-8", at)
         })
     }
 
@@ -270,8 +269,10 @@ impl Reader {
     fn unbalanced(&self, at: usize) -> SyntaxError {
         let error = |text: &str| match parse_single(text, &self.options.limits, self.at_file_start()) {
             Err(e) => e.from(self.origin),
-            Ok(_) => SyntaxError::at(text, at - self.start, format!("unexpected '{}'", self.buf[at] as char))
-                .from(self.origin),
+            Ok(_) => {
+                let reason = format!("unexpected '{}'", self.buf[at] as char);
+                SyntaxError::at(text, at - self.start, ErrorCode::UnexpectedCloser, reason).from(self.origin)
+            }
         };
         match self.text(at + 1) {
             Ok(text) => error(text),

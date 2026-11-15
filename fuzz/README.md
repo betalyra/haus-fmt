@@ -32,8 +32,8 @@ but not which error a parser reports first, so they may differ. Error codes
 are compared where positions agree: an error at the same place is the same
 mistake. A runner that reports codes prints `err <line> <column> <code>
 <reason>` and is marked `{ codes: true }` in `runners.ts`; the others print
-`err <line> <column> <reason>`, and their codes aren't compared. Today Lean
-and TypeScript report codes.
+`err <line> <column> <reason>`, and their codes aren't compared. Today Lean,
+TypeScript, Python, Roc and Rust report codes.
 
 ## The runners
 
@@ -146,6 +146,7 @@ tests the check: `node --test fuzz/src/`.
 | TypeScript | in this process: `compileSchemaFile`, `h.decode`, `h.encode` |
 | Effect | in this process: `Haus.compileSchemaFile`, `decodeValue`, `encodeValue` |
 | Rust | [`schema-rust`](schema-rust): the code haus-fmt-build generates for each schema |
+| Rust (`rust-check`) | [`schema-rust/src/check_runner.rs`](schema-rust/src/check_runner.rs): haus-fmt-schema's runtime checker, `Schema::decode` |
 | Roc | [`roc/schema_runner.roc`](roc/schema_runner.roc), with the modules `haus-gen roc` generates ([`roc/gen_schemas.ts`](roc/gen_schemas.ts)) |
 | Python | [`python/fuzz/schema_runner.py`](../python/fuzz/schema_runner.py): `haus.schema.compile_schema`, `decode`, `encode` |
 
@@ -155,7 +156,7 @@ runner both report an error code (spec §17) at the same place, the codes must
 agree too: Lean's `--schema-batch` prints `err <place> <code> <reason>`, and a
 runner made with `external(…, codes = true)` in
 [`src/schema-runners.ts`](src/schema-runners.ts) is read the same way
-(TypeScript reports codes in this process; the others not yet). Lossy host types (Effect's
+(TypeScript and Effect report codes in this process, and Python, Roc and both Rust runners are made so). Lossy host types (Effect's
 `BigDecimal` and `DateTime`) are opt-in codecs that the runners don't use.
 
 ## JSON
@@ -219,10 +220,10 @@ members, elements and characters, haus as for schema decoding.
 |---|---|
 | Lean | `haus-ref --json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
 | TypeScript | in this process: `h.decode` and `h.toJson`, `h.fromJson` and `h.encode`, `toLosslessJson`, `fromLosslessJson`, `fromJson` |
-| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson` |
+| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson`; errors with their codes, not compared yet (Lean's JSON modes print no codes) |
 | Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-fmt-build generates, `haus::json::to_string` and `from_str`, `haus::to_lossless_json`, `from_lossless_json`, `from_json` |
-| Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
-| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json` |
+| Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue`; errors as `err <place> <code> <reason>`, not compared yet (Lean's JSON modes print no codes) |
+| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json`; errors as `err <place> <code> <reason>`, not compared yet (Lean's JSON modes print no codes) |
 
 The output of a run ends with the number of cases each mode accepted, and
 `fuzz/.out/json/coverage.txt` has it per type for `write` and `read`.

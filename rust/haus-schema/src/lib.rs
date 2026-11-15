@@ -55,36 +55,42 @@ pub use packages::Packages;
 pub use resolve::{Definition, Options, Schema};
 pub use types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
 
+use haus::ErrorCode;
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
-/// What went wrong, and where: `src/order.schema.haus:3:5: unknown type Strin`.
+/// What went wrong, and where: `src/order.schema.haus:3:5: unknown type Strin`,
+/// with its code (spec §17).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     path: Option<PathBuf>,
     /// Line and column, 1-based.
     position: Option<(usize, usize)>,
     reason: String,
-    /// The error's code in the spec's catalogue (spec/errors.haus), once
-    /// codes are assigned to schema errors. None for now.
-    code: Option<&'static str>,
+    code: ErrorCode,
+    hint: Option<String>,
 }
 
 impl Error {
     /// An error without a place.
-    pub fn new(reason: impl Display) -> Error {
-        Error { path: None, position: None, reason: reason.to_string(), code: None }
+    pub fn new(code: ErrorCode, reason: impl Display) -> Error {
+        Error { path: None, position: None, reason: reason.to_string(), code, hint: None }
     }
 
     /// An error about the file at `path`.
-    pub fn at(path: &Path, reason: impl Display) -> Error {
-        Error::new(reason).in_file(path)
+    pub fn at(path: &Path, code: ErrorCode, reason: impl Display) -> Error {
+        Error::new(code, reason).in_file(path)
     }
 
     /// The same error, in the file at `path`.
     pub fn in_file(self, path: &Path) -> Error {
         Error { path: Some(path.to_owned()), ..self }
+    }
+
+    /// The same error, with a fix for this case, better than the code's.
+    pub fn with_hint(self, hint: impl Into<String>) -> Error {
+        Error { hint: Some(hint.into()), ..self }
     }
 
     /// The file it is in, if known.
@@ -102,15 +108,46 @@ impl Error {
         &self.reason
     }
 
-    /// The error's code in the spec's catalogue, when it has one.
-    pub fn code(&self) -> Option<&'static str> {
+    /// Which mistake it is (spec §17): `unknown-type`, or for a warning
+    /// `unknown-attribute` or `deprecated`.
+    pub fn code(&self) -> ErrorCode {
         self.code
+    }
+
+    /// A concrete fix: the one for this case, or the catalogue's for the code.
+    pub fn hint(&self) -> &str {
+        self.hint.as_deref().unwrap_or(self.code.hint())
+    }
+
+    /// The documentation of the code: `https://haus-fmt.org/docs/errors#<code>`.
+    pub fn docs(&self) -> String {
+        self.code.docs()
+    }
+
+    /// The JSON form of spec §17: `{ code, message, line?, column?, hint, docs }`.
+    pub fn to_json(&self) -> String {
+        haus::ErrorJson {
+            code: self.code,
+            message: &self.reason,
+            position: self.position,
+            path: None,
+            expected: None,
+            found: None,
+            hint: self.hint(),
+        }
+        .write()
     }
 }
 
 impl From<syntax::Error> for Error {
     fn from(e: syntax::Error) -> Error {
-        Error { path: None, position: Some((e.line, e.column)), reason: e.reason, code: None }
+        // A well-known type that needs its import: `unknown type Date (import it with: import std/time (Date))`.
+        let hint = e
+            .reason
+            .split_once("(import it with: ")
+            .and_then(|(_, rest)| rest.strip_suffix(')'))
+            .map(|how| format!("Import it with: {how}."));
+        Error { position: Some((e.line, e.column)), hint, ..Error::new(e.code, e.reason) }
     }
 }
 
@@ -133,17 +170,11 @@ pub type Warning = Error;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// Tells Cargo to rerun the build script when `path` changes (only in a build script).
-fn rerun_if_changed(path: &Path) {
-    if env::var_os("OUT_DIR").is_some() {
-        println!("cargo::rerun-if-changed={}", path.display());
-    }
-}
-
 fn read(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|e| Error::at(path, e))
+    fs::read_to_string(path).map_err(|e| Error::at(path, ErrorCode::ImportNotFound, e))
 }
 
 fn var(key: &str) -> Result<String> {
-    env::var(key).map_err(|_| Error::new(format!("{key} is not set: haus-fmt-build runs in a build script")))
+    let reason = format!("{key} is not set: haus-fmt-build runs in a build script");
+    env::var(key).map_err(|_| Error::new(ErrorCode::ImportUnavailable, reason))
 }

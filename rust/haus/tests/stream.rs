@@ -4,7 +4,7 @@
 use haus::stream::{Options, Reader, decode, encode, values};
 use haus::{Limits, SyntaxError, Value};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn tag(t: &str) -> Value {
     Value::Variant { tag: t.into(), args: vec![] }
@@ -18,7 +18,7 @@ fn chunked(bytes: &[u8], size: usize) -> Result<Vec<Value>, SyntaxError> {
     Ok(out)
 }
 
-fn suite(dir: &str) -> Vec<Vec<u8>> {
+fn paths(dir: &str) -> Vec<PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite").join(dir);
     let mut paths: Vec<_> = fs::read_dir(dir)
         .unwrap()
@@ -26,7 +26,11 @@ fn suite(dir: &str) -> Vec<Vec<u8>> {
         .filter(|p| p.extension().is_some_and(|e| e == "haus"))
         .collect();
     paths.sort();
-    paths.iter().map(|p| fs::read(p).unwrap()).collect()
+    paths
+}
+
+fn suite(dir: &str) -> Vec<Vec<u8>> {
+    paths(dir).iter().map(|p| fs::read(p).unwrap()).collect()
 }
 
 #[test]
@@ -39,11 +43,19 @@ fn any_chunking_gives_the_same_values() {
     }
 }
 
+/// With the code of `NAME.error` (spec §17).
 #[test]
 fn invalid_input_is_rejected_in_any_chunking() {
-    for bytes in suite("invalid") {
+    for path in paths("invalid") {
+        let bytes = fs::read(&path).unwrap();
+        let expected = fs::read_to_string(path.with_extension("error")).unwrap().trim().to_owned();
         for size in [1, 5, bytes.len().max(1)] {
-            assert!(chunked(&bytes, size).is_err(), "chunk size {size} accepted: {}", String::from_utf8_lossy(&bytes));
+            match chunked(&bytes, size) {
+                Ok(_) => panic!("chunk size {size} accepted: {}", String::from_utf8_lossy(&bytes)),
+                Err(e) => {
+                    assert_eq!(e.code.as_str(), expected, "chunk size {size}: {e}: {}", String::from_utf8_lossy(&bytes))
+                }
+            }
         }
     }
 }
@@ -180,8 +192,8 @@ fn invalid_input_after_a_byte_order_mark_has_the_parser_positions() {
         for size in [1, 5, bytes.len()] {
             let e = chunked(&bytes, size).unwrap_err();
             assert_eq!(
-                (e.line, e.column),
-                (whole.line, whole.column),
+                (e.line, e.column, e.code),
+                (whole.line, whole.column, whole.code),
                 "chunk size {size}: {}",
                 String::from_utf8_lossy(&bytes)
             );

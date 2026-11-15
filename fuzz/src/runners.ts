@@ -141,15 +141,15 @@ const typescriptStream: Runner = {
 
 export const runners: readonly Runner[] = [
   external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--batch"], { codes: true }),
-  external("rust", join(root, "rust/target/release/examples/fuzz_runner")),
-  external("roc", join(root, "fuzz/.build/roc-runner")),
+  external("rust", join(root, "rust/target/release/examples/fuzz_runner"), [], { codes: true }),
+  external("roc", join(root, "fuzz/.build/roc-runner"), [], { codes: true }),
   typescript,
-  external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py")]),
+  external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py")], { codes: true }),
   // The stream readers, on the same inputs in chunks: they must give what parsing the whole input gives.
-  external("rust-stream", join(root, "rust/target/release/examples/fuzz_runner"), ["--stream"]),
-  external("roc-stream", join(root, "fuzz/.build/roc-runner"), ["--stream"]),
+  external("rust-stream", join(root, "rust/target/release/examples/fuzz_runner"), ["--stream"], { codes: true }),
+  external("roc-stream", join(root, "fuzz/.build/roc-runner"), ["--stream"], { codes: true }),
   typescriptStream,
-  external("python-stream", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py"), "--stream"]),
+  external("python-stream", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py"), "--stream"], { codes: true }),
 ]
 
 /**
@@ -158,10 +158,10 @@ export const runners: readonly Runner[] = [
  */
 export const canonicalRunners: readonly Runner[] = [
   external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--canonical-batch"], { codes: true }),
-  external("rust", join(root, "rust/target/release/examples/fuzz_runner"), ["--canonical"]),
-  external("roc", join(root, "fuzz/.build/roc-runner"), ["--canonical"]),
+  external("rust", join(root, "rust/target/release/examples/fuzz_runner"), ["--canonical"], { codes: true }),
+  external("roc", join(root, "fuzz/.build/roc-runner"), ["--canonical"], { codes: true }),
   { name: "typescript", run: (_dir, cases) => cases.map((bytes) => result(() => parseAll(utf8.decode(bytes)), canonical)) },
-  external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py"), "--canonical"]),
+  external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py"), "--canonical"], { codes: true }),
 ]
 
 /** The runners in use: the parsers, or with `--canonical` the canonical forms. */

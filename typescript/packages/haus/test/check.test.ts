@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { fileURLToPath } from "node:url"
-import { checkData, parseSchemaFile, parseWithLocations, schemaReference } from "../src/index.js"
+import { checkData, compileSchemaFile, parseSchemaFile, parseWithLocations, schemaReference } from "../src/index.js"
+import * as h from "../src/schema.js"
 import { schemaOptions } from "../src/node.js"
 
 const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, import.meta.url))
@@ -68,6 +69,26 @@ describe("checkData", () => {
       `error "x": expected Int, found the string "x"`,
       `error "n": expected None or Some(…) (Maybe String), found the string "n"`,
     ])
+  })
+
+  it("a float literal too large for its type is out of range, as when decoding (spec §15)", () => {
+    const schema = `type Root = { f64: Float64, f32: Float32 }`
+    const codes = (data: string) => checkData(parseSchemaFile(schema), "Root", parseWithLocations(data)).map((i) => `${i.code} ${data.slice(i.start, i.end)}`)
+    expect(codes(`{ f64: 1e400, f32: 1e39 }`)).toEqual(["out-of-range 1e400", "out-of-range 1e39"])
+    expect(codes(`{ f64: -1.7976931348623159e308, f32: 3.4028236e38 }`)).toEqual(["out-of-range -1.7976931348623159e308", "out-of-range 3.4028236e38"])
+    // The largest values, NaN and the infinities are fine; a tiny number rounds to zero.
+    expect(codes(`{ f64: 1.7976931348623157e308, f32: 3.4028235e38 }`)).toEqual([])
+    expect(codes(`{ f64: Infinity, f32: NaN }`)).toEqual([])
+    expect(codes(`{ f64: 1e-400, f32: -1e-50 }`)).toEqual([])
+    expect(issues(schema, `{ f64: 1e400, f32: 1 }`)).toEqual(["error 1e400: 1e400 is too large for Float64"])
+  })
+
+  it("a Decimal may be written in hex or binary: the same number (spec §2), decoded alike", () => {
+    const schema = `type Root = { d: Decimal, e: Decimal, f: Decimal }`
+    const data = `{ d: 0xFF, e: -0b101, f: 1_000.50 }`
+    expect(issues(schema, data)).toEqual([])
+    expect(h.decode(compileSchemaFile(schema).schemas.Root!, parseWithLocations(data)[0]!)).toEqual({ d: "255", e: "-5", f: "1000.50" })
+    expect(issues(schema, `{ d: "0xFF", e: 1, f: 1 }`)).toEqual([`error "0xFF": expected Decimal, found the string "0xFF"`])
   })
 })
 

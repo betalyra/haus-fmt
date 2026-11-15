@@ -20,6 +20,7 @@ from collections.abc import Iterable, Iterator
 from enum import Enum, auto
 from typing import NamedTuple, Never, Protocol, runtime_checkable
 
+from ._error_codes import ErrorCode
 from ._errors import HausSyntaxError
 from ._parser import DEFAULT_LIMITS, Limits, Parser
 from ._value import Value
@@ -68,13 +69,15 @@ class _Position(NamedTuple):
         column = len(text) - text.rfind("\n") if newlines else self.column + len(text)
         return _Position(self.offset + len(text), self.line + newlines, column)
 
-    def error(self, reason: str) -> HausSyntaxError:
-        return HausSyntaxError(reason, self.offset, self.line, self.column)
+    def error(
+        self, code: ErrorCode, reason: str, *, expected: str | None = None, found: str | None = None
+    ) -> HausSyntaxError:
+        return HausSyntaxError(reason, self.offset, self.line, self.column, code, expected=expected, found=found)
 
     def shift(self, e: HausSyntaxError) -> HausSyntaxError:
         """An error in a text that starts here, as an error in the whole input."""
         column = e.column + self.column - 1 if e.line == 1 else e.column
-        return HausSyntaxError(e.reason, self.offset + e.offset, self.line + e.line - 1, column)
+        return e.moved(self.offset + e.offset, self.line + e.line - 1, column)
 
 
 _START = _Position(0, 1, 1)
@@ -144,7 +147,7 @@ class StreamReader:
         except UnicodeDecodeError as e:
             # Read what was valid first: an error before it comes first.
             self._scan(e.object[: e.start].decode("utf-8"), final=False)
-            raise self._end().error("invalid UTF-8") from None
+            raise self._end().error("invalid-utf8", "invalid UTF-8") from None
         return self._scan(text, final=False)
 
     def finish(self) -> list[Value]:
@@ -158,7 +161,9 @@ class StreamReader:
         text = "".join(self._done) + self._buf
         rest = self._parse(text)
         if rest and self._require_terminator:
-            raise self._origin.after(text).error("stream ended without ',' after the last value (truncated?)")
+            raise self._origin.after(text).error(
+                "stream-truncated", "stream ended without ',' after the last value (truncated?)", expected="','"
+            )
         out.extend(rest)
         self._done, self._done_length, self._buf = [], 0, ""
         return out
@@ -168,7 +173,7 @@ class StreamReader:
         try:
             self._decoder.decode(b"", final=True)
         except UnicodeDecodeError:
-            raise self._end().error("invalid UTF-8") from None
+            raise self._end().error("invalid-utf8", "invalid UTF-8") from None
 
     def _end(self) -> _Position:
         """Where the text received so far ends."""
@@ -198,7 +203,7 @@ class StreamReader:
             bom = self._first and (self._done[0] if self._done else buf[start:])[:1] == "\ufeff"
             limit = start + self._max_value_length + bom - self._done_length
             if i > limit:
-                raise self._origin.error(f"value longer than {self._max_value_length} characters")
+                raise self._origin.error("value-too-long", f"value longer than {self._max_value_length} characters")
             end = min(n, limit + 1)
             match self._mode:
                 case _Mode.NORMAL:
@@ -300,7 +305,9 @@ class StreamReader:
         text = "".join(self._done) + tail
         values = self._parse(text)
         if len(values) != 1:
-            raise self._origin.after(text).error("expected a value, found ','")
+            raise self._origin.after(text).error(
+                "expected-value", "expected a value, found ','", expected="a value", found="','"
+            )
         self._origin = self._origin.after(text).after(",")
         self._done, self._done_length = [], 0
         self._first = False
@@ -309,9 +316,13 @@ class StreamReader:
     def _parse(self, text: str) -> list[Value]:
         """The values of one piece. Only the first may start with a byte order mark."""
         if not self._first and text.startswith("\ufeff"):
-            raise self._origin.error("byte order mark after the start of the stream")
+            found = "'\ufeff'"
+            raise self._origin.error(
+                "expected-value", "byte order mark after the start of the stream", expected="a value", found=found
+            )
         try:
-            return Parser(text, self._limits).parse_sequence()
+            # Only the first piece starts the input: `#haus` is a version directive only there (spec §10).
+            return Parser(text, self._limits, directive=self._first).parse_sequence()
         except HausSyntaxError as e:
             raise self._origin.shift(e) from None
 
@@ -319,7 +330,8 @@ class StreamReader:
         """A closing bracket that closes nothing, at the end of `tail`: the parser says what's wrong."""
         text = "".join(self._done) + tail
         self._parse(text)
-        raise self._origin.after(text[:-1]).error(f"unexpected '{text[-1]}'")
+        closer = f"'{text[-1]}'"
+        raise self._origin.after(text[:-1]).error("unexpected-closer", f"unexpected {closer}", found=closer)
 
 
 @runtime_checkable

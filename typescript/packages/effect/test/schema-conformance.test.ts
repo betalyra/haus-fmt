@@ -3,9 +3,9 @@
  * Effect adapter: each schema file is compiled to Effect schemas, and each
  * case goes haus Value → Effect type (`decodeValue`) → haus Value (`encodeValue`).
  */
-import { canonical, HausSchemaFileError, parseAll, withoutAttributes, type Value } from "@haus-fmt/haus"
+import { canonical, errorCode, HausSchemaFileError, parseAll, withoutAttributes, type Value } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Option } from "effect"
 import { readdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
@@ -17,6 +17,8 @@ interface Case {
   readonly type: string
   readonly input: Value
   readonly output: Value
+  /** For `Err`: the error code (spec §17). */
+  readonly code: string | undefined
   readonly name: string
 }
 
@@ -28,7 +30,12 @@ const schemaCases = (text: string): Case[] =>
     const type = f.get("type")
     const input = f.get("input")
     if (type?.kind !== "string" || input === undefined) throw new Error(`not a case: ${canonical(v)}`)
-    return { ok: v.tag === "Ok", type: type.value, input, output: f.get("output") ?? input, name: `${v.tag} ${type.value} ${canonical(input)}` }
+    const code = f.get("code")
+    if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
+    return {
+      ok: v.tag === "Ok", type: type.value, input, output: f.get("output") ?? input,
+      code: code?.kind === "string" ? code.value : undefined, name: `${v.tag} ${type.value} ${canonical(input)}`,
+    }
   })
 
 const suites = readdirSync(DIR).filter((f) => f.endsWith(".schema.haus")).map((f) => f.replace(".schema.haus", ""))
@@ -41,7 +48,11 @@ describe.each(suites)("%s", (suite) => {
     if (!schema) throw new Error(`no type ${c.type}`)
     const decoded = Effect.runSyncExit(Haus.decodeValue(schema)(c.input))
     if (!c.ok) {
-      expect(Exit.isFailure(decoded), "decoding should fail").toBe(true)
+      expect(Exit.isFailure(decoded) && Exit.hasFails(decoded), "decoding should fail with a HausSchemaError").toBe(true)
+      if (Exit.isFailure(decoded)) {
+        const error = Cause.findErrorOption(decoded.cause).pipe(Option.getOrUndefined)
+        expect(error?.code, error?.message).toBe(c.code)
+      }
       return
     }
     if (Exit.isFailure(decoded)) throw new Error(`decoding failed: ${String(decoded.cause)}`)
@@ -66,7 +77,13 @@ describe.each(suites)("%s", (suite) => {
 const INVALID = `${DIR}invalid/`
 
 describe("invalid", () => {
-  it.each(readdirSync(INVALID).filter((f) => f.endsWith(".schema.haus")))("%s is rejected", (file) => {
-    expect(() => Haus.compileSchemaFile(readFileSync(`${INVALID}${file}`, "utf8"))).toThrow(HausSchemaFileError)
+  it.each(readdirSync(INVALID).filter((f) => f.endsWith(".schema.haus")))("%s is rejected with the code in NAME.error", (file) => {
+    const text = readFileSync(`${INVALID}${file}`, "utf8")
+    expect(() => Haus.compileSchemaFile(text)).toThrow(HausSchemaFileError)
+    try {
+      Haus.compileSchemaFile(text)
+    } catch (e) {
+      expect(errorCode(e)).toBe(readFileSync(`${INVALID}${file.replace(/\.schema\.haus$/, ".error")}`, "utf8").trim())
+    }
   })
 })

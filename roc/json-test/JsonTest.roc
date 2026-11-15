@@ -76,17 +76,20 @@ JsonTest := [].{
 	## Case `i` of plain.cases.haus (spec §16.3): `Ok { type, input, json,
 	## output? }` writes the decoded `input` as `json`, and reading `json`
 	## gives a value that encodes to `output` (or `input`); `Read { type, json,
-	## output }` reads `json` as `output`; `Err { type, json }` doesn't read.
+	## output }` reads `json` as `output`; `Err { type, json, code }` doesn't
+	## read, and fails with the error code `code` (spec §17).
 	plain : Str, U64 -> Bool
 	plain = |cases, i| report(plain_case(cases, i))
 
 	## Case `i` of lossless.cases.haus (spec §16.2): `Ok { input, json }`
-	## writes `input` as `json` and reads it back; `Err { json }` doesn't read.
+	## writes `input` as `json` and reads it back; `Err { json, code }` doesn't
+	## read, with the error code `code`.
 	lossless : Str, U64 -> Bool
 	lossless = |cases, i| report(lossless_case(cases, i))
 
 	## Case `i` of schemaless.cases.haus (spec §16.1): `Read { json, output }`
-	## reads `json` as `output`; `Err { json }` doesn't read.
+	## reads `json` as `output`; `Err { json, code }` doesn't read, with the
+	## error code `code`.
 	schemaless : Str, U64 -> Bool
 	schemaless = |cases, i| report(schemaless_case(cases, i))
 
@@ -103,7 +106,7 @@ JsonTest := [].{
 		some = "{\"_tag\":\"Some\",\"value\":"
 		close = "}"
 		json = "${some.repeat(n)}{\"_tag\":\"None\"}${close.repeat(n)}"
-		read(ty, JsonValue.parse(json).map_err(|e| e.reason)?).map_ok(|_| {})
+		read(ty, JsonValue.parse(json).map_err(|e| e.reason)?).map_ok(|_| {}).map_err(Decode.message)
 	}
 }
 
@@ -123,12 +126,15 @@ plain_case = |cases, i| {
 			}
 		}
 		"Read" => read_as(ty, json, value(fields, "output")?)
-		_ => match JsonValue.parse(json) {
-			Ok(j) => match read(ty, j) {
-				Ok(v) => Err("read as ${Encode.canonical(v)}")
-				Err(_) => Ok({})
+		_ => {
+			code = text(fields, "code")?
+			match JsonValue.parse(json) {
+				Ok(j) => match read(ty, j) {
+					Ok(v) => Err("read as ${Encode.canonical(v)}")
+					Err(e) => same_code(code, e.code, Decode.message(e))
+				}
+				Err(e) => same_code(code, e.code, e.reason)
 			}
-			Err(_) => Ok({})
 		}
 	}
 }
@@ -143,10 +149,7 @@ lossless_case = |cases, i| {
 			got = JsonValue.to_lossless_json(input).map_err(Encode.message)?
 			if (same_json(got, json)?) reads_back(json, input) else Err("wrote ${got}")
 		}
-		_ => match JsonValue.from_lossless_json(json) {
-			Ok(v) => Err("read as ${Encode.canonical(v)}")
-			Err(_) => Ok({})
-		}
+		_ => rejected(JsonValue.from_lossless_json(json), text(fields, "code")?)
 	}
 }
 
@@ -160,10 +163,20 @@ schemaless_case = |cases, i| {
 			if (Encode.equals(v, want)) Ok({}) else Err("read as ${Encode.canonical(v)}")
 		}
 		("Read", Err(_)) => Err("can't read it")
-		(_, Ok(v)) => Err("read as ${Encode.canonical(v)}")
-		(_, Err(_)) => Ok({})
+		(_, result) => rejected(result, text(fields, "code")?)
 	}
 }
+
+## Reading failed with the error code `code` (spec §17).
+rejected : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]), Str -> Try({}, Str)
+rejected = |result, code| match result {
+	Ok(v) => Err("read as ${Encode.canonical(v)}")
+	Err(Syntax(e)) => same_code(code, e.code, e.reason)
+	Err(Decode(e)) => same_code(code, e.code, Decode.message(e))
+}
+
+same_code : Str, Str, Str -> Try({}, Str)
+same_code = |want, got, message| if (got == want) Ok({}) else Err("failed with ${got}, expected ${want}: ${message}")
 
 valid_case : List(U8), List(U8) -> Try({}, Str)
 valid_case = |haus, json| {
@@ -218,39 +231,39 @@ write = |ty, v| match ty {
 }
 
 ## Read `j` with the type `ty` of plain.schema.haus, and encode the result.
-read : Str, JsonValue -> Try(Value, Str)
+read : Str, JsonValue -> Try(Value, Decode.Error)
 read = |ty, j| match ty {
-	"S" => Plain.from_json_s(j).map_ok(Plain.encode_s).map_err(Decode.message)
-	"B" => Plain.from_json_b(j).map_ok(Plain.encode_b).map_err(Decode.message)
-	"Flag" => Plain.from_json_flag(j).map_ok(Plain.encode_flag).map_err(Decode.message)
-	"Small" => Plain.from_json_small(j).map_ok(Plain.encode_small).map_err(Decode.message)
-	"Byte" => Plain.from_json_byte(j).map_ok(Plain.encode_byte).map_err(Decode.message)
-	"Big" => Plain.from_json_big(j).map_ok(Plain.encode_big).map_err(Decode.message)
-	"I64" => Plain.from_json_i64(j).map_ok(Plain.encode_i64).map_err(Decode.message)
-	"F64" => Plain.from_json_f64(j).map_ok(Plain.encode_f64).map_err(Decode.message)
-	"F32" => Plain.from_json_f32(j).map_ok(Plain.encode_f32).map_err(Decode.message)
-	"Dec" => Plain.from_json_dec(j).map_ok(Plain.encode_dec).map_err(Decode.message)
-	"Day" => Plain.from_json_day(j).map_ok(Plain.encode_day).map_err(Decode.message)
-	"At" => Plain.from_json_at(j).map_ok(Plain.encode_at).map_err(Decode.message)
-	"Raw" => Plain.from_json_raw(j).map_ok(Plain.encode_raw).map_err(Decode.message)
-	"Key" => Plain.from_json_key(j).map_ok(Plain.encode_key).map_err(Decode.message)
-	"Ints" => Plain.from_json_ints(j).map_ok(Plain.encode_ints).map_err(Decode.message)
-	"Counts" => Plain.from_json_counts(j).map_ok(Plain.encode_counts).map_err(Decode.message)
-	"Opt" => Plain.from_json_opt(j).map_ok(Plain.encode_opt).map_err(Decode.message)
-	"Nested" => Plain.from_json_nested(j).map_ok(Plain.encode_nested).map_err(Decode.message)
-	"OptBig" => Plain.from_json_opt_big(j).map_ok(Plain.encode_opt_big).map_err(Decode.message)
-	"Outcome" => Plain.from_json_outcome(j).map_ok(Plain.encode_outcome).map_err(Decode.message)
-	"Level" => Plain.from_json_level(j).map_ok(Plain.encode_level).map_err(Decode.message)
-	"Shape" => Plain.from_json_shape(j).map_ok(Plain.encode_shape).map_err(Decode.message)
-	"User" => Plain.from_json_user(j).map_ok(Plain.encode_user).map_err(Decode.message)
-	"Strict" => Plain.from_json_strict(j).map_ok(Plain.encode_strict).map_err(Decode.message)
-	"Bits" => Plain.from_json_bits(j).map_ok(Plain.encode_bits).map_err(Decode.message)
-	"Loop" => Plain.from_json_loop(j).map_ok(Plain.encode_loop).map_err(Decode.message)
-	"BoxRec" => Plain.from_json_box_rec(j).map_ok(Plain.encode_box_rec).map_err(Decode.message)
-	"Boxed" => Plain.from_json_boxed(j).map_ok(Plain.encode_boxed).map_err(Decode.message)
-	"Mine" => Plain.from_json_mine(j).map_ok(Plain.encode_mine).map_err(Decode.message)
-	"OptLoop" => Plain.from_json_opt_loop(j).map_ok(Plain.encode_opt_loop).map_err(Decode.message)
-	_ => Err("no type ${ty}")
+	"S" => Plain.from_json_s(j).map_ok(Plain.encode_s)
+	"B" => Plain.from_json_b(j).map_ok(Plain.encode_b)
+	"Flag" => Plain.from_json_flag(j).map_ok(Plain.encode_flag)
+	"Small" => Plain.from_json_small(j).map_ok(Plain.encode_small)
+	"Byte" => Plain.from_json_byte(j).map_ok(Plain.encode_byte)
+	"Big" => Plain.from_json_big(j).map_ok(Plain.encode_big)
+	"I64" => Plain.from_json_i64(j).map_ok(Plain.encode_i64)
+	"F64" => Plain.from_json_f64(j).map_ok(Plain.encode_f64)
+	"F32" => Plain.from_json_f32(j).map_ok(Plain.encode_f32)
+	"Dec" => Plain.from_json_dec(j).map_ok(Plain.encode_dec)
+	"Day" => Plain.from_json_day(j).map_ok(Plain.encode_day)
+	"At" => Plain.from_json_at(j).map_ok(Plain.encode_at)
+	"Raw" => Plain.from_json_raw(j).map_ok(Plain.encode_raw)
+	"Key" => Plain.from_json_key(j).map_ok(Plain.encode_key)
+	"Ints" => Plain.from_json_ints(j).map_ok(Plain.encode_ints)
+	"Counts" => Plain.from_json_counts(j).map_ok(Plain.encode_counts)
+	"Opt" => Plain.from_json_opt(j).map_ok(Plain.encode_opt)
+	"Nested" => Plain.from_json_nested(j).map_ok(Plain.encode_nested)
+	"OptBig" => Plain.from_json_opt_big(j).map_ok(Plain.encode_opt_big)
+	"Outcome" => Plain.from_json_outcome(j).map_ok(Plain.encode_outcome)
+	"Level" => Plain.from_json_level(j).map_ok(Plain.encode_level)
+	"Shape" => Plain.from_json_shape(j).map_ok(Plain.encode_shape)
+	"User" => Plain.from_json_user(j).map_ok(Plain.encode_user)
+	"Strict" => Plain.from_json_strict(j).map_ok(Plain.encode_strict)
+	"Bits" => Plain.from_json_bits(j).map_ok(Plain.encode_bits)
+	"Loop" => Plain.from_json_loop(j).map_ok(Plain.encode_loop)
+	"BoxRec" => Plain.from_json_box_rec(j).map_ok(Plain.encode_box_rec)
+	"Boxed" => Plain.from_json_boxed(j).map_ok(Plain.encode_boxed)
+	"Mine" => Plain.from_json_mine(j).map_ok(Plain.encode_mine)
+	"OptLoop" => Plain.from_json_opt_loop(j).map_ok(Plain.encode_opt_loop)
+	_ => Decode.fail("no-type", "no type ${ty}")
 }
 
 ## The decoded value written as JSON text.
@@ -267,7 +280,7 @@ written = |decoded, to_json| match decoded {
 read_as : Str, Str, Value -> Try({}, Str)
 read_as = |ty, json, want| {
 	j = JsonValue.parse(json).map_err(|e| "can't parse the JSON: ${e.reason}")?
-	got = read(ty, j)?
+	got = read(ty, j).map_err(Decode.message)?
 	if (Encode.equals(got, want)) Ok({}) else Err("read as ${Encode.canonical(got)}")
 }
 

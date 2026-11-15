@@ -44,10 +44,16 @@ def test_valid(path: Path) -> None:
     assert [canonical(v) for v in haus.parse_bytes(path.read_bytes())] == expected
 
 
+def expected_code(path: Path) -> str:
+    """`NAME.error`: the error code (spec §17) the file must be rejected with."""
+    return path.with_suffix(".error").read_text("utf-8").strip()
+
+
 @pytest.mark.parametrize("path", cases("invalid"), ids=lambda p: p.stem)
 def test_invalid(path: Path) -> None:
-    with pytest.raises(haus.HausSyntaxError):
+    with pytest.raises(haus.HausSyntaxError) as e:
         haus.parse_bytes(path.read_bytes())
+    assert e.value.code == expected_code(path), e.value.reason
 
 
 @pytest.mark.parametrize("path", cases("valid"), ids=lambda p: p.stem)

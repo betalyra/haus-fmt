@@ -20,9 +20,10 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Final, Never, cast
+from typing import Final, Literal, Never, cast
 
-from ._errors import HausSyntaxError
+from ._error_codes import ErrorCode
+from ._errors import HausLimitsError, HausSyntaxError
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
 MAX_SUPPORTED_DEPTH: Final = 512
@@ -38,7 +39,8 @@ depth (`make_room`). A `max_depth` above this is rejected when the `Limits` are 
 class Limits:
     """Resource limits, enforced while parsing (spec §7).
 
-    Raises `ValueError` for a `max_depth` above `MAX_SUPPORTED_DEPTH` (512), or not a whole number.
+    Raises `HausLimitsError` (a `ValueError`, code `unsupported-depth`) for a `max_depth` above
+    `MAX_SUPPORTED_DEPTH` (512), or not a whole number.
     """
 
     max_depth: int = 256
@@ -53,9 +55,9 @@ class Limits:
     def __post_init__(self) -> None:
         depth = cast("object", self.max_depth)  # whatever the caller passed
         if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
-            raise ValueError(f"max_depth must be a whole number from 0 to {MAX_SUPPORTED_DEPTH}, not {depth!r}")
+            raise HausLimitsError(f"max_depth must be a whole number from 0 to {MAX_SUPPORTED_DEPTH}, not {depth!r}")
         if depth > MAX_SUPPORTED_DEPTH:
-            raise ValueError(
+            raise HausLimitsError(
                 f"max_depth {depth} is above {MAX_SUPPORTED_DEPTH}, the deepest nesting this binding supports (spec §7)"
             )
 
@@ -92,8 +94,7 @@ _IDENT_OR_DOT = re.compile(r"[A-Za-z0-9_.]*+")
 _HEX = re.compile(r"-?0x([0-9A-Fa-f](?:_?[0-9A-Fa-f])*+)")
 _BIN = re.compile(r"-?0b([01](?:_?[01])*+)")
 _DEC = re.compile(r"-?(?:0|[1-9](?:_?[0-9])*+)(?:\.[0-9](?:_?[0-9])*+)?(?:[eE][+-]?[0-9](?:_?[0-9])*+)?")
-_NUMBER_CHARS = re.compile(r"[-+0-9A-Za-z_.]*+")
-_EXPONENT = re.compile(r"-?(?:0|[1-9][0-9_]*+)(?:\.[0-9_]++)?[eE][+-]?([0-9_]++)")
+_EXPONENT = re.compile(r"[eE][+-]?([0-9_]++)$")
 
 # Characters a string may hold raw: no quote, backslash, control or bidi character.
 _STRING_RUN = re.compile(r'[^"\\\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*+')
@@ -114,9 +115,15 @@ _TAG_START = frozenset(string.ascii_uppercase)
 _KEY_START = frozenset(string.ascii_lowercase + "_")
 _HEX_DIGITS = frozenset(string.hexdigits)
 _SIMPLE_ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "r": "\r", "t": "\t"}
-_BOOLEAN_HINT = " (booleans are the variants True / False)"
-_HINTS = {"true": _BOOLEAN_HINT, "false": _BOOLEAN_HINT, "null": " (use the variant None)"}
+_BOOLEAN: tuple[ErrorCode, str] = ("boolean-literal", " (booleans are the variants True / False)")
+# A lowercase word where a value should be: its code, and what the message adds.
+_WORDS: dict[str, tuple[ErrorCode, str]] = {
+    "true": _BOOLEAN,
+    "false": _BOOLEAN,
+    "null": ("null-literal", " (use the variant None)"),
+}
 _TRIVIA_START = frozenset("\r/")  # what can follow whitespace and still be trivia (or a trivia error)
+_CLOSERS = frozenset("}])")
 
 
 def _run(pattern: re.Pattern[str], src: str, pos: int, end: int = sys.maxsize) -> re.Match[str]:
@@ -135,12 +142,12 @@ def _code(c: str) -> str:
     return f"U+{ord(c):04X}"
 
 
-def _raw_character(c: str, where: str) -> str:
-    """The error for a raw control or bidi character inside a string."""
+def _raw_character(c: str, where: str) -> tuple[ErrorCode, str]:
+    """The code and message for a raw control or bidi character inside a string."""
     escape = f"\\u{{{ord(c):04X}}}"
     if _is_bidi(c):
-        return f"raw bidirectional control character {_code(c)} (write it as {escape})"
-    return f"raw control character {_code(c)} {where} (write it as {escape})"
+        return "bidi-control", f"raw bidirectional control character {_code(c)} (write it as {escape})"
+    return "control-character", f"raw control character {_code(c)} {where} (write it as {escape})"
 
 
 def _describe(c: str) -> str:
@@ -177,13 +184,17 @@ def _exceeds(digits: str, limit: int) -> bool:
 class Parser:
     """Recursive-descent parser over one complete text."""
 
-    __slots__ = ("depth", "limits", "pos", "src")
+    __slots__ = ("depth", "directive", "last", "limits", "pos", "src")
 
-    def __init__(self, src: str, limits: Limits = DEFAULT_LIMITS) -> None:
+    def __init__(self, src: str, limits: Limits = DEFAULT_LIMITS, *, directive: bool = True) -> None:
+        """`directive`: the text starts the input, so `#haus` there is a version directive (spec §10)."""
         self.src = src
         self.limits = limits
+        self.directive = directive
         self.pos = 0
         self.depth = 0
+        self.last: Value | None = None
+        """The value just parsed in a list, record or file: what decides the error when no comma follows."""
 
     def parse_sequence(self) -> list[Value]:
         """A whole file: zero or more comma-separated values (spec §6)."""
@@ -192,8 +203,9 @@ class Parser:
             return self._sequence()
         except RecursionError:
             self._fail(
+                "nesting-too-deep",
                 f"nesting too deep for Python's recursion limit ({sys.getrecursionlimit()}); "
-                "lower max_depth or raise the limit with sys.setrecursionlimit"
+                "lower max_depth or raise the limit with sys.setrecursionlimit",
             )
 
     def value_at(self, pos: int) -> tuple[Value, int]:
@@ -217,6 +229,11 @@ class Parser:
     def _sequence(self) -> list[Value]:
         if self.src.startswith("\ufeff"):
             self.pos = 1
+        if self.directive and self.src.startswith("#haus", self.pos):
+            self._fail(
+                "version-directive",
+                "this file starts with a #haus version directive: it needs a newer version of haus",
+            )
         values: list[Value] = []
         self._skip_trivia()
         while not self._eof():
@@ -224,7 +241,9 @@ class Parser:
             self._skip_trivia()
             if self._eof():
                 break
-            self._expect(",", "expected ',' between top-level values")
+            if self._peek() != ",":
+                self._fail_separator(values[-1], "expected ',' between top-level values")
+            self.pos += 1
             self._skip_trivia()
         return values
 
@@ -248,29 +267,39 @@ class Parser:
                 return self._variant()
             case c if c in _KEY_START:
                 word = self._ident()
+                code, more = _WORDS.get(word, ("bare-identifier", ""))
                 self._fail(
-                    f"unexpected identifier '{word}': lowercase identifiers can only be record keys"
-                    + _HINTS.get(word, ""),
+                    code,
+                    f"unexpected identifier '{word}': lowercase identifiers can only be record keys{more}",
                     self.pos - len(word),
+                    expected="a value",
+                    found=f"'{word}'",
                 )
             case c:
-                self._fail(f"expected a value, found {_describe(c)}")
+                # `+1` and `.5`: a number written the way other languages allow.
+                self._fail(
+                    "invalid-number" if c in ("+", ".") else "expected-value",
+                    f"expected a value, found {_describe(c)}",
+                    expected="a value",
+                    found=_describe(c),
+                )
 
     def _items(self, open_: str, close: str) -> Iterator[None]:
         """Walk `open item, item, … close` (trailing comma allowed), one nesting level deeper.
 
-        Yields at the start of each item; the caller parses it before resuming.
+        Yields at the start of each item; the caller parses it, and sets `last` to it, before resuming.
         """
         start = self.pos
         self.depth += 1
         if self.depth > self.limits.max_depth:
-            self._fail(f"nesting deeper than {self.limits.max_depth} levels")
+            self._fail("nesting-too-deep", f"nesting deeper than {self.limits.max_depth} levels")
         self.pos += 1
         self._skip_trivia()
         while (c := self._peek()) != close:
             if c == "":
-                self._fail(f"unclosed '{open_}'", start)
+                self._unclosed(open_, close, start)
             yield
+            item = self.last
             self._skip_trivia()
             match self._peek():
                 case ",":
@@ -279,9 +308,10 @@ class Parser:
                 case c if c == close:
                     pass
                 case "":
-                    self._fail(f"unclosed '{open_}'", start)
-                case c:
-                    self._fail(f"expected ',' or '{close}', found {_describe(c)}")
+                    self._unclosed(open_, close, start)
+                case _:
+                    assert item is not None
+                    self._fail_separator(item, f"expected ',' or '{close}'", close)
         self.pos += 1
         self.depth -= 1
 
@@ -291,25 +321,31 @@ class Parser:
             key_pos = self.pos
             key = self._key()
             self._skip_trivia()
-            self._expect(":", f"expected ':' after key '{key}'")
+            if (c := self._peek()) != ":":
+                found = _describe(c)
+                self._fail(
+                    "missing-colon", f"expected ':' after key '{key}', found {found}", expected="':'", found=found
+                )
+            self.pos += 1
             self._skip_trivia()
             value = self._value()
             if key in fields:
-                self._fail(f"duplicate key '{key}'", key_pos)
-            fields[key] = value
+                self._fail("duplicate-key", f"duplicate key '{key}'", key_pos)
+            fields[key] = self.last = value
         return Record(fields)
 
     def _list(self, open_: str, close: str) -> tuple[Value, ...]:
         # A plain loop, not a comprehension: on Python 3.11 a comprehension is one more frame per level.
         items: list[Value] = []
         for _ in self._items(open_, close):
-            items.append(self._value())
+            self.last = item = self._value()
+            items.append(item)
         return tuple(items)
 
     def _key(self) -> str:
         match self._peek():
             case '"' if self.src.startswith('"""', self.pos):
-                self._fail("block strings can't be record keys")
+                self._fail("block-string-key", "block strings can't be record keys")
             case '"':
                 return self._string()
             case c if c in _KEY_START:
@@ -317,11 +353,16 @@ class Parser:
             case c if c in _TAG_START:
                 word = self._ident()
                 self._fail(
+                    "uppercase-key",
                     f"record keys must start with a lowercase letter or '_'; quote it: \"{word}\"",
                     self.pos - len(word),
+                    hint=f'Quote the key: "{word}".',
                 )
             case c:
-                self._fail(f"expected a record key, found {_describe(c)}")
+                found = _describe(c)
+                self._fail(
+                    "expected-key", f"expected a record key, found {found}", expected="a record key", found=found
+                )
 
     def _variant(self) -> Variant:
         tag = self._checked_word(self._ident(), "tag")
@@ -334,7 +375,12 @@ class Parser:
             case "(":
                 paren = self.pos
                 if not (args := self._list("(", ")")):
-                    self._fail(f"empty payload: write '{tag}' without parentheses", paren)
+                    self._fail(
+                        "empty-payload",
+                        f"empty payload: write '{tag}' without parentheses",
+                        paren,
+                        hint=f"Write {tag} without parentheses.",
+                    )
                 return Variant(tag, args)
             case "{":
                 return Variant(tag, (self._record(),))
@@ -345,36 +391,32 @@ class Parser:
     # ── numbers ────────────────────────────────────────────────
 
     def _number(self) -> Number:
+        """The literal, then what follows it, then the limits, as the reference does: a literal
+        that runs into a letter is invalid however long it is. Converted only within the limits."""
         start = self.pos
-        self._check_number_limits(start)
-        text = self._radix_number(start) or self._decimal_number(start)
-        end = _run(_IDENT_OR_DOT, self.src, self.pos).end()
-        if end > self.pos:
-            self._fail(f"invalid number '{self.src[start:end]}'", start)
-        return Number(text)
-
-    def _radix_number(self, start: int) -> str | None:
-        """A hex or binary literal as a decimal integer, or None if it isn't one."""
+        src = self.src
+        radix = m = None
         for pattern, base in ((_HEX, 16), (_BIN, 2)):
-            if m := pattern.match(self.src, start):
-                n = int(m[1].replace("_", ""), base)
-                self.pos = m.end()
-                return ("-" if self.src[start] == "-" and n != 0 else "") + _decimal_text(n)
-        return None
-
-    def _decimal_number(self, start: int) -> str:
-        if not (m := _DEC.match(self.src, start)):
-            self._fail("invalid number", start)
-        self.pos = m.end()
-        return _normalize_exponent(m[0].replace("_", "").replace("E", "e"))
-
-    def _check_number_limits(self, start: int) -> None:
-        """Checked before converting, so huge literals are rejected cheaply."""
-        end = _run(_NUMBER_CHARS, self.src, start).end()
+            if m := pattern.match(src, start):
+                radix = base
+                break
+        else:
+            if not (m := _DEC.match(src, start)):
+                self._fail("invalid-number", "invalid number", start)
+        end = m.end()
+        if (after := _run(_IDENT_OR_DOT, src, end).end()) > end:
+            self._fail("invalid-number", f"invalid number '{src[start:after]}'", start)
         if end - start > self.limits.max_number_length:
-            self._fail(f"number literal longer than {self.limits.max_number_length} characters", start)
-        if (m := _EXPONENT.fullmatch(self.src, start, end)) and _exceeds(m[1], self.limits.max_exponent):
-            self._fail(f"exponent larger than {self.limits.max_exponent}", start)
+            self._fail(
+                "number-too-long", f"number literal longer than {self.limits.max_number_length} characters", start
+            )
+        self.pos = end
+        if radix is not None:
+            n = int(m[1].replace("_", ""), radix)
+            return Number(("-" if src[start] == "-" and n != 0 else "") + _decimal_text(n))
+        if (e := _EXPONENT.search(m[0])) and _exceeds(e[1], self.limits.max_exponent):
+            self._fail("exponent-too-large", f"exponent larger than {self.limits.max_exponent}", start)
+        return Number(_normalize_exponent(m[0].replace("_", "").replace("E", "e")))
 
     # ── bytes ──────────────────────────────────────────────────
 
@@ -383,19 +425,27 @@ class Parser:
         start = self.pos
         body = start + 2  # after x"
         end = _run(_BYTES_RUN, self.src, body).end()
+        # The limit counts up to the last whole byte read, as in the reference.
+        limit = self.limits.max_string_length
+        if end - body > limit and len(self.src[body:end].rstrip(" \t")) > limit:
+            self._fail("string-too-long", f"byte string longer than {limit} characters", start)
         match self.src[end : end + 1]:
             case '"':
                 pass
             case "":
-                self._fail("unterminated byte string", start)
+                self._fail("unterminated-bytes", "unterminated byte string", start)
             case "\r" | "\n":
-                self._fail('line break in byte string (keep x"…" on one line)', end)
+                self._fail("bytes-not-hex", 'line break in byte string (keep x"…" on one line)', end)
             case c if c in _HEX_DIGITS:
-                self._fail("a byte needs two hex digits (an odd number of digits, or a space inside a byte)", end)
+                self._fail(
+                    "bytes-odd-digits",
+                    "a byte needs two hex digits (an odd number of digits, or a space inside a byte)",
+                    end,
+                )
             case c:
-                self._fail(f"invalid character {_describe(c)} in byte string (expected hex digits)", end)
-        if end - body > self.limits.max_string_length:
-            self._fail(f"byte string longer than {self.limits.max_string_length} characters", start)
+                self._fail(
+                    "bytes-not-hex", f"invalid character {_describe(c)} in byte string (expected hex digits)", end
+                )
         self.pos = end + 1
         return Bytes(bytes.fromhex(self.src[body:end]))
 
@@ -418,13 +468,13 @@ class Parser:
                     text, pos = self._escape(pos)
                     out.append(text)
                 case "":
-                    self._fail("unterminated string", start)
+                    self._fail("unterminated-string", "unterminated string", start)
                 case "\n":
-                    self._fail('line break in string (use \\n or a """ block string)', pos)
+                    self._fail("string-line-break", 'line break in string (use \\n or a """ block string)', pos)
                 case "\t":
-                    self._fail("raw tab in string (use \\t)", pos)
+                    self._fail("control-character", "raw tab in string (use \\t)", pos)
                 case c:
-                    self._fail(_raw_character(c, "in string"), pos)
+                    self._fail(*_raw_character(c, "in string"), pos)
         self.pos = pos + 1
         return self._checked("".join(out), start)
 
@@ -435,13 +485,13 @@ class Parser:
                 return _SIMPLE_ESCAPES[e], at + 2
             case "u":
                 if not (m := _UNICODE_ESCAPE.match(self.src, at + 2)):
-                    self._fail("invalid unicode escape: expected \\u{1-6 hex digits}", at)
+                    self._fail("invalid-unicode-escape", "invalid unicode escape: expected \\u{1-6 hex digits}", at)
                 cp = int(m[1], 16)
                 if cp > 0x10FFFF or 0xD800 <= cp <= 0xDFFF:
-                    self._fail(f"\\u{{{m[1]}}} is not a Unicode scalar value", at)
+                    self._fail("invalid-unicode-escape", f"\\u{{{m[1]}}} is not a Unicode scalar value", at)
                 return chr(cp), m.end()
             case e:
-                self._fail(f"invalid escape '\\{e}'", at)
+                self._fail("invalid-escape", f"invalid escape '\\{e}'", at)
 
     def _block_string(self) -> String:
         start = self.pos
@@ -452,12 +502,16 @@ class Parser:
         elif src.startswith("\n", self.pos):
             self.pos += 1
         else:
-            self._fail('opening """ must be followed by a line break', start if self._eof() else self.pos)
+            self._fail(
+                "block-string-opening",
+                'opening """ must be followed by a line break',
+                start if self._eof() else self.pos,
+            )
 
         content = self.pos
         close = _run(_BLOCK_BODY, src, content).end()
         if not src.startswith('"""', close):
-            self._fail("unterminated block string", start)
+            self._fail("unterminated-block-string", "unterminated block string", start)
 
         # Split into lines (LF or CRLF), as (start, end) positions in the source.
         lines: list[tuple[int, int]] = []
@@ -468,7 +522,7 @@ class Parser:
             at = newline + 1
         indent = src[at:close]
         if not _BLANK_LINE.fullmatch(indent):
-            self._fail('closing """ must be on its own line', close)
+            self._fail("block-string-closing", 'closing """ must be on its own line', close)
 
         out: list[str] = []
         for line_start, line_end in lines:
@@ -477,7 +531,7 @@ class Parser:
             elif _BLANK_LINE.fullmatch(src, line_start, line_end):
                 out.append("")
             else:
-                self._fail('line is indented less than the closing """', line_start)
+                self._fail("block-string-indent", 'line is indented less than the closing """', line_start)
         self.pos = close + 3
         return String(self._checked("\n".join(out), start))
 
@@ -493,19 +547,23 @@ class Parser:
             if pos >= end:
                 return "".join(out)
             if src[pos] != "\\":
-                self._fail(_raw_character(src[pos], "in block string"), pos)
+                self._fail(*_raw_character(src[pos], "in block string"), pos)
             text, pos = self._escape(pos)
             out.append(text)
 
-    def _checked_word(self, word: str, what: str) -> str:
+    def _checked_word(self, word: str, what: Literal["key", "tag"]) -> str:
         """A record key or tag just read (spec §7: the string limit counts them too); the error is at its start."""
         if len(word) > self.limits.max_string_length:
-            self._fail(f"{what} longer than {self.limits.max_string_length} characters", self.pos - len(word))
+            self._fail(
+                "key-too-long" if what == "key" else "tag-too-long",
+                f"{what} longer than {self.limits.max_string_length} characters",
+                self.pos - len(word),
+            )
         return word
 
     def _checked(self, s: str, start: int) -> str:
         if len(s) > self.limits.max_string_length:
-            self._fail(f"string longer than {self.limits.max_string_length} characters", start)
+            self._fail("string-too-long", f"string longer than {self.limits.max_string_length} characters", start)
         return s
 
     # ── trivia ─────────────────────────────────────────────────
@@ -527,9 +585,11 @@ class Parser:
                 case "/*":
                     self._skip_block_comment()
                 case next_two if next_two.startswith("\r"):
-                    self._fail("carriage return without a line feed (line breaks are LF or CRLF)")
+                    self._fail(
+                        "lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)"
+                    )
                 case _:
-                    self._fail("unexpected '/' (comments are // or /* */)")
+                    self._fail("stray-slash", "unexpected '/' (comments are // or /* */)")
 
     def _skip_block_comment(self) -> None:
         """`/* … */`, which nest."""
@@ -541,7 +601,7 @@ class Parser:
                 self._check_comment(start, m.end())
                 self.pos = m.end()
                 return
-        self._fail("unterminated block comment", start)
+        self._fail("unterminated-comment", "unterminated block comment", start)
 
     def _check_comment(self, start: int, end: int) -> None:
         """Comments are where "Trojan Source" attacks hide reordered text, and where
@@ -553,11 +613,13 @@ class Parser:
                 case "\r" if self.src.startswith("\n", i + 1):
                     continue
                 case "\r":
-                    self._fail("carriage return without a line feed (line breaks are LF or CRLF)", i)
+                    self._fail(
+                        "lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)", i
+                    )
                 case c if _is_bidi(c):
-                    self._fail(f"raw bidirectional control character {_code(c)} in comment", i)
+                    self._fail("bidi-control", f"raw bidirectional control character {_code(c)} in comment", i)
                 case c:
-                    self._fail(f"raw control character {_code(c)} in comment", i)
+                    self._fail("control-character", f"raw control character {_code(c)} in comment", i)
 
     # ── helpers ────────────────────────────────────────────────
 
@@ -573,10 +635,42 @@ class Parser:
     def _eof(self) -> bool:
         return self.pos >= len(self.src)
 
-    def _expect(self, ch: str, message: str) -> None:
-        if self._peek() != ch:
-            self._fail(f"{message}, found {_describe(self._peek())}")
-        self.pos += 1
+    def _unclosed(self, open_: str, close: str, start: int) -> Never:
+        self._fail("unclosed-bracket", f"unclosed '{open_}'", start, expected=f"'{close}'")
 
-    def _fail(self, reason: str, at: int | None = None) -> Never:
-        raise HausSyntaxError.at(self.src, self.pos if at is None else at, reason)
+    def _fail_separator(self, previous: Value, message: str, close: str | None = None) -> Never:
+        """After `previous`, something other than a comma (or the closing bracket `close`).
+
+        Which mistake it is: a payload `(…)` or `{…}` on a line after its tag (the tag took
+        no payload, so anything between them was a line break or a comment), a closing
+        bracket of the wrong kind, or a missing comma.
+        """
+        c = self._peek()
+        found = _describe(c)
+        reason = f"{message}, found {found}"
+        if c in ("(", "{") and isinstance(previous, Variant) and not previous.args:
+            self._fail(
+                "payload-newline",
+                reason,
+                expected="','",
+                found=found,
+                hint=f"Put the payload on the same line as {previous.tag}, or add a comma if they are two values.",
+            )
+        if c in _CLOSERS:
+            self._fail(
+                "unexpected-closer", reason, expected="','" if close is None else f"',' or '{close}'", found=found
+            )
+        self._fail("missing-comma", reason, expected="','", found=found)
+
+    def _fail(
+        self,
+        code: ErrorCode,
+        reason: str,
+        at: int | None = None,
+        *,
+        hint: str | None = None,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> Never:
+        pos = self.pos if at is None else at
+        raise HausSyntaxError.at(self.src, pos, code, reason, hint=hint, expected=expected, found=found)

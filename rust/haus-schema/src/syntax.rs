@@ -8,7 +8,7 @@
 //! What needs other files (names, arities, imports) is checked by
 //! [`Schema`](crate::Schema), and by the code generators of haus-fmt-build.
 
-use haus::Value;
+use haus::{ErrorCode as Code, Value};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use winnow::ascii::{multispace1, till_line_ending};
@@ -20,6 +20,8 @@ use winnow::token::{any, literal, none_of, one_of, take_while};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
+    /// Which mistake it is (spec §17).
+    pub code: Code,
     pub reason: String,
     pub line: usize,
     pub column: usize,
@@ -34,11 +36,11 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// An error at byte offset `pos` of `text`.
-pub fn error(text: &str, pos: usize, reason: impl Into<String>) -> Error {
+pub fn error(text: &str, pos: usize, code: Code, reason: impl Into<String>) -> Error {
     let before = &text[..pos.min(text.len())];
     let line = before.matches('\n').count() + 1;
     let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
-    Error { reason: reason.into(), line, column }
+    Error { code, reason: reason.into(), line, column }
 }
 
 // ── syntax tree ──────────────────────────────────────────────
@@ -234,19 +236,21 @@ fn parse_file(text: &str, imported_spreads: bool) -> Result<File, Error> {
             _ => None,
         });
         let found = found(&text[e.offset()..]);
+        let code = expected.as_deref().map_or(Code::SchemaSyntax, syntax_code);
         error(
             text,
             e.offset(),
+            code,
             expected.map_or_else(|| format!("unexpected {found}"), |what| format!("expected {what}, found {found}")),
         )
     })?;
-    let at = |(pos, reason): Fail| error(text, pos, reason);
+    let at = |(pos, code, reason): Fail| error(text, pos, code, reason);
     let mut warnings = check(&file).map_err(at)?;
     // Before spreads are copied in, so each use is reported once, where it is written.
     warnings.extend(deprecated_uses(&file));
     let file = expand(file, imported_spreads).map_err(at)?;
     guarded(&file).map_err(at)?;
-    warnings.sort_by_key(|(pos, _)| *pos);
+    warnings.sort_by_key(|(pos, _, _)| *pos);
     let types = file
         .types
         .into_iter()
@@ -283,6 +287,22 @@ pub fn without_attributes(file: File) -> File {
     File { types, warnings: vec![], ..file }
 }
 
+/// The code of a syntax error, by what was expected there (spec §17).
+fn syntax_code(expected: &str) -> Code {
+    match expected {
+        COMMENT_END => Code::UnterminatedComment,
+        STRING_END => Code::UnterminatedString,
+        ATTRIBUTE_CLOSE => Code::UnclosedBracket,
+        ATTRIBUTE_PAREN => Code::AttributeSpace,
+        _ => Code::SchemaSyntax,
+    }
+}
+
+const COMMENT_END: &str = "*/ closing the comment";
+const STRING_END: &str = "'\"' closing the string";
+const ATTRIBUTE_CLOSE: &str = "')' closing the attribute's arguments";
+const ATTRIBUTE_PAREN: &str = "'(' right after the attribute's name, without a space";
+
 /// What the parser stopped at, for messages.
 fn found(rest: &str) -> String {
     let word = rest.bytes().take_while(|b| b.is_ascii_alphanumeric() || *b == b'_').count();
@@ -311,9 +331,7 @@ fn ws(i: &mut Input) -> ModalResult<()> {
 
 fn block_comment(i: &mut Input) -> ModalResult<()> {
     let inner = alt((block_comment, (not(alt(("/*", "*/"))), any).void()));
-    ("/*", cut_err((repeat(0.., inner).map(|()| ()), "*/").context(expected("*/ closing the comment"))))
-        .void()
-        .parse_next(i)
+    ("/*", cut_err((repeat(0.., inner).map(|()| ()), "*/").context(expected(COMMENT_END)))).void().parse_next(i)
 }
 
 /// `p`, then whitespace.
@@ -347,12 +365,10 @@ fn lower(i: &mut Input) -> ModalResult<String> {
     word(|c| c.is_ascii_lowercase() || c == '_').parse_next(i)
 }
 
-/// A type parameter: a word starting with a lower-case letter (not `_`) that isn't a keyword.
+/// A type parameter: a lower-case word that isn't a keyword. One starting
+/// with `_` is read too, for [`check`] to say what is wrong with it.
 fn param(i: &mut Input) -> ModalResult<String> {
-    lower
-        .verify(|w: &String| w.starts_with(|c: char| c.is_ascii_lowercase()) && !KEYWORDS.contains(&w.as_str()))
-        .context(expected("a type parameter"))
-        .parse_next(i)
+    lower.verify(|w: &String| !KEYWORDS.contains(&w.as_str())).context(expected("a type parameter")).parse_next(i)
 }
 
 fn string(i: &mut Input) -> ModalResult<String> {
@@ -360,7 +376,7 @@ fn string(i: &mut Input) -> ModalResult<String> {
     token(delimited(
         '"',
         repeat(0.., alt((none_of(['"', '\\', '\n']), escape))),
-        cut_err('"').context(StrContext::Expected(StrContextValue::CharLiteral('"'))),
+        cut_err('"').context(expected(STRING_END)),
     ))
     .parse_next(i)
 }
@@ -393,7 +409,8 @@ fn import(i: &mut Input) -> ModalResult<Import> {
         ),
     ))
     .context(expected("a module (std/time, @org/name, ./file)"));
-    let names = separated(1.., (pos, upper).map(|(p, n)| (n, p)), sym(","));
+    // At least one, which `check` says.
+    let names = separated(0.., (pos, upper).map(|(p, n)| (n, p)), sym(","));
     let (pos, (module, names)) =
         (pos, preceded(keyword("import"), cut_err((module, delimited(sym("("), names, (opt(sym(",")), sym(")")))))))
             .parse_next(i)?;
@@ -426,15 +443,17 @@ fn attribute(i: &mut Input) -> ModalResult<Attribute> {
     let rest: &str = i;
     let args = if rest.starts_with('(') {
         let Some(close) = closing_paren(rest) else {
-            return cut_err(fail.context(expected("')' closing the attribute's arguments"))).parse_next(i);
+            return cut_err(fail.context(expected(ATTRIBUTE_CLOSE))).parse_next(i);
         };
         let start = i.current_token_start() + 1;
         let inner = &rest[1..close];
         let _ = i.next_slice(close + 1);
         match haus::parse(inner) {
-            Ok(args) if args.is_empty() => Err((start - 1, format!("empty parentheses: write @{name} without them"))),
+            Ok(args) if args.is_empty() => {
+                Err((start - 1, Code::AttributeArguments, format!("empty parentheses: write @{name} without them")))
+            }
             Ok(args) => Ok(args),
-            Err(e) => Err((start + e.offset, format!("in the arguments of @{name}: {}", e.reason))),
+            Err(e) => Err((start + e.offset, e.code, format!("in the arguments of @{name}: {}", e.reason))),
         }
     } else {
         // `@deprecated ("x")` would be an attribute without arguments, then `("x")`.
@@ -442,8 +461,7 @@ fn attribute(i: &mut Input) -> ModalResult<Attribute> {
         ws.parse_next(i)?;
         if i.starts_with('(') {
             i.reset(&before);
-            return cut_err(fail.context(expected("'(' right after the attribute's name, without a space")))
-                .parse_next(i);
+            return cut_err(fail.context(expected(ATTRIBUTE_PAREN))).parse_next(i);
         }
         Ok(vec![])
     };
@@ -653,12 +671,27 @@ fn check(file: &File) -> Result<Vec<Fail>, Fail> {
         names.find(|(n, _)| !seen.insert(*n))
     }
     if let Some((name, pos)) = first_duplicate(file.types.iter().map(|d| (d.name.as_str(), d.pos))) {
-        return Err((pos, format!("{name} is defined twice")));
+        return Err((pos, Code::DuplicateType, format!("{name} is defined twice")));
     }
     if let Some(d) = file.types.iter().find(|d| PRELUDE.iter().any(|(n, _)| *n == d.name)) {
-        return Err((d.pos, format!("{} is a prelude type and can't be redefined", d.name)));
+        return Err((d.pos, Code::RedefinePrelude, format!("{} is a prelude type and can't be redefined", d.name)));
     }
-    fn ty(t: &Ty) -> Result<(), (usize, String)> {
+    if let Some(imp) = file.imports.iter().find(|imp| imp.names.is_empty()) {
+        let reason = format!("import {} names no type: import {} (Name, …)", imp.module, imp.module);
+        return Err((imp.pos, Code::UnknownImport, reason));
+    }
+    for d in &file.types {
+        for (i, p) in d.params.iter().enumerate() {
+            if p.starts_with('_') {
+                let reason = format!("{p} can't be a parameter name: a parameter starts with a lowercase letter");
+                return Err((d.pos, Code::InvalidParameter, reason));
+            }
+            if d.params[..i].contains(p) {
+                return Err((d.pos, Code::InvalidParameter, format!("parameter {p} appears twice")));
+            }
+        }
+    }
+    fn ty(t: &Ty) -> Result<(), Fail> {
         let rows = match t {
             Ty::Record { spreads, .. } | Ty::Variant { spreads, .. } => spreads.as_slice(),
             _ => &[],
@@ -666,27 +699,34 @@ fn check(file: &File) -> Result<Vec<Fail>, Fail> {
         if let Some(s) = rows.iter().find(|s| !s.name.starts_with(|c: char| c.is_ascii_uppercase())) {
             return Err((
                 s.pos,
+                Code::RowParameter,
                 format!("row parameters (...{}) aren't supported; spread a named type instead: ...UserEvent", s.name),
             ));
         }
         if let Some((s, a)) = rows.iter().find_map(|s| s.attrs.first().map(|a| (s, a))) {
             return Err((
                 a.pos,
+                Code::AttributeOnSpread,
                 format!("a spread can't have attributes; the fields or tags of {} keep their own", s.name),
             ));
         }
         match t {
             Ty::Name { args, .. } => args.iter().try_for_each(ty),
+            Ty::Param { name, pos } if name == "_" => Err((
+                *pos,
+                Code::UnderscoreType,
+                "types are open by default, so there is no _: write < > for any tag, or use a type parameter".into(),
+            )),
             Ty::Param { .. } => Ok(()),
             Ty::Record { fields, .. } => match first_duplicate(fields.iter().map(|f| (f.key.as_str(), f.pos))) {
-                Some((key, pos)) => Err((pos, format!("duplicate field {key}"))),
+                Some((key, pos)) => Err((pos, Code::DuplicateField, format!("duplicate field {key}"))),
                 None => fields.iter().try_for_each(|f| ty(&f.ty)),
             },
             Ty::Variant { closed: true, cases, spreads, pos } if cases.is_empty() && spreads.is_empty() => {
-                Err((*pos, "a closed variant needs at least one tag".into()))
+                Err((*pos, Code::ClosedEmptyVariant, "a closed variant needs at least one tag".into()))
             }
             Ty::Variant { cases, .. } => match first_duplicate(cases.iter().map(|c| (c.tag.as_str(), c.pos))) {
-                Some((tag, pos)) => Err((pos, format!("duplicate tag {tag}"))),
+                Some((tag, pos)) => Err((pos, Code::DuplicateTag, format!("duplicate tag {tag}"))),
                 None => cases.iter().flat_map(|c| &c.payload).try_for_each(ty),
             },
         }
@@ -728,14 +768,16 @@ fn attributes(attrs: &[Attribute]) -> Result<Vec<Fail>, Fail> {
     for (i, a) in attrs.iter().enumerate() {
         let args = a.args.as_ref().map_err(Clone::clone)?;
         if !DEFINED_ATTRIBUTES.contains(&a.name.as_str()) {
-            warnings.push((a.pos, format!("unknown attribute @{}: this version of haus ignores it", a.name)));
+            let reason = format!("unknown attribute @{}: this version of haus ignores it", a.name);
+            warnings.push((a.pos, Code::UnknownAttribute, reason));
             continue;
         }
         if attrs[..i].iter().any(|b| b.name == a.name) {
-            return Err((a.pos, format!("@{} is written twice here", a.name)));
+            return Err((a.pos, Code::AttributeTwice, format!("@{} is written twice here", a.name)));
         }
         if a.name == "deprecated" && !matches!(args.as_slice(), [] | [Value::String(_)]) {
-            return Err((a.pos, "@deprecated takes at most one argument, a string: @deprecated(\"use email\")".into()));
+            let reason = "@deprecated takes at most one argument, a string: @deprecated(\"use email\")";
+            return Err((a.pos, Code::AttributeArguments, reason.into()));
         }
     }
     Ok(warnings)
@@ -802,6 +844,7 @@ fn guarded(file: &File) -> Result<(), Fail> {
             if n == d.name {
                 return Err((
                     d.pos,
+                    Code::UnguardedRecursion,
                     format!(
                         "{} refers to itself without a record field, array element or variant payload in between, \
                          so decoding it would never end",
@@ -846,6 +889,7 @@ fn deprecated_uses(file: &File) -> Vec<Fail> {
             if let Some(why) = deprecated.get(name) {
                 out.push((
                     pos,
+                    Code::Deprecated,
                     why.map_or(format!("{name} is deprecated"), |why| format!("{name} is deprecated: {why}")),
                 ));
             }
@@ -856,8 +900,8 @@ fn deprecated_uses(file: &File) -> Vec<Fail> {
 
 // ── spreads ──────────────────────────────────────────────────
 
-/// What is wrong, at a byte offset.
-pub type Fail = (usize, String);
+/// What is wrong, at a byte offset, and its code.
+pub type Fail = (usize, Code, String);
 
 /// Copies every `...Name` in: a variant gets the named variant's tags, a
 /// record the named record's fields, in the place they are written. Whether
@@ -903,10 +947,14 @@ impl Expander {
                     .collect::<Result<Vec<_>, Fail>>()?;
                 let (fields, spreads) = self.merge(own, spreads, |x, s| match x.body(s)? {
                     Ty::Record { fields, .. } => Ok(fields),
-                    _ => Err((s.pos, format!("{} is not a record, so it can't be spread here", s.name))),
+                    _ => Err((
+                        s.pos,
+                        Code::InvalidSpread,
+                        format!("{} is not a record, so it can't be spread here", s.name),
+                    )),
                 })?;
                 if let Some((key, pos)) = duplicate(fields.iter().map(|(f, from)| (f.key.as_str(), f.pos, *from))) {
-                    return Err((pos, format!("duplicate field {key}")));
+                    return Err((pos, Code::DuplicateField, format!("duplicate field {key}")));
                 }
                 Ty::Record { closed: *closed, fields: fields.into_iter().map(|(f, _)| f).collect(), spreads, pos: *pos }
             }
@@ -920,10 +968,14 @@ impl Expander {
                     .collect::<Result<Vec<_>, Fail>>()?;
                 let (cases, spreads) = self.merge(own, spreads, |x, s| match x.body(s)? {
                     Ty::Variant { cases, .. } => Ok(cases),
-                    _ => Err((s.pos, format!("{} is not a variant, so it can't be spread here", s.name))),
+                    _ => Err((
+                        s.pos,
+                        Code::InvalidSpread,
+                        format!("{} is not a variant, so it can't be spread here", s.name),
+                    )),
                 })?;
                 if let Some((tag, pos)) = duplicate(cases.iter().map(|(c, from)| (c.tag.as_str(), c.pos, *from))) {
-                    return Err((pos, format!("duplicate tag {tag}")));
+                    return Err((pos, Code::DuplicateTag, format!("duplicate tag {tag}")));
                 }
                 Ty::Variant { closed: *closed, cases: cases.into_iter().map(|(c, _)| c).collect(), spreads, pos: *pos }
             }
@@ -979,17 +1031,20 @@ impl Expander {
         let mut name = s.name.clone();
         loop {
             let Some(def) = self.defs.get(&name).cloned() else {
-                let reason = if self.imported.contains(&name) {
-                    format!("{name} is imported; haus-fmt-build can spread only types defined in this file so far")
-                } else {
-                    format!("unknown type {name}")
-                };
-                return Err((s.pos, reason));
+                return Err(match self.imported.contains(&name) {
+                    true => (
+                        s.pos,
+                        Code::InvalidSpread,
+                        format!("{name} is imported; haus-fmt-build can spread only types defined in this file so far"),
+                    ),
+                    false => (s.pos, Code::UnknownType, unknown_type(&name)),
+                });
             };
             if !def.params.is_empty() {
                 let params = def.params.join(" ");
                 return Err((
                     s.pos,
+                    Code::InvalidSpread,
                     format!("{name} has parameters ({name} {params}); only a type without parameters can be spread"),
                 ));
             }
@@ -999,6 +1054,7 @@ impl Expander {
                     if self.busy.contains(&name) {
                         return Err((
                             def.pos,
+                            Code::SpreadCycle,
                             format!("type {name} spreads itself (directly or through another type)"),
                         ));
                     }
@@ -1012,7 +1068,7 @@ impl Expander {
             match body {
                 Ty::Name { name: next, args, .. } if args.is_empty() && next != name => name = next,
                 Ty::Name { name: stream, .. } if stream == "Stream" => {
-                    return Err((s.pos, format!("{} is a Stream and can't be spread", s.name)));
+                    return Err((s.pos, Code::InvalidSpread, format!("{} is a Stream and can't be spread", s.name)));
                 }
                 other => return Ok(other),
             }

@@ -1,6 +1,7 @@
 """The fuzzing runner (fuzz/README.md): `runner.py [--stream | --canonical] DIR N`
 parses DIR/00000.haus … DIR/{N-1}.haus and prints one line each: `ok <values>`
-in the test-suite JSON encoding, or `err <line> <column> <reason>`.
+in the test-suite JSON encoding, or `err <line> <column> <code> <reason>` (the
+error code of spec §17).
 With `--stream`, each file goes through the stream reader in chunks (see
 `chunks`); with `--canonical`, `ok` is followed by the canonical form of each
 value (spec §12) as a JSON array of strings."""
@@ -49,7 +50,7 @@ def line(read: Callable[[], list[Value]], encode: Callable[[Value], object] = su
     try:
         values = read()
     except haus.HausSyntaxError as e:
-        return f"err {e.line} {e.column} {e.reason.replace(chr(10), ' ')}"
+        return f"err {e.line} {e.column} {e.code} {e.reason.replace(chr(10), ' ')}"
     return "ok " + json.dumps([encode(v) for v in values], separators=(",", ":"))
 
 

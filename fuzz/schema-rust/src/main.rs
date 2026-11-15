@@ -1,7 +1,8 @@
 //! The Rust runner of the schema fuzzer (fuzz/README.md): `schema_runner FILE`
 //! reads lines `SUITE TYPE HEX` (a value's haus text as hex-encoded UTF-8),
 //! decodes the value with the type, encodes the result, and prints one line
-//! each: `ok <canonical form>` or `err <place> <reason>`.
+//! each: `ok <canonical form>` or `err <place> <code> <reason>`, the place as
+//! `$.items[2].price` and the code of spec §17 (`-` for none).
 
 mod schemas {
     include!(concat!(env!("OUT_DIR"), "/schemas.rs"));
@@ -17,15 +18,15 @@ fn unhex(hex: &str) -> Vec<u8> {
 
 fn line(text: &str) -> String {
     let parts: Vec<&str> = text.split(' ').collect();
-    let [suite, ty, hex] = parts.as_slice() else { return "err $ bad line".into() };
+    let [suite, ty, hex] = parts.as_slice() else { return "err $ - bad line".into() };
     let value = match haus::parse_bytes(&unhex(hex)) {
         Ok(mut vs) if vs.len() == 1 => vs.remove(0),
-        _ => return "err $ not a single value".into(),
+        _ => return "err $ - not a single value".into(),
     };
     match schemas::roundtrip(suite, ty, &value) {
         None => format!("crash no type {suite}.{ty}"),
         Some(Ok(encoded)) => format!("ok {}", haus::canonical(&encoded)),
-        Some(Err(e)) => format!("err {}", e.to_string().replace(['\n', '\r'], " ")),
+        Some(Err(e)) => format!("err {} {} {}", e.place(), e.code, e.to_string().replace(['\n', '\r'], " ")),
     }
 }
 

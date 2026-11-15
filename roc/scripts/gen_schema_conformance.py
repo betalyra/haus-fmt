@@ -129,7 +129,8 @@ SchemaTest := [].{
 	## Case `i` of a cases file (see test-suite/schema/numbers.cases.haus):
 	## `Ok { type, input, output? }` decodes `input` with `type`, and encoding
 	## the result gives the canonical form of `output` (or of `input`), which
-	## the writer takes; `Err { type, input }` doesn't decode.
+	## the writer takes; `Err { type, input, code }` doesn't decode, and fails
+	## with the error code `code` (spec §17).
 	check : Str, U64, (Str, Value -> Codec) -> Bool
 	check = |cases, i, codec| {
 		ok = match Value.parse_all(cases) {
@@ -147,13 +148,14 @@ SchemaTest := [].{
 					}
 					_ => Err("a case without a type or an input")
 				}
-				Ok(Tag("Err", [Rec(fields)])) => match (field(fields, "type"), field(fields, "input")) {
-					(Ok(Text(ty)), Ok(input)) => match codec(ty, input) {
-						Decoded(Err(_)) => Ok({})
+				Ok(Tag("Err", [Rec(fields)])) => match (field(fields, "type"), field(fields, "input"), field(fields, "code")) {
+					(Ok(Text(ty)), Ok(input), Ok(Text(code))) => match codec(ty, input) {
+						Decoded(Err(e)) if e.code == code => Ok({})
+						Decoded(Err(e)) => Err("failed with ${e.code}, expected ${code}: ${Decode.message(e)}")
 						Decoded(Ok(got)) => Err("decoded, and wrote ${Encode.canonical(got)}")
 						NoType => Err("the schema has no type ${ty}")
 					}
-					_ => Err("a case without a type or an input")
+					_ => Err("a case without a type, an input or a code")
 				}
 				_ => Err("no case ${i.to_str()}")
 			}

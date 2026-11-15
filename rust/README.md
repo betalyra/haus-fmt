@@ -93,7 +93,9 @@ Schema packages are ordinary dependencies: a crate with `haus.package.haus`,
 `links = "<its library name>"` and `haus_build::package()` in its build script. A crate
 that depends on it directly can `import @org/name (…)`; the types are the
 package crate's own (`haus_money::Money`), so codecs written for them work in
-every crate.
+every crate. haus-fmt-schema never prints (it backs tools whose output must stay
+clean); haus-fmt-build tells Cargo to rerun when a package's files change,
+from `Packages::files()`.
 
 Streams (spec §6) are read as the values arrive: `haus::stream::decode::<T, _>(reader)`
 is an iterator over any `std::io::Read`, and `haus::stream::encode` writes one value per
@@ -102,6 +104,42 @@ the completed values), so an async adapter is a short loop around it.
 
 Without a schema, `haus::parse` reads any haus text into `Value`s: a parser in
 the sense of spec §13.1, which knows no types.
+
+## Error codes
+
+Every error has a code from the catalogue of spec §17 ([`spec/errors.md`](../spec/errors.md)),
+the same in every binding: `haus::ErrorCode`, an enum (`ErrorCode::PayloadNewline`)
+whose `as_str()` is the code (`payload-newline`), with its `category()`, the
+catalogue's fix as `hint()`, and `docs()`, `https://haus-fmt.org/docs/errors#<code>`.
+`ErrorCode::from_name("payload-newline")` goes the other way.
+
+| Error | Code | Also |
+|---|---|---|
+| `haus::SyntaxError` (haus text, JSON text) | `.code` | `line`, `column`, `expected()`, `found()`, `hint()` |
+| `haus::DecodeError`, `haus::EncodeError` (typed values, JSON mappings) | `.code` | `path`, `place()` (`$.items[2].price`), `expected()`, `found()`, `hint()` |
+| `haus::Error` (any of them, or I/O) | `code()`, None for I/O | |
+| `haus_schema::Error`, `Warning` (schema files, imports) | `code()` | `position()`, `hint()` |
+| `haus_schema::Issue` (checking data) | `.code` (`missing-field`; hints: `unlisted-field`, `deprecated`, …) | `position`, `path_string()` |
+
+`hint()` is a fix for the case at hand where one is known (`Put the payload on
+the same line as Heartbeat, …`), else the catalogue's. Each of them has
+`to_json()`, the JSON form of §17, written with haus's own JSON writer:
+
+```rust
+let e = haus::parse("Heartbeat\n{ at: 1 }").unwrap_err();
+assert_eq!(e.code, haus::ErrorCode::PayloadNewline);
+println!("{}", e.to_json());
+// {"code":"payload-newline","message":"expected ',' between top-level values, found '{'","line":2,"column":1,
+//  "expected":"','","found":"'{'","hint":"Put the payload on the same line as Heartbeat, …","docs":"https://haus-fmt.org/docs/errors#payload-newline"}
+```
+
+`haus::ErrorJson { … }.write()` gives the same form for errors of your own.
+The table of codes, `haus/src/error_codes.rs`, is generated from
+`spec/errors.haus` by a test, which reads the catalogue with this crate's
+parser and fails when the file is out of date; regenerate it with
+`HAUS_WRITE_ERROR_CODES=1 cargo test -p haus-fmt --test error_codes`. The
+conformance tests compare codes (`invalid/NAME.error`, `code` in `Err` cases),
+and every example of the catalogue gives its code.
 
 ## Formatting
 
@@ -196,5 +234,5 @@ stack per level.
 
 ```sh
 cargo test                                                   # everything, with the conformance suite
-cargo run -p haus --example errors -- ../test-suite/invalid/*.haus   # print each syntax error
+cargo run -p haus-fmt --example errors -- ../test-suite/invalid/*.haus   # print each syntax error and its code
 ```
