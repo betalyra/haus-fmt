@@ -171,10 +171,10 @@ literals.
 **About JSON** (spec §16), in [`Haus/Json/`](Haus/Json). JSON is modelled
 as data (`JSON`): numbers keep their text, and `JSON.Equiv` compares as §16
 does, member order ignored and numbers by text. A strict reader for JSON text
-(I-JSON, the limits, a leading byte order mark, JSON Lines) and a compact
-writer are references, tested but not proven. All cases of
-`test-suite/json` pass, and every `valid/NAME.json` reads back as its file's
-values. A value is *well formed* (`Value.wf`) when its numbers are normalized
+(I-JSON, the limits, a leading byte order mark, JSON Lines) reads back what
+the compact writer writes, for exactly the JSON the reader returns. All
+cases of `test-suite/json` pass, and every `valid/NAME.json` reads back as
+its file's values. A value is *well formed* (`Value.wf`) when its numbers are normalized
 literals and its tags are tags, as every parsed value is (`parse_wf`).
 
 | Theorem | Says |
@@ -190,6 +190,9 @@ literals and its tags are tags, as every parsed value is (`parse_wf`).
 | `hex_decode_encode`, `hex_encode_decode` | The same for lowercase hex (lossless `bytes`) |
 | `normalizeNumber_normal` | A normalized literal normalizes to itself, so a `Decimal` reads back unchanged |
 | `parse_wf`, `lossless_parsed`, `plain_parsed` | Every value the parser returns is well formed, so both round trips hold for every value of every haus text |
+| `JSON.parse_write`, `JSON.parse_sound`, `JSON.parse_write_iff` | `JSON.parse L (JSON.write j) = .ok j` exactly when `j` is well formed (`JSON.WellFormed`: number tokens, no duplicate member names) and within the limits (`JSON.Fits`) |
+| `JSON.parseLines_writeLines`, `JSON.parseLines_sound` | The same for JSON Lines: the compact writer writes nothing below U+0020 (`JSON.write_chars`), so each value is one line |
+| `JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`, `plain_text_parsed` | The lossless and plain round trips through JSON text, when the JSON is within the limits |
 
 The plain round trip goes by induction on the rules of decoding (`Dec`),
 with `floatLaw` for floats. A `Maybe` writes `None` as `null` only when its

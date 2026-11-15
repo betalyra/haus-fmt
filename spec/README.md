@@ -136,6 +136,7 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
    - build error messages in constant time: no printing of whole schemas or values.
 9. **Recursive types** (a type that contains itself, like a tree) are allowed but MUST be explicit (e.g. `h.Recursive`). Every cycle MUST pass through a record field, array element or variant payload, so that each level of recursion consumes a level of input. A schema that applies itself to the same value again MUST fail. By default, recursive values are limited only by the nesting depth of §7 (256), so every binding accepts the same values; bindings MAY let applications set a smaller limit for a recursive type.
 10. **Schemas are declarative.** The schema language describes structure only: records, arrays, variants, prelude types and recursion. Generic types MAY refer to themselves only with the same parameters (`type List a = < Nil | Cons a (List a) >`; not `T (Pair a a)`). There are no type-level functions, conditions on values, references between values, or user code in schemas, and no syntax for rules about values: the only such rules are those of built-in types (§13.1), which run in linear time. Checking a value against a schema then always terminates in linear time; anything more belongs in application code, where the work budget (item 8) still applies.
+11. **A hash hides nothing.** `hash` and `hashAll` (§12) are unkeyed: anyone who can guess a document's content can compute its hash and confirm the guess. A value with little entropy (a short password, a PIN, an email address, an amount) inside an otherwise predictable document is exposed by publishing the document's hash, whether or not a schema marks it `Secret` (§15), since the hash doesn't depend on a schema. Don't publish hashes or signatures of documents with private content on their own; use a keyed hash (HMAC) or keep the hash as private as the data.
 
 ## 10. Evolution and versions
 
@@ -486,6 +487,8 @@ How it is represented is up to the binding. For example, a binding MAY represent
 - leave the value out of error messages, when decoding and when encoding: an error inside a `Secret` is reported at the secret itself (`$.apiKey`), with its type, never with the value found or any part of it. A path into the secret could itself reveal it, through the keys of a `Map` or an `Any`.
 
 Tools that show data, such as editors and `haus check`, SHOULD mask values of a `Secret` type.
+
+`Secret` protects against accidental exposure in a program, not against anyone who sees the data: it is not encryption, the text holds the value in full, and a hash of the document can confirm a guess of it (§9.11).
 
 **Attributes don't matter.** Decoding and encoding are the same with and without the attributes of a schema (§14).
 

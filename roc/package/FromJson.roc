@@ -23,16 +23,27 @@ FromJson := [].{
 
 	## Read a JSON text holding one value with `reader`.
 	one : Str, (JsonValue -> Try(a, Decode.Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)])
-	one = |text, reader| {
-		json = JsonValue.parse(text).map_err(|e| Syntax(e))?
+	one = |text, reader| one_with(text, Value.default_limits, reader)
+
+	## `one` with your own limits for reading the JSON (see `JsonValue.parse_with`).
+	## A generated `from_json_<name>` checks the value's depth against the
+	## default 256; for `limits.max_depth`, read with `read_json_<name>` and
+	## check with `within_limits`.
+	one_with : Str, Value.Limits, (JsonValue -> Try(a, Decode.Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)])
+	one_with = |text, limits, reader| {
+		json = JsonValue.parse_with(text, limits).map_err(|e| Syntax(e))?
 		reader(json).map_err(|e| Decode(e))
 	}
 
 	## Read JSON Lines (see `JsonValue.lines`), every line with `reader`.
 	## Decode errors say which value: `[3].total`.
 	lines : Str, (JsonValue -> Try(a, Decode.Error)) -> Try(List(a), [Syntax(Value.ParseError), Decode(Decode.Error)])
-	lines = |text, reader| {
-		values = JsonValue.lines(text).map_err(|e| Syntax(e))?
+	lines = |text, reader| lines_with(text, Value.default_limits, reader)
+
+	## `lines` with your own limits for reading the JSON (see `one_with`).
+	lines_with : Str, Value.Limits, (JsonValue -> Try(a, Decode.Error)) -> Try(List(a), [Syntax(Value.ParseError), Decode(Decode.Error)])
+	lines_with = |text, limits, reader| {
+		values = JsonValue.lines_with(text, limits).map_err(|e| Syntax(e))?
 		var $out = []
 		var $i = 0.U64
 		for v in values {
@@ -48,9 +59,15 @@ FromJson := [].{
 	## the value is checked after reading). A generated `from_json_<name>`
 	## checks its result so; the readers it is built from don't.
 	within_depth : Try(a, Decode.Error), (a -> Value) -> Try(a, Decode.Error)
-	within_depth = |result, encode| {
+	within_depth = |result, encode| within_limits(result, encode, Value.default_limits)
+
+	## `within_depth` for the depth limit of `limits`:
+	##
+	##     FromJson.one_with(text, limits, |j| FromJson.within_limits(Order.read_json_order(j), Order.encode_order, limits))
+	within_limits : Try(a, Decode.Error), (a -> Value), Value.Limits -> Try(a, Decode.Error)
+	within_limits = |result, encode, limits| {
 		x = result?
-		if (depth(encode(x)) > max_depth) Decode.fail("nesting deeper than ${max_depth.to_str()} levels") else Ok(x)
+		if (depth(encode(x)) > limits.max_depth) Decode.fail("nesting deeper than ${limits.max_depth.to_str()} levels") else Ok(x)
 	}
 
 	# ── scalars ─────────────────────────────────────────────
@@ -344,9 +361,6 @@ FromJson := [].{
 	no_plain_form = |tag| Decode.fail("${tag} has a field named _tag, so it has no plain JSON form")
 }
 
-max_depth : U64
-max_depth = 256
-
 ## How deep a value nests, counted as the haus writer counts it (`Tag { … }`
 ## is one level).
 depth : Value -> U64
@@ -463,3 +477,15 @@ nest = |n| {
 	}
 	$v
 }
+
+# Your own limits: for the JSON text, and with `within_limits` for the value.
+small : Value.Limits
+small = { ..Value.default_limits, max_depth: 2, max_number_length: 3 }
+
+expect FromJson.one_with("[[[[[[[[[0]]]]]]]]]", small, |_| Ok({})) == Ok({})
+expect FromJson.one_with("[[[[[[[[[[0]]]]]]]]]]", small, |_| Ok({})) == Err(Syntax({ reason: "JSON nested deeper than 9 levels", line: 1, column: 10 }))
+expect FromJson.one_with("123", small, FromJson.u16) == Ok(123)
+expect FromJson.one_with("1234", small, FromJson.u16) == Err(Syntax({ reason: "number literal longer than 3 characters", line: 1, column: 1 }))
+expect FromJson.lines_with("123\n123\n", small, FromJson.u16) == Ok([123, 123]) and FromJson.lines_with("123\n1234\n", small, FromJson.u16).is_err()
+expect FromJson.within_limits(Ok(nest(2)), |v| v, small).is_ok()
+expect FromJson.within_limits(Ok(nest(3)), |v| v, small).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 2 levels")

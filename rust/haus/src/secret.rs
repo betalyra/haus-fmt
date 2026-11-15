@@ -99,6 +99,6 @@ mod tests {
     #[test]
     fn encodes_in_full() {
         let key: Secret<String> = from_str("\"sk-123\"").unwrap();
-        assert_eq!(crate::Encode::encode(&key), Value::String("sk-123".into()));
+        assert_eq!(crate::Encode::encode(&key), Ok(Value::String("sk-123".into())));
     }
 }

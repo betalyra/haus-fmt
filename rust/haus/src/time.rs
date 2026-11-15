@@ -47,8 +47,8 @@ macro_rules! types {
         }
 
         impl Encode for $name {
-            fn encode(&self) -> Value {
-                ser::variant(stringify!($name), vec![Value::String(self.0.clone())])
+            fn encode_with(&self, e: ser::Encoder) -> Result<Value, crate::EncodeError> {
+                ser::tagged(stringify!($name), e, |e| [e.string(&self.0)])
             }
         }
     )*};

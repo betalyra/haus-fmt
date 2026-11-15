@@ -102,6 +102,7 @@ export default defineConfig({
             { label: 'Logs and streams', slug: 'docs/tours/streams' },
             { label: 'From schema to code', slug: 'docs/tours/typed' },
             { label: 'Time and money', slug: 'docs/tours/time-money' },
+            { label: 'Config and secrets', slug: 'docs/tours/secrets' },
           ],
         },
         {

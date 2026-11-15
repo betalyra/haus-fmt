@@ -50,7 +50,7 @@ pub use error::{DecodeError, EncodeError, Error, Segment, SyntaxError};
 pub use json::{FromJson, Json, ToJson};
 pub use parser::{Limits, parse_with};
 pub use secret::Secret;
-pub use ser::Encode;
+pub use ser::{Encode, Encoder};
 pub use value::Value;
 
 /// Include the Rust types haus-build generated for a schema:
@@ -92,9 +92,11 @@ pub fn from_str_all<T: Decode>(src: &str) -> Result<Vec<T>, Error> {
 }
 
 /// Write one value on one line (the compact layout, spec §11). Fails if the
-/// value isn't one a reader with the default limits takes, which only a
-/// [`Value`] built in code can cause, such as the raw value of an `Any` or an
-/// unknown variant (spec §9.8): see [`ser::write_with`].
+/// value isn't one a reader with the default limits takes: one nested deeper
+/// than the depth limit (checked while encoding, so a deep native value fails
+/// at the limit), or a [`Value`] built in code that isn't valid, such as the
+/// raw value of an `Any` or an unknown variant (spec §9.8): see
+/// [`ser::write_with`]. An error inside a [`Secret`] names only the secret.
 pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
     to_string_with(value, &Limits::default())
 }
@@ -102,7 +104,7 @@ pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
 /// [`to_string`], for a reader with `limits`: the value must be within them,
 /// and integers longer than its number limit are written in hex.
 pub fn to_string_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
-    ser::write_with(&value.encode(), limits)
+    ser::write_with(&value.encode_with(Encoder::new(limits))?, limits)
 }
 
 /// Write a stream: one value per line, each followed by `,`. Errors say which value: `[3].total: …`.

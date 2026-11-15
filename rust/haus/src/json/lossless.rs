@@ -19,7 +19,12 @@ use std::fmt::Write as _;
 /// haus writer checks it: number literals (normalized: `1E5` is written
 /// `1e5`), tag names, unique keys, and the limits.
 pub fn to_lossless(value: &Value, limits: &Limits) -> Result<Json, EncodeError> {
-    Writer { limits }.value(value, 0)
+    to_lossless_at(value, limits, 0)
+}
+
+/// [`to_lossless`] for a value inside `depth` containers.
+pub(crate) fn to_lossless_at(value: &Value, limits: &Limits, depth: usize) -> Result<Json, EncodeError> {
+    Writer { limits }.value(value, depth)
 }
 
 /// A value from its lossless form, and from nothing else.

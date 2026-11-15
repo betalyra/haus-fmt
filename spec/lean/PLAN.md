@@ -207,7 +207,7 @@ member order); a strict text reader and a compact writer sit next to it.
 
 | | Step | Gives | Effort |
 |---|---|---|---|
-| ✅ | J1. JSON as data and as text | `JSON`, compared as data (`JSON.Equiv`: member order ignored, numbers by text) ([`Json/Data.lean`](Haus/Json/Data.lean)). `JSON.parse`: RFC 8259 restricted to I-JSON (no duplicate member names, no unpaired surrogates), a leading byte order mark ignored, the limits of §16 (number tokens as written, strings, nesting 4·d + 1); `JSON.parseLines` for JSON Lines; `JSON.write`, compact ([`Json/Text.lean`](Haus/Json/Text.lean)). A reference, tested by `#guard`s and the suite, **not proven**. | days |
+| ✅ | J1. JSON as data and as text | `JSON`, compared as data (`JSON.Equiv`: member order ignored, numbers by text) ([`Json/Data.lean`](Haus/Json/Data.lean)). `JSON.parse`: RFC 8259 restricted to I-JSON (no duplicate member names, no unpaired surrogates), a leading byte order mark ignored, the limits of §16 (number tokens as written, strings, nesting 4·d + 1); `JSON.parseLines` for JSON Lines; `JSON.write`, compact ([`Json/Text.lean`](Haus/Json/Text.lean)). Proven in [`Json/TextRoundTrip.lean`](Haus/Json/TextRoundTrip.lean): `parse_write`, the text of every well-formed JSON within the limits (`WellFormed`: number tokens, no duplicate member names; `Fits`: strings, member names, number tokens, nesting) reads back as exactly that JSON; `parse_sound`, everything `parse` returns is such a JSON, so `parse_write_iff`; `parseLines_writeLines`/`parseLines_sound`, the same for JSON Lines (`writeLines`: each value and a line feed), since the writer writes nothing below U+0020 (`write_chars`). | days |
 | ✅ | J2. Byte strings | Base64 with padding, strict (canonical only), and lowercase hex: each reader accepts exactly the writer's texts and reads them back (`base64_decode_encode`, `base64_encode_decode`, `hex_decode_encode`, `hex_encode_decode`, [`Json/Base64.lean`](Haus/Json/Base64.lean)). | ~1 day |
 | ✅ | J3. Without a schema and lossless (§16.1, §16.2) | `JSON.toValue`, `lossless`, `fromLossless` ([`Json/Lossless.lean`](Haus/Json/Lossless.lean)). `lossless_read_write`/`fromLossless_lossless`: reading the lossless form gives the value back; `lossless_unique`: every accepted JSON is, as data, the lossless form of what it reads; `lossless_equiv_iff`: two values have the same lossless form, as data, exactly when they are equal (§2), for every value. | days |
 | ✅ | J4. Plain (§16.3) | `toJson`/`fromJson` over the schema model, row by row ([`Json/Plain.lean`](Haus/Json/Plain.lean)). `plain_round_trip`: reading the plain JSON of a decoded value gives it back; `plain_injective`: two decoded values with the same plain JSON are the same; `toJson_error`: writing a decoded value fails only for a record payload with a field named `_tag` ([`Json/PlainRoundTrip.lean`](Haus/Json/PlainRoundTrip.lean)). Floats rest on `floatLaw`; `normalizeNumber_normal` ([`Json/Normal.lean`](Haus/Json/Normal.lean)) shows a `Decimal`'s literal reads back unchanged. | ~1 week |
@@ -215,10 +215,16 @@ member order); a strict text reader and a compact writer sit next to it.
 | ✅ | J6. Conformance | `haus-ref --json-suite`: all cases of `test-suite/json` pass (plain, lossless, schemaless, and every `valid/NAME.json` as a lossless file), none skipped; in CI. Types from [`scripts/schema-types.ts`](scripts/schema-types.ts) → [`json-suite.json`](json-suite.json), checked up to date in CI. | days |
 | ⬜ | J7. Fuzzing | The Lean side exists: `--json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch`. Missing: runners per binding in `fuzz/`. | days |
 
-What is proven is about `JSON` as data. Not proven: that `JSON.parse`
-reads back what `JSON.write` writes (both are tested), the limits (checked
-on the value read, `Value.fits`, not part of the theorems), linear time, and
-JSON Lines.
+The mappings' theorems are about `JSON` as data; J1's connect them to text:
+`JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`
+and `plain_text_parsed` ([`Json/Correct.lean`](Haus/Json/Correct.lean)) read
+the written text back to the value, given that the value fits (`Value.fits`)
+and its JSON is within the JSON limits (`Fits`). The lossless JSON of a value
+without duplicate keys is well formed (`lossless_wellFormed`); for plain JSON
+that is a hypothesis. Not proven: that a value within the haus limits has
+lossless JSON within the JSON limits (it need not: keys and tags have no
+length limit in haus, but member names and strings do in JSON), that plain
+JSON is well formed, and linear time.
 
 How the model follows §16 where it was clarified while writing it (all now
 in the spec, with vectors):

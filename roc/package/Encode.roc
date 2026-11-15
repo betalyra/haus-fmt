@@ -18,18 +18,59 @@ Encode := [].{
 	## parser's limits (nesting depth 256, number literals of 1000 characters,
 	## exponents up to 6144, strings of 16 Mi characters).
 	to_str : Value -> Try(Str, Error)
-	to_str = |value| line(value, 0).map_ok(bytes_to_str)
+	to_str = |value| to_str_with(value, Value.default_limits)
+
+	## `to_str` for a reader with other limits (see `Value.Limits`): the value
+	## must be within them, and an integer longer than the number limit is
+	## written in hex if that fits.
+	to_str_with : Value, Value.Limits -> Try(Str, Error)
+	to_str_with = |value, limits| line(value, 0, limits).map_ok(bytes_to_str)
 
 	## `.extra[1]: not a number literal`, or just the reason at the root.
 	message : Error -> Str
 	message = |{ reason, path }| if (path == "") reason else "${path}: ${reason}"
 
 	## The canonical form (spec §12): one exact text per value, the same in
-	## every binding, so equal values (§2) give identical text. There is no
-	## `hash` yet: Roc has no SHA-256 in its standard library; hash the
-	## UTF-8 bytes of `canonical` with SHA-256 for the spec's `hash`.
+	## every binding, so equal values (§2) give identical text. It doesn't
+	## depend on a reader's limits.
 	canonical : Value -> Str
 	canonical = |value| bytes_to_str(canonical_bytes(value))
+
+	## The SHA-256 digest of the canonical form, as 64 lowercase hex digits
+	## (spec §12): the same whatever the layout, comments or key order.
+	hash : Value -> Str
+	hash = |value| Crypto.SHA256.hash(canonical_bytes(value)).to_hex()
+
+	## The hash of a list of values, such as a whole file or stream (spec
+	## §12): the SHA-256 digest of their canonical forms joined by `,`. A list
+	## of one value hashes like the value: `hash_all([v])` is `hash(v)`.
+	hash_all : List(Value) -> Str
+	hash_all = |values| values.fold(HashAll.empty, HashAll.add).digest()
+
+	## `hash_all` of a list as it grows, e.g. a stream while it is read: `add`
+	## each value, and `digest` at any time gives `hash_all` of the values
+	## added so far. Memory stays bounded by the largest value.
+	##
+	##     var $hash = Encode.HashAll.empty
+	##     for value in values {
+	##         $hash = $hash.add(value)
+	##     }
+	##     $hash.digest() # Encode.hash_all(values)
+	HashAll :: { sha : Crypto.SHA256.Hasher, count : U64 }.{
+		empty : Encode.HashAll
+		empty = { sha: Crypto.SHA256.Hasher.empty(), count: 0 }
+
+		## Add the next value.
+		add : Encode.HashAll, Value -> Encode.HashAll
+		add = |h, value| {
+			sha = if (h.count > 0) h.sha.write([',']) else h.sha
+			{ sha: sha.write(canonical_bytes(value)), count: h.count + 1 }
+		}
+
+		## `hash_all` of the values added so far, as 64 lowercase hex digits.
+		digest : Encode.HashAll -> Str
+		digest = |h| h.sha.finish().to_hex()
+	}
 
 	## Whether two values are equal (spec §2): the same canonical form.
 	equals : Value, Value -> Bool
@@ -44,11 +85,15 @@ Encode := [].{
 	## A stream: one value per line, each followed by a comma. Errors say
 	## which value: `[3].total`.
 	stream : List(Value) -> Try(Str, Error)
-	stream = |values| {
+	stream = |values| stream_with(values, Value.default_limits)
+
+	## `stream` for a reader with other limits (see `to_str_with`).
+	stream_with : List(Value), Value.Limits -> Try(Str, Error)
+	stream_with = |values, limits| {
 		var $out = []
 		var $i = 0.U64
 		for v in values {
-			$out = $out.concat(within(line(v, 0), "[${$i.to_str()}]")?).concat([',', '\n'])
+			$out = $out.concat(within(line(v, 0, limits), "[${$i.to_str()}]")?).concat([',', '\n'])
 			$i = $i + 1
 		}
 		Ok(bytes_to_str($out))
@@ -215,19 +260,6 @@ layout = |d, n| {
 ## same paths as `Decode.Error`.
 Error : { reason : Str, path : Str }
 
-# The parser's limits (spec §7 defaults, as in Value.roc): what a reader takes.
-max_depth : U64
-max_depth = 256
-
-max_number_length : U64
-max_number_length = 1000
-
-max_exponent : U64
-max_exponent = 6144
-
-max_string_length : U64
-max_string_length = 16 * 1024 * 1024
-
 ## Prefix the path of an error coming out of a nested value.
 within : Try(a, Error), Str -> Try(a, Error)
 within = |result, segment| result.map_err(|{ reason, path }| { reason, path: "${segment}${path}" })
@@ -236,59 +268,59 @@ fail : Str -> Try(a, Error)
 fail = |reason| Err({ reason, path: "" })
 
 ## A value inside `depth` containers (records, arrays, payloads).
-line : Value, U64 -> Try(List(U8), Error)
-line = |value, depth| match value {
-	Num(text) => number(text).map_err(|reason| { reason, path: "" })
+line : Value, U64, Value.Limits -> Try(List(U8), Error)
+line = |value, depth, limits| match value {
+	Num(text) => number(text, limits).map_err(|reason| { reason, path: "" })
 	Text(s) => {
-		check_length(s)?
+		check_length(s, limits)?
 		Ok(quote(s))
 	}
 	Bytes(b) =>
-		if b.len() > max_string_length // 2 {
-			fail("byte string longer than ${max_string_length.to_str()} characters")
+		if b.len() > limits.max_string_length // 2 {
+			fail("byte string longer than ${limits.max_string_length.to_str()} characters")
 		} else {
 			Ok("x\"".to_utf8().concat(hex(b)).append('"'))
 		}
 	Arr(items) => {
-		open(depth)?
-		Ok(['['].concat(items_line(items, depth + 1)?).append(']'))
+		open(depth, limits)?
+		Ok(['['].concat(items_line(items, depth + 1, limits)?).append(']'))
 	}
-	Rec(fields) => record_line(fields, depth)
+	Rec(fields) => record_line(fields, depth, limits)
 	Tag(name, args) =>
 		if !is_tag(name) {
 			fail("not a tag name: A to Z, then letters, digits and _")
 		} else {
 			match args {
 				[] => Ok(name.to_utf8())
-				[Rec(fields)] => Ok(name.to_utf8().append(' ').concat(within(record_line(fields, depth), "(${name})")?))
+				[Rec(fields)] => Ok(name.to_utf8().append(' ').concat(within(record_line(fields, depth, limits), "(${name})")?))
 				_ => {
-					open(depth)?
-					Ok(name.to_utf8().append('(').concat(within(items_line(args, depth + 1), "(${name})")?).append(')'))
+					open(depth, limits)?
+					Ok(name.to_utf8().append('(').concat(within(items_line(args, depth + 1, limits), "(${name})")?).append(')'))
 				}
 			}
 		}
 }
 
 ## Opening a container inside `depth` others.
-open : U64 -> Try({}, Error)
-open = |depth| if (depth >= max_depth) fail("nesting deeper than ${max_depth.to_str()} levels") else Ok({})
+open : U64, Value.Limits -> Try({}, Error)
+open = |depth, limits| if (depth >= limits.max_depth) fail("nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
 
 ## Items separated by `, `, each at `depth`.
-items_line : List(Value), U64 -> Try(List(U8), Error)
-items_line = |items, depth| {
+items_line : List(Value), U64, Value.Limits -> Try(List(U8), Error)
+items_line = |items, depth, limits| {
 	var $out = []
 	var $i = 0.U64
 	for x in items {
-		item = within(line(x, depth), "[${$i.to_str()}]")?
+		item = within(line(x, depth, limits), "[${$i.to_str()}]")?
 		$out = if ($i == 0) item else $out.concat([',', ' ']).concat(item)
 		$i = $i + 1
 	}
 	Ok($out)
 }
 
-record_line : List((Str, Value)), U64 -> Try(List(U8), Error)
-record_line = |fields, depth| {
-	open(depth)?
+record_line : List((Str, Value)), U64, Value.Limits -> Try(List(U8), Error)
+record_line = |fields, depth, limits| {
+	open(depth, limits)?
 	# Keys are unique (spec §1): a record built in code might repeat one.
 	var $seen = Set.empty()
 	for (k, _) in fields {
@@ -299,19 +331,19 @@ record_line = |fields, depth| {
 	}
 	var $out = []
 	for (k, v) in fields {
-		within(check_length(k), ".${k}")?
-		entry = key(k).concat([':', ' ']).concat(within(line(v, depth + 1), ".${k}")?)
+		within(check_length(k, limits), ".${k}")?
+		entry = key(k).concat([':', ' ']).concat(within(line(v, depth + 1, limits), ".${k}")?)
 		$out = if ($out.is_empty()) entry else $out.concat([',', ' ']).concat(entry)
 	}
 	Ok(if ($out.is_empty()) ['{', '}'] else ['{', ' '].concat($out).concat([' ', '}']))
 }
 
 ## A string within the string limit, counted in code points.
-check_length : Str -> Try({}, Error)
-check_length = |s| {
+check_length : Str, Value.Limits -> Try({}, Error)
+check_length = |s, limits| {
 	b = s.to_utf8()
-	too_long = b.len() > max_string_length and b.count_if(|c| c < 0x80 or c >= 0xC0) > max_string_length
-	if (too_long) fail("string longer than ${max_string_length.to_str()} characters") else Ok({})
+	too_long = b.len() > limits.max_string_length and b.count_if(|c| c < 0x80 or c >= 0xC0) > limits.max_string_length
+	if (too_long) fail("string longer than ${limits.max_string_length.to_str()} characters") else Ok({})
 }
 
 ## A tag name: `[A-Z][A-Za-z0-9_]*`.
@@ -324,8 +356,8 @@ is_tag = |name| {
 
 ## The text a number is written as, or why it can't be: its normalized
 ## literal (spec §2), in hex if it is an integer longer than the number limit.
-number : Str -> Try(List(U8), Str)
-number = |text| {
+number : Str, Value.Limits -> Try(List(U8), Str)
+number = |text, limits| {
 	b = text.to_utf8()
 	literal_chars = b.all(|c| (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == 'x' or c == '.' or c == '_' or c == '+' or c == '-')
 	n =
@@ -333,10 +365,10 @@ number = |text| {
 			b
 		} else if !literal_chars {
 			return Err("not a number literal")
-		} else if b.len() > max_number_length {
-			return Err("number literal longer than ${max_number_length.to_str()} characters")
+		} else if b.len() > limits.max_number_length {
+			return Err("number literal longer than ${limits.max_number_length.to_str()} characters")
 		} else {
-			match Value.parse(text) {
+			match Value.parse_with(text, limits) {
 				Ok(Num(normalized)) => normalized.to_utf8()
 				_ => return Err("not a number literal")
 			}
@@ -345,14 +377,14 @@ number = |text| {
 	match n.find_first_index(|c| c == 'e') {
 		Ok(i) => {
 			digits = n.drop_first(i + 1).drop_if(|c| c == '-')
-			too_large = digits.len() > 4 or (U64.from_str(bytes_to_str(digits)) ?? 0) > max_exponent
+			too_large = digits.len() > 18 or (U64.from_str(bytes_to_str(digits)) ?? 0) > limits.max_exponent
 			if too_large {
-				return Err("exponent larger than ${max_exponent.to_str()}")
+				return Err("exponent larger than ${limits.max_exponent.to_str()}")
 			}
 		}
 		Err(_) => {}
 	}
-	if n.len() <= max_number_length {
+	if n.len() <= limits.max_number_length {
 		return Ok(n)
 	}
 	negative = byte_at(n, 0) == '-'
@@ -360,9 +392,9 @@ number = |text| {
 	# d decimal digits have at least ⌊(d − 1) · log₁₆ 10⌋ + 1 hex digits (0.830482 is just below log₁₆ 10).
 	at_least = (if (negative) 3 else 2) + (digit_count - 1) * 830482 // 1000000 + 1
 	integer = n.drop_if(|c| c == '-').all(|c| c >= '0' and c <= '9')
-	written = if (integer and at_least <= max_number_length) number_text(text_of(n)) else n
-	if written.len() > max_number_length {
-		Err("number literal longer than ${max_number_length.to_str()} characters")
+	written = if (integer and at_least <= limits.max_number_length) number_text(text_of(n), limits.max_number_length) else n
+	if written.len() > limits.max_number_length {
+		Err("number literal longer than ${limits.max_number_length.to_str()} characters")
 	} else {
 		Ok(written)
 	}
@@ -400,7 +432,7 @@ is_normalized = |b| {
 ## The canonical form: no spaces, fields sorted by key.
 canonical_bytes : Value -> List(U8)
 canonical_bytes = |value| match value {
-	Num(text) => number_text(text)
+	Num(text) => number_text(text, Value.default_limits.max_number_length)
 	Text(s) => quote(s)
 	Bytes(b) => "x\"".to_utf8().concat(hex(b)).append('"')
 	Arr(items) => ['['].concat(comma_joined(items.map(canonical_bytes))).append(']')
@@ -455,12 +487,12 @@ comma_joined = |items| {
 
 ## A number's normalized literal, except an integer longer than the number
 ## limit (spec §7), which is written in hex so that it parses again (§11, §12).
-number_text : Str -> List(U8)
-number_text = |text| {
+number_text : Str, U64 -> List(U8)
+number_text = |text, max| {
 	b = text.to_utf8()
 	negative = byte_at(b, 0) == '-'
 	digits = if (negative) b.sublist({ start: 1, len: b.len() - 1 }) else b
-	if b.len() > 1000 and digits.all(|c| c >= '0' and c <= '9') {
+	if b.len() > max and digits.all(|c| c >= '0' and c <= '9') {
 		(if (negative) ['-'] else []).concat(['0', 'x']).concat(decimal_to_hex(digits))
 	} else {
 		b
@@ -662,6 +694,38 @@ expect match Value.parse_all("9, 10, [], \"😀\", { b: 1, a: 2 }, Some(1), -1")
 	_ => False
 }
 expect compare_texts("{ b: 1, a: 2 }", "{ a: 2, b: 1 }") == Same and compare_texts("1.0", "1") == After
+# Hashing (spec §12): SHA-256 of the canonical form; a list joins the forms with `,`.
+expect match Value.parse_all("{ a: 1 }") {
+	Ok([v]) => Encode.hash(v) == "f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261"
+	_ => False
+}
+expect Encode.hash_all([]) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+expect match (Value.parse_all("{ b: 1, a: 0x2 }, \"x\", [None]"), Value.parse_all("{a:2,b:1},\"x\",[None]")) {
+	(Ok(vs), Ok(same)) => {
+		joined = Crypto.SHA256.hash("{a:2,b:1},\"x\",[None]".to_utf8()).to_hex()
+		one = vs.take_first(1)
+		Encode.hash_all(vs) == joined and Encode.hash_all(same) == joined and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
+	}
+	_ => False
+}
+# The running hash gives `hash_all` of what was added so far, at any time.
+expect match Value.parse_all("1, \"two\", Three { n: 3 }") {
+	Ok(vs) => {
+		var $h = Encode.HashAll.empty
+		var $digests = [$h.digest()]
+		for v in vs {
+			$h = $h.add(v)
+			$digests = $digests.append($h.digest())
+		}
+		$digests == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)))
+	}
+	_ => False
+}
+# A reader's limits don't change the canonical form or the hash.
+expect match Value.parse_all_with("1${"0".repeat(1100)}", { ..Value.default_limits, max_number_length: 2000 }) {
+	Ok([v]) => Encode.canonical(v).starts_with("0x") and Encode.hash(v) == Crypto.SHA256.hash(Encode.canonical(v).to_utf8()).to_hex()
+	_ => False
+}
 # The compact writer keeps a huge integer in hex too (spec §11), so its output parses again.
 expect match Value.parse_all("0x${"f".repeat(900)}") {
 	Ok([v]) => Encode.to_str(v) == Ok("0x${"f".repeat(900)}")
@@ -714,3 +778,24 @@ expect {
 		},
 	)
 }
+
+# Writing for a reader with other limits (`to_str_with`): at each limit, and just past it.
+small : Value.Limits
+small = { max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
+
+error_with : Value -> Str
+error_with = |v| match Encode.to_str_with(v, small) {
+	Ok(_) => ""
+	Err(e) => Encode.message(e)
+}
+
+expect Encode.to_str_with(nested(3, Num("1"), |v| Arr([v])), small) == Ok("[[[1]]]")
+expect error_with(nested(4, Num("1"), |v| Arr([v]))) == "[0][0][0]: nesting deeper than 3 levels"
+expect Encode.to_str_with(Num("12345678"), small) == Ok("12345678") and error_with(Num("123456789")) == "number literal longer than 8 characters"
+# An integer longer than the number limit is written in hex if that fits: 10^12 is 0xe8d4a51000 (12 characters).
+expect Encode.to_str_with(Num("1000000000000"), { ..small, max_number_length: 12 }) == Ok("0xe8d4a51000")
+expect Encode.to_str_with(Num("1e99"), small) == Ok("1e99") and error_with(Num("1e100")) == "exponent larger than 99"
+expect Encode.to_str_with(Text("abcd"), small) == Ok("\"abcd\"") and error_with(Text("abcde")) == "string longer than 4 characters"
+expect Encode.stream_with([Num("1"), Num("1e100")], small) == Err({ reason: "exponent larger than 99", path: "[1]" })
+# Larger limits than the defaults: exponents past 9999 too.
+expect Encode.to_str_with(Num("1e12345"), { ..Value.default_limits, max_exponent: 20000 }) == Ok("1e12345")

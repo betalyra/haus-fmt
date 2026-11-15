@@ -5,14 +5,14 @@
 ## every value that is complete. Memory holds the current value, not the
 ## stream. The same reader as the TypeScript and Rust bindings.
 ##
-##     var $reader = Stream.reader({})
-##     (next, values) = Stream.push($reader, chunk)?
+##     var $reader = Streaming.reader(Streaming.defaults)
+##     (next, values) = Streaming.push($reader, chunk)?
 ##     $reader = next
 ##     …
-##     last = Stream.finish($reader)?
+##     last = Streaming.finish($reader)?
 import Value
 
-Stream := [].{
+Streaming := [].{
 
 	## A reader's state.
 	Reader : {
@@ -26,13 +26,16 @@ Stream := [].{
 		options : Options,
 	}
 
+	## `limits`: the parser's limits for each value (spec §7, see `Value.Limits`).
 	## `max_value_length`: the most characters in one value (spec §7: 64 Mi).
 	## `require_terminator`: a stream that ends without a comma after its last
 	## value is reported as cut off (recommended for network streams).
-	Options : { max_value_length : U64, require_terminator : Bool }
+	##
+	##     Streaming.reader({ ..Streaming.defaults, limits: { ..Value.default_limits, max_depth: 64 } })
+	Options : { limits : Value.Limits, max_value_length : U64, require_terminator : Bool }
 
 	defaults : Options
-	defaults = { max_value_length: 64 * 1024 * 1024, require_terminator: False }
+	defaults = { limits: Value.default_limits, max_value_length: 64 * 1024 * 1024, require_terminator: False }
 
 	reader : Options -> Reader
 	reader = |options| {
@@ -69,7 +72,7 @@ Stream := [].{
 		(rest, values) = scan(state, True)?
 		text = utf8(rest.buf, rest.origin)?
 		directive(text, rest.origin)?
-		last = Value.parse_rest(text).map_err(|e| shift(e, rest.origin))?
+		last = Value.parse_rest_with(text, rest.options.limits).map_err(|e| shift(e, rest.origin))?
 		if !last.is_empty() and rest.options.require_terminator {
 			end = after(rest.origin, rest.buf)
 			return Err({ reason: "stream ended without ',' after the last value (truncated?)", line: end.line, column: end.column })
@@ -98,7 +101,7 @@ Mode : [Normal, Text, Block, LineComment, Comment(U64)]
 Pos : { line : U64, column : U64 }
 
 ## Finds the commas between values and parses what is before them.
-scan : Stream.Reader, Bool -> Try((Stream.Reader, List(Value)), Value.ParseError)
+scan : Streaming.Reader, Bool -> Try((Streaming.Reader, List(Value)), Value.ParseError)
 scan = |start, last| {
 	var $s = start
 	var $out = []
@@ -216,12 +219,12 @@ scan = |start, last| {
 }
 
 ## Parse the value before the comma at `comma`, and drop it from the buffer.
-cut : Stream.Reader, U64 -> Try((Stream.Reader, Value), Value.ParseError)
+cut : Streaming.Reader, U64 -> Try((Streaming.Reader, Value), Value.ParseError)
 cut = |s, comma| {
 	piece = s.buf.sublist({ start: 0, len: comma })
 	text = utf8(piece, s.origin)?
 	directive(text, s.origin)?
-	value = match Value.parse_rest(text) {
+	value = match Value.parse_rest_with(text, s.options.limits) {
 		Ok([v]) => v
 		Ok([]) => {
 			end = after(s.origin, piece)
@@ -235,13 +238,13 @@ cut = |s, comma| {
 }
 
 ## A closing bracket without an opening one: let the parser say what's wrong.
-unbalanced : Stream.Reader, U64 -> Value.ParseError
+unbalanced : Streaming.Reader, U64 -> Value.ParseError
 unbalanced = |s, i| {
 	piece = s.buf.sublist({ start: 0, len: i + 1 })
 	match utf8(piece, s.origin) {
 		Err(e) => e
 		Ok(text) =>
-			match Value.parse_rest(text) {
+			match Value.parse_rest_with(text, s.options.limits) {
 				Err(e) => shift(e, s.origin)
 				Ok(_) => {
 					end = after(s.origin, s.buf.sublist({ start: 0, len: i }))
@@ -308,7 +311,7 @@ chunked = |text, size| {
 		$chunks = $chunks.append(bytes.sublist({ start: $i, len: size }))
 		$i = $i + size
 	}
-	Stream.all($chunks)
+	Streaming.all($chunks)
 }
 
 expect {
@@ -328,11 +331,11 @@ expect {
 }
 
 expect {
-	s0 = Stream.reader(Stream.defaults)
-	match Stream.push(s0, "UserCreated { id: 1 ".to_utf8()) {
+	s0 = Streaming.reader(Streaming.defaults)
+	match Streaming.push(s0, "UserCreated { id: 1 ".to_utf8()) {
 		Ok((s1, [])) =>
-			match Stream.push(s1, "},\nHeart".to_utf8()) {
-				Ok((s2, [_])) => Stream.finish(s2).map_ok(|vs| vs.map(Value.to_test_json)) == Ok(["{\"tag\":\"Heart\"}"])
+			match Streaming.push(s1, "},\nHeart".to_utf8()) {
+				Ok((s2, [_])) => Streaming.finish(s2).map_ok(|vs| vs.map(Value.to_test_json)) == Ok(["{\"tag\":\"Heart\"}"])
 				_ => False
 			}
 		_ => False
@@ -341,17 +344,17 @@ expect {
 
 # Positions in the whole stream.
 expect {
-	match Stream.push(Stream.reader(Stream.defaults), "A,\nB,\n{ ok: true },".to_utf8()) {
+	match Streaming.push(Streaming.reader(Streaming.defaults), "A,\nB,\n{ ok: true },".to_utf8()) {
 		Err({ line: 3, column: 7, .. }) => True
 		_ => False
 	}
 }
 
 expect {
-	options = { ..Stream.defaults, require_terminator: True }
-	match Stream.push(Stream.reader(options), "1000,\n100".to_utf8()) {
+	options = { ..Streaming.defaults, require_terminator: True }
+	match Streaming.push(Streaming.reader(options), "1000,\n100".to_utf8()) {
 		Ok((s, [_])) =>
-			match Stream.finish(s) {
+			match Streaming.finish(s) {
 				Err({ reason, .. }) => reason.contains("truncated")
 				_ => False
 			}
@@ -360,9 +363,9 @@ expect {
 }
 
 expect {
-	options = { ..Stream.defaults, max_value_length: 100 }
+	options = { ..Streaming.defaults, max_value_length: 100 }
 	bytes = "[".to_utf8().concat(List.repeat("1, ".to_utf8(), 100).join())
-	match Stream.push(Stream.reader(options), bytes) {
+	match Streaming.push(Streaming.reader(options), bytes) {
 		Err({ reason, .. }) => reason.contains("value longer than 100")
 		_ => False
 	}
@@ -374,7 +377,7 @@ expect chunked("1 ] 2,", 1).is_err()
 
 # A byte order mark is skipped only at the start of the stream, not after a comma (found by fuzz/).
 expect {
-	Stream.all(["A,\u(FEFF)".to_utf8()]).is_err() and Stream.all(["\u(FEFF)A, B".to_utf8()]).is_ok()
+	Streaming.all(["A,\u(FEFF)".to_utf8()]).is_err() and Streaming.all(["\u(FEFF)A, B".to_utf8()]).is_ok()
 }
 
 # Positions after a byte order mark are the whole-text parser's (design review S18):
@@ -388,6 +391,25 @@ expect {
 }
 
 # A version directive at the start (spec §10) needs a newer version of haus.
-expect Stream.all(["#haus 2\n1,\n2,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("the file starts with a version directive (#haus): it needs a newer version of haus")
-expect Stream.all(["\u(FEFF)#ha".to_utf8(), "us 2\n1,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| (e.reason, e.column)) == Err(("the file starts with a version directive (#haus): it needs a newer version of haus", 2))
-expect Stream.all(["1,\n#haus 2,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("expected a value, found '#'")
+expect Streaming.all(["#haus 2\n1,\n2,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("the file starts with a version directive (#haus): it needs a newer version of haus")
+expect Streaming.all(["\u(FEFF)#ha".to_utf8(), "us 2\n1,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| (e.reason, e.column)) == Err(("the file starts with a version directive (#haus): it needs a newer version of haus", 2))
+expect Streaming.all(["1,\n#haus 2,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("expected a value, found '#'")
+
+# The parser's limits apply to each value (`Options.limits`), with positions in the whole stream.
+expect {
+	options = { ..Streaming.defaults, limits: { ..Value.default_limits, max_depth: 3, max_string_length: 4 } }
+	read = |text| match Streaming.push(Streaming.reader(options), text.to_utf8()) {
+		Ok((s, values)) => Streaming.finish(s).map_ok(|last| values.concat(last).len()).map_err(|e| "${e.reason} at ${e.line.to_str()}:${e.column.to_str()}")
+		Err(e) => Err("${e.reason} at ${e.line.to_str()}:${e.column.to_str()}")
+	}
+	read("[[[1]]],\n\"abcd\",\n") == Ok(2)
+		and read("[[[1]]],\n[[[[1]]]],\n") == Err("nesting deeper than 3 levels at 2:4")
+		and read("1,\n\"abcde\"") == Err("string longer than 4 characters at 2:1")
+}
+
+# `max_value_length`: a value of exactly the limit is taken, one character more is not.
+expect {
+	options = { ..Streaming.defaults, max_value_length: 10 }
+	push = |text| Streaming.push(Streaming.reader(options), text.to_utf8()).map_ok(|(_, values)| values.len())
+	push("1234567890,\n 23456789,") == Ok(2) and push("12345678901,").is_err()
+}

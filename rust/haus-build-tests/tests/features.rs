@@ -4,7 +4,7 @@ mod features {
     haus::include_schema!("features");
 }
 
-use features::{AppEvent, Item, Kind, Login, Person, Scores, Shape, Tree};
+use features::{AppEvent, Item, Kind, Login, Person, Scores, Shape, Tree, Vault};
 use haus::{DecodeError, Error, Unknown, Value, from_str, to_string};
 
 const ADA: &str = r#"{ name: "Ada", email: Some("ada@example.com"), type: Member { since: Date("1843-01-01") }, createdAt: Instant("2026-11-09T14:30:00Z"), address: { street: "St James's Square", city: "London" }, scores: { maths: 100 }, check: Ok(7), friends: [], shape: Circle(1.5), tree: Node(Leaf, Node(Leaf, Leaf)) }"#;
@@ -186,4 +186,58 @@ fn raw_values_are_checked_before_they_are_written() {
         haus::to_string_with(&bigger, &small).unwrap_err().to_string(),
         "number literal longer than 20 characters"
     );
+}
+
+/// A `Vault` whose secret keys hold `value` under the key `hunter2`.
+fn vault(value: Value) -> Vault {
+    Vault { owner: "ada".into(), keys: haus::Secret::new([("hunter2".to_owned(), value)].into()) }
+}
+
+#[test]
+fn encode_errors_inside_a_secret_name_only_the_secret() {
+    let ok = vault(Value::Number("1E5".into()));
+    assert_eq!(to_string(&ok).unwrap(), r#"{ owner: "ada", keys: { hunter2: 1e5 } }"#);
+    let hidden = ".keys: not a valid Secret Map Any (the value is hidden)";
+    let deep = (0..300).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
+    let twice = Value::Record(vec![("a".into(), Value::Array(vec![])), ("a".into(), Value::Array(vec![]))]);
+    for bad in [Value::Number("abc".into()), Value::Variant { tag: "lower".into(), args: vec![] }, twice, deep] {
+        let v = vault(bad);
+        for e in [to_string(&v).unwrap_err(), haus::json::to_string(&v).unwrap_err()] {
+            assert_eq!(e.to_string(), hidden);
+        }
+    }
+    // A Map key longer than the string limit, for a reader with small limits.
+    let small = haus::Limits { max_string_length: 5, ..haus::Limits::default() };
+    let e = haus::to_string_with(&vault(Value::Array(vec![])), &small).unwrap_err();
+    assert_eq!(e.to_string(), hidden);
+}
+
+/// A tree `depth` nodes deep along the first payload value.
+fn deep_tree(depth: usize) -> Tree {
+    (0..depth).fold(Tree::Leaf, |t, _| Tree::Node(Box::new(t), Box::new(Tree::Leaf)))
+}
+
+/// Dropped node by node: Rust drops a deep `Box` chain recursively.
+fn dismantle(mut tree: Tree) {
+    while let Tree::Node(first, _) = tree {
+        tree = *first;
+    }
+}
+
+#[test]
+fn deep_native_values_fail_at_the_depth_limit() {
+    // Each `Node(…, …)` is one level.
+    let at_limit = deep_tree(256);
+    assert!(to_string(&at_limit).is_ok() && haus::json::to_string(&at_limit).is_ok());
+    dismantle(at_limit);
+    let deeper = format!("{}: nesting deeper than 256 levels", "(Node)[0]".repeat(256));
+    let beyond = deep_tree(257);
+    assert_eq!(to_string(&beyond).unwrap_err().to_string(), deeper);
+    dismantle(beyond);
+    // Far deeper than the call stack takes: the encoder stops at the limit.
+    let huge = deep_tree(1_000_000);
+    assert_eq!(to_string(&huge).unwrap_err().to_string(), deeper);
+    let json = haus::json::to_string(&huge).unwrap_err().to_string();
+    assert!(json.ends_with(": nesting deeper than 256 levels"), "{json}");
+    dismantle(huge);
 }

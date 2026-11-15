@@ -50,15 +50,20 @@ let order: order::Root = haus::json::from_str(&json)?;
 | `@deprecated("why")` on a type, field or tag | `#[deprecated(note = "why")]` |
 
 A `Secret` is written in full when encoded (the receiver needs it), but a
-decode error inside it names only its place and type
-(`.password: not a valid Secret String (the value is hidden)`), never the value.
+decode or encode error inside it names only its place and type
+(`.password: not a valid Secret String (the value is hidden)`), never the value
+or a key inside it.
 The generated code allows its own use of deprecated items, so a crate gets
 deprecation warnings only where it touches them. Attributes haus doesn't
 define (`@since`) are accepted and reported as Cargo warnings, as are uses of
 deprecated types in a schema; `Config::quiet()` turns them off.
 
-Writing checks what it writes, so `haus::to_string` returns a `Result`. A
-value of the generated types is always valid; what can fail is a `haus::Value`
+Writing checks what it writes, so `haus::to_string` returns a `Result`.
+`Encode::encode_with` (and `ToJson::to_json_with`) take a `haus::Encoder`,
+which carries the limits and counts the depth while the native value is
+traversed: a value nested deeper than the limit fails there with the writer's
+error (`[0][0]…: nesting deeper than 256 levels`), however deep it goes. Any
+other failure comes from a `haus::Value`
 built in code, the raw value of an `Any` or an unknown variant (spec §9.8):
 `Value::Number("abc".into())` is an `EncodeError` (`.extra: not a number
 literal`), as are a tag that isn't a tag name, a key used twice in a record,

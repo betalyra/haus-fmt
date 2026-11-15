@@ -63,7 +63,8 @@ pub mod plain {{
     }}
 
     fn read_as<T: ::haus::FromJson + ::haus::Encode>(json: &str) -> Result<::haus::Value, String> {{
-        ::haus::json::from_str::<T>(json).map(|x| ::haus::Encode::encode(&x)).map_err(|e| e.to_string())
+        let x = ::haus::json::from_str::<T>(json).map_err(|e| e.to_string())?;
+        ::haus::Encode::encode(&x).map_err(|e| e.to_string())
     }}
 
     /// Decode `x` with the type `ty`, and write the result as plain JSON;
@@ -133,12 +134,16 @@ pub fn roundtrip(file: &str, ty: &str, v: &::haus::Value, bare: bool) -> Option<
 fn module(name: &str, text: &str) -> String {
     let arms: String = definitions(text)
         .iter()
-        .map(|t| {
-            format!("            {t:?} => <{t} as ::haus::Decode>::decode(v).map(|x| ::haus::Encode::encode(&x)),\n")
-        })
+        .map(|t| format!("            {t:?} => <{t} as ::haus::Decode>::decode(v).and_then(|x| encode(&x)),\n"))
         .collect();
     let roundtrip = format!(
-        r#"    /// Decode `v` with the type `ty`, then encode the result; None if the schema has no such type.
+        r#"    /// Encode a decoded value again: an error says so, as a decode error.
+    #[allow(dead_code)]
+    fn encode<T: ::haus::Encode>(x: &T) -> Result<::haus::Value, ::haus::DecodeError> {{
+        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(format!("can't encode it again: {{e}}")))
+    }}
+
+    /// Decode `v` with the type `ty`, then encode the result; None if the schema has no such type.
     #[allow(deprecated)]
     pub fn roundtrip(ty: &str, v: &::haus::Value) -> Option<Result<::haus::Value, ::haus::DecodeError>> {{
         Some(match ty {{

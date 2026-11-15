@@ -13,7 +13,7 @@ import pf.OsStr
 import pf.Path
 import pf.Stdout
 import haus.Encode
-import haus.Stream
+import haus.Streaming
 import haus.Value
 
 main! : List(OsStr) => Try({}, _)
@@ -76,14 +76,14 @@ chunks = |bytes, i| {
 
 streamed : List(U8), U64 -> Try(List(Value), Value.ParseError)
 streamed = |bytes, i| {
-	var $reader = Stream.reader(Stream.defaults)
+	var $reader = Streaming.reader(Streaming.defaults)
 	var $values = []
 	for chunk in chunks(bytes, i) {
-		(next, completed) = Stream.push($reader, chunk)?
+		(next, completed) = Streaming.push($reader, chunk)?
 		$reader = next
 		$values = $values.concat(completed)
 	}
-	Ok($values.concat(Stream.finish($reader)?))
+	Ok($values.concat(Streaming.finish($reader)?))
 }
 
 ## 7 → "00007"
