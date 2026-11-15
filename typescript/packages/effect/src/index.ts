@@ -32,7 +32,7 @@
  * `Haus.zonedDateTimeAsDateTime` for schema files (`Schema.BigDecimal`,
  * `Schema.DateTimeUtc` and `Schema.DateTimeZoned` work as well, with the same losses).
  */
-import { HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Value } from "@haus-fmt/haus"
+import { errorCode, HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Value } from "@haus-fmt/haus"
 import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus"
 import {
   fromJson as valueOfJson, fromPlainJson, HausDecodeError, HausEncodeError, jsonDepth, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, parseJson, parseJsonLines, stringifyJson, toPlainJson,
@@ -42,7 +42,8 @@ import type { Limits } from "@haus-fmt/haus/schema"
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
 import { codec, entries, isCodec, setId, type AnyCodec, type Checked, type Decoded, type Named } from "./codec.js"
 import {
-  atIndex as errorAt, CODE, conversionError, HausLimitsError, HausParseError, HausSchemaError, issueError, jsonError, limitsError, parseError, schemaErrorOf,
+  atIndex as errorAt, CODE, conversionError, HausLimitsError, HausParseError, HausSchemaError, invalidUtf8Error, issueError, jsonError, limitsError, parseError,
+  schemaErrorOf,
   type HausError,
 } from "./errors.js"
 import { withCodecs } from "./schema-file.js"
@@ -129,8 +130,11 @@ const atIndex = (index: number) => <E>(e: E | HausSchemaError): E | HausSchemaEr
  */
 export const Any = Schema.Any.annotate({ [VALUE]: true }) as unknown as Schema.Codec<Value>
 
-/** A syntax error of the core parser as a HausParseError. */
-const parseErrorOf = (e: unknown): Option.Option<HausParseError> => (e instanceof HausSyntaxError ? Option.some(parseError(e)) : Option.none())
+/** A syntax error of the core parser as a HausParseError; so is invalid UTF-8 in a byte stream (without a position). */
+const parseErrorOf = (e: unknown): Option.Option<HausParseError> =>
+  e instanceof HausSyntaxError ? Option.some(parseError(e))
+  : errorCode(e) === "invalid-utf8" ? Option.some(invalidUtf8Error())
+  : Option.none()
 
 /** A conversion error as a HausSchemaError, decoding `input` or encoding. */
 const conversionErrorOf = (input?: Value) => (e: unknown): Option.Option<HausSchemaError> =>

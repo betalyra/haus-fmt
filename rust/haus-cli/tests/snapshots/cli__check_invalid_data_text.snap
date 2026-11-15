@@ -1,0 +1,45 @@
+---
+source: haus-cli/tests/cli.rs
+expression: "String::from_utf8(out).unwrap()"
+---
+error[type-mismatch]: expected Int, found the string "7"
+ --> adjacent/order-bad.haus:3:7
+  |
+3 |   id: "7",
+  |       ^^^
+  |
+  = at: $.id
+  = hint: Write a value of the expected type; the message says which.
+  = docs: https://haus-fmt.org/docs/errors#type-mismatch
+
+error[out-of-range]: -2 is out of range for UInt32 (0 to 4294967295)
+ --> adjacent/order-bad.haus:5:24
+  |
+5 |     { sku: "A-1", qty: -2, colour: "red" },
+  |                        ^^
+  |
+  = at: $.items[0].qty
+  = hint: Write a value within the range, or use a larger type (`Int`, `Float64`, `Decimal`).
+  = docs: https://haus-fmt.org/docs/errors#out-of-range
+
+hint[unlisted-field]: colour is not in the schema; a reader ignores it.
+ --> adjacent/order-bad.haus:5:28
+  |
+5 |     { sku: "A-1", qty: -2, colour: "red" },
+  |                            ^^^^^^
+  |
+  = at: $.items[0].colour
+  = hint: Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers.
+  = docs: https://haus-fmt.org/docs/errors#unlisted-field
+
+error[unknown-tag]: Lost is not allowed here: expected one of Pending, Shipped, Cancelled.
+ --> adjacent/order-bad.haus:7:11
+  |
+7 |   status: Lost,
+  |           ^^^^
+  |
+  = at: $.status
+  = hint: Use one of the variant's tags, fix the spelling, or add the tag to the schema.
+  = docs: https://haus-fmt.org/docs/errors#unknown-tag
+
+Checked 1 file: 3 errors, 1 hint.

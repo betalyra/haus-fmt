@@ -106,6 +106,7 @@ import "../../test-suite/invalid/bytes-non-hex.haus" as invalid_bytes_non_hex : 
 import "../../test-suite/invalid/bytes-odd-digits.haus" as invalid_bytes_odd_digits : List(U8)
 import "../../test-suite/invalid/bytes-space-after-prefix.haus" as invalid_bytes_space_after_prefix : List(U8)
 import "../../test-suite/invalid/bytes-split-byte.haus" as invalid_bytes_split_byte : List(U8)
+import "../../test-suite/invalid/bytes-unterminated-odd.haus" as invalid_bytes_unterminated_odd : List(U8)
 import "../../test-suite/invalid/bytes-unterminated.haus" as invalid_bytes_unterminated : List(U8)
 import "../../test-suite/invalid/colon-in-array.haus" as invalid_colon_in_array : List(U8)
 import "../../test-suite/invalid/control-c1-in-block-string.haus" as invalid_control_c1_in_block_string : List(U8)
@@ -771,6 +772,12 @@ expect ConformanceTest.rejects(invalid_bytes_split_byte, "bytes-odd-digits")
 
 # invalid/bytes-split-byte.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_bytes_split_byte, "bytes-odd-digits")
+
+# invalid/bytes-unterminated-odd.haus
+expect ConformanceTest.rejects(invalid_bytes_unterminated_odd, "unterminated-bytes")
+
+# invalid/bytes-unterminated-odd.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_bytes_unterminated_odd, "unterminated-bytes")
 
 # invalid/bytes-unterminated.haus
 expect ConformanceTest.rejects(invalid_bytes_unterminated, "unterminated-bytes")

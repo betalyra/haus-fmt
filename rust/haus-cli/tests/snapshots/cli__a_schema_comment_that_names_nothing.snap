@@ -1,0 +1,50 @@
+---
+source: haus-cli/tests/cli.rs
+expression: pretty(&json)
+---
+{
+  "ok": false,
+  "files": [
+    {
+      "path": "comment/missing.haus",
+      "kind": "data",
+      "schema": "comment/nowhere.schema.haus#Root",
+      "ok": false,
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "import-not-found",
+          "message": "the schema comment/nowhere.schema.haus does not exist",
+          "line": 1,
+          "column": 12,
+          "hint": "Install the package (as a direct dependency), or fix the path.",
+          "docs": "https://haus-fmt.org/docs/errors#import-not-found"
+        }
+      ]
+    },
+    {
+      "path": "comment/notype.haus",
+      "kind": "data",
+      "schema": "comment/shapes.schema.haus#Polygon",
+      "ok": false,
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "unknown-type",
+          "message": "the schema comment/shapes.schema.haus has no type Polygon",
+          "line": 1,
+          "column": 12,
+          "hint": "Define the type, fix its spelling, or import it (`import std/time (Date)`).",
+          "docs": "https://haus-fmt.org/docs/errors#unknown-type"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "files": 2,
+    "errors": 2,
+    "warnings": 0,
+    "hints": 0,
+    "unreadable": 0
+  }
+}

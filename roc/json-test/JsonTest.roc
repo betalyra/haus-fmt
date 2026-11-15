@@ -350,7 +350,7 @@ report = |result| match result {
 }
 
 # json/plain.cases.haus
-expect JsonTest.count(plain_cases) == 104
+expect JsonTest.count(plain_cases) == 106
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
 expect JsonTest.plain(plain_cases, 0)
@@ -514,158 +514,164 @@ expect JsonTest.plain(plain_cases, 52)
 # Err { type: "Nested", json: "5", code: "type-mismatch" },
 expect JsonTest.plain(plain_cases, 53)
 
-# Ok { type: "Outcome", input: Ok(1), json: "{\"_tag\": \"Ok\", \"value\": 1}" },
+# Err { type: "Nested", json: "{}", code: "missing-member" },
 expect JsonTest.plain(plain_cases, 54)
 
-# Ok { type: "Outcome", input: Err("no"), json: "{\"_tag\": \"Err\", \"value\": \"no\"}" },
+# Err { type: "Nested", json: "{\"_tag\": \"Just\", \"value\": 5}", code: "unknown-tag" },
 expect JsonTest.plain(plain_cases, 55)
 
-# Ok { type: "Level", input: Debug, json: "\"Debug\"" },
+# Ok { type: "Outcome", input: Ok(1), json: "{\"_tag\": \"Ok\", \"value\": 1}" },
 expect JsonTest.plain(plain_cases, 56)
 
-# Err { type: "Level", json: "\"Warn\"", code: "unknown-tag" },
+# Ok { type: "Outcome", input: Err("no"), json: "{\"_tag\": \"Err\", \"value\": \"no\"}" },
 expect JsonTest.plain(plain_cases, 57)
 
-# Err { type: "Level", json: "{\"_tag\": \"Debug\"}", code: "type-mismatch" },
+# Ok { type: "Level", input: Debug, json: "\"Debug\"" },
 expect JsonTest.plain(plain_cases, 58)
 
-# Ok { type: "Shape", input: Circle { r: 1.5 }, json: "{\"_tag\": \"Circle\", \"r\": 1.5}" },
+# Err { type: "Level", json: "\"Warn\"", code: "unknown-tag" },
 expect JsonTest.plain(plain_cases, 59)
 
-# Ok { type: "Shape", input: Point(1, 2), json: "{\"_tag\": \"Point\", \"values\": [1, 2]}" },
+# Err { type: "Level", json: "{\"_tag\": \"Debug\"}", code: "type-mismatch" },
 expect JsonTest.plain(plain_cases, 60)
 
-# Ok { type: "Shape", input: Wrap(3), json: "{\"_tag\": \"Wrap\", \"value\": 3}" },
+# Ok { type: "Shape", input: Circle { r: 1.5 }, json: "{\"_tag\": \"Circle\", \"r\": 1.5}" },
 expect JsonTest.plain(plain_cases, 61)
 
-# Ok { type: "Shape", input: Empty, json: "{\"_tag\": \"Empty\"}" },
+# Ok { type: "Shape", input: Point(1, 2), json: "{\"_tag\": \"Point\", \"values\": [1, 2]}" },
 expect JsonTest.plain(plain_cases, 62)
 
-# Ok { type: "Shape", input: Hexagon, json: "{\"_tag\": \"Hexagon\"}" },
+# Ok { type: "Shape", input: Wrap(3), json: "{\"_tag\": \"Wrap\", \"value\": 3}" },
 expect JsonTest.plain(plain_cases, 63)
 
-# Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"args\": [{\"num\": \"1\"}, \"a\"]}" },
+# Ok { type: "Shape", input: Empty, json: "{\"_tag\": \"Empty\"}" },
 expect JsonTest.plain(plain_cases, 64)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Circle\", \"r\": 1.5, \"color\": \"red\"}", output: Circle { r: 1.5 } },
+# Ok { type: "Shape", input: Hexagon, json: "{\"_tag\": \"Hexagon\"}" },
 expect JsonTest.plain(plain_cases, 65)
 
-# Err { type: "Shape", json: "\"Empty\"", code: "type-mismatch" },
+# Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"args\": [{\"num\": \"1\"}, \"a\"]}" },
 expect JsonTest.plain(plain_cases, 66)
 
-# Err { type: "Shape", json: "{\"r\": 1.5}", code: "missing-member" },
+# Read { type: "Shape", json: "{\"_tag\": \"Circle\", \"r\": 1.5, \"color\": \"red\"}", output: Circle { r: 1.5 } },
 expect JsonTest.plain(plain_cases, 67)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1]}", code: "wrong-payload" },
+# Err { type: "Shape", json: "\"Empty\"", code: "type-mismatch" },
 expect JsonTest.plain(plain_cases, 68)
 
-# Ok { type: "User", input: { id: 1, name: "Ada" }, json: "{\"id\": 1, \"name\": \"Ada\"}" },
+# Err { type: "Shape", json: "{\"r\": 1.5}", code: "missing-member" },
 expect JsonTest.plain(plain_cases, 69)
 
-# Ok { type: "User", input: { id: 1, name: "Ada", note: None }, json: "{\"id\": 1, \"name\": \"Ada\", \"note\": null}" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1]}", code: "wrong-payload" },
 expect JsonTest.plain(plain_cases, 70)
 
-# Ok { type: "User", input: { id: 1, name: "Ada", nick: "ada", note: Some("x") }, json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": \"ada\", \"note\": \"x\"}" },
+# Ok { type: "User", input: { id: 1, name: "Ada" }, json: "{\"id\": 1, \"name\": \"Ada\"}" },
 expect JsonTest.plain(plain_cases, 71)
 
-# Read { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"extra\": [1]}", output: { id: 1, name: "Ada" } },
+# Ok { type: "User", input: { id: 1, name: "Ada", note: None }, json: "{\"id\": 1, \"name\": \"Ada\", \"note\": null}" },
 expect JsonTest.plain(plain_cases, 72)
 
-# Err { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": null}", code: "type-mismatch" },
+# Ok { type: "User", input: { id: 1, name: "Ada", nick: "ada", note: Some("x") }, json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": \"ada\", \"note\": \"x\"}" },
 expect JsonTest.plain(plain_cases, 73)
 
-# Err { type: "User", json: "{\"id\": 1}", code: "missing-field" },
+# Read { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"extra\": [1]}", output: { id: 1, name: "Ada" } },
 expect JsonTest.plain(plain_cases, 74)
 
-# Err { type: "Strict", json: "{\"id\": 1, \"x\": 2}", code: "unknown-field" },
+# Err { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": null}", code: "type-mismatch" },
 expect JsonTest.plain(plain_cases, 75)
 
-# Err { type: "B", json: "\"CzR=\"", code: "invalid-base64" },
+# Err { type: "User", json: "{\"id\": 1}", code: "missing-field" },
 expect JsonTest.plain(plain_cases, 76)
 
-# Err { type: "B", json: "\"Cz Q=\"", code: "invalid-base64" },
+# Err { type: "Strict", json: "{\"id\": 1, \"x\": 2}", code: "unknown-field" },
 expect JsonTest.plain(plain_cases, 77)
 
-# Err { type: "B", json: "\"-_8=\"", code: "invalid-base64" },
+# Err { type: "B", json: "\"CzR=\"", code: "invalid-base64" },
 expect JsonTest.plain(plain_cases, 78)
 
-# Read { type: "Big", json: "\"-0\"", output: 0 },
+# Err { type: "B", json: "\"Cz Q=\"", code: "invalid-base64" },
 expect JsonTest.plain(plain_cases, 79)
 
-# Err { type: "Big", json: "\"007\"", code: "invalid-number" },
+# Err { type: "B", json: "\"-_8=\"", code: "invalid-base64" },
 expect JsonTest.plain(plain_cases, 80)
 
-# Err { type: "Dec", json: "\"0xFF\"", code: "invalid-number" },
+# Read { type: "Big", json: "\"-0\"", output: 0 },
 expect JsonTest.plain(plain_cases, 81)
 
-# Err { type: "Dec", json: "\"1_000\"", code: "invalid-number" },
+# Err { type: "Big", json: "\"007\"", code: "invalid-number" },
 expect JsonTest.plain(plain_cases, 82)
 
-# Ok { type: "Bits", input: True, json: "\"True\"" },
+# Err { type: "Dec", json: "\"0xFF\"", code: "invalid-number" },
 expect JsonTest.plain(plain_cases, 83)
 
-# Err { type: "Bits", json: "true", code: "type-mismatch" },
+# Err { type: "Dec", json: "\"1_000\"", code: "invalid-number" },
 expect JsonTest.plain(plain_cases, 84)
 
-# Ok { type: "Loop", input: None, json: "{\"_tag\": \"None\"}" },
+# Ok { type: "Bits", input: True, json: "\"True\"" },
 expect JsonTest.plain(plain_cases, 85)
 
-# Ok { type: "Loop", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+# Err { type: "Bits", json: "true", code: "type-mismatch" },
 expect JsonTest.plain(plain_cases, 86)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hexagon { sides: 6 } },
+# Ok { type: "Loop", input: None, json: "{\"_tag\": \"None\"}" },
 expect JsonTest.plain(plain_cases, 87)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
+# Ok { type: "Loop", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
 expect JsonTest.plain(plain_cases, 88)
 
-# Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hexagon { sides: 6 } },
 expect JsonTest.plain(plain_cases, 89)
 
-# Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1}", code: "unexpected-member" },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
 expect JsonTest.plain(plain_cases, 90)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
+# Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.plain(plain_cases, 91)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
+# Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1}", code: "unexpected-member" },
 expect JsonTest.plain(plain_cases, 92)
 
-# Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
+# Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.plain(plain_cases, 93)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": [{\"num\": \"1\"}], \"x\": 2}", output: Hexagon { args: [{ num: "1" }], x: 2 } },
+# Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.plain(plain_cases, 94)
 
-# Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
+# Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.plain(plain_cases, 95)
 
-# Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": [{\"num\": \"1\"}], \"x\": 2}", output: Hexagon { args: [{ num: "1" }], x: 2 } },
 expect JsonTest.plain(plain_cases, 96)
 
-# Err { type: "Mine", json: "null", code: "type-mismatch" },
+# Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
 expect JsonTest.plain(plain_cases, 97)
 
-# Ok { type: "OptLoop", input: None, json: "null" },
+# Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
 expect JsonTest.plain(plain_cases, 98)
 
-# Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
+# Err { type: "Mine", json: "null", code: "type-mismatch" },
 expect JsonTest.plain(plain_cases, 99)
 
-# Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+# Ok { type: "OptLoop", input: None, json: "null" },
 expect JsonTest.plain(plain_cases, 100)
 
-# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
+# Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
 expect JsonTest.plain(plain_cases, 101)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": []}", code: "lossless-form" },
+# Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
 expect JsonTest.plain(plain_cases, 102)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": 5}", code: "lossless-form" },
+# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
 expect JsonTest.plain(plain_cases, 103)
 
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": []}", code: "lossless-form" },
+expect JsonTest.plain(plain_cases, 104)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": 5}", code: "lossless-form" },
+expect JsonTest.plain(plain_cases, 105)
+
 # json/lossless.cases.haus
-expect JsonTest.count(lossless_cases) == 21
+expect JsonTest.count(lossless_cases) == 22
 
 # Ok { input: 19.90, json: "{\"num\": \"19.90\"}" },
 expect JsonTest.lossless(lossless_cases, 0)
@@ -721,14 +727,17 @@ expect JsonTest.lossless(lossless_cases, 16)
 # Err { json: "{\"tag\": \"T\", \"args\": []}", code: "lossless-form" },
 expect JsonTest.lossless(lossless_cases, 17)
 
-# Err { json: "{\"rec\": {\"a\": 1}}", code: "lossless-form" },
+# Err { json: "{\"tag\": \"\", \"args\": \"\"}", code: "invalid-tag" },
 expect JsonTest.lossless(lossless_cases, 18)
 
-# Err { json: "{\"rec\": {\"a\": {\"num\": \"1\"}, \"a\": {\"num\": \"2\"}}}", code: "duplicate-key" },
+# Err { json: "{\"rec\": {\"a\": 1}}", code: "lossless-form" },
 expect JsonTest.lossless(lossless_cases, 19)
 
-# Err { json: "{\"num\": \"1E5\"}", code: "lossless-number" },
+# Err { json: "{\"rec\": {\"a\": {\"num\": \"1\"}, \"a\": {\"num\": \"2\"}}}", code: "duplicate-key" },
 expect JsonTest.lossless(lossless_cases, 20)
+
+# Err { json: "{\"num\": \"1E5\"}", code: "lossless-number" },
+expect JsonTest.lossless(lossless_cases, 21)
 
 # json/schemaless.cases.haus
 expect JsonTest.count(schemaless_cases) == 10

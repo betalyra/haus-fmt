@@ -86,7 +86,10 @@ theorem decode_sound_all (env : Env) :
         simp only [Bool.and_eq_true, beq_iff_eq] at hc
         obtain ⟨rfl, hc⟩ := hc
         cases hy; exact .time hc
-      next => exact absurd hy fail_ne_ok
+      next =>
+        split at hy
+        next => simp [under, reject, fail] at hy
+        next => exact absurd hy fail_ne_ok
     next =>
       obtain ⟨ys, h1, rfl⟩ := map_ok.mp hy
       exact .array (ih ys h1)

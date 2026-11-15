@@ -2,7 +2,8 @@
 # Error codes
 
 The codes of the catalogue (spec §17, `spec/errors.haus`) that the reference
-reports: the parser's (syntax and limits) and the schema decoder's. A code
+reports: the parser's (syntax and limits), the schema decoder's and the JSON
+readers' and writers' (§16). A code
 names the mistake, the same in every binding; `Code.name` is its text. The
 TypeScript tests check that every name here is in the catalogue.
 
@@ -26,6 +27,9 @@ inductive Code
   -- decoding with a schema (§15)
   | typeMismatch | notAnInteger | outOfRange | missingField | unknownField | unknownTag
   | wrongPayload | invalidTime | invalidSecret | unguardedRecursion | unknownType
+  -- JSON (§16)
+  | jsonSyntax | unpairedSurrogate | losslessForm | losslessNumber | losslessBytes | invalidTag
+  | invalidBase64 | missingMember | unexpectedMember | noJsonForm
   /-- A recursive function ran out of fuel. Never reported: the completeness
   proof shows the fuel always suffices. Not a code of the catalogue. -/
   | outOfFuel
@@ -83,6 +87,16 @@ def Code.name : Code → String
   | .invalidSecret => "invalid-secret"
   | .unguardedRecursion => "unguarded-recursion"
   | .unknownType => "unknown-type"
+  | .jsonSyntax => "json-syntax"
+  | .unpairedSurrogate => "unpaired-surrogate"
+  | .losslessForm => "lossless-form"
+  | .losslessNumber => "lossless-number"
+  | .losslessBytes => "lossless-bytes"
+  | .invalidTag => "invalid-tag"
+  | .invalidBase64 => "invalid-base64"
+  | .missingMember => "missing-member"
+  | .unexpectedMember => "unexpected-member"
+  | .noJsonForm => "no-json-form"
   | .outOfFuel => "(out of fuel)"
 
 instance : ToString Code := ⟨Code.name⟩

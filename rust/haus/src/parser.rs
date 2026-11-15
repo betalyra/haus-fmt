@@ -558,6 +558,10 @@ impl<'a> Parser<'a> {
                 ));
             };
             let Some(lo) = self.at(1).and_then(hex_value) else {
+                // A digit at the end of the input: unterminated, reported at the start (like the reference).
+                if self.at(1).is_none() {
+                    return Err(self.fail_at(open, Code::UnterminatedBytes, "unterminated byte string"));
+                }
                 return Err(self.fail(
                     Code::BytesOddDigits,
                     "a byte needs two hex digits (an odd number of digits, or a space inside a byte)",

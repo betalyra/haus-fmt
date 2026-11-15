@@ -79,14 +79,19 @@ pub mod {name} {{
         }})
     }}
 
+    /// Errors as `<place> <code> <reason>` (spec §17), `$` for an error in the text.
     fn write_as<T: ::haus::Decode + ::haus::ToJson>(v: &::haus::Value) -> Result<String, String> {{
-        let x = T::decode(v).map_err(|e| format!("can't decode: {{e}}"))?;
-        ::haus::json::to_string(&x).map_err(|e| format!("can't write it as JSON: {{e}}"))
+        let x = T::decode(v).map_err(|e| format!("{{}} {{}} can't decode: {{e}}", e.place(), e.code))?;
+        ::haus::json::to_string(&x).map_err(|e| format!("{{}} {{}} can't write it as JSON: {{e}}", e.place(), e.code))
     }}
 
     fn read_as<T: ::haus::FromJson + ::haus::Encode>(text: &str) -> Result<::haus::Value, String> {{
-        let x = ::haus::json::from_str::<T>(text).map_err(|e| e.to_string())?;
-        ::haus::Encode::encode(&x).map_err(|e| e.to_string())
+        let x = ::haus::json::from_str::<T>(text).map_err(|e| match &e {{
+            ::haus::Error::Decode(d) => format!("{{}} {{}} {{e}}", d.place(), d.code),
+            ::haus::Error::Encode(d) => format!("{{}} {{}} {{e}}", d.place(), d.code),
+            _ => format!("$ {{}} {{e}}", e.code().map_or("-".to_owned(), |c| c.to_string())),
+        }})?;
+        ::haus::Encode::encode(&x).map_err(|e| format!("{{}} {{}} {{e}}", e.place(), e.code))
     }}
 
     fn encode<T: ::haus::Encode>(x: &T) -> Result<::haus::Value, ::haus::DecodeError> {{

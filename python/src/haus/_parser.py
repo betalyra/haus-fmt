@@ -434,6 +434,9 @@ class Parser:
                 pass
             case "":
                 self._fail("unterminated-bytes", "unterminated byte string", start)
+            case c if c in _HEX_DIGITS and end + 1 == len(self.src):
+                # A digit at the end of the input: unterminated, reported at the start (like the reference).
+                self._fail("unterminated-bytes", "unterminated byte string", start)
             case "\r" | "\n":
                 self._fail("bytes-not-hex", 'line break in byte string (keep x"…" on one line)', end)
             case c if c in _HEX_DIGITS:

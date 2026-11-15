@@ -47,7 +47,7 @@ const samePlace = (place: string) => place.replace(/\.[A-Z][A-Za-z0-9_]*\((\d+)\
  * `err PLACE CODE REASON` (the code of spec §17, `-` for none); otherwise
  * `err REASON`.
  */
-function parseOutcome(line: string, codes: boolean): Outcome {
+export function parseOutcome(line: string, codes: boolean): Outcome {
   if (line.startsWith("ok ")) return { kind: "ok", text: line.slice(3) }
   if (codes) {
     const m = /^err (\S+) (\S+) ?(.*)$/s.exec(line)

@@ -93,6 +93,7 @@ export default defineConfig({
           items: [
             { label: 'Welcome', slug: 'docs' },
             { label: 'Install', slug: 'docs/install' },
+            { label: 'Command line', slug: 'docs/cli' },
             { label: 'A tour of haus', slug: 'docs/tour' },
             { label: 'Coming from JSON', slug: 'docs/from-json' },
             { label: 'Cheat sheet', slug: 'docs/cheat-sheet' },

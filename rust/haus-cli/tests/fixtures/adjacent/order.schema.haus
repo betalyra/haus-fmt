@@ -1,0 +1,10 @@
+// Root describes order.haus, next to it, and order-bad.haus through its comment.
+type Status = closed < Pending | Shipped { tracking: String } | Cancelled >
+
+type Root = {
+  id: Int,
+  items: Array Item,
+  status: Status,
+}
+
+type Item = { sku: String, qty: UInt32 }

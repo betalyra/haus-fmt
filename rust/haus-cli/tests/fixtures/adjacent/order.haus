@@ -1,0 +1,7 @@
+{
+  id: 7,
+  items: [
+    { sku: "A-1", qty: 2 },
+  ],
+  status: Shipped { tracking: "TR-9" },
+}

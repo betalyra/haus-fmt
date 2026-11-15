@@ -1,0 +1,14 @@
+---
+source: haus-cli/tests/cli.rs
+expression: "String::from_utf8(out).unwrap()"
+---
+error[payload-newline]: expected ',' or '}', found '{'
+ --> syntax/payload-newline.haus:3:5
+  |
+3 |     { r: 1 },
+  |     ^
+  |
+  = hint: Put the payload on the same line as Circle, or add a comma if they are two values.
+  = docs: https://haus-fmt.org/docs/errors#payload-newline
+
+Checked 1 file: 1 error.

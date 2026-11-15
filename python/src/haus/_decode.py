@@ -936,8 +936,10 @@ class _Maybe(_Node):
             case "Some":
                 _only(j, ("value",), "Some", at)
                 return Some(self.item.read_json(_member(j, "value", "Some", at), at.child("value")))
-            case _:
+            case str():
                 at.fail('expected "_tag": "None" or "Some"', code="unknown-tag")
+            case _:
+                at.fail('expected a member "_tag": "None" or "Some"', code="missing-member", expected='"_tag"')
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()

@@ -1,0 +1,5 @@
+@deprecated("use Customer")
+type Client = { id: Int }
+
+@since("1.2")
+type Order = { client: Client }

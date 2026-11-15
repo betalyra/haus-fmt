@@ -62,6 +62,8 @@ in `runners.ts`.
 | Effect rejected an open record payload with an unlisted field `_tag` (`Circle { _tag: 1, r: 1 }`) instead of ignoring it | fixed (`--schema`, `--json`) |
 | Roc's plain JSON readers didn't check the depth of the value read (257 nested `{"_tag": "Some", "value": …}` read as `Loop`) | fixed (`--json`) |
 | TypeScript and Effect rejected a schema file with a record payload field named `_tag` (`< Odd { _tag: Int32 } >`), where the others report only its JSON | fixed: the schema compiles, the case nests its payload as `value` (`--json`, [`json/names.schema.haus`](json/names.schema.haus)) |
+| TypeScript, Effect and Python reported a tagged `Maybe` without `"_tag"` (`{}`) as `unknown-tag`, not `missing-member` | fixed (`--json`, codes; [`json/plain.cases.haus`](../test-suite/json/plain.cases.haus)) |
+| TypeScript, Effect and Rust reported an unknown member of a closed record in plain JSON at the record, not at the member (`$.x`) as when decoding | fixed (`--json`, codes) |
 
 ## Canonical forms
 
@@ -163,7 +165,8 @@ runner made with `external(…, codes = true)` in
 
 The same idea for the JSON mappings (spec §16): generated inputs go through
 the Lean reference converters and every binding's, in five directions, and
-must agree on accepting or rejecting and on the result.
+must agree on accepting or rejecting and on the result, and on the error
+code (spec §17) of errors at the same place.
 
 | Mode | Input | Does | Compared |
 |---|---|---|---|
@@ -220,13 +223,23 @@ members, elements and characters, haus as for schema decoding.
 |---|---|
 | Lean | `haus-ref --json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
 | TypeScript | in this process: `h.decode` and `h.toJson`, `h.fromJson` and `h.encode`, `toLosslessJson`, `fromLosslessJson`, `fromJson` |
-| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson`; errors with their codes, not compared yet (Lean's JSON modes print no codes) |
+| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson` |
 | Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-fmt-build generates, `haus::json::to_string` and `from_str`, `haus::to_lossless_json`, `from_lossless_json`, `from_json` |
-| Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue`; errors as `err <place> <code> <reason>`, not compared yet (Lean's JSON modes print no codes) |
-| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json`; errors as `err <place> <code> <reason>`, not compared yet (Lean's JSON modes print no codes) |
+| Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
+| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json` |
 
-The output of a run ends with the number of cases each mode accepted, and
-`fuzz/.out/json/coverage.txt` has it per type for `write` and `read`.
+Every runner prints an error as `err <place> <code> <reason>`: the place in
+the value (`$.items[2].price`), `$` for an error in the JSON text, and `-` for
+no code (haus text that isn't one value). Codes are compared where Lean's and
+a runner's places agree, as for schema decoding; Lean's JSON readers report
+no positions in the text and no places inside lossless or schemaless JSON, so
+there their errors are at `$`. A runner made with `external(…, codes = true)`
+in [`src/json-runners.ts`](src/json-runners.ts) is read this way (all of them
+today; TypeScript and Effect report codes in this process).
+
+The output of a run ends with the number of cases each mode accepted and of
+error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
+`write` and `read`.
 
 ## When it finds something
 
