@@ -5,10 +5,10 @@
 //! passes that only to crates that depend on it directly, as
 //! `DEP_<LINKS>_HAUS_PACKAGE`: no registry, no network, no transitive lookups.
 
-use crate::{Error, Result, read, rerun_if_changed, schema, var};
+use crate::{Error, Result, read, rerun_if_changed, syntax, var};
 use std::collections::HashMap;
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const MANIFEST: &str = "haus.package.haus";
 
@@ -46,6 +46,8 @@ impl Manifest {
 
 pub struct Package {
     pub manifest: Manifest,
+    /// Its directory, with the manifest.
+    pub dir: PathBuf,
     /// The Rust crate with its types: `haus_money`.
     pub krate: String,
     /// Its types and their number of parameters.
@@ -78,7 +80,7 @@ impl Packages {
     }
 
     /// The one package called `name`.
-    pub(crate) fn find(&self, name: &str) -> Result<&Package, String> {
+    pub fn find(&self, name: &str) -> Result<&Package, String> {
         match self.0.iter().filter(|p| p.manifest.name == name).collect::<Vec<_>>().as_slice() {
             [one] => Ok(one),
             [] => Err(format!(
@@ -95,8 +97,8 @@ impl Package {
         let manifest = Manifest::read(dir)?;
         let path = dir.join(&manifest.schema);
         rerun_if_changed(&path);
-        let file = schema::parse(&read(&path)?).map_err(|e| Error::from(e).in_file(&path))?;
+        let file = syntax::parse(&read(&path)?).map_err(|e| Error::from(e).in_file(&path))?;
         let types = file.types.into_iter().map(|t| (t.name, t.params.len())).collect();
-        Ok(Package { manifest, krate, types })
+        Ok(Package { manifest, dir: dir.to_owned(), krate, types })
     }
 }

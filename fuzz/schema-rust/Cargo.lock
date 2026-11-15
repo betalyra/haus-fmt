@@ -11,10 +11,18 @@ name = "haus-fmt-build"
 version = "0.1.0"
 dependencies = [
  "haus-fmt",
+ "haus-fmt-schema",
  "prettyplease",
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "haus-fmt-schema"
+version = "0.1.0"
+dependencies = [
+ "haus-fmt",
  "winnow",
 ]
 

@@ -1,0 +1,785 @@
+// The error codes of haus (spec §17), in haus. This file is the single source:
+// spec/errors.md, docs/errors.md and the TypeScript table
+// (typescript/packages/haus/src/error-codes.ts) are generated from it with
+//
+//   node spec/scripts/errors.ts          (--check: fail if they are out of date)
+//
+// Each entry: `code`, its `category`, what it `means`, an `example` that has
+// the error, and the `fix`, which is also the hint bindings report with it.
+// Examples are checked by the TypeScript tests: `Data` must fail to parse,
+// `Schema` must be rejected (or warned about), `Decode` must fail to decode
+// with the type Root, `Plain` and `Lossless` must fail to read, and `Check`
+// must be reported by a checker, each with this code. `Text` is shown only.
+//
+// Codes are stable: once released, a code is never renamed, removed or
+// reused for another mistake. New codes may be added.
+
+// ── Syntax (§1–§5, grammar.ebnf) ───────────────────────────────────────────
+
+Code {
+  code: "invalid-utf8",
+  category: Syntax,
+  means: "The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.",
+  example: Text("the bytes 22 FF 22: a quote, a byte that never starts a character, a quote"),
+  fix: "Save the file as UTF-8.",
+},
+Code {
+  code: "version-directive",
+  category: Syntax,
+  means: "The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.",
+  example: Data("#haus 2\n{ a: 1 }"),
+  fix: "Read the file with a version of haus that supports it.",
+},
+Code {
+  code: "expected-value",
+  category: Syntax,
+  means: "A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be.",
+  example: Data("{ a: }"),
+  fix: "Write a value here, or remove the extra comma or bracket.",
+},
+Code {
+  code: "missing-comma",
+  category: Syntax,
+  means: "Two values, fields or top-level values follow each other without a comma between them.",
+  example: Data("[1 2]"),
+  fix: "Add a comma between the two values.",
+},
+Code {
+  code: "payload-newline",
+  category: Syntax,
+  means: "A tag is followed by `(` or `{` on a later line, or after a comment. A payload must start on the tag's line (§5), so the two are read as separate values, and a comma is missing between them.",
+  example: Data("""
+    Heartbeat
+    { at: 1 }
+    """),
+  fix: "Put the payload on the tag's line, or add a comma if they are two values.",
+},
+Code {
+  code: "unexpected-closer",
+  category: Syntax,
+  means: "A closing bracket that doesn't match the open one, or that has no open one.",
+  example: Data("[1}"),
+  fix: "Close each bracket with its own kind (`{` `}`, `[` `]`, `(` `)`) and remove extra closing brackets.",
+},
+Code {
+  code: "unclosed-bracket",
+  category: Syntax,
+  means: "A `{`, `[` or `(` is never closed: the input ends first.",
+  example: Data("[1, 2"),
+  fix: "Add the closing bracket.",
+},
+Code {
+  code: "null-literal",
+  category: Syntax,
+  means: "`null` is not a value: haus has no null (§1).",
+  example: Data("{ x: null }"),
+  fix: "Write `None` (with a `Maybe` type), or leave the field out.",
+},
+Code {
+  code: "boolean-literal",
+  category: Syntax,
+  means: "`true` and `false` are not values: booleans are the tags `True` and `False` (§1).",
+  example: Data("{ ok: true }"),
+  fix: "Write `True` or `False`.",
+},
+Code {
+  code: "bare-identifier",
+  category: Syntax,
+  means: "A lowercase word where a value should be. Lowercase identifiers are only record keys.",
+  example: Data("[foo]"),
+  fix: "Quote it as a string (`\"foo\"`), or start it with a capital letter to make it a tag (`Foo`).",
+},
+Code {
+  code: "expected-key",
+  category: Syntax,
+  means: "Something that can't be a record key where a key should be, such as a number or a comma.",
+  example: Data("{ 1: 1 }"),
+  fix: "Write a key: a lowercase identifier (`name`) or a string (`\"1\"`).",
+},
+Code {
+  code: "uppercase-key",
+  category: Syntax,
+  means: "A record key starts with a capital letter. Bare keys start with a lowercase letter or `_`; capitalized words are tags.",
+  example: Data("{ Name: 1 }"),
+  fix: "Quote the key (`\"Name\"`) or start it with a lowercase letter.",
+},
+Code {
+  code: "block-string-key",
+  category: Syntax,
+  means: "A block string (`\"\"\"`) is used as a record key.",
+  example: Data("""
+    { ""\"
+      k
+      ""\": 1 }
+    """),
+  fix: "Write the key as a basic string: `\"k\"`.",
+},
+Code {
+  code: "missing-colon",
+  category: Syntax,
+  means: "A record key is not followed by `:`.",
+  example: Data("{ a 1 }"),
+  fix: "Add `:` between the key and its value.",
+},
+Code {
+  code: "duplicate-key",
+  category: Syntax,
+  means: "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16).",
+  example: Data("{ a: 1, a: 2 }"),
+  fix: "Remove or rename one of the two.",
+},
+Code {
+  code: "empty-payload",
+  category: Syntax,
+  means: "A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.",
+  example: Data("Some()"),
+  fix: "Remove the parentheses: `Tag`.",
+},
+Code {
+  code: "invalid-number",
+  category: Syntax,
+  means: "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in plain JSON, §16.3).",
+  example: Data("007"),
+  fix: "Write a number like `7`, `-1.5`, `1e10`, `0xff` or `1_000`.",
+},
+Code {
+  code: "unterminated-string",
+  category: Syntax,
+  means: "A string has no closing `\"` (in haus or JSON).",
+  example: Data("\"abc"),
+  fix: "Add the closing quote. A quote inside the string is written `\\\"`.",
+},
+Code {
+  code: "string-line-break",
+  category: Syntax,
+  means: "A raw line break inside a `\"…\"` string.",
+  example: Data("""
+    "a
+    b"
+    """),
+  fix: "Write the line break as `\\n`, or use a `\"\"\"` block string.",
+},
+Code {
+  code: "control-character",
+  category: Syntax,
+  means: "A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `\"…\"` strings. Also a raw control character in a JSON string.",
+  example: Text("\"a⟨U+0007⟩b\": a string with a raw BEL character"),
+  fix: "Write the character as an escape: `\\t`, `\\u{7}`.",
+},
+Code {
+  code: "bidi-control",
+  category: Syntax,
+  means: "A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, where it could reorder how the text is displayed (\"Trojan Source\", §9).",
+  example: Text("// access⟨U+202E⟩ denied: a comment with a raw right-to-left override"),
+  fix: "Write it as an escape (`\\u{202E}`) inside a string, or remove it.",
+},
+Code {
+  code: "invalid-escape",
+  category: Syntax,
+  means: "A backslash followed by a character that doesn't start an escape. haus has `\\\"`, `\\\\`, `\\n`, `\\r`, `\\t` and `\\u{…}`; JSON has its own set.",
+  example: Data("\"\\x41\""),
+  fix: "Use one of the escapes, e.g. `\\u{41}`, or write `\\\\` for a backslash.",
+},
+Code {
+  code: "invalid-unicode-escape",
+  category: Syntax,
+  means: "A `\\u` escape that isn't `\\u{` 1 to 6 hex digits `}`, or names no Unicode scalar value (a surrogate, or above 10FFFF). In JSON: `\\u` not followed by four hex digits.",
+  example: Data("\"\\u0041\""),
+  fix: "Write `\\u{41}`, with braces, for a character from U+0000 to U+10FFFF other than a surrogate.",
+},
+Code {
+  code: "block-string-opening",
+  category: Syntax,
+  means: "Text after the opening `\"\"\"` of a block string. The content starts on the next line.",
+  example: Data("""
+    ""\"text
+    ""\"
+    """),
+  fix: "Start the content on the line after `\"\"\"`.",
+},
+Code {
+  code: "block-string-closing",
+  category: Syntax,
+  means: "The closing `\"\"\"` of a block string has text before it on its line.",
+  example: Data("""
+    ""\"
+      text""\"
+    """),
+  fix: "Put the closing `\"\"\"` on its own line; its indentation is removed from every line.",
+},
+Code {
+  code: "block-string-indent",
+  category: Syntax,
+  means: "A line of a block string is indented less than the closing `\"\"\"`, whose indentation every line must start with.",
+  example: Data("""
+    ""\"
+      a
+     b
+      ""\"
+    """),
+  fix: "Indent every line at least as far as the closing `\"\"\"`.",
+},
+Code {
+  code: "unterminated-block-string",
+  category: Syntax,
+  means: "A block string has no closing `\"\"\"`.",
+  example: Data("""
+    ""\"
+      abc
+    """),
+  fix: "Add the closing `\"\"\"` on its own line.",
+},
+Code {
+  code: "unterminated-bytes",
+  category: Syntax,
+  means: "A byte string `x\"…` has no closing `\"`.",
+  example: Data("x\"00"),
+  fix: "Add the closing quote.",
+},
+Code {
+  code: "bytes-not-hex",
+  category: Syntax,
+  means: "A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break.",
+  example: Data("x\"zz\""),
+  fix: "Write two hex digits per byte (`x\"0b34ff\"`), on one line.",
+},
+Code {
+  code: "bytes-odd-digits",
+  category: Syntax,
+  means: "A byte in a byte string has only one hex digit: an odd number of digits, or a space inside a byte.",
+  example: Data("x\"abc\""),
+  fix: "Write each byte as two hex digits: `x\"0abc\"`.",
+},
+Code {
+  code: "lone-carriage-return",
+  category: Syntax,
+  means: "A carriage return (CR) not followed by a line feed. Line breaks are LF or CRLF.",
+  example: Text("1,⟨CR⟩2: a carriage return on its own"),
+  fix: "Save the file with LF or CRLF line endings.",
+},
+Code {
+  code: "unterminated-comment",
+  category: Syntax,
+  means: "A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`.",
+  example: Data("/* never closed"),
+  fix: "Add `*/`, one for each `/*`.",
+},
+Code {
+  code: "stray-slash",
+  category: Syntax,
+  means: "A `/` that doesn't start a comment. Comments are `//` and `/* */`; haus has no operators.",
+  example: Data("{ a: 1 / 2 }"),
+  fix: "Write `//` or `/*` for a comment, or remove the `/`.",
+},
+
+// ── Limits (§7) ─────────────────────────────────────────────────────────────
+
+Code {
+  code: "nesting-too-deep",
+  category: Limits,
+  means: "Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16).",
+  example: Text("[[[[ … ]]]]: 257 levels"),
+  fix: "Flatten the data, or raise `maxDepth` if you trust the input.",
+},
+Code {
+  code: "number-too-long",
+  category: Limits,
+  means: "A number literal has more characters than the limit (default 1000).",
+  example: Text("a number with 1001 digits"),
+  fix: "Write a shorter number (a `String` or `Bytes` for very long data), or raise `maxNumberLength`.",
+},
+Code {
+  code: "exponent-too-large",
+  category: Limits,
+  means: "A number's exponent is larger than the limit (default 6144), in either direction.",
+  example: Data("1e6145"),
+  fix: "Write a number with a smaller exponent, or raise `maxExponent`.",
+},
+Code {
+  code: "string-too-long",
+  category: Limits,
+  means: "A string or byte string has more characters than the limit (default 16 Mi).",
+  example: Text("a string of 16,777,217 characters"),
+  fix: "Split the string, or raise `maxStringLength`.",
+},
+Code {
+  code: "key-too-long",
+  category: Limits,
+  means: "A record key has more characters than the string limit (default 16 Mi).",
+  example: Text("a bare key of 16,777,217 characters"),
+  fix: "Use a shorter key, or raise `maxStringLength`.",
+},
+Code {
+  code: "tag-too-long",
+  category: Limits,
+  means: "A tag has more characters than the string limit (default 16 Mi).",
+  example: Text("a tag of 16,777,217 characters"),
+  fix: "Use a shorter tag, or raise `maxStringLength`.",
+},
+Code {
+  code: "value-too-long",
+  category: Limits,
+  means: "One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).",
+  example: Text("a stream whose second value is 64 Mi characters long"),
+  fix: "Send smaller values, or raise `maxValueLength`.",
+},
+Code {
+  code: "unsupported-depth",
+  category: Limits,
+  means: "The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input.",
+  example: Text("maxDepth: 100000"),
+  fix: "Configure a depth limit within the binding's documented maximum.",
+},
+
+// ── Streams (§6) ────────────────────────────────────────────────────────────
+
+Code {
+  code: "not-one-value",
+  category: Streams,
+  means: "One value was expected (a single document, a type that isn't a `Stream`), and the input holds none or several.",
+  example: Text("parse(\"1, 2\"): two values where one is expected"),
+  fix: "Give exactly one value, or read the input as a stream.",
+},
+Code {
+  code: "stream-truncated",
+  category: Streams,
+  means: "In strict mode, a stream ended without a comma (or, in JSON Lines, a line feed) after its last value, so the last value may be cut off (§6).",
+  example: Text("1, 2, 3 (strict mode: the last value has no comma)"),
+  fix: "End every value with a comma, or check that the stream wasn't cut off.",
+},
+
+// ── Schema files (§14) ──────────────────────────────────────────────────────
+
+Code {
+  code: "schema-syntax",
+  category: SchemaFiles,
+  means: "A schema file doesn't follow the grammar: an unexpected token, an unterminated string or comment, a character that has no place there.",
+  example: Schema("type A = { x Int }"),
+  fix: "Write it as the grammar says (grammar.ebnf); the message names what was expected.",
+},
+Code {
+  code: "unknown-type",
+  category: SchemaFiles,
+  means: "A type name that is neither defined in the file, imported, nor a prelude type. A type a standard module or official extension has needs its import.",
+  example: Schema("type A = { at: Date }"),
+  fix: "Define the type, fix its spelling, or import it (`import std/time (Date)`).",
+},
+Code {
+  code: "wrong-arity",
+  category: SchemaFiles,
+  means: "A type is used with the wrong number of arguments: `Array` without its element type, `Int` with one, a generic type of your own with too few or too many.",
+  example: Schema("type A = { key: Secret }"),
+  fix: "Give the type exactly the arguments it takes, e.g. `Secret String`, `Map Int`, `Result String Int`.",
+},
+Code {
+  code: "duplicate-type",
+  category: SchemaFiles,
+  means: "Two definitions of the same type name, or a definition with the name of an imported type.",
+  example: Schema("""
+    type A = Int
+    type A = String
+    """),
+  fix: "Rename one of them.",
+},
+Code {
+  code: "redefine-prelude",
+  category: SchemaFiles,
+  means: "A definition with the name of a prelude type (`Int`, `Any`, `Secret`, `Maybe`, …), which schemas can't redefine.",
+  example: Schema("type Any = String"),
+  fix: "Give your type another name.",
+},
+Code {
+  code: "unknown-parameter",
+  category: SchemaFiles,
+  means: "A lowercase name in a type that is not a parameter of the definition.",
+  example: Schema("type Box = { item: a }"),
+  fix: "Declare the parameter (`type Box a = { item: a }`) or use a type name.",
+},
+Code {
+  code: "invalid-parameter",
+  category: SchemaFiles,
+  means: "A type parameter named `_`, or the same parameter twice.",
+  example: Schema("type Pair _ = { a: Int }"),
+  fix: "Give each parameter its own lowercase name.",
+},
+Code {
+  code: "underscore-type",
+  category: SchemaFiles,
+  means: "`_` used as a type. Types are open by default, so there is no wildcard.",
+  example: Schema("type A = { x: _ }"),
+  fix: "Write `< >` for a variant with any tags, `Any` for any value, or use a type parameter.",
+},
+Code {
+  code: "duplicate-field",
+  category: SchemaFiles,
+  means: "A record type lists the same field twice, also one copied in by a spread.",
+  example: Schema("type A = { x: Int, x: String }"),
+  fix: "Remove or rename one of them.",
+},
+Code {
+  code: "duplicate-tag",
+  category: SchemaFiles,
+  means: "A variant type lists the same tag twice, also one copied in by a spread.",
+  example: Schema("type A = < B | B >"),
+  fix: "Remove or rename one of them.",
+},
+Code {
+  code: "closed-empty-variant",
+  category: SchemaFiles,
+  means: "`closed < >`: a closed variant without tags accepts nothing.",
+  example: Schema("type A = closed < >"),
+  fix: "List its tags, or write `< >` for a variant with any tags.",
+},
+Code {
+  code: "invalid-spread",
+  category: SchemaFiles,
+  means: "A spread of something that can't be spread: not a named type, a type with parameters, a `Stream`, or a record spread into a variant (or a variant into a record).",
+  example: Schema("""
+    type R = { x: Int }
+    type V = < ...R >
+    """),
+  fix: "Spread a named variant into a variant, or a named record into a record, without parameters.",
+},
+Code {
+  code: "spread-cycle",
+  category: SchemaFiles,
+  means: "A type spreads itself, directly or through other types.",
+  example: Schema("""
+    type A = < ...B >
+    type B = < ...A >
+    """),
+  fix: "Break the cycle: let one of the types list its tags or fields itself.",
+},
+Code {
+  code: "row-parameter",
+  category: SchemaFiles,
+  means: "A spread of a parameter, `...r`. Row parameters are not part of the language.",
+  example: Schema("type A r = { ...r, x: Int }"),
+  fix: "Spread a named type instead, or nest the open part as a field with a type parameter.",
+},
+Code {
+  code: "misplaced-stream",
+  category: SchemaFiles,
+  means: "`Stream` used anywhere but as the whole type of a definition, or a reference to such a definition. A stream is a whole file.",
+  example: Schema("type A = { events: Stream Int }"),
+  fix: "Use `Array` inside types; `Stream` only as `type Events = Stream Event`.",
+},
+Code {
+  code: "unguarded-recursion",
+  category: SchemaFiles,
+  means: "A type refers to itself without a record field, array element or variant payload in between (§9.9), so decoding it would consume no input. `Secret` and names don't count as a step.",
+  example: Schema("""
+    type A = B
+    type B = A
+    """),
+  fix: "Put the recursion inside a record, array or variant: `type Tree = { children: Array Tree }`.",
+},
+Code {
+  code: "growing-recursion",
+  category: SchemaFiles,
+  means: "A generic type refers to itself with arguments other than its own parameters (§9.10), so its instances could grow without bound.",
+  example: Schema("type Nest a = < Leaf a | Deeper (Nest (Array a)) >"),
+  fix: "Refer to the type with its own parameters (`Nest a`).",
+},
+Code {
+  code: "type-too-deep",
+  category: SchemaFiles,
+  means: "Type expressions are nested deeper than the schema parser's limit.",
+  example: Text("Array (Array (Array … )) nested 300 levels"),
+  fix: "Name the inner types with definitions of their own.",
+},
+Code {
+  code: "attribute-arguments",
+  category: SchemaFiles,
+  means: "An attribute this version defines, given arguments it doesn't take: `@deprecated` takes nothing or one string. Also empty parentheses after an attribute.",
+  example: Schema("@deprecated(1)\ntype A = Int"),
+  fix: "Write `@deprecated` or `@deprecated(\"why, and what to use instead\")`.",
+},
+Code {
+  code: "attribute-twice",
+  category: SchemaFiles,
+  means: "The same attribute twice on one type, field or tag.",
+  example: Schema("@deprecated @deprecated\ntype A = Int"),
+  fix: "Keep one of them.",
+},
+Code {
+  code: "attribute-space",
+  category: SchemaFiles,
+  means: "A space between an attribute's name and its `(`.",
+  example: Schema("type A = { @deprecated (\"x\") x: Int }"),
+  fix: "Write the parenthesis right after the name: `@deprecated(\"x\")`.",
+},
+Code {
+  code: "attribute-on-spread",
+  category: SchemaFiles,
+  means: "An attribute on a spread. The fields and tags a spread copies keep their own attributes.",
+  example: Schema("""
+    type B = { x: Int }
+    type A = { @deprecated ...B }
+    """),
+  fix: "Put the attribute on the fields or tags in the spread type.",
+},
+
+// ── Imports (§13.3) ─────────────────────────────────────────────────────────
+
+Code {
+  code: "unknown-module",
+  category: Imports,
+  means: "An import of a module that doesn't exist: an unknown standard module, a former standard module, or a name that is neither `std/…`, a package `@org/name` nor a file `./name`.",
+  example: Schema("import std/money (Money)\ntype A = Money"),
+  fix: "Import an existing module; `std/money` is now the package `@haus-fmt/money`.",
+},
+Code {
+  code: "unknown-import",
+  category: Imports,
+  means: "An import names a type the module doesn't have, or no type at all.",
+  example: Schema("import std/time (Data)\ntype A = Int"),
+  fix: "Import a type the module defines; the message lists them.",
+},
+Code {
+  code: "duplicate-import",
+  category: Imports,
+  means: "The same type name is imported twice.",
+  example: Schema("import std/time (Date, Date)\ntype A = Date"),
+  fix: "Import each name once.",
+},
+Code {
+  code: "import-unavailable",
+  category: Imports,
+  means: "The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there.",
+  example: Schema("import ./common (Address)\ntype A = Address"),
+  fix: "Read the schema with a resolver (e.g. from a file, with `@haus-fmt/haus/node`), or inline the types.",
+},
+Code {
+  code: "import-not-found",
+  category: Imports,
+  means: "An imported package or file can't be found: it is not installed, not a direct dependency, or the path is wrong. Also a package whose manifest is broken or names another package.",
+  example: Text("import @acme/geo (LatLng), with @acme/geo not installed"),
+  fix: "Install the package (as a direct dependency), or fix the path.",
+},
+Code {
+  code: "import-version",
+  category: Imports,
+  means: "An import asks for a major version (`@org/name@2`) and another one is installed.",
+  example: Text("import @haus-fmt/money@2 (Money), with version 1.2.0 installed"),
+  fix: "Install the major version the schema asks for, or update the import.",
+},
+Code {
+  code: "import-cycle",
+  category: Imports,
+  means: "Schema files import each other in a cycle.",
+  example: Text("a.schema.haus imports ./b, and b.schema.haus imports ./a"),
+  fix: "Move the shared types to a file both import.",
+},
+Code {
+  code: "duplicate-package",
+  category: Imports,
+  means: "Two different files claim to be the same package: two copies of one package, or two packages with the same name.",
+  example: Text("node_modules/@haus-fmt/money and node_modules/x/node_modules/@haus-fmt/money in one schema"),
+  fix: "Install one copy of the package (deduplicate your dependencies).",
+},
+Code {
+  code: "too-many-files",
+  category: Imports,
+  means: "A schema imports more files, directly or not, than the tool allows.",
+  example: Text("a schema whose imports reach 300 files"),
+  fix: "Import fewer files.",
+},
+
+// ── Decoding and encoding with a schema (§15) ───────────────────────────────
+
+Code {
+  code: "type-mismatch",
+  category: Decoding,
+  means: "A value of another kind than the type accepts: a string for an `Int`, an array for a record, a tag that isn't `True` or `False` for a `Bool`. Decoders never convert between kinds (§15).",
+  example: Decode { schema: "type Root = { qty: Int }", data: "{ qty: \"2\" }" },
+  fix: "Write a value of the expected type; the message says which.",
+},
+Code {
+  code: "not-an-integer",
+  category: Decoding,
+  means: "A number with a fraction or an exponent where an integer type is expected. `1.0` and `1e3` are not whole numbers by spelling (§15).",
+  example: Decode { schema: "type Root = { qty: Int }", data: "{ qty: 1.0 }" },
+  fix: "Write the integer without a fraction or exponent: `1`, `1000`.",
+},
+Code {
+  code: "out-of-range",
+  category: Decoding,
+  means: "A number outside the type's range: an `Int8` above 127, a negative `UInt32`, a float too large for `Float32`. Never wrapped or clamped.",
+  example: Decode { schema: "type Root = { age: UInt8 }", data: "{ age: 300 }" },
+  fix: "Write a value within the range, or use a larger type (`Int`, `Float64`, `Decimal`).",
+},
+Code {
+  code: "missing-field",
+  category: Decoding,
+  means: "A record lacks a field the type requires. Only fields with `?` may be missing; `None` is not missing.",
+  example: Decode { schema: "type Root = { id: Int, name: String }", data: "{ id: 1 }" },
+  fix: "Add the field, or mark it optional in the schema (`name?: String`).",
+},
+Code {
+  code: "unknown-field",
+  category: Decoding,
+  means: "A field a closed record doesn't list. Open records ignore such fields (see `unlisted-field`).",
+  example: Decode { schema: "type Root = closed { id: Int }", data: "{ id: 1, extra: 2 }" },
+  fix: "Remove the field, fix its spelling, or add it to the schema.",
+},
+Code {
+  code: "unknown-tag",
+  category: Decoding,
+  means: "A tag a closed variant doesn't list. Open variants read it as an unknown value (see `unlisted-tag`).",
+  example: Decode { schema: "type Root = closed < Red | Green >", data: "Blue" },
+  fix: "Use one of the variant's tags, fix the spelling, or add the tag to the schema.",
+},
+Code {
+  code: "wrong-payload",
+  category: Decoding,
+  means: "A listed tag with another payload than its case says: arguments for a tag without payload, the wrong number of arguments, a positional payload where a record is expected (§15).",
+  example: Decode { schema: "type Root = closed < None | Some Int >", data: "Some(1, 2)" },
+  fix: "Write the payload the schema gives the tag: `Some(1)`.",
+},
+Code {
+  code: "invalid-time",
+  category: Decoding,
+  means: "A std/time value whose text the std/time profile rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md).",
+  example: Decode { schema: "import std/time (Date)\ntype Root = { on: Date }", data: "{ on: Date(\"2026-02-30\") }" },
+  fix: "Write the date or time as the profile says: `Date(\"2026-02-28\")`, `Instant(\"2026-11-08T09:12:00Z\")`.",
+},
+Code {
+  code: "invalid-secret",
+  category: Decoding,
+  means: "A value of a `Secret` type that its type doesn't accept. The error names the place and the type only, never the value or why it failed (§15).",
+  example: Decode { schema: "type Root = { key: Secret String }", data: "{ key: 42 }" },
+  fix: "Write a value of the secret's type; the value isn't shown, so check it where it comes from.",
+},
+Code {
+  code: "cannot-encode",
+  category: Decoding,
+  means: "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.",
+  example: Text("encode(h.Int, 5): Int is a bigint, 5 is a number"),
+  fix: "Pass a value of the host type the binding documents for the type.",
+},
+Code {
+  code: "cyclic-value",
+  category: Decoding,
+  means: "Encoding: a value contains itself, so it has no finite text.",
+  example: Text("const a = { children: [] }; a.children.push(a); encode(Tree, a)"),
+  fix: "Break the cycle before encoding.",
+},
+Code {
+  code: "step-budget",
+  category: Decoding,
+  means: "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).",
+  example: Text("a hand-written schema that decodes each value many times"),
+  fix: "Simplify the schema, or raise the step limit if the work is expected.",
+},
+Code {
+  code: "too-many-nodes",
+  category: Decoding,
+  means: "A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.",
+  example: Text("a value built in code whose arrays share one another a million times"),
+  fix: "Build a smaller value, or raise the limit.",
+},
+
+// ── JSON (§16) ──────────────────────────────────────────────────────────────
+
+Code {
+  code: "json-syntax",
+  category: Json,
+  means: "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.",
+  example: Lossless("{\"tag\": \"A\",}"),
+  fix: "Write valid JSON; the message says what was expected.",
+},
+Code {
+  code: "unpaired-surrogate",
+  category: Json,
+  means: "A JSON string with half of a UTF-16 surrogate pair, raw or as `\\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).",
+  example: Lossless("\"\\uD800\""),
+  fix: "Write the whole pair (`\\uD83D\\uDE00`), or the character itself.",
+},
+Code {
+  code: "lossless-form",
+  category: Json,
+  means: "JSON that isn't one of the lossless forms (§16.2): a bare number, `true`, `null`, an object with other members, a `rec` that isn't an object, an `args` that isn't a non-empty array.",
+  example: Lossless("1"),
+  fix: "Write the lossless form: `{\"num\": \"1\"}`, `{\"tag\": \"True\"}`, `{\"rec\": {…}}`.",
+},
+Code {
+  code: "lossless-number",
+  category: Json,
+  means: "A lossless `num` that isn't a normalized number literal (§2): `\"1E5\"`, `\"01\"`, `\"0xff\"`, or not a string.",
+  example: Lossless("{\"num\": \"1E5\"}"),
+  fix: "Write the normalized literal: `{\"num\": \"1e5\"}`.",
+},
+Code {
+  code: "lossless-bytes",
+  category: Json,
+  means: "A lossless `bytes` that isn't two lowercase hex digits per byte.",
+  example: Lossless("{\"bytes\": \"FF\"}"),
+  fix: "Write lowercase hex, two digits per byte: `{\"bytes\": \"ff\"}`.",
+},
+Code {
+  code: "invalid-tag",
+  category: Json,
+  means: "A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a lossless `tag`, in a plain `_tag`, or in a value built in code.",
+  example: Lossless("{\"tag\": \"lower\"}"),
+  fix: "Start the tag with a capital letter and use only letters, digits and `_`.",
+},
+Code {
+  code: "invalid-base64",
+  category: Json,
+  means: "Plain JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.",
+  example: Plain { schema: "type Root = Bytes", json: "\"CzQ\"" },
+  fix: "Write standard base64 with padding: `\"CzQ=\"`.",
+},
+Code {
+  code: "missing-member",
+  category: Json,
+  means: "Plain JSON: an object lacks a member its form needs, such as `\"_tag\"` for a variant or `\"value\"` for a tag with one argument.",
+  example: Plain { schema: "type Root = < Ok Int | Err String >", json: "{\"_tag\": \"Ok\"}" },
+  fix: "Add the member: `{\"_tag\": \"Ok\", \"value\": 1}`.",
+},
+Code {
+  code: "unexpected-member",
+  category: Json,
+  means: "Plain JSON: an object has a member its form doesn't have, such as `\"value\"` next to a tag without payload (§16.3).",
+  example: Plain { schema: "type Root = < Ok Int | Empty >", json: "{\"_tag\": \"Empty\", \"value\": 1}" },
+  fix: "Remove the member.",
+},
+Code {
+  code: "no-json-form",
+  category: Json,
+  means: "A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` in plain JSON (§16.3), a type with no plain mapping.",
+  example: Text("toPlainJson of Odd { _tag: 1 }, for the case `Odd { _tag: Int32 }`"),
+  fix: "Rename the field, or use the lossless mapping.",
+},
+
+// ── Hints and warnings: reported without failing ────────────────────────────
+
+Code {
+  code: "unknown-attribute",
+  category: Hints,
+  means: "A warning: an attribute this version of haus doesn't define. It is accepted and has no meaning (§14).",
+  example: Schema("@since(\"1.2\")\ntype A = Int"),
+  fix: "Check the spelling; attributes of a later version are fine.",
+},
+Code {
+  code: "deprecated",
+  category: Hints,
+  means: "A hint: the schema or the data uses a type, field or tag marked `@deprecated` (§14).",
+  example: Check { schema: "type Root = { @deprecated(\"use email\") mail?: String, email?: String }", data: "{ mail: \"a@b.c\" }" },
+  fix: "Use what the deprecation note says instead.",
+},
+Code {
+  code: "unlisted-field",
+  category: Hints,
+  means: "A hint: a field an open record doesn't list. A reader ignores it, but it may be a typo.",
+  example: Check { schema: "type Root = { name: String }", data: "{ name: \"a\", nmae: \"b\" }" },
+  fix: "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers.",
+},
+Code {
+  code: "unlisted-tag",
+  category: Hints,
+  means: "A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo.",
+  example: Check { schema: "type Root = < Red | Green >", data: "Gren" },
+  fix: "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers.",
+},

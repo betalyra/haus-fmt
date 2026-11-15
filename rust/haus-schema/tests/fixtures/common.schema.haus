@@ -1,0 +1,4 @@
+import ./sub/geo (Point)
+
+// A postal address.
+type Address = closed { street: String, at?: Point }

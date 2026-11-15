@@ -1,0 +1,14 @@
+Event {
+  at: 1,
+  msg: "a",
+},
+
+Event {
+  at: 2,
+  msg: """
+    b
+    c
+    """,
+},
+
+Ping,

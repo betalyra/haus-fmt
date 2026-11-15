@@ -1,0 +1,2 @@
+import ./cycle-a (A)
+type B = { a: Maybe A }

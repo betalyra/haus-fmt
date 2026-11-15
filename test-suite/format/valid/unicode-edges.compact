@@ -1,0 +1,1 @@
+{ "café": 1, "café": 2, raw_nfc: "café", raw_nfd: "café", nul: "a\u{0}b", max: "\u{10FFFF}", raw_max: "􏿿", astral: "😀 \u{1F600}" }

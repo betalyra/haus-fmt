@@ -11,7 +11,7 @@
  *   closed < Debug | Info > → "Debug"                                 other variants → {"_tag": "Circle", "r": 1.5}, "value", "values"
  *   an unknown value → {"_tag": "Hexagon", "args": [lossless…]}
  */
-import { HausDecodeError, HausEncodeError } from "./errors.js"
+import { HausDecodeError, HausEncodeError, type ErrorCode, type ErrorDetails } from "./errors.js"
 import {
   describeJson, fromLossless, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, losslessJson, numberOfJson, Place, stringOfJson, tagLengthIssue, valueOfJson, type Json,
   type JsonObject, normalizeJsonNumber,
@@ -203,7 +203,7 @@ const concealed = <R>(t: Extract<JsonType, { readonly kind: "secret" }>, place: 
   } catch (e) {
     if (!(e instanceof HausDecodeError || e instanceof HausEncodeError)) throw e
     const reason = `expected ${t.expected} (a Secret: the value is not shown)`
-    throw decoding ? new HausDecodeError(reason, place.path()) : new HausEncodeError(reason, place.path())
+    throw decoding ? new HausDecodeError(reason, place.path(), "invalid-secret", { expected: t.expected }) : new HausEncodeError(reason, place.path(), "invalid-secret", { expected: t.expected })
   }
 }
 
@@ -218,22 +218,23 @@ const concealed = <R>(t: Extract<JsonType, { readonly kind: "secret" }>, place: 
 export const toPlainJson = (type: JsonType, value: Value, limits: Partial<Limits> = {}, place: Place = Place.root()): Json => {
   const l = withDefaults(limits)
   const maxDepth = jsonDepth(l.maxDepth)
-  const fail = (reason: string, at: Place): never => {
-    throw new HausEncodeError(reason, at.path())
+  const fail = (reason: string, at: Place, code: ErrorCode = "type-mismatch", details?: ErrorDetails): never => {
+    throw new HausEncodeError(reason, at.path(), code, details)
   }
   const describe = (v: Value) =>
     v.kind === "variant" ? `the tag ${v.tag}${v.args.length ? ` with ${v.args.length} argument(s)` : ""}`
     : v.kind === "number" ? "a number" : v.kind === "string" ? "a string" : v.kind === "bytes" ? "bytes" : `an ${v.kind}`
-  const mismatch = (expected: string, v: Value, at: Place): never => fail(`expected ${expected}, found ${describe(v)}`, at)
+  const mismatch = (expected: string, v: Value, at: Place, code: ErrorCode = "type-mismatch"): never =>
+    fail(`expected ${expected}, found ${describe(v)}`, at, code, { expected, found: describe(v) })
   const text = (s: string, at: Place): string => {
-    if (/\p{Cs}/u.test(s)) fail("a string with an unpaired surrogate has no JSON form (I-JSON)", at)
+    if (/\p{Cs}/u.test(s)) fail("a string with an unpaired surrogate has no JSON form (I-JSON)", at, "no-json-form")
     return s
   }
 
   const write = (t: JsonType, v: Value, at: Place, depth: number, hops: number): Json => {
-    if (typeof v !== "object" || v === null) return fail("not a haus value", at)
-    if (depth > maxDepth) fail(`value nested deeper than ${l.maxDepth} levels (or cyclic)`, at)
-    const hop = () => (hops < MAX_HOPS ? hops + 1 : fail("a type that refers only to itself (unguarded recursion)", at))
+    if (typeof v !== "object" || v === null) return fail("not a haus value", at, "cannot-encode")
+    if (depth > maxDepth) fail(`value nested deeper than ${l.maxDepth} levels (or cyclic)`, at, "nesting-too-deep")
+    const hop = () => (hops < MAX_HOPS ? hops + 1 : fail("a type that refers only to itself (unguarded recursion)", at, "unguarded-recursion"))
     switch (t.kind) {
       case "lazy":
         return write(t.get(), v, at, depth, hop())
@@ -246,10 +247,10 @@ export const toPlainJson = (type: JsonType, value: Value, limits: Partial<Limits
       case "bool":
         return v.kind === "variant" && v.args.length === 0 && (v.tag === "True" || v.tag === "False") ? v.tag === "True" : mismatch("True or False", v, at)
       case "integer":
-        if (v.kind !== "number" || !SMALL_INTEGER.test(v.text)) return mismatch("a whole number", v, at)
+        if (v.kind !== "number" || !SMALL_INTEGER.test(v.text)) return mismatch("a whole number", v, at, v.kind === "number" ? "not-an-integer" : "type-mismatch")
         return t.quoted ? v.text : new JsonNumber(v.text)
       case "float":
-        if (v.kind === "number") return isJsonNumber(v.text) ? new JsonNumber(v.text) : fail(`${v.text.slice(0, 30)} has no JSON form`, at)
+        if (v.kind === "number") return isJsonNumber(v.text) ? new JsonNumber(v.text) : fail(`${v.text.slice(0, 30)} has no JSON form`, at, "no-json-form")
         return (v.kind === "variant" && v.args.length === 0 ? SPECIAL_FLOATS.get(v.tag) : undefined) ?? mismatch("a number, NaN, Infinity or NegInfinity", v, at)
       case "decimal":
         return v.kind === "number" ? v.text : mismatch("a number", v, at)
@@ -283,36 +284,36 @@ export const toPlainJson = (type: JsonType, value: Value, limits: Partial<Limits
       case "variant":
         return v.kind === "variant" ? writeVariant(t, v, at, depth) : mismatch("a variant", v, at)
       case "none":
-        return fail(`${t.expected} has no plain JSON form`, at)
+        return fail(`${t.expected} has no plain JSON form`, at, "no-json-form")
     }
   }
 
   const fields = (t: JsonRecordType, fs: ReadonlyMap<string, Value>, at: Place, depth: number): [string, Json][] =>
     [...fs].map(([k, x]) => {
       const type = t.fields.get(k)
-      if (type === undefined) return fail(`field '${k.slice(0, 30)}' is not in the record type`, at)
+      if (type === undefined) return fail(`field '${k.slice(0, 30)}' is not in the record type`, at, "unknown-field")
       return [text(k, at), write(type, x, at.child(k), depth + 1, 0)]
     })
 
   const writeVariant = (t: JsonVariantType, v: HVariant, at: Place, depth: number): Json => {
     const c = t.cases.get(v.tag)
     if (c === undefined) {
-      if (!t.open) return fail(`unknown tag ${v.tag}, expected one of ${tagList(t.cases.keys())}`, at)
+      if (!t.open) return fail(`unknown tag ${v.tag}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
       // An unknown value: its tag, and its arguments in their lossless form.
       const args = v.args.map((x, i) => losslessJson(x, l, at.child(i)))
       return jsonObject([["_tag", v.tag], ...(args.length > 0 ? [["args", args] as const] : [])])
     }
-    if (isEnum(t)) return v.args.length === 0 ? v.tag : fail(`'${v.tag}' takes no payload`, at)
+    if (isEnum(t)) return v.args.length === 0 ? v.tag : fail(`'${v.tag}' takes no payload`, at, "wrong-payload")
     const tag = ["_tag", v.tag] as const
-    if (isUnitCase(c)) return v.args.length === 0 ? jsonObject([tag]) : fail(`'${v.tag}' takes no payload`, at)
+    if (isUnitCase(c)) return v.args.length === 0 ? jsonObject([tag]) : fail(`'${v.tag}' takes no payload`, at, "wrong-payload")
     if (c.kind === "record") {
       const [payload] = v.args
-      if (v.args.length !== 1 || payload!.kind !== "record") return fail(`'${v.tag}' takes a record payload`, at)
-      if (c.record.fields.has("_tag") || payload!.fields.has("_tag")) return fail(`'${v.tag}' has a field named _tag: a record payload with one has no plain JSON form`, at)
+      if (v.args.length !== 1 || payload!.kind !== "record") return fail(`'${v.tag}' takes a record payload`, at, "wrong-payload")
+      if (c.record.fields.has("_tag") || payload!.fields.has("_tag")) return fail(`'${v.tag}' has a field named _tag: a record payload with one has no plain JSON form`, at, "no-json-form")
       return jsonObject([tag, ...fields(c.record, payload!.fields, at, depth)])
     }
     const { items } = c as Extract<JsonCase, { kind: "positional" }>
-    if (v.args.length !== items.length) return fail(`'${v.tag}' takes ${items.length} argument(s), found ${v.args.length}`, at)
+    if (v.args.length !== items.length) return fail(`'${v.tag}' takes ${items.length} argument(s), found ${v.args.length}`, at, "wrong-payload")
     if (items.length === 1) return jsonObject([tag, ["value", write(items[0]!, v.args[0]!, at.child("value"), depth + 1, 0)]])
     const values = at.child("values")
     return jsonObject([tag, ["values", v.args.map((x, i) => write(items[i]!, x, values.child(i), depth + 2, 0))]])
@@ -332,30 +333,31 @@ export const toPlainJson = (type: JsonType, value: Value, limits: Partial<Limits
 export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits> = {}, place: Place = Place.root()): Value => {
   const l = withDefaults(limits)
   const maxDepth = jsonDepth(l.maxDepth)
-  const fail = (reason: string, at: Place): never => {
-    throw new HausDecodeError(reason, at.path())
+  const fail = (reason: string, at: Place, code: ErrorCode = "type-mismatch", details?: ErrorDetails): never => {
+    throw new HausDecodeError(reason, at.path(), code, details)
   }
-  const mismatch = (expected: string, j: Json, at: Place): never => fail(`expected ${expected}, found ${describeJson(j)}`, at)
+  const mismatch = (expected: string, j: Json, at: Place): never =>
+    fail(`expected ${expected}, found ${describeJson(j)}`, at, "type-mismatch", { expected, found: describeJson(j) })
   /** A number in a string (Int, Decimal): a JSON number literal, within the limits. */
   const numberText = (s: string, at: Place): Value => {
     const normalized = isJsonNumber(s) ? normalizeJsonNumber(s) : undefined
-    if (normalized === undefined) return fail(`expected a number literal in the string, found ${describeJson(s)}`, at)
+    if (normalized === undefined) return fail(`expected a number literal in the string, found ${describeJson(s)}`, at, "invalid-number")
     const issue = numberLimitIssue(normalized, l)
-    return issue === undefined ? num(normalized) : fail(issue, at)
+    return issue === undefined ? num(normalized) : fail(issue.reason, at, issue.code)
   }
   const object = (j: Json, expected: string, at: Place): JsonObject => (isJsonObject(j) ? j : mismatch(expected, j, at))
   /** Members of a tagged object other than `_tag` and `allowed`: an error. */
   const only = (j: JsonObject, allowed: readonly string[], tag: string, at: Place) => {
     for (const k of Object.keys(j)) {
-      if (k !== "_tag" && !allowed.includes(k)) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} for '${tag}'`, at)
+      if (k !== "_tag" && !allowed.includes(k)) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} for '${tag}'`, at, "unexpected-member")
     }
   }
   const member = (j: JsonObject, name: string, tag: string, at: Place): Json =>
-    Object.hasOwn(j, name) ? j[name]! : fail(`'${tag}' needs a member "${name}"`, at)
+    Object.hasOwn(j, name) ? j[name]! : fail(`'${tag}' needs a member "${name}"`, at, "missing-member", { expected: `"${name}"` })
 
   const read = (t: JsonType, j: Json, at: Place, depth: number, hops: number): Value => {
-    if (depth > maxDepth) fail(`nesting deeper than ${l.maxDepth} levels`, at)
-    const hop = () => (hops < MAX_HOPS ? hops + 1 : fail("a type that refers only to itself (unguarded recursion)", at))
+    if (depth > maxDepth) fail(`nesting deeper than ${l.maxDepth} levels`, at, "nesting-too-deep")
+    const hop = () => (hops < MAX_HOPS ? hops + 1 : fail("a type that refers only to itself (unguarded recursion)", at, "unguarded-recursion"))
     switch (t.kind) {
       case "lazy":
         return read(t.get(), j, at, depth, hop())
@@ -366,15 +368,15 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
       case "bytes": {
         if (typeof j !== "string") return mismatch("a base64 string", j, at)
         const data = fromBase64(j)
-        if (data === undefined) return fail("expected base64 with padding (RFC 4648 §4)", at)
-        return data.length * 2 > l.maxStringLength ? fail(`byte string longer than ${l.maxStringLength} hex digits`, at) : bytesValue(data)
+        if (data === undefined) return fail("expected base64 with padding (RFC 4648 §4)", at, "invalid-base64")
+        return data.length * 2 > l.maxStringLength ? fail(`byte string longer than ${l.maxStringLength} hex digits`, at, "string-too-long") : bytesValue(data)
       }
       case "bool":
         return typeof j === "boolean" ? variant(j ? "True" : "False") : mismatch("true or false", j, at)
       case "integer":
         if (!t.quoted) return j instanceof JsonNumber ? numberOfJson(j, l, at) : mismatch("a number", j, at)
         if (typeof j !== "string") return mismatch("a whole number in a string", j, at)
-        return SMALL_INTEGER.test(j) ? numberText(j, at) : fail(`expected a whole number in a string, found ${describeJson(j)}`, at)
+        return SMALL_INTEGER.test(j) ? numberText(j, at) : fail(`expected a whole number in a string, found ${describeJson(j)}`, at, isJsonNumber(j) ? "not-an-integer" : "invalid-number")
       case "float":
         if (j instanceof JsonNumber) return numberOfJson(j, l, at)
         return (typeof j === "string" ? FLOAT_TAGS.get(j) : undefined) !== undefined ? variant(FLOAT_TAGS.get(j as string)!)
@@ -405,16 +407,16 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
         const tag = o["_tag"]
         if (tag === "None") return only(o, [], tag, at), variant("None")
         if (tag === "Some") return only(o, ["value"], tag, at), variant("Some", [read(t.item, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
-        return fail(`expected "_tag": "None" or "Some"`, at)
+        return fail(`expected "_tag": "None" or "Some"`, at, "unknown-tag")
       }
       case "variant":
         return readVariant(t, j, at, depth)
       case "none":
-        return fail(`${t.expected} has no plain JSON form`, at)
+        return fail(`${t.expected} has no plain JSON form`, at, "no-json-form")
     }
   }
 
-  const key = (k: string, at: Place) => (longerThan(k, l.maxStringLength) ? fail(`key longer than ${l.maxStringLength} characters`, at) : k)
+  const key = (k: string, at: Place) => (longerThan(k, l.maxStringLength) ? fail(`key longer than ${l.maxStringLength} characters`, at, "key-too-long") : k)
 
   /** The fields of a record (or record payload): listed members read with their types; others ignored (open) or an error (closed). */
   const fields = (t: JsonRecordType, o: JsonObject, skip: readonly string[], at: Place, depth: number): Map<string, Value> => {
@@ -423,7 +425,7 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
       if (skip.includes(k)) continue
       const type = t.fields.get(k)
       if (type !== undefined) out.set(k, read(type, o[k]!, at.child(k), depth + 1, 0))
-      else if (t.closed) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} (the record is closed)`, at)
+      else if (t.closed) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} (the record is closed)`, at, "unknown-field")
     }
     return out
   }
@@ -431,24 +433,24 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
   const readVariant = (t: JsonVariantType, j: Json, at: Place, depth: number): Value => {
     if (isEnum(t)) {
       if (typeof j !== "string") return mismatch(`one of the strings ${tagList(t.cases.keys())}`, j, at)
-      return t.cases.has(j) ? variant(j) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at)
+      return t.cases.has(j) ? variant(j) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
     }
     const o = object(j, `an object with "_tag"`, at)
     const tag = o["_tag"]
-    if (typeof tag !== "string") return fail(`expected a member "_tag" with the tag, a string`, at)
+    if (typeof tag !== "string") return fail(`expected a member "_tag" with the tag, a string`, at, "missing-member", { expected: `"_tag"` })
     const c = t.cases.get(tag)
     if (c === undefined) {
-      if (!t.open) return fail(`unknown tag ${describeJson(tag)}, expected one of ${tagList(t.cases.keys())}`, at)
+      if (!t.open) return fail(`unknown tag ${describeJson(tag)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
       // An unknown value (spec §16.3).
-      if (!/^[A-Z][A-Za-z0-9_]*$/.test(tag)) return fail(`"_tag" is not a tag name: ${describeJson(tag)}`, at)
+      if (!/^[A-Z][A-Za-z0-9_]*$/.test(tag)) return fail(`"_tag" is not a tag name: ${describeJson(tag)}`, at, "invalid-tag")
       const tagIssue = tagLengthIssue(tag, l)
-      if (tagIssue !== undefined) fail(tagIssue, at)
+      if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
       const members = Object.keys(o).filter((k) => k !== "_tag")
       if (members.length === 0) return variant(tag)
       // As written: the arguments, losslessly.
       if (members.length === 1 && members[0] === "args") {
         const args = o["args"]!
-        if (!Array.isArray(args) || args.length === 0) return fail(`"args" must be a non-empty array`, at)
+        if (!Array.isArray(args) || args.length === 0) return fail(`"args" must be a non-empty array`, at, "lossless-form")
         const place = at.child("args")
         return variant(tag, args.map((x, i) => fromLossless(x, l, place.child(i))))
       }
@@ -457,14 +459,14 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
     }
     if (isUnitCase(c)) return only(o, [], tag, at), variant(tag)
     if (c.kind === "record") {
-      if (c.record.fields.has("_tag")) return fail(`'${tag}' has a field named _tag: a record payload with one has no plain JSON form`, at)
+      if (c.record.fields.has("_tag")) return fail(`'${tag}' has a field named _tag: a record payload with one has no plain JSON form`, at, "no-json-form")
       return variant(tag, [rec(fields(c.record, o, ["_tag"], at, depth))])
     }
     const { items } = c as Extract<JsonCase, { kind: "positional" }>
     if (items.length === 1) return only(o, ["value"], tag, at), variant(tag, [read(items[0]!, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
     only(o, ["values"], tag, at)
     const values = member(o, "values", tag, at)
-    if (!Array.isArray(values) || values.length !== items.length) return fail(`'${tag}' needs "values", an array of ${items.length}`, at)
+    if (!Array.isArray(values) || values.length !== items.length) return fail(`'${tag}' needs "values", an array of ${items.length}`, at, "wrong-payload")
     const place = at.child("values")
     return variant(tag, values.map((x, i) => read(items[i]!, x, place.child(i), depth + 2, 0)))
   }

@@ -1,0 +1,15 @@
+// A header comment.
+// It has two lines.
+
+{
+  // above name
+  name: "Ada", // after name
+  born: 1815, // no space before
+  // above tags
+  tags: [
+    "math", // first
+    "poetry", // second, no comma
+  ],
+  // end of the record
+}
+// at the end of the file

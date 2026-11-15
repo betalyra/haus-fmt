@@ -112,6 +112,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'Where types come from', slug: 'docs/types' },
+            { label: 'Error codes', slug: 'docs/errors' },
             { label: 'Specification', slug: 'docs/spec' },
             { label: 'std/time', slug: 'docs/spec/time' },
           ],

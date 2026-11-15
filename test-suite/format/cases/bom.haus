@@ -1,0 +1,2 @@
+﻿// after a byte order mark
+{ a: 1, b: [x"00"] }

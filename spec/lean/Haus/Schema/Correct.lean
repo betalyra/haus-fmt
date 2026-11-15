@@ -24,7 +24,7 @@ theorem bind_ok {α β : Type} {f : α → Except Error β} {r : Except Error α
     r >>= f = .ok x ↔ ∃ y, r = .ok y ∧ f y = .ok x := by
   cases r <;> simp [bind, Except.bind]
 
-theorem fail_ne_ok {α : Type} {reason : String} {x : α} : (fail reason : Except Error α) ≠ .ok x := by
+theorem fail_ne_ok {α : Type} {reason : String} {code : Option Code} {x : α} : (fail reason code : Except Error α) ≠ .ok x := by
   simp [fail]
 
 theorem hidden_ok {s : Nat} {c : Ty} {r : Except Error Typed} {x : Typed} :

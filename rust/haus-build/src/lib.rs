@@ -23,68 +23,26 @@
 //! the same in every language (`@haus-fmt/money@1#Money`).
 
 mod codegen;
-mod packages;
 pub mod roc;
-mod schema;
+
+// The schema syntax tree and schema packages are haus-fmt-schema's, which
+// also checks data against schemas at runtime.
+use haus_schema::{packages, syntax as schema};
 
 use codegen::{Imported, STD_TIME};
 use packages::{MANIFEST, Manifest};
 use std::collections::HashMap;
-use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 pub use codegen::Codec;
-pub use packages::Packages;
-
 /// What went wrong, and where: `src/order.schema.haus:3:5: unknown type Strin`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Error {
-    path: Option<PathBuf>,
-    /// Line and column, 1-based.
-    position: Option<(usize, usize)>,
-    reason: String,
-}
-
-impl Error {
-    fn new(reason: impl Display) -> Error {
-        Error { path: None, position: None, reason: reason.to_string() }
-    }
-
-    /// An error about the file at `path`.
-    fn at(path: &Path, reason: impl Display) -> Error {
-        Error::new(reason).in_file(path)
-    }
-
-    /// The same error, in the file at `path`.
-    fn in_file(self, path: &Path) -> Error {
-        Error { path: Some(path.to_owned()), ..self }
-    }
-}
-
-impl From<schema::Error> for Error {
-    fn from(e: schema::Error) -> Error {
-        Error { path: None, position: Some((e.line, e.column)), reason: e.reason }
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let path = self.path.as_ref().map(|p| p.display().to_string());
-        let position = self.position.map(|(line, column)| format!("{line}:{column}"));
-        match [path, position].into_iter().flatten().collect::<Vec<_>>().join(":") {
-            at if at.is_empty() => f.write_str(&self.reason),
-            at => write!(f, "{at}: {}", self.reason),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
+pub use haus_schema::Error;
+pub use haus_schema::Packages;
 /// Something a schema allows but probably doesn't mean, with where it is:
 /// `3:1: unknown attribute @since: this version of haus ignores it`. Build
 /// scripts report warnings to Cargo.
-pub type Warning = Error;
+pub use haus_schema::Warning;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 

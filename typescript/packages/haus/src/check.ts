@@ -14,11 +14,14 @@
  * is reported as one error at the secret, with its type and not its value.
  */
 import { deprecationNote, type Case, type Field, type Instance, type RecordType, type SchemaFile, type StdType, type Type, type VariantType } from "./schema-file.js"
+import type { ErrorCode } from "./errors.js"
 import { checkStdTime } from "./std-time.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
 export interface CheckIssue {
   readonly severity: "error" | "hint"
+  /** Its code (spec §17), e.g. `missing-field`, or `unlisted-field` for a hint. */
+  readonly code: ErrorCode
   readonly message: string
   /** UTF-16 offsets into the data text, `end` exclusive. */
   readonly start: number
@@ -174,18 +177,21 @@ export interface CheckOptions {
 
 export function checkData(file: SchemaFile, typeName: string, values: readonly Value[], options: CheckOptions = {}): CheckIssue[] {
   const definition = file.definition(typeName)
-  if (!definition) return [{ severity: "error", message: `the schema has no type ${typeName}`, start: 0, end: 1 }]
+  if (!definition) return [{ severity: "error", code: "unknown-type", message: `the schema has no type ${typeName}`, start: 0, end: 1 }]
   if (definition.params.length > 0) {
-    return [{ severity: "error", message: `${typeName} needs arguments, so it can't describe a whole file`, start: 0, end: 1 }]
+    return [{ severity: "error", code: "wrong-arity", message: `${typeName} needs arguments, so it can't describe a whole file`, start: 0, end: 1 }]
   }
   const root: Instance = definition.template
   const issues: CheckIssue[] = []
 
-  const report = (severity: CheckIssue["severity"], message: string, start = 0, end = start + 1) => {
-    if (issues.length < MAX_ISSUES) issues.push({ severity, message, start, end: Math.max(end, start + 1) })
+  const report = (severity: CheckIssue["severity"], code: ErrorCode, message: string, start = 0, end = start + 1) => {
+    if (issues.length < MAX_ISSUES) issues.push({ severity, code, message, start, end: Math.max(end, start + 1) })
   }
   const at = (v: Value) => [v.start ?? 0, v.end ?? (v.start ?? 0) + 1] as const
-  const mismatch = (v: Value, t: Type) => report("error", `expected ${describe(t)}, found ${found(v)}`, ...at(v))
+  const mismatch = (v: Value, t: Type, code: ErrorCode = "type-mismatch") => report("error", code, `expected ${describe(t)}, found ${found(v)}`, ...at(v))
+  /** For a closed variant with these tags (`Bool`, `Maybe`): an unknown tag, a known one with the wrong payload, or another kind of value. */
+  const notCase = (v: Value, tags: readonly string[]): ErrorCode =>
+    v.kind !== "variant" ? "type-mismatch" : tags.includes(v.tag) ? "wrong-payload" : "unknown-tag"
   const tagSpan = (v: HVariant) => [v.start ?? 0, (v.start ?? 0) + v.tag.length] as const
 
   const resolve = (t: Type): Type => {
@@ -216,7 +222,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
       case "maybe":
         if (v.kind === "variant" && v.tag === "None" && v.args.length === 0) return
         if (v.kind === "variant" && v.tag === "Some" && v.args.length === 1) return check(v.args[0]!, t.item)
-        return report("error", `expected None or Some(…) (${describe(type)}), found ${found(v)}`, ...at(v))
+        return report("error", notCase(v, ["None", "Some"]), `expected None or Some(…) (${describe(type)}), found ${found(v)}`, ...at(v))
       case "secret": {
         // Check what's inside, then replace whatever was found there (messages
         // quote values, keys and tags of the data) by one error without them.
@@ -228,7 +234,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
           hidden--
         }
         const inside = issues.splice(before)
-        if (inside.some((i) => i.severity === "error")) report("error", `expected ${describe(t.item)} (a Secret: the value is not shown)`, ...at(v))
+        if (inside.some((i) => i.severity === "error")) report("error", "invalid-secret", `expected ${describe(t.item)} (a Secret: the value is not shown)`, ...at(v))
         return
       }
       case "record":
@@ -253,7 +259,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
         if (v.kind !== "bytes") mismatch(v, type)
         return
       case "Bool":
-        if (v.kind !== "variant" || (v.tag !== "True" && v.tag !== "False") || v.args.length > 0) mismatch(v, type)
+        if (v.kind !== "variant" || (v.tag !== "True" && v.tag !== "False") || v.args.length > 0) mismatch(v, type, notCase(v, ["True", "False"]))
         return
       case "Float32":
       case "Float64":
@@ -262,14 +268,14 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
         return
       case "Decimal":
         if (v.kind !== "number") return mismatch(v, type)
-        if (/^-?0[xb]/.test(v.text)) report("error", "a Decimal is written in decimal digits, not hex or binary", ...at(v))
+        if (/^-?0[xb]/.test(v.text)) report("error", "type-mismatch", "a Decimal is written in decimal digits, not hex or binary", ...at(v))
         return
       default: {
         if (v.kind !== "number") return mismatch(v, type)
         const n = integer(v.text)
-        if (n === undefined) return report("error", `expected a whole number (${name}), found ${v.text}`, ...at(v))
+        if (n === undefined) return report("error", "not-an-integer", `expected a whole number (${name}), found ${v.text}`, ...at(v))
         const range = RANGES[name]
-        if (range && (n < range[0] || n > range[1])) report("error", `${v.text} is out of range for ${name} (${range[0]} to ${range[1]})`, ...at(v))
+        if (range && (n < range[0] || n > range[1])) report("error", "out-of-range", `${v.text} is out of range for ${name} (${range[0]} to ${range[1]})`, ...at(v))
       }
     }
   }
@@ -277,10 +283,10 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
   const std = (v: Value, name: StdType, type: Type): void => {
     if (v.kind !== "variant" || v.tag !== name) return mismatch(v, type)
     const [arg] = v.args
-    if (v.args.length !== 1 || arg!.kind !== "string") return report("error", `write ${name}("…") with one string`, ...at(v))
+    if (v.args.length !== 1 || arg!.kind !== "string") return report("error", "type-mismatch", `write ${name}("…") with one string`, ...at(v))
     // The std/time profile (spec/std/time.md): built-in rules, like the ranges of Int8.
     const reason = checkStdTime(name, arg!.value)
-    if (reason !== undefined) report("error", reason, ...at(arg!))
+    if (reason !== undefined) report("error", "invalid-time", reason, ...at(arg!))
   }
 
   const record = (v: HRecord, t: RecordType): void => {
@@ -288,20 +294,20 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
     const missing = t.fields.filter((f) => !f.optional && !v.fields.has(f.key)).map((f) => quoteKey(f.key))
     if (missing.length > 0) {
       const start = v.start ?? 0
-      report("error", `missing field${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`, start, start + 1)
+      report("error", "missing-field", `missing field${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`, start, start + 1)
     }
     for (const [key, x] of v.fields) {
       const f = known.get(key)
       if (f) {
         const note = deprecationNote(quoteKey(key), f.attributes)
-        if (note !== undefined) report("hint", note, ...(v.keySpans?.get(key) ?? at(x)))
+        if (note !== undefined) report("hint", "deprecated", note, ...(v.keySpans?.get(key) ?? at(x)))
         check(x, f.type)
         continue
       }
       const [start, end] = v.keySpans?.get(key) ?? at(x)
       const hint = suggest(key, [...known.keys()].filter((k) => !v.fields.has(k)))
-      if (t.closed) report("error", `${quoteKey(key)} is not a field of this closed record.${hint}`, start, end)
-      else report("hint", `${quoteKey(key)} is not in the schema; a reader ignores it.${hint}`, start, end)
+      if (t.closed) report("error", "unknown-field", `${quoteKey(key)} is not a field of this closed record.${hint}`, start, end)
+      else report("hint", "unlisted-field", `${quoteKey(key)} is not in the schema; a reader ignores it.${hint}`, start, end)
     }
   }
 
@@ -312,25 +318,25 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
       const hint = suggest(v.tag, t.cases.map((x) => x.tag))
       // `< >` lists no tags: any tag is meant, so there is nothing to hint.
       if (t.open) {
-        if (t.cases.length > 0) report("hint", `${v.tag} is not in the schema; a reader keeps it as an unknown value.${hint}`, ...tagSpan(v))
+        if (t.cases.length > 0) report("hint", "unlisted-tag", `${v.tag} is not in the schema; a reader keeps it as an unknown value.${hint}`, ...tagSpan(v))
       }
-      else report("error", `${v.tag} is not allowed here: expected ${tags(t)}.${hint}`, ...tagSpan(v))
+      else report("error", "unknown-tag", `${v.tag} is not allowed here: expected ${tags(t)}.${hint}`, ...tagSpan(v))
       return
     }
     const note = deprecationNote(v.tag, c.attributes)
-    if (note !== undefined) report("hint", note, ...tagSpan(v))
+    if (note !== undefined) report("hint", "deprecated", note, ...tagSpan(v))
     const [first] = v.args
     switch (c.payload.kind) {
       case "none":
-        if (v.args.length > 0) report("error", `${v.tag} takes no payload`, ...at(v))
+        if (v.args.length > 0) report("error", "wrong-payload", `${v.tag} takes no payload`, ...at(v))
         return
       case "record":
-        if (v.args.length !== 1 || first!.kind !== "record") return report("error", `write ${v.tag} { … } with a record`, ...at(v))
+        if (v.args.length !== 1 || first!.kind !== "record") return report("error", "wrong-payload", `write ${v.tag} { … } with a record`, ...at(v))
         return record(first!, c.payload.record)
       case "positional": {
         const items = c.payload.items
         if (v.args.length !== items.length) {
-          return report("error", `${v.tag} takes ${items.length} argument${items.length === 1 ? "" : "s"} (${items.map(describe).join(", ")}), found ${v.args.length}`, ...at(v))
+          return report("error", "wrong-payload", `${v.tag} takes ${items.length} argument${items.length === 1 ? "" : "s"} (${items.map(describe).join(", ")}), found ${v.args.length}`, ...at(v))
         }
         v.args.forEach((arg, i) => check(arg, items[i]!))
       }
@@ -340,7 +346,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
   if (root.stream) for (const v of values) check(v, root.body)
   else if (values.length !== 1) {
     const extra = values[1]
-    report("error", `expected one value (${typeName} is not a Stream), found ${values.length}`, ...(extra ? at(extra) : [0, 1] as const))
+    report("error", "not-one-value", `expected one value (${typeName} is not a Stream), found ${values.length}`, ...(extra ? at(extra) : [0, 1] as const))
   } else check(values[0]!, root.body)
   return issues
 }

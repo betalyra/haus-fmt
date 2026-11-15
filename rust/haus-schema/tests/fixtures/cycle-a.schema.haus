@@ -1,0 +1,2 @@
+import ./cycle-b (B)
+type A = { b: B }

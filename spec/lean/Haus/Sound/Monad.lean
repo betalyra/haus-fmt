@@ -42,8 +42,8 @@ open Haus Parser
     (f <$> x).run t = (x.run t).map fun (a, t') => (f a, t') := by
   simp only [StateT.run, Functor.map, StateT.map, Except.map]
   cases x t <;> rfl
-@[simp] theorem run_fail {α : Type} (r : String) (t : Text) : (fail r : P α).run t = .error (.at r t) := rfl
-@[simp] theorem run_failAt {α : Type} (r : String) (u t : Text) : (failAt r u : P α).run t = .error (.at r u) := rfl
+@[simp] theorem run_fail {α : Type} (c : Code) (r : String) (t : Text) : (fail c r : P α).run t = .error (.at c r t) := rfl
+@[simp] theorem run_failAt {α : Type} (c : Code) (r : String) (u t : Text) : (failAt c r u : P α).run t = .error (.at c r u) := rfl
 
 @[simp] theorem run_skip (n : Nat) (t : Text) : (skip n).run t = .ok ((), t.drop n) := rfl
 
@@ -65,8 +65,14 @@ theorem checkName_ok {L : Limits} {what : String} {s : Text} (h : s.length ≤ L
 
 /-- A key or tag over the limit: `checkName` fails. -/
 theorem checkName_long {L : Limits} {what : String} {s : Text} (h : ¬ s.length ≤ L.maxStringLength) (start t : Text) :
-    (checkName L what s start).run t = .error (.at s!"{what} longer than {L.maxStringLength} characters" start) := by
+    (checkName L what s start).run t =
+      .error (.at (if what == "key" then .keyTooLong else .tagTooLong) s!"{what} longer than {L.maxStringLength} characters" start) := by
   simp [checkName, Nat.lt_of_not_le h]
+
+/-- Relabelling errors (`Parser.parse` names a version directive) changes no success. -/
+theorem mapError_eq_ok {ε ε' α : Type} {f : ε → ε'} {r : Except ε α} {x : α} :
+    r.mapError f = .ok x ↔ r = .ok x := by
+  cases r <;> simp [Except.mapError]
 
 /-- Running a parser for its result only. -/
 theorem run'_eq {α : Type} (x : P α) (t : Text) : x.run' t = (x.run t).map Prod.fst := by

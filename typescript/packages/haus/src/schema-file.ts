@@ -29,7 +29,7 @@
  *
  * Errors are HausSchemaFileError, with the position in the schema file.
  */
-import { HausSyntaxError, locate, START } from "./errors.js"
+import { HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails } from "./errors.js"
 import { DEFAULT_LIMITS, Parser } from "./parser.js"
 import type { Value } from "./value.js"
 
@@ -39,16 +39,19 @@ export interface MissingImport {
   readonly name: string
 }
 
+/** What a schema-file error can say beyond its message. */
+export interface SchemaErrorDetails extends ErrorDetails {
+  /** A known type used without its import in the file itself (for an editor's quick fix). */
+  readonly missingImport?: MissingImport
+}
+
 export class HausSchemaFileError extends HausSyntaxError {
-  constructor(
-    reason: string,
-    offset: number,
-    line: number,
-    column: number,
-    /** Set when the error is a known type used without its import in the file itself (for an editor's quick fix). */
-    readonly missingImport?: MissingImport,
-  ) {
-    super(reason, offset, line, column)
+  /** Set when the error is a known type used without its import in the file itself (for an editor's quick fix). */
+  readonly missingImport?: MissingImport
+
+  constructor(reason: string, offset: number, line: number, column: number, code: ErrorCode, details: SchemaErrorDetails = {}) {
+    super(reason, offset, line, column, code, details)
+    if (details.missingImport !== undefined) this.missingImport = details.missingImport
   }
 }
 
@@ -140,6 +143,8 @@ export const deprecationNote = (name: string, attributes: readonly Attribute[] |
 export interface SchemaWarning {
   /** `unknown-attribute`: `@since(…)` and the like; `deprecated`: a reference to a `@deprecated` type. */
   readonly kind: SchemaWarningKind
+  /** Its code (spec §17): the same as `kind`. */
+  readonly code: SchemaWarningKind
   readonly message: string
   /** UTF-16 offsets into the schema file, `end` exclusive. */
   readonly offset: number
@@ -148,7 +153,7 @@ export interface SchemaWarning {
   readonly column: number
 }
 
-export type SchemaWarningKind = "unknown-attribute" | "deprecated"
+export type SchemaWarningKind = Extract<ErrorCode, "unknown-attribute" | "deprecated">
 
 export interface Field {
   readonly key: string
@@ -261,7 +266,7 @@ const PUNCT = ["...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/"
 
 class Lexer {
   pos = 0
-  constructor(readonly text: string, readonly fail: (reason: string, pos: number) => never) {}
+  constructor(readonly text: string, readonly fail: Fail) {}
 
   /** Skip whitespace and comments. */
   skip(): void {
@@ -276,7 +281,7 @@ class Lexer {
         const start = this.pos
         let depth = 0
         do {
-          if (this.pos >= s.length) this.fail("unterminated block comment", start)
+          if (this.pos >= s.length) this.fail("unterminated-comment", "unterminated block comment", start)
           if (s.startsWith("/*", this.pos)) depth++, (this.pos += 2)
           else if (s.startsWith("*/", this.pos)) depth--, (this.pos += 2)
           else this.pos++
@@ -312,7 +317,7 @@ class Lexer {
       const attribute = /@([a-z_][A-Za-z0-9_]*)/y
       attribute.lastIndex = pos
       const am = attribute.exec(s)
-      if (!am) this.fail("expected an attribute name after '@', like @deprecated", pos)
+      if (!am) this.fail("schema-syntax", "expected an attribute name after '@', like @deprecated", pos)
       this.pos += am[0].length
       return { t: "attribute", value: am[1]!, pos }
     }
@@ -320,12 +325,12 @@ class Lexer {
       const str = /"(?:[^"\\\n]|\\.)*"/y
       str.lastIndex = pos
       const sm = str.exec(s)
-      if (!sm) this.fail("unterminated string", pos)
+      if (!sm) this.fail("unterminated-string", "unterminated string", pos)
       this.pos += sm[0].length
       try {
         return { t: "string", value: JSON.parse(sm[0]) as string, pos }
       } catch {
-        return this.fail("invalid escape in string", pos)
+        return this.fail("invalid-escape", "invalid escape in string", pos)
       }
     }
     for (const p of PUNCT) {
@@ -334,7 +339,7 @@ class Lexer {
         return { t: "punct", value: p, pos }
       }
     }
-    return this.fail(`unexpected character ${JSON.stringify(s[pos])}`, pos)
+    return this.fail("schema-syntax", `unexpected character ${JSON.stringify(s[pos])}`, pos)
   }
 }
 
@@ -433,7 +438,7 @@ class SchemaParser {
   /** Attributes this version doesn't define: a warning each. */
   readonly warnings: RawWarning[] = []
 
-  constructor(readonly text: string, readonly fail: (reason: string, pos: number) => never) {
+  constructor(readonly text: string, readonly fail: Fail) {
     this.lexer = new Lexer(text, fail)
     this.tok = this.lexer.next()
   }
@@ -459,9 +464,9 @@ class SchemaParser {
     return this.advance()
   }
 
-  private unexpected(what: string): never {
+  private unexpected(what: string, code: ErrorCode = "schema-syntax"): never {
     const found = this.tok.t === "eof" ? "end of file" : `'${this.tok.value}'`
-    return this.fail(`expected ${what}, found ${found}`, this.tok.pos)
+    return this.fail(code, `expected ${what}, found ${found}`, this.tok.pos, { expected: what, found })
   }
 
   private keyword(): string | undefined {
@@ -505,7 +510,7 @@ class SchemaParser {
     const nameEnd = t.pos + 1 + t.value.length
     let args: readonly Value[] = []
     if (this.is("(")) {
-      if (this.tok.pos !== nameEnd) this.fail(`no space is allowed between @${t.value} and '('`, nameEnd)
+      if (this.tok.pos !== nameEnd) this.fail("attribute-space", `no space is allowed between @${t.value} and '('`, nameEnd)
       args = this.parseAttributeArgs(this.tok.pos)
     }
     return { name: t.value, args, pos: t.pos, end: this.lastEnd }
@@ -523,10 +528,10 @@ class SchemaParser {
       this.warnings.push({ kind: "unknown-attribute", message: `unknown attribute @${a.name}: this version of haus gives it no meaning (it knows ${known})`, pos: a.pos, end: a.end })
       return
     }
-    if (before.some((b) => b.name === a.name)) this.fail(`@${a.name} appears twice here`, a.pos)
+    if (before.some((b) => b.name === a.name)) this.fail("attribute-twice", `@${a.name} appears twice here`, a.pos)
     const [first, ...more] = a.args
     if (more.length > 0 || (first !== undefined && first.kind !== "string")) {
-      this.fail('@deprecated takes no argument or one string: @deprecated or @deprecated("use email")', a.pos)
+      this.fail("attribute-arguments", '@deprecated takes no argument or one string: @deprecated or @deprecated("use email")', a.pos)
     }
   }
 
@@ -540,21 +545,21 @@ class SchemaParser {
       lexer.skip()
       const c = this.text[lexer.pos]
       if (c === ")") {
-        if (values.length === 0) this.fail("an attribute's ( … ) needs at least one value; write the attribute without parentheses", open)
+        if (values.length === 0) this.fail("attribute-arguments", "an attribute's ( … ) needs at least one value; write the attribute without parentheses", open)
         break
       }
-      if (c === undefined) this.fail("unclosed '(' of an attribute", open)
+      if (c === undefined) this.fail("unclosed-bracket", "unclosed '(' of an attribute", open)
       try {
         const { value, end } = data.valueAt(lexer.pos)
         values.push(value)
         lexer.pos = end
       } catch (e) {
-        if (e instanceof HausSyntaxError) this.fail(e.reason, e.offset)
+        if (e instanceof HausSyntaxError) this.fail(e.code, e.reason, e.offset)
         throw e
       }
       lexer.skip()
       if (this.text[lexer.pos] === ",") lexer.pos++
-      else if (this.text[lexer.pos] !== ")") this.fail(`expected ',' or ')' in the attribute's arguments`, lexer.pos)
+      else if (this.text[lexer.pos] !== ")") this.fail("missing-comma", `expected ',' or ')' in the attribute's arguments`, lexer.pos)
     }
     lexer.pos++ // )
     this.lastEnd = lexer.pos
@@ -580,7 +585,7 @@ class SchemaParser {
       names.push({ name: t.value, pos: t.pos })
       if (!this.is(")")) this.expect(",")
     }
-    if (names.length === 0) this.unexpected("a type name (an import names at least one type)")
+    if (names.length === 0) this.unexpected("a type name (an import names at least one type)", "unknown-import")
     this.advance()
     return { module: parts.join("/"), names, pos, end: this.lastEnd }
   }
@@ -591,7 +596,7 @@ class SchemaParser {
     const name = this.advance().value
     const params: { name: string; pos: number }[] = []
     while (this.cur().t === "lower" && !this.keyword()) {
-      if (this.cur().value.startsWith("_")) this.unexpected("a type parameter (starting with a lowercase letter)")
+      if (this.cur().value.startsWith("_")) this.unexpected("a type parameter (starting with a lowercase letter)", "invalid-parameter")
       const t = this.advance()
       params.push({ name: t.value, pos: t.pos })
     }
@@ -602,7 +607,7 @@ class SchemaParser {
   }
 
   private nested<T>(pos: number, f: () => T): T {
-    if (++this.depth > MAX_NESTING) this.fail(`types nested deeper than ${MAX_NESTING} levels`, pos)
+    if (++this.depth > MAX_NESTING) this.fail("type-too-deep", `types nested deeper than ${MAX_NESTING} levels`, pos)
     try {
       return f()
     } finally {
@@ -641,7 +646,7 @@ class SchemaParser {
       return this.unexpected("a record { … } or a variant < … > after 'closed'")
     }
     if (t.t === "lower" && !this.keyword()) {
-      if (t.value === "_") this.fail("types are open by default, so there is no _: write < > for any tag, or use a type parameter", t.pos)
+      if (t.value === "_") this.fail("underscore-type", "types are open by default, so there is no _: write < > for any tag, or use a type parameter", t.pos)
       this.advance()
       return { t: "var", name: t.value, pos: t.pos }
     }
@@ -660,7 +665,7 @@ class SchemaParser {
   private parseSpread(at: number): SpreadNode {
     const t = this.tok
     if (t.t === "lower" && !this.keyword()) {
-      return this.fail(`row parameters (...${t.value}) aren't supported; spread a named type instead: ...UserEvent`, t.pos)
+      return this.fail("row-parameter", `row parameters (...${t.value}) aren't supported; spread a named type instead: ...UserEvent`, t.pos)
     }
     if (t.t !== "upper") this.unexpected("a type name after '...': ...UserEvent")
     this.advance()
@@ -669,13 +674,13 @@ class SchemaParser {
 
   private parseRecord(closed: boolean): RecordNode {
     const pos = this.advance().pos
-    if (this.is("|")) this.fail("{| … |} is gone: write closed { … } for a closed record", this.tok.pos)
+    if (this.is("|")) this.fail("schema-syntax", "{| … |} is gone: write closed { … } for a closed record", this.tok.pos)
     const fields: FieldNode[] = []
     const spreads: SpreadNode[] = []
     while (!this.is("}")) {
       const attributes = this.parseAttributes()
       if (this.is("...")) {
-        if (attributes.length > 0) this.fail("attributes can't be put on a spread: the fields it copies keep their own", attributes[0]!.pos)
+        if (attributes.length > 0) this.fail("attribute-on-spread", "attributes can't be put on a spread: the fields it copies keep their own", attributes[0]!.pos)
         this.advance()
         spreads.push(this.parseSpread(fields.length))
       } else {
@@ -708,7 +713,7 @@ class SchemaParser {
         while (this.startsAtom()) args.push(this.parseAtom())
         cases.push({ tag: tag.value, args, pos: tag.pos, attributes: attributes.map(attributeOf) })
       } else if (this.is("...")) {
-        if (attributes.length > 0) this.fail("attributes can't be put on a spread: the tags it copies keep their own", attributes[0]!.pos)
+        if (attributes.length > 0) this.fail("attribute-on-spread", "attributes can't be put on a spread: the tags it copies keep their own", attributes[0]!.pos)
         this.advance()
         spreads.push(this.parseSpread(cases.length))
       } else this.unexpected(attributes.length > 0 ? "a tag after the attribute" : "a tag, ...Name or '>'")
@@ -716,7 +721,7 @@ class SchemaParser {
       this.expect("|")
     }
     this.advance()
-    if (closed && cases.length === 0 && spreads.length === 0) this.fail("a closed variant needs at least one tag", pos)
+    if (closed && cases.length === 0 && spreads.length === 0) this.fail("closed-empty-variant", "a closed variant needs at least one tag", pos)
     return { t: "variant", cases, spreads, closed, pos }
   }
 }
@@ -845,12 +850,12 @@ const MAX_FILES = 256
 /** What each type parameter stands for while a generic type is evaluated. */
 type Env = ReadonlyMap<string, Type>
 
-type Fail = (reason: string, pos: number, missing?: MissingImport) => never
+type Fail = (code: ErrorCode, reason: string, pos: number, details?: SchemaErrorDetails) => never
 
 /** Fails with a HausSchemaFileError at an offset of `text`. */
-const failIn = (text: string): Fail => (reason, pos, missing) => {
+const failIn = (text: string): Fail => (code, reason, pos, details) => {
   const at = locate(text, pos, START)
-  throw new HausSchemaFileError(reason, at.offset, at.line, at.column, missing)
+  throw new HausSchemaFileError(reason, at.offset, at.line, at.column, code, details)
 }
 
 /** One schema file: the root, or one it imports (directly or not). */
@@ -901,7 +906,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
 
   // ── loading: parse each file once, build its scope ──
   const load = (text: string, key: string | undefined, id: string | undefined, fail: Fail, root: boolean): Unit => {
-    if (units.size >= MAX_FILES) fail(`more than ${MAX_FILES} schema files are imported`, 0)
+    if (units.size >= MAX_FILES) fail("too-many-files", `more than ${MAX_FILES} schema files are imported`, 0)
     const parser = new SchemaParser(text, fail)
     const { imports, types } = parser.parseFile()
     const unit: Unit = { root, id, text, fail, own: new Map(), scope: new Map(), std: new Map(), warnings: parser.warnings }
@@ -914,36 +919,36 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
           const names = (STD_MODULES as Record<string, readonly StdType[]>)[imp.module]
           if (!names) {
             const moved = MOVED_MODULES[imp.module]
-            fail(moved
+            fail("unknown-module", moved
               ? `${imp.module} is no longer a standard module; it is the package ${moved}: import ${moved} (${imp.names.map((n) => n.name).join(", ")})`
               : `unknown standard module ${imp.module} (there is ${Object.keys(STD_MODULES).join(", ")})`, imp.pos)
           }
           for (const n of imp.names) {
-            if (!names!.includes(n.name as StdType)) fail(`${imp.module} has no type ${n.name} (it has ${names!.join(", ")})`, n.pos)
-            if (unit.std.has(n.name) || unit.scope.has(n.name)) fail(`${n.name} is imported twice`, n.pos)
+            if (!names!.includes(n.name as StdType)) fail("unknown-import", `${imp.module} has no type ${n.name} (it has ${names!.join(", ")})`, n.pos)
+            if (unit.std.has(n.name) || unit.scope.has(n.name)) fail("duplicate-import", `${n.name} is imported twice`, n.pos)
             unit.std.set(n.name, n.name as StdType)
           }
           continue
         }
-        if (!/^(@[^/]+\/|\.\.?\/)/.test(imp.module)) fail(`unknown module ${imp.module}: import std/…, a package @org/name or a file ./name`, imp.pos)
+        if (!/^(@[^/]+\/|\.\.?\/)/.test(imp.module)) fail("unknown-module", `unknown module ${imp.module}: import std/…, a package @org/name or a file ./name`, imp.pos)
         const dep = loadImport(imp, key, fail)
         for (const n of imp.names) {
           const def = dep.own.get(n.name)
-          if (!def) fail(`${imp.module} has no type ${n.name}${dep.own.size ? ` (it has ${[...dep.own.keys()].join(", ")})` : ""}`, n.pos)
-          if (unit.std.has(n.name) || unit.scope.has(n.name)) fail(`${n.name} is imported twice`, n.pos)
+          if (!def) fail("unknown-import", `${imp.module} has no type ${n.name}${dep.own.size ? ` (it has ${[...dep.own.keys()].join(", ")})` : ""}`, n.pos)
+          if (unit.std.has(n.name) || unit.scope.has(n.name)) fail("duplicate-import", `${n.name} is imported twice`, n.pos)
           unit.scope.set(n.name, def!)
         }
       }
       for (const decl of types) {
-        if (unit.own.has(decl.name)) fail(`type ${decl.name} is defined twice`, decl.pos)
-        if (unit.scope.has(decl.name) || unit.std.has(decl.name)) fail(`type ${decl.name} is already imported`, decl.pos)
+        if (unit.own.has(decl.name)) fail("duplicate-type", `type ${decl.name} is defined twice`, decl.pos)
+        if (unit.scope.has(decl.name) || unit.std.has(decl.name)) fail("duplicate-type", `type ${decl.name} is already imported`, decl.pos)
         if ((BUILTINS as readonly string[]).includes(decl.name) || decl.name in PRELUDE_GENERIC) {
-          fail(`${decl.name} is a prelude type and can't be redefined`, decl.pos)
+          fail("redefine-prelude", `${decl.name} is a prelude type and can't be redefined`, decl.pos)
         }
         const seen = new Set<string>()
         for (const p of decl.params) {
-          if (p.name === "_") fail("_ can't be a parameter name", p.pos)
-          if (seen.has(p.name)) fail(`parameter ${p.name} appears twice`, p.pos)
+          if (p.name === "_") fail("invalid-parameter", "_ can't be a parameter name", p.pos)
+          if (seen.has(p.name)) fail("invalid-parameter", `parameter ${p.name} appears twice`, p.pos)
           seen.add(p.name)
         }
         const def: Def = { decl, params: decl.params.map((p) => p.name), unit }
@@ -959,27 +964,27 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
 
   const loadImport = (imp: ImportDecl, from: string | undefined, fail: Fail): Unit => {
     const resolver = options.resolver
-    if (!resolver) return fail(`can't import ${imp.module}: no module resolver (only std modules can be imported here)`, imp.pos)
+    if (!resolver) return fail("import-unavailable", `can't import ${imp.module}: no module resolver (only std modules can be imported here)`, imp.pos)
     let r: ResolvedModule
     try {
       r = resolver.resolve(imp.module.replace(/@[0-9]+$/, ""), from)
     } catch (e) {
-      return fail(`can't import ${imp.module}: ${e instanceof Error ? e.message : String(e)}`, imp.pos)
+      return fail("import-not-found", `can't import ${imp.module}: ${e instanceof Error ? e.message : String(e)}`, imp.pos)
     }
     const wanted = /^@.+@([0-9]+)$/.exec(imp.module)?.[1]
     if (wanted !== undefined && r.version !== undefined && majorOf(r.version) !== wanted) {
-      fail(`${imp.module} wants major version ${wanted}, but version ${r.version} was found`, imp.pos)
+      fail("import-version", `${imp.module} wants major version ${wanted}, but version ${r.version} was found`, imp.pos)
     }
-    if (loading.includes(r.key)) fail(`import cycle: ${imp.module} imports this file again`, imp.pos)
+    if (loading.includes(r.key)) fail("import-cycle", `import cycle: ${imp.module} imports this file again`, imp.pos)
     const cached = units.get(r.key)
     if (cached) return cached
     if (ids.has(r.id) && ids.get(r.id) !== r.key) {
-      fail(`${imp.module} is ${r.id}, but another file already is: two copies or two packages with the same name (${r.key})`, imp.pos)
+      fail("duplicate-package", `${imp.module} is ${r.id}, but another file already is: two copies or two packages with the same name (${r.key})`, imp.pos)
     }
     // Errors inside an imported file are reported at the import, with their place in that file.
-    const nested: Fail = (reason, pos) => {
+    const nested: Fail = (code, reason, pos, details) => {
       const at = locate(r.text, pos, START)
-      return fail(`${imp.module} (${at.line}:${at.column}): ${reason}`, imp.pos)
+      return fail(code, `${imp.module} (${at.line}:${at.column}): ${reason}`, imp.pos, details?.hint === undefined ? {} : { hint: details.hint })
     }
     return load(r.text, r.key, r.id, nested, false)
   }
@@ -991,12 +996,12 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     const { fail } = def.unit
     const params = new Set(def.params)
     // Every lowercase name in a type must be one of the definition's parameters.
-    for (const n of nodesOf(def.decl.body)) if (n.t === "var" && !params.has(n.name)) fail(`unknown type parameter ${n.name}`, n.pos)
+    for (const n of nodesOf(def.decl.body)) if (n.t === "var" && !params.has(n.name)) fail("unknown-parameter", `unknown type parameter ${n.name}`, n.pos)
     // §9.10: a generic type refers to itself only with its own parameters.
     const ownParams = (args: readonly Node[]) => args.length === def.params.length && args.every((a, i) => a.t === "var" && a.name === def.params[i])
     for (const n of nodesOf(def.decl.body)) {
       if (n.t === "app" && scopeOf(def, n.head) === def && !ownParams(n.args)) {
-        fail(`${def.decl.name} must refer to itself with its own parameters (${[def.decl.name, ...def.params].join(" ")}); other arguments could grow without bound`, n.pos)
+        fail("growing-recursion", `${def.decl.name} must refer to itself with its own parameters (${[def.decl.name, ...def.params].join(" ")}); other arguments could grow without bound`, n.pos)
       }
     }
   }
@@ -1006,7 +1011,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const defOf = new Map<Instance, Def>()
   /** The file whose nodes are being evaluated: names resolve in its scope, errors point into it. */
   let current: Unit = root
-  const fail: Fail = (reason, pos, missing) => current.fail(reason, pos, missing)
+  const fail: Fail = (code, reason, pos, details) => current.fail(code, reason, pos, details)
   const within = <R>(unit: Unit, f: () => R): R => {
     const saved = current
     current = unit
@@ -1050,7 +1055,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     const key = args.length === 0 ? nameKey(def) : `${nameKey(def)}(${args.map(keyOf).join(",")})`
     let inst = instances.get(key)
     if (inst) return inst
-    if (instances.size >= MAX_INSTANCES) fail(`more than ${MAX_INSTANCES} type instances: a generic type grows without bound`, pos)
+    if (instances.size >= MAX_INSTANCES) fail("growing-recursion", `more than ${MAX_INSTANCES} type instances: a generic type grows without bound`, pos)
     inst = new Instance(definitionOf(def), args, key)
     instances.set(key, inst)
     defOf.set(inst, def)
@@ -1062,12 +1067,12 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const evaluateInstance = (inst: Instance, def: Def): void =>
     within(def.unit, () => {
       if (inst.state === "done") return
-      if (inst.state === "evaluating") fail(`type ${def.decl.name} spreads itself (directly or through another type)`, def.decl.pos)
+      if (inst.state === "evaluating") fail("spread-cycle", `type ${def.decl.name} spreads itself (directly or through another type)`, def.decl.pos)
       inst.state = "evaluating"
       const env: Env = new Map(def.params.map((p, i) => [p, inst.args[i]!]))
       const body = def.decl.body
       if ((body.t === "app" && body.head === "Stream") || (body.t === "name" && body.name === "Stream")) {
-        if (body.t !== "app" || body.args.length !== 1) return fail("Stream needs 1 argument", body.pos)
+        if (body.t !== "app" || body.args.length !== 1) return fail("wrong-arity", "Stream needs 1 argument", body.pos)
         inst.stream = true
         inst.body = evaluate(body.args[0]!, env)
       } else inst.body = evaluate(body, env)
@@ -1088,7 +1093,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
         t = t.item
         continue
       }
-      if (seen.has(t.instance)) fail(`type ${t.instance.name} refers to itself without a record, array or variant in between`, pos)
+      if (seen.has(t.instance)) fail("unguarded-recursion", `type ${t.instance.name} refers to itself without a record, array or variant in between`, pos)
       seen.add(t.instance)
       t = bodyOf(t.instance)
     }
@@ -1098,20 +1103,20 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const lookupName = (name: string, pos: number): Type => {
     const def = current.scope.get(name)
     if (def) {
-      if (def.params.length > 0) fail(`${name} needs ${def.params.length} argument${def.params.length > 1 ? "s" : ""} (${[name, ...def.params].join(" ")})`, pos)
+      if (def.params.length > 0) fail("wrong-arity", `${name} needs ${def.params.length} argument${def.params.length > 1 ? "s" : ""} (${[name, ...def.params].join(" ")})`, pos)
       return refTo(instance(def, [], pos), pos)
     }
     const std = current.std.get(name)
     if (std) return { kind: "std", name: std }
     if ((BUILTINS as readonly string[]).includes(name)) return { kind: "builtin", name: name as Builtin }
-    if (name in PRELUDE_GENERIC) fail(`${name} needs ${PRELUDE_GENERIC[name]} argument${PRELUDE_GENERIC[name]! > 1 ? "s" : ""}`, pos)
+    if (name in PRELUDE_GENERIC) fail("wrong-arity", `${name} needs ${PRELUDE_GENERIC[name]} argument${PRELUDE_GENERIC[name]! > 1 ? "s" : ""}`, pos)
     const module = moduleOfType(name)
-    if (!module) return fail(`unknown type ${name}`, pos)
-    return fail(`unknown type ${name}; ${importHint({ module, name })}`, pos, { module, name })
+    if (!module) return fail("unknown-type", `unknown type ${name}`, pos)
+    return fail("unknown-type", `unknown type ${name}; ${importHint({ module, name })}`, pos, { missingImport: { module, name }, hint: `I${importHint({ module, name }).slice(1)}.` })
   }
 
   const refTo = (inst: Instance, pos: number): Type => {
-    if (inst.state === "done" && inst.stream) fail(`${inst.name} is a Stream; a stream can only be the whole file, not part of a type`, pos)
+    if (inst.state === "done" && inst.stream) fail("misplaced-stream", `${inst.name} is a Stream; a stream can only be the whole file, not part of a type`, pos)
     pendingStreamChecks.push([inst, pos, current])
     return { kind: "ref", instance: inst }
   }
@@ -1120,7 +1125,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const evaluate = (n: Node, env: Env): Type => {
     switch (n.t) {
       case "name":
-        if (n.name === "Stream") return fail("Stream needs 1 argument", n.pos)
+        if (n.name === "Stream") return fail("wrong-arity", "Stream needs 1 argument", n.pos)
         return lookupName(n.name, n.pos)
       case "var":
         return env.get(n.name)!
@@ -1136,7 +1141,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const apply = (n: Extract<Node, { t: "app" }>, env: Env): Type => {
     const arity = PRELUDE_GENERIC[n.head]
     if (arity !== undefined) {
-      if (n.args.length !== arity) fail(`${n.head} needs ${arity} argument${arity > 1 ? "s" : ""}`, n.pos)
+      if (n.args.length !== arity) fail("wrong-arity", `${n.head} needs ${arity} argument${arity > 1 ? "s" : ""}`, n.pos)
       const [a, b] = n.args.map((x) => evaluate(x, env)) as [Type, Type]
       switch (n.head) {
         case "Array":
@@ -1157,16 +1162,16 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
             ],
           }
         default:
-          return fail("Stream can only be the whole type of a definition: type Events = Stream Event", n.pos)
+          return fail("misplaced-stream", "Stream can only be the whole type of a definition: type Events = Stream Event", n.pos)
       }
     }
     const def = current.scope.get(n.head)
     if (!def) {
-      if (current.std.has(n.head) || (BUILTINS as readonly string[]).includes(n.head)) fail(`${n.head} takes no arguments`, n.pos)
+      if (current.std.has(n.head) || (BUILTINS as readonly string[]).includes(n.head)) fail("wrong-arity", `${n.head} takes no arguments`, n.pos)
       return lookupName(n.head, n.pos)
     }
     if (n.args.length !== def.params.length) {
-      fail(`${n.head} needs ${def.params.length} argument${def.params.length === 1 ? "" : "s"} (${[n.head, ...def.params].join(" ")}), got ${n.args.length}`, n.pos)
+      fail("wrong-arity", `${n.head} needs ${def.params.length} argument${def.params.length === 1 ? "" : "s"} (${[n.head, ...def.params].join(" ")}), got ${n.args.length}`, n.pos)
     }
     return refTo(instance(def, n.args.map((a) => evaluate(a, env)), n.pos), n.pos)
   }
@@ -1176,15 +1181,15 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     const def = current.scope.get(sp.name)
     if (!def) {
       lookupName(sp.name, sp.pos) // reports unknown types, with an import hint
-      return fail(`${sp.name} can't be spread: only a named ${want} can`, sp.pos)
+      return fail("invalid-spread", `${sp.name} can't be spread: only a named ${want} can`, sp.pos)
     }
     if (def.params.length > 0) {
-      fail(`${sp.name} has parameters (${[sp.name, ...def.params].join(" ")}); only a type without parameters can be spread`, sp.pos)
+      fail("invalid-spread", `${sp.name} has parameters (${[sp.name, ...def.params].join(" ")}); only a type without parameters can be spread`, sp.pos)
     }
     const inst = instance(def, [], sp.pos)
     const t = resolveRef({ kind: "ref", instance: inst }, sp.pos)
-    if (inst.stream) fail(`${sp.name} is a Stream and can't be spread`, sp.pos)
-    if (t.kind !== want) fail(`${sp.name} is not a ${want}, so it can't be spread here`, sp.pos)
+    if (inst.stream) fail("invalid-spread", `${sp.name} is a Stream and can't be spread`, sp.pos)
+    if (t.kind !== want) fail("invalid-spread", `${sp.name} is not a ${want}, so it can't be spread here`, sp.pos)
     return t as RecordType | VariantType
   }
 
@@ -1206,7 +1211,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
       const before = seen.get(name)
       if (before !== undefined) {
         const where = [before, from].filter(Boolean).join(" and ")
-        fail(`${what} ${name} appears twice${where ? ` (${where})` : ""}`, pos)
+        fail(what === "field" ? "duplicate-field" : "duplicate-tag", `${what} ${name} appears twice${where ? ` (${where})` : ""}`, pos)
       }
       seen.set(name, from)
     }
@@ -1268,7 +1273,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     }
   }
   for (const [inst, pos, unit] of pendingStreamChecks) {
-    if (inst.stream) unit.fail(`${inst.name} is a Stream; a stream can only be the whole file, not part of a type`, pos)
+    if (inst.stream) unit.fail("misplaced-stream", `${inst.name} is a Stream; a stream can only be the whole file, not part of a type`, pos)
   }
   // §9.9: every cycle passes through a record, array or variant.
   for (const inst of instances.values()) within(defOf.get(inst)!.unit, () => resolveRef({ kind: "ref", instance: inst }, inst.definition.offset, true))
@@ -1280,7 +1285,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     .sort((a, b) => a.pos - b.pos)
     .map(({ kind, message, pos, end }): SchemaWarning => {
       const at = locate(text, pos, START)
-      return { kind, message, offset: at.offset, end, line: at.line, column: at.column }
+      return { kind, code: kind, message, offset: at.offset, end, line: at.line, column: at.column }
     })
   return { definitions, imports: root.std, imported, id: options.id, definition: (name) => byName.get(name) ?? imported.get(name), warnings }
 }

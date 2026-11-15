@@ -7,7 +7,8 @@ import Lean.Data.Json
     haus-ref FILE          print FILE's values in the test-suite JSON encoding
     haus-ref --suite DIR   run the conformance suite in DIR (valid/ and invalid/)
     haus-ref --batch DIR N for DIR/00000.haus … DIR/{N-1}.haus, one line each:
-                           `ok <values>` or `err <line> <column> <reason>` (fuzz/)
+                           `ok <values>` or `err <line> <column> <code> <reason>` (fuzz/;
+                           the code of spec §17)
     haus-ref --canonical FILE     the canonical form of each value in FILE, one per line (spec §12)
     haus-ref --canonical-batch DIR N  like --batch, printing `ok ["<canonical>", …]` (fuzz/)
     haus-ref --time TYPE TEXT     whether TEXT is a valid std/time TYPE (exit 0 or 1)
@@ -18,7 +19,8 @@ import Lean.Data.Json
                                   written by scripts/schema-types.ts)
     haus-ref --schema-batch TYPES FILE   for each line `SUITE TYPE HEX` of FILE (a value's haus
                                   text as hex-encoded UTF-8): `ok <canonical form of the
-                                  encoded result>` or `err <place> <reason>` (fuzz/)
+                                  encoded result>` or `err <place> <code> <reason>` (fuzz/;
+                                  `-` for an error without a code)
     haus-ref --json-suite DIR [TYPES]    run the JSON suite in DIR (spec §16) with the resolved
                                   types in TYPES (default json-suite.json); the lossless
                                   cases include every DIR/../valid/NAME.json
@@ -61,7 +63,7 @@ def position (input : Text) (e : Parser.Error) : Nat × Nat :=
 /-- One result of `--batch`. -/
 def batchLine (bytes : ByteArray) : String :=
   match String.fromUTF8? bytes with
-  | none => "err 0 0 invalid UTF-8"
+  | none => s!"err 0 0 {Code.invalidUtf8} invalid UTF-8"
   | some s =>
       let t := s.toList
       match Parser.parse {} t with
@@ -69,12 +71,12 @@ def batchLine (bytes : ByteArray) : String :=
       | .error e =>
           let (l, c) := position t e
           -- One line per case: line breaks in the reason (from a quoted key, say) as \n.
-          s!"err {l} {c} {(e.reason.replace "\r" "\\r").replace "\n" "\\n"}"
+          s!"err {l} {c} {e.code} {(e.reason.replace "\r" "\\r").replace "\n" "\\n"}"
 
 /-- One result of `--canonical-batch`: the canonical form of each value, as JSON strings. -/
 def canonicalLine (bytes : ByteArray) : String :=
   match String.fromUTF8? bytes with
-  | none => "err 0 0 invalid UTF-8"
+  | none => s!"err 0 0 {Code.invalidUtf8} invalid UTF-8"
   | some s =>
       match Parser.parse {} s.toList with
       | .ok vs => s!"ok {(Json.arr (vs.map fun v => Json.str (String.ofList (Canonical.canonical v))).toArray).compress}"
@@ -87,15 +89,19 @@ def runBatch (line : ByteArray → String) (dir : System.FilePath) (n : Nat) : I
     out.putStrLn (line (← IO.FS.readBinFile (dir / s!"{name}.haus")))
   return 0
 
-/-- Decode UTF-8 and parse. -/
-def parseBytes (bytes : ByteArray) : Except String (List Value) :=
+/-- Decode UTF-8 and parse: the values, or the error's code (spec §17) and its message. -/
+def parseCoded (bytes : ByteArray) : Except (Code × String) (List Value) :=
   match String.fromUTF8? bytes with
-  | none => .error "invalid UTF-8"
+  | none => .error (.invalidUtf8, "invalid UTF-8")
   | some s =>
       let t := s.toList
       match Parser.parse {} t with
       | .ok vs => .ok vs
-      | .error e => let (l, c) := position t e; .error s!"{e.reason} at {l}:{c}"
+      | .error e => let (l, c) := position t e; .error (e.code, s!"{e.reason} at {l}:{c}")
+
+/-- Decode UTF-8 and parse. -/
+def parseBytes (bytes : ByteArray) : Except String (List Value) :=
+  (parseCoded bytes).mapError fun (code, message) => s!"{message} [{code}]"
 
 def runSuite (dir : System.FilePath) : IO UInt32 := do
   let mut failures : Array String := #[]
@@ -119,8 +125,12 @@ def runSuite (dir : System.FilePath) : IO UInt32 := do
   for entry in (← (dir / "invalid").readDir).qsort (·.fileName < ·.fileName) do
     let some name := entry.fileName.dropSuffix? ".haus" | continue
     count := count + 1
-    if let .ok vs := parseBytes (← IO.FS.readBinFile entry.path) then
-      failures := failures.push s!"invalid/{name}: accepted: {(Json.arr (vs.map toJson).toArray).compress}"
+    -- invalid/NAME.error: the code it must be rejected with (spec §17).
+    let want := (← IO.FS.readFile (dir / "invalid" / s!"{name}.error")).trimAscii.toString
+    match parseCoded (← IO.FS.readBinFile entry.path) with
+    | .ok vs => failures := failures.push s!"invalid/{name}: accepted: {(Json.arr (vs.map toJson).toArray).compress}"
+    | .error (code, message) =>
+      if code.name != want then failures := failures.push s!"invalid/{name}: {code} instead of {want}: {message}"
   for f in failures do IO.println f
   IO.println s!"{count - failures.size}/{count} passed"
   return if failures.isEmpty then 0 else 1
@@ -240,14 +250,26 @@ def readSuites (file : System.FilePath) (prelude : Bool := false) :
 def decodeCanonical (env : Schema.Env) (type : String) (v : Value) : Except Schema.Error String :=
   (Schema.decode env (.ref type) v).map fun x => String.ofList (Canonical.canonical (Schema.encode x))
 
-/-- A case of `NAME.cases.haus`: `Ok { type, input, output? }` or `Err { type, input }`. -/
-def schemaCase : Value → Option (Bool × String × Value × Value)
+/--
+A case of `NAME.cases.haus`: `Ok { type, input, output? }` or
+`Err { type, input, code }`; for `Err`, the code (spec §17) as the last part.
+-/
+def schemaCase : Value → Option (Bool × String × Value × Value × String)
   | .variant tag [.record fs] => do
     let ok ← if tag == "Ok" then some true else if tag == "Err" then some false else none
     let .str type ← fs.lookup "type" | none
     let input ← fs.lookup "input"
-    return (ok, type, input, (fs.lookup "output").getD input)
+    let code ← match ok, fs.lookup "code" with
+      | true, _ => some ""
+      | false, some (.str c) => some c
+      | false, _ => none
+    return (ok, type, input, (fs.lookup "output").getD input, code)
   | _ => none
+
+/-- An error's code as the batch runners print it: `-` for none. -/
+def codeText : Option Code → String
+  | some c => c.name
+  | none => "-"
 
 def runSchemaSuite (dir types : System.FilePath) : IO UInt32 := do
   let mut failures : Array String := #[]
@@ -265,15 +287,18 @@ def runSchemaSuite (dir types : System.FilePath) : IO UInt32 := do
         let shown := String.ofList (Canonical.canonical c)
         match schemaCase c with
         | none => failures := failures.push s!"{name}: not a case: {shown}"
-        | some (true, type, input, output) =>
+        | some (true, type, input, output, _) =>
           match decodeCanonical env type input with
           | .ok got =>
             let want := String.ofList (Canonical.canonical output)
             if got != want then failures := failures.push s!"{name}: {shown}: got {got}"
           | .error e => failures := failures.push s!"{name}: {shown}: {e.place}: {e.reason}"
-        | some (false, type, input, _) =>
-          if let .ok got := decodeCanonical env type input then
-            failures := failures.push s!"{name}: {shown}: accepted as {got}"
+        | some (false, type, input, _, code) =>
+          match decodeCanonical env type input with
+          | .ok got => failures := failures.push s!"{name}: {shown}: accepted as {got}"
+          | .error e =>
+            if codeText e.code != code then
+              failures := failures.push s!"{name}: {shown}: {codeText e.code} instead of {code} ({e.place}: {e.reason})"
   for f in failures do IO.println f
   for s in skipped do IO.println s
   IO.println s!"{count - failures.size}/{count} passed"
@@ -287,11 +312,11 @@ def schemaLine (suites : List (String × Except String Schema.Env)) (line : Stri
     | some (.ok env), .ok [v] =>
       match decodeCanonical env type v with
       | .ok got => s!"ok {got}"
-      | .error e => s!"err {e.place} {(e.reason.replace "\r" "\\r").replace "\n" "\\n"}"
-    | some (.ok _), _ => "err $ not a single value"
-    | some (.error _), _ => "err $ schema rejected"
-    | none, _ => s!"err $ unknown suite {suite}"
-  | _ => "err $ bad line"
+      | .error e => s!"err {e.place} {codeText e.code} {(e.reason.replace "\r" "\\r").replace "\n" "\\n"}"
+    | some (.ok _), _ => "err $ - not a single value"
+    | some (.error _), _ => "err $ - schema rejected"
+    | none, _ => s!"err $ - unknown suite {suite}"
+  | _ => "err $ - bad line"
 
 def runSchemaBatch (types file : System.FilePath) : IO UInt32 := do
   let suites ← readSuites types

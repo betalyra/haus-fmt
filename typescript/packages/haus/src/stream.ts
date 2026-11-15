@@ -75,7 +75,7 @@ export class StreamReader {
     const rest = new Parser(text, this.origin, this.limits).parseSequence()
     if (rest.length > 0 && this.requireTerminator) {
       const p = locate(text, text.length, this.origin)
-      throw new HausSyntaxError("stream ended without ',' after the last value (truncated?)", p.offset, p.line, p.column)
+      throw new HausSyntaxError("stream ended without ',' after the last value (truncated?)", p.offset, p.line, p.column, "stream-truncated", { expected: "','" })
     }
     out.push(...rest)
     this.buf = ""
@@ -108,7 +108,7 @@ export class StreamReader {
 
     while (this.i < this.buf.length) {
       if (this.doneLength + this.i > this.maxValueLength) {
-        throw new HausSyntaxError(`value longer than ${this.maxValueLength} characters`, this.origin.offset, this.origin.line, this.origin.column)
+        throw new HausSyntaxError(`value longer than ${this.maxValueLength} characters`, this.origin.offset, this.origin.line, this.origin.column, "value-too-long")
       }
       const c = this.buf[this.i]
       switch (this.mode) {
@@ -218,7 +218,7 @@ export class StreamReader {
     const text = this.scanned(this.i + 1)
     new Parser(text, this.origin, this.limits).parseSingle()
     const p = locate(text, text.length - 1, this.origin)
-    throw new HausSyntaxError(`unexpected '${this.buf[this.i]}'`, p.offset, p.line, p.column)
+    throw new HausSyntaxError(`unexpected '${this.buf[this.i]}'`, p.offset, p.line, p.column, "unexpected-closer", { found: `'${this.buf[this.i]}'` })
   }
 }
 

@@ -3,7 +3,8 @@
 | Crate | What it is |
 |---|---|
 | [`haus-fmt`](haus) | Imported as `haus`. Parser, data model (`haus::Value`), `Decode`/`Encode`, std/time, codecs, compact writer, JSON (`haus::json`). Passes the [conformance suite](../test-suite), JSON suite included. |
-| [`haus-fmt-build`](haus-build) | Imported as `haus_build`. Rust types from `.schema.haus` files, generated in `build.rs`. Also `haus-gen`, which generates the Roc modules. |
+| [`haus-fmt-schema`](haus-schema) | Imported as `haus_schema`. Schema files parsed, their imports resolved (std/time, schema packages, relative files) and checked (spec §14); data decoded and checked against them at runtime (spec §15), with positions, hints for unknown and deprecated fields and tags, and `Secret`s never shown. What `haus check` uses. Passes the schema conformance suite. |
+| [`haus-fmt-build`](haus-build) | Imported as `haus_build`. Rust types from `.schema.haus` files, generated in `build.rs`. Also `haus-gen`, which generates the Roc modules. Uses `haus-fmt-schema` for parsing and resolving schemas. |
 | [`haus-build-tests`](haus-build-tests) | Tests of the generated code. |
 | [`haus-fmt-money`, `haus-fmt-geo`](../extensions) | Imported as `haus_money`, `haus_geo`. The official schema packages, as crates. |
 
@@ -20,6 +21,17 @@ cargo run -p haus-example-logs         # logs.haus: read and write a stream, ent
 
 In VS Code, rust-analyzer needs the build scripts to have run. If it reports
 `OUT_DIR not set`, run "rust-analyzer: Rebuild build dependencies".
+
+## Checking data at runtime
+
+```rust
+let schema = haus_schema::Schema::load("order.schema.haus", &haus_schema::FileResolver::new())?;
+for issue in schema.check_text("Root", &text) {                  // every problem, with positions and hints
+    let at = issue.position.unwrap();
+    println!("{}:{}: {} {}", at.line, at.column, issue.severity, issue);
+}
+let value = schema.decode("Root", &haus::parse(&text)?[0])?;     // spec §15: the value an encoder writes back
+```
 
 ## Use
 
@@ -90,6 +102,31 @@ the completed values), so an async adapter is a short loop around it.
 
 Without a schema, `haus::parse` reads any haus text into `Value`s: a parser in
 the sense of spec §13.1, which knows no types.
+
+## Formatting
+
+`haus::format(text, &options)` writes a file in the standard layout of spec §11,
+byte for byte the same as the TypeScript formatter (both pass the
+[format suite](../test-suite/format)):
+
+```rust
+let pretty = haus::format(&text, &haus::FormatOptions::default())?;   // keeps comments and blank lines
+let compact = haus::format(&text, &haus::FormatOptions { style: haus::Style::Compact, ..Default::default() })?;
+```
+
+| `FormatOptions` field | Default | |
+|---|---|---|
+| `style` | `Style::Pretty` | `Pretty`: one entry per line in every non-empty record and array, comments and blank lines (at most one) kept. `Compact`: every top-level item on one line, comments dropped. |
+| `indent` | 2 | Spaces per level. |
+| `width` | 80 | Positional payloads like `Money(7.90, EUR)` stay inline up to this width, counted in code points and including the comma after the entry. |
+| `limits` | `Limits::default()` | The limits the text is parsed with. |
+
+Numbers, single-line strings and byte strings keep their source spelling
+(`0xFF` stays `0xFF`), and formatting the output again changes nothing. A text
+that doesn't parse gives the same `SyntaxError` as `haus::parse_with`. The
+formatter uses no call stack per level of nesting: at
+`haus::MAX_SUPPORTED_DEPTH` the parser that checks the text is the deepest
+part, within a 2 MiB thread.
 
 ## Limits
 

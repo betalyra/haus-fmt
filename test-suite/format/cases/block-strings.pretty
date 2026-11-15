@@ -1,0 +1,42 @@
+{
+  text: """
+    line one
+      indented line
+
+    after a blank line
+    """,
+  from_escapes: """
+    a
+    b
+
+    """,
+  quotes: "say \"\"\"hi\"\"\" and \"\" and \"",
+  escapes: """
+    tab	here
+    return\r
+    backslash \\ end
+    """,
+  controls: """
+    bell \u{7}
+    bidi \u{202E}
+    """,
+  nested: [
+    Note("inside a payload"),
+    {
+      deeper: {
+        text: """
+          x
+          y
+          """,
+      },
+    },
+  ],
+  trailing_newline: """
+    ends with a line break
+
+    """,
+  only_newline: """
+
+
+    """,
+}

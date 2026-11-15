@@ -1,0 +1,1 @@
+{ text: "line one\n  indented line\n\nafter a blank line", from_escapes: "a\nb\n", quotes: "say \"\"\"hi\"\"\" and \"\" and \"", escapes: "tab\there\nreturn\r\nbackslash \\ end", controls: "bell \u{7}\nbidi \u{202E}", nested: [Note("inside a payload"), { deeper: { text: "x\ny" } }], trailing_newline: "ends with a line break\n", only_newline: "\n" }

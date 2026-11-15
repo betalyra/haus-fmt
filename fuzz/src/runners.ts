@@ -8,13 +8,24 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { canonical, HausSyntaxError, parseAll, StreamReader } from "../../typescript/packages/haus/dist/index.js"
 
+/** An error has the error code of spec §17 when its runner reports codes (`code` undefined otherwise). */
 export type Result =
   | { readonly ok: true; readonly json: string }
-  | { readonly ok: false; readonly line: number; readonly column: number; readonly reason: string }
+  | { readonly ok: false; readonly line: number; readonly column: number; readonly reason: string; readonly code?: string }
 
 export interface Runner {
   readonly name: string
   run(dir: string, cases: readonly Uint8Array[]): Result[]
+}
+
+/**
+ * How a separate program prints an error: `err LINE COLUMN REASON`, or with
+ * `codes`, `err LINE COLUMN CODE REASON` (the code of spec §17). A binding
+ * that reports codes sets it, and its codes are then compared with the
+ * other runners' (main.ts).
+ */
+export interface Format {
+  readonly codes?: boolean
 }
 
 const root = new URL("../..", import.meta.url).pathname
@@ -28,15 +39,20 @@ export function normalize(json: string): string {
   return JSON.stringify(sort(JSON.parse(json)))
 }
 
-function parseLine(line: string): Result {
+function parseLine(line: string, format: Format): Result {
   if (line.startsWith("ok ")) return { ok: true, json: normalize(line.slice(3)) }
+  if (format.codes) {
+    const m = /^err (\d+) (\d+) ([a-z0-9-]+) ?(.*)$/s.exec(line)
+    if (!m) throw new Error(`unexpected runner output (expected err LINE COLUMN CODE REASON): ${line.slice(0, 200)}`)
+    return { ok: false, line: Number(m[1]), column: Number(m[2]), code: m[3]!, reason: m[4]! }
+  }
   const m = /^err (\d+) (\d+) ?(.*)$/s.exec(line)
   if (!m) throw new Error(`unexpected runner output: ${line.slice(0, 200)}`)
   return { ok: false, line: Number(m[1]), column: Number(m[2]), reason: m[3]! }
 }
 
 /** A runner that is a separate program: `program [...args] DIR N`. */
-function external(name: string, program: string, args: readonly string[] = []): Runner {
+function external(name: string, program: string, args: readonly string[] = [], format: Format = {}): Runner {
   return {
     name,
     run(dir, cases) {
@@ -47,7 +63,7 @@ function external(name: string, program: string, args: readonly string[] = []): 
       if (lines.length !== cases.length) throw new Error(`${name}: ${lines.length} results for ${cases.length} cases`)
       return lines.map((l) => {
         try {
-          return parseLine(l)
+          return parseLine(l, format)
         } catch (e) {
           throw new Error(`${name}: ${(e as Error).message}`)
         }
@@ -60,7 +76,7 @@ function external(name: string, program: string, args: readonly string[] = []): 
       writeFileSync(join(single, "00000.haus"), bytes)
       const p = spawnSync(program, [...args, single, "1"], { encoding: "utf8" })
       if (p.status !== 0) return { ok: false, line: -1, column: -1, reason: `CRASH: ${(p.stderr || String(p.signal)).trim().split("\n").slice(0, 3).join(" ")}` }
-      return parseLine(p.stdout.trim())
+      return parseLine(p.stdout.trim(), format)
     },
   } as Runner & { runOne(dir: string, bytes: Uint8Array): Result }
 }
@@ -84,8 +100,8 @@ function result(parse: () => unknown[], encode: (v: any) => unknown = suiteJson)
   try {
     return { ok: true, json: normalize(JSON.stringify(parse().map(encode))) }
   } catch (e) {
-    if (e instanceof HausSyntaxError) return { ok: false, line: e.line, column: e.column, reason: e.reason }
-    if (e instanceof TypeError) return { ok: false, line: 0, column: 0, reason: "invalid UTF-8" }
+    if (e instanceof HausSyntaxError) return { ok: false, line: e.line, column: e.column, reason: e.reason, code: e.code }
+    if (e instanceof TypeError) return { ok: false, line: 0, column: 0, reason: "invalid UTF-8", code: "invalid-utf8" }
     throw e
   }
 }
@@ -124,7 +140,7 @@ const typescriptStream: Runner = {
 }
 
 export const runners: readonly Runner[] = [
-  external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--batch"]),
+  external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--batch"], { codes: true }),
   external("rust", join(root, "rust/target/release/examples/fuzz_runner")),
   external("roc", join(root, "fuzz/.build/roc-runner")),
   typescript,
@@ -141,7 +157,7 @@ export const runners: readonly Runner[] = [
  * inputs must give the same text everywhere (`main.ts --canonical`).
  */
 export const canonicalRunners: readonly Runner[] = [
-  external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--canonical-batch"]),
+  external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--canonical-batch"], { codes: true }),
   external("rust", join(root, "rust/target/release/examples/fuzz_runner"), ["--canonical"]),
   external("roc", join(root, "fuzz/.build/roc-runner"), ["--canonical"]),
   { name: "typescript", run: (_dir, cases) => cases.map((bytes) => result(() => parseAll(utf8.decode(bytes)), canonical)) },

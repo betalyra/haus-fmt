@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["haus", "haus-build", "haus-build-tests", "examples/quickstart", "examples/order", "examples/logs"]
+members = ["haus", "haus-schema", "haus-build", "haus-build-tests", "examples/quickstart", "examples/order", "examples/logs"]
 
 [workspace.package]
 edition = "2024"

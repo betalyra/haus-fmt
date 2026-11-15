@@ -1,0 +1,15 @@
+/* file header */ {
+  /* before a */ a: 1,
+  b: 2 /* after the value, before the comma */,
+  c: [1, /* inside */ 2],
+  d: /* between colon and value */ 3,
+  e /* between key and colon */ : 4,
+  /* nested /* comments */ stay whole */
+  f: 5,
+  /*
+   * A block comment over
+   * several lines keeps its text.
+   */
+  g: 6,
+  h: 7, /* one */ /* two */
+} /* after the file's value */

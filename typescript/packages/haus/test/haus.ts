@@ -59,6 +59,8 @@ export interface Fixture {
   readonly canonical: string | undefined
   /** valid/NAME.hash: hashAll of the file's values (64 hex digits). */
   readonly hash: string | undefined
+  /** invalid/NAME.error: the error code it is rejected with (spec §17). */
+  readonly code: string | undefined
 }
 
 export const fixtures = (kind: "valid" | "invalid"): Fixture[] =>
@@ -74,6 +76,7 @@ export const fixtures = (kind: "valid" | "invalid"): Fixture[] =>
         expected: kind === "valid" ? JSON.parse(readFileSync(json, "utf8")) : undefined,
         canonical: kind === "valid" ? readFileSync(join(SUITE, kind, `${name}.canonical`), "utf8") : undefined,
         hash: kind === "valid" ? readFileSync(join(SUITE, kind, `${name}.hash`), "utf8").trim() : undefined,
+        code: kind === "invalid" ? readFileSync(join(SUITE, kind, `${name}.error`), "utf8").trim() : undefined,
       }
     })
 

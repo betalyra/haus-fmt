@@ -1,0 +1,19 @@
+{
+    short: Point(1, 2),
+    long: Pair(
+        "aaaaaaaaaa",
+        "bbbbbbbbbbbbbbbb",
+    ),
+    longer: Pair(
+        "aaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbb",
+    ),
+    list: [
+        Money(7.90, EUR),
+        Money(12.50, EUR),
+    ],
+    text: """
+        a
+        b
+        """,
+}

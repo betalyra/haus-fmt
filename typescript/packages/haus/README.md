@@ -217,6 +217,33 @@ maximum, thrown when the limits are given. Raw JSON (`parseJson`) counts JSON
 levels, up to `jsonDepth(512)`, 2049, as many as 512 haus levels take.
 Formatting, the canonical form and hashing don't recurse: they take any depth.
 
+## Errors
+
+Every error has a `code` (spec §17): a short name for the mistake, such as
+`payload-newline` or `missing-field`, the same in every haus binding and
+documented at `https://haus-fmt.org/docs/errors#<code>`. `hint` says how to
+fix it. `errorJson(e)` (or `JSON.stringify(e)`) gives the JSON form, for
+tools and agents:
+
+```ts
+try {
+  parse("Heartbeat\n{ at: 1 }")
+} catch (e) {
+  errorJson(e)
+  // { code: "payload-newline", message: "expected ',' between top-level values, found '{'",
+  //   line: 2, column: 1, expected: "','", found: "'{'",
+  //   hint: "Put the payload on the same line as Heartbeat, or add a comma if they are two values.",
+  //   docs: "https://haus-fmt.org/docs/errors#payload-newline" }
+}
+```
+
+Syntax errors (`HausSyntaxError`, and `HausSchemaFileError` for schema files)
+have `line` and `column`; decoding and encoding errors (`HausDecodeError`,
+`HausEncodeError`) have a `path`, `$.items[2].price`. `checkData` gives each
+issue a `code` too, and schema-file warnings have one. `errorCode(e)` is the
+code of any error this package throws, and `invalid-utf8` for the TypeError
+of the UTF-8 decoder `parseStream` uses. `ERROR_CODES` lists them all.
+
 ## Also inside
 
 | | |

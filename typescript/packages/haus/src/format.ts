@@ -9,7 +9,8 @@
  * Given the source text and comment positions (`parseDocument`), comments
  * and blank lines between entries are kept: a comment on its own line stays
  * above the entry that follows it, a comment after an entry on the same line
- * stays after that entry's comma.
+ * stays after that entry's comma. The output has LF line endings only, in
+ * comments too.
  */
 import { DEFAULT_LIMITS } from "./parser.js"
 import type { HRecord, HVariant, Value } from "./value.js"
@@ -22,7 +23,10 @@ export interface FormatOptions {
   readonly style?: "pretty" | "compact"
   /** Spaces per indentation level (default 2). */
   readonly indent?: number
-  /** Line width for positional payloads like `Money(7.90, EUR)` to stay inline (default 80). */
+  /**
+   * Line width for positional payloads like `Money(7.90, EUR)` to stay inline
+   * (default 80), in code points, counting the comma after the entry.
+   */
   readonly width?: number
   /**
    * The text the values were parsed from (with `parseWithLocations` or
@@ -168,7 +172,7 @@ class Formatter {
     const work: (Value | string)[] = [v]
     const push = (text: string) => {
       out.push(text)
-      length += text.length
+      length += codePoints(text)
     }
     /** `values` next, separated by commas, then `close`. */
     const items = (values: readonly Value[], close: string) => {
@@ -290,14 +294,16 @@ class Formatter {
         if (v.args.length === 0) return
         if (v.args.length === 1 && first?.kind === "record") {
           out.push(" ")
-          return this.record(first, ind, out, tasks)
+          // In `Tag({ … })`, comments between the parentheses and the braces move inside the braces.
+          return this.record(first, ind, out, tasks, this.argsSpan(v) ?? inside(first))
         }
         return this.container("(", ")", this.argsSpan(v), v.args.map(entryOf), ind, out, tasks)
       }
     }
   }
 
-  private record(r: HRecord, ind: string, out: string[], tasks: Task[]): void {
+  /** `r` broken over lines; `span` is where its comments are (default: between its braces). */
+  private record(r: HRecord, ind: string, out: string[], tasks: Task[], span: Span | undefined = inside(r)): void {
     const entries = [...r.fields].map(([k, v]): Entry => ({
       start: r.keySpans?.get(k)?.[0] ?? v.start,
       end: v.end,
@@ -305,7 +311,7 @@ class Formatter {
       prefix: `${key(k)}: `,
       value: v,
     }))
-    this.container("{", "}", inside(r), entries, ind, out, tasks)
+    this.container("{", "}", span, entries, ind, out, tasks)
   }
 
   /** `open` + one entry per line (comments and blank lines kept) + `close`. */
@@ -372,7 +378,8 @@ class Formatter {
       tasks.push(
         { kind: "entries", list },
         { kind: "entryEnd", list, index: i, mark: out.length },
-        { kind: "value", value: e.value, ind, used: ind.length + e.prefix.length },
+        // The comma after the entry counts towards the width.
+        { kind: "value", value: e.value, ind, used: ind.length + codePoints(e.prefix) + list.sep.length },
       )
       return
     }
@@ -394,9 +401,9 @@ class Formatter {
     list.prevMultiline = false
   }
 
-  /** A comment's text. */
+  /** A comment's text, with LF line endings (a carriage return in a comment is always part of a CR LF). */
   private text(c: Span): string {
-    return this.source!.slice(c[0], c[1])
+    return this.source!.slice(c[0], c[1]).replaceAll("\r", "")
   }
 
   /** Is there a comment inside [start, end)? */
@@ -406,11 +413,13 @@ class Formatter {
     return k < this.comments.length && this.comments[k]![0] < end
   }
 
-  /** The source span between `(` and `)` of a positional payload. */
+  /** The source span between `(` and `)` of a payload, or undefined for `Tag { … }`. */
   private argsSpan(v: HVariant): [number, number] | undefined {
-    if (this.source === undefined || v.start === undefined || v.end === undefined) return undefined
-    const open = this.source.indexOf("(", v.start + v.tag.length)
-    return [open + 1, v.end - 1]
+    const src = this.source
+    if (src === undefined || v.start === undefined || v.end === undefined) return undefined
+    let i = v.start + v.tag.length
+    while (src[i] === " " || src[i] === "\t") i++
+    return src[i] === "(" ? [i + 1, v.end - 1] : undefined
   }
 
   // ── leaves ─────────────────────────────────────────────────
@@ -442,6 +451,16 @@ const entryOf = (v: Value): Entry => ({ start: v.start, end: v.end, valueStart: 
 /** The source span between a container's brackets. */
 const inside = (v: Value): [number, number] | undefined =>
   v.start !== undefined && v.end !== undefined ? [v.start + 1, v.end - 1] : undefined
+
+/** The number of code points: the width of text (spec §8 counts columns so too). */
+const codePoints = (s: string): number => {
+  let n = s.length
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c >= 0xd800 && c <= 0xdbff) n--
+  }
+  return n
+}
 
 /** How many of the ascending numbers `xs` are below `x`. */
 const countBelow = (xs: readonly number[], x: number): number => {

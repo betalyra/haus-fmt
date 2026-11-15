@@ -120,7 +120,7 @@ Parsing time MUST be linear in the input size for any input within the limits. F
 
 ## 8. Error positions
 
-Errors report a 1-based line and column. Columns count **Unicode code points**, so a character outside the Basic Multilingual Plane, such as an emoji, is one column.
+Errors report a 1-based line and column. Columns count **Unicode code points**, so a character outside the Basic Multilingual Plane, such as an emoji, is one column. Every error also has a code that names the mistake, the same in every implementation (§17).
 
 ## 9. Security considerations
 
@@ -179,20 +179,21 @@ For people.
     price: Money(7.90, EUR),
   }
   ```
-- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line.
+- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry, so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
 - **Spacing:** one space after `:` and `,`; one space between a tag and its `{`; none between a tag and its `(`. Empty containers are written `{}` and `[]`.
 - **Keys** are bare when they can be, otherwise quoted.
 - **Byte strings** keep their source spelling when a document is reformatted. When serializing values, they are written as lowercase hex without spaces, `x"0b34ff"`.
 - **Strings** containing a line break are written as `"""` block strings. All other strings use `"…"` with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`, and `\u{…}` for control and bidi characters. In a block string, a quote followed by two more quotes is escaped.
 - **Numbers and strings keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). When serializing values with no source text, numbers are written in normalized form, except that integers longer than the number limit (§7) are written in hex.
-- **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item. A single item is written without a comma.
+- **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows. A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
 - **Comments** are kept (they are part of the layout, not of the data model):
   - A comment on its own line stays above the entry that follows it.
   - A comment after an entry on the same line stays after that entry's comma.
   - Comments before a closing bracket stay at the end of the container.
   - A comment between a key and its value moves above the entry.
+  - `Tag({ … })` is written `Tag { … }`: comments inside its parentheses but outside the braces move inside the braces.
 - **Blank lines** between entries (and between comments and entries) are kept, at most one.
-- **Line endings:** LF, and the file ends with a line break.
+- **Line endings:** LF everywhere, inside comments too (a CR LF in a comment is written as LF; block strings already join their lines with LF), and the file ends with a line break.
 
 ### Compact
 
@@ -576,3 +577,46 @@ A type's JSON can be `null` only if it is a `Maybe` that uses `null`, directly o
 **Reading** with a type accepts the forms above and the rules of §15 apply: an open record or record payload ignores members it doesn't list, a closed one rejects them, and every other object (a tagged `Maybe`, a case without payload or with positional arguments) rejects members besides its own; an integer type accepts only a whole number by spelling (`1.0` is not one); a float type rounds as in §15, and a number too large for it is an error; a `"_tag"` an open variant doesn't list reads as an unknown value, and MUST be a tag (§4): with no other member, the bare tag; with `"args"` and no other member, its arguments read losslessly (the form written above), and an `"args"` that isn't a non-empty array is an error; otherwise all its other members, `args` included, read as a record payload without a schema (16.1), so that a reader keeps a newer writer's case (`{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`). Anything else is an error.
 
 **Round trip.** For every value `v` that a type accepts, reading the plain JSON of `decode(v)` gives `decode(v)` back, and two different decoded values never have the same plain JSON.
+
+## 17. Error codes
+
+Every error an implementation reports has a **code**: a short lowercase name such as `payload-newline`, `null-literal` or `missing-field` that says which mistake was made. Messages are for people and differ between implementations; codes are for programs, tools and agents, and are the same everywhere.
+
+The catalogue is [`errors.md`](errors.md), generated from its machine-readable source [`errors.haus`](errors.haus). It lists each code with what it means, an example and the usual fix, in eight categories: syntax (§1–§5), limits (§7), streams (§6), schema files (§14), imports (§13.3), decoding and encoding (§15), JSON (§16), and hints and warnings, which checkers and editors report without failing (§14).
+
+**Rules.**
+
+- A code is lowercase kebab-case: `[a-z][a-z0-9]*(-[a-z0-9]+)*`.
+- Codes are stable. From version 1.0 on, a code is never renamed, removed or reused for another mistake; new codes may be added, in a new version of the catalogue.
+- An implementation MUST report, with every error it reports, the catalogue's code for that mistake, and MUST NOT report a code that isn't in the catalogue. It MAY add detail of its own (a message, a hint, the values involved), but no codes of its own.
+- A code names one mistake that its user can fix, not one message: a missing comma between two values is `missing-comma`, and a payload on the line after its tag is `payload-newline`, although both are found as "no comma where one is needed".
+- Which error is reported when an input has several is not fixed (§8, §15). For an input with one mistake, every implementation reports the same code; the conformance suite checks this (test-suite/README.md).
+
+**JSON form.** An implementation that reports errors to programs, as a library or a command-line tool, SHOULD offer each error as a JSON object:
+
+```json
+{
+  "code": "payload-newline",
+  "message": "expected ',' between top-level values, found '{'",
+  "line": 2,
+  "column": 1,
+  "expected": "','",
+  "found": "'{'",
+  "hint": "Put the payload on the tag's line, or add a comma if they are two values.",
+  "docs": "https://haus-fmt.org/docs/errors#payload-newline"
+}
+```
+
+| Member | |
+|---|---|
+| `code` | the code, always |
+| `message` | what went wrong, for people, without the position, always |
+| `line`, `column` | the position (§8), for an error in text: haus, a schema file, JSON text |
+| `path` | the place in the value (§15), for an error in a value: `$.items[2].price` |
+| `expected`, `found` | what should be there and what is, where that is natural |
+| `hint` | a concrete fix: the catalogue's fix for the code, or a better one for the case at hand |
+| `docs` | the documentation of the code: `https://haus-fmt.org/docs/errors#<code>` |
+
+Members that don't apply are left out. An error of a decoder that has no place in text has `path` and no `line` or `column`; invalid UTF-8 has neither when the decoder doesn't say where it is. An error inside a `Secret` (§15) gives the code `invalid-secret` and nothing of the value, in any member.
+
+**Documentation.** `https://haus-fmt.org/docs/errors#<code>` documents every code, with an example and the fix.

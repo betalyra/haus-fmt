@@ -52,8 +52,7 @@ pub struct Input<'a> {
     pub codecs: &'a [Codec],
 }
 
-pub const STD_TIME: [&str; 8] =
-    ["Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone"];
+pub(crate) use crate::schema::{STD_TIME, unknown_type};
 
 pub fn generate(file: &File, input: &Input) -> Result<String, Error> {
     let fail = |pos, reason: String| Err(error(input.text, pos, reason));
@@ -105,20 +104,6 @@ pub fn generate(file: &File, input: &Input) -> Result<String, Error> {
 fn known_ids(file: &File, input: &Input) -> Vec<String> {
     let own = file.types.iter().map(|d| format!("{}#{}", input.id, d.name));
     own.chain(input.imports.values().map(|i| i.id.clone())).collect()
-}
-
-/// `unknown type Money`, with how to import it if it's a well-known type.
-pub(crate) fn unknown_type(name: &str) -> String {
-    match name {
-        "Money" | "Currency" => format!(
-            "unknown type {name} (import it with: import @haus-fmt/money ({name}), and install @haus-fmt/money with your package manager)"
-        ),
-        "LatLng" | "BBox" => format!(
-            "unknown type {name} (import it with: import @haus-fmt/geo ({name}), and install @haus-fmt/geo with your package manager)"
-        ),
-        _ if STD_TIME.contains(&name) => format!("unknown type {name} (import it with: import std/time ({name}))"),
-        _ => format!("unknown type {name}"),
-    }
 }
 
 /// A Rust path or type, as written in a codec or an import: `crate::codecs::Cents`.

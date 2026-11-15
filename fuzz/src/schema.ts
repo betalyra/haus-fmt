@@ -101,6 +101,8 @@ export async function run(argv: readonly string[]): Promise<number> {
   /** Per runner, the parts of secrets found to come from its own messages ("the value is not shown"). */
   const templateWords = new Map<string, Set<string>>()
   let accepted = 0
+  /** Errors whose codes (spec §17) were compared: lean's and another runner's, at the same place. */
+  let codesCompared = 0
   for (let done = 0; done < count; done += batch) {
     const cases = Array.from({ length: Math.min(batch, count - done) }, () => {
       const e = rng.pick(entries)
@@ -115,6 +117,8 @@ export async function run(argv: readonly string[]): Promise<number> {
       const stat = perType.get(`${c.suite}.${c.type}`)!
       stat.total++
       if (rs[0]!.kind === "ok") (stat.ok++, accepted++)
+      const ref = rs[0]!
+      if (ref.kind === "err" && ref.code !== undefined && rs.slice(1).some((o) => o.kind === "err" && o.code !== undefined && o.place === ref.place)) codesCompared++
       // An error inside a Secret must not show the value (spec §15).
       rs.forEach((o, k) => {
         if (o.kind !== "err" || !mentionsSecret(envs.get(c.suite)!, { ref: c.type })) return
@@ -139,7 +143,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     process.stdout.write(`  ${Math.min(done + batch, count)} cases, ${found.size} disagreements\n`)
   }
 
-  console.log(`${accepted} accepted, ${count - accepted} rejected (by lean)`)
+  console.log(`${accepted} accepted, ${count - accepted} rejected (by lean); ${codesCompared} error codes compared (at the same place)`)
   for (const [k, s] of perType) console.log(`  ${k.padEnd(22)} ${String(s.ok).padStart(6)} accepted of ${s.total}`)
   if (found.size === 0) console.log("no disagreements")
   const report: string[] = []
@@ -168,10 +172,17 @@ export async function run(argv: readonly string[]): Promise<number> {
 
 // ── comparing with lean ──────────────────────────────────────
 
-/** Whether a runner's outcome agrees with lean's: the same kind, and for ok the same canonical form. */
+/**
+ * Whether a runner's outcome agrees with lean's: the same kind, for ok the
+ * same canonical form, and for errors at the same place the same code (spec
+ * §17), where both report one. (Which error comes first is not fixed, §15.)
+ */
 function agrees(ref: Outcome, o: Outcome): boolean {
   if (ref.kind === "crash" || o.kind !== ref.kind) return false
-  return o.kind === "err" || (o.kind === "ok" && ref.kind === "ok" && o.text === ref.text)
+  if (o.kind === "err" && ref.kind === "err") {
+    return o.code === undefined || ref.code === undefined || o.place !== ref.place || o.code === ref.code
+  }
+  return o.kind === "ok" && ref.kind === "ok" && o.text === ref.text
 }
 
 // ── secrets ──────────────────────────────────────────────────

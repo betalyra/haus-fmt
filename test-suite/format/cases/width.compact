@@ -1,0 +1,1 @@
+{ fits: Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), over: Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), nested: Outer(Inner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 1), deep: [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[Point(1, 2)]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]] }
