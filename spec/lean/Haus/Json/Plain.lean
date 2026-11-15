@@ -31,7 +31,10 @@ own `closed < None | Some a >` is a variant like any other.
 
 **Errors.** A record payload with a field named `_tag` has no plain form
 (§16.3): writing it is an error, and so is reading with such a case. Errors
-inside a `Secret` show nothing of the value, as when decoding (§15).
+inside a `Secret` show nothing of the value, as when decoding (§15). Every
+error has a code (spec §17): the JSON category's for the form of the JSON
+(`missing-member`, `invalid-base64`, …), the decoder's where reading decodes
+(`out-of-range`, `missing-field`, …).
 
 **Reading strictly.** Where §16.3 leaves a choice, the reader is strict: an
 integer string is spelled like a JSON integer (`-?(0|[1-9][0-9]*)`), a
@@ -232,7 +235,15 @@ def floatJson (k : FloatType) : Flt → JSON
 def unknownJson (tag : String) (vs : List Value) : JSON :=
   .obj (("_tag", .str tag) :: if vs.isEmpty then [] else [("args", .arr (JSON.losslessList vs))])
 
-def mismatch {α : Type} (c : Ty) : Except Error α := fail s!"not a value of {c.name}"
+def mismatch {α : Type} (c : Ty) : Except Error α := reject .typeMismatch s!"not a value of {c.name}"
+
+/--
+The code for an object of a tagged form (§16.3) whose members aren't `_tag`
+and `name`: a member it doesn't have (`unexpected-member`), or else `name`
+is missing (`missing-member`).
+-/
+def memberCode (name : String) (ms : List (String × JSON)) : Code :=
+  if ms.any fun m => m.1 != "_tag" && m.1 != name then .unexpectedMember else .missingMember
 
 mutual
 /--
@@ -283,20 +294,20 @@ def toJsonC (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) : Typed → E
       | some a, [y] =>
         match whnf env env.fuel a with
         | .ok (_, c') => toJsonC env F (boolTy env a) (origin env o a) c' y
-        | .error r => fail r
+        | .error r => fail r (whnfCode r)
       | some _, _ => mismatch c
       | none, args =>
         if isEnum (.variant closed cases) then .ok (.str tag) else
         match caseOf? cases tag, args with
         | some (.bare _), _ => .ok (.obj [("_tag", .str tag)])
         | some (.record _ _ fields), [.record fs] =>
-          if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason, none⟩
+          if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason, some .noJsonForm⟩
           else (under (.arg tag 0) (toJsonFields env F o fields fs)).map fun ms => .obj (("_tag", .str tag) :: ms)
         | some (.positional _ []), _ => .ok (.obj [("_tag", .str tag)])
         | some (.positional _ [t1]), [y] =>
           (under (.arg tag 0) (match whnf env env.fuel t1 with
             | .ok (_, c') => toJsonC env F (boolTy env t1) (origin env o t1) c' y
-            | .error r => fail r)).map fun j => .obj [("_tag", .str tag), ("value", j)]
+            | .error r => fail r (whnfCode r))).map fun j => .obj [("_tag", .str tag), ("value", j)]
         | some (.positional _ ts), args =>
           (toJsonArgs env F o tag 0 ts args).map fun js => .obj [("_tag", .str tag), ("values", .arr js)]
         | _, _ => mismatch c
@@ -307,7 +318,7 @@ def toJsonItems (env : Env) (F : Nat) (o : String) (t : Ty) (i : Nat) : List Typ
   | x :: xs => do
     let j ← under (.index i) (match whnf env env.fuel t with
       | .ok (_, c) => toJsonC env F (boolTy env t) (origin env o t) c x
-      | .error r => fail r)
+      | .error r => fail r (whnfCode r))
     let js ← toJsonItems env F o t (i + 1) xs
     return j :: js
 
@@ -317,7 +328,7 @@ def toJsonEntries (env : Env) (F : Nat) (o : String) (t : Ty) :
   | (k, x) :: fs => do
     let j ← under (.key k) (match whnf env env.fuel t with
       | .ok (_, c) => toJsonC env F (boolTy env t) (origin env o t) c x
-      | .error r => fail r)
+      | .error r => fail r (whnfCode r))
     let js ← toJsonEntries env F o t fs
     return (k, j) :: js
 
@@ -329,17 +340,17 @@ def toJsonFields (env : Env) (F : Nat) (o : String) (fields : List Field) :
     | some f => do
       let j ← under (.key k) (match whnf env env.fuel f.ty with
         | .ok (_, c) => toJsonC env F (boolTy env f.ty) (origin env o f.ty) c x
-        | .error r => fail r)
+        | .error r => fail r (whnfCode r))
       let js ← toJsonFields env F o fields fs
       return (k, j) :: js
-    | none => .error ⟨[.key k], "not a field of this record", none⟩
+    | none => .error ⟨[.key k], "not a field of this record", some .unknownField⟩
 
 def toJsonArgs (env : Env) (F : Nat) (o : String) (tag : String) (i : Nat) :
     List Ty → List Typed → Except Error (List JSON)
   | t :: ts, x :: xs => do
     let j ← under (.arg tag i) (match whnf env env.fuel t with
       | .ok (_, c) => toJsonC env F (boolTy env t) (origin env o t) c x
-      | .error r => fail r)
+      | .error r => fail r (whnfCode r))
     let js ← toJsonArgs env F o tag (i + 1) ts xs
     return j :: js
   | _, _ => .ok []
@@ -349,7 +360,7 @@ end
 def toJsonF (env : Env) (F : Nat) (o : String) (t : Ty) (x : Typed) : Except Error JSON :=
   match whnf env env.fuel t with
   | .ok (_, c) => toJsonC env F (boolTy env t) (origin env o t) c x
-  | .error r => fail r
+  | .error r => fail r (whnfCode r)
 
 /-- **Plain JSON** (§16.3) of a value decoded with the type `t`. -/
 def toJson (env : Env) (t : Ty) (x : Typed) : Except Error JSON := toJsonF env (nullFuel env t) "" t x
@@ -366,26 +377,29 @@ def intOfJson (k : IntType) (j : JSON) : Except Error Typed :=
     else (match j with | .num t => some t | _ => none)
   match lit? with
   | none =>
-    fail (if k.asString then s!"expected {k.name}: a string holding a whole number" else s!"expected {k.name}: a number")
+    reject .typeMismatch (if k.asString then s!"expected {k.name}: a string holding a whole number" else s!"expected {k.name}: a number")
   | some a =>
     match wholeLit a.toList with
-    | some n => if k.inRange n then .ok (.int n) else fail s!"out of range for {k.name}"
-    | none => fail s!"expected {k.name}: a whole number, without a fraction or an exponent"
+    | some n => if k.inRange n then .ok (.int n) else reject .outOfRange s!"out of range for {k.name}"
+    | none =>
+      -- A string that isn't a JSON number at all is `invalid-number`, one that is (`"1.5"`) not an integer.
+      reject (if isJsonNumber a.toList then .notAnInteger else .invalidNumber)
+        s!"expected {k.name}: a whole number, without a fraction or an exponent"
 
 def floatOfJson (k : FloatType) : JSON → Except Error Typed
   | .num t =>
     match roundLit k (String.ofList (jsonToLit t.toList)) with
     | some x => .ok (.float k x)
-    | none => fail s!"too large for {k.name}"
+    | none => reject .outOfRange s!"too large for {k.name}"
   | .str "NaN" => .ok (.float k .nan)
   | .str "Infinity" => .ok (.float k (.inf false))
   | .str "-Infinity" => .ok (.float k (.inf true))
-  | _ => fail s!"expected {k.name}"
+  | _ => reject .typeMismatch s!"expected {k.name}"
 
 /-- A `Decimal`: a string holding a JSON number, kept as its normalized literal. -/
 def decimalOf (s : String) : Except Error Typed :=
   if isJsonNumber s.toList then .ok (.decimal (normalizeNumber s.toList))
-  else fail "expected Decimal: a string holding a JSON number"
+  else reject .invalidNumber "expected Decimal: a string holding a JSON number"
 
 /-- A field without `?` that the object doesn't have. -/
 def missingJ? (fields : List Field) (ms : List (String × JSON)) : Option String :=
@@ -395,7 +409,7 @@ mutual
 /-- **Reading plain JSON** with a type: through references and secrets, then `fromJsonC`. -/
 def fromJsonF (env : Env) (F : Nat) (o : String) (t : Ty) (j : JSON) : Except Error Typed :=
   match whnf env env.fuel t with
-  | .error r => fail r
+  | .error r => fail r (whnfCode r)
   | .ok (s, c) => hidden s c (fromJsonC env F (boolTy env t) (origin env o t) c j)
 termination_by (sizeOf j, 2)
 
@@ -405,7 +419,7 @@ def fromJsonC (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) 
   | some _, .null => .ok (.case "None" [])
   | some a, j =>
     match whnf env env.fuel a with
-    | .error r => fail r
+    | .error r => fail r (whnfCode r)
     | .ok (s', c') =>
       (hidden s' c' (readCore env F (boolTy env a) (origin env o a) c' j)).map fun y => .case "Some" [y]
   | none, j => readCore env F b o c j
@@ -418,55 +432,55 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
   | .bytes, .str s =>
     match Bytes.unbase64 s.toList with
     | some bs => .ok (.bytes bs)
-    | none => fail "expected Bytes: base64 with padding"
+    | none => reject .invalidBase64 "expected Bytes: base64 with padding"
   | .int k, j => intOfJson k j
   | .float k, j => floatOfJson k j
   | .decimal, .str s => decimalOf s
   | .any, j =>
     match JSON.fromLossless j with
     | .ok v => .ok (.any v)
-    | .error r => fail s!"expected Any: {r}"
-  | .time k, .str s => if Time.check k s.toList then .ok (.time k s) else fail s!"expected {k.name}"
+    | .error r => reject r.code s!"expected Any: {r.reason}"
+  | .time k, .str s => if Time.check k s.toList then .ok (.time k s) else reject .invalidTime s!"not a valid {k.name}"
   | .array t, .arr xs => (readItems env F o t 0 xs).map .arr
   | .map t, .obj ms => (readEntries env F o t ms).map .map
   | .record closed fields, .obj ms =>
     match missingJ? fields ms with
-    | some k => fail s!"missing field {k}"
+    | some k => reject .missingField s!"missing field {k}"
     | none => (readFields env F o closed fields false ms).map .record
   | .variant closed cases, j =>
     if b then
       match j with
       | .bool b => .ok (.case (if b then "True" else "False") [])
-      | _ => fail "expected true or false"
+      | _ => reject .typeMismatch "expected true or false"
     else if isEnum (.variant closed cases) then
       match j with
       | .str tag =>
         match caseOf? cases tag with
         | some (.bare _) => .ok (.case tag [])
-        | _ => fail s!"unknown tag {tag}"
-      | _ => fail "expected a string: a tag"
+        | _ => reject .unknownTag s!"unknown tag {tag}"
+      | _ => reject .typeMismatch "expected a string: a tag"
     else
       match j with
       | .obj ms =>
         match ms.lookup "_tag" with
         | some (.str tag) =>
           match caseOf? cases tag with
-          | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else fail s!"{tag} takes no arguments"
+          | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else reject .unexpectedMember s!"{tag} takes no arguments"
           | some (.record _ cl fields) =>
-            if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason, none⟩ else
+            if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason, some .noJsonForm⟩ else
             match missingJ? fields ms with
-            | some k => .error ⟨[.arg tag 0], s!"missing field {k}", none⟩
+            | some k => .error ⟨[.arg tag 0], s!"missing field {k}", some .missingField⟩
             | none => (under (.arg tag 0) (readFields env F o cl fields true ms)).map fun ys => .case tag [.record ys]
-          | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else fail s!"{tag} takes no arguments"
+          | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else reject .unexpectedMember s!"{tag} takes no arguments"
           | some (.positional _ [t1]) =>
             if ms.length = 2 then (memberValue env F o tag t1 ms).map fun y => .case tag [y]
-            else fail s!"{tag} takes one argument, as value"
+            else reject (memberCode "value" ms) s!"{tag} takes one argument, as value"
           | some (.positional _ ts) =>
             if ms.length = 2 then (memberValues env F o tag ts ms).map (.case tag)
-            else fail s!"{tag} takes {ts.length} arguments, as values"
+            else reject (memberCode "values" ms) s!"{tag} takes {ts.length} arguments, as values"
           | none =>
-            if closed then fail s!"unknown tag {tag}"
-            else if !isTag tag.toList then fail "_tag: not a tag"
+            if closed then reject .unknownTag s!"unknown tag {tag}"
+            else if !isTag tag.toList then reject .invalidTag "_tag: not a tag"
             else
               -- An unlisted tag (§16.3): bare, its `args` losslessly, or a newer writer's record payload.
               match ms.filter (·.1 != "_tag") with
@@ -476,15 +490,15 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
                 | .arr (y :: ys) =>
                   match JSON.fromLosslessList (y :: ys) with
                   | .ok vs => .ok (.unknown tag vs)
-                  | .error r => fail s!"args: {r}"
-                | _ => fail "args: not a non-empty array"
+                  | .error r => reject r.code s!"args: {r.reason}"
+                | _ => reject .losslessForm "args: not a non-empty array"
               | rest =>
                 match JSON.toValueMembers rest with
                 | .ok fs => .ok (.unknown tag [.record fs])
-                | .error r => fail r
-        | _ => fail "expected an object with _tag"
-      | _ => fail "expected an object with _tag"
-  | c, _ => fail s!"expected {c.name}"
+                | .error r => reject r.code r.reason
+        | _ => reject .missingMember "expected an object with _tag"
+      | _ => reject .typeMismatch "expected an object with _tag"
+  | c, _ => reject .typeMismatch s!"expected {c.name}"
 termination_by (sizeOf j, 0)
 
 def readItems (env : Env) (F : Nat) (o : String) (t : Ty) (i : Nat) (xs : List JSON) :
@@ -520,7 +534,7 @@ def readFields (env : Env) (F : Nat) (o : String) (closed : Bool) (fields : List
       let ys ← readFields env F o closed fields skipTag ms
       return (k, y) :: ys
     | none =>
-      if closed then .error ⟨[.key k], "not a field of this closed record", none⟩
+      if closed then .error ⟨[.key k], "not a field of this closed record", some .unknownField⟩
       else readFields env F o closed fields skipTag ms
 termination_by (sizeOf ms, 0)
 
@@ -538,7 +552,7 @@ termination_by (sizeOf xs, 0)
 def memberValue (env : Env) (F : Nat) (o : String) (tag : String) (t : Ty) (ms : List (String × JSON)) :
     Except Error Typed :=
   match ms with
-  | [] => fail s!"{tag} takes one argument, as value"
+  | [] => reject .unexpectedMember s!"{tag} takes one argument, as value"
   | (k, x) :: ms =>
     if k = "value" then under (.arg tag 0) (fromJsonF env F o t x) else memberValue env F o tag t ms
 termination_by (sizeOf ms, 0)
@@ -547,13 +561,13 @@ termination_by (sizeOf ms, 0)
 def memberValues (env : Env) (F : Nat) (o : String) (tag : String) (ts : List Ty) (ms : List (String × JSON)) :
     Except Error (List Typed) :=
   match ms with
-  | [] => fail s!"{tag} takes {ts.length} arguments, as values"
+  | [] => reject .unexpectedMember s!"{tag} takes {ts.length} arguments, as values"
   | (k, x) :: ms =>
     if k = "values" then
       match x with
       | .arr xs =>
-        if xs.length = ts.length then readArgs env F o tag 0 ts xs else fail s!"{tag} takes {ts.length} arguments"
-      | _ => fail "values: not an array"
+        if xs.length = ts.length then readArgs env F o tag 0 ts xs else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
+      | _ => reject .wrongPayload "values: not an array"
     else memberValues env F o tag ts ms
 termination_by (sizeOf ms, 0)
 end
@@ -565,15 +579,19 @@ def fromJson (env : Env) (t : Ty) (j : JSON) : Except Error Typed := fromJsonF e
 
 def errorText (e : Error) : String := s!"{e.place}: {e.reason}"
 
+/-- An error in JSON text, at the value's root. -/
+def textError (e : JSON.Error) : Error := { path := [], reason := e.reason, code := some e.code }
+
 /-- Plain JSON text read with a type, within the limits: the value it encodes to (§15) must fit them. -/
-def readPlain (L : Limits) (env : Env) (t : Ty) (text : Text) : Except String Typed := do
-  let j ← JSON.parse L text
-  let x ← (fromJson env t j).mapError errorText
-  if (encode x).fits L then .ok x else .error "outside the limits"
+def readPlain (L : Limits) (env : Env) (t : Ty) (text : Text) : Except Error Typed := do
+  let j ← (JSON.parse L text).mapError textError
+  let x ← fromJson env t j
+  if (encode x).fits L then .ok x
+  else .error { path := [], reason := "outside the limits", code := some ((encode x).limitCode L) }
 
 /-- The text of a decoded value's plain JSON. -/
-def writePlain (env : Env) (t : Ty) (x : Typed) : Except String Text :=
-  ((toJson env t x).mapError errorText).map JSON.write
+def writePlain (env : Env) (t : Ty) (x : Typed) : Except Error Text :=
+  (toJson env t x).map JSON.write
 
 /-! ## Tests -/
 

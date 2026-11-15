@@ -84,7 +84,10 @@ impl<'a> Object<'a> {
     /// A closed record has only the fields listed.
     pub fn closed(&self, known: &[&str]) -> R<()> {
         match self.fields().find(|k| !known.contains(k)) {
-            Some(k) => Err(DecodeError::new(Code::UnknownField, format!("unknown member {k:?} in a closed record"))),
+            // At the member, as when decoding (spec §17).
+            Some(k) => {
+                Err(DecodeError::new(Code::UnknownField, format!("unknown member {k:?} in a closed record")).field(k))
+            }
             None => Ok(()),
         }
     }

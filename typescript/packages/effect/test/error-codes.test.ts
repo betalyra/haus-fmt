@@ -69,6 +69,25 @@ describe("the errors' codes, hints, docs and JSON form", () => {
       expect(json._tag === "HausSchemaError" && [json.code, json.index, json.place]).toEqual(["not-an-integer", 1, "$"])
     }))
 
+  it.effect("invalid UTF-8 in a byte stream is a HausParseError invalid-utf8, without a position", () =>
+    Effect.gen(function* () {
+      const bytes = (...chunks: number[][]) => chunks.map((c) => Uint8Array.from(c))
+      const e = yield* Stream.runCollect(Haus.decodeStream(Schema.Finite)(bytes([0x31, 0x2c], [0x22, 0xff, 0x22, 0x2c]))).pipe(Effect.flip)
+      expect(e._tag === "HausParseError" && [e.code, e.line, e.column]).toEqual(["invalid-utf8", undefined, undefined])
+      expect(Haus.errorJson(e)).toEqual({
+        code: "invalid-utf8",
+        message: "invalid UTF-8",
+        hint: "Save the file as UTF-8.",
+        docs: "https://haus-fmt.org/docs/errors#invalid-utf8",
+      })
+      // Cut inside a character, and never completed.
+      const cut = yield* Stream.runCollect(Haus.decodeStream(Schema.String)(Stream.fromIterable(bytes([0x22, 0xc3], [0x22, 0x2c]))))
+        .pipe(Effect.flip)
+      expect(cut._tag === "HausParseError" && cut.code).toBe("invalid-utf8")
+      const json = yield* Stream.runCollect(Haus.decodeJsonLines(Schema.Finite)(bytes([0x31, 0x0a], [0xed, 0xa0, 0x80, 0x0a]))).pipe(Effect.flip)
+      expect(json._tag === "HausParseError" && [json.code, json.line]).toEqual(["invalid-utf8", undefined])
+    }))
+
   it.effect("a value that can't be encoded is cannot-encode", () =>
     Effect.gen(function* () {
       const e = yield* Effect.flip(Haus.encode(Schema.Struct({ n: Schema.Finite }))({ n: "1" } as never))

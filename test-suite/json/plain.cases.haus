@@ -65,6 +65,8 @@ Ok { type: "Nested", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": n
 Ok { type: "Nested", input: Some(Some(5)), json: "{\"_tag\": \"Some\", \"value\": 5}" },
 Err { type: "Nested", json: "null", code: "type-mismatch" },
 Err { type: "Nested", json: "5", code: "type-mismatch" },
+Err { type: "Nested", json: "{}", code: "missing-member" },
+Err { type: "Nested", json: "{\"_tag\": \"Just\", \"value\": 5}", code: "unknown-tag" },
 
 // ── variants ──
 Ok { type: "Outcome", input: Ok(1), json: "{\"_tag\": \"Ok\", \"value\": 1}" },

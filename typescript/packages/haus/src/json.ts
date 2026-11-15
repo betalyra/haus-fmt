@@ -585,7 +585,8 @@ export const fromLossless = (json: Json, limits: Limits, place: Place): Value =>
     }
     if (only("tag") || only("tag", "args")) {
       const tag = j["tag"]
-      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at, "invalid-tag")
+      // The tag first, at its member, then "args".
+      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at.child("tag"), "invalid-tag")
       const tagIssue = tagLengthIssue(tag, limits)
       if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
       if (!Object.hasOwn(j, "args")) return variant(tag)

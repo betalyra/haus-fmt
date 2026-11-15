@@ -142,7 +142,8 @@ in code nested a thousand levels or more can overflow there.
 ## Errors
 
 The error channel holds `HausParseError` (text that isn't haus or JSON, with
-`line` and `column`), `HausSchemaError` (a value that doesn't fit the schema,
+`line` and `column`; invalid UTF-8 in a byte stream is `invalid-utf8`, without
+them), `HausSchemaError` (a value that doesn't fit the schema,
 or can't be encoded) and `HausLimitsError`. Each has a `code` (spec §17), the
 same in every haus binding, a `hint` and a `docs` link
 (`https://haus-fmt.org/docs/errors#<code>`). `Haus.errorJson(e)` (or

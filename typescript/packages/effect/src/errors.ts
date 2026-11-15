@@ -34,11 +34,14 @@ const detailsJson = (e: { readonly expected?: string; readonly found?: string })
   ...(e.found !== undefined ? { found: e.found } : {}),
 })
 
-/** The text is not valid haus (or not valid JSON). */
+/**
+ * The text is not valid haus (or not valid JSON). `line` and `column` are
+ * left out where the position isn't known: invalid UTF-8 in a byte stream.
+ */
 export class HausParseError extends Schema.TaggedError<HausParseError, { readonly brand: unique symbol }>()("HausParseError", {
   message: Schema.String,
-  line: Schema.Int,
-  column: Schema.Int,
+  line: Schema.optionalKey(Schema.Int),
+  column: Schema.optionalKey(Schema.Int),
   ...details,
 }) {
   /** `https://haus-fmt.org/docs/errors#<code>` */
@@ -46,8 +49,11 @@ export class HausParseError extends Schema.TaggedError<HausParseError, { readonl
     return errorDocs(this.code)
   }
 
-  /** The JSON form of spec §17: `{ code, message, line, column, expected?, found?, hint, docs }`. */
+  /** The JSON form of spec §17: `{ code, message, line?, column?, expected?, found?, hint, docs }`. */
   override toJSON(): ErrorJson {
+    if (this.line === undefined || this.column === undefined) {
+      return { code: this.code, message: this.message, ...detailsJson(this), hint: this.hint, docs: this.docs }
+    }
     const position = ` at ${this.line}:${this.column}`
     const message = this.message.endsWith(position) ? this.message.slice(0, -position.length) : this.message
     return { code: this.code, message, line: this.line, column: this.column, ...detailsJson(this), hint: this.hint, docs: this.docs }
@@ -134,6 +140,9 @@ const withCode = (code: ErrorCode, d: { readonly hint?: string; readonly expecte
 /** A syntax error of the core (haus or JSON text) as a HausParseError. */
 export const parseError = (e: HausSyntaxError): HausParseError =>
   new HausParseError({ message: e.message, line: e.line, column: e.column, ...withCode(e.code, e) })
+
+/** Invalid UTF-8 in a byte stream (the platform's decoder doesn't say where): no line or column. */
+export const invalidUtf8Error = (): HausParseError => new HausParseError({ message: "invalid UTF-8", ...withCode("invalid-utf8") })
 
 /** A HausLimitsError (spec §7). */
 export const limitsError = (message: string): HausLimitsError => new HausLimitsError({ message, ...withCode("unsupported-depth") })

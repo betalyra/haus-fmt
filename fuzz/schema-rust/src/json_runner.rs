@@ -1,5 +1,7 @@
 //! The Rust runner of the JSON fuzzer (fuzz/README.md): `json_runner MODE FILE`
-//! reads one case per line and prints one line each, `ok …` or `err <reason>`:
+//! reads one case per line and prints one line each, `ok …` or `err <place> <code> <reason>`
+//! (the place in the value, `$` for an error in the text, and the code of spec §17;
+//! `-` for an input that isn't one value):
 //!
 //! - `write`: `SUITE TYPE HEX` (haus text): decode with the type, write plain JSON (spec §16.3);
 //! - `read`: `SUITE TYPE HEX` (JSON text): read plain JSON with the type, encode: the canonical form;
@@ -27,12 +29,22 @@ fn one_line(s: &str) -> String {
 fn single(bytes: &[u8]) -> Result<haus::Value, String> {
     match haus::parse_bytes(bytes) {
         Ok(mut vs) if vs.len() == 1 => Ok(vs.remove(0)),
-        _ => Err("err not a single value".into()),
+        _ => Err("err $ - not a single value".into()),
     }
 }
 
 fn text(bytes: &[u8]) -> Result<&str, String> {
-    std::str::from_utf8(bytes).map_err(|_| "err invalid UTF-8".to_owned())
+    std::str::from_utf8(bytes).map_err(|_| "err $ invalid-utf8 invalid UTF-8".to_owned())
+}
+
+/// `err <place> <code> <reason>`: an error in a value at its place, one in the text at `$`.
+fn err(e: &haus::Error) -> String {
+    let (place, code) = match e {
+        haus::Error::Decode(d) => (d.place(), d.code.to_string()),
+        haus::Error::Encode(d) => (d.place(), d.code.to_string()),
+        _ => ("$".to_owned(), e.code().map_or("-".to_owned(), |c| c.to_string())),
+    };
+    format!("err {place} {code} {}", one_line(&e.to_string()))
 }
 
 fn line(mode: &str, line: &str) -> Result<String, String> {
@@ -50,15 +62,15 @@ fn line(mode: &str, line: &str) -> Result<String, String> {
         },
         ("lossless-write", [hex]) => match haus::to_lossless_json(&single(&unhex(hex))?) {
             Ok(json) => Ok(format!("ok {json}")),
-            Err(e) => Err(format!("err {}", one_line(&e.to_string()))),
+            Err(e) => Err(format!("err {} {} {}", e.place(), e.code, one_line(&e.to_string()))),
         },
         ("lossless-read", [hex]) => match haus::from_lossless_json(text(&unhex(hex))?) {
             Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
-            Err(e) => Err(format!("err {}", one_line(&e.to_string()))),
+            Err(e) => Err(err(&e)),
         },
         ("schemaless", [hex]) => match haus::from_json(text(&unhex(hex))?) {
             Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
-            Err(e) => Err(format!("err {}", one_line(&e.to_string()))),
+            Err(e) => Err(err(&e)),
         },
         _ => Ok(format!("crash bad line for {mode}")),
     }

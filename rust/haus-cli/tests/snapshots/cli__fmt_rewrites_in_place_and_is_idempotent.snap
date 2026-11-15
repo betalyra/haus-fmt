@@ -1,0 +1,12 @@
+---
+source: haus-cli/tests/cli.rs
+expression: "fs::read_to_string(&file).unwrap()"
+---
+{
+  name: "Ada",
+  tags: [
+    "a",
+    "b",
+  ], // who
+  total: Money(7.90, EUR),
+}

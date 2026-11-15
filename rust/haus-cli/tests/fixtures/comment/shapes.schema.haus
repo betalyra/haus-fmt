@@ -1,0 +1,1 @@
+type Shape = closed < Circle { r: Float64 } | Square { side: Float64 } >

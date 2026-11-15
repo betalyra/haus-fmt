@@ -26,14 +26,14 @@ import Lean.Data.Json
                                   cases include every DIR/../valid/NAME.json
     haus-ref --json-batch TYPES FILE     plain JSON (spec §16.3): for each line `SUITE TYPE HEX`
                                   (a value's haus text): decode, write: `ok <JSON>` or
-                                  `err <place> <reason>`
+                                  `err <place> <code> <reason>`
     haus-ref --json-read-batch TYPES FILE  for each line `SUITE TYPE HEX` (JSON text): read with
                                   the type: `ok <canonical form of the encoded result>` or
-                                  `err <place> <reason>`
+                                  `err <place> <code> <reason>` (an error in the text at `$`)
     haus-ref --lossless-batch FILE       lossless JSON (spec §16.2): for each line `HEX` (a haus
-                                  value): `ok <JSON>` or `err <reason>`
+                                  value): `ok <JSON>` or `err $ - <reason>`
     haus-ref --lossless-read-batch FILE  for each line `HEX` (JSON text): `ok <canonical form>`
-                                  or `err <reason>`
+                                  or `err $ <code> <reason>`
     haus-ref --schemaless-read-batch FILE  the same for JSON without a schema (spec §16.1)
 -/
 
@@ -327,6 +327,11 @@ def runSchemaBatch (types file : System.FilePath) : IO UInt32 := do
 
 /-! ## JSON (spec §16) -/
 
+instance : ToString JSON.Error := ⟨fun e => s!"{e.reason} [{e.code}]"⟩
+
+/-- A JSON reader's or writer's error with its place and code, as the suites show it. -/
+def schemaErrorText (e : Schema.Error) : String := s!"{e.place}: {e.reason} [{codeText e.code}]"
+
 def jsonText (j : Haus.JSON) : String := String.ofList (Haus.JSON.write j)
 
 def canonicalText (v : Value) : String := String.ofList (Canonical.canonical v)
@@ -342,13 +347,13 @@ def strField (fs : List (String × Value)) (k : String) : Option String :=
   | _ => none
 
 /-- Read JSON text with a type and encode the result: its canonical form. -/
-def readPlainCanonical (env : Schema.Env) (type : String) (json : String) : Except String String :=
+def readPlainCanonical (env : Schema.Env) (type : String) (json : String) : Except Schema.Error String :=
   (Schema.readPlain {} env (.ref type) json.toList).map fun x => canonicalText (Schema.encode x)
 
 /-- Decode a haus value with a type and write it as plain JSON. -/
 def writePlainJson (env : Schema.Env) (type : String) (v : Value) : Except String Haus.JSON := do
-  let x ← (Schema.decode env (.ref type) v).mapError Schema.errorText
-  (Schema.toJson env (.ref type) x).mapError Schema.errorText
+  let x ← (Schema.decode env (.ref type) v).mapError schemaErrorText
+  (Schema.toJson env (.ref type) x).mapError schemaErrorText
 
 def runPlainCases (env : Schema.Env) (cases : List Value) : Array String := Id.run do
   let mut failures : Array String := #[]
@@ -368,15 +373,20 @@ def runPlainCases (env : Schema.Env) (cases : List Value) : Array String := Id.r
       | _, .error e => failures := failures.push s!"plain: {shown}: the case's JSON: {e}"
       match readPlainCanonical env type json with
       | .ok got => if got != want then failures := failures.push s!"plain: {shown}: read {got}"
-      | .error e => failures := failures.push s!"plain: {shown}: reading failed: {e}"
+      | .error e => failures := failures.push s!"plain: {shown}: reading failed: {schemaErrorText e}"
     | "Read" =>
       let some output := fs.lookup "output" | failures := failures.push s!"plain: no output: {shown}"
       match readPlainCanonical env type json with
       | .ok got => if got != canonicalText output then failures := failures.push s!"plain: {shown}: read {got}"
-      | .error e => failures := failures.push s!"plain: {shown}: reading failed: {e}"
+      | .error e => failures := failures.push s!"plain: {shown}: reading failed: {schemaErrorText e}"
     | "Err" =>
-      if let .ok got := readPlainCanonical env type json then
-        failures := failures.push s!"plain: {shown}: accepted as {got}"
+      -- `code`: the error code (spec §17) reading must fail with.
+      let some code := strField fs "code" | failures := failures.push s!"plain: no code: {shown}"
+      match readPlainCanonical env type json with
+      | .ok got => failures := failures.push s!"plain: {shown}: accepted as {got}"
+      | .error e =>
+        if codeText e.code != code then
+          failures := failures.push s!"plain: {shown}: {codeText e.code} instead of {code} ({schemaErrorText e})"
     | _ => failures := failures.push s!"plain: not a case: {shown}"
   return failures
 
@@ -399,7 +409,10 @@ def runLosslessCases (cases : List Value) : Array String := Id.run do
       | .ok v => if !Value.equiv v input then failures := failures.push s!"lossless: {shown}: read {canonicalText v}"
       | .error e => failures := failures.push s!"lossless: {shown}: reading failed: {e}"
     | "Err" =>
-      if let .ok v := read then failures := failures.push s!"lossless: {shown}: accepted as {canonicalText v}"
+      let some code := strField fs "code" | failures := failures.push s!"lossless: no code: {shown}"
+      match read with
+      | .ok v => failures := failures.push s!"lossless: {shown}: accepted as {canonicalText v}"
+      | .error e => if e.code.name != code then failures := failures.push s!"lossless: {shown}: {e.code} instead of {code} ({e.reason})"
     | _ => failures := failures.push s!"lossless: not a case: {shown}"
   return failures
 
@@ -417,7 +430,10 @@ def runSchemalessCases (cases : List Value) : Array String := Id.run do
       | .ok v => if !Value.equiv v output then failures := failures.push s!"schemaless: {shown}: read {canonicalText v}"
       | .error e => failures := failures.push s!"schemaless: {shown}: reading failed: {e}"
     | "Err" =>
-      if let .ok v := read then failures := failures.push s!"schemaless: {shown}: accepted as {canonicalText v}"
+      let some code := strField fs "code" | failures := failures.push s!"schemaless: no code: {shown}"
+      match read with
+      | .ok v => failures := failures.push s!"schemaless: {shown}: accepted as {canonicalText v}"
+      | .error e => if e.code.name != code then failures := failures.push s!"schemaless: {shown}: {e.code} instead of {code} ({e.reason})"
     | _ => failures := failures.push s!"schemaless: not a case: {shown}"
   return failures
 
@@ -469,6 +485,9 @@ def runJsonSuite (dir types : System.FilePath) : IO UInt32 := do
 
 def oneLine (s : String) : String := (s.replace "\r" "\\r").replace "\n" "\\n"
 
+/-- An error as the JSON batch modes print it: `err <place> <code> <reason>` (`-` for no code). -/
+def errLine (e : Schema.Error) : String := s!"err {e.place} {codeText e.code} {oneLine e.reason}"
+
 /-- One line of `--json-batch` (`write`) or `--json-read-batch`: `SUITE TYPE HEX`. -/
 def jsonLine (write : Bool) (suites : List (String × Except String Schema.Env)) (line : String) : String :=
   match line.splitOn " " with
@@ -479,27 +498,22 @@ def jsonLine (write : Bool) (suites : List (String × Except String Schema.Env))
         match parseBytes (unhex hex) with
         | .ok [v] =>
           match Schema.decode env (.ref type) v with
-          | .error e => s!"err {e.place} {oneLine e.reason}"
+          | .error e => errLine e
           | .ok x =>
             match Schema.toJson env (.ref type) x with
             | .ok j => s!"ok {jsonText j}"
-            | .error e => s!"err {e.place} {oneLine e.reason}"
-        | _ => "err $ not a single value"
+            | .error e => errLine e
+        | _ => "err $ - not a single value"
       else
         match String.fromUTF8? (unhex hex) with
-        | none => "err $ invalid UTF-8"
+        | none => "err $ invalid-utf8 invalid UTF-8"
         | some text =>
-          match Haus.JSON.parse {} text.toList with
-          | .error e => s!"err $ {oneLine e}"
-          | .ok j =>
-            match Schema.fromJson env (.ref type) j with
-            | .error e => s!"err {e.place} {oneLine e.reason}"
-            | .ok x =>
-              if (Schema.encode x).fits {} then s!"ok {canonicalText (Schema.encode x)}"
-              else "err $ outside the limits"
-    | some (.error _) => "err $ schema rejected"
-    | none => s!"err $ unknown suite {suite}"
-  | _ => "err $ bad line"
+          match Schema.readPlain {} env (.ref type) text.toList with
+          | .error e => errLine e
+          | .ok x => s!"ok {canonicalText (Schema.encode x)}"
+    | some (.error _) => "err $ - schema rejected"
+    | none => s!"err $ - unknown suite {suite}"
+  | _ => "err $ - bad line"
 
 def runJsonBatch (write : Bool) (types file : System.FilePath) : IO UInt32 := do
   let suites ← readSuites types (prelude := true)
@@ -512,17 +526,17 @@ def runJsonBatch (write : Bool) (types file : System.FilePath) : IO UInt32 := do
 def losslessLine (line : String) : String :=
   match parseBytes (unhex line) with
   | .ok [v] => s!"ok {jsonText (Haus.JSON.lossless v)}"
-  | .ok _ => "err not a single value"
-  | .error e => s!"err {oneLine e}"
+  | .ok _ => "err $ - not a single value"
+  | .error e => s!"err $ - {oneLine e}"
 
 /-- One line of `--lossless-read-batch` or `--schemaless-read-batch`: JSON text read as a haus value. -/
-def readLine (read : Text → Except String Value) (line : String) : String :=
+def readLine (read : Text → Except JSON.Error Value) (line : String) : String :=
   match String.fromUTF8? (unhex line) with
-  | none => "err invalid UTF-8"
+  | none => "err $ invalid-utf8 invalid UTF-8"
   | some text =>
     match read text.toList with
     | .ok v => s!"ok {canonicalText v}"
-    | .error e => s!"err {oneLine e}"
+    | .error e => s!"err $ {e.code} {oneLine e.reason}"
 
 def runLineBatch (f : String → String) (file : System.FilePath) : IO UInt32 := do
   let out ← IO.getStdout

@@ -1,0 +1,64 @@
+---
+source: haus-cli/tests/cli.rs
+expression: pretty(&json)
+---
+{
+  "ok": false,
+  "files": [
+    {
+      "path": "adjacent/order-bad.haus",
+      "kind": "data",
+      "schema": "adjacent/order.schema.haus#Root",
+      "ok": false,
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "type-mismatch",
+          "message": "expected Int, found the string \"7\"",
+          "line": 3,
+          "column": 7,
+          "path": "$.id",
+          "hint": "Write a value of the expected type; the message says which.",
+          "docs": "https://haus-fmt.org/docs/errors#type-mismatch"
+        },
+        {
+          "severity": "error",
+          "code": "out-of-range",
+          "message": "-2 is out of range for UInt32 (0 to 4294967295)",
+          "line": 5,
+          "column": 24,
+          "path": "$.items[0].qty",
+          "hint": "Write a value within the range, or use a larger type (`Int`, `Float64`, `Decimal`).",
+          "docs": "https://haus-fmt.org/docs/errors#out-of-range"
+        },
+        {
+          "severity": "hint",
+          "code": "unlisted-field",
+          "message": "colour is not in the schema; a reader ignores it.",
+          "line": 5,
+          "column": 28,
+          "path": "$.items[0].colour",
+          "hint": "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers.",
+          "docs": "https://haus-fmt.org/docs/errors#unlisted-field"
+        },
+        {
+          "severity": "error",
+          "code": "unknown-tag",
+          "message": "Lost is not allowed here: expected one of Pending, Shipped, Cancelled.",
+          "line": 7,
+          "column": 11,
+          "path": "$.status",
+          "hint": "Use one of the variant's tags, fix the spelling, or add the tag to the schema.",
+          "docs": "https://haus-fmt.org/docs/errors#unknown-tag"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "files": 1,
+    "errors": 3,
+    "warnings": 0,
+    "hints": 1,
+    "unreadable": 0
+  }
+}

@@ -11,7 +11,8 @@
  * - `lossless-write` and `lossless-read`: the lossless form (§16.2);
  * - `schemaless`: JSON read without a schema (§16.1).
  *
- * Accepting or rejecting must agree too. A disagreement is shrunk and saved.
+ * Accepting or rejecting must agree too, and so must the error codes (spec
+ * §17) of errors at the same place. A disagreement is shrunk and saved.
  * See ../README.md.
  *
  *   node fuzz/src/json.ts [--count N] [--seed S] [--modes write,read,…] [--runners lean,typescript,…]
@@ -102,16 +103,19 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 
   // ── comparing ──────────────────────────────────────────────
-  /** What must agree with lean: `ok` and the result (JSON as data), `err`, never a crash. */
+  /** What must agree with lean: `ok` and the result (JSON as data), `err` (codes: see sameCode), never a crash. */
   const result = (mode: Mode, o: Outcome): string => {
     if (o.kind !== "ok") return o.kind
     if (!writes(mode)) return "ok " + o.text
     const j = parseJ(o.text)
     return j === undefined ? `ok, not JSON: ${o.text}` : "ok " + normJ(j)
   }
+  /** Two errors at the same place (`$` for one in the text) with codes (spec §17): which error comes first is not fixed, but a place has one mistake. */
+  const codesAt = (ref: Outcome, o: Outcome) => ref.kind === "err" && o.kind === "err" && ref.code !== undefined && o.code !== undefined && ref.place === o.place
+  const sameCode = (ref: Outcome, o: Outcome) => !codesAt(ref, o) || (ref.kind === "err" && o.kind === "err" && ref.code === o.code)
   const pattern = (mode: Mode, rs: readonly Outcome[]): string => {
     const ref = result(mode, rs[0]!)
-    return rs.map((o, i) => (i === 0 ? rs[0]!.kind : ref !== "crash" && result(mode, o) === ref ? "=" : o.kind)).join(" ")
+    return rs.map((o, i) => (i === 0 ? rs[0]!.kind : ref !== "crash" && result(mode, o) === ref && sameCode(rs[0]!, o) ? "=" : o.kind)).join(" ")
   }
   const disagrees = (p: string) => p.startsWith("crash") || p.split(" ").slice(1).some((x) => x !== "=")
   /** The pattern of each case; an empty case without a type can't be given to the runners (an empty line), so it is skipped. */
@@ -237,6 +241,8 @@ export async function run(argv: readonly string[]): Promise<number> {
   for (const mode of modes) {
     const perType = new Map<string, { total: number; ok: number }>()
     let accepted = 0
+    /** Errors whose codes were compared: lean's and another runner's, at the same place. */
+    let codesCompared = 0
     let before = found.size
     for (let done = 0; done < count; done += batch) {
       const cases = generate(mode, Math.min(batch, count - done))
@@ -248,6 +254,7 @@ export async function run(argv: readonly string[]): Promise<number> {
         perType.set(key, stat)
         stat.total++
         if (rs[0]!.kind === "ok") (stat.ok++, accepted++)
+        if (rs.slice(1).some((o) => codesAt(rs[0]!, o))) codesCompared++
         const p = pattern(mode, rs)
         if (!disagrees(p)) return
         const groupKey = `${mode} ${typedKey(c)} ${p}`
@@ -258,7 +265,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       })
       process.stdout.write(`  ${mode}: ${Math.min(done + batch, count)} cases, ${found.size - before} disagreements\n`)
     }
-    const line = `${mode}: ${accepted} accepted, ${count - accepted} rejected (by lean), ${found.size - before} disagreements`
+    const line = `${mode}: ${accepted} accepted, ${count - accepted} rejected (by lean); ${codesCompared} error codes compared (at the same place); ${found.size - before} disagreements`
     console.log(line)
     coverage.push(line)
     if (mode === "write" || mode === "read") {
@@ -275,7 +282,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       `DISAGREEMENT ${key} (${f.hits} cases; shrunk)`,
       `  case: ${f.case.mode} ${typedKey(f.case)} ${f.case.bytes ? `bytes ${Buffer.from(f.case.bytes).toString("hex")}` : JSON.stringify(f.case.text)}`,
       `  line: ${caseLine(f.case)}`,
-      ...f.outcomes.map((o, i) => `  ${runners[i]!.name.padEnd(10)} ${o.kind === "ok" ? `ok ${o.text.slice(0, 600)}` : `${o.kind} ${o.reason.slice(0, 300)}`}`),
+      ...f.outcomes.map((o, i) => `  ${runners[i]!.name.padEnd(10)} ${o.kind === "ok" ? `ok ${o.text.slice(0, 600)}` : `${o.kind} ${o.kind === "err" && o.code !== undefined ? `[${o.code} at ${o.place}] ` : ""}${o.reason.slice(0, 300)}`}`),
     ]
     report.push(lines.join("\n"))
     console.log("\n" + lines.join("\n"))

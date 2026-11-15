@@ -9,9 +9,11 @@
  * | `lossless-read` | `HEX` (JSON text) | read lossless JSON | `ok <canonical form>` |
  * | `schemaless` | `HEX` (JSON text) | read JSON without a schema (§16.1) | `ok <canonical form>` |
  *
- * Otherwise `err <reason>`. TypeScript and Effect run in this process; the
- * others are the programs built by build.sh (Lean: `haus-ref`'s JSON batch
- * modes; the rest take `MODE FILE`).
+ * Otherwise `err <place> <code> <reason>`: the place in the value
+ * (`$.items[2].price`, `$` for an error in the text) and the error code (spec
+ * §17; `-` for none, such as haus text that isn't one value). TypeScript and
+ * Effect run in this process; the others are the programs built by build.sh
+ * (Lean: `haus-ref`'s JSON batch modes; the rest take `MODE FILE`).
  */
 import { spawnSync } from "node:child_process"
 import { writeFileSync } from "node:fs"
@@ -22,7 +24,7 @@ import {
   canonical, compileSchemaFile, fromJson, fromLosslessJson, HausDecodeError, HausEncodeError, HausSyntaxError, parseAll, toLosslessJson,
 } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
-import type { Outcome } from "./schema-runners.ts"
+import { parseOutcome, type Outcome } from "./schema-runners.ts"
 
 export type Mode = "write" | "read" | "lossless-write" | "lossless-read" | "schemaless"
 export const MODES: readonly Mode[] = ["write", "read", "lossless-write", "lossless-read", "schemaless"]
@@ -52,21 +54,19 @@ export const caseLine = (c: JsonCase) => {
   return typed(c.mode) ? `${c.suite} ${c.type} ${hex}` : hex
 }
 
-function parseOutcome(line: string): Outcome {
-  if (line.startsWith("ok ")) return { kind: "ok", text: line.slice(3) }
-  if (line.startsWith("err")) return { kind: "err", reason: line.slice(4) }
-  return { kind: "crash", reason: `unexpected output: ${line.slice(0, 200)}` }
-}
-
-/** A separate program; when it crashes or hangs, the cases are split in halves until the ones that crash it are found. */
-function external(name: string, command: (mode: Mode, file: string) => readonly [string, readonly string[]]): JsonRunner {
+/**
+ * A separate program; when it crashes or hangs, the cases are split in halves
+ * until the ones that crash it are found. With `codes`, it reports error codes:
+ * an error is `err PLACE CODE REASON` (parseOutcome in schema-runners.ts).
+ */
+function external(name: string, command: (mode: Mode, file: string) => readonly [string, readonly string[]], codes = false): JsonRunner {
   const runRange = (mode: Mode, file: string, cases: readonly JsonCase[]): Outcome[] => {
     const part = `${file}.${name}`
     writeFileSync(part, cases.map((c) => caseLine(c) + "\n").join(""))
     const [program, args] = command(mode, part)
     const p = spawnSync(program, args, { maxBuffer: 1 << 30, encoding: "utf8", timeout: 600_000 })
     const lines = (p.stdout ?? "").split("\n").filter((l) => l !== "")
-    if (p.status === 0 && lines.length === cases.length) return lines.map(parseOutcome)
+    if (p.status === 0 && lines.length === cases.length) return lines.map((l) => parseOutcome(l, codes))
     if (cases.length === 1) {
       const why = p.error ? String(p.error) : p.signal ? `signal ${p.signal}` : `exit ${p.status}, ${lines.length} lines`
       return [{ kind: "crash", reason: `CRASH (${why}): ${(p.stderr ?? "").trim().split("\n").slice(0, 3).join(" ").slice(0, 300)}` }]
@@ -86,10 +86,11 @@ const LEAN_FLAGS: Record<Mode, string> = {
 }
 
 export const lean = (types: string) =>
-  external("lean", (mode, file) => [join(root, "spec/lean/.lake/build/bin/haus-ref"), typed(mode) ? [LEAN_FLAGS[mode], types, file] : [LEAN_FLAGS[mode], file]])
-export const rust = () => external("rust", (mode, file) => [join(root, "fuzz/schema-rust/target/release/json_runner"), [mode, file]])
-export const roc = () => external("roc", (mode, file) => [join(root, "fuzz/.build/roc-json-runner"), [mode, file]])
-export const python = () => external("python", (mode, file) => [join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/json_runner.py"), mode, file]])
+  external("lean", (mode, file) => [join(root, "spec/lean/.lake/build/bin/haus-ref"), typed(mode) ? [LEAN_FLAGS[mode], types, file] : [LEAN_FLAGS[mode], file]], true)
+export const rust = () => external("rust", (mode, file) => [join(root, "fuzz/schema-rust/target/release/json_runner"), [mode, file]], true)
+export const roc = () => external("roc", (mode, file) => [join(root, "fuzz/.build/roc-json-runner"), [mode, file]], true)
+export const python = () =>
+  external("python", (mode, file) => [join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/json_runner.py"), mode, file]], true)
 
 // ── in this process ──────────────────────────────────────────
 
@@ -116,8 +117,18 @@ function single(t: string): { value: any } | { error: string } {
 
 const crash = (e: unknown): Outcome => ({ kind: "crash", reason: `CRASH: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`.slice(0, 300) })
 
-/** An error the API documents (`err`), or anything else (a crash). */
-const isHausError = (e: unknown) => e instanceof HausDecodeError || e instanceof HausSyntaxError || e instanceof HausEncodeError || e instanceof h.HausDecodeError || e instanceof h.HausEncodeError
+/**
+ * An error the API documents (`err`, with its code and its place: `$` for an
+ * error in the text), or undefined for anything else (a crash).
+ */
+function hausError(e: unknown): Outcome | undefined {
+  const reason = e instanceof Error ? e.message.slice(0, 300) : ""
+  if (e instanceof HausSyntaxError) return { kind: "err", reason, code: e.code, place: "$" }
+  if (e instanceof HausDecodeError || e instanceof HausEncodeError || e instanceof h.HausDecodeError || e instanceof h.HausEncodeError) {
+    return { kind: "err", reason, code: e.code, place: h.formatPath(e.path) }
+  }
+  return undefined
+}
 
 function inProcess(name: string, one: (mode: Mode, c: JsonCase, t: string) => Outcome): JsonRunner {
   return {
@@ -125,12 +136,11 @@ function inProcess(name: string, one: (mode: Mode, c: JsonCase, t: string) => Ou
     run: (mode, _file, cases) =>
       cases.map((c) => {
         const t = text(c)
-        if (t === undefined) return { kind: "err", reason: "invalid UTF-8" }
+        if (t === undefined) return { kind: "err", reason: "invalid UTF-8", code: "invalid-utf8", place: "$" }
         try {
           return one(mode, c, t)
         } catch (e) {
-          if (isHausError(e)) return { kind: "err", reason: (e as Error).message.slice(0, 300) }
-          return crash(e)
+          return hausError(e) ?? crash(e)
         }
       }),
   }
@@ -194,14 +204,13 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
   const effectEntry = createRequire(join(dir, "package.json")).resolve("effect")
   const { Effect, Exit, Cause, Option } = await import(pathToFileURL(effectEntry).href)
   const compiled = compileEach(texts, (t) => Haus.compileSchemaFile(t).schemas as Record<string, unknown>)
-  /** The value of an effect, or the outcome of its failure (with its error code, spec §17; not compared yet: Lean's JSON modes print none). */
+  /** The value of an effect, or the outcome of its failure, with its error code (spec §17) and place (`$` for an error in the text). */
   const runE = (e: unknown): { value: any } | { outcome: Outcome } => {
     const exit = Effect.runSyncExit(e)
     if (Exit.isSuccess(exit)) return { value: exit.value }
     if (Cause.hasDies(exit.cause)) return { outcome: { kind: "crash", reason: `CRASH: ${String(exit.cause).slice(0, 300)}` } }
     const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
-    const place = error?.place ?? (error?.line !== undefined ? `${error.line}:${error.column}` : "$")
-    return { outcome: { kind: "err", reason: String(exit.cause).slice(0, 300), ...(error?.code ? { code: error.code, place } : {}) } }
+    return { outcome: { kind: "err", reason: String(exit.cause).slice(0, 300), ...(error?.code ? { code: error.code, place: error.place ?? "$" } : {}) } }
   }
   const chain = (...steps: ((x: any) => unknown)[]): Outcome => {
     let x: any = undefined

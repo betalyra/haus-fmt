@@ -673,6 +673,7 @@ theorem strChars_length : ∀ (fuel : Nat) (t : Text) (acc : List Char) (n : Nat
           | cases h
           | exact ih _ _ _ _ _ h (by simp [hn])
           | ((repeat' split at h) <;> first | cases h | exact ih _ _ _ _ _ h (by simp [hn]))
+      · cases h
       · split at h
         · cases h
         · exact ih _ _ _ _ _ h (by simp [hn])
@@ -821,7 +822,7 @@ theorem parse_sound {t : Text} {j : JSON} (h : parse L t = .ok j) : WellFormed j
 theorem parse_write_iff {j : JSON} : parse L (write j) = .ok j ↔ WellFormed j ∧ Fits L (jsonDepth L) j :=
   ⟨parse_sound, fun ⟨hw, hf⟩ => parse_write hw hf⟩
 
-theorem mapM_sound {α : Type} {f : α → Except String JSON} {P : JSON → Prop} (hf : ∀ a j, f a = .ok j → P j) :
+theorem mapM_sound {α ε : Type} {f : α → Except ε JSON} {P : JSON → Prop} (hf : ∀ a j, f a = .ok j → P j) :
     ∀ {l : List α} {js : List JSON}, l.mapM f = .ok js → ∀ j ∈ js, P j
   | [], js, h => by cases h; simp
   | a :: l, js, h => by

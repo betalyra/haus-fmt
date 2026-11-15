@@ -380,6 +380,8 @@ export class Parser {
         )
       }
       const lo = hexValue(this.src.charCodeAt(this.pos + 1))
+      // A digit at the end of the input: the literal is unterminated, reported at its start (like the reference).
+      if (lo < 0 && this.pos + 1 >= this.src.length) this.fail("unterminated-bytes", "unterminated byte string", open)
       if (lo < 0) this.fail("bytes-odd-digits", "a byte needs two hex digits (an odd number of digits, or a space inside a byte)", this.pos)
       out.push(hi * 16 + lo)
       this.pos += 2

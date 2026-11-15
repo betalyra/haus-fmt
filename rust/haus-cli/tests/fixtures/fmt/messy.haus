@@ -1,0 +1,2 @@
+{ name: "Ada", tags: ["a","b"], // who
+ total: Money(7.90, EUR) }

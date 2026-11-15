@@ -95,12 +95,13 @@ Also in the prelude: `String`, `Bool`, `Result e a`, and `Stream a` for a whole 
 
 ## The loop
 
-> **CLI in progress.** The `haus` command is being built; these are the commands as they will be. Until then, the VS Code extension and the [playground](https://haus-fmt.org/play) show the same errors as you type.
+Install the [`haus` command](/docs/cli) with `cargo install haus-fmt-cli`.
 
 1. Write the `.haus` file, and a `.schema.haus` when the data has a fixed shape.
-2. `haus check order.haus` reports syntax errors with line and column. With a schema (`order.schema.haus` next to it, or a `// schema:` comment), it also reports values the schema rejects.
+2. `haus check order.haus` reports syntax errors with line and column. With a schema (`order.schema.haus` next to it, a `// schema:` comment, or `--schema s.schema.haus#Type`), it also reports values the schema rejects. `haus check .` checks a whole directory; `haus check --json` gives one JSON document with each error's `code`, `line`, `column`, `path` and `hint`. Exit code 0 is valid (hints allowed), 1 invalid, 2 a usage or I/O error.
 3. Fix the first error and check again. Messages say what to write instead.
-4. `haus fmt order.haus` writes the standard layout: one entry per line, trailing commas, comments kept.
+4. `haus fmt order.haus` writes the standard layout: one entry per line, trailing commas, comments kept. `haus fmt --check .` only lists the files that would change; `haus fmt -` formats standard input.
+5. `haus canonical x.haus` and `haus hash x.haus` print the canonical form and the hash (`hashAll`) of a file's values.
 
 ## JSON ⇄ haus
 

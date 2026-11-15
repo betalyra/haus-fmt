@@ -99,6 +99,44 @@ a record key or tag counts like a string.
 -/
 def fits (L : Limits) (v : Value) : Bool := v.depth ≤ L.maxDepth && leaves L v
 
+mutual
+/--
+The code (spec §17) of the first number, string, byte string, record key or
+tag outside the limits, in the order of the text; none if they all fit.
+-/
+def leafCode (L : Limits) : Value → Option Code
+  | .num s =>
+    if JSON.numberFits L s.toList then none
+    else if JSON.exponentOf s.toList ≤ L.maxExponent then some .numberTooLong
+    -- The exponent is too large; so is the literal, unless it would fit with that exponent.
+    else if JSON.numberFits { L with maxExponent := JSON.exponentOf s.toList } s.toList then some .exponentTooLarge
+    else some .numberTooLong
+  | .str s => if s.length ≤ L.maxStringLength then none else some .stringTooLong
+  | .bytes bs => if 2 * bs.length ≤ L.maxStringLength then none else some .stringTooLong
+  | .arr xs => leafCodeList L xs
+  | .record fs => leafCodeFields L fs
+  | .variant t xs => if t.length ≤ L.maxStringLength then leafCodeList L xs else some .tagTooLong
+
+def leafCodeList (L : Limits) : List Value → Option Code
+  | [] => none
+  | x :: xs =>
+    match leafCode L x with
+    | some c => some c
+    | none => leafCodeList L xs
+
+def leafCodeFields (L : Limits) : List (String × Value) → Option Code
+  | [] => none
+  | (k, x) :: fs =>
+    if k.length > L.maxStringLength then some .keyTooLong else
+    match leafCode L x with
+    | some c => some c
+    | none => leafCodeFields L fs
+end
+
+/-- The code (spec §17) of a value that doesn't `fit`: nested too deeply, or a leaf too large. -/
+def limitCode (L : Limits) (v : Value) : Code :=
+  if v.depth > L.maxDepth then .nestingTooDeep else (leafCode L v).getD .nestingTooDeep
+
 end Value
 
 namespace JSON
@@ -111,19 +149,19 @@ mutual
 array, a string as a string, a number as a number with its literal
 normalized (§2), `true` and `false` as `True` and `False`, `null` as `None`.
 -/
-def toValue : JSON → Except String Value
+def toValue : JSON → Except Error Value
   | .null => .ok (.variant "None" [])
   | .bool b => .ok (.variant (if b then "True" else "False") [])
-  | .num t => if isJsonNumber t.toList then .ok (.num (normalizeNumber t.toList)) else .error "not a JSON number"
+  | .num t => if isJsonNumber t.toList then .ok (.num (normalizeNumber t.toList)) else .error ⟨.jsonSyntax, "not a JSON number"⟩
   | .str s => .ok (.str s)
   | .arr xs => (toValueList xs).map .arr
   | .obj ms => (toValueMembers ms).map .record
 
-def toValueList : List JSON → Except String (List Value)
+def toValueList : List JSON → Except Error (List Value)
   | [] => .ok []
   | x :: xs => do return (← toValue x) :: (← toValueList xs)
 
-def toValueMembers : List (String × JSON) → Except String (List (String × Value))
+def toValueMembers : List (String × JSON) → Except Error (List (String × Value))
   | [] => .ok []
   | (k, x) :: ms => do return (k, ← toValue x) :: (← toValueMembers ms)
 end
@@ -154,22 +192,31 @@ def losslessFields : List (String × Value) → List (String × JSON)
 end
 
 /-- `{"num": "…"}`: a normalized literal. -/
-def numOf : JSON → Except String Value
-  | .str s => if isNormalLit s.toList then .ok (.num s) else .error "num: not a normalized number literal"
-  | _ => .error "num: not a string"
+def numOf : JSON → Except Error Value
+  | .str s => if isNormalLit s.toList then .ok (.num s) else .error ⟨.losslessNumber, "num: not a normalized number literal"⟩
+  | _ => .error ⟨.losslessNumber, "num: not a string"⟩
 
 /-- `{"bytes": "…"}`: lowercase hex digits in pairs. -/
-def bytesOf : JSON → Except String Value
+def bytesOf : JSON → Except Error Value
   | .str h =>
     match Bytes.unhex h.toList with
     | some bs => .ok (.bytes bs)
-    | none => .error "bytes: not lowercase hex digits in pairs"
-  | _ => .error "bytes: not a string"
+    | none => .error ⟨.losslessBytes, "bytes: not lowercase hex digits in pairs"⟩
+  | _ => .error ⟨.losslessBytes, "bytes: not a string"⟩
 
 /-- `{"tag": "…"}`: a tag. -/
-def tagOf : JSON → Except String String
-  | .str t => if isTag t.toList then .ok t else .error "tag: not a tag"
-  | _ => .error "tag: not a string"
+def tagOf : JSON → Except Error String
+  | .str t => if isTag t.toList then .ok t else .error ⟨.invalidTag, "tag: not a tag"⟩
+  | _ => .error ⟨.invalidTag, "tag: not a string"⟩
+
+/--
+The code of JSON that is no lossless form: `invalid-tag` for a `{"tag", "args"}`
+object whose tag isn't one (the tag is checked before `args`), else `lossless-form`.
+-/
+def formCode : JSON → Code
+  | .obj [("tag", x), ("args", _)] | .obj [("args", _), ("tag", x)] =>
+    if (tagOf x).toOption.isSome then .losslessForm else .invalidTag
+  | _ => .losslessForm
 
 mutual
 /--
@@ -177,7 +224,7 @@ mutual
 any member order, and nothing else. A `num` must be a normalized literal,
 `bytes` lowercase hex, a `tag` a tag, and `args` not empty.
 -/
-def fromLossless : JSON → Except String Value
+def fromLossless : JSON → Except Error Value
   | .str s => .ok (.str s)
   | .arr xs => (fromLosslessList xs).map .arr
   | .obj [("num", x)] => numOf x
@@ -190,28 +237,28 @@ def fromLossless : JSON → Except String Value
   | .obj [("args", .arr (y :: ys)), ("tag", x)] => do
     let t ← tagOf x
     return .variant t (← fromLosslessList (y :: ys))
-  | _ => .error "not a lossless value"
+  | j => .error ⟨formCode j, "not a lossless value"⟩
 
-def fromLosslessList : List JSON → Except String (List Value)
+def fromLosslessList : List JSON → Except Error (List Value)
   | [] => .ok []
   | x :: xs => do return (← fromLossless x) :: (← fromLosslessList xs)
 
-def fromLosslessMembers : List (String × JSON) → Except String (List (String × Value))
+def fromLosslessMembers : List (String × JSON) → Except Error (List (String × Value))
   | [] => .ok []
   | (k, x) :: ms => do return (k, ← fromLossless x) :: (← fromLosslessMembers ms)
 end
 
 /-! ## Reading text -/
 
-def checkFits (L : Limits) (v : Value) : Except String Value :=
-  if v.fits L then .ok v else .error "outside the limits"
+def checkFits (L : Limits) (v : Value) : Except Error Value :=
+  if v.fits L then .ok v else .error ⟨v.limitCode L, "outside the limits"⟩
 
 /-- JSON text without a schema, within the limits (§16.1): JSON nesting at most `d`. -/
-def readSchemaless (L : Limits) (t : Text) : Except String Value := do
+def readSchemaless (L : Limits) (t : Text) : Except Error Value := do
   checkFits L (← toValue (← parseDepth L L.maxDepth t))
 
 /-- Lossless JSON text, within the limits (§16.2). -/
-def readLossless (L : Limits) (t : Text) : Except String Value := do
+def readLossless (L : Limits) (t : Text) : Except Error Value := do
   checkFits L (← fromLossless (← parse L t))
 
 /-- The text of a value's lossless form. -/
@@ -647,6 +694,18 @@ private def schemaless (src : String) : Option String :=
 #guard schemaless "\uFEFF[1]" == some "[1]"
 #guard (readSchemaless { maxDepth := 2 } "[[1]]".toList).toOption.isSome
 #guard (readSchemaless { maxDepth := 2 } "[[[1]]]".toList).toOption.isNone
+
+private def losslessCode (src : String) : Option Code :=
+  match readLossless {} src.toList with
+  | .error e => some e.code
+  | .ok _ => none
+
+-- Error codes (spec §17).
+#guard losslessCode "{\"tag\": \"T\", \"args\": []}" == some .losslessForm && losslessCode "{\"num\": \"1E5\"}" == some .losslessNumber
+#guard losslessCode "{\"bytes\": \"0B34\"}" == some .losslessBytes && losslessCode "{\"tag\": \"t\"}" == some .invalidTag
+#guard losslessCode "{\"num\": \"1e6145\"}" == some .exponentTooLarge && losslessCode "1" == some .losslessForm
+#guard losslessCode "{\"tag\": \"\", \"args\": \"\"}" == some .invalidTag && losslessCode "{\"args\": [], \"tag\": 1}" == some .invalidTag
+#guard losslessCode "{\"tag\": \"T\", \"args\": \"\"}" == some .losslessForm
 
 end JSON
 end Haus

@@ -407,6 +407,7 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
         const tag = o["_tag"]
         if (tag === "None") return only(o, [], tag, at), variant("None")
         if (tag === "Some") return only(o, ["value"], tag, at), variant("Some", [read(t.item, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
+        if (typeof tag !== "string") return fail(`expected a member "_tag": "None" or "Some"`, at, "missing-member", { expected: `"_tag"` })
         return fail(`expected "_tag": "None" or "Some"`, at, "unknown-tag")
       }
       case "variant":
@@ -425,7 +426,7 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
       if (skip.includes(k)) continue
       const type = t.fields.get(k)
       if (type !== undefined) out.set(k, read(type, o[k]!, at.child(k), depth + 1, 0))
-      else if (t.closed) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} (the record is closed)`, at, "unknown-field")
+      else if (t.closed) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} (the record is closed)`, at.child(k), "unknown-field")
     }
     return out
   }
