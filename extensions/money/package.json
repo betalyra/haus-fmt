@@ -1,5 +1,5 @@
 {
-  "name": "@haus/money",
+  "name": "@haus-fmt/money",
   "version": "1.0.0",
   "description": "haus schema package: exact amounts with a currency",
   "files": ["haus.package.haus", "money.schema.haus", "profiles"]

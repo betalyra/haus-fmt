@@ -57,7 +57,7 @@ Shop := [].{
 	id_of = |record| record.id
 }
 
-## `Money(19.99, EUR)` as a record. (The full @haus/money package, generated
+## `Money(19.99, EUR)` as a record. (The full @haus-fmt/money package, generated
 ## from its schema, is in extensions/money/roc; see examples/order.)
 money : Value -> Try({ amount : Str, currency : Str }, Decode.Error)
 money = |v| match v {

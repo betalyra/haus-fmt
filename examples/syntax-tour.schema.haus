@@ -4,14 +4,14 @@
 //
 // Prelude types (Bool, Maybe, Result, String, Int, Decimal, ...) are always in
 // scope; time comes from the standard module std/time, money from the schema
-// package @haus/money.
+// package @haus-fmt/money.
 //
 // Records and variants are OPEN by default: a reader ignores fields it doesn't
 // know and keeps unknown tags as Unknown values, so writers can add both
 // without breaking older readers. `closed` forbids anything not listed.
 
 import std/time (Date, ZonedDateTime)
-import @haus/money (Money)
+import @haus-fmt/money (Money)
 
 // ── Closed variant: exactly these tags, anything else is rejected ──
 type Level = closed < Debug | Info | Warn | Error >

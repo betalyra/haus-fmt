@@ -103,7 +103,7 @@ Variants arrive as tagged objects, so TypeScript knows only Slack contacts have 
 
 ### Rust, generated
 
-`haus-build` turns the schema into Rust types at build time. Variants become **enums**, and `match` makes you handle every case.
+`haus-fmt-build` turns the schema into Rust types at build time. Variants become **enums**, and `match` makes you handle every case.
 
 </Step>
 
@@ -122,7 +122,7 @@ Alan's Slack contact lost its `user`. Decoding stops and says **what** is wrong 
 - **TypeScript, new project:** typed imports, or build schemas in code with `@haus-fmt/haus/schema`.
 - **TypeScript, existing schemas:** `parseWith` with the library you already use.
 - **Effect:** `@haus-fmt/effect`.
-- **Rust:** `haus-build` in `build.rs`.
+- **Rust:** `haus-fmt-build` in `build.rs`.
 
 `Date` needed `import std/time`, while `String` didn't. What a schema can import, and from where: [Where types come from](/docs/types).
 

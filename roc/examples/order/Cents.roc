@@ -1,22 +1,22 @@
-## A codec (spec §13.4) for `@haus/money@1#Money`: integer cents, as payment
+## A codec (spec §13.4) for `@haus-fmt/money@1#Money`: integer cents, as payment
 ## APIs want them. `Money(44.40, EUR)` ↔ `{ cents: 4440, currency: "EUR" }`.
 ## More than 2 decimal places, or a currency that isn't ISO-shaped, is an error.
-import money.HausMoney
+import money.HausFmtMoney
 
 Cents := [].{
 	Target : { cents : I128, currency : Str }
 
-	decode : HausMoney.Money -> Try(Target, Str)
+	decode : HausFmtMoney.Money -> Try(Target, Str)
 	decode = |money| match money {
 		Money(amount, currency) => Ok({ cents: to_cents(amount)?, currency: iso(currency)? })
 	}
 
-	encode : Target -> HausMoney.Money
+	encode : Target -> HausFmtMoney.Money
 	encode = |{ cents, currency }| Money(from_cents(cents), Bare(currency))
 }
 
-## The @haus/money iso profile: a currency is three letters A–Z.
-iso : HausMoney.Currency -> Try(Str, Str)
+## The @haus-fmt/money iso profile: a currency is three letters A–Z.
+iso : HausFmtMoney.Currency -> Try(Str, Str)
 iso = |currency| match currency {
 	Bare(code) if code.to_utf8().len() == 3 and code.to_utf8().all(|b| b >= 'A' and b <= 'Z') => Ok(code)
 	Bare(code) => Err("${code} is not a currency: three letters A–Z (ISO 4217)")

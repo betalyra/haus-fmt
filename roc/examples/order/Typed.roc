@@ -3,8 +3,8 @@ import haus.Value
 import haus.Decode
 import haus.Encode
 import haus.Int
-import money.HausMoney
-import geo.HausGeo
+import money.HausFmtMoney
+import geo.HausFmtGeo
 import Cents
 import GeoJson
 import CivilDate
@@ -61,10 +61,10 @@ Typed := [].{
 	decode_root : Value -> Try(Root, Decode.Error)
 	decode_root = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", decode_user_id)?, placed: Decode.field(fs, "placed", |x1| Decode.codec(x1, Decode.time("Date"), CivilDate.decode))?, total: Decode.field(fs, "total", |x2| Decode.codec(x2, HausMoney.decode_money, Cents.decode))?, deliver_to: Decode.field(fs, "deliverTo", |x3| Decode.codec(x3, HausGeo.decode_lat_lng, GeoJson.decode))?, status: Decode.field(fs, "status", decode_status)? })
+		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", decode_user_id)?, placed: Decode.field(fs, "placed", |x1| Decode.codec(x1, Decode.time("Date"), CivilDate.decode))?, total: Decode.field(fs, "total", |x2| Decode.codec(x2, HausFmtMoney.decode_money, Cents.decode))?, deliver_to: Decode.field(fs, "deliverTo", |x3| Decode.codec(x3, HausFmtGeo.decode_lat_lng, GeoJson.decode))?, status: Decode.field(fs, "status", decode_status)? })
 	}
 
 	encode_root : Root -> Value
-	encode_root = |v| Encode.record([("id", Present(Encode.int(v.id))), ("customer", Present(encode_user_id(v.customer))), ("placed", Present(Encode.time("Date")(CivilDate.encode(v.placed)))), ("total", Present(HausMoney.encode_money(Cents.encode(v.total)))), ("deliverTo", Present(HausGeo.encode_lat_lng(GeoJson.encode(v.deliver_to)))), ("status", Present(encode_status(v.status)))])
+	encode_root = |v| Encode.record([("id", Present(Encode.int(v.id))), ("customer", Present(encode_user_id(v.customer))), ("placed", Present(Encode.time("Date")(CivilDate.encode(v.placed)))), ("total", Present(HausFmtMoney.encode_money(Cents.encode(v.total)))), ("deliverTo", Present(HausFmtGeo.encode_lat_lng(GeoJson.encode(v.deliver_to)))), ("status", Present(encode_status(v.status)))])
 
 }

@@ -8,7 +8,7 @@ Editor support for `.haus` data files and `.schema.haus` schemas. Learn the form
 
 - 🎨 **Highlighting** for `.haus` and `.schema.haus`; raw bidi control characters are marked as errors.
 - 🚨 **Errors as you type**, e.g. `{ ok: true }` → *booleans are the variants True / False*.
-- 💡 **Missing imports in schemas:** use `Date` or `Money` without importing it and the quick fix (Cmd+.) adds `import std/time (Date)` or `import @haus/money (Money)`, or adds the name to the import you already have. Packages like `@haus/money` and `@haus/geo` also need installing with your package manager; the error says so.
+- 💡 **Missing imports in schemas:** use `Date` or `Money` without importing it and the quick fix (Cmd+.) adds `import std/time (Date)` or `import @haus-fmt/money (Money)`, or adds the name to the import you already have. Packages like `@haus-fmt/money` and `@haus-fmt/geo` also need installing with your package manager; the error says so.
 - 🔍 **Hover with inferred types:** hover any key or value to see the type merged over the whole file. In `Person { type: Engineer }, Person { type: Designer }`, hovering `type` shows `< Engineer | Designer >`. Exact numbers warn when a `Float64` would round them.
 - 🧭 **Outline** of fields, items and variants (Cmd+Shift+O).
 - ✨ **Formatting:**

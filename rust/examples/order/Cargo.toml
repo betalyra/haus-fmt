@@ -8,9 +8,9 @@ publish = false
 [dependencies]
 haus = { package = "haus-fmt", path = "../../haus" }
 # Schema packages are ordinary dependencies (spec §13.3).
-haus-money = { path = "../../../extensions/money" }
-haus-geo = { path = "../../../extensions/geo" }
+haus-fmt-money = { path = "../../../extensions/money" }
+haus-fmt-geo = { path = "../../../extensions/geo" }
 jiff = "0.2"
 
 [build-dependencies]
-haus-build = { path = "../../haus-build" }
+haus-fmt-build = { path = "../../haus-build" }

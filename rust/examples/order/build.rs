@@ -8,8 +8,8 @@ fn main() -> Result<(), haus_build::Error> {
 
     // The app's types: each codec replaces one named type, selected by its id.
     haus_build::Config::new()
-        .codec("@haus/money@1#Money", "crate::codecs::Cents")
-        .codec("@haus/geo@1#LatLng", "crate::codecs::GeoJson")
+        .codec("@haus-fmt/money@1#Money", "crate::codecs::Cents")
+        .codec("@haus-fmt/geo@1#LatLng", "crate::codecs::GeoJson")
         .codec("std/time#Date", "crate::codecs::JiffDate")
         .compile_as(schema, "typed")
 }

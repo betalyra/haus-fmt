@@ -10,7 +10,7 @@ const repo = (path: string) => fileURLToPath(new URL(`../../../../${path}`, impo
 const read = (path: string) => readFileSync(repo(path), "utf8")
 /** Parse options for a schema file of the repo; official extensions come from extensions/. */
 const options = (path: string) =>
-  schemaOptions(repo(path), { packages: { "@haus/money": repo("extensions/money"), "@haus/geo": repo("extensions/geo") } })
+  schemaOptions(repo(path), { packages: { "@haus-fmt/money": repo("extensions/money"), "@haus-fmt/geo": repo("extensions/geo") } })
 const compileFile = (path: string) => Haus.compileSchemaFile(read(path), options(path))
 
 const compile = (text: string) => Haus.compileSchemaFile(text).schemas
@@ -201,7 +201,7 @@ type Root = { i: Instant, z: ZonedDateTime }`
     expect(schemaError("type S = Stream Int\ntype R = { s: S }")).toContain("a stream can only be the whole file")
     expect(schemaError("import std/time (Dat)")).toContain("std/time has no type Dat")
     expect(schemaError("import other/x (A)")).toContain("unknown module other/x")
-    expect(schemaError("import @haus/money (Money)")).toContain("no module resolver")
+    expect(schemaError("import @haus-fmt/money (Money)")).toContain("no module resolver")
     expect(schemaError("type A = { d: Date(1) }")).toContain("expected")
     expect(schemaError("type A = { x: _ }")).toContain("open by default")
     expect(schemaError("type A = < X | ... >")).toContain("a type name after '...'")
@@ -219,10 +219,10 @@ type Root = { i: Instant, z: ZonedDateTime }`
     expect(d).toContain(`readonly timeout: Option$.Option<bigint>`)
     expect(d).toContain(`readonly owner?: string`)
     // Imported types are declared too, with their ids.
-    expect(d).toContain(`type Money<C$ = {}> = Haus$.Lookup<C$, "@haus/money@1#Money", { readonly _tag: "Money"; readonly values: readonly [Haus$.Lookup<C$, "prelude#Decimal", string>, Currency<C$>] }>;`)
+    expect(d).toContain(`type Money<C$ = {}> = Haus$.Lookup<C$, "@haus-fmt/money@1#Money", { readonly _tag: "Money"; readonly values: readonly [Haus$.Lookup<C$, "prelude#Decimal", string>, Currency<C$>] }>;`)
     expect(d).not.toContain("BigDecimal")
     expect(d).not.toContain("DateTime$")
-    expect(d).toContain(`"@haus/money@1#Money"`)
+    expect(d).toContain(`"@haus-fmt/money@1#Money"`)
     expect(d).toContain(`Haus$.Lookup<C$, "std/time#Date", string>`)
     const g = Haus.schemaDeclarations(parseSchemaFile("type List a = closed < Nil | Cons a (List a) >"))
     expect(g).toContain(`export type List<A, C$ = {}> = { readonly _tag: "Nil" } | { readonly _tag: "Cons"; readonly values: readonly [A, List<A, C$>] };`)

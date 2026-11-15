@@ -10,7 +10,7 @@
 //! That's a parser in the sense of spec §13.1: it reads the syntax and knows
 //! no types. `Date("2026-02-30")` is just a tag with a string.
 //!
-//! With a schema, `haus-build` generates Rust types that implement [`Decode`]
+//! With a schema, `haus-fmt-build` generates Rust types that implement [`Decode`]
 //! and [`Encode`], and [`from_str`] / [`to_string`] check every rule of the
 //! schema: closed records and variants, integer ranges, the std/time profile.
 //! Writing checks the value too, since a [`Value`] built in code (the raw
@@ -53,7 +53,7 @@ pub use secret::Secret;
 pub use ser::{Encode, Encoder};
 pub use value::Value;
 
-/// Include the Rust types haus-build generated for a schema:
+/// Include the Rust types haus-fmt-build generated for a schema:
 /// `haus::include_schema!("order")` for `order.schema.haus`.
 #[macro_export]
 macro_rules! include_schema {

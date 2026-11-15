@@ -5,7 +5,7 @@ The same examples as in [Rust](../../rust/examples), on the same files in [`../.
 | Example | Shows |
 |---|---|
 | [`quickstart`](quickstart) | `thread.haus`: data imported as a typed module, decoding and encoding with its schema, errors |
-| [`order`](order) | `order.haus`: schema packages (`@haus/money`, `@haus/geo`) and codecs |
+| [`order`](order) | `order.haus`: schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) and codecs |
 | [`logs`](logs) | `logs.haus`: a stream, read and written entry by entry with Effect `Stream` |
 
 ## Running them

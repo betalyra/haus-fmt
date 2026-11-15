@@ -208,11 +208,11 @@ Reading follows §15: an open record or payload ignores members it doesn't list 
 ```python
 s = schema.load_schema(
     "order.schema.haus",
-    packages={"@haus/money": "../extensions/money", "@acme/ids": schema.installed_package("acme_ids")},
+    packages={"@haus-fmt/money": "../extensions/money", "@acme/ids": schema.installed_package("acme_ids")},
 )
 ```
 
-Relative package directories are relative to the schema file. The manifest's name must be the imported name, and `@haus/money@1` checks its major version. Types have the ids of spec §13.3: `@haus/money@1#Money` in a package, `<project name>/<path>#Name` for other files (the nearest `pyproject.toml`'s `[project] name`). Any other way of finding files is a `ModuleResolver`: an object with `resolve(module, from_key) -> ResolvedModule`, passed to `compile_schema(text, resolver=…, key=…, id=…)`.
+Relative package directories are relative to the schema file. The manifest's name must be the imported name, and `@haus-fmt/money@1` checks its major version. Types have the ids of spec §13.3: `@haus-fmt/money@1#Money` in a package, `<project name>/<path>#Name` for other files (the nearest `pyproject.toml`'s `[project] name`). Any other way of finding files is a `ModuleResolver`: an object with `resolve(module, from_key) -> ResolvedModule`, passed to `compile_schema(text, resolver=…, key=…, id=…)`.
 
 ### Codecs: other host types
 

@@ -148,7 +148,7 @@ class SchemaType:
 
     name: str
     id: str
-    """The type's identity (spec §13.3): `@haus/money@1#Money`, or its name in a file without an id."""
+    """The type's identity (spec §13.3): `@haus-fmt/money@1#Money`, or its name in a file without an id."""
     stream: bool
     """`type Events = Stream Event`: the type describes a whole file; each value decodes as `Event`."""
     _node: _decode._Node = field(repr=False)  # pyright: ignore[reportPrivateUsage]
@@ -299,7 +299,7 @@ def load_schema(
 ) -> Schema:
     """Read a schema file, with its relative imports next to it and `packages` (name → directory).
 
-    schema = load_schema("order.schema.haus", packages={"@haus/money": "vendor/money"})
+    schema = load_schema("order.schema.haus", packages={"@haus-fmt/money": "vendor/money"})
     """
     module = read_module(path)
     file = Path(module.key)

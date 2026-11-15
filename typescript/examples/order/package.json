@@ -15,8 +15,8 @@
   },
   "dependencies": {
     "@haus-fmt/effect": "workspace:*",
-    "@haus/geo": "workspace:*",
-    "@haus/money": "workspace:*",
+    "@haus-fmt/geo": "workspace:*",
+    "@haus-fmt/money": "workspace:*",
     "effect": "4.0.6"
   }
 }

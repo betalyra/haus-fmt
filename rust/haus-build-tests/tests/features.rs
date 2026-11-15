@@ -1,4 +1,4 @@
-//! The code haus-build generates, for every kind of type (features.schema.haus, next to Cargo.toml).
+//! The code haus-fmt-build generates, for every kind of type (features.schema.haus, next to Cargo.toml).
 
 mod features {
     haus::include_schema!("features");

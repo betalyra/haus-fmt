@@ -1,5 +1,5 @@
 [package]
-name = "haus-build"
+name = "haus-fmt-build"
 version = "0.1.0"
 description = "Rust types from haus schemas, generated in build.rs"
 readme = "../README.md"
@@ -10,6 +10,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
+
+# Published as haus-fmt-build, imported as haus_build.
+[lib]
+name = "haus_build"
 
 [dependencies]
 haus = { package = "haus-fmt", path = "../haus", version = "0.1.0" }

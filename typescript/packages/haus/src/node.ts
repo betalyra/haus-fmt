@@ -2,17 +2,17 @@
 /**
  * Resolving schema imports from the file system (Node):
  *
- *   import @haus/money (Money)    → node_modules/@haus/money/haus.package.haus → its schema file
- *   import ./common (Address)     → ./common.schema.haus, next to the importing file
+ *   import @haus-fmt/money (Money)    → node_modules/@haus-fmt/money/haus.package.haus → its schema file
+ *   import ./common (Address)         → ./common.schema.haus, next to the importing file
  *
  *   const file = parseSchemaFile(text, schemaOptions(path))
  *
  * A schema package has a manifest, `haus.package.haus`, next to its schema:
  *
- *   { name: "@haus/money", version: "1.2.0", schema: "money.schema.haus" }
+ *   { name: "@haus-fmt/money", version: "1.2.0", schema: "money.schema.haus" }
  *
  * The manifest gives types their identity in every language
- * (`@haus/money@1#Money`), independent of how a package manager names the
+ * (`@haus-fmt/money@1#Money`), independent of how a package manager names the
  * package. Files outside a schema package are identified by the nearest
  * package.json name and their path (`my-app/src/order#Root`).
  */
@@ -97,7 +97,7 @@ const read = (path: string): ResolvedModule => {
 export interface NodeResolverOptions {
   /** Where relative imports of the root file resolve from, if it has no key (default: the working directory). */
   readonly base?: string
-  /** Package directories by name, looked up before node_modules: `{ "@haus/money": "../extensions/money" }`. */
+  /** Package directories by name, looked up before node_modules: `{ "@haus-fmt/money": "../extensions/money" }`. */
   readonly packages?: Readonly<Record<string, string>>
 }
 

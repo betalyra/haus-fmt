@@ -3,9 +3,9 @@
 | Crate | What it is |
 |---|---|
 | [`haus-fmt`](haus) | Imported as `haus`. Parser, data model (`haus::Value`), `Decode`/`Encode`, std/time, codecs, compact writer, JSON (`haus::json`). Passes the [conformance suite](../test-suite), JSON suite included. |
-| [`haus-build`](haus-build) | Rust types from `.schema.haus` files, generated in `build.rs`. Also `haus-gen`, which generates the Roc modules. |
+| [`haus-fmt-build`](haus-build) | Imported as `haus_build`. Rust types from `.schema.haus` files, generated in `build.rs`. Also `haus-gen`, which generates the Roc modules. |
 | [`haus-build-tests`](haus-build-tests) | Tests of the generated code. |
-| [`haus-money`, `haus-geo`](../extensions) | The official schema packages, as crates. |
+| [`haus-fmt-money`, `haus-fmt-geo`](../extensions) | Imported as `haus_money`, `haus_geo`. The official schema packages, as crates. |
 
 ## Examples
 
@@ -78,7 +78,7 @@ unchanged. `to_i64()` / `to_i128()` give it as a native integer when it fits; th
 integer that must fit, the schema says `Int64` (out of range is a decode error).
 
 Schema packages are ordinary dependencies: a crate with `haus.package.haus`,
-`links = "<its name>"` and `haus_build::package()` in its build script. A crate
+`links = "<its library name>"` and `haus_build::package()` in its build script. A crate
 that depends on it directly can `import @org/name (…)`; the types are the
 package crate's own (`haus_money::Money`), so codecs written for them work in
 every crate.
@@ -116,7 +116,7 @@ At 256 levels, the deepest path, the lossless JSON form of nested variants,
 takes about 1.2 MiB of stack in a debug build and 0.3 MiB in a release build
 (measured on aarch64 macOS): well within the 2 MiB stack of a spawned thread,
 a test thread or an async task, and the 8 MiB of a main thread. Code that
-haus-build generates for a recursive type takes stack in proportion to the
+haus-fmt-build generates for a recursive type takes stack in proportion to the
 type's size: a record of 30 fields that holds itself in a `Maybe` takes about
 18 KiB per record to encode in a debug build (7 KiB in a release build), so
 128 of them, 256 levels, need more than 2 MiB in a debug build. Keep
@@ -136,7 +136,7 @@ exactly) and a writer, both in `haus::json`. No new dependencies.
 | JSON Lines | `haus::json::to_string_all`, `from_str_all`, and `encode` / `decode` over `std::io` |
 | The JSON tree | `haus::Json` (numbers as text), `haus::json::parse`, `haus::json::write` |
 
-haus-build implements `ToJson` and `FromJson` for every generated type; the
+haus-fmt-build implements `ToJson` and `FromJson` for every generated type; the
 prelude types implement them in `haus`. `Int`, `Int64` and `UInt64` are
 strings (`"-12"`), `Decimal` a string with its scale (`"19.90"`), `Bytes`
 base64, floats in the spelling of §15 (`"NaN"`, `"Infinity"`, `"-Infinity"`

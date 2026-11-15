@@ -1,7 +1,7 @@
 /**
  * Codecs: the application's choice of a host type for a named haus type.
  *
- *   import * as money from "@haus/money/money.schema.haus"
+ *   import * as money from "@haus-fmt/money/money.schema.haus"
  *
  *   const cents = Haus.codec(money.Money, (base) =>
  *     base.pipe(Schema.decodeTo(Cents, SchemaTransformation.transform({ decode: toCents, encode: fromCents }))))
@@ -13,7 +13,7 @@
  * (what haus decodes without codecs). It runs after the base, so it can add
  * checks and change the type, but data that the schema rejects stays
  * rejected, and the haus text never changes. Codecs find their type by its
- * id (`@haus/money@1#Money`), the same in every language.
+ * id (`@haus-fmt/money@1#Money`), the same in every language.
  */
 import type { Schema } from "effect"
 
@@ -21,7 +21,7 @@ import type { Schema } from "effect"
 
 /**
  * A type family: the type of a schema-file type for a map of codec types by
- * id (`{ "@haus/money@1#Money": Cents }`). Generated declarations define
+ * id (`{ "@haus-fmt/money@1#Money": Cents }`). Generated declarations define
  * one per type; `Kind` applies it.
  */
 export interface TypeLambda {
@@ -81,7 +81,7 @@ export const setId = <S extends object>(schema: S, id: string): S => {
   return schema
 }
 
-/** The id of a named type's schema (`@haus/money@1#Money`, `std/time#Date`), if it has one. */
+/** The id of a named type's schema (`@haus-fmt/money@1#Money`, `std/time#Date`), if it has one. */
 export const idOf = (schema: Schema.Top): string | undefined => ids.get(schema)
 
 type IdOf<S> = S extends { readonly "~haus.id"?: infer Id } ? (NonNullable<Id> extends infer I extends string ? I : string) : string

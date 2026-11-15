@@ -7,7 +7,7 @@
 //!   [`crate::from_lossless_json`] carry every haus value through JSON and back:
 //!   `{"num": "19.90"}`, `{"tag": "Some", "args": […]}`.
 //! - **Plain** (§16.3), the JSON a JSON consumer expects, needs the schema
-//!   type: haus-build implements [`ToJson`] and [`FromJson`] for every type it
+//!   type: haus-fmt-build implements [`ToJson`] and [`FromJson`] for every type it
 //!   generates, and [`to_string`] / [`from_str`] write and read them.
 //!
 //! ```
@@ -72,7 +72,7 @@ impl Json {
     }
 }
 
-/// A Rust type written as plain JSON (spec §16.3). haus-build implements it
+/// A Rust type written as plain JSON (spec §16.3). haus-fmt-build implements it
 /// for the types it generates.
 pub trait ToJson {
     /// Whether this type's JSON can be `null`: only a `Maybe` that writes
@@ -94,7 +94,7 @@ pub trait ToJson {
     }
 }
 
-/// A Rust type read from plain JSON (spec §16.3). haus-build implements it
+/// A Rust type read from plain JSON (spec §16.3). haus-fmt-build implements it
 /// for the types it generates.
 pub trait FromJson: Sized {
     /// As [`ToJson::NULLABLE`].

@@ -64,10 +64,10 @@ The documentation lives at [haus-fmt.org/docs](https://haus-fmt.org/docs):
 | [`spec/lean/`](spec/lean) | The Lean model and proofs, and `haus-ref`, the reference parser |
 | [`test-suite/`](test-suite) | Conformance files every parser and schema binding must pass |
 | [`typescript/`](typescript) | Parser, schemas, formatter, type inference, Standard Schema, Effect adapter, typed imports, examples |
-| [`rust/`](rust) | Parser, `haus-build` (Rust and Roc types from schemas, with codecs), examples |
+| [`rust/`](rust) | Parser, `haus-fmt-build` (Rust and Roc types from schemas, with codecs), examples |
 | [`roc/`](roc) | Parser, decoding, encoding, streams, examples |
 | [`python/`](python) | Parser, streams, canonical form and hashing |
-| [`extensions/`](extensions) | Official schema packages (`@haus/money`, `@haus/geo`) |
+| [`extensions/`](extensions) | Official schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) |
 | [`editors/vscode/`](editors/vscode) | The VS Code extension |
 | [`fuzz/`](fuzz) | Differential fuzzing of all implementations against each other and `haus-ref` |
 | [`examples/`](examples) | Sample `.haus` and `.schema.haus` files shared by the examples |

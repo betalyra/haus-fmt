@@ -5,7 +5,7 @@ language-neutral package:
 
 | File | What it is |
 |---|---|
-| `haus.package.haus` | The manifest: name and version. They make the identity of its types, the same in every language: `@haus/money@1#Money`. |
+| `haus.package.haus` | The manifest: name and version. They make the identity of its types, the same in every language: `@haus-fmt/money@1#Money`. |
 | `*.schema.haus` | The schema. Shape only, like every haus schema. |
 | `profiles/*.vectors.haus` | Profiles: rules beyond the shape that codecs can implement, with test vectors. |
 
@@ -22,5 +22,5 @@ scripts, and publish every language from one source.
 
 | Package | Types | Profiles |
 |---|---|---|
-| [`@haus/money`](money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
-| [`@haus/geo`](geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |
+| [`@haus-fmt/money`](money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
+| [`@haus-fmt/geo`](geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |

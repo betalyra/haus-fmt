@@ -9,4 +9,4 @@ publish = false
 haus = { package = "haus-fmt", path = "../../haus" }
 
 [build-dependencies]
-haus-build = { path = "../../haus-build" }
+haus-fmt-build = { path = "../../haus-build" }

@@ -83,6 +83,8 @@ export default defineConfig({
           description:
             'haus is a data format for humans: records, variants instead of null, exact numbers, dates and times, streams of values, and optional schemas. It has bindings for TypeScript, Effect, Rust, Roc and Python.',
           rawContent: true,
+          // The cheat sheet right after the welcome page, so agents read it first.
+          promote: ['index*', 'docs', 'docs/cheat-sheet'],
         }),
       ],
       sidebar: [
@@ -93,6 +95,7 @@ export default defineConfig({
             { label: 'Install', slug: 'docs/install' },
             { label: 'A tour of haus', slug: 'docs/tour' },
             { label: 'Coming from JSON', slug: 'docs/from-json' },
+            { label: 'Cheat sheet', slug: 'docs/cheat-sheet' },
           ],
         },
         {

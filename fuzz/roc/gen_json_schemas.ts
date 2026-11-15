@@ -39,7 +39,7 @@ for (const path of schemas) {
   const name = path.split("/").pop()!.replace(".schema.haus", "")
   const module = pascal(name)
   modules.push(module)
-  const p = spawnSync("cargo", ["run", "-q", "--manifest-path", join(root, "rust/Cargo.toml"), "-p", "haus-build", "--bin", "haus-gen", "--", "roc", path, "--module", module, "--json", "--out", join(out, `${module}.roc`)], { encoding: "utf8" })
+  const p = spawnSync("cargo", ["run", "-q", "--manifest-path", join(root, "rust/Cargo.toml"), "-p", "haus-fmt-build", "--bin", "haus-gen", "--", "roc", path, "--module", module, "--json", "--out", join(out, `${module}.roc`)], { encoding: "utf8" })
   if (p.status !== 0) throw new Error(`haus-gen roc ${path} failed: ${p.stderr}`)
   // The non-generic definitions are the types a case can name.
   const types = [...readFileSync(path, "utf8").matchAll(/^type\s+([A-Z][A-Za-z0-9_]*)\s*=/gm)].map((m) => m[1]!)

@@ -1,7 +1,7 @@
 """Resolving schema imports from the file system (spec §13.3).
 
     import ./common (Address)      → common.schema.haus, next to the importing file
-    import @haus/money (Money)     → the package directory given for "@haus/money"
+    import @haus-fmt/money (Money) → the package directory given for "@haus-fmt/money"
 
 Python has no scoped package names, so packages are never searched for: the
 application lists its direct schema dependencies, by name, with their
@@ -9,9 +9,9 @@ directories (`packages=`). `installed_package` finds the directory of an
 installed Python package that ships one, without importing it. Each package
 directory holds a manifest, `haus.package.haus`, next to its schema:
 
-    { name: "@haus/money", version: "1.2.0", schema: "money.schema.haus" }
+    { name: "@haus-fmt/money", version: "1.2.0", schema: "money.schema.haus" }
 
-The manifest gives types their identity in every language (`@haus/money@1#Money`).
+The manifest gives types their identity in every language (`@haus-fmt/money@1#Money`).
 Files outside a schema package are identified by the nearest `pyproject.toml`
 project name and their path (`my-app/schemas/order#Root`).
 """
@@ -106,7 +106,10 @@ def _package_of(file: Path) -> Manifest | None:
 
 
 def identify(path: str | Path) -> str:
-    """The identity of a schema file (spec §13.3): `@haus/money@1`, `@haus/money@1/extra`, `my-app/schemas/order`."""
+    """The identity of a schema file (spec §13.3).
+
+    `@haus-fmt/money@1`, `@haus-fmt/money@1/extra`, `my-app/schemas/order`.
+    """
     file = Path(path).resolve()
     for d in _ancestors(file.parent):
         if (m := d / MANIFEST).is_file():
@@ -162,7 +165,7 @@ class FileResolver:
 def installed_package(name: str) -> Path:
     """The directory of an installed Python package (e.g. one that ships a schema package), without importing it.
 
-    FileResolver(packages={"@haus/money": installed_package("haus_money")})
+    FileResolver(packages={"@haus-fmt/money": installed_package("haus_money")})
     """
     spec = importlib.util.find_spec(name)
     if spec is None:

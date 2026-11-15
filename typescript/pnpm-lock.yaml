@@ -13,10 +13,10 @@ importers:
 
   ../examples:
     dependencies:
-      '@haus/geo':
+      '@haus-fmt/geo':
         specifier: workspace:*
         version: link:../extensions/geo
-      '@haus/money':
+      '@haus-fmt/money':
         specifier: workspace:*
         version: link:../extensions/money
 
@@ -32,7 +32,7 @@ importers:
       '@haus-fmt/effect':
         specifier: workspace:*
         version: link:../packages/effect
-      '@haus/money':
+      '@haus-fmt/money':
         specifier: workspace:*
         version: link:../../extensions/money
       effect:
@@ -82,10 +82,10 @@ importers:
       '@haus-fmt/effect':
         specifier: workspace:*
         version: link:../../packages/effect
-      '@haus/geo':
+      '@haus-fmt/geo':
         specifier: workspace:*
         version: link:../../../extensions/geo
-      '@haus/money':
+      '@haus-fmt/money':
         specifier: workspace:*
         version: link:../../../extensions/money
       effect:
