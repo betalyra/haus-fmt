@@ -154,7 +154,7 @@ const Cart = Schema.Struct({ items: Schema.Array(Schema.Struct({ qty: Schema.Big
 const error = yield* Effect.flip(Haus.decode(Cart)(`{ items: [{ qty: 1.5 }] }`))
 Haus.errorJson(error)
 // { code: "not-an-integer", message: "expected a whole number, got the number 1.5",
-//   path: "$.items[0].qty", hint: "Write the integer without a fraction or exponent: `1`, `1000`.",
+//   path: "$.items[0].qty", hint: "Write the integer without a fraction or exponent.",
 //   docs: "https://haus-fmt.org/docs/errors#not-an-integer" }
 ```
 
@@ -164,7 +164,7 @@ of Effect's own decoder, also in schemas you write by hand:
 | | code |
 |---|---|
 | a value of another kind (`"2"` for a number, a record for a struct, a tag for a string) | `type-mismatch` |
-| `Boolean`, `Option`, literals and tagged structs: a tag none of them takes / a known tag with another payload (`True(1)`, `Some`, `Point(1)`) | `unknown-tag` / `wrong-payload` |
+| `Boolean`, `Option`, literals and tagged structs: a tag none of them takes / a known tag with another payload (`True(1)`, `Some`, `Point(1)`, `Circle(1.5)` for a record case), at the variant, with a hint that says what the tag takes | `unknown-tag` / `wrong-payload` |
 | a number with a fraction or exponent for `BigInt` or an integer check (`Schema.Int`) | `not-an-integer` |
 | a number outside a range check (`isBetween`, `isGreaterThan`, …), the ranges of `Int8` … `UInt64`, a float too large | `out-of-range` |
 | a missing key / an unknown field of a closed record | `missing-field` / `unknown-field` |

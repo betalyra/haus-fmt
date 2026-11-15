@@ -111,7 +111,7 @@ describe("Effect's issues as codes (as the core decides, spec §17)", () => {
     { schema: Schema.Literals(["Debug", "Info"]), text: "Debug(1)", expected: "wrong-payload $" },
     { schema: Schema.Literals(["Debug", "Info"]), text: `"Debug"`, expected: "type-mismatch $" },
     { schema: Schema.TaggedStruct("Circle", { r: Schema.Finite }), text: "Square", expected: "unknown-tag $" },
-    { schema: Schema.TaggedStruct("Circle", { r: Schema.Finite }), text: "Circle(1)", expected: "type-mismatch $[0]" },
+    { schema: Schema.TaggedStruct("Circle", { r: Schema.Finite }), text: "Circle(1)", expected: "wrong-payload $" },
     { schema: Schema.TaggedStruct("Circle", { r: Schema.Finite }), text: "Circle", expected: "wrong-payload $" },
     { schema: Schema.TaggedStruct("Circle", { r: Schema.Finite }), text: "Circle {}", expected: "missing-field $" },
     { schema: Schema.TaggedStruct("Circle", { r: Schema.Finite }), text: `Circle { r: "1" }`, expected: "type-mismatch $.r" },
@@ -159,6 +159,23 @@ describe("Effect's issues as codes (as the core decides, spec §17)", () => {
       expect(yield* failure(schemas.Root!, text("pair: Pair(1, 2)"))).toBe("type-mismatch $.pair[1]")
       expect(yield* failure(schemas.Root!, text(`nick: Some(1)`))).toBe("type-mismatch $.nick[0]")
       expect(yield* failure(schemas.Root!, text(`payload: Wrap { values: [1, 2147483648] }`))).toBe("out-of-range $.payload.values[1]")
+    }))
+
+  it.effect("wrong-payload: at the variant, with a hint that names the case", () =>
+    Effect.gen(function* () {
+      const hint = (schema: Schema.Top, text: string) =>
+        Effect.flip(Haus.decode(schema as Schema.Codec<unknown>)(text)).pipe(Effect.map((e) => Haus.errorJson(e)))
+      const circle = Schema.TaggedStruct("Circle", { r: Schema.Finite })
+      expect(yield* hint(Schema.Struct({ shape: circle }), "{ shape: Circle(1.5) }")).toMatchObject({
+        code: "wrong-payload",
+        path: "$.shape",
+        hint: "Circle takes one argument, a record: write `Circle { … }`.",
+      })
+      expect(yield* hint(Schema.TaggedStruct("Empty", {}), "Empty(1)")).toMatchObject({ hint: "Empty takes no payload: write `Empty`." })
+      expect(yield* hint(Schema.Option(Schema.Finite), "Some")).toMatchObject({ hint: "Some takes 1 argument: write `Some(…)`." })
+      expect(yield* hint(Schema.Boolean, "True(1)")).toMatchObject({ hint: "True takes no payload: write `True`." })
+      const { schemas } = Haus.compileSchemaFile("type Root = < Point Float64 Float64 >")
+      expect(yield* hint(schemas.Root!, "Point(1)")).toMatchObject({ code: "wrong-payload", path: "$", hint: "Point takes 2 arguments: write `Point(…, …)`." })
     }))
 
   it.effect("a secret's error names its type, never the value", () =>

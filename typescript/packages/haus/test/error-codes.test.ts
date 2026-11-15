@@ -170,3 +170,42 @@ describe("the JSON form (spec §17)", () => {
     }
   })
 })
+
+describe("wrong-payload names the case (spec §15, §17)", () => {
+  const SCHEMA = "type Shape = < Circle { r: Float64 } | Point Float64 Float64 | Empty | Wrap Int >\ntype Root = { shape: Shape, on: Maybe Bool }"
+  const decoded = (data: string) => {
+    try {
+      h.decode(compileSchemaFile(SCHEMA).schemas["Root"]!, parse(data))
+    } catch (e) {
+      return errorJson(e)
+    }
+    throw new Error("accepted")
+  }
+  const checked = (data: string) => checkData(parseSchemaFile(SCHEMA), "Root", parseWithLocations(data))
+
+  it("a record case with one argument that isn't a record: wrong-payload at the variant", () => {
+    expect(decoded("{ shape: Circle(1.5), on: None }")).toMatchObject({
+      code: "wrong-payload",
+      path: "$.shape",
+      hint: "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.",
+    })
+    expect(checked("{ shape: Circle(1.5), on: None }")).toEqual([
+      { severity: "error", code: "wrong-payload", message: "Circle takes one argument, a record", hint: "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.", start: 9, end: 20 },
+    ])
+  })
+
+  it("positional, bare and prelude cases", () => {
+    const cases: [string, string][] = [
+      ["{ shape: Point(1), on: None }", "Point takes 2 arguments (Float64, Float64): write `Point(…, …)`."],
+      ["{ shape: Point { x: 1, y: 2 }, on: None }", "Point takes 2 arguments (Float64, Float64): write `Point(…, …)`."],
+      ["{ shape: Empty(1), on: None }", "Empty takes no payload: write `Empty`."],
+      ["{ shape: Wrap, on: None }", "Wrap takes 1 argument (Int): write `Wrap(…)`."],
+      ["{ shape: Empty, on: Some }", "Some takes 1 argument (Bool): write `Some(…)`."],
+      ["{ shape: Empty, on: Some(True(1)) }", "True takes no payload: write `True`."],
+    ]
+    for (const [data, hint] of cases) {
+      expect(decoded(data), data).toMatchObject({ code: "wrong-payload", hint })
+      expect(checked(data).map((i) => [i.code, i.hint]), data).toEqual([["wrong-payload", hint]])
+    }
+  })
+})

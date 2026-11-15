@@ -55,6 +55,8 @@ def render(entries: list[tuple[str, str, str]]) -> str:
         [
             "# Generated from spec/errors.haus by python/tests/test_error_codes.py. Don't edit:",
             "# edit spec/errors.haus and run `uv run python tests/test_error_codes.py` in python/.",
+            "# The fixes are the catalogue's text, kept on one line each.",
+            "# ruff: noqa: E501",
             '"""Every error code of spec §17, with its category and the fix reported as the hint."""',
             "",
             "from __future__ import annotations",
@@ -169,6 +171,48 @@ def test_a_decoding_error_as_json_has_the_path_and_the_catalogue_fix() -> None:
         "hint": ERROR_CODES["not-an-integer"].hint,
         "docs": "https://haus-fmt.org/docs/errors#not-an-integer",
     }
+
+
+SHAPES = compile_schema(
+    "type Shape = < Circle { r: Float64 } | Point Float64 Float64 | Empty >\n"
+    "type Holder = { shape: Shape, flag: Bool, n: Maybe Int }"
+)
+
+
+@pytest.mark.parametrize(
+    ("data", "path", "hint"),
+    [
+        # A record case takes one record: `Circle(1.5)` is the wrong payload, at the variant (spec §15).
+        (
+            "{ shape: Circle(1.5), flag: True, n: None }",
+            "$.shape",
+            "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.",
+        ),
+        (
+            '{ shape: Circle("r"), flag: True, n: None }',
+            "$.shape",
+            "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.",
+        ),
+        (
+            "{ shape: Circle, flag: True, n: None }",
+            "$.shape",
+            "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.",
+        ),
+        (
+            "{ shape: Point(1), flag: True, n: None }",
+            "$.shape",
+            "Point takes 2 arguments (Float64, Float64): write `Point(…, …)`.",
+        ),
+        ("{ shape: Empty(1), flag: True, n: None }", "$.shape", "Empty takes no payload: write `Empty`."),
+        ("{ shape: Empty, flag: True(1), n: None }", "$.flag", "True takes no payload: write `True`."),
+        ("{ shape: Empty, flag: True, n: Some }", "$.n", "Some takes 1 argument (Int): write `Some(…)`."),
+    ],
+)
+def test_a_wrong_payload_names_the_case(data: str, path: str, hint: str) -> None:
+    with pytest.raises(HausDecodeError) as info:
+        SHAPES["Holder"].parse(data)
+    e = info.value.to_json()
+    assert (e["code"], e["path"], e["hint"]) == ("wrong-payload", path, hint)
 
 
 def test_json_has_only_the_members_that_apply() -> None:

@@ -169,7 +169,7 @@ const effectPath = (path: ReadonlyArray<Key>) => path.map((k) => `[${JSON.string
  * An error at `path` (where in the decoded value, as Effect's issues have it),
  * with its place in `input`, the haus value decoded (see `hausPath`).
  */
-const located = (message: string, code: ErrorCode, path: ReadonlyArray<Key>, input: Value | undefined, d: { readonly expected?: string; readonly found?: string } = {}) =>
+const located = (message: string, code: ErrorCode, path: ReadonlyArray<Key>, input: Value | undefined, d: { readonly expected?: string; readonly found?: string; readonly hint?: string } = {}) =>
   new HausSchemaError({
     message: path.length === 0 ? message : `${message}\n  at ${effectPath(path)}`,
     ...(path.length === 0 ? {} : { path: [...path] }),
@@ -178,7 +178,8 @@ const located = (message: string, code: ErrorCode, path: ReadonlyArray<Key>, inp
   })
 
 /** A conversion error (convert.ts), decoding `input` or encoding. */
-export const conversionError = (e: ConversionError, input?: Value): HausSchemaError => located(e.message, e.code, e.path, input)
+export const conversionError = (e: ConversionError, input?: Value): HausSchemaError =>
+  located(e.message, e.code, e.path, input, e.hint === undefined ? {} : { hint: e.hint })
 
 /** An error of the core's JSON mapping (spec §16): its path is already a place in the haus value. */
 export const jsonError = (e: { readonly reason: string; readonly code: ErrorCode; readonly path: Path; readonly expected?: string; readonly found?: string }): HausSchemaError =>

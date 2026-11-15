@@ -95,3 +95,5 @@ For types shared within one project, you don't need a package: `import ./common 
 **Why isn't time in the prelude?** Prelude names are reserved in every schema. With `Time` in the prelude, a schema that has its own `Time` type would have to rename it. In a module, a name is only taken when you import it. And from 1.0 on, the prelude is fixed: new built-in types only go into modules, so no existing schema ever breaks.
 
 **Why isn't money a standard module?** A standard module has to pass three tests: the prelude can't express it, nearly every domain needs it, and a fixed, published grammar defines it. Time passes all three. Money passes the second only partly, `Decimal` already keeps amounts exact, and currencies are a registry that changes. So money is a package, versioned on its own. The tests are in [spec §13.2](/docs/spec#132-standard-modules).
+
+**Why can't a schema say "at most 100"?** A schema describes shape; rules about values go to codecs, package profiles or your application. More in [Design and FAQ](/docs/design#the-schema-describes-shape).

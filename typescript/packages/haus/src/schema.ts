@@ -18,7 +18,7 @@
  * dispatch on the tag, depth is limited, and every call has a work budget.
  * Types that contain themselves are declared with `h.Recursive`.
  */
-import { HausDecodeError, HausEncodeError, START, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
+import { HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
@@ -283,16 +283,19 @@ const describeJs = (value: unknown): string => {
   }
 }
 
-const mismatch = (expected: string, v: Value, at: At, code: ErrorCode = "type-mismatch"): never =>
-  at.reject(code, `expected ${expected}, found ${describe(v)}`, { expected, found: describe(v) })
+const mismatch = (expected: string, v: Value, at: At, code: ErrorCode = "type-mismatch", hint?: string): never =>
+  at.reject(code, `expected ${expected}, found ${describe(v)}`, { expected, found: describe(v), ...(hint === undefined ? {} : { hint }) })
 
 /**
  * For a closed variant with these tags (`Bool`, `Maybe`, an enum): an unknown
- * tag is `unknown-tag`, a known one with the wrong payload `wrong-payload`,
- * anything else a mismatch.
+ * tag is `unknown-tag`, a known one with the wrong payload `wrong-payload`
+ * (its hint says what the tag's case takes: `takes`, or no payload), anything
+ * else a mismatch.
  */
-const notCase = (expected: string, v: Value, at: At, tags: ReadonlySet<string>): never =>
-  mismatch(expected, v, at, v.kind !== "variant" ? "type-mismatch" : tags.has(v.tag) ? "wrong-payload" : "unknown-tag")
+const notCase = (expected: string, v: Value, at: At, tags: ReadonlySet<string>, takes: (tag: string) => CasePayload = () => ({ kind: "none" })): never =>
+  v.kind !== "variant" ? mismatch(expected, v, at)
+  : tags.has(v.tag) ? mismatch(expected, v, at, "wrong-payload", payloadHint(v.tag, takes(v.tag)))
+  : mismatch(expected, v, at, "unknown-tag")
 
 const BOOL_TAGS: ReadonlySet<string> = new Set(["True", "False"])
 const MAYBE_TAGS: ReadonlySet<string> = new Set(["None", "Some"])
@@ -582,7 +585,7 @@ const maybe_ = <A>(inner: Schema<A>): Schema<Maybe<A>> =>
     (v, p) => {
       if (v.kind === "variant" && v.tag === "None" && v.args.length === 0) return none
       if (v.kind === "variant" && v.tag === "Some" && v.args.length === 1) return { _tag: "Some", value: inner.decode(v.args[0]!, p.child(0)) }
-      return notCase(`None | Some(${inner.expected})`, v, p, MAYBE_TAGS)
+      return notCase(`None | Some(${inner.expected})`, v, p, MAYBE_TAGS, (tag) => (tag === "Some" ? { kind: "args", types: [inner.expected] } : { kind: "none" }))
     },
     (a, p) => {
       if (!isMaybe(a)) return invalid(`a Maybe ({ _tag: "None" } or { _tag: "Some", value })`, a, p)
@@ -764,6 +767,17 @@ const isTuple = (c: Case): c is TupleSchema<readonly AnySchema[]> => "kind" in c
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nestsPayload = (c: RecordSchema<any>): boolean => c.keys.includes("_tag")
 
+/** A record case's type for hints, without the open record's `| _`: `{ r: Float64 }`. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const recordType = (c: RecordSchema<any>): string => c.expected.replace(/ \| _ \}$/, " }")
+
+/** A variant's payload as an error describes it: `no payload`, `1 argument (a number)`, `a record`. */
+const payloadFound = (v: HVariant): string =>
+  v.args.length === 0 ? "no payload"
+  : v.args.length === 1 && v.args[0]!.kind === "record" ? "a record"
+  : v.args.length === 1 ? `1 argument (${describe(v.args[0]!)})`
+  : `${v.args.length} arguments`
+
 /** A list of tags for error messages, shortened for very large variants. */
 const tagList = (tags: readonly string[]) => (tags.length > 10 ? `${tags.slice(0, 10).join(" | ")} | … (${tags.length} tags)` : tags.join(" | "))
 
@@ -780,26 +794,28 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
       if (open) return unknownOf(v) as A
       return at.reject("unknown-tag", `unknown tag '${v.tag}', expected one of ${tagList(tags)}`, { expected: `one of ${tagList(tags)}`, found: v.tag })
     }
-    const arity = (n: number, shape: string) => {
-      if (v.args.length !== n) at.reject("wrong-payload", `'${v.tag}' expects ${shape}, found ${v.args.length} argument(s)`, { expected: shape, found: `${v.args.length} argument(s)` })
+    const wrong = (shape: string, takes: CasePayload): never =>
+      at.reject("wrong-payload", `'${v.tag}' expects ${shape}, found ${payloadFound(v)}`, { expected: shape, found: payloadFound(v), hint: payloadHint(v.tag, takes) })
+    const arity = (n: number, shape: string, takes: CasePayload) => {
+      if (v.args.length !== n) wrong(shape, takes)
     }
     if (c === Unit) {
-      arity(0, "no payload")
+      arity(0, "no payload", { kind: "none" })
       return { _tag: v.tag } as A
     }
     if (isRecordSchema(c)) {
-      arity(1, "a record payload")
-      const arg = v.args[0]!
-      if (arg.kind !== "record") return mismatch(`${v.tag} { … }`, arg, at.child(0))
+      // One argument that is a record: `Circle(1.5)` is the wrong payload, at the variant (spec §15).
+      const [arg] = v.args
+      if (v.args.length !== 1 || arg?.kind !== "record") return wrong("a record payload", { kind: "record", type: recordType(c) })
       const out = c.decodeRecord(arg, at) as Record<string, unknown>
       if (nestsPayload(c)) return { _tag: v.tag, value: out } as A
       return Object.defineProperties({ _tag: v.tag }, Object.getOwnPropertyDescriptors(out)) as A
     }
     if (isTuple(c)) {
-      arity(c.items.length, `${c.items.length} argument(s)`)
+      arity(c.items.length, `${c.items.length} argument(s)`, { kind: "args", types: c.items.map((s) => s.expected) })
       return { _tag: v.tag, values: c.items.map((s, i) => s.decode(v.args[i]!, at.child(i))) } as A
     }
-    arity(1, "one argument")
+    arity(1, "one argument", { kind: "args", types: [(c as AnySchema).expected] })
     return { _tag: v.tag, value: (c as AnySchema).decode(v.args[0]!, at.child(0)) } as A
   }, (a, at) => {
     const obj = a as { _tag?: unknown; tag?: unknown; value?: unknown; values?: unknown }

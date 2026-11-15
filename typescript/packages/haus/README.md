@@ -222,7 +222,9 @@ Formatting, the canonical form and hashing don't recurse: they take any depth.
 Every error has a `code` (spec §17): a short name for the mistake, such as
 `payload-newline` or `missing-field`, the same in every haus binding and
 documented at `https://haus-fmt.org/docs/errors#<code>`. `hint` says how to
-fix it. `errorJson(e)` (or `JSON.stringify(e)`) gives the JSON form, for
+fix it: the catalogue's fix for the code, or a concrete one where the decoder
+knows more, such as what the tag of a `wrong-payload` takes (`Point takes 2
+arguments (Float64, Float64): write \`Point(…, …)\`.`). `errorJson(e)` (or `JSON.stringify(e)`) gives the JSON form, for
 tools and agents:
 
 ```ts

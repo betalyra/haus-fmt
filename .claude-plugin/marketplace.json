@@ -1,0 +1,24 @@
+{
+  "name": "haus-fmt",
+  "owner": {
+    "name": "Betalyra",
+    "url": "https://github.com/betalyra"
+  },
+  "metadata": {
+    "description": "Plugins for the haus data format (https://haus-fmt.org)."
+  },
+  "plugins": [
+    {
+      "name": "haus",
+      "source": "./claude-plugin",
+      "description": "Write, check and convert haus data files and schemas: the traps for JSON habits, the haus check → fix → fmt loop, schema design and JSON conversion.",
+      "author": {
+        "name": "Betalyra"
+      },
+      "homepage": "https://haus-fmt.org",
+      "repository": "https://github.com/betalyra/haus-fmt",
+      "license": "MIT",
+      "category": "development"
+    }
+  ]
+}

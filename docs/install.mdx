@@ -51,7 +51,7 @@ The libraries arrive on npm, crates.io and PyPI with the first release. Until th
     ```sh
     pip install haus-fmt
     ```
-    The parser and the stream reader. Typed decoding is on its way.
+    The parser, the stream reader, decoding with a schema file (`haus.schema`), JSON and the canonical form.
   </TabItem>
   <TabItem label="Roc">
     A Roc package with decoding, encoding and streams. See the [Roc README](https://github.com/betalyra/haus-fmt/tree/main/roc).
@@ -60,7 +60,11 @@ The libraries arrive on npm, crates.io and PyPI with the first release. Until th
 
 ## On the command line
 
-A `haus` command-line tool is coming, to format files, check data against a schema and infer schemas. Until then, the editor and the libraries do all of it.
+```sh
+cargo install haus-fmt-cli
+```
+
+The `haus` command checks files against their schemas, formats them, and prints canonical forms and hashes, with JSON output for scripts and agents. See [Command line](/docs/cli).
 
 ## Next
 

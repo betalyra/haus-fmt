@@ -12,7 +12,7 @@
  */
 import {
   arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
-  variant as vVariant, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
+  payloadHint, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import { Array as Arr, BigDecimal, DateTime, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
@@ -77,7 +77,8 @@ export type NumberType = "Int" | FloatType
  * (a number on a variant: its argument).
  */
 export class ConversionError {
-  constructor(readonly message: string, readonly code: ErrorCode, readonly path: ReadonlyArray<string | number> = []) {}
+  /** `hint`: a concrete fix (`wrong-payload`: what the tag's case takes); without one, the catalogue's. */
+  constructor(readonly message: string, readonly code: ErrorCode, readonly path: ReadonlyArray<string | number> = [], readonly hint?: string) {}
 }
 
 /** Convert the value at `key`: an error inside names its place. */
@@ -85,7 +86,7 @@ const at = <A>(key: string | number, f: () => A): A => {
   try {
     return f()
   } catch (e) {
-    if (e instanceof ConversionError) throw new ConversionError(e.message, e.code, [key, ...e.path])
+    if (e instanceof ConversionError) throw new ConversionError(e.message, e.code, [key, ...e.path], e.hint)
     throw e
   }
 }
@@ -113,9 +114,12 @@ const describe = (v: Value): string => {
  * An error here, rather than a schema-less conversion that a lenient Effect
  * schema might accept (a struct takes any object, a string literal any equal string).
  */
-const mismatch = (expected: string, v: Value, code: ErrorCode = "type-mismatch"): never => {
-  throw new ConversionError(`expected ${expected}, got ${describe(v)}`, code)
+const mismatch = (expected: string, v: Value, code: ErrorCode = "type-mismatch", hint?: string): never => {
+  throw new ConversionError(`expected ${expected}, got ${describe(v)}`, code, [], hint)
 }
+
+/** A listed tag with another payload than its case takes (spec §15): the hint names the case. */
+const wrongPayload = (expected: string, v: HVariant, takes: CasePayload): never => mismatch(expected, v, "wrong-payload", payloadHint(v.tag, takes))
 
 /**
  * The code for a value that isn't one of these tags as a closed variant takes
@@ -125,8 +129,9 @@ const mismatch = (expected: string, v: Value, code: ErrorCode = "type-mismatch")
 const caseCode = (v: Value, tags: ReadonlyArray<string>): ErrorCode =>
   v.kind !== "variant" ? "type-mismatch" : tags.includes(v.tag) ? "wrong-payload" : "unknown-tag"
 
-/** A value that is none of these tags of a closed variant (`Bool`, `Maybe`, an enum). */
-const notCase = (expected: string, v: Value, tags: ReadonlyArray<string>): never => mismatch(expected, v, caseCode(v, tags))
+/** A value that is none of these tags of a closed variant (`Bool`, `Maybe`, an enum); `takes` is what a tag's case takes (default: no payload). */
+const notCase = (expected: string, v: Value, tags: ReadonlyArray<string>, takes: (tag: string) => CasePayload = () => ({ kind: "none" })): never =>
+  v.kind === "variant" && tags.includes(v.tag) ? wrongPayload(expected, v, takes(v.tag)) : mismatch(expected, v, caseCode(v, tags))
 
 /** For an integer type: a number with a fraction or an exponent is `not-an-integer`, anything else a mismatch. */
 const notInteger = (v: Value): never => mismatch("a whole number", v, v.kind === "number" ? "not-an-integer" : "type-mismatch")
@@ -360,8 +365,9 @@ const compileByTag: (ast: AST) => Converter = Match.type<AST>().pipe(
   // A literal takes exactly the value it is written as: `EUR` for "EUR", `"a b"` for "a b".
   Match.tag("Literal", (ast): Converter => {
     const written = literalValue(ast.literal)
-    const code = (v: Value): ErrorCode => (written.kind === "variant" ? caseCode(v, [written.tag]) : "type-mismatch")
-    return (v) => (equals(v, written) ? ast.literal : mismatch(describe(written), v, code(v)))
+    return (v) => (equals(v, written) ? ast.literal
+      : written.kind === "variant" ? notCase(describe(written), v, [written.tag])
+      : mismatch(describe(written), v))
   }),
   Match.tag("Enum", (): Converter => (v) =>
     Option.match(variant(v, undefined, 0), { onSome: (x) => x.tag, onNone: () => generic(v) })),
@@ -411,12 +417,12 @@ const fail = (message: string, code: ErrorCode): never => {
 }
 
 /**
- * A case with a record payload given something else (spec §15): one argument
- * that isn't a record is a mismatch at that argument, any other number of
- * arguments the wrong payload.
+ * A case with a record payload given something else (spec §15): no argument,
+ * several, or one that isn't a record (`Circle(1.5)`) is the wrong payload,
+ * at the variant.
  */
 const notRecord = (v: HVariant, message: string): never => {
-  throw v.args.length === 1 ? new ConversionError(message, "type-mismatch", [0]) : new ConversionError(message, "wrong-payload")
+  throw new ConversionError(message, "wrong-payload", [], payloadHint(v.tag, { kind: "record" }))
 }
 
 function compileObject(ast: SchemaAST.Objects): Converter {
@@ -448,13 +454,13 @@ function compileObject(ast: SchemaAST.Objects): Converter {
     const name = tag.value
     if (v.kind !== "variant" || v.tag !== name) return mismatch(`the variant ${name}`, v, v.kind === "variant" ? "unknown-tag" : "type-mismatch")
     // Point(1, 2) → { values: [1, 2] }, with as many arguments as the case lists (spec §15).
-    if (values) return arity === undefined || v.args.length === arity ? [["values", vArr(v.args)]] : mismatch(`${name} with ${arity} argument(s)`, v, "wrong-payload")
+    if (values) return arity === undefined || v.args.length === arity ? [["values", vArr(v.args)]] : wrongPayload(`${name} with ${arity} argument(s)`, v, { kind: "args", count: arity })
     const [first] = v.args
     const record = `${name} { ${positional.map((n) => `${n}: …`).join(", ")} }`
     if (nested) return v.args.length === 1 && first?.kind === "record" ? [["value", first]] : notRecord(v, `expected ${name} { … }, got ${describe(v)}`) // Odd { _tag: 1 } → { value: { _tag: 1 } }
-    if (positional.length === 0) return v.args.length === 0 ? [] : mismatch(`${name} without a payload`, v, "wrong-payload") // Heartbeat
+    if (positional.length === 0) return v.args.length === 0 ? [] : wrongPayload(`${name} without a payload`, v, { kind: "none" }) // Heartbeat
     if (v.args.length === 1 && first?.kind === "record") return [...first.fields] // Circle { radius: 5 }
-    if (v.args.length === 0) return mismatch(record, v, "wrong-payload")
+    if (v.args.length === 0) return wrongPayload(record, v, { kind: "record" })
     // Point(1, 2) fills fields in declaration order, but only when the schema
     // opts in: otherwise reordering fields would silently swap values.
     if (!allowPositional) return notRecord(v, `'${name}' has positional arguments; write ${record} or wrap its schema in Haus.Positional`)
@@ -578,7 +584,7 @@ function compileDeclaration(ast: SchemaAST.Declaration): Converter {
         Option.isSome(variant(v, "None", 0)) ? Option.none()
         : Option.match(variant(v, "Some", 1), {
           onSome: (s) => Option.some(at("value", () => inner(s.args[0]!))),
-          onNone: () => notCase("None or Some(…)", v, MAYBE_TAGS),
+          onNone: () => notCase("None or Some(…)", v, MAYBE_TAGS, (tag) => (tag === "Some" ? { kind: "args", count: 1 } : { kind: "none" })),
         })
     }
     case "effect/schema/Redacted": {

@@ -76,12 +76,15 @@ fn mismatch_as(code: Code, what: &str, v: &Value) -> DecodeError {
 /// `Maybe`, `Result`): an unknown tag, a known tag with the wrong payload, or
 /// not a variant at all (spec §17).
 fn not_case(what: &str, v: &Value, tags: &[&str]) -> DecodeError {
-    let code = match v {
-        Value::Variant { tag, .. } if tags.contains(&tag.as_str()) => Code::WrongPayload,
-        Value::Variant { .. } => Code::UnknownTag,
-        _ => Code::TypeMismatch,
-    };
-    mismatch_as(code, what, v)
+    match v {
+        Value::Variant { tag, .. } if tags.contains(&tag.as_str()) => {
+            // The prelude's cases: `True`, `False` and `None` take nothing, the others one value.
+            let n = usize::from(!matches!(tag.as_str(), "True" | "False" | "None"));
+            mismatch_as(Code::WrongPayload, what, v).with_hint(positional_hint(tag, n, &[]))
+        }
+        Value::Variant { .. } => mismatch_as(Code::UnknownTag, what, v),
+        _ => mismatch_as(Code::TypeMismatch, what, v),
+    }
 }
 
 // ── records ──────────────────────────────────────────────────
@@ -151,6 +154,12 @@ pub fn variant<'a>(v: &'a Value, what: &str) -> R<(&'a str, &'a [Value])> {
 
 /// The payload of `tag`: exactly `N` values.
 pub fn args<'a, const N: usize>(tag: &str, args: &'a [Value]) -> R<&'a [Value; N]> {
+    typed_args::<N>(tag, args, &[])
+}
+
+/// The payload of `tag`: exactly `N` values, of the schema types `types`
+/// (`["Float64", "Float64"]`), which the hint names; `[]` if not known.
+pub fn typed_args<'a, const N: usize>(tag: &str, args: &'a [Value], types: &[&str]) -> R<&'a [Value; N]> {
     args.try_into().map_err(|_| {
         let (reason, expected) = match N {
             0 => (format!("{tag} takes no payload"), "no payload".to_owned()),
@@ -159,7 +168,34 @@ pub fn args<'a, const N: usize>(tag: &str, args: &'a [Value]) -> R<&'a [Value; N
         };
         DecodeError::new(Code::WrongPayload, reason)
             .with_expected_found(expected, format!("{} argument(s)", args.len()))
+            .with_hint(positional_hint(tag, N, types))
     })
+}
+
+/// What a tag with `n` positional values takes, as a hint:
+/// ``Point takes 2 arguments (Float64, Float64): write `Point(…, …)`.``
+/// `types` are the schema types, or `[]` if not known.
+pub fn positional_hint(tag: &str, n: usize, types: &[&str]) -> String {
+    if n == 0 {
+        return format!("{tag} takes no payload: write `{tag}`.");
+    }
+    let s = if n == 1 { "" } else { "s" };
+    let types = match types.len() == n {
+        true => format!(" ({})", types.join(", ")),
+        false => String::new(),
+    };
+    format!("{tag} takes {n} argument{s}{types}: write `{tag}({})`.", vec!["…"; n].join(", "))
+}
+
+/// What a tag with a record payload takes, as a hint:
+/// ``Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.``
+/// `record` is the record type as the schema writes it, or `""` if not known.
+pub fn record_hint(tag: &str, record: &str) -> String {
+    let record = match record.is_empty() {
+        true => String::new(),
+        false => format!(" {record}"),
+    };
+    format!("{tag} takes one argument, a record{record}: write `{tag} {{ … }}`.")
 }
 
 /// Decode payload value `i` of `tag`.
@@ -169,10 +205,26 @@ pub fn arg<T>(tag: &str, i: usize, v: &Value, f: impl FnOnce(&Value) -> R<T>) ->
 
 /// The record payload of `Tag { … }`.
 pub fn payload<'a>(tag: &'a str, args: &'a [Value]) -> R<Record<'a>> {
-    let [v] = self::args::<1>(tag, args)?;
-    match v {
-        Value::Record(_) => Record::new(v, tag).map(|r| Record { tag: Some(tag), ..r }),
-        _ => Err(mismatch(&format!("a record ({tag} {{ … }})"), v).tag(tag)),
+    record_payload(tag, args, "")
+}
+
+/// The record payload of `Tag { … }`, whose record type the schema writes
+/// `record` (`{ r: Float64 }`, for the hint; `""` if not known). Anything
+/// but one record, `Circle(1.5)` too, is the wrong payload (spec §15),
+/// reported at the variant.
+pub fn record_payload<'a>(tag: &'a str, args: &'a [Value], record: &str) -> R<Record<'a>> {
+    match args {
+        [v @ Value::Record(_)] => Record::new(v, tag).map(|r| Record { tag: Some(tag), ..r }),
+        _ => {
+            let found = match args {
+                [] => "no payload".to_owned(),
+                [v] => describe(v),
+                _ => format!("{} arguments", args.len()),
+            };
+            Err(DecodeError::new(Code::WrongPayload, format!("{tag} takes one argument, a record; found {found}"))
+                .with_expected_found("one argument, a record", found)
+                .with_hint(record_hint(tag, record)))
+        }
     }
 }
 

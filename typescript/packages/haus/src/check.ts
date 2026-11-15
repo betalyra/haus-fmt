@@ -14,7 +14,7 @@
  * is reported as one error at the secret, with its type and not its value.
  */
 import { deprecationNote, type Case, type Field, type Instance, type RecordType, type SchemaFile, type StdType, type Type, type VariantType } from "./schema-file.js"
-import type { ErrorCode } from "./errors.js"
+import { payloadHint, type CasePayload, type ErrorCode } from "./errors.js"
 import { toFloat } from "./float.js"
 import { checkStdTime } from "./std-time.js"
 import type { HRecord, HVariant, Value } from "./value.js"
@@ -24,6 +24,8 @@ export interface CheckIssue {
   /** Its code (spec §17), e.g. `missing-field`, or `unlisted-field` for a hint. */
   readonly code: ErrorCode
   readonly message: string
+  /** A concrete fix, where the checker knows one (`wrong-payload`: what the tag's case takes); otherwise the catalogue's fix for the code applies. */
+  readonly hint?: string
   /** UTF-16 offsets into the data text, `end` exclusive. */
   readonly start: number
   readonly end: number
@@ -149,6 +151,13 @@ function describe(t: Type): string {
       return t.name
   }
 }
+/** A record type's fields, as in the schema: `{ r: Float64, label?: String }` (long ones shortened). */
+const recordFields = (r: RecordType): string => {
+  const fields = r.fields.map((f) => `${quoteKey(f.key)}${f.optional ? "?" : ""}: ${describe(f.type)}`)
+  const shown = fields.length > 6 ? [...fields.slice(0, 6), "…"] : fields
+  return shown.length === 0 ? "{}" : `{ ${shown.join(", ")} }`
+}
+
 /** A short description of a type, as in the schema: `Array Line`, `Maybe Int`, `one of A, B`. */
 export const describeType = (t: Type): string => describe(t)
 
@@ -185,11 +194,13 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
   const root: Instance = definition.template
   const issues: CheckIssue[] = []
 
-  const report = (severity: CheckIssue["severity"], code: ErrorCode, message: string, start = 0, end = start + 1) => {
-    if (issues.length < MAX_ISSUES) issues.push({ severity, code, message, start, end: Math.max(end, start + 1) })
+  const report = (severity: CheckIssue["severity"], code: ErrorCode, message: string, start = 0, end = start + 1, hint?: string) => {
+    if (issues.length < MAX_ISSUES) issues.push({ severity, code, message, ...(hint === undefined ? {} : { hint }), start, end: Math.max(end, start + 1) })
   }
+  /** A known tag with another payload than its case takes: the hint names the case. */
+  const wrongPayload = (v: HVariant, message: string, takes: CasePayload) => report("error", "wrong-payload", message, ...at(v), payloadHint(v.tag, takes))
   const at = (v: Value) => [v.start ?? 0, v.end ?? (v.start ?? 0) + 1] as const
-  const mismatch = (v: Value, t: Type, code: ErrorCode = "type-mismatch") => report("error", code, `expected ${describe(t)}, found ${found(v)}`, ...at(v))
+  const mismatch = (v: Value, t: Type, code: ErrorCode = "type-mismatch", hint?: string) => report("error", code, `expected ${describe(t)}, found ${found(v)}`, ...at(v), hint)
   /** For a closed variant with these tags (`Bool`, `Maybe`): an unknown tag, a known one with the wrong payload, or another kind of value. */
   const notCase = (v: Value, tags: readonly string[]): ErrorCode =>
     v.kind !== "variant" ? "type-mismatch" : tags.includes(v.tag) ? "wrong-payload" : "unknown-tag"
@@ -223,7 +234,9 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
       case "maybe":
         if (v.kind === "variant" && v.tag === "None" && v.args.length === 0) return
         if (v.kind === "variant" && v.tag === "Some" && v.args.length === 1) return check(v.args[0]!, t.item)
-        return report("error", notCase(v, ["None", "Some"]), `expected None or Some(…) (${describe(type)}), found ${found(v)}`, ...at(v))
+        return v.kind === "variant" && (v.tag === "None" || v.tag === "Some")
+          ? wrongPayload(v, `expected None or Some(…) (${describe(type)}), found ${found(v)}`, v.tag === "None" ? { kind: "none" } : { kind: "args", types: [describe(t.item)] })
+          : report("error", notCase(v, ["None", "Some"]), `expected None or Some(…) (${describe(type)}), found ${found(v)}`, ...at(v))
       case "secret": {
         // Check what's inside, then replace whatever was found there (messages
         // quote values, keys and tags of the data) by one error without them.
@@ -260,7 +273,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
         if (v.kind !== "bytes") mismatch(v, type)
         return
       case "Bool":
-        if (v.kind !== "variant" || (v.tag !== "True" && v.tag !== "False") || v.args.length > 0) mismatch(v, type, notCase(v, ["True", "False"]))
+        if (v.kind !== "variant" || (v.tag !== "True" && v.tag !== "False") || v.args.length > 0) mismatch(v, type, notCase(v, ["True", "False"]), v.kind === "variant" && (v.tag === "True" || v.tag === "False") ? payloadHint(v.tag, { kind: "none" }) : undefined)
         return
       case "Float32":
       case "Float64":
@@ -331,15 +344,16 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
     const [first] = v.args
     switch (c.payload.kind) {
       case "none":
-        if (v.args.length > 0) report("error", "wrong-payload", `${v.tag} takes no payload`, ...at(v))
+        if (v.args.length > 0) wrongPayload(v, `${v.tag} takes no payload`, { kind: "none" })
         return
       case "record":
-        if (v.args.length !== 1 || first!.kind !== "record") return report("error", "wrong-payload", `write ${v.tag} { … } with a record`, ...at(v))
+        // One argument that is a record: `Circle(1.5)` is the wrong payload, at the variant (spec §15).
+        if (v.args.length !== 1 || first!.kind !== "record") return wrongPayload(v, `${v.tag} takes one argument, a record`, { kind: "record", type: recordFields(c.payload.record) })
         return record(first!, c.payload.record)
       case "positional": {
         const items = c.payload.items
         if (v.args.length !== items.length) {
-          return report("error", "wrong-payload", `${v.tag} takes ${items.length} argument${items.length === 1 ? "" : "s"} (${items.map(describe).join(", ")}), found ${v.args.length}`, ...at(v))
+          return wrongPayload(v, `${v.tag} takes ${items.length} argument${items.length === 1 ? "" : "s"} (${items.map(describe).join(", ")}), found ${v.args.length}`, { kind: "args", types: items.map(describe) })
         }
         v.args.forEach((arg, i) => check(arg, items[i]!))
       }

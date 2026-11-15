@@ -97,6 +97,7 @@ export default defineConfig({
             { label: 'A tour of haus', slug: 'docs/tour' },
             { label: 'Coming from JSON', slug: 'docs/from-json' },
             { label: 'Cheat sheet', slug: 'docs/cheat-sheet' },
+            { label: 'Using haus with agents', slug: 'docs/using-agents' },
           ],
         },
         {
@@ -112,6 +113,7 @@ export default defineConfig({
         {
           label: 'Reference',
           items: [
+            { label: 'Design and FAQ', slug: 'docs/design' },
             { label: 'Where types come from', slug: 'docs/types' },
             { label: 'Error codes', slug: 'docs/errors' },
             { label: 'Specification', slug: 'docs/spec' },

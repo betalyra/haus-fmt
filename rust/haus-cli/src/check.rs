@@ -86,7 +86,17 @@ struct Checker {
 pub fn run(args: &CheckArgs, color: Color) -> Status {
     let forced = match args.schema.as_deref().map(split_schema_arg) {
         Some((file, _)) if !file.is_file() => {
-            return output::fail(format!("--schema {}: no such file", file.display()));
+            let message = format!("--schema {}: no such file", file.display());
+            let failure =
+                Failure { code: ErrorCode::ImportNotFound, message, hint: "Fix the path given with --schema." };
+            return match args.json {
+                // With --json, the document still comes, saying why nothing was checked.
+                true => match output::print(&(json::write(&to_json(&[], Some(&failure))) + "\n")) {
+                    Ok(()) => Status::Failed,
+                    Err(e) => output::fail(e),
+                },
+                false => output::fail(failure.message),
+            };
         }
         forced => forced,
     };
@@ -101,7 +111,7 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
         Status::Ok
     };
     let text = if args.json {
-        json::write(&to_json(&reports, status)) + "\n"
+        json::write(&to_json(&reports, None)) + "\n"
     } else {
         human(&reports, output::colored(color, &stdout()))
     };
@@ -236,7 +246,28 @@ fn normalize(path: &Path) -> PathBuf {
     out
 }
 
-fn to_json(reports: &[Report], status: Status) -> Json {
+/// Why a check couldn't run at all (exit code 2): with --json, the
+/// document's top-level `error`, in the error form of spec §17.
+struct Failure {
+    code: ErrorCode,
+    message: String,
+    hint: &'static str,
+}
+
+impl Failure {
+    fn to_json(&self) -> Json {
+        let mut m = Members::default();
+        m.add("code", s(self.code.as_str()));
+        m.add("message", s(&self.message));
+        m.add("hint", s(self.hint));
+        m.add("docs", s(&self.code.docs()));
+        m.into()
+    }
+}
+
+/// The --json document: `ok`, then `error` if the check couldn't run, the files and the summary.
+fn to_json(reports: &[Report], failure: Option<&Failure>) -> Json {
+    let ok = failure.is_none() && reports.iter().all(Report::ok);
     let total = |f: fn(&Report) -> usize| reports.iter().map(f).sum::<usize>();
     let mut summary = Members::default();
     summary.add("files", n(reports.len()));
@@ -245,7 +276,8 @@ fn to_json(reports: &[Report], status: Status) -> Json {
     summary.add("hints", n(total(|r| r.count(Severity::Hint))));
     summary.add("unreadable", n(reports.iter().filter(|r| r.error.is_some()).count()));
     let mut m = Members::default();
-    m.add("ok", b(status == Status::Ok));
+    m.add("ok", b(ok));
+    m.opt("error", failure.map(Failure::to_json));
     m.add("files", Json::Array(reports.iter().map(Report::to_json).collect()));
     m.add("summary", summary.into());
     m.into()

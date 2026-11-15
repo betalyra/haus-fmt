@@ -260,12 +260,21 @@ def _mismatch(expected: str, v: Value, at: _At, code: ErrorCode = "type-mismatch
     at.fail(f"expected {expected}, found {found}", code=code, expected=expected, found=found)
 
 
-def _not_case(expected: str, v: Value, at: _At, tags: Iterable[str]) -> Never:
-    """For a closed variant with these tags (`Bool`, `Maybe`, an enum): an unknown tag is `unknown-tag`,
+def _not_case(expected: str, v: Value, at: _At, cases: Mapping[str, _CasePayload]) -> Never:
+    """For a closed variant with these cases (`Bool`, `Maybe`): an unknown tag is `unknown-tag`,
     a known one with the wrong payload `wrong-payload`, anything else a mismatch."""
     if not isinstance(v, Variant):
         _mismatch(expected, v, at)
-    _mismatch(expected, v, at, "wrong-payload" if v.tag in tags else "unknown-tag")
+    if v.tag not in cases:
+        _mismatch(expected, v, at, "unknown-tag")
+    found = _describe(v)
+    at.fail(
+        f"expected {expected}, found {found}",
+        code="wrong-payload",
+        hint=_payload_hint(v.tag, cases[v.tag]),
+        expected=expected,
+        found=found,
+    )
 
 
 def _not_integer(expected: str, v: Value, at: _At) -> Never:
@@ -508,7 +517,7 @@ class _Bool(_Node):
             case Variant("False", ()):
                 return False
             case _:
-                _not_case("Bool (True | False)", v, at, ("True", "False"))
+                _not_case("Bool (True | False)", v, at, {"True": None, "False": None})
 
     def encode(self, x: object, at: _At) -> Value:
         return _TRUE if self.write_json(x, at) else _FALSE
@@ -905,7 +914,7 @@ class _Maybe(_Node):
             case Variant("Some", (x,)):
                 return Some(self.item.decode(x, at.child(0)))
             case _:
-                _not_case(f"None | Some({_short(self.item.expected, 40)})", v, at, ("None", "Some"))
+                _not_case(f"None | Some({_short(self.item.expected, 40)})", v, at, {"None": None, "Some": (self.item,)})
 
     def _some(self, x: object, at: _At) -> object:
         match x:
@@ -1139,16 +1148,17 @@ class _Variant(_Node):
         payload = self.cases[tag]
         if payload is None:
             if args:
-                _wrong_payload(tag, "no payload", len(args), at)
+                _wrong_payload(tag, payload, "no payload", f"{len(args)} argument(s)", at)
             return Tagged(tag)
         if isinstance(payload, _Record):
+            # One argument that is a record; `Circle(1.5)` is the wrong payload, at the variant (spec §15).
             if len(args) != 1:
-                _wrong_payload(tag, "a record payload", len(args), at)
+                _wrong_payload(tag, payload, "one argument, a record", f"{len(args)} argument(s)", at)
             if not isinstance(args[0], Record):
-                _mismatch(f"{tag} {{ … }}", args[0], at.child(0))
+                _wrong_payload(tag, payload, "one argument, a record", _describe(args[0]), at)
             return Tagged(tag, payload.decode_fields(args[0].fields, at))
         if len(args) != len(payload):
-            _wrong_payload(tag, f"{len(payload)} argument(s)", len(args), at)
+            _wrong_payload(tag, payload, f"{len(payload)} argument(s)", f"{len(args)} argument(s)", at)
         out: list[object] = []
         for i, node in enumerate(payload):
             out.append(node.decode(args[i], at.child(i)))
@@ -1315,9 +1325,39 @@ def _member(j: dict[str, Json], name: str, tag: str, at: _At) -> Json:
     return j[name]
 
 
-def _wrong_payload(tag: str, shape: str, given: int, at: _At) -> Never:
-    found = f"{given} argument(s)"
-    at.fail(f"'{tag}' takes {shape}, found {found}", code="wrong-payload", expected=shape, found=found)
+def _wrong_payload(tag: str, payload: _CasePayload, shape: str, found: str, at: _At) -> Never:
+    at.fail(
+        f"'{tag}' takes {shape}, found {found}",
+        code="wrong-payload",
+        hint=_payload_hint(tag, payload),
+        expected=shape,
+        found=found,
+    )
+
+
+def _types(nodes: Iterable[str]) -> str:
+    """Up to ten type descriptions, each shortened (spec §9.8)."""
+    ts = [_short(t, 40) for t in nodes]
+    return ", ".join(ts) if len(ts) <= 10 else ", ".join(ts[:10]) + f", … ({len(ts)})"
+
+
+def _payload_hint(tag: str, payload: _CasePayload) -> str:
+    """The hint of a `wrong-payload`: what the case of `tag` takes, and how to write it."""
+    t = _short(tag)
+    if payload is None:
+        return f"{t} takes no payload: write `{t}`."
+    if isinstance(payload, _Record):
+        fields = _types(f"{f.key}{'?' if f.optional else ''}: {f.node.expected}" for f in payload.fields)
+        return (
+            f"{t} takes one argument, a record {{ {fields} }}: write `{t} {{ … }}`."
+            if fields
+            else (f"{t} takes one argument, a record: write `{t} {{ … }}`.")
+        )
+    n = len(payload)
+    holes = ", ".join("…" for _ in payload) if n <= 10 else "…"
+    return (
+        f"{t} takes {n} argument{'' if n == 1 else 's'} ({_types(p.expected for p in payload)}): write `{t}({holes})`."
+    )
 
 
 class _BackRef(_Node):

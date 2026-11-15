@@ -34,7 +34,7 @@ expression: pretty(&json)
           "message": "the schema comment/shapes.schema.haus has no type Polygon",
           "line": 1,
           "column": 12,
-          "hint": "Define the type, fix its spelling, or import it (`import std/time (Date)`).",
+          "hint": "Define the type, fix its spelling, or import it from the module that defines it.",
           "docs": "https://haus-fmt.org/docs/errors#unknown-type"
         }
       ]

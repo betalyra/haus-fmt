@@ -36,6 +36,36 @@ export const errorDocs = (code: ErrorCode): string => `https://haus-fmt.org/docs
 /** The catalogue's fix for an error code, reported as the hint when the error has none of its own. */
 export const errorHint = (code: ErrorCode): string => ERROR_CODES[code].hint
 
+/**
+ * What a variant's case takes (spec §15): no payload, one record (its type, if
+ * known), or positional arguments (their types, or just how many).
+ */
+export type CasePayload =
+  | { readonly kind: "none" }
+  | { readonly kind: "record"; readonly type?: string }
+  | { readonly kind: "args"; readonly types: readonly string[] }
+  | { readonly kind: "args"; readonly count: number }
+
+/**
+ * The hint of a `wrong-payload` error: the case the tag has, instead of the
+ * catalogue's generic fix. `Point takes 2 arguments (Float64, Float64): write
+ * \`Point(…, …)\`.`
+ */
+export const payloadHint = (tag: string, takes: CasePayload): string => {
+  switch (takes.kind) {
+    case "none":
+      return `${tag} takes no payload: write \`${tag}\`.`
+    case "record":
+      return `${tag} takes one argument, a record${takes.type === undefined ? "" : ` ${takes.type}`}: write \`${tag} { … }\`.`
+    case "args": {
+      const types = "types" in takes ? takes.types : undefined
+      const n = types?.length ?? ("count" in takes ? takes.count : 0)
+      const listed = types === undefined ? "" : ` (${types.join(", ")})`
+      return `${tag} takes ${n} argument${n === 1 ? "" : "s"}${listed}: write \`${tag}(${Array.from({ length: n }, () => "…").join(", ")})\`.`
+    }
+  }
+}
+
 /** Whether `s` is an error code of the catalogue (spec §17). */
 export const isErrorCode = (s: unknown): s is ErrorCode => typeof s === "string" && Object.hasOwn(ERROR_CODES, s)
 

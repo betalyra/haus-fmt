@@ -3,8 +3,8 @@ import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
 export {
-  ERROR_CODES, errorCode, errorDocs, errorHint, errorJson, formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, isErrorCode,
-  type ErrorCategory, type ErrorCode, type ErrorDetails, type ErrorJson, type Path,
+  ERROR_CODES, errorCode, errorDocs, errorHint, errorJson, formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, isErrorCode, payloadHint,
+  type CasePayload, type ErrorCategory, type ErrorCode, type ErrorDetails, type ErrorJson, type Path,
 } from "./errors.js"
 export {
   equalsJson, fromJson, fromJsonLines, jsonDepth, fromJsonValue, fromLosslessJson, fromLosslessJsonLines, fromLosslessJsonValue, isJsonObject, jsonObject, JsonNumber,
