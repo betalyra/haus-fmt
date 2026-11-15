@@ -30,7 +30,8 @@ describe("format: comments are kept", () => {
   }
   const commentTexts = (src: string) => {
     const { comments } = parseDocument(src)
-    return comments.map(([s, e]) => src.slice(s, e))
+    // The output has LF line endings, in comments too.
+    return comments.map(([s, e]) => src.slice(s, e).replaceAll("\r", ""))
   }
 
   it.effect.each(files)("$name", ({ bytes }) =>

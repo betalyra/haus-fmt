@@ -1,0 +1,17 @@
+{
+  hex: 0xFF,
+  neg_hex: -0x1f,
+  bin: 0b1010_1010,
+  separators: 1_000_000,
+  exponent: 1E+05,
+  small: 1e-07,
+  scale: 19.90,
+  neg_zero: -0,
+  escaped: "\u{41}\u{1F600}",
+  quoted_escape: "\"quoted\"",
+  bytes: x"0B 34 ff",
+  bytes_lower: x"deadbeef",
+  empty_bytes: x"",
+  empty_string: "",
+  inline: Money(1_000.00, EUR),
+}

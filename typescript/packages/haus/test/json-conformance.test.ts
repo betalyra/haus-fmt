@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-  canonical, compileSchemaFile, equals, equalsJson, fromJson, fromLosslessJson, fromLosslessJsonValue, HausDecodeError, HausSyntaxError, parseAll, parseJson,
+  canonical, compileSchemaFile, equals, equalsJson, errorCode, fromJson, fromLosslessJson, fromLosslessJsonValue, HausDecodeError, HausSyntaxError, parseAll, parseJson,
   stringifyJson, toLosslessJson, toLosslessJsonValue, type Json, type Value,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
@@ -18,6 +18,8 @@ interface Case {
   readonly input?: Value
   readonly output?: Value
   readonly json: string
+  /** For `Err`: the error code (spec §17). */
+  readonly code?: string
   readonly name: string
 }
 
@@ -31,12 +33,15 @@ const cases = (text: string): Case[] =>
     if (json?.kind !== "string") throw new Error(`not a case: ${canonical(v)}`)
     const input = field("input")
     const output = field("output") ?? input
+    const code = field("code")
+    if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
     return {
       kind: v.tag as Case["kind"],
       ...(type?.kind === "string" ? { type: type.value } : {}),
       ...(input ? { input } : {}),
       ...(output ? { output } : {}),
       json: json.value,
+      ...(code?.kind === "string" ? { code: code.value } : {}),
       name: `${v.tag} ${type?.kind === "string" ? type.value + " " : ""}${json.value}`,
     }
   })
@@ -47,11 +52,12 @@ const expectJson = (actual: Json, json: string) => {
   expect(equalsJson(actual, expected), `${stringifyJson(actual)} is not ${json}`).toBe(true)
 }
 
-const rejects = (f: () => unknown) => {
+const rejects = (f: () => unknown, code: string | undefined) => {
   try {
     f()
   } catch (e) {
     expect(e instanceof HausDecodeError || e instanceof HausSyntaxError, String(e)).toBe(true)
+    expect(errorCode(e), String(e)).toBe(code)
     return
   }
   throw new Error("expected an error")
@@ -75,14 +81,14 @@ describe("plain (spec §16.3)", () => {
         expect(canonical(h.encode(s, h.fromJson(s, c.json)))).toBe(canonical(c.output!))
         return
       case "Err":
-        return rejects(() => h.fromJson(s, c.json))
+        return rejects(() => h.fromJson(s, c.json), c.code)
     }
   })
 })
 
 describe("lossless (spec §16.2)", () => {
   it.each(cases(read("json/lossless.cases.haus")))("$name", (c) => {
-    if (c.kind === "Err") return rejects(() => fromLosslessJson(c.json))
+    if (c.kind === "Err") return rejects(() => fromLosslessJson(c.json), c.code)
     expectJson(toLosslessJsonValue(c.input!), c.json)
     expectJson(parseJson(toLosslessJson(c.input!)), c.json)
     expect(canonical(fromLosslessJson(c.json))).toBe(canonical(c.input!))
@@ -91,7 +97,7 @@ describe("lossless (spec §16.2)", () => {
 
 describe("without a schema (spec §16.1)", () => {
   it.each(cases(read("json/schemaless.cases.haus")))("$name", (c) => {
-    if (c.kind === "Err") return rejects(() => fromJson(c.json))
+    if (c.kind === "Err") return rejects(() => fromJson(c.json), c.code)
     expect(equals(fromJson(c.json), c.output!), canonical(fromJson(c.json))).toBe(true)
   })
 })

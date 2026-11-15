@@ -1,0 +1,1 @@
+[None, Some(1), Some { a: 1 }, Wrapped {}, Circle { r: 1.5 }, Point(1, 2), Pair({}, 1), Some([1]), Some([]), Nested(Some(Some(Some(1)))), Empty {}, Mixed(1, "two", x"03", [], {}, Four, Five(5)), WithRecordArg(1, { a: 1 })]

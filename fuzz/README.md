@@ -24,11 +24,16 @@ a failure prints the seed and keeps the shrunk inputs as an artifact.
 |---|---|
 | Generate | [`src/generate.ts`](src/generate.ts): random haus text with varied formatting (spacing, comments, CRLF, byte order mark, number spellings, quoted keys, block strings, both payload forms, trailing commas), values at and just past the limits, the conformance suite as seeds. Half of the inputs are then mutated: bytes deleted, edge characters inserted (quotes, `*/`, control and bidi characters, invalid UTF-8), slices duplicated, cut short. |
 | Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript and Python run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
-| Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree. |
+| Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree, and so must the error codes (spec §17) of runners that report them, wherever two report an error at the same position. |
 | Shrink | A disagreeing input is cut down to the smallest input that still disagrees, and saved to `.out/failures/` with every parser's result. |
 
 Error positions are reported separately: the spec fixes their units (§8)
-but not which error a parser reports first, so they may differ.
+but not which error a parser reports first, so they may differ. Error codes
+are compared where positions agree: an error at the same place is the same
+mistake. A runner that reports codes prints `err <line> <column> <code>
+<reason>` and is marked `{ codes: true }` in `runners.ts`; the others print
+`err <line> <column> <reason>`, and their codes aren't compared. Today Lean
+and TypeScript report codes.
 
 ## The runners
 
@@ -145,7 +150,12 @@ tests the check: `node --test fuzz/src/`.
 | Python | [`python/fuzz/schema_runner.py`](../python/fuzz/schema_runner.py): `haus.schema.compile_schema`, `decode`, `encode` |
 
 Nothing is masked: every binding's default host types keep the value (spec
-§13.4), so every runner must agree with Lean exactly. Lossy host types (Effect's
+§13.4), so every runner must agree with Lean exactly. Where Lean and another
+runner both report an error code (spec §17) at the same place, the codes must
+agree too: Lean's `--schema-batch` prints `err <place> <code> <reason>`, and a
+runner made with `external(…, codes = true)` in
+[`src/schema-runners.ts`](src/schema-runners.ts) is read the same way
+(TypeScript reports codes in this process; the others not yet). Lossy host types (Effect's
 `BigDecimal` and `DateTime`) are opt-in codecs that the runners don't use.
 
 ## JSON

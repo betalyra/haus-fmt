@@ -1,0 +1,6 @@
+// An application schema with imports of every kind.
+import std/time (Date)
+import ./common (Address)
+import @acme/ids@1 (UserId, Tagged)
+
+type Root = { user: UserId, home: Address, since: Date, label: Tagged String }

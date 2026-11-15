@@ -1,0 +1,6 @@
+// In a stream every item has a comma: the first is 80 columns with it, the second 81.
+Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+Pair(
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+),

@@ -95,10 +95,15 @@ inductive Seg
   | arg (tag : String) (i : Nat)
   deriving Repr, DecidableEq
 
-/-- An error: the place of the failing value, from the outside in, and why. -/
+/--
+An error: the place of the failing value, from the outside in, and why. The
+code (spec §17) names the mistake; decoding gives every error one, the JSON
+mappings (`Haus.Json.Plain`) don't yet.
+-/
 structure Error where
   path : List Seg
   reason : String
+  code : Option Code := none
   deriving Repr
 
 /-- The place as `$.items[2].price`; a variant's argument as `.Tag(0)`. -/
@@ -113,7 +118,14 @@ def under {α : Type} (s : Seg) : Except Error α → Except Error α
   | .error e => .error { e with path := s :: e.path }
   | .ok x => .ok x
 
-def fail {α : Type} (reason : String) : Except Error α := .error ⟨[], reason⟩
+def fail {α : Type} (reason : String) (code : Option Code := none) : Except Error α := .error { path := [], reason, code }
+
+/-- `fail` with a code (spec §17). -/
+abbrev reject {α : Type} (code : Code) (reason : String) : Except Error α := fail reason (some code)
+
+/-- The code of an error of `whnf`: a name that isn't defined, or a cycle of names. -/
+def whnfCode (reason : String) : Code :=
+  if reason.startsWith "unknown type" then .unknownType else .unguardedRecursion
 
 /-! ## Unfolding references -/
 
@@ -151,7 +163,8 @@ def missing? (fields : List Field) (fs : List (String × Value)) : Option String
   (fields.find? fun f => !f.optional && !fs.any (·.1 == f.key)).map (·.key)
 
 /-- The error for a value a `Secret` doesn't accept: its type, nothing of the value. -/
-def secretError (c : Ty) : Error := ⟨[], s!"not a valid {c.name} (in a Secret, so the value is not shown)"⟩
+def secretError (c : Ty) : Error :=
+  { path := [], reason := s!"not a valid {c.name} (in a Secret, so the value is not shown)", code := some .invalidSecret }
 
 /--
 The result inside `s` secrets. An error inside one names its place and the
@@ -186,33 +199,33 @@ mutual
 /-- **Decoding** (§15): the value `v` with the type `t`. -/
 def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
   match whnf env env.fuel t with
-  | .error r => fail r
+  | .error r => reject (whnfCode r) r
   | .ok (s, c) => hidden s c <|
     match c, v with
     | .string, .str x => .ok (.str x)
     | .bytes, .bytes bs => .ok (.bytes bs)
     | .int k, .num a =>
       match wholeLit a.toList with
-      | some n => if k.inRange n then .ok (.int n) else fail s!"out of range for {k.name}"
-      | none => fail s!"expected {k.name}: a whole number, without a fraction or an exponent"
+      | some n => if k.inRange n then .ok (.int n) else reject .outOfRange s!"out of range for {k.name}"
+      | none => reject .notAnInteger s!"expected {k.name}: a whole number, without a fraction or an exponent"
     | .float k, .num a =>
       match roundLit k a with
       | some x => .ok (.float k x)
-      | none => fail s!"too large for {k.name}"
+      | none => reject .outOfRange s!"too large for {k.name}"
     | .float k, .variant tag [] =>
       match floatTag? tag with
       | some x => .ok (.float k x)
-      | none => fail s!"expected {k.name}"
+      | none => reject .typeMismatch s!"expected {k.name}"
     | .decimal, .num a => .ok (.decimal a)
     | .any, v => .ok (.any v)
     | .time k, .variant tag [.str x] =>
       if tag == k.name && Time.check k x.toList then .ok (.time k x)
-      else fail s!"expected {k.name}"
+      else reject (if tag == k.name then .invalidTime else .typeMismatch) s!"expected {k.name}"
     | .array t, .arr xs => (decodeItems env t 0 xs).map .arr
     | .map t, .record fs => (decodeEntries env t fs).map .map
     | .record closed fields, .record fs =>
       match missing? fields fs with
-      | some k => fail s!"missing field {k}"
+      | some k => reject .missingField s!"missing field {k}"
       | none => (decodeFields env closed fields fs).map .record
     | .variant closed cases, .variant tag args =>
       match caseOf? cases tag, args with
@@ -221,11 +234,11 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
         under (.arg tag 0) ((decode env (.record cl fields) a).map fun x => .case tag [x])
       | some (.positional _ ts), args =>
         if args.length = ts.length then (decodeArgs env tag 0 ts args).map (.case tag)
-        else fail s!"{tag} takes {ts.length} arguments"
-      | some (.bare _), _ => fail s!"{tag} takes no arguments"
-      | some (.record _ _ _), _ => fail s!"{tag} takes one argument, a record"
-      | none, args => if closed then fail s!"unknown tag {tag}" else .ok (.unknown tag args)
-    | c, _ => fail s!"expected {c.name}"
+        else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
+      | some (.bare _), _ => reject .wrongPayload s!"{tag} takes no arguments"
+      | some (.record _ _ _), _ => reject .wrongPayload s!"{tag} takes one argument, a record"
+      | none, args => if closed then reject .unknownTag s!"unknown tag {tag}" else .ok (.unknown tag args)
+    | c, _ => reject .typeMismatch s!"expected {c.name}"
 
 def decodeItems (env : Env) (t : Ty) (i : Nat) : List Value → Except Error (List Typed)
   | [] => .ok []
@@ -252,7 +265,7 @@ def decodeFields (env : Env) (closed : Bool) (fields : List Field) :
       let ys ← decodeFields env closed fields fs
       return (k, y) :: ys
     | none =>
-      if closed then .error ⟨[.key k], "not a field of this closed record"⟩
+      if closed then .error { path := [.key k], reason := "not a field of this closed record", code := some .unknownField }
       else decodeFields env closed fields fs
 
 def decodeArgs (env : Env) (tag : String) (i : Nat) : List Ty → List Value → Except Error (List Typed)

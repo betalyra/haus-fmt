@@ -27,12 +27,16 @@
 //! JSON, [`to_lossless_json`] / [`from_lossless_json`] carry every value
 //! unchanged, and generated types implement [`ToJson`] / [`FromJson`] for
 //! the plain JSON of their type.
+//!
+//! [`format()`] writes a file in the standard layout (spec §11), keeping
+//! comments and blank lines: the same text as the TypeScript formatter.
 
 mod canonical;
 mod codec;
 pub mod de;
 mod error;
 mod float;
+mod formatter;
 pub mod json;
 mod parser;
 mod secret;
@@ -47,6 +51,7 @@ pub use canonical::{canonical, compare, equals};
 pub use codec::{Codec, same_id};
 pub use de::{AnyTag, Bytes, Decimal, Decode, Decoder, Int, Unknown};
 pub use error::{DecodeError, EncodeError, Error, Segment, SyntaxError};
+pub use formatter::{FormatOptions, Style, format};
 pub use json::{FromJson, Json, ToJson};
 pub use parser::{Limits, MAX_SUPPORTED_DEPTH, parse_with};
 pub use secret::Secret;

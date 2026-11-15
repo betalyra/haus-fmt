@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 import { suiteJson } from "./suite-json.js"
-import { canonical, hash, hashAll, Hasher, HausSyntaxError } from "../src/index.js"
-import { fixtures, parseBytes, repoFile, streamBytes } from "./haus.js"
+import { canonical, errorCode, hash, hashAll, Hasher, HausSyntaxError } from "../src/index.js"
+import { fixtures, InvalidUtf8, parseBytes, repoFile, streamBytes } from "./haus.js"
 
 const chunkSizes = (bytes: Uint8Array) => [1, 2, 3, 7, 64, Math.max(bytes.length, 1)]
 
@@ -48,12 +48,23 @@ describe("valid", () => {
 describe("invalid", () => {
   const invalid = fixtures("invalid")
 
+  /** The code of a rejection (spec §17); invalid UTF-8 is the decoder's TypeError. */
+  const codeOf = (e: unknown) => errorCode(e instanceof InvalidUtf8 ? e.cause : e)
+
   // Effect.flip: the test fails if parsing succeeds; an unexpected exception
   // (not a syntax or UTF-8 error) is a defect and fails it too.
-  it.effect.each(invalid)("$name: parseAll rejects", ({ bytes }) => Effect.flip(parseBytes(bytes)))
+  it.effect.each(invalid)("$name: parseAll rejects with invalid/$name.error", ({ bytes, code }) =>
+    Effect.gen(function* () {
+      const e = yield* Effect.flip(parseBytes(bytes))
+      expect(codeOf(e)).toBe(code)
+    }))
 
-  it.effect.each(invalid)("$name: stream rejects", ({ bytes }) =>
-    Effect.forEach([1, 5, Math.max(bytes.length, 1)], (size) => Effect.flip(streamBytes(bytes, size))))
+  it.effect.each(invalid)("$name: stream rejects with invalid/$name.error", ({ bytes, code }) =>
+    Effect.forEach([1, 5, Math.max(bytes.length, 1)], (size) =>
+      Effect.gen(function* () {
+        const e = yield* Effect.flip(streamBytes(bytes, size))
+        expect(codeOf(e), `chunk size ${size}`).toBe(code)
+      })))
 
   // With a byte order mark in front, the stream reader reports the error where the whole-text parser does (S18).
   it.effect.each(invalid)("$name: stream positions after a byte order mark", ({ bytes }) =>
@@ -64,7 +75,7 @@ describe("invalid", () => {
       yield* Effect.forEach([1, 5, withBom.length], (size) =>
         Effect.gen(function* () {
           const e = yield* Effect.flip(streamBytes(withBom, size))
-          expect(e instanceof HausSyntaxError && [e.line, e.column], `chunk size ${size}`).toEqual([whole.line, whole.column])
+          expect(e instanceof HausSyntaxError && [e.line, e.column, e.code], `chunk size ${size}`).toEqual([whole.line, whole.column, whole.code])
         }))
     }))
 })

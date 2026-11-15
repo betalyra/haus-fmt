@@ -1,0 +1,1 @@
+type Point = closed < Point Float64 Float64 >

@@ -1,0 +1,2 @@
+// A single top-level item has no comma after it: these 80 columns fit.
+Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

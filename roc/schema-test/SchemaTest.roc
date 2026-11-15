@@ -178,10 +178,10 @@ expect SchemaTest.check(attributes_cases, 1, SchemaTest.attributes)
 # Without attributes: Ok { type: "Client", input: { id: 1, email: "a@example.com" } },
 expect SchemaTest.check(attributes_cases, 1, SchemaTest.attributes_bare)
 
-# Err { type: "Client", input: { mail: "a@example.com" } },
+# Err { type: "Client", input: { mail: "a@example.com" }, code: "missing-field" },
 expect SchemaTest.check(attributes_cases, 2, SchemaTest.attributes)
 
-# Without attributes: Err { type: "Client", input: { mail: "a@example.com" } },
+# Without attributes: Err { type: "Client", input: { mail: "a@example.com" }, code: "missing-field" },
 expect SchemaTest.check(attributes_cases, 2, SchemaTest.attributes_bare)
 
 # Ok { type: "Shape", input: Square { side: 2 } },
@@ -196,10 +196,10 @@ expect SchemaTest.check(attributes_cases, 4, SchemaTest.attributes)
 # Without attributes: Ok { type: "Shape", input: Dot },
 expect SchemaTest.check(attributes_cases, 4, SchemaTest.attributes_bare)
 
-# Err { type: "Shape", input: Triangle },
+# Err { type: "Shape", input: Triangle, code: "unknown-tag" },
 expect SchemaTest.check(attributes_cases, 5, SchemaTest.attributes)
 
-# Without attributes: Err { type: "Shape", input: Triangle },
+# Without attributes: Err { type: "Shape", input: Triangle, code: "unknown-tag" },
 expect SchemaTest.check(attributes_cases, 5, SchemaTest.attributes_bare)
 
 # Ok { type: "Later", input: { n: 1 } },
@@ -214,10 +214,10 @@ expect SchemaTest.check(attributes_cases, 7, SchemaTest.attributes)
 # Without attributes: Ok { type: "Later", input: { n: 1, m: 2, x: 3 }, output: { n: 1, m: 2 } },
 expect SchemaTest.check(attributes_cases, 7, SchemaTest.attributes_bare)
 
-# Err { type: "Later", input: { m: 2 } },
+# Err { type: "Later", input: { m: 2 }, code: "missing-field" },
 expect SchemaTest.check(attributes_cases, 8, SchemaTest.attributes)
 
-# Without attributes: Err { type: "Later", input: { m: 2 } },
+# Without attributes: Err { type: "Later", input: { m: 2 }, code: "missing-field" },
 expect SchemaTest.check(attributes_cases, 8, SchemaTest.attributes_bare)
 
 # Ok { type: "Uses", input: { client: { id: 1 }, shape: Dot } },
@@ -241,13 +241,13 @@ expect SchemaTest.check(builtins_cases, 2, SchemaTest.builtins)
 # Ok { type: "S", input: "a\u{0}b" },
 expect SchemaTest.check(builtins_cases, 3, SchemaTest.builtins)
 
-# Err { type: "S", input: x"61" },
+# Err { type: "S", input: x"61", code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 4, SchemaTest.builtins)
 
-# Err { type: "S", input: 1 },
+# Err { type: "S", input: 1, code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 5, SchemaTest.builtins)
 
-# Err { type: "S", input: Text("a") },
+# Err { type: "S", input: Text("a"), code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 6, SchemaTest.builtins)
 
 # Ok { type: "B", input: x"0b34ff" },
@@ -256,10 +256,10 @@ expect SchemaTest.check(builtins_cases, 7, SchemaTest.builtins)
 # Ok { type: "B", input: x"" },
 expect SchemaTest.check(builtins_cases, 8, SchemaTest.builtins)
 
-# Err { type: "B", input: "0b34ff" },
+# Err { type: "B", input: "0b34ff", code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 9, SchemaTest.builtins)
 
-# Err { type: "B", input: [11, 52, 255] },
+# Err { type: "B", input: [11, 52, 255], code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 10, SchemaTest.builtins)
 
 # Ok { type: "Flag", input: True },
@@ -268,16 +268,16 @@ expect SchemaTest.check(builtins_cases, 11, SchemaTest.builtins)
 # Ok { type: "Flag", input: False },
 expect SchemaTest.check(builtins_cases, 12, SchemaTest.builtins)
 
-# Err { type: "Flag", input: Yes },
+# Err { type: "Flag", input: Yes, code: "unknown-tag" },
 expect SchemaTest.check(builtins_cases, 13, SchemaTest.builtins)
 
-# Err { type: "Flag", input: True(1) },
+# Err { type: "Flag", input: True(1), code: "wrong-payload" },
 expect SchemaTest.check(builtins_cases, 14, SchemaTest.builtins)
 
-# Err { type: "Flag", input: "True" },
+# Err { type: "Flag", input: "True", code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 15, SchemaTest.builtins)
 
-# Err { type: "Flag", input: 1 },
+# Err { type: "Flag", input: 1, code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 16, SchemaTest.builtins)
 
 # Ok { type: "MaybeInt", input: None },
@@ -289,22 +289,22 @@ expect SchemaTest.check(builtins_cases, 18, SchemaTest.builtins)
 # Ok { type: "MaybeInt", input: Some(0xFF), output: Some(255) },
 expect SchemaTest.check(builtins_cases, 19, SchemaTest.builtins)
 
-# Err { type: "MaybeInt", input: 1 },
+# Err { type: "MaybeInt", input: 1, code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 20, SchemaTest.builtins)
 
-# Err { type: "MaybeInt", input: Some },
+# Err { type: "MaybeInt", input: Some, code: "wrong-payload" },
 expect SchemaTest.check(builtins_cases, 21, SchemaTest.builtins)
 
-# Err { type: "MaybeInt", input: Some(1, 2) },
+# Err { type: "MaybeInt", input: Some(1, 2), code: "wrong-payload" },
 expect SchemaTest.check(builtins_cases, 22, SchemaTest.builtins)
 
-# Err { type: "MaybeInt", input: None(1) },
+# Err { type: "MaybeInt", input: None(1), code: "wrong-payload" },
 expect SchemaTest.check(builtins_cases, 23, SchemaTest.builtins)
 
-# Err { type: "MaybeInt", input: Some("1") },
+# Err { type: "MaybeInt", input: Some("1"), code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 24, SchemaTest.builtins)
 
-# Err { type: "MaybeInt", input: Just(1) },
+# Err { type: "MaybeInt", input: Just(1), code: "unknown-tag" },
 expect SchemaTest.check(builtins_cases, 25, SchemaTest.builtins)
 
 # Ok { type: "Outcome", input: Ok(1) },
@@ -313,13 +313,13 @@ expect SchemaTest.check(builtins_cases, 26, SchemaTest.builtins)
 # Ok { type: "Outcome", input: Err("failed") },
 expect SchemaTest.check(builtins_cases, 27, SchemaTest.builtins)
 
-# Err { type: "Outcome", input: Ok("1") },
+# Err { type: "Outcome", input: Ok("1"), code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 28, SchemaTest.builtins)
 
-# Err { type: "Outcome", input: Err(1) },
+# Err { type: "Outcome", input: Err(1), code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 29, SchemaTest.builtins)
 
-# Err { type: "Outcome", input: Ok },
+# Err { type: "Outcome", input: Ok, code: "wrong-payload" },
 expect SchemaTest.check(builtins_cases, 30, SchemaTest.builtins)
 
 # Ok { type: "Ints", input: [] },
@@ -331,13 +331,13 @@ expect SchemaTest.check(builtins_cases, 32, SchemaTest.builtins)
 # Ok { type: "Ints", input: [0x10], output: [16] },
 expect SchemaTest.check(builtins_cases, 33, SchemaTest.builtins)
 
-# Err { type: "Ints", input: [1, "2"] },
+# Err { type: "Ints", input: [1, "2"], code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 34, SchemaTest.builtins)
 
-# Err { type: "Ints", input: { a: 1 } },
+# Err { type: "Ints", input: { a: 1 }, code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 35, SchemaTest.builtins)
 
-# Err { type: "Ints", input: 1 },
+# Err { type: "Ints", input: 1, code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 36, SchemaTest.builtins)
 
 # Ok { type: "Counts", input: {} },
@@ -352,10 +352,10 @@ expect SchemaTest.check(builtins_cases, 39, SchemaTest.builtins)
 # Ok { type: "Counts", input: { "__proto__": 1, constructor: 2 } },
 expect SchemaTest.check(builtins_cases, 40, SchemaTest.builtins)
 
-# Err { type: "Counts", input: { a: "1" } },
+# Err { type: "Counts", input: { a: "1" }, code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 41, SchemaTest.builtins)
 
-# Err { type: "Counts", input: [1] },
+# Err { type: "Counts", input: [1], code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 42, SchemaTest.builtins)
 
 # Ok { type: "Day", input: Date("2026-11-13") },
@@ -364,19 +364,19 @@ expect SchemaTest.check(builtins_cases, 43, SchemaTest.builtins)
 # Ok { type: "Day", input: Date("2024-02-29") },
 expect SchemaTest.check(builtins_cases, 44, SchemaTest.builtins)
 
-# Err { type: "Day", input: Date("2026-02-30") },
+# Err { type: "Day", input: Date("2026-02-30"), code: "invalid-time" },
 expect SchemaTest.check(builtins_cases, 45, SchemaTest.builtins)
 
-# Err { type: "Day", input: Date("2026-11-13T10:00:00Z") },
+# Err { type: "Day", input: Date("2026-11-13T10:00:00Z"), code: "invalid-time" },
 expect SchemaTest.check(builtins_cases, 46, SchemaTest.builtins)
 
-# Err { type: "Day", input: Instant("2026-11-13T10:00:00Z") },
+# Err { type: "Day", input: Instant("2026-11-13T10:00:00Z"), code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 47, SchemaTest.builtins)
 
-# Err { type: "Day", input: "2026-11-13" },
+# Err { type: "Day", input: "2026-11-13", code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 48, SchemaTest.builtins)
 
-# Err { type: "Day", input: Date("2026-11-13", "x") },
+# Err { type: "Day", input: Date("2026-11-13", "x"), code: "type-mismatch" },
 expect SchemaTest.check(builtins_cases, 49, SchemaTest.builtins)
 
 # Ok { type: "At", input: Instant("2026-11-13T10:00:00Z") },
@@ -385,7 +385,7 @@ expect SchemaTest.check(builtins_cases, 50, SchemaTest.builtins)
 # Ok { type: "At", input: Instant("2026-11-13T10:00:00.250+01:00") },
 expect SchemaTest.check(builtins_cases, 51, SchemaTest.builtins)
 
-# Err { type: "At", input: Instant("2026-11-13T10:00:00") },
+# Err { type: "At", input: Instant("2026-11-13T10:00:00"), code: "invalid-time" },
 expect SchemaTest.check(builtins_cases, 52, SchemaTest.builtins)
 
 # Ok { type: "Span", input: Duration("PT0S") },
@@ -394,10 +394,10 @@ expect SchemaTest.check(builtins_cases, 53, SchemaTest.builtins)
 # Ok { type: "Span", input: Duration("-P1DT12H") },
 expect SchemaTest.check(builtins_cases, 54, SchemaTest.builtins)
 
-# Err { type: "Span", input: Duration("P01D") },
+# Err { type: "Span", input: Duration("P01D"), code: "invalid-time" },
 expect SchemaTest.check(builtins_cases, 55, SchemaTest.builtins)
 
-# Err { type: "Span", input: Duration("P0D") },
+# Err { type: "Span", input: Duration("P0D"), code: "invalid-time" },
 expect SchemaTest.check(builtins_cases, 56, SchemaTest.builtins)
 
 # Ok { type: "Payload", input: 1 },
@@ -427,10 +427,10 @@ expect SchemaTest.check(builtins_cases, 64, SchemaTest.builtins)
 # Ok { type: "Key", input: "sk-123" },
 expect SchemaTest.check(builtins_cases, 65, SchemaTest.builtins)
 
-# Err { type: "Key", input: 123 },
+# Err { type: "Key", input: 123, code: "invalid-secret" },
 expect SchemaTest.check(builtins_cases, 66, SchemaTest.builtins)
 
-# Err { type: "Key", input: Secret("sk-123") },
+# Err { type: "Key", input: Secret("sk-123"), code: "invalid-secret" },
 expect SchemaTest.check(builtins_cases, 67, SchemaTest.builtins)
 
 # Ok { type: "Config", input: { name: "a", key: "sk-1", extra: {} } },
@@ -439,10 +439,10 @@ expect SchemaTest.check(builtins_cases, 68, SchemaTest.builtins)
 # Ok { type: "Config", input: { name: "a", key: "sk-1", pin: 1234, extra: [1, X(2)] } },
 expect SchemaTest.check(builtins_cases, 69, SchemaTest.builtins)
 
-# Err { type: "Config", input: { name: "a", key: "sk-1", pin: "1234", extra: 1 } },
+# Err { type: "Config", input: { name: "a", key: "sk-1", pin: "1234", extra: 1 }, code: "invalid-secret" },
 expect SchemaTest.check(builtins_cases, 70, SchemaTest.builtins)
 
-# Err { type: "Config", input: { name: "a", key: "sk-1" } },
+# Err { type: "Config", input: { name: "a", key: "sk-1" }, code: "missing-field" },
 expect SchemaTest.check(builtins_cases, 71, SchemaTest.builtins)
 
 # numbers.cases.haus
@@ -469,19 +469,19 @@ expect SchemaTest.check(numbers_cases, 5, SchemaTest.numbers)
 # Ok { type: "I", input: -123456789012345678901234567890 },
 expect SchemaTest.check(numbers_cases, 6, SchemaTest.numbers)
 
-# Err { type: "I", input: 1.0 },
+# Err { type: "I", input: 1.0, code: "not-an-integer" },
 expect SchemaTest.check(numbers_cases, 7, SchemaTest.numbers)
 
-# Err { type: "I", input: 1e3 },
+# Err { type: "I", input: 1e3, code: "not-an-integer" },
 expect SchemaTest.check(numbers_cases, 8, SchemaTest.numbers)
 
-# Err { type: "I", input: 1.5 },
+# Err { type: "I", input: 1.5, code: "not-an-integer" },
 expect SchemaTest.check(numbers_cases, 9, SchemaTest.numbers)
 
-# Err { type: "I", input: "42" },
+# Err { type: "I", input: "42", code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 10, SchemaTest.numbers)
 
-# Err { type: "I", input: True },
+# Err { type: "I", input: True, code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 11, SchemaTest.numbers)
 
 # Ok { type: "I8", input: 127 },
@@ -490,10 +490,10 @@ expect SchemaTest.check(numbers_cases, 12, SchemaTest.numbers)
 # Ok { type: "I8", input: -128 },
 expect SchemaTest.check(numbers_cases, 13, SchemaTest.numbers)
 
-# Err { type: "I8", input: 128 },
+# Err { type: "I8", input: 128, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 14, SchemaTest.numbers)
 
-# Err { type: "I8", input: -129 },
+# Err { type: "I8", input: -129, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 15, SchemaTest.numbers)
 
 # Ok { type: "U8", input: 255 },
@@ -502,13 +502,13 @@ expect SchemaTest.check(numbers_cases, 16, SchemaTest.numbers)
 # Ok { type: "U8", input: -0, output: 0 },
 expect SchemaTest.check(numbers_cases, 17, SchemaTest.numbers)
 
-# Err { type: "U8", input: 256 },
+# Err { type: "U8", input: 256, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 18, SchemaTest.numbers)
 
-# Err { type: "U8", input: -1 },
+# Err { type: "U8", input: -1, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 19, SchemaTest.numbers)
 
-# Err { type: "U8", input: 1e2 },
+# Err { type: "U8", input: 1e2, code: "not-an-integer" },
 expect SchemaTest.check(numbers_cases, 20, SchemaTest.numbers)
 
 # Ok { type: "I64", input: 9223372036854775807 },
@@ -517,16 +517,16 @@ expect SchemaTest.check(numbers_cases, 21, SchemaTest.numbers)
 # Ok { type: "I64", input: -9223372036854775808 },
 expect SchemaTest.check(numbers_cases, 22, SchemaTest.numbers)
 
-# Err { type: "I64", input: 9223372036854775808 },
+# Err { type: "I64", input: 9223372036854775808, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 23, SchemaTest.numbers)
 
-# Err { type: "I64", input: -9223372036854775809 },
+# Err { type: "I64", input: -9223372036854775809, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 24, SchemaTest.numbers)
 
 # Ok { type: "U64", input: 18446744073709551615 },
 expect SchemaTest.check(numbers_cases, 25, SchemaTest.numbers)
 
-# Err { type: "U64", input: 18446744073709551616 },
+# Err { type: "U64", input: 18446744073709551616, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 26, SchemaTest.numbers)
 
 # Ok { type: "F64", input: 1 },
@@ -610,13 +610,13 @@ expect SchemaTest.check(numbers_cases, 52, SchemaTest.numbers)
 # Ok { type: "F64", input: 1.7976931348623158e308, output: 1.7976931348623157e308 },
 expect SchemaTest.check(numbers_cases, 53, SchemaTest.numbers)
 
-# Err { type: "F64", input: 1.7976931348623159e308 },
+# Err { type: "F64", input: 1.7976931348623159e308, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 54, SchemaTest.numbers)
 
-# Err { type: "F64", input: 1e400 },
+# Err { type: "F64", input: 1e400, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 55, SchemaTest.numbers)
 
-# Err { type: "F64", input: -1e400 },
+# Err { type: "F64", input: -1e400, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 56, SchemaTest.numbers)
 
 # Ok { type: "F64", input: NaN },
@@ -628,13 +628,13 @@ expect SchemaTest.check(numbers_cases, 58, SchemaTest.numbers)
 # Ok { type: "F64", input: NegInfinity },
 expect SchemaTest.check(numbers_cases, 59, SchemaTest.numbers)
 
-# Err { type: "F64", input: NaN(1) },
+# Err { type: "F64", input: NaN(1), code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 60, SchemaTest.numbers)
 
-# Err { type: "F64", input: Inf },
+# Err { type: "F64", input: Inf, code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 61, SchemaTest.numbers)
 
-# Err { type: "F64", input: "1.5" },
+# Err { type: "F64", input: "1.5", code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 62, SchemaTest.numbers)
 
 # Ok { type: "F32", input: 0.1 },
@@ -664,10 +664,10 @@ expect SchemaTest.check(numbers_cases, 70, SchemaTest.numbers)
 # Ok { type: "F32", input: 3.40282356e38, output: 3.4028235e38 },
 expect SchemaTest.check(numbers_cases, 71, SchemaTest.numbers)
 
-# Err { type: "F32", input: 3.4028236e38 },
+# Err { type: "F32", input: 3.4028236e38, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 72, SchemaTest.numbers)
 
-# Err { type: "F32", input: 1e39 },
+# Err { type: "F32", input: 1e39, code: "out-of-range" },
 expect SchemaTest.check(numbers_cases, 73, SchemaTest.numbers)
 
 # Ok { type: "F32", input: 1e-46, output: 0 },
@@ -706,10 +706,10 @@ expect SchemaTest.check(numbers_cases, 84, SchemaTest.numbers)
 # Ok { type: "Dec", input: 123456789012345678901234567890.123456789 },
 expect SchemaTest.check(numbers_cases, 85, SchemaTest.numbers)
 
-# Err { type: "Dec", input: "19.90" },
+# Err { type: "Dec", input: "19.90", code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 86, SchemaTest.numbers)
 
-# Err { type: "Dec", input: NaN },
+# Err { type: "Dec", input: NaN, code: "type-mismatch" },
 expect SchemaTest.check(numbers_cases, 87, SchemaTest.numbers)
 
 # Ok { type: "F64", input: 1690060720831323.25, output: 1690060720831323.2 },
@@ -736,28 +736,28 @@ expect SchemaTest.check(records_cases, 2, SchemaTest.records)
 # Ok { type: "User", input: { id: 1, name: "Ada", note: Some("x") } },
 expect SchemaTest.check(records_cases, 3, SchemaTest.records)
 
-# Err { type: "User", input: { id: 1, name: "Ada", nick: None } },
+# Err { type: "User", input: { id: 1, name: "Ada", nick: None }, code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 4, SchemaTest.records)
 
-# Err { type: "User", input: { id: 1, name: "Ada", note: "x" } },
+# Err { type: "User", input: { id: 1, name: "Ada", note: "x" }, code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 5, SchemaTest.records)
 
 # Ok { type: "User", input: { id: 1, name: "Ada", extra: [1, 2], "x-y": Tag }, output: { id: 1, name: "Ada" } },
 expect SchemaTest.check(records_cases, 6, SchemaTest.records)
 
-# Err { type: "User", input: { id: 1 } },
+# Err { type: "User", input: { id: 1 }, code: "missing-field" },
 expect SchemaTest.check(records_cases, 7, SchemaTest.records)
 
-# Err { type: "User", input: { name: "Ada" } },
+# Err { type: "User", input: { name: "Ada" }, code: "missing-field" },
 expect SchemaTest.check(records_cases, 8, SchemaTest.records)
 
-# Err { type: "User", input: { id: "1", name: "Ada" } },
+# Err { type: "User", input: { id: "1", name: "Ada" }, code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 9, SchemaTest.records)
 
-# Err { type: "User", input: User { id: 1, name: "Ada" } },
+# Err { type: "User", input: User { id: 1, name: "Ada" }, code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 10, SchemaTest.records)
 
-# Err { type: "User", input: [1, "Ada"] },
+# Err { type: "User", input: [1, "Ada"], code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 11, SchemaTest.records)
 
 # Ok { type: "Strict", input: { id: 1 } },
@@ -766,16 +766,16 @@ expect SchemaTest.check(records_cases, 12, SchemaTest.records)
 # Ok { type: "Strict", input: { id: 1, tags: ["a"] } },
 expect SchemaTest.check(records_cases, 13, SchemaTest.records)
 
-# Err { type: "Strict", input: { id: 1, extra: 2 } },
+# Err { type: "Strict", input: { id: 1, extra: 2 }, code: "unknown-field" },
 expect SchemaTest.check(records_cases, 14, SchemaTest.records)
 
-# Err { type: "Strict", input: { id: 1, tags: None } },
+# Err { type: "Strict", input: { id: 1, tags: None }, code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 15, SchemaTest.records)
 
 # Ok { type: "Outer", input: { user: { id: 1, name: "Ada", x: 1 } }, output: { user: { id: 1, name: "Ada" } } },
 expect SchemaTest.check(records_cases, 16, SchemaTest.records)
 
-# Err { type: "Outer", input: { user: { id: 1, name: "Ada" }, x: 1 } },
+# Err { type: "Outer", input: { user: { id: 1, name: "Ada" }, x: 1 }, code: "unknown-field" },
 expect SchemaTest.check(records_cases, 17, SchemaTest.records)
 
 # Ok { type: "Empty", input: {} },
@@ -784,7 +784,7 @@ expect SchemaTest.check(records_cases, 18, SchemaTest.records)
 # Ok { type: "Empty", input: { a: 1 }, output: {} },
 expect SchemaTest.check(records_cases, 19, SchemaTest.records)
 
-# Err { type: "Empty", input: [] },
+# Err { type: "Empty", input: [], code: "type-mismatch" },
 expect SchemaTest.check(records_cases, 20, SchemaTest.records)
 
 # types.cases.haus
@@ -793,7 +793,7 @@ expect SchemaTest.count(types_cases) == 12
 # Ok { type: "IntPair", input: { first: 1, second: 2 } },
 expect SchemaTest.check(types_cases, 0, SchemaTest.types)
 
-# Err { type: "IntPair", input: { first: 1, second: "2" } },
+# Err { type: "IntPair", input: { first: 1, second: "2" }, code: "type-mismatch" },
 expect SchemaTest.check(types_cases, 1, SchemaTest.types)
 
 # Ok { type: "Ints", input: Nil },
@@ -802,10 +802,10 @@ expect SchemaTest.check(types_cases, 2, SchemaTest.types)
 # Ok { type: "Ints", input: Cons(1, Cons(2, Nil)) },
 expect SchemaTest.check(types_cases, 3, SchemaTest.types)
 
-# Err { type: "Ints", input: Cons(1, Cons("2", Nil)) },
+# Err { type: "Ints", input: Cons(1, Cons("2", Nil)), code: "type-mismatch" },
 expect SchemaTest.check(types_cases, 4, SchemaTest.types)
 
-# Err { type: "Ints", input: Cons(1) },
+# Err { type: "Ints", input: Cons(1), code: "wrong-payload" },
 expect SchemaTest.check(types_cases, 5, SchemaTest.types)
 
 # Ok { type: "Ints", input: Cons(1, Snoc), output: Cons(1, Snoc) },
@@ -814,13 +814,13 @@ expect SchemaTest.check(types_cases, 6, SchemaTest.types)
 # Ok { type: "Tree", input: { name: "a", children: [{ name: "b", children: [] }] } },
 expect SchemaTest.check(types_cases, 7, SchemaTest.types)
 
-# Err { type: "Tree", input: { name: "a", children: [{ name: "b" }] } },
+# Err { type: "Tree", input: { name: "a", children: [{ name: "b" }] }, code: "missing-field" },
 expect SchemaTest.check(types_cases, 8, SchemaTest.types)
 
 # Ok { type: "Expr", input: Add(Num(1), Neg { of: Num(2) }) },
 expect SchemaTest.check(types_cases, 9, SchemaTest.types)
 
-# Err { type: "Expr", input: Add(Num(1), Sub(Num(2))) },
+# Err { type: "Expr", input: Add(Num(1), Sub(Num(2))), code: "unknown-tag" },
 expect SchemaTest.check(types_cases, 10, SchemaTest.types)
 
 # Ok { type: "Ints", input: Cons(99, Cons(98, Cons(97, Cons(96, Cons(95, Cons(94, Cons(93, Cons(92, Cons(91, Cons(90, Cons(89, Cons(88, Cons(87, Cons(86, Cons(85, Cons(84, Cons(83, Cons(82, Cons(81, Cons(80, Cons(79, Cons(78, Cons(77, Cons(76, Cons(75, Cons(74, Cons(73, Cons(72, Cons(71, Cons(70, Cons(69, Cons(68, Cons(67, Cons(66, Cons(65, Cons(64, Cons(63, Cons(62, Cons(61, Cons(60, Cons(59, Cons(58, Cons(57, Cons(56, Cons(55, Cons(54, Cons(53, Cons(52, Cons(51, Cons(50, Cons(49, Cons(48, Cons(47, Cons(46, Cons(45, Cons(44, Cons(43, Cons(42, Cons(41, Cons(40, Cons(39, Cons(38, Cons(37, Cons(36, Cons(35, Cons(34, Cons(33, Cons(32, Cons(31, Cons(30, Cons(29, Cons(28, Cons(27, Cons(26, Cons(25, Cons(24, Cons(23, Cons(22, Cons(21, Cons(20, Cons(19, Cons(18, Cons(17, Cons(16, Cons(15, Cons(14, Cons(13, Cons(12, Cons(11, Cons(10, Cons(9, Cons(8, Cons(7, Cons(6, Cons(5, Cons(4, Cons(3, Cons(2, Cons(1, Cons(0, Nil)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) },
@@ -838,40 +838,40 @@ expect SchemaTest.check(variants_cases, 1, SchemaTest.variants)
 # Ok { type: "Shape", input: Circle { r: 1.5, color: "red" }, output: Circle { r: 1.5 } },
 expect SchemaTest.check(variants_cases, 2, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle(1.5) },
+# Err { type: "Shape", input: Circle(1.5), code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 3, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle },
+# Err { type: "Shape", input: Circle, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 4, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle({ r: 1 }, { r: 2 }) },
+# Err { type: "Shape", input: Circle({ r: 1 }, { r: 2 }), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 5, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle {} },
+# Err { type: "Shape", input: Circle {}, code: "missing-field" },
 expect SchemaTest.check(variants_cases, 6, SchemaTest.variants)
 
 # Ok { type: "Shape", input: Point(1, 2) },
 expect SchemaTest.check(variants_cases, 7, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point(1) },
+# Err { type: "Shape", input: Point(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 8, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point(1, 2, 3) },
+# Err { type: "Shape", input: Point(1, 2, 3), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 9, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point { x: 1, y: 2 } },
+# Err { type: "Shape", input: Point { x: 1, y: 2 }, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 10, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point([1, 2]) },
+# Err { type: "Shape", input: Point([1, 2]), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 11, SchemaTest.variants)
 
 # Ok { type: "Shape", input: Empty },
 expect SchemaTest.check(variants_cases, 12, SchemaTest.variants)
 
-# Err { type: "Shape", input: Empty(1) },
+# Err { type: "Shape", input: Empty(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 13, SchemaTest.variants)
 
-# Err { type: "Shape", input: Empty {} },
+# Err { type: "Shape", input: Empty {}, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 14, SchemaTest.variants)
 
 # Ok { type: "Shape", input: Wrap { w: 1 } },
@@ -883,13 +883,13 @@ expect SchemaTest.check(variants_cases, 16, SchemaTest.variants)
 # Ok { type: "Shape", input: Wrap { w: 1, h: 2 }, output: Wrap { w: 1 } },
 expect SchemaTest.check(variants_cases, 17, SchemaTest.variants)
 
-# Err { type: "Shape", input: Wrap(1) },
+# Err { type: "Shape", input: Wrap(1), code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 18, SchemaTest.variants)
 
 # Ok { type: "Shape", input: Pair(1, "a") },
 expect SchemaTest.check(variants_cases, 19, SchemaTest.variants)
 
-# Err { type: "Shape", input: Pair("a", 1) },
+# Err { type: "Shape", input: Pair("a", 1), code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 20, SchemaTest.variants)
 
 # Ok { type: "Shape", input: Hexagon },
@@ -901,10 +901,10 @@ expect SchemaTest.check(variants_cases, 22, SchemaTest.variants)
 # Ok { type: "Shape", input: Hexagon(0x10, "a", x"ff") , output: Hexagon(16, "a", x"ff") },
 expect SchemaTest.check(variants_cases, 23, SchemaTest.variants)
 
-# Err { type: "Shape", input: "Circle" },
+# Err { type: "Shape", input: "Circle", code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 24, SchemaTest.variants)
 
-# Err { type: "Shape", input: { r: 1 } },
+# Err { type: "Shape", input: { r: 1 }, code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 25, SchemaTest.variants)
 
 # Ok { type: "Level", input: Debug },
@@ -913,13 +913,13 @@ expect SchemaTest.check(variants_cases, 26, SchemaTest.variants)
 # Ok { type: "Level", input: Info },
 expect SchemaTest.check(variants_cases, 27, SchemaTest.variants)
 
-# Err { type: "Level", input: Warn },
+# Err { type: "Level", input: Warn, code: "unknown-tag" },
 expect SchemaTest.check(variants_cases, 28, SchemaTest.variants)
 
-# Err { type: "Level", input: Debug(1) },
+# Err { type: "Level", input: Debug(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 29, SchemaTest.variants)
 
-# Err { type: "Level", input: "Debug" },
+# Err { type: "Level", input: "Debug", code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 30, SchemaTest.variants)
 
 # Ok { type: "Strict", input: A },
@@ -931,19 +931,19 @@ expect SchemaTest.check(variants_cases, 32, SchemaTest.variants)
 # Ok { type: "Strict", input: C { x: 1, y: 2 }, output: C { x: 1 } },
 expect SchemaTest.check(variants_cases, 33, SchemaTest.variants)
 
-# Err { type: "Strict", input: B },
+# Err { type: "Strict", input: B, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 34, SchemaTest.variants)
 
-# Err { type: "Strict", input: D },
+# Err { type: "Strict", input: D, code: "unknown-tag" },
 expect SchemaTest.check(variants_cases, 35, SchemaTest.variants)
 
-# Err { type: "Strict", input: D(1) },
+# Err { type: "Strict", input: D(1), code: "unknown-tag" },
 expect SchemaTest.check(variants_cases, 36, SchemaTest.variants)
 
 # Ok { type: "ClosedPayload", input: Circle { r: 1 } },
 expect SchemaTest.check(variants_cases, 37, SchemaTest.variants)
 
-# Err { type: "ClosedPayload", input: Circle { r: 1, x: 2 } },
+# Err { type: "ClosedPayload", input: Circle { r: 1, x: 2 }, code: "unknown-field" },
 expect SchemaTest.check(variants_cases, 38, SchemaTest.variants)
 
 # Ok { type: "AnyTag", input: EUR },
@@ -955,10 +955,10 @@ expect SchemaTest.check(variants_cases, 40, SchemaTest.variants)
 # Ok { type: "AnyTag", input: Money { amount: 19.90, currency: EUR } },
 expect SchemaTest.check(variants_cases, 41, SchemaTest.variants)
 
-# Err { type: "AnyTag", input: "EUR" },
+# Err { type: "AnyTag", input: "EUR", code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 42, SchemaTest.variants)
 
-# Err { type: "AnyTag", input: 1 },
+# Err { type: "AnyTag", input: 1, code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 43, SchemaTest.variants)
 
 # Ok { type: "Holder", input: { shape: Hexagon, any: [EUR, USD(1)] } },

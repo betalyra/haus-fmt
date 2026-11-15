@@ -1,4 +1,4 @@
-import { HausSyntaxError, locate, START, type Origin } from "./errors.js"
+import { HausSyntaxError, limitsError, locate, START, type ErrorCode, type ErrorDetails, type Origin } from "./errors.js"
 import { arr, bytes, num, rec, str, variant, type HBytes, type HNumber, type HRecord, type Value } from "./value.js"
 
 /** The default nesting depth (spec §7). */
@@ -50,7 +50,7 @@ export const limitsIssue = (limits: { readonly maxDepth?: number | undefined }, 
 /** Throw a RangeError if `limits` can't be used (see `limitsIssue`). */
 export const checkLimits = (limits: { readonly maxDepth?: number | undefined }, max?: number, what?: string): void => {
   const issue = limitsIssue(limits, max, what)
-  if (issue !== undefined) throw new RangeError(issue)
+  if (issue !== undefined) throw limitsError(issue)
 }
 
 /**
@@ -120,7 +120,8 @@ export class Parser {
       out.push(this.parseValue())
       this.skipTrivia()
       if (this.eof()) break
-      this.expect(",", "expected ',' between top-level values")
+      if (this.peek() !== ",") this.failSeparator(out[out.length - 1]!, "expected ',' between top-level values")
+      this.pos++
       this.skipTrivia()
     }
     return out
@@ -131,10 +132,10 @@ export class Parser {
     this.skipBom()
     this.checkDirective()
     this.skipTrivia()
-    if (this.eof() || this.peek() === ",") this.fail("expected a value")
+    if (this.eof() || this.peek() === ",") this.fail("expected-value", "expected a value", this.pos, { expected: "a value", found: describe(this.peek()) })
     const v = this.parseValue()
     this.skipTrivia()
-    if (!this.eof()) this.fail(`expected ',' between top-level values, found ${describe(this.peek())}`)
+    if (!this.eof()) this.failSeparator(v, "expected ',' between top-level values")
     return v
   }
 
@@ -151,9 +152,9 @@ export class Parser {
 
   /** The whole text as one number literal, without trivia around it: its normalized text (spec §2). */
   parseNumberLiteral(): string {
-    if (!/[-0-9]/.test(this.src[0] ?? "")) this.fail("expected a number")
+    if (!/[-0-9]/.test(this.src[0] ?? "")) this.fail("invalid-number", "expected a number")
     const { text } = this.parseNumber()
-    if (!this.eof()) this.fail(`expected the end of the number, found ${describe(this.peek())}`)
+    if (!this.eof()) this.fail("invalid-number", `expected the end of the number, found ${describe(this.peek())}`)
     return text
   }
 
@@ -167,7 +168,7 @@ export class Parser {
     // Only at the start of the whole text: offset 0, or 1 after a byte order mark
     // (the stream reader drops the mark and starts its first piece at offset 1).
     if (this.origin.offset + this.pos > 1 || !this.src.startsWith("#haus", this.pos)) return
-    this.fail("this file starts with a #haus version directive: it needs a newer version of haus")
+    this.fail("version-directive", "this file starts with a #haus version directive: it needs a newer version of haus")
   }
 
   // ── values ─────────────────────────────────────────────────
@@ -196,18 +197,19 @@ export class Parser {
     if (c === 120 && this.src.charCodeAt(this.pos + 1) === 34) return this.parseBytes() // x"
     if (isLowerStart(c)) {
       const word = this.readIdent()
-      const hint =
-        word === "true" ? " (booleans are the variants True / False)"
-        : word === "false" ? " (booleans are the variants True / False)"
-        : word === "null" ? " (use the variant None)"
-        : ""
-      this.fail(`unexpected identifier '${word}': lowercase identifiers can only be record keys${hint}`, this.pos - word.length)
+      const [code, hint]: [ErrorCode, string] =
+        word === "true" || word === "false" ? ["boolean-literal", " (booleans are the variants True / False)"]
+        : word === "null" ? ["null-literal", " (use the variant None)"]
+        : ["bare-identifier", ""]
+      this.fail(code, `unexpected identifier '${word}': lowercase identifiers can only be record keys${hint}`, this.pos - word.length, { expected: "a value", found: `'${word}'` })
     }
-    this.fail(`expected a value, found ${describe(this.peek())}`)
+    // `+1` and `.5`: a number written the way other languages allow.
+    const code = this.peek() === "+" || this.peek() === "." ? "invalid-number" : "expected-value"
+    this.fail(code, `expected a value, found ${describe(this.peek())}`, this.pos, { expected: "a value", found: describe(this.peek()) })
   }
 
   private enter() {
-    if (++this.depth > this.limits.maxDepth) this.fail(`nesting deeper than ${this.limits.maxDepth} levels`)
+    if (++this.depth > this.limits.maxDepth) this.fail("nesting-too-deep", `nesting deeper than ${this.limits.maxDepth} levels`)
   }
 
   private parseRecord(): HRecord {
@@ -218,22 +220,24 @@ export class Parser {
     const keySpans = this.locations ? new Map<string, readonly [number, number]>() : undefined
     this.skipTrivia()
     while (this.peek() !== "}") {
-      if (this.eof()) this.fail("unclosed '{'", open)
+      if (this.eof()) this.fail("unclosed-bracket", "unclosed '{'", open, { expected: "'}'" })
       const keyPos = this.pos
       const key = this.parseKey()
       keySpans?.set(key, [keyPos, this.pos])
       this.skipTrivia()
-      this.expect(":", `expected ':' after key '${key}'`)
+      if (this.peek() !== ":") this.fail("missing-colon", `expected ':' after key '${key}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) })
+      this.pos++
       this.skipTrivia()
       const value = this.parseValue()
-      if (fields.has(key)) this.fail(`duplicate key '${key}'`, keyPos)
+      if (fields.has(key)) this.fail("duplicate-key", `duplicate key '${key}'`, keyPos)
       fields.set(key, value)
       this.skipTrivia()
       if (this.peek() === ",") {
         this.pos++
         this.skipTrivia()
       } else if (this.peek() !== "}") {
-        this.fail(this.eof() ? "unclosed '{'" : `expected ',' or '}', found ${describe(this.peek())}`, this.eof() ? open : this.pos)
+        if (this.eof()) this.fail("unclosed-bracket", "unclosed '{'", open, { expected: "'}'" })
+        this.failSeparator(value, "expected ',' or '}'", "}")
       }
     }
     this.pos++ // }
@@ -244,15 +248,15 @@ export class Parser {
   private parseKey(): string {
     const c = this.src.charCodeAt(this.pos)
     if (this.peek() === '"') {
-      if (this.src.startsWith('"""', this.pos)) this.fail("block strings can't be record keys")
+      if (this.src.startsWith('"""', this.pos)) this.fail("block-string-key", "block strings can't be record keys")
       return this.parseBasicString().value
     }
     if (isLowerStart(c)) return this.checkWordLength(this.readIdent(), "key")
     if (isUpper(c)) {
       const word = this.readIdent()
-      this.fail(`record keys must start with a lowercase letter or '_'; quote it: "${word}"`, this.pos - word.length)
+      this.fail("uppercase-key", `record keys must start with a lowercase letter or '_'; quote it: "${word}"`, this.pos - word.length, { hint: `Quote the key: "${word}".` })
     }
-    this.fail(`expected a record key, found ${describe(this.peek())}`)
+    this.fail("expected-key", `expected a record key, found ${describe(this.peek())}`, this.pos, { expected: "a record key", found: describe(this.peek()) })
   }
 
   private parseArray(): Value {
@@ -268,14 +272,16 @@ export class Parser {
     const items: Value[] = []
     this.skipTrivia()
     while (this.peek() !== close) {
-      if (this.eof()) this.fail(`unclosed '${open}'`, start)
-      items.push(this.parseValue())
+      if (this.eof()) this.fail("unclosed-bracket", `unclosed '${open}'`, start, { expected: `'${close}'` })
+      const item = this.parseValue()
+      items.push(item)
       this.skipTrivia()
       if (this.peek() === ",") {
         this.pos++
         this.skipTrivia()
       } else if (this.peek() !== close) {
-        this.fail(this.eof() ? `unclosed '${open}'` : `expected ',' or '${close}', found ${describe(this.peek())}`, this.eof() ? start : this.pos)
+        if (this.eof()) this.fail("unclosed-bracket", `unclosed '${open}'`, start, { expected: `'${close}'` })
+        this.failSeparator(item, `expected ',' or '${close}'`, close)
       }
     }
     this.pos++
@@ -293,7 +299,7 @@ export class Parser {
     if (this.peek() === "(") {
       const parenPos = this.pos
       const args = this.parseList("(", ")")
-      if (args.length === 0) this.fail(`empty payload: write '${tag}' without parentheses`, parenPos)
+      if (args.length === 0) this.fail("empty-payload", `empty payload: write '${tag}' without parentheses`, parenPos, { hint: `Write ${tag} without parentheses.` })
       return variant(tag, args)
     }
     if (this.peek() === "{") {
@@ -307,46 +313,47 @@ export class Parser {
 
   private parseNumber(): HNumber {
     const start = this.pos
-    this.checkNumberLimits(start)
-    let text: string | undefined
-    for (const [re, radix] of [[HEX, "0x"], [BIN, "0b"]] as const) {
+    // The literal (a linear scan), then what follows it, then the limits, as
+    // the reference does: a literal that runs into a letter is invalid however
+    // long it is. Converted only within the limits, so huge ones stay cheap.
+    let radix: "0x" | "0b" | undefined
+    let digits: string | undefined
+    let end = -1
+    for (const [re, r] of [[HEX, "0x"], [BIN, "0b"]] as const) {
       re.lastIndex = start
       const m = re.exec(this.src)
       if (m) {
-        const neg = this.src[start] === "-"
-        const n = BigInt(radix + m[1]!.replaceAll("_", ""))
-        text = (neg && n !== 0n ? "-" : "") + n.toString()
-        this.pos = re.lastIndex
+        radix = r
+        digits = m[1]!
+        end = re.lastIndex
         break
       }
     }
-    if (text === undefined) {
+    if (radix === undefined) {
       DEC.lastIndex = start
-      const m = DEC.exec(this.src)
-      if (!m) this.fail("invalid number", start)
-      text = normalizeExponent(m[0].replaceAll("_", "").replace("E", "e"))
-      this.pos = DEC.lastIndex
+      if (!DEC.exec(this.src)) this.fail("invalid-number", "invalid number", start)
+      end = DEC.lastIndex
     }
-    const next = this.src.charCodeAt(this.pos)
-    if (isIdentChar(next) || this.peek() === ".") {
-      let end = this.pos
-      while (end < this.src.length && (isIdentChar(this.src.charCodeAt(end)) || this.src[end] === ".")) end++
-      this.fail(`invalid number '${this.src.slice(start, end)}'`, start)
+    const next = this.src.charCodeAt(end)
+    if (isIdentChar(next) || this.src[end] === ".") {
+      let to = end
+      while (to < this.src.length && (isIdentChar(this.src.charCodeAt(to)) || this.src[to] === ".")) to++
+      this.fail("invalid-number", `invalid number '${this.src.slice(start, to)}'`, start)
     }
-    return num(text)
-  }
-
-  /** Checked before converting, so huge literals are rejected cheaply. */
-  private checkNumberLimits(start: number) {
-    let end = start
-    while (end < this.src.length && /[-+0-9A-Za-z_.]/.test(this.src[end]!)) end++
-    if (end - start > this.limits.maxNumberLength) {
-      this.fail(`number literal longer than ${this.limits.maxNumberLength} characters`, start)
+    const literal = this.src.slice(start, end)
+    if (literal.length > this.limits.maxNumberLength) {
+      this.fail("number-too-long", `number literal longer than ${this.limits.maxNumberLength} characters`, start)
     }
-    const exp = /^-?(?:0|[1-9][0-9_]*)(?:\.[0-9_]+)?[eE]([+-]?)([0-9_]+)$/.exec(this.src.slice(start, end))
+    this.pos = end
+    if (radix !== undefined) {
+      const n = BigInt(radix + digits!.replaceAll("_", ""))
+      return num((literal.startsWith("-") && n !== 0n ? "-" : "") + n.toString())
+    }
+    const exp = /[eE]([+-]?)([0-9_]+)$/.exec(literal)
     if (exp && Number(exp[2]!.replaceAll("_", "")) > this.limits.maxExponent) {
-      this.fail(`exponent larger than ${this.limits.maxExponent}`, start)
+      this.fail("exponent-too-large", `exponent larger than ${this.limits.maxExponent}`, start)
     }
+    return num(normalizeExponent(literal.replaceAll("_", "").replace("E", "e")))
   }
 
   // ── bytes ──────────────────────────────────────────────────
@@ -357,7 +364,7 @@ export class Parser {
     this.pos += 2 // x"
     const out: number[] = []
     for (;;) {
-      if (this.eof()) this.fail("unterminated byte string", open)
+      if (this.eof()) this.fail("unterminated-bytes", "unterminated byte string", open)
       const c = this.src.charCodeAt(this.pos)
       if (c === 34) break // "
       if (c === 32 || c === 9) {
@@ -367,15 +374,16 @@ export class Parser {
       const hi = hexValue(c)
       if (hi < 0) {
         this.fail(
+          "bytes-not-hex",
           c === 10 || c === 13 ? "line break in byte string (keep x\"…\" on one line)"
           : `invalid character ${describe(this.src[this.pos]!)} in byte string (expected hex digits)`,
         )
       }
       const lo = hexValue(this.src.charCodeAt(this.pos + 1))
-      if (lo < 0) this.fail("a byte needs two hex digits (an odd number of digits, or a space inside a byte)", this.pos)
+      if (lo < 0) this.fail("bytes-odd-digits", "a byte needs two hex digits (an odd number of digits, or a space inside a byte)", this.pos)
       out.push(hi * 16 + lo)
       this.pos += 2
-      if (this.pos - open - 2 > this.limits.maxStringLength) this.fail(`byte string longer than ${this.limits.maxStringLength} characters`, open)
+      if (this.pos - open - 2 > this.limits.maxStringLength) this.fail("string-too-long", `byte string longer than ${this.limits.maxStringLength} characters`, open)
     }
     this.pos++ // "
     return bytes(Uint8Array.from(out))
@@ -389,7 +397,7 @@ export class Parser {
     let out = ""
     let chunk = this.pos
     for (;;) {
-      if (this.eof()) this.fail("unterminated string", open)
+      if (this.eof()) this.fail("unterminated-string", "unterminated string", open)
       const c = this.src.charCodeAt(this.pos)
       if (c === 34) break // "
       if (c === 92) {
@@ -399,9 +407,10 @@ export class Parser {
         chunk = this.pos
         continue
       }
-      if (isBidiControl(c)) this.fail(`raw bidirectional control character U+${hex4(c)} (write it as \\u{${hex4(c)}})`)
+      if (isBidiControl(c)) this.fail("bidi-control", `raw bidirectional control character U+${hex4(c)} (write it as \\u{${hex4(c)}})`)
       if (isControl(c)) {
         this.fail(
+          c === 10 ? "string-line-break" : "control-character",
           c === 10 ? "line break in string (use \\n or a \"\"\" block string)"
           : c === 9 ? "raw tab in string (use \\t)"
           : `raw control character U+${hex4(c)} in string (write it as \\u{${hex4(c)}})`,
@@ -429,14 +438,14 @@ export class Parser {
         const m = /\{([0-9A-Fa-f]{1,6})\}/y
         m.lastIndex = this.pos
         const r = m.exec(this.src)
-        if (!r) this.fail("invalid unicode escape: expected \\u{1-6 hex digits}", start)
+        if (!r) this.fail("invalid-unicode-escape", "invalid unicode escape: expected \\u{1-6 hex digits}", start)
         const cp = parseInt(r[1]!, 16)
-        if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) this.fail(`\\u{${r[1]}} is not a Unicode scalar value`, start)
+        if (cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) this.fail("invalid-unicode-escape", `\\u{${r[1]}} is not a Unicode scalar value`, start)
         this.pos = m.lastIndex
         return String.fromCodePoint(cp)
       }
     }
-    this.fail(`invalid escape '\\${e ?? ""}'`, start)
+    this.fail("invalid-escape", `invalid escape '\\${e ?? ""}'`, start)
   }
 
   private parseBlockString() {
@@ -445,7 +454,7 @@ export class Parser {
     while (this.peek() === " " || this.peek() === "\t") this.pos++
     if (this.src.startsWith("\r\n", this.pos)) this.pos += 2
     else if (this.peek() === "\n") this.pos++
-    else this.fail('opening """ must be followed by a line break', this.eof() ? open : this.pos)
+    else this.fail("block-string-opening", 'opening """ must be followed by a line break', this.eof() ? open : this.pos)
 
     // Find the closing """, skipping escaped characters.
     const contentStart = this.pos
@@ -458,7 +467,7 @@ export class Parser {
         break
       }
     }
-    if (close < 0) this.fail("unterminated block string", open)
+    if (close < 0) this.fail("unterminated-block-string", "unterminated block string", open)
 
     // Split into lines, remembering where each starts.
     const lines: { text: string; at: number }[] = []
@@ -474,14 +483,14 @@ export class Parser {
       at = nl + 1
     }
     const last = lines.pop()!
-    if (!BLANK.test(last.text)) this.fail('closing """ must be on its own line', close)
+    if (!BLANK.test(last.text)) this.fail("block-string-closing", 'closing """ must be on its own line', close)
     const indent = last.text
 
     const out: string[] = []
     for (const line of lines) {
       if (line.text.startsWith(indent)) out.push(this.decodeBlockLine(line.text.slice(indent.length), line.at + indent.length))
       else if (BLANK.test(line.text)) out.push("")
-      else this.fail('line is indented less than the closing """', line.at)
+      else this.fail("block-string-indent", 'line is indented less than the closing """', line.at)
     }
     this.pos = close + 3
     return str(this.checkStringLength(out.join("\n"), open))
@@ -490,7 +499,7 @@ export class Parser {
   /** The limit counts characters (code points), not UTF-16 units: an emoji is one character, but two units. */
   private checkStringLength(s: string, open: number): string {
     if (longerThan(s, this.limits.maxStringLength)) {
-      this.fail(`string longer than ${this.limits.maxStringLength} characters`, open)
+      this.fail("string-too-long", `string longer than ${this.limits.maxStringLength} characters`, open)
     }
     return s
   }
@@ -500,7 +509,7 @@ export class Parser {
    * the error is at its start. Identifiers are ASCII, so characters are units.
    */
   private checkWordLength(word: string, what: "key" | "tag"): string {
-    if (word.length > this.limits.maxStringLength) this.fail(`${what} longer than ${this.limits.maxStringLength} characters`, this.pos - word.length)
+    if (word.length > this.limits.maxStringLength) this.fail(what === "key" ? "key-too-long" : "tag-too-long", `${what} longer than ${this.limits.maxStringLength} characters`, this.pos - word.length)
     return word
   }
 
@@ -520,8 +529,8 @@ export class Parser {
         this.pos = saved
         chunk = i
       } else {
-        if (isControl(c) && c !== 9) this.fail(`raw control character U+${hex4(c)} in block string (write it as \\u{${hex4(c)}})`, at + i)
-        if (isBidiControl(c)) this.fail(`raw bidirectional control character U+${hex4(c)} (write it as \\u{${hex4(c)}})`, at + i)
+        if (isControl(c) && c !== 9) this.fail("control-character", `raw control character U+${hex4(c)} in block string (write it as \\u{${hex4(c)}})`, at + i)
+        if (isBidiControl(c)) this.fail("bidi-control", `raw bidirectional control character U+${hex4(c)} (write it as \\u{${hex4(c)}})`, at + i)
         i++
       }
     }
@@ -543,7 +552,7 @@ export class Parser {
       } else if (c === "\r" && this.src[this.pos + 1] === "\n") {
         this.pos += 2
       } else if (c === "\r") {
-        this.fail("carriage return without a line feed (line breaks are LF or CRLF)")
+        this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)")
       } else if (c === "/" && this.src[this.pos + 1] === "/") {
         const nl = this.src.indexOf("\n", this.pos)
         const end = nl < 0 ? this.src.length : nl
@@ -553,7 +562,7 @@ export class Parser {
       } else if (c === "/" && this.src[this.pos + 1] === "*") {
         this.skipBlockComment()
       } else if (c === "/") {
-        this.fail("unexpected '/' (comments are // or /* */)")
+        this.fail("stray-slash", "unexpected '/' (comments are // or /* */)")
       } else {
         return
       }
@@ -577,7 +586,7 @@ export class Parser {
         this.pos++
       }
     }
-    this.fail("unterminated block comment", open)
+    this.fail("unterminated-comment", "unterminated block comment", open)
   }
 
   /**
@@ -588,10 +597,11 @@ export class Parser {
   private checkCommentText(start: number, end: number) {
     for (let i = start; i < end; i++) {
       const c = this.src.charCodeAt(i)
-      if (isBidiControl(c)) this.fail(`raw bidirectional control character U+${hex4(c)} in comment`, i)
+      if (isBidiControl(c)) this.fail("bidi-control", `raw bidirectional control character U+${hex4(c)} in comment`, i)
       if (!isControl(c) || c === 9 || c === 10) continue
       if (c === 13 && this.src.charCodeAt(i + 1) === 10) continue
-      this.fail(c === 13 ? "carriage return without a line feed (line breaks are LF or CRLF)" : `raw control character U+${hex4(c)} in comment`, i)
+      if (c === 13) this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)", i)
+      this.fail("control-character", `raw control character U+${hex4(c)} in comment`, i)
     }
   }
 
@@ -609,14 +619,28 @@ export class Parser {
     return this.pos >= this.src.length
   }
 
-  private expect(ch: string, message: string) {
-    if (this.peek() !== ch) this.fail(`${message}, found ${describe(this.peek())}`)
-    this.pos++
+  /**
+   * After `previous`, something other than a comma (or the closing bracket
+   * `close`). Which mistake it is: a payload `(…)` or `{…}` on a line after
+   * its tag (the tag took no payload, so anything between them was a line
+   * break or a comment), a closing bracket of the wrong kind, or a missing comma.
+   */
+  private failSeparator(previous: Value, message: string, close?: string): never {
+    const c = this.peek()
+    const found = describe(c)
+    const reason = `${message}, found ${found}`
+    if ((c === "(" || c === "{") && previous.kind === "variant" && previous.args.length === 0) {
+      this.fail("payload-newline", reason, this.pos, { expected: "','", found, hint: `Put the payload on the same line as ${previous.tag}, or add a comma if they are two values.` })
+    }
+    if (c === "}" || c === "]" || c === ")") {
+      this.fail("unexpected-closer", reason, this.pos, { expected: close === undefined ? "','" : `',' or '${close}'`, found })
+    }
+    this.fail("missing-comma", reason, this.pos, { expected: "','", found })
   }
 
-  private fail(reason: string, at: number = this.pos): never {
+  private fail(code: ErrorCode, reason: string, at: number = this.pos, details?: ErrorDetails): never {
     const p = locate(this.src, at, this.origin)
-    throw new HausSyntaxError(reason, p.offset, p.line, p.column)
+    throw new HausSyntaxError(reason, p.offset, p.line, p.column, code, details)
   }
 }
 

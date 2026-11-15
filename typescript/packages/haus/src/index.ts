@@ -2,7 +2,10 @@ import { HausSyntaxError } from "./errors.js"
 import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
-export { formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, type Path } from "./errors.js"
+export {
+  ERROR_CODES, errorCode, errorDocs, errorHint, errorJson, formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, isErrorCode,
+  type ErrorCategory, type ErrorCode, type ErrorDetails, type ErrorJson, type Path,
+} from "./errors.js"
 export {
   equalsJson, fromJson, fromJsonLines, jsonDepth, fromJsonValue, fromLosslessJson, fromLosslessJsonLines, fromLosslessJsonValue, isJsonObject, jsonObject, JsonNumber,
   parseJson, parseJsonLines, stringifyJson, toLosslessJson, toLosslessJsonLines, toLosslessJsonValue, type Json, type JsonLinesOptions, type JsonObject,
@@ -46,7 +49,7 @@ export function parseDocument(text: string, limits: Partial<Limits> = {}): { val
 export function parse(text: string, limits: Partial<Limits> = {}): Value {
   const values = parseAll(text, limits)
   if (values.length !== 1) {
-    throw new HausSyntaxError(`expected exactly one value, found ${values.length}`, 0, 1, 1)
+    throw new HausSyntaxError(`expected exactly one value, found ${values.length}`, 0, 1, 1, "not-one-value", { expected: "one value", found: `${values.length} values` })
   }
   return values[0]!
 }

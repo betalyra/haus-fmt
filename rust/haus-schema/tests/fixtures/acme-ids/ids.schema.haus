@@ -1,0 +1,4 @@
+type UserId = closed < UserId Int >
+type Tagged a = { tag: String, value: a }
+type IdEvent = < Created { id: Int } | @deprecated Deleted { id: Int } >
+type Base = { id: Int }

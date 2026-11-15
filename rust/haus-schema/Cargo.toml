@@ -1,0 +1,20 @@
+[package]
+name = "haus-fmt-schema"
+version = "0.1.0"
+description = "haus schema files: parse, resolve and check them, and check data against them at runtime"
+readme = "../README.md"
+keywords = ["haus", "schema", "validation", "data-format"]
+categories = ["parser-implementations", "encoding"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+# Published as haus-fmt-schema, imported as haus_schema.
+[lib]
+name = "haus_schema"
+
+[dependencies]
+haus = { package = "haus-fmt", path = "../haus", version = "0.1.0" }
+winnow = "1.0.5"

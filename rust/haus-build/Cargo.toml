@@ -17,8 +17,8 @@ name = "haus_build"
 
 [dependencies]
 haus = { package = "haus-fmt", path = "../haus", version = "0.1.0" }
+haus-schema = { package = "haus-fmt-schema", path = "../haus-schema", version = "0.1.0" }
 prettyplease = "0.3.0"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
 syn = { version = "3.0.10", default-features = false, features = ["full", "parsing", "printing"] }
-winnow = "1.0.5"

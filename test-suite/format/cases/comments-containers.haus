@@ -1,0 +1,16 @@
+{
+  empty_array: [ // only a comment
+  ],
+  empty_record: { /* nothing here */ },
+  payload: Tag { // in a record payload
+  },
+  args: Pair(1 /* one */, 2),
+  dangling: [
+    1,
+    2,
+    // after the last item
+  ],
+  deep: [[[ // deep
+    1,
+  ]]],
+}

@@ -1,0 +1,26 @@
+Person {
+  name: "John Doe",
+  tags: [
+    "a",
+    "b",
+  ],
+  price: Money(7.90, EUR),
+  empty: {},
+  none: [],
+  nested: [
+    [
+      1,
+      2,
+    ],
+    [],
+    [
+      [],
+    ],
+  ],
+  records: [
+    {
+      a: 1,
+    },
+    {},
+  ],
+}

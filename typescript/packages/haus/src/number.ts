@@ -3,7 +3,7 @@
  * gives every number, and the checks a number built in code passes before it
  * is written (spec §9.8: the same limits as when parsing).
  */
-import { HausSyntaxError, START } from "./errors.js"
+import { HausSyntaxError, START, type Problem } from "./errors.js"
 import { DEFAULT_LIMITS, Parser, type Limits } from "./parser.js"
 
 /** A normalized literal that is a whole number: digits with an optional `-` (`-0` included). */
@@ -56,9 +56,9 @@ const shortestLength = (text: string, max: number): number => {
  * fits in `maxNumberLength` characters. A number the parser produced within
  * `limits` is always within them.
  */
-export const numberLimitIssue = (text: string, limits: Limits): string | undefined => {
+export const numberLimitIssue = (text: string, limits: Limits): Problem | undefined => {
   const exponent = /e-?(\d+)$/.exec(text)?.[1]
-  if (exponent !== undefined && (exponent.length > 15 || Number(exponent) > limits.maxExponent)) return `exponent larger than ${limits.maxExponent}`
-  if (shortestLength(text, limits.maxNumberLength) > limits.maxNumberLength) return `number literal longer than ${limits.maxNumberLength} characters`
+  if (exponent !== undefined && (exponent.length > 15 || Number(exponent) > limits.maxExponent)) return { code: "exponent-too-large", reason: `exponent larger than ${limits.maxExponent}` }
+  if (shortestLength(text, limits.maxNumberLength) > limits.maxNumberLength) return { code: "number-too-long", reason: `number literal longer than ${limits.maxNumberLength} characters` }
   return undefined
 }

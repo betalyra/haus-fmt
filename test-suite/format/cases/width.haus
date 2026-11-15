@@ -1,0 +1,8 @@
+{
+  // With the comma after it, `fits` is exactly 80 columns: it stays on one line.
+  fits: Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+  // One column more: one argument per line.
+  over: Pair("aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+  nested: Outer(Inner("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 1),
+  deep: [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[Point(1, 2)]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]],
+}

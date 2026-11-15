@@ -1,0 +1,8 @@
+// A log stream.
+Event { level: Info, text: "started" }, // first
+
+// The second item.
+Event { level: Warn, text: "slow" } /* before the comma */,
+Ping, Ping, // two on one line
+/* before the last */ Event { level: Info, text: "stopped" },
+// after the last item

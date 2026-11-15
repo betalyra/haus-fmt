@@ -165,7 +165,7 @@ it); a later one may not, since one is only allowed at the start of the
 stream.
 -/
 def parsePiece (L : Limits) (first : Bool) (t : Text) : Except Error (List Value) :=
-  if !first && t.head? = some '﻿' then .error (.at "byte order mark after the start of the stream" t)
+  if !first && t.head? = some '﻿' then .error (.at .expectedValue "byte order mark after the start of the stream" t)
   else parse L t
 
 /-- The values of the pieces, in order, until the first error. -/
@@ -173,7 +173,7 @@ def decode (L : Limits) : Bool → List Text → Res → List Value × Option Er
   | first, p :: ps, res =>
     match parsePiece L first p with
     | .ok [v] => let x := decode L false ps res; (v :: x.1, x.2)
-    | .ok _ => ([], some (.at "expected a value before ','" p))
+    | .ok _ => ([], some (.at .expectedValue "expected a value before ','" p))
     | .error e => ([], some e)
   | first, [], .ok _ cur buf =>
     match parsePiece L first (cur ++ buf) with
@@ -182,7 +182,7 @@ def decode (L : Limits) : Bool → List Text → Res → List Value × Option Er
   | first, [], .unbalanced t =>
     match parsePiece L first t with
     | .error e => ([], some e)
-    | .ok _ => ([], some (.at "unbalanced closing bracket" t))
+    | .ok _ => ([], some (.at .unexpectedCloser "unbalanced closing bracket" t))
 
 /--
 **The stream reader**: the values of the text arriving as `chunks`, and the

@@ -10,6 +10,8 @@ Language-independent tests that every haus parser must pass.
   of their canonical forms joined by `,`, as 64 lowercase hex digits and a
   line break. A file with one value has the same hash as the value.
 - `invalid/NAME.haus` must be rejected: a syntax error, or invalid UTF-8.
+  `invalid/NAME.error` is the error code (spec §17) it must be rejected with:
+  one line, such as `payload-newline`. Positions and messages are not compared.
 
 Files are raw bytes. Some use CRLF line endings, a BOM or literal tab
 characters, so keep them byte-exact. Don't let editors or git rewrite them.
@@ -22,15 +24,17 @@ cases for it (spec §15), written in haus:
 ```haus
 Ok { type: "F64", input: 0.10, output: 0.1 },   // decodes; encoding gives output
 Ok { type: "I", input: 42 },                     // no output: encoding gives input back
-Err { type: "I", input: 1.0 },                   // decoding fails
+Err { type: "I", input: 1.0, code: "not-an-integer" },  // decoding fails, with this code
 ```
 
 `type` names a definition without parameters. For `Ok`, decode `input` with
 the type, encode the result with the same type, and compare its canonical form
 (§12) with that of `output`, or of `input` when there is no `output`. For
-`Err`, decoding must fail. Error messages are not compared.
+`Err`, decoding must fail with the error code `code` (spec §17). Error
+messages and places are not compared.
 
-`schema/invalid/NAME.schema.haus` must be rejected by schema checkers (spec §14).
+`schema/invalid/NAME.schema.haus` must be rejected by schema checkers (spec §14),
+with the error code in `schema/invalid/NAME.error`.
 Bindings also check that attributes don't matter: each schema file, with every
 attribute removed, must give the same result for every case.
 
@@ -79,10 +83,19 @@ haus, with JSON text in strings:
   `Ok { type, input, json }`: writing the decoded `input` gives `json`, and
   reading `json` gives a value that encodes to `input` (or `output`).
   `Read { type, json, output }`: reading `json` gives `output`.
-  `Err { type, json }`: reading fails.
-- `lossless.cases.haus`: the lossless mapping, without a type (`Ok { input, json }`, `Err { json }`).
+  `Err { type, json, code }`: reading fails, with the error code `code`.
+- `lossless.cases.haus`: the lossless mapping, without a type (`Ok { input, json }`, `Err { json, code }`).
   Every `valid/NAME.json` is a lossless case too, a JSON array of the file's values.
-- `schemaless.cases.haus`: JSON read without a schema (`Read { json, output }`, `Err { json }`).
+- `schemaless.cases.haus`: JSON read without a schema (`Read { json, output }`, `Err { json, code }`).
 
 JSON is compared as data: member order and whitespace don't matter, and
 numbers compare by their text.
+
+## Error codes
+
+Every error has a code from the catalogue (spec §17, [`../spec/errors.md`](../spec/errors.md)).
+Where a case is rejected, the suite gives the code it must be rejected with:
+`invalid/NAME.error`, `schema/invalid/NAME.error`, and `code` in each `Err`
+case. A file or case has one mistake, so the code doesn't depend on which
+error a binding finds first. A binding that doesn't report codes yet can
+ignore them; one that does must report exactly these.

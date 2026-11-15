@@ -18,7 +18,7 @@
  * dispatch on the tag, depth is limited, and every call has a work budget.
  * Types that contain themselves are declared with `h.Recursive`.
  */
-import { HausDecodeError, HausEncodeError, START, type Path } from "./errors.js"
+import { HausDecodeError, HausEncodeError, START, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
@@ -35,7 +35,7 @@ export type { Json, JsonType, Value }
 
 // ── core ─────────────────────────────────────────────────────
 
-export { formatPath, HausDecodeError, HausEncodeError, type Path } from "./errors.js"
+export { errorCode, errorJson, formatPath, HausDecodeError, HausEncodeError, type ErrorCode, type ErrorJson, type Path } from "./errors.js"
 
 /**
  * Limits for one decode or encode call. They hold whatever the schema looks
@@ -98,7 +98,7 @@ export class At {
 
   /** The position of a child value. Fails beyond the depth limit. */
   child(key: string | number): At {
-    if (this.depth >= this.ctx.maxDepth) this.fail(`nesting deeper than ${this.ctx.maxDepth} levels`, key)
+    if (this.depth >= this.ctx.maxDepth) this.reject("nesting-too-deep", `nesting deeper than ${this.ctx.maxDepth} levels`, { key })
     return new At(this.ctx, this, key, this.depth + 1)
   }
 
@@ -112,7 +112,7 @@ export class At {
 
   /** Opening a container here: fails if it would nest deeper than the limit, as in the parser. */
   open(): void {
-    if (this.depth >= this.ctx.maxDepth) this.fail(`nesting deeper than ${this.ctx.maxDepth} levels`)
+    if (this.depth >= this.ctx.maxDepth) this.reject("nesting-too-deep", `nesting deeper than ${this.ctx.maxDepth} levels`)
   }
 
   /** The parser's limits for this call, for checking raw values (spec §9.8). */
@@ -123,7 +123,7 @@ export class At {
   /** Count one schema step. Fails when the budget is used up. */
   step(): void {
     if (++this.ctx.steps > this.ctx.maxSteps) {
-      this.fail(`${this.ctx.mode} budget of ${this.ctx.maxSteps} steps exceeded (a schema doing more work than the input justifies)`)
+      this.reject("step-budget", `${this.ctx.mode} budget of ${this.ctx.maxSteps} steps exceeded (a schema doing more work than the input justifies)`)
     }
   }
 
@@ -133,9 +133,20 @@ export class At {
     return out.reverse()
   }
 
+  /**
+   * Fail here (or at the child `childKey`), for schemas written by hand: the
+   * code is `type-mismatch` when decoding and `cannot-encode` when encoding.
+   * `reject` takes the code.
+   */
   fail(reason: string, childKey?: string | number): never {
-    const path = childKey === undefined ? this.path() : [...this.path(), childKey]
-    throw this.ctx.mode === "decode" ? new HausDecodeError(reason, path) : new HausEncodeError(reason, path)
+    return this.reject(this.ctx.mode === "decode" ? "type-mismatch" : "cannot-encode", reason, childKey === undefined ? {} : { key: childKey })
+  }
+
+  /** Fail here (or at the child `details.key`) with an error code (spec §17). */
+  reject(code: ErrorCode, reason: string, details: ErrorDetails & { readonly key?: string | number | undefined } = {}): never {
+    const { key, ...rest } = details
+    const path = key === undefined ? this.path() : [...this.path(), key]
+    throw this.ctx.mode === "decode" ? new HausDecodeError(reason, path, code, rest) : new HausEncodeError(reason, path, code, rest)
   }
 
   /** @internal Bookkeeping for `h.Recursive`. */
@@ -153,7 +164,7 @@ export class At {
   /** Encoding: run `f` with `obj` marked as being encoded; a cycle back to it fails. */
   enter<R>(obj: unknown, f: () => R): R {
     if (typeof obj !== "object" || obj === null) return f()
-    if (this.ctx.ancestors.has(obj)) this.fail("cyclic value: an object contains itself")
+    if (this.ctx.ancestors.has(obj)) this.reject("cyclic-value", "cyclic value: an object contains itself")
     this.ctx.ancestors.add(obj)
     try {
       return f()
@@ -185,10 +196,10 @@ const countValues = (root: Value, maxDepth: number, cap: number, at: At): number
   const stack: [Value, number][] = [[root, 0]]
   while (stack.length > 0) {
     const [v, depth] = stack.pop()!
-    if (++count > cap) at.fail(`value has more than ${cap} nodes`)
+    if (++count > cap) at.reject("too-many-nodes", `value has more than ${cap} nodes`)
     // A container here is one level more (empty or not), as the parser counts it.
     if (depth >= maxDepth && (v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0))) {
-      at.fail(`value nested deeper than ${maxDepth} levels`)
+      at.reject("nesting-too-deep", `value nested deeper than ${maxDepth} levels`)
     }
     if (v.kind === "array") for (const x of v.items) stack.push([x, depth + 1])
     else if (v.kind === "record") for (const x of v.fields.values()) stack.push([x, depth + 1])
@@ -272,7 +283,22 @@ const describeJs = (value: unknown): string => {
   }
 }
 
-const mismatch = (expected: string, v: Value, at: At): never => at.fail(`expected ${expected}, found ${describe(v)}`)
+const mismatch = (expected: string, v: Value, at: At, code: ErrorCode = "type-mismatch"): never =>
+  at.reject(code, `expected ${expected}, found ${describe(v)}`, { expected, found: describe(v) })
+
+/**
+ * For a closed variant with these tags (`Bool`, `Maybe`, an enum): an unknown
+ * tag is `unknown-tag`, a known one with the wrong payload `wrong-payload`,
+ * anything else a mismatch.
+ */
+const notCase = (expected: string, v: Value, at: At, tags: ReadonlySet<string>): never =>
+  mismatch(expected, v, at, v.kind !== "variant" ? "type-mismatch" : tags.has(v.tag) ? "wrong-payload" : "unknown-tag")
+
+const BOOL_TAGS: ReadonlySet<string> = new Set(["True", "False"])
+const MAYBE_TAGS: ReadonlySet<string> = new Set(["None", "Some"])
+
+/** For an integer type: a number with a fraction or an exponent is `not-an-integer`, anything else a mismatch. */
+const notInteger = (expected: string, v: Value, at: At): never => mismatch(expected, v, at, v.kind === "number" ? "not-an-integer" : "type-mismatch")
 
 /** The `~standard` property of a schema: validate haus text or a parsed Value. */
 const standard = <A>(self: () => Schema<A>): StandardSchemaV1.Props<string | Value, A> => ({
@@ -313,7 +339,8 @@ const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: 
   return self
 }
 
-const invalid = (what: string, value: unknown, at: At): never => at.fail(`expected ${what}, got ${describeJs(value)}`)
+const invalid = (what: string, value: unknown, at: At): never =>
+  at.reject("cannot-encode", `expected ${what}, got ${describeJs(value)}`, { expected: what, found: describeJs(value) })
 
 // ── scalars ──────────────────────────────────────────────────
 
@@ -329,7 +356,7 @@ const short = (text: string) => (text.length > 30 ? text.slice(0, 30) + "…" : 
 /** Any integer, as a bigint (the prelude's arbitrary-size `Int`). */
 const int = make(
   "Int",
-  (v, p) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : mismatch("Int", v, p)),
+  (v, p) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : notInteger("Int", v, p)),
   (n, p) => (typeof n === "bigint" ? num(n.toString()) : invalid("a bigint", n, p)),
   { kind: "integer", quoted: true },
 )
@@ -337,17 +364,17 @@ const int = make(
 /** A bounded integer as a JS number (Int8 … UInt32). Out of range is an error. */
 const smallInt = (name: string, min: number, max: number) =>
   make(name, (v, p) => {
-    if (v.kind !== "number" || !INTEGER.test(v.text)) return mismatch(name, v, p)
+    if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = Number(v.text) + 0 // exact within these ranges (a longer literal is out of range anyway); + 0 turns -0 into 0
-    return n >= min && n <= max ? n : p.fail(`${short(v.text)} is out of range for ${name} (${min} to ${max})`)
+    return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
   }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? num(String(n)) : invalid(`an integer from ${min} to ${max}`, n, p)), { kind: "integer", quoted: false })
 
 /** A bounded integer as a bigint (Int64, UInt64). Out of range is an error. */
 const bigInt = (name: string, min: bigint, max: bigint) =>
   make(name, (v, p) => {
-    if (v.kind !== "number" || !INTEGER.test(v.text)) return mismatch(name, v, p)
+    if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = BigInt(v.text)
-    return n >= min && n <= max ? n : p.fail(`${short(v.text)} is out of range for ${name} (${min} to ${max})`)
+    return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
   }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? num(n.toString()) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true })
 
 const int8 = smallInt("Int8", -128, 127)
@@ -370,7 +397,7 @@ const bigint_ = int
 const float = (name: FloatType) => make(
   name,
   (v, p) =>
-    v.kind === "number" ? (toFloat(v.text, name) ?? p.fail(`${short(v.text)} is too large for ${name}`))
+    v.kind === "number" ? (toFloat(v.text, name) ?? p.reject("out-of-range", `${short(v.text)} is too large for ${name}`, { expected: name, found: short(v.text) }))
     : (specialFloat(v) ?? mismatch(name, v, p)),
   (n, p) => (typeof n === "number" ? (floatValue(n, name) ?? invalid(`a number within the range of ${name}`, n, p)) : invalid("a number", n, p)),
   { kind: "float" },
@@ -400,7 +427,7 @@ const numberFromText = (text: unknown, expected: string, at: At): HNumber => {
   const normalized = typeof text === "string" ? normalizeNumber(text, at.limits) : undefined
   if (normalized === undefined) return invalid(expected, text, at)
   const issue = numberLimitIssue(normalized, at.limits)
-  return issue === undefined ? num(normalized) : at.fail(issue)
+  return issue === undefined ? num(normalized) : at.reject(issue.code, issue.reason)
 }
 
 const bool = make(
@@ -408,7 +435,7 @@ const bool = make(
   (v, p) =>
     v.kind === "variant" && v.args.length === 0 && (v.tag === "True" || v.tag === "False")
       ? v.tag === "True"
-      : mismatch("Bool (True | False)", v, p),
+      : notCase("Bool (True | False)", v, p, BOOL_TAGS),
   (b, p) => (typeof b === "boolean" ? variant(b ? "True" : "False") : invalid("a boolean", b, p)),
   { kind: "bool" },
 )
@@ -428,7 +455,7 @@ const taggedString = <A>(tag: string, format: RegExp, convert: (s: string) => A 
     const arg = v.args[0]
     if (v.args.length !== 1 || arg?.kind !== "string") return mismatch(`${tag}("…")`, v, p)
     const out = format.test(arg.value) ? convert(arg.value) : undefined
-    if (out === undefined) return p.fail(`invalid ${tag} ${JSON.stringify(arg.value.length > 40 ? arg.value.slice(0, 40) + "…" : arg.value)}`, 0)
+    if (out === undefined) return p.reject("invalid-time", `invalid ${tag} ${JSON.stringify(arg.value.length > 40 ? arg.value.slice(0, 40) + "…" : arg.value)}`, { key: 0 })
     return out
   }, (a, p) => {
     const text = toText(a)
@@ -555,7 +582,7 @@ const maybe_ = <A>(inner: Schema<A>): Schema<Maybe<A>> =>
     (v, p) => {
       if (v.kind === "variant" && v.tag === "None" && v.args.length === 0) return none
       if (v.kind === "variant" && v.tag === "Some" && v.args.length === 1) return { _tag: "Some", value: inner.decode(v.args[0]!, p.child(0)) }
-      return mismatch(`None | Some(${inner.expected})`, v, p)
+      return notCase(`None | Some(${inner.expected})`, v, p, MAYBE_TAGS)
     },
     (a, p) => {
       if (!isMaybe(a)) return invalid(`a Maybe ({ _tag: "None" } or { _tag: "Some", value })`, a, p)
@@ -633,11 +660,11 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
     for (const [key, schema] of entries) {
       const field = v.fields.get(key)
       if (field !== undefined) setOwn(out, key, schema.decode(field, at.child(key)))
-      else if (!schema.optional) at.fail(`missing field '${key}'`)
+      else if (!schema.optional) at.reject("missing-field", `missing field '${key}'`, { expected: `the field '${key}'` })
     }
     if (options.closed) {
       for (const key of v.fields.keys()) {
-        if (!Object.hasOwn(fields, key)) at.fail(`unexpected field '${key}' (record is closed)`, key)
+        if (!Object.hasOwn(fields, key)) at.reject("unknown-field", `unexpected field '${key}' (record is closed)`, { key })
       }
     }
     return out as RecordOf<F>
@@ -751,10 +778,10 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
     const c = byTag.get(v.tag)
     if (c === undefined) {
       if (open) return unknownOf(v) as A
-      return at.fail(`unknown tag '${v.tag}', expected one of ${tagList(tags)}`)
+      return at.reject("unknown-tag", `unknown tag '${v.tag}', expected one of ${tagList(tags)}`, { expected: `one of ${tagList(tags)}`, found: v.tag })
     }
     const arity = (n: number, shape: string) => {
-      if (v.args.length !== n) at.fail(`'${v.tag}' expects ${shape}, found ${v.args.length} argument(s)`)
+      if (v.args.length !== n) at.reject("wrong-payload", `'${v.tag}' expects ${shape}, found ${v.args.length} argument(s)`, { expected: shape, found: `${v.args.length} argument(s)` })
     }
     if (c === Unit) {
       arity(0, "no payload")
@@ -840,7 +867,7 @@ const checkedValue = (raw: unknown, at: At): Value => {
   /** A string, key or tag within the string limit (spec §7). */
   const checkedString = (s: unknown, what: string, kind: "string" | "key" | "tag" = "string"): string => {
     if (typeof s !== "string") return invalid(what, s, at)
-    return longerThan(s, maxStringLength) ? at.fail(`${kind} longer than ${maxStringLength} characters`) : s
+    return longerThan(s, maxStringLength) ? at.reject(kind === "key" ? "key-too-long" : kind === "tag" ? "tag-too-long" : "string-too-long", `${kind} longer than ${maxStringLength} characters`) : s
   }
   switch (raw.kind) {
     case "number": {
@@ -898,7 +925,7 @@ export const Enum = <const T extends readonly string[]>(...tags: T): Schema<T[nu
     (v, at) =>
       v.kind === "variant" && v.args.length === 0 && known.has(v.tag)
         ? (v.tag as T[number])
-        : mismatch(`one of ${tagList(tags)}`, v, at),
+        : notCase(`one of ${tagList(tags)}`, v, at, known),
     (t, at) => (typeof t === "string" && known.has(t) ? variant(t) : invalid(`one of ${tagList(tags)}`, t, at)),
     { kind: "variant", open: false, cases: new Map(tags.map((t) => [t, { kind: "unit" }])) },
   )
@@ -943,7 +970,7 @@ const concealed = <R>(expected: string, at: At, f: () => R): R => {
   try {
     return f()
   } catch (e) {
-    if (e instanceof HausDecodeError || e instanceof HausEncodeError) at.fail(`expected ${expected} (a Secret: the value is not shown)`)
+    if (e instanceof HausDecodeError || e instanceof HausEncodeError) at.reject("invalid-secret", `expected ${expected} (a Secret: the value is not shown)`, { expected })
     throw e
   }
 }
@@ -967,7 +994,7 @@ export const Secret = Object.assign(
       (s, at) =>
         // Not even a short description of what was given instead: it may be the secret itself.
         s instanceof SecretValue ? concealed(inner.expected, at, () => inner.encode(s.expose(), at))
-        : at.fail(`expected a Secret (h.Secret.make(…)), got ${s === null ? "null" : Array.isArray(s) ? "an array" : typeof s}`),
+        : at.reject("cannot-encode", `expected a Secret (h.Secret.make(…)), got ${s === null ? "null" : Array.isArray(s) ? "an array" : typeof s}`),
       { kind: "secret", item: jsonType(inner), expected: inner.expected },
     ),
   {
@@ -1027,10 +1054,10 @@ export const Recursive = <A>(name: string, build: (self: Schema<A>) => Schema<A>
     if (state.current === value) {
       // Entering again with the very value we're inside: an object that
       // contains itself, or a schema that consumed nothing in between.
-      if (at.isEncoding(value)) at.fail("cyclic value: an object contains itself")
-      at.fail(`unguarded recursion in ${name}: it applies itself to the same value again`)
+      if (at.isEncoding(value)) at.reject("cyclic-value", "cyclic value: an object contains itself")
+      at.reject("unguarded-recursion", `unguarded recursion in ${name}: it applies itself to the same value again`)
     }
-    if (state.depth >= maxDepth) at.fail(`${name} nested deeper than ${maxDepth} levels`)
+    if (state.depth >= maxDepth) at.reject("nesting-too-deep", `${name} nested deeper than ${maxDepth} levels`)
     const saved = state.current
     state.depth++
     state.current = value
@@ -1060,7 +1087,7 @@ export const decode = <A>(schema: Schema<A>, value: Value, limits: Limits = {}):
 /** Parse a text holding exactly one value and decode it. */
 export const parse = <A>(schema: Schema<A>, text: string, limits: Limits = {}): A => {
   const values = new Parser(text, START, withDefaults(limits)).parseSequence()
-  if (values.length !== 1) throw new HausDecodeError(`expected exactly one value, found ${values.length}`, [])
+  if (values.length !== 1) throw new HausDecodeError(`expected exactly one value, found ${values.length}`, [], "not-one-value", { expected: "one value", found: `${values.length} values` })
   return decode(schema, values[0]!, limits)
 }
 

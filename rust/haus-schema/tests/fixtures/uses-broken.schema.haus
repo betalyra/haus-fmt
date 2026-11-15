@@ -1,0 +1,3 @@
+// The error is in the imported file.
+import ./broken (Broken)
+type Root = Broken

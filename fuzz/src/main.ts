@@ -39,7 +39,24 @@ const BATCH = 5000
 
 /** What must agree: accepted with these values, or rejected. A crash (line -1) never agrees. */
 const outcome = (r: Result) => (r.ok ? `ok ${r.json}` : r.line < 0 ? "crash" : "err")
-const disagrees = (rs: readonly Result[]) => new Set(rs.map(outcome)).size > 1
+/**
+ * Error codes (spec §17) must agree too, among the runners that report them,
+ * wherever they report an error at the same position (which error a parser
+ * finds first is not fixed, §8; one at the same place is the same mistake).
+ */
+const codesByPosition = (rs: readonly Result[]) => {
+  const byPosition = new Map<string, string[]>()
+  for (const r of rs) {
+    if (r.ok || r.code === undefined) continue
+    const at = `${r.line}:${r.column}`
+    byPosition.set(at, [...(byPosition.get(at) ?? []), r.code])
+  }
+  return [...byPosition.values()]
+}
+const codesDisagree = (rs: readonly Result[]) => codesByPosition(rs).some((codes) => new Set(codes).size > 1)
+/** Whether two runners' codes were compared for this case. */
+const codesCompared = (rs: readonly Result[]) => codesByPosition(rs).some((codes) => codes.length > 1)
+const disagrees = (rs: readonly Result[]) => new Set(rs.map(outcome)).size > 1 || codesDisagree(rs)
 /** Positions of the errors, where every parser reports one (line 0: no position, e.g. invalid UTF-8). */
 const positionsDiffer = (rs: readonly Result[]) =>
   rs.every((r) => !r.ok && r.line > 0) && new Set(rs.map((r) => (r.ok ? "" : `${r.line}:${r.column}`))).size > 1
@@ -72,7 +89,7 @@ function describe(bytes: Uint8Array): string {
   const rs = runAll(join(out, "shrink"), [bytes])[0]!
   return [
     `input: ${show(bytes)}`,
-    ...rs.map((r, i) => `  ${runners[i]!.name.padEnd(10)} ${r.ok ? `ok ${r.json}` : `err ${r.line}:${r.column} ${r.reason}`}`),
+    ...rs.map((r, i) => `  ${runners[i]!.name.padEnd(10)} ${r.ok ? `ok ${r.json}` : `err ${r.line}:${r.column} ${r.code === undefined ? "" : `[${r.code}] `}${r.reason}`}`),
   ].join("\n")
 }
 
@@ -92,6 +109,7 @@ function runParsers() {
   const seen = new Set<string>()
   let accepted = 0
   let positionMismatches = 0
+  let compared = 0
   const positionExamples: Uint8Array[] = []
 
   console.log(`seed ${seed}: ${count} cases through ${runners.map((r) => r.name).join(", ")}`)
@@ -100,6 +118,7 @@ function runParsers() {
     const results = runAll(join(out, "cases"), cases)
     results.forEach((rs, i) => {
       if (rs[0]!.ok) accepted++
+      if (codesCompared(rs)) compared++
       if (disagrees(rs)) {
         const small = shrink(cases[i]!)
         const key = show(small)
@@ -114,7 +133,7 @@ function runParsers() {
     })
   }
 
-  console.log(`${accepted} accepted, ${count - accepted} rejected (by lean)`)
+  console.log(`${accepted} accepted, ${count - accepted} rejected (by lean); error codes compared in ${compared}`)
   mkdirSync(join(out, "failures"), { recursive: true })
   if (failures.length === 0) console.log("no disagreements")
   failures.forEach((f, i) => {

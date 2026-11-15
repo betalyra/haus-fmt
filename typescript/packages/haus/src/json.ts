@@ -9,7 +9,7 @@
  * The plain mapping with a schema type (§16.3) is in json-plain.ts, and in
  * `h.toJson` / `h.fromJson` for schemas.
  */
-import { HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type Origin, type Path } from "./errors.js"
+import { HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
 import { toHex } from "./format.js"
 import { isNormalizedNumber, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, MAX_DEPTH, MAX_SUPPORTED_DEPTH, withDefaults, type Limits } from "./parser.js"
@@ -82,10 +82,10 @@ const WHOLE_JSON_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/
 export const isJsonNumber = (text: string): boolean => WHOLE_JSON_NUMBER.test(text)
 
 /** Why a JSON number literal is beyond the limits of §7 (its length, its exponent), or undefined. */
-export const jsonNumberIssue = (text: string, limits: Limits): string | undefined => {
-  if (text.length > limits.maxNumberLength) return `number literal longer than ${limits.maxNumberLength} characters`
+export const jsonNumberIssue = (text: string, limits: Limits): Problem | undefined => {
+  if (text.length > limits.maxNumberLength) return { code: "number-too-long", reason: `number literal longer than ${limits.maxNumberLength} characters` }
   const exponent = /[eE][+-]?0*(\d+)$/.exec(text)?.[1]
-  if (exponent !== undefined && (exponent.length > 15 || Number(exponent) > limits.maxExponent)) return `exponent larger than ${limits.maxExponent}`
+  if (exponent !== undefined && (exponent.length > 15 || Number(exponent) > limits.maxExponent)) return { code: "exponent-too-large", reason: `exponent larger than ${limits.maxExponent}` }
   return undefined
 }
 
@@ -118,13 +118,13 @@ class Reader {
     this.space()
     const value = this.value(0)
     this.space()
-    if (this.pos < this.src.length) this.fail(`unexpected ${this.found()} after the JSON value`)
+    if (this.pos < this.src.length) this.fail("json-syntax", `unexpected ${this.found()} after the JSON value`, this.pos, { expected: "the end of the JSON text", found: this.found() })
     return value
   }
 
-  private fail(reason: string, at = this.pos): never {
+  private fail(code: ErrorCode, reason: string, at = this.pos, details?: ErrorDetails): never {
     const p = locate(this.src, at, this.origin)
-    throw new HausSyntaxError(`JSON: ${reason}`, p.offset, p.line, p.column)
+    throw new HausSyntaxError(`JSON: ${reason}`, p.offset, p.line, p.column, code, details)
   }
 
   private found(): string {
@@ -161,7 +161,7 @@ class Reader {
   }
 
   private word<T extends Json>(word: string, value: T): T {
-    if (!this.src.startsWith(word, this.pos)) this.fail(`unexpected ${this.found()}`)
+    if (!this.src.startsWith(word, this.pos)) this.fail("json-syntax", `unexpected ${this.found()}`, this.pos, { expected: "a JSON value", found: this.found() })
     this.pos += word.length
     return value
   }
@@ -169,15 +169,15 @@ class Reader {
   private number(): JsonNumber {
     JSON_NUMBER.lastIndex = this.pos
     const text = JSON_NUMBER.exec(this.src)?.[0]
-    if (text === undefined) this.fail(`unexpected ${this.found()}`)
+    if (text === undefined) this.fail("json-syntax", `unexpected ${this.found()}`, this.pos, { expected: "a JSON value", found: this.found() })
     const issue = jsonNumberIssue(text, this.limits)
-    if (issue !== undefined) this.fail(issue)
+    if (issue !== undefined) this.fail(issue.code, issue.reason)
     this.pos += text.length
     return new JsonNumber(text)
   }
 
   private open(depth: number) {
-    if (depth >= this.limits.maxDepth) this.fail(`nesting deeper than ${this.limits.maxDepth} levels`)
+    if (depth >= this.limits.maxDepth) this.fail("nesting-too-deep", `nesting deeper than ${this.limits.maxDepth} levels`)
     this.pos++
     this.space()
   }
@@ -194,7 +194,7 @@ class Reader {
       out.push(this.value(depth + 1))
       this.space()
       const c = this.src[this.pos]
-      if (c !== "," && c !== "]") this.fail(`expected ',' or ']', found ${this.found()}`)
+      if (c !== "," && c !== "]") this.fail("json-syntax", `expected ',' or ']', found ${this.found()}`, this.pos, { expected: "',' or ']'", found: this.found() })
       this.pos++
       if (c === "]") return out
     }
@@ -210,18 +210,18 @@ class Reader {
     for (;;) {
       this.space()
       const at = this.pos
-      if (this.src[this.pos] !== '"') this.fail(`expected a member name, found ${this.found()}`)
+      if (this.src[this.pos] !== '"') this.fail("json-syntax", `expected a member name, found ${this.found()}`, this.pos, { expected: "a member name", found: this.found() })
       const key = this.string()
       // I-JSON: member names are unique. A hash lookup, so this stays linear.
-      if (Object.hasOwn(out, key)) this.fail(`duplicate member name ${short(key)}`, at)
+      if (Object.hasOwn(out, key)) this.fail("duplicate-key", `duplicate member name ${short(key)}`, at)
       this.space()
-      if (this.src[this.pos] !== ":") this.fail(`expected ':', found ${this.found()}`)
+      if (this.src[this.pos] !== ":") this.fail("json-syntax", `expected ':', found ${this.found()}`, this.pos, { expected: "':'", found: this.found() })
       this.pos++
       this.space()
       setMember(out, key, this.value(depth + 1))
       this.space()
       const c = this.src[this.pos]
-      if (c !== "," && c !== "}") this.fail(`expected ',' or '}', found ${this.found()}`)
+      if (c !== "," && c !== "}") this.fail("json-syntax", `expected ',' or '}', found ${this.found()}`, this.pos, { expected: "',' or '}'", found: this.found() })
       this.pos++
       if (c === "}") return out
     }
@@ -232,7 +232,7 @@ class Reader {
     let out = ""
     let start = this.pos
     for (;;) {
-      if (this.pos >= this.src.length) this.fail("unterminated string", open)
+      if (this.pos >= this.src.length) this.fail("unterminated-string", "unterminated string", open)
       const c = this.src.charCodeAt(this.pos)
       if (c === 34) {
         out += this.src.slice(start, this.pos++)
@@ -243,22 +243,22 @@ class Reader {
         out += this.escape()
         start = this.pos
       } else if (c < 0x20) {
-        this.fail(`raw control character U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
+        this.fail("control-character", `raw control character U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
       } else if (c >= 0xd800 && c <= 0xdfff) {
         const d = this.src.charCodeAt(this.pos + 1)
-        if (c > 0xdbff || !(d >= 0xdc00 && d <= 0xdfff)) this.fail(`unpaired surrogate U+${hex4(c)}`)
+        if (c > 0xdbff || !(d >= 0xdc00 && d <= 0xdfff)) this.fail("unpaired-surrogate", `unpaired surrogate U+${hex4(c)}`)
         this.pos += 2
       } else {
         this.pos++
       }
     }
-    if (longerThan(out, this.limits.maxStringLength)) this.fail(`string longer than ${this.limits.maxStringLength} characters`, open)
+    if (longerThan(out, this.limits.maxStringLength)) this.fail("string-too-long", `string longer than ${this.limits.maxStringLength} characters`, open)
     return out
   }
 
   private hex(at: number): number {
     const digits = this.src.slice(at, at + 4)
-    if (!/^[0-9A-Fa-f]{4}$/.test(digits)) this.fail("expected four hex digits after \\u", at)
+    if (!/^[0-9A-Fa-f]{4}$/.test(digits)) this.fail("invalid-unicode-escape", "expected four hex digits after \\u", at)
     return parseInt(digits, 16)
   }
 
@@ -287,10 +287,10 @@ class Reader {
             return String.fromCharCode(hi, lo)
           }
         }
-        return this.fail(`unpaired surrogate \\u${hex4(hi)}`, at)
+        return this.fail("unpaired-surrogate", `unpaired surrogate \\u${hex4(hi)}`, at)
       }
       default:
-        return this.fail(`invalid escape \\${e ?? ""}`, at)
+        return this.fail("invalid-escape", `invalid escape \\${e ?? ""}`, at)
     }
   }
 }
@@ -335,7 +335,7 @@ const LONE_SURROGATE = /\p{Cs}/u
 
 /** A JSON string literal; a string with an unpaired surrogate has none (I-JSON). */
 const quoteJson = (s: string, path: () => Path): string => {
-  if (LONE_SURROGATE.test(s)) throw new HausEncodeError("a string with an unpaired surrogate has no JSON form (I-JSON)", path())
+  if (LONE_SURROGATE.test(s)) throw new HausEncodeError("a string with an unpaired surrogate has no JSON form (I-JSON)", path(), "no-json-form")
   return JSON.stringify(s)
 }
 
@@ -353,7 +353,7 @@ export const stringifyJson = (json: Json): string => {
   /** The containers being written, to detect a cycle. */
   const open = new Set<object>()
   const enter = (container: object, close: string) => {
-    if (open.has(container)) throw new HausEncodeError("JSON contains itself (cyclic)", [])
+    if (open.has(container)) throw new HausEncodeError("JSON contains itself (cyclic)", [], "cyclic-value")
     open.add(container)
     work.push({ close, container })
   }
@@ -373,7 +373,7 @@ export const stringifyJson = (json: Json): string => {
     else if (j === true || j === false) out.push(String(j))
     else if (typeof j === "string") out.push(quoteJson(j, () => []))
     else if (j instanceof JsonNumber) {
-      if (!WHOLE_JSON_NUMBER.test(j.text)) throw new HausEncodeError(`not a JSON number: ${short(j.text)}`, [])
+      if (!WHOLE_JSON_NUMBER.test(j.text)) throw new HausEncodeError(`not a JSON number: ${short(j.text)}`, [], "cannot-encode")
       out.push(j.text)
     } else if (Array.isArray(j)) {
       out.push("[")
@@ -390,7 +390,7 @@ export const stringifyJson = (json: Json): string => {
         work.push({ json: (j as JsonObject)[keys[i]!]! }, { text: `${i > 0 ? "," : ""}${quoteJson(keys[i]!, () => [])}:` })
       }
     } else {
-      throw new HausEncodeError(`not a JSON value: ${typeof j}`, [])
+      throw new HausEncodeError(`not a JSON value: ${typeof j}`, [], "cannot-encode")
     }
   }
   return out.join("")
@@ -431,26 +431,26 @@ export const describeJson = (j: Json): string =>
 
 /** A JSON number as a haus number (its normalized literal), checked against the limits. */
 export const numberOfJson = (n: JsonNumber, limits: Limits, place: Place) => {
-  if (!WHOLE_JSON_NUMBER.test(n.text)) throw new HausDecodeError(`not a JSON number: ${short(n.text)}`, place.path())
+  if (!WHOLE_JSON_NUMBER.test(n.text)) throw new HausDecodeError(`not a JSON number: ${short(n.text)}`, place.path(), "invalid-number")
   const issue = jsonNumberIssue(n.text, limits)
-  if (issue !== undefined) throw new HausDecodeError(issue, place.path())
+  if (issue !== undefined) throw new HausDecodeError(issue.reason, place.path(), issue.code)
   return num(normalizeJsonNumber(n.text))
 }
 
 /** A member name as a record key, checked against the string limit (spec §7: it counts keys too). */
 export const keyOfJson = (k: string, limits: Limits, place: Place): string => {
-  if (longerThan(k, limits.maxStringLength)) throw new HausDecodeError(`key longer than ${limits.maxStringLength} characters`, place.path())
+  if (longerThan(k, limits.maxStringLength)) throw new HausDecodeError(`key longer than ${limits.maxStringLength} characters`, place.path(), "key-too-long")
   return k
 }
 
 /** A tag name within the string limit (spec §7: it counts tags too): undefined, or why not. */
-export const tagLengthIssue = (tag: string, limits: Limits): string | undefined =>
-  tag.length > limits.maxStringLength ? `tag longer than ${limits.maxStringLength} characters` : undefined
+export const tagLengthIssue = (tag: string, limits: Limits): Problem | undefined =>
+  tag.length > limits.maxStringLength ? { code: "tag-too-long", reason: `tag longer than ${limits.maxStringLength} characters` } : undefined
 
 /** A JSON string as a haus string, checked against the limits (a parsed one is within them already). */
 export const stringOfJson = (s: string, limits: Limits, place: Place) => {
-  if (longerThan(s, limits.maxStringLength)) throw new HausDecodeError(`string longer than ${limits.maxStringLength} characters`, place.path())
-  if (LONE_SURROGATE.test(s)) throw new HausDecodeError("a string with an unpaired surrogate", place.path())
+  if (longerThan(s, limits.maxStringLength)) throw new HausDecodeError(`string longer than ${limits.maxStringLength} characters`, place.path(), "string-too-long")
+  if (LONE_SURROGATE.test(s)) throw new HausDecodeError("a string with an unpaired surrogate", place.path(), "unpaired-surrogate")
   return str(s)
 }
 
@@ -462,9 +462,9 @@ const plainValue = (j: Json, limits: Limits, depth: number, place: Place): Value
   if (j === true || j === false) return variant(j ? "True" : "False")
   if (typeof j === "string") return stringOfJson(j, limits, place)
   if (j instanceof JsonNumber) return numberOfJson(j, limits, place)
-  if (depth >= limits.maxDepth) throw new HausDecodeError(`nesting deeper than ${limits.maxDepth} levels`, place.path())
+  if (depth >= limits.maxDepth) throw new HausDecodeError(`nesting deeper than ${limits.maxDepth} levels`, place.path(), "nesting-too-deep")
   if (Array.isArray(j)) return arr(j.map((x, i) => plainValue(x, limits, depth + 1, place.child(i))))
-  if (typeof j !== "object") throw new HausDecodeError(`not a JSON value: ${typeof j}`, place.path())
+  if (typeof j !== "object") throw new HausDecodeError(`not a JSON value: ${typeof j}`, place.path(), "type-mismatch")
   return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place), plainValue((j as JsonObject)[k]!, limits, depth + 1, place.child(k))])))
 }
 
@@ -497,25 +497,25 @@ const LOWER_HEX = /^(?:[0-9a-f]{2})*$/
  * tag names, number literals (normalized as the parser would), the limits.
  */
 export const losslessJson = (value: Value, limits: Limits, place: Place): Json => {
-  const fail = (reason: string, at: Place): never => {
-    throw new HausEncodeError(reason, at.path())
+  const fail = (reason: string, at: Place, code: ErrorCode = "cannot-encode"): never => {
+    throw new HausEncodeError(reason, at.path(), code)
   }
   const write = (v: Value, depth: number, at: Place, payload: boolean): Json => {
     if (typeof v !== "object" || v === null) return fail("not a haus value", at)
     const open = () => {
-      if (!payload && depth >= limits.maxDepth) fail(`value nested deeper than ${limits.maxDepth} levels (or cyclic)`, at)
+      if (!payload && depth >= limits.maxDepth) fail(`value nested deeper than ${limits.maxDepth} levels (or cyclic)`, at, "nesting-too-deep")
     }
     const inner = payload ? depth : depth + 1
     switch (v.kind) {
       case "string":
         if (typeof v.value !== "string") return fail("not a haus value", at)
-        if (longerThan(v.value, limits.maxStringLength)) fail(`string longer than ${limits.maxStringLength} characters`, at)
+        if (longerThan(v.value, limits.maxStringLength)) fail(`string longer than ${limits.maxStringLength} characters`, at, "string-too-long")
         return v.value
       case "number": {
         const text = typeof v.text !== "string" ? undefined : isNormalizedNumber(v.text) ? v.text : normalizeNumber(v.text, limits)
         if (text === undefined) return fail("not a number literal", at)
         const issue = numberLimitIssue(text, limits)
-        return issue === undefined ? jsonObject([["num", text]]) : fail(issue, at)
+        return issue === undefined ? jsonObject([["num", text]]) : fail(issue.reason, at, issue.code)
       }
       case "bytes":
         return v.bytes instanceof Uint8Array ? jsonObject([["bytes", toHex(v.bytes)]]) : fail("not a haus value", at)
@@ -525,13 +525,13 @@ export const losslessJson = (value: Value, limits: Limits, place: Place): Json =
       case "record":
         open()
         return jsonObject([["rec", jsonObject([...v.fields].map(([k, x]) => {
-          if (longerThan(k, limits.maxStringLength)) fail(`key longer than ${limits.maxStringLength} characters`, at)
+          if (longerThan(k, limits.maxStringLength)) fail(`key longer than ${limits.maxStringLength} characters`, at, "key-too-long")
           return [k, write(x, inner, at.child(k), false)] as const
         }))]])
       case "variant": {
-        if (typeof v.tag !== "string" || !TAG.test(v.tag)) return fail("not a tag name", at)
+        if (typeof v.tag !== "string" || !TAG.test(v.tag)) return fail("not a tag name", at, "invalid-tag")
         const tagIssue = tagLengthIssue(v.tag, limits)
-        if (tagIssue !== undefined) fail(tagIssue, at)
+        if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
         if (v.args.length === 0) return jsonObject([["tag", v.tag]])
         open()
         // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
@@ -547,12 +547,12 @@ export const losslessJson = (value: Value, limits: Limits, place: Place): Json =
 
 /** A haus value from its lossless JSON (spec §16.2); any other JSON is an error. */
 export const fromLossless = (json: Json, limits: Limits, place: Place): Value => {
-  const fail = (reason: string, at: Place): never => {
-    throw new HausDecodeError(reason, at.path())
+  const fail = (reason: string, at: Place, code: ErrorCode = "lossless-form"): never => {
+    throw new HausDecodeError(reason, at.path(), code)
   }
   const read = (j: Json, depth: number, at: Place, payload: boolean): Value => {
     const open = () => {
-      if (!payload && depth >= limits.maxDepth) fail(`nesting deeper than ${limits.maxDepth} levels`, at)
+      if (!payload && depth >= limits.maxDepth) fail(`nesting deeper than ${limits.maxDepth} levels`, at, "nesting-too-deep")
     }
     const inner = payload ? depth : depth + 1
     if (typeof j === "string") return stringOfJson(j, limits, at)
@@ -565,14 +565,14 @@ export const fromLossless = (json: Json, limits: Limits, place: Place): Value =>
     const only = (...names: string[]) => keys.length === names.length && names.every((n) => Object.hasOwn(j, n))
     if (only("num")) {
       const text = j["num"]
-      if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at)
+      if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at, "lossless-number")
       const issue = numberLimitIssue(text, limits)
-      return issue === undefined ? num(text) : fail(issue, at)
+      return issue === undefined ? num(text) : fail(issue.reason, at, issue.code)
     }
     if (only("bytes")) {
       const hex = j["bytes"]
-      if (typeof hex !== "string" || !LOWER_HEX.test(hex)) return fail(`"bytes" must be two lowercase hex digits per byte`, at)
-      if (hex.length > limits.maxStringLength) fail(`byte string longer than ${limits.maxStringLength} characters`, at)
+      if (typeof hex !== "string" || !LOWER_HEX.test(hex)) return fail(`"bytes" must be two lowercase hex digits per byte`, at, "lossless-bytes")
+      if (hex.length > limits.maxStringLength) fail(`byte string longer than ${limits.maxStringLength} characters`, at, "string-too-long")
       const out = new Uint8Array(hex.length / 2)
       for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16)
       return bytesValue(out)
@@ -585,9 +585,9 @@ export const fromLossless = (json: Json, limits: Limits, place: Place): Value =>
     }
     if (only("tag") || only("tag", "args")) {
       const tag = j["tag"]
-      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at)
+      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at, "invalid-tag")
       const tagIssue = tagLengthIssue(tag, limits)
-      if (tagIssue !== undefined) fail(tagIssue, at)
+      if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
       if (!Object.hasOwn(j, "args")) return variant(tag)
       const args = j["args"]!
       if (!Array.isArray(args) || args.length === 0) return fail(`"args" must be a non-empty array (a tag without arguments has no "args")`, at)
@@ -656,7 +656,7 @@ export async function* readLines<T>(
   let origin: Origin = START
   let index = 0
   const tooLong = () => {
-    throw new HausSyntaxError(`JSON Lines: line longer than ${maxLineLength} characters`, origin.offset, origin.line, origin.column)
+    throw new HausSyntaxError(`JSON Lines: line longer than ${maxLineLength} characters`, origin.offset, origin.line, origin.column, "value-too-long")
   }
   const line = (text: string): T => {
     // A byte order mark at the very start is ignored.
@@ -686,7 +686,7 @@ export async function* readLines<T>(
   yield* push(decoder.decode())
   if (pendingLength > 0) {
     if (options.requireTerminator) {
-      throw new HausSyntaxError("JSON Lines: the stream ended without a line feed after the last value (truncated?)", origin.offset, origin.line, origin.column)
+      throw new HausSyntaxError("JSON Lines: the stream ended without a line feed after the last value (truncated?)", origin.offset, origin.line, origin.column, "stream-truncated")
     }
     yield line(pending.join(""))
   }

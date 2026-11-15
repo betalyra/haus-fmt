@@ -23,7 +23,7 @@ theorem WsRead.ws {w r : Text} (h : WsRead w r) (hr : r ≠ []) : WS w := by
   · exact h
   · exact absurd rfl hr
 
-theorem expect_sound (c : Char) (what : String) (t r : Text) (h : (expect c what).run t = .ok ((), r)) :
+theorem expect_sound (c : Char) (code : Code) (what : String) (t r : Text) (h : (expect c code what).run t = .ok ((), r)) :
     t = c :: r := by
   simp only [expect, run_bind, run_get] at h
   split at h
@@ -213,11 +213,11 @@ theorem fields_step (L : Limits) (fuel : Nat) (hv : ValueOk L fuel) (hf : Fields
       | ok res =>
         obtain ⟨⟨⟩, r2⟩ := res
         simp only [hw1] at h
-        cases he : (expect ':' s!"expected ':' after key '{k}'").run r2 with
+        cases he : (expect ':' .missingColon s!"expected ':' after key '{k}'").run r2 with
         | error e => simp [he] at h
         | ok res =>
           obtain ⟨⟨⟩, r3⟩ := res
-          have hr2 := expect_sound ':' _ r2 r3 he
+          have hr2 := expect_sound ':' _ _ r2 r3 he
           simp only [he] at h
           cases hw2 : ws.run r3 with
           | error e => simp [hw2] at h
@@ -506,6 +506,7 @@ has the security properties A1–A4.
 theorem parse_sound (L : Limits) (input : Text) (vs : List Value) (h : Parser.parse L input = .ok vs) :
     File L input vs := by
   unfold Parser.parse at h
+  simp only [mapError_eq_ok] at h
   split at h
   · rename_i r
     simpa using afterBom_sound L _ ['\uFEFF'] r vs (.inr rfl) h

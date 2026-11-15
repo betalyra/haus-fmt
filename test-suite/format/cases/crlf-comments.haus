@@ -1,0 +1,13 @@
+// CRLF everywhere
+/* a block comment
+   over two lines */
+{
+  a: Tag( // in the payload
+    { b: 1 } /* after
+    the record */
+  ), // trailing
+  text: """
+    one
+    two
+    """,
+}

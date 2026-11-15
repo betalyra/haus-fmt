@@ -1,0 +1,16 @@
+// Already in the standard layout: formatting changes nothing.
+Person {
+  name: "John Doe", // the name
+  tags: [
+    "a",
+    "b",
+  ],
+
+  price: Money(7.90, EUR),
+  text: """
+    two
+    lines
+    """,
+},
+
+Ping,

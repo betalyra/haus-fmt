@@ -1,3 +1,4 @@
+import Haus.ErrorCode
 import Haus.Lexical
 import Haus.Value
 import Haus.Lists

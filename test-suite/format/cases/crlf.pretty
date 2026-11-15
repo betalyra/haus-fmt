@@ -1,0 +1,11 @@
+// CRLF line endings
+{
+  a: 1, // trailing
+
+  /* block
+     comment */
+  b: """
+    two
+    lines
+    """,
+}

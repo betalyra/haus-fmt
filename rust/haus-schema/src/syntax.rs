@@ -1,9 +1,12 @@
-//! Schema files (`.schema.haus`): syntax tree and parser, following
-//! spec/grammar.ebnf. Parsing builds the tree; [`check`] then reports what
+//! One schema file (`.schema.haus`): syntax tree and parser, following
+//! spec/grammar.ebnf. Parsing builds the tree; `check` then reports what
 //! the grammar allows but the spec doesn't (duplicates, `closed < >`,
-//! attributes with the wrong arguments), and [`expand`] copies spread types
-//! in (`< ...UserEvent | Ping >`), so the generators only ever see plain
-//! records and variants.
+//! attributes with the wrong arguments), and `expand` copies spread types
+//! in (`< ...UserEvent | Ping >`), so the generators and the resolver only
+//! ever see plain records and variants.
+//!
+//! What needs other files (names, arities, imports) is checked by
+//! [`Schema`](crate::Schema), and by the code generators of haus-fmt-build.
 
 use haus::Value;
 use std::collections::{HashMap, HashSet};
@@ -67,6 +70,24 @@ pub const PRELUDE: &[(&str, usize)] = &[
     ("Stream", 1),
 ];
 
+/// The types of std/time (spec §13.2), the only standard module.
+pub const STD_TIME: [&str; 8] =
+    ["Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone"];
+
+/// `unknown type Money`, with how to import it if it's a well-known type.
+pub fn unknown_type(name: &str) -> String {
+    match name {
+        "Money" | "Currency" => format!(
+            "unknown type {name} (import it with: import @haus-fmt/money ({name}), and install @haus-fmt/money with your package manager)"
+        ),
+        "LatLng" | "BBox" => format!(
+            "unknown type {name} (import it with: import @haus-fmt/geo ({name}), and install @haus-fmt/geo with your package manager)"
+        ),
+        _ if STD_TIME.contains(&name) => format!("unknown type {name} (import it with: import std/time ({name}))"),
+        _ => format!("unknown type {name}"),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct File {
     pub imports: Vec<Import>,
@@ -122,27 +143,30 @@ pub enum Ty {
     Record {
         closed: bool,
         fields: Vec<Field>,
-        /// `...Name`; empty once the file is expanded.
+        /// `...Name`; once the file is expanded, only spreads of imported
+        /// types, kept by [`parse_with_imported_spreads`].
         spreads: Vec<Spread>,
         pos: usize,
     },
     Variant {
         closed: bool,
         cases: Vec<Case>,
-        /// `...Name`; empty once the file is expanded.
+        /// `...Name`; once the file is expanded, only spreads of imported
+        /// types, kept by [`parse_with_imported_spreads`].
         spreads: Vec<Spread>,
         pos: usize,
     },
 }
 
 /// `...Name`: the fields or tags of the named type, copied in where it is
-/// written. `at` is how many own fields or cases come before it.
+/// written. `at` is how many own fields or cases come before it (after
+/// expanding, how many fields or cases, the copied ones included).
 #[derive(Debug, Clone)]
 pub struct Spread {
     pub name: String,
     pub at: usize,
     pub pos: usize,
-    /// Attributes written before it, which [`check`] rejects.
+    /// Attributes written before it, which `check` rejects.
     pub attrs: Vec<Attribute>,
 }
 
@@ -192,6 +216,17 @@ pub struct Case {
 
 /// Parse and check a schema file.
 pub fn parse(text: &str) -> Result<File, Error> {
+    parse_file(text, false)
+}
+
+/// [`parse`], but spreads of imported types (`< ...UserEvent >` with
+/// `UserEvent` imported) are left in `spreads`, after the file's own fields
+/// or tags, for [`Schema`](crate::Schema), which loads the imported files.
+pub fn parse_with_imported_spreads(text: &str) -> Result<File, Error> {
+    parse_file(text, true)
+}
+
+fn parse_file(text: &str, imported_spreads: bool) -> Result<File, Error> {
     let file = file.parse(LocatingSlice::new(text)).map_err(|e| {
         let expected = e.inner().context().find_map(|c| match c {
             StrContext::Expected(StrContextValue::Description(d)) => Some(d.to_string()),
@@ -209,7 +244,7 @@ pub fn parse(text: &str) -> Result<File, Error> {
     let mut warnings = check(&file).map_err(at)?;
     // Before spreads are copied in, so each use is reported once, where it is written.
     warnings.extend(deprecated_uses(&file));
-    let file = expand(file).map_err(at)?;
+    let file = expand(file, imported_spreads).map_err(at)?;
     guarded(&file).map_err(at)?;
     warnings.sort_by_key(|(pos, _)| *pos);
     let types = file
@@ -827,10 +862,12 @@ pub type Fail = (usize, String);
 /// Copies every `...Name` in: a variant gets the named variant's tags, a
 /// record the named record's fields, in the place they are written. Whether
 /// the result is open or closed stays its own (spec §14).
-fn expand(file: File) -> Result<File, Fail> {
+/// With `keep_imported`, spreads of imported types stay (see [`parse_with_imported_spreads`]).
+fn expand(file: File, keep_imported: bool) -> Result<File, Fail> {
     let mut x = Expander {
         defs: file.types.iter().map(|d| (d.name.clone(), d.clone())).collect(),
         imported: file.imports.iter().flat_map(|i| i.names.iter().map(|(n, _)| n.clone())).collect(),
+        keep_imported,
         done: HashMap::new(),
         busy: vec![],
     };
@@ -842,6 +879,8 @@ fn expand(file: File) -> Result<File, Fail> {
 struct Expander {
     defs: HashMap<String, TypeDef>,
     imported: HashSet<String>,
+    /// Leave spreads of imported types in place, for the resolver.
+    keep_imported: bool,
     /// Bodies of definitions already expanded.
     done: HashMap<String, Ty>,
     /// Definitions being expanded, to catch a type that spreads itself.
@@ -862,19 +901,14 @@ impl Expander {
                     .iter()
                     .map(|f| Ok((Field { ty: self.ty(&f.ty)?, ..f.clone() }, None)))
                     .collect::<Result<Vec<_>, Fail>>()?;
-                let fields = self.merge(own, spreads, |x, s| match x.body(s)? {
+                let (fields, spreads) = self.merge(own, spreads, |x, s| match x.body(s)? {
                     Ty::Record { fields, .. } => Ok(fields),
                     _ => Err((s.pos, format!("{} is not a record, so it can't be spread here", s.name))),
                 })?;
                 if let Some((key, pos)) = duplicate(fields.iter().map(|(f, from)| (f.key.as_str(), f.pos, *from))) {
                     return Err((pos, format!("duplicate field {key}")));
                 }
-                Ty::Record {
-                    closed: *closed,
-                    fields: fields.into_iter().map(|(f, _)| f).collect(),
-                    spreads: vec![],
-                    pos: *pos,
-                }
+                Ty::Record { closed: *closed, fields: fields.into_iter().map(|(f, _)| f).collect(), spreads, pos: *pos }
             }
             Ty::Variant { closed, cases, spreads, pos } => {
                 let own = cases
@@ -884,42 +918,60 @@ impl Expander {
                         Ok((Case { payload, ..c.clone() }, None))
                     })
                     .collect::<Result<Vec<_>, Fail>>()?;
-                let cases = self.merge(own, spreads, |x, s| match x.body(s)? {
+                let (cases, spreads) = self.merge(own, spreads, |x, s| match x.body(s)? {
                     Ty::Variant { cases, .. } => Ok(cases),
                     _ => Err((s.pos, format!("{} is not a variant, so it can't be spread here", s.name))),
                 })?;
                 if let Some((tag, pos)) = duplicate(cases.iter().map(|(c, from)| (c.tag.as_str(), c.pos, *from))) {
                     return Err((pos, format!("duplicate tag {tag}")));
                 }
-                Ty::Variant {
-                    closed: *closed,
-                    cases: cases.into_iter().map(|(c, _)| c).collect(),
-                    spreads: vec![],
-                    pos: *pos,
-                }
+                Ty::Variant { closed: *closed, cases: cases.into_iter().map(|(c, _)| c).collect(), spreads, pos: *pos }
             }
         })
     }
 
+    /// Whether `name` is imported, or an alias of an imported type.
+    fn imports(&self, name: &str) -> bool {
+        let mut name = name;
+        for _ in 0..=self.defs.len() {
+            match self.defs.get(name) {
+                Some(TypeDef { params, ty: Ty::Name { name: next, args, .. }, .. })
+                    if params.is_empty() && args.is_empty() =>
+                {
+                    name = next
+                }
+                Some(_) => return false,
+                None => return self.imported.contains(name),
+            }
+        }
+        false
+    }
+
     /// Own entries with each spread's entries inserted where it was written.
-    /// Copied entries carry the spread's position, for error messages.
+    /// Copied entries carry the spread's position, for error messages. The
+    /// spreads left for the resolver (of imported types, when they are kept)
+    /// come back with their place among the entries.
+    #[allow(clippy::type_complexity)]
     fn merge<T: Clone>(
         &mut self,
         own: Vec<(T, Option<usize>)>,
         spreads: &[Spread],
         copied: impl Fn(&mut Self, &Spread) -> Result<Vec<T>, Fail>,
-    ) -> Result<Vec<(T, Option<usize>)>, Fail> {
-        let mut out = vec![];
+    ) -> Result<(Vec<(T, Option<usize>)>, Vec<Spread>), Fail> {
+        let (mut out, mut kept) = (vec![], vec![]);
         let n = own.len();
         for (i, entry) in own.into_iter().map(Some).chain([None]).enumerate() {
             for s in spreads.iter().filter(|s| s.at == i) {
-                out.extend(copied(self, s)?.into_iter().map(|x| (x, Some(s.pos))));
+                match self.keep_imported && self.imports(&s.name) {
+                    true => kept.push(Spread { at: out.len(), ..s.clone() }),
+                    false => out.extend(copied(self, s)?.into_iter().map(|x| (x, Some(s.pos)))),
+                }
             }
             if i < n {
                 out.extend(entry);
             }
         }
-        Ok(out)
+        Ok((out, kept))
     }
 
     /// The expanded body of the type a spread names, following aliases.

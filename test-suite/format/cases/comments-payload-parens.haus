@@ -1,0 +1,29 @@
+// Comments inside the parentheses of `Tag({ … })` but outside the braces
+// move inside the braces of `Tag { … }`.
+[
+  Before(/* before the record */ { a: 1 }),
+  After({ a: 1 } /* after the record */),
+  AfterComma({ a: 1 }, /* after a trailing comma */),
+  Line( // a line comment after the parenthesis
+    { a: 1, b: 2 }
+  ),
+  LineAfter({
+    a: 1,
+  } // after the closing brace
+  ),
+  Empty(/* nothing */ {}),
+  EmptyAfter({} // after an empty record
+  ),
+  Both(
+    // before
+
+    { a: 1 }
+
+    // after
+  ),
+  Spaced   ( /* spaces before the parenthesis */ { a: 1 }),
+  Nested(/* outer */ { inner: Inner(/* inner */ { x: 1 }) }),
+  Inline(/* inline */ {}),
+  Braces { /* already inside */ a: 1 },
+  Positional(1, /* between */ { a: 1 }),
+]

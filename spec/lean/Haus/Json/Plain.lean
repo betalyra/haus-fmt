@@ -290,7 +290,7 @@ def toJsonC (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) : Typed → E
         match caseOf? cases tag, args with
         | some (.bare _), _ => .ok (.obj [("_tag", .str tag)])
         | some (.record _ _ fields), [.record fs] =>
-          if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason⟩
+          if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason, none⟩
           else (under (.arg tag 0) (toJsonFields env F o fields fs)).map fun ms => .obj (("_tag", .str tag) :: ms)
         | some (.positional _ []), _ => .ok (.obj [("_tag", .str tag)])
         | some (.positional _ [t1]), [y] =>
@@ -332,7 +332,7 @@ def toJsonFields (env : Env) (F : Nat) (o : String) (fields : List Field) :
         | .error r => fail r)
       let js ← toJsonFields env F o fields fs
       return (k, j) :: js
-    | none => .error ⟨[.key k], "not a field of this record"⟩
+    | none => .error ⟨[.key k], "not a field of this record", none⟩
 
 def toJsonArgs (env : Env) (F : Nat) (o : String) (tag : String) (i : Nat) :
     List Ty → List Typed → Except Error (List JSON)
@@ -453,9 +453,9 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
           match caseOf? cases tag with
           | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else fail s!"{tag} takes no arguments"
           | some (.record _ cl fields) =>
-            if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason⟩ else
+            if hasTagField fields then .error ⟨[.arg tag 0], tagFieldReason, none⟩ else
             match missingJ? fields ms with
-            | some k => .error ⟨[.arg tag 0], s!"missing field {k}"⟩
+            | some k => .error ⟨[.arg tag 0], s!"missing field {k}", none⟩
             | none => (under (.arg tag 0) (readFields env F o cl fields true ms)).map fun ys => .case tag [.record ys]
           | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else fail s!"{tag} takes no arguments"
           | some (.positional _ [t1]) =>
@@ -520,7 +520,7 @@ def readFields (env : Env) (F : Nat) (o : String) (closed : Bool) (fields : List
       let ys ← readFields env F o closed fields skipTag ms
       return (k, y) :: ys
     | none =>
-      if closed then .error ⟨[.key k], "not a field of this closed record"⟩
+      if closed then .error ⟨[.key k], "not a field of this closed record", none⟩
       else readFields env F o closed fields skipTag ms
 termination_by (sizeOf ms, 0)
 

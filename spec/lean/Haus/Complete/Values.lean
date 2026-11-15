@@ -209,7 +209,7 @@ theorem key_complete {L : Limits} {k : Text} {key : String} (h : Key L k key) {x
       · rename_i c' _ h1 h2 heq; exact absurd (List.cons.inj heq).1.symm h2
       · rename_i heq; simp at heq
 
-theorem expect_complete (c : Char) (what : String) (r : Text) : (expect c what).run (c :: r) = .ok ((), r) := by
+theorem expect_complete (c : Char) (code : Code) (what : String) (r : Text) : (expect c code what).run (c :: r) = .ok ((), r) := by
   simp [expect]
 
 /-! ## Which branch `value` takes -/
@@ -764,7 +764,8 @@ theorem valStart_noBom {c : Char} (h : ValStart c) : c ≠ '﻿' := by
 theorem parse_eq (L : Limits) (input t : Text) (h : (match input with
       | '﻿' :: r => r
       | r => r) = t) :
-    Parser.parse L input = (do ws; fileLoop L (4 * (t.length + 1)) (4 * (t.length + 1)) []).run' t := by
+    Parser.parse L input =
+      ((do ws; fileLoop L (4 * (t.length + 1)) (4 * (t.length + 1)) []).run' t).mapError (directive t) := by
   subst h
   rfl
 

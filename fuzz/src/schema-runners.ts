@@ -14,8 +14,15 @@ import { pathToFileURL } from "node:url"
 import { canonical, compileSchemaFile, parseAll } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 
-/** `ok` with the canonical form of the encoded result, `err` (any reason), or a crash. */
-export type Outcome = { readonly kind: "ok"; readonly text: string } | { readonly kind: "err"; readonly reason: string } | { readonly kind: "crash"; readonly reason: string }
+/**
+ * `ok` with the canonical form of the encoded result, `err` (any reason), or
+ * a crash. A runner that reports error codes (spec §17) gives an `err` its
+ * code and its place (`$.items[2].price`, arguments as `[i]`).
+ */
+export type Outcome =
+  | { readonly kind: "ok"; readonly text: string }
+  | { readonly kind: "err"; readonly reason: string; readonly code?: string; readonly place?: string }
+  | { readonly kind: "crash"; readonly reason: string }
 
 export interface SchemaCase {
   readonly suite: string
@@ -32,8 +39,20 @@ const root = new URL("../..", import.meta.url).pathname
 
 export const caseLine = (c: SchemaCase) => `${c.suite} ${c.type} ${Buffer.from(c.text, "utf8").toString("hex")}`
 
-function parseOutcome(line: string): Outcome {
+/** A place as TypeScript writes it: Lean's `.Tag(1)` for a variant's argument is `[1]`. */
+const samePlace = (place: string) => place.replace(/\.[A-Z][A-Za-z0-9_]*\((\d+)\)/g, "[$1]")
+
+/**
+ * One line of a runner's output. With `codes`, an error is
+ * `err PLACE CODE REASON` (the code of spec §17, `-` for none); otherwise
+ * `err REASON`.
+ */
+function parseOutcome(line: string, codes: boolean): Outcome {
   if (line.startsWith("ok ")) return { kind: "ok", text: line.slice(3) }
+  if (codes) {
+    const m = /^err (\S+) (\S+) ?(.*)$/s.exec(line)
+    if (m) return { kind: "err", reason: `${m[1]} ${m[3]}`, place: samePlace(m[1]!), ...(m[2] === "-" ? {} : { code: m[2]! }) }
+  }
   if (line.startsWith("err")) return { kind: "err", reason: line.slice(4) }
   return { kind: "crash", reason: `unexpected output: ${line.slice(0, 200)}` }
 }
@@ -41,15 +60,15 @@ function parseOutcome(line: string): Outcome {
 /**
  * A runner that is a separate program: `program [...args] FILE`. When it
  * crashes or hangs, the cases are split in halves until the ones that crash
- * it are found.
+ * it are found. With `codes`, it reports error codes (see parseOutcome).
  */
-function external(name: string, program: string, args: readonly string[] = []): SchemaRunner {
+function external(name: string, program: string, args: readonly string[] = [], codes = false): SchemaRunner {
   const runRange = (file: string, cases: readonly SchemaCase[]): Outcome[] => {
     const part = `${file}.${name}`
     writeLines(part, cases)
     const p = spawnSync(program, [...args, part], { maxBuffer: 1 << 30, encoding: "utf8", timeout: 600_000 })
     const lines = (p.stdout ?? "").split("\n").filter((l) => l !== "")
-    if (p.status === 0 && lines.length === cases.length) return lines.map(parseOutcome)
+    if (p.status === 0 && lines.length === cases.length) return lines.map((l) => parseOutcome(l, codes))
     if (cases.length === 1) {
       const why = p.error ? String(p.error) : p.signal ? `signal ${p.signal}` : `exit ${p.status}, ${lines.length} lines`
       return [{ kind: "crash", reason: `CRASH (${why}): ${(p.stderr ?? "").trim().split("\n").slice(0, 3).join(" ").slice(0, 300)}` }]
@@ -110,7 +129,7 @@ export function typescriptRunner(texts: ReadonlyMap<string, string>): SchemaRunn
     try {
       decoded = h.decode(schema, value)
     } catch (e) {
-      if (e instanceof h.HausDecodeError) return { kind: "err", reason: e.message }
+      if (e instanceof h.HausDecodeError) return { kind: "err", reason: e.message, code: e.code, place: h.formatPath(e.path) }
       throw e
     }
     try {
@@ -144,7 +163,7 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
   })
 }
 
-export const lean = (types: string) => external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--schema-batch", types])
+export const lean = (types: string) => external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--schema-batch", types], true)
 export const rust = () => external("rust", join(root, "fuzz/schema-rust/target/release/schema_runner"))
 export const roc = () => external("roc", join(root, "fuzz/.build/roc-schema-runner"))
 export const python = () => external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/schema_runner.py")])

@@ -48,6 +48,12 @@ type), `--lossless-batch FILE` (a haus value: its lossless JSON),
 `--lossless-read-batch FILE` and `--schemaless-read-batch FILE` (JSON text
 read as a haus value). Each prints `ok …` or `err …`.
 
+Errors carry the code of spec §17 ([`Haus/ErrorCode.lean`](Haus/ErrorCode.lean)):
+the parser's (syntax and limits) and the schema decoder's. `--batch` prints
+`err LINE COLUMN CODE REASON`, `--schema-batch` prints `err PLACE CODE REASON`
+(`-` where there is none, as for the JSON mappings, which have no codes yet),
+and `--suite` and `--schema-suite` check the codes the suite expects.
+
 ## What is proven
 
 **About every valid file** (theorems about the grammar, so about every
