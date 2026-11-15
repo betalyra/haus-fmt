@@ -391,13 +391,45 @@ fn colors() {
 
 // ── the conformance suite and the repository ─────────────────────
 
+/// The repository's `examples` as CI sees them, without `pnpm install`: the
+/// files copied into a temporary directory, with the official packages they
+/// import in a `node_modules` of their own, taken from `extensions`.
+fn examples_with_packages() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let examples = dir.path().join("examples");
+    fs::create_dir_all(&examples).unwrap();
+    for entry in fs::read_dir(repo().join("examples")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            fs::copy(&path, examples.join(path.file_name().unwrap())).unwrap();
+        }
+    }
+    for name in ["money", "geo"] {
+        let package = examples.join("node_modules/@haus-fmt").join(name);
+        fs::create_dir_all(&package).unwrap();
+        for file in ["package.haus", "schema.haus"] {
+            fs::copy(repo().join("extensions").join(name).join(file), package.join(file)).unwrap();
+        }
+    }
+    dir
+}
+
 #[test]
 fn the_repository_has_no_errors() {
-    let (code, json) = check_json(&repo(), &["test-suite/valid", "examples", "extensions"]);
-    let summary = json.get("summary").unwrap();
-    assert_eq!(summary.get("errors"), Some(&Json::Number("0".into())), "{}", pretty(&json));
+    let no_errors = |json: &Json| {
+        let summary = json.get("summary").unwrap();
+        assert_eq!(summary.get("errors"), Some(&Json::Number("0".into())), "{}", pretty(json));
+    };
+    let (code, json) = check_json(&repo(), &["test-suite/valid", "extensions"]);
+    no_errors(&json);
     assert_eq!(code, 0);
-    assert!(array(&json, "files").len() > 40);
+    let suite = array(&json, "files").len();
+
+    let examples = examples_with_packages();
+    let (code, json) = check_json(examples.path(), &["examples"]);
+    no_errors(&json);
+    assert_eq!(code, 0);
+    assert!(suite + array(&json, "files").len() > 40);
 }
 
 #[test]
