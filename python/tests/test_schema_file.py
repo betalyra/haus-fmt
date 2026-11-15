@@ -37,6 +37,7 @@ def rejects(text: str, reason: str, **kwargs: object) -> HausSchemaFileError:
         ("type A = B", "unknown type B"),
         ("type A = Date", "import it with: import std/time (Date)"),
         ("type A = Money", "import @haus/money (Money)"),
+        ("type A = BBox", "import @haus/geo (BBox)"),
         ("type A = Array", "Array needs 1 argument"),
         ("type A = Array Int Int", "Array needs 1 argument"),
         ("type A = Result Int", "Result needs 2 arguments"),

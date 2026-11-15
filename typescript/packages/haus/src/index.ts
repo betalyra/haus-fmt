@@ -1,5 +1,5 @@
 import { HausSyntaxError } from "./errors.js"
-import { DEFAULT_LIMITS, Parser, type Limits } from "./parser.js"
+import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
 export { formatPath, HausDecodeError, HausEncodeError, HausSyntaxError, type Path } from "./errors.js"
@@ -8,7 +8,7 @@ export {
   parseJson, parseJsonLines, stringifyJson, toLosslessJson, toLosslessJsonLines, toLosslessJsonValue, type Json, type JsonLinesOptions, type JsonObject,
 } from "./json.js"
 export { fromBase64, fromPlainJson, toBase64, toPlainJson, type JsonCase, type JsonRecordType, type JsonType, type JsonVariantType } from "./json-plain.js"
-export { DEFAULT_LIMITS, MAX_DEPTH, type Limits } from "./parser.js"
+export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, type Limits } from "./parser.js"
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
 export * from "./value.js"
 export { format, quote, stringify, type FormatOptions } from "./format.js"
@@ -17,9 +17,14 @@ export { floatText, floatValue, specialFloat, toFloat, toFloat32, toFloat64, typ
 export { normalizeNumber } from "./number.js"
 export { infer, inferSchema, printShape, recursiveNames, RecordShape, resolve, Shape, VariantShape, type Inference, type PrintOptions } from "./infer.js"
 
-/** Parse a complete text into its sequence of top-level values. */
+/**
+ * Parse a complete text into its sequence of top-level values, within
+ * `limits` (spec §7; the defaults for those not given). Throws
+ * HausSyntaxError, and a RangeError for a `maxDepth` above
+ * MAX_SUPPORTED_DEPTH (512).
+ */
 export function parseAll(text: string, limits: Partial<Limits> = {}): Value[] {
-  return new Parser(text, undefined, { ...DEFAULT_LIMITS, ...limits }).parseSequence()
+  return new Parser(text, undefined, withDefaults(limits)).parseSequence()
 }
 
 /**
@@ -27,12 +32,12 @@ export function parseAll(text: string, limits: Partial<Limits> = {}): Value[] {
  * carry `keySpans`. Slower; meant for editors and language servers.
  */
 export function parseWithLocations(text: string, limits: Partial<Limits> = {}): Value[] {
-  return new Parser(text, undefined, { ...DEFAULT_LIMITS, ...limits }, true).parseSequence()
+  return new Parser(text, undefined, withDefaults(limits), true).parseSequence()
 }
 
 /** Values with locations plus the [start, end) span of every comment (for editors). */
 export function parseDocument(text: string, limits: Partial<Limits> = {}): { values: Value[]; comments: [number, number][] } {
-  const parser = new Parser(text, undefined, { ...DEFAULT_LIMITS, ...limits }, true)
+  const parser = new Parser(text, undefined, withDefaults(limits), true)
   const values = parser.parseSequence()
   return { values, comments: parser.comments }
 }
@@ -50,6 +55,8 @@ export {
   type Attribute, type Builtin, type Case, type Definition, type Field, type ModuleResolver, type ParseSchemaOptions, type Payload, type RecordType,
   type ResolvedModule, type SchemaFile, type SchemaWarning, type SchemaWarningKind, type StdType, type Type, type VariantType,
 } from "./schema-file.js"
+export { importHint, moduleOfType, OFFICIAL_EXTENSIONS, schemaOutline, type MissingImport, type SchemaOutline } from "./schema-file.js"
+export { importEdits, missingImports, type ImportEdit } from "./schema-imports.js"
 export { Secret } from "./secret.js"
 export { checkStdTime, isStdTimeType, STD_TIME_TYPES, type StdTimeType } from "./std-time.js"
 export { checkData, describeType, schemaReference, type CheckIssue, type CheckOptions, type SchemaReference } from "./check.js"

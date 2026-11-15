@@ -25,7 +25,11 @@ fn rules() {
     assert_eq!(error("type A = Strin"), "1:10: unknown type Strin");
     assert_eq!(
         error("type A = { total: Money }"),
-        "1:19: unknown type Money (import it with: import @haus/money (Money))"
+        "1:19: unknown type Money (import it with: import @haus/money (Money), and install @haus/money with your package manager)"
+    );
+    assert_eq!(
+        error("type A = { at: LatLng }"),
+        "1:16: unknown type LatLng (import it with: import @haus/geo (LatLng), and install @haus/geo with your package manager)"
     );
     assert_eq!(error("type A = Array"), "1:10: Array takes 1 argument(s), found 0");
     assert_eq!(error("type A = { a: b }"), "1:15: unknown type parameter b");

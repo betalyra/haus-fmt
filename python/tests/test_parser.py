@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import sys
+from collections.abc import Callable
 from decimal import Decimal
+from typing import TypeVar
 
 import pytest
 
 import haus
 from haus import Array, Bytes, Limits, Number, Record, String, Variant
+
+T = TypeVar("T")
 
 
 def error(text: str, limits: Limits = haus.DEFAULT_LIMITS) -> haus.HausSyntaxError:
@@ -70,14 +75,68 @@ def test_limits_are_configurable() -> None:
     assert error('x"0102 0304"', Limits(max_string_length=8)).reason == "byte string longer than 8 characters"
 
 
-def test_recursion_limit_is_a_syntax_error() -> None:
-    e = error("[" * 5000 + "]" * 5000, Limits(max_depth=10_000))
+def test_the_string_limit_counts_keys_and_tags() -> None:
+    """A record key or tag of exactly the limit is accepted, one more is an error at its start (spec §7)."""
+    four = Limits(max_string_length=4)
+    assert haus.parse("{ abcd: Abcd, a: Abcd(1), b: Abcd { c: 1 } }", limits=four) is not None
+    e = error("{ a: 1,\n  abcde: 1 }", four)
+    assert (e.reason, e.line, e.column) == ("key longer than 4 characters", 2, 3)
+    for text, column in (("Abcde", 1), ("[1, Abcde(1)]", 5), ("{ a: Abcde { b: 1 } }", 6)):
+        e = error(text, four)
+        assert (e.reason, e.column) == ("tag longer than 4 characters", column)
+    # A quoted key is a string: the string error, at its quote.
+    e = error('{ "abcde": 1 }', four)
+    assert (e.reason, e.column) == ("string longer than 4 characters", 3)
+
+
+def test_the_string_limit_counts_keys_and_tags_in_streams() -> None:
+    four = Limits(max_string_length=4)
+    assert len(list(haus.parse_stream(["{ abcd: Abcd },\n"], limits=four))) == 1
+    with pytest.raises(haus.HausSyntaxError) as info:
+        list(haus.parse_stream(["1,\n{ ab", "cde: 1 },"], limits=four))
+    assert (info.value.reason, info.value.line, info.value.column) == ("key longer than 4 characters", 2, 3)
+    with pytest.raises(haus.HausSyntaxError) as info:
+        list(haus.parse_stream(["1,\n2,\n  Abcde,"], limits=four))
+    assert (info.value.reason, info.value.line, info.value.column) == ("tag longer than 4 characters", 3, 3)
+
+
+def test_max_depth_is_at_most_the_supported_depth() -> None:
+    assert haus.MAX_SUPPORTED_DEPTH == 512
+    assert Limits(max_depth=512).max_depth == 512
+    with pytest.raises(ValueError, match=r"^max_depth 513 is above 512, the deepest nesting this binding supports"):
+        Limits(max_depth=513)
+    for bad in (-1, 1.5, True):
+        with pytest.raises(ValueError, match="max_depth must be a whole number from 0 to 512"):
+            Limits(max_depth=bad)  # type: ignore[arg-type]
+
+
+def nested_call(frames: int, f: Callable[[], T]) -> T:
+    """`f()`, called `frames` Python frames deeper than here."""
+    return f() if frames == 0 else nested_call(frames - 1, f)
+
+
+def test_the_supported_depth_fits_however_deep_the_caller_is() -> None:
+    """Python's recursion limit is raised as needed: 512 levels parse even from 900 frames deep."""
+    deepest = "A(" * 128 + "{ a: [" * 192 + "1" + "] }" * 192 + ")" * 128
+    assert nested_call(900, lambda: haus.parse(deepest, limits=Limits(max_depth=512))) is not None
+    stream = list(nested_call(900, lambda: haus.parse_stream([deepest + ","], limits=Limits(max_depth=512))))
+    assert len(stream) == 1
+
+
+def test_recursion_limit_is_a_syntax_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Should the stack still run out, the error is a syntax error, not a crash."""
+
+    def no_room(max_depth: int) -> None:
+        pass
+
+    monkeypatch.setattr("haus._parser.make_room", no_room)
+    old = sys.getrecursionlimit()
+    sys.setrecursionlimit(200)
+    try:
+        e = error("[" * 300 + "]" * 300, Limits(max_depth=512))
+    finally:
+        sys.setrecursionlimit(old)
     assert "recursion limit" in e.reason
-
-
-def test_default_depth_fits_the_recursion_limit() -> None:
-    nested = "A(" * 128 + "{ a: [" * 64 + "1" + "] }" * 64 + ")" * 128
-    assert haus.parse(nested) is not None
 
 
 def test_huge_hex_beyond_cpython_digit_limit() -> None:

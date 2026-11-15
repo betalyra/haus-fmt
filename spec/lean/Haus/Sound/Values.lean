@@ -43,13 +43,16 @@ theorem key_sound (L : Limits) (t r : Text) (k : String) (h : (key L).run t = .o
   · rename_i c t0 _ _
     split at h
     · rename_i hc
-      simp only [run_bind, run_takeWhile, run_pure, Except.ok.injEq, Prod.mk.injEq] at h
-      obtain ⟨rfl, rfl⟩ := h
-      refine ⟨(c :: t0).takeWhile isIdentChar, by simp [List.takeWhile_append_dropWhile], .ident _ ?_⟩
-      have hci : isIdentChar c = true := by simp [isIdentChar, hc]
-      refine ⟨c, t0.takeWhile isIdentChar, by simp [hci], hc, ?_⟩
-      intro x hx
-      exact mem_takeWhile hx
+      simp only [run_bind, run_takeWhile] at h
+      by_cases hl : ((c :: t0).takeWhile isIdentChar).length ≤ L.maxStringLength
+      · simp only [checkName_ok hl, Except.ok.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl⟩ := h
+        refine ⟨(c :: t0).takeWhile isIdentChar, by simp [List.takeWhile_append_dropWhile], .ident _ ?_ hl⟩
+        have hci : isIdentChar c = true := by simp [isIdentChar, hc]
+        refine ⟨c, t0.takeWhile isIdentChar, by simp [hci], hc, ?_⟩
+        intro x hx
+        exact mem_takeWhile hx
+      · simp [checkName_long hl] at h
     · split at h <;> simp at h
   · simp at h
 
@@ -284,6 +287,9 @@ theorem variant_step (L : Limits) (fuel : Nat) (hi : ItemsOk L fuel) (hr : Recor
   intro budget c t0 v rest hc h
   simp only [variant, run_bind, run_takeWhile, run_get] at h
   have htag := tag_takeWhile (t0 := t0) hc
+  have hl : ((c :: t0).takeWhile isIdentChar).length ≤ L.maxStringLength :=
+    Classical.byContradiction fun hl => by simp [checkName_long hl] at h
+  simp only [checkName_ok hl] at h
   have hsplit := List.takeWhile_append_dropWhile (p := isIdentChar) (l := c :: t0)
   have hsp := List.takeWhile_append_dropWhile (p := isBlank)
     (l := (c :: t0).dropWhile isIdentChar)
@@ -304,7 +310,7 @@ theorem variant_step (L : Limits) (fuel : Nat) (hi : ItemsOk L fuel) (hr : Recor
         simp at h
         obtain ⟨rfl, rfl⟩ := h
         refine ⟨(c :: t0).takeWhile isIdentChar ++ ((c :: t0).dropWhile isIdentChar).takeWhile isBlank ++
-          '(' :: inner ++ [')'], ?_, .payload b _ _ inner xs htag hblank hits (by simpa using hne)⟩
+          '(' :: inner ++ [')'], ?_, .payload b _ _ inner xs htag hl hblank hits (by simpa using hne)⟩
         conv => lhs; rw [← hsplit, ← hsp, hr0, hr0']
         simp
   · -- `Tag { … }`
@@ -318,13 +324,13 @@ theorem variant_step (L : Limits) (fuel : Nat) (hi : ItemsOk L fuel) (hr : Recor
       simp only [run_bind, hrec, run_pure, Except.ok.injEq, Prod.mk.injEq] at h
       obtain ⟨rfl, rfl⟩ := h
       refine ⟨(c :: t0).takeWhile isIdentChar ++ ((c :: t0).dropWhile isIdentChar).takeWhile isBlank ++ x,
-        ?_, .recordPayload b _ _ x fs htag hblank hrecord⟩
+        ?_, .recordPayload b _ _ x fs htag hl hblank hrecord⟩
       conv => lhs; rw [← hsplit, ← hsp, hr0, hx]
       simp
   · -- `Tag` alone
     simp only [run_bind, run_set, run_pure, Except.ok.injEq, Prod.mk.injEq] at h
     obtain ⟨rfl, rfl⟩ := h
-    exact ⟨(c :: t0).takeWhile isIdentChar, by rw [hsplit], .tag budget _ htag⟩
+    exact ⟨(c :: t0).takeWhile isIdentChar, by rw [hsplit], .tag budget _ htag hl⟩
 
 theorem value_step (L : Limits) (fuel : Nat) (hr : RecordOk L fuel) (hi : ItemsOk L fuel)
     (hvar : VariantOk L fuel) : ValueOk L (fuel + 1) := by

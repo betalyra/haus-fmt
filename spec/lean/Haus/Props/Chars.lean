@@ -190,7 +190,7 @@ theorem Tag.safe {t : Text} (h : Tag t) : SafeText t := by
 
 theorem Key.safe {L : Limits} {t : Text} {k : String} (h : Key L t k) : SafeText t := by
   cases h with
-  | ident hi => exact hi.safe
+  | ident hi _ => exact hi.safe
   | quoted _ hs => exact hs.safe
 
 /-! ## Whitespace and comments -/
@@ -237,10 +237,10 @@ theorem Val.safe {L : Limits} {n : Nat} {t : Text} {v : Value} : Val L n t v →
   | .bytes _ _ _ h _ => .append (.append (by decide) h.safe) (by decide)
   | .array _ _ _ h => .cons (by decide) (.append h.safe (by decide))
   | .record _ _ _ h => h.safe
-  | .tag _ _ h => h.safe
-  | .payload _ _ _ _ _ ht hsp hi _ =>
+  | .tag _ _ h _ => h.safe
+  | .payload _ _ _ _ _ ht _ hsp hi _ =>
       .append (.append (.append ht.safe (blanks_safe hsp)) (.cons (by decide) hi.safe)) (by decide)
-  | .recordPayload _ _ _ _ _ ht hsp hr => .append (.append ht.safe (blanks_safe hsp)) hr.safe
+  | .recordPayload _ _ _ _ _ ht _ hsp hr => .append (.append ht.safe (blanks_safe hsp)) hr.safe
 
 theorem Items.safe {L : Limits} {n : Nat} {t : Text} {xs : List Value} : Items L n t xs → SafeText t
   | .empty _ _ hw => hw.safe

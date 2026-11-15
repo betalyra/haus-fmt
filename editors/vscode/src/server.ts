@@ -1,4 +1,4 @@
-// haus language server: syntax diagnostics, outline, hover with inferred
+// haus language server: syntax diagnostics, quick fixes for missing imports, outline, hover with inferred
 // types, formatting, and schema inference.
 // Runs in its own process; the parser is the TypeScript one from the repo.
 import { existsSync, readFileSync } from "node:fs"
@@ -9,14 +9,21 @@ import {
   completeAt,
   contextOf,
   format,
+  HausSchemaFileError,
   HausSyntaxError,
   hoverAt,
   hoverMarkdown,
+  importEdits,
+  importHint,
   infer,
   inferSchema,
+  missingImports,
+  moduleOfType,
   parseDocument,
   parseSchemaFile,
   schemaReference,
+  type ImportEdit,
+  type MissingImport,
   type SchemaFile,
   type SchemaWarning,
   type HRecord,
@@ -26,6 +33,7 @@ import {
 } from "@haus-fmt/haus"
 import { schemaOptions } from "@haus-fmt/haus/node"
 import {
+  CodeActionKind,
   CompletionItemKind,
   createConnection,
   InsertTextFormat,
@@ -35,6 +43,7 @@ import {
   SymbolKind,
   TextDocuments,
   TextDocumentSyncKind,
+  type CodeAction,
   type CompletionItem,
   type Diagnostic,
   type DocumentSymbol,
@@ -66,6 +75,7 @@ connection.onInitialize(() => ({
     hoverProvider: true,
     documentFormattingProvider: true,
     completionProvider: { triggerCharacters: ["{", ":", ",", "(", "["] },
+    codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
   },
 }))
 
@@ -170,6 +180,9 @@ const warningDiagnostic = (document: TextDocument) => (w: SchemaWarning): Diagno
   ...(w.kind === "deprecated" ? { tags: [DiagnosticTag.Deprecated] } : {}),
 })
 
+/** The code of a schema file's error for a known type used without its import; its data is the MissingImport. */
+const MISSING_IMPORT = "missing-import"
+
 function validate(document: TextDocument): void {
   const diagnostics: Diagnostic[] = []
   try {
@@ -186,10 +199,17 @@ function validate(document: TextDocument): void {
     }
   } catch (e) {
     if (!(e instanceof HausSyntaxError)) throw e
-    // Offsets are UTF-16, like LSP positions; highlight the character at the error.
+    // Offsets are UTF-16, like LSP positions; highlight the character at the error (the name, for a missing import).
+    const missing = e instanceof HausSchemaFileError ? e.missingImport : undefined
     const start = document.positionAt(e.offset)
-    const end = document.positionAt(Math.min(e.offset + 1, document.getText().length))
-    diagnostics.push({ range: { start, end }, severity: DiagnosticSeverity.Error, source: "haus", message: e.reason })
+    const end = document.positionAt(Math.min(e.offset + (missing?.name.length ?? 1), document.getText().length))
+    diagnostics.push({
+      range: { start, end },
+      severity: DiagnosticSeverity.Error,
+      source: "haus",
+      message: e.reason,
+      ...(missing ? { code: MISSING_IMPORT, data: missing } : {}),
+    })
   }
   void connection.sendDiagnostics({ uri: document.uri, diagnostics })
 }
@@ -280,18 +300,22 @@ const detail = (v: Value): string => {
 
 connection.onHover(({ textDocument, position }): Hover | null => {
   const doc = documents.get(textDocument.uri)
-  const schema = schemas.get(textDocument.uri)
-  if (doc && schema) {
-    // A type name: show its definition.
+  if (doc?.languageId === "haus-schema") {
+    // A type name: show its definition, or where a standard or extension type comes from.
     const text = doc.getText()
     const offset = doc.offsetAt(position)
     let start = offset
     let end = offset
     while (start > 0 && /[A-Za-z0-9_]/.test(text[start - 1]!)) start--
     while (end < text.length && /[A-Za-z0-9_]/.test(text[end]!)) end++
-    const d = schema.definition(text.slice(start, end))
-    if (!d) return null
-    return { contents: { kind: "markdown", value: `\`\`\`haus-schema\n${d.source}\n\`\`\`` } }
+    const name = text.slice(start, end)
+    const d = schemas.get(textDocument.uri)?.definition(name)
+    if (d) return { contents: { kind: "markdown", value: `\`\`\`haus-schema\n${d.source}\n\`\`\`` } }
+    const module = moduleOfType(name)
+    if (!module) return null
+    const missing = missingImports(text).some((m) => m.name === name)
+    const value = `\`${name}\` is from \`${module}\`${missing ? `: ${importHint({ module, name })}` : ""}`
+    return { contents: { kind: "markdown", value }, range: { start: doc.positionAt(start), end: doc.positionAt(end) } }
   }
   const state = parsed.get(textDocument.uri)
   if (!doc || !state) return null
@@ -315,6 +339,39 @@ function hoverState(doc: TextDocument, state: Parsed): HoverContext {
     return { values: state.values, inference: state.inference }
   }
 }
+
+// ── quick fixes ──────────────────────────────────────────────
+
+/**
+ * For a missing import: add it (to the module's import if there is one), and
+ * when more types of that module are missing, add them all at once.
+ */
+connection.onCodeAction(({ textDocument, context }): CodeAction[] => {
+  const doc = documents.get(textDocument.uri)
+  if (!doc || doc.languageId !== "haus-schema") return []
+  const text = doc.getText()
+  const action = (title: string, edits: readonly ImportEdit[], diagnostic: Diagnostic, isPreferred: boolean): CodeAction[] =>
+    edits.length === 0 ? [] : [{
+      title,
+      kind: CodeActionKind.QuickFix,
+      diagnostics: [diagnostic],
+      isPreferred,
+      edit: {
+        changes: {
+          [doc.uri]: edits.map((e) => ({ range: { start: doc.positionAt(e.start), end: doc.positionAt(e.end) }, newText: e.newText })),
+        },
+      },
+    }]
+  return context.diagnostics.flatMap((d) => {
+    if (d.code !== MISSING_IMPORT) return []
+    const { module, name } = d.data as MissingImport
+    const all = missingImports(text).filter((m) => m.module === module).map((m) => m.name)
+    return [
+      ...action(`Import ${name} from ${module}`, importEdits(text, module, [name]), d, true),
+      ...(all.length > 1 ? action(`Add all missing imports from ${module} (${all.join(", ")})`, importEdits(text, module, all), d, false) : []),
+    ]
+  })
+})
 
 // ── formatting ───────────────────────────────────────────────
 

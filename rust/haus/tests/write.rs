@@ -21,9 +21,10 @@ fn writes_every_parsed_value_again() {
     {
         roundtrip(&text, &limits);
     }
-    let raised = Limits { max_number_length: 3000, max_exponent: 9000, max_depth: 300, ..limits };
+    let max = haus::MAX_SUPPORTED_DEPTH;
+    let raised = Limits { max_number_length: 3000, max_exponent: 9000, max_depth: max, ..limits };
     for text in
-        ["1".repeat(2500), "0x".to_owned() + &"f".repeat(2500), "1e9000".into(), "[".repeat(300) + &"]".repeat(300)]
+        ["1".repeat(2500), "0x".to_owned() + &"f".repeat(2500), "1e9000".into(), "[".repeat(max) + &"]".repeat(max)]
     {
         roundtrip(&text, &raised);
     }
@@ -43,7 +44,7 @@ fn values_beyond_the_limits_are_not_written() {
     let nested = Value::Array(vec![Value::Array(vec![Value::Array(vec![])])]);
     assert_eq!(error(&nested, &small), "[0][0]: nesting deeper than 2 levels");
     let key = Value::Record(vec![("abcde".into(), Value::Number("1".into()))]);
-    assert_eq!(error(&key, &small), ".abcde: string longer than 4 characters");
+    assert_eq!(error(&key, &small), ".abcde: key longer than 4 characters");
     for n in ["", "-", "1.", ".5", "01", "1e", "+1", "0x", "1 ", "1 // c", "NaN", "1e5.5"] {
         assert_eq!(error(&Value::Number(n.into()), &Limits::default()), "not a number literal", "{n:?}");
     }

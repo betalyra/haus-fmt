@@ -5,17 +5,42 @@ use crate::{SyntaxError as Error, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
+/// The largest [`Limits::max_depth`] this binding supports (spec §7): the
+/// default, 256.
+///
+/// The parser, decoding, encoding and the JSON mappings recurse once per
+/// level of nesting (the JSON reader and writer and the canonical form
+/// don't), so the depth limit bounds the call stack they use. Every function
+/// that takes limits rejects a larger `max_depth` with an error that names
+/// this maximum, rather than risk overflowing the stack on deep input. At
+/// this depth each of them stays well within a thread with a 2 MiB stack
+/// (the default of spawned threads, test threads and many async runtimes),
+/// in a debug build too. Code generated for a recursive type takes stack in
+/// proportion to the type's size: see the README.
+pub const MAX_SUPPORTED_DEPTH: usize = 256;
+
 /// Resource limits, enforced while parsing (spec §7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// Nesting depth of records, arrays and payloads.
+    /// Nesting depth of records, arrays and payloads: at most
+    /// [`MAX_SUPPORTED_DEPTH`].
     pub max_depth: usize,
     /// Characters in one number literal, including sign, separators and exponent.
     pub max_number_length: usize,
     /// Largest absolute exponent: 6144 allows `1e6144` but not `1e6145`.
     pub max_exponent: u64,
-    /// Characters (code points) in one decoded string, or between the quotes of a byte string.
+    /// Characters (code points) in one decoded string, record key or tag,
+    /// or between the quotes of a byte string.
     pub max_string_length: usize,
+}
+
+impl Limits {
+    /// Why this binding can't use these limits: a depth limit above
+    /// [`MAX_SUPPORTED_DEPTH`].
+    pub(crate) fn unsupported(&self) -> Option<String> {
+        (self.max_depth > MAX_SUPPORTED_DEPTH)
+            .then(|| format!("max_depth {} is more than the supported maximum, {MAX_SUPPORTED_DEPTH}", self.max_depth))
+    }
 }
 
 impl Default for Limits {
@@ -25,21 +50,23 @@ impl Default for Limits {
 }
 
 /// Parse a file with the given limits.
+/// Fails, before reading anything, if `limits.max_depth` is more than
+/// [`MAX_SUPPORTED_DEPTH`].
 pub fn parse_with(src: &str, limits: &Limits) -> Result<Vec<Value>, Error> {
     let start = if src.starts_with('\u{FEFF}') { 3 } else { 0 };
-    Parser { src, b: src.as_bytes(), pos: start, depth: 0, limits, file_start: Some(start) }.sequence()
+    Parser::new(src, limits, start, Some(start))?.sequence()
 }
 
 /// The rest of a stream: like `parse_with`, but a byte order mark is not
 /// skipped (the reader removes the one at the start). `at_start`: the text
 /// is the start of the file.
 pub(crate) fn parse_rest(src: &str, limits: &Limits, at_start: bool) -> Result<Vec<Value>, Error> {
-    Parser { src, b: src.as_bytes(), pos: 0, depth: 0, limits, file_start: at_start.then_some(0) }.sequence()
+    Parser::new(src, limits, 0, at_start.then_some(0))?.sequence()
 }
 
 /// Exactly one value, with comments and whitespace around it: one item of a stream.
 pub(crate) fn parse_single(src: &str, limits: &Limits, at_start: bool) -> Result<Value, Error> {
-    Parser { src, b: src.as_bytes(), pos: 0, depth: 0, limits, file_start: at_start.then_some(0) }.single()
+    Parser::new(src, limits, 0, at_start.then_some(0))?.single()
 }
 
 /// `text` as exactly one number literal (`1E5`, `0xFF`, `1_000`), normalized
@@ -90,6 +117,14 @@ fn describe(c: Option<char>) -> String {
 }
 
 impl<'a> Parser<'a> {
+    /// A parser at `pos`, if this binding supports `limits`.
+    fn new(src: &'a str, limits: &'a Limits, pos: usize, file_start: Option<usize>) -> R<Parser<'a>> {
+        match limits.unsupported() {
+            Some(reason) => Err(Error::at(src, 0, reason)),
+            None => Ok(Parser { src, b: src.as_bytes(), pos, depth: 0, limits, file_start }),
+        }
+    }
+
     // ── values ─────────────────────────────────────────────────
 
     fn sequence(&mut self) -> R<Vec<Value>> {
@@ -123,12 +158,22 @@ impl<'a> Parser<'a> {
     fn value(&mut self) -> R<Value> {
         match self.peek() {
             Some(b'{') => self.record(),
-            Some(b'[') => Ok(Value::Array(self.list(b'[', b']')?)),
+            Some(b'[') => self.list(b']').map(Value::Array),
             Some(b'"') if self.b[self.pos..].starts_with(b"\"\"\"") => self.block_string().map(Value::String),
             Some(b'"') => self.basic_string().map(Value::String),
             Some(b'-' | b'0'..=b'9') => self.number(),
             Some(b'x') if self.at(1) == Some(b'"') => self.bytes(),
             Some(c) if c.is_ascii_uppercase() => self.variant(),
+            _ => Err(self.not_a_value()),
+        }
+    }
+
+    /// Why no value starts here. Kept out of [`Parser::value`], which
+    /// recurses: its frame stays small (see [`crate::MAX_SUPPORTED_DEPTH`]).
+    #[cold]
+    #[inline(never)]
+    fn not_a_value(&mut self) -> Error {
+        match self.peek() {
             Some(c) if is_lower_start(c) => {
                 let start = self.pos;
                 let word = self.ident();
@@ -137,16 +182,16 @@ impl<'a> Parser<'a> {
                     "null" => " (use the variant None)",
                     _ => "",
                 };
-                Err(self.fail_at(
+                self.fail_at(
                     start,
                     format!("unexpected identifier '{word}': lowercase identifiers can only be record keys{hint}"),
-                ))
+                )
             }
             // Reserved for a version directive (spec §10): `#haus 2`.
             Some(b'#') if self.file_start == Some(self.pos) && self.b[self.pos..].starts_with(b"#haus") => {
-                Err(self.fail("the file starts with a version directive (#haus): it needs a newer version of haus"))
+                self.fail("the file starts with a version directive (#haus): it needs a newer version of haus")
             }
-            _ => Err(self.fail(format!("expected a value, found {}", describe(self.peek_char())))),
+            _ => self.fail(format!("expected a value, found {}", describe(self.peek_char()))),
         }
     }
 
@@ -165,34 +210,40 @@ impl<'a> Parser<'a> {
         let mut fields = Vec::new();
         let mut seen = HashSet::new();
         self.trivia()?;
-        while self.peek() != Some(b'}') {
-            if self.eof() {
-                return Err(self.fail_at(open, "unclosed '{'"));
-            }
-            let key_pos = self.pos;
-            let key = self.key()?;
-            self.trivia()?;
-            self.expect(b':', &format!("expected ':' after key '{key}'"))?;
-            self.trivia()?;
+        while self.more(open, b'}')? {
+            let (key_pos, key) = self.field_key()?;
             let value = self.value()?;
-            if !seen.insert(key.clone()) {
-                return Err(self.fail_at(key_pos, format!("duplicate key '{key}'")));
-            }
-            fields.push((key, value));
-            self.trivia()?;
-            match self.peek() {
-                Some(b',') => {
-                    self.pos += 1;
-                    self.trivia()?;
-                }
-                Some(b'}') => {}
-                None => return Err(self.fail_at(open, "unclosed '{'")),
-                _ => return Err(self.fail(format!("expected ',' or '}}', found {}", describe(self.peek_char())))),
-            }
+            self.add_field(&mut fields, &mut seen, key_pos, key, value)?;
+            self.separator(open, b'}')?;
         }
         self.pos += 1; // }
         self.depth -= 1;
         Ok(Value::Record(fields))
+    }
+
+    /// A field's key and the `:` after it, with where the key starts.
+    fn field_key(&mut self) -> R<(usize, String)> {
+        let key_pos = self.pos;
+        let key = self.key()?;
+        self.trivia()?;
+        self.expect(b':', &format!("expected ':' after key '{key}'"))?;
+        self.trivia()?;
+        Ok((key_pos, key))
+    }
+
+    fn add_field(
+        &self,
+        fields: &mut Vec<(String, Value)>,
+        seen: &mut HashSet<String>,
+        key_pos: usize,
+        key: String,
+        value: Value,
+    ) -> R<()> {
+        if !seen.insert(key.clone()) {
+            return Err(self.fail_at(key_pos, format!("duplicate key '{key}'")));
+        }
+        fields.push((key, value));
+        Ok(())
     }
 
     fn key(&mut self) -> R<String> {
@@ -200,8 +251,9 @@ impl<'a> Parser<'a> {
             Some(b'"') if self.b[self.pos..].starts_with(b"\"\"\"") => {
                 Err(self.fail("block strings can't be record keys"))
             }
+            // A quoted key is a string: the string limit says so.
             Some(b'"') => self.basic_string(),
-            Some(c) if is_lower_start(c) => Ok(self.ident().to_owned()),
+            Some(c) if is_lower_start(c) => self.name("key").map(str::to_owned),
             Some(c) if c.is_ascii_uppercase() => {
                 let start = self.pos;
                 let word = self.ident();
@@ -215,63 +267,94 @@ impl<'a> Parser<'a> {
     }
 
     /// `open value, value, … close`, with an optional trailing comma.
-    fn list(&mut self, open: u8, close: u8) -> R<Vec<Value>> {
+    fn list(&mut self, close: u8) -> R<Vec<Value>> {
         let start = self.pos;
         self.enter()?;
         self.pos += 1;
         let mut items = Vec::new();
         self.trivia()?;
-        while self.peek() != Some(close) {
-            if self.eof() {
-                return Err(self.fail_at(start, format!("unclosed '{}'", open as char)));
-            }
+        while self.more(start, close)? {
             items.push(self.value()?);
-            self.trivia()?;
-            match self.peek() {
-                Some(b',') => {
-                    self.pos += 1;
-                    self.trivia()?;
-                }
-                Some(c) if c == close => {}
-                None => return Err(self.fail_at(start, format!("unclosed '{}'", open as char))),
-                _ => {
-                    return Err(self.fail(format!(
-                        "expected ',' or '{}', found {}",
-                        close as char,
-                        describe(self.peek_char())
-                    )));
-                }
-            }
+            self.separator(start, close)?;
         }
         self.pos += 1;
         self.depth -= 1;
         Ok(items)
     }
 
+    // The containers' steps that don't recurse are functions of their own,
+    // so that the frames of the recursive ones stay small (see
+    // `crate::MAX_SUPPORTED_DEPTH`).
+
+    /// Whether another item comes before `close`, in the container opened at `start`.
+    fn more(&self, start: usize, close: u8) -> R<bool> {
+        match self.peek() {
+            Some(c) if c == close => Ok(false),
+            None => Err(self.unclosed(start)),
+            _ => Ok(true),
+        }
+    }
+
+    /// After an item: `,` and the trivia after it, or `close`.
+    fn separator(&mut self, start: usize, close: u8) -> R<()> {
+        self.trivia()?;
+        match self.peek() {
+            Some(b',') => {
+                self.pos += 1;
+                self.trivia()
+            }
+            Some(c) if c == close => Ok(()),
+            None => Err(self.unclosed(start)),
+            _ => Err(self.fail(format!("expected ',' or '{}', found {}", close as char, describe(self.peek_char())))),
+        }
+    }
+
+    #[cold]
+    fn unclosed(&self, start: usize) -> Error {
+        self.fail_at(start, format!("unclosed '{}'", self.b[start] as char))
+    }
+
     fn variant(&mut self) -> R<Value> {
-        let tag = self.ident().to_owned();
+        let tag = self.name("tag")?.to_owned();
+        let args = match self.payload() {
+            Some(b'(') => {
+                let paren = self.pos;
+                let args = self.list(b')')?;
+                if args.is_empty() {
+                    return Err(self.empty_payload(paren, &tag));
+                }
+                args
+            }
+            Some(_) => {
+                let record = self.record()?;
+                vec![record]
+            }
+            None => Vec::new(),
+        };
+        Ok(Value::Variant { tag, args })
+    }
+
+    /// After a tag: `(` or `{` if a payload starts here, at it. The payload
+    /// must follow on the same line: only spaces and tabs in between.
+    /// Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would silently
+    /// become one variant with a payload.
+    fn payload(&mut self) -> Option<u8> {
         let after_tag = self.pos;
-        // The payload must follow on the same line: only spaces and tabs in
-        // between. Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would
-        // silently become one variant with a payload.
         while matches!(self.peek(), Some(b' ' | b'\t')) {
             self.pos += 1;
         }
         match self.peek() {
-            Some(b'(') => {
-                let paren = self.pos;
-                let args = self.list(b'(', b')')?;
-                if args.is_empty() {
-                    return Err(self.fail_at(paren, format!("empty payload: write '{tag}' without parentheses")));
-                }
-                Ok(Value::Variant { tag, args })
-            }
-            Some(b'{') => Ok(Value::Variant { tag, args: vec![self.record()?] }),
+            Some(c @ (b'(' | b'{')) => Some(c),
             _ => {
                 self.pos = after_tag;
-                Ok(Value::Variant { tag, args: vec![] })
+                None
             }
         }
+    }
+
+    #[cold]
+    fn empty_payload(&self, paren: usize, tag: &str) -> Error {
+        self.fail_at(paren, format!("empty payload: write '{tag}' without parentheses"))
     }
 
     // ── numbers ────────────────────────────────────────────────
@@ -453,7 +536,7 @@ impl<'a> Parser<'a> {
         }
         out.push_str(&self.src[chunk..self.pos]);
         self.pos += 1; // "
-        self.check_string_length(out, open)
+        self.check_length(out, open, "string")
     }
 
     /// At a backslash: consumes the escape and returns its character.
@@ -555,7 +638,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.pos = close + 3;
-        self.check_string_length(out.join("\n"), open)
+        self.check_length(out.join("\n"), open, "string")
     }
 
     /// Escapes in one block-string line, which starts at `at` in the source.
@@ -591,10 +674,13 @@ impl<'a> Parser<'a> {
         Ok(out)
     }
 
-    fn check_string_length(&self, s: String, open: usize) -> R<String> {
+    /// `s`, a string, key or tag (`what`) that starts at `open`, if it is
+    /// within the string limit (spec §7).
+    fn check_length<S: AsRef<str>>(&self, s: S, open: usize, what: &str) -> R<S> {
+        let (text, max) = (s.as_ref(), self.limits.max_string_length);
         // Bytes bound code points from above: count only when it could matter.
-        if s.len() > self.limits.max_string_length && s.chars().count() > self.limits.max_string_length {
-            return Err(self.fail_at(open, format!("string longer than {} characters", self.limits.max_string_length)));
+        if text.len() > max && text.chars().count() > max {
+            return Err(self.fail_at(open, format!("{what} longer than {max} characters")));
         }
         Ok(s)
     }
@@ -667,6 +753,13 @@ impl<'a> Parser<'a> {
             }
             None => Ok(()),
         }
+    }
+
+    /// An identifier key or a tag (`what`), within the string limit.
+    fn name(&mut self, what: &str) -> R<&'a str> {
+        let start = self.pos;
+        let word = self.ident();
+        self.check_length(word, start, what)
     }
 
     fn ident(&mut self) -> &'a str {

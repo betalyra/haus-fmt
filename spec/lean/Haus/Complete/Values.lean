@@ -176,7 +176,7 @@ theorem chars_basic_head {raw s : Text} (h : Chars BasicChar raw s) : ∀ c, raw
 theorem key_complete {L : Limits} {k : Text} {key : String} (h : Key L k key) {x : Text}
     (hx : ∀ c, x.head? = some c → isIdentChar c = false ∧ c ≠ '"') : (Parser.key L).run (k ++ x) = .ok (key, x) := by
   cases h with
-  | ident ht =>
+  | ident ht hl =>
     obtain ⟨c, cs, rfl, hc, hcs⟩ := ht
     have hci : isIdentChar c = true := by simp [isIdentChar, hc]
     obtain ⟨htw, hdw⟩ := takeWhile_append (p := isIdentChar) (ds := c :: cs)
@@ -189,8 +189,8 @@ theorem key_complete {L : Limits} {k : Text} {key : String} (h : Key L k key) {x
     · rename_i heq; exact absurd (List.cons.inj heq).1 hq
     · rename_i c' _ heq
       obtain ⟨rfl, -⟩ := List.cons.inj heq
-      simp only [hc, ↓reduceIte, run_bind, run_takeWhile, run_pure]
-      rw [← List.cons_append, htw, hdw]
+      simp only [hc, ↓reduceIte, run_bind, run_takeWhile]
+      rw [← List.cons_append, htw, hdw, checkName_ok hl]
     · rename_i heq; simp at heq
   | quoted _ hs =>
     have hb := basicString_complete hs x
@@ -275,18 +275,19 @@ theorem tag_takeWhile_complete {t : Text} (h : Tag t) {x : Text} (hx : ∀ c, x.
   · simp [isIdentChar, hc]
   · exact hcs y hy
 
-theorem variant_tag {L : Limits} {t : Text} (h : Tag t) {r : Text} (hr : ValFollow r) (f n : Nat) :
+theorem variant_tag {L : Limits} {t : Text} (h : Tag t) (hl : t.length ≤ L.maxStringLength) {r : Text}
+    (hr : ValFollow r) (f n : Nat) :
     (variant L (f + 1) n).run (t ++ r) = .ok (.variant (String.ofList t) [], r) := by
   obtain ⟨htw, hdw⟩ := tag_takeWhile_complete h fun c hc => (valFollow_noIdent hr c hc).1
   have hp := valFollow_noPayload hr
-  simp only [variant, run_bind, run_takeWhile, run_get, htw, hdw]
+  simp only [variant, run_bind, run_takeWhile, run_get, htw, hdw, checkName_ok hl]
   split
   · rename_i heq; exact absurd rfl (hp '(' (by rw [heq]; rfl)).1
   · rename_i heq; exact absurd rfl (hp '{' (by rw [heq]; rfl)).2
   · simp
 
 theorem variant_payload {L : Limits} {t sp inner r : Text} {xs : List Value} {f n : Nat} (h : Tag t)
-    (hsp : ∀ c ∈ sp, isBlank c = true) (hxs : xs ≠ [])
+    (hl : t.length ≤ L.maxStringLength) (hsp : ∀ c ∈ sp, isBlank c = true) (hxs : xs ≠ [])
     (hi : (items L f (n + 1) ')').run ('(' :: inner ++ ')' :: r) = .ok (xs, r)) :
     (variant L (f + 1) (n + 1)).run (t ++ sp ++ '(' :: inner ++ ')' :: r) = .ok (.variant (String.ofList t) xs, r) := by
   have hnb : ∀ c, (sp ++ '(' :: inner ++ ')' :: r).head? = some c → isIdentChar c = false := by
@@ -301,10 +302,10 @@ theorem variant_payload {L : Limits} {t sp inner r : Text} {xs : List Value} {f 
   obtain ⟨htw, hdw⟩ := tag_takeWhile_complete h hnb
   obtain ⟨hsw, hsd⟩ := takeWhile_append hsp (x := '(' :: inner ++ ')' :: r) (by simp; decide)
   simp only [List.append_assoc, List.cons_append] at htw hdw hsw hsd hi ⊢
-  simp [variant, htw, hdw, hsd, hi, hxs]
+  simp [variant, htw, hdw, hsd, hi, hxs, checkName_ok hl]
 
 theorem variant_record {L : Limits} {t sp rt r : Text} {fs : List (String × Value)} {f n : Nat} (h : Tag t)
-    (hsp : ∀ c ∈ sp, isBlank c = true) (hrt : ∃ rt', rt = '{' :: rt')
+    (hl : t.length ≤ L.maxStringLength) (hsp : ∀ c ∈ sp, isBlank c = true) (hrt : ∃ rt', rt = '{' :: rt')
     (hr : (record L f (n + 1)).run (rt ++ r) = .ok (fs, r)) :
     (variant L (f + 1) (n + 1)).run (t ++ sp ++ rt ++ r) = .ok (.variant (String.ofList t) [.record fs], r) := by
   obtain ⟨rt', rfl⟩ := hrt
@@ -320,7 +321,7 @@ theorem variant_record {L : Limits} {t sp rt r : Text} {fs : List (String × Val
   obtain ⟨htw, hdw⟩ := tag_takeWhile_complete h hnb
   obtain ⟨hsw, hsd⟩ := takeWhile_append hsp (x := '{' :: rt' ++ r) (by simp; decide)
   simp only [List.append_assoc, List.cons_append] at htw hdw hsw hsd hr ⊢
-  simp [variant, htw, hdw, hsd, hr]
+  simp [variant, htw, hdw, hsd, hr, checkName_ok hl]
 
 /-! ## One iteration of the item and field loops -/
 
@@ -511,25 +512,25 @@ theorem _root_.Haus.Grammar.Val.complete {L : Limits} {n : Nat} {t : Text} {v : 
     have := hrec.complete r f (by simp at hf ⊢; omega)
     simp only [List.cons_append] at this ⊢
     exact value_record this
-  | .tag _ t ht, r, fuel, hr, hf => by
+  | .tag _ t ht hl, r, fuel, hr, hf => by
     obtain ⟨c, t', rfl, hc⟩ := tag_head ht
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 2 := ⟨fuel - 2, by simp at hf; omega⟩
     rw [List.cons_append, value_upper L (f + 1) _ hc, ← List.cons_append]
-    exact variant_tag ht hr f _
-  | .payload _ t sp inner xs ht hsp hi hxs, r, fuel, hr, hf => by
+    exact variant_tag ht hl hr f _
+  | .payload _ t sp inner xs ht htl hsp hi hxs, r, fuel, hr, hf => by
     obtain ⟨c, t', rfl, hc⟩ := tag_head ht
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 4 := ⟨fuel - 4, by simp at hf; omega⟩
     obtain ⟨x, hx, hw, hl⟩ := hi.complete ')' r (.inr rfl)
     have hitems := items_run (o := '(') hw (hl (f + 1) _ (by simp at hf; omega))
-    have := variant_payload (f := f + 2) ht hsp hxs hitems
+    have := variant_payload (f := f + 2) ht htl hsp hxs hitems
     simp only [List.cons_append, List.append_assoc] at this ⊢
     rw [value_upper L (f + 3) _ hc]
     exact this
-  | .recordPayload _ t sp rt fs ht hsp hrec, r, fuel, hr, hf => by
+  | .recordPayload _ t sp rt fs ht hl hsp hrec, r, fuel, hr, hf => by
     obtain ⟨c, t', rfl, hc⟩ := tag_head ht
     obtain ⟨f, rfl⟩ : ∃ f, fuel = f + 2 := ⟨fuel - 2, by simp at hf; omega⟩
     have hrr := hrec.complete r f (by simp at hf ⊢; omega)
-    have := variant_record (f := f) ht hsp (record_head hrec) hrr
+    have := variant_record (f := f) ht hl hsp (record_head hrec) hrr
     simp only [List.cons_append, List.append_assoc] at this ⊢
     rw [value_upper L (f + 1) _ hc]
     exact this

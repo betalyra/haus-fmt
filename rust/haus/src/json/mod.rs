@@ -39,12 +39,12 @@
 
 mod base64;
 pub mod de;
-mod lossless;
+pub(crate) mod lossless;
 mod read;
 pub mod ser;
 
 use crate::error::Position;
-use crate::{DecodeError, Encode, EncodeError, Encoder, Error, Limits, Segment, SyntaxError, Value};
+use crate::{DecodeError, Decoder, Encode, EncodeError, Encoder, Error, Limits, Segment, SyntaxError, Value};
 use std::io::{self, BufRead, Read, Write};
 
 pub use lossless::{from_lossless, from_plain, to_lossless};
@@ -100,7 +100,18 @@ pub trait FromJson: Sized {
     /// As [`ToJson::NULLABLE`].
     const NULLABLE: bool = false;
 
-    fn from_json(json: &Json) -> Result<Self, DecodeError>;
+    /// The value of `json`, for a reader with `d`'s limits, at `d`'s depth.
+    /// Each container counts as a level of the haus value (a record, an
+    /// array, a payload), checked before it is read, so that JSON nested
+    /// deeper than the depth limit fails instead of recursing on. The
+    /// value's depth is checked again when it is encoded: [`from_str`]
+    /// does that.
+    fn from_json_with(json: &Json, d: Decoder) -> Result<Self, DecodeError>;
+
+    /// The value of `json`, for a reader with the default limits.
+    fn from_json(json: &Json) -> Result<Self, DecodeError> {
+        Self::from_json_with(json, Decoder::default())
+    }
 }
 
 // ── reading and writing JSON text ─────────────────────────────
@@ -151,6 +162,7 @@ pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
         Text(&'static str),
         Close(char),
     }
+    crate::ser::supported(limits)?;
     let max = read::max_depth(limits);
     let (mut out, mut depth, mut todo) = (String::new(), 0, vec![Next::Value(json)]);
     while let Some(next) = todo.pop() {
@@ -268,7 +280,8 @@ pub fn from_str<T: FromJson + Encode>(text: &str) -> Result<T, Error> {
     from_str_with(text, &Limits::default())
 }
 
-/// [`from_str`] with `limits`. (An `Any` in it is read with the default limits.)
+/// [`from_str`] with `limits`. Fails if `limits.max_depth` is more than
+/// [`crate::MAX_SUPPORTED_DEPTH`].
 pub fn from_str_with<T: FromJson + Encode>(text: &str, limits: &Limits) -> Result<T, Error> {
     typed(&parse_with(text, limits)?, limits)
 }
@@ -276,7 +289,7 @@ pub fn from_str_with<T: FromJson + Encode>(text: &str, limits: &Limits) -> Resul
 /// `json` as a `T` whose haus value is within the depth limit of `limits`:
 /// it is encoded to check that, and an error encoding it is the error.
 fn typed<T: FromJson + Encode>(json: &Json, limits: &Limits) -> Result<T, Error> {
-    let x = T::from_json(json)?;
+    let x = T::from_json_with(json, Decoder::new(limits))?;
     match x.encode_with(Encoder::new(limits)) {
         Ok(_) => Ok(x),
         Err(EncodeError { path, reason }) => Err(DecodeError { path, reason }.into()),
@@ -288,7 +301,8 @@ pub fn to_string<T: ToJson + ?Sized>(value: &T) -> Result<String, EncodeError> {
     to_string_with(value, &Limits::default())
 }
 
-/// [`to_string`], for a reader with `limits`.
+/// [`to_string`], for a reader with `limits`. Fails if `limits.max_depth`
+/// is more than [`crate::MAX_SUPPORTED_DEPTH`].
 pub fn to_string_with<T: ToJson + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
     write_with(&value.to_json_with(Encoder::new(limits))?, limits)
 }

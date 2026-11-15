@@ -438,3 +438,5 @@ expect {
 		and Decode.all_with("1, [[2]],", limits, Decode.any).map_ok(|vs| vs.len()) == Ok(2)
 		and Decode.all_with("1, [[[2]]],", limits, Decode.any).is_err()
 }
+expect Decode.one_with("1", { ..Value.default_limits, max_depth: 1025 }, Decode.any).map_ok(|_| {}) == Err(Syntax({ reason: "max_depth 1025 is more than the supported maximum, 1024", line: 1, column: 1 }))
+expect Decode.all_with("1", { ..Value.default_limits, max_depth: 1025 }, Decode.any).map_ok(|_| {}).is_err()

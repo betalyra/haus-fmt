@@ -50,8 +50,11 @@ Streaming := [].{
 	}
 
 	## Add a chunk; returns the reader and the values the chunk completed.
+	## Fails at once if `options.limits` has a deeper `max_depth` than
+	## `Value.max_supported_depth`.
 	push : Reader, List(U8) -> Try((Reader, List(Value)), Value.ParseError)
 	push = |state, chunk| {
+		supported(state.options.limits)?
 		buf = state.buf.concat(chunk)
 		if !state.started and buf.len() < 3 and [0xEF, 0xBB, 0xBF].starts_with(buf) {
 			return Ok(({ ..state, buf }, [])) # maybe a byte order mark: wait for more
@@ -69,6 +72,7 @@ Streaming := [].{
 	## The input is complete: returns the last value, if it had no comma after it.
 	finish : Reader -> Try(List(Value), Value.ParseError)
 	finish = |state| {
+		supported(state.options.limits)?
 		(rest, values) = scan(state, True)?
 		text = utf8(rest.buf, rest.origin)?
 		directive(text, rest.origin)?
@@ -93,6 +97,10 @@ Streaming := [].{
 		Ok($out.concat(finish($state)?))
 	}
 }
+
+## Whether this binding supports `limits` (spec §7), as an error at the start.
+supported : Value.Limits -> Try({}, Value.ParseError)
+supported = |limits| Value.check_limits(limits).map_err(|reason| { reason, line: 1, column: 1 })
 
 ## What the scanner is inside of. It only tracks what it needs to find the
 ## commas between values; the parser checks everything else.
@@ -405,6 +413,22 @@ expect {
 	read("[[[1]]],\n\"abcd\",\n") == Ok(2)
 		and read("[[[1]]],\n[[[[1]]]],\n") == Err("nesting deeper than 3 levels at 2:4")
 		and read("1,\n\"abcde\"") == Err("string longer than 4 characters at 2:1")
+		and read("Abcd,\n{ abcd: 1 },\n") == Ok(2)
+		and read("1,\n{ abcde: 1 },") == Err("key longer than 4 characters at 2:3")
+		and read("1,\nAbcde,") == Err("tag longer than 4 characters at 2:1")
+}
+
+# Up to the supported depth; a deeper limit fails at once, naming the maximum.
+expect {
+	deepest = { ..Streaming.defaults, limits: { ..Value.default_limits, max_depth: Value.max_supported_depth } }
+	text = "${"A(".repeat(1024)}1${")".repeat(1024)},"
+	Streaming.push(Streaming.reader(deepest), text.to_utf8()).map_ok(|(_, values)| values.len()) == Ok(1)
+}
+expect {
+	too_deep = { ..Streaming.defaults, limits: { ..Value.default_limits, max_depth: 1025 } }
+	error = { reason: "max_depth 1025 is more than the supported maximum, 1024", line: 1, column: 1 }
+	Streaming.push(Streaming.reader(too_deep), []).map_ok(|_| {}) == Err(error)
+		and Streaming.finish(Streaming.reader(too_deep)).map_ok(|_| {}) == Err(error)
 }
 
 # `max_value_length`: a value of exactly the limit is taken, one character more is not.

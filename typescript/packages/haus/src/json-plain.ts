@@ -13,7 +13,7 @@
  */
 import { HausDecodeError, HausEncodeError } from "./errors.js"
 import {
-  describeJson, fromLossless, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, losslessJson, numberOfJson, Place, stringOfJson, valueOfJson, type Json,
+  describeJson, fromLossless, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, losslessJson, numberOfJson, Place, stringOfJson, tagLengthIssue, valueOfJson, type Json,
   type JsonObject, normalizeJsonNumber,
 } from "./json.js"
 import { numberLimitIssue } from "./number.js"
@@ -441,6 +441,8 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
       if (!t.open) return fail(`unknown tag ${describeJson(tag)}, expected one of ${tagList(t.cases.keys())}`, at)
       // An unknown value (spec §16.3).
       if (!/^[A-Z][A-Za-z0-9_]*$/.test(tag)) return fail(`"_tag" is not a tag name: ${describeJson(tag)}`, at)
+      const tagIssue = tagLengthIssue(tag, l)
+      if (tagIssue !== undefined) fail(tagIssue, at)
       const members = Object.keys(o).filter((k) => k !== "_tag")
       if (members.length === 0) return variant(tag)
       // As written: the arguments, losslessly.

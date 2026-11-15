@@ -27,20 +27,22 @@ inductive UniqueKeys : Value → Prop
 /--
 The value is within the limits `L`, nested at most `n` levels. Records, arrays
 and payloads are one level each; `Tag { … }` is one level, like in the grammar.
-Numbers were written within the number limits.
+Numbers were written within the number limits; strings, record keys and tags
+have at most `maxStringLength` characters.
 -/
 inductive Bounded (L : Limits) : Nat → Value → Prop
   | num (n : Nat) (lit : Text) : NumberLit L lit → Bounded L n (.num (normalizeNumber lit))
   | str (n : Nat) (s : String) : s.length ≤ L.maxStringLength → Bounded L n (.str s)
   | bytes (n : Nat) (bs : List UInt8) : bs.length ≤ L.maxStringLength → Bounded L n (.bytes bs)
-  | tag (n : Nat) (t : String) : Bounded L n (.variant t [])
+  | tag (n : Nat) (t : String) : t.length ≤ L.maxStringLength → Bounded L n (.variant t [])
   | arr (n : Nat) (xs : List Value) : (∀ x ∈ xs, Bounded L n x) → Bounded L (n + 1) (.arr xs)
   | record (n : Nat) (fs : List (String × Value)) :
-      (∀ kv ∈ fs, Bounded L n kv.2) → Bounded L (n + 1) (.record fs)
-  | variant (n : Nat) (t : String) (xs : List Value) :
+      (∀ kv ∈ fs, kv.1.length ≤ L.maxStringLength) → (∀ kv ∈ fs, Bounded L n kv.2) → Bounded L (n + 1) (.record fs)
+  | variant (n : Nat) (t : String) (xs : List Value) : t.length ≤ L.maxStringLength →
       (∀ x ∈ xs, Bounded L n x) → Bounded L (n + 1) (.variant t xs)
-  | tagRecord (n : Nat) (t : String) (fs : List (String × Value)) :
-      (∀ kv ∈ fs, Bounded L n kv.2) → Bounded L (n + 1) (.variant t [.record fs])
+  | tagRecord (n : Nat) (t : String) (fs : List (String × Value)) : t.length ≤ L.maxStringLength →
+      (∀ kv ∈ fs, kv.1.length ≤ L.maxStringLength) → (∀ kv ∈ fs, Bounded L n kv.2) →
+      Bounded L (n + 1) (.variant t [.record fs])
 
 namespace Grammar
 
@@ -63,8 +65,8 @@ theorem Val.uniqueKeys {L : Limits} {n : Nat} {t : Text} {v : Value} : Val L n t
   | .array _ _ _ hi => .arr _ hi.uniqueKeys
   | .record _ _ _ hr => hr.uniqueKeys
   | .tag .. => .variant _ _ all_nil
-  | .payload _ _ _ _ _ _ _ hi _ => .variant _ _ hi.uniqueKeys
-  | .recordPayload _ _ _ _ _ _ _ hr => .variant _ _ (all_singleton hr.uniqueKeys)
+  | .payload _ _ _ _ _ _ _ _ hi _ => .variant _ _ hi.uniqueKeys
+  | .recordPayload _ _ _ _ _ _ _ _ hr => .variant _ _ (all_singleton hr.uniqueKeys)
 
 theorem Items.uniqueKeys {L : Limits} {n : Nat} {t : Text} {xs : List Value} :
     Items L n t xs → ∀ x ∈ xs, UniqueKeys x
@@ -149,6 +151,11 @@ theorem BlockString.length_le {L : Limits} {t : Text} {s : String} (h : BlockStr
   cases h with
   | mk _ _ _ _ _ _ _ _ _ _ hl => exact hl
 
+theorem Key.length_le {L : Limits} {t : Text} {k : String} (h : Key L t k) : k.length ≤ L.maxStringLength := by
+  cases h with
+  | ident _ hl => simpa using hl
+  | quoted _ hs => exact hs.length_le
+
 mutual
 theorem Val.bounded {L : Limits} {n : Nat} {t : Text} {v : Value} : Val L n t v → Bounded L n v
   | .number _ _ h => .num _ _ h
@@ -156,10 +163,11 @@ theorem Val.bounded {L : Limits} {n : Nat} {t : Text} {v : Value} : Val L n t v 
   | .blockString _ _ _ h => .str _ _ h.length_le
   | .bytes _ _ _ h hl => .bytes _ _ (Nat.le_trans h.length_le hl)
   | .array _ _ _ hi => .arr _ _ hi.bounded
-  | .record _ _ _ hr => .record _ _ hr.bounded
-  | .tag .. => .tag _ _
-  | .payload _ _ _ _ _ _ _ hi _ => .variant _ _ _ hi.bounded
-  | .recordPayload _ _ _ _ _ _ _ hr => .tagRecord _ _ _ hr.bounded
+  | .record _ _ _ hr => .record _ _ (fun kv h => (hr.bounded kv h).1) (fun kv h => (hr.bounded kv h).2)
+  | .tag _ _ _ hl => .tag _ _ (by simpa using hl)
+  | .payload _ _ _ _ _ _ hl _ hi _ => .variant _ _ _ (by simpa using hl) hi.bounded
+  | .recordPayload _ _ _ _ _ _ hl _ hr =>
+    .tagRecord _ _ _ (by simpa using hl) (fun kv h => (hr.bounded kv h).1) (fun kv h => (hr.bounded kv h).2)
 
 theorem Items.bounded {L : Limits} {n : Nat} {t : Text} {xs : List Value} :
     Items L n t xs → ∀ x ∈ xs, Bounded L n x
@@ -173,23 +181,23 @@ theorem ItemsFrom.bounded {L : Limits} {n : Nat} {t : Text} {xs : List Value} :
   | .cons _ _ _ _ _ _ _ hv _ _ hi => all_cons hv.bounded hi.bounded
 
 theorem Record.bounded {L : Limits} {n : Nat} {t : Text} {fs : List (String × Value)} :
-    Record L n t fs → ∀ kv ∈ fs, Bounded L n kv.2
+    Record L n t fs → ∀ kv ∈ fs, kv.1.length ≤ L.maxStringLength ∧ Bounded L n kv.2
   | .mk _ _ _ hf _ => hf.bounded
 
 theorem Fields.bounded {L : Limits} {n : Nat} {t : Text} {fs : List (String × Value)} :
-    Fields L n t fs → ∀ kv ∈ fs, Bounded L n kv.2
+    Fields L n t fs → ∀ kv ∈ fs, kv.1.length ≤ L.maxStringLength ∧ Bounded L n kv.2
   | .empty .. => all_nil
   | .some _ _ _ _ _ hf => hf.bounded
 
 theorem FieldsFrom.bounded {L : Limits} {n : Nat} {t : Text} {fs : List (String × Value)} :
-    FieldsFrom L n t fs → ∀ kv ∈ fs, Bounded L n kv.2
+    FieldsFrom L n t fs → ∀ kv ∈ fs, kv.1.length ≤ L.maxStringLength ∧ Bounded L n kv.2
   | .last _ _ _ _ hf _ => all_singleton hf.bounded
   | .lastComma _ _ _ _ _ hf _ _ => all_singleton hf.bounded
   | .cons _ _ _ _ _ _ _ hf _ _ hi => all_cons hf.bounded hi.bounded
 
 theorem Field.bounded {L : Limits} {n : Nat} {t : Text} {f : String × Value} :
-    Field L n t f → Bounded L n f.2
-  | .mk _ _ _ _ _ _ _ _ _ _ hv => hv.bounded
+    Field L n t f → f.1.length ≤ L.maxStringLength ∧ Bounded L n f.2
+  | .mk _ _ _ _ _ _ _ hk _ _ hv => ⟨hk.length_le, hv.bounded⟩
 end
 
 theorem FileItems.bounded {L : Limits} {t : Text} {xs : List Value} (h : FileItems L t xs) :
@@ -200,7 +208,7 @@ theorem FileItems.bounded {L : Limits} {t : Text} {xs : List Value} (h : FileIte
   | cons _ _ _ _ _ _ hv _ _ _ ih => exact all_cons hv.bounded ih
 
 /-- **A4.** Every value in a valid file is within the limits: at most `L.maxDepth`
-levels deep, and every number, string and byte string within its limit. -/
+levels deep, and every number, string, byte string, record key and tag within its limit. -/
 theorem File.bounded {L : Limits} {t : Text} {vs : List Value} (h : File L t vs) :
     ∀ v ∈ vs, Bounded L L.maxDepth v := by
   cases h with

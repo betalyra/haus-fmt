@@ -234,9 +234,9 @@ theorem _root_.Haus.Grammar.Val.wf {n : Nat} {t : Text} {v : Value} : Val L n t 
   | .string _ _ _ _ | .blockString _ _ _ _ | .bytes _ _ _ _ _ => rfl
   | .array _ _ _ h => by simp only [Value.wf]; exact h.wf
   | .record _ _ _ h => by simp only [Value.wf]; exact h.wf
-  | .tag _ _ h => by simp [Value.wf, Value.wfList, tag_isTag h]
-  | .payload _ _ _ _ _ h _ hi _ => by simp [Value.wf, tag_isTag h, hi.wf]
-  | .recordPayload _ _ _ _ _ h _ hr => by simp [Value.wf, Value.wfList, tag_isTag h, hr.wf]
+  | .tag _ _ h _ => by simp [Value.wf, Value.wfList, tag_isTag h]
+  | .payload _ _ _ _ _ h _ _ hi _ => by simp [Value.wf, tag_isTag h, hi.wf]
+  | .recordPayload _ _ _ _ _ h _ _ hr => by simp [Value.wf, Value.wfList, tag_isTag h, hr.wf]
 
 theorem _root_.Haus.Grammar.Items.wf {n : Nat} {t : Text} {xs : List Value} : Items L n t xs → Value.wfList xs = true
   | .empty _ _ _ => rfl

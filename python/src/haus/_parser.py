@@ -5,41 +5,84 @@ messages. Runs of ordinary characters are matched with regular expressions,
 so the Python loop only runs at delimiters, escapes and errors. Every pattern
 is linear: the possessive quantifiers (`*+`, `++`) never give back input.
 
-Each nesting level costs two Python frames (`_value` → `_record` / `_list` →
-`_value`; the `_items` generator is suspended, not on the stack, while an item
-is parsed), so the default depth of 256 stays well within Python's recursion
-limit.
+Each nesting level costs two or three Python frames (`_value` → `_record` /
+`_list` → `_value`; the `_items` generator is suspended, not on the stack,
+while an item is parsed). `make_room` raises Python's recursion limit, when
+needed, for the configured depth (at most `MAX_SUPPORTED_DEPTH`).
 """
 
 from __future__ import annotations
 
+import inspect
 import re
 import string
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Never
+from typing import Final, Never, cast
 
 from ._errors import HausSyntaxError
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
+MAX_SUPPORTED_DEPTH: Final = 512
+"""The deepest nesting this binding supports (spec §7): 512 levels.
+
+The parser, the decoders and encoders and the JSON mappings recurse, a few Python
+frames per level, and raise Python's recursion limit as needed for the configured
+depth (`make_room`). A `max_depth` above this is rejected when the `Limits` are made.
+"""
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Limits:
-    """Resource limits, enforced while parsing (spec §7)."""
+    """Resource limits, enforced while parsing (spec §7).
+
+    Raises `ValueError` for a `max_depth` above `MAX_SUPPORTED_DEPTH` (512), or not a whole number.
+    """
 
     max_depth: int = 256
-    """Nesting depth of records, arrays and payloads."""
+    """Nesting depth of records, arrays and payloads: at most `MAX_SUPPORTED_DEPTH` (512)."""
     max_number_length: int = 1000
     """Characters in one number literal, including sign, separators and exponent."""
     max_exponent: int = 6144
     """Largest absolute exponent: 6144 allows `1e6144` but not `1e6145`."""
     max_string_length: int = 16 * 1024 * 1024
-    """Characters in one decoded string, or between the quotes of a byte string."""
+    """Characters in one decoded string, record key or tag, or between the quotes of a byte string."""
+
+    def __post_init__(self) -> None:
+        depth = cast("object", self.max_depth)  # whatever the caller passed
+        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 0:
+            raise ValueError(f"max_depth must be a whole number from 0 to {MAX_SUPPORTED_DEPTH}, not {depth!r}")
+        if depth > MAX_SUPPORTED_DEPTH:
+            raise ValueError(
+                f"max_depth {depth} is above {MAX_SUPPORTED_DEPTH}, the deepest nesting this binding supports (spec §7)"
+            )
 
 
 DEFAULT_LIMITS = Limits()
+
+_FRAMES_PER_LEVEL: Final = 6
+"""Python frames per level of nesting, with room to spare: the deepest path takes four."""
+_SLACK: Final = 100
+
+
+def make_room(max_depth: int) -> None:
+    """Raise Python's recursion limit, if needed, so that `max_depth` levels fit above the caller.
+
+    The parser, the decoders and the JSON mappings recurse a few frames per level: Python's
+    default limit of 1000 frames holds neither 512 levels nor, called from deep inside an
+    application, the default 256. The limit is only ever raised, never lowered.
+    """
+    depth = 0
+    frame = inspect.currentframe()
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+    need = depth + _FRAMES_PER_LEVEL * max_depth + _SLACK
+    if sys.getrecursionlimit() < need:
+        sys.setrecursionlimit(need)
+
 
 _WHITESPACE = re.compile(r"[ \t\n]*+")
 _BLANKS = re.compile(r"[ \t]*+")
@@ -144,6 +187,7 @@ class Parser:
 
     def parse_sequence(self) -> list[Value]:
         """A whole file: zero or more comma-separated values (spec §6)."""
+        make_room(self.limits.max_depth)
         try:
             return self._sequence()
         except RecursionError:
@@ -269,7 +313,7 @@ class Parser:
             case '"':
                 return self._string()
             case c if c in _KEY_START:
-                return self._ident()
+                return self._checked_word(self._ident(), "key")
             case c if c in _TAG_START:
                 word = self._ident()
                 self._fail(
@@ -280,7 +324,7 @@ class Parser:
                 self._fail(f"expected a record key, found {_describe(c)}")
 
     def _variant(self) -> Variant:
-        tag = self._ident()
+        tag = self._checked_word(self._ident(), "tag")
         after_tag = self.pos
         # The payload must follow on the same line: only spaces and tabs in between.
         # Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would silently
@@ -452,6 +496,12 @@ class Parser:
                 self._fail(_raw_character(src[pos], "in block string"), pos)
             text, pos = self._escape(pos)
             out.append(text)
+
+    def _checked_word(self, word: str, what: str) -> str:
+        """A record key or tag just read (spec §7: the string limit counts them too); the error is at its start."""
+        if len(word) > self.limits.max_string_length:
+            self._fail(f"{what} longer than {self.limits.max_string_length} characters", self.pos - len(word))
+        return word
 
     def _checked(self, s: str, start: int) -> str:
         if len(s) > self.limits.max_string_length:

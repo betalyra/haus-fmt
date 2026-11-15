@@ -1,11 +1,11 @@
 import { HausSyntaxError, locate, START, type Origin } from "./errors.js"
-import { DEFAULT_LIMITS, Parser, type Limits } from "./parser.js"
+import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
 type Mode = "normal" | "string" | "block" | "line" | "comment"
 
 export interface StreamOptions {
-  /** Parser limits; unspecified fields use DEFAULT_LIMITS. */
+  /** Parser limits; unspecified fields use DEFAULT_LIMITS. A `maxDepth` above MAX_SUPPORTED_DEPTH (512) is a RangeError. */
   readonly limits?: Partial<Limits>
   /** Largest single value in characters (default 64 Mi). Bounds memory per value. */
   readonly maxValueLength?: number
@@ -48,7 +48,7 @@ export class StreamReader {
   private readonly requireTerminator: boolean
 
   constructor(options: StreamOptions = {}) {
-    this.limits = { ...DEFAULT_LIMITS, ...options.limits }
+    this.limits = withDefaults(options.limits ?? {})
     this.maxValueLength = options.maxValueLength ?? 64 * 1024 * 1024
     this.requireTerminator = options.requireTerminator ?? false
   }

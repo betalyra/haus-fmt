@@ -12,7 +12,7 @@
 import { HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type Origin, type Path } from "./errors.js"
 import { toHex } from "./format.js"
 import { isNormalizedNumber, normalizeNumber, numberLimitIssue } from "./number.js"
-import { longerThan, withDefaults, type Limits } from "./parser.js"
+import { checkLimits, longerThan, MAX_DEPTH, MAX_SUPPORTED_DEPTH, withDefaults, type Limits } from "./parser.js"
 import { chunks, type ChunkSource } from "./stream.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type Value } from "./value.js"
 
@@ -304,10 +304,19 @@ export const readJson = (text: string, limits: Limits, origin: Origin = START): 
 
 /**
  * Read one JSON text, strictly: RFC 8259 restricted to I-JSON (RFC 7493),
- * within the limits of spec §7 (`maxDepth` counts arrays and objects).
- * Numbers keep their exact text. Throws HausSyntaxError, with line and column.
+ * within the limits of spec §7 (`maxDepth` counts arrays and objects, at most
+ * `jsonDepth(MAX_SUPPORTED_DEPTH)`, 2049). Numbers keep their exact text.
+ * Throws HausSyntaxError, with line and column; a RangeError for a larger
+ * `maxDepth`.
  */
-export const parseJson = (text: string, limits: Partial<Limits> = {}): Json => readJson(text, withDefaults(limits))
+export const parseJson = (text: string, limits: Partial<Limits> = {}): Json => readJson(text, withJsonDefaults(limits))
+
+/** `withDefaults` for raw JSON, whose `maxDepth` counts JSON levels: at most `jsonDepth(MAX_SUPPORTED_DEPTH)`. */
+const withJsonDefaults = (limits: Partial<Limits>): Limits => {
+  const { maxDepth, ...rest } = limits
+  checkLimits({ maxDepth }, jsonDepth(MAX_SUPPORTED_DEPTH), "JSON nesting")
+  return { ...withDefaults(rest), maxDepth: maxDepth ?? MAX_DEPTH }
+}
 
 /**
  * How deeply JSON may nest to hold a value of `maxDepth` haus levels (spec
@@ -330,17 +339,36 @@ const quoteJson = (s: string, path: () => Path): string => {
   return JSON.stringify(s)
 }
 
-const MAX_WRITE_DEPTH = 4096
-
 /**
  * JSON text for a JSON value, compact (no whitespace). Numbers are written
  * exactly as their text. Throws HausEncodeError for what isn't JSON or
  * I-JSON: a number that isn't a JSON literal, an unpaired surrogate, a cycle.
+ * Iterative, with a stack of what is left to write, so any depth works.
  */
 export const stringifyJson = (json: Json): string => {
   const out: string[] = []
-  const write = (j: Json, depth: number): void => {
-    if (depth > MAX_WRITE_DEPTH) throw new HausEncodeError(`JSON nested deeper than ${MAX_WRITE_DEPTH} levels (or cyclic)`, [])
+  /** What is left to write: JSON values, text, and the end of a container (which leaves `open`). */
+  type Work = { readonly json: Json } | { readonly text: string } | { readonly close: string; readonly container: object }
+  const work: Work[] = [{ json }]
+  /** The containers being written, to detect a cycle. */
+  const open = new Set<object>()
+  const enter = (container: object, close: string) => {
+    if (open.has(container)) throw new HausEncodeError("JSON contains itself (cyclic)", [])
+    open.add(container)
+    work.push({ close, container })
+  }
+  while (work.length > 0) {
+    const w = work.pop()!
+    if ("text" in w) {
+      out.push(w.text)
+      continue
+    }
+    if ("close" in w) {
+      out.push(w.close)
+      open.delete(w.container)
+      continue
+    }
+    const j = w.json
     if (j === null) out.push("null")
     else if (j === true || j === false) out.push(String(j))
     else if (typeof j === "string") out.push(quoteJson(j, () => []))
@@ -349,23 +377,22 @@ export const stringifyJson = (json: Json): string => {
       out.push(j.text)
     } else if (Array.isArray(j)) {
       out.push("[")
-      j.forEach((x, i) => {
-        if (i > 0) out.push(",")
-        write(x, depth + 1)
-      })
-      out.push("]")
+      enter(j, "]")
+      for (let i = j.length - 1; i >= 0; i--) {
+        work.push({ json: j[i] as Json })
+        if (i > 0) work.push({ text: "," })
+      }
     } else if (typeof j === "object") {
       out.push("{")
-      Object.keys(j).forEach((k, i) => {
-        out.push(i > 0 ? "," : "", quoteJson(k, () => []), ":")
-        write((j as JsonObject)[k]!, depth + 1)
-      })
-      out.push("}")
+      enter(j, "}")
+      const keys = Object.keys(j)
+      for (let i = keys.length - 1; i >= 0; i--) {
+        work.push({ json: (j as JsonObject)[keys[i]!]! }, { text: `${i > 0 ? "," : ""}${quoteJson(keys[i]!, () => [])}:` })
+      }
     } else {
       throw new HausEncodeError(`not a JSON value: ${typeof j}`, [])
     }
   }
-  write(json, 0)
   return out.join("")
 }
 
@@ -410,6 +437,16 @@ export const numberOfJson = (n: JsonNumber, limits: Limits, place: Place) => {
   return num(normalizeJsonNumber(n.text))
 }
 
+/** A member name as a record key, checked against the string limit (spec §7: it counts keys too). */
+export const keyOfJson = (k: string, limits: Limits, place: Place): string => {
+  if (longerThan(k, limits.maxStringLength)) throw new HausDecodeError(`key longer than ${limits.maxStringLength} characters`, place.path())
+  return k
+}
+
+/** A tag name within the string limit (spec §7: it counts tags too): undefined, or why not. */
+export const tagLengthIssue = (tag: string, limits: Limits): string | undefined =>
+  tag.length > limits.maxStringLength ? `tag longer than ${limits.maxStringLength} characters` : undefined
+
 /** A JSON string as a haus string, checked against the limits (a parsed one is within them already). */
 export const stringOfJson = (s: string, limits: Limits, place: Place) => {
   if (longerThan(s, limits.maxStringLength)) throw new HausDecodeError(`string longer than ${limits.maxStringLength} characters`, place.path())
@@ -428,7 +465,7 @@ const plainValue = (j: Json, limits: Limits, depth: number, place: Place): Value
   if (depth >= limits.maxDepth) throw new HausDecodeError(`nesting deeper than ${limits.maxDepth} levels`, place.path())
   if (Array.isArray(j)) return arr(j.map((x, i) => plainValue(x, limits, depth + 1, place.child(i))))
   if (typeof j !== "object") throw new HausDecodeError(`not a JSON value: ${typeof j}`, place.path())
-  return rec(new Map(Object.keys(j).map((k) => [k, plainValue((j as JsonObject)[k]!, limits, depth + 1, place.child(k))])))
+  return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place), plainValue((j as JsonObject)[k]!, limits, depth + 1, place.child(k))])))
 }
 
 /** JSON as a haus value without a schema (§16.1), from a place inside a larger conversion. */
@@ -487,9 +524,14 @@ export const losslessJson = (value: Value, limits: Limits, place: Place): Json =
         return v.items.map((x, i) => write(x, inner, at.child(i), false))
       case "record":
         open()
-        return jsonObject([["rec", jsonObject([...v.fields].map(([k, x]) => [k, write(x, inner, at.child(k), false)] as const))]])
+        return jsonObject([["rec", jsonObject([...v.fields].map(([k, x]) => {
+          if (longerThan(k, limits.maxStringLength)) fail(`key longer than ${limits.maxStringLength} characters`, at)
+          return [k, write(x, inner, at.child(k), false)] as const
+        }))]])
       case "variant": {
         if (typeof v.tag !== "string" || !TAG.test(v.tag)) return fail("not a tag name", at)
+        const tagIssue = tagLengthIssue(v.tag, limits)
+        if (tagIssue !== undefined) fail(tagIssue, at)
         if (v.args.length === 0) return jsonObject([["tag", v.tag]])
         open()
         // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
@@ -539,14 +581,13 @@ export const fromLossless = (json: Json, limits: Limits, place: Place): Value =>
       const fields = j["rec"]!
       if (!isJsonObject(fields)) return fail(`"rec" must be an object`, at)
       open()
-      return rec(new Map(Object.keys(fields).map((k) => {
-        if (longerThan(k, limits.maxStringLength)) fail(`key longer than ${limits.maxStringLength} characters`, at)
-        return [k, read(fields[k]!, inner, at.child(k), false)] as const
-      })))
+      return rec(new Map(Object.keys(fields).map((k) => [keyOfJson(k, limits, at), read(fields[k]!, inner, at.child(k), false)] as const)))
     }
     if (only("tag") || only("tag", "args")) {
       const tag = j["tag"]
       if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at)
+      const tagIssue = tagLengthIssue(tag, limits)
+      if (tagIssue !== undefined) fail(tagIssue, at)
       if (!Object.hasOwn(j, "args")) return variant(tag)
       const args = j["args"]!
       if (!Array.isArray(args) || args.length === 0) return fail(`"args" must be a non-empty array (a tag without arguments has no "args")`, at)
@@ -657,7 +698,7 @@ export async function* readLines<T>(
  * or any (async) iterable of text or UTF-8 chunks.
  */
 export const parseJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Json, void, undefined> => {
-  const limits = withDefaults(options.limits ?? {})
+  const limits = withJsonDefaults(options.limits ?? {})
   return readLines(source, options, (text, origin) => readJson(text, limits, origin))
 }
 

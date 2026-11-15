@@ -33,7 +33,24 @@ import { HausSyntaxError, locate, START } from "./errors.js"
 import { DEFAULT_LIMITS, Parser } from "./parser.js"
 import type { Value } from "./value.js"
 
-export class HausSchemaFileError extends HausSyntaxError {}
+/** A type used without its import, and the standard module or official extension that has it. */
+export interface MissingImport {
+  readonly module: string
+  readonly name: string
+}
+
+export class HausSchemaFileError extends HausSyntaxError {
+  constructor(
+    reason: string,
+    offset: number,
+    line: number,
+    column: number,
+    /** Set when the error is a known type used without its import in the file itself (for an editor's quick fix). */
+    readonly missingImport?: MissingImport,
+  ) {
+    super(reason, offset, line, column)
+  }
+}
 
 // ── resolved types ───────────────────────────────────────────
 
@@ -52,6 +69,24 @@ export const STD_MODULES = {
 /** Modules that used to be standard, and where they went. */
 const MOVED_MODULES: Record<string, string> = { "std/money": "@haus/money" }
 export type StdType = (typeof STD_MODULES)[keyof typeof STD_MODULES][number]
+
+/**
+ * The official extensions and their types. They are ordinary schema packages
+ * (spec §13.3), installed with the language's package manager; the table only
+ * lets an unknown type say where it comes from.
+ */
+export const OFFICIAL_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
+  "@haus/money": ["Money", "Currency"],
+  "@haus/geo": ["LatLng", "BBox"],
+}
+
+/** The standard module or official extension that has a type of this name. */
+export const moduleOfType = (name: string): string | undefined =>
+  Object.entries({ ...STD_MODULES, ...OFFICIAL_EXTENSIONS }).find(([, names]) => (names as readonly string[]).includes(name))?.[0]
+
+/** How to get a known type into scope: the import, and for a package, installing it. */
+export const importHint = ({ module, name }: MissingImport): string =>
+  `import it with: import ${module} (${name})${module.startsWith("@") ? `, and install ${module} with your package manager` : ""}`
 
 export type Type =
   | { readonly kind: "builtin"; readonly name: Builtin }
@@ -382,6 +417,8 @@ interface ImportDecl {
   readonly module: string
   readonly names: readonly { readonly name: string; readonly pos: number }[]
   readonly pos: number
+  /** Just after the `)`. */
+  readonly end: number
 }
 
 const MAX_NESTING = 128
@@ -545,7 +582,7 @@ class SchemaParser {
     }
     if (names.length === 0) this.unexpected("a type name (an import names at least one type)")
     this.advance()
-    return { module: parts.join("/"), names, pos }
+    return { module: parts.join("/"), names, pos, end: this.lastEnd }
   }
 
   private parseType(attributes: readonly AttributeNode[]): TypeDecl {
@@ -726,6 +763,30 @@ export function withoutAttributes(text: string): string {
   return out + text.slice(from)
 }
 
+/** A schema file as written, without resolving anything: what an editor needs to fix its imports. */
+export interface SchemaOutline {
+  readonly imports: readonly {
+    readonly module: string
+    readonly names: readonly { readonly name: string; readonly pos: number }[]
+    readonly pos: number
+    readonly end: number
+  }[]
+  /** Its own types; `start` is where the doc comment or attributes before one start. */
+  readonly types: readonly { readonly name: string; readonly start: number }[]
+  /** Every type name the definitions use, in order. */
+  readonly uses: readonly { readonly name: string; readonly pos: number }[]
+}
+
+/** Parse a schema file without resolving it. Throws HausSchemaFileError when the file can't be parsed. */
+export function schemaOutline(text: string): SchemaOutline {
+  const { imports, types } = new SchemaParser(text, failIn(text)).parseFile()
+  return {
+    imports,
+    types: types.map((t) => ({ name: t.name, start: t.docStart })),
+    uses: types.flatMap((t) => namesIn(t.body)),
+  }
+}
+
 /** The `//` lines directly above `pos` (no blank line in between). */
 function docComment(text: string, pos: number): { start: number; doc: string } {
   const lines: string[] = []
@@ -784,12 +845,12 @@ const MAX_FILES = 256
 /** What each type parameter stands for while a generic type is evaluated. */
 type Env = ReadonlyMap<string, Type>
 
-type Fail = (reason: string, pos: number) => never
+type Fail = (reason: string, pos: number, missing?: MissingImport) => never
 
 /** Fails with a HausSchemaFileError at an offset of `text`. */
-const failIn = (text: string): Fail => (reason, pos) => {
+const failIn = (text: string): Fail => (reason, pos, missing) => {
   const at = locate(text, pos, START)
-  throw new HausSchemaFileError(reason, at.offset, at.line, at.column)
+  throw new HausSchemaFileError(reason, at.offset, at.line, at.column, missing)
 }
 
 /** One schema file: the root, or one it imports (directly or not). */
@@ -945,7 +1006,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const defOf = new Map<Instance, Def>()
   /** The file whose nodes are being evaluated: names resolve in its scope, errors point into it. */
   let current: Unit = root
-  const fail: Fail = (reason, pos) => current.fail(reason, pos)
+  const fail: Fail = (reason, pos, missing) => current.fail(reason, pos, missing)
   const within = <R>(unit: Unit, f: () => R): R => {
     const saved = current
     current = unit
@@ -1044,9 +1105,9 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     if (std) return { kind: "std", name: std }
     if ((BUILTINS as readonly string[]).includes(name)) return { kind: "builtin", name: name as Builtin }
     if (name in PRELUDE_GENERIC) fail(`${name} needs ${PRELUDE_GENERIC[name]} argument${PRELUDE_GENERIC[name]! > 1 ? "s" : ""}`, pos)
-    const module = Object.entries(STD_MODULES).find(([, names]) => (names as readonly string[]).includes(name))?.[0]
-      ?? (name === "Money" || name === "Currency" ? "@haus/money" : undefined)
-    return fail(module ? `unknown type ${name}; import it with: import ${module} (${name})` : `unknown type ${name}`, pos)
+    const module = moduleOfType(name)
+    if (!module) return fail(`unknown type ${name}`, pos)
+    return fail(`unknown type ${name}; ${importHint({ module, name })}`, pos, { module, name })
   }
 
   const refTo = (inst: Instance, pos: number): Type => {

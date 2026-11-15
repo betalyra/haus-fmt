@@ -322,6 +322,17 @@ def test_a_value_built_in_code_beyond_the_depth_is_rejected() -> None:
         SCHEMA["List"].decode(value)
 
 
+def test_an_empty_container_counts_as_a_level() -> None:
+    """`[[]]` is two levels, as the parser counts it, for values built in code too."""
+    nest = compile_schema("type Nest = Array Nest")["Nest"]
+    assert nest.decode(Array((Array(()),)), limits=Limits(max_depth=2)) == ((),)
+    with pytest.raises(HausDecodeError, match="deeper than 1 levels"):
+        nest.decode(Array((Array(()),)), limits=Limits(max_depth=1))
+    with pytest.raises(HausEncodeError, match="deeper than 1 levels"):
+        empty: list[list[object]] = [[]]
+        nest.encode(empty, limits=Limits(max_depth=1))
+
+
 def test_values_that_contain_themselves_are_detected() -> None:
     tree: dict[str, list[object]] = {"children": []}
     tree["children"].append(tree)

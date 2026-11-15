@@ -1167,8 +1167,14 @@ class _Checker:
         module = next((m for m, names in STD_MODULES.items() if name in names), None)
         if name in ("Money", "Currency"):
             module = "@haus/money"
+        if name in ("LatLng", "BBox"):
+            module = "@haus/geo"
         self.fail(
-            f"unknown type {name}; import it with: import {module} ({name})" if module else f"unknown type {name}", pos
+            f"unknown type {name}; import it with: import {module} ({name})"
+            + (f", and install {module} with your package manager" if module.startswith("@") else "")
+            if module
+            else f"unknown type {name}",
+            pos,
         )
 
     def ref_to(self, inst: Instance, pos: int) -> RefType:

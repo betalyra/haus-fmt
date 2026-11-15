@@ -156,5 +156,5 @@ fn errors_inside_a_secret_name_only_the_secret() {
     assert!(e.path.is_empty());
     // Outside a secret, the error says where.
     let e = haus::to_string_with(keys.expose(), &small).unwrap_err();
-    assert_eq!(e.to_string(), ".hunter2: string longer than 4 characters");
+    assert_eq!(e.to_string(), ".hunter2: key longer than 4 characters");
 }

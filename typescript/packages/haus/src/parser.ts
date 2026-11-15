@@ -1,17 +1,29 @@
 import { HausSyntaxError, locate, START, type Origin } from "./errors.js"
 import { arr, bytes, num, rec, str, variant, type HBytes, type HNumber, type HRecord, type Value } from "./value.js"
 
+/** The default nesting depth (spec §7). */
 export const MAX_DEPTH = 256
+
+/**
+ * The deepest nesting this binding supports (spec §7): 512 levels. The
+ * parser, the schema decoders and encoders and the JSON mappings recurse, one
+ * call (or a few) per level, so a `maxDepth` above this is rejected with a
+ * RangeError when the limits are given, instead of overflowing the stack on
+ * deep input. Measured to fit Node's default stack with room to spare (the
+ * shallowest path, encoding with a schema, overflows near 750 levels).
+ * Formatting, the canonical form and hashing don't recurse: any depth works.
+ */
+export const MAX_SUPPORTED_DEPTH = 512
 
 /** Resource limits. Every parser enforces them while parsing (spec: "Limits"). */
 export interface Limits {
-  /** Nesting depth of records, arrays and payloads. */
+  /** Nesting depth of records, arrays and payloads: at most MAX_SUPPORTED_DEPTH. */
   readonly maxDepth: number
   /** Characters in one number literal, including sign, separators and exponent. */
   readonly maxNumberLength: number
   /** Largest absolute exponent, e.g. 6144 allows `1e6144` but not `1e6145`. */
   readonly maxExponent: number
-  /** Characters in one decoded string. */
+  /** Characters in one decoded string, record key or tag (or between the quotes of a byte string). */
   readonly maxStringLength: number
 }
 
@@ -22,13 +34,39 @@ export const DEFAULT_LIMITS: Limits = {
   maxStringLength: 16 * 1024 * 1024,
 }
 
-/** `limits` with DEFAULT_LIMITS for the ones not given (an `undefined` field counts as not given). */
-export const withDefaults = (limits: Partial<Limits>): Limits => ({
-  maxDepth: limits.maxDepth ?? DEFAULT_LIMITS.maxDepth,
-  maxNumberLength: limits.maxNumberLength ?? DEFAULT_LIMITS.maxNumberLength,
-  maxExponent: limits.maxExponent ?? DEFAULT_LIMITS.maxExponent,
-  maxStringLength: limits.maxStringLength ?? DEFAULT_LIMITS.maxStringLength,
-})
+/**
+ * Why `limits` can't be used, or undefined if they can: a `maxDepth` that
+ * isn't a whole number from 0 to `max` (MAX_SUPPORTED_DEPTH; for JSON
+ * nesting, `jsonDepth(MAX_SUPPORTED_DEPTH)`). The message names the maximum.
+ */
+export const limitsIssue = (limits: { readonly maxDepth?: number | undefined }, max: number = MAX_SUPPORTED_DEPTH, what = "nesting"): string | undefined => {
+  const depth = limits.maxDepth
+  if (depth === undefined || (Number.isInteger(depth) && depth >= 0 && depth <= max)) return undefined
+  return depth > max
+    ? `maxDepth ${depth} is above ${max}, the deepest ${what} this binding supports (spec §7)`
+    : `maxDepth must be a whole number from 0 to ${max}, not ${depth}`
+}
+
+/** Throw a RangeError if `limits` can't be used (see `limitsIssue`). */
+export const checkLimits = (limits: { readonly maxDepth?: number | undefined }, max?: number, what?: string): void => {
+  const issue = limitsIssue(limits, max, what)
+  if (issue !== undefined) throw new RangeError(issue)
+}
+
+/**
+ * `limits` with DEFAULT_LIMITS for the ones not given (an `undefined` field
+ * counts as not given). Throws a RangeError for a `maxDepth` above
+ * MAX_SUPPORTED_DEPTH (see `limitsIssue`).
+ */
+export const withDefaults = (limits: Partial<Limits>): Limits => {
+  checkLimits(limits)
+  return {
+    maxDepth: limits.maxDepth ?? DEFAULT_LIMITS.maxDepth,
+    maxNumberLength: limits.maxNumberLength ?? DEFAULT_LIMITS.maxNumberLength,
+    maxExponent: limits.maxExponent ?? DEFAULT_LIMITS.maxExponent,
+    maxStringLength: limits.maxStringLength ?? DEFAULT_LIMITS.maxStringLength,
+  }
+}
 
 /** Whether `s` has more than `max` characters (code points: an emoji is one character, but two UTF-16 units). */
 export const longerThan = (s: string, max: number): boolean => s.length > max && codePoints(s) > max
@@ -209,7 +247,7 @@ export class Parser {
       if (this.src.startsWith('"""', this.pos)) this.fail("block strings can't be record keys")
       return this.parseBasicString().value
     }
-    if (isLowerStart(c)) return this.readIdent()
+    if (isLowerStart(c)) return this.checkWordLength(this.readIdent(), "key")
     if (isUpper(c)) {
       const word = this.readIdent()
       this.fail(`record keys must start with a lowercase letter or '_'; quote it: "${word}"`, this.pos - word.length)
@@ -246,7 +284,7 @@ export class Parser {
   }
 
   private parseVariant(): Value {
-    const tag = this.readIdent()
+    const tag = this.checkWordLength(this.readIdent(), "tag")
     const afterTag = this.pos
     // The payload must follow on the same line: only spaces and tabs in between.
     // Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would silently
@@ -455,6 +493,15 @@ export class Parser {
       this.fail(`string longer than ${this.limits.maxStringLength} characters`, open)
     }
     return s
+  }
+
+  /**
+   * A record key or tag (spec §7: the string limit counts them too), just read:
+   * the error is at its start. Identifiers are ASCII, so characters are units.
+   */
+  private checkWordLength(word: string, what: "key" | "tag"): string {
+    if (word.length > this.limits.maxStringLength) this.fail(`${what} longer than ${this.limits.maxStringLength} characters`, this.pos - word.length)
+    return word
   }
 
   /** Process escapes in one block-string line, starting at `at` in the source. */

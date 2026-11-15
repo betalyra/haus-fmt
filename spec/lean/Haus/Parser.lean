@@ -226,6 +226,11 @@ def checkLength (L : Limits) (s : Text) (start : Text) : P String :=
   if s.length > L.maxStringLength then failAt s!"string longer than {L.maxStringLength} characters" start
   else return String.ofList s
 
+/-- A record key or tag (§7): at most `maxStringLength` characters, like a string. -/
+def checkName (L : Limits) (what : String) (s : Text) (start : Text) : P String :=
+  if s.length > L.maxStringLength then failAt s!"{what} longer than {L.maxStringLength} characters" start
+  else return String.ofList s
+
 def basicString (L : Limits) : P String := do
   let start ← get
   skip
@@ -313,8 +318,8 @@ def key (L : Limits) : P String := do
   match ← get with
   | '"' :: '"' :: '"' :: _ => fail "block strings can't be record keys"
   | '"' :: _ => basicString L
-  | c :: _ =>
-      if isLowerStart c then return String.ofList (← takeWhile isIdentChar)
+  | t@(c :: _) =>
+      if isLowerStart c then checkName L "key" (← takeWhile isIdentChar) t
       else if isUpper c then fail "record keys must start with a lowercase letter or '_'; quote it"
       else fail s!"expected a record key, found '{c}'"
   | [] => fail "expected a record key, found end of input"
@@ -349,7 +354,8 @@ mutual
   def variant (L : Limits) : Nat → Nat → P Value
     | 0, _ => fail "out of fuel"
     | fuel + 1, budget => do
-      let name := String.ofList (← takeWhile isIdentChar)
+      let start ← get
+      let name ← checkName L "tag" (← takeWhile isIdentChar) start
       let afterTag ← get
       let _ ← takeWhile isBlank
       match ← get with
@@ -437,5 +443,11 @@ def parse (L : Limits) (input : Text) : Except Error (List Value) :=
     | r => r
   let fuel := 4 * (t.length + 1)
   (do ws; fileLoop L fuel fuel []).run' t
+
+-- Record keys and tags count against the string limit (§7), like strings.
+private def accepts (src : String) : Bool := (parse { maxStringLength := 3 } src.toList).toOption.isSome
+#guard accepts "{abc: Abc, \"xyz\": Abc(1), q: Abc { r: 1 }}"
+#guard !accepts "{abcd: 1}" && !accepts "{\"abcd\": 1}" && !accepts "Abcd" && !accepts "Abcd(1)" && !accepts "Abcd {}"
+#guard (parse { maxStringLength := 3 } "[1, Abcd]".toList) matches .error ⟨"tag longer than 3 characters", 5⟩
 
 end Haus.Parser

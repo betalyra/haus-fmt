@@ -241,3 +241,19 @@ fn deep_native_values_fail_at_the_depth_limit() {
     assert!(json.ends_with(": nesting deeper than 256 levels"), "{json}");
     dismantle(huge);
 }
+
+#[test]
+fn generated_keys_and_tags_count_against_the_string_limit() {
+    // Written for a reader whose string limit is lower than a tag or key.
+    let limits = |n: usize| haus::Limits { max_string_length: n, ..haus::Limits::default() };
+    let (leaf, tree) = (Tree::Leaf, Tree::Node(Box::new(Tree::Leaf), Box::new(Tree::Leaf)));
+    assert!(haus::to_string_with(&leaf, &limits(4)).is_ok());
+    assert_eq!(haus::to_string_with(&leaf, &limits(3)).unwrap_err().to_string(), "tag longer than 3 characters");
+    assert_eq!(haus::to_string_with(&tree, &limits(3)).unwrap_err().to_string(), "tag longer than 3 characters");
+    let item = Item { id: haus::Int::from(1i64), label: String::new() };
+    assert!(haus::to_string_with(&item, &limits(5)).is_ok());
+    assert_eq!(
+        haus::to_string_with(&item, &limits(4)).unwrap_err().to_string(),
+        ".label: key longer than 4 characters"
+    );
+}

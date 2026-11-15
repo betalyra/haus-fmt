@@ -197,6 +197,26 @@ const { values, comments } = parseDocument(text)
 format(values, { source: text, comments })         // reformat a file, comments kept
 ```
 
+## Limits
+
+Every reader, decoder and encoder takes the limits of spec §7, enforced while
+parsing: `maxDepth` (256 by default), `maxNumberLength` (1000),
+`maxExponent` (6144) and `maxStringLength` (16 Mi characters, for strings,
+record keys and tags), plus `maxSteps` for schemas.
+
+```ts
+parse(text, { maxDepth: 512, maxStringLength: 1024 })
+h.decode(Order, value, { maxDepth: 64 })
+```
+
+`maxDepth` is at most `MAX_SUPPORTED_DEPTH`, 512: the parser, the schema
+decoders and encoders and the JSON mappings recurse, and 512 levels fit
+Node's default stack with room to spare (the shallowest path, encoding with a
+schema, overflows near 750). A larger `maxDepth` is a `RangeError` naming the
+maximum, thrown when the limits are given. Raw JSON (`parseJson`) counts JSON
+levels, up to `jsonDepth(512)`, 2049, as many as 512 haus levels take.
+Formatting, the canonical form and hashing don't recurse: they take any depth.
+
 ## Also inside
 
 | | |

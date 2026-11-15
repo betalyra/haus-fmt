@@ -479,12 +479,16 @@ class _Lossless:
         d = self.deeper(depth, path)
         out: dict[str, Value] = {}
         for k, x in fields.items():
+            if len(k) > self.limits.max_string_length:
+                self.fail(f"key longer than {self.limits.max_string_length} characters", (*path, "rec"))
             out[k] = self.value(x, d, (*path, "rec", k))
         return Record(out)
 
     def tag(self, tag: str, path: tuple[PathKey, ...]) -> str:
         if not _TAG.fullmatch(tag):
             self.fail("expected a tag ([A-Z][A-Za-z0-9_]*) in 'tag'", (*path, "tag"))
+        if len(tag) > self.limits.max_string_length:
+            self.fail(f"tag longer than {self.limits.max_string_length} characters", (*path, "tag"))
         return tag
 
 

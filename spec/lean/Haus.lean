@@ -50,5 +50,8 @@ import Haus.Json.Lossless
 import Haus.Json.Normal
 import Haus.Json.Plain
 import Haus.Json.PlainRoundTrip
+import Haus.Json.PlainWellFormed
+import Haus.Json.Fits
+import Haus.Json.PlainFits
 import Haus.Json.WellFormed
 import Haus.Json.Correct

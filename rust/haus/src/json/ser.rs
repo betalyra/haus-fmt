@@ -15,7 +15,7 @@ fn member(name: &str, json: Json) -> (String, Json) {
 /// An object from fields in order, leaving out missing optional ones: a
 /// record, encoded inside it.
 pub fn object<'k, const N: usize>(e: Encoder, fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N]) -> R {
-    fields(e.nested()?)
+    fields(e.record_level()?)
         .into_iter()
         .filter_map(|(k, v)| Some(v?.map(|v| member(k, v)).map_err(|e| e.within(Segment::Field(k.to_owned())))))
         .collect::<Result<_, _>>()
@@ -44,7 +44,7 @@ pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder
     if N == 0 {
         return Ok(Json::Object(vec![tag_member]));
     }
-    let mut values = values(e.nested()?).into_iter().enumerate().map(|(i, v)| {
+    let mut values = values(if N == 1 { e.payload()? } else { e.nested()? }).into_iter().enumerate().map(|(i, v)| {
         v.map_err(|e| match N {
             1 => e.within(Segment::Field("value".into())),
             _ => e.within(Segment::Index(i)).within(Segment::Field("values".into())),
@@ -104,7 +104,7 @@ pub fn array<T>(items: &[T], e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
 }
 
 pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
-    let inner = e.nested()?;
+    let inner = e.record_level()?;
     m.iter()
         .map(|(k, v)| Ok((k.clone(), f(v, inner).map_err(|e| e.within(Segment::Field(k.clone())))?)))
         .collect::<Result<_, _>>()
@@ -117,7 +117,7 @@ pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R)
 pub fn maybe<T>(m: &Option<T>, e: Encoder, nullable: bool, f: impl FnOnce(&T, Encoder) -> R) -> R {
     match (nullable, m) {
         (false, None) => Ok(Json::Null),
-        (false, Some(x)) => f(x, e.nested()?),
+        (false, Some(x)) => f(x, e.payload()?),
         (true, None) => tagged("None", e, |_| []),
         (true, Some(x)) => tagged("Some", e, |e| [f(x, e)]),
     }

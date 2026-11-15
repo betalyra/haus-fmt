@@ -4,10 +4,44 @@
 //! Decoding is linear in the input (spec §9): records are indexed once, and a
 //! variant's case is chosen by its tag, never by trying cases in turn.
 
-use crate::{Codec, DecodeError, Secret, Value};
+use crate::{Codec, DecodeError, Limits, Secret, Value};
 use std::collections::{BTreeMap, HashMap};
 
 type R<T> = Result<T, DecodeError>;
+
+/// Where a value is read with a type, as [`Encoder`](crate::Encoder) is
+/// where one is written: the limits of the reader, and how many containers
+/// (records, arrays, payloads) the value is inside. Reading plain JSON
+/// ([`FromJson`](crate::FromJson)) takes one, and reading a container takes
+/// [`Decoder::nested`], so that JSON nested deeper than the depth limit fails
+/// there instead of recursing on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Decoder {
+    limits: Limits,
+    depth: usize,
+}
+
+impl Decoder {
+    /// At the top, for a reader with `limits`.
+    pub fn new(limits: &Limits) -> Decoder {
+        Decoder { limits: *limits, depth: 0 }
+    }
+
+    pub fn limits(&self) -> &Limits {
+        &self.limits
+    }
+
+    /// How many containers the value is inside.
+    pub fn depth(&self) -> usize {
+        self.depth
+    }
+
+    /// Inside one more container, if the depth limit allows it. Fails too
+    /// if the limit is more than [`crate::MAX_SUPPORTED_DEPTH`].
+    pub fn nested(self) -> R<Decoder> {
+        crate::json::lossless::open(&self.limits, self.depth).map(|depth| Decoder { depth, ..self })
+    }
+}
 
 /// A Rust type that a haus value decodes to.
 pub trait Decode: Sized {

@@ -19,6 +19,9 @@ pub(crate) fn max_depth(limits: &Limits) -> usize {
 /// One JSON text, with whitespace around it, nested at most `max_depth`
 /// levels. A byte order mark at the start is skipped if `bom`.
 pub(crate) fn parse(src: &str, limits: &Limits, max_depth: usize, bom: bool) -> R<Json> {
+    if let Some(reason) = limits.unsupported() {
+        return Err(SyntaxError::at(src, 0, reason));
+    }
     let start = if bom && src.starts_with('\u{FEFF}') { 3 } else { 0 };
     let mut reader = Reader { src, b: src.as_bytes(), pos: start, depth: 0, limits, max_depth };
     reader.whitespace();
