@@ -164,7 +164,10 @@ class SchemaType:
         """
         values = Parser(text, limits).parse_sequence()
         if len(values) != 1:
-            raise HausDecodeError(f"expected exactly one value, found {len(values)}", ())
+            n = len(values)
+            raise HausDecodeError(
+                f"expected exactly one value, found {n}", (), "not-one-value", expected="one value", found=f"{n} values"
+            )
         return self.decode(values[0], limits=limits, max_steps=max_steps)
 
     def encode(self, value: object, *, limits: Limits = DEFAULT_LIMITS, max_steps: int | None = None) -> Value:

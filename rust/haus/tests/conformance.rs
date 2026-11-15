@@ -101,14 +101,24 @@ fn valid_hash() {
     assert!(failures.is_empty(), "hashes differ:\n{}", failures.join("\n"));
 }
 
+/// `NAME.error`: the code it is rejected with (spec §17).
+fn expected_code(path: &Path) -> String {
+    fs::read_to_string(path.with_extension("error")).unwrap().trim().to_owned()
+}
+
 #[test]
 fn invalid() {
     let mut failures = Vec::new();
     for path in cases("invalid") {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-        if let Ok(values) = haus::parse_bytes(&fs::read(&path).unwrap()) {
-            failures.push(format!("{name}: accepted as {values:?}"));
+        let expected = expected_code(&path);
+        match haus::parse_bytes(&fs::read(&path).unwrap()) {
+            Ok(values) => failures.push(format!("{name}: accepted as {values:?}")),
+            Err(e) if e.code.as_str() != expected => {
+                failures.push(format!("{name}: {} ({e}), expected {expected}", e.code))
+            }
+            Err(_) => {}
         }
     }
-    assert!(failures.is_empty(), "invalid cases were accepted:\n{}", failures.join("\n"));
+    assert!(failures.is_empty(), "invalid cases:\n{}", failures.join("\n"));
 }

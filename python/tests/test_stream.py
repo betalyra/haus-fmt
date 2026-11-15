@@ -39,10 +39,13 @@ def test_any_chunking_gives_the_same_values(path: Path) -> None:
 
 @pytest.mark.parametrize("path", suite("invalid"), ids=lambda p: p.stem)
 def test_invalid_input_is_rejected_in_any_chunking(path: Path) -> None:
+    """With the error code of `NAME.error` (spec §17), as when the whole input is parsed."""
     data = path.read_bytes()
+    code = path.with_suffix(".error").read_text("utf-8").strip()
     for size in [*range(1, 10), max(1, len(data))]:
-        with pytest.raises(haus.HausSyntaxError):
+        with pytest.raises(haus.HausSyntaxError) as e:
             chunked(data, size)
+        assert e.value.code == code, f"chunk size {size}: {e.value.reason}"
 
 
 def test_emits_each_value_as_soon_as_its_comma_arrives() -> None:

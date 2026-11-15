@@ -13,7 +13,8 @@ types. `Date("2026-02-30")` is just a tag with a string.
 from __future__ import annotations
 
 from ._canonical import Hasher, canonical, compare, equals, hash, hash_all
-from ._errors import HausJsonError, HausSyntaxError
+from ._error_codes import ERROR_CODES, ErrorCategory, ErrorCode, ErrorInfo
+from ._errors import HausError, HausJsonError, HausLimitsError, HausSyntaxError, error_docs, is_error_code
 from ._json_api import (
     from_json,
     from_json_lines,
@@ -31,11 +32,17 @@ __version__ = "0.0.1"
 __all__ = [
     "DEFAULT_LIMITS",
     "DEFAULT_MAX_VALUE_LENGTH",
+    "ERROR_CODES",
     "MAX_SUPPORTED_DEPTH",
     "Array",
     "Bytes",
+    "ErrorCategory",
+    "ErrorCode",
+    "ErrorInfo",
     "Hasher",
+    "HausError",
     "HausJsonError",
+    "HausLimitsError",
     "HausSyntaxError",
     "Limits",
     "Number",
@@ -49,12 +56,14 @@ __all__ = [
     "canonical",
     "compare",
     "equals",
+    "error_docs",
     "from_json",
     "from_json_lines",
     "from_lossless_json",
     "from_lossless_json_lines",
     "hash",
     "hash_all",
+    "is_error_code",
     "parse",
     "parse_all",
     "parse_bytes",
@@ -73,7 +82,16 @@ def parse(text: str, *, limits: Limits = DEFAULT_LIMITS) -> Value:
     """Parse a text that must hold exactly one value (spec §6)."""
     values = parse_all(text, limits=limits)
     if len(values) != 1:
-        raise HausSyntaxError(f"expected exactly one value, found {len(values)}", 0, 1, 1)
+        n = len(values)
+        raise HausSyntaxError(
+            f"expected exactly one value, found {n}",
+            0,
+            1,
+            1,
+            "not-one-value",
+            expected="one value",
+            found=f"{n} values",
+        )
     return values[0]
 
 
@@ -83,5 +101,5 @@ def parse_bytes(data: bytes, *, limits: Limits = DEFAULT_LIMITS) -> list[Value]:
         text = data.decode("utf-8")
     except UnicodeDecodeError as e:
         valid = data[: e.start].decode("utf-8")
-        raise HausSyntaxError.at(valid, len(valid), "invalid UTF-8") from None
+        raise HausSyntaxError.at(valid, len(valid), "invalid-utf8", "invalid UTF-8") from None
     return parse_all(text, limits=limits)

@@ -1,13 +1,14 @@
 //! The schema conformance suite (test-suite/schema, spec §15), run on the
 //! code haus-fmt-build generates for its schemas (see build.rs).
 //!
-//! Each case is `Ok { type, input, output? }` or `Err { type, input }`. Ok:
-//! decoding `input` with `type` succeeds, and encoding the result gives a value
-//! equal to `output` (or `input`). Err: decoding fails. Every case runs on each
-//! schema twice: as written, and without its attributes, which must not
-//! change any result.
+//! Each case is `Ok { type, input, output? }` or `Err { type, input, code }`.
+//! Ok: decoding `input` with `type` succeeds, and encoding the result gives a
+//! value equal to `output` (or `input`). Err: decoding fails with the error
+//! code `code` (spec §17). Every case runs on each schema twice: as written,
+//! and without its attributes, which must not change any result.
 //!
-//! `invalid/*.schema.haus` must be rejected by haus-fmt-build (spec §14).
+//! `invalid/*.schema.haus` must be rejected by haus-fmt-build (spec §14),
+//! with the code in `invalid/NAME.error`.
 
 mod suite {
     include!(concat!(env!("OUT_DIR"), "/schema_suite.rs"));
@@ -23,6 +24,8 @@ struct Case {
     ty: String,
     input: Value,
     output: Value,
+    /// For an `Err`, the code it fails with.
+    code: String,
 }
 
 impl Case {
@@ -41,6 +44,11 @@ impl Case {
                 ty: ty.clone(),
                 input: input.clone(),
                 output: fields.get("output").unwrap_or(input).clone(),
+                code: match fields.get("code") {
+                    Some(Value::String(code)) => code.clone(),
+                    _ if ok => String::new(),
+                    _ => return Err(format!("an Err case without a code: {}", canonical(v))),
+                },
             }),
             _ => Err(format!("not a case: {}", canonical(v))),
         }
@@ -67,6 +75,9 @@ impl Case {
             }
             (true, Err(e)) => Some(format!("failed to decode: {e}")),
             (false, Ok(encoded)) => Some(format!("decoded, expected an error (encoded as {})", canonical(&encoded))),
+            (false, Err(e)) if e.code.as_str() != self.code => {
+                Some(format!("fails with {} ({e}), expected {}", e.code, self.code))
+            }
             (false, Err(_)) => None,
         }
     }
@@ -103,17 +114,24 @@ fn invalid_schemas_are_rejected() {
     paths.sort();
     assert!(!paths.is_empty(), "no schemas in {}", dir.display());
     let none = haus_build::Packages::none();
-    let accepted: Vec<String> = paths
+    let failures: Vec<String> = paths
         .iter()
         .flat_map(|path| {
             let text = fs::read_to_string(path).unwrap();
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
-            let rust = haus_build::generate(&text, "suite/invalid", &[], &none).ok().map(|_| format!("{name} (Rust)"));
-            let roc = haus_build::roc::generate(&text, "Invalid", "suite/invalid", &[], &none)
-                .ok()
-                .map(|_| format!("{name} (Roc)"));
+            let expected = fs::read_to_string(path.with_extension("").with_extension("error")).unwrap();
+            let expected = expected.trim();
+            let why = |what: &str, result: Result<String, haus_build::Error>| match result {
+                Ok(_) => Some(format!("{name} ({what}): accepted")),
+                Err(e) if e.code().as_str() != expected => {
+                    Some(format!("{name} ({what}): {} ({e}), expected {expected}", e.code()))
+                }
+                Err(_) => None,
+            };
+            let rust = why("Rust", haus_build::generate(&text, "suite/invalid", &[], &none));
+            let roc = why("Roc", haus_build::roc::generate(&text, "Invalid", "suite/invalid", &[], &none));
             [rust, roc].into_iter().flatten()
         })
         .collect();
-    assert!(accepted.is_empty(), "invalid schemas were accepted:\n{}", accepted.join("\n"));
+    assert!(failures.is_empty(), "invalid schemas:\n{}", failures.join("\n"));
 }

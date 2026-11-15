@@ -51,7 +51,7 @@ for (const path of schemas) {
       types.map((t) => `\t${roc(t)} => Written(written(${module}.decode_${snake(t)}(v), ${module}.to_json_${snake(t)}))\n`).join("") +
       `\t_ => NoType\n}\n\n` +
       `read_${s} : Str, JsonValue -> [Read(Try(Value, Str)), NoType]\nread_${s} = |ty, j| match ty {\n` +
-      types.map((t) => `\t${roc(t)} => Read(${module}.from_json_${snake(t)}(j).map_ok(${module}.encode_${snake(t)}).map_err(Decode.message))\n`).join("") +
+      types.map((t) => `\t${roc(t)} => Read(${module}.from_json_${snake(t)}(j).map_ok(${module}.encode_${snake(t)}).map_err(failure))\n`).join("") +
       `\t_ => NoType\n}\n`,
   )
 }
@@ -63,6 +63,7 @@ import haus.Value
 import haus.Decode
 import haus.Encode
 import haus.JsonValue
+import haus.ErrorCode
 ${modules.map((m) => `import ${m}\n`).join("")}
 JsonSchemas := [].{
 \t## Decode \`v\` with the type \`ty\` of the schema \`suite\`, and write the result as plain JSON.
@@ -82,11 +83,15 @@ ${reads.join("")}\t\t_ => NoType
 written : Try(a, Decode.Error), (a -> Try(JsonValue, Encode.Error)) -> Try(Str, Str)
 written = |decoded, to_json| match decoded {
 \tOk(x) => match to_json(x) {
-\t\tOk(j) => JsonValue.to_str(j).map_err(Encode.message)
-\t\tErr(e) => Err("can't write it: \${Encode.message(e)}")
+\t\tOk(j) => JsonValue.to_str(j).map_err(failure)
+\t\tErr(e) => Err(failure({ ..e, reason: "can't write it: \${e.reason}" }))
 \t}
-\tErr(e) => Err("can't decode: \${Decode.message(e)}")
+\tErr(e) => Err(failure({ ..e, reason: "can't decode: \${e.reason}" }))
 }
+
+## An error as the runner prints it: its place (spec §17), its code and its reason.
+failure : { code : Str, reason : Str, path : Str } -> Str
+failure = |e| "\${ErrorCode.place(e.path)} \${e.code} \${e.reason}"
 
 ${codecs.join("\n")}`,
 )

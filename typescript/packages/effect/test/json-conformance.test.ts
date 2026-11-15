@@ -6,7 +6,7 @@
  */
 import { canonical, equalsJson, parseAll, parseJson, stringifyJson, type Json, type Value } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Option, Schema } from "effect"
 import { readdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
@@ -20,6 +20,8 @@ interface Case {
   readonly input: Value | undefined
   readonly output: Value | undefined
   readonly json: string
+  /** For `Err`: the error code (spec §17). */
+  readonly code: string | undefined
   readonly name: string
 }
 
@@ -30,12 +32,15 @@ const cases = (text: string): Case[] =>
     const type = f.get("type")
     const json = f.get("json")
     if (json?.kind !== "string") throw new Error(`not a case: ${canonical(v)}`)
+    const code = f.get("code")
+    if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
     return {
       kind: v.tag as Case["kind"],
       type: type?.kind === "string" ? type.value : undefined,
       input: f.get("input"),
       output: f.get("output") ?? f.get("input"),
       json: json.value,
+      code: code?.kind === "string" ? code.value : undefined,
       name: `${v.tag} ${type?.kind === "string" ? type.value + " " : ""}${json.value}`,
     }
   })
@@ -43,10 +48,14 @@ const cases = (text: string): Case[] =>
 const expectJson = (actual: Json, json: string) =>
   expect(equalsJson(actual, parseJson(json, { maxDepth: 2000 })), `${stringifyJson(actual)} is not ${json}`).toBe(true)
 
-const fails = <A, E>(effect: Effect.Effect<A, E>) => {
+/** The effect fails with a typed error (not a defect) with this code (spec §17). */
+const fails = <A>(effect: Effect.Effect<A, Haus.HausError>, code: string | undefined) => {
   const exit = Effect.runSyncExit(effect)
-  // A failure, not a defect: the errors are typed.
   expect(Exit.isFailure(exit) && Exit.hasFails(exit), String(exit)).toBe(true)
+  if (Exit.isFailure(exit)) {
+    const error = Cause.findErrorOption(exit.cause).pipe(Option.getOrUndefined)
+    expect(error?.code, error?.message).toBe(code)
+  }
 }
 
 describe("plain (spec §16.3)", () => {
@@ -56,7 +65,7 @@ describe("plain (spec §16.3)", () => {
     it.effect(c.name, () =>
       Effect.gen(function* () {
         const schema = schemas[c.type!]!
-        if (c.kind === "Err") return fails(Haus.fromJson(schema)(c.json))
+        if (c.kind === "Err") return fails(Haus.fromJson(schema)(c.json), c.code)
         if (c.kind === "Ok") {
           const decoded = yield* Haus.decodeValue(schema)(c.input!)
           expectJson(yield* Haus.toJsonValue(schema)(decoded), c.json)
@@ -72,7 +81,7 @@ describe("lossless (spec §16.2), as Haus.Any", () => {
   for (const c of cases(read("json/lossless.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
-        if (c.kind === "Err") return fails(Haus.fromJson(Haus.Any)(c.json))
+        if (c.kind === "Err") return fails(Haus.fromJson(Haus.Any)(c.json), c.code)
         expectJson(yield* Haus.toJsonValue(Haus.Any)(c.input!), c.json)
         expect(canonical(yield* Haus.fromJson(Haus.Any)(c.json))).toBe(canonical(c.input!))
       }))
@@ -83,7 +92,7 @@ describe("without a schema (spec §16.1)", () => {
   for (const c of cases(read("json/schemaless.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
-        if (c.kind === "Err") return fails(Haus.valueFromJson(c.json))
+        if (c.kind === "Err") return fails(Haus.valueFromJson(c.json), c.code)
         expect(canonical(yield* Haus.valueFromJson(c.json))).toBe(canonical(c.output!))
       }))
   }

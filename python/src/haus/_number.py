@@ -11,6 +11,7 @@ import math
 import re
 from decimal import Decimal
 
+from ._error_codes import ErrorCode
 from ._parser import DEFAULT_LIMITS, Limits, Parser
 
 INTEGER = re.compile(r"-?[0-9]+")
@@ -52,10 +53,13 @@ def _shortest_length(text: str, limit: int) -> int:
     return min(len(text), sign + 2 + (abs(to_int(text)).bit_length() + 3) // 4)
 
 
-def number_limit_issue(text: str, limits: Limits) -> str | None:
-    """Why the normalized number `text` is outside `limits`, or None. Parsed numbers are always within."""
+def number_limit_issue(text: str, limits: Limits) -> tuple[ErrorCode, str] | None:
+    """Why the normalized number `text` is outside `limits` (its code and message), or None.
+
+    Parsed numbers are always within.
+    """
     if (m := _EXPONENT.search(text)) and (len(m[1]) > 15 or int(m[1]) > limits.max_exponent):
-        return f"exponent larger than {limits.max_exponent}"
+        return "exponent-too-large", f"exponent larger than {limits.max_exponent}"
     if _shortest_length(text, limits.max_number_length) > limits.max_number_length:
-        return f"number literal longer than {limits.max_number_length} characters"
+        return "number-too-long", f"number literal longer than {limits.max_number_length} characters"
     return None

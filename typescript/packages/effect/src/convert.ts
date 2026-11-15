@@ -4,13 +4,15 @@
  * A schema is compiled once into a tree of small converter functions
  * (pattern matching on the schema AST happens here, at compile time). Per
  * value only those closures run, which keeps stream decoding fast. Effect's
- * own decoder then validates the result, so a converter never fails: on a
- * mismatch it falls back to a schema-less conversion and lets Effect report
- * the error with its path.
+ * own decoder then validates the result. Where the haus value decides the
+ * error code (spec §17: a tag of a closed variant, a payload, a whole number,
+ * a float too large) a converter fails with a ConversionError and its code;
+ * elsewhere it falls back to a schema-less conversion and lets Effect report
+ * the error with its path (errors.ts gives Effect's issues their codes).
  */
 import {
   arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
-  variant as vVariant, type FloatType, type HVariant, type StdTimeType, type Value,
+  variant as vVariant, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import { Array as Arr, BigDecimal, DateTime, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
@@ -69,9 +71,13 @@ export const NUMBER = "hausNumber"
 
 export type NumberType = "Int" | FloatType
 
-/** Thrown during conversion; `decodeValue` turns it into a HausSchemaError. `path` is where, as in Effect's issues. */
+/**
+ * Thrown during conversion; `decodeValue` turns it into a HausSchemaError.
+ * `code` is its error code (spec §17), `path` is where, as in Effect's issues
+ * (a number on a variant: its argument).
+ */
 export class ConversionError {
-  constructor(readonly message: string, readonly path: ReadonlyArray<string | number> = []) {}
+  constructor(readonly message: string, readonly code: ErrorCode, readonly path: ReadonlyArray<string | number> = []) {}
 }
 
 /** Convert the value at `key`: an error inside names its place. */
@@ -79,7 +85,7 @@ const at = <A>(key: string | number, f: () => A): A => {
   try {
     return f()
   } catch (e) {
-    if (e instanceof ConversionError) throw new ConversionError(e.message, [key, ...e.path])
+    if (e instanceof ConversionError) throw new ConversionError(e.message, e.code, [key, ...e.path])
     throw e
   }
 }
@@ -107,11 +113,28 @@ const describe = (v: Value): string => {
  * An error here, rather than a schema-less conversion that a lenient Effect
  * schema might accept (a struct takes any object, a string literal any equal string).
  */
-const mismatch = (expected: string, v: Value): never => {
-  throw new ConversionError(`expected ${expected}, got ${describe(v)}`)
+const mismatch = (expected: string, v: Value, code: ErrorCode = "type-mismatch"): never => {
+  throw new ConversionError(`expected ${expected}, got ${describe(v)}`, code)
 }
 
+/**
+ * The code for a value that isn't one of these tags as a closed variant takes
+ * them (spec §17, as the core decides): an unknown tag is `unknown-tag`, a
+ * listed tag with another payload `wrong-payload`, anything else `type-mismatch`.
+ */
+const caseCode = (v: Value, tags: ReadonlyArray<string>): ErrorCode =>
+  v.kind !== "variant" ? "type-mismatch" : tags.includes(v.tag) ? "wrong-payload" : "unknown-tag"
+
+/** A value that is none of these tags of a closed variant (`Bool`, `Maybe`, an enum). */
+const notCase = (expected: string, v: Value, tags: ReadonlyArray<string>): never => mismatch(expected, v, caseCode(v, tags))
+
+/** For an integer type: a number with a fraction or an exponent is `not-an-integer`, anything else a mismatch. */
+const notInteger = (v: Value): never => mismatch("a whole number", v, v.kind === "number" ? "not-an-integer" : "type-mismatch")
+
 const INTEGER = /^-?\d+$/
+
+const BOOL_TAGS = ["True", "False"]
+const MAYBE_TAGS = ["None", "Some"]
 
 // ── value helpers ────────────────────────────────────────────
 
@@ -174,8 +197,8 @@ const guarded = <R>(limits: h.Limits, maxSteps: number, f: () => R): R => {
 }
 
 const enter = () => {
-  if (++guard.steps > guard.maxSteps) throw new ConversionError(`conversion budget of ${guard.maxSteps} steps exceeded`)
-  if (guard.depth >= guard.maxNesting) throw new ConversionError(`value nested deeper than ${guard.maxNesting} levels (or cyclic)`)
+  if (++guard.steps > guard.maxSteps) throw new ConversionError(`conversion budget of ${guard.maxSteps} steps exceeded`, "step-budget")
+  if (guard.depth >= guard.maxNesting) throw new ConversionError(`value nested deeper than ${guard.maxNesting} levels (or cyclic)`, "nesting-too-deep")
   guard.depth++
 }
 
@@ -198,8 +221,8 @@ const countValues = (value: Value, maxDepth: number): number => {
   const stack: [Value, number][] = [[value, 0]]
   while (stack.length > 0) {
     const [v, depth] = stack.pop()!
-    if (++count > MAX_VALUES) throw new ConversionError("value has too many nodes")
-    if (depth >= maxDepth && isNested(v)) throw new ConversionError(`value nested deeper than ${maxDepth} levels (or cyclic)`)
+    if (++count > MAX_VALUES) throw new ConversionError("value has too many nodes", "too-many-nodes")
+    if (depth >= maxDepth && isNested(v)) throw new ConversionError(`value nested deeper than ${maxDepth} levels (or cyclic)`, "nesting-too-deep")
     if (v.kind === "array") for (const x of v.items) stack.push([x, depth + 1])
     else if (v.kind === "record") for (const x of v.fields.values()) stack.push([x, depth + 1])
     // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
@@ -331,13 +354,14 @@ const compileNode = (ast: AST): Converter => (ast.annotations?.[VALUE] === true 
 const compileByTag: (ast: AST) => Converter = Match.type<AST>().pipe(
   Match.tag("String", "TemplateLiteral", compileString),
   Match.tag("Number", compileNumber),
-  Match.tag("BigInt", (): Converter => (v) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : generic(v))),
+  Match.tag("BigInt", (): Converter => (v) => (v.kind !== "number" ? generic(v) : INTEGER.test(v.text) ? BigInt(v.text) : notInteger(v))),
   Match.tag("Boolean", (): Converter => (v) =>
-    Option.isSome(variant(v, "True", 0)) ? true : Option.isSome(variant(v, "False", 0)) ? false : generic(v)),
+    Option.isSome(variant(v, "True", 0)) ? true : Option.isSome(variant(v, "False", 0)) ? false : notCase("True or False", v, BOOL_TAGS)),
   // A literal takes exactly the value it is written as: `EUR` for "EUR", `"a b"` for "a b".
   Match.tag("Literal", (ast): Converter => {
     const written = literalValue(ast.literal)
-    return (v) => (equals(v, written) ? ast.literal : mismatch(describe(written), v))
+    const code = (v: Value): ErrorCode => (written.kind === "variant" ? caseCode(v, [written.tag]) : "type-mismatch")
+    return (v) => (equals(v, written) ? ast.literal : mismatch(describe(written), v, code(v)))
   }),
   Match.tag("Enum", (): Converter => (v) =>
     Option.match(variant(v, undefined, 0), { onSome: (x) => x.tag, onNone: () => generic(v) })),
@@ -376,14 +400,23 @@ const numberType = (ast: AST): NumberType => {
 /** Spec §15: Int* take whole numbers only (`-0` is 0); floats round to the nearest value, and a number too large is an error. */
 function compileNumber(ast: SchemaAST.Number): Converter {
   const type = numberType(ast)
-  if (type === "Int") return (v) => (v.kind === "number" && INTEGER.test(v.text) ? Number(v.text) + 0 : mismatch("a whole number", v))
+  if (type === "Int") return (v) => (v.kind === "number" && INTEGER.test(v.text) ? Number(v.text) + 0 : notInteger(v))
   return (v) =>
-    v.kind === "number" ? (toFloat(v.text, type) ?? fail(`${describe(v)} is too large for ${type}`))
+    v.kind === "number" ? (toFloat(v.text, type) ?? fail(`${describe(v)} is too large for ${type}`, "out-of-range"))
     : (specialFloat(v) ?? generic(v))
 }
 
-const fail = (message: string): never => {
-  throw new ConversionError(message)
+const fail = (message: string, code: ErrorCode): never => {
+  throw new ConversionError(message, code)
+}
+
+/**
+ * A case with a record payload given something else (spec §15): one argument
+ * that isn't a record is a mismatch at that argument, any other number of
+ * arguments the wrong payload.
+ */
+const notRecord = (v: HVariant, message: string): never => {
+  throw v.args.length === 1 ? new ConversionError(message, "type-mismatch", [0]) : new ConversionError(message, "wrong-payload")
 }
 
 function compileObject(ast: SchemaAST.Objects): Converter {
@@ -399,6 +432,12 @@ function compileObject(ast: SchemaAST.Objects): Converter {
   const closed = ast.annotations?.[CLOSED] === true
   // `Map v`: a record with an index signature converts every field with its value schema.
   const rest = Arr.head(ast.indexSignatures).pipe(Option.map((i) => compile(i.type)), Option.getOrElse(() => generic))
+  // The number of arguments of `{ _tag, values }`: the length of its tuple.
+  const arity = Arr.findFirst(ast.propertySignatures, (p) => p.name === "values").pipe(
+    Option.map((p) => resolve(p.type)),
+    Option.flatMap((t) => (t._tag === "Arrays" && t.rest.length === 0 ? Option.some(t.elements.length) : Option.none())),
+    Option.getOrUndefined,
+  )
 
   /**
    * Fields of the value: a record for a struct; for a tagged struct, the
@@ -407,17 +446,18 @@ function compileObject(ast: SchemaAST.Objects): Converter {
   const fieldsOf = (v: Value): ReadonlyArray<readonly [string, Value]> => {
     if (Option.isNone(tag)) return v.kind === "record" ? [...v.fields] : mismatch("a record", v)
     const name = tag.value
-    if (v.kind !== "variant" || v.tag !== name) return mismatch(`the variant ${name}`, v)
-    if (values) return [["values", vArr(v.args)]] // Point(1, 2) → { values: [1, 2] }
+    if (v.kind !== "variant" || v.tag !== name) return mismatch(`the variant ${name}`, v, v.kind === "variant" ? "unknown-tag" : "type-mismatch")
+    // Point(1, 2) → { values: [1, 2] }, with as many arguments as the case lists (spec §15).
+    if (values) return arity === undefined || v.args.length === arity ? [["values", vArr(v.args)]] : mismatch(`${name} with ${arity} argument(s)`, v, "wrong-payload")
     const [first] = v.args
-    if (nested) return v.args.length === 1 && first?.kind === "record" ? [["value", first]] : mismatch(`${name} { … }`, v) // Odd { _tag: 1 } → { value: { _tag: 1 } }
-    if (positional.length === 0) return v.args.length === 0 ? [] : mismatch(`${name} without a payload`, v) // Heartbeat
-    if (v.args.length === 1 && first?.kind === "record") return [...first.fields] // Circle { radius: 5 }
     const record = `${name} { ${positional.map((n) => `${n}: …`).join(", ")} }`
-    if (v.args.length === 0) return mismatch(record, v)
+    if (nested) return v.args.length === 1 && first?.kind === "record" ? [["value", first]] : notRecord(v, `expected ${name} { … }, got ${describe(v)}`) // Odd { _tag: 1 } → { value: { _tag: 1 } }
+    if (positional.length === 0) return v.args.length === 0 ? [] : mismatch(`${name} without a payload`, v, "wrong-payload") // Heartbeat
+    if (v.args.length === 1 && first?.kind === "record") return [...first.fields] // Circle { radius: 5 }
+    if (v.args.length === 0) return mismatch(record, v, "wrong-payload")
     // Point(1, 2) fills fields in declaration order, but only when the schema
     // opts in: otherwise reordering fields would silently swap values.
-    if (!allowPositional) throw new ConversionError(`'${name}' has positional arguments; write ${record} or wrap its schema in Haus.Positional`)
+    if (!allowPositional) return notRecord(v, `'${name}' has positional arguments; write ${record} or wrap its schema in Haus.Positional`)
     return v.args.map((arg, i) => [positional[i] ?? `#${i}`, arg] as const)
   }
 
@@ -427,12 +467,12 @@ function compileObject(ast: SchemaAST.Objects): Converter {
       // A payload field `_tag` that the case doesn't list (its own `_tag` is the tag): an unlisted
       // field like any other, ignored by an open record. A plain record's or a map's `_tag` is data.
       if (key === "_tag" && Option.isSome(tag)) {
-        if (closed) throw new ConversionError(`unexpected field "_tag" in a closed record`, [key])
+        if (closed) throw new ConversionError(`unexpected field "_tag" in a closed record`, "unknown-field", [key])
         continue
       }
       const prop = props.get(key)
       if (prop !== undefined) setOwn(out, key, at(key, () => prop.convert(field)))
-      else if (closed) throw new ConversionError(`unexpected field ${JSON.stringify(key)} in a closed record`, [key])
+      else if (closed) throw new ConversionError(`unexpected field ${JSON.stringify(key)} in a closed record`, "unknown-field", [key])
       else setOwn(out, key, at(key, () => rest(field))) // excess property: ignored by the decoder (records are open), or a Map entry
     }
     return out
@@ -494,8 +534,9 @@ function compileUnion(ast: SchemaAST.Union): Converter {
       if (exact) return exact(v)
       if (anyTag && v.args.length === 0) return v.tag
       if (Option.isSome(byKind.variant)) return byKind.variant.value(v)
-      // Closed: no member takes this tag, so Effect rejects its schema-less form (and says which tags it takes).
-      return open ? { _tag: UNKNOWN_TAG, tag: v.tag, value: v } : generic(v)
+      if (open) return { _tag: UNKNOWN_TAG, tag: v.tag, value: v }
+      // Closed: no member takes this tag.
+      return mismatch(expected, v, tags.length > 0 ? "unknown-tag" : "type-mismatch")
     }
     for (const [written, literal] of literals) if (equals(v, written)) return literal
     return Option.match(byKind[v.kind], { onSome: (convert) => convert(v), onNone: () => otherwise(v) })
@@ -505,7 +546,8 @@ function compileUnion(ast: SchemaAST.Union): Converter {
 /** A std/time string that follows the profile (spec/std/time.md); anything else is an error, whatever the host type accepts. */
 const stdTime = (type: StdTimeType, s: string): string => {
   const reason = checkStdTime(type, s)
-  if (reason !== undefined) throw new ConversionError(reason)
+  // The place of an invalid-time error is the tag's argument (spec §17), added where the error is reported.
+  if (reason !== undefined) throw new ConversionError(reason, "invalid-time")
   return s
 }
 
@@ -531,9 +573,13 @@ function compileDeclaration(ast: SchemaAST.Declaration): Converter {
         })
     case "effect/schema/Option": {
       const inner = Arr.head(ast.typeParameters).pipe(Option.map(compile), Option.getOrElse(() => generic))
+      // The value inside is at "value", as in Effect's issues.
       return (v) =>
         Option.isSome(variant(v, "None", 0)) ? Option.none()
-        : Option.match(variant(v, "Some", 1), { onSome: (s) => Option.some(inner(s.args[0]!)), onNone: () => generic(v) })
+        : Option.match(variant(v, "Some", 1), {
+          onSome: (s) => Option.some(at("value", () => inner(s.args[0]!))),
+          onNone: () => notCase("None or Some(…)", v, MAYBE_TAGS),
+        })
     }
     case "effect/schema/Redacted": {
       // `Secret a`: the value converted as `a`, in a Redacted. An error inside
@@ -544,7 +590,7 @@ function compileDeclaration(ast: SchemaAST.Declaration): Converter {
         try {
           return Redacted.make(inner(v))
         } catch (e) {
-          if (e instanceof ConversionError) throw new ConversionError(message)
+          if (e instanceof ConversionError) throw new ConversionError(message, "invalid-secret")
           throw e
         }
       }
@@ -561,7 +607,7 @@ export type Encoder = (js: unknown) => Value
 const TAG_NAME = /^[A-Z][A-Za-z0-9_]*$/
 
 /** A float in its one spelling (spec §15); a Float32 as the nearest binary32 value. */
-const floatValue = (n: number, type: FloatType = "Float64"): Value => coreFloatValue(n, type) ?? fail(`${n} is too large for ${type}`)
+const floatValue = (n: number, type: FloatType = "Float64"): Value => coreFloatValue(n, type) ?? fail(`${n} is too large for ${type}`, "cannot-encode")
 
 const numberValue = (n: number): Value => floatValue(n)
 
@@ -598,7 +644,7 @@ const decimalValue = (text: string): Value => {
   try {
     return h.encode(h.Decimal, text, guard.limits)
   } catch (e) {
-    if (e instanceof h.HausEncodeError) throw new ConversionError(e.reason, e.path)
+    if (e instanceof h.HausEncodeError) throw new ConversionError(e.reason, e.code, e.path)
     throw e
   }
 }
@@ -656,7 +702,7 @@ export const dateTimeText = (d: DateTime.DateTime): { readonly type: "Instant" |
 /** `text` when std/time accepts it as `type`, else a ConversionError. */
 const stdTimeText = (type: StdTimeType, text: string): string => {
   const reason = checkStdTime(type, text)
-  if (reason !== undefined) throw new ConversionError(`can't write ${type}("${text}"): ${reason}`)
+  if (reason !== undefined) throw new ConversionError(`can't write ${type}("${text}"): ${reason}`, "cannot-encode")
   return text
 }
 
@@ -692,7 +738,7 @@ const encodeValue: Encoder = (js) => {
   try {
     return h.encode(h.Any, js as Value, guard.limits)
   } catch (e) {
-    if (e instanceof h.HausEncodeError) throw new ConversionError(e.reason, e.path)
+    if (e instanceof h.HausEncodeError) throw new ConversionError(e.reason, e.code, e.path)
     throw e
   }
 }
@@ -752,7 +798,7 @@ function encodeObject(ast: SchemaAST.Objects): Encoder {
     }
     if (nested && tag !== undefined) {
       const payload = props.find((p) => p.name === "value")?.encode(obj["value"])
-      return payload?.kind === "record" ? vVariant(tag, [payload]) : fail(`'${tag}' takes a record payload, its value`)
+      return payload?.kind === "record" ? vVariant(tag, [payload]) : fail(`'${tag}' takes a record payload, its value`, "cannot-encode")
     }
     const present: { name: string; encode: Encoder }[] = props.filter((p) => Object.hasOwn(obj, p.name) && obj[p.name] !== undefined)
     if (Option.isSome(rest)) {
@@ -829,11 +875,11 @@ function encodeDeclaration(ast: SchemaAST.Declaration): Encoder {
       const inner = Arr.head(ast.typeParameters).pipe(Option.map(compileEncoder), Option.getOrElse(() => encodeGeneric))
       const message = secretMessage(ast)
       return (js) => {
-        if (!Redacted.isRedacted(js)) throw new ConversionError("expected a Redacted (Redacted.make(…))")
+        if (!Redacted.isRedacted(js)) throw new ConversionError("expected a Redacted (Redacted.make(…))", "cannot-encode")
         try {
           return inner(Redacted.value(js))
         } catch (e) {
-          if (e instanceof ConversionError) throw new ConversionError(message)
+          if (e instanceof ConversionError) throw new ConversionError(message, "invalid-secret")
           throw e
         }
       }

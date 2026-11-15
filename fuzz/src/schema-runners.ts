@@ -147,7 +147,7 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
   const dir = join(root, "typescript/packages/effect")
   const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
   const effectEntry = createRequire(join(dir, "package.json")).resolve("effect")
-  const { Effect, Exit, Cause } = await import(pathToFileURL(effectEntry).href)
+  const { Effect, Exit, Cause, Option } = await import(pathToFileURL(effectEntry).href)
   const compiled = new Map([...texts].map(([s, t]) => [s, Haus.compileSchemaFile(t).schemas]))
   return inProcess("effect", (suite, type, value) => {
     const schema = compiled.get(suite)?.[type]
@@ -155,7 +155,9 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
     const decoded = Effect.runSyncExit(Haus.decodeValue(schema)(value))
     if (Exit.isFailure(decoded)) {
       if (Cause.hasDies(decoded.cause)) return { kind: "crash", reason: `CRASH: ${String(decoded.cause).slice(0, 300)}` }
-      return { kind: "err", reason: String(decoded.cause).slice(0, 300) }
+      // A HausSchemaError, with its code (spec §17) and its place in the haus value.
+      const e = Option.getOrUndefined(Cause.findErrorOption(decoded.cause))
+      return { kind: "err", reason: String(decoded.cause).slice(0, 300), ...(e?.code ? { code: e.code, place: e.place ?? "$" } : {}) }
     }
     const encoded = Effect.runSyncExit(Haus.encodeValue(schema)(decoded.value))
     if (Exit.isFailure(encoded)) return { kind: "crash", reason: `CRASH: encoding failed: ${String(encoded.cause).slice(0, 300)}` }
@@ -164,6 +166,8 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
 }
 
 export const lean = (types: string) => external("lean", join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--schema-batch", types], true)
-export const rust = () => external("rust", join(root, "fuzz/schema-rust/target/release/schema_runner"))
-export const roc = () => external("roc", join(root, "fuzz/.build/roc-schema-runner"))
-export const python = () => external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/schema_runner.py")])
+export const rust = () => external("rust", join(root, "fuzz/schema-rust/target/release/schema_runner"), [], true)
+/** haus-fmt-schema's runtime checker (`Schema::decode`), not generated code. */
+export const rustCheck = () => external("rust-check", join(root, "fuzz/schema-rust/target/release/check_runner"), [], true)
+export const roc = () => external("roc", join(root, "fuzz/.build/roc-schema-runner"), [], true)
+export const python = () => external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/schema_runner.py")], true)

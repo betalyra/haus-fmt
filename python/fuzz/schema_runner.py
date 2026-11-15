@@ -2,8 +2,10 @@
 `schema_runner.py FILE` reads lines `SUITE TYPE HEX` (a value's haus text as
 hex-encoded UTF-8), decodes the value with the named type of the suite's
 schema file (test-suite/schema or fuzz/schema), encodes the result, and prints
-one line each: `ok <canonical form>` or `err <reason>`. Encoding what was
-decoded must work (spec §15), so an encode error is printed as `crash …`."""
+one line each: `ok <canonical form>` or `err <place> <code> <reason>`, the
+place of the error in the value (`$.items[2].price`) and its code (spec §17;
+`-` for an input that isn't one value). Encoding what was decoded must work
+(spec §15), so an encode error is printed as `crash …`."""
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import sys
 from pathlib import Path
 
 import haus
-from haus.schema import HausDecodeError, HausEncodeError, Schema, compile_schema
+from haus.schema import HausDecodeError, HausEncodeError, Schema, compile_schema, format_path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIRS = (ROOT / "test-suite" / "schema", ROOT / "fuzz" / "schema")
@@ -34,14 +36,14 @@ def outcome(compiled: dict[str, Schema], line: str) -> str:
     try:
         values = haus.parse_bytes(bytes.fromhex(hex_text))
     except haus.HausSyntaxError as e:
-        return f"err not a single value: {e}"
+        return f"err $ - not a single value: {e}"
     if len(values) != 1:
-        return "err not a single value"
+        return "err $ - not a single value"
     t = schema[type_name]
     try:
         decoded = t.decode(values[0])
     except HausDecodeError as e:
-        return f"err {e}"
+        return f"err {format_path(e.path)} {e.code} {e.reason}"
     try:
         return "ok " + haus.canonical(t.encode(decoded))
     except HausEncodeError as e:

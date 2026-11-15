@@ -12,6 +12,7 @@ use crate::files::{NoImports, Resolver, identify};
 use crate::syntax::{self, Attribute, STD_TIME, Ty, deprecation, unknown_type};
 use crate::types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
 use crate::{Error, Result, Warning, read};
+use haus::ErrorCode as Code;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::Path;
 
@@ -87,7 +88,7 @@ impl Schema {
     pub fn load_with(path: impl AsRef<Path>, options: &Options) -> Result<Schema> {
         let path = path.as_ref();
         let text = read(path)?;
-        let full = path.canonicalize().map_err(|e| Error::at(path, e))?;
+        let full = path.canonicalize().map_err(|e| Error::at(path, Code::ImportNotFound, e))?;
         let key = full.display().to_string();
         let (id, _) = identify(&full);
         Schema::parse_with(&text, &Options { key: Some(&key), id: Some(&id), ..*options }).map_err(|e| e.in_file(path))
@@ -193,11 +194,12 @@ struct Unit {
 struct Fail {
     unit: usize,
     pos: usize,
+    code: Code,
     reason: String,
 }
 
-fn fail<T>(unit: usize, pos: usize, reason: impl Into<String>) -> Result<T, Fail> {
-    Err(Fail { unit, pos, reason: reason.into() })
+fn fail<T>(unit: usize, pos: usize, code: Code, reason: impl Into<String>) -> Result<T, Fail> {
+    Err(Fail { unit, pos, code, reason: reason.into() })
 }
 
 struct Loader<'a> {
@@ -244,13 +246,14 @@ impl<'a> Loader<'a> {
     fn lift(&self, mut f: Fail) -> Error {
         loop {
             let unit = &self.units[f.unit];
-            let e = syntax::error(&unit.text, f.pos, f.reason);
+            let e = syntax::error(&unit.text, f.pos, f.code, f.reason);
             match &unit.origin {
                 None => return Error::from(e),
                 Some((parent, pos, module)) => {
                     f = Fail {
                         unit: *parent,
                         pos: *pos,
+                        code: e.code,
                         reason: format!("{module} ({}:{}): {}", e.line, e.column, e.reason),
                     };
                 }
@@ -314,6 +317,7 @@ impl<'a> Loader<'a> {
                     Some((parent, pos, module)) => self.lift(Fail {
                         unit: parent,
                         pos,
+                        code: e.code,
                         reason: format!("{module} ({}:{}): {}", e.line, e.column, e.reason),
                     }),
                 });
@@ -347,22 +351,23 @@ impl<'a> Loader<'a> {
     fn imports(&mut self, unit: usize) -> Result<()> {
         let imports = self.units[unit].file.imports.clone();
         for imp in &imports {
-            let at = |reason: String| Fail { unit, pos: imp.pos, reason };
+            let at = |code: Code, reason: String| Fail { unit, pos: imp.pos, code, reason };
             if let Some(module) = imp.module.strip_prefix("std/") {
                 let names = imp.names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ");
                 if module == "money" {
                     let reason = format!(
                         "std/money is no longer a standard module; it is the package @haus-fmt/money: import @haus-fmt/money ({names})"
                     );
-                    return Err(self.lift(at(reason)));
+                    return Err(self.lift(at(Code::UnknownModule, reason)));
                 }
                 if module != "time" {
-                    return Err(self.lift(at(format!("unknown standard module {} (there is std/time)", imp.module))));
+                    let reason = format!("unknown standard module {} (there is std/time)", imp.module);
+                    return Err(self.lift(at(Code::UnknownModule, reason)));
                 }
                 for (n, pos) in &imp.names {
                     let Some(&t) = STD_TIME.iter().find(|t| *t == n) else {
                         let reason = format!("std/time has no type {n} (it has {})", STD_TIME.join(", "));
-                        return Err(self.lift(Fail { unit, pos: *pos, reason }));
+                        return Err(self.lift(Fail { unit, pos: *pos, code: Code::UnknownImport, reason }));
                     };
                     self.bring(unit, n, *pos, None, Some(t))?;
                 }
@@ -374,7 +379,7 @@ impl<'a> Loader<'a> {
             if !is_module {
                 let reason =
                     format!("unknown module {}: import std/…, a package @org/name or a file ./name", imp.module);
-                return Err(self.lift(at(reason)));
+                return Err(self.lift(at(Code::UnknownModule, reason)));
             }
             let dep = self.import(unit, imp)?;
             for (n, pos) in &imp.names {
@@ -383,7 +388,7 @@ impl<'a> Loader<'a> {
                     has.dedup();
                     let list = if has.is_empty() { String::new() } else { format!(" (it has {})", has.join(", ")) };
                     let reason = format!("{} has no type {n}{list}", imp.module);
-                    return Err(self.lift(Fail { unit, pos: *pos, reason }));
+                    return Err(self.lift(Fail { unit, pos: *pos, code: Code::UnknownImport, reason }));
                 };
                 self.bring(unit, n, *pos, Some((dep, d)), None)?;
             }
@@ -401,7 +406,8 @@ impl<'a> Loader<'a> {
         std: Option<&'static str>,
     ) -> Result<()> {
         if self.units[unit].scope.contains_key(name) || self.units[unit].std.contains_key(name) {
-            return Err(self.lift(Fail { unit, pos, reason: format!("{name} is imported twice") }));
+            let reason = format!("{name} is imported twice");
+            return Err(self.lift(Fail { unit, pos, code: Code::DuplicateImport, reason }));
         }
         let u = &mut self.units[unit];
         if let Some(def) = def {
@@ -415,7 +421,7 @@ impl<'a> Loader<'a> {
 
     /// The file an import names, loaded.
     fn import(&mut self, unit: usize, imp: &syntax::Import) -> Result<usize> {
-        let at = |reason: String| Fail { unit, pos: imp.pos, reason };
+        let at = |code: Code, reason: String| Fail { unit, pos: imp.pos, code, reason };
         // `@org/name@2`: the package, and the major version wanted.
         let (module, wanted) = match imp.module.rsplit_once('@') {
             Some((name, major))
@@ -431,17 +437,20 @@ impl<'a> Loader<'a> {
         let from = self.loading.last().filter(|k| !k.is_empty()).cloned();
         let found = match self.options.resolver.resolve(module, from.as_deref()) {
             Ok(m) => m,
-            Err(e) => return Err(self.lift(at(format!("can't import {}: {e}", imp.module)))),
+            Err(e) => {
+                return Err(self.lift(at(e.code(), format!("can't import {}: {e}", imp.module))));
+            }
         };
         if let (Some(wanted), Some(version)) = (wanted, &found.version) {
             let major = version.trim_start_matches('v').split('.').next().unwrap_or_default();
             if major != wanted {
                 let reason = format!("{} wants major version {wanted}, but version {version} was found", imp.module);
-                return Err(self.lift(at(reason)));
+                return Err(self.lift(at(Code::ImportVersion, reason)));
             }
         }
         if self.loading.contains(&found.key) {
-            return Err(self.lift(at(format!("import cycle: {} imports this file again", imp.module))));
+            let reason = format!("import cycle: {} imports this file again", imp.module);
+            return Err(self.lift(at(Code::ImportCycle, reason)));
         }
         if let Some(&cached) = self.by_key.get(&found.key) {
             return Ok(cached);
@@ -453,10 +462,11 @@ impl<'a> Loader<'a> {
                 "{} is {}, but another file already is: two copies or two packages with the same name ({})",
                 imp.module, found.id, found.key
             );
-            return Err(self.lift(at(reason)));
+            return Err(self.lift(at(Code::DuplicatePackage, reason)));
         }
         if self.units.len() >= MAX_FILES {
-            return Err(self.lift(at(format!("more than {MAX_FILES} schema files are imported"))));
+            let reason = format!("more than {MAX_FILES} schema files are imported");
+            return Err(self.lift(at(Code::TooManyFiles, reason)));
         }
         self.load(found.text, Some(found.key), Some(found.id), Some((unit, imp.pos, imp.module.clone())))
     }
@@ -469,7 +479,7 @@ impl<'a> Loader<'a> {
         for (d, (name, pos, _)) in defs.iter().enumerate() {
             let u = &mut self.units[unit];
             if u.scope.contains_key(name) || u.std.contains_key(name) {
-                return fail(unit, *pos, format!("type {name} is already imported"));
+                return fail(unit, *pos, Code::DuplicateType, format!("type {name} is already imported"));
             }
             u.own.insert(name.clone(), d);
         }
@@ -495,6 +505,7 @@ impl<'a> Loader<'a> {
                 return fail(
                     unit,
                     pos,
+                    Code::GrowingRecursion,
                     format!(
                         "{name} must refer to itself with its own parameters ({}); other arguments could grow without bound",
                         whole.join(" ")
@@ -526,6 +537,7 @@ impl<'a> Loader<'a> {
                 return fail(
                     unit,
                     pos,
+                    Code::MisplacedStream,
                     format!("{} is a Stream; a stream can only be the whole file, not part of a type", i.name),
                 );
             }
@@ -543,6 +555,7 @@ impl<'a> Loader<'a> {
                             return fail(
                                 u,
                                 self.units[u].file.types[d].pos,
+                                Code::UnguardedRecursion,
                                 format!("type {name} refers to itself without a record, array or variant in between"),
                             );
                         }
@@ -570,6 +583,7 @@ impl<'a> Loader<'a> {
             return fail(
                 at,
                 pos,
+                Code::GrowingRecursion,
                 format!("more than {MAX_INSTANCES} type instances: a generic type grows without bound"),
             );
         }
@@ -638,6 +652,7 @@ impl<'a> Loader<'a> {
                 return fail(
                     u,
                     def.pos,
+                    Code::SpreadCycle,
                     format!("type {} spreads itself (directly or through another type)", def.name),
                 );
             }
@@ -649,7 +664,14 @@ impl<'a> Loader<'a> {
         let (body, stream) = match &ty {
             Ty::Name { name, args, pos } if name == "Stream" => match args.as_slice() {
                 [item] => (self.eval(u, item, &env)?, true),
-                _ => return fail(u, *pos, format!("Stream takes 1 argument(s), found {}", args.len())),
+                _ => {
+                    return fail(
+                        u,
+                        *pos,
+                        Code::WrongArity,
+                        format!("Stream takes 1 argument(s), found {}", args.len()),
+                    );
+                }
             },
             ty => (self.eval(u, ty, &env)?, false),
         };
@@ -664,7 +686,7 @@ impl<'a> Loader<'a> {
     /// for a spread of an imported type, which the syntax tree leaves in place.
     fn spread(&mut self, u: usize, s: &syntax::Spread, want: &str) -> Result<Type, Fail> {
         let Some(&(du, dd)) = self.units[u].scope.get(&s.name) else {
-            return fail(u, s.pos, unknown_type(&s.name));
+            return fail(u, s.pos, Code::UnknownType, unknown_type(&s.name));
         };
         let params = &self.units[du].file.types[dd].params;
         if !params.is_empty() {
@@ -672,6 +694,7 @@ impl<'a> Loader<'a> {
             return fail(
                 u,
                 s.pos,
+                Code::InvalidSpread,
                 format!(
                     "{name} has parameters ({name} {}); only a type without parameters can be spread",
                     params.join(" ")
@@ -683,13 +706,16 @@ impl<'a> Loader<'a> {
         loop {
             self.evaluate_instance(id)?;
             if self.instances[id.0].stream {
-                return fail(u, s.pos, format!("{} is a Stream and can't be spread", s.name));
+                return fail(u, s.pos, Code::InvalidSpread, format!("{} is a Stream and can't be spread", s.name));
             }
             match &self.instances[id.0].body {
                 Type::Ref(next) if seen.insert(*next) => id = *next,
                 Type::Record(_) if want == "record" => return Ok(self.instances[id.0].body.clone()),
                 Type::Variant(_) if want == "variant" => return Ok(self.instances[id.0].body.clone()),
-                _ => return fail(u, s.pos, format!("{} is not a {want}, so it can't be spread here", s.name)),
+                _ => {
+                    let reason = format!("{} is not a {want}, so it can't be spread here", s.name);
+                    return fail(u, s.pos, Code::InvalidSpread, reason);
+                }
             }
         }
     }
@@ -699,7 +725,7 @@ impl<'a> Loader<'a> {
         match ty {
             Ty::Param { name, pos } => match env.iter().find(|(p, _)| p == name) {
                 Some((_, t)) => Ok(t.clone()),
-                None => fail(u, *pos, format!("unknown type parameter {name}")),
+                None => fail(u, *pos, Code::UnknownParameter, format!("unknown type parameter {name}")),
             },
             Ty::Record { closed, fields, spreads, .. } => {
                 Ok(Type::Record(self.record(u, *closed, fields, spreads, env)?))
@@ -729,7 +755,7 @@ impl<'a> Loader<'a> {
                 let cases = insert(cases, copied);
                 let mut tags = HashSet::new();
                 if let Some((c, pos)) = cases.iter().find(|(c, _)| !tags.insert(c.tag.as_str())) {
-                    return fail(u, *pos, format!("duplicate tag {}", c.tag));
+                    return fail(u, *pos, Code::DuplicateTag, format!("duplicate tag {}", c.tag));
                 }
                 Ok(Type::Variant(Variant::new(!closed, cases.into_iter().map(|(c, _)| c).collect())))
             }
@@ -762,7 +788,7 @@ impl<'a> Loader<'a> {
         let fields = insert(fields, copied);
         let mut keys = HashSet::new();
         if let Some((f, pos)) = fields.iter().find(|(f, _)| !keys.insert(f.key.as_str())) {
-            return fail(u, *pos, format!("duplicate field {}", f.key));
+            return fail(u, *pos, Code::DuplicateField, format!("duplicate field {}", f.key));
         }
         Ok(Record::new(closed, fields.into_iter().map(|(f, _)| f).collect()))
     }
@@ -771,12 +797,12 @@ impl<'a> Loader<'a> {
         let arity = |n: usize| -> Result<(), Fail> {
             match args.len() == n {
                 true => Ok(()),
-                false => fail(u, pos, format!("{name} takes {n} argument(s), found {}", args.len())),
+                false => fail(u, pos, Code::WrongArity, format!("{name} takes {n} argument(s), found {}", args.len())),
             }
         };
         if let Some(&(_, n)) = GENERIC.iter().find(|(g, _)| *g == name) {
             if name == "Stream" {
-                return fail(u, pos, "Stream is only allowed as the whole type of a definition");
+                return fail(u, pos, Code::MisplacedStream, "Stream is only allowed as the whole type of a definition");
             }
             arity(n)?;
             let mut evaluated = args.iter().map(|a| self.eval(u, a, env)).collect::<Result<Vec<_>, _>>()?.into_iter();
@@ -812,7 +838,7 @@ impl<'a> Loader<'a> {
             arity(0)?;
             return Ok(Type::Builtin(b));
         }
-        fail(u, pos, unknown_type(name))
+        fail(u, pos, Code::UnknownType, unknown_type(name))
     }
 }
 

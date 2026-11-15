@@ -1,6 +1,8 @@
 ## The fuzzing runner (../../fuzz/README.md): `runner [--stream] DIR N` parses
 ## DIR/00000.haus … DIR/{N-1}.haus and prints one line each: `ok <values>` in
-## the test-suite JSON encoding, or `err <line> <column> <reason>`. With
+## the test-suite JSON encoding, or `err <line> <column> <code> <reason>` with
+## the error code of spec §17 (invalid UTF-8 at `0 0`, as the other runners
+## that report codes give it). With
 ## `--stream`, each file goes through the stream reader in chunks (see `chunks`);
 ## with `--canonical`, `ok` is followed by the canonical form of each value
 ## (spec §12) as a JSON array of strings.
@@ -13,6 +15,7 @@ import pf.OsStr
 import pf.Path
 import pf.Stdout
 import haus.Encode
+import haus.ErrorCode
 import haus.Streaming
 import haus.Value
 
@@ -44,7 +47,10 @@ line : Try(List(Value), Value.ParseError) -> Str
 line = |result| match result {
 	Ok(values) => "ok [${Str.join_with(values.map(Value.to_test_json), ",")}]"
 	# One line per case: line breaks in the reason are written as \n.
-	Err({ reason, line: l, column }) => "err ${l.to_str()} ${column.to_str()} ${reason.replace_each("\r", "\\r").replace_each("\n", "\\n")}"
+	Err({ code, reason, line: l, column }) => {
+		place = if (code == ErrorCode.invalid_utf8) "0 0" else "${l.to_str()} ${column.to_str()}"
+		"err ${place} ${code} ${reason.replace_each("\r", "\\r").replace_each("\n", "\\n")}"
+	}
 }
 
 ## With `--canonical`: the canonical form of each value (spec §12), as JSON strings.

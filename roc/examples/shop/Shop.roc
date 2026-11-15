@@ -116,9 +116,9 @@ expect {
 expect Shop.id_of({ id: 1, email: "a@b" }) + Shop.id_of({ id: 2, amount: { amount: "1", currency: "EUR" } }) == 3
 
 # Mismatches report where they happened.
-expect Decode.all("UserCreated { id: 1, at: Instant(\"x\") },", Shop.decode_user_event) == Err(Decode({ reason: "missing field 'email'", path: "[0]" }))
-expect Decode.all("Heartbeat, UserRenamed { id: \"42\" },", Shop.decode_user_event) == Err(Decode({ reason: "expected a number (UInt64), found a string", path: "[1].id" }))
-expect Decode.all("UserCreated(1)", Shop.decode_user_event) == Err(Decode({ reason: "expected a record, found variant UserCreated", path: "[0]" }))
+expect Decode.all("UserCreated { id: 1, at: Instant(\"x\") },", Shop.decode_user_event) == Err(Decode({ code: "missing-field", reason: "missing field 'email'", path: "[0]" }))
+expect Decode.all("Heartbeat, UserRenamed { id: \"42\" },", Shop.decode_user_event) == Err(Decode({ code: "type-mismatch", reason: "expected a number (UInt64), found a string", path: "[1].id" }))
+expect Decode.all("UserCreated(1)", Shop.decode_user_event) == Err(Decode({ code: "type-mismatch", reason: "expected a record, found variant UserCreated", path: "[0]" }))
 expect {
 	match Decode.all("{ ok: true }", Shop.decode_user_event) {
 		Err(Syntax({ line: 1, column: 7, .. })) => True

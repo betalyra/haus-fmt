@@ -19,7 +19,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from decimal import Decimal
 from typing import Final, Never, Protocol, TypeVar, cast
 
-from ._errors import HausJsonError, PathKey, format_path
+from ._error_codes import ErrorCode
+from ._errors import HausError, HausJsonError, PathKey, format_path
 from ._float import FloatKind, float_text, to_float32, to_float64
 from ._host import Nothing, Secret, Some, Tagged, Unknown
 from ._json import (
@@ -66,30 +67,37 @@ DEFAULT_ENCODE_STEPS: Final = 16 * 1024 * 1024
 _MAX_VALUES: Final = 64 * 1024 * 1024
 
 
-class HausDecodeError(ValueError):
+class _ValueError(HausError):
+    """An error at a place in a value: its `path`."""
+
+    path: tuple[PathKey, ...]
+    """Where the error is: `("items", 2, "price")`, written `$.items[2].price`."""
+
+    def __init__(
+        self,
+        reason: str,
+        path: tuple[PathKey, ...],
+        code: ErrorCode,
+        *,
+        hint: str | None = None,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> None:
+        super().__init__(
+            f"{reason} at {format_path(path)}", code=code, reason=reason, hint=hint, expected=expected, found=found
+        )
+        self.path = path
+
+    def _place(self) -> dict[str, object]:
+        return {"path": format_path(self.path)}
+
+
+class HausDecodeError(_ValueError):
     """A value the type doesn't accept, with the place of the failing value (spec §15)."""
 
-    reason: str
-    """The message without the path."""
-    path: tuple[PathKey, ...]
-    """Where the mismatch is: `("items", 2, "price")`."""
 
-    def __init__(self, reason: str, path: tuple[PathKey, ...]) -> None:
-        super().__init__(f"{reason} at {format_path(path)}")
-        self.reason = reason
-        self.path = path
-
-
-class HausEncodeError(ValueError):
+class HausEncodeError(_ValueError):
     """A Python value that doesn't fit its type when encoding."""
-
-    reason: str
-    path: tuple[PathKey, ...]
-
-    def __init__(self, reason: str, path: tuple[PathKey, ...]) -> None:
-        super().__init__(f"{reason} at {format_path(path)}")
-        self.reason = reason
-        self.path = path
 
 
 class Codec(Protocol):
@@ -108,10 +116,12 @@ class Codec(Protocol):
 
 
 class _Context:
-    __slots__ = ("ancestors", "decoding", "limits", "max_steps", "steps")
+    __slots__ = ("ancestors", "decoding", "json", "limits", "max_steps", "steps")
 
-    def __init__(self, *, decoding: bool, limits: Limits, max_steps: int) -> None:
+    def __init__(self, *, decoding: bool, limits: Limits, max_steps: int, json: bool = False) -> None:
         self.decoding = decoding
+        self.json = json
+        """Reading or writing JSON (spec §16): what has no JSON form is `no-json-form`."""
         self.limits = limits
         self.max_steps = max_steps
         self.steps = 0
@@ -137,13 +147,13 @@ class _At:
 
     def child(self, key: PathKey) -> _At:
         if self.depth >= self.ctx.limits.max_depth:
-            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels", key)
+            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels", key, code="nesting-too-deep")
         return _At(self.ctx, self, key, self.depth + 1)
 
     def deeper(self) -> _At:
         """One level deeper at the same place: `Some(x)` written as `x` in plain JSON."""
         if self.depth >= self.ctx.limits.max_depth:
-            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels")
+            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels", code="nesting-too-deep")
         return _At(self.ctx, self, None, self.depth + 1)
 
     def member(self, key: str) -> _At:
@@ -153,14 +163,17 @@ class _At:
     def container(self) -> None:
         """Encoding a record, array or payload here: it is one more level of nesting when written."""
         if self.depth >= self.ctx.limits.max_depth:
-            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels")
+            self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels", code="nesting-too-deep")
 
     def step(self) -> None:
         ctx = self.ctx
         ctx.steps += 1
         if ctx.steps > ctx.max_steps:
             mode = "decode" if ctx.decoding else "encode"
-            self.fail(f"{mode} budget of {ctx.max_steps} steps exceeded (a schema doing more work than the input)")
+            self.fail(
+                f"{mode} budget of {ctx.max_steps} steps exceeded (a schema doing more work than the input)",
+                code="step-budget",
+            )
 
     def path(self) -> tuple[PathKey, ...]:
         out: list[PathKey] = []
@@ -171,14 +184,27 @@ class _At:
             at = at.parent
         return tuple(reversed(out))
 
-    def fail(self, reason: str, child: object = _NO_KEY) -> Never:
+    def fail(
+        self,
+        reason: str,
+        child: object = _NO_KEY,
+        *,
+        code: ErrorCode | None = None,
+        hint: str | None = None,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> Never:
+        """Fail here (or at `child`) with `code`; by default `type-mismatch`, or `cannot-encode` when encoding."""
         path = self.path() if child is _NO_KEY else (*self.path(), _path_key(child))
-        raise (HausDecodeError if self.ctx.decoding else HausEncodeError)(reason, path)
+        error = HausDecodeError if self.ctx.decoding else HausEncodeError
+        if code is None:
+            code = "type-mismatch" if self.ctx.decoding else "cannot-encode"
+        raise error(reason, path, code, hint=hint, expected=expected, found=found)
 
     def enter(self, obj: object) -> None:
         """Encoding: `obj` is being written here; meeting it again further down is a cycle."""
         if id(obj) in self.ctx.ancestors:
-            self.fail("cyclic value: an object contains itself")
+            self.fail("cyclic value: an object contains itself", code="cyclic-value")
         self.ctx.ancestors.add(id(obj))
 
     def leave(self, obj: object) -> None:
@@ -229,16 +255,32 @@ def _describe_py(x: object) -> str:
             return f"a {type(x).__name__}"
 
 
-def _mismatch(expected: str, v: Value, at: _At) -> Never:
-    at.fail(f"expected {expected}, found {_describe(v)}")
+def _mismatch(expected: str, v: Value, at: _At, code: ErrorCode = "type-mismatch") -> Never:
+    found = _describe(v)
+    at.fail(f"expected {expected}, found {found}", code=code, expected=expected, found=found)
 
 
-def _invalid(what: str, x: object, at: _At) -> Never:
-    at.fail(f"expected {what}, got {_describe_py(x)}")
+def _not_case(expected: str, v: Value, at: _At, tags: Iterable[str]) -> Never:
+    """For a closed variant with these tags (`Bool`, `Maybe`, an enum): an unknown tag is `unknown-tag`,
+    a known one with the wrong payload `wrong-payload`, anything else a mismatch."""
+    if not isinstance(v, Variant):
+        _mismatch(expected, v, at)
+    _mismatch(expected, v, at, "wrong-payload" if v.tag in tags else "unknown-tag")
+
+
+def _not_integer(expected: str, v: Value, at: _At) -> Never:
+    """For an integer type: a number with a fraction or an exponent is `not-an-integer`, anything else a mismatch."""
+    _mismatch(expected, v, at, "not-an-integer" if isinstance(v, Number) else "type-mismatch")
+
+
+def _invalid(what: str, x: object, at: _At, code: ErrorCode = "cannot-encode") -> Never:
+    found = _describe_py(x)
+    at.fail(f"expected {what}, got {found}", code=code, expected=what, found=found)
 
 
 def _json_mismatch(expected: str, j: Json, at: _At) -> Never:
-    at.fail(f"expected {expected}, found {describe(j)}")
+    found = describe(j)
+    at.fail(f"expected {expected}, found {found}", code="type-mismatch", expected=expected, found=found)
 
 
 def _from_lossless(j: Json, at: _At) -> Value:
@@ -246,8 +288,8 @@ def _from_lossless(j: Json, at: _At) -> Value:
     try:
         return from_lossless(j, at.ctx.limits, at.depth)
     except HausJsonError as e:
-        reason, path = e.reason, e.path
-    raise HausDecodeError(reason, (*at.path(), *path))
+        error = e
+    raise HausDecodeError(error.reason, (*at.path(), *error.path), error.code)
 
 
 def _tag_list(tags: Iterable[str]) -> str:
@@ -264,9 +306,9 @@ def _checked_string(s: object, at: _At, what: str = "a string", kind: str = "str
         _invalid(what, s, at)
     limit = at.ctx.limits.max_string_length
     if len(s) > limit:
-        at.fail(f"{kind} longer than {limit} characters")
+        at.fail(f"{kind} longer than {limit} characters", code="key-too-long" if kind == "key" else "string-too-long")
     if not s.isascii() and _SURROGATE.search(s):
-        at.fail("string with a lone surrogate (not Unicode text)")
+        at.fail("string with a lone surrogate (not Unicode text)", code="no-json-form" if at.ctx.json else None)
     return s
 
 
@@ -274,7 +316,7 @@ def _checked_bytes(b: object, at: _At) -> bytes:
     if not isinstance(b, bytes | bytearray):
         _invalid("bytes", b, at)
     if 2 * len(b) > at.ctx.limits.max_string_length:
-        at.fail(f"byte string longer than {at.ctx.limits.max_string_length} characters")
+        at.fail(f"byte string longer than {at.ctx.limits.max_string_length} characters", code="string-too-long")
     return bytes(b)
 
 
@@ -282,7 +324,7 @@ def _checked_number(text: object, at: _At, what: str) -> str:
     if not isinstance(text, str) or (normalized := normalize_number(text, at.ctx.limits)) is None:
         _invalid(what, text, at)
     if (issue := number_limit_issue(normalized, at.ctx.limits)) is not None:
-        at.fail(issue)
+        at.fail(issue[1], code=issue[0])
     return normalized
 
 
@@ -301,9 +343,9 @@ def _mapping(x: object, at: _At, what: str) -> Mapping[object, object]:
 
 def _checked_tag(tag: object, at: _At) -> str:
     if not isinstance(tag, str) or not _TAG.fullmatch(tag):
-        _invalid("a tag name", tag, at)
+        _invalid("a tag name", tag, at, "invalid-tag" if at.ctx.json else "cannot-encode")
     if len(tag) > at.ctx.limits.max_string_length:
-        at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters")
+        at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", code="tag-too-long")
     return tag
 
 
@@ -441,8 +483,10 @@ class _Bytes(_Node):
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
-        if not isinstance(j, str) or (data := from_base64(j)) is None:
+        if not isinstance(j, str):
             _json_mismatch("Bytes (a string in base64 with padding)", j, at)
+        if (data := from_base64(j)) is None:
+            at.fail("expected base64 with padding (RFC 4648 §4)", code="invalid-base64")
         return _checked_bytes(data, at)
 
     def write_json(self, x: object, at: _At) -> Json:
@@ -464,7 +508,7 @@ class _Bool(_Node):
             case Variant("False", ()):
                 return False
             case _:
-                _mismatch("Bool (True | False)", v, at)
+                _not_case("Bool (True | False)", v, at, ("True", "False"))
 
     def encode(self, x: object, at: _At) -> Value:
         return _TRUE if self.write_json(x, at) else _FALSE
@@ -508,7 +552,8 @@ class _Int(_Node):
             # A literal longer than the bounds' can't be in range: no need to convert it.
             n = to_int(text) if len(text) <= 21 else None
             if n is None or not self.low <= n <= self.high:
-                at.fail(f"{_short(text)} is out of range for {self._range()}")
+                expected, found = self._range(), _short(text)
+                at.fail(f"{found} is out of range for {expected}", code="out-of-range", expected=expected, found=found)
             return n
         return to_int(text)
 
@@ -519,13 +564,13 @@ class _Int(_Node):
             _invalid(f"an int from {self.low} to {self.high}", x, at)
         text = int_text(x)
         if (issue := number_limit_issue(text, at.ctx.limits)) is not None:
-            at.fail(issue)
+            at.fail(issue[1], code=issue[0])
         return text
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
         if not isinstance(v, Number) or (n := self._whole(v.text, at)) is None:
-            _mismatch(self.expected, v, at)
+            _not_integer(self.expected, v, at)
         return n
 
     def encode(self, x: object, at: _At) -> Value:
@@ -535,17 +580,28 @@ class _Int(_Node):
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
         if self.expected in _JSON_STRING_INTEGERS:
-            if not isinstance(j, str) or not _DECIMAL_INTEGER.fullmatch(j):
-                _json_mismatch(f"{self.expected} (a string of a decimal integer)", j, at)
+            expected = f"{self.expected} (a string of a decimal integer)"
+            if not isinstance(j, str):
+                _json_mismatch(expected, j, at)
+            if not _DECIMAL_INTEGER.fullmatch(j):
+                # A number with a fraction or an exponent isn't an integer; anything else isn't a number.
+                found = describe(j)
+                at.fail(
+                    f"expected {expected}, found {found}",
+                    code="not-an-integer" if json_number(j) is not None else "invalid-number",
+                    expected=expected,
+                    found=found,
+                )
             if (issue := number_limit_issue(j, at.ctx.limits)) is not None:
-                at.fail(issue)
+                at.fail(issue[1], code=issue[0])
             text = j
         elif isinstance(j, JsonNumber):
             text = j.text
         else:
             _json_mismatch(f"{self.expected} (a number)", j, at)
         if (n := self._whole(text, at)) is None:
-            _json_mismatch(f"{self.expected} (a whole number, without fraction or exponent)", j, at)
+            expected, found = f"{self.expected} (a whole number, without fraction or exponent)", describe(j)
+            at.fail(f"expected {expected}, found {found}", code="not-an-integer", expected=expected, found=found)
         return n
 
     def write_json(self, x: object, at: _At) -> Json:
@@ -572,7 +628,8 @@ class _Float(_Node):
     def _from_text(self, text: str, at: _At) -> float:
         x = to_float32(text) if self.kind == "Float32" else to_float64(text)
         if x is None:
-            at.fail(f"{_short(text)} is too large for {self.kind}")
+            found = _short(text)
+            at.fail(f"{found} is too large for {self.kind}", code="out-of-range", expected=self.kind, found=found)
         return x
 
     def _rounded(self, x: object, at: _At) -> float:
@@ -642,12 +699,14 @@ class _Decimal(_Node):
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
-        try:
-            text = json_number(j, at.ctx.limits) if isinstance(j, str) else None
-        except ValueError as e:
-            at.fail(str(e))
-        if text is None:
-            _json_mismatch("Decimal (a string of a JSON number)", j, at)
+        expected = "Decimal (a string of a JSON number)"
+        if not isinstance(j, str):
+            _json_mismatch(expected, j, at)
+        if (text := json_number(j)) is None:
+            found = describe(j)
+            at.fail(f"expected {expected}, found {found}", code="invalid-number", expected=expected, found=found)
+        if (issue := number_limit_issue(text, at.ctx.limits)) is not None:
+            at.fail(issue[1], code=issue[0])
         return text
 
     def write_json(self, x: object, at: _At) -> str:
@@ -666,9 +725,9 @@ class _StdTime(_Node):
 
     def _checked(self, text: str, at: _At, child: PathKey | None = None) -> str:
         if (reason := check_time(self.expected, text)) is not None:
-            if child is None:
-                at.fail(_short(reason, 200))
-            at.fail(_short(reason, 200), child)
+            # Decoding: text that isn't valid in the profile. Encoding: a Python value the type can't write.
+            code: ErrorCode = "invalid-time" if at.ctx.decoding else "cannot-encode"
+            at.fail(_short(reason, 200), _NO_KEY if child is None else child, code=code)
         return text
 
     def decode(self, v: Value, at: _At) -> object:
@@ -771,7 +830,7 @@ def _each_entry(x: object, at: _At, write: Callable[[object, _At], T]) -> dict[s
     at.enter(x)
     out: dict[str, T] = {}
     for k, y in entries.items():
-        key = _checked_string(k, at, "string keys")
+        key = _checked_string(k, at, "string keys", "key")
         out[key] = write(y, at.child(key))
     at.leave(x)
     return out
@@ -846,7 +905,7 @@ class _Maybe(_Node):
             case Variant("Some", (x,)):
                 return Some(self.item.decode(x, at.child(0)))
             case _:
-                _mismatch(f"None | Some({_short(self.item.expected, 40)})", v, at)
+                _not_case(f"None | Some({_short(self.item.expected, 40)})", v, at, ("None", "Some"))
 
     def _some(self, x: object, at: _At) -> object:
         match x:
@@ -868,13 +927,17 @@ class _Maybe(_Node):
         at.step()
         if self.uses_null():
             return Nothing() if j is None else Some(self.item.read_json(j, at.deeper()))
-        match j:
-            case dict() if j == {"_tag": "None"}:
+        if not isinstance(j, dict):
+            _json_mismatch(f'{self.expected} ({{"_tag": "None"}} or {{"_tag": "Some", "value": …}})', j, at)
+        match j.get("_tag"):
+            case "None":
+                _only(j, (), "None", at)
                 return Nothing()
-            case dict() if len(j) == 2 and j.get("_tag") == "Some" and "value" in j:
-                return Some(self.item.read_json(j["value"], at.child("value")))
+            case "Some":
+                _only(j, ("value",), "Some", at)
+                return Some(self.item.read_json(_member(j, "value", "Some", at), at.child("value")))
             case _:
-                _json_mismatch(f'{self.expected} ({{"_tag": "None"}} or {{"_tag": "Some", "value": …}})', j, at)
+                at.fail('expected "_tag": "None" or "Some"', code="unknown-tag")
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()
@@ -896,7 +959,9 @@ class _Secret(_Node):
         self.item = item
 
     def _concealed(self, at: _At) -> Never:
-        at.fail(f"expected {_short(self.item.expected, 40)} (a Secret: the value is not shown)")
+        """Any error inside a secret, as `invalid-secret` at its place: its type, never its value (spec §15)."""
+        expected = _short(self.item.expected, 40)
+        at.fail(f"expected {expected} (a Secret: the value is not shown)", code="invalid-secret", expected=expected)
 
     def _exposed(self, x: object, at: _At) -> object:
         if not isinstance(x, Secret):
@@ -978,11 +1043,11 @@ class _Record(_Node):
             if f.key in fields:
                 out[f.key] = read(f.node, fields[f.key], at.child(f.key))
             elif not f.optional:
-                at.fail(f"missing field '{f.key}'")
+                at.fail(f"missing field '{f.key}'", code="missing-field", expected=f"the field '{f.key}'")
         if self.closed:
             for k in fields:
                 if k not in self.keys:
-                    at.fail(f"unexpected field '{_short(k)}' (the record is closed)", k)
+                    at.fail(f"unexpected field '{_short(k)}' (the record is closed)", k, code="unknown-field")
         return out
 
     def encode(self, x: object, at: _At) -> Value:
@@ -1065,20 +1130,23 @@ class _Variant(_Node):
         if tag not in self.cases:
             if self.open:
                 return Unknown(v)
-            at.fail(f"unknown tag '{_short(tag)}', expected one of {self.tags}")
+            expected = f"one of {self.tags}"
+            at.fail(
+                f"unknown tag '{_short(tag)}', {expected}", code="unknown-tag", expected=expected, found=_short(tag)
+            )
         payload = self.cases[tag]
         if payload is None:
             if args:
-                at.fail(f"'{tag}' takes no payload, found {len(args)} argument(s)")
+                _wrong_payload(tag, "no payload", len(args), at)
             return Tagged(tag)
         if isinstance(payload, _Record):
             if len(args) != 1:
-                at.fail(f"'{tag}' takes a record payload, found {len(args)} argument(s)")
+                _wrong_payload(tag, "a record payload", len(args), at)
             if not isinstance(args[0], Record):
                 _mismatch(f"{tag} {{ … }}", args[0], at.child(0))
             return Tagged(tag, payload.decode_fields(args[0].fields, at))
         if len(args) != len(payload):
-            at.fail(f"'{tag}' takes {len(payload)} argument(s), found {len(args)}")
+            _wrong_payload(tag, f"{len(payload)} argument(s)", len(args), at)
         out: list[object] = []
         for i, node in enumerate(payload):
             out.append(node.decode(args[i], at.child(i)))
@@ -1134,32 +1202,38 @@ class _Variant(_Node):
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
+        expected = f"one of {self.tags}"
         if self.as_string:
-            if isinstance(j, str) and j in self.cases:
-                return Tagged(j)
-            _json_mismatch(f"one of the strings {self.tags}", j, at)
-        if not isinstance(j, dict) or not isinstance(tag := j.get("_tag"), str):
+            if not isinstance(j, str):
+                _json_mismatch(f"one of the strings {self.tags}", j, at)
+            if j not in self.cases:
+                found = describe(j)
+                at.fail(f"unknown tag {found}, {expected}", code="unknown-tag", expected=expected, found=found)
+            return Tagged(j)
+        if not isinstance(j, dict):
             _json_mismatch(f'an object with "_tag" ({self.tags})', j, at)
+        if not isinstance(tag := j.get("_tag"), str):
+            at.fail('expected a member "_tag" with the tag, a string', code="missing-member", expected='"_tag"')
         if tag not in self.cases:
             if not self.open:
-                at.fail(f"unknown tag '{_short(tag)}', expected one of {self.tags}")
+                found = _short(tag)
+                at.fail(f"unknown tag '{found}', {expected}", code="unknown-tag", expected=expected, found=found)
             return Unknown(self._read_unknown(tag, j, at))
         case = self.cases[tag]
         if case is None:
-            if len(j) != 1:
-                at.fail(f"'{tag}' takes no payload: no members besides \"_tag\"")
+            _only(j, (), tag, at)
             return Tagged(tag)
         if isinstance(case, _Record):
             _check_payload_keys(case, at)
             fields = {k: x for k, x in j.items() if k != "_tag"}
             return Tagged(tag, case.read_fields(fields, at, _read_json_with))
         if len(case) == 1:
-            if len(j) != 2 or "value" not in j:
-                at.fail(f"'{tag}' takes one argument, as \"value\" (and no other members)")
-            return Tagged(tag, (case[0].read_json(j["value"], at.child("value")),))
-        values = j.get("values")
-        if len(j) != 2 or not isinstance(values, list) or len(values) != len(case):
-            at.fail(f"'{tag}' takes {len(case)} arguments, as \"values\": an array (and no other members)")
+            _only(j, ("value",), tag, at)
+            return Tagged(tag, (case[0].read_json(_member(j, "value", tag, at), at.child("value")),))
+        _only(j, ("values",), tag, at)
+        values = _member(j, "values", tag, at)
+        if not isinstance(values, list) or len(values) != len(case):
+            at.fail(f"'{tag}' takes {len(case)} arguments, as \"values\": an array", code="wrong-payload")
         values_at = at.member("values")
         out: list[object] = []
         for i, node in enumerate(case):
@@ -1174,9 +1248,9 @@ class _Variant(_Node):
         `{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`.
         """
         if not _TAG.fullmatch(tag):
-            at.fail("expected a tag ([A-Z][A-Za-z0-9_]*)", "_tag")
+            at.fail("expected a tag ([A-Z][A-Za-z0-9_]*)", "_tag", code="invalid-tag")
         if len(tag) > at.ctx.limits.max_string_length:
-            at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", "_tag")
+            at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", "_tag", code="tag-too-long")
         if len(j) == 1:
             return Variant(tag)
         if len(j) == 2 and "args" in j:
@@ -1188,10 +1262,10 @@ class _Variant(_Node):
             # `Tag { … }` is one level, as in the parser.
             payload = schemaless(members, at.ctx.limits.max_depth, at.depth)
         except HausJsonError as e:
-            reason, path = e.reason, e.path
+            error = e
         else:
             return Variant(tag, (payload,))
-        raise HausDecodeError(reason, (*at.path(), *path))
+        raise HausDecodeError(error.reason, (*at.path(), *error.path), error.code)
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()
@@ -1223,7 +1297,25 @@ class _Variant(_Node):
 
 def _check_payload_keys(case: _Record, at: _At) -> None:
     if "_tag" in case.keys:
-        at.fail('a record payload with a field named "_tag" has no plain JSON form (spec §16.3)')
+        at.fail('a record payload with a field named "_tag" has no plain JSON form (spec §16.3)', code="no-json-form")
+
+
+def _only(j: dict[str, Json], allowed: tuple[str, ...], tag: str, at: _At) -> None:
+    """A tagged object (spec §16.3) has `_tag` and the members of its form, no others."""
+    for k in j:
+        if k != "_tag" and k not in allowed:
+            at.fail(f"unexpected member {describe(k)} for '{tag}'", code="unexpected-member")
+
+
+def _member(j: dict[str, Json], name: str, tag: str, at: _At) -> Json:
+    if name not in j:
+        at.fail(f"'{tag}' needs a member \"{name}\"", code="missing-member", expected=f'"{name}"')
+    return j[name]
+
+
+def _wrong_payload(tag: str, shape: str, given: int, at: _At) -> Never:
+    found = f"{given} argument(s)"
+    at.fail(f"'{tag}' takes {shape}, found {found}", code="wrong-payload", expected=shape, found=found)
 
 
 class _BackRef(_Node):
@@ -1436,10 +1528,10 @@ def _count_values(root: Value, max_depth: int, at: _At) -> int:
         v, depth = stack.pop()
         count += 1
         if count > _MAX_VALUES:
-            at.fail(f"value has more than {_MAX_VALUES} nodes")
+            at.fail(f"value has more than {_MAX_VALUES} nodes", code="too-many-nodes")
         # A container here is one level more (empty or not), as the parser counts it.
         if depth >= max_depth and isinstance(v, Array | Record | Variant) and (not isinstance(v, Variant) or v.args):
-            at.fail(f"value nested deeper than {max_depth} levels")
+            at.fail(f"value nested deeper than {max_depth} levels", code="nesting-too-deep")
         match v:
             case Array(items):
                 stack += ((x, depth + 1) for x in items)
@@ -1455,7 +1547,10 @@ def _count_values(root: Value, max_depth: int, at: _At) -> int:
 
 
 def _too_deep(at: _At) -> Never:
-    at.fail("nesting too deep for Python's recursion limit; lower max_depth or raise sys.setrecursionlimit")
+    at.fail(
+        "nesting too deep for Python's recursion limit; lower max_depth or raise sys.setrecursionlimit",
+        code="nesting-too-deep",
+    )
 
 
 def decode(node: _Node, value: Value, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
@@ -1472,10 +1567,12 @@ def decode(node: _Node, value: Value, limits: Limits, max_steps: int | None, key
     _too_deep(at)
 
 
-def encode(node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> Value:
+def encode(
+    node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None, *, json: bool = False
+) -> Value:
     make_room(limits.max_depth)
     steps = DEFAULT_ENCODE_STEPS if max_steps is None else max_steps
-    at = _At(_Context(decoding=False, limits=limits, max_steps=steps), None, key, 0)
+    at = _At(_Context(decoding=False, limits=limits, max_steps=steps, json=json), None, key, 0)
     try:
         return node.encode(x, at)
     except RecursionError:
@@ -1501,7 +1598,7 @@ def from_plain_json(node: _Node, j: Json, limits: Limits, max_steps: int | None,
     """A type's plain JSON (spec §16.3) as its Python value; the budget is 16 steps per JSON value by default."""
     make_room(limits.max_depth)
     steps = max_steps if max_steps is not None else STEPS_PER_VALUE * _count_json(j) + 1024
-    at = _At(_Context(decoding=True, limits=limits, max_steps=steps), None, key, 0)
+    at = _At(_Context(decoding=True, limits=limits, max_steps=steps, json=True), None, key, 0)
     try:
         return node.read_json(j, at)
     except RecursionError:
@@ -1513,7 +1610,7 @@ def to_plain_json(node: _Node, x: object, limits: Limits, max_steps: int | None,
     """A Python value of a type as its plain JSON (spec §16.3)."""
     make_room(limits.max_depth)
     steps = DEFAULT_ENCODE_STEPS if max_steps is None else max_steps
-    at = _At(_Context(decoding=False, limits=limits, max_steps=steps), None, key, 0)
+    at = _At(_Context(decoding=False, limits=limits, max_steps=steps, json=True), None, key, 0)
     try:
         return node.write_json(x, at)
     except RecursionError:
@@ -1521,6 +1618,9 @@ def to_plain_json(node: _Node, x: object, limits: Limits, max_steps: int | None,
     _too_deep(at)
 
 
-def checked(value: object, limits: Limits, key: PathKey | None = None) -> Value:
-    """A `Value` built in code, checked to be a haus value within `limits` (as `Any` encodes it)."""
-    return encode(_BUILTINS["Any"], value, limits, None, key)
+def checked(value: object, limits: Limits, key: PathKey | None = None, *, json: bool = False) -> Value:
+    """A `Value` built in code, checked to be a haus value within `limits` (as `Any` encodes it).
+
+    With `json`, for its lossless JSON: what has no JSON form is `no-json-form`.
+    """
+    return encode(_BUILTINS["Any"], value, limits, None, key, json=json)

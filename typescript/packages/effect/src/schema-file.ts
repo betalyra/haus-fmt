@@ -38,6 +38,7 @@ import {
 import { Schema } from "effect"
 import { entries, idOf, setId, type AnyCodec, type CodecEntry } from "./codec.js"
 import { BARE_TAG, CLOSED, NESTED, NUMBER, SECRET, STRICT, VALUES } from "./convert.js"
+import { CODE } from "./errors.js"
 // Circular import: only used when a schema file is compiled, after both modules have loaded.
 import * as Haus from "./index.js"
 
@@ -81,9 +82,13 @@ const INTS: Partial<Record<Builtin, readonly [number, number]>> = {
   UInt32: [0, 4294967295],
 }
 
-/** A whole number in range, as a JS number: `1e2` and `1.0` are not whole numbers (spec §15). */
+/**
+ * A whole number in range, as a JS number: `1e2` and `1.0` are not whole
+ * numbers (spec §15). The converter only gives whole numbers, so one that
+ * isn't a safe integer is out of range.
+ */
 const smallInt = ([minimum, maximum]: readonly [number, number]) =>
-  Schema.Number.annotate({ [NUMBER]: "Int" }).check(Schema.isInt(), Schema.isBetween({ minimum, maximum }))
+  Schema.Number.annotate({ [NUMBER]: "Int" }).check(Schema.isInt({ [CODE]: "out-of-range" }), Schema.isBetween({ minimum, maximum }))
 
 /** A schema file's `String`: only a haus string. */
 const strictString = Schema.String.annotate({ [STRICT]: true })

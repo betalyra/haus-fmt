@@ -3,6 +3,8 @@
 //! loaded, never while data is parsed, and never over the network (§9.2).
 
 use crate::packages::{MANIFEST, Manifest, Packages};
+use crate::{Error, Result};
+use haus::ErrorCode;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
@@ -25,8 +27,10 @@ pub struct Module {
 pub trait Resolver {
     /// `module` as written, without an `@major` (`@haus-fmt/money`,
     /// `./common`), imported by the file with key `from` (None: the root
-    /// file, when it has no key). An error says why it can't be found.
-    fn resolve(&self, module: &str, from: Option<&str>) -> Result<Module, String>;
+    /// file, when it has no key). An error says why it can't be found:
+    /// `import-not-found`, or `import-unavailable` if this resolver can't
+    /// import such modules at all.
+    fn resolve(&self, module: &str, from: Option<&str>) -> Result<Module>;
 }
 
 /// No resolver: only std modules can be imported.
@@ -34,16 +38,17 @@ pub trait Resolver {
 pub struct NoImports;
 
 impl Resolver for NoImports {
-    fn resolve(&self, _module: &str, _from: Option<&str>) -> Result<Module, String> {
-        Err("no module resolver (only std modules can be imported here)".into())
+    fn resolve(&self, _module: &str, _from: Option<&str>) -> Result<Module> {
+        Err(Error::new(ErrorCode::ImportUnavailable, "no module resolver (only std modules can be imported here)"))
     }
 }
 
 /// The schema packages of a crate's direct dependencies (build scripts).
 impl Resolver for Packages {
-    fn resolve(&self, module: &str, _from: Option<&str>) -> Result<Module, String> {
+    fn resolve(&self, module: &str, _from: Option<&str>) -> Result<Module> {
         if !module.starts_with('@') {
-            return Err("haus-fmt-build imports std/time and schema packages (@org/name) so far".into());
+            let reason = "haus-fmt-build imports std/time and schema packages (@org/name) so far";
+            return Err(Error::new(ErrorCode::ImportUnavailable, reason));
         }
         let pkg = self.find(module)?;
         read_module(&pkg.dir.join(&pkg.manifest.schema))
@@ -82,19 +87,19 @@ impl FileResolver {
 }
 
 impl Resolver for FileResolver {
-    fn resolve(&self, module: &str, from: Option<&str>) -> Result<Module, String> {
+    fn resolve(&self, module: &str, from: Option<&str>) -> Result<Module> {
         let dir = match from {
             Some(from) => Path::new(from).parent().map(Path::to_path_buf).unwrap_or_default(),
             None => match &self.base {
                 Some(base) => base.clone(),
-                None => env::current_dir().map_err(|e| e.to_string())?,
+                None => env::current_dir().map_err(|e| not_found(e.to_string()))?,
             },
         };
         if module.starts_with("./") || module.starts_with("../") {
             let file = if module.ends_with(EXTENSION) { module.to_owned() } else { format!("{module}{EXTENSION}") };
             let path = dir.join(file);
             if !path.is_file() {
-                return Err(format!("file not found: {}", path.display()));
+                return Err(not_found(format!("file not found: {}", path.display())));
             }
             return read_module(&path);
         }
@@ -104,23 +109,31 @@ impl Resolver for FileResolver {
         for manifest in direct.chain(installed) {
             if manifest.is_file() {
                 let package = manifest.parent().unwrap_or(Path::new("."));
-                let m = Manifest::read(package).map_err(|e| e.to_string())?;
+                let m = Manifest::read(package)?;
                 if m.name != module {
-                    return Err(format!("{} names the package {}, not {module}", manifest.display(), m.name));
+                    return Err(not_found(format!(
+                        "{} names the package {}, not {module}",
+                        manifest.display(),
+                        m.name
+                    )));
                 }
                 return read_module(&package.join(&m.schema));
             }
         }
-        Err(format!("package not found (no node_modules/{module}/{MANIFEST} above {})", dir.display()))
+        Err(not_found(format!("package not found (no node_modules/{module}/{MANIFEST} above {})", dir.display())))
     }
 }
 
 const EXTENSION: &str = ".schema.haus";
 
+fn not_found(reason: String) -> Error {
+    Error::new(ErrorCode::ImportNotFound, reason)
+}
+
 /// The schema file at `path`, with its key, identity and package version.
-pub(crate) fn read_module(path: &Path) -> Result<Module, String> {
-    let path = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
-    let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+pub(crate) fn read_module(path: &Path) -> Result<Module> {
+    let path = path.canonicalize().map_err(|e| not_found(format!("{}: {e}", path.display())))?;
+    let text = fs::read_to_string(&path).map_err(|e| not_found(format!("{}: {e}", path.display())))?;
     let (id, version) = identify(&path);
     Ok(Module { key: path.display().to_string(), id, text, version })
 }

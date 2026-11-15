@@ -192,14 +192,16 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
   const dir = join(root, "typescript/packages/effect")
   const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
   const effectEntry = createRequire(join(dir, "package.json")).resolve("effect")
-  const { Effect, Exit, Cause } = await import(pathToFileURL(effectEntry).href)
+  const { Effect, Exit, Cause, Option } = await import(pathToFileURL(effectEntry).href)
   const compiled = compileEach(texts, (t) => Haus.compileSchemaFile(t).schemas as Record<string, unknown>)
-  /** The value of an effect, or the outcome of its failure. */
+  /** The value of an effect, or the outcome of its failure (with its error code, spec §17; not compared yet: Lean's JSON modes print none). */
   const runE = (e: unknown): { value: any } | { outcome: Outcome } => {
     const exit = Effect.runSyncExit(e)
     if (Exit.isSuccess(exit)) return { value: exit.value }
     if (Cause.hasDies(exit.cause)) return { outcome: { kind: "crash", reason: `CRASH: ${String(exit.cause).slice(0, 300)}` } }
-    return { outcome: { kind: "err", reason: String(exit.cause).slice(0, 300) } }
+    const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
+    const place = error?.place ?? (error?.line !== undefined ? `${error.line}:${error.column}` : "$")
+    return { outcome: { kind: "err", reason: String(exit.cause).slice(0, 300), ...(error?.code ? { code: error.code, place } : {}) } }
   }
   const chain = (...steps: ((x: any) => unknown)[]): Outcome => {
     let x: any = undefined

@@ -139,6 +139,46 @@ shallowest path, overflows near 800). A larger `maxDepth` fails with a
 also recurses over the value it is given, before haus sees it: a value built
 in code nested a thousand levels or more can overflow there.
 
+## Errors
+
+The error channel holds `HausParseError` (text that isn't haus or JSON, with
+`line` and `column`), `HausSchemaError` (a value that doesn't fit the schema,
+or can't be encoded) and `HausLimitsError`. Each has a `code` (spec §17), the
+same in every haus binding, a `hint` and a `docs` link
+(`https://haus-fmt.org/docs/errors#<code>`). `Haus.errorJson(e)` (or
+`JSON.stringify(e)`) is the core's JSON form, for tools and agents:
+
+```ts
+const Cart = Schema.Struct({ items: Schema.Array(Schema.Struct({ qty: Schema.BigInt })) })
+const error = yield* Effect.flip(Haus.decode(Cart)(`{ items: [{ qty: 1.5 }] }`))
+Haus.errorJson(error)
+// { code: "not-an-integer", message: "expected a whole number, got the number 1.5",
+//   path: "$.items[0].qty", hint: "Write the integer without a fraction or exponent: `1`, `1000`.",
+//   docs: "https://haus-fmt.org/docs/errors#not-an-integer" }
+```
+
+A `HausSchemaError` has the code the core gives the same value. For the issues
+of Effect's own decoder, also in schemas you write by hand:
+
+| | code |
+|---|---|
+| a value of another kind (`"2"` for a number, a record for a struct, a tag for a string) | `type-mismatch` |
+| `Boolean`, `Option`, literals and tagged structs: a tag none of them takes / a known tag with another payload (`True(1)`, `Some`, `Point(1)`) | `unknown-tag` / `wrong-payload` |
+| a number with a fraction or exponent for `BigInt` or an integer check (`Schema.Int`) | `not-an-integer` |
+| a number outside a range check (`isBetween`, `isGreaterThan`, …), the ranges of `Int8` … `UInt64`, a float too large | `out-of-range` |
+| a missing key / an unknown field of a closed record | `missing-field` / `unknown-field` |
+| std/time text that the profile rejects (`Date("2026-02-30")`) | `invalid-time` |
+| anything inside a `Schema.Redacted` (a `Secret`): the error names its type, never the value | `invalid-secret` |
+| any other check or transformation that fails | `type-mismatch` |
+| encoding a value the schema can't write | `cannot-encode` |
+| more than one value where one is expected | `not-one-value` |
+
+`path` is where the error is in the decoded value (`["items", 0, "qty"]`, as
+in Effect's messages); `place` is where it is in the haus value, as the core
+writes it (`$.items[0].qty`; a variant's argument as `[i]`, the text of
+`Date("…")` as `$.on[0]`), and the JSON form's `path`. A `HausLimitsError` is
+`unsupported-depth`. Stream errors keep their `index`.
+
 ## Schema files
 
 ```ts

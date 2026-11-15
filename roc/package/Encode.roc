@@ -6,6 +6,7 @@
 ## The writer checks what it writes (spec §9.8). What generated encoders give
 ## is always fine; a `Value` built in code, such as the raw value of an `Any`
 ## or an unknown variant, may hold anything: `Num("abc")` is an error.
+import ErrorCode
 import Int
 import Secret
 import Value
@@ -32,7 +33,13 @@ Encode := [].{
 
 	## `.extra[1]: not a number literal`, or just the reason at the root.
 	message : Error -> Str
-	message = |{ reason, path }| if (path == "") reason else "${path}: ${reason}"
+	message = |e| if (e.path == "") e.reason else "${e.path}: ${e.reason}"
+
+	## The JSON form of an error (spec §17), on one line, with its place as
+	## `$.extra[1]` (see `ErrorCode.place`):
+	## `{"code":"cannot-encode","message":"not a number literal","path":"$.extra[1]","hint":…,"docs":…}`.
+	error_json : Error -> Str
+	error_json = |e| ErrorCode.json({ code: e.code, message: e.reason, at: Path(e.path) })
 
 	## The canonical form (spec §12): one exact text per value, the same in
 	## every binding, so equal values (§2) give identical text. It doesn't
@@ -261,32 +268,35 @@ layout = |d, n| {
 	}
 }
 
-## Where in the value (`.extra[1]`, empty at the root), and what's wrong: the
-## same paths as `Decode.Error`.
-Error : { reason : Str, path : Str }
+## What's wrong: its code (spec §17, `ErrorCode`) and reason, and where in the
+## value (`.extra[1]`, empty at the root): the same paths as `Decode.Error`.
+## A number that isn't a literal is `cannot-encode`, a tag that isn't a tag
+## name `invalid-tag`, a key used twice `duplicate-key`; what is beyond the
+## limits has the limit's code (`string-too-long`).
+Error : { code : Str, reason : Str, path : Str }
 
 ## Prefix the path of an error coming out of a nested value.
 within : Try(a, Error), Str -> Try(a, Error)
-within = |result, segment| result.map_err(|{ reason, path }| { reason, path: "${segment}${path}" })
+within = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
 
-fail : Str -> Try(a, Error)
-fail = |reason| Err({ reason, path: "" })
+fail : Str, Str -> Try(a, Error)
+fail = |code, reason| Err({ code, reason, path: "" })
 
 ## Whether this binding supports `limits` (spec §7).
 supported : Value.Limits -> Try({}, Error)
-supported = |limits| Value.check_limits(limits).map_err(|reason| { reason, path: "" })
+supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })
 
 ## A value inside `depth` containers (records, arrays, payloads).
 line : Value, U64, Value.Limits -> Try(List(U8), Error)
 line = |value, depth, limits| match value {
-	Num(text) => number(text, limits).map_err(|reason| { reason, path: "" })
+	Num(text) => number(text, limits)
 	Text(s) => {
 		check_length(s, limits)?
 		Ok(quote(s))
 	}
 	Bytes(b) =>
 		if b.len() > limits.max_string_length // 2 {
-			fail("byte string longer than ${limits.max_string_length.to_str()} characters")
+			fail(ErrorCode.string_too_long, "byte string longer than ${limits.max_string_length.to_str()} characters")
 		} else {
 			Ok("x\"".to_utf8().concat(hex(b)).append('"'))
 		}
@@ -297,7 +307,7 @@ line = |value, depth, limits| match value {
 	Rec(fields) => record_line(fields, depth, limits)
 	Tag(name, args) =>
 		if !is_tag(name) {
-			fail("not a tag name: A to Z, then letters, digits and _")
+			fail(ErrorCode.invalid_tag, "not a tag name: A to Z, then letters, digits and _")
 		} else {
 			check_text(name, "tag", limits)?
 			match args {
@@ -313,7 +323,7 @@ line = |value, depth, limits| match value {
 
 ## Opening a container inside `depth` others.
 open : U64, Value.Limits -> Try({}, Error)
-open = |depth, limits| if (depth >= limits.max_depth) fail("nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
+open = |depth, limits| if (depth >= limits.max_depth) fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
 
 ## Items separated by `, `, each at `depth`.
 items_line : List(Value), U64, Value.Limits -> Try(List(U8), Error)
@@ -335,14 +345,14 @@ record_line = |fields, depth, limits| {
 	var $seen = Set.empty()
 	for (k, _) in fields {
 		if $seen.contains(k) {
-			return Err({ reason: "the key is used twice in this record", path: ".${k}" })
+			return Err({ code: ErrorCode.duplicate_key, reason: "the key is used twice in this record", path: ErrorCode.path_key(k) })
 		}
 		$seen = $seen.insert(k)
 	}
 	var $out = []
 	for (k, v) in fields {
-		within(check_text(k, "key", limits), ".${k}")?
-		entry = key(k).concat([':', ' ']).concat(within(line(v, depth + 1, limits), ".${k}")?)
+		within(check_text(k, "key", limits), ErrorCode.path_key(k))?
+		entry = key(k).concat([':', ' ']).concat(within(line(v, depth + 1, limits), ErrorCode.path_key(k))?)
 		$out = if ($out.is_empty()) entry else $out.concat([',', ' ']).concat(entry)
 	}
 	Ok(if ($out.is_empty()) ['{', '}'] else ['{', ' '].concat($out).concat([' ', '}']))
@@ -357,7 +367,8 @@ check_text : Str, Str, Value.Limits -> Try({}, Error)
 check_text = |s, what, limits| {
 	b = s.to_utf8()
 	too_long = b.len() > limits.max_string_length and b.count_if(|c| c < 0x80 or c >= 0xC0) > limits.max_string_length
-	if (too_long) fail("${what} longer than ${limits.max_string_length.to_str()} characters") else Ok({})
+	code = if (what == "key") ErrorCode.key_too_long else if (what == "tag") ErrorCode.tag_too_long else ErrorCode.string_too_long
+	if (too_long) fail(code, "${what} longer than ${limits.max_string_length.to_str()} characters") else Ok({})
 }
 
 ## A tag name: `[A-Z][A-Za-z0-9_]*`.
@@ -370,7 +381,7 @@ is_tag = |name| {
 
 ## The text a number is written as, or why it can't be: its normalized
 ## literal (spec §2), in hex if it is an integer longer than the number limit.
-number : Str, Value.Limits -> Try(List(U8), Str)
+number : Str, Value.Limits -> Try(List(U8), Error)
 number = |text, limits| {
 	b = text.to_utf8()
 	literal_chars = b.all(|c| (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == 'x' or c == '.' or c == '_' or c == '+' or c == '-')
@@ -378,13 +389,13 @@ number = |text, limits| {
 		if is_normalized(b) {
 			b
 		} else if !literal_chars {
-			return Err("not a number literal")
+			return fail(ErrorCode.cannot_encode, "not a number literal")
 		} else if b.len() > limits.max_number_length {
-			return Err("number literal longer than ${limits.max_number_length.to_str()} characters")
+			return fail(ErrorCode.number_too_long, "number literal longer than ${limits.max_number_length.to_str()} characters")
 		} else {
 			match Value.parse_with(text, limits) {
 				Ok(Num(normalized)) => normalized.to_utf8()
-				_ => return Err("not a number literal")
+				_ => return fail(ErrorCode.cannot_encode, "not a number literal")
 			}
 		}
 	# The exponent: `e`, an optional `-`, digits without leading zeros.
@@ -393,7 +404,7 @@ number = |text, limits| {
 			digits = n.drop_first(i + 1).drop_if(|c| c == '-')
 			too_large = digits.len() > 18 or (U64.from_str(bytes_to_str(digits)) ?? 0) > limits.max_exponent
 			if too_large {
-				return Err("exponent larger than ${limits.max_exponent.to_str()}")
+				return fail(ErrorCode.exponent_too_large, "exponent larger than ${limits.max_exponent.to_str()}")
 			}
 		}
 		Err(_) => {}
@@ -408,7 +419,7 @@ number = |text, limits| {
 	integer = n.drop_if(|c| c == '-').all(|c| c >= '0' and c <= '9')
 	written = if (integer and at_least <= limits.max_number_length) number_text(text_of(n), limits.max_number_length) else n
 	if written.len() > limits.max_number_length {
-		Err("number literal longer than ${limits.max_number_length.to_str()} characters")
+		fail(ErrorCode.number_too_long, "number literal longer than ${limits.max_number_length.to_str()} characters")
 	} else {
 		Ok(written)
 	}
@@ -766,7 +777,7 @@ expect error_of(Tag("Hexagon", [Rec([("side", Num("x"))])])) == "(Hexagon).side:
 expect error_of(Rec([("a", Num("1")), ("a", Num("2"))])) == ".a: the key is used twice in this record"
 expect error_of(Bytes(List.repeat(0, 8 * 1024 * 1024 + 1))) == "byte string longer than 16777216 characters"
 expect error_of(Text("x".repeat(16 * 1024 * 1024 + 1))) == "string longer than 16777216 characters"
-expect Encode.stream([Num("1"), Num("x")]) == Err({ reason: "not a number literal", path: "[1]" })
+expect Encode.stream([Num("1"), Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
 # Nesting: as deep as the parser reads, and no deeper.
 nested : U64, Value, (Value -> Value) -> Value
 nested = |n, inner, wrap| {
@@ -810,7 +821,7 @@ expect Encode.to_str_with(Num("12345678"), small) == Ok("12345678") and error_wi
 expect Encode.to_str_with(Num("1000000000000"), { ..small, max_number_length: 12 }) == Ok("0xe8d4a51000")
 expect Encode.to_str_with(Num("1e99"), small) == Ok("1e99") and error_with(Num("1e100")) == "exponent larger than 99"
 expect Encode.to_str_with(Text("abcd"), small) == Ok("\"abcd\"") and error_with(Text("abcde")) == "string longer than 4 characters"
-expect Encode.stream_with([Num("1"), Num("1e100")], small) == Err({ reason: "exponent larger than 99", path: "[1]" })
+expect Encode.stream_with([Num("1"), Num("1e100")], small) == Err({ code: "exponent-too-large", reason: "exponent larger than 99", path: "[1]" })
 # Record keys and tags count against the string limit.
 expect Encode.to_str_with(Rec([("abcd", Num("1"))]), small) == Ok("{ abcd: 1 }") and error_with(Rec([("abcde", Num("1"))])) == ".abcde: key longer than 4 characters"
 expect Encode.to_str_with(Rec([("äöüß", Num("1"))]), small) == Ok("{ \"äöüß\": 1 }")
@@ -818,7 +829,21 @@ expect Encode.to_str_with(Tag("Abcd", []), small) == Ok("Abcd") and error_with(T
 expect error_with(Tag("A", [Tag("Abcde", [])])) == "(A)[0]: tag longer than 4 characters"
 # Up to the supported depth; a deeper limit is an error that names the maximum.
 expect Encode.to_str_with(nested(1024, Num("1"), |v| Tag("A", [v])), { ..Value.default_limits, max_depth: Value.max_supported_depth }).is_ok()
-expect Encode.to_str_with(Num("1"), { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
-expect Encode.stream_with([], { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect Encode.to_str_with(Num("1"), { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect Encode.stream_with([], { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
 # Larger limits than the defaults: exponents past 9999 too.
 expect Encode.to_str_with(Num("1e12345"), { ..Value.default_limits, max_exponent: 20000 }) == Ok("1e12345")
+
+# Error codes (spec §17), and the place in the value.
+code_of : Value -> Str
+code_of = |v| match Encode.to_str(v) {
+	Ok(_) => "ok"
+	Err(e) => "${e.code} at ${ErrorCode.place(e.path)}"
+}
+
+expect code_of(Arr([Num("1"), Num("x")])) == "cannot-encode at $[1]" and code_of(Tag("lower", [])) == "invalid-tag at $"
+expect code_of(Rec([("pt-BR", Num("1")), ("pt-BR", Num("2"))])) == "duplicate-key at $[\"pt-BR\"]" and code_of(Tag("A", [Rec([("b", Num("1e9999"))])])) == "exponent-too-large at $[0].b"
+expect code_of(Text("x".repeat(16 * 1024 * 1024 + 1))) == "string-too-long at $" and code_of(Num("9".repeat(1300))) == "number-too-long at $"
+expect code_of(nested(257, Num("1"), |v| Arr([v]))).starts_with("nesting-too-deep at $[0]")
+expect Encode.to_str_with(Rec([("abcde", Num("1"))]), small).map_err(|e| e.code) == Err("key-too-long") and Encode.to_str_with(Tag("Abcde", []), small).map_err(|e| e.code) == Err("tag-too-long")
+expect Encode.to_str(Num("x")).map_err(Encode.error_json) == Err("{\"code\":\"cannot-encode\",\"message\":\"not a number literal\",\"path\":\"$\",\"hint\":\"Pass a value of the host type the binding documents for the type.\",\"docs\":\"https://haus-fmt.org/docs/errors#cannot-encode\"}")

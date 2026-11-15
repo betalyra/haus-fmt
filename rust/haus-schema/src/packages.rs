@@ -5,7 +5,8 @@
 //! passes that only to crates that depend on it directly, as
 //! `DEP_<LINKS>_HAUS_PACKAGE`: no registry, no network, no transitive lookups.
 
-use crate::{Error, Result, read, rerun_if_changed, syntax, var};
+use crate::{Error, Result, read, syntax, var};
+use haus::ErrorCode;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -23,13 +24,13 @@ impl Manifest {
     pub fn read(dir: &Path) -> Result<Manifest> {
         let path = dir.join(MANIFEST);
         let value = haus::parse(&read(&path)?)
-            .map_err(|e| Error::at(&path, e))?
+            .map_err(|e| Error::at(&path, ErrorCode::ImportNotFound, e))?
             .into_iter()
             .next()
-            .ok_or_else(|| Error::at(&path, "empty manifest"))?;
+            .ok_or_else(|| Error::at(&path, ErrorCode::ImportNotFound, "empty manifest"))?;
         let field = |key: &str| match value.get(key) {
             Some(haus::Value::String(s)) => Ok(s.clone()),
-            _ => Err(Error::at(&path, format!("the manifest needs a string field {key}"))),
+            _ => Err(Error::at(&path, ErrorCode::ImportNotFound, format!("the manifest needs a string field {key}"))),
         };
         Ok(Manifest { name: field("name")?, version: field("version")?, schema: field("schema")? })
     }
@@ -80,15 +81,33 @@ impl Packages {
     }
 
     /// The one package called `name`.
-    pub fn find(&self, name: &str) -> Result<&Package, String> {
+    pub fn find(&self, name: &str) -> Result<&Package> {
         match self.0.iter().filter(|p| p.manifest.name == name).collect::<Vec<_>>().as_slice() {
             [one] => Ok(one),
-            [] => Err(format!(
-                "package {name} not found among this crate's dependencies: \
-                 add the crate that provides it (its build script calls haus_build::package)"
+            [] => Err(Error::new(
+                ErrorCode::ImportNotFound,
+                format!(
+                    "package {name} not found among this crate's dependencies: \
+                     add the crate that provides it (its build script calls haus_build::package)"
+                ),
             )),
-            [a, b, ..] => Err(format!("two dependencies call themselves {name}: {} and {}", a.krate, b.krate)),
+            [a, b, ..] => Err(Error::new(
+                ErrorCode::DuplicatePackage,
+                format!("two dependencies call themselves {name}: {} and {}", a.krate, b.krate),
+            )),
         }
+    }
+
+    /// The packages.
+    pub fn iter(&self) -> impl Iterator<Item = &Package> {
+        self.0.iter()
+    }
+
+    /// The files read to find them: each package's manifest and schema file.
+    /// A build script tells Cargo to rerun when one changes (haus-fmt-build
+    /// does); this crate never prints.
+    pub fn files(&self) -> Vec<PathBuf> {
+        self.0.iter().flat_map(|p| [p.dir.join(MANIFEST), p.dir.join(&p.manifest.schema)]).collect()
     }
 }
 
@@ -96,7 +115,6 @@ impl Package {
     fn load(dir: &Path, krate: String) -> Result<Package> {
         let manifest = Manifest::read(dir)?;
         let path = dir.join(&manifest.schema);
-        rerun_if_changed(&path);
         let file = syntax::parse(&read(&path)?).map_err(|e| Error::from(e).in_file(&path))?;
         let types = file.types.into_iter().map(|t| (t.name, t.params.len())).collect();
         Ok(Package { manifest, dir: dir.to_owned(), krate, types })

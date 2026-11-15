@@ -1,7 +1,7 @@
 //! Recursive-descent parser over one complete piece of text: a port of the
 //! TypeScript reference parser (typescript/packages/haus/src/parser.ts).
 
-use crate::{SyntaxError as Error, Value};
+use crate::{ErrorCode as Code, SyntaxError as Error, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
@@ -120,7 +120,7 @@ impl<'a> Parser<'a> {
     /// A parser at `pos`, if this binding supports `limits`.
     fn new(src: &'a str, limits: &'a Limits, pos: usize, file_start: Option<usize>) -> R<Parser<'a>> {
         match limits.unsupported() {
-            Some(reason) => Err(Error::at(src, 0, reason)),
+            Some(reason) => Err(Error::at(src, 0, Code::UnsupportedDepth, reason)),
             None => Ok(Parser { src, b: src.as_bytes(), pos, depth: 0, limits, file_start }),
         }
     }
@@ -136,7 +136,10 @@ impl<'a> Parser<'a> {
             if self.eof() {
                 break;
             }
-            self.expect(b',', "expected ',' between top-level values")?;
+            if self.peek() != Some(b',') {
+                return Err(self.separator_error(out.last(), "expected ',' between top-level values", None));
+            }
+            self.pos += 1;
             self.trivia()?;
         }
         Ok(out)
@@ -145,13 +148,16 @@ impl<'a> Parser<'a> {
     fn single(&mut self) -> R<Value> {
         self.trivia()?;
         if self.eof() || self.peek() == Some(b',') {
-            return Err(self.fail(format!("expected a value, found {}", describe(self.peek_char()))));
+            let found = describe(self.peek_char());
+            return Err(self
+                .fail(Code::ExpectedValue, format!("expected a value, found {found}"))
+                .with_expected_found("a value", found));
         }
         let value = self.value()?;
         self.trivia()?;
-        match self.peek_char() {
-            None => Ok(value),
-            found => Err(self.fail(format!("expected ',' between top-level values, found {}", describe(found)))),
+        match self.eof() {
+            true => Ok(value),
+            false => Err(self.separator_error(Some(&value), "expected ',' between top-level values", None)),
         }
     }
 
@@ -177,28 +183,38 @@ impl<'a> Parser<'a> {
             Some(c) if is_lower_start(c) => {
                 let start = self.pos;
                 let word = self.ident();
-                let hint = match word {
-                    "true" | "false" => " (booleans are the variants True / False)",
-                    "null" => " (use the variant None)",
-                    _ => "",
+                let (code, hint) = match word {
+                    "true" | "false" => (Code::BooleanLiteral, " (booleans are the variants True / False)"),
+                    "null" => (Code::NullLiteral, " (use the variant None)"),
+                    _ => (Code::BareIdentifier, ""),
                 };
                 self.fail_at(
                     start,
+                    code,
                     format!("unexpected identifier '{word}': lowercase identifiers can only be record keys{hint}"),
                 )
+                .with_expected_found("a value", format!("'{word}'"))
             }
             // Reserved for a version directive (spec §10): `#haus 2`.
-            Some(b'#') if self.file_start == Some(self.pos) && self.b[self.pos..].starts_with(b"#haus") => {
-                self.fail("the file starts with a version directive (#haus): it needs a newer version of haus")
+            Some(b'#') if self.file_start == Some(self.pos) && self.b[self.pos..].starts_with(b"#haus") => self.fail(
+                Code::VersionDirective,
+                "the file starts with a version directive (#haus): it needs a newer version of haus",
+            ),
+            c => {
+                // `+1` and `.5`: a number written the way other languages allow.
+                let code = if matches!(c, Some(b'+' | b'.')) { Code::InvalidNumber } else { Code::ExpectedValue };
+                let found = describe(self.peek_char());
+                self.fail(code, format!("expected a value, found {found}")).with_expected_found("a value", found)
             }
-            _ => self.fail(format!("expected a value, found {}", describe(self.peek_char()))),
         }
     }
 
     fn enter(&mut self) -> R<()> {
         self.depth += 1;
         if self.depth > self.limits.max_depth {
-            return Err(self.fail(format!("nesting deeper than {} levels", self.limits.max_depth)));
+            return Err(
+                self.fail(Code::NestingTooDeep, format!("nesting deeper than {} levels", self.limits.max_depth))
+            );
         }
         Ok(())
     }
@@ -214,7 +230,7 @@ impl<'a> Parser<'a> {
             let (key_pos, key) = self.field_key()?;
             let value = self.value()?;
             self.add_field(&mut fields, &mut seen, key_pos, key, value)?;
-            self.separator(open, b'}')?;
+            self.separator(open, b'}', fields.last().map(|(_, v)| v))?;
         }
         self.pos += 1; // }
         self.depth -= 1;
@@ -226,7 +242,13 @@ impl<'a> Parser<'a> {
         let key_pos = self.pos;
         let key = self.key()?;
         self.trivia()?;
-        self.expect(b':', &format!("expected ':' after key '{key}'"))?;
+        if self.peek() != Some(b':') {
+            let found = describe(self.peek_char());
+            return Err(self
+                .fail(Code::MissingColon, format!("expected ':' after key '{key}', found {found}"))
+                .with_expected_found("':'", found));
+        }
+        self.pos += 1;
         self.trivia()?;
         Ok((key_pos, key))
     }
@@ -240,7 +262,7 @@ impl<'a> Parser<'a> {
         value: Value,
     ) -> R<()> {
         if !seen.insert(key.clone()) {
-            return Err(self.fail_at(key_pos, format!("duplicate key '{key}'")));
+            return Err(self.fail_at(key_pos, Code::DuplicateKey, format!("duplicate key '{key}'")));
         }
         fields.push((key, value));
         Ok(())
@@ -249,20 +271,28 @@ impl<'a> Parser<'a> {
     fn key(&mut self) -> R<String> {
         match self.peek() {
             Some(b'"') if self.b[self.pos..].starts_with(b"\"\"\"") => {
-                Err(self.fail("block strings can't be record keys"))
+                Err(self.fail(Code::BlockStringKey, "block strings can't be record keys"))
             }
             // A quoted key is a string: the string limit says so.
             Some(b'"') => self.basic_string(),
-            Some(c) if is_lower_start(c) => self.name("key").map(str::to_owned),
+            Some(c) if is_lower_start(c) => self.name(Code::KeyTooLong).map(str::to_owned),
             Some(c) if c.is_ascii_uppercase() => {
                 let start = self.pos;
                 let word = self.ident();
-                Err(self.fail_at(
-                    start,
-                    format!("record keys must start with a lowercase letter or '_'; quote it: \"{word}\""),
-                ))
+                Err(self
+                    .fail_at(
+                        start,
+                        Code::UppercaseKey,
+                        format!("record keys must start with a lowercase letter or '_'; quote it: \"{word}\""),
+                    )
+                    .with_hint(format!("Quote the key: \"{word}\".")))
             }
-            _ => Err(self.fail(format!("expected a record key, found {}", describe(self.peek_char())))),
+            _ => {
+                let found = describe(self.peek_char());
+                Err(self
+                    .fail(Code::ExpectedKey, format!("expected a record key, found {found}"))
+                    .with_expected_found("a record key", found))
+            }
         }
     }
 
@@ -275,7 +305,7 @@ impl<'a> Parser<'a> {
         self.trivia()?;
         while self.more(start, close)? {
             items.push(self.value()?);
-            self.separator(start, close)?;
+            self.separator(start, close, items.last())?;
         }
         self.pos += 1;
         self.depth -= 1;
@@ -295,8 +325,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// After an item: `,` and the trivia after it, or `close`.
-    fn separator(&mut self, start: usize, close: u8) -> R<()> {
+    /// After an item (`previous`): `,` and the trivia after it, or `close`.
+    fn separator(&mut self, start: usize, close: u8, previous: Option<&Value>) -> R<()> {
         self.trivia()?;
         match self.peek() {
             Some(b',') => {
@@ -305,17 +335,50 @@ impl<'a> Parser<'a> {
             }
             Some(c) if c == close => Ok(()),
             None => Err(self.unclosed(start)),
-            _ => Err(self.fail(format!("expected ',' or '{}', found {}", close as char, describe(self.peek_char())))),
+            _ => Err(self.separator_error(previous, &format!("expected ',' or '{}'", close as char), Some(close))),
+        }
+    }
+
+    /// After `previous`, something other than a comma (or the closing bracket
+    /// `close`). Which mistake it is: a payload `(…)` or `{…}` on a line after
+    /// its tag (the tag took no payload, so anything between them was a line
+    /// break or a comment), a closing bracket of the wrong kind, or a missing
+    /// comma (spec §17).
+    #[cold]
+    #[inline(never)]
+    fn separator_error(&self, previous: Option<&Value>, message: &str, close: Option<u8>) -> Error {
+        let found = describe(self.peek_char());
+        let reason = format!("{message}, found {found}");
+        let expected = match close {
+            None => "','".to_owned(),
+            Some(c) => format!("',' or '{}'", c as char),
+        };
+        match (self.peek(), previous) {
+            (Some(b'(' | b'{'), Some(Value::Variant { tag, args })) if args.is_empty() => {
+                self.fail(Code::PayloadNewline, reason).with_expected_found("','", found).with_hint(format!(
+                    "Put the payload on the same line as {tag}, or add a comma if they are two values."
+                ))
+            }
+            (Some(b'}' | b']' | b')'), _) => {
+                self.fail(Code::UnexpectedCloser, reason).with_expected_found(expected, found)
+            }
+            _ => self.fail(Code::MissingComma, reason).with_expected_found("','", found),
         }
     }
 
     #[cold]
     fn unclosed(&self, start: usize) -> Error {
-        self.fail_at(start, format!("unclosed '{}'", self.b[start] as char))
+        let close = match self.b[start] {
+            b'{' => '}',
+            b'[' => ']',
+            _ => ')',
+        };
+        self.fail_at(start, Code::UnclosedBracket, format!("unclosed '{}'", self.b[start] as char))
+            .with_expected(format!("'{close}'"))
     }
 
     fn variant(&mut self) -> R<Value> {
-        let tag = self.name("tag")?.to_owned();
+        let tag = self.name(Code::TagTooLong)?.to_owned();
         let args = match self.payload() {
             Some(b'(') => {
                 let paren = self.pos;
@@ -354,37 +417,44 @@ impl<'a> Parser<'a> {
 
     #[cold]
     fn empty_payload(&self, paren: usize, tag: &str) -> Error {
-        self.fail_at(paren, format!("empty payload: write '{tag}' without parentheses"))
+        self.fail_at(paren, Code::EmptyPayload, format!("empty payload: write '{tag}' without parentheses"))
+            .with_hint(format!("Write {tag} without parentheses."))
     }
 
     // ── numbers ────────────────────────────────────────────────
 
+    /// A number: the literal (a linear scan), then what follows it, then
+    /// the limits, as the reference does (a literal that runs into a letter
+    /// is invalid however long it is). Converted only within the limits, so
+    /// huge literals stay cheap.
     fn number(&mut self) -> R<Value> {
         let start = self.pos;
-        self.check_number_limits(start)?;
         let neg = self.peek() == Some(b'-');
         let body = start + usize::from(neg);
-        let text = if let Some((radix, end)) = self.radix_literal(body) {
-            self.pos = end;
-            let digits: Vec<u8> = self.b[body + 2..end].iter().copied().filter(|&c| c != b'_').collect();
-            let n = to_decimal(&digits, radix);
-            if neg && n != "0" { format!("-{n}") } else { n }
-        } else {
-            match self.decimal_literal(start) {
-                Some(end) => {
-                    self.pos = end;
-                    normalize_exponent(self.src[start..end].replace('_', "").replace('E', "e"))
-                }
-                None => return Err(self.fail_at(start, "invalid number")),
-            }
+        let (radix, end) = match self.radix_literal(body) {
+            Some((radix, end)) => (Some(radix), end),
+            None => match self.decimal_literal(start) {
+                Some(end) => (None, end),
+                None => return Err(self.fail_at(start, Code::InvalidNumber, "invalid number")),
+            },
         };
-        if matches!(self.peek(), Some(c) if is_ident(c) || c == b'.') {
-            let mut end = self.pos;
-            while matches!(self.b.get(end), Some(&c) if is_ident(c) || c == b'.') {
-                end += 1;
+        if matches!(self.b.get(end), Some(&c) if is_ident(c) || c == b'.') {
+            let mut to = end;
+            while matches!(self.b.get(to), Some(&c) if is_ident(c) || c == b'.') {
+                to += 1;
             }
-            return Err(self.fail_at(start, format!("invalid number '{}'", &self.src[start..end])));
+            return Err(self.fail_at(start, Code::InvalidNumber, format!("invalid number '{}'", &self.src[start..to])));
         }
+        self.check_number_limits(start, end, radix.is_none())?;
+        self.pos = end;
+        let text = match radix {
+            Some(radix) => {
+                let digits: Vec<u8> = self.b[body + 2..end].iter().copied().filter(|&c| c != b'_').collect();
+                let n = to_decimal(&digits, radix);
+                if neg && n != "0" { format!("-{n}") } else { n }
+            }
+            None => normalize_exponent(self.src[start..end].replace('_', "").replace('E', "e")),
+        };
         Ok(Value::Number(text))
     }
 
@@ -439,23 +509,20 @@ impl<'a> Parser<'a> {
         Some(i)
     }
 
-    /// Checked before converting, so huge literals are rejected cheaply.
-    fn check_number_limits(&self, start: usize) -> R<()> {
-        let mut end = start;
-        while matches!(self.b.get(end), Some(&c) if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'+' | b'_' | b'.'))
-        {
-            end += 1;
-        }
+    /// The literal at `start..end` is within the number limits: its length,
+    /// then (`decimal`) its exponent. Checked before converting, so huge
+    /// literals are rejected cheaply.
+    fn check_number_limits(&self, start: usize, end: usize, decimal: bool) -> R<()> {
         if end - start > self.limits.max_number_length {
-            return Err(
-                self.fail_at(start, format!("number literal longer than {} characters", self.limits.max_number_length))
-            );
+            let reason = format!("number literal longer than {} characters", self.limits.max_number_length);
+            return Err(self.fail_at(start, Code::NumberTooLong, reason));
         }
-        if let Some(exp) = decimal_exponent(&self.src[start..end]) {
+        if let Some(exp) = decimal_exponent(&self.src[start..end]).filter(|_| decimal) {
             let digits: String = exp.chars().filter(|&c| c != '_').collect();
             let digits = digits.trim_start_matches('0');
             if digits.len() > 19 || digits.parse::<u64>().unwrap_or(0) > self.limits.max_exponent {
-                return Err(self.fail_at(start, format!("exponent larger than {}", self.limits.max_exponent)));
+                let reason = format!("exponent larger than {}", self.limits.max_exponent);
+                return Err(self.fail_at(start, Code::ExponentTooLarge, reason));
             }
         }
         Ok(())
@@ -469,7 +536,9 @@ impl<'a> Parser<'a> {
         self.pos += 2; // x"
         let mut out = Vec::new();
         loop {
-            let Some(c) = self.peek() else { return Err(self.fail_at(open, "unterminated byte string")) };
+            let Some(c) = self.peek() else {
+                return Err(self.fail_at(open, Code::UnterminatedBytes, "unterminated byte string"));
+            };
             match c {
                 b'"' => break,
                 b' ' | b'\t' => {
@@ -479,23 +548,26 @@ impl<'a> Parser<'a> {
                 _ => {}
             }
             let Some(hi) = hex_value(c) else {
-                return Err(self.fail(if c == b'\n' || c == b'\r' {
-                    "line break in byte string (keep x\"…\" on one line)".to_owned()
-                } else {
-                    format!("invalid character {} in byte string (expected hex digits)", describe(self.peek_char()))
-                }));
+                return Err(self.fail(
+                    Code::BytesNotHex,
+                    if c == b'\n' || c == b'\r' {
+                        "line break in byte string (keep x\"…\" on one line)".to_owned()
+                    } else {
+                        format!("invalid character {} in byte string (expected hex digits)", describe(self.peek_char()))
+                    },
+                ));
             };
             let Some(lo) = self.at(1).and_then(hex_value) else {
-                return Err(
-                    self.fail("a byte needs two hex digits (an odd number of digits, or a space inside a byte)")
-                );
+                return Err(self.fail(
+                    Code::BytesOddDigits,
+                    "a byte needs two hex digits (an odd number of digits, or a space inside a byte)",
+                ));
             };
             out.push(hi * 16 + lo);
             self.pos += 2;
             if self.pos - open - 2 > self.limits.max_string_length {
-                return Err(
-                    self.fail_at(open, format!("byte string longer than {} characters", self.limits.max_string_length))
-                );
+                let reason = format!("byte string longer than {} characters", self.limits.max_string_length);
+                return Err(self.fail_at(open, Code::StringTooLong, reason));
             }
         }
         self.pos += 1; // "
@@ -510,7 +582,9 @@ impl<'a> Parser<'a> {
         let mut out = String::new();
         let mut chunk = self.pos;
         loop {
-            let Some(c) = self.peek() else { return Err(self.fail_at(open, "unterminated string")) };
+            let Some(c) = self.peek() else {
+                return Err(self.fail_at(open, Code::UnterminatedString, "unterminated string"));
+            };
             match c {
                 b'"' => break,
                 b'\\' => {
@@ -518,16 +592,20 @@ impl<'a> Parser<'a> {
                     out.push(self.escape()?);
                     chunk = self.pos;
                 }
-                b'\n' => return Err(self.fail("line break in string (use \\n or a \"\"\" block string)")),
-                b'\t' => return Err(self.fail("raw tab in string (use \\t)")),
-                0..0x20 | 0x7F => return Err(self.fail(control_message(c as char, "string"))),
+                b'\n' => {
+                    return Err(
+                        self.fail(Code::StringLineBreak, "line break in string (use \\n or a \"\"\" block string)")
+                    );
+                }
+                b'\t' => return Err(self.fail(Code::ControlCharacter, "raw tab in string (use \\t)")),
+                0..0x20 | 0x7F => return Err(self.fail(Code::ControlCharacter, control_message(c as char, "string"))),
                 0x80.. => {
                     let ch = self.peek_char().unwrap_or_default();
                     if is_bidi(ch) {
-                        return Err(self.fail(bidi_message(ch)));
+                        return Err(self.fail(Code::BidiControl, bidi_message(ch)));
                     }
                     if is_control(ch) {
-                        return Err(self.fail(control_message(ch, "string")));
+                        return Err(self.fail(Code::ControlCharacter, control_message(ch, "string")));
                     }
                     self.pos += ch.len_utf8();
                 }
@@ -536,7 +614,7 @@ impl<'a> Parser<'a> {
         }
         out.push_str(&self.src[chunk..self.pos]);
         self.pos += 1; // "
-        self.check_length(out, open, "string")
+        self.check_length(out, open, Code::StringTooLong)
     }
 
     /// At a backslash: consumes the escape and returns its character.
@@ -551,7 +629,10 @@ impl<'a> Parser<'a> {
             Some(b'r') => '\r',
             Some(b't') => '\t',
             Some(b'u') => {
-                let bad = || Error::at(self.src, start, "invalid unicode escape: expected \\u{1-6 hex digits}");
+                let bad = || {
+                    let reason = "invalid unicode escape: expected \\u{1-6 hex digits}";
+                    Error::at(self.src, start, Code::InvalidUnicodeEscape, reason)
+                };
                 if self.peek() != Some(b'{') {
                     return Err(bad());
                 }
@@ -561,14 +642,15 @@ impl<'a> Parser<'a> {
                 }
                 let hex = &self.src[self.pos + 1..self.pos + 1 + digits];
                 let Some(c) = char::from_u32(u32::from_str_radix(hex, 16).unwrap_or(u32::MAX)) else {
-                    return Err(self.fail_at(start, format!("\\u{{{hex}}} is not a Unicode scalar value")));
+                    let reason = format!("\\u{{{hex}}} is not a Unicode scalar value");
+                    return Err(self.fail_at(start, Code::InvalidUnicodeEscape, reason));
                 };
                 self.pos += digits + 2;
                 c
             }
             _ => {
                 let e = self.src[start + 1..].chars().next().map(String::from).unwrap_or_default();
-                return Err(self.fail_at(start, format!("invalid escape '\\{e}'")));
+                return Err(self.fail_at(start, Code::InvalidEscape, format!("invalid escape '\\{e}'")));
             }
         })
     }
@@ -585,7 +667,7 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         } else {
             let at = if self.eof() { open } else { self.pos };
-            return Err(self.fail_at(at, "opening \"\"\" must be followed by a line break"));
+            return Err(self.fail_at(at, Code::BlockStringOpening, "opening \"\"\" must be followed by a line break"));
         }
 
         // Find the closing """, skipping escaped characters.
@@ -603,7 +685,9 @@ impl<'a> Parser<'a> {
             }
             i += 1;
         }
-        let Some(close) = close else { return Err(self.fail_at(open, "unterminated block string")) };
+        let Some(close) = close else {
+            return Err(self.fail_at(open, Code::UnterminatedBlockString, "unterminated block string"));
+        };
 
         // Lines, with where each starts.
         let mut lines: Vec<(usize, &str)> = Vec::new();
@@ -624,7 +708,7 @@ impl<'a> Parser<'a> {
         }
         let (_, indent) = lines.pop().unwrap_or_default();
         if !is_blank(indent) {
-            return Err(self.fail_at(close, "closing \"\"\" must be on its own line"));
+            return Err(self.fail_at(close, Code::BlockStringClosing, "closing \"\"\" must be on its own line"));
         }
 
         let mut out = Vec::with_capacity(lines.len());
@@ -634,11 +718,11 @@ impl<'a> Parser<'a> {
             } else if is_blank(text) {
                 out.push(String::new());
             } else {
-                return Err(self.fail_at(at, "line is indented less than the closing \"\"\""));
+                return Err(self.fail_at(at, Code::BlockStringIndent, "line is indented less than the closing \"\"\""));
             }
         }
         self.pos = close + 3;
-        self.check_length(out.join("\n"), open, "string")
+        self.check_length(out.join("\n"), open, Code::StringTooLong)
     }
 
     /// Escapes in one block-string line, which starts at `at` in the source.
@@ -655,14 +739,14 @@ impl<'a> Parser<'a> {
                 i = self.pos - at;
                 chunk = i;
             } else if (c < 0x20 || c == 0x7F) && c != b'\t' {
-                return Err(self.fail_at(at + i, control_message(c as char, "block string")));
+                return Err(self.fail_at(at + i, Code::ControlCharacter, control_message(c as char, "block string")));
             } else if c >= 0x80 {
                 let ch = text[i..].chars().next().unwrap_or_default();
                 if is_bidi(ch) {
-                    return Err(self.fail_at(at + i, bidi_message(ch)));
+                    return Err(self.fail_at(at + i, Code::BidiControl, bidi_message(ch)));
                 }
                 if is_control(ch) {
-                    return Err(self.fail_at(at + i, control_message(ch, "block string")));
+                    return Err(self.fail_at(at + i, Code::ControlCharacter, control_message(ch, "block string")));
                 }
                 i += ch.len_utf8();
             } else {
@@ -674,13 +758,18 @@ impl<'a> Parser<'a> {
         Ok(out)
     }
 
-    /// `s`, a string, key or tag (`what`) that starts at `open`, if it is
-    /// within the string limit (spec §7).
-    fn check_length<S: AsRef<str>>(&self, s: S, open: usize, what: &str) -> R<S> {
+    /// `s`, a string, key or tag (`code` says which) that starts at `open`,
+    /// if it is within the string limit (spec §7).
+    fn check_length<S: AsRef<str>>(&self, s: S, open: usize, code: Code) -> R<S> {
         let (text, max) = (s.as_ref(), self.limits.max_string_length);
         // Bytes bound code points from above: count only when it could matter.
         if text.len() > max && text.chars().count() > max {
-            return Err(self.fail_at(open, format!("{what} longer than {max} characters")));
+            let what = match code {
+                Code::KeyTooLong => "key",
+                Code::TagTooLong => "tag",
+                _ => "string",
+            };
+            return Err(self.fail_at(open, code, format!("{what} longer than {max} characters")));
         }
         Ok(s)
     }
@@ -693,7 +782,8 @@ impl<'a> Parser<'a> {
                 (Some(b' ' | b'\t' | b'\n'), _) => self.pos += 1,
                 (Some(b'\r'), Some(b'\n')) => self.pos += 2,
                 (Some(b'\r'), _) => {
-                    return Err(self.fail("carriage return without a line feed (line breaks are LF or CRLF)"));
+                    let reason = "carriage return without a line feed (line breaks are LF or CRLF)";
+                    return Err(self.fail(Code::LoneCarriageReturn, reason));
                 }
                 (Some(b'/'), Some(b'/')) => {
                     let end = self.src[self.pos..].find('\n').map_or(self.b.len(), |n| self.pos + n);
@@ -701,7 +791,7 @@ impl<'a> Parser<'a> {
                     self.pos = end;
                 }
                 (Some(b'/'), Some(b'*')) => self.block_comment()?,
-                (Some(b'/'), _) => return Err(self.fail("unexpected '/' (comments are // or /* */)")),
+                (Some(b'/'), _) => return Err(self.fail(Code::StraySlash, "unexpected '/' (comments are // or /* */)")),
                 _ => return Ok(()),
             }
         }
@@ -725,7 +815,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
-        Err(self.fail_at(open, "unterminated block comment"))
+        Err(self.fail_at(open, Code::UnterminatedComment, "unterminated block comment"))
     }
 
     /// Comments are where "Trojan Source" attacks hide reordered text, and where control
@@ -742,24 +832,26 @@ impl<'a> Parser<'a> {
         });
         match bad {
             Some((i, c)) if is_bidi(c) => {
-                Err(self
-                    .fail_at(start + i, format!("raw bidirectional control character U+{:04X} in comment", c as u32)))
+                let reason = format!("raw bidirectional control character U+{:04X} in comment", c as u32);
+                Err(self.fail_at(start + i, Code::BidiControl, reason))
             }
             Some((i, '\r')) => {
-                Err(self.fail_at(start + i, "carriage return without a line feed (line breaks are LF or CRLF)"))
+                let reason = "carriage return without a line feed (line breaks are LF or CRLF)";
+                Err(self.fail_at(start + i, Code::LoneCarriageReturn, reason))
             }
             Some((i, c)) => {
-                Err(self.fail_at(start + i, format!("raw control character U+{:04X} in comment", c as u32)))
+                let reason = format!("raw control character U+{:04X} in comment", c as u32);
+                Err(self.fail_at(start + i, Code::ControlCharacter, reason))
             }
             None => Ok(()),
         }
     }
 
-    /// An identifier key or a tag (`what`), within the string limit.
-    fn name(&mut self, what: &str) -> R<&'a str> {
+    /// An identifier key or a tag (`code`: the error if it is too long), within the string limit.
+    fn name(&mut self, code: Code) -> R<&'a str> {
         let start = self.pos;
         let word = self.ident();
-        self.check_length(word, start, what)
+        self.check_length(word, start, code)
     }
 
     fn ident(&mut self) -> &'a str {
@@ -783,19 +875,11 @@ impl<'a> Parser<'a> {
         self.pos >= self.b.len()
     }
 
-    fn expect(&mut self, c: u8, message: &str) -> R<()> {
-        if self.peek() != Some(c) {
-            return Err(self.fail(format!("{message}, found {}", describe(self.peek_char()))));
-        }
-        self.pos += 1;
-        Ok(())
+    fn fail(&self, code: Code, reason: impl Into<String>) -> Error {
+        Error::at(self.src, self.pos, code, reason)
     }
-
-    fn fail(&self, reason: impl Into<String>) -> Error {
-        Error::at(self.src, self.pos, reason)
-    }
-    fn fail_at(&self, at: usize, reason: impl Into<String>) -> Error {
-        Error::at(self.src, at, reason)
+    fn fail_at(&self, at: usize, code: Code, reason: impl Into<String>) -> Error {
+        Error::at(self.src, at, code, reason)
     }
 }
 

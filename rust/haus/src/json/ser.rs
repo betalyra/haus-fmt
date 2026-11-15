@@ -3,7 +3,7 @@
 
 use super::{Json, ToJson, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::{Codec, EncodeError, Encoder, Secret, Segment, Value};
+use crate::{Codec, EncodeError, Encoder, ErrorCode, Secret, Segment, Value};
 use std::collections::BTreeMap;
 
 type R = Result<Json, EncodeError>;
@@ -63,14 +63,14 @@ pub fn tag_name(tag: &str) -> R {
 
 /// A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
 pub fn no_plain_form(tag: &str) -> R {
-    Err(EncodeError::new(format!("{tag} has a field named _tag, so it has no plain JSON form")))
+    Err(EncodeError::new(ErrorCode::NoJsonForm, format!("{tag} has a field named _tag, so it has no plain JSON form")))
 }
 
 /// An unknown value: `{"_tag": "Hexagon"}`, with `"args"` in the lossless
 /// form if it has any (spec §16.3).
 pub fn unknown(u: &Unknown, e: Encoder) -> R {
     if !crate::ser::is_tag(&u.tag) {
-        return Err(EncodeError::new("not a tag name: A to Z, then letters, digits and _"));
+        return Err(EncodeError::new(ErrorCode::InvalidTag, "not a tag name: A to Z, then letters, digits and _"));
     }
     let tag = member("_tag", Json::String(u.tag.clone()));
     if u.args.is_empty() {
@@ -138,7 +138,8 @@ pub fn result<A, E>(
 /// `Secret a`: the value in full (the receiver needs it); an error says
 /// only that it isn't a valid `what`, never where in it (spec §15).
 pub fn secret<T>(s: &Secret<T>, e: Encoder, what: &str, f: impl FnOnce(&T, Encoder) -> R) -> R {
-    f(s.expose(), e).map_err(|_| EncodeError::new(format!("not a valid {what} (the value is hidden)")))
+    f(s.expose(), e)
+        .map_err(|_| EncodeError::new(ErrorCode::InvalidSecret, format!("not a valid {what} (the value is hidden)")))
 }
 
 /// A type with a codec: back to its base type, then written.
@@ -264,7 +265,7 @@ impl ToJson for Int {
 /// `Decimal`: a string, the normalized literal (`"19.90"`).
 impl ToJson for Decimal {
     fn to_json_with(&self, e: Encoder) -> R {
-        let n = crate::ser::normalized(self.as_str(), e.limits()).map_err(EncodeError::new)?;
+        let n = crate::ser::normalized(self.as_str(), e.limits())?;
         Ok(Json::String(n.into_owned()))
     }
 }

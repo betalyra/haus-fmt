@@ -7,7 +7,7 @@
 
 use super::{FromJson, Json, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::{Codec, DecodeError, Decoder, Secret, Value};
+use crate::{Codec, DecodeError, Decoder, EncodeError, ErrorCode as Code, Secret, Value};
 use std::collections::{BTreeMap, HashMap};
 
 type R<T> = Result<T, DecodeError>;
@@ -25,9 +25,18 @@ pub fn describe(json: &Json) -> String {
     }
 }
 
-/// `expected <what>, found <json>`.
+/// `expected <what>, found <json>`: JSON of another kind (`type-mismatch`).
 pub fn mismatch(what: &str, json: &Json) -> DecodeError {
-    DecodeError::new(format!("expected {what}, found {}", describe(json)))
+    let found = describe(json);
+    DecodeError::new(Code::TypeMismatch, format!("expected {what}, found {found}")).with_expected_found(what, found)
+}
+
+/// A number literal read from JSON that the limits don't take, or that isn't one.
+fn number_error(e: EncodeError) -> DecodeError {
+    match e.code {
+        Code::CannotEncode => e.into_decode().with_code(Code::InvalidNumber),
+        _ => e.into_decode(),
+    }
 }
 
 // ── objects ──────────────────────────────────────────────────
@@ -75,7 +84,7 @@ impl<'a> Object<'a> {
     /// A closed record has only the fields listed.
     pub fn closed(&self, known: &[&str]) -> R<()> {
         match self.fields().find(|k| !known.contains(k)) {
-            Some(k) => Err(DecodeError::new(format!("unknown member {k:?} in a closed record"))),
+            Some(k) => Err(DecodeError::new(Code::UnknownField, format!("unknown member {k:?} in a closed record"))),
             None => Ok(()),
         }
     }
@@ -83,7 +92,8 @@ impl<'a> Object<'a> {
     pub fn required<T>(&self, key: &str, f: impl FnOnce(&Json, Decoder) -> R<T>) -> R<T> {
         match self.index.get(key) {
             Some(v) => f(v, self.inner()?).map_err(|e| e.field(key)),
-            None => Err(DecodeError::new(format!("missing member {key}"))),
+            None => Err(DecodeError::new(Code::MissingField, format!("missing member {key}"))
+                .with_expected_found(format!("the member \"{key}\""), "none")),
         }
     }
 
@@ -101,19 +111,25 @@ impl<'a> Object<'a> {
             _ => Some("values"),
         };
         if let Some(other) = self.fields().find(|k| Some(*k) != name) {
-            return Err(DecodeError::new(format!("unexpected member {other:?}")));
+            return Err(DecodeError::new(Code::UnexpectedMember, format!("unexpected member {other:?}")));
         }
         let values: Vec<&Json> = match (name, name.and_then(|n| self.index.get(n))) {
             (None, _) => vec![],
-            (Some(n), None) => return Err(DecodeError::new(format!("missing member {n}"))),
+            (Some(n), None) => {
+                let e = DecodeError::new(Code::MissingMember, format!("missing member {n}"));
+                return Err(e.with_expected(format!("\"{n}\"")));
+            }
             (Some("value"), Some(v)) => vec![*v],
             (Some(_), Some(Json::Array(items))) if items.len() == N => items.iter().collect(),
             (Some(n), Some(Json::Array(items))) => {
-                return Err(DecodeError::new(format!("expected {N} values, found {}", items.len())).field(n));
+                let reason = format!("expected {N} values, found {}", items.len());
+                return Err(DecodeError::new(Code::WrongPayload, reason).field(n));
             }
-            (Some(n), Some(v)) => return Err(mismatch("an array", v).field(n)),
+            (Some(n), Some(v)) => {
+                return Err(mismatch("an array", v).with_code(Code::WrongPayload).field(n));
+            }
         };
-        values.try_into().map_err(|_| DecodeError::new("wrong number of values"))
+        values.try_into().map_err(|_| DecodeError::new(Code::WrongPayload, "wrong number of values"))
     }
 
     /// A tag the variant doesn't list, as an unknown value (spec §16.3): only
@@ -123,12 +139,13 @@ impl<'a> Object<'a> {
     /// `{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`.
     pub fn unknown(&self, tag: &str) -> R<Unknown> {
         if !crate::ser::is_tag(tag) {
-            return Err(DecodeError::new(format!("{tag:?} is not a tag name")).field("_tag"));
+            return Err(DecodeError::new(Code::InvalidTag, format!("{tag:?} is not a tag name")).field("_tag"));
         }
         let args = match (self.fields().collect::<Vec<_>>().as_slice(), self.index.get("args")) {
             ([], _) => vec![],
             (["args"], Some(Json::Array(items))) if items.is_empty() => {
-                return Err(DecodeError::new(r#"a tag without arguments has no "args""#).field("args"));
+                let reason = r#"a tag without arguments has no "args""#;
+                return Err(DecodeError::new(Code::LosslessForm, reason).field("args"));
             }
             // `Tag { … }`: the record is the payload's only level, as in the lossless form.
             (["args"], Some(Json::Array(items))) => {
@@ -139,7 +156,9 @@ impl<'a> Object<'a> {
                 let read = |(i, x)| Value::from_json_with(x, inner).map_err(|e| e.index(i).field("args"));
                 items.iter().enumerate().map(read).collect::<R<_>>()?
             }
-            (["args"], Some(other)) => return Err(mismatch("an array", other).field("args")),
+            (["args"], Some(other)) => {
+                return Err(mismatch("an array", other).with_code(Code::LosslessForm).field("args"));
+            }
             _ => {
                 let payload = self.members.iter().filter(|(k, _)| k != "_tag").cloned().collect();
                 let (limits, depth) = (self.d.limits(), self.d.depth());
@@ -156,8 +175,11 @@ pub fn variant<'a>(json: &'a Json, d: Decoder, what: &str) -> R<(&'a str, Object
     let object = Object::any(json, d, what)?;
     match object.index.get("_tag") {
         Some(Json::String(tag)) => Ok((tag, Object { tagged: true, ..object })),
-        Some(other) => Err(mismatch("a string", other).field("_tag")),
-        None => Err(DecodeError::new(format!(r#"expected an object with "_tag" ({what})"#))),
+        Some(other) => Err(mismatch("a string", other).with_code(Code::MissingMember).field("_tag")),
+        None => {
+            let e = DecodeError::new(Code::MissingMember, format!(r#"expected an object with "_tag" ({what})"#));
+            Err(e.with_expected(r#""_tag""#))
+        }
     }
 }
 
@@ -177,7 +199,7 @@ pub fn tag_name<'a>(json: &'a Json, what: &str) -> R<&'a str> {
 
 /// A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
 pub fn no_plain_form(tag: &str) -> DecodeError {
-    DecodeError::new(format!("{tag} has a field named _tag, so it has no plain JSON form"))
+    DecodeError::new(Code::NoJsonForm, format!("{tag} has a field named _tag, so it has no plain JSON form"))
 }
 
 // ── containers ───────────────────────────────────────────────
@@ -245,7 +267,7 @@ pub fn result<A, E>(
 /// `Secret a`: read as `a`, but an error says only that the value isn't a
 /// valid `what` (`Secret String`), never what was found or where in it (spec §15).
 pub fn secret<T>(json: &Json, d: Decoder, what: &str, f: impl FnOnce(&Json, Decoder) -> R<T>) -> R<Secret<T>> {
-    f(json, d).map(Secret::new).map_err(|_| DecodeError::new(format!("not a valid {what} (the value is hidden)")))
+    f(json, d).map(Secret::new).map_err(|_| crate::de::hidden(what))
 }
 
 /// A type with a codec: its base type first, then the codec (spec §13.4).
@@ -253,7 +275,7 @@ pub fn codec<C: Codec>(json: &Json, d: Decoder) -> R<C::Target>
 where
     C::Base: FromJson,
 {
-    C::decode(C::Base::from_json_with(json, d)?).map_err(DecodeError::new)
+    C::decode(C::Base::from_json_with(json, d)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
 }
 
 impl<T: FromJson> FromJson for Vec<T> {
@@ -321,10 +343,11 @@ impl FromJson for String {
 impl FromJson for Bytes {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         let Json::String(text) = json else { return Err(mismatch("a base64 string (Bytes)", json)) };
-        let bytes = base64::decode(text).ok_or_else(|| DecodeError::new("not base64 with padding (Bytes)"))?;
+        let bytes = base64::decode(text)
+            .ok_or_else(|| DecodeError::new(Code::InvalidBase64, "not base64 with padding (Bytes)"))?;
         let max = d.limits().max_string_length / 2;
         if bytes.len() > max {
-            return Err(DecodeError::new(format!("more than {max} bytes")));
+            return Err(DecodeError::new(Code::StringTooLong, format!("more than {max} bytes")));
         }
         Ok(Bytes(bytes))
     }
@@ -352,23 +375,30 @@ macro_rules! numbers {
         impl FromJson for $t {
             fn from_json_with(json: &Json, _: Decoder) -> R<Self> {
                 let Json::Number(text) = json else { return Err(mismatch(concat!("a number (", $name, ")"), json)) };
-                let n = integer(text)
-                    .ok_or_else(|| DecodeError::new(format!("expected a whole number ({}), found {text}", $name)))?;
-                n.parse().map_err(|_| DecodeError::new(format!(
-                    "{text} is out of range for {} ({} to {})", $name, <$t>::MIN, <$t>::MAX
-                )))
+                let n = integer(text).ok_or_else(|| {
+                    DecodeError::new(Code::NotAnInteger, format!("expected a whole number ({}), found {text}", $name))
+                        .with_expected_found($name, text.as_str())
+                })?;
+                n.parse().map_err(|_| out_of_range(text, $name, <$t>::MIN, <$t>::MAX))
             }
         }
     )*};
 }
 numbers!(i8 => "Int8", i16 => "Int16", i32 => "Int32", u8 => "UInt8", u16 => "UInt16", u32 => "UInt32");
 
+/// `text` is out of `name`'s range, `min` to `max`.
+fn out_of_range(text: &str, name: &str, min: impl std::fmt::Display, max: impl std::fmt::Display) -> DecodeError {
+    let range = format!("{name} ({min} to {max})");
+    DecodeError::new(Code::OutOfRange, format!("{text} is out of range for {range}")).with_expected_found(range, text)
+}
+
 /// The decimal integer in a JSON string (`Int`, `Int64`, `UInt64`).
 fn integer_string<'a>(json: &'a Json, name: &str) -> R<&'a str> {
     match json {
-        Json::String(text) => {
-            integer(text).ok_or_else(|| DecodeError::new(format!("expected a decimal integer in a string ({name})")))
-        }
+        Json::String(text) => integer(text).ok_or_else(|| {
+            let code = if super::is_number(text) { Code::NotAnInteger } else { Code::InvalidNumber };
+            DecodeError::new(code, format!("expected a decimal integer in a string ({name})"))
+        }),
         _ => Err(mismatch(&format!("a string holding a decimal integer ({name})"), json)),
     }
 }
@@ -378,9 +408,7 @@ macro_rules! strings {
         impl FromJson for $t {
             fn from_json_with(json: &Json, _: Decoder) -> R<Self> {
                 let n = integer_string(json, $name)?;
-                n.parse().map_err(|_| DecodeError::new(format!(
-                    "{n} is out of range for {} ({} to {})", $name, <$t>::MIN, <$t>::MAX
-                )))
+                n.parse().map_err(|_| out_of_range(n, $name, <$t>::MIN, <$t>::MAX))
             }
         }
     )*};
@@ -391,7 +419,7 @@ strings!(i64 => "Int64", u64 => "UInt64");
 impl FromJson for Int {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         let n = integer_string(json, "Int")?;
-        crate::ser::normalized(n, d.limits()).map_err(DecodeError::new)?;
+        crate::ser::normalized(n, d.limits()).map_err(number_error)?;
         Ok(Int(n.to_owned()))
     }
 }
@@ -402,10 +430,10 @@ impl FromJson for Decimal {
         match json {
             Json::String(text) if super::is_number(text) => {
                 let n = super::lossless::normalize_number(text);
-                crate::ser::normalized(&n, d.limits()).map_err(DecodeError::new)?;
+                crate::ser::normalized(&n, d.limits()).map_err(number_error)?;
                 Ok(Decimal(n))
             }
-            Json::String(_) => Err(DecodeError::new("expected a number in a string (Decimal)")),
+            Json::String(_) => Err(DecodeError::new(Code::InvalidNumber, "expected a number in a string (Decimal)")),
             _ => Err(mismatch("a string holding a number (Decimal)", json)),
         }
     }
@@ -421,8 +449,9 @@ macro_rules! floats {
                 match json {
                     Json::Number(text) => match text.parse::<$t>() {
                         Ok(x) if x.is_finite() => Ok(x),
-                        Ok(_) => Err(DecodeError::new(format!("{text} is too large for {}", $name))),
-                        Err(_) => Err(DecodeError::new(format!("{text} is not a {}", $name))),
+                        Ok(_) => Err(DecodeError::new(Code::OutOfRange, format!("{text} is too large for {}", $name))
+                            .with_expected_found($name, text.as_str())),
+                        Err(_) => Err(DecodeError::new(Code::TypeMismatch, format!("{text} is not a {}", $name))),
                     },
                     Json::String(s) if s == "NaN" => Ok(<$t>::NAN),
                     Json::String(s) if s == "Infinity" => Ok(<$t>::INFINITY),
@@ -441,7 +470,9 @@ macro_rules! times {
         impl FromJson for crate::time::$name {
             fn from_json_with(json: &Json, _: Decoder) -> R<Self> {
                 match json {
-                    Json::String(s) => crate::time::$name::new(s.as_str()).map_err(DecodeError::new),
+                    Json::String(s) => {
+                        crate::time::$name::new(s.as_str()).map_err(|e| DecodeError::new(Code::InvalidTime, e))
+                    }
                     _ => Err(mismatch(concat!("a string (", stringify!($name), ")"), json)),
                 }
             }

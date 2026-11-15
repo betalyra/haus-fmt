@@ -44,6 +44,7 @@ use crate::codegen::{STD_TIME, unknown_type};
 use crate::packages::{Manifest, Package, Packages};
 use crate::schema::{self, Attribute, Case, Field, Ty, TypeDef, deprecation, error};
 use crate::{Error, Result, read};
+use haus::ErrorCode as Code;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -114,7 +115,7 @@ impl RocConfig {
     /// Write [`RocConfig::generate`]'s module to `out`.
     pub fn write(&self, schema: &Path, module: &str, id: &str, out: &Path) -> Result<()> {
         let code = self.generate(schema, module, id)?;
-        fs::write(out, code).map_err(|e| Error::at(out, e))
+        fs::write(out, code).map_err(|e| Error::at(out, Code::ImportNotFound, e))
     }
 }
 
@@ -160,23 +161,23 @@ fn generate_file(file: &schema::File, text: &str, module: &str, options: &Option
     // The Roc modules of schema packages and codecs; those of haus come first.
     let mut roc_imports = vec![];
     for imp in &file.imports {
-        let fail = |reason: String| Error::from(error(text, imp.pos, reason));
+        let fail = |code: Code, reason: String| Error::from(error(text, imp.pos, code, reason));
         if imp.module == "std/time" {
             for (n, _) in &imp.names {
                 if !STD_TIME.contains(&n.as_str()) {
-                    return Err(fail(format!("std/time has no type {n}")));
+                    return Err(fail(Code::UnknownImport, format!("std/time has no type {n}")));
                 }
                 imports.insert(n.clone(), Source::Time);
             }
             continue;
         }
         let name = imp.module.rsplit_once('@').filter(|(n, _)| !n.is_empty()).map_or(imp.module.as_str(), |(n, _)| n);
-        let pkg: &Package = packages.find(name).map_err(fail)?;
+        let pkg: &Package = packages.find(name).map_err(|e| fail(e.code(), e.reason().to_owned()))?;
         let m = package_module(&pkg.manifest.name);
         roc_imports.push(format!("{}.{m}", pkg.krate));
         for (n, _) in &imp.names {
             if !pkg.types.contains_key(n) {
-                return Err(fail(format!("{name} has no type {n}")));
+                return Err(fail(Code::UnknownImport, format!("{name} has no type {n}")));
             }
             imports.insert(n.clone(), Source::Package { module: m.clone(), id: format!("{}#{n}", pkg.manifest.id()) });
         }
@@ -191,7 +192,7 @@ fn generate_file(file: &schema::File, text: &str, module: &str, options: &Option
         }))
         .collect();
     if let Some((cid, _)) = codecs.iter().find(|(cid, _)| !ids.contains(cid)) {
-        return Err(Error::new(format!("a codec for {cid}, but the schema has no such type")));
+        return Err(Error::new(Code::UnknownType, format!("a codec for {cid}, but the schema has no such type")));
     }
     roc_imports.extend(codecs.iter().map(|(_, m)| m.clone()));
     roc_imports.dedup();
@@ -368,8 +369,8 @@ struct Gen<'a> {
 }
 
 impl Gen<'_> {
-    fn fail<T>(&self, pos: usize, reason: impl Into<String>) -> Result<T> {
-        Err(error(self.text, pos, reason).into())
+    fn fail<T>(&self, pos: usize, code: Code, reason: impl Into<String>) -> Result<T> {
+        Err(error(self.text, pos, code, reason).into())
     }
 
     /// A type parameter in Roc: `a`, and its decoder `decode_a`, which must
@@ -552,7 +553,7 @@ impl Gen<'_> {
                     &format!("from_json_{p}"),
                     &format!("to_json_{p}"),
                 ),
-                None => return self.fail(*pos, format!("unknown type parameter {name}")),
+                None => return self.fail(*pos, Code::UnknownParameter, format!("unknown type parameter {name}")),
             },
             Ty::Record { .. } | Ty::Variant { .. } => self.inline(ty, hint)?,
             Ty::Name { name, args, pos } => self.named(name, args, *pos, hint)?,
@@ -581,10 +582,14 @@ impl Gen<'_> {
             } else {
                 // A generic type, applied: `Pair Int` is `Pair(Int)`, decoded with `decode_pair(v, Decode.int)`.
                 if let Some(reason) = arity(def.params.len()) {
-                    return self.fail(pos, reason);
+                    return self.fail(pos, Code::WrongArity, reason);
                 }
                 if self.codecs.contains_key(&id) {
-                    return self.fail(pos, format!("a codec for the generic type {name} is not supported in Roc"));
+                    return self.fail(
+                        pos,
+                        Code::WrongArity,
+                        format!("a codec for the generic type {name} is not supported in Roc"),
+                    );
                 }
                 let rs = args
                     .iter()
@@ -641,7 +646,7 @@ impl Gen<'_> {
             return self.prelude(name, args, pos, hint);
         };
         if let Some(reason) = arity(0) {
-            return self.fail(pos, reason);
+            return self.fail(pos, Code::WrongArity, reason);
         }
         Ok(match self.codecs.get(&id).cloned() {
             None => base,
@@ -660,10 +665,14 @@ impl Gen<'_> {
 
     fn prelude(&mut self, name: &str, args: &[Ty], pos: usize, hint: &str) -> Result<R> {
         let Some(&(_, params)) = schema::PRELUDE.iter().find(|(n, _)| *n == name) else {
-            return self.fail(pos, unknown_type(name));
+            return self.fail(pos, Code::UnknownType, unknown_type(name));
         };
         if args.len() != params {
-            return self.fail(pos, format!("{name} takes {params} argument(s), found {}", args.len()));
+            return self.fail(
+                pos,
+                Code::WrongArity,
+                format!("{name} takes {params} argument(s), found {}", args.len()),
+            );
         }
         // `I32` with `Decode.i32`, `FromJson.i32` and `ToJson.i32`, written as a number.
         let number = |ty: String| {
@@ -741,7 +750,13 @@ impl Gen<'_> {
                     F::Template(format!("ToJson.result({{x}}, {ato}, {eto})")),
                 )
             }
-            _ => return self.fail(pos, format!("{name} is only allowed as the whole type of a definition")),
+            _ => {
+                return self.fail(
+                    pos,
+                    Code::MisplacedStream,
+                    format!("{name} is only allowed as the whole type of a definition"),
+                );
+            }
         })
     }
 
@@ -751,6 +766,7 @@ impl Gen<'_> {
         if !self.names.insert(hint.to_owned()) {
             return self.fail(
                 ty.pos(),
+                Code::DuplicateType,
                 format!("the inline type here would be called {hint}, which is taken; give it a name"),
             );
         }
@@ -763,7 +779,7 @@ impl Gen<'_> {
                 Ok((r.ty.clone(), Bodies::of(&r)))
             }
             Ty::Variant { closed, cases, .. } => self.variant(hint, *closed, cases),
-            _ => self.fail(ty.pos(), "expected a record or a variant here"),
+            _ => self.fail(ty.pos(), Code::SchemaSyntax, "expected a record or a variant here"),
         };
         let inner = std::mem::replace(&mut self.nullables_used, outer);
         let (rty, body) = made?;
@@ -805,7 +821,7 @@ impl Gen<'_> {
             .collect::<Result<Vec<_>>>()?;
         match out.iter().enumerate().find(|(i, f)| out[..*i].iter().any(|g| g.0 == f.0)) {
             Some((_, (n, _, f, _))) => {
-                self.fail(f.pos, format!("fields {} and another one are both {n} in Roc", f.key))
+                self.fail(f.pos, Code::DuplicateField, format!("fields {} and another one are both {n} in Roc", f.key))
             }
             None => Ok(out),
         }
@@ -890,6 +906,7 @@ impl Gen<'_> {
         if let Some(case) = cases.iter().find(|c| !closed && c.tag == "Unknown") {
             return self.fail(
                 case.pos,
+                Code::DuplicateTag,
                 "an open variant can't have a tag Unknown in Roc (unknown tags decode to Unknown); close it",
             );
         }

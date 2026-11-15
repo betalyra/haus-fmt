@@ -53,8 +53,17 @@ fn text(fields: &Value, key: &str) -> String {
     }
 }
 
+/// Why `result` isn't a failure with `code` (spec §17), if it isn't.
+fn rejected(result: Result<Value, haus::Error>, code: &str) -> Option<String> {
+    match result {
+        Ok(v) => Some(format!("read as {}", canonical(&v))),
+        Err(e) if e.code().map(|c| c.as_str()) != Some(code) => Some(format!("{:?} ({e}), expected {code}", e.code())),
+        Err(_) => None,
+    }
+}
+
 /// `Ok { input, json }`: writing `input` gives `json`, reading `json` gives
-/// `input`. `Err { json }`: reading `json` fails.
+/// `input`. `Err { json, code }`: reading `json` fails with `code`.
 #[test]
 fn lossless() {
     let failures: Vec<String> = cases("lossless.cases.haus")
@@ -71,7 +80,7 @@ fn lossless() {
                         Err(e) => Some(format!("can't read it: {e}")),
                     },
                 },
-                ("Err", None) => haus::from_lossless_json(&json).ok().map(|v| format!("read as {}", canonical(&v))),
+                ("Err", None) => rejected(haus::from_lossless_json(&json), &text(fields, "code")),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))
@@ -81,7 +90,7 @@ fn lossless() {
 }
 
 /// `Read { json, output }`: reading `json` without a schema gives `output`.
-/// `Err { json }`: reading `json` fails.
+/// `Err { json, code }`: reading `json` fails with `code`.
 #[test]
 fn without_a_schema() {
     let failures: Vec<String> = cases("schemaless.cases.haus")
@@ -94,7 +103,7 @@ fn without_a_schema() {
                     Ok(v) => Some(format!("read as {}", canonical(&v))),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
-                ("Err", None) => haus::from_json(&json).ok().map(|v| format!("read as {}", canonical(&v))),
+                ("Err", None) => rejected(haus::from_json(&json), &text(fields, "code")),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))

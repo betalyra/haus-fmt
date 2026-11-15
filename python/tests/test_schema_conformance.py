@@ -22,6 +22,8 @@ class Case:
     type: str
     input: Value
     output: Value
+    code: str | None
+    """`Err`: the error code (spec §17) decoding must fail with."""
 
     @property
     def name(self) -> str:
@@ -29,13 +31,16 @@ class Case:
 
 
 def schema_cases(text: str) -> list[Case]:
-    """`Ok { type, input, output? }` and `Err { type, input }`."""
+    """`Ok { type, input, output? }` and `Err { type, input, code }`."""
     out: list[Case] = []
     for v in haus.parse_all(text):
         match v:
             case Variant(("Ok" | "Err") as tag, (Record(fields),)) if isinstance(t := fields.get("type"), String):
                 value = fields["input"]
-                out.append(Case(tag == "Ok", t.value, value, fields.get("output", value)))
+                code = fields.get("code")
+                code_text = code.value if isinstance(code, String) else None
+                assert (tag == "Err") == (code_text is not None), f"an Err case has a code: {haus.canonical(v)}"
+                out.append(Case(tag == "Ok", t.value, value, fields.get("output", value), code_text))
             case _:
                 raise ValueError(f"not a case: {haus.canonical(v)}")
     return out
@@ -46,8 +51,9 @@ def run(schema: Schema, case: Case) -> None:
     if case.ok:
         assert haus.canonical(t.encode(t.decode(case.input))) == haus.canonical(case.output)
     else:
-        with pytest.raises(HausDecodeError):
+        with pytest.raises(HausDecodeError) as e:
             t.decode(case.input)
+        assert e.value.code == case.code, e.value.reason
 
 
 CASES = [
@@ -121,3 +127,4 @@ def test_invalid_schema(name: str, reason: str) -> None:
     with pytest.raises(HausSchemaFileError) as e:
         compile_schema((SUITE / "invalid" / f"{name}.schema.haus").read_text("utf-8"))
     assert reason in e.value.reason
+    assert e.value.code == (SUITE / "invalid" / f"{name}.error").read_text("utf-8").strip()

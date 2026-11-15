@@ -53,7 +53,7 @@ def to_lossless_json(value: Value, *, limits: Limits = DEFAULT_LIMITS) -> str:
 
     Raises `haus.schema.HausEncodeError` if a value built in code isn't valid haus within `limits`.
     """
-    value = checked(value, limits)
+    value = checked(value, limits, json=True)
     make_room(limits.max_depth)
     return write_json(lossless(value))
 
@@ -71,7 +71,7 @@ def from_lossless_json(text: str | bytes, *, limits: Limits = DEFAULT_LIMITS) ->
 def to_lossless_json_lines(values: Iterable[Value], *, limits: Limits = DEFAULT_LIMITS) -> Iterator[str]:
     """Each value's lossless JSON followed by a line feed: JSON Lines."""
     for i, v in enumerate(values):
-        value = checked(v, limits, i)
+        value = checked(v, limits, i, json=True)
         make_room(limits.max_depth)
         yield write_json(lossless(value)) + "\n"
 

@@ -1,5 +1,7 @@
 ## The Roc runner of the JSON fuzzer (../README.md): `json_runner MODE FILE`
-## reads one case per line and prints one line each, `ok …` or `err <reason>`:
+## reads one case per line and prints one line each, `ok …` or
+## `err <place> <code> <reason>` (the place as spec §17 writes it, `$` for an
+## error in the JSON text, and the error code; `-` for none):
 ## `write` and `read` (lines `SUITE TYPE HEX`) write and read plain JSON with
 ## a type (the modules that gen_json_schemas.ts generates), `lossless-write`
 ## and `lossless-read` (lines `HEX`) the lossless form, `schemaless` reads
@@ -17,6 +19,7 @@ import haus.Value
 import haus.Decode
 import haus.Encode
 import haus.JsonValue
+import haus.ErrorCode
 import schemas.JsonSchemas
 
 main! : List(OsStr) => Try({}, _)
@@ -56,7 +59,7 @@ run = |mode, line| {
 ## `write` or `read` with a type.
 typed : Str, Str, Str, List(U8) -> Str
 typed = |mode, suite, ty, input| match Str.from_utf8(input) {
-	Err(_) => "err invalid UTF-8"
+	Err(_) => "err $ invalid-utf8 invalid UTF-8"
 	Ok(s) =>
 		if mode == "write" {
 			match Value.parse_all(s) {
@@ -65,11 +68,11 @@ typed = |mode, suite, ty, input| match Str.from_utf8(input) {
 					Written(Err(e)) => "err ${clean(e)}"
 					NoType => "crash no type ${suite}.${ty}"
 				}
-				_ => "err not a single value"
+				_ => "err $ - not a single value"
 			}
 		} else {
 			match JsonValue.parse(s) {
-				Err(e) => "err ${clean(e.reason)}"
+				Err(e) => "err $ ${e.code} ${clean(e.reason)}"
 				Ok(j) => match JsonSchemas.read(suite, ty, j) {
 					Read(Ok(v)) => "ok ${Encode.canonical(v)}"
 					Read(Err(e)) => "err ${clean(e)}"
@@ -82,14 +85,14 @@ typed = |mode, suite, ty, input| match Str.from_utf8(input) {
 ## The modes without a type.
 untyped : Str, List(U8) -> Str
 untyped = |mode, input| match Str.from_utf8(input) {
-	Err(_) => "err invalid UTF-8"
+	Err(_) => "err $ invalid-utf8 invalid UTF-8"
 	Ok(s) => match mode {
 		"lossless-write" => match Value.parse_all(s) {
 			Ok([v]) => match JsonValue.to_lossless_json(v) {
 				Ok(json) => "ok ${json}"
-				Err(e) => "err ${clean(Encode.message(e))}"
+				Err(e) => "err ${ErrorCode.place(e.path)} ${e.code} ${clean(e.reason)}"
 			}
-			_ => "err not a single value"
+			_ => "err $ - not a single value"
 		}
 		"lossless-read" => shown(JsonValue.from_lossless_json(s))
 		"schemaless" => shown(JsonValue.from_json(s))
@@ -100,8 +103,8 @@ untyped = |mode, input| match Str.from_utf8(input) {
 shown : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]) -> Str
 shown = |r| match r {
 	Ok(v) => "ok ${Encode.canonical(v)}"
-	Err(Syntax(e)) => "err ${clean(e.reason)}"
-	Err(Decode(e)) => "err ${clean(Decode.message(e))}"
+	Err(Syntax(e)) => "err $ ${e.code} ${clean(e.reason)}"
+	Err(Decode(e)) => "err ${ErrorCode.place(e.path)} ${e.code} ${clean(e.reason)}"
 }
 
 ## A reason on one line.

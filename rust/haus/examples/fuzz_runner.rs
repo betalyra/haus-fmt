@@ -1,6 +1,7 @@
 //! The fuzzing runner (fuzz/README.md): `fuzz_runner [--stream] DIR N` parses
 //! DIR/00000.haus … DIR/{N-1}.haus and prints one line each:
-//! `ok <values>` in the test-suite JSON encoding, or `err <line> <column> <reason>`.
+//! `ok <values>` in the test-suite JSON encoding, or `err <line> <column> <code> <reason>`
+//! (the error code of spec §17).
 //! With `--stream`, each file goes through the stream reader in chunks
 //! (see `chunks`); with `--canonical`, `ok` is followed by the canonical form
 //! of each value (spec §12) as a JSON array of strings.
@@ -27,7 +28,7 @@ fn canonical(v: &Value) -> Json {
 fn line(result: Result<Vec<Value>, haus::SyntaxError>) -> String {
     match result {
         Ok(values) => format!("ok {}", Json::Array(values.iter().map(canonical).collect())),
-        Err(e) => format!("err {} {} {}", e.line, e.column, e.reason.replace('\n', " ")),
+        Err(e) => format!("err {} {} {} {}", e.line, e.column, e.code, e.reason.replace(['\n', '\r'], " ")),
     }
 }
 

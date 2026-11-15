@@ -11,7 +11,7 @@
 
 use super::Json;
 use crate::ser::{check_key, check_tag, is_normalized, is_tag, normalized, supported};
-use crate::{DecodeError, EncodeError, Limits, Segment, Value};
+use crate::{DecodeError, EncodeError, ErrorCode as Code, Limits, Segment, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
@@ -43,14 +43,14 @@ pub(crate) fn from_lossless_at(json: &Json, limits: &Limits, depth: usize) -> Re
 
 /// Whether this binding supports `limits` (spec §7), as a decoding error.
 pub(crate) fn decode_supported(limits: &Limits) -> Result<(), DecodeError> {
-    limits.unsupported().map_or(Ok(()), |reason| Err(DecodeError::new(reason)))
+    limits.unsupported().map_or(Ok(()), |reason| Err(DecodeError::new(Code::UnsupportedDepth, reason)))
 }
 
 /// The depth inside one more container, after `depth`, if `limits` allow it.
 pub(crate) fn open(limits: &Limits, depth: usize) -> Result<usize, DecodeError> {
     decode_supported(limits)?;
     match depth >= limits.max_depth {
-        true => Err(DecodeError::new(format!("nesting deeper than {} levels", limits.max_depth))),
+        true => Err(DecodeError::new(Code::NestingTooDeep, format!("nesting deeper than {} levels", limits.max_depth))),
         false => Ok(depth + 1),
     }
 }
@@ -115,7 +115,7 @@ fn plain_scalar(json: &Json) -> Value {
 
 /// A member name as a record key: within the string limit (spec §7).
 fn key(k: &str, limits: &Limits) -> Result<(), DecodeError> {
-    check_key(k, limits).map_err(|e| DecodeError::new(e.reason).field(k))
+    check_key(k, limits).map_err(|e| e.into_decode().field(k))
 }
 
 fn tag(name: &str) -> Value {
@@ -156,14 +156,15 @@ impl Writer<'_> {
 
     fn scalar(&self, value: &Value) -> W {
         Ok(match value {
-            Value::Number(n) => {
-                object("num", Json::String(normalized(n, self.limits).map_err(EncodeError::new)?.into()))
-            }
+            Value::Number(n) => object("num", Json::String(normalized(n, self.limits)?.into())),
             Value::String(s) => Json::String(s.clone()),
             Value::Bytes(b) => {
                 if b.len() > self.limits.max_string_length / 2 {
                     let max = self.limits.max_string_length;
-                    return Err(EncodeError::new(format!("byte string longer than {max} characters")));
+                    return Err(EncodeError::new(
+                        Code::StringTooLong,
+                        format!("byte string longer than {max} characters"),
+                    ));
                 }
                 object("bytes", Json::String(hex(b)))
             }
@@ -258,15 +259,19 @@ impl Reader<'_> {
         match json {
             Json::String(n) if is_normalized(n) => match normalized(n, self.limits) {
                 Ok(_) => Ok(Value::Number(n.clone())),
-                Err(why) => Err(DecodeError::new(why)),
+                Err(e) => Err(e.into_decode()),
             },
-            Json::String(n) => Err(DecodeError::new(format!("{n:?} is not a normalized number literal"))),
-            _ => Err(super::de::mismatch("a string", json)),
+            Json::String(n) => {
+                Err(DecodeError::new(Code::LosslessNumber, format!("{n:?} is not a normalized number literal")))
+            }
+            _ => Err(super::de::mismatch("a string", json).with_code(Code::LosslessNumber)),
         }
     }
 
     fn record(&self, json: &Json, depth: usize) -> R {
-        let Json::Object(members) = json else { return Err(super::de::mismatch("an object", json)) };
+        let Json::Object(members) = json else {
+            return Err(super::de::mismatch("an object", json).with_code(Code::LosslessForm));
+        };
         let depth = open(self.limits, depth)?;
         // The reader already rejects duplicate names; a Json built in code may repeat one.
         let mut seen = HashSet::with_capacity(members.len());
@@ -277,7 +282,7 @@ impl Reader<'_> {
                     key(k, self.limits)?;
                     Ok((k.clone(), self.value(v, depth).map_err(|e| e.field(k))?))
                 }
-                false => Err(DecodeError::new(format!("the key {k:?} is used twice"))),
+                false => Err(DecodeError::new(Code::DuplicateKey, format!("the key {k:?} is used twice"))),
             })
             .collect::<Result<_, _>>()
             .map(Value::Record)
@@ -286,18 +291,28 @@ impl Reader<'_> {
     fn variant(&self, tag: &Json, args: &Json, depth: usize) -> R {
         let tag = tag_name(tag, self.limits)?;
         let args = match args {
-            Json::Array(items) if items.is_empty() => {
-                return Err(DecodeError::new(r#"a tag without arguments has no "args""#).field("args"));
-            }
+            Json::Array(items) if items.is_empty() => return Err(bad_args(args)),
             // `Tag { … }`: the record is the payload's only level, as in `to_lossless`.
             Json::Array(items) if matches!(items.as_slice(), [Json::Object(m)] if is_record(m)) => {
                 vec![self.value(&items[0], depth).map_err(|e| e.index(0).field("args"))?]
             }
             Json::Array(items) => self.items(items, depth).map_err(|e| e.field("args"))?,
-            _ => return Err(super::de::mismatch("an array", args).field("args")),
+            _ => return Err(bad_args(args)),
         };
         Ok(Value::Variant { tag, args })
     }
+}
+
+/// `"args"` that isn't a non-empty array. Kept out of [`Reader::variant`],
+/// which recurses: its frame stays small.
+#[cold]
+#[inline(never)]
+fn bad_args(args: &Json) -> DecodeError {
+    let e = match args {
+        Json::Array(_) => DecodeError::new(Code::LosslessForm, r#"a tag without arguments has no "args""#),
+        _ => super::de::mismatch("an array", args).with_code(Code::LosslessForm),
+    };
+    e.field("args")
 }
 
 fn is_record(members: &[(String, Json)]) -> bool {
@@ -305,7 +320,7 @@ fn is_record(members: &[(String, Json)]) -> bool {
 }
 
 fn mismatch(json: &Json) -> DecodeError {
-    super::de::mismatch(FORMS, json)
+    super::de::mismatch(FORMS, json).with_code(Code::LosslessForm)
 }
 
 /// `"Circle"`: a tag name, within the string limit.
@@ -313,24 +328,27 @@ fn tag_name(json: &Json, limits: &Limits) -> Result<String, DecodeError> {
     match json {
         Json::String(t) if is_tag(t) => match check_tag(t, limits) {
             Ok(()) => Ok(t.clone()),
-            Err(e) => Err(DecodeError::new(e.reason).field("tag")),
+            Err(e) => Err(e.into_decode().field("tag")),
         },
         Json::String(t) => {
-            Err(DecodeError::new(format!("{t:?} is not a tag name (A to Z, then letters, digits and _)")).field("tag"))
+            let reason = format!("{t:?} is not a tag name (A to Z, then letters, digits and _)");
+            Err(DecodeError::new(Code::InvalidTag, reason).field("tag"))
         }
-        _ => Err(super::de::mismatch("a string", json).field("tag")),
+        _ => Err(super::de::mismatch("a string", json).with_code(Code::InvalidTag).field("tag")),
     }
 }
 
 /// `"0b34ff"`: two lowercase hex digits per byte.
 fn bytes(json: &Json) -> R {
-    let Json::String(text) = json else { return Err(super::de::mismatch("a string", json)) };
+    let Json::String(text) = json else {
+        return Err(super::de::mismatch("a string", json).with_code(Code::LosslessBytes));
+    };
     let digit = |c: u8| match c {
         b'0'..=b'9' => Some(c - b'0'),
         b'a'..=b'f' => Some(c - b'a' + 10),
         _ => None,
     };
-    let invalid = || DecodeError::new("expected two lowercase hex digits per byte");
+    let invalid = || DecodeError::new(Code::LosslessBytes, "expected two lowercase hex digits per byte");
     if !text.len().is_multiple_of(2) {
         return Err(invalid());
     }

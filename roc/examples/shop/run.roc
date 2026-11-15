@@ -62,6 +62,6 @@ main! = |_args| {
 }
 
 describe_error = |error| match error {
-	Syntax({ reason, line, column }) => "syntax error: ${reason} at ${line.to_str()}:${column.to_str()}"
+	Syntax({ reason, line, column, .. }) => "syntax error: ${reason} at ${line.to_str()}:${column.to_str()}"
 	Decode(e) => "decode error: ${Decode.message(e)}"
 }

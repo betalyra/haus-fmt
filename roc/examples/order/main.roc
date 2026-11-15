@@ -14,6 +14,7 @@ import pf.Path
 import pf.Stdout
 import haus.Decode
 import haus.Encode
+import haus.Value
 import CivilDate
 import Order
 import Typed
@@ -70,7 +71,7 @@ status = |s| match s {
 	Pending | Cancelled => "status: not on its way"
 }
 
-outcome : Str, Try(a, [Decode(Decode.Error), Syntax({ reason : Str, line : U64, column : U64 })]) -> Str
+outcome : Str, Try(a, [Decode(Decode.Error), Syntax(Value.ParseError)]) -> Str
 outcome = |what, result| match result {
 	Ok(_) => "${what}: accepted"
 	Err(Decode(e)) => "${what}: ${Decode.message(e)}"

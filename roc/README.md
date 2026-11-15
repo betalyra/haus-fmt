@@ -4,7 +4,7 @@ Built against the Roc nightly compiler (2026-11-03) and basic-cli 0.26.0.
 
 | Path | Contents |
 |---|---|
-| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Streaming` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16) |
+| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Streaming` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16), `ErrorCode` (error codes, spec §17) |
 | [`examples/`](examples) | The same examples as in TypeScript and Rust, on the same files in [`../examples`](../examples), plus `shop`, a Roc showcase |
 | [`schema-test/`](schema-test) | Generated: the schema conformance suite ([`../test-suite/schema`](../test-suite/schema)) as Roc tests |
 | [`json-test/`](json-test) | Generated: the JSON suite ([`../test-suite/json`](../test-suite/json)) as Roc tests |
@@ -67,7 +67,8 @@ is `List_(a)`, `type F64 = Float64` is `F64_`); its functions keep their
 names (`decode_list`).
 
 A `Secret` is written in full when encoded, but a decode error inside it names
-only its place and type (`.pin: not a valid Secret Int (the value is hidden)`).
+only its place and type (`.pin: not a valid Secret Int (the value is hidden)`),
+with the code `invalid-secret`.
 
 `Encode.to_str` (and `Encode.stream`) check what they write, so they return
 a `Try(Str, Encode.Error)`. What a generated encoder gives is always fine;
@@ -90,6 +91,58 @@ fit, the schema says `Int64` (out of range is a decode error).
 A codec is a Roc module with a `Target` type, `decode : Base -> Try(Target, Str)`
 and `encode : Target -> Base` ([`Cents.roc`](examples/order/Cents.roc)), chosen
 with `--codec ID=MODULE` when generating.
+
+## Error codes
+
+Every error has a code (spec §17): a short name for the mistake, such as
+`payload-newline` or `missing-field`, the same in every binding. It is a
+`code : Str` field next to the message (`reason`) of each error record:
+
+| Error | Fields | Code, for example |
+|---|---|---|
+| `Value.ParseError` (parser, stream reader, JSON text) | `code`, `reason`, `line`, `column` | `missing-comma`, `null-literal`, `json-syntax` |
+| `Decode.Error` (decoding, reading JSON) | `code`, `reason`, `path` | `type-mismatch`, `unknown-tag`, `missing-member` |
+| `Encode.Error` (writing haus or JSON) | `code`, `reason`, `path` | `cannot-encode`, `invalid-tag`, `string-too-long` |
+
+```roc
+match Value.parse_all("[1 2]") {
+    Err(e) => "${e.reason} (${e.code}): ${ErrorCode.hint(e.code)}"
+    # "expected ',' or ']', found '2' (missing-comma): Add a comma between the two values."
+    Ok(_) => "parsed"
+}
+```
+
+`ErrorCode` has a constant for each code (`ErrorCode.missing_comma ==
+"missing-comma"`), `ErrorCode.all`, `ErrorCode.hint(code)` (the catalogue's
+fix), `ErrorCode.category(code)` and `ErrorCode.docs(code)`
+(`https://haus-fmt.org/docs/errors#missing-comma`). `Value.error_json`,
+`Decode.error_json` and `Encode.error_json` give an error's JSON form:
+
+```json
+{"code":"missing-comma","message":"expected ',' or ']', found '2'","line":1,"column":4,"hint":"Add a comma between the two values.","docs":"https://haus-fmt.org/docs/errors#missing-comma"}
+```
+
+A decode or encode error has a `path` instead of a line and column, as spec
+§17 writes it (`ErrorCode.place`): `$.items[2].price`, a variant's payload
+value `i` as `[i]` (`(Money)[1]` in this binding's messages), a record
+payload as `[0]`. A key that isn't an identifier is written as a JSON
+string, `["pt-BR"]`, in both. Invalid UTF-8 is reported where it is.
+
+The codes are those of the reference parser and decoder (spec/lean) where a
+mistake could be read two ways: a `(` or `{` after a tag without payload on
+an earlier line is `payload-newline`, a closing bracket `unexpected-closer`;
+`+1` and `.5` are `invalid-number`, `null`, `true` and other lowercase words
+`null-literal`, `boolean-literal` and `bare-identifier`; a number is checked
+as a literal, then for what follows it, then its length, then its exponent;
+for `Bool`, `Maybe`, `Result` and closed variants an unknown tag is
+`unknown-tag`, a listed one with the wrong payload `wrong-payload`; anything
+inside a `Secret` is `invalid-secret`. A codec's error is a `type-mismatch`.
+
+`ErrorCode.roc` is partly generated from the catalogue,
+[`../spec/errors.haus`](../spec/errors.haus), by
+`scripts/gen_error_codes.py` (the part between its markers). A test in
+`ConformanceTest.roc` reads the catalogue with this parser and fails when the
+module is out of date; the conformance suites check each rejection's code.
 
 ## Streams
 
@@ -226,15 +279,20 @@ cd json-test && roc test main.roc
 `scripts/gen_conformance.py`: for each valid file the values, the canonical
 forms, the hash (`.hash`, also computed with `Encode.HashAll` on the values
 streamed) and the stream reader giving the same values in chunks of any
-size; for each invalid file a rejection, also by the stream reader, whose
-error positions after a byte order mark are the whole-file parser's.
+size; for each invalid file a rejection with the code of its `.error`, also
+by the stream reader, whose error positions after a byte order mark are the
+whole-file parser's; and the check that `ErrorCode.roc` matches
+`../spec/errors.haus` (after changing the catalogue, run
+`python3 scripts/gen_error_codes.py`). `ErrorCode.roc`'s own tests run with
+those of every module that imports it.
 `TimeTest.roc` holds the same std/time cases as the TypeScript and Rust
 bindings.
 
 [`schema-test/`](schema-test) runs the schema conformance suite
 (`../test-suite/schema`, spec §15): `scripts/gen_schema_conformance.py`
 generates a module per schema with `haus-gen` (so it needs Rust) and
-`SchemaTest.roc` with one `expect` per case. A schema with attributes also
+`SchemaTest.roc` with one `expect` per case (an `Err` case must fail with
+its `code`). A schema with attributes also
 gets a module generated without them (`AttributesBare.roc`), which must give
 the same results (attributes don't matter, spec §15). Re-run it after changing
 the suite or the generator:
@@ -247,5 +305,5 @@ python3 scripts/gen_schema_conformance.py
 the same way: `scripts/gen_json_conformance.py` generates `Plain.roc` for
 `plain.schema.haus` with `haus-gen roc --json`, a JSON module for each schema
 of the schema suite (they only have to compile), and `JsonTest.roc` with one
-`expect` per plain, lossless and schemaless case and per `valid/NAME.json`
-(each a lossless case).
+`expect` per plain, lossless and schemaless case (an `Err` case with its
+`code`) and per `valid/NAME.json` (each a lossless case).

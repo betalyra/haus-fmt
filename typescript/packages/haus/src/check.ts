@@ -15,6 +15,7 @@
  */
 import { deprecationNote, type Case, type Field, type Instance, type RecordType, type SchemaFile, type StdType, type Type, type VariantType } from "./schema-file.js"
 import type { ErrorCode } from "./errors.js"
+import { toFloat } from "./float.js"
 import { checkStdTime } from "./std-time.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
@@ -264,11 +265,13 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
       case "Float32":
       case "Float64":
         if (v.kind === "variant" && ["NaN", "Infinity", "NegInfinity"].includes(v.tag) && v.args.length === 0) return
-        if (v.kind !== "number") mismatch(v, type)
+        if (v.kind !== "number") return mismatch(v, type)
+        // Rounded to the nearest value; a number too large for the type is an error (spec §15).
+        if (toFloat(v.text, name) === undefined) report("error", "out-of-range", `${v.text} is too large for ${name}`, ...at(v))
         return
       case "Decimal":
-        if (v.kind !== "number") return mismatch(v, type)
-        if (/^-?0[xb]/.test(v.text)) report("error", "type-mismatch", "a Decimal is written in decimal digits, not hex or binary", ...at(v))
+        // Any number: `0xFF` is 255, as the parser reads it (spec §2), and decodes as such.
+        if (v.kind !== "number") mismatch(v, type)
         return
       default: {
         if (v.kind !== "number") return mismatch(v, type)

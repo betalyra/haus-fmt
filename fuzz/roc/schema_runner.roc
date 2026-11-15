@@ -2,7 +2,8 @@
 ## reads lines `SUITE TYPE HEX` (a value's haus text as hex-encoded UTF-8),
 ## decodes the value with the type of the suite's schema (the modules that
 ## gen_schemas.ts generates), encodes the result, and prints one line each:
-## `ok <canonical form>` or `err <reason>`.
+## `ok <canonical form>` or `err <place> <code> <reason>`, with the place as
+## spec §17 writes it (`$.items[2].price`) and the error code (`-` for none).
 app [main!] {
 	haus: "../../roc/package/main.roc",
 	schemas: "../.build/roc-schema/main.roc",
@@ -15,6 +16,7 @@ import pf.Stdout
 import haus.Value
 import haus.Decode
 import haus.Encode
+import haus.ErrorCode
 import schemas.Schemas
 
 main! : List(OsStr) => Try({}, _)
@@ -56,14 +58,18 @@ run = |line| {
 		Ok(input) => match Value.parse_all(input) {
 			Ok([v]) => match Schemas.roundtrip(suite, ty, v) {
 				Decoded(Ok(encoded)) => "ok ${Encode.canonical(encoded)}"
-				Decoded(Err(e)) => "err ${Decode.message(e)}"
+				Decoded(Err(e)) => "err ${ErrorCode.place(e.path)} ${e.code} ${one_line(e.reason)}"
 				NoType => "crash no type ${suite}.${ty}"
 			}
-			_ => "err $ not a single value"
+			_ => "err $ - not a single value"
 		}
-		Err(_) => "err $ invalid UTF-8"
+		Err(_) => "err $ - invalid UTF-8"
 	}
 }
+
+## A reason on one line.
+one_line : Str -> Str
+one_line = |s| s.replace_each("\r", "\\r").replace_each("\n", "\\n")
 
 ## The index of the next space from `from`, or the end.
 space : List(U8), U64 -> U64
