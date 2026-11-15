@@ -1,6 +1,7 @@
 import Haus.Json.WellFormed
-import Haus.Json.PlainRoundTrip
+import Haus.Json.PlainWellFormed
 import Haus.Json.TextRoundTrip
+import Haus.Json.PlainFits
 import Haus.Secure
 
 /-!
@@ -8,11 +9,13 @@ import Haus.Secure
 
 The round trips of `Haus.Json.Lossless` and `Haus.Json.PlainRoundTrip` assume
 a well-formed value; every value the reference parser returns is one
-(`parse_wf`). So they hold for every value of every haus text
-(`lossless_parsed`, `plain_parsed`), and, with `Haus.Json.TextRoundTrip`,
-through JSON text too: reading the written text gives the value back
-(`lossless_text_parsed`, `plain_text_parsed`) when the JSON is within the
-limits.
+(`parse_wf`), and has no duplicate keys (`parse_uniqueKeys`). So they hold
+for every value of every haus text (`lossless_parsed`, `plain_parsed`), and,
+with `Haus.Json.TextRoundTrip`, through JSON text too: the JSON written is
+well formed (`lossless_wellFormed`, `toJson_wellFormed`) and, for a value
+within the limits, within the JSON limits (`lossless_fits`, `toJson_fits`),
+so reading its text gives the value back (`lossless_text_parsed`,
+`plain_text_parsed`).
 -/
 
 namespace Haus
@@ -20,39 +23,17 @@ open Schema
 
 namespace JSON
 
-/-- The lossless form of a value without duplicate keys is well-formed JSON. -/
-theorem lossless_wellFormed {v : Value} (h : UniqueKeys v) : WellFormed (lossless v) := by
-  induction h with
-  | num s => exact .obj _ (by simp) (by simpa using .str _)
-  | str s => exact .str _
-  | bytes bs => exact .obj _ (by simp) (by simpa using .str _)
-  | arr xs _ ih =>
-    rw [lossless, losslessList_eq]
-    exact .arr _ (by simpa using ih)
-  | record fs hnd _ ih =>
-    rw [lossless, losslessFields_eq]
-    have hin : WellFormed (.obj (fs.map fun kv => (kv.1, lossless kv.2))) := by
-      refine .obj _ (by rw [List.map_map]; exact hnd) ?_
-      intro m hm
-      obtain ⟨kv, hkv, rfl⟩ := List.mem_map.mp hm
-      exact ih kv hkv
-    exact .obj _ (by simp) (by simpa using hin)
-  | variant t xs _ ih =>
-    rw [lossless, losslessList_eq]
-    cases xs with
-    | nil => exact .obj _ (by simp) (by simpa using .str _)
-    | cons x xs =>
-      exact .obj _ (by simp) (by simpa using ⟨.str _, .arr _ (by simpa using ih)⟩)
-
 /--
 **Lossless JSON text round trip** (§16.2): reading the text of the lossless
 form of a well-formed value without duplicate keys gives the value back, when
-the value and its lossless JSON are within the limits.
+the value is within the limits. Its lossless JSON is then too
+(`lossless_fits`), when the limits leave room for the lossless form's member
+names and number literals (`LosslessOk`, true of the defaults).
 -/
 theorem readLossless_writeLossless {L : Limits} {v : Value} (hwf : v.wf = true) (hu : UniqueKeys v)
-    (hfit : v.fits L = true) (hf : Fits L (jsonDepth L) (lossless v)) :
+    (hL : L.LosslessOk) (hfit : v.fits L = true) :
     readLossless L (writeLossless v) = .ok v := by
-  simp [readLossless, writeLossless, parse_write (lossless_wellFormed hu) hf, bind, Except.bind,
+  simp [readLossless, writeLossless, parse_write (lossless_wellFormed hu) (lossless_fits hL hfit), bind, Except.bind,
     fromLossless_lossless v hwf, checkFits, hfit]
 
 end JSON
@@ -71,25 +52,32 @@ theorem plain_parsed {L : Limits} {input : Text} {vs : List Value} (h : Parser.p
     (hx : decode env t v = .ok x) (hj : toJson env t x = .ok j) : fromJson env t j = .ok x :=
   plain_round_trip hx (parse_wf h v hv) hj
 
-/-- **Plain JSON text round trip** (§16.3): reading the text of a decoded value's plain JSON gives the value back. -/
+/--
+**Plain JSON text round trip** (§16.3): reading the text of a decoded value's
+plain JSON gives the value back, when the value has no duplicate keys and its
+encoding is within the limits. The JSON is well formed (`toJson_wellFormed`)
+and within the JSON limits (`toJson_fits`), when the limits leave room for
+plain JSON's member names, numbers in strings and number tokens (`PlainOk`,
+true of the defaults).
+-/
 theorem readPlain_write {L : Limits} {env : Env} {t : Ty} {v : Value} {x : Typed} {j : JSON}
-    (h : decode env t v = .ok x) (hv : v.wf = true) (hj : toJson env t x = .ok j) (hw : JSON.WellFormed j)
-    (hf : JSON.Fits L (JSON.jsonDepth L) j) (hfit : (encode x).fits L = true) :
+    (h : decode env t v = .ok x) (hv : v.wf = true) (hu : UniqueKeys v) (hj : toJson env t x = .ok j)
+    (hL : L.PlainOk) (hfit : (encode x).fits L = true) :
     readPlain L env t (JSON.write j) = .ok x := by
-  simp [readPlain, JSON.parse_write hw hf, bind, Except.bind, plain_round_trip h hv hj, Except.mapError, hfit]
+  simp [readPlain, JSON.parse_write (toJson_wellFormed h hu hj) (toJson_fits hL h hfit hj), bind, Except.bind, plain_round_trip h hv hj, Except.mapError, hfit]
 
-/-- The lossless text round trip for every parsed value. -/
+/-- The lossless text round trip for every parsed value within the limits it is read with. -/
 theorem lossless_text_parsed {L L' : Limits} {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs)
-    {v : Value} (hv : v ∈ vs) (hfit : v.fits L' = true) (hf : JSON.Fits L' (JSON.jsonDepth L') (JSON.lossless v)) :
+    {v : Value} (hv : v ∈ vs) (hL : L'.LosslessOk) (hfit : v.fits L' = true) :
     JSON.readLossless L' (JSON.writeLossless v) = .ok v :=
-  JSON.readLossless_writeLossless (parse_wf h v hv) (parse_uniqueKeys h v hv) hfit hf
+  JSON.readLossless_writeLossless (parse_wf h v hv) (parse_uniqueKeys h v hv) hL hfit
 
-/-- The plain text round trip for every parsed value a type decodes. -/
+/-- The plain text round trip for every parsed value a type decodes, within the limits it is read with. -/
 theorem plain_text_parsed {L L' : Limits} {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs)
     {v : Value} (hv : v ∈ vs) {env : Env} {t : Ty} {x : Typed} {j : JSON}
-    (hx : decode env t v = .ok x) (hj : toJson env t x = .ok j) (hw : JSON.WellFormed j)
-    (hf : JSON.Fits L' (JSON.jsonDepth L') j) (hfit : (encode x).fits L' = true) :
+    (hx : decode env t v = .ok x) (hj : toJson env t x = .ok j)
+    (hL : L'.PlainOk) (hfit : (encode x).fits L' = true) :
     readPlain L' env t (JSON.write j) = .ok x :=
-  readPlain_write hx (parse_wf h v hv) hj hw hf hfit
+  readPlain_write hx (parse_wf h v hv) (parse_uniqueKeys h v hv) hj hL hfit
 
 end Haus

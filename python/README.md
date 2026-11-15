@@ -36,7 +36,7 @@ haus.parse("{ ok: true }")
 # record keys (booleans are the variants True / False) at 1:7
 ```
 
-Limits are configurable with `haus.Limits(max_depth=…, max_number_length=…, max_exponent=…, max_string_length=…)`.
+Limits are configurable with `haus.Limits(max_depth=…, max_number_length=…, max_exponent=…, max_string_length=…)` (spec §7); the string limit counts record keys and tags too. `max_depth` is at most `haus.MAX_SUPPORTED_DEPTH`, 512: a larger one is a `ValueError` naming the maximum when the `Limits` are made. The parser, the decoders and the JSON mappings recurse, a few Python frames per level, so they raise Python's recursion limit when it is too low for the depth (never lowering it): 512 levels work even when called from deep inside an application. The canonical form doesn't recurse.
 
 ## Streams
 
@@ -160,7 +160,7 @@ A secret's errors give its place and type, never the value or a path into it (a 
 
 ### Limits
 
-Decoding is linear in the input whatever the schema (spec §9.8): a variant's case is one lookup on its tag, the nesting depth is limited (`limits=haus.Limits(max_depth=…)`, 256 by default, for recursive types too), and every call has a work budget (`max_steps`; by default 16 steps per value when decoding and 16 Mi when encoding). Encoding detects values that contain themselves, and checks raw values (`Any`, `Unknown`) against the parser's limits and the value syntax before writing them.
+Decoding is linear in the input whatever the schema (spec §9.8): a variant's case is one lookup on its tag, the nesting depth is limited (`limits=haus.Limits(max_depth=…)`, 256 by default and at most 512, for recursive types too), and every call has a work budget (`max_steps`; by default 16 steps per value when decoding and 16 Mi when encoding). Encoding detects values that contain themselves, and checks raw values (`Any`, `Unknown`) against the parser's limits and the value syntax before writing them.
 
 ### Streams
 

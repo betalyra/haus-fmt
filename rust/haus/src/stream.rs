@@ -93,8 +93,10 @@ impl Reader {
         }
     }
 
-    /// Add a chunk; returns the values it completed.
+    /// Add a chunk; returns the values it completed. Fails at once if
+    /// `options.limits.max_depth` is more than [`crate::MAX_SUPPORTED_DEPTH`].
     pub fn push(&mut self, chunk: &[u8]) -> Result<Vec<Value>, SyntaxError> {
+        self.supported()?;
         self.buf.extend_from_slice(chunk);
         if !self.started && !self.buf.is_empty() {
             if self.buf.len() < 3 && b"\xEF\xBB\xBF".starts_with(&self.buf) {
@@ -111,6 +113,7 @@ impl Reader {
 
     /// The input is complete: returns the last value, if it had no comma after it.
     pub fn finish(mut self) -> Result<Vec<Value>, SyntaxError> {
+        self.supported()?;
         let mut out = self.scan(true)?;
         let text = self.text(self.buf.len())?;
         let rest = parse_rest(text, &self.options.limits, self.at_file_start()).map_err(|e| e.from(self.origin))?;
@@ -121,6 +124,14 @@ impl Reader {
         }
         out.extend(rest);
         Ok(out)
+    }
+
+    /// Whether this binding supports the limits (spec §7).
+    fn supported(&self) -> Result<(), SyntaxError> {
+        match self.options.limits.unsupported() {
+            Some(reason) => Err(SyntaxError::at("", 0, reason)),
+            None => Ok(()),
+        }
     }
 
     /// Finds the commas between values and parses what is before them.

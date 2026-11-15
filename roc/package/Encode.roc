@@ -22,9 +22,13 @@ Encode := [].{
 
 	## `to_str` for a reader with other limits (see `Value.Limits`): the value
 	## must be within them, and an integer longer than the number limit is
-	## written in hex if that fits.
+	## written in hex if that fits. Fails if `limits.max_depth` is more than
+	## `Value.max_supported_depth`.
 	to_str_with : Value, Value.Limits -> Try(Str, Error)
-	to_str_with = |value, limits| line(value, 0, limits).map_ok(bytes_to_str)
+	to_str_with = |value, limits| {
+		supported(limits)?
+		line(value, 0, limits).map_ok(bytes_to_str)
+	}
 
 	## `.extra[1]: not a number literal`, or just the reason at the root.
 	message : Error -> Str
@@ -90,6 +94,7 @@ Encode := [].{
 	## `stream` for a reader with other limits (see `to_str_with`).
 	stream_with : List(Value), Value.Limits -> Try(Str, Error)
 	stream_with = |values, limits| {
+		supported(limits)?
 		var $out = []
 		var $i = 0.U64
 		for v in values {
@@ -267,6 +272,10 @@ within = |result, segment| result.map_err(|{ reason, path }| { reason, path: "${
 fail : Str -> Try(a, Error)
 fail = |reason| Err({ reason, path: "" })
 
+## Whether this binding supports `limits` (spec §7).
+supported : Value.Limits -> Try({}, Error)
+supported = |limits| Value.check_limits(limits).map_err(|reason| { reason, path: "" })
+
 ## A value inside `depth` containers (records, arrays, payloads).
 line : Value, U64, Value.Limits -> Try(List(U8), Error)
 line = |value, depth, limits| match value {
@@ -290,6 +299,7 @@ line = |value, depth, limits| match value {
 		if !is_tag(name) {
 			fail("not a tag name: A to Z, then letters, digits and _")
 		} else {
+			check_text(name, "tag", limits)?
 			match args {
 				[] => Ok(name.to_utf8())
 				[Rec(fields)] => Ok(name.to_utf8().append(' ').concat(within(record_line(fields, depth, limits), "(${name})")?))
@@ -331,7 +341,7 @@ record_line = |fields, depth, limits| {
 	}
 	var $out = []
 	for (k, v) in fields {
-		within(check_length(k, limits), ".${k}")?
+		within(check_text(k, "key", limits), ".${k}")?
 		entry = key(k).concat([':', ' ']).concat(within(line(v, depth + 1, limits), ".${k}")?)
 		$out = if ($out.is_empty()) entry else $out.concat([',', ' ']).concat(entry)
 	}
@@ -340,10 +350,14 @@ record_line = |fields, depth, limits| {
 
 ## A string within the string limit, counted in code points.
 check_length : Str, Value.Limits -> Try({}, Error)
-check_length = |s, limits| {
+check_length = |s, limits| check_text(s, "string", limits)
+
+## A string, key or tag (`what`) within the string limit (spec §7), counted in code points.
+check_text : Str, Str, Value.Limits -> Try({}, Error)
+check_text = |s, what, limits| {
 	b = s.to_utf8()
 	too_long = b.len() > limits.max_string_length and b.count_if(|c| c < 0x80 or c >= 0xC0) > limits.max_string_length
-	if (too_long) fail("string longer than ${limits.max_string_length.to_str()} characters") else Ok({})
+	if (too_long) fail("${what} longer than ${limits.max_string_length.to_str()} characters") else Ok({})
 }
 
 ## A tag name: `[A-Z][A-Za-z0-9_]*`.
@@ -797,5 +811,14 @@ expect Encode.to_str_with(Num("1000000000000"), { ..small, max_number_length: 12
 expect Encode.to_str_with(Num("1e99"), small) == Ok("1e99") and error_with(Num("1e100")) == "exponent larger than 99"
 expect Encode.to_str_with(Text("abcd"), small) == Ok("\"abcd\"") and error_with(Text("abcde")) == "string longer than 4 characters"
 expect Encode.stream_with([Num("1"), Num("1e100")], small) == Err({ reason: "exponent larger than 99", path: "[1]" })
+# Record keys and tags count against the string limit.
+expect Encode.to_str_with(Rec([("abcd", Num("1"))]), small) == Ok("{ abcd: 1 }") and error_with(Rec([("abcde", Num("1"))])) == ".abcde: key longer than 4 characters"
+expect Encode.to_str_with(Rec([("äöüß", Num("1"))]), small) == Ok("{ \"äöüß\": 1 }")
+expect Encode.to_str_with(Tag("Abcd", []), small) == Ok("Abcd") and error_with(Tag("Abcde", [])) == "tag longer than 4 characters"
+expect error_with(Tag("A", [Tag("Abcde", [])])) == "(A)[0]: tag longer than 4 characters"
+# Up to the supported depth; a deeper limit is an error that names the maximum.
+expect Encode.to_str_with(nested(1024, Num("1"), |v| Tag("A", [v])), { ..Value.default_limits, max_depth: Value.max_supported_depth }).is_ok()
+expect Encode.to_str_with(Num("1"), { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect Encode.stream_with([], { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
 # Larger limits than the defaults: exponents past 9999 too.
 expect Encode.to_str_with(Num("1e12345"), { ..Value.default_limits, max_exponent: 20000 }) == Ok("1e12345")

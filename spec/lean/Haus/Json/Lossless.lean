@@ -74,14 +74,14 @@ def depthFields : List (String × Value) → Nat
 end
 
 mutual
-/-- Every number, string and byte string within the limits. -/
+/-- Every number, string, byte string, record key and tag within the limits. -/
 def leaves (L : Limits) : Value → Bool
   | .num s => JSON.numberFits L s.toList
   | .str s => s.length ≤ L.maxStringLength
   | .bytes bs => 2 * bs.length ≤ L.maxStringLength
   | .arr xs => leavesList L xs
   | .record fs => leavesFields L fs
-  | .variant _ xs => leavesList L xs
+  | .variant t xs => t.length ≤ L.maxStringLength && leavesList L xs
 
 def leavesList (L : Limits) : List Value → Bool
   | [] => true
@@ -89,12 +89,13 @@ def leavesList (L : Limits) : List Value → Bool
 
 def leavesFields (L : Limits) : List (String × Value) → Bool
   | [] => true
-  | (_, x) :: fs => leaves L x && leavesFields L fs
+  | (k, x) :: fs => k.length ≤ L.maxStringLength && leaves L x && leavesFields L fs
 end
 
 /--
 **Within the limits** (§7): a haus text could write the value within them.
-Numbers as in `JSON.numberFits`; a byte string takes two hex digits a byte.
+Numbers as in `JSON.numberFits`; a byte string takes two hex digits a byte;
+a record key or tag counts like a string.
 -/
 def fits (L : Limits) (v : Value) : Bool := v.depth ≤ L.maxDepth && leaves L v
 

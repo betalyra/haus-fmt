@@ -58,6 +58,16 @@ open Haus Parser
 
 @[simp] theorem run_throw {α : Type} (e : Error) (t : Text) : (throw e : P α).run t = .error e := rfl
 
+/-- A key or tag within the limit: `checkName` returns it and reads nothing. -/
+theorem checkName_ok {L : Limits} {what : String} {s : Text} (h : s.length ≤ L.maxStringLength) (start t : Text) :
+    (checkName L what s start).run t = .ok (String.ofList s, t) := by
+  simp [checkName, Nat.not_lt.mpr h]
+
+/-- A key or tag over the limit: `checkName` fails. -/
+theorem checkName_long {L : Limits} {what : String} {s : Text} (h : ¬ s.length ≤ L.maxStringLength) (start t : Text) :
+    (checkName L what s start).run t = .error (.at s!"{what} longer than {L.maxStringLength} characters" start) := by
+  simp [checkName, Nat.lt_of_not_le h]
+
 /-- Running a parser for its result only. -/
 theorem run'_eq {α : Type} (x : P α) (t : Text) : x.run' t = (x.run t).map Prod.fst := by
   simp only [StateT.run', StateT.run, Functor.map]

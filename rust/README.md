@@ -91,6 +91,37 @@ the completed values), so an async adapter is a short loop around it.
 Without a schema, `haus::parse` reads any haus text into `Value`s: a parser in
 the sense of spec §13.1, which knows no types.
 
+## Limits
+
+Reading enforces the limits of spec §7, `haus::Limits`: by default a depth of
+256, number literals of 1000 characters, exponents up to 6144, and strings,
+record keys and tags of 16 Mi characters. Every reader and writer has a
+version that takes other limits:
+
+| | With limits |
+|---|---|
+| haus text | `haus::parse_with`, `haus::stream::Reader::new(Options { limits, .. })`, `stream::values_with` |
+| writing for such a reader | `haus::to_string_with`, `haus::ser::write_with`, `stream::encode_with`, `Encode::encode_with(Encoder::new(&limits))` |
+| JSON | `json::parse_with`, `json::write_with`, `json::value_from_str_with`, `json::from_str_with`, `json::to_string_with`, `json::to_lossless`, `json::from_lossless`, `json::from_plain`, `FromJson::from_json_with(json, Decoder::new(&limits))` |
+
+`haus::MAX_SUPPORTED_DEPTH` is 256, the default: the parser, decoding,
+encoding and the JSON mappings recurse once per level of nesting, so this
+crate supports no deeper limit (lower ones are fine). Every function above
+rejects a larger `max_depth` before reading or writing anything, with an
+error that names the maximum: `max_depth 300 is more than the supported
+maximum, 256`. The JSON reader and writer and the canonical form use no call
+stack per level.
+
+At 256 levels, the deepest path, the lossless JSON form of nested variants,
+takes about 1.2 MiB of stack in a debug build and 0.3 MiB in a release build
+(measured on aarch64 macOS): well within the 2 MiB stack of a spawned thread,
+a test thread or an async task, and the 8 MiB of a main thread. Code that
+haus-build generates for a recursive type takes stack in proportion to the
+type's size: a record of 30 fields that holds itself in a `Maybe` takes about
+18 KiB per record to encode in a debug build (7 KiB in a release build), so
+128 of them, 256 levels, need more than 2 MiB in a debug build. Keep
+recursive types small, or give the thread that reads them a larger stack.
+
 ## JSON
 
 The two JSON mappings of spec §16, with a strict reader (I-JSON: no duplicate
@@ -119,9 +150,12 @@ read error inside it names only its place and type. A record payload with a
 field named `_tag` has no plain form: writing or reading it is an error.
 
 JSON may nest 4·256 + 1 levels, so that the lossless form of a value at the
-depth limit is readable; the haus value that results is then checked against
-256 (`json::from_str` encodes the result to check it, so it needs `T: Encode`
-too). The reader and writer use no call stack per level.
+depth limit is readable. Reading it with a type counts the levels of the haus
+value as it goes (`FromJson::from_json_with` takes a `haus::Decoder`, as
+`ToJson` takes an `Encoder`), so JSON nested deeper than the depth limit fails
+there instead of recursing on; `json::from_str` then encodes the result to
+check it (so it needs `T: Encode` too). The reader and writer use no call
+stack per level.
 
 ```sh
 cargo test                                                   # everything, with the conformance suite

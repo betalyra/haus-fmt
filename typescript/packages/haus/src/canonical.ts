@@ -30,35 +30,70 @@ export function compareCodePoints(a: string, b: string): number {
   }
 }
 
-function write(v: Value): string {
-  switch (v.kind) {
-    case "number":
-      return numberText(v.text)
-    case "string":
-      return quote(v.value)
-    case "bytes":
-      return `x"${toHex(v.bytes)}"`
-    case "array":
-      return `[${v.items.map(write).join(",")}]`
-    case "record":
-      return record(v.fields)
-    case "variant": {
-      if (v.args.length === 0) return v.tag
-      const only = v.args.length === 1 ? v.args[0]! : undefined
-      if (only?.kind === "record") return v.tag + record(only.fields)
-      return `${v.tag}(${v.args.map(write).join(",")})`
+/**
+ * Write `root` into `out`. Iterative, with a stack of what is left to write
+ * (values, and text between them), so any depth works without the call stack.
+ */
+function write(root: Value, out: string[]): void {
+  const work: (Value | string)[] = [root]
+  /** Push `items` to be written next, separated by commas, then `close`. */
+  const items = (values: readonly Value[], close: string) => {
+    work.push(close)
+    for (let i = values.length - 1; i >= 0; i--) {
+      work.push(values[i]!)
+      if (i > 0) work.push(",")
+    }
+  }
+  const record = (fields: ReadonlyMap<string, Value>) => {
+    out.push("{")
+    const keys = [...fields.keys()].sort(compareCodePoints)
+    work.push("}")
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const k = keys[i]!
+      work.push(fields.get(k)!, `${i > 0 ? "," : ""}${BARE_KEY.test(k) ? k : quote(k)}:`)
+    }
+  }
+  while (work.length > 0) {
+    const v = work.pop()!
+    if (typeof v === "string") {
+      out.push(v)
+      continue
+    }
+    switch (v.kind) {
+      case "number":
+        out.push(numberText(v.text))
+        break
+      case "string":
+        out.push(quote(v.value))
+        break
+      case "bytes":
+        out.push(`x"${toHex(v.bytes)}"`)
+        break
+      case "array":
+        out.push("[")
+        items(v.items, "]")
+        break
+      case "record":
+        record(v.fields)
+        break
+      case "variant": {
+        out.push(v.tag)
+        const only = v.args.length === 1 ? v.args[0]! : undefined
+        if (only?.kind === "record") record(only.fields)
+        else if (v.args.length > 0) {
+          out.push("(")
+          items(v.args, ")")
+        }
+      }
     }
   }
 }
 
-function record(fields: ReadonlyMap<string, Value>): string {
-  const keys = [...fields.keys()].sort(compareCodePoints)
-  return `{${keys.map((k) => `${BARE_KEY.test(k) ? k : quote(k)}:${write(fields.get(k)!)}`).join(",")}}`
-}
-
 /** The canonical form of a value (spec §12). */
 export function canonical(value: Value): string {
-  return write(value)
+  const out: string[] = []
+  write(value, out)
+  return out.join("")
 }
 
 /** Whether two values are equal (spec §2): the same canonical form. */

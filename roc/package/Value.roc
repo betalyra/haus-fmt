@@ -19,6 +19,7 @@ Value := [
 	## `parse_all` with your own limits.
 	parse_all_with : Str, Limits -> Try(List(Value), ParseError)
 	parse_all_with = |text, limits| {
+		check_limits(limits).map_err(|reason| { reason, line: 1, column: 1 })?
 		src = text.to_utf8()
 		start = if (src.starts_with([0xEF, 0xBB, 0xBF])) 3 else 0
 		# Reserved for a version directive (spec §10): `#haus 2`.
@@ -37,6 +38,7 @@ Value := [
 	## `parse_rest` with your own limits.
 	parse_rest_with : Str, Limits -> Try(List(Value), ParseError)
 	parse_rest_with = |text, limits| {
+		check_limits(limits).map_err(|reason| { reason, line: 1, column: 1 })?
 		src = text.to_utf8()
 		parse_sequence(src, 0, limits).map_err(|f| locate(src, f))
 	}
@@ -76,13 +78,34 @@ Value := [
 	}
 
 	## Resource limits (spec §7), enforced while parsing: nesting depth (records,
-	## arrays and payloads), characters in one number literal, the largest
-	## absolute exponent (6144 allows `1e6144`, not `1e6145`), and characters
-	## (code points) in one decoded string or between the quotes of a byte
-	## string. A value of exactly a limit is accepted.
+	## arrays and payloads, at most `max_supported_depth`), characters in one
+	## number literal, the largest absolute exponent (6144 allows `1e6144`, not
+	## `1e6145`), and characters (code points) in one decoded string, record
+	## key or tag, or between the quotes of a byte string. A value of exactly
+	## a limit is accepted.
 	##
 	##     Value.parse_all_with(text, { ..Value.default_limits, max_depth: 64 })
 	Limits : { max_depth : U64, max_number_length : U64, max_exponent : U64, max_string_length : U64 }
+
+	## The largest `max_depth` this binding supports (spec §7): 1024. The
+	## parser, decoding, encoding and the JSON mappings recurse once per level
+	## of nesting, so the depth limit bounds the call stack they use. Every
+	## function that takes limits fails, before reading or writing anything,
+	## if `max_depth` is larger, with an error that names this maximum
+	## (see `check_limits`).
+	max_supported_depth : U64
+	max_supported_depth = 1024
+
+	## `Ok({})` if this binding supports `limits`, or the reason it doesn't:
+	## `max_depth 2000 is more than the supported maximum, 1024`. Every
+	## function that takes limits checks them so.
+	check_limits : Limits -> Try({}, Str)
+	check_limits = |limits|
+		if limits.max_depth > max_supported_depth {
+			Err("max_depth ${limits.max_depth.to_str()} is more than the supported maximum, ${max_supported_depth.to_str()}")
+		} else {
+			Ok({})
+		}
 
 	## The spec's defaults: depth 256, number literals of 1000 characters,
 	## exponents up to 6144, strings of 16 Mi characters. Every reader must
@@ -216,7 +239,7 @@ parse_key = |src, pos, limits| {
 			parse_basic_string(src, pos, limits)
 		}
 	} else if is_lower_start(c) {
-		Ok(read_ident(src, pos))
+		name(src, pos, "key", limits)
 	} else if is_upper(c) {
 		(word, _) = read_ident(src, pos)
 		Err({ reason: "record keys must start with a lowercase letter or '_'; quote it: \"${word}\"", pos })
@@ -256,7 +279,7 @@ parse_list = |src, open, depth, close, limits| {
 
 parse_variant : List(U8), U64, U64, Value.Limits -> Try((Value, U64), Fail)
 parse_variant = |src, pos, depth, limits| {
-	(tag, after_tag) = read_ident(src, pos)
+	(tag, after_tag) = name(src, pos, "tag", limits)?
 	# The payload must follow on the same line: only spaces and tabs in between.
 	var $p = after_tag
 	while at(src, $p) == ' ' or at(src, $p) == '\t' {
@@ -798,6 +821,18 @@ starts_at = |src, pos, prefix| {
 	src.sublist({ start: pos, len: bytes.len() }) == bytes
 }
 
+## An identifier key or a tag (`what`) at `start`, within the string limit
+## (spec §7). Identifiers are ASCII: one byte is one character.
+name : List(U8), U64, Str, Value.Limits -> Try((Str, U64), Fail)
+name = |src, start, what, limits| {
+	(word, end) = read_ident(src, start)
+	if end - start > limits.max_string_length {
+		Err({ reason: "${what} longer than ${limits.max_string_length.to_str()} characters", pos: start })
+	} else {
+		Ok((word, end))
+	}
+}
+
 read_ident : List(U8), U64 -> (Str, U64)
 read_ident = |src, start| {
 	var $p = start
@@ -942,6 +977,27 @@ expect within_small("x\"abcdef\"") == Err("byte string longer than 4 characters 
 expect within_small("x\"ab cd\"") == Err("byte string longer than 4 characters at 1:1")
 expect Value.parse_with("[[[1]]]", small).is_ok() and Value.parse_with("[[[[1]]]]", small).is_err()
 expect Value.parse_bytes_with("12345678".to_utf8(), small).is_ok() and Value.parse_bytes_with("123456789".to_utf8(), small).is_err()
-# Larger limits than the defaults.
+# Record keys and tags count against the string limit: an identifier key or a
+# tag where it starts; a quoted key is a string.
+expect within_small("{ abcd: 1 }, { \"abcd\": 1 }, Abcd, Abcd(1), Abcd { a: 1 }") == Ok(5)
+expect within_small("{ abcde: 1 }") == Err("key longer than 4 characters at 1:3")
+expect within_small("{ a: 1, abcde: 1 }") == Err("key longer than 4 characters at 1:9")
+expect within_small("{ \"abcde\": 1 }") == Err("string longer than 4 characters at 1:3")
+expect within_small("[Abcde]") == Err("tag longer than 4 characters at 1:2")
+expect within_small("[1, Abcde(1)]") == Err("tag longer than 4 characters at 1:5")
+expect within_small("Abcde { a: 1 }") == Err("tag longer than 4 characters at 1:1")
+# Larger limits than the defaults, up to the supported depth.
 expect Value.parse_all_with("${"[".repeat(300)}${"]".repeat(300)}, 1e7000", { ..Value.default_limits, max_depth: 300, max_exponent: 7000 }).is_ok()
+deepest : Value.Limits
+deepest = { ..Value.default_limits, max_depth: Value.max_supported_depth }
+expect Value.parse_with("${"A(".repeat(1024)}1${")".repeat(1024)}", deepest).is_ok()
+expect Value.parse_with("${"{ a: ".repeat(1024)}1${" }".repeat(1024)}", deepest).is_ok()
+expect Value.parse_with("${"A { a: ".repeat(1024)}1${" }".repeat(1024)}", deepest).is_ok()
+expect Value.parse_with("${"[".repeat(1025)}1${"]".repeat(1025)}", deepest).map_ok(|_| {}).map_err(|e| e.reason) == Err("nesting deeper than 1024 levels")
+# A deeper limit than this binding supports is an error that names the maximum, at the start.
+too_deep : Value.Limits
+too_deep = { ..Value.default_limits, max_depth: 1025 }
+expect Value.check_limits(deepest) == Ok({}) and Value.check_limits(too_deep) == Err("max_depth 1025 is more than the supported maximum, 1024")
+expect Value.parse_all_with("[]", too_deep).map_ok(|_| {}) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", line: 1, column: 1 })
+expect Value.parse_with("", too_deep).is_err() and Value.parse_bytes_with([], too_deep).is_err() and Value.parse_rest_with("1", too_deep).is_err()
 expect Value.parse_all("${"[".repeat(256)}${"]".repeat(256)}").is_ok() and Value.parse_all("${"[".repeat(257)}${"]".repeat(257)}").is_err()

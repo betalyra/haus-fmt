@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema, Stream } from "effect"
-import { arr, type Value } from "@haus-fmt/haus"
+import { arr, rec, variant, type Value } from "@haus-fmt/haus"
 import * as Haus from "../src/index.js"
 
 type Nest = ReadonlyArray<Nest>
@@ -26,7 +26,8 @@ const depth = (x: Nest): number => {
 }
 
 const LOWERED = 8
-const RAISED = 500
+/** Raised as far as the binding supports. */
+const RAISED = Haus.MAX_SUPPORTED_DEPTH
 
 /** A text source in two chunks, split inside the value. */
 const chunked = (text: string) => Stream.make(text.slice(0, 3), text.slice(3))
@@ -84,6 +85,26 @@ describe("haus text", () => {
       expect((yield* Effect.flip(Haus.decode(S)(`{ s: "", n: 1e11 }`, { maxExponent: 10 })))._tag).toBe("HausParseError")
     }))
 
+  it.effect("the string limit counts record keys and tags too, in text and in raw values built in code", () =>
+    Effect.gen(function* () {
+      const four = { maxStringLength: 4 }
+      yield* Haus.decode(Haus.Any)("{ abcd: Abcd(1) }", four)
+      for (const [text, reason] of [["{ abcde: 1 }", "key longer than 4 characters"], ["[Abcde]", "tag longer than 4 characters"]] as const) {
+        const e = yield* Effect.flip(Haus.decode(Haus.Any)(text, four))
+        expect(e._tag).toBe("HausParseError")
+        expect(e.message).toContain(reason)
+      }
+      const S = Schema.Struct({ m: Schema.Record(Schema.String, Schema.Finite) })
+      expect((yield* Effect.flip(Haus.decode(S)("{ m: { abcde: 1 } }", four))).message).toContain("key longer than 4 characters")
+      const encode = Haus.encode(Haus.Any, { style: "compact", limits: four })
+      expect(yield* encode(variant("Abcd", [rec(new Map([["abcd", arr([])]]))]))).toBe("Abcd { abcd: [] }")
+      for (const [value, reason] of [[rec(new Map([["abcde", arr([])]])), "key longer than 4"], [arr([variant("Abcde")]), "tag longer than 4"]] as const) {
+        const e = yield* Effect.flip(encode(value))
+        expect(e._tag).toBe("HausSchemaError")
+        expect(e.message).toContain(reason)
+      }
+    }))
+
   it.effect("maxSteps bounds the conversion", () =>
     Effect.gen(function* () {
       const text = `[${Array.from({ length: 100 }, () => "[]").join(", ")}]`
@@ -136,7 +157,7 @@ describe("streams", () => {
       expect(out.join("")).toBe(`${nested(RAISED)},\n`)
       const e = yield* Effect.flip(Stream.runCollect(encode(Stream.make(nestedArray(LOWERED + 1)), { limits: { maxDepth: LOWERED } })))
       expect(e.message).toContain(`nested deeper than ${LOWERED} levels`)
-      expect(e.index).toBe(0)
+      expect(e._tag === "HausSchemaError" && e.index).toBe(0)
     }))
 })
 
@@ -234,5 +255,74 @@ describe("JSON", () => {
     Effect.gen(function* () {
       expect((yield* Haus.valueFromJson(nested(RAISED), { maxDepth: RAISED })).kind).toBe("array")
       expect((yield* Effect.flip(Haus.valueFromJson(nested(LOWERED + 1), { maxDepth: LOWERED })))._tag).toBe("HausParseError")
+    }))
+})
+
+describe("the deepest nesting the binding supports (spec §7)", () => {
+  const MAX = Haus.MAX_SUPPORTED_DEPTH
+  const limits = { maxDepth: MAX }
+
+  interface Box { readonly _tag: "Box"; readonly inner: ReadonlyArray<Box> }
+  const Box: Schema.Codec<Box> = Schema.TaggedStruct("Box", { inner: Schema.Array(Schema.suspend(() => Box)) })
+  /** `n` boxes: 2n levels (a `Box { … }` and its array). */
+  const boxes = (n: number): Box => Array.from({ length: n - 1 }).reduce<Box>((inner) => ({ _tag: "Box", inner: [inner] }), { _tag: "Box", inner: [] })
+  const boxText = (n: number) => "Box { inner: [".repeat(n - 1) + "Box { inner: [] }" + "] }".repeat(n - 1)
+  /** `n` levels of `T { a: … }`: four JSON levels each in the lossless form. */
+  const tagged = (n: number) => "T { a: ".repeat(n) + "1" + " }".repeat(n)
+
+  it("is 512", () => {
+    expect(MAX).toBe(512)
+  })
+
+  it.effect("every decoder and encoder works at it, with Struct-based recursive schemas too", () =>
+    Effect.gen(function* () {
+      expect(depth(yield* Haus.decode(Nest)(nested(MAX), limits))).toBe(MAX)
+      const box = yield* Haus.decode(Box)(boxText(MAX / 2), limits)
+      const value = yield* Haus.encodeValue(Box)(box, limits)
+      expect(yield* Haus.decodeValue(Box)(value, limits)).toEqual(box)
+      expect(yield* Haus.encode(Box)(boxes(MAX / 2), { limits })).toBe(yield* Haus.encode(Box)(box, { limits }))
+      expect(yield* Haus.encode(Box)(box, { style: "compact", limits })).toBe(boxText(MAX / 2))
+      expect((yield* Stream.runCollect(Haus.decodeStream(Box)(chunked(`${boxText(MAX / 2)},`), limits))).length).toBe(1)
+      expect((yield* Stream.runCollect(Haus.encodeStream(Box)(Stream.make(box), { limits }))).join("")).toBe(`${boxText(MAX / 2)},\n`)
+      const json = yield* Haus.toJson(Box)(box, limits)
+      expect(yield* Haus.fromJson(Box)(json, limits)).toEqual(box)
+      expect((yield* Stream.runCollect(Haus.decodeJsonLines(Box)(chunked(`${json}\n`), limits)))).toEqual([box])
+      expect((yield* Stream.runCollect(Haus.encodeJsonLines(Box)(Stream.make(box), limits)))).toEqual([`${json}\n`])
+      expect((yield* Haus.valueFromJson(nested(MAX), limits)).kind).toBe("array")
+    }))
+
+  it.effect("Haus.Any at it, in haus and in the lossless JSON (2049 JSON levels)", () =>
+    Effect.gen(function* () {
+      const any = yield* Haus.decode(Haus.Any)(tagged(MAX), limits)
+      expect(yield* Haus.encode(Haus.Any)(any, { style: "compact", limits })).toBe(tagged(MAX))
+      expect((yield* Haus.encode(Haus.Any)(any, { limits })).split("\n")).toHaveLength(2 * MAX + 1)
+      const json = yield* Haus.toJson(Haus.Any)(any, limits)
+      expect(yield* Haus.encode(Haus.Any)(yield* Haus.fromJson(Haus.Any)(json, limits), { style: "compact", limits })).toBe(tagged(MAX))
+    }))
+
+  it.effect("a larger maxDepth fails with a HausLimitsError naming the maximum, on every entry point", () =>
+    Effect.gen(function* () {
+      const over = { maxDepth: MAX + 1 }
+      const errors = [
+        yield* Effect.flip(Haus.decode(Nest)("[]", over)),
+        yield* Effect.flip(Haus.decodeValue(Nest)(nestedValue(1), over)),
+        yield* Effect.flip(Stream.runCollect(Haus.decodeStream(Nest)(chunked("[],"), over))),
+        yield* Effect.flip(Haus.encodeValue(Nest)([], over)),
+        yield* Effect.flip(Haus.encode(Nest)([], { limits: over })),
+        yield* Effect.flip(Haus.encode(Nest, { limits: over })([])),
+        yield* Effect.flip(Stream.runCollect(Haus.encodeStream(Nest)(Stream.make([]), { limits: over }))),
+        yield* Effect.flip(Haus.fromJson(Nest)("[]", over)),
+        yield* Effect.flip(Haus.fromJsonValue(Nest)([], over)),
+        yield* Effect.flip(Haus.toJson(Nest)([], over)),
+        yield* Effect.flip(Haus.toJsonValue(Nest)([], over)),
+        yield* Effect.flip(Stream.runCollect(Haus.decodeJsonLines(Nest)(chunked("[]\n"), over))),
+        yield* Effect.flip(Stream.runCollect(Haus.encodeJsonLines(Nest)(Stream.make([]), over))),
+        yield* Effect.flip(Haus.valueFromJson("[]", over)),
+      ]
+      for (const e of errors) {
+        expect(e).toBeInstanceOf(Haus.HausLimitsError)
+        expect(e.message).toBe("maxDepth 513 is above 512, the deepest nesting this binding supports (spec §7)")
+      }
+      expect((yield* Effect.flip(Haus.decode(Nest)("[]", { maxDepth: Number.NaN }))).message).toBe("maxDepth must be a whole number from 0 to 512, not NaN")
     }))
 })

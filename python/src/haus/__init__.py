@@ -22,7 +22,7 @@ from ._json_api import (
     to_lossless_json,
     to_lossless_json_lines,
 )
-from ._parser import DEFAULT_LIMITS, Limits, Parser
+from ._parser import DEFAULT_LIMITS, MAX_SUPPORTED_DEPTH, Limits, Parser
 from ._stream import DEFAULT_MAX_VALUE_LENGTH, Readable, StreamReader, parse_stream
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
@@ -31,6 +31,7 @@ __version__ = "0.0.1"
 __all__ = [
     "DEFAULT_LIMITS",
     "DEFAULT_MAX_VALUE_LENGTH",
+    "MAX_SUPPORTED_DEPTH",
     "Array",
     "Bytes",
     "Hasher",

@@ -45,33 +45,55 @@ def number_text(text: str) -> str:
     return f"{sign}0x{int(Decimal(digits)):x}"
 
 
-def _write(v: Value) -> str:
-    match v:
-        case Number(text):
-            return number_text(text)
-        case String(s):
-            return quote(s)
-        case Bytes(data):
-            return f'x"{data.hex()}"'
-        case Array(items):
-            return "[" + ",".join(map(_write, items)) + "]"
-        case Record(fields):
-            return _record(fields)
-        case Variant(tag, ()):
-            return tag
-        case Variant(tag, (Record(fields),)):
-            return tag + _record(fields)
-        case Variant(tag, args):
-            return f"{tag}(" + ",".join(map(_write, args)) + ")"
+def _write(root: Value) -> str:
+    """Iterative, with a stack of what is left to write (values, and text between them): any depth works."""
+    out: list[str] = []
+    work: list[Value | str] = [root]
+
+    def items(values: tuple[Value, ...], close: str) -> None:
+        work.append(close)
+        for i in range(len(values) - 1, -1, -1):
+            work.append(values[i])
+            if i:
+                work.append(",")
+
+    def record(fields: Mapping[str, Value]) -> None:
+        # `str` order is code point order, which is the order of the UTF-8 bytes.
+        out.append("{")
+        work.append("}")
+        keys = sorted(fields)
+        for i in range(len(keys) - 1, -1, -1):
+            work.append(fields[keys[i]])
+            work.append(("," if i else "") + _key(keys[i]) + ":")
+
+    while work:
+        match work.pop():
+            case str() as text:
+                out.append(text)
+            case Number(text):
+                out.append(number_text(text))
+            case String(s):
+                out.append(quote(s))
+            case Bytes(data):
+                out.append(f'x"{data.hex()}"')
+            case Array(values):
+                out.append("[")
+                items(values, "]")
+            case Record(fields):
+                record(fields)
+            case Variant(tag, ()):
+                out.append(tag)
+            case Variant(tag, (Record(fields),)):
+                out.append(tag)
+                record(fields)
+            case Variant(tag, args):
+                out.append(f"{tag}(")
+                items(args, ")")
+    return "".join(out)
 
 
 def _key(k: str) -> str:
     return k if _BARE_KEY.fullmatch(k) else quote(k)
-
-
-def _record(fields: Mapping[str, Value]) -> str:
-    # `str` order is code point order, which is the order of the UTF-8 bytes.
-    return "{" + ",".join(f"{_key(k)}:{_write(fields[k])}" for k in sorted(fields)) + "}"
 
 
 def canonical(value: Value) -> str:

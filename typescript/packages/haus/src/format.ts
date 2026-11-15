@@ -57,7 +57,7 @@ export function format(values: readonly Value[], options: FormatOptions = {}): s
 /** Serialize one value (no trailing newline). */
 export function stringify(value: Value, options: FormatOptions = {}): string {
   const f = new Formatter(options)
-  return options.style === "compact" ? f.line(value) : f.value(value, "", 0)
+  return options.style === "compact" ? f.line(value) : f.value(value)
 }
 
 /**
@@ -81,15 +81,47 @@ interface Entry {
   readonly end: number | undefined
   /** Where the value starts (after `key:`); comments before it move above the entry. */
   readonly valueStart: number | undefined
-  /** The entry's text at indentation `ind` (no separator). */
-  readonly render: (ind: string) => string
+  /** Written before the value: `key: ` for a record field. */
+  readonly prefix: string
+  readonly value: Value
 }
+
+type Span = readonly [number, number]
+
+/** The entries of one container (or of the file), being written one after the other. */
+interface EntryList {
+  readonly entries: readonly Entry[]
+  readonly ind: string
+  readonly sep: string
+  readonly blankAfterMultiline: boolean
+  /** Comments placed before, after (on the same line) each entry, and after the last one. */
+  readonly leading: readonly Span[][]
+  readonly trailing: readonly Span[][]
+  readonly dangling: readonly Span[]
+  /** The next entry to write. */
+  next: number
+  /** Source offset after what was written last, to keep a blank line before the next entry. */
+  cursor: number | undefined
+  first: boolean
+  prevMultiline: boolean
+}
+
+/**
+ * What is left to write, on a stack: text, a value, the rest of a list of
+ * entries, or the end of an entry (its separator and trailing comments).
+ * The formatter loops over it instead of recursing, so any depth works.
+ */
+type Task =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "value"; readonly value: Value; readonly ind: string; readonly used: number }
+  | { readonly kind: "entries"; readonly list: EntryList }
+  | { readonly kind: "entryEnd"; readonly list: EntryList; readonly index: number; readonly mark: number }
 
 class Formatter {
   private readonly step: string
   private readonly width: number
   private readonly source: string | undefined
-  private readonly comments: readonly (readonly [number, number])[]
+  private readonly comments: readonly Span[]
   private readonly maxNumberLength: number
 
   constructor(options: FormatOptions) {
@@ -104,10 +136,15 @@ class Formatter {
 
   file(values: readonly Value[]): string {
     const stream = values.length > 1
-    const entries = values.map((v) => this.entryOf(v))
+    const entries = values.map(entryOf)
     const end = this.source?.length ?? 0
-    const body = this.entries(0, end, entries, "", stream ? "," : "", stream)
-    return body.replace(/\n$/, "")
+    const list = this.entryList(0, end, entries, "", stream ? "," : "", stream)
+    return this.run({ kind: "entries", list }).replace(/\n$/, "")
+  }
+
+  /** Pretty: `v` at indentation 0. */
+  value(v: Value): string {
+    return this.run({ kind: "value", value: v, ind: "", used: 0 })
   }
 
   /**
@@ -115,153 +152,175 @@ class Formatter {
    * `\n` escapes, so a compact stream has exactly one item per line (like NDJSON).
    */
   line(v: Value): string {
-    switch (v.kind) {
-      case "number":
-        return this.number(v)
-      case "string":
-        return this.basicString(v)
-      case "bytes":
-        return this.bytes(v)
-      case "array":
-        return `[${v.items.map((x) => this.line(x)).join(", ")}]`
-      case "record":
-        return this.lineRecord(v)
-      case "variant": {
-        const [first] = v.args
-        if (v.args.length === 0) return v.tag
-        if (v.args.length === 1 && first?.kind === "record") return `${v.tag} ${this.lineRecord(first)}`
-        return `${v.tag}(${v.args.map((x) => this.line(x)).join(", ")})`
-      }
-    }
-  }
-
-  private lineRecord(r: HRecord): string {
-    return r.fields.size === 0 ? "{}" : `{ ${[...r.fields].map(([k, v]) => `${key(k)}: ${this.line(v)}`).join(", ")} }`
-  }
-
-  /** Render `v` at indentation `ind`, with `used` columns already taken on the current line. */
-  value(v: Value, ind: string, used: number): string {
-    if (!this.hasComments(v.start, v.end)) {
-      const flat = this.flat(v)
-      if (flat !== undefined && used + flat.length <= this.width) return flat
-    }
-    return this.broken(v, ind)
+    return this.inline(v, false, Infinity)!
   }
 
   // ── single line ────────────────────────────────────────────
 
-  /** Single-line form, or undefined if the value can't be written on one line (block strings). */
-  private flat(v: Value): string | undefined {
-    switch (v.kind) {
-      case "number":
-        return this.number(v)
-      case "string":
-        return v.value.includes("\n") ? undefined : this.basicString(v)
-      case "bytes":
-        return this.bytes(v)
-      case "array": {
-        if (v.items.length > 0) return undefined // pretty: one item per line
-        const items = this.all(v.items)
-        return items && `[${items.join(", ")}]`
-      }
-      case "record":
-        return this.flatRecord(v)
-      case "variant": {
-        const [first] = v.args
-        if (v.args.length === 0) return v.tag
-        if (v.args.length === 1 && first?.kind === "record") {
-          const r = this.flatRecord(first)
-          return r && `${v.tag} ${r}`
-        }
-        const args = this.all(v.args)
-        return args && `${v.tag}(${args.join(", ")})`
-      }
-    }
-  }
-
-  private all(values: readonly Value[]): string[] | undefined {
+  /**
+   * `v` on one line, or undefined if it is longer than `budget`. Pretty: also
+   * undefined if it can't be written on one line there (a block string, a
+   * non-empty record or array). Iterative, like `run`.
+   */
+  private inline(v: Value, pretty: boolean, budget: number): string | undefined {
     const out: string[] = []
     let length = 0
-    for (const v of values) {
-      const f = this.flat(v)
-      if (f === undefined) return undefined
+    const work: (Value | string)[] = [v]
+    const push = (text: string) => {
+      out.push(text)
+      length += text.length
+    }
+    /** `values` next, separated by commas, then `close`. */
+    const items = (values: readonly Value[], close: string) => {
+      work.push(close)
+      for (let i = values.length - 1; i >= 0; i--) {
+        work.push(values[i]!)
+        if (i > 0) work.push(", ")
+      }
+    }
+    const record = (r: HRecord): boolean => {
+      if (r.fields.size === 0) push("{}")
+      else if (pretty) return false // pretty: one field per line
+      else {
+        push("{ ")
+        work.push(" }")
+        const fields = [...r.fields]
+        for (let i = fields.length - 1; i >= 0; i--) {
+          const [k, x] = fields[i]!
+          work.push(x, `${i > 0 ? ", " : ""}${key(k)}: `)
+        }
+      }
+      return true
+    }
+    while (work.length > 0) {
+      const x = work.pop()!
+      if (typeof x === "string") push(x)
+      else {
+        switch (x.kind) {
+          case "number":
+            push(this.number(x))
+            break
+          case "string":
+            if (pretty && x.value.includes("\n")) return undefined
+            push(this.basicString(x))
+            break
+          case "bytes":
+            push(this.bytes(x))
+            break
+          case "array":
+            if (pretty && x.items.length > 0) return undefined // pretty: one item per line
+            push("[")
+            items(x.items, "]")
+            break
+          case "record":
+            if (!record(x)) return undefined
+            break
+          case "variant": {
+            const [first] = x.args
+            push(x.tag)
+            if (x.args.length === 1 && first?.kind === "record") {
+              push(" ")
+              if (!record(first)) return undefined
+            } else if (x.args.length > 0) {
+              push("(")
+              items(x.args, ")")
+            }
+          }
+        }
+      }
       // Too wide to stay inline anyway: stop early, so nested payloads aren't
       // rendered in full at every level (that would be quadratic in the depth).
-      if ((length += f.length + 2) > this.width) return undefined
-      out.push(f)
+      if (length > budget) return undefined
     }
-    return out
-  }
-
-  private flatRecord(r: HRecord): string | undefined {
-    if (r.fields.size === 0) return "{}"
-    return undefined // pretty: one field per line
-    const fields: string[] = []
-    for (const [k, v] of r.fields) {
-      const f = this.flat(v)
-      if (f === undefined) return undefined
-      fields.push(`${key(k)}: ${f}`)
-    }
-    return `{ ${fields.join(", ")} }`
+    return out.join("")
   }
 
   // ── multi-line ─────────────────────────────────────────────
 
-  private broken(v: Value, ind: string): string {
+  /** Write the tasks, starting with `task`. */
+  private run(task: Task): string {
+    const out: string[] = []
+    const tasks: Task[] = [task]
+    while (tasks.length > 0) {
+      const t = tasks.pop()!
+      switch (t.kind) {
+        case "text":
+          out.push(t.text)
+          break
+        case "value":
+          this.writeValue(t.value, t.ind, t.used, out, tasks)
+          break
+        case "entries":
+          this.nextEntry(t.list, out, tasks)
+          break
+        case "entryEnd": {
+          const { list, index, mark } = t
+          const e = list.entries[index]!
+          const trailing = list.trailing[index]!
+          const multiline = list.blankAfterMultiline && out.slice(mark).some((s) => s.includes("\n"))
+          out.push(`${list.sep}${trailing.length ? " " + trailing.map((c) => this.text(c)).join(" ") : ""}\n`)
+          list.cursor = trailing.at(-1)?.[1] ?? e.end
+          list.prevMultiline = multiline
+        }
+      }
+    }
+    return out.join("")
+  }
+
+  /** `v` at indentation `ind`, with `used` columns already taken on the current line: inline if it fits, else broken. */
+  private writeValue(v: Value, ind: string, used: number, out: string[], tasks: Task[]): void {
+    if (!this.hasComments(v.start, v.end)) {
+      const flat = this.inline(v, true, this.width - used)
+      if (flat !== undefined) return void out.push(flat)
+    }
     switch (v.kind) {
       case "number":
-        return this.number(v)
+        return void out.push(this.number(v))
       case "string":
-        return v.value.includes("\n") ? blockString(v.value, ind + this.step) : this.basicString(v)
+        return void out.push(v.value.includes("\n") ? blockString(v.value, ind + this.step) : this.basicString(v))
       case "bytes":
-        return this.bytes(v)
+        return void out.push(this.bytes(v))
       case "array":
-        return this.container("[", "]", inside(v), v.items.map((x) => this.entryOf(x)), ind)
+        return this.container("[", "]", inside(v), v.items.map(entryOf), ind, out, tasks)
       case "record":
-        return this.brokenRecord(v, ind)
+        return this.record(v, ind, out, tasks)
       case "variant": {
         const [first] = v.args
-        if (v.args.length === 0) return v.tag
-        if (v.args.length === 1 && first?.kind === "record") return `${v.tag} ${this.brokenRecord(first, ind)}`
-        return v.tag + this.container("(", ")", this.argsSpan(v), v.args.map((x) => this.entryOf(x)), ind)
+        out.push(v.tag)
+        if (v.args.length === 0) return
+        if (v.args.length === 1 && first?.kind === "record") {
+          out.push(" ")
+          return this.record(first, ind, out, tasks)
+        }
+        return this.container("(", ")", this.argsSpan(v), v.args.map(entryOf), ind, out, tasks)
       }
     }
   }
 
-  private brokenRecord(r: HRecord, ind: string): string {
-    const entries = [...r.fields].map(([k, v]): Entry => {
-      const span = r.keySpans?.get(k)
-      return {
-        start: span?.[0] ?? v.start,
-        end: v.end,
-        valueStart: v.start,
-        render: (at) => {
-          const prefix = `${key(k)}: `
-          return prefix + this.value(v, at, at.length + prefix.length)
-        },
-      }
-    })
-    return this.container("{", "}", inside(r), entries, ind)
-  }
-
-  private entryOf(v: Value): Entry {
-    return { start: v.start, end: v.end, valueStart: v.start, render: (at) => this.value(v, at, at.length) }
+  private record(r: HRecord, ind: string, out: string[], tasks: Task[]): void {
+    const entries = [...r.fields].map(([k, v]): Entry => ({
+      start: r.keySpans?.get(k)?.[0] ?? v.start,
+      end: v.end,
+      valueStart: v.start,
+      prefix: `${key(k)}: `,
+      value: v,
+    }))
+    this.container("{", "}", inside(r), entries, ind, out, tasks)
   }
 
   /** `open` + one entry per line (comments and blank lines kept) + `close`. */
-  private container(open: string, close: string, span: readonly [number, number] | undefined, entries: Entry[], ind: string): string {
+  private container(open: string, close: string, span: Span | undefined, entries: Entry[], ind: string, out: string[], tasks: Task[]): void {
     const [from, to] = span ?? [undefined, undefined]
-    if (entries.length === 0 && !this.hasComments(from, to)) return open + close
-    const inner = ind + this.step
-    return `${open}\n${this.entries(from, to, entries, inner, ",", false)}${ind}${close}`
+    if (entries.length === 0 && !this.hasComments(from, to)) return void out.push(open + close)
+    out.push(`${open}\n`)
+    tasks.push({ kind: "text", text: ind + close }, { kind: "entries", list: this.entryList(from, to, entries, ind + this.step, ",", false) })
   }
 
   /**
-   * Entries at indentation `ind`, each on its own line(s) ending in "\n", with
-   * the comments in [from, to) placed next to them and blank lines kept.
+   * Entries at indentation `ind`, each to be written on its own line(s)
+   * ending in "\n", with the comments in [from, to) placed next to them.
    */
-  private entries(from: number | undefined, to: number | undefined, entries: Entry[], ind: string, sep: string, blankAfterMultiline: boolean): string {
-    type Span = readonly [number, number]
+  private entryList(from: number | undefined, to: number | undefined, entries: readonly Entry[], ind: string, sep: string, blankAfterMultiline: boolean): EntryList {
     const leading: Span[][] = entries.map(() => [])
     const trailing: Span[][] = entries.map(() => [])
     const dangling: Span[] = []
@@ -294,39 +353,50 @@ class Formatter {
         else dangling.push(c)
       }
     }
+    return { entries, ind, sep, blankAfterMultiline, leading, trailing, dangling, next: 0, cursor: from, first: true, prevMultiline: false }
+  }
 
-    // A blank line in the source between `cursor` and `start` is kept (at most one).
-    const blank = (cursor: number | undefined, start: number | undefined) =>
-      src !== undefined && cursor !== undefined && start !== undefined && start > cursor && /\n[ \t]*\r?\n/.test(src.slice(cursor, start))
-    const text = (c: Span) => src!.slice(c[0], c[1])
-
-    let out = ""
-    let cursor = from
-    let first = true
-    let prevMultiline = false
-    const emit = (start: number | undefined, line: string) => {
-      if (!first && (blank(cursor, start) || prevMultiline)) out += "\n"
-      out += line
-      first = false
-      prevMultiline = false
-    }
-    entries.forEach((e, i) => {
-      for (const c of leading[i]!) {
-        emit(c[0], `${ind}${text(c)}\n`)
-        cursor = c[1]
+  /** Write the next entry of `list` (its leading comments, then the entry), or the comments after the last one. */
+  private nextEntry(list: EntryList, out: string[], tasks: Task[]): void {
+    const { entries, ind } = list
+    if (list.next < entries.length) {
+      const i = list.next++
+      for (const c of list.leading[i]!) {
+        this.startLine(list, c[0], out)
+        out.push(`${ind}${this.text(c)}\n`)
+        list.cursor = c[1]
       }
-      const rendered = e.render(ind)
-      const after = trailing[i]!.map(text)
-      emit(e.start, `${ind}${rendered}${sep}${after.length ? " " + after.join(" ") : ""}\n`)
-      cursor = trailing[i]!.at(-1)?.[1] ?? e.end
-      prevMultiline = blankAfterMultiline && rendered.includes("\n")
-    })
-    prevMultiline = false
-    for (const c of dangling) {
-      emit(c[0], `${ind}${text(c)}\n`)
-      cursor = c[1]
+      const e = entries[i]!
+      this.startLine(list, e.start, out)
+      out.push(ind + e.prefix)
+      tasks.push(
+        { kind: "entries", list },
+        { kind: "entryEnd", list, index: i, mark: out.length },
+        { kind: "value", value: e.value, ind, used: ind.length + e.prefix.length },
+      )
+      return
     }
-    return out
+    list.prevMultiline = false
+    for (const c of list.dangling) {
+      this.startLine(list, c[0], out)
+      out.push(`${ind}${this.text(c)}\n`)
+      list.cursor = c[1]
+    }
+  }
+
+  /** Before a line starting at source offset `start`: a blank line if the source had one there (at most one), or after a multi-line entry. */
+  private startLine(list: EntryList, start: number | undefined, out: string[]): void {
+    const src = this.source
+    const cursor = list.cursor
+    const blank = src !== undefined && cursor !== undefined && start !== undefined && start > cursor && /\n[ \t]*\r?\n/.test(src.slice(cursor, start))
+    if (!list.first && (blank || list.prevMultiline)) out.push("\n")
+    list.first = false
+    list.prevMultiline = false
+  }
+
+  /** A comment's text. */
+  private text(c: Span): string {
+    return this.source!.slice(c[0], c[1])
   }
 
   /** Is there a comment inside [start, end)? */
@@ -365,6 +435,9 @@ class Formatter {
     return this.source !== undefined && v.start !== undefined && v.end !== undefined ? this.source.slice(v.start, v.end) : undefined
   }
 }
+
+/** An array item, a payload argument or a top-level value as an entry. */
+const entryOf = (v: Value): Entry => ({ start: v.start, end: v.end, valueStart: v.start, prefix: "", value: v })
 
 /** The source span between a container's brackets. */
 const inside = (v: Value): [number, number] | undefined =>

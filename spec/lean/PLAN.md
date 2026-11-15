@@ -49,7 +49,7 @@ Each is a theorem of the form `File L t vs → …`.
 | ✅ A1. No raw bidi control character anywhere in a valid file (`File.noBidi`, `Haus/Props/Chars.lean`) | "Trojan Source": text that displays differently from what it is | §4, review S7 |
 | ✅ A2. The only control characters in a valid file are tab, LF and CR (`File.controls`). Found by the proof attempt: comments allowed ESC and NUL, strings allowed DEL and C1; now forbidden everywhere (spec §4). And every CR is directly followed by LF (`File.crlf`, `Haus/Props/LineBreaks.lean`). | Terminal escape injection, truncation at NUL | §4 |
 | ✅ A3. Every record, at any depth, has unique keys (`File.uniqueKeys`, `Haus/Props/Values.lean`) | Parsers that pick different duplicates | review §1.1 |
-| ✅ A4. Every value is within the limits: nesting depth, number length, exponent, string and byte string length (`File.bounded`) | Resource exhaustion | §7, review S4, S5 |
+| ✅ A4. Every value is within the limits: nesting depth, number length, exponent, string and byte string length, and the length of record keys and tags, which count like strings (`File.bounded`) | Resource exhaustion | §7, review S4, S5 |
 | ✅ A5. Every string is valid Unicode with no lone surrogates (`char_isScalar`) | Encoding confusion | §4 (holds by construction: Lean's `Char`) |
 
 Two properties already hold by construction and need no proof:
@@ -218,13 +218,28 @@ member order); a strict text reader and a compact writer sit next to it.
 The mappings' theorems are about `JSON` as data; J1's connect them to text:
 `JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`
 and `plain_text_parsed` ([`Json/Correct.lean`](Haus/Json/Correct.lean)) read
-the written text back to the value, given that the value fits (`Value.fits`)
-and its JSON is within the JSON limits (`Fits`). The lossless JSON of a value
-without duplicate keys is well formed (`lossless_wellFormed`); for plain JSON
-that is a hypothesis. Not proven: that a value within the haus limits has
-lossless JSON within the JSON limits (it need not: keys and tags have no
-length limit in haus, but member names and strings do in JSON), that plain
-JSON is well formed, and linear time.
+the written text back to the value, for a value without duplicate keys
+(`UniqueKeys`, which every parsed value has) that is within the limits
+(`Value.fits`: record keys and tags count like strings, §7). The JSON
+written is well formed (number tokens, distinct member names): the lossless
+form (`lossless_wellFormed`) and the plain form (`toJson_wellFormed`, in
+[`Json/PlainWellFormed.lean`](Haus/Json/PlainWellFormed.lean): integers are
+normalized literals, a float's spelling is a JSON number (`spell_json`), a
+record's members are some of the value's fields, and `_tag` never meets a
+payload field named `_tag`, the case `toJson_error` refuses). And it is
+within the JSON limits (`Fits`, nesting `4 · maxDepth + 1`): the lossless
+form (`lossless_fits`, [`Json/Fits.lean`](Haus/Json/Fits.lean)) when the
+limits leave room for its member names and for number literals in strings
+(`LosslessOk`: `maxStringLength` at least 5 and at least
+`maxNumberLength · 6/5 + 4`, the longest haus number within the limits,
+an integer whose hex form fits); the plain form (`toJson_fits`,
+[`Json/PlainFits.lean`](Haus/Json/PlainFits.lean)) when also
+`maxStringLength` is at least 6 (`values`) and `maxNumberLength` at least 22
+(`PlainOk`). The last is needed: a float's spelling can be an integer of 21
+digits, a JSON number token that the JSON limits count as written, while a
+haus value may use its shorter hex form, so with `maxNumberLength` 19 to 21
+a value can fit and its plain JSON not. The defaults meet both. Not proven:
+linear time.
 
 How the model follows §16 where it was clarified while writing it (all now
 in the spec, with vectors):

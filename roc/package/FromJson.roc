@@ -61,11 +61,13 @@ FromJson := [].{
 	within_depth : Try(a, Decode.Error), (a -> Value) -> Try(a, Decode.Error)
 	within_depth = |result, encode| within_limits(result, encode, Value.default_limits)
 
-	## `within_depth` for the depth limit of `limits`:
+	## `within_depth` for the depth limit of `limits`, which must be at most
+	## `Value.max_supported_depth`:
 	##
 	##     FromJson.one_with(text, limits, |j| FromJson.within_limits(Order.read_json_order(j), Order.encode_order, limits))
 	within_limits : Try(a, Decode.Error), (a -> Value), Value.Limits -> Try(a, Decode.Error)
 	within_limits = |result, encode, limits| {
+		Value.check_limits(limits).map_err(|reason| { reason, path: "" })?
 		x = result?
 		if (depth(encode(x)) > limits.max_depth) Decode.fail("nesting deeper than ${limits.max_depth.to_str()} levels") else Ok(x)
 	}
@@ -489,3 +491,28 @@ expect FromJson.one_with("1234", small, FromJson.u16) == Err(Syntax({ reason: "n
 expect FromJson.lines_with("123\n123\n", small, FromJson.u16) == Ok([123, 123]) and FromJson.lines_with("123\n1234\n", small, FromJson.u16).is_err()
 expect FromJson.within_limits(Ok(nest(2)), |v| v, small).is_ok()
 expect FromJson.within_limits(Ok(nest(3)), |v| v, small).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 2 levels")
+
+# Up to the supported depth; a deeper limit is an error that names the maximum.
+at_max : Value.Limits
+at_max = { ..Value.default_limits, max_depth: Value.max_supported_depth }
+
+expect FromJson.within_limits(Ok(nest(1024)), |v| v, at_max).is_ok()
+expect FromJson.within_limits(Ok(nest(1025)), |v| v, at_max).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 1024 levels")
+expect {
+	text = "${"{\"_tag\":\"Some\",\"value\":".repeat(1024)}{\"_tag\":\"None\"}${"}".repeat(1024)}"
+	FromJson.one_with(text, at_max, |j| FromJson.within_limits(loop(j), |v| v, at_max)).is_ok()
+}
+too_deep : Value.Limits
+too_deep = { ..Value.default_limits, max_depth: 1025 }
+unsupported : Str
+unsupported = "max_depth 1025 is more than the supported maximum, 1024"
+expect FromJson.one_with("1", too_deep, FromJson.u16) == Err(Syntax({ reason: unsupported, line: 1, column: 1 }))
+expect FromJson.lines_with("1", too_deep, FromJson.u16) == Err(Syntax({ reason: unsupported, line: 1, column: 1 }))
+expect FromJson.within_limits(Ok(nest(1)), |v| v, too_deep).map_ok(|_| {}).map_err(Decode.message) == Err(unsupported)
+
+## `type Loop = Maybe Loop` read from plain JSON, as its haus value.
+loop : JsonValue -> Try(Value, Decode.Error)
+loop = |j| FromJson.maybe(j, True, loop).map_ok(|m| match m {
+	None => Tag("None", [])
+	Some(v) => Tag("Some", [v])
+})

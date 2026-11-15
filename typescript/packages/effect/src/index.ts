@@ -35,7 +35,8 @@
 import { HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Value } from "@haus-fmt/haus"
 import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus"
 import {
-  fromJson as valueOfJson, fromPlainJson, HausDecodeError, HausEncodeError, jsonDepth, MAX_DEPTH, parseJson, parseJsonLines, stringifyJson, toPlainJson, type Json, type JsonType,
+  fromJson as valueOfJson, fromPlainJson, HausDecodeError, HausEncodeError, jsonDepth, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, parseJson, parseJsonLines, stringifyJson, toPlainJson,
+  type Json, type JsonType,
 } from "@haus-fmt/haus"
 import type { Limits } from "@haus-fmt/haus/schema"
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
@@ -51,14 +52,25 @@ export type { Json, Value }
 
 /**
  * Limits for one call (spec §7), as in the core's `h.decode`: the parser's
- * `maxDepth` (256 by default), `maxNumberLength`, `maxExponent` and
- * `maxStringLength`, and `maxSteps` for the conversion. Unset ones keep their
- * defaults. Every decoder takes them with its input, every encoder with its
- * value (`Haus.encode` and `Haus.encodeStream` as `limits` in their options):
- * `Haus.decode(Root)(text, { maxDepth: 1000 })`. Encode with the limits you
- * decode with, and a decoded value always encodes again.
+ * `maxDepth` (256 by default, at most `MAX_SUPPORTED_DEPTH`, 512),
+ * `maxNumberLength`, `maxExponent` and `maxStringLength`, and `maxSteps` for
+ * the conversion. Unset ones keep their defaults. Every decoder takes them
+ * with its input, every encoder with its value (`Haus.encode` and
+ * `Haus.encodeStream` as `limits` in their options):
+ * `Haus.decode(Root)(text, { maxDepth: 512 })`. Encode with the limits you
+ * decode with, and a decoded value always encodes again. A `maxDepth` above
+ * 512 fails with a HausLimitsError.
  */
 export type { Limits }
+
+/**
+ * The deepest nesting this binding supports (spec §7): 512 levels. The core
+ * parser, the converters and Effect's own schema decoder recurse, so a
+ * `maxDepth` above this fails with a HausLimitsError instead of overflowing
+ * the stack on deep input. (Effect's decoder, the shallowest path, overflows
+ * near 800 levels of Node's default stack.)
+ */
+export { MAX_SUPPORTED_DEPTH }
 
 // ── errors ───────────────────────────────────────────────────
 
@@ -75,6 +87,11 @@ export class HausSchemaError extends Schema.TaggedError<HausSchemaError, { reado
   index: Schema.optionalKey(Schema.Int),
   /** Where in the decoded value the error is: field names and array indexes (see `locateIssue`). */
   path: Schema.optionalKey(Schema.Array(Schema.Union([Schema.String, Schema.Int]))),
+}) {}
+
+/** Limits that can't be used (spec §7): a `maxDepth` above `MAX_SUPPORTED_DEPTH` (512), or not a whole number. The message names the maximum. */
+export class HausLimitsError extends Schema.TaggedError<HausLimitsError, { readonly brand: unique symbol }>()("HausLimitsError", {
+  message: Schema.String,
 }) {}
 
 type Path = ReadonlyArray<string | number>
@@ -146,7 +163,21 @@ export const locateIssue = (value: Value, path: ReadonlyArray<string | number>):
   return v
 }
 
-export type HausError = HausParseError | HausSchemaError
+export type HausError = HausParseError | HausSchemaError | HausLimitsError
+
+/** Fail with a HausLimitsError for limits the binding can't honour (see `HausLimitsError`). */
+const checkLimits = (limits: Limits): Effect.Effect<void, HausLimitsError> => {
+  const issue = limitsIssue(limits)
+  return issue === undefined ? Effect.void : Effect.fail(new HausLimitsError({ message: issue }))
+}
+
+/** `effect`, after checking `limits`. */
+const withLimits = <A, E, R>(limits: Limits, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | HausLimitsError, R> =>
+  Effect.andThen(checkLimits(limits), effect)
+
+/** Re-index a HausSchemaError of a stream element; other errors pass unchanged. */
+const atIndex = (index: number) => <E>(e: E | HausSchemaError): E | HausSchemaError =>
+  e instanceof HausSchemaError ? new HausSchemaError({ message: e.message, index, ...(e.path ? { path: e.path } : {}) }) : e
 
 // ── Any ──────────────────────────────────────────────────────
 
@@ -370,17 +401,20 @@ export const decodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
   checkSchema(ast)
   const convert = compile(ast)
   const decode = Schema.decodeUnknownEffect(s)
-  return (value: Value, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]> =>
-    // Conversion work is bounded by the size of the input (see convert.ts).
-    fromSync(() => decoding(value, limits, convert), conversionErrorOf).pipe(
-      Effect.flatMap((encoded) => decode(encoded, decodeOptions)),
-      Effect.mapError((e) => (e instanceof HausSchemaError ? e : schemaError(e))),
-    ) as Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>
+  return (value: Value, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]> =>
+    withLimits(
+      limits,
+      // Conversion work is bounded by the size of the input (see convert.ts).
+      fromSync(() => decoding(value, limits, convert), conversionErrorOf).pipe(
+        Effect.flatMap((encoded) => decode(encoded, decodeOptions)),
+        Effect.mapError((e) => (e instanceof HausSchemaError ? e : schemaError(e))),
+      ),
+    ) as Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]>
 }
 
 /** `decodeValue` for codecs already checked by the caller's signature. */
 const valueDecoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(schema: S, codecs: ReadonlyArray<AnyCodec>) =>
-  (decodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Value, limits?: Limits) => Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>)(
+  (decodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Value, limits?: Limits) => Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]>)(
     schema,
     ...codecs,
   )
@@ -390,11 +424,12 @@ const valueDecoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(s
  *
  *   Haus.decode(Root)(text)                         // the types of the schema
  *   Haus.decode(Root, cents, geojson)(text)         // with the codecs' types for Money and LatLng
- *   Haus.decode(Root)(text, { maxDepth: 1000 })     // other limits than the defaults (spec §7)
+ *   Haus.decode(Root)(text, { maxDepth: 512 })      // other limits than the defaults (spec §7)
  */
 export const decode = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const fromValue = valueDecoder<S, C>(schema, codecs)
   return Effect.fn("Haus.decode")(function* (text: string, limits: Limits = {}) {
+    yield* checkLimits(limits)
     const values = yield* fromSync(() => parseAll(text, limits), parseErrorOf)
     if (values.length !== 1) {
       return yield* new HausSchemaError({ message: `expected exactly one value, found ${values.length}` })
@@ -435,7 +470,7 @@ export interface SourceDecoder<A, R> {
  */
 const decodeSource = <X, A, R>(
   read: (chunks: ChunkSource, limits: Limits) => AsyncIterable<X>,
-  decodeItem: (item: X, limits: Limits) => Effect.Effect<A, HausSchemaError, R>,
+  decodeItem: (item: X, limits: Limits) => Effect.Effect<A, HausSchemaError | HausLimitsError, R>,
   span: string,
 ): SourceDecoder<A, R> => {
   const decodeChunks = <E>(chunks: ChunkSource, limits: Limits): Stream.Stream<A, HausError | E, R> =>
@@ -444,12 +479,13 @@ const decodeSource = <X, A, R>(
         e instanceof SourceFailure ? Stream.fail(e.error as E)
         : Option.match(parseErrorOf(e), { onNone: () => Stream.die(e), onSome: Stream.fail })),
       Stream.zipWithIndex,
-      Stream.mapEffect(([item, index]) =>
-        decodeItem(item, limits).pipe(Effect.mapError(({ message, path }) => new HausSchemaError({ message, index, ...(path ? { path } : {}) })))),
+      Stream.mapEffect(([item, index]) => decodeItem(item, limits).pipe(Effect.mapError(atIndex(index)))),
     )
   function decode(source: ChunkSource, limits?: Limits): Stream.Stream<A, HausError, R>
   function decode<E, R2>(source: Stream.Stream<string | Uint8Array, E, R2>, limits?: Limits): Stream.Stream<A, HausError | E, R | R2>
   function decode<E, R2>(source: ChunkSource | Stream.Stream<string | Uint8Array, E, R2>, limits: Limits = {}): Stream.Stream<A, HausError | E, R | R2> {
+    const issue = limitsIssue(limits)
+    if (issue !== undefined) return Stream.fail(new HausLimitsError({ message: issue }))
     const decoded = Stream.isStream(source)
       ? Stream.unwrap(
         Stream.toAsyncIterableEffect(
@@ -490,11 +526,14 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
   checkSchema(ast)
   const toValue = compileEncoder(ast)
   const encode = Schema.encodeUnknownEffect(s)
-  return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Value, HausSchemaError, S["EncodingServices"]> =>
-    encode(value, { errors: "first" }).pipe(
-      Effect.mapError(schemaError),
-      Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), conversionErrorOf)),
-    ) as Effect.Effect<Value, HausSchemaError, S["EncodingServices"]>
+  return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]> =>
+    withLimits(
+      limits,
+      encode(value, { errors: "first" }).pipe(
+        Effect.mapError(schemaError),
+        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), conversionErrorOf)),
+      ),
+    ) as Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>
 }
 
 /** Options of the haus encoders: the format, and the limits the value is held to (spec §7). */
@@ -521,7 +560,7 @@ const withOptions = (defaults: EncodeOptions, options: EncodeOptions = {}): [For
 
 /** `encodeValue` for codecs already checked by the caller's signature. */
 const valueEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(schema: S, codecs: ReadonlyArray<AnyCodec>) =>
-  (encodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, limits?: Limits) => Effect.Effect<Value, HausSchemaError, S["EncodingServices"]>)(
+  (encodeValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, limits?: Limits) => Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>)(
     schema,
     ...codecs,
   )
@@ -530,10 +569,10 @@ const valueEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(s
  * Encode a typed value as haus text in the standard format (no trailing
  * newline). Pass the same codecs as for decoding; options go with the
  * value: `Haus.encode(Root, cents)(order, { style: "compact" })`, and
- * `{ limits: { maxDepth: 1000 } }` for a reader with other limits (spec §7).
+ * `{ limits: { maxDepth: 512 } }` for a reader with other limits (spec §7).
  */
-export function encode<S extends Schema.Top>(schema: S, options?: EncodeOptions): (value: S["Type"], options?: EncodeOptions) => Effect.Effect<string, HausSchemaError, S["EncodingServices"]>
-export function encode<S extends Schema.Top, const C extends ReadonlyArray<AnyCodec>>(schema: S, ...codecs: C & Checked<S, C>): (value: Decoded<S, C>, options?: EncodeOptions) => Effect.Effect<string, HausSchemaError, S["EncodingServices"]>
+export function encode<S extends Schema.Top>(schema: S, options?: EncodeOptions): (value: S["Type"], options?: EncodeOptions) => Effect.Effect<string, HausSchemaError | HausLimitsError, S["EncodingServices"]>
+export function encode<S extends Schema.Top, const C extends ReadonlyArray<AnyCodec>>(schema: S, ...codecs: C & Checked<S, C>): (value: Decoded<S, C>, options?: EncodeOptions) => Effect.Effect<string, HausSchemaError | HausLimitsError, S["EncodingServices"]>
 export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<AnyCodec | EncodeOptions | undefined>) {
   const [codecs, defaults] = splitArgs(args)
   const toValue = valueEncoder<S, []>(schema, codecs)
@@ -547,19 +586,21 @@ export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<A
  * Encode a stream of values as haus stream chunks, each ending in ",\n".
  * Compact by default (one item per line); pass `{ style: "pretty" }` for multi-line items.
  */
-export function encodeStream<S extends Schema.Top>(schema: S, options?: EncodeOptions): <E, R>(values: Stream.Stream<S["Type"], E, R>, options?: EncodeOptions) => Stream.Stream<string, E | HausSchemaError, R | S["EncodingServices"]>
-export function encodeStream<S extends Schema.Top, const C extends ReadonlyArray<AnyCodec>>(schema: S, ...codecs: C & Checked<S, C>): <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, options?: EncodeOptions) => Stream.Stream<string, E | HausSchemaError, R | S["EncodingServices"]>
+export function encodeStream<S extends Schema.Top>(schema: S, options?: EncodeOptions): <E, R>(values: Stream.Stream<S["Type"], E, R>, options?: EncodeOptions) => Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]>
+export function encodeStream<S extends Schema.Top, const C extends ReadonlyArray<AnyCodec>>(schema: S, ...codecs: C & Checked<S, C>): <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, options?: EncodeOptions) => Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]>
 export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<AnyCodec | EncodeOptions | undefined>) {
   const [codecs, defaults] = splitArgs(args)
   const toValue = valueEncoder<S, []>(schema, codecs)
-  return <E, R>(values: Stream.Stream<S["Type"], E, R>, options?: EncodeOptions): Stream.Stream<string, E | HausSchemaError, R | S["EncodingServices"]> => {
+  return <E, R>(values: Stream.Stream<S["Type"], E, R>, options?: EncodeOptions): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
     const [format, limits] = withOptions(defaults, options)
+    const issue = limitsIssue(limits)
+    if (issue !== undefined) return Stream.fail(new HausLimitsError({ message: issue }))
     return values.pipe(
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toValue(value, limits).pipe(
           Effect.map((v) => stringify(v, { style: "compact", ...format }) + ",\n"),
-          Effect.mapError(({ message }) => new HausSchemaError({ message, index })),
+          Effect.mapError((e) => (e instanceof HausSchemaError ? new HausSchemaError({ message: e.message, index }) : e)),
         )),
       Stream.withSpan("Haus.encodeStream"),
     )
@@ -589,13 +630,13 @@ const jsonLimits = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth
 export const toJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const type = jsonForm(schema, codecs)
   const toValue = valueEncoder<S, C>(schema, codecs)
-  return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Json, HausSchemaError, S["EncodingServices"]> =>
+  return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]> =>
     toValue(value, limits).pipe(Effect.flatMap((v) => fromSync(() => toPlainJson(type, v, limits), jsonErrorOf)))
 }
 
 /** `toJsonValue` for codecs already checked by the caller's signature. */
 const jsonEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(schema: S, codecs: ReadonlyArray<AnyCodec>) =>
-  (toJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, limits?: Limits) => Effect.Effect<Json, HausSchemaError, S["EncodingServices"]>)(
+  (toJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (v: Decoded<S, C>, limits?: Limits) => Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]>)(
     schema,
     ...codecs,
   )
@@ -621,13 +662,13 @@ export const toJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCo
 export const fromJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const type = jsonForm(schema, codecs)
   const fromValue = valueDecoder<S, C>(schema, codecs)
-  return (json: Json, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]> =>
-    fromSync(() => fromPlainJson(type, json, limits), jsonErrorOf).pipe(Effect.flatMap((value) => fromValue(value, limits)))
+  return (json: Json, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]> =>
+    withLimits(limits, fromSync(() => fromPlainJson(type, json, limits), jsonErrorOf).pipe(Effect.flatMap((value) => fromValue(value, limits))))
 }
 
 /** `fromJsonValue` for codecs already checked by the caller's signature. */
 const jsonDecoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(schema: S, codecs: ReadonlyArray<AnyCodec>) =>
-  (fromJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (j: Json, limits?: Limits) => Effect.Effect<Decoded<S, C>, HausSchemaError, S["DecodingServices"]>)(
+  (fromJsonValue as (s: S, ...c: ReadonlyArray<AnyCodec>) => (j: Json, limits?: Limits) => Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]>)(
     schema,
     ...codecs,
   )
@@ -643,6 +684,7 @@ const jsonDecoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(sc
 export const fromJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const fromJsonOf = jsonDecoder<S, C>(schema, codecs)
   return Effect.fn("Haus.fromJson")(function* (text: string, limits: Limits = {}) {
+    yield* checkLimits(limits)
     const json = yield* fromSync(() => parseJson(text, jsonLimits(limits)), parseErrorOf)
     return yield* fromJsonOf(json, limits)
   })
@@ -662,16 +704,19 @@ export const decodeJsonLines = <S extends Schema.Top, const C extends ReadonlyAr
 /** Encode a stream of values as JSON Lines of their plain JSON (spec §16): one line per value, each ending in a line feed. */
 export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const toJsonOf = jsonEncoder<S, C>(schema, codecs)
-  return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, limits: Limits = {}): Stream.Stream<string, E | HausSchemaError, R | S["EncodingServices"]> =>
-    values.pipe(
+  return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, limits: Limits = {}): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
+    const issue = limitsIssue(limits)
+    if (issue !== undefined) return Stream.fail(new HausLimitsError({ message: issue }))
+    return values.pipe(
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toJsonOf(value, limits).pipe(
           Effect.flatMap((json) => fromSync(() => stringifyJson(json) + "\n", jsonErrorOf)),
-          Effect.mapError(({ message, path }) => new HausSchemaError({ message, index, ...(path ? { path } : {}) })),
+          Effect.mapError(atIndex(index)),
         )),
       Stream.withSpan("Haus.encodeJsonLines"),
     )
+  }
 }
 
 /**
@@ -681,6 +726,7 @@ export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyAr
  * and `Haus.toJson(Haus.Any)`.)
  */
 export const valueFromJson = Effect.fn("Haus.valueFromJson")(function* (text: string, limits: Limits = {}) {
+  yield* checkLimits(limits)
   return yield* fromSync(() => valueOfJson(text, limits), (e) => Option.orElse(parseErrorOf(e), () => jsonErrorOf(e)))
 })
 

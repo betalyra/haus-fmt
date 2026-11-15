@@ -21,7 +21,7 @@
 import { HausDecodeError, HausEncodeError, START, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
-import { longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
+import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
 import { parseStream, type ChunkSource } from "./stream.js"
 import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
@@ -43,7 +43,10 @@ export { formatPath, HausDecodeError, HausEncodeError, type Path } from "./error
  * ends in an error instead of exhausting CPU, memory or the stack.
  */
 export interface Limits extends Partial<ValueLimits> {
-  /** Deepest nesting of values (default 256, the parser's limit). */
+  /**
+   * Deepest nesting of values (default 256, the parser's limit), at most
+   * MAX_SUPPORTED_DEPTH (512): a larger one is a RangeError naming it.
+   */
   readonly maxDepth?: number
   /**
    * Most schema steps (one per schema applied to a value). Decoding defaults
@@ -183,7 +186,10 @@ const countValues = (root: Value, maxDepth: number, cap: number, at: At): number
   while (stack.length > 0) {
     const [v, depth] = stack.pop()!
     if (++count > cap) at.fail(`value has more than ${cap} nodes`)
-    if (depth > maxDepth) at.fail(`value nested deeper than ${maxDepth} levels`)
+    // A container here is one level more (empty or not), as the parser counts it.
+    if (depth >= maxDepth && (v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0))) {
+      at.fail(`value nested deeper than ${maxDepth} levels`)
+    }
     if (v.kind === "array") for (const x of v.items) stack.push([x, depth + 1])
     else if (v.kind === "record") for (const x of v.fields.values()) stack.push([x, depth + 1])
     // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
@@ -485,7 +491,11 @@ const array_ = <A>(item: Schema<A>): Schema<readonly A[]> =>
   make<readonly A[]>(
     `Array ${item.expected}`,
     (v, p) => (v.kind === "array" ? v.items.map((x, i) => item.decode(x, p.child(i))) : mismatch(`Array ${item.expected}`, v, p)),
-    (xs, p) => (Array.isArray(xs) ? p.enter(xs, () => arr((xs as readonly A[]).map((x, i) => item.encode(x, p.child(i))))) : invalid("an array", xs, p)),
+    (xs, p) => {
+      if (!Array.isArray(xs)) return invalid("an array", xs, p)
+      p.open()
+      return p.enter(xs, () => arr((xs as readonly A[]).map((x, i) => item.encode(x, p.child(i)))))
+    },
     { kind: "array", item: jsonType(item) },
   )
 
@@ -508,6 +518,7 @@ const map_ = <A>(value: Schema<A>): Schema<ReadonlyMap<string, A>> =>
     },
     (m, p) => {
       if (!(m instanceof Map)) return invalid("a Map", m, p)
+      p.open()
       return p.enter(m, () => rec(new Map([...m].map(([k, x]) => {
         if (typeof k !== "string") return invalid("string keys", k, p)
         return [k, value.encode(x, p.child(k))] as const
@@ -633,6 +644,7 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
   }
   const encodeRecord = (a: RecordOf<F>, at: At): HRecord => {
     if (typeof a !== "object" || a === null) return invalid("an object", a, at)
+    at.open()
     return at.enter(a, () => {
       const out = new Map<string, Value>()
       for (const [key, schema] of entries) {
@@ -825,9 +837,10 @@ const checkedValue = (raw: unknown, at: At): Value => {
   at.step()
   if (!isValueNode(raw)) return invalid("a haus value", raw, at)
   const { maxStringLength } = at.limits
-  const checkedString = (s: unknown, what: string): string => {
+  /** A string, key or tag within the string limit (spec §7). */
+  const checkedString = (s: unknown, what: string, kind: "string" | "key" | "tag" = "string"): string => {
     if (typeof s !== "string") return invalid(what, s, at)
-    return longerThan(s, maxStringLength) ? at.fail(`string longer than ${maxStringLength} characters`) : s
+    return longerThan(s, maxStringLength) ? at.fail(`${kind} longer than ${maxStringLength} characters`) : s
   }
   switch (raw.kind) {
     case "number": {
@@ -851,7 +864,7 @@ const checkedValue = (raw: unknown, at: At): Value => {
       const fields = new globalThis.Map<string, Value>()
       let changed = false
       for (const [k, x] of raw.fields) {
-        const y = checkedValue(x, at.child(checkedString(k, "a string key")))
+        const y = checkedValue(x, at.child(checkedString(k, "a string key", "key")))
         changed ||= y !== x
         fields.set(k, y)
       }
@@ -859,6 +872,7 @@ const checkedValue = (raw: unknown, at: At): Value => {
     }
     case "variant": {
       if (typeof raw.tag !== "string" || !TAG.test(raw.tag)) return invalid("a tag name", raw.tag, at)
+      checkedString(raw.tag, "a tag name", "tag")
       if (!Array.isArray(raw.args)) return invalid("an array of arguments", raw.args, at)
       if (raw.args.length > 0) at.open()
       // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
@@ -1067,8 +1081,10 @@ export const stringify = <A>(schema: Schema<A>, value: A, options: FormatOptions
   stringifyValue(encode(schema, value, options), options)
 
 /** Encode several values as a stream file: a comma after every value. */
-export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: FormatOptions & Limits = {}): string =>
-  format([...values].map((v, i) => schema.encode(v, encodeAt(options, i))), options)
+export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: FormatOptions & Limits = {}): string => {
+  checkLimits(options)
+  return format([...values].map((v, i) => schema.encode(v, encodeAt(options, i))), options)
+}
 
 /**
  * Encode values one at a time as stream chunks, each ending in ",\n", e.g.

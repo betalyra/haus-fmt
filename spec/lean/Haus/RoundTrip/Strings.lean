@@ -92,9 +92,15 @@ theorem key_canonical {k : Text} {s : String} (h : Key L k s) : Key L (Canonical
         simp only [Bool.and_eq_true, List.all_eq_true] at hi
         exact ⟨c, cs, heq, hi.1, hi.2⟩
       · simp at hi
-    simpa [Canonical.key, hi] using Key.ident (L := L) s.toList hid
+    have hl : s.toList.length ≤ L.maxStringLength := by
+      cases h with
+      | ident _ hl => simpa using hl
+      | quoted _ hs =>
+        cases hs with
+        | mk raw s' _ hl => simpa using hl
+    simpa [Canonical.key, hi] using Key.ident (L := L) s.toList hid hl
   · cases h with
-    | ident ht =>
+    | ident ht _ =>
       exfalso; apply hi
       obtain ⟨c, cs, rfl, hc, hcs⟩ := ht
       simp [isIdent, hc, List.all_eq_true.mpr hcs]

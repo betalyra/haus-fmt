@@ -32,11 +32,11 @@ theorem _root_.Haus.Grammar.Val.mono {n : Nat} {t : Text} {v : Value} :
     obtain ⟨m', rfl, h'⟩ := succ_of_le hm; exact .array m' inner xs (hi.mono m' h')
   | .record _ t fs hr, m, hm => by
     obtain ⟨m', rfl, h'⟩ := succ_of_le hm; exact .record m' t fs (hr.mono m' h')
-  | .tag _ t h, m, _ => .tag m t h
-  | .payload _ t sp inner xs ht hsp hi hxs, m, hm => by
-    obtain ⟨m', rfl, h'⟩ := succ_of_le hm; exact .payload m' t sp inner xs ht hsp (hi.mono m' h') hxs
-  | .recordPayload _ t sp r fs ht hsp hr, m, hm => by
-    obtain ⟨m', rfl, h'⟩ := succ_of_le hm; exact .recordPayload m' t sp r fs ht hsp (hr.mono m' h')
+  | .tag _ t h hl, m, _ => .tag m t h hl
+  | .payload _ t sp inner xs ht hl hsp hi hxs, m, hm => by
+    obtain ⟨m', rfl, h'⟩ := succ_of_le hm; exact .payload m' t sp inner xs ht hl hsp (hi.mono m' h') hxs
+  | .recordPayload _ t sp r fs ht hl hsp hr, m, hm => by
+    obtain ⟨m', rfl, h'⟩ := succ_of_le hm; exact .recordPayload m' t sp r fs ht hl hsp (hr.mono m' h')
 
 theorem _root_.Haus.Grammar.Items.mono {n : Nat} {t : Text} {xs : List Value} :
     Items L n t xs → ∀ m, n ≤ m → Items L m t xs
@@ -171,12 +171,12 @@ theorem _root_.Haus.Grammar.Val.roundTrip (hL : numberLimit ≤ L.maxNumberLengt
     simpa [canon, write, canonList_eq] using this
   | .record m t fs hr => by
     rw [canon_record]; exact .record m _ _ (hr.roundTrip hL)
-  | .tag _ t ht => by
-    simpa [canon, canonList, write] using Val.tag n t ht
-  | .payload m t sp inner xs ht hsp hi hxs => by
+  | .tag _ t ht hl => by
+    simpa [canon, canonList, write] using Val.tag n t ht hl
+  | .payload m t sp inner xs ht hl hsp hi hxs => by
     have hall : ∀ x ∈ xs, Val L m (write x.canon) x.canon := (hi.roundTrip hL)
     -- `Tag(…)` with the arguments in canonical form
-    have general := Val.payload m t [] _ _ ht blank_nil (items_of (xs.map canon) fun y hy => by
+    have general := Val.payload m t [] _ _ ht hl blank_nil (items_of (xs.map canon) fun y hy => by
       obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hy; exact hall x hx) (by simpa using hxs)
     rcases xs with _ | ⟨x, _ | ⟨y, ys⟩⟩
     · exact absurd rfl hxs
@@ -186,15 +186,15 @@ theorem _root_.Haus.Grammar.Val.roundTrip (hL : numberLimit ≤ L.maxNumberLengt
         have hv := hall (.record fs) (by simp)
         rw [canon_record] at hv
         obtain ⟨k, rfl, hr⟩ := val_record hv
-        have := Val.recordPayload (k + 1) t [] _ _ ht blank_nil (hr.mono (k + 1) (by omega))
+        have := Val.recordPayload (k + 1) t [] _ _ ht hl blank_nil (hr.mono (k + 1) (by omega))
         simpa [canon, canonList, canon_record, write] using this
       · have hx' : ∀ fs, x ≠ .record fs := fun fs h => hx ⟨fs, h⟩
         rw [show (Value.variant (String.ofList t) [x]).canon = .variant (String.ofList t) [x.canon] by
           simp [canon, canonList], write_single _ (canon_ne_record hx')]
         simpa [writeList] using general
     · simpa [canon, canonList_eq, write, writeList] using general
-  | .recordPayload m t sp r fs ht hsp hr => by
-    have := Val.recordPayload m t [] _ _ ht blank_nil (hr.roundTrip hL)
+  | .recordPayload m t sp r fs ht hl hsp hr => by
+    have := Val.recordPayload m t [] _ _ ht hl blank_nil (hr.roundTrip hL)
     simpa [canon, canonList, canon_record, write] using this
 
 theorem _root_.Haus.Grammar.Items.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {xs : List Value} :

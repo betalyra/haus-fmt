@@ -181,7 +181,7 @@ theorem Tag.crOk {t : Text} (h : Tag t) : CrOk t := by
 
 theorem Key.crOk {L : Limits} {t : Text} {k : String} (h : Key L t k) : CrOk t := by
   cases h with
-  | ident hi => exact hi.crOk
+  | ident hi _ => exact hi.crOk
   | quoted _ hs => exact hs.crOk
 
 /-! ## Whitespace and comments -/
@@ -226,10 +226,10 @@ theorem Val.crOk {L : Limits} {n : Nat} {t : Text} {v : Value} : Val L n t v →
   | .bytes _ _ _ h _ => .append (.append (by decide) h.crOk) (by decide)
   | .array _ _ _ h => .cons (by decide) (.append h.crOk (by decide))
   | .record _ _ _ h => h.crOk
-  | .tag _ _ h => h.crOk
-  | .payload _ _ _ _ _ ht hsp hi _ =>
+  | .tag _ _ h _ => h.crOk
+  | .payload _ _ _ _ _ ht _ hsp hi _ =>
       .append (.append (.append ht.crOk (blanks_crOk hsp)) (.cons (by decide) hi.crOk)) (by decide)
-  | .recordPayload _ _ _ _ _ ht hsp hr => .append (.append ht.crOk (blanks_crOk hsp)) hr.crOk
+  | .recordPayload _ _ _ _ _ ht _ hsp hr => .append (.append ht.crOk (blanks_crOk hsp)) hr.crOk
 
 theorem Items.crOk {L : Limits} {n : Nat} {t : Text} {xs : List Value} : Items L n t xs → CrOk t
   | .empty _ _ hw => hw.crOk

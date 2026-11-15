@@ -1,0 +1,97 @@
+---
+title: Where types come from
+description: The prelude, standard modules and schema packages, and how a schema uses each.
+---
+
+Data never imports anything. `Date("2027-03-15")` and `Money(19.90, EUR)` are valid haus with a schema or without one: to a parser, each is just a tag with its arguments. Imports only appear in schema files, and they decide which rules a schema binding checks.
+
+```haus title="workshop.haus"
+{
+  signupBy: Date("2027-03-15"),
+  price: Money(19.90, EUR),
+  seats: 40,
+}
+```
+
+```haus-schema title="workshop.schema.haus"
+import std/time (Date)
+import @haus/money (Money)
+
+type Root = { signupBy: Date, price: Money, seats: UInt16 }
+```
+
+`UInt16` comes from the prelude, `Date` from a standard module, and `Money` from a schema package.
+
+| | Prelude | Standard modules | Packages |
+|---|---|---|---|
+| Examples | `Int`, `String`, `Decimal`, `Maybe a` | `Date`, `Instant`, `Duration` | `Money`, `LatLng`, your own |
+| In a schema | nothing: always in scope | `import std/time (Date)` | `import @haus/money (Money)` |
+| Defined by | the spec | the spec | package authors: `@haus/` for the official extensions, anyone else under a name they own |
+| Versions | fixed from haus 1.0 on | versioned with the spec; a module only gains types | its own semantic version |
+| Comes with every schema binding | yes | yes | no: you add it as a dependency, from npm, crates.io, PyPI, … |
+| Rules beyond the shape | built in: integer ranges, exact decimals | built in: the [std/time profile](/docs/spec/time) | none in the schema; profiles that codecs can check |
+| Your schema can define a type with the same name | no | yes, if it doesn't import it | yes, if it doesn't import it |
+
+## The prelude
+
+The prelude is always in scope. It is the data model itself:
+
+- **Numbers:** `Int` (any size), `Int8`, `Int16`, `Int32`, `Int64`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32`, `Float64`, `Decimal`
+- **Text and bytes:** `String`, `Bytes`
+- **Structure:** `Bool`, `Maybe a`, `Result e a`, `Array a`, `Map v`, and records `{ … }`
+- **Anything:** `Any`, a value kept exactly as parsed, for a payload you pass on without knowing its shape
+- **Secrets:** `Secret a`, the same data as `a`, kept out of logs and error messages
+- **Streams:** `Stream a`, a whole file as a sequence of values
+
+Their rules are built in: `300` is out of range for a `UInt8`, and a `Decimal` keeps `19.90` as `19.90`. Prelude names are reserved, so a schema can't define its own `String` or `Int`. The full list, with comments: [`prelude.schema.haus`](https://github.com/betalyra/haus-fmt/blob/main/spec/prelude.schema.haus).
+
+## Standard modules
+
+Standard modules ship with the spec, and every schema binding supports them completely. Today there is one, `std/time`:
+
+```haus-schema
+import std/time (Date, Time, DateTime, Instant, ZonedDateTime, Duration, YearMonth, TimeZone)
+```
+
+Each value is a tag around a string. A schema binding checks the string against the [std/time profile](/docs/spec/time): with `Date` in the schema, `Date("2027-02-30")` is an error, not a date. Which type fits what is in [Time and money](/docs/tours/time-money).
+
+A module only gains types and its rules never change, so an import of a standard module carries no version.
+
+Forget the import and the checker tells you what to write. Your editor shows it as you type:
+
+```text
+unknown type Date; import it with: import std/time (Date)
+```
+
+## Schema packages
+
+Everything else is a schema package: an ordinary schema file with a manifest next to it, installed like any other dependency. A package fixes the shape only and changes no syntax.
+
+### Official extensions
+
+| Package | Types | Profile |
+|---|---|---|
+| [`@haus/money`](https://github.com/betalyra/haus-fmt/tree/main/extensions/money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
+| [`@haus/geo`](https://github.com/betalyra/haus-fmt/tree/main/extensions/geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |
+
+The schema says a `Money` is a `Decimal` and a currency tag. Whether `XYZ` counts as a currency is up to the codec your application chooses; a profile is the recommended rule, defined by test vectors that codecs implement.
+
+An import can name the major version it expects: `import @haus/money@1 (Money)`.
+
+### Your own packages
+
+Anyone can publish a schema package. A package is a directory with a manifest, `haus.package.haus`, and the schema it names:
+
+```haus title="haus.package.haus"
+{ name: "@acme/shipping", version: "1.0.0", schema: "shipping.schema.haus" }
+```
+
+There is no haus registry. Publish wherever your users install dependencies from: npm, crates.io, PyPI, a private registry or a git repository. Name the package after something you own (`@your-domain/…`, `@your-github-org/…`), and give it no install scripts: a schema package is data. Names, resolution and versions are in [spec §13.3](/docs/spec#133-schema-packages).
+
+For types shared within one project, you don't need a package: `import ./common (Address)` imports `common.schema.haus` from the same folder.
+
+## Why three?
+
+**Why isn't time in the prelude?** Prelude names are reserved in every schema. With `Time` in the prelude, a schema that has its own `Time` type would have to rename it. In a module, a name is only taken when you import it. And from 1.0 on, the prelude is fixed: new built-in types only go into modules, so no existing schema ever breaks.
+
+**Why isn't money a standard module?** A standard module has to pass three tests: the prelude can't express it, nearly every domain needs it, and a fixed, published grammar defines it. Time passes all three. Money passes the second only partly, `Decimal` already keeps amounts exact, and currencies are a registry that changes. So money is a package, versioned on its own. The tests are in [spec §13.2](/docs/spec#132-standard-modules).

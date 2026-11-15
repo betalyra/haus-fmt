@@ -134,8 +134,8 @@ builtin `Hasher`.)
 
 The parser enforces the limits of spec §7. The reading functions use the
 defaults (`Value.default_limits`: depth 256, number literals of 1000
-characters, exponents up to 6144, strings of 16 Mi characters); each has a
-`_with` version that takes a `Value.Limits` record:
+characters, exponents up to 6144, strings, record keys and tags of 16 Mi
+characters); each has a `_with` version that takes a `Value.Limits` record:
 
 ```roc
 limits = { ..Value.default_limits, max_depth: 64 }
@@ -147,12 +147,27 @@ Value.parse_all_with(text, limits)
 | haus text | `Value.parse_all_with`, `Value.parse_with`, `Value.parse_bytes_with`, `Decode.all_with`, `Decode.one_with` |
 | a stream | `Streaming.reader({ ..Streaming.defaults, limits })` |
 | JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.from_json_with`, `JsonValue.from_lossless_json_with`, `FromJson.one_with`, `FromJson.lines_with` |
-| writing for such a reader | `Encode.to_str_with`, `Encode.stream_with` |
+| writing haus for such a reader | `Encode.to_str_with`, `Encode.stream_with` |
+| writing JSON for such a reader | `JsonValue.to_str_with`, `JsonValue.write_lines_with`, `JsonValue.to_lossless_json_with`, `JsonValue.lossless_with`, `ToJson.to_str_with`, `ToJson.lines_with` |
+
+`Value.max_supported_depth` is 1024: the parser, decoding, encoding and the
+JSON mappings recurse once per level of nesting, so the binding supports no
+deeper limit. Every function above fails, before reading or writing anything,
+if `max_depth` is larger, with an error that names the maximum (`max_depth
+2000 is more than the supported maximum, 1024`); `Value.check_limits(limits)`
+says so too. With basic-cli 0.26 a program overflows its stack only past about
+24,000 levels on the deepest path (the lossless JSON form of nested variants,
+measured on aarch64 macOS, optimized and dev builds alike), so 1024 leaves a
+wide margin; the canonical form, the hash and `Encode.equals` take no limits
+and recurse further still (about 70,000 levels).
 
 A generated `from_json_<name>` checks the depth of what it read against 256;
 for another depth limit, read with `read_json_<name>` and check with
-`FromJson.within_limits(result, encode_<name>, limits)`. The canonical form
-and the hash don't depend on limits.
+`FromJson.within_limits(result, encode_<name>, limits)`. A generated
+`to_json_<name>` doesn't check the depth of the haus value: for a reader with
+other limits, write with `ToJson.to_str_with(x, to_json_<name>, limits)`, which
+checks the JSON's numbers, strings and nesting (4·d + 1 levels). The canonical
+form and the hash don't depend on limits.
 
 ## JSON
 

@@ -197,9 +197,9 @@ inductive ByteChars : Text → List UInt8 → Prop
 
 /-! ## Values -/
 
-/-- `key ::= ident | basic_string` -/
+/-- `key ::= ident | basic_string`, at most `maxStringLength` characters, like a string (§7). -/
 inductive Key (L : Limits) : Text → String → Prop
-  | ident (t : Text) : Ident t → Key L t (String.ofList t)
+  | ident (t : Text) : Ident t → t.length ≤ L.maxStringLength → Key L t (String.ofList t)
   | quoted (t : Text) (s : String) : BasicString L t s → Key L t s
 
 mutual
@@ -215,15 +215,15 @@ mutual
         Items L n inner xs → Val L (n + 1) ('[' :: inner ++ [']']) (.arr xs)
     | record (n : Nat) (t : Text) (fs : List (String × Value)) :
         Record L n t fs → Val L (n + 1) t (.record fs)
-    /-- `Tag` -/
-    | tag (n : Nat) (t : Text) : Tag t → Val L n t (.variant (String.ofList t) [])
+    /-- `Tag`. A tag has at most `maxStringLength` characters, like a string (§7). -/
+    | tag (n : Nat) (t : Text) : Tag t → t.length ≤ L.maxStringLength → Val L n t (.variant (String.ofList t) [])
     /-- `Tag(a, b)`: the payload starts on the tag's line. `Tag()` is not allowed. -/
     | payload (n : Nat) (t sp inner : Text) (xs : List Value) :
-        Tag t → (∀ c ∈ sp, isBlank c = true) → Items L n inner xs → xs ≠ [] →
+        Tag t → t.length ≤ L.maxStringLength → (∀ c ∈ sp, isBlank c = true) → Items L n inner xs → xs ≠ [] →
         Val L (n + 1) (t ++ sp ++ '(' :: inner ++ [')']) (.variant (String.ofList t) xs)
     /-- `Tag { … }`: the same value as `Tag({ … })`, but one level. -/
     | recordPayload (n : Nat) (t sp r : Text) (fs : List (String × Value)) :
-        Tag t → (∀ c ∈ sp, isBlank c = true) → Record L n r fs →
+        Tag t → t.length ≤ L.maxStringLength → (∀ c ∈ sp, isBlank c = true) → Record L n r fs →
         Val L (n + 1) (t ++ sp ++ r) (.variant (String.ofList t) [.record fs])
 
   /-- `ws ( value ws ( "," ws value ws )* ( "," ws )? )?`: the inside of `[…]` and `(…)`. -/

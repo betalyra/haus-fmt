@@ -110,7 +110,12 @@ fn known_ids(file: &File, input: &Input) -> Vec<String> {
 /// `unknown type Money`, with how to import it if it's a well-known type.
 pub(crate) fn unknown_type(name: &str) -> String {
     match name {
-        "Money" | "Currency" => format!("unknown type {name} (import it with: import @haus/money ({name}))"),
+        "Money" | "Currency" => format!(
+            "unknown type {name} (import it with: import @haus/money ({name}), and install @haus/money with your package manager)"
+        ),
+        "LatLng" | "BBox" => format!(
+            "unknown type {name} (import it with: import @haus/geo ({name}), and install @haus/geo with your package manager)"
+        ),
         _ if STD_TIME.contains(&name) => format!("unknown type {name} (import it with: import std/time ({name}))"),
         _ => format!("unknown type {name}"),
     }
@@ -291,11 +296,29 @@ impl Fun {
             Fun::Expr(e) => quote!({ let x = #arg; #e }),
         }
     }
+
+    /// A JSON reader, which also takes the `::haus::Decoder` `__d`, as a
+    /// function value: `f`, or `|x, __d| expr`.
+    fn reader(&self) -> TokenStream {
+        match self {
+            Fun::Path(f) => f.clone(),
+            Fun::Expr(e) => quote!(|x, __d| #e),
+        }
+    }
+
+    /// A JSON reader applied to `arg`, with `__d` in scope.
+    fn read(&self, arg: TokenStream) -> TokenStream {
+        match self {
+            Fun::Path(f) => quote!(#f(#arg, __d)),
+            Fun::Expr(e) => quote!({ let x = #arg; #e }),
+        }
+    }
 }
 
 /// A Rust type, how to decode it from `x: &Value` and encode `x: &T`, and
 /// how to read it from `x: &Json` and write `x: &T` as plain JSON. Encoding
-/// and writing also take `__e: ::haus::Encoder`, which counts the depth.
+/// and writing also take `__e: ::haus::Encoder`, and reading JSON
+/// `__d: ::haus::Decoder`, which count the depth.
 struct Rs {
     ty: TokenStream,
     de: Fun,
@@ -318,7 +341,7 @@ impl Rs {
         Rs {
             de: Fun::Path(quote!(<#ty as ::haus::Decode>::decode)),
             en: Fun::Path(quote!(::haus::Encode::encode_with)),
-            from_json: Fun::Path(quote!(<#ty as ::haus::FromJson>::from_json)),
+            from_json: Fun::Path(quote!(<#ty as ::haus::FromJson>::from_json_with)),
             to_json: Fun::Path(quote!(::haus::ToJson::to_json_with)),
             ty,
             shadow,
@@ -336,19 +359,19 @@ impl Rs {
     fn container(ty: TokenStream, shadow: TokenStream, helper: &str, items: &[&Rs]) -> Rs {
         let helper = format_ident!("{helper}");
         let (de, en): (Vec<_>, Vec<_>) = items.iter().map(|r| (r.de.value(), r.en.encoder())).unzip();
-        let (from, to): (Vec<_>, Vec<_>) = items.iter().map(|r| (r.from_json.value(), r.to_json.encoder())).unzip();
+        let (from, to): (Vec<_>, Vec<_>) = items.iter().map(|r| (r.from_json.reader(), r.to_json.encoder())).unzip();
         Rs {
             ty,
             de: Fun::Expr(quote!(::haus::de::#helper(x, #(#de),*))),
             en: Fun::Expr(quote!(::haus::ser::#helper(x, __e, #(#en),*))),
-            from_json: Fun::Expr(quote!(::haus::json::de::#helper(x, #(#from),*))),
+            from_json: Fun::Expr(quote!(::haus::json::de::#helper(x, __d, #(#from),*))),
             to_json: Fun::Expr(quote!(::haus::json::ser::#helper(x, __e, #(#to),*))),
             shadow,
         }
     }
 
     fn boxed(self) -> Rs {
-        let (ty, shadow, de, from) = (self.ty, self.shadow, self.de.call(quote!(x)), self.from_json.call(quote!(x)));
+        let (ty, shadow, de, from) = (self.ty, self.shadow, self.de.call(quote!(x)), self.from_json.read(quote!(x)));
         Rs {
             ty: quote!(::std::boxed::Box<#ty>),
             de: Fun::Expr(quote!(#de.map(::std::boxed::Box::new))),
@@ -387,7 +410,7 @@ impl FieldRs {
 
     /// `name: r.required("key", from_json)?`, `r` being a JSON object.
     fn read_json(&self) -> TokenStream {
-        self.read(self.rs.from_json.value())
+        self.read(self.rs.from_json.reader())
     }
 
     fn read(&self, f: TokenStream) -> TokenStream {
@@ -536,7 +559,7 @@ impl Item<'_> {
             impl #from_g ::haus::FromJson for #name #g {
                 #from_null
                 #[allow(unused_variables)]
-                fn from_json(j: &::haus::Json) -> ::std::result::Result<Self, ::haus::DecodeError> {
+                fn from_json_with(j: &::haus::Json, __d: ::haus::Decoder) -> ::std::result::Result<Self, ::haus::DecodeError> {
                     #from
                 }
             }
@@ -552,7 +575,7 @@ impl Item<'_> {
     }
 }
 
-/// The bodies of `FromJson::from_json` (of `j: &Json`) and `ToJson::to_json_with`,
+/// The bodies of `FromJson::from_json_with` (of `j: &Json` and `__d`) and `ToJson::to_json_with`,
 /// and `NULLABLE` in each if it isn't false.
 struct Json {
     from: TokenStream,
@@ -689,13 +712,13 @@ impl<'a> Gen<'a> {
             "Secret" => {
                 let inner = self.lower(&args[0], at)?;
                 let (ty, shadow, de, en) = (&inner.ty, &inner.shadow, inner.de.value(), inner.en.encoder());
-                let (from, to) = (inner.from_json.value(), inner.to_json.encoder());
+                let (from, to) = (inner.from_json.reader(), inner.to_json.encoder());
                 let what = format!("Secret {}", args[0]);
                 Ok(Rs {
                     ty: quote!(::haus::Secret<#ty>),
                     de: Fun::Expr(quote!(::haus::de::secret(x, #what, #de))),
                     en: Fun::Expr(quote!(::haus::ser::secret(x, __e, #what, #en))),
-                    from_json: Fun::Expr(quote!(::haus::json::de::secret(x, #what, #from))),
+                    from_json: Fun::Expr(quote!(::haus::json::de::secret(x, __d, #what, #from))),
                     to_json: Fun::Expr(quote!(::haus::json::ser::secret(x, __e, #what, #to))),
                     shadow: quote!(::haus::Secret<#shadow>),
                 })
@@ -718,14 +741,14 @@ impl<'a> Gen<'a> {
             "Maybe" => {
                 let some = self.lower(&args[0], at)?;
                 let (ty, shadow) = (&some.ty, &some.shadow);
-                let (from, to) = (some.from_json.value(), some.to_json.encoder());
+                let (from, to) = (some.from_json.reader(), some.to_json.encoder());
                 // `true` forces the tagged form, as for an inner type whose JSON can be null.
                 let (from_null, to_null) = match self.tagged_maybes.contains(&pos) {
                     true => (quote!(true), quote!(true)),
                     false => (some.nullable("FromJson"), some.nullable("ToJson")),
                 };
                 Ok(Rs {
-                    from_json: Fun::Expr(quote!(::haus::json::de::maybe(x, #from_null, #from))),
+                    from_json: Fun::Expr(quote!(::haus::json::de::maybe(x, __d, #from_null, #from))),
                     to_json: Fun::Expr(quote!(::haus::json::ser::maybe(x, __e, #to_null, #to))),
                     ..Rs::container(
                         quote!(::std::option::Option<#ty>),
@@ -823,7 +846,7 @@ impl<'a> Gen<'a> {
             f.en(quote!(self.#n), false)
         });
         let bind = bind_record(quote!(::haus::de::Record::new(v, #label)), closed, fields);
-        let json_bind = bind_record(quote!(::haus::json::de::Object::new(j, #label)), closed, fields);
+        let json_bind = bind_record(quote!(::haus::json::de::Object::new(j, __d, #label)), closed, fields);
         let read = fs.iter().map(FieldRs::read_json);
         let written = fs.iter().map(|f| {
             let n = &f.name;
@@ -873,7 +896,7 @@ impl<'a> Gen<'a> {
             inner.en.encode(quote!(&self.0)),
             Json {
                 from: {
-                    let from = inner.from_json.call(quote!(j));
+                    let from = inner.from_json.read(quote!(j));
                     quote!(#from.map(Self))
                 },
                 to: inner.to_json.encode(quote!(&self.0)),
@@ -891,7 +914,7 @@ impl<'a> Gen<'a> {
                 return ::std::result::Result::Err(::haus::de::unknown_tag(tag, &[#tag]));
             }
         };
-        let tagged = quote!(let (tag, r) = ::haus::json::de::variant(j, #label)?; #check);
+        let tagged = quote!(let (tag, r) = ::haus::json::de::variant(j, __d, #label)?; #check);
         let (definition, decode, encode, json) = match self.payload(case, &item.at)? {
             Payload::None => (
                 quote!(pub struct #name;),
@@ -899,7 +922,7 @@ impl<'a> Gen<'a> {
                     ::haus::de::args::<0>(tag, args)?;
                     ::std::result::Result::Ok(Self)
                 },
-                quote!(::std::result::Result::Ok(::haus::ser::variant(#tag, ::std::vec![]))),
+                quote!(__e.tag(#tag)),
                 // A closed variant whose tags have no payload: a string.
                 Json {
                     nullable: None,
@@ -1008,7 +1031,7 @@ impl<'a> Gen<'a> {
                     Payload::None => Arm {
                         decl: quote!(#deprecated #v),
                         de: quote!(#tag => { ::haus::de::args::<0>(tag, args)?; ::std::result::Result::Ok(Self::#v) }),
-                        en: quote!(Self::#v => ::std::result::Result::Ok(::haus::ser::variant(#tag, ::std::vec![]))),
+                        en: quote!(Self::#v => __e.tag(#tag)),
                         from_json: match names_only {
                             true => quote!(#tag => ::std::result::Result::Ok(Self::#v),),
                             false => quote!(#tag => { r.args::<0>()?; ::std::result::Result::Ok(Self::#v) }),
@@ -1101,7 +1124,7 @@ impl<'a> Gen<'a> {
         };
         let read_tag = match names_only {
             true => quote!(let tag = ::haus::json::de::tag_name(j, #label)?;),
-            false => quote!(let (tag, r) = ::haus::json::de::variant(j, #label)?;),
+            false => quote!(let (tag, r) = ::haus::json::de::variant(j, __d, #label)?;),
         };
         Ok(item.implement(
             item.header(&[]),
@@ -1177,17 +1200,18 @@ fn tuple_en(items: &[Rs]) -> Vec<TokenStream> {
     items.iter().zip(vars(items.len())).map(|(r, var)| r.en.encode(quote!(#var))).collect()
 }
 
-/// `let [a0, a1] = r.args::<2>()?;` (`r` a tag's JSON object) and the values read.
+/// `let [a0, a1] = r.args::<2>()?;` (`r` a tag's JSON object), `__d` inside
+/// the payload, and the values read.
 fn tuple_from_json(items: &[Rs]) -> (TokenStream, Vec<TokenStream>) {
     let (vars, n) = (vars(items.len()), Literal::usize_unsuffixed(items.len()));
-    let bind = quote!(let [#(#vars),*] = r.args::<#n>()?;);
+    let bind = quote!(let [#(#vars),*] = r.args::<#n>()?; let __d = r.inner()?;);
     let values = items
         .iter()
         .zip(&vars)
         .enumerate()
         .map(|(i, (r, var))| {
-            let (i, f) = (Literal::usize_unsuffixed(i), r.from_json.value());
-            quote!(::haus::json::de::arg::<#n, _>(#i, #var, #f)?)
+            let (i, f) = (Literal::usize_unsuffixed(i), r.from_json.reader());
+            quote!(::haus::json::de::arg::<#n, _>(#i, #var, __d, #f)?)
         })
         .collect();
     (bind, values)

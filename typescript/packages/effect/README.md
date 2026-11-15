@@ -131,9 +131,13 @@ const text = yield* Haus.encode(Order)(order, { style: "compact", limits: { maxD
 ```
 
 Encoders hold the value to `maxDepth` too, so what they write reads again
-with the same limits. The parser, Effect's decoder and the formatter recurse,
-so a raised `maxDepth` is bounded by the JavaScript stack: around a thousand
-levels, fewer for deeply wrapped schemas.
+with the same limits. `maxDepth` is at most `Haus.MAX_SUPPORTED_DEPTH`, 512:
+the parser, the converters and Effect's own schema decoder recurse, and 512
+levels fit Node's default stack with room to spare (Effect's decoder, the
+shallowest path, overflows near 800). A larger `maxDepth` fails with a
+`HausLimitsError` naming the maximum, in the error channel. Effect's encoder
+also recurses over the value it is given, before haus sees it: a value built
+in code nested a thousand levels or more can overflow there.
 
 ## Schema files
 

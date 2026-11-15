@@ -59,7 +59,7 @@ possible input):
 | `File.controls` (A2) | Its only control characters are tab, LF and CR |
 | `File.crlf` (A2) | Every CR is directly followed by LF: no lone carriage returns |
 | `File.uniqueKeys` (A3) | Every record in it, at any depth, has unique keys |
-| `File.bounded` (A4) | Every value is within the limits: depth, numbers, strings, byte strings |
+| `File.bounded` (A4) | Every value is within the limits: depth, numbers, strings, byte strings, record keys and tags |
 | `char_isScalar` (A5) | Every string is valid Unicode, with no lone surrogates |
 
 **About the reference parser:** it computes exactly the grammar. It accepts
@@ -192,7 +192,9 @@ literals and its tags are tags, as every parsed value is (`parse_wf`).
 | `parse_wf`, `lossless_parsed`, `plain_parsed` | Every value the parser returns is well formed, so both round trips hold for every value of every haus text |
 | `JSON.parse_write`, `JSON.parse_sound`, `JSON.parse_write_iff` | `JSON.parse L (JSON.write j) = .ok j` exactly when `j` is well formed (`JSON.WellFormed`: number tokens, no duplicate member names) and within the limits (`JSON.Fits`) |
 | `JSON.parseLines_writeLines`, `JSON.parseLines_sound` | The same for JSON Lines: the compact writer writes nothing below U+0020 (`JSON.write_chars`), so each value is one line |
-| `JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`, `plain_text_parsed` | The lossless and plain round trips through JSON text, when the JSON is within the limits |
+| `JSON.lossless_wellFormed`, `toJson_wellFormed` | The lossless and the plain JSON of a value without duplicate keys are well formed: number tokens (`spell_json`: a float's spelling is a JSON number), distinct member names |
+| `JSON.lossless_fits`, `toJson_fits` | The lossless and the plain JSON of a value within the haus limits (`Value.fits`) are within the JSON limits (`JSON.Fits`), when the limits leave room for the forms' member names and numbers (`LosslessOk`, `PlainOk`: true of the defaults) |
+| `JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`, `plain_text_parsed` | The lossless and plain round trips through JSON text, for a value without duplicate keys within the limits |
 
 The plain round trip goes by induction on the rules of decoding (`Dec`),
 with `floatLaw` for floats. A `Maybe` writes `None` as `null` only when its

@@ -4,6 +4,9 @@ import std/time (Date, Instant)
 // Recursion through a payload: Node holds Box<Tree>.
 type Tree = < Leaf | Node Tree Tree >
 
+// Recursion through a record field: reply holds Option<Box<Thread>>.
+type Thread = { text: String, reply: Maybe Thread }
+
 // A generic record.
 type Page a = { items: Array a, next?: String }
 

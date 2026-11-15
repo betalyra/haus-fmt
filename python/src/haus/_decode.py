@@ -34,7 +34,7 @@ from ._json import (
     to_base64,
 )
 from ._number import INTEGER, int_text, normalize_number, number_limit_issue, to_int
-from ._parser import Limits
+from ._parser import Limits, make_room
 from ._schema_file import (
     ArrayType,
     BuiltinType,
@@ -258,12 +258,13 @@ def _tag_list(tags: Iterable[str]) -> str:
 # ── values written from Python: within the limits (spec §9.8) ──
 
 
-def _checked_string(s: object, at: _At, what: str = "a string") -> str:
+def _checked_string(s: object, at: _At, what: str = "a string", kind: str = "string") -> str:
+    """A string, key (`kind`) within the string limit (spec §7), and Unicode text."""
     if not isinstance(s, str):
         _invalid(what, s, at)
     limit = at.ctx.limits.max_string_length
     if len(s) > limit:
-        at.fail(f"string longer than {limit} characters")
+        at.fail(f"{kind} longer than {limit} characters")
     if not s.isascii() and _SURROGATE.search(s):
         at.fail("string with a lone surrogate (not Unicode text)")
     return s
@@ -301,6 +302,8 @@ def _mapping(x: object, at: _At, what: str) -> Mapping[object, object]:
 def _checked_tag(tag: object, at: _At) -> str:
     if not isinstance(tag, str) or not _TAG.fullmatch(tag):
         _invalid("a tag name", tag, at)
+    if len(tag) > at.ctx.limits.max_string_length:
+        at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters")
     return tag
 
 
@@ -364,7 +367,7 @@ def _checked_record(raw: Record, at: _At) -> Record:
     out: dict[str, Value] = {}
     changed = False
     for k, x in fields.items():
-        key = _checked_string(k, at, "a string key")
+        key = _checked_string(k, at, "a string key", "key")
         y = checked_value(x, at.child(key))
         changed = changed or y is not x
         out[key] = y
@@ -1172,6 +1175,8 @@ class _Variant(_Node):
         """
         if not _TAG.fullmatch(tag):
             at.fail("expected a tag ([A-Z][A-Za-z0-9_]*)", "_tag")
+        if len(tag) > at.ctx.limits.max_string_length:
+            at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", "_tag")
         if len(j) == 1:
             return Variant(tag)
         if len(j) == 2 and "args" in j:
@@ -1432,7 +1437,8 @@ def _count_values(root: Value, max_depth: int, at: _At) -> int:
         count += 1
         if count > _MAX_VALUES:
             at.fail(f"value has more than {_MAX_VALUES} nodes")
-        if depth > max_depth:
+        # A container here is one level more (empty or not), as the parser counts it.
+        if depth >= max_depth and isinstance(v, Array | Record | Variant) and (not isinstance(v, Variant) or v.args):
             at.fail(f"value nested deeper than {max_depth} levels")
         match v:
             case Array(items):
@@ -1453,6 +1459,7 @@ def _too_deep(at: _At) -> Never:
 
 
 def decode(node: _Node, value: Value, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
+    make_room(limits.max_depth)
     probe = _At(_Context(decoding=True, limits=limits, max_steps=_MAX_VALUES), None, key, 0)
     steps = (
         max_steps if max_steps is not None else STEPS_PER_VALUE * _count_values(value, limits.max_depth, probe) + 1024
@@ -1466,6 +1473,7 @@ def decode(node: _Node, value: Value, limits: Limits, max_steps: int | None, key
 
 
 def encode(node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> Value:
+    make_room(limits.max_depth)
     steps = DEFAULT_ENCODE_STEPS if max_steps is None else max_steps
     at = _At(_Context(decoding=False, limits=limits, max_steps=steps), None, key, 0)
     try:
@@ -1491,6 +1499,7 @@ def _count_json(root: Json) -> int:
 
 def from_plain_json(node: _Node, j: Json, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
     """A type's plain JSON (spec §16.3) as its Python value; the budget is 16 steps per JSON value by default."""
+    make_room(limits.max_depth)
     steps = max_steps if max_steps is not None else STEPS_PER_VALUE * _count_json(j) + 1024
     at = _At(_Context(decoding=True, limits=limits, max_steps=steps), None, key, 0)
     try:
@@ -1502,6 +1511,7 @@ def from_plain_json(node: _Node, j: Json, limits: Limits, max_steps: int | None,
 
 def to_plain_json(node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> Json:
     """A Python value of a type as its plain JSON (spec §16.3)."""
+    make_room(limits.max_depth)
     steps = DEFAULT_ENCODE_STEPS if max_steps is None else max_steps
     at = _At(_Context(decoding=False, limits=limits, max_steps=steps), None, key, 0)
     try:

@@ -33,12 +33,15 @@ type R = Result<Value, EncodeError>;
 pub struct Encoder {
     limits: Limits,
     depth: usize,
+    /// The value is a tag's only payload: a record here is written
+    /// `Tag { … }`, inside the payload's level rather than one more (§7).
+    payload: bool,
 }
 
 impl Encoder {
     /// At the top, for a reader with `limits`.
     pub fn new(limits: &Limits) -> Encoder {
-        Encoder { limits: *limits, depth: 0 }
+        Encoder { limits: *limits, depth: 0, payload: false }
     }
 
     pub fn limits(&self) -> &Limits {
@@ -50,17 +53,37 @@ impl Encoder {
         self.depth
     }
 
-    /// Inside one more container, if the depth limit allows it.
+    /// Inside one more container, if the depth limit allows it. Fails too
+    /// if the limit is more than [`crate::MAX_SUPPORTED_DEPTH`].
     pub fn nested(self) -> Result<Encoder, EncodeError> {
-        match self.depth >= self.limits.max_depth {
-            true => Err(EncodeError::new(format!("nesting deeper than {} levels", self.limits.max_depth))),
-            false => Ok(Encoder { depth: self.depth + 1, ..self }),
+        open(&self.limits, self.depth).map(|depth| Encoder { depth, payload: false, ..self })
+    }
+
+    /// Inside a tag's only payload: like [`Encoder::nested`], but a record
+    /// right inside takes no level of its own (`Tag { … }`).
+    pub(crate) fn payload(self) -> Result<Encoder, EncodeError> {
+        self.nested().map(|e| Encoder { payload: true, ..e })
+    }
+
+    /// Inside a record or map: one more level, unless the record is a tag's
+    /// only payload and so shares its level.
+    pub(crate) fn record_level(self) -> Result<Encoder, EncodeError> {
+        match self.payload {
+            true => Ok(Encoder { payload: false, ..self }),
+            false => self.nested(),
         }
     }
 
     /// A number literal, if the writer takes it.
     pub fn number(self, text: &str) -> R {
         Ok(Value::Number(normalized(text, &self.limits).map_err(EncodeError::new)?.into_owned()))
+    }
+
+    /// A tag without a payload: `None`, `Circle`, if it is a tag name within
+    /// the string limit.
+    pub fn tag(self, tag: &str) -> R {
+        check_tag(tag, &self.limits)?;
+        Ok(variant(tag, vec![]))
     }
 
     /// A string, if it is within the string limit.
@@ -83,8 +106,29 @@ impl Encoder {
 
     /// Whether the writer takes `v` here: it writes it, and drops the text.
     fn check(self, v: &Value) -> Result<(), EncodeError> {
-        Writer { out: &mut String::new(), limits: &self.limits }.value(v, self.depth)
+        supported(&self.limits)?;
+        // A record that is a tag's only payload shares the payload's level.
+        let depth = match (self.payload, v) {
+            (true, Value::Record(_)) => self.depth - 1,
+            _ => self.depth,
+        };
+        Writer { out: &mut String::new(), limits: &self.limits }.value(v, depth)
     }
+}
+
+/// The depth inside one more container, after `depth`, if `limits` allow it.
+pub(crate) fn open(limits: &Limits, depth: usize) -> Result<usize, EncodeError> {
+    supported(limits)?;
+    match depth >= limits.max_depth {
+        true => Err(EncodeError::new(format!("nesting deeper than {} levels", limits.max_depth))),
+        false => Ok(depth + 1),
+    }
+}
+
+/// Whether this binding supports `limits` (spec §7): an error naming
+/// [`crate::MAX_SUPPORTED_DEPTH`] if the depth limit is above it.
+pub(crate) fn supported(limits: &Limits) -> Result<(), EncodeError> {
+    limits.unsupported().map_or(Ok(()), |reason| Err(EncodeError::new(reason)))
 }
 
 /// A variant value. Doesn't check `tag`.
@@ -96,9 +140,11 @@ pub fn variant(tag: &str, args: Vec<Value>) -> Value {
 /// The values are encoded inside the payload, which is a level of its own.
 pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder) -> [R; N]) -> R {
     if N == 0 {
-        return Ok(variant(tag, vec![]));
+        return e.tag(tag);
     }
-    let args = values(e.nested()?)
+    check_tag(tag, &e.limits)?;
+    let inner = if N == 1 { e.payload()? } else { e.nested()? };
+    let args = values(inner)
         .into_iter()
         .enumerate()
         .map(|(i, v)| v.map_err(|e| e.within(Segment::Index(i)).within(Segment::Tag(tag.to_owned()))))
@@ -113,15 +159,20 @@ pub fn tagged_record<'k, const N: usize>(
     e: Encoder,
     fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N],
 ) -> R {
+    check_tag(tag, &e.limits)?;
     let payload = record(e, fields).map_err(|e| e.within(Segment::Tag(tag.to_owned())))?;
     Ok(variant(tag, vec![payload]))
 }
 
 /// A record from fields in order, leaving out missing optional ones.
 pub fn record<'k, const N: usize>(e: Encoder, fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N]) -> R {
-    fields(e.nested()?)
+    let inner = e.record_level()?;
+    fields(inner)
         .into_iter()
-        .filter_map(|(k, v)| Some(v?.map(|v| (k.to_owned(), v)).map_err(|e| e.within(Segment::Field(k.to_owned())))))
+        .filter_map(|(k, v)| {
+            let field = v?.and_then(|v| check_key(k, &inner.limits).map(|()| (k.to_owned(), v)));
+            Some(field.map_err(|e| e.within(Segment::Field(k.to_owned()))))
+        })
         .collect::<Result<_, _>>()
         .map(Value::Record)
 }
@@ -137,11 +188,11 @@ pub fn array<T>(items: &[T], e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
 }
 
 pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
-    let inner = e.nested()?;
+    let inner = e.record_level()?;
     m.iter()
         .map(|(k, v)| {
             let within = |e: EncodeError| e.within(Segment::Field(k.clone()));
-            check_length(k, &inner.limits).map_err(within)?;
+            check_key(k, &inner.limits).map_err(within)?;
             Ok((k.clone(), f(v, inner).map_err(within)?))
         })
         .collect::<Result<_, _>>()
@@ -150,7 +201,7 @@ pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R)
 
 pub fn maybe<T>(m: &Option<T>, e: Encoder, f: impl FnOnce(&T, Encoder) -> R) -> R {
     match m {
-        None => Ok(variant("None", vec![])),
+        None => e.tag("None"),
         Some(x) => tagged("Some", e, |e| [f(x, e)]),
     }
 }
@@ -242,8 +293,8 @@ impl Encode for Bytes {
     }
 }
 impl Encode for bool {
-    fn encode_with(&self, _: Encoder) -> R {
-        Ok(variant(if *self { "True" } else { "False" }, vec![]))
+    fn encode_with(&self, e: Encoder) -> R {
+        e.tag(if *self { "True" } else { "False" })
     }
 }
 macro_rules! integers {
@@ -261,9 +312,9 @@ macro_rules! floats {
         impl Encode for $t {
             fn encode_with(&self, e: Encoder) -> R {
                 if self.is_nan() {
-                    Ok(variant("NaN", vec![]))
+                    e.tag("NaN")
                 } else if self.is_infinite() {
-                    Ok(variant(if *self > 0.0 { "Infinity" } else { "NegInfinity" }, vec![]))
+                    e.tag(if *self > 0.0 { "Infinity" } else { "NegInfinity" })
                 } else {
                     e.number(&crate::float::text(*self))
                 }
@@ -313,6 +364,7 @@ pub fn write(v: &Value) -> Result<String, EncodeError> {
 /// integer longer than `limits.max_number_length` is written in hex, so
 /// that the same reader takes it.
 pub fn write_with(v: &Value, limits: &Limits) -> Result<String, EncodeError> {
+    supported(limits)?;
     let mut out = String::new();
     Writer { out: &mut out, limits }.value(v, 0)?;
     Ok(out)
@@ -326,8 +378,29 @@ struct Writer<'a> {
 type W = Result<(), EncodeError>;
 
 impl Writer<'_> {
-    /// `v`, inside `depth` containers.
+    /// `v`, inside `depth` containers. The steps that don't recurse are
+    /// functions of their own, so that this frame stays small (see
+    /// [`crate::MAX_SUPPORTED_DEPTH`]).
     fn value(&mut self, v: &Value, depth: usize) -> W {
+        match v {
+            Value::Array(items) => self.list('[', items, depth, ']'),
+            Value::Record(fields) => self.record(fields, depth),
+            Value::Variant { tag, args } => {
+                self.tag(tag)?;
+                match args.as_slice() {
+                    [] => Ok(()),
+                    [Value::Record(fields)] => {
+                        self.out.push(' ');
+                        self.record(fields, depth).map_err(|e| e.within(Segment::Tag(tag.clone())))
+                    }
+                    _ => self.list('(', args, depth, ')').map_err(|e| e.within(Segment::Tag(tag.clone()))),
+                }
+            }
+            scalar => self.scalar(scalar),
+        }
+    }
+
+    fn scalar(&mut self, v: &Value) -> W {
         match v {
             Value::Number(n) => {
                 let text = number(n, self.limits).map_err(EncodeError::new)?;
@@ -345,92 +418,94 @@ impl Writer<'_> {
                 }
                 self.out.push('"');
             }
-            Value::Array(items) => {
-                self.open(depth)?;
-                self.out.push('[');
-                self.items(items, depth + 1, Segment::Index)?;
-                self.out.push(']');
-            }
-            Value::Record(fields) => self.record(fields, depth)?,
-            Value::Variant { tag, args } => {
-                if !is_tag(tag) {
-                    return Err(EncodeError::new("not a tag name: A to Z, then letters, digits and _"));
-                }
-                self.out.push_str(tag);
-                let within = |e: EncodeError| e.within(Segment::Tag(tag.clone()));
-                match args.as_slice() {
-                    [] => {}
-                    [Value::Record(fields)] => {
-                        self.out.push(' ');
-                        self.record(fields, depth).map_err(within)?;
-                    }
-                    _ => {
-                        self.open(depth)?;
-                        self.out.push('(');
-                        self.items(args, depth + 1, Segment::Index).map_err(within)?;
-                        self.out.push(')');
-                    }
-                }
-            }
+            _ => {}
         }
         Ok(())
     }
 
-    /// Opening a container inside `depth` others.
-    fn open(&self, depth: usize) -> W {
-        if depth >= self.limits.max_depth {
-            return Err(EncodeError::new(format!("nesting deeper than {} levels", self.limits.max_depth)));
-        }
+    /// A tag name within the string limit.
+    fn tag(&mut self, tag: &str) -> W {
+        check_tag(tag, self.limits)?;
+        self.out.push_str(tag);
         Ok(())
     }
 
-    /// Items separated by `, `, at `depth`.
-    fn items(&mut self, items: &[Value], depth: usize, at: fn(usize) -> Segment) -> W {
+    /// `open item, item, … close`: an array or a payload, inside `depth` containers.
+    fn list(&mut self, open: char, items: &[Value], depth: usize, close: char) -> W {
+        let depth = self::open(self.limits, depth)?;
+        self.out.push(open);
         for (i, x) in items.iter().enumerate() {
             if i > 0 {
                 self.out.push_str(", ");
             }
-            self.value(x, depth).map_err(|e| e.within(at(i)))?;
+            self.value(x, depth).map_err(|e| e.within(Segment::Index(i)))?;
         }
+        self.out.push(close);
         Ok(())
     }
 
     fn record(&mut self, fields: &[(String, Value)], depth: usize) -> W {
-        self.open(depth)?;
+        let depth = self::open(self.limits, depth)?;
         if fields.is_empty() {
             self.out.push_str("{}");
             return Ok(());
         }
-        // Keys are unique (spec §1): a record built in code might repeat one.
-        if fields.len() > 1 {
-            let mut seen = HashSet::with_capacity(fields.len());
-            if let Some((k, _)) = fields.iter().find(|(k, _)| !seen.insert(k.as_str())) {
-                return Err(EncodeError::new("the key is used twice in this record").within(Segment::Field(k.clone())));
-            }
-        }
+        unique_keys(fields)?;
         self.out.push_str("{ ");
         for (i, (k, v)) in fields.iter().enumerate() {
-            if i > 0 {
-                self.out.push_str(", ");
-            }
-            let within = |e: EncodeError| e.within(Segment::Field(k.clone()));
-            check_length(k, self.limits).map_err(within)?;
-            key(k, self.out);
-            self.out.push_str(": ");
-            self.value(v, depth + 1).map_err(within)?;
+            self.key(i, k)?;
+            self.value(v, depth).map_err(|e| e.within(Segment::Field(k.clone())))?;
         }
         self.out.push_str(" }");
         Ok(())
     }
+
+    /// The `i`th key of a record, with `: ` after it.
+    fn key(&mut self, i: usize, k: &str) -> W {
+        if i > 0 {
+            self.out.push_str(", ");
+        }
+        check_key(k, self.limits).map_err(|e| e.within(Segment::Field(k.to_owned())))?;
+        key(k, self.out);
+        self.out.push_str(": ");
+        Ok(())
+    }
 }
 
-/// Whether a string or key is within the string limit.
-fn check_length(s: &str, limits: &Limits) -> W {
+/// Keys are unique (spec §1): a record built in code might repeat one.
+pub(crate) fn unique_keys(fields: &[(String, Value)]) -> W {
+    let mut seen = HashSet::with_capacity(fields.len());
+    match fields.iter().find(|(k, _)| !seen.insert(k.as_str())) {
+        Some((k, _)) => Err(EncodeError::new("the key is used twice in this record").within(Segment::Field(k.clone()))),
+        None => Ok(()),
+    }
+}
+
+/// Whether a record key is within the string limit (spec §7).
+pub(crate) fn check_key(k: &str, limits: &Limits) -> W {
+    check_text(k, "key", limits)
+}
+
+/// Whether a tag is a tag name, within the string limit (spec §4, §7).
+pub(crate) fn check_tag(tag: &str, limits: &Limits) -> W {
+    if !is_tag(tag) {
+        return Err(EncodeError::new("not a tag name: A to Z, then letters, digits and _"));
+    }
+    check_text(tag, "tag", limits)
+}
+
+/// Whether a string, key or tag (`what`) is within the string limit.
+fn check_text(s: &str, what: &str, limits: &Limits) -> W {
     let max = limits.max_string_length;
     if s.len() > max && s.chars().count() > max {
-        return Err(EncodeError::new(format!("string longer than {max} characters")));
+        return Err(EncodeError::new(format!("{what} longer than {max} characters")));
     }
     Ok(())
+}
+
+/// Whether a string is within the string limit.
+fn check_length(s: &str, limits: &Limits) -> W {
+    check_text(s, "string", limits)
 }
 
 /// Whether a byte string's hex is within the string limit.

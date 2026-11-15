@@ -464,7 +464,7 @@ theorem tag_quiet {t : Text} (h : Tag t) : ∀ c ∈ t, Quiet c := by
 theorem key_thru {L : Limits} {k : Text} {key : String} (h : Key L k key) (d : Nat) {rest : Text}
     (hr : NoQuote rest) : Thru ⟨.normal, d⟩ k ⟨.normal, d⟩ rest := by
   cases h with
-  | ident ht =>
+  | ident ht _ =>
     obtain ⟨c, cs, rfl, hc, hcs⟩ := ht
     refine thru_quiet (fun x hx => ?_) d rest
     simp at hx
@@ -500,13 +500,13 @@ theorem _root_.Haus.Grammar.Val.thru {L : Limits} {n : Nat} {t : Text} {x : Valu
     ((thru_open (c := '[') (by simp) d (inner ++ ']' :: rest)).seq
       ((hi.thru d (']' :: rest) (noQuote_cons (c := ']') (by decide) _)).seq (thru_close (c := ']') (by simp) d rest))).conv
   | .record _ _ _ hrec, d, rest, hr => hrec.thru d rest hr
-  | .tag _ _ ht, d, rest, _ => thru_quiet (tag_quiet ht) d rest
-  | .payload _ t sp inner _ ht hsp hi _, d, rest, hr =>
+  | .tag _ _ ht _, d, rest, _ => thru_quiet (tag_quiet ht) d rest
+  | .payload _ t sp inner _ ht _ hsp hi _, d, rest, hr =>
     ((thru_quiet (tag_quiet ht) d (sp ++ '(' :: inner ++ ')' :: rest)).seq
       ((thru_quiet (blanks_quiet hsp) d ('(' :: inner ++ ')' :: rest)).seq
       ((thru_open (c := '(') (by simp) d (inner ++ ')' :: rest)).seq
       ((hi.thru d (')' :: rest) (noQuote_cons (c := ')') (by decide) _)).seq (thru_close (c := ')') (by simp) d rest))))).conv
-  | .recordPayload _ t sp r _ ht hsp hrec, d, rest, hr =>
+  | .recordPayload _ t sp r _ ht _ hsp hrec, d, rest, hr =>
     ((thru_quiet (tag_quiet ht) d (sp ++ r ++ rest)).seq
       ((thru_quiet (blanks_quiet hsp) d (r ++ rest)).seq (hrec.thru d rest hr))).conv
 

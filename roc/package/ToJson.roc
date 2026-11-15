@@ -19,19 +19,34 @@ ToJson := [].{
 
 	## A value as plain JSON text, on one line.
 	to_str : a, (a -> Try(JsonValue, Encode.Error)) -> Try(Str, Encode.Error)
-	to_str = |x, writer| JsonValue.to_str(writer(x)?)
+	to_str = |x, writer| to_str_with(x, writer, Value.default_limits)
+
+	## `to_str` for a reader with other limits (see `JsonValue.to_str_with`):
+	## numbers and strings within them, and the JSON nested at most 4·d + 1
+	## levels for a depth limit d. Fails if d is more than
+	## `Value.max_supported_depth`.
+	to_str_with : a, (a -> Try(JsonValue, Encode.Error)), Value.Limits -> Try(Str, Encode.Error)
+	to_str_with = |x, writer, limits| {
+		Value.check_limits(limits).map_err(|reason| { reason, path: "" })?
+		JsonValue.to_str_with(writer(x)?, limits)
+	}
 
 	## Values as JSON Lines: each on its own line, followed by a line feed.
 	## Errors say which value: `[3].total`.
 	lines : List(a), (a -> Try(JsonValue, Encode.Error)) -> Try(Str, Encode.Error)
-	lines = |values, writer| {
+	lines = |values, writer| lines_with(values, writer, Value.default_limits)
+
+	## `lines` for a reader with other limits (see `to_str_with`).
+	lines_with : List(a), (a -> Try(JsonValue, Encode.Error)), Value.Limits -> Try(Str, Encode.Error)
+	lines_with = |values, writer, limits| {
+		Value.check_limits(limits).map_err(|reason| { reason, path: "" })?
 		var $out = []
 		var $i = 0.U64
 		for v in values {
 			$out = $out.append(within(writer(v), "[${$i.to_str()}]")?)
 			$i = $i + 1
 		}
-		JsonValue.write_lines($out)
+		JsonValue.write_lines_with($out, limits)
 	}
 
 	# ── scalars ─────────────────────────────────────────────
@@ -263,3 +278,13 @@ expect ToJson.to_str({ id: 1, nick: Missing }, |u| ToJson.object([("id", Present
 expect ToJson.unknown("Hexagon", [Num("1")]).map_ok(JsonValue.to_str) == Ok(Ok("{\"_tag\":\"Hexagon\",\"args\":[{\"num\":\"1\"}]}"))
 expect ToJson.unknown("Hexagon", [Num("x")]) == Err({ reason: "not a number literal", path: ".args[0]" })
 expect ToJson.lines([1, 2], ToJson.u8) == Ok("1\n2\n")
+
+# Writing for a reader with other limits.
+small : Value.Limits
+small = { ..Value.default_limits, max_depth: 2, max_string_length: 3 }
+
+expect ToJson.to_str_with("abc", ToJson.str, small) == Ok("\"abc\"") and ToJson.to_str_with("abcd", ToJson.str, small) == Err({ reason: "string longer than 3 characters", path: "" })
+expect ToJson.lines_with(["a", "abcd"], ToJson.str, small) == Err({ reason: "string longer than 3 characters", path: "[1]" })
+expect ToJson.lines_with(["a", "b"], ToJson.str, small) == Ok("\"a\"\n\"b\"\n")
+expect ToJson.to_str_with("a", ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+expect ToJson.lines_with([], ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })

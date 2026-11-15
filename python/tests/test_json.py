@@ -282,6 +282,64 @@ def test_deepest_values_at_the_default_limits() -> None:
     assert haus.equals(raw.from_json(raw.to_json(deep)), deep)
 
 
+def test_the_string_limit_counts_keys_and_tags_in_values_built_in_code() -> None:
+    """Raw values (`Any`) and the lossless form check record keys and tags against the string limit (spec §7)."""
+    four = Limits(max_string_length=4)
+    raw = SCHEMA["Raw"]
+    ok = Variant("Abcd", (Record({"abcd": Array(())}),))
+    assert raw.encode(ok, limits=four) == ok
+    assert haus.to_lossless_json(ok, limits=four) == '{"tag":"Abcd","args":[{"rec":{"abcd":[]}}]}'
+    for value, reason in (
+        (Record({"abcde": Array(())}), "key longer than 4 characters"),
+        (Array((Variant("Abcde"),)), "tag longer than 4 characters"),
+        (Variant("Abcde", (Record({"a": Array(())}),)), "tag longer than 4 characters"),
+    ):
+        with pytest.raises(HausEncodeError, match=reason):
+            raw.encode(value, limits=four)
+        with pytest.raises(HausEncodeError, match=reason):
+            haus.to_lossless_json(value, limits=four)
+    # In JSON text, member names and tags are JSON strings first: the reader's string limit.
+    with pytest.raises(HausJsonError, match="string longer than 4 characters"):
+        haus.from_lossless_json('{"tag": "Abcde"}', limits=four)
+    with pytest.raises(HausJsonError, match="string longer than 4 characters"):
+        haus.from_json('{"abcde": []}', limits=four)
+
+
+def test_deepest_values_at_the_supported_depth() -> None:
+    """512 levels, `MAX_SUPPORTED_DEPTH`, on every path: 2049 JSON levels for `Tag { … }`, from deep in the stack."""
+    limits = Limits(max_depth=haus.MAX_SUPPORTED_DEPTH)
+
+    def nested(frames: int) -> None:
+        if frames > 0:
+            return nested(frames - 1)
+        deep = haus.parse("T { a: " * 511 + "[1]" + " }" * 511, limits=limits)
+        assert haus.canonical(deep) == "T{a:" * 511 + "[1]" + "}" * 511
+        assert haus.equals(haus.from_lossless_json(haus.to_lossless_json(deep, limits=limits), limits=limits), deep)
+        lines = list(haus.to_lossless_json_lines([deep], limits=limits))
+        assert [haus.canonical(v) for v in haus.from_lossless_json_lines(lines[0], limits=limits)] == [
+            haus.canonical(deep)
+        ]
+        assert haus.equals(
+            haus.from_json("[" * 512 + "]" * 512, limits=limits), haus.parse("[" * 512 + "]" * 512, limits=limits)
+        )
+        raw = SCHEMA["Raw"]
+        assert haus.equals(raw.from_json(raw.to_json(deep, limits=limits), limits=limits), deep)
+        assert haus.equals(raw.decode(deep, limits=limits), deep)
+        t = SCHEMA["List"]
+        value: object = Tagged("Nil")
+        for i in range(512):
+            value = Tagged("Cons", (i, value))
+        text = t.canonical(value, limits=limits)
+        assert t.parse(text, limits=limits) == value
+        assert t.from_json(t.to_json(value, limits=limits), limits=limits) == value
+        with pytest.raises(haus.HausSyntaxError, match="deeper than 512"):
+            t.parse("Cons(0," + text + ")", limits=limits)
+        with pytest.raises(HausEncodeError, match="deeper than 512"):
+            t.encode(Tagged("Cons", (0, value)), limits=limits)
+
+    nested(500)
+
+
 def test_lossless_long_integers_within_the_hex_limit() -> None:
     """A whole number written in hex within the limit has a longer decimal literal (spec §12)."""
     value = haus.parse("0x" + "f" * 998)
