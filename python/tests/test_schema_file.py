@@ -268,11 +268,8 @@ def test_load_schema_with_files_and_packages(tmp_path: Path) -> None:
     )
     money = tmp_path / "vendor" / "money"
     money.mkdir(parents=True)
-    (money / "haus.package.haus").write_text(
-        '{ name: "@haus-fmt/money", version: "1.0.0", schema: "money.schema.haus" }'
-    )
-    (money / "money.schema.haus").write_text("type Money = < Money Decimal String >\n")
-    (money / "extra.schema.haus").write_text("type X = Int\n")
+    (money / "package.haus").write_text('{ name: "@haus-fmt/money", version: "1.0.0" }')
+    (money / "schema.haus").write_text("type Money = < Money Decimal String >\n")
 
     s = load_schema(app / "schemas" / "order.schema.haus", packages={"@haus-fmt/money": money})
     assert s["Root"].id == "my-app/schemas/order#Root"
@@ -281,7 +278,7 @@ def test_load_schema_with_files_and_packages(tmp_path: Path) -> None:
     assert s["Root"].parse('{ to: { city: "Paris" }, total: Money(1.50, "EUR") }')["total"] == Tagged(
         "Money", ("1.50", "EUR")
     )
-    assert identify(money / "extra.schema.haus") == "@haus-fmt/money@1/extra"
+    assert identify(money / "schema.haus") == "@haus-fmt/money@1"
 
     with pytest.raises(HausSchemaFileError, match="not among the packages"):
         load_schema(app / "schemas" / "order.schema.haus")

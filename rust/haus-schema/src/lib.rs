@@ -146,7 +146,10 @@ impl From<syntax::Error> for Error {
             .reason
             .split_once("(import it with: ")
             .and_then(|(_, rest)| rest.strip_suffix(')'))
-            .map(|how| format!("Import it with: {how}."));
+            .map(|how| format!("Import it with: {how}."))
+            .or_else(|| {
+                syntax::import_version_hint(&e.reason).filter(|_| e.code == ErrorCode::ImportVersion).map(str::to_owned)
+            });
         Error { position: Some((e.line, e.column)), hint, ..Error::new(e.code, e.reason) }
     }
 }

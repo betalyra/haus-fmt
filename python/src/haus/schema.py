@@ -40,7 +40,17 @@ from ._errors import HausJsonError, format_path
 from ._host import Maybe, Nothing, Secret, Some, Tagged, Unknown
 from ._json import Json, mapped_depth, read_json, read_lines, write_json
 from ._parser import DEFAULT_LIMITS, Limits, Parser
-from ._resolve import MANIFEST, FileResolver, Manifest, identify, installed_package, read_manifest, read_module
+from ._resolve import (
+    MANIFEST,
+    PACKAGE_SCHEMA,
+    FileResolver,
+    Manifest,
+    identify,
+    installed_package,
+    read_manifest,
+    read_module,
+    schema_path,
+)
 from ._schema_file import (
     ATTRIBUTES,
     BUILTINS,
@@ -55,6 +65,7 @@ from ._schema_file import (
     Instance,
     MapType,
     MaybeType,
+    ModuleError,
     ModuleResolver,
     NoPayload,
     ParamType,
@@ -81,6 +92,7 @@ __all__ = [
     "ATTRIBUTES",
     "BUILTINS",
     "MANIFEST",
+    "PACKAGE_SCHEMA",
     "STD_MODULES",
     "ArrayType",
     "Attribute",
@@ -102,6 +114,7 @@ __all__ = [
     "MapType",
     "Maybe",
     "MaybeType",
+    "ModuleError",
     "ModuleResolver",
     "NoPayload",
     "Nothing",
@@ -133,6 +146,7 @@ __all__ = [
     "load_schema",
     "parse_schema_file",
     "read_manifest",
+    "schema_path",
     "without_attributes",
 ]
 

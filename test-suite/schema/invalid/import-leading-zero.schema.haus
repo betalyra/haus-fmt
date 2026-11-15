@@ -1,0 +1,3 @@
+// A major version has no leading zeros (spec §13.3).
+import @haus-fmt/money@01 (Money)
+type A = { total: Money }

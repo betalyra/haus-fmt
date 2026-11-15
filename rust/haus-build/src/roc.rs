@@ -108,7 +108,11 @@ impl RocConfig {
     pub fn generate_package(&self, dir: &Path) -> Result<(String, String)> {
         let manifest = Manifest::read(dir)?;
         let module = package_module(&manifest.name);
-        let code = self.generate(&dir.join(&manifest.schema), &module, &manifest.id())?;
+        let schema = manifest.schema_path(dir)?;
+        let text = read(&schema)?;
+        let file = schema::parse(&text).map_err(|e| Error::from(e).in_file(&schema))?;
+        crate::packages::imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&schema))?;
+        let code = self.generate(&schema, &module, &manifest.id())?;
         Ok((module, code))
     }
 

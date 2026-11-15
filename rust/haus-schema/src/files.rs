@@ -2,7 +2,7 @@
 //! files next to the importing one. Resolution happens when a schema is
 //! loaded, never while data is parsed, and never over the network (§9.2).
 
-use crate::packages::{MANIFEST, Manifest, Packages};
+use crate::packages::{MANIFEST, Manifest, Packages, package_dir_of, package_of};
 use crate::{Error, Result};
 use haus::ErrorCode;
 use std::path::{Path, PathBuf};
@@ -14,9 +14,9 @@ pub struct Module {
     /// Unique for each file (its canonical path, say); passed back as `from`
     /// for the file's own imports.
     pub key: String,
-    /// The file's identity, the same in every language: `@haus-fmt/money@1`
-    /// for a package's schema (from its manifest), `@org/name@1/path` for its
-    /// other files.
+    /// The file's identity: `@haus-fmt/money@1` for a package's
+    /// `schema.haus` (from its manifest), the same in every language; for
+    /// other files, one the resolver chooses.
     pub id: String,
     pub text: String,
     /// The package's version, checked against an `@major` in the import.
@@ -51,7 +51,7 @@ impl Resolver for Packages {
             return Err(Error::new(ErrorCode::ImportUnavailable, reason));
         }
         let pkg = self.find(module)?;
-        read_module(&pkg.dir.join(&pkg.manifest.schema))
+        read_module(&pkg.manifest.schema_path(&pkg.dir)?)
     }
 }
 
@@ -59,7 +59,7 @@ impl Resolver for Packages {
 ///
 /// - `import ./common (Address)`: `./common.schema.haus`, next to the importing file;
 /// - `import @haus-fmt/money (Money)`: a package directory given with
-///   [`FileResolver::package`], else `node_modules/@haus-fmt/money/haus.package.haus`
+///   [`FileResolver::package`], else `node_modules/@haus-fmt/money/package.haus`
 ///   in the importing file's directory or above it.
 #[derive(Debug, Clone, Default)]
 pub struct FileResolver {
@@ -96,8 +96,20 @@ impl Resolver for FileResolver {
             },
         };
         if module.starts_with("./") || module.starts_with("../") {
-            let file = if module.ends_with(EXTENSION) { module.to_owned() } else { format!("{module}{EXTENSION}") };
-            let path = dir.join(file);
+            // A package is one file: its schema imports other packages by name (spec §13.3).
+            if let Some(package) = from.and_then(|from| package_dir_of(Path::new(from))) {
+                let name = Manifest::read(package).map_or_else(|_| package.display().to_string(), |m| m.name);
+                let reason = format!("the schema of {name} can't import files, only packages by name");
+                return Err(Error::new(ErrorCode::PackagePath, reason));
+            }
+            let path = dir.join(format!("{module}{EXTENSION}"));
+            // An application's file doesn't reach into a package: it imports the package by name.
+            let real = path.canonicalize().ok();
+            if let Some(into) = package_dir_of(&path).or_else(|| real.as_deref().and_then(package_dir_of)) {
+                let reason =
+                    format!("the file is in the package directory {}: import the package by its name", into.display());
+                return Err(Error::new(ErrorCode::PackagePath, reason));
+            }
             if !path.is_file() {
                 return Err(not_found(format!("file not found: {}", path.display())));
             }
@@ -117,7 +129,7 @@ impl Resolver for FileResolver {
                         m.name
                     )));
                 }
-                return read_module(&package.join(&m.schema));
+                return read_module(&m.schema_path(package)?);
             }
         }
         Err(not_found(format!("package not found (no node_modules/{module}/{MANIFEST} above {})", dir.display())))
@@ -130,31 +142,22 @@ fn not_found(reason: String) -> Error {
     Error::new(ErrorCode::ImportNotFound, reason)
 }
 
-/// The schema file at `path`, with its key, identity and package version.
+/// The schema file at `path`, with its key (its canonical path), identity and package version.
 pub(crate) fn read_module(path: &Path) -> Result<Module> {
+    let (id, version) = identify(path);
     let path = path.canonicalize().map_err(|e| not_found(format!("{}: {e}", path.display())))?;
     let text = fs::read_to_string(&path).map_err(|e| not_found(format!("{}: {e}", path.display())))?;
-    let (id, version) = identify(&path);
     Ok(Module { key: path.display().to_string(), id, text, version })
 }
 
-/// The identity of the schema file at `path` (canonical), and the version of
-/// its package: `@haus-fmt/money@1` for a package's schema, `@haus-fmt/money@1/path`
-/// for another file in a package, and the file's name (`order`) outside one.
+/// The identity of the schema file at `path`, and the version of its
+/// package: `@haus-fmt/money@1` for a package's `schema.haus`, and the
+/// file's name (`order`) for other files.
 pub(crate) fn identify(path: &Path) -> (String, Option<String>) {
-    for dir in path.ancestors().skip(1) {
-        if dir.join(MANIFEST).is_file()
-            && let Ok(m) = Manifest::read(dir)
-        {
-            let rel = path.strip_prefix(dir).unwrap_or(path);
-            let id = match rel == Path::new(&m.schema) {
-                true => m.id(),
-                false => format!("{}/{}", m.id(), stem(&rel.to_string_lossy().replace('\\', "/"))),
-            };
-            return (id, Some(m.version));
-        }
+    match package_of(path) {
+        Some((_, Ok(m))) => (m.id(), Some(m.version)),
+        _ => (stem(&path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()), None),
     }
-    (stem(&path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()), None)
 }
 
 /// `order` for `order.schema.haus`.

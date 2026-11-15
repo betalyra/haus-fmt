@@ -35,6 +35,41 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+/// Why the version in a package import (`@haus-fmt/money@1.1`) isn't a major
+/// version, `@N` without leading zeros (spec §13.3); None if it is one, or
+/// the import names none.
+pub fn import_version(module: &str) -> Option<String> {
+    let (name, version) = module.strip_prefix('@')?.split_once('@')?;
+    let digits = version.find(|c: char| !c.is_ascii_digit()).map_or(version, |end| &version[..end]);
+    let major = digits.trim_start_matches('0');
+    let major = if major.is_empty() { "0" } else { major };
+    let rest = &version[digits.len()..];
+    if digits.is_empty() || !(rest.is_empty() || rest.starts_with('.')) {
+        Some(format!("@{name}@{version}: expected a major version after '@', like @{name}@1"))
+    } else if !rest.is_empty() {
+        Some(format!("@{name}@{version}: an import names only the major version (@{name}@{major})"))
+    } else if digits.len() != major.len() {
+        Some(format!("@{name}@{version}: a major version has no leading zeros (@{name}@{major})"))
+    } else {
+        None
+    }
+}
+
+/// The hint for an [`import_version`] error (None for other errors).
+pub fn import_version_hint(reason: &str) -> Option<&'static str> {
+    if reason.contains("an import names only the major version") {
+        Some(
+            "An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
+        )
+    } else if reason.contains("a major version has no leading zeros") {
+        Some("Write the major version without leading zeros (`@1`).")
+    } else if reason.contains("expected a major version after '@'") {
+        Some("An import names only the major version (`@1`), or none.")
+    } else {
+        None
+    }
+}
+
 /// An error at byte offset `pos` of `text`.
 pub fn error(text: &str, pos: usize, code: Code, reason: impl Into<String>) -> Error {
     let before = &text[..pos.min(text.len())];
@@ -679,6 +714,9 @@ fn check(file: &File) -> Result<Vec<Fail>, Fail> {
     if let Some(imp) = file.imports.iter().find(|imp| imp.names.is_empty()) {
         let reason = format!("import {} names no type: import {} (Name, …)", imp.module, imp.module);
         return Err((imp.pos, Code::UnknownImport, reason));
+    }
+    if let Some((imp, reason)) = file.imports.iter().find_map(|imp| Some((imp, import_version(&imp.module)?))) {
+        return Err((imp.pos, Code::ImportVersion, reason));
     }
     for d in &file.types {
         for (i, p) in d.params.iter().enumerate() {

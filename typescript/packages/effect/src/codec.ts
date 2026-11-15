@@ -1,7 +1,7 @@
 /**
  * Codecs: the application's choice of a host type for a named haus type.
  *
- *   import * as money from "@haus-fmt/money/money.schema.haus"
+ *   import * as money from "@haus-fmt/money/schema.haus"
  *
  *   const cents = Haus.codec(money.Money, (base) =>
  *     base.pipe(Schema.decodeTo(Cents, SchemaTransformation.transform({ decode: toCents, encode: fromCents }))))

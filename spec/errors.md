@@ -6,13 +6,13 @@ The catalogue of the error codes of [§17](README.md#17-error-codes). Every impl
 every binding; a code is never renamed, removed or reused after 1.0, only added. Each code has a page section at
 `https://haus-fmt.org/docs/errors#<code>`. The machine-readable source is [`errors.haus`](errors.haus).
 
-101 codes in 8 categories:
+102 codes in 8 categories:
 
 - [Syntax](#syntax): 33
 - [Limits](#limits): 8
 - [Streams](#streams): 2
 - [Schema files](#schema-files): 22
-- [Imports](#imports): 9
+- [Imports](#imports): 10
 - [Decoding and encoding](#decoding): 13
 - [JSON](#json): 10
 - [Hints and warnings](#hints): 4
@@ -121,9 +121,10 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 | `duplicate-import` | The same type name is imported twice. | `import std/time (Date, Date) ⏎ type A = Date` | Import each name once. |
 | `import-unavailable` | The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there. | `import ./common (Address) ⏎ type A = Address` | Read the schema with a resolver that loads imports (from files or packages), or inline the types. |
 | `import-not-found` | An imported package or file can't be found: it is not installed, not a direct dependency, or the path is wrong. Also a package whose manifest is broken or names another package. | import @acme/geo (LatLng), with @acme/geo not installed | Install the package (as a direct dependency), or fix the path. |
-| `import-version` | An import asks for a major version (`@org/name@2`) and another one is installed. | import @haus-fmt/money@2 (Money), with version 1.2.0 installed | Install the major version the schema asks for, or update the import. |
+| `import-version` | An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`. | `import @haus-fmt/money@1.1 (Money) ⏎ type A = Money` | Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range. |
 | `import-cycle` | Schema files import each other in a cycle. | a.schema.haus imports ./b, and b.schema.haus imports ./a | Move the shared types to a file both import. |
 | `duplicate-package` | Two different files claim to be the same package: two copies of one package, or two packages with the same name. | node_modules/@haus-fmt/money and node_modules/x/node_modules/@haus-fmt/money in one schema | Install one copy of the package (deduplicate your dependencies). |
+| `package-path` | A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. | a package whose schema.haus has import ../../.env (T) | A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too. |
 | `too-many-files` | A schema imports more files, directly or not, than the tool allows. | a schema whose imports reach 300 files | Import fewer files. |
 
 ## Decoding and encoding

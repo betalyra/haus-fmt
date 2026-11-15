@@ -89,8 +89,9 @@ unchanged. `to_i64()` / `to_i128()` give it as a native integer when it fits; th
 `bigint` feature adds conversions to and from `num_bigint::BigInt`. For a native
 integer that must fit, the schema says `Int64` (out of range is a decode error).
 
-Schema packages are ordinary dependencies: a crate with `haus.package.haus`,
-`links = "<its library name>"` and `haus_build::package()` in its build script. A crate
+Schema packages are ordinary dependencies: a crate with `package.haus` and
+`schema.haus`, `links = "<its library name>"`, `haus_build::package()` in its
+build script and `haus::include_schema!("schema")` in its `lib.rs`. A crate
 that depends on it directly can `import @org/name (…)`; the types are the
 package crate's own (`haus_money::Money`), so codecs written for them work in
 every crate. haus-fmt-schema never prints (it backs tools whose output must stay

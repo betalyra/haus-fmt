@@ -297,7 +297,7 @@ ErrorCode := [].{
 	import_not_found : Str
 	import_not_found = "import-not-found"
 
-	## `import-version` (imports): An import asks for a major version (`@org/name@2`) and another one is installed.
+	## `import-version` (imports): An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.
 	import_version : Str
 	import_version = "import-version"
 
@@ -308,6 +308,10 @@ ErrorCode := [].{
 	## `duplicate-package` (imports): Two different files claim to be the same package: two copies of one package, or two packages with the same name.
 	duplicate_package : Str
 	duplicate_package = "duplicate-package"
+
+	## `package-path` (imports): A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
+	package_path : Str
+	package_path = "package-path"
 
 	## `too-many-files` (imports): A schema imports more files, directly or not, than the tool allows.
 	too_many_files : Str
@@ -423,7 +427,7 @@ ErrorCode := [].{
 
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "lossless-form", "lossless-number", "lossless-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "package-path", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "lossless-form", "lossless-number", "lossless-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -500,9 +504,10 @@ ErrorCode := [].{
 		"duplicate-import" => "Import each name once."
 		"import-unavailable" => "Read the schema with a resolver that loads imports (from files or packages), or inline the types."
 		"import-not-found" => "Install the package (as a direct dependency), or fix the path."
-		"import-version" => "Install the major version the schema asks for, or update the import."
+		"import-version" => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
 		"import-cycle" => "Move the shared types to a file both import."
 		"duplicate-package" => "Install one copy of the package (deduplicate your dependencies)."
+		"package-path" => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too."
 		"too-many-files" => "Import fewer files."
 		"type-mismatch" => "Write a value of the expected type; the message says which."
 		"not-an-integer" => "Write the integer without a fraction or exponent."
@@ -612,6 +617,7 @@ ErrorCode := [].{
 		"import-version" => "imports"
 		"import-cycle" => "imports"
 		"duplicate-package" => "imports"
+		"package-path" => "imports"
 		"too-many-files" => "imports"
 		"type-mismatch" => "decoding"
 		"not-an-integer" => "decoding"
@@ -758,7 +764,7 @@ at = |b, i| b.get(i) ?? 0
 expect ErrorCode.hint(ErrorCode.missing_comma) == "Add a comma between the two values."
 expect ErrorCode.category("payload-newline") == "syntax" and ErrorCode.category("missing-field") == "decoding" and ErrorCode.hint("nonsense") == ""
 expect ErrorCode.docs("null-literal") == "https://haus-fmt.org/docs/errors#null-literal"
-expect ErrorCode.all.len() == 101 and ErrorCode.all.contains("invalid-secret")
+expect ErrorCode.all.len() == 102 and ErrorCode.all.contains("invalid-secret")
 expect ErrorCode.place("") == "$" and ErrorCode.place(".items[2].price") == "$.items[2].price"
 expect ErrorCode.place("(Circle).r") == "$[0].r" and ErrorCode.place(".total(Money)[1]") == "$.total[1]" and ErrorCode.place("(Date)[0]") == "$[0]"
 expect ErrorCode.place("[\"pt-BR\"](Tag)") == "$[\"pt-BR\"][0]" and ErrorCode.place("[\"a\\\"(b\"].c") == "$[\"a\\\"(b\"].c"

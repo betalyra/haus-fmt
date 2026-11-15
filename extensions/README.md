@@ -5,8 +5,8 @@ language-neutral package:
 
 | File | What it is |
 |---|---|
-| `haus.package.haus` | The manifest: name and version. They make the identity of its types, the same in every language: `@haus-fmt/money@1#Money`. |
-| `*.schema.haus` | The schema. Shape only, like every haus schema. |
+| `package.haus` | The manifest: name and version. They make the identity of its types, the same in every language: `@haus-fmt/money@1#Money`. |
+| `schema.haus` | The schema, the package's one schema file. Shape only, like every haus schema. |
 | `profiles/*.vectors.haus` | Profiles: rules beyond the shape that codecs can implement, with test vectors. |
 
 The same schema is published for each language from this one source: the
