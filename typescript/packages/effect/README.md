@@ -206,7 +206,7 @@ A codec is your choice of type for a named haus type, applied after the
 schema's own checks:
 
 ```ts
-import * as money from "@haus-fmt/money/money.schema.haus"
+import * as money from "@haus-fmt/money/schema.haus"
 
 const cents = Haus.codec(money.Money, (base) => base.pipe(Schema.decodeTo(Cents, toCents)))
 const order = yield* Haus.decode(Order, cents)(text)   // order.total: Cents

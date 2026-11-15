@@ -7,7 +7,7 @@ license = "MIT"
 # Its library name: tells crates that depend on this one where its schema is,
 # and which crate has its types (haus_build::package).
 links = "haus_money"
-include = ["Cargo.toml", "build.rs", "src", "haus.package.haus", "*.schema.haus", "profiles"]
+include = ["Cargo.toml", "build.rs", "src", "package.haus", "schema.haus", "profiles"]
 
 # Imported as haus_money (the crate is haus-fmt-money: crates.io has no scopes).
 [lib]

@@ -11,18 +11,22 @@ use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
-pub const MANIFEST: &str = "haus.package.haus";
+/// A schema package's manifest.
+pub const MANIFEST: &str = "package.haus";
+/// A schema package's one schema file, next to its manifest.
+pub const SCHEMA: &str = "schema.haus";
 
-/// `haus.package.haus`: `{ name: "@haus-fmt/money", version: "1.2.0", schema: "money.schema.haus" }`.
+/// `package.haus`: `{ name: "@haus-fmt/money", version: "1.2.0" }`. Other
+/// fields are ignored.
 pub struct Manifest {
     pub name: String,
     pub version: String,
-    pub schema: String,
 }
 
 impl Manifest {
     pub fn read(dir: &Path) -> Result<Manifest> {
         let path = dir.join(MANIFEST);
+        check_inside(dir, &path, || format!("the manifest {}", path.display()))?;
         let value = haus::parse(&read(&path)?)
             .map_err(|e| Error::at(&path, ErrorCode::ImportNotFound, e))?
             .into_iter()
@@ -32,7 +36,20 @@ impl Manifest {
             Some(haus::Value::String(s)) => Ok(s.clone()),
             _ => Err(Error::at(&path, ErrorCode::ImportNotFound, format!("the manifest needs a string field {key}"))),
         };
-        Ok(Manifest { name: field("name")?, version: field("version")?, schema: field("schema")? })
+        Ok(Manifest { name: field("name")?, version: field("version")? })
+    }
+
+    /// The package's schema file, `schema.haus` in its directory `dir`
+    /// (spec §13.3). Checked, not read: a missing file is `import-not-found`,
+    /// a symbolic link to a file outside the package `package-path`.
+    pub fn schema_path(&self, dir: &Path) -> Result<PathBuf> {
+        let path = dir.join(SCHEMA);
+        if !path.is_file() {
+            let reason = format!("{} has no {SCHEMA} next to its manifest ({})", self.name, dir.display());
+            return Err(Error::new(ErrorCode::ImportNotFound, reason));
+        }
+        check_inside(dir, &path, || format!("{}: its {SCHEMA}", self.name))?;
+        Ok(path)
     }
 
     pub fn major(&self) -> &str {
@@ -107,16 +124,65 @@ impl Packages {
     /// A build script tells Cargo to rerun when one changes (haus-fmt-build
     /// does); this crate never prints.
     pub fn files(&self) -> Vec<PathBuf> {
-        self.0.iter().flat_map(|p| [p.dir.join(MANIFEST), p.dir.join(&p.manifest.schema)]).collect()
+        self.0.iter().flat_map(|p| [p.dir.join(MANIFEST), p.dir.join(SCHEMA)]).collect()
     }
 }
 
 impl Package {
     fn load(dir: &Path, krate: String) -> Result<Package> {
         let manifest = Manifest::read(dir)?;
-        let path = dir.join(&manifest.schema);
-        let file = syntax::parse(&read(&path)?).map_err(|e| Error::from(e).in_file(&path))?;
+        let path = manifest.schema_path(dir)?;
+        let text = read(&path)?;
+        let file = syntax::parse(&text).map_err(|e| Error::from(e).in_file(&path))?;
+        imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&path))?;
         let types = file.types.into_iter().map(|t| (t.name, t.params.len())).collect();
         Ok(Package { manifest, dir: dir.to_owned(), krate, types })
+    }
+}
+
+/// A package's schema (`text`, parsed as `file`) imports standard modules and
+/// packages, never files (spec §13.3): a relative import is `package-path`.
+pub fn imports_no_files(manifest: &Manifest, file: &syntax::File, text: &str) -> Result<()> {
+    match file.imports.iter().find(|imp| imp.module.starts_with('.')) {
+        Some(imp) => {
+            let reason = format!(
+                "can't import {}: the schema of {} can't import files, only packages by name",
+                imp.module, manifest.name
+            );
+            Err(syntax::error(text, imp.pos, ErrorCode::PackagePath, reason).into())
+        }
+        None => Ok(()),
+    }
+}
+
+/// The manifest of the package whose schema is the file at `path`, with
+/// the package's directory, if it is one (`schema.haus` next to a manifest).
+pub fn package_of(path: &Path) -> Option<(&Path, Result<Manifest>)> {
+    let dir = path.parent().filter(|d| path.file_name() == Some(SCHEMA.as_ref()) && d.join(MANIFEST).is_file())?;
+    Some((dir, Manifest::read(dir)))
+}
+
+/// The package directory a file is in: the nearest directory above it with a manifest.
+pub fn package_dir_of(path: &Path) -> Option<&Path> {
+    path.ancestors().skip(1).find(|d| d.join(MANIFEST).is_file())
+}
+
+/// A file read for a package stays inside it (spec §13.3): `path`, in the
+/// package directory `root`, is still inside it after resolving symbolic
+/// links. Checked before the file is read; `what` says which file it is. The
+/// error (`package-path`) never quotes the file.
+pub fn check_inside(root: &Path, path: &Path, what: impl FnOnce() -> String) -> Result<()> {
+    let real = |p: &Path| p.canonicalize().ok();
+    let escapes = path.exists()
+        && match (real(root), real(path)) {
+            (Some(root), Some(path)) => !path.starts_with(root),
+            _ => true,
+        };
+    match escapes {
+        true => Err(Error::new(
+            ErrorCode::PackagePath,
+            format!("{} is a symbolic link to a file outside the package {}", what(), root.display()),
+        )),
+        false => Ok(()),
     }
 }

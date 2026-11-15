@@ -125,7 +125,7 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
 ## 9. Security considerations
 
 1. **Tags are data.** Implementations MUST NOT map tag names to classes, constructors or functions dynamically. Decode only into the types a schema lists explicitly. That kind of dynamic mapping is the root of the "gadget" attacks against Java and .NET deserializers.
-2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Future schema imports MUST be pinned by version and content hash and resolved at build time, never while parsing.
+2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus` and `schema.haus`, never through a symbolic link out of its directory, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read.
 3. **Enforce limits while parsing** (§7), not afterwards.
 4. **Record keys are data.** A key such as `__proto__`, `constructor` or `$type` MUST NOT reach an object's prototype or any internal field. JavaScript bindings use own properties, a null prototype or a `Map`.
 5. **Unknown variants carry raw data.** The raw value kept for an unknown tag in an open variant is untrusted and subject to the same limits when stored or forwarded.
@@ -305,22 +305,24 @@ Implementations SHOULD tell users of the former module `std/money` to import `@h
 
 ### 13.3 Schema packages
 
-A **schema package** is a directory with a manifest, `haus.package.haus`, next to its schema:
+A **schema package** is a directory with two files: a manifest, `package.haus`, and the package's one schema file, `schema.haus`, next to it:
 
 ```
-{ name: "@haus-fmt/money", version: "1.2.0", schema: "money.schema.haus" }
+{ name: "@haus-fmt/money", version: "1.2.0" }
 ```
 
 - `name` is `@organisation/name`. `@haus-fmt/` is reserved for the official extensions maintained with haus.
 - `version` is a semantic version (below).
-- Package schemas are ordinary schema files: shape only, like every schema. They change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus-fmt/money`.
+- Other fields of the manifest are ignored.
+- `schema.haus` is an ordinary schema file: shape only, like every schema. It imports standard modules and other packages, never files. Packages change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus-fmt/money`.
+- The directory may hold other files, such as profiles (below) and the wrappers of package managers (`package.json`, `Cargo.toml`). No import reads them.
 
-**Resolution.** An implementation finds packages where its language's package manager puts them (`node_modules` for JavaScript, …) and relative files next to the importing file. Resolution happens when a schema is built, never while data is parsed, and never over the network (§9.2). The exact version and content hash are pinned by the application's package manager (its lock file), not by the schema.
+**Resolution.** An implementation finds packages where its language's package manager puts them (`node_modules` for JavaScript, …) and relative files next to the importing file (`import ./common` is `common.schema.haus`: the extension is always added). Resolution happens when a schema is built, never while data is parsed, and never over the network (§9.2). The exact version and content hash are pinned by the application's package manager (its lock file), not by the schema.
 
 - Where the package manager has scoped names (npm), `@org/name` resolves with its own name resolution, from the importing file. Elsewhere, an implementation looks only among the project's direct dependencies.
 - The manifest's `name` MUST equal the imported name, and the package manager's name where it is scoped (npm `@haus-fmt/money` holds `@haus-fmt/money`).
 
-**Distribution.** There is no haus registry. Authors publish schema packages however their users install dependencies: language registries (npm, crates.io, PyPI, …), private registries, git dependencies, workspaces, or copies in the project imported as relative files. Codec libraries for registries that reject git dependencies (crates.io, PyPI) can carry the schema text they target.
+**Distribution.** There is no haus registry. Authors publish schema packages however their users install dependencies: language registries (npm, crates.io, PyPI, …), private registries, git dependencies, workspaces, or copies in the project (vendored, still imported by name). Codec libraries for registries that reject git dependencies (crates.io, PyPI) can carry the schema text they target.
 
 The reasons:
 
@@ -335,14 +337,17 @@ What this means for users:
 - **Copies in several languages.** A package published to several registries SHOULD be published from one source, so that equal versions have equal files.
 - **Discovery.** There is no index. The official extensions are listed in [`../extensions`](../extensions).
 
-**Identity.** Every named type has an id, the same in every language: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Other files of a package are `@haus-fmt/money@1/path#Type`. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path). Codecs (§13.4) and tools refer to types by their id.
+**Identity.** Every named type has an id, the same in every language: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path). Codecs (§13.4) and tools refer to types by their id.
 
 **Imports.** `import M (A, B)` makes the types `A` and `B` defined in `M` available under their names; a file can't re-export types it imports. Implementations MUST reject:
 
 - a module that can't be found, or a type it doesn't define;
 - a name imported twice, or imported and also defined;
 - two different files with the same id in one schema, such as two copies of `@acme/ids@3` found in different places, or two packages that both call themselves `@acme/ids`;
-- `@org/name@N` when the package found has another major version;
+- `@org/name@N` when the package found has another major version, and a version that isn't a major version: `@1.1`, `@01`;
+- a relative import in a package's `schema.haus` (a package imports other packages by name);
+- a relative import from a file outside a package to a file in a package's directory (import the package by name);
+- a package's `package.haus` or `schema.haus` that is a symbolic link to a file outside the package's directory. Such a file is not read;
 - import cycles: a file that imports itself, directly or not.
 
 Errors inside an imported file are reported at the import, with their place in that file.
@@ -355,7 +360,7 @@ Errors inside an imported file are reported at the import, with their place in t
 | minor | new types; new optional fields in open records; new tags in open variants | data valid before stays valid and decodes to the same shape |
 | patch | comments and documentation | nothing changes |
 
-An import names at most a major version. A minimum minor version would be redundant: the types it imports already fail against an older package that lacks them.
+An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range: `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
 
 **Profiles.** A package MAY define profiles: rules beyond its shape that codecs can implement, named like `@haus-fmt/money/iso`. A profile is defined by test vectors (`profiles/<name>.vectors.haus`): values a codec implementing it accepts, values it rejects, and values that encode back to the same text. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
 

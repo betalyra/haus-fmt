@@ -59,6 +59,9 @@
         "aliases": [
           "Haus Schema"
         ],
+        "filenames": [
+          "schema.haus"
+        ],
         "filenamePatterns": [
           "*.schema.haus"
         ],

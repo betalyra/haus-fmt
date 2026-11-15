@@ -9,6 +9,7 @@
  * Syntax and schema errors become diagnostics at the right place in the file.
  */
 import { HausSyntaxError } from "@haus-fmt/haus"
+import { isSchemaFile } from "@haus-fmt/haus/node"
 import { runContentMapper, stringIndexToPosition } from "ts-content-mapper"
 import { backend, targetOf, typesFor, type Backend, type ImportOptions } from "./generate.js"
 
@@ -29,7 +30,7 @@ runContentMapper<ImportOptions, Backend>({
     } catch (e) {
       if (!(e instanceof HausSyntaxError)) throw e
       return {
-        text: params.fileName.endsWith(".schema.haus") ? "export {};\n" : "declare const value: unknown;\nexport default value;\n",
+        text: isSchemaFile(params.fileName) ? "export {};\n" : "declare const value: unknown;\nexport default value;\n",
         extension: ".mts",
         diagnostics: [{ messageText: e.reason, start: at(e.offset), length: 1, code: 91001 }],
       }

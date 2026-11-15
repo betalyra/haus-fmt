@@ -2,8 +2,8 @@
 // is an ordinary Effect schema built on the type's base schema, so the
 // schema's rules always run first and the haus text never changes.
 import * as Haus from "@haus-fmt/effect";
-import * as money from "@haus-fmt/money/money.schema.haus";
-import * as geo from "@haus-fmt/geo/geo.schema.haus";
+import * as money from "@haus-fmt/money/schema.haus";
+import * as geo from "@haus-fmt/geo/schema.haus";
 import { BigDecimal, Effect, Schema, SchemaIssue, SchemaTransformation } from "effect";
 import * as Order from "../../../../examples/order.schema.haus";
 

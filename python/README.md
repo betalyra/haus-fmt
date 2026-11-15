@@ -203,7 +203,7 @@ Reading follows §15: an open record or payload ignores members it doesn't list 
 
 ### Imports and packages
 
-`import ./common (Address)` reads `common.schema.haus` next to the importing file. Python has no scoped package names, so schema packages are never searched for (spec §13.3): list the project's direct schema dependencies with their directories, each holding a `haus.package.haus` manifest. `installed_package` finds the directory of an installed Python package that ships one, without importing it:
+`import ./common (Address)` reads `common.schema.haus` next to the importing file. Python has no scoped package names, so schema packages are never searched for (spec §13.3): list the project's direct schema dependencies with their directories, each holding a `package.haus` manifest and the package's `schema.haus`. `installed_package` finds the directory of an installed Python package that ships one, without importing it:
 
 ```python
 s = schema.load_schema(

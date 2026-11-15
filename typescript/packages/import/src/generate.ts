@@ -15,7 +15,7 @@
  * with a schema are decoded with it.
  */
 import { parseSchemaFile, schemaDeclarations } from "@haus-fmt/haus"
-import { schemaOptions } from "@haus-fmt/haus/node"
+import { isSchemaFile, schemaOptions } from "@haus-fmt/haus/node"
 import { parsePlain, plainDeclarations } from "@haus-fmt/haus/plain"
 import { dataModule, dataModuleSource, schemaFor, schemaModuleSource, specifier, type Diagnostic } from "./schemas.js"
 
@@ -37,7 +37,7 @@ export const targetOf = (options: { readonly target?: unknown } | undefined): Ta
 /** What differs between the targets. */
 export interface Backend {
   readonly target: Target
-  /** Declarations for a `.schema.haus` file: its types and schemas. */
+  /** Declarations for a schema file (`.schema.haus`, a package's `schema.haus`): its types and schemas. */
   readonly schemaTypes: (text: string, fileName: string) => string
   /** The runtime generated modules import (runtime/plain.ts or runtime/effect.ts), as `@haus-fmt/import/runtime/<target>`. */
   readonly runtime: string
@@ -59,7 +59,7 @@ export async function backend(target: Target): Promise<Backend> {
 
 /** TypeScript declarations for an imported `.haus` file, with diagnostics for the file. */
 export function typesFor(text: string, fileName: string, b: Backend): { text: string; diagnostics: Diagnostic[] } {
-  if (fileName.endsWith(".schema.haus")) return { text: b.schemaTypes(text, fileName), diagnostics: [] }
+  if (isSchemaFile(fileName)) return { text: b.schemaTypes(text, fileName), diagnostics: [] }
   const link = schemaFor(fileName, text)
   if (link) return dataModule(text, fileName, link)
   return { text: plainDeclarations(text, fileName), diagnostics: [] }
@@ -72,7 +72,7 @@ export function typesFor(text: string, fileName: string, b: Backend): { text: st
  */
 export function moduleFor(text: string, fileName: string, b: Backend, importRuntime: (path: string) => string): { code: string; files: string[] } {
   const runtime = importRuntime(b.runtime)
-  if (fileName.endsWith(".schema.haus")) return schemaModuleSource(fileName, runtime)
+  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime)
   const link = schemaFor(fileName, text)
   if (link) return dataModuleSource(text, fileName, link, runtime)
   return { code: `export default ${js(parsePlain(text))};\n`, files: [] }

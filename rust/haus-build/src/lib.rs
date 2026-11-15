@@ -16,11 +16,12 @@
 //! let order: order::Root = haus::from_str(&text)?;
 //! ```
 //!
-//! A schema package (`haus.package.haus` next to `Cargo.toml`, and
-//! `links = "<library name>"` in it) calls [`package`] instead. Crates that
-//! depend on it directly can then `import @org/name (…)`: the package's
-//! types are its crate's types (`haus_money::Money`), and their ids are
-//! the same in every language (`@haus-fmt/money@1#Money`).
+//! A schema package (`package.haus` and `schema.haus` next to `Cargo.toml`,
+//! and `links = "<library name>"` in it) calls [`package`] instead, and its
+//! `lib.rs` includes the types with `haus::include_schema!("schema")`. Crates
+//! that depend on it directly can then `import @org/name (…)`: the package's
+//! types are its crate's types (`haus_money::Money`), and their ids are the
+//! same in every language (`@haus-fmt/money@1#Money`).
 
 mod codegen;
 pub mod roc;
@@ -104,13 +105,17 @@ impl Config {
         self.emit(&path, &id, name)
     }
 
-    /// For a schema package crate: generate its types, with ids from its
-    /// manifest, and tell dependent crates where it is.
+    /// For a schema package crate: generate the types of its `schema.haus`
+    /// to `$OUT_DIR/schema.rs` (`haus::include_schema!("schema")`), with ids
+    /// from its manifest, and tell dependent crates where it is.
     pub fn package(&self) -> Result<()> {
         let dir = PathBuf::from(var("CARGO_MANIFEST_DIR")?);
         let manifest = Manifest::read(&dir)?;
-        let schema = dir.join(&manifest.schema);
-        self.emit(&schema, &manifest.id(), &stem(&schema))?;
+        let schema = manifest.schema_path(&dir)?;
+        let text = read(&schema)?;
+        let file = schema::parse(&text).map_err(|e| Error::from(e).in_file(&schema))?;
+        packages::imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&schema))?;
+        self.emit(&schema, &manifest.id(), "schema")?;
         rerun_if_changed(&dir.join(MANIFEST));
         println!("cargo::metadata=haus_package={}", dir.display());
         // The name code uses for this crate: its `links`, which is its library

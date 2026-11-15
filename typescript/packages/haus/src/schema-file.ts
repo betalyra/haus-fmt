@@ -264,6 +264,28 @@ type Token =
 
 const PUNCT = ["...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/"]
 
+/** The version an import may name: a major version, without leading zeros (spec §13.3). */
+const MAJOR = /^(?:0|[1-9][0-9]*)$/
+
+/** `@haus-fmt/money@1.1`, `@01`, `@x`: an import names only a major version (code `import-version`). */
+const importVersionError = (fail: Fail, name: string, version: string, pos: number): never => {
+  const digits = /^([0-9]+)(\.|$)/.exec(version)
+  const major = digits?.[1]!.replace(/^0+(?=[0-9])/, "")
+  if (digits?.[2] === ".") {
+    return fail("import-version", `${name}@${version}: an import names only the major version (${name}@${major})`, pos, {
+      hint: "An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
+    })
+  }
+  if (digits) {
+    return fail("import-version", `${name}@${version}: a major version has no leading zeros (${name}@${major})`, pos, {
+      hint: "Write the major version without leading zeros (`@1`).",
+    })
+  }
+  return fail("import-version", `${name}@${version}: expected a major version after '@', like ${name}@1`, pos, {
+    hint: "An import names only the major version (`@1`), or none.",
+  })
+}
+
 class Lexer {
   pos = 0
   constructor(readonly text: string, readonly fail: Fail) {}
@@ -303,11 +325,13 @@ class Lexer {
       return { t: /^[A-Z]/.test(m[0]) ? "upper" : "lower", value: m[0], pos }
     }
     // A package or file after `import`: @org/name, @org/name@1, ./file, ../dir/file.
-    const module = /@[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:@[0-9]+)?|\.\.?\/[A-Za-z0-9_./-]*/y
+    const module = /(@[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?\/[A-Za-z0-9_./-]*/y
     if (s[pos] === "@" || s.startsWith("./", pos) || s.startsWith("../", pos)) {
       module.lastIndex = pos
       const mm = module.exec(s)
       if (mm) {
+        const [, name, version] = mm
+        if (version !== undefined && !MAJOR.test(version)) importVersionError(this.fail, name!, version, pos)
         this.pos += mm[0].length
         return { t: "module", value: mm[0], pos }
       }
@@ -825,11 +849,24 @@ export interface ResolvedModule {
 /**
  * Finds the schema files that imports name. Resolution happens when the
  * schema is built, never while data is parsed (spec §9.2). Throw an Error
- * with a readable message when a module can't be found.
+ * with a readable message when a module can't be found (code
+ * `import-not-found`), or a ModuleError for another code.
  */
 export interface ModuleResolver {
   /** `module` as written (`@haus-fmt/money`, `@haus-fmt/money@1`, `./common`), imported by the file `from` (undefined: the root file without a key). */
   resolve(module: string, from: string | undefined): ResolvedModule
+}
+
+/**
+ * An error a ModuleResolver throws for a code other than `import-not-found`:
+ * `package-path` for a file outside its package (spec §13.3). The message
+ * never quotes a file the resolver refused to read.
+ */
+export class ModuleError extends Error {
+  constructor(readonly code: ErrorCode, message: string) {
+    super(message)
+    this.name = "ModuleError"
+  }
 }
 
 export interface ParseSchemaOptions {
@@ -969,7 +1006,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     try {
       r = resolver.resolve(imp.module.replace(/@[0-9]+$/, ""), from)
     } catch (e) {
-      return fail("import-not-found", `can't import ${imp.module}: ${e instanceof Error ? e.message : String(e)}`, imp.pos)
+      return fail(e instanceof ModuleError ? e.code : "import-not-found", `can't import ${imp.module}: ${e instanceof Error ? e.message : String(e)}`, imp.pos)
     }
     const wanted = /^@.+@([0-9]+)$/.exec(imp.module)?.[1]
     if (wanted !== undefined && r.version !== undefined && majorOf(r.version) !== wanted) {

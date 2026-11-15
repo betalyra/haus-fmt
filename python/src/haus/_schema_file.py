@@ -330,9 +330,22 @@ class ModuleResolver(Protocol):
     def resolve(self, module: str, from_key: str | None) -> ResolvedModule:
         """`module` as written without `@major` (`@haus-fmt/money`, `./common`), imported by `from_key`.
 
-        Raise an exception with a readable message when it can't be found.
+        Raise an exception with a readable message when it can't be found (code
+        `import-not-found`), or a `ModuleError` for another code.
         """
         ...
+
+
+class ModuleError(Exception):
+    """An error a resolver raises for a code other than `import-not-found`.
+
+    `package-path`: a file outside its package (spec §13.3). The message never
+    quotes a file the resolver refused to read.
+    """
+
+    def __init__(self, code: ErrorCode, message: str) -> None:
+        super().__init__(message)
+        self.code: ErrorCode = code
 
 
 # ── lexer ────────────────────────────────────────────────────
@@ -365,7 +378,39 @@ class _Token:
 
 _PUNCT = ("...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/")
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_MODULE = re.compile(r"@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:@[0-9]+)?|\.\.?/[A-Za-z0-9_./-]*")
+_MODULE = re.compile(r"(@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?/[A-Za-z0-9_./-]*")
+_MAJOR_VERSION = re.compile(r"0|[1-9][0-9]*")
+"""The version an import may name: a major version, without leading zeros (spec §13.3)."""
+_VERSION_DIGITS = re.compile(r"([0-9]+)(\.|$)")
+
+
+def _import_version_error(fail: Fail, name: str, version: str, pos: int) -> Never:
+    """`@haus-fmt/money@1.1`, `@01`, `@x`: an import names only a major version (code `import-version`)."""
+    digits = _VERSION_DIGITS.match(version)
+    major = (digits[1].lstrip("0") or "0") if digits else ""
+    if digits and digits[2] == ".":
+        fail(
+            "import-version",
+            f"{name}@{version}: an import names only the major version ({name}@{major})",
+            pos,
+            hint="An import names only the major version (`@1`); the minimum minor goes in your package manager's"
+            " dependency range.",
+        )
+    if digits:
+        fail(
+            "import-version",
+            f"{name}@{version}: a major version has no leading zeros ({name}@{major})",
+            pos,
+            hint="Write the major version without leading zeros (`@1`).",
+        )
+    fail(
+        "import-version",
+        f"{name}@{version}: expected a major version after '@', like {name}@1",
+        pos,
+        hint="An import names only the major version (`@1`), or none.",
+    )
+
+
 _ATTRIBUTE = re.compile(r"@([a-z_][A-Za-z0-9_]*)")
 _SPACE = re.compile(r"[ \t\r\n]*")
 _PARAM = re.compile(r"[a-z][A-Za-z0-9_]*")
@@ -414,6 +459,8 @@ class _Lexer:
             self.pos = m.end()
             return _Token("upper" if m[0][0].isupper() else "lower", m[0], pos)
         if (s[pos] == "@" or s.startswith(("./", "../"), pos)) and (m := _MODULE.match(s, pos)):
+            if m[2] is not None and not _MAJOR_VERSION.fullmatch(m[2]):
+                _import_version_error(self.fail, m[1], m[2], pos)
             self.pos = m.end()
             return _Token("module", m[0], pos)
         if s[pos] == "@":
@@ -1078,7 +1125,8 @@ class _Checker:
         try:
             r = self.resolver.resolve(module, from_key)
         except Exception as e:  # the resolver's own errors, reported at the import
-            fail("import-not-found", f"can't import {imp.module}: {e}", imp.pos)
+            code: ErrorCode = e.code if isinstance(e, ModuleError) else "import-not-found"
+            fail(code, f"can't import {imp.module}: {e}", imp.pos)
         if (wanted := _WANTED_MAJOR.fullmatch(imp.module)) and r.version is not None:
             found = _MAJOR.match(r.version)
             if found is None or found[1] != wanted[1]:

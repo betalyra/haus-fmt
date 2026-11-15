@@ -254,6 +254,68 @@ fn directories_respect_gitignore_and_skip_other_files() {
     assert_eq!((code, array(&json, "files").len()), (1, 1));
 }
 
+#[cfg(unix)]
+#[test]
+fn packages_in_node_modules() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    let manifest = |name: &str| format!("{{ name: \"{name}\", version: \"1.2.0\" }}");
+    write("secret/creds.txt", "API_TOKEN=hunter2");
+    write("secret/creds.schema.haus", "API_TOKEN=hunter2");
+    // A package that works: app → @acme/orders → @haus-fmt/money, hoisted.
+    write("app/node_modules/@haus-fmt/money/package.haus", &manifest("@haus-fmt/money"));
+    write("app/node_modules/@haus-fmt/money/schema.haus", "type Money = closed < Money Decimal String >");
+    write("app/node_modules/@acme/orders/package.haus", &manifest("@acme/orders"));
+    write(
+        "app/node_modules/@acme/orders/schema.haus",
+        "import @haus-fmt/money@1 (Money)\ntype Order = { total: Money }",
+    );
+    write("app/order.schema.haus", "import @acme/orders (Order)\ntype Root = Order");
+    write("app/order.haus", "{ total: Money(19.99, \"EUR\") }");
+    let (code, json) = check_json(dir.path(), &["app"]);
+    assert_eq!(code, 0, "{}", pretty(&json));
+    // A package's schema.haus is a schema file.
+    let (code, json) = check_json(dir.path(), &["app/node_modules/@acme/orders"]);
+    assert_eq!(code, 0, "{}", pretty(&json));
+    let kinds: Vec<&str> = array(&json, "files").iter().map(|f| str_of(f, "kind")).collect();
+    assert_eq!(kinds, ["data", "schema"], "package.haus, schema.haus");
+    // Packages that read files outside themselves, each imported by an app schema.
+    let evil = [
+        ("link", "", Some("secret/creds.schema.haus")),
+        ("import", "import ../../../../secret/creds (T)\ntype U = T", None),
+        ("near", "import ./near (T)\ntype U = T", None),
+    ];
+    for (name, schema, link) in evil {
+        let package = format!("app/node_modules/@evil/{name}");
+        write(&format!("{package}/package.haus"), &manifest(&format!("@evil/{name}")));
+        write(&format!("{package}/near.schema.haus"), "type T = Int");
+        match link {
+            Some(target) => {
+                std::os::unix::fs::symlink(dir.path().join(target), dir.path().join(&package).join("schema.haus"))
+                    .unwrap()
+            }
+            None => write(&format!("{package}/schema.haus"), schema),
+        }
+        write(&format!("app/{name}.schema.haus"), &format!("import @evil/{name} (T)\ntype Root = T"));
+        let (code, json) = check_json(dir.path(), &[&format!("app/{name}.schema.haus")]);
+        assert_eq!(code, 1, "{name}");
+        let diagnostic = &array(&array(&json, "files")[0], "diagnostics")[0];
+        assert_eq!(str_of(diagnostic, "code"), "package-path", "{name}: {}", pretty(&json));
+        assert!(!pretty(&json).contains("API_TOKEN"), "{name}: {}", pretty(&json));
+    }
+    // An app file that imports a file inside a package directory.
+    write("app/into.schema.haus", "import ./node_modules/x/near (T)\ntype Root = T");
+    write("app/node_modules/x/package.haus", &manifest("@evil/x"));
+    write("app/node_modules/x/near.schema.haus", "type T = Int");
+    let (code, json) = check_json(dir.path(), &["app/into.schema.haus"]);
+    assert_eq!(code, 1);
+    assert_eq!(str_of(&array(&array(&json, "files")[0], "diagnostics")[0], "code"), "package-path");
+}
+
 #[test]
 fn io_errors_exit_with_2_and_are_reported() {
     let (code, json) = check_json(&fixtures(), &["adjacent/order.haus", "nowhere.haus"]);

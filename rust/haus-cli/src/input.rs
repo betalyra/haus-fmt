@@ -49,7 +49,7 @@ impl Target {
 }
 
 pub fn is_schema(path: &Path) -> bool {
-    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".schema.haus"))
+    path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".schema.haus") || n == "schema.haus")
 }
 
 pub fn is_haus(path: &Path) -> bool {

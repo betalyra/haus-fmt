@@ -1,0 +1,3 @@
+// After the package name, @ is followed by a major version (spec §13.3).
+import @haus-fmt/money@ (Money)
+type A = { total: Money }

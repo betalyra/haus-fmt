@@ -32,7 +32,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 **Schema files:** [schema-syntax](#schema-syntax), [unknown-type](#unknown-type), [wrong-arity](#wrong-arity), [duplicate-type](#duplicate-type), [redefine-prelude](#redefine-prelude), [unknown-parameter](#unknown-parameter), [invalid-parameter](#invalid-parameter), [underscore-type](#underscore-type), [duplicate-field](#duplicate-field), [duplicate-tag](#duplicate-tag), [closed-empty-variant](#closed-empty-variant), [invalid-spread](#invalid-spread), [spread-cycle](#spread-cycle), [row-parameter](#row-parameter), [misplaced-stream](#misplaced-stream), [unguarded-recursion](#unguarded-recursion), [growing-recursion](#growing-recursion), [type-too-deep](#type-too-deep), [attribute-arguments](#attribute-arguments), [attribute-twice](#attribute-twice), [attribute-space](#attribute-space), [attribute-on-spread](#attribute-on-spread)
 
-**Imports:** [unknown-module](#unknown-module), [unknown-import](#unknown-import), [duplicate-import](#duplicate-import), [import-unavailable](#import-unavailable), [import-not-found](#import-not-found), [import-version](#import-version), [import-cycle](#import-cycle), [duplicate-package](#duplicate-package), [too-many-files](#too-many-files)
+**Imports:** [unknown-module](#unknown-module), [unknown-import](#unknown-import), [duplicate-import](#duplicate-import), [import-unavailable](#import-unavailable), [import-not-found](#import-not-found), [import-version](#import-version), [import-cycle](#import-cycle), [duplicate-package](#duplicate-package), [package-path](#package-path), [too-many-files](#too-many-files)
 
 **Decoding and encoding:** [type-mismatch](#type-mismatch), [not-an-integer](#not-an-integer), [out-of-range](#out-of-range), [missing-field](#missing-field), [unknown-field](#unknown-field), [unknown-tag](#unknown-tag), [wrong-payload](#wrong-payload), [invalid-time](#invalid-time), [invalid-secret](#invalid-secret), [cannot-encode](#cannot-encode), [cyclic-value](#cyclic-value), [step-budget](#step-budget), [too-many-nodes](#too-many-nodes)
 
@@ -734,11 +734,14 @@ For example: import @acme/geo (LatLng), with @acme/geo not installed.
 
 ## import-version
 
-*Imports.* An import asks for a major version (`@org/name@2`) and another one is installed.
+*Imports.* An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.
 
-For example: import @haus-fmt/money@2 (Money), with version 1.2.0 installed.
+```haus-schema
+import @haus-fmt/money@1.1 (Money)
+type A = Money
+```
 
-**Fix:** Install the major version the schema asks for, or update the import.
+**Fix:** Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.
 
 ## import-cycle
 
@@ -755,6 +758,14 @@ For example: a.schema.haus imports ./b, and b.schema.haus imports ./a.
 For example: node_modules/@haus-fmt/money and node_modules/x/node_modules/@haus-fmt/money in one schema.
 
 **Fix:** Install one copy of the package (deduplicate your dependencies).
+
+## package-path
+
+*Imports.* A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
+
+For example: a package whose schema.haus has import ../../.env (T).
+
+**Fix:** A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.
 
 ## too-many-files
 

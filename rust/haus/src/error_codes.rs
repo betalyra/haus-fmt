@@ -146,12 +146,14 @@ pub enum ErrorCode {
     ImportUnavailable,
     /// `import-not-found`: An imported package or file can't be found: it is not installed, not a direct dependency, or the path is wrong. Also a package whose manifest is broken or names another package.
     ImportNotFound,
-    /// `import-version`: An import asks for a major version (`@org/name@2`) and another one is installed.
+    /// `import-version`: An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.
     ImportVersion,
     /// `import-cycle`: Schema files import each other in a cycle.
     ImportCycle,
     /// `duplicate-package`: Two different files claim to be the same package: two copies of one package, or two packages with the same name.
     DuplicatePackage,
+    /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
+    PackagePath,
     /// `too-many-files`: A schema imports more files, directly or not, than the tool allows.
     TooManyFiles,
     /// `type-mismatch`: A value of another kind than the type accepts: a string for an `Int`, an array for a record, a tag that isn't `True` or `False` for a `Bool`. Decoders never convert between kinds (§15).
@@ -242,7 +244,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 101] = [
+    pub const ALL: [ErrorCode; 102] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -316,6 +318,7 @@ impl ErrorCode {
         ErrorCode::ImportVersion,
         ErrorCode::ImportCycle,
         ErrorCode::DuplicatePackage,
+        ErrorCode::PackagePath,
         ErrorCode::TooManyFiles,
         ErrorCode::TypeMismatch,
         ErrorCode::NotAnInteger,
@@ -422,6 +425,7 @@ impl ErrorCode {
             ErrorCode::ImportVersion => "import-version",
             ErrorCode::ImportCycle => "import-cycle",
             ErrorCode::DuplicatePackage => "duplicate-package",
+            ErrorCode::PackagePath => "package-path",
             ErrorCode::TooManyFiles => "too-many-files",
             ErrorCode::TypeMismatch => "type-mismatch",
             ErrorCode::NotAnInteger => "not-an-integer",
@@ -529,6 +533,7 @@ impl ErrorCode {
             ErrorCode::ImportVersion => ErrorCategory::Imports,
             ErrorCode::ImportCycle => ErrorCategory::Imports,
             ErrorCode::DuplicatePackage => ErrorCategory::Imports,
+            ErrorCode::PackagePath => ErrorCategory::Imports,
             ErrorCode::TooManyFiles => ErrorCategory::Imports,
             ErrorCode::TypeMismatch => ErrorCategory::Decoding,
             ErrorCode::NotAnInteger => ErrorCategory::Decoding,
@@ -633,9 +638,10 @@ impl ErrorCode {
             ErrorCode::DuplicateImport => "Import each name once.",
             ErrorCode::ImportUnavailable => "Read the schema with a resolver that loads imports (from files or packages), or inline the types.",
             ErrorCode::ImportNotFound => "Install the package (as a direct dependency), or fix the path.",
-            ErrorCode::ImportVersion => "Install the major version the schema asks for, or update the import.",
+            ErrorCode::ImportVersion => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
             ErrorCode::ImportCycle => "Move the shared types to a file both import.",
             ErrorCode::DuplicatePackage => "Install one copy of the package (deduplicate your dependencies).",
+            ErrorCode::PackagePath => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.",
             ErrorCode::TooManyFiles => "Import fewer files.",
             ErrorCode::TypeMismatch => "Write a value of the expected type; the message says which.",
             ErrorCode::NotAnInteger => "Write the integer without a fraction or exponent.",

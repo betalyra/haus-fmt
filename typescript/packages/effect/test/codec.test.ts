@@ -29,14 +29,14 @@ const order = Haus.compileSchemaFile(
 ).schemas
 const Order = order.Order as unknown as Haus.Named<Schema.Codec<Order>, "app/order#Order", OrderF, OrderIds>
 
-// The packages' own schema modules: what `import * as money from "@haus-fmt/money/money.schema.haus"` gives.
+// The packages' own schema modules: what `import * as money from "@haus-fmt/money/schema.haus"` gives.
 const moneyModule = Haus.compileSchemaFile(
-  readFileSync(repo("extensions/money/money.schema.haus"), "utf8"),
-  schemaOptions(repo("extensions/money/money.schema.haus")),
+  readFileSync(repo("extensions/money/schema.haus"), "utf8"),
+  schemaOptions(repo("extensions/money/schema.haus")),
 ).schemas
 const geoModule = Haus.compileSchemaFile(
-  readFileSync(repo("extensions/geo/geo.schema.haus"), "utf8"),
-  schemaOptions(repo("extensions/geo/geo.schema.haus")),
+  readFileSync(repo("extensions/geo/schema.haus"), "utf8"),
+  schemaOptions(repo("extensions/geo/schema.haus")),
 ).schemas
 const MoneySchema = moneyModule.Money as unknown as Haus.Named<Schema.Codec<Money>, "@haus-fmt/money@1#Money">
 const CurrencySchema = moneyModule.Currency as unknown as Haus.Named<Schema.Codec<Currency>, "@haus-fmt/money@1#Currency">

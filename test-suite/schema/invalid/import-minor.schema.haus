@@ -1,0 +1,4 @@
+// An import names only a major version: the minimum minor goes in the
+// package manager's dependency range (spec §13.3).
+import @haus-fmt/money@1.1 (Money)
+type A = { total: Money }

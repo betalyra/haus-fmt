@@ -560,9 +560,9 @@ Code {
 Code {
   code: "import-version",
   category: Imports,
-  means: "An import asks for a major version (`@org/name@2`) and another one is installed.",
-  example: Text("import @haus-fmt/money@2 (Money), with version 1.2.0 installed"),
-  fix: "Install the major version the schema asks for, or update the import.",
+  means: "An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.",
+  example: Schema("import @haus-fmt/money@1.1 (Money)\ntype A = Money"),
+  fix: "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
 },
 Code {
   code: "import-cycle",
@@ -577,6 +577,13 @@ Code {
   means: "Two different files claim to be the same package: two copies of one package, or two packages with the same name.",
   example: Text("node_modules/@haus-fmt/money and node_modules/x/node_modules/@haus-fmt/money in one schema"),
   fix: "Install one copy of the package (deduplicate your dependencies).",
+},
+Code {
+  code: "package-path",
+  category: Imports,
+  means: "A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.",
+  example: Text("a package whose schema.haus has import ../../.env (T)"),
+  fix: "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.",
 },
 Code {
   code: "too-many-files",

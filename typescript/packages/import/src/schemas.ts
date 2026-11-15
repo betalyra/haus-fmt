@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { basename, dirname, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { checkData, definitionDoc, HausSyntaxError, parseSchemaFile, parseWithLocations, schemaReference, type ParseSchemaOptions, type ResolvedModule } from "@haus-fmt/haus"
-import { schemaOptions } from "@haus-fmt/haus/node"
+import { isSchemaFile, schemaOptions } from "@haus-fmt/haus/node"
 
 export interface Diagnostic {
   readonly message: string
@@ -25,7 +25,7 @@ export interface SchemaLink {
 
 /** The schema for a data file, if it has one: named in a comment, or the `.schema.haus` file next to it. */
 export function schemaFor(dataFile: string, text: string): SchemaLink | undefined {
-  if (dataFile.endsWith(".schema.haus")) return undefined
+  if (isSchemaFile(dataFile)) return undefined
   const ref = schemaReference(text)
   if (ref) return { path: resolve(dirname(dataFile), ref.path), type: ref.type, offset: ref.start }
   const path = dataFile.replace(/\.haus$/, ".schema.haus")

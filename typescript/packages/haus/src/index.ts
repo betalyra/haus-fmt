@@ -54,7 +54,7 @@ export function parse(text: string, limits: Partial<Limits> = {}): Value {
   return values[0]!
 }
 export {
-  ATTRIBUTES, BUILTINS, deprecation, HausSchemaFileError, Instance, instanceOf, parseSchemaFile, STD_MODULES, withoutAttributes,
+  ATTRIBUTES, BUILTINS, deprecation, HausSchemaFileError, Instance, instanceOf, ModuleError, parseSchemaFile, STD_MODULES, withoutAttributes,
   type Attribute, type Builtin, type Case, type Definition, type Field, type ModuleResolver, type ParseSchemaOptions, type Payload, type RecordType,
   type ResolvedModule, type SchemaFile, type SchemaWarning, type SchemaWarningKind, type StdType, type Type, type VariantType,
 } from "./schema-file.js"
