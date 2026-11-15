@@ -64,7 +64,7 @@ fn module(name: &str, text: &str) -> String {
     let defs = definitions(text);
     let arms: String = defs
         .iter()
-        .map(|t| format!("            {t:?} => <{t} as ::haus::Decode>::decode(v).map(|x| ::haus::Encode::encode(&x)),\n"))
+        .map(|t| format!("            {t:?} => <{t} as ::haus::Decode>::decode(v).and_then(|x| encode(&x)),\n"))
         .collect();
     let write_arms: String = defs.iter().map(|t| format!("            {t:?} => write_as::<{t}>(v),\n")).collect();
     let read_arms: String = defs.iter().map(|t| format!("            {t:?} => read_as::<{t}>(text),\n")).collect();
@@ -85,7 +85,12 @@ pub mod {name} {{
     }}
 
     fn read_as<T: ::haus::FromJson + ::haus::Encode>(text: &str) -> Result<::haus::Value, String> {{
-        ::haus::json::from_str::<T>(text).map(|x| ::haus::Encode::encode(&x)).map_err(|e| e.to_string())
+        let x = ::haus::json::from_str::<T>(text).map_err(|e| e.to_string())?;
+        ::haus::Encode::encode(&x).map_err(|e| e.to_string())
+    }}
+
+    fn encode<T: ::haus::Encode>(x: &T) -> Result<::haus::Value, ::haus::DecodeError> {{
+        ::haus::Encode::encode(x).map_err(|e| ::haus::DecodeError::new(format!("can't encode it again: {{e}}")))
     }}
 
     pub fn write(ty: &str, v: &::haus::Value) -> Option<Result<String, String>> {{
