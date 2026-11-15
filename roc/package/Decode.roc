@@ -267,14 +267,13 @@ Decode := [].{
 	arg = |tag, i, v, decoder| at(decoder(v), "(${tag})[${i.to_str()}]")
 
 	## The record payload of `Tag { … }`, with errors inside it under `(Tag)`.
+	## An argument that isn't a record (`Circle(1.5)`) is the wrong payload,
+	## a `wrong-payload` at the variant's place (spec §15).
 	payload : Str, Value, (List((Str, Value)) -> Try(a, Error)) -> Try(a, Error)
-	payload = |tag, v, decoder| at(
-		match strict_record(v) {
-			Ok(fields) => decoder(fields)
-			Err(e) => Err(e)
-		},
-		"(${tag})",
-	)
+	payload = |tag, v, decoder| match v {
+		Rec(fields) => at(decoder(fields), "(${tag})")
+		_ => fail(ErrorCode.wrong_payload, "${tag} takes one argument, a record, found ${describe(v)}: write `${tag} { … }`")
+	}
 
 	## A type with a codec: its base decoder first, then the codec (spec §13.4).
 	## A value the codec rejects is a `type-mismatch`.
@@ -286,7 +285,10 @@ Decode := [].{
 
 	## A tag with the wrong number of payload values: `wrong-payload`.
 	arity : Str, U64 -> Try(a, Error)
-	arity = |tag, n| fail(ErrorCode.wrong_payload, if (n == 0) "${tag} takes no payload" else "${tag} takes ${n.to_str()} value(s)")
+	arity = |tag, n| fail(
+		ErrorCode.wrong_payload,
+		if (n == 0) "${tag} takes no payload: write `${tag}`" else if (n == 1) "${tag} takes one argument" else "${tag} takes ${n.to_str()} arguments",
+	)
 
 	## A tag a closed variant doesn't list: `unknown-tag`.
 	unknown_tag : Str, List(Str) -> Try(a, Error)
@@ -499,6 +501,13 @@ expect {
 		Tag("Shape", [p]) => Decode.payload("Shape", p, |fs| Decode.field(fs, "r", Decode.i32))
 		_ => Decode.expected("Shape { … }", v)
 	}
-	code_of("Shape { r: \"1\" }", shape) == "type-mismatch at $[0].r" and code_of("Shape(1)", shape) == "type-mismatch at $[0]"
+	code_of("Shape { r: \"1\" }", shape) == "type-mismatch at $[0].r" and code_of("Shape(1)", shape) == "wrong-payload at $" and code_of("Shape([1])", shape) == "wrong-payload at $"
 }
-expect Decode.error_json({ code: "missing-field", reason: "missing field 'id'", path: "[2](Item)" }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$[2][0]\",\"hint\":\"Add the field, or mark it optional in the schema (`name?: String`).\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"
+expect {
+	shape = |v| match v {
+		Tag("Circle", [p]) => Decode.payload("Circle", p, |fs| Decode.field(fs, "r", Decode.f64))
+		_ => Decode.expected("Circle { … }", v)
+	}
+	Decode.one("Circle(1.5)", shape) == Err(Decode({ code: "wrong-payload", reason: "Circle takes one argument, a record, found number 1.5: write `Circle { … }`", path: "" }))
+}
+expect Decode.error_json({ code: "missing-field", reason: "missing field 'id'", path: "[2](Item)" }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$[2][0]\",\"hint\":\"Add the field, or mark it optional in the schema with `?` after its name.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"

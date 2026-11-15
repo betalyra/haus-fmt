@@ -829,7 +829,7 @@ expect SchemaTest.check(types_cases, 10, SchemaTest.types)
 expect SchemaTest.check(types_cases, 11, SchemaTest.types)
 
 # variants.cases.haus
-expect SchemaTest.count(variants_cases) == 45
+expect SchemaTest.count(variants_cases) == 49
 
 # Ok { type: "Shape", input: Circle { r: 1.5 } },
 expect SchemaTest.check(variants_cases, 0, SchemaTest.variants)
@@ -840,128 +840,140 @@ expect SchemaTest.check(variants_cases, 1, SchemaTest.variants)
 # Ok { type: "Shape", input: Circle { r: 1.5, color: "red" }, output: Circle { r: 1.5 } },
 expect SchemaTest.check(variants_cases, 2, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle(1.5), code: "type-mismatch" },
+# Err { type: "Shape", input: Circle(1.5), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 3, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle, code: "wrong-payload" },
+# Err { type: "Shape", input: Circle("r"), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 4, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle({ r: 1 }, { r: 2 }), code: "wrong-payload" },
+# Err { type: "Shape", input: Circle([1.5]), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 5, SchemaTest.variants)
 
-# Err { type: "Shape", input: Circle {}, code: "missing-field" },
+# Err { type: "Shape", input: Circle(Empty), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 6, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Point(1, 2) },
+# Err { type: "Shape", input: Circle, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 7, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point(1), code: "wrong-payload" },
+# Err { type: "Shape", input: Circle({ r: 1 }, { r: 2 }), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 8, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point(1, 2, 3), code: "wrong-payload" },
+# Err { type: "Shape", input: Circle {}, code: "missing-field" },
 expect SchemaTest.check(variants_cases, 9, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point { x: 1, y: 2 }, code: "wrong-payload" },
+# Ok { type: "Shape", input: Point(1, 2) },
 expect SchemaTest.check(variants_cases, 10, SchemaTest.variants)
 
-# Err { type: "Shape", input: Point([1, 2]), code: "wrong-payload" },
+# Err { type: "Shape", input: Point(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 11, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Empty },
+# Err { type: "Shape", input: Point(1, 2, 3), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 12, SchemaTest.variants)
 
-# Err { type: "Shape", input: Empty(1), code: "wrong-payload" },
+# Err { type: "Shape", input: Point { x: 1, y: 2 }, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 13, SchemaTest.variants)
 
-# Err { type: "Shape", input: Empty {}, code: "wrong-payload" },
+# Err { type: "Shape", input: Point([1, 2]), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 14, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Wrap { w: 1 } },
+# Ok { type: "Shape", input: Empty },
 expect SchemaTest.check(variants_cases, 15, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Wrap({ w: 1 }), output: Wrap { w: 1 } },
+# Err { type: "Shape", input: Empty(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 16, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Wrap { w: 1, h: 2 }, output: Wrap { w: 1 } },
+# Err { type: "Shape", input: Empty {}, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 17, SchemaTest.variants)
 
-# Err { type: "Shape", input: Wrap(1), code: "type-mismatch" },
+# Ok { type: "Shape", input: Wrap { w: 1 } },
 expect SchemaTest.check(variants_cases, 18, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Pair(1, "a") },
+# Ok { type: "Shape", input: Wrap({ w: 1 }), output: Wrap { w: 1 } },
 expect SchemaTest.check(variants_cases, 19, SchemaTest.variants)
 
-# Err { type: "Shape", input: Pair("a", 1), code: "type-mismatch" },
+# Ok { type: "Shape", input: Wrap { w: 1, h: 2 }, output: Wrap { w: 1 } },
 expect SchemaTest.check(variants_cases, 20, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Hexagon },
+# Err { type: "Shape", input: Wrap(1), code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 21, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Hexagon { side: 1.50, x: [1, Some(2)] } },
+# Ok { type: "Shape", input: Pair(1, "a") },
 expect SchemaTest.check(variants_cases, 22, SchemaTest.variants)
 
-# Ok { type: "Shape", input: Hexagon(0x10, "a", x"ff") , output: Hexagon(16, "a", x"ff") },
+# Err { type: "Shape", input: Pair("a", 1), code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 23, SchemaTest.variants)
 
-# Err { type: "Shape", input: "Circle", code: "type-mismatch" },
+# Ok { type: "Shape", input: Hexagon },
 expect SchemaTest.check(variants_cases, 24, SchemaTest.variants)
 
-# Err { type: "Shape", input: { r: 1 }, code: "type-mismatch" },
+# Ok { type: "Shape", input: Hexagon { side: 1.50, x: [1, Some(2)] } },
 expect SchemaTest.check(variants_cases, 25, SchemaTest.variants)
 
-# Ok { type: "Level", input: Debug },
+# Ok { type: "Shape", input: Hexagon(0x10, "a", x"ff") , output: Hexagon(16, "a", x"ff") },
 expect SchemaTest.check(variants_cases, 26, SchemaTest.variants)
 
-# Ok { type: "Level", input: Info },
+# Err { type: "Shape", input: "Circle", code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 27, SchemaTest.variants)
 
-# Err { type: "Level", input: Warn, code: "unknown-tag" },
+# Err { type: "Shape", input: { r: 1 }, code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 28, SchemaTest.variants)
 
-# Err { type: "Level", input: Debug(1), code: "wrong-payload" },
+# Ok { type: "Level", input: Debug },
 expect SchemaTest.check(variants_cases, 29, SchemaTest.variants)
 
-# Err { type: "Level", input: "Debug", code: "type-mismatch" },
+# Ok { type: "Level", input: Info },
 expect SchemaTest.check(variants_cases, 30, SchemaTest.variants)
 
-# Ok { type: "Strict", input: A },
+# Err { type: "Level", input: Warn, code: "unknown-tag" },
 expect SchemaTest.check(variants_cases, 31, SchemaTest.variants)
 
-# Ok { type: "Strict", input: B(1) },
+# Err { type: "Level", input: Debug(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 32, SchemaTest.variants)
 
-# Ok { type: "Strict", input: C { x: 1, y: 2 }, output: C { x: 1 } },
+# Err { type: "Level", input: "Debug", code: "type-mismatch" },
 expect SchemaTest.check(variants_cases, 33, SchemaTest.variants)
 
-# Err { type: "Strict", input: B, code: "wrong-payload" },
+# Ok { type: "Strict", input: A },
 expect SchemaTest.check(variants_cases, 34, SchemaTest.variants)
 
-# Err { type: "Strict", input: D, code: "unknown-tag" },
+# Ok { type: "Strict", input: B(1) },
 expect SchemaTest.check(variants_cases, 35, SchemaTest.variants)
 
-# Err { type: "Strict", input: D(1), code: "unknown-tag" },
+# Ok { type: "Strict", input: C { x: 1, y: 2 }, output: C { x: 1 } },
 expect SchemaTest.check(variants_cases, 36, SchemaTest.variants)
 
-# Ok { type: "ClosedPayload", input: Circle { r: 1 } },
+# Err { type: "Strict", input: B, code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 37, SchemaTest.variants)
 
-# Err { type: "ClosedPayload", input: Circle { r: 1, x: 2 }, code: "unknown-field" },
+# Err { type: "Strict", input: C(1), code: "wrong-payload" },
 expect SchemaTest.check(variants_cases, 38, SchemaTest.variants)
 
-# Ok { type: "AnyTag", input: EUR },
+# Err { type: "Strict", input: D, code: "unknown-tag" },
 expect SchemaTest.check(variants_cases, 39, SchemaTest.variants)
 
-# Ok { type: "AnyTag", input: Custom("XBT") },
+# Err { type: "Strict", input: D(1), code: "unknown-tag" },
 expect SchemaTest.check(variants_cases, 40, SchemaTest.variants)
 
-# Ok { type: "AnyTag", input: Money { amount: 19.90, currency: EUR } },
+# Ok { type: "ClosedPayload", input: Circle { r: 1 } },
 expect SchemaTest.check(variants_cases, 41, SchemaTest.variants)
 
-# Err { type: "AnyTag", input: "EUR", code: "type-mismatch" },
+# Err { type: "ClosedPayload", input: Circle { r: 1, x: 2 }, code: "unknown-field" },
 expect SchemaTest.check(variants_cases, 42, SchemaTest.variants)
 
-# Err { type: "AnyTag", input: 1, code: "type-mismatch" },
+# Ok { type: "AnyTag", input: EUR },
 expect SchemaTest.check(variants_cases, 43, SchemaTest.variants)
 
-# Ok { type: "Holder", input: { shape: Hexagon, any: [EUR, USD(1)] } },
+# Ok { type: "AnyTag", input: Custom("XBT") },
 expect SchemaTest.check(variants_cases, 44, SchemaTest.variants)
+
+# Ok { type: "AnyTag", input: Money { amount: 19.90, currency: EUR } },
+expect SchemaTest.check(variants_cases, 45, SchemaTest.variants)
+
+# Err { type: "AnyTag", input: "EUR", code: "type-mismatch" },
+expect SchemaTest.check(variants_cases, 46, SchemaTest.variants)
+
+# Err { type: "AnyTag", input: 1, code: "type-mismatch" },
+expect SchemaTest.check(variants_cases, 47, SchemaTest.variants)
+
+# Ok { type: "Holder", input: { shape: Hexagon, any: [EUR, USD(1)] } },
+expect SchemaTest.check(variants_cases, 48, SchemaTest.variants)

@@ -100,6 +100,8 @@ jobs:
           node spec/lean/scripts/schema-types.ts > spec/lean/schema-suite.json
           node spec/lean/scripts/schema-types.ts test-suite/json > spec/lean/json-suite.json
           git diff --exit-code spec/lean/schema-suite.json spec/lean/json-suite.json
+      - name: The skill's cheat sheet is up to date
+        run: node claude-plugin/scripts/sync.ts --check
 
   roc:
     name: Roc

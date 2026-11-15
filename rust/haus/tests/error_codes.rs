@@ -230,7 +230,7 @@ fn the_json_form() {
         concat!(
             r#"{"code":"not-an-integer","message":"expected a whole number (Int64), found 2.5","path":"$[1]","#,
             r#""expected":"Int64","found":"2.5","#,
-            r#""hint":"Write the integer without a fraction or exponent: `1`, `1000`.","#,
+            r#""hint":"Write the integer without a fraction or exponent.","#,
             r#""docs":"https://haus-fmt.org/docs/errors#not-an-integer"}"#
         )
     );

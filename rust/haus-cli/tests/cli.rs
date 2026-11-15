@@ -267,6 +267,38 @@ fn io_errors_exit_with_2_and_are_reported() {
 }
 
 #[test]
+fn json_output_even_when_nothing_can_be_checked() {
+    // A --schema that doesn't exist: the document, with the reason in `error`, and exit code 2.
+    let (code, json) = check_json(&fixtures(), &["--schema", "missing.schema.haus", "adjacent/order.haus"]);
+    assert_eq!(code, 2);
+    insta::assert_snapshot!(pretty(&json));
+    haus()
+        .args(["check", "--json", "--schema", "missing.schema.haus#Order", "-"])
+        .write_stdin("{}")
+        .assert()
+        .code(2)
+        .stderr("");
+    // Without --json, the reason goes to standard error.
+    haus()
+        .args(["check", "--schema", "missing.schema.haus", "adjacent/order.haus"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr("error: --schema missing.schema.haus: no such file\n");
+}
+
+#[test]
+fn wrong_payload_hints_name_the_case() {
+    let schema = "comment/shapes.schema.haus#Shape";
+    let out = haus().args(["check", "--json", "--schema", schema, "-"]).write_stdin("Circle(1.5)").output().unwrap();
+    let json = haus::json::parse(&String::from_utf8(out.stdout).unwrap()).unwrap();
+    let d = &array(&array(&json, "files")[0], "diagnostics")[0];
+    assert_eq!(str_of(d, "code"), "wrong-payload");
+    assert_eq!(str_of(d, "path"), "$");
+    assert_eq!(str_of(d, "hint"), "Circle takes one argument, a record { r: Float64 }: write `Circle { … }`.");
+}
+
+#[test]
 fn limits() {
     haus()
         .args(["check", "--max-depth", "1", "-"])

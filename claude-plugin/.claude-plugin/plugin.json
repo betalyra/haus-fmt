@@ -1,0 +1,13 @@
+{
+  "name": "haus",
+  "version": "0.1.0",
+  "description": "Write, check and convert haus data files and schemas: the traps for JSON habits, the haus check → fix → fmt loop, schema design and JSON conversion.",
+  "author": {
+    "name": "Betalyra",
+    "url": "https://github.com/betalyra"
+  },
+  "homepage": "https://haus-fmt.org",
+  "repository": "https://github.com/betalyra/haus-fmt",
+  "license": "MIT",
+  "keywords": ["haus", "data-format", "schema", "json", "config"]
+}

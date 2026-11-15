@@ -138,7 +138,7 @@ Heartbeat
 [foo]
 ```
 
-**Fix:** Quote it as a string (`"foo"`), or start it with a capital letter to make it a tag (`Foo`).
+**Fix:** Quote it as a string, or start it with a capital letter to make it a tag.
 
 ## expected-key
 
@@ -148,7 +148,7 @@ Heartbeat
 { 1: 1 }
 ```
 
-**Fix:** Write a key: a lowercase identifier (`name`) or a string (`"1"`).
+**Fix:** Write a key: a lowercase identifier or a string.
 
 ## uppercase-key
 
@@ -158,7 +158,7 @@ Heartbeat
 { Name: 1 }
 ```
 
-**Fix:** Quote the key (`"Name"`) or start it with a lowercase letter.
+**Fix:** Quote the key, or start it with a lowercase letter.
 
 ## block-string-key
 
@@ -170,7 +170,7 @@ Heartbeat
   """: 1 }
 ```
 
-**Fix:** Write the key as a basic string: `"k"`.
+**Fix:** Write the key as a basic string, `"…"`.
 
 ## missing-colon
 
@@ -200,7 +200,7 @@ Heartbeat
 Some()
 ```
 
-**Fix:** Remove the parentheses: `Tag`.
+**Fix:** Remove the empty parentheses after the tag.
 
 ## invalid-number
 
@@ -210,7 +210,7 @@ Some()
 007
 ```
 
-**Fix:** Write a number like `7`, `-1.5`, `1e10`, `0xff` or `1_000`.
+**Fix:** Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits.
 
 ## unterminated-string
 
@@ -239,7 +239,7 @@ b"
 
 For example: "a⟨U+0007⟩b": a string with a raw BEL character.
 
-**Fix:** Write the character as an escape: `\t`, `\u{7}`.
+**Fix:** Write the character as an escape, `\u{…}`.
 
 ## bidi-control
 
@@ -247,7 +247,7 @@ For example: "a⟨U+0007⟩b": a string with a raw BEL character.
 
 For example: // access⟨U+202E⟩ denied: a comment with a raw right-to-left override.
 
-**Fix:** Write it as an escape (`\u{202E}`) inside a string, or remove it.
+**Fix:** Write it as an escape (`\u{…}`) inside a string, or remove it.
 
 ## invalid-escape
 
@@ -257,7 +257,7 @@ For example: // access⟨U+202E⟩ denied: a comment with a raw right-to-left ov
 "\x41"
 ```
 
-**Fix:** Use one of the escapes, e.g. `\u{41}`, or write `\\` for a backslash.
+**Fix:** Use one of the escapes of §4, or write `\\` for a backslash.
 
 ## invalid-unicode-escape
 
@@ -267,7 +267,7 @@ For example: // access⟨U+202E⟩ denied: a comment with a raw right-to-left ov
 "\u0041"
 ```
 
-**Fix:** Write `\u{41}`, with braces, for a character from U+0000 to U+10FFFF other than a surrogate.
+**Fix:** Write the escape with braces, `\u{…}`, for a character from U+0000 to U+10FFFF other than a surrogate.
 
 ## block-string-opening
 
@@ -333,7 +333,7 @@ x"00
 x"zz"
 ```
 
-**Fix:** Write two hex digits per byte (`x"0b34ff"`), on one line.
+**Fix:** Write two hex digits per byte, on one line.
 
 ## bytes-odd-digits
 
@@ -343,7 +343,7 @@ x"zz"
 x"abc"
 ```
 
-**Fix:** Write each byte as two hex digits: `x"0abc"`.
+**Fix:** Write each byte as two hex digits.
 
 ## lone-carriage-return
 
@@ -379,7 +379,7 @@ For example: 1,⟨CR⟩2: a carriage return on its own.
 
 For example: [[[[ … ]]]]: 257 levels.
 
-**Fix:** Flatten the data, or raise `maxDepth` if you trust the input.
+**Fix:** Flatten the data, or raise the depth limit if you trust the input.
 
 ## number-too-long
 
@@ -387,7 +387,7 @@ For example: [[[[ … ]]]]: 257 levels.
 
 For example: a number with 1001 digits.
 
-**Fix:** Write a shorter number (a `String` or `Bytes` for very long data), or raise `maxNumberLength`.
+**Fix:** Write a shorter number (a `String` or `Bytes` for very long data), or raise the number length limit.
 
 ## exponent-too-large
 
@@ -397,7 +397,7 @@ For example: a number with 1001 digits.
 1e6145
 ```
 
-**Fix:** Write a number with a smaller exponent, or raise `maxExponent`.
+**Fix:** Write a number with a smaller exponent, or raise the exponent limit.
 
 ## string-too-long
 
@@ -405,7 +405,7 @@ For example: a number with 1001 digits.
 
 For example: a string of 16,777,217 characters.
 
-**Fix:** Split the string, or raise `maxStringLength`.
+**Fix:** Split the string, or raise the string length limit.
 
 ## key-too-long
 
@@ -413,7 +413,7 @@ For example: a string of 16,777,217 characters.
 
 For example: a bare key of 16,777,217 characters.
 
-**Fix:** Use a shorter key, or raise `maxStringLength`.
+**Fix:** Use a shorter key, or raise the string length limit.
 
 ## tag-too-long
 
@@ -421,7 +421,7 @@ For example: a bare key of 16,777,217 characters.
 
 For example: a tag of 16,777,217 characters.
 
-**Fix:** Use a shorter tag, or raise `maxStringLength`.
+**Fix:** Use a shorter tag, or raise the string length limit.
 
 ## value-too-long
 
@@ -429,7 +429,7 @@ For example: a tag of 16,777,217 characters.
 
 For example: a stream whose second value is 64 Mi characters long.
 
-**Fix:** Send smaller values, or raise `maxValueLength`.
+**Fix:** Send smaller values, or raise the value length limit.
 
 ## unsupported-depth
 
@@ -473,7 +473,7 @@ type A = { x Int }
 type A = { at: Date }
 ```
 
-**Fix:** Define the type, fix its spelling, or import it (`import std/time (Date)`).
+**Fix:** Define the type, fix its spelling, or import it from the module that defines it.
 
 ## wrong-arity
 
@@ -483,7 +483,7 @@ type A = { at: Date }
 type A = { key: Secret }
 ```
 
-**Fix:** Give the type exactly the arguments it takes, e.g. `Secret String`, `Map Int`, `Result String Int`.
+**Fix:** Give the type exactly as many arguments as it has parameters.
 
 ## duplicate-type
 
@@ -514,7 +514,7 @@ type Any = String
 type Box = { item: a }
 ```
 
-**Fix:** Declare the parameter (`type Box a = { item: a }`) or use a type name.
+**Fix:** Declare the parameter after the type's name, or use a type name.
 
 ## invalid-parameter
 
@@ -606,7 +606,7 @@ type A r = { ...r, x: Int }
 type A = { events: Stream Int }
 ```
 
-**Fix:** Use `Array` inside types; `Stream` only as `type Events = Stream Event`.
+**Fix:** Use `Array` inside types, and `Stream` only as the whole of a definition.
 
 ## unguarded-recursion
 
@@ -617,7 +617,7 @@ type A = B
 type B = A
 ```
 
-**Fix:** Put the recursion inside a record, array or variant: `type Tree = { children: Array Tree }`.
+**Fix:** Put the recursion inside a record field, array element or variant payload.
 
 ## growing-recursion
 
@@ -627,7 +627,7 @@ type B = A
 type Nest a = < Leaf a | Deeper (Nest (Array a)) >
 ```
 
-**Fix:** Refer to the type with its own parameters (`Nest a`).
+**Fix:** Refer to the type inside itself with exactly its own parameters.
 
 ## type-too-deep
 
@@ -646,7 +646,7 @@ For example: Array (Array (Array … )) nested 300 levels.
 type A = Int
 ```
 
-**Fix:** Write `@deprecated` or `@deprecated("why, and what to use instead")`.
+**Fix:** Give the attribute only the arguments it takes: `@deprecated` takes none, or one string.
 
 ## attribute-twice
 
@@ -667,7 +667,7 @@ type A = Int
 type A = { @deprecated ("x") x: Int }
 ```
 
-**Fix:** Write the parenthesis right after the name: `@deprecated("x")`.
+**Fix:** Write the parenthesis right after the attribute's name, without a space.
 
 ## attribute-on-spread
 
@@ -689,7 +689,7 @@ import std/money (Money)
 type A = Money
 ```
 
-**Fix:** Import an existing module; `std/money` is now the package `@haus-fmt/money`.
+**Fix:** Fix the module's name; a former standard module is now a package, which the message names.
 
 ## unknown-import
 
@@ -722,7 +722,7 @@ import ./common (Address)
 type A = Address
 ```
 
-**Fix:** Read the schema with a resolver (e.g. from a file, with `@haus-fmt/haus/node`), or inline the types.
+**Fix:** Read the schema with a resolver that loads imports (from files or packages), or inline the types.
 
 ## import-not-found
 
@@ -790,7 +790,7 @@ type Root = { qty: Int }
 { qty: 1.0 }
 ```
 
-**Fix:** Write the integer without a fraction or exponent: `1`, `1000`.
+**Fix:** Write the integer without a fraction or exponent.
 
 ## out-of-range
 
@@ -818,7 +818,7 @@ type Root = { id: Int, name: String }
 { id: 1 }
 ```
 
-**Fix:** Add the field, or mark it optional in the schema (`name?: String`).
+**Fix:** Add the field, or mark it optional in the schema with `?` after its name.
 
 ## unknown-field
 
@@ -850,7 +850,7 @@ Blue
 
 ## wrong-payload
 
-*Decoding and encoding.* A listed tag with another payload than its case says: arguments for a tag without payload, the wrong number of arguments, a positional payload where a record is expected (§15).
+*Decoding and encoding.* A listed tag with another payload than its case says: arguments for a tag without payload, the wrong number of arguments, a positional payload where a record is expected, such as `Circle(1.5)` for the case `Circle { r: Float64 }` (§15).
 
 ```haus-schema
 type Root = closed < None | Some Int >
@@ -860,7 +860,7 @@ type Root = closed < None | Some Int >
 Some(1, 2)
 ```
 
-**Fix:** Write the payload the schema gives the tag: `Some(1)`.
+**Fix:** Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which.
 
 ## invalid-time
 
@@ -875,7 +875,7 @@ type Root = { on: Date }
 { on: Date("2026-02-30") }
 ```
 
-**Fix:** Write the date or time as the profile says: `Date("2026-02-28")`, `Instant("2026-11-08T09:12:00Z")`.
+**Fix:** Write the date or time as the std/time profile says (spec/std/time.md); the message names the type.
 
 ## invalid-secret
 
@@ -945,7 +945,7 @@ Read as lossless JSON:
 "\uD800"
 ```
 
-**Fix:** Write the whole pair (`\uD83D\uDE00`), or the character itself.
+**Fix:** Write both halves of the surrogate pair, or the character itself.
 
 ## lossless-form
 
@@ -957,7 +957,7 @@ Read as lossless JSON:
 1
 ```
 
-**Fix:** Write the lossless form: `{"num": "1"}`, `{"tag": "True"}`, `{"rec": {…}}`.
+**Fix:** Write one of the lossless forms of §16.2: a string, an array, or an object with `num`, `bytes`, `rec`, or `tag` (and `args`).
 
 ## lossless-number
 
@@ -969,7 +969,7 @@ Read as lossless JSON:
 {"num": "1E5"}
 ```
 
-**Fix:** Write the normalized literal: `{"num": "1e5"}`.
+**Fix:** Write the number's normalized literal (§2) as a string.
 
 ## lossless-bytes
 
@@ -981,7 +981,7 @@ Read as lossless JSON:
 {"bytes": "FF"}
 ```
 
-**Fix:** Write lowercase hex, two digits per byte: `{"bytes": "ff"}`.
+**Fix:** Write the bytes as lowercase hex, two digits per byte.
 
 ## invalid-tag
 
@@ -1007,7 +1007,7 @@ type Root = Bytes
 "CzQ"
 ```
 
-**Fix:** Write standard base64 with padding: `"CzQ="`.
+**Fix:** Write standard base64, with padding.
 
 ## missing-member
 
@@ -1021,7 +1021,7 @@ type Root = < Ok Int | Err String >
 {"_tag": "Ok"}
 ```
 
-**Fix:** Add the member: `{"_tag": "Ok", "value": 1}`.
+**Fix:** Add the member the message names.
 
 ## unexpected-member
 

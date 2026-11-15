@@ -232,8 +232,9 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
     | .variant closed cases, .variant tag args =>
       match caseOf? cases tag, args with
       | some (.bare _), [] => .ok (.case tag [])
-      | some (.record _ cl fields), [a] =>
-        under (.arg tag 0) ((decode env (.record cl fields) a).map fun x => .case tag [x])
+      -- One argument that is a record: anything else, `Circle(1.5)` too, is the wrong payload.
+      | some (.record _ cl fields), [.record fs] =>
+        under (.arg tag 0) ((decode env (.record cl fields) (.record fs)).map fun x => .case tag [x])
       | some (.positional _ ts), args =>
         if args.length = ts.length then (decodeArgs env tag 0 ts args).map (.case tag)
         else reject .wrongPayload s!"{tag} takes {ts.length} arguments"

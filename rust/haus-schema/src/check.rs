@@ -79,20 +79,24 @@ pub struct Issue {
     pub span: Option<Range<usize>>,
     /// Where `span` starts.
     pub position: Option<Position>,
+    /// A fix for this case, better than the catalogue's for the code
+    /// (boxed: errors are returned by value, and stay small this way).
+    fix: Option<Box<str>>,
 }
 
 impl Issue {
     fn new(severity: Severity, code: Code, message: String, path: Vec<Segment>) -> Issue {
-        Issue { severity, code, message, path, span: None, position: None }
+        Issue { severity, code, message, path, span: None, position: None, fix: None }
     }
 
     fn error((code, message): (Code, String)) -> Issue {
         Issue::new(Severity::Error, code, message, vec![])
     }
 
-    /// The catalogue's fix for the code (spec §17).
-    pub fn hint(&self) -> &'static str {
-        self.code.hint()
+    /// A concrete fix: the one for this case (`Point takes 2 arguments …`),
+    /// or the catalogue's for the code (spec §17).
+    pub fn hint(&self) -> &str {
+        self.fix.as_deref().unwrap_or(self.code.hint())
     }
 
     /// The documentation of the code: `https://haus-fmt.org/docs/errors#<code>`.
@@ -398,18 +402,74 @@ impl<'s> Walker<'s> {
     }
 
     fn report(&mut self, severity: Severity, code: Code, message: String, span: Option<Range<usize>>) {
+        self.report_fix(severity, code, message, None, span);
+    }
+
+    fn report_fix(
+        &mut self,
+        severity: Severity,
+        code: Code,
+        message: String,
+        fix: Option<String>,
+        span: Option<Range<usize>>,
+    ) {
         if severity == Severity::Hint && self.decoding() {
             return;
         }
         if self.issues.len() < MAX_ISSUES {
             let span = span.filter(|_| self.located).map(|s| s.start..s.end.max(s.start + 1));
-            self.issues.push(Issue { span, ..Issue::new(severity, code, message, self.path.clone()) });
+            self.issues.push(Issue {
+                span,
+                fix: fix.map(String::into_boxed_str),
+                ..Issue::new(severity, code, message, self.path.clone())
+            });
         }
     }
 
     fn error<T>(&mut self, code: Code, message: String, loc: Loc) -> Option<T> {
         self.report(Severity::Error, code, message, span(loc));
         None
+    }
+
+    /// A `wrong-payload` error, with a hint that says what `tag` takes.
+    fn wrong_payload<T>(&mut self, message: String, fix: String, loc: Loc) -> Option<T> {
+        self.report_fix(Severity::Error, Code::WrongPayload, message, Some(fix), span(loc));
+        None
+    }
+
+    /// What `tag` takes, as a hint: `Point takes 2 arguments (Float64, Float64): write `Point(…, …)`.`
+    fn payload_fix(&self, tag: &str, payload: &Payload) -> String {
+        match payload {
+            Payload::None => format!("{tag} takes no payload: write `{tag}`."),
+            Payload::Record(r) => {
+                let fields: Vec<String> = r
+                    .fields
+                    .iter()
+                    .take(6)
+                    .map(|f| {
+                        format!(
+                            "{}{}: {}",
+                            quote_key(&f.key),
+                            if f.optional { "?" } else { "" },
+                            self.schema.describe(&f.ty)
+                        )
+                    })
+                    .collect();
+                let more = if r.fields.len() > 6 { ", …" } else { "" };
+                let record = match fields.is_empty() {
+                    true => "{}".to_owned(),
+                    false => format!("{{ {}{more} }}", fields.join(", ")),
+                };
+                format!("{tag} takes one argument, a record {record}: write `{tag} {{ … }}`.")
+            }
+            Payload::Positional(items) => {
+                let n = items.len();
+                let described: Vec<String> = items.iter().map(|t| self.schema.describe(t)).collect();
+                let s = if n == 1 { "" } else { "s" };
+                let holes = vec!["…"; n].join(", ");
+                format!("{tag} takes {n} argument{s} ({}): write `{tag}({holes})`.", described.join(", "))
+            }
+        }
     }
 
     fn fatal<T>(&mut self, code: Code, message: String) -> Option<T> {
@@ -504,7 +564,15 @@ impl<'s> Walker<'s> {
                 _ => {
                     let message =
                         format!("expected None or Some(…) ({}), found {}", self.schema.describe(ty), found(v));
-                    self.error(not_case(v, &["None", "Some"]), message, loc)
+                    let fix = match v {
+                        Value::Variant { tag, .. } if tag == "None" => Some(self.payload_fix(tag, &Payload::None)),
+                        Value::Variant { tag, .. } if tag == "Some" => {
+                            Some(self.payload_fix(tag, &Payload::Positional(vec![(**item).clone()])))
+                        }
+                        _ => None,
+                    };
+                    self.report_fix(Severity::Error, not_case(v, &["None", "Some"]), message, fix, span(loc));
+                    None
                 }
             },
             Type::Secret(item) => self.secret(v, item, loc),
@@ -560,6 +628,11 @@ impl<'s> Walker<'s> {
                 if args.is_empty() && matches!(tag.as_str(), "NaN" | "Infinity" | "NegInfinity") =>
             {
                 Some(self.keep(v))
+            }
+            (Builtin::Bool, Value::Variant { tag, .. }) if tag == "True" || tag == "False" => {
+                let message = format!("expected {}, found {}", self.schema.describe(ty), found(v));
+                let fix = self.payload_fix(tag, &Payload::None);
+                self.wrong_payload(message, fix, loc)
             }
             (Builtin::Bool, Value::Variant { .. }) => self.mismatch_as(not_case(v, &["True", "False"]), v, ty, loc),
             (Builtin::Float64, Value::Number(text)) => self.float(text.parse::<f64>(), text, name, v, ty, loc),
@@ -740,23 +813,34 @@ impl<'s> Walker<'s> {
     fn payload(&mut self, tag: &str, args: &[Value], case: &Case, loc: Loc) -> Option<Value> {
         match &case.payload {
             Payload::None if args.is_empty() => Some(self.out(|| haus::ser::variant(tag, vec![]))),
-            Payload::None => self.error(Code::WrongPayload, format!("{tag} takes no payload"), loc),
+            Payload::None => {
+                let fix = self.payload_fix(tag, &case.payload);
+                self.wrong_payload(format!("{tag} takes no payload"), fix, loc)
+            }
             Payload::Record(r) => match args {
                 // `Tag { … }`: the record is at the variant's level and place.
                 [Value::Record(fields)] => {
                     let x = self.record(fields, r, item_of(loc, 0))?;
                     Some(self.out(|| haus::ser::variant(tag, vec![x])))
                 }
-                // One value that isn't a record: the payload has the wrong type.
-                [_] => self.error(Code::TypeMismatch, format!("write {tag} {{ … }} with a record"), loc),
-                _ => self.error(Code::WrongPayload, format!("write {tag} {{ … }} with a record"), loc),
+                // Anything else, `Circle(1.5)` too, is the wrong payload (spec §15).
+                _ => {
+                    let fix = self.payload_fix(tag, &case.payload);
+                    let got = match args {
+                        [] => "no payload".to_owned(),
+                        [x] => found(x),
+                        _ => format!("{} arguments", args.len()),
+                    };
+                    self.wrong_payload(format!("{tag} takes one argument, a record; found {got}"), fix, loc)
+                }
             },
             Payload::Positional(items) if items.len() != args.len() => {
                 let n = items.len();
                 let described: Vec<String> = items.iter().map(|t| self.schema.describe(t)).collect();
                 let s = if n == 1 { "" } else { "s" };
                 let message = format!("{tag} takes {n} argument{s} ({}), found {}", described.join(", "), args.len());
-                self.error(Code::WrongPayload, message, loc)
+                let fix = self.payload_fix(tag, &case.payload);
+                self.wrong_payload(message, fix, loc)
             }
             Payload::Positional(items) => {
                 let out: Vec<Option<Value>> = args

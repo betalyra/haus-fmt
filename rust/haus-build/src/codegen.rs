@@ -933,7 +933,7 @@ impl<'a> Gen<'a> {
             ),
             Payload::Tuple(items) => {
                 let tys = items.iter().map(|r| &r.ty);
-                let (bind, values) = tuple_de(&items);
+                let (bind, values) = tuple_de(&items, &case.payload);
                 let (json_bind, read) = tuple_from_json(&items);
                 let vars = vars(items.len());
                 let encoded = tuple_en(&items);
@@ -962,7 +962,7 @@ impl<'a> Gen<'a> {
                     let n = &f.name;
                     f.en(quote!(self.#n), false)
                 });
-                let bind = bind_record(quote!(::haus::de::payload(tag, args)), closed, fields);
+                let bind = bind_record(record_payload(fields), closed, fields);
                 let json = if fields.iter().any(|f| f.key == "_tag") {
                     Json {
                         nullable: None,
@@ -1041,7 +1041,7 @@ impl<'a> Gen<'a> {
                     },
                     Payload::Tuple(items) => {
                         let tys = items.iter().map(|r| &r.ty);
-                        let (bind, values) = tuple_de(&items);
+                        let (bind, values) = tuple_de(&items, &case.payload);
                         let (json_bind, read) = tuple_from_json(&items);
                         let vars = vars(items.len());
                         let encoded = tuple_en(&items);
@@ -1062,7 +1062,7 @@ impl<'a> Gen<'a> {
                             let n = &f.name;
                             f.en(quote!(#n), true)
                         });
-                        let bind = bind_record(quote!(::haus::de::payload(tag, args)), closed, fields);
+                        let bind = bind_record(record_payload(fields), closed, fields);
                         let (from_json, to_json) = if fields.iter().any(|f| f.key == "_tag") {
                             (
                                 quote!(#tag => ::std::result::Result::Err(::haus::json::de::no_plain_form(#tag)),),
@@ -1177,10 +1177,12 @@ fn vars(n: usize) -> Vec<Ident> {
     (0..n).map(|i| format_ident!("a{i}")).collect()
 }
 
-/// `let [a0, a1] = args::<2>(tag, args)?;` and the decoded values.
-fn tuple_de(items: &[Rs]) -> (TokenStream, Vec<TokenStream>) {
+/// `let [a0, a1] = typed_args::<2>(tag, args, &["Float64", "Float64"])?;`
+/// and the decoded values; `types` are the case's, which the hint names.
+fn tuple_de(items: &[Rs], types: &[Ty]) -> (TokenStream, Vec<TokenStream>) {
     let (vars, n) = (vars(items.len()), Literal::usize_unsuffixed(items.len()));
-    let bind = quote!(let [#(#vars),*] = ::haus::de::args::<#n>(tag, args)?;);
+    let types = types.iter().map(|t| t.to_string());
+    let bind = quote!(let [#(#vars),*] = ::haus::de::typed_args::<#n>(tag, args, &[#(#types),*])?;);
     let values = items
         .iter()
         .zip(&vars)
@@ -1191,6 +1193,27 @@ fn tuple_de(items: &[Rs]) -> (TokenStream, Vec<TokenStream>) {
         })
         .collect();
     (bind, values)
+}
+
+/// `record_payload(tag, args, "{ r: Float64 }")`: the record payload of a
+/// case, with its type as the schema writes it for the hint.
+fn record_payload(fields: &[Field]) -> TokenStream {
+    let shown: Vec<String> = fields
+        .iter()
+        .take(6)
+        .map(|f| {
+            let word = f.key.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
+                && f.key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            let key = if word { f.key.clone() } else { format!("{:?}", f.key) };
+            format!("{key}{}: {}", if f.optional { "?" } else { "" }, f.ty)
+        })
+        .collect();
+    let more = if fields.len() > 6 { ", …" } else { "" };
+    let record = match shown.is_empty() {
+        true => "{}".to_owned(),
+        false => format!("{{ {}{more} }}", shown.join(", ")),
+    };
+    quote!(::haus::de::record_payload(tag, args, #record))
 }
 
 /// The encoded payload values `a0`, `a1`, ….

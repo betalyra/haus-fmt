@@ -125,6 +125,7 @@ One JSON document on one line on standard output, whatever happened:
 | Member | |
 |---|---|
 | `ok` | no errors and no unreadable files: the exit code is 0 |
+| `error` | only when nothing could be checked, such as a `--schema` file that doesn't exist (then the exit code is 2): `{ code, message, hint, docs }`, the error form of spec §17; `files` is then empty |
 | `files[]` | every file checked, in the order checked |
 | `files[].path` | as given or found (`./a.haus` when walking `.`); `<stdin>` for standard input |
 | `files[].kind` | `"data"` or `"schema"` |
@@ -139,6 +140,27 @@ One JSON document on one line on standard output, whatever happened:
 | `path` | the place in the value, for schema checks: `$.items[2].price` |
 | `expected`, `found` | for syntax errors, where natural |
 | `summary` | counts over all files |
+
+A check that can't start still prints the document, with `ok` false and
+the reason in `error`:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "import-not-found",
+    "message": "--schema missing.schema.haus: no such file",
+    "hint": "Fix the path given with --schema.",
+    "docs": "https://haus-fmt.org/docs/errors#import-not-found"
+  },
+  "files": [],
+  "summary": { "files": 0, "errors": 0, "warnings": 0, "hints": 0, "unreadable": 0 }
+}
+```
+
+Only arguments the command line can't parse (an unknown option, a missing
+path) are reported as text on standard error, with exit code 2, since
+`--json` itself may not have been read.
 
 Members that don't apply are left out. The shape is stable: members may be
 added, never removed or renamed. Codes come from the catalogue (spec §17)

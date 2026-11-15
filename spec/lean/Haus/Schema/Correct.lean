@@ -191,6 +191,15 @@ theorem Args.length_eq {env : Env} {ts : List Ty} {xs : List Value} {ys : List T
 theorem hidden_of {s : Nat} {c : Ty} {r : Except Error Typed} {x : Typed} (h : r = .ok x) :
     hidden s c r = .ok (x.hide s) := hidden_ok.mpr ⟨x, h, rfl⟩
 
+/-- A record type accepts only records: a record case's one argument is a record. -/
+theorem Dec.record_value {env : Env} {cl : Bool} {fields : List Field} {a : Value} {y : Typed} :
+    Dec env (.record cl fields) a y → ∃ fs, a = .record fs
+  | .intro hw hc => by
+    simp only [whnf, peel] at hw
+    cases hw
+    cases hc
+    exact ⟨_, rfl⟩
+
 mutual
 theorem Dec.decode {env : Env} {t : Ty} {v : Value} {x : Typed} : Dec env t v x → decode env t v = .ok x
   | .intro hw hc => hc.decode hw
@@ -210,7 +219,9 @@ theorem Core.decode {env : Env} {c t : Ty} {s : Nat} {v : Value} {x : Typed} :
   | .record hm hf, hw => by rw [decode, hw]; exact hidden_of (by simp [hm, hf.decode, Except.map])
   | .bare hc, hw => by rw [decode, hw]; exact hidden_of (by simp [hc])
   | .recordCase hc hd, hw => by
-    rw [decode, hw]; exact hidden_of (by simp [hc, hd.decode, Except.map, under])
+    have h := hd.decode
+    obtain ⟨fs, rfl⟩ := hd.record_value
+    rw [decode, hw]; exact hidden_of (by simp [hc, h, Except.map, under])
   | .positional hc ha, hw => by
     rw [decode, hw]; exact hidden_of (by simp [hc, ha.length_eq, ha.decode 0, Except.map])
   | .unknown hc, hw => by rw [decode, hw]; exact hidden_of (by simp [hc])

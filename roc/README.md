@@ -135,7 +135,9 @@ an earlier line is `payload-newline`, a closing bracket `unexpected-closer`;
 `null-literal`, `boolean-literal` and `bare-identifier`; a number is checked
 as a literal, then for what follows it, then its length, then its exponent;
 for `Bool`, `Maybe`, `Result` and closed variants an unknown tag is
-`unknown-tag`, a listed one with the wrong payload `wrong-payload`; anything
+`unknown-tag`, a listed one with the wrong payload `wrong-payload`, and so
+is a record case's argument that isn't a record (`Circle(1.5)`, at the
+variant, with the case in the message: "Circle takes one argument, a record"); anything
 inside a `Secret` is `invalid-secret`. A codec's error is a `type-mismatch`.
 
 `ErrorCode.roc` is partly generated from the catalogue,

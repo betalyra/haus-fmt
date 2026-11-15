@@ -1,0 +1,21 @@
+---
+source: haus-cli/tests/cli.rs
+expression: pretty(&json)
+---
+{
+  "ok": false,
+  "error": {
+    "code": "import-not-found",
+    "message": "--schema missing.schema.haus: no such file",
+    "hint": "Fix the path given with --schema.",
+    "docs": "https://haus-fmt.org/docs/errors#import-not-found"
+  },
+  "files": [],
+  "summary": {
+    "files": 0,
+    "errors": 0,
+    "warnings": 0,
+    "hints": 0,
+    "unreadable": 0
+  }
+}

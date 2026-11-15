@@ -93,6 +93,19 @@ fn errors_say_where() {
 }
 
 #[test]
+fn wrong_payloads_are_reported_at_the_variant_with_what_the_tag_takes() {
+    // A record case given one value that isn't a record: the payload is wrong, not the value (spec §15).
+    let record = decode_error::<Person>(&ADA.replace("Member { since: Date(\"1843-01-01\") }", "Member(1)"));
+    assert_eq!((record.code, record.place().as_str()), (haus::ErrorCode::WrongPayload, "$.type"));
+    assert_eq!(record.hint(), "Member takes one argument, a record { since: Date }: write `Member { … }`.");
+    let positional = decode_error::<Person>(&ADA.replace("Circle(1.5)", "Rect(1.5)"));
+    assert_eq!((positional.code, positional.place().as_str()), (haus::ErrorCode::WrongPayload, "$.shape"));
+    assert_eq!(positional.hint(), "Rect takes 2 arguments (Float64, Float64): write `Rect(…, …)`.");
+    let bare = decode_error::<Tree>("Leaf(1)");
+    assert_eq!(bare.hint(), "Leaf takes no payload: write `Leaf`.");
+}
+
+#[test]
 fn spreads_copy_tags_and_fields() {
     let event: AppEvent = from_str(r#"Failed { reason: "timeout" }"#).unwrap();
     assert!(matches!(&event, AppEvent::Failed { reason } if reason == "timeout"));
