@@ -34,11 +34,13 @@ prototype, …) is outside Lean and stays covered by tests.
 | 🟡 | **V. Versions** (spec §10) | `Extends old new`: a new version is a conservative extension of the old one (same values for every old text; canonical form, built-in types and schema decoding agree on what the old version can express). Defined, with `refl`, `trans` and `current_extends_self`, in [`Haus/Version.lean`](Haus/Version.lean); to be proven for each release. | days per release |
 | ✅ | **T. std/time** | A reference model of the profile (spec §13.2, `std/time.md`), the bindings' time checkers fuzzed against it, and its security and calendar properties proven | 1–3 weeks |
 | 🟡 | **J. JSON** (spec §16) | A reference for the JSON mappings (without a schema, lossless, plain) that passes the JSON suite, with the round trips and uniqueness proven, in steps J1–J7 (below). J1–J6 done, in [`Haus/Json/`](Haus/Json); fuzzing the bindings against it (J7) is open. | J1–J6: ~1 week |
+| ⬜ | **X. Extensions and codecs** (spec §13.3, §13.4) | The codec contract proven once for any codec; a reference checker for each official profile (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`) that the bindings' codecs are fuzzed against, in steps X1–X4 (below). | X1–X3: ~1 week |
 
 Order: A–H, T1–T6, I1–I3, I5, J1–J6 and the definition of V are done. Next:
 fuzzing the bindings' decoders against the Lean one (the rest of I3), then
 I4 and I6. P comes after the benchmarks' doubling
-tests and is needed only for I7.
+tests and is needed only for I7. X1–X3 come before the extensions are
+released; a new package's profile is written in Lean before its codecs.
 
 ## A. Security properties of the grammar
 
@@ -260,6 +262,29 @@ in the spec, with vectors):
 - **An unlisted tag without other members** reads as bare (`Hexagon`), not as
   `Hexagon {}`; with only `args` losslessly, and `"args": []` is rejected;
   otherwise its other members read as a record payload (§16.1).
+
+## X. Extensions and codecs
+
+An extension's schema is an ordinary schema, so the theorems of I and J
+(`decode_iff`, `decode_encode`, `plain_round_trip`) already hold for its
+types. What they don't cover is the rules a package adds beyond its shape:
+its profiles (spec §13.3), which codecs (§13.4) enforce. A profile is small
+and decidable, like the std/time profile, so it gets the same treatment as
+T: a definition, a checker proven to compute it, and the bindings fuzzed
+against it.
+
+| | Step | Gives | Effort |
+|---|---|---|---|
+| ⬜ | X1. The codec contract | A codec as a check on the value its type's schema decoded. For any such check, the three laws of §13.4: it accepts only what the schema accepts (by construction); decode, encode, decode is decode (from `decode_encode`, since the check reads only the decoded value); the decoded value is the schema's. Proven once, so each extension gets them without a proof of its own. A codec whose host type keeps less than the value (`Instant` as a JavaScript `Date`) has one obligation left: what it encodes decodes back to the same host value. | days |
+| ⬜ | X2. Reference model of each profile | The rule as a definition (`Valid`) and a checker with `check_iff`, as in T1; `haus-ref --profile NAME`. First `@haus-fmt/money/iso` (a currency is three letters A–Z) and `@haus-fmt/geo/wgs84` (latitude in [-90, 90], longitude in [-180, 180]). `wgs84` needs a decision first: the range on the float after rounding or on the literal, and `Infinity`, `NegInfinity` and `-0` (design review §3.6 E3). | days |
+| ⬜ | X3. Fuzzing | Every binding's codec against the reference checker, on generated values and near misses, as `fuzz/src/time.ts` does for std/time. | 1–2 days |
+| ⬜ | X4. Proofs where a profile claims something | One spelling per value (a canonical UUID, as T6), parsing that security depends on (`@haus-fmt/net`: URLs, email addresses, IP addresses), exact numeric bounds. Per profile, when the package is written. | per profile |
+
+Not modelled: registries. Whether a currency code is assigned is outside the
+`iso` profile by design; a profile that checks it would be a table generated
+from ISO 4217 and tested, not proven. And none of this is a rule for schema
+packages: a profile's contract is its written rule, and community packages
+need no Lean.
 
 ## V. Versions
 
