@@ -1,5 +1,6 @@
 import Haus.Schema.Float
 import Haus.Time.Check
+import Haus.Canonical
 
 /-!
 # The reference decoder and encoder (spec §15)
@@ -52,7 +53,7 @@ def Typed.hide : Nat → Typed → Typed
 /-! ## Encoding -/
 
 /-- An integer's literal: `-` and its digits, so `-0` is written `0`. -/
-def intLit (n : Int) : String := String.ofList (RoundTrip.intText (n < 0) n.natAbs)
+def intLit (n : Int) : String := String.ofList (intText (n < 0) n.natAbs)
 
 def encodeFloat (k : FloatType) : Flt → Value
   | .nan => .variant "NaN" []

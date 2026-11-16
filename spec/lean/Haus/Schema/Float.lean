@@ -1,5 +1,4 @@
 import Haus.Schema.Types
-import Haus.RoundTrip.Numbers
 
 /-!
 # Floats (spec §15)
@@ -171,7 +170,7 @@ def layout (ds : Text) (n : Int) : Text :=
   else
     let e := n - 1
     ds.take 1 ++ (if ds.length > 1 then '.' :: ds.drop 1 else []) ++
-      'e' :: RoundTrip.intText (e < 0) e.natAbs
+      'e' :: intText (e < 0) e.natAbs
 
 /--
 **Writing a finite float** (§15): the fewest decimal digits that round back to

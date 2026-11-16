@@ -91,9 +91,22 @@ Checked 1 file: 1 error, 1 hint.
 Lines and columns are 1-based, columns in Unicode code points (spec §8).
 Everything goes to standard output, the summary line last.
 
+Standard input (`-`) is checked as a stream, value by value: each
+diagnostic is printed as soon as its value is complete, with its line and
+column in the whole input, so `tail -f events.haus | haus check -` reports
+each bad event as it arrives (see "Streams and `tail -f`" below). Its schema
+is `--schema`, or the `// schema:` comment at the top, found once the first
+value is complete. Against a `Stream` type every value is checked (`at:
+$[3].status`) and the limit of 200 errors is per value; against any other
+type the first value is checked, and a second one is an error
+(`not-one-value`). An excerpt shows the value's last line up to its comma.
+A syntax error ends the check, since nothing after it can be trusted.
+
 #### `--json`
 
-One JSON document on one line on standard output, whatever happened:
+One JSON document on one line on standard output, whatever happened. It
+comes once every file is checked: standard input is read to its end, not
+value by value.
 
 ```json
 {
@@ -190,6 +203,15 @@ is 1.
 | `compact` | one line per top-level value, with spaces: `Person { name: "Ada", age: 36 },` | logs and streams people look at |
 | `minimised` | one line per top-level value, no whitespace between tokens: `Person{name:"Ada",age:36},` | the wire and storage |
 
+Standard input in the pretty layout is read to its end first: comments and
+blank lines belong between values. In the compact and minimised layouts,
+when standard input is a pipe (`tail -f events.haus | haus fmt --layout
+compact -`), each value is written as soon as it is complete, followed by a
+comma, as streams are written. So a lone value keeps its comma
+(`{ a: 1 },`), which formatting the whole input drops; one that the input
+ends without a comma stays without. Values before a syntax error are already
+written.
+
 Compact and minimised drop comments. So that a comment is never lost by
 accident, `haus fmt` refuses to rewrite a file that has comments in one of
 them (the exit code is 2, and the file stays as it was) unless you pass
@@ -215,8 +237,11 @@ curl -s https://example.org/feed.haus | haus hash
 The file is read as a stream (spec §6), value by value, so memory stays
 bounded by the largest value. Without a FILE (or with `-`) they read
 standard input; without a FILE on a terminal, that's a usage error rather
-than a wait. A syntax error is reported on standard error with exit code 1;
-canonical forms printed before it stay printed. `haus hash` of a file with
+than a wait. When the input is a pipe or a FIFO rather than a regular file,
+each canonical form or hash is written as soon as its value is complete:
+`tail -f events.haus | haus canonical`. A syntax error is reported on
+standard error with exit code 1; canonical forms printed before it stay
+printed. `haus hash` of a file with
 one value is the hash of that value; of an empty file, the SHA-256 of the
 empty text.
 
@@ -227,6 +252,19 @@ hash, whatever their comments, key order, spelling or whitespace.
 ```sh
 haus fmt --layout minimised - < order.haus | haus hash   # the same as `haus hash order.haus`
 ```
+
+### Streams and `tail -f`
+
+`haus check -`, `haus canonical`, `haus hash --each` and `haus fmt --layout
+compact|minimised -` work on a stream that is still being written, such as
+`tail -f events.haus | haus check --schema events.schema.haus -`: each value
+is handled, and its output shown, as soon as it is complete.
+
+A value is complete at the comma after it (spec §6), or at the end of the
+input. So write a comma after every value, the last one too, as haus writers
+do (`Heartbeat,`): a last value without one is only handled once the input
+ends. `haus check --json` and `haus hash` without `--each` print once, at
+the end; `haus fmt` in the pretty layout reads all of standard input first.
 
 ### Limits
 
@@ -247,5 +285,13 @@ literal: 829 for the default 1000), `--max-exponent N` and
 ## Color
 
 `--color auto|always|never` (default `auto`). `auto` colors only a terminal,
-and not when `NO_COLOR` is set to a non-empty value. `--json` output is never
-colored.
+and not when `NO_COLOR` is set to a non-empty value. Each output is decided
+on its own: diagnostics on standard error by standard error, haus text on
+standard output by standard output, so `haus canonical x.haus > out.haus`
+writes plain text. `--json` output and hashes are never colored.
+
+The haus text that `haus canonical` and `haus fmt` print on standard output
+is highlighted: tags cyan, record keys blue, strings green with their
+escapes in bold, numbers yellow, byte strings magenta and comments dim.
+Only color codes are added, never at a line break: without them the text is
+the same, character for character.

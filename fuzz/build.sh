@@ -1,5 +1,5 @@
 #!/bin/sh
-# Build the parsers, std/time checkers, schema decoders and JSON converters under test (fuzz/README.md).
+# Build the parsers, std/time checkers, schema decoders, JSON converters and formatters under test (fuzz/README.md).
 set -e
 cd "$(dirname "$0")/.."
 (cd spec/lean && lake build haus-ref)

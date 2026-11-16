@@ -5,7 +5,11 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use haus::json::Json;
 use predicates::prelude::*;
 use std::fs;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::time::Duration;
 
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -533,6 +537,200 @@ fn an_integer_of_any_size_has_a_canonical_form_and_hash() {
         .assert()
         .code(1)
         .stderr(predicate::str::contains("error[number-too-long]").and(predicate::str::contains("<stdin>:1:10")));
+}
+
+// ── live streams (`tail -f x.haus | haus …`) ───────────────────
+
+/// `haus` reading a stream that is still being written: standard input stays
+/// open, and each line of output must come before it is closed.
+struct Live {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    lines: Receiver<String>,
+}
+
+impl Live {
+    fn start(dir: &Path, args: &[&str]) -> Live {
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_haus"))
+            .current_dir(dir)
+            .args(args)
+            .env_remove("NO_COLOR")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (send, lines) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if send.send(line.unwrap()).is_err() {
+                    break;
+                }
+            }
+        });
+        Live { stdin: child.stdin.take(), child, lines }
+    }
+
+    fn send(&mut self, text: &str) {
+        let stdin = self.stdin.as_mut().unwrap();
+        stdin.write_all(text.as_bytes()).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// The next line of output, while standard input is still open.
+    fn line(&self) -> String {
+        self.lines.recv_timeout(Duration::from_secs(5)).expect("a line of output within 5 s")
+    }
+
+    /// The lines of output up to the one that starts with `end`, without
+    /// the empty lines before them.
+    fn lines_to(&self, end: &str) -> Vec<String> {
+        let mut out = vec![self.line()];
+        while out[0].is_empty() {
+            out[0] = self.line();
+        }
+        while !out.last().unwrap().starts_with(end) {
+            out.push(self.line());
+        }
+        out
+    }
+
+    /// Close standard input: the rest of the output, and the exit code.
+    fn close(mut self) -> (Vec<String>, i32) {
+        drop(self.stdin.take());
+        let code = self.child.wait().unwrap().code().unwrap();
+        (self.lines.iter().collect(), code)
+    }
+}
+
+#[test]
+fn canonical_and_hash_each_print_each_value_as_it_comes() {
+    let mut live = Live::start(&fixtures(), &["canonical"]);
+    live.send("A { x: 1 },\n");
+    assert_eq!(live.line(), "A{x:1}");
+    live.send("B(2.50),\n");
+    assert_eq!(live.line(), "B(2.50)");
+    assert_eq!(live.close(), (vec![], 0));
+
+    let hash = |text: &str| haus::hash(&haus::parse(text).unwrap()[0]);
+    let mut live = Live::start(&fixtures(), &["hash", "--each", "-"]);
+    live.send("A { x: 1 },\n");
+    assert_eq!(live.line(), hash("A { x: 1 }"));
+    live.send("// a comment\nB,\n");
+    assert_eq!(live.line(), hash("B"));
+    assert_eq!(live.close(), (vec![], 0));
+}
+
+#[test]
+fn check_stdin_reports_each_value_as_it_comes() {
+    let mut live = Live::start(&fixtures(), &["check", "--color", "never", "-"]);
+    live.send("{ a: 1 },\n");
+    live.send("{ b: [1 2] },\n");
+    let error = live.lines_to("  = docs");
+    assert_eq!(error[0], "error[missing-comma]: expected ',' or ']', found '2'");
+    assert_eq!(error[1], " --> <stdin>:2:9");
+    assert_eq!(error[3], "2 | { b: [1 2] },");
+    // A syntax error ends the stream: the summary comes without waiting for the rest.
+    assert_eq!(live.line(), "");
+    assert_eq!(live.line(), "Checked 1 file: 1 error.");
+    assert_eq!(live.close(), (vec![], 1));
+}
+
+#[test]
+fn check_stdin_against_a_stream_schema_reports_each_value_as_it_comes() {
+    let dir = tempfile::tempdir().unwrap();
+    let schema = "type Shape = closed < Circle { r: Float64 } | Square { side: Float64 } >\ntype Root = Stream Shape\n";
+    fs::write(dir.path().join("shapes.schema.haus"), schema).unwrap();
+    let mut live = Live::start(dir.path(), &["check", "--color", "never", "--schema", "shapes.schema.haus", "-"]);
+    live.send("Square { side: 2.0 },\n");
+    live.send("Square { side: \"2\" },\n");
+    let error = live.lines_to("  = docs");
+    assert_eq!(error[0], "error[type-mismatch]: expected Float64, found the string \"2\"");
+    assert_eq!(error[1], " --> <stdin>:2:16");
+    assert!(error.contains(&"  = at: $[1].side".to_owned()), "{error:?}");
+    // The check goes on: two values on one line, the second one wrong.
+    live.send("Circle { r: 1.0 }, Circle { r: Some(1) },\n");
+    let error = live.lines_to("  = docs");
+    assert_eq!(error[0], "error[type-mismatch]: expected Float64, found the tag Some");
+    assert_eq!(error[1], " --> <stdin>:3:32");
+    assert!(error.contains(&"  = at: $[3].r".to_owned()), "{error:?}");
+    let (rest, code) = live.close();
+    assert_eq!((rest, code), (vec!["".to_owned(), "Checked 1 file: 2 errors.".to_owned()], 1));
+}
+
+#[test]
+fn check_stdin_against_a_document_schema_rejects_a_second_value() {
+    let mut live =
+        Live::start(&fixtures(), &["check", "--color", "never", "--schema", "comment/shapes.schema.haus#Shape", "-"]);
+    live.send("Square { side: 2.0 },\n");
+    live.send("Square { side: 3.0 },\n");
+    let error = live.lines_to("  = docs");
+    assert_eq!(error[0], "error[not-one-value]: expected one value (Shape is not a Stream), found more than one");
+    assert_eq!(error[1], " --> <stdin>:2:1");
+    live.send("Square { side: \"not checked\" },\n");
+    let (rest, code) = live.close();
+    assert_eq!((rest, code), (vec!["".to_owned(), "Checked 1 file: 1 error.".to_owned()], 1));
+}
+
+#[test]
+fn fmt_compact_stdin_writes_each_value_as_it_comes() {
+    for (layout, first) in [("compact", "{ a: 1, b: [2] },"), ("minimised", "{a:1,b:[2]},")] {
+        let mut live = Live::start(&fixtures(), &["fmt", "--layout", layout, "-"]);
+        live.send("{a:1,\n// c\nb:[2]},\n");
+        assert_eq!(live.line(), first);
+        live.send("  Tag,\n");
+        assert_eq!(live.line(), "Tag,");
+        live.send("Last");
+        // The last value has no comma: it is complete only at the end of the input.
+        assert_eq!(live.close(), (vec!["Last,".to_owned()], 0));
+    }
+    // A lone value keeps the comma it came with: when it was written, more could have come.
+    haus().args(["fmt", "--layout", "compact", "-"]).write_stdin("{ a: 1 },\n").assert().stdout("{ a: 1 },\n");
+    haus().args(["fmt", "--layout", "compact", "-"]).write_stdin("{ a: 1 }\n").assert().stdout("{ a: 1 }\n");
+}
+
+/// `text` without its ANSI codes.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("\x1b[") {
+        out.push_str(&rest[..i]);
+        rest = &rest[i + rest[i..].find('m').unwrap() + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn haus_text_is_colored_only_when_asked_for() {
+    let input = "// c\nOrder { id: 1, \"x-y\": \"a\\tb\", raw: x\"00ff\", ok: True, n: -1.5e3 },\nB,\n";
+    let commands: [&[&str]; 4] =
+        [&["canonical"], &["fmt", "-"], &["fmt", "--layout", "compact", "-"], &["fmt", "--layout", "minimised", "-"]];
+    for args in commands {
+        let run = |color: &[&str]| {
+            let out = haus().args(color).args(args).write_stdin(input).output().unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8(out.stdout).unwrap()
+        };
+        // Not a terminal: exactly the plain text.
+        let plain = run(&[]);
+        assert!(!plain.contains('\x1b'), "{args:?}");
+        assert_eq!(run(&["--color", "never"]), plain);
+        let colored = run(&["--color", "always"]);
+        assert_ne!(colored, plain, "{args:?}");
+        assert_eq!(strip_ansi(&colored), plain, "{args:?}");
+        assert!(colored.contains("\x1b[36mOrder\x1b[0m"), "{args:?}: {colored:?}");
+        assert!(colored.contains("\x1b[33m1\x1b[0m"), "{args:?}: {colored:?}");
+    }
+    let colored = haus().args(["--color", "always", "fmt", "-"]).write_stdin(input).output().unwrap().stdout;
+    let colored = String::from_utf8(colored).unwrap();
+    for part in ["\x1b[2m// c\x1b[0m", "\x1b[34m\"x-y\"\x1b[0m", "\x1b[1;32m\\t\x1b[0m", "\x1b[35mx\"00ff\"\x1b[0m"] {
+        assert!(colored.contains(part), "{part:?}: {colored:?}");
+    }
+    // Hashes and check's JSON are never colored.
+    let hashes = haus().args(["hash", "--each", "--color", "always", "-"]).write_stdin(input).output().unwrap().stdout;
+    assert!(!hashes.contains(&0x1b));
 }
 
 // ── fmt ──────────────────────────────────────────────────────────

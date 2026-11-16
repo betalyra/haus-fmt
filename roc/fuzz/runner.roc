@@ -5,7 +5,11 @@
 ## that report codes give it). With
 ## `--stream`, each file goes through the stream reader in chunks (see `chunks`);
 ## with `--canonical`, `ok` is followed by the canonical form of each value
-## (spec §12) as a JSON array of strings.
+## (spec §12) as a JSON array of strings. With `--write compact` or
+## `--write minimised` (the formatter fuzzer, `main.ts --format`), each value
+## goes through the value writer, `Encode.to_str` or `Encode.minimised`, and
+## `ok` is followed by the lines as a JSON array of strings; an encoding
+## error is `err 0 0 <code> <reason>`.
 app [main!] {
 	haus: "../package/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t.tar.zst",
@@ -24,6 +28,8 @@ main! = |args| {
 	(mode, dir, n) = match args.map(|a| OsStr.to_str_try(a) ?? "") {
 		["--stream", d, count] => (Stream, d, U64.from_str(count) ?? 0)
 		["--canonical", d, count] => (Canonical, d, U64.from_str(count) ?? 0)
+		["--write", "compact", d, count] => (WriteCompact, d, U64.from_str(count) ?? 0)
+		["--write", "minimised", d, count] => (WriteMinimised, d, U64.from_str(count) ?? 0)
 		[d, count] => (Parse, d, U64.from_str(count) ?? 0)
 		_ => (Parse, "", 0)
 	}
@@ -35,6 +41,8 @@ main! = |args| {
 		output = match mode {
 			Stream => line(streamed(bytes, $i))
 			Canonical => canonical_line(Value.parse_bytes(bytes))
+			WriteCompact => write_line(Value.parse_bytes(bytes), Encode.to_str)
+			WriteMinimised => write_line(Value.parse_bytes(bytes), Encode.minimised)
 			Parse => line(Value.parse_bytes(bytes))
 		}
 		Stdout.line!(output)?
@@ -58,6 +66,26 @@ canonical_line : Try(List(Value), Value.ParseError) -> Str
 canonical_line = |result| match result {
 	Ok(values) => "ok [${Str.join_with(values.map(|v| Value.to_test_json(Text(Encode.canonical(v)))), ",")}]"
 	Err(e) => line(Err(e))
+}
+
+## With `--write`: each value through `write` (`Encode.to_str` or `Encode.minimised`), as JSON strings.
+write_line : Try(List(Value), Value.ParseError), (Value -> Try(Str, Encode.Error)) -> Str
+write_line = |result, write| match result {
+	Ok(values) =>
+		match write_all(values, write) {
+			Ok(lines) => "ok [${Str.join_with(lines.map(|text| Value.to_test_json(Text(text))), ",")}]"
+			Err({ code, reason, path: _ }) => "err 0 0 ${code} ${reason.replace_each("\r", "\\r").replace_each("\n", "\\n")}"
+		}
+	Err(e) => line(Err(e))
+}
+
+write_all : List(Value), (Value -> Try(Str, Encode.Error)) -> Try(List(Str), Encode.Error)
+write_all = |values, write| {
+	var $lines = []
+	for v in values {
+		$lines = $lines.append(write(v)?)
+	}
+	Ok($lines)
 }
 
 ## The chunks of case `i`, the same in every runner: chunk k has size

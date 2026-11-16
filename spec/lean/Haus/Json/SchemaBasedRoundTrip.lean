@@ -1,4 +1,5 @@
 import Haus.Json.SchemaBased
+import Haus.Json.Normal
 import Haus.Schema.RoundTrip
 
 /-!
@@ -34,9 +35,9 @@ theorem mem_stripTrailing {ds : Text} {c : Char} (h : c ∈ stripTrailing ds) : 
 /-- Characters a float's spelling is made of. -/
 def SpellChar (c : Char) : Prop := isDigit c = true ∨ c = '.' ∨ c = 'e' ∨ c = '-'
 
-theorem intText_chars (neg : Bool) (v : Nat) : ∀ c ∈ RoundTrip.intText neg v, SpellChar c := by
+theorem intText_chars (neg : Bool) (v : Nat) : ∀ c ∈ intText neg v, SpellChar c := by
   intro c hc
-  unfold RoundTrip.intText at hc
+  unfold intText at hc
   rcases List.mem_append.mp hc with h | h
   · split at h
     · simp only [List.mem_singleton] at h; exact .inr (.inr (.inr h))

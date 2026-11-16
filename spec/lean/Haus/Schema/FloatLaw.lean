@@ -1,4 +1,5 @@
 import Haus.Schema.Float
+import Haus.RoundTrip.Numbers
 
 /-!
 # The spelling of a float rounds back to it (spec §15)
@@ -526,13 +527,13 @@ theorem fracOf_dot {f r : Text} (hf : ∀ c ∈ f, isDigit c = true) (hr : ∀ c
   obtain ⟨h1, h2⟩ := digits_split hf hr
   simp only [fracOf, h1, h2]
 
-theorem expOf_intText (e : Int) : expOf ('e' :: RoundTrip.intText (decide (e < 0)) e.natAbs) = some e := by
+theorem expOf_intText (e : Int) : expOf ('e' :: intText (decide (e < 0)) e.natAbs) = some e := by
   have hd : ∀ v : Nat, (Nat.toDigits 10 v ≠ [] && (Nat.toDigits 10 v).all isDigit) = true := by
     intro v
     simp only [Bool.and_eq_true, decide_eq_true_eq, List.all_eq_true]
     exact ⟨Nat.toDigits_ne_nil, RoundTrip.toDigits_decimal⟩
   have hv := RoundTrip.digitsValue_toDigits (b := 10) (by decide) (by decide) e.natAbs
-  unfold RoundTrip.intText
+  unfold intText
   by_cases he : e < 0
   · have : (decide (e < 0) && e.natAbs != 0) = true := by simp; omega
     simp only [this, ↓reduceIte, List.cons_append, List.nil_append, expOf, hd, hv]

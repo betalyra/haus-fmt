@@ -5,12 +5,14 @@
  *   node fuzz/src/main.ts [--count N] [--seed S] [--out DIR] [--canonical]
  *   node fuzz/src/main.ts --schema [--count N] [--seed S] [--runners …]   schema decoding (schema.ts)
  *   node fuzz/src/main.ts --json [--count N] [--seed S] [--modes …] [--runners …]   the JSON mappings (json.ts)
+ *   node fuzz/src/main.ts --format [--count N] [--seed S]   the formatters and value writers (format.ts)
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { input, Rng } from "./generate.ts"
 import { activeRunners, runAll, useCanonical, type Result } from "./runners.ts"
+import { run as runFormat } from "./format.ts"
 import { run as runJson } from "./json.ts"
 import { run as runSchema } from "./schema.ts"
 
@@ -25,6 +27,8 @@ const { values: args } = parseArgs({
     schema: { type: "boolean", default: false },
     // The JSON mappings instead (json.ts).
     json: { type: "boolean", default: false },
+    // The formatters (spec §11) and value writers instead (format.ts).
+    format: { type: "boolean", default: false },
     modes: { type: "string" },
     runners: { type: "string" },
     batch: { type: "string" },
@@ -97,6 +101,7 @@ function describe(bytes: Uint8Array): string {
 
 if (args.schema) process.exitCode = await runSchema(process.argv.slice(2))
 else if (args.json) process.exitCode = await runJson(process.argv.slice(2))
+else if (args.format) process.exitCode = await runFormat(process.argv.slice(2))
 else runParsers()
 
 function runParsers() {

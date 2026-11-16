@@ -40,7 +40,7 @@ theorem wholeLit_intLit (n : Int) : wholeLit (intLit n).toList = some n := by
       simp [he, hc]
   have hv : digitsValue 10 (Nat.toDigits 10 n.natAbs) = n.natAbs :=
     RoundTrip.digitsValue_toDigits (by decide) (by decide) _
-  unfold intLit RoundTrip.intText
+  unfold intLit intText
   rw [String.toList_ofList]
   by_cases hn : n < 0
   · have h0 : (n.natAbs != 0) = true := by simp; omega
@@ -79,7 +79,7 @@ theorem wholeLit_spelling {a : String} {n : Int} (h : wholeLit a.toList = some n
         exact ⟨String.toList_inj.mp (by rw [this]; rfl), by omega⟩
       · left
         apply String.toList_inj.mp
-        unfold intLit RoundTrip.intText
+        unfold intLit intText
         rw [String.toList_ofList, he]
         have hneg : (-(digitsValue 10 ds : Int) < 0) = True := by simp; omega
         have h0' : (digitsValue 10 ds != 0) = true := by simpa using h0
@@ -92,7 +92,7 @@ theorem wholeLit_spelling {a : String} {n : Int} (h : wholeLit a.toList = some n
       cases h
       left
       apply String.toList_inj.mp
-      unfold intLit RoundTrip.intText
+      unfold intLit intText
       rw [String.toList_ofList]
       have : ¬ ((digitsValue 10 a.toList : Int) < 0) := by omega
       simp only [this, decide_false, Bool.false_and, Bool.false_eq_true, ↓reduceIte, List.nil_append,
