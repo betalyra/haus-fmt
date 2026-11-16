@@ -27,8 +27,48 @@ env:
   PNPM_VERSION: "12.4.1"
 
 jobs:
+  # Changes only to the website, docs, plans or top-level Markdown skip the
+  # jobs below (a skipped job counts as passed for required checks); `docs`
+  # still checks the generated documentation. Nightly and manual runs, and
+  # anything else that changed, run everything.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: diff
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) range="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"; base="${{ github.event.pull_request.base.sha }}" ;;
+            push) range="${{ github.event.before }}..${{ github.sha }}"; base="${{ github.event.before }}" ;;
+            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          # A new branch or a force push has no usable base: run everything.
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          files=$(git diff --name-only "$range")
+          printf '%s\n' "$files"
+          if printf '%s\n' "$files" | grep -qvE '^(website/|docs/|plans/|[^/]+\.md$|$)'; then code=true; else code=false; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  docs:
+    name: Generated docs are up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: node spec/scripts/errors.ts --check
+      - run: node claude-plugin/scripts/sync.ts --check
+
   lean:
     name: Lean proofs and reference parser
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -51,6 +91,8 @@ jobs:
 
   rust:
     name: Rust
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -72,6 +114,8 @@ jobs:
 
   typescript:
     name: TypeScript
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -105,6 +149,8 @@ jobs:
 
   roc:
     name: Roc
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -133,6 +179,8 @@ jobs:
 
   python:
     name: Python
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -150,6 +198,8 @@ jobs:
 
   fuzz-build:
     name: Fuzzing / build the runners
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # The fuzz jobs run these binaries: the same image for all of them.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
