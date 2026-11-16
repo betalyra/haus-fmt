@@ -356,9 +356,16 @@ Errors inside an imported file are reported at the import, with their place in t
 
 | Version | Allowed changes | Guarantee |
 |---|---|---|
-| major | removing or renaming types, fields or tags; changing a field's type; making a type `closed` | none |
-| minor | new types; new optional fields in open records; new tags in open variants | data valid before stays valid and decodes to the same shape |
-| patch | comments and documentation | nothing changes |
+| major | everything not listed below, for example: removing or renaming types, fields or tags; changing a field's type or a tag's payload; adding a required field (a `Maybe` field is required); making an optional field required or a required one optional; adding a field or tag to a closed type; making a type `closed` or open | none |
+| minor | new types; new optional fields (`x?: T`) in open records; new tags in open variants | see below |
+| patch | comments, documentation and attributes (§14) | nothing changes |
+
+A minor version guarantees, between any two versions of the same major:
+
+- **Older data, newer reader.** Data valid under the older version that uses only the fields and tags it lists stays valid under the newer one and decodes to the same value.
+- **Newer data, older reader.** Data valid under the newer version stays valid under the older one, which ignores the new fields and decodes the new tags to unknown values (§15).
+
+A field or tag that an open type doesn't list is reserved for later versions of its schema: writers SHOULD NOT use one, as a later minor version may give it a meaning or a type the data doesn't match. `{ id: 1, note: 5 }` is valid under an open `{ id: Int }`, and invalid once 1.1 adds `note?: String`.
 
 An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range: `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
 
