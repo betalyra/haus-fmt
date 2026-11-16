@@ -1,4 +1,4 @@
-## Reading plain JSON (spec §16.3) into your own Roc types: the building
+## Reading schema-based JSON (spec §16.3) into your own Roc types: the building
 ## blocks that generated modules (`haus-gen roc --json`) use, like `Decode`
 ## for haus values.
 ##
@@ -12,8 +12,10 @@
 ##     })
 ##
 ## Errors have the codes of spec §17 (`ErrorCode`), as decoding haus does,
-## and those of the plain mapping: `missing-member`, `unexpected-member`,
-## `invalid-base64`, `invalid-number` for a string that should hold a number.
+## and those of schema-based JSON: `missing-member`, `unexpected-member`,
+## `invalid-base64`, `invalid-number` for a string that should hold a number,
+## and `haus-json-form` for an `Any` or an unknown value's `"_args"` that
+## isn't self-describing JSON.
 import ErrorCode
 import Int
 import JsonValue
@@ -59,7 +61,7 @@ FromJson := [].{
 	}
 
 	## A reader's result, if the haus value it encodes to (with `encode`)
-	## nests at most 256 levels (spec §16, "Limits": a mapping can take
+	## nests at most 256 levels (spec §16, "Limits": a form can take
 	## several JSON levels for one haus level, so the JSON may nest deeper and
 	## the value is checked after reading). A generated `from_json_<name>`
 	## checks its result so; the readers it is built from don't.
@@ -165,9 +167,9 @@ FromJson := [].{
 		_ => expected("a string (${name})", j)
 	}
 
-	## `Any`: the lossless form (spec §16.2).
+	## `Any`: its self-describing value (spec §16.2), without the envelope.
 	any : JsonValue -> Try(Value, Decode.Error)
-	any = |j| JsonValue.from_lossless(j)
+	any = |j| JsonValue.from_haus_json_value(j)
 
 	## `< >`: any tag, as an unknown value.
 	any_tag : JsonValue -> Try([Bare(Str), Other(Str, List(Value))], Decode.Error)
@@ -333,10 +335,10 @@ FromJson := [].{
 	arity = |tag, n| Decode.fail(ErrorCode.wrong_payload, "${tag} takes ${n.to_str()} value(s)")
 
 	## The arguments of a tag the variant doesn't list (spec §16.3): none for
-	## only `"_tag"`; with `"args"` and no other member, the arguments in the
-	## lossless form; otherwise the other members are a record payload, read
-	## without a schema (§16.1): `{"_tag": "Hexagon", "sides": 6}` is
-	## `Hexagon { sides: 6 }`.
+	## only `"_tag"`; with `"_args"` and no other member, the arguments as
+	## self-describing values (without the envelope), a non-empty array;
+	## otherwise the other members are a record payload, read by the import
+	## (§16.1): `{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`.
 	unknown : Str, List((Str, JsonValue)) -> Try(List(Value), Decode.Error)
 	unknown = |tag, members| {
 		if !JsonValue.is_tag_name(tag) {
@@ -345,18 +347,18 @@ FromJson := [].{
 		others = members.keep_if(|(k, _)| k != "_tag")
 		match others {
 			[] => Ok([])
-			[("args", Array([]))] => at(Decode.fail(ErrorCode.lossless_form, "a tag without arguments has no \"args\""), ".args")
-			[("args", Array(items))] => {
+			[("_args", Array([]))] => at(Decode.fail(ErrorCode.haus_json_form, "a tag without arguments has no \"_args\""), "._args")
+			[("_args", Array(items))] => {
 				var $out = []
 				var $i = 0.U64
 				for x in items {
-					$out = $out.append(at(JsonValue.from_lossless(x), ".args[${$i.to_str()}]")?)
+					$out = $out.append(at(JsonValue.from_haus_json_value(x), "._args[${$i.to_str()}]")?)
 					$i = $i + 1
 				}
 				Ok($out)
 			}
-			[("args", other)] => at(Decode.fail(ErrorCode.lossless_form, "expected an array, found ${JsonValue.describe(other)}"), ".args")
-			_ => Ok([JsonValue.to_value(Object(others))?])
+			[("_args", other)] => at(Decode.fail(ErrorCode.haus_json_form, "expected an array, found ${JsonValue.describe(other)}"), "._args")
+			_ => Ok([JsonValue.import_value(Object(others))?])
 		}
 	}
 
@@ -367,9 +369,10 @@ FromJson := [].{
 		_ => expected("a string (${what})", j)
 	}
 
-	## A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
-	no_plain_form : Str -> Try(a, Decode.Error)
-	no_plain_form = |tag| Decode.fail(ErrorCode.no_json_form, "${tag} has a field named _tag, so it has no plain JSON form")
+	## A case whose record payload has a field named `_tag` or `_args`
+	## (`name`): it has no schema-based form (spec §16.3).
+	no_json_form : Str, Str -> Try(a, Decode.Error)
+	no_json_form = |tag, name| Decode.fail(ErrorCode.no_json_form, "${tag} has a field named ${name}, so it has no schema-based JSON form")
 }
 
 ## How deep a value nests, counted as the haus writer counts it (`Tag { … }`
@@ -461,6 +464,27 @@ expect FromJson.one("{\"_tag\": \"Hexagon\", \"sides\": 6}", FromJson.any_tag).m
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon{sides:6}")
+# `_args` alone: the arguments; beside other members, or `args`: a record payload.
+expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}", FromJson.any_tag).map_ok(
+	|t| match t {
+		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Bare(tag) => tag
+	},
+) == Ok("Hexagon(1,\"a\")")
+expect FromJson.one("{\"_tag\": \"Run\", \"args\": [1, 2]}", FromJson.any_tag).map_ok(
+	|t| match t {
+		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Bare(tag) => tag
+	},
+) == Ok("Run{args:[1,2]}")
+expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", FromJson.any_tag).map_ok(
+	|t| match t {
+		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Bare(tag) => tag
+	},
+) == Ok("Hexagon{_args:[{_num:\"1\"}],x:2}")
+# `Any` inside schema-based JSON accepts raw DEL, C1 and bidi controls.
+expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}\"")
 expect FromJson.one(
 	"{\"pin\": 98765}",
 	|j| {
@@ -522,14 +546,14 @@ expect FromJson.one_with("1", too_deep, FromJson.u16) == Err(Syntax({ code: "uns
 expect FromJson.lines_with("1", too_deep, FromJson.u16) == Err(Syntax({ code: "unsupported-depth", reason: unsupported, line: 1, column: 1 }))
 expect FromJson.within_limits(Ok(nest(1)), |v| v, too_deep).map_ok(|_| {}).map_err(Decode.message) == Err(unsupported)
 
-## `type Loop = Maybe Loop` read from plain JSON, as its haus value.
+## `type Loop = Maybe Loop` read from schema-based JSON, as its haus value.
 loop : JsonValue -> Try(Value, Decode.Error)
 loop = |j| FromJson.maybe(j, True, loop).map_ok(|m| match m {
 	None => Tag("None", [])
 	Some(v) => Tag("Some", [v])
 })
 
-# Error codes (spec §17) of the plain mapping.
+# Error codes (spec §17) of schema-based JSON.
 code_of : Str, (JsonValue -> Try(a, Decode.Error)) -> Str
 code_of = |text, reader| match FromJson.one(text, reader) {
 	Ok(_) => "ok"
@@ -547,9 +571,10 @@ expect code_of("{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", |j| FromJson.m
 expect code_of("{\"_tag\": \"Just\", \"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "unknown-tag at $._tag" and code_of("{\"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $"
 expect code_of("{\"_tag\": \"Some\"}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $" and code_of("{\"_tag\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $._tag"
 expect code_of("{\"_tag\": \"Fine\"}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "unknown-tag at $._tag" and code_of("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "type-mismatch at $.value"
-expect code_of("{\"_tag\": \"hexagon\"}", FromJson.any_tag) == "invalid-tag at $._tag" and code_of("{\"_tag\": \"Hexagon\", \"args\": []}", FromJson.any_tag) == "lossless-form at $.args" and code_of("{\"_tag\": \"Hexagon\", \"args\": 5}", FromJson.any_tag) == "lossless-form at $.args"
+expect code_of("{\"_tag\": \"hexagon\"}", FromJson.any_tag) == "invalid-tag at $._tag" and code_of("{\"_tag\": \"Hexagon\", \"_args\": []}", FromJson.any_tag) == "haus-json-form at $._args" and code_of("{\"_tag\": \"Hexagon\", \"_args\": 5}", FromJson.any_tag) == "haus-json-form at $._args"
+expect code_of("{\"_tag\": \"Hexagon\", \"_args\": [1]}", FromJson.any_tag) == "haus-json-form at $._args[0]" and code_of("{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", FromJson.any_tag) == "haus-json-form at $._args[0]"
 expect code_of("{\"pin\": 98765}", |j| FromJson.field(FromJson.object(j, "Login")?, "pin", |x| FromJson.secret(x, "Secret UInt16", FromJson.u16))) == "invalid-secret at $.pin"
 expect code_of("{\"id\": 1, \"x\": 2}", |j| FromJson.closed(FromJson.object(j, "Strict")?, ["id"])) == "unknown-field at $.x" and code_of("{}", |j| FromJson.field(FromJson.object(j, "User")?, "id", FromJson.i32)) == "missing-field at $"
-expect code_of("{\"_tag\": \"Point\", \"values\": [1]}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2)) == "wrong-payload at $.values" and code_of("1", FromJson.any) == "lossless-form at $"
+expect code_of("{\"_tag\": \"Point\", \"values\": [1]}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2)) == "wrong-payload at $.values" and code_of("1", FromJson.any) == "haus-json-form at $" and code_of("{\"_haus\": 1, \"_value\": \"x\"}", FromJson.any) == "haus-json-form at $"
 expect code_of("{\"a\": 1, \"a\": 2}", |j| FromJson.map(j, FromJson.i32)) == "duplicate-key" and code_of("{\"pt-BR\": \"x\"}", |j| FromJson.map(j, FromJson.i32)) == "type-mismatch at $[\"pt-BR\"]"
-expect code_of("1", |_| FromJson.no_plain_form("Odd")) == "no-json-form at $" and FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(|e| e.code) == Err("nesting-too-deep")
+expect code_of("1", |_| FromJson.no_json_form("Odd", "_args")) == "no-json-form at $" and FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(|e| e.code) == Err("nesting-too-deep")

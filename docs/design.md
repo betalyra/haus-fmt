@@ -172,13 +172,13 @@ Write `Secret String` in the schema. The data stays the same; the decoded value 
 
 ### How does it map to JSON?
 
-Three ways, all defined in the spec:
+Three forms, all defined in the spec:
 
-- **JSON to haus, without a schema:** objects become records, numbers stay exact, `true` becomes `True`, `null` becomes `None`.
-- **Lossless:** every haus value as JSON, with no schema needed, for carrying haus through systems that only store JSON: `19.90` is `{"num": "19.90"}`.
-- **Plain, with a schema:** the JSON an API client expects. `Decimal` and 64-bit integers are strings, so no float parser rounds them; a `Maybe` is `null` or the value; variants are objects with a `_tag`: `{"_tag": "Circle", "r": 1.5}`.
+- **Schema-based JSON:** the JSON an API client expects, read and written with the schema. `Decimal` and 64-bit integers are strings, so no float parser rounds them; a `Maybe` is `null` or the value; variants are objects with a `_tag`: `{"_tag": "Circle", "r": 1.5}`.
+- **Self-describing JSON:** every haus value exactly, with no schema needed, for carrying haus through systems that only store JSON: `19.90` is `{"_haus": 1, "_value": {"_num": "19.90"}}`.
+- **JSON import:** any JSON read as haus, without a schema: objects become records, numbers stay exact, `true` becomes `True`, `null` becomes `None`.
 
-A stream maps to JSON Lines, one JSON text per value. [§16](/docs/spec#16-json)
+Which one? Whoever knows least decides. If every reader has the schema, schema-based. If a reader lacks it but uses haus and needs exact values, self-describing. If a reader lacks it and wants ordinary JSON, schema-based too: read without the schema, ids, decimals, dates and bytes are just strings, so it isn't a way to pass data through unchanged. The reader always says which form it expects; the data never decides. A stream maps to JSON Lines, one JSON text per value. [§16](/docs/spec#16-json)
 
 ### Which languages are supported?
 

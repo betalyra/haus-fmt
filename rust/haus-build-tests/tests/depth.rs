@@ -44,8 +44,8 @@ fn recursive_types_at_the_supported_depth() {
         let (text, value) = tree(MAX);
         assert_eq!(haus::from_str::<Tree>(&text).unwrap(), value);
         assert_eq!(haus::to_string_with(&value, &limits).unwrap(), text);
-        let plain = json::to_string_with(&value, &limits).unwrap();
-        assert_eq!(json::from_str_with::<Tree>(&plain, &limits).unwrap(), value);
+        let as_json = json::to_string_with(&value, &limits).unwrap();
+        assert_eq!(json::from_str_with::<Tree>(&as_json, &limits).unwrap(), value);
         assert_eq!(haus::parse_with(&text, &limits).unwrap()[0], value.encode().unwrap());
 
         // 1 + 2·replies levels.
@@ -54,8 +54,8 @@ fn recursive_types_at_the_supported_depth() {
         // Written `Some { … }`, the same value as `Some({ … })` (spec §2).
         let written = haus::to_string_with(&value, &limits).unwrap();
         assert_eq!(haus::from_str::<Thread>(&written).unwrap(), value);
-        let plain = json::to_string_with(&value, &limits).unwrap();
-        assert_eq!(json::from_str_with::<Thread>(&plain, &limits).unwrap(), value);
+        let as_json = json::to_string_with(&value, &limits).unwrap();
+        assert_eq!(json::from_str_with::<Thread>(&as_json, &limits).unwrap(), value);
         // One level more as written with parentheses; the writer's
         // `Some { … }` takes one level per reply, so it still fits (spec §7).
         let (text, value) = thread(MAX.div_ceil(2));

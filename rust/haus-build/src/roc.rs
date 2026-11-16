@@ -30,7 +30,7 @@
 //!
 //! With [`RocConfig::json`] (`haus-gen roc --json`), each type also gets
 //! `from_json_<name> : JsonValue -> Try(T, Decode.Error)` and
-//! `to_json_<name> : T -> Try(JsonValue, Encode.Error)` for its plain JSON
+//! `to_json_<name> : T -> Try(JsonValue, Encode.Error)` for its schema-based JSON
 //! (spec §16.3). `from_json_<name>` checks that the value it read nests at
 //! most 256 levels as a haus value (§16, "Limits"); `read_json_<name>`
 //! doesn't, and is what the readers of other types call. A generic type's
@@ -86,7 +86,7 @@ impl RocConfig {
         self
     }
 
-    /// Also generate `from_json_<name>` and `to_json_<name>` for the plain
+    /// Also generate `from_json_<name>` and `to_json_<name>` for the schema-based
     /// JSON of each type (spec §16.3), with the haus modules `JsonValue`,
     /// `FromJson` and `ToJson`.
     pub fn json(mut self) -> RocConfig {
@@ -294,7 +294,7 @@ impl F {
     }
 }
 
-/// A Roc type, its decoder and encoder, its plain JSON reader and writer,
+/// A Roc type, its decoder and encoder, its schema-based JSON reader and writer,
 /// and whether its JSON can be `null`.
 struct R {
     ty: String,
@@ -540,7 +540,7 @@ impl Gen<'_> {
         let v = encoded_var(&def.ty);
         let json = match (self.json, params_given) {
             (false, _) => Json::None,
-            (true, true) => Json::Plain,
+            (true, true) => Json::Unchecked,
             (true, false) => Json::Checked,
         };
         Ok(functions(&doc, &decl, &snake_name, &head, &body, &p, v, json))
@@ -793,7 +793,7 @@ impl Gen<'_> {
             self.params.iter().filter(|(h, _)| used.contains(h)).map(|(_, p)| p.clone()).collect();
         let p = Params::new(passed.iter().map(|p| (p.clone(), true, inner.contains(p))));
         let v = encoded_var(ty);
-        let json = if self.json { Json::Plain } else { Json::None };
+        let json = if self.json { Json::Unchecked } else { Json::None };
         self.helpers.push(functions("", "", &s, &rty, &body, &p, v, json));
         Ok(if passed.is_empty() {
             R::named(
@@ -954,9 +954,11 @@ impl Gen<'_> {
                     ));
                     en.push(format!("{tag}({r}) => Tag(\"{tag}\", [{}])", parts.encoded));
                     arity.push(format!("Tag(\"{tag}\", _) => Decode.arity(\"{tag}\", 1)"));
-                    if fields.iter().any(|f| f.key == "_tag") {
-                        from.push(format!("\"{tag}\" => FromJson.no_plain_form(\"{tag}\")"));
-                        to.push(format!("{tag}(_) => ToJson.no_plain_form(\"{tag}\")"));
+                    // A field named `_tag` or `_args` has no schema-based form (spec §16.3).
+                    if let Some(f) = fields.iter().find(|f| f.key == "_tag" || f.key == "_args") {
+                        let name = &f.key;
+                        from.push(format!("\"{tag}\" => FromJson.no_json_form(\"{tag}\", \"{name}\")"));
+                        to.push(format!("{tag}(_) => ToJson.no_json_form(\"{tag}\", \"{name}\")"));
                     } else {
                         // The members are those of the tag's object: `"_tag"` is one of them.
                         let check = if *rc {
@@ -1096,7 +1098,7 @@ struct RecordParts {
 enum Json {
     None,
     /// `from_json_<s>` and `to_json_<s>`: a generic type's or a helper's.
-    Plain,
+    Unchecked,
     /// Also `read_json_<s>`, `from_json_<s>` without the depth check, which
     /// the readers of other types use: a type without parameters.
     Checked,
@@ -1105,7 +1107,7 @@ enum Json {
 /// A type's (or a helper's) functions: `decode_<s>` and `encode_<s>`, and
 /// with `json` `from_json_<s>` and `to_json_<s>`, after `doc` and `decl`.
 ///
-/// The haus value read from plain JSON must nest at most 256 levels (spec
+/// The haus value read from schema-based JSON must nest at most 256 levels (spec
 /// §16, "Limits"), and only the value as a whole can be measured: so the
 /// `from_json_<s>` of a type without parameters encodes its result and
 /// measures it (`FromJson.within_depth`), and calls `read_json_<s>`, which
@@ -1121,7 +1123,7 @@ fn functions(doc: &str, decl: &str, s: &str, head: &str, body: &Bodies, p: &Para
     );
     match json {
         Json::None => {}
-        Json::Plain => {
+        Json::Unchecked => {
             let _ = write!(
                 out,
                 "\n\tfrom_json_{s} : JsonValue{} -> Try({head}, Decode.Error)\n\tfrom_json_{s} = |j{}| {from_json}\n\n\
@@ -1466,12 +1468,15 @@ mod tests {
             "{code}"
         );
         // A closed variant of tags without payload is a string; others are tagged objects.
-        let code = json("type Level = closed < Debug | Info >\ntype S = < Circle { _tag: String } | Wrap Int32 >");
+        let code = json(
+            "type Level = closed < Debug | Info >\ntype S = < Circle { _tag: String } | Run { _args: Int32 } | Wrap Int32 >",
+        );
         assert!(
             code.contains("tag = FromJson.tag_name(j, \"Level\")?")
                 && code.contains("Debug => ToJson.tag_name(\"Debug\")")
         );
-        assert!(code.contains("\"Circle\" => FromJson.no_plain_form(\"Circle\")"), "{code}");
+        assert!(code.contains("\"Circle\" => FromJson.no_json_form(\"Circle\", \"_tag\")"), "{code}");
+        assert!(code.contains("Run(_) => ToJson.no_json_form(\"Run\", \"_args\")"), "{code}");
         assert!(code.contains("Wrap(a0) => ToJson.tagged(\"Wrap\", [ToJson.i32(a0)])"), "{code}");
         assert!(code.contains("_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))"), "{code}");
     }

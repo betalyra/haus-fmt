@@ -1,0 +1,144 @@
+// Schema-based JSON (spec §16.3). Each case: `type`, a haus `input`
+// (decoded with the type) and its schema-based
+// `json` (a string holding the JSON text). Ok: writing gives `json` (compared
+// as data, numbers by their text), and reading `json` back gives a value that
+// encodes to `input` (or `output`). Read: reading `json` gives `output`; it is
+// not what writing gives. Err: reading `json` fails, with `code` (spec §17).
+
+// ── scalars ──
+Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
+Ok { type: "B", input: x"0b34", json: "\"CzQ=\"" },
+Ok { type: "B", input: x"", json: "\"\"" },
+Err { type: "B", json: "\"CzQ\"", code: "invalid-base64" },
+Err { type: "B", json: "\"0b34\u{0}\"", code: "control-character" },
+Ok { type: "Flag", input: True, json: "true" },
+Ok { type: "Flag", input: False, json: "false" },
+Err { type: "Flag", json: "\"True\"", code: "type-mismatch" },
+Ok { type: "Small", input: -12, json: "-12" },
+Err { type: "Small", json: "\"-12\"", code: "type-mismatch" },
+Err { type: "Small", json: "1.0", code: "not-an-integer" },
+Err { type: "Small", json: "1e2", code: "not-an-integer" },
+Err { type: "Small", json: "2147483648", code: "out-of-range" },
+Ok { type: "Byte", input: -0, output: 0, json: "0" },
+Ok { type: "Big", input: 123456789012345678901234567890, json: "\"123456789012345678901234567890\"" },
+Ok { type: "Big", input: -0, output: 0, json: "\"0\"" },
+Err { type: "Big", json: "123", code: "type-mismatch" },
+Err { type: "Big", json: "\"1e3\"", code: "not-an-integer" },
+Err { type: "Big", json: "\"+1\"", code: "invalid-number" },
+Ok { type: "I64", input: 9223372036854775807, json: "\"9223372036854775807\"" },
+Err { type: "I64", json: "\"9223372036854775808\"", code: "out-of-range" },
+Err { type: "I64", json: "\"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
+Err { type: "Big", json: "\"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "number-too-long" },
+Ok { type: "F64", input: 0.10, output: 0.1, json: "0.1" },
+Ok { type: "F64", input: 1e21, json: "1e21" },
+Ok { type: "F64", input: -0, json: "-0" },
+Ok { type: "F64", input: NaN, json: "\"NaN\"" },
+Ok { type: "F64", input: Infinity, json: "\"Infinity\"" },
+Ok { type: "F64", input: NegInfinity, json: "\"-Infinity\"" },
+Read { type: "F64", json: "1E+2", output: 100 },
+Err { type: "F64", json: "1e400", code: "out-of-range" },
+Err { type: "F64", json: "\"1.5\"", code: "type-mismatch" },
+Ok { type: "F32", input: 16777217, output: 16777216, json: "16777216" },
+Ok { type: "Dec", input: 19.90, json: "\"19.90\"" },
+Ok { type: "Dec", input: 1.5e3, json: "\"1.5e3\"" },
+Ok { type: "Dec", input: -0, json: "\"-0\"" },
+Read { type: "Dec", json: "\"1E+05\"", output: 1e5 },
+Err { type: "Dec", json: "19.90", code: "type-mismatch" },
+Err { type: "Dec", json: "\"19,90\"", code: "invalid-number" },
+Ok { type: "Day", input: Date("2026-11-13"), json: "\"2026-11-13\"" },
+Err { type: "Day", json: "\"2026-02-30\"", code: "invalid-time" },
+Ok { type: "At", input: Instant("2026-11-13T10:00:00.250+01:00"), json: "\"2026-11-13T10:00:00.250+01:00\"" },
+
+// ── Any and Secret ──
+Ok { type: "Raw", input: { a: [1, "x", None] }, json: "{\"_rec\": {\"a\": [{\"_num\": \"1\"}, \"x\", {\"_tag\": \"None\"}]}}" },
+Err { type: "Raw", json: "1", code: "haus-json-form" },
+// `Any` is the value without the envelope
+Err { type: "Raw", json: "{\"_haus\": 1, \"_value\": \"x\"}", code: "haus-json-form" },
+Ok { type: "Key", input: "sk-1", json: "\"sk-1\"" },
+
+// ── containers ──
+Ok { type: "Ints", input: [1, 2], json: "[1, 2]" },
+Ok { type: "Counts", input: { en: 1, "pt-BR": 2 }, json: "{\"en\": 1, \"pt-BR\": 2}" },
+Err { type: "Counts", json: "{\"a\": 1, \"a\": 2}", code: "duplicate-key" },
+
+// ── Maybe: null when the inner JSON can't be null, tagged otherwise ──
+Ok { type: "Opt", input: None, json: "null" },
+Ok { type: "Opt", input: Some(5), json: "5" },
+Ok { type: "OptBig", input: Some(5), json: "\"5\"" },
+Ok { type: "Nested", input: None, json: "{\"_tag\": \"None\"}" },
+Ok { type: "Nested", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": null}" },
+Ok { type: "Nested", input: Some(Some(5)), json: "{\"_tag\": \"Some\", \"value\": 5}" },
+Err { type: "Nested", json: "null", code: "type-mismatch" },
+Err { type: "Nested", json: "5", code: "type-mismatch" },
+Err { type: "Nested", json: "{}", code: "missing-member" },
+Err { type: "Nested", json: "{\"_tag\": \"Just\", \"value\": 5}", code: "unknown-tag" },
+
+// ── variants ──
+Ok { type: "Outcome", input: Ok(1), json: "{\"_tag\": \"Ok\", \"value\": 1}" },
+Ok { type: "Outcome", input: Err("no"), json: "{\"_tag\": \"Err\", \"value\": \"no\"}" },
+Ok { type: "Level", input: Debug, json: "\"Debug\"" },
+Err { type: "Level", json: "\"Warn\"", code: "unknown-tag" },
+Err { type: "Level", json: "{\"_tag\": \"Debug\"}", code: "type-mismatch" },
+Ok { type: "Shape", input: Circle { r: 1.5 }, json: "{\"_tag\": \"Circle\", \"r\": 1.5}" },
+Ok { type: "Shape", input: Point(1, 2), json: "{\"_tag\": \"Point\", \"values\": [1, 2]}" },
+Ok { type: "Shape", input: Wrap(3), json: "{\"_tag\": \"Wrap\", \"value\": 3}" },
+Ok { type: "Shape", input: Empty, json: "{\"_tag\": \"Empty\"}" },
+Ok { type: "Shape", input: Hexagon, json: "{\"_tag\": \"Hexagon\"}" },
+Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}" },
+Read { type: "Shape", json: "{\"_tag\": \"Circle\", \"r\": 1.5, \"color\": \"red\"}", output: Circle { r: 1.5 } },
+Err { type: "Shape", json: "\"Empty\"", code: "type-mismatch" },
+Err { type: "Shape", json: "{\"r\": 1.5}", code: "missing-member" },
+Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1]}", code: "wrong-payload" },
+
+// ── records ──
+Ok { type: "User", input: { id: 1, name: "Ada" }, json: "{\"id\": 1, \"name\": \"Ada\"}" },
+Ok { type: "User", input: { id: 1, name: "Ada", note: None }, json: "{\"id\": 1, \"name\": \"Ada\", \"note\": null}" },
+Ok { type: "User", input: { id: 1, name: "Ada", nick: "ada", note: Some("x") }, json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": \"ada\", \"note\": \"x\"}" },
+Read { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"extra\": [1]}", output: { id: 1, name: "Ada" } },
+Err { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": null}", code: "type-mismatch" },
+Err { type: "User", json: "{\"id\": 1}", code: "missing-field" },
+Err { type: "Strict", json: "{\"id\": 1, \"x\": 2}", code: "unknown-field" },
+
+// ── clarifications (§16) ──
+Err { type: "B", json: "\"CzR=\"", code: "invalid-base64" },
+Err { type: "B", json: "\"Cz Q=\"", code: "invalid-base64" },
+Err { type: "B", json: "\"-_8=\"", code: "invalid-base64" },
+Read { type: "Big", json: "\"-0\"", output: 0 },
+Err { type: "Big", json: "\"007\"", code: "invalid-number" },
+Err { type: "Dec", json: "\"0xFF\"", code: "invalid-number" },
+Err { type: "Dec", json: "\"1_000\"", code: "invalid-number" },
+Ok { type: "Bits", input: True, json: "\"True\"" },
+Err { type: "Bits", json: "true", code: "type-mismatch" },
+Ok { type: "Loop", input: None, json: "{\"_tag\": \"None\"}" },
+Ok { type: "Loop", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+// a newer writer's case: its other members read as a record payload
+Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hexagon { sides: 6 } },
+Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
+
+// ── the schema's case decides the form; other objects reject extra members ──
+Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1}", code: "unexpected-member" },
+Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
+Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
+Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
+// `_args` beside other members is just another member of the record payload
+Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", output: Hexagon { _args: [{ _num: "1" }], x: 2 } },
+// a newer writer's record case with a field `args` reads as a record payload, whatever it holds
+Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [1, 2]}", output: Run { args: [1, 2] } },
+Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": []}", output: Run { args: [] } },
+Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [\"a\"]}", output: Run { args: ["a"] } },
+
+// ── only the prelude's Maybe uses null; a Maybe is identified by where it is written ──
+Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
+Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
+Err { type: "Mine", json: "null", code: "type-mismatch" },
+Ok { type: "OptLoop", input: None, json: "null" },
+Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
+Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+
+// ── unknown tags: a bare tag stays bare; _args must be a non-empty array; _tag must be a tag ──
+Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
+Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
+Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },

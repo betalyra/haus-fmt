@@ -2,7 +2,7 @@
 
 Language-independent tests that every haus parser must pass.
 
-- `valid/NAME.haus` must parse. `valid/NAME.json` is the expected result.
+- `valid/NAME.haus` must parse. `valid/NAME.jsonl` is the expected result.
 - `valid/NAME.canonical` is the canonical form (spec §12) of each of its
   top-level values, one per line. Bindings that provide `canonical` must
   produce it byte for byte.
@@ -40,18 +40,19 @@ attribute removed, must give the same result for every case.
 
 ## Expected output encoding
 
-`NAME.json` is a JSON array holding the file's top-level values in order (an
-empty file is `[]`). Each value is encoded as:
+`NAME.jsonl` is self-describing JSON (spec §16.2) as JSON Lines: one line per
+top-level value of the file, in order (an empty file gives an empty file), each
+an envelope `{"_haus": 1, "_value": …}`. Each value in `_value` is encoded as:
 
 | haus value             | JSON                                   |
 |------------------------|----------------------------------------|
 | string                 | JSON string                            |
 | array                  | JSON array                             |
-| record                 | `{"rec": { "key": value, ... }}`       |
-| number                 | `{"num": "literal"}`                   |
-| bytes                  | `{"bytes": "hex"}`, lowercase, no spaces |
-| variant without payload| `{"tag": "Name"}`                      |
-| variant with payload   | `{"tag": "Name", "args": [value, ...]}`|
+| record                 | `{"_rec": { "key": value, ... }}`      |
+| number                 | `{"_num": "literal"}`                  |
+| bytes                  | `{"_bytes": "hex"}`, lowercase, no spaces |
+| variant without payload| `{"_tag": "Name"}`                     |
+| variant with payload   | `{"_tag": "Name", "_args": [value, ...]}`|
 
 Number literals are written as exact text, normalised (spec §2): digit
 separators removed, the exponent written `e` and its value (`1E+05` → `1e5`),
@@ -76,17 +77,17 @@ Conformance is tested with the default limits from the spec:
 
 ## JSON suite
 
-`json/` tests the JSON mappings (spec §16). Each file holds cases written in
+`json/` tests the three JSON forms (spec §16). Each file holds cases written in
 haus, with JSON text in strings:
 
-- `plain.schema.haus` and `plain.cases.haus`: the plain mapping with a type.
+- `schema-based.schema.haus` and `schema-based.cases.haus`: schema-based JSON, with a type.
   `Ok { type, input, json }`: writing the decoded `input` gives `json`, and
   reading `json` gives a value that encodes to `input` (or `output`).
   `Read { type, json, output }`: reading `json` gives `output`.
   `Err { type, json, code }`: reading fails, with the error code `code`.
-- `lossless.cases.haus`: the lossless mapping, without a type (`Ok { input, json }`, `Err { json, code }`).
-  Every `valid/NAME.json` is a lossless case too, a JSON array of the file's values.
-- `schemaless.cases.haus`: JSON read without a schema (`Read { json, output }`, `Err { json, code }`).
+- `self-describing.cases.haus`: self-describing JSON, without a type (`Ok { input, json }`, `Err { json, code }`).
+  Every `valid/NAME.jsonl` is a case too, one envelope per value of the file.
+- `import.cases.haus`: the JSON import, without a schema (`Read { json, output }`, `Err { json, code }`).
 
 JSON is compared as data: member order and whitespace don't matter, and
 numbers compare by their text.

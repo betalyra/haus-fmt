@@ -81,7 +81,7 @@ ErrorCode := [].{
 	empty_payload : Str
 	empty_payload = "empty-payload"
 
-	## `invalid-number` (syntax): A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in plain JSON, §16.3).
+	## `invalid-number` (syntax): A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
 	invalid_number : Str
 	invalid_number = "invalid-number"
 
@@ -93,11 +93,11 @@ ErrorCode := [].{
 	string_line_break : Str
 	string_line_break = "string-line-break"
 
-	## `control-character` (syntax): A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string.
+	## `control-character` (syntax): A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string: C0 in any JSON, DEL and C1 in self-describing JSON (§16).
 	control_character : Str
 	control_character = "control-character"
 
-	## `bidi-control` (syntax): A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, where it could reorder how the text is displayed ("Trojan Source", §9).
+	## `bidi-control` (syntax): A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, or in a self-describing JSON string (§16), where it could reorder how the text is displayed ("Trojan Source", §9).
 	bidi_control : Str
 	bidi_control = "bidi-control"
 
@@ -377,35 +377,39 @@ ErrorCode := [].{
 	unpaired_surrogate : Str
 	unpaired_surrogate = "unpaired-surrogate"
 
-	## `lossless-form` (json): JSON that isn't one of the lossless forms (§16.2): a bare number, `true`, `null`, an object with other members, a `rec` that isn't an object, an `args` that isn't a non-empty array.
-	lossless_form : Str
-	lossless_form = "lossless-form"
+	## `haus-json-form` (json): JSON that isn't self-describing JSON (§16.2): a text without the envelope `{"_haus": 1, "_value": …}`, an envelope with other members, a bare number, `true`, `null`, an object with other members, a `_rec` that isn't an object, an `_args` that isn't a non-empty array.
+	haus_json_form : Str
+	haus_json_form = "haus-json-form"
 
-	## `lossless-number` (json): A lossless `num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
-	lossless_number : Str
-	lossless_number = "lossless-number"
+	## `haus-json-version` (json): A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.
+	haus_json_version : Str
+	haus_json_version = "haus-json-version"
 
-	## `lossless-bytes` (json): A lossless `bytes` that isn't two lowercase hex digits per byte.
-	lossless_bytes : Str
-	lossless_bytes = "lossless-bytes"
+	## `haus-json-number` (json): A self-describing `_num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
+	haus_json_number : Str
+	haus_json_number = "haus-json-number"
 
-	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a lossless `tag`, in a plain `_tag`, or in a value built in code.
+	## `haus-json-bytes` (json): A self-describing `_bytes` that isn't two lowercase hex digits per byte.
+	haus_json_bytes : Str
+	haus_json_bytes = "haus-json-bytes"
+
+	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.
 	invalid_tag : Str
 	invalid_tag = "invalid-tag"
 
-	## `invalid-base64` (json): Plain JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
+	## `invalid-base64` (json): Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
 	invalid_base64 : Str
 	invalid_base64 = "invalid-base64"
 
-	## `missing-member` (json): Plain JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
+	## `missing-member` (json): Schema-based JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
 	missing_member : Str
 	missing_member = "missing-member"
 
-	## `unexpected-member` (json): Plain JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
+	## `unexpected-member` (json): Schema-based JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
 	unexpected_member : Str
 	unexpected_member = "unexpected-member"
 
-	## `no-json-form` (json): A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` in plain JSON (§16.3), a type with no plain mapping.
+	## `no-json-form` (json): A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` or `_args` in schema-based JSON (§16.3), a type with no schema-based form.
 	no_json_form : Str
 	no_json_form = "no-json-form"
 
@@ -427,7 +431,7 @@ ErrorCode := [].{
 
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "package-path", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "lossless-form", "lossless-number", "lossless-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "package-path", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -524,14 +528,15 @@ ErrorCode := [].{
 		"too-many-nodes" => "Build a smaller value, or raise the limit."
 		"json-syntax" => "Write valid JSON; the message says what was expected."
 		"unpaired-surrogate" => "Write both halves of the surrogate pair, or the character itself."
-		"lossless-form" => "Write one of the lossless forms of §16.2: a string, an array, or an object with `num`, `bytes`, `rec`, or `tag` (and `args`)."
-		"lossless-number" => "Write the number's normalized literal (§2) as a string."
-		"lossless-bytes" => "Write the bytes as lowercase hex, two digits per byte."
+		"haus-json-form" => "Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead."
+		"haus-json-version" => "Read it with a newer version of haus, or write `\"_haus\": 1`."
+		"haus-json-number" => "Write the number's normalized literal (§2) as a string."
+		"haus-json-bytes" => "Write the bytes as lowercase hex, two digits per byte."
 		"invalid-tag" => "Start the tag with a capital letter and use only letters, digits and `_`."
 		"invalid-base64" => "Write standard base64, with padding."
 		"missing-member" => "Add the member the message names."
 		"unexpected-member" => "Remove the member."
-		"no-json-form" => "Rename the field, or use the lossless mapping."
+		"no-json-form" => "Rename the field, or use self-describing JSON."
 		"unknown-attribute" => "Check the spelling; attributes of a later version are fine."
 		"deprecated" => "Use what the deprecation note says instead."
 		"unlisted-field" => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
@@ -634,9 +639,10 @@ ErrorCode := [].{
 		"too-many-nodes" => "decoding"
 		"json-syntax" => "json"
 		"unpaired-surrogate" => "json"
-		"lossless-form" => "json"
-		"lossless-number" => "json"
-		"lossless-bytes" => "json"
+		"haus-json-form" => "json"
+		"haus-json-version" => "json"
+		"haus-json-number" => "json"
+		"haus-json-bytes" => "json"
 		"invalid-tag" => "json"
 		"invalid-base64" => "json"
 		"missing-member" => "json"
@@ -764,7 +770,7 @@ at = |b, i| b.get(i) ?? 0
 expect ErrorCode.hint(ErrorCode.missing_comma) == "Add a comma between the two values."
 expect ErrorCode.category("payload-newline") == "syntax" and ErrorCode.category("missing-field") == "decoding" and ErrorCode.hint("nonsense") == ""
 expect ErrorCode.docs("null-literal") == "https://haus-fmt.org/docs/errors#null-literal"
-expect ErrorCode.all.len() == 102 and ErrorCode.all.contains("invalid-secret")
+expect ErrorCode.all.len() == 103 and ErrorCode.all.contains("invalid-secret")
 expect ErrorCode.place("") == "$" and ErrorCode.place(".items[2].price") == "$.items[2].price"
 expect ErrorCode.place("(Circle).r") == "$[0].r" and ErrorCode.place(".total(Money)[1]") == "$.total[1]" and ErrorCode.place("(Date)[0]") == "$[0]"
 expect ErrorCode.place("[\"pt-BR\"](Tag)") == "$[\"pt-BR\"][0]" and ErrorCode.place("[\"a\\\"(b\"].c") == "$[\"a\\\"(b\"].c"

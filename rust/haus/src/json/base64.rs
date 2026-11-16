@@ -1,4 +1,4 @@
-//! Base64 with padding (RFC 4648 §4), for `Bytes` in plain JSON.
+//! Base64 with padding (RFC 4648 §4), for `Bytes` in schema-based JSON.
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 

@@ -1,6 +1,6 @@
 //! Rust code from a schema: one item per named type, with `Decode` and
 //! `Encode` implementations that check every rule of the schema, and
-//! `FromJson` and `ToJson` for its plain JSON (spec §16.3).
+//! `FromJson` and `ToJson` for its schema-based JSON (spec §16.3).
 //!
 //! | haus                         | Rust                                     |
 //! |------------------------------|------------------------------------------|
@@ -303,7 +303,7 @@ impl Fun {
 }
 
 /// A Rust type, how to decode it from `x: &Value` and encode `x: &T`, and
-/// how to read it from `x: &Json` and write `x: &T` as plain JSON. Encoding
+/// how to read it from `x: &Json` and write `x: &T` as schema-based JSON. Encoding
 /// and writing also take `__e: ::haus::Encoder`, and reading JSON
 /// `__d: ::haus::Decoder`, which count the depth.
 struct Rs {
@@ -963,11 +963,11 @@ impl<'a> Gen<'a> {
                     f.en(quote!(self.#n), false)
                 });
                 let bind = bind_record(record_payload(fields), closed, fields);
-                let json = if fields.iter().any(|f| f.key == "_tag") {
+                let json = if let Some(field) = reserved_field(fields) {
                     Json {
                         nullable: None,
-                        from: quote! { #tagged ::std::result::Result::Err(::haus::json::de::no_plain_form(#tag)) },
-                        to: quote!(::haus::json::ser::no_plain_form(#tag)),
+                        from: quote! { #tagged ::std::result::Result::Err(::haus::json::de::no_json_form(#tag, #field)) },
+                        to: quote!(::haus::json::ser::no_json_form(#tag, #field)),
                     }
                 } else {
                     let read = rs.iter().map(FieldRs::read_json);
@@ -1063,10 +1063,10 @@ impl<'a> Gen<'a> {
                             f.en(quote!(#n), true)
                         });
                         let bind = bind_record(record_payload(fields), closed, fields);
-                        let (from_json, to_json) = if fields.iter().any(|f| f.key == "_tag") {
+                        let (from_json, to_json) = if let Some(field) = reserved_field(fields) {
                             (
-                                quote!(#tag => ::std::result::Result::Err(::haus::json::de::no_plain_form(#tag)),),
-                                quote!(Self::#v { .. } => ::haus::json::ser::no_plain_form(#tag)),
+                                quote!(#tag => ::std::result::Result::Err(::haus::json::de::no_json_form(#tag, #field)),),
+                                quote!(Self::#v { .. } => ::haus::json::ser::no_json_form(#tag, #field)),
                             )
                         } else {
                             let read = rs.iter().map(FieldRs::read_json);
@@ -1241,6 +1241,12 @@ fn tuple_from_json(items: &[Rs]) -> (TokenStream, Vec<TokenStream>) {
 /// The payload values `a0`, `a1`, … as JSON.
 fn tuple_to_json(items: &[Rs]) -> Vec<TokenStream> {
     items.iter().zip(vars(items.len())).map(|(r, var)| r.to_json.encode(quote!(#var))).collect()
+}
+
+/// The first field of a record payload named `_tag` or `_args`: the case
+/// has no schema-based JSON form (spec §16.3).
+fn reserved_field(fields: &[Field]) -> Option<&str> {
+    fields.iter().map(|f| f.key.as_str()).find(|k| matches!(*k, "_tag" | "_args"))
 }
 
 /// `r.closed(&["_tag", "a"])?;` for a closed record payload in JSON (`r` the tag's object).

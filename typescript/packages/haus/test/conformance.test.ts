@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { suiteJson } from "./suite-json.js"
+import { suiteJsonLine } from "./suite-json.js"
 import { canonical, errorCode, hash, hashAll, Hasher, HausSyntaxError } from "../src/index.js"
 import { fixtures, InvalidUtf8, parseBytes, repoFile, streamBytes } from "./haus.js"
 
@@ -12,7 +12,7 @@ describe("valid", () => {
   it.effect.each(valid)("$name: parseAll", ({ bytes, expected }) =>
     Effect.gen(function* () {
       const values = yield* parseBytes(bytes)
-      expect(values.map(suiteJson)).toEqual(expected)
+      expect(values.map(suiteJsonLine)).toEqual(expected)
     }))
 
   it.effect.each(valid)("$name: canonical form", ({ bytes, canonical: expected }) =>
@@ -41,7 +41,7 @@ describe("valid", () => {
     Effect.forEach(chunkSizes(bytes), (size) =>
       Effect.gen(function* () {
         const values = yield* streamBytes(bytes, size)
-        expect(values.map(suiteJson), `chunk size ${size}`).toEqual(expected)
+        expect(values.map(suiteJsonLine), `chunk size ${size}`).toEqual(expected)
       })))
 })
 

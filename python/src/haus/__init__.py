@@ -16,12 +16,12 @@ from ._canonical import Hasher, canonical, compare, equals, hash, hash_all
 from ._error_codes import ERROR_CODES, ErrorCategory, ErrorCode, ErrorInfo
 from ._errors import HausError, HausJsonError, HausLimitsError, HausSyntaxError, error_docs, is_error_code
 from ._json_api import (
-    from_json,
-    from_json_lines,
-    from_lossless_json,
-    from_lossless_json_lines,
-    to_lossless_json,
-    to_lossless_json_lines,
+    from_haus_json,
+    from_haus_json_lines,
+    import_json,
+    import_json_lines,
+    to_haus_json,
+    to_haus_json_lines,
 )
 from ._parser import DEFAULT_LIMITS, MAX_SUPPORTED_DEPTH, Limits, Parser
 from ._stream import DEFAULT_MAX_VALUE_LENGTH, Readable, StreamReader, parse_stream
@@ -57,19 +57,19 @@ __all__ = [
     "compare",
     "equals",
     "error_docs",
-    "from_json",
-    "from_json_lines",
-    "from_lossless_json",
-    "from_lossless_json_lines",
+    "from_haus_json",
+    "from_haus_json_lines",
     "hash",
     "hash_all",
+    "import_json",
+    "import_json_lines",
     "is_error_code",
     "parse",
     "parse_all",
     "parse_bytes",
     "parse_stream",
-    "to_lossless_json",
-    "to_lossless_json_lines",
+    "to_haus_json",
+    "to_haus_json_lines",
 ]
 
 

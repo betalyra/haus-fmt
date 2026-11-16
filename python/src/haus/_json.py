@@ -1,11 +1,11 @@
 """JSON (spec §16): a strict I-JSON reader that keeps numbers exact, a writer,
-and the mappings that need no schema: JSON read as haus (§16.1) and the
-lossless form (§16.2). The plain mapping with a type is in `_decode`.
+and the forms that need no schema: the JSON import (§16.1) and self-describing
+JSON (§16.2). Schema-based JSON (§16.3) is in `_decode`.
 
     >>> read_json('{"price": 19.90, "tags": ["a"]}', Limits())
     {'price': JsonNumber(text='19.90'), 'tags': ['a']}
-    >>> write_json(lossless(Number("19.90")))
-    '{"num":"19.90"}'
+    >>> write_json(envelope(self_describing(Number("19.90"))))
+    '{"_haus":1,"_value":{"_num":"19.90"}}'
 """
 
 from __future__ import annotations
@@ -45,6 +45,9 @@ _WHITESPACE = re.compile(r"[ \t\n\r]*+")
 _NUMBER = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:[eE][+-]?[0-9]++)?")
 _NUMBER_EXPONENT = re.compile(r"[eE]([+-]?)0*([0-9]+)$")
 _PLAIN_RUN = re.compile(r'[^"\\\x00-\x1f\ud800-\udfff]*+')
+_STRICT_RUN = re.compile(r'[^"\\\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\ud800-\udfff]*+')
+"""A run of characters self-describing JSON allows raw: no DEL, C1 or bidi controls either (spec §16)."""
+_BIDI = re.compile(r"[\u202a-\u202e\u2066-\u2069]")
 _HEX4 = re.compile(r"[0-9A-Fa-f]{4}")
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
 _ESCAPES: Final = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
@@ -92,14 +95,16 @@ class _Reader:
     Iterative, with a stack of open containers: the nesting depth is limited only by `max_depth`.
     """
 
-    __slots__ = ("limits", "max_depth", "pos", "text")
+    __slots__ = ("limits", "max_depth", "pos", "run", "text")
 
-    def __init__(self, text: str, limits: Limits, max_depth: int, bom: bool) -> None:
+    def __init__(self, text: str, limits: Limits, max_depth: int, bom: bool, strict: bool) -> None:
         self.text: str = text
         self.limits: Limits = limits
         self.max_depth: int = max_depth
         self.pos: int = 1 if bom and text.startswith("\ufeff") else 0
         """A leading byte order mark is ignored, as in haus (spec §16), where `bom` allows one."""
+        self.run: re.Pattern[str] = _STRICT_RUN if strict else _PLAIN_RUN
+        """What a string may hold raw: with `strict`, no DEL, C1 or bidi controls (self-describing JSON)."""
 
     def fail(
         self,
@@ -224,7 +229,7 @@ class _Reader:
         parts: list[str] = []
         length = 0
         while True:
-            m = _PLAIN_RUN.match(text, self.pos)
+            m = self.run.match(text, self.pos)
             assert m is not None
             if m.end() > m.start():
                 parts.append(m[0])
@@ -241,6 +246,10 @@ class _Reader:
                 self.fail("unterminated-string", "unterminated string", start)
             elif _SURROGATE.match(c):
                 self.fail("unpaired-surrogate", "a lone surrogate (not Unicode text)")
+            elif _BIDI.match(c):
+                self.fail(
+                    "bidi-control", f"raw bidirectional control U+{ord(c):04X} in a string (write it as an escape)"
+                )
             else:
                 self.fail(
                     "control-character", f"raw control character U+{ord(c):04X} in a string (write it as an escape)"
@@ -288,23 +297,36 @@ def json_text(data: str | bytes) -> str:
         raise HausJsonError.at(valid, len(valid), "invalid-utf8", "invalid UTF-8") from None
 
 
-def read_json(data: str | bytes, limits: Limits, max_depth: int | None = None, *, bom: bool = True) -> Json:
+def read_json(
+    data: str | bytes,
+    limits: Limits,
+    max_depth: int | None = None,
+    *,
+    bom: bool = True,
+    strict: bool = False,
+) -> Json:
     """One JSON text, read strictly: I-JSON (no duplicate names, no lone surrogates) within `limits`.
 
     Numbers are normalized literals. `max_depth` (objects and arrays) is `limits.max_depth` by default.
     A leading byte order mark is ignored if `bom`: in JSON Lines only at the start of the stream.
+    With `strict` (self-describing JSON), raw DEL, C1 and bidi controls in strings are errors too.
     """
     text = json_text(data)
-    return _Reader(text, limits, limits.max_depth if max_depth is None else max_depth, bom).document()
+    return _Reader(text, limits, limits.max_depth if max_depth is None else max_depth, bom, strict).document()
 
 
-def mapped_depth(limits: Limits) -> int:
-    """The JSON nesting read for the lossless and plain forms.
+def schema_json_depth(limits: Limits) -> int:
+    """The JSON nesting read for schema-based JSON (§16.3).
 
-    Up to four JSON levels make one haus level (`Tag { … }` is `{"tag": …, "args": [{"rec": {…}}]}`),
-    and a number one more (`{"num": …}`). The haus depth is then checked against `limits`.
+    Up to four JSON levels make one haus level (`Tag { … }` is `{"_tag": …, "_args": [{"_rec": {…}}]}`),
+    and a number one more (`{"_num": …}`). The haus depth is then checked against `limits`.
     """
     return 4 * limits.max_depth + 1
+
+
+def haus_json_depth(limits: Limits) -> int:
+    """The JSON nesting read for self-describing JSON (§16.2): one more level than schema-based JSON, the envelope."""
+    return schema_json_depth(limits) + 1
 
 
 # ── writing JSON text ────────────────────────────────────────
@@ -318,7 +340,7 @@ class _Text:
 
 
 def write_json(j: Json) -> str:
-    """JSON text on one line, without spaces; strings as UTF-8 (only `"`, `\\` and controls escaped).
+    """JSON text on one line, without spaces; strings as UTF-8 (`"`, `\\` and controls escaped, spec §16).
 
     Iterative, so any nesting can be written.
     """
@@ -358,8 +380,12 @@ def write_json(j: Json) -> str:
     return "".join(out)
 
 
+_UNSAFE = re.compile(r"[\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
+"""What writers escape besides C0 controls: DEL, C1 and bidi controls, which could change what is displayed (§16)."""
+
+
 def _string(s: str) -> str:
-    return json.dumps(s, ensure_ascii=False)
+    return _UNSAFE.sub(lambda m: f"\\u{ord(m[0]):04x}", json.dumps(s, ensure_ascii=False))
 
 
 # ── haus values without a schema (§16.1, §16.2) ─────────────
@@ -369,13 +395,15 @@ _TRUE, _FALSE, _NONE = Variant("True"), Variant("False"), Variant("None")
 _TAG = re.compile(r"[A-Z][A-Za-z0-9_]*")
 _HEX_BYTES = re.compile(r"(?:[0-9a-f]{2})*+")
 _NORMALIZED = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
+_VERSION: Final = JsonNumber("1")
+"""The version of self-describing JSON, `_haus` in its envelope (§16.2)."""
 
 
-def schemaless(j: Json, max_depth: int | None = None, depth: int = 0, path: tuple[PathKey, ...] = ()) -> Value:
-    """JSON as a haus value (§16.1): objects are records, `true`/`false`/`null` are `True`/`False`/`None`.
+def imported(j: Json, max_depth: int | None = None, depth: int = 0, path: tuple[PathKey, ...] = ()) -> Value:
+    """Any JSON as a haus value, the JSON import (§16.1): objects are records, `null` is `None`.
 
-    With `max_depth`, a container at `depth` or deeper is an error (`HausJsonError` with its path);
-    without it, the reader has limited the nesting already.
+    Nothing in the data is special: `{"_tag": "A"}` is a record. With `max_depth`, a container at `depth`
+    or deeper is an error (`HausJsonError` with its path); without it, the reader has limited the nesting already.
     """
     if isinstance(j, list | dict) and max_depth is not None and depth >= max_depth:
         raise HausJsonError(f"nesting deeper than {max_depth} levels", code="nesting-too-deep", path=path)
@@ -393,57 +421,85 @@ def schemaless(j: Json, max_depth: int | None = None, depth: int = 0, path: tupl
         case list():
             items: list[Value] = []
             for i, x in enumerate(j):
-                items.append(schemaless(x, max_depth, depth + 1, (*path, i)))
+                items.append(imported(x, max_depth, depth + 1, (*path, i)))
             return Array(tuple(items))
         case dict():
             fields: dict[str, Value] = {}
             for k, x in j.items():
-                fields[k] = schemaless(x, max_depth, depth + 1, (*path, k))
+                fields[k] = imported(x, max_depth, depth + 1, (*path, k))
             return Record(fields)
 
 
-def lossless(v: Value) -> Json:
-    """The lossless form of a value (§16.2). The value must be valid (checked with the `Any` type)."""
+def envelope(j: Json) -> Json:
+    """A self-describing value in its envelope (§16.2): `{"_haus": 1, "_value": …}`, the form of a whole text."""
+    return {"_haus": _VERSION, "_value": j}
+
+
+def self_describing(v: Value) -> Json:
+    """The self-describing form of a value (§16.2), without the envelope.
+
+    The value must be valid (checked with the `Any` type).
+    """
     match v:
         case String(s):
             return s
         case Number(text):
-            return {"num": text}
+            return {"_num": text}
         case Bytes(data):
-            return {"bytes": data.hex()}
+            return {"_bytes": data.hex()}
         case Array(items):
-            return _lossless_items(items)
+            return _self_describing_items(items)
         case Record(fields):
             out: dict[str, Json] = {}
             for k, x in fields.items():
-                out[k] = lossless(x)
-            return {"rec": out}
+                out[k] = self_describing(x)
+            return {"_rec": out}
         case Variant(tag, ()):
-            return {"tag": tag}
+            return {"_tag": tag}
         case Variant(tag, args):
-            return {"tag": tag, "args": _lossless_items(args)}
+            return {"_tag": tag, "_args": _self_describing_items(args)}
 
 
-def _lossless_items(items: tuple[Value, ...]) -> list[Json]:
+def _self_describing_items(items: tuple[Value, ...]) -> list[Json]:
     out: list[Json] = []
     for x in items:
-        out.append(lossless(x))
+        out.append(self_describing(x))
     return out
 
 
-def from_lossless(j: Json, limits: Limits, depth: int = 0, path: tuple[PathKey, ...] = ()) -> Value:
-    """The value whose lossless form (§16.2) is `j`, at nesting `depth`. Raises `HausJsonError` with the path."""
-    return _Lossless(limits, path).value(j, depth, ())
+def from_envelope(j: Json, limits: Limits, prefix: tuple[PathKey, ...] = ()) -> Value:
+    """The value of a self-describing JSON text (§16.2): the envelope, then its value.
+
+    The envelope adds no path segment. Raises `HausJsonError` with the path (after `prefix`).
+    """
+    reader = _SelfDescribing(limits, prefix)
+    if not isinstance(j, dict) or len(j) != 2 or "_haus" not in j or "_value" not in j:
+        reader.fail(f'expected the envelope {{"_haus": 1, "_value": …}}, found {describe(j)}', ())
+    if j["_haus"] != _VERSION:
+        reader.fail(
+            f"expected version 1 of self-describing JSON in '_haus', found {describe(j['_haus'])}",
+            (),
+            "haus-json-version",
+        )
+    return reader.value(j["_value"], 0, ())
 
 
-class _Lossless:
+def from_self_describing(j: Json, limits: Limits, depth: int = 0, path: tuple[PathKey, ...] = ()) -> Value:
+    """The value whose self-describing form (§16.2, no envelope) is `j`, at nesting `depth`.
+
+    Raises `HausJsonError` with the path (after `path`).
+    """
+    return _SelfDescribing(limits, path).value(j, depth, ())
+
+
+class _SelfDescribing:
     __slots__ = ("limits", "prefix")
 
     def __init__(self, limits: Limits, prefix: tuple[PathKey, ...]) -> None:
         self.limits = limits
         self.prefix = prefix
 
-    def fail(self, reason: str, path: tuple[PathKey, ...], code: ErrorCode = "lossless-form") -> Never:
+    def fail(self, reason: str, path: tuple[PathKey, ...], code: ErrorCode = "haus-json-form") -> Never:
         raise HausJsonError(reason, code=code, path=(*self.prefix, *path))
 
     def deeper(self, depth: int, path: tuple[PathKey, ...]) -> int:
@@ -461,43 +517,46 @@ class _Lossless:
             case dict():
                 return self.object(j, depth, path)
             case _:
-                self.fail(f"expected the lossless form of a haus value, found {describe(j)}", path)
+                self.fail(f"expected the self-describing form of a haus value, found {describe(j)}", path)
 
     def object(self, j: dict[str, Json], depth: int, path: tuple[PathKey, ...]) -> Value:
-        """`{"rec": …}`, `{"num": …}`, `{"bytes": …}`, `{"tag": …}` or `{"tag": …, "args": […]}`."""
+        """`{"_rec": …}`, `{"_num": …}`, `{"_bytes": …}`, `{"_tag": …}` or `{"_tag": …, "_args": […]}`."""
         match j:
-            case {"rec": fields} if len(j) == 1:
+            case {"_rec": fields} if len(j) == 1:
                 return self.record(fields, depth, path)
-            case {"num": text} if len(j) == 1:
+            case {"_num": text} if len(j) == 1:
                 if not isinstance(text, str) or not _NORMALIZED.fullmatch(text):
-                    self.fail("expected a normalized number literal in 'num'", (*path, "num"), "lossless-number")
+                    self.fail("expected a normalized number literal in '_num'", (*path, "_num"), "haus-json-number")
                 if (issue := number_limit_issue(text, self.limits)) is not None:
-                    self.fail(issue[1], (*path, "num"), issue[0])
+                    self.fail(issue[1], (*path, "_num"), issue[0])
                 return Number(text)
-            case {"bytes": digits} if len(j) == 1:
+            case {"_bytes": digits} if len(j) == 1:
                 if not isinstance(digits, str) or not _HEX_BYTES.fullmatch(digits):
                     self.fail(
-                        "expected two lowercase hex digits per byte in 'bytes'", (*path, "bytes"), "lossless-bytes"
+                        "expected two lowercase hex digits per byte in '_bytes'", (*path, "_bytes"), "haus-json-bytes"
                     )
                 if len(digits) > self.limits.max_string_length:
                     limit = self.limits.max_string_length
-                    self.fail(f"byte string longer than {limit} characters", (*path, "bytes"), "string-too-long")
+                    self.fail(f"byte string longer than {limit} characters", (*path, "_bytes"), "string-too-long")
                 return Bytes(bytes.fromhex(digits))
-            case {"tag": tag} if len(j) == 1:
+            case {"_tag": tag} if len(j) == 1:
                 return Variant(self.tag(tag, path))
-            case {"tag": tag, "args": args} if len(j) == 2:
-                name = self.tag(tag, path)
-                args_path = (*path, "args")
-                if not isinstance(args, list) or not args:
-                    self.fail("'args' must be a non-empty array (a tag without arguments has no 'args')", args_path)
-                match args:
-                    case [dict() as only] if len(only) == 1 and "rec" in only:
-                        # `Tag { … }` is one level, as in the parser.
-                        return Variant(name, (self.record(only["rec"], depth, (*args_path, 0)),))
-                    case _:
-                        return Variant(name, self.items(args, self.deeper(depth, path), args_path))
+            case {"_tag": tag, "_args": args} if len(j) == 2:
+                return self.variant(self.tag(tag, path), args, depth, path)
             case _:
-                self.fail(f"expected the lossless form of a haus value, found {describe(j)}", path)
+                self.fail(f"expected the self-describing form of a haus value, found {describe(j)}", path)
+
+    def variant(self, tag: str, args: Json, depth: int, path: tuple[PathKey, ...]) -> Variant:
+        """A tag with its `_args` at `path` (the variant's object)."""
+        args_path = (*path, "_args")
+        if not isinstance(args, list) or not args:
+            self.fail("'_args' must be a non-empty array (a tag without arguments has no '_args')", args_path)
+        match args:
+            case [dict() as only] if len(only) == 1 and "_rec" in only:
+                # `Tag { … }` is one level, as in the parser.
+                return Variant(tag, (self.record(only["_rec"], depth, (*args_path, 0)),))
+            case _:
+                return Variant(tag, self.items(args, self.deeper(depth, path), args_path))
 
     def items(self, items: list[Json], depth: int, path: tuple[PathKey, ...]) -> tuple[Value, ...]:
         out: list[Value] = []
@@ -507,22 +566,29 @@ class _Lossless:
 
     def record(self, fields: Json, depth: int, path: tuple[PathKey, ...]) -> Record:
         if not isinstance(fields, dict):
-            self.fail(f"expected the fields of a record (an object), found {describe(fields)}", (*path, "rec"))
+            self.fail(f"expected the fields of a record (an object), found {describe(fields)}", (*path, "_rec"))
         d = self.deeper(depth, path)
         out: dict[str, Value] = {}
         for k, x in fields.items():
             if len(k) > self.limits.max_string_length:
                 limit = self.limits.max_string_length
-                self.fail(f"key longer than {limit} characters", (*path, "rec"), "key-too-long")
-            out[k] = self.value(x, d, (*path, "rec", k))
+                self.fail(f"key longer than {limit} characters", (*path, "_rec"), "key-too-long")
+            out[k] = self.value(x, d, (*path, "_rec", k))
         return Record(out)
 
     def tag(self, tag: Json, path: tuple[PathKey, ...]) -> str:
         if not isinstance(tag, str) or not _TAG.fullmatch(tag):
-            self.fail("expected a tag ([A-Z][A-Za-z0-9_]*) in 'tag'", (*path, "tag"), "invalid-tag")
+            self.fail("expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag'", (*path, "_tag"), "invalid-tag")
         if len(tag) > self.limits.max_string_length:
-            self.fail(f"tag longer than {self.limits.max_string_length} characters", (*path, "tag"), "tag-too-long")
+            self.fail(f"tag longer than {self.limits.max_string_length} characters", (*path, "_tag"), "tag-too-long")
         return tag
+
+
+def self_describing_arguments(
+    tag: str, args: Json, limits: Limits, depth: int, path: tuple[PathKey, ...] = ()
+) -> Variant:
+    """`tag` with the self-describing arguments `args` (no envelope), as the `_args` of the object at `path`."""
+    return _SelfDescribing(limits, path).variant(tag, args, depth, ())
 
 
 def describe(j: Json) -> str:
@@ -621,14 +687,17 @@ def read_lines(
     max_depth: int,
     convert: Callable[[Json, int], R],
     max_line_length: int,
+    *,
+    strict: bool = False,
 ) -> Iterator[R]:
     """Each line of JSON Lines read as JSON, then `convert(json, index)`; syntax errors get the line's number.
 
     A byte order mark is ignored only at the start of the stream, as in haus streams (spec §16).
+    `strict` is as for `read_json`.
     """
     for i, text in enumerate(json_lines(source, max_line_length)):
         try:
-            yield convert(read_json(text, limits, max_depth, bom=i == 0), i)
+            yield convert(read_json(text, limits, max_depth, bom=i == 0, strict=strict), i)
         except HausJsonError as e:
             if e.line is None:
                 raise

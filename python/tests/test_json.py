@@ -1,4 +1,4 @@
-"""JSON (spec §16): the strict reader, the writer, the lossless and plain mappings, JSON Lines."""
+"""JSON (spec §16): the strict reader, the writer, the import, self-describing and schema-based JSON, JSON Lines."""
 
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ SCHEMA = compile_schema("""
     type Level = closed < Debug | Info >
     type Bits = Bool
     type Tagged = < X { _tag: Int32 } | Y >
+    type Args = < X { _args: Int32 } | Y >
     type Config = { name: String, key: Secret String, pins?: Secret (Map Int32) }
     type Hidden = Maybe (Secret (Maybe Int32))
     type Loop = Maybe Loop
@@ -58,62 +59,71 @@ def data(text: str) -> object:
     return json.loads(text, parse_int=lambda s: ("n", s), parse_float=lambda s: ("n", s))
 
 
+def enveloped(value: str) -> str:
+    """A self-describing value's JSON text in its envelope (spec §16.2), as written."""
+    return f'{{"_haus":1,"_value":{value}}}'
+
+
+A = enveloped('"a"')
+"""The self-describing JSON of the string "a"."""
+
+
 # ── the reader ───────────────────────────────────────────────
 
 
 def test_numbers_keep_their_text() -> None:
-    assert haus.from_json("0.1000000000000000000000001") == Number("0.1000000000000000000000001")
-    assert haus.from_json("123456789012345678901234567890") == Number("123456789012345678901234567890")
-    assert haus.from_json("19.90") == Number("19.90")
-    assert haus.from_json("1E+05") == Number("1e5")
-    assert haus.from_json("2.5E-007") == Number("2.5e-7")
-    assert haus.from_json("1E-0") == Number("1e0")
-    assert haus.from_json("1e000") == Number("1e0")
-    assert haus.from_json("-0") == Number("-0")
+    assert haus.import_json("0.1000000000000000000000001") == Number("0.1000000000000000000000001")
+    assert haus.import_json("123456789012345678901234567890") == Number("123456789012345678901234567890")
+    assert haus.import_json("19.90") == Number("19.90")
+    assert haus.import_json("1E+05") == Number("1e5")
+    assert haus.import_json("2.5E-007") == Number("2.5e-7")
+    assert haus.import_json("1E-0") == Number("1e0")
+    assert haus.import_json("1e000") == Number("1e0")
+    assert haus.import_json("-0") == Number("-0")
 
 
 @pytest.mark.parametrize("text", ["01", "-", "1.", ".5", "+1", "1e", "0x10", "Infinity", "-Infinity", "1_000"])
 def test_invalid_numbers(text: str) -> None:
     with pytest.raises(HausJsonError):
-        haus.from_json(text)
+        haus.import_json(text)
 
 
 def test_number_limits() -> None:
-    assert haus.from_json("9" * 1000) == Number("9" * 1000)
-    assert haus.from_json("1e6144") == Number("1e6144")
-    assert haus.from_json("1e-6144") == Number("1e-6144")
+    assert haus.import_json("9" * 1000) == Number("9" * 1000)
+    assert haus.import_json("1e6144") == Number("1e6144")
+    assert haus.import_json("1e-6144") == Number("1e-6144")
     with pytest.raises(HausJsonError, match="longer than 1000"):
-        haus.from_json("9" * 1001)
+        haus.import_json("9" * 1001)
     with pytest.raises(HausJsonError, match="exponent"):
-        haus.from_json("1e6145")
+        haus.import_json("1e6145")
     with pytest.raises(HausJsonError, match="longer than 10"):
-        haus.from_json("12345678901", limits=Limits(max_number_length=10))
+        haus.import_json("12345678901", limits=Limits(max_number_length=10))
 
 
 def test_nesting_limit() -> None:
-    assert haus.from_json("[" * 256 + "]" * 256) is not None
+    assert haus.import_json("[" * 256 + "]" * 256) is not None
     with pytest.raises(HausJsonError, match="nesting deeper than 256"):
-        haus.from_json("[" * 257 + "]" * 257)
+        haus.import_json("[" * 257 + "]" * 257)
     with pytest.raises(HausJsonError, match="nesting deeper than 2"):
-        haus.from_json('{"a": [[1]]}', limits=Limits(max_depth=2))
+        haus.import_json('{"a": [[1]]}', limits=Limits(max_depth=2))
     with pytest.raises(HausJsonError):
-        haus.from_json("[" * 100_000)
+        haus.import_json("[" * 100_000)
 
 
 def test_string_limit() -> None:
     small = Limits(max_string_length=3)
-    assert haus.from_json('"abc"', limits=small) == String("abc")
-    assert haus.from_json('"\\u00e9\\n\\t"', limits=small) == String("é\n\t")
+    assert haus.import_json('"abc"', limits=small) == String("abc")
+    assert haus.import_json('"\\u00e9\\n\\t"', limits=small) == String("é\n\t")
     with pytest.raises(HausJsonError, match="longer than 3"):
-        haus.from_json('"abcd"', limits=small)
+        haus.import_json('"abcd"', limits=small)
     with pytest.raises(HausJsonError, match="longer than 3"):
-        haus.from_json('{"abcd": 1}', limits=small)
+        haus.import_json('{"abcd": 1}', limits=small)
 
 
 def test_strings_and_escapes() -> None:
     text = r'"a\"b\\c\/d\b\f\n\r\t\u0041\u00E9\ud83d\uDE00 é 😀"'
-    assert haus.from_json(text) == String('a"b\\c/d\b\f\n\r\tAé\U0001f600 é 😀')
-    assert haus.from_json('"\u2028\u007f"') == String("\u2028\u007f")  # raw, not escaped
+    assert haus.import_json(text) == String('a"b\\c/d\b\f\n\r\tAé\U0001f600 é 😀')
+    assert haus.import_json('"\u2028\u007f"') == String("\u2028\u007f")  # raw, not escaped
 
 
 @pytest.mark.parametrize(
@@ -133,7 +143,7 @@ def test_strings_and_escapes() -> None:
 )
 def test_invalid_strings(text: str) -> None:
     with pytest.raises(HausJsonError):
-        haus.from_json(text)
+        haus.import_json(text)
 
 
 @pytest.mark.parametrize(
@@ -145,136 +155,192 @@ def test_invalid_strings(text: str) -> None:
 )
 def test_invalid_json(text: str) -> None:
     with pytest.raises(HausJsonError):
-        haus.from_json(text)
+        haus.import_json(text)
 
 
 def test_whitespace_and_literals() -> None:
-    assert haus.from_json(' \t\r\n{ "a" : [ true , false , null ] } \n') == Record(
+    assert haus.import_json(' \t\r\n{ "a" : [ true , false , null ] } \n') == Record(
         {"a": Array((Variant("True"), Variant("False"), Variant("None")))}
     )
 
 
 def test_duplicate_names_are_rejected() -> None:
     with pytest.raises(HausJsonError, match='duplicate member name "a"') as e:
-        haus.from_json('{\n  "a": 1,\n  "a": 2\n}')
+        haus.import_json('{\n  "a": 1,\n  "a": 2\n}')
     assert (e.value.line, e.value.column) == (3, 3)
     # Escapes don't hide a duplicate.
     with pytest.raises(HausJsonError):
-        haus.from_json('{"a": 1, "\\u0061": 2}')
+        haus.import_json('{"a": 1, "\\u0061": 2}')
 
 
 def test_error_positions_count_code_points() -> None:
     with pytest.raises(HausJsonError) as e:
-        haus.from_json('["😀", x]')
+        haus.import_json('["😀", x]')
     assert (e.value.line, e.value.column, e.value.reason) == (1, 7, 'unexpected "x", expected a JSON value')
     assert str(e.value) == 'unexpected "x", expected a JSON value at 1:7'
 
 
 def test_a_byte_order_mark_is_ignored() -> None:
-    assert haus.from_json("\ufeff[1]") == Array((Number("1"),))
-    assert haus.from_json(b"\xef\xbb\xbf[1]") == Array((Number("1"),))
-    assert haus.from_lossless_json('\ufeff"a"') == String("a")
+    assert haus.import_json("\ufeff[1]") == Array((Number("1"),))
+    assert haus.import_json(b"\xef\xbb\xbf[1]") == Array((Number("1"),))
+    assert haus.from_haus_json("\ufeff" + A) == String("a")
     assert SCHEMA["Big"].from_json('\ufeff"5"') == 5
     with pytest.raises(HausJsonError) as e:
-        haus.from_json("\ufeff[x]")
+        haus.import_json("\ufeff[x]")
     assert (e.value.line, e.value.column) == (1, 3)  # the mark is a column, as in haus
 
 
 def test_bytes_input_is_utf8() -> None:
-    assert haus.from_json('"é"'.encode()) == String("é")
+    assert haus.import_json('"é"'.encode()) == String("é")
     with pytest.raises(HausJsonError, match="invalid UTF-8") as e:
-        haus.from_json(b'["\xff"]')
+        haus.import_json(b'["\xff"]')
     assert (e.value.line, e.value.column) == (1, 3)
 
 
-# ── lossless (§16.2) ─────────────────────────────────────────
+# ── self-describing (§16.2) ──────────────────────────────────
 
 
-def test_lossless_writes_every_kind() -> None:
+def test_self_describing_writes_every_kind() -> None:
     value = haus.parse('{ s: "é\\n", n: 0xFF, b: x"0B34", a: [], t: None, p: Point(1, 2.50), r: Circle { r: 1 } }')
-    assert data(haus.to_lossless_json(value)) == {
-        "rec": {
-            "s": "é\n",
-            "n": {"num": "255"},
-            "b": {"bytes": "0b34"},
-            "a": [],
-            "t": {"tag": "None"},
-            "p": {"tag": "Point", "args": [{"num": "1"}, {"num": "2.50"}]},
-            "r": {"tag": "Circle", "args": [{"rec": {"r": {"num": "1"}}}]},
-        }
+    assert data(haus.to_haus_json(value)) == {
+        "_haus": ("n", "1"),
+        "_value": {
+            "_rec": {
+                "s": "é\n",
+                "n": {"_num": "255"},
+                "b": {"_bytes": "0b34"},
+                "a": [],
+                "t": {"_tag": "None"},
+                "p": {"_tag": "Point", "_args": [{"_num": "1"}, {"_num": "2.50"}]},
+                "r": {"_tag": "Circle", "_args": [{"_rec": {"r": {"_num": "1"}}}]},
+            }
+        },
     }
-    assert haus.to_lossless_json(String("é\u0000\u001b")) == '"é\\u0000\\u001b"'
+    assert haus.to_haus_json(String("é\u0000\u001b")) == enveloped('"é\\u0000\\u001b"')
 
 
-def test_lossless_round_trip() -> None:
-    text = '[{ "x-y": [1.0, -0, 1e-7] }, Tag({ a: x"" }), Two(Some(1), "\\u{1F600}"), {}]'
-    value = haus.parse(text)
-    assert haus.equals(haus.from_lossless_json(haus.to_lossless_json(value)), value)
-
-
-def test_lossless_rejects_invalid_values_built_in_code() -> None:
-    with pytest.raises(HausEncodeError):
-        haus.to_lossless_json(Variant("lower"))
-    with pytest.raises(HausEncodeError):
-        haus.to_lossless_json(Number("01"))
-    with pytest.raises(HausEncodeError):
-        haus.to_lossless_json(String("\ud800"))
-    with pytest.raises(HausEncodeError):
-        haus.to_lossless_json(Array((Array(()),)), limits=Limits(max_depth=1))
-    # Number literals built in code are normalized, as the parser would.
-    assert haus.to_lossless_json(Number("1E+05")) == '{"num":"1e5"}'
+def test_writers_escape_controls_that_change_the_display() -> None:
+    """DEL, C1 and bidi controls are escaped in strings and member names, by every writer (spec §16)."""
+    text = "a\u007f\u0085\u009f\u202a\u202e\u2066\u2069b\u00a0\u2028"
+    escaped = '"a\\u007f\\u0085\\u009f\\u202a\\u202e\\u2066\\u2069b\u00a0\u2028"'
+    assert haus.to_haus_json(String(text)) == enveloped(escaped)
+    assert haus.to_haus_json(Record({text: String("")})) == enveloped(f'{{"_rec":{{{escaped}:""}}}}')
+    assert SCHEMA["Counts"].to_json({text: 1}) == f"{{{escaped}:1}}"
+    assert haus.from_haus_json(enveloped(escaped)) == String(text)
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("raw", "code"),
+    [("\u007f", "control-character"), ("\u0085", "control-character"), ("\u202e", "bidi-control")],
+)
+def test_only_self_describing_json_rejects_raw_display_controls(raw: str, code: str) -> None:
+    """Only haus writes self-describing JSON, and it escapes them; other JSON may hold them raw (spec §16)."""
+    for text in (enveloped(f'"a{raw}"'), enveloped(f'{{"_rec":{{"a{raw}":"b"}}}}')):
+        with pytest.raises(HausJsonError) as e:
+            haus.from_haus_json(text)
+        assert e.value.code == code
+        assert e.value.line == 1
+        with pytest.raises(HausJsonError) as f:
+            list(haus.from_haus_json_lines(f"{A}\n{text}\n"))
+        assert (f.value.code, f.value.line) == (code, 2)
+    assert haus.import_json(f'"a{raw}"') == String(f"a{raw}")
+    assert SCHEMA["Raw"].from_json(f'"a{raw}"') == String(f"a{raw}")  # `Any` inside schema-based JSON
+    assert SCHEMA["Shape"].from_json(f'{{"_tag": "Star", "_args": ["{raw}"]}}') == Unknown(
+        Variant("Star", (String(raw),))
+    )
+
+
+def test_self_describing_envelope() -> None:
+    assert haus.to_haus_json(String("a")) == '{"_haus":1,"_value":"a"}'
+    assert haus.from_haus_json(' { "_value" : "a" , "_haus" : 1 } ') == String("a")
+    for text, code in [
+        ('"a"', "haus-json-form"),
+        ('{"_rec": {}}', "haus-json-form"),
+        ('{"_haus": 1}', "haus-json-form"),
+        ('{"_haus": 1, "_value": "a", "_tag": "A"}', "haus-json-form"),
+        ('{"_haus": 2, "_value": "a"}', "haus-json-version"),
+        ('{"_haus": 1e0, "_value": "a"}', "haus-json-version"),
+        ('{"_haus": "1", "_value": "a"}', "haus-json-version"),
+        ('{"_haus": null, "_value": "a"}', "haus-json-version"),
+        ('{"_haus": 1, "_value": {"_haus": 1, "_value": "a"}}', "haus-json-form"),
+    ]:
+        with pytest.raises(HausJsonError) as e:
+            haus.from_haus_json(text)
+        assert (e.value.code, e.value.path) == (code, ()), text
+
+
+def test_self_describing_round_trip() -> None:
+    text = '[{ "x-y": [1.0, -0, 1e-7] }, Tag({ a: x"" }), Two(Some(1), "\\u{1F600}"), {}]'
+    value = haus.parse(text)
+    assert haus.equals(haus.from_haus_json(haus.to_haus_json(value)), value)
+
+
+def test_self_describing_rejects_invalid_values_built_in_code() -> None:
+    with pytest.raises(HausEncodeError):
+        haus.to_haus_json(Variant("lower"))
+    with pytest.raises(HausEncodeError):
+        haus.to_haus_json(Number("01"))
+    with pytest.raises(HausEncodeError):
+        haus.to_haus_json(String("\ud800"))
+    with pytest.raises(HausEncodeError):
+        haus.to_haus_json(Array((Array(()),)), limits=Limits(max_depth=1))
+    # Number literals built in code are normalized, as the parser would.
+    assert haus.to_haus_json(Number("1E+05")) == enveloped('{"_num":"1e5"}')
+
+
+@pytest.mark.parametrize(
+    "value",
     [
-        '{"num": "1E5"}',  # not normalized
-        '{"num": "1_000"}',
-        '{"num": "0xff"}',
-        '{"num": "+1"}',
-        '{"num": "1e6145"}',
-        '{"bytes": "0b 34"}',
-        '{"bytes": 1}',
-        '{"rec": []}',
-        '{"tag": "T", "args": {}}',
-        '{"tag": "T", "args": [1]}',
-        '{"tag": "", "args": ["a"]}',
-        '{"tag": "T", "x": 1}',
-        '{"args": ["a"]}',
-        '{"str": "a"}',
+        '{"_num": "1E5"}',  # not normalized
+        '{"_num": "1_000"}',
+        '{"_num": "0xff"}',
+        '{"_num": "+1"}',
+        '{"_num": "1e6145"}',
+        '{"_bytes": "0b 34"}',
+        '{"_bytes": 1}',
+        '{"_rec": []}',
+        '{"_tag": "T", "_args": {}}',
+        '{"_tag": "T", "_args": [1]}',
+        '{"_tag": "", "_args": ["a"]}',
+        '{"_tag": "T", "x": 1}',
+        '{"_tag": "T", "args": ["a"]}',
+        '{"_args": ["a"]}',
+        '{"_str": "a"}',
+        '{"num": "1"}',
         "[1]",
     ],
 )
-def test_lossless_rejects(text: str) -> None:
+def test_self_describing_rejects(value: str) -> None:
     with pytest.raises(HausJsonError):
-        haus.from_lossless_json(text)
+        haus.from_haus_json(enveloped(value))
 
 
-def test_lossless_errors_have_a_path() -> None:
+def test_self_describing_errors_have_a_path() -> None:
+    """The envelope adds no path segment."""
     with pytest.raises(HausJsonError) as e:
-        haus.from_lossless_json('{"rec": {"items": [{"num": "1"}, 2]}}')
-    assert e.value.path == ("rec", "items", 1)
+        haus.from_haus_json(enveloped('{"_rec": {"items": [{"_num": "1"}, 2]}}'))
+    assert e.value.path == ("_rec", "items", 1)
     assert e.value.line is None
-    assert str(e.value) == "expected the lossless form of a haus value, found number 2 at $.rec.items[1]"
+    assert str(e.value) == "expected the self-describing form of a haus value, found number 2 at $._rec.items[1]"
 
 
-def test_lossless_depth_is_the_values() -> None:
+def test_self_describing_depth_is_the_values() -> None:
     """Two JSON levels make one haus level; the haus depth is what is limited."""
     nested = haus.parse("{ a: { b: [T { c: 1 }] } }")
-    text = haus.to_lossless_json(nested)
-    assert haus.equals(haus.from_lossless_json(text, limits=Limits(max_depth=4)), nested)
+    text = haus.to_haus_json(nested)
+    assert haus.equals(haus.from_haus_json(text, limits=Limits(max_depth=4)), nested)
     with pytest.raises(HausJsonError, match="nesting deeper than 3"):
-        haus.from_lossless_json(text, limits=Limits(max_depth=3))
+        haus.from_haus_json(text, limits=Limits(max_depth=3))
     deep = "[" * 256 + "]" * 256
-    assert haus.from_lossless_json(deep) == haus.parse(deep)
+    assert haus.from_haus_json(enveloped(deep)) == haus.parse(deep)
     with pytest.raises(HausJsonError):
-        haus.from_lossless_json("[" * 257 + "]" * 257)
+        haus.from_haus_json(enveloped("[" * 257 + "]" * 257))
 
 
 def test_deepest_values_at_the_default_limits() -> None:
     """256 levels, the default limit: as many JSON levels as `Tag { … }` needs, without Python's recursion limit."""
     deep = haus.parse("T { a: " * 255 + "[1]" + " }" * 255)
-    assert haus.equals(haus.from_lossless_json(haus.to_lossless_json(deep)), deep)
+    assert haus.equals(haus.from_haus_json(haus.to_haus_json(deep)), deep)
     t = SCHEMA["List"]
     value: object = Tagged("Nil")
     for i in range(255):
@@ -285,12 +351,12 @@ def test_deepest_values_at_the_default_limits() -> None:
 
 
 def test_the_string_limit_counts_keys_and_tags_in_values_built_in_code() -> None:
-    """Raw values (`Any`) and the lossless form check record keys and tags against the string limit (spec §7)."""
+    """Raw values (`Any`) and self-describing JSON check record keys and tags against the string limit (spec §7)."""
     four = Limits(max_string_length=4)
     raw = SCHEMA["Raw"]
     ok = Variant("Abcd", (Record({"abcd": Array(())}),))
     assert raw.encode(ok, limits=four) == ok
-    assert haus.to_lossless_json(ok, limits=four) == '{"tag":"Abcd","args":[{"rec":{"abcd":[]}}]}'
+    assert haus.to_haus_json(ok, limits=four) == enveloped('{"_tag":"Abcd","_args":[{"_rec":{"abcd":[]}}]}')
     for value, reason in (
         (Record({"abcde": Array(())}), "key longer than 4 characters"),
         (Array((Variant("Abcde"),)), "tag longer than 4 characters"),
@@ -299,12 +365,12 @@ def test_the_string_limit_counts_keys_and_tags_in_values_built_in_code() -> None
         with pytest.raises(HausEncodeError, match=reason):
             raw.encode(value, limits=four)
         with pytest.raises(HausEncodeError, match=reason):
-            haus.to_lossless_json(value, limits=four)
+            haus.to_haus_json(value, limits=four)
     # In JSON text, member names and tags are JSON strings first: the reader's string limit.
     with pytest.raises(HausJsonError, match="string longer than 4 characters"):
-        haus.from_lossless_json('{"tag": "Abcde"}', limits=four)
+        haus.from_haus_json(enveloped('{"_tag": "Abcde"}'), limits=four)
     with pytest.raises(HausJsonError, match="string longer than 4 characters"):
-        haus.from_json('{"abcde": []}', limits=four)
+        haus.import_json('{"abcde": []}', limits=four)
 
 
 def test_deepest_values_at_the_supported_depth() -> None:
@@ -316,13 +382,11 @@ def test_deepest_values_at_the_supported_depth() -> None:
             return nested(frames - 1)
         deep = haus.parse("T { a: " * 511 + "[1]" + " }" * 511, limits=limits)
         assert haus.canonical(deep) == "T{a:" * 511 + "[1]" + "}" * 511
-        assert haus.equals(haus.from_lossless_json(haus.to_lossless_json(deep, limits=limits), limits=limits), deep)
-        lines = list(haus.to_lossless_json_lines([deep], limits=limits))
-        assert [haus.canonical(v) for v in haus.from_lossless_json_lines(lines[0], limits=limits)] == [
-            haus.canonical(deep)
-        ]
+        assert haus.equals(haus.from_haus_json(haus.to_haus_json(deep, limits=limits), limits=limits), deep)
+        lines = list(haus.to_haus_json_lines([deep], limits=limits))
+        assert [haus.canonical(v) for v in haus.from_haus_json_lines(lines[0], limits=limits)] == [haus.canonical(deep)]
         assert haus.equals(
-            haus.from_json("[" * 512 + "]" * 512, limits=limits), haus.parse("[" * 512 + "]" * 512, limits=limits)
+            haus.import_json("[" * 512 + "]" * 512, limits=limits), haus.parse("[" * 512 + "]" * 512, limits=limits)
         )
         raw = SCHEMA["Raw"]
         assert haus.equals(raw.from_json(raw.to_json(deep, limits=limits), limits=limits), deep)
@@ -342,18 +406,18 @@ def test_deepest_values_at_the_supported_depth() -> None:
     nested(500)
 
 
-def test_lossless_long_integers_within_the_hex_limit() -> None:
+def test_self_describing_long_integers_within_the_hex_limit() -> None:
     """A whole number written in hex within the limit has a longer decimal literal (spec §12)."""
     value = haus.parse("0x" + "f" * 998)
     assert isinstance(value, Number)
     assert len(value.text) > 1000
-    assert haus.from_lossless_json(haus.to_lossless_json(value)) == value
+    assert haus.from_haus_json(haus.to_haus_json(value)) == value
 
 
-# ── plain (§16.3) ────────────────────────────────────────────
+# ── schema-based (§16.3) ─────────────────────────────────────
 
 
-def test_plain_order() -> None:
+def test_schema_based_order() -> None:
     t = SCHEMA["Order"]
     order = t.parse("""{
         id: 12345678901234567890,
@@ -372,11 +436,11 @@ def test_plain_order() -> None:
     assert t.from_json('{"id": "1", "items": []}') == {"id": 1, "items": ()}
 
 
-def test_plain_writes_one_line_without_spaces() -> None:
+def test_schema_based_writes_one_line_without_spaces() -> None:
     assert SCHEMA["Order"].to_json({"id": 1, "items": [], "note": Some("é\n")}) == '{"id":"1","items":[],"note":"é\\n"}'
 
 
-def test_plain_scalars() -> None:
+def test_schema_based_scalars() -> None:
     assert SCHEMA["Blob"].to_json(b"\x0b\x34\xff") == '"CzT/"'
     assert SCHEMA["Blob"].from_json('"CzT/"') == b"\x0b\x34\xff"
     assert SCHEMA["Blob"].from_json('""') == b""
@@ -392,24 +456,24 @@ def test_plain_scalars() -> None:
 
 
 @pytest.mark.parametrize("text", ['"CzR="', '"CzQ"', '"C zQ="', '"CzQ=\\n"', '"CzQ=="', '"Cz-_"', "11"])
-def test_plain_bytes_are_strict_base64(text: str) -> None:
+def test_schema_based_bytes_are_strict_base64(text: str) -> None:
     with pytest.raises(HausDecodeError):
         SCHEMA["Blob"].from_json(text)
 
 
 @pytest.mark.parametrize("text", ['"007"', '"1.0"', '" 1"', '"1 "', '""', '"0x10"', '"1_000"', "1"])
-def test_plain_integer_strings(text: str) -> None:
+def test_schema_based_integer_strings(text: str) -> None:
     with pytest.raises(HausDecodeError):
         SCHEMA["Big"].from_json(text)
 
 
 @pytest.mark.parametrize("text", ['"1."', '".5"', '"0x10"', '"1_000"', '" 1"', '"NaN"', '""', '"1e6145"'])
-def test_plain_decimal_strings(text: str) -> None:
+def test_schema_based_decimal_strings(text: str) -> None:
     with pytest.raises(HausDecodeError):
         SCHEMA["Amount"].from_json(text)
 
 
-def test_plain_floats() -> None:
+def test_schema_based_floats() -> None:
     f64, f32 = SCHEMA["F64"], SCHEMA["F32"]
     assert f64.to_json(0.1) == "0.1"
     assert f64.to_json(1e21) == "1e21"
@@ -431,14 +495,14 @@ def test_plain_floats() -> None:
             f64.from_json(text)
 
 
-def test_plain_maybe() -> None:
+def test_schema_based_maybe() -> None:
     order = SCHEMA["Order"]
     assert order.from_json('{"id": "1", "items": [], "note": null}')["note"] == Nothing()
     assert order.from_json('{"id": "1", "items": [], "note": "x"}')["note"] == Some("x")
     assert "note" not in order.from_json('{"id": "1", "items": []}')
 
 
-def test_plain_maybe_through_a_secret() -> None:
+def test_schema_based_maybe_through_a_secret() -> None:
     """`Maybe (Secret (Maybe Int32))`: the secret's JSON can be null, so the outer Maybe is tagged."""
     t = SCHEMA["Hidden"]
     assert t.to_json(Nothing()) == '{"_tag":"None"}'
@@ -450,7 +514,7 @@ def test_plain_maybe_through_a_secret() -> None:
 
 
 @pytest.mark.parametrize("name", ["Loop", "Ping", "Pong"])
-def test_plain_recursive_maybe_is_tagged(name: str) -> None:
+def test_schema_based_recursive_maybe_is_tagged(name: str) -> None:
     """`type Loop = Maybe Loop`: whether its JSON can be null depends on itself, so every level is tagged."""
     t = SCHEMA[name]
     value = Some(Some(Nothing()))
@@ -461,7 +525,7 @@ def test_plain_recursive_maybe_is_tagged(name: str) -> None:
         t.from_json("null")
 
 
-def test_plain_variants() -> None:
+def test_schema_based_variants() -> None:
     shape = SCHEMA["Shape"]
     assert shape.to_json(Tagged("Circle", {"r": 1.5})) == '{"_tag":"Circle","r":1.5}'
     assert shape.to_json(Tagged("Wrap", (3,))) == '{"_tag":"Wrap","value":3}'
@@ -490,28 +554,33 @@ def test_plain_variants() -> None:
             shape.from_json(text)
 
 
-def test_plain_unknown_values() -> None:
+def test_schema_based_unknown_values() -> None:
     shape = SCHEMA["Shape"]
     unknown = Unknown(Variant("Hexagon", (Number("6"), Record({"a": Bytes(b"\x01")}))))
     text = shape.to_json(unknown)
-    assert data(text) == {"_tag": "Hexagon", "args": [{"num": "6"}, {"rec": {"a": {"bytes": "01"}}}]}
+    assert data(text) == {"_tag": "Hexagon", "_args": [{"_num": "6"}, {"_rec": {"a": {"_bytes": "01"}}}]}
     assert shape.from_json(text) == unknown
     assert shape.from_json('{"_tag": "Star"}') == Unknown(Variant("Star"))
     assert SCHEMA["Anything"].from_json('{"_tag": "EUR"}') == Unknown(Variant("EUR"))
     for text in [
-        '{"_tag": "Star", "args": []}',
-        '{"_tag": "Star", "args": [1]}',  # arguments are lossless
-        '{"_tag": "Star", "args": "a"}',
+        '{"_tag": "Star", "_args": []}',
+        '{"_tag": "Star", "_args": [1]}',  # arguments are self-describing
+        '{"_tag": "Star", "_args": "a"}',
+        '{"_tag": "Star", "_args": [{"_haus": 1, "_value": "a"}]}',  # without the envelope
         '{"_tag": "star"}',  # not a tag
     ]:
         with pytest.raises(HausDecodeError):
             shape.from_json(text)
-    # A newer writer's case: other members are a record payload, read without a schema (§16.1).
+    # A newer writer's case: other members are a record payload, read by the import (§16.1).
     assert shape.from_json('{"_tag": "Hexagon", "sides": 6, "tags": [true, null]}') == Unknown(
         Variant("Hexagon", (Record({"sides": Number("6"), "tags": Array((Variant("True"), Variant("None")))}),))
     )
-    assert shape.from_json('{"_tag": "Hexagon", "args": "a", "n": 1}') == Unknown(
-        Variant("Hexagon", (Record({"args": String("a"), "n": Number("1")}),))
+    assert shape.from_json('{"_tag": "Hexagon", "_args": "a", "n": 1}') == Unknown(
+        Variant("Hexagon", (Record({"_args": String("a"), "n": Number("1")}),))
+    )
+    # `args` is an ordinary member.
+    assert shape.from_json('{"_tag": "Run", "args": [1, 2]}') == Unknown(
+        Variant("Run", (Record({"args": Array((Number("1"), Number("2")))}),))
     )
     with pytest.raises(HausDecodeError, match="nesting deeper than 2") as e:
         shape.from_json('{"_tag": "Hexagon", "a": {"b": [1]}}', limits=Limits(max_depth=2))
@@ -520,7 +589,7 @@ def test_plain_unknown_values() -> None:
         shape.to_json(Unknown(Variant("Empty")))
 
 
-def test_plain_recursive_variant() -> None:
+def test_schema_based_recursive_variant() -> None:
     t = SCHEMA["List"]
     value = Tagged("Cons", (1, Tagged("Cons", (2, Tagged("Nil")))))
     text = t.to_json(value)
@@ -528,26 +597,33 @@ def test_plain_recursive_variant() -> None:
     assert t.from_json(text) == value
 
 
-def test_plain_field_named_tag_has_no_plain_form() -> None:
-    t = SCHEMA["Tagged"]
-    with pytest.raises(HausEncodeError, match='"_tag" has no plain JSON form'):
-        t.to_json(Tagged("X", {"_tag": 1}))
-    with pytest.raises(HausDecodeError, match='"_tag" has no plain JSON form'):
+@pytest.mark.parametrize("name", ["Tagged", "Args"])
+def test_schema_based_field_named_tag_or_args_has_no_form(name: str) -> None:
+    t = SCHEMA[name]
+    key = "_tag" if name == "Tagged" else "_args"
+    with pytest.raises(HausEncodeError, match=f'"{key}" has no schema-based JSON form') as e:
+        t.to_json(Tagged("X", {key: 1}))
+    assert e.value.code == "no-json-form"
+    with pytest.raises(HausDecodeError, match=f'"{key}" has no schema-based JSON form') as f:
         t.from_json('{"_tag": "X"}')
+    assert f.value.code == "no-json-form"
     assert t.to_json(Tagged("Y")) == '{"_tag":"Y"}'
 
 
-def test_plain_any_is_lossless() -> None:
+def test_schema_based_any_is_self_describing_without_the_envelope() -> None:
     raw = SCHEMA["Raw"]
     value = haus.parse("{ a: [1, None] }")
-    assert raw.to_json(value) == '{"rec":{"a":[{"num":"1"},{"tag":"None"}]}}'
+    assert raw.to_json(value) == '{"_rec":{"a":[{"_num":"1"},{"_tag":"None"}]}}'
     assert raw.from_json(raw.to_json(value)) == value
     with pytest.raises(HausDecodeError) as e:
-        SCHEMA["Order"].from_json('{"id": "1", "items": [], "shape": {"_tag": "Star", "args": [{"rec": 1}]}}')
-    assert e.value.path == ("shape", "args", 0, "rec")
+        raw.from_json(haus.to_haus_json(value))
+    assert (e.value.code, e.value.path) == ("haus-json-form", ())
+    with pytest.raises(HausDecodeError) as f:
+        SCHEMA["Order"].from_json('{"id": "1", "items": [], "shape": {"_tag": "Star", "_args": [{"_rec": 1}]}}')
+    assert f.value.path == ("shape", "_args", 0, "_rec")
 
 
-def test_plain_secrets_never_leak() -> None:
+def test_schema_based_secrets_never_leak() -> None:
     config = SCHEMA["Config"]
     value = config.from_json('{"name": "prod", "key": "sk-123", "pins": {"a": 1}}')
     assert value["key"].expose() == "sk-123"
@@ -566,7 +642,7 @@ def test_plain_secrets_never_leak() -> None:
     assert "sk-123" not in str(g.value)
 
 
-def test_plain_error_paths() -> None:
+def test_schema_based_error_paths() -> None:
     order = SCHEMA["Order"]
     cases = {
         '{"id": "1", "items": [{"sku": "a", "qty": 1, "price": "1"}, {"sku": "b", "qty": -1, "price": "1"}]}': (
@@ -584,7 +660,7 @@ def test_plain_error_paths() -> None:
         assert e.value.path == path, text
 
 
-def test_plain_with_codecs() -> None:
+def test_schema_based_with_codecs() -> None:
     s = compile_schema(
         """
         import std/time (Date)
@@ -598,7 +674,7 @@ def test_plain_with_codecs() -> None:
     assert t.to_json(value) == '{"amount":"19.90","on":"2026-11-13"}'
 
 
-def test_plain_limits_and_budget() -> None:
+def test_schema_based_limits_and_budget() -> None:
     t = SCHEMA["List"]
     deep = Tagged("Nil")
     for i in range(10):
@@ -617,7 +693,7 @@ def test_plain_limits_and_budget() -> None:
         compile_schema("type T = { a: Array T }")["T"].to_json(node)
 
 
-def test_plain_json_errors_are_json_errors() -> None:
+def test_schema_based_json_errors_are_json_errors() -> None:
     with pytest.raises(HausJsonError):
         SCHEMA["Counts"].from_json('{"a": 1, "a": 2}')
     with pytest.raises(HausJsonError):
@@ -653,7 +729,7 @@ def test_json_lines_errors() -> None:
     with pytest.raises(HausJsonError, match="line longer than 10"):
         list(events.from_json_lines('{"_tag":"Empty"}\n', max_line_length=10))
     with pytest.raises(HausJsonError, match="invalid UTF-8"):
-        list(haus.from_json_lines([b'"\xc3', b'"\n"\xff"\n']))
+        list(haus.import_json_lines([b'"\xc3', b'"\n"\xff"\n']))
     with pytest.raises(HausEncodeError) as h:
         list(events.to_json_lines([Tagged("Empty"), Tagged("Nope")]))
     assert h.value.path == (1,)
@@ -666,30 +742,41 @@ def test_json_lines_byte_order_mark() -> None:
         Tagged("Empty"),
         Tagged("Empty"),
     ]
-    assert list(haus.from_json_lines("\ufeff1\n2\n")) == [Number("1"), Number("2")]
-    assert list(haus.from_lossless_json_lines('\ufeff"a"\n')) == [String("a")]
+    assert list(haus.import_json_lines("\ufeff1\n2\n")) == [Number("1"), Number("2")]
+    assert list(haus.from_haus_json_lines(f"\ufeff{A}\n")) == [String("a")]
     later_lines = {
         events.from_json_lines: '{"_tag":"Empty"}\n\ufeff{"_tag":"Empty"}\n',
-        haus.from_json_lines: "1\n\ufeff2\n",
-        haus.from_lossless_json_lines: '"a"\n\ufeff"b"\n',
+        haus.import_json_lines: "1\n\ufeff2\n",
+        haus.from_haus_json_lines: f"{A}\n\ufeff{A}\n",
     }
     for read, text in later_lines.items():
         with pytest.raises(HausJsonError) as e:
             list(read(text))
         assert (e.value.line, e.value.column) == (2, 1)
     with pytest.raises(HausJsonError):
-        list(haus.from_json_lines("\ufeff\ufeff1\n"))
+        list(haus.import_json_lines("\ufeff\ufeff1\n"))
 
 
 def test_json_lines_without_a_schema() -> None:
-    assert list(haus.from_json_lines(['{"a": 1}\n[tr', "ue]\n"])) == [
+    assert list(haus.import_json_lines(['{"a": 1}\n[tr', "ue]\n"])) == [
         Record({"a": Number("1")}),
         Array((Variant("True"),)),
     ]
     values = haus.parse_all('1, "a", T { x: x"00" },')
-    text = "".join(haus.to_lossless_json_lines(values))
-    assert text == '{"num":"1"}\n"a"\n{"tag":"T","args":[{"rec":{"x":{"bytes":"00"}}}]}\n'
-    assert list(haus.from_lossless_json_lines(text)) == values
-    with pytest.raises(HausJsonError) as e:
-        list(haus.from_lossless_json_lines('"a"\n1\n'))
-    assert e.value.path == (1,)
+    text = "".join(haus.to_haus_json_lines(values))
+    assert text == "".join(
+        enveloped(v) + "\n" for v in ['{"_num":"1"}', '"a"', '{"_tag":"T","_args":[{"_rec":{"x":{"_bytes":"00"}}}]}']
+    )
+    assert list(haus.from_haus_json_lines(text)) == values
+    # Every line is an envelope of its own; errors carry the line's index first in their path.
+    for lines, path in [
+        (f"{A}\n{enveloped('1')}\n", (1,)),
+        (f'{A}\n"b"\n', (1,)),
+        (A + "\n" + enveloped('{"_rec": {"k": 1}}') + "\n", (1, "_rec", "k")),
+    ]:
+        with pytest.raises(HausJsonError) as e:
+            list(haus.from_haus_json_lines(lines))
+        assert (e.value.code, e.value.path) == ("haus-json-form", path)
+    # A JSON array of values isn't self-describing JSON Lines.
+    with pytest.raises(HausJsonError):
+        list(haus.from_haus_json_lines('[{"_haus":1,"_value":"a"}]\n'))

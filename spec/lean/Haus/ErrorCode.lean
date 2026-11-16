@@ -28,7 +28,7 @@ inductive Code
   | typeMismatch | notAnInteger | outOfRange | missingField | unknownField | unknownTag
   | wrongPayload | invalidTime | invalidSecret | unguardedRecursion | unknownType
   -- JSON (§16)
-  | jsonSyntax | unpairedSurrogate | losslessForm | losslessNumber | losslessBytes | invalidTag
+  | jsonSyntax | unpairedSurrogate | hausJsonForm | hausJsonVersion | hausJsonNumber | hausJsonBytes | invalidTag
   | invalidBase64 | missingMember | unexpectedMember | noJsonForm
   /-- A recursive function ran out of fuel. Never reported: the completeness
   proof shows the fuel always suffices. Not a code of the catalogue. -/
@@ -89,9 +89,10 @@ def Code.name : Code → String
   | .unknownType => "unknown-type"
   | .jsonSyntax => "json-syntax"
   | .unpairedSurrogate => "unpaired-surrogate"
-  | .losslessForm => "lossless-form"
-  | .losslessNumber => "lossless-number"
-  | .losslessBytes => "lossless-bytes"
+  | .hausJsonForm => "haus-json-form"
+  | .hausJsonVersion => "haus-json-version"
+  | .hausJsonNumber => "haus-json-number"
+  | .hausJsonBytes => "haus-json-bytes"
   | .invalidTag => "invalid-tag"
   | .invalidBase64 => "invalid-base64"
   | .missingMember => "missing-member"

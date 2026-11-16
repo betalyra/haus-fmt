@@ -1,6 +1,6 @@
 //! The JSON suite without a type (test-suite/json, spec §16.1 and §16.2), and
-//! every `valid/NAME.json` of the conformance suite as a lossless case.
-//! The plain mapping, which needs generated types, is in
+//! every `valid/NAME.jsonl` of the conformance suite as a self-describing
+//! case. Schema-based JSON, which needs generated types, is in
 //! haus-build-tests/tests/json_conformance.rs.
 
 use haus::{Json, Value, canonical};
@@ -65,57 +65,58 @@ fn rejected(result: Result<Value, haus::Error>, code: &str) -> Option<String> {
 /// `Ok { input, json }`: writing `input` gives `json`, reading `json` gives
 /// `input`. `Err { json, code }`: reading `json` fails with `code`.
 #[test]
-fn lossless() {
-    let failures: Vec<String> = cases("lossless.cases.haus")
+fn self_describing() {
+    let failures: Vec<String> = cases("self-describing.cases.haus")
         .iter()
         .filter_map(|(tag, fields)| {
             let json = text(fields, "json");
             let failure = match (tag.as_str(), fields.get("input")) {
-                ("Ok", Some(input)) => match haus::to_lossless_json(input) {
+                ("Ok", Some(input)) => match haus::to_haus_json(input) {
                     Err(e) => Some(format!("can't write the input: {e}")),
                     Ok(written) if !same_json(&written, &json) => Some(format!("written as {written}")),
-                    Ok(_) => match haus::from_lossless_json(&json) {
+                    Ok(_) => match haus::from_haus_json(&json) {
                         Ok(v) if haus::equals(&v, input) => None,
                         Ok(v) => Some(format!("read as {}", canonical(&v))),
                         Err(e) => Some(format!("can't read it: {e}")),
                     },
                 },
-                ("Err", None) => rejected(haus::from_lossless_json(&json), &text(fields, "code")),
+                ("Err", None) => rejected(haus::from_haus_json(&json), &text(fields, "code")),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))
         })
         .collect();
-    assert!(failures.is_empty(), "lossless cases failed:\n{}", failures.join("\n"));
+    assert!(failures.is_empty(), "self-describing cases failed:\n{}", failures.join("\n"));
 }
 
-/// `Read { json, output }`: reading `json` without a schema gives `output`.
-/// `Err { json, code }`: reading `json` fails with `code`.
+/// `Read { json, output }`: importing `json` gives `output`.
+/// `Err { json, code }`: importing `json` fails with `code`.
 #[test]
-fn without_a_schema() {
-    let failures: Vec<String> = cases("schemaless.cases.haus")
+fn import() {
+    let failures: Vec<String> = cases("import.cases.haus")
         .iter()
         .filter_map(|(tag, fields)| {
             let json = text(fields, "json");
             let failure = match (tag.as_str(), fields.get("output")) {
-                ("Read", Some(output)) => match haus::from_json(&json) {
+                ("Read", Some(output)) => match haus::import_json(&json) {
                     Ok(v) if haus::equals(&v, output) => None,
                     Ok(v) => Some(format!("read as {}", canonical(&v))),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
-                ("Err", None) => rejected(haus::from_json(&json), &text(fields, "code")),
+                ("Err", None) => rejected(haus::import_json(&json), &text(fields, "code")),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))
         })
         .collect();
-    assert!(failures.is_empty(), "cases without a schema failed:\n{}", failures.join("\n"));
+    assert!(failures.is_empty(), "import cases failed:\n{}", failures.join("\n"));
 }
 
-/// Every `valid/NAME.json` is the lossless form of the file's values, as an
-/// array: writing them gives it, and reading it gives them back.
+/// Every `valid/NAME.jsonl` is the file's values as self-describing JSON
+/// Lines, an envelope per value: writing them gives it (line by line, as
+/// data), and reading it gives them back.
 #[test]
-fn valid_files_are_lossless_cases() {
+fn valid_files_are_self_describing_cases() {
     let mut paths: Vec<_> = fs::read_dir(suite("valid"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -123,23 +124,29 @@ fn valid_files_are_lossless_cases() {
         .collect();
     paths.sort();
     assert!(!paths.is_empty());
+    let lines = |text: &str| text.lines().map(str::to_owned).collect::<Vec<_>>();
     let failures: Vec<String> = paths
         .iter()
         .filter_map(|path| {
             let name = path.file_stem().unwrap().to_string_lossy().into_owned();
-            let values = Value::Array(haus::parse_bytes(&fs::read(path).unwrap()).unwrap());
-            let expected = fs::read_to_string(path.with_extension("json")).unwrap();
-            let failure = match haus::to_lossless_json(&values) {
+            let values = haus::parse_bytes(&fs::read(path).unwrap()).unwrap();
+            let expected = fs::read_to_string(path.with_extension("jsonl")).unwrap();
+            let failure = match haus::json::to_haus_json_lines(&values) {
                 Err(e) => Some(format!("can't write it: {e}")),
-                Ok(written) if !same_json(&written, &expected) => Some(format!("written as {written}")),
-                Ok(_) => match haus::from_lossless_json(&expected) {
-                    Ok(v) if haus::equals(&v, &values) => None,
-                    Ok(v) => Some(format!("read as {}", canonical(&v))),
+                Ok(written)
+                    if lines(&written).len() != lines(&expected).len()
+                        || !lines(&written).iter().zip(lines(&expected)).all(|(a, b)| same_json(a, &b)) =>
+                {
+                    Some(format!("written as {written}"))
+                }
+                Ok(_) => match haus::json::from_haus_json_lines(&expected) {
+                    Ok(v) if v.len() == values.len() && v.iter().zip(&values).all(|(a, b)| haus::equals(a, b)) => None,
+                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)))),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
             };
-            failure.map(|why| format!("{name}.json: {why}"))
+            failure.map(|why| format!("{name}.jsonl: {why}"))
         })
         .collect();
-    assert!(failures.is_empty(), "valid/*.json as lossless cases failed:\n{}", failures.join("\n"));
+    assert!(failures.is_empty(), "valid/*.jsonl as self-describing cases failed:\n{}", failures.join("\n"));
 }

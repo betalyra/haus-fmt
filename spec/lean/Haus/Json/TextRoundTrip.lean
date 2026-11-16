@@ -16,7 +16,8 @@ formed and within the limits.
 
 `parseLines_writeLines` and `parseLines_sound` do the same for JSON Lines
 (§16, "Streams"): the compact writer writes nothing below U+0020
-(`write_chars`), so no line break, and each value is one line.
+(`write_chars`), so no line break, and each value is one line. It writes
+no DEL, C1 or bidi control either (`write_clean`): every one is escaped.
 -/
 
 namespace Haus.JSON
@@ -185,22 +186,36 @@ theorem number_write {L : Limits} {t : String} {rest : Text} (hn : isJsonNumber 
 
 /-! ## Strings -/
 
-theorem hexChar_ctl : ∀ n < 0x20,
-    [('0' : Char), '0', Bytes.hexChar (n / 16), Bytes.hexChar (n % 16)].all isHexDigit = true ∧
-    digitsValue 16 ['0', '0', Bytes.hexChar (n / 16), Bytes.hexChar (n % 16)] = n := by decide
+theorem hexChar_spec : ∀ k < 16, isHexDigit (Bytes.hexChar k) = true ∧ hexValue (Bytes.hexChar k) = k := by decide
 
 theorem hexChar_toNat : ∀ n < 16, 0x20 ≤ (Bytes.hexChar n).toNat := by decide
 
+theorem hexChar_clean : ∀ n < 16, mustEscape (Bytes.hexChar n) = false := by decide
+
+/-- Four hex digits read back as the number they write. -/
+theorem hex4_hex4Of {n : Nat} (h : n < 0x10000) (r : Text) : hex4 (hex4Of n ++ r) = some (n, r) := by
+  obtain ⟨h1, v1⟩ := hexChar_spec (n / 4096 % 16) (Nat.mod_lt _ (by decide))
+  obtain ⟨h2, v2⟩ := hexChar_spec (n / 256 % 16) (Nat.mod_lt _ (by decide))
+  obtain ⟨h3, v3⟩ := hexChar_spec (n / 16 % 16) (Nat.mod_lt _ (by decide))
+  obtain ⟨h4, v4⟩ := hexChar_spec (n % 16) (Nat.mod_lt _ (by decide))
+  simp only [hex4Of, List.cons_append, List.nil_append, hex4, List.all_cons, List.all_nil, h1, h2, h3, h4,
+    Bool.and_self, ↓reduceIte, digitsValue, List.foldl, v1, v2, v3, v4, Option.some.injEq, Prod.mk.injEq, and_true]
+  omega
+
+/-- A character that `mustEscape`s is below U+10000 and no surrogate. -/
+theorem mustEscape_lt {c : Char} (h : mustEscape c = true) : c.toNat < 0x2070 := by
+  simp only [mustEscape, isRawControl, isBidi, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+  omega
+
 /-- How `escape` writes a character other than `"`, `\`, LF, CR and tab. -/
 theorem escape_other {c : Char} (h1 : c ≠ '"') (h2 : c ≠ '\\') (h3 : c ≠ '\n') (h4 : c ≠ '\r')
-    (h5 : c ≠ '\t') : escape c = if c.toNat < 0x20 then
-      ['\\', 'u', '0', '0', Bytes.hexChar (c.toNat / 16), Bytes.hexChar (c.toNat % 16)] else [c] := by
+    (h5 : c ≠ '\t') : escape c = if mustEscape c then '\\' :: 'u' :: hex4Of c.toNat else [c] := by
   unfold escape; split <;> simp_all
 
 /-- An escaped character reads back as itself. -/
-theorem strChars_escape {L : Limits} (c : Char) (f : Nat) (acc : List Char) (n : Nat) (r : Text)
+theorem strChars_escape {L : Limits} {strict : Bool} (c : Char) (f : Nat) (acc : List Char) (n : Nat) (r : Text)
     (hn : n ≤ L.maxStringLength) :
-    strChars L (f + 1) (escape c ++ r) acc n = strChars L f r (c :: acc) (n + 1) := by
+    strChars L strict (f + 1) (escape c ++ r) acc n = strChars L strict f r (c :: acc) (n + 1) := by
   have hn' : ¬ n > L.maxStringLength := by omega
   by_cases h1 : c = '"'
   · subst h1; simp [escape, strChars, hn']
@@ -215,20 +230,21 @@ theorem strChars_escape {L : Limits} (c : Char) (f : Nat) (acc : List Char) (n :
   rw [escape_other h1 h2 h3 h4 h5]
   split
   · rename_i hc
-    obtain ⟨hh, hv⟩ := hexChar_ctl c.toNat hc
-    have hx : hex4 ('0' :: '0' :: Bytes.hexChar (c.toNat / 16) :: Bytes.hexChar (c.toNat % 16) :: r) =
-        some (c.toNat, r) := by
-      simp only [hex4, hh, hv, ite_true]
+    have hlt := mustEscape_lt hc
+    have hx := hex4_hex4Of (n := c.toNat) (by omega) r
     have hhi : isHigh c.toNat = false := by simp [isHigh]; omega
     have hlo : isLow c.toNat = false := by simp [isLow]; omega
-    simp [strChars, hn', hx, hhi, hlo, Char.ofNat_toNat]
+    simp only [List.cons_append, strChars, hn', ↓reduceIte, hx, hhi, hlo, Bool.false_eq_true, Char.ofNat_toNat]
   · rename_i hc
-    simp [strChars, hn', h2, hc]
+    have hlt : ¬ c.toNat < 0x20 := by
+      simp only [mustEscape, isRawControl, Bool.or_eq_true, decide_eq_true_eq, not_or] at hc
+      exact hc.1.1
+    simp [strChars, hn', h2, hlt, hc]
 
 /-- A string's escaped characters read back as the string. -/
-theorem strChars_write {L : Limits} : ∀ (cs : List Char) (fuel : Nat) (acc : List Char) (n : Nat) (rest : Text),
+theorem strChars_write {L : Limits} {strict : Bool} : ∀ (cs : List Char) (fuel : Nat) (acc : List Char) (n : Nat) (rest : Text),
     n + cs.length ≤ L.maxStringLength → cs.length < fuel →
-    strChars L fuel (cs.flatMap escape ++ '"' :: rest) acc n = .ok (String.ofList (acc.reverse ++ cs), rest)
+    strChars L strict fuel (cs.flatMap escape ++ '"' :: rest) acc n = .ok (String.ofList (acc.reverse ++ cs), rest)
   | [], fuel + 1, acc, n, rest, hl, _ => by
     have hn' : ¬ n > L.maxStringLength := by simp at hl; omega
     simp [strChars, hn']
@@ -238,8 +254,8 @@ theorem strChars_write {L : Limits} : ∀ (cs : List Char) (fuel : Nat) (acc : L
       strChars_write cs fuel (c :: acc) (n + 1) rest (by omega) (by omega)]
     simp
 
-theorem strChars_writeString {L : Limits} (s : String) (rest : Text) (h : s.length ≤ L.maxStringLength) :
-    strChars L ((s.toList.flatMap escape ++ '"' :: rest).length + 1) (s.toList.flatMap escape ++ '"' :: rest) [] 0 =
+theorem strChars_writeString {L : Limits} {strict : Bool} (s : String) (rest : Text) (h : s.length ≤ L.maxStringLength) :
+    strChars L strict ((s.toList.flatMap escape ++ '"' :: rest).length + 1) (s.toList.flatMap escape ++ '"' :: rest) [] 0 =
       .ok (s, rest) := by
   have hle : ∀ cs : List Char, cs.length ≤ (cs.flatMap escape).length := by
     intro cs
@@ -248,7 +264,7 @@ theorem strChars_writeString {L : Limits} (s : String) (rest : Text) (h : s.leng
     | cons c cs ih =>
       have : 1 ≤ (escape c).length := by
         unfold escape; split <;> try simp
-        split <;> simp
+        split <;> simp [hex4Of]
       simp only [List.flatMap_cons, List.length_append, List.length_cons]
       omega
   have := hle s.toList
@@ -256,7 +272,8 @@ theorem strChars_writeString {L : Limits} (s : String) (rest : Text) (h : s.leng
     (by simp only [List.length_append, List.length_cons]; omega)]
   simp [String.ofList_toList]
 
-theorem escape_toNat (c : Char) : ∀ e ∈ escape c, 0x20 ≤ e.toNat := by
+/-- What `escape` writes needs no escape. -/
+theorem escape_clean (c : Char) : ∀ e ∈ escape c, mustEscape e = false := by
   by_cases h1 : c = '"'
   · subst h1; decide
   by_cases h2 : c = '\\'
@@ -269,25 +286,23 @@ theorem escape_toNat (c : Char) : ∀ e ∈ escape c, 0x20 ≤ e.toNat := by
   · subst h5; decide
   rw [escape_other h1 h2 h3 h4 h5]
   split
-  · rename_i hc
-    intro e he
-    simp only [List.mem_cons, List.not_mem_nil, or_false] at he
+  · intro e he
+    simp only [hex4Of, List.mem_cons, List.not_mem_nil, or_false] at he
     rcases he with rfl | rfl | rfl | rfl | rfl | rfl
     any_goals decide
-    · exact hexChar_toNat _ (by omega)
-    · exact hexChar_toNat _ (by omega)
+    all_goals exact hexChar_clean _ (Nat.mod_lt _ (by decide))
   · rename_i hc
     intro e he
     simp only [List.mem_singleton] at he
-    subst he; omega
+    subst he; simpa using hc
 
-theorem writeString_toNat (s : String) : ∀ e ∈ writeString s, 0x20 ≤ e.toNat := by
+theorem writeString_clean (s : String) : ∀ e ∈ writeString s, mustEscape e = false := by
   intro e he
   simp only [writeString, List.cons_append, List.mem_cons, List.mem_append, List.mem_flatMap,
     List.not_mem_nil, or_false] at he
   rcases he with rfl | ⟨c, _, hc⟩ | rfl
   · decide
-  · exact escape_toNat c e hc
+  · exact escape_clean c e hc
   · decide
 
 /-! ## What the writer writes -/
@@ -328,17 +343,34 @@ theorem writeMembers_mem {c : Char} : ∀ {ms : List (String × JSON)}, c ∈ wr
       · exact .inr (.inl h)
       · exact .inr (.inr ⟨z, List.mem_cons_of_mem _ hz, h⟩)
 
+theorem isDigit_toNat {c : Char} (h : isDigit c = true) : 48 ≤ c.toNat ∧ c.toNat ≤ 57 := by
+  simp only [isDigit, Bool.and_eq_true, decide_eq_true_eq] at h
+  have h1 := Char.le_def.mp h.1
+  have h2 := Char.le_def.mp h.2
+  simp only [UInt32.le_iff_toNat_le] at h1 h2
+  exact ⟨h1, h2⟩
+
+theorem isNumberChar_clean {c : Char} (h : isNumberChar c = true) : mustEscape c = false := by
+  simp only [isNumberChar, Bool.or_eq_true, beq_iff_eq] at h
+  rcases h with ((((h | rfl) | rfl) | rfl) | rfl) | rfl
+  · have := isDigit_toNat h
+    simp only [mustEscape, isRawControl, isBidi, Bool.or_eq_false_iff, Bool.and_eq_false_imp, decide_eq_true_eq,
+      decide_eq_false_iff_not]
+    omega
+  all_goals decide
+
 /--
-**The writer writes no control character**: every character of `write j`
-is U+0020 or above. In particular no line break, so in JSON Lines each value
-is one line.
+**The writer writes no character that must be escaped** (§16): no control
+character (below U+0020, DEL, C1) and no bidi control, raw, anywhere in
+`write j`. So the self-describing reader, which rejects them raw, reads what
+any writer writes.
 -/
-theorem write_chars {j : JSON} (h : WellFormed j) : ∀ c ∈ write j, 0x20 ≤ c.toNat := by
+theorem write_clean {j : JSON} (h : WellFormed j) : ∀ c ∈ write j, mustEscape c = false := by
   induction h with
   | null => decide
   | bool b => cases b <;> decide
-  | num t ht => exact fun c hc => isNumberChar_toNat (isJsonNumber_chars ht c hc)
-  | str s => exact writeString_toNat s
+  | num t ht => exact fun c hc => isNumberChar_clean (isJsonNumber_chars ht c hc)
+  | str s => exact writeString_clean s
   | arr xs _ ih =>
     intro c hc
     simp only [write, List.cons_append, List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hc
@@ -356,9 +388,20 @@ theorem write_chars {j : JSON} (h : WellFormed j) : ∀ c ∈ write j, 0x20 ≤ 
     · rcases writeMembers_mem hc with rfl | rfl | ⟨m, hm, hc | hc⟩
       · decide
       · decide
-      · exact writeString_toNat _ c hc
+      · exact writeString_clean _ c hc
       · exact ih m hm c hc
     · decide
+
+/--
+**The writer writes no control character**: every character of `write j`
+is U+0020 or above. In particular no line break, so in JSON Lines each value
+is one line.
+-/
+theorem write_chars {j : JSON} (h : WellFormed j) : ∀ c ∈ write j, 0x20 ≤ c.toNat := by
+  intro c hc
+  have := write_clean h c hc
+  simp only [mustEscape, isRawControl, Bool.or_eq_false_iff, decide_eq_false_iff_not] at this
+  omega
 
 /-- What a value's text starts with: not whitespace, not `]`, not a byte order mark. -/
 def Start (c : Char) : Prop := isWs c = false ∧ c ≠ ']' ∧ c ≠ '﻿'
@@ -409,10 +452,10 @@ theorem write_ne_nil {j : JSON} (h : WellFormed j) : write j ≠ [] := by
 /-! ## Reading what is written -/
 
 section
-variable {L : Limits}
+variable {L : Limits} {strict : Bool}
 
 theorem value_number {f d : Nat} {c : Char} {r : Text} (h : c = '-' ∨ isDigit c = true) :
-    value L (f + 1) d (c :: r) = number L (c :: r) := by
+    value L strict (f + 1) d (c :: r) = number L (c :: r) := by
   rcases h with rfl | h
   · simp [value]
   · simp [value, h, digit_ne h (d := '{') rfl, digit_ne h (d := '[') rfl, digit_ne h (d := '"') rfl,
@@ -432,15 +475,15 @@ members after the first `{` (`members`). By induction on the fuel.
 -/
 theorem read_write : ∀ fuel : Nat,
     (∀ (j : JSON) (d : Nat) (rest : Text), WellFormed j → Fits L d j → (write j).length ≤ fuel →
-      NumStop rest → value L fuel d (write j ++ rest) = .ok (j, rest)) ∧
+      NumStop rest → value L strict fuel d (write j ++ rest) = .ok (j, rest)) ∧
     (∀ (xs : List JSON) (d : Nat) (rest : Text) (acc : List JSON), xs ≠ [] → (∀ x ∈ xs, WellFormed x) →
       (∀ x ∈ xs, Fits L d x) → (writeItems xs).length < fuel →
-      items L fuel d (writeItems xs ++ ']' :: rest) acc = .ok (.arr (acc.reverse ++ xs), rest)) ∧
+      items L strict fuel d (writeItems xs ++ ']' :: rest) acc = .ok (.arr (acc.reverse ++ xs), rest)) ∧
     (∀ (ms : List (String × JSON)) (d : Nat) (rest : Text) (acc : List (String × JSON)) (keys : List String),
       ms ≠ [] → (ms.map (·.1)).Nodup → (∀ m ∈ ms, m.1 ∉ keys) → (∀ m ∈ ms, WellFormed m.2) →
       (∀ m ∈ ms, m.1.length ≤ L.maxStringLength) → (∀ m ∈ ms, Fits L d m.2) →
       (writeMembers ms).length < fuel →
-      members L fuel d (writeMembers ms ++ '}' :: rest) acc keys = .ok (.obj (acc.reverse ++ ms), rest))
+      members L strict fuel d (writeMembers ms ++ '}' :: rest) acc keys = .ok (.obj (acc.reverse ++ ms), rest))
   | 0 => by
     refine ⟨fun j _ _ hw _ hl _ => ?_, fun _ _ _ _ _ _ _ hl => absurd hl (Nat.not_lt_zero _),
       fun _ _ _ _ _ _ _ _ _ _ _ hl => absurd hl (Nat.not_lt_zero _)⟩
@@ -517,7 +560,7 @@ theorem read_write : ∀ fuel : Nat,
         simp only at he
         have hx := hv x d ('}' :: rest) (hw (k, x) (by simp)) (hf (k, x) (by simp)) (by omega) numStop_brace
         rw [he, List.cons_append] at hx
-        have hsk := strChars_writeString (L := L) k (':' :: c :: (r ++ '}' :: rest)) (hs (k, x) (by simp))
+        have hsk := strChars_writeString (L := L) (strict := strict) k (':' :: c :: (r ++ '}' :: rest)) (hs (k, x) (by simp))
         simp only [List.cons_append, List.append_assoc, List.nil_append, he]
         rw [members, hsk]
         simp [hk (k, x) (by simp), skipWs_colon, skipWs_start hc, hx, skipWs_brace, bind, Except.bind]
@@ -541,7 +584,7 @@ theorem read_write : ∀ fuel : Nat,
           (fun z hz => hw z (by simp [hz])) (fun z hz => hs z (by simp [hz]))
           (fun z hz => hf z (by simp [hz])) (by omega)
         rw [hm', List.cons_append] at h2
-        have hsk := strChars_writeString (L := L) k
+        have hsk := strChars_writeString (L := L) (strict := strict) k
           (':' :: c :: (r ++ ',' :: '"' :: ((writeMembers (m :: ms)).tail ++ '}' :: rest))) (hs (k, x) (by simp))
         rw [hm']
         simp only [List.cons_append, List.append_assoc, List.nil_append, he]
@@ -550,7 +593,7 @@ theorem read_write : ∀ fuel : Nat,
           Except.bind]
 
 theorem value_write {j : JSON} {d fuel : Nat} {rest : Text} (hw : WellFormed j) (hf : Fits L d j)
-    (hl : (write j).length ≤ fuel) (hr : NumStop rest) : value L fuel d (write j ++ rest) = .ok (j, rest) :=
+    (hl : (write j).length ≤ fuel) (hr : NumStop rest) : value L strict fuel d (write j ++ rest) = .ok (j, rest) :=
   (read_write fuel).1 j d rest hw hf hl hr
 
 theorem dropBom_start {c : Char} {r : Text} (h : Start c) : dropBom (c :: r) = c :: r := by
@@ -560,9 +603,9 @@ theorem dropBom_start {c : Char} {r : Text} (h : Start c) : dropBom (c :: r) = c
 
 /-- One JSON text, nested at most `d`, without a byte order mark. -/
 theorem parseText_write {j : JSON} {d : Nat} (hw : WellFormed j) (hf : Fits L d j) :
-    parseText L d (write j) = .ok j := by
+    parseText L strict d (write j) = .ok j := by
   obtain ⟨c, r, he, hc⟩ := write_head hw
-  have hv := value_write (fuel := 2 * (write j).length + 4) (rest := []) hw hf (by omega) numStop_nil
+  have hv := value_write (strict := strict) (fuel := 2 * (write j).length + 4) (rest := []) hw hf (by omega) numStop_nil
   rw [List.append_nil, he] at hv
   unfold parseText
   rw [he, skipWs_start hc, hv]
@@ -656,7 +699,7 @@ theorem parseLines_writeLines {js : List JSON} (hw : ∀ j ∈ js, WellFormed j)
 
 /-- A string read is within the length limit. -/
 theorem strChars_length : ∀ (fuel : Nat) (t : Text) (acc : List Char) (n : Nat) (s : String) (r : Text),
-    strChars L fuel t acc n = .ok (s, r) → acc.length = n → s.length ≤ L.maxStringLength
+    strChars L strict fuel t acc n = .ok (s, r) → acc.length = n → s.length ≤ L.maxStringLength
   | 0, _, _, _, _, _, h, _ => by simp [strChars] at h
   | f + 1, t, acc, n, s, r, h, hn => by
     have ih := strChars_length f
@@ -676,7 +719,9 @@ theorem strChars_length : ∀ (fuel : Nat) (t : Text) (acc : List Char) (n : Nat
       · cases h
       · split at h
         · cases h
-        · exact ih _ _ _ _ _ h (by simp [hn])
+        · split at h
+          · split at h <;> cases h
+          · exact ih _ _ _ _ _ h (by simp [hn])
 
 theorem number_sound {d : Nat} {t : Text} {j : JSON} {r : Text} (h : number L t = .ok (j, r)) :
     WellFormed j ∧ Fits L d j := by
@@ -699,12 +744,12 @@ What the reader's three functions return is well formed and within the
 limits. By induction on the fuel.
 -/
 theorem read_sound : ∀ fuel : Nat,
-    (∀ d t j r, value L fuel d t = .ok (j, r) → WellFormed j ∧ Fits L d j) ∧
-    (∀ d t acc j r, (∀ x ∈ acc, WellFormed x ∧ Fits L d x) → items L fuel d t acc = .ok (j, r) →
+    (∀ d t j r, value L strict fuel d t = .ok (j, r) → WellFormed j ∧ Fits L d j) ∧
+    (∀ d t acc j r, (∀ x ∈ acc, WellFormed x ∧ Fits L d x) → items L strict fuel d t acc = .ok (j, r) →
       ∃ xs, j = .arr xs ∧ ∀ x ∈ xs, WellFormed x ∧ Fits L d x) ∧
     (∀ d t acc keys j r, keys = acc.map (·.1) → (acc.map (·.1)).Nodup →
       (∀ m ∈ acc, m.1.length ≤ L.maxStringLength ∧ WellFormed m.2 ∧ Fits L d m.2) →
-      members L fuel d t acc keys = .ok (j, r) →
+      members L strict fuel d t acc keys = .ok (j, r) →
       ∃ ms, j = .obj ms ∧ (ms.map (·.1)).Nodup ∧
         ∀ m ∈ ms, m.1.length ≤ L.maxStringLength ∧ WellFormed m.2 ∧ Fits L d m.2)
   | 0 => by
@@ -736,7 +781,7 @@ theorem read_sound : ∀ fuel : Nat,
         · obtain ⟨xs, rfl, hxs⟩ := hi _ _ _ _ _ (by simp) h
           exact ⟨.arr _ (fun x hx => (hxs x hx).1), .arr _ _ (fun x hx => (hxs x hx).2)⟩
       · rename_i r0
-        cases hs : strChars L (r0.length + 1) r0 [] 0 with
+        cases hs : strChars L strict (r0.length + 1) r0 [] 0 with
         | error e => rw [hs] at h; cases h
         | ok p =>
           rw [hs] at h
@@ -801,7 +846,7 @@ theorem read_sound : ∀ fuel : Nat,
       · cases h
 
 /-- What `parseText` reads is well formed and nested at most `d`. -/
-theorem parseText_sound {d : Nat} {t : Text} {j : JSON} (h : parseText L d t = .ok j) :
+theorem parseText_sound {d : Nat} {t : Text} {j : JSON} (h : parseText L strict d t = .ok j) :
     WellFormed j ∧ Fits L d j := by
   simp only [parseText, bind, Except.bind] at h
   split at h

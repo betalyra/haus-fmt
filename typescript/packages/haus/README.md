@@ -89,7 +89,7 @@ const order = h.parse(schemas.Order!, data)
 
 A case whose record payload has a field named `_tag` (`< Odd { _tag: Int32 } >`)
 can't put its fields beside the tag: it is nested, `{ _tag: "Odd"; value: { _tag: number } }`
-(and has no plain JSON form, spec §16.3).
+(and has no schema-based JSON form, spec §16.3; nor has one with a field named `_args`).
 
 `h.Maybe<A>` is `{ _tag: "None" } | { _tag: "Some"; value: A }`, tagged like
 every other variant, so `Maybe (Maybe Int)` keeps `None` and `Some(None)`
@@ -123,8 +123,8 @@ longer than `maxNumberLength` is written in hex, so that the reader takes it.
 
 ## JSON
 
-Schemas also read and write plain JSON (spec §16.3), the JSON a JSON consumer
-expects, with the schema saying what JSON can't (that a string is a date or a
+Schemas also read and write schema-based JSON (spec §16.3), the JSON a JSON
+consumer expects, with the schema saying what JSON can't (that a string is a date or a
 decimal):
 
 ```ts
@@ -148,16 +148,17 @@ for await (const o of h.decodeJsonLines(Order, response.body!)) { … }
 | `Array a`, `Map v`, records | arrays and objects; a missing optional field is a missing member, never `null` |
 | a closed variant of tags without payload (`h.Enum`) | a string, `"Debug"` |
 | other variants | `{"_tag": "Circle", "r": 1.5}`: a record payload's fields beside `_tag`, one argument as `"value"`, several as `"values"` |
-| an unknown value of an open variant | `{"_tag": "Hexagon", "args": […]}`, the arguments lossless |
-| `Any` | its lossless form (below) |
+| an unknown value of an open variant | `{"_tag": "Hexagon", "_args": […]}`, the arguments self-describing (without the envelope) |
+| `Any` | its self-describing form (below), without the envelope |
 | `Secret a` | as `a`; errors inside never show the value |
 
 Reading follows decoding: an open record ignores members it doesn't list, a
 closed one rejects them, an integer type takes only whole numbers (`1.0` is
 not one), an open variant reads a `"_tag"` it doesn't list as an unknown
-value (with `"args"` alone, read losslessly; with other members, those as a
-record payload read without a schema, so `{"_tag": "Hexagon", "sides": 6}` is
-`Hexagon { sides: 6 }`). A record payload with a field named `_tag` has no plain form. Every
+value (with `"_args"` alone, its arguments self-describing; with other
+members, those as a record payload, imported, so `{"_tag": "Hexagon", "sides": 6}`
+is `Hexagon { sides: 6 }`). A record payload with a field named `_tag` or
+`_args` has no schema-based form. Every
 schema of `h.` has a JSON form; a schema written by hand (`h.withStandard`)
 declares one with `json` (a `JsonType`), or has none. `h.toJsonValue` and
 `h.fromJsonValue` work on parsed JSON instead of text.
@@ -165,21 +166,26 @@ declares one with `json` (a `JsonType`), or has none. `h.toJsonValue` and
 Without a schema:
 
 ```ts
-import { fromJson, fromLosslessJson, parseJson, toLosslessJson } from "@haus-fmt/haus"
+import { fromHausJson, importJson, parseJson, toHausJson } from "@haus-fmt/haus"
 
-fromJson(`{"total": 19.90, "ok": true, "note": null}`)   // JSON as haus (spec §16.1): { total: 19.90, ok: True, note: None }
-toLosslessJson(value)       // any haus value as JSON (spec §16.2): {"rec":{"total":{"num":"19.90"}}}
-fromLosslessJson(text)      // and back to an equal value; anything but a lossless form is an error
+toHausJson(value)           // self-describing JSON, every haus value exactly (spec §16.2): {"_haus":1,"_value":{"_rec":{"total":{"_num":"19.90"}}}}
+fromHausJson(text)          // and back to an equal value; anything but the envelope of a self-describing form is an error
+importJson(`{"total": 19.90, "ok": true, "note": null}`)   // any JSON as haus (spec §16.1): { total: 19.90, ok: True, note: None }
 parseJson(text)             // the strict I-JSON reader: numbers as JsonNumber (exact text), duplicate members rejected
 ```
 
-All of them read RFC 8259 JSON restricted to I-JSON: no duplicate member
-names, no unpaired surrogates, and the limits of spec §7, number literals
-included. Numbers are never rounded through a binary float, except where the
-type says `Float32` or `Float64`. `stringifyJson` writes JSON values
-compactly, with numbers as their text; `JSON.stringify` does too where the
-engine has `JSON.rawJSON`. JSON Lines without a schema: `parseJsonLines`,
-`fromJsonLines`, `fromLosslessJsonLines` and `toLosslessJsonLines`. Readers of
+The caller says which form it reads: `fromHausJson` requires the envelope,
+`h.fromJson` and `importJson` never look for one (to them it is an object
+like any other). All of them read RFC 8259 JSON restricted to I-JSON: no
+duplicate member names, no unpaired surrogates, and the limits of spec §7,
+number literals included; `fromHausJson` also rejects raw DEL, C1 and bidi
+controls, which haus writers always escape. Numbers are never rounded through
+a binary float, except where the type says `Float32` or `Float64`.
+`stringifyJson` writes JSON values compactly, with numbers as their text and
+DEL, C1 and bidi controls escaped; `JSON.stringify` keeps numbers exact too
+where the engine has `JSON.rawJSON`, but writes those controls raw. JSON Lines
+without a schema: `parseJsonLines`, `importJsonLines`, `fromHausJsonLines` and
+`toHausJsonLines` (an envelope per line). Readers of
 JSON Lines accept CR LF and a missing last line feed (`requireTerminator`
 makes it an error); an empty line is an error, and a byte order mark is
 ignored only at the start of the stream.
@@ -214,7 +220,8 @@ decoders and encoders and the JSON mappings recurse, and 512 levels fit
 Node's default stack with room to spare (the shallowest path, encoding with a
 schema, overflows near 750). A larger `maxDepth` is a `RangeError` naming the
 maximum, thrown when the limits are given. Raw JSON (`parseJson`) counts JSON
-levels, up to `jsonDepth(512)`, 2049, as many as 512 haus levels take.
+levels, up to `hausJsonDepth(512)`, 2050, as many as 512 haus levels take in
+self-describing JSON (`jsonDepth(512)`, 2049, in schema-based JSON).
 Formatting, the canonical form and hashing don't recurse: they take any depth.
 
 ## Errors

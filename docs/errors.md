@@ -36,7 +36,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 **Decoding and encoding:** [type-mismatch](#type-mismatch), [not-an-integer](#not-an-integer), [out-of-range](#out-of-range), [missing-field](#missing-field), [unknown-field](#unknown-field), [unknown-tag](#unknown-tag), [wrong-payload](#wrong-payload), [invalid-time](#invalid-time), [invalid-secret](#invalid-secret), [cannot-encode](#cannot-encode), [cyclic-value](#cyclic-value), [step-budget](#step-budget), [too-many-nodes](#too-many-nodes)
 
-**JSON:** [json-syntax](#json-syntax), [unpaired-surrogate](#unpaired-surrogate), [lossless-form](#lossless-form), [lossless-number](#lossless-number), [lossless-bytes](#lossless-bytes), [invalid-tag](#invalid-tag), [invalid-base64](#invalid-base64), [missing-member](#missing-member), [unexpected-member](#unexpected-member), [no-json-form](#no-json-form)
+**JSON:** [json-syntax](#json-syntax), [unpaired-surrogate](#unpaired-surrogate), [haus-json-form](#haus-json-form), [haus-json-version](#haus-json-version), [haus-json-number](#haus-json-number), [haus-json-bytes](#haus-json-bytes), [invalid-tag](#invalid-tag), [invalid-base64](#invalid-base64), [missing-member](#missing-member), [unexpected-member](#unexpected-member), [no-json-form](#no-json-form)
 
 **Hints and warnings:** [unknown-attribute](#unknown-attribute), [deprecated](#deprecated), [unlisted-field](#unlisted-field), [unlisted-tag](#unlisted-tag)
 
@@ -204,7 +204,7 @@ Some()
 
 ## invalid-number
 
-*Syntax.* A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in plain JSON, §16.3).
+*Syntax.* A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
 
 ```haus
 007
@@ -235,7 +235,7 @@ b"
 
 ## control-character
 
-*Syntax.* A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string.
+*Syntax.* A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string: C0 in any JSON, DEL and C1 in self-describing JSON (§16).
 
 For example: "a⟨U+0007⟩b": a string with a raw BEL character.
 
@@ -243,7 +243,7 @@ For example: "a⟨U+0007⟩b": a string with a raw BEL character.
 
 ## bidi-control
 
-*Syntax.* A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, where it could reorder how the text is displayed ("Trojan Source", §9).
+*Syntax.* A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, or in a self-describing JSON string (§16), where it could reorder how the text is displayed ("Trojan Source", §9).
 
 For example: // access⟨U+202E⟩ denied: a comment with a raw right-to-left override.
 
@@ -938,10 +938,10 @@ For example: a value built in code whose arrays share one another a million time
 
 *JSON.* Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.
 
-Read as lossless JSON:
+Read as self-describing JSON:
 
 ```json
-{"tag": "A",}
+{"_haus": 1,}
 ```
 
 **Fix:** Write valid JSON; the message says what was expected.
@@ -950,65 +950,77 @@ Read as lossless JSON:
 
 *JSON.* A JSON string with half of a UTF-16 surrogate pair, raw or as `\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).
 
-Read as lossless JSON:
+Read as self-describing JSON:
 
 ```json
-"\uD800"
+{"_haus": 1, "_value": "\uD800"}
 ```
 
 **Fix:** Write both halves of the surrogate pair, or the character itself.
 
-## lossless-form
+## haus-json-form
 
-*JSON.* JSON that isn't one of the lossless forms (§16.2): a bare number, `true`, `null`, an object with other members, a `rec` that isn't an object, an `args` that isn't a non-empty array.
+*JSON.* JSON that isn't self-describing JSON (§16.2): a text without the envelope `{"_haus": 1, "_value": …}`, an envelope with other members, a bare number, `true`, `null`, an object with other members, a `_rec` that isn't an object, an `_args` that isn't a non-empty array.
 
-Read as lossless JSON:
+Read as self-describing JSON:
 
 ```json
-1
+{"_haus": 1, "_value": 1}
 ```
 
-**Fix:** Write one of the lossless forms of §16.2: a string, an array, or an object with `num`, `bytes`, `rec`, or `tag` (and `args`).
+**Fix:** Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead.
 
-## lossless-number
+## haus-json-version
 
-*JSON.* A lossless `num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
+*JSON.* A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.
 
-Read as lossless JSON:
+Read as self-describing JSON:
 
 ```json
-{"num": "1E5"}
+{"_haus": 2, "_value": "a"}
+```
+
+**Fix:** Read it with a newer version of haus, or write `"_haus": 1`.
+
+## haus-json-number
+
+*JSON.* A self-describing `_num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
+
+Read as self-describing JSON:
+
+```json
+{"_haus": 1, "_value": {"_num": "1E5"}}
 ```
 
 **Fix:** Write the number's normalized literal (§2) as a string.
 
-## lossless-bytes
+## haus-json-bytes
 
-*JSON.* A lossless `bytes` that isn't two lowercase hex digits per byte.
+*JSON.* A self-describing `_bytes` that isn't two lowercase hex digits per byte.
 
-Read as lossless JSON:
+Read as self-describing JSON:
 
 ```json
-{"bytes": "FF"}
+{"_haus": 1, "_value": {"_bytes": "FF"}}
 ```
 
 **Fix:** Write the bytes as lowercase hex, two digits per byte.
 
 ## invalid-tag
 
-*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a lossless `tag`, in a plain `_tag`, or in a value built in code.
+*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.
 
-Read as lossless JSON:
+Read as self-describing JSON:
 
 ```json
-{"tag": "lower"}
+{"_haus": 1, "_value": {"_tag": "lower"}}
 ```
 
 **Fix:** Start the tag with a capital letter and use only letters, digits and `_`.
 
 ## invalid-base64
 
-*JSON.* Plain JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
+*JSON.* Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
 
 ```haus-schema
 type Root = Bytes
@@ -1022,7 +1034,7 @@ type Root = Bytes
 
 ## missing-member
 
-*JSON.* Plain JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
+*JSON.* Schema-based JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
 
 ```haus-schema
 type Root = < Ok Int | Err String >
@@ -1036,7 +1048,7 @@ type Root = < Ok Int | Err String >
 
 ## unexpected-member
 
-*JSON.* Plain JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
+*JSON.* Schema-based JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
 
 ```haus-schema
 type Root = < Ok Int | Empty >
@@ -1050,11 +1062,11 @@ type Root = < Ok Int | Empty >
 
 ## no-json-form
 
-*JSON.* A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` in plain JSON (§16.3), a type with no plain mapping.
+*JSON.* A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` or `_args` in schema-based JSON (§16.3), a type with no schema-based form.
 
-For example: toPlainJson of Odd { _tag: 1 }, for the case `Odd { _tag: Int32 }`.
+For example: toJson of Odd { _tag: 1 }, for the case `Odd { _tag: Int32 }`.
 
-**Fix:** Rename the field, or use the lossless mapping.
+**Fix:** Rename the field, or use self-describing JSON.
 
 ## unknown-attribute
 

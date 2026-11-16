@@ -17,7 +17,7 @@ and a reference parser that computes it.
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new` |
-| [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, JSON without a schema, lossless and plain JSON, and the proofs that they round-trip and are unique |
+| [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique |
 | [`Main.lean`](Main.lean) | `haus-ref`, the parser on the command line |
 | [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` and `--json-suite` |
 
@@ -26,7 +26,7 @@ the Lean version is pinned in `lean-toolchain`. No Mathlib.
 
 ```sh
 lake build
-.lake/build/bin/haus-ref FILE                    # values in the test-suite JSON encoding
+.lake/build/bin/haus-ref FILE                    # values as self-describing JSON Lines (spec §16.2)
 .lake/build/bin/haus-ref --suite ../../test-suite # the conformance suite
 .lake/build/bin/haus-ref --time Date 2026-02-29     # a std/time check
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §15)
@@ -42,17 +42,19 @@ after changing a schema file (`node scripts/schema-types.ts > schema-suite.json`
 The JSON suite's types are written the same way, from `test-suite/json`
 (`node scripts/schema-types.ts ../../test-suite/json > json-suite.json`).
 For fuzzing the JSON mappings, one case per line: `--json-batch TYPES FILE`
-(`SUITE TYPE HEX`, a haus value: decode and write plain JSON),
+(`SUITE TYPE HEX`, a haus value: decode and write schema-based JSON),
 `--json-read-batch TYPES FILE` (`SUITE TYPE HEX`, JSON text: read with the
-type), `--lossless-batch FILE` (a haus value: its lossless JSON),
-`--lossless-read-batch FILE` and `--schemaless-read-batch FILE` (JSON text
-read as a haus value). Each prints `ok …` or `err …`.
+type), `--haus-json-batch FILE` (a haus value: its self-describing JSON, in
+the envelope), `--haus-json-read-batch FILE` (an envelope read as a haus
+value) and `--import-batch FILE` (any JSON text imported as a haus value).
+Each prints `ok …` or `err …`.
 
 Errors carry the code of spec §17 ([`Haus/ErrorCode.lean`](Haus/ErrorCode.lean)):
-the parser's (syntax and limits) and the schema decoder's. `--batch` prints
-`err LINE COLUMN CODE REASON`, `--schema-batch` prints `err PLACE CODE REASON`
-(`-` where there is none, as for the JSON mappings, which have no codes yet),
-and `--suite` and `--schema-suite` check the codes the suite expects.
+the parser's (syntax and limits), the schema decoder's and the JSON
+mappings'. `--batch` prints `err LINE COLUMN CODE REASON`, `--schema-batch`
+and the JSON batch modes print `err PLACE CODE REASON` (`-` where there is
+none), and `--suite`, `--schema-suite` and `--json-suite` check the codes
+the suite expects.
 
 ## What is proven
 
@@ -178,31 +180,40 @@ literals.
 as data (`JSON`): numbers keep their text, and `JSON.Equiv` compares as §16
 does, member order ignored and numbers by text. A strict reader for JSON text
 (I-JSON, the limits, a leading byte order mark, JSON Lines) reads back what
-the compact writer writes, for exactly the JSON the reader returns. All
-cases of `test-suite/json` pass, and every `valid/NAME.json` reads back as
-its file's values. A value is *well formed* (`Value.wf`) when its numbers are normalized
-literals and its tags are tags, as every parsed value is (`parse_wf`).
+the compact writer writes, for exactly the JSON the reader returns; the
+writer escapes every control character and bidi control. Three forms sit
+on it: the JSON import (`JSON.toValue`, `readImport`), self-describing JSON
+(`selfDescribing`, the value without the envelope, as in `Any`; `hausJson`,
+the envelope `{"_haus": 1, "_value": …}` around it; `readHausJson`, which
+also rejects raw DEL, C1 and bidi controls), and schema-based JSON
+(`toJson`, `fromJson`, `readJson`). All cases of `test-suite/json` pass,
+and every `valid/NAME.jsonl` reads back as its file's values, one envelope
+per line. A value is *well formed* (`Value.wf`) when its numbers are
+normalized literals and its tags are tags, as every parsed value is
+(`parse_wf`).
 
 | Theorem | Says |
 |---|---|
-| `lossless_read_write`, `fromLossless_lossless` | Reading the lossless JSON of a well-formed value gives the value back (§16.2) |
-| `lossless_unique` | Every JSON the lossless reader accepts is, as data, the lossless form of the value it reads |
-| `lossless_equiv_iff` | Two values have the same lossless JSON, as data, exactly when they are equal (§2); for every value |
-| `fromLossless_wf` | What the lossless reader returns is well formed |
-| `plain_round_trip` | If `decode env t v = .ok x` (`v` well formed) and `toJson env t x = .ok j`, then `fromJson env t j = .ok x` (§16.3) |
-| `plain_injective` | Two values decoded with `t` (from well-formed values) with the same plain JSON are the same |
-| `toJson_error` | Writing a decoded value fails only for a record payload with a field named `_tag` (§16.3) |
+| `hausJson_read_write`, `fromHausJson_hausJson` | Reading the self-describing JSON of a well-formed value gives the value back (§16.2); `selfDescribing_read_write`, `fromSelfDescribing_selfDescribing` without the envelope |
+| `hausJson_unique`, `selfDescribing_unique` | Every JSON the self-describing reader accepts is, as data, the self-describing JSON of the value it reads |
+| `hausJson_equiv_iff`, `selfDescribing_equiv_iff` | Two values have the same self-describing JSON, as data, exactly when they are equal (§2); for every value |
+| `fromHausJson_wf`, `fromSelfDescribing_wf` | What the self-describing reader returns is well formed |
+| `schemaBased_round_trip` | If `decode env t v = .ok x` (`v` well formed) and `toJson env t x = .ok j`, then `fromJson env t j = .ok x` (§16.3) |
+| `schemaBased_injective` | Two values decoded with `t` (from well-formed values) with the same schema-based JSON are the same |
+| `toJson_error` | Writing a decoded value fails only for a record payload with a field named `_tag` or `_args` (§16.3) |
 | `base64_decode_encode`, `base64_encode_decode` | Base64 reads back, and only canonical base64 is read |
-| `hex_decode_encode`, `hex_encode_decode` | The same for lowercase hex (lossless `bytes`) |
+| `hex_decode_encode`, `hex_encode_decode` | The same for lowercase hex (self-describing `_bytes`) |
 | `normalizeNumber_normal` | A normalized literal normalizes to itself, so a `Decimal` reads back unchanged |
-| `parse_wf`, `lossless_parsed`, `plain_parsed` | Every value the parser returns is well formed, so both round trips hold for every value of every haus text |
+| `parse_wf`, `hausJson_parsed`, `schemaBased_parsed` | Every value the parser returns is well formed, so both round trips hold for every value of every haus text |
 | `JSON.parse_write`, `JSON.parse_sound`, `JSON.parse_write_iff` | `JSON.parse L (JSON.write j) = .ok j` exactly when `j` is well formed (`JSON.WellFormed`: number tokens, no duplicate member names) and within the limits (`JSON.Fits`) |
 | `JSON.parseLines_writeLines`, `JSON.parseLines_sound` | The same for JSON Lines: the compact writer writes nothing below U+0020 (`JSON.write_chars`), so each value is one line |
-| `JSON.lossless_wellFormed`, `toJson_wellFormed` | The lossless and the plain JSON of a value without duplicate keys are well formed: number tokens (`spell_json`: a float's spelling is a JSON number), distinct member names |
-| `JSON.lossless_fits`, `toJson_fits` | The lossless and the plain JSON of a value within the haus limits (`Value.fits`) are within the JSON limits (`JSON.Fits`), when the limits leave room for the forms' member names and numbers (`LosslessOk`, `PlainOk`: true of the defaults) |
-| `JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`, `plain_text_parsed` | The lossless and plain round trips through JSON text, for a value without duplicate keys within the limits |
+| `JSON.write_clean` | The writer writes no control character (C0, DEL, C1) and no bidi control raw: it escapes them all (§16) |
+| `JSON.hausJson_wellFormed`, `toJson_wellFormed` | The self-describing and the schema-based JSON of a value without duplicate keys are well formed: number tokens (`spell_json`: a float's spelling is a JSON number), distinct member names |
+| `JSON.hausJson_fits`, `toJson_fits` | The self-describing and the schema-based JSON of a value within the haus limits (`Value.fits`) are within the JSON limits (`JSON.Fits`; nesting `4 · maxDepth + 2` with the envelope, `4 · maxDepth + 1` without), when the limits leave room for the forms' member names and numbers (`SelfDescribingOk`, `SchemaBasedOk`: true of the defaults) |
+| `JSON.readHausJson_writeHausJson`, `readJson_write`, `hausJson_text_parsed`, `schemaBased_text_parsed` | The self-describing and schema-based round trips through JSON text, for a value without duplicate keys within the limits |
+| `JSON.readHausJsonLines_writeHausJsonLines`, `hausJsonLines_text_parsed` | The same for self-describing JSON Lines, one envelope per line: a parsed file's values read back from them |
 
-The plain round trip goes by induction on the rules of decoding (`Dec`),
+The schema-based round trip goes by induction on the rules of decoding (`Dec`),
 with `floatLaw` for floats. A `Maybe` writes `None` as `null` only when its
 argument's JSON can't be `null` (`nullArg?_next`, `toJsonC_null`), whatever
 the rule for cycles of `Maybe`s decides, so `null` is never ambiguous.

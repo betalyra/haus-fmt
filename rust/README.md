@@ -45,7 +45,7 @@ haus_build::Config::new()
 mod order { haus::include_schema!("order"); }
 let order: order::Root = haus::from_str(&text)?;          // checks every rule of the schema
 let text = haus::to_string(&order)?;                      // back to haus (compact)
-let json = haus::json::to_string(&order)?;                // plain JSON (spec §16.3)
+let json = haus::json::to_string(&order)?;                // schema-based JSON (spec §16.3)
 let order: order::Root = haus::json::from_str(&json)?;
 ```
 
@@ -178,7 +178,7 @@ version that takes other limits:
 |---|---|
 | haus text | `haus::parse_with`, `haus::stream::Reader::new(Options { limits, .. })`, `stream::values_with` |
 | writing for such a reader | `haus::to_string_with`, `haus::ser::write_with`, `stream::encode_with`, `Encode::encode_with(Encoder::new(&limits))` |
-| JSON | `json::parse_with`, `json::write_with`, `json::value_from_str_with`, `json::from_str_with`, `json::to_string_with`, `json::to_lossless`, `json::from_lossless`, `json::from_plain`, `FromJson::from_json_with(json, Decoder::new(&limits))` |
+| JSON | `json::parse_with`, `json::write_with`, `json::from_str_with`, `json::to_string_with`, `json::to_haus_json_with`, `json::from_haus_json_with`, `json::import_json_with`, `json::to_self_describing`, `json::from_self_describing`, `json::import`, `FromJson::from_json_with(json, Decoder::new(&limits))` |
 
 `haus::MAX_SUPPORTED_DEPTH` is 256, the default: the parser, decoding,
 encoding and the JSON mappings recurse once per level of nesting, so this
@@ -188,7 +188,7 @@ error that names the maximum: `max_depth 300 is more than the supported
 maximum, 256`. The JSON reader and writer and the canonical form use no call
 stack per level.
 
-At 256 levels, the deepest path, the lossless JSON form of nested variants,
+At 256 levels, the deepest path, the self-describing JSON of nested variants,
 takes about 1.2 MiB of stack in a debug build and 0.3 MiB in a release build
 (measured on aarch64 macOS): well within the 2 MiB stack of a spawned thread,
 a test thread or an async task, and the 8 MiB of a main thread. Code that
@@ -200,16 +200,17 @@ recursive types small, or give the thread that reads them a larger stack.
 
 ## JSON
 
-The two JSON mappings of spec §16, with a strict reader (I-JSON: no duplicate
+The three JSON forms of spec §16, with a strict reader (I-JSON: no duplicate
 member names, no unpaired surrogates, the limits of §7, number text kept
-exactly) and a writer, both in `haus::json`. No new dependencies.
+exactly) and a writer, both in `haus::json`. No new dependencies. The caller
+says which form it reads: the data never decides.
 
 | | Function |
 |---|---|
-| JSON without a schema (§16.1) | `haus::from_json(text) -> Value` (`null` is `None`, `true` is `True`) |
-| Lossless (§16.2) | `haus::to_lossless_json(&value)`, `haus::from_lossless_json(text)`: `{"num": "19.90"}`, `{"tag": "Some", "args": […]}` |
-| Plain, with a type (§16.3) | `haus::json::to_string(&x)`, `haus::json::from_str::<T>(text)` for any `T: ToJson` / `FromJson` |
-| JSON Lines | `haus::json::to_string_all`, `from_str_all`, and `encode` / `decode` over `std::io` |
+| Schema-based JSON, with a type (§16.3) | `haus::json::to_string(&x)`, `haus::json::from_str::<T>(text)` for any `T: ToJson` / `FromJson` |
+| Self-describing JSON (§16.2) | `haus::to_haus_json(&value)`, `haus::from_haus_json(text)`: `{"_haus": 1, "_value": {"_tag": "Some", "_args": [{"_num": "19.90"}]}}` |
+| JSON import, without a schema (§16.1) | `haus::import_json(text) -> Value` (`null` is `None`, `true` is `True`); it only reads |
+| JSON Lines | `haus::json::to_string_all`, `from_str_all`, and `encode` / `decode` over `std::io`; `to_haus_json_lines`, `from_haus_json_lines` (an envelope per line) |
 | The JSON tree | `haus::Json` (numbers as text), `haus::json::parse`, `haus::json::write` |
 
 haus-fmt-build implements `ToJson` and `FromJson` for every generated type; the
@@ -218,15 +219,19 @@ strings (`"-12"`), `Decimal` a string with its scale (`"19.90"`), `Bytes`
 base64, floats in the spelling of §15 (`"NaN"`, `"Infinity"`, `"-Infinity"`
 as strings), a closed variant of tags without payload a string (`"Debug"`),
 other variants objects with `"_tag"` (`{"_tag": "Circle", "r": 1.5}`,
-`"value"`, `"values"`), unknown tags `{"_tag": …, "args": […]}` with the
-arguments in the lossless form, and `Any` its lossless form. A `Maybe` is
+`"value"`, `"values"`), unknown tags `{"_tag": …, "_args": […]}` with the
+arguments' self-describing values, and `Any` its self-describing value, both
+without the envelope. A `Maybe` is
 `null` or the value when its inner JSON can't be `null`, and tagged otherwise:
 each type says so in `ToJson::NULLABLE`. A `Secret` is written in full, and a
 read error inside it names only its place and type. A record payload with a
-field named `_tag` has no plain form: writing or reading it is an error.
+field named `_tag` or `_args` has no schema-based form: writing or reading it
+is an error. Writers escape DEL, C1 and bidi controls as well as what JSON
+requires; the self-describing reader rejects them raw.
 
-JSON may nest 4·256 + 1 levels, so that the lossless form of a value at the
-depth limit is readable. Reading it with a type counts the levels of the haus
+Schema-based JSON may nest 4·256 + 1 levels and self-describing JSON one more
+for its envelope, so that the forms of a value at the depth limit are
+readable; the import's JSON nests 256. Reading it with a type counts the levels of the haus
 value as it goes (`FromJson::from_json_with` takes a `haus::Decoder`, as
 `ToJson` takes an `Encoder`), so JSON nested deeper than the depth limit fails
 there instead of recursing on; `json::from_str` then encodes the result to

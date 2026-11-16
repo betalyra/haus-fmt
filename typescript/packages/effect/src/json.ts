@@ -1,16 +1,16 @@
 /**
- * The plain JSON form (spec §16.3) of an Effect schema: a `JsonType` built
+ * The schema-based JSON form (spec §16.3) of an Effect schema: a `JsonType` built
  * from the schema's encoded side, the same AST the converters of convert.ts
  * read. A value is written by encoding it to a haus value and that to JSON
- * (the core's `toPlainJson`), and read the other way round, so Effect's own
+ * (the core's `toSchemaBasedJson`), and read the other way round, so Effect's own
  * decoder and encoder still run, with their filters and transformations.
  *
  *   Schema.String → "…"              Haus.Date & co. → "2026-11-13"        Haus.Decimal, Schema.BigDecimal → "19.90"
  *   Schema.Number → 1.5, "NaN", …    integer numbers of schema files → 12  Schema.BigInt → "12"
- *   Schema.Boolean → true / false    Schema.Uint8Array → base64            Haus.Any → its lossless form
+ *   Schema.Boolean → true / false    Schema.Uint8Array → base64            Haus.Any → self-describing, no envelope
  *   Schema.Option(X) → null / x      (tagged when X's JSON can be null)     Schema.Redacted(X) → as X
  *   Schema.Literals(["Debug", "Info"]) → "Debug"                           TaggedStruct("Circle", { r }) → {"_tag": "Circle", "r": 1.5}
- *   Haus.OpenUnion([...]): other tags → {"_tag": "Hexagon", "args": [lossless…]}
+ *   Haus.OpenUnion([...]): other tags → {"_tag": "Hexagon", "_args": [self-describing…]}
  */
 import type { JsonCase, JsonRecordType, JsonType } from "@haus-fmt/haus"
 import { Option, SchemaAST } from "effect"
@@ -26,7 +26,7 @@ const unit: JsonCase = { kind: "unit" }
 
 const cache = new WeakMap<AST, JsonType>()
 
-/** The plain JSON form of an encoded-side AST (memoised; a `Schema.suspend` is a lazy link). */
+/** The schema-based JSON form of an encoded-side AST (memoised; a `Schema.suspend` is a lazy link). */
 export const jsonTypeOf = (ast: AST): JsonType => {
   const cached = cache.get(ast)
   if (cached) return cached

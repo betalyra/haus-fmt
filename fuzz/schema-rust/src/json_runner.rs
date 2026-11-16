@@ -3,11 +3,11 @@
 //! (the place in the value, `$` for an error in the text, and the code of spec §17;
 //! `-` for an input that isn't one value):
 //!
-//! - `write`: `SUITE TYPE HEX` (haus text): decode with the type, write plain JSON (spec §16.3);
-//! - `read`: `SUITE TYPE HEX` (JSON text): read plain JSON with the type, encode: the canonical form;
-//! - `lossless-write`: `HEX` (haus text): `haus::to_lossless_json` (§16.2);
-//! - `lossless-read`: `HEX` (JSON text): `haus::from_lossless_json`, the canonical form;
-//! - `schemaless`: `HEX` (JSON text): `haus::from_json` (§16.1), the canonical form.
+//! - `write`: `SUITE TYPE HEX` (haus text): decode with the type, write schema-based JSON (spec §16.3);
+//! - `read`: `SUITE TYPE HEX` (JSON text): read schema-based JSON with the type, encode: the canonical form;
+//! - `haus-json-write`: `HEX` (haus text): `haus::to_haus_json` (§16.2), the envelope;
+//! - `haus-json-read`: `HEX` (JSON text): `haus::from_haus_json`, the canonical form;
+//! - `import`: `HEX` (JSON text): `haus::import_json` (§16.1), the canonical form.
 
 mod schemas {
     include!(concat!(env!("OUT_DIR"), "/schemas.rs"));
@@ -60,15 +60,15 @@ fn line(mode: &str, line: &str) -> Result<String, String> {
             Some(Ok(v)) => Ok(format!("ok {}", haus::canonical(&v))),
             Some(Err(e)) => Err(format!("err {}", one_line(&e))),
         },
-        ("lossless-write", [hex]) => match haus::to_lossless_json(&single(&unhex(hex))?) {
+        ("haus-json-write", [hex]) => match haus::to_haus_json(&single(&unhex(hex))?) {
             Ok(json) => Ok(format!("ok {json}")),
             Err(e) => Err(format!("err {} {} {}", e.place(), e.code, one_line(&e.to_string()))),
         },
-        ("lossless-read", [hex]) => match haus::from_lossless_json(text(&unhex(hex))?) {
+        ("haus-json-read", [hex]) => match haus::from_haus_json(text(&unhex(hex))?) {
             Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
             Err(e) => Err(err(&e)),
         },
-        ("schemaless", [hex]) => match haus::from_json(text(&unhex(hex))?) {
+        ("import", [hex]) => match haus::import_json(text(&unhex(hex))?) {
             Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
             Err(e) => Err(err(&e)),
         },

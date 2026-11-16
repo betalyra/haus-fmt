@@ -54,6 +54,7 @@ const SUITE = join(import.meta.dirname, "../../../../test-suite")
 export interface Fixture {
   readonly name: string
   readonly bytes: Uint8Array
+  /** valid/NAME.jsonl: each value in self-describing JSON, one envelope per line (parsed). */
   readonly expected: unknown
   /** valid/NAME.canonical: the canonical form of each value, one per line. */
   readonly canonical: string | undefined
@@ -69,11 +70,11 @@ export const fixtures = (kind: "valid" | "invalid"): Fixture[] =>
     .sort()
     .map((file) => {
       const name = file.slice(0, -".haus".length)
-      const json = join(SUITE, kind, `${name}.json`)
+      const jsonl = join(SUITE, kind, `${name}.jsonl`)
       return {
         name,
         bytes: readFileSync(join(SUITE, kind, file)),
-        expected: kind === "valid" ? JSON.parse(readFileSync(json, "utf8")) : undefined,
+        expected: kind === "valid" ? readFileSync(jsonl, "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.parse(l)) : undefined,
         canonical: kind === "valid" ? readFileSync(join(SUITE, kind, `${name}.canonical`), "utf8") : undefined,
         hash: kind === "valid" ? readFileSync(join(SUITE, kind, `${name}.hash`), "utf8").trim() : undefined,
         code: kind === "invalid" ? readFileSync(join(SUITE, kind, `${name}.error`), "utf8").trim() : undefined,

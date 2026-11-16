@@ -1,6 +1,6 @@
 //! The catalogue's examples (spec/errors.haus, spec §17) of schema files
 //! (`Schema`), of decoding (`Decode`) and of checking (`Check`): each has its
-//! entry's code. haus-fmt checks the examples of syntax and lossless JSON.
+//! entry's code. haus-fmt checks the examples of syntax and self-describing JSON.
 
 use haus::Value;
 use haus_schema::Schema;

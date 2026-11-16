@@ -426,7 +426,7 @@ impl EncodeError {
         })
     }
 
-    /// The same mistake, found while reading (plain JSON read into a value that can't be written).
+    /// The same mistake, found while reading (schema-based JSON read into a value that can't be written).
     pub(crate) fn into_decode(self) -> DecodeError {
         let EncodeError { code, path, reason, details } = self;
         DecodeError { code, path, reason, details }

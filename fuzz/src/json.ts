@@ -4,12 +4,12 @@
  * directions (json-runners.ts):
  *
  * - `write`: a haus value decoded with a type of the schema suite, written
- *   as plain JSON (§16.3); the JSON must agree as data (member order doesn't
- *   matter, numbers compare by their text);
- * - `read`: JSON text read with a type as plain JSON, and encoded; the
- *   canonical forms must agree;
- * - `lossless-write` and `lossless-read`: the lossless form (§16.2);
- * - `schemaless`: JSON read without a schema (§16.1).
+ *   as schema-based JSON (§16.3); the JSON must agree as data (member order
+ *   doesn't matter, numbers compare by their text);
+ * - `read`: JSON text read with a type as schema-based JSON, and encoded;
+ *   the canonical forms must agree;
+ * - `haus-json-write` and `haus-json-read`: self-describing JSON (§16.2);
+ * - `import`: JSON read without a schema (§16.1).
  *
  * Accepting or rejecting must agree too, and so must the error codes (spec
  * §17) of errors at the same place. A disagreement is shrunk and saved.
@@ -24,7 +24,7 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { Rng, value as hausValue } from "./generate.ts"
 import {
-  anyJ, badLosslessJ, losslessJ, mutateJ, nested, normJ, NOT_JSON, Obj, parseJ, PlainGen, single, smallerJ, textOf, wrongJ, writeJ, type J,
+  anyJ, badEnvelopeJ, badHausValueJ, envelope, hausJsonJ, hausValueJ, mutateJ, nested, normJ, NOT_JSON, Obj, parseJ, PlainGen, single, smallerJ, textOf, wrongJ, writeJ, type J,
 } from "./json-gen.ts"
 import {
   caseBytes, caseLine, effectRunner, lean, MODES, python, roc, rust, typed, typescriptRunner, writes, type JsonCase, type JsonRunner, type Mode,
@@ -76,7 +76,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   const hausGen = new Map([...envs].map(([s, env]) => [s, new Generator(env)]))
   const plainGen = new Map([...envs].map(([s, env]) => [s, new PlainGen(env)]))
 
-  // The conformance suite's valid files that hold one value: seeds for the lossless mapping.
+  // The conformance suite's valid files that hold one value: seeds for self-describing JSON.
   const valid = join(root, "test-suite/valid")
   const seeds = readdirSync(valid).filter((f) => f.endsWith(".haus")).map((f) => readFileSync(join(valid, f), "utf8")).filter((t) => single(t) !== undefined)
 
@@ -154,18 +154,18 @@ export async function run(argv: readonly string[]): Promise<number> {
     return open.repeat(n) + r.pick(["1", '"x"', 'x"00"', "[]", "N"]) + close.repeat(n)
   }
 
-  /** Lossless JSON nested near the JSON limit (4·256 + 1): `T { a: … }` takes four levels. */
-  const deepLossless = (): J => {
+  /** Self-describing JSON nested near the JSON limit (4·256 + 2 with the envelope): `T { a: … }` takes four levels. */
+  const deepHausJson = (): J => {
     const n = r.pick([254, 255, 256, 257])
-    let j: J = { 0: () => new Obj([["num", "1"]]), 1: () => "x", 2: () => [] as J[] }[r.int(3)]!()
+    let j: J = { 0: () => new Obj([["_num", "1"]]), 1: () => "x", 2: () => [] as J[] }[r.int(3)]!()
     const shape = r.int(4)
     for (let i = 0; i < n; i++) {
-      j = shape === 0 ? new Obj([["tag", "T"], ["args", [new Obj([["rec", new Obj([["a", j]])]])]]])
-        : shape === 1 ? new Obj([["rec", new Obj([["a", j]])]])
+      j = shape === 0 ? new Obj([["_tag", "T"], ["_args", [new Obj([["_rec", new Obj([["a", j]])]])]]])
+        : shape === 1 ? new Obj([["_rec", new Obj([["a", j]])]])
         : shape === 2 ? [j]
-        : new Obj([["tag", "S"], ["args", [j]]])
+        : new Obj([["_tag", "S"], ["_args", [j]]])
     }
-    return j
+    return envelope(j)
   }
 
   /** Generate one batch of cases for a mode. */
@@ -178,18 +178,19 @@ export async function run(argv: readonly string[]): Promise<number> {
           const e = pickEntry()
           return ofText(hausFor(e, missRate()), e)
         })
-      case "lossless-write":
+      case "haus-json-write":
         return Array.from({ length: n }, () => ofText(anyHaus()))
-      case "lossless-read":
+      case "haus-json-read":
         return Array.from({ length: n }, () => {
           if (r.chance(0.03)) return ofText(r.pick(NOT_JSON))
-          if (r.chance(0.04)) return ofText(textOf(r, deepLossless(), 0.05))
+          if (r.chance(0.04)) return ofText(textOf(r, deepHausJson(), 0.05))
           const v = single(anyHaus())
-          let j: J = v ? losslessJ(v) : badLosslessJ(r)
-          if (r.chance(0.35)) j = mutateJ(r, j, badLosslessJ)
+          let inner: J = v ? hausValueJ(v) : badHausValueJ(r)
+          if (r.chance(0.3)) inner = mutateJ(r, inner, badHausValueJ)
+          const j = r.chance(0.1) ? badEnvelopeJ(r, inner) : envelope(inner)
           return ofText(textOf(r, j, 0.08))
         })
-      case "schemaless":
+      case "import":
         return Array.from({ length: n }, () => {
           const x = r.next()
           if (x < 0.06) return ofText(r.pick(NOT_JSON))
@@ -197,7 +198,7 @@ export async function run(argv: readonly string[]): Promise<number> {
           if (x < 0.1) j = nested(r, r.pick([100, 254, 255, 256, 257]), anyJ(r, 4))
           else if (x < 0.25) {
             const v = single(anyHaus())
-            j = v ? losslessJ(v) : anyJ(r)
+            j = v ? (r.chance(0.5) ? hausJsonJ(v) : hausValueJ(v)) : anyJ(r)
           } else if (x < 0.4) {
             const e = pickEntry()
             j = plainGen.get(e.suite)!.value(r, { ref: e.type }, { miss: missRate(), maxDepth: 3, deep: 0 })

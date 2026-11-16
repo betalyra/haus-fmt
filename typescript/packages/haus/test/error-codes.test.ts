@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-  checkData, compileSchemaFile, ERROR_CODES, errorCode, errorJson, fromLosslessJson, HausSyntaxError, isErrorCode, parse, parseAll,
+  checkData, compileSchemaFile, ERROR_CODES, errorCode, errorJson, fromHausJson, HausSyntaxError, isErrorCode, parse, parseAll,
   parseSchemaFile, parseWithLocations, type Value,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
@@ -58,13 +58,13 @@ function codesOf(example: Value): string[] | undefined {
       const error = thrown(() => parseSchemaFile(t))
       return error === "no error" ? parseSchemaFile(t).warnings.map((w) => w.code) : [error]
     }
-    case "Lossless":
-      return [thrown(() => fromLosslessJson(text(arg)))]
+    case "HausJson":
+      return [thrown(() => fromHausJson(text(arg)))]
     case "Decode": {
       const f = fields(example)
       return [thrown(() => h.decode(compileSchemaFile(text(f.get("schema"))).schemas["Root"]!, parse(text(f.get("data")))))]
     }
-    case "Plain": {
+    case "SchemaJson": {
       const f = fields(example)
       return [thrown(() => h.fromJson(compileSchemaFile(text(f.get("schema"))).schemas["Root"]!, text(f.get("json"))))]
     }

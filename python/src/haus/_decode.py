@@ -1,7 +1,7 @@
 """Decoding and encoding with a schema (spec §15): the resolved types of a
 schema file (`_schema_file`) built into a tree of nodes, each with `decode`
 (haus `Value` → Python) and `encode` (Python → `Value`), and the same with the
-type's plain JSON (spec §16.3): `read_json` and `write_json`.
+type's schema-based JSON (spec §16.3): `read_json` and `write_json`.
 
 Linear whatever the schema (spec §9.8): a variant's case is one dict lookup
 on its tag, the nesting depth is limited (256 by default), and every call has
@@ -28,10 +28,11 @@ from ._json import (
     JsonNumber,
     describe,
     from_base64,
-    from_lossless,
+    from_self_describing,
+    imported,
     json_number,
-    lossless,
-    schemaless,
+    self_describing,
+    self_describing_arguments,
     to_base64,
 )
 from ._number import INTEGER, int_text, normalize_number, number_limit_issue, to_int
@@ -151,7 +152,7 @@ class _At:
         return _At(self.ctx, self, key, self.depth + 1)
 
     def deeper(self) -> _At:
-        """One level deeper at the same place: `Some(x)` written as `x` in plain JSON."""
+        """One level deeper at the same place: `Some(x)` written as `x` in schema-based JSON."""
         if self.depth >= self.ctx.limits.max_depth:
             self.fail(f"nesting deeper than {self.ctx.limits.max_depth} levels", code="nesting-too-deep")
         return _At(self.ctx, self, None, self.depth + 1)
@@ -292,10 +293,10 @@ def _json_mismatch(expected: str, j: Json, at: _At) -> Never:
     at.fail(f"expected {expected}, found {found}", code="type-mismatch", expected=expected, found=found)
 
 
-def _from_lossless(j: Json, at: _At) -> Value:
-    """The value of a lossless form (spec §16.2) read at `at`; its errors as decode errors with the full path."""
+def _read_at(at: _At, read: Callable[[], T]) -> T:
+    """`read()` at `at`: its JSON errors (paths relative to `at`) as decode errors with the full path."""
     try:
-        return from_lossless(j, at.ctx.limits, at.depth)
+        return read()
     except HausJsonError as e:
         error = e
     raise HausDecodeError(error.reason, (*at.path(), *error.path), error.code)
@@ -432,7 +433,7 @@ def _checked_record(raw: Record, at: _At) -> Record:
 class _Node:
     """One type: `decode` a value at a place, `encode` a Python value. Each application is one step.
 
-    `read_json` and `write_json` do the same with the type's plain JSON (spec §16.3).
+    `read_json` and `write_json` do the same with the type's schema-based JSON (spec §16.3).
     """
 
     __slots__ = ("expected",)
@@ -537,7 +538,7 @@ class _Bool(_Node):
 
 _DECIMAL_INTEGER = re.compile(r"-?(?:0|[1-9][0-9]*+)")
 _JSON_STRING_INTEGERS = frozenset({"Int", "Int64", "UInt64"})
-"""Integer types whose plain JSON is a string: many JSON parsers round integers beyond 2^53 (spec §16.3)."""
+"""Integer types whose schema-based JSON is a string: many JSON parsers round integers beyond 2^53 (spec §16.3)."""
 
 
 class _Int(_Node):
@@ -763,7 +764,7 @@ class _StdTime(_Node):
 
 
 class _Any(_Node):
-    """`Any`: the parsed value, unchanged, in JSON its lossless form (spec §16.2).
+    """`Any`: the parsed value, unchanged, in JSON its self-describing form without the envelope (spec §16.2).
 
     Encoding checks it is a value within the limits.
     """
@@ -779,10 +780,10 @@ class _Any(_Node):
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
-        return _from_lossless(j, at)
+        return _read_at(at, lambda: from_self_describing(j, at.ctx.limits, at.depth))
 
     def write_json(self, x: object, at: _At) -> Json:
-        return lossless(checked_value(x, at))
+        return self_describing(checked_value(x, at))
 
 
 def _each_item(x: object, at: _At, write: Callable[[object, _At], T]) -> list[T]:
@@ -890,7 +891,7 @@ _NONE = Variant("None")
 class _Maybe(_Node):
     """`Maybe a`: `Nothing()` or `Some(value)`.
 
-    In plain JSON (spec §16.3) `null` and the value when `a`'s JSON can't be `null`,
+    In schema-based JSON (spec §16.3) `null` and the value when `a`'s JSON can't be `null`,
     `{"_tag": "None"}` and `{"_tag": "Some", "value": …}` otherwise.
     """
 
@@ -1120,7 +1121,7 @@ _CasePayload = _Record | tuple[_Node, ...] | None
 class _Variant(_Node):
     """`< … >`: a listed case is a `Tagged`; another tag is an `Unknown` in an open variant.
 
-    In plain JSON (spec §16.3) a closed variant whose cases have no payload is the tag as a
+    In schema-based JSON (spec §16.3) a closed variant whose cases have no payload is the tag as a
     string; any other is an object with the tag as `"_tag"`.
     """
 
@@ -1256,8 +1257,8 @@ class _Variant(_Node):
     def _read_unknown(self, tag: str, j: dict[str, Json], at: _At) -> Variant:
         """A tag this open variant doesn't list (spec §16.3).
 
-        `{"_tag": "<Tag>", "args": [<lossless>, …]}` is the form written; any other members are a
-        newer writer's case, read as a record payload without a schema (§16.1):
+        `{"_tag": "<Tag>", "_args": [<self-describing>, …]}` is the form written; any other members are
+        a newer writer's case, read as a record payload by the import (§16.1):
         `{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`.
         """
         if not _TAG.fullmatch(tag):
@@ -1266,19 +1267,13 @@ class _Variant(_Node):
             at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", "_tag", code="tag-too-long")
         if len(j) == 1:
             return Variant(tag)
-        if len(j) == 2 and "args" in j:
-            value = _from_lossless({"tag": tag, "args": j["args"]}, at)
-            assert isinstance(value, Variant)
-            return value
+        if len(j) == 2 and "_args" in j:
+            args = j["_args"]
+            return _read_at(at, lambda: self_describing_arguments(tag, args, at.ctx.limits, at.depth))
         members: dict[str, Json] = {k: x for k, x in j.items() if k != "_tag"}
-        try:
-            # `Tag { … }` is one level, as in the parser.
-            payload = schemaless(members, at.ctx.limits.max_depth, at.depth)
-        except HausJsonError as e:
-            error = e
-        else:
-            return Variant(tag, (payload,))
-        raise HausDecodeError(error.reason, (*at.path(), *error.path), error.code)
+        # `Tag { … }` is one level, as in the parser.
+        payload = _read_at(at, lambda: imported(members, at.ctx.limits.max_depth, at.depth))
+        return Variant(tag, (payload,))
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()
@@ -1286,7 +1281,7 @@ class _Variant(_Node):
             raw = self._unknown(cast("object", x.value), at)
             if not raw.args:
                 return {"_tag": raw.tag}
-            return {"_tag": raw.tag, "args": [lossless(a) for a in raw.args]}
+            return {"_tag": raw.tag, "_args": [self_describing(a) for a in raw.args]}
         tag, given, case = self._tagged(x, at)
         if case is None:
             return tag if self.as_string else {"_tag": tag}
@@ -1309,8 +1304,10 @@ class _Variant(_Node):
 
 
 def _check_payload_keys(case: _Record, at: _At) -> None:
-    if "_tag" in case.keys:
-        at.fail('a record payload with a field named "_tag" has no plain JSON form (spec §16.3)', code="no-json-form")
+    for key in ("_tag", "_args"):
+        if key in case.keys:
+            reason = f'a record payload with a field named "{key}" has no schema-based JSON form (spec §16.3)'
+            at.fail(reason, code="no-json-form")
 
 
 def _only(j: dict[str, Json], allowed: tuple[str, ...], tag: str, at: _At) -> None:
@@ -1440,7 +1437,10 @@ def _null_step(node: _Node) -> _Node | None:
 
 
 def _json_nullable(node: _Node) -> bool:
-    """Whether a type's plain JSON can be `null`: a `Maybe` that uses `null`, directly or through `Secret` or a name."""
+    """Whether a type's schema-based JSON can be `null`.
+
+    That is a `Maybe` that uses `null`, directly or through `Secret` or a name.
+    """
     while not isinstance(node, _Maybe):
         if (inner := _null_step(node)) is None:
             return False
@@ -1637,8 +1637,8 @@ def _count_json(root: Json) -> int:
     return count
 
 
-def from_plain_json(node: _Node, j: Json, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
-    """A type's plain JSON (spec §16.3) as its Python value; the budget is 16 steps per JSON value by default."""
+def from_schema_json(node: _Node, j: Json, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
+    """A type's schema-based JSON (spec §16.3) as its Python value; the budget is 16 steps per JSON value by default."""
     make_room(limits.max_depth)
     steps = max_steps if max_steps is not None else STEPS_PER_VALUE * _count_json(j) + 1024
     at = _At(_Context(decoding=True, limits=limits, max_steps=steps, json=True), None, key, 0)
@@ -1649,8 +1649,8 @@ def from_plain_json(node: _Node, j: Json, limits: Limits, max_steps: int | None,
     _too_deep(at)
 
 
-def to_plain_json(node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> Json:
-    """A Python value of a type as its plain JSON (spec §16.3)."""
+def to_schema_json(node: _Node, x: object, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> Json:
+    """A Python value of a type as its schema-based JSON (spec §16.3)."""
     make_room(limits.max_depth)
     steps = DEFAULT_ENCODE_STEPS if max_steps is None else max_steps
     at = _At(_Context(decoding=False, limits=limits, max_steps=steps, json=True), None, key, 0)
@@ -1664,6 +1664,6 @@ def to_plain_json(node: _Node, x: object, limits: Limits, max_steps: int | None,
 def checked(value: object, limits: Limits, key: PathKey | None = None, *, json: bool = False) -> Value:
     """A `Value` built in code, checked to be a haus value within `limits` (as `Any` encodes it).
 
-    With `json`, for its lossless JSON: what has no JSON form is `no-json-form`.
+    With `json`, for its self-describing JSON: what has no JSON form is `no-json-form`.
     """
     return encode(_BUILTINS["Any"], value, limits, None, key, json=json)

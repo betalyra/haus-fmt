@@ -1,10 +1,10 @@
-/** The JSON suite (test-suite/json, spec §16), and every valid/NAME.json as a lossless case. */
+/** The JSON suite (test-suite/json, spec §16), and every valid/NAME.jsonl as a self-describing case. */
 import { describe, expect, it } from "vitest"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-  canonical, compileSchemaFile, equals, equalsJson, errorCode, fromJson, fromLosslessJson, fromLosslessJsonValue, HausDecodeError, HausSyntaxError, parseAll, parseJson,
-  stringifyJson, toLosslessJson, toLosslessJsonValue, type Json, type Value,
+  canonical, compileSchemaFile, equals, equalsJson, errorCode, fromHausJson, fromHausJsonLines, HausDecodeError, HausSyntaxError, importJson, parseAll, parseJson,
+  stringifyJson, toHausJson, toHausJsonLines, toHausJsonValue, type Json, type Value,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
 
@@ -63,11 +63,11 @@ const rejects = (f: () => unknown, code: string | undefined) => {
   throw new Error("expected an error")
 }
 
-describe("plain (spec §16.3)", () => {
-  const { schemas } = compileSchemaFile(read("json/plain.schema.haus"))
+describe("schema-based (spec §16.3)", () => {
+  const { schemas } = compileSchemaFile(read("json/schema-based.schema.haus"))
   const schema = (c: Case) => schemas[c.type!] ?? (() => { throw new Error(`no type ${c.type}`) })()
 
-  it.each(cases(read("json/plain.cases.haus")))("$name", (c) => {
+  it.each(cases(read("json/schema-based.cases.haus")))("$name", (c) => {
     const s = schema(c)
     switch (c.kind) {
       case "Ok": {
@@ -86,34 +86,41 @@ describe("plain (spec §16.3)", () => {
   })
 })
 
-describe("lossless (spec §16.2)", () => {
-  it.each(cases(read("json/lossless.cases.haus")))("$name", (c) => {
-    if (c.kind === "Err") return rejects(() => fromLosslessJson(c.json), c.code)
-    expectJson(toLosslessJsonValue(c.input!), c.json)
-    expectJson(parseJson(toLosslessJson(c.input!)), c.json)
-    expect(canonical(fromLosslessJson(c.json))).toBe(canonical(c.input!))
+describe("self-describing (spec §16.2)", () => {
+  it.each(cases(read("json/self-describing.cases.haus")))("$name", (c) => {
+    if (c.kind === "Err") return rejects(() => fromHausJson(c.json), c.code)
+    expectJson(toHausJsonValue(c.input!), c.json)
+    expectJson(parseJson(toHausJson(c.input!)), c.json)
+    expect(canonical(fromHausJson(c.json))).toBe(canonical(c.input!))
   })
 })
 
-describe("without a schema (spec §16.1)", () => {
-  it.each(cases(read("json/schemaless.cases.haus")))("$name", (c) => {
-    if (c.kind === "Err") return rejects(() => fromJson(c.json), c.code)
-    expect(equals(fromJson(c.json), c.output!), canonical(fromJson(c.json))).toBe(true)
+describe("import (spec §16.1)", () => {
+  it.each(cases(read("json/import.cases.haus")))("$name", (c) => {
+    if (c.kind === "Err") return rejects(() => importJson(c.json), c.code)
+    expect(equals(importJson(c.json), c.output!), canonical(importJson(c.json))).toBe(true)
   })
 })
 
-describe("valid/NAME.json as lossless cases", () => {
+const collect = async <T>(items: AsyncIterable<T>): Promise<T[]> => {
+  const out: T[] = []
+  for await (const x of items) out.push(x)
+  return out
+}
+
+describe("valid/NAME.jsonl as self-describing cases", () => {
   const names = readdirSync(join(SUITE, "valid")).filter((f) => f.endsWith(".haus")).map((f) => f.slice(0, -".haus".length)).sort()
-  it.each(names)("%s", (name) => {
+  it.each(names)("%s", async (name) => {
     const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(join(SUITE, "valid", `${name}.haus`)))
     const values = parseAll(text)
-    const json = read(`valid/${name}.json`)
-    // Writing: the JSON array of the values' lossless forms.
-    expectJson(values.map((v) => toLosslessJsonValue(v)), json)
-    // Reading: each element gives an equal value.
-    const parsed = parseJson(json, { maxDepth: 2000 })
-    expect(Array.isArray(parsed)).toBe(true)
-    const back = (parsed as readonly Json[]).map((j) => fromLosslessJsonValue(j))
+    const jsonl = read(`valid/${name}.jsonl`)
+    // Writing: one envelope per value, a line each.
+    const written = await collect(toHausJsonLines(values))
+    const lines = jsonl.split("\n").filter((l) => l !== "")
+    expect(written).toHaveLength(lines.length)
+    written.forEach((w, i) => expectJson(parseJson(w, { maxDepth: 2000 }), lines[i]!))
+    // Reading: each line gives an equal value.
+    const back = await collect(fromHausJsonLines([jsonl]))
     expect(back.map(canonical)).toEqual(values.map(canonical))
   })
 })

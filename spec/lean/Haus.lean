@@ -47,12 +47,12 @@ import Haus.Json.Data
 import Haus.Json.Base64
 import Haus.Json.Text
 import Haus.Json.TextRoundTrip
-import Haus.Json.Lossless
+import Haus.Json.SelfDescribing
 import Haus.Json.Normal
-import Haus.Json.Plain
-import Haus.Json.PlainRoundTrip
-import Haus.Json.PlainWellFormed
+import Haus.Json.SchemaBased
+import Haus.Json.SchemaBasedRoundTrip
+import Haus.Json.SchemaBasedWellFormed
 import Haus.Json.Fits
-import Haus.Json.PlainFits
+import Haus.Json.SchemaBasedFits
 import Haus.Json.WellFormed
 import Haus.Json.Correct

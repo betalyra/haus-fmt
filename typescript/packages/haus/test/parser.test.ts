@@ -56,16 +56,16 @@ describe("StreamReader", () => {
     expect(r.push("UserCreated { id: 1 ")).toEqual([])
     expect(r.push("}")).toEqual([]) // a payload could still follow
     expect(r.push(",\nHeart").map(suiteJson)).toEqual([
-      { tag: "UserCreated", args: [{ rec: { id: { num: "1" } } }] },
+      { _tag: "UserCreated", _args: [{ _rec: { id: { _num: "1" } } }] },
     ])
     expect(r.push("beat")).toEqual([])
-    expect(r.end().map(suiteJson)).toEqual([{ tag: "Heartbeat" }])
+    expect(r.end().map(suiteJson)).toEqual([{ _tag: "Heartbeat" }])
   })
 
   it("does not split on commas inside strings, comments or payloads", () => {
     const r = new StreamReader()
     const out = [...r.push('"a,b", /* , */ Pair(1, 2), // ,\n"""\n  x,\n  """,'), ...r.end()]
-    expect(out.map(suiteJson)).toEqual(["a,b", { tag: "Pair", args: [{ num: "1" }, { num: "2" }] }, "x,"])
+    expect(out.map(suiteJson)).toEqual(["a,b", { _tag: "Pair", _args: [{ _num: "1" }, { _num: "2" }] }, "x,"])
   })
 
   it("skips a byte order mark only at the start, not after a comma (found by fuzz/)", () => {
@@ -102,7 +102,7 @@ describe("StreamReader", () => {
 
 describe("parse", () => {
   it("accepts exactly one value", () => {
-    expect(suiteJson(parse("{ a: 1 },"))).toEqual({ rec: { a: { num: "1" } } })
+    expect(suiteJson(parse("{ a: 1 },"))).toEqual({ _rec: { a: { _num: "1" } } })
   })
 
   it.effect.each(["1, 2", "// empty"])("rejects %j", (src) =>
@@ -114,7 +114,7 @@ describe("parse", () => {
 
 describe("parseAll", () => {
   it("returns the top-level sequence", () => {
-    expect(parseAll("A, B,").map(suiteJson)).toEqual([{ tag: "A" }, { tag: "B" }])
+    expect(parseAll("A, B,").map(suiteJson)).toEqual([{ _tag: "A" }, { _tag: "B" }])
   })
 })
 

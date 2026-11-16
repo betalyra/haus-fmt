@@ -34,9 +34,9 @@ export const CATEGORIES = [
 ] as const
 
 export type Example =
-  | { readonly kind: "Data" | "Schema" | "Lossless" | "Text"; readonly text: string }
+  | { readonly kind: "Data" | "Schema" | "HausJson" | "Text"; readonly text: string }
   | { readonly kind: "Decode" | "Check"; readonly schema: string; readonly data: string }
-  | { readonly kind: "Plain"; readonly schema: string; readonly json: string }
+  | { readonly kind: "SchemaJson"; readonly schema: string; readonly json: string }
 
 export interface Entry {
   readonly code: string
@@ -62,13 +62,13 @@ const example = (v: Value, code: string): Example => {
   switch (v.tag) {
     case "Data":
     case "Schema":
-    case "Lossless":
+    case "HausJson":
     case "Text":
       return { kind: v.tag, text: text(arg!, code) }
     case "Decode":
     case "Check":
       return { kind: v.tag, schema: text(field(arg!, "schema"), code), data: text(field(arg!, "data"), code) }
-    case "Plain":
+    case "SchemaJson":
       return { kind: v.tag, schema: text(field(arg!, "schema"), code), json: text(field(arg!, "json"), code) }
   }
   return fail(`${code}: unknown example kind ${v.tag}`)
@@ -106,14 +106,14 @@ const inlineExample = (e: Example): string => {
   switch (e.kind) {
     case "Data":
     case "Schema":
-    case "Lossless":
+    case "HausJson":
       return code(e.text)
     case "Text":
       return e.text
     case "Decode":
     case "Check":
       return `${code(e.data)} with ${code(e.schema)}`
-    case "Plain":
+    case "SchemaJson":
       return `${code(e.json)} with ${code(e.schema)}`
   }
 }
@@ -154,14 +154,14 @@ const docsExample = (e: Example): string => {
       return fence("haus", e.text)
     case "Schema":
       return fence("haus-schema", e.text)
-    case "Lossless":
-      return `Read as lossless JSON:\n\n${fence("json", e.text)}`
+    case "HausJson":
+      return `Read as self-describing JSON:\n\n${fence("json", e.text)}`
     case "Text":
       return `For example: ${e.text}.`
     case "Decode":
     case "Check":
       return `${fence("haus-schema", e.schema)}\n\n${fence("haus", e.data)}`
-    case "Plain":
+    case "SchemaJson":
       return `${fence("haus-schema", e.schema)}\n\n${fence("json", e.json)}`
   }
 }

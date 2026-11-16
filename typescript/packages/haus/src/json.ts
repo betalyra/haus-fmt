@@ -1,13 +1,13 @@
 /**
  * JSON (spec §16): a strict I-JSON reader that keeps every number exactly as
- * written, a writer, and the two mappings that need no schema:
+ * written, a writer, and the two forms that need no schema:
  *
- *   fromJson('{"total": 19.90, "ok": true}')   // JSON read as haus (§16.1): { total: 19.90, ok: True }
- *   toLosslessJson(value)                      // every haus value as JSON (§16.2): {"rec":{"total":{"num":"19.90"}}}
- *   fromLosslessJson(text)                     // and back, to an equal value
+ *   importJson('{"total": 19.90, "ok": true}')   // any JSON read as haus (§16.1): { total: 19.90, ok: True }
+ *   toHausJson(value)                            // self-describing JSON (§16.2): {"_haus":1,"_value":{"_rec":{"total":{"_num":"19.90"}}}}
+ *   fromHausJson(text)                           // and back, to an equal value
  *
- * The plain mapping with a schema type (§16.3) is in json-plain.ts, and in
- * `h.toJson` / `h.fromJson` for schemas.
+ * Schema-based JSON with a schema type (§16.3) is in json-schema-based.ts,
+ * and in `h.toJson` / `h.fromJson` for schemas.
  */
 import { HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
 import { toHex } from "./format.js"
@@ -100,10 +100,17 @@ export const normalizeJsonNumber = (text: string): string => {
 const hex4 = (c: number) => c.toString(16).toUpperCase().padStart(4, "0")
 const short = (s: string) => JSON.stringify(s.length > 30 ? s.slice(0, 30) + "…" : s)
 
+/** DEL, C1 and the bidi controls (spec §4): what JSON writers escape, and the self-describing reader rejects raw. */
+const DISPLAY_CONTROL = /[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/
+const DISPLAY_CONTROLS = new RegExp(DISPLAY_CONTROL.source, "g")
+const isBidi = (c: number) => (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
+
 /**
  * Recursive descent over one JSON text (RFC 8259) restricted to I-JSON
  * (RFC 7493): no duplicate member names, no unpaired surrogates, and the
- * limits of spec §7 (nesting, number literals, string lengths).
+ * limits of spec §7 (nesting, number literals, string lengths). With
+ * `rejectControls` (self-describing JSON, §16), also no raw DEL, C1 or bidi
+ * controls in strings and member names.
  */
 class Reader {
   private pos = 0
@@ -112,6 +119,7 @@ class Reader {
     private readonly src: string,
     private readonly limits: Limits,
     private readonly origin: Origin,
+    private readonly rejectControls: boolean,
   ) {}
 
   document(): Json {
@@ -244,6 +252,10 @@ class Reader {
         start = this.pos
       } else if (c < 0x20) {
         this.fail("control-character", `raw control character U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
+      } else if (this.rejectControls && (c === 0x7f || (c >= 0x80 && c <= 0x9f) || isBidi(c))) {
+        // Self-describing JSON is written by haus tools only, which escape these (§16).
+        if (isBidi(c)) this.fail("bidi-control", `raw bidi control U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
+        this.fail("control-character", `raw control character U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
       } else if (c >= 0xd800 && c <= 0xdfff) {
         const d = this.src.charCodeAt(this.pos + 1)
         if (c > 0xdbff || !(d >= 0xdc00 && d <= 0xdfff)) this.fail("unpaired-surrogate", `unpaired surrogate U+${hex4(c)}`)
@@ -295,53 +307,70 @@ class Reader {
   }
 }
 
-/** Read one JSON text within `limits` (`maxDepth` counts JSON's arrays and objects), starting at `origin`. */
-export const readJson = (text: string, limits: Limits, origin: Origin = START): Json => {
+/**
+ * Read one JSON text within `limits` (`maxDepth` counts JSON's arrays and
+ * objects), starting at `origin`. `rejectControls`: raw DEL, C1 and bidi
+ * controls in strings are errors, as in self-describing JSON (§16).
+ */
+export const readJson = (text: string, limits: Limits, origin: Origin = START, rejectControls = false): Json => {
   // A leading byte order mark is ignored, as in haus (spec §4).
-  if (origin.offset === 0 && text.charCodeAt(0) === 0xfeff) return new Reader(text.slice(1), limits, { offset: 1, line: 1, column: 2 }).document()
-  return new Reader(text, limits, origin).document()
+  if (origin.offset === 0 && text.charCodeAt(0) === 0xfeff) return new Reader(text.slice(1), limits, { offset: 1, line: 1, column: 2 }, rejectControls).document()
+  return new Reader(text, limits, origin, rejectControls).document()
 }
 
 /**
  * Read one JSON text, strictly: RFC 8259 restricted to I-JSON (RFC 7493),
  * within the limits of spec §7 (`maxDepth` counts arrays and objects, at most
- * `jsonDepth(MAX_SUPPORTED_DEPTH)`, 2049). Numbers keep their exact text.
+ * `hausJsonDepth(MAX_SUPPORTED_DEPTH)`, 2050). Numbers keep their exact text.
  * Throws HausSyntaxError, with line and column; a RangeError for a larger
  * `maxDepth`.
  */
 export const parseJson = (text: string, limits: Partial<Limits> = {}): Json => readJson(text, withJsonDefaults(limits))
 
-/** `withDefaults` for raw JSON, whose `maxDepth` counts JSON levels: at most `jsonDepth(MAX_SUPPORTED_DEPTH)`. */
+/** `withDefaults` for raw JSON, whose `maxDepth` counts JSON levels: at most `hausJsonDepth(MAX_SUPPORTED_DEPTH)`. */
 const withJsonDefaults = (limits: Partial<Limits>): Limits => {
   const { maxDepth, ...rest } = limits
-  checkLimits({ maxDepth }, jsonDepth(MAX_SUPPORTED_DEPTH), "JSON nesting")
+  checkLimits({ maxDepth }, hausJsonDepth(MAX_SUPPORTED_DEPTH), "JSON nesting")
   return { ...withDefaults(rest), maxDepth: maxDepth ?? MAX_DEPTH }
 }
 
 /**
- * How deeply JSON may nest to hold a value of `maxDepth` haus levels (spec
- * §16): the lossless and the plain forms take up to four JSON levels for one
- * haus level (`Tag { … }` is `{"tag": …, "args": [{"rec": {…}}]}`). The haus
- * value is then held to `maxDepth` itself.
+ * How deeply schema-based JSON may nest to hold a value of `maxDepth` haus
+ * levels (spec §16): it takes up to four JSON levels for one haus level
+ * (`Tag { … }` of an unknown tag is `{"_tag": …, "_args": [{"_rec": {…}}]}`).
+ * The haus value is then held to `maxDepth` itself.
  */
 export const jsonDepth = (maxDepth: number): number => 4 * maxDepth + 1
 
-/** `limits` for reading the JSON of values within them (see `jsonDepth`). */
+/** How deeply self-describing JSON may nest for `maxDepth` haus levels: `jsonDepth`, and one more for the envelope. */
+export const hausJsonDepth = (maxDepth: number): number => jsonDepth(maxDepth) + 1
+
+/** `limits` for reading the schema-based JSON of values within them (see `jsonDepth`). */
 export const jsonDepthFor = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth(limits.maxDepth) })
+
+/** `limits` for reading the self-describing JSON of values within them (see `hausJsonDepth`). */
+const hausJsonDepthFor = (limits: Limits): Limits => ({ ...limits, maxDepth: hausJsonDepth(limits.maxDepth) })
 
 // ── writing ──────────────────────────────────────────────────
 
 const LONE_SURROGATE = /\p{Cs}/u
 
-/** A JSON string literal; a string with an unpaired surrogate has none (I-JSON). */
+const escapeControl = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
+
+/**
+ * A JSON string literal, with DEL, C1 and bidi controls escaped besides
+ * what JSON escapes (spec §16), so it can't display differently from what it
+ * holds. A string with an unpaired surrogate has none (I-JSON).
+ */
 const quoteJson = (s: string, path: () => Path): string => {
   if (LONE_SURROGATE.test(s)) throw new HausEncodeError("a string with an unpaired surrogate has no JSON form (I-JSON)", path(), "no-json-form")
-  return JSON.stringify(s)
+  const quoted = JSON.stringify(s)
+  return DISPLAY_CONTROL.test(quoted) ? quoted.replace(DISPLAY_CONTROLS, escapeControl) : quoted
 }
 
 /**
  * JSON text for a JSON value, compact (no whitespace). Numbers are written
- * exactly as their text. Throws HausEncodeError for what isn't JSON or
+ * exactly as their text; DEL, C1 and bidi controls are escaped. Throws HausEncodeError for what isn't JSON or
  * I-JSON: a number that isn't a JSON literal, an unpaired surrogate, a cycle.
  * Iterative, with a stack of what is left to write, so any depth works.
  */
@@ -454,49 +483,55 @@ export const stringOfJson = (s: string, limits: Limits, place: Place) => {
   return str(s)
 }
 
-// ── §16.1: JSON without a schema ─────────────────────────────
+// ── §16.1: JSON import ───────────────────────────────────────
 
 /** JSON as a haus value (spec §16.1): objects → records, `true`/`false` → `True`/`False`, `null` → `None`, numbers exact. */
-const plainValue = (j: Json, limits: Limits, depth: number, place: Place): Value => {
+const imported = (j: Json, limits: Limits, depth: number, place: Place): Value => {
   if (j === null) return variant("None")
   if (j === true || j === false) return variant(j ? "True" : "False")
   if (typeof j === "string") return stringOfJson(j, limits, place)
   if (j instanceof JsonNumber) return numberOfJson(j, limits, place)
   if (depth >= limits.maxDepth) throw new HausDecodeError(`nesting deeper than ${limits.maxDepth} levels`, place.path(), "nesting-too-deep")
-  if (Array.isArray(j)) return arr(j.map((x, i) => plainValue(x, limits, depth + 1, place.child(i))))
+  if (Array.isArray(j)) return arr(j.map((x, i) => imported(x, limits, depth + 1, place.child(i))))
   if (typeof j !== "object") throw new HausDecodeError(`not a JSON value: ${typeof j}`, place.path(), "type-mismatch")
-  return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place), plainValue((j as JsonObject)[k]!, limits, depth + 1, place.child(k))])))
+  return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place), imported((j as JsonObject)[k]!, limits, depth + 1, place.child(k))])))
 }
 
-/** JSON as a haus value without a schema (§16.1), from a place inside a larger conversion. */
-export const valueOfJson = (j: Json, limits: Limits, place: Place): Value => plainValue(j, limits, 0, place)
+/** JSON imported as a haus value (§16.1), from a place inside a larger conversion. */
+export const importedValue = (j: Json, limits: Limits, place: Place): Value => imported(j, limits, 0, place)
 
 /**
- * Read JSON text as a haus value, without a schema (spec §16.1): an object
+ * Import JSON text as a haus value, without a schema (spec §16.1): an object
  * as a record, an array as an array, a string as a string, a number as a
  * number with its literal normalized (`1E+05` → `1e5`, `19.90` stays
- * `19.90`), `true`/`false` as `True`/`False` and `null` as `None`.
+ * `19.90`), `true`/`false` as `True`/`False` and `null` as `None`. Nothing
+ * in the data is special: `{"_tag": "Circle"}` is a record. It only reads.
  */
-export const fromJson = (text: string, limits: Partial<Limits> = {}): Value => {
+export const importJson = (text: string, limits: Partial<Limits> = {}): Value => {
   const l = withDefaults(limits)
-  return plainValue(readJson(text, l), l, 0, Place.root())
+  return imported(readJson(text, l), l, 0, Place.root())
 }
 
-/** `fromJson` for a JSON value that is already parsed. */
-export const fromJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => plainValue(json, withDefaults(limits), 0, Place.root())
+/** `importJson` for a JSON value that is already parsed. */
+export const importJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => imported(json, withDefaults(limits), 0, Place.root())
 
-// ── §16.2: lossless ──────────────────────────────────────────
+// ── §16.2: self-describing JSON ──────────────────────────────
 
 const TAG = /^[A-Z][A-Za-z0-9_]*$/
 const LOWER_HEX = /^(?:[0-9a-f]{2})*$/
 
+/** The version of self-describing JSON, `_haus` in the envelope. */
+const VERSION = "1"
+
 /**
- * The lossless JSON of a value (spec §16.2): strings and arrays as
- * themselves, `{"num": "19.90"}`, `{"bytes": "0b34"}`, `{"rec": {…}}`,
- * `{"tag": "Circle", "args": […]}`. A value built in code is checked first:
- * tag names, number literals (normalized as the parser would), the limits.
+ * The self-describing JSON of a value (spec §16.2), without the envelope (as
+ * inside schema-based JSON): strings and arrays as themselves,
+ * `{"_num": "19.90"}`, `{"_bytes": "0b34"}`, `{"_rec": {…}}`,
+ * `{"_tag": "Circle", "_args": […]}`. A value built in code is checked
+ * first: tag names, number literals (normalized as the parser would), the
+ * limits.
  */
-export const losslessJson = (value: Value, limits: Limits, place: Place): Json => {
+export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => {
   const fail = (reason: string, at: Place, code: ErrorCode = "cannot-encode"): never => {
     throw new HausEncodeError(reason, at.path(), code)
   }
@@ -515,16 +550,16 @@ export const losslessJson = (value: Value, limits: Limits, place: Place): Json =
         const text = typeof v.text !== "string" ? undefined : isNormalizedNumber(v.text) ? v.text : normalizeNumber(v.text, limits)
         if (text === undefined) return fail("not a number literal", at)
         const issue = numberLimitIssue(text, limits)
-        return issue === undefined ? jsonObject([["num", text]]) : fail(issue.reason, at, issue.code)
+        return issue === undefined ? jsonObject([["_num", text]]) : fail(issue.reason, at, issue.code)
       }
       case "bytes":
-        return v.bytes instanceof Uint8Array ? jsonObject([["bytes", toHex(v.bytes)]]) : fail("not a haus value", at)
+        return v.bytes instanceof Uint8Array ? jsonObject([["_bytes", toHex(v.bytes)]]) : fail("not a haus value", at)
       case "array":
         open()
         return v.items.map((x, i) => write(x, inner, at.child(i), false))
       case "record":
         open()
-        return jsonObject([["rec", jsonObject([...v.fields].map(([k, x]) => {
+        return jsonObject([["_rec", jsonObject([...v.fields].map(([k, x]) => {
           if (longerThan(k, limits.maxStringLength)) fail(`key longer than ${limits.maxStringLength} characters`, at, "key-too-long")
           return [k, write(x, inner, at.child(k), false)] as const
         }))]])
@@ -532,11 +567,11 @@ export const losslessJson = (value: Value, limits: Limits, place: Place): Json =
         if (typeof v.tag !== "string" || !TAG.test(v.tag)) return fail("not a tag name", at, "invalid-tag")
         const tagIssue = tagLengthIssue(v.tag, limits)
         if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
-        if (v.args.length === 0) return jsonObject([["tag", v.tag]])
+        if (v.args.length === 0) return jsonObject([["_tag", v.tag]])
         open()
         // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
         const single = v.args.length === 1 && v.args[0]!.kind === "record"
-        return jsonObject([["tag", v.tag], ["args", v.args.map((x, i) => write(x, depth + 1, at.child(i), single))]])
+        return jsonObject([["_tag", v.tag], ["_args", v.args.map((x, i) => write(x, depth + 1, at.child(i), single))]])
       }
       default:
         return fail("not a haus value", at)
@@ -545,9 +580,9 @@ export const losslessJson = (value: Value, limits: Limits, place: Place): Json =
   return write(value, 0, place, false)
 }
 
-/** A haus value from its lossless JSON (spec §16.2); any other JSON is an error. */
-export const fromLossless = (json: Json, limits: Limits, place: Place): Value => {
-  const fail = (reason: string, at: Place, code: ErrorCode = "lossless-form"): never => {
+/** A haus value from its self-describing JSON without the envelope (spec §16.2, as inside schema-based JSON); any other JSON is an error. */
+export const valueOfHausJson = (json: Json, limits: Limits, place: Place): Value => {
+  const fail = (reason: string, at: Place, code: ErrorCode = "haus-json-form"): never => {
     throw new HausDecodeError(reason, at.path(), code)
   }
   const read = (j: Json, depth: number, at: Place, payload: boolean): Value => {
@@ -560,69 +595,96 @@ export const fromLossless = (json: Json, limits: Limits, place: Place): Value =>
       open()
       return arr(j.map((x, i) => read(x, inner, at.child(i), false)))
     }
-    if (!isJsonObject(j)) return fail(`not a lossless form: ${describeJson(j)} (numbers are {"num": "…"}, True is {"tag": "True"}, None is {"tag": "None"})`, at)
+    if (!isJsonObject(j)) return fail(`not a self-describing form: ${describeJson(j)} (numbers are {"_num": "…"}, True is {"_tag": "True"}, None is {"_tag": "None"})`, at)
     const keys = Object.keys(j)
     const only = (...names: string[]) => keys.length === names.length && names.every((n) => Object.hasOwn(j, n))
-    if (only("num")) {
-      const text = j["num"]
-      if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at, "lossless-number")
+    if (only("_num")) {
+      const text = j["_num"]
+      if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"_num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at, "haus-json-number")
       const issue = numberLimitIssue(text, limits)
       return issue === undefined ? num(text) : fail(issue.reason, at, issue.code)
     }
-    if (only("bytes")) {
-      const hex = j["bytes"]
-      if (typeof hex !== "string" || !LOWER_HEX.test(hex)) return fail(`"bytes" must be two lowercase hex digits per byte`, at, "lossless-bytes")
+    if (only("_bytes")) {
+      const hex = j["_bytes"]
+      if (typeof hex !== "string" || !LOWER_HEX.test(hex)) return fail(`"_bytes" must be two lowercase hex digits per byte`, at, "haus-json-bytes")
       if (hex.length > limits.maxStringLength) fail(`byte string longer than ${limits.maxStringLength} characters`, at, "string-too-long")
       const out = new Uint8Array(hex.length / 2)
       for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16)
       return bytesValue(out)
     }
-    if (only("rec")) {
-      const fields = j["rec"]!
-      if (!isJsonObject(fields)) return fail(`"rec" must be an object`, at)
+    if (only("_rec")) {
+      const fields = j["_rec"]!
+      if (!isJsonObject(fields)) return fail(`"_rec" must be an object`, at)
       open()
       return rec(new Map(Object.keys(fields).map((k) => [keyOfJson(k, limits, at), read(fields[k]!, inner, at.child(k), false)] as const)))
     }
-    if (only("tag") || only("tag", "args")) {
-      const tag = j["tag"]
-      // The tag first, at its member, then "args".
-      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at.child("tag"), "invalid-tag")
+    if (only("_tag") || only("_tag", "_args")) {
+      const tag = j["_tag"]
+      // The tag first, at its member, then "_args".
+      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"_tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at.child("_tag"), "invalid-tag")
       const tagIssue = tagLengthIssue(tag, limits)
       if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
-      if (!Object.hasOwn(j, "args")) return variant(tag)
-      const args = j["args"]!
-      if (!Array.isArray(args) || args.length === 0) return fail(`"args" must be a non-empty array (a tag without arguments has no "args")`, at)
+      if (!Object.hasOwn(j, "_args")) return variant(tag)
+      const args = j["_args"]!
+      if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array (a tag without arguments has no "_args")`, at)
       open()
-      const single = args.length === 1 && isJsonObject(args[0]!) && Object.hasOwn(args[0], "rec")
+      const single = args.length === 1 && isJsonObject(args[0]!) && Object.hasOwn(args[0], "_rec")
       return variant(tag, args.map((x, i) => read(x, depth + 1, at.child(i), single)))
     }
     const members = keys.slice(0, 5).map((k) => short(k)).join(", ")
-    return fail(`not a lossless form: an object with the members ${members}${keys.length > 5 ? ", …" : ""} (expected {"num"}, {"bytes"}, {"rec"} or {"tag"[, "args"]})`, at)
+    return fail(`not a self-describing form: an object with the members ${members}${keys.length > 5 ? ", …" : ""} (expected {"_num"}, {"_bytes"}, {"_rec"} or {"_tag"[, "_args"]})`, at)
   }
   return read(json, 0, place, false)
 }
 
-/** The lossless JSON of a value (spec §16.2), as a JSON value. */
-export const toLosslessJsonValue = (value: Value, limits: Partial<Limits> = {}): Json => losslessJson(value, withDefaults(limits), Place.root())
+/** The envelope of self-describing JSON (spec §16.2): `{"_haus": 1, "_value": …}`. */
+const envelope = (value: Json): JsonObject => jsonObject([["_haus", new JsonNumber(VERSION)], ["_value", value]])
+
+/** The value in an envelope (spec §16.2), at `place`: the envelope adds no path segment. */
+const unwrap = (json: Json, place: Place): Json => {
+  const isEnvelope = isJsonObject(json) && Object.keys(json).length === 2 && Object.hasOwn(json, "_haus") && Object.hasOwn(json, "_value")
+  if (!isEnvelope) {
+    throw new HausDecodeError(`not self-describing JSON: expected the envelope {"_haus": 1, "_value": …}, found ${describeJson(json)}`, place.path(), "haus-json-form")
+  }
+  const version = json["_haus"]!
+  if (!(version instanceof JsonNumber && version.text === VERSION)) {
+    throw new HausDecodeError(`self-describing JSON of version ${describeJson(version)}: this reader reads version 1 ("_haus": 1)`, place.path(), "haus-json-version")
+  }
+  return json["_value"]!
+}
+
+/** The self-describing JSON of a value (spec §16.2), as a JSON value: the envelope. */
+export const toHausJsonValue = (value: Value, limits: Partial<Limits> = {}): Json => envelope(hausJsonOf(value, withDefaults(limits), Place.root()))
 
 /**
- * The lossless JSON text of a value (spec §16.2): every haus value has one,
- * and reading it gives an equal value (§2). For carrying haus through systems
- * that only store JSON.
+ * The self-describing JSON text of a value (spec §16.2),
+ * `{"_haus":1,"_value":…}`: every haus value has one, and reading it gives
+ * an equal value (§2). For carrying haus through systems that only store
+ * JSON.
  */
-export const toLosslessJson = (value: Value, limits: Partial<Limits> = {}): string => stringifyJson(toLosslessJsonValue(value, limits))
-
-/** A haus value from its lossless JSON value. Anything that isn't exactly a lossless form is a HausDecodeError. */
-export const fromLosslessJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => fromLossless(json, withDefaults(limits), Place.root())
+export const toHausJson = (value: Value, limits: Partial<Limits> = {}): string => stringifyJson(toHausJsonValue(value, limits))
 
 /**
- * Read lossless JSON text (spec §16.2): exactly the forms `toLosslessJson`
- * writes. A bare number, `true`, `false`, `null`, a `num` that isn't a
- * normalized literal or an object with other members is an error.
+ * A haus value from its self-describing JSON value (the envelope). Anything
+ * that isn't exactly a self-describing form is a HausDecodeError. A parsed
+ * value can't tell raw controls from escaped ones; `fromHausJson` rejects
+ * raw ones.
  */
-export const fromLosslessJson = (text: string, limits: Partial<Limits> = {}): Value => {
+export const fromHausJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => {
+  const place = Place.root()
+  return valueOfHausJson(unwrap(json, place), withDefaults(limits), place)
+}
+
+/**
+ * Read self-describing JSON text (spec §16.2): exactly what `toHausJson`
+ * writes. A text without the envelope, a `_haus` other than 1, a bare number,
+ * `true`, `false`, `null`, a `_num` that isn't a normalized literal, an
+ * object with other members, or a raw DEL, C1 or bidi control is an error.
+ */
+export const fromHausJson = (text: string, limits: Partial<Limits> = {}): Value => {
   const l = withDefaults(limits)
-  return fromLossless(readJson(text, jsonDepthFor(l)), l, Place.root())
+  const place = Place.root()
+  return valueOfHausJson(unwrap(readJson(text, hausJsonDepthFor(l), START, true), place), l, place)
 }
 
 // ── JSON Lines (spec §16: a stream is one JSON text per value) ─
@@ -703,21 +765,24 @@ export const parseJsonLines = (source: ChunkSource, options: JsonLinesOptions = 
   return readLines(source, options, (text, origin) => readJson(text, limits, origin))
 }
 
-/** Read a JSON Lines stream as haus values, without a schema (§16.1). Errors name the line's index. */
-export const fromJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Value, void, undefined> => {
+/** Import a JSON Lines stream as haus values, without a schema (§16.1). Errors name the line's index. */
+export const importJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Value, void, undefined> => {
   const limits = withDefaults(options.limits ?? {})
-  return readLines(source, options, (text, origin, i) => plainValue(readJson(text, limits, origin), limits, 0, Place.root(i)))
+  return readLines(source, options, (text, origin, i) => imported(readJson(text, limits, origin), limits, 0, Place.root(i)))
 }
 
-/** Read a JSON Lines stream of lossless forms (§16.2) as haus values. Errors name the line's index. */
-export const fromLosslessJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Value, void, undefined> => {
+/** Read a JSON Lines stream of self-describing JSON (§16.2), an envelope per line, as haus values. Errors name the line's index. */
+export const fromHausJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Value, void, undefined> => {
   const limits = withDefaults(options.limits ?? {})
-  return readLines(source, options, (text, origin, i) => fromLossless(readJson(text, jsonDepthFor(limits), origin), limits, Place.root(i)))
+  return readLines(source, options, (text, origin, i) => {
+    const place = Place.root(i)
+    return valueOfHausJson(unwrap(readJson(text, hausJsonDepthFor(limits), origin, true), place), limits, place)
+  })
 }
 
-/** Write values as JSON Lines of their lossless forms (§16.2): one line per value, each ending in a line feed. */
-export async function* toLosslessJsonLines(values: AsyncIterable<Value> | Iterable<Value>, limits: Partial<Limits> = {}): AsyncGenerator<string, void, undefined> {
+/** Write values as JSON Lines of their self-describing JSON (§16.2): an envelope per line, each ending in a line feed. */
+export async function* toHausJsonLines(values: AsyncIterable<Value> | Iterable<Value>, limits: Partial<Limits> = {}): AsyncGenerator<string, void, undefined> {
   const l = withDefaults(limits)
   let i = 0
-  for await (const v of values) yield stringifyJson(losslessJson(v, l, Place.root(i++))) + "\n"
+  for await (const v of values) yield stringifyJson(envelope(hausJsonOf(v, l, Place.root(i++)))) + "\n"
 }

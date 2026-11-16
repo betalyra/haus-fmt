@@ -2,7 +2,7 @@
  * Generates the Roc package that the Roc runner of the JSON fuzzer
  * (json_runner.roc) uses: for each schema of test-suite/schema, fuzz/schema,
  * test-suite/json and fuzz/json, `haus-gen roc --json` writes the module NAME.roc (its
- * types, decoders, encoders and plain JSON readers and writers), and
+ * types, decoders, encoders and schema-based JSON readers and writers), and
  * JsonSchemas.roc dispatches on the schema and type names. Writes
  * fuzz/.build/roc-json/; run by fuzz/build.sh. Needs Rust (cargo).
  */
@@ -66,13 +66,13 @@ import haus.JsonValue
 import haus.ErrorCode
 ${modules.map((m) => `import ${m}\n`).join("")}
 JsonSchemas := [].{
-\t## Decode \`v\` with the type \`ty\` of the schema \`suite\`, and write the result as plain JSON.
+\t## Decode \`v\` with the type \`ty\` of the schema \`suite\`, and write the result as schema-based JSON.
 \twrite : Str, Str, Value -> [Written(Try(Str, Str)), NoType]
 \twrite = |suite, ty, v| match suite {
 ${writes.join("")}\t\t_ => NoType
 \t}
 
-\t## Read \`j\` as plain JSON with the type \`ty\` of the schema \`suite\`, and encode the result.
+\t## Read \`j\` as schema-based JSON with the type \`ty\` of the schema \`suite\`, and encode the result.
 \tread : Str, Str, JsonValue -> [Read(Try(Value, Str)), NoType]
 \tread = |suite, ty, j| match suite {
 ${reads.join("")}\t\t_ => NoType

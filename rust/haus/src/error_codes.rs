@@ -38,15 +38,15 @@ pub enum ErrorCode {
     DuplicateKey,
     /// `empty-payload`: A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.
     EmptyPayload,
-    /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in plain JSON, §16.3).
+    /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
     InvalidNumber,
     /// `unterminated-string`: A string has no closing `"` (in haus or JSON).
     UnterminatedString,
     /// `string-line-break`: A raw line break inside a `"…"` string.
     StringLineBreak,
-    /// `control-character`: A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string.
+    /// `control-character`: A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string: C0 in any JSON, DEL and C1 in self-describing JSON (§16).
     ControlCharacter,
-    /// `bidi-control`: A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, where it could reorder how the text is displayed ("Trojan Source", §9).
+    /// `bidi-control`: A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, or in a self-describing JSON string (§16), where it could reorder how the text is displayed ("Trojan Source", §9).
     BidiControl,
     /// `invalid-escape`: A backslash followed by a character that doesn't start an escape. haus has `\"`, `\\`, `\n`, `\r`, `\t` and `\u{…}`; JSON has its own set.
     InvalidEscape,
@@ -186,21 +186,23 @@ pub enum ErrorCode {
     JsonSyntax,
     /// `unpaired-surrogate`: A JSON string with half of a UTF-16 surrogate pair, raw or as `\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).
     UnpairedSurrogate,
-    /// `lossless-form`: JSON that isn't one of the lossless forms (§16.2): a bare number, `true`, `null`, an object with other members, a `rec` that isn't an object, an `args` that isn't a non-empty array.
-    LosslessForm,
-    /// `lossless-number`: A lossless `num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
-    LosslessNumber,
-    /// `lossless-bytes`: A lossless `bytes` that isn't two lowercase hex digits per byte.
-    LosslessBytes,
-    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`: in a lossless `tag`, in a plain `_tag`, or in a value built in code.
+    /// `haus-json-form`: JSON that isn't self-describing JSON (§16.2): a text without the envelope `{"_haus": 1, "_value": …}`, an envelope with other members, a bare number, `true`, `null`, an object with other members, a `_rec` that isn't an object, an `_args` that isn't a non-empty array.
+    HausJsonForm,
+    /// `haus-json-version`: A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.
+    HausJsonVersion,
+    /// `haus-json-number`: A self-describing `_num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
+    HausJsonNumber,
+    /// `haus-json-bytes`: A self-describing `_bytes` that isn't two lowercase hex digits per byte.
+    HausJsonBytes,
+    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`: in a `_tag` of either JSON form, or in a value built in code.
     InvalidTag,
-    /// `invalid-base64`: Plain JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
+    /// `invalid-base64`: Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
     InvalidBase64,
-    /// `missing-member`: Plain JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
+    /// `missing-member`: Schema-based JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
     MissingMember,
-    /// `unexpected-member`: Plain JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
+    /// `unexpected-member`: Schema-based JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
     UnexpectedMember,
-    /// `no-json-form`: A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` in plain JSON (§16.3), a type with no plain mapping.
+    /// `no-json-form`: A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` or `_args` in schema-based JSON (§16.3), a type with no schema-based form.
     NoJsonForm,
     /// `unknown-attribute`: A warning: an attribute this version of haus doesn't define. It is accepted and has no meaning (§14).
     UnknownAttribute,
@@ -244,7 +246,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 102] = [
+    pub const ALL: [ErrorCode; 103] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -335,9 +337,10 @@ impl ErrorCode {
         ErrorCode::TooManyNodes,
         ErrorCode::JsonSyntax,
         ErrorCode::UnpairedSurrogate,
-        ErrorCode::LosslessForm,
-        ErrorCode::LosslessNumber,
-        ErrorCode::LosslessBytes,
+        ErrorCode::HausJsonForm,
+        ErrorCode::HausJsonVersion,
+        ErrorCode::HausJsonNumber,
+        ErrorCode::HausJsonBytes,
         ErrorCode::InvalidTag,
         ErrorCode::InvalidBase64,
         ErrorCode::MissingMember,
@@ -442,9 +445,10 @@ impl ErrorCode {
             ErrorCode::TooManyNodes => "too-many-nodes",
             ErrorCode::JsonSyntax => "json-syntax",
             ErrorCode::UnpairedSurrogate => "unpaired-surrogate",
-            ErrorCode::LosslessForm => "lossless-form",
-            ErrorCode::LosslessNumber => "lossless-number",
-            ErrorCode::LosslessBytes => "lossless-bytes",
+            ErrorCode::HausJsonForm => "haus-json-form",
+            ErrorCode::HausJsonVersion => "haus-json-version",
+            ErrorCode::HausJsonNumber => "haus-json-number",
+            ErrorCode::HausJsonBytes => "haus-json-bytes",
             ErrorCode::InvalidTag => "invalid-tag",
             ErrorCode::InvalidBase64 => "invalid-base64",
             ErrorCode::MissingMember => "missing-member",
@@ -550,9 +554,10 @@ impl ErrorCode {
             ErrorCode::TooManyNodes => ErrorCategory::Decoding,
             ErrorCode::JsonSyntax => ErrorCategory::Json,
             ErrorCode::UnpairedSurrogate => ErrorCategory::Json,
-            ErrorCode::LosslessForm => ErrorCategory::Json,
-            ErrorCode::LosslessNumber => ErrorCategory::Json,
-            ErrorCode::LosslessBytes => ErrorCategory::Json,
+            ErrorCode::HausJsonForm => ErrorCategory::Json,
+            ErrorCode::HausJsonVersion => ErrorCategory::Json,
+            ErrorCode::HausJsonNumber => ErrorCategory::Json,
+            ErrorCode::HausJsonBytes => ErrorCategory::Json,
             ErrorCode::InvalidTag => ErrorCategory::Json,
             ErrorCode::InvalidBase64 => ErrorCategory::Json,
             ErrorCode::MissingMember => ErrorCategory::Json,
@@ -658,14 +663,15 @@ impl ErrorCode {
             ErrorCode::TooManyNodes => "Build a smaller value, or raise the limit.",
             ErrorCode::JsonSyntax => "Write valid JSON; the message says what was expected.",
             ErrorCode::UnpairedSurrogate => "Write both halves of the surrogate pair, or the character itself.",
-            ErrorCode::LosslessForm => "Write one of the lossless forms of §16.2: a string, an array, or an object with `num`, `bytes`, `rec`, or `tag` (and `args`).",
-            ErrorCode::LosslessNumber => "Write the number's normalized literal (§2) as a string.",
-            ErrorCode::LosslessBytes => "Write the bytes as lowercase hex, two digits per byte.",
+            ErrorCode::HausJsonForm => "Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead.",
+            ErrorCode::HausJsonVersion => "Read it with a newer version of haus, or write `\"_haus\": 1`.",
+            ErrorCode::HausJsonNumber => "Write the number's normalized literal (§2) as a string.",
+            ErrorCode::HausJsonBytes => "Write the bytes as lowercase hex, two digits per byte.",
             ErrorCode::InvalidTag => "Start the tag with a capital letter and use only letters, digits and `_`.",
             ErrorCode::InvalidBase64 => "Write standard base64, with padding.",
             ErrorCode::MissingMember => "Add the member the message names.",
             ErrorCode::UnexpectedMember => "Remove the member.",
-            ErrorCode::NoJsonForm => "Rename the field, or use the lossless mapping.",
+            ErrorCode::NoJsonForm => "Rename the field, or use self-describing JSON.",
             ErrorCode::UnknownAttribute => "Check the spelling; attributes of a later version are fine.",
             ErrorCode::Deprecated => "Use what the deprecation note says instead.",
             ErrorCode::UnlistedField => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers.",

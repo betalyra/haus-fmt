@@ -81,18 +81,26 @@ hasher.digest()  # == haus.hash_all(all events)
 
 ## JSON
 
-Two mappings connect haus and JSON (spec §16). JSON is read strictly, as I-JSON within the limits: UTF-8 (a leading byte order mark is ignored; in JSON Lines only at the start of the stream), no duplicate member names, no unpaired surrogates, and numbers keep their exact text, never a float. Errors are `haus.HausJsonError`, a `ValueError` with `reason` and either `line` and `column` (text that isn't JSON) or `path` (JSON that isn't the expected form).
+Three forms connect haus and JSON (spec §16), and the caller always says which one it reads:
+
+- **Schema-based JSON** is the JSON a JSON consumer expects, written and read with a schema type: `s["Order"].to_json(order)` and `from_json(text)` (below).
+- **Self-describing JSON** carries every haus value exactly, without a schema, through systems that only store JSON: `haus.to_haus_json(value)` and `haus.from_haus_json(text)`.
+- **JSON import** reads any JSON as a haus value, without a schema: `haus.import_json(text)`. It only reads.
 
 ```python
-haus.from_json('{"price": 19.90, "ok": true, "note": null}')  # any JSON as a haus value (§16.1)
+haus.import_json('{"price": 19.90, "ok": true, "note": null}')  # any JSON as a haus value (§16.1)
 # Record(fields={'price': Number(text='19.90'), 'ok': Variant(tag='True', ...), 'note': Variant(tag='None', ...)})
 
-haus.to_lossless_json(haus.parse("Circle { r: 1.50 }"))  # every value, without a schema (§16.2)
-# '{"tag":"Circle","args":[{"rec":{"r":{"num":"1.50"}}}]}'
-haus.from_lossless_json('{"num": "19.90"}')  # Number(text='19.90'); any other form is an error
+haus.to_haus_json(haus.parse("Circle { r: 1.50 }"))  # every value, without a schema (§16.2)
+# '{"_haus":1,"_value":{"_tag":"Circle","_args":[{"_rec":{"r":{"_num":"1.50"}}}]}}'
+haus.from_haus_json('{"_haus": 1, "_value": {"_num": "19.90"}}')  # Number(text='19.90'); any other form is an error
 ```
 
-The lossless form carries haus through systems that only store JSON: every value has exactly one, and reading it gives an equal value. For the JSON an API consumer expects, use a schema type (below). Streams are JSON Lines, one JSON text per line: `haus.from_json_lines(source)`, `haus.to_lossless_json_lines(values)` and `haus.from_lossless_json_lines(source)` read a text, a file, or chunks split anywhere.
+Self-describing JSON is an envelope, `{"_haus": 1, "_value": …}`: every value has exactly one, and reading it gives an equal value. `from_haus_json` requires the envelope (`haus-json-form` without it, `haus-json-version` for a `_haus` other than 1); `import_json` and schema-based reading never look for one, so to them it is an ordinary object.
+
+JSON is read strictly, as I-JSON within the limits: UTF-8 (a leading byte order mark is ignored; in JSON Lines only at the start of the stream), no duplicate member names, no unpaired surrogates, and numbers keep their exact text, never a float. Writers escape C0, DEL, C1 and bidi controls in strings and member names, so written JSON can't display differently from what it holds; `from_haus_json` rejects them raw (only haus writes that form), the other readers accept them. Errors are `haus.HausJsonError`, a `ValueError` with `reason` and either `line` and `column` (text that isn't JSON) or `path` (JSON that isn't the expected form).
+
+Streams are JSON Lines, one JSON text per line (in self-describing JSON, an envelope each): `haus.import_json_lines(source)`, `haus.to_haus_json_lines(values)` and `haus.from_haus_json_lines(source)` read a text, a file, or chunks split anywhere.
 
 ## Schemas
 
@@ -166,7 +174,7 @@ Decoding is linear in the input whatever the schema (spec §9.8): a variant's ca
 
 `type Events = Stream Event` describes a file. `s["Events"].parse_stream(source)` reads it (a file or chunks, as `haus.parse_stream`) and decodes each value as it arrives; an error's path starts with the value's index. `encode_all(values)` writes stream items, each followed by `,\n`.
 
-### Plain JSON
+### Schema-based JSON
 
 `to_json` and `from_json` map a type's values to the JSON a JSON consumer expects (spec §16.3). The schema carries what JSON can't say, so reading checks everything decoding does:
 
@@ -191,15 +199,15 @@ s["Order"].to_json_lines(orders)  # JSON Lines; from_json_lines(source) reads th
 | `Int`, `Int64`, `UInt64` | a string (`"-12"`): many JSON parsers round integers beyond 2⁵³ |
 | `Float32`, `Float64` | a number in the spelling of §15; `"NaN"`, `"Infinity"`, `"-Infinity"` |
 | `Decimal` | a string, the literal (`"19.90"`) |
-| `Any` | its lossless form |
+| `Any` | its self-describing form, without the envelope |
 | `Secret a` | as `a`; errors never show the value |
 | `Array a`, `Map v`, records | an array, an object; a missing optional field is a missing member |
 | `Maybe a` | `null` or the value when `a`'s JSON can't be `null`; otherwise `{"_tag": "None"}`, `{"_tag": "Some", "value": …}` |
 | a closed variant without payloads | the tag as a string (`"Debug"`) |
 | other variants | `{"_tag": "Circle", "r": 1.5}`, `{"_tag": "Wrap", "value": 3}`, `{"_tag": "Point", "values": [1, 2]}` |
-| an unknown value | `{"_tag": "Hexagon", "args": [<lossless>, …]}` |
+| an unknown value | `{"_tag": "Hexagon"}`, or with arguments `{"_tag": "Hexagon", "_args": [<self-describing>, …]}` |
 
-Reading follows §15: an open record or payload ignores members it doesn't list and a closed one rejects them, an integer type accepts only whole numbers by spelling (`1.0` is not one), and an open variant reads a `"_tag"` it doesn't list as an `Unknown`: with `"args"` (lossless), or, from a newer writer's case, its other members as a record payload read without a schema (`{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`). A `Maybe` whose JSON would depend on itself (`type T = Maybe T`) is always tagged. A record payload with a field named `_tag` has no plain form: writing or reading it is an error.
+Reading follows §15: an open record or payload ignores members it doesn't list and a closed one rejects them, an integer type accepts only whole numbers by spelling (`1.0` is not one), and an open variant reads a `"_tag"` it doesn't list as an `Unknown`: alone, the bare tag; with only `"_args"`, its arguments as self-describing values; otherwise, from a newer writer's case, its other members as a record payload read by the import (`{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`, and `{"_tag": "Run", "args": [1]}` is `Run { args: [1] }`). A `Maybe` whose JSON would depend on itself (`type T = Maybe T`) is always tagged. A record payload with a field named `_tag` or `_args` has no schema-based form: writing or reading a value of that case is an error (`no-json-form`).
 
 ### Imports and packages
 

@@ -1,5 +1,5 @@
 import Haus.Json.Normal
-import Haus.Json.Lossless
+import Haus.Json.SelfDescribing
 import Haus.RoundTrip.File
 import Haus.Sound.Values
 

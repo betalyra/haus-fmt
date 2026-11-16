@@ -1,6 +1,7 @@
 """The JSON conformance suite (test-suite/json, spec §16; format in test-suite/README.md).
 
-Every valid/NAME.json of the parser suite is a lossless case too: the JSON array of the file's values.
+Every valid/NAME.jsonl of the parser suite is a self-describing case too: JSON Lines, one
+envelope per value of the file.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import haus
-from haus import Array, Record, String, Value, Variant
+from haus import Record, String, Value, Variant
 from haus.schema import HausDecodeError, HausJsonError, Schema, compile_schema
 
 SUITE = Path(__file__).resolve().parents[2] / "test-suite"
@@ -79,18 +80,18 @@ def canonical(v: Value | None) -> str:
     return haus.canonical(v)
 
 
-# ── plain (§16.3) ────────────────────────────────────────────
+# ── schema-based (§16.3) ─────────────────────────────────────
 
 
 @cache
-def plain_schema() -> Schema:
-    return compile_schema((JSON_SUITE / "plain.schema.haus").read_text("utf-8"))
+def schema_based() -> Schema:
+    return compile_schema((JSON_SUITE / "schema-based.schema.haus").read_text("utf-8"))
 
 
-@pytest.mark.parametrize("case", load("plain.cases.haus"), ids=lambda c: c.name)
-def test_plain(case: Case) -> None:
+@pytest.mark.parametrize("case", load("schema-based.cases.haus"), ids=lambda c: c.name)
+def test_schema_based(case: Case) -> None:
     assert case.type is not None
-    t = plain_schema()[case.type]
+    t = schema_based()[case.type]
     match case.kind:
         case "Ok":
             assert case.input is not None
@@ -107,18 +108,18 @@ def test_plain(case: Case) -> None:
             assert e.value.code == case.code, e.value.reason
 
 
-# ── lossless (§16.2) ─────────────────────────────────────────
+# ── self-describing (§16.2) ──────────────────────────────────
 
 
-@pytest.mark.parametrize("case", load("lossless.cases.haus"), ids=lambda c: c.name)
-def test_lossless(case: Case) -> None:
+@pytest.mark.parametrize("case", load("self-describing.cases.haus"), ids=lambda c: c.name)
+def test_self_describing(case: Case) -> None:
     if case.kind == "Ok":
         assert case.input is not None
-        assert data(haus.to_lossless_json(case.input)) == data(case.json)
-        assert haus.equals(haus.from_lossless_json(case.json), case.input)
+        assert data(haus.to_haus_json(case.input)) == data(case.json)
+        assert haus.equals(haus.from_haus_json(case.json), case.input)
     else:
         with pytest.raises(HausJsonError) as e:
-            haus.from_lossless_json(case.json)
+            haus.from_haus_json(case.json)
         assert e.value.code == case.code, e.value.reason
 
 
@@ -126,35 +127,36 @@ VALID = sorted((SUITE / "valid").glob("*.haus"))
 
 
 @pytest.mark.parametrize("path", VALID, ids=lambda p: p.stem)
-def test_lossless_valid(path: Path) -> None:
-    """`valid/NAME.json` is the lossless form of the file's values, in a JSON array."""
-    expected = path.with_suffix(".json").read_bytes()
+def test_self_describing_valid(path: Path) -> None:
+    """`valid/NAME.jsonl` is the self-describing JSON of the file's values, one envelope per line."""
+    expected = path.with_suffix(".jsonl").read_bytes()
     values = haus.parse_bytes(path.read_bytes())
-    file = Array(tuple(values))
-    assert data(haus.to_lossless_json(file)) == data(expected)
-    assert haus.equals(haus.from_lossless_json(expected), file)
-    # As JSON Lines: one value per line.
-    lines = "".join(haus.to_lossless_json_lines(values))
-    assert lines.count("\n") == len(values)
-    read = list(haus.from_lossless_json_lines(lines))
+    lines = expected.splitlines()
+    assert len(lines) == len(values)
+    for line, value in zip(lines, values, strict=True):
+        assert data(haus.to_haus_json(value)) == data(line)
+        assert haus.equals(haus.from_haus_json(line), value)
+    written = "".join(haus.to_haus_json_lines(values))
+    assert [data(line) for line in written.splitlines()] == [data(line) for line in lines]
+    read = list(haus.from_haus_json_lines(expected))
     assert len(read) == len(values)
     assert all(map(haus.equals, read, values))
 
 
-def test_every_valid_file_has_json() -> None:
+def test_every_valid_file_has_json_lines() -> None:
     assert VALID
-    assert all(p.with_suffix(".json").is_file() for p in VALID)
+    assert all(p.with_suffix(".jsonl").is_file() for p in VALID)
 
 
-# ── without a schema (§16.1) ─────────────────────────────────
+# ── the JSON import (§16.1) ──────────────────────────────────
 
 
-@pytest.mark.parametrize("case", load("schemaless.cases.haus"), ids=lambda c: c.name)
-def test_schemaless(case: Case) -> None:
+@pytest.mark.parametrize("case", load("import.cases.haus"), ids=lambda c: c.name)
+def test_import(case: Case) -> None:
     if case.kind == "Read":
         assert case.output is not None
-        assert haus.equals(haus.from_json(case.json), case.output)
+        assert haus.equals(haus.import_json(case.json), case.output)
     else:
         with pytest.raises(HausJsonError) as e:
-            haus.from_json(case.json)
+            haus.import_json(case.json)
         assert e.value.code == case.code, e.value.reason

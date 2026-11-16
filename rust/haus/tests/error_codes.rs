@@ -4,8 +4,8 @@
 //!
 //!     HAUS_WRITE_ERROR_CODES=1 cargo test -p haus-fmt --test error_codes
 //!
-//! The catalogue's examples of syntax errors (`Data`) and of the lossless JSON
-//! form (`Lossless`) are checked here too; haus-fmt-schema checks the others.
+//! The catalogue's examples of syntax errors (`Data`) and of self-describing
+//! JSON (`HausJson`) are checked here too; haus-fmt-schema checks the others.
 
 use haus::{ErrorCode, Value};
 use std::path::{Path, PathBuf};
@@ -194,7 +194,7 @@ fn codes_have_their_names_hints_and_docs() {
 }
 
 /// The catalogue's examples this crate can run: `Data` (haus text) and
-/// `Lossless` (the lossless JSON form) fail with their entry's code.
+/// `HausJson` (self-describing JSON) fail with their entry's code.
 #[test]
 fn examples_have_their_codes() {
     let mut checked = 0;
@@ -203,7 +203,7 @@ fn examples_have_their_codes() {
         let [Value::String(input)] = args.as_slice() else { continue };
         let code = match tag.as_str() {
             "Data" => haus::parse(input).err().map(|err| err.code),
-            "Lossless" => haus::from_lossless_json(input).err().and_then(|err| err.code()),
+            "HausJson" => haus::from_haus_json(input).err().and_then(|err| err.code()),
             _ => continue,
         };
         assert_eq!(code.map(|c| c.as_str()), Some(e.code.as_str()), "{}: {input:?}", e.code);
