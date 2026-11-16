@@ -79,14 +79,14 @@ theorem isJsonNumber_minus {t : Text} {c : Char} {r : Text} (ht : t = c :: r) (h
   rw [dropMinus_digit hc]
   rfl
 
-theorem jsonExp_intText (neg : Bool) (v : Nat) : jsonTail.jsonExp ('e' :: RoundTrip.intText neg v) = true := by
+theorem jsonExp_intText (neg : Bool) (v : Nat) : jsonTail.jsonExp ('e' :: intText neg v) = true := by
   have hd := RoundTrip.toDigits_decimal (n := v)
   obtain ⟨c, rest, he⟩ : ∃ c rest, Nat.toDigits 10 v = c :: rest :=
     match Nat.toDigits 10 v, Nat.toDigits_ne_nil (b := 10) (n := v) with
     | c :: rest, _ => ⟨c, rest, rfl⟩
   have hc : isDigit c = true := hd c (by simp [he])
   have hall : (c :: rest).all isDigit = true := List.all_eq_true.mpr (he ▸ hd)
-  unfold RoundTrip.intText
+  unfold intText
   split
   · simp only [List.cons_append, List.nil_append, he]
     simp [jsonTail.jsonExp, hall]

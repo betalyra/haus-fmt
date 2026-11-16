@@ -33,11 +33,17 @@ pub fn renderer(color: bool) -> Renderer {
 /// `text` on standard output, flushed. A closed pipe (`haus canonical x | head`)
 /// is not an error.
 pub fn print(text: &str) -> io::Result<()> {
-    let mut out = io::stdout().lock();
-    match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+    match write(text) {
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         result => result,
     }
+}
+
+/// `text` on standard output, flushed; a closed pipe is an error, for a
+/// command that should stop writing.
+pub fn write(text: &str) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    out.write_all(text.as_bytes()).and_then(|()| out.flush())
 }
 
 /// `text` on standard error; nothing to do if that fails.

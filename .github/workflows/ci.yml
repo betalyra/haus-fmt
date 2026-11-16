@@ -148,10 +148,11 @@ jobs:
         working-directory: python
         run: uv run pytest
 
-  fuzz:
-    name: Differential fuzzing
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  fuzz-build:
+    name: Fuzzing / build the runners
+    # The fuzz jobs run these binaries: the same image for all of them.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: leanprover/lean-action@v1
@@ -180,36 +181,70 @@ jobs:
         run: |
           (cd typescript && pnpm install --frozen-lockfile)
           sh fuzz/build.sh
-      - name: Budget
-        id: budget
+      # Artifacts drop the executable bit, so the runners travel as a tarball.
+      - name: Pack the runners
         run: |
-          if [ "${{ github.event_name }}" = schedule ]; then
-            echo "parser=1000000" >> "$GITHUB_OUTPUT"; echo "time=20000000" >> "$GITHUB_OUTPUT"; echo "schema=500000" >> "$GITHUB_OUTPUT"; echo "json=50000" >> "$GITHUB_OUTPUT"
-          else
-            echo "parser=100000" >> "$GITHUB_OUTPUT"; echo "time=2000000" >> "$GITHUB_OUTPUT"; echo "schema=20000" >> "$GITHUB_OUTPUT"; echo "json=4000" >> "$GITHUB_OUTPUT"
-          fi
-          # A new seed every run, printed in the log.
-          echo "seed=$(( ${{ github.run_id }} % 1000000 ))" >> "$GITHUB_OUTPUT"
-      - name: The fuzzers' own tests
-        run: node --test fuzz/src/
-      - name: Parsers
-        if: ${{ !cancelled() }}
-        run: node fuzz/src/main.ts --count ${{ steps.budget.outputs.parser }} --seed ${{ steps.budget.outputs.seed }}
-      - name: Canonical forms
-        if: ${{ !cancelled() }}
-        run: node fuzz/src/main.ts --canonical --count ${{ steps.budget.outputs.parser }} --seed ${{ steps.budget.outputs.seed }}
-      - name: std/time checkers
-        if: ${{ !cancelled() }}
-        run: node fuzz/src/time.ts --count ${{ steps.budget.outputs.time }} --seed ${{ steps.budget.outputs.seed }}
-      - name: Schema decoding
-        if: ${{ !cancelled() }}
-        run: node fuzz/src/main.ts --schema --count ${{ steps.budget.outputs.schema }} --seed ${{ steps.budget.outputs.seed }}
-      - name: JSON mappings
-        if: ${{ !cancelled() }}
-        run: node fuzz/src/main.ts --json --count ${{ steps.budget.outputs.json }} --seed ${{ steps.budget.outputs.seed }}
+          tar -czf fuzz-runners.tgz \
+            spec/lean/.lake/build/bin/haus-ref \
+            rust/target/release/examples/fuzz_runner rust/target/release/examples/time_runner \
+            fuzz/schema-rust/target/release/schema_runner fuzz/schema-rust/target/release/json_runner fuzz/schema-rust/target/release/check_runner \
+            fuzz/.build \
+            typescript/packages/haus/dist typescript/packages/effect/dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-runners
+          path: fuzz-runners.tgz
+          retention-days: 1
+
+  fuzz:
+    name: Fuzzing / ${{ matrix.mode }}
+    needs: fuzz-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each mode runs on its own runner against the same binaries; `pr` and
+        # `nightly` are the case counts (std/time cases are cheap, so many more;
+        # 0: no count, the fuzzers' unit tests).
+        include:
+          - { mode: own-tests, run: "node --test fuzz/src/", pr: 0, nightly: 0 }
+          - { mode: parser, run: "node fuzz/src/main.ts", pr: 100000, nightly: 1000000 }
+          - { mode: canonical, run: "node fuzz/src/main.ts --canonical", pr: 100000, nightly: 1000000 }
+          - { mode: time, run: "node fuzz/src/time.ts", pr: 2000000, nightly: 20000000 }
+          - { mode: schema, run: "node fuzz/src/main.ts --schema", pr: 20000, nightly: 500000 }
+          - { mode: json, run: "node fuzz/src/main.ts --json", pr: 4000, nightly: 50000 }
+          - { mode: format, run: "node fuzz/src/main.ts --format", pr: 20000, nightly: 200000 }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - uses: actions/download-artifact@v4
+        with:
+          name: fuzz-runners
+      - name: Unpack the runners
+        run: |
+          tar -xzf fuzz-runners.tgz
+          (cd typescript && pnpm install --frozen-lockfile)
+          (cd python && uv sync -q)
+      - name: Fuzz
+        run: |
+          count=${{ github.event_name == 'schedule' && matrix.nightly || matrix.pr }}
+          # A new seed every run, printed in the log; the same for every mode, as before.
+          seed=$(( ${{ github.run_id }} % 1000000 ))
+          if [ "$count" = 0 ]; then set -x; ${{ matrix.run }}; exit; fi
+          set -x
+          ${{ matrix.run }} --count "$count" --seed "$seed"
       - name: Keep the failures
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-failures
+          name: fuzz-failures-${{ matrix.mode }}
           path: fuzz/.out/**/failures*

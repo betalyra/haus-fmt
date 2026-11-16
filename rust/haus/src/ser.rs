@@ -112,7 +112,7 @@ impl Encoder {
             (true, Value::Record(_)) => self.depth - 1,
             _ => self.depth,
         };
-        Writer { out: &mut String::new(), limits: &self.limits }.value(v, depth)
+        Writer { out: &mut String::new(), limits: &self.limits, spaced: true }.value(v, depth)
     }
 }
 
@@ -365,15 +365,28 @@ pub fn write(v: &Value) -> Result<String, EncodeError> {
 /// Integers are written in decimal: one longer than
 /// `limits.max_number_length` is an error (`number-too-long`).
 pub fn write_with(v: &Value, limits: &Limits) -> Result<String, EncodeError> {
+    write_line(v, limits, true)
+}
+
+/// One value on one line in the minimised layout (spec §11): the compact
+/// layout without the whitespace between tokens, `Person{name:"Ada",tags:[1,2]}`.
+/// Checked as [`write_with`] checks it.
+pub fn write_minimised_with(v: &Value, limits: &Limits) -> Result<String, EncodeError> {
+    write_line(v, limits, false)
+}
+
+fn write_line(v: &Value, limits: &Limits, spaced: bool) -> Result<String, EncodeError> {
     supported(limits)?;
     let mut out = String::new();
-    Writer { out: &mut out, limits }.value(v, 0)?;
+    Writer { out: &mut out, limits, spaced }.value(v, 0)?;
     Ok(out)
 }
 
 struct Writer<'a> {
     out: &'a mut String,
     limits: &'a Limits,
+    /// Compact has spaces between tokens; minimised has none.
+    spaced: bool,
 }
 
 type W = Result<(), EncodeError>;
@@ -391,7 +404,9 @@ impl Writer<'_> {
                 match args.as_slice() {
                     [] => Ok(()),
                     [Value::Record(fields)] => {
-                        self.out.push(' ');
+                        if self.spaced {
+                            self.out.push(' ');
+                        }
                         self.record(fields, depth).map_err(|e| e.within(Segment::Tag(tag.clone())))
                     }
                     _ => self.list('(', args, depth, ')').map_err(|e| e.within(Segment::Tag(tag.clone()))),
@@ -434,7 +449,7 @@ impl Writer<'_> {
         self.out.push(open);
         for (i, x) in items.iter().enumerate() {
             if i > 0 {
-                self.out.push_str(", ");
+                self.out.push_str(self.gap(", "));
             }
             self.value(x, depth).map_err(|e| e.within(Segment::Index(i)))?;
         }
@@ -449,24 +464,29 @@ impl Writer<'_> {
             return Ok(());
         }
         unique_keys(fields)?;
-        self.out.push_str("{ ");
+        self.out.push_str(self.gap("{ "));
         for (i, (k, v)) in fields.iter().enumerate() {
             self.key(i, k)?;
             self.value(v, depth).map_err(|e| e.within(Segment::Field(k.clone())))?;
         }
-        self.out.push_str(" }");
+        self.out.push_str(self.gap(" }"));
         Ok(())
     }
 
-    /// The `i`th key of a record, with `: ` after it.
+    /// The `i`th key of a record, with `: ` after it (`:` minimised).
     fn key(&mut self, i: usize, k: &str) -> W {
         if i > 0 {
-            self.out.push_str(", ");
+            self.out.push_str(self.gap(", "));
         }
         check_key(k, self.limits).map_err(|e| e.within(Segment::Field(k.to_owned())))?;
         key(k, self.out);
-        self.out.push_str(": ");
+        self.out.push_str(self.gap(": "));
         Ok(())
+    }
+
+    /// `spaced` as written in compact, or without its spaces in minimised.
+    fn gap(&self, spaced: &'static str) -> &'static str {
+        if self.spaced { spaced } else { spaced.trim() }
     }
 }
 

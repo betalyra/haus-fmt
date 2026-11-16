@@ -71,6 +71,9 @@ define (`@since`) are accepted and reported as Cargo warnings, as are uses of
 deprecated types in a schema; `Config::quiet()` turns them off.
 
 Writing checks what it writes, so `haus::to_string` returns a `Result`.
+`haus::to_string_minimised` writes the minimised layout of spec §11
+(`Person{name:"Ada",age:36}`) instead of the compact one, for the wire and
+storage, with the same checks.
 `Encode::encode_with` (and `ToJson::to_json_with`) take a `haus::Encoder`,
 which carries the limits and counts the depth while the native value is
 traversed: a value nested deeper than the limit fails there with the writer's

@@ -1,4 +1,5 @@
-import Haus
+import Haus.Canonical
+import Haus.Json.SchemaBased
 import Lean.Data.Json
 
 /-!

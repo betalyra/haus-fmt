@@ -116,6 +116,23 @@ pub fn to_string_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<
     ser::write_with(&value.encode_with(Encoder::new(limits))?, limits)
 }
 
+/// Write one value on one line in the minimised layout (spec §11): the
+/// compact layout of [`to_string`] without the whitespace between tokens,
+/// for the wire and storage. Fails as [`to_string`] does.
+///
+/// ```
+/// let v = haus::parse(r#"Person { name: "Ada", tags: [1, 2] }"#).unwrap();
+/// assert_eq!(haus::to_string_minimised(&v[0]).unwrap(), r#"Person{name:"Ada",tags:[1,2]}"#);
+/// ```
+pub fn to_string_minimised<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
+    to_string_minimised_with(value, &Limits::default())
+}
+
+/// [`to_string_minimised`], for a reader with `limits` (see [`to_string_with`]).
+pub fn to_string_minimised_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
+    ser::write_minimised_with(&value.encode_with(Encoder::new(limits))?, limits)
+}
+
 /// Write a stream: one value per line, each followed by `,`. Errors say which value: `[3].total: …`.
 pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
     values

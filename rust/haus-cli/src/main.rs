@@ -5,9 +5,11 @@ mod check;
 mod cli;
 mod diagnostic;
 mod fmt;
+mod highlight;
 mod input;
 mod json;
 mod output;
+mod pieces;
 mod values;
 
 use clap::{CommandFactory, Parser};

@@ -43,14 +43,17 @@ pub enum Command {
     /// to `x.haus`, or the schema named by a `// schema: ./s.schema.haus#Type`
     /// comment at its top, or the one given with --schema. Directories are
     /// searched for `*.haus` files (schema files included), respecting
-    /// .gitignore.
+    /// .gitignore. Standard input is checked value by value: each value is
+    /// reported as soon as the comma after it arrives (`tail -f x.haus | haus
+    /// check -`).
     Check(CheckArgs),
     /// Rewrite data files in the standard layout (spec §11).
     ///
     /// Directories are searched for `*.haus` data files (not `*.schema.haus`),
     /// respecting .gitignore. Prints each file it rewrites. `-` formats
-    /// standard input to standard output. A file with a syntax error is never
-    /// written.
+    /// standard input to standard output; from a pipe, the compact and
+    /// minimised layouts write each value as soon as it is complete. A file
+    /// with a syntax error is never written.
     Fmt(FmtArgs),
     /// Print the canonical form (spec §12) of each value, one per line.
     Canonical(CanonicalArgs),
@@ -82,7 +85,7 @@ pub struct CheckArgs {
     #[arg(long)]
     pub no_schema: bool,
 
-    /// Print one JSON document instead of text.
+    /// Print one JSON document instead of text, once everything is checked.
     #[arg(long)]
     pub json: bool,
 

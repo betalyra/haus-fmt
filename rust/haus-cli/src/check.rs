@@ -1,15 +1,20 @@
 //! `haus check`: data files (syntax, then their schema) and schema files.
+//! Standard input is checked value by value, so that `tail -f x.haus | haus
+//! check -` reports each value as soon as it is complete.
 
 use crate::cli::{CheckArgs, Color};
 use crate::diagnostic::{self, Diagnostic, Severity};
+use crate::highlight::{Token, tokens};
 use crate::input::{self, Target};
 use crate::json::{self, Members, b, n, s};
 use crate::output::{self, Status, count};
+use crate::pieces::{Piece, Pieces};
+use annotate_snippets::Renderer;
 use haus::json::Json;
 use haus::{ErrorCode, Limits};
-use haus_schema::{FileResolver, Schema};
+use haus_schema::{FileResolver, Schema, Segment};
 use std::collections::HashMap;
-use std::io::stdout;
+use std::io::{self, Read, stdout};
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
@@ -80,7 +85,15 @@ struct Checker {
     /// The schema given with --schema.
     forced: Option<(PathBuf, String)>,
     /// Schemas loaded so far, by canonical path.
-    schemas: HashMap<PathBuf, Rc<Result<Schema, haus_schema::Error>>>,
+    schemas: HashMap<PathBuf, Loaded>,
+}
+
+type Loaded = Result<Rc<Schema>, Rc<haus_schema::Error>>;
+
+/// The schema and type data is checked against.
+struct Checking {
+    schema: Rc<Schema>,
+    type_name: String,
 }
 
 pub fn run(args: &CheckArgs, color: Color) -> Status {
@@ -102,7 +115,12 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
     };
     let mut checker =
         Checker { limits: args.limits.limits(), no_schema: args.no_schema, forced, schemas: HashMap::new() };
-    let reports: Vec<Report> = input::collect(&args.paths, input::is_haus).iter().map(|t| checker.check(t)).collect();
+    let targets = input::collect(&args.paths, input::is_haus);
+    if !args.json {
+        return text(&mut checker, &targets, &output::renderer(output::colored(color, &stdout())));
+    }
+    // One document: standard input is read to its end.
+    let reports: Vec<Report> = targets.iter().map(|t| checker.check(t)).collect();
     let status = if reports.iter().any(|r| r.error.is_some()) {
         Status::Failed
     } else if reports.iter().any(|r| r.errors() > 0) {
@@ -110,14 +128,102 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
     } else {
         Status::Ok
     };
-    let text = if args.json {
-        json::write(&to_json(&reports, None)) + "\n"
-    } else {
-        human(&reports, output::colored(color, &stdout()))
-    };
-    match output::print(&text) {
+    match output::print(&(json::write(&to_json(&reports, None)) + "\n")) {
         Ok(()) => status,
         Err(e) => output::fail(e),
+    }
+}
+
+/// The text output, written as it is found: each file's diagnostics once it
+/// is checked, standard input's as soon as their value is complete, and the
+/// summary last. A closed output (`haus check - | head`) ends the check.
+fn text(checker: &mut Checker, targets: &[Target], renderer: &Renderer) -> Status {
+    let mut tally = Tally::default();
+    let render = |d: &Diagnostic, name: &str| format!("{}\n\n", d.render(name, renderer));
+    for target in targets {
+        tally.files += 1;
+        let name = target.name();
+        let shown = match target {
+            Target::Stdin => {
+                let mut show = |d: &Diagnostic| {
+                    tally.add(d);
+                    output::write(&render(d, &name))
+                };
+                match checker.check_stream(io::stdin().lock(), &mut show) {
+                    Ok(Some(e)) => {
+                        tally.unreadable += 1;
+                        output::write(&format!("error: cannot read {name}: {e}\n\n"))
+                    }
+                    shown => shown.map(drop),
+                }
+            }
+            _ => {
+                let report = checker.check(target);
+                let mut out = String::new();
+                if let Some(e) = &report.error {
+                    tally.unreadable += 1;
+                    out.push_str(&format!("error: cannot read {name}: {e}\n\n"));
+                }
+                for d in &report.diagnostics {
+                    tally.add(d);
+                    out.push_str(&render(d, &name));
+                }
+                output::write(&out)
+            }
+        };
+        match shown {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::BrokenPipe => return tally.status(),
+            Err(e) => return output::fail(e),
+        }
+    }
+    match output::write(&tally.summary()) {
+        Err(e) if e.kind() != io::ErrorKind::BrokenPipe => output::fail(e),
+        _ => tally.status(),
+    }
+}
+
+/// What the text output has shown so far.
+#[derive(Default)]
+struct Tally {
+    files: usize,
+    errors: usize,
+    warnings: usize,
+    hints: usize,
+    unreadable: usize,
+}
+
+impl Tally {
+    fn add(&mut self, d: &Diagnostic) {
+        match d.severity {
+            Severity::Error => self.errors += 1,
+            Severity::Warning => self.warnings += 1,
+            Severity::Hint => self.hints += 1,
+        }
+    }
+
+    fn status(&self) -> Status {
+        match (self.unreadable, self.errors) {
+            (0, 0) => Status::Ok,
+            (0, _) => Status::Invalid,
+            _ => Status::Failed,
+        }
+    }
+
+    /// `Checked 2 files: 1 error, 1 hint.`
+    fn summary(&self) -> String {
+        let found: Vec<String> = [
+            (self.errors, "error"),
+            (self.warnings, "warning"),
+            (self.hints, "hint"),
+            (self.unreadable, "unreadable file"),
+        ]
+        .into_iter()
+        .filter(|&(n, _)| n > 0)
+        .map(|(n, noun)| count(n, noun))
+        .collect();
+        let found = if found.is_empty() { "no problems".to_owned() } else { found.join(", ") };
+        format!("Checked {}: {found}.\n", count(self.files, "file"))
     }
 }
 
@@ -157,8 +263,8 @@ impl Checker {
     /// A schema file: its errors, or its warnings.
     fn check_schema(&mut self, path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {
         let text = String::from_utf8_lossy(bytes);
-        match &*self.load(path) {
-            Err(e) => vec![Diagnostic::schema(e, Severity::Error, Some(&text))],
+        match self.load(path) {
+            Err(e) => vec![Diagnostic::schema(&e, Severity::Error, Some(&text))],
             Ok(schema) => {
                 schema.warnings().iter().map(|w| Diagnostic::schema(w, Severity::Warning, Some(&text))).collect()
             }
@@ -174,38 +280,130 @@ impl Checker {
         if let Err(e) = haus::parse_with(text, &self.limits) {
             return (None, vec![Diagnostic::syntax(&e, Some(text))]);
         }
-        let Some(r) = self.schema_for(dir, adjacent, text) else { return (None, vec![]) };
+        match self.checking(dir, adjacent, text) {
+            None => (None, vec![]),
+            Some((label, Err(diagnostics))) => (Some(label), diagnostics),
+            Some((label, Ok(c))) => {
+                let issues = c.schema.check_text_with(&c.type_name, text, &self.limits);
+                (Some(label), issues.iter().map(|i| Diagnostic::issue(i, text)).collect())
+            }
+        }
+    }
+
+    /// What a data file in `dir` whose text is (or starts with) `text` is
+    /// checked against, and its label (`order.schema.haus#Root`); or, if it
+    /// has a schema that can't be used, why. None: no schema.
+    fn checking(
+        &mut self,
+        dir: &Path,
+        adjacent: Option<PathBuf>,
+        text: &str,
+    ) -> Option<(String, Result<Checking, Vec<Diagnostic>>)> {
+        let r = self.schema_for(dir, adjacent, text)?;
         let label = format!("{}#{}", r.file.display(), r.type_name);
         let place = |d: Diagnostic| match &r.comment {
             Some(span) => d.at(text, span.clone()),
             None => d,
         };
-        let diagnostics = match &*self.load(&r.file) {
+        let checking = match self.load(&r.file) {
             Err(e) if e.position().is_some() => {
                 let schema_text = std::fs::read_to_string(&r.file).ok();
-                vec![
-                    Diagnostic::schema(e, Severity::Error, schema_text.as_deref())
+                Err(vec![
+                    Diagnostic::schema(&e, Severity::Error, schema_text.as_deref())
                         .in_file(r.file.display().to_string()),
-                ]
+                ])
             }
             Err(e) => {
                 let message = match r.file.exists() {
                     false => format!("the schema {} does not exist", r.file.display()),
                     true => format!("cannot load the schema {}: {}", r.file.display(), e.reason()),
                 };
-                vec![place(Diagnostic::new(Severity::Error, e.code(), message))]
+                Err(vec![place(Diagnostic::new(Severity::Error, e.code(), message))])
             }
             Ok(schema) if schema.definition(&r.type_name).is_none() => {
                 let message = format!("the schema {} has no type {}", r.file.display(), r.type_name);
-                vec![place(Diagnostic::new(Severity::Error, ErrorCode::UnknownType, message))]
+                Err(vec![place(Diagnostic::new(Severity::Error, ErrorCode::UnknownType, message))])
             }
-            Ok(schema) => schema
-                .check_text_with(&r.type_name, text, &self.limits)
-                .iter()
-                .map(|i| Diagnostic::issue(i, text))
-                .collect(),
+            Ok(schema) => Ok(Checking { schema, type_name: r.type_name }),
         };
-        (Some(label), diagnostics)
+        Some((label, checking))
+    }
+
+    /// Standard input, value by value: `show` gets each diagnostic as soon
+    /// as its value is complete, with its place in the whole stream. Its
+    /// schema is found as a file's (--schema, or the `// schema:` comment at
+    /// the top), once the first value is complete. A type that isn't a
+    /// `Stream` gets the first value, and an error at the second. Returns
+    /// why the input couldn't be read, if it couldn't; fails if `show` does.
+    fn check_stream(
+        &mut self,
+        input: impl Read,
+        show: &mut dyn FnMut(&Diagnostic) -> io::Result<()>,
+    ) -> io::Result<Option<String>> {
+        let options = haus::stream::Options { limits: self.limits, ..Default::default() };
+        let mut pieces = Pieces::new(input, options);
+        // Found at the first value; then None if there is none, or after an error that ends the checks.
+        let mut checking: Option<Option<Checking>> = None;
+        let mut seen = 0;
+        while let Some(piece) = pieces.next() {
+            let piece = match piece {
+                Ok(piece) => piece,
+                Err(haus::Error::Syntax(e)) => {
+                    show(&pieces.diagnostic(&e))?;
+                    break;
+                }
+                Err(e) => return Ok(Some(e.to_string())),
+            };
+            if checking.is_none() {
+                let (found, diagnostics) = match self.checking(Path::new(""), None, &piece.text) {
+                    Some((_, Ok(c))) => (Some(c), vec![]),
+                    Some((_, Err(diagnostics))) => (None, diagnostics),
+                    None => (None, vec![]),
+                };
+                diagnostics.iter().try_for_each(&mut *show)?;
+                checking = Some(found);
+            }
+            if let Some(Some(c)) = &checking {
+                let (diagnostics, more) = self.check_piece(c, &piece, seen);
+                diagnostics.iter().try_for_each(&mut *show)?;
+                if !more {
+                    checking = Some(None);
+                }
+            }
+            seen += piece.values.len();
+        }
+        Ok(None)
+    }
+
+    /// What the schema finds in a value of the stream, after `seen` others;
+    /// and whether the values after it are still to be checked.
+    fn check_piece(&self, c: &Checking, piece: &Piece, seen: usize) -> (Vec<Diagnostic>, bool) {
+        let Some(def) = c.schema.definition(&c.type_name) else { return (vec![], false) };
+        let stream = c.schema.instance(def.template).stream;
+        // A type with parameters can't describe a whole file: said once, at the first value.
+        let more = def.params.is_empty() && (stream || seen == 0);
+        if piece.values.is_empty() && seen > 0 {
+            return (vec![], more);
+        }
+        if !stream && seen > 0 {
+            let message = format!("expected one value ({} is not a Stream), found more than one", c.type_name);
+            let mut d = Diagnostic::new(Severity::Error, ErrorCode::NotOneValue, message);
+            d.path = Some("$".to_owned());
+            return (vec![piece.place(d, value_span(&piece.text))], false);
+        }
+        let diagnostics = c
+            .schema
+            .check_text_with(&c.type_name, &piece.text, &self.limits)
+            .into_iter()
+            .map(|mut i| {
+                if let (true, Some(Segment::Index(j))) = (stream, i.path.first_mut()) {
+                    *j += seen;
+                }
+                let span = i.span.clone().unwrap_or(0..0);
+                piece.place(Diagnostic::issue(&i, &piece.text), span)
+            })
+            .collect();
+        (diagnostics, more)
     }
 
     /// The schema of a data file in `dir`: --schema, else the `// schema:`
@@ -225,9 +423,28 @@ impl Checker {
     }
 
     /// The schema file at `path`, loaded once.
-    fn load(&mut self, path: &Path) -> Rc<Result<Schema, haus_schema::Error>> {
+    fn load(&mut self, path: &Path) -> Loaded {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-        self.schemas.entry(key).or_insert_with(|| Rc::new(Schema::load(path, &FileResolver::new()))).clone()
+        let load = || Schema::load(path, &FileResolver::new()).map(Rc::new).map_err(Rc::new);
+        self.schemas.entry(key).or_insert_with(load).clone()
+    }
+}
+
+/// Where the value is in a value's `text`, without the whitespace and
+/// comments around it.
+fn value_span(text: &str) -> Range<usize> {
+    let solid: Vec<Range<usize>> = tokens(text)
+        .into_iter()
+        .filter(|(token, range)| *token != Token::Comment && !text[range.clone()].trim().is_empty())
+        .map(|(_, range)| range)
+        .collect();
+    match (solid.first(), solid.last()) {
+        (Some(first), Some(last)) => {
+            let start = first.start + (text[first.clone()].len() - text[first.clone()].trim_start().len());
+            let end = last.end - (text[last.clone()].len() - text[last.clone()].trim_end().len());
+            start..end
+        }
+        _ => 0..0,
     }
 }
 
@@ -281,33 +498,4 @@ fn to_json(reports: &[Report], failure: Option<&Failure>) -> Json {
     m.add("files", Json::Array(reports.iter().map(Report::to_json).collect()));
     m.add("summary", summary.into());
     m.into()
-}
-
-fn human(reports: &[Report], color: bool) -> String {
-    let renderer = output::renderer(color);
-    let mut out = String::new();
-    for r in reports {
-        if let Some(e) = &r.error {
-            out.push_str(&format!("error: cannot read {}: {e}\n\n", r.name));
-        }
-        for d in &r.diagnostics {
-            out.push_str(&d.render(&r.name, &renderer));
-            out.push_str("\n\n");
-        }
-    }
-    let total = |severity| reports.iter().map(|r| r.count(severity)).sum::<usize>();
-    let unreadable = reports.iter().filter(|r| r.error.is_some()).count();
-    let found: Vec<String> = [
-        (total(Severity::Error), "error"),
-        (total(Severity::Warning), "warning"),
-        (total(Severity::Hint), "hint"),
-        (unreadable, "unreadable file"),
-    ]
-    .into_iter()
-    .filter(|&(n, _)| n > 0)
-    .map(|(n, noun)| count(n, noun))
-    .collect();
-    let found = if found.is_empty() { "no problems".to_owned() } else { found.join(", ") };
-    out.push_str(&format!("Checked {}: {found}.\n", count(reports.len(), "file")));
-    out
 }

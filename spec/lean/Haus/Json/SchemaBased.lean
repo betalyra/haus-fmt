@@ -1,5 +1,4 @@
 import Haus.Json.SelfDescribing
-import Haus.Json.Normal
 import Haus.Schema.Decode
 
 /-!

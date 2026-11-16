@@ -1,12 +1,36 @@
-//! The compact writer checks what it writes (spec §9.8): every value the
-//! parser gives is written again, under the same limits, and parses back.
+//! The compact and minimised writers check what they write (spec §9.8):
+//! every value the parser gives is written again, under the same limits,
+//! and parses back.
 
-use haus::{Limits, Value, parse_with, ser};
+use haus::{FormatOptions, Limits, Style, Value, parse_with, ser};
 
 fn roundtrip(text: &str, limits: &Limits) {
     let [value] = parse_with(text, limits).unwrap_or_else(|e| panic!("{text}: {e}")).try_into().unwrap();
     let written = ser::write_with(&value, limits).unwrap_or_else(|e| panic!("{text}: {e}"));
-    assert_eq!(parse_with(&written, limits).unwrap(), [value], "{text}");
+    assert_eq!(parse_with(&written, limits).unwrap(), std::slice::from_ref(&value), "{text}");
+    // Minimised: the compact line without the whitespace between tokens, as the formatter writes it.
+    let minimised = ser::write_minimised_with(&value, limits).unwrap_or_else(|e| panic!("{text}: {e}"));
+    assert_eq!(parse_with(&minimised, limits).unwrap(), [value], "{text}");
+    let options = FormatOptions { style: Style::Minimised, limits: *limits, ..FormatOptions::default() };
+    assert_eq!(haus::format(&written, &options).unwrap(), minimised.clone() + "\n", "{text}");
+}
+
+#[test]
+fn minimised_has_no_whitespace_between_tokens() {
+    let [value] = haus::parse(r#"Person { name: "Ada Lovelace", tags: [1, Tag {}], at: Point(1, 2), b: x"9F 86" }"#)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        haus::to_string_minimised(&value).unwrap(),
+        r#"Person{name:"Ada Lovelace",tags:[1,Tag{}],at:Point(1,2),b:x"9f86"}"#
+    );
+    assert_eq!(
+        haus::to_string(&value).unwrap(),
+        r#"Person { name: "Ada Lovelace", tags: [1, Tag {}], at: Point(1, 2), b: x"9f86" }"#
+    );
+    let wrong = Value::Array(vec![Value::Number("abc".into())]);
+    assert_eq!(haus::to_string_minimised(&wrong).unwrap_err().to_string(), "[0]: not a number literal");
 }
 
 #[test]

@@ -3,7 +3,8 @@
 Generated inputs go through every haus parser: the Lean reference parser
 (`spec/lean`), Rust, Roc and TypeScript (and, with `--schema`, through
 every schema decoder: see [Schema decoding](#schema-decoding); with `--json`,
-through every JSON converter: see [JSON](#json)). They must agree on every input:
+through every JSON converter: see [JSON](#json); with `--format`, through
+the formatters and value writers: see [Formatters](#formatters)). They must agree on every input:
 accepted with the same values, or rejected. A disagreement is a bug in at
 least one of them, or a gap in the spec.
 
@@ -243,6 +244,72 @@ today; TypeScript and Effect report codes in this process).
 The output of a run ends with the number of cases each mode accepted and of
 error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
 `write` and `read`.
+
+## Formatters
+
+`--format` tests the standard layouts of spec §11 (audit item C2, phase L1
+of [`spec/lean/PLAN.md`](../spec/lean/PLAN.md)). Generated documents go
+through the TypeScript and Rust formatters in the pretty, compact and
+minimised layouts; the values they hold go through the value writers of
+TypeScript, Rust and Roc.
+
+```sh
+sh fuzz/build.sh                               # the Rust and Roc runners
+node fuzz/src/main.ts --format --count 20000   # about 30 seconds
+node fuzz/src/main.ts --format --seed 7
+```
+
+[`src/format-gen.ts`](src/format-gen.ts) writes documents as people do:
+containers on one line or one entry per line, with comments on their own
+line, after an entry's comma, before a closing bracket, between a key and
+its value, inside `Tag( … )` around the braces of its record and between
+top-level items (line and block comments, nested, over several lines, with
+blanks at the ends of their lines); blank lines, some with blanks on them;
+LF, CR LF or both; a byte order mark; streams with and without a trailing
+comma; positional payloads of strings as long as 0 to 80 code points (some
+of them wide: `é`, `😀`) so that lines land on both sides of the width;
+block strings with blanks at the ends of lines; the spellings layouts keep
+(`0xFF_ff`, `1E+05`, `x"9f86 D081"`, `-0x0`); keys with a raw U+2028. Some
+inputs come from the parser fuzzer's generator or are files of the suites,
+some get whitespace and comments inserted at random places (inside tokens
+that mostly makes them invalid), and a few are mutated. Most batches use the
+default options; some use another indentation and width (down to 0 and 0).
+
+For every input, and each layout:
+
+| Check | |
+|---|---|
+| Same bytes | TypeScript and Rust write the same text, or both reject the input; a crash is a finding. |
+| Values | The output parses to the input's values (compared by their canonical forms, spec §12). |
+| Idempotence | Formatting the output again in the same layout gives it back, in both formatters. |
+| Comments | Pretty keeps every comment, in order (a CR LF in one is written as LF); compact and minimised have none. |
+| Lines | Compact and minimised: one top-level item per line, each a value on its own, with a comma in a stream and none for a single item; no carriage return, U+2028 or U+2029 anywhere. |
+| Minimised | No space or tab outside strings and byte strings. Formatted as pretty, it gives what compact formatted as pretty gives, and the pretty file without its comments and blank lines. |
+| Trailing blanks | No pretty line ends in a space or tab outside a comment, and trimming them keeps the values. |
+| Layout | Read from the output, without either formatter: keys bare when they can be; one space after `:` and `,`, one between a tag and its `{`, none before `(`; every non-empty record and array broken, each entry one level deeper than its brackets, block strings one level deeper than their entry; a positional payload inline exactly when it fits the width (in code points, with the comma after the entry) and holds no comment, block string or non-empty container; at most one blank line in a row; in a pretty stream a comma after every item and a blank line after each multi-line item that another follows. |
+
+The value writers (no source text: numbers normalized, byte strings in
+lowercase hex) must write the same line for every value: TypeScript's
+`stringify(v, { style })`, Rust's `haus::to_string` and
+`haus::to_string_minimised`, Roc's `Encode.to_str` and `Encode.minimised`.
+Each line parses back to its value and keeps the layout's rules.
+
+A failing input is shrunk to the smallest input that still fails the same
+check (at most three per check), and saved to `.out/format/failures/` with
+the check, what was seen, and both formatters' output in every layout.
+
+| Formatter / writer | Runner (`DIR N`, as for the parsers; prints `ok` and the output as a JSON string, or `err …`) |
+|---|---|
+| TypeScript | in this process: `parseDocument`, `format(values, { style, indent, width, source, comments })`, `stringify` |
+| Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `haus::to_string`, `haus::to_string_minimised` (a JSON array of lines) |
+| Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `Encode.to_str`, `Encode.minimised` (a JSON array of lines) |
+
+[`src/format.test.ts`](src/format.test.ts) tests the generator and the
+checks (`node --test fuzz/src/`): the format suite's expected files keep
+every rule, and outputs that break one are caught.
+
+So far the formatters and writers agree, and keep every rule, on every
+input generated.
 
 ## When it finds something
 

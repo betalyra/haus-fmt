@@ -32,7 +32,7 @@ export class Rng {
 
 // ── formatting ───────────────────────────────────────────────
 
-const COMMENTS = ["// note\n", "// café 😀\t\n", "/* c */", "/* a /* nested */ b */", "/* multi\n   line */", "/**/", "// x\r\n"]
+export const COMMENTS = ["// note\n", "// café 😀\t\n", "/* c */", "/* a /* nested */ b */", "/* multi\n   line */", "/**/", "// x\r\n"]
 
 /** Whitespace between tokens: usually none or a space, sometimes line breaks and comments. */
 export function ws(r: Rng): string {
@@ -48,7 +48,7 @@ export function ws(r: Rng): string {
 const digits = (r: Rng, n: number, alphabet = "0123456789") =>
   Array.from({ length: n }, () => r.pick([...alphabet])).join("")
 
-function number(r: Rng): string {
+export function number(r: Rng): string {
   const sign = r.chance(0.2) ? "-" : ""
   switch (r.int(10)) {
     case 0: return sign + "0"
@@ -64,13 +64,13 @@ function number(r: Rng): string {
     case 6: return sign + "0b" + digits(r, 1 + r.int(12), "01")
     case 7: return sign + (1 + r.int(9)) + digits(r, 15 + r.int(30)) // beyond 2^53
     case 8: return sign + "19.90"
-    default: return sign + r.pick(["1e6144", "1e-6144", "1e6145", "0x" + "f".repeat(829), "0x" + "f".repeat(830), "0x" + "0".repeat(829) + "1", "0x" + "f_".repeat(829) + "f", "1" + "0".repeat(999), "1" + "0".repeat(1000), "0x0", "0b0", "0x00", "0X0"])
+    default: return sign + r.pick(["0xFF_ff", "1E+05", "0b1010_1010", "1_000.000_1e+0_5", "1e6144", "1e-6144", "1e6145", "0x" + "f".repeat(829), "0x" + "f".repeat(830), "0x" + "0".repeat(829) + "1", "0x" + "f_".repeat(829) + "f", "1" + "0".repeat(999), "1" + "0".repeat(1000), "0x0", "0b0", "0x00", "0X0"])
   }
 }
 
-const STRING_PARTS = ["a", "hello", " ", "é", "😀", "中文", "\\n", "\\t", '\\"', "\\\\", "\\u{41}", "\\u{1F600}", "\\u{0}", "\\u{1B}", "\\u{7F}", "\\u{85}", "\\u{202E}", "\\r", "'", "/*", "*/", "//", ",", "\u2028", "\u2029", "\\u{2028}", "\\u{2029}"]
+export const STRING_PARTS = ["a", "hello", " ", "é", "😀", "中文", "\\n", "\\t", '\\"', "\\\\", "\\u{41}", "\\u{1F600}", "\\u{0}", "\\u{1B}", "\\u{7F}", "\\u{85}", "\\u{202E}", "\\r", "'", "/*", "*/", "//", ",", "\u2028", "\u2029", "\\u{2028}", "\\u{2029}"]
 
-function basicString(r: Rng): string {
+export function basicString(r: Rng): string {
   return '"' + r.times(5, () => r.pick(STRING_PARTS)).join("") + '"'
 }
 
@@ -81,18 +81,18 @@ export function blockString(r: Rng, indent: string): string {
   return '"""' + r.pick(["", " "]) + nl + lines.map((l) => l + nl).join("") + inner + '"""'
 }
 
-function bytes(r: Rng): string {
+export function bytes(r: Rng): string {
   return 'x"' + r.times(4, () => digits(r, 2, "0123456789abcdefABCDEF") + r.pick(["", " ", "\t"])).join("") + '"'
 }
 
-const KEYS = ["a", "b", "id", "_x", "snake_case", "camelCase", "k1"]
-const QUOTED_KEYS = ['"x-y"', '""', '"__proto__"', '"Upper"', '"café"', '"with space"', '"\\u{41}"']
+export const KEYS = ["a", "b", "id", "_x", "snake_case", "camelCase", "k1"]
+export const QUOTED_KEYS = ['"x-y"', '""', '"__proto__"', '"Upper"', '"café"', '"with space"', '"\\u{41}"']
 
-function key(r: Rng): string {
+export function key(r: Rng): string {
   return r.chance(0.8) ? r.pick(KEYS) : r.pick(QUOTED_KEYS)
 }
 
-const TAGS = ["None", "Some", "True", "False", "Point", "Circle", "Tag", "A", "Ok", "Err"]
+export const TAGS = ["None", "Some", "True", "False", "Point", "Circle", "Tag", "A", "Ok", "Err"]
 
 // ── containers ───────────────────────────────────────────────
 

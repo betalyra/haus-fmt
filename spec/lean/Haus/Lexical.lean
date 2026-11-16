@@ -125,6 +125,9 @@ def normalizeExponent (e : Text) : Text :=
 /-- The sign of a normalized literal: `-` for a negative literal, zero included. -/
 def signText (neg : Bool) : String := if neg then "-" else ""
 
+/-- An integer's normalized literal: `-` (unless 0) and its decimal digits. -/
+def intText (neg : Bool) (v : Nat) : Text := (if neg && v != 0 then ['-'] else []) ++ Nat.toDigits 10 v
+
 /--
 A number's literal after its sign: digit separators removed, the exponent
 written `e` and its value, hex and binary converted to decimal integers.

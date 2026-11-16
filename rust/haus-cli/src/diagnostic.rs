@@ -118,6 +118,17 @@ impl Diagnostic {
         Diagnostic { position: Some((line, column)), excerpt: Some(Excerpt::new(text, span)), ..self }
     }
 
+    /// The same diagnostic, for text that starts on line `line` of the file
+    /// rather than on line 1 (a value of a stream, from its excerpt).
+    pub fn on_line(self, line: usize) -> Diagnostic {
+        Diagnostic { position: self.position.map(|(l, c)| (l + line - 1, c)), ..self }
+    }
+
+    /// The same diagnostic, at `line` and `column`, without an excerpt.
+    pub fn placed(self, line: usize, column: usize) -> Diagnostic {
+        Diagnostic { position: Some((line, column)), excerpt: None, ..self }
+    }
+
     /// The same diagnostic, in the file `file` rather than the one checked.
     pub fn in_file(self, file: String) -> Diagnostic {
         Diagnostic { file: Some(file), ..self }
@@ -244,7 +255,7 @@ fn offset(text: &str, line: usize, column: usize) -> usize {
 }
 
 /// The 1-based line and column (in code points) of byte offset `at`.
-fn position(text: &str, at: usize) -> (usize, usize) {
+pub fn position(text: &str, at: usize) -> (usize, usize) {
     let at = floor(text, at);
     let before = &text[..at];
     let line_start = before.rfind('\n').map_or(0, |i| i + 1);

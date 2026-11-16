@@ -65,9 +65,6 @@ theorem intPart_toDigits (v : Nat) : IntPart (Nat.toDigits 10 v) := by
     rw [he] at hd ⊢
     exact .nonzero c rest (hd c (by simp)) hc (sepTail_all fun x hx => hd x (by simp [hx]))
 
-/-- An integer's normalized literal: `-` (unless 0) and its decimal digits. -/
-def intText (neg : Bool) (v : Nat) : Text := (if neg && v != 0 then ['-'] else []) ++ Nat.toDigits 10 v
-
 /--
 The normalized literal of a hex or binary integer: its sign, kept also on
 zero (`-0x0` is `-0`), and its decimal digits.
