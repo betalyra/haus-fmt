@@ -153,10 +153,64 @@ Nothing is published yet, so everything can still change. After 1.0 the format o
 | ✅ | **Lean: `Extends old new`** (defined in `lean/Haus/Version.lean`, with reflexivity and transitivity), a conservative extension: every text the old version accepts, the new one accepts with the same values, and the canonical form and built-in rules agree on what the old version can express. Defined now, proven for each release. (That an old parser rejects new syntax already follows from soundness, B.) |
 | ✅ | **Prelude, frozen at 1.0.** Done in the spec, the schema suite, TypeScript, Effect, Rust and Roc. Add `Secret a`: the same data as `a`; the host type hides the value (Effect `Redacted`, Rust and TypeScript wrappers whose printing and `toJSON` show `<redacted>`, Python like `SecretStr`), reading it takes an explicit call, and decode errors never echo it; the canonical form and hash are unchanged. A `Redacted` tag for redacted logs is left out for now. Add `Any`: any haus value, kept exactly as parsed and re-encoded unchanged, the explicit form of the unknown value (`payload: Any`). Not added: `Set` (haus equality isn't the host's, and sets have no canonical order; deduplicate in application code), `Nat`, `Uuid`/`Url`/`Email`, tuples, `NonEmpty`. `Map v` exists. Built-in types added after 1.0 go into standard modules, so they are opt-in through `import`. Each new type gets a §15 entry, schema suite cases, and support in every binding. |
 | ✅ | **`@deprecated("message")`** (spec §14, all bindings, invalid-schema cases) on types, fields and tags in schema files, the only attribute. Tools warn where data uses it, and code generators emit the language's marker (`#[deprecated]`, JSDoc `@deprecated`, Python warnings); decoding doesn't change. The spec defines the list of attributes and the test an attribute must pass: it never affects which data is valid or what it decodes to; tools act on it mechanically, the same way in every language (documentation goes in comments); most target languages have a native counterpart. `@experimental` is the most plausible future candidate; `@since`, `@example`, `@min`, `@default` fail the test. Tools accept attributes they don't know, give them no meaning and warn about them; implementations never add their own. The schema checker produces resolved types without attributes, so decoding can't depend on them; the schema conformance runners check it by stripping all attributes and adding `@deprecated` everywhere, with identical results. |
-| ⬜ | **Irreversible decisions, signed off:** prelude contents, default limits, equality and the canonical form, §15 (including the float spelling), the std/time profile, the schema language's semantics, and the JSON mapping if it ships with 1.0. |
+| ⬜ | **Irreversible decisions, signed off:** prelude contents, default limits, equality and the canonical form, §15 (including the float spelling), the std/time profile, the schema language's semantics, and the JSON mapping if it ships with 1.0. Includes the audit's A2, B1, B5 and D1–D3 (§3.6). |
 | ✅ | **Design and FAQ page (`docs/design.md`), including why there are no min/max validators**: haus describes shape; rules go into codecs (§13.4, they can reject more, never fewer), package profiles (§13.3) or the application; constraints for people go in comments. |
 | ⬜ | **Governance document** (outside the spec): how changes are proposed and decided, the release process, tags and changelog. |
 | ⬜ | **Final review pass** of the whole spec before the 1.0 tag, then tag the conformance suite, register `application/vnd.haus`, and announce. |
+
+### 3.6 Spec and proof audit (2026-11-16)
+
+An audit compared the Lean definitions with `grammar.ebnf`, §1–§16 and `std/time.md`. The theorem statements match the prose; no error in the Lean model. What it found in the prose, and what the proofs don't cover. Priority: A1, A2, B1, B2, then D1–D3, then the rest.
+
+**A. Claims that are wrong as written**
+
+| | Item |
+|---|---|
+| ⬜ | **A1. §13.3 "Versions": the minor-version guarantee is false.** `{ id: 1, note: 5 }` is valid under open `{ id: Int }`; after a minor version adds `note?: String` it fails. Likewise `Foo(1)` as an unknown value becomes `wrong-payload` once `Foo String` is added. The guarantee holds only for data that uses the names the earlier version listed: reword it, or reserve unlisted names in open types for later versions. The table also leaves changes unclassified (adding a required field, optionality in either direction, adding to a closed type, changing a payload, opening a closed type): add "anything not listed as minor or patch is major". Ties in with the compat check in `plans/package-resolution.md`. |
+| ⬜ | **A2. §16.3 Reading: "a reader keeps a newer writer's case" doesn't hold end to end.** Derived from `Json/Plain.lean` (`unknownJson`, the `none` branch of `readCore`), not run against the bindings. (1) Lossy: an unlisted case's members read without a schema, so an Int64, Decimal, Bytes or std/time value arrives as a string; value and hash differ. (2) No pass-through: the old reader writes it back as `{"_tag", "args": [lossless]}`, which the newer reader (record case, open) ignores and reports a missing field or drops data. (3) Positional misread: `Hexagon Int` writes `{"_tag":"Hexagon","value":6}`, read as `Hexagon { value: 6 }`. (4) `args` collision: a record case whose only field is `args: Array String` reads as positional. `plain_round_trip` and `plain_injective` stay true (same schema both ways). The mapping is frozen at 1.0, so decide before: at least say an unknown value from plain JSON is best effort and not to be forwarded as faithful; consider reserving `args`/`value`/`values`. |
+
+**B. Rules that are imprecise or live only in code**
+
+| | Item |
+|---|---|
+| ⬜ | **B1.** `-0x0` and `-0b0` normalize to `0`, decimal `-0` stays `-0` (only in a comment at `Haus/Lexical.lean` `normalizeBody`). Changes canonical forms and hashes. State it in §2 and add a conformance case with its `.canonical`. |
+| ⬜ | **B2.** Block strings have no prose section; the EBNF comment (`grammar.ebnf` 74–81) is wrong: a whitespace-only line starting with the indent keeps the rest (indent 2, line of 6 spaces → 4 spaces), not "empty". Trailing whitespace is significant, so an editor that trims it changes the value and hash. Write the rules in prose, fix the comment, decide whether the formatter (§11) escapes trailing blanks or whitespace-only lines. |
+| ⬜ | **B3.** `std/time.md` "every other value has exactly one spelling" is false for offsets: `Z` and `+00:00` both accepted. Add the caveat or reject one spelling. (`instant_same_iff` is stated correctly.) |
+| ⬜ | **B4.** §8 doesn't say a BOM counts as column 1, nor what a line break is for line numbers (only in §1.2 S18 and the bindings). |
+| ⬜ | **B5.** The hex threshold for long integers is "the default number limit (§7, 1000)" in §11, §12, §15, §16, but §10 lets default limits grow. Make 1000 a fixed constant of canonical form v1. |
+| ⬜ | **B6.** An integer too long even in hex has no specified encoder behaviour or code (`number-too-long` or `cannot-encode`). |
+| ⬜ | **B7.** `Tag ({ … })` in a schema: record case or positional case with one record argument? Different plain JSON. TypeScript decides at `schema-file.ts` (`c.args.length === 1 && first.t === "record"`). Specify it; add schema and JSON suite cases. |
+| ⬜ | **B8.** §7: "MUST accept every input within these defaults" should say "by default", next to "MUST let users configure them". |
+
+**C. What the proofs don't cover**
+
+| | Item |
+|---|---|
+| ⬜ | **C1.** Schema files (§14) have no Lean model; types come from the TypeScript parser (`scripts/schema-types.ts`), so resolution, spreads, generics and guarded recursion are only compared between bindings. A reference schema-file checker is the piece behind I4 and I6 (`spec/lean/PLAN.md`). |
+| ⬜ | **C2.** Formatter (§11): no model and no fuzz property. Add: `parse(format(t)) = parse(t)`, idempotence, TypeScript and Rust give identical bytes. Block strings (B2) are the likeliest bug. |
+| ⬜ | **C3.** The model starts after UTF-8 decoding; invalid UTF-8 and SHA-256 are outside the proofs. Say so in `spec/lean/README.md` next to A5. |
+| ⬜ | **C4.** Streams: the 64 Mi value limit and strict mode aren't modelled, so the same bytes can be accepted whole and rejected streamed. |
+| ⬜ | **C5.** `Extends` (`Version.lean`) omits the JSON mappings, the hash, default limits and error codes, though §16 freezes the mappings. |
+| ⬜ | **C6.** Linear time: phase P and I7, already in `spec/lean/PLAN.md`. |
+| ⬜ | **C7.** `spec/lean/PLAN.md` phase 0 says 103/103 cases; the suite has 120. |
+
+**D. Decisions before 1.0** (part of the irreversible decisions in §3.5, with B1, B5 and A2)
+
+| | Item |
+|---|---|
+| ⬜ | **D1.** U+2028 and U+2029 are written raw by every writer, canonical included. Python's `str.splitlines()` splits on them, which breaks §11's "a compact stream can be split by lines". Escape them or not, before the canonical form freezes. |
+| ⬜ | **D2.** §7's duplicate-key check "must use hashing": require seeded (collision-resistant) hashing or an ordered structure, else crafted keys make it quadratic (the S2 class). |
+| ⬜ | **D3.** Year `0000` is valid in std/time, but Python `datetime` and .NET `DateTime` can't hold it, and offsets can push an Instant outside 0000–9999 in UTC. Document that those can't be lossless default host types (§13.4), or narrow the range. |
+
+**E. Extensions and profiles** (from the discussion after the audit; proof steps in [`lean/PLAN.md`](lean/PLAN.md), phase X)
+
+| | Item |
+|---|---|
+| ⬜ | **E1. §13.3 says a profile "is defined by test vectors".** Vectors can't define a rule: two codecs can pass all of them (7 for `iso`, 6 for `wgs84`) and disagree on other values. Change §13.3: a profile is defined by its rule, written in prose and in Lean, and the vectors are examples of it. Today the rule is only a comment at the top of each `profiles/*.vectors.haus`. |
+| ⬜ | **E2. A Lean definition and checker for each official profile** (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`), and every binding's codec fuzzed against it, as for std/time (X2, X3). |
+| ⬜ | **E3. `wgs84` leaves questions open.** `LatLng` is two `Float64`s: is the range checked on the float after rounding (`LatLng(90.00000000000000001, 0)` rounds to 90) or on the literal? `Infinity` and `NegInfinity` have no vector (only `NaN`), nor has `-0`. Decide, write it in the rule, add vectors. |
+| ⬜ | **E4. The codec contract of §13.4, proven once for any codec** (X1): it rejects more, never fewer; decode, encode, decode is decode; the value's meaning doesn't change. Each extension then gets the three laws without a proof of its own. |
+| ⬜ | **E5. More proofs only where a profile claims something** (X4): one spelling per value (a canonical UUID), parsing that security depends on (`@haus-fmt/net`), exact numeric bounds. Registries are not formalised: a profile for assigned ISO 4217 codes would be a table generated from the list, and tested. Proofs are how the official packages are made, never a rule for schema packages (§13.3). |
 
 Not planned: newtypes. A single-tag variant (`closed < UserId String >`) makes the type visible in the data, and a named alias (`type UserId = String`) can get a distinct host type through a codec. An optional codegen setting could emit distinct types for named aliases (a Rust newtype, a TypeScript branded type); that is tooling, not format.
 
@@ -195,10 +249,10 @@ Done: the 1.0 spec changes (versions, `Any`, `Secret a`, `@deprecated`) in every
    - ✅ **Done: one name, `@haus-fmt`.** The `haus` names can't be had (npm, crates.io, PyPI); the `@haus-fmt` npm and GitHub orgs and the `haus-fmt` crate and PyPI package are ours. Renamed `@haus/money` → `@haus-fmt/money`, `@haus/geo` → `@haus-fmt/geo` (spec §13.3 and type ids, manifests, the editor's hint table, the Rust and Python hints, generators: Roc `HausFmtMoney`, docs, examples, the website sample); crates `haus-money`, `haus-geo`, `haus-build` → `haus-fmt-money`, `haus-fmt-geo`, `haus-fmt-build` (code keeps `haus_build`, `haus_money`, `haus_geo` through `[lib] name`); PyPI `haus-fmt-money`, `haus-fmt-geo`. Done before 1.0, because type ids are permanent. Still to do: claim the free crates early, `haus-fmt-build` first. crates.io has no scopes yet; when open namespaces (RFC 3243) ship, only the owner of `haus-fmt` can publish `haus-fmt::money`, and the flat crates stay as re-exports.
    - `@haus-fmt/money` and `@haus-fmt/geo` release-ready: a Python package, codecs that implement the profiles (`iso`, `wgs84`) in every binding and pass the profile vectors, Effect support, a docs page each, publishing set up for npm, crates.io and PyPI.
    - One or two new packages whose rules a published grammar fixes, the types left out of the prelude: `@haus-fmt/id` (`Uuid`, maybe `Ulid`) and `@haus-fmt/net` (`Url`, `Email`, `IpAddr`), each with a profile and vectors.
-   - The contract for implementers is the profile vectors. The shape is covered by the schema proofs (phase I) like any schema. Each profile gets a Lean reference checker so the fuzzer compares the bindings, as for std/time; a proof only where a profile defines a normal form (a canonical UUID spelling).
+   - The contract for implementers is each profile's rule, written in prose and in Lean; the vectors are examples of it (§3.6 E1). The shape is covered by the schema proofs (phase I) like any schema. Each profile gets a Lean reference checker so the fuzzer compares the bindings, as for std/time, and the codec contract of §13.4 is proven once for every codec (§3.6 E4). More proofs only where a profile claims something: a normal form (a canonical UUID spelling), parsing that security depends on, exact bounds (§3.6 E5). A new package's profile is written in Lean before its codecs.
    - After 1.0, as people ask: units and quantities, locales (language tags, countries), phone numbers.
 4. **A Go binding** for launch: config files are the strongest use case and much infrastructure tooling is Go. Parser, formatter (the `test-suite/format` suite), canonical form and hash, JSON (§16), limits and error codes, the runtime schema checker (§15), a fuzz runner against Lean; codegen from schemas after 1.0. About 1–2 weeks. v1 then ships TypeScript, Effect, Rust, Python, Roc and Go.
-5. **1.0 release** (§3.5): sign off the irreversible decisions, governance document, final review, tag the suite, register the MIME type, announce.
+5. **1.0 release** (§3.5): fix the audit's wrong claims and hash-affecting rules first (§3.6: A1, A2, B1, B2, then D1–D3), sign off the irreversible decisions, governance document, final review, tag the suite, register the MIME type, announce.
 6. **After 1.0:** MCP servers, JSON Schema export, eval (§3.4); Tree-sitter and the editor pull requests; proof phases I4, I6, I7 and P; Temporal codecs, codegen for more languages, a binary encoding; more bindings as people ask: Java/Kotlin, C#, Swift, and a C or WebAssembly interface to the Rust crate for the long tail. New bindings need no spec change: the tagged suite and the fuzzer show they conform.
 7. **Dogfooding** (low priority, after the main packages are published). Config files other tools read stay as they are (`Cargo.toml`, `package.json`, `tsconfig.json`, `pyproject.toml`, `lakefile.toml`, CI YAML, VS Code's JSON); the suite, schemas, manifests, profile vectors and examples are haus already. To do:
    - the TextMate grammars (`editors/vscode/syntaxes/*.tmLanguage.json`) written in haus, regexes in block strings without doubled backslashes, converted to JSON in the extension's build (§16);
