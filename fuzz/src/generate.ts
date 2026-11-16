@@ -64,11 +64,11 @@ function number(r: Rng): string {
     case 6: return sign + "0b" + digits(r, 1 + r.int(12), "01")
     case 7: return sign + (1 + r.int(9)) + digits(r, 15 + r.int(30)) // beyond 2^53
     case 8: return sign + "19.90"
-    default: return sign + r.pick(["1e6144", "1e-6144", "1e6145", "0x" + "f".repeat(997), "1" + "0".repeat(999), "1" + "0".repeat(1000)])
+    default: return sign + r.pick(["1e6144", "1e-6144", "1e6145", "0x" + "f".repeat(997), "1" + "0".repeat(999), "1" + "0".repeat(1000), "0x0", "0b0", "0x00", "0X0"])
   }
 }
 
-const STRING_PARTS = ["a", "hello", " ", "é", "😀", "中文", "\\n", "\\t", '\\"', "\\\\", "\\u{41}", "\\u{1F600}", "\\u{0}", "\\u{1B}", "\\u{7F}", "\\u{85}", "\\u{202E}", "\\r", "'", "/*", "*/", "//", ","]
+const STRING_PARTS = ["a", "hello", " ", "é", "😀", "中文", "\\n", "\\t", '\\"', "\\\\", "\\u{41}", "\\u{1F600}", "\\u{0}", "\\u{1B}", "\\u{7F}", "\\u{85}", "\\u{202E}", "\\r", "'", "/*", "*/", "//", ",", "\u2028", "\u2029", "\\u{2028}", "\\u{2029}"]
 
 function basicString(r: Rng): string {
   return '"' + r.times(5, () => r.pick(STRING_PARTS)).join("") + '"'
@@ -77,7 +77,7 @@ function basicString(r: Rng): string {
 export function blockString(r: Rng, indent: string): string {
   const nl = r.chance(0.2) ? "\r\n" : "\n"
   const inner = indent + r.pick(["", "  ", "\t"])
-  const lines = r.times(3, () => r.pick(["", inner + "line", inner + 'say "hi" \\"""', inner + "  deeper", inner + "tab\there", inner + "😀 \\u{1B}"]))
+  const lines = r.times(3, () => r.pick(["", inner + "line", inner + 'say "hi" \\"""', inner + "  deeper", inner + "tab\there", inner + "😀 \\u{1B}", inner + "end  ", inner + "tab\t", inner + "   ", inner + "\u2028"]))
   return '"""' + r.pick(["", " "]) + nl + lines.map((l) => l + nl).join("") + inner + '"""'
 }
 

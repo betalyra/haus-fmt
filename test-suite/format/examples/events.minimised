@@ -1,0 +1,4 @@
+UserCreated{id:42,email:"jan@example.com",at:Instant("2026-11-07T10:00:00Z")},
+UserRenamed{id:42,from:"Jan",to:"Jan S.",at:Instant("2026-11-07T10:05:12Z")},
+PaymentReceived{id:42,amount:Money(19.99,EUR),at:Instant("2026-11-07T10:06:00Z")},
+Heartbeat,

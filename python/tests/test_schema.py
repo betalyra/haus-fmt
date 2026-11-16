@@ -189,6 +189,18 @@ def test_scalars() -> None:
     assert SCHEMA["F32"].canonical(0.1) == "0.1"
     assert roundtrip("F32", "NegInfinity") == "NegInfinity"
     assert SCHEMA["Small"].parse("-0") == 0
+
+
+def test_a_negative_hex_zero_decodes_as_negative_zero() -> None:
+    # -0x0 is -0 (spec §2): an Int 0, a Float64 negative zero.
+    import math
+
+    for text in ("-0x0", "-0b0"):
+        assert SCHEMA["Small"].parse(text) == 0
+        assert SCHEMA["Counts"].parse(f"{{ a: {text} }}") == {"a": 0}
+        r = SCHEMA["Shape"].parse(f"Circle {{ r: {text} }}").payload["r"]
+        assert r == 0 and math.copysign(1, r) == -1
+    assert SCHEMA["Amount"].parse("-0x0") == "-0"
     with pytest.raises(HausDecodeError, match="out of range for UInt8"):
         SCHEMA["Small"].parse("256")
     with pytest.raises(HausEncodeError):

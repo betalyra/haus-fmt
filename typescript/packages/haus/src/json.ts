@@ -100,8 +100,13 @@ export const normalizeJsonNumber = (text: string): string => {
 const hex4 = (c: number) => c.toString(16).toUpperCase().padStart(4, "0")
 const short = (s: string) => JSON.stringify(s.length > 30 ? s.slice(0, 30) + "…" : s)
 
-/** DEL, C1 and the bidi controls (spec §4): what JSON writers escape, and the self-describing reader rejects raw. */
-const DISPLAY_CONTROL = /[\u007f-\u009f\u202a-\u202e\u2066-\u2069]/
+/**
+ * What JSON writers escape besides what JSON.stringify does (spec §16): DEL,
+ * C1, the bidi controls, and the line and paragraph separators U+2028 and
+ * U+2029. The self-describing reader rejects the first three raw (§4), but
+ * accepts the separators.
+ */
+const DISPLAY_CONTROL = /[\u007f-\u009f\u202a-\u202e\u2066-\u2069\u2028\u2029]/
 const DISPLAY_CONTROLS = new RegExp(DISPLAY_CONTROL.source, "g")
 const isBidi = (c: number) => (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
 
@@ -358,7 +363,7 @@ const LONE_SURROGATE = /\p{Cs}/u
 const escapeControl = (c: string) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`
 
 /**
- * A JSON string literal, with DEL, C1 and bidi controls escaped besides
+ * A JSON string literal, with DEL, C1, bidi controls, U+2028 and U+2029 escaped besides
  * what JSON escapes (spec §16), so it can't display differently from what it
  * holds. A string with an unpaired surrogate has none (I-JSON).
  */
@@ -370,7 +375,7 @@ const quoteJson = (s: string, path: () => Path): string => {
 
 /**
  * JSON text for a JSON value, compact (no whitespace). Numbers are written
- * exactly as their text; DEL, C1 and bidi controls are escaped. Throws HausEncodeError for what isn't JSON or
+ * exactly as their text; DEL, C1, bidi controls, U+2028 and U+2029 are escaped. Throws HausEncodeError for what isn't JSON or
  * I-JSON: a number that isn't a JSON literal, an unpaired surrogate, a cycle.
  * Iterative, with a stack of what is left to write, so any depth works.
  */

@@ -55,7 +55,7 @@ theorem escape_ok (c : Char) : (escape c = [c] ∧ BasicChar c) ∨ Escape (esca
   · subst h4; exact .inr .cr
   by_cases h5 : c = '\t'
   · subst h5; exact .inr .tab
-  have e : escape c = if isRawControl c || isBidi c then
+  have e : escape c = if isRawControl c || isBidi c || isLineSep c then
       ['\\', 'u', '{'] ++ (Nat.toDigits 16 c.toNat).map Char.toUpper ++ ['}'] else [c] := by
     unfold escape; split <;> simp_all
   rw [e]
@@ -63,7 +63,7 @@ theorem escape_ok (c : Char) : (escape c = [c] ∧ BasicChar c) ∨ Escape (esca
   · exact .inr (unicodeEscape c)
   · rename_i h
     simp only [Bool.or_eq_true, not_or, Bool.not_eq_true] at h
-    exact .inl ⟨rfl, h1, h2, h.1, h.2⟩
+    exact .inl ⟨rfl, h1, h2, h.1.1, h.1.2⟩
 
 theorem chars_escape : ∀ cs : Text, Chars BasicChar (cs.flatMap escape) cs
   | [] => .nil

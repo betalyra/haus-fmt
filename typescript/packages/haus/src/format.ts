@@ -1,10 +1,11 @@
 /**
  * Serializer and standard formatter (spec §11, "Standard format").
  *
- * Two official layouts, like gofmt there are no other style options:
+ * Three official layouts, like gofmt there are no other style options:
  * - pretty (default): every non-empty record and array has one entry per
  *   line, each with a trailing comma; short positional payloads stay inline.
  * - compact: every top-level item on a single line, `{ a: 1, b: [1, 2] }`.
+ * - minimised: compact without the whitespace between tokens, `{a:1,b:[1,2]}`.
  *
  * Given the source text and comment positions (`parseDocument`), comments
  * and blank lines between entries are kept: a comment on its own line stays
@@ -15,12 +16,17 @@
 import { DEFAULT_LIMITS } from "./parser.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
+/**
+ * The layouts of spec §11:
+ * - `"pretty"`: one entry per line in every non-empty record and array, comments kept. For people who edit.
+ * - `"compact"`: every top-level item on one line, `{ a: 1, b: [1, 2] }`. Comments are dropped. For logs.
+ * - `"minimised"`: compact without the whitespace between tokens, `{a:1,b:[1,2]}`. Comments are dropped. For the wire and storage.
+ */
+export type FormatStyle = "pretty" | "compact" | "minimised"
+
 export interface FormatOptions {
-  /**
-   * `"pretty"` (default): one entry per line in every non-empty record and array.
-   * `"compact"`: every top-level item on one line. Comments are dropped.
-   */
-  readonly style?: "pretty" | "compact"
+  /** The layout (spec §11): `"pretty"` (default), `"compact"` or `"minimised"`. */
+  readonly style?: FormatStyle
   /** Spaces per indentation level (default 2). */
   readonly indent?: number
   /**
@@ -47,7 +53,7 @@ export interface FormatOptions {
 
 /** Format a whole file: one value, or a stream with a comma after each value. */
 export function format(values: readonly Value[], options: FormatOptions = {}): string {
-  if (options.style === "compact") {
+  if (oneLine(options)) {
     const f = new Formatter(options)
     if (values.length === 0) return ""
     if (values.length === 1) return f.line(values[0]!) + "\n"
@@ -61,8 +67,11 @@ export function format(values: readonly Value[], options: FormatOptions = {}): s
 /** Serialize one value (no trailing newline). */
 export function stringify(value: Value, options: FormatOptions = {}): string {
   const f = new Formatter(options)
-  return options.style === "compact" ? f.line(value) : f.value(value)
+  return oneLine(options) ? f.line(value) : f.value(value)
 }
+
+/** Compact and minimised write every top-level item on one line. */
+const oneLine = (options: FormatOptions) => options.style === "compact" || options.style === "minimised"
 
 /**
  * A number's literal; an integer longer than `maxNumberLength` (a hex literal
@@ -77,6 +86,22 @@ export function numberText(text: string, maxNumberLength: number = DEFAULT_LIMIT
 }
 
 const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
+
+/** The whitespace between the tokens of a line: compact and pretty have it, minimised has none. */
+interface Spacing {
+  /** Between items: `, `. */
+  readonly comma: string
+  /** After a key: `: `. */
+  readonly colon: string
+  /** Inside the braces of a non-empty record: `{ `, ` }`. */
+  readonly open: string
+  readonly close: string
+  /** Between a tag and its record payload: `Tag { … }`. */
+  readonly tag: string
+}
+
+const SPACED: Spacing = { comma: ", ", colon: ": ", open: "{ ", close: " }", tag: " " }
+const TIGHT: Spacing = { comma: ",", colon: ":", open: "{", close: "}", tag: "" }
 
 /** One entry of a container: a record field, an array item, a payload argument, a top-level value. */
 interface Entry {
@@ -127,8 +152,11 @@ class Formatter {
   private readonly source: string | undefined
   private readonly comments: readonly Span[]
   private readonly maxNumberLength: number
+  /** The spacing of a top-level item on one line: compact's, or none (minimised). */
+  private readonly spacing: Spacing
 
   constructor(options: FormatOptions) {
+    this.spacing = options.style === "minimised" ? TIGHT : SPACED
     this.maxNumberLength = options.maxNumberLength ?? DEFAULT_LIMITS.maxNumberLength
     this.step = " ".repeat(options.indent ?? 2)
     this.width = options.width ?? 80
@@ -152,11 +180,12 @@ class Formatter {
   }
 
   /**
-   * Compact: the value on one line with normal spacing. Multi-line strings use
-   * `\n` escapes, so a compact stream has exactly one item per line (like NDJSON).
+   * Compact and minimised: the value on one line, with spaces between tokens
+   * (compact) or without (minimised). Multi-line strings use `\n` escapes, so
+   * a stream has exactly one item per line (like NDJSON).
    */
   line(v: Value): string {
-    return this.inline(v, false, Infinity)!
+    return this.inline(v, false, Infinity, this.spacing)!
   }
 
   // ── single line ────────────────────────────────────────────
@@ -166,7 +195,8 @@ class Formatter {
    * undefined if it can't be written on one line there (a block string, a
    * non-empty record or array). Iterative, like `run`.
    */
-  private inline(v: Value, pretty: boolean, budget: number): string | undefined {
+  private inline(v: Value, pretty: boolean, budget: number, spacing: Spacing = SPACED): string | undefined {
+    const { comma, colon } = spacing
     const out: string[] = []
     let length = 0
     const work: (Value | string)[] = [v]
@@ -179,19 +209,19 @@ class Formatter {
       work.push(close)
       for (let i = values.length - 1; i >= 0; i--) {
         work.push(values[i]!)
-        if (i > 0) work.push(", ")
+        if (i > 0) work.push(comma)
       }
     }
     const record = (r: HRecord): boolean => {
       if (r.fields.size === 0) push("{}")
       else if (pretty) return false // pretty: one field per line
       else {
-        push("{ ")
-        work.push(" }")
+        push(spacing.open)
+        work.push(spacing.close)
         const fields = [...r.fields]
         for (let i = fields.length - 1; i >= 0; i--) {
           const [k, x] = fields[i]!
-          work.push(x, `${i > 0 ? ", " : ""}${key(k)}: `)
+          work.push(x, `${i > 0 ? comma : ""}${key(k)}${colon}`)
         }
       }
       return true
@@ -223,7 +253,7 @@ class Formatter {
             const [first] = x.args
             push(x.tag)
             if (x.args.length === 1 && first?.kind === "record") {
-              push(" ")
+              push(spacing.tag)
               if (!record(first)) return undefined
             } else if (x.args.length > 0) {
               push("(")
@@ -434,9 +464,12 @@ class Formatter {
   }
 
   private basicString(v: Extract<Value, { kind: "string" }>): string {
-    // The original spelling, unless it was a block string (those span lines).
+    // The original spelling, unless it was a block string (those span lines),
+    // with raw line and paragraph separators escaped (spec §11).
     const original = this.original(v)
-    return original !== undefined && original.startsWith('"') && !original.startsWith('"""') ? original : quote(v.value)
+    return original !== undefined && original.startsWith('"') && !original.startsWith('"""')
+      ? original.replace(SEPARATORS, (ch) => hexEscape(ch.charCodeAt(0)))
+      : quote(v.value)
   }
 
   /** The value's source text, when formatting a parsed document. */
@@ -489,6 +522,9 @@ const firstAtOrAfter = (comments: readonly (readonly [number, number])[], offset
 const key = (k: string) => (BARE_KEY.test(k) ? k : quote(k))
 
 const isBidi = (c: number) => (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
+/** The line and paragraph separators U+2028, U+2029: some software splits lines at them, so every writer escapes them (spec §11). */
+const isSeparator = (c: number) => c === 0x2028 || c === 0x2029
+const SEPARATORS = /[\u2028\u2029]/g
 /** C0, DEL and C1 control characters: written as escapes (spec §4). */
 const isControl = (c: number) => c < 0x20 || (c >= 0x7f && c <= 0x9f)
 const hexEscape = (c: number) => `\\u{${c.toString(16).toUpperCase()}}`
@@ -512,13 +548,18 @@ export function quote(s: string): string {
     else if (ch === "\n") out += "\\n"
     else if (ch === "\r") out += "\\r"
     else if (ch === "\t") out += "\\t"
-    else if (isControl(c) || isBidi(c)) out += hexEscape(c)
+    else if (isControl(c) || isBidi(c) || isSeparator(c)) out += hexEscape(c)
     else out += ch
   }
   return out + '"'
 }
 
-/** A `"""` block string whose content and closing quotes sit at `ind`. */
+/**
+ * A `"""` block string whose content and closing quotes sit at `ind`. No line
+ * ends in a space or tab (spec §11): the last one of a content line that ends
+ * in one is written as an escape, so trimming trailing whitespace can't
+ * change the value.
+ */
 function blockString(s: string, ind: string): string {
   const lines = s.split("\n").map((line) => {
     let out = ""
@@ -526,12 +567,13 @@ function blockString(s: string, ind: string): string {
       const c = ch.codePointAt(0)!
       if (ch === "\\") out += "\\\\"
       else if (ch === "\r") out += "\\r"
-      else if ((isControl(c) && ch !== "\t") || isBidi(c)) out += hexEscape(c)
+      else if ((isControl(c) && ch !== "\t") || isBidi(c) || isSeparator(c)) out += hexEscape(c)
       else out += ch
     }
     // A run of three quotes would close the string early: escape every quote
     // that has two more after it, so at most two raw quotes remain in a row.
-    return out.replace(/"(?="")/g, '\\"')
+    out = out.replace(/"(?="")/g, '\\"')
+    return out.endsWith(" ") ? out.slice(0, -1) + "\\u{20}" : out.endsWith("\t") ? out.slice(0, -1) + "\\t" : out
   })
   return `"""\n${lines.map((l) => (l === "" ? "" : ind + l)).join("\n")}\n${ind}"""`
 }

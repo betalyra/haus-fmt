@@ -144,24 +144,31 @@ and every example of the catalogue gives its code.
 
 ## Formatting
 
-`haus::format(text, &options)` writes a file in the standard layout of spec §11,
+`haus::format(text, &options)` writes a file in one of the three layouts of spec §11,
 byte for byte the same as the TypeScript formatter (both pass the
 [format suite](../test-suite/format)):
 
 ```rust
 let pretty = haus::format(&text, &haus::FormatOptions::default())?;   // keeps comments and blank lines
 let compact = haus::format(&text, &haus::FormatOptions { style: haus::Style::Compact, ..Default::default() })?;
+let minimised = haus::format(&text, &haus::FormatOptions { style: haus::Style::Minimised, ..Default::default() })?;
 ```
 
 | `FormatOptions` field | Default | |
 |---|---|---|
-| `style` | `Style::Pretty` | `Pretty`: one entry per line in every non-empty record and array, comments and blank lines (at most one) kept. `Compact`: every top-level item on one line, comments dropped. |
+| `style` | `Style::Pretty` | `Pretty`: one entry per line in every non-empty record and array, comments and blank lines (at most one) kept. `Compact`: every top-level item on one line, comments dropped. `Minimised`: compact without whitespace between tokens (`Person{name:"Ada",age:36}`), for the wire and storage. |
 | `indent` | 2 | Spaces per level. |
 | `width` | 80 | Positional payloads like `Money(7.90, EUR)` stay inline up to this width, counted in code points and including the comma after the entry. |
 | `limits` | `Limits::default()` | The limits the text is parsed with. |
 
 Numbers, single-line strings and byte strings keep their source spelling
-(`0xFF` stays `0xFF`), and formatting the output again changes nothing. A text
+(`0xFF` stays `0xFF`, `x"9f86 d081"` keeps its blank, also in minimised), and
+formatting the output again changes nothing. Every layout escapes U+2028 and
+U+2029 in strings, and no line of a pretty block string ends in a space or
+tab (the last one is written `\u{20}` or `\t`), so an editor that trims
+trailing whitespace can't change the value. A tool that rewrites a file in
+place in compact or minimised should refuse when `haus::has_comments` is
+true, unless asked to drop them (spec §11). A text
 that doesn't parse gives the same `SyntaxError` as `haus::parse_with`. The
 formatter uses no call stack per level of nesting: at
 `haus::MAX_SUPPORTED_DEPTH` the parser that checks the text is the deepest

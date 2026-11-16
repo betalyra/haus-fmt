@@ -196,7 +196,8 @@ ignored only at the start of the stream.
 import { format, parseDocument, stringify } from "@haus-fmt/haus"
 
 stringify(value)                                   // one value in the standard layout
-stringify(value, { style: "compact" })             // on one line
+stringify(value, { style: "compact" })             // on one line: { a: 1, b: [1, 2] }
+stringify(value, { style: "minimised" })           // on one line, no whitespace: {a:1,b:[1,2]}
 format(values)                                     // a file of values (a stream)
 
 const { values, comments } = parseDocument(text)

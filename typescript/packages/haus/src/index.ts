@@ -16,7 +16,7 @@ export {
 export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, type Limits } from "./parser.js"
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
 export * from "./value.js"
-export { format, quote, stringify, type FormatOptions } from "./format.js"
+export { format, quote, stringify, type FormatOptions, type FormatStyle } from "./format.js"
 export { canonical, compare, compareCodePoints, equals, hash, hashAll, Hasher } from "./canonical.js"
 export { floatText, floatValue, specialFloat, toFloat, toFloat32, toFloat64, type FloatType } from "./float.js"
 export { normalizeNumber } from "./number.js"

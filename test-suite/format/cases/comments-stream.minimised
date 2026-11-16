@@ -1,0 +1,5 @@
+Event{level:Info,text:"started"},
+Event{level:Warn,text:"slow"},
+Ping,
+Ping,
+Event{level:Info,text:"stopped"},

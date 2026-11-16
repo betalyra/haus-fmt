@@ -30,7 +30,7 @@ haus is a text data format: JSON's records, arrays, strings and numbers, plus by
 ```
 
 - **Values:** number, string, bytes, array `[…]`, record `{…}`, variant. No `null`, no `true`/`false`, no other bare words.
-- **Strings:** `"…"` with the escapes `\"` `\\` `\n` `\r` `\t` `\u{1F600}`, on one line. Block strings: `"""`, a line break, the lines, then `"""` on its own line.
+- **Strings:** `"…"` with the escapes `\"` `\\` `\n` `\r` `\t` `\u{1F600}`, on one line. Block strings: `"""`, a line break, the lines, then `"""` on its own line; its indent is removed from every line, and spaces at the end of a line belong to the text (the formatter writes the last one as `\u{20}`).
 - **Numbers:** `42`, `-0.5`, `1.5e-3`, `1E+05`, `0xFF`, `0b1010`, `1_000_000`. No `+`, no `.5` or `1.`, no leading zeros (`007`).
 - **Variants:** a tag starts uppercase. `Circle { r: 1 }` is the same value as `Circle({ r: 1 })`. `True`, `False`, `None`, `Some(x)`, `Ok(x)`, `Err(x)` get their meaning from the prelude.
 - **Streams:** a file is zero or more values separated by commas. Writers put a comma after every value, the last one too:

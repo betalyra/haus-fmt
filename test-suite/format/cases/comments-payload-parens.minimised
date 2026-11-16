@@ -1,0 +1,1 @@
+[Before{a:1},After{a:1},AfterComma{a:1},Line{a:1,b:2},LineAfter{a:1},Empty{},EmptyAfter{},Both{a:1},Spaced{a:1},Nested{inner:Inner{x:1}},Inline{},Braces{a:1},Positional(1,{a:1})]

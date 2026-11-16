@@ -507,8 +507,9 @@ const valueEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(s
 /**
  * Encode a typed value as haus text in the standard format (no trailing
  * newline). Pass the same codecs as for decoding; options go with the
- * value: `Haus.encode(Root, cents)(order, { style: "compact" })`, and
- * `{ limits: { maxDepth: 512 } }` for a reader with other limits (spec §7).
+ * value: `Haus.encode(Root, cents)(order, { style: "compact" })` (or
+ * `"minimised"`, without whitespace, for the wire and storage, spec §11),
+ * and `{ limits: { maxDepth: 512 } }` for a reader with other limits (spec §7).
  */
 export function encode<S extends Schema.Top>(schema: S, options?: EncodeOptions): (value: S["Type"], options?: EncodeOptions) => Effect.Effect<string, HausSchemaError | HausLimitsError, S["EncodingServices"]>
 export function encode<S extends Schema.Top, const C extends ReadonlyArray<AnyCodec>>(schema: S, ...codecs: C & Checked<S, C>): (value: Decoded<S, C>, options?: EncodeOptions) => Effect.Effect<string, HausSchemaError | HausLimitsError, S["EncodingServices"]>
@@ -523,7 +524,8 @@ export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<A
 
 /**
  * Encode a stream of values as haus stream chunks, each ending in ",\n".
- * Compact by default (one item per line); pass `{ style: "pretty" }` for multi-line items.
+ * Compact by default (one item per line); pass `{ style: "minimised" }` for
+ * one item per line without whitespace, `{ style: "pretty" }` for multi-line items.
  */
 export function encodeStream<S extends Schema.Top>(schema: S, options?: EncodeOptions): <E, R>(values: Stream.Stream<S["Type"], E, R>, options?: EncodeOptions) => Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]>
 export function encodeStream<S extends Schema.Top, const C extends ReadonlyArray<AnyCodec>>(schema: S, ...codecs: C & Checked<S, C>): <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, options?: EncodeOptions) => Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]>

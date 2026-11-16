@@ -1,0 +1,1 @@
+{ note: "Delivery to the back door \nTwo spaces  \n   \nTab at the end\t\n\t\nSpace then tab \t\nTab then space\t \nRing twice", escaped: "Ends in a space \nEnds in a tab\t", blank: "first\n  \n\nlast", list: ["In an array \nand a second line", "single line \t"], shape: Circle { label: "a \nb" } }

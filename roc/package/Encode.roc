@@ -1,7 +1,9 @@
 ## Writing haus: the compact layout (spec §11: one value per line, normal
-## spacing), and the building blocks that generated encoders use.
+## spacing), the minimised layout (the same without spaces), and the building
+## blocks that generated encoders use.
 ##
-##     Encode.to_str(Rec([("name", Text("Ada"))]))   # Ok("{ name: \"Ada\" }")
+##     Encode.to_str(Rec([("name", Text("Ada"))]))      # Ok("{ name: \"Ada\" }")
+##     Encode.minimised(Rec([("name", Text("Ada"))]))   # Ok("{name:\"Ada\"}")
 ##
 ## The writer checks what it writes (spec §9.8). What generated encoders give
 ## is always fine; a `Value` built in code, such as the raw value of an `Any`
@@ -28,7 +30,22 @@ Encode := [].{
 	to_str_with : Value, Value.Limits -> Try(Str, Error)
 	to_str_with = |value, limits| {
 		supported(limits)?
-		line(value, 0, limits).map_ok(bytes_to_str)
+		line(value, 0, { limits, spaced: True }).map_ok(bytes_to_str)
+	}
+
+	## One value on one line in the minimised layout (spec §11): the compact
+	## layout without the whitespace between tokens, for the wire and storage.
+	## Checked as `to_str` checks it.
+	##
+	##     Encode.minimised(Tag("Person", [Rec([("age", Num("30"))])]))   # Ok("Person{age:30}")
+	minimised : Value -> Try(Str, Error)
+	minimised = |value| minimised_with(value, Value.default_limits)
+
+	## `minimised` for a reader with other limits (see `to_str_with`).
+	minimised_with : Value, Value.Limits -> Try(Str, Error)
+	minimised_with = |value, limits| {
+		supported(limits)?
+		line(value, 0, { limits, spaced: False }).map_ok(bytes_to_str)
 	}
 
 	## `.extra[1]: not a number literal`, or just the reason at the root.
@@ -43,7 +60,10 @@ Encode := [].{
 
 	## The canonical form (spec §12): one exact text per value, the same in
 	## every binding, so equal values (§2) give identical text. It doesn't
-	## depend on a reader's limits.
+	## depend on a reader's limits: an integer longer than 1000 characters is
+	## written in hex. One longer than 1000 characters even in hex has no
+	## canonical form (only a parser with a larger number limit, or code,
+	## makes one); this function can't fail, so it writes that one in hex too.
 	canonical : Value -> Str
 	canonical = |value| bytes_to_str(canonical_bytes(value))
 
@@ -100,16 +120,16 @@ Encode := [].{
 
 	## `stream` for a reader with other limits (see `to_str_with`).
 	stream_with : List(Value), Value.Limits -> Try(Str, Error)
-	stream_with = |values, limits| {
-		supported(limits)?
-		var $out = []
-		var $i = 0.U64
-		for v in values {
-			$out = $out.concat(within(line(v, 0, limits), "[${$i.to_str()}]")?).concat([',', '\n'])
-			$i = $i + 1
-		}
-		Ok(bytes_to_str($out))
-	}
+	stream_with = |values, limits| write_stream(values, { limits, spaced: True })
+
+	## A stream in the minimised layout (spec §11): one value per line, each
+	## followed by a comma, without spaces: `Person{age:30},`.
+	stream_minimised : List(Value) -> Try(Str, Error)
+	stream_minimised = |values| stream_minimised_with(values, Value.default_limits)
+
+	## `stream_minimised` for a reader with other limits (see `to_str_with`).
+	stream_minimised_with : List(Value), Value.Limits -> Try(Str, Error)
+	stream_minimised_with = |values, limits| write_stream(values, { limits, spaced: False })
 
 	# ── building blocks ─────────────────────────────────────
 
@@ -286,60 +306,85 @@ fail = |code, reason| Err({ code, reason, path: "" })
 supported : Value.Limits -> Try({}, Error)
 supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })
 
+## How a line is written: for a reader with `limits`, with spaces between
+## tokens (compact) or without (minimised).
+Writer : { limits : Value.Limits, spaced : Bool }
+
+write_stream : List(Value), Writer -> Try(Str, Error)
+write_stream = |values, writer| {
+	supported(writer.limits)?
+	var $out = []
+	var $i = 0.U64
+	for v in values {
+		$out = $out.concat(within(line(v, 0, writer), "[${$i.to_str()}]")?).concat([',', '\n'])
+		$i = $i + 1
+	}
+	Ok(bytes_to_str($out))
+}
+
 ## A value inside `depth` containers (records, arrays, payloads).
-line : Value, U64, Value.Limits -> Try(List(U8), Error)
-line = |value, depth, limits| match value {
-	Num(text) => number(text, limits)
-	Text(s) => {
-		check_length(s, limits)?
-		Ok(quote(s))
-	}
-	Bytes(b) =>
-		if b.len() > limits.max_string_length // 2 {
-			fail(ErrorCode.string_too_long, "byte string longer than ${limits.max_string_length.to_str()} characters")
-		} else {
-			Ok("x\"".to_utf8().concat(hex(b)).append('"'))
+line : Value, U64, Writer -> Try(List(U8), Error)
+line = |value, depth, writer| {
+	limits = writer.limits
+	match value {
+		Num(text) => number(text, limits)
+		Text(s) => {
+			check_length(s, limits)?
+			Ok(quote(s))
 		}
-	Arr(items) => {
-		open(depth, limits)?
-		Ok(['['].concat(items_line(items, depth + 1, limits)?).append(']'))
-	}
-	Rec(fields) => record_line(fields, depth, limits)
-	Tag(name, args) =>
-		if !is_tag(name) {
-			fail(ErrorCode.invalid_tag, "not a tag name: A to Z, then letters, digits and _")
-		} else {
-			check_text(name, "tag", limits)?
-			match args {
-				[] => Ok(name.to_utf8())
-				[Rec(fields)] => Ok(name.to_utf8().append(' ').concat(within(record_line(fields, depth, limits), "(${name})")?))
-				_ => {
-					open(depth, limits)?
-					Ok(name.to_utf8().append('(').concat(within(items_line(args, depth + 1, limits), "(${name})")?).append(')'))
+		Bytes(b) =>
+			if b.len() > limits.max_string_length // 2 {
+				fail(ErrorCode.string_too_long, "byte string longer than ${limits.max_string_length.to_str()} characters")
+			} else {
+				Ok("x\"".to_utf8().concat(hex(b)).append('"'))
+			}
+		Arr(items) => {
+			open(depth, limits)?
+			Ok(['['].concat(items_line(items, depth + 1, writer)?).append(']'))
+		}
+		Rec(fields) => record_line(fields, depth, writer)
+		Tag(name, args) =>
+			if !is_tag(name) {
+				fail(ErrorCode.invalid_tag, "not a tag name: A to Z, then letters, digits and _")
+			} else {
+				check_text(name, "tag", limits)?
+				match args {
+					[] => Ok(name.to_utf8())
+					[Rec(fields)] => Ok(name.to_utf8().concat(space(writer)).concat(within(record_line(fields, depth, writer), "(${name})")?))
+					_ => {
+						open(depth, limits)?
+						Ok(name.to_utf8().append('(').concat(within(items_line(args, depth + 1, writer), "(${name})")?).append(')'))
+					}
 				}
 			}
-		}
+	}
 }
+
+## A space between tokens, unless minimised.
+space : Writer -> List(U8)
+space = |writer| if (writer.spaced) [' '] else []
 
 ## Opening a container inside `depth` others.
 open : U64, Value.Limits -> Try({}, Error)
 open = |depth, limits| if (depth >= limits.max_depth) fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
 
-## Items separated by `, `, each at `depth`.
-items_line : List(Value), U64, Value.Limits -> Try(List(U8), Error)
-items_line = |items, depth, limits| {
+## Items separated by `, ` (`,` minimised), each at `depth`.
+items_line : List(Value), U64, Writer -> Try(List(U8), Error)
+items_line = |items, depth, writer| {
+	separator = [','].concat(space(writer))
 	var $out = []
 	var $i = 0.U64
 	for x in items {
-		item = within(line(x, depth, limits), "[${$i.to_str()}]")?
-		$out = if ($i == 0) item else $out.concat([',', ' ']).concat(item)
+		item = within(line(x, depth, writer), "[${$i.to_str()}]")?
+		$out = if ($i == 0) item else $out.concat(separator).concat(item)
 		$i = $i + 1
 	}
 	Ok($out)
 }
 
-record_line : List((Str, Value)), U64, Value.Limits -> Try(List(U8), Error)
-record_line = |fields, depth, limits| {
+record_line : List((Str, Value)), U64, Writer -> Try(List(U8), Error)
+record_line = |fields, depth, writer| {
+	limits = writer.limits
 	open(depth, limits)?
 	# Keys are unique (spec §1): a record built in code might repeat one.
 	var $seen = Set.empty()
@@ -349,13 +394,14 @@ record_line = |fields, depth, limits| {
 		}
 		$seen = $seen.insert(k)
 	}
+	sp = space(writer)
 	var $out = []
 	for (k, v) in fields {
 		within(check_text(k, "key", limits), ErrorCode.path_key(k))?
-		entry = key(k).concat([':', ' ']).concat(within(line(v, depth + 1, limits), ErrorCode.path_key(k))?)
-		$out = if ($out.is_empty()) entry else $out.concat([',', ' ']).concat(entry)
+		entry = key(k).append(':').concat(sp).concat(within(line(v, depth + 1, writer), ErrorCode.path_key(k))?)
+		$out = if ($out.is_empty()) entry else $out.append(',').concat(sp).concat(entry)
 	}
-	Ok(if ($out.is_empty()) ['{', '}'] else ['{', ' '].concat($out).concat([' ', '}']))
+	Ok(if ($out.is_empty()) ['{', '}'] else ['{'].concat(sp).concat($out).concat(sp).append('}'))
 }
 
 ## A string within the string limit, counted in code points.
@@ -458,10 +504,16 @@ is_normalized = |b| {
 	whole(int) and frac_ok and exp_ok
 }
 
+## Integers whose decimal form is longer are written in hex in the canonical
+## form (spec §12). A constant of the canonical form, not the number limit of
+## §7: it stays 1000 if the default limits grow.
+canonical_hex_threshold : U64
+canonical_hex_threshold = 1000
+
 ## The canonical form: no spaces, fields sorted by key.
 canonical_bytes : Value -> List(U8)
 canonical_bytes = |value| match value {
-	Num(text) => number_text(text, Value.default_limits.max_number_length)
+	Num(text) => number_text(text, canonical_hex_threshold)
 	Text(s) => quote(s)
 	Bytes(b) => "x\"".to_utf8().concat(hex(b)).append('"')
 	Arr(items) => ['['].concat(comma_joined(items.map(canonical_bytes))).append(']')
@@ -590,7 +642,8 @@ quote = |s| {
 			Ok(x) => x
 			Err(_) => 0
 		}
-		# Bidirectional controls (U+202A–U+202E, U+2066–U+2069): E2 80 AA–AE, E2 81 A6–A9.
+		# The line and paragraph separators and the bidirectional controls
+		# (U+2028–U+2029, U+202A–U+202E, U+2066–U+2069): E2 80 A8–AE, E2 81 A6–A9.
 		next = match b.get($i + 1) {
 			Ok(x) => x
 			Err(_) => 0
@@ -599,7 +652,7 @@ quote = |s| {
 			Ok(x) => x
 			Err(_) => 0
 		}
-		bidi = c == 0xE2 and ((next == 0x80 and third >= 0xAA and third <= 0xAE) or (next == 0x81 and third >= 0xA6 and third <= 0xA9))
+		bidi = c == 0xE2 and ((next == 0x80 and third >= 0xA8 and third <= 0xAE) or (next == 0x81 and third >= 0xA6 and third <= 0xA9))
 		# C1 controls (U+0080–U+009F): C2 80–9F.
 		c1 = c == 0xC2 and next >= 0x80 and next <= 0x9F
 		if c1 {
@@ -680,6 +733,39 @@ expect Encode.stream([Tag("A", []), Num("1")]) == Ok("A,\n1,\n")
 expect Int.from_str("340282366920938463463374607431768211457").map_ok(|n| Encode.to_str(Encode.int(n))) == Ok(Ok("340282366920938463463374607431768211457"))
 expect Encode.to_str(Encode.record([("a", Present(Num("1"))), ("b", Missing)])) == Ok("{ a: 1 }")
 expect Encode.to_str(Text("\u(1B)\u(7F)\u(85)")) == Ok("\"\\u{1B}\\u{7F}\\u{85}\"")
+# U+2028 and U+2029 are escaped too, so a line never ends inside a string (spec §11).
+expect Encode.to_str(Text("a\u(2028)b\u(2029)\u(2027)\u(202F)")) == Ok("\"a\\u{2028}b\\u{2029}\u(2027)\u(202F)\"")
+
+# The minimised layout (spec §11): compact without the whitespace between tokens.
+person : Str, Str, Str -> Value
+person = |name, age, kind| Tag("Person", [Rec([("name", Text(name)), ("age", Num(age)), ("type", Tag(kind, []))])])
+
+expect Encode.minimised(person("John Doe", "30", "Engineer")) == Ok("Person{name:\"John Doe\",age:30,type:Engineer}")
+expect Encode.stream_minimised([person("John Doe", "30", "Engineer"), person("Jane Smith", "28", "Designer")]) == Ok("Person{name:\"John Doe\",age:30,type:Engineer},\nPerson{name:\"Jane Smith\",age:28,type:Designer},\n")
+expect Encode.minimised(Arr([Num("1"), Tag("Pair", [Num("1E5"), Text("a b")]), Rec([]), Arr([]), Bytes([0x0b, 0xff]), Tag("None", [])])) == Ok("[1,Pair(1e5,\"a b\"),{},[],x\"0bff\",None]")
+expect Encode.minimised(Rec([("pt-BR", Rec([("a", Arr([Num("1"), Num("2")]))])), ("b", Tag("Circle", [Rec([("r", Num("1"))])]))])) == Ok("{\"pt-BR\":{a:[1,2]},b:Circle{r:1}}")
+# Strings as in compact: never across lines.
+expect Encode.minimised(Text("two\nlines\t\u(2028)\u(202E)")) == Ok("\"two\\nlines\\t\\u{2028}\\u{202E}\"")
+# Checked as `to_str` checks, with the same places in errors.
+expect Encode.minimised(Rec([("extra", Arr([Num("1"), Num("abc")]))])).map_err(Encode.message) == Err(".extra[1]: not a number literal")
+expect Encode.stream_minimised([Num("1"), Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
+expect Encode.minimised_with(Arr([Arr([Num("1")])]), { ..Value.default_limits, max_depth: 1 }).map_err(|e| e.code) == Err("nesting-too-deep")
+expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 12 }) == Ok("0xe8d4a51000,\n")
+expect Encode.minimised_with(Num("1"), { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code) == Err("unsupported-depth")
+# Minimised and compact differ only in spaces, and both parse back to the value.
+expect {
+	texts = ["Order { id: 0xFF, lines: [Line(1, \"A 1\"), Line(2, \"B\")], note: \"\"\"\n  a\n  b\n  \"\"\", \"x-y\": {}, e: [] }", "Some(Circle { r: 1.50 })", "[x\"00 ff\", -0x0, 1_000]"]
+	texts.all(
+		|t| match Value.parse(t) {
+			Ok(v) =>
+				match (Encode.minimised(v), Encode.to_str(v)) {
+					(Ok(m), Ok(c)) => Value.parse(m).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and Value.parse(c).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
+					_ => False
+				}
+			Err(_) => False
+		},
+	)
+}
 
 # Floats in their one spelling (spec §15).
 expect [1.0, 100.0, 123000.0, 1.5, 12.25, 0.1, 0.000001, 1e-7, 1.5e-7, 1e20, 1e21, -1.5, 0.30000000000000004, 5e-324, 1.7976931348623157e308].map(|x| Encode.to_str(Encode.f64(x)) ?? "") == ["1", "100", "123000", "1.5", "12.25", "0.1", "0.000001", "1e-7", "1.5e-7", "100000000000000000000", "1e21", "-1.5", "0.30000000000000004", "5e-324", "1.7976931348623157e308"]
@@ -712,7 +798,12 @@ expect canonical_of("Order { total: 19.90, id: 0xFF, \"x-y\": 1e+5, p: Point(1, 
 expect canonical_of("{ b: [1_000, 0b11], /* c */ a: Tag({ x: x\"0B 34\" }) }") == "{a:Tag{x:x\"0b34\"},b:[1000,3]}"
 expect equal_texts("{ b: [1_000, 0b11], /* c */ a: Tag({ x: x\"0B 34\" }) }", "{a:Tag{x:x\"0b34\"},b:[1000,3]}")
 expect !equal_texts("1.0", "1") and !equal_texts("{}", "{ x: None }") and !equal_texts("-0", "0")
-expect !equal_texts("\"caf\\u{E9}\"", "\"cafe\\u{301}\"") and equal_texts("-0x0", "0")
+expect !equal_texts("\"caf\\u{E9}\"", "\"cafe\\u{301}\"") and !equal_texts("-0x0", "0")
+# `-0x0` is `-0` (spec §2): equal, the same canonical form and hash.
+expect equal_texts("-0x0", "-0") and equal_texts("-0b0", "-0") and canonical_of("[-0x0, -0b0, 0x0]") == "[-0,-0,0]"
+# U+2028 and U+2029 are escaped (spec §12), as some software splits lines at them; their neighbours are not.
+expect canonical_of("\"a\u(2028)b\u(2029)\\u{2027}\\u{202F}\"") == "\"a\\u{2028}b\\u{2029}\u(2027)\u(202F)\""
+expect canonical_of("{ \"\u(2028)\": 1 }") == "{\"\\u{2028}\":1}"
 expect canonical_of("\"tab\\tquote\\\" \\u{41} \\u{1b} \\u{202e} café 😀\"") == "\"tab\\tquote\\\" A \\u{1B} \\u{202E} café 😀\""
 expect canonical_of("\"\"\"\n  two\n  lines\n  \"\"\"") == "\"two\\nlines\""
 expect canonical_of("{ \"😀\": 1, \"\u(FFFD)\": 2, a: 3, \"Z\": 4 }") == "{\"Z\":4,a:3,\"\u(FFFD)\":2,\"😀\":1}"
@@ -768,7 +859,7 @@ error_of = |v| match Encode.to_str(v) {
 	Err(e) => Encode.message(e)
 }
 
-expect Encode.to_str(Arr([Num("1E5"), Num("0xFF"), Num("1_000"), Num("-0x0"), Num("1e-0"), Num("1E+05")])) == Ok("[1e5, 255, 1000, 0, 1e0, 1e5]")
+expect Encode.to_str(Arr([Num("1E5"), Num("0xFF"), Num("1_000"), Num("-0x0"), Num("1e-0"), Num("1E+05")])) == Ok("[1e5, 255, 1000, -0, 1e0, 1e5]")
 expect ["", "-", "1.", ".5", "01", "1e", "+1", "0x", "1 ", "1 // c", "NaN", "1e5.5", "abc", "--1"].map(|n| error_of(Num(n))) == List.repeat("not a number literal", 14)
 expect error_of(Rec([("extra", Arr([Num("1"), Num("abc")]))])) == ".extra[1]: not a number literal"
 expect error_of(Num("1e6145")) == "exponent larger than 6144"

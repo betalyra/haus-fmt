@@ -444,6 +444,10 @@ expect Decode.one("1e400", Decode.f64) == Err(Decode({ code: "out-of-range", rea
 expect Decode.one("3.4028236e38", Decode.f32) == Err(Decode({ code: "out-of-range", reason: "3.4028236e38 is too large for Float32", path: "" }))
 # `-0` is 0, also for the unsigned types.
 expect Decode.one("-0", Decode.u8) == Ok(0)
+# `-0x0` is `-0` (spec §2): an integer 0, a negative zero float.
+expect Decode.one("-0x0", Decode.u8) == Ok(0) and Decode.one("-0b0", Decode.int).map_ok(|n| n.to_str()) == Ok("0")
+expect Decode.one("-0x0", Decode.f64).map_ok(|x| 1.0 / x) == Ok(-1.0 / 0.0) and Decode.one("0x0", Decode.f64).map_ok(|x| 1.0 / x) == Ok(1.0 / 0.0)
+expect Decode.one("-0b0", Decode.f32).map_ok(|x| 1.0 / x) == Ok(-1.0 / 0.0)
 expect Decode.one("-1", Decode.u8) == Err(Decode({ code: "out-of-range", reason: "-1 is out of range for UInt8 (0 to 255)", path: "" }))
 # A variant with a record payload is not a record.
 expect Decode.one("User { id: 1 }", |v| Decode.strict_record(v).map_ok(|fs| fs.len())) == Err(Decode({ code: "type-mismatch", reason: "expected a record, found variant User", path: "" }))

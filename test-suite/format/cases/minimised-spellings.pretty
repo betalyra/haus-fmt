@@ -1,0 +1,37 @@
+// Minimised keeps every literal as written and drops every comment.
+Order {
+  id: 0xFF_ff, // hex case and digit separators
+  total: 1_000.50,
+  big: 1E+05,
+  zero: -0x0,
+  bits: 0b1010_0101,
+  hash: x"9f86 D081	884c",
+  /* before a key */
+  note: "tab\there \u{41} \"quoted\"",
+  "x-y": [
+    1,
+    2,
+    3,
+  ],
+  empty: {},
+  none: [],
+  shape: Circle {
+    r: 1,
+  },
+  money: Money(7.90, EUR),
+  wrapped: Some {
+    a: 1,
+  },
+  text: """
+    two
+    lines
+    """,
+},
+
+// Between top-level items.
+Bare,
+/* and here */
+[
+  Pair(1, 2),
+  Tag,
+], // after the last

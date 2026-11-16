@@ -59,7 +59,7 @@ A large document is updated by sending only what changes: a record of the same s
 
 Two values are equal when they have the same kind and:
 
-- **numbers:** the normalized literals are equal. Normalizing removes digit separators, writes the exponent as `e` followed by its value (no `+`, no leading zeros, no `-` on zero), and converts hex and binary literals to decimal integers. So `1_000` = `1000`, `0xFF` = `255` and `1E+05` = `1e5`, but `1.0` ≠ `1` and `1e2` ≠ `100`: scale and notation are part of the value. Numeric equality ("is 1.0 the same amount as 1?") belongs to the schema or the application.
+- **numbers:** the normalized literals are equal. Normalizing removes digit separators, writes the exponent as `e` followed by its value (no `+`, no leading zeros, no `-` on zero), and converts hex and binary literals to decimal integers, keeping the sign (`-0x0` is `-0`, as `-0` is). So `1_000` = `1000`, `0xFF` = `255` and `1E+05` = `1e5`, but `1.0` ≠ `1` and `1e2` ≠ `100`: scale and notation are part of the value. Numeric equality ("is 1.0 the same amount as 1?") belongs to the schema or the application.
 - **strings:** the code point sequences are identical. There is no Unicode normalization (§4).
 - **bytes:** the byte sequences are identical. Case and spacing in the literal don't matter (`x"0B 34"` = `x"0b34"`).
 - **bytes vs. other kinds:** a byte string is never equal to a string or an array of numbers.
@@ -81,6 +81,20 @@ Two values are equal when they have the same kind and:
 
 - **Encoding:** input is UTF-8. Invalid UTF-8 MUST be rejected. A leading byte order mark is ignored.
 - **Escapes:** `\"`, `\\`, `\n`, `\r`, `\t` and `\u{1–6 hex digits}`. A `\u{…}` escape MUST denote a Unicode scalar value, so surrogates are rejected.
+- **Block strings** hold text over several lines. The opening `"""` ends its line (only spaces and tabs may follow it), and the closing `"""` stands on a line of its own, after only spaces and tabs: they are the *indent*. Every line in between is a content line:
+  - a line that starts with the indent loses it, and keeps everything after it, spaces and tabs included;
+  - a line of only spaces and tabs that doesn't start with the indent (it is shorter, or uses other blanks) is an empty line;
+  - any other line is an error.
+
+  The content lines are joined with line feeds (a CR LF ends a line like a LF); the line break before the closing `"""` is not part of the value. Escapes are processed after the indent is removed, so `\n` in a block string is a line feed, and a quote followed by two more quotes must be escaped (`\"""`). Spaces and tabs at the end of a content line are part of the value; editors that trim them change it, which is why the formatter never ends a line with one (§11).
+
+  ```haus
+  note: """
+    Dear Ada,
+      thank you.
+    """,
+  ```
+  is the string `"Dear Ada,\n  thank you."`.
 - **Raw control characters:** the raw control characters U+0000–U+001F, U+007F (DEL) and U+0080–U+009F (C1) MUST NOT appear anywhere in the input, except tab and line breaks (LF, CR LF) where whitespace, block strings and comments allow them. A carriage return is only allowed directly before a line feed. Control characters can rewrite what a terminal displays (ESC and CSI sequences) or truncate text (NUL), so a file could show different content from what it contains. Inside strings, write them as escapes, e.g. `\u{1B}`.
 - **Bidirectional controls:** the raw characters U+202A–U+202E and U+2066–U+2069 MUST NOT appear anywhere in the input, including strings, block strings and comments. They can make source text display differently from what is parsed ("Trojan Source"). Inside strings, write them as escapes, e.g. `\u{202E}`.
 - **Key comparison:** keys are compared by code point, with **no normalization**. `"café"` (NFC) and `"café"` (NFD) are different keys. Producers that need normalized keys must normalize before writing.
@@ -148,7 +162,7 @@ This specification is versioned. Versions 0.x are drafts, in which anything may 
 
 - A **minor version** (1.1, 1.2, …) may add: syntax, schema-language constructs (never prelude types, see below), standard modules and types in them, attributes (§14), and new canonical forms or hashes under new names (§12).
 - A **patch version** (1.0.1, …) only clarifies wording. Nothing it changes changes behaviour.
-- There is **no breaking version**. A later version may make invalid text valid, through new syntax or new schema constructs. It never makes valid text invalid, never changes what valid text means, never changes what an existing schema accepts or what it decodes to, and never changes the canonical form or the hash of a value. Default limits (§7) may only grow. The rules of built-in types (§13.1) never change once published.
+- There is **no breaking version**. A later version may make invalid text valid, through new syntax or new schema constructs. It never makes valid text invalid, never changes what valid text means, never changes what an existing schema accepts or what it decodes to, and never changes the canonical form or the hash of a value. Default limits (§7) may only grow. The rules of built-in types (§13.1) never change once published. The compact and minimised layouts (§11) never change; the pretty layout may change in a minor version, as only people read it.
 - **New syntax MUST be a syntax error in every earlier version,** so an old parser fails loudly instead of misreading newer data.
 - **The prelude is fixed at 1.0.** A schema may not redefine a prelude type (§14), so adding one would break schemas that define a type of that name. Built-in types added later go into standard modules, which a schema imports (§13.2).
 
@@ -160,9 +174,19 @@ Schema packages are versioned separately, with the rules of §13.3.
 
 ## 11. Standard format
 
-There are two official layouts, and like `gofmt` they have no other style
+There are three official layouts, and like `gofmt` they have no other style
 options (indent width defaults to 2 spaces; line width, default 80, only
-affects positional payloads). Formatters MUST produce them exactly.
+affects positional payloads in pretty). Formatters MUST produce them exactly.
+
+| | Comments | Key order and spellings | Whitespace | For |
+|---|---|---|---|---|
+| **Pretty** | kept | as written | one entry per line | people who edit |
+| **Compact** | dropped | as written | spaces, one item per line | logs and streams people look at |
+| **Minimised** | dropped | as written | none between tokens, one item per line | the wire and storage |
+
+The canonical form (§12) is the fourth way to write values; it sorts keys and normalizes spellings, for hashing. All four forms of the same values have the same hash (§12), as they parse to the same values.
+
+Strings are escaped alike in every layout: `\"`, `\\`, and `\u{…}` for raw control characters, bidi controls and the line and paragraph separators U+2028 and U+2029 (which some software splits lines at); a string is never written with any of them raw.
 
 ### Pretty (default)
 
@@ -183,7 +207,13 @@ For people.
 - **Spacing:** one space after `:` and `,`; one space between a tag and its `{`; none between a tag and its `(`. Empty containers are written `{}` and `[]`.
 - **Keys** are bare when they can be, otherwise quoted.
 - **Byte strings** keep their source spelling when a document is reformatted. When serializing values, they are written as lowercase hex without spaces, `x"0b34ff"`.
-- **Strings** containing a line break are written as `"""` block strings. All other strings use `"…"` with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`, and `\u{…}` for control and bidi characters. In a block string, a quote followed by two more quotes is escaped.
+- **Strings** containing a line feed are written as `"""` block strings (§4), the indent one level deeper than the entry. All other strings use `"…"` with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`, and `\u{…}` for control and bidi characters and U+2028, U+2029. In a block string, a quote followed by two more quotes is escaped, a carriage return is `\r`, and **no line ends in a space or tab**: the last space or tab of a content line that ends in one is written as an escape (`\u{20}`, `\t`), so an editor that trims trailing whitespace can't change the value:
+  ```haus
+  note: """
+    Delivery to the back door \u{20}
+    Ring twice
+    """,
+  ```
 - **Numbers and strings keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). When serializing values with no source text, numbers are written in normalized form, except that integers longer than the number limit (§7) are written in hex.
 - **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows. A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
 - **Comments** are kept (they are part of the layout, not of the data model):
@@ -205,12 +235,27 @@ Person { name: "Jane Smith", age: 28, type: Designer },
 ```
 
 - **Each top-level item is written on a single line,** with the same spacing as pretty (`{ a: 1 }`, `[1, 2]`, `Tag(a, b)`).
-- **Strings never span lines:** multi-line text uses `\n` escapes, so a compact stream can be split by lines (like NDJSON) and is still valid haus.
+- **Strings never span lines:** multi-line text uses `\n` escapes, and U+2028 and U+2029 are escaped too, so a compact stream can be split by lines (like NDJSON) and is still valid haus.
 - **Streams:** every item is followed by `,`.
-- **Comments are dropped.**
+- **Comments are dropped,** also those between top-level items.
+- Byte strings, numbers and strings keep their spelling, as in pretty.
 - Encoders that write a stream item by item use compact by default.
 
-Tools that cannot keep comments MUST refuse to format in the pretty layout rather than drop them.
+### Minimised
+
+The compact layout without the whitespace between tokens, and nothing else different:
+
+```haus
+Person{name:"John Doe",age:30,type:Engineer},
+Person{name:"Jane Smith",age:28,type:Designer},
+```
+
+- **Each top-level item on a single line,** with no space or tab anywhere outside strings and byte strings. Streams as in compact: every item is followed by `,`.
+- **Literals stay as written:** digit separators (`1_000`), the case of hex digits, and the blanks inside a byte string (`x"9f86 d081"`) are spelling, not whitespace between tokens. When serializing values with no source text, they are written as in pretty.
+- **Comments are dropped,** as in compact. Key order and spellings are kept, so formatting a minimised file as pretty gives back the pretty file without its comments and blank lines.
+- Encoders MAY offer minimised for the wire and storage; compact stays their default.
+
+**Comments and layouts.** Tools that cannot keep comments MUST refuse to format in the pretty layout rather than drop them. A tool that rewrites a file in place in the compact or minimised layout MUST refuse when the file has comments, unless the user asked to drop them; writing to standard output or another file needs no such check.
 
 ## 12. Canonical form, equality and hashing
 
@@ -228,8 +273,8 @@ comments, no whitespace outside strings, and no trailing comma or line break:
 
 | Value | Canonical form |
 |---|---|
-| number | its normalized literal (§2): `255`, `19.90`, `-0`, `1e5`. An integer whose decimal form would be longer than the default number limit (§7, 1000 characters) is written in lowercase hex instead, without leading zeros: `-0x1f…`. |
-| string | `"…"`, never a block string. These are escaped: `\"`, `\\`, line feed as `\n`, carriage return as `\r`, tab as `\t`, and every other raw control character (U+0000–U+001F, U+007F–U+009F) and bidi control (U+202A–U+202E, U+2066–U+2069) as `\u{…}` with uppercase hex digits and no leading zeros (`\u{1B}`). Every other character is written as itself, in UTF-8. |
+| number | its normalized literal (§2): `255`, `19.90`, `-0`, `1e5`. An integer whose decimal form would be longer than 1000 characters is written in lowercase hex instead, without leading zeros: `-0x1f…`. The 1000 is a constant of this canonical form, not the number limit of §7: it stays 1000 if the default limits grow. An integer whose hex form is longer than 1000 characters too has no canonical form; writing it is an error (`number-too-long`). |
+| string | `"…"`, never a block string. These are escaped: `\"`, `\\`, line feed as `\n`, carriage return as `\r`, tab as `\t`, and every other raw control character (U+0000–U+001F, U+007F–U+009F) bidi control (U+202A–U+202E, U+2066–U+2069) and line or paragraph separator (U+2028, U+2029) as `\u{…}` with uppercase hex digits and no leading zeros (`\u{1B}`). Every other character is written as itself, in UTF-8. |
 | bytes | `x"…"`: two lowercase hex digits per byte, nothing between them. |
 | array | `[` the elements, separated by `,` `]`. |
 | record | `{` the fields, separated by `,` `}`. Each field is `key:value`. Fields are sorted by their keys' code points, which is the order of their UTF-8 bytes (not of UTF-16 units, JavaScript's default). A key is bare if it is an identifier (`[a-z_][A-Za-z0-9_]*`), and otherwise written as a string. |
@@ -553,7 +598,7 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 
 **JSON that is read.** Readers read JSON (RFC 8259) restricted to I-JSON (RFC 7493): UTF-8, no duplicate member names, no unpaired surrogates in `\u` escapes. A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a reader MUST NOT round them through a binary float, except where schema-based JSON says a float. JSON is compared as data: member order and whitespace don't matter. The self-describing reader also rejects raw DEL, C1 and bidi controls (§4) in strings and member names (`control-character`, `bidi-control`), as only haus tools write that form and they escape them. The schema-based reader and the import accept them raw, as other software writes them so (`JSON.stringify` does).
 
-**JSON that is written.** Writers escape, in strings and member names, every character below U+0020, DEL, U+0080–U+009F and the bidi controls U+202A–U+202E and U+2066–U+2069, so that written JSON can't display differently from what it holds, as haus text can't (§4). Which escape (`\n` or `\u000A`) is up to the writer.
+**JSON that is written.** Writers escape, in strings and member names, every character below U+0020, DEL, U+0080–U+009F, the bidi controls U+202A–U+202E and U+2066–U+2069, and U+2028 and U+2029, so that written JSON can't display differently from what it holds, as haus text can't (§4), and JSON Lines can be split at any line break software knows. Readers accept U+2028 and U+2029 raw. Which escape (`\n` or `\u000A`) is up to the writer.
 
 **Limits.** The limits of §7 apply to the haus value that results (with a type: the value the decoded result encodes to), and the number limit also to JSON number tokens as written. A form can need several JSON levels for one haus level (`Tag { … }` is `{"_tag": …, "_args": [{"_rec": {…}}]}`), so the JSON nesting is limited to 4·d + 1, where d is the depth limit of §7, plus 1 for the envelope of self-describing JSON, and the depth of the resulting haus value is then checked against d. The import's JSON nesting is limited to d.
 

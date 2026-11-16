@@ -1,0 +1,13 @@
+// Raw line and paragraph separators are allowed in strings, block strings and comments:  
+[
+  "a\u{2028}b",
+  "c\u{2029}d",
+  "\u{2028}\u{2029}",
+  {
+    "k\u{2028}": "v\u{2029}",
+  },
+  """
+    block\u{2028}
+    text\u{2029}
+    """,
+]

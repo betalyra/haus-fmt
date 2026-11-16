@@ -646,8 +646,8 @@ open = |depth, max| {
 fail : Str, Str -> Try(a, Encode.Error)
 fail = |code, reason| Err({ code, reason, path: "" })
 
-## A JSON string. Escaped: what JSON requires, and DEL, C1 and the bidi
-## controls (spec §16, "JSON that is written").
+## A JSON string. Escaped: what JSON requires, DEL, C1 and the bidi
+## controls, and U+2028 and U+2029 (spec §16, "JSON that is written").
 quote : Str, Value.Limits -> Try(List(U8), Encode.Error)
 quote = |s, limits| {
 	b = s.to_utf8()
@@ -659,7 +659,7 @@ quote = |s, limits| {
 	var $i = 0.U64
 	while $i < b.len() {
 		c = at(b, $i)
-		cp = escaped(b, $i)
+		cp = if (escaped(b, $i) != 0) escaped(b, $i) else separator(b, $i)
 		$out =
 			if cp != 0 {
 				$out.concat(['\\', 'u']).concat(hex4_of(cp).to_utf8())
@@ -687,8 +687,19 @@ quote = |s, limits| {
 	Ok($out.append('"'))
 }
 
+## U+2028 or U+2029 if it starts at `pos` in UTF-8 (E2 80 A8–A9), or 0:
+## written escaped, as some software splits lines at them, but read raw.
+separator : List(U8), U64 -> U64
+separator = |b, pos|
+	if at(b, pos) == 0xE2 and at(b, pos + 1) == 0x80 and (at(b, pos + 2) == 0xA8 or at(b, pos + 2) == 0xA9) {
+		0x2000 + at(b, pos + 2).to_u64() - 0x80
+	} else {
+		0
+	}
+
 ## The code point of the DEL, C1 or bidi control that starts at `pos` in
-## UTF-8, or 0 if there is none there: what is escaped beyond what JSON requires.
+## UTF-8, or 0 if there is none there: what is escaped beyond what JSON
+## requires, and rejected raw in self-describing JSON.
 escaped : List(U8), U64 -> U64
 escaped = |b, pos| {
 	c = at(b, pos)
@@ -1119,6 +1130,10 @@ expect JsonValue.parse("${Str.repeat("[", 1026)}${Str.repeat("]", 1026)}").map_e
 expect JsonValue.to_str(String("\"\\\n\r\t\u(8)\u(C)\u(1)\u(7F)é")) == Ok("\"\\\"\\\\\\n\\r\\t\\b\\f\\u0001\\u007fé\"")
 # DEL, C1 and the bidi controls are escaped too, in strings and member names (spec §16).
 expect JsonValue.to_str(Object([("a\u(85)", String("\u(9F)\u(A0)\u(202A)\u(202E)\u(202F)\u(2066)\u(2069)\u(206A)"))])) == Ok("{\"a\\u0085\":\"\\u009f\u(A0)\\u202a\\u202e\u(202F)\\u2066\\u2069\u(206A)\"}")
+# And U+2028 and U+2029, at which some software splits lines; their neighbours stay raw.
+expect JsonValue.to_str(Object([("\u(2028)", String("a\u(2027)\u(2028)\u(2029)\u(202A)b"))])) == Ok("{\"\\u2028\":\"a\u(2027)\\u2028\\u2029\\u202ab\"}")
+expect JsonValue.to_haus_json(Text("\u(2028)\u(2029)")) == Ok("{\"_haus\":1,\"_value\":\"\\u2028\\u2029\"}")
+expect JsonValue.write_lines([String("\u(2029)")]) == Ok("\"\\u2029\"\n")
 expect JsonValue.to_str(Object([("a", Array([Number("1.5"), Null, Boolean(True)]))])) == Ok("{\"a\":[1.5,null,true]}")
 expect JsonValue.to_str(Number("01")) == Err({ code: "cannot-encode", reason: "not a JSON number", path: "" })
 expect JsonValue.to_str(Object([("a", Null), ("a", Null)])) == Err({ code: "duplicate-key", reason: "a member name is used twice in an object", path: "" })
@@ -1260,6 +1275,9 @@ expect json_code(JsonValue.from_haus_json(env("\"a\u(7F)b\""))) == "control-char
 expect json_code(JsonValue.from_haus_json(env("\"a\u(202E)b\""))) == "bidi-control at 1:26" and json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"a\u(2066)\": \"b\"}}"))) == "bidi-control at 1:36"
 expect JsonValue.from_haus_json(env("\"a\\u007f\\u0085\\u202eb\"")).map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}b\"")
 expect JsonValue.from_haus_json(env("\"\u(A0)\u(202F)\u(2065)\u(206A)\"")).is_ok()
+# U+2028 and U+2029 are read raw by every reader, the self-describing one too (spec §16).
+expect JsonValue.from_haus_json(env("\"a\u(2028)b\u(2029)\"")).map_ok(Encode.canonical) == Ok("\"a\\u{2028}b\\u{2029}\"") and JsonValue.import_json("\"\u(2028)\"").map_ok(Encode.canonical) == Ok("\"\\u{2028}\"")
+expect JsonValue.parse("{\"\u(2029)\": \"\u(2028)\"}") == Ok(Object([("\u(2029)", String("\u(2028)"))]))
 expect JsonValue.import_json("\"a\u(7F)\u(85)\u(202E)b\"").map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}b\"") and JsonValue.parse("\"\u(2069)\"") == Ok(String("\u(2069)"))
 expect JsonValue.from_haus_json_value(Object([("_haus", Number("1")), ("_value", String("x"))])).map_ok(|_| {}).map_err(|e| e.code) == Err("haus-json-form")
 # The import reads the envelope as a record.

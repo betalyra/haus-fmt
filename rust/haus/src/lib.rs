@@ -53,7 +53,7 @@ pub use canonical::{canonical, compare, equals};
 pub use codec::{Codec, same_id};
 pub use de::{AnyTag, Bytes, Decimal, Decode, Decoder, Int, Unknown};
 pub use error::{DecodeError, EncodeError, Error, ErrorCategory, ErrorCode, ErrorJson, Segment, SyntaxError};
-pub use formatter::{FormatOptions, Style, format};
+pub use formatter::{FormatOptions, Style, format, has_comments};
 pub use json::{FromJson, Json, ToJson};
 pub use parser::{Limits, MAX_SUPPORTED_DEPTH, parse_with};
 pub use secret::Secret;

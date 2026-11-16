@@ -74,8 +74,10 @@ block_char  ::= [^\#x00-#x08#x0A-#x1F#x7F-#x9F#x202A-#x202E#x2066-#x2069]  (* ta
                 (* Content may not contain an unescaped `"""`.
                    Indentation: the whitespace before the closing `"""` is the
                    indent. It is removed from the start of every content line.
-                   A non-blank line that doesn't start with exactly that indent
-                   is an error. Blank lines become empty. Lines are joined with
+                   A line that starts with the indent keeps everything after
+                   it, blanks included. A line of only blanks that doesn't
+                   start with the indent becomes empty; any other line that
+                   doesn't start with it is an error (spec §4). Lines are joined with
                    "\n" (CRLF is normalised). The newline before the closing
                    `"""` is not part of the value. Escapes are processed after
                    indentation is removed. *)

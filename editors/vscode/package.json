@@ -110,6 +110,11 @@
         "command": "haus.print.compact",
         "title": "Compact (one item per line, drops comments)",
         "category": "haus"
+      },
+      {
+        "command": "haus.print.minimised",
+        "title": "Minimised (compact without spaces, drops comments)",
+        "category": "haus"
       }
     ],
     "menus": {
@@ -124,6 +129,10 @@
         },
         {
           "command": "haus.print.compact",
+          "when": "editorLangId == haus"
+        },
+        {
+          "command": "haus.print.minimised",
           "when": "editorLangId == haus"
         }
       ],

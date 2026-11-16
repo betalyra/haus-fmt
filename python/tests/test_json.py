@@ -220,13 +220,23 @@ def test_self_describing_writes_every_kind() -> None:
 
 
 def test_writers_escape_controls_that_change_the_display() -> None:
-    """DEL, C1 and bidi controls are escaped in strings and member names, by every writer (spec §16)."""
-    text = "a\u007f\u0085\u009f\u202a\u202e\u2066\u2069b\u00a0\u2028"
-    escaped = '"a\\u007f\\u0085\\u009f\\u202a\\u202e\\u2066\\u2069b\u00a0\u2028"'
+    """DEL, C1 and bidi controls, and U+2028 and U+2029, are escaped in strings and member names,
+    by every writer (spec §16)."""
+    text = "a\u007f\u0085\u009f\u202a\u202e\u2066\u2069b\u00a0\u2027\u2028\u2029\u202f"
+    escaped = '"a\\u007f\\u0085\\u009f\\u202a\\u202e\\u2066\\u2069b\u00a0\u2027\\u2028\\u2029\u202f"'
     assert haus.to_haus_json(String(text)) == enveloped(escaped)
     assert haus.to_haus_json(Record({text: String("")})) == enveloped(f'{{"_rec":{{{escaped}:""}}}}')
     assert SCHEMA["Counts"].to_json({text: 1}) == f"{{{escaped}:1}}"
+    assert list(SCHEMA["Counts"].to_json_lines([{"\u2028": 1}])) == ['{"\\u2028":1}\n']
     assert haus.from_haus_json(enveloped(escaped)) == String(text)
+
+
+def test_readers_accept_the_line_separators_raw() -> None:
+    """U+2028 and U+2029 are escaped when written, and read raw by every reader (spec §16)."""
+    raw = '"a\u2028b\u2029"'
+    assert haus.from_haus_json(enveloped(raw)) == String("a\u2028b\u2029")
+    assert haus.import_json(raw) == String("a\u2028b\u2029")
+    assert SCHEMA["Counts"].from_json('{"\u2028": 1}') == {"\u2028": 1}
 
 
 @pytest.mark.parametrize(

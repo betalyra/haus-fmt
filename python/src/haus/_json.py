@@ -380,8 +380,9 @@ def write_json(j: Json) -> str:
     return "".join(out)
 
 
-_UNSAFE = re.compile(r"[\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
-"""What writers escape besides C0 controls: DEL, C1 and bidi controls, which could change what is displayed (§16)."""
+_UNSAFE = re.compile(r"[\x7f-\x9f\u2028-\u202e\u2066-\u2069]")
+"""What writers escape besides C0 controls (§16): DEL, C1 and bidi controls, which could change what is
+displayed, and U+2028 and U+2029, at which some software splits lines."""
 
 
 def _string(s: str) -> str:

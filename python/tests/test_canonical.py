@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import cmp_to_key
+
+import pytest
 
 import haus
 from haus import Number, Record, String
@@ -30,13 +33,35 @@ def test_keeps_what_section_2_tells_apart() -> None:
     assert not haus.equals(haus.parse("{}"), haus.parse("{ x: None }"))
     assert not haus.equals(haus.parse('"caf\\u{E9}"'), haus.parse('"cafe\\u{301}"'))
     assert not haus.equals(haus.parse("-0"), haus.parse("0"))
-    assert haus.equals(haus.parse("-0x0"), haus.parse("0"))
+
+
+def test_keeps_the_sign_of_a_hex_or_binary_zero() -> None:
+    # -0x0 is -0, as -0 is (spec §2).
+    assert [v.text for v in haus.parse_all("-0x0, -0b0, -0x0_0, 0x0, -0") if isinstance(v, Number)] == [
+        "-0",
+        "-0",
+        "-0",
+        "0",
+        "-0",
+    ]
+    assert haus.equals(haus.parse("-0x0"), haus.parse("-0"))
+    assert not haus.equals(haus.parse("-0x0"), haus.parse("0"))
+    assert c("[-0x0, -0b0, 0x0]") == "[-0,-0,0]"
+    assert haus.hash(haus.parse("-0x0")) == haus.hash(haus.parse("-0"))
 
 
 def test_escapes_only_what_it_must() -> None:
     assert c('"tab\\tquote\\" \\u{41} \\u{1b} \\u{202e} café 😀"') == '"tab\\tquote\\" A \\u{1B} \\u{202E} café 😀"'
     assert c('"""\n  two\n  lines\n  """') == '"two\\nlines"'
     assert c('"\\u{7f}\\u{9f}\\u{a0}\\r\\\\"') == '"\\u{7F}\\u{9F}\xa0\\r\\\\"'
+
+
+def test_escapes_the_line_and_paragraph_separators() -> None:
+    # U+2028 and U+2029 are escaped, as some software splits lines at them; their neighbours are not.
+    assert c('"a\u2028b\u2029c"') == '"a\\u{2028}b\\u{2029}c"'
+    assert c('"\\u{2027}\\u{2028}\\u{2029}\\u{202F}"') == '"\u2027\\u{2028}\\u{2029}\u202f"'
+    assert c('{ "\u2028": 1 }') == '{"\\u{2028}":1}'
+    assert haus.parse(c('"\u2028\u2029"')) == String("\u2028\u2029")
 
 
 def test_sorts_keys_by_code_point() -> None:
@@ -58,11 +83,41 @@ def test_keeps_a_huge_hex_integer_in_hex() -> None:
     assert c("-" + big) == "-" + big
 
 
-def test_writes_integers_beyond_the_number_limit_in_hex() -> None:
+def test_writes_integers_longer_than_1000_characters_in_hex() -> None:
     assert haus.canonical(Number("1" + "0" * 999)) == "1" + "0" * 999  # 1000 characters: decimal
     assert haus.canonical(Number("1" + "0" * 1000)) == "0x" + format(10**1000, "x")
-    assert haus.canonical(Number("-" + "9" * 5000)) == "-0x" + format(10**5000 - 1, "x")  # past int's str limit
+    assert haus.canonical(Number("-" + "9" * 1200)) == "-0x" + format(10**1200 - 1, "x")
     assert haus.canonical(Number("1." + "0" * 1000)) == "1." + "0" * 1000  # not an integer: as written
+
+
+def test_the_hex_threshold_is_1000_whatever_the_number_limit() -> None:
+    # A parser with a larger number limit reads a longer literal; its canonical form is still hex past 1000.
+    limits = haus.Limits(max_number_length=2000)
+    decimal = "9" * 1100
+    assert haus.canonical(haus.parse(decimal, limits=limits)) == "0x" + format(10**1100 - 1, "x")
+    hex_1000 = "0x" + "f" * 998
+    assert c(hex_1000) == hex_1000
+
+
+def test_an_integer_too_long_even_in_hex_has_no_canonical_form() -> None:
+    limits = haus.Limits(max_number_length=2000)
+    too_long = haus.parse("0x" + "f" * 999, limits=limits)  # 1001 characters in hex
+    writers: list[Callable[[haus.Value], object]] = [
+        haus.canonical,
+        haus.hash,
+        lambda v: haus.Hasher().add(v),
+        lambda v: haus.hash_all([v]),
+    ]
+    for write in writers:
+        with pytest.raises(haus.HausError) as e:
+            write(too_long)
+        assert e.value.code == "number-too-long"
+    with pytest.raises(haus.HausError, match="no canonical form"):
+        haus.canonical(Number("-" + "9" * 5000))  # past int's str limit, and far too long in hex
+    # Equality and order need no canonical text: they still tell such values apart.
+    assert haus.equals(too_long, haus.parse("0x" + "f" * 999, limits=limits))
+    assert not haus.equals(too_long, Number("0"))
+    assert haus.compare(too_long, Number("0")) == 1
 
 
 def test_parses_back_to_the_same_value() -> None:

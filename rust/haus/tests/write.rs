@@ -48,7 +48,15 @@ fn values_beyond_the_limits_are_not_written() {
     for n in ["", "-", "1.", ".5", "01", "1e", "+1", "0x", "1 ", "1 // c", "NaN", "1e5.5"] {
         assert_eq!(error(&Value::Number(n.into()), &Limits::default()), "not a number literal", "{n:?}");
     }
-    for (n, written) in [("1E+05", "1e5"), ("1e-0", "1e0"), ("-0x0", "0"), ("0b101", "5"), ("-1_0.5_0", "-10.50")] {
+    for (n, written) in [
+        ("1E+05", "1e5"),
+        ("1e-0", "1e0"),
+        ("-0x0", "-0"),
+        ("-0b0", "-0"),
+        ("0x0", "0"),
+        ("0b101", "5"),
+        ("-1_0.5_0", "-10.50"),
+    ] {
         assert_eq!(ser::write(&Value::Number(n.into())).as_deref(), Ok(written), "{n:?}");
     }
 }

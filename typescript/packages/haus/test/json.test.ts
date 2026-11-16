@@ -140,6 +140,21 @@ describe("self-describing (spec §16.2)", () => {
     expect(h.fromJson(h.Any, `"\u{85}"`)).toEqual(parse(String.raw`"\u{85}"`))
   })
 
+  it("writes U+2028 and U+2029 escaped, and reads them raw (spec §16)", () => {
+    const v = parse(String.raw`{ "k\u{2028}": "a\u{2029}b" }`)
+    expect(toHausJson(v)).toBe(`{"_haus":1,"_value":{"_rec":{"k\\u2028":"a\\u2029b"}}}`)
+    expect(stringifyJson(["\u{2028}", "\u{2029}"])).toBe(`["\\u2028","\\u2029"]`)
+    expect(h.toJson(h.String, "\u{2028}")).toBe(`"\\u2028"`)
+    // Every reader accepts them raw, the self-describing one too.
+    expect(canonical(fromHausJson(`{"_haus": 1, "_value": {"_rec": {"k\u{2028}": "a\u{2029}b"}}}`))).toBe(canonical(v))
+    expect(canonical(importJson(`"\u{2028}"`))).toBe(canonical(parse(String.raw`"\u{2028}"`)))
+    expect(h.fromJson(h.String, `"\u{2029}"`)).toBe("\u{2029}")
+  })
+
+  it("keeps the sign of a hex or binary zero in _num (spec §2)", () => {
+    expect(toHausJson(parse("[-0x0, -0b0, 0x0]"))).toBe(`{"_haus":1,"_value":[{"_num":"-0"},{"_num":"-0"},{"_num":"0"}]}`)
+  })
+
   it("holds values to the haus nesting limit, not JSON's", () => {
     // `Tag { … }` is one haus level but four JSON levels.
     const deep = (n: number): string => (n === 0 ? "1" : `A { x: ${deep(n - 1)} }`)

@@ -4,7 +4,7 @@ Built against the Roc nightly compiler (2026-11-03) and basic-cli 0.26.0.
 
 | Path | Contents |
 |---|---|
-| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact writer), `Int` (integers of any size), `Streaming` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16), `ErrorCode` (error codes, spec §17) |
+| [`package/`](package) | The haus package: `Value` (data model and parser), `Decode`, `Encode` (compact and minimised writers), `Int` (integers of any size), `Streaming` (reads a stream chunk by chunk), `Time` (the std/time profile), `JsonValue`, `FromJson`, `ToJson` (JSON, spec §16), `ErrorCode` (error codes, spec §17) |
 | [`examples/`](examples) | The same examples as in TypeScript and Rust, on the same files in [`../examples`](../examples), plus `shop`, a Roc showcase |
 | [`schema-test/`](schema-test) | Generated: the schema conformance suite ([`../test-suite/schema`](../test-suite/schema)) as Roc tests |
 | [`json-test/`](json-test) | Generated: the JSON suite ([`../test-suite/json`](../test-suite/json)) as Roc tests |
@@ -78,6 +78,13 @@ literal`), as are a tag that isn't a tag name, a key used twice in a record,
 and nesting, strings and numbers beyond the parser's limits. Number literals
 are written as the parser reads them (`Num("1E5")` as `1e5`).
 `Encode.message(e)` gives the error with its path.
+
+`Encode.to_str` and `Encode.stream` write the compact layout (spec §11), with
+spaces: `Person { name: "Ada", age: 36 }`. `Encode.minimised` and
+`Encode.stream_minimised` write the minimised layout, the same without the
+whitespace between tokens, for the wire and storage:
+`Person{name:"Ada",age:36}`. Both check alike, keep the key order, and write
+each value on one line (strings escape line breaks and U+2028/U+2029).
 
 A float is written in one spelling (spec §15): the fewest digits that read
 back as the same `F64` or `F32`, laid out like JavaScript (`0.1`, `1e21`,
@@ -202,7 +209,7 @@ Value.parse_all_with(text, limits)
 | haus text | `Value.parse_all_with`, `Value.parse_with`, `Value.parse_bytes_with`, `Decode.all_with`, `Decode.one_with` |
 | a stream | `Streaming.reader({ ..Streaming.defaults, limits })` |
 | JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.import_json_with`, `JsonValue.from_haus_json_with`, `JsonValue.from_haus_json_lines_with`, `FromJson.one_with`, `FromJson.lines_with` |
-| writing haus for such a reader | `Encode.to_str_with`, `Encode.stream_with` |
+| writing haus for such a reader | `Encode.to_str_with`, `Encode.stream_with`, `Encode.minimised_with`, `Encode.stream_minimised_with` |
 | writing JSON for such a reader | `JsonValue.to_str_with`, `JsonValue.write_lines_with`, `JsonValue.to_haus_json_with`, `JsonValue.to_haus_json_lines_with`, `JsonValue.haus_json_value_with`, `ToJson.to_str_with`, `ToJson.lines_with` |
 
 `Value.max_supported_depth` is 1024: the parser, decoding, encoding and the
@@ -242,9 +249,10 @@ type is called `JsonValue`.
 The caller says which form it reads: `from_haus_json` requires the envelope
 (`haus-json-form` without it, `haus-json-version` for a `_haus` other than
 `1`), and `FromJson` and `import_json` never look for one. Every writer
-escapes control characters (C0, DEL, C1) and the bidi controls; reading
-self-describing JSON rejects DEL, C1 and bidi controls raw
-(`control-character`, `bidi-control`), the other readers accept them.
+escapes control characters (C0, DEL, C1), the bidi controls and U+2028 and
+U+2029; reading self-describing JSON rejects DEL, C1 and bidi controls raw
+(`control-character`, `bidi-control`), the other readers accept them, and
+every reader accepts U+2028 and U+2029 raw.
 
 `haus-gen roc --json` adds `from_json_<name> : JsonValue -> Try(T, Decode.Error)`
 and `to_json_<name> : T -> Try(JsonValue, Encode.Error)` to each type, built

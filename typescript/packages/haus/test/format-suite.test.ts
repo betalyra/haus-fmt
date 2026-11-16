@@ -1,25 +1,28 @@
 /**
  * The format conformance suite (test-suite/format/README.md): every input,
- * formatted in the pretty and the compact layout, must give the expected
- * files byte for byte, and formatting the output again must change nothing.
+ * formatted in the pretty, the compact and the minimised layout, must give
+ * the expected files byte for byte, and formatting the output again must
+ * change nothing.
  *
  * The TypeScript formatter is the reference: run with HAUS_UPDATE_FORMAT=1 to
  * (re)write the expected files from it, then review the diff against spec §11.
  */
 import { describe, expect, it } from "@effect/vitest"
+import { Arbitrary, Schema } from "effect"
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { format, parseAll, parseDocument, type FormatOptions } from "../src/index.js"
+import { arr, format, parseAll, parseDocument, rec, str, variant, type FormatOptions, type FormatStyle, type Value } from "../src/index.js"
 import { suiteJson } from "./suite-json.js"
 
 const SUITE = join(import.meta.dirname, "../../../../test-suite")
 const FORMAT = join(SUITE, "format")
 const UPDATE = process.env["HAUS_UPDATE_FORMAT"] === "1"
+const STYLES = ["pretty", "compact", "minimised"] as const satisfies readonly FormatStyle[]
 
 interface Case {
   readonly name: string
   readonly input: string
-  /** Where NAME.pretty, NAME.compact (and NAME.options) are, without the extension. */
+  /** Where NAME.pretty, NAME.compact, NAME.minimised (and NAME.options) are, without the extension. */
   readonly expected: string
 }
 
@@ -47,7 +50,7 @@ const cases: Case[] = [
 // The parser skips a byte order mark itself: the decoder must keep it.
 const decode = (bytes: Uint8Array) => new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
 
-/** NAME.options: a record `{ indent: 4, width: 40 }`, applied to both layouts. */
+/** NAME.options: a record `{ indent: 4, width: 40 }`, applied to every layout. */
 const optionsOf = (c: Case): FormatOptions => {
   const file = `${c.expected}.options`
   if (!existsSync(file)) return {}
@@ -60,17 +63,32 @@ const optionsOf = (c: Case): FormatOptions => {
   return { ...int("indent"), ...int("width") }
 }
 
-const run = (text: string, options: FormatOptions, style: "pretty" | "compact") => {
+/** Reformat a document in `style`, keeping comments where the layout does. */
+const run = (text: string, options: FormatOptions, style: FormatStyle) => {
   const { values, comments } = parseDocument(text)
   return format(values, { ...options, style, source: text, comments })
 }
+
+const same = (a: string, b: string) => expect(parseAll(a).map(suiteJson)).toEqual(parseAll(b).map(suiteJson))
+
+/** What an editor that trims trailing whitespace makes of a text. */
+const trimLines = (text: string) => text.replace(/[ \t]+$/gm, "")
+
+/** The offsets of the last character of the lines that end in a space or tab outside a comment. */
+const trailingBlanks = (text: string): number[] => {
+  const { comments } = parseDocument(text)
+  const inComment = (i: number) => comments.some(([s, e]) => s <= i && i < e)
+  return [...text.matchAll(/[ \t](?=\n|$)/g)].map((m) => m.index).filter((i) => !inComment(i))
+}
+
+const withoutBlankLines = (text: string) => text.split("\n").filter((l) => l !== "").join("\n")
 
 describe("format suite", () => {
   it("has cases", () => {
     expect(cases.length).toBeGreaterThan(0)
   })
 
-  for (const style of ["pretty", "compact"] as const) {
+  for (const style of STYLES) {
     describe(style, () => {
       it.each(cases)("$name", (c) => {
         const input = decode(readFileSync(c.input))
@@ -83,8 +101,59 @@ describe("format suite", () => {
         // LF line endings only, idempotent, and the same data.
         expect(out).not.toContain("\r")
         expect(run(out, options, style)).toBe(out)
-        expect(parseAll(out).map(suiteJson)).toEqual(parseAll(input).map(suiteJson))
+        same(out, input)
+        // Strings never carry a raw line or paragraph separator (spec §11);
+        // comments, kept by pretty, may.
+        if (style !== "pretty") expect(out).not.toMatch(/[\u2028\u2029]/)
       })
     })
   }
+
+  describe("minimised", () => {
+    it.each(cases)("$name has no whitespace between tokens", (c) => {
+      const out = run(decode(readFileSync(c.input)), optionsOf(c), "minimised")
+      // Outside strings and byte strings, every space or tab is gone.
+      const outside = out.replace(/x?"(?:[^"\\]|\\.)*"/g, "")
+      expect(outside).not.toMatch(/[ \t]/)
+    })
+
+    it.each(cases)("$name, formatted as pretty, is the pretty file without comments and blank lines", (c) => {
+      const input = decode(readFileSync(c.input))
+      const options = optionsOf(c)
+      const back = run(run(input, options, "minimised"), options, "pretty")
+      expect(back).toBe(run(run(input, options, "compact"), options, "pretty"))
+      const { values } = parseDocument(input)
+      const withoutComments = format(values, { ...options, style: "pretty", source: input, comments: [] })
+      expect(withoutBlankLines(back)).toBe(withoutBlankLines(withoutComments))
+    })
+  })
+
+  describe("pretty survives trimming trailing whitespace (spec §11)", () => {
+    it.each(cases)("$name", (c) => {
+      const input = decode(readFileSync(c.input))
+      const out = run(input, optionsOf(c), "pretty")
+      expect(trailingBlanks(out)).toEqual([])
+      same(trimLines(out), input)
+    })
+
+    // Strings made of pieces that end lines in blanks, next to the characters a block string escapes.
+    const piece = Arbitrary.schema(Schema.Literals(["a", "é", "😀", " ", "  ", "\t", " \t", "\n", "\r\n", "\r", '"', '""', '"""', "\\", "\u2028", "\u2029", "\u0001", "\u202e", "\\u{20}"]))
+    const text = Arbitrary.map(Arbitrary.array(piece, { maxLength: 24 }), (pieces) => pieces.join(""))
+
+    it.prop("generated strings", [text], ([s]) => {
+      const values: Value[] = [str(s), rec(new Map<string, Value>([["note", str(s)], ["list", arr([str(s), str(`${s}\n`)])]])), variant("Note", [str(s), str(s)])]
+      for (const out of [format(values), format(values.slice(0, 1)), format(values.slice(1, 2), { indent: 4 })]) {
+        expect(trailingBlanks(out)).toEqual([])
+        const back = parseAll(trimLines(out)).map(suiteJson)
+        expect(back).toEqual(parseAll(out).map(suiteJson))
+      }
+      expect(parseAll(trimLines(format(values))).map(suiteJson)).toEqual(values.map(suiteJson))
+      for (const style of STYLES) {
+        const out = format(values, { style })
+        expect(format(parseAll(out), { style })).toBe(out)
+        expect(run(out, {}, style)).toBe(out)
+        expect(parseAll(out).map(suiteJson)).toEqual(values.map(suiteJson))
+      }
+    }, { arbitrary: { runs: 500 } })
+  })
 })
