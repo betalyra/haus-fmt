@@ -33,14 +33,15 @@ prototype, …) is outside Lean and stays covered by tests.
 | 🟡 | **I. Schema decoding** (spec §14–15) | A reference decoder that passes the schema suite, then termination, the round trip and linear time, in steps I1–I7 (below). I1–I3 and I5 done, in [`Haus/Schema/`](Haus/Schema). | I1–I3: ~2 weeks; all: months |
 | 🟡 | **V. Versions** (spec §10) | `Extends old new`: a new version is a conservative extension of the old one (same values for every old text; canonical form, built-in types and schema decoding agree on what the old version can express). Defined, with `refl`, `trans` and `current_extends_self`, in [`Haus/Version.lean`](Haus/Version.lean); to be proven for each release. | days per release |
 | ✅ | **T. std/time** | A reference model of the profile (spec §13.2, `std/time.md`), the bindings' time checkers fuzzed against it, and its security and calendar properties proven | 1–3 weeks |
-| 🟡 | **J. JSON** (spec §16) | A reference for the JSON mappings (without a schema, lossless, plain) that passes the JSON suite, with the round trips and uniqueness proven, in steps J1–J7 (below). J1–J7 done, in [`Haus/Json/`](Haus/Json), with the bindings fuzzed against it in CI (J7). | J1–J6: ~1 week |
+| 🟡 | **J. JSON** (spec §16) | A reference for the JSON mappings (the import, self-describing and schema-based JSON) that passes the JSON suite, with the round trips and uniqueness proven, in steps J1–J10 (below). J1–J8 done, in [`Haus/Json/`](Haus/Json), with the bindings fuzzed against it in CI (J7). | J1–J6: ~1 week |
 | ⬜ | **X. Extensions and codecs** (spec §13.3, §13.4) | The codec contract proven once for any codec; a reference checker for each official profile (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`) that the bindings' codecs are fuzzed against, in steps X1–X4 (below). | X1–X3: ~1 week |
+| ⬜ | **L. Layouts** (spec §11) | The standard format: the formatters fuzzed for keeping the values, idempotence and identical bytes; the block-string rules written down; a reference compact writer proven to parse back, for every binding's serializer to be fuzzed against, in steps L1–L5 (below). | L1–L2: days; L3–L4: 1–2 weeks |
 
 Order: A–H, T1–T6, I1–I3, I5, J1–J6 and the definition of V are done. Next:
 fuzzing the bindings' decoders against the Lean one (the rest of I3), then
 I4 and I6. P comes after the benchmarks' doubling
 tests and is needed only for I7. X1–X3 come before the extensions are
-released; a new package's profile is written in Lean before its codecs.
+released; a new package's profile is written in Lean before its codecs. L1 and L2 come before 1.0 (L2 together with the audit's B2); L3–L5 after, L3 first, as it also gives Python and Roc a reference.
 
 ## A. Security properties of the grammar
 
@@ -201,50 +202,56 @@ design, and so outside the model.
 
 ## J. JSON
 
-Spec §16 maps haus to JSON two ways: **lossless** (every value, no schema)
-and **plain** (a schema type's values, as JSON consumers expect them), and
-reads any JSON as a haus value (§16.1). `test-suite/json` tests them. The
+Spec §16 maps haus to JSON two ways: **self-describing** (every value, no
+schema, in an envelope `{"_haus": 1, "_value": …}`) and **schema-based** (a
+schema type's values, as JSON consumers expect them), and imports any JSON
+as a haus value (§16.1). `test-suite/json` tests them. The
 model works on JSON as data (`JSON`: numbers keep their text, objects their
 member order); a strict text reader and a compact writer sit next to it.
 
 | | Step | Gives | Effort |
 |---|---|---|---|
-| ✅ | J1. JSON as data and as text | `JSON`, compared as data (`JSON.Equiv`: member order ignored, numbers by text) ([`Json/Data.lean`](Haus/Json/Data.lean)). `JSON.parse`: RFC 8259 restricted to I-JSON (no duplicate member names, no unpaired surrogates), a leading byte order mark ignored, the limits of §16 (number tokens as written, strings, nesting 4·d + 1); `JSON.parseLines` for JSON Lines; `JSON.write`, compact ([`Json/Text.lean`](Haus/Json/Text.lean)). Proven in [`Json/TextRoundTrip.lean`](Haus/Json/TextRoundTrip.lean): `parse_write`, the text of every well-formed JSON within the limits (`WellFormed`: number tokens, no duplicate member names; `Fits`: strings, member names, number tokens, nesting) reads back as exactly that JSON; `parse_sound`, everything `parse` returns is such a JSON, so `parse_write_iff`; `parseLines_writeLines`/`parseLines_sound`, the same for JSON Lines (`writeLines`: each value and a line feed), since the writer writes nothing below U+0020 (`write_chars`). | days |
+| ✅ | J1. JSON as data and as text | `JSON`, compared as data (`JSON.Equiv`: member order ignored, numbers by text) ([`Json/Data.lean`](Haus/Json/Data.lean)). `JSON.parse`: RFC 8259 restricted to I-JSON (no duplicate member names, no unpaired surrogates), a leading byte order mark ignored, the limits of §16 (number tokens as written, strings, nesting 4·d + 1); `JSON.parseLines` for JSON Lines; `JSON.write`, compact, escaping every control character and bidi control (`mustEscape`) ([`Json/Text.lean`](Haus/Json/Text.lean)). Proven in [`Json/TextRoundTrip.lean`](Haus/Json/TextRoundTrip.lean): `parse_write`, the text of every well-formed JSON within the limits (`WellFormed`: number tokens, no duplicate member names; `Fits`: strings, member names, number tokens, nesting) reads back as exactly that JSON; `parse_sound`, everything `parse` returns is such a JSON, so `parse_write_iff`; `parseLines_writeLines`/`parseLines_sound`, the same for JSON Lines (`writeLines`: each value and a line feed), since the writer writes nothing below U+0020 (`write_chars`); nor DEL, C1 or a bidi control (`write_clean`). | days |
 | ✅ | J2. Byte strings | Base64 with padding, strict (canonical only), and lowercase hex: each reader accepts exactly the writer's texts and reads them back (`base64_decode_encode`, `base64_encode_decode`, `hex_decode_encode`, `hex_encode_decode`, [`Json/Base64.lean`](Haus/Json/Base64.lean)). | ~1 day |
-| ✅ | J3. Without a schema and lossless (§16.1, §16.2) | `JSON.toValue`, `lossless`, `fromLossless` ([`Json/Lossless.lean`](Haus/Json/Lossless.lean)). `lossless_read_write`/`fromLossless_lossless`: reading the lossless form gives the value back; `lossless_unique`: every accepted JSON is, as data, the lossless form of what it reads; `lossless_equiv_iff`: two values have the same lossless form, as data, exactly when they are equal (§2), for every value. | days |
-| ✅ | J4. Plain (§16.3) | `toJson`/`fromJson` over the schema model, row by row ([`Json/Plain.lean`](Haus/Json/Plain.lean)). `plain_round_trip`: reading the plain JSON of a decoded value gives it back; `plain_injective`: two decoded values with the same plain JSON are the same; `toJson_error`: writing a decoded value fails only for a record payload with a field named `_tag` ([`Json/PlainRoundTrip.lean`](Haus/Json/PlainRoundTrip.lean)). Floats rest on `floatLaw`; `normalizeNumber_normal` ([`Json/Normal.lean`](Haus/Json/Normal.lean)) shows a `Decimal`'s literal reads back unchanged. | ~1 week |
-| ✅ | J5. Parsed values | The round trips assume a well-formed value (normalized numbers, tags); `parse_wf`: every value the reference parser returns is one ([`Json/WellFormed.lean`](Haus/Json/WellFormed.lean)), so `lossless_parsed` and `plain_parsed` hold for every value of every haus text ([`Json/Correct.lean`](Haus/Json/Correct.lean)). | days |
-| ✅ | J6. Conformance | `haus-ref --json-suite`: all cases of `test-suite/json` pass (plain, lossless, schemaless, and every `valid/NAME.json` as a lossless file), none skipped; in CI. Types from [`scripts/schema-types.ts`](scripts/schema-types.ts) → [`json-suite.json`](json-suite.json), checked up to date in CI. | days |
-| ✅ | J7. Fuzzing | `--json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch` against runners for TypeScript, Effect, Rust, Roc and Python (`fuzz/src/json.ts`), error codes compared, in CI. | done |
-| ⬜ | J8. The decided forms | The decisions of the design review ([§3.7](../design-review.md), F1–F6) in the model: the self-describing form's keys `_tag`, `_args`, `_rec`, `_num`, `_bytes`; its envelope `{"_haus": 1, "_value": …}` in `readLossless`/`writeLossless`, one per line of JSON Lines; `_args` in `unknownJson` and `readCore`, reserved with `_tag` (`hasTagField`); a writer that escapes DEL, C1 and bidi controls, and a text reader for the self-describing form that rejects them raw. The round trips proven again: `toJson_error` then names `_tag` or `_args`, and `LosslessOk` needs room for `_bytes`. The model's names follow F1. `valid/NAME.json` and the JSON suite are written again. | days |
-| ⬜ | J9. An older reader accepts a newer writer | When a newer schema adds a case to an open variant, an older reader reads the newer writer's schema-based JSON without an error, and that case as an unknown value. False today (`{"_tag": "Run", "args": [1, 2]}` is rejected), true once `_args` is reserved (J8). It is what spec §13.3 relies on when it calls a new tag in an open variant a minor change. | days |
-| ⬜ | J10. What the JSON readers return | `UniqueKeys` for the values the self-describing reader and the import return: it follows from `parse_sound` (no duplicate member names) but is not stated, as `parse_uniqueKeys` is for haus text. And both paths decode alike: reading a value's self-describing JSON and decoding it gives what reading its schema-based JSON with the type gives (from `fromLossless_lossless` and `plain_round_trip`). | days |
+| ✅ | J3. The import and self-describing JSON (§16.1, §16.2) | `JSON.toValue` (the import), `selfDescribing`/`fromSelfDescribing` (a value without the envelope, as in `Any`), `hausJson`/`fromHausJson` (with it) ([`Json/SelfDescribing.lean`](Haus/Json/SelfDescribing.lean)). `hausJson_read_write`/`fromHausJson_hausJson`: reading the self-describing JSON gives the value back; `hausJson_unique`: every accepted JSON is, as data, the self-describing JSON of what it reads; `hausJson_equiv_iff`: two values have the same self-describing JSON, as data, exactly when they are equal (§2), for every value; the same without the envelope (`selfDescribing_…`). | days |
+| ✅ | J4. Schema-based (§16.3) | `toJson`/`fromJson` over the schema model, row by row ([`Json/SchemaBased.lean`](Haus/Json/SchemaBased.lean)). `schemaBased_round_trip`: reading the schema-based JSON of a decoded value gives it back; `schemaBased_injective`: two decoded values with the same schema-based JSON are the same; `toJson_error`: writing a decoded value fails only for a record payload with a field named `_tag` or `_args` ([`Json/SchemaBasedRoundTrip.lean`](Haus/Json/SchemaBasedRoundTrip.lean)). Floats rest on `floatLaw`; `normalizeNumber_normal` ([`Json/Normal.lean`](Haus/Json/Normal.lean)) shows a `Decimal`'s literal reads back unchanged. | ~1 week |
+| ✅ | J5. Parsed values | The round trips assume a well-formed value (normalized numbers, tags); `parse_wf`: every value the reference parser returns is one ([`Json/WellFormed.lean`](Haus/Json/WellFormed.lean)), so `hausJson_parsed` and `schemaBased_parsed` hold for every value of every haus text ([`Json/Correct.lean`](Haus/Json/Correct.lean)). | days |
+| ✅ | J6. Conformance | `haus-ref --json-suite`: all cases of `test-suite/json` pass (schema-based, self-describing, import, and every `valid/NAME.jsonl` as self-describing JSON Lines), none skipped; in CI. `haus-ref --suite` checks `valid/NAME.jsonl` too. Types from [`scripts/schema-types.ts`](scripts/schema-types.ts) → [`json-suite.json`](json-suite.json), checked up to date in CI. | days |
+| ✅ | J7. Fuzzing | `--json-batch`, `--json-read-batch`, `--haus-json-batch`, `--haus-json-read-batch`, `--import-batch` against runners for TypeScript, Effect, Rust, Roc and Python (`fuzz/src/json.ts`), error codes compared, in CI. | done |
+| ✅ | J8. The decided forms | The decisions of the design review ([§3.7](../design-review.md), F1–F7) in the model, its names following F1 (`SelfDescribing`, `SchemaBased`, `readImport`). The self-describing form's keys `_tag`, `_args`, `_rec`, `_num`, `_bytes`; its envelope (`hausJson`, `fromHausJson`: exactly the members `_haus` and `_value`, `haus-json-form` otherwise, `_haus` the number written `1`, `haus-json-version` otherwise), one per line of JSON Lines (`readHausJsonLines`); JSON nesting `4 · d + 2` for it (`hausJsonDepth`). `_args` in `unknownJson` and `readCore` (`args` is now an ordinary member of a newer writer's record payload), reserved with `_tag` (`hasReservedField`); `Any` and `_args` without the envelope. Every writer escapes DEL, C1 and bidi controls (`escape`, `write_clean`); the self-describing text reader rejects them raw where its string lexer meets them (`strChars` in strict mode: `control-character`, `bidi-control`), so the error is the first in the text, the schema-based reader and the import accept them. Proven again: `hausJson_*` beside `selfDescribing_*`, `hausJson_fits` (`SelfDescribingOk` now needs room for `_bytes` and `_value`, and the version `1`), `hausJson_wellFormed`, `readHausJson_writeHausJson` (`parseText_write` in strict mode), `readHausJsonLines_writeHausJsonLines`, `hausJsonLines_text_parsed`; `toJson_error` names `_tag` or `_args`. Error codes `haus-json-form`, `haus-json-version`, `haus-json-number`, `haus-json-bytes`. | days |
+| ⬜ | J9. An older reader accepts a newer writer | When a newer schema adds a case to an open variant, an older reader reads the newer writer's schema-based JSON without an error, and that case as an unknown value. `{"_tag": "Run", "args": [1, 2]}` is read since J8 (`args` is no longer the arguments' member), but not proven in general. It is what spec §13.3 relies on when it calls a new tag in an open variant a minor change. | days |
+| ⬜ | J10. What the JSON readers return | `UniqueKeys` for the values the self-describing reader and the import return: it follows from `parse_sound` (no duplicate member names) but is not stated, as `parse_uniqueKeys` is for haus text. And both paths decode alike: reading a value's self-describing JSON and decoding it gives what reading its schema-based JSON with the type gives (from `fromHausJson_hausJson` and `schemaBased_round_trip`). | days |
 
 The mappings' theorems are about `JSON` as data; J1's connect them to text:
-`JSON.readLossless_writeLossless`, `readPlain_write`, `lossless_text_parsed`
-and `plain_text_parsed` ([`Json/Correct.lean`](Haus/Json/Correct.lean)) read
-the written text back to the value, for a value without duplicate keys
+`JSON.readHausJson_writeHausJson`, `readJson_write`, `hausJson_text_parsed`
+and `schemaBased_text_parsed` ([`Json/Correct.lean`](Haus/Json/Correct.lean))
+read the written text back to the value, for a value without duplicate keys
 (`UniqueKeys`, which every parsed value has) that is within the limits
-(`Value.fits`: record keys and tags count like strings, §7). The JSON
-written is well formed (number tokens, distinct member names): the lossless
-form (`lossless_wellFormed`) and the plain form (`toJson_wellFormed`, in
-[`Json/PlainWellFormed.lean`](Haus/Json/PlainWellFormed.lean): integers are
-normalized literals, a float's spelling is a JSON number (`spell_json`), a
-record's members are some of the value's fields, and `_tag` never meets a
-payload field named `_tag`, the case `toJson_error` refuses). And it is
-within the JSON limits (`Fits`, nesting `4 · maxDepth + 1`): the lossless
-form (`lossless_fits`, [`Json/Fits.lean`](Haus/Json/Fits.lean)) when the
-limits leave room for its member names and for number literals in strings
-(`LosslessOk`: `maxStringLength` at least 5 and at least
-`maxNumberLength · 6/5 + 4`, the longest haus number within the limits,
-an integer whose hex form fits); the plain form (`toJson_fits`,
-[`Json/PlainFits.lean`](Haus/Json/PlainFits.lean)) when also
-`maxStringLength` is at least 6 (`values`) and `maxNumberLength` at least 22
-(`PlainOk`). The last is needed: a float's spelling can be an integer of 21
-digits, a JSON number token that the JSON limits count as written, while a
-haus value may use its shorter hex form, so with `maxNumberLength` 19 to 21
-a value can fit and its plain JSON not. The defaults meet both. Not proven:
-linear time.
+(`Value.fits`: record keys and tags count like strings, §7);
+`hausJsonLines_text_parsed` does it for a file's values as self-describing
+JSON Lines, as the suite's `valid/NAME.jsonl` hold them. The JSON written
+is well formed (number tokens, distinct member names): the self-describing
+JSON (`hausJson_wellFormed`) and the schema-based JSON (`toJson_wellFormed`,
+in [`Json/SchemaBasedWellFormed.lean`](Haus/Json/SchemaBasedWellFormed.lean):
+integers are normalized literals, a float's spelling is a JSON number
+(`spell_json`), a record's members are some of the value's fields, and
+`_tag` never meets a payload field named `_tag`, the case `toJson_error`
+refuses). Its text holds no raw DEL, C1 or bidi control (`write_clean`), so
+the self-describing reader's strict mode reads it (`parseText_write` holds
+for both modes). And it is
+within the JSON limits (`Fits`): the self-describing JSON, nested at most
+`4 · maxDepth + 2` (`hausJson_fits`, [`Json/Fits.lean`](Haus/Json/Fits.lean)),
+when the limits leave room for its member names, for number literals in
+strings and for the version (`SelfDescribingOk`: `maxStringLength` at least
+6 and at least `maxNumberLength · 6/5 + 4`, the longest haus number within
+the limits, an integer whose hex form fits; `maxNumberLength` at least 1);
+the schema-based JSON, nested at most `4 · maxDepth + 1` (`toJson_fits`,
+[`Json/SchemaBasedFits.lean`](Haus/Json/SchemaBasedFits.lean)), when also
+`maxNumberLength` is at least 22 (`SchemaBasedOk`). The last is needed: a
+float's spelling can be an integer of 21 digits, a JSON number token that
+the JSON limits count as written, while a haus value may use its shorter
+hex form, so with `maxNumberLength` 19 to 21 a value can fit and its
+schema-based JSON not. The defaults meet both. Not proven: linear time.
 
 How the model follows §16 where it was clarified while writing it (all now
 in the spec, with vectors):
@@ -263,13 +270,44 @@ in the spec, with vectors):
   (`nullFuel`, the size of the types involved). The proofs hold for any
   answer the chain gives (`usesNull` never lets a `null` arm hold a `null`).
 - **An unlisted tag without other members** reads as bare (`Hexagon`), not as
-  `Hexagon {}`; with only `args` losslessly, and `"args": []` is rejected;
+  `Hexagon {}`; with only `_args` as self-describing values, and
+  `"_args": []` is rejected;
   otherwise its other members read as a record payload (§16.1).
+
+## L. Layouts
+
+Spec §11 defines the pretty and the compact layout in prose, and
+[`test-suite/format`](../../test-suite/format) pins them down byte for byte
+on 65 inputs (28 cases, 9 examples, the 28 valid files), with idempotence
+and the same values checked for each. The TypeScript and Rust formatters run
+it. What that leaves open:
+
+- The expected files are written by the TypeScript formatter and reviewed by
+  hand, so the suite shows that Rust agrees with TypeScript, and that
+  TypeScript is right as far as the review saw.
+- Nothing is checked on generated input: the fuzzer (G) has no formatter.
+- Nothing is proven. E proves that the canonical form parses back; the
+  layouts' writers are different code.
+- Block strings, where a mistake is likeliest, have no written rules
+  (design review §3.6 B2).
+
+| | Step | Gives | Effort |
+|---|---|---|---|
+| ⬜ | L1. Fuzzing the formatters | In `fuzz/`, on G's generated inputs (comments, blank lines, block strings, CRLF, byte order marks, both payload forms): formatting keeps the values, in both layouts; formatting twice is formatting once; the TypeScript and Rust formatters give identical bytes; the pretty layout keeps every comment; a compact item has no line break. Shrinking as in G. | days |
+| ⬜ | L2. The rules in prose | Block strings in spec §4 and §11 (B2): the indent, whitespace-only lines, escapes after the indent is removed. What the pretty layout writes for a string whose lines end in blanks or hold only blanks, which an editor that trims lines would change: decide (escape them, or not use a block string). And whether §10 lets the layouts change after 1.0: it lists what never changes, and the standard format is not on the list. | days |
+| ⬜ | L3. A reference compact writer | `compact : Value → Text` and `compactAll` for a stream, next to `Canonical.write` (spacing as §11, fields in the order given, strings never block strings). Proven as in E: it parses back to the value, in the same order, and holds no line break, so a compact stream splits by lines (§11). `haus-ref --compact`, and every binding's serializer of values (`stringify`, `to_string`, Roc `Encode`, Python) fuzzed against it: the first check of the layouts that doesn't come from the TypeScript formatter. Values only: the spellings a formatter keeps from the source (`0xFF`) are not in the value model. | ~1 week |
+| ⬜ | L4. Block strings parse back | The block string the pretty layout writes for a string with a line break parses back to that string, for every string: trailing blanks, whitespace-only lines, carriage returns, `"""`, backslashes, control and bidi characters. A lemma about `Grammar.BlockString`, after L2 fixes what is written. | days to 1 week |
+| ⬜ | L5. The pretty layout from values | Pretty without comments (one entry per line, positional payloads inline when they fit the width), proven to parse back, with L4 for its strings. | 1–2 weeks |
+
+Not planned: a model of the pretty layout with comments, their placement
+and blank lines. It would need a model of documents with comments, which
+the parser's model has no place for (comments are whitespace in the
+grammar). L1 covers it by fuzzing, and the suite pins the placement.
 
 ## X. Extensions and codecs
 
 An extension's schema is an ordinary schema, so the theorems of I and J
-(`decode_iff`, `decode_encode`, `plain_round_trip`) already hold for its
+(`decode_iff`, `decode_encode`, `schemaBased_round_trip`) already hold for its
 types. What they don't cover is the rules a package adds beyond its shape:
 its profiles (spec §13.3), which codecs (§13.4) enforce. A profile is small
 and decidable, like the std/time profile, so it gets the same treatment as

@@ -93,7 +93,7 @@ struct Parser<'a> {
 }
 
 /// Raw bidirectional controls (U+202A–U+202E, U+2066–U+2069) are not allowed outside escapes.
-fn is_bidi(c: char) -> bool {
+pub(crate) fn is_bidi(c: char) -> bool {
     matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 fn is_ident(c: u8) -> bool {
@@ -888,7 +888,7 @@ impl<'a> Parser<'a> {
 }
 
 /// A raw control character: C0, DEL or C1 (spec §4).
-fn is_control(c: char) -> bool {
+pub(crate) fn is_control(c: char) -> bool {
     matches!(c as u32, 0..0x20 | 0x7F..=0x9F)
 }
 

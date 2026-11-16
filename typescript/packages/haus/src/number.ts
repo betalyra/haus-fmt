@@ -57,8 +57,9 @@ const shortestLength = (text: string, max: number): number => {
  * `limits` is always within them.
  */
 export const numberLimitIssue = (text: string, limits: Limits): Problem | undefined => {
+  // The length first, as a parser meets it (spec §7): a literal too long with an exponent too large is too long.
+  if (shortestLength(text, limits.maxNumberLength) > limits.maxNumberLength) return { code: "number-too-long", reason: `number literal longer than ${limits.maxNumberLength} characters` }
   const exponent = /e-?(\d+)$/.exec(text)?.[1]
   if (exponent !== undefined && (exponent.length > 15 || Number(exponent) > limits.maxExponent)) return { code: "exponent-too-large", reason: `exponent larger than ${limits.maxExponent}` }
-  if (shortestLength(text, limits.maxNumberLength) > limits.maxNumberLength) return { code: "number-too-long", reason: `number literal longer than ${limits.maxNumberLength} characters` }
   return undefined
 }

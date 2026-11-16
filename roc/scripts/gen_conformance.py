@@ -2,7 +2,10 @@
 """Generate roc/package/ConformanceTest.roc from the shared test-suite.
 
 Each fixture is embedded with `import "…" as name : List(U8)`, so `roc test`
-runs the suite without a platform. An invalid file must be rejected with the
+runs the suite without a platform. A valid file's values must be those of its
+NAME.jsonl (self-describing JSON, spec §16.2, one envelope per value), checked
+in the form `Value.to_test_json` writes (the parser fuzzer's): the same,
+with keys without the leading `_`. An invalid file must be rejected with the
 error code of its NAME.error (spec §17), by the parser and by the stream
 reader. The catalogue of codes, spec/errors.haus, is embedded too: the test
 fails if roc/package/ErrorCode.roc is out of date (gen_error_codes.py).
@@ -16,6 +19,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SUITE = ROOT / "test-suite"
 OUT = ROOT / "roc" / "package" / "ConformanceTest.roc"
+
+
+def test_json(v):
+    """A self-describing JSON value (without the envelope) in the form of
+    `Value.to_test_json`: `{"_num": "1"}` is `{"num": "1"}`."""
+    if isinstance(v, list):
+        return [test_json(x) for x in v]
+    if isinstance(v, dict):
+        if "_rec" in v:
+            return {"rec": {k: test_json(x) for k, x in v["_rec"].items()}}
+        return {k.removeprefix("_"): test_json(x) for k, x in v.items()}
+    return v
+
+
+def expected_values(path: Path) -> list:
+    """The values of a valid file, from its NAME.jsonl."""
+    lines = path.with_suffix(".jsonl").read_text(encoding="utf-8").splitlines()
+    envelopes = [json.loads(l) for l in lines if l.strip()]
+    assert all(set(e) == {"_haus", "_value"} and e["_haus"] == 1 for e in envelopes), path
+    return [test_json(e["_value"]) for e in envelopes]
 
 
 def ident(kind: str, name: str) -> str:
@@ -35,7 +58,7 @@ def roc_str(s: str) -> str:
 imports, tests = [], []
 for path in sorted((SUITE / "valid").glob("*.haus")):
     name = ident("valid", path.stem)
-    expected = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    expected = expected_values(path)
     imports.append(f'import "../../test-suite/valid/{path.name}" as {name} : List(U8)')
     tests.append(f"# valid/{path.name}\nexpect ConformanceTest.run({name}) == {roc_str(json.dumps(expected, ensure_ascii=False, separators=(',', ':')))}")
     # The canonical form of each value, one per line (spec §12).

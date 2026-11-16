@@ -1,5 +1,5 @@
 {"suites": [
-  {"name": "plain", "defs": [
+  {"name": "schema-based", "defs": [
     ["At",{"time":"Instant"}],
     ["B",{"builtin":"Bytes"}],
     ["Big",{"builtin":"Int"}],

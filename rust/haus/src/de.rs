@@ -11,7 +11,7 @@ type R<T> = Result<T, DecodeError>;
 
 /// Where a value is read with a type, as [`Encoder`](crate::Encoder) is
 /// where one is written: the limits of the reader, and how many containers
-/// (records, arrays, payloads) the value is inside. Reading plain JSON
+/// (records, arrays, payloads) the value is inside. Reading schema-based JSON
 /// ([`FromJson`](crate::FromJson)) takes one, and reading a container takes
 /// [`Decoder::nested`], so that JSON nested deeper than the depth limit fails
 /// there instead of recursing on.
@@ -39,7 +39,7 @@ impl Decoder {
     /// Inside one more container, if the depth limit allows it. Fails too
     /// if the limit is more than [`crate::MAX_SUPPORTED_DEPTH`].
     pub fn nested(self) -> R<Decoder> {
-        crate::json::lossless::open(&self.limits, self.depth).map(|depth| Decoder { depth, ..self })
+        crate::json::open(&self.limits, self.depth).map(|depth| Decoder { depth, ..self })
     }
 }
 

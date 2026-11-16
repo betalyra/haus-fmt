@@ -8,7 +8,7 @@
 //! Roc module MODULE is the codec for the type with this id. Without `--out`,
 //! the module is written to standard output. `--without-attributes` leaves the
 //! schema's attributes out, for tests that they don't matter (spec §15).
-//! `--json` also generates each type's plain JSON reader and writer
+//! `--json` also generates each type's schema-based JSON reader and writer
 //! (`from_json_<name>`, `to_json_<name>`, spec §16.3).
 
 use haus_build::roc::RocConfig;

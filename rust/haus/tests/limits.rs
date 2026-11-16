@@ -44,19 +44,23 @@ fn every_path_takes_the_supported_depth_in_a_small_thread() {
             assert_eq!(Value::decode(&value).unwrap(), value);
             assert_eq!(value.encode_with(Encoder::new(&limits)).unwrap(), value);
             assert_eq!(haus::to_string_with(&value, &limits).unwrap(), ser::write_with(&value, &limits).unwrap());
-            let lossless = json::to_lossless(&value, &limits).unwrap();
-            assert_eq!(json::from_lossless(&lossless, &limits).unwrap(), value);
-            assert_eq!(value.to_json_with(Encoder::new(&limits)).unwrap(), lossless);
-            assert_eq!(Value::from_json_with(&lossless, Decoder::new(&limits)).unwrap(), value);
-            let text = json::write_with(&lossless, &limits).unwrap();
-            assert_eq!(json::parse_with(&text, &limits).unwrap(), lossless);
+            let enveloped = json::to_self_describing(&value, &limits).unwrap();
+            assert_eq!(json::from_self_describing(&enveloped, &limits).unwrap(), value);
+            let text = json::to_haus_json_with(&value, &limits).unwrap();
+            assert_eq!(json::from_haus_json_with(&text, &limits).unwrap(), value);
+            // `Any`: the same value, without the envelope.
+            let any = enveloped.get("_value").unwrap();
+            assert_eq!(&value.to_json_with(Encoder::new(&limits)).unwrap(), any);
+            assert_eq!(Value::from_json_with(any, Decoder::new(&limits)).unwrap(), value);
+            let text = json::write_with(any, &limits).unwrap();
+            assert_eq!(&json::parse_with(&text, &limits).unwrap(), any);
             assert_eq!(json::from_str_with::<Value>(&text, &limits).unwrap(), value);
             assert_eq!(json::to_string_with(&value, &limits).unwrap(), text);
         }
-        // JSON without a schema nests as haus does.
-        let plain = (0..MAX).fold(Json::Null, |j, _| Json::Array(vec![j]));
-        let text = json::write_with(&plain, &limits).unwrap();
-        assert!(json::from_plain(&plain, &limits).is_ok() && json::value_from_str_with(&text, &limits).is_ok());
+        // The import's JSON nests as haus does.
+        let imported = (0..MAX).fold(Json::Null, |j, _| Json::Array(vec![j]));
+        let text = json::write_with(&imported, &limits).unwrap();
+        assert!(json::import(&imported, &limits).is_ok() && json::import_json_with(&text, &limits).is_ok());
     });
 }
 
@@ -86,13 +90,16 @@ fn a_deeper_limit_is_rejected_naming_the_maximum() {
     assert_eq!(e.to_string(), format!("[0]: {reason}"));
     // JSON.
     assert_eq!(syntax(json::parse_with("[]", &above).unwrap_err()), at_start);
-    assert_eq!(json::value_from_str_with("1", &above).unwrap_err().to_string(), format!("{reason} at 1:1"));
+    assert_eq!(json::import_json_with("1", &above).unwrap_err().to_string(), format!("{reason} at 1:1"));
+    assert_eq!(json::from_haus_json_with("1", &above).unwrap_err().to_string(), format!("{reason} at 1:1"));
     assert_eq!(json::from_str_with::<Value>("[]", &above).unwrap_err().to_string(), format!("{reason} at 1:1"));
     assert_eq!(json::write_with(&Json::Null, &above).unwrap_err().to_string(), reason);
     assert_eq!(json::to_string_with(&value, &above).unwrap_err().to_string(), reason);
-    assert_eq!(json::to_lossless(&value, &above).unwrap_err().to_string(), reason);
-    assert_eq!(json::from_lossless(&Json::Array(vec![]), &above).unwrap_err().to_string(), reason);
-    assert_eq!(json::from_plain(&Json::Null, &above).unwrap_err().to_string(), reason);
+    assert_eq!(json::to_self_describing(&value, &above).unwrap_err().to_string(), reason);
+    assert_eq!(json::to_haus_json_with(&value, &above).unwrap_err().to_string(), reason);
+    let enveloped = json::to_self_describing(&value, &Limits::default()).unwrap();
+    assert_eq!(json::from_self_describing(&enveloped, &above).unwrap_err().to_string(), reason);
+    assert_eq!(json::import(&Json::Null, &above).unwrap_err().to_string(), reason);
     assert_eq!(Decoder::new(&above).nested().unwrap_err().to_string(), reason);
     let e = Vec::<u8>::from_json_with(&Json::Array(vec![]), Decoder::new(&above)).unwrap_err();
     assert_eq!(e.to_string(), reason);
@@ -167,7 +174,7 @@ fn keys_and_tags_count_against_the_string_limit() {
     let record = |k: &str| Value::Record(vec![(k.into(), Value::Number("1".into()))]);
     let tag = |t: &str| Value::Variant { tag: t.into(), args: vec![] };
     for v in [record("abcd"), record("äöüß"), tag("Abcd")] {
-        assert!(ser::write_with(&v, &limits).is_ok() && json::to_lossless(&v, &limits).is_ok(), "{v:?}");
+        assert!(ser::write_with(&v, &limits).is_ok() && json::to_self_describing(&v, &limits).is_ok(), "{v:?}");
         assert!(v.encode_with(Encoder::new(&limits)).is_ok());
     }
     let write = |v: &Value| ser::write_with(v, &limits).unwrap_err().to_string();
@@ -177,8 +184,8 @@ fn keys_and_tags_count_against_the_string_limit() {
     assert_eq!(write(&payload), "(A)[0]: tag longer than 4 characters");
     let encoded = tag("Abcde").encode_with(Encoder::new(&limits)).unwrap_err();
     assert_eq!(encoded.to_string(), "tag longer than 4 characters");
-    let lossless = json::to_lossless(&record("abcde"), &limits).unwrap_err();
-    assert_eq!(lossless.to_string(), ".abcde: key longer than 4 characters");
+    let enveloped = json::to_self_describing(&record("abcde"), &limits).unwrap_err();
+    assert_eq!(enveloped.to_string(), ".abcde: key longer than 4 characters");
     // Native values: a tag such as `True` or `None`, and map keys.
     let tiny = Limits { max_string_length: 3, ..Limits::default() };
     assert_eq!(haus::to_string_with(&true, &tiny).unwrap_err().to_string(), "tag longer than 3 characters");
@@ -186,16 +193,16 @@ fn keys_and_tags_count_against_the_string_limit() {
     let map: std::collections::BTreeMap<String, u8> = [("abcd".to_owned(), 1)].into();
     assert_eq!(haus::to_string_with(&map, &tiny).unwrap_err().to_string(), ".abcd: key longer than 3 characters");
 
-    // JSON read into haus: member names become keys, "tag" values tags.
-    let read = |j: &Json| json::from_lossless(j, &limits).unwrap_err().to_string();
-    let rec = |k: &str| Json::Object(vec![("rec".into(), Json::Object(vec![(k.into(), Json::String("x".into()))]))]);
-    let lossless_tag = |t: &str| Json::Object(vec![("tag".into(), Json::String(t.into()))]);
-    assert!(json::from_lossless(&rec("abcd"), &limits).is_ok());
-    assert!(json::from_lossless(&lossless_tag("Abcd"), &limits).is_ok());
-    assert_eq!(read(&rec("abcde")), ".rec.abcde: key longer than 4 characters");
-    assert_eq!(read(&lossless_tag("Abcde")), ".tag: tag longer than 4 characters");
-    let plain = Json::Object(vec![("abcde".into(), Json::Null)]);
-    assert_eq!(json::from_plain(&plain, &limits).unwrap_err().to_string(), ".abcde: key longer than 4 characters");
+    // JSON read into haus: member names become keys, "_tag" values tags.
+    let envelope = |j: Json| Json::Object(vec![("_haus".into(), Json::Number("1".into())), ("_value".into(), j)]);
+    let read = |j: Json| json::from_self_describing(&envelope(j), &limits);
+    let rec = |k: &str| Json::Object(vec![("_rec".into(), Json::Object(vec![(k.into(), Json::String("x".into()))]))]);
+    let tag_json = |t: &str| Json::Object(vec![("_tag".into(), Json::String(t.into()))]);
+    assert!(read(rec("abcd")).is_ok() && read(tag_json("Abcd")).is_ok());
+    assert_eq!(read(rec("abcde")).unwrap_err().to_string(), "._rec.abcde: key longer than 4 characters");
+    assert_eq!(read(tag_json("Abcde")).unwrap_err().to_string(), "._tag: tag longer than 4 characters");
+    let imported = Json::Object(vec![("abcde".into(), Json::Null)]);
+    assert_eq!(json::import(&imported, &limits).unwrap_err().to_string(), ".abcde: key longer than 4 characters");
     // The JSON reader limits every string, member names too.
     assert!(json::parse_with(r#"{"abcd": 1}"#, &limits).is_ok());
     let e = json::parse_with(r#"{"abcde": 1}"#, &limits).unwrap_err().to_string();

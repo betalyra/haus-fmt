@@ -5,7 +5,7 @@ import Haus.RoundTrip.Numbers
 # Normalizing a normalized literal changes nothing (spec §2)
 
 `normalizeNumber_normal`: a normalized literal (`isNormalLit`) is its own
-normalized literal. The plain reader normalizes a `Decimal` string
+normalized literal. The schema-based reader normalizes a `Decimal` string
 (`"1E+05"` is `1e5`); this is why the literal a decimal is written as reads
 back unchanged.
 -/

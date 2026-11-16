@@ -12,7 +12,7 @@
  *
  * Every schema also encodes: `h.stringify(User, user)` writes haus text,
  * `h.encodeStream(Event, events)` writes a stream. `h.toJson(User, user)`
- * and `h.fromJson(User, json)` write and read plain JSON (spec §16.3).
+ * and `h.fromJson(User, json)` write and read schema-based JSON (spec §16.3).
  *
  * Decoding is linear in the input whatever the schema (spec §9.8): variants
  * dispatch on the tag, depth is limited, and every call has a work budget.
@@ -28,7 +28,7 @@ import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
 import { jsonDepthFor, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions } from "./json.js"
-import { fromPlainJson, toPlainJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-plain.js"
+import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
 import { Secret as SecretValue } from "./secret.js"
 
 export type { Json, JsonType, Value }
@@ -242,14 +242,14 @@ export interface Schema<A> extends StandardSchemaV1<string | Value, A> {
    */
   readonly optional?: true | undefined
   /**
-   * The plain JSON form of the type (spec §16.3), for `h.toJson` and
+   * The schema-based JSON form of the type (spec §16.3), for `h.toJson` and
    * `h.fromJson`. Every schema of this module has one; a schema written by
-   * hand without one has no plain JSON form.
+   * hand without one has no schema-based JSON form.
    */
   readonly json?: JsonType | undefined
 }
 
-/** The plain JSON form of a schema: its own, or none. */
+/** The schema-based JSON form of a schema: its own, or none. */
 export const jsonType = (schema: AnySchema): JsonType => schema.json ?? { kind: "none", expected: schema.expected }
 
 export type Infer<S> = S extends Schema<infer A> ? A : never
@@ -849,7 +849,7 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
   }, json)
 }
 
-/** The plain JSON form of a variant case: a record payload's fields go beside `_tag`, other payloads are positional. */
+/** The schema-based JSON form of a variant case: a record payload's fields go beside `_tag`, other payloads are positional. */
 const jsonCase = (c: Case): JsonCase => {
   if (c === Unit) return { kind: "unit" }
   if (isRecordSchema(c)) return c.json?.kind === "record" ? { kind: "record", record: c.json } : { kind: "positional", items: [jsonType(c)] }
@@ -1146,28 +1146,28 @@ export async function* encodeStream<A>(
 // ── JSON (spec §16.3) ────────────────────────────────────────
 
 /**
- * The plain JSON of a value (spec §16.3), as a JSON value: what a JSON
+ * The schema-based JSON of a value (spec §16.3), as a JSON value: what a JSON
  * consumer expects, with the schema saying what JSON can't (that a string is
  * a date or a decimal). `Int`, `Int64` and `UInt64` are strings, `Bytes`
  * base64, a `Maybe` `null` or its value (tagged when its value can be
  * `null`), closed enums strings, other variants `{ "_tag": …, … }`.
  */
 export const toJsonValue = <A>(schema: Schema<A>, value: A, limits: Limits = {}): Json =>
-  toPlainJson(jsonType(schema), encode(schema, value, limits), limits)
+  toSchemaBasedJson(jsonType(schema), encode(schema, value, limits), limits)
 
 /**
- * The plain JSON text of a value (spec §16.3), compact.
+ * The schema-based JSON text of a value (spec §16.3), compact.
  *
  *   h.toJson(User, { id: 1, name: "Ada", note: h.Maybe.none })   // '{"id":1,"name":"Ada","note":null}'
  */
 export const toJson = <A>(schema: Schema<A>, value: A, limits: Limits = {}): string => stringifyJson(toJsonValue(schema, value, limits))
 
-/** Read the plain JSON of a value (spec §16.3) from a JSON value. Throws HausDecodeError. */
+/** Read the schema-based JSON of a value (spec §16.3) from a JSON value. Throws HausDecodeError. */
 export const fromJsonValue = <A>(schema: Schema<A>, json: Json, limits: Limits = {}): A =>
-  decode(schema, fromPlainJson(jsonType(schema), json, limits), limits)
+  decode(schema, fromSchemaBasedJson(jsonType(schema), json, limits), limits)
 
 /**
- * Read plain JSON text (spec §16.3) with a schema: the forms `h.toJson`
+ * Read schema-based JSON text (spec §16.3) with a schema: the forms `h.toJson`
  * writes, with the rules of decoding haus (an open record ignores members
  * it doesn't list, an integer type takes only whole numbers, a float type
  * rounds…). Throws HausSyntaxError for text that isn't I-JSON, and
@@ -1177,7 +1177,7 @@ export const fromJson = <A>(schema: Schema<A>, text: string, limits: Limits = {}
   fromJsonValue(schema, parseJson(text, jsonDepthFor(withDefaults(limits))), limits)
 
 /**
- * Read a JSON Lines stream (one plain JSON text per line, spec §16) and
+ * Read a JSON Lines stream (one schema-based JSON text per line, spec §16) and
  * decode each value as soon as its line is complete. Errors name the line's
  * index. Limits apply per value.
  */
@@ -1189,12 +1189,12 @@ export async function* decodeJsonLines<A>(
   const type = jsonType(schema)
   const limits = withDefaults(options)
   yield* readLines(source, options, (text, origin, i) => {
-    const value = fromPlainJson(type, readJson(text, jsonDepthFor(limits), origin), options, Place.root(i))
+    const value = fromSchemaBasedJson(type, readJson(text, jsonDepthFor(limits), origin), options, Place.root(i))
     return schema.decode(value, decodeAt(value, options, i))
   })
 }
 
-/** Encode values as JSON Lines of their plain JSON (spec §16): one line per value, each ending in a line feed. */
+/** Encode values as JSON Lines of their schema-based JSON (spec §16): one line per value, each ending in a line feed. */
 export async function* encodeJsonLines<A>(
   schema: Schema<A>,
   values: AsyncIterable<A> | Iterable<A>,
@@ -1204,6 +1204,6 @@ export async function* encodeJsonLines<A>(
   let i = 0
   for await (const v of values) {
     const place = Place.root(i)
-    yield stringifyJson(toPlainJson(type, schema.encode(v, encodeAt(limits, i++)), limits, place)) + "\n"
+    yield stringifyJson(toSchemaBasedJson(type, schema.encode(v, encodeAt(limits, i++)), limits, place)) + "\n"
   }
 }

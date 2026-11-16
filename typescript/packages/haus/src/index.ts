@@ -7,10 +7,12 @@ export {
   type CasePayload, type ErrorCategory, type ErrorCode, type ErrorDetails, type ErrorJson, type Path,
 } from "./errors.js"
 export {
-  equalsJson, fromJson, fromJsonLines, jsonDepth, fromJsonValue, fromLosslessJson, fromLosslessJsonLines, fromLosslessJsonValue, isJsonObject, jsonObject, JsonNumber,
-  parseJson, parseJsonLines, stringifyJson, toLosslessJson, toLosslessJsonLines, toLosslessJsonValue, type Json, type JsonLinesOptions, type JsonObject,
+  equalsJson, fromHausJson, fromHausJsonLines, fromHausJsonValue, hausJsonDepth, importJson, importJsonLines, importJsonValue, isJsonObject, jsonDepth, jsonObject, JsonNumber,
+  parseJson, parseJsonLines, stringifyJson, toHausJson, toHausJsonLines, toHausJsonValue, type Json, type JsonLinesOptions, type JsonObject,
 } from "./json.js"
-export { fromBase64, fromPlainJson, toBase64, toPlainJson, type JsonCase, type JsonRecordType, type JsonType, type JsonVariantType } from "./json-plain.js"
+export {
+  fromBase64, fromSchemaBasedJson, toBase64, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType, type JsonVariantType,
+} from "./json-schema-based.js"
 export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, type Limits } from "./parser.js"
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
 export * from "./value.js"

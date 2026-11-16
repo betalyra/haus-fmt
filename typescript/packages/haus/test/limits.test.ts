@@ -6,9 +6,9 @@
 import { describe, expect, it } from "vitest"
 import * as h from "../src/schema.js"
 import {
-  arr, canonical, format, HausSyntaxError, fromJson, fromJsonLines, fromJsonValue, fromLosslessJson, fromLosslessJsonLines, fromLosslessJsonValue, hash, jsonDepth, MAX_SUPPORTED_DEPTH,
-  parse, parseAll, parseDocument, parseJson, parseJsonLines, parseStream, parseWithLocations, rec, StreamReader, stringify, stringifyJson, toLosslessJson,
-  toLosslessJsonLines, toLosslessJsonValue, variant, type Json, type Value,
+  arr, canonical, format, fromHausJson, fromHausJsonLines, fromHausJsonValue, hash, hausJsonDepth, HausSyntaxError, importJson, importJsonLines, importJsonValue, jsonDepth,
+  JsonNumber, jsonObject, MAX_SUPPORTED_DEPTH, parse, parseAll, parseDocument, parseJson, parseJsonLines, parseStream, parseWithLocations, rec, StreamReader, stringify,
+  stringifyJson, toHausJson, toHausJsonLines, toHausJsonValue, variant, type Json, type Value,
 } from "../src/index.js"
 
 const MAX = MAX_SUPPORTED_DEPTH
@@ -17,7 +17,7 @@ const limits = { maxDepth: MAX }
 /** `n` levels of arrays, as text and as a value built in code. */
 const nested = (n: number) => "[".repeat(n) + "]".repeat(n)
 const nestedValue = (n: number): Value => Array.from({ length: n - 1 }).reduce<Value>((inner) => arr([inner]), arr([]))
-/** `n` levels of `T { a: … }`: one level each in haus, four in the lossless JSON. */
+/** `n` levels of `T { a: … }`: one level each in haus, four in self-describing JSON. */
 const tagged = (n: number) => "T { a: ".repeat(n) + "1" + " }".repeat(n)
 
 type Nest = readonly Nest[]
@@ -84,7 +84,7 @@ describe("MAX_SUPPORTED_DEPTH", () => {
     expect(() => h.decode(Nest, nestedValue(MAX + 1), limits)).toThrow(`deeper than ${MAX} levels`)
   })
 
-  it("maps to and from JSON at it: plain, lossless (2049 JSON levels) and without a schema", async () => {
+  it("maps to and from JSON at it: schema-based, self-describing (2050 JSON levels) and import", async () => {
     const json = h.toJson(Tree, tree(MAX / 2), limits)
     expect(same(h.fromJson(Tree, json, limits), tree(MAX / 2))).toBe(true)
     expect(same(h.fromJsonValue(Tree, h.toJsonValue(Tree, tree(MAX / 2), limits), limits), tree(MAX / 2))).toBe(true)
@@ -92,20 +92,25 @@ describe("MAX_SUPPORTED_DEPTH", () => {
     expect(await collect(h.encodeJsonLines(Tree, [tree(MAX / 2)], limits))).toEqual([`${json}\n`])
 
     const value = parse(tagged(MAX), limits)
-    const lossless = toLosslessJson(value, limits)
-    expect(lossless.startsWith('{"tag":"T","args":[{"rec":{"a":'.repeat(2))).toBe(true)
-    expect(canonical(fromLosslessJson(lossless, limits))).toBe(canonical(value))
-    expect(canonical(fromLosslessJsonValue(toLosslessJsonValue(value, limits), limits))).toBe(canonical(value))
-    const lines = await collect(toLosslessJsonLines([value], limits))
-    expect((await collect(fromLosslessJsonLines(lines, { limits }))).map(canonical)).toEqual([canonical(value)])
+    const self = toHausJson(value, limits)
+    expect(self.startsWith('{"_haus":1,"_value":' + '{"_tag":"T","_args":[{"_rec":{"a":'.repeat(2))).toBe(true)
+    expect(canonical(fromHausJson(self, limits))).toBe(canonical(value))
+    expect(canonical(fromHausJsonValue(toHausJsonValue(value, limits), limits))).toBe(canonical(value))
+    const lines = await collect(toHausJsonLines([value], limits))
+    expect((await collect(fromHausJsonLines(lines, { limits }))).map(canonical)).toEqual([canonical(value)])
+    // An array at every level: one JSON level each, and the envelope.
+    const arrays = `{"_haus":1,"_value":${nested(MAX)}}`
+    expect(canonical(fromHausJson(arrays, limits))).toBe(nested(MAX))
+    expect(() => fromHausJson(`{"_haus":1,"_value":${nested(hausJsonDepth(MAX))}}`, limits)).toThrow(`nesting deeper than ${hausJsonDepth(MAX)} levels`)
 
-    expect(canonical(fromJson(nested(MAX), limits))).toBe(nested(MAX))
-    expect(canonical(fromJsonValue(parseJson(nested(MAX), limits), limits))).toBe(nested(MAX))
-    expect((await collect(fromJsonLines([`${nested(MAX)}\n`], { limits }))).map(canonical)).toEqual([nested(MAX)])
-    // Raw JSON counts its own levels: up to jsonDepth(MAX).
-    const deepest = nested(jsonDepth(MAX))
-    expect(stringifyJson(parseJson(deepest, { maxDepth: jsonDepth(MAX) }))).toBe(deepest)
-    expect(await collect(parseJsonLines([deepest], { limits: { maxDepth: jsonDepth(MAX) } }))).toHaveLength(1)
+    expect(canonical(importJson(nested(MAX), limits))).toBe(nested(MAX))
+    expect(canonical(importJsonValue(parseJson(nested(MAX), limits), limits))).toBe(nested(MAX))
+    expect((await collect(importJsonLines([`${nested(MAX)}\n`], { limits }))).map(canonical)).toEqual([nested(MAX)])
+    // Raw JSON counts its own levels: up to hausJsonDepth(MAX), as self-describing JSON needs.
+    const deepest = nested(hausJsonDepth(MAX))
+    expect(stringifyJson(parseJson(deepest, { maxDepth: hausJsonDepth(MAX) }))).toBe(deepest)
+    expect(await collect(parseJsonLines([deepest], { limits: { maxDepth: hausJsonDepth(MAX) } }))).toHaveLength(1)
+    expect(jsonDepth(MAX)).toBe(2049)
   })
 
   it("formatting, the canonical form and JSON writing don't recurse: values built in code of any depth", () => {
@@ -152,15 +157,15 @@ describe("a maxDepth above MAX_SUPPORTED_DEPTH", () => {
       () => h.fromJsonValue(Nest, [], over),
       () => collect(h.decodeJsonLines(Nest, ["[]\n"], over)),
       () => collect(h.encodeJsonLines(Nest, [[]], over)),
-      () => fromJson("[]", over),
-      () => fromJsonValue([], over),
-      () => collect(fromJsonLines(["[]\n"], { limits: over })),
-      () => toLosslessJson(arr([]), over),
-      () => toLosslessJsonValue(arr([]), over),
-      () => fromLosslessJson("[]", over),
-      () => fromLosslessJsonValue([], over),
-      () => collect(toLosslessJsonLines([arr([])], over)),
-      () => collect(fromLosslessJsonLines(["[]\n"], { limits: over })),
+      () => importJson("[]", over),
+      () => importJsonValue([], over),
+      () => collect(importJsonLines(["[]\n"], { limits: over })),
+      () => toHausJson(arr([]), over),
+      () => toHausJsonValue(arr([]), over),
+      () => fromHausJson(`{"_haus":1,"_value":[]}`, over),
+      () => fromHausJsonValue(jsonObject([["_haus", new JsonNumber("1")], ["_value", []]]), over),
+      () => collect(toHausJsonLines([arr([])], over)),
+      () => collect(fromHausJsonLines([`{"_haus":1,"_value":[]}\n`], { limits: over })),
     ]
     for (const call of calls) {
       const e = await errorOf(call)
@@ -169,9 +174,9 @@ describe("a maxDepth above MAX_SUPPORTED_DEPTH", () => {
     }
   })
 
-  it("raw JSON is limited to jsonDepth(MAX_SUPPORTED_DEPTH) JSON levels", async () => {
-    const jsonOver = { maxDepth: jsonDepth(MAX) + 1 }
-    const jsonMessage = "maxDepth 2050 is above 2049, the deepest JSON nesting this binding supports (spec §7)"
+  it("raw JSON is limited to hausJsonDepth(MAX_SUPPORTED_DEPTH) JSON levels", async () => {
+    const jsonOver = { maxDepth: hausJsonDepth(MAX) + 1 }
+    const jsonMessage = "maxDepth 2051 is above 2050, the deepest JSON nesting this binding supports (spec §7)"
     for (const call of [() => parseJson("[]", jsonOver), () => collect(parseJsonLines(["[]"], { limits: jsonOver }))]) {
       const e = await errorOf(call)
       expect(e).toBeInstanceOf(RangeError)
@@ -219,11 +224,11 @@ describe("the string limit counts record keys and tags too (spec §7)", () => {
     expect([tag.reason, tag.line, tag.column]).toEqual(["tag longer than 4 characters", 3, 3])
   })
 
-  it("in values built in code, encoded raw (Any) or as lossless JSON", () => {
+  it("in values built in code, encoded raw (Any) or as self-describing JSON", () => {
     const keyed = (k: string) => rec(new Map([[k, arr([])]]))
     expect(h.encode(h.Any, variant("Abcd", [keyed("abcd")]), four).kind).toBe("variant")
-    expect(toLosslessJson(variant("Abcd", [keyed("abcd")]), four)).toBe('{"tag":"Abcd","args":[{"rec":{"abcd":[]}}]}')
-    for (const write of [(v: Value) => h.encode(h.Any, v, four), (v: Value) => toLosslessJsonValue(v, four)]) {
+    expect(toHausJson(variant("Abcd", [keyed("abcd")]), four)).toBe('{"_haus":1,"_value":{"_tag":"Abcd","_args":[{"_rec":{"abcd":[]}}]}}')
+    for (const write of [(v: Value) => h.encode(h.Any, v, four), (v: Value) => toHausJsonValue(v, four)]) {
       expect(() => write(keyed("abcde"))).toThrow("key longer than 4 characters")
       expect(() => write(arr([variant("Abcde")]))).toThrow("tag longer than 4 characters")
       expect(() => write(variant("Abcde", [keyed("a")]))).toThrow("tag longer than 4 characters")
@@ -231,17 +236,18 @@ describe("the string limit counts record keys and tags too (spec §7)", () => {
   })
 
   it("in JSON: member names and tags read from JSON values are keys and tags; in JSON text, they are strings first", () => {
-    expect(() => fromJsonValue({ abcde: [] } as Json, four)).toThrow("key longer than 4 characters")
-    expect(canonical(fromJsonValue({ abcd: [] } as Json, four))).toBe("{abcd:[]}")
-    expect(() => fromLosslessJsonValue({ rec: { abcde: [] } } as Json, four)).toThrow("key longer than 4 characters")
-    expect(() => fromLosslessJsonValue({ tag: "Abcde" } as Json, four)).toThrow("tag longer than 4 characters")
-    expect(canonical(fromLosslessJsonValue({ tag: "Abcd", args: [{ rec: { abcd: [] } }] } as Json, four))).toBe("Abcd{abcd:[]}")
+    expect(() => importJsonValue({ abcde: [] } as Json, four)).toThrow("key longer than 4 characters")
+    expect(canonical(importJsonValue({ abcd: [] } as Json, four))).toBe("{abcd:[]}")
+    const envelope = (value: Json): Json => jsonObject([["_haus", new JsonNumber("1")], ["_value", value]])
+    expect(() => fromHausJsonValue(envelope({ _rec: { abcde: [] } }), four)).toThrow("key longer than 4 characters")
+    expect(() => fromHausJsonValue(envelope({ _tag: "Abcde" }), four)).toThrow("tag longer than 4 characters")
+    expect(canonical(fromHausJsonValue(envelope({ _tag: "Abcd", _args: [{ _rec: { abcd: [] } }] }), four))).toBe("Abcd{abcd:[]}")
     const Open = h.OpenVariant({ Known: h.Unit })
     expect(() => h.fromJsonValue(Open, { _tag: "Abcde" } as Json, four)).toThrow("tag longer than 4 characters")
     expect(() => h.fromJsonValue(Open, { _tag: "Abcd", abcde: 1 } as unknown as Json, four)).toThrow("key longer than 4 characters")
     expect(h.fromJsonValue(Open, { _tag: "Abcd" } as Json, four)).toMatchObject({ tag: "Abcd" })
     // JSON text: the reader limits every JSON string, member names and tags included.
-    expect(() => fromJson('{"abcde": []}', four)).toThrow("JSON: string longer than 4 characters")
-    expect(() => fromLosslessJson('{"tag": "Abcde"}', four)).toThrow("JSON: string longer than 4 characters")
+    expect(() => importJson('{"abcde": []}', four)).toThrow("JSON: string longer than 4 characters")
+    expect(() => fromHausJson('{"_haus": 1, "_value": {"_tag": "Abcde"}}', four)).toThrow("JSON: string longer than 4 characters")
   })
 })

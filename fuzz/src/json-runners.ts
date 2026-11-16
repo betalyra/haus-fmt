@@ -5,9 +5,9 @@
  * |---|---|---|---|
  * | `write` | `SUITE TYPE HEX` (haus text) | decode with the type, write plain JSON (§16.3) | `ok <JSON>` |
  * | `read` | `SUITE TYPE HEX` (JSON text) | read plain JSON with the type, encode | `ok <canonical form>` |
- * | `lossless-write` | `HEX` (haus text) | the lossless JSON of the value (§16.2) | `ok <JSON>` |
- * | `lossless-read` | `HEX` (JSON text) | read lossless JSON | `ok <canonical form>` |
- * | `schemaless` | `HEX` (JSON text) | read JSON without a schema (§16.1) | `ok <canonical form>` |
+ * | `haus-json-write` | `HEX` (haus text) | the self-describing JSON of the value, in its envelope (§16.2) | `ok <JSON>` |
+ * | `haus-json-read` | `HEX` (JSON text) | read self-describing JSON | `ok <canonical form>` |
+ * | `import` | `HEX` (JSON text) | import JSON, without a schema (§16.1) | `ok <canonical form>` |
  *
  * Otherwise `err <place> <code> <reason>`: the place in the value
  * (`$.items[2].price`, `$` for an error in the text) and the error code (spec
@@ -21,15 +21,15 @@ import { createRequire } from "node:module"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
 import {
-  canonical, compileSchemaFile, fromJson, fromLosslessJson, HausDecodeError, HausEncodeError, HausSyntaxError, parseAll, toLosslessJson,
+  canonical, compileSchemaFile, fromHausJson, HausDecodeError, HausEncodeError, HausSyntaxError, importJson, parseAll, toHausJson,
 } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 import { parseOutcome, type Outcome } from "./schema-runners.ts"
 
-export type Mode = "write" | "read" | "lossless-write" | "lossless-read" | "schemaless"
-export const MODES: readonly Mode[] = ["write", "read", "lossless-write", "lossless-read", "schemaless"]
+export type Mode = "write" | "read" | "haus-json-write" | "haus-json-read" | "import"
+export const MODES: readonly Mode[] = ["write", "read", "haus-json-write", "haus-json-read", "import"]
 /** Whether a mode writes JSON (compared as data) rather than reading it (compared by canonical form). */
-export const writes = (m: Mode) => m === "write" || m === "lossless-write"
+export const writes = (m: Mode) => m === "write" || m === "haus-json-write"
 export const typed = (m: Mode) => m === "write" || m === "read"
 
 export interface JsonCase {
@@ -80,9 +80,9 @@ function external(name: string, command: (mode: Mode, file: string) => readonly 
 const LEAN_FLAGS: Record<Mode, string> = {
   write: "--json-batch",
   read: "--json-read-batch",
-  "lossless-write": "--lossless-batch",
-  "lossless-read": "--lossless-read-batch",
-  schemaless: "--schemaless-read-batch",
+  "haus-json-write": "--haus-json-batch",
+  "haus-json-read": "--haus-json-read-batch",
+  import: "--import-batch",
 }
 
 export const lean = (types: string) =>
@@ -186,18 +186,18 @@ export function typescriptRunner(texts: ReadonlyMap<string, string>): JsonRunner
           return { kind: "crash", reason: `CRASH: encoding what was read failed: ${(e as Error).message}`.slice(0, 300) }
         }
       }
-      case "lossless-write": {
+      case "haus-json-write": {
         const v = single(t)
         if ("error" in v) return { kind: "err", reason: v.error }
-        return { kind: "ok", text: toLosslessJson(v.value) }
+        return { kind: "ok", text: toHausJson(v.value) }
       }
-      case "lossless-read": return { kind: "ok", text: canonical(fromLosslessJson(t)) }
-      case "schemaless": return { kind: "ok", text: canonical(fromJson(t)) }
+      case "haus-json-read": return { kind: "ok", text: canonical(fromHausJson(t)) }
+      case "import": return { kind: "ok", text: canonical(importJson(t)) }
     }
   })
 }
 
-/** @haus-fmt/effect: `decodeValue` + `Haus.toJson`, `Haus.fromJson` + `encodeValue`; lossless as `Haus.Any`; `Haus.valueFromJson`. */
+/** @haus-fmt/effect: `decodeValue` + `Haus.toJson`, `Haus.fromJson` + `encodeValue`; `Haus.toHausJson`, `Haus.fromHausJson`; `Haus.importJson`. */
 export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<JsonRunner> {
   const dir = join(root, "typescript/packages/effect")
   const Haus = await import(pathToFileURL(join(dir, "dist/index.js")).href)
@@ -240,17 +240,17 @@ export async function effectRunner(texts: ReadonlyMap<string, string>): Promise<
         if ("outcome" in enc) return { kind: "crash", reason: `CRASH: encoding what was read failed: ${"reason" in enc.outcome ? enc.outcome.reason : ""}` }
         return { kind: "ok", text: canonical(enc.value) }
       }
-      case "lossless-write": {
+      case "haus-json-write": {
         const v = single(t)
         if ("error" in v) return { kind: "err", reason: v.error }
-        return chain(() => Haus.toJson(Haus.Any)(v.value))
+        return chain(() => Haus.toHausJson(v.value))
       }
-      case "lossless-read": {
-        const r = runE(Haus.fromJson(Haus.Any)(t))
+      case "haus-json-read": {
+        const r = runE(Haus.fromHausJson(t))
         return "outcome" in r ? r.outcome : { kind: "ok", text: canonical(r.value) }
       }
-      case "schemaless": {
-        const r = runE(Haus.valueFromJson(t))
+      case "import": {
+        const r = runE(Haus.importJson(t))
         return "outcome" in r ? r.outcome : { kind: "ok", text: canonical(r.value) }
       }
     }

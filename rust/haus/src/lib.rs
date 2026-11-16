@@ -23,10 +23,10 @@
 //! assert_eq!(haus::to_string(&wrong).unwrap_err().to_string(), "not a number literal");
 //! ```
 //!
-//! [`json`] maps haus to JSON and back (spec §16): [`from_json`] reads any
-//! JSON, [`to_lossless_json`] / [`from_lossless_json`] carry every value
-//! unchanged, and generated types implement [`ToJson`] / [`FromJson`] for
-//! the plain JSON of their type.
+//! [`json`] connects haus and JSON (spec §16): generated types implement
+//! [`ToJson`] / [`FromJson`] for the schema-based JSON of their type,
+//! [`to_haus_json`] / [`from_haus_json`] carry every value unchanged as
+//! self-describing JSON, and [`import_json`] reads any JSON.
 //!
 //! [`format()`] writes a file in the standard layout (spec §11), keeping
 //! comments and blank lines: the same text as the TypeScript formatter.
@@ -125,29 +125,41 @@ pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
         .collect()
 }
 
-/// Read JSON without a schema (spec §16.1): an object as a record, an array
-/// as an array, a string as a string, a number as a number (its literal
-/// normalized: `1E+05` is `1e5`), `true` / `false` as `True` / `False`, and
-/// `null` as `None`.
+/// Read any JSON as a haus value, without a schema (JSON import, spec
+/// §16.1): an object as a record, an array as an array, a string as a
+/// string, a number as a number (its literal normalized: `1E+05` is `1e5`),
+/// `true` / `false` as `True` / `False`, and `null` as `None`. Nothing in the
+/// data is special: `_tag` and an envelope are record keys.
 ///
 /// ```
-/// let v = haus::from_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
+/// let v = haus::import_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
 /// assert_eq!(haus::canonical(&v), "{note:None,paid:True,total:19.90}");
 /// ```
-pub fn from_json(text: &str) -> Result<Value, Error> {
-    json::value_from_str_with(text, &Limits::default())
+pub fn import_json(text: &str) -> Result<Value, Error> {
+    json::import_json_with(text, &Limits::default())
 }
 
-/// Write a value in the lossless JSON form (spec §16.2): `19.90` is
-/// `{"num":"19.90"}`, `Some(1)` is `{"tag":"Some","args":[{"num":"1"}]}`.
-/// Fails, saying where, for a [`Value`] built in code that isn't a valid
-/// haus value within the limits.
-pub fn to_lossless_json(value: &Value) -> Result<String, EncodeError> {
-    json::to_string(value)
+/// Write a value as self-describing JSON (spec §16.2), in its envelope:
+/// `19.90` is `{"_haus":1,"_value":{"_num":"19.90"}}`, `Some(1)` is
+/// `{"_haus":1,"_value":{"_tag":"Some","_args":[{"_num":"1"}]}}`. Fails,
+/// saying where, for a [`Value`] built in code that isn't a valid haus value
+/// within the limits.
+pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
+    json::to_haus_json_with(value, &Limits::default())
 }
 
-/// Read the lossless JSON form (spec §16.2), and nothing else: a bare number,
-/// `true`, `false`, `null` and objects with other members are errors.
-pub fn from_lossless_json(text: &str) -> Result<Value, Error> {
-    json::from_str(text)
+/// Read self-describing JSON (spec §16.2), and nothing else: a text without
+/// the envelope (`haus-json-form`), a `_haus` other than 1
+/// (`haus-json-version`), a bare number, `true`, `false`, `null`, objects
+/// with other members, and raw DEL, C1 or bidi controls in strings are
+/// errors. To read ordinary JSON, use a schema ([`json::from_str`]) or
+/// [`import_json`].
+///
+/// ```
+/// let v = haus::from_haus_json(r#"{"_haus": 1, "_value": {"_num": "19.90"}}"#).unwrap();
+/// assert_eq!(haus::canonical(&v), "19.90");
+/// assert!(haus::from_haus_json(r#"{"_num": "19.90"}"#).is_err());
+/// ```
+pub fn from_haus_json(text: &str) -> Result<Value, Error> {
+    json::from_haus_json_with(text, &Limits::default())
 }

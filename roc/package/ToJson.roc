@@ -1,16 +1,16 @@
-## Writing your own Roc types as plain JSON (spec §16.3): the building blocks
+## Writing your own Roc types as schema-based JSON (spec §16.3): the building blocks
 ## that generated modules (`haus-gen roc --json`) use, like `Encode` for haus.
 ##
 ## A writer is a function `a -> Try(JsonValue, Encode.Error)`. It fails only
-## for a value that has no plain JSON: a `Value` built in code that isn't a
-## valid haus value (the raw value of an `Any` or an unknown variant), or a
-## record payload with a field named `_tag`.
+## for a value that has no schema-based JSON: a `Value` built in code that
+## isn't a valid haus value (the raw value of an `Any` or an unknown
+## variant), or a record payload with a field named `_tag` or `_args`.
 ##
 ##     ToJson.to_str({ id: 1 }, |u| ToJson.object([("id", Present(ToJson.i32(u.id)))]))
 ##     # Ok("{\"id\":1}")
 ##
 ## Its errors have the codes of spec §17 (`ErrorCode`), like `Encode`'s, and
-## `no-json-form` for a record payload with a field named `_tag`.
+## `no-json-form` for a record payload with a field named `_tag` or `_args`.
 import ErrorCode
 import Int
 import JsonValue
@@ -21,7 +21,7 @@ import Encode
 ToJson := [].{
 	# ── documents ───────────────────────────────────────────
 
-	## A value as plain JSON text, on one line.
+	## A value as schema-based JSON text, on one line.
 	to_str : a, (a -> Try(JsonValue, Encode.Error)) -> Try(Str, Encode.Error)
 	to_str = |x, writer| to_str_with(x, writer, Value.default_limits)
 
@@ -119,9 +119,10 @@ ToJson := [].{
 	time : Str -> Try(JsonValue, Encode.Error)
 	time = |s| Ok(String(s))
 
-	## `Any`: the lossless form (spec §16.2), checked as `Encode.to_str` checks it.
+	## `Any`: its self-describing value (spec §16.2), without the envelope,
+	## checked as `Encode.to_str` checks it.
 	any : Value -> Try(JsonValue, Encode.Error)
-	any = |v| JsonValue.lossless(v)
+	any = |v| JsonValue.haus_json_value(v)
 
 	## `< >`: any tag, as an unknown value.
 	any_tag : [Bare(Str), Other(Str, List(Value))] -> Try(JsonValue, Encode.Error)
@@ -217,8 +218,8 @@ ToJson := [].{
 	tag_name : Str -> Try(JsonValue, Encode.Error)
 	tag_name = |tag| Ok(String(tag))
 
-	## An unknown value: `{"_tag": "Hexagon"}`, with `"args"` in the lossless
-	## form if it has any (spec §16.3).
+	## An unknown value: `{"_tag": "Hexagon"}`, with `"_args"`, the arguments'
+	## self-describing values (without the envelope), if it has any (spec §16.3).
 	unknown : Str, List(Value) -> Try(JsonValue, Encode.Error)
 	unknown = |tag, args| {
 		if !JsonValue.is_tag_name(tag) {
@@ -230,15 +231,16 @@ ToJson := [].{
 		var $out = []
 		var $i = 0.U64
 		for a in args {
-			$out = $out.append(within(JsonValue.lossless(a), ".args[${$i.to_str()}]")?)
+			$out = $out.append(within(JsonValue.haus_json_value(a), "._args[${$i.to_str()}]")?)
 			$i = $i + 1
 		}
-		Ok(Object([("_tag", String(tag)), ("args", Array($out))]))
+		Ok(Object([("_tag", String(tag)), ("_args", Array($out))]))
 	}
 
-	## A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
-	no_plain_form : Str -> Try(JsonValue, Encode.Error)
-	no_plain_form = |tag| Err({ code: ErrorCode.no_json_form, reason: "${tag} has a field named _tag, so it has no plain JSON form", path: "" })
+	## A case whose record payload has a field named `_tag` or `_args`
+	## (`name`): it has no schema-based form (spec §16.3).
+	no_json_form : Str, Str -> Try(JsonValue, Encode.Error)
+	no_json_form = |tag, name| Err({ code: ErrorCode.no_json_form, reason: "${tag} has a field named ${name}, so it has no schema-based JSON form", path: "" })
 }
 
 within : Try(a, Encode.Error), Str -> Try(a, Encode.Error)
@@ -279,8 +281,11 @@ expect ToJson.to_str(Some(None), |m| ToJson.maybe(m, True, |x| ToJson.maybe(x, F
 expect ToJson.to_str(Some(5), |m| ToJson.maybe(m, False, ToJson.i32)) == Ok("5")
 expect ToJson.to_str(Ok(1), |r| ToJson.result(r, ToJson.i32, ToJson.str)) == Ok("{\"_tag\":\"Ok\",\"value\":1}")
 expect ToJson.to_str({ id: 1, nick: Missing }, |u| ToJson.object([("id", Present(ToJson.i32(u.id))), ("nick", ToJson.optional(u.nick, ToJson.str))])) == Ok("{\"id\":1}")
-expect ToJson.unknown("Hexagon", [Num("1")]).map_ok(JsonValue.to_str) == Ok(Ok("{\"_tag\":\"Hexagon\",\"args\":[{\"num\":\"1\"}]}"))
-expect ToJson.unknown("Hexagon", [Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: ".args[0]" })
+expect ToJson.unknown("Hexagon", [Num("1")]).map_ok(JsonValue.to_str) == Ok(Ok("{\"_tag\":\"Hexagon\",\"_args\":[{\"_num\":\"1\"}]}"))
+expect ToJson.unknown("Hexagon", [Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "._args[0]" })
+expect ToJson.to_str(Tag("A", []), ToJson.any) == Ok("{\"_tag\":\"A\"}")
+# DEL, C1 and bidi controls are escaped.
+expect ToJson.to_str("a\u(7F)\u(85)\u(202E)", ToJson.str) == Ok("\"a\\u007f\\u0085\\u202e\"")
 expect ToJson.lines([1, 2], ToJson.u8) == Ok("1\n2\n")
 
 # Writing for a reader with other limits.
@@ -292,6 +297,6 @@ expect ToJson.lines_with(["a", "abcd"], ToJson.str, small) == Err({ code: "strin
 expect ToJson.lines_with(["a", "b"], ToJson.str, small) == Ok("\"a\"\n\"b\"\n")
 expect ToJson.to_str_with("a", ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
 expect ToJson.lines_with([], ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
-expect ToJson.unknown("hexagon", []).map_err(|e| e.code) == Err("invalid-tag") and ToJson.no_plain_form("Odd").map_err(|e| e.code) == Err("no-json-form")
+expect ToJson.unknown("hexagon", []).map_err(|e| e.code) == Err("invalid-tag") and ToJson.no_json_form("Odd", "_tag").map_err(|e| e.code) == Err("no-json-form")
 expect ToJson.to_str(Secret.new("x"), |s| ToJson.secret(s, "Secret Decimal", ToJson.decimal)).map_err(|e| (e.code, e.reason)) == Err(("invalid-secret", "not a valid Secret Decimal (the value is hidden)"))
 expect ToJson.to_str([("pt-BR", "1E5x")], |m| ToJson.map(m, ToJson.decimal)).map_err(|e| (e.code, ErrorCode.place(e.path))) == Err(("cannot-encode", "$[\"pt-BR\"]"))

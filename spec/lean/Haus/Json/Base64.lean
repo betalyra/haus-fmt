@@ -3,8 +3,8 @@ import Haus.Json.Data
 /-!
 # Base64 and hex for byte strings (spec §16)
 
-Plain JSON writes `Bytes` as base64 with padding (RFC 4648 §4), lossless
-JSON as two lowercase hex digits per byte (§16.2). Both readers are strict:
+Schema-based JSON writes `Bytes` as base64 with padding (RFC 4648 §4),
+self-describing JSON as two lowercase hex digits per byte (§16.2). Both readers are strict:
 they accept exactly what the writers write.
 
 - Base64: the standard alphabet, `=` padding, length a multiple of 4, and

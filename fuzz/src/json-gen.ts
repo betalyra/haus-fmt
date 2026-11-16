@@ -2,13 +2,14 @@
  * Inputs for the JSON fuzzer (json.ts, spec §16): JSON text as data (`J`),
  * written with varied formatting and escapes, and generated for each mapping:
  *
- * - plain JSON (§16.3) for a resolved type of the schema suite, mostly what
- *   the type reads, plus near misses: the wrong kind, extra and missing
+ * - schema-based JSON (§16.3) for a resolved type of the schema suite, mostly
+ *   what the type reads, plus near misses: the wrong kind, extra and missing
  *   members, `_tag` games, `null` against the tagged `Maybe`, base64 and
- *   integer strings at their edges, unknown tags with members or `args`;
- * - lossless JSON (§16.2) of any haus value, and mutations of it;
- * - any JSON (§16.1): numbers, strings, duplicate names, lone surrogates,
- *   nesting at the limits.
+ *   integer strings at their edges, unknown tags with members, `_args` or `args`;
+ * - self-describing JSON (§16.2) of any haus value, its envelope, and
+ *   mutations of both;
+ * - any JSON for the import (§16.1): numbers, strings, duplicate names, lone
+ *   surrogates, nesting at the limits.
  *
  * Also a lenient JSON reader (duplicate names and lone surrogates kept) to
  * compare written JSON as data and to shrink inputs.
@@ -62,6 +63,8 @@ export function writeString(s: string, r?: Rng): string {
     else if (c === 0x22) out += '\\"'
     else if (c === 0x5c) out += "\\\\"
     else if (c < 0x20) out += SHORT[c] !== undefined && !r?.chance(0.3) ? SHORT[c] : u4(c, r)
+    // DEL, C1 and bidi controls: escaped as haus writers do (§16), raw now and then.
+    else if (c === 0x7f || (c >= 0x80 && c <= 0x9f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) out += r?.chance(0.3) ? s[i] : u4(c, r)
     else if (c === 0x2f && r?.chance(0.2)) out += "\\/"
     else if (r?.chance(0.03)) out += u4(c, r)
     else out += s[i]
@@ -347,18 +350,35 @@ function decimalText(r: Rng): string {
 
 const NOT_DECIMAL_STRINGS = ["0xFF", "1_000", ".5", "5.", "+1", "01", "NaN", "Infinity", "-Infinity", " 1", "1 ", "1e", "", "-", "1.5e3.2", "1,5", "19,90", "0b1", "１", "1e+-1"]
 
-// ── lossless JSON (§16.2) ────────────────────────────────────
+// ── self-describing JSON (§16.2) ─────────────────────────────
 
-/** The lossless form of a value: the mapping itself, for generating inputs. */
-export function losslessJ(v: Value): J {
+/** The self-describing form of a value, without the envelope (as inside `Any`): the form itself, for generating inputs. */
+export function hausValueJ(v: Value): J {
   switch (v.kind) {
-    case "number": return obj(["num", v.text])
+    case "number": return obj(["_num", v.text])
     case "string": return v.value
-    case "bytes": return obj(["bytes", [...v.bytes].map((b) => b.toString(16).padStart(2, "0")).join("")])
-    case "array": return v.items.map(losslessJ)
-    case "record": return obj(["rec", new Obj([...v.fields].map(([k, x]) => [k, losslessJ(x)] as const))])
-    case "variant": return v.args.length ? obj(["tag", v.tag], ["args", v.args.map(losslessJ)]) : obj(["tag", v.tag])
+    case "bytes": return obj(["_bytes", [...v.bytes].map((b) => b.toString(16).padStart(2, "0")).join("")])
+    case "array": return v.items.map(hausValueJ)
+    case "record": return obj(["_rec", new Obj([...v.fields].map(([k, x]) => [k, hausValueJ(x)] as const))])
+    case "variant": return v.args.length ? obj(["_tag", v.tag], ["_args", v.args.map(hausValueJ)]) : obj(["_tag", v.tag])
   }
+}
+
+/** The envelope around a self-describing value. */
+export const envelope = (j: J): J => obj(["_haus", num("1")], ["_value", j])
+
+/** A value's self-describing JSON text, as data: the envelope around its form. */
+export const hausJsonJ = (v: Value): J => envelope(hausValueJ(v))
+
+/** Envelopes that are near misses: none, other members, another version, a member missing. */
+export function badEnvelopeJ(r: Rng, inner: J): J {
+  return r.pick<() => J>([
+    () => inner,
+    () => obj(["_haus", num("1")], ["_value", inner], [r.pick(["x", "_tag", "_haus", "_value", "_Haus"]), num("1")]),
+    () => obj(["_haus", r.pick<J>([num("2"), num("0"), num("1.0"), num("1e0"), num("-1"), "1", null, true, [num("1")]])], ["_value", inner]),
+    () => obj(["_haus", num("1")]), () => obj(["_value", inner]), () => obj(["haus", num("1")], ["value", inner]),
+    () => obj(["_value", inner], ["_haus", num("1")]),
+  ])()
 }
 
 /** A haus value from haus text, if the text is exactly one value. */
@@ -371,31 +391,32 @@ export function single(text: string): Value | undefined {
   }
 }
 
-/** A random haus value (generate.ts), as lossless JSON. */
-export function randomLossless(r: Rng, depth = 0): J {
+/** A random haus value (generate.ts), as a self-describing value without the envelope. */
+export function randomHausValueJ(r: Rng, depth = 0): J {
   for (let i = 0; i < 5; i++) {
     const v = single(hausValue(r, depth))
-    if (v) return losslessJ(v)
+    if (v) return hausValueJ(v)
   }
-  return obj(["num", "1"])
+  return obj(["_num", "1"])
 }
 
-/** Lossless forms that are near misses, or not lossless forms at all. */
-export function badLosslessJ(r: Rng): J {
-  const ok = () => randomLossless(r, 3)
+/** Self-describing values that are near misses, or no such value at all (the old keys without `_` among them). */
+export function badHausValueJ(r: Rng): J {
+  const ok = () => randomHausValueJ(r, 3)
   return r.pick<() => J>([
     () => num(r.pick(["1", "0", "-1.5"])), () => true, () => false, () => null, () => obj(),
-    () => obj(["num", r.pick(["01", "1E5", "1e+5", "+1", "1e05", "0x10", "1_0", "-0e0", "0e-0", "1e-0", "1.", ".5", "", " 1", "NaN", "1e6145", "1e-6145",
+    () => obj(["_num", r.pick(["01", "1E5", "1e+5", "+1", "1e05", "0x10", "1_0", "-0e0", "0e-0", "1e-0", "1.", ".5", "", " 1", "NaN", "1e6145", "1e-6145",
       "1" + "0".repeat(1000), "-1" + "0".repeat(1000), "1" + "0".repeat(1210), (2n ** 3988n).toString(), (2n ** 3989n).toString(), (2n ** 3988n - 1n).toString(),
       "1." + "0".repeat(999), "1e6144", "-0", "0.0", "1.50", "1e2"])]),
-    () => obj(["num", num("1")]), () => obj(["num", "1"], ["x", num("2")]), () => obj(["num", "1"], ["num", "2"]),
-    () => obj(["bytes", r.pick(["0B34", "0b3", "", "0b 34", "0x0b", "zz", "0b340", "ÿ"])]), () => obj(["bytes", ["0b"]]),
-    () => obj(["tag", r.pick(["circle", "", "T_1", "_T", "Tä", "T-1", "T x", "1T", "None", "Some", "Ok", "\u0000"])]),
-    () => obj(["tag", "T"], ["args", r.pick<J>([[], null, num("5"), obj(), "x"])]), () => obj(["tag", "T"], ["args", [ok()]], ["x", null]),
-    () => obj(["tag", num("1")]), () => obj(["args", [ok()]]), () => obj(["tag", "T"], ["tag", "U"]),
-    () => obj(["rec", obj(["a", num("1")])]), () => obj(["rec", [ok()]]), () => obj(["rec", obj()], ["tag", "X"]),
-    () => obj(["rec", obj(["a", ok()], ["a", ok()])]), () => obj(["rec", null]),
-    () => obj(["Num", "1"]), () => obj(["_tag", "None"]),
+    () => obj(["_num", num("1")]), () => obj(["_num", "1"], ["x", num("2")]), () => obj(["_num", "1"], ["_num", "2"]),
+    () => obj(["_bytes", r.pick(["0B34", "0b3", "", "0b 34", "0x0b", "zz", "0b340", "ÿ"])]), () => obj(["_bytes", ["0b"]]),
+    () => obj(["_tag", r.pick(["circle", "", "T_1", "_T", "Tä", "T-1", "T x", "1T", "None", "Some", "Ok", "\u0000"])]),
+    () => obj(["_tag", "T"], ["_args", r.pick<J>([[], null, num("5"), obj(), "x"])]), () => obj(["_tag", "T"], ["_args", [ok()]], ["x", null]),
+    () => obj(["_tag", num("1")]), () => obj(["_args", [ok()]]), () => obj(["_tag", "T"], ["_tag", "U"]),
+    () => obj(["_rec", obj(["a", num("1")])]), () => obj(["_rec", [ok()]]), () => obj(["_rec", obj()], ["_tag", "X"]),
+    () => obj(["_rec", obj(["a", ok()], ["a", ok()])]), () => obj(["_rec", null]),
+    () => obj(["Num", "1"]), () => obj(["_Num", "1"]), () => obj(["num", "1"]), () => obj(["tag", "None"]), () => obj(["rec", obj()]),
+    () => obj(["_tag", "T"], ["args", [ok()]]), () => envelope(ok()),
   ])()
 }
 
@@ -421,9 +442,9 @@ export function mutateJ(r: Rng, j: J, wrong: (r: Rng) => J): J {
         break
       case 1: if (ms.length) return set(new Obj(ms.filter((_, i) => i !== r.int(ms.length))))
         break
-      case 2: return set(new Obj([...ms, [r.pick(["x", "_tag", "value", "values", "args", "tag", "", "_Tag", "__proto__"]), wrong(r)]]))
+      case 2: return set(new Obj([...ms, [r.pick(["x", "_tag", "value", "values", "_args", "args", "tag", "_haus", "_value", "", "_Tag", "__proto__"]), wrong(r)]]))
       case 3: return set(new Obj(ms.map(([k, v]) => [k === "_tag" ? r.pick(["tag", "_TAG", "_tag "]) : k, v] as const)))
-      case 4: return set(new Obj(ms.map(([k, v]) => [k, k === "_tag" || k === "tag" ? r.pick<J>(["", "x", "None", "Some", "Unknown", num("1"), null, ["A"], "Bad Tag", "lower"]) : v] as const)))
+      case 4: return set(new Obj(ms.map(([k, v]) => [k, k === "_tag" || k === "tag" ? r.pick<J>(["", "x", "None", "Some", "Unknown", num("1"), null, ["A"], "Bad Tag", "lower"]) : k === "_haus" ? r.pick<J>([num("2"), "1", num("1.0"), null]) : v] as const)))
       case 5: return set(new Obj([...ms].reverse()))
       case 6: return set(new Obj(ms.map(([k, v]) => [k === "value" ? "values" : k === "values" ? "value" : k, v] as const)))
       default: return set(ms.length ? new Obj([...ms, ...ms.slice(0, 1)]) : obj(["_tag", "None"]))
@@ -491,7 +512,7 @@ function anyNumber(r: Rng): string {
   return sign + int + frac + exp
 }
 
-const KEYS = ["a", "b", "id", "x", "", "_tag", "tag", "num", "rec", "bytes", "args", "value", "values", "__proto__", "constructor", "café", "😀", "\uFF61", "\uE000",
+const KEYS = ["a", "b", "id", "x", "", "_tag", "tag", "num", "rec", "bytes", "args", "_num", "_rec", "_bytes", "_args", "_haus", "_value", "value", "values", "__proto__", "constructor", "café", "😀", "\uFF61", "\uE000",
   "\u0000", "a b", "None"]
 
 /** Any JSON value, `depth` levels down. */
@@ -536,7 +557,7 @@ export interface PlainOpts {
 
 /** A value of the wrong kind for most types. */
 const WRONG: readonly J[] = [num("0"), num("1.5"), "x", "", [], [num("1")], obj(), obj(["a", num("1")]), null, true, false, obj(["_tag", "None"]),
-  obj(["_tag", "Some"], ["value", num("1")]), obj(["num", "1"]), "AA==", "True", "None", obj(["tag", "None"])]
+  obj(["_tag", "Some"], ["value", num("1")]), obj(["num", "1"]), obj(["_num", "1"]), "AA==", "True", "None", obj(["tag", "None"])]
 export const wrongJ = (r: Rng): J => r.pick(WRONG)
 
 type Maybe = { readonly maybe: Type }
@@ -621,7 +642,7 @@ export class PlainGen {
       }
       if (miss) {
         return r.pick<() => J>([() => null, inner, () => obj(["_tag", "Some"]), () => obj(["_tag", "None"], ["value", num("1")]), () => obj(["_tag", "Some"], ["value", inner()], ["x", num("1")]),
-          () => obj(["_tag", "Some"], ["values", [inner()]]), () => obj(["_tag", r.pick(["none", "some", "Nothing", "Just"])]), () => obj(["_tag", "Some"], ["args", [randomLossless(r)]]),
+          () => obj(["_tag", "Some"], ["values", [inner()]]), () => obj(["_tag", r.pick(["none", "some", "Nothing", "Just"])]), () => obj(["_tag", "Some"], ["_args", [randomHausValueJ(r)]]),
           () => obj(["_tag", "None"], ["_tag", "None"]), () => "None"])()
       }
       if (deep <= 0 && r.chance(0.3)) return obj(["_tag", "None"])
@@ -658,7 +679,7 @@ export class PlainGen {
         if (r.chance(0.06)) return r.pick(["NaN", "Infinity", "-Infinity"])
         return num(floatText(r, name))
       }
-      case "Any": return miss ? (r.chance(0.7) ? badLosslessJ(r) : mutateJ(r, randomLossless(r, depth), badLosslessJ)) : randomLossless(r, depth)
+      case "Any": return miss ? (r.chance(0.7) ? r.pick<J>([badHausValueJ(r), envelope(randomHausValueJ(r, depth))]) : mutateJ(r, randomHausValueJ(r, depth), badHausValueJ)) : randomHausValueJ(r, depth)
       case "Int":
       case "Int64":
       case "UInt64": {
@@ -688,7 +709,7 @@ export class PlainGen {
       out.push([f.key, this.gen(r, f.type, c, depth + 1, f.key === spine ? deep - 1 : 0)])
     }
     const extras = (!rec.closed && r.chance(0.3)) || (miss && drop === undefined) ? 1 + r.int(2) : 0
-    const candidates = [...EXTRA_KEYS, "_tag", "value", "values", "args", "tag"].filter((k) => !declared.has(k))
+    const candidates = [...EXTRA_KEYS, "_tag", "value", "values", "_args", "args", "tag"].filter((k) => !declared.has(k))
     for (const k of shuffle(r, candidates).slice(0, extras)) out.push([k, anyJ(r, depth + 1)])
     if (miss && out.length && r.chance(0.2)) out.push([r.pick(out)[0], anyJ(r, depth + 1)]) // a duplicate name
     return new Obj([...lead, ...shuffle(r, out)])
@@ -704,14 +725,14 @@ export class PlainGen {
       switch (form) {
         case 0:
         case 1: return obj(["_tag", tag])
-        case 2: return obj(["_tag", tag], ["args", Array.from({ length: 1 + r.int(3) }, () => randomLossless(r, depth + 2))])
+        case 2: return obj(["_tag", tag], ["_args", Array.from({ length: 1 + r.int(3) }, () => randomHausValueJ(r, depth + 2))])
         case 3:
         case 4: {
-          // Other members: a record payload read without a schema (§16.1).
-          const ks = shuffle(r, ["sides", "value", "values", "args", "x", "", "r", "_tag2", "tag"]).slice(0, 1 + r.int(3))
-          return new Obj(shuffle(r, [["_tag", tag] as const, ...ks.map((k) => [k, k === "args" && r.chance(0.5) ? [randomLossless(r, depth + 2)] : anyJ(r, depth + 2)] as const)]))
+          // Other members: a record payload read by the import (§16.1); `args` is an ordinary member, `_args` beside others too.
+          const ks = shuffle(r, ["sides", "value", "values", "args", "_args", "x", "", "r", "_tag2", "tag"]).slice(0, 1 + r.int(3))
+          return new Obj(shuffle(r, [["_tag", tag] as const, ...ks.map((k) => [k, (k === "args" || k === "_args") && r.chance(0.5) ? [randomHausValueJ(r, depth + 2)] : anyJ(r, depth + 2)] as const)]))
         }
-        case 5: return obj(["_tag", tag], ["args", r.pick<J>([[], num("5"), null, obj(), "x", [num("1")], [null], [true]])])
+        case 5: return obj(["_tag", tag], [r.chance(0.8) ? "_args" : "args", r.pick<J>([[], num("5"), null, obj(), "x", [num("1")], [null], [true], [envelope("x")]])])
         case 6: return obj(["_tag", r.pick<J>([num("1"), null, true, [tag], obj()])])
         default: return r.pick<J>([tag, obj(), obj(["tag", tag]), obj(["_tag", tag], ["_tag", tag])])
       }
@@ -722,14 +743,14 @@ export class PlainGen {
     const tagged = (...ms: (readonly [string, J])[]) => new Obj(r.chance(0.7) ? [["_tag", kase.tag], ...ms] : [...ms, ["_tag", kase.tag]])
     if (p === "none") {
       if (bare) return miss ? r.pick<J>([obj(["_tag", kase.tag]), kase.tag.toLowerCase(), kase.tag + " ", num("0"), true, [kase.tag]]) : kase.tag
-      if (miss) return r.pick<J>([tagged(["value", num("1")]), tagged(["x", num("1")]), kase.tag, tagged(["values", []]), tagged(["args", [obj(["num", "1"])]]), obj(["_tag", kase.tag], ["_tag", kase.tag])])
+      if (miss) return r.pick<J>([tagged(["value", num("1")]), tagged(["x", num("1")]), kase.tag, tagged(["values", []]), tagged(["_args", [obj(["_num", "1"])]]), obj(["_tag", kase.tag], ["_tag", kase.tag])])
       return tagged()
     }
     if ("record" in p) {
       if (miss && r.chance(0.5)) {
         return r.pick<() => J>([() => obj(["_tag", kase.tag], ["value", this.fields(r, p.record, c, depth + 1, 0, false)]), () => this.fields(r, p.record, c, depth + 1, 0, false),
           () => this.fields(r, p.record, c, depth + 1, 0, false, [["_tag", kase.tag], ["_tag", kase.tag]]), () => kase.tag,
-          () => obj(["_tag", kase.tag], ["args", [obj(["rec", obj()])]])])()
+          () => obj(["_tag", kase.tag], ["_args", [obj(["_rec", obj()])]])])()
       }
       return this.fields(r, p.record, c, depth + 1, deep, miss, [["_tag", kase.tag]])
     }
@@ -778,7 +799,7 @@ export class PlainGen {
       const b = t.builtin
       if (b === "String" || b === "Bytes") return ""
       if (b === "Bool") return true
-      if (b === "Any") return obj(["num", "0"])
+      if (b === "Any") return obj(["_num", "0"])
       if (b === "Int" || b === "Int64" || b === "UInt64" || b === "Decimal") return "0"
       return num("0")
     }

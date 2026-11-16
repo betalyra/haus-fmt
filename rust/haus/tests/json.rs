@@ -1,5 +1,5 @@
-//! JSON (spec §16): the reader and writer, the prelude types' plain JSON,
-//! and the lossless form of values built in code.
+//! JSON (spec §16): the reader and writer, the prelude types' schema-based
+//! JSON, self-describing JSON of values built in code, and the import.
 
 use haus::json::{self, Json, from_str, parse, to_string};
 use haus::{Bytes, Decimal, Error, Int, Limits, Secret, Value};
@@ -31,8 +31,19 @@ fn the_reader_takes_i_json() {
     // Numbers keep their text, however long.
     let digits = "1".repeat(1000);
     assert_eq!(parse(&digits).unwrap(), Json::Number(digits));
-    // Noncharacters and raw controls beyond U+001F are fine in JSON.
+    // Noncharacters and raw controls beyond U+001F are fine in JSON, except
+    // in self-describing JSON, which only haus writes, escaping them.
     assert_eq!(parse("\"\u{10FFFF}\u{7F}\u{202E}\"").unwrap(), Json::String("\u{10FFFF}\u{7F}\u{202E}".into()));
+    let raw = |text: &str| haus::from_haus_json(&format!(r#"{{"_haus": 1, "_value": {text}}}"#));
+    assert_eq!(
+        raw("\"a\u{85}\"").unwrap_err().to_string(),
+        "raw control character U+0085 in a string (escape it) at 1:26"
+    );
+    assert_eq!(
+        raw("{\"_rec\": {\"\u{2066}\": \"x\"}}").unwrap_err().to_string(),
+        "raw bidirectional control character U+2066 in a string (escape it) at 1:35"
+    );
+    assert!(raw("\"\\u0085\\u2066\"").is_ok());
 }
 
 #[test]
@@ -76,34 +87,49 @@ fn the_reader_enforces_limits() {
     let nested = |n: usize| format!("{}1{}", "[".repeat(n), "]".repeat(n));
     assert!(json::parse_with(&nested(9), &limits).is_ok());
     assert_eq!(json::parse_with(&nested(10), &limits).unwrap_err().reason, "JSON nested deeper than 9 levels");
+    // Self-describing JSON one more, for the envelope (whose member names
+    // the string limit must leave room for).
+    let shallow = Limits { max_depth: 2, ..Limits::default() };
+    let enveloped = |n: usize| format!(r#"{{"_haus":1,"_value":{}"a"{}}}"#, "[".repeat(n), "]".repeat(n));
+    assert!(json::from_haus_json_with(&enveloped(2), &shallow).is_ok());
+    assert_eq!(
+        json::from_haus_json_with(&enveloped(10), &shallow).unwrap_err().to_string(),
+        "JSON nested deeper than 10 levels at 1:30"
+    );
     // Then the haus value that results is checked against d.
-    let lossless = r#"{"tag":"T","args":[{"rec":{"a":{"rec":{}}}}]}"#;
-    assert_eq!(haus::from_lossless_json(lossless).unwrap(), haus::parse("T { a: {} }").unwrap()[0]);
-    let deeper = r#"{"tag":"T","args":[{"rec":{"a":{"rec":{"b":{"rec":{}}}}}}]}"#;
-    assert!(haus::from_lossless_json(deeper).is_ok());
+    assert_eq!(
+        json::from_haus_json_with(&enveloped(9), &shallow).unwrap_err().to_string(),
+        "[0][0]: nesting deeper than 2 levels"
+    );
+    let at_limit = r#"{"_haus":1,"_value":{"_tag":"T","_args":[{"_rec":{"a":{"_rec":{}}}}]}}"#;
+    assert_eq!(haus::from_haus_json(at_limit).unwrap(), haus::parse("T { a: {} }").unwrap()[0]);
     let typed: Result<Vec<Vec<Vec<u8>>>, _> = json::from_str_with("[[[1]]]", &limits);
     assert_eq!(typed.unwrap_err().to_string(), "[0][0]: nesting deeper than 2 levels");
-    // Without a schema, JSON nests d levels.
-    assert!(json::value_from_str_with("[[1]]", &limits).is_ok());
+    // The import's JSON nests d levels.
+    assert!(json::import_json_with("[[1]]", &limits).is_ok());
     assert!(
-        json::value_from_str_with("[[[1]]]", &limits)
+        json::import_json_with("[[[1]]]", &limits)
             .unwrap_err()
             .to_string()
             .contains("JSON nested deeper than 2 levels")
     );
     assert!(json::parse_with("\"abc\"", &limits).is_ok());
     assert_eq!(json::parse_with("\"abcd\"", &limits).unwrap_err().reason, "string longer than 3 characters");
-    // Without a schema, JSON nests as haus does.
-    assert!(haus::from_json(&format!("{}1{}", "[".repeat(256), "]".repeat(256))).is_ok());
+    // The import's JSON nests as haus does.
+    assert!(haus::import_json(&format!("{}1{}", "[".repeat(256), "]".repeat(256))).is_ok());
     let deep = format!("{}1{}", "[".repeat(257), "]".repeat(257));
-    assert_eq!(haus::from_json(&deep).unwrap_err().to_string(), "JSON nested deeper than 256 levels at 1:257");
+    assert_eq!(haus::import_json(&deep).unwrap_err().to_string(), "JSON nested deeper than 256 levels at 1:257");
 }
 
 #[test]
 fn the_writer_checks_what_it_writes() {
-    let text = json::write(&Json::String("\"\\\n\r\t\u{8}\u{c}\u{1}\u{7F}é".into())).unwrap();
-    assert_eq!(text, "\"\\\"\\\\\\n\\r\\t\\b\\f\\u0001\u{7F}é\"");
-    assert_eq!(parse(&text).unwrap(), Json::String("\"\\\n\r\t\u{8}\u{c}\u{1}\u{7F}é".into()));
+    // Besides what JSON requires, DEL, C1 and the bidi controls are escaped.
+    let held = "\"\\\n\r\t\u{8}\u{c}\u{1}\u{7F}\u{9F}\u{202A}\u{2069}é\u{A0}\u{200F}";
+    let text = json::write(&Json::String(held.into())).unwrap();
+    assert_eq!(text, "\"\\\"\\\\\\n\\r\\t\\b\\f\\u0001\\u007f\\u009f\\u202a\\u2069é\u{A0}\u{200F}\"");
+    assert_eq!(parse(&text).unwrap(), Json::String(held.into()));
+    let named = json::write(&Json::Object(vec![("\u{202E}".into(), Json::Null)])).unwrap();
+    assert_eq!(named, r#"{"\u202e":null}"#);
     for bad in ["1.", "01", "+1", "NaN", "0x1", ""] {
         assert_eq!(json::write(&Json::Number(bad.into())).unwrap_err().to_string(), "not a JSON number", "{bad:?}");
     }
@@ -214,14 +240,18 @@ fn containers() {
 }
 
 #[test]
-fn any_and_unknown_values_are_lossless() {
+fn any_is_its_self_describing_value_without_the_envelope() {
     let v = haus::parse(r#"{ a: [1.50, "x", x"ff", None, Point(1, 2)] }"#).unwrap().remove(0);
     let json = to_string(&v).unwrap();
     assert_eq!(
         json,
-        r#"{"rec":{"a":[{"num":"1.50"},"x",{"bytes":"ff"},{"tag":"None"},{"tag":"Point","args":[{"num":"1"},{"num":"2"}]}]}}"#
+        r#"{"_rec":{"a":[{"_num":"1.50"},"x",{"_bytes":"ff"},{"_tag":"None"},{"_tag":"Point","_args":[{"_num":"1"},{"_num":"2"}]}]}}"#
     );
     assert_eq!(from_str::<Value>(&json).unwrap(), v);
+    assert_eq!(haus::to_haus_json(&v).unwrap(), format!(r#"{{"_haus":1,"_value":{json}}}"#));
+    // An envelope is an object like any other here: not a form of `Any`.
+    let e = from_str::<Value>(r#"{"_haus":1,"_value":"x"}"#).unwrap_err();
+    assert_eq!(e.code().map(|c| c.as_str()), Some("haus-json-form"));
 
     let any = haus::AnyTag::Bare("EUR".into());
     assert_eq!(to_string(&any).unwrap(), r#"{"_tag":"EUR"}"#);
@@ -229,11 +259,11 @@ fn any_and_unknown_values_are_lossless() {
 }
 
 #[test]
-fn lossless_checks_values_built_in_code() {
-    let error = |v: Value| haus::to_lossless_json(&v).unwrap_err().to_string();
+fn self_describing_json_checks_values_built_in_code() {
+    let error = |v: Value| haus::to_haus_json(&v).unwrap_err().to_string();
     let number = |n: &str| Value::Number(n.into());
-    assert_eq!(haus::to_lossless_json(&number("1E+05")).unwrap(), r#"{"num":"1e5"}"#);
-    assert_eq!(haus::to_lossless_json(&number("0xFF")).unwrap(), r#"{"num":"255"}"#);
+    assert_eq!(haus::to_haus_json(&number("1E+05")).unwrap(), r#"{"_haus":1,"_value":{"_num":"1e5"}}"#);
+    assert_eq!(haus::to_haus_json(&number("0xFF")).unwrap(), r#"{"_haus":1,"_value":{"_num":"255"}}"#);
     assert_eq!(error(Value::Array(vec![number("1"), number("abc")])), "[1]: not a number literal");
     assert_eq!(
         error(Value::Variant { tag: "x".into(), args: vec![] }),
@@ -247,22 +277,44 @@ fn lossless_checks_values_built_in_code() {
     assert!(error(deep).ends_with("nesting deeper than 256 levels"));
 
     // A haus integer longer than the number limit (written in hex there) is
-    // its decimal literal in lossless JSON, and reads back.
+    // its decimal literal in self-describing JSON, and reads back.
     let big = haus::parse(&format!("0x{}", "f".repeat(998))).unwrap().remove(0);
-    let json = haus::to_lossless_json(&big).unwrap();
-    assert_eq!(haus::from_lossless_json(&json).unwrap(), big);
-    assert!(haus::from_lossless_json(&format!(r#"{{"num":"{}"}}"#, "9".repeat(1300))).is_err());
+    let json = haus::to_haus_json(&big).unwrap();
+    assert_eq!(haus::from_haus_json(&json).unwrap(), big);
+    assert!(haus::from_haus_json(&format!(r#"{{"_haus":1,"_value":{{"_num":"{}"}}}}"#, "9".repeat(1300))).is_err());
 }
 
 #[test]
-fn lossless_reads_one_form_per_value() {
-    let error = |json: &str| haus::from_lossless_json(json).unwrap_err().to_string();
-    assert_eq!(error(r#"{"num": "1E5"}"#), ".num: \"1E5\" is not a normalized number literal");
-    assert_eq!(error(r#"{"num": "1e+5"}"#), ".num: \"1e+5\" is not a normalized number literal");
-    assert_eq!(error(r#"{"num": "1e6145"}"#), ".num: exponent larger than 6144");
-    assert_eq!(error(r#"{"tag": "T", "args": 1}"#), ".args: expected an array, found the number 1");
-    assert_eq!(error(r#"[{"rec": {"a": 1}}]"#).split(": ").next(), Some("[0].rec.a"));
-    assert!(haus::from_lossless_json(r#"{"args": [{"num": "1"}], "tag": "T"}"#).is_ok());
+fn self_describing_json_reads_one_form_per_value() {
+    let read = |value: &str| haus::from_haus_json(&format!(r#"{{"_value": {value}, "_haus": 1}}"#));
+    let error = |value: &str| read(value).unwrap_err().to_string();
+    assert_eq!(error(r#"{"_num": "1E5"}"#), "._num: \"1E5\" is not a normalized number literal");
+    assert_eq!(error(r#"{"_num": "1e+5"}"#), "._num: \"1e+5\" is not a normalized number literal");
+    assert_eq!(error(r#"{"_num": "1e6145"}"#), "._num: exponent larger than 6144");
+    assert_eq!(error(r#"{"_tag": "T", "_args": 1}"#), "._args: expected an array, found the number 1");
+    assert_eq!(error(r#"[{"_rec": {"a": 1}}]"#).split(": ").next(), Some("[0]._rec.a"));
+    assert!(read(r#"{"_args": [{"_num": "1"}], "_tag": "T"}"#).is_ok());
+    // The envelope: exactly `_haus` 1 and `_value`, in any order; errors are at `$`.
+    let code = |text: &str| haus::from_haus_json(text).unwrap_err().code().map(|c| c.as_str());
+    assert_eq!(code(r#"{"_num": "1"}"#), Some("haus-json-form"));
+    assert_eq!(code(r#"{"_haus": 1, "_value": "a", "_x": 1}"#), Some("haus-json-form"));
+    assert_eq!(code(r#"{"_haus": 1.0, "_value": "a"}"#), Some("haus-json-version"));
+    assert_eq!(
+        haus::from_haus_json(r#"{"_haus": 2, "_value": "a"}"#).unwrap_err().to_string(),
+        "self-describing JSON version 2; this reader reads version 1"
+    );
+    assert_eq!(
+        haus::from_haus_json(r#""a""#).unwrap_err().to_string(),
+        r#"expected self-describing JSON, the envelope {"_haus": 1, "_value": …}, found a string"#
+    );
+}
+
+#[test]
+fn the_import_reads_any_json() {
+    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap());
+    assert_eq!(read(r#"{"_tag": "Circle", "r": 1E+0}"#), r#"{_tag:"Circle",r:1e0}"#);
+    assert_eq!(read(r#"{"_haus": 1, "_value": {"_num": "1"}}"#), r#"{_haus:1,_value:{_num:"1"}}"#);
+    assert_eq!(read("\"\u{7F}\u{202E}\""), "\"\\u{7F}\\u{202E}\"");
 }
 
 #[test]
@@ -284,9 +336,20 @@ fn json_lines() {
     let e = json::decode::<u8, _>("1\n\u{FEFF}2\n".as_bytes()).find_map(Result::err).unwrap();
     assert_eq!(e.to_string(), "expected a JSON value, found '\u{FEFF}' at 2:1");
 
-    // Lossless lines: a haus stream as JSON Lines.
+    // Self-describing lines: a haus stream as JSON Lines, an envelope per line.
     let values = haus::parse("1, Some(\"a\"),").unwrap();
-    let lines = json::to_string_all(&values).unwrap();
-    assert_eq!(lines, "{\"num\":\"1\"}\n{\"tag\":\"Some\",\"args\":[\"a\"]}\n");
-    assert_eq!(json::from_str_all::<Value>(&lines).unwrap(), values);
+    let lines = json::to_haus_json_lines(&values).unwrap();
+    assert_eq!(
+        lines,
+        "{\"_haus\":1,\"_value\":{\"_num\":\"1\"}}\n{\"_haus\":1,\"_value\":{\"_tag\":\"Some\",\"_args\":[\"a\"]}}\n"
+    );
+    assert_eq!(json::from_haus_json_lines(&lines).unwrap(), values);
+    assert_eq!(json::from_haus_json_lines("").unwrap(), []);
+    let e = json::from_haus_json_lines("{\"_haus\":1,\"_value\":\"a\"}\n{\"_haus\":1,\"_value\":1}\n").unwrap_err();
+    assert_eq!(
+        e.to_string(),
+        "[1]: expected a self-describing value: a string, an array, or an object {\"_num\"}, {\"_bytes\"}, {\"_rec\"} or {\"_tag\", \"_args\"?}, found the number 1"
+    );
+    // As Any, the lines hold no envelope.
+    assert_eq!(json::to_string_all(&values).unwrap(), "{\"_num\":\"1\"}\n{\"_tag\":\"Some\",\"_args\":[\"a\"]}\n");
 }

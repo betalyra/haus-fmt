@@ -35,8 +35,8 @@
 import { errorCode, HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Value } from "@haus-fmt/haus"
 import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus"
 import {
-  fromJson as valueOfJson, fromPlainJson, HausDecodeError, HausEncodeError, jsonDepth, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, parseJson, parseJsonLines, stringifyJson, toPlainJson,
-  type Json, type JsonType,
+  fromHausJson as valueOfHausJson, fromSchemaBasedJson, HausDecodeError, HausEncodeError, importJson as importedValue, jsonDepth, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH,
+  parseJson, parseJsonLines, stringifyJson, toHausJson as hausJsonOf, toSchemaBasedJson, type Json, type JsonType,
 } from "@haus-fmt/haus"
 import type { Limits } from "@haus-fmt/haus/schema"
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
@@ -552,25 +552,25 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
 const jsonErrorOf = (e: unknown): Option.Option<HausSchemaError> =>
   e instanceof HausDecodeError || e instanceof HausEncodeError ? Option.some(jsonError(e)) : Option.none()
 
-/** The plain JSON form of a schema with codecs: the form of its encoded side. */
+/** The schema-based JSON form of a schema with codecs: the form of its encoded side. */
 const jsonForm = (schema: Schema.Top, codecs: ReadonlyArray<AnyCodec>): JsonType => jsonTypeOf(SchemaAST.toEncoded(target(schema, codecs).ast))
 
 /**
- * The limits for reading the JSON of values within `limits`: JSON may nest
+ * The limits for reading the schema-based JSON of values within `limits`: JSON may nest
  * `jsonDepth(maxDepth)` levels, enough for every haus value within `maxDepth`
  * (spec §16); the value is then held to `maxDepth` itself.
  */
 const jsonLimits = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth(limits.maxDepth ?? MAX_DEPTH) })
 
 /**
- * Encode a typed value as plain JSON (spec §16.3), a JSON value
+ * Encode a typed value as schema-based JSON (spec §16.3), a JSON value
  * (`JsonNumber`s keep numbers exact; `Haus.toJson` writes the text).
  */
 export const toJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const type = jsonForm(schema, codecs)
   const toValue = valueEncoder<S, C>(schema, codecs)
   return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Json, HausSchemaError | HausLimitsError, S["EncodingServices"]> =>
-    toValue(value, limits).pipe(Effect.flatMap((v) => fromSync(() => toPlainJson(type, v, limits), jsonErrorOf)))
+    toValue(value, limits).pipe(Effect.flatMap((v) => fromSync(() => toSchemaBasedJson(type, v, limits), jsonErrorOf)))
 }
 
 /** `toJsonValue` for codecs already checked by the caller's signature. */
@@ -581,7 +581,7 @@ const jsonEncoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(sc
   )
 
 /**
- * Encode a typed value as plain JSON text (spec §16.3), compact: what a JSON
+ * Encode a typed value as schema-based JSON text (spec §16.3), compact: what a JSON
  * consumer expects, with the schema saying what JSON can't. `BigInt` and the
  * 64-bit integers of schema files are strings, decimals strings (`"19.90"`),
  * bytes base64, an `Option` `null` or its value (tagged when its value can
@@ -597,12 +597,12 @@ export const toJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCo
   })
 }
 
-/** Decode plain JSON (spec §16.3) that is already parsed (with `parseJson`, which keeps numbers exact). */
+/** Decode schema-based JSON (spec §16.3) that is already parsed (with `parseJson`, which keeps numbers exact). */
 export const fromJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const type = jsonForm(schema, codecs)
   const fromValue = valueDecoder<S, C>(schema, codecs)
   return (json: Json, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]> =>
-    withLimits(limits, fromSync(() => fromPlainJson(type, json, limits), jsonErrorOf).pipe(Effect.flatMap((value) => fromValue(value, limits))))
+    withLimits(limits, fromSync(() => fromSchemaBasedJson(type, json, limits), jsonErrorOf).pipe(Effect.flatMap((value) => fromValue(value, limits))))
 }
 
 /** `fromJsonValue` for codecs already checked by the caller's signature. */
@@ -613,7 +613,7 @@ const jsonDecoder = <S extends Schema.Top, C extends ReadonlyArray<AnyCodec>>(sc
   )
 
 /**
- * Decode plain JSON text (spec §16.3): the forms `Haus.toJson` writes, with
+ * Decode schema-based JSON text (spec §16.3): the forms `Haus.toJson` writes, with
  * the rules of decoding haus (open structs ignore other members, integers
  * must be whole numbers, an OpenUnion keeps other tags as `Unknown`).
  * Text that isn't I-JSON (duplicate members, unpaired surrogates) fails with
@@ -630,7 +630,7 @@ export const fromJson = <S extends Schema.Top, const C extends ReadonlyArray<Any
 }
 
 /**
- * Decode a JSON Lines stream (one plain JSON text per line, spec §16) as the
+ * Decode a JSON Lines stream (one schema-based JSON text per line, spec §16) as the
  * lines arrive, from the same sources as `Haus.decodeStream`, with limits per
  * line. Errors carry the line's index.
  */
@@ -640,7 +640,7 @@ export const decodeJsonLines = <S extends Schema.Top, const C extends ReadonlyAr
 ): SourceDecoder<Decoded<S, C>, S["DecodingServices"]> =>
   decodeSource((chunks, limits) => parseJsonLines(chunks, { limits: jsonLimits(limits) }), jsonDecoder<S, C>(schema, codecs), "Haus.decodeJsonLines")
 
-/** Encode a stream of values as JSON Lines of their plain JSON (spec §16): one line per value, each ending in a line feed. */
+/** Encode a stream of values as JSON Lines of their schema-based JSON (spec §16): one line per value, each ending in a line feed. */
 export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const toJsonOf = jsonEncoder<S, C>(schema, codecs)
   return <E, R>(values: Stream.Stream<Decoded<S, C>, E, R>, limits: Limits = {}): Stream.Stream<string, E | HausSchemaError | HausLimitsError, R | S["EncodingServices"]> => {
@@ -658,15 +658,40 @@ export const encodeJsonLines = <S extends Schema.Top, const C extends ReadonlyAr
   }
 }
 
+/** A JSON reading error of the core: text that isn't I-JSON as a HausParseError, JSON that isn't the form as a HausSchemaError. */
+const readErrorOf = (e: unknown) => Option.orElse(parseErrorOf(e), () => jsonErrorOf(e))
+
 /**
- * Read JSON text without a schema (spec §16.1), as a haus `Value`: objects
+ * Import JSON text without a schema (spec §16.1), as a haus `Value`: objects
  * as records, `true`/`false`/`null` as `True`/`False`/`None`, numbers exact.
- * (For the lossless form of §16.2, use `Haus.Any`: `Haus.fromJson(Haus.Any)`
- * and `Haus.toJson(Haus.Any)`.)
+ * Nothing in the data is special: `{"_tag": "Circle"}` is a record.
  */
-export const valueFromJson = Effect.fn("Haus.valueFromJson")(function* (text: string, limits: Limits = {}) {
+export const importJson = Effect.fn("Haus.importJson")(function* (text: string, limits: Limits = {}) {
   yield* checkLimits(limits)
-  return yield* fromSync(() => valueOfJson(text, limits), (e) => Option.orElse(parseErrorOf(e), () => jsonErrorOf(e)))
+  return yield* fromSync(() => importedValue(text, limits), readErrorOf)
+})
+
+/**
+ * The self-describing JSON text of a haus `Value` (spec §16.2),
+ * `{"_haus":1,"_value":…}`: every haus value exactly, without a schema. For a
+ * typed value, encode it first (`Haus.encodeValue`).
+ *
+ *   yield* Haus.toHausJson(value)   // '{"_haus":1,"_value":{"_rec":{"total":{"_num":"19.90"}}}}'
+ */
+export const toHausJson = Effect.fn("Haus.toHausJson")(function* (value: Value, limits: Limits = {}) {
+  yield* checkLimits(limits)
+  return yield* fromSync(() => hausJsonOf(value, limits), jsonErrorOf)
+})
+
+/**
+ * Read self-describing JSON text (spec §16.2) as a haus `Value`: the envelope
+ * `{"_haus": 1, "_value": …}` and exactly the forms `Haus.toHausJson` writes.
+ * Text that isn't I-JSON (or holds raw DEL, C1 or bidi controls) fails with a
+ * HausParseError, any other JSON with a HausSchemaError.
+ */
+export const fromHausJson = Effect.fn("Haus.fromHausJson")(function* (text: string, limits: Limits = {}) {
+  yield* checkLimits(limits)
+  return yield* fromSync(() => valueOfHausJson(text, limits), readErrorOf)
 })
 
 export { jsonTypeOf } from "./json.js"

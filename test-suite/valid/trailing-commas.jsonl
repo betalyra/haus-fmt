@@ -1,0 +1,1 @@
+{"_haus": 1, "_value": {"_rec": {"list": [{"_num": "1"}, {"_num": "2"}, {"_num": "3"}], "point": {"_tag": "Point", "_args": [{"_num": "1"}, {"_num": "2"}]}, "nested": {"_rec": {"a": {"_num": "1"}}}}}}

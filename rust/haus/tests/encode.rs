@@ -116,7 +116,7 @@ fn very_deep_values_built_in_code_have_a_canonical_form() {
     assert!(haus::equals(&deep, &deep));
     // Encoding it stops at the limit, as the writer does.
     assert!(haus::to_string(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
-    assert!(haus::to_lossless_json(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
+    assert!(haus::to_haus_json(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
     assert!(json::to_string(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
     dismantle(deep);
 }

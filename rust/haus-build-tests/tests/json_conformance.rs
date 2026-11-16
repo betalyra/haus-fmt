@@ -1,5 +1,6 @@
-//! The plain JSON suite (test-suite/json/plain.cases.haus, spec §16.3), run
-//! on the code haus-fmt-build generates for plain.schema.haus (see build.rs).
+//! The schema-based JSON suite (test-suite/json/schema-based.cases.haus, spec
+//! §16.3), run on the code haus-fmt-build generates for
+//! schema-based.schema.haus (see build.rs).
 //!
 //! - `Ok { type, input, json, output? }`: decoding `input` with `type` and
 //!   writing the result gives `json`, and reading `json` gives a value that
@@ -88,7 +89,7 @@ impl Case {
 
     /// None if the case passes, what went wrong otherwise.
     fn failure(&self) -> Option<String> {
-        let read = || suite::plain::read(&self.ty, &self.json).ok_or_else(|| format!("no type {}", self.ty));
+        let read = || suite::schema_based::read(&self.ty, &self.json).ok_or_else(|| format!("no type {}", self.ty));
         let expect_read = |expected: &Value| match read() {
             Ok(Ok(v)) if canonical(&v) == canonical(expected) => None,
             Ok(Ok(v)) => Some(format!("read as {}, expected {}", canonical(&v), canonical(expected))),
@@ -97,7 +98,7 @@ impl Case {
         };
         match (&self.kind, &self.input, &self.output) {
             (Kind::Ok, Some(input), output) => {
-                let written = match suite::plain::write(&self.ty, input) {
+                let written = match suite::schema_based::write(&self.ty, input) {
                     None => return Some(format!("no type {}", self.ty)),
                     Some(Err(e)) => return Some(e),
                     Some(Ok(text)) => text,
@@ -123,8 +124,8 @@ impl Case {
 }
 
 #[test]
-fn plain_json_conformance() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite/json/plain.cases.haus");
+fn schema_based_json_conformance() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite/json/schema-based.cases.haus");
     let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let values = haus::parse(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let cases: Vec<Case> = values.iter().map(Case::parse).collect::<Result<_, _>>().unwrap();

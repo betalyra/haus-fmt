@@ -1,0 +1,52 @@
+// Self-describing JSON (spec §16.2), without a schema. Ok: writing `input`
+// gives `json` (compared as data), and reading `json` gives a value equal to
+// `input`. Err: reading `json` fails, with `code`. Every valid/NAME.jsonl of
+// the conformance suite is also a case: one envelope per value of the file.
+Ok { input: 19.90, json: "{\"_haus\": 1, \"_value\": {\"_num\": \"19.90\"}}" },
+Ok { input: 0xFF, json: "{\"_haus\": 1, \"_value\": {\"_num\": \"255\"}}" },
+Ok { input: x"0b34", json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0b34\"}}" },
+Ok { input: Circle { r: 1 }, json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"Circle\", \"_args\": [{\"_rec\": {\"r\": {\"_num\": \"1\"}}}]}}" },
+Ok { input: None, json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"None\"}}" },
+Ok { input: [], json: "{\"_haus\": 1, \"_value\": []}" },
+Ok { input: {}, json: "{\"_haus\": 1, \"_value\": {\"_rec\": {}}}" },
+Ok { input: "Shipped", json: "{\"_haus\": 1, \"_value\": \"Shipped\"}" },
+Ok { input: { _tag: 1, tag: "x" }, json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"_tag\": {\"_num\": \"1\"}, \"tag\": \"x\"}}}" },
+// writers escape DEL, C1 and bidi controls; readers compare as data
+Ok { input: "a\u{7F}\u{85}\u{202E}b", json: "{\"_haus\": 1, \"_value\": \"a\\u007f\\u0085\\u202eb\"}" },
+
+// ── the envelope ──
+Err { json: "\"a\"", code: "haus-json-form" },
+Err { json: "[]", code: "haus-json-form" },
+Err { json: "{\"_num\": \"1\"}", code: "haus-json-form" },
+Err { json: "{}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1}", code: "haus-json-form" },
+Err { json: "{\"_value\": \"a\"}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\", \"x\": 1}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 2, \"_value\": \"a\"}", code: "haus-json-version" },
+Err { json: "{\"_haus\": \"1\", \"_value\": \"a\"}", code: "haus-json-version" },
+Err { json: "{\"_haus\": 1.0, \"_value\": \"a\"}", code: "haus-json-version" },
+
+// ── the value ──
+Err { json: "{\"_haus\": 1, \"_value\": 1}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": true}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": null}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {}}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"num\": \"1\"}}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"tag\": \"A\"}}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"01\"}}", code: "haus-json-number" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": 1}}", code: "haus-json-number" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\", \"x\": 2}}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0B34\"}}", code: "haus-json-bytes" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0b3\"}}", code: "haus-json-bytes" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"circle\"}}", code: "invalid-tag" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": []}}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"\", \"_args\": \"\"}}", code: "invalid-tag" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": 1}}}", code: "haus-json-form" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": {\"_num\": \"1\"}, \"a\": {\"_num\": \"2\"}}}}", code: "duplicate-key" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1E5\"}}", code: "haus-json-number" },
+
+// ── raw DEL, C1 and bidi controls: only haus writes this form, and it escapes them ──
+Err { json: "{\"_haus\": 1, \"_value\": \"a\u{7F}b\"}", code: "control-character" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\u{85}b\"}", code: "control-character" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\u{202E}b\"}", code: "bidi-control" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\u{2066}\": \"b\"}}}", code: "bidi-control" },

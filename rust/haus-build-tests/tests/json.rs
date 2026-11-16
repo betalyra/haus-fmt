@@ -1,4 +1,4 @@
-//! Plain JSON (spec §16.3) of the code haus-fmt-build generates (features.schema.haus).
+//! Schema-based JSON (spec §16.3) of the code haus-fmt-build generates (features.schema.haus).
 
 mod features {
     haus::include_schema!("features");
@@ -20,7 +20,7 @@ fn read_error<T: haus::FromJson + haus::Encode + std::fmt::Debug>(json: &str) ->
 }
 
 #[test]
-fn writes_and_reads_plain_json() {
+fn writes_and_reads_schema_based_json() {
     let ada: Person = haus::from_str(ADA).unwrap();
     assert_eq!(to_string(&ada).unwrap(), ADA_JSON);
     assert_eq!(from_str::<Person>(ADA_JSON).unwrap(), ada);
@@ -67,19 +67,22 @@ fn variants() {
     );
     assert_eq!(read_error::<Tree>(r#"{"_tag":"Leaf","value":1}"#), "unexpected member \"value\"");
 
-    // Unknown tags of an open variant: the arguments in the lossless form.
+    // Unknown tags of an open variant: the arguments' self-describing values.
     let hexagon = Shape::Unknown(Unknown { tag: "Hexagon".into(), args: vec![Value::Number("1".into())] });
-    let json = r#"{"_tag":"Hexagon","args":[{"num":"1"}]}"#;
+    let json = r#"{"_tag":"Hexagon","_args":[{"_num":"1"}]}"#;
     assert_eq!(to_string(&hexagon).unwrap(), json);
     assert_eq!(from_str::<Shape>(json).unwrap(), hexagon);
-    assert_eq!(read_error::<Shape>(r#"{"_tag":"Hexagon","args":[1]}"#).split_once(':').unwrap().0, ".args[0]");
-    // A newer writer's case with a record payload: its other members read without a schema.
+    assert_eq!(read_error::<Shape>(r#"{"_tag":"Hexagon","_args":[1]}"#).split_once(':').unwrap().0, "._args[0]");
+    // A newer writer's case with a record payload: its other members read by the import.
     let newer = from_str::<Shape>(r#"{"_tag":"Hexagon","side":1,"open":true}"#).unwrap();
     assert_eq!(haus::to_string(&newer).unwrap(), "Hexagon { side: 1, open: True }");
     assert_eq!(
         to_string(&newer).unwrap(),
-        r#"{"_tag":"Hexagon","args":[{"rec":{"side":{"num":"1"},"open":{"tag":"True"}}}]}"#
+        r#"{"_tag":"Hexagon","_args":[{"_rec":{"side":{"_num":"1"},"open":{"_tag":"True"}}}]}"#
     );
+    // `args` is a member like any other.
+    let run = from_str::<Shape>(r#"{"_tag":"Run","args":["a"]}"#).unwrap();
+    assert_eq!(haus::to_string(&run).unwrap(), r#"Run { args: ["a"] }"#);
     assert_eq!(read_error::<Shape>(r#"{"_tag":"hexagon"}"#), "._tag: \"hexagon\" is not a tag name");
 }
 
@@ -112,11 +115,15 @@ fn maybe_is_null_only_when_its_inner_json_cant_be() {
 }
 
 #[test]
-fn a_tag_field_in_a_record_payload_has_no_plain_form() {
+fn a_tag_or_args_field_in_a_record_payload_has_no_schema_based_form() {
     let clash = Clash::Tagged { _tag: "x".into() };
-    let why = "Tagged has a field named _tag, so it has no plain JSON form";
+    let why = "Tagged has a field named _tag, so it has no schema-based JSON form";
     assert_eq!(to_string(&clash).unwrap_err().to_string(), why);
     assert_eq!(read_error::<Clash>(r#"{"_tag":"Tagged"}"#), why);
+    let listed = Clash::Listed { _args: vec![1] };
+    let why = "Listed has a field named _args, so it has no schema-based JSON form";
+    assert_eq!(to_string(&listed).unwrap_err().to_string(), why);
+    assert_eq!(read_error::<Clash>(r#"{"_tag":"Listed","_args":[1]}"#), why);
     // The other tags are fine.
     assert_eq!(to_string(&Clash::Fine(1)).unwrap(), r#"{"_tag":"Fine","value":1}"#);
 }
@@ -125,8 +132,8 @@ fn a_tag_field_in_a_record_payload_has_no_plain_form() {
 fn secrets_stay_hidden() {
     let login: Login =
         haus::from_str(r#"{ user: "ada", password: "hunter2", pin: 1234, extra: [1, Some { a: 19.90 }] }"#).unwrap();
-    let json = r#"{"user":"ada","password":"hunter2","pin":1234,"extra":[{"num":"1"},{"tag":"Some","args":[{"rec":{"a":{"num":"19.90"}}}]}]}"#;
-    // Written in full; Any in the lossless form.
+    let json = r#"{"user":"ada","password":"hunter2","pin":1234,"extra":[{"_num":"1"},{"_tag":"Some","_args":[{"_rec":{"a":{"_num":"19.90"}}}]}]}"#;
+    // Written in full; Any as its self-describing value, without the envelope.
     assert_eq!(to_string(&login).unwrap(), json);
     assert_eq!(from_str::<Login>(json).unwrap(), login);
 

@@ -29,11 +29,11 @@ const names = own(namesText)
 const builtins = suite("test-suite/schema/builtins.schema.haus")
 const variants = suite("test-suite/schema/variants.schema.haus")
 const types = suite("test-suite/schema/types.schema.haus")
-const plain = suite("test-suite/json/plain.schema.haus")
+const schemaBased = suite("test-suite/json/schema-based.schema.haus")
 
 /** Decode `text` with `schema` and encode it again, canonical. */
 const roundTrip = (schema: h.Schema<unknown>, text: string) => canonical(h.encode(schema, h.decode(schema, parse(text))))
-/** Write `text` as plain JSON, read it back and encode it, canonical. */
+/** Write `text` as schema-based JSON, read it back and encode it, canonical. */
 const jsonRoundTrip = (schema: h.Schema<unknown>, text: string) => {
   const json = h.toJson(schema, h.decode(schema, parse(text)))
   return { json, back: canonical(h.encode(schema, h.fromJson(schema, json))) }
@@ -65,10 +65,10 @@ describe("keys named _tag", () => {
 
   it.each([
     ["NameKeys", fuzz.NameKeys, `{_tag:""}`, `{"_tag":""}`],
-    ["plain Map Int32", plain.Counts, `{_tag:0}`, `{"_tag":0}`],
+    ["Map Int32", schemaBased.Counts, `{_tag:0}`, `{"_tag":0}`],
     ["Map Int", builtins.Counts, `{_tag:0}`, `{"_tag":"0"}`],
-    ["Map Any", fuzz.Mixed, `{list:[],map:{},result:Err(0),any:{_tag:0}}`, `"any":{"_tag":{"num":"0"}}`],
-  ])("plain JSON keeps them: %s", (_, schema, input, json) => {
+    ["Map Any", fuzz.Mixed, `{list:[],map:{},result:Err(0),any:{_tag:0}}`, `"any":{"_tag":{"_num":"0"}}`],
+  ])("schema-based JSON keeps them: %s", (_, schema, input, json) => {
     const r = jsonRoundTrip(schema!, input)
     expect(r.json).toContain(json)
     expect(r.back).toBe(canonical(parse(input)))
@@ -89,7 +89,7 @@ describe("a payload field named _tag", () => {
     expect(roundTrip(names.HasOdd!, `{n:1,odd:Odd{_tag:-2}}`)).toBe(`{n:1,odd:Odd{_tag:-2}}`)
   })
 
-  it("has no plain JSON form (§16.3)", () => {
+  it("has no schema-based JSON form (§16.3)", () => {
     const odd = h.decode(names.HasOdd!, parse(`{n:1,odd:Odd{_tag:1}}`))
     expect(() => h.toJson(names.HasOdd!, odd)).toThrow(/'Odd' has a field named _tag/)
     expect(() => h.fromJson(names.HasOdd!, `{"n":1,"odd":{"_tag":"Odd"}}`)).toThrow(/'Odd' has a field named _tag/)

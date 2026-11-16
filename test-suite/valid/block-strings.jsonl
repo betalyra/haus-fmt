@@ -1,0 +1,1 @@
+{"_haus": 1, "_value": {"_rec": {"simple": "line one\nline two", "relative": "  indented\nbase", "blank": "a\n\nb", "empty": "", "quotes": "say \"hi\" and \"\"twice\"\" and \"\"\"", "escapes": "tab:\t unicode:☺", "trailing_newline": "text\n"}}}

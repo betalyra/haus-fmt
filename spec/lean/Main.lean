@@ -4,11 +4,12 @@ import Lean.Data.Json
 /-!
 `haus-ref`: the reference parser on the command line.
 
-    haus-ref FILE          print FILE's values in the test-suite JSON encoding
+    haus-ref FILE          print FILE's values as self-describing JSON Lines (spec §16.2):
+                           one envelope per value
     haus-ref --suite DIR   run the conformance suite in DIR (valid/ and invalid/)
     haus-ref --batch DIR N for DIR/00000.haus … DIR/{N-1}.haus, one line each:
-                           `ok <values>` or `err <line> <column> <code> <reason>` (fuzz/;
-                           the code of spec §17)
+                           `ok <values>` (in the encoding fuzz/ compares parsers in)
+                           or `err <line> <column> <code> <reason>` (fuzz/; the code of spec §17)
     haus-ref --canonical FILE     the canonical form of each value in FILE, one per line (spec §12)
     haus-ref --canonical-batch DIR N  like --batch, printing `ok ["<canonical>", …]` (fuzz/)
     haus-ref --time TYPE TEXT     whether TEXT is a valid std/time TYPE (exit 0 or 1)
@@ -22,24 +23,28 @@ import Lean.Data.Json
                                   encoded result>` or `err <place> <code> <reason>` (fuzz/;
                                   `-` for an error without a code)
     haus-ref --json-suite DIR [TYPES]    run the JSON suite in DIR (spec §16) with the resolved
-                                  types in TYPES (default json-suite.json); the lossless
-                                  cases include every DIR/../valid/NAME.json
-    haus-ref --json-batch TYPES FILE     plain JSON (spec §16.3): for each line `SUITE TYPE HEX`
-                                  (a value's haus text): decode, write: `ok <JSON>` or
-                                  `err <place> <code> <reason>`
+                                  types in TYPES (default json-suite.json); the
+                                  self-describing cases include every DIR/../valid/NAME.jsonl
+    haus-ref --json-batch TYPES FILE     schema-based JSON (spec §16.3): for each line
+                                  `SUITE TYPE HEX` (a value's haus text): decode, write:
+                                  `ok <JSON>` or `err <place> <code> <reason>`
     haus-ref --json-read-batch TYPES FILE  for each line `SUITE TYPE HEX` (JSON text): read with
                                   the type: `ok <canonical form of the encoded result>` or
                                   `err <place> <code> <reason>` (an error in the text at `$`)
-    haus-ref --lossless-batch FILE       lossless JSON (spec §16.2): for each line `HEX` (a haus
-                                  value): `ok <JSON>` or `err $ - <reason>`
-    haus-ref --lossless-read-batch FILE  for each line `HEX` (JSON text): `ok <canonical form>`
-                                  or `err $ <code> <reason>`
-    haus-ref --schemaless-read-batch FILE  the same for JSON without a schema (spec §16.1)
+    haus-ref --haus-json-batch FILE      self-describing JSON (spec §16.2): for each line `HEX`
+                                  (a haus value): `ok <JSON>` (the envelope) or `err $ - <reason>`
+    haus-ref --haus-json-read-batch FILE  for each line `HEX` (JSON text, an envelope):
+                                  `ok <canonical form>` or `err $ <code> <reason>`
+    haus-ref --import-batch FILE         the same for the JSON import (spec §16.1)
 -/
 
 open Haus Lean
 
-/-- The test-suite encoding (test-suite/README.md). -/
+/--
+The encoding the fuzzer compares parsers in (`suiteJson` in
+fuzz/src/runners.ts): self-describing JSON's forms (spec §16.2) without the
+underscores and without the envelope.
+-/
 partial def toJson : Value → Json
   | .num t => Json.mkObj [("num", Json.str t)]
   | .str s => Json.str s
@@ -103,25 +108,50 @@ def parseCoded (bytes : ByteArray) : Except (Code × String) (List Value) :=
 def parseBytes (bytes : ByteArray) : Except String (List Value) :=
   (parseCoded bytes).mapError fun (code, message) => s!"{message} [{code}]"
 
+instance : ToString JSON.Error := ⟨fun e => s!"{e.reason} [{e.code}]"⟩
+
+def jsonText (j : Haus.JSON) : String := String.ofList (Haus.JSON.write j)
+
+def canonicalText (v : Value) : String := String.ofList (Canonical.canonical v)
+
+/--
+`valid/NAME.jsonl`: the file's values as self-describing JSON Lines (spec
+§16.2), one envelope per value. Each line must be, as data, what writing the
+value gives, and reading the lines must give the values back.
+-/
+def validJsonLines (text : String) (vs : List Value) : Option String :=
+  match Haus.JSON.parseLines {} text.toList with
+  | .error e => some s!"not JSON Lines: {e}"
+  | .ok js =>
+    if js.length != vs.length then some s!"{js.length} lines for {vs.length} values" else
+    match (js.zip vs).findSome? fun (j, v) =>
+      if Haus.JSON.equiv (Haus.JSON.hausJson v) j then none else some s!"wrote {jsonText (Haus.JSON.hausJson v)}" with
+    | some e => some e
+    | none =>
+      match Haus.JSON.readHausJsonLines {} text.toList with
+      | .error e => some s!"rejected: {e}"
+      | .ok ws =>
+        if ws.length == vs.length && (ws.zip vs).all fun (w, v) => Value.equiv w v then none
+        else some s!"read {ws.map canonicalText}"
+
 def runSuite (dir : System.FilePath) : IO UInt32 := do
   let mut failures : Array String := #[]
   let mut count := 0
   for entry in (← (dir / "valid").readDir).qsort (·.fileName < ·.fileName) do
     let some name := entry.fileName.dropSuffix? ".haus" | continue
     count := count + 1
-    let expected ← IO.FS.readFile (dir / "valid" / s!"{name}.json")
-    match parseBytes (← IO.FS.readBinFile entry.path), Json.parse expected with
-    | .ok vs, .ok json =>
-        let got := (Json.arr (vs.map toJson).toArray).compress
-        if got != json.compress then failures := failures.push s!"valid/{name}: got {got}"
+    -- valid/NAME.jsonl: the expected values, as self-describing JSON Lines.
+    let expected ← IO.FS.readFile (dir / "valid" / s!"{name}.jsonl")
+    match parseBytes (← IO.FS.readBinFile entry.path) with
+    | .ok vs =>
+        if let some e := validJsonLines expected vs then failures := failures.push s!"valid/{name}: {e}"
         -- The canonical form of each value, one per line (spec §12).
         let file := dir / "valid" / s!"{name}.canonical"
         if ← file.pathExists then
           let canonical := String.join (vs.map fun v => String.ofList (Canonical.canonical v) ++ "\n")
           if canonical != (← IO.FS.readFile file) then
             failures := failures.push s!"valid/{name}.canonical: got {canonical}"
-    | .error e, _ => failures := failures.push s!"valid/{name}: rejected: {e}"
-    | _, .error e => failures := failures.push s!"valid/{name}.json: {e}"
+    | .error e => failures := failures.push s!"valid/{name}: rejected: {e}"
   for entry in (← (dir / "invalid").readDir).qsort (·.fileName < ·.fileName) do
     let some name := entry.fileName.dropSuffix? ".haus" | continue
     count := count + 1
@@ -327,14 +357,8 @@ def runSchemaBatch (types file : System.FilePath) : IO UInt32 := do
 
 /-! ## JSON (spec §16) -/
 
-instance : ToString JSON.Error := ⟨fun e => s!"{e.reason} [{e.code}]"⟩
-
 /-- A JSON reader's or writer's error with its place and code, as the suites show it. -/
 def schemaErrorText (e : Schema.Error) : String := s!"{e.place}: {e.reason} [{codeText e.code}]"
-
-def jsonText (j : Haus.JSON) : String := String.ofList (Haus.JSON.write j)
-
-def canonicalText (v : Value) : String := String.ofList (Canonical.canonical v)
 
 /-- A case of a JSON suite: its tag and fields. -/
 def jsonCase : Value → Option (String × List (String × Value))
@@ -346,110 +370,96 @@ def strField (fs : List (String × Value)) (k : String) : Option String :=
   | some (.str s) => some s
   | _ => none
 
-/-- Read JSON text with a type and encode the result: its canonical form. -/
-def readPlainCanonical (env : Schema.Env) (type : String) (json : String) : Except Schema.Error String :=
-  (Schema.readPlain {} env (.ref type) json.toList).map fun x => canonicalText (Schema.encode x)
+/-- Read schema-based JSON text with a type and encode the result: its canonical form. -/
+def readJsonCanonical (env : Schema.Env) (type : String) (json : String) : Except Schema.Error String :=
+  (Schema.readJson {} env (.ref type) json.toList).map fun x => canonicalText (Schema.encode x)
 
-/-- Decode a haus value with a type and write it as plain JSON. -/
-def writePlainJson (env : Schema.Env) (type : String) (v : Value) : Except String Haus.JSON := do
+/-- Decode a haus value with a type and write it as schema-based JSON. -/
+def writeSchemaBased (env : Schema.Env) (type : String) (v : Value) : Except String Haus.JSON := do
   let x ← (Schema.decode env (.ref type) v).mapError schemaErrorText
   (Schema.toJson env (.ref type) x).mapError schemaErrorText
 
-def runPlainCases (env : Schema.Env) (cases : List Value) : Array String := Id.run do
+def runSchemaBasedCases (env : Schema.Env) (cases : List Value) : Array String := Id.run do
   let mut failures : Array String := #[]
   for c in cases do
     let shown := canonicalText c
-    let some (tag, fs) := jsonCase c | failures := failures.push s!"plain: not a case: {shown}"
-    let some type := strField fs "type" | failures := failures.push s!"plain: no type: {shown}"
-    let some json := strField fs "json" | failures := failures.push s!"plain: no json: {shown}"
+    let some (tag, fs) := jsonCase c | failures := failures.push s!"schema-based: not a case: {shown}"
+    let some type := strField fs "type" | failures := failures.push s!"schema-based: no type: {shown}"
+    let some json := strField fs "json" | failures := failures.push s!"schema-based: no json: {shown}"
     match tag with
     | "Ok" =>
-      let some input := fs.lookup "input" | failures := failures.push s!"plain: no input: {shown}"
+      let some input := fs.lookup "input" | failures := failures.push s!"schema-based: no input: {shown}"
       let want := canonicalText ((fs.lookup "output").getD input)
-      match writePlainJson env type input, Haus.JSON.parse {} json.toList with
+      match writeSchemaBased env type input, Haus.JSON.parse {} json.toList with
       | .ok got, .ok exp =>
-        if !Haus.JSON.equiv got exp then failures := failures.push s!"plain: {shown}: wrote {jsonText got}"
-      | .error e, _ => failures := failures.push s!"plain: {shown}: writing failed: {e}"
-      | _, .error e => failures := failures.push s!"plain: {shown}: the case's JSON: {e}"
-      match readPlainCanonical env type json with
-      | .ok got => if got != want then failures := failures.push s!"plain: {shown}: read {got}"
-      | .error e => failures := failures.push s!"plain: {shown}: reading failed: {schemaErrorText e}"
+        if !Haus.JSON.equiv got exp then failures := failures.push s!"schema-based: {shown}: wrote {jsonText got}"
+      | .error e, _ => failures := failures.push s!"schema-based: {shown}: writing failed: {e}"
+      | _, .error e => failures := failures.push s!"schema-based: {shown}: the case's JSON: {e}"
+      match readJsonCanonical env type json with
+      | .ok got => if got != want then failures := failures.push s!"schema-based: {shown}: read {got}"
+      | .error e => failures := failures.push s!"schema-based: {shown}: reading failed: {schemaErrorText e}"
     | "Read" =>
-      let some output := fs.lookup "output" | failures := failures.push s!"plain: no output: {shown}"
-      match readPlainCanonical env type json with
-      | .ok got => if got != canonicalText output then failures := failures.push s!"plain: {shown}: read {got}"
-      | .error e => failures := failures.push s!"plain: {shown}: reading failed: {schemaErrorText e}"
+      let some output := fs.lookup "output" | failures := failures.push s!"schema-based: no output: {shown}"
+      match readJsonCanonical env type json with
+      | .ok got => if got != canonicalText output then failures := failures.push s!"schema-based: {shown}: read {got}"
+      | .error e => failures := failures.push s!"schema-based: {shown}: reading failed: {schemaErrorText e}"
     | "Err" =>
       -- `code`: the error code (spec §17) reading must fail with.
-      let some code := strField fs "code" | failures := failures.push s!"plain: no code: {shown}"
-      match readPlainCanonical env type json with
-      | .ok got => failures := failures.push s!"plain: {shown}: accepted as {got}"
+      let some code := strField fs "code" | failures := failures.push s!"schema-based: no code: {shown}"
+      match readJsonCanonical env type json with
+      | .ok got => failures := failures.push s!"schema-based: {shown}: accepted as {got}"
       | .error e =>
         if codeText e.code != code then
-          failures := failures.push s!"plain: {shown}: {codeText e.code} instead of {code} ({schemaErrorText e})"
-    | _ => failures := failures.push s!"plain: not a case: {shown}"
+          failures := failures.push s!"schema-based: {shown}: {codeText e.code} instead of {code} ({schemaErrorText e})"
+    | _ => failures := failures.push s!"schema-based: not a case: {shown}"
   return failures
 
-def runLosslessCases (cases : List Value) : Array String := Id.run do
+def runSelfDescribingCases (cases : List Value) : Array String := Id.run do
   let mut failures : Array String := #[]
   for c in cases do
     let shown := canonicalText c
-    let some (tag, fs) := jsonCase c | failures := failures.push s!"lossless: not a case: {shown}"
-    let some json := strField fs "json" | failures := failures.push s!"lossless: no json: {shown}"
-    let read := Haus.JSON.readLossless {} json.toList
+    let some (tag, fs) := jsonCase c | failures := failures.push s!"self-describing: not a case: {shown}"
+    let some json := strField fs "json" | failures := failures.push s!"self-describing: no json: {shown}"
+    let read := Haus.JSON.readHausJson {} json.toList
     match tag with
     | "Ok" =>
-      let some input := fs.lookup "input" | failures := failures.push s!"lossless: no input: {shown}"
-      match Haus.JSON.parse {} json.toList with
+      let some input := fs.lookup "input" | failures := failures.push s!"self-describing: no input: {shown}"
+      match Haus.JSON.parseDepth {} (Haus.JSON.hausJsonDepth {}) json.toList with
       | .ok exp =>
-        if !Haus.JSON.equiv (Haus.JSON.lossless input) exp then
-          failures := failures.push s!"lossless: {shown}: wrote {jsonText (Haus.JSON.lossless input)}"
-      | .error e => failures := failures.push s!"lossless: {shown}: the case's JSON: {e}"
+        if !Haus.JSON.equiv (Haus.JSON.hausJson input) exp then
+          failures := failures.push s!"self-describing: {shown}: wrote {jsonText (Haus.JSON.hausJson input)}"
+      | .error e => failures := failures.push s!"self-describing: {shown}: the case's JSON: {e}"
       match read with
-      | .ok v => if !Value.equiv v input then failures := failures.push s!"lossless: {shown}: read {canonicalText v}"
-      | .error e => failures := failures.push s!"lossless: {shown}: reading failed: {e}"
+      | .ok v => if !Value.equiv v input then failures := failures.push s!"self-describing: {shown}: read {canonicalText v}"
+      | .error e => failures := failures.push s!"self-describing: {shown}: reading failed: {e}"
     | "Err" =>
-      let some code := strField fs "code" | failures := failures.push s!"lossless: no code: {shown}"
+      let some code := strField fs "code" | failures := failures.push s!"self-describing: no code: {shown}"
       match read with
-      | .ok v => failures := failures.push s!"lossless: {shown}: accepted as {canonicalText v}"
-      | .error e => if e.code.name != code then failures := failures.push s!"lossless: {shown}: {e.code} instead of {code} ({e.reason})"
-    | _ => failures := failures.push s!"lossless: not a case: {shown}"
+      | .ok v => failures := failures.push s!"self-describing: {shown}: accepted as {canonicalText v}"
+      | .error e => if e.code.name != code then failures := failures.push s!"self-describing: {shown}: {e.code} instead of {code} ({e.reason})"
+    | _ => failures := failures.push s!"self-describing: not a case: {shown}"
   return failures
 
-def runSchemalessCases (cases : List Value) : Array String := Id.run do
+def runImportCases (cases : List Value) : Array String := Id.run do
   let mut failures : Array String := #[]
   for c in cases do
     let shown := canonicalText c
-    let some (tag, fs) := jsonCase c | failures := failures.push s!"schemaless: not a case: {shown}"
-    let some json := strField fs "json" | failures := failures.push s!"schemaless: no json: {shown}"
-    let read := Haus.JSON.readSchemaless {} json.toList
+    let some (tag, fs) := jsonCase c | failures := failures.push s!"import: not a case: {shown}"
+    let some json := strField fs "json" | failures := failures.push s!"import: no json: {shown}"
+    let read := Haus.JSON.readImport {} json.toList
     match tag with
     | "Read" =>
-      let some output := fs.lookup "output" | failures := failures.push s!"schemaless: no output: {shown}"
+      let some output := fs.lookup "output" | failures := failures.push s!"import: no output: {shown}"
       match read with
-      | .ok v => if !Value.equiv v output then failures := failures.push s!"schemaless: {shown}: read {canonicalText v}"
-      | .error e => failures := failures.push s!"schemaless: {shown}: reading failed: {e}"
+      | .ok v => if !Value.equiv v output then failures := failures.push s!"import: {shown}: read {canonicalText v}"
+      | .error e => failures := failures.push s!"import: {shown}: reading failed: {e}"
     | "Err" =>
-      let some code := strField fs "code" | failures := failures.push s!"schemaless: no code: {shown}"
+      let some code := strField fs "code" | failures := failures.push s!"import: no code: {shown}"
       match read with
-      | .ok v => failures := failures.push s!"schemaless: {shown}: accepted as {canonicalText v}"
-      | .error e => if e.code.name != code then failures := failures.push s!"schemaless: {shown}: {e.code} instead of {code} ({e.reason})"
-    | _ => failures := failures.push s!"schemaless: not a case: {shown}"
+      | .ok v => failures := failures.push s!"import: {shown}: accepted as {canonicalText v}"
+      | .error e => if e.code.name != code then failures := failures.push s!"import: {shown}: {e.code} instead of {code} ({e.reason})"
+    | _ => failures := failures.push s!"import: not a case: {shown}"
   return failures
-
-/-- `valid/NAME.json`: the file's values in a JSON array, each in lossless form (spec §16.2). -/
-def validLossless (json : String) (vs : List Value) : Option String :=
-  match Haus.JSON.parse {} json.toList with
-  | .error e => some s!"not JSON: {e}"
-  | .ok (.arr items) =>
-    if items.length != vs.length then some "a different number of values" else
-    (items.zip vs).findSome? fun (j, v) =>
-      if !Haus.JSON.equiv (Haus.JSON.lossless v) j then some s!"wrote {jsonText (Haus.JSON.lossless v)}" else
-      match Haus.JSON.fromLossless j with
-      | .error e => some s!"rejected: {e}"
-      | .ok w => if !w.fits {} then some "outside the limits" else
-        if !Value.equiv w v then some s!"read {canonicalText w}" else none
-  | .ok _ => some "not an array"
 
 def runJsonSuite (dir types : System.FilePath) : IO UInt32 := do
   let cases (name : String) : IO (List Value) := do
@@ -463,13 +473,14 @@ def runJsonSuite (dir types : System.FilePath) : IO UInt32 := do
     count := count + cs.length
     match env with
     | .error e => failures := failures.push s!"{name}: the schema file is rejected: {e}"
-    | .ok env => failures := failures ++ runPlainCases env cs
-  let lossless ← cases "lossless"
-  count := count + lossless.length
-  failures := failures ++ runLosslessCases lossless
-  let schemaless ← cases "schemaless"
-  count := count + schemaless.length
-  failures := failures ++ runSchemalessCases schemaless
+    | .ok env => failures := failures ++ runSchemaBasedCases env cs
+  let selfDescribing ← cases "self-describing"
+  count := count + selfDescribing.length
+  failures := failures ++ runSelfDescribingCases selfDescribing
+  let imports ← cases "import"
+  count := count + imports.length
+  failures := failures ++ runImportCases imports
+  -- Every valid/NAME.jsonl is a self-describing case too: one envelope per value of NAME.haus.
   let valid := dir / ".." / "valid"
   for entry in (← valid.readDir).qsort (·.fileName < ·.fileName) do
     let some name := entry.fileName.dropSuffix? ".haus" | continue
@@ -477,8 +488,8 @@ def runJsonSuite (dir types : System.FilePath) : IO UInt32 := do
     match parseBytes (← IO.FS.readBinFile entry.path) with
     | .error e => failures := failures.push s!"valid/{name}: rejected: {e}"
     | .ok vs =>
-      if let some e := validLossless (← IO.FS.readFile (valid / s!"{name}.json")) vs then
-        failures := failures.push s!"valid/{name}.json: {e}"
+      if let some e := validJsonLines (← IO.FS.readFile (valid / s!"{name}.jsonl")) vs then
+        failures := failures.push s!"valid/{name}.jsonl: {e}"
   for f in failures do IO.println f
   IO.println s!"{count - failures.size}/{count} passed"
   return if failures.isEmpty then 0 else 1
@@ -508,7 +519,7 @@ def jsonLine (write : Bool) (suites : List (String × Except String Schema.Env))
         match String.fromUTF8? (unhex hex) with
         | none => "err $ invalid-utf8 invalid UTF-8"
         | some text =>
-          match Schema.readPlain {} env (.ref type) text.toList with
+          match Schema.readJson {} env (.ref type) text.toList with
           | .error e => errLine e
           | .ok x => s!"ok {canonicalText (Schema.encode x)}"
     | some (.error _) => "err $ - schema rejected"
@@ -522,14 +533,14 @@ def runJsonBatch (write : Bool) (types file : System.FilePath) : IO UInt32 := do
     if !line.isEmpty then out.putStrLn (jsonLine write suites line)
   return 0
 
-/-- One line of `--lossless-batch`: a haus value as lossless JSON. -/
-def losslessLine (line : String) : String :=
+/-- One line of `--haus-json-batch`: a haus value as self-describing JSON, in its envelope. -/
+def hausJsonLine (line : String) : String :=
   match parseBytes (unhex line) with
-  | .ok [v] => s!"ok {jsonText (Haus.JSON.lossless v)}"
+  | .ok [v] => s!"ok {jsonText (Haus.JSON.hausJson v)}"
   | .ok _ => "err $ - not a single value"
   | .error e => s!"err $ - {oneLine e}"
 
-/-- One line of `--lossless-read-batch` or `--schemaless-read-batch`: JSON text read as a haus value. -/
+/-- One line of `--haus-json-read-batch` or `--import-batch`: JSON text read as a haus value. -/
 def readLine (read : Text → Except JSON.Error Value) (line : String) : String :=
   match String.fromUTF8? (unhex line) with
   | none => "err $ invalid-utf8 invalid UTF-8"
@@ -567,11 +578,11 @@ def main : List String → IO UInt32
   | ["--json-suite", dir, types] => runJsonSuite dir types
   | ["--json-batch", types, file] => runJsonBatch true types file
   | ["--json-read-batch", types, file] => runJsonBatch false types file
-  | ["--lossless-batch", file] => runLineBatch losslessLine file
-  | ["--lossless-read-batch", file] => runLineBatch (readLine (Haus.JSON.readLossless {})) file
-  | ["--schemaless-read-batch", file] => runLineBatch (readLine (Haus.JSON.readSchemaless {})) file
+  | ["--haus-json-batch", file] => runLineBatch hausJsonLine file
+  | ["--haus-json-read-batch", file] => runLineBatch (readLine (Haus.JSON.readHausJson {})) file
+  | ["--import-batch", file] => runLineBatch (readLine (Haus.JSON.readImport {})) file
   | [file] => do
       match parseBytes (← IO.FS.readBinFile file) with
-      | .ok vs => IO.println (Json.arr (vs.map toJson).toArray).compress; return 0
+      | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --lossless-batch FILE | --lossless-read-batch FILE | --schemaless-read-batch FILE"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE"; return 2

@@ -1,8 +1,10 @@
 //! Generates the Rust types of every schema the fuzzers use (test-suite/schema,
 //! fuzz/schema, test-suite/json and fuzz/json), and `roundtrip(suite, type, value)`:
 //! decode a value with a type named by a string, then encode the result. For
-//! the JSON fuzzer, `write(suite, type, value)` (decode, then write plain JSON)
-//! and `read(suite, type, text)` (read plain JSON, then encode).
+//! the JSON fuzzer, `write(suite, type, value)` (decode, then write schema-based
+//! JSON) and `read(suite, type, text)` (read schema-based JSON, then encode).
+//! A suite is named after its file (`schema-based` for
+//! schema-based.schema.haus), its module with `_` for `-`.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -25,27 +27,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut code = String::from("/// Decode `v` with `ty` of the schema `suite`, then encode the result; None if there is no such type.\n");
     code += "#[allow(dead_code)]\npub fn roundtrip(suite: &str, ty: &str, v: &::haus::Value) -> Option<Result<::haus::Value, ::haus::DecodeError>> {\n    match suite {\n";
     for (name, _) in &schemas {
-        code += &format!("        {name:?} => {name}::roundtrip(ty, v),\n");
+        code += &format!("        {name:?} => {}::roundtrip(ty, v),\n", ident(name));
     }
     code += "        _ => None,\n    }\n}\n\n";
-    code += "/// Decode `v` with `ty` of the schema `suite`, and write the result as plain JSON; None if there is no such type.\n";
+    code += "/// Decode `v` with `ty` of the schema `suite`, and write the result as schema-based JSON; None if there is no such type.\n";
     code += "#[allow(dead_code)]\npub fn write(suite: &str, ty: &str, v: &::haus::Value) -> Option<Result<String, String>> {\n    match suite {\n";
     for (name, _) in &schemas {
-        code += &format!("        {name:?} => {name}::write(ty, v),\n");
+        code += &format!("        {name:?} => {}::write(ty, v),\n", ident(name));
     }
     code += "        _ => None,\n    }\n}\n\n";
-    code += "/// Read the plain JSON `text` with `ty` of the schema `suite`, and encode the result; None if there is no such type.\n";
+    code += "/// Read the schema-based JSON `text` with `ty` of the schema `suite`, and encode the result; None if there is no such type.\n";
     code += "#[allow(dead_code)]\npub fn read(suite: &str, ty: &str, text: &str) -> Option<Result<::haus::Value, String>> {\n    match suite {\n";
     for (name, _) in &schemas {
-        code += &format!("        {name:?} => {name}::read(ty, text),\n");
+        code += &format!("        {name:?} => {}::read(ty, text),\n", ident(name));
     }
     code += "        _ => None,\n    }\n}\n\n";
     for (name, path) in &schemas {
-        haus_build::Config::new().quiet().compile_as(path, &format!("suite_{name}"))?;
-        code += &module(name, &fs::read_to_string(path)?);
+        haus_build::Config::new().quiet().compile_as(path, &format!("suite_{}", ident(name)))?;
+        code += &module(&ident(name), &fs::read_to_string(path)?);
     }
     fs::write(Path::new(&env::var("OUT_DIR")?).join("schemas.rs"), code)?;
     Ok(())
+}
+
+/// A suite's name as a Rust identifier: `schema_based` for `schema-based`.
+fn ident(name: &str) -> String {
+    name.replace('-', "_")
 }
 
 /// The names of a schema's non-generic definitions: `type Name = …` at the

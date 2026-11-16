@@ -568,6 +568,10 @@ pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, s
             .into()
     };
     if let Some((_, exp)) = n.split_once('e') {
+        // The length first, as a parser meets it (spec §7); a number with an exponent is no integer, so no hex form.
+        if n.len() > limits.max_number_length {
+            return Err(too_long());
+        }
         let digits = exp.trim_start_matches('-');
         if digits.len() > 19 || digits.parse::<u64>().map_or(true, |e| e > limits.max_exponent) {
             return Err(EncodeError::new(

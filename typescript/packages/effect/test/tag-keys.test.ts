@@ -30,7 +30,7 @@ const names = own(namesText)
 const builtins = suite("test-suite/schema/builtins.schema.haus")
 const variants = suite("test-suite/schema/variants.schema.haus")
 const types = suite("test-suite/schema/types.schema.haus")
-const plain = suite("test-suite/json/plain.schema.haus")
+const schemaBased = suite("test-suite/json/schema-based.schema.haus")
 
 type Codec = Schema.Codec<unknown>
 
@@ -46,7 +46,7 @@ const failure = <A, E>(effect: Effect.Effect<A, E>): string => {
 const decode = (schema: Codec, text: string): any => run(Haus.decodeValue(schema)(parse(text)))
 /** Decode `text` with `schema` and encode it again, canonical. */
 const roundTrip = (schema: Codec, text: string) => canonical(run(Haus.encodeValue(schema)(decode(schema, text))))
-/** Write `text` as plain JSON, read it back and encode it, canonical. */
+/** Write `text` as schema-based JSON, read it back and encode it, canonical. */
 const jsonRoundTrip = (schema: Codec, text: string) => {
   const json = run(Haus.toJson(schema)(decode(schema, text)))
   return { json, back: canonical(run(Haus.encodeValue(schema)(run(Haus.fromJson(schema)(json))))) }
@@ -85,10 +85,10 @@ describe("keys named _tag", () => {
 
   it.each([
     ["NameKeys", fuzz.NameKeys, `{_tag:""}`, `{"_tag":""}`],
-    ["plain Map Int32", plain.Counts, `{_tag:0}`, `{"_tag":0}`],
+    ["Map Int32", schemaBased.Counts, `{_tag:0}`, `{"_tag":0}`],
     ["Map Int", builtins.Counts, `{_tag:0}`, `{"_tag":"0"}`],
-    ["Map Any", fuzz.Mixed, `{list:[],map:{},result:Err(0),any:{_tag:0}}`, `"any":{"_tag":{"num":"0"}}`],
-  ])("plain JSON keeps them: %s", (_, schema, input, json) => {
+    ["Map Any", fuzz.Mixed, `{list:[],map:{},result:Err(0),any:{_tag:0}}`, `"any":{"_tag":{"_num":"0"}}`],
+  ])("schema-based JSON keeps them: %s", (_, schema, input, json) => {
     const r = jsonRoundTrip(schema!, input)
     expect(r.json).toContain(json)
     expect(r.back).toBe(canonical(parse(input)))
@@ -116,7 +116,7 @@ describe("a payload field named _tag", () => {
     expect(failure(Haus.decodeValue(V!)(parse(`Odd{_tag:1,y:2}`)))).toMatch(/unexpected field "y"/)
   })
 
-  it("has no plain JSON form (§16.3)", () => {
+  it("has no schema-based JSON form (§16.3)", () => {
     const odd = decode(names.HasOdd!, `{n:1,odd:Odd{_tag:1}}`)
     expect(failure(Haus.toJson(names.HasOdd!)(odd))).toMatch(/'Odd' has a field named _tag/)
     expect(failure(Haus.fromJson(names.HasOdd!)(`{"n":1,"odd":{"_tag":"Odd"}}`))).toMatch(/'Odd' has a field named _tag/)

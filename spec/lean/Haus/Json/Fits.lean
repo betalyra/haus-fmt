@@ -1,35 +1,39 @@
-import Haus.Json.Lossless
+import Haus.Json.SelfDescribing
 import Haus.Json.TextRoundTrip
 
 /-!
 # Values within the limits have JSON within the limits (spec §7, §16)
 
-`lossless_fits`: the lossless JSON of a value within the haus limits
-(`Value.fits`) is within the JSON limits (`Fits`, nested at most
-`jsonDepth L = 4 · maxDepth + 1`), so the JSON text reader reads it back.
+`selfDescribing_fits`: the self-describing form of a value within the haus
+limits (`Value.fits`) is within the JSON limits (`Fits`, nested at most
+`jsonDepth L = 4 · maxDepth + 1`); `hausJson_fits`: so is its
+self-describing JSON, with the envelope one level more (`hausJsonDepth L`).
+So the JSON text reader reads them back.
 
-Two side conditions on the limits, which the defaults meet
-(`Limits.losslessOk_default`):
+Side conditions on the limits, which the defaults meet
+(`Limits.selfDescribingOk_default`):
 
-- member names: the lossless form's own (`num`, `bytes`, `rec`, `tag`,
-  `args`) have at most 5 characters;
+- member names: the form's own (`_num`, `_bytes`, `_rec`, `_tag`, `_args`,
+  `_haus`, `_value`) have at most 6 characters;
 - number literals: a number goes into a JSON string, and a haus number
   within the limits has at most `maxNumberLength · 6/5 + 4` characters (an
-  integer may be longer than `maxNumberLength` when its hex form isn't).
+  integer may be longer than `maxNumberLength` when its hex form isn't);
+- the envelope's version `1` is a number token within the limits.
 
 Record keys and tags count against `maxStringLength` in haus as in JSON
 (§7), and a byte string's hex has two characters a byte, as `Value.fits`
-counts it. Nesting: `Tag { … }` is one level in haus and four in lossless
-JSON (`{"tag", "args": [{"rec": {…}}]}`), so `4 · depth + 1` levels.
+counts it. Nesting: `Tag { … }` is one level in haus and four in
+self-describing JSON (`{"_tag", "_args": [{"_rec": {…}}]}`), so
+`4 · depth + 1` levels, and one more for the envelope.
 -/
 
 namespace Haus
 
-/-- What `lossless_fits` needs of the limits: room for the member names and the number literals. -/
-def Limits.LosslessOk (L : Limits) : Prop :=
-  5 ≤ L.maxStringLength ∧ L.maxNumberLength * 6 / 5 + 4 ≤ L.maxStringLength
+/-- What `hausJson_fits` needs of the limits: room for the member names, the number literals and the version. -/
+def Limits.SelfDescribingOk (L : Limits) : Prop :=
+  6 ≤ L.maxStringLength ∧ L.maxNumberLength * 6 / 5 + 4 ≤ L.maxStringLength ∧ 1 ≤ L.maxNumberLength
 
-theorem Limits.losslessOk_default : Limits.LosslessOk {} := by unfold Limits.LosslessOk; decide
+theorem Limits.selfDescribingOk_default : Limits.SelfDescribingOk {} := by unfold Limits.SelfDescribingOk; decide
 
 namespace JSON
 
@@ -58,17 +62,17 @@ theorem fits_succ {d : Nat} (h : 1 ≤ d) : ∃ d', d = d' + 1 := ⟨d - 1, by o
 
 variable {L : Limits}
 
-theorem names_le (hL : L.LosslessOk) {ms : List (String × JSON)} (h : ∀ m ∈ ms, m.1.length ≤ 5) :
+theorem names_le (hL : L.SelfDescribingOk) {ms : List (String × JSON)} (h : ∀ m ∈ ms, m.1.length ≤ 6) :
     ∀ m ∈ ms, m.1.length ≤ L.maxStringLength :=
   fun m hm => Nat.le_trans (h m hm) hL.1
 
 mutual
-theorem lossless_fitsD (hL : L.LosslessOk) :
-    ∀ (v : Value) {d : Nat}, 4 * v.depth + 1 ≤ d → v.leaves L = true → Fits L d (lossless v)
+theorem selfDescribing_fitsD (hL : L.SelfDescribingOk) :
+    ∀ (v : Value) {d : Nat}, 4 * v.depth + 1 ≤ d → v.leaves L = true → Fits L d (selfDescribing v)
   | .num s, d, hd, hl => by
     simp only [Value.leaves] at hl
     obtain ⟨d', rfl⟩ := fits_succ hd
-    simp only [lossless]
+    simp only [selfDescribing]
     refine .obj _ _ (names_le hL (by simp <;> decide)) ?_
     simp only [List.mem_singleton, forall_eq]
     exact .str _ _ (by have := numberFits_length hl; have := hL.2; rw [String.length_toList] at *; omega)
@@ -78,7 +82,7 @@ theorem lossless_fitsD (hL : L.LosslessOk) :
   | .bytes bs, d, hd, hl => by
     simp only [Value.leaves, decide_eq_true_eq] at hl
     obtain ⟨d', rfl⟩ := fits_succ hd
-    simp only [lossless]
+    simp only [selfDescribing]
     refine .obj _ _ (names_le hL (by simp <;> decide)) ?_
     simp only [List.mem_singleton, forall_eq]
     exact .str _ _ (by simp [hex_length]; omega)
@@ -86,17 +90,17 @@ theorem lossless_fitsD (hL : L.LosslessOk) :
     simp only [Value.leaves] at hl
     simp only [Value.depth] at hd
     obtain ⟨d', rfl⟩ := fits_succ (d := d) (by omega)
-    simp only [lossless]
-    exact .arr _ _ (losslessList_fitsD hL xs (by omega) hl)
+    simp only [selfDescribing]
+    exact .arr _ _ (selfDescribingList_fitsD hL xs (by omega) hl)
   | .record fs, d, hd, hl => by
     simp only [Value.leaves] at hl
     simp only [Value.depth] at hd
     obtain ⟨d', rfl⟩ := fits_succ (d := d) (by omega)
     obtain ⟨d'', rfl⟩ := fits_succ (d := d') (by omega)
-    simp only [lossless]
+    simp only [selfDescribing]
     refine .obj _ _ (names_le hL (by simp <;> decide)) ?_
     simp only [List.mem_singleton, forall_eq]
-    have h := losslessFields_fitsD hL fs (d := d'') (by omega) hl
+    have h := selfDescribingFields_fitsD hL fs (d := d'') (by omega) hl
     exact .obj _ _ (fun m hm => (h m hm).1) (fun m hm => (h m hm).2)
   | .variant t xs, d, hd, hl => by
     simp only [Value.leaves, Bool.and_eq_true, decide_eq_true_eq] at hl
@@ -127,7 +131,7 @@ theorem lossless_fitsD (hL : L.LosslessOk) :
         obtain ⟨fs, rfl⟩ := hx
         simp only [Value.depth] at hd
         simp only [Value.leavesList, Value.leaves, Bool.and_true] at hl
-        simp only [lossless, losslessList]
+        simp only [selfDescribing, selfDescribingList]
         obtain ⟨e, rfl⟩ := fits_succ (d := d') (by omega)
         refine htag e _ rfl (by simp) ?_
         simp only [List.mem_singleton, forall_eq]
@@ -135,51 +139,66 @@ theorem lossless_fitsD (hL : L.LosslessOk) :
         refine .obj _ _ (names_le hL (by simp <;> decide)) ?_
         simp only [List.mem_singleton, forall_eq]
         obtain ⟨b, rfl⟩ := fits_succ (d := a) (by omega)
-        have h := losslessFields_fitsD hL fs (d := b) (by omega) hl.2
+        have h := selfDescribingFields_fitsD hL fs (d := b) (by omega) hl.2
         exact .obj _ _ (fun m hm => (h m hm).1) (fun m hm => (h m hm).2)
       · have hx' : ∀ fs, [x] ≠ [Value.record fs] := fun fs h => hx ⟨fs, by simpa using h⟩
         rw [Value.depth_variant (by simp) hx'] at hd
-        simp only [lossless]
+        simp only [selfDescribing]
         obtain ⟨e, rfl⟩ := fits_succ (d := d') (by omega)
-        exact htag e _ rfl (by simp [losslessList]) (losslessList_fitsD hL [x] (by omega) hl.2)
+        exact htag e _ rfl (by simp [selfDescribingList]) (selfDescribingList_fitsD hL [x] (by omega) hl.2)
     · rw [Value.depth_variant (by simp) (by simp)] at hd
-      simp only [lossless]
+      simp only [selfDescribing]
       obtain ⟨e, rfl⟩ := fits_succ (d := d') (by omega)
-      exact htag e _ rfl (by simp [losslessList]) (losslessList_fitsD hL _ (by omega) hl.2)
+      exact htag e _ rfl (by simp [selfDescribingList]) (selfDescribingList_fitsD hL _ (by omega) hl.2)
 
-theorem losslessList_fitsD (hL : L.LosslessOk) :
+theorem selfDescribingList_fitsD (hL : L.SelfDescribingOk) :
     ∀ (xs : List Value) {d : Nat}, 4 * Value.depthList xs + 1 ≤ d → Value.leavesList L xs = true →
-      ∀ j ∈ losslessList xs, Fits L d j
-  | [], _, _, _ => by simp [losslessList]
+      ∀ j ∈ selfDescribingList xs, Fits L d j
+  | [], _, _, _ => by simp [selfDescribingList]
   | x :: xs, d, hd, hl => by
     simp only [Value.depthList] at hd
     simp only [Value.leavesList, Bool.and_eq_true] at hl
-    simp only [losslessList, List.mem_cons]
+    simp only [selfDescribingList, List.mem_cons]
     rintro j (rfl | hj)
-    · exact lossless_fitsD hL x (by omega) hl.1
-    · exact losslessList_fitsD hL xs (by omega) hl.2 j hj
+    · exact selfDescribing_fitsD hL x (by omega) hl.1
+    · exact selfDescribingList_fitsD hL xs (by omega) hl.2 j hj
 
-theorem losslessFields_fitsD (hL : L.LosslessOk) :
+theorem selfDescribingFields_fitsD (hL : L.SelfDescribingOk) :
     ∀ (fs : List (String × Value)) {d : Nat}, 4 * Value.depthFields fs + 1 ≤ d → Value.leavesFields L fs = true →
-      ∀ m ∈ losslessFields fs, m.1.length ≤ L.maxStringLength ∧ Fits L d m.2
-  | [], _, _, _ => by simp [losslessFields]
+      ∀ m ∈ selfDescribingFields fs, m.1.length ≤ L.maxStringLength ∧ Fits L d m.2
+  | [], _, _, _ => by simp [selfDescribingFields]
   | (k, x) :: fs, d, hd, hl => by
     simp only [Value.depthFields] at hd
     simp only [Value.leavesFields, Bool.and_eq_true, decide_eq_true_eq] at hl
-    simp only [losslessFields, List.mem_cons]
+    simp only [selfDescribingFields, List.mem_cons]
     rintro m (rfl | hm)
-    · exact ⟨hl.1.1, lossless_fitsD hL x (by omega) hl.1.2⟩
-    · exact losslessFields_fitsD hL fs (by omega) hl.2 m hm
+    · exact ⟨hl.1.1, selfDescribing_fitsD hL x (by omega) hl.1.2⟩
+    · exact selfDescribingFields_fitsD hL fs (by omega) hl.2 m hm
 end
 
 /--
-**Lossless JSON within the limits** (§7, §16.2): the lossless form of a value
-within the haus limits is within the JSON limits, when the limits leave room
-for the lossless form's member names and number literals (`LosslessOk`).
+**A self-describing value within the limits** (§7, §16.2): the
+self-describing form of a value within the haus limits is within the JSON
+limits, when the limits leave room for the form's member names and number
+literals (`SelfDescribingOk`).
 -/
-theorem lossless_fits (hL : L.LosslessOk) {v : Value} (h : v.fits L = true) : Fits L (jsonDepth L) (lossless v) := by
+theorem selfDescribing_fits (hL : L.SelfDescribingOk) {v : Value} (h : v.fits L = true) : Fits L (jsonDepth L) (selfDescribing v) := by
   simp only [Value.fits, Bool.and_eq_true, decide_eq_true_eq] at h
-  exact lossless_fitsD hL v (by simp [jsonDepth]; omega) h.2
+  exact selfDescribing_fitsD hL v (by simp [jsonDepth]; omega) h.2
+
+/--
+**Self-describing JSON within the limits** (§7, §16.2): the self-describing
+JSON of a value within the haus limits, its envelope included, is within the
+JSON limits, nested at most `4 · maxDepth + 2`.
+-/
+theorem hausJson_fits (hL : L.SelfDescribingOk) {v : Value} (h : v.fits L = true) :
+    Fits L (hausJsonDepth L) (hausJson v) := by
+  refine .obj _ _ (names_le hL (by simp <;> decide)) ?_
+  intro m hm
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hm
+  rcases hm with rfl | rfl
+  · exact .num _ _ (by simp [tokenFits, exponentOf]; exact hL.2.2)
+  · exact selfDescribing_fits hL h
 
 end JSON
 end Haus

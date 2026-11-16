@@ -34,6 +34,6 @@ Tags start with an uppercase letter and contain only letters, digits and `_`: `"
 
 ## haus to JSON
 
-- **For JSON consumers, with a schema** (the plain mapping): `Int`, `Int64`, `UInt64` and `Decimal` become strings (`"19.90"`); smaller integers and floats numbers; `Bool` `true`/`false`; `Bytes` base64; time values their string; `Maybe` `null` or the value; a missing optional field a missing member. Closed variants without payloads become strings (`"Debug"`); other variants objects with `"_tag"`: `{"_tag": "Circle", "r": 1.5}`, positional arguments as `"value"` (one) or `"values"` (several).
-- **Without a schema, lossless:** `{"num": "19.90"}`, `{"rec": {…}}`, `{"tag": "Some", "args": […]}`, `{"bytes": "0b34ff"}`; strings and arrays as themselves.
+- **For JSON consumers, with a schema** (schema-based JSON): `Int`, `Int64`, `UInt64` and `Decimal` become strings (`"19.90"`); smaller integers and floats numbers; `Bool` `true`/`false`; `Bytes` base64; time values their string; `Maybe` `null` or the value; a missing optional field a missing member. Closed variants without payloads become strings (`"Debug"`); other variants objects with `"_tag"`: `{"_tag": "Circle", "r": 1.5}`, positional arguments as `"value"` (one) or `"values"` (several).
+- **Without a schema, exact** (self-describing JSON, for haus tools): `{"_haus": 1, "_value": …}` around `{"_num": "19.90"}`, `{"_rec": {…}}`, `{"_tag": "Some", "_args": […]}`, `{"_bytes": "0b34ff"}`; strings and arrays as themselves.
 - A stream becomes JSON Lines.

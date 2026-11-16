@@ -2,10 +2,11 @@
 ## reads one case per line and prints one line each, `ok …` or
 ## `err <place> <code> <reason>` (the place as spec §17 writes it, `$` for an
 ## error in the JSON text, and the error code; `-` for none):
-## `write` and `read` (lines `SUITE TYPE HEX`) write and read plain JSON with
-## a type (the modules that gen_json_schemas.ts generates), `lossless-write`
-## and `lossless-read` (lines `HEX`) the lossless form, `schemaless` reads
-## JSON without a schema. Reads print the canonical form of the value.
+## `write` and `read` (lines `SUITE TYPE HEX`) write and read schema-based
+## JSON with a type (the modules that gen_json_schemas.ts generates),
+## `haus-json-write` and `haus-json-read` (lines `HEX`) self-describing JSON,
+## in its envelope, and `import` reads JSON without a schema. Reads print the
+## canonical form of the value.
 app [main!] {
 	haus: "../../roc/package/main.roc",
 	schemas: "../.build/roc-json/main.roc",
@@ -87,15 +88,15 @@ untyped : Str, List(U8) -> Str
 untyped = |mode, input| match Str.from_utf8(input) {
 	Err(_) => "err $ invalid-utf8 invalid UTF-8"
 	Ok(s) => match mode {
-		"lossless-write" => match Value.parse_all(s) {
-			Ok([v]) => match JsonValue.to_lossless_json(v) {
+		"haus-json-write" => match Value.parse_all(s) {
+			Ok([v]) => match JsonValue.to_haus_json(v) {
 				Ok(json) => "ok ${json}"
 				Err(e) => "err ${ErrorCode.place(e.path)} ${e.code} ${clean(e.reason)}"
 			}
 			_ => "err $ - not a single value"
 		}
-		"lossless-read" => shown(JsonValue.from_lossless_json(s))
-		"schemaless" => shown(JsonValue.from_json(s))
+		"haus-json-read" => shown(JsonValue.from_haus_json(s))
+		"import" => shown(JsonValue.import_json(s))
 		_ => "crash bad mode ${mode}"
 	}
 }

@@ -79,8 +79,8 @@ const text = Haus.encodeStream(Event)(events)               // Stream<string>, o
 
 ## JSON
 
-The same schemas read and write plain JSON (spec §16.3), the JSON a JSON
-consumer expects. The schema says what JSON can't: that a string is a date
+The same schemas read and write schema-based JSON (spec §16.3), the JSON a
+JSON consumer expects. The schema says what JSON can't: that a string is a date
 or a decimal.
 
 ```ts
@@ -104,18 +104,22 @@ const decoded = Haus.decodeJsonLines(Event)(response.body!)  // Stream<Event, Ha
 | `optionalKey(X)` | a missing member (never `null`) |
 | `Literals(["Debug", "Info"])` | a string, `"Debug"` |
 | tagged structs | `{"_tag": "Circle", "r": 1.5}`; `{"_tag": "Wrap", "value": 3}` and `{"_tag": "Point", "values": [1, 2]}` for positional ones |
-| an unknown tag in `Haus.OpenUnion` | `{"_tag": "Hexagon", "args": […]}`, the arguments lossless; read back from that form, or from a newer writer's `{"_tag": "Hexagon", "sides": 6}` as `Hexagon { sides: 6 }` |
-| `Haus.Any` | the lossless form: `{"num": "19.90"}`, `{"rec": {…}}`, `{"tag": "None"}`, … |
+| an unknown tag in `Haus.OpenUnion` | `{"_tag": "Hexagon", "_args": […]}`, the arguments self-describing; read back from that form, or from a newer writer's `{"_tag": "Hexagon", "sides": 6}` as `Hexagon { sides: 6 }` |
+| `Haus.Any` | the self-describing form without the envelope: `{"_num": "19.90"}`, `{"_rec": {…}}`, `{"_tag": "None"}`, … |
 | `Redacted(X)` | as X; errors inside never show the value |
 
 Numbers keep their exact text: the reader never rounds them through a float,
 and rejects text that isn't I-JSON (duplicate members, unpaired surrogates).
-A schema with no plain form (`Schema.Unknown`, a union that isn't tagged) is
-a `HausSchemaError` naming it. `Haus.toJsonValue` and `Haus.fromJsonValue`
-work on parsed JSON (`JsonNumber`s for numbers), `Haus.valueFromJson` reads
-JSON without a schema as a haus `Value` (spec §16.1), and
-`Haus.toJson(Haus.Any)` / `Haus.fromJson(Haus.Any)` are the lossless mapping
-(spec §16.2).
+A schema with no schema-based form (`Schema.Unknown`, a union that isn't
+tagged, a tagged struct with a field `_args`) is a `HausSchemaError` naming
+it. `Haus.toJsonValue` and `Haus.fromJsonValue` work on parsed JSON
+(`JsonNumber`s for numbers).
+
+Without a schema, on haus `Value`s: `Haus.toHausJson` / `Haus.fromHausJson`
+write and read self-describing JSON (spec §16.2), every haus value exactly in
+an envelope, `{"_haus":1,"_value":…}`, and `Haus.importJson` reads any JSON as
+a haus `Value` (spec §16.1). The caller says which form it reads: only
+`Haus.fromHausJson` looks for the envelope.
 
 ## Limits
 

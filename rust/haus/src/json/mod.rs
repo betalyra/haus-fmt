@@ -1,14 +1,19 @@
-//! JSON (spec §16): the two mappings between haus and JSON, and a strict
+//! JSON (spec §16): the three forms that connect haus and JSON, and a strict
 //! JSON reader and writer for them.
 //!
-//! - **Without a schema** (§16.1), [`crate::from_json`] reads any JSON as a
-//!   haus [`Value`](crate::Value): `null` is `None`, `true` is `True`, numbers keep their text.
-//! - **Lossless** (§16.2), [`crate::to_lossless_json`] and
-//!   [`crate::from_lossless_json`] carry every haus value through JSON and back:
-//!   `{"num": "19.90"}`, `{"tag": "Some", "args": […]}`.
-//! - **Plain** (§16.3), the JSON a JSON consumer expects, needs the schema
-//!   type: haus-fmt-build implements [`ToJson`] and [`FromJson`] for every type it
-//!   generates, and [`to_string`] / [`from_str`] write and read them.
+//! - **Schema-based JSON** (§16.3), the JSON a JSON consumer expects, needs
+//!   the schema type: haus-fmt-build implements [`ToJson`] and [`FromJson`]
+//!   for every type it generates, and [`to_string`] / [`from_str`] write and
+//!   read them.
+//! - **Self-describing JSON** (§16.2), [`crate::to_haus_json`] and
+//!   [`crate::from_haus_json`], carries every haus value through JSON and
+//!   back, without a schema: `{"_haus": 1, "_value": {"_num": "19.90"}}`.
+//! - **JSON import** (§16.1), [`crate::import_json`], reads any JSON as a
+//!   haus [`Value`], without a schema: `null` is `None`, `true`
+//!   is `True`, numbers keep their text. It only reads.
+//!
+//! The caller says which form it reads; the data never decides. To the
+//! schema-based reader and the import, an envelope is an object like any other.
 //!
 //! ```
 //! let ids: Vec<haus::Int> = haus::json::from_str(r#"["1", "123456789012345678901234567890"]"#).unwrap();
@@ -17,29 +22,36 @@
 //! assert_eq!(haus::json::to_string(&Some(None::<f64>)).unwrap(), r#"{"_tag":"Some","value":null}"#);
 //!
 //! let value = haus::parse("Point(1, 2.50)").unwrap().remove(0);
-//! let lossless = haus::to_lossless_json(&value).unwrap();
-//! assert_eq!(lossless, r#"{"tag":"Point","args":[{"num":"1"},{"num":"2.50"}]}"#);
-//! assert_eq!(haus::from_lossless_json(&lossless).unwrap(), value);
+//! let json = haus::to_haus_json(&value).unwrap();
+//! assert_eq!(json, r#"{"_haus":1,"_value":{"_tag":"Point","_args":[{"_num":"1"},{"_num":"2.50"}]}}"#);
+//! assert_eq!(haus::from_haus_json(&json).unwrap(), value);
 //! ```
 //!
 //! The reader takes RFC 8259 JSON restricted to I-JSON (RFC 7493): UTF-8, no
 //! duplicate member names, no unpaired surrogates in `\u` escapes; a leading
 //! byte order mark is ignored. Numbers keep their text and are never rounded
-//! through a float, except where the type is a float.
+//! through a float, except where the type is a float. Self-describing JSON
+//! may not hold raw DEL, C1 or bidi controls in strings and member names;
+//! the other forms accept them. Writers escape them, and every character
+//! below U+0020.
 //!
-//! The limits of spec §7 apply to the haus value that results. A mapping can
-//! take several JSON levels for one haus level, so JSON may nest 4·d + 1
-//! levels (d is [`Limits::max_depth`]), and the depth of the resulting value
-//! is then checked against d. Without a schema, JSON may nest d levels.
+//! The limits of spec §7 apply to the haus value that results. A form can
+//! take several JSON levels for one haus level, so schema-based JSON may nest
+//! 4·d + 1 levels (d is [`Limits::max_depth`]), self-describing JSON one more
+//! for its envelope, and the depth of the resulting value is then checked
+//! against d. The import's JSON may nest d levels.
 //!
 //! A stream is JSON Lines (§16): one JSON text per value, each followed by a
-//! line feed: [`to_string_all`], [`from_str_all`], [`encode`], [`decode`].
+//! line feed: [`to_string_all`], [`from_str_all`], [`encode`], [`decode`]
+//! for schema-based JSON, [`to_haus_json_lines`] and
+//! [`from_haus_json_lines`] for self-describing JSON, an envelope per line.
 //! Readers accept a missing line feed after the last value and CR LF; a byte
 //! order mark is ignored only at the start of the stream.
 
 mod base64;
 pub mod de;
-pub(crate) mod lossless;
+mod haus_json;
+mod import;
 mod read;
 pub mod ser;
 
@@ -47,9 +59,11 @@ use crate::error::Position;
 use crate::{
     DecodeError, Decoder, Encode, EncodeError, Encoder, Error, ErrorCode, Limits, Segment, SyntaxError, Value,
 };
+use read::Form;
 use std::io::{BufRead, Read, Write};
 
-pub use lossless::{from_lossless, from_plain, to_lossless};
+pub use haus_json::{from_self_describing, to_self_describing};
+pub use import::import;
 
 /// A JSON value. Numbers are kept as their exact text, and objects as their
 /// members in order (names are unique in what the reader gives).
@@ -74,29 +88,29 @@ impl Json {
     }
 }
 
-/// A Rust type written as plain JSON (spec §16.3). haus-fmt-build implements it
+/// A Rust type written as schema-based JSON (spec §16.3). haus-fmt-build implements it
 /// for the types it generates.
 pub trait ToJson {
     /// Whether this type's JSON can be `null`: only a `Maybe` that writes
     /// `None` as `null` (§16.3). A `Maybe` of such a type writes the tagged form.
     const NULLABLE: bool = false;
 
-    /// The plain JSON, for a reader with `e`'s limits, at `e`'s depth. Fails
+    /// The schema-based JSON, for a reader with `e`'s limits, at `e`'s depth. Fails
     /// only for a value that has none: one nested deeper than the depth limit
     /// as a haus value (checked before each container, so a deep value fails
-    /// instead of recursing on), a [`Value`](crate::Value) built in code that
+    /// instead of recursing on), a [`Value`] built in code that
     /// isn't a valid haus value (the raw value of an `Any` or an unknown
-    /// variant), or a record payload with a field named `_tag`. An error inside
+    /// variant), or a record payload with a field named `_tag` or `_args`. An error inside
     /// a `Secret` is reported at the secret (spec §15).
     fn to_json_with(&self, e: Encoder) -> Result<Json, EncodeError>;
 
-    /// The plain JSON, for a reader with the default limits.
+    /// The schema-based JSON, for a reader with the default limits.
     fn to_json(&self) -> Result<Json, EncodeError> {
         self.to_json_with(Encoder::default())
     }
 }
 
-/// A Rust type read from plain JSON (spec §16.3). haus-fmt-build implements it
+/// A Rust type read from schema-based JSON (spec §16.3). haus-fmt-build implements it
 /// for the types it generates.
 pub trait FromJson: Sized {
     /// As [`ToJson::NULLABLE`].
@@ -123,15 +137,10 @@ pub fn parse(text: &str) -> Result<Json, SyntaxError> {
     parse_with(text, &Limits::default())
 }
 
-/// Read one JSON text with `limits`: it may nest 4·d + 1 levels (see the module docs).
+/// Read one JSON text with `limits`, as the schema-based reader reads it:
+/// it may nest 4·d + 1 levels (see the module docs).
 pub fn parse_with(text: &str, limits: &Limits) -> Result<Json, SyntaxError> {
-    read::parse(text, limits, read::max_depth(limits), true)
-}
-
-/// Read JSON without a schema (spec §16.1) with `limits`: as [`from_plain`]
-/// after reading JSON that nests at most d levels.
-pub fn value_from_str_with(text: &str, limits: &Limits) -> Result<Value, Error> {
-    Ok(from_plain(&read::parse(text, limits, limits.max_depth, true)?, limits)?)
+    read::parse(text, limits, Form::SchemaBased, true)
 }
 
 /// Read raw bytes, which must be UTF-8.
@@ -156,6 +165,11 @@ pub fn write(json: &Json) -> Result<String, EncodeError> {
 /// what the reader takes. These errors say what, not where: the place could
 /// be inside a `Secret`.
 pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
+    write_form(json, limits, Form::SchemaBased)
+}
+
+/// [`write_with`], for a reader of `form`: it nests as deep as that reader takes.
+fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, EncodeError> {
     /// What is left to write, last first: a stack rather than recursion, so
     /// that deep nesting takes no call stack.
     enum Next<'a> {
@@ -165,7 +179,7 @@ pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
         Close(char),
     }
     crate::ser::supported(limits)?;
-    let max = read::max_depth(limits);
+    let max = form.max_depth(limits);
     let (mut out, mut depth, mut todo) = (String::new(), 0, vec![Next::Value(json)]);
     while let Some(next) = todo.pop() {
         match next {
@@ -257,7 +271,7 @@ pub(crate) fn is_number(n: &str) -> bool {
         && exp.is_none_or(|e| digits(e.strip_prefix(['+', '-']).unwrap_or(e)))
 }
 
-/// A JSON string. Only what JSON requires is escaped.
+/// A JSON string, escaped as [`escape`] escapes it.
 fn quote(s: &str, limits: &Limits, out: &mut String) -> Result<(), EncodeError> {
     let max = limits.max_string_length;
     if s.len() > max && s.chars().count() > max {
@@ -267,7 +281,9 @@ fn quote(s: &str, limits: &Limits, out: &mut String) -> Result<(), EncodeError> 
     Ok(())
 }
 
-/// `s` as a JSON string, appended to `out`. Only what JSON requires is escaped.
+/// `s` as a JSON string, appended to `out`. Besides what JSON requires, DEL,
+/// C1 and the bidi controls are escaped, so that the JSON can't display
+/// differently from what it holds (spec §16).
 pub(crate) fn escape(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -279,17 +295,19 @@ pub(crate) fn escape(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if c < ' ' => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c if crate::parser::is_control(c) || crate::parser::is_bidi(c) => {
+                out.push_str(&format!("\\u{:04x}", u32::from(c)));
+            }
             c => out.push(c),
         }
     }
     out.push('"');
 }
 
-// ── plain JSON with a type ────────────────────────────────────
+// ── schema-based JSON ────────────────────────────────────────
 
-/// Read plain JSON (spec §16.3) as a `T`. The value that results must nest at
-/// most 256 levels, as a haus value (it is encoded to check that).
+/// Read schema-based JSON (spec §16.3) as a `T`. The value that results must
+/// nest at most 256 levels, as a haus value (it is encoded to check that).
 pub fn from_str<T: FromJson + Encode>(text: &str) -> Result<T, Error> {
     from_str_with(text, &Limits::default())
 }
@@ -310,7 +328,7 @@ fn typed<T: FromJson + Encode>(json: &Json, limits: &Limits) -> Result<T, Error>
     }
 }
 
-/// Write a value as plain JSON (spec §16.3), on one line.
+/// Write a value as schema-based JSON (spec §16.3), on one line.
 pub fn to_string<T: ToJson + ?Sized>(value: &T) -> Result<String, EncodeError> {
     to_string_with(value, &Limits::default())
 }
@@ -321,43 +339,101 @@ pub fn to_string_with<T: ToJson + ?Sized>(value: &T, limits: &Limits) -> Result<
     write_with(&value.to_json_with(Encoder::new(limits))?, limits)
 }
 
+// ── self-describing JSON and the import ──────────────────────
+
+/// [`crate::to_haus_json`], for a reader with `limits`. Fails if
+/// `limits.max_depth` is more than [`crate::MAX_SUPPORTED_DEPTH`].
+pub fn to_haus_json_with(value: &Value, limits: &Limits) -> Result<String, EncodeError> {
+    write_form(&to_self_describing(value, limits)?, limits, Form::SelfDescribing)
+}
+
+/// [`crate::from_haus_json`] with `limits`. Fails if `limits.max_depth` is
+/// more than [`crate::MAX_SUPPORTED_DEPTH`].
+pub fn from_haus_json_with(text: &str, limits: &Limits) -> Result<Value, Error> {
+    Ok(from_self_describing(&read::parse(text, limits, Form::SelfDescribing, true)?, limits)?)
+}
+
+/// [`crate::import_json`] with `limits`: the JSON may nest d levels, one per
+/// level of the haus value. Fails if `limits.max_depth` is more than
+/// [`crate::MAX_SUPPORTED_DEPTH`].
+pub fn import_json_with(text: &str, limits: &Limits) -> Result<Value, Error> {
+    Ok(import(&read::parse(text, limits, Form::Import, true)?, limits)?)
+}
+
 // ── JSON Lines ────────────────────────────────────────────────
 
-/// Write values as JSON Lines: one JSON text per value, each followed by a
-/// line feed. Errors say which value: `[3].total: …`.
+/// Write values as schema-based JSON Lines: one JSON text per value, each
+/// followed by a line feed. Errors say which value: `[3].total: …`.
 pub fn to_string_all<T: ToJson>(values: &[T]) -> Result<String, EncodeError> {
+    lines(values, to_string)
+}
+
+/// Write values as self-describing JSON Lines: an envelope per value, each
+/// followed by a line feed. Errors say which value: `[3].total: …`.
+pub fn to_haus_json_lines(values: &[Value]) -> Result<String, EncodeError> {
+    lines(values, crate::to_haus_json)
+}
+
+/// Each value written by `write`, followed by a line feed.
+fn lines<T>(values: &[T], write: impl Fn(&T) -> Result<String, EncodeError>) -> Result<String, EncodeError> {
     values
         .iter()
         .enumerate()
-        .map(|(i, v)| to_string(v).map(|line| line + "\n").map_err(|e| e.within(Segment::Index(i))))
+        .map(|(i, v)| write(v).map(|line| line + "\n").map_err(|e| e.within(Segment::Index(i))))
         .collect()
 }
 
-/// Read JSON Lines: every line a JSON text read as a `T`. The last line may
-/// end without a line feed, lines may end with CR LF, and a byte order mark
-/// is ignored at the start; empty lines are errors. Syntax errors give the
-/// line in the whole text, decode errors the value's index.
+/// Read schema-based JSON Lines: every line a JSON text read as a `T`. The
+/// last line may end without a line feed, lines may end with CR LF, and a
+/// byte order mark is ignored at the start; empty lines are errors. Syntax
+/// errors give the line in the whole text, decode errors the value's index.
 pub fn from_str_all<T: FromJson + Encode>(text: &str) -> Result<Vec<T>, Error> {
-    let text = text.strip_suffix('\n').unwrap_or(text);
-    if text.is_empty() {
-        return Ok(vec![]);
-    }
-    text.split('\n').enumerate().map(|(i, line)| line_value(i, line, &Limits::default())).collect()
+    read_lines(text, |i, line| typed_line(i, line, &Limits::default()))
 }
 
-/// Line `i` (0-based) of JSON Lines, as a `T`. Only the first line may start
-/// with a byte order mark.
-fn line_value<T: FromJson + Encode>(i: usize, line: &str, limits: &Limits) -> Result<T, Error> {
+/// Read self-describing JSON Lines: every line an envelope, read as
+/// [`from_str_all`] reads its lines.
+pub fn from_haus_json_lines(text: &str) -> Result<Vec<Value>, Error> {
+    let limits = Limits::default();
+    read_lines(text, |i, line| {
+        line_json(i, line, &limits, Form::SelfDescribing, |json| Ok(from_self_describing(json, &limits)?))
+    })
+}
+
+/// The values of the lines of `text`, each read by `read` with its index.
+fn read_lines<T>(text: &str, read: impl Fn(usize, &str) -> Result<T, Error>) -> Result<Vec<T>, Error> {
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    match text.is_empty() {
+        true => Ok(vec![]),
+        false => text.split('\n').enumerate().map(|(i, line)| read(i, line)).collect(),
+    }
+}
+
+/// Line `i` (0-based) of schema-based JSON Lines, as a `T`.
+fn typed_line<T: FromJson + Encode>(i: usize, line: &str, limits: &Limits) -> Result<T, Error> {
+    line_json(i, line, limits, Form::SchemaBased, |json| typed(json, limits))
+}
+
+/// Line `i` (0-based) of JSON Lines in `form`, read as JSON and then by
+/// `read`. Only the first line may start with a byte order mark. Syntax
+/// errors give the line, decode errors the value's index.
+fn line_json<T>(
+    i: usize,
+    line: &str,
+    limits: &Limits,
+    form: Form,
+    read: impl FnOnce(&Json) -> Result<T, Error>,
+) -> Result<T, Error> {
     let at = Position { offset: 0, line: i + 1, column: 1 };
-    let json = read::parse(line, limits, read::max_depth(limits), i == 0).map_err(|e| e.from(at))?;
-    typed(&json, limits).map_err(|e| match e {
+    let json = read::parse(line, limits, form, i == 0).map_err(|e| e.from(at))?;
+    read(&json).map_err(|e| match e {
         Error::Decode(e) => Error::Decode(e.index(i)),
         e => e,
     })
 }
 
-/// Write `values` as JSON Lines. A value that can't be written stops the
-/// output before it, with an error that says which: `[3].total: …`.
+/// Write `values` as schema-based JSON Lines. A value that can't be written
+/// stops the output before it, with an error that says which: `[3].total: …`.
 pub fn encode<T: ToJson, W: Write>(mut output: W, values: impl IntoIterator<Item = T>) -> Result<(), Error> {
     for (i, v) in values.into_iter().enumerate() {
         let line = to_string(&v).map_err(|e| e.within(Segment::Index(i)))?;
@@ -366,9 +442,9 @@ pub fn encode<T: ToJson, W: Write>(mut output: W, values: impl IntoIterator<Item
     Ok(output.flush()?)
 }
 
-/// The values of JSON Lines read from `input`, as `T`, one line at a time,
-/// as [`from_str_all`] reads them. A line may hold at most 64 Mi characters
-/// (spec §7). The iterator ends after the first error.
+/// The values of schema-based JSON Lines read from `input`, as `T`, one line
+/// at a time, as [`from_str_all`] reads them. A line may hold at most 64 Mi
+/// characters (spec §7). The iterator ends after the first error.
 pub fn decode<T: FromJson + Encode, R: BufRead>(input: R) -> impl Iterator<Item = Result<T, Error>> {
     const MAX_LINE: usize = 64 * 1024 * 1024;
     let mut input = Some(input);
@@ -404,5 +480,23 @@ fn read_line<T: FromJson + Encode>(i: usize, line: &[u8], max: usize) -> Result<
         let reason = format!("JSON Lines: line {} is longer than {max} characters", i + 1);
         return Err(SyntaxError::new(ErrorCode::ValueTooLong, reason, at).into());
     }
-    line_value(i, text, &Limits::default())
+    typed_line(i, text, &Limits::default())
+}
+
+// ── depth while decoding ─────────────────────────────────────
+
+/// Whether this binding supports `limits` (spec §7), as a decoding error.
+pub(crate) fn decode_supported(limits: &Limits) -> Result<(), DecodeError> {
+    limits.unsupported().map_or(Ok(()), |reason| Err(DecodeError::new(ErrorCode::UnsupportedDepth, reason)))
+}
+
+/// The depth inside one more container, after `depth`, if `limits` allow it.
+pub(crate) fn open(limits: &Limits, depth: usize) -> Result<usize, DecodeError> {
+    decode_supported(limits)?;
+    match depth >= limits.max_depth {
+        true => {
+            Err(DecodeError::new(ErrorCode::NestingTooDeep, format!("nesting deeper than {} levels", limits.max_depth)))
+        }
+        false => Ok(depth + 1),
+    }
 }

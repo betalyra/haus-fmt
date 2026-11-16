@@ -3,27 +3,50 @@
 //! escapes pair their surrogates, and the limits of spec §7 apply.
 
 use super::Json;
+use crate::parser::{is_bidi, is_control};
 use crate::{ErrorCode as Code, Limits, SyntaxError};
 use std::collections::HashSet;
 
 type R<T> = Result<T, SyntaxError>;
 
-/// How deep JSON may nest for `limits` (spec §16): 4·d + 1. A mapping can
-/// take several JSON levels for one haus level (`Tag { … }` is `{"tag": …,
-/// "args": [{"rec": {…}}]}`); the depth of the haus value that results is
-/// checked against d where JSON becomes one.
-pub(crate) fn max_depth(limits: &Limits) -> usize {
-    limits.max_depth.saturating_mul(4).saturating_add(1)
+/// Which of the forms of spec §16 a JSON text is read as. The form sets how
+/// deep the JSON may nest, and whether raw DEL, C1 and bidi controls are
+/// allowed in strings and member names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Form {
+    /// Self-describing JSON (§16.2): 4·d + 2 levels (one for the envelope),
+    /// and no raw DEL, C1 or bidi controls: only haus writes it, and it escapes them.
+    SelfDescribing,
+    /// Schema-based JSON (§16.3): 4·d + 1 levels. A mapping can take several
+    /// JSON levels for one haus level (`Tag { … }` is `{"_tag": …, "_args":
+    /// [{"_rec": {…}}]}`); the depth of the haus value that results is
+    /// checked against d where JSON becomes one.
+    SchemaBased,
+    /// JSON import (§16.1): d levels, one per level of the haus value.
+    Import,
 }
 
-/// One JSON text, with whitespace around it, nested at most `max_depth`
-/// levels. A byte order mark at the start is skipped if `bom`.
-pub(crate) fn parse(src: &str, limits: &Limits, max_depth: usize, bom: bool) -> R<Json> {
+impl Form {
+    /// How deep JSON in this form may nest for `limits`.
+    pub(crate) fn max_depth(self, limits: &Limits) -> usize {
+        let d = limits.max_depth;
+        match self {
+            Form::SelfDescribing => d.saturating_mul(4).saturating_add(2),
+            Form::SchemaBased => d.saturating_mul(4).saturating_add(1),
+            Form::Import => d,
+        }
+    }
+}
+
+/// One JSON text in `form`, with whitespace around it. A byte order mark at
+/// the start is skipped if `bom`.
+pub(crate) fn parse(src: &str, limits: &Limits, form: Form, bom: bool) -> R<Json> {
     if let Some(reason) = limits.unsupported() {
         return Err(SyntaxError::at(src, 0, Code::UnsupportedDepth, reason));
     }
     let start = if bom && src.starts_with('\u{FEFF}') { 3 } else { 0 };
-    let mut reader = Reader { src, b: src.as_bytes(), pos: start, depth: 0, limits, max_depth };
+    let mut reader =
+        Reader { src, b: src.as_bytes(), pos: start, depth: 0, limits, max_depth: form.max_depth(limits), form };
     reader.whitespace();
     let value = reader.value()?;
     reader.whitespace();
@@ -40,6 +63,7 @@ struct Reader<'a> {
     depth: usize,
     limits: &'a Limits,
     max_depth: usize,
+    form: Form,
 }
 
 /// A container being read: its items so far, and for an object the names
@@ -237,6 +261,7 @@ impl Reader<'_> {
             while matches!(self.peek(), Some(c) if c != b'"' && c != b'\\' && c >= 0x20) {
                 self.pos += 1;
             }
+            self.raw(run)?;
             out.push_str(&self.src[run..self.pos]);
             match self.peek() {
                 Some(b'"') => {
@@ -258,6 +283,31 @@ impl Reader<'_> {
             return Err(self.fail_at(open, Code::StringTooLong, format!("string longer than {max} characters")));
         }
         Ok(out)
+    }
+
+    /// In self-describing JSON, a raw DEL, C1 or bidi control in the
+    /// characters from `run` to here is an error (spec §16).
+    fn raw(&self, run: usize) -> R<()> {
+        if self.form != Form::SelfDescribing {
+            return Ok(());
+        }
+        let text = &self.src[run..self.pos];
+        if text.is_ascii() && !text.contains('\u{7F}') {
+            return Ok(());
+        }
+        match text.char_indices().find(|&(_, c)| is_control(c) || is_bidi(c)) {
+            Some((i, c)) if is_bidi(c) => Err(self.fail_at(
+                run + i,
+                Code::BidiControl,
+                format!("raw bidirectional control character U+{:04X} in a string (escape it)", u32::from(c)),
+            )),
+            Some((i, c)) => Err(self.fail_at(
+                run + i,
+                Code::ControlCharacter,
+                format!("raw control character U+{:04X} in a string (escape it)", u32::from(c)),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// An escape sequence, at its backslash.

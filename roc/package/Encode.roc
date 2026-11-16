@@ -401,6 +401,10 @@ number = |text, limits| {
 	# The exponent: `e`, an optional `-`, digits without leading zeros.
 	match n.find_first_index(|c| c == 'e') {
 		Ok(i) => {
+			# The length first, as a parser meets it (spec §7); a number with an exponent is no integer, so no hex form.
+			if n.len() > limits.max_number_length {
+				return fail(ErrorCode.number_too_long, "number literal longer than ${limits.max_number_length.to_str()} characters")
+			}
 			digits = n.drop_first(i + 1).drop_if(|c| c == '-')
 			too_large = digits.len() > 18 or (U64.from_str(bytes_to_str(digits)) ?? 0) > limits.max_exponent
 			if too_large {

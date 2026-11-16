@@ -1,12 +1,13 @@
 /**
- * The JSON suite (test-suite/json, spec §16) through the Effect adapter: the
- * plain mapping with the schema file compiled to Effect schemas, the lossless
- * mapping as the plain form of `Haus.Any`, JSON without a schema with
- * `Haus.valueFromJson`, and every valid/NAME.json as `Array Any`.
+ * The JSON suite (test-suite/json, spec §16) through the Effect adapter:
+ * schema-based JSON with the schema file compiled to Effect schemas,
+ * self-describing JSON with `Haus.toHausJson` / `Haus.fromHausJson` (and,
+ * without the envelope, as the schema-based form of `Haus.Any`), the import
+ * with `Haus.importJson`, and every valid/NAME.jsonl a line at a time.
  */
-import { canonical, equalsJson, parseAll, parseJson, stringifyJson, type Json, type Value } from "@haus-fmt/haus"
+import { canonical, equalsJson, isJsonObject, parseAll, parseJson, stringifyJson, type Json, type Value } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Exit, Option, Schema } from "effect"
+import { Cause, Effect, Exit, Option } from "effect"
 import { readdirSync, readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import * as Haus from "../src/index.js"
@@ -58,10 +59,10 @@ const fails = <A>(effect: Effect.Effect<A, Haus.HausError>, code: string | undef
   }
 }
 
-describe("plain (spec §16.3)", () => {
-  const { schemas } = Haus.compileSchemaFile(read("json/plain.schema.haus"))
+describe("schema-based (spec §16.3)", () => {
+  const { schemas } = Haus.compileSchemaFile(read("json/schema-based.schema.haus"))
 
-  for (const c of cases(read("json/plain.cases.haus"))) {
+  for (const c of cases(read("json/schema-based.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
         const schema = schemas[c.type!]!
@@ -77,39 +78,50 @@ describe("plain (spec §16.3)", () => {
   }
 })
 
-describe("lossless (spec §16.2), as Haus.Any", () => {
-  for (const c of cases(read("json/lossless.cases.haus"))) {
+/** The value in an envelope, as JSON text. */
+const valueOf = (json: string): string => {
+  const envelope = parseJson(json, { maxDepth: 2000 })
+  if (!isJsonObject(envelope) || envelope["_value"] === undefined) throw new Error(`not an envelope: ${json}`)
+  return stringifyJson(envelope["_value"])
+}
+
+describe("self-describing (spec §16.2)", () => {
+  for (const c of cases(read("json/self-describing.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
-        if (c.kind === "Err") return fails(Haus.fromJson(Haus.Any)(c.json), c.code)
-        expectJson(yield* Haus.toJsonValue(Haus.Any)(c.input!), c.json)
-        expect(canonical(yield* Haus.fromJson(Haus.Any)(c.json))).toBe(canonical(c.input!))
+        if (c.kind === "Err") return fails(Haus.fromHausJson(c.json), c.code)
+        expectJson(parseJson(yield* Haus.toHausJson(c.input!)), c.json)
+        expect(canonical(yield* Haus.fromHausJson(c.json))).toBe(canonical(c.input!))
+        // Haus.Any is the value without the envelope.
+        expectJson(yield* Haus.toJsonValue(Haus.Any)(c.input!), valueOf(c.json))
+        expect(canonical(yield* Haus.fromJson(Haus.Any)(valueOf(c.json)))).toBe(canonical(c.input!))
       }))
   }
 })
 
-describe("without a schema (spec §16.1)", () => {
-  for (const c of cases(read("json/schemaless.cases.haus"))) {
+describe("import (spec §16.1)", () => {
+  for (const c of cases(read("json/import.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
-        if (c.kind === "Err") return fails(Haus.valueFromJson(c.json), c.code)
-        expect(canonical(yield* Haus.valueFromJson(c.json))).toBe(canonical(c.output!))
+        if (c.kind === "Err") return fails(Haus.importJson(c.json), c.code)
+        expect(canonical(yield* Haus.importJson(c.json))).toBe(canonical(c.output!))
       }))
   }
 })
 
-describe("valid/NAME.json as lossless cases", () => {
-  const Values = Schema.Array(Haus.Any)
+describe("valid/NAME.jsonl as self-describing cases", () => {
   const names = readdirSync(`${SUITE}valid`).filter((f) => f.endsWith(".haus")).map((f) => f.slice(0, -".haus".length)).sort()
   for (const name of names) {
     it.effect(name, () =>
       Effect.gen(function* () {
         const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(`${SUITE}valid/${name}.haus`))
         const values = parseAll(text)
-        const json = read(`valid/${name}.json`)
-        expectJson(yield* Haus.toJsonValue(Values)(values), json)
-        const back = yield* Haus.fromJson(Values)(json)
-        expect(back.map(canonical)).toEqual(values.map(canonical))
+        const lines = read(`valid/${name}.jsonl`).split("\n").filter((l) => l !== "")
+        expect(lines).toHaveLength(values.length)
+        for (const [i, value] of values.entries()) {
+          expectJson(parseJson(yield* Haus.toHausJson(value), { maxDepth: 2000 }), lines[i]!)
+          expect(canonical(yield* Haus.fromHausJson(lines[i]!))).toBe(canonical(value))
+        }
       }))
   }
 })

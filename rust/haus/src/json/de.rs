@@ -1,4 +1,4 @@
-//! Reading plain JSON (spec §16.3) into Rust types: [`FromJson`] for the
+//! Reading schema-based JSON (spec §16.3) into Rust types: [`FromJson`] for the
 //! prelude types, and the helpers that generated code calls.
 //!
 //! Errors name the place in the JSON: `.items[2].price`, `.values[1]`. Like
@@ -136,36 +136,31 @@ impl<'a> Object<'a> {
     }
 
     /// A tag the variant doesn't list, as an unknown value (spec §16.3): only
-    /// `"_tag"` is a tag without arguments; `"_tag"` and `"args"` hold the
-    /// arguments in the lossless form; other members are a record payload,
-    /// read without a schema (§16.1), so that a newer writer's case
-    /// `{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`.
+    /// `"_tag"` is a tag without arguments; `"_tag"` and `"_args"` hold the
+    /// arguments as self-describing values (§16.2, without the envelope);
+    /// with other members, all of them are a record payload, read by the
+    /// import (§16.1), so that a newer writer's case `{"_tag": "Hexagon",
+    /// "sides": 6}` reads as `Hexagon { sides: 6 }`.
     pub fn unknown(&self, tag: &str) -> R<Unknown> {
         if !crate::ser::is_tag(tag) {
             return Err(DecodeError::new(Code::InvalidTag, format!("{tag:?} is not a tag name")).field("_tag"));
         }
-        let args = match (self.fields().collect::<Vec<_>>().as_slice(), self.index.get("args")) {
+        let args = match (self.fields().collect::<Vec<_>>().as_slice(), self.index.get("_args")) {
             ([], _) => vec![],
-            (["args"], Some(Json::Array(items))) if items.is_empty() => {
-                let reason = r#"a tag without arguments has no "args""#;
-                return Err(DecodeError::new(Code::LosslessForm, reason).field("args"));
-            }
-            // `Tag { … }`: the record is the payload's only level, as in the lossless form.
-            (["args"], Some(Json::Array(items))) => {
+            (["_args"], Some(Json::Array(items))) if !items.is_empty() => {
+                // `Tag { … }`: the record is the payload's only level, as in self-describing JSON.
                 let inner = match items.as_slice() {
-                    [Json::Object(m)] if matches!(m.as_slice(), [(k, _)] if k == "rec") => self.d,
+                    [Json::Object(m)] if super::haus_json::is_record(m) => self.d,
                     _ => self.d.nested()?,
                 };
-                let read = |(i, x)| Value::from_json_with(x, inner).map_err(|e| e.index(i).field("args"));
+                let read = |(i, x)| Value::from_json_with(x, inner).map_err(|e| e.index(i).field("_args"));
                 items.iter().enumerate().map(read).collect::<R<_>>()?
             }
-            (["args"], Some(other)) => {
-                return Err(mismatch("an array", other).with_code(Code::LosslessForm).field("args"));
-            }
+            (["_args"], Some(args)) => return Err(super::haus_json::bad_args(args)),
             _ => {
                 let payload = self.members.iter().filter(|(k, _)| k != "_tag").cloned().collect();
                 let (limits, depth) = (self.d.limits(), self.d.depth());
-                vec![super::lossless::from_plain_at(&Json::Object(payload), limits, depth)?]
+                vec![super::import::import_at(&Json::Object(payload), limits, depth)?]
             }
         };
         Ok(Unknown { tag: tag.to_owned(), args })
@@ -200,9 +195,10 @@ pub fn tag_name<'a>(json: &'a Json, what: &str) -> R<&'a str> {
     }
 }
 
-/// A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
-pub fn no_plain_form(tag: &str) -> DecodeError {
-    DecodeError::new(Code::NoJsonForm, format!("{tag} has a field named _tag, so it has no plain JSON form"))
+/// A case whose record payload has a field named `_tag` or `_args` (`field`):
+/// it has no schema-based form (spec §16.3).
+pub fn no_json_form(tag: &str, field: &str) -> DecodeError {
+    DecodeError::new(Code::NoJsonForm, super::ser::no_json_form_reason(tag, field))
 }
 
 // ── containers ───────────────────────────────────────────────
@@ -317,10 +313,11 @@ impl<T: FromJson> FromJson for Secret<T> {
 
 // ── scalars ──────────────────────────────────────────────────
 
-/// `Any`: the lossless form (spec §16.2), within the limits.
+/// `Any`: its self-describing value (spec §16.2), without the envelope,
+/// within the limits.
 impl FromJson for Value {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
-        super::lossless::from_lossless_at(json, d.limits(), d.depth())
+        super::haus_json::from_value_at(json, d.limits(), d.depth())
     }
 }
 
@@ -432,7 +429,7 @@ impl FromJson for Decimal {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         match json {
             Json::String(text) if super::is_number(text) => {
-                let n = super::lossless::normalize_number(text);
+                let n = super::import::normalize_number(text);
                 crate::ser::normalized(&n, d.limits()).map_err(number_error)?;
                 Ok(Decimal(n))
             }

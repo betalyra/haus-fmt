@@ -217,16 +217,16 @@ def test_a_wrong_payload_names_the_case(data: str, path: str, hint: str) -> None
 
 def test_json_has_only_the_members_that_apply() -> None:
     with pytest.raises(haus.HausJsonError) as info:
-        haus.from_lossless_json('{"num": "01"}')
+        haus.from_haus_json('{"_haus": 1, "_value": {"_num": "01"}}')
     assert info.value.to_json() == {
-        "code": "lossless-number",
+        "code": "haus-json-number",
         "message": info.value.reason,
-        "path": "$.num",
-        "hint": ERROR_CODES["lossless-number"].hint,
-        "docs": "https://haus-fmt.org/docs/errors#lossless-number",
+        "path": "$._num",
+        "hint": ERROR_CODES["haus-json-number"].hint,
+        "docs": "https://haus-fmt.org/docs/errors#haus-json-number",
     }
     with pytest.raises(haus.HausJsonError) as info:
-        haus.from_json("[1,]")
+        haus.import_json("[1,]")
     assert {k: v for k, v in info.value.to_json().items() if k in ("code", "line", "column")} == {
         "code": "json-syntax",
         "line": 1,

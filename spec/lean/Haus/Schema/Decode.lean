@@ -97,8 +97,8 @@ inductive Seg
 
 /--
 An error: the place of the failing value, from the outside in, and why. The
-code (spec §17) names the mistake; decoding gives every error one, the JSON
-mappings (`Haus.Json.Plain`) don't yet.
+code (spec §17) names the mistake; decoding and schema-based JSON
+(`Haus.Json.SchemaBased`) give every error one.
 -/
 structure Error where
   path : List Seg

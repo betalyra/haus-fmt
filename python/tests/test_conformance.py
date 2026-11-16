@@ -19,29 +19,32 @@ def cases(kind: str) -> list[Path]:
     return files
 
 
-def canonical(v: Value) -> object:
-    """A value in the suite's JSON encoding."""
+def self_describing(v: Value) -> object:
+    """A value as self-describing JSON (spec §16.2) without the envelope, as data: written here, not by haus."""
     match v:
         case String(s):
             return s
         case Number(text):
-            return {"num": text}
+            return {"_num": text}
         case Bytes(data):
-            return {"bytes": data.hex()}
+            return {"_bytes": data.hex()}
         case Array(items):
-            return [canonical(x) for x in items]
+            return [self_describing(x) for x in items]
         case Record(fields):
-            return {"rec": {k: canonical(x) for k, x in fields.items()}}
+            return {"_rec": {k: self_describing(x) for k, x in fields.items()}}
         case Variant(tag, ()):
-            return {"tag": tag}
+            return {"_tag": tag}
         case Variant(tag, args):
-            return {"tag": tag, "args": [canonical(x) for x in args]}
+            return {"_tag": tag, "_args": [self_describing(x) for x in args]}
 
 
 @pytest.mark.parametrize("path", cases("valid"), ids=lambda p: p.stem)
 def test_valid(path: Path) -> None:
-    expected = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
-    assert [canonical(v) for v in haus.parse_bytes(path.read_bytes())] == expected
+    """`NAME.jsonl`: one self-describing JSON envelope per value of the file."""
+    lines = path.with_suffix(".jsonl").read_text(encoding="utf-8").splitlines()
+    expected = [json.loads(line) for line in lines]
+    values = haus.parse_bytes(path.read_bytes())
+    assert [{"_haus": 1, "_value": self_describing(v)} for v in values] == expected
 
 
 def expected_code(path: Path) -> str:

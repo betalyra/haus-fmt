@@ -170,46 +170,49 @@ code (spec §17) of errors at the same place.
 
 | Mode | Input | Does | Compared |
 |---|---|---|---|
-| `write` | haus text and a type | decode, write plain JSON (§16.3) | the JSON as data: member order doesn't matter, numbers compare by their text |
-| `read` | JSON text and a type | read plain JSON, encode | the canonical form (§12) |
-| `lossless-write` | haus text | the lossless form (§16.2) | the JSON as data |
-| `lossless-read` | JSON text | read the lossless form | the canonical form |
-| `schemaless` | JSON text | read JSON without a schema (§16.1) | the canonical form |
+| `write` | haus text and a type | decode, write schema-based JSON (§16.3) | the JSON as data: member order doesn't matter, numbers compare by their text |
+| `read` | JSON text and a type | read schema-based JSON, encode | the canonical form (§12) |
+| `haus-json-write` | haus text | self-describing JSON, in its envelope (§16.2) | the JSON as data |
+| `haus-json-read` | JSON text | read self-describing JSON | the canonical form |
+| `import` | JSON text | import JSON, without a schema (§16.1) | the canonical form |
 
 ```sh
 sh fuzz/build.sh                                   # also builds the JSON runners
 node fuzz/src/main.ts --json --count 4000          # cases per mode; two or three minutes
-node fuzz/src/main.ts --json --seed 7 --modes read,schemaless --runners lean,typescript,rust
+node fuzz/src/main.ts --json --seed 7 --modes read,import --runners lean,typescript,rust
 ```
 
 The types are the schema fuzzer's, plus
-[`test-suite/json/plain.schema.haus`](../test-suite/json/plain.schema.haus)
+[`test-suite/json/schema-based.schema.haus`](../test-suite/json/schema-based.schema.haus)
 and [`json/names.schema.haus`](json/names.schema.haus) (a record payload with
-a field named `_tag`, which has no plain form). A schema file a binding
+a field named `_tag`, which has no schema-based form). A schema file a binding
 rejects makes every case of it `err` for that binding.
 [`src/json-gen.ts`](src/json-gen.ts) generates the JSON:
 
-- `write` takes the schema fuzzer's values (above). `lossless-write` takes
+- `write` takes the schema fuzzer's values (above). `haus-json-write` takes
   random haus values, values of the schema types, the conformance suite's
   valid files, and nesting at the depth limit (`[`, `{ a:`, `Some(`,
   `T { a:`).
-- `read` takes plain JSON generated from the type, and the JSON Lean writes
+- `read` takes schema-based JSON generated from the type, and the JSON Lean writes
   for generated values (a third of the cases), then near misses: the wrong
   kind of value; missing, extra and repeated members; `_tag` missing,
   renamed, repeated, not a string, not a tag; `value` and `values` swapped
   or of the wrong length; `null` for a `Maybe` that is tagged and the tagged
   form for one that uses `null`, `null` for an optional field; unknown tags
-  bare, with `args` (empty, not an array) or with other members; base64
+  bare, with `_args` (empty, not an array, not self-describing values) or with other members (`args` among them, an ordinary member); base64
   without padding, with the URL alphabet, whitespace or pad bits; integer
   strings with `+`, leading zeros, exponents, separators, at the 64-bit and
   number limits; decimal strings that aren't JSON numbers; floats exactly at
   and halfway between floats, `"NaN"` and its misspellings; lone surrogates.
-- `lossless-read` takes lossless forms of random values and mutations of
-  them: bare numbers, `true`, `null`, `num`s that aren't normalized or are
-  past the number limit (and integers whose hex form fits), uppercase or odd
-  hex, tags that aren't tags, empty `args`, extra members, records of bare
-  values; and nesting at the JSON limit (4·256 + 1).
-- `schemaless` takes any JSON: numbers at the edges (`-0`, `1E+05`,
+- `haus-json-read` takes the self-describing JSON of random values and
+  mutations of it: envelopes missing, with other members, another `_haus`
+  (`2`, `"1"`, `1.0`) or a member missing; bare numbers, `true`, `null`,
+  `_num`s that aren't normalized or are past the number limit (and integers
+  whose hex form fits), uppercase or odd hex, tags that aren't tags, empty
+  `_args`, the old keys without `_`, extra members, records of bare values;
+  raw DEL, C1 and bidi controls; and nesting at the JSON limit (4·256 + 2).
+- `import` takes any JSON (envelopes and `_tag` objects among it, which it
+  reads as records): numbers at the edges (`-0`, `1E+05`,
   exponent and length limits), strings with escapes, duplicate names, and
   nesting at the limit (256), as well as text that isn't JSON.
 
@@ -221,18 +224,18 @@ members, elements and characters, haus as for schema decoding.
 
 | Converter | Runner (`MODE FILE`; lines `SUITE TYPE HEX` for `write` and `read`, `HEX` for the others) |
 |---|---|
-| Lean | `haus-ref --json-batch`, `--json-read-batch`, `--lossless-batch`, `--lossless-read-batch`, `--schemaless-read-batch` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
-| TypeScript | in this process: `h.decode` and `h.toJson`, `h.fromJson` and `h.encode`, `toLosslessJson`, `fromLosslessJson`, `fromJson` |
-| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.Any` for the lossless form, `Haus.valueFromJson` |
-| Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-fmt-build generates, `haus::json::to_string` and `from_str`, `haus::to_lossless_json`, `from_lossless_json`, `from_json` |
+| Lean | `haus-ref --json-batch`, `--json-read-batch`, `--haus-json-batch`, `--haus-json-read-batch`, `--import-batch` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
+| TypeScript | in this process: `h.decode` and `h.toJson`, `h.fromJson` and `h.encode`, `toHausJson`, `fromHausJson`, `importJson` |
+| Effect | in this process: `decodeValue` and `Haus.toJson`, `Haus.fromJson` and `encodeValue`, `Haus.toHausJson`, `Haus.fromHausJson`, `Haus.importJson` |
+| Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-fmt-build generates, `haus::json::to_string` and `from_str`, `haus::to_haus_json`, `from_haus_json`, `import_json` |
 | Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
-| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_lossless_json`, `from_lossless_json`, `from_json` |
+| Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_haus_json`, `from_haus_json`, `import_json` |
 
 Every runner prints an error as `err <place> <code> <reason>`: the place in
 the value (`$.items[2].price`), `$` for an error in the JSON text, and `-` for
 no code (haus text that isn't one value). Codes are compared where Lean's and
 a runner's places agree, as for schema decoding; Lean's JSON readers report
-no positions in the text and no places inside lossless or schemaless JSON, so
+no positions in the text and no places inside self-describing or imported JSON, so
 there their errors are at `$`. A runner made with `external(…, codes = true)`
 in [`src/json-runners.ts`](src/json-runners.ts) is read this way (all of them
 today; TypeScript and Effect report codes in this process).

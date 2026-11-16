@@ -251,10 +251,16 @@ describe("JSON", () => {
       expect(yield* Effect.flip(Stream.runCollect(Haus.encodeJsonLines(Nest)(Stream.make(nestedArray(257)))))).toBeInstanceOf(Haus.HausSchemaError)
     }))
 
-  it.effect("valueFromJson takes limits", () =>
+  it.effect("importJson, toHausJson and fromHausJson take limits", () =>
     Effect.gen(function* () {
-      expect((yield* Haus.valueFromJson(nested(RAISED), { maxDepth: RAISED })).kind).toBe("array")
-      expect((yield* Effect.flip(Haus.valueFromJson(nested(LOWERED + 1), { maxDepth: LOWERED })))._tag).toBe("HausParseError")
+      expect((yield* Haus.importJson(nested(RAISED), { maxDepth: RAISED })).kind).toBe("array")
+      expect((yield* Effect.flip(Haus.importJson(nested(LOWERED + 1), { maxDepth: LOWERED })))._tag).toBe("HausParseError")
+      const deep = yield* Haus.importJson(nested(RAISED), { maxDepth: RAISED })
+      const json = yield* Haus.toHausJson(deep, { maxDepth: RAISED })
+      expect((yield* Haus.fromHausJson(json, { maxDepth: RAISED })).kind).toBe("array")
+      expect((yield* Effect.flip(Haus.toHausJson(deep, { maxDepth: LOWERED })))._tag).toBe("HausSchemaError")
+      // 512 JSON levels are beyond hausJsonDepth(8) = 34: the reader stops them.
+      expect((yield* Effect.flip(Haus.fromHausJson(json, { maxDepth: LOWERED })))._tag).toBe("HausParseError")
     }))
 })
 
@@ -267,7 +273,7 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
   /** `n` boxes: 2n levels (a `Box { … }` and its array). */
   const boxes = (n: number): Box => Array.from({ length: n - 1 }).reduce<Box>((inner) => ({ _tag: "Box", inner: [inner] }), { _tag: "Box", inner: [] })
   const boxText = (n: number) => "Box { inner: [".repeat(n - 1) + "Box { inner: [] }" + "] }".repeat(n - 1)
-  /** `n` levels of `T { a: … }`: four JSON levels each in the lossless form. */
+  /** `n` levels of `T { a: … }`: four JSON levels each in self-describing JSON. */
   const tagged = (n: number) => "T { a: ".repeat(n) + "1" + " }".repeat(n)
 
   it("is 512", () => {
@@ -288,16 +294,18 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
       expect(yield* Haus.fromJson(Box)(json, limits)).toEqual(box)
       expect((yield* Stream.runCollect(Haus.decodeJsonLines(Box)(chunked(`${json}\n`), limits)))).toEqual([box])
       expect((yield* Stream.runCollect(Haus.encodeJsonLines(Box)(Stream.make(box), limits)))).toEqual([`${json}\n`])
-      expect((yield* Haus.valueFromJson(nested(MAX), limits)).kind).toBe("array")
+      expect((yield* Haus.importJson(nested(MAX), limits)).kind).toBe("array")
     }))
 
-  it.effect("Haus.Any at it, in haus and in the lossless JSON (2049 JSON levels)", () =>
+  it.effect("Haus.Any at it, in haus and in self-describing JSON (2049 JSON levels, 2050 with the envelope)", () =>
     Effect.gen(function* () {
       const any = yield* Haus.decode(Haus.Any)(tagged(MAX), limits)
       expect(yield* Haus.encode(Haus.Any)(any, { style: "compact", limits })).toBe(tagged(MAX))
       expect((yield* Haus.encode(Haus.Any)(any, { limits })).split("\n")).toHaveLength(2 * MAX + 1)
       const json = yield* Haus.toJson(Haus.Any)(any, limits)
       expect(yield* Haus.encode(Haus.Any)(yield* Haus.fromJson(Haus.Any)(json, limits), { style: "compact", limits })).toBe(tagged(MAX))
+      const self = yield* Haus.toHausJson(any, limits)
+      expect(yield* Haus.encode(Haus.Any)(yield* Haus.fromHausJson(self, limits), { style: "compact", limits })).toBe(tagged(MAX))
     }))
 
   it.effect("a larger maxDepth fails with a HausLimitsError naming the maximum, on every entry point", () =>
@@ -317,7 +325,9 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
         yield* Effect.flip(Haus.toJsonValue(Nest)([], over)),
         yield* Effect.flip(Stream.runCollect(Haus.decodeJsonLines(Nest)(chunked("[]\n"), over))),
         yield* Effect.flip(Stream.runCollect(Haus.encodeJsonLines(Nest)(Stream.make([]), over))),
-        yield* Effect.flip(Haus.valueFromJson("[]", over)),
+        yield* Effect.flip(Haus.importJson("[]", over)),
+        yield* Effect.flip(Haus.toHausJson({ kind: "array", items: [] }, over)),
+        yield* Effect.flip(Haus.fromHausJson(`{"_haus":1,"_value":[]}`, over)),
       ]
       for (const e of errors) {
         expect(e).toBeInstanceOf(Haus.HausLimitsError)

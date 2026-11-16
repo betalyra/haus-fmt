@@ -1,4 +1,5 @@
-/** Plain JSON (spec §16.3) for hand-written Effect schemas. */
+/** Schema-based JSON (spec §16.3) for hand-written Effect schemas, and the forms without a schema. */
+import { canonical } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
 import { BigDecimal, Effect, Option, Redacted, Schema, Stream } from "effect"
 import * as Haus from "../src/index.js"
@@ -57,9 +58,9 @@ describe("toJson / fromJson", () => {
       expect(yield* Haus.fromJson(Nested)(`{"_tag":"Some","value":5}`)).toEqual(Option.some(Option.some(5)))
     }))
 
-  it.effect("OpenUnion keeps unknown tags with their lossless arguments", () =>
+  it.effect("OpenUnion keeps unknown tags with their self-describing arguments", () =>
     Effect.gen(function* () {
-      const text = `{"_tag":"Hexagon","args":[{"rec":{"side":{"num":"1"}}}]}`
+      const text = `{"_tag":"Hexagon","_args":[{"_rec":{"side":{"_num":"1"}}}]}`
       const unknown = yield* Haus.fromJson(Shape)(text)
       expect(unknown._tag).toBe("@unknown")
       expect(yield* Haus.toJson(Shape)(unknown)).toBe(text)
@@ -98,16 +99,31 @@ describe("toJson / fromJson", () => {
       expect(error._tag === "HausSchemaError" && error.path).toEqual(["keys"])
     }))
 
-  it.effect("a schema without a plain form says so", () =>
+  it.effect("a schema without a schema-based form says so", () =>
     Effect.gen(function* () {
       const error = yield* Haus.toJson(Schema.Struct({ x: Schema.Unknown }))({ x: 1 }).pipe(Effect.flip)
-      expect(error.message).toContain("has no plain JSON form")
+      expect(error.message).toContain("has no schema-based JSON form")
     }))
 
-  it.effect("Haus.Any is the lossless form; valueFromJson reads JSON without a schema", () =>
+  it.effect("Haus.Any is the self-describing form without the envelope; importJson reads any JSON", () =>
     Effect.gen(function* () {
-      const value = yield* Haus.valueFromJson(`{"a": [1.50, true, null]}`)
-      expect(yield* Haus.toJson(Haus.Any)(value)).toBe(`{"rec":{"a":[{"num":"1.50"},{"tag":"True"},{"tag":"None"}]}}`)
+      const value = yield* Haus.importJson(`{"a": [1.50, true, null]}`)
+      const json = `{"_rec":{"a":[{"_num":"1.50"},{"_tag":"True"},{"_tag":"None"}]}}`
+      expect(yield* Haus.toJson(Haus.Any)(value)).toBe(json)
+      expect(yield* Haus.toHausJson(value)).toBe(`{"_haus":1,"_value":${json}}`)
+      expect(canonical(yield* Haus.fromHausJson(`{"_haus":1,"_value":${json}}`))).toBe(canonical(value))
+    }))
+
+  it.effect("the caller says which form it reads", () =>
+    Effect.gen(function* () {
+      const envelope = `{"_haus":1,"_value":"x"}`
+      expect(canonical(yield* Haus.importJson(envelope))).toBe(`{_haus:1,_value:"x"}`)
+      expect((yield* Effect.flip(Haus.fromJson(Haus.Any)(envelope))).code).toBe("haus-json-form")
+      expect((yield* Effect.flip(Haus.fromHausJson(`"x"`))).code).toBe("haus-json-form")
+      expect((yield* Effect.flip(Haus.fromHausJson(`{"_haus":2,"_value":"x"}`))).code).toBe("haus-json-version")
+      const raw = yield* Effect.flip(Haus.fromHausJson(`{"_haus":1,"_value":"\u{202E}"}`))
+      expect([raw._tag, raw.code]).toEqual(["HausParseError", "bidi-control"])
+      expect((yield* Effect.flip(Haus.toHausJson({ kind: "variant", tag: "lower", args: [] })))._tag).toBe("HausSchemaError")
     }))
 })
 

@@ -1,4 +1,4 @@
-//! Writing Rust values as plain JSON (spec §16.3): [`ToJson`] for the
+//! Writing Rust values as schema-based JSON (spec §16.3): [`ToJson`] for the
 //! prelude types, and the helpers that generated code calls.
 
 use super::{Json, ToJson, base64};
@@ -61,13 +61,18 @@ pub fn tag_name(tag: &str) -> R {
     Ok(Json::String(tag.to_owned()))
 }
 
-/// A case whose record payload has a field named `_tag`: it has no plain form (spec §16.3).
-pub fn no_plain_form(tag: &str) -> R {
-    Err(EncodeError::new(ErrorCode::NoJsonForm, format!("{tag} has a field named _tag, so it has no plain JSON form")))
+/// A case whose record payload has a field named `_tag` or `_args` (`field`):
+/// it has no schema-based form (spec §16.3).
+pub fn no_json_form(tag: &str, field: &str) -> R {
+    Err(EncodeError::new(ErrorCode::NoJsonForm, no_json_form_reason(tag, field)))
 }
 
-/// An unknown value: `{"_tag": "Hexagon"}`, with `"args"` in the lossless
-/// form if it has any (spec §16.3).
+pub(crate) fn no_json_form_reason(tag: &str, field: &str) -> String {
+    format!("{tag} has a field named {field}, so it has no schema-based JSON form")
+}
+
+/// An unknown value: `{"_tag": "Hexagon"}`, with `"_args"`, the arguments'
+/// self-describing values (without the envelope), if it has any (spec §16.3).
 pub fn unknown(u: &Unknown, e: Encoder) -> R {
     if !crate::ser::is_tag(&u.tag) {
         return Err(EncodeError::new(ErrorCode::InvalidTag, "not a tag name: A to Z, then letters, digits and _"));
@@ -86,11 +91,11 @@ pub fn unknown(u: &Unknown, e: Encoder) -> R {
         .iter()
         .enumerate()
         .map(|(i, a)| {
-            super::lossless::to_lossless_at(a, inner.limits(), inner.depth())
-                .map_err(|e| e.within(Segment::Index(i)).within(Segment::Field("args".into())))
+            super::haus_json::to_value_at(a, inner.limits(), inner.depth())
+                .map_err(|e| e.within(Segment::Index(i)).within(Segment::Field("_args".into())))
         })
         .collect::<Result<_, _>>()?;
-    Ok(Json::Object(vec![tag, member("args", Json::Array(args))]))
+    Ok(Json::Object(vec![tag, member("_args", Json::Array(args))]))
 }
 
 pub fn array<T>(items: &[T], e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
@@ -195,10 +200,11 @@ impl<A: ToJson, E: ToJson> ToJson for Result<A, E> {
     }
 }
 
-/// `Any`: the lossless form (spec §16.2), checked against the limits.
+/// `Any`: its self-describing value (spec §16.2), without the envelope,
+/// checked against the limits.
 impl ToJson for Value {
     fn to_json_with(&self, e: Encoder) -> R {
-        super::lossless::to_lossless_at(self, e.limits(), e.depth())
+        super::haus_json::to_value_at(self, e.limits(), e.depth())
     }
 }
 impl ToJson for Unknown {

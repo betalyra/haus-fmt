@@ -201,9 +201,9 @@ Value.parse_all_with(text, limits)
 |---|---|
 | haus text | `Value.parse_all_with`, `Value.parse_with`, `Value.parse_bytes_with`, `Decode.all_with`, `Decode.one_with` |
 | a stream | `Streaming.reader({ ..Streaming.defaults, limits })` |
-| JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.from_json_with`, `JsonValue.from_lossless_json_with`, `FromJson.one_with`, `FromJson.lines_with` |
+| JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.import_json_with`, `JsonValue.from_haus_json_with`, `JsonValue.from_haus_json_lines_with`, `FromJson.one_with`, `FromJson.lines_with` |
 | writing haus for such a reader | `Encode.to_str_with`, `Encode.stream_with` |
-| writing JSON for such a reader | `JsonValue.to_str_with`, `JsonValue.write_lines_with`, `JsonValue.to_lossless_json_with`, `JsonValue.lossless_with`, `ToJson.to_str_with`, `ToJson.lines_with` |
+| writing JSON for such a reader | `JsonValue.to_str_with`, `JsonValue.write_lines_with`, `JsonValue.to_haus_json_with`, `JsonValue.to_haus_json_lines_with`, `JsonValue.haus_json_value_with`, `ToJson.to_str_with`, `ToJson.lines_with` |
 
 `Value.max_supported_depth` is 1024: the parser, decoding, encoding and the
 JSON mappings recurse once per level of nesting, so the binding supports no
@@ -211,7 +211,7 @@ deeper limit. Every function above fails, before reading or writing anything,
 if `max_depth` is larger, with an error that names the maximum (`max_depth
 2000 is more than the supported maximum, 1024`); `Value.check_limits(limits)`
 says so too. With basic-cli 0.26 a program overflows its stack only past about
-24,000 levels on the deepest path (the lossless JSON form of nested variants,
+24,000 levels on the deepest path (the self-describing JSON of nested variants,
 measured on aarch64 macOS, optimized and dev builds alike), so 1024 leaves a
 wide margin; the canonical form, the hash and `Encode.equals` take no limits
 and recurse further still (about 70,000 levels).
@@ -226,18 +226,25 @@ form and the hash don't depend on limits.
 
 ## JSON
 
-The two JSON mappings of spec §16. `JsonValue` is a JSON tree (numbers as
+The three JSON forms of spec §16. `JsonValue` is a JSON tree (numbers as
 text) with a strict reader (I-JSON: no duplicate member names, no unpaired
 surrogates, the limits of §7) and a writer. Roc has a builtin `Json`, so the
 type is called `JsonValue`.
 
 | | Function |
 |---|---|
-| JSON without a schema (§16.1) | `JsonValue.from_json(text)`: a `Value` (`null` is `None`) |
-| Lossless (§16.2) | `JsonValue.to_lossless_json(value)`, `JsonValue.from_lossless_json(text)` |
-| Plain, with a type (§16.3) | `ToJson.to_str(x, to_json_order)`, `FromJson.one(text, from_json_order)` |
-| JSON Lines | `ToJson.lines(xs, to_json_order)`, `FromJson.lines(text, from_json_order)` |
-| The JSON tree | `JsonValue.parse`, `JsonValue.to_str` |
+| Schema-based, with a type (§16.3) | `ToJson.to_str(x, to_json_order)`, `FromJson.one(text, from_json_order)` |
+| Self-describing (§16.2) | `JsonValue.to_haus_json(value)`, `JsonValue.from_haus_json(text)`: `{"_haus":1,"_value":{"_num":"19.90"}}` |
+| JSON import (§16.1) | `JsonValue.import_json(text)`: any JSON as a `Value` (`null` is `None`) |
+| JSON Lines | `ToJson.lines(xs, to_json_order)`, `FromJson.lines(text, from_json_order)`; `JsonValue.to_haus_json_lines(values)`, `JsonValue.from_haus_json_lines(text)` (an envelope per line) |
+| The JSON tree | `JsonValue.parse`, `JsonValue.to_str`; `JsonValue.import_value(json)`; `JsonValue.haus_json_value(value)` and `JsonValue.from_haus_json_value(json)`, a self-describing value without the envelope (as in an `Any`) |
+
+The caller says which form it reads: `from_haus_json` requires the envelope
+(`haus-json-form` without it, `haus-json-version` for a `_haus` other than
+`1`), and `FromJson` and `import_json` never look for one. Every writer
+escapes control characters (C0, DEL, C1) and the bidi controls; reading
+self-describing JSON rejects DEL, C1 and bidi controls raw
+(`control-character`, `bidi-control`), the other readers accept them.
 
 `haus-gen roc --json` adds `from_json_<name> : JsonValue -> Try(T, Decode.Error)`
 and `to_json_<name> : T -> Try(JsonValue, Encode.Error)` to each type, built
@@ -254,13 +261,18 @@ JSON is opt-in for now: the examples and the schema packages in
 [`../extensions`](../extensions) are generated without it, and a module with
 JSON needs the packages it imports generated with `--json` too.
 
-A plain JSON text may nest 4·256 + 1 levels, as one haus level can take
-several JSON levels, and the value read must then nest at most 256 levels as
-a haus value (spec §16). `from_json_<name>` checks that by encoding what it
+A schema-based JSON text may nest 4·256 + 1 levels, as one haus level can
+take several JSON levels, and the value read must then nest at most 256
+levels as a haus value (spec §16); a self-describing one a level more, for
+the envelope. `from_json_<name>` checks that by encoding what it
 read (`FromJson.within_depth`); `read_json_<name>`, which the readers of other
 types call, doesn't. A generic type's `from_json_pair` doesn't check either,
 as it can't encode its parameters: read through a type without parameters
 (`type Pairs = Pair Int`).
+
+A record case with a field named `_tag` or `_args` has no schema-based form:
+its `to_json_<name>` and `from_json_<name>` fail with `no-json-form` for a
+value of that case (`FromJson.no_json_form`, `ToJson.no_json_form`).
 
 What Roc can't do yet, or this binding doesn't: a schema package type is
 assumed not to be a `Maybe` when deciding whether a `Maybe` of it writes
@@ -304,8 +316,9 @@ python3 scripts/gen_schema_conformance.py
 ```
 
 [`json-test/`](json-test) runs the JSON suite (`../test-suite/json`, spec §16)
-the same way: `scripts/gen_json_conformance.py` generates `Plain.roc` for
-`plain.schema.haus` with `haus-gen roc --json`, a JSON module for each schema
-of the schema suite (they only have to compile), and `JsonTest.roc` with one
-`expect` per plain, lossless and schemaless case (an `Err` case with its
-`code`) and per `valid/NAME.json` (each a lossless case).
+the same way: `scripts/gen_json_conformance.py` generates `SchemaBased.roc`
+for `schema-based.schema.haus` with `haus-gen roc --json`, a JSON module for
+each schema of the schema suite (they only have to compile), and
+`JsonTest.roc` with one `expect` per schema-based, self-describing and import
+case (an `Err` case with its `code`) and per `valid/NAME.jsonl` (each a
+self-describing case: an envelope per value of the file).

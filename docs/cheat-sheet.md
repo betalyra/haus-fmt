@@ -105,8 +105,8 @@ Install the [`haus` command](/docs/cli) with `cargo install haus-fmt-cli`.
 
 ## JSON ⇄ haus
 
-- **JSON to haus without a schema:** objects become records, arrays arrays, strings strings, numbers stay exact, `true`/`false` become `True`/`False`, `null` becomes `None`. Turn `"type": "circle"` discriminators and sets of flags into variants.
-- **Plain JSON with a schema** (for APIs): `Int`, `Int64`, `UInt64` and `Decimal` are strings (`"19.90"`); `Int8`…`Int32`, `UInt8`…`UInt32` and floats are numbers; `Bool` is `true`/`false`; `Bytes` is base64; time values are their string; `Maybe` is `null` or the value (tagged if the value can be `null`); a missing optional field is a missing member.
+- **JSON import, no schema:** objects become records, arrays arrays, strings strings, numbers stay exact, `true`/`false` become `True`/`False`, `null` becomes `None`. Turn `"type": "circle"` discriminators and sets of flags into variants.
+- **Schema-based JSON** (for APIs, read and written with the schema): `Int`, `Int64`, `UInt64` and `Decimal` are strings (`"19.90"`); `Int8`…`Int32`, `UInt8`…`UInt32` and floats are numbers; `Bool` is `true`/`false`; `Bytes` is base64; time values are their string; `Maybe` is `null` or the value (tagged if the value can be `null`); a missing optional field is a missing member.
 - Closed variants without payloads are strings (`"Debug"`); other variants are objects with `"_tag"`: `{"_tag": "Circle", "r": 1.5}`, positional arguments as `"value"` or `"values"`. `NaN`, `Infinity`, `NegInfinity` are `"NaN"`, `"Infinity"`, `"-Infinity"`.
-- **Lossless JSON, no schema:** `{"num": "19.90"}`, `{"rec": {…}}`, `{"tag": "Some", "args": […]}`, `{"bytes": "0b34ff"}`; strings and arrays as themselves.
-- A stream is JSON Lines: one JSON text per value.
+- **Self-describing JSON, no schema** (exact, for haus tools): `{"_haus": 1, "_value": …}` around `{"_num": "19.90"}`, `{"_rec": {…}}`, `{"_tag": "Some", "_args": […]}`, `{"_bytes": "0b34ff"}`; strings and arrays as themselves.
+- Keys starting with `_` are haus's. A stream is JSON Lines: one JSON text per value.

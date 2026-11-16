@@ -1,0 +1,15 @@
+// JSON import (spec §16.1), without a schema: reading `json` gives `output`.
+// Nothing in the data is special: `_tag` and the envelope are record keys.
+Read { json: "{\"a\": 1, \"b\": [true, false, null], \"c\": \"x\"}", output: { a: 1, b: [True, False, None], c: "x" } },
+Read { json: "1E+05", output: 1e5 },
+Read { json: "-0", output: -0 },
+Read { json: "19.90", output: 19.90 },
+Read { json: "\"\\ud83d\\ude00\"", output: "\u{1F600}" },
+Err { json: "{\"a\": 1, \"a\": 2}", code: "duplicate-key" },
+Err { json: "\"\\ud83d\"", code: "unpaired-surrogate" },
+Err { json: "[1,]", code: "json-syntax" },
+Err { json: "NaN", code: "json-syntax" },
+Read { json: "\u{FEFF}[1]", output: [1] },
+Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 } },
+Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },
+Read { json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },

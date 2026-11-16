@@ -3,66 +3,66 @@ import haus.Value
 import haus.Decode
 import haus.Encode
 import haus.JsonValue
-import Plain
-import "../../test-suite/json/plain.cases.haus" as plain_cases : Str
-import "../../test-suite/json/lossless.cases.haus" as lossless_cases : Str
-import "../../test-suite/json/schemaless.cases.haus" as schemaless_cases : Str
+import SchemaBased
+import "../../test-suite/json/schema-based.cases.haus" as schema_based_cases : Str
+import "../../test-suite/json/self-describing.cases.haus" as self_describing_cases : Str
+import "../../test-suite/json/import.cases.haus" as import_cases : Str
 import "../../test-suite/valid/bare-values.haus" as valid_bare_values : List(U8)
-import "../../test-suite/valid/bare-values.json" as valid_bare_values_json : List(U8)
+import "../../test-suite/valid/bare-values.jsonl" as valid_bare_values_jsonl : List(U8)
 import "../../test-suite/valid/bidi-escaped.haus" as valid_bidi_escaped : List(U8)
-import "../../test-suite/valid/bidi-escaped.json" as valid_bidi_escaped_json : List(U8)
+import "../../test-suite/valid/bidi-escaped.jsonl" as valid_bidi_escaped_jsonl : List(U8)
 import "../../test-suite/valid/block-strings.haus" as valid_block_strings : List(U8)
-import "../../test-suite/valid/block-strings.json" as valid_block_strings_json : List(U8)
+import "../../test-suite/valid/block-strings.jsonl" as valid_block_strings_jsonl : List(U8)
 import "../../test-suite/valid/bom.haus" as valid_bom : List(U8)
-import "../../test-suite/valid/bom.json" as valid_bom_json : List(U8)
+import "../../test-suite/valid/bom.jsonl" as valid_bom_jsonl : List(U8)
 import "../../test-suite/valid/bytes.haus" as valid_bytes : List(U8)
-import "../../test-suite/valid/bytes.json" as valid_bytes_json : List(U8)
+import "../../test-suite/valid/bytes.jsonl" as valid_bytes_jsonl : List(U8)
 import "../../test-suite/valid/comments-tabs-crlf.haus" as valid_comments_tabs_crlf : List(U8)
-import "../../test-suite/valid/comments-tabs-crlf.json" as valid_comments_tabs_crlf_json : List(U8)
+import "../../test-suite/valid/comments-tabs-crlf.jsonl" as valid_comments_tabs_crlf_jsonl : List(U8)
 import "../../test-suite/valid/comments.haus" as valid_comments : List(U8)
-import "../../test-suite/valid/comments.json" as valid_comments_json : List(U8)
+import "../../test-suite/valid/comments.jsonl" as valid_comments_jsonl : List(U8)
 import "../../test-suite/valid/crlf-line-endings.haus" as valid_crlf_line_endings : List(U8)
-import "../../test-suite/valid/crlf-line-endings.json" as valid_crlf_line_endings_json : List(U8)
+import "../../test-suite/valid/crlf-line-endings.jsonl" as valid_crlf_line_endings_jsonl : List(U8)
 import "../../test-suite/valid/deep-nesting.haus" as valid_deep_nesting : List(U8)
-import "../../test-suite/valid/deep-nesting.json" as valid_deep_nesting_json : List(U8)
+import "../../test-suite/valid/deep-nesting.jsonl" as valid_deep_nesting_jsonl : List(U8)
 import "../../test-suite/valid/empty-containers.haus" as valid_empty_containers : List(U8)
-import "../../test-suite/valid/empty-containers.json" as valid_empty_containers_json : List(U8)
+import "../../test-suite/valid/empty-containers.jsonl" as valid_empty_containers_jsonl : List(U8)
 import "../../test-suite/valid/empty-file.haus" as valid_empty_file : List(U8)
-import "../../test-suite/valid/empty-file.json" as valid_empty_file_json : List(U8)
+import "../../test-suite/valid/empty-file.jsonl" as valid_empty_file_jsonl : List(U8)
 import "../../test-suite/valid/escaped-controls.haus" as valid_escaped_controls : List(U8)
-import "../../test-suite/valid/escaped-controls.json" as valid_escaped_controls_json : List(U8)
+import "../../test-suite/valid/escaped-controls.jsonl" as valid_escaped_controls_jsonl : List(U8)
 import "../../test-suite/valid/exponents.haus" as valid_exponents : List(U8)
-import "../../test-suite/valid/exponents.json" as valid_exponents_json : List(U8)
+import "../../test-suite/valid/exponents.jsonl" as valid_exponents_jsonl : List(U8)
 import "../../test-suite/valid/keys.haus" as valid_keys : List(U8)
-import "../../test-suite/valid/keys.json" as valid_keys_json : List(U8)
+import "../../test-suite/valid/keys.jsonl" as valid_keys_jsonl : List(U8)
 import "../../test-suite/valid/limits-boundary.haus" as valid_limits_boundary : List(U8)
-import "../../test-suite/valid/limits-boundary.json" as valid_limits_boundary_json : List(U8)
+import "../../test-suite/valid/limits-boundary.jsonl" as valid_limits_boundary_jsonl : List(U8)
 import "../../test-suite/valid/numbers.haus" as valid_numbers : List(U8)
-import "../../test-suite/valid/numbers.json" as valid_numbers_json : List(U8)
+import "../../test-suite/valid/numbers.jsonl" as valid_numbers_jsonl : List(U8)
 import "../../test-suite/valid/only-comments.haus" as valid_only_comments : List(U8)
-import "../../test-suite/valid/only-comments.json" as valid_only_comments_json : List(U8)
+import "../../test-suite/valid/only-comments.jsonl" as valid_only_comments_jsonl : List(U8)
 import "../../test-suite/valid/payload-same-line-spaces.haus" as valid_payload_same_line_spaces : List(U8)
-import "../../test-suite/valid/payload-same-line-spaces.json" as valid_payload_same_line_spaces_json : List(U8)
+import "../../test-suite/valid/payload-same-line-spaces.jsonl" as valid_payload_same_line_spaces_jsonl : List(U8)
 import "../../test-suite/valid/single-record.haus" as valid_single_record : List(U8)
-import "../../test-suite/valid/single-record.json" as valid_single_record_json : List(U8)
+import "../../test-suite/valid/single-record.jsonl" as valid_single_record_jsonl : List(U8)
 import "../../test-suite/valid/single-trailing-comma.haus" as valid_single_trailing_comma : List(U8)
-import "../../test-suite/valid/single-trailing-comma.json" as valid_single_trailing_comma_json : List(U8)
+import "../../test-suite/valid/single-trailing-comma.jsonl" as valid_single_trailing_comma_jsonl : List(U8)
 import "../../test-suite/valid/stream-comments-between.haus" as valid_stream_comments_between : List(U8)
-import "../../test-suite/valid/stream-comments-between.json" as valid_stream_comments_between_json : List(U8)
+import "../../test-suite/valid/stream-comments-between.jsonl" as valid_stream_comments_between_jsonl : List(U8)
 import "../../test-suite/valid/stream-no-trailing-comma.haus" as valid_stream_no_trailing_comma : List(U8)
-import "../../test-suite/valid/stream-no-trailing-comma.json" as valid_stream_no_trailing_comma_json : List(U8)
+import "../../test-suite/valid/stream-no-trailing-comma.jsonl" as valid_stream_no_trailing_comma_jsonl : List(U8)
 import "../../test-suite/valid/stream.haus" as valid_stream : List(U8)
-import "../../test-suite/valid/stream.json" as valid_stream_json : List(U8)
+import "../../test-suite/valid/stream.jsonl" as valid_stream_jsonl : List(U8)
 import "../../test-suite/valid/strings.haus" as valid_strings : List(U8)
-import "../../test-suite/valid/strings.json" as valid_strings_json : List(U8)
+import "../../test-suite/valid/strings.jsonl" as valid_strings_jsonl : List(U8)
 import "../../test-suite/valid/tab-in-block-string.haus" as valid_tab_in_block_string : List(U8)
-import "../../test-suite/valid/tab-in-block-string.json" as valid_tab_in_block_string_json : List(U8)
+import "../../test-suite/valid/tab-in-block-string.jsonl" as valid_tab_in_block_string_jsonl : List(U8)
 import "../../test-suite/valid/trailing-commas.haus" as valid_trailing_commas : List(U8)
-import "../../test-suite/valid/trailing-commas.json" as valid_trailing_commas_json : List(U8)
+import "../../test-suite/valid/trailing-commas.jsonl" as valid_trailing_commas_jsonl : List(U8)
 import "../../test-suite/valid/unicode-edges.haus" as valid_unicode_edges : List(U8)
-import "../../test-suite/valid/unicode-edges.json" as valid_unicode_edges_json : List(U8)
+import "../../test-suite/valid/unicode-edges.jsonl" as valid_unicode_edges_jsonl : List(U8)
 import "../../test-suite/valid/variants.haus" as valid_variants : List(U8)
-import "../../test-suite/valid/variants.json" as valid_variants_json : List(U8)
+import "../../test-suite/valid/variants.jsonl" as valid_variants_jsonl : List(U8)
 
 JsonTest := [].{
 
@@ -73,30 +73,30 @@ JsonTest := [].{
 		Err(_) => 0
 	}
 
-	## Case `i` of plain.cases.haus (spec §16.3): `Ok { type, input, json,
-	## output? }` writes the decoded `input` as `json`, and reading `json`
-	## gives a value that encodes to `output` (or `input`); `Read { type, json,
-	## output }` reads `json` as `output`; `Err { type, json, code }` doesn't
-	## read, and fails with the error code `code` (spec §17).
-	plain : Str, U64 -> Bool
-	plain = |cases, i| report(plain_case(cases, i))
+	## Case `i` of schema-based.cases.haus (spec §16.3): `Ok { type, input,
+	## json, output? }` writes the decoded `input` as `json`, and reading
+	## `json` gives a value that encodes to `output` (or `input`); `Read {
+	## type, json, output }` reads `json` as `output`; `Err { type, json, code }`
+	## doesn't read, and fails with the error code `code` (spec §17).
+	schema_based : Str, U64 -> Bool
+	schema_based = |cases, i| report(schema_based_case(cases, i))
 
-	## Case `i` of lossless.cases.haus (spec §16.2): `Ok { input, json }`
+	## Case `i` of self-describing.cases.haus (spec §16.2): `Ok { input, json }`
 	## writes `input` as `json` and reads it back; `Err { json, code }` doesn't
 	## read, with the error code `code`.
-	lossless : Str, U64 -> Bool
-	lossless = |cases, i| report(lossless_case(cases, i))
+	self_describing : Str, U64 -> Bool
+	self_describing = |cases, i| report(self_describing_case(cases, i))
 
-	## Case `i` of schemaless.cases.haus (spec §16.1): `Read { json, output }`
+	## Case `i` of import.cases.haus (spec §16.1): `Read { json, output }`
 	## reads `json` as `output`; `Err { json, code }` doesn't read, with the
 	## error code `code`.
-	schemaless : Str, U64 -> Bool
-	schemaless = |cases, i| report(schemaless_case(cases, i))
+	imported : Str, U64 -> Bool
+	imported = |cases, i| report(import_case(cases, i))
 
-	## A valid file of the conformance suite and its NAME.json: the lossless
-	## form of its values, as an array, both ways.
+	## A valid file of the conformance suite and its NAME.jsonl: its values
+	## as self-describing JSON Lines, both ways.
 	valid : List(U8), List(U8) -> Bool
-	valid = |haus, json| report(valid_case(haus, json))
+	valid = |haus, jsonl| report(valid_case(haus, jsonl))
 
 	## Reading `n` nested `{"_tag": "Some", "value": …}` around
 	## `{"_tag": "None"}` with the type `ty` (`Loop`, `OptLoop`). The haus
@@ -110,8 +110,8 @@ JsonTest := [].{
 	}
 }
 
-plain_case : Str, U64 -> Try({}, Str)
-plain_case = |cases, i| {
+schema_based_case : Str, U64 -> Try({}, Str)
+schema_based_case = |cases, i| {
 	(tag, fields) = case(cases, i)?
 	ty = text(fields, "type")?
 	json = text(fields, "json")?
@@ -139,25 +139,25 @@ plain_case = |cases, i| {
 	}
 }
 
-lossless_case : Str, U64 -> Try({}, Str)
-lossless_case = |cases, i| {
+self_describing_case : Str, U64 -> Try({}, Str)
+self_describing_case = |cases, i| {
 	(tag, fields) = case(cases, i)?
 	json = text(fields, "json")?
 	match tag {
 		"Ok" => {
 			input = value(fields, "input")?
-			got = JsonValue.to_lossless_json(input).map_err(Encode.message)?
+			got = JsonValue.to_haus_json(input).map_err(Encode.message)?
 			if (same_json(got, json)?) reads_back(json, input) else Err("wrote ${got}")
 		}
-		_ => rejected(JsonValue.from_lossless_json(json), text(fields, "code")?)
+		_ => rejected(JsonValue.from_haus_json(json), text(fields, "code")?)
 	}
 }
 
-schemaless_case : Str, U64 -> Try({}, Str)
-schemaless_case = |cases, i| {
+import_case : Str, U64 -> Try({}, Str)
+import_case = |cases, i| {
 	(tag, fields) = case(cases, i)?
 	json = text(fields, "json")?
-	match (tag, JsonValue.from_json(json)) {
+	match (tag, JsonValue.import_json(json)) {
 		("Read", Ok(v)) => {
 			want = value(fields, "output")?
 			if (Encode.equals(v, want)) Ok({}) else Err("read as ${Encode.canonical(v)}")
@@ -179,90 +179,99 @@ same_code : Str, Str, Str -> Try({}, Str)
 same_code = |want, got, message| if (got == want) Ok({}) else Err("failed with ${got}, expected ${want}: ${message}")
 
 valid_case : List(U8), List(U8) -> Try({}, Str)
-valid_case = |haus, json| {
-	values = Arr(Value.parse_bytes(haus).map_err(|e| e.reason)?)
-	want = Str.from_utf8(json).map_err(|_| "the JSON isn't UTF-8")?
-	got = JsonValue.to_lossless_json(values).map_err(Encode.message)?
-	if (same_json(got, want)?) reads_back(want, values) else Err("wrote ${got}")
+valid_case = |haus, jsonl| {
+	values = Value.parse_bytes(haus).map_err(|e| e.reason)?
+	want = Str.from_utf8(jsonl).map_err(|_| "the JSON Lines aren't UTF-8")?
+	got = JsonValue.to_haus_json_lines(values).map_err(Encode.message)?
+	want_lines = JsonValue.lines(want).map_err(|e| "${want}: ${e.reason}")?
+	got_lines = JsonValue.lines(got).map_err(|e| "${got}: ${e.reason}")?
+	if want_lines.map(sorted) != got_lines.map(sorted) {
+		return Err("wrote ${got}")
+	}
+	match JsonValue.from_haus_json_lines(want) {
+		Ok(back) if back.len() == values.len() and back.map2(values, Encode.equals).all(|same| same) => Ok({})
+		Ok(back) => Err("read as ${Str.join_with(back.map(Encode.canonical), ", ")}")
+		Err(_) => Err("can't read it")
+	}
 }
 
-## Reading the lossless `json` gives a value equal to `want`.
+## Reading the self-describing `json` gives a value equal to `want`.
 reads_back : Str, Value -> Try({}, Str)
-reads_back = |json, want| match JsonValue.from_lossless_json(json) {
+reads_back = |json, want| match JsonValue.from_haus_json(json) {
 	Ok(v) if Encode.equals(v, want) => Ok({})
 	Ok(v) => Err("read as ${Encode.canonical(v)}")
 	Err(_) => Err("can't read it")
 }
 
-## Decode `v` with the type `ty` of plain.schema.haus, and write the result as plain JSON.
+## Decode `v` with the type `ty` of schema-based.schema.haus, and write the result as schema-based JSON.
 write : Str, Value -> Try(Str, Str)
 write = |ty, v| match ty {
-	"S" => written(Plain.decode_s(v), Plain.to_json_s)
-	"B" => written(Plain.decode_b(v), Plain.to_json_b)
-	"Flag" => written(Plain.decode_flag(v), Plain.to_json_flag)
-	"Small" => written(Plain.decode_small(v), Plain.to_json_small)
-	"Byte" => written(Plain.decode_byte(v), Plain.to_json_byte)
-	"Big" => written(Plain.decode_big(v), Plain.to_json_big)
-	"I64" => written(Plain.decode_i64(v), Plain.to_json_i64)
-	"F64" => written(Plain.decode_f64(v), Plain.to_json_f64)
-	"F32" => written(Plain.decode_f32(v), Plain.to_json_f32)
-	"Dec" => written(Plain.decode_dec(v), Plain.to_json_dec)
-	"Day" => written(Plain.decode_day(v), Plain.to_json_day)
-	"At" => written(Plain.decode_at(v), Plain.to_json_at)
-	"Raw" => written(Plain.decode_raw(v), Plain.to_json_raw)
-	"Key" => written(Plain.decode_key(v), Plain.to_json_key)
-	"Ints" => written(Plain.decode_ints(v), Plain.to_json_ints)
-	"Counts" => written(Plain.decode_counts(v), Plain.to_json_counts)
-	"Opt" => written(Plain.decode_opt(v), Plain.to_json_opt)
-	"Nested" => written(Plain.decode_nested(v), Plain.to_json_nested)
-	"OptBig" => written(Plain.decode_opt_big(v), Plain.to_json_opt_big)
-	"Outcome" => written(Plain.decode_outcome(v), Plain.to_json_outcome)
-	"Level" => written(Plain.decode_level(v), Plain.to_json_level)
-	"Shape" => written(Plain.decode_shape(v), Plain.to_json_shape)
-	"User" => written(Plain.decode_user(v), Plain.to_json_user)
-	"Strict" => written(Plain.decode_strict(v), Plain.to_json_strict)
-	"Bits" => written(Plain.decode_bits(v), Plain.to_json_bits)
-	"Loop" => written(Plain.decode_loop(v), Plain.to_json_loop)
-	"BoxRec" => written(Plain.decode_box_rec(v), Plain.to_json_box_rec)
-	"Boxed" => written(Plain.decode_boxed(v), Plain.to_json_boxed)
-	"Mine" => written(Plain.decode_mine(v), Plain.to_json_mine)
-	"OptLoop" => written(Plain.decode_opt_loop(v), Plain.to_json_opt_loop)
+	"S" => written(SchemaBased.decode_s(v), SchemaBased.to_json_s)
+	"B" => written(SchemaBased.decode_b(v), SchemaBased.to_json_b)
+	"Flag" => written(SchemaBased.decode_flag(v), SchemaBased.to_json_flag)
+	"Small" => written(SchemaBased.decode_small(v), SchemaBased.to_json_small)
+	"Byte" => written(SchemaBased.decode_byte(v), SchemaBased.to_json_byte)
+	"Big" => written(SchemaBased.decode_big(v), SchemaBased.to_json_big)
+	"I64" => written(SchemaBased.decode_i64(v), SchemaBased.to_json_i64)
+	"F64" => written(SchemaBased.decode_f64(v), SchemaBased.to_json_f64)
+	"F32" => written(SchemaBased.decode_f32(v), SchemaBased.to_json_f32)
+	"Dec" => written(SchemaBased.decode_dec(v), SchemaBased.to_json_dec)
+	"Day" => written(SchemaBased.decode_day(v), SchemaBased.to_json_day)
+	"At" => written(SchemaBased.decode_at(v), SchemaBased.to_json_at)
+	"Raw" => written(SchemaBased.decode_raw(v), SchemaBased.to_json_raw)
+	"Key" => written(SchemaBased.decode_key(v), SchemaBased.to_json_key)
+	"Ints" => written(SchemaBased.decode_ints(v), SchemaBased.to_json_ints)
+	"Counts" => written(SchemaBased.decode_counts(v), SchemaBased.to_json_counts)
+	"Opt" => written(SchemaBased.decode_opt(v), SchemaBased.to_json_opt)
+	"Nested" => written(SchemaBased.decode_nested(v), SchemaBased.to_json_nested)
+	"OptBig" => written(SchemaBased.decode_opt_big(v), SchemaBased.to_json_opt_big)
+	"Outcome" => written(SchemaBased.decode_outcome(v), SchemaBased.to_json_outcome)
+	"Level" => written(SchemaBased.decode_level(v), SchemaBased.to_json_level)
+	"Shape" => written(SchemaBased.decode_shape(v), SchemaBased.to_json_shape)
+	"User" => written(SchemaBased.decode_user(v), SchemaBased.to_json_user)
+	"Strict" => written(SchemaBased.decode_strict(v), SchemaBased.to_json_strict)
+	"Bits" => written(SchemaBased.decode_bits(v), SchemaBased.to_json_bits)
+	"Loop" => written(SchemaBased.decode_loop(v), SchemaBased.to_json_loop)
+	"BoxRec" => written(SchemaBased.decode_box_rec(v), SchemaBased.to_json_box_rec)
+	"Boxed" => written(SchemaBased.decode_boxed(v), SchemaBased.to_json_boxed)
+	"Mine" => written(SchemaBased.decode_mine(v), SchemaBased.to_json_mine)
+	"OptLoop" => written(SchemaBased.decode_opt_loop(v), SchemaBased.to_json_opt_loop)
 	_ => Err("no type ${ty}")
 }
 
-## Read `j` with the type `ty` of plain.schema.haus, and encode the result.
+## Read `j` with the type `ty` of schema-based.schema.haus, and encode the result.
 read : Str, JsonValue -> Try(Value, Decode.Error)
 read = |ty, j| match ty {
-	"S" => Plain.from_json_s(j).map_ok(Plain.encode_s)
-	"B" => Plain.from_json_b(j).map_ok(Plain.encode_b)
-	"Flag" => Plain.from_json_flag(j).map_ok(Plain.encode_flag)
-	"Small" => Plain.from_json_small(j).map_ok(Plain.encode_small)
-	"Byte" => Plain.from_json_byte(j).map_ok(Plain.encode_byte)
-	"Big" => Plain.from_json_big(j).map_ok(Plain.encode_big)
-	"I64" => Plain.from_json_i64(j).map_ok(Plain.encode_i64)
-	"F64" => Plain.from_json_f64(j).map_ok(Plain.encode_f64)
-	"F32" => Plain.from_json_f32(j).map_ok(Plain.encode_f32)
-	"Dec" => Plain.from_json_dec(j).map_ok(Plain.encode_dec)
-	"Day" => Plain.from_json_day(j).map_ok(Plain.encode_day)
-	"At" => Plain.from_json_at(j).map_ok(Plain.encode_at)
-	"Raw" => Plain.from_json_raw(j).map_ok(Plain.encode_raw)
-	"Key" => Plain.from_json_key(j).map_ok(Plain.encode_key)
-	"Ints" => Plain.from_json_ints(j).map_ok(Plain.encode_ints)
-	"Counts" => Plain.from_json_counts(j).map_ok(Plain.encode_counts)
-	"Opt" => Plain.from_json_opt(j).map_ok(Plain.encode_opt)
-	"Nested" => Plain.from_json_nested(j).map_ok(Plain.encode_nested)
-	"OptBig" => Plain.from_json_opt_big(j).map_ok(Plain.encode_opt_big)
-	"Outcome" => Plain.from_json_outcome(j).map_ok(Plain.encode_outcome)
-	"Level" => Plain.from_json_level(j).map_ok(Plain.encode_level)
-	"Shape" => Plain.from_json_shape(j).map_ok(Plain.encode_shape)
-	"User" => Plain.from_json_user(j).map_ok(Plain.encode_user)
-	"Strict" => Plain.from_json_strict(j).map_ok(Plain.encode_strict)
-	"Bits" => Plain.from_json_bits(j).map_ok(Plain.encode_bits)
-	"Loop" => Plain.from_json_loop(j).map_ok(Plain.encode_loop)
-	"BoxRec" => Plain.from_json_box_rec(j).map_ok(Plain.encode_box_rec)
-	"Boxed" => Plain.from_json_boxed(j).map_ok(Plain.encode_boxed)
-	"Mine" => Plain.from_json_mine(j).map_ok(Plain.encode_mine)
-	"OptLoop" => Plain.from_json_opt_loop(j).map_ok(Plain.encode_opt_loop)
+	"S" => SchemaBased.from_json_s(j).map_ok(SchemaBased.encode_s)
+	"B" => SchemaBased.from_json_b(j).map_ok(SchemaBased.encode_b)
+	"Flag" => SchemaBased.from_json_flag(j).map_ok(SchemaBased.encode_flag)
+	"Small" => SchemaBased.from_json_small(j).map_ok(SchemaBased.encode_small)
+	"Byte" => SchemaBased.from_json_byte(j).map_ok(SchemaBased.encode_byte)
+	"Big" => SchemaBased.from_json_big(j).map_ok(SchemaBased.encode_big)
+	"I64" => SchemaBased.from_json_i64(j).map_ok(SchemaBased.encode_i64)
+	"F64" => SchemaBased.from_json_f64(j).map_ok(SchemaBased.encode_f64)
+	"F32" => SchemaBased.from_json_f32(j).map_ok(SchemaBased.encode_f32)
+	"Dec" => SchemaBased.from_json_dec(j).map_ok(SchemaBased.encode_dec)
+	"Day" => SchemaBased.from_json_day(j).map_ok(SchemaBased.encode_day)
+	"At" => SchemaBased.from_json_at(j).map_ok(SchemaBased.encode_at)
+	"Raw" => SchemaBased.from_json_raw(j).map_ok(SchemaBased.encode_raw)
+	"Key" => SchemaBased.from_json_key(j).map_ok(SchemaBased.encode_key)
+	"Ints" => SchemaBased.from_json_ints(j).map_ok(SchemaBased.encode_ints)
+	"Counts" => SchemaBased.from_json_counts(j).map_ok(SchemaBased.encode_counts)
+	"Opt" => SchemaBased.from_json_opt(j).map_ok(SchemaBased.encode_opt)
+	"Nested" => SchemaBased.from_json_nested(j).map_ok(SchemaBased.encode_nested)
+	"OptBig" => SchemaBased.from_json_opt_big(j).map_ok(SchemaBased.encode_opt_big)
+	"Outcome" => SchemaBased.from_json_outcome(j).map_ok(SchemaBased.encode_outcome)
+	"Level" => SchemaBased.from_json_level(j).map_ok(SchemaBased.encode_level)
+	"Shape" => SchemaBased.from_json_shape(j).map_ok(SchemaBased.encode_shape)
+	"User" => SchemaBased.from_json_user(j).map_ok(SchemaBased.encode_user)
+	"Strict" => SchemaBased.from_json_strict(j).map_ok(SchemaBased.encode_strict)
+	"Bits" => SchemaBased.from_json_bits(j).map_ok(SchemaBased.encode_bits)
+	"Loop" => SchemaBased.from_json_loop(j).map_ok(SchemaBased.encode_loop)
+	"BoxRec" => SchemaBased.from_json_box_rec(j).map_ok(SchemaBased.encode_box_rec)
+	"Boxed" => SchemaBased.from_json_boxed(j).map_ok(SchemaBased.encode_boxed)
+	"Mine" => SchemaBased.from_json_mine(j).map_ok(SchemaBased.encode_mine)
+	"OptLoop" => SchemaBased.from_json_opt_loop(j).map_ok(SchemaBased.encode_opt_loop)
 	_ => Decode.fail("no-type", "no type ${ty}")
 }
 
@@ -349,434 +358,518 @@ report = |result| match result {
 	}
 }
 
-# json/plain.cases.haus
-expect JsonTest.count(plain_cases) == 108
+# json/schema-based.cases.haus
+expect JsonTest.count(schema_based_cases) == 114
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
-expect JsonTest.plain(plain_cases, 0)
+expect JsonTest.schema_based(schema_based_cases, 0)
 
 # Ok { type: "B", input: x"0b34", json: "\"CzQ=\"" },
-expect JsonTest.plain(plain_cases, 1)
+expect JsonTest.schema_based(schema_based_cases, 1)
 
 # Ok { type: "B", input: x"", json: "\"\"" },
-expect JsonTest.plain(plain_cases, 2)
+expect JsonTest.schema_based(schema_based_cases, 2)
 
 # Err { type: "B", json: "\"CzQ\"", code: "invalid-base64" },
-expect JsonTest.plain(plain_cases, 3)
+expect JsonTest.schema_based(schema_based_cases, 3)
 
 # Err { type: "B", json: "\"0b34\u{0}\"", code: "control-character" },
-expect JsonTest.plain(plain_cases, 4)
+expect JsonTest.schema_based(schema_based_cases, 4)
 
 # Ok { type: "Flag", input: True, json: "true" },
-expect JsonTest.plain(plain_cases, 5)
+expect JsonTest.schema_based(schema_based_cases, 5)
 
 # Ok { type: "Flag", input: False, json: "false" },
-expect JsonTest.plain(plain_cases, 6)
+expect JsonTest.schema_based(schema_based_cases, 6)
 
 # Err { type: "Flag", json: "\"True\"", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 7)
+expect JsonTest.schema_based(schema_based_cases, 7)
 
 # Ok { type: "Small", input: -12, json: "-12" },
-expect JsonTest.plain(plain_cases, 8)
+expect JsonTest.schema_based(schema_based_cases, 8)
 
 # Err { type: "Small", json: "\"-12\"", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 9)
+expect JsonTest.schema_based(schema_based_cases, 9)
 
 # Err { type: "Small", json: "1.0", code: "not-an-integer" },
-expect JsonTest.plain(plain_cases, 10)
+expect JsonTest.schema_based(schema_based_cases, 10)
 
 # Err { type: "Small", json: "1e2", code: "not-an-integer" },
-expect JsonTest.plain(plain_cases, 11)
+expect JsonTest.schema_based(schema_based_cases, 11)
 
 # Err { type: "Small", json: "2147483648", code: "out-of-range" },
-expect JsonTest.plain(plain_cases, 12)
+expect JsonTest.schema_based(schema_based_cases, 12)
 
 # Ok { type: "Byte", input: -0, output: 0, json: "0" },
-expect JsonTest.plain(plain_cases, 13)
+expect JsonTest.schema_based(schema_based_cases, 13)
 
 # Ok { type: "Big", input: 123456789012345678901234567890, json: "\"123456789012345678901234567890\"" },
-expect JsonTest.plain(plain_cases, 14)
+expect JsonTest.schema_based(schema_based_cases, 14)
 
 # Ok { type: "Big", input: -0, output: 0, json: "\"0\"" },
-expect JsonTest.plain(plain_cases, 15)
+expect JsonTest.schema_based(schema_based_cases, 15)
 
 # Err { type: "Big", json: "123", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 16)
+expect JsonTest.schema_based(schema_based_cases, 16)
 
 # Err { type: "Big", json: "\"1e3\"", code: "not-an-integer" },
-expect JsonTest.plain(plain_cases, 17)
+expect JsonTest.schema_based(schema_based_cases, 17)
 
 # Err { type: "Big", json: "\"+1\"", code: "invalid-number" },
-expect JsonTest.plain(plain_cases, 18)
+expect JsonTest.schema_based(schema_based_cases, 18)
 
 # Ok { type: "I64", input: 9223372036854775807, json: "\"9223372036854775807\"" },
-expect JsonTest.plain(plain_cases, 19)
+expect JsonTest.schema_based(schema_based_cases, 19)
 
 # Err { type: "I64", json: "\"9223372036854775808\"", code: "out-of-range" },
-expect JsonTest.plain(plain_cases, 20)
+expect JsonTest.schema_based(schema_based_cases, 20)
 
 # Err { type: "I64", json: "\"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
-expect JsonTest.plain(plain_cases, 21)
+expect JsonTest.schema_based(schema_based_cases, 21)
 
 # Err { type: "Big", json: "\"1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "number-too-long" },
-expect JsonTest.plain(plain_cases, 22)
+expect JsonTest.schema_based(schema_based_cases, 22)
 
 # Ok { type: "F64", input: 0.10, output: 0.1, json: "0.1" },
-expect JsonTest.plain(plain_cases, 23)
+expect JsonTest.schema_based(schema_based_cases, 23)
 
 # Ok { type: "F64", input: 1e21, json: "1e21" },
-expect JsonTest.plain(plain_cases, 24)
+expect JsonTest.schema_based(schema_based_cases, 24)
 
 # Ok { type: "F64", input: -0, json: "-0" },
-expect JsonTest.plain(plain_cases, 25)
+expect JsonTest.schema_based(schema_based_cases, 25)
 
 # Ok { type: "F64", input: NaN, json: "\"NaN\"" },
-expect JsonTest.plain(plain_cases, 26)
+expect JsonTest.schema_based(schema_based_cases, 26)
 
 # Ok { type: "F64", input: Infinity, json: "\"Infinity\"" },
-expect JsonTest.plain(plain_cases, 27)
+expect JsonTest.schema_based(schema_based_cases, 27)
 
 # Ok { type: "F64", input: NegInfinity, json: "\"-Infinity\"" },
-expect JsonTest.plain(plain_cases, 28)
+expect JsonTest.schema_based(schema_based_cases, 28)
 
 # Read { type: "F64", json: "1E+2", output: 100 },
-expect JsonTest.plain(plain_cases, 29)
+expect JsonTest.schema_based(schema_based_cases, 29)
 
 # Err { type: "F64", json: "1e400", code: "out-of-range" },
-expect JsonTest.plain(plain_cases, 30)
+expect JsonTest.schema_based(schema_based_cases, 30)
 
 # Err { type: "F64", json: "\"1.5\"", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 31)
+expect JsonTest.schema_based(schema_based_cases, 31)
 
 # Ok { type: "F32", input: 16777217, output: 16777216, json: "16777216" },
-expect JsonTest.plain(plain_cases, 32)
+expect JsonTest.schema_based(schema_based_cases, 32)
 
 # Ok { type: "Dec", input: 19.90, json: "\"19.90\"" },
-expect JsonTest.plain(plain_cases, 33)
+expect JsonTest.schema_based(schema_based_cases, 33)
 
 # Ok { type: "Dec", input: 1.5e3, json: "\"1.5e3\"" },
-expect JsonTest.plain(plain_cases, 34)
+expect JsonTest.schema_based(schema_based_cases, 34)
 
 # Ok { type: "Dec", input: -0, json: "\"-0\"" },
-expect JsonTest.plain(plain_cases, 35)
+expect JsonTest.schema_based(schema_based_cases, 35)
 
 # Read { type: "Dec", json: "\"1E+05\"", output: 1e5 },
-expect JsonTest.plain(plain_cases, 36)
+expect JsonTest.schema_based(schema_based_cases, 36)
 
 # Err { type: "Dec", json: "19.90", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 37)
+expect JsonTest.schema_based(schema_based_cases, 37)
 
 # Err { type: "Dec", json: "\"19,90\"", code: "invalid-number" },
-expect JsonTest.plain(plain_cases, 38)
+expect JsonTest.schema_based(schema_based_cases, 38)
 
 # Ok { type: "Day", input: Date("2026-11-13"), json: "\"2026-11-13\"" },
-expect JsonTest.plain(plain_cases, 39)
+expect JsonTest.schema_based(schema_based_cases, 39)
 
 # Err { type: "Day", json: "\"2026-02-30\"", code: "invalid-time" },
-expect JsonTest.plain(plain_cases, 40)
+expect JsonTest.schema_based(schema_based_cases, 40)
 
 # Ok { type: "At", input: Instant("2026-11-13T10:00:00.250+01:00"), json: "\"2026-11-13T10:00:00.250+01:00\"" },
-expect JsonTest.plain(plain_cases, 41)
+expect JsonTest.schema_based(schema_based_cases, 41)
 
-# Ok { type: "Raw", input: { a: [1, "x", None] }, json: "{\"rec\": {\"a\": [{\"num\": \"1\"}, \"x\", {\"tag\": \"None\"}]}}" },
-expect JsonTest.plain(plain_cases, 42)
+# Ok { type: "Raw", input: { a: [1, "x", None] }, json: "{\"_rec\": {\"a\": [{\"_num\": \"1\"}, \"x\", {\"_tag\": \"None\"}]}}" },
+expect JsonTest.schema_based(schema_based_cases, 42)
 
-# Err { type: "Raw", json: "1", code: "lossless-form" },
-expect JsonTest.plain(plain_cases, 43)
+# Err { type: "Raw", json: "1", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 43)
+
+# Err { type: "Raw", json: "{\"_haus\": 1, \"_value\": \"x\"}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 44)
 
 # Ok { type: "Key", input: "sk-1", json: "\"sk-1\"" },
-expect JsonTest.plain(plain_cases, 44)
+expect JsonTest.schema_based(schema_based_cases, 45)
 
 # Ok { type: "Ints", input: [1, 2], json: "[1, 2]" },
-expect JsonTest.plain(plain_cases, 45)
+expect JsonTest.schema_based(schema_based_cases, 46)
 
 # Ok { type: "Counts", input: { en: 1, "pt-BR": 2 }, json: "{\"en\": 1, \"pt-BR\": 2}" },
-expect JsonTest.plain(plain_cases, 46)
+expect JsonTest.schema_based(schema_based_cases, 47)
 
 # Err { type: "Counts", json: "{\"a\": 1, \"a\": 2}", code: "duplicate-key" },
-expect JsonTest.plain(plain_cases, 47)
+expect JsonTest.schema_based(schema_based_cases, 48)
 
 # Ok { type: "Opt", input: None, json: "null" },
-expect JsonTest.plain(plain_cases, 48)
+expect JsonTest.schema_based(schema_based_cases, 49)
 
 # Ok { type: "Opt", input: Some(5), json: "5" },
-expect JsonTest.plain(plain_cases, 49)
+expect JsonTest.schema_based(schema_based_cases, 50)
 
 # Ok { type: "OptBig", input: Some(5), json: "\"5\"" },
-expect JsonTest.plain(plain_cases, 50)
+expect JsonTest.schema_based(schema_based_cases, 51)
 
 # Ok { type: "Nested", input: None, json: "{\"_tag\": \"None\"}" },
-expect JsonTest.plain(plain_cases, 51)
+expect JsonTest.schema_based(schema_based_cases, 52)
 
 # Ok { type: "Nested", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": null}" },
-expect JsonTest.plain(plain_cases, 52)
+expect JsonTest.schema_based(schema_based_cases, 53)
 
 # Ok { type: "Nested", input: Some(Some(5)), json: "{\"_tag\": \"Some\", \"value\": 5}" },
-expect JsonTest.plain(plain_cases, 53)
+expect JsonTest.schema_based(schema_based_cases, 54)
 
 # Err { type: "Nested", json: "null", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 54)
+expect JsonTest.schema_based(schema_based_cases, 55)
 
 # Err { type: "Nested", json: "5", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 55)
+expect JsonTest.schema_based(schema_based_cases, 56)
 
 # Err { type: "Nested", json: "{}", code: "missing-member" },
-expect JsonTest.plain(plain_cases, 56)
+expect JsonTest.schema_based(schema_based_cases, 57)
 
 # Err { type: "Nested", json: "{\"_tag\": \"Just\", \"value\": 5}", code: "unknown-tag" },
-expect JsonTest.plain(plain_cases, 57)
+expect JsonTest.schema_based(schema_based_cases, 58)
 
 # Ok { type: "Outcome", input: Ok(1), json: "{\"_tag\": \"Ok\", \"value\": 1}" },
-expect JsonTest.plain(plain_cases, 58)
+expect JsonTest.schema_based(schema_based_cases, 59)
 
 # Ok { type: "Outcome", input: Err("no"), json: "{\"_tag\": \"Err\", \"value\": \"no\"}" },
-expect JsonTest.plain(plain_cases, 59)
+expect JsonTest.schema_based(schema_based_cases, 60)
 
 # Ok { type: "Level", input: Debug, json: "\"Debug\"" },
-expect JsonTest.plain(plain_cases, 60)
+expect JsonTest.schema_based(schema_based_cases, 61)
 
 # Err { type: "Level", json: "\"Warn\"", code: "unknown-tag" },
-expect JsonTest.plain(plain_cases, 61)
+expect JsonTest.schema_based(schema_based_cases, 62)
 
 # Err { type: "Level", json: "{\"_tag\": \"Debug\"}", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 62)
+expect JsonTest.schema_based(schema_based_cases, 63)
 
 # Ok { type: "Shape", input: Circle { r: 1.5 }, json: "{\"_tag\": \"Circle\", \"r\": 1.5}" },
-expect JsonTest.plain(plain_cases, 63)
+expect JsonTest.schema_based(schema_based_cases, 64)
 
 # Ok { type: "Shape", input: Point(1, 2), json: "{\"_tag\": \"Point\", \"values\": [1, 2]}" },
-expect JsonTest.plain(plain_cases, 64)
+expect JsonTest.schema_based(schema_based_cases, 65)
 
 # Ok { type: "Shape", input: Wrap(3), json: "{\"_tag\": \"Wrap\", \"value\": 3}" },
-expect JsonTest.plain(plain_cases, 65)
+expect JsonTest.schema_based(schema_based_cases, 66)
 
 # Ok { type: "Shape", input: Empty, json: "{\"_tag\": \"Empty\"}" },
-expect JsonTest.plain(plain_cases, 66)
+expect JsonTest.schema_based(schema_based_cases, 67)
 
 # Ok { type: "Shape", input: Hexagon, json: "{\"_tag\": \"Hexagon\"}" },
-expect JsonTest.plain(plain_cases, 67)
+expect JsonTest.schema_based(schema_based_cases, 68)
 
-# Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"args\": [{\"num\": \"1\"}, \"a\"]}" },
-expect JsonTest.plain(plain_cases, 68)
+# Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}" },
+expect JsonTest.schema_based(schema_based_cases, 69)
 
 # Read { type: "Shape", json: "{\"_tag\": \"Circle\", \"r\": 1.5, \"color\": \"red\"}", output: Circle { r: 1.5 } },
-expect JsonTest.plain(plain_cases, 69)
+expect JsonTest.schema_based(schema_based_cases, 70)
 
 # Err { type: "Shape", json: "\"Empty\"", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 70)
+expect JsonTest.schema_based(schema_based_cases, 71)
 
 # Err { type: "Shape", json: "{\"r\": 1.5}", code: "missing-member" },
-expect JsonTest.plain(plain_cases, 71)
+expect JsonTest.schema_based(schema_based_cases, 72)
 
 # Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1]}", code: "wrong-payload" },
-expect JsonTest.plain(plain_cases, 72)
+expect JsonTest.schema_based(schema_based_cases, 73)
 
 # Ok { type: "User", input: { id: 1, name: "Ada" }, json: "{\"id\": 1, \"name\": \"Ada\"}" },
-expect JsonTest.plain(plain_cases, 73)
+expect JsonTest.schema_based(schema_based_cases, 74)
 
 # Ok { type: "User", input: { id: 1, name: "Ada", note: None }, json: "{\"id\": 1, \"name\": \"Ada\", \"note\": null}" },
-expect JsonTest.plain(plain_cases, 74)
+expect JsonTest.schema_based(schema_based_cases, 75)
 
 # Ok { type: "User", input: { id: 1, name: "Ada", nick: "ada", note: Some("x") }, json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": \"ada\", \"note\": \"x\"}" },
-expect JsonTest.plain(plain_cases, 75)
+expect JsonTest.schema_based(schema_based_cases, 76)
 
 # Read { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"extra\": [1]}", output: { id: 1, name: "Ada" } },
-expect JsonTest.plain(plain_cases, 76)
+expect JsonTest.schema_based(schema_based_cases, 77)
 
 # Err { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": null}", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 77)
+expect JsonTest.schema_based(schema_based_cases, 78)
 
 # Err { type: "User", json: "{\"id\": 1}", code: "missing-field" },
-expect JsonTest.plain(plain_cases, 78)
+expect JsonTest.schema_based(schema_based_cases, 79)
 
 # Err { type: "Strict", json: "{\"id\": 1, \"x\": 2}", code: "unknown-field" },
-expect JsonTest.plain(plain_cases, 79)
+expect JsonTest.schema_based(schema_based_cases, 80)
 
 # Err { type: "B", json: "\"CzR=\"", code: "invalid-base64" },
-expect JsonTest.plain(plain_cases, 80)
+expect JsonTest.schema_based(schema_based_cases, 81)
 
 # Err { type: "B", json: "\"Cz Q=\"", code: "invalid-base64" },
-expect JsonTest.plain(plain_cases, 81)
+expect JsonTest.schema_based(schema_based_cases, 82)
 
 # Err { type: "B", json: "\"-_8=\"", code: "invalid-base64" },
-expect JsonTest.plain(plain_cases, 82)
+expect JsonTest.schema_based(schema_based_cases, 83)
 
 # Read { type: "Big", json: "\"-0\"", output: 0 },
-expect JsonTest.plain(plain_cases, 83)
+expect JsonTest.schema_based(schema_based_cases, 84)
 
 # Err { type: "Big", json: "\"007\"", code: "invalid-number" },
-expect JsonTest.plain(plain_cases, 84)
+expect JsonTest.schema_based(schema_based_cases, 85)
 
 # Err { type: "Dec", json: "\"0xFF\"", code: "invalid-number" },
-expect JsonTest.plain(plain_cases, 85)
+expect JsonTest.schema_based(schema_based_cases, 86)
 
 # Err { type: "Dec", json: "\"1_000\"", code: "invalid-number" },
-expect JsonTest.plain(plain_cases, 86)
+expect JsonTest.schema_based(schema_based_cases, 87)
 
 # Ok { type: "Bits", input: True, json: "\"True\"" },
-expect JsonTest.plain(plain_cases, 87)
+expect JsonTest.schema_based(schema_based_cases, 88)
 
 # Err { type: "Bits", json: "true", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 88)
+expect JsonTest.schema_based(schema_based_cases, 89)
 
 # Ok { type: "Loop", input: None, json: "{\"_tag\": \"None\"}" },
-expect JsonTest.plain(plain_cases, 89)
+expect JsonTest.schema_based(schema_based_cases, 90)
 
 # Ok { type: "Loop", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
-expect JsonTest.plain(plain_cases, 90)
+expect JsonTest.schema_based(schema_based_cases, 91)
 
 # Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hexagon { sides: 6 } },
-expect JsonTest.plain(plain_cases, 91)
+expect JsonTest.schema_based(schema_based_cases, 92)
 
 # Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
-expect JsonTest.plain(plain_cases, 92)
+expect JsonTest.schema_based(schema_based_cases, 93)
 
 # Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
-expect JsonTest.plain(plain_cases, 93)
+expect JsonTest.schema_based(schema_based_cases, 94)
 
 # Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1}", code: "unexpected-member" },
-expect JsonTest.plain(plain_cases, 94)
+expect JsonTest.schema_based(schema_based_cases, 95)
 
 # Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
-expect JsonTest.plain(plain_cases, 95)
+expect JsonTest.schema_based(schema_based_cases, 96)
 
 # Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
-expect JsonTest.plain(plain_cases, 96)
+expect JsonTest.schema_based(schema_based_cases, 97)
 
 # Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
-expect JsonTest.plain(plain_cases, 97)
+expect JsonTest.schema_based(schema_based_cases, 98)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": [{\"num\": \"1\"}], \"x\": 2}", output: Hexagon { args: [{ num: "1" }], x: 2 } },
-expect JsonTest.plain(plain_cases, 98)
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", output: Hexagon { _args: [{ _num: "1" }], x: 2 } },
+expect JsonTest.schema_based(schema_based_cases, 99)
+
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [1, 2]}", output: Run { args: [1, 2] } },
+expect JsonTest.schema_based(schema_based_cases, 100)
+
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": []}", output: Run { args: [] } },
+expect JsonTest.schema_based(schema_based_cases, 101)
+
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [\"a\"]}", output: Run { args: ["a"] } },
+expect JsonTest.schema_based(schema_based_cases, 102)
 
 # Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
-expect JsonTest.plain(plain_cases, 99)
+expect JsonTest.schema_based(schema_based_cases, 103)
 
 # Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
-expect JsonTest.plain(plain_cases, 100)
+expect JsonTest.schema_based(schema_based_cases, 104)
 
 # Err { type: "Mine", json: "null", code: "type-mismatch" },
-expect JsonTest.plain(plain_cases, 101)
+expect JsonTest.schema_based(schema_based_cases, 105)
 
 # Ok { type: "OptLoop", input: None, json: "null" },
-expect JsonTest.plain(plain_cases, 102)
+expect JsonTest.schema_based(schema_based_cases, 106)
 
 # Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
-expect JsonTest.plain(plain_cases, 103)
+expect JsonTest.schema_based(schema_based_cases, 107)
 
 # Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
-expect JsonTest.plain(plain_cases, 104)
+expect JsonTest.schema_based(schema_based_cases, 108)
 
 # Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
-expect JsonTest.plain(plain_cases, 105)
+expect JsonTest.schema_based(schema_based_cases, 109)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": []}", code: "lossless-form" },
-expect JsonTest.plain(plain_cases, 106)
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 110)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"args\": 5}", code: "lossless-form" },
-expect JsonTest.plain(plain_cases, 107)
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 111)
 
-# json/lossless.cases.haus
-expect JsonTest.count(lossless_cases) == 22
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 112)
 
-# Ok { input: 19.90, json: "{\"num\": \"19.90\"}" },
-expect JsonTest.lossless(lossless_cases, 0)
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 113)
 
-# Ok { input: 0xFF, json: "{\"num\": \"255\"}" },
-expect JsonTest.lossless(lossless_cases, 1)
+# json/self-describing.cases.haus
+expect JsonTest.count(self_describing_cases) == 41
 
-# Ok { input: x"0b34", json: "{\"bytes\": \"0b34\"}" },
-expect JsonTest.lossless(lossless_cases, 2)
+# Ok { input: 19.90, json: "{\"_haus\": 1, \"_value\": {\"_num\": \"19.90\"}}" },
+expect JsonTest.self_describing(self_describing_cases, 0)
 
-# Ok { input: Circle { r: 1 }, json: "{\"tag\": \"Circle\", \"args\": [{\"rec\": {\"r\": {\"num\": \"1\"}}}]}" },
-expect JsonTest.lossless(lossless_cases, 3)
+# Ok { input: 0xFF, json: "{\"_haus\": 1, \"_value\": {\"_num\": \"255\"}}" },
+expect JsonTest.self_describing(self_describing_cases, 1)
 
-# Ok { input: None, json: "{\"tag\": \"None\"}" },
-expect JsonTest.lossless(lossless_cases, 4)
+# Ok { input: x"0b34", json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0b34\"}}" },
+expect JsonTest.self_describing(self_describing_cases, 2)
 
-# Ok { input: [], json: "[]" },
-expect JsonTest.lossless(lossless_cases, 5)
+# Ok { input: Circle { r: 1 }, json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"Circle\", \"_args\": [{\"_rec\": {\"r\": {\"_num\": \"1\"}}}]}}" },
+expect JsonTest.self_describing(self_describing_cases, 3)
 
-# Ok { input: {}, json: "{\"rec\": {}}" },
-expect JsonTest.lossless(lossless_cases, 6)
+# Ok { input: None, json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"None\"}}" },
+expect JsonTest.self_describing(self_describing_cases, 4)
 
-# Err { json: "1", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 7)
+# Ok { input: [], json: "{\"_haus\": 1, \"_value\": []}" },
+expect JsonTest.self_describing(self_describing_cases, 5)
 
-# Err { json: "true", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 8)
+# Ok { input: {}, json: "{\"_haus\": 1, \"_value\": {\"_rec\": {}}}" },
+expect JsonTest.self_describing(self_describing_cases, 6)
 
-# Err { json: "null", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 9)
+# Ok { input: "Shipped", json: "{\"_haus\": 1, \"_value\": \"Shipped\"}" },
+expect JsonTest.self_describing(self_describing_cases, 7)
 
-# Err { json: "{}", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 10)
+# Ok { input: { _tag: 1, tag: "x" }, json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"_tag\": {\"_num\": \"1\"}, \"tag\": \"x\"}}}" },
+expect JsonTest.self_describing(self_describing_cases, 8)
 
-# Err { json: "{\"num\": \"01\"}", code: "lossless-number" },
-expect JsonTest.lossless(lossless_cases, 11)
+# Ok { input: "a\u{7F}\u{85}\u{202E}b", json: "{\"_haus\": 1, \"_value\": \"a\\u007f\\u0085\\u202eb\"}" },
+expect JsonTest.self_describing(self_describing_cases, 9)
 
-# Err { json: "{\"num\": 1}", code: "lossless-number" },
-expect JsonTest.lossless(lossless_cases, 12)
+# Err { json: "\"a\"", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 10)
 
-# Err { json: "{\"num\": \"1\", \"x\": 2}", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 13)
+# Err { json: "[]", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 11)
 
-# Err { json: "{\"bytes\": \"0B34\"}", code: "lossless-bytes" },
-expect JsonTest.lossless(lossless_cases, 14)
+# Err { json: "{\"_num\": \"1\"}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 12)
 
-# Err { json: "{\"bytes\": \"0b3\"}", code: "lossless-bytes" },
-expect JsonTest.lossless(lossless_cases, 15)
+# Err { json: "{}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 13)
 
-# Err { json: "{\"tag\": \"circle\"}", code: "invalid-tag" },
-expect JsonTest.lossless(lossless_cases, 16)
+# Err { json: "{\"_haus\": 1}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 14)
 
-# Err { json: "{\"tag\": \"T\", \"args\": []}", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 17)
+# Err { json: "{\"_value\": \"a\"}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 15)
 
-# Err { json: "{\"tag\": \"\", \"args\": \"\"}", code: "invalid-tag" },
-expect JsonTest.lossless(lossless_cases, 18)
+# Err { json: "{\"_haus\": 1, \"_value\": \"a\", \"x\": 1}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 16)
 
-# Err { json: "{\"rec\": {\"a\": 1}}", code: "lossless-form" },
-expect JsonTest.lossless(lossless_cases, 19)
+# Err { json: "{\"_haus\": 2, \"_value\": \"a\"}", code: "haus-json-version" },
+expect JsonTest.self_describing(self_describing_cases, 17)
 
-# Err { json: "{\"rec\": {\"a\": {\"num\": \"1\"}, \"a\": {\"num\": \"2\"}}}", code: "duplicate-key" },
-expect JsonTest.lossless(lossless_cases, 20)
+# Err { json: "{\"_haus\": \"1\", \"_value\": \"a\"}", code: "haus-json-version" },
+expect JsonTest.self_describing(self_describing_cases, 18)
 
-# Err { json: "{\"num\": \"1E5\"}", code: "lossless-number" },
-expect JsonTest.lossless(lossless_cases, 21)
+# Err { json: "{\"_haus\": 1.0, \"_value\": \"a\"}", code: "haus-json-version" },
+expect JsonTest.self_describing(self_describing_cases, 19)
 
-# json/schemaless.cases.haus
-expect JsonTest.count(schemaless_cases) == 10
+# Err { json: "{\"_haus\": 1, \"_value\": 1}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 20)
+
+# Err { json: "{\"_haus\": 1, \"_value\": true}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 21)
+
+# Err { json: "{\"_haus\": 1, \"_value\": null}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 22)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {}}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 23)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"num\": \"1\"}}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 24)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"tag\": \"A\"}}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 25)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"01\"}}", code: "haus-json-number" },
+expect JsonTest.self_describing(self_describing_cases, 26)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": 1}}", code: "haus-json-number" },
+expect JsonTest.self_describing(self_describing_cases, 27)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\", \"x\": 2}}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 28)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0B34\"}}", code: "haus-json-bytes" },
+expect JsonTest.self_describing(self_describing_cases, 29)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0b3\"}}", code: "haus-json-bytes" },
+expect JsonTest.self_describing(self_describing_cases, 30)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"circle\"}}", code: "invalid-tag" },
+expect JsonTest.self_describing(self_describing_cases, 31)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": []}}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 32)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"\", \"_args\": \"\"}}", code: "invalid-tag" },
+expect JsonTest.self_describing(self_describing_cases, 33)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": 1}}}", code: "haus-json-form" },
+expect JsonTest.self_describing(self_describing_cases, 34)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": {\"_num\": \"1\"}, \"a\": {\"_num\": \"2\"}}}}", code: "duplicate-key" },
+expect JsonTest.self_describing(self_describing_cases, 35)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1E5\"}}", code: "haus-json-number" },
+expect JsonTest.self_describing(self_describing_cases, 36)
+
+# Err { json: "{\"_haus\": 1, \"_value\": \"a\u{7F}b\"}", code: "control-character" },
+expect JsonTest.self_describing(self_describing_cases, 37)
+
+# Err { json: "{\"_haus\": 1, \"_value\": \"a\u{85}b\"}", code: "control-character" },
+expect JsonTest.self_describing(self_describing_cases, 38)
+
+# Err { json: "{\"_haus\": 1, \"_value\": \"a\u{202E}b\"}", code: "bidi-control" },
+expect JsonTest.self_describing(self_describing_cases, 39)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\u{2066}\": \"b\"}}}", code: "bidi-control" },
+expect JsonTest.self_describing(self_describing_cases, 40)
+
+# json/import.cases.haus
+expect JsonTest.count(import_cases) == 13
 
 # Read { json: "{\"a\": 1, \"b\": [true, false, null], \"c\": \"x\"}", output: { a: 1, b: [True, False, None], c: "x" } },
-expect JsonTest.schemaless(schemaless_cases, 0)
+expect JsonTest.imported(import_cases, 0)
 
 # Read { json: "1E+05", output: 1e5 },
-expect JsonTest.schemaless(schemaless_cases, 1)
+expect JsonTest.imported(import_cases, 1)
 
 # Read { json: "-0", output: -0 },
-expect JsonTest.schemaless(schemaless_cases, 2)
+expect JsonTest.imported(import_cases, 2)
 
 # Read { json: "19.90", output: 19.90 },
-expect JsonTest.schemaless(schemaless_cases, 3)
+expect JsonTest.imported(import_cases, 3)
 
 # Read { json: "\"\\ud83d\\ude00\"", output: "\u{1F600}" },
-expect JsonTest.schemaless(schemaless_cases, 4)
+expect JsonTest.imported(import_cases, 4)
 
 # Err { json: "{\"a\": 1, \"a\": 2}", code: "duplicate-key" },
-expect JsonTest.schemaless(schemaless_cases, 5)
+expect JsonTest.imported(import_cases, 5)
 
 # Err { json: "\"\\ud83d\"", code: "unpaired-surrogate" },
-expect JsonTest.schemaless(schemaless_cases, 6)
+expect JsonTest.imported(import_cases, 6)
 
 # Err { json: "[1,]", code: "json-syntax" },
-expect JsonTest.schemaless(schemaless_cases, 7)
+expect JsonTest.imported(import_cases, 7)
 
 # Err { json: "NaN", code: "json-syntax" },
-expect JsonTest.schemaless(schemaless_cases, 8)
+expect JsonTest.imported(import_cases, 8)
 
 # Read { json: "\u{FEFF}[1]", output: [1] },
-expect JsonTest.schemaless(schemaless_cases, 9)
+expect JsonTest.imported(import_cases, 9)
+
+# Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 } },
+expect JsonTest.imported(import_cases, 10)
+
+# Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },
+expect JsonTest.imported(import_cases, 11)
+
+# Read { json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
+expect JsonTest.imported(import_cases, 12)
 
 # Loop: 256 nested Somes read, 257 don't
 expect JsonTest.somes("Loop", 256) == Ok({})
@@ -786,86 +879,86 @@ expect JsonTest.somes("Loop", 257) == Err("nesting deeper than 256 levels")
 expect JsonTest.somes("OptLoop", 255) == Ok({})
 expect JsonTest.somes("OptLoop", 256) == Err("nesting deeper than 256 levels")
 
-# valid/bare-values.json
-expect JsonTest.valid(valid_bare_values, valid_bare_values_json)
+# valid/bare-values.jsonl
+expect JsonTest.valid(valid_bare_values, valid_bare_values_jsonl)
 
-# valid/bidi-escaped.json
-expect JsonTest.valid(valid_bidi_escaped, valid_bidi_escaped_json)
+# valid/bidi-escaped.jsonl
+expect JsonTest.valid(valid_bidi_escaped, valid_bidi_escaped_jsonl)
 
-# valid/block-strings.json
-expect JsonTest.valid(valid_block_strings, valid_block_strings_json)
+# valid/block-strings.jsonl
+expect JsonTest.valid(valid_block_strings, valid_block_strings_jsonl)
 
-# valid/bom.json
-expect JsonTest.valid(valid_bom, valid_bom_json)
+# valid/bom.jsonl
+expect JsonTest.valid(valid_bom, valid_bom_jsonl)
 
-# valid/bytes.json
-expect JsonTest.valid(valid_bytes, valid_bytes_json)
+# valid/bytes.jsonl
+expect JsonTest.valid(valid_bytes, valid_bytes_jsonl)
 
-# valid/comments-tabs-crlf.json
-expect JsonTest.valid(valid_comments_tabs_crlf, valid_comments_tabs_crlf_json)
+# valid/comments-tabs-crlf.jsonl
+expect JsonTest.valid(valid_comments_tabs_crlf, valid_comments_tabs_crlf_jsonl)
 
-# valid/comments.json
-expect JsonTest.valid(valid_comments, valid_comments_json)
+# valid/comments.jsonl
+expect JsonTest.valid(valid_comments, valid_comments_jsonl)
 
-# valid/crlf-line-endings.json
-expect JsonTest.valid(valid_crlf_line_endings, valid_crlf_line_endings_json)
+# valid/crlf-line-endings.jsonl
+expect JsonTest.valid(valid_crlf_line_endings, valid_crlf_line_endings_jsonl)
 
-# valid/deep-nesting.json
-expect JsonTest.valid(valid_deep_nesting, valid_deep_nesting_json)
+# valid/deep-nesting.jsonl
+expect JsonTest.valid(valid_deep_nesting, valid_deep_nesting_jsonl)
 
-# valid/empty-containers.json
-expect JsonTest.valid(valid_empty_containers, valid_empty_containers_json)
+# valid/empty-containers.jsonl
+expect JsonTest.valid(valid_empty_containers, valid_empty_containers_jsonl)
 
-# valid/empty-file.json
-expect JsonTest.valid(valid_empty_file, valid_empty_file_json)
+# valid/empty-file.jsonl
+expect JsonTest.valid(valid_empty_file, valid_empty_file_jsonl)
 
-# valid/escaped-controls.json
-expect JsonTest.valid(valid_escaped_controls, valid_escaped_controls_json)
+# valid/escaped-controls.jsonl
+expect JsonTest.valid(valid_escaped_controls, valid_escaped_controls_jsonl)
 
-# valid/exponents.json
-expect JsonTest.valid(valid_exponents, valid_exponents_json)
+# valid/exponents.jsonl
+expect JsonTest.valid(valid_exponents, valid_exponents_jsonl)
 
-# valid/keys.json
-expect JsonTest.valid(valid_keys, valid_keys_json)
+# valid/keys.jsonl
+expect JsonTest.valid(valid_keys, valid_keys_jsonl)
 
-# valid/limits-boundary.json
-expect JsonTest.valid(valid_limits_boundary, valid_limits_boundary_json)
+# valid/limits-boundary.jsonl
+expect JsonTest.valid(valid_limits_boundary, valid_limits_boundary_jsonl)
 
-# valid/numbers.json
-expect JsonTest.valid(valid_numbers, valid_numbers_json)
+# valid/numbers.jsonl
+expect JsonTest.valid(valid_numbers, valid_numbers_jsonl)
 
-# valid/only-comments.json
-expect JsonTest.valid(valid_only_comments, valid_only_comments_json)
+# valid/only-comments.jsonl
+expect JsonTest.valid(valid_only_comments, valid_only_comments_jsonl)
 
-# valid/payload-same-line-spaces.json
-expect JsonTest.valid(valid_payload_same_line_spaces, valid_payload_same_line_spaces_json)
+# valid/payload-same-line-spaces.jsonl
+expect JsonTest.valid(valid_payload_same_line_spaces, valid_payload_same_line_spaces_jsonl)
 
-# valid/single-record.json
-expect JsonTest.valid(valid_single_record, valid_single_record_json)
+# valid/single-record.jsonl
+expect JsonTest.valid(valid_single_record, valid_single_record_jsonl)
 
-# valid/single-trailing-comma.json
-expect JsonTest.valid(valid_single_trailing_comma, valid_single_trailing_comma_json)
+# valid/single-trailing-comma.jsonl
+expect JsonTest.valid(valid_single_trailing_comma, valid_single_trailing_comma_jsonl)
 
-# valid/stream-comments-between.json
-expect JsonTest.valid(valid_stream_comments_between, valid_stream_comments_between_json)
+# valid/stream-comments-between.jsonl
+expect JsonTest.valid(valid_stream_comments_between, valid_stream_comments_between_jsonl)
 
-# valid/stream-no-trailing-comma.json
-expect JsonTest.valid(valid_stream_no_trailing_comma, valid_stream_no_trailing_comma_json)
+# valid/stream-no-trailing-comma.jsonl
+expect JsonTest.valid(valid_stream_no_trailing_comma, valid_stream_no_trailing_comma_jsonl)
 
-# valid/stream.json
-expect JsonTest.valid(valid_stream, valid_stream_json)
+# valid/stream.jsonl
+expect JsonTest.valid(valid_stream, valid_stream_jsonl)
 
-# valid/strings.json
-expect JsonTest.valid(valid_strings, valid_strings_json)
+# valid/strings.jsonl
+expect JsonTest.valid(valid_strings, valid_strings_jsonl)
 
-# valid/tab-in-block-string.json
-expect JsonTest.valid(valid_tab_in_block_string, valid_tab_in_block_string_json)
+# valid/tab-in-block-string.jsonl
+expect JsonTest.valid(valid_tab_in_block_string, valid_tab_in_block_string_jsonl)
 
-# valid/trailing-commas.json
-expect JsonTest.valid(valid_trailing_commas, valid_trailing_commas_json)
+# valid/trailing-commas.jsonl
+expect JsonTest.valid(valid_trailing_commas, valid_trailing_commas_jsonl)
 
-# valid/unicode-edges.json
-expect JsonTest.valid(valid_unicode_edges, valid_unicode_edges_json)
+# valid/unicode-edges.jsonl
+expect JsonTest.valid(valid_unicode_edges, valid_unicode_edges_jsonl)
 
-# valid/variants.json
-expect JsonTest.valid(valid_variants, valid_variants_json)
+# valid/variants.jsonl
+expect JsonTest.valid(valid_variants, valid_variants_jsonl)

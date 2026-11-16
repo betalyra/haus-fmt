@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
-  canonical, compileSchemaFile, equalsJson, fromBase64, fromJson, fromJsonLines, fromLosslessJson, fromLosslessJsonLines, HausDecodeError, HausEncodeError,
-  HausSyntaxError, JsonNumber, jsonObject, parse, parseJson, parseJsonLines, stringifyJson, toBase64, toLosslessJson, toLosslessJsonLines, type Json,
+  canonical, compileSchemaFile, equalsJson, fromBase64, fromHausJson, fromHausJsonLines, fromHausJsonValue, HausDecodeError, HausEncodeError, HausSyntaxError,
+  importJson, importJsonLines, JsonNumber, jsonObject, parse, parseJson, parseJsonLines, stringifyJson, toBase64, toHausJson, toHausJsonLines, type Json,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
 
@@ -96,51 +96,78 @@ describe("writing JSON", () => {
   })
 })
 
-describe("lossless (spec §16.2)", () => {
+describe("self-describing (spec §16.2)", () => {
   it.each([
     `{ a: [1, "x", None], "b-c": x"0b34ff", d: Circle { r: 1.5 }, e: Point(1, -0), f: 0xFF, g: 1E+05, h: [] }`,
     String.raw`"\u{0}\u{1B}\u{202E}😀"`,
     `Tag({ x: 1 })`,
   ])("round trips %s", (text) => {
     const v = parse(text)
-    expect(canonical(fromLosslessJson(toLosslessJson(v)))).toBe(canonical(v))
+    expect(canonical(fromHausJson(toHausJson(v)))).toBe(canonical(v))
   })
 
   it("normalizes numbers built in code and checks tags", () => {
-    expect(toLosslessJson({ kind: "number", text: "1E+05" })).toBe(`{"num":"1e5"}`)
-    expect(() => toLosslessJson({ kind: "variant", tag: "lower", args: [] })).toThrow(HausEncodeError)
-    expect(() => toLosslessJson({ kind: "number", text: "1.2.3" })).toThrow(HausEncodeError)
+    expect(toHausJson({ kind: "number", text: "1E+05" })).toBe(`{"_haus":1,"_value":{"_num":"1e5"}}`)
+    expect(() => toHausJson({ kind: "variant", tag: "lower", args: [] })).toThrow(HausEncodeError)
+    expect(() => toHausJson({ kind: "number", text: "1.2.3" })).toThrow(HausEncodeError)
   })
 
   it.each([
-    `{"num": "1E5"}`, `{"num": "0xFF"}`, `{"num": "1_000"}`, `{"num": "+1"}`, `{"bytes": "0b 34"}`, `{"rec": []}`, `{"tag": "A", "args": {}}`,
-    `{"tag": 1}`, `{"rec": {}, "tag": "A"}`, `{"tag": "Circle", "args": [1]}`,
+    `{"_num": "1E5"}`, `{"_num": "0xFF"}`, `{"_num": "1_000"}`, `{"_num": "+1"}`, `{"_bytes": "0b 34"}`, `{"_rec": []}`, `{"_tag": "A", "_args": {}}`,
+    `{"_tag": 1}`, `{"_rec": {}, "_tag": "A"}`, `{"_tag": "Circle", "_args": [1]}`, `{"num": "1"}`, `{"tag": "A", "args": ["x"]}`,
   ])("rejects %s", (json) => {
-    expect(() => fromLosslessJson(json)).toThrow(HausDecodeError)
+    expect(() => fromHausJson(`{"_haus": 1, "_value": ${json}}`)).toThrow(HausDecodeError)
+  })
+
+  it("the envelope: required, exactly its two members, version 1, errors at $", () => {
+    expect(canonical(fromHausJson(`{"_value": [], "_haus": 1}`))).toBe("[]")
+    expect(() => fromHausJson(`[]`)).toThrow(/expected the envelope .* at \$$/)
+    expect(() => fromHausJson(`{"_haus": 1, "_value": [], "_x": 1}`)).toThrow(/expected the envelope/)
+    expect(() => fromHausJson(`{"_haus": 1.0, "_value": []}`)).toThrow(/version the number 1\.0/)
+    // Paths inside the value start at $: the envelope adds no segment.
+    expect(() => fromHausJson(`{"_haus": 1, "_value": {"_rec": {"a": [{"_num": "01"}]}}}`)).toThrow(/at \$\.a\[0\]$/)
+    expect(() => fromHausJsonValue(jsonObject([["_haus", new JsonNumber("2")], ["_value", "x"]]))).toThrow(/version/)
+  })
+
+  it("writes DEL, C1 and bidi controls escaped, and rejects them raw", () => {
+    expect(toHausJson(parse(String.raw`"\u{7F}\u{85}\u{202E}\u{2069}"`))).toBe(`{"_haus":1,"_value":"\\u007f\\u0085\\u202e\\u2069"}`)
+    expect(stringifyJson({ "a\u{2066}": "\u{9F}" })).toBe(`{"a\\u2066":"\\u009f"}`)
+    expect(() => fromHausJson(`{"_haus": 1, "_value": "\u{7F}"}`)).toThrow(expect.objectContaining({ code: "control-character", line: 1, column: 25 }))
+    expect(() => fromHausJson(`{"_haus": 1, "_value": "\u{202A}"}`)).toThrow(expect.objectContaining({ code: "bidi-control" }))
+    // Escaped, they are fine; the other readers take them raw.
+    expect(canonical(fromHausJson(`{"_haus": 1, "_value": "\\u007f"}`))).toBe(canonical(parse(String.raw`"\u{7F}"`)))
+    expect(canonical(importJson(`"\u{7F}\u{202E}"`))).toBe(canonical(parse(String.raw`"\u{7F}\u{202E}"`)))
+    expect(h.fromJson(h.Any, `"\u{85}"`)).toEqual(parse(String.raw`"\u{85}"`))
   })
 
   it("holds values to the haus nesting limit, not JSON's", () => {
     // `Tag { … }` is one haus level but four JSON levels.
     const deep = (n: number): string => (n === 0 ? "1" : `A { x: ${deep(n - 1)} }`)
     const atLimit = parse(deep(256))
-    expect(canonical(fromLosslessJson(toLosslessJson(atLimit)))).toBe(canonical(atLimit))
+    expect(canonical(fromHausJson(toHausJson(atLimit)))).toBe(canonical(atLimit))
     // Arrays are one JSON level each: past 256, the haus limit is what rejects them.
-    expect(() => fromLosslessJson("[".repeat(256) + "]".repeat(256))).not.toThrow()
-    expect(() => fromLosslessJson("[".repeat(257) + "]".repeat(257))).toThrow(/nesting deeper than 256/)
+    const envelope = (json: string) => `{"_haus": 1, "_value": ${json}}`
+    expect(() => fromHausJson(envelope("[".repeat(256) + "]".repeat(256)))).not.toThrow()
+    expect(() => fromHausJson(envelope("[".repeat(257) + "]".repeat(257)))).toThrow(/nesting deeper than 256/)
   })
 
-  it("JSON Lines", async () => {
+  it("JSON Lines: an envelope per line", async () => {
     const values = [parse("1"), parse(`A { x: "y" }`)]
-    const lines = await collect(toLosslessJsonLines(values))
-    expect(lines).toEqual([`{"num":"1"}\n`, `{"tag":"A","args":[{"rec":{"x":"y"}}]}\n`])
-    const back = await collect(fromLosslessJsonLines([lines.join("").slice(0, 7), lines.join("").slice(7)]))
+    const lines = await collect(toHausJsonLines(values))
+    expect(lines).toEqual([`{"_haus":1,"_value":{"_num":"1"}}\n`, `{"_haus":1,"_value":{"_tag":"A","_args":[{"_rec":{"x":"y"}}]}}\n`])
+    const back = await collect(fromHausJsonLines([lines.join("").slice(0, 7), lines.join("").slice(7)]))
     expect(back.map(canonical)).toEqual(values.map(canonical))
+    await expect(collect(fromHausJsonLines([`${lines[0]}{"_num":"1"}\n`]))).rejects.toThrow(/expected the envelope .* at \$\[1\]$/)
   })
 })
 
-describe("without a schema (spec §16.1)", () => {
+describe("import (spec §16.1)", () => {
   it("reads JSON as haus", () => {
-    expect(canonical(fromJson(`{"a": [true, null, 1.50], "b": {"c": "d"}}`))).toBe(`{a:[True,None,1.50],b:{c:"d"}}`)
+    expect(canonical(importJson(`{"a": [true, null, 1.50], "b": {"c": "d"}}`))).toBe(`{a:[True,None,1.50],b:{c:"d"}}`)
+  })
+
+  it("nothing in the data is special: an envelope is a record", () => {
+    expect(canonical(importJson(`{"_haus": 1, "_value": {"_num": "1"}}`))).toBe(`{_haus:1,_value:{_num:"1"}}`)
   })
 
   it("JSON Lines, in chunks of any size", async () => {
@@ -149,7 +176,7 @@ describe("without a schema (spec §16.1)", () => {
     for (const size of [1, 2, 5, bytes.length]) {
       const chunks: Uint8Array[] = []
       for (let i = 0; i < bytes.length; i += size) chunks.push(bytes.subarray(i, i + size))
-      expect((await collect(fromJsonLines(chunks))).map(canonical)).toEqual([`{a:1}`, `[2,"😀"]`, `3`])
+      expect((await collect(importJsonLines(chunks))).map(canonical)).toEqual([`{a:1}`, `[2,"😀"]`, `3`])
     }
   })
 
@@ -181,7 +208,7 @@ describe("base64", () => {
   })
 })
 
-describe("plain (spec §16.3), hand-written schemas", () => {
+describe("schema-based (spec §16.3), hand-written schemas", () => {
   const Shape = h.OpenVariant({
     Circle: h.Record({ r: h.Float64 }),
     Point: h.Tuple(h.Float64, h.Float64),
@@ -235,23 +262,25 @@ describe("plain (spec §16.3), hand-written schemas", () => {
     expect(h.toJson(Shape, { _tag: "Label", value: "a" })).toBe(`{"_tag":"Label","value":"a"}`)
     expect(h.toJson(Shape, { _tag: "Empty" })).toBe(`{"_tag":"Empty"}`)
     const unknown = h.parse(Shape, `Hexagon { side: 1 }`)
-    expect(h.toJson(Shape, unknown)).toBe(`{"_tag":"Hexagon","args":[{"rec":{"side":{"num":"1"}}}]}`)
-    expect(h.fromJson(Shape, `{"_tag":"Hexagon","args":[{"rec":{"side":{"num":"1"}}}]}`)).toEqual(unknown)
+    expect(h.toJson(Shape, unknown)).toBe(`{"_tag":"Hexagon","_args":[{"_rec":{"side":{"_num":"1"}}}]}`)
+    expect(h.fromJson(Shape, `{"_tag":"Hexagon","_args":[{"_rec":{"side":{"_num":"1"}}}]}`)).toEqual(unknown)
   })
 
   it.each([
     [`{"_tag":"Empty","x":1}`, /unexpected member/],
     [`{"_tag":"Label","value":"a","x":1}`, /unexpected member/],
     [`{"_tag":"Label"}`, /needs a member "value"/],
-    [`{"_tag":"Hexagon","args":[]}`, /non-empty/],
+    [`{"_tag":"Hexagon","_args":[]}`, /non-empty/],
+    [`{"_tag":"Hexagon","_args":[{"_haus":1,"_value":"a"}]}`, /not a self-describing form/],
     [`{"_tag":"hexagon"}`, /not a tag name/],
     [`{"_tag":1}`, /_tag/],
   ])("rejects %s", (text, message) => {
     expect(() => h.fromJson(Shape, text)).toThrow(message)
   })
 
-  it("an unknown tag with other members than args: a newer writer's record payload, read without a schema", () => {
-    expect(canonical(h.encode(Shape, h.fromJson(Shape, `{"_tag":"Hexagon","side":1,"args":[true]}`)))).toBe(`Hexagon{args:[True],side:1}`)
+  it("an unknown tag with other members than _args: a newer writer's record payload, imported", () => {
+    expect(canonical(h.encode(Shape, h.fromJson(Shape, `{"_tag":"Hexagon","side":1,"_args":[true]}`)))).toBe(`Hexagon{_args:[True],side:1}`)
+    expect(canonical(h.encode(Shape, h.fromJson(Shape, `{"_tag":"Run","args":[1,2]}`)))).toBe(`Run{args:[1,2]}`)
     expect(canonical(h.encode(Shape, h.fromJson(Shape, `{"_tag":"Hexagon"}`)))).toBe(`Hexagon`)
   })
 
@@ -260,10 +289,15 @@ describe("plain (spec §16.3), hand-written schemas", () => {
     expect(h.fromJson(h.AnyTag, `{"_tag":"EUR"}`)).toBe("EUR")
   })
 
-  it("a record payload with a field named _tag has no plain form", () => {
+  it("a record payload with a field named _tag or _args has no schema-based form", () => {
     const Bad = h.Variant({ A: h.Record({ _tag: h.String }) })
     expect(() => h.toJson(Bad, h.decode(Bad, parse(`A { _tag: "x" }`)))).toThrow(HausEncodeError)
     expect(() => h.fromJson(Bad, `{"_tag":"A"}`)).toThrow(/_tag/)
+    const Args = h.Variant({ A: h.Record({ _args: h.String }), B: h.Unit })
+    expect(() => h.toJson(Args, h.decode(Args, parse(`A { _args: "x" }`)))).toThrow(/'A' has a field named _args/)
+    expect(() => h.fromJson(Args, `{"_tag":"A","_args":"x"}`)).toThrow(/'A' has a field named _args/)
+    // Its other cases are fine.
+    expect(h.fromJson(Args, h.toJson(Args, { _tag: "B" }))).toEqual({ _tag: "B" })
   })
 
   it("errors name the JSON path", () => {
@@ -282,8 +316,8 @@ describe("plain (spec §16.3), hand-written schemas", () => {
     }
   })
 
-  it("Any is its lossless form; an Any can't be confused with JSON null", () => {
-    expect(h.toJson(h.Maybe(h.Any), h.Maybe.some(parse("None")))).toBe(`{"tag":"None"}`)
+  it("Any is its self-describing form without the envelope; an Any can't be confused with JSON null", () => {
+    expect(h.toJson(h.Maybe(h.Any), h.Maybe.some(parse("None")))).toBe(`{"_tag":"None"}`)
     expect(h.toJson(h.Maybe(h.Any), h.Maybe.none)).toBe("null")
   })
 
@@ -311,13 +345,13 @@ describe("plain (spec §16.3), hand-written schemas", () => {
     }
   })
 
-  it("a schema without a plain form says so", () => {
+  it("a schema without a schema-based form says so", () => {
     const Custom = h.withStandard<string, Omit<h.Schema<string>, "~standard">>({
       expected: "Custom",
       decode: (v, at) => (v.kind === "string" ? v.value : at.fail("expected a string")),
       encode: (s) => ({ kind: "string", value: s }),
     })
-    expect(() => h.toJson(h.Record({ c: Custom }), { c: "x" })).toThrow(/Custom has no plain JSON form at \$\.c/)
+    expect(() => h.toJson(h.Record({ c: Custom }), { c: "x" })).toThrow(/Custom has no schema-based JSON form at \$\.c/)
     const WithJson = h.withStandard<string, Omit<h.Schema<string>, "~standard">>({ ...Custom, json: { kind: "string" } })
     expect(h.toJson(WithJson, "x")).toBe(`"x"`)
   })

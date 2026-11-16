@@ -58,8 +58,9 @@ def number_limit_issue(text: str, limits: Limits) -> tuple[ErrorCode, str] | Non
 
     Parsed numbers are always within.
     """
-    if (m := _EXPONENT.search(text)) and (len(m[1]) > 15 or int(m[1]) > limits.max_exponent):
-        return "exponent-too-large", f"exponent larger than {limits.max_exponent}"
+    # The length first, as a parser meets it (spec §7): a literal too long with an exponent too large is too long.
     if _shortest_length(text, limits.max_number_length) > limits.max_number_length:
         return "number-too-long", f"number literal longer than {limits.max_number_length} characters"
+    if (m := _EXPONENT.search(text)) and (len(m[1]) > 15 or int(m[1]) > limits.max_exponent):
+        return "exponent-too-large", f"exponent larger than {limits.max_exponent}"
     return None

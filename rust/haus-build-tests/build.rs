@@ -6,8 +6,9 @@
 //! matter, spec §15). tests/schema_conformance.rs runs the cases with both.
 //!
 //! For the JSON suite (test-suite/json, spec §16.3) it generates the types of
-//! plain.schema.haus, with `write` and `read`: a value decoded with a type
-//! written as plain JSON, and plain JSON read with a type and encoded.
+//! schema-based.schema.haus, with `write` and `read`: a value decoded with a
+//! type written as schema-based JSON, and schema-based JSON read with a type
+//! and encoded.
 //! tests/json_conformance.rs runs its cases.
 
 use std::path::{Path, PathBuf};
@@ -40,22 +41,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let code = format!("{}{}", dispatch(&names), modules.concat());
     fs::write(Path::new(&env::var("OUT_DIR")?).join("schema_suite.rs"), code)?;
 
-    let plain = suite.join("../json/plain.schema.haus");
-    haus_build::Config::new().compile_as(&plain, "suite_json_plain")?;
-    fs::write(Path::new(&env::var("OUT_DIR")?).join("json_suite.rs"), json_module(&fs::read_to_string(&plain)?))?;
+    let schema_based = suite.join("../json/schema-based.schema.haus");
+    haus_build::Config::new().compile_as(&schema_based, "suite_json_schema_based")?;
+    let module = json_module(&fs::read_to_string(&schema_based)?);
+    fs::write(Path::new(&env::var("OUT_DIR")?).join("json_suite.rs"), module)?;
     Ok(())
 }
 
-/// `pub mod plain { <generated types> pub fn write(…) pub fn read(…) }`.
+/// `pub mod schema_based { <generated types> pub fn write(…) pub fn read(…) }`.
 fn json_module(text: &str) -> String {
     let arms = |f: &str| -> String {
         definitions(text).iter().map(|t| format!("            {t:?} => {f}::<{t}>(x),\n")).collect()
     };
     let (write, read) = (arms("write_as"), arms("read_as"));
     format!(
-        r#"/// The types of test-suite/json/plain.schema.haus.
-pub mod plain {{
-    include!(concat!(env!("OUT_DIR"), "/suite_json_plain.rs"));
+        r#"/// The types of test-suite/json/schema-based.schema.haus.
+pub mod schema_based {{
+    include!(concat!(env!("OUT_DIR"), "/suite_json_schema_based.rs"));
 
     fn write_as<T: ::haus::Decode + ::haus::ToJson>(v: &::haus::Value) -> Result<String, String> {{
         let x = T::decode(v).map_err(|e| format!("can't decode the input: {{e}}"))?;
@@ -67,7 +69,7 @@ pub mod plain {{
         Ok(::haus::Encode::encode(&x)?)
     }}
 
-    /// Decode `x` with the type `ty`, and write the result as plain JSON;
+    /// Decode `x` with the type `ty`, and write the result as schema-based JSON;
     /// None if there is no such type.
     pub fn write(ty: &str, x: &::haus::Value) -> Option<Result<String, String>> {{
         Some(match ty {{
@@ -75,7 +77,7 @@ pub mod plain {{
         }})
     }}
 
-    /// Read the plain JSON `x` with the type `ty`, and encode the result;
+    /// Read the schema-based JSON `x` with the type `ty`, and encode the result;
     /// None if there is no such type.
     pub fn read(ty: &str, x: &str) -> Option<Result<::haus::Value, ::haus::Error>> {{
         Some(match ty {{
