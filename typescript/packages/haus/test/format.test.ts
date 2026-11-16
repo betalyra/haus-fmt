@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
-import { format, inferSchema, parseAll, parseDocument, parseWithLocations, stringify, infer, printShape } from "../src/index.js"
+import { format, inferSchema, parse, parseAll, parseDocument, parseWithLocations, stringify, infer, printShape } from "../src/index.js"
 import { suiteJson } from "./suite-json.js"
 import { decode, fixtures, repoFile } from "./haus.js"
 
@@ -108,6 +108,24 @@ describe("format: pretty (default)", () => {
     expect(parseAll(out).map(suiteJson)).toEqual(parseAll(src).map(suiteJson))
   })
 
+  it("ends no block-string line in a space or tab: the last one is an escape (spec §11)", () => {
+    const value = parse(String.raw`"a \nb  \n   \nc\t\n\t\nd \t\ne"`)
+    expect(format([value])).toBe('"""\n  a\\u{20}\n  b \\u{20}\n    \\u{20}\n  c\\t\n  \\t\n  d \\t\n  e\n  """\n')
+    expect(parse(format([value]).replace(/[ \t]+$/gm, ""))).toEqual(value)
+  })
+
+  it("escapes U+2028 and U+2029 in every layout, also in a kept spelling (spec §11)", () => {
+    const src = '{ "k\u{2028}": "a\u{2029}", b: "x\u{2028}\\ny" }'
+    const { values, comments } = parseDocument(src)
+    for (const style of ["pretty", "compact", "minimised"] as const) {
+      for (const out of [format(values, { style, source: src, comments }), format(parseAll(src), { style })]) {
+        expect(out).not.toMatch(/[\u2028\u2029]/)
+        expect(parseAll(out).map(suiteJson)).toEqual(parseAll(src).map(suiteJson))
+      }
+    }
+    expect(format(values, { style: "minimised", source: src })).toBe(String.raw`{"k\u{2028}":"a\u{2029}",b:"x\u{2028}\ny"}` + "\n")
+  })
+
   it("breaks a long positional payload", () => {
     expect(format(parseAll('Pair("aaaaaaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbbbbbb")'), { width: 30 })).toBe(
       'Pair(\n  "aaaaaaaaaaaaaaaaaaaa",\n  "bbbbbbbbbbbbbbbbbbbb",\n)\n',
@@ -139,6 +157,25 @@ describe("format: compact (one item per line)", () => {
 
   it("stringify", () => {
     expect(stringify(parseAll('{ a: [1, 2], b: Some("y"), c: {} }')[0]!, { style: "compact" })).toBe('{ a: [1, 2], b: Some("y"), c: {} }')
+  })
+})
+
+describe("format: minimised (compact without whitespace)", () => {
+  it("writes the spec's example", () => {
+    const src = 'Person { name: "John Doe", age: 30, type: Engineer }, Person { name: "Jane Smith", age: 28, type: Designer }'
+    expect(format(parseAll(src), { style: "minimised" })).toBe('Person{name:"John Doe",age:30,type:Engineer},\nPerson{name:"Jane Smith",age:28,type:Designer},\n')
+  })
+
+  it("keeps spellings, drops comments", () => {
+    const src = '// c\n{ a: 1_000, /* c */ b: 0xFf, c: x"9f86 d081", d: Pair(1, [2, 3]), e: Tag { x: {} } } // c\n'
+    const { values, comments } = parseDocument(src)
+    expect(format(values, { style: "minimised", source: src, comments })).toBe('{a:1_000,b:0xFf,c:x"9f86 d081",d:Pair(1,[2,3]),e:Tag{x:{}}}\n')
+  })
+
+  it("writes values with no source text as compact does", () => {
+    const v = parse('{ a: 1_000, b: 0xFF, c: x"0B 34", d: "a\\nb", "x-y": [] }')
+    expect(stringify(v, { style: "minimised" })).toBe('{a:1000,b:255,c:x"0b34",d:"a\\nb","x-y":[]}')
+    expect(stringify(v, { style: "minimised" })).toBe(stringify(v, { style: "compact" }).replace(/(?<=[,:{]) | (?=})/g, ""))
   })
 })
 

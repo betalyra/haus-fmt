@@ -33,13 +33,20 @@ fn keeps_what_equality_tells_apart() {
     assert!(!equals(&parse("{}"), &parse("{ x: None }")));
     assert!(!equals(&parse(r#""caf\u{E9}""#), &parse(r#""cafe\u{301}""#)));
     assert!(!equals(&parse("-0"), &parse("0")));
-    assert!(equals(&parse("-0x0"), &parse("0")));
+    // Hex and binary keep the sign of zero, as decimal does (spec §2).
+    assert!(equals(&parse("-0x0"), &parse("-0")));
+    assert!(equals(&parse("-0b0_0"), &parse("-0")));
+    assert!(!equals(&parse("-0x0"), &parse("0")));
+    assert_eq!(c("[-0x0, -0b0, 0x0, -0x00]"), "[-0,-0,0,-0]");
 }
 
 #[test]
 fn escapes_only_what_it_must() {
     assert_eq!(c(r#""tab\tquote\" \u{41} \u{1b} \u{202e} café 😀""#), r#""tab\tquote\" A \u{1B} \u{202E} café 😀""#);
     assert_eq!(c("\"\"\"\n  two\n  lines\n  \"\"\""), r#""two\nlines""#);
+    // Line and paragraph separators: accepted raw, always written as escapes.
+    assert_eq!(c("\"a\u{2028}b\u{2029}c\""), r#""a\u{2028}b\u{2029}c""#);
+    assert_eq!(c(r#"{ "\u{2028}": "\u{2029}" }"#), r#"{"\u{2028}":"\u{2029}"}"#);
 }
 
 #[test]

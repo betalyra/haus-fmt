@@ -1,0 +1,1 @@
+{plain:"line\u{2028}separator, paragraph\u{2029}separator",escaped:"\u{2028} and \u{2029}","key\u{2028}":1,block:"first\u{2028}line\nends in\u{2029}",list:["\u{2029}",Some("\u{2028}")]}

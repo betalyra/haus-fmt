@@ -173,12 +173,12 @@ An audit compared the Lean definitions with `grammar.ebnf`, §1–§16 and `std/
 
 | | Item |
 |---|---|
-| ⬜ | **B1.** `-0x0` and `-0b0` normalize to `0`, decimal `-0` stays `-0` (only in a comment at `Haus/Lexical.lean` `normalizeBody`). Changes canonical forms and hashes. State it in §2 and add a conformance case with its `.canonical`. |
-| ⬜ | **B2.** Block strings have no prose section; the EBNF comment (`grammar.ebnf` 74–81) is wrong: a whitespace-only line starting with the indent keeps the rest (indent 2, line of 6 spaces → 4 spaces), not "empty". Trailing whitespace is significant, so an editor that trims it changes the value and hash. Write the rules in prose, fix the comment, decide whether the formatter (§11) escapes trailing blanks or whitespace-only lines. |
+| ✅ | **B1.** `-0x0` and `-0b0` normalize to `0`, decimal `-0` stays `-0` (only in a comment at `Haus/Lexical.lean` `normalizeBody`). Changes canonical forms and hashes. State it in §2 and add a conformance case with its `.canonical`. |
+| ✅ | **B2.** Block strings have no prose section; the EBNF comment (`grammar.ebnf` 74–81) is wrong: a whitespace-only line starting with the indent keeps the rest (indent 2, line of 6 spaces → 4 spaces), not "empty". Trailing whitespace is significant, so an editor that trims it changes the value and hash. Write the rules in prose, fix the comment, decide whether the formatter (§11) escapes trailing blanks or whitespace-only lines. |
 | ⬜ | **B3.** `std/time.md` "every other value has exactly one spelling" is false for offsets: `Z` and `+00:00` both accepted. Add the caveat or reject one spelling. (`instant_same_iff` is stated correctly.) |
 | ⬜ | **B4.** §8 doesn't say a BOM counts as column 1, nor what a line break is for line numbers (only in §1.2 S18 and the bindings). |
-| ⬜ | **B5.** The hex threshold for long integers is "the default number limit (§7, 1000)" in §11, §12, §15, §16, but §10 lets default limits grow. Make 1000 a fixed constant of canonical form v1. |
-| ⬜ | **B6.** An integer too long even in hex has no specified encoder behaviour or code (`number-too-long` or `cannot-encode`). |
+| ✅ | **B5.** The hex threshold for long integers is "the default number limit (§7, 1000)" in §11, §12, §15, §16, but §10 lets default limits grow. Make 1000 a fixed constant of canonical form v1. |
+| 🟡 | **B6.** An integer too long even in hex has no specified encoder behaviour or code (`number-too-long` or `cannot-encode`). Specified (§12: `number-too-long`); TypeScript and Python report it, Rust and Roc still write the long hex, since their `canonical` returns no error. |
 | ⬜ | **B7.** `Tag ({ … })` in a schema: record case or positional case with one record argument? Different plain JSON. TypeScript decides at `schema-file.ts` (`c.args.length === 1 && first.t === "record"`). Specify it; add schema and JSON suite cases. |
 | ⬜ | **B8.** §7: "MUST accept every input within these defaults" should say "by default", next to "MUST let users configure them". |
 
@@ -198,7 +198,7 @@ An audit compared the Lean definitions with `grammar.ebnf`, §1–§16 and `std/
 
 | | Item |
 |---|---|
-| ⬜ | **D1.** U+2028 and U+2029 are written raw by every writer, canonical included. Python's `str.splitlines()` splits on them, which breaks §11's "a compact stream can be split by lines". Escape them or not, before the canonical form freezes. |
+| ✅ | **D1.** U+2028 and U+2029 are written raw by every writer, canonical included. Python's `str.splitlines()` splits on them, which breaks §11's "a compact stream can be split by lines". Escape them or not, before the canonical form freezes. |
 | ⬜ | **D2.** §7's duplicate-key check "must use hashing": require seeded (collision-resistant) hashing or an ordered structure, else crafted keys make it quadratic (the S2 class). |
 | ⬜ | **D3.** Year `0000` is valid in std/time, but Python `datetime` and .NET `DateTime` can't hold it, and offsets can push an Instant outside 0000–9999 in UTC. Document that those can't be lossless default host types (§13.4), or narrow the range. |
 
@@ -244,6 +244,30 @@ Decided with Jan after the audit, because §16 freezes the mappings at 1.0. Impl
 - **A writer that mirrors the import.** The import is one way. The use is weak, and an application that holds a haus value knows which JSON it wants.
 - **`.haus.json` and `application/vnd.haus+json`** for the self-describing form: decide with [`plans/mime-type.md`](../plans/mime-type.md).
 
+### 3.8 Layouts: decisions (2026-11-16)
+
+Decided with Jan. Implemented (2026-11-16): §11, §12, the TypeScript and Rust formatters, the CLI (`--layout`, `--drop-comments`), Roc's encoder, the VS Code extension, and `NAME.minimised` suite files. Steps: [`lean/PLAN.md`](lean/PLAN.md), phase L.
+
+Four forms of the same values, each with one job:
+
+| | Comments | Key order | Spellings (`0xFF`) | Whitespace | For |
+|---|---|---|---|---|---|
+| **Pretty** | kept | as written | as written | one entry per line | people who edit |
+| **Compact** | dropped | as written | as written | spaces, one item per line | logs and streams people look at |
+| **Minimised** (new) | dropped | as written | as written | none between tokens, one item per line | the wire and storage |
+| **Canonical** (§12) | dropped | sorted | normalized | none | hashing, signing, comparing |
+
+| | Decision | Why |
+|---|---|---|
+| ✅ | **G1. A third layout, minimised:** the compact layout without the whitespace between tokens, and nothing else different. One item per line, each followed by `,`. | Compact's spaces cost about 2 bytes a field and 3 a container, 15–20% of a small record (`Person { name: "John", age: 30 }` is 33 bytes, `Person{name:"John",age:30}` 26), and there was no way to choose the small form. The canonical form is as small, but it sorts keys and rewrites numbers: minimise a file and format it pretty again, and the file is back, without its comments and blank lines; through the canonical form it comes back reordered. An encoder also needs no sort for each record. Defined as compact without spaces it is the same code path in every formatter, and in Lean it is the canonical writer without the key sort. The line break after each item costs a byte and keeps a stream splittable by lines and open to appending. |
+| ✅ | **G2. Minimised leaves every literal as written:** digit separators (`1_000`), the case of hex digits, and the blanks inside a byte string (`x"9f86 d081"`). | They are spelling, like `0xFF`: grouping inside a literal. One rule without exceptions (whitespace between tokens goes, literals stay), and G1's "the file is back" holds exactly. It costs bytes only in hand-written files; an encoder that writes values writes no blanks. |
+| ✅ | **G3. Compact keeps its spaces.** | "One item per line, still readable" (§11) is what compact is for: logs are where people read it. The small form is G1. |
+| ✅ | **G4. Compact and minimised drop every comment,** also those between top-level items. A tool that rewrites a file in place in one of them MUST refuse when the file has comments, unless an option says to drop them; writing to standard output or to another file needs no such check. | Keeping comments inside an item on one line is partly impossible: `// see */ here` has no block form, and a block comment over several lines can't stay on one line unchanged. Keeping only those between items makes little sense when the others go. The danger is the rewrite that can't be undone: in an editor, undo brings the comments back; a command that overwrites the file doesn't. It is a rule for tools, so the layouts' output and the format suite's compact files don't change. |
+| ✅ | **G5. The canonical form and `hashAll` stay as they are:** no line breaks in the hashed text. | The hash is of the values, not of the text on the wire (§12), so a stream written with a line break after each value hashes the same already. Line breaks between values in the hashed text would lose nothing, after each value they would cost `hashAll([v]) = hash(v)`; neither is needed now that G1 is the small layout for streams. |
+| ✅ | **G6. The docs and `haus hash` say it plainly: all four forms of the same data have the same hash.** | With two forms that look alike, people will hash the minimised text and expect the canonical hash. The sentence is true by design, since every form parses to the same values. What it rests on is that the formatters keep the values: proven for the canonical form, tested on the format suite's 65 files for the layouts, to be fuzzed (L1) and proven for the writers of values (L3). |
+
+Decided for L2: compact and minimised never change after 1.0; pretty may change in a minor version (§10).
+
 ---
 
 ## 4. Use cases
@@ -276,7 +300,7 @@ Done: the 1.0 spec changes (versions, `Any`, `Secret a`, `@deprecated`) in every
 **Current order** (2026-11-16, after the audit, §3.6–§3.7); the numbered items below give the details:
 
 1. The audit's wrong claims: A1 ✅; A2 as the JSON forms of §3.7 (F1–F7, Lean J8), in progress.
-2. The rules that change hashes or the formatter: B1, B2 with the formatter prose (`lean/PLAN.md` L2), B5, B6, D1.
+2. The rules that change hashes or the formatter: B1, B2 with the formatter prose (`lean/PLAN.md` L2), B5, B6, D1, and the minimised layout (§3.8 G1–G6: §11 and §12, the TypeScript and Rust formatters, `NAME.minimised` suite files). Decide in L2 whether §10 lets layouts change after 1.0.
 3. Fuzzing the formatters (L1, audit C2).
 4. Packages before the first publish (`plans/package-resolution.md`): the TypeScript symlink fix, transitive lookup, the `package-version` check, the open decisions D1–D11.
 5. Release setup and v0.1 to claim the names.

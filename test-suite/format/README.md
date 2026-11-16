@@ -1,23 +1,31 @@
 # Format suite
 
-Expected output of the standard formatter (spec §11), in both layouts. Every
-binding with a formatter must produce these files byte for byte.
+Expected output of the standard formatter (spec §11), in its three layouts:
+pretty, compact and minimised. Every binding with a formatter must produce
+these files byte for byte.
 
 | Inputs | Expected output |
 |---|---|
-| `cases/NAME.haus`: written for this suite (comments, blank lines, block strings, spellings, streams, width, BOM, CRLF, …) | `cases/NAME.pretty`, `cases/NAME.compact` |
-| `examples/NAME.haus`: copies of the data files in [`examples`](../../examples) | `examples/NAME.pretty`, `examples/NAME.compact` |
-| `../valid/NAME.haus`: every file of the conformance suite | `valid/NAME.pretty`, `valid/NAME.compact` |
+| `cases/NAME.haus`: written for this suite (comments, blank lines, block strings, spellings, streams, width, BOM, CRLF, …) | `cases/NAME.pretty`, `cases/NAME.compact`, `cases/NAME.minimised` |
+| `examples/NAME.haus`: copies of the data files in [`examples`](../../examples) | `examples/NAME.pretty`, `examples/NAME.compact`, `examples/NAME.minimised` |
+| `../valid/NAME.haus`: every file of the conformance suite | `valid/NAME.pretty`, `valid/NAME.compact`, `valid/NAME.minimised` |
 
 For each input:
 
 - Format it in the pretty layout, keeping comments: the result must equal
   `NAME.pretty`. Format it in the compact layout: the result must equal
-  `NAME.compact`.
+  `NAME.compact`. Format it in the minimised layout: the result must equal
+  `NAME.minimised`.
 - Format each result again in the same layout: it must not change
   (idempotence), and it must parse to the same values as the input.
-- `NAME.options`, where present, is a haus record of options for both
-  layouts, `{ indent: 4, width: 40 }`. Without it, the defaults apply: indent
+- Format the minimised result in the pretty layout: it must equal the pretty
+  file without its comments and blank lines (spec §11).
+- Remove the spaces and tabs at the end of every line of the pretty result,
+  as an editor that trims trailing whitespace does: it must still parse to
+  the same values. No line of the pretty result ends in a space or tab,
+  except inside a comment.
+- `NAME.options`, where present, is a haus record of options for every
+  layout, `{ indent: 4, width: 40 }`. Without it, the defaults apply: indent
   2, width 80.
 
 Inputs are raw bytes (some have a BOM or CRLF line endings): read them as
@@ -40,3 +48,16 @@ wrong:
 - A CR LF in a comment is written as LF (`cases/crlf*`, `valid/comments-tabs-crlf`).
 - Comments inside the parentheses of `Tag({ … })` but outside the braces move
   inside the braces of `Tag { … }` (`cases/comments-payload-parens`).
+- In a block string, the last space or tab of a line that ends in one is
+  written as an escape (`\u{20}`, `\t`), also on a line of only blanks; earlier
+  blanks stay raw (`cases/block-strings-trailing-blanks`, `valid/strings`).
+- Raw U+2028 and U+2029 in strings, keys and block strings are written as
+  `\u{2028}` and `\u{2029}` in every layout, also when a string keeps its
+  source spelling; in a comment, pretty keeps them raw
+  (`cases/line-separators`, `valid/line-separators`).
+- Minimised keeps every literal as written: digit separators, hex case, a
+  negative hex zero, and the blanks inside a byte string. It drops every
+  comment, also those between top-level items (`cases/minimised-spellings`).
+- Compact and minimised write a single top-level item without a comma, and
+  every item of a stream with one (`cases/single-with-comma`,
+  `cases/stream-no-trailing-comma`).

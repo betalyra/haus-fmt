@@ -12,6 +12,11 @@ use crate::Value;
 use crate::ser::{key, number_text, quote};
 use std::fmt::Write;
 
+/// An integer whose decimal form is longer than this is written in hex in
+/// the canonical form (spec §12). A constant of the canonical form, not the
+/// number limit of §7: it stays 1000 if the default limits grow.
+const DECIMAL_MAX: usize = 1000;
+
 /// The canonical form of a value (spec §12).
 pub fn canonical(value: &Value) -> String {
     let mut out = String::new();
@@ -148,10 +153,7 @@ fn write(v: &Value, out: &mut String) {
                 key(k, out);
                 out.push(':');
             }
-            // The default number limit, whatever the reader's (spec §12).
-            Next::Value(Value::Number(n)) => {
-                out.push_str(&number_text(n, crate::Limits::default().max_number_length));
-            }
+            Next::Value(Value::Number(n)) => out.push_str(&number_text(n, DECIMAL_MAX)),
             Next::Value(Value::String(s)) => quote(s, out),
             Next::Value(Value::Bytes(b)) => {
                 out.push_str("x\"");

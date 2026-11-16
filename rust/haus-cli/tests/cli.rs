@@ -105,6 +105,7 @@ fn usage_errors_exit_with_2() {
     haus().args(["check", "--schema", "x.schema.haus", "--no-schema", "a.haus"]).assert().code(2);
     haus().args(["check", "--max-depth", "257", "adjacent"]).assert().code(2).stderr(predicate::str::contains("256"));
     haus().args(["fmt", "--indent", "0", "fmt"]).assert().code(2);
+    haus().args(["fmt", "--layout", "fancy", "fmt"]).assert().code(2);
     haus().args(["fmt", "--style", "fancy", "fmt"]).assert().code(2);
 }
 
@@ -553,11 +554,23 @@ fn fmt_stdin_to_stdout() {
         .assert()
         .success()
         .stdout("{\n  a: 1,\n  b: [\n    Some(2),\n  ],\n}\n");
-    haus()
-        .args(["fmt", "--style", "compact", "-"])
-        .write_stdin("{a:1,\n// c\nb:[2]}")
-        .assert()
-        .stdout("{ a: 1, b: [2] }\n");
+    // Standard output needs no --drop-comments. `--style` is the layout's older name.
+    for layout in ["--layout", "--style"] {
+        haus()
+            .args(["fmt", layout, "compact", "-"])
+            .write_stdin("{a:1,\n// c\nb:[2]}")
+            .assert()
+            .success()
+            .stdout("{ a: 1, b: [2] }\n");
+    }
+    for name in ["minimised", "minimized"] {
+        haus()
+            .args(["fmt", "--layout", name, "-"])
+            .write_stdin("{ a: 1_000, // c\n b: [x\"9f86 d081\", Tag { c: 0xFF }] }, 2,")
+            .assert()
+            .success()
+            .stdout("{a:1_000,b:[x\"9f86 d081\",Tag{c:0xFF}]},\n2,\n");
+    }
     haus().args(["fmt", "--indent", "4", "-"]).write_stdin("[1]").assert().stdout("[\n    1,\n]\n");
     haus()
         .args(["fmt", "--width", "10", "-"])
@@ -567,6 +580,78 @@ fn fmt_stdin_to_stdout() {
     haus().args(["fmt", "--check", "-"]).write_stdin("[1]").assert().code(1).stdout("<stdin>\n");
     haus().args(["fmt", "--check", "-"]).write_stdin("[\n  1,\n]\n").assert().success().stdout("");
     haus().args(["fmt", "-"]).write_stdin("[1 2]").assert().code(1).stdout("");
+}
+
+#[test]
+fn fmt_layouts() {
+    let file = fs::read_to_string(fixtures().join("fmt/messy.haus")).unwrap();
+    let layout = |name: &str| {
+        let out = haus().args(["fmt", "--layout", name, "-"]).write_stdin(file.clone()).output().unwrap();
+        assert!(out.status.success(), "{name}");
+        format!("── {name}\n{}", String::from_utf8(out.stdout).unwrap())
+    };
+    insta::assert_snapshot!(["pretty", "compact", "minimised"].map(layout).join(""));
+}
+
+#[test]
+fn fmt_in_place_drops_comments_only_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let commented = dir.path().join("commented.haus");
+    let plain = dir.path().join("plain.haus");
+    fs::write(&commented, "{ a: 1, // why\n b: 2 }\n").unwrap();
+    fs::write(&plain, "{ a: 1,\n b: 2 }\n").unwrap();
+    for layout in ["compact", "minimised"] {
+        // Refused for the file with comments, which stays as it was; the other one is rewritten.
+        haus()
+            .current_dir(dir.path())
+            .args(["fmt", "--layout", layout, "commented.haus", "plain.haus"])
+            .assert()
+            .code(2)
+            .stdout("plain.haus\n")
+            .stderr(format!(
+                "error: commented.haus: not rewritten: it has comments, which the {layout} layout drops \
+                 (pass --drop-comments to drop them, or format to standard output)\n"
+            ));
+        assert_eq!(fs::read_to_string(&commented).unwrap(), "{ a: 1, // why\n b: 2 }\n");
+        // --check writes nothing, so it only lists the file.
+        haus()
+            .current_dir(dir.path())
+            .args(["fmt", "--check", "--layout", layout, "commented.haus"])
+            .assert()
+            .code(1)
+            .stdout("commented.haus\n");
+    }
+    assert_eq!(fs::read_to_string(&plain).unwrap(), "{a:1,b:2}\n");
+    haus()
+        .current_dir(dir.path())
+        .args(["fmt", "--layout", "minimised", "--drop-comments", "commented.haus"])
+        .assert()
+        .success()
+        .stdout("commented.haus\n");
+    assert_eq!(fs::read_to_string(&commented).unwrap(), "{a:1,b:2}\n");
+    // Pretty keeps comments, so it needs no option.
+    fs::write(&commented, "{ a: 1, // why\n b: 2 }\n").unwrap();
+    haus().current_dir(dir.path()).args(["fmt", "commented.haus"]).assert().success().stdout("commented.haus\n");
+    assert_eq!(fs::read_to_string(&commented).unwrap(), "{\n  a: 1, // why\n  b: 2,\n}\n");
+}
+
+#[test]
+fn every_form_of_the_same_data_has_the_same_hash() {
+    let file = fs::read(fixtures().join("fmt/messy.haus")).unwrap();
+    let run = |args: &[&str], input: &[u8]| haus().args(args).write_stdin(input).output().unwrap().stdout;
+    let hash = run(&["hash", "-"], &file);
+    assert_eq!(hash.len(), 65);
+    for layout in ["pretty", "compact", "minimised"] {
+        let formatted = run(&["fmt", "--layout", layout, "-"], &file);
+        assert_ne!(formatted, file);
+        assert_eq!(run(&["hash", "-"], &formatted), hash, "{layout}");
+    }
+    assert_eq!(run(&["hash", "-"], &run(&["canonical", "-"], &file)), hash, "canonical");
+    haus()
+        .args(["hash", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("minimised layouts and the canonical form of the same data all have"));
 }
 
 #[test]

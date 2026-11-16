@@ -11,8 +11,8 @@ values), as for the haus parser. Numbers keep their exact text: nothing is
 rounded through a binary float.
 
 `JSON.write j` writes JSON compactly, with members in the order given. It
-escapes every control character and bidi control (`mustEscape`), as §16
-requires of every writer.
+escapes every control character, bidi control and line or paragraph
+separator (`mustEscape`), as §16 requires of every writer.
 
 The reader is shared by the three forms. It accepts DEL, C1 and bidi
 controls raw, as the schema-based reader and the import must; with
@@ -114,16 +114,26 @@ def isHigh (n : Nat) : Bool := 0xD800 ≤ n && n ≤ 0xDBFF
 def isLow (n : Nat) : Bool := 0xDC00 ≤ n && n ≤ 0xDFFF
 
 /--
-A character every JSON writer escapes (§16, "JSON that is written"): a
-control character (below U+0020, DEL, U+0080–U+009F) or a bidi control
-(§4), so that written JSON can't display differently from what it holds.
+A character the self-describing reader rejects raw (§16, "JSON that is
+read"): a control character (below U+0020, DEL, U+0080–U+009F) or a bidi
+control (§4). Only haus tools write that form, and they escape them.
 -/
-def mustEscape (c : Char) : Bool := isRawControl c || isBidi c
+def strictRejects (c : Char) : Bool := isRawControl c || isBidi c
+
+/--
+A character every JSON writer escapes (§16, "JSON that is written"): one
+the strict reader rejects raw, so that written JSON can't display
+differently from what it holds, and the line and paragraph separators
+U+2028 and U+2029, so that JSON Lines can be split at any line break
+software knows. Readers accept the separators raw, so this is more than
+`strictRejects`.
+-/
+def mustEscape (c : Char) : Bool := strictRejects c || isLineSep c
 
 /--
 A string's characters after the opening quote, up to the closing one.
 `acc` holds the characters read, reversed, and `n` how many. With `strict`
-(the self-describing reader, §16), a raw character that `mustEscape`s is an
+(the self-describing reader, §16), a raw character that `strictRejects` is an
 error where it stands: DEL and C1 `control-character`, a bidi control
 `bidi-control`. Without it, only C0 is (RFC 8259).
 -/
@@ -166,7 +176,7 @@ def strChars (L : Limits) (strict : Bool) : Nat → Text → List Char → Nat �
     | ['\\'] => .error ⟨.invalidEscape, "invalid escape"⟩
     | c :: r =>
       if c.toNat < 0x20 then .error ⟨.controlCharacter, "control character in a string"⟩
-      else if strict && mustEscape c then
+      else if strict && strictRejects c then
         if isBidi c then .error ⟨.bidiControl, "raw bidirectional control character in a string (write it as a \\u escape)"⟩
         else .error ⟨.controlCharacter, "raw control character in a string (write it as a \\u escape)"⟩
       else strChars L strict fuel r (c :: acc) (n + 1)
@@ -341,6 +351,9 @@ private def rt (s : String) : Option String :=
 #guard rt "\"\\u0000\\u001f\\/\"" == some "\"\\u0000\\u001f/\""
 -- DEL, C1 and bidi controls are read raw and written escaped.
 #guard rt "\"a\u007F\u0085\u202Eb\"" == some "\"a\\u007f\\u0085\\u202eb\"" && rt "\"\\u2066\"" == some "\"\\u2066\""
+-- U+2028 and U+2029 are read raw, also by the strict reader, and written escaped.
+#guard rt "\"a\u2028b\u2029\"" == some "\"a\\u2028b\\u2029\""
+#guard (parseText {} true (jsonDepth {}) "\"a\u2028b\u2029\"".toList).toOption.isSome
 #guard rt "{\"a\": 1, \"a\": 2}" == none
 #guard rt "\"\\ud83d\"" == none && rt "\"\\ude00\"" == none && rt "\"\\ud83dx\"" == none
 #guard rt "[1,]" == none && rt "NaN" == none && rt "01" == none && rt "1." == none && rt "+1" == none

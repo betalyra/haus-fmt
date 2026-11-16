@@ -204,7 +204,8 @@ theorem hex4_hex4Of {n : Nat} (h : n < 0x10000) (r : Text) : hex4 (hex4Of n ++ r
 
 /-- A character that `mustEscape`s is below U+10000 and no surrogate. -/
 theorem mustEscape_lt {c : Char} (h : mustEscape c = true) : c.toNat < 0x2070 := by
-  simp only [mustEscape, isRawControl, isBidi, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+  simp only [mustEscape, strictRejects, isRawControl, isBidi, isLineSep, Bool.or_eq_true, Bool.and_eq_true,
+    decide_eq_true_eq] at h
   omega
 
 /-- How `escape` writes a character other than `"`, `\`, LF, CR and tab. -/
@@ -237,9 +238,12 @@ theorem strChars_escape {L : Limits} {strict : Bool} (c : Char) (f : Nat) (acc :
     simp only [List.cons_append, strChars, hn', ↓reduceIte, hx, hhi, hlo, Bool.false_eq_true, Char.ofNat_toNat]
   · rename_i hc
     have hlt : ¬ c.toNat < 0x20 := by
-      simp only [mustEscape, isRawControl, Bool.or_eq_true, decide_eq_true_eq, not_or] at hc
-      exact hc.1.1
-    simp [strChars, hn', h2, hlt, hc]
+      simp only [mustEscape, strictRejects, isRawControl, Bool.or_eq_true, decide_eq_true_eq, not_or] at hc
+      exact hc.1.1.1
+    have hs : strictRejects c = false := by
+      simp only [mustEscape, Bool.or_eq_true, not_or, Bool.not_eq_true] at hc
+      exact hc.1
+    simp [strChars, hn', h2, hlt, hs]
 
 /-- A string's escaped characters read back as the string. -/
 theorem strChars_write {L : Limits} {strict : Bool} : ∀ (cs : List Char) (fuel : Nat) (acc : List Char) (n : Nat) (rest : Text),
@@ -354,16 +358,17 @@ theorem isNumberChar_clean {c : Char} (h : isNumberChar c = true) : mustEscape c
   simp only [isNumberChar, Bool.or_eq_true, beq_iff_eq] at h
   rcases h with ((((h | rfl) | rfl) | rfl) | rfl) | rfl
   · have := isDigit_toNat h
-    simp only [mustEscape, isRawControl, isBidi, Bool.or_eq_false_iff, Bool.and_eq_false_imp, decide_eq_true_eq,
-      decide_eq_false_iff_not]
+    simp only [mustEscape, strictRejects, isRawControl, isBidi, isLineSep, Bool.or_eq_false_iff,
+      Bool.and_eq_false_imp, decide_eq_true_eq, decide_eq_false_iff_not]
     omega
   all_goals decide
 
 /--
 **The writer writes no character that must be escaped** (§16): no control
-character (below U+0020, DEL, C1) and no bidi control, raw, anywhere in
-`write j`. So the self-describing reader, which rejects them raw, reads what
-any writer writes.
+character (below U+0020, DEL, C1), no bidi control and no line or paragraph
+separator (U+2028, U+2029), raw, anywhere in `write j`. So the
+self-describing reader, which rejects the first two raw, reads what any
+writer writes.
 -/
 theorem write_clean {j : JSON} (h : WellFormed j) : ∀ c ∈ write j, mustEscape c = false := by
   induction h with
@@ -400,7 +405,7 @@ is one line.
 theorem write_chars {j : JSON} (h : WellFormed j) : ∀ c ∈ write j, 0x20 ≤ c.toNat := by
   intro c hc
   have := write_clean h c hc
-  simp only [mustEscape, isRawControl, Bool.or_eq_false_iff, decide_eq_false_iff_not] at this
+  simp only [mustEscape, strictRejects, isRawControl, Bool.or_eq_false_iff, decide_eq_false_iff_not] at this
   omega
 
 /-- What a value's text starts with: not whitespace, not `]`, not a byte order mark. -/

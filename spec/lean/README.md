@@ -13,6 +13,7 @@ and a reference parser that computes it.
 | [`Haus/Complete/`](Haus/Complete) | Proofs that the parser accepts everything the grammar allows |
 | [`Haus/Correct.lean`](Haus/Correct.lean) | Both together, and unambiguity |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
+| [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
 | [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does |
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
@@ -127,9 +128,23 @@ offset); `Date` and `YearMonth` have exactly one spelling.
 | `canonical_eq_canonicalAll_iff` | A value's canonical form is the text of a list only for one equal value: `hash v = hashAll [v]`, and nothing else collides (H) |
 | `hashText_eq`, `canonicalAll_prefix`, `read_canonicalAll` | Hashing value by value as a stream is read gives `hashAll` of the file; the values read so far give a prefix of the text (H) |
 
-Both assume a number limit of at least the default: the canonical form
-writes integers longer than 1000 digits in hex, so under a stricter limit a
-hex literal's canonical decimal form could be too long.
+Both assume a number limit of at least 1000: the canonical form writes
+integers longer than 1000 digits in hex (a constant of the canonical form,
+`numberLimit`, not the configurable limit), so under a stricter limit a hex
+literal's canonical decimal form could be too long.
+
+**About block strings** (spec §4, §11), in
+[`Haus/Pretty/BlockString.lean`](Haus/Pretty/BlockString.lean).
+`blockString ind s` is what the pretty layout writes for a string `s` at the
+indent `ind`: each line after the indent, `\`, `\r`, `\"` before two more
+quotes, `\u{…}` for controls, bidi controls and U+2028, U+2029, and the last
+space or tab of a line as `\u{20}` or `\t`.
+
+| Theorem | Says |
+|---|---|
+| `blockString_parses`, `parse_blockString` | It is a block string of the grammar with the value `s`, so the parser reads it as exactly `s`, for every string within the limit |
+| `blockString_noTrailingBlank` | No line of it ends in a space or a tab |
+| `trimLines_blockString`, `parse_trimLines_blockString` | Trimming the spaces and tabs at the end of every line, as editors do, leaves it unchanged, so it still parses to `s` |
 
 **About streams** (spec §6), in [`Haus/Stream/`](Haus/Stream). The model in
 [`Haus/Stream.lean`](Haus/Stream.lean) works like the readers of all three
@@ -181,7 +196,7 @@ as data (`JSON`): numbers keep their text, and `JSON.Equiv` compares as §16
 does, member order ignored and numbers by text. A strict reader for JSON text
 (I-JSON, the limits, a leading byte order mark, JSON Lines) reads back what
 the compact writer writes, for exactly the JSON the reader returns; the
-writer escapes every control character and bidi control. Three forms sit
+writer escapes every control character, bidi control and U+2028, U+2029. Three forms sit
 on it: the JSON import (`JSON.toValue`, `readImport`), self-describing JSON
 (`selfDescribing`, the value without the envelope, as in `Any`; `hausJson`,
 the envelope `{"_haus": 1, "_value": …}` around it; `readHausJson`, which
@@ -207,7 +222,7 @@ normalized literals and its tags are tags, as every parsed value is
 | `parse_wf`, `hausJson_parsed`, `schemaBased_parsed` | Every value the parser returns is well formed, so both round trips hold for every value of every haus text |
 | `JSON.parse_write`, `JSON.parse_sound`, `JSON.parse_write_iff` | `JSON.parse L (JSON.write j) = .ok j` exactly when `j` is well formed (`JSON.WellFormed`: number tokens, no duplicate member names) and within the limits (`JSON.Fits`) |
 | `JSON.parseLines_writeLines`, `JSON.parseLines_sound` | The same for JSON Lines: the compact writer writes nothing below U+0020 (`JSON.write_chars`), so each value is one line |
-| `JSON.write_clean` | The writer writes no control character (C0, DEL, C1) and no bidi control raw: it escapes them all (§16) |
+| `JSON.write_clean` | The writer writes no control character (C0, DEL, C1), no bidi control and no U+2028, U+2029 raw: it escapes them all (§16). The strict reader rejects only the first two raw (`strictRejects`) |
 | `JSON.hausJson_wellFormed`, `toJson_wellFormed` | The self-describing and the schema-based JSON of a value without duplicate keys are well formed: number tokens (`spell_json`: a float's spelling is a JSON number), distinct member names |
 | `JSON.hausJson_fits`, `toJson_fits` | The self-describing and the schema-based JSON of a value within the haus limits (`Value.fits`) are within the JSON limits (`JSON.Fits`; nesting `4 · maxDepth + 2` with the envelope, `4 · maxDepth + 1` without), when the limits leave room for the forms' member names and numbers (`SelfDescribingOk`, `SchemaBasedOk`: true of the defaults) |
 | `JSON.readHausJson_writeHausJson`, `readJson_write`, `hausJson_text_parsed`, `schemaBased_text_parsed` | The self-describing and schema-based round trips through JSON text, for a value without duplicate keys within the limits |

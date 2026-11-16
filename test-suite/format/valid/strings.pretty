@@ -2,8 +2,8 @@
   "plain",
   "",
   """
-    quote " backslash \\ newline 
-     cr \r tab 	
+    quote " backslash \\ newline\u{20}
+     cr \r tab \t
     """,
   "\u{41}\u{e9}\u{1F600}",
   "raw ünïcödé 😀",

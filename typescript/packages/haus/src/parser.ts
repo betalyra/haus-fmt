@@ -347,7 +347,8 @@ export class Parser {
     this.pos = end
     if (radix !== undefined) {
       const n = BigInt(radix + digits!.replaceAll("_", ""))
-      return num((literal.startsWith("-") && n !== 0n ? "-" : "") + n.toString())
+      // The sign is kept, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
+      return num((literal.startsWith("-") ? "-" : "") + n.toString())
     }
     const exp = /[eE]([+-]?)([0-9_]+)$/.exec(literal)
     if (exp && Number(exp[2]!.replaceAll("_", "")) > this.limits.maxExponent) {

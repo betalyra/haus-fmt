@@ -35,6 +35,13 @@ only where the grammar allows (§4).
 -/
 def isRawControl (c : Char) : Bool := c.toNat < 0x20 || (0x7F ≤ c.toNat && c.toNat ≤ 0x9F)
 
+/--
+The line and paragraph separators U+2028 and U+2029. They are allowed raw
+in strings, but every writer escapes them (§11, §12, §16), as some software
+splits lines at them.
+-/
+def isLineSep (c : Char) : Bool := 0x2028 ≤ c.toNat && c.toNat ≤ 0x2029
+
 /-- A space or a tab. -/
 def isBlank (c : Char) : Bool := c == ' ' || c == '\t'
 
@@ -82,12 +89,16 @@ def normalizeExponent (e : Text) : Text :=
   let ds := stripZeros ds
   if neg && ds != ['0'] then '-' :: ds else ds
 
+/-- The sign of a normalized literal: `-` for a negative literal, zero included. -/
+def signText (neg : Bool) : String := if neg then "-" else ""
+
 /--
 A number's literal after its sign: digit separators removed, the exponent
 written `e` and its value, hex and binary converted to decimal integers.
+The sign is kept, also on zero: `-0x0` is `-0`, as `-0` is.
 -/
 def normalizeBody (neg : Bool) (body : Text) : String :=
-  let integer (n : Nat) := (if neg && n != 0 then "-" else "") ++ toString n
+  let integer (n : Nat) := signText neg ++ toString n
   match body.filter (· != '_') with
   | '0' :: 'x' :: ds => integer (digitsValue 16 ds)
   | '0' :: 'b' :: ds => integer (digitsValue 2 ds)
@@ -101,7 +112,7 @@ def normalizeBody (neg : Bool) (body : Text) : String :=
 /--
 The normalized literal of a number (§2): digit separators removed, the
 exponent written `e` and its value (`E+05` is `e5`), hex and binary
-converted to decimal integers. `-0x0` is `0`; a decimal `-0` stays `-0`.
+converted to decimal integers, keeping the sign: `-0x0` is `-0`, as `-0` is.
 -/
 def normalizeNumber : Text → String
   | '-' :: r => normalizeBody true r
@@ -112,7 +123,8 @@ def normalizeNumber : Text → String
 #guard normalizeNumber "1e-0".toList == "1e0"
 #guard normalizeNumber "1e000".toList == "1e0"
 #guard normalizeNumber "1_000.0".toList == "1000.0"
-#guard normalizeNumber "-0x0".toList == "0" && normalizeNumber "-0".toList == "-0"
+#guard normalizeNumber "-0x0".toList == "-0" && normalizeNumber "-0b0".toList == "-0"
+#guard normalizeNumber "-0".toList == "-0" && normalizeNumber "0x0".toList == "0"
 #guard normalizeNumber "0xFF".toList == "255"
 
 /--

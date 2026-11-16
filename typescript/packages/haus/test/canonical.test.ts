@@ -22,7 +22,7 @@ describe("canonical form (spec §12)", () => {
     expect(equals(parse("{}"), parse("{ x: None }"))).toBe(false)
     expect(equals(parse('"caf\\u{E9}"'), parse('"cafe\\u{301}"'))).toBe(false)
     expect(equals(parse("-0"), parse("0"))).toBe(false)
-    expect(equals(parse("-0x0"), parse("0"))).toBe(true)
+    expect(equals(parse("-0x0"), parse("0"))).toBe(false)
   })
 
   it("escapes only what it must", () => {
@@ -44,6 +44,28 @@ describe("canonical form (spec §12)", () => {
   it("keeps a huge hex integer in hex", () => {
     const big = "0x" + "f".repeat(900)
     expect(c(big)).toBe(big)
+  })
+
+  it("switches to hex at 1000 characters, whatever the number limit (spec §12)", () => {
+    const limits = { maxNumberLength: 5000 }
+    expect(canonical(parse("9".repeat(1000), limits))).toBe("9".repeat(1000))
+    expect(canonical(parse("-" + "9".repeat(999), limits))).toBe("-" + "9".repeat(999))
+    expect(canonical(parse("1" + "0".repeat(1000), limits))).toMatch(/^0x[0-9a-f]+$/)
+  })
+
+  it("has no form for an integer longer than 1000 characters in hex too: number-too-long", () => {
+    const huge = parse(`{ a: [1, ${"9".repeat(1300)}] }`, { maxNumberLength: 5000 })
+    expect(() => canonical(huge)).toThrow(expect.objectContaining({ name: "HausEncodeError", code: "number-too-long", path: ["a", 1] }))  })
+
+  it("keeps the sign of a hex or binary zero (spec §2)", () => {
+    expect(c("[-0x0, -0b0, -0x00, 0x0, -0]")).toBe("[-0,-0,-0,0,-0]")
+    expect(equals(parse("-0x0"), parse("-0"))).toBe(true)
+    expect(equals(parse("-0b0"), parse("0"))).toBe(false)
+  })
+
+  it("escapes U+2028 and U+2029 (spec §12)", () => {
+    expect(c('"a\u{2028}b\u{2029}"')).toBe(String.raw`"a\u{2028}b\u{2029}"`)
+    expect(c('{ "k\u{2028}": 1 }')).toBe(String.raw`{"k\u{2028}":1}`)
   })
 })
 

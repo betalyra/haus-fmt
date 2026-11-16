@@ -67,9 +67,26 @@ theorem intPart_toDigits (v : Nat) : IntPart (Nat.toDigits 10 v) := by
 /-- An integer's normalized literal: `-` (unless 0) and its decimal digits. -/
 def intText (neg : Bool) (v : Nat) : Text := (if neg && v != 0 then ['-'] else []) ++ Nat.toDigits 10 v
 
+/--
+The normalized literal of a hex or binary integer: its sign, kept also on
+zero (`-0x0` is `-0`), and its decimal digits.
+-/
+def signedText (neg : Bool) (v : Nat) : Text := (if neg then ['-'] else []) ++ Nat.toDigits 10 v
+
 theorem integer_toList (neg : Bool) (v : Nat) :
-    ((if neg && v != 0 then "-" else "") ++ toString v).toList = intText neg v := by
-  unfold intText; split <;> simp [Nat.toString_eq_repr]
+    (signText neg ++ toString v).toList = signedText neg v := by
+  unfold signText signedText; split <;> simp [Nat.toString_eq_repr]
+
+/-- Without a sign on zero, the literal is the integer's. -/
+theorem signedText_intText (neg : Bool) (v : Nat) : signedText (neg && v != 0) v = intText neg v := by
+  unfold signedText intText; cases neg <;> by_cases hv : v = 0 <;> simp [hv]
+
+/-- A hex or binary literal's value is an integer's literal, or `-0`. -/
+theorem signedText_cases (neg : Bool) (v : Nat) :
+    signedText neg v = intText neg v ∨ (neg = true ∧ v = 0 ∧ signedText neg v = ['-', '0']) := by
+  by_cases h : neg = true ∧ v = 0
+  · obtain ⟨rfl, rfl⟩ := h; right; exact ⟨rfl, rfl, by decide⟩
+  · left; rw [← signedText_intText]; congr 1; cases neg <;> by_cases hv : v = 0 <;> simp_all
 
 theorem toDigits_head_ne {v : Nat} {c : Char} (h : (Nat.toDigits 10 v).head? = some c) :
     isDigit c = true := toDigits_decimal c (List.mem_of_head? h)
@@ -131,8 +148,8 @@ theorem hexLit (neg : Bool) (v : Nat) (hlen : (intSign neg v ++ '0' :: 'x' :: Na
   unfold normalizeBody
   rw [hf]
   simp only
-  rw [digitsValue_toDigits (by decide) (by decide), ← String.toList_inj, integer_toList, String.toList_ofList]
-  unfold intText; cases neg <;> by_cases hv : v = 0 <;> simp [hv]
+  rw [digitsValue_toDigits (by decide) (by decide), ← String.toList_inj, integer_toList, String.toList_ofList,
+    signedText_intText]
 
 theorem decimalIntLit (neg : Bool) (v : Nat) (hlen : (intText neg v).length ≤ L.maxNumberLength) :
     NumberLit L (intText neg v) ∧ normalizeNumber (intText neg v) = String.ofList (intText neg v) := by
@@ -441,7 +458,7 @@ theorem intSign_length (neg : Bool) (v : Nat) : (intSign neg v).length ≤ 1 := 
 /-- Hex and binary literals: their value as an integer. -/
 theorem normalize_radix {s ds : Text} {r : Char} (hs : Sign s) (hr : r = 'x' ∨ r = 'b') :
     normalizeNumber (s ++ '0' :: r :: ds) =
-      String.ofList (intText (s == ['-']) (digitsValue (if r = 'x' then 16 else 2) (ds.filter (· != '_')))) := by
+      String.ofList (signedText (s == ['-']) (digitsValue (if r = 'x' then 16 else 2) (ds.filter (· != '_')))) := by
   rw [normalizeNumber_sign hs (by simp)]
   unfold normalizeBody
   have hf : ('0' :: r :: ds).filter (· != '_') = '0' :: r :: ds.filter (· != '_') := by
@@ -507,6 +524,25 @@ theorem number_eq_self {t : Text} (h : t.length ≤ numberLimit ∨ ∃ c ∈ t,
   · have := key t (.inr rfl)
     rw [ite_eq_right_iff.mpr (fun h => absurd (by simpa using h) this)]
 
+/-- `-0`, as a hex or binary zero with a sign normalizes to, written canonically. -/
+theorem negZero_canonical (hL : numberLimit ≤ L.maxNumberLength) (n : Nat) :
+    Val L n (Canonical.number (String.ofList ['-', '0'])) (.num (String.ofList ['-', '0'])) := by
+  rw [number_eq_self (.inl (by decide))]
+  have hl : NumberLit L (['-'] ++ ['0'] ++ [] ++ []) :=
+    .decimal _ _ _ _ (.inr rfl) .zero (.inl rfl) (.inl rfl) (by simp [expMagnitude, digitsValue])
+      (by simp [numberLimit] at hL; simp; omega)
+  have hn : normalizeNumber ['-', '0'] = String.ofList ['-', '0'] := by decide
+  exact hn ▸ Val.number n _ hl
+
+/-- A hex or binary integer's value, written canonically. -/
+theorem signed_canonical (hL : numberLimit ≤ L.maxNumberLength) (neg : Bool) (v : Nat)
+    (hhex : (intText neg v).length > numberLimit →
+      (intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v).length ≤ L.maxNumberLength) (n : Nat) :
+    Val L n (Canonical.number (String.ofList (signedText neg v))) (.num (String.ofList (signedText neg v))) := by
+  rcases signedText_cases neg v with h | ⟨-, -, h⟩
+  · rw [h]; exact int_canonical hL neg v hhex n
+  · rw [h]; exact negZero_canonical hL n
+
 theorem isBin_hex {c : Char} (h : isBinDigit c = true) : isHexDigit c = true ∧ hexValue c < 2 := by
   simp [isBinDigit] at h; rcases h with rfl | rfl <;> decide
 
@@ -517,7 +553,7 @@ theorem number_canonical (hL : numberLimit ≤ L.maxNumberLength) {t : Text} (h 
   | hex s ds hs hds hlen =>
     rw [normalize_radix (ds := ds) hs (.inl rfl)]
     simp only [↓reduceIte]
-    refine int_canonical hL _ _ (fun _ => ?_) n
+    refine signed_canonical hL _ _ (fun _ => ?_) n
     have hv : digitsValue 16 (ds.filter (· != '_')) < 16 ^ (ds.filter (· != '_')).length :=
       digitsValue_lt fun c hc => hexValue_hex (by
         obtain ⟨h1, h2⟩ := List.mem_filter.mp hc
@@ -536,7 +572,7 @@ theorem number_canonical (hL : numberLimit ≤ L.maxNumberLength) {t : Text} (h 
   | binary s ds hs hds hlen =>
     rw [normalize_radix (ds := ds) hs (.inr rfl)]
     simp only [show ('b' = 'x') = False by decide, ite_false]
-    refine int_canonical hL _ _ (fun _ => ?_) n
+    refine signed_canonical hL _ _ (fun _ => ?_) n
     have hv : digitsValue 2 (ds.filter (· != '_')) < 2 ^ (ds.filter (· != '_')).length :=
       digitsValue_lt fun c hc => by
         obtain ⟨h1, h2⟩ := List.mem_filter.mp hc

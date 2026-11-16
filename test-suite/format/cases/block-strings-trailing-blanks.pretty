@@ -1,0 +1,40 @@
+{
+  // A space at the end of a line, two spaces (only the last one is escaped),
+  // a line of only spaces, a tab at the end, a line of only a tab, and both.
+  note: """
+    Delivery to the back door\u{20}
+    Two spaces \u{20}
+      \u{20}
+    Tab at the end\t
+    \t
+    Space then tab \t
+    Tab then space	\u{20}
+    Ring twice
+    """,
+  // Escaped in the source already.
+  escaped: """
+    Ends in a space\u{20}
+    Ends in a tab\t
+    """,
+  // Blanks after the indent of a blank line are content; a blank line
+  // shorter than the indent is empty.
+  blank: """
+    first
+     \u{20}
+
+    last
+    """,
+  list: [
+    """
+      In an array\u{20}
+      and a second line
+      """,
+    "single line \t",
+  ],
+  shape: Circle {
+    label: """
+      a\u{20}
+      b
+      """,
+  },
+}

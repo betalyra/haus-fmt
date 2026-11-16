@@ -1,0 +1,17 @@
+---
+source: haus-cli/tests/cli.rs
+expression: "[\"pretty\", \"compact\", \"minimised\"].map(layout).join(\"\")"
+---
+── pretty
+{
+  name: "Ada",
+  tags: [
+    "a",
+    "b",
+  ], // who
+  total: Money(7.90, EUR),
+}
+── compact
+{ name: "Ada", tags: ["a", "b"], total: Money(7.90, EUR) }
+── minimised
+{name:"Ada",tags:["a","b"],total:Money(7.90,EUR)}

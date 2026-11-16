@@ -56,3 +56,4 @@ import Haus.Json.Fits
 import Haus.Json.SchemaBasedFits
 import Haus.Json.WellFormed
 import Haus.Json.Correct
+import Haus.Pretty.BlockString

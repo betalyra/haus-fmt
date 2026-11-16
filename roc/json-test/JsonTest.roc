@@ -37,6 +37,10 @@ import "../../test-suite/valid/keys.haus" as valid_keys : List(U8)
 import "../../test-suite/valid/keys.jsonl" as valid_keys_jsonl : List(U8)
 import "../../test-suite/valid/limits-boundary.haus" as valid_limits_boundary : List(U8)
 import "../../test-suite/valid/limits-boundary.jsonl" as valid_limits_boundary_jsonl : List(U8)
+import "../../test-suite/valid/line-separators.haus" as valid_line_separators : List(U8)
+import "../../test-suite/valid/line-separators.jsonl" as valid_line_separators_jsonl : List(U8)
+import "../../test-suite/valid/negative-zero-hex.haus" as valid_negative_zero_hex : List(U8)
+import "../../test-suite/valid/negative-zero-hex.jsonl" as valid_negative_zero_hex_jsonl : List(U8)
 import "../../test-suite/valid/numbers.haus" as valid_numbers : List(U8)
 import "../../test-suite/valid/numbers.jsonl" as valid_numbers_jsonl : List(U8)
 import "../../test-suite/valid/only-comments.haus" as valid_only_comments : List(U8)
@@ -923,6 +927,12 @@ expect JsonTest.valid(valid_keys, valid_keys_jsonl)
 
 # valid/limits-boundary.jsonl
 expect JsonTest.valid(valid_limits_boundary, valid_limits_boundary_jsonl)
+
+# valid/line-separators.jsonl
+expect JsonTest.valid(valid_line_separators, valid_line_separators_jsonl)
+
+# valid/negative-zero-hex.jsonl
+expect JsonTest.valid(valid_negative_zero_hex, valid_negative_zero_hex_jsonl)
 
 # valid/numbers.jsonl
 expect JsonTest.valid(valid_numbers, valid_numbers_jsonl)

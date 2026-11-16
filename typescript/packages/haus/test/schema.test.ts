@@ -46,6 +46,16 @@ describe("decoding", () => {
     expect(h.parse(h.Int, "-" + "9".repeat(500))).toBe(-(10n ** 500n - 1n))
   })
 
+  it("a negative hex or binary zero is -0 (spec §2): an integer 0, a float negative zero", () => {
+    for (const text of ["-0x0", "-0b0", "-0x00"]) {
+      expect(h.parse(h.Int, text)).toBe(0n)
+      expect(h.parse(h.Int32, text)).toBe(0)
+      expect(Object.is(h.parse(h.Float64, text), -0)).toBe(true)
+      expect(h.parse(h.Decimal, text)).toBe("-0")
+    }
+    expect(Object.is(h.parse(h.Float64, "0x0"), 0)).toBe(true)
+  })
+
   it("Int8 … UInt64 are bounded: JS numbers up to 32 bits, bigints for 64", () => {
     expect(h.parse(h.Array(h.UInt8), "[0, 255]")).toEqual([0, 255])
     expect(h.parse(h.Int32, "-2147483648")).toBe(-2147483648)

@@ -502,7 +502,8 @@ radix_text = |src, start, end, radix, neg| {
 		}
 	}
 	digits = bytes_to_str(reverse($decimal).map(|d| d.to_u8_wrap() + '0'))
-	sign = if (neg and digits != "0") "-" else ""
+	# The sign stays, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
+	sign = if (neg) "-" else ""
 	"${sign}${digits}"
 }
 
@@ -1074,6 +1075,8 @@ expect code_at("null") == "null-literal at 1:1" and code_at("[true]") == "boolea
 expect code_at("/* a\rb */ 1") == "lone-carriage-return at 1:5" and code_at("// a\rb\n1") == "lone-carriage-return at 1:5" and code_at("1 \r") == "lone-carriage-return at 1:3"
 expect code_at("/* \u(1B) */ 1") == "control-character at 1:4" and code_at("/* 1") == "unterminated-comment at 1:1" and code_at("1 / 2") == "stray-slash at 1:3"
 expect code_at("\"\\u0041\"") == "invalid-unicode-escape at 1:2" and code_at("\"\\u{D800}\"") == "invalid-unicode-escape at 1:2" and code_at("\"\\x\"") == "invalid-escape at 1:2"
+# Hex and binary keep the sign, also on zero: `-0x0` is `-0` (spec §2).
+expect Value.parse_all("-0x0, -0b0, -0x0_0, 0x0, 0b0, -0, -0xFF").map_ok(|vs| vs.map(Value.to_test_json)) == Ok(["-0", "-0", "-0", "0", "0", "-0", "-255"].map(|n| "{\"num\":\"${n}\"}"))
 # Numbers: the literal, what follows it, its length, its exponent.
 expect code_at("1.") == "invalid-number at 1:1" and code_at("007") == "invalid-number at 1:1" and code_at("0x") == "invalid-number at 1:1"
 expect Value.parse_all_with("123456789x", small).map_ok(|_| {}).map_err(|e| e.code) == Err("invalid-number")

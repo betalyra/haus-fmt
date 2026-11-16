@@ -58,8 +58,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
       const result = await vscode.workspace.openTextDocument({ language: "haus-schema", content: schema })
       await vscode.window.showTextDocument(result, vscode.ViewColumn.Beside)
     }),
-    // Format Document uses the pretty layout; these switch a document between the two styles.
-    ...(["pretty", "compact"] as const).map((style) =>
+    // Format Document uses the pretty layout; these switch a document between the three layouts.
+    ...(["pretty", "compact", "minimised"] as const).map((style) =>
       vscode.commands.registerCommand(`haus.print.${style}`, async () => {
         const editor = vscode.window.activeTextEditor
         const document = editor?.document

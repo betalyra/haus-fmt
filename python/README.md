@@ -69,6 +69,8 @@ haus.equals(haus.parse("1.0"), haus.parse("1"))  # False: different numbers
 sorted(values, key=functools.cmp_to_key(haus.compare))  # by canonical form, not numeric: 10 before 9
 ```
 
+An integer longer than 1000 characters is written in hex; one longer than 1000 characters even in hex has no canonical form, and `canonical` and `hash` raise a `haus.HausError` with the code `number-too-long` (only a parser with a larger number limit, or code, makes one; `equals` and `compare` still work).
+
 A whole file or stream has one hash too: `haus.hash_all(values)` hashes the canonical forms joined by `,` (a file of one value hashes like the value). `haus.Hasher` computes it while a stream is read:
 
 ```python
@@ -98,7 +100,7 @@ haus.from_haus_json('{"_haus": 1, "_value": {"_num": "19.90"}}')  # Number(text=
 
 Self-describing JSON is an envelope, `{"_haus": 1, "_value": …}`: every value has exactly one, and reading it gives an equal value. `from_haus_json` requires the envelope (`haus-json-form` without it, `haus-json-version` for a `_haus` other than 1); `import_json` and schema-based reading never look for one, so to them it is an ordinary object.
 
-JSON is read strictly, as I-JSON within the limits: UTF-8 (a leading byte order mark is ignored; in JSON Lines only at the start of the stream), no duplicate member names, no unpaired surrogates, and numbers keep their exact text, never a float. Writers escape C0, DEL, C1 and bidi controls in strings and member names, so written JSON can't display differently from what it holds; `from_haus_json` rejects them raw (only haus writes that form), the other readers accept them. Errors are `haus.HausJsonError`, a `ValueError` with `reason` and either `line` and `column` (text that isn't JSON) or `path` (JSON that isn't the expected form).
+JSON is read strictly, as I-JSON within the limits: UTF-8 (a leading byte order mark is ignored; in JSON Lines only at the start of the stream), no duplicate member names, no unpaired surrogates, and numbers keep their exact text, never a float. Writers escape C0, DEL, C1 and bidi controls in strings and member names, so written JSON can't display differently from what it holds, and U+2028 and U+2029, at which some software splits lines (readers accept those raw); `from_haus_json` rejects them raw (only haus writes that form), the other readers accept them. Errors are `haus.HausJsonError`, a `ValueError` with `reason` and either `line` and `column` (text that isn't JSON) or `path` (JSON that isn't the expected form).
 
 Streams are JSON Lines, one JSON text per line (in self-describing JSON, an envelope each): `haus.import_json_lines(source)`, `haus.to_haus_json_lines(values)` and `haus.from_haus_json_lines(source)` read a text, a file, or chunks split anywhere.
 

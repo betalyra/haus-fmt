@@ -1,0 +1,12 @@
+// Raw line and paragraph separators in strings are written as escapes.
+// In a comment they stay as they are:  
+{
+  plain: "line separator, paragraph separator",
+  escaped: "\u{2028} and \u{2029}",
+  "key ": 1,
+  block: """
+    first line
+    ends in 
+    """,
+  list: [" ", Some(" ")],
+}

@@ -21,12 +21,26 @@ def hexDigit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.of
 /-- A number in hex, lowercase, without leading zeros. -/
 def hex (n : Nat) : Text := Nat.toDigits 16 n
 
-/-- The default number limit (spec §7). -/
-def numberLimit : Nat := ({} : Limits).maxNumberLength
+/--
+The length above which the canonical form writes an integer in hex (spec
+§12): a constant of the canonical form, 1000, not a configurable limit. It
+equals today's default number limit (§7, `numberLimit_default`), and stays
+1000 if the defaults grow.
+-/
+def numberLimit : Nat := 1000
+
+theorem numberLimit_default : numberLimit = ({} : Limits).maxNumberLength := rfl
 
 /--
 A number: its normalized literal, except an integer whose decimal form is
-longer than the number limit, which is written in hex.
+longer than 1000 characters (`numberLimit`), which is written in hex.
+
+Spec §12 also says an integer whose hex form is longer than 1000 characters
+too has no canonical form (`number-too-long`). This model writes it in hex
+anyway, so `canonical` stays total: no integer parsed with a number limit of
+1000 is that long (its hex form is shorter than its literal), and the
+theorems about `canonical` hold for any limits `L` with
+`numberLimit ≤ L.maxNumberLength`, the hex form read back within `L`.
 -/
 def number (literal : String) : Text :=
   let t := literal.toList
@@ -43,7 +57,7 @@ def escape : Char → Text
   | '\r' => ['\\', 'r']
   | '\t' => ['\\', 't']
   | c =>
-    if isRawControl c || isBidi c then
+    if isRawControl c || isBidi c || isLineSep c then
       ['\\', 'u', '{'] ++ (Nat.toDigits 16 c.toNat).map Char.toUpper ++ ['}']
     else [c]
 
@@ -117,11 +131,13 @@ private def canonicalOf (src : String) : Option String :=
 -- Strings: minimal escapes, uppercase hex for the rest, block strings become "…".
 #guard canonicalOf "\"tab\\tquote\\\" \\u{41} \\u{1b} \\u{202e} café\"" ==
   some "\"tab\\tquote\\\" A \\u{1B} \\u{202E} café\""
+-- Line and paragraph separators are read raw and written escaped.
+#guard canonicalOf "\"a\u2028b\\u{2029}\"" == some "\"a\\u{2028}b\\u{2029}\""
 #guard canonicalOf "\"\"\"\n  two\n  lines\n  \"\"\"" == some "\"two\\nlines\""
 -- Keys: bare when they can be, sorted by code point ("Z" before "a", "é" last).
 #guard canonicalOf "{ \"é\": 1, a: 2, \"Z\": 3, \"x-y\": 4 }" == some "{\"Z\":3,a:2,\"x-y\":4,\"é\":1}"
 -- Numbers keep their scale; a huge hex integer stays hex.
-#guard canonicalOf "[1.0, 1, -0, -0x0, 1E+05]" == some "[1.0,1,-0,0,1e5]"
+#guard canonicalOf "[1.0, 1, -0, -0x0, 0x0, 1E+05]" == some "[1.0,1,-0,-0,0,1e5]"
 #guard canonicalOf ("0x" ++ String.ofList (List.replicate 900 'f')) ==
   some ("0x" ++ String.ofList (List.replicate 900 'f'))
 -- Variants: bare, a single record payload as Tag{…}, otherwise Tag(…).

@@ -141,6 +141,38 @@ fn the_writer_checks_what_it_writes() {
 }
 
 #[test]
+fn line_and_paragraph_separators_are_written_escaped_and_read_raw() {
+    // Written escaped by every JSON writer, in strings and member names (spec §16) ...
+    let held = "a\u{2028}b\u{2029}c";
+    let escaped = r#""a\u2028b\u2029c""#;
+    assert_eq!(json::write(&Json::String(held.into())).unwrap(), escaped);
+    assert_eq!(json::write(&Json::Object(vec![(held.into(), Json::Null)])).unwrap(), format!("{{{escaped}:null}}"));
+    assert_eq!(to_string(&held.to_owned()).unwrap(), escaped);
+    let value = haus::Value::Record(vec![(held.into(), haus::Value::String(held.into()))]);
+    let text = haus::to_haus_json(&value).unwrap();
+    assert_eq!(text, format!(r#"{{"_haus":1,"_value":{{"_rec":{{{escaped}:{escaped}}}}}}}"#));
+    assert!(!text.contains(['\u{2028}', '\u{2029}']));
+    // ... and read raw by every reader, the self-describing one included.
+    let raw = format!("\"{held}\"");
+    assert_eq!(parse(&raw).unwrap(), Json::String(held.into()));
+    assert_eq!(json::from_str::<String>(&raw).unwrap(), held);
+    assert_eq!(haus::import_json(&raw).unwrap(), haus::Value::String(held.into()));
+    let enveloped = format!(r#"{{"_haus": 1, "_value": {{"_rec": {{{raw}: {raw}}}}}}}"#);
+    assert_eq!(haus::from_haus_json(&enveloped).unwrap(), value);
+}
+
+#[test]
+fn hex_and_binary_zero_keep_their_sign() {
+    // `-0x0` is `-0`, as `-0` is (spec §2): in `_num`, and decoded.
+    let v = &haus::parse("[-0x0, -0b0, 0x0]").unwrap()[0];
+    assert_eq!(haus::to_haus_json(v).unwrap(), r#"{"_haus":1,"_value":[{"_num":"-0"},{"_num":"-0"},{"_num":"0"}]}"#);
+    assert_eq!(haus::from_str::<i32>("-0x0").unwrap(), 0);
+    let float = haus::from_str::<f64>("-0x0").unwrap();
+    assert!(float == 0.0 && float.is_sign_negative());
+    assert!(haus::from_str::<f64>("0x0").unwrap().is_sign_positive());
+}
+
+#[test]
 fn scalars() {
     assert_eq!(to_string(&-12i32).unwrap(), "-12");
     assert_eq!(from_str::<u8>("-0").unwrap(), 0);

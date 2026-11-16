@@ -451,7 +451,8 @@ impl<'a> Parser<'a> {
             Some(radix) => {
                 let digits: Vec<u8> = self.b[body + 2..end].iter().copied().filter(|&c| c != b'_').collect();
                 let n = to_decimal(&digits, radix);
-                if neg && n != "0" { format!("-{n}") } else { n }
+                // The sign stays, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
+                if neg { format!("-{n}") } else { n }
             }
             None => normalize_exponent(self.src[start..end].replace('_', "").replace('E', "e")),
         };

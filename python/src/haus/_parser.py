@@ -413,7 +413,8 @@ class Parser:
         self.pos = end
         if radix is not None:
             n = int(m[1].replace("_", ""), radix)
-            return Number(("-" if src[start] == "-" and n != 0 else "") + _decimal_text(n))
+            # The sign stays, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
+            return Number(("-" if src[start] == "-" else "") + _decimal_text(n))
         if (e := _EXPONENT.search(m[0])) and _exceeds(e[1], self.limits.max_exponent):
             self._fail("exponent-too-large", f"exponent larger than {self.limits.max_exponent}", start)
         return Number(_normalize_exponent(m[0].replace("_", "").replace("E", "e")))

@@ -55,6 +55,10 @@ pub enum Command {
     /// Print the canonical form (spec §12) of each value, one per line.
     Canonical(CanonicalArgs),
     /// Print the SHA-256 hash (spec §12) of a file's values (`hashAll`).
+    ///
+    /// The hash is of the values, not of the text: the pretty, compact and
+    /// minimised layouts and the canonical form of the same data all have
+    /// the same hash, whatever their comments, key order or spelling.
     Hash(HashArgs),
     /// Print a shell completion script.
     Completions {
@@ -96,9 +100,15 @@ pub struct FmtArgs {
     #[arg(long)]
     pub check: bool,
 
-    /// The layout.
-    #[arg(long, value_enum, default_value_t = Style::Pretty)]
-    pub style: Style,
+    /// The layout (spec §11). `--style` is an older name for it.
+    #[arg(long, alias = "style", value_enum, default_value_t = Layout::Pretty, value_name = "LAYOUT")]
+    pub layout: Layout,
+
+    /// Drop comments when rewriting a file in the compact or minimised layout.
+    /// Without it, such a file with comments is refused; standard output
+    /// needs no option.
+    #[arg(long)]
+    pub drop_comments: bool,
 
     /// Spaces per indentation level.
     #[arg(long, value_name = "N", default_value_t = 2, value_parser = clap::value_parser!(u16).range(1..=16))]
@@ -113,11 +123,14 @@ pub struct FmtArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum Style {
-    /// One entry per line, comments kept.
+pub enum Layout {
+    /// One entry per line, comments kept: for people who edit.
     Pretty,
-    /// One line per top-level value, comments dropped.
+    /// One line per top-level value, with spaces; comments dropped.
     Compact,
+    /// One line per top-level value, no whitespace between tokens; comments dropped.
+    #[value(alias = "minimized")]
+    Minimised,
 }
 
 #[derive(Debug, Args)]

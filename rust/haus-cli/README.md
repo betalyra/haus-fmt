@@ -22,7 +22,7 @@ cargo install haus-fmt-cli    # installs the `haus` command
 | Command | What it does |
 |---|---|
 | `haus check PATH…` | syntax errors; then the schema's errors and hints, for data files; errors and warnings, for schema files |
-| `haus fmt PATH…` | rewrites data files in the standard layout (spec §11); `--check` only lists them |
+| `haus fmt PATH…` | rewrites data files in a standard layout (spec §11): pretty, compact or minimised; `--check` only lists them |
 | `haus canonical [FILE]` | the canonical form (spec §12) of each value, one per line |
 | `haus hash [FILE]` | `hashAll` of the file's values (spec §12); `--each` hashes each value |
 | `haus completions SHELL` | a completion script for bash, zsh, fish, elvish or PowerShell |
@@ -170,21 +170,35 @@ haus fmt order.haus                # rewrite in place
 haus fmt .                         # every data file below the current directory
 haus fmt --check .                 # list what would change, write nothing
 haus fmt - < in.haus > out.haus    # standard input to standard output
-haus fmt --style compact -         # one line per top-level value, no comments
+haus fmt --layout compact -        # one line per top-level value, no comments
+haus fmt --layout minimised -      # the same without whitespace between tokens
 ```
 
-Writes the standard layout (spec §11), keeping comments, blank lines and the
-spelling of numbers and strings; formatting twice changes nothing. Prints
-each file it rewrites (with `--check`, each file that would change) on
-standard output, one path per line. A file with a syntax error is never
-written: the error goes to standard error and the exit code is 1.
+Writes a standard layout (spec §11), keeping the key order and the spelling
+of numbers, strings and byte strings (`0xFF` stays `0xFF`); formatting twice
+changes nothing. Prints each file it rewrites (with `--check`, each file that
+would change) on standard output, one path per line. A file with a syntax
+error is never written: the error goes to standard error and the exit code
+is 1.
+
+| `--layout` | | For |
+|---|---|---|
+| `pretty` (default) | one entry per line; comments and blank lines kept | people who edit |
+| `compact` | one line per top-level value, with spaces: `Person { name: "Ada", age: 36 },` | logs and streams people look at |
+| `minimised` | one line per top-level value, no whitespace between tokens: `Person{name:"Ada",age:36},` | the wire and storage |
+
+Compact and minimised drop comments. So that a comment is never lost by
+accident, `haus fmt` refuses to rewrite a file that has comments in one of
+them (the exit code is 2, and the file stays as it was) unless you pass
+`--drop-comments`. Formatting standard input to standard output needs no
+option. `--style` is an older name for `--layout`.
 
 Only data files are formatted. Directories are searched for `*.haus` files
 that aren't `*.schema.haus`; a schema file named explicitly is a usage error.
 
-Options: `--style pretty|compact` (default `pretty`), `--indent N` (1–16,
-default 2), `--width N` (default 80; only positional payloads such as
-`Money(7.90, EUR)` wrap).
+Other options: `--indent N` (1–16, default 2), `--width N` (default 80; only
+positional payloads such as `Money(7.90, EUR)` wrap). Both only affect the
+pretty layout.
 
 ### `haus canonical` and `haus hash`
 
@@ -203,6 +217,14 @@ canonical forms printed before it stay printed. `haus hash` of a file with
 one value is the hash of that value; of an empty file, the SHA-256 of the
 empty text.
 
+The hash is of the values, not of the text: the pretty, compact and
+minimised layouts and the canonical form of the same data all have the same
+hash, whatever their comments, key order, spelling or whitespace.
+
+```sh
+haus fmt --layout minimised - < order.haus | haus hash   # the same as `haus hash order.haus`
+```
+
 ### Limits
 
 `check`, `fmt`, `canonical` and `hash` parse with the limits of spec §7, and take
@@ -215,7 +237,7 @@ empty text.
 |---|---|
 | 0 | OK. Hints and warnings don't change it. |
 | 1 | Invalid data: a syntax error, an error against the schema, a broken schema; or, with `fmt --check`, files that would change. |
-| 2 | Usage error (unknown option, missing argument, an invalid limit, `--schema` file not found, `fmt` on a schema file) or I/O error (a file that doesn't exist or can't be read or written). Wins over 1. |
+| 2 | Usage error (unknown option, missing argument, an invalid limit, `--schema` file not found, `fmt` on a schema file, `fmt` that would drop a file's comments without `--drop-comments`) or I/O error (a file that doesn't exist or can't be read or written). Wins over 1. |
 
 ## Color
 

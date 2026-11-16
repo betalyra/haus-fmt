@@ -67,6 +67,15 @@ describe("decode", () => {
       expect(yield* Haus.encode(S, { style: "compact" })(v)).toBe('{ key: x"0b34ff" }')
     }))
 
+  it.effect("encodes in the minimised layout, and minimised streams (spec §11)", () =>
+    Effect.gen(function* () {
+      const S = Schema.Struct({ name: Schema.String, tags: Schema.Array(Schema.String) })
+      const v = { name: "Ada\u2028", tags: ["a", "b"] }
+      expect(yield* Haus.encode(S, { style: "minimised" })(v)).toBe('{name:"Ada\\u{2028}",tags:["a","b"]}')
+      const chunks = yield* Stream.runCollect(Haus.encodeStream(S, { style: "minimised" })(Stream.make(v, v)))
+      expect(chunks.join("")).toBe('{name:"Ada\\u{2028}",tags:["a","b"]},\n'.repeat(2))
+    }))
+
   it.effect("an optional key is never None: missing and None are different things", () =>
     Effect.gen(function* () {
       const S = Schema.Struct({ tracking: Schema.optionalKey(Schema.String), note: Schema.Option(Schema.String) })

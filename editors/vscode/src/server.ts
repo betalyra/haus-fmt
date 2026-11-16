@@ -390,8 +390,8 @@ connection.onDocumentFormatting(({ textDocument }): TextEdit[] => {
   return [{ range: { start: doc.positionAt(0), end: doc.positionAt(text.length) }, newText: formatted }]
 })
 
-/** The whole document in the given style; null on syntax errors. Comments are kept except in compact. */
-connection.onRequest("haus/print", ({ uri, style }: { uri: string; style: "pretty" | "compact" }): string | null => {
+/** The whole document in the given layout; null on syntax errors. Comments are kept in pretty only. */
+connection.onRequest("haus/print", ({ uri, style }: { uri: string; style: "pretty" | "compact" | "minimised" }): string | null => {
   const doc = documents.get(uri)
   if (!doc) return null
   const text = doc.getText()

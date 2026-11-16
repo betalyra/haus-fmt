@@ -651,7 +651,10 @@ fn decimal_to_hex(digits: &str) -> String {
     })
 }
 
-/// A `"…"` string with the minimal escapes.
+/// A `"…"` string with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`,
+/// and `\u{…}` (uppercase hex) for the other control characters, the bidi
+/// controls and the line and paragraph separators U+2028 and U+2029 (spec
+/// §11, §12). The same in every layout and in the canonical form.
 pub(crate) fn quote(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -662,7 +665,7 @@ pub(crate) fn quote(s: &str, out: &mut String) {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
             c if matches!(u32::from(c), 0..0x20 | 0x7F..=0x9F)
-                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}') =>
+                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{2028}' | '\u{2029}') =>
             {
                 let _ = write!(out, "\\u{{{:X}}}", u32::from(c));
             }

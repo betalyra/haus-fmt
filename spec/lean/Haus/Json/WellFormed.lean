@@ -75,6 +75,13 @@ theorem normalLit_intText (neg : Bool) (v : Nat) : isNormalLit (intText neg v) =
 theorem isNormalLit_intText_string (neg : Bool) (v : Nat) : isNormalLit (String.ofList (intText neg v)).toList = true := by
   rw [String.toList_ofList]; exact normalLit_intText neg v
 
+/-- A hex or binary literal's value is a normalized literal, `-0` included. -/
+theorem isNormalLit_signedText_string (neg : Bool) (v : Nat) :
+    isNormalLit (String.ofList (signedText neg v)).toList = true := by
+  rcases signedText_cases neg v with h | ⟨-, -, h⟩
+  · rw [h]; exact isNormalLit_intText_string neg v
+  · rw [h]; decide
+
 /-- The normalized exponent part is one a normalized literal has. -/
 theorem normalExp_normE {e : Text} (he : Exp e) : normalTail.normalExp (normE e) = true := by
   obtain ⟨m, sgn, ds, rfl, hm, hsg, hds⟩ := he
@@ -121,8 +128,8 @@ theorem normalExp_normE {e : Text} (he : Exp e) : normalTail.normalExp (normE e)
 theorem normalLit_number {L : Limits} {t : Text} (h : NumberLit L t) :
     isNormalLit (normalizeNumber t).toList = true := by
   cases h with
-  | hex s ds hs _ _ => rw [normalize_radix hs (.inl rfl)]; exact isNormalLit_intText_string _ _
-  | binary s ds hs _ _ => rw [normalize_radix hs (.inr rfl)]; exact isNormalLit_intText_string _ _
+  | hex s ds hs _ _ => rw [normalize_radix hs (.inl rfl)]; exact isNormalLit_signedText_string _ _
+  | binary s ds hs _ _ => rw [normalize_radix hs (.inr rfl)]; exact isNormalLit_signedText_string _ _
   | decimal sg i f e hs hi hf he _ _ =>
     rw [normalize_decimal hs hi hf he, String.toList_ofList]
     obtain ⟨hIP, hid, hi0⟩ := intPart_filter hi

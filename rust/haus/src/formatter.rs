@@ -25,6 +25,10 @@ pub enum Style {
     /// strings as `\n` escapes, a comma after every item of a stream.
     /// Comments are dropped.
     Compact,
+    /// Compact without the whitespace between tokens, for the wire and
+    /// storage: `Person{name:"Ada",tags:[1,2]}`. Literals keep their
+    /// spelling (`1_000`, `x"9f86 d081"`); comments are dropped.
+    Minimised,
 }
 
 /// Options of [`format()`], the same as the TypeScript formatter's.
@@ -52,7 +56,8 @@ impl Default for FormatOptions {
 /// stream with a comma after each value. The pretty layout keeps comments,
 /// blank lines (at most one in a row) and the source spelling of numbers,
 /// single-line strings and byte strings (`0xFF` stays `0xFF`); the compact
-/// layout drops comments. Formatting the output again changes nothing.
+/// and minimised layouts drop comments. Formatting the output again changes
+/// nothing, and every layout holds the same values as the input.
 ///
 /// Fails with the parser's error if `text` isn't valid haus within
 /// `options.limits`, or if those limits aren't supported
@@ -64,6 +69,8 @@ impl Default for FormatOptions {
 /// assert_eq!(out, "{\n  name: \"Ada\", // who\n  tags: [\n    0xFF,\n  ],\n}\n");
 /// let compact = haus::FormatOptions { style: haus::Style::Compact, ..Default::default() };
 /// assert_eq!(haus::format(text, &compact).unwrap(), "{ name: \"Ada\", tags: [0xFF] }\n");
+/// let minimised = haus::FormatOptions { style: haus::Style::Minimised, ..Default::default() };
+/// assert_eq!(haus::format(text, &minimised).unwrap(), "{name:\"Ada\",tags:[0xFF]}\n");
 /// ```
 pub fn format(text: &str, options: &FormatOptions) -> Result<String, SyntaxError> {
     let values = parse_with(text, &options.limits)?;
@@ -73,11 +80,27 @@ pub fn format(text: &str, options: &FormatOptions) -> Result<String, SyntaxError
         doc: &doc,
         step: options.indent,
         width: i64::try_from(options.width).unwrap_or(i64::MAX),
+        gaps: if options.style == Style::Minimised { Gaps::NONE } else { Gaps::SPACED },
     };
     Ok(match options.style {
         Style::Pretty => f.pretty(),
-        Style::Compact => f.compact(),
+        Style::Compact | Style::Minimised => f.lines(),
     })
+}
+
+/// Whether a text has comments: a tool that rewrites a file in place in the
+/// compact or minimised layout, which drop them, must refuse if it has
+/// (spec §11, "Comments and layouts"), unless the user asked to drop them.
+/// Fails with the parser's error if `text` isn't valid haus within `limits`.
+///
+/// ```
+/// let limits = haus::Limits::default();
+/// assert_eq!(haus::has_comments("{ a: 1 } // why", &limits), Ok(true));
+/// assert_eq!(haus::has_comments("{ a: \"// not one\" }", &limits), Ok(false));
+/// ```
+pub fn has_comments(text: &str, limits: &Limits) -> Result<bool, SyntaxError> {
+    let values = parse_with(text, limits)?;
+    Ok(!Document::scan(text, values).comments.is_empty())
 }
 
 // ── the document: values, keys and comments with their positions ──────────
@@ -377,6 +400,27 @@ struct Formatter<'a> {
     doc: &'a Document,
     step: usize,
     width: i64,
+    /// What goes between tokens on one line.
+    gaps: Gaps,
+}
+
+/// The whitespace between tokens on one line: the minimised layout has none.
+#[derive(Clone, Copy)]
+struct Gaps {
+    /// Between entries: `, `.
+    comma: &'static str,
+    /// After a key: `: `.
+    colon: &'static str,
+    /// Inside a non-empty record: `{ ` and ` }`.
+    open: &'static str,
+    close: &'static str,
+    /// Between a tag and its record payload: `Tag {`.
+    tag: &'static str,
+}
+
+impl Gaps {
+    const SPACED: Gaps = Gaps { comma: ", ", colon: ": ", open: "{ ", close: " }", tag: " " };
+    const NONE: Gaps = Gaps { comma: ",", colon: ":", open: "{", close: "}", tag: "" };
 }
 
 /// One entry of a container: a record field, an array item, a payload
@@ -477,7 +521,8 @@ impl<'a> Formatter<'a> {
         out
     }
 
-    fn compact(&self) -> String {
+    /// The compact or minimised layout: every top-level item on one line.
+    fn lines(&self) -> String {
         let line = |&i: &usize| self.inline(self.node(i), false, i64::MAX).unwrap_or_default();
         match self.doc.roots.as_slice() {
             [] => String::new(),
@@ -499,11 +544,11 @@ impl<'a> Formatter<'a> {
                 Piece::Text(t) => line.push(t),
                 Piece::Key(k, first) => {
                     if !first {
-                        line.push(", ");
+                        line.push(self.gaps.comma);
                     }
                     let mut text = String::new();
                     key(k, &mut text);
-                    text.push_str(": ");
+                    text.push_str(self.gaps.colon);
                     line.push(&text);
                 }
                 Piece::Node(n) => match &n.kind {
@@ -526,7 +571,7 @@ impl<'a> Formatter<'a> {
                         line.push(&self.src[n.start..*tag_end]);
                         match self.record_payload(args) {
                             Some(fields) => {
-                                line.push(" ");
+                                line.push(self.gaps.tag);
                                 self.inline_record(&mut line, &mut work, fields, pretty)?;
                             }
                             None if args.is_empty() => {}
@@ -553,7 +598,7 @@ impl<'a> Formatter<'a> {
         for (i, &item) in items.iter().enumerate().rev() {
             work.push(Piece::Node(self.node(item)));
             if i > 0 {
-                work.push(Piece::Text(", "));
+                work.push(Piece::Text(self.gaps.comma));
             }
         }
     }
@@ -571,8 +616,8 @@ impl<'a> Formatter<'a> {
         } else if pretty {
             return None;
         } else {
-            line.push("{ ");
-            work.push(Piece::Text(" }"));
+            line.push(self.gaps.open);
+            work.push(Piece::Text(self.gaps.close));
             for (i, f) in fields.iter().enumerate().rev() {
                 work.push(Piece::Node(self.node(f.value)));
                 work.push(Piece::Key(&f.key, i == 0));
@@ -835,11 +880,13 @@ impl<'a> Formatter<'a> {
         &self.src[n.start..n.end]
     }
 
-    /// The original spelling, unless it was a block string (those span lines).
+    /// The original spelling, unless it was a block string (those span
+    /// lines). Raw line and paragraph separators, which the parser accepts
+    /// but some software breaks lines at, are escaped (spec §11).
     fn basic_string(&self, n: &Node, s: &str) -> String {
         let original = self.original(n);
         if original.starts_with('"') && !original.starts_with("\"\"\"") {
-            return original.to_owned();
+            return original.replace('\u{2028}', "\\u{2028}").replace('\u{2029}', "\\u{2029}");
         }
         let mut out = String::new();
         quote(s, &mut out);
@@ -864,8 +911,10 @@ impl<'a> Formatter<'a> {
 }
 
 /// One line of a block string, escaped: backslashes, carriage returns,
-/// control and bidi characters, and every quote that has two more after it
-/// (a run of three would close the string early).
+/// control and bidi characters, line and paragraph separators, every quote
+/// that has two more after it (a run of three would close the string early),
+/// and the last space or tab of a line that ends in one (`\u{20}`, `\t`), so
+/// that no line ends in a blank an editor might trim (spec §11).
 fn block_line(line: &str) -> String {
     let mut escaped = String::with_capacity(line.len());
     for c in line.chars() {
@@ -873,12 +922,19 @@ fn block_line(line: &str) -> String {
             '\\' => escaped.push_str("\\\\"),
             '\r' => escaped.push_str("\\r"),
             c if (matches!(u32::from(c), 0..0x20 | 0x7F..=0x9F) && c != '\t')
-                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}') =>
+                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{2028}' | '\u{2029}') =>
             {
                 let _ = write!(escaped, "\\u{{{:X}}}", u32::from(c));
             }
             c => escaped.push(c),
         }
+    }
+    // Escapes end in a letter or `}`, so a blank at the end is a raw one.
+    match escaped.pop() {
+        Some(' ') => escaped.push_str("\\u{20}"),
+        Some('\t') => escaped.push_str("\\t"),
+        Some(c) => escaped.push(c),
+        None => {}
     }
     if !escaped.contains("\"\"\"") {
         return escaped;

@@ -48,6 +48,12 @@ import "../../test-suite/valid/keys.hash" as valid_keys_hash : List(U8)
 import "../../test-suite/valid/limits-boundary.haus" as valid_limits_boundary : List(U8)
 import "../../test-suite/valid/limits-boundary.canonical" as valid_limits_boundary_canonical : List(U8)
 import "../../test-suite/valid/limits-boundary.hash" as valid_limits_boundary_hash : List(U8)
+import "../../test-suite/valid/line-separators.haus" as valid_line_separators : List(U8)
+import "../../test-suite/valid/line-separators.canonical" as valid_line_separators_canonical : List(U8)
+import "../../test-suite/valid/line-separators.hash" as valid_line_separators_hash : List(U8)
+import "../../test-suite/valid/negative-zero-hex.haus" as valid_negative_zero_hex : List(U8)
+import "../../test-suite/valid/negative-zero-hex.canonical" as valid_negative_zero_hex_canonical : List(U8)
+import "../../test-suite/valid/negative-zero-hex.hash" as valid_negative_zero_hex_hash : List(U8)
 import "../../test-suite/valid/numbers.haus" as valid_numbers : List(U8)
 import "../../test-suite/valid/numbers.canonical" as valid_numbers_canonical : List(U8)
 import "../../test-suite/valid/numbers.hash" as valid_numbers_hash : List(U8)
@@ -502,6 +508,30 @@ expect ConformanceTest.hash(valid_limits_boundary) == valid_limits_boundary_hash
 
 # valid/limits-boundary.haus, streamed
 expect ConformanceTest.streams(valid_limits_boundary)
+
+# valid/line-separators.haus
+expect ConformanceTest.run(valid_line_separators) == "[[\"a b\",\"c d\",\"  \",{\"rec\":{\"k \":\"v \"}},\"block \\ntext \"]]"
+
+# valid/line-separators.canonical
+expect ConformanceTest.canonical(valid_line_separators) == valid_line_separators_canonical
+
+# valid/line-separators.hash
+expect ConformanceTest.hash(valid_line_separators) == valid_line_separators_hash
+
+# valid/line-separators.haus, streamed
+expect ConformanceTest.streams(valid_line_separators)
+
+# valid/negative-zero-hex.haus
+expect ConformanceTest.run(valid_negative_zero_hex) == "[[{\"num\":\"-0\"},{\"num\":\"-0\"},{\"num\":\"-0\"},{\"num\":\"-0\"},{\"num\":\"-0\"},{\"num\":\"0\"},{\"num\":\"0\"},{\"num\":\"-0\"},{\"num\":\"0\"}]]"
+
+# valid/negative-zero-hex.canonical
+expect ConformanceTest.canonical(valid_negative_zero_hex) == valid_negative_zero_hex_canonical
+
+# valid/negative-zero-hex.hash
+expect ConformanceTest.hash(valid_negative_zero_hex) == valid_negative_zero_hex_hash
+
+# valid/negative-zero-hex.haus, streamed
+expect ConformanceTest.streams(valid_negative_zero_hex)
 
 # valid/numbers.haus
 expect ConformanceTest.run(valid_numbers) == "[[{\"num\":\"0\"},{\"num\":\"-0\"},{\"num\":\"42\"},{\"num\":\"-42\"},{\"num\":\"1000000\"},{\"num\":\"3.14\"},{\"num\":\"-0.5\"},{\"num\":\"19.90\"},{\"num\":\"1.0\"},{\"num\":\"1e10\"},{\"num\":\"1e10\"},{\"num\":\"2.5e-3\"},{\"num\":\"6.02e23\"},{\"num\":\"10.01e10\"},{\"num\":\"255\"},{\"num\":\"65535\"},{\"num\":\"-16\"},{\"num\":\"10\"},{\"num\":\"240\"},{\"num\":\"123456789012345678901234567890\"},{\"num\":\"0.1000000000000000000000000001\"}]]"

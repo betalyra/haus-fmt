@@ -1,0 +1,2 @@
+// Hex and binary zero keep their sign, as decimal zero does (spec §2).
+[-0x0, -0b0, -0x00, -0x0_0, -0b0_0, 0x0, 0b0, -0, 0]

@@ -283,7 +283,8 @@ fn quote(s: &str, limits: &Limits, out: &mut String) -> Result<(), EncodeError> 
 
 /// `s` as a JSON string, appended to `out`. Besides what JSON requires, DEL,
 /// C1 and the bidi controls are escaped, so that the JSON can't display
-/// differently from what it holds (spec §16).
+/// differently from what it holds, and U+2028 and U+2029, so that JSON Lines
+/// can be split at any line break software knows (spec §16).
 pub(crate) fn escape(s: &str, out: &mut String) {
     out.push('"');
     for c in s.chars() {
@@ -295,7 +296,7 @@ pub(crate) fn escape(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if crate::parser::is_control(c) || crate::parser::is_bidi(c) => {
+            c if crate::parser::is_control(c) || crate::parser::is_bidi(c) || matches!(c, '\u{2028}' | '\u{2029}') => {
                 out.push_str(&format!("\\u{:04x}", u32::from(c)));
             }
             c => out.push(c),
