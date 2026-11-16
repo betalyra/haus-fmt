@@ -42,6 +42,10 @@ export const jsonTypeOf = (ast: AST): JsonType => {
   return built
 }
 
+/** Whether a bigint schema has both bounds (`isBetweenBigInt`, as Int64 and UInt64 in schema files). */
+const hasRange = (ast: AST): boolean =>
+  (ast.checks ?? []).some((c) => (c.annotations?.["representation"] as { readonly id?: unknown } | undefined)?.id === "effect/schema/isBetweenBigInt")
+
 const build = (ast: AST): JsonType => {
   switch (ast._tag) {
     case "String": {
@@ -57,7 +61,7 @@ const build = (ast: AST): JsonType => {
     case "Number":
       return ast.annotations?.[NUMBER] === "Int" ? { kind: "integer", quoted: false } : { kind: "float" }
     case "BigInt":
-      return { kind: "integer", quoted: true }
+      return { kind: "integer", quoted: true, bounded: hasRange(ast) }
     case "Boolean":
       return { kind: "bool" }
     case "Literal":

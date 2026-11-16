@@ -601,7 +601,8 @@ class _Int(_Node):
                     expected=expected,
                     found=found,
                 )
-            if (issue := number_limit_issue(j, at.ctx.limits)) is not None:
+            # A bounded type checks its range first (`_whole`): a number too long for the limit is out of range.
+            if self.low is None and (issue := number_limit_issue(j, at.ctx.limits)) is not None:
                 at.fail(issue[1], code=issue[0])
             text = j
         elif isinstance(j, JsonNumber):

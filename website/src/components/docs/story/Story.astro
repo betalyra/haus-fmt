@@ -20,7 +20,7 @@ import type { KeyedTokensInfo } from "@shikijs/magic-move/types";
 import { hausLang, hausSchemaLang, hausTheme } from "@/lib/code";
 import { hausHover, hoverSpans } from "@/lib/hover";
 import { DIFF_INSERT, diffCleanupSemantic, diffMain } from "diff-match-patch-es";
-import { inferSchema, parseAll } from "../../../../../typescript/packages/haus/src/index.ts";
+import { format, inferSchema, parseAll, parseDocument } from "../../../../../typescript/packages/haus/src/index.ts";
 
 interface Props {
   /** Show, under the code, the type haus infers from it at each step. */
@@ -44,15 +44,32 @@ const steps = [...html.matchAll(stepTag)].map(([, attrs]) => {
 });
 
 /** The type haus infers from a data step, without the "review this" header. */
-const inferred = (s: { code: string; lang: string }) => {
+const inferred = (s: { code: string; lang: string }, width?: number) => {
   if (s.lang !== "haus") return "";
   try {
-    return inferSchema(parseAll(s.code)).replace(/^(\/\/.*\n)+\n/, "").trim();
+    return inferSchema(parseAll(s.code), { width }).replace(/^(\/\/.*\n)+\n/, "").trim();
   } catch {
     return "";
   }
 };
-const typeTexts = types ? steps.map(inferred) : [];
+const typeTexts = types ? steps.map((s) => inferred(s)) : [];
+
+/**
+ * Phones: the columns a code card holds at about 360px. Wider haus is laid out
+ * again by the formatter for them, so it reads without scrolling sideways.
+ */
+const PHONE = 36;
+const tooWide = (text: string) => text.split("\n").some((line) => line.length > PHONE);
+/** `code` laid out for phones, or null when it already fits or can't be redone (comments would be lost). */
+const forPhone = (s: { code: string; lang: string }) => {
+  if (s.lang !== "haus" || !tooWide(s.code)) return null;
+  try {
+    const doc = parseDocument(s.code);
+    return doc.comments.length ? null : format(doc.values, { width: PHONE }).trim();
+  } catch {
+    return null;
+  }
+};
 
 const highlighter = await createHighlighter({ themes: [hausTheme as any], langs: [hausLang as any, hausSchemaLang as any, "json", "ts", "rust", "sh"] });
 
@@ -122,9 +139,20 @@ let n = 0;
 const body = html.replace(/(<section class="story-step"(?:[^>"]|"[^"]*")*>)([\s\S]*?)(<\/section>)/g, (_, open, inner, close) => {
   const i = n++;
   const s = steps[i]!;
-  const still = highlighter.codeToHtml(s.code, { lang: s.lang, theme: "haus-light", transformers: transformers(s.lang) });
-  const type = typeTexts[i] ? highlighter.codeToHtml(typeTexts[i]!, { lang: "haus-schema", theme: "haus-light" }) : "";
-  return `${open}${inner}<div class="story-still not-content">${figure(s.label, still)}${type ? figure("haus infers", type, "story-still__type") : ""}</div>${close}`;
+  const still = (code: string, type: string, extra = "") => {
+    const c = highlighter.codeToHtml(code, { lang: s.lang, theme: "haus-light", transformers: transformers(s.lang) });
+    const t = type ? highlighter.codeToHtml(type, { lang: "haus-schema", theme: "haus-light" }) : "";
+    return `<div class="story-still not-content ${extra}">${figure(s.label, c)}${t ? figure("haus infers", t, "story-still__type") : ""}</div>`;
+  };
+  const type = typeTexts[i] ?? "";
+  // Phones get their own layout when the authored one is too wide for them.
+  const phoneCode = forPhone(s);
+  const phoneType = type && tooWide(type) ? inferred(s, PHONE) : type;
+  const phone = phoneCode !== null || phoneType !== type;
+  const stills = phone
+    ? still(s.code, type, "story-still--roomy") + still(phoneCode ?? s.code, phoneType, "story-still--phone")
+    : still(s.code, type);
+  return `${open}${inner}${stills}${close}`;
 });
 
 const data = { code, types: typed, labels: steps.map((s) => s.label) };
@@ -232,6 +260,18 @@ const data = { code, types: typed, labels: steps.map((s) => s.label) };
   }
   .story-still__type {
     background: #fbfaf8;
+  }
+  /* Phones get the step's code laid out narrow; wider screens keep it as written. */
+  .story-still--phone {
+    display: none;
+  }
+  @media (max-width: 639px) {
+    .story-still--roomy {
+      display: none;
+    }
+    .story-still--phone {
+      display: grid;
+    }
   }
   .story-step {
     padding-block: 1.25rem;

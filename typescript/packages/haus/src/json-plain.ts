@@ -30,8 +30,12 @@ export type JsonType =
   | { readonly kind: "string" }
   | { readonly kind: "bytes" }
   | { readonly kind: "bool" }
-  /** Int8 … UInt32 as JSON numbers; `quoted` (Int, Int64, UInt64) as strings. */
-  | { readonly kind: "integer"; readonly quoted: boolean }
+  /**
+   * Int8 … UInt32 as JSON numbers; `quoted` (Int, Int64, UInt64) as strings.
+   * `bounded` (Int64, UInt64): a quoted integer too long for the number limit
+   * is out of range, as the type's range comes first (§16.3).
+   */
+  | { readonly kind: "integer"; readonly quoted: boolean; readonly bounded?: boolean }
   | { readonly kind: "float" }
   | { readonly kind: "decimal" }
   /** A std/time type: `Date("2026-11-13")` ↔ `"2026-11-13"`. */
@@ -338,12 +342,16 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
   }
   const mismatch = (expected: string, j: Json, at: Place): never =>
     fail(`expected ${expected}, found ${describeJson(j)}`, at, "type-mismatch", { expected, found: describeJson(j) })
-  /** A number in a string (Int, Decimal): a JSON number literal, within the limits. */
-  const numberText = (s: string, at: Place): Value => {
+  /**
+   * A number in a string (Int, Decimal): a JSON number literal, within the
+   * limits. A `bounded` integer beyond them is out of its type's range.
+   */
+  const numberText = (s: string, at: Place, bounded = false): Value => {
     const normalized = isJsonNumber(s) ? normalizeJsonNumber(s) : undefined
     if (normalized === undefined) return fail(`expected a number literal in the string, found ${describeJson(s)}`, at, "invalid-number")
     const issue = numberLimitIssue(normalized, l)
-    return issue === undefined ? num(normalized) : fail(issue.reason, at, issue.code)
+    if (issue === undefined) return num(normalized)
+    return bounded ? fail(`a whole number of ${s.length} characters is out of range`, at, "out-of-range") : fail(issue.reason, at, issue.code)
   }
   const object = (j: Json, expected: string, at: Place): JsonObject => (isJsonObject(j) ? j : mismatch(expected, j, at))
   /** Members of a tagged object other than `_tag` and `allowed`: an error. */
@@ -376,7 +384,7 @@ export const fromPlainJson = (type: JsonType, json: Json, limits: Partial<Limits
       case "integer":
         if (!t.quoted) return j instanceof JsonNumber ? numberOfJson(j, l, at) : mismatch("a number", j, at)
         if (typeof j !== "string") return mismatch("a whole number in a string", j, at)
-        return SMALL_INTEGER.test(j) ? numberText(j, at) : fail(`expected a whole number in a string, found ${describeJson(j)}`, at, isJsonNumber(j) ? "not-an-integer" : "invalid-number")
+        return SMALL_INTEGER.test(j) ? numberText(j, at, t.bounded) : fail(`expected a whole number in a string, found ${describeJson(j)}`, at, isJsonNumber(j) ? "not-an-integer" : "invalid-number")
       case "float":
         if (j instanceof JsonNumber) return numberOfJson(j, l, at)
         return (typeof j === "string" ? FLOAT_TAGS.get(j) : undefined) !== undefined ? variant(FLOAT_TAGS.get(j as string)!)
