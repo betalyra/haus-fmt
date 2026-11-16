@@ -42,8 +42,8 @@ SchemaTest := [].{
 						want = field(fields, "output") ?? input
 						match codec(ty, input) {
 							# The writer takes it too (it checks what it writes).
-							Decoded(Ok(got)) if Encode.canonical(got) == Encode.canonical(want) => Encode.to_str(got).map_ok(|_| {}).map_err(|e| "can't be written: ${Encode.message(e)}")
-							Decoded(Ok(got)) => Err("wrote ${Encode.canonical(got)}, expected ${Encode.canonical(want)}")
+							Decoded(Ok(got)) if Encode.equals(got, want) => Encode.to_str(got).map_ok(|_| {}).map_err(|e| "can't be written: ${Encode.message(e)}")
+							Decoded(Ok(got)) => Err("wrote ${canonical_text(got)}, expected ${canonical_text(want)}")
 							Decoded(Err(e)) => Err("didn't decode: ${Decode.message(e)}")
 							NoType => Err("the schema has no type ${ty}")
 						}
@@ -54,7 +54,7 @@ SchemaTest := [].{
 					(Ok(Text(ty)), Ok(input), Ok(Text(code))) => match codec(ty, input) {
 						Decoded(Err(e)) if e.code == code => Ok({})
 						Decoded(Err(e)) => Err("failed with ${e.code}, expected ${code}: ${Decode.message(e)}")
-						Decoded(Ok(got)) => Err("decoded, and wrote ${Encode.canonical(got)}")
+						Decoded(Ok(got)) => Err("decoded, and wrote ${canonical_text(got)}")
 						NoType => Err("the schema has no type ${ty}")
 					}
 					_ => Err("a case without a type, an input or a code")
@@ -157,6 +157,13 @@ SchemaTest := [].{
 		"Holder" => Decoded(Variants.decode_holder(v).map_ok(Variants.encode_holder))
 		_ => NoType
 	}
+}
+
+## The canonical form of a value, for a message.
+canonical_text : Value -> Str
+canonical_text = |v| match Encode.canonical(v) {
+	Ok(form) => form
+	Err(e) => "a value with no canonical form (${Encode.message(e)})"
 }
 
 field : List((Str, Value)), Str -> Try(Value, [Missing])

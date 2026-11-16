@@ -134,7 +134,7 @@ schema_based_case = |cases, i| {
 			code = text(fields, "code")?
 			match JsonValue.parse(json) {
 				Ok(j) => match read(ty, j) {
-					Ok(v) => Err("read as ${Encode.canonical(v)}")
+					Ok(v) => Err("read as ${canonical_text(v)}")
 					Err(e) => same_code(code, e.code, Decode.message(e))
 				}
 				Err(e) => same_code(code, e.code, e.reason)
@@ -164,17 +164,24 @@ import_case = |cases, i| {
 	match (tag, JsonValue.import_json(json)) {
 		("Read", Ok(v)) => {
 			want = value(fields, "output")?
-			if (Encode.equals(v, want)) Ok({}) else Err("read as ${Encode.canonical(v)}")
+			if (Encode.equals(v, want)) Ok({}) else Err("read as ${canonical_text(v)}")
 		}
 		("Read", Err(_)) => Err("can't read it")
 		(_, result) => rejected(result, text(fields, "code")?)
 	}
 }
 
+## The canonical form of a value, for a message.
+canonical_text : Value -> Str
+canonical_text = |v| match Encode.canonical(v) {
+	Ok(form) => form
+	Err(e) => "a value with no canonical form (${Encode.message(e)})"
+}
+
 ## Reading failed with the error code `code` (spec §17).
 rejected : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]), Str -> Try({}, Str)
 rejected = |result, code| match result {
-	Ok(v) => Err("read as ${Encode.canonical(v)}")
+	Ok(v) => Err("read as ${canonical_text(v)}")
 	Err(Syntax(e)) => same_code(code, e.code, e.reason)
 	Err(Decode(e)) => same_code(code, e.code, Decode.message(e))
 }
@@ -194,7 +201,7 @@ valid_case = |haus, jsonl| {
 	}
 	match JsonValue.from_haus_json_lines(want) {
 		Ok(back) if back.len() == values.len() and back.map2(values, Encode.equals).all(|same| same) => Ok({})
-		Ok(back) => Err("read as ${Str.join_with(back.map(Encode.canonical), ", ")}")
+		Ok(back) => Err("read as ${Str.join_with(back.map(canonical_text), ", ")}")
 		Err(_) => Err("can't read it")
 	}
 }
@@ -203,7 +210,7 @@ valid_case = |haus, jsonl| {
 reads_back : Str, Value -> Try({}, Str)
 reads_back = |json, want| match JsonValue.from_haus_json(json) {
 	Ok(v) if Encode.equals(v, want) => Ok({})
-	Ok(v) => Err("read as ${Encode.canonical(v)}")
+	Ok(v) => Err("read as ${canonical_text(v)}")
 	Err(_) => Err("can't read it")
 }
 
@@ -294,7 +301,7 @@ read_as : Str, Str, Value -> Try({}, Str)
 read_as = |ty, json, want| {
 	j = JsonValue.parse(json).map_err(|e| "can't parse the JSON: ${e.reason}")?
 	got = read(ty, j).map_err(Decode.message)?
-	if (Encode.equals(got, want)) Ok({}) else Err("read as ${Encode.canonical(got)}")
+	if (Encode.equals(got, want)) Ok({}) else Err("read as ${canonical_text(got)}")
 }
 
 ## Whether two JSON texts are the same data: member order and whitespace

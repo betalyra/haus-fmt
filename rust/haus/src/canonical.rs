@@ -5,28 +5,35 @@
 //!
 //! ```
 //! let v = haus::from_str::<haus::Value>(r#"Order { total: 19.90, id: 0xFF, "x-y": 1e+5 }"#).unwrap();
-//! assert_eq!(haus::canonical(&v), r#"Order{id:255,total:19.90,"x-y":1e5}"#);
+//! assert_eq!(haus::canonical(&v).unwrap(), r#"Order{id:255,total:19.90,"x-y":1e5}"#);
 //! ```
 
-use crate::Value;
 use crate::ser::{key, number_text, quote};
+use crate::{EncodeError, ErrorCode, Segment, Value};
 use std::fmt::Write;
 
 /// An integer whose decimal form is longer than this is written in hex in
-/// the canonical form (spec §12). A constant of the canonical form, not the
-/// number limit of §7: it stays 1000 if the default limits grow.
+/// the canonical form, and one whose hex form is longer too has none (spec
+/// §12). A constant of the canonical form, not the number limit of §7: it
+/// stays 1000 if the default limits grow.
 const DECIMAL_MAX: usize = 1000;
 
-/// The canonical form of a value (spec §12).
-pub fn canonical(value: &Value) -> String {
+/// The canonical form of a value (spec §12). An integer longer than 1000
+/// characters in decimal and in hex, which only a value built in code or
+/// parsed with a larger number limit can hold, has none: an [`EncodeError`]
+/// (`number-too-long`) at its path.
+pub fn canonical(value: &Value) -> Result<String, EncodeError> {
     let mut out = String::new();
-    write(value, &mut out);
-    out
+    match write(value, &mut out) {
+        None => Ok(out),
+        Some(n) => Err(no_canonical_form(value, n)),
+    }
 }
 
-/// Whether two values are equal (spec §2): the same canonical form.
+/// Whether two values are equal (spec §2): the same canonical form. A
+/// number without one compares by its hex form, which is as unique.
 pub fn equals(a: &Value, b: &Value) -> bool {
-    canonical(a) == canonical(b)
+    text(a) == text(b)
 }
 
 /// Orders values by the bytes of their canonical forms (spec §12): a total
@@ -36,35 +43,38 @@ pub fn equals(a: &Value, b: &Value) -> bool {
 /// ```
 /// let mut vs: Vec<haus::Value> = ["9", "10", "\"a\"", "[]"].iter().map(|s| haus::from_str(s).unwrap()).collect();
 /// vs.sort_by(haus::compare);
-/// assert_eq!(vs.iter().map(haus::canonical).collect::<Vec<_>>(), ["\"a\"", "10", "9", "[]"]);
+/// assert_eq!(vs.iter().map(|v| haus::canonical(v).unwrap()).collect::<Vec<_>>(), ["\"a\"", "10", "9", "[]"]);
 /// ```
 pub fn compare(a: &Value, b: &Value) -> std::cmp::Ordering {
-    canonical(a).cmp(&canonical(b))
+    text(a).cmp(&text(b))
 }
 
 /// The SHA-256 digest of the canonical form, as 64 lowercase hex digits
-/// (spec §12). Needs the `hash` feature.
+/// (spec §12). An error (`number-too-long`) where [`canonical`] is one.
+/// Needs the `hash` feature.
 #[cfg(feature = "hash")]
-pub fn hash(value: &Value) -> String {
+pub fn hash(value: &Value) -> Result<String, EncodeError> {
     use sha2::{Digest, Sha256};
-    hex(&Sha256::digest(canonical(value).as_bytes()))
+    Ok(hex(&Sha256::digest(canonical(value)?.as_bytes())))
 }
 
 /// The hash of a list of values, such as a whole file or stream (spec §12):
 /// the SHA-256 digest of their canonical forms joined by `,`. A list of one
-/// value hashes like the value. Needs the `hash` feature.
+/// value hashes like the value. An error (`number-too-long`) at the first
+/// value without a canonical form, with the path inside that value. Needs
+/// the `hash` feature.
 ///
 /// ```
 /// let vs = haus::parse("1, \"a\",").unwrap();
 /// assert_eq!(haus::hash_all(&vs[..1]), haus::hash(&vs[0]));
 /// ```
 #[cfg(feature = "hash")]
-pub fn hash_all<'a>(values: impl IntoIterator<Item = &'a Value>) -> String {
-    let mut hasher = Hasher::new();
-    for v in values {
-        hasher.add(v);
-    }
-    hasher.digest()
+pub fn hash_all<'a>(values: impl IntoIterator<Item = &'a Value>) -> Result<String, EncodeError> {
+    let hasher = values.into_iter().try_fold(Hasher::new(), |mut hasher, v| {
+        hasher.add(v)?;
+        Ok::<_, EncodeError>(hasher)
+    })?;
+    Ok(hasher.digest())
 }
 
 /// Hashes a list of values as it grows, e.g. a stream while it is read (spec
@@ -83,15 +93,17 @@ impl Hasher {
         Hasher::default()
     }
 
-    /// Add the next value.
-    pub fn add(&mut self, value: &Value) -> &mut Hasher {
+    /// Add the next value, or the error (`number-too-long`) of [`canonical`]
+    /// if it has no canonical form; the hasher is then as it was.
+    pub fn add(&mut self, value: &Value) -> Result<&mut Hasher, EncodeError> {
         use sha2::Digest;
+        let text = canonical(value)?;
         if self.count > 0 {
             self.sha.update(b",");
         }
         self.count += 1;
-        self.sha.update(canonical(value).as_bytes());
-        self
+        self.sha.update(text.as_bytes());
+        Ok(self)
     }
 
     /// [`hash_all`] of the values added so far, as 64 lowercase hex digits.
@@ -109,10 +121,62 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// `v`'s canonical form, appended to `out`. A stack rather than recursion,
-/// so that a value built in code, which may nest deeper than any limit,
-/// takes no call stack per level.
-fn write(v: &Value, out: &mut String) {
+/// The canonical form, where a number without one is written in hex all
+/// the same: the text equality and order compare.
+fn text(value: &Value) -> String {
+    let mut out = String::new();
+    write(value, &mut out);
+    out
+}
+
+/// The `number-too-long` error for the number `n` inside `root`.
+fn no_canonical_form(root: &Value, n: &Value) -> EncodeError {
+    let reason = format!("an integer longer than {DECIMAL_MAX} characters in hex too has no canonical form");
+    let mut e = EncodeError::new(ErrorCode::NumberTooLong, reason);
+    e.path = path_to(root, n);
+    e
+}
+
+/// Where `target` is inside `root`, outermost first: searched only for an
+/// error, so that the writer needn't track paths. The segments are the
+/// writer's (spec §17): a tag's payload is `(Tag)`, then its index or field.
+fn path_to(root: &Value, target: &Value) -> Vec<Segment> {
+    // Every value met, with its parent's index and the steps from there.
+    let mut met: Vec<(&Value, usize, Vec<Segment>)> = vec![(root, 0, Vec::new())];
+    let mut i = 0;
+    while let Some(&(v, ..)) = met.get(i) {
+        if std::ptr::eq(v, target) {
+            let mut steps = Vec::new();
+            while i > 0 {
+                let (_, parent, step) = &met[i];
+                steps.extend(step.iter().rev().cloned());
+                i = *parent;
+            }
+            steps.reverse();
+            return steps;
+        }
+        let tagged = |tag: &str, s: Segment| vec![Segment::Tag(tag.to_owned()), s];
+        match v {
+            Value::Array(items) => met.extend(items.iter().enumerate().map(|(j, x)| (x, i, vec![Segment::Index(j)]))),
+            Value::Record(fields) => met.extend(fields.iter().map(|(k, x)| (x, i, vec![Segment::Field(k.clone())]))),
+            Value::Variant { tag, args } => match args.as_slice() {
+                [Value::Record(fields)] => {
+                    met.extend(fields.iter().map(|(k, x)| (x, i, tagged(tag, Segment::Field(k.clone())))))
+                }
+                _ => met.extend(args.iter().enumerate().map(|(j, x)| (x, i, tagged(tag, Segment::Index(j))))),
+            },
+            _ => {}
+        }
+        i += 1;
+    }
+    Vec::new()
+}
+
+/// `v`'s canonical form, appended to `out`, and the first number that has
+/// none (written in hex all the same). A stack rather than recursion, so
+/// that a value built in code, which may nest deeper than any limit, takes
+/// no call stack per level.
+fn write<'a>(v: &'a Value, out: &mut String) -> Option<&'a Value> {
     /// What is left to write, last first.
     enum Next<'a> {
         Value(&'a Value),
@@ -146,6 +210,7 @@ fn write(v: &Value, out: &mut String) {
         }
     }
     let mut todo = vec![Next::Value(v)];
+    let mut too_long = None;
     while let Some(next) = todo.pop() {
         match next {
             Next::Text(c) => out.push(c),
@@ -153,7 +218,13 @@ fn write(v: &Value, out: &mut String) {
                 key(k, out);
                 out.push(':');
             }
-            Next::Value(Value::Number(n)) => out.push_str(&number_text(n, DECIMAL_MAX)),
+            Next::Value(number @ Value::Number(n)) => {
+                let text = number_text(n, DECIMAL_MAX);
+                if text.len() > DECIMAL_MAX {
+                    too_long = too_long.or(Some(number));
+                }
+                out.push_str(&text);
+            }
             Next::Value(Value::String(s)) => quote(s, out),
             Next::Value(Value::Bytes(b)) => {
                 out.push_str("x\"");
@@ -174,4 +245,5 @@ fn write(v: &Value, out: &mut String) {
             }
         }
     }
+    too_long
 }

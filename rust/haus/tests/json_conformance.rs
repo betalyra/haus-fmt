@@ -3,9 +3,14 @@
 //! case. Schema-based JSON, which needs generated types, is in
 //! haus-build-tests/tests/json_conformance.rs.
 
-use haus::{Json, Value, canonical};
+use haus::{Json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// `v`'s canonical form, for messages and expectations; the error if it has none.
+fn canonical(v: &Value) -> String {
+    haus::canonical(v).unwrap_or_else(|e| e.to_string())
+}
 
 fn suite(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite").join(path)

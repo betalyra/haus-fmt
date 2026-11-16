@@ -179,12 +179,21 @@ from the package's other modules.)
 canonical form as 64 lowercase hex digits, and `Encode.hash_all(values)` the
 hash of a list, such as a file or a stream: the canonical forms joined by `,`
 (`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`.
-`Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read:
+
+An integer longer than 1000 characters is written in hex; one longer than
+1000 characters even in hex has no canonical form. Only a parser with a larger
+number limit, or code, makes one, so `canonical`, `hash` and `hash_all` return
+`Try(Str, Encode.Error)` and fail with `number-too-long` at its path
+(`.items[2]`). `Encode.equals` and `Encode.compare` never fail: they compare
+such an integer by its hex form.
+
+`Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read;
+`add` fails as `canonical` does:
 
 ```roc
 var $hash = Encode.HashAll.empty
 for value in values {
-    $hash = $hash.add(value)
+    $hash = $hash.add(value)?
 }
 $hash.digest() # == Encode.hash_all(values)
 ```

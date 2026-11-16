@@ -564,7 +564,7 @@ Tools that show data, such as editors and `haus check`, SHOULD mask values of a 
 - the spelling of a float: `0.10` decodes as `Float64` to the float 0.1, which is written `0.1`;
 - `-0` decoded as an integer, which is written `0`.
 
-Integers are written as decimal integers (in hex when longer than the number limit, as in §12), and decimals as their literal, scale included (§3).
+Integers are written as decimal integers (in hex when the decimal form is longer than the number limit of §7 that the writer writes for; only the canonical form, §12, uses the fixed 1000), and decimals as their literal, scale included (§3).
 
 **Floats** are written as `NaN`, `Infinity` and `NegInfinity`, and otherwise in one exact spelling, so that every binding writes the same float as the same text and gives it the same canonical form and hash (§12):
 

@@ -9,7 +9,7 @@
 //! // Decoding gives the value a writer writes back (spec §15): `0x10` is `16`,
 //! // and the open record drops the field it doesn't list.
 //! let decoded = schema.decode("Root", &value).unwrap();
-//! assert_eq!(haus::canonical(&decoded), r#"{id:16,tags:["a"]}"#);
+//! assert_eq!(haus::canonical(&decoded).unwrap(), r#"{id:16,tags:["a"]}"#);
 //!
 //! // Checking reports every problem, with its place in the text, and hints.
 //! let issues = schema.check_text("Root", "{\n  id: \"7\",\n  tgs: [],\n}");

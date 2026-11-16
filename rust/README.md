@@ -174,6 +174,30 @@ formatter uses no call stack per level of nesting: at
 `haus::MAX_SUPPORTED_DEPTH` the parser that checks the text is the deepest
 part, within a 2 MiB thread.
 
+## Canonical form and hashing
+
+The canonical form (spec §12) is one exact text per value, the same in every
+binding; hashes are SHA-256 of it (the `hash` feature):
+
+```rust
+let v = haus::parse(r#"Order { total: 19.90, id: 0xFF }"#)?.remove(0);
+haus::canonical(&v)?;                  // Result<String, EncodeError>: Order{id:255,total:19.90}
+haus::hash(&v)?;                       // Result<String, EncodeError>: 64 lowercase hex digits
+haus::hash_all(&values)?;              // a whole file or stream: the forms joined by `,`
+let mut hasher = haus::Hasher::new();  // the same, as values arrive
+hasher.add(&v)?;                       // Result<&mut Hasher, EncodeError>
+hasher.digest();
+haus::equals(&a, &b);                  // bool
+haus::compare(&a, &b);                 // Ordering, by the canonical bytes
+```
+
+An integer longer than 1000 characters is written in hex; one whose hex
+form is longer than 1000 characters too has no canonical form. Only a value
+built in code or parsed with a larger `max_number_length` can hold one, and
+`canonical`, `hash`, `hash_all` and `Hasher::add` give an `EncodeError`
+(`number-too-long`) at its path (`$.a[0]`); the hasher is then as it was.
+`equals` and `compare` need no canonical form and never fail.
+
 ## Limits
 
 Reading enforces the limits of spec §7, `haus::Limits`: by default a depth of

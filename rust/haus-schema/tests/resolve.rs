@@ -1,9 +1,14 @@
 //! Schema files with their imports (spec §13.3, §14), and what decoding
 //! gives (spec §15) beyond the conformance suite.
 
-use haus::{Value, canonical};
+use haus::Value;
 use haus_schema::{FileResolver, Options, Schema};
 use std::path::{Path, PathBuf};
+
+/// `v`'s canonical form, for messages and expectations; the error if it has none.
+fn canonical(v: &Value) -> String {
+    haus::canonical(v).unwrap_or_else(|e| e.to_string())
+}
 
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path)

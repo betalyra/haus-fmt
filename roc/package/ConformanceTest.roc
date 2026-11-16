@@ -198,9 +198,9 @@ ConformanceTest := [].{
 
 	## The canonical form of each value, one per line.
 	canonical : List(U8) -> List(U8)
-	canonical = |bytes| match Value.parse_bytes(bytes) {
-		Ok(values) => Str.join_with(values.map(|v| "${Encode.canonical(v)}\n"), "").to_utf8()
-		Err(_) => []
+	canonical = |bytes| match Value.parse_bytes(bytes).map_ok(|values| values.map_try(Encode.canonical)) {
+		Ok(Ok(forms)) => Str.join_with(forms.map(|form| "${form}\n"), "").to_utf8()
+		_ => []
 	}
 
 	## Rejected, with the error code `code` (spec §17).
@@ -218,11 +218,11 @@ ConformanceTest := [].{
 	## The running hash of the values as they are streamed gives the same.
 	hash : List(U8) -> List(U8)
 	hash = |bytes| match (Value.parse_bytes(bytes), streamed(bytes, 3)) {
-		(Ok(values), Ok(again)) => {
-			whole = Encode.hash_all(values)
-			running = again.fold(Encode.HashAll.empty, Encode.HashAll.add).digest()
-			if (running == whole) "${whole}\n".to_utf8() else []
-		}
+		(Ok(values), Ok(again)) =>
+			match (Encode.hash_all(values), again.fold_try(Encode.HashAll.empty, Encode.HashAll.add)) {
+				(Ok(whole), Ok(running)) if running.digest() == whole => "${whole}\n".to_utf8()
+				_ => []
+			}
 		_ => []
 	}
 

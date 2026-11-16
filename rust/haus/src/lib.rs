@@ -133,7 +133,7 @@ pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::import_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
-/// assert_eq!(haus::canonical(&v), "{note:None,paid:True,total:19.90}");
+/// assert_eq!(haus::canonical(&v).unwrap(), "{note:None,paid:True,total:19.90}");
 /// ```
 pub fn import_json(text: &str) -> Result<Value, Error> {
     json::import_json_with(text, &Limits::default())
@@ -157,7 +157,7 @@ pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::from_haus_json(r#"{"_haus": 1, "_value": {"_num": "19.90"}}"#).unwrap();
-/// assert_eq!(haus::canonical(&v), "19.90");
+/// assert_eq!(haus::canonical(&v).unwrap(), "19.90");
 /// assert!(haus::from_haus_json(r#"{"_num": "19.90"}"#).is_err());
 /// ```
 pub fn from_haus_json(text: &str) -> Result<Value, Error> {
