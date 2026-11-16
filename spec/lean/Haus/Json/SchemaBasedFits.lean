@@ -9,23 +9,19 @@ within the haus limits (`Value.fits`) is within the JSON limits (`Fits`,
 nested at most `jsonDepth L = 4 · maxDepth + 1`), so the JSON text reader
 reads it back.
 
-It needs more of the limits than the self-describing form (`Limits.SchemaBasedOk`,
-true of the defaults), each for a reason:
+It needs of the limits what the self-describing form does
+(`Limits.SchemaBasedOk`, true of the defaults):
 
 - **member names**: schema-based JSON's own (`_tag`, `_args`, `value`,
   `values`, and the self-describing form's inside an `Any`) have at most 6
   characters;
 - **numbers in strings**: an `Int`, `Int64`, `UInt64` or `Decimal` is a
-  string holding its literal, and a haus number within the limits has at
-  most `maxNumberLength · 6/5 + 4` characters (an integer's hex form may fit
-  when its decimal form doesn't);
+  string holding its literal, of at most `maxNumberLength` characters;
 - **number tokens**: an integer of at most 32 bits and a float are JSON
-  numbers, which the JSON limits count as written, with no hex form to fall
-  back on. A float's spelling can be an integer of up to 21 digits
-  (`1e20` is `100000000000000000000`), whose hex form is shorter: with
-  `maxNumberLength` 19 to 21 the haus value fits and its schema-based JSON doesn't.
-  So `maxNumberLength` must be at least 22 (an integer of at most 32 bits
-  has at most 11 characters).
+  numbers, which the JSON limits count as written, as the haus limits count
+  their literal (`numberFits` and `tokenFits` agree): an integer's literal is
+  decimal, and every integer a haus literal can hold has a decimal form
+  within the number limit (§7).
 
 `Bytes` are base64, `4 · ⌈n / 3⌉` characters, at most the `2 · n` of their
 hex (as `Value.fits` counts them) or 4. Nesting: schema-based JSON uses at most two
@@ -35,13 +31,12 @@ self-describing form, four.
 
 namespace Haus
 
-/-- What `toJson_fits` needs of the limits, besides `SelfDescribingOk`. -/
-def Limits.SchemaBasedOk (L : Limits) : Prop :=
-  6 ≤ L.maxStringLength ∧ L.maxNumberLength * 6 / 5 + 4 ≤ L.maxStringLength ∧ 22 ≤ L.maxNumberLength
+/-- What `toJson_fits` needs of the limits: what the self-describing form needs. -/
+def Limits.SchemaBasedOk (L : Limits) : Prop := L.SelfDescribingOk
 
-theorem Limits.schemaBasedOk_default : Limits.SchemaBasedOk {} := by unfold Limits.SchemaBasedOk; decide
+theorem Limits.schemaBasedOk_default : Limits.SchemaBasedOk {} := Limits.selfDescribingOk_default
 
-theorem Limits.SchemaBasedOk.selfDescribing {L : Limits} (h : L.SchemaBasedOk) : L.SelfDescribingOk := ⟨h.1, h.2.1, by have := h.2.2; omega⟩
+theorem Limits.SchemaBasedOk.selfDescribing {L : Limits} (h : L.SchemaBasedOk) : L.SelfDescribingOk := h
 
 theorem Bytes.base64_length : ∀ bs : List UInt8, (Bytes.base64 bs).length = 4 * ((bs.length + 2) / 3)
   | [] => rfl
@@ -51,134 +46,6 @@ theorem Bytes.base64_length : ∀ bs : List UInt8, (Bytes.base64 bs).length = 4 
 
 namespace Schema
 open JSON
-
-/-! ## Number tokens -/
-
-theorem hexForm_digits {lit h : Text} (hh : hexForm lit = some h) : ∀ c ∈ dropMinus lit, isDigit c = true := by
-  by_cases hc : ∃ r, lit = '-' :: r
-  · obtain ⟨r, rfl⟩ := hc
-    simp only [hexForm, Bool.and_eq_true, bne_iff_ne, ne_eq, List.all_eq_true] at hh
-    split at hh
-    · rename_i hall; exact hall.2
-    · cases hh
-  · have hd : dropMinus lit = lit := by
-      unfold dropMinus; split
-      · exact absurd ⟨_, rfl⟩ hc
-      · rfl
-    rw [hd]
-    unfold hexForm at hh
-    split at hh
-    rename_i sign ds heq
-    have hds : ds = lit := by
-      split at heq
-      · rename_i r; exact absurd ⟨r, rfl⟩ hc
-      · cases heq; rfl
-    subst hds
-    simp only [Bool.and_eq_true, bne_iff_ne, ne_eq, List.all_eq_true] at hh
-    split at hh
-    · rename_i hall; exact hall.2
-    · cases hh
-
-theorem layout_digits_length {ds : Text} (n : Int) (h : ∀ c ∈ layout ds n, isDigit c = true) :
-    (layout ds n).length ≤ 21 := by
-  simp only [layout] at h ⊢
-  by_cases h1 : (ds.length : Int) ≤ n ∧ n ≤ 21
-  · have hb : (decide ((ds.length : Int) ≤ n) && decide (n ≤ 21)) = true := by simp [h1]
-    simp only [hb, ↓reduceIte, List.length_append, List.length_replicate]
-    omega
-  · have hb : (decide ((ds.length : Int) ≤ n) && decide (n ≤ 21)) = false := by simp; omega
-    simp only [hb, Bool.false_eq_true, ↓reduceIte] at h ⊢
-    exfalso
-    split at h
-    · exact absurd (h '.' (by simp)) (by decide)
-    split at h
-    · exact absurd (h '.' (by simp)) (by decide)
-    · exact absurd (h 'e' (by simp)) (by decide)
-
-/-- A float's spelling: a sign, then `0` or digits laid out like JavaScript. -/
-theorem spell_cases (k : FloatType) (x : Flt) :
-    ∃ (neg : Bool) (t : Text), (spell k x).toList = (if neg then "-" else "").toList ++ t ∧
-      (∃ c r, t = c :: r ∧ isDigit c = true) ∧
-      (t = ['0'] ∨ ∃ ds n, t = layout ds n ∧ ds ≠ [] ∧ (∀ c ∈ ds, isDigit c = true)) := by
-  cases x with
-  | nan => exact ⟨false, ['0'], by simp [spell], ⟨_, _, rfl, rfl⟩, .inl rfl⟩
-  | inf => exact ⟨false, ['0'], by simp [spell], ⟨_, _, rfl, rfl⟩, .inl rfl⟩
-  | fin neg m q =>
-    unfold spell
-    simp only
-    by_cases hm : m = 0
-    · simp only [hm, ↓reduceIte]
-      exact ⟨neg, ['0'], by simp, ⟨_, _, rfl, rfl⟩, .inl rfl⟩
-    · simp only [hm, ↓reduceIte]
-      split
-      · rename_i d k' hs
-        have hr := digitsAt_some (shortest_some hs)
-        simp only [roundsTo, beq_iff_eq] at hr
-        generalize decimalExponent _ _ = n at hr ⊢
-        have hd0 : d ≠ 0 := by
-          rintro rfl
-          rw [fraction_zero, roundRat, roundMag_zero] at hr
-          simp only [Option.map_some, Option.some.injEq, Flt.fin.injEq] at hr
-          omega
-        obtain ⟨z, hz⟩ := stripTrailing_zeros (Nat.toDigits 10 d)
-        generalize stripTrailing (Nat.toDigits 10 d) = s at hz ⊢
-        have hV : d = digitsValue 10 s * 10 ^ z := by
-          rw [← digitsValue_zeros, ← hz, RoundTrip.digitsValue_toDigits (by decide) (by decide)]
-        have hsne : s ≠ [] := by rintro rfl; simp [digitsValue] at hV; omega
-        have hsd : ∀ c ∈ s, isDigit c = true := fun c hc =>
-          RoundTrip.toDigits_decimal c (by rw [hz]; exact List.mem_append_left _ hc)
-        obtain ⟨D, E, hdec, -⟩ := decBody_layout neg hsne hsd (n - k' + (Nat.toDigits 10 d).length)
-        exact ⟨neg, _, by rw [String.toList_append, String.toList_ofList], decBody_head hdec,
-          .inr ⟨s, _, rfl, hsne, hsd⟩⟩
-      · exact ⟨neg, ['0'], by simp, ⟨_, _, rfl, rfl⟩, .inl rfl⟩
-
-/-- **A float's spelling as a JSON number token** is within the limits whenever it is as a haus number. -/
-theorem spell_tokenFits {L : Limits} (hL : 22 ≤ L.maxNumberLength) (k : FloatType) (x : Flt)
-    (h : numberFits L (spell k x).toList = true) : tokenFits L (spell k x).toList = true := by
-  simp only [numberFits, tokenFits, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at h ⊢
-  refine ⟨?_, h.1⟩
-  rcases h.2 with h | ⟨-, hh⟩
-  · exact h
-  · split at hh
-    · rename_i hx hform
-      have hd := hexForm_digits hform
-      obtain ⟨neg, t, he, ⟨c0, r0, hc0, hd0⟩, ht⟩ := spell_cases k x
-      rw [he] at hd ⊢
-      have hdt : ∀ c ∈ t, isDigit c = true := by
-        cases neg
-        · simpa [hc0, dropMinus_digit hd0] using hd
-        · simpa [dropMinus] using hd
-      have hlen : t.length ≤ 21 := by
-        rcases ht with rfl | ⟨ds, n, rfl, -, -⟩
-        · simp
-        · exact layout_digits_length n hdt
-      cases neg <;> simp <;> omega
-    · simp at hh
-
-/-- An integer of at most 32 bits has at most 11 characters. -/
-theorem intLit_length {k : IntType} {n : Int} (hk : k.asString = false) (hr : k.inRange n = true) :
-    (intLit n).toList.length ≤ 11 := by
-  have hb : n.natAbs < 2 ^ 32 := by
-    cases k with
-    | int => simp [IntType.asString] at hk
-    | signed b =>
-      simp only [IntType.asString, decide_eq_false_iff_not, Nat.not_lt] at hk
-      simp only [IntType.inRange, Bool.and_eq_true, decide_eq_true_eq] at hr
-      have : (2 : Int) ^ (b - 1) ≤ 2 ^ 31 := by
-        have := Nat.pow_le_pow_right (n := 2) (by decide) (show b - 1 ≤ 31 by omega)
-        exact_mod_cast this
-      omega
-    | unsigned b =>
-      simp only [IntType.asString, decide_eq_false_iff_not, Nat.not_lt] at hk
-      simp only [IntType.inRange, Bool.and_eq_true, decide_eq_true_eq] at hr
-      have : (2 : Int) ^ b ≤ 2 ^ 32 := by
-        have := Nat.pow_le_pow_right (n := 2) (by decide) hk
-        exact_mod_cast this
-      omega
-  have hd : (Nat.toDigits 10 n.natAbs).length ≤ 10 :=
-    toDigits_length_le (by decide) (Nat.lt_of_lt_of_le hb (by decide))
-  simp only [intLit, String.toList_ofList, RoundTrip.intText, List.length_append]
-  split <;> simp <;> omega
 
 /-! ## Nesting -/
 
@@ -414,18 +281,12 @@ theorem Core.fits (hL : L.SchemaBasedOk) {c : Ty} {v : Value} {x : Typed} {b : B
     · have := numberFits_length hl
       have := hL.2.1
       exact .str _ _ (by rw [← String.length_toList]; omega)
-    · rename_i hk
-      refine .num _ _ ?_
-      simp only [numberFits, Bool.and_eq_true, decide_eq_true_eq] at hl
-      simp only [tokenFits, Bool.and_eq_true, decide_eq_true_eq]
-      have := intLit_length (by simpa using hk) hr
-      have := hL.2.2
-      exact ⟨by omega, hl.1⟩
+    · exact .num _ _ (numberFits_tokenFits hl)
   | .float (k := k) (x := f) hx, hl, _, h => by
     obtain ⟨n, m, q, rfl⟩ := roundLit_fin hx
     simp only [toJsonC, floatJson, Except.ok.injEq] at h; subst h
     simp only [encode, encodeFloat, Value.leaves] at hl
-    exact .num _ _ (spell_tokenFits hL.2.2 k _ hl)
+    exact .num _ _ (numberFits_tokenFits hl)
   | .floatTag (k := k) (tag := tag) hx, hl, _, h => by
     have he := floatTag?_encode k hx
     simp only [encode, he, Value.leaves, Value.leavesList, Bool.and_true, decide_eq_true_eq] at hl

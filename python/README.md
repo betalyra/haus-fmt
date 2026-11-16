@@ -36,7 +36,7 @@ haus.parse("{ ok: true }")
 # record keys (booleans are the variants True / False) at 1:7; its code is boolean-literal
 ```
 
-Limits are configurable with `haus.Limits(max_depth=…, max_number_length=…, max_exponent=…, max_string_length=…)` (spec §7); the string limit counts record keys and tags too. `max_depth` is at most `haus.MAX_SUPPORTED_DEPTH`, 512: a larger one is a `haus.HausLimitsError` (a `ValueError`, code `unsupported-depth`) naming the maximum when the `Limits` are made. The parser, the decoders and the JSON mappings recurse, a few Python frames per level, so they raise Python's recursion limit when it is too low for the depth (never lowering it): 512 levels work even when called from deep inside an application. The canonical form doesn't recurse.
+Limits are configurable with `haus.Limits(max_depth=…, max_number_length=…, max_exponent=…, max_string_length=…)` (spec §7); the string limit counts record keys and tags too. A hex literal has at most as many hex digits as keep its decimal form within the number limit: 829 for 1000. `max_depth` is at most `haus.MAX_SUPPORTED_DEPTH`, 512: a larger one is a `haus.HausLimitsError` (a `ValueError`, code `unsupported-depth`) naming the maximum when the `Limits` are made. The parser, the decoders and the JSON mappings recurse, a few Python frames per level, so they raise Python's recursion limit when it is too low for the depth (never lowering it): 512 levels work even when called from deep inside an application. The canonical form doesn't recurse.
 
 ## Streams
 
@@ -69,7 +69,7 @@ haus.equals(haus.parse("1.0"), haus.parse("1"))  # False: different numbers
 sorted(values, key=functools.cmp_to_key(haus.compare))  # by canonical form, not numeric: 10 before 9
 ```
 
-An integer longer than 1000 characters is written in hex; one longer than 1000 characters even in hex has no canonical form, and `canonical` and `hash` raise a `haus.HausError` with the code `number-too-long` (only a parser with a larger number limit, or code, makes one; `equals` and `compare` still work).
+Every value has a canonical form, and `canonical` and `hash` never fail: an integer is written in decimal with all its digits, however long (a parser with a larger number limit, or code, can make one longer than 1000 characters).
 
 A whole file or stream has one hash too: `haus.hash_all(values)` hashes the canonical forms joined by `,` (a file of one value hashes like the value). `haus.Hasher` computes it while a stream is read:
 

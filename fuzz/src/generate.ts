@@ -64,7 +64,7 @@ function number(r: Rng): string {
     case 6: return sign + "0b" + digits(r, 1 + r.int(12), "01")
     case 7: return sign + (1 + r.int(9)) + digits(r, 15 + r.int(30)) // beyond 2^53
     case 8: return sign + "19.90"
-    default: return sign + r.pick(["1e6144", "1e-6144", "1e6145", "0x" + "f".repeat(997), "1" + "0".repeat(999), "1" + "0".repeat(1000), "0x0", "0b0", "0x00", "0X0"])
+    default: return sign + r.pick(["1e6144", "1e-6144", "1e6145", "0x" + "f".repeat(829), "0x" + "f".repeat(830), "0x" + "0".repeat(829) + "1", "0x" + "f_".repeat(829) + "f", "1" + "0".repeat(999), "1" + "0".repeat(1000), "0x0", "0b0", "0x00", "0X0"])
   }
 }
 

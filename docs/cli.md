@@ -216,10 +216,7 @@ The file is read as a stream (spec §6), value by value, so memory stays
 bounded by the largest value. Without a FILE (or with `-`) they read
 standard input; without a FILE on a terminal, that's a usage error rather
 than a wait. A syntax error is reported on standard error with exit code 1;
-canonical forms printed before it stay printed. So is a value without a
-canonical form, with its place in the value: an integer longer than 1000
-characters in hex too (`number-too-long`), which only a raised
-`--max-number-length` lets through. `haus hash` of a file with
+canonical forms printed before it stay printed. `haus hash` of a file with
 one value is the hash of that value; of an empty file, the SHA-256 of the
 empty text.
 
@@ -235,14 +232,16 @@ haus fmt --layout minimised - < order.haus | haus hash   # the same as `haus has
 
 `check`, `fmt`, `canonical` and `hash` parse with the limits of spec §7, and take
 `--max-depth N` (at most 256, the deepest this binding supports),
-`--max-number-length N`, `--max-exponent N` and `--max-string-length N`.
+`--max-number-length N` (which also sets the most hex digits in a hex
+literal: 829 for the default 1000), `--max-exponent N` and
+`--max-string-length N`.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | OK. Hints and warnings don't change it. |
-| 1 | Invalid data: a syntax error, an error against the schema, a broken schema, a value without a canonical form (`canonical`, `hash`); or, with `fmt --check`, files that would change. |
+| 1 | Invalid data: a syntax error, an error against the schema, a broken schema; or, with `fmt --check`, files that would change. |
 | 2 | Usage error (unknown option, missing argument, an invalid limit, `--schema` file not found, `fmt` on a schema file, `fmt` that would drop a file's comments without `--drop-comments`) or I/O error (a file that doesn't exist or can't be read or written). Wins over 1. |
 
 ## Color

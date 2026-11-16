@@ -356,11 +356,18 @@ const string_ = make(
 
 const short = (text: string) => (text.length > 30 ? text.slice(0, 30) + "…" : text)
 
+/**
+ * An integer as a number value, always decimal (spec §11): one longer than
+ * the number limit of the reader written for can't be written (spec §7).
+ */
+const integer = (text: string, at: At): HNumber =>
+  text.length > at.limits.maxNumberLength ? at.reject("number-too-long", `number literal longer than ${at.limits.maxNumberLength} characters`) : num(text)
+
 /** Any integer, as a bigint (the prelude's arbitrary-size `Int`). */
 const int = make(
   "Int",
   (v, p) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : notInteger("Int", v, p)),
-  (n, p) => (typeof n === "bigint" ? num(n.toString()) : invalid("a bigint", n, p)),
+  (n, p) => (typeof n === "bigint" ? integer(n.toString(), p) : invalid("a bigint", n, p)),
   { kind: "integer", quoted: true },
 )
 
@@ -370,7 +377,7 @@ const smallInt = (name: string, min: number, max: number) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = Number(v.text) + 0 // exact within these ranges (a longer literal is out of range anyway); + 0 turns -0 into 0
     return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
-  }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? num(String(n)) : invalid(`an integer from ${min} to ${max}`, n, p)), { kind: "integer", quoted: false })
+  }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? integer(String(n), p) : invalid(`an integer from ${min} to ${max}`, n, p)), { kind: "integer", quoted: false })
 
 /** A bounded integer as a bigint (Int64, UInt64). Out of range is an error. */
 const bigInt = (name: string, min: bigint, max: bigint) =>
@@ -378,7 +385,7 @@ const bigInt = (name: string, min: bigint, max: bigint) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = BigInt(v.text)
     return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
-  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? num(n.toString()) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true, bounded: true })
+  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? integer(n.toString(), p) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true, bounded: true })
 
 const int8 = smallInt("Int8", -128, 127)
 const int16 = smallInt("Int16", -32768, 32767)

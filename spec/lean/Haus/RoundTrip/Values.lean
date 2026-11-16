@@ -154,9 +154,9 @@ theorem canon_ne_record {x : Value} (hx : ∀ fs, x ≠ .record fs) : ∀ fs, x.
   cases x <;> simp_all [canon]
 
 mutual
-theorem _root_.Haus.Grammar.Val.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {v : Value} :
+theorem _root_.Haus.Grammar.Val.roundTrip {n : Nat} {t : Text} {v : Value} :
     Val L n t v → Val L n (write v.canon) v.canon
-  | .number _ t hn => by simpa [canon, write] using number_canonical hL hn n
+  | .number _ t hn => by simpa [canon, write] using number_canonical hn n
   | .string _ t s hs => by
     cases hs with
     | mk raw s' _ hl => simpa [canon, write] using string_canonical (L := L) (String.ofList s') (by simpa using hl) n
@@ -167,14 +167,14 @@ theorem _root_.Haus.Grammar.Val.roundTrip (hL : numberLimit ≤ L.maxNumberLengt
   | .array m inner xs hi => by
     have := Val.array m _ _ (items_of (xs.map canon) fun y hy => by
       obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hy
-      exact (hi.roundTrip hL) x hx)
+      exact hi.roundTrip x hx)
     simpa [canon, write, canonList_eq] using this
   | .record m t fs hr => by
-    rw [canon_record]; exact .record m _ _ (hr.roundTrip hL)
+    rw [canon_record]; exact .record m _ _ hr.roundTrip
   | .tag _ t ht hl => by
     simpa [canon, canonList, write] using Val.tag n t ht hl
   | .payload m t sp inner xs ht hl hsp hi hxs => by
-    have hall : ∀ x ∈ xs, Val L m (write x.canon) x.canon := (hi.roundTrip hL)
+    have hall : ∀ x ∈ xs, Val L m (write x.canon) x.canon := hi.roundTrip
     -- `Tag(…)` with the arguments in canonical form
     have general := Val.payload m t [] _ _ ht hl blank_nil (items_of (xs.map canon) fun y hy => by
       obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hy; exact hall x hx) (by simpa using hxs)
@@ -194,38 +194,38 @@ theorem _root_.Haus.Grammar.Val.roundTrip (hL : numberLimit ≤ L.maxNumberLengt
         simpa [writeList] using general
     · simpa [canon, canonList_eq, write, writeList] using general
   | .recordPayload m t sp r fs ht hl hsp hr => by
-    have := Val.recordPayload m t [] _ _ ht hl blank_nil (hr.roundTrip hL)
+    have := Val.recordPayload m t [] _ _ ht hl blank_nil hr.roundTrip
     simpa [canon, canonList, canon_record, write] using this
 
-theorem _root_.Haus.Grammar.Items.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {xs : List Value} :
+theorem _root_.Haus.Grammar.Items.roundTrip {n : Nat} {t : Text} {xs : List Value} :
     Items L n t xs → ∀ x ∈ xs, Val L n (write x.canon) x.canon
   | .empty _ _ _ => by simp
-  | .some _ _ _ _ _ hi => (hi.roundTrip hL)
+  | .some _ _ _ _ _ hi => hi.roundTrip
 
-theorem _root_.Haus.Grammar.ItemsFrom.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {xs : List Value} :
+theorem _root_.Haus.Grammar.ItemsFrom.roundTrip {n : Nat} {t : Text} {xs : List Value} :
     ItemsFrom L n t xs → ∀ x ∈ xs, Val L n (write x.canon) x.canon
-  | .last _ _ _ _ hv _ => List.forall_mem_singleton.mpr (hv.roundTrip hL)
-  | .lastComma _ _ _ _ _ hv _ _ => List.forall_mem_singleton.mpr (hv.roundTrip hL)
-  | .cons _ _ _ _ _ _ _ hv _ _ hi => List.forall_mem_cons.mpr ⟨hv.roundTrip hL, (hi.roundTrip hL)⟩
+  | .last _ _ _ _ hv _ => List.forall_mem_singleton.mpr hv.roundTrip
+  | .lastComma _ _ _ _ _ hv _ _ => List.forall_mem_singleton.mpr hv.roundTrip
+  | .cons _ _ _ _ _ _ _ hv _ _ hi => List.forall_mem_cons.mpr ⟨hv.roundTrip, hi.roundTrip⟩
 
-theorem _root_.Haus.Grammar.Record.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {fs : List (String × Value)} :
+theorem _root_.Haus.Grammar.Record.roundTrip {n : Nat} {t : Text} {fs : List (String × Value)} :
     Record L n t fs → Record L n ('{' :: writeFields (sorted fs) ++ ['}']) (sorted fs)
-  | .mk _ _ fs hf hnd => record_of fs hnd (hf.roundTrip hL)
+  | .mk _ _ fs hf hnd => record_of fs hnd hf.roundTrip
 
-theorem _root_.Haus.Grammar.Fields.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {fs : List (String × Value)} :
+theorem _root_.Haus.Grammar.Fields.roundTrip {n : Nat} {t : Text} {fs : List (String × Value)} :
     Fields L n t fs → ∀ g ∈ fs, FieldOk L n (g.1, g.2.canon)
   | .empty _ _ _ => by simp
-  | .some _ _ _ _ _ hf => (hf.roundTrip hL)
+  | .some _ _ _ _ _ hf => hf.roundTrip
 
-theorem _root_.Haus.Grammar.FieldsFrom.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {fs : List (String × Value)} :
+theorem _root_.Haus.Grammar.FieldsFrom.roundTrip {n : Nat} {t : Text} {fs : List (String × Value)} :
     FieldsFrom L n t fs → ∀ g ∈ fs, FieldOk L n (g.1, g.2.canon)
-  | .last _ _ _ _ hf _ => List.forall_mem_singleton.mpr (hf.roundTrip hL)
-  | .lastComma _ _ _ _ _ hf _ _ => List.forall_mem_singleton.mpr (hf.roundTrip hL)
-  | .cons _ _ _ _ _ _ _ hf _ _ hi => List.forall_mem_cons.mpr ⟨hf.roundTrip hL, (hi.roundTrip hL)⟩
+  | .last _ _ _ _ hf _ => List.forall_mem_singleton.mpr hf.roundTrip
+  | .lastComma _ _ _ _ _ hf _ _ => List.forall_mem_singleton.mpr hf.roundTrip
+  | .cons _ _ _ _ _ _ _ hf _ _ hi => List.forall_mem_cons.mpr ⟨hf.roundTrip, hi.roundTrip⟩
 
-theorem _root_.Haus.Grammar.Field.roundTrip (hL : numberLimit ≤ L.maxNumberLength) {n : Nat} {t : Text} {f : String × Value} :
+theorem _root_.Haus.Grammar.Field.roundTrip {n : Nat} {t : Text} {f : String × Value} :
     Field L n t f → FieldOk L n (f.1, f.2.canon)
-  | .mk _ _ _ _ _ _ _ hk _ _ hv => ⟨key_canonical hk, (hv.roundTrip hL)⟩
+  | .mk _ _ _ _ _ _ _ hk _ _ hv => ⟨key_canonical hk, hv.roundTrip⟩
 end
 
 end Haus.RoundTrip

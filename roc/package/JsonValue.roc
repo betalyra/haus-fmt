@@ -1138,10 +1138,10 @@ expect JsonValue.to_str(Object([("a", Array([Number("1.5"), Null, Boolean(True)]
 expect JsonValue.to_str(Number("01")) == Err({ code: "cannot-encode", reason: "not a JSON number", path: "" })
 expect JsonValue.to_str(Object([("a", Null), ("a", Null)])) == Err({ code: "duplicate-key", reason: "a member name is used twice in an object", path: "" })
 
-expect JsonValue.import_json("{\"a\": 1E+05, \"b\": [true, null], \"c\": \"x\"}").map_ok(Encode.canonical) == Ok(Ok("{a:1e5,b:[True,None],c:\"x\"}"))
+expect JsonValue.import_json("{\"a\": 1E+05, \"b\": [true, null], \"c\": \"x\"}").map_ok(Encode.canonical) == Ok("{a:1e5,b:[True,None],c:\"x\"}")
 expect JsonValue.import_json("${Str.repeat("[", 256)}${Str.repeat("]", 256)}").is_ok()
 expect JsonValue.import_json("${Str.repeat("[", 257)}${Str.repeat("]", 257)}").is_err()
-expect JsonValue.import_json("\u(FEFF)[1]").map_ok(Encode.canonical) == Ok(Ok("[1]"))
+expect JsonValue.import_json("\u(FEFF)[1]").map_ok(Encode.canonical) == Ok("[1]")
 
 ## A self-describing value in its envelope, as these tests write it.
 env : Str -> Str
@@ -1157,7 +1157,7 @@ expect JsonValue.haus_json_value(Num("1E5")) == Ok(Object([("_num", String("1e5"
 expect JsonValue.to_haus_json(Arr([Num("1"), Num("abc")])) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
 expect JsonValue.from_haus_json(env("{\"_num\": \"1E5\"}")).is_err()
 expect JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": []}")).is_err()
-expect JsonValue.from_haus_json(env("{\"_args\": [{\"_num\": \"1\"}], \"_tag\": \"T\"}")).map_ok(Encode.canonical) == Ok(Ok("T(1)"))
+expect JsonValue.from_haus_json(env("{\"_args\": [{\"_num\": \"1\"}], \"_tag\": \"T\"}")).map_ok(Encode.canonical) == Ok("T(1)")
 
 expect JsonValue.base64([0x0B, 0x34]) == "CzQ="
 expect JsonValue.base64([]) == ""
@@ -1251,6 +1251,16 @@ json_code = |result| match result {
 	Err(Decode(e)) => "${e.code} at ${ErrorCode.place(e.path)}"
 }
 
+# A `_num` within the number limit (spec §16.2): the longest hex literal's decimal form, but nothing longer.
+expect match Value.parse("0x${"f".repeat(829)}") {
+	Ok(v) => match JsonValue.to_haus_json(v).map_ok(JsonValue.from_haus_json) {
+		Ok(Ok(back)) => Encode.equals(back, v)
+		_ => False
+	}
+	Err(_) => False
+}
+expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"1${"0".repeat(1000)}\"}"))) == "number-too-long at $._num"
+expect JsonValue.to_haus_json_with(Num("1000000000000"), { ..Value.default_limits, max_number_length: 12 }).map_err(|e| e.code) == Err("number-too-long")
 expect json_code(JsonValue.import_json("[1,]")) == "json-syntax at 1:4" and json_code(JsonValue.import_json("NaN")) == "json-syntax at 1:1" and json_code(JsonValue.import_json("1 2")) == "json-syntax at 1:3"
 expect json_code(JsonValue.import_json("\"\\ud83d\"")) == "unpaired-surrogate at 1:2" and json_code(JsonValue.import_json("\"\\u12\"")) == "invalid-unicode-escape at 1:4"
 expect json_code(JsonValue.import_json("\"\\ud83d\\u12\"")) == "invalid-unicode-escape at 1:10" and json_code(JsonValue.import_json("\"\\ud83d\\u0041\"")) == "unpaired-surrogate at 1:2" and json_code(JsonValue.import_json("\"\\x\"")) == "invalid-escape at 1:2"
@@ -1265,7 +1275,7 @@ expect JsonValue.from_haus_json_value(Object([("_rec", Object([("a", String("x")
 expect JsonValue.to_haus_json(Tag("lower", [])).map_err(|e| e.code) == Err("invalid-tag")
 
 # The envelope (spec §16.2): exactly `_haus` and `_value`, version 1, read in any order.
-expect JsonValue.from_haus_json("{\"_value\": \"a\", \"_haus\": 1}").map_ok(Encode.canonical) == Ok(Ok("\"a\""))
+expect JsonValue.from_haus_json("{\"_value\": \"a\", \"_haus\": 1}").map_ok(Encode.canonical) == Ok("\"a\"")
 expect json_code(JsonValue.from_haus_json("\"a\"")) == "haus-json-form at $" and json_code(JsonValue.from_haus_json("{\"_num\": \"1\"}")) == "haus-json-form at $"
 expect json_code(JsonValue.from_haus_json("{\"_haus\": 1}")) == "haus-json-form at $" and json_code(JsonValue.from_haus_json("{\"_haus\": 1, \"_value\": \"a\", \"x\": 1}")) == "haus-json-form at $"
 expect json_code(JsonValue.from_haus_json("{\"_haus\": 2, \"_value\": \"a\"}")) == "haus-json-version at $" and json_code(JsonValue.from_haus_json("{\"_haus\": \"1\", \"_value\": \"a\"}")) == "haus-json-version at $"
@@ -1273,20 +1283,20 @@ expect json_code(JsonValue.from_haus_json("{\"_haus\": 1.0, \"_value\": \"a\"}")
 # Raw DEL, C1 and bidi controls: rejected in self-describing JSON, accepted elsewhere.
 expect json_code(JsonValue.from_haus_json(env("\"a\u(7F)b\""))) == "control-character at 1:26" and json_code(JsonValue.from_haus_json(env("\"a\u(85)b\""))) == "control-character at 1:26"
 expect json_code(JsonValue.from_haus_json(env("\"a\u(202E)b\""))) == "bidi-control at 1:26" and json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"a\u(2066)\": \"b\"}}"))) == "bidi-control at 1:36"
-expect JsonValue.from_haus_json(env("\"a\\u007f\\u0085\\u202eb\"")).map_ok(Encode.canonical) == Ok(Ok("\"a\\u{7F}\\u{85}\\u{202E}b\""))
+expect JsonValue.from_haus_json(env("\"a\\u007f\\u0085\\u202eb\"")).map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}b\"")
 expect JsonValue.from_haus_json(env("\"\u(A0)\u(202F)\u(2065)\u(206A)\"")).is_ok()
 # U+2028 and U+2029 are read raw by every reader, the self-describing one too (spec §16).
-expect JsonValue.from_haus_json(env("\"a\u(2028)b\u(2029)\"")).map_ok(Encode.canonical) == Ok(Ok("\"a\\u{2028}b\\u{2029}\"")) and JsonValue.import_json("\"\u(2028)\"").map_ok(Encode.canonical) == Ok(Ok("\"\\u{2028}\""))
+expect JsonValue.from_haus_json(env("\"a\u(2028)b\u(2029)\"")).map_ok(Encode.canonical) == Ok("\"a\\u{2028}b\\u{2029}\"") and JsonValue.import_json("\"\u(2028)\"").map_ok(Encode.canonical) == Ok("\"\\u{2028}\"")
 expect JsonValue.parse("{\"\u(2029)\": \"\u(2028)\"}") == Ok(Object([("\u(2029)", String("\u(2028)"))]))
-expect JsonValue.import_json("\"a\u(7F)\u(85)\u(202E)b\"").map_ok(Encode.canonical) == Ok(Ok("\"a\\u{7F}\\u{85}\\u{202E}b\"")) and JsonValue.parse("\"\u(2069)\"") == Ok(String("\u(2069)"))
+expect JsonValue.import_json("\"a\u(7F)\u(85)\u(202E)b\"").map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}b\"") and JsonValue.parse("\"\u(2069)\"") == Ok(String("\u(2069)"))
 expect JsonValue.from_haus_json_value(Object([("_haus", Number("1")), ("_value", String("x"))])).map_ok(|_| {}).map_err(|e| e.code) == Err("haus-json-form")
 # The import reads the envelope as a record.
-expect JsonValue.import_json(env("{\"_num\": \"1\"}")).map_ok(Encode.canonical) == Ok(Ok("{_haus:1,_value:{_num:\"1\"}}"))
+expect JsonValue.import_json(env("{\"_num\": \"1\"}")).map_ok(Encode.canonical) == Ok("{_haus:1,_value:{_num:\"1\"}}")
 # Self-describing JSON Lines: an envelope per line.
 expect JsonValue.to_haus_json_lines([Num("1"), Text("a")]) == Ok("${enveloped_as_written("{\"_num\":\"1\"}")}\n${enveloped_as_written("\"a\"")}\n")
 expect JsonValue.to_haus_json_lines([]) == Ok("")
 expect JsonValue.to_haus_json_lines([Text("a"), Num("x")]).map_err(|e| e.path) == Err("[1]")
-expect JsonValue.from_haus_json_lines("\u(FEFF)${env("\"a\"")}\r\n${env("[]")}").map_ok(|vs| vs.map(Encode.canonical)) == Ok([Ok("\"a\""), Ok("[]")])
+expect JsonValue.from_haus_json_lines("\u(FEFF)${env("\"a\"")}\r\n${env("[]")}").map_ok(|vs| vs.map(Encode.canonical)) == Ok(["\"a\"", "[]"])
 expect JsonValue.from_haus_json_lines("").map_ok(List.len) == Ok(0)
 expect json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n\"b\"\n")) == "haus-json-form at $[1]" and json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n${env("\"\u(85)\"")}")) == "control-character at 2:25"
 # The envelope's level: 4·d + 2 JSON levels for self-describing JSON.

@@ -6,11 +6,12 @@ import Haus.Complete.Lexical
 /-!
 # Numbers in canonical form
 
-A number's canonical text is its normalized literal, or for an integer
-longer than the default number limit, that integer in hex. Either way it is
-a valid literal again, it normalizes to the same value, and it is no longer
-than the literal it came from, so it stays within the number limit as long
-as that limit is at least the default (spec §12 uses the default).
+A number's canonical text is its normalized literal, always in decimal
+(spec §12). It is a valid literal again, it normalizes to the same value,
+and it stays within the limits the number was parsed with
+(`normalized_lit`, `NumberLit.normalize_fits`): a decimal literal only gets
+shorter, and a hex literal has at most `maxHexDigits` hex digits (§7), few
+enough for its decimal form.
 -/
 
 namespace Haus.RoundTrip
@@ -110,55 +111,11 @@ theorem normalizeBody_digits (neg : Bool) (v : Nat) :
     simp [isDigit] at this
   · simp [htw, hdw]
 
-/-- The sign of an integer's literal. -/
-def intSign (neg : Bool) (v : Nat) : Text := if neg && v != 0 then ['-'] else []
-
-theorem intSign_sign (neg : Bool) (v : Nat) : Sign (intSign neg v) := by
-  unfold intSign; split
-  · exact .inr rfl
-  · exact .inl rfl
-
 theorem toDigits_not_minus (b v : Nat) (hb : 1 < b) (h16 : b ≤ 16) : (Nat.toDigits b v).head? ≠ some '-' := by
   intro h
   obtain ⟨d, hd, he⟩ := mem_toDigits hb (List.mem_of_head? h)
   have : ∀ d < 16, Nat.digitChar d ≠ '-' := by decide
   exact this d (by omega) he.symm
-
-theorem normalizeBody_intSign (neg : Bool) (v : Nat) (r : Text) (hr : r.head? ≠ some '-') :
-    normalizeNumber (intSign neg v ++ r) = normalizeBody (neg && v != 0) r := by
-  unfold intSign; split
-  · rename_i h; simp only [List.cons_append, List.nil_append, normalizeNumber_minus, h]
-  · rename_i h
-    simp only [List.nil_append, normalizeNumber_plain hr]
-    congr 1
-    cases neg <;> by_cases hv : v = 0 <;> simp_all
-
-theorem hexLit (neg : Bool) (v : Nat) (hlen : (intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v).length ≤ L.maxNumberLength) :
-    NumberLit L (intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v) ∧
-      normalizeNumber (intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v) = String.ofList (intText neg v) := by
-  have hh := toDigits_hex (n := v)
-  obtain ⟨c, rest, he⟩ : ∃ c rest, Nat.toDigits 16 v = c :: rest :=
-    match Nat.toDigits 16 v, Nat.toDigits_ne_nil (b := 16) (n := v) with
-    | c :: rest, _ => ⟨c, rest, rfl⟩
-  refine ⟨.hex _ _ (intSign_sign neg v) ⟨c, rest, he, hh c (by simp [he]), sepTail_all fun x hx => hh x (by simp [he, hx])⟩ hlen, ?_⟩
-  rw [normalizeBody_intSign neg v _ (by simp)]
-  have hf : ('0' :: 'x' :: Nat.toDigits 16 v).filter (· != '_') = '0' :: 'x' :: Nat.toDigits 16 v := by
-    simp only [List.filter_cons]
-    simp [filter_all fun c hc => .inr (hh c hc)]
-  unfold normalizeBody
-  rw [hf]
-  simp only
-  rw [digitsValue_toDigits (by decide) (by decide), ← String.toList_inj, integer_toList, String.toList_ofList,
-    signedText_intText]
-
-theorem decimalIntLit (neg : Bool) (v : Nat) (hlen : (intText neg v).length ≤ L.maxNumberLength) :
-    NumberLit L (intText neg v) ∧ normalizeNumber (intText neg v) = String.ofList (intText neg v) := by
-  have := NumberLit.decimal (L := L) (intSign neg v) (Nat.toDigits 10 v) [] [] (intSign_sign neg v)
-    (intPart_toDigits v) (.inl rfl) (.inl rfl) (by simp [expMagnitude, digitsValue]) (by simpa [intText, intSign] using hlen)
-  refine ⟨by simpa [intText, intSign] using this, ?_⟩
-  show normalizeNumber (intSign neg v ++ Nat.toDigits 10 v) = _
-  rw [normalizeBody_intSign neg v _ (toDigits_not_minus 10 v (by decide) (by decide)), normalizeBody_digits]
-  rfl
 
 /-! ## Decimal literals -/
 
@@ -411,49 +368,10 @@ theorem normE_exp {e : Text} (he : Exp e) :
     rw [← hsdef]
     split <;> simp_all
 
-/-! ## Writing a number -/
+/-! ## The normalized literal -/
 
-theorem number_intText (neg : Bool) (v : Nat) :
-    Canonical.number (String.ofList (intText neg v)) =
-      if (intText neg v).length > numberLimit then intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v
-      else intText neg v := by
-  have hd := toDigits_decimal (n := v)
-  have hall : (Nat.toDigits 10 v).all isDigit = true := List.all_eq_true.mpr hd
-  unfold Canonical.number intText
-  simp only [String.toList_ofList]
-  by_cases hs : (neg && v != 0) = true
-  · simp only [hs, ↓reduceIte, List.cons_append, List.nil_append]
-    rw [digitsValue_toDigits (by decide) (by decide)]
-    simp [hall, intSign, hs, Canonical.hex]
-  · have hnm := toDigits_not_minus 10 v (by decide) (by decide)
-    simp only [hs, Bool.false_eq_true, ↓reduceIte, List.nil_append]
-    split
-    · rename_i r heq; exact absurd (by rw [heq]; rfl) hnm
-    · rw [digitsValue_toDigits (by decide) (by decide)]
-      simp [hall, intSign, hs, Canonical.hex]
-
-/-- An integer, written canonically, given that its hex form fits when it is used. -/
-theorem int_canonical (hL : numberLimit ≤ L.maxNumberLength) (neg : Bool) (v : Nat)
-    (hhex : (intText neg v).length > numberLimit →
-      (intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v).length ≤ L.maxNumberLength) (n : Nat) :
-    Val L n (Canonical.number (String.ofList (intText neg v))) (.num (String.ofList (intText neg v))) := by
-  rw [number_intText]
-  split
-  · rename_i h
-    obtain ⟨hl, hn⟩ := hexLit (L := L) neg v (hhex h)
-    exact hn ▸ Val.number n _ hl
-  · rename_i h
-    obtain ⟨hl, hn⟩ := decimalIntLit (L := L) neg v (by omega)
-    exact hn ▸ Val.number n _ hl
-
-theorem hexLength {b v k : Nat} (hb : b ≤ 16) (hk : 0 < k) (h : v < b ^ k) : (Nat.toDigits 16 v).length ≤ k :=
-  (Nat.length_toDigits_le_iff (by decide) hk).mpr (Nat.lt_of_lt_of_le h (Nat.pow_le_pow_left hb k))
-
-theorem intSign_le {s : Text} (hs : Sign s) (v : Nat) : (intSign (s == ['-']) v).length ≤ s.length := by
-  rcases hs with rfl | rfl <;> simp [intSign] <;> split <;> simp
-
-theorem intSign_length (neg : Bool) (v : Nat) : (intSign neg v).length ≤ 1 := by
-  unfold intSign; split <;> simp
+theorem _root_.Haus.Grammar.NumberLit.length_le {t : Text} (h : NumberLit L t) : t.length ≤ L.maxNumberLength := by
+  cases h <;> assumption
 
 /-- Hex and binary literals: their value as an integer. -/
 theorem normalize_radix {s ds : Text} {r : Char} (hs : Sign s) (hr : r = 'x' ∨ r = 'b') :
@@ -466,6 +384,35 @@ theorem normalize_radix {s ds : Text} {r : Char} (hs : Sign s) (hr : r = 'x' ∨
   rw [hf]
   rcases hr with rfl | rfl <;> simp only [↓reduceIte] <;>
     rw [← String.toList_inj, integer_toList, String.toList_ofList] <;> rfl
+
+/--
+The normalized literal of a hex or binary integer, a sign and decimal
+digits, is a decimal literal within the limits when it is short enough, and
+normalizes to itself.
+-/
+theorem signedLit (neg : Bool) (v : Nat) (hlen : (signedText neg v).length ≤ L.maxNumberLength) :
+    NumberLit L (signedText neg v) ∧ normalizeNumber (signedText neg v) = String.ofList (signedText neg v) := by
+  have hs : Sign (if neg then ['-'] else []) := by cases neg <;> simp [Sign]
+  have := NumberLit.decimal (L := L) _ (Nat.toDigits 10 v) [] [] hs (intPart_toDigits v) (.inl rfl) (.inl rfl)
+    (by simp [expMagnitude, digitsValue]) (by simpa [signedText] using hlen)
+  refine ⟨by simpa [signedText] using this, ?_⟩
+  unfold signedText
+  rw [normalizeNumber_sign hs (toDigits_not_minus 10 v (by decide) (by decide)), normalizeBody_digits]
+  cases neg <;> rfl
+
+theorem signedText_length (neg : Bool) (v : Nat) :
+    (signedText neg v).length = (if neg then 1 else 0) + (Nat.toDigits 10 v).length := by
+  unfold signedText; cases neg <;> simp; omega
+
+theorem sign_length {s : Text} (hs : Sign s) : (if (s == ['-']) = true then 1 else 0) = s.length := by
+  rcases hs with rfl | rfl <;> rfl
+
+/-- Fewer than `10 ^ k` (`k > 0`): at most `k` decimal digits. -/
+theorem decimalLength {v k : Nat} (hk : 0 < k) (h : v < 10 ^ k) : (Nat.toDigits 10 v).length ≤ k :=
+  (Nat.length_toDigits_le_iff (by decide) hk).mpr h
+
+theorem isBin_hex {c : Char} (h : isBinDigit c = true) : isHexDigit c = true ∧ hexValue c < 2 := by
+  simp [isBinDigit] at h; rcases h with rfl | rfl <;> decide
 
 theorem intPart_filter {i : Text} (h : IntPart i) :
     IntPart (i.filter (· != '_')) ∧ (∀ c ∈ i.filter (· != '_'), isDigit c = true) ∧
@@ -501,96 +448,61 @@ theorem frac_filter {f : Text} (h : f = [] ∨ Frac f) :
 theorem filter_idem (l : Text) : (l.filter (· != '_')).filter (· != '_') = l.filter (· != '_') := by
   rw [List.filter_filter]; congr 1; funext c; simp
 
-/-- A literal that isn't a long integer is written as it is. -/
-theorem number_eq_self {t : Text} (h : t.length ≤ numberLimit ∨ ∃ c ∈ t, c ≠ '-' ∧ isDigit c = false) :
-    Canonical.number (String.ofList t) = t := by
-  unfold Canonical.number
-  simp only [String.toList_ofList]
-  have key : ∀ ds, (t = '-' :: ds ∨ t = ds) → ¬ (t.length > numberLimit ∧ ds.all isDigit = true) := by
-    rintro ds hds ⟨hl, hall⟩
-    rcases h with h | ⟨c, hc, hm, hd⟩
-    · omega
-    · have : c ∈ ds := by
-        rcases hds with rfl | rfl
-        · rcases List.mem_cons.mp hc with rfl | hc
-          · exact absurd rfl hm
-          · exact hc
-        · exact hc
-      rw [List.all_eq_true.mp hall c this] at hd; exact absurd hd (by decide)
-  split
-  · rename_i ds
-    have := key ds (.inl rfl)
-    rw [ite_eq_right_iff.mpr (fun h => absurd (by simpa using h) this)]
-  · have := key t (.inr rfl)
-    rw [ite_eq_right_iff.mpr (fun h => absurd (by simpa using h) this)]
+/-- A radix literal's digits, `_` removed: at least one. -/
+theorem digits_filter_pos {p : Char → Bool} (hp : p '_' = false) {ds : Text} (hds : Digits p ds) :
+    0 < (ds.filter (· != '_')).length := by
+  obtain ⟨d, r, rfl, hd, -⟩ := hds
+  have : d ≠ '_' := by rintro rfl; rw [hp] at hd; exact absurd hd (by decide)
+  simp [this]
 
-/-- `-0`, as a hex or binary zero with a sign normalizes to, written canonically. -/
-theorem negZero_canonical (hL : numberLimit ≤ L.maxNumberLength) (n : Nat) :
-    Val L n (Canonical.number (String.ofList ['-', '0'])) (.num (String.ofList ['-', '0'])) := by
-  rw [number_eq_self (.inl (by decide))]
-  have hl : NumberLit L (['-'] ++ ['0'] ++ [] ++ []) :=
-    .decimal _ _ _ _ (.inr rfl) .zero (.inl rfl) (.inl rfl) (by simp [expMagnitude, digitsValue])
-      (by simp [numberLimit] at hL; simp; omega)
-  have hn : normalizeNumber ['-', '0'] = String.ofList ['-', '0'] := by decide
-  exact hn ▸ Val.number n _ hl
+/-- The value of a radix literal's digits, `_` removed: fewer than `b ^ k` for `k` digits. -/
+theorem digits_value_lt {p : Char → Bool} {b : Nat} (hp : ∀ c, p c = true → hexValue c < b) {ds : Text}
+    (hds : Digits p ds) : digitsValue b (ds.filter (· != '_')) < b ^ (ds.filter (· != '_')).length :=
+  digitsValue_lt fun c hc => by
+    obtain ⟨h1, h2⟩ := List.mem_filter.mp hc
+    rcases digits_chars hds c h1 with h | rfl
+    · exact hp c h
+    · simp at h2
 
-/-- A hex or binary integer's value, written canonically. -/
-theorem signed_canonical (hL : numberLimit ≤ L.maxNumberLength) (neg : Bool) (v : Nat)
-    (hhex : (intText neg v).length > numberLimit →
-      (intSign neg v ++ '0' :: 'x' :: Nat.toDigits 16 v).length ≤ L.maxNumberLength) (n : Nat) :
-    Val L n (Canonical.number (String.ofList (signedText neg v))) (.num (String.ofList (signedText neg v))) := by
-  rcases signedText_cases neg v with h | ⟨-, -, h⟩
-  · rw [h]; exact int_canonical hL neg v hhex n
-  · rw [h]; exact negZero_canonical hL n
-
-theorem isBin_hex {c : Char} (h : isBinDigit c = true) : isHexDigit c = true ∧ hexValue c < 2 := by
-  simp [isBinDigit] at h; rcases h with rfl | rfl <;> decide
-
-/-- **A number, written canonically**, is the same number. -/
-theorem number_canonical (hL : numberLimit ≤ L.maxNumberLength) {t : Text} (h : NumberLit L t) (n : Nat) :
-    Val L n (Canonical.number (normalizeNumber t)) (.num (normalizeNumber t)) := by
+/--
+**A number's normalized literal is a literal within the same limits**, and
+normalizes to itself. For a hex literal this is what `maxHexDigits` is for
+(§7): at most `maxHexDigits` hex digits are less than `10 ^ (n - 1)`, so at
+most `n - 1` decimal digits and a sign.
+-/
+theorem normalized_lit {t : Text} (h : NumberLit L t) :
+    NumberLit L (normalizeNumber t).toList ∧ normalizeNumber (normalizeNumber t).toList = normalizeNumber t := by
   cases h with
-  | hex s ds hs hds hlen =>
+  | hex s ds hs hds hlen hhex =>
     rw [normalize_radix (ds := ds) hs (.inl rfl)]
-    simp only [↓reduceIte]
-    refine signed_canonical hL _ _ (fun _ => ?_) n
-    have hv : digitsValue 16 (ds.filter (· != '_')) < 16 ^ (ds.filter (· != '_')).length :=
-      digitsValue_lt fun c hc => hexValue_hex (by
-        obtain ⟨h1, h2⟩ := List.mem_filter.mp hc
-        rcases digits_chars hds c h1 with h | rfl
-        · exact h
-        · simp at h2)
-    have hne : 0 < (ds.filter (· != '_')).length := by
-      obtain ⟨d, r, rfl, hd, -⟩ := hds
-      have : d ≠ '_' := by rintro rfl; simp [isHexDigit, isDigit] at hd
-      simp [this]
-    have := hexLength (b := 16) (by decide) hne hv
-    have := List.length_filter_le (· != '_') ds
-    have := intSign_le hs (digitsValue 16 (ds.filter (· != '_')))
-    simp only [List.length_append, List.length_cons] at hlen ⊢
+    simp only [↓reduceIte, String.toList_ofList]
+    refine signedLit _ _ ?_
+    -- at most `maxHexDigits` hex digits: less than `10 ^ (n - 1)`
+    have hv := Nat.lt_of_lt_of_le (digits_value_lt (fun _ => hexValue_hex) hds)
+      (Nat.le_trans (Nat.pow_le_pow_right (by decide) hhex) ((L.maxHexDigits_iff _).mp (Nat.le_refl _)))
+    have hn : 0 < L.maxNumberLength - 1 := by
+      rcases hs with rfl | rfl <;> simp only [List.length_append, List.length_cons] at hlen <;> omega
+    have := decimalLength hn hv
+    have : s.length ≤ 1 := by rcases hs with rfl | rfl <;> simp
+    rw [signedText_length, sign_length hs]
+    simp only [List.length_append, List.length_cons] at hlen
     omega
   | binary s ds hs hds hlen =>
     rw [normalize_radix (ds := ds) hs (.inr rfl)]
-    simp only [show ('b' = 'x') = False by decide, ite_false]
-    refine signed_canonical hL _ _ (fun _ => ?_) n
-    have hv : digitsValue 2 (ds.filter (· != '_')) < 2 ^ (ds.filter (· != '_')).length :=
-      digitsValue_lt fun c hc => by
-        obtain ⟨h1, h2⟩ := List.mem_filter.mp hc
-        rcases digits_chars hds c h1 with h | rfl
-        · exact (isBin_hex h).2
-        · simp at h2
-    have hne : 0 < (ds.filter (· != '_')).length := by
-      obtain ⟨d, r, rfl, hd, -⟩ := hds
-      have : d ≠ '_' := by rintro rfl; simp [isBinDigit] at hd
-      simp [this]
-    have := hexLength (b := 2) (by decide) hne hv
+    simp only [show ('b' = 'x') = False by decide, ite_false, String.toList_ofList]
+    refine signedLit _ _ ?_
+    -- `k` binary digits: less than `2 ^ k ≤ 10 ^ k`, so at most `k` decimal digits
+    have hk := digits_filter_pos (by decide) hds
+    have hv := Nat.lt_of_lt_of_le (digits_value_lt (fun _ h => (isBin_hex h).2) hds)
+      (Nat.pow_le_pow_left (show 2 ≤ 10 by decide) _)
+    have := decimalLength hk hv
     have := List.length_filter_le (· != '_') ds
-    have := intSign_le hs (digitsValue 2 (ds.filter (· != '_')))
-    simp only [List.length_append, List.length_cons] at hlen ⊢
+    rw [signedText_length, sign_length hs]
+    simp only [List.length_append, List.length_cons] at hlen
     omega
   | decimal s i f e hs hi hf he hexp hlen =>
-    rw [normalize_decimal hs hi hf he]
-    obtain ⟨hi', hid, hi0⟩ := intPart_filter hi
+    rw [normalize_decimal hs hi hf he, String.toList_ofList]
+    obtain ⟨hi', -, -⟩ := intPart_filter hi
     have hf' := frac_filter hf
     have he' : (normE e = [] ∨ Exp (normE e)) ∧ expMagnitude (normE e) = expMagnitude e ∧
         (normE e).length ≤ e.length ∧ normE (normE e) = normE e := by
@@ -602,54 +514,26 @@ theorem number_canonical (hL : numberLimit ≤ L.maxNumberLength) {t : Text} (h 
       have := List.length_filter_le (· != '_') i
       have := List.length_filter_le (· != '_') f
       simp only [List.length_append]; omega
-    have hlit : NumberLit L (s ++ i.filter (· != '_') ++ f.filter (· != '_') ++ normE e) :=
-      .decimal _ _ _ _ hs hi' hf' he'.1 (by rw [he'.2.1]; exact hexp) (Nat.le_trans hl hlen)
-    have hnorm : normalizeNumber (s ++ i.filter (· != '_') ++ f.filter (· != '_') ++ normE e) =
-        String.ofList (s ++ i.filter (· != '_') ++ f.filter (· != '_') ++ normE e) := by
-      rw [normalize_decimal hs hi' hf' he'.1, filter_idem, filter_idem, he'.2.2.2]
-    by_cases hint : f = [] ∧ e = []
-    · -- an integer: decimal, or hex if it is very long
-      obtain ⟨rfl, rfl⟩ := hint
-      simp only [List.filter_nil, List.append_nil, show normE [] = [] from rfl] at hnorm hlit hl ⊢
-      have hne : i.filter (· != '_') ≠ [] := by
-        obtain ⟨c, r, he0, -⟩ := intPart_head hi'; rw [he0]; simp
-      have hdig := toDigits_digitsValue hne hid hi0
-      generalize hv : digitsValue 10 (i.filter (· != '_')) = v at hdig
-      by_cases hshort : (s ++ i.filter (· != '_')).length ≤ numberLimit
-      · rw [number_eq_self (.inl hshort)]
-        exact hnorm ▸ Val.number n _ hlit
-      · have hv0 : v ≠ 0 := by
-          rintro rfl
-          rw [← hdig] at hshort; simp [Nat.toDigits_zero] at hshort
-          rcases hs with rfl | rfl <;> simp [numberLimit] at hshort <;> decide
-        have hint : s ++ i.filter (· != '_') = intText (s == ['-']) v := by
-          rw [← hdig]; unfold intText; rcases hs with rfl | rfl <;> simp [hv0]
-        rw [hint]
-        refine int_canonical hL _ _ (fun hlong => ?_) n
-        -- v has D digits, so fewer than D - 1 hex digits
-        have hD : 12 ≤ (i.filter (· != '_')).length := by
-          have : s.length ≤ 1 := by rcases hs with rfl | rfl <;> simp
-          simp [numberLimit] at hshort; omega
-        have hlt : v < 16 ^ ((i.filter (· != '_')).length - 2) :=
-          hv ▸ Nat.lt_of_lt_of_le (digitsValue_lt fun c hc => hexValue_digit (hid c hc)) (ten_pow_le _ hD)
-        have := hexLength (b := 16) (by decide) (by omega) hlt
-        have := intSign_le hs v
-        rw [← hint] at hlong
-        simp only [List.length_append, List.length_cons] at hl hlen ⊢
-        omega
-    · -- a fraction or an exponent: written as normalized
-      rw [number_eq_self (.inr ?_)]
-      · exact hnorm ▸ Val.number n _ hlit
-      · rcases hf' with hf0 | ⟨ds, hds, -⟩
-        · have he0 : e ≠ [] := fun h => hint ⟨by
-            rcases hf with rfl | ⟨ds, rfl, -⟩
-            · rfl
-            · simp at hf0, h⟩
-          rcases he'.1 with h | ⟨m, sgn, es, hm', hmk, -⟩
-          · rcases he with rfl | ⟨m, sgn, es, rfl, hm, hsg, -⟩
-            · exact absurd rfl he0
-            · simp [normE, List.cons_append, filter_exp hm hsg] at h
-          · exact ⟨m, by simp [hm'], by rcases hmk with rfl | rfl <;> decide, by rcases hmk with rfl | rfl <;> decide⟩
-        · exact ⟨'.', by simp [hds], by decide, by decide⟩
+    refine ⟨.decimal _ _ _ _ hs hi' hf' he'.1 (by rw [he'.2.1]; exact hexp) (Nat.le_trans hl hlen), ?_⟩
+    rw [normalize_decimal hs hi' hf' he'.1, filter_idem, filter_idem, he'.2.2.2]
+
+/--
+**Every number a literal can hold fits the number limit in normalized
+form** (§7): the normalized literal of a number parsed within `L`, which is
+its canonical text (§12), always decimal, has at most `L.maxNumberLength`
+characters. This is what the hex limit `maxHexDigits` buys.
+-/
+theorem _root_.Haus.Grammar.NumberLit.normalize_fits {t : Text} (h : NumberLit L t) :
+    (normalizeNumber t).length ≤ L.maxNumberLength := by
+  rw [← String.length_toList]; exact (normalized_lit h).1.length_le
+
+/-! ## Writing a number -/
+
+/-- **A number, written canonically**, is the same number, within the same limits. -/
+theorem number_canonical {t : Text} (h : NumberLit L t) (n : Nat) :
+    Val L n (Canonical.number (normalizeNumber t)) (.num (normalizeNumber t)) := by
+  obtain ⟨hl, hn⟩ := normalized_lit h
+  have := Val.number n _ hl
+  rwa [hn] at this
 
 end Haus.RoundTrip

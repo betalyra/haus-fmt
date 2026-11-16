@@ -284,7 +284,7 @@ Code {
 Code {
   code: "number-too-long",
   category: Limits,
-  means: "A number literal has more characters than the limit (default 1000).",
+  means: "A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7).",
   example: Text("a number with 1001 digits"),
   fix: "Write a shorter number (a `String` or `Bytes` for very long data), or raise the number length limit.",
 },

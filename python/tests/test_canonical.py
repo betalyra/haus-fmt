@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from functools import cmp_to_key
-
-import pytest
 
 import haus
 from haus import Number, Record, String
@@ -77,47 +76,39 @@ def test_writes_a_single_record_payload_as_tag_braces() -> None:
     assert c("[None, Some(1), Circle({ r: 1 }), Pair({ a: 1 }, 2)]") == "[None,Some(1),Circle{r:1},Pair({a:1},2)]"
 
 
-def test_keeps_a_huge_hex_integer_in_hex() -> None:
-    big = "0x" + "f" * 900
-    assert c(big) == big
-    assert c("-" + big) == "-" + big
+def test_writes_a_huge_hex_integer_in_decimal() -> None:
+    big = "0x" + "f" * 829  # the most hex digits the default number limit takes
+    assert c(big) == str(16**829 - 1)
+    assert c("-" + big) == str(1 - 16**829)
+    assert len(c("-" + big)) <= 1000
 
 
-def test_writes_integers_longer_than_1000_characters_in_hex() -> None:
-    assert haus.canonical(Number("1" + "0" * 999)) == "1" + "0" * 999  # 1000 characters: decimal
-    assert haus.canonical(Number("1" + "0" * 1000)) == "0x" + format(10**1000, "x")
-    assert haus.canonical(Number("-" + "9" * 1200)) == "-0x" + format(10**1200 - 1, "x")
-    assert haus.canonical(Number("1." + "0" * 1000)) == "1." + "0" * 1000  # not an integer: as written
+def test_writes_every_integer_in_decimal_whatever_its_length() -> None:
+    # Every value has a canonical form (spec §12): an integer of any size is written with all its digits.
+    assert haus.canonical(Number("1" + "0" * 1000)) == "1" + "0" * 1000
+    assert haus.canonical(Number("1." + "0" * 1000)) == "1." + "0" * 1000
+    huge = "-" + "9" * 5000  # built in code, past int's str limit
+    assert haus.canonical(Number(huge)) == huge
 
 
-def test_the_hex_threshold_is_1000_whatever_the_number_limit() -> None:
-    # A parser with a larger number limit reads a longer literal; its canonical form is still hex past 1000.
-    limits = haus.Limits(max_number_length=2000)
-    decimal = "9" * 1100
-    assert haus.canonical(haus.parse(decimal, limits=limits)) == "0x" + format(10**1100 - 1, "x")
-    hex_1000 = "0x" + "f" * 998
-    assert c(hex_1000) == hex_1000
-
-
-def test_an_integer_too_long_even_in_hex_has_no_canonical_form() -> None:
-    limits = haus.Limits(max_number_length=2000)
-    too_long = haus.parse("0x" + "f" * 999, limits=limits)  # 1001 characters in hex
-    writers: list[Callable[[haus.Value], object]] = [
-        haus.canonical,
+def test_a_1300_digit_integer_has_a_decimal_canonical_form_and_hash() -> None:
+    # Only a parser with a raised number limit, or code, makes one; the reader's limits don't matter.
+    digits = "1" + "0" * 1299
+    parsed = haus.parse(digits, limits=haus.Limits(max_number_length=2000))
+    built = Record({"a": Number(digits)})
+    assert haus.canonical(parsed) == digits
+    assert haus.canonical(built) == "{a:" + digits + "}"
+    want = hashlib.sha256(digits.encode()).hexdigest()
+    hashers: list[Callable[[haus.Value], str]] = [
         haus.hash,
-        lambda v: haus.Hasher().add(v),
+        lambda v: haus.Hasher().add(v).digest(),
         lambda v: haus.hash_all([v]),
     ]
-    for write in writers:
-        with pytest.raises(haus.HausError) as e:
-            write(too_long)
-        assert e.value.code == "number-too-long"
-    with pytest.raises(haus.HausError, match="no canonical form"):
-        haus.canonical(Number("-" + "9" * 5000))  # past int's str limit, and far too long in hex
-    # Equality and order need no canonical text: they still tell such values apart.
-    assert haus.equals(too_long, haus.parse("0x" + "f" * 999, limits=limits))
-    assert not haus.equals(too_long, Number("0"))
-    assert haus.compare(too_long, Number("0")) == 1
+    for h in hashers:
+        assert h(parsed) == want
+    assert haus.equals(parsed, Number(digits))
+    assert not haus.equals(parsed, Number("0"))
+    assert haus.compare(parsed, Number("2")) == -1
 
 
 def test_parses_back_to_the_same_value() -> None:

@@ -153,7 +153,7 @@ ErrorCode := [].{
 	nesting_too_deep : Str
 	nesting_too_deep = "nesting-too-deep"
 
-	## `number-too-long` (limits): A number literal has more characters than the limit (default 1000).
+	## `number-too-long` (limits): A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7).
 	number_too_long : Str
 	number_too_long = "number-too-long"
 

@@ -53,13 +53,10 @@ line = |result| match result {
 	}
 }
 
-## With `--canonical`: the canonical form of each value (spec §12), as JSON
-## strings. A value without one (`number-too-long`, which the default number
-## limit rules out) is an `err` at line and column 0.
+## With `--canonical`: the canonical form of each value (spec §12), as JSON strings.
 canonical_line : Try(List(Value), Value.ParseError) -> Str
-canonical_line = |result| match result.map_ok(|values| values.map_try(Encode.canonical)) {
-	Ok(Ok(forms)) => "ok [${Str.join_with(forms.map(|form| Value.to_test_json(Text(form))), ",")}]"
-	Ok(Err(e)) => "err 0 0 ${e.code} ${e.reason}"
+canonical_line = |result| match result {
+	Ok(values) => "ok [${Str.join_with(values.map(|v| Value.to_test_json(Text(Encode.canonical(v)))), ",")}]"
 	Err(e) => line(Err(e))
 }
 

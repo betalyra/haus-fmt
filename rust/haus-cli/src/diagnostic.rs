@@ -4,7 +4,7 @@
 use crate::json::{Members, n, s};
 use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet};
 use haus::json::Json;
-use haus::{EncodeError, ErrorCode, SyntaxError};
+use haus::{ErrorCode, SyntaxError};
 use haus_schema::Issue;
 use std::ops::Range;
 
@@ -79,18 +79,6 @@ impl Diagnostic {
             found: e.found().map(str::to_owned),
             hint: e.hint().to_owned(),
             excerpt: text.map(|t| Excerpt::new(t, e.offset..e.offset)),
-            ..Diagnostic::new(Severity::Error, e.code, &e.reason)
-        }
-    }
-
-    /// A value that can't be written (no canonical form: `number-too-long`),
-    /// at its place in the value; values in a stream keep no position.
-    pub fn encode(e: &EncodeError) -> Diagnostic {
-        Diagnostic {
-            path: Some(e.place()),
-            expected: e.expected().map(str::to_owned),
-            found: e.found().map(str::to_owned),
-            hint: e.hint().to_owned(),
             ..Diagnostic::new(Severity::Error, e.code, &e.reason)
         }
     }

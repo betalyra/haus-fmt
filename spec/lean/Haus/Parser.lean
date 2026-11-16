@@ -179,6 +179,7 @@ def number (L : Limits) : P Value := do
   -- A number must not run into a following identifier or `.`: `007`, `1.`, `1_`.
   if n.rest.head?.any (fun c => isIdentChar c || c == '.') then fail .invalidNumber "invalid number"
   if n.literal.length > L.maxNumberLength then fail .numberTooLong s!"number literal longer than {L.maxNumberLength} characters"
+  if hexDigitCount n.literal > L.maxHexDigits then fail .numberTooLong s!"hex literal with more than {L.maxHexDigits} hex digits"
   if expMagnitude n.exponent > L.maxExponent then fail .exponentTooLarge s!"exponent larger than {L.maxExponent}"
   set n.rest
   return .num (normalizeNumber n.literal)
@@ -500,5 +501,19 @@ private def codeOf (src : String) : Option Code :=
 #guard codeOf "[1}" == some .unexpectedCloser && codeOf "{ a: 1 }}" == some .unexpectedCloser
 #guard codeOf "#haus 2\n1" == some .versionDirective && codeOf "\uFEFF#haus 2" == some .versionDirective
 #guard codeOf "{ x: null }" == some .nullLiteral && codeOf "+1" == some .invalidNumber
+-- A hex literal has at most 829 hex digits for the default number limit of 1000 (§7);
+-- `_` doesn't count, leading zeros do, and a decimal literal may have 1000 digits.
+private def hexLit (sign : String) (n : Nat) (sep : Bool := false) : String :=
+  sign ++ "0x" ++ (if sep then "f_" ++ String.ofList (List.replicate (n - 1) 'f') else String.ofList (List.replicate n 'f'))
+#guard codeOf (hexLit "" 829) == none && codeOf (hexLit "-" 829) == none && codeOf (hexLit "" 829 (sep := true)) == none
+#guard codeOf (hexLit "" 830) == some .numberTooLong && codeOf (hexLit "-" 830) == some .numberTooLong &&
+  codeOf (hexLit "" 830 (sep := true)) == some .numberTooLong
+#guard codeOf ("0x" ++ String.ofList (List.replicate 830 '0')) == some .numberTooLong
+#guard codeOf ("0x" ++ String.ofList (List.replicate 829 '0')) == none
+#guard codeOf (String.ofList (List.replicate 1000 '9')) == none && codeOf ("0b" ++ String.ofList (List.replicate 998 '1')) == none
+-- So the largest hex integer has a decimal form of at most 1000 characters, sign included.
+#guard match parse {} (hexLit "-" 829).toList with
+  | .ok [.num s] => s.length == 1000 && s.startsWith "-"
+  | _ => false
 
 end Haus.Parser

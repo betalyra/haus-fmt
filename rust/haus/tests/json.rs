@@ -188,9 +188,10 @@ fn scalars() {
     for bad in ["\"+1\"", "\"1e3\"", "\" 1\"", "\"01\"", "\"\""] {
         assert_eq!(read_error::<Int>(bad), "expected a decimal integer in a string (Int)", "{bad}");
     }
-    // Within the number limit as haus writes it: in hex.
-    let big = "9".repeat(1200);
+    // Within the number limit (spec §16.3), sign included.
+    let big = format!("-{}", "9".repeat(999));
     assert_eq!(from_str::<Int>(&format!("\"{big}\"")).unwrap().as_str(), big);
+    assert_eq!(read_error::<Int>(&format!("\"{}\"", "9".repeat(1001))), "number literal longer than 1000 characters");
 
     // Floats in the spelling of spec §15; NaN and the infinities as strings.
     assert_eq!(to_string(&0.1f64).unwrap(), "0.1");
@@ -308,12 +309,13 @@ fn self_describing_json_checks_values_built_in_code() {
     let deep = (0..257).fold(number("1"), |v, _| Value::Array(vec![v]));
     assert!(error(deep).ends_with("nesting deeper than 256 levels"));
 
-    // A haus integer longer than the number limit (written in hex there) is
-    // its decimal literal in self-describing JSON, and reads back.
-    let big = haus::parse(&format!("0x{}", "f".repeat(998))).unwrap().remove(0);
+    // The largest hex literal is its decimal literal in self-describing JSON,
+    // within the number limit, and reads back; a longer `_num` doesn't.
+    let big = haus::parse(&format!("-0x{}", "f".repeat(829))).unwrap().remove(0);
     let json = haus::to_haus_json(&big).unwrap();
     assert_eq!(haus::from_haus_json(&json).unwrap(), big);
-    assert!(haus::from_haus_json(&format!(r#"{{"_haus":1,"_value":{{"_num":"{}"}}}}"#, "9".repeat(1300))).is_err());
+    let long = haus::from_haus_json(&format!(r#"{{"_haus":1,"_value":{{"_num":"{}"}}}}"#, "9".repeat(1001)));
+    assert_eq!(long.unwrap_err().to_string(), "._num: number literal longer than 1000 characters");
 }
 
 #[test]
@@ -343,7 +345,7 @@ fn self_describing_json_reads_one_form_per_value() {
 
 #[test]
 fn the_import_reads_any_json() {
-    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap()).unwrap();
+    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap());
     assert_eq!(read(r#"{"_tag": "Circle", "r": 1E+0}"#), r#"{_tag:"Circle",r:1e0}"#);
     assert_eq!(read(r#"{"_haus": 1, "_value": {"_num": "1"}}"#), r#"{_haus:1,_value:{_num:"1"}}"#);
     assert_eq!(read("\"\u{7F}\u{202E}\""), "\"\\u{7F}\\u{202E}\"");

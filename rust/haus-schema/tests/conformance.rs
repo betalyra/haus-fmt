@@ -11,15 +11,10 @@
 //! `invalid/*.schema.haus` must be rejected (spec §14), with the code in
 //! `invalid/NAME.error`.
 
-use haus::Value;
+use haus::{Value, canonical};
 use haus_schema::{Options, Schema, Severity};
 use std::fs;
 use std::path::{Path, PathBuf};
-
-/// `v`'s canonical form, for messages and expectations; the error if it has none.
-fn canonical(v: &Value) -> String {
-    haus::canonical(v).unwrap_or_else(|e| e.to_string())
-}
 
 /// A case: whether it should decode, the type, the input, and the expected output.
 struct Case {
@@ -69,7 +64,7 @@ impl Case {
         let errors = schema.check(&self.ty, std::slice::from_ref(&self.input));
         let errors: Vec<_> = errors.iter().filter(|i| i.severity == Severity::Error).collect();
         match (self.ok, decoded) {
-            (true, Ok(out)) if !haus::equals(&out, &self.output) => {
+            (true, Ok(out)) if canonical(&out) != canonical(&self.output) => {
                 Some(format!("decoded as {}, expected {}", canonical(&out), canonical(&self.output)))
             }
             (true, Ok(out)) => match (haus::ser::write(&out), errors.first()) {

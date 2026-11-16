@@ -615,7 +615,7 @@ private def testEnv : Env := ⟨[("T", .ref "Maybe#0"), ("Maybe#0", .maybe (.ref
   ("Maybe#6", .maybe (.ref "Flag")), ("Mine", .maybe (.ref "I")),
   ("Pay", .variant false [.record "C" false [.mk "_tag" true .string]]),
   ("Pay2", .variant false [.record "C" false [.mk "_args" true .string]]),
-  ("Shape", .variant false [.bare "Empty"]), ("Raw", .any)]⟩
+  ("Shape", .variant false [.bare "Empty"]), ("Raw", .any), ("Big", .int .int)]⟩
 
 private def jsonOf (t : String) (src : String) : Option String :=
   match Parser.parse {} src.toList with
@@ -655,5 +655,14 @@ private def readOf (t : String) (json : String) : Option String :=
 -- `Any` is the self-describing value without the envelope, and accepts raw controls.
 #guard jsonOf "Raw" "[1]" == some "[{\"_num\":\"1\"}]" && readOf "Raw" "{\"_haus\":1,\"_value\":\"x\"}" == none
 #guard readOf "Raw" "\"a\u007F\u202Eb\"" == some "\"a\\u{7F}\\u{202E}b\""
+-- An `Int` string within the number limit (§7): 1000 characters, sign included; its hex form doesn't count.
+private def readCode (t : String) (json : String) : Option Code :=
+  match readJson {} testEnv (.ref t) json.toList with
+  | .error e => e.code
+  | .ok _ => none
+#guard readCode "Big" ("\"" ++ toString (10 ^ 999) ++ "\"") == none
+#guard readCode "Big" ("\"-" ++ toString (10 ^ 998) ++ "\"") == none
+#guard readCode "Big" ("\"" ++ toString (10 ^ 1000) ++ "\"") == some .numberTooLong
+#guard readCode "Big" ("\"-" ++ toString (10 ^ 999) ++ "\"") == some .numberTooLong
 
 end Haus.Schema

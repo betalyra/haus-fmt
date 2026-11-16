@@ -47,11 +47,6 @@ fn err(e: &haus::Error) -> String {
     format!("err {place} {code} {}", one_line(&e.to_string()))
 }
 
-/// `ok <canonical form>`, or `err <place> number-too-long …` for a value without one.
-fn ok(v: &haus::Value) -> Result<String, String> {
-    haus::canonical(v).map(|c| format!("ok {c}")).map_err(|e| err(&haus::Error::Encode(e)))
-}
-
 fn line(mode: &str, line: &str) -> Result<String, String> {
     let parts: Vec<&str> = line.split(' ').collect();
     match (mode, parts.as_slice()) {
@@ -62,7 +57,7 @@ fn line(mode: &str, line: &str) -> Result<String, String> {
         },
         ("read", [suite, ty, hex]) => match schemas::read(suite, ty, text(&unhex(hex))?) {
             None => Ok(format!("crash no type {suite}.{ty}")),
-            Some(Ok(v)) => ok(&v),
+            Some(Ok(v)) => Ok(format!("ok {}", haus::canonical(&v))),
             Some(Err(e)) => Err(format!("err {}", one_line(&e))),
         },
         ("haus-json-write", [hex]) => match haus::to_haus_json(&single(&unhex(hex))?) {
@@ -70,11 +65,11 @@ fn line(mode: &str, line: &str) -> Result<String, String> {
             Err(e) => Err(format!("err {} {} {}", e.place(), e.code, one_line(&e.to_string()))),
         },
         ("haus-json-read", [hex]) => match haus::from_haus_json(text(&unhex(hex))?) {
-            Ok(v) => ok(&v),
+            Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
             Err(e) => Err(err(&e)),
         },
         ("import", [hex]) => match haus::import_json(text(&unhex(hex))?) {
-            Ok(v) => ok(&v),
+            Ok(v) => Ok(format!("ok {}", haus::canonical(&v))),
             Err(e) => Err(err(&e)),
         },
         _ => Ok(format!("crash bad line for {mode}")),

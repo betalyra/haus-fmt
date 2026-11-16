@@ -18,36 +18,15 @@ open Haus
 /-- A hex digit, lowercase: `0`–`9`, `a`–`f`. -/
 def hexDigit (n : Nat) : Char := if n < 10 then Char.ofNat (48 + n) else Char.ofNat (87 + n)
 
-/-- A number in hex, lowercase, without leading zeros. -/
-def hex (n : Nat) : Text := Nat.toDigits 16 n
-
 /--
-The length above which the canonical form writes an integer in hex (spec
-§12): a constant of the canonical form, 1000, not a configurable limit. It
-equals today's default number limit (§7, `numberLimit_default`), and stays
-1000 if the defaults grow.
+A number: its normalized literal (spec §12), always in decimal. Every value
+has a canonical form: an integer of any size is written with all its digits.
+
+A number parsed within limits `L` fits them again (`NumberLit.normalize_fits`):
+a hex literal has at most `L.maxHexDigits` hex digits (§7), so its decimal
+form, sign included, has at most `L.maxNumberLength` characters.
 -/
-def numberLimit : Nat := 1000
-
-theorem numberLimit_default : numberLimit = ({} : Limits).maxNumberLength := rfl
-
-/--
-A number: its normalized literal, except an integer whose decimal form is
-longer than 1000 characters (`numberLimit`), which is written in hex.
-
-Spec §12 also says an integer whose hex form is longer than 1000 characters
-too has no canonical form (`number-too-long`). This model writes it in hex
-anyway, so `canonical` stays total: no integer parsed with a number limit of
-1000 is that long (its hex form is shorter than its literal), and the
-theorems about `canonical` hold for any limits `L` with
-`numberLimit ≤ L.maxNumberLength`, the hex form read back within `L`.
--/
-def number (literal : String) : Text :=
-  let t := literal.toList
-  let (sign, ds) := match t with
-    | '-' :: ds => (['-'], ds)
-    | ds => ([], ds)
-  if t.length > numberLimit && ds.all isDigit then sign ++ '0' :: 'x' :: hex (digitsValue 10 ds) else t
+def number (literal : String) : Text := literal.toList
 
 /-- One character of a string: escaped if it must be, otherwise itself. -/
 def escape : Char → Text
@@ -136,10 +115,12 @@ private def canonicalOf (src : String) : Option String :=
 #guard canonicalOf "\"\"\"\n  two\n  lines\n  \"\"\"" == some "\"two\\nlines\""
 -- Keys: bare when they can be, sorted by code point ("Z" before "a", "é" last).
 #guard canonicalOf "{ \"é\": 1, a: 2, \"Z\": 3, \"x-y\": 4 }" == some "{\"Z\":3,a:2,\"x-y\":4,\"é\":1}"
--- Numbers keep their scale; a huge hex integer stays hex.
+-- Numbers keep their scale; integers are always decimal, a huge hex one too.
 #guard canonicalOf "[1.0, 1, -0, -0x0, 0x0, 1E+05]" == some "[1.0,1,-0,-0,0,1e5]"
-#guard canonicalOf ("0x" ++ String.ofList (List.replicate 900 'f')) ==
-  some ("0x" ++ String.ofList (List.replicate 900 'f'))
+#guard canonicalOf ("0x" ++ String.ofList (List.replicate 829 'f')) == some (toString (16 ^ 829 - 1))
+#guard (toString (16 ^ 829 - 1)).length == 999
+-- An integer of any size, built in code, has all its digits.
+#guard String.ofList (canonical (.num (toString (10 ^ 1300)))) == toString (10 ^ 1300)
 -- Variants: bare, a single record payload as Tag{…}, otherwise Tag(…).
 #guard canonicalOf "[None, Some(1), Circle({ r: 1 }), Pair({ a: 1 }, 2)]" ==
   some "[None,Some(1),Circle{r:1},Pair({a:1},2)]"

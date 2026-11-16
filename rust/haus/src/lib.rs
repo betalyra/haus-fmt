@@ -111,7 +111,7 @@ pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
 }
 
 /// [`to_string`], for a reader with `limits`: the value must be within them,
-/// and integers longer than its number limit are written in hex.
+/// integers included, which are written in decimal.
 pub fn to_string_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
     ser::write_with(&value.encode_with(Encoder::new(limits))?, limits)
 }
@@ -133,7 +133,7 @@ pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::import_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
-/// assert_eq!(haus::canonical(&v).unwrap(), "{note:None,paid:True,total:19.90}");
+/// assert_eq!(haus::canonical(&v), "{note:None,paid:True,total:19.90}");
 /// ```
 pub fn import_json(text: &str) -> Result<Value, Error> {
     json::import_json_with(text, &Limits::default())
@@ -157,7 +157,7 @@ pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::from_haus_json(r#"{"_haus": 1, "_value": {"_num": "19.90"}}"#).unwrap();
-/// assert_eq!(haus::canonical(&v).unwrap(), "19.90");
+/// assert_eq!(haus::canonical(&v), "19.90");
 /// assert!(haus::from_haus_json(r#"{"_num": "19.90"}"#).is_err());
 /// ```
 pub fn from_haus_json(text: &str) -> Result<Value, Error> {

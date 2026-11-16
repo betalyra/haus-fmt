@@ -262,10 +262,11 @@ macro_rules! strings {
     )*};
 }
 strings!(i64, u64);
-/// `Int`: a string, the decimal integer.
+/// `Int`: a string, the decimal integer, within the number limit.
 impl ToJson for Int {
-    fn to_json_with(&self, _: Encoder) -> R {
-        Ok(Json::String(self.as_str().to_owned()))
+    fn to_json_with(&self, e: Encoder) -> R {
+        let n = crate::ser::normalized(self.as_str(), e.limits())?;
+        Ok(Json::String(n.into_owned()))
     }
 }
 /// `Decimal`: a string, the normalized literal (`"19.90"`).

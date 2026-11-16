@@ -125,13 +125,17 @@ offset); `Date` and `YearMonth` have exactly one spelling.
 | `parse_canonical` | The canonical form of a parsed value parses back to that value: nothing can break out of its quotes (E) |
 | `canonical_eq_iff` | Two parsed values have the same canonical form exactly when they are equal (§2), so hashes are well defined (H) |
 | `canonicalAll_eq_iff` | Two parsed files have the same `hashAll` text exactly when they hold equal values in the same order (H) |
+| `NumberLit.normalize_fits`, `Bounded.num_fits` | Every number parsed within limits `L`, at any depth, has a canonical text (its normalized literal, always decimal) of at most `L.maxNumberLength` characters: what the hex digit limit of §7 is for |
 | `canonical_eq_canonicalAll_iff` | A value's canonical form is the text of a list only for one equal value: `hash v = hashAll [v]`, and nothing else collides (H) |
 | `hashText_eq`, `canonicalAll_prefix`, `read_canonicalAll` | Hashing value by value as a stream is read gives `hashAll` of the file; the values read so far give a prefix of the text (H) |
 
-Both assume a number limit of at least 1000: the canonical form writes
-integers longer than 1000 digits in hex (a constant of the canonical form,
-`numberLimit`, not the configurable limit), so under a stricter limit a hex
-literal's canonical decimal form could be too long.
+They hold for any limits. The canonical form writes every number as its
+normalized literal, always in decimal, and that text is within the limits
+the number was parsed with (`NumberLit.normalize_fits`, `Bounded.num_fits`):
+a decimal literal only gets shorter, and a hex literal has at most
+`maxHexDigits` hex digits (§7: the largest `h` with `16^h ≤ 10^(n−1)`,
+`Limits.maxHexDigits_iff`; 829 for the default 1000), so its decimal form,
+sign included, has at most `maxNumberLength` characters.
 
 **About block strings** (spec §4, §11), in
 [`Haus/Pretty/BlockString.lean`](Haus/Pretty/BlockString.lean).

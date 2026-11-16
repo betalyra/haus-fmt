@@ -17,19 +17,19 @@ fn writes_every_parsed_value_again() {
         roundtrip(&format!("{}{{}}{}", "A { a: ".repeat(depth - 1), " }".repeat(depth - 1)), &limits);
         roundtrip(&format!("{}N{}", "C(1, ".repeat(depth), ")".repeat(depth)), &limits);
     }
-    for text in ["0x".to_owned() + &"f".repeat(900), "-0x".to_owned() + &"F".repeat(900), "1e6144".into(), "-0".into()]
+    for text in ["0x".to_owned() + &"f".repeat(829), "-0x".to_owned() + &"F".repeat(829), "1e6144".into(), "-0".into()]
     {
         roundtrip(&text, &limits);
     }
     let max = haus::MAX_SUPPORTED_DEPTH;
     let raised = Limits { max_number_length: 3000, max_exponent: 9000, max_depth: max, ..limits };
     for text in
-        ["1".repeat(2500), "0x".to_owned() + &"f".repeat(2500), "1e9000".into(), "[".repeat(max) + &"]".repeat(max)]
+        ["1".repeat(2500), "0x".to_owned() + &"f".repeat(2490), "1e9000".into(), "[".repeat(max) + &"]".repeat(max)]
     {
         roundtrip(&text, &raised);
     }
     let lowered = Limits { max_number_length: 20, max_string_length: 4, max_depth: 2, ..limits };
-    for text in ["0xFFFFFFFFFFFFFFFFFF", "\"abcd\"", "x\"0102\"", "[[1]]", "A { a: [1] }"] {
+    for text in ["0xFFFFFFFFFFFFFFF", "\"abcd\"", "x\"0102\"", "[[1]]", "A { a: [1] }"] {
         roundtrip(text, &lowered);
     }
 }
@@ -59,4 +59,29 @@ fn values_beyond_the_limits_are_not_written() {
     ] {
         assert_eq!(ser::write(&Value::Number(n.into())).as_deref(), Ok(written), "{n:?}");
     }
+}
+
+#[test]
+fn integers_longer_than_the_number_limit_are_not_written() {
+    // Integers are written in decimal (spec §11): one longer than the limit written for can't be.
+    let fits = Value::Number(format!("-{}", "9".repeat(999)));
+    let long = Value::Number("9".repeat(1001));
+    let too_long = "number literal longer than 1000 characters";
+    let raised = Limits { max_number_length: 2000, ..Limits::default() };
+    assert_eq!(ser::write(&fits), Ok(format!("-{}", "9".repeat(999))));
+    assert_eq!(ser::write(&long).unwrap_err().to_string(), too_long);
+    assert_eq!(ser::write_with(&long, &raised), Ok("9".repeat(1001)));
+    let in_array = Value::Array(vec![Value::Number("1".into()), long.clone()]);
+    let e = haus::to_string(&in_array).unwrap_err();
+    assert_eq!((e.code.as_str(), e.place()), ("number-too-long", "$[1]".to_owned()));
+    let mut out = Vec::new();
+    let e = haus::stream::encode(&mut out, [fits.clone(), long.clone()]).unwrap_err();
+    assert_eq!(e.to_string(), format!("[1]: {too_long}"));
+    assert_eq!(out, format!("-{},\n", "9".repeat(999)).into_bytes());
+    // The JSON writers: self-describing, `Any`, and `Int`.
+    assert_eq!(haus::to_haus_json(&long).unwrap_err().to_string(), too_long);
+    assert!(haus::json::to_haus_json_with(&long, &raised).is_ok());
+    assert_eq!(haus::json::to_string(&long).unwrap_err().to_string(), too_long);
+    let int = <haus::Int as haus::Decode>::decode(&long).unwrap();
+    assert_eq!(haus::json::to_string(&int).unwrap_err().to_string(), too_long);
 }

@@ -11,6 +11,7 @@ import pytest
 
 import haus
 from haus import Array, Bytes, Limits, Number, Record, String, Variant
+from haus._parser import max_hex_digits
 
 T = TypeVar("T")
 
@@ -144,6 +145,33 @@ def test_huge_hex_beyond_cpython_digit_limit() -> None:
     value = haus.parse("0x" + "f" * 4000, limits=Limits(max_number_length=5000))
     assert isinstance(value, Number)
     assert value.text == str(Decimal(16**4000 - 1))
+
+
+def test_a_hex_literal_has_at_most_829_hex_digits() -> None:
+    # The largest h with 16**h <= 10**999 (spec §7): every integer that parses fits 1000 characters in decimal.
+    for sign in ("", "-"):
+        value = haus.parse(sign + "0x" + "f" * 829)
+        assert isinstance(value, Number)
+        assert value.text == sign + str(16**829 - 1)
+        assert len(value.text) <= 1000
+        e = error(sign + "0x" + "f" * 830)
+        assert (e.code, e.reason, e.column) == ("number-too-long", "hex literal with more than 829 hex digits", 1)
+    # Leading zeros count, `_` separators don't.
+    assert error("0x" + "0" * 830).code == "number-too-long"
+    separated = "0x" + "_".join(["f" * 100] * 8 + ["f" * 29])  # 829 digits, 8 separators
+    assert haus.parse(separated) == haus.parse("0x" + "f" * 829)
+    # Binary literals need no limit of their own: 998 binary digits are 301 decimal ones.
+    assert isinstance(haus.parse("0b" + "1" * 998), Number)
+
+
+def test_the_hex_digit_limit_follows_the_number_limit() -> None:
+    assert [max_hex_digits(n) for n in (1, 2, 3, 12, 1000, 2000)] == [0, 0, 1, 9, 829, 1660]
+    for n in range(1, 1500):
+        h = max_hex_digits(n)
+        assert 16**h <= 10 ** (n - 1) < 16 ** (h + 1)
+    assert isinstance(haus.parse("0x" + "f" * 9, limits=Limits(max_number_length=12)), Number)
+    assert error("0x" + "f" * 10, Limits(max_number_length=12)).code == "number-too-long"
+    assert error("0x" + "f" * 10, Limits(max_number_length=12)).reason == "hex literal with more than 9 hex digits"
 
 
 def test_huge_exponent_is_checked_without_converting() -> None:

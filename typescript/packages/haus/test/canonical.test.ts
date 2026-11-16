@@ -41,21 +41,24 @@ describe("canonical form (spec §12)", () => {
     expect(c("[None, Some(1), Circle({ r: 1 }), Pair({ a: 1 }, 2)]")).toBe("[None,Some(1),Circle{r:1},Pair({a:1},2)]")
   })
 
-  it("keeps a huge hex integer in hex", () => {
-    const big = "0x" + "f".repeat(900)
-    expect(c(big)).toBe(big)
+  it("writes every integer in decimal, also from a hex literal (spec §12)", () => {
+    const big = "0x" + "f".repeat(829)
+    const decimal = (16n ** 829n - 1n).toString()
+    expect(c(big)).toBe(decimal)
+    expect(c("-" + big)).toBe("-" + decimal)
+    expect(decimal.length).toBe(999)
   })
 
-  it("switches to hex at 1000 characters, whatever the number limit (spec §12)", () => {
+  it("gives an integer of any size a decimal form, whatever the number limit", () => {
     const limits = { maxNumberLength: 5000 }
-    expect(canonical(parse("9".repeat(1000), limits))).toBe("9".repeat(1000))
-    expect(canonical(parse("-" + "9".repeat(999), limits))).toBe("-" + "9".repeat(999))
-    expect(canonical(parse("1" + "0".repeat(1000), limits))).toMatch(/^0x[0-9a-f]+$/)
+    expect(canonical(parse("1" + "0".repeat(1000), limits))).toBe("1" + "0".repeat(1000))
+    const huge = parse(`{ a: [1, ${"9".repeat(1300)}] }`, limits)
+    expect(canonical(huge)).toBe(`{a:[1,${"9".repeat(1300)}]}`)
+    // Built in code: no limit applies.
+    const built = { kind: "number", text: "-" + "7".repeat(3000) } as const
+    expect(canonical(built)).toBe("-" + "7".repeat(3000))
+    expect(new Hasher().add(built).digest()).toMatch(/^[0-9a-f]{64}$/)
   })
-
-  it("has no form for an integer longer than 1000 characters in hex too: number-too-long", () => {
-    const huge = parse(`{ a: [1, ${"9".repeat(1300)}] }`, { maxNumberLength: 5000 })
-    expect(() => canonical(huge)).toThrow(expect.objectContaining({ name: "HausEncodeError", code: "number-too-long", path: ["a", 1] }))  })
 
   it("keeps the sign of a hex or binary zero (spec §2)", () => {
     expect(c("[-0x0, -0b0, -0x00, 0x0, -0]")).toBe("[-0,-0,-0,0,-0]")

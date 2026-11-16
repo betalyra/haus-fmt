@@ -111,8 +111,8 @@ theorem schemaBased_parsed {L : Limits} {input : Text} {vs : List Value} (h : Pa
 value's schema-based JSON gives the value back, when the value has no
 duplicate keys and its encoding is within the limits. The JSON is well formed
 (`toJson_wellFormed`) and within the JSON limits (`toJson_fits`), when the
-limits leave room for schema-based JSON's member names, numbers in strings
-and number tokens (`SchemaBasedOk`, true of the defaults).
+limits leave room for schema-based JSON's member names and numbers in
+strings (`SchemaBasedOk`, the same as `SelfDescribingOk`, true of the defaults).
 -/
 theorem readJson_write {L : Limits} {env : Env} {t : Ty} {v : Value} {x : Typed} {j : JSON}
     (h : decode env t v = .ok x) (hv : v.wf = true) (hu : UniqueKeys v) (hj : toJson env t x = .ok j)

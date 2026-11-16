@@ -208,3 +208,42 @@ fn keys_and_tags_count_against_the_string_limit() {
     let e = json::parse_with(r#"{"abcde": 1}"#, &limits).unwrap_err().to_string();
     assert_eq!(e, "string longer than 4 characters at 1:2");
 }
+
+#[test]
+fn the_hex_digit_limit_follows_from_the_number_limit() {
+    // The largest h with 16^h ≤ 10^(n−1) (spec §7).
+    let hex = |n: usize| Limits { max_number_length: n, ..Limits::default() }.max_hex_digits();
+    for (n, h) in [(0, 0), (1, 0), (2, 0), (3, 1), (13, 9), (20, 15), (1000, 829), (1001, 830), (3000, 2490)] {
+        assert_eq!(hex(n), h, "{n}");
+    }
+    assert_eq!(hex(1_000_000_000), 830_482_022);
+    assert_eq!(hex(usize::MAX), 15_319_689_349_413_178_108);
+}
+
+#[test]
+fn a_hex_literal_has_at_most_829_hex_digits() {
+    let error = |text: &str| {
+        let e = haus::parse(text).unwrap_err();
+        (e.code.as_str(), e.reason, e.column)
+    };
+    for sign in ["", "-"] {
+        // Leading zeros count; separators and the prefix don't.
+        for digits in ["f".repeat(829), "0".repeat(829), format!("{}_f", "f".repeat(828))] {
+            let text = format!("{sign}0x{digits}");
+            let [v] = haus::parse(&text).unwrap().try_into().unwrap();
+            // It fits the number limit in decimal.
+            assert!(ser::write(&v).unwrap().len() <= 1000, "{text:.20}");
+        }
+        let text = format!("[1, {sign}0x{}]", "0".repeat(830));
+        // At the literal.
+        assert_eq!(error(&text), ("number-too-long", "hex literal with more than 829 hex digits".into(), 5));
+    }
+    // The literal's length is checked first: 830 hex digits with 414 separators are 1246 characters.
+    let long = format!("0x{}", vec!["ff"; 415].join("_"));
+    assert_eq!(error(&long).1, "number literal longer than 1000 characters");
+    // A raised number limit allows more.
+    let raised = Limits { max_number_length: 1001, ..Limits::default() };
+    assert!(haus::parse_with(&format!("0x{}", "f".repeat(830)), &raised).is_ok());
+    // Binary literals need no limit of their own: 998 binary digits fit in decimal.
+    assert!(haus::parse(&format!("-0b{}", "1".repeat(997))).is_ok());
+}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect } from "effect"
 import { MAX_DEPTH, parse, parseAll, parseStream, StreamReader } from "../src/index.js"
+import { maxHexDigits } from "../src/parser.js"
 import { suiteJson } from "./suite-json.js"
 import { parseText, syntax } from "./haus.js"
 
@@ -125,6 +126,27 @@ describe("limits and stream safety", () => {
       expect(e.message).toContain("number literal longer than 5")
       const s = yield* Effect.flip(syntax(() => parseAll('"abcdef"', { maxStringLength: 3 })))
       expect(s.message).toContain("string longer than 3")
+    }))
+
+  it.effect("a hex literal has at most as many hex digits as fit the number limit in decimal (spec §7)", () =>
+    Effect.gen(function* () {
+      expect(maxHexDigits(1000)).toBe(829)
+      // The largest h with 16^h ≤ 10^(n−1), checked against exact powers.
+      for (let n = 1; n <= 1500; n++) {
+        const h = maxHexDigits(n)
+        expect(16n ** BigInt(h) <= 10n ** BigInt(n - 1) && 16n ** BigInt(h + 1) > 10n ** BigInt(n - 1)).toBe(true)
+      }
+      const f = "f".repeat(829)
+      expect(parse(`[0x${f}, -0x${f}]`)).toEqual(parse(`[${16n ** 829n - 1n}, -${16n ** 829n - 1n}]`))
+      // `_` doesn't count; leading zeros do.
+      expect(() => parse(`0x${f.slice(1)}_f`)).not.toThrow()
+      const e = yield* Effect.flip(syntax(() => parse(`[1, 0x${f}f]`)))
+      expect(e.code).toBe("number-too-long")
+      expect([e.line, e.column]).toEqual([1, 5])
+      expect(e.message).toContain("more than 829 hex digits")
+      expect((yield* Effect.flip(syntax(() => parse(`-0x0${f}`)))).code).toBe("number-too-long")
+      expect((yield* Effect.flip(syntax(() => parse("0x" + "f".repeat(15) + "f", { maxNumberLength: 20 })))).code).toBe("number-too-long")
+      expect(parse("0b" + "1".repeat(998)).kind).toBe("number")
     }))
 
   it.effect("requireTerminator reports a cut-off last value", () =>

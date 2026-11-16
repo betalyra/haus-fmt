@@ -110,7 +110,7 @@ fn very_deep_native_values_fail_without_overflowing_the_stack() {
 fn very_deep_values_built_in_code_have_a_canonical_form() {
     // The canonical form takes no call stack per level: it has no limit (spec §12).
     let deep = (0..1_000_000).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
-    let text = haus::canonical(&deep).unwrap();
+    let text = haus::canonical(&deep);
     assert_eq!(text.len(), 2 * 1_000_001);
     assert!(text.starts_with("[[[") && text.ends_with("]]]"));
     assert!(haus::equals(&deep, &deep));

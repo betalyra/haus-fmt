@@ -75,7 +75,7 @@ Two values are equal when they have the same kind and:
 - **Without a schema:** a decoder that turns values into native types without a schema MUST NOT lose precision, and MUST NOT reject a number for its size within the limits (§7). Every integer becomes an arbitrary-size integer type (`bigint` in JavaScript), and every other number an exact decimal or its literal text, never a rounded binary float. A decoder MUST NOT choose the type by looking at the data, such as a JavaScript `number` for a field whose integers all fit one: types must not depend on the document, and a stream reader can't look ahead at later values.
 - **`Int`:** decodes to an arbitrary-size integer in every binding. For a native fixed-size integer, the schema says `Int32`, `Int64` and so on, and a value out of range is an error.
 - **NaN and infinities:** there are no `NaN` or infinity literals. The prelude tags `NaN`, `Infinity` and `NegInfinity` are accepted where the schema says `Float32` or `Float64`. A finite literal too large for the float type is an error, not an infinity (§15).
-- **Limits:** a number literal is at most 1000 characters, and its exponent at most ±6144 (§7).
+- **Limits:** a number literal is at most 1000 characters, a hex literal at most 829 hex digits, and an exponent at most ±6144 (§7). So every integer has a decimal form of at most 1000 characters.
 
 ## 4. Strings and Unicode
 
@@ -120,6 +120,7 @@ Implementations MUST enforce limits while parsing, MUST let users configure them
 |---|---|
 | nesting depth (records, arrays, payloads) | 256 |
 | characters in one number literal | 1000 |
+| hex digits in one hex literal (`_` not counted) | 829: derived from the number limit *n* as the largest *h* with 16<sup>*h*</sup> ≤ 10<sup>*n*−1</sup>, so that every integer's decimal form, sign included, fits in *n* characters |
 | absolute exponent | 6144 |
 | characters in one string, record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
 | characters in one top-level value of a stream | 64 Mi (67,108,864) |
@@ -214,7 +215,7 @@ For people.
     Ring twice
     """,
   ```
-- **Numbers and strings keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). When serializing values with no source text, numbers are written in normalized form, except that integers longer than the number limit (§7) are written in hex.
+- **Numbers and strings keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the number limit (§7) of the reader written for can't be written (`number-too-long`).
 - **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows. A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
 - **Comments** are kept (they are part of the layout, not of the data model):
   - A comment on its own line stays above the entry that follows it.
@@ -273,7 +274,7 @@ comments, no whitespace outside strings, and no trailing comma or line break:
 
 | Value | Canonical form |
 |---|---|
-| number | its normalized literal (§2): `255`, `19.90`, `-0`, `1e5`. An integer whose decimal form would be longer than 1000 characters is written in lowercase hex instead, without leading zeros: `-0x1f…`. The 1000 is a constant of this canonical form, not the number limit of §7: it stays 1000 if the default limits grow. An integer whose hex form is longer than 1000 characters too has no canonical form; writing it is an error (`number-too-long`). |
+| number | its normalized literal (§2), always in decimal: `255`, `19.90`, `-0`, `1e5`. Every value has a canonical form: an integer of any size is written with all its digits. |
 | string | `"…"`, never a block string. These are escaped: `\"`, `\\`, line feed as `\n`, carriage return as `\r`, tab as `\t`, and every other raw control character (U+0000–U+001F, U+007F–U+009F) bidi control (U+202A–U+202E, U+2066–U+2069) and line or paragraph separator (U+2028, U+2029) as `\u{…}` with uppercase hex digits and no leading zeros (`\u{1B}`). Every other character is written as itself, in UTF-8. |
 | bytes | `x"…"`: two lowercase hex digits per byte, nothing between them. |
 | array | `[` the elements, separated by `,` `]`. |
@@ -564,7 +565,7 @@ Tools that show data, such as editors and `haus check`, SHOULD mask values of a 
 - the spelling of a float: `0.10` decodes as `Float64` to the float 0.1, which is written `0.1`;
 - `-0` decoded as an integer, which is written `0`.
 
-Integers are written as decimal integers (in hex when the decimal form is longer than the number limit of §7 that the writer writes for; only the canonical form, §12, uses the fixed 1000), and decimals as their literal, scale included (§3).
+Integers are written as decimal integers, and decimals as their literal, scale included (§3).
 
 **Floats** are written as `NaN`, `Infinity` and `NegInfinity`, and otherwise in one exact spelling, so that every binding writes the same float as the same text and gives it the same canonical form and hash (§12):
 
@@ -623,7 +624,7 @@ A JSON text in this form is an envelope, an object with exactly two members: `{"
 
 `"Shipped"` is the string `"Shipped"` here, and the tag `Shipped` in schema-based JSON with a closed enum: the envelope says which form a text is in.
 
-Reading accepts exactly these forms and rejects every other JSON (`haus-json-form`): a text without the envelope, an envelope with other members or a `_haus` other than 1 (`haus-json-version`), a bare number, `true`, `false`, `null`, an object with other members, a `_num` that isn't a normalized literal (`"1E5"` and `"01"` are rejected, `haus-json-number`) or holds a number no haus literal can hold (an integer's normalized literal may exceed the number limit when its hex form fits, §12), uppercase hex in `_bytes` (`haus-json-bytes`), a `_tag` that isn't a tag, an empty `_args`. So every haus value has one self-describing form, reading it gives an equal value (§2), and each accepted JSON text is the form of exactly one value. Inside schema-based JSON (`Any`, unknown values, 16.3) the value appears without an envelope. The conformance suite's `.jsonl` files use this form, one envelope per value of the file.
+Reading accepts exactly these forms and rejects every other JSON (`haus-json-form`): a text without the envelope, an envelope with other members or a `_haus` other than 1 (`haus-json-version`), a bare number, `true`, `false`, `null`, an object with other members, a `_num` that isn't a normalized literal (`"1E5"` and `"01"` are rejected, `haus-json-number`) or longer than the number limit (§7), uppercase hex in `_bytes` (`haus-json-bytes`), a `_tag` that isn't a tag, an empty `_args`. So every haus value has one self-describing form, reading it gives an equal value (§2), and each accepted JSON text is the form of exactly one value. Inside schema-based JSON (`Any`, unknown values, 16.3) the value appears without an envelope. The conformance suite's `.jsonl` files use this form, one envelope per value of the file.
 
 ### 16.3 Schema-based JSON
 
@@ -635,7 +636,7 @@ With a schema type, the decoded value (§15) is written as:
 | `Bytes` | a string, base64 with padding (RFC 4648 §4); readers accept only this canonical form: no whitespace, no URL alphabet, zero pad bits |
 | `Bool` | `true` or `false` (the prelude's `Bool` only; a schema's own `closed < False \| True >` is a closed enum like any other) |
 | `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32` | a number: the decimal integer |
-| `Int`, `Int64`, `UInt64` | a string: the decimal integer (`"-12"`), since many JSON parsers round integers beyond 2⁵³. Readers accept `-?(0|[1-9][0-9]*)` (`"-0"` is 0) whose value a haus literal can hold (§7, §12). |
+| `Int`, `Int64`, `UInt64` | a string: the decimal integer (`"-12"`), since many JSON parsers round integers beyond 2⁵³. Readers accept `-?(0|[1-9][0-9]*)` (`"-0"` is 0) within the number limit (§7). |
 | `Float32`, `Float64` | a number in the spelling of §15; `NaN`, `Infinity` and `NegInfinity` as the strings `"NaN"`, `"Infinity"` and `"-Infinity"` |
 | `Decimal` | a string: the normalized literal (`"19.90"`), so that float parsers can't round it. Readers accept a JSON number literal in the string (`"1E+05"` is `1e5`), not hex or digit separators. |
 | `Any` | its self-describing value (16.2), without the envelope |

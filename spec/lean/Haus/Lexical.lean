@@ -23,6 +23,27 @@ structure Limits where
   maxStringLength : Nat := 16 * 1024 * 1024
   deriving Repr, Inhabited
 
+/--
+Hex digits in one hex literal, `_` not counted (§7): derived from the number
+limit `n` as the largest `h` with `16 ^ h ≤ 10 ^ (n - 1)` (`maxHexDigits_iff`),
+so that every integer a literal can hold has a decimal form, sign included,
+of at most `n` characters. 829 for the default 1000.
+
+`16 ^ h = 2 ^ (4 · h)`, so `h` is a quarter of the binary logarithm, computed
+exactly on the integer `10 ^ (n - 1)`.
+-/
+def Limits.maxHexDigits (L : Limits) : Nat := Nat.log2 (10 ^ (L.maxNumberLength - 1)) / 4
+
+/-- `maxHexDigits` is the largest `h` with `16 ^ h ≤ 10 ^ (n - 1)`. -/
+theorem Limits.maxHexDigits_iff (L : Limits) (h : Nat) :
+    h ≤ L.maxHexDigits ↔ 16 ^ h ≤ 10 ^ (L.maxNumberLength - 1) := by
+  have hne : 10 ^ (L.maxNumberLength - 1) ≠ 0 := Nat.ne_of_gt (Nat.pow_pos (by decide))
+  rw [Limits.maxHexDigits, Nat.le_div_iff_mul_le (by decide), Nat.le_log2 hne,
+    show (16 : Nat) = 2 ^ 4 from rfl, ← Nat.pow_mul, Nat.mul_comm]
+
+#guard ({} : Limits).maxHexDigits == 829
+#guard 16 ^ 829 ≤ 10 ^ 999 && 10 ^ 999 < 16 ^ 830
+
 /-- Raw bidirectional controls, U+202A–U+202E and U+2066–U+2069 ("Trojan Source"). -/
 def isBidi (c : Char) : Bool :=
   (0x202A ≤ c.toNat && c.toNat ≤ 0x202E) || (0x2066 ≤ c.toNat && c.toNat ≤ 0x2069)
@@ -64,6 +85,18 @@ def hexValue (c : Char) : Nat :=
 /-- The value of a sequence of digits in a radix. -/
 def digitsValue (radix : Nat) (ds : Text) : Nat :=
   ds.foldl (fun n c => n * radix + hexValue c) 0
+
+/--
+The hex digits of a hex literal (`0x…` or `-0x…`), `_` not counted, for the
+limit `maxHexDigits` (§7); 0 for any other literal.
+-/
+def hexDigitCount : Text → Nat
+  | '-' :: '0' :: 'x' :: ds => (ds.filter (· != '_')).length
+  | '0' :: 'x' :: ds => (ds.filter (· != '_')).length
+  | _ => 0
+
+#guard hexDigitCount "-0xFF_FF".toList == 4 && hexDigitCount "0x00ff".toList == 4
+#guard hexDigitCount "0b11".toList == 0 && hexDigitCount "100".toList == 0
 
 /-- A Unicode scalar value: at most U+10FFFF and not a surrogate. -/
 def isScalar (n : Nat) : Bool := n ≤ 0x10FFFF && !(0xD800 ≤ n && n ≤ 0xDFFF)

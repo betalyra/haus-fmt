@@ -461,30 +461,30 @@ expect FromJson.one("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"sides\": 6}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => Ok(tag)
+		Bare(tag) => tag
 	},
-) == Ok(Ok("Hexagon{sides:6}"))
+) == Ok("Hexagon{sides:6}")
 # `_args` alone: the arguments; beside other members, or `args`: a record payload.
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => Ok(tag)
+		Bare(tag) => tag
 	},
-) == Ok(Ok("Hexagon(1,\"a\")"))
+) == Ok("Hexagon(1,\"a\")")
 expect FromJson.one("{\"_tag\": \"Run\", \"args\": [1, 2]}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => Ok(tag)
+		Bare(tag) => tag
 	},
-) == Ok(Ok("Run{args:[1,2]}"))
+) == Ok("Run{args:[1,2]}")
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => Ok(tag)
+		Bare(tag) => tag
 	},
-) == Ok(Ok("Hexagon{_args:[{_num:\"1\"}],x:2}"))
+) == Ok("Hexagon{_args:[{_num:\"1\"}],x:2}")
 # `Any` inside schema-based JSON accepts raw DEL, C1 and bidi controls.
-expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(Encode.canonical) == Ok(Ok("\"a\\u{7F}\\u{85}\\u{202E}\""))
+expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}\"")
 expect FromJson.one(
 	"{\"pin\": 98765}",
 	|j| {
@@ -498,7 +498,7 @@ expect FromJson.one(
 	},
 ) == Err(".pin: not a valid Secret UInt16 (the value is hidden)")
 expect FromJson.lines("1\n2\n", FromJson.u8) == Ok([1, 2])
-expect FromJson.within_depth(Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), |v| v).map_ok(Encode.canonical) == Ok(Ok("[{a:Some([])}]"))
+expect FromJson.within_depth(Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), |v| v).map_ok(Encode.canonical) == Ok("[{a:Some([])}]")
 expect FromJson.within_depth(Ok(nest(256)), |v| v).is_ok()
 expect FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
 expect FromJson.within_depth(Ok(Tag("Box", [Rec([("w", nest(255))])])), |v| v).is_ok()
@@ -564,6 +564,9 @@ code_of = |text, reader| match FromJson.one(text, reader) {
 expect code_of("\"CzQ\"", FromJson.bytes) == "invalid-base64 at $" and code_of("1", FromJson.bytes) == "type-mismatch at $"
 expect code_of("\"-12\"", FromJson.i32) == "type-mismatch at $" and code_of("1.0", FromJson.i32) == "not-an-integer at $" and code_of("2147483648", FromJson.i32) == "out-of-range at $"
 expect code_of("123", FromJson.int) == "type-mismatch at $" and code_of("\"1e3\"", FromJson.int) == "not-an-integer at $" and code_of("\"+1\"", FromJson.int) == "invalid-number at $" and code_of("\"007\"", FromJson.int) == "invalid-number at $"
+# An `Int` string within the number limit (spec §16.3), whether or not its hex form would fit; a bounded type checks its range.
+expect FromJson.one("\"-${"9".repeat(999)}\"", FromJson.int).map_ok(|n| n.to_str()) == Ok("-${"9".repeat(999)}")
+expect code_of("\"1${"0".repeat(1000)}\"", FromJson.int) == "number-too-long at $" and code_of("\"1${"0".repeat(1000)}\"", FromJson.u64) == "out-of-range at $"
 expect code_of("\"9223372036854775808\"", FromJson.i64) == "out-of-range at $" and code_of("1e400", FromJson.f64) == "out-of-range at $" and code_of("\"1.5\"", FromJson.f64) == "type-mismatch at $"
 expect code_of("19.90", FromJson.decimal) == "type-mismatch at $" and code_of("\"19,90\"", FromJson.decimal) == "invalid-number at $" and code_of("\"2026-02-30\"", FromJson.time("Date")) == "invalid-time at $"
 expect code_of("null", |j| FromJson.maybe(j, True, |x| FromJson.maybe(x, False, FromJson.i32))) == "type-mismatch at $"

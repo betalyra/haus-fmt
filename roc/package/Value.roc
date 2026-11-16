@@ -373,11 +373,47 @@ parse_number = |src, start, limits| {
 	if end - start > limits.max_number_length {
 		return Err({ code: ErrorCode.number_too_long, reason: "number literal longer than ${limits.max_number_length.to_str()} characters", pos: start })
 	}
+	# More hex digits would make an integer longer than the limit in decimal (spec §7).
+	if radix == 16 {
+		most = max_hex_digits(limits.max_number_length)
+		if src.sublist({ start: digits_start + 2, len: end - digits_start - 2 }).count_if(|b| b != '_') > most {
+			return Err({ code: ErrorCode.number_too_long, reason: "hex literal with more than ${most.to_str()} hex digits", pos: start })
+		}
+	}
 	if radix == 10 and exponent_larger(src.sublist({ start, len: end - start }), limits.max_exponent) {
 		return Err({ code: ErrorCode.exponent_too_large, reason: "exponent larger than ${limits.max_exponent.to_str()}", pos: start })
 	}
 	text = if (radix == 10) decimal_text(src, start, end) else radix_text(src, digits_start + 2, end, radix, neg)
 	Ok((Num(text), end))
+}
+
+## The most hex digits in one hex literal for the number limit `n` (spec §7):
+## the largest h with 16^h ≤ 10^(n − 1), so that every integer that parses has
+## a decimal form, sign included, of at most n characters. 829 for 1000.
+##
+## Exact, never from a literal: ⌊(n − 1) · log₁₆ 10⌋ with two 18-digit bounds
+## of log₁₆ 10, which agree for every limit below 10⁷ and almost every larger
+## one; where they don't, a power of 16 decides.
+max_hex_digits : U64 -> U64
+max_hex_digits = |n| {
+	if n == 0 {
+		return 0
+	}
+	m = (n - 1).to_u128()
+	# log₁₆ 10 = 0.830482023721840586967…
+	low = (m * 830482023721840586 // 1000000000000000000).to_u64_wrap()
+	high = (m * 830482023721840587 // 1000000000000000000).to_u64_wrap()
+	if low == high {
+		return low
+	}
+	# 16^high ≤ 10^(n − 1) exactly when 16^high, never a power of 10, has at most n − 1 digits.
+	var $power = [1]
+	var $i = 0
+	while $i < high {
+		$power = mul_add($power, 16, 0)
+		$i = $i + 1
+	}
+	if ($power.len() <= n - 1) high else low
 }
 
 ## Digits with optional single `_` between them. Returns the end position.
@@ -1018,8 +1054,21 @@ expect within_small("[[[1]]], { a: { b: [] } }, A(B(C(1))), A { b: B { c: [] } }
 expect within_small("[[[[1]]]]") == Err("nesting-too-deep: nesting deeper than 3 levels at 1:4")
 expect within_small("A(B(C(D(1))))") == Err("nesting-too-deep: nesting deeper than 3 levels at 1:8")
 expect within_small("{ a: { b: { c: {} } } }") == Err("nesting-too-deep: nesting deeper than 3 levels at 1:16")
-expect within_small("12345678, -1234567, 1_234_56, 0xFFFFFF") == Ok(4)
+expect within_small("12345678, -1234567, 1_234_56, 0xF_FFFF") == Ok(4)
 expect within_small("123456789") == Err("number-too-long: number literal longer than 8 characters at 1:1")
+# Five hex digits for a limit of 8: -0xFFFFFF would be -16777215, 9 characters.
+expect within_small("0xFFFFFF") == Err("number-too-long: hex literal with more than 5 hex digits at 1:1")
+# A hex literal has at most 829 hex digits (spec §7): leading zeros count, `_` doesn't.
+expect ["0x${"f".repeat(829)}", "-0x${"f".repeat(829)}", "0x${Str.join_with(List.repeat("f".repeat(100), 8), "_")}_${"f".repeat(29)}"].all(|t| Value.parse_all(t).is_ok())
+expect ["0x${"f".repeat(830)}", "-0x${"0".repeat(830)}", "[1, 0x${"F".repeat(830)}]"].map(|t| Value.parse_all(t).map_ok(|_| {}).map_err(|e| (e.code, e.reason, e.column))) == [Err(("number-too-long", "hex literal with more than 829 hex digits", 1)), Err(("number-too-long", "hex literal with more than 829 hex digits", 1)), Err(("number-too-long", "hex literal with more than 829 hex digits", 5))]
+# 829 hex digits are at most 999 decimal digits; binary literals need no limit of their own.
+expect match Value.parse_all("-0x${"f".repeat(829)}, 0b${"1".repeat(998)}") {
+	Ok([Num(hex), Num(bin)]) => hex.count_utf8_bytes() == 1000 and bin.count_utf8_bytes() == 301
+	_ => False
+}
+# The hex digit limit follows the number limit: the largest h with 16^h ≤ 10^(n − 1).
+expect [0, 1, 2, 3, 12, 1000, 2000, 1000000].map(max_hex_digits) == [0, 0, 0, 1, 9, 829, 1660, 830481]
+expect Value.parse_all_with("0x${"f".repeat(9)}", { ..small, max_number_length: 12 }).is_ok() and Value.parse_all_with("0x${"f".repeat(10)}", { ..small, max_number_length: 12 }).map_ok(|_| {}).map_err(|e| e.reason) == Err("hex literal with more than 9 hex digits")
 expect within_small("1e99, 1e-99") == Ok(2)
 expect within_small("1e100") == Err("exponent-too-large: exponent larger than 99 at 1:1")
 expect within_small("\"abcd\", \"éééé\", \"a\\u{1F600}cd\", x\"abcd\", x\"ab\"") == Ok(5)

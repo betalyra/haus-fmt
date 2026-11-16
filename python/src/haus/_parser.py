@@ -13,13 +13,14 @@ needed, for the configured depth (at most `MAX_SUPPORTED_DEPTH`).
 
 from __future__ import annotations
 
+import functools
 import inspect
 import re
 import string
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Context, Decimal
 from typing import Final, Literal, Never, cast
 
 from ._error_codes import ErrorCode
@@ -63,6 +64,36 @@ class Limits:
 
 
 DEFAULT_LIMITS = Limits()
+
+
+_PRECISE = Context(prec=60)
+_LOG16_10 = _PRECISE.divide(Decimal(10).ln(_PRECISE), Decimal(16).ln(_PRECISE))
+"""log16(10) to 60 digits: (n - 1) times it is within 1e-38 of the exact product for any practical n."""
+_MARGIN = Decimal("1e-30")
+
+
+@functools.cache
+def max_hex_digits(max_number_length: int) -> int:
+    """The most hex digits in one hex literal for the number limit n (spec §7): 829 for 1000.
+
+    The largest h with 16**h <= 10**(n - 1), so that every integer that parses has a decimal
+    form, sign included, of at most n characters. Exact, once per limit: floor((n - 1) * log16(10)) to
+    60 digits, checked with integer powers only when that lands next to a whole number.
+    """
+    if max_number_length < 1:
+        return 0
+    x = _PRECISE.multiply(max_number_length - 1, _LOG16_10)
+    h = int(x)
+    fraction = _PRECISE.subtract(x, h)
+    if fraction > _MARGIN and _PRECISE.subtract(1, fraction) > _MARGIN:
+        return h
+    bound = 10 ** (max_number_length - 1)
+    while h > 0 and 1 << (4 * h) > bound:
+        h -= 1
+    while 1 << (4 * (h + 1)) <= bound:
+        h += 1
+    return h
+
 
 _FRAMES_PER_LEVEL: Final = 6
 """Python frames per level of nesting, with room to spare: the deepest path takes four."""
@@ -410,6 +441,9 @@ class Parser:
             self._fail(
                 "number-too-long", f"number literal longer than {self.limits.max_number_length} characters", start
             )
+        # Hex digits beyond the limit's would make an integer longer than the limit in decimal (spec §7).
+        if radix == 16 and len(m[1]) - m[1].count("_") > (most := max_hex_digits(self.limits.max_number_length)):
+            self._fail("number-too-long", f"hex literal with more than {most} hex digits", start)
         self.pos = end
         if radix is not None:
             n = int(m[1].replace("_", ""), radix)

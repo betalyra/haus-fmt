@@ -165,7 +165,7 @@ pub struct LimitArgs {
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(0..=haus::MAX_SUPPORTED_DEPTH as i64))]
     pub max_depth: Option<u16>,
 
-    /// Characters in one number literal [default: 1000].
+    /// Characters in one number literal [default: 1000]; also limits a hex literal's hex digits (829 for 1000).
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_number_length: Option<u64>,
 

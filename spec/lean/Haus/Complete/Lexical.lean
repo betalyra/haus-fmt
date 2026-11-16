@@ -193,11 +193,44 @@ theorem intPart_head {i : Text} (h : IntPart i) : ∃ c r, i = c :: r ∧ isDigi
   | zero => exact ⟨'0', [], rfl, by decide⟩
   | nonzero c rest hc _ _ => exact ⟨c, rest, rfl, hc⟩
 
+/-- Only a literal that starts with `0x` after its sign has hex digits to count. -/
+theorem hexDigitCount_cases (t : Text) :
+    hexDigitCount t = 0 ∨ ∃ ds, t = '-' :: '0' :: 'x' :: ds ∨ t = '0' :: 'x' :: ds := by
+  unfold hexDigitCount; split
+  · exact .inr ⟨_, .inl rfl⟩
+  · exact .inr ⟨_, .inr rfl⟩
+  · exact .inl rfl
+
+/-- A literal that doesn't start with `0x` after its sign has no hex digits to count. -/
+theorem hexDigitCount_other {s r : Text} (hs : Sign s) (hr : ∀ c, r.head? = some c → c ≠ '-')
+    (hx : ∀ ds, r ≠ '0' :: 'x' :: ds) : hexDigitCount (s ++ r) = 0 := by
+  rcases hexDigitCount_cases (s ++ r) with h | ⟨ds, h | h⟩
+  · exact h
+  · rcases hs with rfl | rfl
+    · exact absurd rfl (hr '-' (by simp at h; simp [h]))
+    · simp at h; exact absurd h (hx ds)
+  · rcases hs with rfl | rfl
+    · simp at h; exact absurd h (hx ds)
+    · simp at h
+
 theorem lexNumber_complete {L : Limits} {t : Text} (h : NumberLit L t) (r : Text) (hr : NoIdent r) :
-    ∃ e, lexNumber (t ++ r) = some ⟨t, e, r⟩ ∧ expMagnitude e ≤ L.maxExponent ∧ t.length ≤ L.maxNumberLength := by
+    ∃ e, lexNumber (t ++ r) = some ⟨t, e, r⟩ ∧ expMagnitude e ≤ L.maxExponent ∧ t.length ≤ L.maxNumberLength ∧
+      hexDigitCount t ≤ L.maxHexDigits := by
   cases h with
   | decimal s i f e hs hi hf he hexp hlen =>
-    refine ⟨e, ?_, hexp, hlen⟩
+    refine ⟨e, ?_, hexp, hlen, ?_⟩
+    rotate_left
+    · rw [List.append_assoc, List.append_assoc, hexDigitCount_other hs]
+      · exact Nat.zero_le _
+      · obtain ⟨c, i', rfl, hc⟩ := intPart_head hi
+        intro x hx; simp at hx; subst hx; rintro rfl; simp [isDigit] at hc
+      · intro ds heq
+        cases hi with
+        | nonzero _ _ _ h0 _ => exact h0 (List.cons.inj heq).1
+        | zero =>
+          have := (decimal_follow hf he (r := []) (fun _ h => by simp at h) 'x'
+            (by simp only [List.append_nil]; simp at heq; simp [heq])).2.2.1
+          exact this rfl
     obtain ⟨c, i', rfl, hc⟩ := intPart_head hi
     have hm := lexMinus_sign hs c (i' ++ f ++ e ++ r) hc
     simp only [List.append_assoc, List.cons_append] at hm ⊢
@@ -218,14 +251,16 @@ theorem lexNumber_complete {L : Limits} {t : Text} (h : NumberLit L t) (r : Text
       | zero => have := (hfol 'b' (by simp only [List.nil_append] at heq; simp [List.append_assoc, heq])).2.2.2; exact absurd rfl this
       | nonzero _ _ _ h0 _ => exact absurd rfl h0
     · exact hd
-  | hex s ds hs hds hlen =>
-    refine ⟨[], ?_, by simp [expMagnitude, digitsValue], hlen⟩
+  | hex s ds hs hds hlen hhex =>
+    refine ⟨[], ?_, by simp [expMagnitude, digitsValue], hlen, by rcases hs with rfl | rfl <;> exact hhex⟩
     have hm := lexMinus_sign hs '0' ('x' :: ds ++ r) (by decide)
     have hd := digits_complete isHexDigit_underscore hds r (noIdent_radix (fun _ => isHexDigit_ident) hr)
     simp only [List.append_assoc, List.cons_append] at hm ⊢
     simp [lexNumber, hm, lexUnsigned, lexRadix, hd, HOrElse.hOrElse, OrElse.orElse, Option.orElse]
   | binary s ds hs hds hlen =>
-    refine ⟨[], ?_, by simp [expMagnitude, digitsValue], hlen⟩
+    refine ⟨[], ?_, by simp [expMagnitude, digitsValue], hlen, ?_⟩
+    rotate_left
+    · rw [hexDigitCount_other hs (by simp) (by simp)]; exact Nat.zero_le _
     have hm := lexMinus_sign hs '0' ('b' :: ds ++ r) (by decide)
     have hd := digits_complete isBinDigit_underscore hds r (noIdent_radix (fun _ => isBinDigit_ident) hr)
     simp only [List.append_assoc, List.cons_append] at hm ⊢
@@ -233,12 +268,12 @@ theorem lexNumber_complete {L : Limits} {t : Text} (h : NumberLit L t) (r : Text
 
 theorem number_complete {L : Limits} {t : Text} (h : NumberLit L t) (r : Text) (hr : NoIdent r) :
     (number L).run (t ++ r) = .ok (.num (normalizeNumber t), r) := by
-  obtain ⟨e, hl, hexp, hlen⟩ := lexNumber_complete h r hr
+  obtain ⟨e, hl, hexp, hlen, hhex⟩ := lexNumber_complete h r hr
   have hrest : (r.head?.any fun c => isIdentChar c || c == '.') = false := by
     cases r with
     | nil => rfl
     | cons c r' => obtain ⟨h1, h2⟩ := hr c rfl; simp [h1, h2]
-  simp [number, hl, hrest, Nat.not_lt.mpr hexp, Nat.not_lt.mpr hlen]
+  simp [number, hl, hrest, Nat.not_lt.mpr hexp, Nat.not_lt.mpr hlen, Nat.not_lt.mpr hhex]
 
 /-! ## Strings -/
 

@@ -118,8 +118,10 @@ as parsing: pass the parser's limits to both if you raise them,
 `h.parse(h.Any, text, { maxNumberLength: 5000 })` and
 `h.encode(h.Any, value, { maxNumberLength: 5000 })`. Number literals built in
 code are normalized as the parser would (`"1E5"` is written `1e5`).
-`h.stringify` writes for a reader with the limits it is given: an integer
-longer than `maxNumberLength` is written in hex, so that the reader takes it.
+`h.stringify` writes for a reader with the limits it is given: integers are
+always written in decimal, and one longer than `maxNumberLength` is an error
+(`number-too-long`). A hex literal has at most 829 hex digits (with the
+default limit of 1000), so every integer the parser takes fits in decimal.
 
 ## JSON
 

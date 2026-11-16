@@ -25,7 +25,10 @@ pub struct Limits {
     /// Nesting depth of records, arrays and payloads: at most
     /// [`MAX_SUPPORTED_DEPTH`].
     pub max_depth: usize,
-    /// Characters in one number literal, including sign, separators and exponent.
+    /// Characters in one number literal, including sign, separators and
+    /// exponent. A hex literal also has at most
+    /// [`max_hex_digits`](Limits::max_hex_digits) hex digits, so that every
+    /// integer has a decimal form within this limit.
     pub max_number_length: usize,
     /// Largest absolute exponent: 6144 allows `1e6144` but not `1e6145`.
     pub max_exponent: u64,
@@ -35,6 +38,18 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// The most hex digits (leading zeros counted, `_` not) in one hex
+    /// literal, derived from the number limit *n* (spec §7): the largest *h*
+    /// with 16^*h* ≤ 10^(*n*−1), so that the integer's decimal form, sign
+    /// included, fits in *n* characters. 829 for the default 1000.
+    ///
+    /// ```
+    /// assert_eq!(haus::Limits::default().max_hex_digits(), 829);
+    /// ```
+    pub fn max_hex_digits(&self) -> usize {
+        max_hex_digits(self.max_number_length)
+    }
+
     /// Why this binding can't use these limits: a depth limit above
     /// [`MAX_SUPPORTED_DEPTH`].
     pub(crate) fn unsupported(&self) -> Option<String> {
@@ -73,11 +88,54 @@ pub(crate) fn parse_single(src: &str, limits: &Limits, at_start: bool) -> Result
 /// as the parser reads it (`1e5`, `255`, `1000`); None if it isn't one or is
 /// beyond the limits.
 pub(crate) fn number_literal(text: &str, limits: &Limits) -> Option<String> {
-    let mut p = Parser { src: text, b: text.as_bytes(), pos: 0, depth: 0, limits, file_start: None };
+    let max_hex_digits = limits.max_hex_digits();
+    let mut p = Parser { src: text, b: text.as_bytes(), pos: 0, depth: 0, limits, max_hex_digits, file_start: None };
     match p.number() {
         Ok(Value::Number(n)) if p.pos == text.len() => Some(n),
         _ => None,
     }
+}
+
+/// ⌊2^128 · log₁₆ 10⌋, as its high and low 64 bits.
+const LOG16_10: (u128, u128) = (0xd49a_784b_cd1b_8afe, 0x492b_f6ff_4daf_db4c);
+
+/// The largest `h` with 16^h ≤ 10^(n−1), i.e. ⌊(n−1) · log₁₆ 10⌋, exactly:
+/// computed with log₁₆ 10 rounded down and up in 128 bits, which give the
+/// same floor unless (n−1) · log₁₆ 10 is within (n−1)/2^128 of an integer;
+/// that is then decided with exact powers.
+fn max_hex_digits(n: usize) -> usize {
+    let m = n.saturating_sub(1) as u128;
+    // ⌊m · f / 2^128⌋ for the 128-bit fraction f = (high, low).
+    let floor = |(high, low): (u128, u128)| (m * high + ((m * low) >> 64)) >> 64;
+    let below = floor(LOG16_10);
+    let above = floor((LOG16_10.0, LOG16_10.1 + 1));
+    let h = if below == above || !hex_fits(above, m) { below } else { above };
+    usize::try_from(h).unwrap_or(usize::MAX)
+}
+
+/// Whether 16^h ≤ 10^m, exactly: 2^(4h) ≤ 2^m · 5^m, i.e. 4h − m is less than
+/// the bit length of 5^m (which is no power of 2 for m > 0).
+fn hex_fits(h: u128, m: u128) -> bool {
+    let Some(k) = (4 * h).checked_sub(m) else { return true };
+    // 5^m in little-endian 64-bit limbs, 5^27 (< 2^64) at a time.
+    let mut limbs: Vec<u64> = vec![1];
+    let mut left = m;
+    while left > 0 {
+        let e = left.min(27);
+        left -= e;
+        let mut carry = 0u128;
+        for limb in &mut limbs {
+            let v = u128::from(*limb) * 5u128.pow(e as u32) + carry;
+            *limb = v as u64;
+            carry = v >> 64;
+        }
+        if carry > 0 {
+            limbs.push(carry as u64);
+        }
+    }
+    let top = limbs.last().copied().unwrap_or(1);
+    let bits = (limbs.len() as u128 - 1) * 64 + u128::from(64 - top.leading_zeros());
+    k < bits
 }
 
 type R<T> = Result<T, Error>;
@@ -88,6 +146,8 @@ struct Parser<'a> {
     pos: usize,
     depth: usize,
     limits: &'a Limits,
+    /// [`Limits::max_hex_digits`], computed once.
+    max_hex_digits: usize,
     /// Where the file's first character is, if this text has it (after a byte order mark).
     file_start: Option<usize>,
 }
@@ -121,7 +181,10 @@ impl<'a> Parser<'a> {
     fn new(src: &'a str, limits: &'a Limits, pos: usize, file_start: Option<usize>) -> R<Parser<'a>> {
         match limits.unsupported() {
             Some(reason) => Err(Error::at(src, 0, Code::UnsupportedDepth, reason)),
-            None => Ok(Parser { src, b: src.as_bytes(), pos, depth: 0, limits, file_start }),
+            None => {
+                let max_hex_digits = limits.max_hex_digits();
+                Ok(Parser { src, b: src.as_bytes(), pos, depth: 0, limits, max_hex_digits, file_start })
+            }
         }
     }
 
@@ -445,7 +508,7 @@ impl<'a> Parser<'a> {
             }
             return Err(self.fail_at(start, Code::InvalidNumber, format!("invalid number '{}'", &self.src[start..to])));
         }
-        self.check_number_limits(start, end, radix.is_none())?;
+        self.check_number_limits(start, end, radix)?;
         self.pos = end;
         let text = match radix {
             Some(radix) => {
@@ -510,15 +573,24 @@ impl<'a> Parser<'a> {
         Some(i)
     }
 
-    /// The literal at `start..end` is within the number limits: its length,
-    /// then (`decimal`) its exponent. Checked before converting, so huge
-    /// literals are rejected cheaply.
-    fn check_number_limits(&self, start: usize, end: usize, decimal: bool) -> R<()> {
+    /// The literal at `start..end` (in `radix`, None for decimal) is within
+    /// the number limits: its length, then a hex literal's hex digits or a
+    /// decimal's exponent. Checked before converting, so huge literals are
+    /// rejected cheaply.
+    fn check_number_limits(&self, start: usize, end: usize, radix: Option<u32>) -> R<()> {
         if end - start > self.limits.max_number_length {
             let reason = format!("number literal longer than {} characters", self.limits.max_number_length);
             return Err(self.fail_at(start, Code::NumberTooLong, reason));
         }
-        if let Some(exp) = decimal_exponent(&self.src[start..end]).filter(|_| decimal) {
+        if radix == Some(16) {
+            // After `-0x` or `0x`; leading zeros count, separators don't.
+            let digits = self.src[start..end].bytes().skip_while(|&c| c != b'x').filter(|c| c.is_ascii_hexdigit());
+            if digits.count() > self.max_hex_digits {
+                let reason = format!("hex literal with more than {} hex digits", self.max_hex_digits);
+                return Err(self.fail_at(start, Code::NumberTooLong, reason));
+            }
+        }
+        if let Some(exp) = decimal_exponent(&self.src[start..end]).filter(|_| radix.is_none()) {
             let digits: String = exp.chars().filter(|&c| c != '_').collect();
             let digits = digits.trim_start_matches('0');
             if digits.len() > 19 || digits.parse::<u64>().unwrap_or(0) > self.limits.max_exponent {

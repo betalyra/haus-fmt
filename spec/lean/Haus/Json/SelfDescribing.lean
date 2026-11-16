@@ -114,12 +114,8 @@ The code (spec §17) of the first number, string, byte string, record key or
 tag outside the limits, in the order of the text; none if they all fit.
 -/
 def leafCode (L : Limits) : Value → Option Code
-  | .num s =>
-    if JSON.numberFits L s.toList then none
-    else if JSON.exponentOf s.toList ≤ L.maxExponent then some .numberTooLong
-    -- The exponent is too large; so is the literal, unless it would fit with that exponent.
-    else if JSON.numberFits { L with maxExponent := JSON.exponentOf s.toList } s.toList then some .exponentTooLarge
-    else some .numberTooLong
+  -- As the haus parser checks: the literal's length, then its exponent.
+  | .num s => if JSON.numberFits L s.toList then none else some (JSON.tokenCode L s.toList)
   | .str s => if s.length ≤ L.maxStringLength then none else some .stringTooLong
   | .bytes bs => if 2 * bs.length ≤ L.maxStringLength then none else some .stringTooLong
   | .arr xs => leafCodeList L xs
@@ -855,6 +851,10 @@ private def hausJsonCode (src : String) : Option Code := codeOf (readHausJson {}
 #guard codeOf (readValue "{\"_bytes\": \"0B34\"}") == some .hausJsonBytes
 #guard codeOf (readValue "{\"_tag\": \"t\"}") == some .invalidTag
 #guard codeOf (readValue "{\"_num\": \"1e6145\"}") == some .exponentTooLarge
+-- `_num` within the number limit (§7): 1000 characters; an integer's hex form doesn't count.
+#guard codeOf (readValue ("{\"_num\": \"" ++ toString (10 ^ 999) ++ "\"}")) == none
+#guard codeOf (readValue ("{\"_num\": \"" ++ toString (10 ^ 1000) ++ "\"}")) == some .numberTooLong
+#guard codeOf (readValue ("{\"_num\": \"-" ++ toString (16 ^ 829 - 1) ++ "\"}")) == none
 #guard codeOf (readValue "1") == some .hausJsonForm
 #guard codeOf (readValue "{\"_tag\": \"\", \"_args\": \"\"}") == some .invalidTag
 #guard codeOf (readValue "{\"_args\": [], \"_tag\": 1}") == some .invalidTag

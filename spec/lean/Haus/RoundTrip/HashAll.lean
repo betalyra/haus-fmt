@@ -29,30 +29,30 @@ open Haus Grammar Canonical Value
 variable {L : Limits}
 
 /-- The canonical forms of derived values, joined by `,`, are the items of a file. -/
-theorem fileItems_canonicalAll (hL : numberLimit ≤ L.maxNumberLength) :
+theorem fileItems_canonicalAll :
     ∀ (vs : List Value), vs ≠ [] → (∀ v ∈ vs, ∃ s, Val L L.maxDepth s v) →
       FileItems L (canonicalAll vs) (vs.map canon)
   | [], hne, _ => absurd rfl hne
   | [v], _, h => by
     obtain ⟨s, hs⟩ := h v (by simp)
-    simpa [canonicalAll, writeList] using FileItems.last _ [] _ (hs.roundTrip hL) (.ws [] .nil)
+    simpa [canonicalAll, writeList] using FileItems.last _ [] _ hs.roundTrip (.ws [] .nil)
   | v :: w :: ws, _, h => by
     obtain ⟨s, hs⟩ := h v (by simp)
-    have rest := fileItems_canonicalAll hL (w :: ws) (by simp) (fun x hx => h x (by simp_all))
+    have rest := fileItems_canonicalAll (w :: ws) (by simp) (fun x hx => h x (by simp_all))
     simpa [canonicalAll, writeList] using
-      FileItems.cons _ [] [] _ _ _ (hs.roundTrip hL) .nil .nil rest
+      FileItems.cons _ [] [] _ _ _ hs.roundTrip .nil .nil rest
 
 /-- The text of derived values is a file with exactly those values, in canonical order. -/
-theorem file_canonicalAll (hL : numberLimit ≤ L.maxNumberLength) {vs : List Value}
+theorem file_canonicalAll {vs : List Value}
     (h : ∀ v ∈ vs, ∃ s, Val L L.maxDepth s v) : File L (canonicalAll vs) (vs.map canon) := by
   cases vs with
   | nil => simpa [canonicalAll, writeList] using File.empty (L := L) [] [] (.inl rfl) (.ws [] .nil)
-  | cons v vs => simpa using File.values [] [] _ _ (.inl rfl) .nil (fileItems_canonicalAll hL (v :: vs) (by simp) h)
+  | cons v vs => simpa using File.values [] [] _ _ (.inl rfl) .nil (fileItems_canonicalAll (v :: vs) (by simp) h)
 
 /-- **Parsing the text of a parsed file gives its values back,** in canonical order. -/
-theorem parse_canonicalAll (hL : numberLimit ≤ L.maxNumberLength) {input : Text} {vs : List Value}
+theorem parse_canonicalAll {input : Text} {vs : List Value}
     (h : Parser.parse L input = .ok vs) : Parser.parse L (canonicalAll vs) = .ok (vs.map canon) :=
-  (parse_correct L _ _).mpr (file_canonicalAll hL (File.vals ((parse_correct L input vs).mp h)))
+  (parse_correct L _ _).mpr (file_canonicalAll (File.vals ((parse_correct L input vs).mp h)))
 
 /-- Two lists of values of the same length, equal (§2) pairwise. -/
 inductive AllEquiv : List Value → List Value → Prop
@@ -75,26 +75,26 @@ theorem map_canon_eq_iff : ∀ {as bs : List Value}, as.map canon = bs.map canon
 and equal values (§2) in the same order,** so `hashAll` is well defined and
 tells different lists apart.
 -/
-theorem canonicalAll_eq_iff (hL : numberLimit ≤ L.maxNumberLength) {input₁ input₂ : Text} {as bs : List Value}
+theorem canonicalAll_eq_iff {input₁ input₂ : Text} {as bs : List Value}
     (h₁ : Parser.parse L input₁ = .ok as) (h₂ : Parser.parse L input₂ = .ok bs) :
     canonicalAll as = canonicalAll bs ↔ AllEquiv as bs := by
   rw [← map_canon_eq_iff]
   refine ⟨fun h => ?_, fun h => by simp [canonicalAll, h]⟩
-  have pa := parse_canonicalAll hL h₁
-  rw [h, parse_canonicalAll hL h₂] at pa
+  have pa := parse_canonicalAll h₁
+  rw [h, parse_canonicalAll h₂] at pa
   exact (Except.ok.inj pa).symm
 
 /--
 **A value's canonical form is the text of a list only for one equal value:**
 `hash v = hashAll [v]`, and `hash` never collides with `hashAll` of any other list.
 -/
-theorem canonical_eq_canonicalAll_iff (hL : numberLimit ≤ L.maxNumberLength) {input₁ input₂ : Text}
+theorem canonical_eq_canonicalAll_iff {input₁ input₂ : Text}
     {as bs : List Value} (h₁ : Parser.parse L input₁ = .ok as) (h₂ : Parser.parse L input₂ = .ok bs)
     {a : Value} (ha : a ∈ as) : canonical a = canonicalAll bs ↔ ∃ b, bs = [b] ∧ Equiv a b := by
-  have pa := parse_canonical hL h₁ ha
+  have pa := parse_canonical h₁ ha
   constructor
   · intro h
-    rw [h, parse_canonicalAll hL h₂] at pa
+    rw [h, parse_canonicalAll h₂] at pa
     have hm := Except.ok.inj pa
     cases bs with
     | nil => simp at hm
