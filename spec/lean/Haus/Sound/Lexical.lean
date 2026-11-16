@@ -145,13 +145,17 @@ theorem number_sound (L : Limits) (t rest : Text) (v : Value) (h : (number L).ru
     obtain ⟨h1, h2⟩ := lexNumber_spec t n hn
     by_cases c1 : (n.rest.head?.any fun c => isIdentChar c || c == '.') = true <;>
     by_cases c2 : n.literal.length > L.maxNumberLength <;>
+    by_cases c4 : hexDigitCount n.literal > L.maxHexDigits <;>
     by_cases c3 : expMagnitude n.exponent > L.maxExponent <;>
-    simp [c1, c2, c3] at h
+    simp [c1, c2, c3, c4] at h
     obtain ⟨rfl, rfl⟩ := h
     refine ⟨n.literal, h1.symm, ?_, rfl⟩
     rcases h2 with ⟨s, i, f, hs, hi, hf, he, hlit⟩ | ⟨s, ds, hs, hd, hlit, -⟩ | ⟨s, ds, hs, hd, hlit, -⟩
     · rw [hlit] at c2 ⊢; exact .decimal s i f _ hs hi hf he (by omega) (by omega)
-    · rw [hlit] at c2 ⊢; exact .hex s ds hs hd (by omega)
+    · rw [hlit] at c2 c4 ⊢
+      have hc : hexDigitCount (s ++ '0' :: 'x' :: ds) = (ds.filter (· != '_')).length := by
+        rcases hs with rfl | rfl <;> rfl
+      exact .hex s ds hs hd (by omega) (by omega)
     · rw [hlit] at c2 ⊢; exact .binary s ds hs hd (by omega)
 
 /-! ## Strings -/

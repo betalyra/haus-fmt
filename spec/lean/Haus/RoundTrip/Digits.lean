@@ -177,16 +177,4 @@ theorem toDigits_digitsValue : ∀ {l : Text}, l ≠ [] → (∀ c ∈ l, isDigi
       rw [Nat.mul_comm, ← Nat.toDigits_append_toDigits (by decide) hpos (hexValue_digit hc), ih',
         Nat.toDigits_of_lt_base (hexValue_digit hc), digitChar_hexValue hc]
 
-/-- For 12 digits and more, a number has at least two fewer hex digits than decimal ones. -/
-theorem ten_pow_le (D : Nat) (h : 12 ≤ D) : 10 ^ D ≤ 16 ^ (D - 2) := by
-  have : ∀ k, 10 ^ (k + 12) ≤ 16 ^ (k + 10) := by
-    intro k
-    induction k with
-    | zero => decide
-    | succ k ih =>
-      rw [show k + 1 + 12 = (k + 12) + 1 by omega, show k + 1 + 10 = (k + 10) + 1 by omega, Nat.pow_succ, Nat.pow_succ]
-      exact Nat.mul_le_mul ih (by decide)
-  have := this (D - 12)
-  rwa [show D - 12 + 12 = D by omega, show D - 12 + 10 = D - 2 by omega] at this
-
 end Haus.RoundTrip

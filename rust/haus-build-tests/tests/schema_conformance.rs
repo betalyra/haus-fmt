@@ -14,14 +14,9 @@ mod suite {
     include!(concat!(env!("OUT_DIR"), "/schema_suite.rs"));
 }
 
-use haus::Value;
+use haus::{Value, canonical};
 use std::fs;
 use std::path::Path;
-
-/// `v`'s canonical form, for messages and expectations; the error if it has none.
-fn canonical(v: &Value) -> String {
-    haus::canonical(v).unwrap_or_else(|e| e.to_string())
-}
 
 /// A case: whether it should decode, the type, the input, and the expected output.
 struct Case {
@@ -71,7 +66,7 @@ impl Case {
             return Some(format!("no type {}", self.ty));
         };
         match (self.ok, result) {
-            (true, Ok(encoded)) if haus::equals(&encoded, &self.output) => {
+            (true, Ok(encoded)) if canonical(&encoded) == canonical(&self.output) => {
                 // The writer takes it too (it checks what it writes).
                 haus::ser::write(&encoded).err().map(|e| format!("encoded, but can't be written: {e}"))
             }

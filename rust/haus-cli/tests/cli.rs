@@ -507,31 +507,32 @@ fn canonical_and_hash_errors() {
 }
 
 #[test]
-fn an_integer_too_long_in_hex_too_has_no_canonical_form_or_hash() {
-    // 1300 digits are more than 1000 characters in hex too (spec §12); 1100 are not.
-    let huge = format!("1, {{ a: [{}] }},\n", "9".repeat(1300));
-    let too_long = || {
-        predicate::str::contains("error[number-too-long]")
-            .and(predicate::str::contains("in hex too has no canonical form"))
-            .and(predicate::str::contains("$.a[0]"))
-    };
-    for args in [&["canonical"][..], &["hash", "--each"], &["hash"]] {
+fn an_integer_of_any_size_has_a_canonical_form_and_hash() {
+    // 1300 digits: beyond the default number limit, read with a raised one; written in decimal (spec §12).
+    let huge = "9".repeat(1300);
+    let input = format!("1, {{ a: [{huge}] }},\n");
+    haus()
+        .args(["canonical", "--max-number-length", "2000", "-"])
+        .write_stdin(input.clone())
+        .assert()
+        .success()
+        .stdout(format!("1\n{{a:[{huge}]}}\n"));
+    for args in [&["hash", "--each"][..], &["hash"]] {
         haus()
             .args(args)
             .args(["--max-number-length", "2000", "-"])
-            .write_stdin(huge.clone())
+            .write_stdin(input.clone())
             .assert()
-            .code(1)
-            .stderr(too_long());
+            .success()
+            .stdout(predicate::str::is_match("^([0-9a-f]{64}\n)+$").unwrap());
     }
-    // What was printed before it stays printed.
-    haus().args(["canonical", "--max-number-length", "2000", "-"]).write_stdin(huge).assert().stdout("1\n");
+    // With the default limit, it is a syntax error at the literal.
     haus()
-        .args(["canonical", "--max-number-length", "2000", "-"])
-        .write_stdin("9".repeat(1100))
+        .args(["canonical", "-"])
+        .write_stdin(input)
         .assert()
-        .success()
-        .stdout(predicate::str::starts_with("0x"));
+        .code(1)
+        .stderr(predicate::str::contains("error[number-too-long]").and(predicate::str::contains("<stdin>:1:10")));
 }
 
 // ── fmt ──────────────────────────────────────────────────────────

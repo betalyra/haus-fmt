@@ -81,8 +81,9 @@ built in code, the raw value of an `Any` or an unknown variant (spec §9.8):
 literal`), as are a tag that isn't a tag name, a key used twice in a record,
 and nesting, strings and numbers beyond the limits. Number literals are
 written as the parser reads them (`1E5` as `1e5`). For a reader with other
-limits, `haus::to_string_with(&value, &limits)` checks those, and writes an
-integer longer than its number limit in hex so that it parses again.
+limits, `haus::to_string_with(&value, &limits)` checks those: integers are
+written in decimal, and one longer than its number limit is an `EncodeError`
+(`number-too-long`).
 
 `haus::Int` is an integer of any size, kept as its digits and written back
 unchanged. `to_i64()` / `to_i128()` give it as a native integer when it fits; the
@@ -181,28 +182,26 @@ binding; hashes are SHA-256 of it (the `hash` feature):
 
 ```rust
 let v = haus::parse(r#"Order { total: 19.90, id: 0xFF }"#)?.remove(0);
-haus::canonical(&v)?;                  // Result<String, EncodeError>: Order{id:255,total:19.90}
-haus::hash(&v)?;                       // Result<String, EncodeError>: 64 lowercase hex digits
-haus::hash_all(&values)?;              // a whole file or stream: the forms joined by `,`
+haus::canonical(&v);                   // String: Order{id:255,total:19.90}
+haus::hash(&v);                        // String: 64 lowercase hex digits
+haus::hash_all(&values);               // a whole file or stream: the forms joined by `,`
 let mut hasher = haus::Hasher::new();  // the same, as values arrive
-hasher.add(&v)?;                       // Result<&mut Hasher, EncodeError>
+hasher.add(&v).add(&w);                // &mut Hasher
 hasher.digest();
 haus::equals(&a, &b);                  // bool
 haus::compare(&a, &b);                 // Ordering, by the canonical bytes
 ```
 
-An integer longer than 1000 characters is written in hex; one whose hex
-form is longer than 1000 characters too has no canonical form. Only a value
-built in code or parsed with a larger `max_number_length` can hold one, and
-`canonical`, `hash`, `hash_all` and `Hasher::add` give an `EncodeError`
-(`number-too-long`) at its path (`$.a[0]`); the hasher is then as it was.
-`equals` and `compare` need no canonical form and never fail.
+Every value has a canonical form, and none of these fail: numbers are
+written in decimal, an integer of any size with all its digits, also one
+built in code or parsed with a larger `max_number_length`.
 
 ## Limits
 
 Reading enforces the limits of spec §7, `haus::Limits`: by default a depth of
-256, number literals of 1000 characters, exponents up to 6144, and strings,
-record keys and tags of 16 Mi characters. Every reader and writer has a
+256, number literals of 1000 characters (hex literals of at most 829 hex
+digits, `Limits::max_hex_digits()`, so that every integer fits in decimal),
+exponents up to 6144, and strings, record keys and tags of 16 Mi characters. Every reader and writer has a
 version that takes other limits:
 
 | | With limits |

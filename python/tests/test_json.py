@@ -416,12 +416,20 @@ def test_deepest_values_at_the_supported_depth() -> None:
     nested(500)
 
 
-def test_self_describing_long_integers_within_the_hex_limit() -> None:
-    """A whole number written in hex within the limit has a longer decimal literal (spec §12)."""
-    value = haus.parse("0x" + "f" * 998)
+def test_self_describing_integers_within_the_number_limit() -> None:
+    """The longest hex literal has a decimal literal within the limit (spec §7); `_num` takes no longer one."""
+    value = haus.parse("0x" + "f" * 829)
     assert isinstance(value, Number)
-    assert len(value.text) > 1000
+    assert len(value.text) <= 1000
     assert haus.from_haus_json(haus.to_haus_json(value)) == value
+    assert haus.from_haus_json(enveloped(f'{{"_num":"{"9" * 1000}"}}')) == Number("9" * 1000)
+    with pytest.raises(HausJsonError) as info:
+        haus.from_haus_json(enveloped(f'{{"_num":"{"1" + "0" * 1000}"}}'))
+    assert info.value.code == "number-too-long"
+    # A writer for a reader with a smaller limit has no hex to fall back on.
+    with pytest.raises(haus.HausError) as written:
+        haus.to_haus_json(Number("1000000000000"), limits=Limits(max_number_length=12))
+    assert written.value.code == "number-too-long"
 
 
 # ── schema-based (§16.3) ─────────────────────────────────────
@@ -456,6 +464,7 @@ def test_schema_based_scalars() -> None:
     assert SCHEMA["Blob"].from_json('""') == b""
     assert SCHEMA["Big"].to_json(-12) == '"-12"'
     assert SCHEMA["Big"].from_json('"-0"') == 0
+    assert SCHEMA["Big"].from_json(f'"-{"9" * 999}"') == 1 - 10**999
     assert SCHEMA["U64"].to_json(2**64 - 1) == '"18446744073709551615"'
     assert SCHEMA["Amount"].to_json("1.5e3") == '"1.5e3"'
     assert SCHEMA["Amount"].from_json('"-0.00"') == "-0.00"
@@ -475,6 +484,21 @@ def test_schema_based_bytes_are_strict_base64(text: str) -> None:
 def test_schema_based_integer_strings(text: str) -> None:
     with pytest.raises(HausDecodeError):
         SCHEMA["Big"].from_json(text)
+
+
+def test_schema_based_integer_strings_within_the_number_limit() -> None:
+    # Longer than the limit is too long (spec §16.3), whether or not its hex form would fit; a bounded type
+    # checks its range first.
+    with pytest.raises(HausDecodeError) as info:
+        SCHEMA["Big"].from_json(f'"{"1" + "0" * 1000}"')
+    assert info.value.code == "number-too-long"
+    with pytest.raises(HausDecodeError) as info:
+        SCHEMA["U64"].from_json(f'"{"1" + "0" * 1000}"')
+    assert info.value.code == "out-of-range"
+    assert SCHEMA["Big"].from_json('"1000000000000"', limits=Limits(max_number_length=13)) == 10**12
+    with pytest.raises(HausDecodeError) as info:
+        SCHEMA["Big"].from_json('"1000000000000"', limits=Limits(max_number_length=12))
+    assert info.value.code == "number-too-long"
 
 
 @pytest.mark.parametrize("text", ['"1."', '".5"', '"0x10"', '"1_000"', '" 1"', '"NaN"', '""', '"1e6145"'])

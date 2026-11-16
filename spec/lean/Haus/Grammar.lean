@@ -109,7 +109,12 @@ def Exp (t : Text) : Prop :=
 
 def Sign (s : Text) : Prop := s = [] ∨ s = ['-']
 
-/-- `number ::= "-"? ( decimal | hex | binary )`, within the number limits (§3, §7). -/
+/--
+`number ::= "-"? ( decimal | hex | binary )`, within the number limits (§3,
+§7): at most `maxNumberLength` characters, an exponent of at most
+`maxExponent`, and a hex literal at most `maxHexDigits` hex digits, `_` not
+counted.
+-/
 inductive NumberLit (L : Limits) : Text → Prop
   | decimal (s i f e : Text) :
       Sign s → IntPart i → (f = [] ∨ Frac f) → (e = [] ∨ Exp e) →
@@ -117,6 +122,7 @@ inductive NumberLit (L : Limits) : Text → Prop
       NumberLit L (s ++ i ++ f ++ e)
   | hex (s ds : Text) :
       Sign s → Digits isHexDigit ds → (s ++ '0' :: 'x' :: ds).length ≤ L.maxNumberLength →
+      (ds.filter (· != '_')).length ≤ L.maxHexDigits →
       NumberLit L (s ++ '0' :: 'x' :: ds)
   | binary (s ds : Text) :
       Sign s → Digits isBinDigit ds → (s ++ '0' :: 'b' :: ds).length ≤ L.maxNumberLength →

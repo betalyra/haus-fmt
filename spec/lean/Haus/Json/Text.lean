@@ -47,13 +47,6 @@ open Haus
 
 /-! ## Limits on numbers -/
 
-/-- The hex form of an integer literal (`-0x…`, as §12 writes it), if the literal is an integer. -/
-def hexForm (lit : Text) : Option Text :=
-  let (sign, ds) := match lit with
-    | '-' :: ds => (['-'], ds)
-    | ds => ([], ds)
-  if ds != [] && ds.all isDigit then some (sign ++ '0' :: 'x' :: Canonical.hex (digitsValue 10 ds)) else none
-
 /-- The exponent of a literal, as a magnitude: `1.5e-7` has 7. -/
 def exponentOf (lit : Text) : Nat :=
   match lit.dropWhile (fun c => c != 'e' && c != 'E') with
@@ -62,18 +55,13 @@ def exponentOf (lit : Text) : Nat :=
 
 /--
 **A haus number within the limits** (§7): a haus literal can hold it. Its
-exponent is at most `maxExponent`, and its literal at most `maxNumberLength`
-characters, or, for an integer, its hex form (§12): a valid haus integer
-written in hex can have a longer decimal form.
+literal has at most `maxNumberLength` characters and its exponent is at most
+`maxExponent`. An integer's normalized literal is decimal, and every integer
+a haus literal can hold has a decimal form within the number limit (a hex
+literal has at most `maxHexDigits` hex digits), so no other form is needed.
 -/
 def numberFits (L : Limits) (lit : Text) : Bool :=
-  exponentOf lit ≤ L.maxExponent &&
-    (lit.length ≤ L.maxNumberLength ||
-      -- A hex form is never shorter than 5/6 of the decimal one: don't convert longer ones.
-      (lit.length ≤ L.maxNumberLength * 6 / 5 + 4 &&
-        match hexForm lit with
-        | some h => h.length ≤ L.maxNumberLength
-        | none => false))
+  lit.length ≤ L.maxNumberLength && exponentOf lit ≤ L.maxExponent
 
 /-- **A JSON number token within the limits** (§16), as written. -/
 def tokenFits (L : Limits) (lit : Text) : Bool :=
@@ -86,9 +74,10 @@ def jsonDepth (L : Limits) : Nat := 4 * L.maxDepth + 1
 def hausJsonDepth (L : Limits) : Nat := jsonDepth L + 1
 
 #guard numberFits {} ("9".toList ++ List.replicate 999 '9')
-#guard !numberFits {} ("0.".toList ++ List.replicate 999 '1') && numberFits {} ("1".toList ++ List.replicate 1000 '0')
-#guard numberFits {} (Nat.toDigits 10 (16 ^ 998 - 1))
-#guard !numberFits {} (Nat.toDigits 10 (16 ^ 998))
+#guard !numberFits {} ("0.".toList ++ List.replicate 999 '1') && !numberFits {} ("1".toList ++ List.replicate 1000 '0')
+-- The largest hex integer a haus literal can hold fits; a longer integer doesn't, whatever its hex form.
+#guard numberFits {} (Nat.toDigits 10 (16 ^ 829 - 1)) && numberFits {} ('-' :: Nat.toDigits 10 (16 ^ 829 - 1))
+#guard !numberFits {} (Nat.toDigits 10 (10 ^ 1000))
 #guard numberFits {} "1e6144".toList && !numberFits {} "1e6145".toList && numberFits {} "1E-6144".toList
 #guard !tokenFits {} ("1".toList ++ List.replicate 1000 '0') && tokenFits {} "1E-6144".toList
 

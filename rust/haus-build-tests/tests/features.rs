@@ -196,17 +196,13 @@ fn raw_values_are_checked_before_they_are_written() {
     });
     assert_eq!(error(&shape), "(Hexagon).side: not a number literal");
 
-    // A reader with lower limits: an integer longer than its number limit is written in hex.
+    // A reader with lower limits: an integer longer than its number limit can't be written.
     let small = haus::Limits { max_number_length: 20, ..haus::Limits::default() };
+    let fits = number(&"9".repeat(20));
+    assert_eq!(haus::to_string_with(&fits, &small).unwrap(), "9".repeat(20));
     let big = number("4722366482869645213695"); // 2^72 - 1
     assert_eq!(haus::to_string(&big).unwrap(), "4722366482869645213695");
-    assert_eq!(haus::to_string_with(&big, &small).unwrap(), "0xffffffffffffffffff");
-    assert_eq!(haus::parse_with("0xffffffffffffffffff", &small).unwrap(), [big]);
-    let bigger = number(&"9".repeat(30));
-    assert_eq!(
-        haus::to_string_with(&bigger, &small).unwrap_err().to_string(),
-        "number literal longer than 20 characters"
-    );
+    assert_eq!(haus::to_string_with(&big, &small).unwrap_err().to_string(), "number literal longer than 20 characters");
 }
 
 /// A `Vault` whose secret keys hold `value` under the key `hunter2`.

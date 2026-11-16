@@ -13,7 +13,6 @@
  * stays after that entry's comma. The output has LF line endings only, in
  * comments too.
  */
-import { DEFAULT_LIMITS } from "./parser.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
 /**
@@ -43,12 +42,6 @@ export interface FormatOptions {
   readonly source?: string
   /** Comment spans from `parseDocument`; they are kept in the output. Needs `source`. */
   readonly comments?: readonly (readonly [number, number])[]
-  /**
-   * The number limit of the reader (default 1000, spec §7): an integer whose
-   * decimal literal is longer is written in hex, so that it parses again.
-   * Pass the same limits as to the parser.
-   */
-  readonly maxNumberLength?: number
 }
 
 /** Format a whole file: one value, or a stream with a comma after each value. */
@@ -72,18 +65,6 @@ export function stringify(value: Value, options: FormatOptions = {}): string {
 
 /** Compact and minimised write every top-level item on one line. */
 const oneLine = (options: FormatOptions) => options.style === "compact" || options.style === "minimised"
-
-/**
- * A number's literal; an integer longer than `maxNumberLength` (a hex literal
- * at the length limit has a longer decimal form) is written in hex.
- */
-export function numberText(text: string, maxNumberLength: number = DEFAULT_LIMITS.maxNumberLength): string {
-  if (text.length > maxNumberLength && /^-?\d+$/.test(text)) {
-    const n = BigInt(text)
-    return (n < 0n ? "-0x" : "0x") + (n < 0n ? -n : n).toString(16)
-  }
-  return text
-}
 
 const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
 
@@ -151,13 +132,11 @@ class Formatter {
   private readonly width: number
   private readonly source: string | undefined
   private readonly comments: readonly Span[]
-  private readonly maxNumberLength: number
   /** The spacing of a top-level item on one line: compact's, or none (minimised). */
   private readonly spacing: Spacing
 
   constructor(options: FormatOptions) {
     this.spacing = options.style === "minimised" ? TIGHT : SPACED
-    this.maxNumberLength = options.maxNumberLength ?? DEFAULT_LIMITS.maxNumberLength
     this.step = " ".repeat(options.indent ?? 2)
     this.width = options.width ?? 80
     this.source = options.source
@@ -454,8 +433,9 @@ class Formatter {
 
   // ── leaves ─────────────────────────────────────────────────
 
+  /** The source spelling when reformatting (`0xFF` stays `0xFF`), else the normalized literal, always decimal (spec §11). */
   private number(v: Extract<Value, { kind: "number" }>): string {
-    return numberText(this.original(v) ?? v.text, this.maxNumberLength)
+    return this.original(v) ?? v.text
   }
 
   /** `x"…"`: the source spelling when reformatting (spaces kept), else lowercase hex. */

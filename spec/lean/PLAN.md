@@ -26,7 +26,7 @@ prototype, …) is outside Lean and stays covered by tests.
 | ✅ | **B. Soundness** | The parser only accepts what the grammar allows. A's properties then hold for its output. | 2–3 weeks |
 | ✅ | **C. Completeness** | The parser accepts everything the grammar allows: `parse L t = .ok vs ↔ File L t vs` | 3–5 weeks |
 | ✅ | **D. Unambiguity** | Every valid text has exactly one meaning. Follows from B + C, since the parser is a function. | days |
-| ✅ | **E. Encoder round trip** | `parse_canonical`: for every value a parser returns, its canonical form parses back to that value (in canonical order), so no string, key or number can break out of its syntax. Holds for number limits of at least 1000 (spec §12 writes integers longer than 1000 characters in hex; `numberLimit` is that constant, not a configurable limit). Hex and binary literals keep their sign on zero (`-0x0` normalizes to `-0`, design review B1: `signedText`, `negZero_canonical`). Not modelled: §12's `number-too-long` for an integer whose hex form is longer than 1000 too (the model writes it in hex; no value parsed within limits of number limit 1000 has one). In [`Haus/RoundTrip/`](Haus/RoundTrip). | 1–2 weeks |
+| ✅ | **E. Encoder round trip** | `parse_canonical`: for every value a parser returns, its canonical form parses back to that value (in canonical order), so no string, key or number can break out of its syntax. Holds for any limits: the canonical form writes every number as its normalized literal, always decimal (§12), and a hex literal has at most `maxHexDigits` hex digits (§7, the largest `h` with `16^h ≤ 10^(n−1)`: 829 for the default number limit 1000, `Limits.maxHexDigits_iff`), so every parsed number's canonical text fits the number limit it was parsed with (`normalized_lit`, `NumberLit.normalize_fits`, `Bounded.num_fits`). Hex and binary literals keep their sign on zero (`-0x0` normalizes to `-0`, design review B1: `signedText`, `signedLit`). In [`Haus/RoundTrip/`](Haus/RoundTrip). | 1–2 weeks |
 | ✅ | **F. Streams** | A model of the bindings' stream readers: `read_chunks`, any split gives the same values and errors; `read_correct`, the reader returns `vs` exactly when `parse` accepts the whole text with `vs`. In [`Haus/Stream/`](Haus/Stream). | 1–2 weeks |
 | ✅ | **H. Canonical form** (spec §12) | `canonical_eq_iff`: two parsed values have the same canonical form exactly when they are equal (§2), so `hash` is well defined. `canonicalAll_eq_iff` does the same for `hashAll` of a file or stream, and `read_canonicalAll`/`canonicalAll_prefix` cover hashing while reading ([`Haus/RoundTrip/HashAll.lean`](Haus/RoundTrip/HashAll.lean)). Reference encoder in [`Haus/Canonical.lean`](Haus/Canonical.lean), implemented in TypeScript, Rust and Roc and fuzzed against it. Strings escape U+2028 and U+2029 as `\u{2028}`, `\u{2029}` (design review D1, `isLineSep`). | 1–2 weeks |
 | ⬜ | **P. Linear time** (spec §7) | A cost model (steps counted next to the result) and proofs that the stream scanner and a linear reference parser take at most `c · length` steps (below). Deferred: see below. | 1–2 weeks |
@@ -244,15 +244,15 @@ within the JSON limits (`Fits`): the self-describing JSON, nested at most
 `4 · maxDepth + 2` (`hausJson_fits`, [`Json/Fits.lean`](Haus/Json/Fits.lean)),
 when the limits leave room for its member names, for number literals in
 strings and for the version (`SelfDescribingOk`: `maxStringLength` at least
-6 and at least `maxNumberLength · 6/5 + 4`, the longest haus number within
-the limits, an integer whose hex form fits; `maxNumberLength` at least 1);
-the schema-based JSON, nested at most `4 · maxDepth + 1` (`toJson_fits`,
-[`Json/SchemaBasedFits.lean`](Haus/Json/SchemaBasedFits.lean)), when also
-`maxNumberLength` is at least 22 (`SchemaBasedOk`). The last is needed: a
-float's spelling can be an integer of 21 digits, a JSON number token that
-the JSON limits count as written, while a haus value may use its shorter
-hex form, so with `maxNumberLength` 19 to 21 a value can fit and its
-schema-based JSON not. The defaults meet both. Not proven: linear time.
+6 and at least `maxNumberLength`, the longest haus number within the limits;
+`maxNumberLength` at least 1); the schema-based JSON, nested at most
+`4 · maxDepth + 1` (`toJson_fits`,
+[`Json/SchemaBasedFits.lean`](Haus/Json/SchemaBasedFits.lean)), under the
+same conditions (`SchemaBasedOk`): a haus number within the limits and a
+JSON number token within them are counted the same way, as written
+(`numberFits_tokenFits`), since every integer a haus literal can hold has a
+decimal form within the number limit (§7) and no hex form is accepted
+instead. The defaults meet both. Not proven: linear time.
 
 How the model follows §16 where it was clarified while writing it (all now
 in the spec, with vectors):

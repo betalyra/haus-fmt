@@ -76,7 +76,8 @@ what can fail is a `Value` built in code, the raw value of an `Any` or an
 unknown variant (spec §9.8): `Num("abc")` is an error (`.extra: not a number
 literal`), as are a tag that isn't a tag name, a key used twice in a record,
 and nesting, strings and numbers beyond the parser's limits. Number literals
-are written as the parser reads them (`Num("1E5")` as `1e5`).
+are written as the parser reads them (`Num("1E5")` as `1e5`), integers always
+in decimal: one longer than the number limit is `number-too-long`.
 `Encode.message(e)` gives the error with its path.
 
 `Encode.to_str` and `Encode.stream` write the compact layout (spec §11), with
@@ -178,22 +179,15 @@ from the package's other modules.)
 `Encode.compare` use it. `Encode.hash(v)` is the SHA-256 digest of the
 canonical form as 64 lowercase hex digits, and `Encode.hash_all(values)` the
 hash of a list, such as a file or a stream: the canonical forms joined by `,`
-(`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`.
-
-An integer longer than 1000 characters is written in hex; one longer than
-1000 characters even in hex has no canonical form. Only a parser with a larger
-number limit, or code, makes one, so `canonical`, `hash` and `hash_all` return
-`Try(Str, Encode.Error)` and fail with `number-too-long` at its path
-(`.items[2]`). `Encode.equals` and `Encode.compare` never fail: they compare
-such an integer by its hex form.
-
-`Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read;
-`add` fails as `canonical` does:
+(`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`. Every
+value has a canonical form, so none of them can fail: an integer is written
+in decimal with all its digits, however long.
+`Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read:
 
 ```roc
 var $hash = Encode.HashAll.empty
 for value in values {
-    $hash = $hash.add(value)?
+    $hash = $hash.add(value)
 }
 $hash.digest() # == Encode.hash_all(values)
 ```
@@ -206,7 +200,8 @@ builtin `Hasher`.)
 The parser enforces the limits of spec §7. The reading functions use the
 defaults (`Value.default_limits`: depth 256, number literals of 1000
 characters, exponents up to 6144, strings, record keys and tags of 16 Mi
-characters); each has a `_with` version that takes a `Value.Limits` record:
+characters). A hex literal has at most as many hex digits as keep every
+integer within the number limit in decimal: 829 for 1000. Each has a `_with` version that takes a `Value.Limits` record:
 
 ```roc
 limits = { ..Value.default_limits, max_depth: 64 }

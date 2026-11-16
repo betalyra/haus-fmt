@@ -7,7 +7,6 @@ and checked against the same limits before they are written.
 
 from __future__ import annotations
 
-import math
 import re
 from decimal import Decimal
 
@@ -20,8 +19,6 @@ INTEGER = re.compile(r"-?[0-9]+")
 # Exactly what the parser writes: no `_`, `+`, `E`, hex or binary, no leading zeros in the exponent.
 _NORMALIZED = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
 _EXPONENT = re.compile(r"e-?([0-9]+)$")
-# A whole number of d decimal digits has at least floor((d - 1) * log16(10)) + 1 hex digits.
-_HEX_PER_DECIMAL = math.log(10) / math.log(16)
 
 
 def normalize_number(text: str, limits: Limits = DEFAULT_LIMITS) -> str | None:
@@ -41,25 +38,13 @@ def int_text(n: int) -> str:
     return str(n) if n.bit_length() < 13000 else str(Decimal(n))
 
 
-def _shortest_length(text: str, limit: int) -> int:
-    """The length of the shortest literal of a normalized number: long whole numbers can be hex (spec §12)."""
-    if len(text) <= limit or not INTEGER.fullmatch(text):
-        return len(text)
-    sign = 1 if text.startswith("-") else 0
-    digits = len(text) - sign
-    at_least = sign + 2 + math.floor((digits - 1) * _HEX_PER_DECIMAL) + 1
-    if at_least > limit:
-        return at_least  # too long either way
-    return min(len(text), sign + 2 + (abs(to_int(text)).bit_length() + 3) // 4)
-
-
 def number_limit_issue(text: str, limits: Limits) -> tuple[ErrorCode, str] | None:
     """Why the normalized number `text` is outside `limits` (its code and message), or None.
 
     Parsed numbers are always within.
     """
     # The length first, as a parser meets it (spec §7): a literal too long with an exponent too large is too long.
-    if _shortest_length(text, limits.max_number_length) > limits.max_number_length:
+    if len(text) > limits.max_number_length:
         return "number-too-long", f"number literal longer than {limits.max_number_length} characters"
     if (m := _EXPONENT.search(text)) and (len(m[1]) > 15 or int(m[1]) > limits.max_exponent):
         return "exponent-too-large", f"exponent larger than {limits.max_exponent}"

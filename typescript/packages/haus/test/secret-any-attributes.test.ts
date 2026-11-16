@@ -162,16 +162,16 @@ describe("Any", () => {
   })
 
   it("encodes every value the parser produced again, under the same limits", () => {
-    // 900 hex digits: more than 1000 decimal digits, written in hex again.
-    const hex = "0x" + "f".repeat(900)
+    // 829 hex digits, the most a hex literal may have: 999 decimal digits, written in decimal.
+    const hex = "0x" + "f".repeat(829)
     const big = parse(hex)
-    expect(big.kind === "number" && big.text.length > 1000).toBe(true)
+    expect(big.kind === "number" && big.text.length).toBe(999)
     expect(h.encode(h.Any, big)).toBe(big)
-    expect(h.stringify(h.Any, big)).toBe(hex)
-    expect(h.encode(h.Any, parse("-0x" + "f".repeat(900)))).toEqual(parse("-0x" + "F".repeat(900)))
+    expect(h.stringify(h.Any, big)).toBe((16n ** 829n - 1n).toString())
+    expect(h.encode(h.Any, parse("-0x" + "f".repeat(829)))).toEqual(parse("-0x" + "F".repeat(829)))
     // Raised limits: parsed with them, encoded with them.
     const limits = { maxNumberLength: 3000, maxExponent: 9000, maxStringLength: 10 }
-    for (const text of ["1".repeat(2500), "0x" + "f".repeat(2500), "1e9000", '"0123456789"']) {
+    for (const text of ["1".repeat(2500), "0x" + "f".repeat(2000), "1e9000", '"0123456789"']) {
       const value = parse(text, limits)
       expect(h.encode(h.Any, value, limits)).toBe(value)
       expect(h.parse(h.Any, text, limits)).toEqual(value)
@@ -180,15 +180,15 @@ describe("Any", () => {
     expect(() => h.encode(h.Any, parse("1".repeat(2500), limits))).toThrow(/number literal longer than 1000/)
     expect(() => h.encode(h.Any, parse('"0123456789"'), { maxStringLength: 9 })).toThrow(/string longer than 9/)
     expect(() => h.parse(h.Any, "1e9000")).toThrow(/exponent larger/)
-    // Lowered limits: a hex literal that fits fits again, though its decimal form is longer.
+    // Lowered limits: a hex literal has at most as many hex digits as fit in decimal.
     const small = { maxNumberLength: 20 }
-    const fits = parse("0xFFFFFFFFFFFFFFFFFF", small)
+    const fits = parse("0xFFFFFFFFFFFFFFF", small)
     expect(h.encode(h.Any, fits, small)).toBe(fits)
-    // … and is written in hex under those limits, so that the same reader takes it.
-    const written = h.stringify(h.Any, fits, small)
-    expect(written).toBe("0xffffffffffffffffff")
-    expect(h.parse(h.Any, written, small)).toEqual(fits)
-    expect(h.stringify(h.Int, 2n ** 72n - 1n, small)).toBe("0xffffffffffffffffff")
+    expect(() => parse("0xFFFFFFFFFFFFFFFF", small)).toThrow(/more than 15 hex digits/)
+    // Integers are written in decimal: one longer than the limit can't be written for that reader.
+    expect(h.stringify(h.Any, fits, small)).toBe("1152921504606846975")
+    expect(h.stringify(h.Int, 10n ** 19n, small)).toBe("10000000000000000000")
+    expect(() => h.stringify(h.Int, 10n ** 20n, small)).toThrow(/number literal longer than 20/)
     expect(h.stringify(h.Int, 2n ** 72n - 1n)).toBe("4722366482869645213695")
     // Decimal takes the same literals and limits.
     expect(h.encode(h.Decimal, "1E5")).toEqual({ kind: "number", text: "1e5" })

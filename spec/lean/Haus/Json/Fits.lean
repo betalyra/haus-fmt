@@ -16,8 +16,7 @@ Side conditions on the limits, which the defaults meet
 - member names: the form's own (`_num`, `_bytes`, `_rec`, `_tag`, `_args`,
   `_haus`, `_value`) have at most 6 characters;
 - number literals: a number goes into a JSON string, and a haus number
-  within the limits has at most `maxNumberLength · 6/5 + 4` characters (an
-  integer may be longer than `maxNumberLength` when its hex form isn't);
+  within the limits has at most `maxNumberLength` characters;
 - the envelope's version `1` is a number token within the limits.
 
 Record keys and tags count against `maxStringLength` in haus as in JSON
@@ -31,18 +30,20 @@ namespace Haus
 
 /-- What `hausJson_fits` needs of the limits: room for the member names, the number literals and the version. -/
 def Limits.SelfDescribingOk (L : Limits) : Prop :=
-  6 ≤ L.maxStringLength ∧ L.maxNumberLength * 6 / 5 + 4 ≤ L.maxStringLength ∧ 1 ≤ L.maxNumberLength
+  6 ≤ L.maxStringLength ∧ L.maxNumberLength ≤ L.maxStringLength ∧ 1 ≤ L.maxNumberLength
 
 theorem Limits.selfDescribingOk_default : Limits.SelfDescribingOk {} := by unfold Limits.SelfDescribingOk; decide
 
 namespace JSON
 
 theorem numberFits_length {L : Limits} {lit : Text} (h : numberFits L lit = true) :
-    lit.length ≤ L.maxNumberLength * 6 / 5 + 4 := by
-  simp only [numberFits, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at h
-  rcases h.2 with h | h
-  · omega
-  · exact h.1
+    lit.length ≤ L.maxNumberLength := by
+  simp only [numberFits, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h.1
+
+/-- A haus number within the limits is a JSON number token within them: both count the literal as written. -/
+theorem numberFits_tokenFits {L : Limits} {lit : Text} (h : numberFits L lit = true) : tokenFits L lit = true := by
+  simpa [numberFits, tokenFits] using h
 
 theorem hex_length (bs : List UInt8) : (Bytes.hex bs).length = 2 * bs.length := by
   induction bs with

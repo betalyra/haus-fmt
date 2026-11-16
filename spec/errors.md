@@ -64,7 +64,7 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 | Code | Meaning | Example | Fix |
 |---|---|---|---|
 | `nesting-too-deep` | Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16). | [[[[ … ]]]]: 257 levels | Flatten the data, or raise the depth limit if you trust the input. |
-| `number-too-long` | A number literal has more characters than the limit (default 1000). | a number with 1001 digits | Write a shorter number (a `String` or `Bytes` for very long data), or raise the number length limit. |
+| `number-too-long` | A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7). | a number with 1001 digits | Write a shorter number (a `String` or `Bytes` for very long data), or raise the number length limit. |
 | `exponent-too-large` | A number's exponent is larger than the limit (default 6144), in either direction. | `1e6145` | Write a number with a smaller exponent, or raise the exponent limit. |
 | `string-too-long` | A string or byte string has more characters than the limit (default 16 Mi). | a string of 16,777,217 characters | Split the string, or raise the string length limit. |
 | `key-too-long` | A record key has more characters than the string limit (default 16 Mi). | a bare key of 16,777,217 characters | Use a shorter key, or raise the string length limit. |

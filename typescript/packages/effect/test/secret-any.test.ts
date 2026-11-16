@@ -95,8 +95,8 @@ describe("Any", () => {
     expect(e.message).toContain("expected a number literal")
     // Number literals built in code are normalized as the parser would.
     expect(Effect.runSync(Haus.encodeValue(Haus.Any)({ kind: "number", text: "1E5" }))).toEqual({ kind: "number", text: "1e5" })
-    // A 900-digit hex literal (over 1000 decimal digits) is written again.
-    const big = parse("0x" + "f".repeat(900))
+    // An 829-digit hex literal, the longest there is, is written again (in decimal).
+    const big = parse("0x" + "f".repeat(829))
     expect(Effect.runSync(Haus.encodeValue(Haus.Any)(big))).toBe(big)
   })
 

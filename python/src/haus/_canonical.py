@@ -13,22 +13,14 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable, Mapping
-from decimal import Decimal
 from typing import Self
 
-from ._errors import HausError
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
 _BARE_KEY = re.compile(r"[a-z_][A-Za-z0-9_]*")
-_INTEGER = re.compile(r"-?[0-9]+")
 # What a string can't hold raw: quote, backslash, control and bidi characters,
 # and the line and paragraph separators U+2028 and U+2029.
 _ESCAPED = re.compile(r'["\\\x00-\x1f\x7f-\x9f\u2028-\u202e\u2066-\u2069]')
-HEX_THRESHOLD = 1000
-"""Integers whose decimal form is longer are written in hex; longer still in hex, they have no canonical form.
-
-A constant of the canonical form (spec §12), not the number limit of §7: it stays 1000 if the default limits grow.
-"""
 _SHORT_ESCAPES = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
 
 
@@ -42,31 +34,8 @@ def quote(s: str) -> str:
     return '"' + _ESCAPED.sub(_escape, s) + '"'
 
 
-def number_text(text: str) -> str:
-    """A normalized literal, or an integer longer than `HEX_THRESHOLD` in lowercase hex."""
-    if len(text) <= HEX_THRESHOLD or not _INTEGER.fullmatch(text):
-        return text
-    sign, digits = ("-", text[1:]) if text.startswith("-") else ("", text)
-    # Via Decimal: `int(str)` refuses more than 4300 digits.
-    return f"{sign}0x{int(Decimal(digits)):x}"
-
-
-def _canonical_number(text: str) -> str:
-    """`number_text`, or `number-too-long` if even the hex form is longer than `HEX_THRESHOLD` (spec §12)."""
-    written = number_text(text)
-    if len(written) > HEX_THRESHOLD and _INTEGER.fullmatch(text):
-        reason = f"an integer longer than {HEX_THRESHOLD} characters in hex has no canonical form"
-        raise HausError(reason, code="number-too-long", reason=reason)
-    return written
-
-
-def _write(root: Value, checked: bool = True) -> str:
-    """Iterative, with a stack of what is left to write (values, and text between them): any depth works.
-
-    `checked`: fail on an integer with no canonical form. Unchecked, it is written in hex anyway,
-    which still tells values apart: what equality and order need.
-    """
-    write_number = _canonical_number if checked else number_text
+def _write(root: Value) -> str:
+    """Iterative, with a stack of what is left to write (values, and text between them): any depth works."""
     out: list[str] = []
     work: list[Value | str] = [root]
 
@@ -91,7 +60,8 @@ def _write(root: Value, checked: bool = True) -> str:
             case str() as text:
                 out.append(text)
             case Number(text):
-                out.append(write_number(text))
+                # Always the normalized decimal literal, however long (spec §12).
+                out.append(text)
             case String(s):
                 out.append(quote(s))
             case Bytes(data):
@@ -117,17 +87,13 @@ def _key(k: str) -> str:
 
 
 def canonical(value: Value) -> str:
-    """The canonical form of a value (spec §12).
-
-    Raises `HausError` (`number-too-long`) for an integer longer than 1000 characters even in hex,
-    which has none; only a parser with a raised number limit, or code, makes one.
-    """
+    """The canonical form of a value (spec §12). Every value has one: integers are written in decimal, however long."""
     return _write(value)
 
 
 def equals(a: Value, b: Value) -> bool:
     """Whether two values are equal (spec §2): the same normalized literals, and so the same canonical form."""
-    return _write(a, checked=False) == _write(b, checked=False)
+    return _write(a) == _write(b)
 
 
 def compare(a: Value, b: Value) -> int:
@@ -137,7 +103,7 @@ def compare(a: Value, b: Value) -> int:
     (`sorted(values, key=functools.cmp_to_key(compare))`) and ordered maps.
     Not numeric order: `10` sorts before `9`.
     """
-    x, y = _write(a, checked=False), _write(b, checked=False)
+    x, y = _write(a), _write(b)
     return (x > y) - (x < y)
 
 

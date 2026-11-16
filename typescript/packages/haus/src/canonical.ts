@@ -7,44 +7,11 @@
  *   canonical(parse('Order { total: 19.90, id: 0xFF, "x-y": 1e+5 }'))
  *   // 'Order{id:255,total:19.90,"x-y":1e5}'
  */
-import { HausEncodeError, type Path } from "./errors.js"
-import { numberText, quote, toHex } from "./format.js"
+import { quote, toHex } from "./format.js"
 import { Sha256 } from "./sha256.js"
 import type { Value } from "./value.js"
 
 const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
-
-/**
- * An integer whose decimal form is longer than this is written in hex (spec
- * §12). A constant of the canonical form, not the number limit of §7: it
- * stays 1000 if the default limits grow, so hashes never change.
- */
-const CANONICAL_NUMBER_LENGTH = 1000
-
-/**
- * The canonical literal of a normalized number. An integer longer than 1000
- * characters in hex too has none: `number-too-long`.
- */
-const canonicalNumber = (v: Value & { kind: "number" }, root: Value): string => {
-  const text = numberText(v.text, CANONICAL_NUMBER_LENGTH)
-  if (text.length > CANONICAL_NUMBER_LENGTH) {
-    throw new HausEncodeError(`an integer longer than ${CANONICAL_NUMBER_LENGTH} characters in hex too has no canonical form`, pathTo(root, v), "number-too-long")
-  }
-  return text
-}
-
-/** Where `target` is inside `root` (searched only for an error, so the writer needn't track paths). */
-const pathTo = (root: Value, target: Value): Path => {
-  const work: [Value, Path][] = [[root, []]]
-  while (work.length > 0) {
-    const [v, path] = work.pop()!
-    if (v === target) return path
-    if (v.kind === "array") v.items.forEach((x, i) => work.push([x, [...path, i]]))
-    else if (v.kind === "record") for (const [k, x] of v.fields) work.push([x, [...path, k]])
-    else if (v.kind === "variant") v.args.forEach((x, i) => work.push([x, [...path, i]]))
-  }
-  return []
-}
 
 /**
  * Orders strings by code point, which is the order of their UTF-8 bytes.
@@ -94,7 +61,8 @@ function write(root: Value, out: string[]): void {
     }
     switch (v.kind) {
       case "number":
-        out.push(canonicalNumber(v, root))
+        // The normalized literal, always decimal: every integer has a canonical form (spec §12).
+        out.push(v.text)
         break
       case "string":
         out.push(quote(v.value))
@@ -123,10 +91,8 @@ function write(root: Value, out: string[]): void {
 }
 
 /**
- * The canonical form of a value (spec §12). Throws HausEncodeError
- * (`number-too-long`) for an integer longer than 1000 characters in decimal
- * and in hex, which only a value built in code or parsed with a larger
- * number limit can hold.
+ * The canonical form of a value (spec §12). Every value has one: an integer
+ * of any size is written with all its decimal digits.
  */
 export function canonical(value: Value): string {
   const out: string[] = []

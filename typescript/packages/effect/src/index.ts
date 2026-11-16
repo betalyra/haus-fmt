@@ -477,7 +477,7 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
 
 /** Options of the haus encoders: the format, and the limits the value is held to (spec §7). */
 export interface EncodeOptions extends FormatOptions {
-  /** The limits of the reader the text is for (its `maxNumberLength` is also the format's, unless that is set). */
+  /** The limits of the reader the text is for: a value beyond them is an error (spec §7). */
   readonly limits?: Limits
 }
 
@@ -492,9 +492,7 @@ const splitArgs = (args: ReadonlyArray<AnyCodec | EncodeOptions | undefined>): [
 const withOptions = (defaults: EncodeOptions, options: EncodeOptions = {}): [FormatOptions, Limits] => {
   const { limits: baseLimits, ...baseFormat } = defaults
   const { limits: ownLimits, ...format } = options
-  const limits: Limits = { ...baseLimits, ...ownLimits }
-  const numbers = limits.maxNumberLength === undefined ? {} : { maxNumberLength: limits.maxNumberLength }
-  return [{ ...numbers, ...baseFormat, ...format }, limits]
+  return [{ ...baseFormat, ...format }, { ...baseLimits, ...ownLimits }]
 }
 
 /** `encodeValue` for codecs already checked by the caller's signature. */

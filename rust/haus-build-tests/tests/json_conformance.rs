@@ -15,14 +15,9 @@ mod suite {
     include!(concat!(env!("OUT_DIR"), "/json_suite.rs"));
 }
 
-use haus::{Json, Value};
+use haus::{Json, Value, canonical};
 use std::fs;
 use std::path::Path;
-
-/// `v`'s canonical form, for messages and expectations; the error if it has none.
-fn canonical(v: &Value) -> String {
-    haus::canonical(v).unwrap_or_else(|e| e.to_string())
-}
 
 /// JSON with every object's members sorted, to compare as data.
 fn sorted(json: Json) -> Json {
@@ -96,7 +91,7 @@ impl Case {
     fn failure(&self) -> Option<String> {
         let read = || suite::schema_based::read(&self.ty, &self.json).ok_or_else(|| format!("no type {}", self.ty));
         let expect_read = |expected: &Value| match read() {
-            Ok(Ok(v)) if haus::equals(&v, expected) => None,
+            Ok(Ok(v)) if canonical(&v) == canonical(expected) => None,
             Ok(Ok(v)) => Some(format!("read as {}, expected {}", canonical(&v), canonical(expected))),
             Ok(Err(e)) => Some(format!("can't read the JSON: {e}")),
             Err(e) => Some(e),

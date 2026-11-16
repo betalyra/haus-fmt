@@ -24,9 +24,9 @@ Encode := [].{
 	to_str = |value| to_str_with(value, Value.default_limits)
 
 	## `to_str` for a reader with other limits (see `Value.Limits`): the value
-	## must be within them, and an integer longer than the number limit is
-	## written in hex if that fits. Fails if `limits.max_depth` is more than
-	## `Value.max_supported_depth`.
+	## must be within them, so an integer whose decimal form is longer than the
+	## number limit is `number-too-long`. Fails if `limits.max_depth` is more
+	## than `Value.max_supported_depth`.
 	to_str_with : Value, Value.Limits -> Try(Str, Error)
 	to_str_with = |value, limits| {
 		supported(limits)?
@@ -59,28 +59,24 @@ Encode := [].{
 	error_json = |e| ErrorCode.json({ code: e.code, message: e.reason, at: Path(e.path) })
 
 	## The canonical form (spec §12): one exact text per value, the same in
-	## every binding, so equal values (§2) give identical text. It doesn't
-	## depend on a reader's limits: an integer longer than 1000 characters is
-	## written in hex. One longer than 1000 characters even in hex has no
-	## canonical form (only a parser with a larger number limit, or code, makes
-	## one): `number-too-long`, at its path.
+	## every binding, so equal values (§2) give identical text. Every value
+	## has one, whatever a reader's limits: an integer is written in decimal
+	## with all its digits, however long.
 	##
-	##     Encode.canonical(Rec([("b", Num("1")), ("a", Num("0xFF"))]))   # Ok("{a:255,b:1}")
-	canonical : Value -> Try(Str, Error)
-	canonical = |value| canonical_form(value).map_ok(bytes_to_str)
+	##     Encode.canonical(Rec([("b", Num("1")), ("a", Num("255"))]))   # "{a:255,b:1}"
+	canonical : Value -> Str
+	canonical = |value| bytes_to_str(canonical_bytes(value))
 
 	## The SHA-256 digest of the canonical form, as 64 lowercase hex digits
-	## (spec §12): the same whatever the layout, comments or key order. Fails
-	## where `canonical` does.
-	hash : Value -> Try(Str, Error)
-	hash = |value| canonical_form(value).map_ok(|bytes| Crypto.SHA256.hash(bytes).to_hex())
+	## (spec §12): the same whatever the layout, comments or key order.
+	hash : Value -> Str
+	hash = |value| Crypto.SHA256.hash(canonical_bytes(value)).to_hex()
 
 	## The hash of a list of values, such as a whole file or stream (spec
 	## §12): the SHA-256 digest of their canonical forms joined by `,`. A list
-	## of one value hashes like the value: `hash_all([v])` is `hash(v)`. Fails
-	## where `canonical` fails for one of the values.
-	hash_all : List(Value) -> Try(Str, Error)
-	hash_all = |values| values.fold_try(HashAll.empty, HashAll.add).map_ok(HashAll.digest)
+	## of one value hashes like the value: `hash_all([v])` is `hash(v)`.
+	hash_all : List(Value) -> Str
+	hash_all = |values| values.fold(HashAll.empty, HashAll.add).digest()
 
 	## `hash_all` of a list as it grows, e.g. a stream while it is read: `add`
 	## each value, and `digest` at any time gives `hash_all` of the values
@@ -88,19 +84,18 @@ Encode := [].{
 	##
 	##     var $hash = Encode.HashAll.empty
 	##     for value in values {
-	##         $hash = $hash.add(value)?
+	##         $hash = $hash.add(value)
 	##     }
 	##     $hash.digest() # Encode.hash_all(values)
 	HashAll :: { sha : Crypto.SHA256.Hasher, count : U64 }.{
 		empty : Encode.HashAll
 		empty = { sha: Crypto.SHA256.Hasher.empty(), count: 0 }
 
-		## Add the next value. Fails where `canonical` does, and then adds nothing.
-		add : Encode.HashAll, Value -> Try(Encode.HashAll, Error)
+		## Add the next value.
+		add : Encode.HashAll, Value -> Encode.HashAll
 		add = |h, value| {
-			bytes = canonical_form(value)?
 			sha = if (h.count > 0) h.sha.write([',']) else h.sha
-			Ok({ sha: sha.write(bytes), count: h.count + 1 })
+			{ sha: sha.write(canonical_bytes(value)), count: h.count + 1 }
 		}
 
 		## `hash_all` of the values added so far, as 64 lowercase hex digits.
@@ -108,8 +103,7 @@ Encode := [].{
 		digest = |h| h.sha.finish().to_hex()
 	}
 
-	## Whether two values are equal (spec §2): the same canonical form. Never
-	## fails: an integer with no canonical form compares by its hex form.
+	## Whether two values are equal (spec §2): the same canonical form.
 	equals : Value, Value -> Bool
 	equals = |a, b| canonical_bytes(a) == canonical_bytes(b)
 
@@ -298,8 +292,7 @@ layout = |d, n| {
 ## value (`.extra[1]`, empty at the root): the same paths as `Decode.Error`.
 ## A number that isn't a literal is `cannot-encode`, a tag that isn't a tag
 ## name `invalid-tag`, a key used twice `duplicate-key`; what is beyond the
-## limits has the limit's code (`string-too-long`), and an integer with no
-## canonical form (spec §12) `number-too-long`.
+## limits has the limit's code (`string-too-long`).
 Error : { code : Str, reason : Str, path : Str }
 
 ## Prefix the path of an error coming out of a nested value.
@@ -433,7 +426,7 @@ is_tag = |name| {
 }
 
 ## The text a number is written as, or why it can't be: its normalized
-## literal (spec §2), in hex if it is an integer longer than the number limit.
+## literal (spec §2), always decimal, within the limits.
 number : Str, Value.Limits -> Try(List(U8), Error)
 number = |text, limits| {
 	b = text.to_utf8()
@@ -454,7 +447,7 @@ number = |text, limits| {
 	# The exponent: `e`, an optional `-`, digits without leading zeros.
 	match n.find_first_index(|c| c == 'e') {
 		Ok(i) => {
-			# The length first, as a parser meets it (spec §7); a number with an exponent is no integer, so no hex form.
+			# The length first, as a parser meets it (spec §7).
 			if n.len() > limits.max_number_length {
 				return fail(ErrorCode.number_too_long, "number literal longer than ${limits.max_number_length.to_str()} characters")
 			}
@@ -466,24 +459,13 @@ number = |text, limits| {
 		}
 		Err(_) => {}
 	}
-	if n.len() <= limits.max_number_length {
-		return Ok(n)
-	}
-	negative = byte_at(n, 0) == '-'
-	digit_count = if (negative) n.len() - 1 else n.len()
-	# d decimal digits have at least ⌊(d − 1) · log₁₆ 10⌋ + 1 hex digits (0.830482 is just below log₁₆ 10).
-	at_least = (if (negative) 3 else 2) + (digit_count - 1) * 830482 // 1000000 + 1
-	integer = n.drop_if(|c| c == '-').all(|c| c >= '0' and c <= '9')
-	written = if (integer and at_least <= limits.max_number_length) number_text(text_of(n), limits.max_number_length) else n
-	if written.len() > limits.max_number_length {
+	# Integers too: always decimal (spec §11), so one longer than the limit has no text a reader with it takes.
+	if n.len() > limits.max_number_length {
 		fail(ErrorCode.number_too_long, "number literal longer than ${limits.max_number_length.to_str()} characters")
 	} else {
-		Ok(written)
+		Ok(n)
 	}
 }
-
-text_of : List(U8) -> Str
-text_of = |bytes| bytes_to_str(bytes)
 
 ## Whether a literal is normalized (spec §2), as the parser gives it:
 ## `-?(0|[1-9][0-9]*)(.[0-9]+)?(e(0|-?[1-9][0-9]*))?`.
@@ -511,60 +493,11 @@ is_normalized = |b| {
 	whole(int) and frac_ok and exp_ok
 }
 
-## Integers whose decimal form is longer are written in hex in the canonical
-## form (spec §12). A constant of the canonical form, not the number limit of
-## §7: it stays 1000 if the default limits grow.
-canonical_hex_threshold : U64
-canonical_hex_threshold = 1000
-
-## The canonical form, or `number-too-long` at the first integer that has
-## none: longer than 1000 characters even in hex.
-canonical_form : Value -> Try(List(U8), Error)
-canonical_form = |value| {
-	check_canonical(value)?
-	Ok(canonical_bytes(value))
-}
-
-## `number-too-long` at an integer that is longer than 1000 characters in hex
-## too, if the value holds one. The paths are the writer's (`line`).
-check_canonical : Value -> Try({}, Error)
-check_canonical = |value| match value {
-	Num(text) =>
-		if text.count_utf8_bytes() > canonical_hex_threshold and number_text(text, canonical_hex_threshold).len() > canonical_hex_threshold {
-			fail(ErrorCode.number_too_long, "an integer longer than ${canonical_hex_threshold.to_str()} characters in hex too has no canonical form")
-		} else {
-			Ok({})
-		}
-	Arr(items) => check_canonical_items(items)
-	Rec(fields) => check_canonical_fields(fields)
-	Tag(name, [Rec(fields)]) => within(check_canonical_fields(fields), "(${name})")
-	Tag(name, args) => within(check_canonical_items(args), "(${name})")
-	_ => Ok({})
-}
-
-check_canonical_items : List(Value) -> Try({}, Error)
-check_canonical_items = |items| {
-	var $i = 0.U64
-	for x in items {
-		within(check_canonical(x), "[${$i.to_str()}]")?
-		$i = $i + 1
-	}
-	Ok({})
-}
-
-check_canonical_fields : List((Str, Value)) -> Try({}, Error)
-check_canonical_fields = |fields| {
-	for (k, v) in fields {
-		within(check_canonical(v), ErrorCode.path_key(k))?
-	}
-	Ok({})
-}
-
-## The canonical form: no spaces, fields sorted by key. An integer with no
-## canonical form is written in hex all the same, for `equals` and `compare`.
+## The canonical form: no spaces, fields sorted by key, numbers as their
+## normalized decimal literal, however long.
 canonical_bytes : Value -> List(U8)
 canonical_bytes = |value| match value {
-	Num(text) => number_text(text, canonical_hex_threshold)
+	Num(text) => text.to_utf8()
 	Text(s) => quote(s)
 	Bytes(b) => "x\"".to_utf8().concat(hex(b)).append('"')
 	Arr(items) => ['['].concat(comma_joined(items.map(canonical_bytes))).append(']')
@@ -612,59 +545,6 @@ comma_joined = |items| {
 	var $first = True
 	for item in items {
 		$out = if ($first) item else $out.append(',').concat(item)
-		$first = False
-	}
-	$out
-}
-
-## A number's normalized literal, except an integer longer than the number
-## limit (spec §7), which is written in hex so that it parses again (§11, §12).
-number_text : Str, U64 -> List(U8)
-number_text = |text, max| {
-	b = text.to_utf8()
-	negative = byte_at(b, 0) == '-'
-	digits = if (negative) b.sublist({ start: 1, len: b.len() - 1 }) else b
-	if b.len() > max and digits.all(|c| c >= '0' and c <= '9') {
-		(if (negative) ['-'] else []).concat(['0', 'x']).concat(decimal_to_hex(digits))
-	} else {
-		b
-	}
-}
-
-## Decimal digits as lowercase hex, without leading zeros.
-decimal_to_hex : List(U8) -> List(U8)
-decimal_to_hex = |digits| {
-	# Little-endian limbs of base 2^32.
-	var $limbs = [0]
-	for d in digits {
-		var $carry = (d - '0').to_u64()
-		var $next = []
-		for limb in $limbs {
-			v = limb * 10 + $carry
-			$next = $next.append(v % 4294967296)
-			$carry = v // 4294967296
-		}
-		$limbs = if ($carry > 0) $next.append($carry) else $next
-	}
-	var $out = []
-	var $first = True
-	var $index = $limbs.len()
-	while $index > 0 {
-		$index = $index - 1
-		limb = match $limbs.get($index) {
-			Ok(l) => l
-			Err(_) => 0
-		}
-		# The most significant limb without leading zeros, the others padded to 8 digits.
-		var $part = []
-		var $v = limb
-		var $count = 0
-		while $v > 0 or ($first and $part.is_empty()) or (!$first and $count < 8) {
-			$part = [hex_digit(($v % 16).to_u8_wrap())].concat($part)
-			$v = $v // 16
-			$count = $count + 1
-		}
-		$out = $out.concat($part)
 		$first = False
 	}
 	$out
@@ -801,7 +681,8 @@ expect Encode.minimised(Text("two\nlines\t\u(2028)\u(202E)")) == Ok("\"two\\nlin
 expect Encode.minimised(Rec([("extra", Arr([Num("1"), Num("abc")]))])).map_err(Encode.message) == Err(".extra[1]: not a number literal")
 expect Encode.stream_minimised([Num("1"), Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
 expect Encode.minimised_with(Arr([Arr([Num("1")])]), { ..Value.default_limits, max_depth: 1 }).map_err(|e| e.code) == Err("nesting-too-deep")
-expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 12 }) == Ok("0xe8d4a51000,\n")
+expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 13 }) == Ok("1000000000000,\n")
+expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 12 }).map_err(|e| e.code) == Err("number-too-long")
 expect Encode.minimised_with(Num("1"), { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code) == Err("unsupported-depth")
 # Minimised and compact differ only in spaces, and both parse back to the value.
 expect {
@@ -810,7 +691,7 @@ expect {
 		|t| match Value.parse(t) {
 			Ok(v) =>
 				match (Encode.minimised(v), Encode.to_str(v)) {
-					(Ok(m), Ok(c)) => Value.parse(m).map_ok(canonical_text) == Ok(canonical_text(v)) and Value.parse(c).map_ok(canonical_text) == Ok(canonical_text(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
+					(Ok(m), Ok(c)) => Value.parse(m).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and Value.parse(c).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
 					_ => False
 				}
 			Err(_) => False
@@ -829,15 +710,8 @@ expect [2097152.25.F32, 2097152.75, 1048576.125, 4498.53125].map(|x| Encode.to_s
 # The canonical form (spec §12): the same cases as the TypeScript and Rust bindings.
 canonical_of : Str -> Str
 canonical_of = |src| match Value.parse_all(src) {
-	Ok([v]) => canonical_text(v)
+	Ok([v]) => Encode.canonical(v)
 	_ => "(not one value)"
-}
-
-## The canonical form, or the error's message.
-canonical_text : Value -> Str
-canonical_text = |v| match Encode.canonical(v) {
-	Ok(text) => text
-	Err(e) => "no canonical form: ${Encode.message(e)}"
 }
 
 equal_texts : Str, Str -> Bool
@@ -866,23 +740,27 @@ expect canonical_of("\"tab\\tquote\\\" \\u{41} \\u{1b} \\u{202e} café 😀\"") 
 expect canonical_of("\"\"\"\n  two\n  lines\n  \"\"\"") == "\"two\\nlines\""
 expect canonical_of("{ \"😀\": 1, \"\u(FFFD)\": 2, a: 3, \"Z\": 4 }") == "{\"Z\":4,a:3,\"\u(FFFD)\":2,\"😀\":1}"
 expect canonical_of("[None, Some(1), Circle({ r: 1 }), Pair({ a: 1 }, 2)]") == "[None,Some(1),Circle{r:1},Pair({a:1},2)]"
-expect canonical_of("0x${"f".repeat(900)}") == "0x${"f".repeat(900)}"
+# Always decimal: the longest hex literal (829 digits) is 999 decimal digits.
+expect {
+	form = canonical_of("0x${"f".repeat(829)}")
+	form.starts_with("16423496480701302824") and form.ends_with("5554113535") and form.count_utf8_bytes() == 999 and canonical_of("-0x${"f".repeat(829)}") == "-${form}"
+}
 expect match Value.parse_all("9, 10, [], \"😀\", { b: 1, a: 2 }, Some(1), -1") {
-	Ok(vs) => vs.sort_with(Encode.compare).map(canonical_text) == ["\"😀\"", "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}"]
+	Ok(vs) => vs.sort_with(Encode.compare).map(Encode.canonical) == ["\"😀\"", "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}"]
 	_ => False
 }
 expect compare_texts("{ b: 1, a: 2 }", "{ a: 2, b: 1 }") == Same and compare_texts("1.0", "1") == After
 # Hashing (spec §12): SHA-256 of the canonical form; a list joins the forms with `,`.
 expect match Value.parse_all("{ a: 1 }") {
-	Ok([v]) => Encode.hash(v) == Ok("f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261")
+	Ok([v]) => Encode.hash(v) == "f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261"
 	_ => False
 }
-expect Encode.hash_all([]) == Ok("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+expect Encode.hash_all([]) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 expect match (Value.parse_all("{ b: 1, a: 0x2 }, \"x\", [None]"), Value.parse_all("{a:2,b:1},\"x\",[None]")) {
 	(Ok(vs), Ok(same)) => {
 		joined = Crypto.SHA256.hash("{a:2,b:1},\"x\",[None]".to_utf8()).to_hex()
 		one = vs.take_first(1)
-		Encode.hash_all(vs) == Ok(joined) and Encode.hash_all(same) == Ok(joined) and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
+		Encode.hash_all(vs) == joined and Encode.hash_all(same) == joined and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
 	}
 	_ => False
 }
@@ -892,49 +770,34 @@ expect match Value.parse_all("1, \"two\", Three { n: 3 }") {
 		var $h = Encode.HashAll.empty
 		var $digests = [$h.digest()]
 		for v in vs {
-			$h = $h.add(v) ?? $h
+			$h = $h.add(v)
 			$digests = $digests.append($h.digest())
 		}
-		$digests.map(|d| Ok(d)) == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)))
+		$digests == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)))
 	}
 	_ => False
 }
-# A reader's limits don't change the canonical form or the hash.
-expect match Value.parse_all_with("1${"0".repeat(1100)}", { ..Value.default_limits, max_number_length: 2000 }) {
-	Ok([v]) => canonical_text(v).starts_with("0x") and Encode.hash(v) == Ok(Crypto.SHA256.hash(canonical_text(v).to_utf8()).to_hex())
+# Every value has a canonical form and a hash, whatever a reader's limits (spec §12): a 1300-digit
+# integer, parsed with a raised limit or built in code, is written with all its digits.
+huge_digits : Str
+huge_digits = "1${"0".repeat(1299)}"
+
+expect match Value.parse_all_with(huge_digits, { ..Value.default_limits, max_number_length: 2000 }) {
+	Ok([v]) => Encode.canonical(v) == huge_digits and Encode.hash(v) == Crypto.SHA256.hash(huge_digits.to_utf8()).to_hex()
 	_ => False
 }
-# An integer longer than 1000 characters even in hex has no canonical form
-# (spec §12): `number-too-long`, at its path. 1100 digits are 913 in hex, 1300 are 1079.
-huge : Value
-huge = Num("1${"0".repeat(1299)}")
-
-no_form : Try(a, Error) -> Str
-no_form = |result| match result {
-	Ok(_) => "ok"
-	Err(e) => "${e.code} at ${ErrorCode.place(e.path)}: ${e.reason}"
-}
-
-expect no_form(Encode.canonical(huge)) == "number-too-long at $: an integer longer than 1000 characters in hex too has no canonical form"
-expect no_form(Encode.hash(huge)) == no_form(Encode.canonical(huge)) and no_form(Encode.hash_all([Num("1"), huge])) == no_form(Encode.canonical(huge))
-expect no_form(Encode.HashAll.empty.add(huge)) == no_form(Encode.canonical(huge))
 expect {
-	nested_huge = Rec([("b", Num("1")), ("a", Arr([Text("x"), huge]))])
-	no_form(Encode.canonical(nested_huge)).starts_with("number-too-long at $.a[1]:") and no_form(Encode.hash(nested_huge)).starts_with("number-too-long at $.a[1]:") and no_form(Encode.hash_all([Num("1"), nested_huge])).starts_with("number-too-long at $.a[1]:")
+	built = Rec([("b", Num("1")), ("a", Arr([Text("x"), Num(huge_digits)]))])
+	form = "{a:[\"x\",${huge_digits}],b:1}"
+	Encode.canonical(built) == form and Encode.hash(built) == Crypto.SHA256.hash(form.to_utf8()).to_hex() and Encode.hash_all([Num("1"), built]) == Crypto.SHA256.hash("1,${form}".to_utf8()).to_hex() and Encode.HashAll.empty.add(built).digest() == Encode.hash(built)
 }
-expect no_form(Encode.canonical(Tag("A", [Num("1"), Tag("B", [Rec([("c", Num("-${"9".repeat(1300)}"))])])]))).starts_with("number-too-long at $[1][0].c:")
-expect {
-	ok = Num("1${"0".repeat(1099)}")
-	text = Encode.canonical(Arr([ok])) ?? ""
-	text.starts_with("[0x") and text.count_utf8_bytes() == 2 + 2 + 913 and Encode.hash(ok).is_ok() and Encode.hash_all([ok, ok]).is_ok()
-}
-# Equality and order never fail: such an integer compares by its hex form.
-expect Encode.equals(huge, Num("1${"0".repeat(1299)}")) and !Encode.equals(huge, Num("1")) and Encode.compare(huge, Num("1")) == Before
-# The compact writer keeps a huge integer in hex too (spec §11), so its output parses again.
-expect match Value.parse_all("0x${"f".repeat(900)}") {
-	Ok([v]) => Encode.to_str(v) == Ok("0x${"f".repeat(900)}")
+expect Encode.equals(Num(huge_digits), Num("1${"0".repeat(1299)}")) and !Encode.equals(Num(huge_digits), Num("1")) and Encode.compare(Num(huge_digits), Num("2")) == Before
+# The compact writer writes a huge integer in decimal (spec §11); one too long for the reader is an error.
+expect match Value.parse_all("0x${"f".repeat(829)}") {
+	Ok([v]) => Encode.to_str(v) == Ok(Encode.canonical(v))
 	_ => False
 }
+expect Encode.to_str(Num(huge_digits)).map_err(|e| e.code) == Err("number-too-long")
 
 # The writer checks what it writes (spec §9.8): a Value built in code may hold anything.
 error_of : Value -> Str
@@ -974,10 +837,10 @@ expect Encode.to_str(nested(256, Tag("N", []), |v| Tag("C", [Num("1"), v]))).is_
 expect Encode.to_str(nested(255, Rec([]), |v| Tag("A", [Rec([("a", v)])]))).is_ok() and error_of(nested(256, Rec([]), |v| Tag("A", [Rec([("a", v)])]))).ends_with("nesting deeper than 256 levels")
 # Every value the parser gives is written again, and parses back to itself.
 expect {
-	texts = ["${"[".repeat(256)}${"]".repeat(256)}", "0x${"f".repeat(900)}", "-0x${"F".repeat(900)}", "1e6144", "-0", "A { a: [1, B(2)] }"]
+	texts = ["${"[".repeat(256)}${"]".repeat(256)}", "0x${"f".repeat(829)}", "-0x${"F".repeat(829)}", "1e6144", "-0", "A { a: [1, B(2)] }"]
 	texts.all(
 		|t| match Value.parse(t) {
-			Ok(v) => Encode.to_str(v).map_ok(|w| Value.parse(w).map_ok(canonical_text)) == Ok(Ok(canonical_text(v)))
+			Ok(v) => Encode.to_str(v).map_ok(|w| Value.parse(w).map_ok(Encode.canonical)) == Ok(Ok(Encode.canonical(v)))
 			Err(_) => False
 		},
 	)
@@ -996,8 +859,8 @@ error_with = |v| match Encode.to_str_with(v, small) {
 expect Encode.to_str_with(nested(3, Num("1"), |v| Arr([v])), small) == Ok("[[[1]]]")
 expect error_with(nested(4, Num("1"), |v| Arr([v]))) == "[0][0][0]: nesting deeper than 3 levels"
 expect Encode.to_str_with(Num("12345678"), small) == Ok("12345678") and error_with(Num("123456789")) == "number literal longer than 8 characters"
-# An integer longer than the number limit is written in hex if that fits: 10^12 is 0xe8d4a51000 (12 characters).
-expect Encode.to_str_with(Num("1000000000000"), { ..small, max_number_length: 12 }) == Ok("0xe8d4a51000")
+# An integer longer than the number limit is too long, though its hex form would fit: 10^12 is 0xe8d4a51000 (12 characters).
+expect Encode.to_str_with(Num("1000000000000"), { ..small, max_number_length: 12 }) == Err({ code: "number-too-long", reason: "number literal longer than 12 characters", path: "" })
 expect Encode.to_str_with(Num("1e99"), small) == Ok("1e99") and error_with(Num("1e100")) == "exponent larger than 99"
 expect Encode.to_str_with(Text("abcd"), small) == Ok("\"abcd\"") and error_with(Text("abcde")) == "string longer than 4 characters"
 expect Encode.stream_with([Num("1"), Num("1e100")], small) == Err({ code: "exponent-too-large", reason: "exponent larger than 99", path: "[1]" })

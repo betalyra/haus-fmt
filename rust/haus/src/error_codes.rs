@@ -74,7 +74,7 @@ pub enum ErrorCode {
     StraySlash,
     /// `nesting-too-deep`: Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16).
     NestingTooDeep,
-    /// `number-too-long`: A number literal has more characters than the limit (default 1000).
+    /// `number-too-long`: A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7).
     NumberTooLong,
     /// `exponent-too-large`: A number's exponent is larger than the limit (default 6144), in either direction.
     ExponentTooLarge,

@@ -75,7 +75,7 @@ typed = |mode, suite, ty, input| match Str.from_utf8(input) {
 			match JsonValue.parse(s) {
 				Err(e) => "err $ ${e.code} ${clean(e.reason)}"
 				Ok(j) => match JsonSchemas.read(suite, ty, j) {
-					Read(Ok(v)) => canonical_line(v)
+					Read(Ok(v)) => "ok ${Encode.canonical(v)}"
 					Read(Err(e)) => "err ${clean(e)}"
 					NoType => "crash no type ${suite}.${ty}"
 				}
@@ -103,20 +103,12 @@ untyped = |mode, input| match Str.from_utf8(input) {
 
 shown : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]) -> Str
 shown = |r| match r {
-	Ok(v) => canonical_line(v)
+	Ok(v) => "ok ${Encode.canonical(v)}"
 	Err(Syntax(e)) => "err $ ${e.code} ${clean(e.reason)}"
 	Err(Decode(e)) => "err ${ErrorCode.place(e.path)} ${e.code} ${clean(e.reason)}"
 }
 
 ## A reason on one line.
-## `ok` and the canonical form of a value read (spec §12), or `err` with
-## `number-too-long` for an integer that has none.
-canonical_line : Value -> Str
-canonical_line = |v| match Encode.canonical(v) {
-	Ok(form) => "ok ${form}"
-	Err(e) => "err ${ErrorCode.place(e.path)} ${e.code} ${clean(e.reason)}"
-}
-
 clean : Str -> Str
 clean = |s| Str.from_utf8(s.to_utf8().map(|b| if b == '\n' or b == '\r' ' ' else b)) ?? "?"
 

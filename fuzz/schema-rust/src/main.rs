@@ -23,16 +23,10 @@ fn line(text: &str) -> String {
         Ok(mut vs) if vs.len() == 1 => vs.remove(0),
         _ => return "err $ - not a single value".into(),
     };
-    let err = |place: String, code: haus::ErrorCode, e: &dyn std::fmt::Display| {
-        format!("err {place} {code} {}", e.to_string().replace(['\n', '\r'], " "))
-    };
     match schemas::roundtrip(suite, ty, &value) {
         None => format!("crash no type {suite}.{ty}"),
-        Some(Ok(encoded)) => match haus::canonical(&encoded) {
-            Ok(text) => format!("ok {text}"),
-            Err(e) => err(e.place(), e.code, &e),
-        },
-        Some(Err(e)) => err(e.place(), e.code, &e),
+        Some(Ok(encoded)) => format!("ok {}", haus::canonical(&encoded)),
+        Some(Err(e)) => format!("err {} {} {}", e.place(), e.code, e.to_string().replace(['\n', '\r'], " ")),
     }
 }
 

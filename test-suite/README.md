@@ -69,11 +69,13 @@ Conformance is tested with the default limits from the spec:
 |---|---|
 | nesting depth | 256 |
 | characters in a number literal | 1000 |
+| hex digits in a hex literal (`_` not counted) | 829 |
 | absolute exponent | 6144 |
 | characters in a string | 16 Mi |
 
-`valid/limits-boundary.haus` sits exactly at the number limits, and
-`invalid/*-too-*.haus` goes one past them.
+`valid/limits-boundary.haus` sits exactly at the number limits (its hex
+literals have 829 hex digits, and canonical form and JSON write them in
+decimal), and `invalid/*-too-*.haus` goes one past them.
 
 ## JSON suite
 

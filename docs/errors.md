@@ -383,7 +383,7 @@ For example: [[[[ … ]]]]: 257 levels.
 
 ## number-too-long
 
-*Limits.* A number literal has more characters than the limit (default 1000).
+*Limits.* A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7).
 
 For example: a number with 1001 digits.
 

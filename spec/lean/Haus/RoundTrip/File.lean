@@ -1,5 +1,6 @@
 import Haus.RoundTrip.Values
 import Haus.Correct
+import Haus.Secure
 
 /-!
 # The canonical form: round trip and uniqueness (spec §12)
@@ -30,15 +31,27 @@ theorem File.vals {t : Text} {vs : List Value} (h : File L t vs) : ∀ v ∈ vs,
   | values _ _ _ _ _ _ hi => exact items hi
 
 /-- The canonical form of a value is a file with that value alone. -/
-theorem file_canonical (hL : numberLimit ≤ L.maxNumberLength) {s : Text} {v : Value} (h : Val L L.maxDepth s v) : File L (canonical v) [v.canon] := by
-  have := File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ [] _ (h.roundTrip hL) (.ws [] .nil))
+theorem file_canonical {s : Text} {v : Value} (h : Val L L.maxDepth s v) : File L (canonical v) [v.canon] := by
+  have := File.values [] [] _ _ (.inl rfl) .nil (FileItems.last _ [] _ h.roundTrip (.ws [] .nil))
   simpa [canonical] using this
 
 /-- **E.** Parsing the canonical form of a parsed value gives it back, in canonical order. -/
-theorem parse_canonical (hL : numberLimit ≤ L.maxNumberLength) {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) {v : Value}
+theorem parse_canonical {input : Text} {vs : List Value} (h : Parser.parse L input = .ok vs) {v : Value}
     (hv : v ∈ vs) : Parser.parse L (canonical v) = .ok [v.canon] := by
   obtain ⟨s, hs⟩ := File.vals ((parse_correct L input vs).mp h) v hv
-  exact (parse_correct L _ _).mpr (file_canonical hL hs)
+  exact (parse_correct L _ _).mpr (file_canonical hs)
+
+/--
+**Every parsed number's canonical text fits the number limit** (§7, §12): a
+number within the limits `L` (A4, `parse_bounded`: every number a parser
+returns, at any depth) has a canonical form, always decimal, of at most
+`L.maxNumberLength` characters. So a writer for the same limits can write
+every integer it read, and the canonical form never needs another spelling.
+-/
+theorem _root_.Haus.Bounded.num_fits {n : Nat} {s : String} (h : Bounded L n (.num s)) :
+    (canonical (.num s)).length ≤ L.maxNumberLength := by
+  cases h with
+  | num _ lit hl => simpa [canonical, canon, write, Canonical.number, String.length_toList] using hl.normalize_fits
 
 /-- Equal values (§2) have the same canonical form: for any values. -/
 theorem canonical_of_equiv {a b : Value} (h : Equiv a b) : canonical a = canonical b := by
@@ -49,12 +62,12 @@ theorem canonical_of_equiv {a b : Value} (h : Equiv a b) : canonical a = canonic
 equal (§2), so equal values hash the same and different values don't share
 a canonical form.
 -/
-theorem canonical_eq_iff (hL : numberLimit ≤ L.maxNumberLength) {input₁ input₂ : Text} {as bs : List Value}
+theorem canonical_eq_iff {input₁ input₂ : Text} {as bs : List Value}
     (h₁ : Parser.parse L input₁ = .ok as) (h₂ : Parser.parse L input₂ = .ok bs)
     {a b : Value} (ha : a ∈ as) (hb : b ∈ bs) : canonical a = canonical b ↔ Equiv a b := by
   refine ⟨fun h => ?_, canonical_of_equiv⟩
-  have pa := parse_canonical hL h₁ ha
-  have pb := parse_canonical hL h₂ hb
+  have pa := parse_canonical h₁ ha
+  have pb := parse_canonical h₂ hb
   rw [h, pb] at pa
   simpa [Equiv] using (Except.ok.inj pa).symm
 

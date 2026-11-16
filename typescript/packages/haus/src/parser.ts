@@ -68,6 +68,37 @@ export const withDefaults = (limits: Partial<Limits>): Limits => {
   }
 }
 
+/** log₁₆ 10: a power of ten 10^e is 16^(e · this). */
+const HEX_PER_DECIMAL = Math.log(10) / Math.log(16)
+
+/** The hex digit limit of each number limit seen, computed once. */
+const hexDigitLimits = new Map<number, number>()
+
+/**
+ * The most hex digits a hex literal may have under the number limit
+ * `maxNumberLength` = n (spec §7): the largest h with 16^h ≤ 10^(n−1), so
+ * that every integer's decimal form, sign included, fits in n characters.
+ * 829 for the default 1000. A float estimate, checked with exact powers
+ * where it is near a whole number.
+ */
+export const maxHexDigits = (maxNumberLength: number): number => {
+  if (maxNumberLength === Infinity) return Infinity
+  if (!(maxNumberLength >= 1)) return 0
+  const n = Math.floor(maxNumberLength)
+  const known = hexDigitLimits.get(n)
+  if (known !== undefined) return known
+  const e = n - 1
+  const estimate = e * HEX_PER_DECIMAL
+  let h = Math.floor(estimate)
+  if (Math.abs(estimate - Math.round(estimate)) < 1e-9 * (estimate + 1)) {
+    const ten = 10n ** BigInt(e)
+    while (1n << BigInt(4 * h) > ten) h--
+    while (1n << BigInt(4 * (h + 1)) <= ten) h++
+  }
+  hexDigitLimits.set(n, h)
+  return h
+}
+
 /** Whether `s` has more than `max` characters (code points: an emoji is one character, but two UTF-16 units). */
 export const longerThan = (s: string, max: number): boolean => s.length > max && codePoints(s) > max
 
@@ -343,6 +374,13 @@ export class Parser {
     const literal = this.src.slice(start, end)
     if (literal.length > this.limits.maxNumberLength) {
       this.fail("number-too-long", `number literal longer than ${this.limits.maxNumberLength} characters`, start)
+    }
+    if (radix === "0x") {
+      // So that its decimal form fits the number limit too (spec §7). `_` doesn't count; leading zeros do.
+      const max = maxHexDigits(this.limits.maxNumberLength)
+      if (digits!.length - (digits!.split("_").length - 1) > max) {
+        this.fail("number-too-long", `hex literal with more than ${max} hex digits (the number limit is ${this.limits.maxNumberLength} characters in decimal)`, start)
+      }
     }
     this.pos = end
     if (radix !== undefined) {
