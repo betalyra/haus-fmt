@@ -59,9 +59,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      # errors.ts reads spec/errors.haus with the built TypeScript package.
+      - name: Build the TypeScript package
+        working-directory: typescript
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter ./packages/haus build
       - run: node spec/scripts/errors.ts --check
       - run: node claude-plugin/scripts/sync.ts --check
 
