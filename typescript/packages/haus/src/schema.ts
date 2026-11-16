@@ -378,7 +378,7 @@ const bigInt = (name: string, min: bigint, max: bigint) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = BigInt(v.text)
     return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
-  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? num(n.toString()) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true })
+  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? num(n.toString()) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true, bounded: true })
 
 const int8 = smallInt("Int8", -128, 127)
 const int16 = smallInt("Int16", -32768, 32767)
