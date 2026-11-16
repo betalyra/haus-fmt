@@ -24,7 +24,7 @@ import { compareExamples, formatDefault, formatExamples, hashExamples } from "./
 import { linkEditors, pairValues } from "./sync";
 
 type Tool = "hash" | "compare" | "format";
-type Style = "pretty" | "compact";
+type Style = "pretty" | "compact" | "minimised" | "canonical";
 
 const $ = <E extends HTMLElement>(sel: string) => document.querySelector<E>(sel)!;
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
@@ -124,7 +124,7 @@ async function loadState(): Promise<State> {
     a: str(raw.a, fallback.a),
     b: str(raw.b, fallback.b),
     f: str(raw.f, fallback.f),
-    s: raw.s === "compact" ? "compact" : "pretty",
+    s: raw.s === "compact" || raw.s === "minimised" || raw.s === "canonical" ? raw.s : "pretty",
     i: raw.i === 4 ? 4 : 2,
   };
 }
@@ -356,7 +356,7 @@ async function start() {
     const fi = formatExamples.findIndex((e) => e.text === state.f);
     fmtExample.value = fi < 0 ? "" : String(fi);
     for (const btn of styleButtons) btn.setAttribute("aria-selected", String(btn.dataset.style === state.s));
-    indent.disabled = state.s === "compact";
+    indent.disabled = state.s !== "pretty";
     const r = fmtIn.reading;
     if (!r.values) {
       fmtSummary.textContent = syntaxSummary(r);
@@ -364,22 +364,26 @@ async function start() {
       link.setPairs([]); // the output is from an older text: nothing lines up
       return;
     }
+    // The canonical form is one value per line (as `haus canonical` prints it), not a stream with commas.
     const text =
-      state.s === "compact"
-        ? format(r.values, { style: "compact" })
-        : format(r.values, { source: r.text, comments: r.comments, indent: state.i });
+      state.s === "canonical"
+        ? r.values.map((v) => canonical(v) + "\n").join("")
+        : format(r.values, { style: state.s, source: r.text, comments: r.comments, indent: state.i });
     setText(out, text);
     // The output is the same values, so a second parse pairs each one with its copy.
     try {
-      link.setPairs(pairValues(r.values, parseDocument(text).values));
+      const again = state.s === "canonical" ? text.split("\n").filter((l) => l !== "").map((l) => parseDocument(l).values[0]!) : parseDocument(text).values;
+      link.setPairs(pairValues(r.values, again));
     } catch {
       link.setPairs([]);
     }
-    const dropped = state.s === "compact" && r.comments.length > 0;
-    fmtSummary.textContent =
-      state.s === "compact"
-        ? `Each value on one line.${dropped ? ` ${plural(r.comments.length, "comment")} dropped: compact has no room for them.` : ""}`
-        : "One entry per line, comments kept.";
+    const dropped = state.s !== "pretty" && r.comments.length > 0 ? ` ${plural(r.comments.length, "comment")} dropped.` : "";
+    fmtSummary.textContent = {
+      pretty: "One entry per line, comments kept.",
+      compact: `Each value on one line, spellings kept.${dropped}`,
+      minimised: `Each value on one line without spaces, spellings kept: for the wire and storage.${dropped}`,
+      canonical: `Keys sorted, spellings normalized, no whitespace: the exact text the hash is computed from, one value per line.${dropped}`,
+    }[state.s];
     fmtSummary.dataset.state = "ok";
   };
   const fmtIn = input($("#fmt-in"), state.f, () => updateFormat(), (pos) => link.cursor("a", pos));
