@@ -506,6 +506,34 @@ fn canonical_and_hash_errors() {
     haus().args(["hash", "nowhere.haus"]).assert().code(2);
 }
 
+#[test]
+fn an_integer_too_long_in_hex_too_has_no_canonical_form_or_hash() {
+    // 1300 digits are more than 1000 characters in hex too (spec §12); 1100 are not.
+    let huge = format!("1, {{ a: [{}] }},\n", "9".repeat(1300));
+    let too_long = || {
+        predicate::str::contains("error[number-too-long]")
+            .and(predicate::str::contains("in hex too has no canonical form"))
+            .and(predicate::str::contains("$.a[0]"))
+    };
+    for args in [&["canonical"][..], &["hash", "--each"], &["hash"]] {
+        haus()
+            .args(args)
+            .args(["--max-number-length", "2000", "-"])
+            .write_stdin(huge.clone())
+            .assert()
+            .code(1)
+            .stderr(too_long());
+    }
+    // What was printed before it stays printed.
+    haus().args(["canonical", "--max-number-length", "2000", "-"]).write_stdin(huge).assert().stdout("1\n");
+    haus()
+        .args(["canonical", "--max-number-length", "2000", "-"])
+        .write_stdin("9".repeat(1100))
+        .assert()
+        .success()
+        .stdout(predicate::str::starts_with("0x"));
+}
+
 // ── fmt ──────────────────────────────────────────────────────────
 
 #[test]

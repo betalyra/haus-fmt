@@ -57,10 +57,14 @@ fn streamed(bytes: &[u8], i: usize) -> Result<Vec<Value>, haus::SyntaxError> {
     Ok(values)
 }
 
-/// With `--canonical`: the canonical form of each value (spec §12), as JSON strings.
+/// With `--canonical`: the canonical form of each value (spec §12), as JSON
+/// strings. A value without one (`number-too-long`, which the default number
+/// limit rules out) is an `err` at line and column 0.
 fn canonical_line(result: Result<Vec<Value>, haus::SyntaxError>) -> String {
-    match result {
-        Ok(values) => format!("ok {}", Json::Array(values.iter().map(|v| json!(haus::canonical(v))).collect())),
+    let forms = result.map(|values| values.iter().map(haus::canonical).collect::<Result<Vec<_>, _>>());
+    match forms {
+        Ok(Ok(forms)) => format!("ok {}", json!(forms)),
+        Ok(Err(e)) => format!("err 0 0 {} {}", e.code, e.reason),
         Err(e) => line(Err(e)),
     }
 }

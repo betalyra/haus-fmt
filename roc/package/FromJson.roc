@@ -461,30 +461,30 @@ expect FromJson.one("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"sides\": 6}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => tag
+		Bare(tag) => Ok(tag)
 	},
-) == Ok("Hexagon{sides:6}")
+) == Ok(Ok("Hexagon{sides:6}"))
 # `_args` alone: the arguments; beside other members, or `args`: a record payload.
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => tag
+		Bare(tag) => Ok(tag)
 	},
-) == Ok("Hexagon(1,\"a\")")
+) == Ok(Ok("Hexagon(1,\"a\")"))
 expect FromJson.one("{\"_tag\": \"Run\", \"args\": [1, 2]}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => tag
+		Bare(tag) => Ok(tag)
 	},
-) == Ok("Run{args:[1,2]}")
+) == Ok(Ok("Run{args:[1,2]}"))
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", FromJson.any_tag).map_ok(
 	|t| match t {
 		Other(tag, args) => Encode.canonical(Tag(tag, args))
-		Bare(tag) => tag
+		Bare(tag) => Ok(tag)
 	},
-) == Ok("Hexagon{_args:[{_num:\"1\"}],x:2}")
+) == Ok(Ok("Hexagon{_args:[{_num:\"1\"}],x:2}"))
 # `Any` inside schema-based JSON accepts raw DEL, C1 and bidi controls.
-expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}\"")
+expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(Encode.canonical) == Ok(Ok("\"a\\u{7F}\\u{85}\\u{202E}\""))
 expect FromJson.one(
 	"{\"pin\": 98765}",
 	|j| {
@@ -498,7 +498,7 @@ expect FromJson.one(
 	},
 ) == Err(".pin: not a valid Secret UInt16 (the value is hidden)")
 expect FromJson.lines("1\n2\n", FromJson.u8) == Ok([1, 2])
-expect FromJson.within_depth(Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), |v| v).map_ok(Encode.canonical) == Ok("[{a:Some([])}]")
+expect FromJson.within_depth(Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), |v| v).map_ok(Encode.canonical) == Ok(Ok("[{a:Some([])}]"))
 expect FromJson.within_depth(Ok(nest(256)), |v| v).is_ok()
 expect FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
 expect FromJson.within_depth(Ok(Tag("Box", [Rec([("w", nest(255))])])), |v| v).is_ok()

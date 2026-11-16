@@ -78,7 +78,7 @@ fn valid_canonical() {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
         let expected = fs::read_to_string(path.with_extension("canonical")).unwrap();
         let values = haus::parse_bytes(&fs::read(&path).unwrap()).unwrap();
-        let actual: String = values.iter().map(|v| haus::canonical(v) + "\n").collect();
+        let actual: String = values.iter().map(|v| haus::canonical(v).unwrap() + "\n").collect();
         if actual != expected {
             failures.push(format!("{name}: got {actual}"));
         }
@@ -97,12 +97,12 @@ fn valid_hash() {
         let expected = fs::read_to_string(path.with_extension("hash")).unwrap().trim().to_owned();
         let values = haus::parse_bytes(&fs::read(&path).unwrap()).unwrap();
         let mut hasher = haus::Hasher::new();
-        let streamed: Vec<String> = values.iter().map(|v| hasher.add(v).digest()).collect();
-        let actual = haus::hash_all(&values);
-        if actual != expected || streamed.last().unwrap_or(&haus::hash_all([])) != &expected {
+        let streamed: Vec<String> = values.iter().map(|v| hasher.add(v).unwrap().digest()).collect();
+        let actual = haus::hash_all(&values).unwrap();
+        if actual != expected || streamed.last().unwrap_or(&haus::hash_all([]).unwrap()) != &expected {
             failures.push(format!("{name}: got {actual}"));
         }
-        if matches!(values.as_slice(), [v] if haus::hash(v) != expected) {
+        if matches!(values.as_slice(), [v] if haus::hash(v).unwrap() != expected) {
             failures.push(format!("{name}: hash of the only value differs"));
         }
     }

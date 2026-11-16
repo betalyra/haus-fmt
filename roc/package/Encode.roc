@@ -62,21 +62,25 @@ Encode := [].{
 	## every binding, so equal values (§2) give identical text. It doesn't
 	## depend on a reader's limits: an integer longer than 1000 characters is
 	## written in hex. One longer than 1000 characters even in hex has no
-	## canonical form (only a parser with a larger number limit, or code,
-	## makes one); this function can't fail, so it writes that one in hex too.
-	canonical : Value -> Str
-	canonical = |value| bytes_to_str(canonical_bytes(value))
+	## canonical form (only a parser with a larger number limit, or code, makes
+	## one): `number-too-long`, at its path.
+	##
+	##     Encode.canonical(Rec([("b", Num("1")), ("a", Num("0xFF"))]))   # Ok("{a:255,b:1}")
+	canonical : Value -> Try(Str, Error)
+	canonical = |value| canonical_form(value).map_ok(bytes_to_str)
 
 	## The SHA-256 digest of the canonical form, as 64 lowercase hex digits
-	## (spec §12): the same whatever the layout, comments or key order.
-	hash : Value -> Str
-	hash = |value| Crypto.SHA256.hash(canonical_bytes(value)).to_hex()
+	## (spec §12): the same whatever the layout, comments or key order. Fails
+	## where `canonical` does.
+	hash : Value -> Try(Str, Error)
+	hash = |value| canonical_form(value).map_ok(|bytes| Crypto.SHA256.hash(bytes).to_hex())
 
 	## The hash of a list of values, such as a whole file or stream (spec
 	## §12): the SHA-256 digest of their canonical forms joined by `,`. A list
-	## of one value hashes like the value: `hash_all([v])` is `hash(v)`.
-	hash_all : List(Value) -> Str
-	hash_all = |values| values.fold(HashAll.empty, HashAll.add).digest()
+	## of one value hashes like the value: `hash_all([v])` is `hash(v)`. Fails
+	## where `canonical` fails for one of the values.
+	hash_all : List(Value) -> Try(Str, Error)
+	hash_all = |values| values.fold_try(HashAll.empty, HashAll.add).map_ok(HashAll.digest)
 
 	## `hash_all` of a list as it grows, e.g. a stream while it is read: `add`
 	## each value, and `digest` at any time gives `hash_all` of the values
@@ -84,18 +88,19 @@ Encode := [].{
 	##
 	##     var $hash = Encode.HashAll.empty
 	##     for value in values {
-	##         $hash = $hash.add(value)
+	##         $hash = $hash.add(value)?
 	##     }
 	##     $hash.digest() # Encode.hash_all(values)
 	HashAll :: { sha : Crypto.SHA256.Hasher, count : U64 }.{
 		empty : Encode.HashAll
 		empty = { sha: Crypto.SHA256.Hasher.empty(), count: 0 }
 
-		## Add the next value.
-		add : Encode.HashAll, Value -> Encode.HashAll
+		## Add the next value. Fails where `canonical` does, and then adds nothing.
+		add : Encode.HashAll, Value -> Try(Encode.HashAll, Error)
 		add = |h, value| {
+			bytes = canonical_form(value)?
 			sha = if (h.count > 0) h.sha.write([',']) else h.sha
-			{ sha: sha.write(canonical_bytes(value)), count: h.count + 1 }
+			Ok({ sha: sha.write(bytes), count: h.count + 1 })
 		}
 
 		## `hash_all` of the values added so far, as 64 lowercase hex digits.
@@ -103,7 +108,8 @@ Encode := [].{
 		digest = |h| h.sha.finish().to_hex()
 	}
 
-	## Whether two values are equal (spec §2): the same canonical form.
+	## Whether two values are equal (spec §2): the same canonical form. Never
+	## fails: an integer with no canonical form compares by its hex form.
 	equals : Value, Value -> Bool
 	equals = |a, b| canonical_bytes(a) == canonical_bytes(b)
 
@@ -292,7 +298,8 @@ layout = |d, n| {
 ## value (`.extra[1]`, empty at the root): the same paths as `Decode.Error`.
 ## A number that isn't a literal is `cannot-encode`, a tag that isn't a tag
 ## name `invalid-tag`, a key used twice `duplicate-key`; what is beyond the
-## limits has the limit's code (`string-too-long`).
+## limits has the limit's code (`string-too-long`), and an integer with no
+## canonical form (spec §12) `number-too-long`.
 Error : { code : Str, reason : Str, path : Str }
 
 ## Prefix the path of an error coming out of a nested value.
@@ -510,7 +517,51 @@ is_normalized = |b| {
 canonical_hex_threshold : U64
 canonical_hex_threshold = 1000
 
-## The canonical form: no spaces, fields sorted by key.
+## The canonical form, or `number-too-long` at the first integer that has
+## none: longer than 1000 characters even in hex.
+canonical_form : Value -> Try(List(U8), Error)
+canonical_form = |value| {
+	check_canonical(value)?
+	Ok(canonical_bytes(value))
+}
+
+## `number-too-long` at an integer that is longer than 1000 characters in hex
+## too, if the value holds one. The paths are the writer's (`line`).
+check_canonical : Value -> Try({}, Error)
+check_canonical = |value| match value {
+	Num(text) =>
+		if text.count_utf8_bytes() > canonical_hex_threshold and number_text(text, canonical_hex_threshold).len() > canonical_hex_threshold {
+			fail(ErrorCode.number_too_long, "an integer longer than ${canonical_hex_threshold.to_str()} characters in hex too has no canonical form")
+		} else {
+			Ok({})
+		}
+	Arr(items) => check_canonical_items(items)
+	Rec(fields) => check_canonical_fields(fields)
+	Tag(name, [Rec(fields)]) => within(check_canonical_fields(fields), "(${name})")
+	Tag(name, args) => within(check_canonical_items(args), "(${name})")
+	_ => Ok({})
+}
+
+check_canonical_items : List(Value) -> Try({}, Error)
+check_canonical_items = |items| {
+	var $i = 0.U64
+	for x in items {
+		within(check_canonical(x), "[${$i.to_str()}]")?
+		$i = $i + 1
+	}
+	Ok({})
+}
+
+check_canonical_fields : List((Str, Value)) -> Try({}, Error)
+check_canonical_fields = |fields| {
+	for (k, v) in fields {
+		within(check_canonical(v), ErrorCode.path_key(k))?
+	}
+	Ok({})
+}
+
+## The canonical form: no spaces, fields sorted by key. An integer with no
+## canonical form is written in hex all the same, for `equals` and `compare`.
 canonical_bytes : Value -> List(U8)
 canonical_bytes = |value| match value {
 	Num(text) => number_text(text, canonical_hex_threshold)
@@ -759,7 +810,7 @@ expect {
 		|t| match Value.parse(t) {
 			Ok(v) =>
 				match (Encode.minimised(v), Encode.to_str(v)) {
-					(Ok(m), Ok(c)) => Value.parse(m).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and Value.parse(c).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
+					(Ok(m), Ok(c)) => Value.parse(m).map_ok(canonical_text) == Ok(canonical_text(v)) and Value.parse(c).map_ok(canonical_text) == Ok(canonical_text(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
 					_ => False
 				}
 			Err(_) => False
@@ -778,8 +829,15 @@ expect [2097152.25.F32, 2097152.75, 1048576.125, 4498.53125].map(|x| Encode.to_s
 # The canonical form (spec §12): the same cases as the TypeScript and Rust bindings.
 canonical_of : Str -> Str
 canonical_of = |src| match Value.parse_all(src) {
-	Ok([v]) => Encode.canonical(v)
+	Ok([v]) => canonical_text(v)
 	_ => "(not one value)"
+}
+
+## The canonical form, or the error's message.
+canonical_text : Value -> Str
+canonical_text = |v| match Encode.canonical(v) {
+	Ok(text) => text
+	Err(e) => "no canonical form: ${Encode.message(e)}"
 }
 
 equal_texts : Str, Str -> Bool
@@ -810,21 +868,21 @@ expect canonical_of("{ \"😀\": 1, \"\u(FFFD)\": 2, a: 3, \"Z\": 4 }") == "{\"Z
 expect canonical_of("[None, Some(1), Circle({ r: 1 }), Pair({ a: 1 }, 2)]") == "[None,Some(1),Circle{r:1},Pair({a:1},2)]"
 expect canonical_of("0x${"f".repeat(900)}") == "0x${"f".repeat(900)}"
 expect match Value.parse_all("9, 10, [], \"😀\", { b: 1, a: 2 }, Some(1), -1") {
-	Ok(vs) => vs.sort_with(Encode.compare).map(Encode.canonical) == ["\"😀\"", "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}"]
+	Ok(vs) => vs.sort_with(Encode.compare).map(canonical_text) == ["\"😀\"", "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}"]
 	_ => False
 }
 expect compare_texts("{ b: 1, a: 2 }", "{ a: 2, b: 1 }") == Same and compare_texts("1.0", "1") == After
 # Hashing (spec §12): SHA-256 of the canonical form; a list joins the forms with `,`.
 expect match Value.parse_all("{ a: 1 }") {
-	Ok([v]) => Encode.hash(v) == "f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261"
+	Ok([v]) => Encode.hash(v) == Ok("f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261")
 	_ => False
 }
-expect Encode.hash_all([]) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+expect Encode.hash_all([]) == Ok("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 expect match (Value.parse_all("{ b: 1, a: 0x2 }, \"x\", [None]"), Value.parse_all("{a:2,b:1},\"x\",[None]")) {
 	(Ok(vs), Ok(same)) => {
 		joined = Crypto.SHA256.hash("{a:2,b:1},\"x\",[None]".to_utf8()).to_hex()
 		one = vs.take_first(1)
-		Encode.hash_all(vs) == joined and Encode.hash_all(same) == joined and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
+		Encode.hash_all(vs) == Ok(joined) and Encode.hash_all(same) == Ok(joined) and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
 	}
 	_ => False
 }
@@ -834,18 +892,44 @@ expect match Value.parse_all("1, \"two\", Three { n: 3 }") {
 		var $h = Encode.HashAll.empty
 		var $digests = [$h.digest()]
 		for v in vs {
-			$h = $h.add(v)
+			$h = $h.add(v) ?? $h
 			$digests = $digests.append($h.digest())
 		}
-		$digests == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)))
+		$digests.map(|d| Ok(d)) == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)))
 	}
 	_ => False
 }
 # A reader's limits don't change the canonical form or the hash.
 expect match Value.parse_all_with("1${"0".repeat(1100)}", { ..Value.default_limits, max_number_length: 2000 }) {
-	Ok([v]) => Encode.canonical(v).starts_with("0x") and Encode.hash(v) == Crypto.SHA256.hash(Encode.canonical(v).to_utf8()).to_hex()
+	Ok([v]) => canonical_text(v).starts_with("0x") and Encode.hash(v) == Ok(Crypto.SHA256.hash(canonical_text(v).to_utf8()).to_hex())
 	_ => False
 }
+# An integer longer than 1000 characters even in hex has no canonical form
+# (spec §12): `number-too-long`, at its path. 1100 digits are 913 in hex, 1300 are 1079.
+huge : Value
+huge = Num("1${"0".repeat(1299)}")
+
+no_form : Try(a, Error) -> Str
+no_form = |result| match result {
+	Ok(_) => "ok"
+	Err(e) => "${e.code} at ${ErrorCode.place(e.path)}: ${e.reason}"
+}
+
+expect no_form(Encode.canonical(huge)) == "number-too-long at $: an integer longer than 1000 characters in hex too has no canonical form"
+expect no_form(Encode.hash(huge)) == no_form(Encode.canonical(huge)) and no_form(Encode.hash_all([Num("1"), huge])) == no_form(Encode.canonical(huge))
+expect no_form(Encode.HashAll.empty.add(huge)) == no_form(Encode.canonical(huge))
+expect {
+	nested_huge = Rec([("b", Num("1")), ("a", Arr([Text("x"), huge]))])
+	no_form(Encode.canonical(nested_huge)).starts_with("number-too-long at $.a[1]:") and no_form(Encode.hash(nested_huge)).starts_with("number-too-long at $.a[1]:") and no_form(Encode.hash_all([Num("1"), nested_huge])).starts_with("number-too-long at $.a[1]:")
+}
+expect no_form(Encode.canonical(Tag("A", [Num("1"), Tag("B", [Rec([("c", Num("-${"9".repeat(1300)}"))])])]))).starts_with("number-too-long at $[1][0].c:")
+expect {
+	ok = Num("1${"0".repeat(1099)}")
+	text = Encode.canonical(Arr([ok])) ?? ""
+	text.starts_with("[0x") and text.count_utf8_bytes() == 2 + 2 + 913 and Encode.hash(ok).is_ok() and Encode.hash_all([ok, ok]).is_ok()
+}
+# Equality and order never fail: such an integer compares by its hex form.
+expect Encode.equals(huge, Num("1${"0".repeat(1299)}")) and !Encode.equals(huge, Num("1")) and Encode.compare(huge, Num("1")) == Before
 # The compact writer keeps a huge integer in hex too (spec §11), so its output parses again.
 expect match Value.parse_all("0x${"f".repeat(900)}") {
 	Ok([v]) => Encode.to_str(v) == Ok("0x${"f".repeat(900)}")
@@ -893,7 +977,7 @@ expect {
 	texts = ["${"[".repeat(256)}${"]".repeat(256)}", "0x${"f".repeat(900)}", "-0x${"F".repeat(900)}", "1e6144", "-0", "A { a: [1, B(2)] }"]
 	texts.all(
 		|t| match Value.parse(t) {
-			Ok(v) => Encode.to_str(v).map_ok(|w| Value.parse(w).map_ok(Encode.canonical)) == Ok(Ok(Encode.canonical(v)))
+			Ok(v) => Encode.to_str(v).map_ok(|w| Value.parse(w).map_ok(canonical_text)) == Ok(Ok(canonical_text(v)))
 			Err(_) => False
 		},
 	)

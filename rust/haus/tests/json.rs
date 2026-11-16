@@ -343,7 +343,7 @@ fn self_describing_json_reads_one_form_per_value() {
 
 #[test]
 fn the_import_reads_any_json() {
-    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap());
+    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap()).unwrap();
     assert_eq!(read(r#"{"_tag": "Circle", "r": 1E+0}"#), r#"{_tag:"Circle",r:1e0}"#);
     assert_eq!(read(r#"{"_haus": 1, "_value": {"_num": "1"}}"#), r#"{_haus:1,_value:{_num:"1"}}"#);
     assert_eq!(read("\"\u{7F}\u{202E}\""), "\"\\u{7F}\\u{202E}\"");
