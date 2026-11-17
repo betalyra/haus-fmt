@@ -203,7 +203,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Lint and type check
         working-directory: python
         run: |
@@ -237,7 +237,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: TypeScript
         working-directory: typescript
         run: |
@@ -275,7 +275,7 @@ jobs:
           workspaces: |
             rust
             fuzz/schema-rust
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -326,7 +326,7 @@ jobs:
           - { mode: format, run: "node fuzz/src/main.ts --format", pr: 20000, nightly: 200000 }
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
