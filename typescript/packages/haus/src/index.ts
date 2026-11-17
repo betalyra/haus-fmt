@@ -64,7 +64,7 @@ export { importHint, moduleOfType, OFFICIAL_EXTENSIONS, schemaOutline, type Miss
 export { importEdits, missingImports, type ImportEdit } from "./schema-imports.js"
 export { Secret } from "./secret.js"
 export { checkStdTime, isStdTimeType, STD_TIME_TYPES, type StdTimeType } from "./std-time.js"
-export { checkData, describeType, schemaReference, type CheckIssue, type CheckOptions, type SchemaReference } from "./check.js"
+export { checkData, describeType, type CheckIssue, type CheckOptions } from "./check.js"
 export { contextOf, describeValue, hoverAt, hoverContext, hoverMarkdown, hoverText, TAG_NOTES, type HoverContext, type HoverInfo } from "./hover.js"
 export { completeAt, type Completion } from "./complete.js"
 export { HausValidationError, parseWith, parseWithAsync, type StandardSchemaV1 } from "./standard.js"

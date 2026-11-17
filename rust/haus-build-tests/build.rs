@@ -10,12 +10,20 @@
 //! type written as schema-based JSON, and schema-based JSON read with a type
 //! and encoded.
 //! tests/json_conformance.rs runs its cases.
+//!
+//! app/main/order.schema.haus is an application's schema split into files
+//! (relative imports, `../`, two common.schema.haus): tests/files.rs uses
+//! its types, without and with a codec for a type of an imported file.
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     haus_build::Config::new().compile("features.schema.haus")?;
+    haus_build::Config::new().compile_as("app/main/order.schema.haus", "app")?;
+    haus_build::Config::new()
+        .codec("haus-build-tests/app/shared/money#Money", "crate::Cents")
+        .compile_as("app/main/order.schema.haus", "app_typed")?;
 
     let suite = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("../../test-suite/schema");
     println!("cargo::rerun-if-changed={}", suite.display());

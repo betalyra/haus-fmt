@@ -36,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      packages: ${{ steps.diff.outputs.packages }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -45,14 +46,17 @@ jobs:
           case "${{ github.event_name }}" in
             pull_request) range="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"; base="${{ github.event.pull_request.base.sha }}" ;;
             push) range="${{ github.event.before }}..${{ github.sha }}"; base="${{ github.event.before }}" ;;
-            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *) printf 'code=true\npackages=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # A new branch or a force push has no usable base: run everything.
-          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then printf 'code=true\npackages=true\n' >> "$GITHUB_OUTPUT"; exit 0; fi
           files=$(git diff --name-only "$range")
           printf '%s\n' "$files"
           if printf '%s\n' "$files" | grep -qvE '^(website/|docs/|plans/|[^/]+\.md$|$)'; then code=true; else code=false; fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          # Package resolution (file systems differ by OS): also run on Windows.
+          if printf '%s\n' "$files" | grep -qE '^(test-suite/packages/|rust/haus-schema/|typescript/packages/haus/(src/(node|schema-file)\.ts|test/(package-suite|node)\.test\.ts)|python/(src/haus/_(resolve|schema_file)\.py|tests/test_package)|\.github/workflows/ci\.yml)'; then packages=true; else packages=false; fi
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
 
   docs:
     name: Generated docs are up to date
@@ -99,6 +103,9 @@ jobs:
       - name: JSON suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --json-suite ../../test-suite/json json-suite.json
+      - name: Package suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus
 
   rust:
     name: Rust
@@ -206,6 +213,42 @@ jobs:
       - name: Test
         working-directory: python
         run: uv run pytest
+
+  packages-windows:
+    name: Package resolution on Windows
+    needs: changes
+    if: needs.changes.outputs.packages == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      # The suites are raw bytes: no line ending conversion.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: astral-sh/setup-uv@v6
+      - name: TypeScript
+        working-directory: typescript
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter ./packages/haus build
+          pnpm --filter ./packages/haus exec vitest run test/package-suite.test.ts test/node.test.ts
+      - name: Rust
+        working-directory: rust
+        run: cargo test -p haus-fmt-schema
+      - name: Python
+        working-directory: python
+        run: uv run pytest tests/test_package_suite.py tests/test_packages.py
 
   fuzz-build:
     name: Fuzzing / build the runners

@@ -6,13 +6,13 @@ The catalogue of the error codes of [§17](README.md#17-error-codes). Every impl
 every binding; a code is never renamed, removed or reused after 1.0, only added. Each code has a page section at
 `https://haus-fmt.org/docs/errors#<code>`. The machine-readable source is [`errors.haus`](errors.haus).
 
-103 codes in 8 categories:
+108 codes in 8 categories:
 
 - [Syntax](#syntax): 33
 - [Limits](#limits): 8
 - [Streams](#streams): 2
 - [Schema files](#schema-files): 22
-- [Imports](#imports): 10
+- [Imports](#imports): 15
 - [Decoding and encoding](#decoding): 13
 - [JSON](#json): 11
 - [Hints and warnings](#hints): 4
@@ -120,12 +120,17 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 | `unknown-import` | An import names a type the module doesn't have, or no type at all. | `import std/time (Data) ⏎ type A = Int` | Import a type the module defines; the message lists them. |
 | `duplicate-import` | The same type name is imported twice. | `import std/time (Date, Date) ⏎ type A = Date` | Import each name once. |
 | `import-unavailable` | The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there. | `import ./common (Address) ⏎ type A = Address` | Read the schema with a resolver that loads imports (from files or packages), or inline the types. |
-| `import-not-found` | An imported package or file can't be found: it is not installed, not a direct dependency, or the path is wrong. Also a package whose manifest is broken or names another package. | import @acme/geo (LatLng), with @acme/geo not installed | Install the package (as a direct dependency), or fix the path. |
+| `import-not-found` | An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest. | import @acme/geo (LatLng), with @acme/geo not installed | Install the package, or fix the path. |
 | `import-version` | An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`. | `import @haus-fmt/money@1.1 (Money) ⏎ type A = Money` | Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range. |
 | `import-cycle` | Schema files import each other in a cycle. | a.schema.haus imports ./b, and b.schema.haus imports ./a | Move the shared types to a file both import. |
-| `duplicate-package` | Two different files claim to be the same package: two copies of one package, or two packages with the same name. | node_modules/@haus-fmt/money and node_modules/x/node_modules/@haus-fmt/money in one schema | Install one copy of the package (deduplicate your dependencies). |
-| `package-path` | A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. | a package whose schema.haus has import ../../.env (T) | A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too. |
-| `too-many-files` | A schema imports more files, directly or not, than the tool allows. | a schema whose imports reach 300 files | Import fewer files. |
+| `duplicate-package` | One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package. | @haus-fmt/money 1.4.0 in node_modules/@haus-fmt/money and 1.2.0 in node_modules/@acme/orders/node_modules/@haus-fmt/money | Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`. |
+| `undeclared-package` | A file imports a package that its package or project doesn't declare as a dependency (with npm: in the package's own `package.json`, or the nearest one above an application file), or a file with no `package.json` above it imports a package that wasn't given explicitly. A package found only because the package manager placed it nearby, such as a hoisted dependency of a dependency, could be replaced by another one placed there. Checked before the package is looked for. | @acme/orders imports @acme/common@1, and the package.json of @acme/orders doesn't list @acme/common | Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`). |
+| `package-manifest` | A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB. | a package.haus with { name: "@Acme/Orders", version: "1" } | Write `{ name: "@org/name", version: "1.2.0" }`, in lowercase, with a full version. |
+| `package-version` | A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3). | package.haus says 1.2.0, the package.json next to it 1.3.0 | Release both with the same version: change them together. |
+| `package-path` | A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. | a package whose schema.haus has import ../../.env (T) | A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too. |
+| `codec-unreachable` | A codec's type occurs inside a type that another library generated (a package crate, another package's Roc module), where this binding can't apply the codec. Decoding there with the default host type would silently differ from the other bindings (§13.4). | a codec for @haus-fmt/money@1#Money, used inside @acme/orders@1#Order, which the crate haus_orders generates | Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs. |
+| `file-too-large` | A schema file or a package's `package.json` is larger than the tool allows (1 MiB by default). It is not read. | an imported common.schema.haus of 3 MiB | Split the schema into several files, or raise the limit if you trust the file. |
+| `too-many-files` | A schema imports more schema files, directly or not, than the tool allows (256 by default, the root included), or a folder of packages has more entries than allowed (4096). | a schema whose imports reach 300 files | Import fewer files. |
 
 ## Decoding and encoding
 

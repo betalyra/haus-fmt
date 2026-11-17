@@ -19,6 +19,7 @@ and a reference parser that computes it.
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new` |
 | [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique |
+| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner, and one package per name and injective ids |
 | [`Main.lean`](Main.lean) | `haus-ref`, the parser on the command line |
 | [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` and `--json-suite` |
 
@@ -32,6 +33,7 @@ lake build
 .lake/build/bin/haus-ref --time Date 2026-02-29     # a std/time check
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §15)
 .lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
+.lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus  # the package suite (spec §13.3)
 ```
 
 The schema suite's schema files are parsed by the TypeScript binding
@@ -246,3 +248,14 @@ express the canonical form, the built-in types and the types of every
 schema `old` accepts are the same. `Extends.refl`, `Extends.trans` and
 `current_extends_self` are proven; each release will prove that it extends
 the one before.
+
+**About package resolution** (spec §13.3), in
+[`Haus/Packages/`](Haus/Packages). A file tree with directories, regular
+files, symbolic links and other files (`Fs.lean`), and the reference
+resolver on it (`Resolve.lean`), which reads files only through one function
+that records them; `haus-ref --packages` runs the package suite with it. On
+it: the packages a run makes have distinct names, and on success they are
+the result (`one_package_per_name`, `resolveIn_ok`); a copy is one package
+with another only if its `package.haus`, `schema.haus` and imports are the
+same (`addClass_same`); and type ids `@org/name@N#Type` are injective
+(`typeId_injective`).

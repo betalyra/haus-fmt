@@ -1,0 +1,145 @@
+/-!
+# A file-system model (spec §13.3)
+
+The file tree that schema packages are resolved in: directories, regular
+files, symbolic links and other files (a FIFO, a device). A tree is a finite
+map from absolute paths to entries; the root `[]` is always a directory.
+
+What the resolver may do with it is only what an operating system offers:
+
+- `child?`: look a name up in a directory, without following a link (as
+  `lstat`). A name is found only if the directory lists it, spelled the
+  same: the model has no case folding or Unicode normalisation, so this is
+  the rule "each name in the path MUST be spelled as its directory lists
+  it" of §13.3, which a binding on such a file system has to check itself.
+- `realPath`: a path with every symbolic link, `.` and `..` resolved (as
+  `realpath(3)`), following at most `maxLinks` links, so that a cycle of
+  links ends (`ELOOP`).
+- `list`: a directory's names, exactly as stored.
+- reading a regular file's bytes, through the resolver's monad
+  (`Haus.Packages.Resolve`), which records every path it reads, so that
+  what the resolver reads can be stated and proven (R7).
+
+Paths are lists of names. A link's target is text, relative to the link's
+directory, or absolute (from the model's root) when it starts with `/`.
+-/
+
+namespace Haus.Packages
+
+/-- An absolute path: the names from the root, `[]` being the root. -/
+abbrev Path := List String
+
+/-- What is at a path. -/
+inductive Entry where
+  | dir
+  /-- A regular file and its bytes. -/
+  | file (bytes : List UInt8)
+  /-- A symbolic link and its target, as written (`ln -s target`). -/
+  | link (target : String)
+  /-- Anything else: a FIFO, a socket, a device. Never read: opening a FIFO blocks. -/
+  | other
+  deriving Repr, DecidableEq, Inhabited
+
+/-- A finite file tree: each path present, with its entry. Paths not listed don't exist. -/
+structure Tree where
+  entries : List (Path × Entry)
+  deriving Repr, Inhabited
+
+/-- A path as text, `/` between names (the root is `.`). -/
+def showPath (p : Path) : String := if p.isEmpty then "." else "/".intercalate p
+
+/-- The names of a path written with `/`; empty names (from `//` or a final `/`) are dropped. -/
+def splitPath (s : String) : List String := (s.splitOn "/").filter (· ≠ "")
+
+namespace Tree
+
+/-- The entry at a path, the root being a directory. Links are not followed. -/
+def get? (t : Tree) (p : Path) : Option Entry :=
+  if p.isEmpty then some .dir else (t.entries.find? (·.1 == p)).map (·.2)
+
+/-- The names a directory lists, as stored, in the order they were made. -/
+def list (t : Tree) (d : Path) : List String :=
+  t.entries.filterMap fun (p, _) => if p.dropLast == d && p.length == d.length + 1 then p.getLast? else none
+
+/--
+The entry `name` in the directory `d`, not following a link (`lstat`). The
+name must be one the directory lists, spelled exactly the same.
+-/
+def child? (t : Tree) (d : Path) (name : String) : Option Entry :=
+  if name ∈ t.list d then t.get? (d ++ [name]) else none
+
+end Tree
+
+/-- Why a path has no real path. -/
+inductive Fault where
+  /-- A name isn't there (also: a dangling link). -/
+  | missing
+  /-- A name follows a file that isn't a directory. -/
+  | notDir
+  /-- More than `maxLinks` links (a cycle of links). -/
+  | loop
+  deriving Repr, DecidableEq
+
+/-- How many links a path may pass through (Linux's `MAXSYMLINKS`). -/
+def maxLinks : Nat := 40
+
+/-- Where a link's target starts: the root for `/…`, else the link's directory. -/
+def linkBase (target : String) (dir : Path) : Path := if target.startsWith "/" then [] else dir
+
+/--
+Resolves the names `rest` from the directory `cur` (a real path), following
+links with `fuel` left. `..` at the root stays at the root.
+-/
+def resolve (t : Tree) (fuel : Nat) (cur : Path) (rest : List String) : Except Fault Path :=
+  match rest with
+  | [] => .ok cur
+  | c :: rest =>
+    if c == "." || c == "" then resolve t fuel cur rest
+    else if c == ".." then resolve t fuel cur.dropLast rest
+    else match t.child? cur c with
+      | none => .error .missing
+      | some .dir => resolve t fuel (cur ++ [c]) rest
+      | some (.link target) =>
+        match fuel with
+        | 0 => .error .loop
+        | fuel + 1 => resolve t fuel (linkBase target cur) (splitPath target ++ rest)
+      | some _ => if rest.isEmpty then .ok (cur ++ [c]) else .error .notDir
+termination_by (fuel, rest.length)
+
+/-- The real path of `p` (`realpath(3)`): no links, no `.` or `..`. -/
+def Tree.realPath (t : Tree) (p : Path) : Except Fault Path := resolve t maxLinks [] p
+
+/-- The entry at a real path, or none. -/
+def Tree.at? (t : Tree) (p : Path) : Option Entry :=
+  match p.getLast?, p.dropLast with
+  | some n, d => t.child? d n
+  | none, _ => some .dir
+
+/-- The directories from `d` up to the root, nearest first. -/
+def ancestors (d : Path) : List Path := (List.range (d.length + 1)).reverse.map d.take
+
+#guard ancestors ["a", "b"] = [["a", "b"], ["a"], []]
+
+/-- Whether a real path is a directory. -/
+def Tree.isDir (t : Tree) (p : Path) : Bool := t.at? p == some .dir
+
+section Examples
+
+private def ex : Tree := ⟨[
+  (["a"], .dir), (["a", "f.txt"], .file [104, 105]),
+  (["a", "up"], .link ".."), (["a", "loop"], .link "loop"),
+  (["a", "dangling"], .link "../missing"),
+  (["b"], .link "a/up/a")]⟩
+
+#guard (ex.realPath ["a", "f.txt"]).toOption == some ["a", "f.txt"]
+#guard (ex.realPath ["b", "f.txt"]).toOption == some ["a", "f.txt"]
+#guard (ex.realPath ["a", "up", "a", "up", "b"]).toOption == some ["a"]
+#guard (match ex.realPath ["a", "loop"] with | .error f => f == .loop | .ok _ => false)
+#guard (match ex.realPath ["a", "dangling"] with | .error f => f == .missing | .ok _ => false)
+#guard (match ex.realPath ["a", "f.txt", "x"] with | .error f => f == .notDir | .ok _ => false)
+#guard (match ex.realPath ["A", "f.txt"] with | .error f => f == .missing | .ok _ => false)
+#guard ex.list ["a"] = ["f.txt", "up", "loop", "dangling"]
+
+end Examples
+
+end Haus.Packages

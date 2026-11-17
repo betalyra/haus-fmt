@@ -2,7 +2,7 @@
 //! Standard input is checked value by value, so that `tail -f x.haus | haus
 //! check -` reports each value as soon as it is complete.
 
-use crate::cli::{CheckArgs, Color};
+use crate::cli::{CheckArgs, Color, PackageArgs};
 use crate::diagnostic::{self, Diagnostic, Severity};
 use crate::highlight::{Token, tokens};
 use crate::input::{self, Target};
@@ -12,11 +12,11 @@ use crate::pieces::{Piece, Pieces};
 use annotate_snippets::Renderer;
 use haus::json::Json;
 use haus::{ErrorCode, Limits};
-use haus_schema::{FileResolver, Schema, Segment};
+use haus_schema::{Explicit, Locator, Manifest, NodeModules, Or, Schema, Segment};
 use std::collections::HashMap;
 use std::io::{self, Read, stdout};
 use std::ops::Range;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 /// What checking one file found.
@@ -75,8 +75,6 @@ impl Report {
 struct SchemaRef {
     file: PathBuf,
     type_name: String,
-    /// Where the `// schema:` comment names it, if it does.
-    comment: Option<Range<usize>>,
 }
 
 struct Checker {
@@ -84,6 +82,8 @@ struct Checker {
     no_schema: bool,
     /// The schema given with --schema.
     forced: Option<(PathBuf, String)>,
+    /// Packages given with --package and --packages, then node_modules.
+    packages: Or<Explicit, NodeModules>,
     /// Schemas loaded so far, by canonical path.
     schemas: HashMap<PathBuf, Loaded>,
 }
@@ -100,21 +100,17 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
     let forced = match args.schema.as_deref().map(split_schema_arg) {
         Some((file, _)) if !file.is_file() => {
             let message = format!("--schema {}: no such file", file.display());
-            let failure =
-                Failure { code: ErrorCode::ImportNotFound, message, hint: "Fix the path given with --schema." };
-            return match args.json {
-                // With --json, the document still comes, saying why nothing was checked.
-                true => match output::print(&(json::write(&to_json(&[], Some(&failure))) + "\n")) {
-                    Ok(()) => Status::Failed,
-                    Err(e) => output::fail(e),
-                },
-                false => output::fail(failure.message),
-            };
+            let hint = "Fix the path given with --schema.".into();
+            return fail(args.json, Failure { code: ErrorCode::ImportNotFound, message, hint });
         }
         forced => forced,
     };
+    let packages = match packages(&args.packages) {
+        Ok(packages) => packages,
+        Err(failure) => return fail(args.json, failure),
+    };
     let mut checker =
-        Checker { limits: args.limits.limits(), no_schema: args.no_schema, forced, schemas: HashMap::new() };
+        Checker { limits: args.limits.limits(), no_schema: args.no_schema, forced, packages, schemas: HashMap::new() };
     let targets = input::collect(&args.paths, input::is_haus);
     if !args.json {
         return text(&mut checker, &targets, &output::renderer(output::colored(color, &stdout())));
@@ -132,6 +128,44 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
         Ok(()) => status,
         Err(e) => output::fail(e),
     }
+}
+
+/// Why nothing could be checked (exit code 2). With --json, the document
+/// still comes, saying why.
+fn fail(json: bool, failure: Failure) -> Status {
+    match json {
+        true => match output::print(&(json::write(&to_json(&[], Some(&failure))) + "\n")) {
+            Ok(()) => Status::Failed,
+            Err(e) => output::fail(e),
+        },
+        false => output::fail(failure.message),
+    }
+}
+
+/// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`, then node_modules.
+fn packages(args: &PackageArgs) -> Result<Or<Explicit, NodeModules>, Failure> {
+    let given = |flag: &str, arg: &str, e: haus_schema::Error| Failure {
+        code: e.code(),
+        message: format!("{flag} {arg}: {e}"),
+        hint: e.hint().to_owned(),
+    };
+    let explicit = args.package.iter().try_fold(Explicit::new(), |all, arg| {
+        let named = arg.split_once('=').filter(|(name, _)| name.starts_with('@'));
+        let (name, dir) = named.map_or((None, arg.as_str()), |(name, dir)| (Some(name), dir));
+        let all = all.package(dir).map_err(|e| given("--package", arg, e))?;
+        match (name, Manifest::read(Path::new(dir))) {
+            (Some(name), Ok(manifest)) if manifest.name != name => Err(Failure {
+                code: ErrorCode::ImportNotFound,
+                message: format!("--package {arg}: its package.haus names the package {}, not {name}", manifest.name),
+                hint: format!("Give the directory of {name}, or leave out {name}= to use the name its manifest gives."),
+            }),
+            _ => Ok(all),
+        }
+    })?;
+    let explicit = args.packages.iter().try_fold(explicit, |all, folder| {
+        all.folder(folder).map_err(|e| given("--packages", &folder.display().to_string(), e))
+    })?;
+    Ok(explicit.or(NodeModules))
 }
 
 /// The text output, written as it is found: each file's diagnostics once it
@@ -246,15 +280,11 @@ impl Checker {
         match (kind, target) {
             (Kind::Schema, Target::File(path)) => report.diagnostics = self.check_schema(path, &bytes),
             _ => {
-                let dir = match target {
-                    Target::File(path) => path.parent().unwrap_or(Path::new("")).to_owned(),
-                    _ => PathBuf::new(),
-                };
                 let adjacent = match target {
                     Target::File(path) => adjacent_schema(path),
                     _ => None,
                 };
-                (report.schema, report.diagnostics) = self.check_data(&dir, adjacent, &bytes);
+                (report.schema, report.diagnostics) = self.check_data(adjacent, &bytes);
             }
         }
         report
@@ -271,8 +301,8 @@ impl Checker {
         }
     }
 
-    /// A data file in `dir`: syntax errors, then what its schema finds.
-    fn check_data(&mut self, dir: &Path, adjacent: Option<PathBuf>, bytes: &[u8]) -> (Option<String>, Vec<Diagnostic>) {
+    /// A data file: syntax errors, then what its schema finds.
+    fn check_data(&mut self, adjacent: Option<PathBuf>, bytes: &[u8]) -> (Option<String>, Vec<Diagnostic>) {
         let text = match diagnostic::utf8(bytes) {
             Ok(text) => text,
             Err(d) => return (None, vec![*d]),
@@ -280,7 +310,7 @@ impl Checker {
         if let Err(e) = haus::parse_with(text, &self.limits) {
             return (None, vec![Diagnostic::syntax(&e, Some(text))]);
         }
-        match self.checking(dir, adjacent, text) {
+        match self.checking(adjacent) {
             None => (None, vec![]),
             Some((label, Err(diagnostics))) => (Some(label), diagnostics),
             Some((label, Ok(c))) => {
@@ -290,21 +320,12 @@ impl Checker {
         }
     }
 
-    /// What a data file in `dir` whose text is (or starts with) `text` is
-    /// checked against, and its label (`order.schema.haus#Root`); or, if it
-    /// has a schema that can't be used, why. None: no schema.
-    fn checking(
-        &mut self,
-        dir: &Path,
-        adjacent: Option<PathBuf>,
-        text: &str,
-    ) -> Option<(String, Result<Checking, Vec<Diagnostic>>)> {
-        let r = self.schema_for(dir, adjacent, text)?;
+    /// What a data file is checked against, and its label
+    /// (`order.schema.haus#Root`); or, if it has a schema that can't be
+    /// used, why. None: no schema.
+    fn checking(&mut self, adjacent: Option<PathBuf>) -> Option<(String, Result<Checking, Vec<Diagnostic>>)> {
+        let r = self.schema_for(adjacent)?;
         let label = format!("{}#{}", r.file.display(), r.type_name);
-        let place = |d: Diagnostic| match &r.comment {
-            Some(span) => d.at(text, span.clone()),
-            None => d,
-        };
         let checking = match self.load(&r.file) {
             Err(e) if e.position().is_some() => {
                 let schema_text = std::fs::read_to_string(&r.file).ok();
@@ -318,11 +339,11 @@ impl Checker {
                     false => format!("the schema {} does not exist", r.file.display()),
                     true => format!("cannot load the schema {}: {}", r.file.display(), e.reason()),
                 };
-                Err(vec![place(Diagnostic::new(Severity::Error, e.code(), message))])
+                Err(vec![Diagnostic::new(Severity::Error, e.code(), message)])
             }
             Ok(schema) if schema.definition(&r.type_name).is_none() => {
                 let message = format!("the schema {} has no type {}", r.file.display(), r.type_name);
-                Err(vec![place(Diagnostic::new(Severity::Error, ErrorCode::UnknownType, message))])
+                Err(vec![Diagnostic::new(Severity::Error, ErrorCode::UnknownType, message)])
             }
             Ok(schema) => Ok(Checking { schema, type_name: r.type_name }),
         };
@@ -331,8 +352,8 @@ impl Checker {
 
     /// Standard input, value by value: `show` gets each diagnostic as soon
     /// as its value is complete, with its place in the whole stream. Its
-    /// schema is found as a file's (--schema, or the `// schema:` comment at
-    /// the top), once the first value is complete. A type that isn't a
+    /// schema is the one given with --schema, loaded once the first value
+    /// is complete. A type that isn't a
     /// `Stream` gets the first value, and an error at the second. Returns
     /// why the input couldn't be read, if it couldn't; fails if `show` does.
     fn check_stream(
@@ -355,7 +376,7 @@ impl Checker {
                 Err(e) => return Ok(Some(e.to_string())),
             };
             if checking.is_none() {
-                let (found, diagnostics) = match self.checking(Path::new(""), None, &piece.text) {
+                let (found, diagnostics) = match self.checking(None) {
                     Some((_, Ok(c))) => (Some(c), vec![]),
                     Some((_, Err(diagnostics))) => (None, diagnostics),
                     None => (None, vec![]),
@@ -406,26 +427,23 @@ impl Checker {
         (diagnostics, more)
     }
 
-    /// The schema of a data file in `dir`: --schema, else the `// schema:`
-    /// comment, else `x.schema.haus` next to `x.haus` (`adjacent`, if it exists).
-    fn schema_for(&self, dir: &Path, adjacent: Option<PathBuf>, text: &str) -> Option<SchemaRef> {
+    /// The schema of a data file: --schema, else `x.schema.haus` next to
+    /// `x.haus` (`adjacent`, if it exists). The reader decides: a data file
+    /// never names its schema (spec §14).
+    fn schema_for(&self, adjacent: Option<PathBuf>) -> Option<SchemaRef> {
         if self.no_schema {
             return None;
         }
         if let Some((file, type_name)) = &self.forced {
-            return Some(SchemaRef { file: file.clone(), type_name: type_name.clone(), comment: None });
+            return Some(SchemaRef { file: file.clone(), type_name: type_name.clone() });
         }
-        if let Some(r) = haus_schema::schema_reference(text) {
-            let file = normalize(&dir.join(&r.path));
-            return Some(SchemaRef { file, type_name: r.type_name, comment: Some(r.span) });
-        }
-        adjacent.map(|file| SchemaRef { file, type_name: "Root".into(), comment: None })
+        adjacent.map(|file| SchemaRef { file, type_name: "Root".into() })
     }
 
     /// The schema file at `path`, loaded once.
     fn load(&mut self, path: &Path) -> Loaded {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-        let load = || Schema::load(path, &FileResolver::new()).map(Rc::new).map_err(Rc::new);
+        let load = || Schema::load(path, &self.packages).map(Rc::new).map_err(Rc::new);
         self.schemas.entry(key).or_insert_with(load).clone()
     }
 }
@@ -454,21 +472,12 @@ fn adjacent_schema(path: &Path) -> Option<PathBuf> {
     Some(path.with_file_name(format!("{stem}.schema.haus"))).filter(|p| p.is_file())
 }
 
-/// `dir/./order.schema.haus` as `dir/order.schema.haus`.
-fn normalize(path: &Path) -> PathBuf {
-    let mut out: PathBuf = path.components().filter(|c| *c != Component::CurDir).collect();
-    if out.as_os_str().is_empty() {
-        out.push(".");
-    }
-    out
-}
-
 /// Why a check couldn't run at all (exit code 2): with --json, the
 /// document's top-level `error`, in the error form of spec §17.
 struct Failure {
     code: ErrorCode,
     message: String,
-    hint: &'static str,
+    hint: String,
 }
 
 impl Failure {
@@ -476,7 +485,7 @@ impl Failure {
         let mut m = Members::default();
         m.add("code", s(self.code.as_str()));
         m.add("message", s(&self.message));
-        m.add("hint", s(self.hint));
+        m.add("hint", s(&self.hint));
         m.add("docs", s(&self.code.docs()));
         m.into()
     }

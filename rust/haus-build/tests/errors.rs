@@ -52,9 +52,10 @@ fn spreads() {
         error("type A = < X | ...B >\ntype B = < Y | ...A >"),
         "2:6: type B spreads itself (directly or through another type)"
     );
+    // haus-fmt-schema's message, for a type that can't be spread.
     assert_eq!(
         error("import std/time (Date)\ntype B = < ...Date >"),
-        "2:15: Date is imported; haus-fmt-build can spread only types defined in this file so far"
+        "2:15: unknown type Date (import it with: import std/time (Date))"
     );
 }
 
@@ -62,11 +63,11 @@ fn spreads() {
 fn imports() {
     assert_eq!(
         error("import std/time (Data)"),
-        "1:1: std/time has no type Data (it has Date, Time, DateTime, Instant, ZonedDateTime, Duration, YearMonth, TimeZone)"
+        "1:18: std/time has no type Data (it has Date, Time, DateTime, Instant, ZonedDateTime, Duration, YearMonth, TimeZone)"
     );
     assert!(
         error("import @acme/ids (UserId)")
-            .starts_with("1:1: package @acme/ids not found among this crate's dependencies")
+            .starts_with("1:1: can't import @acme/ids: package @acme/ids not found among this crate's dependencies")
     );
 }
 
@@ -79,7 +80,7 @@ fn codecs() {
         &Packages::none(),
     )
     .unwrap_err();
-    assert_eq!(e.to_string(), "1:1: a codec for test/schema#B, but the schema has no such type (it has test/schema#A)");
+    assert_eq!(e.to_string(), "a codec for test/schema#B, but the schema has no such type (it has test/schema#A)");
 }
 
 #[test]

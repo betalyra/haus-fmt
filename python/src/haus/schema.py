@@ -27,9 +27,9 @@ Host types (the defaults keep the value, spec §13.4):
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from . import _decode
@@ -42,9 +42,14 @@ from ._json import Json, read_json, read_lines, schema_json_depth, write_json
 from ._parser import DEFAULT_LIMITS, Limits, Parser
 from ._resolve import (
     MANIFEST,
+    MAX_FOLDER_ENTRIES,
+    MAX_MANIFEST_SIZE,
+    MAX_SCHEMA_SIZE,
     PACKAGE_SCHEMA,
     FileResolver,
     Manifest,
+    Packages,
+    StrPath,
     identify,
     installed_package,
     read_manifest,
@@ -92,6 +97,9 @@ __all__ = [
     "ATTRIBUTES",
     "BUILTINS",
     "MANIFEST",
+    "MAX_FOLDER_ENTRIES",
+    "MAX_MANIFEST_SIZE",
+    "MAX_SCHEMA_SIZE",
     "PACKAGE_SCHEMA",
     "STD_MODULES",
     "ArrayType",
@@ -118,6 +126,7 @@ __all__ = [
     "ModuleResolver",
     "NoPayload",
     "Nothing",
+    "Packages",
     "ParamType",
     "Payload",
     "PositionalPayload",
@@ -133,6 +142,7 @@ __all__ = [
     "SecretType",
     "Some",
     "StdType",
+    "StrPath",
     "Tagged",
     "Type",
     "Unknown",
@@ -146,6 +156,7 @@ __all__ = [
     "load_schema",
     "parse_schema_file",
     "read_manifest",
+    "read_module",
     "schema_path",
     "without_attributes",
 ]
@@ -312,16 +323,27 @@ def compile_schema(
 
 
 def load_schema(
-    path: str | Path,
+    path: StrPath,
     *,
-    packages: Mapping[str, str | Path] | None = None,
+    packages: Packages | None = None,
+    package_folders: Iterable[StrPath] = (),
     codecs: Mapping[str, Codec] | None = None,
 ) -> Schema:
-    """Read a schema file, with its relative imports next to it and `packages` (name → directory).
+    """Read a schema file, with its relative imports next to it and the schema packages it is given.
 
-    schema = load_schema("order.schema.haus", packages={"@haus-fmt/money": "vendor/money"})
+    `packages` are package directories, each named by its manifest, or a mapping
+    from each package name to its directory (the name must be the manifest's).
+    Each of `package_folders` is a directory whose direct subdirectories with a
+    `package.haus` are packages. Relative directories are relative to the schema
+    file's directory. Raises `HausSchemaFileError`, also for a package directory
+    without `package.haus` or a folder that doesn't exist (at 1:1, before any
+    import), and `OSError` for a schema file that can't be read.
+
+    schema = load_schema("order.schema.haus", packages=["vendor/money"], package_folders=["schemas"])
     """
-    module = read_module(path)
-    file = Path(module.key)
-    resolver = FileResolver(file.parent, {name: Path(p) for name, p in (packages or {}).items()})
+    try:
+        module = read_module(path)
+        resolver = FileResolver(os.path.dirname(module.key), packages or (), folders=package_folders)
+    except ModuleError as e:  # the root file (too large, not a file) or the configuration
+        raise HausSchemaFileError(str(e), 0, 1, 1, e.code) from None
     return compile_schema(module.text, resolver=resolver, key=module.key, id=module.id, codecs=codecs)

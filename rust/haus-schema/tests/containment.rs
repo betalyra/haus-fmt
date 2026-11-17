@@ -1,13 +1,13 @@
 //! A schema package is a directory with `package.haus` and `schema.haus`
-//! (spec §13.3). Every file read for it stays inside it, also through
-//! symbolic links; its schema imports other packages by name, never files;
+//! (spec §13.3). Both are regular files, never symbolic links (the package
+//! directory may be one); its schema imports other packages by name, never files;
 //! application files don't import files inside a package directory. Errors
 //! have the code `package-path` and never quote a file that wasn't read. And
 //! imports name only major versions.
 #![cfg(unix)]
 
 use haus::ErrorCode;
-use haus_schema::{Error, FileResolver, Packages, Schema};
+use haus_schema::{Error, NodeModules, Packages, Schema};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,8 @@ impl App {
         write(&app.path("secret/creds.txt"), SECRET);
         write(&app.path("secret/creds.schema.haus"), SECRET);
         fs::create_dir_all(app.path(PKG)).unwrap();
+        // The app declares the package it imports (spec §13.3, npm).
+        write(&app.path("app/package.json"), r#"{ "name": "app", "dependencies": { "@acme/evil": "*" } }"#);
         for (path, text) in files {
             write(&app.path(path), text);
         }
@@ -54,7 +56,7 @@ impl App {
     }
 
     fn load(&self) -> Result<Schema, Error> {
-        Schema::load(self.path("app/main.schema.haus"), &FileResolver::new())
+        Schema::load(self.path("app/main.schema.haus"), &NodeModules)
     }
 
     /// The error, which must be `code` and must not quote the secret.
@@ -91,23 +93,24 @@ fn a_package_without_schema_haus() {
 fn a_schema_or_manifest_that_links_outside_the_package() {
     let app = App::importing(&[("package.haus", MANIFEST)]);
     symlink(app.path("secret/creds.schema.haus"), app.path(PKG).join("schema.haus")).unwrap();
-    assert!(
-        app.rejected(ErrorCode::PackagePath).contains("schema.haus is a symbolic link to a file outside the package")
-    );
+    assert!(app.rejected(ErrorCode::PackagePath).contains("schema.haus is a symbolic link or not a regular file"));
     let manifest = App::importing(&[("schema.haus", MONEY)]);
     symlink(manifest.path("secret/creds.txt"), manifest.path(PKG).join("package.haus")).unwrap();
     assert!(manifest.rejected(ErrorCode::PackagePath).contains("is a symbolic link"));
 }
 
 #[test]
-fn links_to_the_package_and_inside_it_are_followed() {
-    let app = App::new(&[("store/evil/package.haus", MANIFEST), ("store/evil/real.haus", MONEY)], "");
-    symlink(app.path("store/evil/real.haus"), app.path("store/evil/schema.haus")).unwrap();
+fn a_link_to_the_package_is_followed_a_link_inside_it_is_not() {
+    let app = App::new(&[("store/evil/package.haus", MANIFEST), ("store/evil/schema.haus", MONEY)], "");
     fs::remove_dir(app.path(PKG)).unwrap();
     symlink(app.path("store/evil"), app.path(PKG)).unwrap();
     write(&app.path("app/main.schema.haus"), "import @acme/evil (Money)\ntype Root = { m: Money }");
     let schema = app.load().unwrap();
     assert_eq!(schema.imported()[0].id, "@acme/evil@1#Money");
+    // schema.haus is a regular file, also when its link stays inside the package.
+    fs::rename(app.path("store/evil/schema.haus"), app.path("store/evil/real.haus")).unwrap();
+    symlink("real.haus", app.path("store/evil/schema.haus")).unwrap();
+    app.rejected(ErrorCode::PackagePath);
 }
 
 #[test]
@@ -168,4 +171,67 @@ fn imports_name_only_major_versions() {
         let e = Schema::parse(&format!("import @haus-fmt/money@{v} (Money)\ntype A = Money")).unwrap_err();
         assert_eq!(e.code(), ErrorCode::ImportUnavailable, "@{v}: {e}");
     }
+}
+
+#[test]
+fn schema_files_and_package_json_have_a_size_limit() {
+    let big = format!("type Money = Int\n//{}", "x".repeat(1024 * 1024));
+    let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", &big)]);
+    assert!(app.rejected(ErrorCode::FileTooLarge).contains("more than 1 MiB"));
+    let json = format!(r#"{{ "name": "@acme/evil", "version": "1.2.0", "x": "{}" }}"#, "x".repeat(1024 * 1024));
+    let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", MONEY), ("package.json", &json)]);
+    app.rejected(ErrorCode::FileTooLarge);
+    let app = App::new(&[("app/big.schema.haus", &big)], "import ./big (Money)\ntype Root = Money");
+    app.rejected(ErrorCode::FileTooLarge);
+    // The root too.
+    write(&app.path("app/main.schema.haus"), &big);
+    app.rejected(ErrorCode::FileTooLarge);
+}
+
+#[test]
+fn a_package_json_that_isnt_json_declares_nothing_and_gives_no_version() {
+    let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", MONEY), ("package.json", "{ not json")]);
+    app.load().unwrap();
+    write(&app.path("app/package.json"), "{ not json");
+    // The project's package.json isn't JSON: it declares nothing, and the
+    // search doesn't go on above it (case package-json-not-json).
+    assert!(app.rejected(ErrorCode::UndeclaredPackage).contains("package.json"));
+}
+
+#[test]
+fn a_fifo_is_not_read_and_does_not_block() {
+    let app = App::importing(&[("package.haus", MANIFEST)]);
+    let fifo = |path: PathBuf| assert!(std::process::Command::new("mkfifo").arg(path).status().unwrap().success());
+    fifo(app.path(PKG).join("schema.haus"));
+    app.rejected(ErrorCode::PackagePath);
+    let app = App::new(&[], "import ./pipe (T)\ntype Root = T");
+    fifo(app.path("app/pipe.schema.haus"));
+    assert!(app.rejected(ErrorCode::ImportNotFound).contains("not a regular file"));
+}
+
+#[test]
+fn a_schema_reaches_at_most_256_files() {
+    for (n, ok) in [(255, true), (256, false)] {
+        let files: Vec<(String, String)> =
+            (0..n).map(|i| (format!("app/f{i}.schema.haus"), format!("type T{i} = Int"))).collect();
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+        let imports: String = (0..n).map(|i| format!("import ./f{i} (T{i})\n")).collect();
+        let app = App::new(&files, &format!("{imports}type Root = Int"));
+        match ok {
+            true => assert_eq!(app.load().unwrap().files().len(), 256),
+            false => assert!(app.rejected(ErrorCode::TooManyFiles).contains("more than 256")),
+        }
+    }
+}
+
+#[test]
+fn messages_escape_and_cut_text_from_files() {
+    let name = format!("@acme/\u{202e}{}", "x".repeat(100));
+    let app = App::importing(&[
+        ("package.haus", &format!("{{ name: {name:?}, version: \"1.0.0\" }}")),
+        ("schema.haus", MONEY),
+    ]);
+    let message = app.rejected(ErrorCode::PackageManifest);
+    assert!(message.contains("\"@acme/\\u{202e}xxxx") && message.contains("x…\""), "{message}");
+    assert!(!message.contains('\u{202e}') && !message.contains(&"x".repeat(40)), "{message}");
 }

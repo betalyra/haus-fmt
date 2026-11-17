@@ -94,6 +94,65 @@ haus, with JSON text in strings:
 JSON is compared as data: member order and whitespace don't matter, and
 numbers compare by their text.
 
+## Package suite
+
+`packages/cases.haus` tests how schema imports find packages and files (spec
+§13.3). Each `Case` is a file tree, the schema file to load, how packages are
+found, and the result:
+
+```haus
+Case {
+  name: "undeclared-in-package",
+  files: [
+    Npm("app", { dependencies: ["@acme/orders"] }),               // app/package.json
+    File("app/app.schema.haus", "import @acme/orders@1 (Order)\ntype Root = { order: Order }"),
+    Package("app/node_modules/@acme/orders", "@acme/orders", "1.0.0", "type Order = { id: Int }"),
+    Link("app/node_modules/@acme/x", "../../../vendor/x"),       // a symbolic link
+  ],
+  root: "app/app.schema.haus",
+  mode: Npm,
+  expect: Err { code: "undeclared-package", mentions: ["@acme/orders"] },
+},
+```
+
+An adapter writes the tree into an empty temporary directory, then loads
+`root` as a schema with its binding's resolver:
+
+- `File(path, text)` writes `text` to `path`.
+- `Package(dir, name, version, schema)` writes `dir/package.haus` as
+  `{ name: "NAME", version: "VERSION" }` and `dir/schema.haus` as `schema`.
+- `Npm(dir, { name?, version?, dependencies?, peerDependencies?, devDependencies?, optionalDependencies? })`
+  writes `dir/package.json`, each dependency list as an object from the names
+  to `"*"`. Fields that are missing are left out.
+- `Link(path, target)` makes `path` a symbolic link to `target`, relative to
+  the link's directory (as `ln -s target path`).
+
+Paths use `/` and are relative to the temporary directory. Parent directories
+are created as needed.
+
+`mode` says how packages are found:
+
+- `Explicit { packages?, folders? }`: the packages are given explicitly, and
+  nothing else is looked at (no `node_modules`). Each of `packages` is a
+  package's directory; each of `folders` is a directory whose subdirectories
+  with a `package.haus` are packages. Their manifests name them. Every
+  binding runs these cases.
+- `Npm` or `Npm { packages?, folders? }`: from `node_modules` by the npm
+  rules of spec §13.3, together with the packages given explicitly, if any.
+  Only bindings that read `node_modules` run these cases.
+
+`expect` is the result:
+
+- `Ok { packages }`: the schema loads, and `packages` lists every package it
+  reaches, as `name@version` (the version of its `package.haus`), sorted.
+- `Err { code, mentions?, hides? }`: loading fails with the error code `code`.
+  The message must contain each string of `mentions` and none of `hides`.
+  Places are not compared.
+
+`should: True` marks a case for the version check, which implementations
+SHOULD make (spec §13.3, "Package versions"). An implementation that doesn't
+make it skips these cases and says so; one that makes it must pass them.
+
 ## Error codes
 
 Every error has a code from the catalogue (spec §17, [`../spec/errors.md`](../spec/errors.md)).

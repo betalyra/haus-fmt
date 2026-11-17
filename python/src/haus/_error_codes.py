@@ -89,7 +89,12 @@ ErrorCode: TypeAlias = Literal[
     "import-version",
     "import-cycle",
     "duplicate-package",
+    "undeclared-package",
+    "package-manifest",
+    "package-version",
     "package-path",
+    "codec-unreachable",
+    "file-too-large",
     "too-many-files",
     "type-mismatch",
     "not-an-integer",
@@ -256,16 +261,34 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
             "imports",
             "Read the schema with a resolver that loads imports (from files or packages), or inline the types.",
         ),
-        "import-not-found": ErrorInfo("imports", "Install the package (as a direct dependency), or fix the path."),
+        "import-not-found": ErrorInfo("imports", "Install the package, or fix the path."),
         "import-version": ErrorInfo(
             "imports",
             "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
         ),
         "import-cycle": ErrorInfo("imports", "Move the shared types to a file both import."),
-        "duplicate-package": ErrorInfo("imports", "Install one copy of the package (deduplicate your dependencies)."),
+        "duplicate-package": ErrorInfo(
+            "imports",
+            "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`.",
+        ),
+        "undeclared-package": ErrorInfo(
+            "imports",
+            "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`).",
+        ),
+        "package-manifest": ErrorInfo(
+            "imports", 'Write `{ name: "@org/name", version: "1.2.0" }`, in lowercase, with a full version.'
+        ),
+        "package-version": ErrorInfo("imports", "Release both with the same version: change them together."),
         "package-path": ErrorInfo(
             "imports",
             "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.",
+        ),
+        "codec-unreachable": ErrorInfo(
+            "imports",
+            "Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs.",
+        ),
+        "file-too-large": ErrorInfo(
+            "imports", "Split the schema into several files, or raise the limit if you trust the file."
         ),
         "too-many-files": ErrorInfo("imports", "Import fewer files."),
         "type-mismatch": ErrorInfo("decoding", "Write a value of the expected type; the message says which."),

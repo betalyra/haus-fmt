@@ -8,13 +8,14 @@
 //! with its own parameters (§9.10); a limit on the number of instances is a
 //! second guard.
 
-use crate::files::{NoImports, Resolver, identify};
+use crate::files::{self, FileCache, Found};
+use crate::locator::{Locator, NoImports, duplicate};
 use crate::syntax::{self, Attribute, STD_TIME, Ty, deprecation, unknown_type};
 use crate::types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
-use crate::{Error, Result, Warning, read};
+use crate::{Error, Result, Warning, quote, shown};
 use haus::ErrorCode as Code;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 
 const MAX_INSTANCES: usize = 10_000;
 const MAX_FILES: usize = 256;
@@ -26,12 +27,21 @@ const GENERIC: [(&str, usize); 6] =
 /// How to load a schema.
 #[derive(Clone, Copy)]
 pub struct Options<'a> {
-    /// Finds imported packages and files. [`NoImports`] (the default) allows std modules only.
-    pub resolver: &'a dyn Resolver,
-    /// The root file's key for the resolver (its path), so its relative imports resolve from it.
-    pub key: Option<&'a str>,
-    /// The root file's identity, for the ids of its types (see [`Module::id`](crate::Module::id)).
+    /// Finds the packages imports name (spec §13.3). [`NoImports`] (the
+    /// default) finds none.
+    pub packages: &'a dyn Locator,
+    /// The root file's path: its relative imports resolve from it, and its
+    /// own imports of packages are checked as its. None: a schema given as
+    /// text, which imports no files.
+    pub path: Option<&'a Path>,
+    /// The root file's id, for the ids of its types (`shop/order` gives
+    /// `shop/order#Order`). Default: from its manifest for a package's
+    /// `schema.haus`, else as for any file outside packages ([`Options::project`]).
     pub id: Option<&'a str>,
+    /// Ids of files outside packages: `Some(("shop", dir))` gives
+    /// `dir/src/common.schema.haus` the id `shop/src/common`. None: the path
+    /// from the root file's directory (`common`, `billing/common`).
+    pub project: Option<(&'a str, &'a Path)>,
     /// Leave the attributes of every file out, as if they weren't written:
     /// decoding is the same (spec §15). For tests of that.
     pub without_attributes: bool,
@@ -39,7 +49,7 @@ pub struct Options<'a> {
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { resolver: &NoImports, key: None, id: None, without_attributes: false }
+        Options { packages: &NoImports, path: None, id: None, project: None, without_attributes: false }
     }
 }
 
@@ -58,6 +68,17 @@ pub struct Definition {
     pub template: InstanceId,
 }
 
+/// A schema package a schema reaches, directly or through other packages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaPackage {
+    /// `@haus-fmt/money`.
+    pub name: String,
+    /// The version of its manifest: `1.2.0`.
+    pub version: String,
+    /// Its directory (a real path).
+    pub dir: PathBuf,
+}
+
 /// A schema file, its imports resolved and every rule of spec §14 checked.
 #[derive(Debug, Clone)]
 pub struct Schema {
@@ -66,6 +87,37 @@ pub struct Schema {
     definitions: Vec<Definition>,
     own: usize,
     warnings: Vec<Warning>,
+    packages: Vec<SchemaPackage>,
+    files: Vec<SchemaFile>,
+}
+
+/// A file a schema loaded: the root, or a file or package it imports,
+/// directly or not. Code generators make one module of each.
+#[derive(Debug, Clone)]
+pub struct SchemaFile {
+    /// Its real path; None for a schema given as text.
+    pub path: Option<PathBuf>,
+    /// Its id (spec §13.3): `@haus-fmt/money@1`, `shop/src/common`; None for
+    /// a schema given as text without one.
+    pub id: Option<String>,
+    /// The package's name, for a package's `schema.haus`; None for a file outside packages.
+    pub package: Option<String>,
+    /// Its own definitions in source order, then the ones it imports.
+    definitions: Vec<Definition>,
+    own: usize,
+}
+
+impl SchemaFile {
+    /// The file's own definitions, in source order.
+    pub fn definitions(&self) -> &[Definition] {
+        &self.definitions[..self.own]
+    }
+
+    /// The types the file imports from packages and files (not std/time), by
+    /// the name they have in it.
+    pub fn imported(&self) -> &[Definition] {
+        &self.definitions[self.own..]
+    }
 }
 
 impl Schema {
@@ -74,24 +126,37 @@ impl Schema {
         Schema::parse_with(text, &Options::default())
     }
 
-    /// A schema, with imports found by `options.resolver`.
+    /// A schema, with `options`: the packages it imports found by
+    /// `options.packages`, its files next to `options.path`.
     pub fn parse_with(text: &str, options: &Options) -> Result<Schema> {
-        Loader::new(options).run(text)
+        Loader::new(options, FileCache::new()).run(text)
     }
 
-    /// The schema file at `path`, its relative imports next to it.
-    pub fn load(path: impl AsRef<Path>, resolver: &dyn Resolver) -> Result<Schema> {
-        Schema::load_with(path, &Options { resolver, ..Options::default() })
+    /// The schema file at `path`: its relative imports next to it, the
+    /// packages it imports found by `packages`.
+    pub fn load(path: impl AsRef<Path>, packages: &dyn Locator) -> Result<Schema> {
+        Schema::load_with(path, &Options { packages, ..Options::default() })
     }
 
-    /// [`Schema::load`] with options; `options.key` and `options.id` are the file's own.
+    /// [`Schema::load`] with options; `options.path` is `path`.
     pub fn load_with(path: impl AsRef<Path>, options: &Options) -> Result<Schema> {
         let path = path.as_ref();
-        let text = read(path)?;
-        let full = path.canonicalize().map_err(|e| Error::at(path, Code::ImportNotFound, e))?;
-        let key = full.display().to_string();
-        let (id, _) = identify(&full);
-        Schema::parse_with(&text, &Options { key: Some(&key), id: Some(&id), ..*options }).map_err(|e| e.in_file(path))
+        let mut files = FileCache::new();
+        let (_, text) = files::root(path, &mut files)?;
+        Loader::new(&Options { path: Some(path), ..*options }, files)
+            .run(&text)
+            .map_err(|e| if e.path().is_some() { e } else { e.in_file(path) })
+    }
+
+    /// Every schema package the schema reaches, by name.
+    pub fn packages(&self) -> &[SchemaPackage] {
+        &self.packages
+    }
+
+    /// Every file the schema loaded: the root first, then the files and
+    /// packages it imports, directly or not, each once.
+    pub fn files(&self) -> &[SchemaFile] {
+        &self.files
     }
 
     /// The file's own definitions, in source order.
@@ -179,6 +244,10 @@ pub(crate) fn tags(v: &Variant) -> String {
 struct Unit {
     text: String,
     file: syntax::File,
+    /// Its real path, if it is a file.
+    path: Option<PathBuf>,
+    /// The package's name, for a package's `schema.haus`.
+    package: Option<String>,
     id: Option<String>,
     /// Where it was first imported: the importing file, the import's offset there, the module as written.
     origin: Option<(usize, usize, String)>,
@@ -202,15 +271,30 @@ fn fail<T>(unit: usize, pos: usize, code: Code, reason: impl Into<String>) -> Re
     Err(Fail { unit, pos, code, reason: reason.into() })
 }
 
+/// A package a schema reaches: one per name.
+struct Reached {
+    /// Its `schema.haus`.
+    path: PathBuf,
+    found: Found,
+    text: String,
+}
+
 struct Loader<'a> {
     options: &'a Options<'a>,
     units: Vec<Unit>,
-    /// Files by key, loaded once each.
-    by_key: HashMap<String, usize>,
-    /// The key of the file with each id: two files with one id would give their types the same ids.
-    ids: HashMap<String, Option<String>>,
-    /// Keys of the files being loaded, for import cycles.
-    loading: Vec<String>,
+    /// Files by real path, loaded once each.
+    by_path: HashMap<PathBuf, usize>,
+    /// Packages by name.
+    packages: BTreeMap<String, Reached>,
+    /// Ids of files outside packages: a prefix, and the directory their paths start from.
+    base: Option<(String, PathBuf)>,
+    /// The files being loaded, for import cycles.
+    loading: Vec<usize>,
+    /// Every file read, each once.
+    files: FileCache,
+    /// The `schema.haus` of copies of packages (identical to the one
+    /// loaded), whose imports were resolved too.
+    copies: HashSet<PathBuf>,
     instances: Vec<Instance>,
     /// Per instance: its key, and the definition it applies.
     keys: Vec<String>,
@@ -224,13 +308,16 @@ struct Loader<'a> {
 }
 
 impl<'a> Loader<'a> {
-    fn new(options: &'a Options<'a>) -> Loader<'a> {
+    fn new(options: &'a Options<'a>, files: FileCache) -> Loader<'a> {
         Loader {
             options,
             units: vec![],
-            by_key: HashMap::new(),
-            ids: HashMap::new(),
+            by_path: HashMap::new(),
+            packages: BTreeMap::new(),
+            base: None,
             loading: vec![],
+            files,
+            copies: HashSet::new(),
             instances: vec![],
             keys: vec![],
             def_of: vec![],
@@ -262,22 +349,68 @@ impl<'a> Loader<'a> {
     }
 
     fn run(mut self, text: &str) -> Result<Schema> {
-        let (key, id) = (self.options.key.map(str::to_owned), self.options.id.map(str::to_owned));
-        let root = self.load(text.to_owned(), key, id, None)?;
+        let path = self.options.path.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_owned()));
+        let package = match &path {
+            Some(path) => files::package_of(path, &mut self.files)?,
+            None => None,
+        };
+        let real = |dir: &Path| dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+        self.base = match self.options.project {
+            Some((name, dir)) => Some((format!("{name}/"), real(dir))),
+            None => path.as_deref().and_then(Path::parent).map(|dir| (String::new(), dir.to_owned())),
+        };
+        let id = match (self.options.id, &package, &path) {
+            (Some(id), _, _) => Some(id.to_owned()),
+            (None, Some(found), _) => Some(found.manifest.id()),
+            (None, None, Some(path)) => Some(self.app_id(path)),
+            (None, None, None) => None,
+        };
+        let name = package.as_ref().map(|found| found.manifest.name.clone());
+        if let (Some(found), Some(path)) = (package, &path) {
+            let reached = Reached { path: path.clone(), found, text: text.to_owned() };
+            self.packages.insert(reached.found.manifest.name.clone(), reached);
+        }
+        let root = self.load(text.to_owned(), path, name, id, None)?;
         self.evaluate_all().map_err(|f| self.lift(f))?;
         let warnings = self.units[root].file.warnings.iter().cloned().map(Error::from).collect();
-        let unit = &self.units[root];
+        let files: Vec<SchemaFile> = (0..self.units.len()).map(|u| self.file(u)).collect();
+        let (definitions, own) = (files[root].definitions.clone(), files[root].own);
+        let packages = self
+            .packages
+            .into_values()
+            .map(|r| SchemaPackage { name: r.found.manifest.name, version: r.found.manifest.version, dir: r.found.dir })
+            .collect();
+        Ok(Schema { instances: self.instances, own, definitions, warnings, packages, files })
+    }
+
+    /// A loaded file: its own definitions in source order, then the imported ones by name.
+    fn file(&self, u: usize) -> SchemaFile {
+        let unit = &self.units[u];
         let mut own: Vec<(usize, &str)> = unit.own.iter().map(|(n, &d)| (d, n.as_str())).collect();
         own.sort();
         let mut imported: Vec<(&str, (usize, usize))> =
-            unit.scope.iter().filter(|(_, (u, _))| *u != root).map(|(n, &at)| (n.as_str(), at)).collect();
+            unit.scope.iter().filter(|(_, (v, _))| *v != u).map(|(n, &at)| (n.as_str(), at)).collect();
         imported.sort();
-        let definitions: Vec<Definition> = own
+        let definitions = own
             .iter()
-            .map(|&(d, name)| self.definition(name, (root, d)))
+            .map(|&(d, name)| self.definition(name, (u, d)))
             .chain(imported.iter().map(|&(name, at)| self.definition(name, at)))
             .collect();
-        Ok(Schema { instances: self.instances, own: own.len(), definitions, warnings })
+        SchemaFile {
+            path: unit.path.clone(),
+            id: unit.id.clone(),
+            package: unit.package.clone(),
+            definitions,
+            own: own.len(),
+        }
+    }
+
+    /// The id of a file outside packages (spec §13.3): different for different files.
+    fn app_id(&self, path: &Path) -> String {
+        match &self.base {
+            Some((prefix, dir)) => format!("{prefix}{}", files::relative_id(dir, path)),
+            None => path.display().to_string(),
+        }
     }
 
     fn definition(&self, name: &str, (u, d): (usize, usize)) -> Definition {
@@ -305,7 +438,8 @@ impl<'a> Loader<'a> {
     fn load(
         &mut self,
         text: String,
-        key: Option<String>,
+        path: Option<PathBuf>,
+        package: Option<String>,
         id: Option<String>,
         origin: Option<(usize, usize, String)>,
     ) -> Result<usize> {
@@ -325,22 +459,21 @@ impl<'a> Loader<'a> {
         };
         let file = if self.options.without_attributes { syntax::without_attributes(file) } else { file };
         let unit = self.units.len();
+        if let Some(path) = &path {
+            self.by_path.insert(path.clone(), unit);
+        }
         self.units.push(Unit {
             text,
             file,
-            id: id.clone(),
+            path,
+            package,
+            id,
             origin,
             own: HashMap::new(),
             scope: HashMap::new(),
             std: HashMap::new(),
         });
-        if let Some(key) = &key {
-            self.by_key.insert(key.clone(), unit);
-        }
-        if let Some(id) = id {
-            self.ids.insert(id, key.clone());
-        }
-        self.loading.push(key.unwrap_or_default());
+        self.loading.push(unit);
         let loaded = self.imports(unit);
         self.loading.pop();
         loaded?;
@@ -421,54 +554,117 @@ impl<'a> Loader<'a> {
 
     /// The file an import names, loaded.
     fn import(&mut self, unit: usize, imp: &syntax::Import) -> Result<usize> {
-        let at = |code: Code, reason: String| Fail { unit, pos: imp.pos, code, reason };
+        let from = self.units[unit].path.clone();
+        self.import_from(unit, imp.pos, &imp.module, &imp.module, from)
+    }
+
+    /// The file `module` names for the file at `from`, loaded; errors are
+    /// reported at offset `pos` of `unit`, for the import `label`.
+    fn import_from(
+        &mut self,
+        unit: usize,
+        pos: usize,
+        module: &str,
+        label: &str,
+        from: Option<PathBuf>,
+    ) -> Result<usize> {
+        let at = |code: Code, reason: String| Fail { unit, pos, code, reason };
         // `@org/name@2`: the package, and the major version wanted.
-        let (module, wanted) = match imp.module.rsplit_once('@') {
+        let (name, wanted) = match module.rsplit_once('@') {
             Some((name, major))
-                if imp.module.starts_with('@')
+                if module.starts_with('@')
                     && name.len() > 1
                     && !major.is_empty()
                     && major.bytes().all(|b| b.is_ascii_digit()) =>
             {
                 (name, Some(major))
             }
-            _ => (imp.module.as_str(), None),
+            _ => (module, None),
         };
-        let from = self.loading.last().filter(|k| !k.is_empty()).cloned();
-        let found = match self.options.resolver.resolve(module, from.as_deref()) {
-            Ok(m) => m,
-            Err(e) => {
-                return Err(self.lift(at(e.code(), format!("can't import {}: {e}", imp.module))));
-            }
+        let found = match name.starts_with('@') {
+            true => files::package(self.options.packages, name, from.as_deref(), &mut self.files),
+            false => files::file(name, from.as_deref(), &mut self.files),
         };
-        if let (Some(wanted), Some(version)) = (wanted, &found.version) {
-            let major = version.trim_start_matches('v').split('.').next().unwrap_or_default();
-            if major != wanted {
-                let reason = format!("{} wants major version {wanted}, but version {version} was found", imp.module);
+        let found = found.map_err(|e| self.lift(at(e.code(), format!("can't import {label}: {}", e.reason()))))?;
+        if let (Some(wanted), Some(package)) = (wanted, &found.package) {
+            let version = quote(&package.manifest.version);
+            if package.manifest.major() != wanted {
+                let reason = format!("{label} wants major version {wanted}, but version {version} was found");
                 return Err(self.lift(at(Code::ImportVersion, reason)));
             }
         }
-        if self.loading.contains(&found.key) {
-            let reason = format!("import cycle: {} imports this file again", imp.module);
+        // One package per name (spec §13.3): copies with the same files, whose
+        // imports reach the same packages, are one.
+        let mut copy = None;
+        let path = match &found.package {
+            Some(new) => match self.packages.get(&new.manifest.name) {
+                Some(old) if old.path == found.path => old.path.clone(),
+                Some(old) if old.found.manifest_text == new.manifest_text && old.text == found.text => {
+                    copy = Some(found.path.clone());
+                    old.path.clone()
+                }
+                Some(Reached { found: old, .. }) => {
+                    let e = duplicate((&old.manifest, &old.dir), (&new.manifest, &new.dir));
+                    return Err(self.lift(at(e.code(), format!("can't import {label}: {}", e.reason()))));
+                }
+                None => found.path.clone(),
+            },
+            None => found.path.clone(),
+        };
+        if self.loading.iter().any(|&u| self.units[u].path.as_ref() == Some(&path)) {
+            let reason = format!("import cycle: {label} imports this file again");
             return Err(self.lift(at(Code::ImportCycle, reason)));
         }
-        if let Some(&cached) = self.by_key.get(&found.key) {
+        if let Some(&cached) = self.by_path.get(&path) {
+            if let Some(copy) = copy {
+                self.copy_imports(unit, pos, label, cached, copy)?;
+            }
             return Ok(cached);
         }
-        if let Some(other) = self.ids.get(&found.id)
-            && other.as_deref() != Some(found.key.as_str())
-        {
-            let reason = format!(
-                "{} is {}, but another file already is: two copies or two packages with the same name ({})",
-                imp.module, found.id, found.key
-            );
-            return Err(self.lift(at(Code::DuplicatePackage, reason)));
-        }
-        if self.units.len() >= MAX_FILES {
+        if self.units.len() + self.copies.len() >= MAX_FILES {
             let reason = format!("more than {MAX_FILES} schema files are imported");
             return Err(self.lift(at(Code::TooManyFiles, reason)));
         }
-        self.load(found.text, Some(found.key), Some(found.id), Some((unit, imp.pos, imp.module.clone())))
+        let origin = Some((unit, pos, label.to_owned()));
+        match found.package {
+            Some(package) => {
+                let (name, id) = (package.manifest.name.clone(), package.manifest.id());
+                let reached = Reached { path: path.clone(), found: package, text: found.text.clone() };
+                self.packages.insert(name.clone(), reached);
+                self.load(found.text, Some(path), Some(name), Some(id), origin)
+            }
+            None => {
+                let id = self.app_id(&path);
+                self.load(found.text, Some(path), None, Some(id), origin)
+            }
+        }
+    }
+
+    /// The imports of a copy of a package (its `schema.haus` at `copy`),
+    /// identical to the package loaded as `original`: resolved from the
+    /// copy's place, with its own checks, they must reach the same packages
+    /// (spec §13.3). Errors are reported at the import `label` of `unit`.
+    fn copy_imports(&mut self, unit: usize, pos: usize, label: &str, original: usize, copy: PathBuf) -> Result<()> {
+        if !self.copies.insert(copy.clone()) {
+            return Ok(());
+        }
+        if self.units.len() + self.copies.len() > MAX_FILES {
+            let reason = format!("more than {MAX_FILES} schema files are imported");
+            return Err(self.lift(Fail { unit, pos, code: Code::TooManyFiles, reason }));
+        }
+        let dir = copy.parent().map(shown).unwrap_or_default();
+        let imports: Vec<String> = self.units[original]
+            .file
+            .imports
+            .iter()
+            .filter(|imp| imp.module.starts_with('@'))
+            .map(|imp| imp.module.clone())
+            .collect();
+        for module in imports {
+            let label = format!("{label} (its copy in {dir} imports {module})");
+            self.import_from(unit, pos, &module, &label, Some(copy.clone()))?;
+        }
+        Ok(())
     }
 
     /// The file's own definitions: in scope, unless a name is also imported;

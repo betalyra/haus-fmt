@@ -27,9 +27,9 @@
 //! ]);
 //! ```
 //!
-//! - [`Schema`]: a schema file parsed, its imports resolved (std/time, schema
-//!   packages, relative files, through a [`Resolver`]) and checked: every rule
-//!   of §14 for invalid schemas.
+//! - [`Schema`]: a schema file parsed, its imports resolved (std/time,
+//!   relative files, and schema packages found by a [`Locator`]) and checked:
+//!   every rule of §13.3 for imports and of §14 for invalid schemas.
 //! - [`Schema::decode`] and [`Schema::decode_stream`]: decode a [`haus::Value`]
 //!   with a type exactly as §15 says, giving the value an encoder writes back
 //!   (floats in their one spelling, `-0` as an integer `0`, fields an open
@@ -37,28 +37,33 @@
 //! - [`Schema::check_text`] and [`Schema::check`]: every problem in a data file
 //!   (up to 200), with positions, and hints for fields and tags an open type
 //!   doesn't list and for deprecated ones: what `haus check` and editors show.
-//! - [`syntax`]: the syntax tree of one schema file, and [`packages`]: schema
-//!   packages among a Cargo crate's direct dependencies. haus-fmt-build
-//!   generates code from these.
+//! - [`Locator`]: where packages are, for one package manager:
+//!   [`NodeModules`], [`Explicit`] (packages given by the user), and
+//!   [`Packages`] (a Cargo crate's direct dependencies).
+//! - [`syntax`]: the syntax tree of one schema file, and [`packages`]: the
+//!   manifest and the rules of package files. haus-fmt-build generates code
+//!   from these.
 
 mod check;
 mod files;
 mod locate;
+mod locator;
 pub mod packages;
 mod resolve;
 pub mod syntax;
 mod types;
 
-pub use check::{Issue, MAX_ISSUES, Position, SchemaReference, Segment, Severity, schema_reference};
-pub use files::{FileResolver, Module, NoImports, Resolver};
-pub use packages::Packages;
-pub use resolve::{Definition, Options, Schema};
+pub use check::{Issue, MAX_ISSUES, Position, Segment, Severity};
+pub use files::FileCache;
+pub use locator::{Explicit, Location, Locator, NoImports, NodeModules, Or};
+pub use packages::{Manifest, Packages};
+pub use resolve::{Definition, Options, Schema, SchemaFile, SchemaPackage};
 pub use types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
 
 use haus::ErrorCode;
+use std::env;
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
-use std::{env, fs};
 
 /// What went wrong, and where: `src/order.schema.haus:3:5: unknown type Strin`,
 /// with its code (spec §17).
@@ -173,8 +178,40 @@ pub type Warning = Error;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
-fn read(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|e| Error::at(path, ErrorCode::ImportNotFound, e))
+/// Text from a file, for a message (spec §9.2): control and bidirectional
+/// characters escaped as `\u{…}`, and at most 40 characters, cut with `…`.
+pub(crate) fn quote(text: &str) -> String {
+    const MAX: usize = 40;
+    let pieces: Vec<String> = text.chars().map(escape).collect();
+    let length: usize = pieces.iter().map(|p| p.chars().count()).sum();
+    if length <= MAX {
+        return pieces.concat();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for piece in pieces {
+        let n = piece.chars().count();
+        if used + n > MAX - 1 {
+            break;
+        }
+        out.push_str(&piece);
+        used += n;
+    }
+    out + "…"
+}
+
+/// A path, for a message: its control and bidirectional characters escaped.
+pub(crate) fn shown(path: &Path) -> String {
+    path.display().to_string().chars().map(escape).collect()
+}
+
+/// A character as a message shows it: control and bidirectional ones as `\u{…}`.
+fn escape(c: char) -> String {
+    let bidi = matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    match c.is_control() || bidi {
+        true => format!("\\u{{{:x}}}", c as u32),
+        false => c.to_string(),
+    }
 }
 
 fn var(key: &str) -> Result<String> {

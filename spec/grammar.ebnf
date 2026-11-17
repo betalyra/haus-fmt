@@ -111,7 +111,7 @@ import      ::= "import" ws module ws "(" ws type_name ( ws "," ws type_name )* 
 module      ::= "std/" ident                              (* a standard module: std/time *)
               | "@" segment "/" segment [ "@" major ]     (* a schema package: @haus-fmt/money, @haus-fmt/money@1 *)
               | ( "./" | "../" ) path                     (* a schema file, without .schema.haus: ./common *)
-segment     ::= [A-Za-z0-9_.-]+
+segment     ::= [a-z0-9] [a-z0-9._-]*                    (* npm's rules for scoped names, lowercase; not node_modules *)
 major       ::= "0" | [1-9] [0-9]*                        (* a major version only: not @1.1, not @01 *)
 path        ::= [A-Za-z0-9_./-]*
 typedef     ::= ( attribute ws )* "type" ws type_name ( ws param )* ws "=" ws type

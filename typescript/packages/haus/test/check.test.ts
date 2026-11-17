@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import { fileURLToPath } from "node:url"
-import { checkData, compileSchemaFile, parseSchemaFile, parseWithLocations, schemaReference } from "../src/index.js"
+import { checkData, compileSchemaFile, parseSchemaFile, parseWithLocations } from "../src/index.js"
 import * as h from "../src/schema.js"
 import { schemaOptions } from "../src/node.js"
 
@@ -89,16 +89,5 @@ describe("checkData", () => {
     expect(issues(schema, data)).toEqual([])
     expect(h.decode(compileSchemaFile(schema).schemas.Root!, parseWithLocations(data)[0]!)).toEqual({ d: "255", e: "-5", f: "1000.50" })
     expect(issues(schema, `{ d: "0xFF", e: 1, f: 1 }`)).toEqual([`error "0xFF": expected Decimal, found the string "0xFF"`])
-  })
-})
-
-describe("schemaReference", () => {
-  it("reads the comment at the top", () => {
-    const text = `// An order.\n// schema: ./api.schema.haus#Order\n{ id: 1 }`
-    const ref = schemaReference(text)!
-    expect(ref).toMatchObject({ path: "./api.schema.haus", type: "Order" })
-    expect(text.slice(ref.start, ref.end)).toBe("./api.schema.haus#Order")
-    expect(schemaReference(`// schema: x.schema.haus\n{}`)?.type).toBe("Root")
-    expect(schemaReference(`{}\n// schema: x.schema.haus`)).toBeUndefined()
   })
 })

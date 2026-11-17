@@ -21,6 +21,7 @@ fn a_package_schema_outside_the_package_is_not_read() {
     let package = dir.path().join("evil");
     write(&package.join("package.haus"), "{ name: \"@acme/evil\", version: \"1.0.0\" }");
     symlink(dir.path().join("secret/creds.schema.haus"), package.join("schema.haus")).unwrap();
+    write(&dir.path().join("app.schema.haus"), "import @acme/evil (T)\ntype A = T");
     for e in [
         RocConfig::new().generate_package(&package).map(|_| ()).unwrap_err(),
         RocConfig::new()
@@ -47,12 +48,14 @@ fn a_package_is_package_haus_and_schema_haus() {
 #[test]
 fn a_package_schema_imports_no_files() {
     let dir = tempfile::tempdir().unwrap();
-    write(&dir.path().join("package.haus"), "{ name: \"@acme/evil\", version: \"1.0.0\" }");
-    write(&dir.path().join("schema.haus"), "import ../secret/pins (T)\ntype U = T");
+    let package = dir.path().join("evil");
+    write(&package.join("package.haus"), "{ name: \"@acme/evil\", version: \"1.0.0\" }");
+    write(&package.join("schema.haus"), "import ../secret/pins (T)\ntype U = T");
+    write(&dir.path().join("app.schema.haus"), "import @acme/evil (U)\ntype A = U");
     for e in [
-        RocConfig::new().generate_package(dir.path()).map(|_| ()).unwrap_err(),
+        RocConfig::new().generate_package(&package).map(|_| ()).unwrap_err(),
         RocConfig::new()
-            .package(dir.path(), "evil")
+            .package(&package, "evil")
             .generate(&dir.path().join("app.schema.haus"), "App", "app")
             .map(|_| ())
             .unwrap_err(),

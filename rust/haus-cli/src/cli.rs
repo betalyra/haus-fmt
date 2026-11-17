@@ -39,13 +39,13 @@ pub enum Color {
 pub enum Command {
     /// Check data files (syntax, and their schema) and schema files.
     ///
-    /// A data file is checked against the type `Root` of `x.schema.haus` next
-    /// to `x.haus`, or the schema named by a `// schema: ./s.schema.haus#Type`
-    /// comment at its top, or the one given with --schema. Directories are
+    /// A data file is checked against the schema given with --schema, or else
+    /// the type `Root` of `x.schema.haus` next to `x.haus`. Directories are
     /// searched for `*.haus` files (schema files included), respecting
     /// .gitignore. Standard input is checked value by value: each value is
     /// reported as soon as the comma after it arrives (`tail -f x.haus | haus
-    /// check -`).
+    /// check -`). Schema packages are found in `node_modules`, from each schema
+    /// file's real path, or given with --package and --packages.
     Check(CheckArgs),
     /// Rewrite data files in the standard layout (spec §11).
     ///
@@ -90,7 +90,29 @@ pub struct CheckArgs {
     pub json: bool,
 
     #[command(flatten)]
+    pub packages: PackageArgs,
+
+    #[command(flatten)]
     pub limits: LimitArgs,
+}
+
+/// Where the schema packages that schemas import are (spec §13.3): by
+/// default in `node_modules`, from each schema file's real path, as Node
+/// finds them, for the packages the nearest package.json declares. A
+/// package given by its directory comes first, for its name; one found in a
+/// folder doesn't replace an installed one with other files.
+#[derive(Debug, Args)]
+#[command(next_help_heading = "Packages")]
+pub struct PackageArgs {
+    /// A schema package's directory (with package.haus and schema.haus); its
+    /// manifest names it. With NAME=, the manifest must say NAME. Repeatable.
+    #[arg(long = "package", value_name = "[NAME=]DIR")]
+    pub package: Vec<String>,
+
+    /// A folder whose subdirectories with a package.haus are schema packages
+    /// (not deeper; one whose manifest is invalid is left out). Repeatable.
+    #[arg(long = "packages", value_name = "FOLDER")]
+    pub packages: Vec<PathBuf>,
 }
 
 #[derive(Debug, Args)]

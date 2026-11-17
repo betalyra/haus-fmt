@@ -140,7 +140,7 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
 ## 9. Security considerations
 
 1. **Tags are data.** Implementations MUST NOT map tag names to classes, constructors or functions dynamically. Decode only into the types a schema lists explicitly. That kind of dynamic mapping is the root of the "gadget" attacks against Java and .NET deserializers.
-2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus` and `schema.haus`, never through a symbolic link out of its directory, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read.
+2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that errors quote from files (a token, a name, a version) is escaped (control and bidirectional characters) and at most 40 characters long; a version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used.
 3. **Enforce limits while parsing** (§7), not afterwards.
 4. **Record keys are data.** A key such as `__proto__`, `constructor` or `$type` MUST NOT reach an object's prototype or any internal field. JavaScript bindings use own properties, a null prototype or a `Map`.
 5. **Unknown variants carry raw data.** The raw value kept for an unknown tag in an open variant is untrusted and subject to the same limits when stored or forwarded.
@@ -357,16 +357,48 @@ A **schema package** is a directory with two files: a manifest, `package.haus`, 
 { name: "@haus-fmt/money", version: "1.2.0" }
 ```
 
-- `name` is `@organisation/name`. `@haus-fmt/` is reserved for the official extensions maintained with haus.
+- `name` is `@organisation/name`, with npm's rules for scoped names in lowercase: each part starts with a letter or digit and has only `a`–`z`, `0`–`9`, `-`, `.` and `_`, is not `node_modules`, and the whole name has at most 214 characters. `@haus-fmt/` is reserved for the official extensions maintained with haus.
 - `version` is a semantic version (below).
-- Other fields of the manifest are ignored.
+- Other fields of the manifest are ignored, so later versions can add some. A manifest is at most 64 KiB.
 - `schema.haus` is an ordinary schema file: shape only, like every schema. It imports standard modules and other packages, never files. Packages change no syntax: `Money(19.99, EUR)` is valid haus with or without `@haus-fmt/money`.
 - The directory may hold other files, such as profiles (below) and the wrappers of package managers (`package.json`, `Cargo.toml`). No import reads them.
 
-**Resolution.** An implementation finds packages where its language's package manager puts them (`node_modules` for JavaScript, …) and relative files next to the importing file (`import ./common` is `common.schema.haus`: the extension is always added). Resolution happens when a schema is built, never while data is parsed, and never over the network (§9.2). The exact version and content hash are pinned by the application's package manager (its lock file), not by the schema.
+**Resolution.** Relative imports read the file next to the importing file: `import ./common` is `common.schema.haus` (the extension is always added). Each name in the path MUST be spelled as its directory lists it, also on file systems that ignore case or Unicode normalization, and the real path of the file MUST end in `.schema.haus`. Packages are found when a schema is built, never while data is parsed. The exact version and content hash are pinned by the application's package manager (its lock file), not by the schema.
 
-- Where the package manager has scoped names (npm), `@org/name` resolves with its own name resolution, from the importing file. Elsewhere, an implementation looks only among the project's direct dependencies.
-- The manifest's `name` MUST equal the imported name, and the package manager's name where it is scoped (npm `@haus-fmt/money` holds `@haus-fmt/money`).
+Resolution follows five principles, and the rules below apply them; an implementation for another ecosystem derives its rules from them the same way:
+
+1. A build reads only a package's own files, and those are plain files, never links.
+2. Packages are found only where the build declared them, never because something happens to be nearby or in a shared place.
+3. Two different packages never share a name silently.
+4. The work is bounded: sizes, the number of files, each file read once.
+5. Text from files is never repeated unescaped.
+
+Where an implementation looks for packages is part of the security model (§9.2). It MUST look only in:
+
+- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
+- the dependencies of the build, as its package manager installed them: `node_modules` (below), the crate's dependencies (Cargo);
+
+and never in global or environment-wide locations (npm's global folder, `NODE_PATH`, a shared cache), and never over the network.
+
+**npm.** An implementation that looks in `node_modules` MUST follow these rules, so that every binding finds the same package and a dependency can't place one where another is looked for:
+
+- A file imports only packages it declares, and the implementation checks this before it looks. For a package's `schema.haus`, the declarations are in the package's own `package.json`. For other files, they are in the nearest `package.json` above the file's real path, skipping one that has neither a `name` nor a dependency field (such as `{ "type": "module" }`). The declared packages are those in `dependencies`, `peerDependencies` and `optionalDependencies`, and for every file other than a package's `schema.haus` also `devDependencies`. Without such a `package.json`, a file declares nothing. Explicit packages count as declared. Otherwise: `undeclared-package`.
+- It starts from the real path of the importing file and tries `D/node_modules/@org/name` for each directory `D` from the file's directory up, nearest first, as Node does. It skips a `D` that is itself named `node_modules`, a scope directory directly inside one (`node_modules/@acme`), or the root of a Windows drive (`C:\`), where any user can create `node_modules`. It SHOULD skip a `D` that everyone may write to, such as `/tmp`, so that a `node_modules` planted there is never used.
+- The first `node_modules/@org/name` that exists is the package. If it has no `package.haus`, the import is not found; the search doesn't go on.
+- A package found this way MUST have the imported name in its manifest, and npm's name for it (its directory) is that name too.
+
+**Package versions** (`package-version`): implementations SHOULD check that a package's manifest `version` equals the version the package manager gives it, where it gives one (the `version` of npm's `package.json`, Cargo's package version). The check catches publishing mistakes and doesn't change what a schema means.
+
+**Files and limits.** A package's `package.haus`, `schema.haus` and `package.json` MUST be regular files, not symbolic links (the package's directory may be one). Implementations open them without following links, check the type and the size on the opened file, and read from it, so that the file checked is the file read. Each file is read at most once for a schema. These limits MUST be enforced by default and MAY be raised by the user:
+
+| Limit | Default | Error |
+|---|---|---|
+| manifest | 64 KiB | `package-manifest` |
+| schema file, `package.json` | 1 MiB | `file-too-large` |
+| entries in a folder of packages | 4096 | `too-many-files` |
+| schema files in one schema, the root included (manifests and `package.json` don't count) | 256 | `too-many-files` |
+
+A `package.json` that isn't valid JSON declares nothing and gives no version to check.
 
 **Distribution.** There is no haus registry. Authors publish schema packages however their users install dependencies: language registries (npm, crates.io, PyPI, …), private registries, git dependencies, workspaces, or copies in the project (vendored, still imported by name). Codec libraries for registries that reject git dependencies (crates.io, PyPI) can carry the schema text they target.
 
@@ -381,19 +413,22 @@ What this means for users:
 - **Names are claims.** A manifest name doesn't prove who wrote a package: trust comes from the dependency the application chose to add. Scopes make names reliable on npm, and less so on registries with unscoped names. `@haus-fmt/` is reserved by convention; on npm the `@haus-fmt` scope enforces it. Organisations SHOULD use a name they own: their domain or their code hosting organisation.
 - **No install scripts.** A schema package is data and MUST NOT need code to install, such as npm `postinstall`. Codecs are code, and are trusted like any other library.
 - **Copies in several languages.** A package published to several registries SHOULD be published from one source, so that equal versions have equal files.
+- **One copy per build.** On npm, a schema package SHOULD declare the schema packages it imports as `peerDependencies`, so that npm installs one copy for the whole application or reports a conflict when installing, as Cargo does.
 - **Discovery.** There is no index. The official extensions are listed in [`../extensions`](../extensions).
 
-**Identity.** Every named type has an id, the same in every language: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path). Codecs (§13.4) and tools refer to types by their id.
+**Identity.** Every named type has an id, the same in every language: `@haus-fmt/money@1#Money` is the type `Money` of the package `@haus-fmt/money`, major version 1. Types of the prelude and the standard modules have the ids `prelude#Decimal` and `std/time#Instant`. Files outside a package get an id from the binding (the JavaScript binding uses the nearest `package.json` name and the file's path); two imports reach the same such file when its real path is the same, whatever its id. Major versions are compared as text (`@18446744073709551616` is a valid major that no package has). Codecs (§13.4) and tools refer to types by their id.
 
 **Imports.** `import M (A, B)` makes the types `A` and `B` defined in `M` available under their names; a file can't re-export types it imports. Implementations MUST reject:
 
 - a module that can't be found, or a type it doesn't define;
 - a name imported twice, or imported and also defined;
-- two different files with the same id in one schema, such as two copies of `@acme/ids@3` found in different places, or two packages that both call themselves `@acme/ids`;
+- two different packages with the same name in one schema, such as `@acme/ids` 3.1.0 and 3.2.0 found in different places, two major versions of it (`@acme/ids@2` and `@acme/ids@3`), or two packages that both call themselves `@acme/ids`. Copies whose `package.haus` and `schema.haus` are byte for byte the same, and whose imports reach the same packages, are one package;
 - `@org/name@N` when the package found has another major version, and a version that isn't a major version: `@1.1`, `@01`;
+- a manifest that breaks the rules above (its `name`, its `version`, its size);
 - a relative import in a package's `schema.haus` (a package imports other packages by name);
 - a relative import from a file outside a package to a file in a package's directory (import the package by name);
-- a package's `package.haus` or `schema.haus` that is a symbolic link to a file outside the package's directory. Such a file is not read;
+- a package's `package.haus`, `schema.haus` or `package.json` that is a symbolic link or not a regular file. Such a file is not read;
+- a relative import whose file isn't a schema file (its real path doesn't end in `.schema.haus`) or that spells a name differently from its directory. Such a file is not read. A real path inside a package's directory is checked first: it is the error above, whatever the file's name;
 - import cycles: a file that imports itself, directly or not.
 
 Errors inside an imported file are reported at the import, with their place in that file.
@@ -426,6 +461,8 @@ A schema binding MAY let applications choose the host type of a named type witho
 - never changes what a value means: the same text means the same thing with and without it, the same instant or the same amount.
 
 A host type may keep less than the haus value: `Temporal.Instant` or a JavaScript `Date` keeps the instant but not the offset it was written with, and a decimal type may forget `-0` or exponent notation. Encoding through it then writes a value that means the same but is not equal (§2), with another canonical form and hash. A binding's default host types MUST keep the value, so that encoding what the defaults decoded always gives back an equal value, with the exceptions of §15 only. A host type that keeps less is offered only as a choice the application makes explicitly (a codec, or a schema variant such as `InstantAsDate`), and its documentation MUST say what it drops. Hash and sign parsed values, not re-encoded ones (§12).
+
+A codec applies wherever its type occurs, inside the types of imported packages too. A binding that can't apply it somewhere, such as generated code that reuses a type another library generated, MUST report an error instead of decoding there with the default host type.
 
 Codecs are part of the application, not of the schema. Two applications reading the same file with different codecs agree on what the file says, and may disagree only on what they accept. A codec for a standard type changes the host type only (§13.1).
 
@@ -480,7 +517,7 @@ Implementations MUST reject:
 - `Stream a` anywhere but as the whole type of a definition, and references to such a definition;
 - the import errors of §13.3.
 
-**Which schema describes a file.** A data file `x.haus` is described by the type `Root` of the schema file `x.schema.haus` next to it. A comment on the first lines of the data file names another one: `// schema: ./order.schema.haus` or `// schema: ./api.schema.haus#Order` (a type other than `Root`). The comment is for tools; parsers ignore it, and it never changes what the data means (§9.2).
+**Which schema describes a file.** The reader decides (§9.2): an application passes its schema to the decoder, and tools take one when given (`--schema`). Without one, tools MAY use the type `Root` of the schema file `x.schema.haus` next to a data file `x.haus`. A data file never names its schema.
 
 ## 15. Decoding with a schema
 

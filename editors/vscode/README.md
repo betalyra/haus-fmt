@@ -27,6 +27,14 @@ Format on save is not switched on by the extension. If you have it on globally a
 "[haus]": { "editor.formatOnSave": false }
 ```
 
+Schema packages are found in `node_modules`, from the real path of the schema file (pnpm and workspace links work), when the nearest `package.json` declares them. Packages outside `node_modules` (vendored, or from a Cargo or Python project) can be given with `haus.packages`, as paths relative to the workspace folder: a package's directory (with `package.haus`), or a folder whose subdirectories are packages.
+
+```jsonc
+"haus.packages": ["vendor/money", "schemas"]
+```
+
+Paths in workspace settings must stay inside the workspace folder (symbolic links resolved); only your user settings may point elsewhere on your computer. Network paths (`\\host\share`) are never used. In a workspace you haven't trusted, its `haus.packages` is ignored (Workspace Trust).
+
 ## Develop
 
 Press **F5** in the repo root ("haus extension (dev host)" in `.vscode/launch.json`). A second window opens running the extension from this folder, with `examples/` open. Run `pnpm watch` alongside, and reload that window after changes.

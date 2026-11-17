@@ -4,10 +4,10 @@
  * module source that rebuilds a schema file's schemas at runtime.
  */
 import { existsSync, readFileSync } from "node:fs"
-import { basename, dirname, join, relative, resolve } from "node:path"
+import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkData, definitionDoc, HausSyntaxError, parseSchemaFile, parseWithLocations, schemaReference, type ParseSchemaOptions, type ResolvedModule } from "@haus-fmt/haus"
-import { isSchemaFile, schemaOptions } from "@haus-fmt/haus/node"
+import { checkData, definitionDoc, HausSyntaxError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule } from "@haus-fmt/haus"
+import { isSchemaFile, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
 
 export interface Diagnostic {
   readonly message: string
@@ -19,17 +19,16 @@ export interface Diagnostic {
 export interface SchemaLink {
   readonly path: string
   readonly type: string
-  /** Where a `// schema:` comment names it. */
-  readonly offset: number
 }
 
-/** The schema for a data file, if it has one: named in a comment, or the `.schema.haus` file next to it. */
-export function schemaFor(dataFile: string, text: string): SchemaLink | undefined {
+/**
+ * The schema for a data file, if it has one: `Root` of the `.schema.haus`
+ * file next to it. A data file never names its schema (spec §14).
+ */
+export function schemaFor(dataFile: string): SchemaLink | undefined {
   if (isSchemaFile(dataFile)) return undefined
-  const ref = schemaReference(text)
-  if (ref) return { path: resolve(dirname(dataFile), ref.path), type: ref.type, offset: ref.start }
   const path = dataFile.replace(/\.haus$/, ".schema.haus")
-  return existsSync(path) ? { path, type: "Root", offset: 0 } : undefined
+  return existsSync(path) ? { path, type: "Root" } : undefined
 }
 
 /**
@@ -56,17 +55,17 @@ export const identifier = (fileName: string): string => {
 }
 
 /** Declarations for a data file with a schema, plus where the data doesn't match it. */
-export function dataModule(text: string, fileName: string, link: SchemaLink): { text: string; diagnostics: Diagnostic[] } {
+export function dataModule(text: string, fileName: string, link: SchemaLink, packages: NodeResolverOptions = {}): { text: string; diagnostics: Diagnostic[] } {
   const name = identifier(fileName)
   const schemaName = basename(link.path)
   const fallback = (message: string) => ({
     text: `declare const ${name}: unknown;\nexport default ${name};\n`,
-    diagnostics: [{ message, offset: link.offset, length: 1 }],
+    diagnostics: [{ message, offset: 0, length: 1 }],
   })
   if (!existsSync(link.path)) return fallback(`schema file not found: ${link.path}`)
   let file
   try {
-    file = parseSchemaFile(readFileSync(link.path, "utf8"), schemaOptions(link.path))
+    file = parseSchemaFile(readFileSync(link.path, "utf8"), schemaOptions(link.path, packages))
   } catch (e) {
     if (e instanceof HausSyntaxError) return fallback(`${schemaName}: ${e.message}`)
     throw e
@@ -93,8 +92,8 @@ export function dataModule(text: string, fileName: string, link: SchemaLink): { 
  * resolver finds, under short keys (no absolute paths end up in a bundle).
  * The recorded modules let the runtime rebuild the schema without a file system.
  */
-function recording(path: string) {
-  const base = schemaOptions(path)
+function recording(path: string, packages: NodeResolverOptions) {
+  const base = schemaOptions(path, packages)
   const short = new Map<string, string>()
   const real = new Map<string, string>()
   const shorten = (key: string) => {
@@ -112,10 +111,11 @@ function recording(path: string) {
     id: base.id!,
     resolver: {
       resolve(module, from) {
-        const found = base.resolver!.resolve(module, from === undefined ? undefined : real.get(from))
+        const { path, ...found } = base.resolver!.resolve(module, from === undefined ? undefined : real.get(from))
+        // The bundle gets neither absolute keys nor paths; messages at build time still name the path.
         const resolved = { ...found, key: shorten(found.key) }
         modules[`${from ?? ""}\0${module}`] = resolved
-        return resolved
+        return path === undefined ? resolved : { ...resolved, path }
       },
     },
   }
@@ -123,9 +123,9 @@ function recording(path: string) {
 }
 
 /** Module source that rebuilds a schema file's schemas at runtime (`const schema = …`), and the files it was built from. */
-function compiledSchema(schemaPath: string, runtime: string): { code: string; files: string[] } {
+function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[] } {
   const text = readFileSync(schemaPath, "utf8")
-  const r = recording(schemaPath)
+  const r = recording(schemaPath, packages)
   parseSchemaFile(text, r.options) // resolves (and records) every import, and reports errors now
   return {
     code: `import { compiled, decodeData } from ${JSON.stringify(runtime)};\n` +
@@ -135,15 +135,15 @@ function compiledSchema(schemaPath: string, runtime: string): { code: string; fi
 }
 
 /** Module source for a `.schema.haus` file: its schemas as named exports. */
-export function schemaModuleSource(path: string, runtime: string): { code: string; files: string[] } {
-  const { code, files } = compiledSchema(path, runtime)
-  const names = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path)).definitions.filter((d) => d.params.length === 0).map((d) => d.name)
+export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}): { code: string; files: string[] } {
+  const { code, files } = compiledSchema(path, runtime, packages)
+  const names = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, packages)).definitions.filter((d) => d.params.length === 0).map((d) => d.name)
   return { code: code + names.map((n) => `export const ${n} = schema.schemas[${JSON.stringify(n)}];\n`).join(""), files }
 }
 
 /** Module source for a data file with a schema: decoded with it when the module loads. */
-export function dataModuleSource(text: string, fileName: string, link: SchemaLink, runtime: string): { code: string; files: string[] } {
-  const { code, files } = compiledSchema(link.path, runtime)
+export function dataModuleSource(text: string, fileName: string, link: SchemaLink, runtime: string, packages: NodeResolverOptions = {}): { code: string; files: string[] } {
+  const { code, files } = compiledSchema(link.path, runtime, packages)
   return {
     code: code + `export default decodeData(${JSON.stringify(text)}, schema, ${JSON.stringify(link.type)}, ${JSON.stringify(basename(fileName))});\n`,
     files,

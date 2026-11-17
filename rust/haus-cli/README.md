@@ -49,13 +49,54 @@ and tags an open type doesn't list and for deprecated ones the data uses.
 Hints never fail a check. The schema is, in this order:
 
 1. the one given with `--schema FILE[#Type]` (type default `Root`), for every data file checked;
-2. the one named by a comment at the top of the file: `// schema: ./order.schema.haus` or `// schema: ./api.schema.haus#Order`, relative to the data file;
-3. `x.schema.haus` next to `x.haus`, type `Root`;
-4. none: syntax only. `--no-schema` always checks syntax only.
+2. `x.schema.haus` next to `x.haus`, type `Root`;
+3. none: syntax only. `--no-schema` always checks syntax only.
 
-Imports in schemas resolve as in the other bindings: `std/time`, files next to
-the schema (`import ./common (Address)`), and schema packages in
-`node_modules/@org/name` in the schema's directory or above it.
+A data file never names its own schema (spec §14): the reader decides, so a
+file can't make `haus check` read another file. Comments in it mean nothing.
+
+Imports in schemas resolve as in the other bindings (spec §13.3): `std/time`,
+files next to the schema (`import ./common (Address)`), and schema packages.
+A file imports only the packages it declares: those in the nearest
+`package.json` above it (for a package's `schema.haus`, the package's own,
+without `devDependencies`), checked before anything is looked for
+(`undeclared-package`). A declared package `@org/name` is found in
+`node_modules/@org/name` in the directory of the importing file's real path
+or above it, as Node finds packages (so pnpm and workspace links work),
+skipping directories inside `node_modules` and world-writable ones such as
+`/tmp`; the nearest one is the package. Nothing else is looked at: not
+`NODE_PATH`, not npm's global folder. Packages can also be given explicitly;
+they count as declared, and a package given by its directory is used instead
+of `node_modules` for its name:
+
+```sh
+haus check --package vendor/money order.haus             # a package's directory
+haus check --package @acme/money=vendor/money order.haus # the same, its manifest must say @acme/money
+haus check --packages schemas/ order.haus                # every subdirectory with a package.haus
+```
+
+Both options can be repeated. Their manifests name the packages, not the
+directory names. A package found in a folder doesn't replace one installed
+in `node_modules`: if the two have other files, that is `duplicate-package`.
+A package given that can't be used (a directory without `package.haus`, an
+invalid manifest, two packages with one name, a folder that doesn't exist or
+has more than 4096 entries) stops the check before anything is checked, with
+exit code 2. A subdirectory of a folder whose manifest is invalid is left
+out; an import that isn't found names it.
+
+The checks of §13.3 apply wherever a package is found: its manifest is valid
+(`package-manifest`) and has the imported name (`import-not-found`) and
+major version (`import-version`); in `node_modules`, the importing file
+declares it in the nearest `package.json` (`undeclared-package`) and the
+`version` of the package's `package.json` is the manifest's
+(`package-version`); one schema reaches one package of each name
+(`duplicate-package`, unless the copies are byte for byte the same and their
+imports reach the same packages); a package's `package.haus`, `schema.haus`
+and `package.json` are regular files, not links (`package-path`); a relative
+import spells each name as its directory lists it and reaches a
+`.schema.haus` file (`import-not-found`). A schema file and a `package.json`
+are at most 1 MiB (`file-too-large`), and a schema reaches at most 256 schema
+files (`too-many-files`).
 
 A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
@@ -92,12 +133,12 @@ Standard input (`-`) is checked as a stream, value by value: each
 diagnostic is printed as soon as its value is complete, with its line and
 column in the whole input, so `tail -f events.haus | haus check -` reports
 each bad event as it arrives (see "Streams and `tail -f`" below). Its schema
-is `--schema`, or the `// schema:` comment at the top, found once the first
-value is complete. Against a `Stream` type every value is checked (`at:
-$[3].status`) and the limit of 200 errors is per value; against any other
-type the first value is checked, and a second one is an error
-(`not-one-value`). An excerpt shows the value's last line up to its comma.
-A syntax error ends the check, since nothing after it can be trusted.
+is the one given with `--schema`, loaded once the first value is complete.
+Against a `Stream` type every value is checked (`at: $[3].status`) and the
+limit of 200 errors is per value; against any other type the first value is
+checked, and a second one is an error (`not-one-value`). An excerpt shows
+the value's last line up to its comma. A syntax error ends the check, since
+nothing after it can be trusted.
 
 #### `--json`
 

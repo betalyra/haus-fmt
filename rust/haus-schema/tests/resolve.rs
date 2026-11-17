@@ -2,15 +2,15 @@
 //! gives (spec §15) beyond the conformance suite.
 
 use haus::{Value, canonical};
-use haus_schema::{FileResolver, Options, Schema};
+use haus_schema::{Explicit, Options, Schema};
 use std::path::{Path, PathBuf};
 
 fn fixture(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(path)
 }
 
-fn resolver() -> FileResolver {
-    FileResolver::new().package("@acme/ids", fixture("acme-ids"))
+fn resolver() -> Explicit {
+    Explicit::new().package(fixture("acme-ids")).unwrap()
 }
 
 fn error(schema: &str) -> String {
@@ -49,8 +49,8 @@ fn imports_files_and_packages() {
 #[test]
 fn import_errors() {
     let load = |text: &str| {
-        let key = fixture("app.schema.haus").display().to_string();
-        let options = Options { resolver: &resolver(), key: Some(&key), ..Options::default() };
+        let path = fixture("app.schema.haus");
+        let options = Options { packages: &resolver(), path: Some(&path), ..Options::default() };
         Schema::parse_with(text, &options).expect_err("an error").to_string()
     };
     assert_eq!(
@@ -64,7 +64,10 @@ fn import_errors() {
     assert_eq!(load("import ./common (Address)\nimport ./common (Address)"), "2:18: Address is imported twice");
     assert_eq!(load("import ./common (Address)\ntype Address = Int"), "2:6: type Address is already imported");
     assert!(load("import ./missing (A)").starts_with("1:1: can't import ./missing: file not found: "));
-    assert!(load("import @acme/other (A)").starts_with("1:1: can't import @acme/other: package not found"));
+    assert_eq!(
+        load("import @acme/other (A)"),
+        "1:1: can't import @acme/other: package @acme/other is not among the packages given"
+    );
     assert_eq!(
         Schema::load(fixture("cycle-a.schema.haus"), &resolver()).unwrap_err().reason(),
         "./cycle-b (1:1): import cycle: ./cycle-a imports this file again"
@@ -76,7 +79,7 @@ fn import_errors() {
     );
     assert_eq!(
         error("import @acme/ids (UserId)"),
-        "1:1: can't import @acme/ids: no module resolver (only std modules can be imported here)"
+        "1:1: can't import @acme/ids: no package locator (only std modules and files can be imported here)"
     );
     assert_eq!(
         error("import std/money (Money)"),
@@ -90,7 +93,7 @@ fn import_errors() {
 
 #[test]
 fn spreads_of_imported_types() {
-    let parse = |text: &str| Schema::parse_with(text, &Options { resolver: &resolver(), ..Options::default() });
+    let parse = |text: &str| Schema::parse_with(text, &Options { packages: &resolver(), ..Options::default() });
     let schema = parse(
         "import @acme/ids (IdEvent, Base)
          type Event = closed < ...IdEvent | Ping >
@@ -226,4 +229,70 @@ fn warnings_of_the_schema() {
         ["1:1: unknown attribute @since: this version of haus ignores it", "3:15: B is deprecated: use C"]
     );
     assert_eq!(schema.definition("B").unwrap().deprecated.as_ref().unwrap().note("B"), "B is deprecated: use C");
+}
+
+#[test]
+fn package_names_and_manifests() {
+    use haus::ErrorCode;
+    use haus_schema::Manifest;
+    // Imports name packages in lowercase (spec §13.3, grammar.ebnf).
+    for module in
+        ["@Acme/x", "@acme/X", "@acme", "@acme/x/y", "@-acme/x", "@acme/.x", "@acme/x~y", "@acme/node_modules"]
+    {
+        let e = Schema::parse(&format!("import {module} (A)\ntype R = A")).expect_err(module);
+        assert_eq!(e.code(), ErrorCode::UnknownModule, "{module}: {e}");
+    }
+    for module in ["@acme/x.y.z_1-2", "@0/9@1", "@acme/node_modules2"] {
+        let e = Schema::parse(&format!("import {module} (A)\ntype R = A")).expect_err(module);
+        assert_eq!(e.code(), ErrorCode::ImportUnavailable, "{module}: {e}");
+    }
+    let manifest = |name: &str, version: &str| Manifest::parse(&format!("{{ name: {name:?}, version: {version:?} }}"));
+    for version in ["0.0.0", "1.2.3", "1.0.0-rc.1", "1.0.0-0.x-y", "1.0.0+build.05", "10.20.30-alpha+001"] {
+        assert!(manifest("@a/b", version).is_ok(), "{version}");
+    }
+    for version in ["1", "1.0", "v1.0.0", "01.0.0", "1.0.0-", "1.0.0-01", "1.0.0+", "1.0.0-a..b", " 1.0.0"] {
+        assert!(manifest("@a/b", version).unwrap_err().contains("is not a semantic version"), "{version}");
+    }
+    let long = format!("@{}/{}", "a".repeat(100), "b".repeat(112));
+    assert!(manifest(&long, "1.0.0").is_ok(), "{} characters", long.len());
+    for name in ["@a/B", "a/b", "@a", "@a/b/c", "@./b", "@a/~b", "@a/b~c", "@node_modules/b", &format!("{long}c")] {
+        assert!(manifest(name, "1.0.0").unwrap_err().contains("is not a package name"), "{name}");
+    }
+    assert!(Manifest::parse("{ name: \"@a/b\" }").unwrap_err().contains("needs a string field version"));
+    assert!(Manifest::parse("{ name: \"@a/b\", version: \"1.0.0\" }, {}").unwrap_err().contains("one record"));
+    let big = format!("{{ name: \"@a/b\", version: \"1.0.0\", x: \"{}\" }}", "x".repeat(64 * 1024));
+    assert!(Manifest::parse(&big).unwrap_err().contains("more than 64 KiB"));
+}
+
+#[test]
+fn files_outside_packages_have_ids_from_their_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("shop/billing/common.schema.haus", "type Iban = String");
+    write("shop/shipping/common.schema.haus", "type Address = { street: String }");
+    write("shared/money.schema.haus", "type Money = Decimal");
+    write(
+        "shop/app.schema.haus",
+        "import ./billing/common (Iban)\nimport ./shipping/common (Address)\nimport ../shared/money (Money)\ntype Root = { iban: Iban, to: Address, total: Money }",
+    );
+    let path = dir.path().join("shop/app.schema.haus");
+    let ids = |options: &Options| {
+        let schema = Schema::load_with(&path, options).unwrap_or_else(|e| panic!("{e}"));
+        let mut ids: Vec<String> = schema.definitions().iter().chain(schema.imported()).map(|d| d.id.clone()).collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(
+        ids(&Options::default()),
+        ["../shared/money#Money", "app#Root", "billing/common#Iban", "shipping/common#Address"]
+    );
+    let project = dir.path().join("shop");
+    assert_eq!(
+        ids(&Options { project: Some(("shop", &project)), ..Options::default() }),
+        ["shop/../shared/money#Money", "shop/app#Root", "shop/billing/common#Iban", "shop/shipping/common#Address"]
+    );
 }

@@ -40,11 +40,25 @@
 //! (`from_json_pair(j, from_json_a, nullable_a)`). The schema packages a
 //! module imports must be generated with JSON too.
 
-use crate::codegen::{STD_TIME, unknown_type};
-use crate::packages::{Manifest, Package, Packages};
+//!
+//! A schema's imports are loaded and checked by haus-fmt-schema (spec
+//! §13.3). Schema packages are given explicitly ([`RocConfig::package`],
+//! `haus-gen roc --package DIR=ALIAS`): each is a Roc package of its own
+//! (generated with `haus-gen roc-package`), imported under its alias. The
+//! application's files a schema imports (`import ./common (Address)`) each
+//! get a module of their own, named after the root module and their path
+//! from its directory: `OrderCommon`, `OrderBillingCommon` for
+//! `billing/common.schema.haus`, `OrderUpSharedMoney` for
+//! `../shared/money.schema.haus`; their ids are their paths from there
+//! (`billing/common#Address`).
+
+use crate::codegen::unknown_type;
+use crate::graph::{self, Origin, Unit};
 use crate::schema::{self, Attribute, Case, Field, Ty, TypeDef, deprecation, error};
-use crate::{Error, Result, read};
+use crate::{Error, Result};
 use haus::ErrorCode as Code;
+use haus_schema::packages::MANIFEST;
+use haus_schema::{Explicit, InstanceId, Manifest, Options as LoadOptions, Packages, Schema, Type};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
@@ -57,6 +71,8 @@ pub struct RocConfig {
     codecs: Vec<(String, String)>,
     /// Schema packages: their directory, and the alias the app gives their Roc package.
     packages: Vec<(PathBuf, String)>,
+    /// Folders of schema packages.
+    folders: Vec<PathBuf>,
     without_attributes: bool,
     json: bool,
 }
@@ -78,6 +94,15 @@ impl RocConfig {
         self
     }
 
+    /// The schema packages in `folder`: its subdirectories with a
+    /// `package.haus`. Each is imported in Roc under the last part of its
+    /// name, in snake case (`money` for `@haus-fmt/money`), unless
+    /// [`RocConfig::package`] gives it another alias.
+    pub fn folder(mut self, folder: impl Into<PathBuf>) -> RocConfig {
+        self.folders.push(folder.into());
+        self
+    }
+
     /// Leave the schema's attributes out, as if they weren't written: the
     /// module decodes and encodes the same (spec §15). For tests of that.
     #[doc(hidden)]
@@ -94,14 +119,37 @@ impl RocConfig {
         self
     }
 
-    /// The module for an application's schema file, named `module`, with id `id`.
+    /// The modules for an application's schema file, with id `id`: its own,
+    /// named `module`, then one for each file it imports, directly or not
+    /// (`OrderCommon`), as (name, code).
+    pub fn modules(&self, schema: &Path, module: &str, id: &str) -> Result<Vec<(String, String)>> {
+        let packages = self.packages.iter().map(|(dir, alias)| (dir.as_path(), alias.as_str()));
+        let given = Given::new(packages, &self.folders)?;
+        let options = LoadOptions {
+            packages: &given.explicit,
+            id: Some(id),
+            without_attributes: self.without_attributes,
+            ..LoadOptions::default()
+        };
+        let loaded = Schema::load_with(schema, &options)?;
+        let units = graph::units(&loaded, None, self.without_attributes)?;
+        generate_units(&loaded, &units, module, &given, &self.codecs, self.json)
+    }
+
+    /// The module for an application's schema file, named `module`, with id
+    /// `id`. A schema that imports other files of the application needs
+    /// their modules too: [`RocConfig::modules`].
     pub fn generate(&self, schema: &Path, module: &str, id: &str) -> Result<String> {
-        let packages = self.packages.iter().try_fold(Packages::none(), |all, (dir, alias)| all.with(dir, alias))?;
-        let text = read(schema)?;
-        let file = schema::parse(&text).map_err(|e| Error::from(e).in_file(schema))?;
-        let file = if self.without_attributes { schema::without_attributes(file) } else { file };
-        generate_file(&file, &text, module, &Options { id, codecs: &self.codecs, packages: &packages, json: self.json })
-            .map_err(|e| e.in_file(schema))
+        let mut modules = self.modules(schema, module, id)?;
+        match modules.len() {
+            1 => Ok(modules.remove(0).1),
+            _ => Err(Error::at(
+                schema,
+                Code::ImportUnavailable,
+                "the schema imports other files, which get modules of their own: generate them all \
+                 (haus-gen roc with --out writes them next to it)",
+            )),
+        }
     }
 
     /// The module of the schema package in `dir`: its name and ids come from the manifest.
@@ -109,9 +157,6 @@ impl RocConfig {
         let manifest = Manifest::read(dir)?;
         let module = package_module(&manifest.name);
         let schema = manifest.schema_path(dir)?;
-        let text = read(&schema)?;
-        let file = schema::parse(&text).map_err(|e| Error::from(e).in_file(&schema))?;
-        crate::packages::imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&schema))?;
         let code = self.generate(&schema, &module, &manifest.id())?;
         Ok((module, code))
     }
@@ -123,13 +168,50 @@ impl RocConfig {
     }
 }
 
+/// The packages given: where they are, and the alias of each one's Roc package, by name.
+#[derive(Default)]
+struct Given {
+    explicit: Explicit,
+    aliases: HashMap<String, String>,
+}
+
+impl Given {
+    fn new<'a>(packages: impl IntoIterator<Item = (&'a Path, &'a str)>, folders: &[PathBuf]) -> Result<Given> {
+        let given = packages.into_iter().try_fold(Given::default(), |g, (dir, alias)| {
+            let mut aliases = g.aliases;
+            aliases.entry(Manifest::read(dir)?.name).or_insert_with(|| alias.to_owned());
+            Ok::<_, Error>(Given { explicit: g.explicit.package(dir)?, aliases })
+        })?;
+        folders.iter().try_fold(given, |g, folder| {
+            let explicit = g.explicit.folder(folder)?;
+            let mut aliases = g.aliases;
+            let entries = fs::read_dir(folder).map_err(|e| Error::at(folder, Code::ImportNotFound, e))?;
+            // A subdirectory whose manifest is invalid is left out, as the explicit packages leave it out.
+            let dirs =
+                entries.filter_map(|e| Some(e.ok()?.path())).filter(|d| d.join(MANIFEST).symlink_metadata().is_ok());
+            for name in dirs.filter_map(|dir| Manifest::read(&dir).ok()).map(|m| m.name) {
+                let alias = name.rsplit('/').next().map(snake).unwrap_or_default();
+                aliases.entry(name).or_insert(alias);
+            }
+            Ok(Given { explicit, aliases })
+        })
+    }
+
+    /// `money.HausFmtMoney`: the Roc module with a package's types.
+    fn module(&self, package: &str) -> String {
+        let alias = self.aliases.get(package).map_or("", String::as_str);
+        format!("{alias}.{}", package_module(package))
+    }
+}
+
 /// `@haus-fmt/money` → `HausFmtMoney`: the organisation too, so the module's name
 /// never clashes with a type in it (`HausFmtMoney.Money`).
 fn package_module(name: &str) -> String {
     pascal(name)
 }
 
-/// The Roc module for a schema.
+/// The Roc module for a schema given as text (it imports std modules and
+/// `packages`, each package's crate name being its Roc alias, not files).
 pub fn generate(
     text: &str,
     module: &str,
@@ -137,7 +219,7 @@ pub fn generate(
     codecs: &[(String, String)],
     packages: &Packages,
 ) -> Result<String> {
-    generate_file(&schema::parse(text)?, text, module, &Options { id, codecs, packages, json: false })
+    generate_text(text, module, id, codecs, packages, false)
 }
 
 /// [`generate`], with `from_json_<name>` and `to_json_<name>` for each type (see [`RocConfig::json`]).
@@ -148,60 +230,132 @@ pub fn generate_with_json(
     codecs: &[(String, String)],
     packages: &Packages,
 ) -> Result<String> {
-    generate_file(&schema::parse(text)?, text, module, &Options { id, codecs, packages, json: true })
+    generate_text(text, module, id, codecs, packages, true)
 }
 
-/// What a module is generated with.
-struct Options<'a> {
+fn generate_text(
+    text: &str,
+    module: &str,
+    id: &str,
+    codecs: &[(String, String)],
+    packages: &Packages,
+    json: bool,
+) -> Result<String> {
+    let given = Given::new(packages.iter().map(|p| (p.dir.as_path(), p.krate.as_str())), &[])?;
+    let options = LoadOptions { packages: &given.explicit, id: Some(id), ..LoadOptions::default() };
+    let loaded = Schema::parse_with(text, &options)?;
+    let units = graph::units(&loaded, Some(text), false)?;
+    let mut modules = generate_units(&loaded, &units, module, &given, codecs, json)?;
+    Ok(modules.remove(0).1)
+}
+
+/// The modules of a schema's files: the root's, named `module`, then one for each file it imports.
+fn generate_units(
+    schema: &Schema,
+    units: &[Unit],
+    module: &str,
+    given: &Given,
+    codecs: &[(String, String)],
+    json: bool,
+) -> Result<Vec<(String, String)>> {
+    let in_root = |e: Error| match units[0].path.as_deref() {
+        Some(path) if e.path().is_none() => e.in_file(path),
+        _ => e,
+    };
+    let owner = |package: &str| format!("the Roc module {}", given.module(package));
+    graph::check_codecs(schema, units, codecs.iter().map(|(id, _)| id.as_str()), owner, "other packages' modules")
+        .map_err(in_root)?;
+    let names: Vec<String> = std::iter::once(module.to_owned())
+        .chain(graph::module_names(&units[1..], &[module], "", |segments| {
+            format!("{module}{}", segments.iter().map(|s| pascal(s)).collect::<String>())
+        }))
+        .collect();
+    // The Roc modules each unit imports: packages' and other files' (codecs' come later).
+    let roc_imports: Vec<Vec<String>> = units
+        .iter()
+        .map(|unit| {
+            // In the order of the schema's imports.
+            let origins = unit.file.imports.iter().filter_map(|imp| unit.imports.get(&imp.names.first()?.0));
+            origins.fold(vec![], |mut imports: Vec<String>, origin| {
+                let module = match origin {
+                    Origin::Time => return imports,
+                    Origin::Package { package, .. } => given.module(package),
+                    Origin::File { unit, .. } => names[*unit].clone(),
+                };
+                if !imports.contains(&module) {
+                    imports.push(module);
+                }
+                imports
+            })
+        })
+        .collect();
+    let roc_names: Vec<HashMap<String, String>> =
+        units.iter().enumerate().map(|(u, unit)| roc_names(&unit.file, &names[u], &roc_imports[u], json)).collect();
+    units
+        .iter()
+        .enumerate()
+        .map(|(u, unit)| {
+            let imports = unit
+                .imports
+                .iter()
+                .map(|(name, origin)| {
+                    let source = match origin {
+                        Origin::Time => Source::Time,
+                        Origin::Package { package, id, template, .. } => Source::Module {
+                            module: package_module(package),
+                            roc: name.clone(),
+                            id: id.clone(),
+                            template: *template,
+                        },
+                        Origin::File { unit: to, id, template, .. } => Source::Module {
+                            module: names[*to].clone(),
+                            roc: roc_names[*to].get(name).cloned().unwrap_or_else(|| name.clone()),
+                            id: id.clone(),
+                            template: *template,
+                        },
+                    };
+                    (name.clone(), source)
+                })
+                .collect();
+            let input = Input {
+                schema,
+                text: &unit.text,
+                id: &unit.id,
+                module: &names[u],
+                imports,
+                roc_imports: &roc_imports[u],
+                roc_names: roc_names[u].clone(),
+                codecs,
+                json,
+            };
+            let code = generate_file(&unit.file, input).map_err(|e| match &unit.path {
+                Some(path) if e.path().is_none() => e.in_file(path),
+                _ => e,
+            })?;
+            Ok((names[u].clone(), code))
+        })
+        .collect()
+}
+
+/// What a module is generated from.
+struct Input<'a> {
+    schema: &'a Schema,
+    text: &'a str,
     id: &'a str,
+    module: &'a str,
+    /// Where each imported type comes from.
+    imports: HashMap<String, Source>,
+    /// The Roc modules of packages and other files it imports.
+    roc_imports: &'a [String],
+    /// Each type's name in Roc.
+    roc_names: HashMap<String, String>,
     codecs: &'a [(String, String)],
-    packages: &'a Packages,
     json: bool,
 }
 
-fn generate_file(file: &schema::File, text: &str, module: &str, options: &Options) -> Result<String> {
-    let Options { id, codecs, packages, json } = *options;
-    let mut imports = HashMap::new();
-    // The Roc modules of schema packages and codecs; those of haus come first.
-    let mut roc_imports = vec![];
-    for imp in &file.imports {
-        let fail = |code: Code, reason: String| Error::from(error(text, imp.pos, code, reason));
-        if imp.module == "std/time" {
-            for (n, _) in &imp.names {
-                if !STD_TIME.contains(&n.as_str()) {
-                    return Err(fail(Code::UnknownImport, format!("std/time has no type {n}")));
-                }
-                imports.insert(n.clone(), Source::Time);
-            }
-            continue;
-        }
-        let name = imp.module.rsplit_once('@').filter(|(n, _)| !n.is_empty()).map_or(imp.module.as_str(), |(n, _)| n);
-        let pkg: &Package = packages.find(name).map_err(|e| fail(e.code(), e.reason().to_owned()))?;
-        let m = package_module(&pkg.manifest.name);
-        roc_imports.push(format!("{}.{m}", pkg.krate));
-        for (n, _) in &imp.names {
-            if !pkg.types.contains_key(n) {
-                return Err(fail(Code::UnknownImport, format!("{name} has no type {n}")));
-            }
-            imports.insert(n.clone(), Source::Package { module: m.clone(), id: format!("{}#{n}", pkg.manifest.id()) });
-        }
-    }
-    let ids: HashSet<String> = file
-        .types
-        .iter()
-        .map(|d| format!("{id}#{}", d.name))
-        .chain(imports.iter().map(|(n, source)| match source {
-            Source::Package { id, .. } => id.clone(),
-            Source::Time => format!("std/time#{n}"),
-        }))
-        .collect();
-    if let Some((cid, _)) = codecs.iter().find(|(cid, _)| !ids.contains(cid)) {
-        return Err(Error::new(Code::UnknownType, format!("a codec for {cid}, but the schema has no such type")));
-    }
-    roc_imports.extend(codecs.iter().map(|(_, m)| m.clone()));
-    roc_imports.dedup();
-
-    // Names taken in Roc: builtin types, imported modules and the module itself.
+/// Each type's name in Roc: a type named like a Roc builtin, a haus module,
+/// an imported module or the module itself gets a `_` (`List_`).
+fn roc_names(file: &schema::File, module: &str, roc_imports: &[String], json: bool) -> HashMap<String, String> {
     let taken: HashSet<&str> = BUILTIN_TYPES
         .iter()
         .chain(HAUS_MODULES)
@@ -211,8 +365,7 @@ fn generate_file(file: &schema::File, text: &str, module: &str, options: &Option
         .chain(roc_imports.iter().map(|i| i.rsplit('.').next().unwrap_or(i)))
         .collect();
     let schema_names: HashSet<&str> = file.types.iter().map(|d| d.name.as_str()).collect();
-    let roc_names = file
-        .types
+    file.types
         .iter()
         .map(|d| {
             let mut name = d.name.clone();
@@ -221,17 +374,35 @@ fn generate_file(file: &schema::File, text: &str, module: &str, options: &Option
             }
             (d.name.clone(), name)
         })
+        .collect()
+}
+
+fn generate_file(file: &schema::File, input: Input) -> Result<String> {
+    let Input { schema, text, id, module, imports, roc_imports, roc_names, codecs, json } = input;
+    // The ids of the types this module has: its own, and those it imports.
+    let ids: HashSet<String> = file
+        .types
+        .iter()
+        .map(|d| format!("{id}#{}", d.name))
+        .chain(imports.iter().map(|(n, source)| match source {
+            Source::Module { id, .. } => id.clone(),
+            Source::Time => format!("std/time#{n}"),
+        }))
         .collect();
+    // The codecs of its types.
+    let codecs: Vec<&(String, String)> = codecs.iter().filter(|(cid, _)| ids.contains(cid)).collect();
+
     let defs: HashMap<&str, &TypeDef> = file.types.iter().map(|d| (d.name.as_str(), d)).collect();
     let recursive = file.types.iter().filter(|d| refers_to_itself(d, &defs)).map(|d| d.name.clone()).collect();
     let tagged_maybes = crate::codegen::tagged_maybes(&defs);
 
     let mut g = Gen {
+        schema,
         text,
         id,
         defs,
         imports,
-        codecs: codecs.iter().cloned().collect(),
+        codecs: codecs.iter().map(|(i, m)| (i.clone(), m.clone())).collect(),
         fresh: 0,
         fresh_json: 0,
         helpers: Vec::new(),
@@ -253,6 +424,14 @@ fn generate_file(file: &schema::File, text: &str, module: &str, options: &Option
         .chain(g.uses_int.then_some("Int"))
         .chain(g.uses_secret.then_some("Secret"))
         .map(|m| format!("haus.{m}"));
+    // The modules of the codecs it uses.
+    let used = |m: &str| items.iter().chain(&g.helpers).any(|i| i.contains(&format!("{m}.")));
+    let mut roc_imports = roc_imports.to_vec();
+    for (_, m) in codecs.iter().filter(|(_, m)| used(m)) {
+        if !roc_imports.contains(m) {
+            roc_imports.push(m.clone());
+        }
+    }
     let mut out = format!("## Generated by haus-gen from {id}. Don't edit.\n");
     for i in haus.chain(roc_imports) {
         let _ = writeln!(out, "import {i}");
@@ -274,7 +453,14 @@ const JSON_MODULES: &[&str] = &["JsonValue", "FromJson", "ToJson"];
 /// Where an imported type comes from.
 enum Source {
     Time,
-    Package { module: String, id: String },
+    /// Another module: a package's (`HausFmtMoney`) or another file's
+    /// (`OrderCommon`), with the type's name there, its id, and its template.
+    Module {
+        module: String,
+        roc: String,
+        id: String,
+        template: InstanceId,
+    },
 }
 
 /// Decoding or encoding `x`: a function's name, or an expression with `{x}`.
@@ -342,6 +528,7 @@ impl Nullable {
 }
 
 struct Gen<'a> {
+    schema: &'a Schema,
     text: &'a str,
     id: &'a str,
     defs: HashMap<&'a str, &'a TypeDef>,
@@ -398,6 +585,23 @@ impl Gen<'_> {
                 ("Maybe", [inner]) if !self.tagged_maybes.contains(pos) => self.nullable_of(inner, env, seen).not(),
                 ("Secret", [inner]) => self.nullable_of(inner, env, seen),
                 (name, args) => match self.defs.get(name) {
+                    None => match self.imports.get(name) {
+                        // A type of another module: from its resolved type.
+                        Some(Source::Module { template, .. }) => {
+                            let instance = self.schema.instance(*template);
+                            let inner = instance
+                                .args
+                                .iter()
+                                .zip(args)
+                                .filter_map(|(p, a)| match p {
+                                    Type::Param(p) => Some((p.clone(), self.nullable_of(a, env, seen))),
+                                    _ => None,
+                                })
+                                .collect();
+                            nullable_resolved(self.schema, &instance.body, &inner, &mut HashSet::new())
+                        }
+                        _ => Nullable::Never,
+                    },
                     Some(def) if seen.insert(name.to_owned()) => {
                         let inner = def
                             .params
@@ -569,23 +773,33 @@ impl Gen<'_> {
 
     fn named(&mut self, name: &str, args: &[Ty], pos: usize, hint: &str) -> Result<R> {
         let arity = |n: usize| (args.len() != n).then(|| format!("{name} takes {n} argument(s), found {}", args.len()));
-        let (id, base) = if let Some(def) = self.defs.get(name) {
+        // A type of this module, or of another one: its id, the module's prefix
+        // (`OrderCommon.`), its Roc type, and its number of parameters.
+        let named = match (self.defs.get(name), self.imports.get(name)) {
+            (Some(def), _) => {
+                Some((format!("{}#{name}", self.id), String::new(), self.roc_names[name].clone(), def.params.len()))
+            }
+            (None, Some(Source::Module { module, roc, id, template })) => {
+                let params = self.schema.instance(*template).args.len();
+                Some((id.clone(), format!("{module}."), format!("{module}.{roc}"), params))
+            }
+            _ => None,
+        };
+        let (id, base) = if let Some((id, prefix, roc, params)) = named {
             let s = snake(name);
-            let roc = self.roc_names[name].clone();
-            let id = format!("{}#{name}", self.id);
-            if def.params.is_empty() {
+            if params == 0 {
                 // Its reader without the depth check (see `functions`).
                 let r = R::named(
                     &roc,
-                    &format!("decode_{s}"),
-                    &format!("encode_{s}"),
-                    &format!("read_json_{s}"),
-                    &format!("to_json_{s}"),
+                    &format!("{prefix}decode_{s}"),
+                    &format!("{prefix}encode_{s}"),
+                    &format!("{prefix}read_json_{s}"),
+                    &format!("{prefix}to_json_{s}"),
                 );
                 (id, r)
             } else {
                 // A generic type, applied: `Pair Int` is `Pair(Int)`, decoded with `decode_pair(v, Decode.int)`.
-                if let Some(reason) = arity(def.params.len()) {
+                if let Some(reason) = arity(params) {
                     return self.fail(pos, Code::WrongArity, reason);
                 }
                 if self.codecs.contains_key(&id) {
@@ -614,38 +828,23 @@ impl Gen<'_> {
                     .unzip();
                 return Ok(R::new(
                     &ty,
-                    F::Template(format!("decode_{s}({{x}}, {})", de.join(", "))),
-                    F::Template(format!("encode_{s}({{x}}, {})", en.join(", "))),
-                    F::Template(format!("from_json_{s}({{x}}, {})", from.join(", "))),
-                    F::Template(format!("to_json_{s}({{x}}, {})", to.join(", "))),
+                    F::Template(format!("{prefix}decode_{s}({{x}}, {})", de.join(", "))),
+                    F::Template(format!("{prefix}encode_{s}({{x}}, {})", en.join(", "))),
+                    F::Template(format!("{prefix}from_json_{s}({{x}}, {})", from.join(", "))),
+                    F::Template(format!("{prefix}to_json_{s}({{x}}, {})", to.join(", "))),
                 ));
             }
-        } else if let Some(source) = self.imports.get(name) {
-            match source {
-                Source::Time => (
-                    format!("std/time#{name}"),
-                    R::named(
-                        "Str",
-                        &format!("Decode.time(\"{name}\")"),
-                        &format!("Encode.time(\"{name}\")"),
-                        &format!("FromJson.time(\"{name}\")"),
-                        "ToJson.time",
-                    ),
+        } else if let Some(Source::Time) = self.imports.get(name) {
+            (
+                format!("std/time#{name}"),
+                R::named(
+                    "Str",
+                    &format!("Decode.time(\"{name}\")"),
+                    &format!("Encode.time(\"{name}\")"),
+                    &format!("FromJson.time(\"{name}\")"),
+                    "ToJson.time",
                 ),
-                Source::Package { module, id } => {
-                    let s = snake(name);
-                    (
-                        id.clone(),
-                        R::named(
-                            &format!("{module}.{name}"),
-                            &format!("{module}.decode_{s}"),
-                            &format!("{module}.encode_{s}"),
-                            &format!("{module}.read_json_{s}"),
-                            &format!("{module}.to_json_{s}"),
-                        ),
-                    )
-                }
-            }
+            )
         } else {
             return self.prelude(name, args, pos, hint);
         };
@@ -1296,6 +1495,41 @@ const BUILTIN_TYPES: &[&str] = &[
     "Utf8Problem",
     "Num",
 ];
+
+/// Whether the JSON of a resolved type (of another module) can be `null`,
+/// with its parameters' in `env`: as [`Gen::nullable_of`] decides for the
+/// module that has the type, from its schema. A `Maybe` that reaches
+/// itself through `Maybe`, `Secret` and names uses the tagged form.
+fn nullable_resolved(
+    schema: &Schema,
+    ty: &Type,
+    env: &HashMap<String, Nullable>,
+    seen: &mut HashSet<InstanceId>,
+) -> Nullable {
+    match ty {
+        Type::Param(p) => env.get(p).cloned().unwrap_or(Nullable::Never),
+        Type::Secret(inner) => nullable_resolved(schema, inner, env, seen),
+        Type::Maybe(inner) if !reaches(schema, inner, ty, &mut HashSet::new()) => {
+            nullable_resolved(schema, inner, env, seen).not()
+        }
+        Type::Ref(id) if seen.insert(*id) => {
+            let n = nullable_resolved(schema, &schema.instance(*id).body, env, seen);
+            seen.remove(id);
+            n
+        }
+        _ => Nullable::Never,
+    }
+}
+
+/// Whether `ty` reaches the `Maybe` `target` through `Maybe`, `Secret` and names.
+fn reaches(schema: &Schema, ty: &Type, target: &Type, seen: &mut HashSet<InstanceId>) -> bool {
+    match ty {
+        Type::Maybe(inner) => std::ptr::eq(ty, target) || reaches(schema, inner, target, seen),
+        Type::Secret(inner) => reaches(schema, inner, target, seen),
+        Type::Ref(id) => seen.insert(*id) && reaches(schema, &schema.instance(*id).body, target, seen),
+        _ => false,
+    }
+}
 
 /// `< >`: any tag.
 fn any_tag() -> R {

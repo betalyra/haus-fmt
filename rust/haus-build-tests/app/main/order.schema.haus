@@ -1,0 +1,14 @@
+// An application's schema split into files (spec §13.3): relative imports,
+// `../`, and two files called common.schema.haus in different folders.
+import ../billing/common (Address)
+import ../shipping/common (Parcel)
+import ../shared/money (Money, Page)
+
+type Order = {
+  bill: Address,
+  ship: Parcel,
+  total: Money,
+  lines: Page Line,
+}
+
+type Line = { item: String, price: Money }

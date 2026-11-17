@@ -52,13 +52,31 @@ and tags an open type doesn't list and for deprecated ones the data uses.
 Hints never fail a check. The schema is, in this order:
 
 1. the one given with `--schema FILE[#Type]` (type default `Root`), for every data file checked;
-2. the one named by a comment at the top of the file: `// schema: ./order.schema.haus` or `// schema: ./api.schema.haus#Order`, relative to the data file;
-3. `x.schema.haus` next to `x.haus`, type `Root`;
-4. none: syntax only. `--no-schema` always checks syntax only.
+2. `x.schema.haus` next to `x.haus`, type `Root`;
+3. none: syntax only. `--no-schema` always checks syntax only.
+
+A data file never names its own schema (spec §14): the reader decides, so a
+file can't make `haus check` read another file. Comments in it mean nothing.
 
 Imports in schemas resolve as in the other bindings: `std/time`, files next to
-the schema (`import ./common (Address)`), and schema packages in
-`node_modules/@org/name` in the schema's directory or above it.
+the schema (`import ./common (Address)`), and schema packages. A package
+`@org/name` is found in `node_modules/@org/name` in the directory of the
+importing file's real path or above it, as Node finds packages, so pnpm and
+workspace links work. It is never taken from `NODE_PATH` or npm's global
+folder. In a Cargo or Python project, or for packages anywhere else, give
+them explicitly:
+
+```sh
+haus check --package vendor/money order.haus              # a package's directory
+haus check --package @acme/money=vendor/money order.haus  # the same; its manifest must say @acme/money
+haus check --packages schemas/ order.haus                 # every subdirectory with a package.haus
+```
+
+Both options can be repeated. A package given with `--package` is used
+instead of `node_modules` for its name. One found with `--packages` is not:
+if `node_modules` holds a different copy, that's `duplicate-package`. A package given that can't be used (no
+`package.haus`, an invalid manifest, two packages with one name) stops the
+check with exit code 2.
 
 A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
@@ -95,12 +113,12 @@ Standard input (`-`) is checked as a stream, value by value: each
 diagnostic is printed as soon as its value is complete, with its line and
 column in the whole input, so `tail -f events.haus | haus check -` reports
 each bad event as it arrives (see "Streams and `tail -f`" below). Its schema
-is `--schema`, or the `// schema:` comment at the top, found once the first
-value is complete. Against a `Stream` type every value is checked (`at:
-$[3].status`) and the limit of 200 errors is per value; against any other
-type the first value is checked, and a second one is an error
-(`not-one-value`). An excerpt shows the value's last line up to its comma.
-A syntax error ends the check, since nothing after it can be trusted.
+is the one given with `--schema`, loaded once the first value is complete.
+Against a `Stream` type every value is checked (`at: $[3].status`) and the
+limit of 200 errors is per value; against any other type the first value is
+checked, and a second one is an error (`not-one-value`). An excerpt shows
+the value's last line up to its comma. A syntax error ends the check, since
+nothing after it can be trusted.
 
 #### `--json`
 

@@ -1,2 +1,0 @@
-// schema: ./shapes.schema.haus#Shape
-Circle { r: 1.5 }

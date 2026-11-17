@@ -74,6 +74,25 @@ const { schemas } = compileSchemaFile(text, schemaOptions("order.schema.haus"))
 const order = h.parse(schemas.Order!, data)
 ```
 
+`schemaOptions` finds packages in `node_modules` as Node does, from the real
+path of the importing file, after checking that the file declares the package
+in its `package.json` (spec §13.3); never in `NODE_PATH`, global folders or
+directories everyone may write to. Packages can also be given explicitly:
+package directories, or folders whose subdirectories are packages (relative to
+the schema file's directory). A package directory is used instead of the
+installed one; a package from a folder must have the same files as the
+installed one, if any. With `npm: false`, only the given packages exist:
+
+```ts
+schemaOptions("order.schema.haus", { packages: ["../vendor/money"], folders: ["../schemas"] })
+schemaOptions("order.schema.haus", { folders: ["../schemas"], npm: false })
+```
+
+A package's `package.haus`, `schema.haus` and `package.json` must be regular
+files, not links. Schema files and `package.json` are read up to 1 MiB
+(`file-too-large`), and one schema reads at most 256 schema files
+(`too-many-files`).
+
 | schema file | `h.` schema | TypeScript |
 |---|---|---|
 | `String`, `Bytes`, `Bool` | `h.String`, `h.Bytes`, `h.Bool` | `string`, `Uint8Array`, `boolean` |

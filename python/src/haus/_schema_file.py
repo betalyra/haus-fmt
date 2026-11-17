@@ -339,13 +339,48 @@ class ModuleResolver(Protocol):
 class ModuleError(Exception):
     """An error a resolver raises for a code other than `import-not-found`.
 
-    `package-path`: a file outside its package (spec §13.3). The message never
-    quotes a file the resolver refused to read.
+    `package-path`: a file outside its package; `package-manifest`: a broken
+    manifest; `duplicate-package`: two packages with one name (spec §13.3).
+    The message never quotes a file the resolver refused to read.
     """
 
     def __init__(self, code: ErrorCode, message: str) -> None:
         super().__init__(message)
         self.code: ErrorCode = code
+
+
+_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
+"""Control and bidirectional characters, which a terminal or a log would act on (spec §9.2)."""
+MAX_QUOTED = 40
+"""Text quoted from a file is at most 40 characters long in a message (spec §9.2)."""
+
+
+def escape(text: str) -> str:
+    r"""`text` with control and bidirectional characters escaped as `\u{…}`, for a message (spec §9.2).
+
+    >>> escape("a\x1b[31mb\u202e")
+    'a\\u{1b}[31mb\\u{202e}'
+    """
+    return _UNSAFE.sub(lambda m: f"\\u{{{ord(m[0]):x}}}", text)
+
+
+def quote(text: str) -> str:
+    """Text from a file (a token, a name, a version) as a message quotes it: escaped, at most 40 characters.
+
+    >>> quote("x" * 50)
+    'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…'
+    """
+    escaped = escape(text)
+    if len(escaped) <= MAX_QUOTED:
+        return escaped
+    out: list[str] = []
+    size = 0
+    for piece in map(escape, text):  # cut between characters, never inside an escape
+        if size + len(piece) > MAX_QUOTED - 1:
+            break
+        out.append(piece)
+        size += len(piece)
+    return "".join(out) + "…"
 
 
 # ── lexer ────────────────────────────────────────────────────
@@ -378,7 +413,7 @@ class _Token:
 
 _PUNCT = ("...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/")
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_MODULE = re.compile(r"(@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?/[A-Za-z0-9_./-]*")
+_MODULE = re.compile(r"(@[A-Za-z0-9_.~-]+/[A-Za-z0-9_.~-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?/[A-Za-z0-9_./-]*")
 _MAJOR_VERSION = re.compile(r"0|[1-9][0-9]*")
 """The version an import may name: a major version, without leading zeros (spec §13.3)."""
 _VERSION_DIGITS = re.compile(r"([0-9]+)(\.|$)")
@@ -386,6 +421,7 @@ _VERSION_DIGITS = re.compile(r"([0-9]+)(\.|$)")
 
 def _import_version_error(fail: Fail, name: str, version: str, pos: int) -> Never:
     """`@haus-fmt/money@1.1`, `@01`, `@x`: an import names only a major version (code `import-version`)."""
+    name, version = quote(name), quote(version)
     digits = _VERSION_DIGITS.match(version)
     major = (digits[1].lstrip("0") or "0") if digits else ""
     if digits and digits[2] == ".":
@@ -481,7 +517,7 @@ class _Lexer:
             if s.startswith(p, pos):
                 self.pos = pos + len(p)
                 return _Token("punct", p, pos)
-        self.fail("schema-syntax", f"unexpected character {json.dumps(s[pos], ensure_ascii=False)}", pos)
+        self.fail("schema-syntax", f"unexpected character {json.dumps(escape(s[pos]), ensure_ascii=False)}", pos)
 
 
 # ── syntax tree ──────────────────────────────────────────────
@@ -621,7 +657,7 @@ class _SchemaParser:
         return self.advance()
 
     def unexpected(self, what: str, code: ErrorCode = "schema-syntax") -> Never:
-        found = "end of file" if self.kind() == "eof" else f"'{self.tok.value}'"
+        found = "end of file" if self.kind() == "eof" else f"'{quote(self.tok.value)}'"
         self.fail(code, f"expected {what}, found {found}", self.tok.pos, expected=what, found=found)
 
     def keyword(self) -> str | None:
@@ -1028,9 +1064,14 @@ class _Def:
         return tuple(p for p, _ in self.decl.params)
 
 
-_MAJOR = re.compile(r"v?([0-9]+)")
 _WANTED_MAJOR = re.compile(r"@.+@([0-9]+)")
 _PACKAGE_OR_FILE = re.compile(r"@[^/]+/|\.\.?/")
+_PACKAGE_IMPORT = re.compile(
+    r"@(?!node_modules/)[a-z0-9][a-z0-9._-]*/(?!node_modules(?:@|\Z))[a-z0-9][a-z0-9._-]*(?:@[0-9]+)?"
+)
+"""A package import: npm's rules for scoped names, in lowercase, no part `node_modules` (spec §13.3)."""
+_PACKAGE_ID = re.compile(r"(@[^@/]+/[^@/]+)@[0-9]+")
+"""The id of a package's schema, `@org/name@major`, with the package's name."""
 
 
 def _plural(n: int) -> str:
@@ -1045,8 +1086,8 @@ class _Checker:
         self.units: dict[str, _Unit] = {}
         self.loading: list[str] = []
         self.all_defs: list[_Def] = []
-        self.ids: dict[str, str | None] = {}
-        """The file that has each id: two files with one id would give their types the same ids."""
+        self.packages: dict[str, tuple[str, str]] = {}
+        """The key and version of the package with each name: one schema reaches one package per name."""
         self.instances: dict[str, Instance] = {}
         self.def_of: dict[Instance, _Def] = {}
         self.queue: list[tuple[Instance, _Def]] = []
@@ -1063,8 +1104,6 @@ class _Checker:
         unit = _Unit(root, id, text, fail, parser.warnings)
         if key is not None:
             self.units[key] = unit
-        if id is not None:
-            self.ids[id] = key
         self.loading.append(key or "")
         try:
             for imp in imports:
@@ -1096,21 +1135,28 @@ class _Checker:
                 )
             for name, pos in imp.names:
                 if name not in names:
-                    fail("unknown-import", f"{imp.module} has no type {name} (it has {', '.join(names)})", pos)
+                    fail("unknown-import", f"{quote(imp.module)} has no type {name} (it has {', '.join(names)})", pos)
                 check_new(name, pos)
                 unit.std[name] = name
             return
         if not _PACKAGE_OR_FILE.match(imp.module):
             fail(
                 "unknown-module",
-                f"unknown module {imp.module}: import std/…, a package @org/name or a file ./name",
+                f"unknown module {quote(imp.module)}: import std/…, a package @org/name or a file ./name",
+                imp.pos,
+            )
+        if imp.module.startswith("@") and not _PACKAGE_IMPORT.fullmatch(imp.module):
+            fail(
+                "unknown-module",
+                f"unknown module {quote(imp.module)}: a package name is @org/name in lowercase (a-z, 0-9, -, ., _),"
+                " and no part is node_modules",
                 imp.pos,
             )
         dep = self.load_import(imp, key, fail)
         for name, pos in imp.names:
             if (d := dep.own.get(name)) is None:
-                has = f" (it has {', '.join(dep.own)})" if dep.own else ""
-                fail("unknown-import", f"{imp.module} has no type {name}{has}", pos)
+                has = f" (it has {', '.join(map(quote, dep.own))})" if dep.own else ""
+                fail("unknown-import", f"{quote(imp.module)} has no type {quote(name)}{has}", pos)
             check_new(name, pos)
             unit.scope[name] = d
 
@@ -1118,34 +1164,37 @@ class _Checker:
         if self.resolver is None:
             fail(
                 "import-unavailable",
-                f"can't import {imp.module}: no module resolver (only std modules can be imported here)",
+                f"can't import {quote(imp.module)}: no module resolver (only std modules can be imported here)",
                 imp.pos,
             )
-        module = re.sub(r"@[0-9]+$", "", imp.module)
+        module = re.sub(r"@[0-9]+\Z", "", imp.module)
         try:
             r = self.resolver.resolve(module, from_key)
         except Exception as e:  # the resolver's own errors, reported at the import
             code: ErrorCode = e.code if isinstance(e, ModuleError) else "import-not-found"
-            fail(code, f"can't import {imp.module}: {e}", imp.pos)
-        if (wanted := _WANTED_MAJOR.fullmatch(imp.module)) and r.version is not None:
-            found = _MAJOR.match(r.version)
-            if found is None or found[1] != wanted[1]:
-                fail(
-                    "import-version",
-                    f"{imp.module} wants major version {wanted[1]}, but version {r.version} was found",
-                    imp.pos,
-                )
-        if r.key in self.loading:
-            fail("import-cycle", f"import cycle: {imp.module} imports this file again", imp.pos)
-        if (cached := self.units.get(r.key)) is not None:
-            return cached
-        if r.id in self.ids and self.ids[r.id] != r.key:
+            fail(code, f"can't import {quote(imp.module)}: {escape(str(e))}", imp.pos)
+        # Major versions compare as text: `@18446744073709551616` is valid, and no package has it.
+        wanted = _WANTED_MAJOR.fullmatch(imp.module)
+        if wanted and r.version is not None and r.version.split(".")[0] != wanted[1]:
             fail(
-                "duplicate-package",
-                f"{imp.module} is {r.id}, but another file already is: two copies or two packages with the same name"
-                f" ({r.key})",
+                "import-version",
+                f"{quote(imp.module)} wants major version {quote(wanted[1])}, but version {quote(r.version)} was found",
                 imp.pos,
             )
+        if r.key in self.loading:
+            fail("import-cycle", f"import cycle: {quote(imp.module)} imports this file again", imp.pos)
+        if (cached := self.units.get(r.key)) is not None:
+            return cached
+        if r.version is not None and (package := _PACKAGE_ID.fullmatch(r.id)):
+            name = package[1]
+            if (seen := self.packages.get(name)) is not None and seen[0] != r.key:
+                fail(
+                    "duplicate-package",
+                    f"{quote(imp.module)}: two packages are called {quote(name)}: {quote(seen[1])} ({escape(seen[0])})"
+                    f" and {quote(r.version)} ({escape(r.key)}); install one copy",
+                    imp.pos,
+                )
+            self.packages[name] = (r.key, r.version)
 
         # Errors inside an imported file are reported at the import, with their place in that file.
         def nested(
@@ -1158,7 +1207,7 @@ class _Checker:
             found: str | None = None,
         ) -> Never:
             at = HausSyntaxError.at(r.text, pos, code, reason)
-            fail(code, f"{imp.module} ({at.line}:{at.column}): {reason}", imp.pos, hint=hint)
+            fail(code, f"{quote(imp.module)} ({at.line}:{at.column}): {reason}", imp.pos, hint=hint)
 
         return self.load(r.text, r.key, r.id, nested, root=False)
 

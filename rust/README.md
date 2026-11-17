@@ -93,6 +93,16 @@ unchanged. `to_i64()` / `to_i128()` give it as a native integer when it fits; th
 `bigint` feature adds conversions to and from `num_bigint::BigInt`. For a native
 integer that must fit, the schema says `Int64` (out of range is a decode error).
 
+A schema can be split into files: `import ./common (Address)` reads
+`common.schema.haus` next to it (spec §13.3). The files it imports, directly
+or not, are generated into the same output, each as a module named after its
+path from the schema's directory: `order::common::Address`,
+`order::billing_common` for `billing/common.schema.haus`,
+`order::up_shared_money` for `../shared/money.schema.haus`. Their ids are
+their paths in the crate (`my-app/src/billing/common#Address`), so two
+`common.schema.haus` in different folders are different files. Two schemas
+compiled separately each get their own copy of a file both import.
+
 Schema packages are ordinary dependencies: a crate with `package.haus` and
 `schema.haus`, `links = "<its library name>"`, `haus_build::package()` in its
 build script and `haus::include_schema!("schema")` in its `lib.rs`. A crate
@@ -101,6 +111,21 @@ package crate's own (`haus_money::Money`), so codecs written for them work in
 every crate. haus-fmt-schema never prints (it backs tools whose output must stay
 clean); haus-fmt-build tells Cargo to rerun when a package's files change,
 from `Packages::files()`.
+
+- Generated code names a package's crate by its `links`, so `links` must be
+  the library name; `haus_build::package()` checks that, and that the crate's
+  version is the one in `package.haus` (`package-version`).
+- **Don't rename schema package dependencies** (`money = { package =
+  "haus-fmt-money", … }`): generated code refers to `::haus_money`, which a
+  renamed dependency isn't, and rustc reports `E0433` inside the generated file.
+- Imports are checked as everywhere (spec §13.3): `@org/name@2` with version
+  1.4.0 installed is `import-version`, two packages with one name are
+  `duplicate-package`, and only direct dependencies are found (Cargo gives a
+  build script nothing else).
+- A codec applies wherever its type occurs (spec §13.4), but a package
+  crate's types decode their fields themselves: a codec for a type used
+  inside an imported package's type (`@haus-fmt/money@1#Money` inside
+  `@acme/orders@1#Order`) is an error, not applied silently.
 
 Streams (spec §6) are read as the values arrive: `haus::stream::decode::<T, _>(reader)`
 is an iterator over any `std::io::Read`, and `haus::stream::encode` writes one value per
