@@ -127,8 +127,8 @@ def allowedRead (p : Path) : Bool :=
 /-- Runs a case: `none` if it passes, else why not. Also the outcome, for printing. -/
 def check (c : Case) : Option String × Outcome :=
   let o := resolveIn c.tree { mode := c.mode } c.root
-  let bad := o.reads.toList.filter (!allowedRead ·)
-  let twice := o.reads.toList.filter fun p => o.reads.toList.count p > 1
+  let bad := o.reads.filter (!allowedRead ·)
+  let twice := o.reads.filter fun p => o.reads.count p > 1
   let verdict :=
     if !bad.isEmpty then some s!"read {bad.map showPath}"
     else if !twice.isEmpty then some s!"read twice: {twice.map showPath}"

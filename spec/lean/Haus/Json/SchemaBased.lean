@@ -28,6 +28,13 @@ True >`. A schema's own `closed < False | True >` is a closed enum.
 **`Maybe`** is the prelude's only, by name too (`preludeMaybe`): a schema's
 own `closed < None | Some a >` is a variant like any other.
 
+**Record cases** (§15): a case with one argument whose type is a record
+writes the record's fields beside `_tag`, however the record is written:
+`caseOf?` resolves `Tag T` (`Case.named`) to the record case when `T` is a
+record through names (`Case.resolve`). A type parameter is applied as a
+positional argument, so `Ok a` writes `value` even where `a` is a record.
+`Haus.Json.RecordCases` proves that naming a record changes nothing.
+
 **`Any`** is its self-describing form (§16.2) without the envelope, and so
 are an unknown value's arguments, in `_args`; the self-describing value is
 read as it is inside schema-based JSON, raw DEL, C1 and bidi controls
@@ -75,6 +82,7 @@ def Ty.casesSize : List Case → Nat
   | .bare _ :: cs => 1 + Ty.casesSize cs
   | .record _ _ fields :: cs => Ty.fieldsSize fields + 1 + Ty.casesSize cs
   | .positional _ ts :: cs => Ty.listSize ts + 1 + Ty.casesSize cs
+  | .named _ t :: cs => t.size + 1 + Ty.casesSize cs
 
 def Ty.listSize : List Ty → Nat
   | [] => 0
@@ -89,7 +97,118 @@ part of `t` or of a definition, so a chain that doesn't repeat is shorter.
 -/
 def nullFuel (env : Env) (t : Ty) : Nat := t.size + env.size + 1
 
-deriving instance BEq for Ty, Field, Case
+/-!
+Types are compared structurally (`Ty.beq`), as `chainEnd` does to find a
+`Maybe` the chain comes back to. Not a derived `BEq`: for a nested type that
+is a `partial` function, which nothing can be proven about; this one is
+lawful (`Ty.beq_eq`, `Ty.beq_refl`), and computes the same.
+-/
+
+mutual
+/-- Structural equality of types. -/
+def Ty.beq : Ty → Ty → Bool
+  | .string, .string | .bytes, .bytes | .decimal, .decimal | .any, .any => true
+  | .int k, .int k' => decide (k = k')
+  | .float k, .float k' => decide (k = k')
+  | .time k, .time k' => decide (k = k')
+  | .secret t, .secret t' | .array t, .array t' | .map t, .map t' => Ty.beq t t'
+  | .record c fs, .record c' fs' => c == c' && Field.beqs fs fs'
+  | .variant c cs, .variant c' cs' => c == c' && Case.beqs cs cs'
+  | .ref n, .ref n' => n == n'
+  | _, _ => false
+
+def Field.beq : Field → Field → Bool
+  | .mk k o t, .mk k' o' t' => k == k' && o == o' && Ty.beq t t'
+
+def Field.beqs : List Field → List Field → Bool
+  | [], [] => true
+  | f :: fs, f' :: fs' => Field.beq f f' && Field.beqs fs fs'
+  | _, _ => false
+
+def Case.beq : Case → Case → Bool
+  | .bare t, .bare t' => t == t'
+  | .record t c fs, .record t' c' fs' => t == t' && c == c' && Field.beqs fs fs'
+  | .positional t ts, .positional t' ts' => t == t' && Ty.beqs ts ts'
+  | .named t a, .named t' a' => t == t' && Ty.beq a a'
+  | _, _ => false
+
+def Case.beqs : List Case → List Case → Bool
+  | [], [] => true
+  | c :: cs, c' :: cs' => Case.beq c c' && Case.beqs cs cs'
+  | _, _ => false
+
+def Ty.beqs : List Ty → List Ty → Bool
+  | [], [] => true
+  | t :: ts, t' :: ts' => Ty.beq t t' && Ty.beqs ts ts'
+  | _, _ => false
+end
+
+mutual
+theorem Ty.beq_eq : ∀ a b : Ty, Ty.beq a b = true → a = b
+  | .string, b, h | .bytes, b, h | .decimal, b, h | .any, b, h | .int _, b, h | .float _, b, h | .time _, b, h
+  | .ref _, b, h => by cases b <;> simp_all [Ty.beq]
+  | .secret t, b, h => by cases b <;> simp [Ty.beq] at h; rw [Ty.beq_eq _ _ h]
+  | .array t, b, h => by cases b <;> simp [Ty.beq] at h; rw [Ty.beq_eq _ _ h]
+  | .map t, b, h => by cases b <;> simp [Ty.beq] at h; rw [Ty.beq_eq _ _ h]
+  | .record c fs, b, h => by cases b <;> simp [Ty.beq] at h; rw [h.1, Field.beqs_eq _ _ h.2]
+  | .variant c cs, b, h => by cases b <;> simp [Ty.beq] at h; rw [h.1, Case.beqs_eq _ _ h.2]
+
+theorem Field.beqs_eq : ∀ a b : List Field, Field.beqs a b = true → a = b
+  | [], b, h => by cases b <;> simp_all [Field.beqs]
+  | .mk k o t :: fs, b, h => by
+    cases b with
+    | nil => simp [Field.beqs] at h
+    | cons f' fs' =>
+      cases f' with
+      | mk k' o' t' =>
+        simp only [Field.beqs, Field.beq, Bool.and_eq_true, beq_iff_eq] at h
+        rw [h.1.1.1, h.1.1.2, Ty.beq_eq _ _ h.1.2, Field.beqs_eq _ _ h.2]
+
+theorem Case.beq_eq : ∀ a b : Case, Case.beq a b = true → a = b
+  | .bare t, b, h => by cases b <;> simp_all [Case.beq]
+  | .record t c fs, b, h => by cases b <;> simp [Case.beq] at h; rw [h.1.1, h.1.2, Field.beqs_eq _ _ h.2]
+  | .positional t ts, b, h => by cases b <;> simp [Case.beq] at h; rw [h.1, Ty.beqs_eq _ _ h.2]
+  | .named t a, b, h => by cases b <;> simp [Case.beq] at h; rw [h.1, Ty.beq_eq _ _ h.2]
+
+theorem Case.beqs_eq : ∀ a b : List Case, Case.beqs a b = true → a = b
+  | [], b, h => by cases b <;> simp_all [Case.beqs]
+  | c :: cs, b, h => by
+    cases b <;> simp [Case.beqs] at h; rw [Case.beq_eq _ _ h.1, Case.beqs_eq _ _ h.2]
+
+theorem Ty.beqs_eq : ∀ a b : List Ty, Ty.beqs a b = true → a = b
+  | [], b, h => by cases b <;> simp_all [Ty.beqs]
+  | t :: ts, b, h => by
+    cases b <;> simp [Ty.beqs] at h; rw [Ty.beq_eq _ _ h.1, Ty.beqs_eq _ _ h.2]
+end
+
+mutual
+theorem Ty.beq_refl : ∀ a : Ty, Ty.beq a a = true
+  | .string | .bytes | .decimal | .any | .int _ | .float _ | .time _ | .ref _ => by simp [Ty.beq]
+  | .secret t | .array t | .map t => by simp only [Ty.beq]; exact Ty.beq_refl t
+  | .record c fs => by simp only [Ty.beq, beq_self_eq_true, Bool.true_and]; exact Field.beqs_refl fs
+  | .variant c cs => by simp only [Ty.beq, beq_self_eq_true, Bool.true_and]; exact Case.beqs_refl cs
+
+theorem Field.beqs_refl : ∀ a : List Field, Field.beqs a a = true
+  | [] => by simp [Field.beqs]
+  | .mk k o t :: fs => by simp [Field.beqs, Field.beq, Ty.beq_refl t, Field.beqs_refl fs]
+
+theorem Case.beqs_refl : ∀ a : List Case, Case.beqs a a = true
+  | [] => by simp [Case.beqs]
+  | .bare t :: cs => by simp [Case.beqs, Case.beq, Case.beqs_refl cs]
+  | .record t c fs :: cs => by simp [Case.beqs, Case.beq, Field.beqs_refl fs, Case.beqs_refl cs]
+  | .positional t ts :: cs => by simp [Case.beqs, Case.beq, Ty.beqs_refl ts, Case.beqs_refl cs]
+  | .named t a :: cs => by simp [Case.beqs, Case.beq, Ty.beq_refl a, Case.beqs_refl cs]
+
+theorem Ty.beqs_refl : ∀ a : List Ty, Ty.beqs a a = true
+  | [] => by simp [Ty.beqs]
+  | t :: ts => by simp [Ty.beqs, Ty.beq_refl t, Ty.beqs_refl ts]
+end
+
+instance : BEq Ty := ⟨Ty.beq⟩
+
+instance : LawfulBEq Ty where
+  eq_of_beq h := Ty.beq_eq _ _ h
+  rfl := Ty.beq_refl _
 
 /-- The prelude's `Maybe a = closed < None | Some a >`: its argument. -/
 def maybeOf? : Ty → Option Ty
@@ -309,7 +428,7 @@ def toJsonC (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) : Typed → E
       | some _, _ => mismatch c
       | none, args =>
         if isEnum (.variant closed cases) then .ok (.str tag) else
-        match caseOf? cases tag, args with
+        match caseOf? env cases tag, args with
         | some (.bare _), _ => .ok (.obj [("_tag", .str tag)])
         | some (.record _ _ fields), [.record fs] =>
           if hasReservedField fields then .error ⟨[.arg tag 0], reservedFieldReason, some .noJsonForm⟩
@@ -466,7 +585,7 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
     else if isEnum (.variant closed cases) then
       match j with
       | .str tag =>
-        match caseOf? cases tag with
+        match caseOf? env cases tag with
         | some (.bare _) => .ok (.case tag [])
         | _ => reject .unknownTag s!"unknown tag {tag}"
       | _ => reject .typeMismatch "expected a string: a tag"
@@ -475,7 +594,7 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
       | .obj ms =>
         match ms.lookup "_tag" with
         | some (.str tag) =>
-          match caseOf? cases tag with
+          match caseOf? env cases tag with
           | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else reject .unexpectedMember s!"{tag} takes no arguments"
           | some (.record _ cl fields) =>
             if hasReservedField fields then .error ⟨[.arg tag 0], reservedFieldReason, some .noJsonForm⟩ else
@@ -489,6 +608,8 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
           | some (.positional _ ts) =>
             if ms.length = 2 then (memberValues env F o tag ts ms).map (.case tag)
             else reject (memberCode "values" ms) s!"{tag} takes {ts.length} arguments, as values"
+          -- `caseOf?` resolves every `Tag T` to one of the forms above.
+          | some (.named _ _) => reject .wrongPayload s!"{tag} takes one argument"
           | none =>
             if closed then reject .unknownTag s!"unknown tag {tag}"
             else if !isTag tag.toList then reject .invalidTag "_tag: not a tag"

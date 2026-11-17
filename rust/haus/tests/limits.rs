@@ -203,10 +203,11 @@ fn keys_and_tags_count_against_the_string_limit() {
     assert_eq!(read(tag_json("Abcde")).unwrap_err().to_string(), "._tag: tag longer than 4 characters");
     let imported = Json::Object(vec![("abcde".into(), Json::Null)]);
     assert_eq!(json::import(&imported, &limits).unwrap_err().to_string(), ".abcde: key longer than 4 characters");
-    // The JSON reader limits every string, member names too.
-    assert!(json::parse_with(r#"{"abcd": 1}"#, &limits).is_ok());
-    let e = json::parse_with(r#"{"abcde": 1}"#, &limits).unwrap_err().to_string();
-    assert_eq!(e, "string longer than 4 characters at 1:2");
+    // The JSON text reader leaves lengths to the forms, which count them on the
+    // haus value (spec §16): a member name is a key only where it becomes one.
+    assert!(json::parse_with(r#"{"abcde": 1}"#, &limits).is_ok());
+    let e = json::import_json_with(r#"{"abcde": 1}"#, &limits).unwrap_err().to_string();
+    assert_eq!(e, ".abcde: key longer than 4 characters");
 }
 
 #[test]

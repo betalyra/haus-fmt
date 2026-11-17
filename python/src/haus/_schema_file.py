@@ -131,9 +131,24 @@ class RecordPayload:
 
 @dataclass(frozen=True, slots=True)
 class PositionalPayload:
-    """`Point Float64 Float64`."""
+    """`Point Float64 Float64`; also `Circle Disc`, a record case by name (see `record`)."""
 
     items: tuple[Type, ...]
+    parameter: bool = False
+    """Its one argument is written as a type parameter (`Ok a` of `Result e a`): never a record case."""
+
+    @property
+    def record(self) -> RecordType | None:
+        """The record of a record case written by name (spec §15), else None.
+
+        A case with one argument whose type is a record is a record case, however the record is
+        written: `Circle Disc` with `type Disc = { r: Float64 }`, through aliases, or a name applied
+        to arguments that gives a record (`Found (Page Int)`). Its data is that of `Circle { … }`.
+        A type parameter is not a record, even where the argument given for it is one.
+        """
+        if len(self.items) != 1 or self.parameter:
+            return None
+        return record_of(self.items[0])
 
 
 Payload: TypeAlias = NoPayload | RecordPayload | PositionalPayload
@@ -182,6 +197,18 @@ Type: TypeAlias = (
 )
 
 
+def record_of(t: Type) -> RecordType | None:
+    """The record a type is through names (`type Disc = { … }`, aliases, applied names), else None.
+
+    Not through `Secret`, `Maybe` or a type parameter. Read once the schema is checked.
+    """
+    seen: set[int] = set()
+    while isinstance(t, RefType) and id(t.instance) not in seen:
+        seen.add(id(t.instance))
+        t = t.instance.body
+    return t if isinstance(t, RecordType) else None
+
+
 @dataclass(frozen=True, slots=True)
 class Definition:
     """A type definition of a schema file."""
@@ -222,7 +249,7 @@ class Instance:
         return f"Instance({self.key})"
 
 
-WarningKind: TypeAlias = Literal["unknown-attribute", "deprecated"]
+WarningKind: TypeAlias = Literal["unknown-attribute", "deprecated", "no-json-form"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +257,8 @@ class SchemaWarning:
     """Something a tool should point out without failing (spec §14)."""
 
     kind: WarningKind
-    """`unknown-attribute`: `@since(…)` and the like; `deprecated`: a use of a `@deprecated` type."""
+    """`unknown-attribute`: `@since(…)` and the like; `deprecated`: a use of a `@deprecated` type;
+    `no-json-form`: a record case with a field `_tag` or `_args`, which has no schema-based JSON form (spec §16)."""
     message: str
     offset: int
     """Code point offsets into the schema file, `end` exclusive."""
@@ -277,7 +305,8 @@ class SchemaFile:
     """Types imported from other files and packages, by the name they have here."""
     id: str | None
     warnings: tuple[SchemaWarning, ...]
-    """Attributes this version doesn't define, and uses of deprecated types, in this file only."""
+    """Attributes this version doesn't define, uses of deprecated types, and cases without a
+    schema-based JSON form, in this file only."""
     instances: Mapping[str, Instance]
     """The template instance of each definition (own and imported), by name here."""
 
@@ -1092,6 +1121,8 @@ class _Checker:
         self.def_of: dict[Instance, _Def] = {}
         self.queue: list[tuple[Instance, _Def]] = []
         self.pending_streams: list[tuple[Instance, int, _Unit]] = []
+        self.root_cases: dict[int, Case] = {}
+        """The root file's own cases, by position: checked for a JSON form once every type is evaluated."""
         self.current: _Unit | None = None
 
     # ── loading ──
@@ -1412,7 +1443,10 @@ class _Checker:
                     return SecretType(args[0])
                 case "Result":
                     return VariantType(
-                        (Case("Err", PositionalPayload((args[0],))), Case("Ok", PositionalPayload((args[1],)))),
+                        (
+                            Case("Err", PositionalPayload((args[0],), parameter=True)),
+                            Case("Ok", PositionalPayload((args[1],), parameter=True)),
+                        ),
                         open=False,
                     )
                 case _:
@@ -1439,8 +1473,11 @@ class _Checker:
         """The record or variant `...Name` copies from, evaluated now if necessary."""
         d = self.unit.scope.get(sp.name)
         if d is None:
-            self.lookup_name(sp.name, sp.pos)  # reports unknown types, with an import hint
-            self.fail("invalid-spread", f"{sp.name} can't be spread: only a named {want} can", sp.pos)
+            # An imported standard type or a prelude type is known, just not spreadable;
+            # any other name is unknown (with an import hint when it's a standard type not imported).
+            if sp.name not in self.unit.std and sp.name not in BUILTINS and sp.name not in _PRELUDE_GENERIC:
+                self.lookup_name(sp.name, sp.pos)
+            self.fail("invalid-spread", f"{sp.name} is not a {want}, so it can't be spread here", sp.pos)
         if d.params:
             own = " ".join((sp.name, *d.params))
             self.fail(
@@ -1480,10 +1517,15 @@ class _Checker:
                     return NoPayload()
                 case (_RecordNode() as record,):
                     return RecordPayload(self.evaluate_record(record, env))
+                case (_Var() as var,):
+                    # Never a record case, even where the argument given is a record (spec §15).
+                    return PositionalPayload((self.evaluate(var, env),), parameter=True)
                 case args:
                     return PositionalPayload(tuple(self.evaluate(a, env) for a in args))
 
         own = [(Case(c.tag, payload(c), c.attributes), "", c.pos) for c in n.cases]
+        if self.unit.root:
+            self.root_cases.update((pos, case) for case, _, pos in own)
 
         def spread(sp: _Spread) -> list[tuple[Case, str, int]]:
             variant = self.spread_of(sp, "variant")
@@ -1534,10 +1576,8 @@ class _Checker:
         definitions = tuple(self.definition_of(d) for d in root.own.values())
         imported = {name: self.definition_of(d) for name, d in root.scope.items() if d.unit is not root}
         instances = {name: templates[d] for name, d in root.scope.items()}
-        located = (
-            (w, HausSyntaxError.at(text, w.pos, w.kind, w.message))
-            for w in sorted([*root.warnings, *_deprecated_uses(root)], key=lambda w: w.pos)
-        )
+        raw = [*root.warnings, *_deprecated_uses(root), *_without_json_form(self.root_cases)]
+        located = ((w, HausSyntaxError.at(text, w.pos, w.kind, w.message)) for w in sorted(raw, key=lambda w: w.pos))
         warnings = tuple(SchemaWarning(w.kind, w.message, at.offset, w.end, at.line, at.column) for w, at in located)
         return SchemaFile(definitions, dict(root.std), imported, id, warnings, instances)
 
@@ -1572,8 +1612,9 @@ def _payload_key(p: Payload) -> str:
             return ""
         case RecordPayload(record):
             return _key_of(record)
-        case PositionalPayload(items):
-            return "(" + ",".join(map(_key_of, items)) + ")"
+        case PositionalPayload(items, parameter):
+            # A parameter's case writes other JSON than a record case by name: keep them apart.
+            return ("(^" if parameter else "(") + ",".join(map(_key_of, items)) + ")"
 
 
 def _in_order(own: Sequence[_T], spreads: Sequence[_Spread], spread: Callable[[_Spread], list[_T]]) -> list[_T]:
@@ -1599,6 +1640,27 @@ def _deprecated_uses(unit: _Unit) -> list[_RawWarning]:
             used = unit.scope.get(name)
             if used is not None and (message := deprecation_note(name, used.decl.attributes)) is not None:
                 out.append(_RawWarning("deprecated", message, pos, pos + len(name)))
+    return out
+
+
+def _without_json_form(cases: Mapping[int, Case]) -> list[_RawWarning]:
+    """Spec §16: each record case with a field `_tag` or `_args`, which has no schema-based JSON form.
+
+    The schema is valid; a converter fails only on a value of the case. The record is written in
+    the case, by name, through aliases or applied (`Circle Disc`), never as a type parameter.
+    """
+    out: list[_RawWarning] = []
+    for pos, case in cases.items():
+        match case.payload:
+            case RecordPayload(record):
+                fields = record.fields
+            case PositionalPayload() as p:
+                fields = p.record.fields if p.record is not None else ()
+            case NoPayload():
+                fields = ()
+        if (key := next((f.key for f in fields if f.key in ("_tag", "_args")), None)) is not None:
+            message = f"{case.tag} has a field named {key}, so it has no schema-based JSON form"
+            out.append(_RawWarning("no-json-form", message, pos, pos + len(case.tag)))
     return out
 
 

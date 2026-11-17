@@ -135,6 +135,30 @@ fn spreads_of_imported_types() {
 }
 
 #[test]
+fn spreads_of_types_that_are_not_records_or_variants() {
+    // A std/time type that is imported is known: the error is the spread, not the name.
+    assert_eq!(
+        error("import std/time (Date)\ntype T = < A | ...Date >"),
+        "2:19: Date is not a variant, so it can't be spread here"
+    );
+    assert_eq!(
+        error("import std/time (Date)\ntype T = { a: Int, ...Date }"),
+        "2:23: Date is not a record, so it can't be spread here"
+    );
+    assert_eq!(error("type T = { ...Maybe }"), "1:15: Maybe is not a record, so it can't be spread here");
+    assert_eq!(error("type T = { ...Array }"), "1:15: Array is not a record, so it can't be spread here");
+    assert_eq!(error("type T = < ...Int >"), "1:15: Int is not a variant, so it can't be spread here");
+    // Through an alias, the alias is what isn't one.
+    assert_eq!(error("type R = Int\ntype T = { ...R }"), "2:15: R is not a record, so it can't be spread here");
+    assert_eq!(
+        error("import std/time (Date)\ntype D = Date\ntype T = < ...D >"),
+        "3:15: D is not a variant, so it can't be spread here"
+    );
+    // Not imported: unknown, with how to import it.
+    assert_eq!(error("type T = { ...Date }"), "1:15: unknown type Date (import it with: import std/time (Date))");
+}
+
+#[test]
 fn rules_about_names_and_types() {
     assert_eq!(error("type A = Strin"), "1:10: unknown type Strin");
     assert_eq!(
@@ -295,4 +319,154 @@ fn files_outside_packages_have_ids_from_their_paths() {
         ids(&Options { project: Some(("shop", &project)), ..Options::default() }),
         ["shop/../shared/money#Money", "shop/app#Root", "shop/billing/common#Iban", "shop/shipping/common#Address"]
     );
+}
+
+/// The payload of `tag` in the variant `ty`: "record", "named", "positional" or "none".
+fn payload_kind(schema: &Schema, ty: &str, tag: &str) -> &'static str {
+    let def = schema.definition(ty).unwrap_or_else(|| panic!("no type {ty}"));
+    let haus_schema::Type::Variant(v) = schema.resolve(&schema.instance(def.template).body) else {
+        panic!("{ty} is not a variant")
+    };
+    match v.case(tag).map(|c| &c.payload) {
+        Some(haus_schema::Payload::Record(_)) => "record",
+        Some(haus_schema::Payload::Named(_)) => "named",
+        Some(haus_schema::Payload::Positional(_)) => "positional",
+        Some(haus_schema::Payload::None) => "none",
+        None => panic!("{ty} has no tag {tag}"),
+    }
+}
+
+#[test]
+fn record_cases_by_name() {
+    // Spec §15: one argument whose type is a record, however it is written.
+    let schema = Schema::parse(
+        "type R = { w: Int }\ntype A = R\ntype Id a = a\ntype Page a = { items: Array a }\n\
+         type Gen a = < Box a >\ntype GenR = Gen R\ntype Wrap a = < Box (Id a) >\ntype WrapR = Wrap R\n\
+         type T = < Inline { w: Int } | Paren ({ w: Int }) | Name R | Alias A | Applied (Page Int) | Through (Id R) \
+         | Res (Result String R) | Many (Maybe R) | Secretly (Secret R) | Num Int | Two R R >\n\
+         type Res = Result String R",
+    )
+    .unwrap();
+    for (tag, kind) in [
+        ("Inline", "record"),
+        ("Paren", "record"),
+        ("Name", "named"),
+        ("Alias", "named"),
+        ("Applied", "named"),
+        ("Through", "named"),
+        ("Res", "positional"),
+        ("Many", "positional"),
+        ("Secretly", "positional"),
+        ("Num", "positional"),
+        ("Two", "positional"),
+    ] {
+        assert_eq!(payload_kind(&schema, "T", tag), kind, "{tag}");
+    }
+    // A type parameter is never a record, even where its argument is one.
+    assert_eq!(payload_kind(&schema, "GenR", "Box"), "positional");
+    assert_eq!(payload_kind(&schema, "WrapR", "Box"), "positional");
+    assert_eq!(payload_kind(&schema, "Res", "Ok"), "positional");
+    // Decoding: the same values as inline, and anything but one record is the wrong payload.
+    assert_eq!(decode(&schema, "T", "Name({ w: 1, x: 2 })"), "Name{w:1}");
+    for text in ["Name(1)", "Name(1, 2)", "Name", "Alias(1)", "Applied([])"] {
+        assert!(
+            decode(&schema, "T", text).contains("takes one argument, a record"),
+            "{text}: {}",
+            decode(&schema, "T", text)
+        );
+    }
+    assert!(decode(&schema, "GenR", "Box(1)").starts_with("error"));
+    assert_eq!(decode(&schema, "GenR", "Box { w: 1 }"), "Box{w:1}");
+}
+
+/// The payload of `tag` in the variant of field `key` of the record `ty`.
+fn field_payload_kind(schema: &Schema, ty: &str, key: &str, tag: &str) -> &'static str {
+    let def = schema.definition(ty).unwrap_or_else(|| panic!("no type {ty}"));
+    let haus_schema::Type::Record(r) = schema.resolve(&schema.instance(def.template).body) else {
+        panic!("{ty} is not a record")
+    };
+    let haus_schema::Type::Variant(v) = schema.resolve(&r.field(key).expect("no such field").ty) else {
+        panic!("{ty}.{key} is not a variant")
+    };
+    match v.case(tag).map(|c| &c.payload) {
+        Some(haus_schema::Payload::Named(_)) => "named",
+        Some(haus_schema::Payload::Positional(_)) => "positional",
+        _ => "other",
+    }
+}
+
+#[test]
+fn record_cases_are_decided_where_they_are_written() {
+    // An inline variant in the argument of a generic type, written in a generic
+    // definition: its parameter stays one (test-suite/json, InnerRec), also behind
+    // a name, while the same variant written without parameters has a record case.
+    let schema = Schema::parse(
+        "type R = { w: Int }\ntype Id a = a\ntype Holder v = { item: v }\n\
+         type Inner a = Holder (< X a >)\ntype InnerRec = Inner R\n\
+         type Through a = Holder (< X (Id a) >)\ntype ThroughRec = Through R\n\
+         type Direct = Holder (< X (Id R) >)",
+    )
+    .unwrap();
+    assert_eq!(field_payload_kind(&schema, "InnerRec", "item", "X"), "positional");
+    assert_eq!(field_payload_kind(&schema, "ThroughRec", "item", "X"), "positional");
+    assert_eq!(field_payload_kind(&schema, "Direct", "item", "X"), "named");
+    // In either order: the two are different types.
+    let schema = Schema::parse(
+        "type R = { w: Int }\ntype Id a = a\ntype Holder v = { item: v }\n\
+         type Direct = Holder (< X (Id R) >)\ntype Through a = Holder (< X (Id a) >)\ntype ThroughRec = Through R",
+    )
+    .unwrap();
+    assert_eq!(field_payload_kind(&schema, "ThroughRec", "item", "X"), "positional");
+    assert_eq!(field_payload_kind(&schema, "Direct", "item", "X"), "named");
+}
+
+#[test]
+fn record_cases_without_a_json_form_are_warned_about() {
+    // Spec §16.3: a record case with a field `_tag` or `_args` has no
+    // schema-based JSON form. The schema is valid; checkers warn at the case.
+    let schema = Schema::parse(
+        "type R = { _tag: String }\ntype A = R\ntype Page a = { _args: Array a, n: Int }\n\
+         type Gen a = < Box a >\ntype Base = { _args: Int }\n\
+         type T = < Inline { x: Int, _tag: String } | Name R | Alias A | Applied (Page Int) | Spread { ...Base } \
+         | Fine { tag: String } | Res (Result String R) | Param (Gen R) >\n\
+         type U = < ...T | Own >\n\
+         type Nested = { a: Array (Maybe < Deep { _args: Int } >), r: Result < E ({ _tag: Int }) > Int }\n\
+         type Events = Stream < Ev { _tag: Int } >",
+    )
+    .unwrap();
+    let warnings: Vec<String> = schema.warnings().iter().map(|w| format!("{} {}", w.code().as_str(), w)).collect();
+    assert_eq!(
+        warnings,
+        [
+            "no-json-form 6:12: Inline has a field named _tag, so it has no schema-based JSON form",
+            "no-json-form 6:46: Name has a field named _tag, so it has no schema-based JSON form",
+            "no-json-form 6:55: Alias has a field named _tag, so it has no schema-based JSON form",
+            "no-json-form 6:65: Applied has a field named _args, so it has no schema-based JSON form",
+            "no-json-form 6:86: Spread has a field named _args, so it has no schema-based JSON form",
+            "no-json-form 8:35: Deep has a field named _args, so it has no schema-based JSON form",
+            "no-json-form 8:71: E has a field named _tag, so it has no schema-based JSON form",
+            "no-json-form 9:24: Ev has a field named _tag, so it has no schema-based JSON form",
+        ]
+    );
+    // Converters still fail only on values of these cases.
+    assert!(schema.decode("T", &value("Fine { tag: \"x\" }")).is_ok());
+}
+
+#[test]
+fn record_cases_without_a_json_form_through_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("b.schema.haus"), "type Tagged = { _tag: String }").unwrap();
+    let root = dir.path().join("a.schema.haus");
+    std::fs::write(&root, "import ./b (Tagged)\ntype V = < T Tagged | U { ...Tagged } >").unwrap();
+    let schema = Schema::load(&root, &haus_schema::NoImports).unwrap_or_else(|e| panic!("{e}"));
+    let warnings: Vec<String> = schema.warnings().iter().map(ToString::to_string).collect();
+    assert_eq!(
+        warnings,
+        [
+            "2:12: T has a field named _tag, so it has no schema-based JSON form",
+            "2:23: U has a field named _tag, so it has no schema-based JSON form",
+        ]
+    );
+    // The imported file has no case: nothing to point out there.
+    assert!(schema.files()[1].warnings().is_empty());
 }

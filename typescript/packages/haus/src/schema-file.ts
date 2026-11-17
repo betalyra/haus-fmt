@@ -138,10 +138,14 @@ export const deprecationNote = (name: string, attributes: readonly Attribute[] |
 
 /**
  * Something a tool should point out in a schema file, without failing (spec
- * §14): an attribute this version doesn't define, or a use of a deprecated type.
+ * §14, §16): an attribute this version doesn't define, a use of a deprecated
+ * type, or a case that has no schema-based JSON form.
  */
 export interface SchemaWarning {
-  /** `unknown-attribute`: `@since(…)` and the like; `deprecated`: a reference to a `@deprecated` type. */
+  /**
+   * `unknown-attribute`: `@since(…)` and the like; `deprecated`: a reference to a `@deprecated` type;
+   * `no-json-form`: a record case with a field named `_tag` or `_args` (spec §16).
+   */
   readonly kind: SchemaWarningKind
   /** Its code (spec §17): the same as `kind`. */
   readonly code: SchemaWarningKind
@@ -153,7 +157,7 @@ export interface SchemaWarning {
   readonly column: number
 }
 
-export type SchemaWarningKind = Extract<ErrorCode, "unknown-attribute" | "deprecated">
+export type SchemaWarningKind = Extract<ErrorCode, "unknown-attribute" | "deprecated" | "no-json-form">
 
 export interface Field {
   readonly key: string
@@ -170,9 +174,23 @@ export interface RecordType {
   readonly closed: boolean
 }
 
+/**
+ * What a case takes. A case with one argument whose type is a record is a
+ * record case (spec §15), however the record is written: `Box { w: Int32 }`,
+ * `Box ({ w: Int32 })`, `Box BoxRec` with `type BoxRec = { w: Int32 }` (through
+ * any aliases) or `Found (Page Int32)` with `type Page a = { … }` all give
+ * `record`. A type parameter is never a record, even where its argument is
+ * one: `Ok a` of `Result` and `Box a` of `type GenBox a = < Box a >` stay
+ * `positional`.
+ */
 export type Payload =
   | { readonly kind: "none" }
-  | { readonly kind: "record"; readonly record: RecordType }
+  | {
+      readonly kind: "record"
+      readonly record: RecordType
+      /** The argument as written when it names the record (`BoxRec`, `Page Int32`): a reference, whose chain of aliases ends in `record`. */
+      readonly named?: Type
+    }
   | { readonly kind: "positional"; readonly items: readonly Type[] }
 
 export interface Case {
@@ -249,8 +267,9 @@ export interface SchemaFile {
   definition(name: string): Definition | undefined
   /**
    * What to point out in this file (not in the files it imports), in source
-   * order: attributes this version doesn't define, and each place that uses a
-   * deprecated type (outside deprecated types).
+   * order: attributes this version doesn't define, each place that uses a
+   * deprecated type (outside deprecated types), and each case whose record
+   * has a field named `_tag` or `_args` (no schema-based JSON form, spec §16).
    */
   readonly warnings: readonly SchemaWarning[]
 }
@@ -1235,6 +1254,10 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     return { kind: "ref", instance: inst }
   }
   const pendingStreamChecks: [Instance, number, Unit][] = []
+  /** Cases with one named argument, which are record cases if it stands for a record. */
+  const pendingCases: [Case, Type, number, Unit][] = []
+  /** Each case as written, with where its tag is: the cases to warn about (no-json-form). */
+  const writtenCases: [Case, number, Unit][] = []
 
   const evaluate = (n: Node, env: Env): Type => {
     switch (n.t) {
@@ -1294,8 +1317,12 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const spreadOf = (sp: SpreadNode, want: "record" | "variant"): RecordType | VariantType => {
     const def = current.scope.get(sp.name)
     if (!def) {
-      lookupName(sp.name, sp.pos) // reports unknown types, with an import hint
-      return fail("invalid-spread", `${sp.name} can't be spread: only a named ${want} can`, sp.pos)
+      // A built-in, prelude or imported standard type is known, and not a
+      // record or variant of this file: the same error as for any other type
+      // that isn't one. An unknown type is reported as such, with an import hint.
+      const known = current.std.has(sp.name) || (BUILTINS as readonly string[]).includes(sp.name) || sp.name in PRELUDE_GENERIC
+      if (!known) lookupName(sp.name, sp.pos)
+      return fail("invalid-spread", `${sp.name} is not a ${want}, so it can't be spread here`, sp.pos)
     }
     if (def.params.length > 0) {
       fail("invalid-spread", `${sp.name} has parameters (${[sp.name, ...def.params].join(" ")}); only a type without parameters can be spread`, sp.pos)
@@ -1349,7 +1376,13 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
         c.args.length === 0 ? { kind: "none" }
         : c.args.length === 1 && first!.t === "record" ? { kind: "record", record: evaluateRecord(first!, env) }
         : { kind: "positional", items: c.args.map((a) => evaluate(a, env)) }
-      return { c: { tag: c.tag, payload, attributes: c.attributes } as Case, from: "", pos: c.pos }
+      const out = { tag: c.tag, payload, attributes: c.attributes } as Case
+      // One named argument may stand for a record (`Box BoxRec`, `Found (Page Int32)`): decided
+      // once every type is evaluated, since it may name the type being evaluated (`< S Nat >`).
+      // A type parameter (`Box a`) never makes a record case, whatever it is applied to.
+      if (payload.kind === "positional" && payload.items.length === 1 && payload.items[0]!.kind === "ref" && first!.t !== "var") pendingCases.push([out, payload.items[0], first!.pos, current])
+      writtenCases.push([out, c.pos, current])
+      return { c: out, from: "", pos: c.pos }
     })
     const cases = inOrder(own, n.spreads, (sp) =>
       (spreadOf(sp, "variant") as VariantType).cases.map((c) => ({ c, from: `from ...${sp.name}`, pos: sp.pos })),
@@ -1391,11 +1424,32 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   }
   // §9.9: every cycle passes through a record, array or variant.
   for (const inst of instances.values()) within(defOf.get(inst)!.unit, () => resolveRef({ kind: "ref", instance: inst }, inst.definition.offset, true))
+  // §15: a case whose one argument names a record is a record case. Spreads share the
+  // Case objects, so setting the payload here reaches every variant that copied the case.
+  for (const [c, arg, pos, unit] of pendingCases) {
+    const t = within(unit, () => resolveRef(arg, pos))
+    if (t.kind === "record") (c as { payload: Payload }).payload = { kind: "record", record: t, named: arg }
+  }
+
+  // §16: a record case with a field named _tag or _args has no schema-based JSON form. The schema
+  // is valid; warn at the case, once (a generic type's instances share where the case is written).
+  const noJsonForm = new Map<number, RawWarning>()
+  for (const [c, pos, unit] of writtenCases) {
+    if (unit !== root || noJsonForm.has(pos) || c.payload.kind !== "record") continue
+    const field = c.payload.record.fields.find((f) => f.key === "_tag" || f.key === "_args")
+    if (field === undefined) continue
+    noJsonForm.set(pos, {
+      kind: "no-json-form",
+      message: `${c.tag} has no schema-based JSON form: its record has a field named ${field.key}, which that form uses itself. Rename the field, or use self-describing JSON`,
+      pos,
+      end: pos + c.tag.length,
+    })
+  }
 
   const definitions = [...root.own.values()].map((d) => d.definition!)
   const byName = new Map(definitions.map((d) => [d.name, d]))
   const imported = new Map([...root.scope].filter(([, d]) => d.unit !== root).map(([name, d]) => [name, d.definition!]))
-  const warnings = [...root.warnings, ...deprecatedUses(root)]
+  const warnings = [...root.warnings, ...deprecatedUses(root), ...noJsonForm.values()]
     .sort((a, b) => a.pos - b.pos)
     .map(({ kind, message, pos, end }): SchemaWarning => {
       const at = locate(text, pos, START)

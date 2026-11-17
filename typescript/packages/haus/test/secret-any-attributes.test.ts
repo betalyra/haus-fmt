@@ -196,10 +196,24 @@ describe("Any", () => {
     expect(() => h.encode(h.Decimal, "1".repeat(2500))).toThrow(/longer than 1000/)
   })
 
-  it("bounds the work for values that share parts", () => {
+  // A DAG of depth 64 would expand to 2^64 nodes: the work is bounded by
+  // counted steps, not by time. A small budget keeps the test fast under load.
+  const shared = (depth: number): Value => {
     let v: Value = { kind: "number", text: "1" }
-    for (let i = 0; i < 64; i++) v = { kind: "array", items: [v, v] }
-    expect(() => h.encode(h.Any, v)).toThrow(/budget/)
+    for (let i = 0; i < depth; i++) v = { kind: "array", items: [v, v] }
+    return v
+  }
+
+  it("bounds the work for values that share parts", () => {
+    expect(() => h.encode(h.Any, shared(64), { maxSteps: 4096 })).toThrow(/encode budget of 4096 steps exceeded/)
+    // Within the budget, the same kind of value encodes (2^11 - 1 nodes).
+    expect(h.encode(h.Any, shared(10), { maxSteps: 4096 }).kind).toBe("array")
+  })
+
+  // The default budget (16 Mi steps) takes a few seconds to use up: a generous
+  // timeout, so a loaded machine doesn't fail it.
+  it("bounds the work for values that share parts by default", { timeout: 120_000 }, () => {
+    expect(() => h.encode(h.Any, shared(64))).toThrow(/encode budget of 16777216 steps exceeded/)
   })
 })
 
@@ -284,6 +298,37 @@ describe("attributes", () => {
     // Warnings are in source order, unknown attributes among them.
     const mixed = parseSchemaFile(`@deprecated type A = Int\ntype B = { @since("2") b: A }`).warnings
     expect(mixed.map((w) => w.kind)).toEqual(["unknown-attribute", "deprecated"])
+  })
+
+  it("warn about a record case with no schema-based JSON form (no-json-form), without failing", () => {
+    const text = [
+      `type Rec = { _tag: Int32 }`,
+      `type Alias = Rec`,
+      `type Box a = { _args: a }`,
+      `type Base = { _tag: String }`,
+      `type E = < Inline { _tag: Int32 } | Paren ({ _args: Int32 }) | Named Rec | Aliased Alias | Applied (Box Int32) | Spread { ...Base } | Fine { tag: Int32 } | Pos Int32 Rec >`,
+      `type F = < ...E | Other >`,
+      `type G a = < Gen { _tag: a } >`,
+      `type H = G Int32`,
+      `type I = G String`,
+    ].join("\n")
+    const file = parseSchemaFile(text)
+    expect(file.warnings.map((w) => [w.kind, w.line, text.slice(w.offset, w.end)])).toEqual([
+      ["no-json-form", 5, "Inline"],
+      ["no-json-form", 5, "Paren"],
+      ["no-json-form", 5, "Named"],
+      ["no-json-form", 5, "Aliased"],
+      ["no-json-form", 5, "Applied"],
+      ["no-json-form", 5, "Spread"],
+      ["no-json-form", 7, "Gen"],
+    ])
+    expect(file.warnings[0]!.message).toBe("Inline has no schema-based JSON form: its record has a field named _tag, which that form uses itself. Rename the field, or use self-describing JSON")
+    expect(file.warnings[1]!.message).toMatch(/field named _args/)
+    // Only cases written in this file: an imported one is warned about in its own file.
+    const resolver = { resolve: () => ({ key: "other", id: "other", text: `type V = < X { _tag: Int32 } >` }) }
+    expect(parseSchemaFile(`import ./other (V)\ntype W = < ...V | Y >`, { resolver }).warnings).toEqual([])
+    // A field anywhere else, or a type parameter's record, is fine.
+    expect(parseSchemaFile(`type A = { _tag: Int32 }\ntype B c = < C (Array A) | D c >\ntype K = B A`).warnings).toEqual([])
   })
 
   it("are rejected where they are malformed", () => {

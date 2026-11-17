@@ -118,6 +118,7 @@ theorem decode_sound_all (env : Env) :
         next => exact absurd hy fail_ne_ok
       next => exact absurd hy fail_ne_ok
       next => exact absurd hy fail_ne_ok
+      next => exact absurd hy fail_ne_ok
       next hc =>
         split at hy
         next => exact absurd hy fail_ne_ok

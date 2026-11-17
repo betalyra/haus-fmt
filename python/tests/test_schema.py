@@ -5,7 +5,9 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import pickle
+from collections.abc import Mapping
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
@@ -101,7 +103,7 @@ def test_variants_are_tagged() -> None:
     assert t.parse("Circle({ r: 1.5 })") == Tagged("Circle", {"r": 1.5})
     assert t.parse("Point(1, 2)") == Tagged("Point", (1.0, 2.0))
     assert t.parse("Empty") == Tagged("Empty")
-    assert t.parse('Wrap { id: 1, name: "a" }') == Tagged("Wrap", ({"id": 1, "name": "a"},))
+    assert t.parse('Wrap { id: 1, name: "a" }') == Tagged("Wrap", {"id": 1, "name": "a"})
     assert t.canonical(Tagged("Point", (1.0, 2.5))) == "Point(1,2.5)"
     assert SCHEMA["Level"].parse("Info") == Tagged("Info")
     with pytest.raises(HausEncodeError):
@@ -398,3 +400,107 @@ def test_codecs_are_opt_in_host_types() -> None:
         s["T"].encode({"d": "2026-11-13", "at": t["at"], "amount": Decimal(1)})
     with pytest.raises(ValueError, match="no such type"):
         compile_schema(text, codecs={"std/time#Duration": DateCodec()})
+
+
+# ── record cases (spec §15, §16.3) ───────────────────────────
+
+_INLINE = "type V = < Box { w: Int32, tags?: Array String } | Pair Int32 Int32 >"
+_EXTRACTED = {
+    "by name": "type R = { w: Int32, tags?: Array String }\ntype V = < Box R | Pair Int32 Int32 >",
+    "in parentheses": "type V = < Box ({ w: Int32, tags?: Array String }) | Pair Int32 Int32 >",
+    "through aliases": "type R = { w: Int32, tags?: Array String }\ntype A = R\ntype B = A\n"
+    "type V = < Box B | Pair Int32 Int32 >",
+    "applied generic": "type Page a = { w: a, tags?: Array String }\ntype V = < Box (Page Int32) | Pair Int32 Int32 >",
+    "applied name giving a record": "type Id a = a\ntype R = { w: Int32, tags?: Array String }\n"
+    "type V = < Box (Id R) | Pair Int32 Int32 >",
+    "generic in a generic": "type Page a = { w: a, tags?: Array String }\ntype G a = < Box (Page a) | Pair a a >\n"
+    "type V = G Int32",
+}
+
+
+@pytest.mark.parametrize("schema", _EXTRACTED.values(), ids=list(_EXTRACTED))
+def test_naming_a_record_changes_nothing(schema: str) -> None:
+    inline, named = compile_schema(_INLINE)["V"], compile_schema(schema)["V"]
+    for text in ("Box { w: 1 }", 'Box({ w: 2, tags: ["a"] })', "Box { w: 3, x: 4 }", "Pair(1, 2)"):
+        host = inline.parse(text)
+        assert named.parse(text) == host
+        assert named.to_json(host) == inline.to_json(host)  # byte for byte
+        assert named.canonical(host) == inline.canonical(host)
+        assert named.from_json(inline.to_json(host)) == host
+    assert named.parse("Box { w: 1 }") == Tagged("Box", {"w": 1})
+    assert named.to_json(Tagged("Box", {"w": 1})) == '{"_tag":"Box","w":1}'
+    for bad, code in (('{"_tag":"Box","value":{"w":1}}', "missing-field"), ('{"_tag":"Box"}', "missing-field")):
+        with pytest.raises(HausDecodeError) as e:
+            named.from_json(bad)
+        assert e.value.code == code
+
+
+def test_a_type_parameter_is_never_a_record_case() -> None:
+    s = compile_schema("""
+        type R = { w: Int32 }
+        type G a = < Box a >
+        type V = G R
+        type Out = Result String R
+    """)
+    assert s["V"].parse("Box { w: 1 }") == Tagged("Box", ({"w": 1},))
+    assert s["V"].to_json(Tagged("Box", ({"w": 1},))) == '{"_tag":"Box","value":{"w":1}}'
+    assert s["Out"].to_json(Tagged("Ok", ({"w": 1},))) == '{"_tag":"Ok","value":{"w":1}}'
+    # Different JSON forms, so `< Box a >` with a := R and `< Box R >` are not one instance.
+    s = compile_schema(
+        "type R = { w: Int32 }\ntype W x = { v: x }\ntype G a = W < Box a >\ntype A = G R\ntype B = W < Box R >"
+    )
+    assert s["A"].to_json({"v": Tagged("Box", ({"w": 1},))}) == '{"v":{"_tag":"Box","value":{"w":1}}}'
+    assert s["B"].to_json({"v": Tagged("Box", {"w": 1})}) == '{"v":{"_tag":"Box","w":1}}'
+
+
+def test_record_cases_by_name_in_the_model() -> None:
+    from haus.schema import PositionalPayload, VariantType, parse_schema_file
+
+    f = parse_schema_file("type R = { w: Int32 }\ntype A = R\ntype V = < Box A | Sec (Secret R) | Two R R >")
+    v = f.instance("V")
+    assert v is not None and isinstance(v.body, VariantType)
+    box, sec, two = (c.payload for c in v.body.cases)
+    assert isinstance(box, PositionalPayload) and box.record is not None and box.record.fields[0].key == "w"
+    assert isinstance(sec, PositionalPayload) and sec.record is None
+    assert isinstance(two, PositionalPayload) and two.record is None
+
+
+def test_record_cases_by_name_keep_their_errors_and_recursion() -> None:
+    s = compile_schema("""
+        type R = { w: Int32, next?: V }
+        type V = < Box R | End >
+        type Strict = closed { id: Int32 }
+        type S = < Box Strict >
+    """)
+    v = s["V"]
+    value = v.parse("Box { w: 1, next: Box { w: 2, next: End } }")
+    assert value == Tagged("Box", {"w": 1, "next": Tagged("Box", {"w": 2, "next": Tagged("End")})})
+    assert v.to_json(value) == '{"_tag":"Box","w":1,"next":{"_tag":"Box","w":2,"next":{"_tag":"End"}}}'
+    assert v.from_json(v.to_json(value)) == value
+    for text in ("Box(1)", "Box(1, 2)", "Box", "Box({ w: 1 }, { w: 2 })"):  # as for `Circle { … }`
+        with pytest.raises(HausDecodeError) as e:
+            v.parse(text)
+        assert e.value.code == "wrong-payload" and e.value.path == ()
+    with pytest.raises(HausDecodeError) as e:
+        v.parse('Box { w: "1" }')
+    assert e.value.path == ("w",)
+    with pytest.raises(HausDecodeError) as e:
+        s["S"].from_json('{"_tag":"Box","id":1,"x":2}')
+    assert e.value.code == "unknown-field"
+    with pytest.raises(HausDecodeError) as e:
+        s["S"].parse("Box { id: 1, x: 2 }")
+    assert e.value.code == "unknown-field"
+
+
+def test_a_codec_applies_to_a_record_case_by_name() -> None:
+    class Width:
+        def decode(self, value: object, /) -> int:
+            return cast("int", cast("Mapping[str, object]", value)["w"])
+
+        def encode(self, value: object, /) -> object:
+            return {"w": value}
+
+    s = compile_schema("type R = { w: Int32 }\ntype V = < Box R >", codecs={"R": Width()})
+    assert s["V"].parse("Box { w: 7 }") == Tagged("Box", cast("dict[str, object]", 7))
+    assert s["V"].to_json(Tagged("Box", cast("dict[str, object]", 7))) == '{"_tag":"Box","w":7}'
+    assert s["V"].from_json('{"_tag":"Box","w":7}') == Tagged("Box", cast("dict[str, object]", 7))

@@ -81,7 +81,14 @@ pub(crate) fn parse_rest(src: &str, limits: &Limits, at_start: bool) -> Result<V
 
 /// Exactly one value, with comments and whitespace around it: one item of a stream.
 pub(crate) fn parse_single(src: &str, limits: &Limits, at_start: bool) -> Result<Value, Error> {
-    Parser::new(src, limits, 0, at_start.then_some(0))?.single()
+    Parser::new(src, limits, 0, at_start.then_some(0))?.single(false)
+}
+
+/// One item of a stream with the comma after it, which ends `src`: errors
+/// are those of the whole file, which sees the comma too (`1,,2`: "expected
+/// a value, found ','").
+pub(crate) fn parse_item(src: &str, limits: &Limits, at_start: bool) -> Result<Value, Error> {
+    Parser::new(src, limits, 0, at_start.then_some(0))?.single(true)
 }
 
 /// `text` as exactly one number literal (`1E5`, `0xFF`, `1_000`), normalized
@@ -208,7 +215,8 @@ impl<'a> Parser<'a> {
         Ok(out)
     }
 
-    fn single(&mut self) -> R<Value> {
+    /// `comma`: the text ends with the comma after the value.
+    fn single(&mut self, comma: bool) -> R<Value> {
         self.trivia()?;
         if self.eof() || self.peek() == Some(b',') {
             let found = describe(self.peek_char());
@@ -218,6 +226,9 @@ impl<'a> Parser<'a> {
         }
         let value = self.value()?;
         self.trivia()?;
+        if comma && self.peek() == Some(b',') && self.pos + 1 == self.b.len() {
+            self.pos += 1;
+        }
         match self.eof() {
             true => Ok(value),
             false => Err(self.separator_error(Some(&value), "expected ',' between top-level values", None)),

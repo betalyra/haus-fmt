@@ -77,10 +77,22 @@ inductive Field where
 inductive Case where
   /-- `Tag`: no payload. -/
   | bare (tag : String)
-  /-- `Tag { … }`: one argument, a record. -/
+  /-- `Tag { … }`: one argument, a record written in place. -/
   | record (tag : String) (closed : Bool) (fields : List Field)
-  /-- `Tag T1 … Tn`: exactly n arguments. -/
+  /--
+  `Tag T1 … Tn`: exactly n arguments. Also how a type parameter is applied:
+  `Ok a` of `Result e a` is `positional "Ok" [a]` whatever `a` is, so it is
+  never a record case (§15).
+  -/
   | positional (tag : String) (args : List Ty)
+  /--
+  `Tag T`: one argument written as a type that isn't a type parameter: a
+  name, an applied name (`Page Int32`, an instance in the environment) or a
+  type in parentheses. It is a record case when `T` is a record through
+  references (`recordOf?`), and a case of one positional argument otherwise
+  (`Case.resolve`).
+  -/
+  | named (tag : String) (arg : Ty)
 end
 
 def Field.key : Field → String | .mk k _ _ => k
@@ -88,7 +100,7 @@ def Field.optional : Field → Bool | .mk _ o _ => o
 def Field.ty : Field → Ty | .mk _ _ t => t
 
 def Case.tag : Case → String
-  | .bare t | .record t _ _ | .positional t _ => t
+  | .bare t | .record t _ _ | .positional t _ | .named t _ => t
 
 /-! The prelude's variants (`prelude.schema.haus`) are ordinary closed variants. -/
 

@@ -262,6 +262,26 @@ describe("JSON", () => {
       // 512 JSON levels are beyond hausJsonDepth(8) = 34: the reader stops them.
       expect((yield* Effect.flip(Haus.fromHausJson(json, { maxDepth: LOWERED })))._tag).toBe("HausParseError")
     }))
+
+  it.effect("lengths count on the resulting value, not the JSON text (spec §16, Limits)", () =>
+    Effect.gen(function* () {
+      const four = { maxStringLength: 4 }
+      // `é` is six JSON characters and one haus character.
+      const escaped = (n: number) => `"${"\\u00e9".repeat(n)}"`
+      expect(yield* Haus.fromJson(Schema.String)(escaped(4), four)).toBe("éééé")
+      expect(yield* Stream.runCollect(Haus.decodeJsonLines(Schema.String)(chunked(`${escaped(4)}\n`), four))).toEqual(["éééé"])
+      const long = yield* Effect.flip(Haus.fromJson(Schema.String)(escaped(5), four))
+      expect([long._tag, long.code]).toEqual(["HausSchemaError", "string-too-long"])
+      // Bytes: two characters per byte. With 8, 4 bytes are accepted; 5 are not, though "AAECAwQ=" is 8 JSON characters.
+      const eight = { maxStringLength: 8 }
+      expect(yield* Haus.fromJson(Schema.Uint8Array)('"AAECAw=="', eight)).toEqual(new Uint8Array([0, 1, 2, 3]))
+      const bytes = yield* Effect.flip(Haus.fromJson(Schema.Uint8Array)('"AAECAwQ="', eight))
+      expect([bytes._tag, bytes.code]).toEqual(["HausSchemaError", "string-too-long"])
+      // Keys and tags as haus keys and tags; escapes read.
+      expect((yield* Haus.importJson(`{"\\u0061bcd": []}`, four)).kind).toBe("record")
+      expect((yield* Effect.flip(Haus.importJson(`{"\\u0061bcde": []}`, four))).code).toBe("key-too-long")
+      expect((yield* Effect.flip(Haus.fromHausJson(`{"_haus": 1, "_value": {"_tag": "Abcde"}}`, four))).code).toBe("tag-too-long")
+    }))
 })
 
 describe("the deepest nesting the binding supports (spec §7)", () => {

@@ -614,7 +614,7 @@ SchemaBased := [].{
 
 	decode_boxed : Value -> Try(Boxed, Decode.Error)
 	decode_boxed = |v| match v {
-		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, decode_box_rec)?))
+		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, decode_box_rec)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (Boxed)", v)
@@ -633,19 +633,404 @@ SchemaBased := [].{
 	read_json_boxed = |j| {
 		(tag, ms) = FromJson.variant(j, "Boxed")?
 		match tag {
-			"Box" => match FromJson.args(ms, 1)? {
-				[a0] => Ok(Box(FromJson.arg(1, 0, a0, read_json_box_rec)?))
-				_ => FromJson.arity("Box", 1)
-			}
+			"Box" => Ok(Box(FromJson.record_case(ms, read_json_box_rec)?))
 			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
 		}
 	}
 
 	to_json_boxed : Boxed -> Try(JsonValue, Encode.Error)
 	to_json_boxed = |v| match v {
-		Box(a0) => ToJson.tagged("Box", [to_json_box_rec(a0)])
+		Box(a0) => ToJson.record_case("Box", to_json_box_rec(a0))
 		Unknown(tag, args) => ToJson.unknown(tag, args)
 	}
+
+	## haus type `schema-based#BoxAlias`.
+	BoxAlias : BoxRec
+
+	decode_box_alias : Value -> Try(BoxAlias, Decode.Error)
+	decode_box_alias = |v| decode_box_rec(v)
+
+	encode_box_alias : BoxAlias -> Value
+	encode_box_alias = |v| encode_box_rec(v)
+
+	from_json_box_alias : JsonValue -> Try(BoxAlias, Decode.Error)
+	from_json_box_alias = |j| FromJson.within_depth(read_json_box_alias(j), encode_box_alias)
+
+	read_json_box_alias : JsonValue -> Try(BoxAlias, Decode.Error)
+	read_json_box_alias = |j| read_json_box_rec(j)
+
+	to_json_box_alias : BoxAlias -> Try(JsonValue, Encode.Error)
+	to_json_box_alias = |v| to_json_box_rec(v)
+
+	## haus type `schema-based#ParenBox`.
+	ParenBox := [Box({ w : I32 }), Unknown(Str, List(Value))]
+
+	decode_paren_box : Value -> Try(ParenBox, Decode.Error)
+	decode_paren_box = |v| match v {
+		Tag("Box", [p]) => Decode.payload(
+			"Box",
+			p,
+			|fs| {
+				Ok(Box({ w: Decode.field(fs, "w", Decode.i32)? }))
+			},
+		)
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (ParenBox)", v)
+	}
+
+	encode_paren_box : ParenBox -> Value
+	encode_paren_box = |v| match v {
+		Box(r) => Tag("Box", [Encode.record([("w", Present(Num(r.w.to_str())))])])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_paren_box : JsonValue -> Try(ParenBox, Decode.Error)
+	from_json_paren_box = |j| FromJson.within_depth(read_json_paren_box(j), encode_paren_box)
+
+	read_json_paren_box : JsonValue -> Try(ParenBox, Decode.Error)
+	read_json_paren_box = |j| {
+		(tag, ms) = FromJson.variant(j, "ParenBox")?
+		match tag {
+			"Box" => {
+				Ok(Box({ w: FromJson.field(ms, "w", FromJson.i32)? }))
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_paren_box : ParenBox -> Try(JsonValue, Encode.Error)
+	to_json_paren_box = |v| match v {
+		Box(r) => ToJson.tagged_object("Box", [("w", Present(ToJson.i32(r.w)))])
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#AliasBox`.
+	AliasBox := [Box(BoxAlias), Unknown(Str, List(Value))]
+
+	decode_alias_box : Value -> Try(AliasBox, Decode.Error)
+	decode_alias_box = |v| match v {
+		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, decode_box_alias)?))
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (AliasBox)", v)
+	}
+
+	encode_alias_box : AliasBox -> Value
+	encode_alias_box = |v| match v {
+		Box(a0) => Tag("Box", [encode_box_alias(a0)])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_alias_box : JsonValue -> Try(AliasBox, Decode.Error)
+	from_json_alias_box = |j| FromJson.within_depth(read_json_alias_box(j), encode_alias_box)
+
+	read_json_alias_box : JsonValue -> Try(AliasBox, Decode.Error)
+	read_json_alias_box = |j| {
+		(tag, ms) = FromJson.variant(j, "AliasBox")?
+		match tag {
+			"Box" => Ok(Box(FromJson.record_case(ms, read_json_box_alias)?))
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_alias_box : AliasBox -> Try(JsonValue, Encode.Error)
+	to_json_alias_box = |v| match v {
+		Box(a0) => ToJson.record_case("Box", to_json_box_alias(a0))
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#Page`.
+	Page(a) : { items : List(a) }
+
+	decode_page : Value, (Value -> Try(a, Decode.Error)) -> Try(Page(a), Decode.Error)
+	decode_page = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ items: Decode.field(fs, "items", |x10| Decode.list(x10, decode_a))? })
+	}
+
+	encode_page : Page(a), (a -> Value) -> Value
+	encode_page = |v, encode_a| Encode.record([("items", Present(Encode.list(v.items, encode_a)))])
+
+	from_json_page : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Page(a), Decode.Error)
+	from_json_page = |j, from_json_a, _nullable_a| {
+		fs = FromJson.object(j, "Page")?
+		Ok({ items: FromJson.field(fs, "items", |y5| FromJson.list(y5, from_json_a))? })
+	}
+
+	to_json_page : Page(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
+	to_json_page = |v, to_json_a, _nullable_a| ToJson.object([("items", Present(ToJson.list(v.items, to_json_a)))])
+
+	## haus type `schema-based#Found`.
+	Found := [Found(Page(I32)), Unknown(Str, List(Value))]
+
+	decode_found : Value -> Try(Found, Decode.Error)
+	decode_found = |v| match v {
+		Tag("Found", [p]) => Ok(Found(Decode.record_arg("Found", p, |x12| decode_page(x12, Decode.i32))?))
+		Tag("Found", _) => Decode.arity("Found", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Found)", v)
+	}
+
+	encode_found : Found -> Value
+	encode_found = |v| match v {
+		Found(a0) => Tag("Found", [encode_page(a0, |x11| Num(x11.to_str()))])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_found : JsonValue -> Try(Found, Decode.Error)
+	from_json_found = |j| FromJson.within_depth(read_json_found(j), encode_found)
+
+	read_json_found : JsonValue -> Try(Found, Decode.Error)
+	read_json_found = |j| {
+		(tag, ms) = FromJson.variant(j, "Found")?
+		match tag {
+			"Found" => Ok(Found(FromJson.record_case(ms, |y6| from_json_page(y6, FromJson.i32, False))?))
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_found : Found -> Try(JsonValue, Encode.Error)
+	to_json_found = |v| match v {
+		Found(a0) => ToJson.record_case("Found", to_json_page(a0, ToJson.i32, False))
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#GenBox`.
+	GenBox(a) := [Box(a), Unknown(Str, List(Value))]
+
+	decode_gen_box : Value, (Value -> Try(a, Decode.Error)) -> Try(GenBox(a), Decode.Error)
+	decode_gen_box = |v, decode_a| match v {
+		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, decode_a)?))
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (GenBox)", v)
+	}
+
+	encode_gen_box : GenBox(a), (a -> Value) -> Value
+	encode_gen_box = |v, encode_a| match v {
+		Box(a0) => Tag("Box", [encode_a(a0)])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_gen_box : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(GenBox(a), Decode.Error)
+	from_json_gen_box = |j, from_json_a, _nullable_a| {
+		(tag, ms) = FromJson.variant(j, "GenBox")?
+		match tag {
+			"Box" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Box(FromJson.arg(1, 0, a0, from_json_a)?))
+				_ => FromJson.arity("Box", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_gen_box : GenBox(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
+	to_json_gen_box = |v, to_json_a, _nullable_a| match v {
+		Box(a0) => ToJson.tagged("Box", [to_json_a(a0)])
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#GenRec`.
+	GenRec : GenBox(BoxRec)
+
+	decode_gen_rec : Value -> Try(GenRec, Decode.Error)
+	decode_gen_rec = |v| decode_gen_box(v, decode_box_rec)
+
+	encode_gen_rec : GenRec -> Value
+	encode_gen_rec = |v| encode_gen_box(v, encode_box_rec)
+
+	from_json_gen_rec : JsonValue -> Try(GenRec, Decode.Error)
+	from_json_gen_rec = |j| FromJson.within_depth(read_json_gen_rec(j), encode_gen_rec)
+
+	read_json_gen_rec : JsonValue -> Try(GenRec, Decode.Error)
+	read_json_gen_rec = |j| from_json_gen_box(j, read_json_box_rec, False)
+
+	to_json_gen_rec : GenRec -> Try(JsonValue, Encode.Error)
+	to_json_gen_rec = |v| to_json_gen_box(v, to_json_box_rec, False)
+
+	## haus type `schema-based#StrictBox`.
+	StrictBox := [Box(Strict), Unknown(Str, List(Value))]
+
+	decode_strict_box : Value -> Try(StrictBox, Decode.Error)
+	decode_strict_box = |v| match v {
+		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, decode_strict)?))
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (StrictBox)", v)
+	}
+
+	encode_strict_box : StrictBox -> Value
+	encode_strict_box = |v| match v {
+		Box(a0) => Tag("Box", [encode_strict(a0)])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_strict_box : JsonValue -> Try(StrictBox, Decode.Error)
+	from_json_strict_box = |j| FromJson.within_depth(read_json_strict_box(j), encode_strict_box)
+
+	read_json_strict_box : JsonValue -> Try(StrictBox, Decode.Error)
+	read_json_strict_box = |j| {
+		(tag, ms) = FromJson.variant(j, "StrictBox")?
+		match tag {
+			"Box" => Ok(Box(FromJson.record_case(ms, read_json_strict)?))
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_strict_box : StrictBox -> Try(JsonValue, Encode.Error)
+	to_json_strict_box = |v| match v {
+		Box(a0) => ToJson.record_case("Box", to_json_strict(a0))
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#SecretRec`.
+	SecretRec : Secret(BoxRec)
+
+	decode_secret_rec : Value -> Try(SecretRec, Decode.Error)
+	decode_secret_rec = |v| Decode.secret(v, "Secret BoxRec", decode_box_rec)
+
+	encode_secret_rec : SecretRec -> Value
+	encode_secret_rec = |v| Encode.secret(v, encode_box_rec)
+
+	from_json_secret_rec : JsonValue -> Try(SecretRec, Decode.Error)
+	from_json_secret_rec = |j| FromJson.within_depth(read_json_secret_rec(j), encode_secret_rec)
+
+	read_json_secret_rec : JsonValue -> Try(SecretRec, Decode.Error)
+	read_json_secret_rec = |j| FromJson.secret(j, "Secret BoxRec", read_json_box_rec)
+
+	to_json_secret_rec : SecretRec -> Try(JsonValue, Encode.Error)
+	to_json_secret_rec = |v| ToJson.secret(v, "Secret BoxRec", to_json_box_rec)
+
+	## haus type `schema-based#SecretBox`.
+	SecretBox := [Box(SecretRec), Unknown(Str, List(Value))]
+
+	decode_secret_box : Value -> Try(SecretBox, Decode.Error)
+	decode_secret_box = |v| match v {
+		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, decode_secret_rec)?))
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (SecretBox)", v)
+	}
+
+	encode_secret_box : SecretBox -> Value
+	encode_secret_box = |v| match v {
+		Box(a0) => Tag("Box", [encode_secret_rec(a0)])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_secret_box : JsonValue -> Try(SecretBox, Decode.Error)
+	from_json_secret_box = |j| FromJson.within_depth(read_json_secret_box(j), encode_secret_box)
+
+	read_json_secret_box : JsonValue -> Try(SecretBox, Decode.Error)
+	read_json_secret_box = |j| {
+		(tag, ms) = FromJson.variant(j, "SecretBox")?
+		match tag {
+			"Box" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Box(FromJson.arg(1, 0, a0, read_json_secret_rec)?))
+				_ => FromJson.arity("Box", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_secret_box : SecretBox -> Try(JsonValue, Encode.Error)
+	to_json_secret_box = |v| match v {
+		Box(a0) => ToJson.tagged("Box", [to_json_secret_rec(a0)])
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#InlineSecretBox`.
+	InlineSecretBox := [Box(Secret({ w : I32 })), Unknown(Str, List(Value))]
+
+	decode_inline_secret_box : Value -> Try(InlineSecretBox, Decode.Error)
+	decode_inline_secret_box = |v| match v {
+		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, |x13| Decode.secret(x13, "Secret { … }", decode_inline_secret_box_box))?))
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (InlineSecretBox)", v)
+	}
+
+	encode_inline_secret_box : InlineSecretBox -> Value
+	encode_inline_secret_box = |v| match v {
+		Box(a0) => Tag("Box", [Encode.secret(a0, encode_inline_secret_box_box)])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_inline_secret_box : JsonValue -> Try(InlineSecretBox, Decode.Error)
+	from_json_inline_secret_box = |j| FromJson.within_depth(read_json_inline_secret_box(j), encode_inline_secret_box)
+
+	read_json_inline_secret_box : JsonValue -> Try(InlineSecretBox, Decode.Error)
+	read_json_inline_secret_box = |j| {
+		(tag, ms) = FromJson.variant(j, "InlineSecretBox")?
+		match tag {
+			"Box" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Box(FromJson.arg(1, 0, a0, |y7| FromJson.secret(y7, "Secret { … }", from_json_inline_secret_box_box))?))
+				_ => FromJson.arity("Box", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_inline_secret_box : InlineSecretBox -> Try(JsonValue, Encode.Error)
+	to_json_inline_secret_box = |v| match v {
+		Box(a0) => ToJson.tagged("Box", [ToJson.secret(a0, "Secret { … }", to_json_inline_secret_box_box)])
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
+
+	## haus type `schema-based#Holder`.
+	Holder(v) : { item : v }
+
+	decode_holder : Value, (Value -> Try(v, Decode.Error)) -> Try(Holder(v), Decode.Error)
+	decode_holder = |v, decode_v| {
+		fs = Decode.strict_record(v)?
+		Ok({ item: Decode.field(fs, "item", decode_v)? })
+	}
+
+	encode_holder : Holder(v), (v -> Value) -> Value
+	encode_holder = |v, encode_v| Encode.record([("item", Present(encode_v(v.item)))])
+
+	from_json_holder : JsonValue, (JsonValue -> Try(v, Decode.Error)), Bool -> Try(Holder(v), Decode.Error)
+	from_json_holder = |j, from_json_v, _nullable_v| {
+		fs = FromJson.object(j, "Holder")?
+		Ok({ item: FromJson.field(fs, "item", from_json_v)? })
+	}
+
+	to_json_holder : Holder(v), (v -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
+	to_json_holder = |v, to_json_v, _nullable_v| ToJson.object([("item", Present(to_json_v(v.item)))])
+
+	## haus type `schema-based#Inner`.
+	Inner(a) : Holder([X(a), Unknown(Str, List(Value))])
+
+	decode_inner : Value, (Value -> Try(a, Decode.Error)) -> Try(Inner(a), Decode.Error)
+	decode_inner = |v, decode_a| decode_holder(v, |x14| decode_inner1(x14, decode_a))
+
+	encode_inner : Inner(a), (a -> Value) -> Value
+	encode_inner = |v, encode_a| encode_holder(v, |x15| encode_inner1(x15, encode_a))
+
+	from_json_inner : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Inner(a), Decode.Error)
+	from_json_inner = |j, from_json_a, nullable_a| from_json_holder(j, |y8| from_json_inner1(y8, from_json_a, nullable_a), False)
+
+	to_json_inner : Inner(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
+	to_json_inner = |v, to_json_a, nullable_a| to_json_holder(v, |y9| to_json_inner1(y9, to_json_a, nullable_a), False)
+
+	## haus type `schema-based#InnerRec`.
+	InnerRec : Inner(BoxRec)
+
+	decode_inner_rec : Value -> Try(InnerRec, Decode.Error)
+	decode_inner_rec = |v| decode_inner(v, decode_box_rec)
+
+	encode_inner_rec : InnerRec -> Value
+	encode_inner_rec = |v| encode_inner(v, encode_box_rec)
+
+	from_json_inner_rec : JsonValue -> Try(InnerRec, Decode.Error)
+	from_json_inner_rec = |j| FromJson.within_depth(read_json_inner_rec(j), encode_inner_rec)
+
+	read_json_inner_rec : JsonValue -> Try(InnerRec, Decode.Error)
+	read_json_inner_rec = |j| from_json_inner(j, read_json_box_rec, False)
+
+	to_json_inner_rec : InnerRec -> Try(JsonValue, Encode.Error)
+	to_json_inner_rec = |v| to_json_inner(v, to_json_box_rec, False)
 
 	## haus type `schema-based#MyMaybe`.
 	MyMaybe(a) := [None, Some(a)]
@@ -695,7 +1080,7 @@ SchemaBased := [].{
 	decode_mine = |v| decode_my_maybe(v, Decode.i32)
 
 	encode_mine : Mine -> Value
-	encode_mine = |v| encode_my_maybe(v, |x10| Num(x10.to_str()))
+	encode_mine = |v| encode_my_maybe(v, |x16| Num(x16.to_str()))
 
 	from_json_mine : JsonValue -> Try(Mine, Decode.Error)
 	from_json_mine = |j| FromJson.within_depth(read_json_mine(j), encode_mine)
@@ -723,5 +1108,55 @@ SchemaBased := [].{
 
 	to_json_opt_loop : OptLoop -> Try(JsonValue, Encode.Error)
 	to_json_opt_loop = |v| ToJson.maybe(v, False, to_json_loop)
+
+	decode_inline_secret_box_box : Value -> Try({ w : I32 }, Decode.Error)
+	decode_inline_secret_box_box = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ w: Decode.field(fs, "w", Decode.i32)? })
+	}
+
+	encode_inline_secret_box_box : { w : I32 } -> Value
+	encode_inline_secret_box_box = |v| Encode.record([("w", Present(Num(v.w.to_str())))])
+
+	from_json_inline_secret_box_box : JsonValue -> Try({ w : I32 }, Decode.Error)
+	from_json_inline_secret_box_box = |j| {
+		fs = FromJson.object(j, "InlineSecretBoxBox")?
+		Ok({ w: FromJson.field(fs, "w", FromJson.i32)? })
+	}
+
+	to_json_inline_secret_box_box : { w : I32 } -> Try(JsonValue, Encode.Error)
+	to_json_inline_secret_box_box = |v| ToJson.object([("w", Present(ToJson.i32(v.w)))])
+
+	decode_inner1 : Value, (Value -> Try(a, Decode.Error)) -> Try([X(a), Unknown(Str, List(Value))], Decode.Error)
+	decode_inner1 = |v, decode_a| match v {
+		Tag("X", [a0]) => Ok(X(Decode.arg("X", 0, a0, decode_a)?))
+		Tag("X", _) => Decode.arity("X", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Inner1)", v)
+	}
+
+	encode_inner1 : [X(a), Unknown(Str, List(Value))], (a -> Value) -> Value
+	encode_inner1 = |v, encode_a| match v {
+		X(a0) => Tag("X", [encode_a(a0)])
+		Unknown(tag, args) => Tag(tag, args)
+	}
+
+	from_json_inner1 : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try([X(a), Unknown(Str, List(Value))], Decode.Error)
+	from_json_inner1 = |j, from_json_a, _nullable_a| {
+		(tag, ms) = FromJson.variant(j, "Inner1")?
+		match tag {
+			"X" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(X(FromJson.arg(1, 0, a0, from_json_a)?))
+				_ => FromJson.arity("X", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_inner1 : [X(a), Unknown(Str, List(Value))], (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
+	to_json_inner1 = |v, to_json_a, _nullable_a| match v {
+		X(a0) => ToJson.tagged("X", [to_json_a(a0)])
+		Unknown(tag, args) => ToJson.unknown(tag, args)
+	}
 
 }

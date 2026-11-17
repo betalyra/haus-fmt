@@ -739,12 +739,13 @@ fn check(file: &File) -> Result<Vec<Fail>, Fail> {
         return Err((imp.pos, Code::UnknownModule, reason));
     }
     for d in &file.types {
-        for (i, p) in d.params.iter().enumerate() {
+        let mut seen = HashSet::new();
+        for p in &d.params {
             if p.starts_with('_') {
                 let reason = format!("{p} can't be a parameter name: a parameter starts with a lowercase letter");
                 return Err((d.pos, Code::InvalidParameter, reason));
             }
-            if d.params[..i].contains(p) {
+            if !seen.insert(p) {
                 return Err((d.pos, Code::InvalidParameter, format!("parameter {p} appears twice")));
             }
         }
@@ -968,7 +969,8 @@ pub type Fail = (usize, Code, String);
 fn expand(file: File, keep_imported: bool) -> Result<File, Fail> {
     let mut x = Expander {
         defs: file.types.iter().map(|d| (d.name.clone(), d.clone())).collect(),
-        imported: file.imports.iter().flat_map(|i| i.names.iter().map(|(n, _)| n.clone())).collect(),
+        imported: names(file.imports.iter().filter(|i| !i.module.starts_with("std/"))),
+        std: names(file.imports.iter().filter(|i| i.module.starts_with("std/"))),
         keep_imported,
         done: HashMap::new(),
         busy: vec![],
@@ -978,9 +980,17 @@ fn expand(file: File, keep_imported: bool) -> Result<File, Fail> {
     Ok(File { types, ..file })
 }
 
+/// The names the imports bring in.
+fn names<'a>(imports: impl Iterator<Item = &'a Import>) -> HashSet<String> {
+    imports.flat_map(|i| i.names.iter().map(|(n, _)| n.clone())).collect()
+}
+
 struct Expander {
     defs: HashMap<String, TypeDef>,
+    /// Names imported from files and packages.
     imported: HashSet<String>,
+    /// Names imported from standard modules (std/time): types, but not records or variants.
+    std: HashSet<String>,
     /// Leave spreads of imported types in place, for the resolver.
     keep_imported: bool,
     /// Bodies of definitions already expanded.
@@ -1003,7 +1013,7 @@ impl Expander {
                     .iter()
                     .map(|f| Ok((Field { ty: self.ty(&f.ty)?, ..f.clone() }, None)))
                     .collect::<Result<Vec<_>, Fail>>()?;
-                let (fields, spreads) = self.merge(own, spreads, |x, s| match x.body(s)? {
+                let (fields, spreads) = self.merge(own, spreads, |x, s| match x.body(s, "record")? {
                     Ty::Record { fields, .. } => Ok(fields),
                     _ => Err((
                         s.pos,
@@ -1024,7 +1034,7 @@ impl Expander {
                         Ok((Case { payload, ..c.clone() }, None))
                     })
                     .collect::<Result<Vec<_>, Fail>>()?;
-                let (cases, spreads) = self.merge(own, spreads, |x, s| match x.body(s)? {
+                let (cases, spreads) = self.merge(own, spreads, |x, s| match x.body(s, "variant")? {
                     Ty::Variant { cases, .. } => Ok(cases),
                     _ => Err((
                         s.pos,
@@ -1085,18 +1095,26 @@ impl Expander {
     }
 
     /// The expanded body of the type a spread names, following aliases.
-    fn body(&mut self, s: &Spread) -> Result<Ty, Fail> {
+    /// `want`: a record or a variant, for errors.
+    fn body(&mut self, s: &Spread, want: &str) -> Result<Ty, Fail> {
         let mut name = s.name.clone();
         loop {
             let Some(def) = self.defs.get(&name).cloned() else {
-                return Err(match self.imported.contains(&name) {
-                    true => (
+                // A standard or built-in type is known, just not a record or variant.
+                let known = self.std.contains(&name) || PRELUDE.iter().any(|(n, _)| *n == name);
+                return match (known, self.imported.contains(&name)) {
+                    (true, _) => Err((
+                        s.pos,
+                        Code::InvalidSpread,
+                        format!("{} is not a {want}, so it can't be spread here", s.name),
+                    )),
+                    (false, true) => Err((
                         s.pos,
                         Code::InvalidSpread,
                         format!("{name} is imported; haus-fmt-build can spread only types defined in this file so far"),
-                    ),
-                    false => (s.pos, Code::UnknownType, unknown_type(&name)),
-                });
+                    )),
+                    (false, false) => Err((s.pos, Code::UnknownType, unknown_type(&name))),
+                };
             };
             if !def.params.is_empty() {
                 let params = def.params.join(" ");

@@ -194,6 +194,16 @@ ToJson := [].{
 	tagged_object : Str, List((Str, [Missing, Present(Try(JsonValue, Encode.Error))])) -> Try(JsonValue, Encode.Error)
 	tagged_object = |tag, fields| members(fields).map_ok(|ms| Object([("_tag", String(tag))].concat(ms)))
 
+	## A record case whose record is a named type (`Box BoxRec` with `type
+	## BoxRec = { w: Int32 }`, spec §15): the record's members beside
+	## `"_tag"`, `{"_tag": "Box", "w": 1}`, as for `Box { w: Int32 }`.
+	## `record` is the record, written.
+	record_case : Str, Try(JsonValue, Encode.Error) -> Try(JsonValue, Encode.Error)
+	record_case = |tag, record| match record? {
+		Object(ms) => Ok(Object([("_tag", String(tag))].concat(ms)))
+		other => Err({ code: ErrorCode.cannot_encode, reason: "${tag} takes a record, whose JSON is an object; found ${JsonValue.describe(other)}", path: "" })
+	}
+
 	## A case with positional values: `{"_tag": "Empty"}`, `{"_tag": "Wrap",
 	## "value": 3}`, `{"_tag": "Point", "values": [1, 2]}`.
 	tagged : Str, List(Try(JsonValue, Encode.Error)) -> Try(JsonValue, Encode.Error)
@@ -297,6 +307,9 @@ expect ToJson.lines_with(["a", "abcd"], ToJson.str, small) == Err({ code: "strin
 expect ToJson.lines_with(["a", "b"], ToJson.str, small) == Ok("\"a\"\n\"b\"\n")
 expect ToJson.to_str_with("a", ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
 expect ToJson.lines_with([], ToJson.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
+# A record case by name: the record's members beside `"_tag"`.
+expect ToJson.record_case("Box", ToJson.object([("w", Present(ToJson.i32(1)))])) == Ok(Object([("_tag", String("Box")), ("w", Number("1"))]))
+expect ToJson.record_case("Box", ToJson.i32(1)).map_err(|e| e.code) == Err("cannot-encode")
 expect ToJson.unknown("hexagon", []).map_err(|e| e.code) == Err("invalid-tag") and ToJson.no_json_form("Odd", "_tag").map_err(|e| e.code) == Err("no-json-form")
 expect ToJson.to_str(Secret.new("x"), |s| ToJson.secret(s, "Secret Decimal", ToJson.decimal)).map_err(|e| (e.code, e.reason)) == Err(("invalid-secret", "not a valid Secret Decimal (the value is hidden)"))
 expect ToJson.to_str([("pt-BR", "1E5x")], |m| ToJson.map(m, ToJson.decimal)).map_err(|e| (e.code, ErrorCode.place(e.path))) == Err(("cannot-encode", "$[\"pt-BR\"]"))

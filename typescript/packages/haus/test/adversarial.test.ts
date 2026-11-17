@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import * as h from "../src/schema.js"
-import { arr, format, infer, inferSchema, num, parseAll, parseDocument, parseStream, printShape, type Value } from "../src/index.js"
+import { arr, format, fromHausJson, importJson, infer, inferSchema, num, parseAll, parseDocument, parseStream, printShape, type Value } from "../src/index.js"
 
 /** Run `f` and fail the test if it takes longer than `ms`. */
 const within = <A>(ms: number, f: () => A): A => {
@@ -174,6 +174,35 @@ describe("decoding values built in code", () => {
     let v: Value = num("1")
     for (let i = 0; i < 300; i++) v = arr([v])
     expect(errorOf(() => h.decode(h.Array(h.Int), v)).message).toContain("nested deeper than 256")
+  })
+})
+
+describe("duplicate keys stay linear (spec §7)", () => {
+  // Every check is a Map, a Set or an Object.create(null) lookup: V8 hashes strings and
+  // array indices with a seed chosen at random per process, so keys can't be crafted to
+  // collide. Names (k0 …) and array indices ("0" …) are kept apart by V8, so both are tried.
+  const N = 100_000
+  const names = Array.from({ length: N }, (_, i) => `k${i}`)
+  const indices = Array.from({ length: N }, (_, i) => `${i}`)
+  const record = (keys: readonly string[], extra = "") => `{ ${keys.map((k) => `${JSON.stringify(k)}: 1`).join(", ")}${extra} }`
+  const object = (keys: readonly string[], extra = "", value = "1") => `{${keys.map((k) => `${JSON.stringify(k)}: ${value}`).join(",")}${extra}}`
+  const Counts = h.Map(h.Int32)
+
+  it("haus records with many keys, and a duplicate found at the end", () => {
+    for (const keys of [names, indices]) {
+      expect(within(3000, () => parseAll(record(keys)))[0]).toMatchObject({ kind: "record" })
+      expect(within(3000, () => errorOf(() => parseAll(record(keys, `, ${JSON.stringify(keys[0])}: 2`)))).message).toContain("duplicate key")
+      expect(within(3000, () => h.parse(Counts, record(keys))).size).toBe(N)
+    }
+  })
+
+  it("JSON objects with many members: parsing, schema-based, self-describing and the import", () => {
+    for (const keys of [names, indices]) {
+      expect(within(3000, () => errorOf(() => importJson(object(keys, `,${JSON.stringify(keys[0])}:2`)))).message).toContain("duplicate member name")
+      expect(within(3000, () => importJson(object(keys)))).toMatchObject({ kind: "record" })
+      expect(within(3000, () => h.fromJson(Counts, object(keys))).size).toBe(N)
+      expect(within(3000, () => fromHausJson(`{"_haus":1,"_value":{"_rec":${object(keys, "", `"v"`)}}}`))).toMatchObject({ kind: "record" })
+    }
   })
 })
 

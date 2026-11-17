@@ -53,11 +53,14 @@ class Tagged:
     | `Empty`                  | `Empty`         | `Tagged("Empty")`                   |
     | `Circle { r: Float64 }`  | `Circle { r: 1 }` | `Tagged("Circle", {"r": 1.0})`    |
     | `Point Float64 Float64`  | `Point(1, 2)`   | `Tagged("Point", (1.0, 2.0))`       |
+
+    A record case by name (`Circle Disc` with `type Disc = { r: Float64 }`, spec §15) is the same as
+    `Circle { r: Float64 }`. A type parameter is not a record case: `Ok a` is `Tagged("Ok", (x,))`.
     """
 
     tag: str
     payload: tuple[object, ...] | Mapping[str, object] = ()
-    """`()` without payload, a dict of fields for `Tag { … }`, a tuple of arguments for `Tag A B`."""
+    """`()` without payload, a dict of fields for a record case, a tuple of arguments for `Tag A B`."""
 
 
 @dataclass(frozen=True, slots=True)

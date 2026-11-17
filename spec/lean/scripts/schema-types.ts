@@ -17,7 +17,13 @@
  *     | {"maybe": T} | {"secret": T} | {"ref": KEY}
  *     | {"record": {"closed": B, "fields": [{"key": K, "optional": B, "type": T}]}}
  *     | {"variant": {"closed": B, "cases": [{"tag": TAG, "payload": P}]}}
- *   P = "none" | {"record": {"closed": B, "fields": […]}} | {"positional": [T]}
+ *   P = "none" | {"record": {"closed": B, "fields": […]}, "named"?: T} | {"positional": [T]}
+ *
+ * A record case whose record is written by name (`Box BoxRec`, `Found (Page
+ * Int32)`, spec §15) also has `"named"`, T the reference as written: the Lean
+ * model reads that and finds the record through the definitions itself
+ * (`Case.resolve`); the fuzzers read `"record"`. A case whose one argument is
+ * a type parameter stays `positional`, whatever the parameter stands for.
  *
  * Attributes are left out: decoding never reads them (spec §15). The script
  * checks that on the TypeScript side too: the file with its attributes
@@ -54,7 +60,9 @@ function resolve(text: string): [string, Json][] {
     fields: r.fields.map((f: any) => ({ key: f.key, optional: f.optional, type: type(f.type) })),
   })
   const payload = (p: any): Json =>
-    p.kind === "none" ? "none" : p.kind === "record" ? { record: record(p.record) } : { positional: p.items.map(type) }
+    p.kind === "none" ? "none"
+    : p.kind === "record" ? { record: record(p.record), ...(p.named !== undefined ? { named: type(p.named) } : {}) }
+    : { positional: p.items.map(type) }
   const type = (t: any): Json => {
     switch (t.kind) {
       case "builtin": return { builtin: t.name }

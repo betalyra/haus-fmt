@@ -387,12 +387,13 @@ record_line = |fields, depth, writer| {
 	limits = writer.limits
 	open(depth, limits)?
 	# Keys are unique (spec §1): a record built in code might repeat one.
-	var $seen = Set.empty()
+	var $keys = List.with_capacity(fields.len())
 	for (k, _) in fields {
-		if $seen.contains(k) {
-			return Err({ code: ErrorCode.duplicate_key, reason: "the key is used twice in this record", path: ErrorCode.path_key(k) })
-		}
-		$seen = $seen.insert(k)
+		$keys = $keys.append((k, $keys.len()))
+	}
+	match Value.first_repeated($keys) {
+		Ok((k, _)) => return Err({ code: ErrorCode.duplicate_key, reason: "the key is used twice in this record", path: ErrorCode.path_key(k) })
+		Err(_) => {}
 	}
 	sp = space(writer)
 	var $out = []

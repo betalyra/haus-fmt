@@ -238,6 +238,16 @@ write = |ty, v| match ty {
 	"Loop" => written(SchemaBased.decode_loop(v), SchemaBased.to_json_loop)
 	"BoxRec" => written(SchemaBased.decode_box_rec(v), SchemaBased.to_json_box_rec)
 	"Boxed" => written(SchemaBased.decode_boxed(v), SchemaBased.to_json_boxed)
+	"BoxAlias" => written(SchemaBased.decode_box_alias(v), SchemaBased.to_json_box_alias)
+	"ParenBox" => written(SchemaBased.decode_paren_box(v), SchemaBased.to_json_paren_box)
+	"AliasBox" => written(SchemaBased.decode_alias_box(v), SchemaBased.to_json_alias_box)
+	"Found" => written(SchemaBased.decode_found(v), SchemaBased.to_json_found)
+	"GenRec" => written(SchemaBased.decode_gen_rec(v), SchemaBased.to_json_gen_rec)
+	"StrictBox" => written(SchemaBased.decode_strict_box(v), SchemaBased.to_json_strict_box)
+	"SecretRec" => written(SchemaBased.decode_secret_rec(v), SchemaBased.to_json_secret_rec)
+	"SecretBox" => written(SchemaBased.decode_secret_box(v), SchemaBased.to_json_secret_box)
+	"InlineSecretBox" => written(SchemaBased.decode_inline_secret_box(v), SchemaBased.to_json_inline_secret_box)
+	"InnerRec" => written(SchemaBased.decode_inner_rec(v), SchemaBased.to_json_inner_rec)
 	"Mine" => written(SchemaBased.decode_mine(v), SchemaBased.to_json_mine)
 	"OptLoop" => written(SchemaBased.decode_opt_loop(v), SchemaBased.to_json_opt_loop)
 	_ => Err("no type ${ty}")
@@ -274,6 +284,16 @@ read = |ty, j| match ty {
 	"Loop" => SchemaBased.from_json_loop(j).map_ok(SchemaBased.encode_loop)
 	"BoxRec" => SchemaBased.from_json_box_rec(j).map_ok(SchemaBased.encode_box_rec)
 	"Boxed" => SchemaBased.from_json_boxed(j).map_ok(SchemaBased.encode_boxed)
+	"BoxAlias" => SchemaBased.from_json_box_alias(j).map_ok(SchemaBased.encode_box_alias)
+	"ParenBox" => SchemaBased.from_json_paren_box(j).map_ok(SchemaBased.encode_paren_box)
+	"AliasBox" => SchemaBased.from_json_alias_box(j).map_ok(SchemaBased.encode_alias_box)
+	"Found" => SchemaBased.from_json_found(j).map_ok(SchemaBased.encode_found)
+	"GenRec" => SchemaBased.from_json_gen_rec(j).map_ok(SchemaBased.encode_gen_rec)
+	"StrictBox" => SchemaBased.from_json_strict_box(j).map_ok(SchemaBased.encode_strict_box)
+	"SecretRec" => SchemaBased.from_json_secret_rec(j).map_ok(SchemaBased.encode_secret_rec)
+	"SecretBox" => SchemaBased.from_json_secret_box(j).map_ok(SchemaBased.encode_secret_box)
+	"InlineSecretBox" => SchemaBased.from_json_inline_secret_box(j).map_ok(SchemaBased.encode_inline_secret_box)
+	"InnerRec" => SchemaBased.from_json_inner_rec(j).map_ok(SchemaBased.encode_inner_rec)
 	"Mine" => SchemaBased.from_json_mine(j).map_ok(SchemaBased.encode_mine)
 	"OptLoop" => SchemaBased.from_json_opt_loop(j).map_ok(SchemaBased.encode_opt_loop)
 	_ => Decode.fail("no-type", "no type ${ty}")
@@ -363,7 +383,7 @@ report = |result| match result {
 }
 
 # json/schema-based.cases.haus
-expect JsonTest.count(schema_based_cases) == 116
+expect JsonTest.count(schema_based_cases) == 126
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
 expect JsonTest.schema_based(schema_based_cases, 0)
@@ -653,65 +673,95 @@ expect JsonTest.schema_based(schema_based_cases, 94)
 # Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
 expect JsonTest.schema_based(schema_based_cases, 95)
 
-# Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+# Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 96)
 
-# Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1}", code: "unexpected-member" },
+# Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", code: "missing-field" },
 expect JsonTest.schema_based(schema_based_cases, 97)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
+# Ok { type: "ParenBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 98)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
+# Ok { type: "AliasBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 99)
 
-# Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
+# Ok { type: "Found", input: Found { items: [1, 2] }, json: "{\"_tag\": \"Found\", \"items\": [1, 2]}" },
 expect JsonTest.schema_based(schema_based_cases, 100)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", output: Hexagon { _args: [{ _num: "1" }], x: 2 } },
+# Read { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1, \"x\": 2}", output: Box { w: 1 } },
 expect JsonTest.schema_based(schema_based_cases, 101)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [1, 2]}", output: Run { args: [1, 2] } },
+# Err { type: "StrictBox", json: "{\"_tag\": \"Box\", \"id\": 1, \"x\": 2}", code: "unknown-field" },
 expect JsonTest.schema_based(schema_based_cases, 102)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": []}", output: Run { args: [] } },
+# Ok { type: "InnerRec", input: { item: X { w: 1 } }, json: "{\"item\": {\"_tag\": \"X\", \"value\": {\"w\": 1}}}" },
 expect JsonTest.schema_based(schema_based_cases, 103)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [\"a\"]}", output: Run { args: ["a"] } },
+# Ok { type: "SecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.schema_based(schema_based_cases, 104)
 
-# Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
+# Ok { type: "InlineSecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.schema_based(schema_based_cases, 105)
 
-# Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
+# Ok { type: "GenRec", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.schema_based(schema_based_cases, 106)
 
-# Err { type: "Mine", json: "null", code: "type-mismatch" },
+# Err { type: "GenRec", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}, \"w\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 107)
 
-# Ok { type: "OptLoop", input: None, json: "null" },
+# Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 108)
 
-# Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
+# Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 109)
 
-# Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+# Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 110)
 
-# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", output: Hexagon { _args: [{ _num: "1" }], x: 2 } },
 expect JsonTest.schema_based(schema_based_cases, 111)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [1, 2]}", output: Run { args: [1, 2] } },
 expect JsonTest.schema_based(schema_based_cases, 112)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": []}", output: Run { args: [] } },
 expect JsonTest.schema_based(schema_based_cases, 113)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [\"a\"]}", output: Run { args: ["a"] } },
 expect JsonTest.schema_based(schema_based_cases, 114)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
+# Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
 expect JsonTest.schema_based(schema_based_cases, 115)
+
+# Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
+expect JsonTest.schema_based(schema_based_cases, 116)
+
+# Err { type: "Mine", json: "null", code: "type-mismatch" },
+expect JsonTest.schema_based(schema_based_cases, 117)
+
+# Ok { type: "OptLoop", input: None, json: "null" },
+expect JsonTest.schema_based(schema_based_cases, 118)
+
+# Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
+expect JsonTest.schema_based(schema_based_cases, 119)
+
+# Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+expect JsonTest.schema_based(schema_based_cases, 120)
+
+# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
+expect JsonTest.schema_based(schema_based_cases, 121)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 122)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 123)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 124)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 125)
 
 # json/self-describing.cases.haus
 expect JsonTest.count(self_describing_cases) == 43
@@ -894,6 +944,34 @@ expect JsonTest.somes("Loop", 257) == Err("nesting deeper than 256 levels")
 # OptLoop: 255 nested Somes read, 256 don't
 expect JsonTest.somes("OptLoop", 255) == Ok({})
 expect JsonTest.somes("OptLoop", 256) == Err("nesting deeper than 256 levels")
+
+# record cases: the same JSON and Roc record, however the record is written
+expect {
+	v = Tag("Box", [Rec([("w", Num("1"))])])
+	json = written(SchemaBased.decode_boxed(v), SchemaBased.to_json_boxed)
+	same = written(SchemaBased.decode_paren_box(v), SchemaBased.to_json_paren_box) == json and written(SchemaBased.decode_alias_box(v), SchemaBased.to_json_alias_box) == json
+	json == Ok("{\"_tag\":\"Box\",\"w\":1}") and same
+}
+expect {
+	v = Tag("Box", [Rec([("w", Num("1"))])])
+	boxed = match SchemaBased.decode_boxed(v) {
+		Ok(Box(r)) => Ok(r)
+		_ => Err({})
+	}
+	paren = match SchemaBased.decode_paren_box(v) {
+		Ok(Box(r)) => Ok(r)
+		_ => Err({})
+	}
+	alias = match SchemaBased.decode_alias_box(v) {
+		Ok(Box(r)) => Ok(r)
+		_ => Err({})
+	}
+	boxed == Ok({ w: 1 }) and paren == boxed and alias == boxed
+}
+expect written(SchemaBased.decode_found(Tag("Found", [Rec([("items", Arr([Num("1")]))])])), SchemaBased.to_json_found) == Ok("{\"_tag\":\"Found\",\"items\":[1]}")
+expect written(SchemaBased.decode_gen_rec(Tag("Box", [Rec([("w", Num("1"))])])), SchemaBased.to_json_gen_rec) == Ok("{\"_tag\":\"Box\",\"value\":{\"w\":1}}")
+# by name, any payload but one record is the wrong payload, as inline
+expect [SchemaBased.decode_boxed(Tag("Box", [Num("1")])), SchemaBased.decode_boxed(Tag("Box", [])), SchemaBased.decode_boxed(Tag("Box", [Num("1"), Num("2")]))].map(|r| r.map_ok(|_| {}).map_err(|e| e.code)) == [Err("wrong-payload"), Err("wrong-payload"), Err("wrong-payload")]
 
 # valid/bare-values.jsonl
 expect JsonTest.valid(valid_bare_values, valid_bare_values_jsonl)

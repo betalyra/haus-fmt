@@ -24,7 +24,10 @@ their relative imports can't reach into a package directory.
 Files are read as spec §13.3 says: a package's `package.haus` and
 `schema.haus` are regular files, never links (its directory may be one), opened
 without following links, checked on the opened file and read from it; a
-schema file is at most 1 MiB (`file-too-large`), and each file is read once.
+schema file is at most 1 MiB (`file-too-large`), and each file is read once,
+by its real path, also when it is needed in two roles (a `pyproject.toml` that
+is a link to a schema file): every use sees the same bytes, and the checks of
+each role still apply to it.
 """
 
 from __future__ import annotations
@@ -134,6 +137,28 @@ def _read_file(path: Path, limit: int, what: str, *, irregular: ErrorCode, too_l
         os.close(fd)
 
 
+class _Files:
+    """Every file read for one schema, by real path: each is read once (spec §13.3)."""
+
+    __slots__ = ("_read",)
+
+    def __init__(self) -> None:
+        self._read: dict[str, bytes] = {}
+
+    def read(self, path: Path, limit: int, what: str, *, irregular: ErrorCode, too_large: ErrorCode) -> bytes:
+        """`_read_file`, or the bytes already read from the same real path, checked for this use."""
+        real = os.path.realpath(path)
+        if (data := self._read.get(real)) is None:
+            data = self._read[real] = _read_file(path, limit, what, irregular=irregular, too_large=too_large)
+            return data
+        # Read in another role: this use's checks, on the path it uses and the bytes read.
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            raise ModuleError(irregular, f"{what} is a symbolic link or not a regular file; it is not read")
+        if len(data) > limit:
+            raise ModuleError(too_large, f"{what} is larger than {limit // 1024} KiB; it is not read")
+        return data
+
+
 def _decode(data: bytes, what: str) -> str:
     try:
         return data.decode("utf-8")
@@ -154,8 +179,12 @@ def read_manifest(path: StrPath) -> Manifest:
     isn't a semantic version), `package-path` for a link or a file that isn't
     regular (not read).
     """
+    return _read_manifest(path, _Files())
+
+
+def _read_manifest(path: StrPath, files: _Files) -> Manifest:
     path = Path(os.path.abspath(path))
-    data = _read_file(
+    data = files.read(
         path,
         MAX_MANIFEST_SIZE,
         f"the manifest {escape(str(path))}",
@@ -223,23 +252,27 @@ def _stem(path: Path) -> str:
     return path.as_posix().removesuffix(EXTENSION)
 
 
-_PROJECT_NAMES: dict[Path, str | None] = {}
-
-
-def _project_name(pyproject: Path) -> str | None:
-    if pyproject not in _PROJECT_NAMES:
-        try:
-            if pyproject.stat().st_size > MAX_SCHEMA_SIZE:
-                raise ValueError("too large")
-            data = tomllib.loads(pyproject.read_text("utf-8"))
-        except (OSError, ValueError, RecursionError):  # TOMLDecodeError and UnicodeDecodeError are ValueErrors
-            data = {}
-        match data:
-            case {"project": {"name": str(name)}}:
-                _PROJECT_NAMES[pyproject] = name
-            case _:
-                _PROJECT_NAMES[pyproject] = None
-    return _PROJECT_NAMES[pyproject]
+def _project_name(pyproject: Path, files: _Files) -> str | None:
+    """The project name in a `pyproject.toml` (read through links), if it has one."""
+    if not pyproject.is_file():
+        return None
+    try:
+        what = f"the project file {escape(str(pyproject))}"
+        text = files.read(
+            Path(os.path.realpath(pyproject)),
+            MAX_SCHEMA_SIZE,
+            what,
+            irregular="import-not-found",
+            too_large="file-too-large",
+        ).decode("utf-8")
+        data = tomllib.loads(text)
+    except (OSError, ModuleError, ValueError, RecursionError):  # TOMLDecodeError and UnicodeDecodeError too
+        return None
+    match data:
+        case {"project": {"name": str(name)}}:
+            return name
+        case _:
+            return None
 
 
 def _package_dir(file: Path) -> Path | None:
@@ -247,16 +280,16 @@ def _package_dir(file: Path) -> Path | None:
     return next((d for d in _ancestors(file.parent) if os.path.lexists(d / MANIFEST)), None)
 
 
-def _package_of(file: Path) -> Manifest | None:
+def _package_of(file: Path, files: _Files) -> Manifest | None:
     """The manifest of the package whose schema is `file`, if it is one (`schema.haus` next to a manifest)."""
     m = file.parent / MANIFEST
-    return read_manifest(m) if file.name == PACKAGE_SCHEMA and os.path.lexists(m) else None
+    return _read_manifest(m, files) if file.name == PACKAGE_SCHEMA and os.path.lexists(m) else None
 
 
-def _package_name(directory: Path) -> str:
+def _package_name(directory: Path, files: _Files) -> str:
     """The name of the package in `directory`, or the directory if its manifest can't be read."""
     try:
-        return quote(read_manifest(directory / MANIFEST).name)
+        return quote(_read_manifest(directory / MANIFEST, files).name)
     except (OSError, ModuleError):
         return escape(str(directory))
 
@@ -279,12 +312,16 @@ def identify(path: StrPath, root: StrPath | None = None) -> str:
     Different files have different identities, apart from files of two projects
     with the same name.
     """
-    file = Path(os.path.abspath(path))
-    if (manifest := _package_of(file)) is not None:
-        return f"{manifest.name}@{manifest.major}"
+    file, files = Path(os.path.abspath(path)), _Files()
+    return _identify(file, _package_of(file, files), root, files)
+
+
+def _identify(file: Path, package: Manifest | None, root: StrPath | None, files: _Files) -> str:
+    if package is not None:
+        return f"{package.name}@{package.major}"
     file = file.resolve()
     for d in _ancestors(file.parent):
-        if (p := d / "pyproject.toml").is_file() and (name := _project_name(p)) is not None:
+        if (name := _project_name(d / "pyproject.toml", files)) is not None:
             return f"{name}/{_stem(file.relative_to(d))}"
     return _stem(_relative(file, Path(root).resolve() if root is not None else file.parent))
 
@@ -295,12 +332,17 @@ def read_module(path: StrPath, root: StrPath | None = None) -> ResolvedModule:
     The file is regular and at most 1 MiB (`file-too-large`); it is read from
     its real path, without following links.
     """
+    return _read_module(path, root, _Files())
+
+
+def _read_module(path: StrPath, root: StrPath | None, files: _Files) -> ResolvedModule:
     file = Path(os.path.abspath(path))
-    package = _package_of(file)
+    package = _package_of(file, files)
     key = file.resolve()
     what = f"the schema file {escape(str(key))}"
-    data = _read_file(key, MAX_SCHEMA_SIZE, what, irregular="import-not-found", too_large="file-too-large")
-    return ResolvedModule(str(key), identify(file, root), _decode(data, what), package.version if package else None)
+    data = files.read(key, MAX_SCHEMA_SIZE, what, irregular="import-not-found", too_large="file-too-large")
+    identity = _identify(file, package, root, files)
+    return ResolvedModule(str(key), identity, _decode(data, what), package.version if package else None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,7 +376,7 @@ class FileResolver:
     Each file is read once by a resolver: make a new one to see changed files.
     """
 
-    __slots__ = ("_by_name", "_dirs", "_folders", "_invalid", "_listings", "_modules", "_named", "base")
+    __slots__ = ("_by_name", "_dirs", "_files", "_folders", "_invalid", "_listings", "_modules", "_named", "base")
 
     base: Path
     """Where relative imports of a root file without a key resolve from, and relative directories."""
@@ -365,8 +407,10 @@ class FileResolver:
         self._by_name: dict[str, list[_Given]] | None = None
         self._invalid: list[Path] = []
         """Subdirectories of folders whose manifests are invalid."""
+        self._files = _Files()
+        """Every file read, by real path: each is read once, whatever it is read as."""
         self._modules: dict[str, ResolvedModule] = {}
-        """Every file read, by real path for files and by name for packages: each is read once."""
+        """Every module resolved, by real path for files and by name for packages."""
         self._listings: dict[Path, frozenset[str]] = {}
 
     def _path(self, path: StrPath) -> Path:
@@ -395,15 +439,15 @@ class FileResolver:
             return self._by_name
         direct: dict[str, list[_Given]] = {}
         for name, directory in self._named:
-            direct.setdefault(name, []).append(_Given(read_manifest(directory / MANIFEST), name))
+            direct.setdefault(name, []).append(_Given(_read_manifest(directory / MANIFEST, self._files), name))
         for directory in self._dirs:
-            manifest = read_manifest(directory / MANIFEST)
+            manifest = _read_manifest(directory / MANIFEST, self._files)
             direct.setdefault(manifest.name, []).append(_Given(manifest, None))
         in_folders: dict[str, list[_Given]] = {}
         for folder in self._folders:
             for directory in self._scan(folder):
                 try:
-                    manifest = read_manifest(directory / MANIFEST)
+                    manifest = _read_manifest(directory / MANIFEST, self._files)
                 except (OSError, ModuleError):
                     self._invalid.append(directory)
                     continue
@@ -450,20 +494,19 @@ class FileResolver:
         self._modules[name] = module
         return module
 
-    @staticmethod
-    def _package_files(manifest: Manifest) -> tuple[bytes, bytes]:
+    def _package_files(self, manifest: Manifest) -> tuple[bytes, bytes]:
         """The bytes of a package's `package.haus` and `schema.haus`, regular files that aren't links."""
         schema = schema_path(manifest)
         what = f"{quote(manifest.name)}: its"
         return (
-            _read_file(
+            self._files.read(
                 manifest.dir / MANIFEST,
                 MAX_MANIFEST_SIZE,
                 f"{what} {MANIFEST}",
                 irregular="package-path",
                 too_large="package-manifest",
             ),
-            _read_file(
+            self._files.read(
                 schema,
                 MAX_SCHEMA_SIZE,
                 f"{what} {PACKAGE_SCHEMA}",
@@ -504,7 +547,7 @@ class FileResolver:
     def _file(self, module: str, from_key: str | None) -> ResolvedModule:
         # A package is one file: its schema imports other packages by name.
         if from_key is not None and (package := _package_dir(Path(os.path.abspath(from_key)))) is not None:
-            name = _package_name(package)
+            name = _package_name(package, self._files)
             raise ModuleError("package-path", f"the schema of {name} can't import files, only packages by name")
         directory = Path(os.path.abspath(Path(from_key).parent if from_key is not None else self.base))
         path = self._spelled(directory, module)
@@ -521,9 +564,25 @@ class FileResolver:
             )
         if (known := self._modules.get(str(real))) is not None:
             return known
-        module_ = read_module(real, self.base)
+        module_ = _read_module(real, self.base, self._files)
         self._modules[module_.key] = module_
         return module_
+
+    @classmethod
+    def for_root(
+        cls, path: StrPath, packages: Packages = (), *, folders: Iterable[StrPath] = ()
+    ) -> tuple[ResolvedModule, FileResolver]:
+        """A root schema file (see `read_module`), and a resolver for its imports that has read it.
+
+        Its relative imports and relative directories are relative to the file's real directory.
+        Imported (in a cycle), the root is not read again.
+        """
+        files = _Files()
+        module = _read_module(path, None, files)
+        resolver = cls(os.path.dirname(module.key), packages, folders=folders)
+        resolver._files = files
+        resolver._modules[module.key] = module
+        return module, resolver
 
     def resolve(self, module: str, from_key: str | None) -> ResolvedModule:
         if module.startswith(("./", "../")):

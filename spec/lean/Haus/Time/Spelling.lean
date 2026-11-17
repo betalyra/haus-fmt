@@ -19,6 +19,10 @@ offset. Every other value has exactly one spelling. This file proves it.
   `ZerosOnly` holds (for `Instant` and `ZonedDateTime`: when their offsets
   are the same). `Date`, `YearMonth` and `TimeZone` have no fraction, so
   the same value means the same string.
+* Offset zero (plan step T7): `Z` and `+00:00` are the same offset, the only
+  offset with two spellings (`offset_same_iff`), so two `Instant`s are the
+  same value exactly when they differ at most in trailing zeros and in that
+  (`instant_value_same_iff`); `-00:00` is no offset (`not_offset_minusZero`).
 -/
 
 namespace Haus.Time
@@ -418,6 +422,150 @@ theorem zoned_same_iff {dt dt' o z z' : Text} (h : DateTime dt) (h' : DateTime d
     (instantValue dt o = instantValue dt' o ∧ z = z') ↔
       (normFrac (dt ++ o) = normFrac (dt' ++ o) ∧ z = z') := by
   rw [instant_same_iff h h' ho]
+
+/-! ## Offset zero (plan step T7, design review B3) -/
+
+/-- `+00:00` -/
+def plusZero : Text := ['+', '0', '0', ':', '0', '0']
+/-- `-00:00`, which RFC 3339 gives another meaning; the profile rejects it. -/
+def minusZero : Text := ['-', '0', '0', ':', '0', '0']
+
+theorem numOffset_shape {o : Text} (h : NumOffset o) : ∃ sg a b c d, o = [sg, a, b, ':', c, d] ∧
+    (sg = '+' ∨ sg = '-') ∧ isDigit a = true ∧ isDigit b = true ∧ isDigit c = true ∧ isDigit d = true ∧
+    hexValue a * 10 + hexValue b ≤ 23 ∧ hexValue c * 10 + hexValue d ≤ 59 ∧
+    ¬ (sg = '-' ∧ hexValue a * 10 + hexValue b = 0 ∧ hexValue c * 10 + hexValue d = 0) := by
+  obtain ⟨sg, h, m, rfl, hsg, hh, hm, h1, h2, h3⟩ := h
+  obtain ⟨a, b, rfl, ha, hb⟩ := digits2 hh
+  obtain ⟨c, d, rfl, hc, hd⟩ := digits2 hm
+  simp only [num2] at h1 h2 h3
+  exact ⟨sg, a, b, c, d, rfl, hsg, ha, hb, hc, hd, h1, h2, h3⟩
+
+theorem offsetSeconds_num (sg a b c d : Char) : offsetSeconds [sg, a, b, ':', c, d] =
+    (if sg = '-' then -1 else 1) * ((((hexValue a * 10 + hexValue b) * 60 + (hexValue c * 10 + hexValue d)) * 60 : Nat) : Int) := by
+  simp [offsetSeconds, num2]
+
+theorem digit_zero {c : Char} (h : isDigit c = true) (h0 : hexValue c = 0) : c = '0' :=
+  digit_eq h (by decide) (by rw [h0]; decide)
+
+/-- **`-00:00` is not an offset.** -/
+theorem not_offset_minusZero : ¬ Offset minusZero := by
+  rintro (h | h)
+  · simp [minusZero] at h
+  · obtain ⟨sg, a, b, c, d, e, -, -, -, -, -, -, -, h3⟩ := numOffset_shape h
+    simp only [minusZero, List.cons.injEq, and_true, true_and] at e
+    obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := e
+    exact h3 ⟨rfl, by decide, by decide⟩
+
+/-- **No `Instant` ends in `-00:00`**, so the checker rejects every such string (`check_iff`). -/
+theorem not_instant_minusZero (s : Text) : ¬ Instant (s ++ minusZero) := by
+  rintro ⟨dt, o, e, -, ho | hn⟩
+  · subst ho
+    have := congrArg List.reverse e
+    simp [minusZero] at this
+  · obtain ⟨sg, a, b, c, d, rfl, -, -, -, -, -, -, -, h3⟩ := numOffset_shape hn
+    have := congrArg List.reverse e
+    simp only [minusZero, List.reverse_append, List.reverse_cons, List.reverse_nil, List.nil_append,
+      List.cons_append, List.cons.injEq] at this
+    obtain ⟨rfl, rfl, -, rfl, rfl, rfl, -⟩ := this
+    exact h3 ⟨rfl, by decide, by decide⟩
+
+theorem check_instant_minusZero (s : Text) : check .instant (s ++ minusZero) = false := by
+  cases h : check .instant (s ++ minusZero)
+  · rfl
+  · exact absurd ((check_iff _ _).mp h) (not_instant_minusZero s)
+
+/-- The offsets of value zero are `Z` and `+00:00`. -/
+theorem offset_zero_iff {o : Text} (h : Offset o) : offsetSeconds o = 0 ↔ o = ['Z'] ∨ o = plusZero := by
+  rcases h with rfl | hn
+  · simp [offsetSeconds]
+  · obtain ⟨sg, a, b, c, d, rfl, hsg, ha, hb, hc, hd, -, -, h3⟩ := numOffset_shape hn
+    have la := RoundTrip.hexValue_digit ha; have lb := RoundTrip.hexValue_digit hb
+    have lc := RoundTrip.hexValue_digit hc; have ld := RoundTrip.hexValue_digit hd
+    rw [offsetSeconds_num]
+    constructor
+    · intro e
+      have z : hexValue a = 0 ∧ hexValue b = 0 ∧ hexValue c = 0 ∧ hexValue d = 0 := by
+        split at e <;> omega
+      obtain ⟨za, zb, zc, zd⟩ := z
+      rcases hsg with rfl | rfl
+      · right
+        simp [plusZero, digit_zero ha za, digit_zero hb zb, digit_zero hc zc, digit_zero hd zd]
+      · exact absurd ⟨rfl, by omega, by omega⟩ h3
+    · rintro (e | e)
+      · simp at e
+      · simp only [plusZero, List.cons.injEq, and_true, true_and] at e
+        obtain ⟨rfl, rfl, rfl, rfl, rfl⟩ := e
+        decide
+
+/--
+**One spelling per offset, apart from zero:** two valid offsets are the
+same offset exactly when they are the same string, or are `Z` and `+00:00`.
+-/
+theorem offset_same_iff {o o' : Text} (h : Offset o) (h' : Offset o') :
+    offsetSeconds o = offsetSeconds o' ↔
+      o = o' ∨ (o = ['Z'] ∧ o' = plusZero) ∨ (o = plusZero ∧ o' = ['Z']) := by
+  have zZ : offsetSeconds ['Z'] = 0 := rfl
+  have zP : offsetSeconds plusZero = 0 := by decide
+  constructor
+  · intro e
+    rcases h with rfl | hn
+    · rcases (offset_zero_iff h').mp (by rw [← e]; rfl) with rfl | rfl
+      · exact .inl rfl
+      · exact .inr (.inl ⟨rfl, rfl⟩)
+    rcases h' with rfl | hn'
+    · rcases (offset_zero_iff (.inr hn)).mp e with rfl | rfl
+      · exact .inl rfl
+      · exact .inr (.inr ⟨rfl, rfl⟩)
+    obtain ⟨sg, a, b, c, d, rfl, hsg, ha, hb, hc, hd, h1, h2, h3⟩ := numOffset_shape hn
+    obtain ⟨sg', a', b', c', d', rfl, hsg', ha', hb', hc', hd', h1', h2', h3'⟩ := numOffset_shape hn'
+    have la := RoundTrip.hexValue_digit ha; have lb := RoundTrip.hexValue_digit hb
+    have lc := RoundTrip.hexValue_digit hc; have ld := RoundTrip.hexValue_digit hd
+    have la' := RoundTrip.hexValue_digit ha'; have lb' := RoundTrip.hexValue_digit hb'
+    have lc' := RoundTrip.hexValue_digit hc'; have ld' := RoundTrip.hexValue_digit hd'
+    rw [offsetSeconds_num, offsetSeconds_num] at e
+    have v : sg = sg' ∧ hexValue a = hexValue a' ∧ hexValue b = hexValue b' ∧
+        hexValue c = hexValue c' ∧ hexValue d = hexValue d' := by
+      rcases hsg with rfl | rfl <;> rcases hsg' with rfl | rfl <;> simp at e h3 h3' ⊢ <;> omega
+    obtain ⟨rfl, va, vb, vc, vd⟩ := v
+    left
+    rw [digit_eq ha ha' va, digit_eq hb hb' vb, digit_eq hc hc' vc, digit_eq hd hd' vd]
+  · rintro (rfl | ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩)
+    · rfl
+    · rw [zZ, zP]
+    · rw [zZ, zP]
+
+/--
+**Offset zero** (std/time "Values"): `Z` and `+00:00` are the same offset,
+so `…T13:30:00Z` and `…T13:30:00+00:00` are the same value: the same instant
+(`instantValue`) with the same offset (`offsetSeconds`, which an encoder
+keeps).
+-/
+theorem instant_offset_zero (dt : Text) :
+    instantValue dt ['Z'] = instantValue dt plusZero ∧ offsetSeconds ['Z'] = offsetSeconds plusZero := by
+  have zP : offsetSeconds plusZero = 0 := by decide
+  have zZ : offsetSeconds ['Z'] = 0 := rfl
+  unfold instantValue
+  rw [zP, zZ]
+  exact ⟨rfl, rfl⟩
+
+/--
+**Two valid `Instant`s are the same value** (the same instant, with the same
+offset) **exactly when they differ at most in trailing zeros of the fraction
+and in writing the offset zero as `Z` or `+00:00`.**
+-/
+theorem instant_value_same_iff {dt dt' o o' : Text} (h : DateTime dt) (h' : DateTime dt') (ho : Offset o)
+    (ho' : Offset o') :
+    (instantValue dt o = instantValue dt' o' ∧ offsetSeconds o = offsetSeconds o') ↔
+      (normFrac dt = normFrac dt' ∧ (o = o' ∨ (o = ['Z'] ∧ o' = plusZero) ∨ (o = plusZero ∧ o' = ['Z']))) := by
+  rw [← offset_same_iff ho ho', ← dateTime_same_iff h h']
+  unfold instantValue
+  constructor
+  · rintro ⟨e1, e2⟩
+    rw [e2] at e1
+    exact ⟨by omega, e2⟩
+  · rintro ⟨e1, e2⟩
+    rw [e1, e2]
+    exact ⟨rfl, rfl⟩
 
 /-- Different offsets can be the same instant: `10:00+01:00` is `09:00Z`. -/
 example : instantValue "2026-11-13T10:00:00".toList "+01:00".toList = instantValue "2026-11-13T09:00:00".toList ['Z'] := by

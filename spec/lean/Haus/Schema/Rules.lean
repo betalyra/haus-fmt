@@ -40,16 +40,16 @@ inductive Core (env : Env) : Ty → Value → Typed → Prop
   /-- Every field without `?` present; the fields decoded as `Fields` says. -/
   | record {closed fields fs ys} : missing? fields fs = none → Fields env closed fields fs ys →
       Core env (.record closed fields) (.record fs) (.record ys)
-  | bare {closed cases tag tag'} : caseOf? cases tag = some (.bare tag') →
+  | bare {closed cases tag tag'} : caseOf? env cases tag = some (.bare tag') →
       Core env (.variant closed cases) (.variant tag []) (.case tag [])
   /-- `Tag { … }`: one argument, which the record type accepts. -/
-  | recordCase {closed cases tag tag' cl fields a y} : caseOf? cases tag = some (.record tag' cl fields) →
+  | recordCase {closed cases tag tag' cl fields a y} : caseOf? env cases tag = some (.record tag' cl fields) →
       Dec env (.record cl fields) a y → Core env (.variant closed cases) (.variant tag [a]) (.case tag [y])
   /-- `Tag T1 … Tn`: exactly n arguments. -/
-  | positional {closed cases tag tag' ts xs ys} : caseOf? cases tag = some (.positional tag' ts) →
+  | positional {closed cases tag tag' ts xs ys} : caseOf? env cases tag = some (.positional tag' ts) →
       Args env ts xs ys → Core env (.variant closed cases) (.variant tag xs) (.case tag ys)
   /-- A tag an open variant doesn't list: an unknown value, kept as parsed. -/
-  | unknown {cases tag args} : caseOf? cases tag = none →
+  | unknown {cases tag args} : caseOf? env cases tag = none →
       Core env (.variant false cases) (.variant tag args) (.unknown tag args)
 
 inductive Items (env : Env) : Ty → List Value → List Typed → Prop
@@ -90,9 +90,9 @@ inductive AgreeCore (env : Env) : Ty → Value → Value → Prop
   | map {t fs gs} : AgreeEntries env t fs gs → AgreeCore env (.map t) (.record fs) (.record gs)
   | record {closed fields fs gs} : AgreeFields env closed fields fs gs →
       AgreeCore env (.record closed fields) (.record fs) (.record gs)
-  | recordCase {closed cases tag tag' cl fields a b} : caseOf? cases tag = some (.record tag' cl fields) →
+  | recordCase {closed cases tag tag' cl fields a b} : caseOf? env cases tag = some (.record tag' cl fields) →
       Agree env (.record cl fields) a b → AgreeCore env (.variant closed cases) (.variant tag [a]) (.variant tag [b])
-  | positional {closed cases tag tag' ts xs ys} : caseOf? cases tag = some (.positional tag' ts) →
+  | positional {closed cases tag tag' ts xs ys} : caseOf? env cases tag = some (.positional tag' ts) →
       AgreeArgs env ts xs ys → AgreeCore env (.variant closed cases) (.variant tag xs) (.variant tag ys)
 
 inductive AgreeItems (env : Env) : Ty → List Value → List Value → Prop

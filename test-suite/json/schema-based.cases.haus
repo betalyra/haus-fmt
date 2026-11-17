@@ -118,8 +118,24 @@ Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hex
 Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
 
 // ── the schema's case decides the form; other objects reject extra members ──
-Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
-Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1}", code: "unexpected-member" },
+// A case with one argument of a record type is a record case, however the
+// record is written: inline, in parentheses, by name or through an alias.
+Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
+Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", code: "missing-field" },
+Ok { type: "ParenBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
+Ok { type: "AliasBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
+Ok { type: "Found", input: Found { items: [1, 2] }, json: "{\"_tag\": \"Found\", \"items\": [1, 2]}" },
+Read { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1, \"x\": 2}", output: Box { w: 1 } },
+Err { type: "StrictBox", json: "{\"_tag\": \"Box\", \"id\": 1, \"x\": 2}", code: "unknown-field" },
+// A type parameter stays one, also inside an inline variant that is the argument of
+// a generic: X a is positional even where a is a record.
+Ok { type: "InnerRec", input: { item: X { w: 1 } }, json: "{\"item\": {\"_tag\": \"X\", \"value\": {\"w\": 1}}}" },
+// Secret around a record is not a record: one positional argument.
+Ok { type: "SecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+Ok { type: "InlineSecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+// A type parameter is not a record, even where its argument is one.
+Ok { type: "GenRec", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+Err { type: "GenRec", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}, \"w\": 1}", code: "unexpected-member" },
 Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
 Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
 Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },

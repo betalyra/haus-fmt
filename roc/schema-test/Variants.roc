@@ -34,7 +34,7 @@ Variants := [].{
 		)
 		Tag("Point", [a0, a1]) => Ok(Point(Decode.arg("Point", 0, a0, Decode.f64)?, Decode.arg("Point", 1, a1, Decode.f64)?))
 		Tag("Empty", []) => Ok(Empty)
-		Tag("Wrap", [a0]) => Ok(Wrap(Decode.arg("Wrap", 0, a0, decode_box)?))
+		Tag("Wrap", [p]) => Ok(Wrap(Decode.record_arg("Wrap", p, decode_box)?))
 		Tag("Pair", [a0, a1]) => Ok(Pair(Decode.arg("Pair", 0, a0, Decode.int)?, Decode.arg("Pair", 1, a1, Decode.str)?))
 		Tag("Circle", _) => Decode.arity("Circle", 1)
 		Tag("Point", _) => Decode.arity("Point", 2)

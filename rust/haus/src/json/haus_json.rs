@@ -16,7 +16,7 @@
 
 use super::import::key;
 use super::{Json, decode_supported, open};
-use crate::ser::{check_key, check_tag, is_normalized, is_tag, normalized, supported};
+use crate::ser::{check_key, check_length, check_tag, is_normalized, is_tag, normalized, supported};
 use crate::{DecodeError, EncodeError, ErrorCode as Code, Limits, Segment, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -202,10 +202,13 @@ impl Reader<'_> {
     /// A string, number, byte string or tag without arguments.
     fn leaf(&self, json: &Json) -> R {
         match json {
-            Json::String(s) => Ok(Value::String(s.clone())),
+            Json::String(s) => {
+                check_length(s, self.limits).map_err(EncodeError::into_decode)?;
+                Ok(Value::String(s.clone()))
+            }
             Json::Object(members) => match members.as_slice() {
                 [(k, v)] if k == "_num" => self.number(v).map_err(|e| e.field("_num")),
-                [(k, v)] if k == "_bytes" => bytes(v).map_err(|e| e.field("_bytes")),
+                [(k, v)] if k == "_bytes" => bytes(v, self.limits).map_err(|e| e.field("_bytes")),
                 [(k, v)] if k == "_tag" => Ok(Value::Variant { tag: tag_name(v, self.limits)?, args: vec![] }),
                 _ => Err(mismatch(json)),
             },
@@ -304,11 +307,16 @@ fn tag_name(json: &Json, limits: &Limits) -> Result<String, DecodeError> {
     }
 }
 
-/// `"0b34ff"`: two lowercase hex digits per byte.
-fn bytes(json: &Json) -> R {
+/// `"0b34ff"`: two lowercase hex digits per byte, within the string limit
+/// as the haus byte string's hex.
+fn bytes(json: &Json, limits: &Limits) -> R {
     let Json::String(text) = json else {
         return Err(super::de::mismatch("a string", json).with_code(Code::HausJsonBytes));
     };
+    if text.len() > limits.max_string_length {
+        let reason = format!("byte string longer than {} characters", limits.max_string_length);
+        return Err(DecodeError::new(Code::StringTooLong, reason));
+    }
     let digit = |c: u8| match c {
         b'0'..=b'9' => Some(c - b'0'),
         b'a'..=b'f' => Some(c - b'a' + 10),

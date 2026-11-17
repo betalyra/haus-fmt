@@ -236,7 +236,7 @@ connection.onCompletion(({ textDocument, position }): CompletionItem[] => {
   }))
 })
 
-/** A schema file's warning: an attribute this version doesn't define, or a use of a deprecated type (struck through). */
+/** A schema file's warning: an attribute this version doesn't define, a case with no schema-based JSON form, or a use of a deprecated type (struck through). */
 const warningDiagnostic = (document: TextDocument) => (w: SchemaWarning): Diagnostic => ({
   range: { start: document.positionAt(w.offset), end: document.positionAt(w.end) },
   severity: w.kind === "deprecated" ? DiagnosticSeverity.Hint : DiagnosticSeverity.Warning,

@@ -43,6 +43,45 @@ describe("missing imports", () => {
     expect(missingImports(text).map((m) => `${m.module} ${m.name}`)).toEqual(["std/time Instant", "std/time Duration"])
     expect(missingImports("type A = {")).toEqual([])
   })
+
+  it("a spread of an imported standard, built-in or prelude type says it isn't a record or variant, not that it is unknown", () => {
+    const variant = schemaError("import std/time (Date)\ntype T = < ...Date >")
+    expect([variant.code, variant.reason, variant.line, variant.column]).toEqual(["invalid-spread", "Date is not a variant, so it can't be spread here", 2, 15])
+    expect(variant.missingImport).toBeUndefined()
+    const spreads: [string, string][] = [
+      ["import std/time (Date)\ntype T = { ...Date }", "Date is not a record, so it can't be spread here"],
+      ["type T = { ...Int32 }", "Int32 is not a record, so it can't be spread here"],
+      ["type T = { ...Array }", "Array is not a record, so it can't be spread here"],
+      ["type T = < ...Maybe >", "Maybe is not a variant, so it can't be spread here"],
+      ["type T = < ...Bool >", "Bool is not a variant, so it can't be spread here"],
+    ]
+    for (const [text, reason] of spreads) expect([schemaError(text).code, schemaError(text).reason]).toEqual(["invalid-spread", reason])
+    // Not imported: then it is unknown, with the import hint.
+    const unknown = schemaError("type T = { ...Date }")
+    expect([unknown.code, unknown.missingImport]).toEqual(["unknown-type", { module: "std/time", name: "Date" }])
+  })
+
+  it("an imported record or variant can be spread; anything else says why not", () => {
+    const other = `type R = { a: Int32 }\ntype V = < X | Y Int32 >\ntype G a = { g: a }\ntype S = Stream R`
+    const resolver = { resolve: (module: string) => ({ key: module, id: module, text: other }) }
+    const parse = (text: string) => parseSchemaFile(text, { resolver })
+    expect(parse(`import ./other (R)\ntype T = { ...R, b: String }`).definition("T")).toBeDefined()
+    expect(parse(`import @acme/shapes (V)\ntype T = < ...V | Z >`).definition("T")).toBeDefined()
+    const failing: [string, string][] = [
+      [`import ./other (V)\ntype T = { ...V }`, "V is not a record, so it can't be spread here"],
+      [`import ./other (G)\ntype T = { ...G }`, "G has parameters (G a); only a type without parameters can be spread"],
+      [`import ./other (S)\ntype T = { ...S }`, "S is a Stream and can't be spread"],
+    ]
+    for (const [text, reason] of failing) {
+      try {
+        parse(text)
+        expect.unreachable(text)
+      } catch (e) {
+        expect(e).toBeInstanceOf(HausSchemaFileError)
+        expect([(e as HausSchemaFileError).code, (e as HausSchemaFileError).reason]).toEqual(["invalid-spread", reason])
+      }
+    }
+  })
 })
 
 describe("import edits", () => {

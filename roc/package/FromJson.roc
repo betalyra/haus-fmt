@@ -33,9 +33,9 @@ FromJson := [].{
 	one = |text, reader| one_with(text, Value.default_limits, reader)
 
 	## `one` with your own limits for reading the JSON (see `JsonValue.parse_with`).
-	## A generated `from_json_<name>` checks the value's depth against the
-	## default 256; for `limits.max_depth`, read with `read_json_<name>` and
-	## check with `within_limits`.
+	## A generated `from_json_<name>` checks the value's depth and lengths
+	## against the default limits; for `limits`, read with `read_json_<name>`
+	## and check with `within_limits`.
 	one_with : Str, Value.Limits, (JsonValue -> Try(a, Decode.Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)])
 	one_with = |text, limits, reader| {
 		json = JsonValue.parse_with(text, limits).map_err(|e| Syntax(e))?
@@ -72,11 +72,21 @@ FromJson := [].{
 	## `Value.max_supported_depth`:
 	##
 	##     FromJson.one_with(text, limits, |j| FromJson.within_limits(Order.read_json_order(j), Order.encode_order, limits))
+	##
+	## Lengths are checked here too, on the haus value (spec §16, "Limits"): a
+	## string's characters after its escapes are read, keys and tags as haus keys
+	## and tags, bytes as two characters per byte, as in the hex of a haus byte
+	## string, although JSON spells them in base64.
 	within_limits : Try(a, Decode.Error), (a -> Value), Value.Limits -> Try(a, Decode.Error)
 	within_limits = |result, encode, limits| {
 		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
 		x = result?
-		if (depth(encode(x)) > limits.max_depth) Decode.fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels") else Ok(x)
+		value = encode(x)
+		if depth(value) > limits.max_depth {
+			Decode.fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels")
+		} else {
+			lengths(value, limits.max_string_length).map_ok(|_| x)
+		}
 	}
 
 	# ── scalars ─────────────────────────────────────────────
@@ -362,6 +372,13 @@ FromJson := [].{
 		}
 	}
 
+	## The record of a record case whose record is a named type (`Box BoxRec`
+	## with `type BoxRec = { w: Int32 }`, spec §15), read with `reader` from
+	## the members of the tag's object other than `"_tag"`, as for `Box { w:
+	## Int32 }`.
+	record_case : List((Str, JsonValue)), (JsonValue -> Try(a, Decode.Error)) -> Try(a, Decode.Error)
+	record_case = |members, reader| reader(Object(members.keep_if(|(k, _)| k != "_tag")))
+
 	## A closed variant whose tags have no payload: the tag, a string.
 	tag_name : JsonValue, Str -> Try(Str, Decode.Error)
 	tag_name = |j, what| match j {
@@ -385,6 +402,47 @@ depth = |value| match value {
 	Tag(_, []) => 0
 	Tag(_, args) => 1 + deepest(args)
 	_ => 0
+}
+
+## The first string, key, tag or byte string in `value` longer than `max`
+## characters, as an error: counted on the haus value, in code points, and
+## bytes as two characters each.
+lengths : Value, U64 -> Try({}, Decode.Error)
+lengths = |value, max| {
+	long = |s| {
+		b = s.to_utf8()
+		b.len() > max and b.count_if(|c| c < 0x80 or c >= 0xC0) > max
+	}
+	too_long = |code, what| Decode.fail(code, "${what} longer than ${max.to_str()} characters")
+	match value {
+		Text(s) => if (long(s)) too_long(ErrorCode.string_too_long, "string") else Ok({})
+		Bytes(b) => if (b.len() > max // 2) too_long(ErrorCode.string_too_long, "byte string") else Ok({})
+		Arr(items) => {
+			for x in items {
+				lengths(x, max)?
+			}
+			Ok({})
+		}
+		Rec(fields) => {
+			for (k, x) in fields {
+				if long(k) {
+					return too_long(ErrorCode.key_too_long, "key")
+				}
+				lengths(x, max)?
+			}
+			Ok({})
+		}
+		Tag(name, args) => {
+			if long(name) {
+				return too_long(ErrorCode.tag_too_long, "tag")
+			}
+			for x in args {
+				lengths(x, max)?
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
 }
 
 ## The depth of the deepest of `items`; 0 for none.
@@ -528,6 +586,31 @@ expect FromJson.lines_with("123\n123\n", small, FromJson.u16) == Ok([123, 123]) 
 expect FromJson.within_limits(Ok(nest(2)), |v| v, small).is_ok()
 expect FromJson.within_limits(Ok(nest(3)), |v| v, small).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 2 levels")
 
+# Lengths count on the haus value (spec §16, "Limits"): a string's characters after
+# its escapes are read, bytes two characters per byte although JSON spells them in
+# base64. Exactly at the limit is accepted, one more is not.
+limited : Str, U64, (JsonValue -> Try(a, Decode.Error)), (a -> Value) -> Str
+limited = |text, max, reader, encode| {
+	limits = { ..Value.default_limits, max_string_length: max }
+	match FromJson.one_with(text, limits, |j| FromJson.within_limits(reader(j), encode, limits)) {
+		Ok(_) => "ok"
+		Err(Decode(e)) => e.code
+		Err(Syntax(e)) => e.code
+	}
+}
+
+expect limited("\"\\u00e9\\u00e9\\u00e9\\u00e9\"", 4, FromJson.str, |s| Text(s)) == "ok" and limited("\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"", 4, FromJson.str, |s| Text(s)) == "string-too-long"
+expect limited("\"\\ud83d\\ude00abc\"", 4, FromJson.str, |s| Text(s)) == "ok"
+expect limited("\"AAA=\"", 4, FromJson.bytes, |b| Bytes(b)) == "ok" and limited("\"AAAA\"", 4, FromJson.bytes, |b| Bytes(b)) == "string-too-long"
+expect limited("\"AAAA\"", 6, FromJson.bytes, |b| Bytes(b)) == "ok" and limited("\"AAAAAA==\"", 6, FromJson.bytes, |b| Bytes(b)) == "string-too-long"
+# One byte is 2 characters, although its base64 has 4.
+expect limited("\"AA==\"", 2, FromJson.bytes, |b| Bytes(b)) == "ok"
+# Map keys are keys; Int64 and Decimal strings are numbers, which the number limit bounds.
+expect limited("{\"abcd\": 1}", 4, |j| FromJson.map(j, FromJson.i32), |m| Rec(m.map(|(k, n)| (k, Num(n.to_str()))))) == "ok"
+expect limited("{\"abcde\": 1}", 4, |j| FromJson.map(j, FromJson.i32), |m| Rec(m.map(|(k, n)| (k, Num(n.to_str()))))) == "key-too-long"
+expect limited("\"123456\"", 4, FromJson.i64, |n| Num(n.to_str())) == "ok"
+expect limited("{\"_tag\": \"Abcde\"}", 4, FromJson.any_tag, |_| Tag("Abcde", [])) == "tag-too-long"
+
 # Up to the supported depth; a deeper limit is an error that names the maximum.
 at_max : Value.Limits
 at_max = { ..Value.default_limits, max_depth: Value.max_supported_depth }
@@ -540,6 +623,7 @@ expect {
 }
 too_deep : Value.Limits
 too_deep = { ..Value.default_limits, max_depth: 1025 }
+
 unsupported : Str
 unsupported = "max_depth 1025 is more than the supported maximum, 1024"
 expect FromJson.one_with("1", too_deep, FromJson.u16) == Err(Syntax({ code: "unsupported-depth", reason: unsupported, line: 1, column: 1 }))
@@ -548,10 +632,12 @@ expect FromJson.within_limits(Ok(nest(1)), |v| v, too_deep).map_ok(|_| {}).map_e
 
 ## `type Loop = Maybe Loop` read from schema-based JSON, as its haus value.
 loop : JsonValue -> Try(Value, Decode.Error)
-loop = |j| FromJson.maybe(j, True, loop).map_ok(|m| match m {
-	None => Tag("None", [])
-	Some(v) => Tag("Some", [v])
-})
+loop = |j| FromJson.maybe(j, True, loop).map_ok(
+	|m| match m {
+		None => Tag("None", [])
+		Some(v) => Tag("Some", [v])
+	},
+)
 
 # Error codes (spec §17) of schema-based JSON.
 code_of : Str, (JsonValue -> Try(a, Decode.Error)) -> Str
@@ -581,3 +667,18 @@ expect code_of("{\"id\": 1, \"x\": 2}", |j| FromJson.closed(FromJson.object(j, "
 expect code_of("{\"_tag\": \"Point\", \"values\": [1]}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2)) == "wrong-payload at $.values" and code_of("1", FromJson.any) == "haus-json-form at $" and code_of("{\"_haus\": 1, \"_value\": \"x\"}", FromJson.any) == "haus-json-form at $"
 expect code_of("{\"a\": 1, \"a\": 2}", |j| FromJson.map(j, FromJson.i32)) == "duplicate-key" and code_of("{\"pt-BR\": \"x\"}", |j| FromJson.map(j, FromJson.i32)) == "type-mismatch at $[\"pt-BR\"]"
 expect code_of("1", |_| FromJson.no_json_form("Odd", "_args")) == "no-json-form at $" and FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(|e| e.code) == Err("nesting-too-deep")
+# A record case by name: the record is read from the tag's object, without `"_tag"`.
+expect {
+	box = |j| {
+		(_, ms) = FromJson.variant(j, "Boxed")?
+		FromJson.record_case(
+			ms,
+			|r| {
+				fs = FromJson.object(r, "BoxRec")?
+				FromJson.closed(fs, ["w"])?
+				FromJson.field(fs, "w", FromJson.i32)
+			},
+		)
+	}
+	FromJson.one("{\"_tag\": \"Box\", \"w\": 1}", box) == Ok(1) and code_of("{\"_tag\": \"Box\", \"w\": 1, \"x\": 2}", box) == "unknown-field at $.x" and code_of("{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", box) == "unknown-field at $.value"
+}

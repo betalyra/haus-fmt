@@ -199,7 +199,8 @@ export class StreamReader {
   /** Parse the piece before the comma at `i` and drop it from the buffer. */
   private cut(): Value {
     const text = this.scanned(this.i + 1) // including the comma
-    const value = new Parser(text.slice(0, -1), this.origin, this.limits).parseSingle()
+    // With its comma, so an empty item fails as in the whole text: "found ','".
+    const value = new Parser(text, this.origin, this.limits).parseSingle()
     this.origin = locate(text, text.length, this.origin)
     this.buf = this.buf.slice(this.i + 1)
     this.i = 0

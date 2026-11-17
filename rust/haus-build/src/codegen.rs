@@ -19,6 +19,7 @@
 //! `Order.status` becomes `OrderStatus`. The code is built as tokens with
 //! `quote!` and printed with `prettyplease`.
 
+use crate::graph::Shape;
 use crate::schema::{Attribute, Case, Error, Field, File, PRELUDE, Ty, TypeDef, deprecation, error};
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
@@ -32,6 +33,8 @@ pub struct Imported {
     /// The Rust path: `::haus::time::Date`, `::haus_money::Money`.
     pub path: String,
     pub params: usize,
+    /// Whether it is a record, for record cases.
+    pub shape: Shape,
 }
 
 /// A codec: the Rust type (implementing `haus::Codec`) used for the type with this id.
@@ -426,7 +429,20 @@ impl FieldRs {
 enum Payload<'a> {
     None,
     Tuple(Vec<Rs>),
-    Record { closed: bool, fields: &'a [Field], rs: Vec<FieldRs> },
+    Record {
+        closed: bool,
+        fields: &'a [Field],
+        rs: Vec<FieldRs>,
+    },
+    /// `Tag R` with `R` a record type by name (`Wrap Box`): a record case
+    /// (spec §15), whose Rust payload is the named type, `Wrap(Box)`. Its
+    /// JSON has the record's members beside `"_tag"`, unless the record has
+    /// a field named `_tag` or `_args` (`reserved`).
+    Named {
+        rs: Box<Rs>,
+        shown: String,
+        reserved: Option<String>,
+    },
 }
 
 // ── generation ───────────────────────────────────────────────
@@ -670,7 +686,12 @@ impl<'a> Gen<'a> {
                 shadow: quote!(<#codec as ::haus::Codec>::Base),
             });
         }
-        let args = args.iter().map(|a| self.lower(a, at)).collect::<Result<Vec<_>, _>>()?;
+        // An inline type in an argument is named after its place, as in Roc: `Inner1`.
+        let args = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| self.lower(a, &at.inner(&(i + 1).to_string())))
+            .collect::<Result<Vec<_>, _>>()?;
         let (tys, shadows) = (args.iter().map(|r| &r.ty), args.iter().map(|r| &r.shadow));
         let rs = match args.is_empty() {
             true => Rs::plain(path),
@@ -797,7 +818,9 @@ impl<'a> Gen<'a> {
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
-        match out.iter().enumerate().find(|(i, f)| out[..*i].iter().any(|g| g.name == f.name)) {
+        // The first field whose Rust name an earlier one has (a set: linear in the fields).
+        let mut seen = HashSet::new();
+        match out.iter().enumerate().find(|(_, f)| !seen.insert(f.name.to_string())) {
             Some((i, f)) => self.fail(
                 fields[i].pos,
                 Code::DuplicateField,
@@ -814,7 +837,16 @@ impl<'a> Gen<'a> {
             [Ty::Record { closed, fields, .. }] => {
                 Payload::Record { closed: *closed, fields, rs: self.fields(fields, &at)? }
             }
-            [one] => Payload::Tuple(vec![self.lower(one, &at)?]),
+            [one] => {
+                let imports = self.input.imports;
+                let imported = |name: &str| imports.get(name).map(|i| i.shape.clone());
+                match crate::graph::record_case(one, &self.defs, &imported) {
+                    Some(reserved) => {
+                        Payload::Named { rs: Box::new(self.lower(one, &at)?), shown: one.to_string(), reserved }
+                    }
+                    None => Payload::Tuple(vec![self.lower(one, &at)?]),
+                }
+            }
             items => Payload::Tuple(
                 items
                     .iter()
@@ -948,6 +980,35 @@ impl<'a> Gen<'a> {
                     },
                 )
             }
+            Payload::Named { rs, shown, reserved } => {
+                let (ty, de) = (&rs.ty, rs.de.value());
+                let (encoded, from, written) =
+                    (rs.en.encode(quote!(a0)), rs.from_json.reader(), rs.to_json.encode(quote!(a0)));
+                let json = match reserved {
+                    Some(field) => Json {
+                        nullable: None,
+                        from: quote! { #tagged ::std::result::Result::Err(::haus::json::de::no_json_form(#tag, #field)) },
+                        to: quote!(::haus::json::ser::no_json_form(#tag, #field)),
+                    },
+                    None => Json {
+                        nullable: None,
+                        from: quote! { #tagged ::haus::json::de::record_case(j, __d, #from).map(Self) },
+                        to: quote! {
+                            let Self(a0) = self;
+                            ::haus::json::ser::record_case(#tag, #written)
+                        },
+                    },
+                };
+                (
+                    quote!(pub struct #name #g (pub #ty);),
+                    quote!(::haus::de::record_arg(tag, args, #shown, #de).map(Self)),
+                    quote! {
+                        let Self(a0) = self;
+                        ::haus::ser::tagged(#tag, __e, |__e| [#encoded])
+                    },
+                    json,
+                )
+            }
             Payload::Record { closed, fields, rs } => {
                 let decls = rs.iter().map(|f| f.decl(quote!(pub)));
                 let decoded = rs.iter().map(FieldRs::de);
@@ -1045,6 +1106,28 @@ impl<'a> Gen<'a> {
                             en: quote!(Self::#v(#(#vars),*) => ::haus::ser::tagged(#tag, __e, |__e| [#(#encoded),*])),
                             from_json: quote!(#tag => { #json_bind ::std::result::Result::Ok(Self::#v(#(#read),*)) }),
                             to_json: quote!(Self::#v(#(#vars),*) => ::haus::json::ser::tagged(#tag, __e, |__e| [#(#written),*])),
+                        }
+                    }
+                    Payload::Named { rs, shown, reserved } => {
+                        let (ty, de) = (&rs.ty, rs.de.value());
+                        let (encoded, from, written) =
+                            (rs.en.encode(quote!(a0)), rs.from_json.reader(), rs.to_json.encode(quote!(a0)));
+                        let (from_json, to_json) = match reserved {
+                            Some(field) => (
+                                quote!(#tag => ::std::result::Result::Err(::haus::json::de::no_json_form(#tag, #field)),),
+                                quote!(Self::#v(_) => ::haus::json::ser::no_json_form(#tag, #field)),
+                            ),
+                            None => (
+                                quote!(#tag => ::haus::json::de::record_case(j, __d, #from).map(Self::#v),),
+                                quote!(Self::#v(a0) => ::haus::json::ser::record_case(#tag, #written)),
+                            ),
+                        };
+                        Arm {
+                            decl: quote!(#deprecated #v(#ty)),
+                            de: quote!(#tag => ::haus::de::record_arg(tag, args, #shown, #de).map(Self::#v),),
+                            en: quote!(Self::#v(a0) => ::haus::ser::tagged(#tag, __e, |__e| [#encoded])),
+                            from_json,
+                            to_json,
                         }
                     }
                     Payload::Record { closed, fields, rs } => {

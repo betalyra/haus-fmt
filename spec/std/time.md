@@ -5,8 +5,9 @@ Every schema binding checks exactly these rules: they are built-in rules, like
 the range of `UInt8`. A parser does not check them (§13.1).
 
 The profile is a strict subset of RFC 3339, RFC 9557 and ISO 8601 durations,
-close to what JavaScript's Temporal and java.time parse. There is one spelling
-for each value, and nothing depends on a registry.
+close to what JavaScript's Temporal and java.time parse. Each value has one
+spelling, apart from the few listed under "Values" below, and
+nothing depends on a registry.
 
 ## Types
 
@@ -25,7 +26,7 @@ for each value, and nothing depends on a registry.
 
 | Rule | Accepted | Rejected |
 |---|---|---|
-| Year | `0000`–`9999`, exactly 4 digits | `+12026-11-09`, `-0001-01-01` |
+| Year | `0000`–`9999`, exactly 4 digits; `0000` is 1 BC, as in ISO 8601 | `+12026-11-09`, `-0001-01-01` |
 | Day | the day exists in the proleptic Gregorian calendar | `2026-02-29`, `1900-02-29`, `2026-04-31` |
 | Month | `01`–`12` | `2026-13-01`, `2026-00-10` |
 | Hour, minute, second | `00`–`23`, `00`–`59`, `00`–`59`; seconds required | `14:30`, `24:00:00`, `12:60:00` |
@@ -54,8 +55,8 @@ Nothing that depends on a registry:
 
 std/time never changes what a haus value is. `Instant("…T10:00:00.250Z")` is
 a tag with a string, and haus equality, the canonical form and `hash` (spec
-§2, §12) compare that string as written: `.250` and `.25` give different
-hashes, as `19.90` and `19.9` do. What std/time adds, for a schema that asks
+§2, §12) compare that string as written: `.250` and `.25`, or `Z` and `+00:00`,
+give different hashes, as `19.90` and `19.9` do. What std/time adds, for a schema that asks
 for its types, is which strings are valid and which valid strings denote the
 same time:
 
@@ -67,6 +68,10 @@ same time:
 - **Offsets:** `…T14:30:00+01:00` and `…T13:30:00Z` are the same instant.
   The offset also says which local time was meant, so it isn't just a
   spelling: an encoder keeps it.
+- **Offset zero:** `Z` and `+00:00` are both the offset zero, so
+  `…T13:30:00Z` and `…T13:30:00+00:00` are the same value. Both are accepted
+  because common writers produce `+00:00` (Python's `isoformat`); `-00:00`
+  is not (RFC 3339 gives it another meaning).
 - Every other value has exactly one spelling: numbers have no leading zeros,
   letters and separators have one case, a duration leaves out components
   that are zero, and the zero duration is `PT0S`, without a sign.
@@ -89,3 +94,14 @@ checker proven to compute them (`haus-ref --time TYPE TEXT`). The TypeScript
 implementation's tests
 ([`std-time.test.ts`](../../typescript/packages/haus/test/std-time.test.ts))
 cover every row above.
+
+## Host types
+
+Every binding accepts the same values: the whole range above, in every type.
+How a program holds them is the binding's choice (spec §13.4). JavaScript's
+Temporal, Go's `time.Time` and `java.time` hold the whole range. Python's
+`datetime` and .NET's `DateTime` start at the year 1, and an offset can move
+an instant across the ends of the range (`0001-01-01T00:00:00+01:00` is in
+the year `0000` in UTC). A binding for such a language keeps the value
+another way by default, such as the checked text, and offers the native type
+as an opt-in codec that rejects what it can't hold.

@@ -27,7 +27,7 @@ import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
-import { jsonDepthFor, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions } from "./json.js"
+import { jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions } from "./json.js"
 import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
 import { Secret as SecretValue } from "./secret.js"
 
@@ -740,12 +740,14 @@ type Cases = Readonly<Record<string, Case>>
  *   Record({...}) → { _tag, ...fields }        (`Circle { radius: 5 }`)
  *                   { _tag, value: { ...fields } } when one of the fields is
  *                   named `_tag`, which can't go beside the tag (`Odd { _tag: 1 }`)
+ *                   A `Recursive` whose schema is a record is a record case too,
+ *                   as a named record is in a schema file (spec §15).
  *   Tuple(a, b)   → { _tag, values: [a, b] }    (`Point(1, 2)`)
  *   any schema    → { _tag, value }             (`Ok("done")`)
  */
 export type CaseOf<T extends string, C> =
   C extends typeof Unit ? { readonly _tag: T }
-  : C extends RecordSchema<infer A> ? ("_tag" extends keyof A ? { readonly _tag: T; readonly value: A } : { readonly _tag: T } & A)
+  : C extends RecordSchema<infer A> | RecursiveRecord<infer A> ? ("_tag" extends keyof A ? { readonly _tag: T; readonly value: A } : { readonly _tag: T } & A)
   : C extends TupleSchema<infer S> ? { readonly _tag: T; readonly values: { readonly [I in keyof S]: Infer<S[I]> } }
   : C extends Schema<infer A> ? { readonly _tag: T; readonly value: A }
   : never
@@ -788,15 +790,28 @@ const payloadFound = (v: HVariant): string =>
 /** A list of tags for error messages, shortened for very large variants. */
 const tagList = (tags: readonly string[]) => (tags.length > 10 ? `${tags.slice(0, 10).join(" | ")} | … (${tags.length} tags)` : tags.join(" | "))
 
+/**
+ * A case as it is used: a `Recursive` whose schema is a record is a record
+ * case (spec §15: a case with one argument of a record type), entered through
+ * the `Recursive`. Decided when the variant is first used, since the
+ * `Recursive` may not be built yet when the variant is made.
+ */
+const caseOf = (c: Case): Case => recordBodies.get(c)?.() ?? c
+
 const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> => {
   const tags = Object.keys(cases)
   const expected = `< ${tagList(tags)}${open ? " | _" : ""} >`
+  const written = Object.entries(cases)
   // Dispatch is one hash lookup on the tag: never "try each case and backtrack".
-  const byTag = new Map<string, Case>(Object.entries(cases))
-  const json: JsonType = { kind: "variant", open, cases: new Map([...byTag].map(([tag, c]) => [tag, jsonCase(c)])) }
+  let resolved: Map<string, Case> | undefined
+  const byTag = (): Map<string, Case> => (resolved ??= new Map(written.map(([tag, c]) => [tag, caseOf(c)])))
+  const jsonOf = (): JsonType => ({ kind: "variant", open, cases: new Map([...byTag()].map(([tag, c]) => [tag, jsonCase(c)])) })
+  let lazyJson: JsonType | undefined
+  // With a Recursive among the cases, the form is known once it is built: a lazy link (the same object every time).
+  const json: JsonType = written.some(([, c]) => recordBodies.has(c)) ? { kind: "lazy", get: () => (lazyJson ??= jsonOf()) } : jsonOf()
   return make(expected, (v, at) => {
     if (v.kind !== "variant") return mismatch(expected, v, at)
-    const c = byTag.get(v.tag)
+    const c = byTag().get(v.tag)
     if (c === undefined) {
       if (open) return unknownOf(v) as A
       return at.reject("unknown-tag", `unknown tag '${v.tag}', expected one of ${tagList(tags)}`, { expected: `one of ${tagList(tags)}`, found: v.tag })
@@ -833,10 +848,10 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
       const raw = checkedValue(obj.value, at)
       // An unknown value is one whose tag the variant doesn't list (spec §15).
       if (raw.kind !== "variant") return invalid("a variant", raw, at)
-      if (byTag.has(raw.tag)) return invalid(`a tag the variant doesn't list (${raw.tag} is one of its cases)`, raw.tag, at)
+      if (byTag().has(raw.tag)) return invalid(`a tag the variant doesn't list (${raw.tag} is one of its cases)`, raw.tag, at)
       return raw
     }
-    const c = byTag.get(obj._tag)
+    const c = byTag().get(obj._tag)
     if (c === undefined) return invalid(`one of ${tagList(tags)}`, obj._tag, at)
     if (c === Unit) return variant(obj._tag)
     return at.enter(obj, () => {
@@ -1044,6 +1059,23 @@ export interface RecursiveOptions {
 }
 
 /**
+ * A `Recursive` whose schema is a record (`h.Recursive<Node>("Node", (self) =>
+ * h.Record({ … }))`): as the payload of a variant case, it is a record case,
+ * `{ _tag, ...fields }`, as a named record is in a schema file (spec §15).
+ * Annotate such a schema as `h.RecursiveRecord<A>` rather than `h.Schema<A>`
+ * so that the case's type says so too.
+ */
+export interface RecursiveRecord<A> extends Schema<A> {
+  /** Type-level only: the schema of this Recursive is a record. */
+  readonly [recordBody]: A
+}
+declare const recordBody: unique symbol
+
+/** For each Recursive: its schema as a record case, if it is a record (through other Recursives). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const recordBodies = new WeakMap<object, () => RecordSchema<any> | undefined>()
+
+/**
  * A type that contains itself, such as a tree or a comment thread. Schemas
  * can't refer to themselves otherwise, so recursion is always visible.
  *
@@ -1055,8 +1087,14 @@ export interface RecursiveOptions {
  * payload ("guarded"), so each level consumes one level of the input. A
  * schema that refers to itself directly, or decodes or encodes the same value
  * with itself again, fails instead of looping.
+ *
+ * A Recursive whose schema is a record (`h.RecursiveRecord`) is a record
+ * case as the one payload of a variant case, as a named record is in a
+ * schema file (spec §15).
  */
-export const Recursive = <A>(name: string, build: (self: Schema<A>) => Schema<A>, options: RecursiveOptions = {}): Schema<A> => {
+export function Recursive<A>(name: string, build: (self: Schema<A>) => RecordSchema<A> | RecursiveRecord<A>, options?: RecursiveOptions): RecursiveRecord<A>
+export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>, options?: RecursiveOptions): Schema<A>
+export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>, options: RecursiveOptions = {}): Schema<A> {
   // Each level consumes a level of the value, so the call's depth limit bounds it too.
   const maxDepth = options.maxDepth ?? Infinity
   let body: Schema<A> | undefined
@@ -1100,6 +1138,32 @@ export const Recursive = <A>(name: string, build: (self: Schema<A>) => Schema<A>
     decode: (v, at) => run(v, at, (b) => b.decode(v, at)),
     encode: (a, at) => run(a, at, (b) => b.encode(a, at)),
   }
+  // As a record case: the record's own decodeRecord and encodeRecord, entered through this
+  // Recursive (its depth and cycle checks). Decided once, when first asked, after it is built.
+  let asRecord: RecordSchema<A> | null | undefined
+  let resolving = false
+  recordBodies.set(self, () => {
+    if (asRecord !== undefined) return asRecord ?? undefined
+    // Recursives that are only each other (unguarded, so never decoded): not a record.
+    if (resolving) return undefined
+    resolving = true
+    try {
+      const body = force()
+      const record = isRecordSchema(body) ? (body as RecordSchema<A>) : recordBodies.get(body)?.()
+      asRecord = record === undefined ? null : {
+        ...self,
+        kind: "record",
+        expected: record.expected,
+        keys: record.keys,
+        json: record.json,
+        decodeRecord: (v, at) => run(v, at, () => record.decodeRecord(v, at)),
+        encodeRecord: (a, at) => run(a, at, () => record.encodeRecord(a, at)),
+      }
+    } finally {
+      resolving = false
+    }
+    return asRecord ?? undefined
+  })
   return self
 }
 
@@ -1181,7 +1245,7 @@ export const fromJsonValue = <A>(schema: Schema<A>, json: Json, limits: Limits =
  * HausDecodeError for JSON that doesn't fit the schema.
  */
 export const fromJson = <A>(schema: Schema<A>, text: string, limits: Limits = {}): A =>
-  fromJsonValue(schema, parseJson(text, jsonDepthFor(withDefaults(limits))), limits)
+  fromJsonValue(schema, parseJson(text, jsonTextLimits(withDefaults(limits))), limits)
 
 /**
  * Read a JSON Lines stream (one schema-based JSON text per line, spec §16) and
@@ -1196,7 +1260,7 @@ export async function* decodeJsonLines<A>(
   const type = jsonType(schema)
   const limits = withDefaults(options)
   yield* readLines(source, options, (text, origin, i) => {
-    const value = fromSchemaBasedJson(type, readJson(text, jsonDepthFor(limits), origin), options, Place.root(i))
+    const value = fromSchemaBasedJson(type, readJson(text, jsonTextLimits(limits), origin), options, Place.root(i))
     return schema.decode(value, decodeAt(value, options, i))
   })
 }

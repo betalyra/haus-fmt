@@ -10,6 +10,7 @@
 ##     n.to_i128()   # Err(OutOfRange)
 ##     n.to_str()    # "340282366920938463463374607431768211457"
 Int :: [Digits(Str)].{
+
 	## A decimal integer: an optional `-` and digits. Leading zeros are dropped.
 	from_str : Str -> Try(Int, [BadNumStr])
 	from_str = |text| {

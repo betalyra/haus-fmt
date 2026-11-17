@@ -295,8 +295,10 @@ impl Checker {
         let text = String::from_utf8_lossy(bytes);
         match self.load(path) {
             Err(e) => vec![Diagnostic::schema(&e, Severity::Error, Some(&text))],
+            // Shown in the text the schema was loaded from.
             Ok(schema) => {
-                schema.warnings().iter().map(|w| Diagnostic::schema(w, Severity::Warning, Some(&text))).collect()
+                let text = &schema.files()[0].text;
+                schema.warnings().iter().map(|w| Diagnostic::schema(w, Severity::Warning, Some(text))).collect()
             }
         }
     }

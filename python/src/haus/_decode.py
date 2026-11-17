@@ -470,7 +470,7 @@ class _String(_Node):
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
         if isinstance(j, str):
-            return j
+            return _checked_string(j, at)
         _json_mismatch("String (a string)", j, at)
 
     def write_json(self, x: object, at: _At) -> str:
@@ -755,7 +755,7 @@ class _StdTime(_Node):
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
         if isinstance(j, str):
-            return self._checked(j, at)
+            return self._checked(_checked_string(j, at), at)
         _json_mismatch(f"{self.expected} (a string)", j, at)
 
     def write_json(self, x: object, at: _At) -> str:
@@ -877,6 +877,7 @@ class _Map(_Node):
         value = self.value
         out: dict[str, object] = {}
         for k, x in j.items():
+            _checked_string(k, at, kind="key")
             out[k] = value.read_json(x, at.child(k))
         return out
 
@@ -1115,7 +1116,54 @@ def _write_json_with(node: _Node, x: object, at: _At) -> Json:
     return node.write_json(x, at)
 
 
-_CasePayload = _Record | tuple[_Node, ...] | None
+class _RecordCase:
+    """The payload of a record case (spec §15): a record, inline or by name.
+
+    By name (`Circle Disc`), `node` is the named type's node: codecs and back references around
+    the record, applied here, so the case's data is that of `Circle { … }` whatever the host type.
+    """
+
+    __slots__ = ("_chain", "node")
+
+    def __init__(self, node: _Node) -> None:
+        self.node = node
+        self._chain: tuple[tuple[_Coded, ...], _Record] | None = None
+
+    def chain(self) -> tuple[tuple[_Coded, ...], _Record]:
+        """The codecs around the record, outermost first, and the record (once back references are set)."""
+        if self._chain is None:
+            coded: list[_Coded] = []
+            node = self.node
+            while not isinstance(node, _Record):
+                if isinstance(node, _Coded):
+                    coded.append(node)
+                    node = node.inner
+                elif isinstance(node, _BackRef):
+                    node = node.resolved()
+                else:
+                    raise AssertionError(f"a record case of {node.expected}")
+            self._chain = (tuple(coded), node)
+        return self._chain
+
+    @property
+    def record(self) -> _Record:
+        return self.chain()[1]
+
+    def read_fields(self, fields: Mapping[str, V], at: _At, read: Callable[[_Node, V, _At], object]) -> object:
+        coded, record = self.chain()
+        x: object = record.read_fields(fields, at, read)
+        for c in reversed(coded):
+            x = c.decoded(x, at)
+        return x
+
+    def write_fields(self, x: object, at: _At, write: Callable[[_Node, object, _At], T]) -> dict[str, T]:
+        coded, record = self.chain()
+        for c in coded:
+            x = c.encoded(x, at)
+        return record.write_fields(x, at, write)
+
+
+_CasePayload = _RecordCase | tuple[_Node, ...] | None
 
 
 class _Variant(_Node):
@@ -1152,13 +1200,14 @@ class _Variant(_Node):
             if args:
                 _wrong_payload(tag, payload, "no payload", f"{len(args)} argument(s)", at)
             return Tagged(tag)
-        if isinstance(payload, _Record):
-            # One argument that is a record; `Circle(1.5)` is the wrong payload, at the variant (spec §15).
+        if isinstance(payload, _RecordCase):
+            # One argument that is a record, inline or by name; `Circle(1.5)` and `Wrap(1)` are the
+            # wrong payload, at the variant (spec §15).
             if len(args) != 1:
                 _wrong_payload(tag, payload, "one argument, a record", f"{len(args)} argument(s)", at)
             if not isinstance(args[0], Record):
                 _wrong_payload(tag, payload, "one argument, a record", _describe(args[0]), at)
-            return Tagged(tag, payload.decode_fields(args[0].fields, at))
+            return Tagged(tag, cast("Mapping[str, object]", payload.read_fields(args[0].fields, at, _decode_with)))
         if len(args) != len(payload):
             _wrong_payload(tag, payload, f"{len(payload)} argument(s)", f"{len(args)} argument(s)", at)
         out: list[object] = []
@@ -1203,8 +1252,8 @@ class _Variant(_Node):
         tag, given, case = self._tagged(x, at)
         if case is None:
             return Variant(tag)
-        if isinstance(case, _Record):
-            return Variant(tag, (Record(case.encode_fields(given, at)),))
+        if isinstance(case, _RecordCase):
+            return Variant(tag, (Record(case.write_fields(given, at, _encode_with)),))
         args = self._arguments(tag, given, case, at)
         at.container()
         at.enter(given)
@@ -1237,10 +1286,10 @@ class _Variant(_Node):
         if case is None:
             _only(j, (), tag, at)
             return Tagged(tag)
-        if isinstance(case, _Record):
+        if isinstance(case, _RecordCase):
             _check_payload_keys(case, at)
             fields = {k: x for k, x in j.items() if k != "_tag"}
-            return Tagged(tag, case.read_fields(fields, at, _read_json_with))
+            return Tagged(tag, cast("Mapping[str, object]", case.read_fields(fields, at, _read_json_with)))
         if len(case) == 1:
             _only(j, ("value",), tag, at)
             return Tagged(tag, (case[0].read_json(_member(j, "value", tag, at), at.child("value")),))
@@ -1272,7 +1321,7 @@ class _Variant(_Node):
             return _read_at(at, lambda: self_describing_arguments(tag, args, at.ctx.limits, at.depth))
         members: dict[str, Json] = {k: x for k, x in j.items() if k != "_tag"}
         # `Tag { … }` is one level, as in the parser.
-        payload = _read_at(at, lambda: imported(members, at.ctx.limits.max_depth, at.depth))
+        payload = _read_at(at, lambda: imported(members, at.ctx.limits, at.ctx.limits.max_depth, at.depth))
         return Variant(tag, (payload,))
 
     def write_json(self, x: object, at: _At) -> Json:
@@ -1285,7 +1334,7 @@ class _Variant(_Node):
         tag, given, case = self._tagged(x, at)
         if case is None:
             return tag if self.as_string else {"_tag": tag}
-        if isinstance(case, _Record):
+        if isinstance(case, _RecordCase):
             _check_payload_keys(case, at)
             return {"_tag": tag, **case.write_fields(given, at, _write_json_with)}
         args = self._arguments(tag, given, case, at)
@@ -1303,9 +1352,9 @@ class _Variant(_Node):
         return out
 
 
-def _check_payload_keys(case: _Record, at: _At) -> None:
+def _check_payload_keys(case: _RecordCase, at: _At) -> None:
     for key in ("_tag", "_args"):
-        if key in case.keys:
+        if key in case.record.keys:
             reason = f'a record payload with a field named "{key}" has no schema-based JSON form (spec §16.3)'
             at.fail(reason, code="no-json-form")
 
@@ -1344,8 +1393,8 @@ def _payload_hint(tag: str, payload: _CasePayload) -> str:
     t = _short(tag)
     if payload is None:
         return f"{t} takes no payload: write `{t}`."
-    if isinstance(payload, _Record):
-        fields = _types(f"{f.key}{'?' if f.optional else ''}: {f.node.expected}" for f in payload.fields)
+    if isinstance(payload, _RecordCase):
+        fields = _types(f"{f.key}{'?' if f.optional else ''}: {f.node.expected}" for f in payload.record.fields)
         return (
             f"{t} takes one argument, a record {{ {fields} }}: write `{t} {{ … }}`."
             if fields
@@ -1395,14 +1444,14 @@ class _Coded(_Node):
         self.codec = codec
         self.id = id
 
-    def _decoded(self, x: object, at: _At) -> object:
+    def decoded(self, x: object, at: _At) -> object:
         try:
             return self.codec.decode(x)
         except (ValueError, TypeError, OverflowError) as e:
             reason = _short(str(e), 100)
         at.fail(f"the codec for {self.id} rejects it: {reason}")
 
-    def _encoded(self, x: object, at: _At) -> object:
+    def encoded(self, x: object, at: _At) -> object:
         at.step()
         try:
             return self.codec.encode(x)
@@ -1411,16 +1460,16 @@ class _Coded(_Node):
         at.fail(f"the codec for {self.id} can't encode it: {reason}")
 
     def decode(self, v: Value, at: _At) -> object:
-        return self._decoded(self.inner.decode(v, at), at)
+        return self.decoded(self.inner.decode(v, at), at)
 
     def encode(self, x: object, at: _At) -> Value:
-        return self.inner.encode(self._encoded(x, at), at)
+        return self.inner.encode(self.encoded(x, at), at)
 
     def read_json(self, j: Json, at: _At) -> object:
-        return self._decoded(self.inner.read_json(j, at), at)
+        return self.decoded(self.inner.read_json(j, at), at)
 
     def write_json(self, x: object, at: _At) -> Json:
-        return self.inner.write_json(self._encoded(x, at), at)
+        return self.inner.write_json(self.encoded(x, at), at)
 
 
 def _null_step(node: _Node) -> _Node | None:
@@ -1547,7 +1596,10 @@ class Builder:
                         case NoPayload():
                             payloads[c.tag] = None
                         case RecordPayload(record):
-                            payloads[c.tag] = self.record(record)
+                            payloads[c.tag] = _RecordCase(self.record(record))
+                        case PositionalPayload(items) as p if p.record is not None:
+                            # A record case by name: the named type's node, with its codecs (spec §15).
+                            payloads[c.tag] = _RecordCase(self.build(items[0]))
                         case PositionalPayload(items):
                             payloads[c.tag] = tuple(self.build(x) for x in items)
                 return _Variant(payloads, open_)

@@ -16,6 +16,7 @@ use crate::{Error, Result, Warning, quote, shown};
 use haus::ErrorCode as Code;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 const MAX_INSTANCES: usize = 10_000;
 const MAX_FILES: usize = 256;
@@ -102,9 +103,12 @@ pub struct SchemaFile {
     pub id: Option<String>,
     /// The package's name, for a package's `schema.haus`; None for a file outside packages.
     pub package: Option<String>,
+    /// Its text, as read: each file is read once for a schema (spec §13.3).
+    pub text: String,
     /// Its own definitions in source order, then the ones it imports.
     definitions: Vec<Definition>,
     own: usize,
+    warnings: Vec<Warning>,
 }
 
 impl SchemaFile {
@@ -117,6 +121,11 @@ impl SchemaFile {
     /// the name they have in it.
     pub fn imported(&self) -> &[Definition] {
         &self.definitions[self.own..]
+    }
+
+    /// What to point out in the file, in source order (as [`Schema::warnings`]).
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
 }
 
@@ -179,7 +188,8 @@ impl Schema {
     }
 
     /// What to point out in the file (not in the files it imports), in source
-    /// order: attributes this version doesn't define, uses of deprecated types.
+    /// order: attributes this version doesn't define, uses of deprecated
+    /// types, record cases with no schema-based JSON form (`no-json-form`).
     pub fn warnings(&self) -> &[Warning] {
         &self.warnings
     }
@@ -372,8 +382,8 @@ impl<'a> Loader<'a> {
         }
         let root = self.load(text.to_owned(), path, name, id, None)?;
         self.evaluate_all().map_err(|f| self.lift(f))?;
-        let warnings = self.units[root].file.warnings.iter().cloned().map(Error::from).collect();
         let files: Vec<SchemaFile> = (0..self.units.len()).map(|u| self.file(u)).collect();
+        let warnings = files[root].warnings.clone();
         let (definitions, own) = (files[root].definitions.clone(), files[root].own);
         let packages = self
             .packages
@@ -396,12 +406,95 @@ impl<'a> Loader<'a> {
             .map(|&(d, name)| self.definition(name, (u, d)))
             .chain(imported.iter().map(|&(name, at)| self.definition(name, at)))
             .collect();
+        let mut warnings: Vec<syntax::Error> =
+            unit.file.warnings.iter().cloned().chain(self.no_json_forms(u)).collect();
+        warnings.sort_by_key(|w| (w.line, w.column));
         SchemaFile {
             path: unit.path.clone(),
             id: unit.id.clone(),
             package: unit.package.clone(),
+            text: unit.text.clone(),
             definitions,
             own: own.len(),
+            warnings: warnings.into_iter().map(Error::from).collect(),
+        }
+    }
+
+    /// The record cases of file `u` with a field named `_tag` or `_args`,
+    /// which have no schema-based JSON form (spec §16.3): the schema is
+    /// valid, converters fail on values of such a case, and checkers warn
+    /// about it, at the case. Spreads in the file copy cases, which are
+    /// reported where they are written.
+    fn no_json_forms(&self, u: usize) -> Vec<syntax::Error> {
+        let unit = &self.units[u];
+        let mut found = vec![];
+        for (d, def) in unit.file.types.iter().enumerate() {
+            let template = &self.instances[self.by_instance_key[&template_key(u, d, &def.params)].0];
+            let ty = match &def.ty {
+                Ty::Name { name, args, .. } if name == "Stream" && template.stream => &args[0],
+                ty => ty,
+            };
+            self.reserved_cases(ty, &template.body, &mut found);
+        }
+        found.sort();
+        found.dedup();
+        found.into_iter().map(|(pos, reason)| syntax::error(&unit.text, pos, Code::NoJsonForm, reason)).collect()
+    }
+
+    /// The cases written in `ty` (whose decided type is `t`) that are record
+    /// cases with a reserved field: where each is written, and why.
+    fn reserved_cases(&self, ty: &Ty, t: &Type, found: &mut Vec<(usize, String)>) {
+        match (ty, t) {
+            (Ty::Name { args, .. }, Type::Array(x) | Type::Map(x) | Type::Maybe(x) | Type::Secret(x)) => {
+                args.iter().for_each(|a| self.reserved_cases(a, x, found))
+            }
+            // `Result e a`: `closed < Err e | Ok a >`.
+            (Ty::Name { name, args, .. }, Type::Variant(v)) if name == "Result" => {
+                for (a, tag) in args.iter().zip(["Err", "Ok"]) {
+                    if let Some(Case { payload: Payload::Positional(xs), .. }) = v.case(tag) {
+                        xs.iter().for_each(|x| self.reserved_cases(a, x, found));
+                    }
+                }
+            }
+            (Ty::Record { fields, .. }, Type::Record(r)) => self.reserved_in_fields(fields, r, found),
+            (Ty::Variant { cases, .. }, Type::Variant(v)) => {
+                for c in cases {
+                    let Some(case) = v.case(&c.tag) else { continue };
+                    let record = match &case.payload {
+                        Payload::Record(r) => Some(r),
+                        Payload::Named(x) => match self.resolve(x) {
+                            Type::Record(r) => Some(r),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some(field) =
+                        record.and_then(|r| r.fields.iter().find(|f| f.key == "_tag" || f.key == "_args"))
+                    {
+                        let reason =
+                            format!("{} has a field named {}, so it has no schema-based JSON form", c.tag, field.key);
+                        found.push((c.pos, reason));
+                    }
+                    match (&case.payload, c.payload.as_slice()) {
+                        (Payload::Record(r), [Ty::Record { fields, .. }]) => self.reserved_in_fields(fields, r, found),
+                        (Payload::Named(x), [p]) => self.reserved_cases(p, x, found),
+                        (Payload::Positional(xs), ps) => {
+                            ps.iter().zip(xs).for_each(|(p, x)| self.reserved_cases(p, x, found))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Named types are checked where they are defined; parameters and scalars have no cases.
+            _ => {}
+        }
+    }
+
+    fn reserved_in_fields(&self, fields: &[syntax::Field], r: &Record, found: &mut Vec<(usize, String)>) {
+        for f in fields {
+            if let Some(field) = r.field(&f.key) {
+                self.reserved_cases(&f.ty, &field.ty, found);
+            }
         }
     }
 
@@ -765,6 +858,51 @@ impl<'a> Loader<'a> {
         Ok(())
     }
 
+    /// Whether `ty`, written in file `u`, is a record (spec §15), decided
+    /// where it is written: names are followed through their definitions,
+    /// with their arguments as written, and a type parameter of the
+    /// definition it is written in is not a record, whatever its argument
+    /// is. So `X (Id a)` in `type T a = Holder (< X (Id a) >)` is never a
+    /// record case, and `X (Id R)` always is.
+    fn is_record(&self, u: usize, ty: &Ty) -> bool {
+        /// The arguments of the definitions followed: each with the file and
+        /// the arguments it is written with.
+        #[derive(Clone, Default)]
+        struct Env<'s>(Rc<Vec<(&'s str, usize, &'s Ty, Env<'s>)>>);
+        let (mut u, mut ty, mut env) = (u, ty, Env::default());
+        // Checked: every chain of names ends (§9.9); the bound is for safety.
+        for _ in 0..MAX_INSTANCES {
+            match ty {
+                Ty::Record { .. } => return true,
+                Ty::Variant { .. } => return false,
+                Ty::Param { name, .. } => match env.0.iter().find(|(p, ..)| p == name) {
+                    Some((_, au, aty, aenv)) => (u, ty, env) = (*au, *aty, aenv.clone()),
+                    None => return false,
+                },
+                // The prelude's types and std/time's are not records.
+                Ty::Name { name, .. } if GENERIC.iter().any(|(g, _)| g == name) => return false,
+                Ty::Name { name, args, .. } => match self.units[u].scope.get(name) {
+                    Some(&(du, dd)) => {
+                        let def = &self.units[du].file.types[dd];
+                        let bound = def.params.iter().zip(args).map(|(p, a)| (p.as_str(), u, a, env.clone()));
+                        (u, ty, env) = (du, &def.ty, Env(Rc::new(bound.collect())));
+                    }
+                    None => return false,
+                },
+            }
+        }
+        false
+    }
+
+    /// The type a reference stands for, following named types (as [`Schema::resolve`]).
+    fn resolve<'t>(&'t self, mut ty: &'t Type) -> &'t Type {
+        // Checked: every chain of names ends (§9.9).
+        while let Type::Ref(id) = ty {
+            ty = &self.instances[id.0].body;
+        }
+        ty
+    }
+
     /// The instance of definition `d` of file `u` with `args`, created if new.
     /// `at` and `pos`: where it is used, for errors.
     fn instance(&mut self, u: usize, d: usize, args: Vec<Type>, at: usize, pos: usize) -> Result<InstanceId, Fail> {
@@ -819,6 +957,8 @@ impl<'a> Loader<'a> {
                     .map(|c| match &c.payload {
                         Payload::None => c.tag.clone(),
                         Payload::Record(r) => format!("{}{}", c.tag, self.record_key(r)),
+                        // Not the key of one positional argument: `X R` and `X a` with R for a differ.
+                        Payload::Named(t) => format!("{}{{{}}}", c.tag, self.key(t)),
                         Payload::Positional(items) => {
                             format!("{}({})", c.tag, items.iter().map(|t| self.key(t)).collect::<Vec<_>>().join(","))
                         }
@@ -882,7 +1022,17 @@ impl<'a> Loader<'a> {
     /// for a spread of an imported type, which the syntax tree leaves in place.
     fn spread(&mut self, u: usize, s: &syntax::Spread, want: &str) -> Result<Type, Fail> {
         let Some(&(du, dd)) = self.units[u].scope.get(&s.name) else {
-            return fail(u, s.pos, Code::UnknownType, unknown_type(&s.name));
+            // A standard or built-in type is known, just not a record or variant.
+            let known = self.units[u].std.contains_key(&s.name) || syntax::PRELUDE.iter().any(|(n, _)| *n == s.name);
+            return match known {
+                true => fail(
+                    u,
+                    s.pos,
+                    Code::InvalidSpread,
+                    format!("{} is not a {want}, so it can't be spread here", s.name),
+                ),
+                false => fail(u, s.pos, Code::UnknownType, unknown_type(&s.name)),
+            };
         };
         let params = &self.units[du].file.types[dd].params;
         if !params.is_empty() {
@@ -935,6 +1085,11 @@ impl<'a> Loader<'a> {
                             [Ty::Record { closed, fields, spreads, .. }] => {
                                 Payload::Record(self.record(u, *closed, fields, spreads, env)?)
                             }
+                            // A record case by name, if it is a record where it is written.
+                            [one @ Ty::Name { .. }] => match self.is_record(u, one) {
+                                true => Payload::Named(self.eval(u, one, env)?),
+                                false => Payload::Positional(vec![self.eval(u, one, env)?]),
+                            },
                             items => Payload::Positional(
                                 items.iter().map(|t| self.eval(u, t, env)).collect::<Result<_, _>>()?,
                             ),

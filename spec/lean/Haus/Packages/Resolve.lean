@@ -9,9 +9,12 @@ import Haus.Json.Text
 it imports, and returns the packages it reaches (`name@version`, sorted) or
 the first error, with its code (spec §17) and a message.
 
-It runs in `M`, which reads the tree only through `readFile` (recording each
-path it reads in `St.reads`), `Tree.child?` (`lstat`), `Tree.realPath` and
-`Tree.list`, so that what it reads can be stated about the same model.
+It runs in `M`, which sees the tree only through `openFile` (recording each
+path it opens in `St.reads`) and `look`, which tells only kinds, names,
+links and real paths (`Tree.childKind?` for `lstat`, `Tree.realPath`,
+`Tree.list`), never a file's bytes: so what it reads can be stated about
+the same model, and the bytes of a file it doesn't open can't matter (R7,
+`Haus.Packages.Reads`).
 
 **How packages are found** (`Mode`). The packages given explicitly, by their
 directory (`packages`) or as a folder whose subdirectories with a
@@ -39,7 +42,10 @@ package exactly when §13.3 says so ("byte for byte the same, and whose
 imports reach the same packages").
 
 **Each file is read at most once** (`St.files`, `St.copies`, `St.manifests`,
-`St.npm`), so the diamond of 2^24 paths reads 49 files.
+`St.npm`), so the diamond of 2^24 paths reads 49 files. `openFile` also
+keeps the paths it opened, and doesn't open one twice: the caches are kept
+by kind, and one file can be of two kinds (a project's `package.json` that
+is a link to a schema file; a root that is a `package.json`).
 
 Recursion: `load` takes fuel, the number of entries of the tree plus one.
 Each call on the stack is loading a different file of the tree (a file
@@ -166,8 +172,8 @@ def Classes.push (cs : Classes) (c : Class) (h : ∀ d ∈ cs.list, d.name ≠ c
       exact h d hd e)⟩
 
 structure St where
-  /-- Every file read, by real path, in order. -/
-  reads : Array Path := #[]
+  /-- Every file opened (and read, unless too large), by real path, in order. -/
+  reads : List Path := []
   /-- Schema files outside packages: being loaded (`none`) or their types. -/
   files : List (Path × Option (List String)) := []
   /-- Package copies, by their directory's real path. -/
@@ -178,6 +184,12 @@ structure St where
   classes : Classes := .empty
   /-- Schema files loaded, the root included. -/
   count : Nat := 0
+  /-- Searches for a package (`candidates`), for the bound of R4. -/
+  lookups : Nat := 0
+  /-- Schema files scanned, their imports all together, and the most in one of them. -/
+  scanned : Nat := 0
+  imports : Nat := 0
+  widest : Nat := 0
   deriving Inhabited
 
 abbrev M := ReaderT Env (ExceptT Err (StateM St))
@@ -186,19 +198,30 @@ def fail {α} (code : Code) (message : String) : M α := throw ⟨code, message�
 
 /-! ## Reading files -/
 
-/-- Reads the regular file at the real path `p`, and records it. The one way the resolver reads a file. -/
-def readFile (p : Path) : M (List UInt8) := do
+/--
+Something of the tree that is not a file's bytes: kinds, names, links, real
+paths. Everything the resolver learns of the tree, except through `openFile`.
+-/
+def look {β} (g : Tree → β) : M β := do return g (← read).tree
+
+/-- Something of the run's settings: the configuration, the explicit packages. -/
+def ask {β} (f : Env → β) : M β := do return f (← read)
+
+def cfg : M Config := ask (·.config)
+
+/--
+Opens the regular file at the real path `p`, records it, checks its size on
+the opened file (else `tooLarge size`), and reads it. The one way the
+resolver reads a file. A file opened before is not opened again: a binding
+keeps what it read, and the model's tree doesn't change.
+-/
+def openFile (p : Path) (limit : Nat) (tooLarge : Nat → Err) : M (List UInt8) := do
   match (← read).tree.at? p with
   | some (.file bs) =>
-    modify fun s => { s with reads := s.reads.push p }
+    if p ∉ (← get).reads then modify fun s => { s with reads := s.reads ++ [p] }
+    if bs.length > limit then throw (tooLarge bs.length)
     pure bs
   | _ => fail .outOfFuel s!"internal: {showPath p} is not a regular file"
-
-/-- The size of the regular file at the real path `p` (`fstat`). Not a read. -/
-def fileSize (p : Path) : M Nat := do
-  match (← read).tree.at? p with
-  | some (.file bs) => pure bs.length
-  | _ => pure 0
 
 def utf8 (bs : List UInt8) : Option Text := (String.fromUTF8? ⟨bs.toArray⟩).map (·.toList)
 
@@ -209,13 +232,12 @@ opened without following a link, which must be a regular file (else
 it is read. `none` if there is none.
 -/
 def openPackageFile (dir : Path) (name : String) (limit : Nat) (tooLarge : Code) (owner : String) : M (Option (List UInt8)) := do
-  match (← read).tree.child? dir name with
+  match ← look (·.childKind? dir name) with
   | none => pure none
-  | some (.file _) =>
-    let p := dir ++ [name]
-    let size ← fileSize p
-    if size > limit then fail tooLarge s!"the {name} of {owner} has {size} bytes, more than {limit}; it is not read"
-    readFile p
+  | some .file =>
+    let bs ← openFile (dir ++ [name]) limit fun size =>
+      ⟨tooLarge, s!"the {name} of {owner} has {size} bytes, more than {limit}; it is not read"⟩
+    pure (some bs)
   | some (.link _) => fail .packagePath s!"the {name} of {owner} is a symbolic link; it is not read"
   | some _ => fail .packagePath s!"the {name} of {owner} is not a regular file; it is not read"
 
@@ -241,7 +263,7 @@ def parseManifest (bytes : List UInt8) (owner : String) : Except Err Manifest :=
 /-- The manifest of the package in `dir` (a real path), read once. `none` if it has no `package.haus`. -/
 def manifestOf (dir : Path) (shown : String) : M (Option Manifest) := do
   if let some m := (← get).manifests.lookup dir then return some m
-  match ← openPackageFile dir "package.haus" (← read).config.limits.manifest .packageManifest shown with
+  match ← openPackageFile dir "package.haus" (← cfg).limits.manifest .packageManifest shown with
   | none => pure none
   | some bytes =>
     let m ← match parseManifest bytes shown with
@@ -275,7 +297,7 @@ def parseNpm (bytes : List UInt8) : Option NpmInfo :=
 def packageJsonOf (dir : Path) (owner : String) : M (Option NpmInfo) := do
   let p := dir ++ ["package.json"]
   if let some r := (← get).npm.lookup p then return r
-  match ← openPackageFile dir "package.json" (← read).config.limits.packageJson .fileTooLarge owner with
+  match ← openPackageFile dir "package.json" (← cfg).limits.packageJson .fileTooLarge owner with
   | none => pure none
   | some bytes =>
     let r := parseNpm bytes
@@ -290,19 +312,18 @@ puts no rule on it. Not valid JSON, or not a regular file: it declares nothing.
 Returns where it is, and what it declares (with `devDependencies`; `none`: nothing, as it can't be read).
 -/
 def projectOf (p : Path) : M (Option (Path × Option (List String))) := do
-  let env ← read
+  let limit := (← cfg).limits.packageJson
   for d in ancestors p.dropLast do
-    if (env.tree.child? d "package.json").isNone then continue
-    match env.tree.realPath (d ++ ["package.json"]) with
+    if (← look (·.childKind? d "package.json")).isNone then continue
+    match ← look (·.realPath (d ++ ["package.json"])) with
     | .ok real =>
-      if !(env.tree.at? real matches some (.file _)) then return some (d, none)
+      if (← look (·.kindAt? real)) != some .file then return some (d, none)
       let info ← match (← get).npm.lookup real with
         | some r => pure r
         | none => do
-          let size ← fileSize real
-          if size > env.config.limits.packageJson then
-            fail .fileTooLarge s!"{showPath (d ++ ["package.json"])} has {size} bytes, more than {env.config.limits.packageJson}; it is not read"
-          let r := parseNpm (← readFile real)
+          let bytes ← openFile real limit fun size =>
+            ⟨.fileTooLarge, s!"{showPath (d ++ ["package.json"])} has {size} bytes, more than {limit}; it is not read"⟩
+          let r := parseNpm bytes
           modify fun s => { s with npm := (real, r) :: s.npm }
           pure r
       match info with
@@ -339,27 +360,30 @@ def skipped (worldWritable : Path → Bool) (d : Path) : Bool :=
     || worldWritable d
 
 /--
+Where the npm walk (§13.3) looks for `name` (`@org/n`) from the directory
+`start`: `D/node_modules/@org/n` for `D` from `start` up, nearest first,
+skipping the directories of `skipped`.
+-/
+def walk (worldWritable : Path → Bool) (start : Path) (name : String) : List Path :=
+  ((ancestors start).filter fun d => !skipped worldWritable d).map (· ++ "node_modules" :: splitPath name)
+
+/--
 The npm walk (§13.3) for the package `name` (`@org/n`) from the directory
-`start` (a real path): the first `D/node_modules/@org/n` that exists, for
-`D` from `start` up, nearest first, skipping the directories of `skipped`.
-Its real path; an error if it has no `package.haus`; `none` if there is none.
+`start` (a real path): the first place of `walk` that exists. Its real
+path; an error if it has no `package.haus`; `none` if there is none.
 -/
 def npmLookup (start : Path) (name : String) : M (Option Path) := do
-  let env ← read
-  let parts := splitPath name
-  for d in ancestors start do
-    if skipped env.config.worldWritable d then continue
-    let p := d ++ "node_modules" :: parts
-    match env.tree.realPath p with
+  for p in walk (← cfg).worldWritable start name do
+    match ← look (·.realPath p) with
     | .ok real =>
-      if (env.tree.child? real "package.haus").isSome then return some real
+      if (← look (·.childKind? real "package.haus")).isSome then return some real
       fail .importNotFound s!"{name}: {showPath p} has no package.haus (not a schema package); the search stops there"
     | .error _ => continue
   return none
 
 /-- Is the real path `p` in a package's directory: a directory above it with a `package.haus`? -/
 def inPackage (t : Tree) (p : Path) : Option Path :=
-  (ancestors p.dropLast).find? fun d => (t.child? d "package.haus").isSome
+  (ancestors p.dropLast).find? fun d => (t.childKind? d "package.haus").isSome
 
 /-- What loading gives: the types defined, and for a package, its class. -/
 structure Loaded where
@@ -378,11 +402,12 @@ def checkNames (imp : Import) (types : List String) (what : String) : M Unit := 
 
 /-- The candidates for `@org/n` from `importer` (§13.3, "Resolution" and "npm"): real directories, with how they are shown. -/
 def candidates (importer : Importer) (name : String) : M (List (Path × String)) := do
-  let env ← read
-  let byDir := env.given.filter fun g => g.byDir && g.name == name
+  modify fun s => { s with lookups := s.lookups + 1 }
+  let given ← ask (·.given)
+  let byDir := given.filter fun g => g.byDir && g.name == name
   if !byDir.isEmpty then return byDir.map fun g => (g.dir, g.shown)
-  let inFolders := (env.given.filter fun g => !g.byDir && g.name == name).map fun g => (g.dir, g.shown)
-  let fromNpm ← if !env.config.mode.npm then pure [] else do
+  let inFolders := (given.filter fun g => !g.byDir && g.name == name).map fun g => (g.dir, g.shown)
+  let fromNpm ← if !(← cfg).mode.npm then pure [] else do
     let (decl, where_) ← declared importer
     if name ∈ decl then
       let start := match importer with | .app p => p.dropLast | .pkg dir _ _ => dir
@@ -392,8 +417,9 @@ def candidates (importer : Importer) (name : String) : M (List (Path × String))
     else pure []
   let all := inFolders ++ fromNpm.filter fun (d, _) => !inFolders.any (·.1 == d)
   if all.isEmpty then
-    let broken := if env.broken.isEmpty then "" else
-      s!"; these entries of the folders given have no valid package.haus: {", ".intercalate env.broken}"
+    let broken ← ask (·.broken)
+    let broken := if broken.isEmpty then "" else
+      s!"; these entries of the folders given have no valid package.haus: {", ".intercalate broken}"
     fail .importNotFound s!"{importer.show} imports {name}, which isn't found{broken}"
   return all
 
@@ -402,7 +428,6 @@ One import of `importer`. `loadFn` loads a target (it is `load` with less
 fuel). Returns the class of an imported package.
 -/
 def resolveImport (loadFn : Target → M Loaded) (importer : Importer) (imp : Import) : M (Option Nat) := do
-  let env ← read
   match imp.module with
   | .std _ => pure none  -- checked by `scan`
   | .file path =>
@@ -411,14 +436,14 @@ def resolveImport (loadFn : Target → M Loaded) (importer : Importer) (imp : Im
     | .app p =>
       let comps := splitPath path
       let comps := comps.dropLast ++ [comps.getLastD "" ++ ".schema.haus"]
-      match resolve env.tree maxLinks p.dropLast comps with
+      match ← look (resolve · maxLinks p.dropLast comps) with
       | .error _ => fail .importNotFound s!"{showPath p} imports {path}, which isn't found"
       | .ok real =>
-        if let some d := inPackage env.tree real then
+        if let some d ← look (inPackage · real) then
           fail .packagePath s!"{showPath p} imports {path}, a file in the package directory {showPath d}; import the package by its name"
         if !(real.getLast?.any (·.endsWith ".schema.haus")) then
           fail .importNotFound s!"{showPath p} imports {path}, which is not a schema file (its real path doesn't end in .schema.haus); it is not read"
-        if !(env.tree.at? real matches some (.file _)) then
+        if (← look (·.kindAt? real)) != some .file then
           fail .importNotFound s!"{showPath p} imports {path}, which is not a regular file; it is not read"
         let r ← loadFn (.file real)
         checkNames imp r.types path
@@ -442,11 +467,15 @@ def resolveImport (loadFn : Target → M Loaded) (importer : Importer) (imp : Im
 /-! ## Loading -/
 
 def countFile (what : String) : M Unit := do
-  let s ← get
-  let limit := (← read).config.limits.files
-  if s.count + 1 > limit then
-    fail .tooManyFiles s!"{what} would be schema file {s.count + 1}, more than {limit}"
-  set { s with count := s.count + 1 }
+  let limit := (← cfg).limits.files
+  let n := (← get).count
+  if n + 1 > limit then
+    fail .tooManyFiles s!"{what} would be schema file {n + 1}, more than {limit}"
+  modify fun s => { s with count := s.count + 1 }
+
+/-- Notes the imports of a schema file loaded (R4). -/
+def noteImports (k : Nat) : M Unit :=
+  modify fun s => { s with scanned := s.scanned + 1, imports := s.imports + k, widest := max s.widest k }
 
 def decodeScan (bytes : List UInt8) (what : String) : M Scanned := do
   match utf8 bytes with
@@ -483,9 +512,8 @@ def addClass (c : Class) (cs : Classes) : Except Err (Nat × Classes) :=
 
 /-- `addClass` on the run's classes. -/
 def classify (c : Class) : M Nat := do
-  let st ← get
-  match addClass c st.classes with
-  | .ok (i, cs) => set { st with classes := cs }; pure i
+  match addClass c (← get).classes with
+  | .ok (i, cs) => modify fun st => { st with classes := cs }; pure i
   | .error e => throw e
 
 def load : Nat → Target → M Loaded
@@ -496,12 +524,12 @@ def load : Nat → Target → M Loaded
     | some none => fail .importCycle s!"{showPath p} imports itself, directly or not"
     | none => pure ()
     modify fun s => { s with files := (p, none) :: s.files }
-    let env ← read
-    let size ← fileSize p
-    if size > env.config.limits.schemaFile then
-      fail .fileTooLarge s!"{showPath p} has {size} bytes, more than {env.config.limits.schemaFile}; it is not read"
+    let limit := (← cfg).limits.schemaFile
+    let bytes ← openFile p limit fun size =>
+      ⟨.fileTooLarge, s!"{showPath p} has {size} bytes, more than {limit}; it is not read"⟩
     countFile (showPath p)
-    let s ← decodeScan (← readFile p) (showPath p)
+    let s ← decodeScan bytes (showPath p)
+    noteImports s.imports.length
     for imp in s.imports do
       let _ ← resolveImport (load n) (.app p) imp
     modify fun st => { st with files := (p, some s.types) :: st.files }
@@ -512,21 +540,22 @@ def load : Nat → Target → M Loaded
     | some .loading => fail .importCycle s!"the package in {showPath dir} imports itself, directly or not"
     | none => pure ()
     modify fun s => { s with copies := (dir, .loading) :: s.copies }
-    let env ← read
+    let config ← cfg
     let some m ← manifestOf dir (showPath dir)
       | fail .importNotFound s!"{showPath dir} has no package.haus"
     let owner := s!"{m.name} ({showPath dir})"
     -- Its package.json: what it declares, and the version its package manager gives it.
-    let npm ← if env.config.mode.npm then packageJsonOf dir owner else pure none
-    if env.config.checkVersions then
+    let npm ← if config.mode.npm then packageJsonOf dir owner else pure none
+    if config.checkVersions then
       if let some v := npm.bind (·.version) then
         if v != m.version then
           let shown := if isSemver v then quote v else "a version that isn't a semantic version"
           fail .packageVersion s!"the package.haus of {owner} says version {quote m.version}, its package.json {shown}"
-    let some bytes ← openPackageFile dir "schema.haus" env.config.limits.schemaFile .fileTooLarge owner
+    let some bytes ← openPackageFile dir "schema.haus" config.limits.schemaFile .fileTooLarge owner
       | fail .importNotFound s!"{owner} has no schema.haus"
     countFile s!"the schema.haus of {owner}"
     let s ← decodeScan bytes s!"the schema.haus of {owner}"
+    noteImports s.imports.length
     -- A package imports packages, never files: checked before anything is looked for.
     if let some i := s.imports.find? (·.module matches .file _) then
       fail .packagePath s!"the schema of {m.name} imports the file {i.module.show}; a package imports only packages, by name"
@@ -542,27 +571,27 @@ def load : Nat → Target → M Loaded
 
 /-- Reads the manifests of the packages given explicitly (§13.3), at the start. -/
 def givenPackages : M (List Given × List String) := do
-  let env ← read
+  let config ← cfg
   let mut given : List Given := []
   let mut broken : List String := []
-  for d in env.config.mode.packages do
-    let real ← match env.tree.realPath d with
-      | .ok r => if env.tree.isDir r then pure r else fail .importNotFound s!"the package directory {showPath d} given is not a directory"
+  for d in config.mode.packages do
+    let real ← match ← look (·.realPath d) with
+      | .ok r => if ← look (·.isDir r) then pure r else fail .importNotFound s!"the package directory {showPath d} given is not a directory"
       | .error _ => fail .importNotFound s!"the package directory {showPath d} given doesn't exist"
     let some m ← manifestOf real (showPath d)
       | fail .importNotFound s!"the package directory {showPath d} given has no package.haus"
     given := given ++ [{ dir := real, shown := showPath d, name := m.name, byDir := true }]
-  for f in env.config.mode.folders do
-    let real ← match env.tree.realPath f with
-      | .ok r => if env.tree.isDir r then pure r else fail .importNotFound s!"the folder of packages {showPath f} given is not a directory"
+  for f in config.mode.folders do
+    let real ← match ← look (·.realPath f) with
+      | .ok r => if ← look (·.isDir r) then pure r else fail .importNotFound s!"the folder of packages {showPath f} given is not a directory"
       | .error _ => fail .importNotFound s!"the folder of packages {showPath f} given doesn't exist"
-    let names := env.tree.list real
-    if names.length > env.config.limits.folderEntries then
-      fail .tooManyFiles s!"the folder of packages {showPath f} has {names.length} entries, more than {env.config.limits.folderEntries}"
+    let names ← look (·.list real)
+    if names.length > config.limits.folderEntries then
+      fail .tooManyFiles s!"the folder of packages {showPath f} has {names.length} entries, more than {config.limits.folderEntries}"
     for n in names.mergeSort (· ≤ ·) do
       let shown := showPath (f ++ [n])
-      let .ok sub := env.tree.realPath (real ++ [n]) | continue
-      if !env.tree.isDir sub || (env.tree.child? sub "package.haus").isNone then continue
+      let .ok sub ← look (·.realPath (real ++ [n])) | continue
+      if !(← look (·.isDir sub)) || (← look (·.childKind? sub "package.haus")).isNone then continue
       try
         if let some m ← manifestOf sub shown then
           given := given ++ [{ dir := sub, shown, name := m.name, byDir := false }]
@@ -576,7 +605,7 @@ def packagesOf (cs : List Class) : List String :=
 /-- The result of `resolveIn`, with the files read and the packages (classes) reached. -/
 structure Outcome where
   result : Except Err (List String)
-  reads : Array Path
+  reads : List Path
   /-- The packages made, also when an error ended the run. -/
   classes : Classes
 
@@ -584,20 +613,23 @@ structure Outcome where
 def Outcome.of (p : Except Err Unit × St) : Outcome :=
   ⟨p.1.map fun _ => packagesOf p.2.classes.list, p.2.reads, p.2.classes⟩
 
+/-- The whole run: the explicit packages, then the schema file `root` and everything it imports. -/
+def main (root : Path) : M Unit := do
+  let (given, broken) ← givenPackages
+  withReader (fun e => { e with given, broken }) do
+    let real ← match ← look (·.realPath root) with
+      | .ok r => pure r
+      | .error _ => fail .importNotFound s!"the schema file {showPath root} doesn't exist"
+    if (← look (·.kindAt? real)) != some .file then
+      fail .importNotFound s!"the schema file {showPath root} is not a regular file"
+    let fuel ← look (·.entries.length + 1)
+    let _ ← load fuel (.file real)
+
 /--
 Loads the schema file `root` of `tree` and everything it imports. On success,
 every package reached, as `name@version`, sorted.
 -/
 def resolveIn (tree : Tree) (config : Config) (root : Path) : Outcome :=
-  let run : M Unit := do
-    let (given, broken) ← givenPackages
-    withReader (fun e => { e with given, broken }) do
-      let real ← match tree.realPath root with
-        | .ok r => pure r
-        | .error _ => fail .importNotFound s!"the schema file {showPath root} doesn't exist"
-      if !(tree.at? real matches some (.file _)) then
-        fail .importNotFound s!"the schema file {showPath root} is not a regular file"
-      let _ ← load (tree.entries.length + 1) (.file real)
-  Outcome.of (((run.run { tree, config }).run).run {})
+  Outcome.of ((((main root).run { tree, config }).run).run {})
 
 end Haus.Packages

@@ -391,27 +391,11 @@ impl<'s> Walker<'s> {
     fn payload_fix(&self, tag: &str, payload: &Payload) -> String {
         match payload {
             Payload::None => format!("{tag} takes no payload: write `{tag}`."),
-            Payload::Record(r) => {
-                let fields: Vec<String> = r
-                    .fields
-                    .iter()
-                    .take(6)
-                    .map(|f| {
-                        format!(
-                            "{}{}: {}",
-                            quote_key(&f.key),
-                            if f.optional { "?" } else { "" },
-                            self.schema.describe(&f.ty)
-                        )
-                    })
-                    .collect();
-                let more = if r.fields.len() > 6 { ", …" } else { "" };
-                let record = match fields.is_empty() {
-                    true => "{}".to_owned(),
-                    false => format!("{{ {}{more} }}", fields.join(", ")),
-                };
-                format!("{tag} takes one argument, a record {record}: write `{tag} {{ … }}`.")
-            }
+            Payload::Record(r) => self.record_fix(tag, r),
+            Payload::Named(t) => match self.schema.resolve(t) {
+                Type::Record(r) => self.record_fix(tag, r),
+                _ => self.payload_fix(tag, &Payload::Positional(vec![t.clone()])),
+            },
             Payload::Positional(items) => {
                 let n = items.len();
                 let described: Vec<String> = items.iter().map(|t| self.schema.describe(t)).collect();
@@ -420,6 +404,24 @@ impl<'s> Walker<'s> {
                 format!("{tag} takes {n} argument{s} ({}): write `{tag}({holes})`.", described.join(", "))
             }
         }
+    }
+
+    /// What a record case takes, as a hint: `Circle takes one argument, a record { r: Float64 }: …`.
+    fn record_fix(&self, tag: &str, r: &Record) -> String {
+        let fields: Vec<String> = r
+            .fields
+            .iter()
+            .take(6)
+            .map(|f| {
+                format!("{}{}: {}", quote_key(&f.key), if f.optional { "?" } else { "" }, self.schema.describe(&f.ty))
+            })
+            .collect();
+        let more = if r.fields.len() > 6 { ", …" } else { "" };
+        let record = match fields.is_empty() {
+            true => "{}".to_owned(),
+            false => format!("{{ {}{more} }}", fields.join(", ")),
+        };
+        format!("{tag} takes one argument, a record {record}: write `{tag} {{ … }}`.")
     }
 
     fn fatal<T>(&mut self, code: Code, message: String) -> Option<T> {
@@ -760,6 +762,17 @@ impl<'s> Walker<'s> {
         self.payload(tag, args, case, loc)
     }
 
+    /// A record case's payload that isn't one record: the wrong payload (spec §15).
+    fn not_one_record(&mut self, tag: &str, args: &[Value], case: &Case, loc: Loc) -> Option<Value> {
+        let fix = self.payload_fix(tag, &case.payload);
+        let got = match args {
+            [] => "no payload".to_owned(),
+            [x] => found(x),
+            _ => format!("{} arguments", args.len()),
+        };
+        self.wrong_payload(format!("{tag} takes one argument, a record; found {got}"), fix, loc)
+    }
+
     fn payload(&mut self, tag: &str, args: &[Value], case: &Case, loc: Loc) -> Option<Value> {
         match &case.payload {
             Payload::None if args.is_empty() => Some(self.out(|| haus::ser::variant(tag, vec![]))),
@@ -774,15 +787,15 @@ impl<'s> Walker<'s> {
                     Some(self.out(|| haus::ser::variant(tag, vec![x])))
                 }
                 // Anything else, `Circle(1.5)` too, is the wrong payload (spec §15).
-                _ => {
-                    let fix = self.payload_fix(tag, &case.payload);
-                    let got = match args {
-                        [] => "no payload".to_owned(),
-                        [x] => found(x),
-                        _ => format!("{} arguments", args.len()),
-                    };
-                    self.wrong_payload(format!("{tag} takes one argument, a record; found {got}"), fix, loc)
+                _ => self.not_one_record(tag, args, case, loc),
+            },
+            // A record case too: `Wrap Box` takes `Wrap { … }`, and errors are at the same places.
+            Payload::Named(t) => match args {
+                [x @ Value::Record(_)] => {
+                    let x = self.value(x, t, item_of(loc, 0))?;
+                    Some(self.out(|| haus::ser::variant(tag, vec![x])))
                 }
+                _ => self.not_one_record(tag, args, case, loc),
             },
             Payload::Positional(items) if items.len() != args.len() => {
                 let n = items.len();

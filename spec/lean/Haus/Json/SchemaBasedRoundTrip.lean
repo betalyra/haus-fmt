@@ -213,31 +213,46 @@ theorem isBool_eq {c : Ty} (h : isBool c = true) : c = .variant true [.bare "Fal
   · rfl
   · cases h
 
-theorem caseOf?_mem {cases : List Case} {tag : String} {cs : Case} (h : caseOf? cases tag = some cs) :
-    cs ∈ cases ∧ cs.tag = tag := by
+theorem Case.resolve_tag (env : Env) (c : Case) : (c.resolve env).tag = c.tag := by
+  unfold Case.resolve
+  split
+  · split <;> rfl
+  · rfl
+
+theorem Case.resolve_isBare (env : Env) (c : Case) : (c.resolve env).isBare = c.isBare := by
+  unfold Case.resolve
+  split
+  · split <;> rfl
+  · rfl
+
+theorem caseOf?_mem {env : Env} {cases : List Case} {tag : String} {cs : Case} (h : caseOf? env cases tag = some cs) :
+    (∃ c ∈ cases, c.resolve env = cs) ∧ cs.tag = tag := by
   unfold caseOf? at h
-  exact ⟨List.mem_of_find?_eq_some h, by simpa using List.find?_some h⟩
+  obtain ⟨c, hc, rfl⟩ := Option.map_eq_some_iff.mp h
+  exact ⟨⟨c, List.mem_of_find?_eq_some hc, rfl⟩, by rw [Case.resolve_tag]; simpa using List.find?_some hc⟩
 
-theorem caseOf?_bool {tag : String} {cs : Case} (h : caseOf? [.bare "False", .bare "True"] tag = some cs) :
+theorem caseOf?_bool {env : Env} {tag : String} {cs : Case} (h : caseOf? env [.bare "False", .bare "True"] tag = some cs) :
     tag = "False" ∨ tag = "True" := by
-  obtain ⟨hm, ht⟩ := caseOf?_mem h
+  obtain ⟨⟨c, hm, rfl⟩, ht⟩ := caseOf?_mem h
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hm
-  rcases hm with rfl | rfl <;> simp [Case.tag] at ht <;> simp [← ht]
+  rcases hm with rfl | rfl <;> simp [Case.resolve, Case.tag] at ht <;> simp [← ht]
 
-theorem caseOf?_maybe {a : Ty} {tag : String} {cs : Case}
-    (h : caseOf? [.bare "None", .positional "Some" [a]] tag = some cs) :
+theorem caseOf?_maybe {env : Env} {a : Ty} {tag : String} {cs : Case}
+    (h : caseOf? env [.bare "None", .positional "Some" [a]] tag = some cs) :
     (tag = "None" ∧ cs = .bare "None") ∨ (tag = "Some" ∧ cs = .positional "Some" [a]) := by
-  obtain ⟨hm, ht⟩ := caseOf?_mem h
+  obtain ⟨⟨c, hm, rfl⟩, ht⟩ := caseOf?_mem h
   simp only [List.mem_cons, List.not_mem_nil, or_false] at hm
-  rcases hm with rfl | rfl <;> simp [Case.tag] at ht <;> simp [← ht]
+  rcases hm with rfl | rfl <;> simp [Case.resolve, Case.tag] at ht <;> simp [← ht, Case.resolve]
 
-theorem isEnum_bare {closed : Bool} {cases : List Case} {tag : String} {cs : Case}
-    (he : isEnum (.variant closed cases) = true) (h : caseOf? cases tag = some cs) : cs.isBare = true := by
+theorem isEnum_bare {env : Env} {closed : Bool} {cases : List Case} {tag : String} {cs : Case}
+    (he : isEnum (.variant closed cases) = true) (h : caseOf? env cases tag = some cs) : cs.isBare = true := by
   unfold isEnum at he
   split at he
   · rename_i heq
     cases heq
-    exact List.all_eq_true.mp he cs (caseOf?_mem h).1
+    obtain ⟨⟨c, hm, rfl⟩, -⟩ := caseOf?_mem h
+    rw [Case.resolve_isBare]
+    exact List.all_eq_true.mp he c hm
   · cases he
 
 theorem toJsonF_eq {env : Env} {F : Nat} {o : String} {t c : Ty} {s : Nat} (x : Typed) (hw : whnf env env.fuel t = .ok (s, c)) :
@@ -393,8 +408,8 @@ theorem whnf_record {env : Env} {cl : Bool} {fields : List Field} :
 
 theorem isEnum_bool : isEnum (.variant true [.bare "False", .bare "True"]) = true := rfl
 
-theorem isEnum_false {closed : Bool} {cases : List Case} {tag : String} {cs : Case}
-    (hc : caseOf? cases tag = some cs) (hb : cs.isBare = false) : isEnum (.variant closed cases) = false := by
+theorem isEnum_false {env : Env} {closed : Bool} {cases : List Case} {tag : String} {cs : Case}
+    (hc : caseOf? env cases tag = some cs) (hb : cs.isBare = false) : isEnum (.variant closed cases) = false := by
   cases h : isEnum (.variant closed cases)
   · rfl
   · rw [isEnum_bare h hc] at hb; cases hb
@@ -402,7 +417,7 @@ theorem isEnum_false {closed : Bool} {cases : List Case} {tag : String} {cs : Ca
 /-- `Tag { … }`, given the round trip of its fields. -/
 theorem recordCase_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {cl : Bool} {fields : List Field} {y : Typed} {b : Bool} {j : JSON}
-    (hc : caseOf? cases tag = some (.record tag' cl fields))
+    (hc : caseOf? env cases tag = some (.record tag' cl fields))
     (hb : b = true → isBool (.variant closed cases) = true)
     (IH : hasReservedField fields = false → ∃ ys, y = .record ys ∧ ∀ ms, toJsonFields env F o fields ys = .ok ms →
       missingJ? fields ms = none ∧ readFields env F o cl fields true ms = .ok ys)
@@ -437,7 +452,7 @@ theorem recordCase_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} 
 /-- `Tag T1 … Tn`, `Some` of a `Maybe` that uses `null` included, given the round trip of the arguments. -/
 theorem positional_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {ts : List Ty} {ys : List Typed} {b : Bool} {j : JSON}
-    (hc : caseOf? cases tag = some (.positional tag' ts))
+    (hc : caseOf? env cases tag = some (.positional tag' ts))
     (hb : b = true → isBool (.variant closed cases) = true) (hl : ys.length = ts.length)
     (IHargs : ∀ js, toJsonArgs env F o tag 0 ts ys = .ok js → readArgs env F o tag 0 ts js = .ok ys)
     (IHone : ∀ t1, ts = [t1] → ∃ y, ys = [y] ∧ ∀ j, toJsonF env F o t1 y = .ok j → fromJsonF env F o t1 j = .ok y)
@@ -765,7 +780,7 @@ def TagErr (e : Error) : Prop := e.reason = reservedFieldReason
 
 theorem recordCase_err {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {cl : Bool} {fields : List Field} {y : Typed} {b : Bool} {e : Error}
-    (hc : caseOf? cases tag = some (.record tag' cl fields))
+    (hc : caseOf? env cases tag = some (.record tag' cl fields))
     (hb : b = true → isBool (.variant closed cases) = true)
     (IH : ∃ ys, y = .record ys ∧ ∀ e, toJsonFields env F o fields ys = .error e → TagErr e)
     (h : toJsonC env F b o (.variant closed cases) (.case tag [y]) = .error e) : TagErr e := by
@@ -795,7 +810,7 @@ theorem recordCase_err {env : Env} {F : Nat} {o : String} {closed : Bool} {cases
 
 theorem positional_err {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {ts : List Ty} {ys : List Typed} {b : Bool} {e : Error}
-    (hc : caseOf? cases tag = some (.positional tag' ts))
+    (hc : caseOf? env cases tag = some (.positional tag' ts))
     (hb : b = true → isBool (.variant closed cases) = true)
     (IHargs : ∀ e, toJsonArgs env F o tag 0 ts ys = .error e → TagErr e)
     (IHone : ∀ t1, ts = [t1] → ∃ y, ys = [y] ∧ ∀ e, toJsonF env F o t1 y = .error e → TagErr e)

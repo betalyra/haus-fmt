@@ -142,7 +142,7 @@ def PayloadFits (L : Limits) (env : Env) (F : Nat) (o : String) (fields : List F
 
 theorem recordCase_fits {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {cl : Bool} {fields : List Field} {y : Typed} {b : Bool} {j : JSON} {d : Nat} (hL : L.SchemaBasedOk)
-    (hc : caseOf? cases tag = some (.record tag' cl fields)) (IH : PayloadFits L env F o fields y)
+    (hc : caseOf? env cases tag = some (.record tag' cl fields)) (IH : PayloadFits L env F o fields y)
     (hl : (encode (.case tag [y])).leaves L = true) (hd : jsonNeed (encode (.case tag [y])) ≤ d)
     (h : toJsonC env F b o (.variant closed cases) (.case tag [y]) = .ok j) : Fits L d j := by
   rw [toJsonC.eq_def] at h
@@ -172,7 +172,7 @@ theorem recordCase_fits {env : Env} {F : Nat} {o : String} {closed : Bool} {case
 
 theorem positional_fits {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {ts : List Ty} {ys : List Typed} {b : Bool} {j : JSON} {d : Nat} (hL : L.SchemaBasedOk)
-    (hc : caseOf? cases tag = some (.positional tag' ts)) (hlen : ys.length = ts.length)
+    (hc : caseOf? env cases tag = some (.positional tag' ts)) (hlen : ys.length = ts.length)
     (IHargs : ∀ d js, Value.leavesList L (encodeList ys) = true → 4 * Value.depthList (encodeList ys) + 1 ≤ d →
       toJsonArgs env F o tag 0 ts ys = .ok js → ∀ j ∈ js, Fits L d j)
     (IHone : ∀ t1, ts = [t1] → ∃ y, ys = [y] ∧ ∀ d j, (encode y).leaves L = true → jsonNeed (encode y) ≤ d →

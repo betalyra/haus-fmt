@@ -144,7 +144,8 @@ an earlier line is `payload-newline`, a closing bracket `unexpected-closer`;
 as a literal, then for what follows it, then its length, then its exponent;
 for `Bool`, `Maybe`, `Result` and closed variants an unknown tag is
 `unknown-tag`, a listed one with the wrong payload `wrong-payload`, and so
-is a record case's argument that isn't a record (`Circle(1.5)`, at the
+is a record case's argument that isn't a record (`Circle(1.5)`, also for
+a record case by name, `Wrap(1)` with `Wrap Box`, at the
 variant, with the case in the message: "Circle takes one argument, a record"); anything
 inside a `Secret` is `invalid-secret`. A codec's error is a `type-mismatch`.
 
@@ -264,7 +265,10 @@ from `FromJson` and `ToJson` as decoders are from `Decode` and `Encode`. The
 JSON is the same as in Rust and TypeScript: `Int`, `Int64` and `UInt64` as
 strings, `Decimal` as a string with its scale, `Bytes` as base64, a closed
 variant of tags without payload as a string, other variants as objects with
-`"_tag"`. A `Maybe` is `null` or the value when its inner JSON can't be
+`"_tag"`. A record case (spec §15) has the record's fields beside `"_tag"`
+however the record is written: `Wrap Box` with `type Box = { w : Int }` is
+`Wrap(Box)` in Roc, the same record as `Wrap({ w : Int })`, and both write
+`{"_tag": "Wrap", "w": 1}`; a type parameter is never one (`Ok a`). A `Maybe` is `null` or the value when its inner JSON can't be
 `null`, and tagged otherwise; Roc has no traits, so haus-gen decides this
 from the schema, and a generic type takes a `Bool` for each parameter
 (`from_json_pair(j, from_json_a, nullable_a)`).

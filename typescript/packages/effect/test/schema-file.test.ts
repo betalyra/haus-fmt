@@ -1,6 +1,6 @@
 import { HausSchemaFileError, parseSchemaFile } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
-import { DateTime, Effect, Exit, Option } from "effect"
+import { DateTime, Effect, Exit, Option, Schema } from "effect"
 import { schemaOptions } from "@haus-fmt/haus/node"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -19,6 +19,14 @@ const decoded = (text: string, name: string, data: string): any => {
   const exit = decodeWith(text, name, data)
   if (Exit.isFailure(exit)) throw new Error(String(exit.cause))
   return exit.value
+}
+const thrown = (f: () => unknown): unknown => {
+  try {
+    f()
+  } catch (e) {
+    return e
+  }
+  throw new Error("expected an error")
 }
 const schemaError = (text: string) => {
   try {
@@ -126,6 +134,45 @@ type Root = { i: Instant, z: ZonedDateTime }`
     expect(v.shapes).toEqual([{ _tag: "Circle", r: 1 }, { _tag: "Point", values: [1, 2] }, { _tag: "Empty" }])
     expect(v.theme).toMatchObject({ _tag: "@unknown", tag: "Sepia" })
     expect(Exit.isFailure(decodeWith(schema, "Root", `{ level: Trace, shapes: [], theme: Light }`))).toBe(true)
+  })
+
+  it("a case whose one argument names a record is a record case (spec §15)", () => {
+    const { schemas } = Haus.compileSchemaFile(`
+      type Rec = { w: Int32, tags?: Array String }
+      type Alias = Rec
+      type Alias2 = Alias
+      type Page a = { w: a, tags?: Array String }
+      type Inline = < Box { w: Int32, tags?: Array String } | Empty >
+      type Paren = < Box ({ w: Int32, tags?: Array String }) | Empty >
+      type Named = < Box Rec | Empty >
+      type Chain = < Box Alias2 | Empty >
+      type Applied = < Box (Page Int32) | Empty >
+      type Id a = a
+      type ById = < Box (Id Rec) | Empty >
+      type GenBox a = < Box a | Empty >
+      type Gen = GenBox Rec`)
+    const run = <A>(e: Effect.Effect<A, unknown>) => Effect.runSync(e)
+    for (const text of [`Box { w: 1 }`, `Box({ w: 1, tags: ["a"] })`, `Box { w: 1, extra: 2 }`, `Empty`]) {
+      const value = (name: string) => run(Haus.decode(schemas[name]!)(text))
+      const json = (name: string) => run(Haus.toJson(schemas[name]!)(value(name)))
+      for (const name of ["Paren", "Named", "Chain", "Applied", "ById"]) {
+        expect(value(name), `${name}: ${text}`).toEqual(value("Inline"))
+        expect(json(name), `${name}: ${text}`).toBe(json("Inline"))
+        expect(run(Haus.fromJson(schemas[name]!)(json("Inline")))).toEqual(value("Inline"))
+      }
+    }
+    expect(run(Haus.toJson(schemas.Named!)({ _tag: "Box", w: 1 }))).toBe(`{"_tag":"Box","w":1}`)
+    // A type parameter is never a record, even where its argument is one.
+    const gen = run(Haus.decode(schemas.Gen!)(`Box { w: 1 }`))
+    expect(gen).toEqual({ _tag: "Box", values: [{ w: 1 }] })
+    expect(run(Haus.toJson(schemas.Gen!)(gen))).toBe(`{"_tag":"Box","value":{"w":1}}`)
+    // A codec can't give the record another host type where its fields sit beside `_tag`.
+    const toNumber = Haus.codec(schemas.Rec as Haus.Named<Schema.Codec<{ readonly w: number }>, "Rec">, (base) => base)
+    for (const name of ["Named", "Chain", "ById"]) {
+      const e = thrown(() => Haus.decode(schemas[name]!, toNumber as never))
+      expect(e).toBeInstanceOf(Haus.HausSchemaError)
+      expect(e).toMatchObject({ code: "codec-unreachable", message: expect.stringContaining("the codec for Rec can't apply in the record case Box") })
+    }
   })
 
   it("encodes back to the same text", () => {

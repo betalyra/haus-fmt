@@ -52,11 +52,12 @@ fn spreads() {
         error("type A = < X | ...B >\ntype B = < Y | ...A >"),
         "2:6: type B spreads itself (directly or through another type)"
     );
-    // haus-fmt-schema's message, for a type that can't be spread.
+    // An imported std/time type is known, just not a variant.
     assert_eq!(
         error("import std/time (Date)\ntype B = < ...Date >"),
-        "2:15: unknown type Date (import it with: import std/time (Date))"
+        "2:15: Date is not a variant, so it can't be spread here"
     );
+    assert_eq!(error("type B = { ...Array }"), "1:15: Array is not a record, so it can't be spread here");
 }
 
 #[test]

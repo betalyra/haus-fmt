@@ -95,6 +95,38 @@ for ty, n in [("Loop", 256), ("OptLoop", 255)]:
         f'expect JsonTest.somes("{ty}", {n}) == Ok({{}})\n'
         f'expect JsonTest.somes("{ty}", {n + 1}) == Err("nesting deeper than 256 levels")'
     )
+# A record case is the same inline (`ParenBox`), by name (`Boxed`), through an
+# alias (`AliasBox`) or an applied generic type (`Found`), spec §15: the same JSON,
+# and the same Roc record in the case. A type parameter (`GenRec`) is not one.
+tests.append(
+    """# record cases: the same JSON and Roc record, however the record is written
+expect {
+	v = Tag("Box", [Rec([("w", Num("1"))])])
+	json = written(SchemaBased.decode_boxed(v), SchemaBased.to_json_boxed)
+	same = written(SchemaBased.decode_paren_box(v), SchemaBased.to_json_paren_box) == json and written(SchemaBased.decode_alias_box(v), SchemaBased.to_json_alias_box) == json
+	json == Ok("{\\"_tag\\":\\"Box\\",\\"w\\":1}") and same
+}
+expect {
+	v = Tag("Box", [Rec([("w", Num("1"))])])
+	boxed = match SchemaBased.decode_boxed(v) {
+		Ok(Box(r)) => Ok(r)
+		_ => Err({})
+	}
+	paren = match SchemaBased.decode_paren_box(v) {
+		Ok(Box(r)) => Ok(r)
+		_ => Err({})
+	}
+	alias = match SchemaBased.decode_alias_box(v) {
+		Ok(Box(r)) => Ok(r)
+		_ => Err({})
+	}
+	boxed == Ok({ w: 1 }) and paren == boxed and alias == boxed
+}
+expect written(SchemaBased.decode_found(Tag("Found", [Rec([("items", Arr([Num("1")]))])])), SchemaBased.to_json_found) == Ok("{\\"_tag\\":\\"Found\\",\\"items\\":[1]}")
+expect written(SchemaBased.decode_gen_rec(Tag("Box", [Rec([("w", Num("1"))])])), SchemaBased.to_json_gen_rec) == Ok("{\\"_tag\\":\\"Box\\",\\"value\\":{\\"w\\":1}}")
+# by name, any payload but one record is the wrong payload, as inline
+expect [SchemaBased.decode_boxed(Tag("Box", [Num("1")])), SchemaBased.decode_boxed(Tag("Box", [])), SchemaBased.decode_boxed(Tag("Box", [Num("1"), Num("2")]))].map(|r| r.map_ok(|_| {}).map_err(|e| e.code)) == [Err("wrong-payload"), Err("wrong-payload"), Err("wrong-payload")]"""
+)
 for path in sorted((SUITE / "valid").glob("*.haus")):
     name = "valid_" + re.sub(r"[^a-z0-9]", "_", path.stem.lower())
     imports.append(f'import "../../test-suite/valid/{path.name}" as {name} : List(U8)')

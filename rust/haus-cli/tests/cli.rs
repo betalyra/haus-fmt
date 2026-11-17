@@ -209,6 +209,29 @@ fn check_a_schema_file_shows_its_warnings() {
 }
 
 #[test]
+fn a_case_without_a_json_form_is_a_warning() {
+    // Spec §16.3: the schema is valid, so the check passes; the case is pointed out.
+    let dir = tempfile::tempdir().unwrap();
+    let schema = "type R = { _args: Int }\ntype Shape = < Circle { r: Float64, _tag: String } | Named R | Square >\n";
+    fs::write(dir.path().join("x.schema.haus"), schema).unwrap();
+    let (code, json) = check_json(dir.path(), &["x.schema.haus"]);
+    assert_eq!(code, 0, "warnings don't fail: {json:?}");
+    let found: Vec<(&str, &str, &str)> = array(&array(&json, "files")[0], "diagnostics")
+        .iter()
+        .map(|d| (str_of(d, "severity"), str_of(d, "code"), str_of(d, "message")))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("warning", "no-json-form", "Circle has a field named _tag, so it has no schema-based JSON form"),
+            ("warning", "no-json-form", "Named has a field named _args, so it has no schema-based JSON form"),
+        ]
+    );
+    let text = predicate::str::contains("warning[no-json-form]: Circle has a field named _tag");
+    haus().current_dir(dir.path()).args(["check", "x.schema.haus"]).assert().success().stdout(text);
+}
+
+#[test]
 fn a_broken_schema_is_reported_for_its_data_files_too() {
     let (code, json) = check_json(&fixtures(), &["badschema"]);
     assert_eq!(code, 1);
