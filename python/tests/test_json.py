@@ -114,10 +114,88 @@ def test_string_limit() -> None:
     small = Limits(max_string_length=3)
     assert haus.import_json('"abc"', limits=small) == String("abc")
     assert haus.import_json('"\\u00e9\\n\\t"', limits=small) == String("é\n\t")
-    with pytest.raises(HausJsonError, match="longer than 3"):
-        haus.import_json('"abcd"', limits=small)
-    with pytest.raises(HausJsonError, match="longer than 3"):
+    with pytest.raises(HausJsonError, match="string longer than 3") as info:
+        haus.import_json('["abcd"]', limits=small)
+    assert (info.value.code, info.value.path) == ("string-too-long", (0,))
+    with pytest.raises(HausJsonError, match="key longer than 3") as info:
         haus.import_json('{"abcd": 1}', limits=small)
+    assert info.value.code == "key-too-long"
+    with pytest.raises(HausJsonError, match="key longer than 3") as info:
+        list(haus.import_json_lines('{"abc": 1}\n{"a": {"abcd": 1}}', limits=small))
+    assert info.value.path == (1, "a")
+
+
+# Lengths count on the haus value, not the JSON text (spec §16 "Limits"): characters after escapes
+# are read, keys and tags as haus keys and tags, bytes as two characters per byte (hex or base64).
+FOUR = Limits(max_string_length=4)
+
+
+def test_a_string_with_escapes_exactly_at_the_limit_is_read() -> None:
+    at, over = r'"\u00e9\n\"\ud83d\ude00"', r'"\u00e9\n\"\ud83d\ude00a"'  # 4 and 5 characters, 26 and 27 in JSON
+    assert haus.import_json(at, limits=FOUR) == String('é\n"😀')
+    assert haus.from_haus_json(enveloped(at), limits=FOUR) == String('é\n"😀')
+    assert SCHEMA["Raw"].from_json(at, limits=FOUR) == String('é\n"😀')
+    assert SCHEMA["Order"].from_json(
+        f'{{"id": "1", "items": [{{"sku": {at}, "qty": 1, "price": "1"}}]}}', limits=FOUR
+    ) == {"id": 1, "items": ({"sku": 'é\n"😀', "qty": 1, "price": "1"},)}
+    for read in (
+        lambda: haus.import_json(over, limits=FOUR),
+        lambda: haus.from_haus_json(enveloped(over), limits=FOUR),
+        lambda: SCHEMA["Raw"].from_json(over, limits=FOUR),
+        lambda: SCHEMA["Order"].from_json(
+            f'{{"id": "1", "items": [{{"sku": {over}, "qty": 1, "price": "1"}}]}}', limits=FOUR
+        ),
+    ):
+        with pytest.raises((HausJsonError, HausDecodeError), match="string longer than 4 characters") as info:
+            read()
+        assert info.value.code == "string-too-long"
+
+
+def test_bytes_count_two_characters_per_byte_in_base64_and_hex() -> None:
+    blob = SCHEMA["Blob"]
+    # 3 bytes are 6 characters, whatever the base64 (here with an escape) takes in JSON.
+    assert blob.from_json('"\\u0041AEC"', limits=Limits(max_string_length=6)) == b"\x00\x01\x02"
+    assert blob.from_json('"AAE="', limits=Limits(max_string_length=5)) == b"\x00\x01"  # 2 bytes: 4
+    with pytest.raises(HausDecodeError, match="byte string longer than 5 characters") as info:
+        blob.from_json('"AAEC"', limits=Limits(max_string_length=5))
+    assert info.value.code == "string-too-long"
+    # Self-describing JSON spells them in hex, which already counts two per byte.
+    assert haus.from_haus_json(enveloped('{"_bytes": "000102"}'), limits=Limits(max_string_length=6)) == Bytes(
+        b"\x00\x01\x02"
+    )
+    with pytest.raises(HausJsonError, match="byte string longer than 5 characters"):
+        haus.from_haus_json(enveloped('{"_bytes": "000102"}'), limits=Limits(max_string_length=5))
+
+
+def test_keys_and_tags_count_as_keys_and_tags() -> None:
+    assert haus.from_haus_json(enveloped(r'{"_rec": {"\u0061bcd": {"_tag": "Abcd"}}}'), limits=FOUR) == Record(
+        {"abcd": Variant("Abcd")}
+    )
+    for text, code in (
+        ('{"_rec": {"abcde": []}}', "key-too-long"),
+        ('{"_tag": "Abcde"}', "tag-too-long"),
+        ('[{"_tag": "Abcde", "_args": [[]]}]', "tag-too-long"),
+    ):
+        with pytest.raises(HausJsonError) as info:
+            haus.from_haus_json(enveloped(text), limits=FOUR)
+        assert info.value.code == code, text
+    assert SCHEMA["Counts"].from_json('{"abcd": 1}', limits=FOUR) == {"abcd": 1}
+    with pytest.raises(HausDecodeError) as decoded:
+        SCHEMA["Counts"].from_json('{"abcde": 1}', limits=FOUR)
+    assert decoded.value.code == "key-too-long"
+
+
+def test_json_strings_that_are_not_haus_strings_are_not_counted() -> None:
+    """Member names of the forms, number texts and base64 aren't strings of the value."""
+    one = Limits(max_string_length=1)
+    assert haus.from_haus_json(enveloped('{"_num": "123456"}'), limits=one) == Number("123456")
+    assert haus.from_haus_json(enveloped('{"_bytes": ""}'), limits=one) == Bytes(b"")
+    assert SCHEMA["Amount"].from_json('"12345.678"', limits=one) == "12345.678"
+    # A date's text is a string of its value, `Date("2024-01-31")`: it counts.
+    assert SCHEMA["Day"].from_json('"2024-01-31"', limits=Limits(max_string_length=10)) == "2024-01-31"
+    with pytest.raises(HausDecodeError) as info:
+        SCHEMA["Day"].from_json('"2024-01-31"', limits=Limits(max_string_length=9))
+    assert info.value.code == "string-too-long"
 
 
 def test_strings_and_escapes() -> None:
@@ -376,10 +454,10 @@ def test_the_string_limit_counts_keys_and_tags_in_values_built_in_code() -> None
             raw.encode(value, limits=four)
         with pytest.raises(HausEncodeError, match=reason):
             haus.to_haus_json(value, limits=four)
-    # In JSON text, member names and tags are JSON strings first: the reader's string limit.
-    with pytest.raises(HausJsonError, match="string longer than 4 characters"):
+    # Read from JSON, they count as keys and tags too, not as JSON strings (spec §16 "Limits").
+    with pytest.raises(HausJsonError, match="tag longer than 4 characters"):
         haus.from_haus_json(enveloped('{"_tag": "Abcde"}'), limits=four)
-    with pytest.raises(HausJsonError, match="string longer than 4 characters"):
+    with pytest.raises(HausJsonError, match="key longer than 4 characters"):
         haus.import_json('{"abcde": []}', limits=four)
 
 
@@ -814,3 +892,24 @@ def test_json_lines_without_a_schema() -> None:
     # A JSON array of values isn't self-describing JSON Lines.
     with pytest.raises(HausJsonError):
         list(haus.from_haus_json_lines('[{"_haus":1,"_value":"a"}]\n'))
+
+
+def test_many_member_names_read_in_linear_time() -> None:
+    """Spec §7: each JSON reader finds duplicate names with a dict (`str` hashed with a per-process
+    random seed), so 100k members take well under the bound, in every reader."""
+    import time
+
+    n = 100_000
+    members = ",".join(f'"k{i}":{i}' for i in range(n))
+    start = time.perf_counter()
+    imported = haus.import_json("{" + members + "}")
+    assert isinstance(imported, haus.Record) and len(imported.fields) == n
+    strings = ",".join(f'"k{i}":"{i}"' for i in range(n))
+    described = haus.from_haus_json('{"_haus":1,"_value":{"_rec":{' + strings + "}}}")
+    assert isinstance(described, haus.Record) and len(described.fields) == n
+    counts = SCHEMA["Counts"].from_json("{" + members + "}")
+    assert len(counts) == n
+    with pytest.raises(HausJsonError) as e:
+        haus.import_json("{" + members + ',"k0":0}')
+    assert e.value.code == "duplicate-key"
+    assert time.perf_counter() - start < 20

@@ -18,7 +18,7 @@
 //! Memory is bounded by the largest single value, not by the stream.
 
 use crate::error::Position;
-use crate::parser::{parse_rest, parse_single};
+use crate::parser::{parse_item, parse_rest, parse_single};
 use crate::{Decode, Encode, Error, ErrorCode, Limits, Segment, SyntaxError, Value, to_string_with};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -240,11 +240,13 @@ impl Reader {
     }
 
     /// Parse the value before the comma at `comma`; the next one starts after it.
+    /// The comma is parsed too, so that a missing value is reported as the
+    /// whole-file parser does: `1,,2` is "expected a value, found ','".
     fn cut(&mut self, comma: usize) -> Result<Value, SyntaxError> {
         let origin = self.origin;
-        let text = self.text(comma)?;
-        let value = parse_single(text, &self.options.limits, self.at_file_start()).map_err(|e| e.from(origin))?;
-        self.origin = origin.after(text).after(",");
+        let text = self.text(comma + 1)?;
+        let value = parse_item(text, &self.options.limits, self.at_file_start()).map_err(|e| e.from(origin))?;
+        self.origin = origin.after(text);
         self.start = comma + 1;
         self.chars = 0;
         Ok(value)

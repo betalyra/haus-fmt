@@ -19,12 +19,16 @@ type R<T> = Result<T, DecodeError>;
 pub struct Decoder {
     limits: Limits,
     depth: usize,
+    /// The record is read from a tag's object, beside its `"_tag"` (a record
+    /// case whose record is a named type, spec §16.3): `"_tag"` is not one of
+    /// its fields. Only the next object read takes it.
+    in_tag: bool,
 }
 
 impl Decoder {
     /// At the top, for a reader with `limits`.
     pub fn new(limits: &Limits) -> Decoder {
-        Decoder { limits: *limits, depth: 0 }
+        Decoder { limits: *limits, depth: 0, in_tag: false }
     }
 
     pub fn limits(&self) -> &Limits {
@@ -39,7 +43,19 @@ impl Decoder {
     /// Inside one more container, if the depth limit allows it. Fails too
     /// if the limit is more than [`crate::MAX_SUPPORTED_DEPTH`].
     pub fn nested(self) -> R<Decoder> {
-        crate::json::open(&self.limits, self.depth).map(|depth| Decoder { depth, ..self })
+        crate::json::open(&self.limits, self.depth).map(|depth| Decoder { depth, in_tag: false, ..self })
+    }
+
+    /// For the record of a record case (spec §15) whose record is a named
+    /// type, read from the tag's object: its members other than `"_tag"`
+    /// are the record's fields.
+    pub(crate) fn in_tag(self) -> Decoder {
+        Decoder { in_tag: true, ..self }
+    }
+
+    /// Whether the object read here is a tag's (see [`Decoder::in_tag`]).
+    pub(crate) fn is_in_tag(&self) -> bool {
+        self.in_tag
     }
 }
 
@@ -215,17 +231,32 @@ pub fn payload<'a>(tag: &'a str, args: &'a [Value]) -> R<Record<'a>> {
 pub fn record_payload<'a>(tag: &'a str, args: &'a [Value], record: &str) -> R<Record<'a>> {
     match args {
         [v @ Value::Record(_)] => Record::new(v, tag).map(|r| Record { tag: Some(tag), ..r }),
-        _ => {
-            let found = match args {
-                [] => "no payload".to_owned(),
-                [v] => describe(v),
-                _ => format!("{} arguments", args.len()),
-            };
-            Err(DecodeError::new(Code::WrongPayload, format!("{tag} takes one argument, a record; found {found}"))
-                .with_expected_found("one argument, a record", found)
-                .with_hint(record_hint(tag, record)))
-        }
+        _ => Err(not_one_record(tag, args, record)),
     }
+}
+
+/// The record of a record case whose record is a named type (spec §15:
+/// `Wrap Box` with `type Box = { w: Int }`), decoded with `f`: the same as
+/// `Tag { … }`, so anything but one record, `Wrap(1)` too, is the wrong
+/// payload, and errors in the record are at the variant's place. `record`
+/// names the type for the hint (`""` if not known).
+pub fn record_arg<T>(tag: &str, args: &[Value], record: &str, f: impl FnOnce(&Value) -> R<T>) -> R<T> {
+    match args {
+        [v @ Value::Record(_)] => f(v).map_err(|e| e.tag(tag)),
+        _ => Err(not_one_record(tag, args, record)),
+    }
+}
+
+/// `wrong-payload`: `tag` takes one argument, a record, and `args` isn't one.
+fn not_one_record(tag: &str, args: &[Value], record: &str) -> DecodeError {
+    let found = match args {
+        [] => "no payload".to_owned(),
+        [v] => describe(v),
+        _ => format!("{} arguments", args.len()),
+    };
+    DecodeError::new(Code::WrongPayload, format!("{tag} takes one argument, a record; found {found}"))
+        .with_expected_found("one argument, a record", found)
+        .with_hint(record_hint(tag, record))
 }
 
 /// A tag a closed variant doesn't list.

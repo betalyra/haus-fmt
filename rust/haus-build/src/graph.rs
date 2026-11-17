@@ -8,7 +8,7 @@
 //! read the files it loaded.
 
 use crate::schema;
-use crate::{Error, Result, read};
+use crate::{Error, Result};
 use haus::ErrorCode as Code;
 use haus_schema::{InstanceId, Schema, Type};
 use std::collections::{HashMap, HashSet};
@@ -49,9 +49,95 @@ impl Origin {
     }
 }
 
-/// The files of `schema` to generate code for, the root first. `root_text`:
-/// the root's text, for a schema given as text.
-pub(crate) fn units(schema: &Schema, root_text: Option<&str>, without_attributes: bool) -> Result<Vec<Unit>> {
+/// What an imported type is, as far as record cases go (spec §15): a case
+/// `Tag T` is one if `T` is a record, through names and applied generic types.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Shape {
+    /// A record: the first of its fields named `_tag` or `_args`, if any
+    /// (such a case has no schema-based JSON form, §16.3).
+    Record(Option<String>),
+    /// One of its parameters, the `i`-th: `type Id a = a`.
+    Param(usize),
+    Other,
+}
+
+impl Origin {
+    /// What the imported type is.
+    pub fn shape(&self, schema: &Schema) -> Shape {
+        match self {
+            Origin::Time => Shape::Other,
+            Origin::Package { template, .. } | Origin::File { template, .. } => shape(schema, *template),
+        }
+    }
+}
+
+/// What the type with this template (its body, its parameters left as they are) is.
+pub(crate) fn shape(schema: &Schema, template: InstanceId) -> Shape {
+    let template = schema.instance(template);
+    match schema.resolve(&template.body) {
+        Type::Record(r) => {
+            Shape::Record(r.fields.iter().map(|f| f.key.clone()).find(|k| matches!(k.as_str(), "_tag" | "_args")))
+        }
+        Type::Param(p) => {
+            template.args.iter().position(|a| matches!(a, Type::Param(q) if q == p)).map_or(Shape::Other, Shape::Param)
+        }
+        _ => Shape::Other,
+    }
+}
+
+/// Whether `ty`, the one argument of a case, is a record type: then the
+/// case is a record case (spec §15), as `Tag { … }` is. Names are followed
+/// through the file's definitions `defs` (aliases, applied generic types,
+/// `Found (Page Int)`) and imported types (`imported`). A type parameter
+/// never is one, even where its argument is a record. If it is, the first of
+/// the record's fields named `_tag` or `_args`, if any.
+pub(crate) fn record_case(
+    ty: &schema::Ty,
+    defs: &HashMap<&str, &schema::TypeDef>,
+    imported: &dyn Fn(&str) -> Option<Shape>,
+) -> Option<Option<String>> {
+    use schema::Ty;
+    let mut ty = ty.clone();
+    // Schemas are checked: every chain of names ends (§9.9); the bound is for safety.
+    for _ in 0..1000 {
+        match ty {
+            Ty::Record { fields, .. } => {
+                return Some(fields.iter().map(|f| f.key.clone()).find(|k| matches!(k.as_str(), "_tag" | "_args")));
+            }
+            Ty::Name { name, args, .. } => match (defs.get(name.as_str()), imported(&name)) {
+                (Some(def), _) => ty = substitute(&def.ty, &def.params, &args),
+                (None, Some(Shape::Record(reserved))) => return Some(reserved),
+                (None, Some(Shape::Param(i))) => ty = args.get(i)?.clone(),
+                // The prelude's types and std/time's are not records.
+                _ => return None,
+            },
+            Ty::Param { .. } | Ty::Variant { .. } => return None,
+        }
+    }
+    None
+}
+
+/// `ty` with the parameters `params` replaced by `args`.
+fn substitute(ty: &schema::Ty, params: &[String], args: &[schema::Ty]) -> schema::Ty {
+    use schema::Ty;
+    match ty {
+        Ty::Param { name, .. } => match params.iter().position(|p| p == name).and_then(|i| args.get(i)) {
+            Some(arg) => arg.clone(),
+            None => ty.clone(),
+        },
+        Ty::Name { name, args: inner, pos } => Ty::Name {
+            name: name.clone(),
+            args: inner.iter().map(|a| substitute(a, params, args)).collect(),
+            pos: *pos,
+        },
+        // Only whether it is a record matters, not what its fields hold.
+        Ty::Record { .. } | Ty::Variant { .. } => ty.clone(),
+    }
+}
+
+/// The files of `schema` to generate code for, the root first, each with
+/// the text haus-fmt-schema read (each file is read once, spec §13.3).
+pub(crate) fn units(schema: &Schema, without_attributes: bool) -> Result<Vec<Unit>> {
     let files = schema.files();
     let root_dir = files[0].path.as_deref().and_then(Path::parent);
     // The root, and every file outside packages.
@@ -63,11 +149,7 @@ pub(crate) fn units(schema: &Schema, root_text: Option<&str>, without_attributes
         .iter()
         .map(|&i| {
             let f = &files[i];
-            let text = match (&f.path, root_text.filter(|_| i == 0)) {
-                (_, Some(text)) => text.to_owned(),
-                (Some(path), None) => read(path)?,
-                (None, None) => String::new(),
-            };
+            let text = f.text.clone();
             let in_file = |e: Error| match &f.path {
                 Some(path) => e.in_file(path),
                 None => e,
@@ -213,6 +295,7 @@ fn walk(schema: &Schema, ty: &Type, seen: &mut HashSet<InstanceId>, out: &mut Ha
         Type::Variant(v) => v.cases.iter().for_each(|c| match &c.payload {
             haus_schema::Payload::None => {}
             haus_schema::Payload::Record(r) => r.fields.iter().for_each(|f| walk(schema, &f.ty, seen, out)),
+            haus_schema::Payload::Named(t) => walk(schema, t, seen, out),
             haus_schema::Payload::Positional(items) => items.iter().for_each(|t| walk(schema, t, seen, out)),
         }),
         Type::Ref(id) => {

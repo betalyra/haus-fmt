@@ -156,8 +156,38 @@ def whnf (env : Env) : Nat → Ty → Except String (Nat × Ty)
 /-- The field of a record type with this key. -/
 def fieldOf? (fields : List Field) (k : String) : Option Field := fields.find? (·.key == k)
 
-/-- The case of a variant type with this tag: found by lookup, never by trying cases (§9.8). -/
-def caseOf? (cases : List Case) (tag : String) : Option Case := cases.find? (·.tag == tag)
+/--
+The record a type is, through references (not through `Secret`): `{ … }`
+itself, or a name (an alias, or an applied generic's instance) whose chain of
+definitions ends in one. `fuel` bounds the chain; a cycle of names is none.
+-/
+def recordOf? (env : Env) : Nat → Ty → Option (Bool × List Field)
+  | _, .record closed fields => some (closed, fields)
+  | f + 1, .ref n =>
+    match env.lookup n with
+    | some t => recordOf? env f t
+    | none => none
+  | _, _ => none
+
+/--
+**Record cases** (§15): a case with one argument whose type is a record is a
+record case, however the record is written. `Tag T` (`Case.named`) is the
+record case of `T`'s record when there is one, else a case of one positional
+argument. The other cases are what they are written as.
+-/
+def Case.resolve (env : Env) : Case → Case
+  | .named tag t =>
+    match recordOf? env env.fuel t with
+    | some (cl, fields) => .record tag cl fields
+    | none => .positional tag [t]
+  | c => c
+
+/--
+The case of a variant type with this tag, resolved (`Case.resolve`): found by
+lookup, never by trying cases (§9.8).
+-/
+def caseOf? (env : Env) (cases : List Case) (tag : String) : Option Case :=
+  (cases.find? (·.tag == tag)).map (Case.resolve env)
 
 /-- A field without `?` that the record doesn't have. -/
 def missing? (fields : List Field) (fs : List (String × Value)) : Option String :=
@@ -231,7 +261,7 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
       | some k => reject .missingField s!"missing field {k}"
       | none => (decodeFields env closed fields fs).map .record
     | .variant closed cases, .variant tag args =>
-      match caseOf? cases tag, args with
+      match caseOf? env cases tag, args with
       | some (.bare _), [] => .ok (.case tag [])
       -- One argument that is a record: anything else, `Circle(1.5)` too, is the wrong payload.
       | some (.record _ cl fields), [.record fs] =>
@@ -241,6 +271,8 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
         else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
       | some (.bare _), _ => reject .wrongPayload s!"{tag} takes no arguments"
       | some (.record _ _ _), _ => reject .wrongPayload s!"{tag} takes one argument, a record"
+      -- `caseOf?` resolves every `Tag T` to one of the forms above.
+      | some (.named _ _), _ => reject .wrongPayload s!"{tag} takes one argument"
       | none, args => if closed then reject .unknownTag s!"unknown tag {tag}" else .ok (.unknown tag args)
     | c, _ => reject .typeMismatch s!"expected {c.name}"
 

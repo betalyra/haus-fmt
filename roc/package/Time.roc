@@ -4,6 +4,7 @@
 ## Each type reads its whole shape first, then checks the values: a string
 ## with the wrong shape says how to write it, whatever its values.
 Time := [].{
+
 	## Whether `text` is a valid value of the std/time type `name`, and if not, why.
 	check : Str, Str -> Try({}, Str)
 	check = |name, text| {

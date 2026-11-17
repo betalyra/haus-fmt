@@ -38,7 +38,7 @@ import {
 import { Schema } from "effect"
 import { entries, idOf, setId, type AnyCodec, type CodecEntry } from "./codec.js"
 import { BARE_TAG, CLOSED, NESTED, NUMBER, SECRET, STRICT, VALUES } from "./convert.js"
-import { CODE } from "./errors.js"
+import { CODE, schemaErrorOf } from "./errors.js"
 // Circular import: only used when a schema file is compiled, after both modules have loaded.
 import * as Haus from "./index.js"
 
@@ -187,6 +187,21 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     return schema
   }
 
+  /**
+   * A record case by name (`Box BoxRec`, spec §15) puts the record's fields
+   * beside `_tag`, where a codec's host type for the record can't go: a codec
+   * that targets the record, or an alias of it, is an error there (§13.4):
+   * a HausSchemaError with the code `codec-unreachable`, thrown when the codecs are given.
+   */
+  const codecFreeRecord = (tag: string, t: Type): void => {
+    for (; t.kind === "ref"; t = t.instance.body) {
+      const { id } = t.instance.definition
+      if (t.instance.args.length === 0 && byId.has(id)) {
+        throw schemaErrorOf(`the codec for ${id} can't apply in the record case ${tag}: a record case's fields sit beside "_tag" in the host value (spec §15)`, "codec-unreachable")
+      }
+    }
+  }
+
   const fields = (fs: readonly Field[]): Schema.Struct.Fields =>
     Object.fromEntries(fs.map((f) => [f.key, f.optional ? Schema.optionalKey(build(f.type)) : build(f.type)]))
 
@@ -220,7 +235,8 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
             case "none":
               return Schema.TaggedStruct(c.tag, {})
             case "record": {
-              const { record } = c.payload
+              const { record, named: as } = c.payload
+              if (as) codecFreeRecord(c.tag, as)
               const closed = (s: Schema.Top) => (record.closed ? s.annotate({ [CLOSED]: true }) : s)
               // A payload with a field `_tag` can't put its fields beside the tag: they go in `value`.
               if (nestsPayload(record.fields)) return Schema.TaggedStruct(c.tag, { value: closed(Schema.Struct(fields(record.fields))) }).annotate({ [NESTED]: true })

@@ -27,7 +27,6 @@ Host types (the defaults keep the value, spec §13.4):
 
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -342,8 +341,7 @@ def load_schema(
     schema = load_schema("order.schema.haus", packages=["vendor/money"], package_folders=["schemas"])
     """
     try:
-        module = read_module(path)
-        resolver = FileResolver(os.path.dirname(module.key), packages or (), folders=package_folders)
+        module, resolver = FileResolver.for_root(path, packages or (), folders=package_folders)
     except ModuleError as e:  # the root file (too large, not a file) or the configuration
         raise HausSchemaFileError(str(e), 0, 1, 1, e.code) from None
     return compile_schema(module.text, resolver=resolver, key=module.key, id=module.id, codecs=codecs)

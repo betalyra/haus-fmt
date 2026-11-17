@@ -211,3 +211,22 @@ fn many_values_in_one_chunk_take_linear_time() {
     assert_eq!(values.len(), 200_000);
     assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
 }
+
+/// An empty item between commas is reported as the whole-file parser
+/// reports it: the same code, message and place, in any chunking.
+#[test]
+fn an_empty_item_is_the_error_of_the_whole_file() {
+    let seen = |e: &SyntaxError| (e.code.as_str(), e.reason.clone(), e.line, e.column);
+    for text in ["1,,2", "1, ,2", "1,/*c*/,2", ",1", "1,\n// c\n,2", "1,,", "-,2"] {
+        let whole = haus::parse(text).expect_err(text);
+        if text != "-,2" {
+            assert_eq!((whole.code.as_str(), whole.reason.as_str()), ("expected-value", "expected a value, found ','"));
+        }
+        for size in [1, 2, text.len()] {
+            let streamed = chunked(text.as_bytes(), size).expect_err(text);
+            assert_eq!(seen(&streamed), seen(&whole), "{text:?}, chunk size {size}");
+        }
+        let read: Result<Vec<Value>, _> = values(text.as_bytes()).collect();
+        assert_eq!(read.expect_err(text).to_string(), haus::Error::from(whole).to_string(), "{text:?}");
+    }
+}

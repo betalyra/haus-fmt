@@ -46,7 +46,11 @@ fn number_error(e: EncodeError) -> DecodeError {
 pub struct Object<'a> {
     members: &'a [(String, Json)],
     index: HashMap<&'a str, &'a Json>,
+    /// A variant's object: its payload is a level, inside it.
     tagged: bool,
+    /// A tag's object (a variant's, or the record of a record case read
+    /// from one): `"_tag"` is not one of its members.
+    in_tag: bool,
     /// Where the object is: for a record, inside it, where its fields are
     /// read; for a tag, outside it (its payload is a level).
     d: Decoder,
@@ -56,7 +60,7 @@ impl<'a> Object<'a> {
     /// `json` as a record, at `d`; `what` names the expected type in errors.
     pub fn new(json: &'a Json, d: Decoder, what: &str) -> R<Object<'a>> {
         let object = Object::any(json, d, what)?;
-        Ok(Object { d: d.nested()?, ..object })
+        Ok(Object { d: d.nested()?, in_tag: d.is_in_tag(), ..object })
     }
 
     /// `json` as an object, at `d`.
@@ -64,7 +68,7 @@ impl<'a> Object<'a> {
         match json {
             Json::Object(members) => {
                 let index = members.iter().map(|(k, v)| (k.as_str(), v)).collect();
-                Ok(Object { members, index, tagged: false, d })
+                Ok(Object { members, index, tagged: false, in_tag: false, d })
             }
             _ => Err(mismatch(&format!("an object ({what})"), json)),
         }
@@ -76,9 +80,9 @@ impl<'a> Object<'a> {
         if self.tagged { self.d.nested() } else { Ok(self.d) }
     }
 
-    /// The members other than `"_tag"`, if the object is tagged.
+    /// The members other than `"_tag"`, if the object is a tag's.
     fn fields(&self) -> impl Iterator<Item = &'a str> + '_ {
-        self.members.iter().map(|(k, _)| k.as_str()).filter(|k| !self.tagged || *k != "_tag")
+        self.members.iter().map(|(k, _)| k.as_str()).filter(|k| !self.in_tag || *k != "_tag")
     }
 
     /// A closed record has only the fields listed.
@@ -145,6 +149,7 @@ impl<'a> Object<'a> {
         if !crate::ser::is_tag(tag) {
             return Err(DecodeError::new(Code::InvalidTag, format!("{tag:?} is not a tag name")).field("_tag"));
         }
+        crate::ser::check_tag(tag, self.d.limits()).map_err(|e| e.into_decode().field("_tag"))?;
         let args = match (self.fields().collect::<Vec<_>>().as_slice(), self.index.get("_args")) {
             ([], _) => vec![],
             (["_args"], Some(Json::Array(items))) if !items.is_empty() => {
@@ -172,7 +177,7 @@ impl<'a> Object<'a> {
 pub fn variant<'a>(json: &'a Json, d: Decoder, what: &str) -> R<(&'a str, Object<'a>)> {
     let object = Object::any(json, d, what)?;
     match object.index.get("_tag") {
-        Some(Json::String(tag)) => Ok((tag, Object { tagged: true, ..object })),
+        Some(Json::String(tag)) => Ok((tag, Object { tagged: true, in_tag: true, ..object })),
         Some(other) => Err(mismatch("a string", other).with_code(Code::MissingMember).field("_tag")),
         None => {
             let e = DecodeError::new(Code::MissingMember, format!(r#"expected an object with "_tag" ({what})"#));
@@ -185,6 +190,14 @@ pub fn variant<'a>(json: &'a Json, d: Decoder, what: &str) -> R<(&'a str, Object
 /// `.value`, or `.values[i]` in errors.
 pub fn arg<const N: usize, T>(i: usize, json: &Json, d: Decoder, f: impl FnOnce(&Json, Decoder) -> R<T>) -> R<T> {
     f(json, d).map_err(|e| if N == 1 { e.field("value") } else { e.index(i).field("values") })
+}
+
+/// The record of a record case whose record is a named type (spec §15: `Box
+/// BoxRec` with `type BoxRec = { w: Int32 }`), at `d`: read from the tag's
+/// object `json`, whose members other than `"_tag"` are its fields, as for
+/// `Box { w: Int32 }`.
+pub fn record_case<T>(json: &Json, d: Decoder, f: impl FnOnce(&Json, Decoder) -> R<T>) -> R<T> {
+    f(json, d.in_tag())
 }
 
 /// A closed variant whose tags have no payload: the tag as a string.
@@ -214,12 +227,19 @@ pub fn array<T>(json: &Json, d: Decoder, f: impl Fn(&Json, Decoder) -> R<T>) -> 
     }
 }
 
-/// `Map v`, at `d`: an object used as a dictionary.
+/// `Map v`, at `d`: an object used as a dictionary, whose member names are
+/// the map's keys, within the string limit.
 pub fn map<T>(json: &Json, d: Decoder, f: impl Fn(&Json, Decoder) -> R<T>) -> R<BTreeMap<String, T>> {
     match json {
         Json::Object(members) => {
             let inner = d.nested()?;
-            members.iter().map(|(k, x)| Ok((k.clone(), f(x, inner).map_err(|e| e.field(k))?))).collect()
+            members
+                .iter()
+                .map(|(k, x)| {
+                    super::import::key(k, d.limits())?;
+                    Ok((k.clone(), f(x, inner).map_err(|e| e.field(k))?))
+                })
+                .collect()
         }
         _ => Err(mismatch("an object (Map)", json)),
     }
@@ -330,25 +350,27 @@ impl FromJson for AnyTag {
     }
 }
 
+/// A string, within the string limit: its characters after escapes are read (spec §16).
 impl FromJson for String {
-    fn from_json_with(json: &Json, _: Decoder) -> R<Self> {
+    fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         match json {
-            Json::String(s) => Ok(s.clone()),
+            Json::String(s) => {
+                crate::ser::check_length(s, d.limits()).map_err(EncodeError::into_decode)?;
+                Ok(s.clone())
+            }
             _ => Err(mismatch("a string", json)),
         }
     }
 }
 
-/// `Bytes`: base64 with padding (RFC 4648 §4).
+/// `Bytes`: base64 with padding (RFC 4648 §4), within the string limit as
+/// the haus byte string's hex: two characters per byte (spec §16).
 impl FromJson for Bytes {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         let Json::String(text) = json else { return Err(mismatch("a base64 string (Bytes)", json)) };
         let bytes = base64::decode(text)
             .ok_or_else(|| DecodeError::new(Code::InvalidBase64, "not base64 with padding (Bytes)"))?;
-        let max = d.limits().max_string_length / 2;
-        if bytes.len() > max {
-            return Err(DecodeError::new(Code::StringTooLong, format!("more than {max} bytes")));
-        }
+        crate::ser::check_bytes(&bytes, d.limits()).map_err(EncodeError::into_decode)?;
         Ok(Bytes(bytes))
     }
 }

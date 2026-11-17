@@ -68,3 +68,19 @@ type Nulls = { direct: Holder Int32, nested: Holder (Maybe Int32), named: Maybe 
 
 // A record payload with a field named _tag or _args has no schema-based JSON form.
 type Clash = < Tagged { _tag: String } | Listed { _args: Array Int32 } | Fine Int32 >
+
+// Record cases (spec §15): a record written inline or by name, through an
+// alias chain or an applied generic type, is the same case.
+type Dims = { w: Int32, h?: Int32 }
+type DimsAlias = Dims
+type DimsAlias2 = DimsAlias
+type Sealed = closed { id: Int32 }
+type Wrapper a = { inner: a }
+type Id a = a
+type Inline = < Sized { w: Int32, h?: Int32 } | Seal closed { id: Int32 } | Held { inner: Int32 } >
+type ByName = < Sized Dims | Seal Sealed | Held (Wrapper Int32) >
+type ByAlias = < Sized DimsAlias2 | Seal (Id Sealed) | Held (Id (Wrapper Int32)) >
+// A type parameter is never a record case, even where its argument is one.
+type Generic a = < Sized a >
+type TagField = { _tag: String }
+type ClashByName = < Tagged TagField | Fine Int32 >

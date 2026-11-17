@@ -68,7 +68,9 @@ or a key inside it.
 The generated code allows its own use of deprecated items, so a crate gets
 deprecation warnings only where it touches them. Attributes haus doesn't
 define (`@since`) are accepted and reported as Cargo warnings, as are uses of
-deprecated types in a schema; `Config::quiet()` turns them off.
+deprecated types in a schema and record cases with a field named `_tag` or
+`_args`, which have no schema-based JSON form (`no-json-form`);
+`Config::quiet()` turns them off.
 
 Writing checks what it writes, so `haus::to_string` returns a `Result`.
 `haus::to_string_minimised` writes the minimised layout of spec §11
@@ -277,7 +279,9 @@ strings (`"-12"`), `Decimal` a string with its scale (`"19.90"`), `Bytes`
 base64, floats in the spelling of §15 (`"NaN"`, `"Infinity"`, `"-Infinity"`
 as strings), a closed variant of tags without payload a string (`"Debug"`),
 other variants objects with `"_tag"` (`{"_tag": "Circle", "r": 1.5}`,
-`"value"`, `"values"`), unknown tags `{"_tag": …, "_args": […]}` with the
+`"value"`, `"values"`; a record case has its fields beside `"_tag"` however
+the record is written, so `Circle Disc` with `type Disc = { r: Float64 }`,
+which Rust keeps as `Circle(Disc)`, writes the same as `Circle { r: Float64 }`), unknown tags `{"_tag": …, "_args": […]}` with the
 arguments' self-describing values, and `Any` its self-describing value, both
 without the envelope. A `Maybe` is
 `null` or the value when its inner JSON can't be `null`, and tagged otherwise:

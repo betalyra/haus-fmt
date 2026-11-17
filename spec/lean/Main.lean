@@ -235,6 +235,8 @@ partial def tyOfJsonM (prelude : Bool) (j : Json) : TyM Schema.Ty := do
       let tag ← c.getObjValAs? String "tag"
       let p : Json ← c.getObjVal? "payload"
       if p == Json.str "none" then return Schema.Case.bare tag
+      -- A record case written by name: the model finds the record itself (`Case.resolve`).
+      if let .ok t := p.getObjVal? "named" then return .named tag (← go t)
       if let .ok r := p.getObjVal? "record" then
         let (cl, fields) ← record r
         return .record tag cl fields
@@ -587,7 +589,7 @@ def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := d
       | some why => failed := failed + 1; IO.println s!"FAIL {c.name}{should}: {why}"
       if only.isSome then
         IO.println s!"     {Packages.Suite.showResult o.result}"
-        IO.println s!"     read: {o.reads.toList.map Packages.showPath}"
+        IO.println s!"     read: {o.reads.map Packages.showPath}"
   IO.println s!"{count - failed}/{count} passed"
   return if failed == 0 then 0 else 1
 

@@ -132,7 +132,7 @@ impl RocConfig {
             ..LoadOptions::default()
         };
         let loaded = Schema::load_with(schema, &options)?;
-        let units = graph::units(&loaded, None, self.without_attributes)?;
+        let units = graph::units(&loaded, self.without_attributes)?;
         generate_units(&loaded, &units, module, &given, &self.codecs, self.json)
     }
 
@@ -244,7 +244,7 @@ fn generate_text(
     let given = Given::new(packages.iter().map(|p| (p.dir.as_path(), p.krate.as_str())), &[])?;
     let options = LoadOptions { packages: &given.explicit, id: Some(id), ..LoadOptions::default() };
     let loaded = Schema::parse_with(text, &options)?;
-    let units = graph::units(&loaded, Some(text), false)?;
+    let units = graph::units(&loaded, false)?;
     let mut modules = generate_units(&loaded, &units, module, &given, codecs, json)?;
     Ok(modules.remove(0).1)
 }
@@ -1022,7 +1022,9 @@ impl Gen<'_> {
                 Ok((field_name(&f.key), if f.optional { "optional_field" } else { "field" }, f, r))
             })
             .collect::<Result<Vec<_>>>()?;
-        match out.iter().enumerate().find(|(i, f)| out[..*i].iter().any(|g| g.0 == f.0)) {
+        // The first field whose Roc name an earlier one has (a set: linear in the fields).
+        let mut seen = HashSet::new();
+        match out.iter().enumerate().find(|(_, f)| !seen.insert(f.0.as_str())) {
             Some((_, (n, _, f, _))) => {
                 self.fail(f.pos, Code::DuplicateField, format!("fields {} and another one are both {n} in Roc", f.key))
             }
@@ -1104,6 +1106,15 @@ impl Gen<'_> {
         }
     }
 
+    /// Whether `ty`, a case's one argument, is a record type (see [`graph::record_case`]).
+    fn record_case(&self, ty: &Ty) -> Option<Option<String>> {
+        let imported = |name: &str| match self.imports.get(name)? {
+            Source::Time => Some(graph::Shape::Other),
+            Source::Module { template, .. } => Some(graph::shape(self.schema, *template)),
+        };
+        graph::record_case(ty, &self.defs, &imported)
+    }
+
     /// A variant: its tag union, and the bodies of its functions.
     fn variant(&mut self, owner: &str, closed: bool, cases: &[Case]) -> Result<(String, Bodies)> {
         if let Some(case) = cases.iter().find(|c| !closed && c.tag == "Unknown") {
@@ -1172,6 +1183,30 @@ impl Gen<'_> {
                         let read = parts.read.replace("(fs, ", "(ms, ");
                         from.push(format!("\"{tag}\" => {{\n{check}\t\t\tOk({tag}({read}))\n\t\t}}"));
                         to.push(format!("{tag}({r}) => ToJson.tagged_object(\"{tag}\", [{}])", parts.written));
+                    }
+                }
+                // A record case by name (spec §15): `Wrap Box` is `Wrap(Box)` in Roc, and
+                // takes and writes what `Wrap { … }` does.
+                [one] if self.record_case(one).is_some() => {
+                    let reserved = self.record_case(one).flatten();
+                    let r = self.lower(one, &hint)?;
+                    tags.push(format!("{tag}({})", r.ty));
+                    let f = self.value(&r.de);
+                    de.push(format!("Tag(\"{tag}\", [p]) => Ok({tag}(Decode.record_arg(\"{tag}\", p, {f})?))"));
+                    en.push(format!("{tag}(a0) => Tag(\"{tag}\", [{}])", r.en.apply("a0")));
+                    arity.push(format!("Tag(\"{tag}\", _) => Decode.arity(\"{tag}\", 1)"));
+                    match reserved {
+                        // A field named `_tag` or `_args` has no schema-based form (spec §16.3).
+                        Some(name) => {
+                            from.push(format!("\"{tag}\" => FromJson.no_json_form(\"{tag}\", \"{name}\")"));
+                            to.push(format!("{tag}(_) => ToJson.no_json_form(\"{tag}\", \"{name}\")"));
+                        }
+                        None => {
+                            reads_members = true;
+                            let f = self.json_value(&r.from_json);
+                            from.push(format!("\"{tag}\" => Ok({tag}(FromJson.record_case(ms, {f})?))"));
+                            to.push(format!("{tag}(a0) => ToJson.record_case(\"{tag}\", {})", r.to_json.apply("a0")));
+                        }
                     }
                 }
                 items => {

@@ -158,15 +158,19 @@ export class Parser {
     return out
   }
 
-  /** Exactly one value surrounded by trivia (used by the stream reader). */
+  /**
+   * Exactly one value surrounded by trivia, optionally followed by the ',' that
+   * ends the text (used by the stream reader, which passes each item with its
+   * comma). Fails as parseSequence fails on the same text: an empty item is
+   * "expected a value, found ','", as in the whole text.
+   */
   parseSingle(): Value {
     this.skipBom()
     this.checkDirective()
     this.skipTrivia()
-    if (this.eof() || this.peek() === ",") this.fail("expected-value", "expected a value", this.pos, { expected: "a value", found: describe(this.peek()) })
     const v = this.parseValue()
     this.skipTrivia()
-    if (!this.eof()) this.failSeparator(v, "expected ',' between top-level values")
+    if (!this.eof() && !(this.peek() === "," && this.pos === this.src.length - 1)) this.failSeparator(v, "expected ',' between top-level values")
     return v
   }
 

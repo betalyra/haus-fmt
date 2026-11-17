@@ -113,12 +113,67 @@ fn the_reader_enforces_limits() {
             .to_string()
             .contains("JSON nested deeper than 2 levels")
     );
-    assert!(json::parse_with("\"abc\"", &limits).is_ok());
-    assert_eq!(json::parse_with("\"abcd\"", &limits).unwrap_err().reason, "string longer than 3 characters");
+    // Lengths are the haus value's (below): the JSON text reader leaves them to the forms.
+    assert!(json::parse_with("\"abcd\"", &limits).is_ok());
     // The import's JSON nests as haus does.
     assert!(haus::import_json(&format!("{}1{}", "[".repeat(256), "]".repeat(256))).is_ok());
     let deep = format!("{}1{}", "[".repeat(257), "]".repeat(257));
     assert_eq!(haus::import_json(&deep).unwrap_err().to_string(), "JSON nested deeper than 256 levels at 1:257");
+}
+
+/// The code of a read's error, or "ok".
+fn outcome<T>(read: Result<T, Error>) -> String {
+    match read {
+        Ok(_) => "ok".into(),
+        Err(e) => e.code().map_or_else(|| e.to_string(), |c| c.as_str().to_owned()),
+    }
+}
+
+#[test]
+fn lengths_count_on_the_haus_value() {
+    // Spec §16 "Limits": a string's characters after its escapes are read,
+    // keys and tags as haus keys and tags, bytes as two characters per byte
+    // (the hex of a haus byte string), in hex or base64. Exactly at the limit
+    // is accepted, one more is not.
+    let four = Limits { max_string_length: 4, ..Limits::default() };
+    let typed = |json: &str| outcome(json::from_str_with::<String>(json, &four));
+    assert_eq!(typed(r#""\u00e9\u00e9\u00e9\u00e9""#), "ok");
+    assert_eq!(typed(r#""\u00e9\u00e9\u00e9\u00e9\u00e9""#), "string-too-long");
+    assert_eq!(typed(r#""\ud83d\ude00abc""#), "ok");
+    let described =
+        |value: &str| outcome(json::from_haus_json_with(&format!(r#"{{"_haus":1,"_value":{value}}}"#), &four));
+    assert_eq!(described(r#""\u00e9\n\t\"""#), "ok");
+    assert_eq!(described(r#""\u00e9\n\t\"x""#), "string-too-long");
+    let imported = |json: &str| outcome(json::import_json_with(json, &four));
+    assert_eq!(imported(r#"["\u00e9\u00e9\u00e9\u00e9"]"#), "ok");
+    assert_eq!(imported(r#"["\u00e9\u00e9\u00e9\u00e9\u00e9"]"#), "string-too-long");
+    // Bytes: 2 bytes are 4 characters, in base64 ("AAA=") as in hex ("0000").
+    let bytes = |json: &str| outcome(json::from_str_with::<Bytes>(json, &four));
+    assert_eq!(bytes(r#""AAA=""#), "ok");
+    assert_eq!(bytes(r#""AAAA""#), "string-too-long");
+    let six = Limits { max_string_length: 6, ..Limits::default() };
+    assert_eq!(outcome(json::from_str_with::<Bytes>(r#""AAAA""#, &six)), "ok");
+    assert_eq!(outcome(json::from_str_with::<Bytes>(r#""AAAAAA==""#, &six)), "string-too-long");
+    // One byte is 2 characters, although its base64 has 4.
+    let two = Limits { max_string_length: 2, ..Limits::default() };
+    assert_eq!(outcome(json::from_str_with::<Bytes>(r#""AA==""#, &two)), "ok");
+    assert_eq!(described(r#"{"_bytes":"0b34"}"#), "ok");
+    assert_eq!(described(r#"{"_bytes":"0b34ff"}"#), "string-too-long");
+    // Keys and tags, with their own codes.
+    assert_eq!(imported(r#"{"abcd":1}"#), "ok");
+    assert_eq!(imported(r#"{"abcde":1}"#), "key-too-long");
+    assert_eq!(described(r#"{"_rec":{"abcde":1}}"#), "key-too-long");
+    assert_eq!(outcome(json::from_str_with::<BTreeMap<String, i32>>(r#"{"abcd":1}"#, &four)), "ok");
+    assert_eq!(outcome(json::from_str_with::<BTreeMap<String, i32>>(r#"{"abcde":1}"#, &four)), "key-too-long");
+    assert_eq!(described(r#"{"_tag":"Abcd"}"#), "ok");
+    assert_eq!(described(r#"{"_tag":"Abcde"}"#), "tag-too-long");
+    // What isn't a string of the value doesn't count: the forms' member names,
+    // and number literals, which the number limit bounds.
+    assert_eq!(outcome(json::from_haus_json_with(r#"{"_haus":1,"_value":"ab"}"#, &two)), "ok");
+    assert_eq!(described(r#"{"_num":"123456"}"#), "ok");
+    assert_eq!(outcome(json::from_str_with::<i64>(r#""123456""#, &four)), "ok");
+    assert_eq!(outcome(json::from_str_with::<Decimal>(r#""1.23456""#, &four)), "ok");
+    assert_eq!(outcome(json::from_str_with::<Int>(r#""123456""#, &four)), "ok");
 }
 
 #[test]

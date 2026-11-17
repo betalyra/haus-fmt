@@ -49,7 +49,7 @@ VariantsJson := [].{
 		)
 		Tag("Point", [a0, a1]) => Ok(Point(Decode.arg("Point", 0, a0, Decode.f64)?, Decode.arg("Point", 1, a1, Decode.f64)?))
 		Tag("Empty", []) => Ok(Empty)
-		Tag("Wrap", [a0]) => Ok(Wrap(Decode.arg("Wrap", 0, a0, decode_box)?))
+		Tag("Wrap", [p]) => Ok(Wrap(Decode.record_arg("Wrap", p, decode_box)?))
 		Tag("Pair", [a0, a1]) => Ok(Pair(Decode.arg("Pair", 0, a0, Decode.int)?, Decode.arg("Pair", 1, a1, Decode.str)?))
 		Tag("Circle", _) => Decode.arity("Circle", 1)
 		Tag("Point", _) => Decode.arity("Point", 2)
@@ -88,10 +88,7 @@ VariantsJson := [].{
 				[] => Ok(Empty)
 				_ => FromJson.arity("Empty", 0)
 			}
-			"Wrap" => match FromJson.args(ms, 1)? {
-				[a0] => Ok(Wrap(FromJson.arg(1, 0, a0, read_json_box)?))
-				_ => FromJson.arity("Wrap", 1)
-			}
+			"Wrap" => Ok(Wrap(FromJson.record_case(ms, read_json_box)?))
 			"Pair" => match FromJson.args(ms, 2)? {
 				[a0, a1] => Ok(Pair(FromJson.arg(2, 0, a0, FromJson.int)?, FromJson.arg(2, 1, a1, FromJson.str)?))
 				_ => FromJson.arity("Pair", 2)
@@ -105,7 +102,7 @@ VariantsJson := [].{
 		Circle(r) => ToJson.tagged_object("Circle", [("r", Present(ToJson.f64(r.r)))])
 		Point(a0, a1) => ToJson.tagged("Point", [ToJson.f64(a0), ToJson.f64(a1)])
 		Empty => ToJson.tagged("Empty", [])
-		Wrap(a0) => ToJson.tagged("Wrap", [to_json_box(a0)])
+		Wrap(a0) => ToJson.record_case("Wrap", to_json_box(a0))
 		Pair(a0, a1) => ToJson.tagged("Pair", [ToJson.int(a0), ToJson.str(a1)])
 		Unknown(tag, args) => ToJson.unknown(tag, args)
 	}

@@ -165,6 +165,12 @@ pub enum Payload {
     None,
     /// `Tag { … }`: one record.
     Record(Record),
+    /// `Tag R`, whose one argument is a named type that is a record (`Wrap
+    /// Box` with `type Box = { … }`, through aliases, or an applied name
+    /// that gives one, `Found (Page Int)`): a record case like `Tag { … }`
+    /// (spec §15). The type resolves to a [`Type::Record`]. A type parameter
+    /// is never one, even where its argument is a record.
+    Named(Type),
     /// `Tag A B`: exactly these values.
     Positional(Vec<Type>),
 }

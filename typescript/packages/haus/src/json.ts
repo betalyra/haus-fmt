@@ -350,11 +350,25 @@ export const jsonDepth = (maxDepth: number): number => 4 * maxDepth + 1
 /** How deeply self-describing JSON may nest for `maxDepth` haus levels: `jsonDepth`, and one more for the envelope. */
 export const hausJsonDepth = (maxDepth: number): number => jsonDepth(maxDepth) + 1
 
-/** `limits` for reading the schema-based JSON of values within them (see `jsonDepth`). */
-export const jsonDepthFor = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth(limits.maxDepth) })
+/**
+ * The JSON reader's limits for JSON text that is read as a haus value within
+ * `limits`, its nesting limited to `maxDepth` JSON levels. Lengths count on
+ * the resulting value, not on the JSON text (spec §16, Limits): a JSON string
+ * may become a string, a key, a tag, a number (`"19.90"`, `{"_num": …}`) or
+ * bytes (base64, `_bytes`), each with its own count, so the reader doesn't
+ * count strings and the conversion to the value does. Number tokens are
+ * limited as written, by the reader.
+ */
+const textLimits = (limits: Limits, maxDepth: number): Limits => ({ ...limits, maxDepth, maxStringLength: Infinity })
 
-/** `limits` for reading the self-describing JSON of values within them (see `hausJsonDepth`). */
-const hausJsonDepthFor = (limits: Limits): Limits => ({ ...limits, maxDepth: hausJsonDepth(limits.maxDepth) })
+/** `limits` for reading the schema-based JSON text of values within them (see `jsonDepth`, `textLimits`). */
+export const jsonTextLimits = (limits: Limits): Limits => textLimits(limits, jsonDepth(limits.maxDepth))
+
+/** `limits` for reading the self-describing JSON text of values within them (see `hausJsonDepth`, `textLimits`). */
+const hausJsonTextLimits = (limits: Limits): Limits => textLimits(limits, hausJsonDepth(limits.maxDepth))
+
+/** `limits` for reading JSON text to import as values within them (see `textLimits`). */
+const importTextLimits = (limits: Limits): Limits => textLimits(limits, limits.maxDepth)
 
 // ── writing ──────────────────────────────────────────────────
 
@@ -514,7 +528,7 @@ export const importedValue = (j: Json, limits: Limits, place: Place): Value => i
  */
 export const importJson = (text: string, limits: Partial<Limits> = {}): Value => {
   const l = withDefaults(limits)
-  return imported(readJson(text, l), l, 0, Place.root())
+  return imported(readJson(text, importTextLimits(l)), l, 0, Place.root())
 }
 
 /** `importJson` for a JSON value that is already parsed. */
@@ -689,7 +703,7 @@ export const fromHausJsonValue = (json: Json, limits: Partial<Limits> = {}): Val
 export const fromHausJson = (text: string, limits: Partial<Limits> = {}): Value => {
   const l = withDefaults(limits)
   const place = Place.root()
-  return valueOfHausJson(unwrap(readJson(text, hausJsonDepthFor(l), START, true), place), l, place)
+  return valueOfHausJson(unwrap(readJson(text, hausJsonTextLimits(l), START, true), place), l, place)
 }
 
 // ── JSON Lines (spec §16: a stream is one JSON text per value) ─
@@ -773,7 +787,7 @@ export const parseJsonLines = (source: ChunkSource, options: JsonLinesOptions = 
 /** Import a JSON Lines stream as haus values, without a schema (§16.1). Errors name the line's index. */
 export const importJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Value, void, undefined> => {
   const limits = withDefaults(options.limits ?? {})
-  return readLines(source, options, (text, origin, i) => imported(readJson(text, limits, origin), limits, 0, Place.root(i)))
+  return readLines(source, options, (text, origin, i) => imported(readJson(text, importTextLimits(limits), origin), limits, 0, Place.root(i)))
 }
 
 /** Read a JSON Lines stream of self-describing JSON (§16.2), an envelope per line, as haus values. Errors name the line's index. */
@@ -781,7 +795,7 @@ export const fromHausJsonLines = (source: ChunkSource, options: JsonLinesOptions
   const limits = withDefaults(options.limits ?? {})
   return readLines(source, options, (text, origin, i) => {
     const place = Place.root(i)
-    return valueOfHausJson(unwrap(readJson(text, hausJsonDepthFor(limits), origin, true), place), limits, place)
+    return valueOfHausJson(unwrap(readJson(text, hausJsonTextLimits(limits), origin, true), place), limits, place)
   })
 }
 

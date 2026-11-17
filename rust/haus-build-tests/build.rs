@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use std::{env, fs};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    haus_build::Config::new().compile("features.schema.haus")?;
+    // Its cases without a schema-based JSON form (`_tag`, `_args`) are there on purpose: no warnings.
+    haus_build::Config::new().quiet().compile("features.schema.haus")?;
     haus_build::Config::new().compile_as("app/main/order.schema.haus", "app")?;
     haus_build::Config::new()
         .codec("haus-build-tests/app/shared/money#Money", "crate::Cents")

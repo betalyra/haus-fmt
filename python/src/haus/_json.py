@@ -72,6 +72,20 @@ def json_number_issue(text: str, limits: Limits) -> tuple[ErrorCode, str] | None
     return None
 
 
+def string_length_issue(s: str, limits: Limits) -> tuple[ErrorCode, str] | None:
+    """Why the haus string `s` is beyond the string limit (spec §7), counted after escapes are read (§16)."""
+    if len(s) > limits.max_string_length:
+        return "string-too-long", f"string longer than {limits.max_string_length} characters"
+    return None
+
+
+def key_length_issue(k: str, limits: Limits) -> tuple[ErrorCode, str] | None:
+    """Why the record key `k` is beyond the string limit (spec §7), counted after escapes are read (§16)."""
+    if len(k) > limits.max_string_length:
+        return "key-too-long", f"key longer than {limits.max_string_length} characters"
+    return None
+
+
 class _Container:
     """An object or array being read, with the member name whose value comes next."""
 
@@ -223,17 +237,17 @@ class _Reader:
         return JsonNumber(normalized)
 
     def string(self) -> str:
-        text, limit = self.text, self.limits.max_string_length
+        """A string token. Its length isn't checked here: limits count the haus value (§16), and a
+        JSON string can be a member name of the form (`"_value"`), a number (`"_num"`) or base64."""
+        text = self.text
         start = self.pos
         self.pos += 1
         parts: list[str] = []
-        length = 0
         while True:
             m = self.run.match(text, self.pos)
             assert m is not None
             if m.end() > m.start():
                 parts.append(m[0])
-                length += m.end() - m.start()
             self.pos = m.end()
             c = text[self.pos] if self.pos < len(text) else ""
             if c == '"':
@@ -241,7 +255,6 @@ class _Reader:
                 break
             if c == "\\":
                 parts.append(self.escape())
-                length += 1
             elif c == "":
                 self.fail("unterminated-string", "unterminated string", start)
             elif _SURROGATE.match(c):
@@ -254,10 +267,6 @@ class _Reader:
                 self.fail(
                     "control-character", f"raw control character U+{ord(c):04X} in a string (write it as an escape)"
                 )
-            if length > limit:
-                self.fail("string-too-long", f"string longer than {limit} characters", start)
-        if length > limit:
-            self.fail("string-too-long", f"string longer than {limit} characters", start)
         return "".join(parts)
 
     def escape(self) -> str:
@@ -400,11 +409,14 @@ _VERSION: Final = JsonNumber("1")
 """The version of self-describing JSON, `_haus` in its envelope (§16.2)."""
 
 
-def imported(j: Json, max_depth: int | None = None, depth: int = 0, path: tuple[PathKey, ...] = ()) -> Value:
+def imported(
+    j: Json, limits: Limits, max_depth: int | None = None, depth: int = 0, path: tuple[PathKey, ...] = ()
+) -> Value:
     """Any JSON as a haus value, the JSON import (§16.1): objects are records, `null` is `None`.
 
-    Nothing in the data is special: `{"_tag": "A"}` is a record. With `max_depth`, a container at `depth`
-    or deeper is an error (`HausJsonError` with its path); without it, the reader has limited the nesting already.
+    Nothing in the data is special: `{"_tag": "A"}` is a record. Strings and keys are checked against
+    `limits` (`HausJsonError` with the path). With `max_depth`, a container at `depth` or deeper is an
+    error too; without it, the reader has limited the nesting already.
     """
     if isinstance(j, list | dict) and max_depth is not None and depth >= max_depth:
         raise HausJsonError(f"nesting deeper than {max_depth} levels", code="nesting-too-deep", path=path)
@@ -416,18 +428,22 @@ def imported(j: Json, max_depth: int | None = None, depth: int = 0, path: tuple[
         case False:
             return _FALSE
         case str():
+            if (issue := string_length_issue(j, limits)) is not None:
+                raise HausJsonError(issue[1], code=issue[0], path=path)
             return String(j)
         case JsonNumber(text):
             return Number(text)
         case list():
             items: list[Value] = []
             for i, x in enumerate(j):
-                items.append(imported(x, max_depth, depth + 1, (*path, i)))
+                items.append(imported(x, limits, max_depth, depth + 1, (*path, i)))
             return Array(tuple(items))
         case dict():
             fields: dict[str, Value] = {}
             for k, x in j.items():
-                fields[k] = imported(x, max_depth, depth + 1, (*path, k))
+                if (issue := key_length_issue(k, limits)) is not None:
+                    raise HausJsonError(issue[1], code=issue[0], path=path)
+                fields[k] = imported(x, limits, max_depth, depth + 1, (*path, k))
             return Record(fields)
 
 
@@ -512,6 +528,8 @@ class _SelfDescribing:
     def value(self, j: Json, depth: int, path: tuple[PathKey, ...]) -> Value:
         match j:
             case str():
+                if (issue := string_length_issue(j, self.limits)) is not None:
+                    self.fail(issue[1], path, issue[0])
                 return String(j)
             case list():
                 return Array(self.items(j, self.deeper(depth, path), path))
@@ -571,9 +589,8 @@ class _SelfDescribing:
         d = self.deeper(depth, path)
         out: dict[str, Value] = {}
         for k, x in fields.items():
-            if len(k) > self.limits.max_string_length:
-                limit = self.limits.max_string_length
-                self.fail(f"key longer than {limit} characters", (*path, "_rec"), "key-too-long")
+            if (issue := key_length_issue(k, self.limits)) is not None:
+                self.fail(issue[1], (*path, "_rec"), issue[0])
             out[k] = self.value(x, d, (*path, "_rec", k))
         return Record(out)
 

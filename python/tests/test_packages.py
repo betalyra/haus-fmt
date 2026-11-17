@@ -424,11 +424,8 @@ def test_a_schema_reaches_at_most_256_files(tmp_path: Path) -> None:
     assert info.value.code == "too-many-files"
 
 
-def test_each_file_is_read_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    write(tmp_path / "common.schema.haus", "type C = Int")
-    write(tmp_path / "a.schema.haus", "import ./common (C)\nimport @acme/money (Money)\ntype A = C")
-    write(tmp_path / "b.schema.haus", "import ./common (C)\nimport @acme/money (Money)\ntype B = C")
-    money = package(tmp_path / "vendor" / "money", "@acme/money")
+def count_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The names of the files opened from now on, through a test hook on `os.open`."""
     opened: list[str] = []
     real_open = os.open
 
@@ -437,11 +434,47 @@ def test_each_file_is_read_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         return real_open(path, flags, *args)
 
     monkeypatch.setattr(os, "open", counting_open)
-    resolver = FileResolver(tmp_path, [money])
+    return opened
+
+
+def test_each_file_is_read_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write(tmp_path / "common.schema.haus", "type C = Int")
+    write(tmp_path / "a.schema.haus", "import ./common (C)\nimport @acme/money (Money)\ntype A = C")
+    write(tmp_path / "b.schema.haus", "import ./common (C)\nimport @acme/money (Money)\ntype B = C")
+    money = package(tmp_path / "vendor" / "money", "@acme/money")
+    opened = count_opens(monkeypatch)
+    # The package given twice: the manifest is read once, for listing the packages and comparing copies.
+    resolver = FileResolver(tmp_path, [money, money])
     compile_schema("import ./a (A)\nimport ./b (B)\ntype Root = { a: A, b: B }", resolver=resolver)
-    assert sorted(opened) == sorted(
-        ["a.schema.haus", "b.schema.haus", "common.schema.haus", "package.haus", "package.haus", "schema.haus"]
-    )  # the manifest is read when the packages are listed, then with the schema for comparing copies
+    assert sorted(opened) == ["a.schema.haus", "b.schema.haus", "common.schema.haus", "package.haus", "schema.haus"]
+
+
+@symlinks
+def test_a_file_in_two_roles_is_read_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec §13.3: by its real path, whatever it is read as; each role's checks still apply."""
+    app = tmp_path / "app"
+    write(app / "x.schema.haus", "type X = Int")
+    write(app / "a.schema.haus", "import ./x (X)\nimport @acme/money (Money)\ntype Root = { x: X, m: Money }")
+    (app / "pyproject.toml").symlink_to("x.schema.haus")  # read for the identity of a and x, as TOML
+    money = package(tmp_path / "vendor" / "money", "@acme/money")
+    opened = count_opens(monkeypatch)
+    schema = load_schema(app / "a.schema.haus", packages=[money])
+    assert schema["Root"].parse("{ x: 1, m: Money(1.5, EUR) }") is not None
+    assert sorted(opened) == ["a.schema.haus", "package.haus", "schema.haus", "x.schema.haus"]
+    # The root, imported again in a cycle, is not read again.
+    write(app / "x.schema.haus", "import ./a (Root)\ntype X = Int")
+    opened.clear()
+    with pytest.raises(HausSchemaFileError) as info:
+        load_schema(app / "a.schema.haus", packages=[money])
+    assert info.value.code == "import-cycle"
+    assert sorted(opened) == ["a.schema.haus", "x.schema.haus"]
+    # A package's manifest that is a link to a file read as a schema is still refused, unread as a manifest.
+    write(app / "x.schema.haus", "type X = Int")
+    (money / "package.haus").unlink()
+    (money / "package.haus").symlink_to(app / "x.schema.haus")
+    with pytest.raises(HausSchemaFileError) as info:
+        load_schema(app / "a.schema.haus", packages=[money])
+    assert info.value.code == "package-path"
 
 
 def test_messages_escape_and_shorten_text_from_files(tmp_path: Path) -> None:

@@ -177,3 +177,20 @@ def test_the_hex_digit_limit_follows_the_number_limit() -> None:
 def test_huge_exponent_is_checked_without_converting() -> None:
     e = error("1e" + "9" * 5000, Limits(max_number_length=6000))
     assert e.reason == "exponent larger than 6144"
+
+
+def test_many_keys_parse_in_linear_time() -> None:
+    """Spec §7: duplicate keys are found with Python's dict, whose `str` hash (SipHash) is seeded at
+    random per process, so no keys can be crafted to collide; 100k keys take well under the bound."""
+    import time
+
+    n = 100_000
+    text = "{" + ",".join(f"k{i}:{i}" for i in range(n)) + "}"
+    start = time.perf_counter()
+    value = haus.parse(text)
+    assert isinstance(value, Record) and len(value.fields) == n
+    assert len(list(haus.parse_stream([text.encode()]))) == 1
+    with pytest.raises(haus.HausSyntaxError) as e:
+        haus.parse(text[:-1] + ",k0:0}")  # a duplicate at the very end is still found
+    assert e.value.code == "duplicate-key"
+    assert time.perf_counter() - start < 20

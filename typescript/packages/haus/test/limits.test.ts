@@ -246,8 +246,86 @@ describe("the string limit counts record keys and tags too (spec §7)", () => {
     expect(() => h.fromJsonValue(Open, { _tag: "Abcde" } as Json, four)).toThrow("tag longer than 4 characters")
     expect(() => h.fromJsonValue(Open, { _tag: "Abcd", abcde: 1 } as unknown as Json, four)).toThrow("key longer than 4 characters")
     expect(h.fromJsonValue(Open, { _tag: "Abcd" } as Json, four)).toMatchObject({ tag: "Abcd" })
-    // JSON text: the reader limits every JSON string, member names and tags included.
-    expect(() => importJson('{"abcde": []}', four)).toThrow("JSON: string longer than 4 characters")
-    expect(() => fromHausJson('{"_haus": 1, "_value": {"_tag": "Abcde"}}', four)).toThrow("JSON: string longer than 4 characters")
+    // JSON text: the same, counted on the value (spec §16, Limits), not as JSON strings.
+    expect(() => importJson('{"abcde": []}', four)).toThrow("key longer than 4 characters")
+    expect(() => fromHausJson('{"_haus": 1, "_value": {"_tag": "Abcde"}}', four)).toThrow("tag longer than 4 characters")
+  })
+})
+
+describe("JSON lengths count on the resulting haus value, not the JSON text (spec §16, Limits)", () => {
+  const four = { maxStringLength: 4 }
+  const codeOf = (f: () => unknown): string | undefined => {
+    try {
+      f()
+    } catch (e) {
+      return (e as { code?: string }).code
+    }
+    return undefined
+  }
+  /** `n` times é, each written as the escape é (six JSON characters, one haus character). */
+  const escaped = (n: number) => `"${"\\u00e9".repeat(n)}"`
+  const lines = (text: string) => [`${text}\n`]
+
+  it("a string's characters after its escapes are read: exactly the limit is accepted, one more is an error", async () => {
+    const readers: [string, (json: string) => unknown][] = [
+      ["import", (j) => importJson(j, four)],
+      ["self-describing", (j) => fromHausJson(`{"_haus": 1, "_value": ${j}}`, four)],
+      ["schema-based", (j) => h.fromJson(h.String, j, four)],
+    ]
+    for (const [name, read] of readers) {
+      expect([name, codeOf(() => read(escaped(4)))]).toEqual([name, undefined])
+      expect([name, codeOf(() => read(escaped(5)))]).toEqual([name, "string-too-long"])
+    }
+    expect(importJson(escaped(4), four)).toEqual({ kind: "string", value: "éééé" })
+    expect(await collect(importJsonLines(lines(escaped(4)), { limits: four }))).toHaveLength(1)
+    expect((await errorOf(() => collect(importJsonLines(lines(escaped(5)), { limits: four })))) as unknown as { code: string }).toMatchObject({ code: "string-too-long" })
+    expect(await collect(h.decodeJsonLines(h.String, lines(escaped(4)), four))).toEqual(["éééé"])
+    expect((await errorOf(() => collect(h.decodeJsonLines(h.String, lines(escaped(5)), four)))) as unknown as { code: string }).toMatchObject({ code: "string-too-long" })
+  })
+
+  it("keys and tags count as haus keys and tags, escapes read", () => {
+    expect(canonical(importJson(`{"\\u0061bcd": []}`, four))).toBe("{abcd:[]}")
+    expect(codeOf(() => importJson(`{"\\u0061bcde": []}`, four))).toBe("key-too-long")
+    expect(canonical(fromHausJson(`{"_haus": 1, "_value": {"_tag": "\\u0041bcd"}}`, four))).toBe("Abcd")
+    expect(codeOf(() => fromHausJson(`{"_haus": 1, "_value": {"_tag": "\\u0041bcde"}}`, four))).toBe("tag-too-long")
+  })
+
+  it("bytes count two characters per byte, in base64 (schema-based) and in hex (_bytes)", () => {
+    // 4 characters: 2 bytes. Base64 "AAE=" is 4 JSON characters either way; 3 bytes, "AAEC", are 6.
+    expect(h.fromJson(h.Bytes, '"AAE="', four)).toEqual(new Uint8Array([0, 1]))
+    expect(codeOf(() => h.fromJson(h.Bytes, '"AAEC"', four))).toBe("string-too-long")
+    // With 8: 4 bytes are accepted, 5 (base64 "AAECAwQ=", only 8 JSON characters) are not.
+    const eight = { maxStringLength: 8 }
+    expect(h.fromJson(h.Bytes, '"AAECAw=="', eight)).toEqual(new Uint8Array([0, 1, 2, 3]))
+    expect(codeOf(() => h.fromJson(h.Bytes, '"AAECAwQ="', eight))).toBe("string-too-long")
+    const hex = (digits: string) => `{"_haus": 1, "_value": {"_bytes": "${digits}"}}`
+    expect(fromHausJson(hex("00010203"), eight)).toEqual({ kind: "bytes", bytes: new Uint8Array([0, 1, 2, 3]) })
+    expect(codeOf(() => fromHausJson(hex("0001020304"), eight))).toBe("string-too-long")
+  })
+
+  it("a JSON string that is a number is limited as a number, not as a string", () => {
+    const long = "123456789"
+    expect(h.fromJson(h.Decimal, `"${long}"`, four)).toBe(long)
+    expect(canonical(fromHausJson(`{"_haus": 1, "_value": {"_num": "${long}"}}`, four))).toBe(long)
+    expect(codeOf(() => h.fromJson(h.Decimal, `"${long}"`, { maxNumberLength: 8 }))).toBe("number-too-long")
+    expect(h.fromJson(h.Int64, `"${long}"`, four)).toBe(123456789n)
+  })
+
+  it("structural member names are no haus strings: a tiny string limit doesn't reject them", () => {
+    const one = { maxStringLength: 1 }
+    // "_haus", "_value", "_bytes", "_num", "_rec", "_tag", "_args" are longer than 1.
+    expect(canonical(fromHausJson(`{"_haus": 1, "_value": [{"_bytes": ""}, {"_num": "12"}, {"_rec": {"a": "b"}}, {"_tag": "A", "_args": ["c"]}]}`, one))).toBe('[x"",12,{a:"b"},A("c")]')
+    const Shape = h.Variant({ Circle: h.Record({ r: h.Int32 }), Pair: h.Tuple(h.Int32, h.Int32) })
+    expect(h.fromJson(h.Array(Shape), `[{"_tag": "Circle", "r": 1}, {"_tag": "Pair", "values": [1, 2]}]`, one)).toEqual([{ _tag: "Circle", r: 1 }, { _tag: "Pair", values: [1, 2] }])
+  })
+
+  it("a map's member names are keys", () => {
+    expect(h.fromJson(h.Map(h.Int32), `{"\\u0061bcd": 1}`, four)).toEqual(new Map([["abcd", 1]]))
+    expect(codeOf(() => h.fromJson(h.Map(h.Int32), `{"abcde": 1}`, four))).toBe("key-too-long")
+  })
+
+  it("raw JSON (parseJson) still limits its strings as JSON strings", () => {
+    expect(codeOf(() => parseJson(escaped(5), four))).toBe("string-too-long")
+    expect(parseJson(escaped(4), four)).toBe("éééé")
   })
 })

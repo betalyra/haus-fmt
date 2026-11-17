@@ -73,7 +73,18 @@ pub(crate) enum Opened {
 /// Opens the file at `path` as `kind` says and reads it: a regular file,
 /// within the limit, checked on the opened file.
 pub(crate) fn open(path: &Path, kind: Kind) -> Opened {
-    let follow = kind.follows_links();
+    read(path, kind.follows_links(), kind.limit())
+}
+
+/// The most any file is read to: [`FileCache`] reads each file once, to the
+/// largest limit, and checks each use's own limit on what it read.
+const MAX_READ: u64 = if MAX_FILE > MAX_MANIFEST { MAX_FILE } else { MAX_MANIFEST };
+
+/// Opens the file at `path`, following a link or not, and reads it: a
+/// regular file of at most `limit` bytes, checked on the opened file.
+fn read(path: &Path, follow: bool, limit: u64) -> Opened {
+    #[cfg(test)]
+    tests::OPENED.with(|o| o.borrow_mut().push(path.to_owned()));
     #[cfg(not(unix))]
     let before = match if follow { fs::metadata(path) } else { fs::symlink_metadata(path) } {
         Ok(m) if m.is_file() => m,
@@ -103,7 +114,6 @@ pub(crate) fn open(path: &Path, kind: Kind) -> Opened {
     if meta.len() != before.len() {
         return Opened::NotRegular;
     }
-    let limit = kind.limit();
     if meta.len() > limit {
         return Opened::TooLarge(meta.len());
     }
@@ -112,6 +122,15 @@ pub(crate) fn open(path: &Path, kind: Kind) -> Opened {
         Ok(_) if bytes.len() as u64 > limit => Opened::TooLarge(bytes.len() as u64),
         Ok(_) => Opened::Read(bytes.into()),
         Err(e) => Opened::Failed(e.to_string()),
+    }
+}
+
+/// What a file read for one use is for another, `kind`: too large if it is
+/// larger than that use allows.
+fn within(opened: Opened, kind: Kind) -> Opened {
+    match opened {
+        Opened::Read(bytes) if bytes.len() as u64 > kind.limit() => Opened::TooLarge(bytes.len() as u64),
+        opened => opened,
     }
 }
 
@@ -144,13 +163,19 @@ fn options(_follow: bool) -> OpenOptions {
     options
 }
 
-/// The files one schema reads, each once (spec §13.3): by path and how it
-/// is read. [`Schema::load`](crate::Schema::load) makes one for each schema;
-/// a [`Locator`] reads `package.json` files through it.
+/// The files one schema reads, each once (spec §13.3), by real path: a file
+/// needed in two roles (a `package.json` that is a link to a schema file)
+/// is read once, and every use sees the same bytes. Each use still gets its
+/// own checks: a package's files are never read through a link, and each
+/// kind of file has its own size limit. [`Schema::load`](crate::Schema::load)
+/// makes one for each schema; a [`Locator`] reads `package.json` files
+/// through it.
 #[derive(Debug, Default)]
 pub struct FileCache {
-    opened: HashMap<(PathBuf, Kind), Opened>,
-    json: HashMap<(PathBuf, Kind), Option<Rc<Json>>>,
+    /// By real path; a file that isn't there by the path it was looked for at.
+    opened: HashMap<PathBuf, Opened>,
+    /// The `package.json` files parsed, by real path: `null` if not valid JSON.
+    json: HashMap<PathBuf, Rc<Json>>,
 }
 
 impl FileCache {
@@ -159,32 +184,46 @@ impl FileCache {
     }
 
     pub(crate) fn open(&mut self, path: &Path, kind: Kind) -> Opened {
-        self.opened.entry((path.to_owned(), kind)).or_insert_with(|| open(path, kind)).clone()
+        self.opened_at(path, kind).1
+    }
+
+    /// The file at `path`, read as `kind` says, and the path it is cached by.
+    fn opened_at(&mut self, path: &Path, kind: Kind) -> (PathBuf, Opened) {
+        // A package's files: the path itself is never a link (checked again on the opened file).
+        if !kind.follows_links() {
+            match fs::symlink_metadata(path) {
+                Ok(m) if m.file_type().is_symlink() => return (path.to_owned(), Opened::NotRegular),
+                Err(e) if e.kind() == ErrorKind::NotFound => return (path.to_owned(), Opened::Missing),
+                _ => {}
+            }
+        }
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_owned());
+        let opened = self.opened.entry(key.clone()).or_insert_with(|| read(path, kind.follows_links(), MAX_READ));
+        (key, within(opened.clone(), kind))
     }
 
     /// A `package.json` (`kind` says whose): None if there is none (or, for a
     /// project's, it isn't a regular file), JSON `null` if it isn't valid
     /// JSON (it declares nothing and gives no version).
     pub(crate) fn package_json(&mut self, path: &Path, kind: Kind) -> Result<Option<Rc<Json>>> {
-        if let Some(json) = self.json.get(&(path.to_owned(), kind)) {
-            return Ok(json.clone());
-        }
-        let json = match self.open(path, kind) {
-            Opened::Missing => None,
-            Opened::NotRegular if kind == Kind::ProjectJson => None,
+        let (key, opened) = self.opened_at(path, kind);
+        match opened {
+            Opened::Missing => Ok(None),
+            Opened::NotRegular if kind == Kind::ProjectJson => Ok(None),
             Opened::NotRegular => {
                 let reason = format!("{} is a symbolic link or not a regular file; it is not read", shown(path));
-                return Err(Error::new(ErrorCode::PackagePath, reason));
+                Err(Error::new(ErrorCode::PackagePath, reason))
             }
-            Opened::TooLarge(size) => return Err(too_large(path, size)),
-            Opened::Failed(e) => return Err(not_found(format!("{}: {e}", shown(path)))),
+            Opened::TooLarge(size) => Err(too_large(path, size)),
+            Opened::Failed(e) => Err(not_found(format!("{}: {e}", shown(path)))),
             Opened::Read(bytes) => {
-                let json = std::str::from_utf8(&bytes).ok().and_then(|text| haus::json::parse(text).ok());
-                Some(Rc::new(json.unwrap_or(Json::Null)))
+                let json = self.json.entry(key).or_insert_with(|| {
+                    let json = std::str::from_utf8(&bytes).ok().and_then(|text| haus::json::parse(text).ok());
+                    Rc::new(json.unwrap_or(Json::Null))
+                });
+                Ok(Some(json.clone()))
             }
-        };
-        self.json.insert((path.to_owned(), kind), json.clone());
-        Ok(json)
+        }
     }
 
     /// The manifest of the package in `dir` (a real path), and its text.
@@ -426,4 +465,62 @@ fn not_found(reason: String) -> Error {
 fn too_large(path: &Path, size: u64) -> Error {
     let reason = format!("{} has {size} bytes, more than 1 MiB; it is not read", shown(path));
     Error::new(ErrorCode::FileTooLarge, reason)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
+    thread_local! {
+        /// Every file opened on this thread, in order.
+        pub(crate) static OPENED: RefCell<Vec<PathBuf>> = const { RefCell::new(vec![]) };
+    }
+
+    /// A file needed in two roles is read once, by its real path (spec
+    /// §13.3): `app/package.json` is a link to `app/x.schema.haus`, which
+    /// `app/a.schema.haus` imports, and the project's `package.json` is
+    /// read for the package it imports too.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_in_two_roles_is_read_once() {
+        use crate::{NodeModules, Schema};
+        use haus::ErrorCode;
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("app");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("x.schema.haus"), "type X = Int").unwrap();
+        fs::write(app.join("a.schema.haus"), "import ./x (X)\nimport @acme/money (Money)\ntype A = { x: X, m: Money }")
+            .unwrap();
+        symlink("x.schema.haus", app.join("package.json")).unwrap();
+        OPENED.with(|o| o.borrow_mut().clear());
+        let e = Schema::load(app.join("a.schema.haus"), &NodeModules).expect_err("x declares no packages");
+        // The project's package.json is the schema file's bytes: not JSON, so it declares nothing.
+        assert_eq!(e.code(), ErrorCode::UndeclaredPackage, "{e}");
+        let x = app.join("x.schema.haus").canonicalize().unwrap();
+        let opened = OPENED.with(|o| o.borrow().clone());
+        let x_opens = opened.iter().filter(|p| p.canonicalize().ok().as_ref() == Some(&x)).count();
+        assert_eq!(x_opens, 1, "{opened:?}");
+    }
+
+    /// Each use of a file read once keeps its own checks: a package's files
+    /// are never read through a link, and a manifest has its own limit.
+    #[cfg(unix)]
+    #[test]
+    fn each_use_keeps_its_checks() {
+        use super::{FileCache, Kind, Opened};
+        use std::fs;
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let (file, link) = (dir.path().join("x.schema.haus"), dir.path().join("schema.haus"));
+        fs::write(&file, "type X = Int\n".repeat(8000)).unwrap();
+        symlink("x.schema.haus", &link).unwrap();
+        let mut files = FileCache::new();
+        assert!(matches!(files.open(&file, Kind::Schema), Opened::Read(_)));
+        assert!(matches!(files.open(&link, Kind::PackageSchema), Opened::NotRegular));
+        assert!(matches!(files.open(&file, Kind::Manifest), Opened::TooLarge(104000)));
+        assert!(matches!(files.open(&link, Kind::ProjectJson), Opened::Read(_)));
+    }
 }

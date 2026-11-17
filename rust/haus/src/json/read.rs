@@ -1,6 +1,8 @@
 //! A strict JSON reader: RFC 8259 restricted to I-JSON (RFC 7493), as spec §16
 //! asks. Numbers keep their exact text, member names are unique, `\u`
-//! escapes pair their surrogates, and the limits of spec §7 apply.
+//! escapes pair their surrogates, and the depth and number limits of spec §7
+//! apply. Lengths of strings, keys, tags and bytes are checked on the haus
+//! value that results, by the reader of each form.
 
 use super::Json;
 use crate::parser::{is_bidi, is_control};
@@ -278,10 +280,9 @@ impl Reader<'_> {
                 None => return Err(self.fail_at(open, Code::UnterminatedString, "unclosed string")),
             }
         }
-        let max = self.limits.max_string_length;
-        if out.len() > max && out.chars().count() > max {
-            return Err(self.fail_at(open, Code::StringTooLong, format!("string longer than {max} characters")));
-        }
+        // Lengths are counted on the haus value that results (spec §16), by
+        // the reader of each form: a member name may be a key or a form's
+        // own (`"_tag"`), a string a string, a tag, bytes or a number.
         Ok(out)
     }
 

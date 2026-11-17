@@ -36,6 +36,21 @@ pub fn tagged_object<'k, const N: usize>(
     }
 }
 
+/// A record case whose record is a named type (spec §15: `Box BoxRec`): the
+/// record's members beside `"_tag"`, `{"_tag": "Box", "w": 1}`, as for `Box {
+/// w: Int32 }`. `record` is the record written with `e`, the tag's encoder.
+pub fn record_case(tag: &str, record: R) -> R {
+    match record? {
+        Json::Object(members) => {
+            Ok(Json::Object([member("_tag", Json::String(tag.to_owned()))].into_iter().chain(members).collect()))
+        }
+        other => Err(EncodeError::new(
+            ErrorCode::CannotEncode,
+            format!("{tag} takes a record, whose JSON is an object; found {}", super::de::describe(&other)),
+        )),
+    }
+}
+
 /// A case with `N` positional values: `{"_tag": "Empty"}`, `{"_tag": "Wrap",
 /// "value": 3}`, `{"_tag": "Point", "values": [1, 2]}`. The values are
 /// encoded inside the payload, a level of the haus value.

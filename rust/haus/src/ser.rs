@@ -528,12 +528,13 @@ fn check_text(s: &str, code: Code, limits: &Limits) -> W {
 }
 
 /// Whether a string is within the string limit.
-fn check_length(s: &str, limits: &Limits) -> W {
+pub(crate) fn check_length(s: &str, limits: &Limits) -> W {
     check_text(s, Code::StringTooLong, limits)
 }
 
-/// Whether a byte string's hex is within the string limit.
-fn check_bytes(b: &[u8], limits: &Limits) -> W {
+/// Whether a byte string's hex is within the string limit: two characters
+/// per byte, also where JSON spells them in base64 (spec §16).
+pub(crate) fn check_bytes(b: &[u8], limits: &Limits) -> W {
     if b.len() > limits.max_string_length / 2 {
         let reason = format!("byte string longer than {} characters", limits.max_string_length);
         return Err(EncodeError::new(Code::StringTooLong, reason));

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-from haus import Variant
+from haus import HausError, Variant
 from haus.schema import (
     FileResolver,
     HausSchemaFileError,
@@ -57,7 +58,7 @@ def rejects(text: str, reason: str, **kwargs: object) -> HausSchemaFileError:
         ("type B = { x: Int }\ntype A = < ...B >", "B is not a variant"),
         ("type B a = { x: a }\ntype A = { ...B }", "only a type without parameters can be spread"),
         ("type B = Stream { x: Int }\ntype A = { ...B }", "B is a Stream and can't be spread"),
-        ("type A = { ...Int }", "Int can't be spread"),
+        ("type A = { ...Int }", "Int is not a record, so it can't be spread here"),
         ("type A = < ...A >", "type A spreads itself"),
         ("type A = { x: Int, ...r }", "row parameters (...r)"),
         ("type A = { @deprecated(1) x: Int }", "@deprecated takes no argument or one string"),
@@ -170,6 +171,36 @@ type AlsoOld = { c: Client }
     assert (w.offset, w.end) == (0, len('@since("1.2")'))
 
 
+def test_a_record_case_with_a_field_tag_or_args_has_no_json_form() -> None:
+    text = """type Disc = { _tag: Int32 }
+type Alias = Disc
+type Page a = { _args: a }
+type Shape = < Odd { _tag: Int32 } | Circle Disc | Aliased Alias | Found (Page Int32) | Fine { tag: Int32 } >
+type Kept a = < Param a | Inline { _tag: a } >
+type Wrapped = < Some2 (Maybe Disc) | Res (Result Int32 Disc) >
+"""
+    f = parse_schema_file(text)
+    assert [(w.code, w.message, w.line, w.column) for w in f.warnings] == [
+        ("no-json-form", "Odd has a field named _tag, so it has no schema-based JSON form", 4, 16),
+        ("no-json-form", "Circle has a field named _tag, so it has no schema-based JSON form", 4, 38),
+        ("no-json-form", "Aliased has a field named _tag, so it has no schema-based JSON form", 4, 52),
+        ("no-json-form", "Found has a field named _args, so it has no schema-based JSON form", 4, 68),
+        ("no-json-form", "Inline has a field named _tag, so it has no schema-based JSON form", 5, 27),
+    ]
+    w = f.warnings[0]
+    assert (w.end - w.offset, w.hint) == (len("Odd"), "Rename the field, or use self-describing JSON.")
+    # Only a warning: the schema is valid, its other cases have JSON, and haus text has the case.
+    s = compile_schema(text)
+    assert s["Shape"].parse("Odd { _tag: 1 }") == Tagged("Odd", {"_tag": 1})
+    assert json.loads(s["Shape"].to_json(Tagged("Fine", {"tag": 1}))) == {"_tag": "Fine", "tag": 1}
+    with pytest.raises(HausError) as e:
+        s["Shape"].to_json(Tagged("Odd", {"_tag": 1}))
+    assert e.value.code == "no-json-form"
+    # The cases of imported files are warned about in those files.
+    resolver = MemoryResolver({"shapes": (text, None)})
+    assert parse_schema_file("import ./shapes (Shape)\ntype Root = Shape", resolver=resolver).warnings == ()
+
+
 def test_unknown_attributes_are_accepted_as_they_are() -> None:
     s = compile_schema('@x @x(1, "a", [True], { a: Some(1) },) type A = { @y @y n: Int }')
     assert s["A"].parse("{ n: 1 }") == {"n": 1}
@@ -192,6 +223,17 @@ class MemoryResolver:
         text, version = self.files[key]
         id = f"{key}@{version.split('.')[0]}" if version else f"app/{key}"
         return ResolvedModule(key, id, text, version)
+
+
+GEO = MemoryResolver(
+    {
+        "@acme/geo": (
+            "type Point = { x: Int, y: Int }\ntype Shape = < Circle Int | Square Int >\n"
+            "type Box a = { item: a }\ntype Id = String",
+            "1.0.0",
+        )
+    }
+)
 
 
 def test_imports() -> None:
@@ -267,6 +309,39 @@ def test_import_errors() -> None:
 
 
 # ── files and packages ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("import std/time (Date)\ntype A = < ...Date >", "Date is not a variant, so it can't be spread here"),
+        ("import std/time (Date)\ntype A = { ...Date }", "Date is not a record, so it can't be spread here"),
+        ("type A = { ...Array }", "Array is not a record, so it can't be spread here"),
+        ("import @acme/geo (Point)\ntype A = < ...Point >", "Point is not a variant, so it can't be spread here"),
+        ("import @acme/geo (Id)\ntype A = { ...Id }", "Id is not a record, so it can't be spread here"),
+        ("import @acme/geo (Box)\ntype A = { ...Box }", "Box has parameters (Box a)"),
+    ],
+)
+def test_spreading_a_known_type_that_cannot_be_spread_says_why(text: str, reason: str) -> None:
+    """The error is the spread, not the import: the type is known (spec §14)."""
+    e = rejects(text, reason, resolver=GEO)
+    assert e.code == "invalid-spread"
+    assert (e.line, e.column) == ((2, 15) if "\n" in text else (1, 15))
+
+
+def test_imported_records_and_variants_can_be_spread() -> None:
+    s = compile_schema(
+        "import @acme/geo (Point, Shape)\ntype P = { z: Int, ...Point }\ntype S = < Dot | ...Shape >",
+        resolver=GEO,
+    )
+    assert s["P"].parse("{ z: 1, x: 2, y: 3 }") == {"z": 1, "x": 2, "y": 3}
+    assert s["S"].parse("Circle(1)") == Tagged("Circle", (1,))
+    assert s["S"].parse("Dot") == Tagged("Dot")
+
+
+def test_a_spread_type_that_is_not_imported_is_unknown() -> None:
+    e = rejects("type A = { ...Date }", "unknown type Date; import it with: import std/time (Date)")
+    assert e.code == "unknown-type"
 
 
 def test_load_schema_with_files_and_packages(tmp_path: Path) -> None:

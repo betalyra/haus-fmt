@@ -12,7 +12,7 @@ type R = Result<Value, DecodeError>;
 /// an array, a string as a string, a number as a number with its literal
 /// normalized (`1E+05` is `1e5`), `true` / `false` as `True` / `False`, and
 /// `null` as `None`. The result nests at most `limits.max_depth`, and its
-/// keys are within the string limit. Fails if `limits.max_depth` is more
+/// strings and keys are within the string limit. Fails if `limits.max_depth` is more
 /// than [`crate::MAX_SUPPORTED_DEPTH`].
 pub fn import(json: &Json, limits: &Limits) -> R {
     import_at(json, limits, 0)
@@ -36,7 +36,7 @@ impl Import<'_> {
         match json {
             Json::Array(items) => self.items(items, depth),
             Json::Object(members) => self.members(members, depth),
-            scalar => Ok(scalar_value(scalar)),
+            scalar => scalar_value(scalar, self.limits),
         }
     }
 
@@ -56,14 +56,17 @@ impl Import<'_> {
     }
 }
 
-fn scalar_value(json: &Json) -> Value {
-    match json {
+fn scalar_value(json: &Json, limits: &Limits) -> R {
+    Ok(match json {
         Json::Bool(true) => tag("True"),
         Json::Bool(false) => tag("False"),
         Json::Number(n) => Value::Number(normalize_number(n)),
-        Json::String(s) => Value::String(s.clone()),
+        Json::String(s) => {
+            crate::ser::check_length(s, limits).map_err(crate::EncodeError::into_decode)?;
+            Value::String(s.clone())
+        }
         _ => tag("None"),
-    }
+    })
 }
 
 fn tag(name: &str) -> Value {

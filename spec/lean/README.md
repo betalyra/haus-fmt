@@ -12,16 +12,17 @@ and a reference parser that computes it.
 | [`Haus/Sound/`](Haus/Sound) | Proofs that the parser only accepts what the grammar allows |
 | [`Haus/Complete/`](Haus/Complete) | Proofs that the parser accepts everything the grammar allows |
 | [`Haus/Correct.lean`](Haus/Correct.lean) | Both together, and unambiguity |
+| [`Haus/DupKeys.lean`](Haus/DupKeys.lean) | Duplicate keys found by sorting (spec §7): the same answer as the parser's scan, in n log n comparisons |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
 | [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
 | [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does |
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new` |
-| [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique |
-| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner, and one package per name and injective ids |
+| [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique, that naming a record case's record changes nothing, that an older reader reads a newer writer's JSON (§13.3), and that the readers return no duplicate keys |
+| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, and name isolation |
 | [`Main.lean`](Main.lean) | `haus-ref`, the parser on the command line |
-| [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` and `--json-suite` |
+| [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` and `--json-suite`; a record case written by name keeps the name, and the model finds the record itself |
 
 It needs [elan](https://github.com/leanprover/elan) (`brew install elan-init`);
 the Lean version is pinned in `lean-toolchain`. No Mathlib.
@@ -92,6 +93,17 @@ By soundness, A1–A4 hold for everything the parser returns
 ([`Haus/Secure.lean`](Haus/Secure.lean): `parse_noBidi`, `parse_controls`,
 `parse_uniqueKeys`, `parse_bounded`).
 
+**Duplicate keys in n log n** (spec §7, design review D2), in
+[`Haus/DupKeys.lean`](Haus/DupKeys.lean). The reference parser checks each
+key against the keys before it (`scanDup`), which is quadratic. Sorting
+the keys and comparing neighbours (`keysDup`, a merge sort that counts its
+comparisons) reports a duplicate exactly when the parser's scan does
+(`keysDup_eq_scanDup`, `keysDup_iff`: exactly when the keys aren't
+distinct), in at most `n · (log₂ n + 2)` comparisons of two keys
+(`keysDup_cost`; `msort_cost`: `n ≤ 2^k` keys sort in `n · k`). Not done
+(the rest of P3): a reference parser that uses it, and a bound on the
+parser's steps as a whole.
+
 Both directions are proven one file per part of the parser: numbers and
 strings, whitespace and nested comments, byte strings, block strings, and
 values, records, arrays, payloads and files together (they call each
@@ -118,7 +130,12 @@ formula, which doesn't use the month-length table the rules use.
 [`Haus/Time/Spelling.lean`](Haus/Time/Spelling.lean) proves one spelling per
 value: two valid strings of a type are the same value exactly when they
 differ at most in trailing zeros of a fraction (and, for instants, in the
-offset); `Date` and `YearMonth` have exactly one spelling.
+offset); `Date` and `YearMonth` have exactly one spelling. The offset zero
+has two spellings, `Z` and `+00:00` (`offset_same_iff`, `instant_offset_zero`):
+two `Instant`s are the same value (the same instant with the same offset)
+exactly when they differ at most in trailing zeros and in that
+(`instant_value_same_iff`). `-00:00` is no offset (`not_offset_minusZero`),
+so no `Instant` ends in it (`not_instant_minusZero`, `check_instant_minusZero`).
 
 **About the canonical form** (spec §12), in [`Haus/RoundTrip/`](Haus/RoundTrip):
 
@@ -222,6 +239,8 @@ normalized literals and its tags are tags, as every parsed value is
 | `schemaBased_round_trip` | If `decode env t v = .ok x` (`v` well formed) and `toJson env t x = .ok j`, then `fromJson env t j = .ok x` (§16.3) |
 | `schemaBased_injective` | Two values decoded with `t` (from well-formed values) with the same schema-based JSON are the same |
 | `toJson_error` | Writing a decoded value fails only for a record payload with a field named `_tag` or `_args` (§16.3) |
+| `record_case_named`, `record_case_ref` | Naming a record changes nothing (§15, design review B7): in a variant, the case `Tag T` with `T` a record through names (in parentheses, `type Disc = { … }`, an alias chain, an applied generic's instance) and `Tag { … }` written in place decode the same haus text, write the same schema-based JSON and read the same JSON, for every value and every fuel of the `Maybe` chains |
+| `positional_one_toJson`, `positional_one_fromJson`, `result_ok_toJson`, `result_ok_fromJson` | A type parameter never makes a record case: one positional argument, `Ok a` of `Result` included, is written as `{"_tag": …, "value": J}` and read from `value` alone, `J` the argument's own JSON, whatever its type (`Case.resolve_positional`) |
 | `base64_decode_encode`, `base64_encode_decode` | Base64 reads back, and only canonical base64 is read |
 | `hex_decode_encode`, `hex_encode_decode` | The same for lowercase hex (self-describing `_bytes`) |
 | `normalizeNumber_normal` | A normalized literal normalizes to itself, so a `Decimal` reads back unchanged |
@@ -233,12 +252,52 @@ normalized literals and its tags are tags, as every parsed value is
 | `JSON.hausJson_fits`, `toJson_fits` | The self-describing and the schema-based JSON of a value within the haus limits (`Value.fits`) are within the JSON limits (`JSON.Fits`; nesting `4 · maxDepth + 2` with the envelope, `4 · maxDepth + 1` without), when the limits leave room for the forms' member names and numbers (`SelfDescribingOk`, `SchemaBasedOk`: true of the defaults) |
 | `JSON.readHausJson_writeHausJson`, `readJson_write`, `hausJson_text_parsed`, `schemaBased_text_parsed` | The self-describing and schema-based round trips through JSON text, for a value without duplicate keys within the limits |
 | `JSON.readHausJsonLines_writeHausJsonLines`, `hausJsonLines_text_parsed` | The same for self-describing JSON Lines, one envelope per line: a parsed file's values read back from them |
+| `older_reads_newer`, `older_reads_newer_name`, `older_reads_newer_parsed` | An older reader accepts a newer writer (§13.3, §16.3): when `env'` is a later minor version of `env` (`Env.Minor`) and `t'` the newer version of `t` (`MinorTy`), the older reader reads the newer writer's schema-based JSON of every value `t'` decodes (well formed, no duplicate keys: every parsed value) without an error, as the value with each case the older schema doesn't list read as an unknown value and each field it doesn't list left out (`Older`); for every fuel `F` of the `Maybe` chains, the same on both sides |
+| `JSON.toValue_uniqueKeys`, `JSON.readImport_uniqueKeys` | What the JSON import returns has no duplicate keys (`UniqueKeys`), as `parse_uniqueKeys` says of the haus parser |
+| `JSON.fromSelfDescribing_uniqueKeys`, `JSON.fromHausJson_uniqueKeys`, `JSON.readHausJson_uniqueKeys`, `JSON.readHausJsonLines_uniqueKeys` | The same for the self-describing reader, without and with the envelope, from text and from JSON Lines |
+| `json_paths_agree` | A value's self-describing JSON read back and decoded with `t` gives what its schema-based JSON read with `t` gives |
+
+A case is a record case when it is written `Tag { … }` or when its one
+argument, written as a name or in parentheses, is a record through
+references (`Case.resolve`, `recordOf?`); `caseOf?` returns the resolved
+case, so decoding, the rules and both JSON directions see record cases only
+as `Tag { … }`, and the round trip covers record cases written by name. Not
+proven: that `toJson`'s choice of fuel (`nullFuel`, from the sizes of the
+types, which a record written in place and its name don't share) doesn't
+change the result; `record_case_named` holds for each fuel.
+[`Json/RecordCases.lean`](Haus/Json/RecordCases.lean) has the theorems.
 
 The schema-based round trip goes by induction on the rules of decoding (`Dec`),
 with `floatLaw` for floats. A `Maybe` writes `None` as `null` only when its
 argument's JSON can't be `null` (`nullArg?_next`, `toJsonC_null`), whatever
 the rule for cycles of `Maybe`s decides, so `null` is never ambiguous.
 `#print axioms` shows only `propext`, `Classical.choice` and `Quot.sound`.
+
+**A newer writer, an older reader** (§13.3), in
+[`Json/Evolution.lean`](Haus/Json/Evolution.lean). `Env.Minor env env'`
+is §13.3's minor version: every type of `env` is defined in `env'` as the old
+definition with new optional fields in open records (`MinorFields.add`) and
+new tags, of any payload, in open variants (`MinorCases.add`), anywhere
+inside, and `env'` may define new types. A new field key or tag is not one
+the record or variant already has after it; a new tag is a tag. A
+`closed < None | Some a >` (the prelude's `Maybe`) keeps its argument as it
+is written (a name in it may change). `older_reads_newer` goes by induction
+on the newer decoding, like the round trip; the two schemas follow the same
+names (`whnf_minor`, `recordOf?_minor`), take the same `Bool`
+(`boolTy_minor`), the same origins and the same cases and fields
+(`caseOf?_minor`, `find_minorFields`), and write `null` for the same
+`Maybe`s (`nullArg?_minor`). Each schema follows names with its own fuel,
+`env.fuel`, which grows with the number of definitions; it is enough for
+every name chain ([`Json/Fuel.lean`](Haus/Json/Fuel.lean): `whnfNames_nodup`,
+a chain that ends visits each name once, so `whnf_enough`), so more fuel
+gives the same results (`whnf_fuel`, `recordOf?_fuel`, `lastRef_fuel`,
+`reachesBool_fuel`). Types are compared structurally (`Ty.beq`, lawful);
+the derived `BEq` was a `partial` function nothing could be proven about.
+Not proven: that `toJson`'s and `fromJson`'s chain fuel (`nullFuel`, from the
+sizes of the types and definitions, which grow from one minor version to the
+next) is enough for every chain of `Maybe`s, so the theorem is stated for one
+fuel `F` on both sides; and a `Maybe`'s argument written in place (`Maybe <
+A | B >`, rather than a name) can't grow in the model.
 
 **About versions** (spec §10), in [`Haus/Version.lean`](Haus/Version.lean).
 A `Version` is what a version fixes: its files, its canonical form, its
@@ -259,3 +318,24 @@ the result (`one_package_per_name`, `resolveIn_ok`); a copy is one package
 with another only if its `package.haus`, `schema.haus` and imports are the
 same (`addClass_same`); and type ids `@org/name@N#Type` are injective
 (`typeId_injective`).
+
+The resolver sees the tree only through `look`, which tells kinds, names,
+links and real paths but never a file's bytes, and `openFile`, which records
+each file it opens. Properties of whole runs are proven a function at a
+time, with Hoare-style triples for the resolver's monad (`Run.lean`) and
+`load` by induction on its fuel:
+
+| Theorem | Says |
+|---|---|
+| `reads_allowed` | Every file a run opens is a package's own `package.haus`, `schema.haus` or `package.json` (a regular file directly in a directory with a `package.haus`, never through a link), a regular file whose real path ends in `.schema.haus` (or the root), or the real path of a `package.json` in a directory above a schema file (R7, P1) |
+| `resolveIn_same`, `resolveIn_other_files` | Two trees that differ only in the bytes of files the run doesn't open give the same result, message and reads; so changing a file outside the read set changes nothing (R7, P2) |
+| `reads_nodup`, `reads_length_le` | Each file is opened at most once, so at most as many as the tree has (R4) |
+| `count_le`, `openFile_spec` | At most `Limits.files` schema files, the root included; the bytes of a file opened are within its limit, or the run fails before using them (R4) |
+| `lookups_le`, `lookups_le_files` | The searches for a package are at most the imports of the files loaded: files × the most imports in one file (R4) |
+| `candidates_from` | A package found for `@org/name` is one given explicitly with that name, or what the npm walk finds (R5) |
+| `npmLookup_eq`, `npmLookup_isolated`, `walk_mem`, `walk_skips_scope` | The walk reads no file and depends only on the real paths of `D/node_modules/@org/name`, for the directories `D` from the importer's up that §13.3 keeps: never `node_modules/@scope/node_modules` (R5, F1). Node's walk does try it (`nodeWalk_scope`) and finds a planted package (`#guard`) |
+
+Not proven: that the result doesn't depend on the order of imports (R3) and
+that a folder of packages never changes a successful result (R6). With two
+mistakes in one schema, the error reported does depend on the order
+(`Order.lean`); the spec doesn't say which one is reported.

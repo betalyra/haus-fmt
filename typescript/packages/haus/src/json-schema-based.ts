@@ -381,7 +381,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
         if (typeof j !== "string") return mismatch("a base64 string", j, at)
         const data = fromBase64(j)
         if (data === undefined) return fail("expected base64 with padding (RFC 4648 §4)", at, "invalid-base64")
-        return data.length * 2 > l.maxStringLength ? fail(`byte string longer than ${l.maxStringLength} hex digits`, at, "string-too-long") : bytesValue(data)
+        return data.length * 2 > l.maxStringLength ? fail(`byte string longer than ${l.maxStringLength} characters`, at, "string-too-long") : bytesValue(data)
       }
       case "bool":
         return typeof j === "boolean" ? variant(j ? "True" : "False") : mismatch("true or false", j, at)

@@ -52,9 +52,12 @@
  * (`my-app/src/order#Root`), or without one by their path from the resolver's
  * `base`; their relative imports can't reach into a package directory.
  *
- * Files are read again only when they change (by device, inode, size and
- * modification time), so a long-running process such as a language server
- * sees a reinstalled package.
+ * A resolver reads each file at most once, by its real path, also when one
+ * file is needed in two roles (a project's package.json that is a link to a
+ * schema file): every use sees the same bytes (spec §13.3). The checks of each
+ * role (a regular file, not a link, its size) still apply to each use. Make
+ * one resolver per schema (schemaOptions does), so a long-running process
+ * such as a language server sees a reinstalled package.
  */
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, statSync, type BigIntStats } from "node:fs"
 import { basename, dirname, join, relative, resolve, sep } from "node:path"
@@ -105,29 +108,41 @@ type Read =
 
 const NOFOLLOW: number | undefined = constants.O_NOFOLLOW
 const NONBLOCK: number = constants.O_NONBLOCK ?? 0
+/** The most bytes read from any file: the largest limit, so one read serves every role (spec §13.3). */
+const MAX_READ = Math.max(MAX_MANIFEST_BYTES, MAX_SCHEMA_BYTES, MAX_PACKAGE_JSON_BYTES)
 
-/** The text of each file read, by path, while its device, inode, size and times stay the same. */
-const reads = new Map<string, { readonly stamp: string; readonly text: string }>()
-const stampOf = (s: BigIntStats) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`
-
-const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code
+/** A file opened: not a regular file, or one with its size and, unless it is larger than MAX_READ, its text. */
+type Opened =
+  | { readonly kind: "special" }
+  | { readonly kind: "file"; readonly size: bigint; readonly text: string | undefined }
 
 /**
- * Read `path` if it is a regular file of at most `limit` bytes. Unless
- * `follow`, a symbolic link at its last component is not followed (and not
- * read): `link`. It is opened without following links (O_NOFOLLOW) and
- * without blocking (O_NONBLOCK, so a FIFO can't stall the open); the type and
- * size are checked on the open handle, and the text read from it, so the file
- * checked is the file read. Where O_NOFOLLOW doesn't exist (Windows), the path
- * is checked with lstat first and the handle must be the same file.
+ * Reads files for one schema (a resolver): `read(path, limit, follow)` reads
+ * `path` if it is a regular file of at most `limit` bytes. Unless `follow`, a
+ * symbolic link at its last component is not followed (and not read): `link`.
+ * Each file is opened at most once, by its real path, whatever roles it has
+ * (spec §13.3); each use checks its own limit.
  */
-const readRegular = (path: string, limit: number, follow = false): Read => {
+type Reader = (path: string, limit: number, follow?: boolean) => Read
+
+const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code
+const isMissing = (e: unknown): boolean => errno(e) === "ENOENT" || errno(e) === "ENOTDIR"
+
+/**
+ * Open the file at `path`, whose last component must not be a link, and read
+ * it. It is opened without following links (O_NOFOLLOW) and without blocking
+ * (O_NONBLOCK, so a FIFO can't stall the open); the type and size are checked
+ * on the open handle, and the text read from it, so the file checked is the
+ * file read. Where O_NOFOLLOW doesn't exist (Windows), the path is checked
+ * with lstat first and the handle must be the same file.
+ */
+const openRegular = (path: string): Opened | { readonly kind: "missing" } | { readonly kind: "link" } => {
   let before: BigIntStats | undefined
-  if (!follow && NOFOLLOW === undefined) {
+  if (NOFOLLOW === undefined) {
     try {
       before = lstatSync(path, { bigint: true })
     } catch (e) {
-      if (errno(e) === "ENOENT" || errno(e) === "ENOTDIR") return { kind: "missing" }
+      if (isMissing(e)) return { kind: "missing" }
       throw e
     }
     if (before.isSymbolicLink()) return { kind: "link" }
@@ -135,12 +150,12 @@ const readRegular = (path: string, limit: number, follow = false): Read => {
   }
   let fd: number
   try {
-    fd = openSync(path, constants.O_RDONLY | (follow ? 0 : (NOFOLLOW ?? 0)) | NONBLOCK)
+    fd = openSync(path, constants.O_RDONLY | (NOFOLLOW ?? 0) | NONBLOCK)
   } catch (e) {
     const code = errno(e)
-    if (code === "ENOENT" || code === "ENOTDIR") return { kind: "missing" }
+    if (isMissing(e)) return { kind: "missing" }
     // O_NOFOLLOW on a link: ELOOP (Linux, macOS), EMLINK (FreeBSD), EFTYPE (NetBSD).
-    if (!follow && (code === "ELOOP" || code === "EMLINK" || code === "EFTYPE")) return { kind: "link" }
+    if (code === "ELOOP" || code === "EMLINK" || code === "EFTYPE") return { kind: "link" }
     if (code === "EISDIR" || code === "ENXIO" || code === "EACCES" || code === "EPERM") return { kind: "special" }
     throw e
   }
@@ -148,11 +163,8 @@ const readRegular = (path: string, limit: number, follow = false): Read => {
     const stats = fstatSync(fd, { bigint: true })
     if (before !== undefined && (stats.ino !== before.ino || stats.dev !== before.dev)) return { kind: "link" }
     if (!stats.isFile()) return { kind: "special" }
-    if (stats.size > BigInt(limit)) return { kind: "large", size: stats.size }
-    const stamp = stampOf(stats)
-    const hit = reads.get(path)
-    if (hit?.stamp === stamp) return { kind: "file", text: hit.text }
-    // Read from the handle, never more than the limit (the file may grow meanwhile).
+    if (stats.size > BigInt(MAX_READ)) return { kind: "file", size: stats.size, text: undefined }
+    // Read from the handle, never more than MAX_READ (the file may grow meanwhile).
     const chunks: Buffer[] = []
     let total = 0
     for (;;) {
@@ -160,14 +172,43 @@ const readRegular = (path: string, limit: number, follow = false): Read => {
       const n = readSync(fd, chunk, 0, chunk.length, null)
       if (n === 0) break
       total += n
-      if (total > limit) return { kind: "large", size: BigInt(total) }
+      if (total > MAX_READ) return { kind: "file", size: BigInt(total), text: undefined }
       chunks.push(chunk.subarray(0, n))
     }
-    const text = Buffer.concat(chunks).toString("utf8")
-    reads.set(path, { stamp, text })
-    return { kind: "file", text }
+    return { kind: "file", size: BigInt(total), text: Buffer.concat(chunks).toString("utf8") }
   } finally {
     closeSync(fd)
+  }
+}
+
+/**
+ * A Reader with its own files, by real path: what one schema reads.
+ * `onOpen` is called with the real path of each file opened.
+ */
+const reader = (onOpen?: (path: string) => void): Reader => {
+  const files = new Map<string, Opened>()
+  return (path, limit, follow = false) => {
+    // The real path: the file's own (follow), or its directory's and its name, a link not followed.
+    let key: string
+    try {
+      key = follow ? realpathSync(path) : join(realpathSync(dirname(resolve(path))), basename(path))
+    } catch (e) {
+      if (isMissing(e)) return { kind: "missing" }
+      throw e
+    }
+    let opened = files.get(key)
+    if (opened === undefined) {
+      const o = openRegular(key)
+      if (o.kind === "missing") return o
+      // A link at a real path: it changed since. Followed, it is not this file.
+      if (o.kind === "link") return follow ? { kind: "special" } : o
+      onOpen?.(key)
+      files.set(key, o)
+      opened = o
+    }
+    if (opened.kind === "special") return opened
+    if (opened.text === undefined || opened.size > BigInt(limit)) return { kind: "large", size: opened.size }
+    return { kind: "file", text: opened.text }
   }
 }
 
@@ -213,14 +254,14 @@ const notRegular = (what: string, path: string, read: Read): never => {
  * ModuleError with code `package-manifest`, or `package-path` for a link or
  * a file that isn't regular; a plain Error when there is no manifest.
  */
-export function readManifest(path: string): Manifest {
+export function readManifest(path: string, read: Reader = reader()): Manifest {
   const dir = real(dirname(resolve(path)))
   const file = join(dir, MANIFEST)
-  const read = readRegular(file, MAX_MANIFEST_BYTES)
-  if (read.kind === "missing") throw new Error(`${shown(dir)} is not a schema package: it has no ${MANIFEST}`)
-  if (read.kind === "link" || read.kind === "special") return notRegular("the manifest", file, read)
-  if (read.kind === "large") return badManifest(file, `it is larger than ${MAX_MANIFEST_BYTES / 1024} KiB`)
-  const text = read.text
+  const got = read(file, MAX_MANIFEST_BYTES)
+  if (got.kind === "missing") throw new Error(`${shown(dir)} is not a schema package: it has no ${MANIFEST}`)
+  if (got.kind === "link" || got.kind === "special") return notRegular("the manifest", file, got)
+  if (got.kind === "large") return badManifest(file, `it is larger than ${MAX_MANIFEST_BYTES / 1024} KiB`)
+  const text = got.text
   let values
   try {
     values = parseAll(text)
@@ -257,16 +298,16 @@ type PackageJson =
  * other files: a regular file, never a link (`package-path`). Larger than
  * 1 MiB: `file-too-large`.
  */
-const readPackageJson = (dir: string): PackageJson => {
+const readPackageJson = (dir: string, read: Reader): PackageJson => {
   const path = join(dir, "package.json")
   const ofPackage = present(join(dir, MANIFEST))
-  const read = readRegular(path, MAX_PACKAGE_JSON_BYTES, !ofPackage)
-  if (read.kind === "missing") return { kind: "missing" }
-  if (read.kind === "link") return notRegular("the package.json", path, read)
-  if (read.kind === "special") return ofPackage ? notRegular("the package.json", path, read) : { kind: "invalid" }
-  if (read.kind === "large") throw new ModuleError("file-too-large", `${shown(path)} is larger than ${MAX_PACKAGE_JSON_BYTES / 1024 / 1024} MiB. It is not read`)
+  const got = read(path, MAX_PACKAGE_JSON_BYTES, !ofPackage)
+  if (got.kind === "missing") return { kind: "missing" }
+  if (got.kind === "link") return notRegular("the package.json", path, got)
+  if (got.kind === "special") return ofPackage ? notRegular("the package.json", path, got) : { kind: "invalid" }
+  if (got.kind === "large") throw new ModuleError("file-too-large", `${shown(path)} is larger than ${MAX_PACKAGE_JSON_BYTES / 1024 / 1024} MiB. It is not read`)
   try {
-    const json: unknown = JSON.parse(read.text)
+    const json: unknown = JSON.parse(got.text)
     return typeof json === "object" && json !== null && !Array.isArray(json) ? { kind: "json", json: json as Record<string, unknown> } : { kind: "invalid" }
   } catch {
     return { kind: "invalid" }
@@ -274,9 +315,9 @@ const readPackageJson = (dir: string): PackageJson => {
 }
 
 /** The `name` of the package.json in `dir`, if it can be read. */
-const npmName = (dir: string): string | undefined => {
+const npmName = (dir: string, read: Reader): string | undefined => {
   try {
-    const p = readPackageJson(dir)
+    const p = readPackageJson(dir, read)
     return p.kind === "json" && typeof p.json.name === "string" && p.json.name !== "" ? p.json.name : undefined
   } catch {
     return undefined
@@ -295,8 +336,8 @@ const declares = (json: Readonly<Record<string, unknown>>, field: string, name: 
 // ── packages and files ───────────────────────────────────────
 
 /** The manifest of the package whose schema is the file at `path` (absolute), if it is one. */
-const packageOf = (path: string): Manifest | undefined =>
-  basename(path) === PACKAGE_SCHEMA && present(join(dirname(path), MANIFEST)) ? readManifest(join(dirname(path), MANIFEST)) : undefined
+const packageOf = (path: string, read: Reader): Manifest | undefined =>
+  basename(path) === PACKAGE_SCHEMA && present(join(dirname(path), MANIFEST)) ? readManifest(join(dirname(path), MANIFEST), read) : undefined
 
 /** The package directory a file is in, if any: the nearest directory above it with a manifest. */
 const packageDirOf = (path: string): string | undefined => {
@@ -305,9 +346,9 @@ const packageDirOf = (path: string): string | undefined => {
 }
 
 /** The name of the package in `dir`, or the directory if its manifest can't be read. */
-const packageName = (dir: string): string => {
+const packageName = (dir: string, read: Reader): string => {
   try {
-    return readManifest(join(dir, MANIFEST)).name
+    return readManifest(join(dir, MANIFEST), read).name
   } catch {
     return shown(dir)
   }
@@ -321,12 +362,12 @@ const stem = (path: string) => path.replaceAll(sep, "/").replace(/\.schema\.haus
  * and otherwise its path from `base` (default: its own directory, so just its
  * name). Different files get different ids as long as they share a `base`.
  */
-export function identify(path: string, base: string = dirname(resolve(path))): string {
+export function identify(path: string, base: string = dirname(resolve(path)), read: Reader = reader()): string {
   const file = resolve(path)
-  const manifest = packageOf(file)
+  const manifest = packageOf(file, read)
   if (manifest) return `${manifest.name}@${manifest.version.split(".")[0]}`
   for (const dir of ancestors(dirname(file))) {
-    const name = npmName(dir)
+    const name = npmName(dir, read)
     if (name !== undefined) return `${name}/${stem(relative(dir, file))}`
   }
   return stem(relative(base, file))
@@ -421,6 +462,11 @@ export interface NodeResolverOptions {
    * packages given in `packages` and `folders` exist.
    */
   readonly npm?: boolean
+  /**
+   * Called with the real path of each file the resolver opens; each is opened
+   * at most once (spec §13.3). For tests and tools that list what a schema read.
+   */
+  readonly onOpen?: (path: string) => void
 }
 
 /** The packages given explicitly, by manifest name; read when the first package is resolved. */
@@ -438,16 +484,16 @@ interface Explicit {
 }
 
 /** The text of the package's `schema.haus`, if it is a regular file that can be read. */
-const schemaText = (m: Manifest): string | undefined => {
-  const read = readRegular(join(m.dir, PACKAGE_SCHEMA), MAX_SCHEMA_BYTES)
-  return read.kind === "file" ? read.text : undefined
+const schemaText = (m: Manifest, read: Reader): string | undefined => {
+  const got = read(join(m.dir, PACKAGE_SCHEMA), MAX_SCHEMA_BYTES)
+  return got.kind === "file" ? got.text : undefined
 }
 
 /** Copies of one package: their package.haus and schema.haus are the same, byte for byte. */
-const sameFiles = (a: Manifest, b: Manifest): boolean => {
+const sameFiles = (a: Manifest, b: Manifest, read: Reader): boolean => {
   if (a.dir === b.dir) return true
-  const text = schemaText(a)
-  return a.text === b.text && text !== undefined && text === schemaText(b)
+  const text = schemaText(a, read)
+  return a.text === b.text && text !== undefined && text === schemaText(b, read)
 }
 
 const configError = (message: string): never => {
@@ -501,23 +547,23 @@ const given = (base: string, options: NodeResolverOptions): Given => {
 }
 
 /** Read the manifests of the packages given. A given directory's must be valid; a folder's invalid ones are noted. */
-const explicitPackages = ({ dirs, named, scanned }: Given): Explicit => {
+const explicitPackages = ({ dirs, named, scanned }: Given, read: Reader): Explicit => {
   const clashes = new Map<string, string>()
   const add = (into: Map<string, Manifest>, manifest: Manifest) => {
     const first = into.get(manifest.name)
     if (first === undefined) into.set(manifest.name, manifest)
-    else if (!clashes.has(manifest.name) && !sameFiles(first, manifest)) {
+    else if (!clashes.has(manifest.name) && !sameFiles(first, manifest, read)) {
       clashes.set(manifest.name, `two packages are named ${manifest.name}: ${quoteText(first.version)} in ${shown(first.dir)} and ${quoteText(manifest.version)} in ${shown(manifest.dir)}`)
     }
   }
   const givenByName = new Map<string, Manifest>()
-  for (const dir of dirs) add(givenByName, readManifest(join(dir, MANIFEST)))
+  for (const dir of dirs) add(givenByName, readManifest(join(dir, MANIFEST), read))
   const found = new Map<string, Manifest>()
   const invalid: string[] = []
   for (const dir of scanned) {
     let manifest: Manifest
     try {
-      manifest = readManifest(join(dir, MANIFEST))
+      manifest = readManifest(join(dir, MANIFEST), read)
     } catch (e) {
       invalid.push(`${shown(dir)} (${e instanceof Error ? e.message : String(e)})`)
       continue
@@ -527,7 +573,7 @@ const explicitPackages = ({ dirs, named, scanned }: Given): Explicit => {
   }
   const misnamed = new Map<string, string>()
   for (const [name, dir] of named) {
-    const m = readManifest(join(dir, MANIFEST))
+    const m = readManifest(join(dir, MANIFEST), read)
     if (m.name !== name) misnamed.set(name, `${shown(dir)} holds the package ${m.name}, not ${name}`)
   }
   return { given: givenByName, found, clashes, misnamed, invalid }
@@ -536,24 +582,24 @@ const explicitPackages = ({ dirs, named, scanned }: Given): Explicit => {
 // ── the resolver ─────────────────────────────────────────────
 
 /** The schema of the package in `manifest.dir`, imported as `module`, after the checks of spec §13.3. */
-const packageSchema = (manifest: Manifest, module: string): ResolvedModule => {
+const packageSchema = (manifest: Manifest, module: string, read: Reader): ResolvedModule => {
   if (manifest.name !== module) throw new Error(`${shown(manifest.dir)} holds the package ${manifest.name}, not ${module}`)
   // The version npm gives the package, where it gives one (SHOULD, spec §13.3). Quoted only when it is a version.
-  const npm = readPackageJson(manifest.dir)
+  const npm = readPackageJson(manifest.dir, read)
   const npmVersion = npm.kind === "json" ? npm.json.version : undefined
   if (typeof npmVersion === "string" && npmVersion !== manifest.version) {
     const theirs = SEMVER.test(npmVersion) ? `version ${quoteText(npmVersion)}` : "a version that is not a semantic version"
     throw new ModuleError("package-version", `${manifest.name}: its package.haus says version ${quoteText(manifest.version)}, its package.json ${theirs} (${shown(manifest.dir)})`)
   }
   const key = join(manifest.dir, PACKAGE_SCHEMA)
-  const read = readRegular(key, MAX_SCHEMA_BYTES)
-  if (read.kind === "missing") throw new Error(`${manifest.name} has no ${PACKAGE_SCHEMA} next to its manifest (${shown(manifest.dir)})`)
-  if (read.kind === "link" || read.kind === "special") return notRegular(`${manifest.name}: its ${PACKAGE_SCHEMA}`, key, read)
-  if (read.kind === "large") throw new ModuleError("file-too-large", `${manifest.name}: its ${PACKAGE_SCHEMA} is larger than ${MAX_SCHEMA_BYTES / 1024 / 1024} MiB. It is not read`)
+  const got = read(key, MAX_SCHEMA_BYTES)
+  if (got.kind === "missing") throw new Error(`${manifest.name} has no ${PACKAGE_SCHEMA} next to its manifest (${shown(manifest.dir)})`)
+  if (got.kind === "link" || got.kind === "special") return notRegular(`${manifest.name}: its ${PACKAGE_SCHEMA}`, key, got)
+  if (got.kind === "large") throw new ModuleError("file-too-large", `${manifest.name}: its ${PACKAGE_SCHEMA} is larger than ${MAX_SCHEMA_BYTES / 1024 / 1024} MiB. It is not read`)
   return {
     key,
     id: `${manifest.name}@${manifest.version.split(".")[0]}`,
-    text: read.text,
+    text: got.text,
     version: manifest.version,
     package: manifest.name,
     manifest: manifest.text,
@@ -567,11 +613,11 @@ const packageSchema = (manifest: Manifest, module: string): ResolvedModule => {
  * package.json above them that has a `name` or a dependency field. Throws
  * `undeclared-package` when it doesn't. Checked before anything is looked for.
  */
-const checkDeclared = (module: string, from: string): void => {
+const checkDeclared = (module: string, from: string, read: Reader): void => {
   const dir = dirname(from)
-  const pkg = packageOf(from)
+  const pkg = packageOf(from, read)
   if (pkg !== undefined) {
-    const own = readPackageJson(dir)
+    const own = readPackageJson(dir, read)
     if (own.kind === "json" && DECLARING.some((f) => declares(own.json, f, module))) return
     throw new ModuleError(
       "undeclared-package",
@@ -581,7 +627,7 @@ const checkDeclared = (module: string, from: string): void => {
     )
   }
   for (const d of ancestors(dir)) {
-    const p = readPackageJson(d)
+    const p = readPackageJson(d, read)
     if (p.kind === "missing") continue
     // Not a project's: a marker such as { "type": "module" }.
     if (p.kind === "json" && !Object.hasOwn(p.json, "name") && !ALL_DEPENDENCIES.some((f) => Object.hasOwn(p.json, f))) continue
@@ -601,11 +647,16 @@ const checkDeclared = (module: string, from: string): void => {
  * don't exist.
  */
 export function nodeResolver(options: NodeResolverOptions = {}): ModuleResolver {
+  return resolverReading(options, reader(options.onOpen))
+}
+
+/** A Node resolver that reads with `read`, shared with whoever identifies the root file. */
+const resolverReading = (options: NodeResolverOptions, read: Reader): ModuleResolver => {
   const base = resolve(options.base ?? process.cwd())
   const npm = options.npm ?? true
   const setup = given(base, options)
   let explicit: Explicit | undefined
-  const packages = (): Explicit => (explicit ??= explicitPackages(setup))
+  const packages = (): Explicit => (explicit ??= explicitPackages(setup, read))
   const notFound = (message: string, ex: Explicit): never => {
     throw new Error(ex.invalid.length === 0 ? message : `${message}; these packages could not be read: ${ex.invalid.join(", ")}`)
   }
@@ -613,7 +664,7 @@ export function nodeResolver(options: NodeResolverOptions = {}): ModuleResolver 
   const relativeFile = (module: string, from: string | undefined, origin: string | undefined): ResolvedModule => {
     // A package is one file: its schema imports other packages by name (spec §13.3).
     const pkg = from === undefined ? undefined : (packageDirOf(resolve(from)) ?? (origin ? packageDirOf(origin) : undefined))
-    if (pkg !== undefined) throw new ModuleError("package-path", `the schema of ${packageName(pkg)} can't import files, only packages by name`)
+    if (pkg !== undefined) throw new ModuleError("package-path", `the schema of ${packageName(pkg, read)} can't import files, only packages by name`)
     const dir = origin ? dirname(origin) : base
     const path = resolve(dir, module + EXTENSION)
     // An application's file doesn't reach into a package: it imports the package by name.
@@ -623,11 +674,11 @@ export function nodeResolver(options: NodeResolverOptions = {}): ModuleResolver 
     if (!existsSync(path) || !spelled(dir, module + EXTENSION)) throw new Error(`file not found: ${shown(path)}`)
     const key = realpathSync(path)
     if (!key.endsWith(EXTENSION)) throw new Error(`${shown(path)} is not a schema file: its real path doesn't end in ${EXTENSION}. It is not read`)
-    const read = readRegular(key, MAX_SCHEMA_BYTES)
-    if (read.kind === "missing" || read.kind === "link") throw new Error(`file not found: ${shown(path)}`)
-    if (read.kind === "special") throw new Error(`${shown(path)} is not a regular file. It is not read`)
-    if (read.kind === "large") throw new ModuleError("file-too-large", `${shown(path)} is larger than ${MAX_SCHEMA_BYTES / 1024 / 1024} MiB. It is not read`)
-    return { key, id: identify(key, base), text: read.text, path: key }
+    const got = read(key, MAX_SCHEMA_BYTES)
+    if (got.kind === "missing" || got.kind === "link") throw new Error(`file not found: ${shown(path)}`)
+    if (got.kind === "special") throw new Error(`${shown(path)} is not a regular file. It is not read`)
+    if (got.kind === "large") throw new ModuleError("file-too-large", `${shown(path)} is larger than ${MAX_SCHEMA_BYTES / 1024 / 1024} MiB. It is not read`)
+    return { key, id: identify(key, base, read), text: got.text, path: key }
   }
 
   return {
@@ -639,14 +690,14 @@ export function nodeResolver(options: NodeResolverOptions = {}): ModuleResolver 
       const clash = ex.clashes.get(module)
       if (clash !== undefined) throw new ModuleError("duplicate-package", clash)
       const own = ex.given.get(module)
-      if (own) return packageSchema(own, module)
+      if (own) return packageSchema(own, module, read)
       const wrong = ex.misnamed.get(module)
       if (wrong !== undefined) throw new Error(wrong)
       const inFolder = ex.found.get(module)
-      if (!npm) return inFolder ? packageSchema(inFolder, module) : notFound(`package not found: ${module} is not among the packages given`, ex)
+      if (!npm) return inFolder ? packageSchema(inFolder, module, read) : notFound(`package not found: ${module} is not among the packages given`, ex)
       const importer = origin ?? join(base, "_")
       // Given packages count as declared; others must be, before anything is looked for.
-      if (inFolder === undefined) checkDeclared(module, importer)
+      if (inFolder === undefined) checkDeclared(module, importer, read)
       // As Node: the first node_modules/@org/name above the importing file's real path.
       let installed: string | undefined
       for (const nm of nodeModules(importer)) {
@@ -659,20 +710,20 @@ export function nodeResolver(options: NodeResolverOptions = {}): ModuleResolver 
       if (inFolder !== undefined) {
         // A package found in a folder doesn't replace an installed one with other files (spec §13.3).
         if (installed !== undefined && present(join(installed, MANIFEST))) {
-          const m = readManifest(join(installed, MANIFEST))
-          if (m.name === module && !sameFiles(m, inFolder)) {
+          const m = readManifest(join(installed, MANIFEST), read)
+          if (m.name === module && !sameFiles(m, inFolder, read)) {
             throw new ModuleError(
               "duplicate-package",
               `two packages are named ${module}: ${quoteText(m.version)} installed in ${shown(m.dir)} and ${quoteText(inFolder.version)} in the folder of packages (${shown(inFolder.dir)})`,
             )
           }
         }
-        return packageSchema(inFolder, module)
+        return packageSchema(inFolder, module, read)
       }
       if (installed === undefined) return notFound(`package not found (no node_modules/${module} above ${shown(dirname(importer))})`, ex)
       // The first one found is the package: no looking further up.
       if (!present(join(installed, MANIFEST))) throw new Error(`${shown(installed)} is not a schema package: it has no ${MANIFEST}`)
-      return packageSchema(readManifest(join(installed, MANIFEST)), module)
+      return packageSchema(readManifest(join(installed, MANIFEST), read), module, read)
     },
   }
 }
@@ -680,5 +731,7 @@ export function nodeResolver(options: NodeResolverOptions = {}): ModuleResolver 
 /** Options for parseSchemaFile for the schema file at `path`: its key (real path), identity and a Node resolver. */
 export function schemaOptions(path: string, options: NodeResolverOptions = {}): ParseSchemaOptions {
   const key = real(path)
-  return { key, id: identify(key, resolve(options.base ?? dirname(key))), resolver: nodeResolver({ base: dirname(key), ...options }) }
+  // One reader for the schema: the root's identity and every import (each file read once).
+  const read = reader(options.onOpen)
+  return { key, id: identify(key, resolve(options.base ?? dirname(key)), read), resolver: resolverReading({ base: dirname(key), ...options }, read) }
 }

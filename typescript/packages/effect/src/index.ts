@@ -558,9 +558,12 @@ const jsonForm = (schema: Schema.Top, codecs: ReadonlyArray<AnyCodec>): JsonType
 /**
  * The limits for reading the schema-based JSON of values within `limits`: JSON may nest
  * `jsonDepth(maxDepth)` levels, enough for every haus value within `maxDepth`
- * (spec §16); the value is then held to `maxDepth` itself.
+ * (spec §16); the value is then held to `maxDepth` itself. Lengths count on
+ * the value, not on the JSON text (spec §16, Limits): a JSON string may be a
+ * number (`"19.90"`) or bytes in base64, so the reader doesn't count strings;
+ * `fromSchemaBasedJson` counts strings, keys, tags and bytes as haus values.
  */
-const jsonLimits = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth(limits.maxDepth ?? MAX_DEPTH) })
+const jsonLimits = (limits: Limits): Limits => ({ ...limits, maxDepth: jsonDepth(limits.maxDepth ?? MAX_DEPTH), maxStringLength: Infinity })
 
 /**
  * Encode a typed value as schema-based JSON (spec §16.3), a JSON value

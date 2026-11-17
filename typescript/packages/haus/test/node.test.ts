@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -220,6 +220,26 @@ describe("files and limits (spec §13.3)", () => {
       Object.fromEntries(Array.from({ length: n }, (_, i) => [`app/f${i}.schema.haus`, i === n - 1 ? `type T${i} = Int` : `import ./f${i + 1} (T${i + 1})\ntype T${i} = T${i + 1}`]))
     expect(() => load(app(chain(255), "import ./f0 (T0)\ntype Root = T0"))).not.toThrow()
     rejected(app(chain(256), "import ./f0 (T0)\ntype Root = T0"), "too-many-files")
+  })
+
+  it("opens each file once, by its real path, also a file in two roles", () => {
+    const root = tree({
+      "app/a.schema.haus": "import ./x (X)\nimport @acme/evil (Money)\ntype Root = { x: X, m: Money }",
+      "app/x.schema.haus": "type X = Int",
+      "vendor/evil/package.haus": manifest("@acme/evil"),
+      "vendor/evil/schema.haus": money,
+    })
+    // The project's package.json is the schema file x: read as one (not JSON, so it declares nothing) and imported.
+    symlinkSync("x.schema.haus", join(root, "app/package.json"))
+    const opened: string[] = []
+    const path = join(root, "app/a.schema.haus")
+    const file = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, { packages: [join(root, "vendor/evil")], onOpen: (p) => opened.push(p) }))
+    expect(file.imported.get("X")?.id).toMatch(/x#X$/)
+    expect(file.imported.get("Money")?.id).toBe("@acme/evil@1#Money")
+    const x = realpathSync(join(root, "app/x.schema.haus"))
+    expect(opened.filter((p) => p === x)).toEqual([x])
+    expect(new Set(opened).size).toBe(opened.length)
+    expect(opened).toEqual(expect.arrayContaining([x, realpathSync(join(root, "vendor/evil/package.haus")), realpathSync(join(root, "vendor/evil/schema.haus"))]))
   })
 
   it("takes an invalid package.json as declaring nothing", () => {

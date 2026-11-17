@@ -302,7 +302,7 @@ def PayloadWF (env : Env) (F : Nat) (o : String) (fields : List Field) (y : Type
 
 theorem recordCase_wf {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {cl : Bool} {fields : List Field} {y : Typed} {b : Bool} {j : JSON}
-    (hc : caseOf? cases tag = some (.record tag' cl fields)) (IH : PayloadWF env F o fields y)
+    (hc : caseOf? env cases tag = some (.record tag' cl fields)) (IH : PayloadWF env F o fields y)
     (h : toJsonC env F b o (.variant closed cases) (.case tag [y]) = .ok j) : JSON.WellFormed j := by
   rw [toJsonC.eq_def] at h
   simp only at h
@@ -329,7 +329,7 @@ theorem recordCase_wf {env : Env} {F : Nat} {o : String} {closed : Bool} {cases 
 
 theorem positional_wf {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {ts : List Ty} {ys : List Typed} {b : Bool} {j : JSON}
-    (hc : caseOf? cases tag = some (.positional tag' ts))
+    (hc : caseOf? env cases tag = some (.positional tag' ts))
     (IHargs : ∀ js, toJsonArgs env F o tag 0 ts ys = .ok js → ∀ j ∈ js, JSON.WellFormed j)
     (IHone : ∀ t1, ts = [t1] → ∃ y, ys = [y] ∧ ∀ j, toJsonF env F o t1 y = .ok j → JSON.WellFormed j)
     (h : toJsonC env F b o (.variant closed cases) (.case tag ys) = .ok j) : JSON.WellFormed j := by

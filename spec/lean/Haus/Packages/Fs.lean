@@ -123,6 +123,30 @@ def ancestors (d : Path) : List Path := (List.range (d.length + 1)).reverse.map 
 /-- Whether a real path is a directory. -/
 def Tree.isDir (t : Tree) (p : Path) : Bool := t.at? p == some .dir
 
+/--
+An entry without a file's bytes: what `lstat` tells about it. Everything the
+resolver learns about the tree, except the bytes of the files it opens, is
+told in kinds, so that the bytes of a file it doesn't open can't matter (R7).
+-/
+inductive Kind where
+  | dir
+  | file
+  | link (target : String)
+  | other
+  deriving Repr, DecidableEq, Inhabited
+
+def Entry.kind : Entry → Kind
+  | .dir => .dir
+  | .file _ => .file
+  | .link target => .link target
+  | .other => .other
+
+/-- The kind of the entry `name` in the directory `d`, not following a link (`lstat`). -/
+def Tree.childKind? (t : Tree) (d : Path) (name : String) : Option Kind := (t.child? d name).map Entry.kind
+
+/-- The kind of the entry at a real path. -/
+def Tree.kindAt? (t : Tree) (p : Path) : Option Kind := (t.at? p).map Entry.kind
+
 section Examples
 
 private def ex : Tree := ⟨[

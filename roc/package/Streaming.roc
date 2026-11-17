@@ -228,21 +228,23 @@ scan = |start, last| {
 }
 
 ## Parse the value before the comma at `comma`, and drop it from the buffer.
+## The comma is parsed too, so that every error is the whole-file parser's:
+## `1,,2` is "expected a value, found ','", `1 2,` a missing comma before `2`.
 cut : Streaming.Reader, U64 -> Try((Streaming.Reader, Value), Value.ParseError)
 cut = |s, comma| {
-	piece = s.buf.sublist({ start: 0, len: comma })
+	piece = s.buf.sublist({ start: 0, len: comma + 1 })
 	text = utf8(piece, s.origin)?
 	directive(text, s.origin)?
 	value = match Value.parse_rest_with(text, s.options.limits) {
 		Ok([v]) => v
-		Ok([]) => {
-			end = after(s.origin, piece)
+		# The only comma at the top level ends the text: there is one value, or an error.
+		Ok(_) => {
+			end = after(s.origin, s.buf.sublist({ start: 0, len: comma }))
 			return Err({ code: ErrorCode.expected_value, reason: "expected a value, found ','", line: end.line, column: end.column })
 		}
-		Ok(_) => return Err({ code: ErrorCode.missing_comma, reason: "expected ',' between top-level values", line: s.origin.line, column: s.origin.column })
 		Err(e) => return Err(shift(e, s.origin))
 	}
-	origin = after(s.origin, piece.append(','))
+	origin = after(s.origin, piece)
 	Ok(({ ..s, buf: s.buf.drop_first(comma + 1), scanned: 0, chars: 0, origin }, value))
 }
 
@@ -453,6 +455,17 @@ expect {
 		and code(["[1 2],"]) == Err("missing-comma at 1:4")
 		and code(["#haus 2,"]) == Err("version-directive at 1:1")
 		and code(["1,\n", "nul", "l,"]) == Err("null-literal at 2:1")
+}
+# An empty item between commas is the whole-file parser's error (code, message and
+# place), also with whitespace or a comment between the commas, in any chunking.
+expect {
+	same = |text| {
+		whole = Value.parse_all(text).map_ok(|_| {})
+		bytes = text.to_utf8()
+		Streaming.all([bytes]).map_ok(|_| {}) == whole and Streaming.all(bytes.map(|b| [b])).map_ok(|_| {}) == whole
+	}
+	same("1,,2") and same("1, ,2") and same("1,/*c*/,2") and same(",1") and same("1,\n// c\n,2") and same("1 2,") and same("-,2")
+		and Value.parse_all("1,/*c*/,2").map_ok(|_| {}).map_err(|e| (e.code, e.reason, e.column)) == Err(("expected-value", "expected a value, found ','", 8))
 }
 expect {
 	options = { ..Streaming.defaults, require_terminator: True, max_value_length: 3 }

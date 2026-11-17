@@ -17,7 +17,10 @@
 ## writes can't display differently from what it holds; the self-describing
 ## reader rejects them raw, the others accept them.
 ##
-## The limits of spec §7 apply to the haus value that results. A form can
+## The limits of spec §7 apply to the haus value that results: a string's
+## characters after its escapes are read, keys and tags as haus keys and tags,
+## bytes as two characters per byte, whether JSON spells them in hex or base64
+## (the forms' member names, such as `"_value"`, don't count). A form can
 ## take several JSON levels for one haus level, so schema-based JSON may nest
 ## 4·256 + 1 = 1025 levels, self-describing JSON one more for the envelope,
 ## and the resulting value is then checked against 256. The import's JSON may
@@ -55,9 +58,10 @@ JsonValue := [
 	parse : Str -> Try(JsonValue, Value.ParseError)
 	parse = |text| parse_with(text, Value.default_limits)
 
-	## `parse` with your own limits (see `Value.Limits`): numbers and strings
-	## within them, and the JSON nested at most 4·d + 1 levels for a depth
-	## limit d.
+	## `parse` with your own limits (see `Value.Limits`): numbers within them,
+	## and the JSON nested at most 4·d + 1 levels for a depth limit d. The
+	## lengths of strings, keys, tags and bytes are those of the haus value a
+	## form reads (spec §16): the forms' readers check them.
 	parse_with : Str, Value.Limits -> Try(JsonValue, Value.ParseError)
 	parse_with = |text, limits| read_json(text, limits, json_depth(limits), { bom: True, strict: False })
 
@@ -372,37 +376,74 @@ read_object = |src, open, depth, r| {
 		return Err(json_too_deep(r.max, open))
 	}
 	var $members = []
-	var $seen = Set.empty()
+	# Each name and where it is; checked for repeats when the object ends, or
+	# before an error after them, which a repeated name comes before.
+	var $names = []
 	var $pos = skip_ws(src, open + 1)
 	var $done = at(src, $pos) == '}'
 	while !$done {
 		if at(src, $pos) != '"' {
-			return Err(syntax("expected a member name, found ${describe(src, $pos)}", $pos))
+			return Err(repeated_first($names, syntax("expected a member name, found ${describe(src, $pos)}", $pos)))
 		}
 		name_pos = $pos
-		(name, after_name) = read_string(src, $pos, r)?
-		if $seen.contains(name) {
-			return Err({ code: ErrorCode.duplicate_key, reason: "duplicate member name ${quote_str(name)}", pos: name_pos })
+		(name, after_name) = match read_string(src, $pos, r) {
+			Ok(read) => read
+			Err(e) => return Err(repeated_first($names, e))
 		}
-		$seen = $seen.insert(name)
-		colon = skip_ws(src, after_name)
-		if at(src, colon) != ':' {
-			return Err(syntax("expected ':', found ${describe(src, colon)}", colon))
+		$names = $names.append((name, name_pos))
+		(value, next, done) = match member_rest(src, after_name, depth, r) {
+			Ok(rest) => rest
+			Err(e) => return Err(repeated_first($names, e))
 		}
-		(value, after_value) = read_value(src, skip_ws(src, colon + 1), depth + 1, r)?
 		$members = $members.append((name, value))
-		p = skip_ws(src, after_value)
-		if at(src, p) == ',' {
-			$pos = skip_ws(src, p + 1)
-		} else if at(src, p) == '}' {
-			$pos = p
-			$done = True
-		} else {
-			return Err(syntax("expected ',' or '}', found ${describe(src, p)}", p))
-		}
+		$pos = next
+		$done = done
 	}
-	Ok((Object($members), $pos + 1))
+	match Value.first_repeated($names) {
+		Ok((name, pos)) => Err(duplicate_member(name, pos))
+		Err(_) => Ok((Object($members), $pos + 1))
+	}
 }
+
+## A member after its name: its value, where the next member starts (or the
+## closing `}`), and whether the object ends there.
+member_rest : List(U8), U64, U64, Reader -> Try((JsonValue, U64, Bool), Fail)
+member_rest = |src, after_name, depth, r| {
+	colon = skip_ws(src, after_name)
+	if at(src, colon) != ':' {
+		return Err(syntax("expected ':', found ${describe(src, colon)}", colon))
+	}
+	(value, after_value) = read_value(src, skip_ws(src, colon + 1), depth + 1, r)?
+	p = skip_ws(src, after_value)
+	if at(src, p) == ',' {
+		Ok((value, skip_ws(src, p + 1), False))
+	} else if at(src, p) == '}' {
+		Ok((value, p, True))
+	} else {
+		Err(syntax("expected ',' or '}', found ${describe(src, p)}", p))
+	}
+}
+
+## `e`, unless one of the names before it repeats an earlier one: reading in
+## order, that error comes first.
+repeated_first : List((Str, U64)), Fail -> Fail
+repeated_first = |names, e| match Value.first_repeated(names) {
+	Ok((name, pos)) => duplicate_member(name, pos)
+	Err(_) => e
+}
+
+## Each member's name with its index.
+indexed : List((Str, a)) -> List((Str, U64))
+indexed = |members| {
+	var $out = List.with_capacity(members.len())
+	for (k, _) in members {
+		$out = $out.append((k, $out.len()))
+	}
+	$out
+}
+
+duplicate_member : Str, U64 -> Fail
+duplicate_member = |name, pos| { code: ErrorCode.duplicate_key, reason: "duplicate member name ${quote_str(name)}", pos }
 
 read_array : List(U8), U64, U64, Reader -> Try((JsonValue, U64), Fail)
 read_array = |src, open, depth, r| {
@@ -491,7 +532,6 @@ read_number = |src, start, limits| {
 
 read_string : List(U8), U64, Reader -> Try((Str, U64), Fail)
 read_string = |src, open, r| {
-	limits = r.limits
 	var $out = []
 	var $pos = open + 1
 	var $done = False
@@ -517,9 +557,9 @@ read_string = |src, open, r| {
 			$pos = $pos + 1
 		}
 	}
-	if $out.len() > limits.max_string_length and code_points($out) > limits.max_string_length {
-		return Err({ code: ErrorCode.string_too_long, reason: "string longer than ${limits.max_string_length.to_str()} characters", pos: open })
-	}
+	# Lengths are counted on the haus value that results (spec §16, "Limits"),
+	# by each form's reader: a member name may be a key or a form's own
+	# (`"_tag"`), a string a string, a tag, bytes or a number.
 	Ok((bytes_to_str($out), $pos + 1))
 }
 
@@ -624,13 +664,16 @@ write = |json, depth, max, limits| match json {
 	}
 	Object(members) => {
 		open(depth, max)?
-		var $seen = Set.empty()
+		# An object built in code may repeat a name: an error where it does.
+		repeated = Value.first_repeated(indexed(members))
 		var $out = ['{']
+		var $i = 0.U64
 		for (k, v) in members {
-			if $seen.contains(k) {
-				return fail(ErrorCode.duplicate_key, "a member name is used twice in an object")
+			match repeated {
+				Ok((_, at_index)) if at_index == $i => return fail(ErrorCode.duplicate_key, "a member name is used twice in an object")
+				_ => {}
 			}
-			$seen = $seen.insert(k)
+			$i = $i + 1
 			member = quote(k, limits)?.append(':').concat(write(v, depth + 1, max, limits)?)
 			$out = if ($out.len() == 1) $out.concat(member) else $out.append(',').concat(member)
 		}
@@ -726,7 +769,7 @@ imported = |json, depth, limits| match json {
 	Boolean(True) => Ok(Tag("True", []))
 	Boolean(False) => Ok(Tag("False", []))
 	Number(n) => Ok(Num(JsonValue.normalize_number(n)))
-	String(s) => Ok(Text(s))
+	String(s) => text_within(s, "string", limits).map_ok(|_| Text(s))
 	Array(items) => {
 		enter(depth, limits)?
 		var $out = []
@@ -752,7 +795,7 @@ imported = |json, depth, limits| match json {
 key : Str, Value.Limits -> Try({}, Decode.Error)
 key = |k, limits| text_within(k, "key", limits)
 
-## A key or tag (`what`) within the string limit, counted in code points.
+## A string, key or tag (`what`) within the string limit, counted in code points.
 text_within : Str, Str, Value.Limits -> Try({}, Decode.Error)
 text_within = |s, what, limits| {
 	b = s.to_utf8()
@@ -804,13 +847,13 @@ forms = "a self-describing value: a string, an array, or an object {\"_num\"}, {
 ## the haus writer counts them: `Tag { … }` is one level).
 described : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
 described = |json, depth, limits| match json {
-	String(s) => Ok(Text(s))
+	String(s) => text_within(s, "string", limits).map_ok(|_| Text(s))
 	Array(items) => {
 		enter(depth, limits)?
 		Ok(Arr(described_items(items, depth + 1, limits)?))
 	}
 	Object([("_num", n)]) => within(described_number(n, limits), "._num")
-	Object([("_bytes", h)]) => within(described_bytes(h), "._bytes")
+	Object([("_bytes", h)]) => within(described_bytes(h, limits), "._bytes")
 	Object([("_rec", r)]) => within(described_record(r, depth, limits), "._rec")
 	Object([("_tag", t)]) => Ok(Tag(described_tag(t, limits)?, []))
 	Object([("_tag", t), ("_args", a)]) => described_variant(t, a, depth, limits)
@@ -847,13 +890,16 @@ described_number = |json, limits| match json {
 	_ => Decode.fail(ErrorCode.haus_json_number, "expected a string, found ${describe_json(json)}")
 }
 
-## `"0b34ff"`: two lowercase hex digits per byte.
-described_bytes : JsonValue -> Try(Value, Decode.Error)
-described_bytes = |json| match json {
+## `"0b34ff"`: two lowercase hex digits per byte, within the string limit
+## as the haus byte string's hex.
+described_bytes : JsonValue, Value.Limits -> Try(Value, Decode.Error)
+described_bytes = |json, limits| match json {
 	String(text) => {
 		b = text.to_utf8()
 		is_lower_hex = |c| is_digit(c) or (c >= 'a' and c <= 'f')
-		if b.len() % 2 != 0 or !b.all(is_lower_hex) {
+		if b.len() > limits.max_string_length {
+			Decode.fail(ErrorCode.string_too_long, "byte string longer than ${limits.max_string_length.to_str()} characters")
+		} else if b.len() % 2 != 0 or !b.all(is_lower_hex) {
 			Decode.fail(ErrorCode.haus_json_bytes, "expected two lowercase hex digits per byte")
 		} else {
 			var $out = []
@@ -872,13 +918,14 @@ described_record : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
 described_record = |json, depth, limits| match json {
 	Object(members) => {
 		enter(depth, limits)?
-		var $seen = Set.empty()
 		var $out = []
+		# The members of a parsed object are unique; one built in code may repeat a name.
+		repeated = Value.first_repeated(indexed(members))
 		for (k, x) in members {
-			if $seen.contains(k) {
-				return within(Decode.fail(ErrorCode.duplicate_key, "the key ${quote_str(k)} is used twice"), ErrorCode.path_key(k))
+			match repeated {
+				Ok((r, i)) if i == $out.len() => return within(Decode.fail(ErrorCode.duplicate_key, "the key ${quote_str(r)} is used twice"), ErrorCode.path_key(r))
+				_ => {}
 			}
-			$seen = $seen.insert(k)
 			within(key(k, limits), ErrorCode.path_key(k))?
 			$out = $out.append((k, within(described(x, depth + 1, limits), ErrorCode.path_key(k))?))
 		}
@@ -1180,15 +1227,15 @@ small : Value.Limits
 small = { max_depth: 2, max_number_length: 4, max_exponent: 9, max_string_length: 4 }
 
 expect JsonValue.parse_with("[\"abcd\", 1234, 1e9, [[[[[[[[0]]]]]]]]]", small).is_ok()
-expect JsonValue.parse_with("\"abcde\"", small).map_err(|e| e.reason) == Err("string longer than 4 characters")
+# The text reader leaves lengths to the forms, which count them on the haus value.
+expect JsonValue.parse_with("\"abcde\"", small).is_ok()
 expect JsonValue.parse_with("12345", small).map_err(|e| e.reason) == Err("number literal longer than 4 characters")
 expect JsonValue.parse_with("1e10", small).map_err(|e| e.reason) == Err("exponent larger than 9")
 expect JsonValue.parse_with("[[[[[[[[[[0]]]]]]]]]]", small).map_err(|e| e.reason) == Err("JSON nested deeper than 9 levels")
 # Without a schema the JSON nests as deep as the value.
 expect JsonValue.import_json_with("[[0]]", small).is_ok() and JsonValue.import_json_with("[[[0]]]", small).is_err()
-expect JsonValue.lines_with("[[0]]\n\"abcd\"", small).is_ok() and JsonValue.lines_with("1\n\"abcde\"", small).map_err(|e| e.line) == Err(2)
-# Self-describing: the value within the limits too. (Its envelope's member
-# names count against the string limit, as every JSON string does.)
+expect JsonValue.lines_with("[[0]]\n\"abcde\"", small).is_ok() and JsonValue.lines_with("1\n[[[0]]]", small).is_ok()
+# Self-describing: the value within the limits too.
 small6 : Value.Limits
 small6 = { ..small, max_string_length: 6 }
 
@@ -1202,6 +1249,24 @@ expect imported(Object([("abcde", Null)]), 0, small).map_ok(|_| {}).map_err(Deco
 expect described(Object([("_rec", Object([("abcde", String("x"))]))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("._rec.abcde: key longer than 4 characters")
 expect described(Object([("_tag", String("Abcde"))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("._tag: tag longer than 4 characters")
 expect described(Object([("_tag", String("Abcde")), ("_args", Array([String("x")]))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("._tag: tag longer than 4 characters")
+# Lengths count on the haus value (spec §16, "Limits"): a string's characters
+# after its escapes are read, bytes two characters per byte; exactly at the
+# limit is accepted, one more is not. The forms' member names don't count.
+read_code : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]) -> Str
+read_code = |result| match result {
+	Ok(_) => "ok"
+	Err(Decode(e)) => e.code
+	Err(Syntax(e)) => e.code
+}
+
+expect read_code(JsonValue.from_haus_json_with(env("\"\\u00e9\\n\\t\\\"\""), small)) == "ok"
+expect read_code(JsonValue.from_haus_json_with(env("\"\\u00e9\\n\\t\\\"x\""), small)) == "string-too-long"
+expect read_code(JsonValue.import_json_with("[\"\\u00e9\\u00e9\\u00e9\\u00e9\"]", small)) == "ok"
+expect read_code(JsonValue.import_json_with("[\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"]", small)) == "string-too-long"
+expect read_code(JsonValue.from_haus_json_with(env("{\"_bytes\": \"0b34\"}"), small)) == "ok"
+expect read_code(JsonValue.from_haus_json_with(env("{\"_bytes\": \"0b34ff\"}"), small)) == "string-too-long"
+expect read_code(JsonValue.from_haus_json_with(env("{\"_num\": \"123456\"}"), { ..small, max_number_length: 6 })) == "ok"
+expect read_code(JsonValue.from_haus_json_with(env("\"ab\""), { ..small, max_string_length: 2 })) == "ok"
 # Writing for a reader with other limits.
 expect JsonValue.to_str_with(Array([Array([String("abcd"), Number("1234")])]), small) == Ok("[[\"abcd\",1234]]")
 expect JsonValue.to_str_with(String("abcde"), small) == Err({ code: "string-too-long", reason: "string longer than 4 characters", path: "" })
@@ -1226,6 +1291,7 @@ expect JsonValue.import_json_with("${Str.repeat("[", 1024)}${Str.repeat("]", 102
 expect JsonValue.parse_with("${Str.repeat("[", 4097)}${Str.repeat("]", 4097)}", deepest).is_ok()
 too_deep : Value.Limits
 too_deep = { ..Value.default_limits, max_depth: 1025 }
+
 unsupported : Str
 unsupported = "max_depth 1025 is more than the supported maximum, 1024"
 expect JsonValue.parse_with("1", too_deep) == Err({ code: "unsupported-depth", reason: unsupported, line: 1, column: 1 })
@@ -1307,4 +1373,37 @@ expect {
 		Ok(v) => JsonValue.to_haus_json_with(v, small6) == Ok(enveloped_as_written(deepest_form))
 		Err(_) => Bool.False
 	}
+}
+
+# Duplicate member names (spec §7): sorted and neighbours compared, so an
+# object with many members takes O(n log n), whatever the names are.
+expect {
+	n = 100000
+	match JsonValue.parse(many_members(n, "")) {
+		Ok(Object(members)) => members.len() == n
+		_ => Bool.False
+	}
+}
+expect {
+	text = many_members(100000, ",\"k5\":0")
+	match JsonValue.parse(text) {
+		Err({ code, column, .. }) => code == "duplicate-key" and column == text.count_utf8_bytes() - 6
+		_ => Bool.False
+	}
+}
+# A repeated name is reported before an error after it, and after one before it.
+expect JsonValue.parse("{\"a\":1,\"b\":2,\"a\":tru}").map_err(|e| (e.code, e.column)) == Err(("duplicate-key", 14))
+expect JsonValue.parse("{\"a\":1,\"a\" 2}").map_err(|e| (e.code, e.column)) == Err(("duplicate-key", 8)) and JsonValue.parse("{\"a\":{\"b\":1,\"b\":2},\"a\":1}").map_err(|e| (e.code, e.column)) == Err(("duplicate-key", 13))
+expect JsonValue.parse("{\"a\":1,\"a\u(0)\":2}").map_err(|e| e.code) == Err("control-character") and JsonValue.to_str(Object([("a", Null), ("b", Number("x")), ("a", Null)])).map_err(|e| e.code) == Err("cannot-encode")
+
+## `{"k0":0,"k1":1,…}` with `n` members, then `more`.
+many_members : U64, Str -> Str
+many_members = |n, more| {
+	var $parts = List.with_capacity(n)
+	var $i = 0.U64
+	while $i < n {
+		$parts = $parts.append("\"k${$i.to_str()}\":${$i.to_str()}")
+		$i = $i + 1
+	}
+	"{${Str.join_with($parts, ",")}${more}}"
 }

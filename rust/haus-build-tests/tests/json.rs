@@ -4,7 +4,10 @@ mod features {
     haus::include_schema!("features");
 }
 
-use features::{AppEvent, Clash, Kind, Login, Nulls, Person, Scores, Shape, Tree};
+use features::{
+    AppEvent, ByAlias, ByName, Clash, ClashByName, Dims, Generic, Inline, Kind, Login, Nulls, Person, Scores, Shape,
+    TagField, Tree, Wrapper,
+};
 use haus::json::{from_str, to_string};
 use haus::{Error, Unknown, Value};
 
@@ -126,6 +129,65 @@ fn a_tag_or_args_field_in_a_record_payload_has_no_schema_based_form() {
     assert_eq!(read_error::<Clash>(r#"{"_tag":"Listed","_args":[1]}"#), why);
     // The other tags are fine.
     assert_eq!(to_string(&Clash::Fine(1)).unwrap(), r#"{"_tag":"Fine","value":1}"#);
+}
+
+/// Decodes `text` as `T`, writes it as schema-based JSON, reads that back and
+/// encodes it: the JSON, and the haus value it reads back as.
+fn json_of<T: haus::Decode + haus::Encode + haus::ToJson + haus::FromJson>(
+    text: &str,
+) -> Result<(String, Value), String> {
+    let x: T = haus::from_str(text).map_err(|e| e.to_string())?;
+    let json = to_string(&x).map_err(|e| e.to_string())?;
+    let back = from_str::<T>(&json).map_err(|e| e.to_string())?;
+    Ok((json, haus::Encode::encode(&back).map_err(|e| e.to_string())?))
+}
+
+#[test]
+fn a_record_case_is_the_same_inline_and_by_name() {
+    // Spec §15: `Sized { … }`, `Sized Dims`, `Sized DimsAlias2` (an alias
+    // chain), `Seal (Id Sealed)` and `Held (Wrapper Int32)` (applied generic
+    // types) are the same record case: the same haus values, the same JSON.
+    let values = ["Sized { w: 1 }", "Sized { w: 1, h: 2 }", "Seal { id: 3 }", "Held { inner: 4 }", "Other(5)"];
+    for text in values {
+        let inline = json_of::<Inline>(text).unwrap();
+        assert_eq!(json_of::<ByName>(text).unwrap(), inline, "{text}");
+        assert_eq!(json_of::<ByAlias>(text).unwrap(), inline, "{text}");
+        assert_eq!(inline.1, haus::from_str::<Value>(text).unwrap(), "{text}");
+    }
+    let (json, _) = json_of::<ByName>("Sized { w: 1, h: 2 }").unwrap();
+    assert_eq!(json, r#"{"_tag":"Sized","w":1,"h":2}"#);
+    // Rust keeps each form: a struct-like case inline, a tuple case by name.
+    assert_eq!(haus::from_str::<ByName>("Held { inner: 4 }").unwrap(), ByName::Held(Wrapper { inner: 4 }));
+    assert_eq!(haus::from_str::<ByAlias>("Sized { w: 1 }").unwrap(), ByAlias::Sized(Dims { w: 1, h: None }));
+    // Reading: other members are ignored by an open record and an error in a closed one, as inline.
+    let open = r#"{"_tag":"Sized","w":1,"x":2}"#;
+    assert_eq!(from_str::<ByName>(open).unwrap(), ByName::Sized(Dims { w: 1, h: None }));
+    let closed = r#"{"_tag":"Seal","id":1,"x":2}"#;
+    for e in [read_error::<Inline>(closed), read_error::<ByName>(closed), read_error::<ByAlias>(closed)] {
+        assert!(e.contains("unknown member \"x\""), "{e}");
+    }
+    let missing = r#"{"_tag":"Sized","value":{"w":1}}"#;
+    for e in [read_error::<Inline>(missing), read_error::<ByName>(missing), read_error::<ByAlias>(missing)] {
+        assert!(e.contains("missing member w"), "{e}");
+    }
+    // Decoding haus: any payload but one record is wrong, as for `Sized { … }`.
+    for text in ["Sized(1)", "Sized(1, 2)", "Sized"] {
+        let codes = [
+            haus::from_str::<Inline>(text).unwrap_err(),
+            haus::from_str::<ByName>(text).unwrap_err(),
+            haus::from_str::<ByAlias>(text).unwrap_err(),
+        ]
+        .map(|e| e.code());
+        assert_eq!(codes, [Some(haus::ErrorCode::WrongPayload); 3], "{text}");
+    }
+    // A type parameter is never a record case, even where its argument is a record.
+    let (json, _) = json_of::<Generic<Dims>>("Sized { w: 1 }").unwrap();
+    assert_eq!(json, r#"{"_tag":"Sized","value":{"w":1}}"#);
+    // A record by name with a field named _tag has no schema-based form either.
+    let clash = ClashByName::Tagged(TagField { _tag: "x".into() });
+    let why = "Tagged has a field named _tag, so it has no schema-based JSON form";
+    assert_eq!(to_string(&clash).unwrap_err().to_string(), why);
+    assert_eq!(read_error::<ClashByName>(r#"{"_tag":"Tagged"}"#), why);
 }
 
 #[test]

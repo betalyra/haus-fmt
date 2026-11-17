@@ -96,6 +96,23 @@ def test_error_positions_match_parsing_the_whole_text() -> None:
         assert (streamed.value.line, streamed.value.column) == (whole.value.line, whole.value.column), text
 
 
+@pytest.mark.parametrize("text", ["1,,2", "1, ,2", "1,/*c*/,2", ",1", "1,\n// c\n,2", "\ufeff,1"])
+def test_an_empty_item_is_reported_as_the_whole_text_parser_reports_it(text: str) -> None:
+    """Code, message and place: `expected a value, found ','` at the second comma, in any chunking."""
+
+    def report(e: haus.HausSyntaxError) -> tuple[object, ...]:
+        return (e.code, e.reason, e.offset, e.line, e.column, e.expected, e.found)
+
+    with pytest.raises(haus.HausSyntaxError) as whole:
+        haus.parse_all(text)
+    assert (whole.value.code, whole.value.found) == ("expected-value", "','")
+    data = text.encode()
+    for size in [1, 2, 3, len(data)]:
+        with pytest.raises(haus.HausSyntaxError) as streamed:
+            chunked(data, size)
+        assert report(streamed.value) == report(whole.value), f"chunk size {size}"
+
+
 def test_require_terminator_reports_a_cut_off_last_value() -> None:
     r = haus.StreamReader(require_terminator=True)
     assert len(r.push(b"1000,\n100")) == 1

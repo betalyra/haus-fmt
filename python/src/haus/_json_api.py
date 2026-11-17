@@ -37,10 +37,11 @@ def import_json(text: str | bytes, *, limits: Limits = DEFAULT_LIMITS) -> Value:
         >>> import_json('{"price": 19.90, "ok": true}')
         Record(fields={'price': Number(text='19.90'), 'ok': Variant(tag='True', args=())})
 
-    Raises `HausJsonError`, with a line and column.
+    Raises `HausJsonError`: with a line and column for text that isn't I-JSON, with a path for a
+    string or key beyond the string limit (counted on the haus value: after escapes are read).
     """
     make_room(limits.max_depth)
-    return imported(read_json(text, limits))
+    return imported(read_json(text, limits), limits)
 
 
 def import_json_lines(
@@ -51,9 +52,9 @@ def import_json_lines(
 ) -> Iterator[Value]:
     """Each line of JSON Lines as a haus value (spec §16.1), from a text, a file or chunks split anywhere."""
 
-    def convert(j: Json, _: int) -> Value:
+    def convert(j: Json, i: int) -> Value:
         make_room(limits.max_depth)
-        return imported(j)
+        return imported(j, limits, path=(i,))
 
     return read_lines(source, limits, limits.max_depth, convert, max_line_length)
 

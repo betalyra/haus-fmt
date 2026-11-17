@@ -42,6 +42,20 @@ describe("error messages and positions", () => {
       expect([e.line, e.column, e.offset]).toEqual([whole.line, whole.column, whole.offset])
     }))
 
+  // An empty item between commas: the stream reader reported "found end of
+  // input"; it must report what the whole-text parser reports, at the same place.
+  it.effect.each(["1,,2", "1, ,2", "1,/*c*/,2", ",1", "1,\n// c\n,2", "1,,"])("stream errors for an empty item match the whole text: %j", (src) =>
+    Effect.gen(function* () {
+      const whole = yield* Effect.flip(parseText(src))
+      expect([whole.code, whole.reason]).toEqual(["expected-value", "expected a value, found ','"])
+      const at = (e: typeof whole) => [e.code, e.reason, e.line, e.column, e.offset, e.expected, e.found]
+      const r = new StreamReader()
+      expect(at(yield* Effect.flip(syntax(() => [...r.push(src), ...r.end()])))).toEqual(at(whole))
+      // Also with the text arriving one character at a time.
+      const chars = new StreamReader()
+      expect(at(yield* Effect.flip(syntax(() => [...[...src].flatMap((c) => chars.push(c)), ...chars.end()])))).toEqual(at(whole))
+    }))
+
   it.effect(`rejects nesting deeper than ${MAX_DEPTH}`, () =>
     Effect.gen(function* () {
       const nest = (n: number) => "[".repeat(n) + "]".repeat(n)

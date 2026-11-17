@@ -20,11 +20,15 @@ Err { type: "Shape", input: Point([1, 2]), code: "wrong-payload" },
 Ok { type: "Shape", input: Empty },
 Err { type: "Shape", input: Empty(1), code: "wrong-payload" },
 Err { type: "Shape", input: Empty {}, code: "wrong-payload" },
-// a single positional argument may be a record: `Wrap Box` takes `Wrap { … }`
+// a record case by name (spec §15): `Wrap Box` takes `Wrap { … }`, as `Circle { … }` does
 Ok { type: "Shape", input: Wrap { w: 1 } },
 Ok { type: "Shape", input: Wrap({ w: 1 }), output: Wrap { w: 1 } },
 Ok { type: "Shape", input: Wrap { w: 1, h: 2 }, output: Wrap { w: 1 } },
-Err { type: "Shape", input: Wrap(1), code: "type-mismatch" },
+// as for Circle above: any payload but one record is wrong
+Err { type: "Shape", input: Wrap(1), code: "wrong-payload" },
+Err { type: "Shape", input: Wrap(1, 2), code: "wrong-payload" },
+Err { type: "Shape", input: Wrap, code: "wrong-payload" },
+Err { type: "Shape", input: Circle(1, 2), code: "wrong-payload" },
 Ok { type: "Shape", input: Pair(1, "a") },
 Err { type: "Shape", input: Pair("a", 1), code: "type-mismatch" },
 

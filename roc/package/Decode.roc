@@ -275,6 +275,16 @@ Decode := [].{
 		_ => fail(ErrorCode.wrong_payload, "${tag} takes one argument, a record, found ${describe(v)}: write `${tag} { … }`")
 	}
 
+	## The record of a record case whose record is a named type (`Wrap Box`
+	## with `type Box = { w: Int }`, spec §15), decoded with `decoder`: as for
+	## `payload`, an argument that isn't a record (`Wrap(1)`) is the wrong
+	## payload, and errors inside it are under `(Tag)`.
+	record_arg : Str, Value, (Value -> Try(a, Error)) -> Try(a, Error)
+	record_arg = |tag, v, decoder| match v {
+		Rec(_) => at(decoder(v), "(${tag})")
+		_ => fail(ErrorCode.wrong_payload, "${tag} takes one argument, a record, found ${describe(v)}: write `${tag} { … }`")
+	}
+
 	## A type with a codec: its base decoder first, then the codec (spec §13.4).
 	## A value the codec rejects is a `type-mismatch`.
 	codec : Value, (Value -> Try(b, Error)), (b -> Try(t, Str)) -> Try(t, Error)
@@ -515,3 +525,7 @@ expect {
 	Decode.one("Circle(1.5)", shape) == Err(Decode({ code: "wrong-payload", reason: "Circle takes one argument, a record, found number 1.5: write `Circle { … }`", path: "" }))
 }
 expect Decode.error_json({ code: "missing-field", reason: "missing field 'id'", path: "[2](Item)" }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$[2][0]\",\"hint\":\"Add the field, or mark it optional in the schema with `?` after its name.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"
+# A record case by name: one record, as `Tag { … }`; anything else is the wrong payload.
+expect Decode.record_arg("Wrap", Rec([("w", Num("1"))]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)) == Ok(1)
+expect Decode.record_arg("Wrap", Num("1"), |v| Decode.i32(v)).map_err(|e| e.code) == Err("wrong-payload")
+expect Decode.record_arg("Wrap", Rec([]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)).map_err(|e| (e.code, e.path)) == Err(("missing-field", "(Wrap)"))

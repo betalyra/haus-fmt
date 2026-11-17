@@ -100,7 +100,8 @@ files (`too-many-files`).
 
 A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
-define, uses of deprecated types), which don't fail the check.
+define, uses of deprecated types, record cases with a field named `_tag` or
+`_args`, which have no schema-based JSON form), which don't fail the check.
 
 ```text
 error[type-mismatch]: expected Int, found the string "7"

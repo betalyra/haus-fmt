@@ -126,6 +126,36 @@ Value := [
 	default_limits : Limits
 	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024 }
 
+	## The first of `keys` (each with where it is: an offset or an index)
+	## that repeats an earlier one, if any: the key a duplicate-key error
+	## names (spec §1). The keys are sorted and neighbours compared, so this
+	## takes O(n log n) for any keys (spec §7): a hash table would need a
+	## seed attackers can't predict, which Roc's `Dict` doesn't promise.
+	first_repeated : List((Str, U64)) -> Try((Str, U64), [NoneRepeated])
+	first_repeated = |keys| {
+		sorted = keys.map(|(k, pos)| (k.to_utf8(), k, pos)).sort_with(
+			|(a, _, i), (b, _, j)| match compare_bytes(a, b) {
+				Same => if (i < j) Before else if (i > j) After else Same
+				order => order
+			},
+		)
+		var $first = Err(NoneRepeated)
+		var $i = 1.U64
+		while $i < sorted.len() {
+			match (sorted.get($i - 1), sorted.get($i)) {
+				(Ok((a, _, _)), Ok((b, k, pos))) if a == b => {
+					$first = match $first {
+						Ok((_, earlier)) if earlier < pos => $first
+						_ => Ok((k, pos))
+					}
+				}
+				_ => {}
+			}
+			$i = $i + 1
+		}
+		$first
+	}
+
 	## Encode in the conformance suite's JSON form (see test-suite/README.md).
 	to_test_json : Value -> Str
 	to_test_json = |value| match value {
@@ -246,37 +276,69 @@ parse_record = |src, open, depth, limits| {
 		return Err(nesting_error(limits, open))
 	}
 	var $fields = []
-	var $seen = Set.empty()
+	# Each key and where it is; checked for repeats when the record ends, or
+	# before an error after them, which a repeated key comes before.
+	var $keys = []
 	var $pos = skip_trivia(src, open + 1)?
 	while at(src, $pos) != '}' {
 		if $pos >= src.len() {
-			return Err(unclosed(src, open))
+			return Err(repeated_first($keys, unclosed(src, open)))
 		}
 		key_pos = $pos
-		(key, after_key) = parse_key(src, $pos, limits)?
-		colon = skip_trivia(src, after_key)?
-		if at(src, colon) != ':' {
-			return Err({ code: ErrorCode.missing_colon, reason: "expected ':' after key '${key}', found ${describe(src, colon)}", pos: colon })
-		}
-		(value, after_value) = parse_value(src, skip_trivia(src, colon + 1)?, depth + 1, limits)?
-		if $seen.contains(key) {
-			return Err({ code: ErrorCode.duplicate_key, reason: "duplicate key '${key}'", pos: key_pos })
+		(key, value, after_value) = match record_entry(src, $pos, depth, limits) {
+			Ok(entry) => entry
+			Err(e) => return Err(repeated_first($keys, e))
 		}
 		$fields = $fields.append((key, value))
-		$seen = $seen.insert(key)
-		p = skip_trivia(src, after_value)?
-		if at(src, p) == ',' {
-			$pos = skip_trivia(src, p + 1)?
-		} else if at(src, p) == '}' {
-			$pos = p
-		} else if p >= src.len() {
-			return Err(unclosed(src, open))
-		} else {
-			return Err(separator(src, p, value, "expected ',' or '}'"))
+		$keys = $keys.append((key, key_pos))
+		$pos = match record_next(src, after_value, open, value) {
+			Ok(next) => next
+			Err(e) => return Err(repeated_first($keys, e))
 		}
 	}
-	Ok(($fields, $pos + 1))
+	match Value.first_repeated($keys) {
+		Ok((key, pos)) => Err(duplicate_key(key, pos))
+		Err(_) => Ok(($fields, $pos + 1))
+	}
 }
+
+## A record's entry at `pos`: its key, its value, and where the value ends.
+record_entry : List(U8), U64, U64, Value.Limits -> Try((Str, Value, U64), Fail)
+record_entry = |src, pos, depth, limits| {
+	(key, after_key) = parse_key(src, pos, limits)?
+	colon = skip_trivia(src, after_key)?
+	if at(src, colon) != ':' {
+		return Err({ code: ErrorCode.missing_colon, reason: "expected ':' after key '${key}', found ${describe(src, colon)}", pos: colon })
+	}
+	(value, after_value) = parse_value(src, skip_trivia(src, colon + 1)?, depth + 1, limits)?
+	Ok((key, value, after_value))
+}
+
+## After a record's entry: where the next one starts, or the closing `}`.
+record_next : List(U8), U64, U64, Value -> Try(U64, Fail)
+record_next = |src, after_value, open, value| {
+	p = skip_trivia(src, after_value)?
+	if at(src, p) == ',' {
+		skip_trivia(src, p + 1)
+	} else if at(src, p) == '}' {
+		Ok(p)
+	} else if p >= src.len() {
+		Err(unclosed(src, open))
+	} else {
+		Err(separator(src, p, value, "expected ',' or '}'"))
+	}
+}
+
+## `e`, unless one of the keys before it repeats an earlier one: reading in
+## order, that error comes first.
+repeated_first : List((Str, U64)), Fail -> Fail
+repeated_first = |keys, e| match Value.first_repeated(keys) {
+	Ok((key, pos)) => duplicate_key(key, pos)
+	Err(_) => e
+}
+
+duplicate_key : Str, U64 -> Fail
+duplicate_key = |key, pos| { code: ErrorCode.duplicate_key, reason: "duplicate key '${key}'", pos }
 
 parse_key : List(U8), U64, Value.Limits -> Try((Str, U64), Fail)
 parse_key = |src, pos, limits| {
@@ -981,6 +1043,24 @@ bytes_to_str = |bytes| match Str.from_utf8(bytes) {
 slice_str : List(U8), U64, U64 -> Str
 slice_str = |src, start, end| bytes_to_str(src.sublist({ start, len: end - start }))
 
+## Byte strings in order: a prefix comes first.
+compare_bytes : List(U8), List(U8) -> [Before, Same, After]
+compare_bytes = |a, b| {
+	var $i = 0
+	while $i < a.len() and $i < b.len() {
+		x = at(a, $i)
+		y = at(b, $i)
+		if x < y {
+			return Before
+		}
+		if x > y {
+			return After
+		}
+		$i = $i + 1
+	}
+	if (a.len() < b.len()) Before else if (a.len() > b.len()) After else Same
+}
+
 byte_str : U8 -> Str
 byte_str = |b| bytes_to_str([b])
 
@@ -1143,3 +1223,38 @@ expect code_at("A()") == "empty-payload at 1:2" and code_at("\"\"\"x\n\"\"\"") =
 expect Value.parse_bytes([0x5B, 0x31, 0x0A, 0x22, 0xFF, 0x22, 0x5D]).map_ok(|_| {}).map_err(|e| (e.code, e.line, e.column)) == Err(("invalid-utf8", 2, 2))
 expect Value.parse("1, 2").map_ok(|_| {}).map_err(|e| e.code) == Err("not-one-value") and Value.parse("").map_ok(|_| {}).map_err(|e| e.code) == Err("not-one-value")
 expect Value.parse_all("[1 2]").map_ok(|_| {}).map_err(Value.error_json) == Err("{\"code\":\"missing-comma\",\"message\":\"expected ',' or ']', found '2'\",\"line\":1,\"column\":4,\"hint\":\"Add a comma between the two values.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-comma\"}")
+
+# Duplicate keys (spec §7): keys are sorted and neighbours compared, so a
+# record or object with many keys takes O(n log n), whatever the keys are.
+expect Value.first_repeated([("b", 0), ("a", 1), ("c", 2), ("a", 3), ("b", 4)]) == Ok(("a", 3))
+expect Value.first_repeated([("x", 9), ("x", 2), ("x", 5)]) == Ok(("x", 5)) and Value.first_repeated([("a", 0), ("ab", 1), ("", 2)]) == Err(NoneRepeated)
+expect Value.first_repeated([]) == Err(NoneRepeated) and Value.first_repeated([("é", 0), ("e\u(301)", 1)]) == Err(NoneRepeated)
+expect {
+	n = 100000
+	match Value.parse_all(many_keys(n, "")) {
+		Ok([Rec(fields)]) => fields.len() == n
+		_ => Bool.False
+	}
+}
+expect {
+	text = many_keys(100000, ", k99999: 0")
+	match Value.parse_all(text) {
+		Err({ code, column, .. }) => code == "duplicate-key" and column == text.count_utf8_bytes() - 10
+		_ => Bool.False
+	}
+}
+# A repeated key is reported before an error after it, and after one before it.
+expect code_at("{ a: 1, b: 2, a: 3, c: }") == "duplicate-key at 1:15" and code_at("{ a: 1, a: [ }") == "expected-value at 1:14"
+expect code_at("{ a: 1, a: 2 x }") == "duplicate-key at 1:9" and code_at("{ a: 1, a: 2") == "duplicate-key at 1:9" and code_at("{ a: { b: 1, b: 2 }, a: 1 }") == "duplicate-key at 1:14"
+
+## `{ k0: 0, k1: 1, … }` with `n` keys, then `more`.
+many_keys : U64, Str -> Str
+many_keys = |n, more| {
+	var $parts = List.with_capacity(n)
+	var $i = 0.U64
+	while $i < n {
+		$parts = $parts.append("k${$i.to_str()}: ${$i.to_str()}")
+		$i = $i + 1
+	}
+	"{ ${Str.join_with($parts, ", ")}${more} }"
+}

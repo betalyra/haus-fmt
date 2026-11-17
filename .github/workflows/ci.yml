@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v5
@@ -137,7 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v5
@@ -188,6 +188,7 @@ jobs:
       - name: Test
         working-directory: roc
         run: |
+          roc fmt --check package
           (cd package && roc test ConformanceTest.roc && roc test TimeTest.roc)
           (cd package && roc test Decode.roc && roc test Encode.roc && roc test Int.roc && roc test Streaming.roc && roc test Secret.roc && roc test Value.roc)
           (cd package && roc test JsonValue.roc && roc test FromJson.roc && roc test ToJson.roc)
@@ -202,7 +203,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
       - name: Lint and type check
         working-directory: python
         run: |
@@ -224,7 +225,7 @@ jobs:
       # The suites are raw bytes: no line ending conversion.
       - run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v5
@@ -236,7 +237,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
       - name: TypeScript
         working-directory: typescript
         run: |
@@ -274,8 +275,8 @@ jobs:
           workspaces: |
             rust
             fuzz/schema-rust
-      - uses: astral-sh/setup-uv@v6
-      - uses: pnpm/action-setup@v4
+      - uses: astral-sh/setup-uv@v10
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v5
@@ -325,8 +326,8 @@ jobs:
           - { mode: format, run: "node fuzz/src/main.ts --format", pr: 20000, nightly: 200000 }
     steps:
       - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
-      - uses: pnpm/action-setup@v4
+      - uses: astral-sh/setup-uv@v10
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
       - uses: actions/setup-node@v5

@@ -163,20 +163,15 @@ impl Config {
     /// [`Config::compile`]; this is for tests and tools.
     #[doc(hidden)]
     pub fn generate(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<String> {
-        self.load(path, options, krate).map(|(_, _, code)| code)
+        self.load(path, options, krate).map(|(_, code)| code)
     }
 
-    /// The schema at `path`, the files to generate, and their code.
-    fn load(
-        &self,
-        path: &Path,
-        options: &Options,
-        krate: &dyn Fn(&str) -> String,
-    ) -> Result<(Schema, Vec<Unit>, String)> {
+    /// The schema at `path`, and its code.
+    fn load(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<(Schema, String)> {
         let schema = Schema::load_with(path, &Options { without_attributes: self.without_attributes, ..*options })?;
-        let units = graph::units(&schema, None, self.without_attributes)?;
+        let units = graph::units(&schema, self.without_attributes)?;
         let code = generate_units(&schema, &units, &self.codecs, krate)?;
-        Ok((schema, units, code))
+        Ok((schema, code))
     }
 
     /// Writes the code for the schema at `path` to `$OUT_DIR/<name>.rs`.
@@ -185,12 +180,14 @@ impl Config {
         // haus-fmt-schema never prints: the build script tells Cargo what it read.
         packages.files().iter().for_each(|f| rerun_if_changed(f));
         let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
-        let (schema, units, code) = self.load(path, options, &krate)?;
+        let (schema, code) = self.load(path, options, &krate)?;
         schema.files().iter().filter_map(|f| f.path.as_deref()).for_each(rerun_if_changed);
         if !self.quiet {
-            for unit in &units {
-                let path = unit.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
-                unit.file.warnings.iter().for_each(|w| println!("cargo::warning={path}:{w}"));
+            // The files code is generated for: the root and the application's files.
+            let files = schema.files().iter().enumerate().filter(|(i, f)| *i == 0 || f.package.is_none());
+            for file in files.map(|(_, f)| f) {
+                let path = file.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
+                file.warnings().iter().for_each(|w| println!("cargo::warning={path}:{w}"));
             }
         }
         let out = PathBuf::from(var("OUT_DIR")?).join(format!("{name}.rs"));
@@ -213,7 +210,7 @@ pub fn check(text: &str) -> Result<Vec<Warning>> {
 /// touching the environment. It imports std modules and `packages`, not files.
 pub fn generate(text: &str, id: &str, codecs: &[Codec], packages: &Packages) -> Result<String> {
     let schema = Schema::parse_with(text, &Options { packages, id: Some(id), ..Options::default() })?;
-    let units = graph::units(&schema, Some(text), false)?;
+    let units = graph::units(&schema, false)?;
     let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
     generate_units(&schema, &units, codecs, &krate)
 }
@@ -242,7 +239,7 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                             (format!("{at}::{}::{name}", modules[to - 1]), *params)
                         }
                     };
-                    (name.clone(), Imported { id: origin.id(name), path, params })
+                    (name.clone(), Imported { id: origin.id(name), path, params, shape: origin.shape(schema) })
                 })
                 .collect::<HashMap<_, _>>();
             let input =
@@ -350,10 +347,6 @@ fn rerun_if_changed(path: &Path) {
     if env::var_os("OUT_DIR").is_some() {
         println!("cargo::rerun-if-changed={}", path.display());
     }
-}
-
-fn read(path: &Path) -> Result<String> {
-    fs::read_to_string(path).map_err(|e| Error::at(path, Code::ImportNotFound, e))
 }
 
 fn var(key: &str) -> Result<String> {

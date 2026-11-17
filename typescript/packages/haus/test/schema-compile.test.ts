@@ -95,6 +95,86 @@ describe("schemas from schema files", () => {
     })
   })
 
+  it("treat a case whose one argument names a record as a record case (spec §15)", () => {
+    const { schemas, file } = compileSchemaFile(`
+      type Rec = { w: Int32, tags?: Array String }
+      type Alias = Rec
+      type Alias2 = Alias
+      type Page a = { w: a, tags?: Array String }
+      type Inline = < Box { w: Int32, tags?: Array String } | Empty >
+      type Paren = < Box ({ w: Int32, tags?: Array String }) | Empty >
+      type Named = < Box Rec | Empty >
+      type Chain = < Box Alias2 | Empty >
+      type Applied = < Box (Page Int32) | Empty >
+      type Id a = a
+      type ById = < Box (Id Rec) | Empty >
+      type Nat = < Z | S Nat >
+      type Spread = < ...Named | Other >
+      type GenBox a = < Box a | Empty >
+      type Gen = GenBox Rec
+    `)
+    for (const text of ["Box { w: 1 }", "Box({ w: 1, tags: [\"a\"] })", "Box { w: 1, extra: 2 }", "Empty"]) {
+      const value = (name: string) => h.parse(schemas[name]!, text)
+      const json = (name: string) => h.toJson(schemas[name]!, value(name))
+      for (const name of ["Paren", "Named", "Chain", "Applied", "ById", "Spread"]) {
+        expect(value(name), `${name}: ${text}`).toEqual(value("Inline"))
+        expect(json(name), `${name}: ${text}`).toBe(json("Inline"))
+        expect(h.fromJson(schemas[name]!, json("Inline"))).toEqual(value("Inline"))
+      }
+    }
+    expect(h.toJson(schemas.Named!, h.parse(schemas.Named!, "Box { w: 1 }"))).toBe(`{"_tag":"Box","w":1}`)
+    // A recursive case resolves once every type is known.
+    expect(h.parse(schemas.Nat!, "S(S(Z))")).toEqual({ _tag: "S", values: [{ _tag: "S", values: [{ _tag: "Z" }] }] })
+    // A type parameter is never a record, even where its argument is one.
+    expect(h.parse(schemas.Gen!, "Box { w: 1 }")).toEqual({ _tag: "Box", values: [{ w: 1 }] })
+    expect(h.toJson(schemas.Gen!, h.parse(schemas.Gen!, "Box { w: 1 }"))).toBe(`{"_tag":"Box","value":{"w":1}}`)
+    // The declarations agree: the record's fields beside the tag.
+    const decl = schemaDeclarations(file)
+    const box = `{ readonly _tag: "Box"; readonly w: number; readonly tags?: ReadonlyArray<string> }`
+    for (const name of ["Inline", "Paren", "Named", "Chain", "Applied", "ById"]) expect(decl).toContain(`export type ${name} = ${box} | { readonly _tag: "Empty" } | h$.Unknown;`)
+  })
+
+  it("agree with hand-written schemas where a Recursive record is a case's one argument (spec §15)", () => {
+    const { schemas } = compileSchemaFile(`
+      type Node = { name: String, next?: Node, then: Maybe Event }
+      type Event = < Start Node | Odd Weird | Stop >
+      type Weird = { n: Int32 }
+    `)
+    interface Node { readonly name: string; readonly next?: Node; readonly then: h.Maybe<Event> }
+    type Event = ({ readonly _tag: "Start" } & Node) | { readonly _tag: "Odd"; readonly n: number } | { readonly _tag: "Stop" } | h.Unknown
+    // Built when first used: Event is defined below, and Node is a record only once it is built.
+    const Node = h.Recursive<Node>("Node", (self) => h.Record({ name: h.String, next: h.Optional(self), then: h.Maybe(Event) }))
+    const Weird = h.Recursive<{ readonly n: number }>("Weird", () => h.Recursive("Inner", () => h.Record({ n: h.Int32 })))
+    const Event: h.Schema<Event> = h.OpenVariant({ Start: Node, Odd: Weird, Stop: h.Unit })
+    // The case's type has the record's fields beside the tag.
+    const start: h.Infer<typeof Event> = { _tag: "Start", name: "x", then: { _tag: "None" } }
+    expect(h.toJson(Event, start)).toBe(`{"_tag":"Start","name":"x","then":null}`)
+    for (const text of [
+      `Start { name: "a", next: { name: "b", then: None }, then: Some(Stop) }`,
+      `Start { name: "a", then: Some(Start { name: "c", then: Some(Odd { n: 3 }) }), extra: 1 }`,
+      `Odd { n: 1 }`,
+      `Stop`,
+      `Later(1)`,
+    ]) {
+      const written = h.parse(Event, text)
+      const fromFile = h.parse(schemas.Event!, text)
+      expect(written, text).toEqual(fromFile)
+      const json = h.toJson(schemas.Event!, fromFile)
+      expect(h.toJson(Event, written), text).toBe(json)
+      expect(h.fromJson(Event, json), text).toEqual(written)
+      expect(h.stringify(Event, written)).toBe(h.stringify(schemas.Event!, fromFile))
+    }
+    expect(h.toJson(Event, h.parse(Event, `Odd { n: 1 }`))).toBe(`{"_tag":"Odd","n":1}`)
+    // A record case takes a record, as the schema file's does.
+    for (const text of [`Start("a")`, `Odd(1)`]) {
+      expect(() => h.parse(Event, text)).toThrow(/expects a record payload/)
+      expect(() => h.parse(schemas.Event!, text)).toThrow(/expects a record payload/)
+    }
+    // A Recursive that isn't a record stays a positional case.
+    const Ints = h.Recursive<readonly number[]>("Ints", () => h.Array(h.Int32))
+    expect(h.parse(h.Variant({ L: Ints }), "L([1])")).toEqual({ _tag: "L", value: [1] })
+  })
+
   it("are Standard Schemas", () => {
     const { schemas } = compileSchemaFile(`type Root = { id: Int }`)
     const s = schemas.Root as StandardSchemaV1<unknown, unknown>
