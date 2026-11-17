@@ -246,13 +246,24 @@ def test_import_errors() -> None:
     rejects("import std/time ()", "expected a type name")
     rejects("import money (Money)", "unknown module money")
 
-    # Two files with one id: two copies of a package found in different places.
+    # One package per name: two copies found in different places, or two major versions.
     @dataclass(frozen=True, slots=True)
     class TwoCopies:
         def resolve(self, module: str, from_key: str | None) -> ResolvedModule:
-            return ResolvedModule(module, "@acme/ids@3", "type Id = String", "3.0.1")
+            major = module.removeprefix("./")
+            return ResolvedModule(module, f"@acme/ids@{major}", "type Id = String", f"{major}.0.1")
 
-    rejects("import ./one (Id)\nimport ./two (Id)", "another file already is", resolver=TwoCopies())
+    rejects("import ./3 (Id)\nimport ./3 (Id)", "Id is imported twice", resolver=TwoCopies())
+    e = rejects("import ./3 (Id)\nimport ./2 (Id)", "two packages are called @acme/ids", resolver=TwoCopies())
+    assert e.code == "duplicate-package" and "3.0.1 (./3) and 2.0.1 (./2)" in e.reason
+
+    # Files outside packages may share an id: they are told apart by their key.
+    @dataclass(frozen=True, slots=True)
+    class SameIds:
+        def resolve(self, module: str, from_key: str | None) -> ResolvedModule:
+            return ResolvedModule(module, "common", f"type {module[2:].upper()} = String")
+
+    parse_schema_file("import ./a (A)\nimport ./b (B)", resolver=SameIds())
 
 
 # ── files and packages ───────────────────────────────────────

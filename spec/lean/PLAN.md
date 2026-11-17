@@ -35,6 +35,7 @@ prototype, …) is outside Lean and stays covered by tests.
 | ✅ | **T. std/time** | A reference model of the profile (spec §13.2, `std/time.md`), the bindings' time checkers fuzzed against it, and its security and calendar properties proven | 1–3 weeks |
 | 🟡 | **J. JSON** (spec §16) | A reference for the JSON mappings (the import, self-describing and schema-based JSON) that passes the JSON suite, with the round trips and uniqueness proven, in steps J1–J10 (below). J1–J8 done, in [`Haus/Json/`](Haus/Json), with the bindings fuzzed against it in CI (J7). | J1–J6: ~1 week |
 | ⬜ | **X. Extensions and codecs** (spec §13.3, §13.4) | The codec contract proven once for any codec; a reference checker for each official profile (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`) that the bindings' codecs are fuzzed against, in steps X1–X4 (below). | X1–X3: ~1 week |
+| 🟡 | **R. Package resolution** (spec §13.3, §9.2) | A file-system model with links, an executable resolver that is the reference for `test-suite/packages`, and the security properties of the 2026-11-17 review proven on it, in steps R1–R7 (below). R1 and R2 done, in [`Haus/Packages/`](Haus/Packages). | ~1–1.5 weeks |
 | 🟡 | **L. Layouts** (spec §11) | The standard format: the formatters fuzzed for keeping the values, idempotence and identical bytes; the block-string rules written down; a reference compact writer proven to parse back, for every binding's serializer to be fuzzed against, in steps L1–L5 (below). L1 done (`node fuzz/src/main.ts --format`, in CI); L2 done in the spec (§4, §10, §11); L4 done, in [`Haus/Pretty/`](Haus/Pretty). | L1–L2: days; L3–L4: 1–2 weeks |
 
 Order: A–H, T1–T6, I1–I3, I5, J1–J6 and the definition of V are done. Next:
@@ -328,6 +329,36 @@ Not modelled: registries. Whether a currency code is assigned is outside the
 from ISO 4217 and tested, not proven. And none of this is a rule for schema
 packages: a profile's contract is its written rule, and community packages
 need no Lean.
+
+## R. Package resolution
+
+`plans/package-resolution.md` first judged the rules "finite checks over a
+graph, not worth proofs". The security review of 2026-11-17
+(`plans/package-security-review.md`, appendix "What Lean could verify")
+showed otherwise: F1 (Node's walk also tries `node_modules/@scope/node_modules`)
+and F4 (unifying identical copies made the result depend on import order) are
+exactly the bugs a proof finds, and the suite's expected results (74 cases, 40
+from the review) were written by hand and checked by nothing. So:
+
+| | Step | Gives | Effort |
+|---|---|---|---|
+| ✅ | R1. File-system model and reference resolver | A finite file tree with directories, regular files, symbolic links (relative targets, dangling, cycles) and other files (a FIFO); `realPath` (at most 40 links), a directory listing, and reads through an interface that records them ([`Packages/Fs.lean`](Haus/Packages/Fs.lean)). The resolver of §13.3 on it, executable: root file, mode (`Npm`, `Explicit`, both) → `Ok packages` or `Err code` with a message ([`Packages/Resolve.lean`](Haus/Packages/Resolve.lean)); names, versions and quoting ([`Packages/Names.lean`](Haus/Packages/Names.lean)); a schema file's imports and type names ([`Packages/SchemaFile.lean`](Haus/Packages/SchemaFile.lean)). `haus-ref --packages FILE [CASE]` runs `test-suite/packages/cases.haus`, the `should` cases included: all pass, every hand-written `expect` checked, and every run reads only package files and `*.schema.haus` files, each once ([`Packages/Suite.lean`](Haus/Packages/Suite.lean)). The world-writable skip is a parameter (`Config.worldWritable`); Windows drive roots are not modelled. | 2–3 days |
+| ✅ | R2. One package per name, and ids | `one_package_per_name`: the packages a run makes have distinct names (an invariant of their type, `Classes`), and on `Ok` they are the result (`resolveIn_ok`); `addClass_same`: a copy gets a class only with the same name, `package.haus`, `schema.haus` and imports, and classes only grow. `typeId_injective`: `(name, major, type) ↦ @org/name@N#Type` is injective for valid names and majors. In [`Packages/Props.lean`](Haus/Packages/Props.lean). Not proven: that `classify` is the only writer of the classes over all of `load` (by inspection). | ½–1 day |
+| ⬜ | R3. Order independence (F4) | The result doesn't change when the imports of a file are reordered or the graph is walked in another order. | 1 day |
+| ⬜ | R4. Bounded work (P3, F9) | With a step counter: reads at most one per file, lookups bounded by files × imports; the 256-file and size limits respected. | 1 day |
+| ⬜ | R5. Name isolation (F1, P6) | Resolving `@org/name` from importer I reads only `D/node_modules/@org/name` (and `package.json` files) for the ancestors D of I's real path that the rules keep, plus the explicit packages. Stated against the fixed walk; Node's own walk is a counterexample. | 1–2 days |
+| ⬜ | R6. Folders are conservative (F2) | Adding a folder of packages never turns one successful result into a different successful result: it gives the same result or an error. | 1 day |
+| ⬜ | R7. Read set and non-interference (P1, P2, F6–F8) | Every read is one of: the `package.haus`, `schema.haus` or `package.json` of a reached package; the `package.haus` of an explicitly given package or folder entry, and of a `node_modules/@org/name` that turns out to name another package; a project `package.json` above an importing file (also the ones skipped); a file whose real path ends in `.schema.haus`; changing any other file never changes the result or a message. This is the containment model `plans/package-resolution.md` planned. | 2–3 days |
+
+R1 comes first: it checks the suite's expected results, and the fuzzer can
+then compare the bindings with it on random small trees (a `--packages` mode,
+as for the schema checker in G). R2–R4 need only the graph and are small;
+R5–R7 need the file-system model with links.
+
+Not settled by Lean: what operating systems do (case-insensitive and
+Unicode-normalising file systems, Windows junctions and UNC paths, the race
+between checking and reading of F6), what npm installs, differences between
+regex engines, and the editor.
 
 ## V. Versions
 

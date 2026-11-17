@@ -15,7 +15,8 @@
  * with a schema are decoded with it.
  */
 import { parseSchemaFile, schemaDeclarations } from "@haus-fmt/haus"
-import { isSchemaFile, schemaOptions } from "@haus-fmt/haus/node"
+import { resolve } from "node:path"
+import { isSchemaFile, nodeResolver, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
 import { parsePlain, plainDeclarations } from "@haus-fmt/haus/plain"
 import { dataModule, dataModuleSource, schemaFor, schemaModuleSource, specifier, type Diagnostic } from "./schemas.js"
 
@@ -24,9 +25,44 @@ export type Target = "plain" | "effect"
 export interface ImportOptions {
   /** What `.haus` imports become. Default "plain". */
   readonly target?: Target
+  /**
+   * Schema packages given explicitly (spec §13.3), relative to the project
+   * root: each a package directory with `package.haus` and `schema.haus`.
+   * Used instead of an installed package with the same name.
+   */
+  readonly packages?: readonly string[]
+  /**
+   * Folders of packages, relative to the project root: each direct
+   * subdirectory with a `package.haus` is a package. One that is also
+   * installed in node_modules must have the same files.
+   */
+  readonly folders?: readonly string[]
+  /** Look for packages in node_modules too (default true). With `false`, only `packages` and `folders`. */
+  readonly npm?: boolean
 }
 
 export type { Diagnostic }
+
+const paths = (value: unknown, what: string): readonly string[] => {
+  if (value === undefined) return []
+  if (Array.isArray(value) && value.every((p) => typeof p === "string")) return value as readonly string[]
+  throw new Error(`@haus-fmt/import: ${what} must be a list of paths, found ${JSON.stringify(value)}`)
+}
+
+/**
+ * The resolver options of `options`: `packages` and `folders` made absolute
+ * against `root` (the project root: Vite's root, the tsconfig.json's
+ * directory, or the working directory).
+ */
+export const packagesOf = (options: { readonly packages?: unknown; readonly folders?: unknown; readonly npm?: unknown } | undefined, root: string): NodeResolverOptions => {
+  const npm = options?.npm ?? true
+  if (typeof npm !== "boolean") throw new Error(`@haus-fmt/import: npm must be true or false, found ${JSON.stringify(npm)}`)
+  return {
+    packages: paths(options?.packages, "packages").map((p) => resolve(root, p)),
+    folders: paths(options?.folders, "folders").map((f) => resolve(root, f)),
+    npm,
+  }
+}
 
 export const targetOf = (options: { readonly target?: unknown } | undefined): Target => {
   const t = options?.target ?? "plain"
@@ -41,27 +77,36 @@ export interface Backend {
   readonly schemaTypes: (text: string, fileName: string) => string
   /** The runtime generated modules import (runtime/plain.ts or runtime/effect.ts), as `@haus-fmt/import/runtime/<target>`. */
   readonly runtime: string
+  /** Where schema packages are found (packagesOf). */
+  readonly packages: NodeResolverOptions
 }
 
-const plain: Backend = {
-  target: "plain",
-  schemaTypes: (text, fileName) =>
-    schemaDeclarations(parseSchemaFile(text, schemaOptions(fileName)), { haus: specifier(fileName, "@haus-fmt/haus/schema") }),
-  runtime: "runtime/plain",
-}
-
-/** The backend for a target. The Effect one is loaded only when a project asks for it, so plain projects need no Effect. */
-export async function backend(target: Target): Promise<Backend> {
-  if (target === "plain") return plain
+/**
+ * The backend for a target, finding schema packages with `packages`
+ * (packagesOf; default: node_modules only). Packages or folders that don't
+ * exist are reported now. The Effect backend is loaded only when a project
+ * asks for it, so plain projects need no Effect.
+ */
+export async function backend(target: Target, packages: NodeResolverOptions = {}): Promise<Backend> {
+  nodeResolver(packages)
+  if (target === "plain") {
+    return {
+      target,
+      schemaTypes: (text, fileName) =>
+        schemaDeclarations(parseSchemaFile(text, schemaOptions(fileName, packages)), { haus: specifier(fileName, "@haus-fmt/haus/schema") }),
+      runtime: "runtime/plain",
+      packages,
+    }
+  }
   const { effectSchemaTypes } = await import("./effect.js")
-  return { target, schemaTypes: effectSchemaTypes, runtime: "runtime/effect" }
+  return { target, schemaTypes: (text, fileName) => effectSchemaTypes(text, fileName, packages), runtime: "runtime/effect", packages }
 }
 
 /** TypeScript declarations for an imported `.haus` file, with diagnostics for the file. */
 export function typesFor(text: string, fileName: string, b: Backend): { text: string; diagnostics: Diagnostic[] } {
   if (isSchemaFile(fileName)) return { text: b.schemaTypes(text, fileName), diagnostics: [] }
-  const link = schemaFor(fileName, text)
-  if (link) return dataModule(text, fileName, link)
+  const link = schemaFor(fileName)
+  if (link) return dataModule(text, fileName, link, b.packages)
   return { text: plainDeclarations(text, fileName), diagnostics: [] }
 }
 
@@ -72,9 +117,9 @@ export function typesFor(text: string, fileName: string, b: Backend): { text: st
  */
 export function moduleFor(text: string, fileName: string, b: Backend, importRuntime: (path: string) => string): { code: string; files: string[] } {
   const runtime = importRuntime(b.runtime)
-  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime)
-  const link = schemaFor(fileName, text)
-  if (link) return dataModuleSource(text, fileName, link, runtime)
+  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime, b.packages)
+  const link = schemaFor(fileName)
+  if (link) return dataModuleSource(text, fileName, link, runtime, b.packages)
   return { code: `export default ${js(parsePlain(text))};\n`, files: [] }
 }
 

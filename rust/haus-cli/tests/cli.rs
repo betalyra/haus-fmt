@@ -11,6 +11,10 @@ use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
+/// Schemas the fixtures are checked against with --schema.
+const ORDER: &str = "adjacent/order.schema.haus";
+const SHAPE: &str = "shapes/shapes.schema.haus#Shape";
+
 fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -126,14 +130,20 @@ fn check_a_valid_file_against_the_schema_next_to_it() {
 
 #[test]
 fn check_invalid_data_json() {
-    let (code, json) = check_json(&fixtures(), &["adjacent/order-bad.haus"]);
+    let (code, json) = check_json(&fixtures(), &["--schema", ORDER, "adjacent/order-bad.haus"]);
     assert_eq!(code, 1);
     insta::assert_snapshot!(pretty(&json));
 }
 
 #[test]
 fn check_invalid_data_text() {
-    let out = haus().args(["check", "adjacent/order-bad.haus"]).assert().code(1).get_output().stdout.clone();
+    let out = haus()
+        .args(["check", "--schema", ORDER, "adjacent/order-bad.haus"])
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
     insta::assert_snapshot!(String::from_utf8(out).unwrap());
 }
 
@@ -144,43 +154,50 @@ fn check_syntax_error_text() {
 }
 
 #[test]
-fn check_with_the_schema_named_in_a_comment() {
-    haus().args(["check", "comment/circle.haus"]).assert().success();
-    let (code, json) = check_json(&fixtures(), &["comment/triangle.haus"]);
+fn check_with_the_schema_given() {
+    haus().args(["check", "--schema", SHAPE, "shapes/circle.haus"]).assert().success();
+    let (code, json) = check_json(&fixtures(), &["--schema", SHAPE, "shapes/triangle.haus"]);
     assert_eq!(code, 1);
     let file = &array(&json, "files")[0];
-    assert_eq!(str_of(file, "schema"), "comment/shapes.schema.haus#Shape");
+    assert_eq!(str_of(file, "schema"), "shapes/shapes.schema.haus#Shape");
     let d = &array(file, "diagnostics")[0];
     assert_eq!(str_of(d, "code"), "unknown-tag");
     assert_eq!(str_of(d, "path"), "$");
+    // Without --schema, a file with no schema next to it is checked for syntax only.
+    haus().args(["check", "shapes/triangle.haus"]).assert().success();
 }
 
 #[test]
-fn a_schema_comment_that_names_nothing() {
-    let (code, json) = check_json(&fixtures(), &["comment/missing.haus", "comment/notype.haus"]);
+fn a_schema_without_the_type_given() {
+    let (code, json) =
+        check_json(&fixtures(), &["--schema", "shapes/shapes.schema.haus#Polygon", "shapes/circle.haus"]);
     assert_eq!(code, 1);
-    insta::assert_snapshot!(pretty(&json));
+    let file = &array(&json, "files")[0];
+    assert_eq!(str_of(file, "schema"), "shapes/shapes.schema.haus#Polygon");
+    let d = &array(file, "diagnostics")[0];
+    assert_eq!(str_of(d, "code"), "unknown-type");
+    assert_eq!(str_of(d, "message"), "the schema shapes/shapes.schema.haus has no type Polygon");
+    assert!(d.get("line").is_none(), "{d:?}");
 }
 
 #[test]
 fn check_with_schema_option_overrides() {
-    let schema = "comment/shapes.schema.haus#Shape";
-    haus().args(["check", "--schema", schema, "-"]).write_stdin("Square { side: 2.0 }").assert().success();
+    haus().args(["check", "--schema", SHAPE, "-"]).write_stdin("Square { side: 2.0 }").assert().success();
     haus()
-        .args(["check", "--schema", schema, "-"])
+        .args(["check", "--schema", SHAPE, "-"])
         .write_stdin("Square { side: \"2\" }")
         .assert()
         .code(1)
         .stdout(predicate::str::contains("error[type-mismatch]").and(predicate::str::contains("<stdin>:1:16")));
-    // It wins over the comment and the file next to the data.
-    haus().args(["check", "--schema", schema, "comment/triangle.haus"]).assert().code(1);
-    haus().args(["check", "--schema", "adjacent/order.schema.haus", "comment/circle.haus"]).assert().code(1);
+    // It wins over the file next to the data.
+    haus().args(["check", "--schema", SHAPE, "adjacent/order.haus"]).assert().code(1);
     haus().args(["check", "--schema", "nowhere.schema.haus", "adjacent"]).assert().code(2);
 }
 
 #[test]
 fn check_syntax_only() {
-    haus().args(["check", "--no-schema", "adjacent/order-bad.haus", "comment/missing.haus"]).assert().success();
+    // Not even the broken schema next to badschema/data.haus is read.
+    haus().args(["check", "--no-schema", "badschema/data.haus"]).assert().success();
     haus().args(["check", "--no-schema", "syntax/null.haus"]).assert().code(1);
 }
 
@@ -271,7 +288,14 @@ fn packages_in_node_modules() {
     let manifest = |name: &str| format!("{{ name: \"{name}\", version: \"1.2.0\" }}");
     write("secret/creds.txt", "API_TOKEN=hunter2");
     write("secret/creds.schema.haus", "API_TOKEN=hunter2");
-    // A package that works: app → @acme/orders → @haus-fmt/money, hoisted.
+    // A package that works: app → @acme/orders → @haus-fmt/money, hoisted,
+    // each declaring what it imports.
+    let deps = r#"{ "@acme/orders": "*", "@evil/link": "*", "@evil/import": "*", "@evil/near": "*" }"#;
+    write("app/package.json", &format!(r#"{{ "name": "app", "dependencies": {deps} }}"#));
+    write(
+        "app/node_modules/@acme/orders/package.json",
+        r#"{ "name": "@acme/orders", "version": "1.2.0", "peerDependencies": { "@haus-fmt/money": "*" } }"#,
+    );
     write("app/node_modules/@haus-fmt/money/package.haus", &manifest("@haus-fmt/money"));
     write("app/node_modules/@haus-fmt/money/schema.haus", "type Money = closed < Money Decimal String >");
     write("app/node_modules/@acme/orders/package.haus", &manifest("@acme/orders"));
@@ -321,6 +345,86 @@ fn packages_in_node_modules() {
     assert_eq!(str_of(&array(&array(&json, "files")[0], "diagnostics")[0], "code"), "package-path");
 }
 
+#[cfg(unix)]
+#[test]
+fn packages_given_with_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    };
+    let manifest = |name: &str, version: &str| format!("{{ name: \"{name}\", version: \"{version}\" }}");
+    // The manifests name the packages, not the directories.
+    write("vendor/money-v1/package.haus", &manifest("@acme/money", "1.2.0"));
+    write("vendor/money-v1/schema.haus", "type Money = { amount: Decimal }");
+    write("lib/geo/package.haus", &manifest("@acme/geo", "1.0.0"));
+    write("lib/geo/schema.haus", "type LatLng = { lat: Float64, lng: Float64 }");
+    write("lib/README.md", "not a package: no package.haus");
+    write(
+        "app/order.schema.haus",
+        "import @acme/money@1 (Money)\nimport @acme/geo@1 (LatLng)\ntype Root = { total: Money, at: LatLng }",
+    );
+    write("app/order.haus", "{ total: { amount: 1.5 }, at: { lat: 1.0, lng: 2.0 } }");
+    write("app/package.json", r#"{ "name": "app", "dependencies": { "@acme/money": "*", "@acme/geo": "*" } }"#);
+    let first_code = |json: &Json| str_of(&array(&array(json, "files")[0], "diagnostics")[0], "code").to_owned();
+
+    // Not in node_modules, not given.
+    let (code, json) = check_json(dir.path(), &["app/order.haus"]);
+    assert_eq!((code, first_code(&json)), (1, "import-not-found".into()), "{}", pretty(&json));
+    // --package DIR and --packages FOLDER, also as NAME=DIR.
+    for money in ["vendor/money-v1", "@acme/money=vendor/money-v1"] {
+        let (code, json) = check_json(dir.path(), &["--package", money, "--packages", "lib", "app"]);
+        assert_eq!(code, 0, "{}", pretty(&json));
+        assert_eq!(array(&json, "files").len(), 2);
+    }
+    // A package given comes before node_modules for its name.
+    write("app/node_modules/@acme/money/package.haus", &manifest("@acme/money", "1.9.0"));
+    write("app/node_modules/@acme/money/schema.haus", "type Money = Int");
+    let (code, json) = check_json(dir.path(), &["--packages", "lib", "app/order.haus"]);
+    assert_eq!((code, first_code(&json)), (1, "type-mismatch".into()), "{}", pretty(&json));
+    let (code, json) = check_json(dir.path(), &["--package", "vendor/money-v1", "--packages", "lib", "app/order.haus"]);
+    assert_eq!(code, 0, "{}", pretty(&json));
+
+    // Packages that can't be used: nothing is checked (exit code 2).
+    write("bad/package.haus", &manifest("@Acme/Bad", "1.0.0"));
+    write("bad/schema.haus", "type Bad = Int");
+    let failures = [
+        (
+            vec!["--package", "@acme/cash=vendor/money-v1"],
+            "import-not-found",
+            "names the package @acme/money, not @acme/cash",
+        ),
+        (vec!["--package", "bad"], "package-manifest", "\"@Acme/Bad\" is not a package name"),
+        (vec!["--package", "nowhere"], "import-not-found", "--package nowhere"),
+        (vec!["--packages", "nowhere"], "import-not-found", "--packages nowhere"),
+        (vec!["--package", "lib"], "import-not-found", "is not a schema package"),
+        (
+            vec!["--package", "vendor/money-v1", "--package", "app/node_modules/@acme/money"],
+            "duplicate-package",
+            "1.2.0",
+        ),
+    ];
+    for (args, want, says) in failures {
+        let (code, json) = check_json(dir.path(), &[args.as_slice(), &["app/order.haus"]].concat());
+        let error = json.get("error").unwrap_or_else(|| panic!("{args:?}: {}", pretty(&json)));
+        assert_eq!((code, str_of(error, "code")), (2, want), "{args:?}: {}", pretty(&json));
+        assert!(str_of(error, "message").contains(says), "{args:?}: {}", pretty(&json));
+    }
+    // A package in a folder whose manifest is invalid is left out; an import
+    // that isn't found names it.
+    let (code, json) = check_json(dir.path(), &["--packages", ".", "app/order.haus"]);
+    assert_eq!((code, first_code(&json)), (1, "import-not-found".into()), "{}", pretty(&json));
+    assert!(pretty(&json).contains("bad (") && pretty(&json).contains("is not a package name"), "{}", pretty(&json));
+    haus()
+        .current_dir(dir.path())
+        .args(["check", "--package", "bad", "app/order.haus"])
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicate::str::starts_with("error: --package bad: "));
+}
+
 #[test]
 fn io_errors_exit_with_2_and_are_reported() {
     let (code, json) = check_json(&fixtures(), &["adjacent/order.haus", "nowhere.haus"]);
@@ -356,8 +460,7 @@ fn json_output_even_when_nothing_can_be_checked() {
 
 #[test]
 fn wrong_payload_hints_name_the_case() {
-    let schema = "comment/shapes.schema.haus#Shape";
-    let out = haus().args(["check", "--json", "--schema", schema, "-"]).write_stdin("Circle(1.5)").output().unwrap();
+    let out = haus().args(["check", "--json", "--schema", SHAPE, "-"]).write_stdin("Circle(1.5)").output().unwrap();
     let json = haus::json::parse(&String::from_utf8(out.stdout).unwrap()).unwrap();
     let d = &array(&array(&json, "files")[0], "diagnostics")[0];
     assert_eq!(str_of(d, "code"), "wrong-payload");
@@ -661,8 +764,7 @@ fn check_stdin_against_a_stream_schema_reports_each_value_as_it_comes() {
 
 #[test]
 fn check_stdin_against_a_document_schema_rejects_a_second_value() {
-    let mut live =
-        Live::start(&fixtures(), &["check", "--color", "never", "--schema", "comment/shapes.schema.haus#Shape", "-"]);
+    let mut live = Live::start(&fixtures(), &["check", "--color", "never", "--schema", SHAPE, "-"]);
     live.send("Square { side: 2.0 },\n");
     live.send("Square { side: 3.0 },\n");
     let error = live.lines_to("  = docs");

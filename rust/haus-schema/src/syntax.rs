@@ -8,6 +8,8 @@
 //! What needs other files (names, arities, imports) is checked by
 //! [`Schema`](crate::Schema), and by the code generators of haus-fmt-build.
 
+use crate::packages::is_package_name;
+use crate::quote;
 use haus::{ErrorCode as Code, Value};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -52,6 +54,14 @@ pub fn import_version(module: &str) -> Option<String> {
         Some(format!("@{name}@{version}: a major version has no leading zeros (@{name}@{major})"))
     } else {
         None
+    }
+}
+
+/// The package a package import names, without its `@major`: `@haus-fmt/money` for `@haus-fmt/money@1`.
+pub fn package(module: &str) -> &str {
+    match module.get(1..).and_then(|m| m.find('@')) {
+        Some(at) => &module[..at + 1],
+        None => module,
     }
 }
 
@@ -343,8 +353,9 @@ fn found(rest: &str) -> String {
     let word = rest.bytes().take_while(|b| b.is_ascii_alphanumeric() || *b == b'_').count();
     match rest.chars().next() {
         None => "end of file".into(),
-        Some(_) if word > 0 => format!("'{}'", &rest[..word]),
-        Some(c) => format!("{c:?}"),
+        Some(_) if word > 0 => format!("'{}'", quote(&rest[..word])),
+        Some(c) if c.is_ascii() => format!("{c:?}"),
+        Some(c) => format!("'{}'", quote(&c.to_string())),
     }
 }
 
@@ -438,7 +449,7 @@ fn import(i: &mut Input) -> ModalResult<Import> {
     let module = alt((
         preceded("std/", lower).map(|m| format!("std/{m}")),
         token(
-            (one_of(['@', '.']), take_while(1.., |c: char| c.is_ascii_alphanumeric() || "_.-/@".contains(c)))
+            (one_of(['@', '.']), take_while(1.., |c: char| c.is_ascii_alphanumeric() || "_.-/@~".contains(c)))
                 .take()
                 .map(str::to_owned),
         ),
@@ -717,6 +728,15 @@ fn check(file: &File) -> Result<Vec<Fail>, Fail> {
     }
     if let Some((imp, reason)) = file.imports.iter().find_map(|imp| Some((imp, import_version(&imp.module)?))) {
         return Err((imp.pos, Code::ImportVersion, reason));
+    }
+    if let Some(imp) =
+        file.imports.iter().find(|imp| imp.module.starts_with('@') && !is_package_name(package(&imp.module)))
+    {
+        let reason = format!(
+            "unknown module {}: a package is @org/name, in lowercase letters, digits, -, . and _ (not node_modules)",
+            quote(&imp.module)
+        );
+        return Err((imp.pos, Code::UnknownModule, reason));
     }
     for d in &file.types {
         for (i, p) in d.params.iter().enumerate() {

@@ -29,7 +29,7 @@ If the file has a schema, read it before writing data: it decides `Maybe` or opt
 
 `haus check` also checks schema files: run it on a `.schema.haus` you wrote or changed, then on the data that uses it. `haus check .` checks a directory.
 
-**Which schema.** The first that applies: `--schema s.schema.haus#Type` (type defaults to `Root`); a comment at the top of the data file, `// schema: ./order.schema.haus#Order`; `x.schema.haus` next to `x.haus`, type `Root`. Otherwise only the syntax is checked and `files[].schema` is absent: `ok: true` then says nothing about the schema. Data meant for a schema must show it in `files[].schema`; add the `// schema:` comment to data files you create for an existing schema.
+**Which schema.** The first that applies: `--schema s.schema.haus#Type` (type defaults to `Root`); `x.schema.haus` next to `x.haus`, type `Root`. A data file can't name its own schema, and comments in it mean nothing. Otherwise only the syntax is checked and `files[].schema` is absent: `ok: true` then says nothing about the schema. Data meant for a schema must show it in `files[].schema`: put `x.schema.haus` next to `x.haus`, or pass `--schema s.schema.haus#Type` on every check.
 
 **Exit codes.** 0: valid (hints and warnings don't fail). 1: invalid. 2: usage or I/O error, such as a missing file or `--schema` file.
 

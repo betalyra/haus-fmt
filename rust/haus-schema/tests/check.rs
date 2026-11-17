@@ -2,7 +2,7 @@
 //! checker's tests (typescript/packages/haus/test/check.test.ts), with the
 //! same messages and places.
 
-use haus_schema::{FileResolver, Schema, schema_reference};
+use haus_schema::{Explicit, Schema};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,7 +25,7 @@ fn issues(schema: &str, data: &str, ty: &str) -> Vec<String> {
 
 #[test]
 fn accepts_the_examples() {
-    let resolver = FileResolver::new().package("@haus-fmt/money", repo("extensions/money"));
+    let resolver = Explicit::new().package(repo("extensions/money")).unwrap();
     for name in ["thread", "syntax-tour"] {
         let schema =
             Schema::load(repo(&format!("examples/{name}.schema.haus")), &resolver).unwrap_or_else(|e| panic!("{e}"));
@@ -165,14 +165,4 @@ fn many_problems_are_reported_up_to_a_limit() {
     let schema = Schema::parse("type Root = Array Int").unwrap();
     let data = format!("[{}]", vec!["\"x\""; 500].join(", "));
     assert_eq!(schema.check_text("Root", &data).len(), haus_schema::MAX_ISSUES);
-}
-
-#[test]
-fn schema_reference_reads_the_comment_at_the_top() {
-    let text = "// An order.\n// schema: ./api.schema.haus#Order\n{ id: 1 }";
-    let r = schema_reference(text).unwrap();
-    assert_eq!((r.path.as_str(), r.type_name.as_str()), ("./api.schema.haus", "Order"));
-    assert_eq!(&text[r.span], "./api.schema.haus#Order");
-    assert_eq!(schema_reference("// schema: x.schema.haus\n{}").map(|r| r.type_name), Some("Root".into()));
-    assert_eq!(schema_reference("{}\n// schema: x.schema.haus"), None);
 }

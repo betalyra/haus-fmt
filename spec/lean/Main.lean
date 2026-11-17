@@ -1,5 +1,6 @@
 import Haus.Canonical
 import Haus.Json.SchemaBased
+import Haus.Packages.Suite
 import Lean.Data.Json
 
 /-!
@@ -37,6 +38,9 @@ import Lean.Data.Json
     haus-ref --haus-json-read-batch FILE  for each line `HEX` (JSON text, an envelope):
                                   `ok <canonical form>` or `err $ <code> <reason>`
     haus-ref --import-batch FILE         the same for the JSON import (spec §16.1)
+    haus-ref --packages FILE [CASE]      run the package suite FILE (test-suite/packages/cases.haus,
+                                  spec §13.3) with the reference resolver, or only the case
+                                  CASE, printing its result and the files it read
 -/
 
 open Haus Lean
@@ -556,7 +560,40 @@ def runLineBatch (f : String → String) (file : System.FilePath) : IO UInt32 :=
     if !line.isEmpty then out.putStrLn (f line)
   return 0
 
+/-! ## Package resolution (spec §13.3) -/
+
+/--
+`--packages FILE [NAME]`: every case of the package suite in FILE
+(`test-suite/packages/cases.haus`), or only the case NAME, with its message
+and the files read. Cases marked `should` are run: the reference makes the
+version check.
+-/
+def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := do
+  let vs ← match parseBytes (← IO.FS.readBinFile file) with
+    | .ok vs => pure vs
+    | .error e => IO.eprintln s!"{file}: {e}"; return 2
+  let mut failed := 0
+  let mut count := 0
+  for v in vs do
+    match Packages.Suite.decode v with
+    | .error e => IO.println s!"FAIL (case not read): {e}"; failed := failed + 1; count := count + 1
+    | .ok c =>
+      if only.any (· != c.name) then continue
+      count := count + 1
+      let (verdict, o) := Packages.Suite.check c
+      let should := if c.should then " (should)" else ""
+      match verdict with
+      | none => IO.println s!"ok   {c.name}{should}"
+      | some why => failed := failed + 1; IO.println s!"FAIL {c.name}{should}: {why}"
+      if only.isSome then
+        IO.println s!"     {Packages.Suite.showResult o.result}"
+        IO.println s!"     read: {o.reads.toList.map Packages.showPath}"
+  IO.println s!"{count - failed}/{count} passed"
+  return if failed == 0 then 0 else 1
+
 def main : List String → IO UInt32
+  | ["--packages", file] => runPackages file none
+  | ["--packages", file, name] => runPackages file (some name)
   | ["--suite", dir] => runSuite dir
   | ["--batch", dir, n] => runBatch batchLine dir n.toNat!
   | ["--canonical-batch", dir, n] => runBatch canonicalLine dir n.toNat!
@@ -586,4 +623,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --packages FILE [CASE]"; return 2

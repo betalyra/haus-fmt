@@ -213,16 +213,19 @@ Reading follows §15: an open record or payload ignores members it doesn't list 
 
 ### Imports and packages
 
-`import ./common (Address)` reads `common.schema.haus` next to the importing file. Python has no scoped package names, so schema packages are never searched for (spec §13.3): list the project's direct schema dependencies with their directories, each holding a `package.haus` manifest and the package's `schema.haus`. `installed_package` finds the directory of an installed Python package that ships one, without importing it:
+`import ./common (Address)` reads `common.schema.haus` next to the importing file. Python has no scoped package names, so schema packages are never searched for (spec §13.3): give them explicitly. A package is a directory holding a `package.haus` manifest and the package's `schema.haus`, and its manifest names it. `packages` lists package directories (or maps each name to its directory), and each of `package_folders` is a directory whose subdirectories with a `package.haus` are packages. `installed_package` finds the directory of an installed Python package that ships one, without importing it:
 
 ```python
 s = schema.load_schema(
     "order.schema.haus",
-    packages={"@haus-fmt/money": "../extensions/money", "@acme/ids": schema.installed_package("acme_ids")},
+    packages=["../extensions/money", schema.installed_package("acme_ids")],
+    package_folders=["../schemas"],
 )
 ```
 
-Relative package directories are relative to the schema file. The manifest's name must be the imported name, and `@haus-fmt/money@1` checks its major version. Types have the ids of spec §13.3: `@haus-fmt/money@1#Money` in a package, `<project name>/<path>#Name` for other files (the nearest `pyproject.toml`'s `[project] name`). Any other way of finding files is a `ModuleResolver`: an object with `resolve(module, from_key) -> ResolvedModule`, passed to `compile_schema(text, resolver=…, key=…, id=…)`.
+Relative directories are relative to the schema file. Given packages count as declared dependencies; nothing else is searched (no `node_modules`, no global folders). A package directory without `package.haus`, or a folder that doesn't exist, fails before any import (`import-not-found`). A folder's packages are its direct subdirectories (links to directories too), at most 4096 entries (`too-many-files`). A manifest given by its directory is checked when the first package is imported (`package-manifest`: one record, a lowercase `@org/name` without `~` or a part `node_modules`, a semantic version, at most 64 KiB); one in a folder that isn't valid is ignored, and named when an import isn't found. A mapping's name must be the manifest's (`import-not-found` otherwise), and `@haus-fmt/money@1` checks the major version. A package given by its directory is used instead of one in a folder with its name. One schema reaches one package per name: two different packages with one name, also two versions of it, are `duplicate-package`, while copies whose `package.haus` and `schema.haus` are byte for byte the same are one package.
+
+Files are read as spec §13.3 says. A package's `package.haus` and `schema.haus` are regular files, never symbolic links (`package-path`; the package's directory may be a link); they are opened without following links and checked on the opened file. A relative import spells each name as its directory lists it, also on file systems that ignore case, and reads only a file whose real name ends in `.schema.haus` (`import-not-found` otherwise). A schema file is at most 1 MiB (`file-too-large`), a schema reaches at most 256 schema files, the root included (`too-many-files`), and each file is read once. Text that messages quote from files is escaped and at most 40 characters long. Types have the ids of spec §13.3: `@haus-fmt/money@1#Money` in a package, `<project name>/<path>#Name` for other files (the nearest `pyproject.toml`'s `[project] name`), or without a project their path from the root schema file's directory (`billing/common#Address`). Two imports reach the same file when its real path is the same. `schema.FileResolver(base, packages, folders=…)` is the resolver `load_schema` uses; any other way of finding files is a `ModuleResolver`: an object with `resolve(module, from_key) -> ResolvedModule`, passed to `compile_schema(text, resolver=…, key=…, id=…)`.
 
 ### Codecs: other host types
 

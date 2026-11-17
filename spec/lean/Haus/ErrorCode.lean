@@ -2,8 +2,8 @@
 # Error codes
 
 The codes of the catalogue (spec §17, `spec/errors.haus`) that the reference
-reports: the parser's (syntax and limits), the schema decoder's and the JSON
-readers' and writers' (§16). A code
+reports: the parser's (syntax and limits), the schema decoder's, the JSON
+readers' and writers' (§16) and package resolution's (§13.3). A code
 names the mistake, the same in every binding; `Code.name` is its text. The
 TypeScript tests check that every name here is in the catalogue.
 
@@ -30,6 +30,10 @@ inductive Code
   -- JSON (§16)
   | jsonSyntax | unpairedSurrogate | hausJsonForm | hausJsonVersion | hausJsonNumber | hausJsonBytes | invalidTag
   | invalidBase64 | missingMember | unexpectedMember | noJsonForm
+  -- schema files and imports (§13.3, §14), as package resolution reports them
+  | schemaSyntax | unknownModule | unknownImport | duplicateImport | duplicateType
+  | importNotFound | importVersion | importCycle | duplicatePackage | undeclaredPackage
+  | packageManifest | packageVersion | packagePath | fileTooLarge | tooManyFiles
   /-- A recursive function ran out of fuel. Never reported: the completeness
   proof shows the fuel always suffices. Not a code of the catalogue. -/
   | outOfFuel
@@ -98,6 +102,21 @@ def Code.name : Code → String
   | .missingMember => "missing-member"
   | .unexpectedMember => "unexpected-member"
   | .noJsonForm => "no-json-form"
+  | .schemaSyntax => "schema-syntax"
+  | .unknownModule => "unknown-module"
+  | .unknownImport => "unknown-import"
+  | .duplicateImport => "duplicate-import"
+  | .duplicateType => "duplicate-type"
+  | .importNotFound => "import-not-found"
+  | .importVersion => "import-version"
+  | .importCycle => "import-cycle"
+  | .duplicatePackage => "duplicate-package"
+  | .undeclaredPackage => "undeclared-package"
+  | .packageManifest => "package-manifest"
+  | .packageVersion => "package-version"
+  | .packagePath => "package-path"
+  | .fileTooLarge => "file-too-large"
+  | .tooManyFiles => "too-many-files"
   | .outOfFuel => "(out of fuel)"
 
 instance : ToString Code := ⟨Code.name⟩

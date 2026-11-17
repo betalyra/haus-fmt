@@ -144,17 +144,27 @@ pub enum ErrorCode {
     DuplicateImport,
     /// `import-unavailable`: The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there.
     ImportUnavailable,
-    /// `import-not-found`: An imported package or file can't be found: it is not installed, not a direct dependency, or the path is wrong. Also a package whose manifest is broken or names another package.
+    /// `import-not-found`: An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.
     ImportNotFound,
     /// `import-version`: An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.
     ImportVersion,
     /// `import-cycle`: Schema files import each other in a cycle.
     ImportCycle,
-    /// `duplicate-package`: Two different files claim to be the same package: two copies of one package, or two packages with the same name.
+    /// `duplicate-package`: One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package.
     DuplicatePackage,
-    /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
+    /// `undeclared-package`: A file imports a package that its package or project doesn't declare as a dependency (with npm: in the package's own `package.json`, or the nearest one above an application file), or a file with no `package.json` above it imports a package that wasn't given explicitly. A package found only because the package manager placed it nearby, such as a hoisted dependency of a dependency, could be replaced by another one placed there. Checked before the package is looked for.
+    UndeclaredPackage,
+    /// `package-manifest`: A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB.
+    PackageManifest,
+    /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3).
+    PackageVersion,
+    /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
     PackagePath,
-    /// `too-many-files`: A schema imports more files, directly or not, than the tool allows.
+    /// `codec-unreachable`: A codec's type occurs inside a type that another library generated (a package crate, another package's Roc module), where this binding can't apply the codec. Decoding there with the default host type would silently differ from the other bindings (§13.4).
+    CodecUnreachable,
+    /// `file-too-large`: A schema file or a package's `package.json` is larger than the tool allows (1 MiB by default). It is not read.
+    FileTooLarge,
+    /// `too-many-files`: A schema imports more schema files, directly or not, than the tool allows (256 by default, the root included), or a folder of packages has more entries than allowed (4096).
     TooManyFiles,
     /// `type-mismatch`: A value of another kind than the type accepts: a string for an `Int`, an array for a record, a tag that isn't `True` or `False` for a `Bool`. Decoders never convert between kinds (§15).
     TypeMismatch,
@@ -246,7 +256,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 103] = [
+    pub const ALL: [ErrorCode; 108] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -320,7 +330,12 @@ impl ErrorCode {
         ErrorCode::ImportVersion,
         ErrorCode::ImportCycle,
         ErrorCode::DuplicatePackage,
+        ErrorCode::UndeclaredPackage,
+        ErrorCode::PackageManifest,
+        ErrorCode::PackageVersion,
         ErrorCode::PackagePath,
+        ErrorCode::CodecUnreachable,
+        ErrorCode::FileTooLarge,
         ErrorCode::TooManyFiles,
         ErrorCode::TypeMismatch,
         ErrorCode::NotAnInteger,
@@ -428,7 +443,12 @@ impl ErrorCode {
             ErrorCode::ImportVersion => "import-version",
             ErrorCode::ImportCycle => "import-cycle",
             ErrorCode::DuplicatePackage => "duplicate-package",
+            ErrorCode::UndeclaredPackage => "undeclared-package",
+            ErrorCode::PackageManifest => "package-manifest",
+            ErrorCode::PackageVersion => "package-version",
             ErrorCode::PackagePath => "package-path",
+            ErrorCode::CodecUnreachable => "codec-unreachable",
+            ErrorCode::FileTooLarge => "file-too-large",
             ErrorCode::TooManyFiles => "too-many-files",
             ErrorCode::TypeMismatch => "type-mismatch",
             ErrorCode::NotAnInteger => "not-an-integer",
@@ -537,7 +557,12 @@ impl ErrorCode {
             ErrorCode::ImportVersion => ErrorCategory::Imports,
             ErrorCode::ImportCycle => ErrorCategory::Imports,
             ErrorCode::DuplicatePackage => ErrorCategory::Imports,
+            ErrorCode::UndeclaredPackage => ErrorCategory::Imports,
+            ErrorCode::PackageManifest => ErrorCategory::Imports,
+            ErrorCode::PackageVersion => ErrorCategory::Imports,
             ErrorCode::PackagePath => ErrorCategory::Imports,
+            ErrorCode::CodecUnreachable => ErrorCategory::Imports,
+            ErrorCode::FileTooLarge => ErrorCategory::Imports,
             ErrorCode::TooManyFiles => ErrorCategory::Imports,
             ErrorCode::TypeMismatch => ErrorCategory::Decoding,
             ErrorCode::NotAnInteger => ErrorCategory::Decoding,
@@ -642,11 +667,16 @@ impl ErrorCode {
             ErrorCode::UnknownImport => "Import a type the module defines; the message lists them.",
             ErrorCode::DuplicateImport => "Import each name once.",
             ErrorCode::ImportUnavailable => "Read the schema with a resolver that loads imports (from files or packages), or inline the types.",
-            ErrorCode::ImportNotFound => "Install the package (as a direct dependency), or fix the path.",
+            ErrorCode::ImportNotFound => "Install the package, or fix the path.",
             ErrorCode::ImportVersion => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
             ErrorCode::ImportCycle => "Move the shared types to a file both import.",
-            ErrorCode::DuplicatePackage => "Install one copy of the package (deduplicate your dependencies).",
+            ErrorCode::DuplicatePackage => "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`.",
+            ErrorCode::UndeclaredPackage => "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`).",
+            ErrorCode::PackageManifest => "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version.",
+            ErrorCode::PackageVersion => "Release both with the same version: change them together.",
             ErrorCode::PackagePath => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.",
+            ErrorCode::CodecUnreachable => "Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs.",
+            ErrorCode::FileTooLarge => "Split the schema into several files, or raise the limit if you trust the file.",
             ErrorCode::TooManyFiles => "Import fewer files.",
             ErrorCode::TypeMismatch => "Write a value of the expected type; the message says which.",
             ErrorCode::NotAnInteger => "Write the integer without a fraction or exponent.",

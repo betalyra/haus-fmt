@@ -141,56 +141,6 @@ impl fmt::Display for Issue {
 
 impl std::error::Error for Issue {}
 
-/// The `// schema: ./order.schema.haus` or `// schema: ./api.schema.haus#Order`
-/// comment at the top of a data file (spec §14): the schema file, as written,
-/// and the type (default `Root`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaReference {
-    pub path: String,
-    pub type_name: String,
-    /// Where it is written (byte offsets), for diagnostics.
-    pub span: Range<usize>,
-}
-
-/// The schema reference in the comment lines at the top of `text`, if any.
-pub fn schema_reference(text: &str) -> Option<SchemaReference> {
-    let mut offset = 0;
-    for line in text.split('\n') {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() && !trimmed.starts_with("//") {
-            return None;
-        }
-        let clean = line.strip_suffix('\r').unwrap_or(line);
-        let found = clean
-            .trim_start_matches([' ', '\t'])
-            .strip_prefix("//")
-            .map(|c| c.trim_start_matches([' ', '\t']))
-            .and_then(|c| c.strip_prefix("schema:"))
-            .map(|c| c.trim_matches([' ', '\t']))
-            .filter(|r| !r.is_empty() && !r.contains(char::is_whitespace));
-        if let Some(reference) = found {
-            let (path, ty) = match reference.split_once('#') {
-                Some((path, ty)) => (path, Some(ty)),
-                None => (reference, None),
-            };
-            let valid_type = ty.is_none_or(|t| {
-                t.starts_with(|c: char| c.is_ascii_uppercase())
-                    && t.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
-            });
-            if !path.is_empty() && valid_type {
-                let start = offset + line.find(reference).unwrap_or(0);
-                return Some(SchemaReference {
-                    path: path.to_owned(),
-                    type_name: ty.unwrap_or("Root").to_owned(),
-                    span: start..start + reference.len(),
-                });
-            }
-        }
-        offset += line.len() + 1;
-    }
-    None
-}
-
 impl Schema {
     /// Decode `value` with the type `name` (a definition without parameters)
     /// as spec §15 says. The result is the value an encoder writes back:

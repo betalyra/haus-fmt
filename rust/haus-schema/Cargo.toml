@@ -19,5 +19,9 @@ name = "haus_schema"
 haus = { package = "haus-fmt", path = "../haus", version = "0.1.0" }
 winnow = "1.0.5"
 
+# O_NOFOLLOW and O_NONBLOCK, to open package files without following links (spec §13.3).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 [dev-dependencies]
 tempfile = "3.27.0"

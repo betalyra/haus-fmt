@@ -9,7 +9,7 @@ haus is a text data format: JSON's records, arrays, strings and numbers, plus by
 ## Syntax
 
 ```haus
-// schema: ./order.schema.haus#Order
+// order.haus: checked against order.schema.haus next to it
 /* block comments /* nest */ */
 {
   id: 1042,                                   // bare keys: [a-z_][A-Za-z0-9_]*
@@ -92,14 +92,14 @@ type Status = < Pending | Shipped { at: Instant } | Cancelled String > // open: 
 type Level = closed < Debug | Info | Warn >
 ```
 
-Also in the prelude: `String`, `Bool`, `Result e a`, and `Stream a` for a whole file of values (`type Root = Stream Event`). `type Page a = { items: Array a }` is generic; `...Base` copies another record's fields or variant's tags. A data file `x.haus` is described by the type `Root` in `x.schema.haus` next to it, or by the type named in a comment at the top: `// schema: ./order.schema.haus#Order`.
+Also in the prelude: `String`, `Bool`, `Result e a`, and `Stream a` for a whole file of values (`type Root = Stream Event`). `type Page a = { items: Array a }` is generic; `...Base` copies another record's fields or variant's tags. A data file `x.haus` is described by the type `Root` in `x.schema.haus` next to it; `haus check --schema s.schema.haus#Type` uses another schema or type. A data file never names its schema.
 
 ## The loop
 
 Install the [`haus` command](https://haus-fmt.org/docs/cli) with `cargo install haus-fmt-cli`.
 
 1. Write the `.haus` file, and a `.schema.haus` when the data has a fixed shape.
-2. `haus check order.haus` reports syntax errors with line and column. With a schema (`order.schema.haus` next to it, a `// schema:` comment, or `--schema s.schema.haus#Type`), it also reports values the schema rejects. `haus check .` checks a whole directory; `haus check --json` gives one JSON document with each error's `code`, `line`, `column`, `path` and `hint`. Exit code 0 is valid (hints allowed), 1 invalid, 2 a usage or I/O error.
+2. `haus check order.haus` reports syntax errors with line and column. With a schema (`order.schema.haus` next to it, or `--schema s.schema.haus#Type`), it also reports values the schema rejects. `haus check .` checks a whole directory; `haus check --json` gives one JSON document with each error's `code`, `line`, `column`, `path` and `hint`. Exit code 0 is valid (hints allowed), 1 invalid, 2 a usage or I/O error.
 3. Fix the first error and check again. Messages say what to write instead.
 4. `haus fmt order.haus` writes the standard layout: one entry per line, trailing commas, comments kept. `haus fmt --check .` only lists the files that would change; `haus fmt -` formats standard input.
 5. `haus canonical x.haus` and `haus hash x.haus` print the canonical form and the hash (`hashAll`) of a file's values.

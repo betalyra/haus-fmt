@@ -1,8 +1,8 @@
 // haus language server: syntax diagnostics, quick fixes for missing imports, outline, hover with inferred
 // types, formatting, and schema inference.
 // Runs in its own process; the parser is the TypeScript one from the repo.
-import { existsSync, readFileSync } from "node:fs"
-import { dirname, resolve as resolvePath } from "node:path"
+import { existsSync, readFileSync, statSync } from "node:fs"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import {
   checkData,
@@ -18,10 +18,10 @@ import {
   infer,
   inferSchema,
   missingImports,
+  ModuleError,
   moduleOfType,
   parseDocument,
   parseSchemaFile,
-  schemaReference,
   type ImportEdit,
   type MissingImport,
   type SchemaFile,
@@ -31,7 +31,7 @@ import {
   type Inference,
   type Value,
 } from "@haus-fmt/haus"
-import { schemaOptions } from "@haus-fmt/haus/node"
+import { MANIFEST, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
 import {
   CodeActionKind,
   CompletionItemKind,
@@ -81,22 +81,18 @@ connection.onInitialize(() => ({
 
 // ── diagnostics ──────────────────────────────────────────────
 
-// The schema a data file is checked against: named in a `// schema: …`
-// comment at the top, or the `.schema.haus` file next to it.
+// The schema a data file is checked against: `Root` of the `.schema.haus`
+// file next to it. A data file never names its schema (spec §14).
 interface SchemaLink {
   readonly path: string
   readonly type: string
-  /** Where the comment names it (undefined for the sibling file). */
-  readonly span: readonly [number, number] | undefined
 }
 
 function schemaLink(document: TextDocument): SchemaLink | undefined {
   if (!document.uri.startsWith("file:")) return undefined
   const path = fileURLToPath(document.uri)
-  const ref = schemaReference(document.getText())
-  if (ref) return { path: resolvePath(dirname(path), ref.path), type: ref.type, span: [ref.start, ref.end] }
   const sibling = path.replace(/\.haus$/, ".schema.haus")
-  return sibling !== path && existsSync(sibling) ? { path: sibling, type: "Root", span: undefined } : undefined
+  return sibling !== path && existsSync(sibling) ? { path: sibling, type: "Root" } : undefined
 }
 
 /** The schema file's text: from the editor if it is open (unsaved changes count), else from disk. */
@@ -106,25 +102,93 @@ function schemaText(path: string): string | undefined {
   return existsSync(path) ? readFileSync(path, "utf8") : undefined
 }
 
-const schemaCache = new Map<string, SchemaFile>()
-/** A schema file and its imports (packages from node_modules, files next to it), cached by path and text. */
+// ── packages ─────────────────────────────────────────────────
+
+/**
+ * The setting `haus.packages` of each workspace folder (sent by the client
+ * as absolute paths): each path is a package directory when it has a
+ * package.haus, otherwise a folder of packages.
+ */
+let packageSettings: Readonly<Record<string, readonly string[]>> = {}
+
+/** The paths `haus.packages` gives for the file at `path`: those of the innermost workspace folder that has it. */
+const packagesFor = (path: string): readonly string[] => {
+  const contains = (folder: string) => {
+    const rel = relative(folder, path)
+    return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
+  }
+  const folder = Object.keys(packageSettings).filter(contains).sort((a, b) => b.length - a.length)[0]
+  return folder === undefined ? [] : packageSettings[folder]!
+}
+
+/** Parse options for the schema file at `path`: node_modules, plus the packages of `haus.packages`. */
+function optionsFor(path: string) {
+  const given = packagesFor(path)
+  const options: NodeResolverOptions = {
+    packages: given.filter((p) => existsSync(join(p, MANIFEST))),
+    folders: given.filter((p) => !existsSync(join(p, MANIFEST))),
+  }
+  return schemaOptions(path, options)
+}
+
+/** The files a compiled schema was built from, with their modification times: it is stale when one changes. */
+type Stamps = ReadonlyMap<string, string>
+const stamp = (file: string): string => {
+  try {
+    const { mtimeMs, size } = statSync(file)
+    return `${mtimeMs}:${size}`
+  } catch {
+    return "gone"
+  }
+}
+const fresh = (stamps: Stamps): boolean => [...stamps].every(([file, s]) => stamp(file) === s)
+
+const schemaCache = new Map<string, { readonly file: SchemaFile; readonly stamps: Stamps }>()
+/**
+ * A schema file and its imports (packages from node_modules or `haus.packages`,
+ * files next to it), cached by path and text until a file it imports changes
+ * (a reinstalled package, say).
+ */
 function compileSchema(text: string, path: string): SchemaFile {
   const key = `${path}\0${text}`
-  let file = schemaCache.get(key)
-  if (!file) {
-    if (schemaCache.size > 32) schemaCache.clear()
-    file = parseSchemaFile(text, schemaOptions(path))
-    schemaCache.set(key, file)
-  }
+  const hit = schemaCache.get(key)
+  if (hit && fresh(hit.stamps)) return hit.file
+  if (schemaCache.size > 32) schemaCache.clear()
+  const options = optionsFor(path)
+  const stamps = new Map<string, string>()
+  const file = parseSchemaFile(text, {
+    ...options,
+    resolver: {
+      resolve(module, from) {
+        const r = options.resolver!.resolve(module, from)
+        stamps.set(r.key, stamp(r.key))
+        if (r.package !== undefined) stamps.set(join(dirname(r.key), MANIFEST), stamp(join(dirname(r.key), MANIFEST)))
+        return r
+      },
+    },
+  })
+  schemaCache.set(key, { file, stamps })
   return file
 }
+
+/** All open documents, checked again (after `haus.packages` changed). */
+const validateAll = () => {
+  schemaCache.clear()
+  for (const document of documents.all()) validate(document)
+}
+
+connection.onNotification("haus/packages", (settings: Record<string, string[]>) => {
+  // The client checked them (trust, inside the workspace folder); network paths are never used.
+  packageSettings = Object.fromEntries(Object.entries(settings).map(([folder, paths]) => [folder, paths.filter((p) => !/^[\\/]{2}/.test(p))]))
+  validateAll()
+})
 
 /** Errors and hints from the data file's schema. */
 function schemaDiagnostics(document: TextDocument, values: Value[]): Diagnostic[] {
   const link = schemaLink(document)
   if (!link) return []
   const range = (start: number, end: number): Range => ({ start: document.positionAt(start), end: document.positionAt(end) })
-  const at = link.span ? range(...link.span) : range(0, 0)
+  const at = range(0, 0)
   const name = link.path.split(/[\\/]/).pop()!
   const text = schemaText(link.path)
   if (text === undefined) return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `schema file not found: ${link.path}` }]
@@ -132,6 +196,7 @@ function schemaDiagnostics(document: TextDocument, values: Value[]): Diagnostic[
   try {
     file = compileSchema(text, link.path)
   } catch (e) {
+    if (e instanceof ModuleError) return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `haus.packages: ${e.message}` }]
     if (!(e instanceof HausSyntaxError)) throw e
     return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `${name}: ${e.message}` }]
   }
@@ -187,7 +252,7 @@ function validate(document: TextDocument): void {
   const diagnostics: Diagnostic[] = []
   try {
     if (document.languageId === "haus-schema") {
-      const options = document.uri.startsWith("file:") ? schemaOptions(fileURLToPath(document.uri)) : {}
+      const options = document.uri.startsWith("file:") ? optionsFor(fileURLToPath(document.uri)) : {}
       const file = parseSchemaFile(document.getText(), options)
       schemas.set(document.uri, file)
       diagnostics.push(...file.warnings.map(warningDiagnostic(document)))
@@ -198,6 +263,12 @@ function validate(document: TextDocument): void {
       diagnostics.push(...schemaDiagnostics(document, values))
     }
   } catch (e) {
+    // The packages or folders of haus.packages can't be used (one was removed, say).
+    if (e instanceof ModuleError) {
+      diagnostics.push({ range: { start: document.positionAt(0), end: document.positionAt(0) }, severity: DiagnosticSeverity.Error, source: "haus", message: `haus.packages: ${e.message}` })
+      void connection.sendDiagnostics({ uri: document.uri, diagnostics })
+      return
+    }
     if (!(e instanceof HausSyntaxError)) throw e
     // Offsets are UTF-16, like LSP positions; highlight the character at the error (the name, for a missing import).
     const missing = e instanceof HausSchemaFileError ? e.missingImport : undefined

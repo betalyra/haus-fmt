@@ -31,36 +31,6 @@ export interface CheckIssue {
   readonly end: number
 }
 
-export interface SchemaReference {
-  /** The schema file, as written (relative to the data file). */
-  readonly path: string
-  /** The type that describes the file (default `Root`). */
-  readonly type: string
-  /** Where the reference is written, for diagnostics. */
-  readonly start: number
-  readonly end: number
-}
-
-/**
- * The `// schema: ./order.schema.haus` or `// schema: ./api.schema.haus#Order`
- * comment in the comment lines at the top of a data file, if any.
- */
-export function schemaReference(text: string): SchemaReference | undefined {
-  const pattern = /^[ \t]*\/\/[ \t]*schema:[ \t]*([^\s#]+)(?:#([A-Z][A-Za-z0-9_]*))?[ \t]*$/
-  let offset = 0
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim()
-    if (trimmed !== "" && !trimmed.startsWith("//")) return undefined
-    const m = pattern.exec(line.replace(/\r$/, ""))
-    if (m) {
-      const start = offset + line.indexOf(m[1]!)
-      return { path: m[1]!, type: m[2] ?? "Root", start, end: start + m[1]!.length + (m[2] ? m[2].length + 1 : 0) }
-    }
-    offset += line.length + 1
-  }
-  return undefined
-}
-
 const MAX_ISSUES = 200
 
 

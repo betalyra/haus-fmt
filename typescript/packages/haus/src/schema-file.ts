@@ -325,7 +325,8 @@ class Lexer {
       return { t: /^[A-Z]/.test(m[0]) ? "upper" : "lower", value: m[0], pos }
     }
     // A package or file after `import`: @org/name, @org/name@1, ./file, ../dir/file.
-    const module = /(@[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?\/[A-Za-z0-9_./-]*/y
+    // Package names are checked when the import is loaded (lowercase, spec §13.3), for a clear message.
+    const module = /(@[A-Za-z0-9_.~-]+\/[A-Za-z0-9_.~-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?\/[A-Za-z0-9_./-]*/y
     if (s[pos] === "@" || s.startsWith("./", pos) || s.startsWith("../", pos)) {
       module.lastIndex = pos
       const mm = module.exec(s)
@@ -363,7 +364,7 @@ class Lexer {
         return { t: "punct", value: p, pos }
       }
     }
-    return this.fail("schema-syntax", `unexpected character ${JSON.stringify(s[pos])}`, pos)
+    return this.fail("schema-syntax", `unexpected character '${quoteText(String.fromCodePoint(s.codePointAt(pos)!))}'`, pos)
   }
 }
 
@@ -489,7 +490,7 @@ class SchemaParser {
   }
 
   private unexpected(what: string, code: ErrorCode = "schema-syntax"): never {
-    const found = this.tok.t === "eof" ? "end of file" : `'${this.tok.value}'`
+    const found = this.tok.t === "eof" ? "end of file" : `'${quoteText(this.tok.value)}'`
     return this.fail(code, `expected ${what}, found ${found}`, this.tok.pos, { expected: what, found })
   }
 
@@ -844,6 +845,16 @@ export interface ResolvedModule {
   readonly text: string
   /** The package version (semver), checked against an `@major` in the import. */
   readonly version?: string
+  /**
+   * For a package's schema: the package's name (its manifest's). One schema
+   * reaches at most one package per name (spec §13.3); without it, the file
+   * is not a package and two files may share nothing but their text.
+   */
+  readonly package?: string
+  /** For a package's schema: its manifest's text. Copies whose manifest and schema are the same, byte for byte, are one package. */
+  readonly manifest?: string
+  /** Where the file is, for messages (such as its path); default `key`. */
+  readonly path?: string
 }
 
 /**
@@ -916,6 +927,33 @@ interface Def {
   definition?: Definition
 }
 
+/** npm's rules for scoped names, in lowercase (spec §13.3): `@org/name`, each part starting with a letter or digit. */
+const PACKAGE_NAME = /^@([a-z0-9][a-z0-9._-]*)\/([a-z0-9][a-z0-9._-]*)$/
+
+/** A package name (spec §13.3): `@org/name` in lowercase, by npm's rules, and neither part `node_modules`. The length is checked separately. */
+export const isPackageName = (name: string): boolean => {
+  const m = PACKAGE_NAME.exec(name)
+  return m !== null && m[1] !== "node_modules" && m[2] !== "node_modules"
+}
+
+/** Bidirectional controls and marks, shown escaped in messages. */
+const BIDI = /^[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]$/
+
+/**
+ * Text from a file, for a message (spec §9.2): control and bidirectional
+ * characters escaped as `\u{…}` and at most `max` characters (default 40),
+ * cut with `…`.
+ */
+export function quoteText(text: string, max = 40): string {
+  const chars = [...text]
+  const shown = chars.slice(0, max).map((c) => {
+    const cp = c.codePointAt(0)!
+    const escape = cp < 0x20 || (cp >= 0x7f && cp < 0xa0) || cp === 0x2028 || cp === 0x2029 || (cp >= 0xd800 && cp <= 0xdfff) || BIDI.test(c)
+    return escape ? `\\u{${cp.toString(16)}}` : c
+  })
+  return chars.length > max ? `${shown.join("")}…` : shown.join("")
+}
+
 const majorOf = (version: string) => /^v?(\d+)/.exec(version)?.[1]
 
 /**
@@ -940,10 +978,16 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   const allDefs: Def[] = []
   /** The file that has each id: two files with one id would give their types the same ids. */
   const ids = new Map<string, string | undefined>()
+  /** The package reached for each name: one per name (spec §13.3). */
+  const packages = new Map<string, ResolvedModule>()
+  /** Identical copies of a loaded package whose imports were resolved too (spec §13.3), by key. */
+  const copies = new Set<string>()
+  /** Schema files read, the root included: units and copies. */
+  const files = () => units.size + copies.size
 
   // ── loading: parse each file once, build its scope ──
   const load = (text: string, key: string | undefined, id: string | undefined, fail: Fail, root: boolean): Unit => {
-    if (units.size >= MAX_FILES) fail("too-many-files", `more than ${MAX_FILES} schema files are imported`, 0)
+    if (files() >= MAX_FILES) fail("too-many-files", `more than ${MAX_FILES} schema files are imported`, 0)
     const parser = new SchemaParser(text, fail)
     const { imports, types } = parser.parseFile()
     const unit: Unit = { root, id, text, fail, own: new Map(), scope: new Map(), std: new Map(), warnings: parser.warnings }
@@ -968,6 +1012,10 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
           continue
         }
         if (!/^(@[^/]+\/|\.\.?\/)/.test(imp.module)) fail("unknown-module", `unknown module ${imp.module}: import std/…, a package @org/name or a file ./name`, imp.pos)
+        const name = imp.module.replace(/@[0-9]+$/, "")
+        if (name.startsWith("@") && !isPackageName(name)) {
+          fail("unknown-module", `${quoteText(name)} is not a package name: package names are lowercase, @org/name with a-z, 0-9, - . _, each part starting with a letter or digit and not node_modules`, imp.pos)
+        }
         const dep = loadImport(imp, key, fail)
         for (const n of imp.names) {
           const def = dep.own.get(n.name)
@@ -1010,18 +1058,47 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     }
     const wanted = /^@.+@([0-9]+)$/.exec(imp.module)?.[1]
     if (wanted !== undefined && r.version !== undefined && majorOf(r.version) !== wanted) {
-      fail("import-version", `${imp.module} wants major version ${wanted}, but version ${r.version} was found`, imp.pos)
-    }
-    if (loading.includes(r.key)) fail("import-cycle", `import cycle: ${imp.module} imports this file again`, imp.pos)
-    const cached = units.get(r.key)
-    if (cached) return cached
-    if (ids.has(r.id) && ids.get(r.id) !== r.key) {
-      fail("duplicate-package", `${imp.module} is ${r.id}, but another file already is: two copies or two packages with the same name (${r.key})`, imp.pos)
+      fail("import-version", `${imp.module} wants major version ${wanted}, but version ${quoteText(r.version)} was found`, imp.pos)
     }
     // Errors inside an imported file are reported at the import, with their place in that file.
     const nested: Fail = (code, reason, pos, details) => {
       const at = locate(r.text, pos, START)
       return fail(code, `${imp.module} (${at.line}:${at.column}): ${reason}`, imp.pos, details?.hint === undefined ? {} : { hint: details.hint })
+    }
+    // One package per name; byte-identical copies are one package (spec §13.3).
+    let key = r.key
+    const first = r.package === undefined ? undefined : packages.get(r.package)
+    const copy = first !== undefined && first.key !== r.key
+    if (copy) {
+      if (first.manifest === r.manifest && first.text === r.text) key = first.key
+      else {
+        const where = (m: ResolvedModule) => `${quoteText(m.version ?? "?")} in ${quoteText(m.path ?? m.key, Infinity)}`
+        fail("duplicate-package", first.version === r.version
+          ? `two copies of ${r.package} ${quoteText(r.version ?? "?")} whose files differ: ${quoteText(first.path ?? first.key, Infinity)} and ${quoteText(r.path ?? r.key, Infinity)}; one schema reaches one copy of each package`
+          : `two versions of ${r.package}: ${where(first)} and ${where(r)}; one schema reaches one version of each package`, imp.pos)
+      }
+    }
+    if (loading.includes(key)) fail("import-cycle", `import cycle: ${imp.module} imports this file again`, imp.pos)
+    if (copy && !copies.has(r.key)) {
+      // Copies are one package only if their imports reach the same packages too: resolve this
+      // copy's imports from where it is, as if it were loaded (whichever copy came first).
+      copies.add(r.key)
+      if (files() > MAX_FILES) fail("too-many-files", `more than ${MAX_FILES} schema files are imported`, imp.pos)
+      const { imports } = new SchemaParser(r.text, nested).parseFile()
+      loading.push(key)
+      try {
+        for (const i of imports) if (!i.module.startsWith("std/")) loadImport(i, r.key, nested)
+      } finally {
+        loading.pop()
+      }
+    }
+    const cached = units.get(key)
+    if (cached) return cached
+    if (r.package !== undefined) packages.set(r.package, r)
+    if (ids.has(r.id) && ids.get(r.id) !== r.key) {
+      fail("duplicate-package", r.package === undefined && r.version === undefined
+        ? `${imp.module} has the id ${r.id}, as another file does (${r.path ?? r.key}): the module resolver must give different files different ids`
+        : `${imp.module} is ${r.id}, but another file already is (${r.path ?? r.key})`, imp.pos)
     }
     return load(r.text, r.key, r.id, nested, false)
   }

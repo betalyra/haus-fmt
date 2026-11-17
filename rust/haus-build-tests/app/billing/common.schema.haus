@@ -1,0 +1,3 @@
+import ../shared/money (Money)
+
+type Address = { street: String, owes?: Money }

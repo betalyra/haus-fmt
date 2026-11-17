@@ -44,7 +44,7 @@ The [cheat sheet](/docs/cheat-sheet) alone (about 2,000 tokens) is the best sing
 ## The loop
 
 1. Write the `.haus` file.
-2. Run `haus check file.haus --json`. The file is checked against `file.schema.haus` next to it, the schema named in a `// schema: ./order.schema.haus#Order` comment at its top, or the one given with `--schema`.
+2. Run `haus check file.haus --json`. The file is checked against the schema given with `--schema s.schema.haus#Type`, or else `file.schema.haus` next to it.
 3. Fix the first error and check again. Every error has a stable `code`, a `hint` with the fix, the place (`line`, `column`, and `path` for schema errors) and a `docs` link to the [error catalogue](/docs/errors).
 4. Run `haus fmt file.haus`.
 
@@ -73,7 +73,7 @@ After changing a `.haus` or `.schema.haus` file:
 1. Run `haus check <file> --json`. Fix the first error using its `code`, `message` and `hint` (more under its `docs` link), and repeat until `ok` is true.
 2. Run `haus fmt <file>`.
 
-`x.haus` is checked against `x.schema.haus` next to it, or the schema in its `// schema: ./file.schema.haus#Type` comment.
+`x.haus` is checked against `x.schema.haus` next to it; for another schema, pass `--schema file.schema.haus#Type`.
 Fix the data, not the schema, unless the task is to change the schema.
 Install the checker with `cargo install haus-fmt-cli`.
 ```

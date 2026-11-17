@@ -74,6 +74,42 @@ build time, and the schema files are watched.
 In VS Code, typed imports need the TypeScript native preview extension, a trusted
 workspace and permission to run content mappers.
 
+## Schema packages
+
+Schema imports (`import @acme/money (Money)`) find packages in `node_modules`,
+from the real path of the importing file, when the nearest `package.json`
+declares them. Packages outside `node_modules` (vendored, or from a Cargo or
+Python project) are given with the same options everywhere:
+
+| Option | |
+|---|---|
+| `packages` | package directories (with `package.haus` and `schema.haus`), used instead of an installed package with the same name |
+| `folders` | folders whose direct subdirectories with a `package.haus` are packages; one also installed in `node_modules` must have the same files |
+| `npm` | `false`: only `packages` and `folders`, never `node_modules` (default `true`) |
+
+Paths are relative to the project root: the directory of `tsconfig.json` for
+the content mapper, Vite's `root` for the plugin, the working directory for the
+Node loader. Give the same packages to all three, so the types match the values.
+
+```jsonc
+// tsconfig.json
+"contentMappers": [
+  { "package": "@haus-fmt/import", "extensions": [".haus"], "options": { "packages": ["vendor/money"], "folders": ["schemas"] } }
+]
+```
+
+```ts
+// vite.config.ts
+export default { plugins: [haus({ packages: ["vendor/money"], folders: ["schemas"] })] }
+
+// register.ts, then: node --import ./register.ts main.ts
+import { register } from "@haus-fmt/import/node"
+await register({ packages: ["vendor/money"], folders: ["schemas"] })
+```
+
+A package directory or folder that doesn't exist is an error when the loader
+starts, not at some import.
+
 ## Without imports
 
 To parse haus text yourself, use [`@haus-fmt/haus`](../haus): `parsePlain(text)` for the

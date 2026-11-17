@@ -1,4 +1,6 @@
 // Starts the haus language server for .haus files.
+import { realpathSync } from "node:fs"
+import { isAbsolute, relative, resolve, sep } from "node:path"
 import * as vscode from "vscode"
 import { LanguageClient, TransportKind, type ServerOptions } from "vscode-languageclient/node"
 import { extendMarkdownIt } from "./highlight"
@@ -43,6 +45,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
   })
   await client.start()
 
+  // `haus.packages` of each workspace folder, as real absolute paths, for the server.
+  let warned = ""
+  const sendPackages = () => {
+    const ignored: string[] = []
+    const settings = Object.fromEntries(
+      (vscode.workspace.workspaceFolders ?? []).map((folder) => {
+        const { paths, problems } = packagePaths(folder)
+        ignored.push(...problems)
+        return [folder.uri.fsPath, paths]
+      }),
+    )
+    void client?.sendNotification("haus/packages", settings)
+    const message = ignored.join("; ")
+    if (message !== "" && message !== warned) void vscode.window.showWarningMessage(`haus: some haus.packages entries are not used: ${message}`)
+    warned = message
+  }
+  sendPackages()
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => e.affectsConfiguration("haus.packages") && sendPackages()),
+    vscode.workspace.onDidChangeWorkspaceFolders(sendPackages),
+    vscode.workspace.onDidGrantWorkspaceTrust(sendPackages),
+  )
+
   vscode.window.visibleTextEditors.forEach(decorate)
   context.subscriptions.push(notInSchema, vscode.window.onDidChangeVisibleTextEditors((editors) => editors.forEach(decorate)))
 
@@ -81,4 +106,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
 
 export function deactivate(): Promise<void> | undefined {
   return client?.stop()
+}
+
+// ── haus.packages ────────────────────────────────────────────
+
+/** A network path (`\\host\share`, `//host/share`, `\\?\UNC\…`): never used, from any settings. */
+const isNetworkPath = (path: string): boolean => /^[\\/]{2}/.test(path)
+
+const isInside = (root: string, path: string): boolean => {
+  const rel = relative(root, path)
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/**
+ * The paths `haus.packages` gives a workspace folder, as real paths, and why
+ * others are not used. Paths from user settings may be anywhere local; paths
+ * from workspace or folder settings must stay inside the folder (symbolic
+ * links resolved), and are ignored in an untrusted workspace. Network paths
+ * are never used.
+ */
+function packagePaths(folder: vscode.WorkspaceFolder): { readonly paths: readonly string[]; readonly problems: readonly string[] } {
+  const inspected = vscode.workspace.getConfiguration("haus", folder.uri).inspect<string[]>("packages")
+  const trusted = vscode.workspace.isTrusted
+  // The most specific level that has a value wins, as for `get`.
+  const level =
+    trusted && inspected?.workspaceFolderValue !== undefined ? { paths: inspected.workspaceFolderValue, workspace: true }
+    : trusted && inspected?.workspaceValue !== undefined ? { paths: inspected.workspaceValue, workspace: true }
+    : { paths: inspected?.globalValue ?? [], workspace: false }
+  const problems: string[] = []
+  if (!trusted && (inspected?.workspaceFolderValue !== undefined || inspected?.workspaceValue !== undefined)) {
+    problems.push(`the workspace settings are ignored in ${folder.name} until you trust the workspace`)
+  }
+  let root: string
+  try {
+    root = realpathSync(folder.uri.fsPath)
+  } catch {
+    return { paths: [], problems }
+  }
+  const paths: string[] = []
+  for (const given of Array.isArray(level.paths) ? level.paths : []) {
+    if (typeof given !== "string") continue
+    const absolute = isAbsolute(given) ? given : resolve(folder.uri.fsPath, given)
+    if (isNetworkPath(given) || isNetworkPath(absolute)) {
+      problems.push(`${given} is a network path`)
+      continue
+    }
+    let real: string
+    try {
+      real = realpathSync(absolute)
+    } catch {
+      problems.push(`${given} doesn't exist`)
+      continue
+    }
+    if (isNetworkPath(real)) problems.push(`${given} is a network path`)
+    else if (level.workspace && !isInside(root, real)) problems.push(`${given} is outside the workspace folder ${folder.name} (only user settings may point outside it)`)
+    else paths.push(real)
+  }
+  return { paths, problems }
 }

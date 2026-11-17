@@ -1,4 +1,4 @@
-// Root describes order.haus, next to it, and order-bad.haus through its comment.
+// Root describes order.haus, next to it. The tests give it with --schema for order-bad.haus.
 type Status = closed < Pending | Shipped { tracking: String } | Cancelled >
 
 type Root = {

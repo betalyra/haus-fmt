@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, it } from "vitest"
-import { backend, moduleFor, typesFor } from "../src/generate.js"
+import { backend, moduleFor, packagesOf, typesFor } from "../src/generate.js"
 import haus from "../src/vite.js"
 
 const examples = join(import.meta.dirname, "../../../../examples")
@@ -141,5 +141,67 @@ describe("node loader (built)", () => {
     const register = join(import.meta.dirname, "../dist/register/plain.js")
     const out = execFileSync(process.execPath, ["--import", pathToFileURL(register).href, join(dir, "main.mjs")], { encoding: "utf8" })
     expect(JSON.parse(out)).toEqual({ name: "Ada", total: "30.30", status: "Shipped" })
+  })
+})
+
+describe("packages given explicitly", () => {
+  /** A project: app/order.schema.haus (and order.haus) importing @acme/money from vendor/money and @acme/geo from the folder schemas. */
+  const project = () => {
+    // Real path: the files a module was built from are known by theirs.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "haus-packages-")))
+    const files: Record<string, string> = {
+      "vendor/money/package.haus": `{ name: "@acme/money", version: "1.0.0" }`,
+      "vendor/money/schema.haus": "type Money = { amount: Decimal, currency: String }",
+      "schemas/geo-v1/package.haus": `{ name: "@acme/geo", version: "1.2.0" }`,
+      "schemas/geo-v1/schema.haus": "type City = { name: String }",
+      "app/order.schema.haus": "import @acme/money@1 (Money)\nimport @acme/geo@1 (City)\ntype Root = { total: Money, to: City }",
+      "app/order.haus": `{ total: { amount: 9.50, currency: "EUR" }, to: { name: "Berlin" } }`,
+    }
+    for (const [path, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, path)), { recursive: true })
+      writeFileSync(join(root, path), text)
+    }
+    return root
+  }
+  const given = { packages: ["vendor/money"], folders: ["schemas"] }
+
+  for (const npm of [true, false]) {
+    it(`finds them relative to the project root (npm: ${npm})`, async () => {
+      const root = project()
+      const b = await backend("plain", packagesOf({ ...given, npm }, root))
+      const schema = join(root, "app/order.schema.haus")
+      expect(typesFor(readFileSync(schema, "utf8"), schema, b).text).toContain("Money")
+      const data = join(root, "app/order.haus")
+      expect(typesFor(readFileSync(data, "utf8"), data, b).diagnostics).toEqual([])
+      const { code, files } = moduleFor(readFileSync(data, "utf8"), data, b, runtimeOf)
+      expect(files).toEqual(expect.arrayContaining([join(root, "app/order.schema.haus")]))
+      const order = (await load(code)).default as { readonly total: { readonly amount: string }; readonly to: { readonly name: string } }
+      expect(order.to.name).toBe("Berlin")
+    })
+  }
+
+  it("without them, the imports are not found", async () => {
+    const root = project()
+    const b = await backend("plain", packagesOf({}, root))
+    const data = join(root, "app/order.haus")
+    expect(typesFor(readFileSync(data, "utf8"), data, b).diagnostics[0]?.message).toMatch(/@acme\/money/)
+  })
+
+  it("reports packages and folders that don't exist, and options that aren't paths", async () => {
+    const root = project()
+    await expect(backend("plain", packagesOf({ folders: ["nowhere"] }, root))).rejects.toThrow(/doesn't exist/)
+    expect(() => packagesOf({ packages: "vendor/money" }, root)).toThrow(/packages must be a list of paths/)
+    expect(() => haus({ npm: "yes" as never })).toThrow(/npm must be true or false/)
+  })
+
+  it("vite: relative to Vite's root", async () => {
+    const root = project()
+    const plugin = haus({ ...given, npm: false })
+    ;(plugin.configResolved as (config: { root: string }) => void)({ root })
+    const loadHook = plugin.load as (this: unknown, id: string) => Promise<{ code: string } | null>
+    const watched: string[] = []
+    const out = await loadHook.call({ addWatchFile: (f: string) => watched.push(f) }, join(root, "app/order.haus"))
+    expect(out?.code).toContain("decodeData")
+    expect(watched).toContain(join(root, "app/order.schema.haus"))
   })
 })

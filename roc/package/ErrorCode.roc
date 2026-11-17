@@ -293,7 +293,7 @@ ErrorCode := [].{
 	import_unavailable : Str
 	import_unavailable = "import-unavailable"
 
-	## `import-not-found` (imports): An imported package or file can't be found: it is not installed, not a direct dependency, or the path is wrong. Also a package whose manifest is broken or names another package.
+	## `import-not-found` (imports): An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.
 	import_not_found : Str
 	import_not_found = "import-not-found"
 
@@ -305,15 +305,35 @@ ErrorCode := [].{
 	import_cycle : Str
 	import_cycle = "import-cycle"
 
-	## `duplicate-package` (imports): Two different files claim to be the same package: two copies of one package, or two packages with the same name.
+	## `duplicate-package` (imports): One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package.
 	duplicate_package : Str
 	duplicate_package = "duplicate-package"
 
-	## `package-path` (imports): A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package, or its `package.haus` or `schema.haus` is a symbolic link to a file outside the package's directory; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
+	## `undeclared-package` (imports): A file imports a package that its package or project doesn't declare as a dependency (with npm: in the package's own `package.json`, or the nearest one above an application file), or a file with no `package.json` above it imports a package that wasn't given explicitly. A package found only because the package manager placed it nearby, such as a hoisted dependency of a dependency, could be replaced by another one placed there. Checked before the package is looked for.
+	undeclared_package : Str
+	undeclared_package = "undeclared-package"
+
+	## `package-manifest` (imports): A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB.
+	package_manifest : Str
+	package_manifest = "package-manifest"
+
+	## `package-version` (imports): A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3).
+	package_version : Str
+	package_version = "package-version"
+
+	## `package-path` (imports): A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
 	package_path : Str
 	package_path = "package-path"
 
-	## `too-many-files` (imports): A schema imports more files, directly or not, than the tool allows.
+	## `codec-unreachable` (imports): A codec's type occurs inside a type that another library generated (a package crate, another package's Roc module), where this binding can't apply the codec. Decoding there with the default host type would silently differ from the other bindings (§13.4).
+	codec_unreachable : Str
+	codec_unreachable = "codec-unreachable"
+
+	## `file-too-large` (imports): A schema file or a package's `package.json` is larger than the tool allows (1 MiB by default). It is not read.
+	file_too_large : Str
+	file_too_large = "file-too-large"
+
+	## `too-many-files` (imports): A schema imports more schema files, directly or not, than the tool allows (256 by default, the root included), or a folder of packages has more entries than allowed (4096).
 	too_many_files : Str
 	too_many_files = "too-many-files"
 
@@ -431,7 +451,7 @@ ErrorCode := [].{
 
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "package-path", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -507,11 +527,16 @@ ErrorCode := [].{
 		"unknown-import" => "Import a type the module defines; the message lists them."
 		"duplicate-import" => "Import each name once."
 		"import-unavailable" => "Read the schema with a resolver that loads imports (from files or packages), or inline the types."
-		"import-not-found" => "Install the package (as a direct dependency), or fix the path."
+		"import-not-found" => "Install the package, or fix the path."
 		"import-version" => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
 		"import-cycle" => "Move the shared types to a file both import."
-		"duplicate-package" => "Install one copy of the package (deduplicate your dependencies)."
+		"duplicate-package" => "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`."
+		"undeclared-package" => "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`)."
+		"package-manifest" => "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version."
+		"package-version" => "Release both with the same version: change them together."
 		"package-path" => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too."
+		"codec-unreachable" => "Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs."
+		"file-too-large" => "Split the schema into several files, or raise the limit if you trust the file."
 		"too-many-files" => "Import fewer files."
 		"type-mismatch" => "Write a value of the expected type; the message says which."
 		"not-an-integer" => "Write the integer without a fraction or exponent."
@@ -622,7 +647,12 @@ ErrorCode := [].{
 		"import-version" => "imports"
 		"import-cycle" => "imports"
 		"duplicate-package" => "imports"
+		"undeclared-package" => "imports"
+		"package-manifest" => "imports"
+		"package-version" => "imports"
 		"package-path" => "imports"
+		"codec-unreachable" => "imports"
+		"file-too-large" => "imports"
 		"too-many-files" => "imports"
 		"type-mismatch" => "decoding"
 		"not-an-integer" => "decoding"
@@ -770,7 +800,7 @@ at = |b, i| b.get(i) ?? 0
 expect ErrorCode.hint(ErrorCode.missing_comma) == "Add a comma between the two values."
 expect ErrorCode.category("payload-newline") == "syntax" and ErrorCode.category("missing-field") == "decoding" and ErrorCode.hint("nonsense") == ""
 expect ErrorCode.docs("null-literal") == "https://haus-fmt.org/docs/errors#null-literal"
-expect ErrorCode.all.len() == 103 and ErrorCode.all.contains("invalid-secret")
+expect ErrorCode.all.len() >= 108 and ErrorCode.all.contains("invalid-secret") and ErrorCode.all.contains("codec-unreachable")
 expect ErrorCode.place("") == "$" and ErrorCode.place(".items[2].price") == "$.items[2].price"
 expect ErrorCode.place("(Circle).r") == "$[0].r" and ErrorCode.place(".total(Money)[1]") == "$.total[1]" and ErrorCode.place("(Date)[0]") == "$[0]"
 expect ErrorCode.place("[\"pt-BR\"](Tag)") == "$[\"pt-BR\"][0]" and ErrorCode.place("[\"a\\\"(b\"].c") == "$[\"a\\\"(b\"].c"

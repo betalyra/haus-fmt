@@ -57,3 +57,9 @@ import Haus.Json.SchemaBasedFits
 import Haus.Json.WellFormed
 import Haus.Json.Correct
 import Haus.Pretty.BlockString
+import Haus.Packages.Fs
+import Haus.Packages.Names
+import Haus.Packages.SchemaFile
+import Haus.Packages.Resolve
+import Haus.Packages.Props
+import Haus.Packages.Suite

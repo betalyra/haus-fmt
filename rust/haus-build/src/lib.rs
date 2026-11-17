@@ -21,18 +21,27 @@
 //! `lib.rs` includes the types with `haus::include_schema!("schema")`. Crates
 //! that depend on it directly can then `import @org/name (…)`: the package's
 //! types are its crate's types (`haus_money::Money`), and their ids are the
-//! same in every language (`@haus-fmt/money@1#Money`).
+//! same in every language (`@haus-fmt/money@1#Money`). Generated code names
+//! the crate by its `links`: don't rename schema package dependencies.
+//!
+//! Imports are loaded and checked by haus-fmt-schema (spec §13.3); files
+//! the schema imports (`import ./common (Address)`) are generated into the
+//! same output, as modules ([`Config::compile`]).
 
 mod codegen;
+mod graph;
 pub mod roc;
 
 // The schema syntax tree and schema packages are haus-fmt-schema's, which
-// also checks data against schemas at runtime.
-use haus_schema::{packages, syntax as schema};
+// also loads and checks schemas with their imports.
+use haus_schema::{Schema, packages, syntax as schema};
 
-use codegen::{Imported, STD_TIME};
+use codegen::Imported;
+use graph::{Origin, Unit};
 use haus::ErrorCode as Code;
 use packages::{MANIFEST, Manifest};
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -40,11 +49,11 @@ use std::{env, fs};
 pub use codegen::Codec;
 /// What went wrong, and where: `src/order.schema.haus:3:5: unknown type Strin`.
 pub use haus_schema::Error;
-pub use haus_schema::Packages;
 /// Something a schema allows but probably doesn't mean, with where it is:
 /// `3:1: unknown attribute @since: this version of haus ignores it`. Build
 /// scripts report warnings to Cargo.
 pub use haus_schema::Warning;
+pub use haus_schema::{Explicit, Locator, Options, Packages};
 
 type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -85,6 +94,12 @@ impl Config {
 
     /// Generate `$OUT_DIR/<name>.rs` for `<name>.schema.haus`; include it with
     /// `haus::include_schema!("<name>")`.
+    ///
+    /// The files the schema imports (`import ./common (Address)`) are
+    /// generated into the same file, each as a module named after its path
+    /// from the schema's directory: `common`, `billing_common` for
+    /// `billing/common.schema.haus`, `up_shared_money` for
+    /// `../shared/money.schema.haus`.
     pub fn compile(&self, schema: impl AsRef<Path>) -> Result<()> {
         let schema = schema.as_ref();
         self.compile_as(schema, &stem(schema))
@@ -96,49 +111,88 @@ impl Config {
         let schema = schema.as_ref();
         let crate_dir = PathBuf::from(var("CARGO_MANIFEST_DIR")?);
         let path = crate_dir.join(schema).canonicalize().map_err(|e| Error::at(schema, Code::ImportNotFound, e))?;
-        // A file in this crate: `<crate>/<path>`; elsewhere: its name (like the TypeScript binding).
-        let relative = crate_dir.canonicalize().ok().and_then(|dir| path.strip_prefix(dir).ok().map(Path::to_path_buf));
-        let id = match relative {
-            Some(relative) => format!("{}/{}", var("CARGO_PKG_NAME")?, relative.with_file_name(stem(&path)).display()),
-            None => stem(&path),
+        let krate = var("CARGO_PKG_NAME")?;
+        // Files in this crate: `<crate>/<path>`; elsewhere: the schema's name (like the TypeScript binding).
+        let crate_dir = crate_dir.canonicalize().unwrap_or(crate_dir);
+        let id = match path.strip_prefix(&crate_dir) {
+            Ok(relative) => format!("{krate}/{}", relative.with_file_name(stem(&path)).display()),
+            Err(_) => stem(&path),
         };
-        self.emit(&path, &id, name)
+        let packages = Packages::from_env()?;
+        let options =
+            Options { packages: &packages, id: Some(&id), project: Some((&krate, &crate_dir)), ..Options::default() };
+        self.emit(&path, &options, &packages, name)
     }
 
     /// For a schema package crate: generate the types of its `schema.haus`
     /// to `$OUT_DIR/schema.rs` (`haus::include_schema!("schema")`), with ids
     /// from its manifest, and tell dependent crates where it is.
+    ///
+    /// Checks the crate too: its version is the manifest's
+    /// (`package-version`), and its `links` is its library name, which
+    /// generated code names it by.
     pub fn package(&self) -> Result<()> {
         let dir = PathBuf::from(var("CARGO_MANIFEST_DIR")?);
         let manifest = Manifest::read(&dir)?;
-        let schema = manifest.schema_path(&dir)?;
-        let text = read(&schema)?;
-        let file = schema::parse(&text).map_err(|e| Error::from(e).in_file(&schema))?;
-        packages::imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&schema))?;
-        self.emit(&schema, &manifest.id(), "schema")?;
+        let version = var("CARGO_PKG_VERSION")?;
+        if version != manifest.version {
+            let reason = format!(
+                "the package.haus of {} says version {}, its Cargo.toml {version} ({})",
+                manifest.name,
+                manifest.version,
+                dir.display()
+            );
+            return Err(Error::at(&dir.join(MANIFEST), Code::PackageVersion, reason));
+        }
+        let lib = crate_lib(&dir)?;
+        let schema_path = manifest.schema_path(&dir)?;
+        let packages = Packages::from_env()?;
+        self.emit(&schema_path, &Options { packages: &packages, ..Options::default() }, &packages, "schema")?;
         rerun_if_changed(&dir.join(MANIFEST));
+        rerun_if_changed(&dir.join("Cargo.toml"));
         println!("cargo::metadata=haus_package={}", dir.display());
-        // The name code uses for this crate: its `links`, which is its library
-        // name (`haus_money` for haus-fmt-money), else its package name.
-        let krate = env::var("CARGO_MANIFEST_LINKS").or_else(|_| var("CARGO_PKG_NAME"))?;
-        println!("cargo::metadata=haus_crate={}", krate.replace('-', "_"));
+        // The name code uses for this crate: its `links`, which is its library name.
+        println!("cargo::metadata=haus_crate={lib}");
+        println!("cargo::metadata=haus_version={version}");
         Ok(())
     }
 
-    fn emit(&self, schema: &Path, id: &str, name: &str) -> Result<()> {
-        rerun_if_changed(schema);
-        let text = read(schema)?;
-        let file = schema::parse(&text).map_err(|e| Error::from(e).in_file(schema))?;
-        let file = if self.without_attributes { schema::without_attributes(file) } else { file };
-        if !self.quiet {
-            for w in &file.warnings {
-                println!("cargo::warning={}:{w}", schema.display());
-            }
-        }
-        let packages = Packages::from_env()?;
+    /// The Rust code for the schema file at `path`, loaded with `options`
+    /// (its packages found by `options.packages`), the types of the package
+    /// `@org/name` being in the crate `krate(name)`. Build scripts use
+    /// [`Config::compile`]; this is for tests and tools.
+    #[doc(hidden)]
+    pub fn generate(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<String> {
+        self.load(path, options, krate).map(|(_, _, code)| code)
+    }
+
+    /// The schema at `path`, the files to generate, and their code.
+    fn load(
+        &self,
+        path: &Path,
+        options: &Options,
+        krate: &dyn Fn(&str) -> String,
+    ) -> Result<(Schema, Vec<Unit>, String)> {
+        let schema = Schema::load_with(path, &Options { without_attributes: self.without_attributes, ..*options })?;
+        let units = graph::units(&schema, None, self.without_attributes)?;
+        let code = generate_units(&schema, &units, &self.codecs, krate)?;
+        Ok((schema, units, code))
+    }
+
+    /// Writes the code for the schema at `path` to `$OUT_DIR/<name>.rs`.
+    fn emit(&self, path: &Path, options: &Options, packages: &Packages, name: &str) -> Result<()> {
+        rerun_if_changed(path);
         // haus-fmt-schema never prints: the build script tells Cargo what it read.
         packages.files().iter().for_each(|f| rerun_if_changed(f));
-        let code = generate_file(&file, &text, id, &self.codecs, &packages).map_err(|e| e.in_file(schema))?;
+        let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
+        let (schema, units, code) = self.load(path, options, &krate)?;
+        schema.files().iter().filter_map(|f| f.path.as_deref()).for_each(rerun_if_changed);
+        if !self.quiet {
+            for unit in &units {
+                let path = unit.path.as_deref().map(|p| p.display().to_string()).unwrap_or_default();
+                unit.file.warnings.iter().for_each(|w| println!("cargo::warning={path}:{w}"));
+            }
+        }
         let out = PathBuf::from(var("OUT_DIR")?).join(format!("{name}.rs"));
         fs::write(&out, code).map_err(|e| Error::at(&out, Code::ImportNotFound, e))
     }
@@ -155,71 +209,140 @@ pub fn check(text: &str) -> Result<Vec<Warning>> {
     Ok(schema::parse(text)?.warnings.into_iter().map(Error::from).collect())
 }
 
-/// The Rust code for a schema, without touching the environment.
+/// The Rust code for a schema given as text, with the id `id`, without
+/// touching the environment. It imports std modules and `packages`, not files.
 pub fn generate(text: &str, id: &str, codecs: &[Codec], packages: &Packages) -> Result<String> {
-    generate_file(&schema::parse(text)?, text, id, codecs, packages)
+    let schema = Schema::parse_with(text, &Options { packages, id: Some(id), ..Options::default() })?;
+    let units = graph::units(&schema, Some(text), false)?;
+    let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
+    generate_units(&schema, &units, codecs, &krate)
 }
 
-fn generate_file(file: &schema::File, text: &str, id: &str, codecs: &[Codec], packages: &Packages) -> Result<String> {
-    let imports = file
-        .imports
+/// The code of a schema's files: the root's types, then a module for each
+/// file it imports.
+fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn Fn(&str) -> String) -> Result<String> {
+    graph::check_codecs(schema, units, codecs.iter().map(|c| c.id.as_str()), krate, "other crates' types")
+        .map_err(|e| in_root(e, units))?;
+    let modules = graph::module_names(&units[1..], &[], "_", rust_module);
+    let module = |u: usize| format_ident!("{}", modules[u - 1]);
+    let items = units
         .iter()
-        .map(|imp| resolve(imp, packages).map_err(|(code, reason)| schema::error(text, imp.pos, code, reason).into()))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .try_fold(HashMap::new(), |mut all, (name, t)| match all.insert(name.clone(), t) {
-            Some(_) => Err(Error::new(Code::DuplicateImport, format!("{name} is imported twice"))),
-            None => Ok(all),
-        })?;
-    Ok(codegen::generate(file, &codegen::Input { text, id, imports: &imports, codecs })?)
+        .enumerate()
+        .map(|(u, unit)| {
+            let imports = unit
+                .imports
+                .iter()
+                .map(|(name, origin)| {
+                    let (path, params) = match origin {
+                        Origin::Time => (format!("::haus::time::{name}"), 0),
+                        Origin::Package { package, params, .. } => (format!("::{}::{name}", krate(package)), *params),
+                        Origin::File { unit: 0, params, .. } => (format!("super::{name}"), *params),
+                        Origin::File { unit: to, params, .. } => {
+                            let at = if u == 0 { "self" } else { "super" };
+                            (format!("{at}::{}::{name}", modules[to - 1]), *params)
+                        }
+                    };
+                    (name.clone(), Imported { id: origin.id(name), path, params })
+                })
+                .collect::<HashMap<_, _>>();
+            let input =
+                codegen::Input { text: &unit.text, id: &unit.id, imports: &imports, codecs, check_codecs: u == 0 };
+            let items = codegen::generate(&unit.file, &input).map_err(|e| {
+                let e = Error::from(e);
+                match &unit.path {
+                    Some(path) => e.in_file(path),
+                    None => e,
+                }
+            })?;
+            Ok(match u {
+                0 => items,
+                _ => {
+                    let (name, file) = (module(u), unit.path.as_deref().and_then(Path::file_name));
+                    let doc = format!(
+                        " The types of `{}` ({}).",
+                        unit.id,
+                        file.map(|f| f.to_string_lossy()).unwrap_or_default()
+                    );
+                    quote! {
+                        #[doc = #doc]
+                        pub mod #name { #items }
+                    }
+                }
+            })
+        })
+        .collect::<Result<Vec<TokenStream>>>()?;
+    codegen::print(quote! { #(#items)* }, &units[0].id)
 }
 
-/// The types an import brings in, by name.
-fn resolve(imp: &schema::Import, packages: &Packages) -> Result<Vec<(String, Imported)>, (Code, String)> {
-    let names = imp.names.iter().map(|(n, _)| n.as_str());
-    match imp.module.as_str() {
-        "std/time" => names
-            .map(|n| {
-                if !STD_TIME.contains(&n) {
-                    return Err((Code::UnknownImport, format!("std/time has no type {n} (it has {})", STD_TIME.join(", "))));
-                }
-                let imported = Imported { id: format!("std/time#{n}"), path: format!("::haus::time::{n}"), params: 0 };
-                Ok((n.to_owned(), imported))
-            })
-            .collect(),
-        "std/money" => Err((
-            Code::UnknownModule,
-            "std/money is no longer a standard module; it is the package @haus-fmt/money: import @haus-fmt/money (Money)"
-                .into(),
+/// An error about the schema as a whole, in its root file.
+fn in_root(e: Error, units: &[Unit]) -> Error {
+    match units[0].path.as_deref() {
+        Some(path) if e.path().is_none() => e.in_file(path),
+        _ => e,
+    }
+}
+
+/// The module of an imported file in Rust: `billing_common` for `billing/common`.
+fn rust_module(segments: &[String]) -> String {
+    let words: Vec<String> = segments
+        .iter()
+        .flat_map(|s| s.split(|c: char| !c.is_ascii_alphanumeric()))
+        .filter(|w| !w.is_empty())
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    let name = words.join("_");
+    match name.as_str() {
+        "" => "file".into(),
+        n if n.starts_with(|c: char| c.is_ascii_digit()) => format!("file_{n}"),
+        n if syn::parse_str::<syn::Ident>(n).is_err() => format!("{n}_"),
+        _ => name,
+    }
+}
+
+/// The library name of the package crate in `dir`, checked: generated code
+/// names the crate by its `links` (Cargo passes the package's metadata only
+/// with one), so `links` must be its library name (G9).
+fn crate_lib(dir: &Path) -> Result<String> {
+    let path = dir.join("Cargo.toml");
+    let package = var("CARGO_PKG_NAME")?;
+    let toml = fs::read_to_string(&path).map_err(|e| Error::at(&path, Code::ImportNotFound, e))?;
+    let lib = lib_name(&toml).unwrap_or_else(|| package.replace('-', "_"));
+    match env::var("CARGO_MANIFEST_LINKS") {
+        Ok(links) if links == lib => Ok(lib),
+        Ok(links) => Err(Error::at(
+            &path,
+            Code::ImportNotFound,
+            format!(
+                "{package} has links = \"{links}\", but its library is {lib}: crates that use its types name it by \
+                 its links, so they must be the same: links = \"{lib}\""
+            ),
         )),
-        module if module.starts_with('@') => {
-            let (name, major) = match module.rsplit_once('@').filter(|(n, _)| !n.is_empty()) {
-                Some((n, v)) => (n, Some(v)),
-                None => (module, None),
-            };
-            let pkg = packages.find(name).map_err(|e| (e.code(), e.reason().to_owned()))?;
-            if let Some(major) = major.filter(|m| *m != pkg.manifest.major()) {
-                return Err((Code::ImportVersion, format!(
-                    "{module} wants major version {major}, but version {} was found",
-                    pkg.manifest.version
-                )));
-            }
-            names
-                .map(|n| match pkg.types.get(n) {
-                    Some(&params) => {
-                        let id = format!("{}#{n}", pkg.manifest.id());
-                        Ok((n.to_owned(), Imported { id, path: format!("::{}::{n}", pkg.krate), params }))
-                    }
-                    None => Err((Code::UnknownImport, format!("{name} has no type {n}"))),
-                })
-                .collect()
-        }
-        module => Err((
-            Code::ImportUnavailable,
-            format!("can't import {module}: haus-fmt-build imports std/time and schema packages (@org/name) so far"),
+        Err(_) => Err(Error::at(
+            &path,
+            Code::ImportNotFound,
+            format!(
+                "{package} has no links: add links = \"{lib}\" (its library name) to [package], so that crates \
+                 depending on it find its schema"
+            ),
         )),
     }
+}
+
+/// `name` in the `[lib]` table of a Cargo.toml, if it has one.
+fn lib_name(toml: &str) -> Option<String> {
+    let mut in_lib = false;
+    for line in toml.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_lib = line.split('#').next().is_some_and(|t| t.trim() == "[lib]");
+            continue;
+        }
+        let value = line.strip_prefix("name").map(str::trim_start).and_then(|r| r.strip_prefix('='));
+        if let (true, Some(value)) = (in_lib, value) {
+            let value = value.trim().strip_prefix('"')?;
+            return value.split_once('"').map(|(name, _)| name.to_owned());
+        }
+    }
+    None
 }
 
 /// Tells Cargo to rerun the build script when `path` changes (only in a build script).
