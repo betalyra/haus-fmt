@@ -147,6 +147,8 @@ are created as needed.
   reaches, as `name@version` (the version of its `package.haus`), sorted.
 - `Err { code, mentions?, hides? }`: loading fails with the error code `code`.
   The message must contain each string of `mentions` and none of `hides`.
+  Paths in `mentions` use `/`; adapters compare them with every `\` in the
+  message read as `/`.
   Places are not compared.
 
 `should: True` marks a case for the version check, which implementations

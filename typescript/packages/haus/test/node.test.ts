@@ -207,7 +207,8 @@ describe("files and limits (spec §13.3)", () => {
     expect(rejected(app({ "app/big.schema.haus": big + money }, "import ./big (Money)\ntype Root = Money"), "file-too-large")).toContain("big.schema.haus")
   })
 
-  it("doesn't open a FIFO as a package file, and doesn't block on it", () => {
+  // Unix only: no FIFOs, and no write permission for everyone, on Windows.
+  it.skipIf(process.platform === "win32")("doesn't open a FIFO as a package file, and doesn't block on it", () => {
     const root = pkg({})
     unlinkSync(join(root, PKG, "schema.haus"))
     execFileSync("mkfifo", [join(root, PKG, "schema.haus")])
@@ -231,7 +232,8 @@ describe("files and limits (spec §13.3)", () => {
     expect(rejected(root, "undeclared-package")).toMatch(/no package.json above .* declares @acme\/evil: give the package explicitly/)
   })
 
-  it("never looks in a node_modules of a directory everyone may write to", () => {
+  // Unix only: no FIFOs, and no write permission for everyone, on Windows.
+  it.skipIf(process.platform === "win32")("never looks in a node_modules of a directory everyone may write to", () => {
     const root = tree({
       "shared/node_modules/@acme/evil/package.haus": manifest("@acme/evil"),
       "shared/node_modules/@acme/evil/schema.haus": money,
