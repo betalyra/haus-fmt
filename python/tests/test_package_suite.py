@@ -13,7 +13,6 @@ them are `Npm` cases. The skips are listed by pytest, and
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -150,8 +149,10 @@ def write(path: Path, content: str) -> None:
 
 
 def write_tree(root: Path, files: tuple[Variant, ...]) -> None:
-    """The case's files, as test-suite/README.md says."""
-    for file in files:
+    """The case's files, as test-suite/README.md says. Links last, once their
+    targets exist: on Windows a link to a directory must be made as one."""
+    links = [f for f in files if f.tag == "Link"]
+    for file in [f for f in files if f.tag != "Link"] + links:
         match file:
             case Variant("File", (String(path), String(content))):
                 write(root / path, content)
@@ -166,7 +167,7 @@ def write_tree(root: Path, files: tuple[Variant, ...]) -> None:
             case Variant("Link", (String(path), String(target))):
                 link = root / path
                 link.parent.mkdir(parents=True, exist_ok=True)
-                link.symlink_to(target)
+                link.symlink_to(Path(target), target_is_directory=(link.parent / target).is_dir())
             case _:
                 raise ValueError(f"not a file: {haus.canonical(file)}")
 
@@ -215,11 +216,6 @@ def test_the_suite_runs_explicit_cases() -> None:
             marks=[
                 *([pytest.mark.skip(reason=SKIPPED[c.name])] if c.name in SKIPPED else []),
                 *([pytest.mark.xfail(reason=BROKEN[c.name], strict=True)] if c.name in BROKEN else []),
-                *(
-                    [pytest.mark.skipif(os.name == "nt", reason="needs symbolic links")]
-                    if any(f.tag == "Link" for f in c.files)
-                    else []
-                ),
             ],
         )
         for c in ALL
@@ -244,7 +240,7 @@ def test_package_case(case: Case, tmp_path: Path) -> None:
                 load_schema(root, packages=packages, package_folders=folders)
             message = str(info.value)
             assert info.value.code == code, message
-            for s in mentions:
-                assert s in message, f"{s!r} not in {message!r}"
+            for s in mentions:  # paths are compared with "/", whatever the OS writes
+                assert s in message.replace("\\", "/"), f"{s!r} not in {message!r}"
             for s in hides:
                 assert s not in message, f"{s!r} in {message!r}"

@@ -1,3 +1,6 @@
+//! Unix only: links, FIFOs and permissions as Unix has them.
+#![cfg(unix)]
+
 //! A schema package is a directory with `package.haus` and `schema.haus`
 //! (spec §13.3). Both are regular files, never symbolic links (the package
 //! directory may be one); its schema imports other packages by name, never files;

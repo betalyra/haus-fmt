@@ -244,9 +244,13 @@ jobs:
           pnpm --filter ./packages/haus build
           pnpm --filter ./packages/haus exec vitest run test/package-suite.test.ts test/node.test.ts
       - name: Rust
+        # Run every language, even when one fails.
+        if: success() || failure()
         working-directory: rust
         run: cargo test -p haus-fmt-schema
       - name: Python
+        # Run every language, even when one fails.
+        if: success() || failure()
         working-directory: python
         run: uv run pytest tests/test_package_suite.py tests/test_packages.py
 

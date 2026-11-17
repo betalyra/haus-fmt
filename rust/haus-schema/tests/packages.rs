@@ -8,7 +8,6 @@ use haus::Value;
 use haus::json::Json;
 use haus_schema::{Error, Explicit, Locator, NodeModules, Schema};
 use std::fs;
-use std::os::unix::fs::symlink;
 use std::path::Path;
 
 fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
@@ -35,6 +34,23 @@ fn variant(v: &Value) -> (&str, &[Value]) {
     match v {
         Value::Variant { tag, args } => (tag, args),
         other => panic!("expected a variant, found {}", haus::canonical(other)),
+    }
+}
+
+/// A symbolic link at `path` to `target`, relative to the link's directory,
+/// as `ln -s`. On Windows a link to a directory must be made as one, and the
+/// target is written with `\`.
+fn symlink(target: &str, path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, path);
+    #[cfg(windows)]
+    {
+        let target = target.replace('/', "\\");
+        if path.parent().unwrap().join(&target).is_dir() {
+            std::os::windows::fs::symlink_dir(target, path)
+        } else {
+            std::os::windows::fs::symlink_file(target, path)
+        }
     }
 }
 
@@ -71,7 +87,7 @@ fn create(root: &Path, entry: &Value) {
         ("Link", [path, target]) => {
             let path = root.join(string(path));
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            symlink(string(target), path).unwrap();
+            symlink(string(target), &path).unwrap();
         }
         (tag, _) => panic!("unknown file entry {tag}"),
     }
@@ -107,7 +123,11 @@ fn failure(case: &Value) -> Option<String> {
         Some(Value::Array(files)) => files,
         _ => panic!("a case without files"),
     };
-    files.iter().for_each(|entry| create(dir.path(), entry));
+    files
+        .iter()
+        .filter(|e| variant(e).0 != "Link")
+        .chain(files.iter().filter(|e| variant(e).0 == "Link"))
+        .for_each(|entry| create(dir.path(), entry));
     let result = load(dir.path(), case);
     match (variant(field(case, "expect").expect("expect")), result) {
         (("Ok", [want]), Ok(reached)) => {
@@ -121,8 +141,10 @@ fn failure(case: &Value) -> Option<String> {
         (("Err", [want]), Err(e)) => {
             let message = e.to_string();
             let code = string(field(want, "code").expect("code"));
-            let missing: Vec<String> =
-                strings(field(want, "mentions")).into_iter().filter(|m| !message.contains(m)).collect();
+            let missing: Vec<String> = strings(field(want, "mentions"))
+                .into_iter()
+                .filter(|m| !message.replace('\\', "/").contains(m.as_str()))
+                .collect();
             let shown: Vec<String> =
                 strings(field(want, "hides")).into_iter().filter(|h| message.contains(h)).collect();
             match (e.code().as_str() == code, missing.is_empty(), shown.is_empty()) {
@@ -180,7 +202,11 @@ fn copies_are_checked_in_either_order() {
     ] {
         let dir = tempfile::tempdir().unwrap();
         match field(case, "files") {
-            Some(Value::Array(files)) => files.iter().for_each(|entry| create(dir.path(), entry)),
+            Some(Value::Array(files)) => files
+                .iter()
+                .filter(|e| variant(e).0 != "Link")
+                .chain(files.iter().filter(|e| variant(e).0 == "Link"))
+                .for_each(|entry| create(dir.path(), entry)),
             _ => panic!("files"),
         }
         write(&dir.path().join("app/app.schema.haus"), root);

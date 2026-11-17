@@ -1,7 +1,7 @@
 /** The package suite (test-suite/packages, spec §13.3): file trees resolved with the Node resolver. */
-import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 import { canonical, HausSchemaFileError, parseAll, parseSchemaFile, type Value } from "../src/index.js"
 import { schemaOptions, type NodeResolverOptions } from "../src/node.js"
@@ -125,10 +125,18 @@ const write = (files: readonly Entry[]): string => {
         file(`${e.dir}/package.json`, JSON.stringify(e.json, null, 2))
         break
       case "Link":
-        mkdirSync(dirname(join(root, e.path)), { recursive: true })
-        symlinkSync(e.target, join(root, e.path))
         break
     }
+  }
+  // Links last, once their targets exist: on Windows a link to a directory
+  // must be made as one ("dir"), which Node only does when it sees the target.
+  for (const e of files) {
+    if (e.kind !== "Link") continue
+    const at = join(root, e.path)
+    mkdirSync(dirname(at), { recursive: true })
+    const target = resolve(dirname(at), e.target)
+    const text = process.platform === "win32" ? e.target.replaceAll("/", "\\") : e.target
+    symlinkSync(text, at, existsSync(target) && statSync(target).isDirectory() ? "dir" : "file")
   }
   return root
 }
@@ -171,7 +179,8 @@ const run = (c: Case): void => {
   expect(error, "the schema loads, but should fail").toBeInstanceOf(HausSchemaFileError)
   const e = error as HausSchemaFileError
   expect(e.code, e.message).toBe(c.expect.code)
-  for (const m of c.expect.mentions) expect(e.message).toContain(m)
+  // Paths in messages are compared with "/", whatever the OS writes.
+  for (const m of c.expect.mentions) expect(e.message.replaceAll("\\", "/")).toContain(m)
   for (const h of c.expect.hides) expect(e.message).not.toContain(h)
 }
 
