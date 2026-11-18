@@ -7,11 +7,24 @@ import type { CompletionContext, CompletionResult } from "@codemirror/autocomple
 import type { EditorView } from "@codemirror/view";
 import { completeAt, hoverAt, hoverText } from "../../../../typescript/packages/haus/src/index.ts";
 import { analyze, type Analysis } from "./analyze";
+import { prettyDeclarations } from "./pretty";
+import { inYourCode, type How } from "./in-code";
 import { createEditor, lintAgain, setLanguage, setText } from "./editor";
 import { presets } from "./presets";
 import { copyLink, decodeState, encodeState } from "../share";
 
-type Output = keyof Analysis["outputs"];
+/** The output tabs; "code" shows the outputs of the chosen target. */
+type Output = "code" | "json" | "inferred" | "formatted";
+type Target = "plain" | "effect";
+
+/** The Effect target's declarations of a schema, loaded with Effect only when asked for. */
+async function effectDeclarations(schemaText: string): Promise<string> {
+  const [{ parseSchemaFile }, Haus] = await Promise.all([
+    import("../../../../typescript/packages/haus/src/index.ts"),
+    import("../../../../typescript/packages/effect/src/index.ts"),
+  ]);
+  return Haus.schemaDeclarations(parseSchemaFile(schemaText) as never);
+}
 
 const $ = <E extends HTMLElement>(sel: string) => document.querySelector<E>(sel)!;
 
@@ -35,7 +48,11 @@ async function start() {
   /** The schema text, if it is switched on. */
   const schemaIn = (text: string) => (use.checked ? text : "");
   let analysis: Analysis = analyze(first.data, schemaIn(first.schema));
-  let output: Output = "typescript";
+  let output: Output = "code";
+  let target: Target = "plain";
+  let how: How = "file";
+  /** Whether "In your code" shows the generated declarations instead. */
+  let declarations = false;
 
   const out = createEditor({ parent: $("#play-output"), doc: "", readOnly: true });
 
@@ -79,16 +96,46 @@ async function start() {
     diagnostics: () => analysis.schemaProblems.map((p) => ({ ...p })),
   });
 
+  /** The text of the declarations view; the Effect one arrives later (it loads Effect). */
+  let shown = 0;
+  const declarationsText = async (): Promise<string> => {
+    const schemaText = schemaIn(schema.state.doc.toString());
+    if (target === "plain" || !analysis.schema) return analysis.outputs.typescript;
+    try {
+      return `// data.haus\nimport type { ${analysis.schema.type} } from "./data.schema.haus";\n\ndeclare const data: ${analysis.schema.type};\nexport default data;\n\n\n// data.schema.haus\n${prettyDeclarations(await effectDeclarations(schemaText))}`;
+    } catch (e) {
+      return `// ${(e as Error).message}`;
+    }
+  };
+
   const show = () => {
-    setLanguage(out, output === "typescript" ? "typescript" : output === "json" ? "json" : "haus");
-    setText(out, analysis.outputs[output]);
+    const code = output === "code";
+    setLanguage(out, code || output === "json" ? (code ? "typescript" : "json") : "haus");
+    const turn = ++shown;
+    if (code && declarations) {
+      if (target === "plain" || !analysis.schema) setText(out, analysis.outputs.typescript);
+      else void declarationsText().then((text) => turn === shown && setText(out, text));
+    } else if (code) setText(out, analysis.code ? inYourCode(analysis.code, target, how) : "// fix the error to see this");
+    else setText(out, analysis.outputs[output]);
     $("#play-use-schema").hidden = output !== "inferred";
+    $("#play-code-options").hidden = !code;
+    const toggle = $<HTMLButtonElement>("#play-declarations");
+    toggle.hidden = !code;
+    toggle.setAttribute("aria-pressed", String(declarations));
+    toggle.textContent = declarations ? "Show fields and values" : "Show the generated declarations";
+    document.querySelectorAll<HTMLButtonElement>("[data-target]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.target === target)));
+    document.querySelectorAll<HTMLButtonElement>("[data-how]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.how === how)));
     $("#play-summary").textContent = analysis.summary;
     $("#play-summary").dataset.state = analysis.dataProblems.some((p) => p.severity === "error") || analysis.schemaProblems.length ? "error" : "ok";
     document.querySelectorAll<HTMLButtonElement>("[data-output]").forEach((b) => {
       b.setAttribute("aria-selected", String(b.dataset.output === output));
       if (b.dataset.output === output) $("#play-caption").textContent = b.dataset.caption ?? "";
     });
+    if (code) {
+      $("#play-caption").textContent = how === "file"
+        ? "A .haus file your code imports: typed, no parsing code to write."
+        : "haus your program receives: a schema checks it and gives it a type.";
+    }
   };
 
   let saving = 0;
@@ -133,7 +180,23 @@ async function start() {
 
   $("#play-use-schema").addEventListener("click", () => {
     schema.dispatch({ changes: { from: 0, to: schema.state.doc.length, insert: analysis.outputs.inferred } });
-    output = "typescript";
+    output = "code";
+    show();
+  });
+
+  // Target of "In your code", and its declarations
+  document.querySelectorAll<HTMLButtonElement>("[data-target]").forEach((b) =>
+    b.addEventListener("click", () => {
+      target = b.dataset.target as Target;
+      show();
+    }));
+  document.querySelectorAll<HTMLButtonElement>("[data-how]").forEach((b) =>
+    b.addEventListener("click", () => {
+      how = b.dataset.how as How;
+      show();
+    }));
+  $("#play-declarations").addEventListener("click", () => {
+    declarations = !declarations;
     show();
   });
 

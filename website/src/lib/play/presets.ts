@@ -78,6 +78,23 @@ type Root = {
 }`),
   },
   {
+    name: "Missing values, with a schema",
+    data: trim(`
+// A value that may be missing is None or Some(…), never null.
+// Switch to Effect: these become Options.
+{
+  name: "Ada",
+  nickname: Some("Countess"),
+  email: None,
+}`),
+    schema: trim(`
+type Root = {
+  name: String,
+  nickname: Maybe String,
+  email: Maybe String,
+}`),
+  },
+  {
     name: "Variants: open and closed",
     data: trim(`
 // Paused isn't in the schema: fine for the open Event,
