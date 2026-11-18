@@ -7,10 +7,10 @@ import { PiLinkSimpleBold } from "react-icons/pi";
 import "@/styles/play.css";
 
 const outputs = [
-  { key: "typescript", label: "Types in TypeScript", caption: "What TypeScript sees when your code imports these files (with @haus-fmt/import): one module per file." },
-  { key: "json", label: "Values", caption: "What your program gets at runtime, written as JSON." },
-  { key: "inferred", label: "Inferred schema", caption: "A schema that fits this data: a starting point for your own." },
-  { key: "formatted", label: "Formatted", caption: "The data in the standard layout, comments kept." },
+  { key: "code", label: "In your code", caption: "" },
+  { key: "json", label: "As JSON", caption: "The same values written as JSON: whole numbers end in n (bigints), decimals stay exact text." },
+  { key: "inferred", label: "Infer a schema", caption: "A schema that fits this data: a starting point for your own.", tool: true },
+  { key: "formatted", label: "Format", caption: "The data in the standard layout, comments kept.", tool: true },
 ];
 ---
 
@@ -68,21 +68,37 @@ const outputs = [
 
       <section class="play-card flex min-w-0 flex-col" aria-label="Output">
         <header class="play-card__head flex-wrap gap-y-2">
-          <div role="tablist" class="flex flex-wrap gap-x-4 gap-y-1">
-            {outputs.map((o) => (
-              <button type="button" role="tab" class="play-tab" data-output={o.key} data-caption={o.caption}>{o.label}</button>
+          <div role="tablist" class="flex flex-wrap items-center gap-x-4 gap-y-1">
+            {outputs.map((o, i) => (
+              <>
+                {o.tool && !outputs[i - 1]?.tool && <span class="play-tabs__divider" aria-hidden="true"></span>}
+                <button type="button" role="tab" class="play-tab" data-output={o.key} data-caption={o.caption}>{o.label}</button>
+              </>
             ))}
           </div>
           <button id="play-use-schema" type="button" class="play-link" hidden>Use as schema</button>
         </header>
-        <p id="play-caption" class="play-caption"></p>
+        <div id="play-code-options" class="play-options">
+          <div class="play-segmented" role="radiogroup" aria-label="How your code gets the data">
+            <button type="button" role="radio" data-how="file">Import a file</button>
+            <button type="button" role="radio" data-how="parse">Parse received data</button>
+          </div>
+          <div class="play-segmented" role="radiogroup" aria-label="Target">
+            <button type="button" role="radio" data-target="plain">TypeScript</button>
+            <button type="button" role="radio" data-target="effect">Effect</button>
+          </div>
+        </div>
+        <p class="play-caption">
+          <span id="play-caption"></span>
+          <button id="play-declarations" type="button" class="play-link" aria-pressed="false" hidden>Show the generated declarations</button>
+        </p>
         <div id="play-output" class="play-editor min-h-[20rem] flex-1"></div>
         <p id="play-summary" class="play-summary" aria-live="polite"></p>
       </section>
     </div>
 
     <p class="mt-6 text-[0.92rem] text-ink-3">
-      Types and values are those of the plain target of <code class="inline-code">@haus-fmt/import</code> (no Effect).
+      Types and values are those of <code class="inline-code">@haus-fmt/import</code>, with its plain or its Effect target.
       Schema imports of packages like <code class="inline-code">@haus-fmt/money</code> don't work here yet;
       <code class="inline-code">std/time</code> does.
     </p>

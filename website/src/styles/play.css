@@ -184,3 +184,53 @@
   padding: 0 1.7rem 0 0.7rem;
   background-position: right 0.6rem center;
 }
+/* Between the tabs that show what your code gets and the tools. */
+.play-tabs__divider {
+  width: 1px;
+  height: 1rem;
+  background: var(--line);
+}
+/* Two or three choices side by side: the target of "In your code". */
+.play-segmented {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-sans);
+}
+.play-segmented button {
+  padding: 0.1rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.play-segmented button:hover {
+  color: var(--ink);
+}
+.play-segmented button[aria-checked="true"] {
+  background: color-mix(in oklab, var(--ultramarine) 12%, white);
+  color: var(--ink);
+}
+.play-segmented button:focus-visible {
+  outline: 1.5px solid color-mix(in oklab, var(--ink) 55%, white);
+  outline-offset: 1px;
+}
+.play-caption .play-link {
+  margin-left: 0.4rem;
+}
+.play-segmented[hidden] {
+  display: none;
+}
+/* The choices of "In your code": how the data arrives, and the target. */
+.play-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem 0;
+}
+.play-options[hidden] {
+  display: none;
+}

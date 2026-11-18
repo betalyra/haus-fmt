@@ -20,6 +20,8 @@ import {
 } from "../../../../typescript/packages/haus/src/index.ts";
 import { plainDeclarations } from "../../../../typescript/packages/haus/src/plain.ts";
 import * as h from "../../../../typescript/packages/haus/src/schema.ts";
+import { prettyDeclarations } from "./pretty";
+import type { CodeInput } from "./in-code";
 
 export interface Problem {
   readonly from: number;
@@ -33,6 +35,8 @@ export interface Analysis {
   readonly schemaProblems: Problem[];
   /** For hovers and completion; absent while the data doesn't parse. */
   readonly hover?: HoverContext;
+  /** What "In your code" shows, for each target and way of getting the data; absent while the data doesn't parse. */
+  readonly code?: CodeInput;
   readonly schema?: { readonly file: SchemaFile; readonly type: string };
   readonly outputs: {
     readonly inferred: string;
@@ -66,68 +70,6 @@ const json = (x: unknown) =>
       : v,
     2,
   );
-
-/** Split `text` at `sep` where it is not inside brackets or a string. */
-function splitTop(text: string, sep: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let inString = false;
-  let last = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (c === '"' && text[i - 1] !== "\\") inString = !inString;
-    if (inString) continue;
-    if ("{[(<".includes(c)) depth++;
-    else if ("}])>".includes(c)) depth--;
-    else if (depth === 0 && text.startsWith(sep, i)) {
-      parts.push(text.slice(last, i));
-      last = i + sep.length;
-      i += sep.length - 1;
-    }
-  }
-  parts.push(text.slice(last));
-  return parts;
-}
-
-const WIDTH = 76;
-
-/** A TypeScript type, broken over lines where it is too long: one union member or field per line. */
-function prettyType(type: string, indent: string, room: number): string {
-  // Objects with more than one field always get a line per field; anything else only when too long.
-  const isObject = type.startsWith("{ ") && type.endsWith(" }");
-  if (type.length <= room && !(isObject && splitTop(type.slice(2, -2), "; ").length > 1)) return type;
-  const members = splitTop(type, " | ");
-  if (members.length > 1) return members.map((m) => `\n${indent}  | ${prettyType(m, indent + "    ", WIDTH - indent.length - 4)}`).join("");
-  if (isObject) {
-    const fields = splitTop(type.slice(2, -2), "; ");
-    return `{\n${fields.map((f) => {
-      const colon = splitTop(f, ": ");
-      const head = colon[0]!;
-      const rest = colon.slice(1).join(": ");
-      return `${indent}  ${head}: ${prettyType(rest, indent + "  ", room - head.length - 4)};`;
-    }).join("\n")}\n${indent}}`;
-  }
-  return type;
-}
-
-/**
- * Generated declarations, made readable: doc comments dropped (the
- * playground shows the schema next to it) and long types broken over lines.
- */
-export function prettyDeclarations(ts: string): string {
-  return ts
-    .replace(/\/\*\*[\s\S]*?\*\/\n/g, "")
-    .split("\n")
-    .map((line) => {
-      const m = /^((?:export )?(?:declare const \S+: |type \S+ = ))(.*);$/.exec(line);
-      if (!m) return line;
-      const pretty = prettyType(m[2]!, "", WIDTH - m[1]!.length);
-      return `${m[1]}${pretty.startsWith("\n") ? pretty.trimEnd().replace(/^ /, "") : pretty};`.replace(/= \n/, "=\n");
-    })
-    .join("\n")
-    .replace(/;\n(?=export |declare |type )/g, ";\n\n")
-    .replace(/^(import[^\n]*\n)(?!\n)/, "$1\n");
-}
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -179,23 +121,32 @@ export function analyze(data: string, schemaText: string): Analysis {
   } catch (e) {
     program = `${(e as Error).message}`;
   }
+  let fits = false;
   if (schema && errors === 0) {
     try {
       const { schemas, streams } = compileSchemaFile(schemaText);
       const root = schemas[schema.type]!;
       const decoded = values.map((v) => h.decode(root, v));
       program = streams.has(schema.type) ? decoded : decoded[0];
+      fits = true;
     } catch {
       // keep the plain view
     }
   }
 
+  const first = issues.find((i) => i.severity === "error");
+  const at = (offset: number) => {
+    const lines = data.slice(0, offset).split("\n");
+    return `${lines.length}:${lines.at(-1)!.length + 1}`;
+  };
+  const code: CodeInput = { values, data, program, ...(schema ? { schema } : {}), fits, ...(first ? { error: `${first.message} (at ${at(first.start)})` } : {}) };
   const what = values.length === 1 ? "1 value" : `${values.length} values (a stream)`;
   const checked = schema ? `, checked against ${schema.type}: ${errors === 0 ? "no errors" : plural(errors, "error")}` : "";
   return {
     dataProblems,
     schemaProblems,
     hover: contextOf(values, schema),
+    code,
     ...(schema ? { schema } : {}),
     outputs: {
       inferred: inferSchema(values),
