@@ -7,6 +7,9 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 import tailwindcss from '@tailwindcss/vite';
 import { hausLang, hausSchemaLang, hausTheme } from './src/lib/code.ts';
 import { hausHoverPlugin } from './src/lib/ec-hover.ts';
+import { fileURLToPath } from 'node:url';
+
+const hausSrc = (file) => fileURLToPath(new URL(`../typescript/packages/haus/src/${file}`, import.meta.url));
 
 
 // https://astro.build/config
@@ -127,6 +130,16 @@ export default defineConfig({
     plugins: [tailwindcss()],
     // The playground and the hover types use the haus parser and the examples from the repo.
     server: { fs: { allow: [".."] } },
+    resolve: {
+      // The playground loads @haus-fmt/effect from its sources, which import these by
+      // package name. Only website/ is installed when the site is built: take the haus
+      // sources and this site's own copy of effect.
+      alias: [
+        { find: /^@haus-fmt\/haus$/, replacement: hausSrc('index.ts') },
+        { find: /^@haus-fmt\/haus\/schema$/, replacement: hausSrc('schema.ts') },
+      ],
+      dedupe: ['effect'],
+    },
     // Native canvas for the Open Graph images: keep it out of the bundle.
     ssr: { external: ['@napi-rs/canvas'] },
     optimizeDeps: { exclude: ['@napi-rs/canvas'] },
