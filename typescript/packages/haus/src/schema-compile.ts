@@ -176,7 +176,13 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
             case "none":
               return [c.tag, h.Unit]
             case "record":
-              if (c.payload.named) codecFreeRecord(c.tag, c.payload.named)
+              // A record case by name is the named record's schema (a Recursive
+              // record while it is being built), so a record that reaches its own
+              // case by name (`type C = { s: < S B > }`, `type B = C`) ends.
+              if (c.payload.named) {
+                codecFreeRecord(c.tag, c.payload.named)
+                return [c.tag, build(c.payload.named)]
+              }
               return [c.tag, h.Record(fields(c.payload.record.fields), { closed: c.payload.record.closed })]
             case "positional":
               return [c.tag, h.Tuple(...c.payload.items.map(build))]

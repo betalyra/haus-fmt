@@ -433,6 +433,29 @@ func TestEqualsCompare(t *testing.T) {
 	}
 }
 
+// TestFormatComments: where comments and blank lines land, as the other
+// formatters put them (found by the differential fuzzer, main.ts --format).
+func TestFormatComments(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// A blank line before a record payload's '}' stays, before the comments moved inside.
+		{"{b:T(/**/{/**/\n\n}//\n),/**/a:F}//", "{\n  b: T {\n    /**/\n    /**/\n\n    //\n  }, /**/\n  a: F,\n} //\n"},
+		{"F,//\nF({a:0/**/\n\n}\n/**/)", "F, //\nF {\n  a: 0, /**/\n\n  /**/\n},\n"},
+		// A comment after a multi-line comment starts on a later line: it doesn't trail.
+		{"N(\"\"\"\n\"\"\")/*\n*///", "N(\"\") /*\n*/\n//\n"},
+		{"[A(5)/*\n*/,//c\n\"\"]", "[\n  A(5), /*\n*/\n  //c\n  \"\",\n]\n"},
+		// A comma on a line of its own makes no blank line.
+		{"\"\"//\n,\n\"\"//", "\"\", //\n\"\", //\n"},
+		// A comment between a key and its value moves above the entry, after its blank line.
+		{"{b:{b:\"\"},\n\na://\n\"x\"}", "{\n  b: {\n    b: \"\",\n  },\n\n  //\n  a: \"x\",\n}\n"},
+	}
+	for _, c := range cases {
+		got, err := Format([]byte(c.in), FormatOptions{})
+		if err != nil || string(got) != c.want {
+			t.Errorf("Format(%q) = %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+}
+
 func TestFormatValue(t *testing.T) {
 	r, _ := NewRecord(
 		Field{"n", mustNumber(t, "0xFF")},

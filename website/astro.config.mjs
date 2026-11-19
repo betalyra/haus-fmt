@@ -84,7 +84,7 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: 'haus',
           description:
-            'haus is a data format for humans: records, variants instead of null, exact numbers, dates and times, streams of values, and optional schemas. It has bindings for TypeScript, Effect, Rust, Roc and Python.',
+            'haus is a data format for humans: records, variants instead of null, exact numbers, dates and times, streams of values, and optional schemas. It has bindings for TypeScript, Effect, Rust, Roc, Python and Go.',
           rawContent: true,
           // The cheat sheet right after the welcome page, so agents read it first.
           promote: ['index*', 'docs', 'docs/cheat-sheet'],

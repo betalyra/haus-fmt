@@ -202,8 +202,26 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     }
   }
 
-  const fields = (fs: readonly Field[]): Schema.Struct.Fields =>
-    Object.fromEntries(fs.map((f) => [f.key, f.optional ? Schema.optionalKey(build(f.type)) : build(f.type)]))
+  const fields = (fs: readonly Field[], field: (f: Field) => Schema.Top = (f) => build(f.type)): Schema.Struct.Fields =>
+    Object.fromEntries(fs.map((f) => [f.key, f.optional ? Schema.optionalKey(field(f)) : field(f)]))
+
+  /**
+   * The fields of a record case by name, built once per record. A record
+   * that reaches its own case by name (`type C = { s: < S B > }`, `type B =
+   * C`) gets the fields of the case inside it as suspended schemas.
+   */
+  const caseFields = new Map<Type, ReadonlyMap<string, Schema.Top>>()
+  const buildingCase = new Set<Type>()
+  const namedCaseFields = (record: Extract<Type, { kind: "record" }>): Schema.Struct.Fields => {
+    if (buildingCase.has(record)) return fields(record.fields, (f) => Schema.suspend(() => caseFields.get(record)!.get(f.key)!))
+    if (!caseFields.has(record)) {
+      buildingCase.add(record)
+      caseFields.set(record, new Map(record.fields.map((f) => [f.key, build(f.type)])))
+      buildingCase.delete(record)
+    }
+    const done = caseFields.get(record)!
+    return fields(record.fields, (f) => done.get(f.key)!)
+  }
 
   const build = (t: Type): Schema.Top => {
     switch (t.kind) {
@@ -238,9 +256,10 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
               const { record, named: as } = c.payload
               if (as) codecFreeRecord(c.tag, as)
               const closed = (s: Schema.Top) => (record.closed ? s.annotate({ [CLOSED]: true }) : s)
+              const fs = as ? namedCaseFields(record) : fields(record.fields)
               // A payload with a field `_tag` can't put its fields beside the tag: they go in `value`.
-              if (nestsPayload(record.fields)) return Schema.TaggedStruct(c.tag, { value: closed(Schema.Struct(fields(record.fields))) }).annotate({ [NESTED]: true })
-              return closed(Schema.TaggedStruct(c.tag, fields(record.fields)))
+              if (nestsPayload(record.fields)) return Schema.TaggedStruct(c.tag, { value: closed(Schema.Struct(fs)) }).annotate({ [NESTED]: true })
+              return closed(Schema.TaggedStruct(c.tag, fs))
             }
             case "positional":
               return Schema.TaggedStruct(c.tag, { values: Schema.Tuple(c.payload.items.map(build)) }).annotate({ [VALUES]: true })

@@ -482,7 +482,7 @@ _PARAM = re.compile(r"[a-z][A-Za-z0-9_]*")
 
 
 class _Lexer:
-    __slots__ = ("data", "fail", "pos", "text")
+    __slots__ = ("data", "fail", "pos", "quote_at", "text")
 
     def __init__(self, text: str, fail: Fail) -> None:
         self.text = text
@@ -490,6 +490,8 @@ class _Lexer:
         self.pos = 1 if text.startswith("\ufeff") else 0
         self.data = Parser(text)
         """Comments, whitespace and `"…"` strings are those of data files (spec §14), read by the data parser."""
+        self.quote_at = -1
+        """Where the third '"' of a `\"\"\"` is: a token of its own (`next`)."""
 
     def skip(self) -> None:
         """Skip whitespace and comments: those of data files (spec §14), read by the data parser."""
@@ -517,8 +519,13 @@ class _Lexer:
             self.pos = m.end()
             return _Token("attribute", m[1], pos)
         if s[pos] == '"':
+            # `"""` is the string "" and a '"' that no rule takes: the grammar has no block strings.
+            if self.quote_at == pos:
+                self.pos = pos + 1
+                return _Token("punct", '"', pos)
             if s.startswith('"""', pos):
-                self.fail("block-string-key", "block strings can't be field names", pos)
+                self.pos = self.quote_at = pos + 2
+                return _Token("string", "", pos)
             try:
                 value, self.pos = self.data.value_at(pos)
             except HausSyntaxError as e:
@@ -669,6 +676,9 @@ class _SchemaParser:
         return self.advance()
 
     def unexpected(self, what: str, code: ErrorCode = "schema-syntax") -> Never:
+        # A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
+        if self.tok.kind == "punct" and self.tok.value == "/":
+            self.fail("stray-slash", "unexpected '/' (comments are // or /* */)", self.tok.pos)
         found = "end of file" if self.kind() == "eof" else f"'{quote(self.tok.value)}'"
         self.fail(code, f"expected {what}, found {found}", self.tok.pos, expected=what, found=found)
 

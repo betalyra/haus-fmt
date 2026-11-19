@@ -168,3 +168,5 @@ export const rust = () => external("rust", join(root, "fuzz/schema-rust/target/r
 export const rustCheck = () => external("rust-check", join(root, "fuzz/schema-rust/target/release/check_runner"), [], true)
 export const roc = () => external("roc", join(root, "fuzz/.build/roc-schema-runner"), [], true)
 export const python = () => external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/schema_runner.py")], true)
+/** Package schema of the Go binding (`schema.Parse`, `Type.Decode`, `Type.Encode`). */
+export const go = () => external("go", join(root, "fuzz/.build/go-runner"), ["--schema"], true)

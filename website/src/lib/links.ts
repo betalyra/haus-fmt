@@ -16,6 +16,7 @@ export const links = {
   rust: `${repo}/tree/main/rust`,
   roc: `${repo}/tree/main/roc`,
   python: `${repo}/tree/main/python`,
+  go: `${repo}/tree/main/go`,
   effect: `${repo}/tree/main/typescript/packages/effect`,
   typedImports: `${repo}/tree/main/typescript/packages/import`,
   vscode: "https://marketplace.visualstudio.com/items?itemName=betalyra.haus",

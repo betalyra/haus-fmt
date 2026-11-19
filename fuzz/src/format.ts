@@ -1,9 +1,9 @@
 /**
  * Differential testing of the formatters (spec §11): generated documents
- * (format-gen.ts) through the TypeScript and Rust formatters in the pretty,
- * compact and minimised layouts, which must write the same bytes and keep
- * the properties of §11; and generated values through the value writers of
- * TypeScript, Rust and Roc, which must write the same compact and minimised
+ * (format-gen.ts) through the TypeScript, Rust and Go formatters in the
+ * pretty, compact and minimised layouts, which must write the same bytes and
+ * keep the properties of §11; and generated values through the value writers
+ * of TypeScript, Rust, Roc and Go, which must write the same compact and minimised
  * lines. See ../README.md.
  *
  *   node fuzz/src/main.ts --format [--count N] [--seed S] [--out DIR]
@@ -37,6 +37,7 @@ export interface Failure {
 const root = new URL("../..", import.meta.url).pathname
 const RUST = join(root, "rust/target/release/examples/fuzz_runner")
 const ROC = join(root, "fuzz/.build/roc-runner")
+const GO = join(root, "fuzz/.build/go-runner")
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 const enc = new TextEncoder()
@@ -323,11 +324,32 @@ function external(program: string, args: readonly string[], dir: string, cases: 
   return cases.map((c) => external(program, args, `${dir}-single`, [c])[0]!)
 }
 
-/** The Rust formatter (`fuzz_runner --format`). */
-export function rustFormat(dir: string, cases: readonly Uint8Array[], style: Style, options: Options): Out[] {
+/** A formatter that is a separate program: `program --format STYLE --indent N --width N DIR N`. */
+interface Formatter {
+  readonly name: string
+  readonly program: string
+  /** Whether it can be given these options. */
+  readonly takes: (options: Options) => boolean
+}
+
+/**
+ * The formatters compared with TypeScript's: Rust's (`fuzz_runner --format`)
+ * and Go's (`go-runner --format`, `haus.Format`). Go's options take 0 as
+ * the default (indent 2, width 80), so it can't be given an indent or width
+ * of 0 and sits out those batches.
+ */
+const FORMATTERS: readonly Formatter[] = [
+  { name: "rust", program: RUST, takes: () => true },
+  { name: "go", program: GO, takes: (o) => o.indent > 0 && o.width > 0 },
+]
+
+const formattersFor = (options: Options) => FORMATTERS.filter((f) => f.takes(options))
+
+/** An external formatter's outputs. */
+function externalFormat(f: Formatter, dir: string, cases: readonly Uint8Array[], style: Style, options: Options): Out[] {
   if (cases.length === 0) return []
   const args = ["--format", style, "--indent", String(options.indent), "--width", String(options.width)]
-  return external(RUST, args, dir, cases).map((line) => {
+  return external(f.program, args, dir, cases).map((line) => {
     if (line.startsWith("crash ")) return { ok: false, crash: line }
     const r = parseOut<string>(line)
     return r.ok ? { ok: true, text: r.json } : { ok: false }
@@ -338,25 +360,34 @@ const describeOut = (o: Out | undefined) => (o === undefined ? "-" : o.ok ? show
 const same = (a: Out, b: Out) => (a.ok && b.ok ? a.text === b.text : a.ok === b.ok && !a.crash && !b.crash)
 
 /**
- * Every property of §11 for each case, in each layout: the TypeScript and
- * Rust formatters agree byte for byte, the output keeps the values (and in
- * pretty every comment, in order), formatting it again changes nothing,
- * minimised formatted as pretty is compact formatted as pretty and the
- * pretty file without its comments and blank lines, and the layouts' own
+ * Every property of §11 for each case, in each layout: the TypeScript,
+ * Rust and Go formatters agree byte for byte, the output keeps the values
+ * (and in pretty every comment, in order), formatting it again changes
+ * nothing, minimised formatted as pretty is compact formatted as pretty and
+ * the pretty file without its comments and blank lines, and the layouts' own
  * rules hold (`layoutFailures`). Returns the failures of each case.
  */
 export function checkFormat(dir: string, cases: readonly Uint8Array[], options: Options): Failure[][] {
   const failures: Failure[][] = cases.map(() => [])
+  const formatters = formattersFor(options)
+  /** A failure for each external formatter whose output differs from TypeScript's. */
+  const compare = (i: number, what: string, t: Out, others: readonly Out[]) =>
+    formatters.forEach((f, k) => {
+      const o = others[k]!
+      if (!same(t, o)) failures[i]!.push({ check: `${f.name} ≠ typescript: ${what}`, detail: `typescript ${describeOut(t)}\n${f.name.padEnd(10)} ${describeOut(o)}` })
+    })
   const outs = new Map<Style, Out[]>()
   for (const style of STYLES) {
     const ts = cases.map((c) => tsFormat(c, style, options))
-    const rust = rustFormat(join(dir, "input"), cases, style, options)
+    const others = formatters.map((f) => externalFormat(f, join(dir, "input"), cases, style, options))
     outs.set(style, ts)
     ts.forEach((t, i) => {
-      const r = rust[i]!
       if (t.crash) failures[i]!.push({ check: `crash: typescript ${style}`, detail: t.crash })
-      if (r.crash) failures[i]!.push({ check: `crash: rust ${style}`, detail: r.crash })
-      if (!same(t, r)) failures[i]!.push({ check: `rust ≠ typescript: ${style}`, detail: `typescript ${describeOut(t)}\nrust       ${describeOut(r)}` })
+      formatters.forEach((f, k) => {
+        const crash = others[k]![i]!.crash
+        if (crash) failures[i]!.push({ check: `crash: ${f.name} ${style}`, detail: crash })
+      })
+      compare(i, style, t, others.map((o) => o[i]!))
       if (t.ok) failures[i]!.push(...layoutFailures(style, utf8.decode(cases[i]!), t.text, options))
     })
   }
@@ -365,34 +396,37 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
   const accepted = cases.flatMap((_, i) => (STYLES.every((s) => outs.get(s)![i]!.ok) ? [i] : []))
   const text = (s: Style, i: number) => (outs.get(s)![i] as { text: string }).text
   const inputsOf = new Map<Style, Uint8Array[]>()
-  const again = (input: Style, style: Style) => {
+  /** Every formatter's output, TypeScript's first, for each accepted case. */
+  const again = (input: Style, style: Style): (readonly Out[])[] => {
     const inputs = inputsOf.get(input) ?? accepted.map((i) => enc.encode(text(input, i)))
     inputsOf.set(input, inputs)
     const ts = inputs.map((c) => tsFormat(c, style, options))
-    const rust = rustFormat(join(dir, input), inputs, style, options)
+    const others = formatters.map((f) => externalFormat(f, join(dir, input), inputs, style, options))
     return accepted.map((i, k) => {
-      const [t, r] = [ts[k]!, rust[k]!]
-      if (!same(t, r)) failures[i]!.push({ check: `rust ≠ typescript: ${input} → ${style}`, detail: `typescript ${describeOut(t)}\nrust       ${describeOut(r)}` })
-      return [t, r] as const
+      const all = [ts[k]!, ...others.map((o) => o[k]!)]
+      compare(i, `${input} → ${style}`, all[0]!, all.slice(1))
+      return all
     })
   }
+  const names = ["typescript", ...formatters.map((f) => f.name)]
   for (const style of STYLES) {
-    again(style, style).forEach(([t, r], k) => {
+    again(style, style).forEach((all, k) => {
       const i = accepted[k]!
       const out = text(style, i)
-      for (const [name, o] of [["typescript", t], ["rust", r]] as const) {
-        if (!o.ok || o.text !== out) failures[i]!.push({ check: `idempotence: ${style} (${name})`, detail: `once  ${show(out)}\ntwice ${describeOut(o)}` })
-      }
+      all.forEach((o, n) => {
+        if (!o.ok || o.text !== out) failures[i]!.push({ check: `idempotence: ${style} (${names[n]})`, detail: `once  ${show(out)}\ntwice ${describeOut(o)}` })
+      })
     })
   }
   const fromCompact = again("compact", "pretty")
-  again("minimised", "pretty").forEach(([t, r], k) => {
+  again("minimised", "pretty").forEach((all, k) => {
     const i = accepted[k]!
-    const [ct, cr] = fromCompact[k]!
-    for (const [name, m, c] of [["typescript", t, ct], ["rust", r, cr]] as const) {
-      if (!same(m, c)) failures[i]!.push({ check: `minimised → pretty (${name})`, detail: `pretty(minimised) ${describeOut(m)}\npretty(compact)   ${describeOut(c)}` })
-    }
+    all.forEach((m, n) => {
+      const c = fromCompact[k]![n]!
+      if (!same(m, c)) failures[i]!.push({ check: `minimised → pretty (${names[n]})`, detail: `pretty(minimised) ${describeOut(m)}\npretty(compact)   ${describeOut(c)}` })
+    })
     // The pretty file without its comments and blank lines (spec §11).
+    const t = all[0]!
     if (t.ok) {
       const input = utf8.decode(cases[i]!)
       const { values } = parseDocument(input)
@@ -441,6 +475,7 @@ export function checkWriters(dir: string, cases: readonly Uint8Array[]): Failure
   for (const style of WRITERS) {
     const rust = externalLines(RUST, ["--write", style], join(dir, "input"), cases)
     const roc = externalLines(ROC, ["--write", style], join(dir, "input"), cases)
+    const go = externalLines(GO, ["--write", style], join(dir, "input"), cases)
     parsed.forEach((values, i) => {
       if (!values) return
       let ts: Lines
@@ -449,7 +484,7 @@ export function checkWriters(dir: string, cases: readonly Uint8Array[]): Failure
       } catch (e) {
         ts = { ok: false, reason: String(e) }
       }
-      for (const [name, other] of [["rust", rust[i]!], ["roc", roc[i]!]] as const) {
+      for (const [name, other] of [["rust", rust[i]!], ["roc", roc[i]!], ["go", go[i]!]] as const) {
         if (describeLines(other) !== describeLines(ts)) {
           failures[i]!.push({ check: `writer: ${name} ≠ typescript (${style})`, detail: `typescript ${describeLines(ts)}\n${name.padEnd(10)} ${describeLines(other)}` })
         }
@@ -496,8 +531,8 @@ const dir = (name: string) => join(outDir, "format", name)
 function outputs(bytes: Uint8Array, options: Options): string {
   return STYLES.flatMap((style) => {
     const t = tsFormat(bytes, style, options)
-    const [r] = rustFormat(dir("report"), [bytes], style, options)
-    return [`  ${style.padEnd(9)} typescript ${describeOut(t)}`, `  ${"".padEnd(9)} rust       ${describeOut(r)}`]
+    const others = formattersFor(options).map((f) => `  ${"".padEnd(9)} ${f.name.padEnd(10)} ${describeOut(externalFormat(f, dir("report"), [bytes], style, options)[0])}`)
+    return [`  ${style.padEnd(9)} typescript ${describeOut(t)}`, ...others]
   }).join("\n")
 }
 
@@ -531,7 +566,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   let streams = 0
   const MAX_SHRUNK = 3
 
-  console.log(`seed ${seed}: ${count} documents through the typescript and rust formatters (pretty, compact, minimised), their values through the typescript, rust and roc writers`)
+  console.log(`seed ${seed}: ${count} documents through the typescript, rust and go formatters (pretty, compact, minimised), their values through the typescript, rust, roc and go writers`)
   for (let done = 0; done < count; done += batch) {
     // Most batches use the default options; some another indentation and width.
     const options = rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { compileSchemaFile, HausSchemaFileError, parseSchemaFile, schemaDeclarations, type Codec, type StandardSchemaV1 } from "../src/index.js"
+import { canonical, compileSchemaFile, HausSchemaFileError, parseSchemaFile, schemaDeclarations, type Codec, type StandardSchemaV1 } from "../src/index.js"
 import { nodeResolver, schemaOptions } from "../src/node.js"
 import * as h from "../src/schema.js"
 
@@ -10,6 +10,14 @@ const read = (name: string) => readFileSync(join(examples, name), "utf8")
 const compile = (name: string) => compileSchemaFile(read(name), schemaOptions(join(examples, name)))
 
 describe("schemas from schema files", () => {
+  it("compile a record that reaches its own record case by name (found by the schema-file fuzzer)", () => {
+    const { schemas } = compileSchemaFile("type C = { s: < S B | N > }\ntype B = C")
+    const c = schemas.C!
+    const v = h.parse(c, "{ s: S { s: S { s: N } } }")
+    expect(canonical(h.encode(c, v))).toBe("{s:S{s:S{s:N}}}")
+    expect(() => h.parse(c, "{ s: S { s: 1 } }")).toThrow()
+  })
+
   it("decode data the way the declarations say", () => {
     const { schemas } = compile("thread.schema.haus")
     const thread = h.parse(schemas.Root!, read("thread.haus")) as { author: string; likes: bigint; at: string; replies: unknown[] }

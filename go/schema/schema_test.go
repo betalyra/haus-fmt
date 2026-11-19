@@ -168,8 +168,8 @@ func TestSchemaErrors(t *testing.T) {
 		{"type L a = < Nil | Cons a (L (Array a)) >", "growing-recursion"},
 		{"type A = { @deprecated(1) x: Int }", "attribute-arguments"},
 		{"type A = { @deprecated() x: Int }", "attribute-arguments"},
-		{"type A = { @deprecated(\"x\" x: Int }", "unclosed-bracket"},
-		{"@deprecated(\"a\"\ntype A = Int", "unclosed-bracket"},
+		{"type A = { @deprecated(\"x\" x: Int }", "missing-comma"}, // after a value, a comma or ")" is missing, as in Lean
+		{"@deprecated(\"a\"\ntype A = Int", "missing-comma"},
 		{"type A = { @deprecated(\"\\q\") x: Int }", "invalid-escape"},
 		{"/* never closed\ntype A = Int", "unterminated-comment"},
 		{"// a \x1b[2J comment\ntype A = Int", "control-character"},

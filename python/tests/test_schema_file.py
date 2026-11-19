@@ -87,7 +87,8 @@ def rejects(text: str, reason: str, **kwargs: object) -> HausSchemaFileError:
         ("type A = { x: Int", "expected ',' or '}'"),
         ("type a = Int", "a type name"),
         ("type A = Int /* open", "unterminated block comment"),
-        ('type A = { """x""": Int }', "block strings can't be field names"),
+        # The key "" and a '"': the grammar has no block strings (as Lean reads it).
+        ('type A = { """x""": Int }', "expected ':', found '\"'"),
         ("type A = { @deprecated(Foo { a: ) x: Int }", "expected a value"),
     ],
 )

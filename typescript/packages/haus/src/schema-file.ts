@@ -311,6 +311,8 @@ class Lexer {
   pos: number
   /** Comments, whitespace and `"…"` strings are those of data files (spec §14), read by the data parser. */
   private readonly data: Parser
+  /** Where the third '"' of a `"""` is: a token of its own (next). */
+  private quoteAt = -1
   constructor(readonly text: string, readonly fail: Fail) {
     this.pos = text.startsWith("\ufeff") ? 1 : 0
     this.data = new Parser(text, START, DEFAULT_LIMITS)
@@ -366,7 +368,13 @@ class Lexer {
       return { t: "attribute", value: am[1]!, pos }
     }
     if (s[pos] === '"') {
+      // `"""` is the string "" and a '"' that no rule takes: the grammar has no block strings.
+      if (this.quoteAt === pos) {
+        this.pos = pos + 1
+        return { t: "punct", value: '"', pos }
+      }
       const { value, end } = this.read(() => this.data.basicStringAt(pos))
+      if (end === pos + 2 && s[end] === '"') this.quoteAt = end
       this.pos = end
       return { t: "string", value, pos }
     }
@@ -502,6 +510,8 @@ class SchemaParser {
   }
 
   private unexpected(what: string, code: ErrorCode = "schema-syntax"): never {
+    // A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
+    if (this.tok.t === "punct" && this.tok.value === "/") return this.fail("stray-slash", "unexpected '/' (comments are // or /* */)", this.tok.pos)
     const found = this.tok.t === "eof" ? "end of file" : `'${quoteText(this.tok.value)}'`
     return this.fail(code, `expected ${what}, found ${found}`, this.tok.pos, { expected: what, found })
   }

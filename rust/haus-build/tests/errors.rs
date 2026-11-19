@@ -111,7 +111,7 @@ fn attributes() {
     );
     assert_eq!(
         error("type A = { @deprecated(\"x\" x: Int }"),
-        "1:23: expected ')' closing the attribute's arguments, found '('"
+        "1:28: in the arguments of @deprecated: expected ',' between top-level values, found 'x'"
     );
     assert_eq!(
         error("@deprecated\nimport std/time (Date)"),

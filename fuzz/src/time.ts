@@ -167,6 +167,7 @@ const runners: ReadonlyArray<{ readonly name: string; run(file: string, cases: r
   { name: "rust", run: external(join(root, "rust/target/release/examples/time_runner")) },
   { name: "roc", run: external(join(root, "fuzz/.build/roc-time-runner")) },
   { name: "python", run: external(join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/time_runner.py")]) },
+  { name: "go", run: external(join(root, "fuzz/.build/go-runner"), ["--time"]) },
 ]
 
 /** results[case][runner] */

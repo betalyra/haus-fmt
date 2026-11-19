@@ -182,7 +182,7 @@ Which one? Whoever knows least decides. If every reader has the schema, schema-b
 
 ### Which languages are supported?
 
-TypeScript (`@haus-fmt/haus`, also through Standard Schema libraries such as Zod), Effect (`@haus-fmt/effect`), Rust (`haus-fmt`, with code generation in `haus-fmt-build`), Python (`haus-fmt`) and Roc. A Go binding is planned. The [`haus` command](/docs/cli) checks, formats and hashes files, and the VS Code extension shows errors and types as you type. The libraries are published with the first release; until then, use them from the repository. [Install](/docs/install)
+TypeScript (`@haus-fmt/haus`, also through Standard Schema libraries such as Zod), Effect (`@haus-fmt/effect`), Rust (`haus-fmt`, with code generation in `haus-fmt-build`), Python (`haus-fmt`), Roc and Go (`github.com/betalyra/haus-fmt/go`). The [`haus` command](/docs/cli) checks, formats and hashes files, and the VS Code extension shows errors and types as you type. The libraries are published with the first release; until then, use them from the repository. [Install](/docs/install)
 
 ### Is the parser really proven?
 
