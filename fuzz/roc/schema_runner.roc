@@ -57,7 +57,7 @@ run = |line| {
 	match Str.from_utf8($bytes) {
 		Ok(input) => match Value.parse_all(input) {
 			Ok([v]) => match Schemas.roundtrip(suite, ty, v) {
-				Decoded(Ok(encoded)) => "ok ${Encode.canonical(encoded)}"
+				Decoded(Ok(encoded)) => "ok ${Encode.canonical(encoded) ?? "(no canonical form)"}"
 				Decoded(Err(e)) => "err ${ErrorCode.place(e.path)} ${e.code} ${one_line(e.reason)}"
 				NoType => "crash no type ${suite}.${ty}"
 			}
