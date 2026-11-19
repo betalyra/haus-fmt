@@ -878,6 +878,18 @@ expect Encode.minimised(Text("two\nlines\t\u(2028)\u(202E)")) == Ok("\"two\\nlin
 expect Encode.minimised(Rec([("extra", Arr([Num("1"), Num("abc")]))])).map_err(Encode.message) == Err(".extra[1]: not a number literal")
 expect Encode.stream_minimised([Num("1"), Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
 expect Encode.minimised_with(Arr([Arr([Num("1")])]), { ..Value.default_limits, max_depth: 1 }).map_err(|e| e.code) == Err("nesting-too-deep")
+# An empty record, array or record payload is a level, written or built (spec §7).
+expect {
+	small_depth = |d| { ..Value.default_limits, max_depth: d }
+	fits = |v, d| Encode.minimised_with(v, small_depth(d)).is_ok()
+	empties = [Arr([]), Rec([]), Tag("A", [Rec([])]), Tag("Some", [Arr([])])]
+	empties.map(|v| (fits(v, 0), fits(v, 1))) == [(False, True), (False, True), (False, True), (False, False)]
+		and Encode.value_with([], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
+		and Encode.value_with({}, |_, e| Encode.record(e, []), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
+		and Encode.value_with({}, |_, e| Encode.tagged_record("A", e, []), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
+		and Encode.value_with({}, |_, e| Encode.tagged_record("A", e, []), small_depth(1)).map_ok(Encode.canonical) == Ok("A{}")
+		and Encode.value_with([], |l, e| Encode.map(l, e, |n, e1| Encode.number(n.to_str(), e1)), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
+}
 expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 13 }) == Ok("1000000000000,\n")
 expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 12 }).map_err(|e| e.code) == Err("number-too-long")
 expect Encode.minimised_with(Num("1"), { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code) == Err("unsupported-depth")

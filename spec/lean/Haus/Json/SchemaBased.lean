@@ -374,13 +374,28 @@ def unknownJson (tag : String) (vs : List Value) : JSON :=
 
 def mismatch {α : Type} (c : Ty) : Except Error α := reject .typeMismatch s!"not a value of {c.name}"
 
+/-- The first member of a tagged form's object (§16.3) besides `_tag` and `name`. -/
+def extraMember? (name : String) (ms : List (String × JSON)) : Option String :=
+  (ms.find? fun m => m.1 != "_tag" && m.1 != name).map (·.1)
+
 /--
-The code for an object of a tagged form (§16.3) whose members aren't `_tag`
-and `name`: a member it doesn't have (`unexpected-member`), or else `name`
-is missing (`missing-member`).
+The error of an object of a tagged form (§16.3) whose members aren't `_tag`
+and `name`: a member it doesn't have (`unexpected-member`), at that member
+as an unknown field is (§16.3 "Places"), or else `name` is missing
+(`missing-member`), at the object.
 -/
-def memberCode (name : String) (ms : List (String × JSON)) : Code :=
-  if ms.any fun m => m.1 != "_tag" && m.1 != name then .unexpectedMember else .missingMember
+def memberError {α : Type} (name : String) (ms : List (String × JSON)) (reason : String) : Except Error α :=
+  match extraMember? name ms with
+  | some k => .error ⟨[.key k], reason, some .unexpectedMember⟩
+  | none => reject .missingMember reason
+
+/-- An `unexpected-member` error at the object itself moved to the member it is about. -/
+def atExtra {α : Type} (name : String) (ms : List (String × JSON)) : Except Error α → Except Error α
+  | .error e =>
+    if e.code = some .unexpectedMember ∧ e.path = [] then
+      .error { e with path := ((extraMember? name ms).map fun k => [Seg.key k]).getD [] }
+    else .error e
+  | .ok x => .ok x
 
 mutual
 /--
@@ -538,6 +553,10 @@ def decimalOf (s : String) : Except Error Typed :=
   if isJsonNumber s.toList then .ok (.decimal (normalizeNumber s.toList))
   else reject .invalidNumber "expected Decimal: a string holding a JSON number"
 
+/-- A place in JSON (§16.3 "Places") as the steps of a place: member names as keys, array indexes as items. -/
+def jsonPlace (p : List JSON.Step) : List Seg :=
+  p.map fun | .member k => .key k | .index i => .index i
+
 /-- A field without `?` that the object doesn't have. -/
 def missingJ? (fields : List Field) (ms : List (String × JSON)) : Option String :=
   (fields.find? fun f => !f.optional && !ms.any (·.1 == f.key)).map (·.key)
@@ -576,7 +595,7 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
   | .any, j =>
     match JSON.fromSelfDescribing j with
     | .ok v => .ok (.any v)
-    | .error r => reject r.code s!"expected Any: {r.reason}"
+    | .error r => .error ⟨jsonPlace (JSON.selfDescribingPlace j), s!"expected Any: {r.reason}", some r.code⟩
   | .time k, .str s => if Time.check k s.toList then .ok (.time k s) else reject .invalidTime s!"not a valid {k.name}"
   | .array t, .arr xs => (readItems env F o t 0 xs).map .arr
   | .map t, .obj ms => (readEntries env F o t ms).map .map
@@ -600,26 +619,28 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
       match j with
       | .obj ms =>
         match ms.lookup "_tag" with
+        -- A `"_tag"` that isn't a string, or isn't a tag, is `invalid-tag` (§16.3), whatever the variant.
         | some (.str tag) =>
+          if !isTag tag.toList then reject .invalidTag "_tag: not a tag" else
           match caseOf? env cases tag with
-          | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else reject .unexpectedMember s!"{tag} takes no arguments"
+          | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else memberError "_tag" ms s!"{tag} takes no arguments"
           | some (.record _ cl fields) =>
-            if hasReservedField fields then .error ⟨[.arg tag 0], reservedFieldReason, some .noJsonForm⟩ else
+            -- The payload's fields are members of the variant's own object: no step for the payload.
+            if hasReservedField fields then reject .noJsonForm reservedFieldReason else
             match missingJ? fields ms with
-            | some k => .error ⟨[.arg tag 0], s!"missing field {k}", some .missingField⟩
-            | none => (under (.arg tag 0) (readFields env F o cl fields true ms)).map fun ys => .case tag [.record ys]
-          | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else reject .unexpectedMember s!"{tag} takes no arguments"
+            | some k => reject .missingField s!"missing field {k}"
+            | none => (readFields env F o cl fields true ms).map fun ys => .case tag [.record ys]
+          | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else memberError "_tag" ms s!"{tag} takes no arguments"
           | some (.positional _ [t1]) =>
-            if ms.length = 2 then (memberValue env F o tag t1 ms).map fun y => .case tag [y]
-            else reject (memberCode "value" ms) s!"{tag} takes one argument, as value"
+            if ms.length = 2 then (atExtra "value" ms (memberValue env F o tag t1 ms)).map fun y => .case tag [y]
+            else memberError "value" ms s!"{tag} takes one argument, as value"
           | some (.positional _ ts) =>
-            if ms.length = 2 then (memberValues env F o tag ts ms).map (.case tag)
-            else reject (memberCode "values" ms) s!"{tag} takes {ts.length} arguments, as values"
+            if ms.length = 2 then (atExtra "values" ms (memberValues env F o tag ts ms)).map (.case tag)
+            else memberError "values" ms s!"{tag} takes {ts.length} arguments, as values"
           -- `caseOf?` resolves every `Tag T` to one of the forms above.
           | some (.named _ _) => reject .wrongPayload s!"{tag} takes one argument"
           | none =>
             if closed then reject .unknownTag s!"unknown tag {tag}"
-            else if !isTag tag.toList then reject .invalidTag "_tag: not a tag"
             else
               -- An unlisted tag (§16.3): bare, its `_args` as self-describing values, or a newer writer's record payload.
               match ms.filter (·.1 != "_tag") with
@@ -629,13 +650,14 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
                 | .arr (y :: ys) =>
                   match JSON.fromSelfDescribingList (y :: ys) with
                   | .ok vs => .ok (.unknown tag vs)
-                  | .error r => reject r.code s!"_args: {r.reason}"
+                  | .error r => .error ⟨.key "_args" :: jsonPlace (JSON.selfDescribingListPlace (y :: ys)), s!"_args: {r.reason}", some r.code⟩
                 | _ => reject .hausJsonForm "_args: not a non-empty array"
               | rest =>
                 match JSON.toValueMembers rest with
                 | .ok fs => .ok (.unknown tag [.record fs])
                 | .error r => reject r.code r.reason
-        | _ => reject .missingMember "expected an object with _tag"
+        | some _ => reject .invalidTag "_tag: not a string"
+        | none => reject .missingMember "expected an object with _tag"
       | _ => reject .typeMismatch "expected an object with _tag"
   | c, _ => reject .typeMismatch s!"expected {c.name}"
 termination_by (sizeOf j, 0)
@@ -681,7 +703,7 @@ def readArgs (env : Env) (F : Nat) (o : String) (tag : String) (i : Nat) (ts : L
     Except Error (List Typed) :=
   match ts, xs with
   | t :: ts, x :: xs => do
-    let y ← under (.arg tag i) (fromJsonF env F o t x)
+    let y ← under (.index i) (fromJsonF env F o t x)
     let ys ← readArgs env F o tag (i + 1) ts xs
     return y :: ys
   | _, _ => .ok []
@@ -693,7 +715,7 @@ def memberValue (env : Env) (F : Nat) (o : String) (tag : String) (t : Ty) (ms :
   match ms with
   | [] => reject .unexpectedMember s!"{tag} takes one argument, as value"
   | (k, x) :: ms =>
-    if k = "value" then under (.arg tag 0) (fromJsonF env F o t x) else memberValue env F o tag t ms
+    if k = "value" then under (.key "value") (fromJsonF env F o t x) else memberValue env F o tag t ms
 termination_by (sizeOf ms, 0)
 
 /-- The member `values`: several positional arguments. -/
@@ -705,7 +727,8 @@ def memberValues (env : Env) (F : Nat) (o : String) (tag : String) (ts : List Ty
     if k = "values" then
       match x with
       | .arr xs =>
-        if xs.length = ts.length then readArgs env F o tag 0 ts xs else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
+        if xs.length = ts.length then under (.key "values") (readArgs env F o tag 0 ts xs)
+        else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
       | _ => reject .wrongPayload "values: not an array"
     else memberValues env F o tag ts ms
 termination_by (sizeOf ms, 0)
@@ -791,5 +814,12 @@ private def readCode (t : String) (json : String) : Option Code :=
 #guard readCode "Big" ("\"-" ++ toString (10 ^ 998) ++ "\"") == none
 #guard readCode "Big" ("\"" ++ toString (10 ^ 1000) ++ "\"") == some .numberTooLong
 #guard readCode "Big" ("\"-" ++ toString (10 ^ 999) ++ "\"") == some .numberTooLong
+-- A member a tagged form doesn't have is `unexpected-member` at that member, as an unknown field is (§16.3 "Places").
+private def readPlace (t : String) (json : String) : Option String :=
+  match readJson {} testEnv (.ref t) json.toList with
+  | .error e => some e.place
+  | .ok _ => none
+#guard readPlace "Shape" "{\"_tag\":\"Empty\",\"x\":1}" == some "$.x"
+#guard readCode "Shape" "{\"_tag\":\"Empty\",\"x\":1}" == some .unexpectedMember
 
 end Haus.Schema

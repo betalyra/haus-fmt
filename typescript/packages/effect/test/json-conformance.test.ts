@@ -23,6 +23,8 @@ interface Case {
   readonly json: string
   /** For `Err`: the error code (spec §17). */
   readonly code: string | undefined
+  /** For `Err`, when given: the error's place in the JSON (spec §16.3 "Places"). */
+  readonly path: string | undefined
   readonly name: string
 }
 
@@ -34,6 +36,7 @@ const cases = (text: string): Case[] =>
     const json = f.get("json")
     if (json?.kind !== "string") throw new Error(`not a case: ${canonical(v)}`)
     const code = f.get("code")
+    const path = f.get("path")
     if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
     return {
       kind: v.tag as Case["kind"],
@@ -42,6 +45,7 @@ const cases = (text: string): Case[] =>
       output: f.get("output") ?? f.get("input"),
       json: json.value,
       code: code?.kind === "string" ? code.value : undefined,
+      path: path?.kind === "string" ? path.value : undefined,
       name: `${v.tag} ${type?.kind === "string" ? type.value + " " : ""}${json.value}`,
     }
   })
@@ -49,13 +53,14 @@ const cases = (text: string): Case[] =>
 const expectJson = (actual: Json, json: string) =>
   expect(equalsJson(actual, parseJson(json, { maxDepth: 2000 })), `${stringifyJson(actual)} is not ${json}`).toBe(true)
 
-/** The effect fails with a typed error (not a defect) with this code (spec §17). */
-const fails = <A>(effect: Effect.Effect<A, Haus.HausError>, code: string | undefined) => {
+/** The effect fails with a typed error (not a defect) with the case's code (spec §17), and its place when the case gives one. */
+const fails = <A>(effect: Effect.Effect<A, Haus.HausError>, c: Case) => {
   const exit = Effect.runSyncExit(effect)
   expect(Exit.isFailure(exit) && Exit.hasFails(exit), String(exit)).toBe(true)
   if (Exit.isFailure(exit)) {
     const error = Cause.findErrorOption(exit.cause).pipe(Option.getOrUndefined)
-    expect(error?.code, error?.message).toBe(code)
+    expect(error?.code, error?.message).toBe(c.code)
+    if (c.path !== undefined) expect(error instanceof Haus.HausSchemaError ? error.place : undefined, error?.message).toBe(c.path)
   }
 }
 
@@ -66,7 +71,7 @@ describe("schema-based (spec §16.3)", () => {
     it.effect(c.name, () =>
       Effect.gen(function* () {
         const schema = schemas[c.type!]!
-        if (c.kind === "Err") return fails(Haus.fromJson(schema)(c.json), c.code)
+        if (c.kind === "Err") return fails(Haus.fromJson(schema)(c.json), c)
         if (c.kind === "Ok") {
           const decoded = yield* Haus.decodeValue(schema)(c.input!)
           expectJson(yield* Haus.toJsonValue(schema)(decoded), c.json)
@@ -89,7 +94,7 @@ describe("self-describing (spec §16.2)", () => {
   for (const c of cases(read("json/self-describing.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
-        if (c.kind === "Err") return fails(Haus.fromHausJson(c.json), c.code)
+        if (c.kind === "Err") return fails(Haus.fromHausJson(c.json), c)
         expectJson(parseJson(yield* Haus.toHausJson(c.input!)), c.json)
         expect(canonical(yield* Haus.fromHausJson(c.json))).toBe(canonical(c.input!))
         // Haus.Any is the value without the envelope.
@@ -103,7 +108,7 @@ describe("import (spec §16.1)", () => {
   for (const c of cases(read("json/import.cases.haus"))) {
     it.effect(c.name, () =>
       Effect.gen(function* () {
-        if (c.kind === "Err") return fails(Haus.importJson(c.json), c.code)
+        if (c.kind === "Err") return fails(Haus.importJson(c.json), c)
         expect(canonical(yield* Haus.importJson(c.json))).toBe(canonical(c.output!))
       }))
   }

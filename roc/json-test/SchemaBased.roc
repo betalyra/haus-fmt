@@ -1252,6 +1252,56 @@ SchemaBased := [].{
 	to_json_in_place : InPlace, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	to_json_in_place = |v, e| ToJson.maybe(v, e, False, to_json_in_place_item)
 
+	## haus type `schema-based#U64`.
+	U64_ : U64
+
+	decode_u64 : Value -> Try(U64_, Decode.Error)
+	decode_u64 = |v| Decode.within_depth(v, read_value_u64)
+
+	read_value_u64 : Value -> Try(U64_, Decode.Error)
+	read_value_u64 = |v| Decode.u64(v)
+
+	encode_u64 : U64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_u64 = |v, e| Encode.number(v.to_str(), e)
+
+	from_json_u64 : JsonValue -> Try(U64_, Decode.Error)
+	from_json_u64 = |j| FromJson.within_depth(j, read_json_u64, encode_u64)
+
+	read_json_u64 : JsonValue -> Try(U64_, Decode.Error)
+	read_json_u64 = |j| FromJson.u64(j)
+
+	to_json_u64 : U64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_u64 = |v, e| ToJson.u64(v, e)
+
+	## a document for the places of errors (spec §16.3 "Places")
+	##
+	## haus type `schema-based#Doc`.
+	Doc : { shape : [Missing, Present(Shape)], maybe : [Missing, Present(Nested)], users : [Missing, Present(List(User))], strict : [Missing, Present(Strict)], counts : [Missing, Present(Counts)], raw : [Missing, Present(Raw)], key : [Missing, Present(Key)], boxed : [Missing, Present(GenRec)] }
+
+	decode_doc : Value -> Try(Doc, Decode.Error)
+	decode_doc = |v| Decode.within_depth(v, read_value_doc)
+
+	read_value_doc : Value -> Try(Doc, Decode.Error)
+	read_value_doc = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ shape: Decode.optional_field(fs, "shape", read_value_shape)?, maybe: Decode.optional_field(fs, "maybe", read_value_nested)?, users: Decode.optional_field(fs, "users", |x36| Decode.list(x36, read_value_user))?, strict: Decode.optional_field(fs, "strict", read_value_strict)?, counts: Decode.optional_field(fs, "counts", read_value_counts)?, raw: Decode.optional_field(fs, "raw", read_value_raw)?, key: Decode.optional_field(fs, "key", read_value_key)?, boxed: Decode.optional_field(fs, "boxed", read_value_gen_rec)? })
+	}
+
+	encode_doc : Doc, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_doc = |v, e| Encode.record(e, [("shape", Encode.optional(v.shape, encode_shape)), ("maybe", Encode.optional(v.maybe, encode_nested)), ("users", Encode.optional(v.users, |x37, e37| Encode.list(x37, e37, encode_user))), ("strict", Encode.optional(v.strict, encode_strict)), ("counts", Encode.optional(v.counts, encode_counts)), ("raw", Encode.optional(v.raw, encode_raw)), ("key", Encode.optional(v.key, encode_key)), ("boxed", Encode.optional(v.boxed, encode_gen_rec))])
+
+	from_json_doc : JsonValue -> Try(Doc, Decode.Error)
+	from_json_doc = |j| FromJson.within_depth(j, read_json_doc, encode_doc)
+
+	read_json_doc : JsonValue -> Try(Doc, Decode.Error)
+	read_json_doc = |j| {
+		fs = FromJson.object(j, "Doc")?
+		Ok({ shape: FromJson.optional_field(fs, "shape", read_json_shape)?, maybe: FromJson.optional_field(fs, "maybe", read_json_nested)?, users: FromJson.optional_field(fs, "users", |y24| FromJson.list(y24, read_json_user))?, strict: FromJson.optional_field(fs, "strict", read_json_strict)?, counts: FromJson.optional_field(fs, "counts", read_json_counts)?, raw: FromJson.optional_field(fs, "raw", read_json_raw)?, key: FromJson.optional_field(fs, "key", read_json_key)?, boxed: FromJson.optional_field(fs, "boxed", read_json_gen_rec)? })
+	}
+
+	to_json_doc : Doc, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_doc = |v, e| ToJson.object(e, [("shape", ToJson.optional(v.shape, to_json_shape)), ("maybe", ToJson.optional(v.maybe, to_json_nested)), ("users", ToJson.optional(v.users, |y25, e25| ToJson.list(y25, e25, to_json_user))), ("strict", ToJson.optional(v.strict, to_json_strict)), ("counts", ToJson.optional(v.counts, to_json_counts)), ("raw", ToJson.optional(v.raw, to_json_raw)), ("key", ToJson.optional(v.key, to_json_key)), ("boxed", ToJson.optional(v.boxed, to_json_gen_rec))])
+
 	decode_inline_secret_box_box : Value -> Try({ w : I32 }, Decode.Error)
 	decode_inline_secret_box_box = |v| {
 		fs = Decode.strict_record(v)?

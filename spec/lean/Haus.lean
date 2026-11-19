@@ -74,6 +74,10 @@ import Haus.Json.Evolution
 import Haus.Json.NullFuel
 import Haus.Json.Readers
 import Haus.Pretty.BlockString
+import Haus.Layout.Compact
+import Haus.Layout.CompactRoundTrip
+import Haus.Layout.Pretty
+import Haus.Layout.PrettyRoundTrip
 import Haus.Packages.Fs
 import Haus.Packages.Names
 import Haus.Packages.SchemaFile
@@ -89,6 +93,7 @@ import Haus.Packages.Closed
 import Haus.Packages.Steps
 import Haus.Packages.Done
 import Haus.Packages.Walk
+import Haus.Packages.Folders
 import Haus.Profiles.Money
 import Haus.Profiles.Geo
 import Haus.Profiles.Vectors

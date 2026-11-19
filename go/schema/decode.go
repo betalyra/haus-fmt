@@ -299,6 +299,11 @@ func (w *walker) value(v haus.Value, t *typ) (haus.Value, bool, error) {
 	} else {
 		out, changed, err = w.resolved(v, rt, t)
 	}
+	if err == nil && w.depth >= w.lim.MaxDepth && emptyLevel(out) {
+		// An empty record, array or record payload is a level, as when
+		// parsing (spec §7), though it has nothing in it to nest.
+		return nil, false, w.fail(haus.CodeNestingTooDeep, "nesting deeper than %d levels", w.lim.MaxDepth)
+	}
 	if err != nil || w.codecs == nil || len(w.codecs.byID) == 0 {
 		return out, changed, err
 	}
@@ -313,6 +318,25 @@ func (w *walker) value(v haus.Value, t *typ) (haus.Value, bool, error) {
 			return out, changed, nil
 		}
 	}
+}
+
+// emptyLevel reports whether v is an empty record or array, or a variant
+// with an empty record payload (Tag {}): a level of nesting with nothing
+// below it.
+func emptyLevel(v haus.Value) bool {
+	switch v := v.(type) {
+	case haus.Array:
+		return len(v) == 0
+	case haus.Record:
+		return v.Len() == 0
+	case haus.Variant:
+		if len(v.Args) != 1 {
+			return false
+		}
+		r, ok := v.Args[0].(haus.Record)
+		return ok && r.Len() == 0
+	}
+	return false
 }
 
 func (w *walker) resolved(v haus.Value, rt, t *typ) (haus.Value, bool, error) {

@@ -2,6 +2,7 @@
 ## edge cases, and the codecs inside another package's types.
 import haus.Decode
 import haus.Encode
+import haus.ErrorCode
 import haus.Value
 import money.HausFmtMoney
 import money.Iso
@@ -221,14 +222,20 @@ expect {
 	}
 }
 
-# The codecs reject what their profiles do, wherever the type is.
+# The codecs reject what their profiles do, wherever the type is. Codecs run
+# from the inside out (spec §13.4): a currency's codec runs before the codec of
+# the Money that holds it, and rejects at the currency's own place.
 rejected_at = |from, to| match Decode.one(ProfilesTest.travel.replace_first(from, to), Travel.decode_travel) {
-	Err(Decode({ path, code, .. })) if code == "type-mismatch" => path
+	Err(Decode({ path, code, .. })) if code == "type-mismatch" => ErrorCode.place(path)
 	_ => "accepted"
 }
-expect rejected_at("Money(3.10, EUR)", "Money(3.10, Eur)") == ".trips[0].legs[1](Ride).fare"
-expect rejected_at("Tip(CHF)", "Tip(CHFR)") == ".trips[0].legs[2](Tip)[0]"
-expect rejected_at("LatLng(-0, 0)", "LatLng(-0, 181)") == ".trips[0].stops[0]"
-expect rejected_at("LatLng(38.8, -9.2)", "LatLng(NaN, -9.2)") == ".trips[0].legs[1](Ride).to"
-expect rejected_at("LatLng(10, -170)", "LatLng(-10, -170)") == ".trips[0].area"
-expect rejected_at("Money(100.00, USD)", "Money(100.00, US)") == ".budget"
+expect rejected_at("Money(3.10, EUR)", "Money(3.10, Eur)") == "$.trips[0].legs[1].fare[1]"
+expect rejected_at("Tip(CHF)", "Tip(CHFR)") == "$.trips[0].legs[2][0]"
+expect rejected_at("LatLng(-0, 0)", "LatLng(-0, 181)") == "$.trips[0].stops[0]"
+expect rejected_at("LatLng(38.8, -9.2)", "LatLng(NaN, -9.2)") == "$.trips[0].legs[1].to"
+expect rejected_at("LatLng(10, -170)", "LatLng(-10, -170)") == "$.trips[0].area"
+expect rejected_at("LatLng(10, -170)", "LatLng(91, -170)") == "$.trips[0].area[1]"
+expect rejected_at("Money(100.00, USD)", "Money(100.00, US)") == "$.budget[1]"
+expect rejected_at("Money(12.50, EUR)", "Money(12.50, EUR(1))") == "$.trips[0].fare[1]"
+# The first codec to reject gives the error: the point's, before the BBox's own rule.
+expect rejected_at("BBox(LatLng(0, 170), LatLng(10, -170))", "BBox(LatLng(10, 170), LatLng(0, 181))") == "$.trips[0].area[1]"

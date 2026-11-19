@@ -204,7 +204,7 @@ pub enum ErrorCode {
     StepBudget,
     /// `too-many-nodes`: A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
     TooManyNodes,
-    /// `json-syntax`: Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.
+    /// `json-syntax`: Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.
     JsonSyntax,
     /// `unpaired-surrogate`: A JSON string with half of a UTF-16 surrogate pair, raw or as `\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).
     UnpairedSurrogate,
@@ -216,7 +216,7 @@ pub enum ErrorCode {
     HausJsonNumber,
     /// `haus-json-bytes`: A self-describing `_bytes` that isn't two lowercase hex digits per byte.
     HausJsonBytes,
-    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`: in a `_tag` of either JSON form, or in a value built in code.
+    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
     InvalidTag,
     /// `invalid-base64`: Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
     InvalidBase64,

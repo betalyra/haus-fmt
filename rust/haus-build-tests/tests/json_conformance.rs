@@ -6,7 +6,9 @@
 //!   writing the result gives `json`, and reading `json` gives a value that
 //!   encodes to `output` (or `input`).
 //! - `Read { type, json, output }`: reading `json` gives `output`.
-//! - `Err { type, json, code }`: reading `json` fails with the error code `code` (spec §17).
+//! - `Err { type, json, code, path? }`: reading `json` fails with the error
+//!   code `code` (spec §17), at `path` in the JSON if the case gives one
+//!   (spec §16.3 "Places").
 //!
 //! JSON is compared as data: member order and whitespace don't matter, and
 //! numbers compare by their text.
@@ -51,6 +53,8 @@ struct Case {
     output: Option<Value>,
     /// For an `Err`, the code it fails with.
     code: Option<String>,
+    /// For an `Err`, the place in the JSON it fails at, if the case gives one.
+    path: Option<String>,
 }
 
 impl Case {
@@ -75,6 +79,7 @@ impl Case {
             input: fields.get("input").cloned(),
             output: fields.get("output").cloned(),
             code: text("code").ok(),
+            path: text("path").ok(),
         })
     }
 
@@ -115,11 +120,25 @@ impl Case {
                 Ok(Err(e)) if e.code().map(|c| c.as_str()) != self.code.as_deref() => {
                     Some(format!("fails with {:?} ({e}), expected {:?}", e.code(), self.code))
                 }
-                Ok(Err(_)) => None,
+                Ok(Err(e)) => match (&self.path, place(&e)) {
+                    (Some(path), place) if place.as_deref() != Some(path.as_str()) => {
+                        Some(format!("fails at {place:?} ({e}), expected {path}"))
+                    }
+                    _ => None,
+                },
                 Err(e) => Some(e),
             },
             _ => Some("not a well-formed case".into()),
         }
+    }
+}
+
+/// The place of an error in a value (spec §17 `path`); None for an error in text.
+fn place(e: &haus::Error) -> Option<String> {
+    match e {
+        haus::Error::Decode(e) => Some(e.place()),
+        haus::Error::Encode(e) => Some(e.place()),
+        _ => None,
     }
 }
 

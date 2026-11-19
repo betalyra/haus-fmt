@@ -544,3 +544,86 @@ def test_a_codec_applies_to_a_record_case_by_name() -> None:
     assert s["V"].parse("Box { w: 7 }") == Tagged("Box", cast("dict[str, object]", 7))
     assert s["V"].to_json(Tagged("Box", cast("dict[str, object]", 7))) == '{"_tag":"Box","w":7}'
     assert s["V"].from_json('{"_tag":"Box","w":7}') == Tagged("Box", cast("dict[str, object]", 7))
+
+
+def test_codecs_in_one_value_run_inside_out() -> None:
+    """Spec §13.4: a part's codec runs before the codec of the value that holds it; the first that
+    rejects gives the error, at its own place (`$[1]` for the currency inside the money)."""
+    ran: list[str] = []
+
+    class Currency:
+        def decode(self, value: object, /) -> str:
+            ran.append("Currency")
+            assert isinstance(value, Unknown)
+            if len(value.value.tag) != 3:
+                raise ValueError(f"{value.value.tag} is not a currency")
+            return value.value.tag
+
+        def encode(self, value: object, /) -> object:
+            return Unknown(Variant(str(value)))
+
+    class Money:
+        def decode(self, value: object, /) -> object:
+            ran.append("Money")
+            assert isinstance(value, Tagged) and isinstance(value.payload, tuple)
+            amount = value.payload[0]
+            if isinstance(amount, str) and amount.startswith("-"):
+                raise ValueError("a negative amount")
+            return value.payload
+
+        def encode(self, value: object, /) -> object:
+            assert isinstance(value, tuple)
+            return Tagged("Money", cast("tuple[object, ...]", value))
+
+    s = compile_schema(
+        "type Money = closed < Money Decimal Currency >\ntype Currency = < >\ntype Order = { total: Money }",
+        codecs={"Money": Money(), "Currency": Currency()},
+    )
+    order = s["Order"]
+    assert order.parse("{ total: Money(19.90, EUR) }") == {"total": ("19.90", "EUR")}
+    assert ran == ["Currency", "Money"]
+    for text, path in [
+        ("{ total: Money(-1, EURO) }", "$.total[1]"),  # both reject: the inner one first
+        ("{ total: Money(-1, EUR) }", "$.total"),
+    ]:
+        with pytest.raises(HausDecodeError) as e:
+            order.parse(text)
+        assert e.value.to_json()["path"] == path, text
+    for json, path in [
+        ('{"total": {"_tag": "Money", "values": ["-1", {"_tag": "EURO"}]}}', "$.total.values[1]"),
+        ('{"total": {"_tag": "Money", "values": ["-1", {"_tag": "EUR"}]}}', "$.total"),
+    ]:
+        with pytest.raises(HausDecodeError) as e:
+            order.from_json(json)
+        assert e.value.to_json()["path"] == path, json
+
+
+def test_values_built_in_code_count_empty_containers_as_levels() -> None:
+    """Spec §7: an empty record, array or record payload is a level, in values built in code as when parsed."""
+    one = Limits(max_depth=1)
+    s = compile_schema(
+        "type A = Array (Array Int32)\ntype R = { a: {} }\ntype W = Array (< T {} >)\n"
+        "type M = Map (Map Int32)\ntype X = Any"
+    )
+    typed: list[tuple[str, object]] = [("A", [[]]), ("R", {"a": {}}), ("W", [Tagged("T", {})]), ("M", {"a": {}})]
+    for name, value in typed:
+        t = s[name]
+        with pytest.raises(HausEncodeError) as e:
+            t.encode(value, limits=one)
+        assert e.value.code == "nesting-too-deep", name
+        with pytest.raises(HausEncodeError) as j:
+            t.to_json(value, limits=one)
+        assert j.value.code == "nesting-too-deep", name
+        # The same value parsed is as deep.
+        with pytest.raises(haus.HausSyntaxError) as p:
+            t.parse(haus.canonical(t.encode(value)), limits=one)
+        assert p.value.code == "nesting-too-deep"
+    raw: list[haus.Value] = [Array((Array(()),)), Record({"a": Record({})}), Array((Variant("T", (Record({}),)),))]
+    for v in raw:
+        with pytest.raises(HausEncodeError, match="nesting"):
+            s["X"].encode(v, limits=one)
+        with pytest.raises(HausEncodeError, match="nesting"):
+            s["X"].to_json(v, limits=one)
+        with pytest.raises(HausEncodeError, match="nesting"):
+            haus.to_haus_json(v, limits=one)
+        assert haus.to_haus_json(v, limits=Limits(max_depth=2))

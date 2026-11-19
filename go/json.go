@@ -584,6 +584,7 @@ func (s *selfDescribing) envelope(j Value) (Value, error) {
 	if n, ok := h.(Number); !ok || n.lit != "1" {
 		return nil, s.fail(CodeHausJSONVersion, "expected version 1 of self-describing JSON in '_haus', found %s", describeJSON(h))
 	}
+	s.push(key("_value"))
 	return s.value(v, 0)
 }
 
@@ -736,14 +737,13 @@ func (s *selfDescribing) record(fields Value, depth int) (Value, error) {
 	return recordOwned(out), nil
 }
 
+// tag reads a '_tag'; its errors are at the variant, the object that holds it.
 func (s *selfDescribing) tag(j Value) (string, error) {
 	t, ok := j.(String)
 	if !ok || !isTag(string(t)) {
-		s.push(key("_tag"))
 		return "", s.fail(CodeInvalidTag, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found %s", describeJSON(j))
 	}
 	if len(t) > s.lim.MaxStringLength {
-		s.push(key("_tag"))
 		return "", s.fail(CodeTagTooLong, "a tag longer than the limit of %d characters", s.lim.MaxStringLength)
 	}
 	return string(t), nil

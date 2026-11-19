@@ -105,6 +105,12 @@ haus, with JSON text in strings:
 JSON is compared as data: member order and whitespace don't matter, and
 numbers compare by their text.
 
+An `Err` case may also give `path`, the error's place in the JSON (spec §16.3
+"Places"): member names and array indexes from the JSON text's root, written as
+the paths of spec §15 (`$.shape.values[1]`, `$.counts["pt-BR"]`,
+`$._value._args[1]._num`). Runners compare it, when it is there, with the
+`path` of the error (spec §17). A case without `path` doesn't pin the place.
+
 ## Package suite
 
 `packages/cases.haus` tests how schema imports find packages and files (spec

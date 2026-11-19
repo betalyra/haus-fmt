@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import haus
-from haus import Record, String, Value, Variant
+from haus import HausError, Record, String, Value, Variant
 from haus.schema import HausDecodeError, HausJsonError, Schema, compile_schema
 
 SUITE = Path(__file__).resolve().parents[2] / "test-suite"
@@ -31,6 +31,8 @@ class Case:
     output: Value | None = None
     code: str | None = None
     """`Err`: the error code (spec §17) reading must fail with."""
+    path: str | None = None
+    """`Err`, optional: the error's place in the JSON (spec §16.3 "Places"), e.g. `$.shape.values[1]`."""
 
     @property
     def name(self) -> str:
@@ -46,6 +48,7 @@ def load(name: str) -> list[Case]:
                 t = fields.get("type")
                 input_ = fields.get("input")
                 code = fields.get("code")
+                path = fields.get("path")
                 assert (kind == "Err") == isinstance(code, String), f"an Err case has a code: {haus.canonical(v)}"
                 out.append(
                     Case(
@@ -55,6 +58,7 @@ def load(name: str) -> list[Case]:
                         input_,
                         fields.get("output", input_),
                         code.value if isinstance(code, String) else None,
+                        path.value if isinstance(path, String) else None,
                     )
                 )
             case _:
@@ -73,6 +77,13 @@ def data(text: str | bytes) -> object:
         raise ValueError(f"not JSON: {s}")
 
     return json.loads(text, parse_int=number, parse_float=number, parse_constant=constant)
+
+
+def expect_error(e: HausError, case: Case) -> None:
+    """The error has the case's code and, if the case gives one, its place in the JSON."""
+    assert e.code == case.code, e.reason
+    if case.path is not None:
+        assert e.to_json().get("path") == case.path, str(e)
 
 
 def canonical(v: Value | None) -> str:
@@ -105,7 +116,7 @@ def test_schema_based(case: Case) -> None:
         case _:
             with pytest.raises((HausDecodeError, HausJsonError)) as e:
                 t.from_json(case.json)
-            assert e.value.code == case.code, e.value.reason
+            expect_error(e.value, case)
 
 
 # ── self-describing (§16.2) ──────────────────────────────────
@@ -120,7 +131,7 @@ def test_self_describing(case: Case) -> None:
     else:
         with pytest.raises(HausJsonError) as e:
             haus.from_haus_json(case.json)
-        assert e.value.code == case.code, e.value.reason
+        expect_error(e.value, case)
 
 
 VALID = sorted((SUITE / "valid").glob("*.haus"))
@@ -159,4 +170,4 @@ def test_import(case: Case) -> None:
     else:
         with pytest.raises(HausJsonError) as e:
             haus.import_json(case.json)
-        assert e.value.code == case.code, e.value.reason
+        expect_error(e.value, case)

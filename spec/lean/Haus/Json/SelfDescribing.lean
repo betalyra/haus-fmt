@@ -281,8 +281,8 @@ def unwrap : JSON → Except Error JSON
 
 /--
 **Reading self-describing JSON** (§16.2): the envelope, and in it a
-self-describing value. Paths inside the value start at `$`: the envelope
-adds no segment.
+self-describing value. Its errors are placed by `hausJsonPlace`, from the
+envelope: `$._value._args[1]._num`.
 -/
 def fromHausJson (j : JSON) : Except Error Value := do fromSelfDescribing (← unwrap j)
 
@@ -315,6 +315,97 @@ def readHausJson (L : Limits) (t : Text) : Except Error Value := readHausJsonTex
 def readHausJsonLines (L : Limits) (t : Text) : Except Error (List Value) :=
   (lines (dropBom t)).mapM fun l =>
     if l.isEmpty then .error ⟨.jsonSyntax, "empty line"⟩ else readHausJsonText L l
+
+/-! ## Places (§16.3 "Places")
+
+An error reading JSON names its place in the JSON: member names and array
+indexes from the JSON text's root. The readers above say what is wrong; the
+functions here say where, as the first part, in reading order, that the
+reader rejects. -/
+
+/-- A step of a place in JSON: a member name, or an array index. -/
+inductive Step
+  | member (k : String)
+  | index (i : Nat)
+  deriving Repr, DecidableEq
+
+/-- A step as §15 writes it: `.name` for an identifier, `["…"]` for any other name, `[i]` for an index. -/
+def Step.text : Step → String
+  | .member k => if Canonical.isIdent k then "." ++ k else "[" ++ String.ofList (Canonical.string k) ++ "]"
+  | .index i => s!"[{i}]"
+
+/-- A place as text: `$`, then its steps. -/
+def placeText (p : List Step) : String := p.foldl (fun s step => s ++ step.text) "$"
+
+mutual
+/--
+The place of the error of `fromSelfDescribing j`, when it rejects `j`: a
+`_num` or `_bytes` that isn't one is at that member, a part of an array, a
+`_rec` or an `_args` at the first part rejected, and anything else (a tag
+that isn't one, JSON that is no form) at the object itself.
+-/
+def selfDescribingPlace : JSON → List Step
+  | .arr xs => selfDescribingListPlaceFrom 0 xs
+  | .obj [("_num", _)] => [.member "_num"]
+  | .obj [("_bytes", _)] => [.member "_bytes"]
+  | .obj [("_rec", .obj ms)] => .member "_rec" :: selfDescribingMembersPlace ms
+  | .obj [("_tag", x), ("_args", .arr (y :: ys))] =>
+    if (tagOf x).toOption.isSome then .member "_args" :: selfDescribingListPlaceFrom 0 (y :: ys) else []
+  | .obj [("_args", .arr (y :: ys)), ("_tag", x)] =>
+    if (tagOf x).toOption.isSome then .member "_args" :: selfDescribingListPlaceFrom 0 (y :: ys) else []
+  | _ => []
+
+/-- The first item from index `i` on that `fromSelfDescribing` rejects, and the place in it. -/
+def selfDescribingListPlaceFrom (i : Nat) : List JSON → List Step
+  | [] => []
+  | x :: xs =>
+    if (fromSelfDescribing x).toOption.isSome then selfDescribingListPlaceFrom (i + 1) xs
+    else .index i :: selfDescribingPlace x
+
+/-- The first member that `fromSelfDescribing` rejects, and the place in it. -/
+def selfDescribingMembersPlace : List (String × JSON) → List Step
+  | [] => []
+  | (k, x) :: ms =>
+    if (fromSelfDescribing x).toOption.isSome then selfDescribingMembersPlace ms
+    else .member k :: selfDescribingPlace x
+end
+
+/-- The place of the error of `fromSelfDescribingList xs`: the first item rejected. -/
+def selfDescribingListPlace (xs : List JSON) : List Step := selfDescribingListPlaceFrom 0 xs
+
+/-- The place of the error of `fromHausJson j`: the envelope itself, or `_value` and the place in it. -/
+def hausJsonPlace : JSON → List Step
+  | .obj [("_haus", .num "1"), ("_value", j)] => .member "_value" :: selfDescribingPlace j
+  | .obj [("_value", j), ("_haus", .num "1")] => .member "_value" :: selfDescribingPlace j
+  | _ => []
+
+/-- The place of an error in one self-describing JSON text without a byte order mark: none for an error in the text. -/
+def hausJsonTextPlace (L : Limits) (t : Text) : List Step :=
+  match parseText L true (hausJsonDepth L) t with
+  | .ok j => if (fromHausJson j).toOption.isSome then [] else hausJsonPlace j
+  | .error _ => []
+
+/-- **Self-describing JSON text** (§16.2) as `readHausJson` reads it, an error with its place. -/
+def readHausJsonAt (L : Limits) (t : Text) : Except (List Step × Error) Value :=
+  match readHausJson L t with
+  | .ok v => .ok v
+  | .error e => .error (hausJsonTextPlace L (dropBom t), e)
+
+/--
+**Self-describing JSON Lines** as `readHausJsonLines` reads them, an error
+with its place: the index of the line, counted from 0, then the place in
+its value (`$[3]._value._num`). An empty line, and a byte order mark at the
+start of a line after the first, are `json-syntax` at their line (§16,
+"Streams").
+-/
+def readHausJsonLinesAt (L : Limits) (t : Text) : Except (List Step × Error) (List Value) :=
+  match readHausJsonLines L t with
+  | .ok vs => .ok vs
+  | .error e =>
+    let ls := lines (dropBom t)
+    let rejected (l : Text) : Bool := l.isEmpty || (readHausJsonText L l).toOption.isNone
+    let i := (ls.findIdx? rejected).getD 0
+    .error (.index i :: hausJsonTextPlace L (ls.getD i []), e)
 
 /-- The text of a value's self-describing JSON. -/
 def writeHausJson (v : Value) : Text := write (hausJson v)
@@ -881,6 +972,27 @@ private def hausJsonCode (src : String) : Option Code := codeOf (readHausJson {}
 -- JSON Lines: one envelope per line.
 #guard (readHausJsonLines {} "{\"_haus\": 1, \"_value\": \"a\"}\r\n{\"_haus\": 1, \"_value\": []}".toList).toOption.map (·.length) == some 2
 #guard (readHausJsonLines {} "\"a\"\n".toList).toOption.isNone && (readHausJsonLines {} "".toList).toOption == some []
+-- An empty line, and a byte order mark at the start of a later line, are `json-syntax`, at their line (§16, "Streams").
+private def linesError (s : String) : Option (String × Code) :=
+  match readHausJsonLinesAt {} s.toList with
+  | .error (p, e) => some (placeText p, e.code)
+  | .ok _ => none
+private def env1 : String := "{\"_haus\": 1, \"_value\": \"a\"}"
+#guard linesError (env1 ++ "\n\n" ++ env1) == some ("$[1]", .jsonSyntax)
+#guard linesError (env1 ++ "\r\n\r\n") == some ("$[1]", .jsonSyntax)
+#guard linesError (env1 ++ "\n\uFEFF" ++ env1) == some ("$[1]", .jsonSyntax)
+#guard (readHausJsonLinesAt {} ("\uFEFF" ++ env1 ++ "\n" ++ env1).toList).toOption.map (·.length) == some 2
+-- Places from the JSON text's root, the line's index first in JSON Lines (§16.3 "Places").
+#guard linesError (env1 ++ "\n" ++ env1 ++ "\n{\"_haus\": 1, \"_value\": [\"a\", {\"_num\": \"01\"}]}") == some ("$[2]._value[1]._num", .hausJsonNumber)
+private def placeOf (s : String) : Option String :=
+  match readHausJsonAt {} s.toList with
+  | .error (p, _) => some (placeText p)
+  | .ok _ => none
+#guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": [\"a\", {\"_bytes\": \"0B\"}]}}" == some "$._value._args[1]._bytes"
+#guard placeOf "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": \"b\", \"pt-BR\": 1}}}" == some "$._value._rec[\"pt-BR\"]"
+#guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": 1}}" == some "$._value"
+#guard placeOf "{\"_haus\": 2, \"_value\": \"a\"}" == some "$"
+#guard placeOf "{\"_haus\": 1, \"_value\": \"a\"" == some "$"
 
 end JSON
 end Haus

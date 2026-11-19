@@ -53,17 +53,36 @@ fn text(fields: &Value, key: &str) -> String {
     }
 }
 
-/// Why `result` isn't a failure with `code` (spec §17), if it isn't.
-fn rejected(result: Result<Value, haus::Error>, code: &str) -> Option<String> {
+/// Why `result` isn't a failure with the `code` of the case `fields` (spec
+/// §17), at its `path` in the JSON if it gives one (spec §16.3 "Places"), if it isn't.
+fn rejected(result: Result<Value, haus::Error>, fields: &Value) -> Option<String> {
+    let code = text(fields, "code");
+    let path = fields.get("path").map(|_| text(fields, "path"));
     match result {
         Ok(v) => Some(format!("read as {}", canonical(&v))),
-        Err(e) if e.code().map(|c| c.as_str()) != Some(code) => Some(format!("{:?} ({e}), expected {code}", e.code())),
-        Err(_) => None,
+        Err(e) if e.code().map(|c| c.as_str()) != Some(code.as_str()) => {
+            Some(format!("{:?} ({e}), expected {code}", e.code()))
+        }
+        Err(e) => match (path, place(&e)) {
+            (Some(path), place) if place.as_deref() != Some(path.as_str()) => {
+                Some(format!("at {place:?} ({e}), expected {path}"))
+            }
+            _ => None,
+        },
+    }
+}
+
+/// The place of an error in a value (spec §17 `path`); None for an error in text.
+fn place(e: &haus::Error) -> Option<String> {
+    match e {
+        haus::Error::Decode(e) => Some(e.place()),
+        haus::Error::Encode(e) => Some(e.place()),
+        _ => None,
     }
 }
 
 /// `Ok { input, json }`: writing `input` gives `json`, reading `json` gives
-/// `input`. `Err { json, code }`: reading `json` fails with `code`.
+/// `input`. `Err { json, code, path? }`: reading `json` fails with `code`, at `path`.
 #[test]
 fn self_describing() {
     let failures: Vec<String> = cases("self-describing.cases.haus")
@@ -80,7 +99,7 @@ fn self_describing() {
                         Err(e) => Some(format!("can't read it: {e}")),
                     },
                 },
-                ("Err", None) => rejected(haus::from_haus_json(&json), &text(fields, "code")),
+                ("Err", None) => rejected(haus::from_haus_json(&json), fields),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))
@@ -103,7 +122,7 @@ fn import() {
                     Ok(v) => Some(format!("read as {}", canonical(&v))),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
-                ("Err", None) => rejected(haus::import_json(&json), &text(fields, "code")),
+                ("Err", None) => rejected(haus::import_json(&json), fields),
                 _ => panic!("not a case: {}", canonical(fields)),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))

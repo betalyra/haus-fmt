@@ -176,10 +176,26 @@ fn the_profiles_reject_inside_another_packages_types() {
             other => panic!("{to}: {other:?}"),
         }
     };
-    assert_eq!(place("Money(3.10, EUR)", "Money(3.10, Eur)"), "$.trips[0].legs[1].fare");
+    // Codecs run from the inside out (spec §13.4): the Currency codec rejects
+    // first, at its own place inside the Money.
+    assert_eq!(place("Money(3.10, EUR)", "Money(3.10, Eur)"), "$.trips[0].legs[1].fare[1]");
     assert_eq!(place("Tip(CHF)", "Tip(CHFR)"), "$.trips[0].legs[2][0]");
     assert_eq!(place("LatLng(-0, 0)", "LatLng(-0, 181)"), "$.trips[0].stops[0]");
     assert_eq!(place("LatLng(38.8, -9.2)", "LatLng(NaN, -9.2)"), "$.trips[0].legs[1].to");
     assert_eq!(place("LatLng(10, -170)", "LatLng(-10, -170)"), "$.trips[0].area");
-    assert_eq!(place("Money(100.00, USD)", "Money(100.00, US)"), "$.budget");
+    assert_eq!(place("Money(100.00, USD)", "Money(100.00, US)"), "$.budget[1]");
+    // In schema-based JSON too, at the place in the JSON.
+    let json = haus::json::to_string(&haus::from_str::<travel::Travel>(TRAVEL).unwrap()).unwrap();
+    let json_place = |from: &str, to: &str| {
+        let text = json.replacen(from, to, 1);
+        assert_ne!(text, json, "{from}");
+        match haus::json::from_str::<travel::Travel>(&text) {
+            Err(haus::Error::Decode(e)) => {
+                assert_eq!(e.code, haus::ErrorCode::TypeMismatch, "{e}");
+                e.place()
+            }
+            other => panic!("{to}: {other:?}"),
+        }
+    };
+    assert_eq!(json_place(r#"{"_tag":"USD"}"#, r#"{"_tag":"US"}"#), "$.budget.values[1]");
 }

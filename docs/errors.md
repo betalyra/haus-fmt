@@ -1024,7 +1024,7 @@ For example: a value built in code whose arrays share one another a million time
 
 ## json-syntax
 
-*JSON.* Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.
+*JSON.* Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.
 
 Read as self-describing JSON:
 
@@ -1096,7 +1096,7 @@ Read as self-describing JSON:
 
 ## invalid-tag
 
-*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.
+*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
 
 Read as self-describing JSON:
 

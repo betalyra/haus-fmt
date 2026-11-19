@@ -12,6 +12,7 @@
     ["Counts",{"map":{"builtin":"Int32"}}],
     ["Day",{"time":"Date"}],
     ["Dec",{"builtin":"Decimal"}],
+    ["Doc",{"record":{"closed":false,"fields":[{"key":"shape","optional":true,"type":{"ref":"Shape"}},{"key":"maybe","optional":true,"type":{"ref":"Nested"}},{"key":"users","optional":true,"type":{"array":{"ref":"User"}}},{"key":"strict","optional":true,"type":{"ref":"Strict"}},{"key":"counts","optional":true,"type":{"ref":"Counts"}},{"key":"raw","optional":true,"type":{"ref":"Raw"}},{"key":"key","optional":true,"type":{"ref":"Key"}},{"key":"boxed","optional":true,"type":{"ref":"GenRec"}}]}}],
     ["F32",{"builtin":"Float32"}],
     ["F64",{"builtin":"Float64"}],
     ["Flag",{"builtin":"Bool"}],
@@ -45,6 +46,7 @@
     ["Small",{"builtin":"Int32"}],
     ["Strict",{"record":{"closed":true,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int32"}}]}}],
     ["StrictBox",{"variant":{"closed":false,"cases":[{"tag":"Box","payload":{"record":{"closed":true,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int32"}}]},"named":{"ref":"Strict"}}}]}}],
+    ["U64",{"builtin":"UInt64"}],
     ["User",{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int32"}},{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"nick","optional":true,"type":{"builtin":"String"}},{"key":"note","optional":true,"type":{"maybe":{"builtin":"String"}}}]}}]
   ]}
 ]}

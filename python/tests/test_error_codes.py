@@ -221,7 +221,7 @@ def test_json_has_only_the_members_that_apply() -> None:
     assert info.value.to_json() == {
         "code": "haus-json-number",
         "message": info.value.reason,
-        "path": "$._num",
+        "path": "$._value._num",
         "hint": ERROR_CODES["haus-json-number"].hint,
         "docs": "https://haus-fmt.org/docs/errors#haus-json-number",
     }

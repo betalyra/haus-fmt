@@ -6,6 +6,7 @@ import TravelHausTestTravel
 import travel.HausTestTravel
 import money.HausFmtMoney
 import money.Iso
+import money.IsoCurrency
 
 Travel := [].{
 
@@ -18,10 +19,16 @@ Travel := [].{
 	read_value_travel : Value -> Try(Travel_, Decode.Error)
 	read_value_travel = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ trips: Decode.field(fs, "trips", |x1| Decode.list(x1, TravelHausTestTravel.read_value_trip))?, traveller: Decode.field(fs, "traveller", HausTestTravel.read_value_traveller)?, budget: Decode.field(fs, "budget", |x2| Decode.codec(x2, HausFmtMoney.read_value_money, Iso.decode))? })
+		Ok({ trips: Decode.field(fs, "trips", |x1| Decode.list(x1, TravelHausTestTravel.read_value_trip))?, traveller: Decode.field(fs, "traveller", HausTestTravel.read_value_traveller)?, budget: Decode.field(fs, "budget", |x2| Decode.codec_inside(x2, check_codecs_2, HausFmtMoney.read_value_money, Iso.decode))? })
 	}
 
 	encode_travel : Travel_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
 	encode_travel = |v, e| Encode.record(e, [("trips", Present(|e3| Encode.list(v.trips, e3, TravelHausTestTravel.encode_trip))), ("traveller", Encode.required(v.traveller, HausTestTravel.encode_traveller)), ("budget", Present(|e4| HausFmtMoney.encode_money(Iso.encode(v.budget), e4)))])
+
+	check_codecs_1 : Value -> Try({}, Decode.Error)
+	check_codecs_1 = |v| Decode.codec(v, HausFmtMoney.read_value_currency, IsoCurrency.decode).map_ok(|_| {})
+
+	check_codecs_2 : Value -> Try({}, Decode.Error)
+	check_codecs_2 = |v| Decode.check_cases(v, [("Money", Args([|_| Ok({}), check_codecs_1]))])
 
 }

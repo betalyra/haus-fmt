@@ -143,6 +143,7 @@ for path in sorted((SUITE / "valid").glob("*.haus")):
     "import haus.Value\n"
     "import haus.Decode\n"
     "import haus.Encode\n"
+    "import haus.ErrorCode\n"
     "import haus.JsonValue\n"
     "import haus.ToJson\n"
     "import SchemaBased\n"
@@ -161,7 +162,8 @@ JsonTest := [].{
 	## json, output? }` writes the decoded `input` as `json`, and reading
 	## `json` gives a value that encodes to `output` (or `input`); `Read {
 	## type, json, output }` reads `json` as `output`; `Err { type, json, code }`
-	## doesn't read, and fails with the error code `code` (spec §17).
+	## doesn't read, and fails with the error code `code` (spec §17), at the
+	## place `path` in the JSON when the case gives one (§16.3 "Places").
 	schema_based : Str, U64 -> Bool
 	schema_based = |cases, i| report(schema_based_case(cases, i))
 
@@ -211,13 +213,12 @@ schema_based_case = |cases, i| {
 		}
 		"Read" => read_as(ty, json, value(fields, "output")?)
 		_ => {
-			code = text(fields, "code")?
 			match JsonValue.parse(json) {
 				Ok(j) => match read(ty, j) {
 					Ok(v) => Err("read as ${Encode.canonical(v)}")
-					Err(e) => same_code(code, e.code, Decode.message(e))
+					Err(e) => rejected(Err(Decode(e)), fields)
 				}
-				Err(e) => same_code(code, e.code, e.reason)
+				Err(e) => rejected(Err(Syntax(e)), fields)
 			}
 		}
 	}
@@ -233,7 +234,7 @@ self_describing_case = |cases, i| {
 			got = JsonValue.to_haus_json(input).map_err(Encode.message)?
 			if same_json(got, json)? reads_back(json, input) else Err("wrote ${got}")
 		}
-		_ => rejected(JsonValue.from_haus_json(json), text(fields, "code")?)
+		_ => rejected(JsonValue.from_haus_json(json), fields)
 	}
 }
 
@@ -247,16 +248,32 @@ import_case = |cases, i| {
 			if Encode.equals(v, want) Ok({}) else Err("read as ${Encode.canonical(v)}")
 		}
 		("Read", Err(_)) => Err("can't read it")
-		(_, result) => rejected(result, text(fields, "code")?)
+		(_, result) => rejected(result, fields)
 	}
 }
 
-## Reading failed with the error code `code` (spec §17).
-rejected : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]), Str -> Try({}, Str)
-rejected = |result, code| match result {
-	Ok(v) => Err("read as ${Encode.canonical(v)}")
-	Err(Syntax(e)) => same_code(code, e.code, e.reason)
-	Err(Decode(e)) => same_code(code, e.code, Decode.message(e))
+## Reading failed with the case's error `code` (spec §17), and at its `path`,
+## the place in the JSON (§16.3 "Places"), if the case gives one: an error in
+## the JSON text has a line and column instead.
+rejected : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]), List((Str, Value)) -> Try({}, Str)
+rejected = |result, fields| {
+	code = text(fields, "code")?
+	path = text(fields, "path")
+	match result {
+		Ok(v) => Err("read as ${Encode.canonical(v)}")
+		Err(Syntax(e)) =>
+			match path {
+				Ok(p) => Err("failed in the JSON text (${e.code} at ${e.line.to_str()}:${e.column.to_str()}), expected ${code} at ${p}")
+				Err(_) => same_code(code, e.code, e.reason)
+			}
+		Err(Decode(e)) => {
+			same_code(code, e.code, Decode.message(e))?
+			match path {
+				Ok(p) if ErrorCode.place(e.path) != p => Err("failed at ${ErrorCode.place(e.path)}, expected ${p}: ${Decode.message(e)}")
+				_ => Ok({})
+			}
+		}
+	}
 }
 
 same_code : Str, Str, Str -> Try({}, Str)

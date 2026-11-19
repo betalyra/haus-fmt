@@ -378,8 +378,10 @@ fn lines<T>(values: &[T], write: impl Fn(&T) -> Result<String, EncodeError>) -> 
 
 /// Read schema-based JSON Lines: every line a JSON text read as a `T`. The
 /// last line may end without a line feed, lines may end with CR LF, and a
-/// byte order mark is ignored at the start; empty lines are errors. Syntax
-/// errors give the line in the whole text, decode errors the value's index.
+/// byte order mark is ignored at the start of the stream; empty lines, and a
+/// byte order mark at the start of a later line, are errors (`json-syntax`,
+/// at the line). Syntax errors give the line in the whole text, decode
+/// errors the value's index: `$[3].price`.
 pub fn from_str_all<T: FromJson + Encode>(text: &str) -> Result<Vec<T>, Error> {
     read_lines(text, |i, line| typed_line(i, line, &Limits::default()))
 }
@@ -394,12 +396,14 @@ pub fn from_haus_json_lines(text: &str) -> Result<Vec<Value>, Error> {
 }
 
 /// The values of the lines of `text`, each read by `read` with its index.
+/// No text, or only a byte order mark, is no values; a lone line feed is an
+/// empty line.
 fn read_lines<T>(text: &str, read: impl Fn(usize, &str) -> Result<T, Error>) -> Result<Vec<T>, Error> {
-    let text = text.strip_suffix('\n').unwrap_or(text);
-    match text.is_empty() {
-        true => Ok(vec![]),
-        false => text.split('\n').enumerate().map(|(i, line)| read(i, line)).collect(),
+    if text.strip_prefix('\u{FEFF}').unwrap_or(text).is_empty() {
+        return Ok(vec![]);
     }
+    let text = text.strip_suffix('\n').unwrap_or(text);
+    text.split('\n').enumerate().map(|(i, line)| read(i, line)).collect()
 }
 
 /// Line `i` (0-based) of schema-based JSON Lines, as a `T`.
@@ -408,8 +412,10 @@ fn typed_line<T: FromJson + Encode>(i: usize, line: &str, limits: &Limits) -> Re
 }
 
 /// Line `i` (0-based) of JSON Lines in `form`, read as JSON and then by
-/// `read`. Only the first line may start with a byte order mark. Syntax
-/// errors give the line, decode errors the value's index.
+/// `read`. Only the first line may start with a byte order mark: an empty
+/// line, and a byte order mark at the start of a later line, are
+/// `json-syntax` (spec §16 "Streams"). Syntax errors give the line, decode
+/// errors the value's index (`$[3].price`).
 fn line_json<T>(
     i: usize,
     line: &str,
@@ -418,6 +424,18 @@ fn line_json<T>(
     read: impl FnOnce(&Json) -> Result<T, Error>,
 ) -> Result<T, Error> {
     let at = Position { offset: 0, line: i + 1, column: 1 };
+    let content = if i == 0 { line.strip_prefix('\u{FEFF}').unwrap_or(line) } else { line };
+    if content.strip_suffix('\r').unwrap_or(content).is_empty() {
+        let reason = format!("JSON Lines: line {} is empty (a line holds one JSON text)", i + 1);
+        return Err(SyntaxError::new(ErrorCode::JsonSyntax, reason, at).into());
+    }
+    if i > 0 && line.starts_with('\u{FEFF}') {
+        let reason = format!(
+            "JSON Lines: a byte order mark at the start of line {} (only the stream may start with one)",
+            i + 1
+        );
+        return Err(SyntaxError::new(ErrorCode::JsonSyntax, reason, at).into());
+    }
     let json = read::parse(line, limits, form, i == 0).map_err(|e| e.from(at))?;
     read(&json).map_err(|e| match e {
         Error::Decode(e) => Error::Decode(e.index(i)),

@@ -91,3 +91,22 @@ describe("checkData", () => {
     expect(issues(schema, `{ d: "0xFF", e: 1, f: 1 }`)).toEqual([`error "0xFF": expected Decimal, found the string "0xFF"`])
   })
 })
+
+describe("@deprecated hints (spec §14)", () => {
+  const schema = `
+    type Root = { lines: Array Line }
+    type Line = { @deprecated("use quantity") count?: Int, quantity?: Int, shape?: Shape }
+    type Shape = < Circle { r: Float64 } | @deprecated("use Circle") Round Float64 >
+  `
+  const located = (data: string) =>
+    checkData(parseSchemaFile(schema), "Root", parseWithLocations(data)).map((i) => [i.severity, i.code, data.slice(i.start, i.end)])
+
+  it("are at the field (its name in the data, as unlisted-field is) or at the tagged value's tag, wherever they are", () => {
+    const data = `{ lines: [{ quantity: 1 }, { count: 2, extra: 1, shape: Round(1.5) }] }`
+    expect(located(data)).toEqual([
+      ["hint", "deprecated", "count"],
+      ["hint", "unlisted-field", "extra"],
+      ["hint", "deprecated", "Round"],
+    ])
+  })
+})

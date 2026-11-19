@@ -257,15 +257,17 @@ theorem positional_one_toJson {env : Env} {F : Nat} {o : String} {cl : Bool} {cs
 /-- And it is read back from `value` alone. -/
 theorem positional_one_fromJson {env : Env} {F : Nat} {o : String} {cl : Bool} {cs : List Case}
     {tag tag' : String} {t : Ty} (j : JSON)
-    (hc : caseOf? env cs tag = some (.positional tag' [t])) (hm : maybeOf? (.variant cl cs) = none) :
+    (hc : caseOf? env cs tag = some (.positional tag' [t])) (hm : maybeOf? (.variant cl cs) = none)
+    (htag : isTag tag.toList = true) :
     fromJsonF env F o (.variant cl cs) (.obj [("_tag", .str tag), ("value", j)]) =
-      (under (.arg tag 0) (fromJsonF env F o t j)).map fun y => .case tag [y] := by
+      (under (.key "value") (fromJsonF env F o t j)).map fun y => .case tag [y] := by
   rw [fromJsonF_eq _ whnf_variant, boolTy_variant, origin_variant, fromJsonC_none _ (nullArg?_none hm),
     readCore.eq_def]
-  simp only [Bool.false_eq_true, ↓reduceIte, isEnum_false (closed := cl) hc rfl, List.lookup, beq_self_eq_true, hc,
-    List.length_cons, List.length_nil, hidden]
+  simp only [Bool.false_eq_true, ↓reduceIte, isEnum_false (closed := cl) hc rfl, List.lookup, beq_self_eq_true, htag,
+    Bool.not_true, hc, List.length_cons, List.length_nil, hidden]
   rw [memberValue, memberValue]
-  simp [fromJsonF_inPlace]
+  simp only [show ("_tag" = "value") = False by decide, ↓reduceIte, fromJsonF_inPlace]
+  cases fromJsonF env F o t j <;> simp [under, atExtra]
 
 theorem caseOf?_result_ok (env : Env) (e a : Ty) :
     caseOf? env [.positional "Err" [e], .positional "Ok" [a]] "Ok" = some (.positional "Ok" [a]) := by
@@ -281,8 +283,8 @@ theorem result_ok_toJson (env : Env) (F : Nat) (o : String) (e a : Ty) (y : Type
 
 theorem result_ok_fromJson (env : Env) (F : Nat) (o : String) (e a : Ty) (j : JSON) :
     fromJsonF env F o (Ty.result e a) (.obj [("_tag", .str "Ok"), ("value", j)]) =
-      (under (.arg "Ok" 0) (fromJsonF env F o a j)).map fun y => .case "Ok" [y] :=
-  positional_one_fromJson j (caseOf?_result_ok env e a) (maybeOf?_result e a)
+      (under (.key "value") (fromJsonF env F o a j)).map fun y => .case "Ok" [y] :=
+  positional_one_fromJson j (caseOf?_result_ok env e a) (maybeOf?_result e a) (by decide)
 
 /-! ## Examples (the suite's `Boxed`, `AliasBox`, `Found`, `GenRec`) -/
 

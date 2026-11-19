@@ -39,6 +39,10 @@ pub struct Imported {
     pub params: usize,
     /// Whether it is a record, for record cases.
     pub shape: Shape,
+    /// Whether it is the application's copy of a package's type (the codec
+    /// closure). For a type with a codec, the copy runs the codecs inside it
+    /// first (spec §13.4: from the inside out).
+    pub copy: bool,
 }
 
 /// A codec: the Rust type (implementing `haus::Codec`) used for the type with this id.
@@ -664,14 +668,14 @@ impl<'a> Gen<'a> {
         let arity = |params: usize| {
             (args.len() != params).then(|| format!("{name} takes {params} argument(s), found {}", args.len()))
         };
-        let (id, path, params) = if let Some(def) = self.defs.get(name) {
+        let (id, path, params, copy) = if let Some(def) = self.defs.get(name) {
             let ident = format_ident!("{name}");
-            (format!("{}#{name}", self.input.id), quote!(#ident), def.params.len())
+            (format!("{}#{name}", self.input.id), quote!(#ident), def.params.len(), false)
         } else if let Some(imp) = self.input.imports.get(name) {
             let path = rust_path(&imp.path).ok_or_else(|| {
                 error(self.input.text, pos, Code::UnknownType, format!("{} is not a Rust path", imp.path))
             })?;
-            (imp.id.clone(), path, imp.params)
+            (imp.id.clone(), path, imp.params, imp.copy)
         } else if let Some(&(_, params)) = PRELUDE.iter().find(|(n, _)| *n == name) {
             return match arity(params) {
                 Some(reason) => self.fail(pos, Code::WrongArity, reason),
@@ -684,11 +688,20 @@ impl<'a> Gen<'a> {
             return self.fail(pos, Code::WrongArity, reason);
         }
         if let Some(codec) = self.codecs.get(id.as_str()).filter(|_| args.is_empty()) {
+            // A package's type that contains other codecs' types is copied: the
+            // copy runs those codecs first, at their own places (spec §13.4).
+            let (de, from_json) = match copy {
+                true => (
+                    quote!(::haus::de::codec_inside_out::<#codec, #path>),
+                    quote!(::haus::json::de::codec_inside_out::<#codec, #path>),
+                ),
+                false => (quote!(::haus::de::codec::<#codec>), quote!(::haus::json::de::codec::<#codec>)),
+            };
             return Ok(Rs {
                 ty: quote!(<#codec as ::haus::Codec>::Target),
-                de: Fun::Path(quote!(::haus::de::codec::<#codec>)),
+                de: Fun::Path(de),
                 en: Fun::Path(quote!(::haus::ser::codec::<#codec>)),
-                from_json: Fun::Path(quote!(::haus::json::de::codec::<#codec>)),
+                from_json: Fun::Path(from_json),
                 to_json: Fun::Path(quote!(::haus::json::ser::codec::<#codec>)),
                 shadow: quote!(<#codec as ::haus::Codec>::Base),
             });
@@ -1183,12 +1196,12 @@ impl<'a> Gen<'a> {
         let tags = cases.iter().map(|c| &c.tag);
         let unknown_tag = quote!(::haus::de::unknown_tag(tag, &[#(#tags),*]));
         let (other_decl, other_de, other_en, other_from_json, other_to_json) = if closed {
-            let at_tag = if names_only { quote!() } else { quote!(.field("_tag")) };
+            // An unknown tag is at the variant (spec §15), in JSON too.
             (
                 quote!(),
                 quote!(_ => ::std::result::Result::Err(#unknown_tag)),
                 quote!(),
-                quote!(_ => ::std::result::Result::Err(#unknown_tag #at_tag)),
+                quote!(_ => ::std::result::Result::Err(#unknown_tag)),
                 quote!(),
             )
         } else {

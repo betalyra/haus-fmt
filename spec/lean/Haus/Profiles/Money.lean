@@ -127,6 +127,73 @@ theorem codec_decode_encode {ty : Type_} {v : Value} {x : Typed}
 /-- The codec keeps the value, so every law of `Haus.Schema.Codec` holds for it. -/
 theorem codec_keeps (ty : Type_) : (codec ty).Keeps := Codec.check_keeps _
 
+/-! ## Both codecs in one value (§13.4)
+
+When codecs apply at several places in one value, decoding runs them from
+the inside out, and the first that rejects gives the error at its own place.
+In a `Money`, the codec of its `Currency` runs first, at `$[1]`, then the
+codec of `Money` at `$`. Together they accept exactly what the codec of
+`Money` alone accepts (`decodeInsideOut_ok`), as its rule includes the
+currency's: only the place of the error differs.
+-/
+
+/-- Whether the codec of an inner `Currency` rejects: for a `Money`, the codec of its currency. -/
+def currencyRejects : Type_ → Typed → Bool
+  | .money, .case _ [_, c] => !checkCurrency c
+  | _, _ => false
+
+/-- The place of the inner `Currency` of a `Money`: its second argument, `$[1]`. -/
+def currencyPlace : List Seg := [.arg "Money" 1]
+
+/-- **Decoding with both codecs**: the schema, then the codec of the `Currency` inside, then the type's own. -/
+def decodeInsideOut (ty : Type_) (v : Value) : Except Error Typed :=
+  match Schema.decode env (.ref ty.name) v with
+  | .error e => .error e
+  | .ok x =>
+    if currencyRejects ty x then .error { Codec.rejected with path := currencyPlace }
+    else if check ty x then .ok x else .error Codec.rejected
+
+theorem check_of_currencyRejects {ty : Type_} {x : Typed} (h : currencyRejects ty x = true) : check ty x = false := by
+  cases ty with
+  | currency => simp [currencyRejects] at h
+  | money =>
+    simp only [check, checkMoney]
+    split
+    · simp_all [currencyRejects]
+    · rfl
+
+/-- **Inside out, the codecs accept what the type's own codec accepts**: only the place of a rejection moves. -/
+theorem decodeInsideOut_ok {ty : Type_} {v : Value} {x : Typed} :
+    decodeInsideOut ty v = .ok x ↔ (codec ty).decode env (.ref ty.name) v = .ok x := by
+  rw [codec, Codec.check_decode]
+  unfold decodeInsideOut
+  cases hd : Schema.decode env (.ref ty.name) v with
+  | error e => simp
+  | ok y =>
+    by_cases hc : currencyRejects ty y = true
+    · simp only [hc, ↓reduceIte, reduceCtorEq, false_iff, Except.ok.injEq, not_and]
+      rintro rfl
+      simp [check_of_currencyRejects hc]
+    · by_cases hk : check ty y = true
+      · simp only [hc, hk, ↓reduceIte, Bool.false_eq_true, Except.ok.injEq]
+        constructor
+        · rintro rfl; exact ⟨rfl, hk⟩
+        · exact fun h => h.1
+      · simp only [hc, hk, ↓reduceIte, Bool.false_eq_true, reduceCtorEq, false_iff, Except.ok.injEq, not_and]
+        rintro rfl; exact hk
+
+private def rejectedAt (ty : Type_) (src : String) : Option String :=
+  match Parser.parse {} src.toList with
+  | .ok [v] =>
+    match decodeInsideOut ty v with
+    | .error e => some e.place
+    | .ok _ => none
+  | _ => none
+
+#guard rejectedAt .money "Money(19.99, Eur)" == some "$[1]"
+#guard rejectedAt .money "Money(19.99, EUR)" == none
+#guard rejectedAt .currency "Eur" == some "$"
+
 #guard check .currency (.unknown "EUR" [])
 #guard !check .currency (.unknown "Eur" [])
 #guard !check .currency (.unknown "EURO" [])

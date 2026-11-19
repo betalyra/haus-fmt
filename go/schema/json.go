@@ -374,7 +374,7 @@ func (w *walker) readMaybe(j haus.Value, rt, t *typ) (haus.Value, error) {
 }
 
 // tagMember returns the "_tag" of an object: missing-member without one,
-// invalid-tag if it isn't a string.
+// invalid-tag if it isn't a string or isn't a tag (§16.3), at the object.
 func (w *walker) tagMember(r haus.Record) (string, error) {
 	j, ok := r.Get("_tag")
 	if !ok {
@@ -382,8 +382,10 @@ func (w *walker) tagMember(r haus.Record) (string, error) {
 	}
 	s, ok := j.(haus.String)
 	if !ok {
-		w.path = append(w.path, step{key: "_tag", index: -1})
 		return "", w.fail(haus.CodeInvalidTag, "expected a tag in '_tag', found %s", describeJSON(j))
+	}
+	if !isTagName(string(s)) {
+		return "", w.fail(haus.CodeInvalidTag, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found %s", quote(shortText(string(s))))
 	}
 	return string(s), nil
 }
@@ -524,7 +526,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 	if err != nil {
 		return nil, err
 	}
-	w.path = append(w.path, step{key: "values", index: -1})
+	// A wrong payload is at the variant (§15), as in haus text.
 	a, ok := x.(haus.Array)
 	if !ok {
 		return nil, w.fail(haus.CodeWrongPayload, "%s takes %d arguments, as an array in \"values\"; found %s", tag, len(c.items), describeJSON(x))
@@ -532,6 +534,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 	if len(a) != len(c.items) {
 		return nil, w.fail(haus.CodeWrongPayload, "%s takes %d arguments, found %d", tag, len(c.items), len(a))
 	}
+	w.path = append(w.path, step{key: "values", index: -1})
 	args := make([]haus.Value, len(a))
 	for i, x := range a {
 		y, _, err := w.child(step{index: i}, x, c.items[i])
@@ -549,7 +552,6 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 // otherwise its other members as a record payload, by the import.
 func (w *walker) unknownJSON(tag string, r haus.Record) (haus.Value, error) {
 	if !isTagName(tag) {
-		w.path = append(w.path, step{key: "_tag", index: -1})
 		return nil, w.fail(haus.CodeInvalidTag, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found %s", quote(shortText(tag)))
 	}
 	if len(tag) > w.lim.MaxStringLength {

@@ -13,3 +13,8 @@ Read { json: "\u{FEFF}[1]", output: [1] },
 Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 } },
 Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },
 Read { json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
+
+// ── the number limits apply to JSON number tokens as written (§16) ──
+Err { json: "1e-7000", code: "exponent-too-large" },
+Err { json: "[1, -2E+6145]", code: "exponent-too-large" },
+Read { json: "1e-6144", output: 1e-6144 },

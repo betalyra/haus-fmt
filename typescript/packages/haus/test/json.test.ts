@@ -124,8 +124,8 @@ describe("self-describing (spec §16.2)", () => {
     expect(() => fromHausJson(`[]`)).toThrow(/expected the envelope .* at \$$/)
     expect(() => fromHausJson(`{"_haus": 1, "_value": [], "_x": 1}`)).toThrow(/expected the envelope/)
     expect(() => fromHausJson(`{"_haus": 1.0, "_value": []}`)).toThrow(/version the number 1\.0/)
-    // Paths inside the value start at $: the envelope adds no segment.
-    expect(() => fromHausJson(`{"_haus": 1, "_value": {"_rec": {"a": [{"_num": "01"}]}}}`)).toThrow(/at \$\.a\[0\]$/)
+    // Places are in the JSON, from its root, the envelope included (spec §16.3 "Places").
+    expect(() => fromHausJson(`{"_haus": 1, "_value": {"_rec": {"a": [{"_num": "01"}]}}}`)).toThrow(/at \$\._value\._rec\.a\[0\]\._num$/)
     expect(() => fromHausJsonValue(jsonObject([["_haus", new JsonNumber("2")], ["_value", "x"]]))).toThrow(/version/)
   })
 
@@ -197,14 +197,18 @@ describe("import (spec §16.1)", () => {
 
   it("JSON Lines: errors name the line, a blank line is an error, strict mode wants the last line feed", async () => {
     await expect(collect(parseJsonLines(["1\n{\n"]))).rejects.toMatchObject({ line: 2 })
-    await expect(collect(parseJsonLines(["1\n\n2\n"]))).rejects.toThrow(HausSyntaxError)
+    // An empty line, and a byte order mark at the start of a later line, are no JSON text (spec §16, "Streams").
+    await expect(collect(parseJsonLines(["1\n\n2\n"]))).rejects.toMatchObject({ code: "json-syntax", line: 2, reason: expect.stringMatching(/line 2 is empty/) })
+    await expect(collect(importJsonLines(["1\r\n\r\n2\r\n"]))).rejects.toMatchObject({ code: "json-syntax", line: 2 })
+    await expect(collect(fromHausJsonLines([`{"_haus":1,"_value":"a"}\n\n`]))).rejects.toMatchObject({ code: "json-syntax", line: 2 })
     expect(await collect(parseJsonLines(["1\n2"]))).toEqual([new JsonNumber("1"), new JsonNumber("2")])
     await expect(collect(parseJsonLines(["1\n2"], { requireTerminator: true }))).rejects.toThrow(/truncated/)
     await expect(collect(parseJsonLines(["[1, 2]\n"], { maxLineLength: 3 }))).rejects.toThrow(/longer than 3/)
     // A byte order mark is ignored at the start of the stream only, as in haus streams.
     expect(await collect(parseJsonLines(["\uFEFF1\n2\n"]))).toEqual([new JsonNumber("1"), new JsonNumber("2")])
     expect(await collect(parseJsonLines([new Uint8Array([0xef, 0xbb, 0xbf, 0x31, 0x0a])]))).toEqual([new JsonNumber("1")])
-    await expect(collect(parseJsonLines(["1\n\uFEFF2\n"]))).rejects.toMatchObject({ line: 2 })
+    await expect(collect(parseJsonLines(["1\n\uFEFF2\n"]))).rejects.toMatchObject({ code: "json-syntax", line: 2, reason: expect.stringMatching(/byte order mark at the start of line 2/) })
+    await expect(collect(h.decodeJsonLines(h.Int32, ["1\n2\n\uFEFF3\n"]))).rejects.toMatchObject({ code: "json-syntax", line: 3 })
     await expect(collect(parseJsonLines(["\uFEFF\uFEFF1\n"]))).rejects.toThrow(HausSyntaxError)
   })
 })
@@ -377,6 +381,12 @@ describe("schema-based (spec §16.3), hand-written schemas", () => {
     expect(lines).toEqual([`{"_tag":"A","n":"1"}\n`, `{"_tag":"B"}\n`])
     expect(await collect(h.decodeJsonLines(Event, [lines.join("")]))).toEqual([{ _tag: "A", n: 1n }, { _tag: "B" }])
     await expect(collect(h.decodeJsonLines(Event, [`{"_tag":"B"}\n{"_tag":"C"}\n`]))).rejects.toThrow(/at \$\[1\]/)
+    // Places start with the line's index, then the place in the line's JSON (spec §16.3 "Places"),
+    // also for what the schema finds after reading (a range).
+    const Line = h.Record({ price: h.Int32, at: h.Variant({ P: h.Tuple(h.Int32, h.Int32) }) })
+    const line = (price: string) => `{"price": ${price}, "at": {"_tag": "P", "values": [1, 2]}}\n`
+    await expect(collect(h.decodeJsonLines(Line, [line("1") + line("2") + line("3") + line("1.5")]))).rejects.toMatchObject({ code: "not-an-integer", path: [3, "price"] })
+    await expect(collect(h.decodeJsonLines(Line, [line("1") + `{"price": 1, "at": {"_tag": "P", "values": [1, 3000000000]}}\n`]))).rejects.toMatchObject({ code: "out-of-range", path: [1, "at", "values", 1] })
   })
 
   it("compares as data", () => {

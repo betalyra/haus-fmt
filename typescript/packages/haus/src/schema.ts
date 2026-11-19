@@ -27,7 +27,7 @@ import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
-import { jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions } from "./json.js"
+import { atJsonPlace, jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions, type JsonPlaces } from "./json.js"
 import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
 import { Secret as SecretValue } from "./secret.js"
 
@@ -1320,9 +1320,27 @@ export const toJsonValue = <A>(schema: Schema<A>, value: A, limits: Limits = {})
  */
 export const toJson = <A>(schema: Schema<A>, value: A, limits: Limits = {}): string => stringifyJson(toJsonValue(schema, value, limits))
 
-/** Read the schema-based JSON of a value (spec §16.3) from a JSON value. Throws HausDecodeError. */
-export const fromJsonValue = <A>(schema: Schema<A>, json: Json, limits: Limits = {}): A =>
-  decode(schema, fromSchemaBasedJson(jsonType(schema), json, limits), limits)
+/**
+ * Decode a value read from JSON by `read`; an error the schema finds (a
+ * range, a std/time text, a codec) is reported at its place in the JSON
+ * (spec §16.3 "Places"), as the reader's own errors are. `skip`: steps of
+ * the error's path before the value's own (a JSON Lines line's index).
+ */
+const decodeRead = <A>(decodeIt: () => A, read: (places: JsonPlaces) => Value, skip = 0): A => {
+  try {
+    return decodeIt()
+  } catch (e) {
+    throw e instanceof HausDecodeError ? atJsonPlace(e, read, skip) : e
+  }
+}
+
+/** Read the schema-based JSON of a value (spec §16.3) from a JSON value. Throws HausDecodeError, at its place in the JSON. */
+export const fromJsonValue = <A>(schema: Schema<A>, json: Json, limits: Limits = {}): A => {
+  const type = jsonType(schema)
+  const read = (places?: JsonPlaces) => fromSchemaBasedJson(type, json, limits, Place.root(), places)
+  const value = read()
+  return decodeRead(() => decode(schema, value, limits), read)
+}
 
 /**
  * Read schema-based JSON text (spec §16.3) with a schema: the forms `h.toJson`
@@ -1347,8 +1365,10 @@ export async function* decodeJsonLines<A>(
   const type = jsonType(schema)
   const limits = withDefaults(options)
   yield* readLines(source, options, (text, origin, i) => {
-    const value = fromSchemaBasedJson(type, readJson(text, jsonTextLimits(limits), origin), options, Place.root(i))
-    return schema.decode(value, decodeAt(value, options, i))
+    const json = readJson(text, jsonTextLimits(limits), origin)
+    const read = (places?: JsonPlaces) => fromSchemaBasedJson(type, json, options, Place.root(i), places)
+    const value = read()
+    return decodeRead(() => schema.decode(value, decodeAt(value, options, i)), read, 1)
   })
 }
 

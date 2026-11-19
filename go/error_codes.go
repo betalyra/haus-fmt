@@ -203,7 +203,7 @@ const (
 	CodeStepBudget ErrorCode = "step-budget"
 	// CodeTooManyNodes is "too-many-nodes": A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
 	CodeTooManyNodes ErrorCode = "too-many-nodes"
-	// CodeJSONSyntax is "json-syntax": Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.
+	// CodeJSONSyntax is "json-syntax": Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.
 	CodeJSONSyntax ErrorCode = "json-syntax"
 	// CodeUnpairedSurrogate is "unpaired-surrogate": A JSON string with half of a UTF-16 surrogate pair, raw or as `\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).
 	CodeUnpairedSurrogate ErrorCode = "unpaired-surrogate"
@@ -215,7 +215,7 @@ const (
 	CodeHausJSONNumber ErrorCode = "haus-json-number"
 	// CodeHausJSONBytes is "haus-json-bytes": A self-describing `_bytes` that isn't two lowercase hex digits per byte.
 	CodeHausJSONBytes ErrorCode = "haus-json-bytes"
-	// CodeInvalidTag is "invalid-tag": A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.
+	// CodeInvalidTag is "invalid-tag": A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
 	CodeInvalidTag ErrorCode = "invalid-tag"
 	// CodeInvalidBase64 is "invalid-base64": Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
 	CodeInvalidBase64 ErrorCode = "invalid-base64"
@@ -464,13 +464,13 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeCyclicValue:             {CategoryDecoding, "Encoding: a value contains itself, so it has no finite text.", "Break the cycle before encoding."},
 	CodeStepBudget:              {CategoryDecoding, "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).", "Simplify the schema, or raise the step limit if the work is expected."},
 	CodeTooManyNodes:            {CategoryDecoding, "A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.", "Build a smaller value, or raise the limit."},
-	CodeJSONSyntax:              {CategoryJson, "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.", "Write valid JSON; the message says what was expected."},
+	CodeJSONSyntax:              {CategoryJson, "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.", "Write valid JSON; the message says what was expected."},
 	CodeUnpairedSurrogate:       {CategoryJson, "A JSON string with half of a UTF-16 surrogate pair, raw or as `\\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).", "Write both halves of the surrogate pair, or the character itself."},
 	CodeHausJSONForm:            {CategoryJson, "JSON that isn't self-describing JSON (§16.2): a text without the envelope `{\"_haus\": 1, \"_value\": …}`, an envelope with other members, a bare number, `true`, `null`, an object with other members, a `_rec` that isn't an object, an `_args` that isn't a non-empty array.", "Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead."},
 	CodeHausJSONVersion:         {CategoryJson, "A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.", "Read it with a newer version of haus, or write `\"_haus\": 1`."},
 	CodeHausJSONNumber:          {CategoryJson, "A self-describing `_num` that isn't a normalized number literal (§2): `\"1E5\"`, `\"01\"`, `\"0xff\"`, or not a string.", "Write the number's normalized literal (§2) as a string."},
 	CodeHausJSONBytes:           {CategoryJson, "A self-describing `_bytes` that isn't two lowercase hex digits per byte.", "Write the bytes as lowercase hex, two digits per byte."},
-	CodeInvalidTag:              {CategoryJson, "A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.", "Start the tag with a capital letter and use only letters, digits and `_`."},
+	CodeInvalidTag:              {CategoryJson, "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.", "Start the tag with a capital letter and use only letters, digits and `_`."},
 	CodeInvalidBase64:           {CategoryJson, "Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.", "Write standard base64, with padding."},
 	CodeMissingMember:           {CategoryJson, "Schema-based JSON: an object lacks a member its form needs, such as `\"_tag\"` for a variant or `\"value\"` for a tag with one argument.", "Add the member the message names."},
 	CodeUnexpectedMember:        {CategoryJson, "Schema-based JSON: an object has a member its form doesn't have, such as `\"value\"` next to a tag without payload (§16.3).", "Remove the member."},

@@ -168,6 +168,23 @@ fn check_with_the_schema_given() {
 }
 
 #[test]
+fn check_marks_deprecated_fields_and_tags_at_their_values() {
+    // Spec §14: at the field's value or the tagged value, as `unlisted-field` is.
+    let dir = tempfile::tempdir().unwrap();
+    let schema = "type Shape = < Circle { r: Float64 } | @deprecated Square { side: Float64 } >\n\
+                  type Line = { @deprecated(\"use amount\") count?: Int, shape?: Shape }\n\
+                  type Root = { lines: Array Line }\n";
+    fs::write(dir.path().join("order.schema.haus"), schema).unwrap();
+    fs::write(dir.path().join("order.haus"), "{ lines: [{ count: 1 }, { shape: Square { side: 1 } }] }\n").unwrap();
+    let (code, json) = check_json(dir.path(), &["--schema", "order.schema.haus#Root", "order.haus"]);
+    assert_eq!(code, 0);
+    let file = &array(&json, "files")[0];
+    let found: Vec<(&str, &str)> =
+        array(file, "diagnostics").iter().map(|d| (str_of(d, "code"), str_of(d, "path"))).collect();
+    assert_eq!(found, [("deprecated", "$.lines[0].count"), ("deprecated", "$.lines[1].shape")]);
+}
+
+#[test]
 fn a_schema_without_the_type_given() {
     let (code, json) =
         check_json(&fixtures(), &["--schema", "shapes/shapes.schema.haus#Polygon", "shapes/circle.haus"]);
