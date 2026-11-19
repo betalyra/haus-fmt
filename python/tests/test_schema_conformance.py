@@ -144,6 +144,8 @@ INVALID = {
     "lone-carriage-return": "carriage return without a line feed",
     "param-underscore": "must start with a lowercase letter",
     "parens-too-deep": "types nested deeper than 128 levels",
+    "record-comment-comma": "expected a field name, ...Name or '}', found ','",
+    "record-lone-comma": "expected a field name, ...Name or '}', found ','",
     "redefine-any": "Any is a prelude type and can't be redefined",
     "redefine-secret": "Secret is a prelude type and can't be redefined",
     "row-parameter": "row parameters (...r) aren't supported",
