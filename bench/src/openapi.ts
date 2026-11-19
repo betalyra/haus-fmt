@@ -1,10 +1,12 @@
 /**
- * OpenAPI 3.1 / JSON Schema (the subset GitHub's description uses) → haus
- * schema types, and the JSON ↔ haus mapping those types give GitHub's JSON.
+ * OpenAPI 3.1 / JSON Schema (the subset GitHub's description and Vega-Lite's
+ * draft-07 schema use) → haus schema types, and the JSON ↔ haus mapping those
+ * types give their JSON.
  *
  * Types:
  *
- *   components/schemas/<name>   type <PascalName> = …   (kebab/snake → PascalCase; collisions get a number)
+ *   components/schemas/<name>   type <PascalName> = …   (kebab/snake → PascalCase; collisions get a number);
+ *   (definitions/<name>)        for a JSON Schema, `definitions/<name>` (`ValueDef<number>` → ValueDefNumber)
  *   $ref                        a reference to that name
  *   properties                  a record: `field` if required, `field?` if not. Records are open,
  *                               as in haus by default: a member the description doesn't list is
@@ -23,14 +25,19 @@
  *                               merged otherwise; one branch alone is that branch
  *   oneOf/anyOf + discriminator a closed variant: the discriminator value is the tag (same
  *                               convention), the branch's other fields its record payload
+ *   oneOf/anyOf of records with a property every branch requires and gives a `const` (or a
+ *                               one-value `enum`), a different one in each: a closed variant, that
+ *                               value the tag (same convention), the branch's other fields its
+ *                               record payload. Only with `constDiscriminators` (the JSON Schema
+ *                               sources; GitHub's description keeps the rules it was measured with)
  *   oneOf/anyOf without one     Any (counted), unless all branches but one are `null`
  *   several types, no type      Any (counted)
  *
  * JSON mapping (for the round trip): spec §16.3 with the reader options the
- * benchmark plan names (benchmarks.md §4.2), because GitHub's JSON isn't
+ * benchmark plan names (benchmarks.md §4.2), because this JSON isn't
  * schema-based JSON: an enum is its value (`"in_progress"`), integers are
  * JSON numbers (§16.3 quotes `Int`), a variant's tag is the discriminator
- * member (`"user_view_type": "public"`) instead of `"_tag"`, and unlisted
+ * member (`"user_view_type": "public"`, `"type": "boxplot"`) instead of `"_tag"`, and unlisted
  * members are kept. `Any` maps as the import (§16.1) and back. With
  * `enums: "strings"` an enum is a String instead: the exact §16.3 mapping.
  */
@@ -117,6 +124,24 @@ const isConstraintOnly = (s: Json) => {
   return o !== undefined && !["type", "$ref", "properties", "items", "enum", "allOf", "oneOf", "anyOf", "additionalProperties"].some((k) => k in o)
 }
 
+/** `~1` → `/`, `~0` → `~` (RFC 6901), and percent-escapes (a pointer in a URI fragment). */
+const unescapePointer = (k: string): string => {
+  const unescaped = k.replaceAll("~1", "/").replaceAll("~0", "~")
+  return unescaped.includes("%") ? decodeURIComponent(unescaped) : unescaped
+}
+
+export interface ConverterOptions {
+  /** Where named types live: the `$ref` prefix, `#/components/schemas/` or `#/definitions/`. */
+  readonly prefix: string
+  /** Unions of records told apart by a `const` property become variants. */
+  readonly constDiscriminators: boolean
+}
+
+/** An OpenAPI description, with the rules GitHub's numbers were measured with. */
+export const OPENAPI: ConverterOptions = { prefix: "#/components/schemas/", constDiscriminators: false }
+/** A JSON Schema (draft-07, `definitions`). */
+export const JSON_SCHEMA: ConverterOptions = { prefix: "#/definitions/", constDiscriminators: true }
+
 /** Why a position is `Any`, and other mapping decisions, counted. */
 export type Counts = Record<string, number>
 
@@ -132,9 +157,24 @@ export class Converter {
   readonly notes: string[] = []
 
   private readonly description: JsonObject
+  private readonly options: ConverterOptions
 
-  constructor(description: JsonObject) {
+  /** `description`: the document the `$ref`s point into (the OpenAPI description, the JSON Schema). */
+  constructor(description: JsonObject, options: ConverterOptions = OPENAPI) {
     this.description = description
+    this.options = options
+  }
+
+  /** Converts every named type, reachable or not (for counting what the whole schema gives). */
+  convertAll(): void {
+    const named = asObject(this.options.prefix.slice(2, -1).split("/").reduce<Json | undefined>((at, k) => asObject(at)?.[unescapePointer(k)], this.description))
+    for (const key of Object.keys(named ?? {})) this.ref(key)
+  }
+
+  /** The schema a `$ref` under the named types' prefix points to: a JSON pointer into the description. */
+  private schemaAt(key: string): JsonObject | undefined {
+    const pointer = this.options.prefix.slice(2) + key
+    return asObject(pointer.split("/").reduce<Json | undefined>((at, k) => asObject(at)?.[unescapePointer(k)], this.description))
   }
 
   private count(what: string) {
@@ -153,8 +193,8 @@ export class Converter {
   ref(key: string): HType {
     let entry = this.named.get(key)
     if (!entry) {
-      const schema = asObject(asObject(asObject(this.description["components"])?.["schemas"])?.[key])
-      if (schema === undefined) throw new Error(`no component schema ${key}`)
+      const schema = this.schemaAt(key)
+      if (schema === undefined) throw new Error(`no schema ${this.options.prefix}${key}`)
       entry = { name: this.freshName(typeName(key)), type: undefined }
       this.named.set(key, entry)
       entry.type = this.convert(schema)
@@ -166,8 +206,8 @@ export class Converter {
   /** The type of a document whose response has `schema`: a named type, for decoding. */
   root(schema: Json | undefined, fallbackName: string): string {
     const r = asObject(schema)?.["$ref"]
-    if (typeof r === "string" && r.startsWith("#/components/schemas/")) {
-      const t = this.ref(r.slice("#/components/schemas/".length))
+    if (typeof r === "string" && r.startsWith(this.options.prefix)) {
+      const t = this.ref(r.slice(this.options.prefix.length))
       return (t as { name: string }).name
     }
     const key = schema ?? {}
@@ -197,8 +237,8 @@ export class Converter {
     if (s === undefined) return this.any("schema is not an object")
     const ref = s["$ref"]
     if (typeof ref === "string") {
-      if (!ref.startsWith("#/components/schemas/")) return this.any(`reference outside components/schemas`)
-      return this.ref(ref.slice("#/components/schemas/".length))
+      if (!ref.startsWith(this.options.prefix)) return this.any(`reference outside ${this.options.prefix.slice(2, -1)}`)
+      return this.ref(ref.slice(this.options.prefix.length))
     }
     let types = Array.isArray(s["type"]) ? s["type"].filter((t): t is string => typeof t === "string") : typeof s["type"] === "string" ? [s["type"]] : []
     let nullable = types.includes("null") || s["nullable"] === true || list(s["enum"]).includes(null)
@@ -219,6 +259,8 @@ export class Converter {
       if (nonNull.length === 1) return wrap(this.convert(nonNull[0]!))
       const discriminator = asObject(s["discriminator"])
       if (discriminator !== undefined) return wrap(this.variant(discriminator, nonNull))
+      const inferred = this.options.constDiscriminators ? this.constDiscriminator(nonNull) : undefined
+      if (inferred !== undefined) return wrap(this.variantOf(inferred.member, inferred.pairs, "variant (const discriminator)"))
       return wrap(this.any(`${key} without a discriminator`))
     }
 
@@ -336,6 +378,11 @@ export class Converter {
           const r = asObject(b)?.["$ref"]
           return typeof r === "string" ? [[r.split("/").at(-1)!, b] as [string, Json]] : []
         })
+    return this.variantOf(member, pairs, "variant (discriminated union)")
+  }
+
+  /** A closed variant: one case per (value of `member`, schema of that branch). */
+  private variantOf(member: string, pairs: readonly (readonly [string, Json])[], what: string): HType {
     const cases = new Map<string, { value: string; record: RecordType }>()
     for (const [value, schema] of pairs) {
       const u = unref(this.convert(schema))
@@ -345,14 +392,43 @@ export class Converter {
       const fields = new Map([...u.fields].filter(([k]) => k !== member))
       cases.set(tag, { value, record: { k: "record", fields, spreads: [] } })
     }
-    this.count("variant (discriminated union)")
+    this.count(what)
     return { k: "variant", member, cases }
+  }
+
+  /** The schema itself, or the one its `$ref` names (one level). */
+  private resolved(schema: Json): JsonObject | undefined {
+    const o = asObject(schema)
+    const r = o?.["$ref"]
+    return typeof r === "string" && r.startsWith(this.options.prefix) ? this.schemaAt(r.slice(this.options.prefix.length)) : o
+  }
+
+  /**
+   * A union of records told apart by a property: one that every branch
+   * requires and gives one value (`const`, or an `enum` of one string), a
+   * different value in each branch. The first such property of the first branch.
+   */
+  private constDiscriminator(branches: readonly Json[]): { member: string; pairs: [string, Json][] } | undefined {
+    const records = branches.map((b) => this.resolved(b))
+    if (records.length < 2 || records.some((r) => asObject(r?.["properties"]) === undefined)) return undefined
+    const valueOf = (r: JsonObject | undefined, member: string): string | undefined => {
+      const p = this.resolved(asObject(r?.["properties"])?.[member] ?? null)
+      const one = list(p?.["enum"])
+      return typeof p?.["const"] === "string" ? p["const"] : one.length === 1 && typeof one[0] === "string" ? one[0] : undefined
+    }
+    const requires = (r: JsonObject | undefined, member: string) => list(r?.["required"]).includes(member)
+    const member = Object.keys(asObject(records[0]!["properties"])!).find((m) => {
+      const values = records.map((r) => (requires(r, m) ? valueOf(r, m) : undefined))
+      return values.every((v) => v !== undefined) && new Set(values).size === values.length
+    })
+    if (member === undefined) return undefined
+    return { member, pairs: branches.map((b, i) => [valueOf(records[i], member)!, b]) }
   }
 
   // ── schema text ────────────────────────────────────────────
 
   /** `.schema.haus` text for the named types the given roots reach. */
-  schemaText(roots: readonly string[], enums: EnumStyle): string {
+  schemaText(roots: readonly string[], enums: EnumStyle, from: string): string {
     const done = new Set<string>()
     const order: string[] = []
     const pending = [...roots]
@@ -404,7 +480,7 @@ export class Converter {
       definitions.push(`type ${name} = ${print(this.typeOf(name), "")}\n`)
     }
     const imports = time.size > 0 ? `import std/time (${[...time].sort().join(", ")})\n\n` : ""
-    return `// Generated by bench/openapi.ts from GitHub's REST API description (OpenAPI 3.1).\n// Enums: ${enums === "tags" ? "closed variants of tags" : "strings"}.\n\n${imports}${definitions.join("\n")}`
+    return `// Generated by bench/openapi.ts from ${from}.\n// Enums: ${enums === "tags" ? "closed variants of tags" : "strings"}.\n\n${imports}${definitions.join("\n")}`
   }
 }
 

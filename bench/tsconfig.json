@@ -12,7 +12,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": ["node"],
+    "plugins": [{ "name": "@effect/language-service", "allowedUnstableApis": ["effect/FileSystem", "effect/Path", "effect/Crypto", "effect/process", "effect/http", "effect/cli", "@effect/platform-node", "@effect/platform-bun"] }]
   },
-  "include": ["*.ts", "lib"]
+  "include": ["*.ts", "src"]
 }
