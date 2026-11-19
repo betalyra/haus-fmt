@@ -91,6 +91,7 @@ export const rust = () => external("rust", (mode, file) => [join(root, "fuzz/sch
 export const roc = () => external("roc", (mode, file) => [join(root, "fuzz/.build/roc-json-runner"), [mode, file]], true)
 export const python = () =>
   external("python", (mode, file) => [join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/json_runner.py"), mode, file]], true)
+export const go = () => external("go", (mode, file) => [join(root, "fuzz/.build/go-runner"), ["--json", mode, file]], true)
 
 // ── in this process ──────────────────────────────────────────
 

@@ -1,5 +1,7 @@
 package haus
 
+import "strings"
+
 // The syntax tree the formatter works on: values with their source
 // spellings, and the comments and blank lines around them. The parser builds
 // it only for formatting; [Parse] builds values alone.
@@ -7,16 +9,28 @@ package haus
 // comment is a comment as written (a CR LF inside it read as LF).
 type comment struct {
 	text string
-	nl   int // line breaks between the previous token or comment and this one
+	// nl is the most line breaks in a row (with only blanks between them)
+	// since the previous comment or item: 0 if the comment is on that line,
+	// 2 or more if a blank line comes before it.
+	nl int
 }
 
 // blank reports whether a blank line comes before the comment.
 func (c comment) blank() bool { return c.nl >= 2 }
 
-// gap collects the comments and line breaks between two tokens.
+// gap collects the comments and line breaks between two items.
 type gap struct {
 	comments []comment
-	nl       int // line breaks after the last comment (or since the token)
+	nl       int // the most line breaks in a row after the last comment (or since the item)
+	run      int // the line breaks in a row so far: a comment or a comma ends a row
+}
+
+// lineBreak counts a line break of whitespace; g may be nil.
+func (g *gap) lineBreak() {
+	if g != nil {
+		g.run++
+		g.nl = max(g.nl, g.run)
+	}
 }
 
 // form is how a variant's payload is written.
@@ -36,6 +50,7 @@ type node struct {
 	items    []*item   // the fields of a record (also a record payload), elements of an array, arguments of a payload
 	dangling []comment // comments after the last item, before the closer
 	sameLine bool      // the closer is on the line where the last item ends
+	closeNL  int       // line breaks before the closer, after the last item or comment
 	iw       int       // memo for the inline width: 0 unknown, -1 never inline, else width+1
 }
 
@@ -56,12 +71,16 @@ type fileNode struct {
 	dangling []comment
 }
 
-// trailingCount returns how many of the comments in g directly follow the
-// previous token on its line.
+// trailingCount returns how many of the comments in g start on the line of
+// the previous token: those with no line break before them, up to the first
+// that spans lines (a comment after it starts on a later line).
 func trailingCount(g *gap) int {
 	n := 0
 	for n < len(g.comments) && g.comments[n].nl == 0 {
 		n++
+		if strings.Contains(g.comments[n-1].text, "\n") {
+			break
+		}
 	}
 	return n
 }
@@ -86,8 +105,9 @@ func newItem(prev *item, g *gap) *item {
 
 // closeItems ends a container whose last item is prev (nil if it has none),
 // with the gap g before the closer. It returns the comments that dangle at
-// the end, and whether the closer is on the line where the last item ends.
-func closeItems(prev *item, g *gap) (dangling []comment, sameLine bool) {
+// the end, whether the closer is on the line where the last item ends, and
+// the line breaks before the closer.
+func closeItems(prev *item, g *gap) (dangling []comment, sameLine bool, closeNL int) {
 	cs := g.comments
 	if prev != nil {
 		n := trailingCount(g)
@@ -95,8 +115,9 @@ func closeItems(prev *item, g *gap) (dangling []comment, sameLine bool) {
 		cs = cs[n:]
 	}
 	sameLine = prev != nil && len(cs) == 0 && g.nl == 0
+	closeNL = g.nl
 	*g = gap{}
-	return cs, sameLine
+	return cs, sameLine, closeNL
 }
 
 // mergeRecordArg turns the payload of Tag({ … }), a parenthesized payload
@@ -127,16 +148,20 @@ func mergeRecordArg(parens *node) *node {
 		}
 	}
 	// Comments after the record: on the line of its last entry they trail
-	// that entry, otherwise they dangle at its end.
-	if len(arg.trailing) > 0 {
-		if len(rec.items) > 0 && len(rec.dangling) == 0 && rec.sameLine {
-			last := rec.items[len(rec.items)-1]
-			last.trailing = append(last.trailing, arg.trailing...)
-		} else {
-			rec.dangling = append(rec.dangling, arg.trailing...)
-		}
+	// that entry, otherwise they dangle at its end, after the line breaks
+	// before its closing brace (a blank line there stays).
+	var moved []comment
+	if len(arg.trailing) > 0 && len(rec.items) > 0 && len(rec.dangling) == 0 && rec.sameLine {
+		last := rec.items[len(rec.items)-1]
+		last.trailing = append(last.trailing, arg.trailing...)
+	} else {
+		moved = append(moved, arg.trailing...)
 	}
-	rec.dangling = append(rec.dangling, parens.dangling...)
+	moved = append(moved, parens.dangling...)
+	if len(moved) > 0 {
+		moved[0].nl = max(moved[0].nl, rec.closeNL)
+		rec.dangling = append(rec.dangling, moved...)
+	}
 	return rec
 }
 

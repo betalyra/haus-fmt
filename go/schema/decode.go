@@ -1,7 +1,6 @@
 package schema
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -11,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	haus "github.com/betalyra/haus-fmt/go"
+	"github.com/betalyra/haus-fmt/go/internal/floats"
 	"github.com/betalyra/haus-fmt/go/internal/hooks"
 )
 
@@ -552,8 +552,8 @@ func (w *walker) float(n haus.Number, k kind) (haus.Value, bool, error) {
 		bits = 32
 	}
 	text := n.String()
-	f, err := strconv.ParseFloat(text, bits)
-	if err != nil && !errors.Is(err, strconv.ErrRange) || math.IsInf(f, 0) {
+	f := floats.Parse(text, bits)
+	if math.IsInf(f, 0) {
 		return nil, false, w.fail(haus.CodeOutOfRange, "%s is too large for %s", short(text), builtinNames[k])
 	}
 	spelled := formatFloat(f, bits)

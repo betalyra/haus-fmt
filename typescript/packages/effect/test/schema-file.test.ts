@@ -39,6 +39,15 @@ const schemaError = (text: string) => {
 }
 
 describe("schema files", () => {
+  it("compile a record that reaches its own record case by name (found by the schema-file fuzzer)", () => {
+    const schema = "type C = { s: < S B | N >, o?: < T B > }\ntype B = C"
+    const v = decoded(schema, "C", "{ s: S { s: S { s: N }, o: T { s: N } } }")
+    expect(v.s._tag).toBe("S")
+    expect(v.s.s._tag).toBe("S")
+    expect(v.s.o._tag).toBe("T")
+    expect(Exit.isFailure(decodeWith(schema, "C", "{ s: S { s: 1 } }"))).toBe(true)
+  })
+
   it("decode the examples with their schemas", () => {
     const thread = decoded(read("examples/thread.schema.haus"), "Root", read("examples/thread.haus"))
     expect(thread._tag).toBe("Comment")

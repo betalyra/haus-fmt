@@ -525,6 +525,7 @@ const allRunners: Runner[] = [
   external("rust", join(root, "fuzz/schema-rust/target/release/profile_runner")),
   external("roc", join(root, "fuzz/.build/roc-profile-runner")),
   external("python", join(root, "python/.venv/bin/python"), () => [join(root, "python/fuzz/profile_runner.py")]),
+  external("go", join(root, "fuzz/.build/go-runner"), () => ["--profile"]),
 ]
 const wanted = args.runners?.split(",")
 const runners = allRunners.filter((r) => r.name === "lean" || !wanted || wanted.includes(r.name))

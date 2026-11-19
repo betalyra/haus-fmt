@@ -1,0 +1,3 @@
+// Attribute arguments without their closing parenthesis: after a value, a comma or ")" is missing (spec §14).
+@deprecated("use B"
+type A = Int

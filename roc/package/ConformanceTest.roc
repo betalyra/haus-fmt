@@ -106,6 +106,7 @@ import "../../test-suite/invalid/bidi-isolate-in-string.haus" as invalid_bidi_is
 import "../../test-suite/invalid/bidi-outside-string.haus" as invalid_bidi_outside_string : List(U8)
 import "../../test-suite/invalid/block-closing-not-alone.haus" as invalid_block_closing_not_alone : List(U8)
 import "../../test-suite/invalid/block-content-on-opening-line.haus" as invalid_block_content_on_opening_line : List(U8)
+import "../../test-suite/invalid/block-opening-at-end.haus" as invalid_block_opening_at_end : List(U8)
 import "../../test-suite/invalid/block-string-control-after-opening.haus" as invalid_block_string_control_after_opening : List(U8)
 import "../../test-suite/invalid/block-string-key.haus" as invalid_block_string_key : List(U8)
 import "../../test-suite/invalid/block-string-raw-cr.haus" as invalid_block_string_raw_cr : List(U8)
@@ -783,6 +784,12 @@ expect ConformanceTest.rejects(invalid_block_content_on_opening_line, "block-str
 
 # invalid/block-content-on-opening-line.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_block_content_on_opening_line, "block-string-opening")
+
+# invalid/block-opening-at-end.haus
+expect ConformanceTest.rejects(invalid_block_opening_at_end, "block-string-opening")
+
+# invalid/block-opening-at-end.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_block_opening_at_end, "block-string-opening")
 
 # invalid/block-string-control-after-opening.haus
 expect ConformanceTest.rejects(invalid_block_string_control_after_opening, "block-string-opening")

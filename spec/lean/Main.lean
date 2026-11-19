@@ -667,6 +667,19 @@ def runLineBatch (f : String → String) (file : System.FilePath) : IO UInt32 :=
     if !line.isEmpty then out.putStrLn (f line)
   return 0
 
+/--
+One line of `--schema-check-batch`: `HEX`, a schema file's bytes, read by the
+reference's schema-file checker as `loadSchemaFile` reads a file: `ok`, or
+`err <code> <message>`.
+-/
+def schemaCheckLine (line : String) : String :=
+  match String.fromUTF8? (unhex line) with
+  | none => "err invalid-utf8 invalid UTF-8"
+  | some text =>
+    match SchemaFile.load text.toList with
+    | .ok _ => "ok"
+    | .error e => s!"err {e.code.name} {oneLine e.message}"
+
 /-! ## Package resolution (spec §13.3) -/
 
 /--
@@ -829,8 +842,9 @@ def main : List String → IO UInt32
   | ["--haus-json-batch", file] => runLineBatch hausJsonLine file
   | ["--haus-json-read-batch", file] => runLineBatch (readLine (Haus.JSON.readHausJson {})) file
   | ["--import-batch", file] => runLineBatch (readLine (Haus.JSON.readImport {})) file
+  | ["--schema-check-batch", file] => runLineBatch schemaCheckLine file
   | [file] => do
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2

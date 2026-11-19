@@ -183,6 +183,10 @@ func (p *parser) found(i int) string {
 }
 
 func (p *parser) expected(what string) *synErr {
+	// A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
+	if p.pos < len(p.src) && p.src[p.pos] == '/' {
+		return failAt(p.pos, haus.CodeStraySlash, "unexpected '/' (comments are // or /* */)")
+	}
 	return failAt(p.pos, haus.CodeSchemaSyntax, "expected %s, found %s", what, p.found(p.pos))
 }
 
@@ -487,7 +491,7 @@ func (p *parser) attribute() (attribute, *synErr) {
 	if p.pos < len(s) && s[p.pos] == '(' {
 		end := closingParen(s, p.pos)
 		if end < 0 {
-			return a, failAt(p.pos, haus.CodeUnclosedBracket, "expected ')' closing the attribute's arguments, found end of file")
+			return a, p.unclosedArguments(p.pos, a.name)
 		}
 		inner := s[p.pos+1 : end]
 		values, err := haus.ParseAll([]byte(inner))
@@ -508,6 +512,23 @@ func (p *parser) attribute() (attribute, *synErr) {
 		return a, failAt(p.pos, haus.CodeAttributeSpace, "expected '(' right after the attribute's name, without a space")
 	}
 	return a, nil
+}
+
+// unclosedArguments is the error of attribute arguments whose '(' at open
+// has no ')': what reading them value by value finds first, as for any
+// arguments. A value that isn't one is the data parser's error; after the
+// last value, a comma or nothing means the '(' is unclosed, anything else
+// that a ',' or ')' is missing.
+func (p *parser) unclosedArguments(open int, name string) *synErr {
+	inner := p.src[open+1:]
+	values, err := haus.ParseAll([]byte(inner))
+	switch {
+	case err != nil:
+		return p.dataError(err, open+1, "in the arguments of @"+name)
+	case len(values) == 0 || strings.HasSuffix(strings.TrimRight(inner, " \t\r\n"), ","):
+		return failAt(open, haus.CodeUnclosedBracket, "unclosed '(' of an attribute")
+	}
+	return failAt(len(p.src), haus.CodeMissingComma, "expected ',' or ')' in the attribute's arguments")
 }
 
 // dataError turns an error of the data parser, in text that starts at the
@@ -625,12 +646,9 @@ func (p *parser) enter(pos int) *synErr {
 	return nil
 }
 
-// typ reads `Name atom+ | atom`.
+// typ reads `Name atom+ | atom`. Only parentheses, records and variants
+// count as a level of nesting, as in every binding.
 func (p *parser) typ() (*ty, *synErr) {
-	if err := p.enter(p.pos); err != nil {
-		return nil, err
-	}
-	defer func() { p.depth-- }()
 	if p.pos < len(p.src) && isUpper(p.src[p.pos]) {
 		name, pos, err := p.upper("a type name")
 		if err != nil {
@@ -807,8 +825,10 @@ func (p *parser) field(attrs []attribute) (*fieldDef, *synErr) {
 func (p *parser) stringLit() (string, *synErr) {
 	s := p.src
 	start := p.pos
+	// `"""` is the key "" and a '"' that no rule takes: the grammar has no block strings.
 	if strings.HasPrefix(s[start:], `"""`) {
-		return "", failAt(start, haus.CodeBlockStringKey, `a block string (""") can't be a key`)
+		p.pos = start + 2
+		return "", nil
 	}
 	i := start + 1
 	for i < len(s) && s[i] != '"' && s[i] != '\n' {
@@ -817,10 +837,10 @@ func (p *parser) stringLit() (string, *synErr) {
 		}
 		i++
 	}
-	if i >= len(s) || s[i] != '"' {
-		return "", failAt(start, haus.CodeUnterminatedString, "expected '\"' closing the string, found %s", p.found(min(i, len(s))))
-	}
-	v, err := haus.Parse([]byte(s[start : i+1]))
+	// The string up to its closing '"', or to the line break or end where it
+	// stops, which the data parser reports as in data (string-line-break,
+	// control-character for a carriage return, unterminated-string).
+	v, err := haus.Parse([]byte(s[start:min(i+1, len(s))]))
 	if err != nil {
 		return "", p.dataError(err, start, "in a field name")
 	}

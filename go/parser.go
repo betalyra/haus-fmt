@@ -162,12 +162,13 @@ func (p *parser) file() ([]Value, *fileNode, error) {
 			return nil, nil, p.afterValue(v, 0, 0)
 		}
 		p.pos++
+		g.run = 0
 		if err := p.ws(gp); err != nil {
 			return nil, nil, err
 		}
 	}
 	if p.keep {
-		syn.dangling, _ = closeItems(prev, &g)
+		syn.dangling, _, _ = closeItems(prev, &g)
 	}
 	return values, syn, nil
 }
@@ -258,15 +259,11 @@ func (p *parser) ws(g *gap) error {
 			i++
 		case '\n':
 			i++
-			if g != nil {
-				g.nl++
-			}
+			g.lineBreak()
 		case '\r':
 			if i+1 < len(s) && s[i+1] == '\n' {
 				i += 2
-				if g != nil {
-					g.nl++
-				}
+				g.lineBreak()
 				continue
 			}
 			p.pos = i
@@ -291,7 +288,7 @@ func (p *parser) ws(g *gap) error {
 					text = strings.ReplaceAll(text, "\r\n", "\n")
 				}
 				g.comments = append(g.comments, comment{text: text, nl: g.nl})
-				g.nl = 0
+				g.nl, g.run = 0, 0
 			}
 		default:
 			p.pos = i
@@ -503,7 +500,7 @@ func (p *parser) record() (Record, *node, error) {
 			r := Record{fields: fields, index: index}
 			if p.keep {
 				syn.val = r
-				syn.dangling, syn.sameLine = closeItems(prev, &g)
+				syn.dangling, syn.sameLine, syn.closeNL = closeItems(prev, &g)
 			}
 			return r, syn, nil
 		}
@@ -546,6 +543,7 @@ func (p *parser) record() (Record, *node, error) {
 			return Record{}, nil, err
 		}
 		p.pos++
+		g.run = 0
 		if err := p.ws(gp); err != nil {
 			return Record{}, nil, err
 		}
@@ -555,7 +553,12 @@ func (p *parser) record() (Record, *node, error) {
 		}
 		fields = append(fields, Field{Key: key, Value: v})
 		if p.keep {
-			// Comments between the key and the value move above the entry.
+			// Comments between the key and the value move above the entry,
+			// after its blank line.
+			if len(g.comments) > 0 {
+				g.comments[0].nl = max(g.comments[0].nl, blankNL(it.blank))
+				it.blank = false
+			}
 			it.leading = append(it.leading, g.comments...)
 			g = gap{}
 			it.val = n
@@ -567,6 +570,7 @@ func (p *parser) record() (Record, *node, error) {
 		}
 		if p.pos < len(s) && s[p.pos] == ',' {
 			p.pos++
+			g.run = 0
 			if err := p.ws(gp); err != nil {
 				return Record{}, nil, err
 			}
@@ -654,7 +658,7 @@ func (p *parser) sequence(closer byte) ([]Value, *node, error) {
 			p.pos++
 			p.depth--
 			if p.keep {
-				syn.dangling, syn.sameLine = closeItems(prev, &g)
+				syn.dangling, syn.sameLine, syn.closeNL = closeItems(prev, &g)
 			}
 			return values, syn, nil
 		}
@@ -677,6 +681,7 @@ func (p *parser) sequence(closer byte) ([]Value, *node, error) {
 		}
 		if p.pos < len(s) && s[p.pos] == ',' {
 			p.pos++
+			g.run = 0
 			if err := p.ws(gp); err != nil {
 				return nil, nil, err
 			}
@@ -863,7 +868,8 @@ func (p *parser) blockString() (Value, *node, error) {
 	}
 	switch {
 	case i >= len(s):
-		return nil, nil, p.fail(start, CodeUnterminatedBlockString, `a block string without its closing """`)
+		// Nothing after the opening: no line break, at the block string.
+		return nil, nil, p.fail(start, CodeBlockStringOpening, `the opening """ must be followed by a line break`)
 	case s[i] == '\n':
 		i++
 	case s[i] == '\r' && i+1 < len(s) && s[i+1] == '\n':
@@ -871,68 +877,43 @@ func (p *parser) blockString() (Value, *node, error) {
 	default:
 		return nil, nil, p.fail(i, CodeBlockStringOpening, `text after the opening """: the content starts on the next line`)
 	}
-	// First pass: find the content lines and the closing line.
+	// The closing """, skipping escaped characters; then the lines before it.
+	end := -1
+	for j := i; j < len(s); j++ {
+		if s[j] == '\\' {
+			j++
+		} else if s[j] == '"' && strings.HasPrefix(s[j:], `"""`) {
+			end = j
+			break
+		}
+	}
+	if end < 0 {
+		return nil, nil, p.fail(start, CodeUnterminatedBlockString, `a block string without its closing """`)
+	}
 	type span struct{ from, to int }
 	var lines []span
-	var indent string
-	for {
-		lineStart := i
-		blanks := true
-		closed := false
-		for !closed {
-			if i >= len(s) {
-				return nil, nil, p.fail(start, CodeUnterminatedBlockString, `a block string without its closing """`)
-			}
-			switch c := s[i]; c {
-			case '\n':
-				end := i
-				if end > lineStart && s[end-1] == '\r' {
-					end--
-				}
-				lines = append(lines, span{lineStart, end})
-				i++
-				lineStart = i
-				blanks = true
-			case ' ', '\t':
-				i++
-			case '\\':
-				blanks = false
-				if i+1 < len(s) && (s[i+1] == '"' || s[i+1] == '\\') {
-					i += 2
-				} else {
-					i++
-				}
-			case '"':
-				if strings.HasPrefix(s[i:], `"""`) {
-					if !blanks {
-						return nil, nil, p.fail(i, CodeBlockStringClosing, `the closing """ must stand on a line of its own`)
-					}
-					indent = s[lineStart:i]
-					i += 3
-					closed = true
-					continue
-				}
-				blanks = false
-				i++
-			default:
-				if rawCheck[c] {
-					if code := rawCharCode(s, i); code != "" {
-						// A carriage return that isn't part of a line break is a
-						// control character here (spec §4, "Which error").
-						if code == CodeLoneCarriageReturn {
-							code = CodeControlCharacter
-						}
-						return nil, nil, p.rawCharError(i, code, "in a block string: write it as an escape")
-					}
-				}
-				blanks = false
-				i++
-			}
+	for at := i; ; {
+		nl := strings.IndexByte(s[at:end], '\n')
+		if nl < 0 {
+			lines = append(lines, span{at, end})
+			break
 		}
-		break
+		to := at + nl
+		if to > at && s[to-1] == '\r' {
+			to--
+		}
+		lines = append(lines, span{at, to})
+		at += nl + 1
 	}
-	p.pos = i
-	// Second pass: remove the indent and decode escapes.
+	last := lines[len(lines)-1]
+	lines = lines[:len(lines)-1]
+	indent := s[last.from:last.to]
+	if strings.Trim(indent, " \t") != "" {
+		return nil, nil, p.fail(end, CodeBlockStringClosing, `the closing """ must stand on a line of its own`)
+	}
+	p.pos = end + 3
+	// Line by line: the indent, then the content in order, raw characters
+	// and escapes (spec §4, "Which error": the same order in every binding).
 	var b []byte
 	for k, l := range lines {
 		if k > 0 {
@@ -950,20 +931,34 @@ func (p *parser) blockString() (Value, *node, error) {
 				`a line of a block string indented less than its closing """`)
 		}
 		for j := from; j < l.to; {
-			k := strings.IndexByte(s[j:l.to], '\\')
-			if k < 0 {
-				b = append(b, s[j:l.to]...)
-				break
+			c := s[j]
+			if c == '\\' {
+				var err error
+				b, j, err = p.escape(b, j)
+				if err != nil {
+					return nil, nil, err
+				}
+				if j > l.to {
+					return nil, nil, p.fail(j, CodeInvalidEscape, "an escape across a line break")
+				}
+				continue
 			}
-			b = append(b, s[j:j+k]...)
-			var err error
-			b, j, err = p.escape(b, j+k)
-			if err != nil {
-				return nil, nil, err
+			if rawCheck[c] {
+				if code := rawCharCode(s, j); code != "" {
+					// A carriage return that isn't part of a line break is a
+					// control character here (spec §4, "Which error").
+					if code == CodeLoneCarriageReturn {
+						code = CodeControlCharacter
+					}
+					return nil, nil, p.rawCharError(j, code, "in a block string: write it as an escape")
+				}
 			}
-			if j > l.to {
-				return nil, nil, p.fail(j, CodeInvalidEscape, "an escape across a line break")
+			run := j + 1
+			for run < l.to && s[run] != '\\' && !rawCheck[s[run]] {
+				run++
 			}
+			b = append(b, s[j:run]...)
+			j = run
 		}
 	}
 	v := string(b)

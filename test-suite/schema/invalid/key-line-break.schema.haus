@@ -1,0 +1,3 @@
+// A quoted field key that ends at a line break, as in data files (spec §14, §4).
+type A = { "a: Int }
+type B = Int

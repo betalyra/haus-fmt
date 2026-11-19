@@ -274,14 +274,34 @@ pub fn parse_with_imported_spreads(text: &str) -> Result<File, Error> {
 }
 
 fn parse_file(text: &str, imported_spreads: bool) -> Result<File, Error> {
-    lexis(text).map_err(|(pos, code, reason)| error(text, pos, code, reason))?;
-    let file = file.parse(LocatingSlice::new(text)).map_err(|e| {
+    // The first mistake of the file, read from its start: a lexical one (or
+    // types nested too deep) only if the grammar has no complaint before it.
+    // So the text is parsed up to it, never past it; types nested too deep
+    // aren't parsed at all, which would take as deep a stack.
+    let lexical = lexis(text).err();
+    if let Some((pos, Code::TypeTooDeep, reason)) = lexical {
+        return Err(error(text, pos, Code::TypeTooDeep, reason));
+    }
+    let upto = lexical.as_ref().map_or(text.len(), |(pos, _, _)| *pos);
+    let file = file.parse(LocatingSlice::new(&text[..upto])).map_err(|e| {
         let expected = e.inner().context().find_map(|c| match c {
             StrContext::Expected(StrContextValue::Description(d)) => Some(d.to_string()),
             StrContext::Expected(StrContextValue::StringLiteral(s)) => Some(format!("'{s}'")),
             _ => None,
         });
-        let found = found(&text[e.offset()..]);
+        // Reached the lexical mistake (attribute arguments without their `)`
+        // are one, which `lexis` describes).
+        if let Some((pos, code, reason)) = &lexical
+            && (e.offset() >= *pos || expected.as_deref() == Some(ATTRIBUTE_CLOSE))
+        {
+            return error(text, *pos, *code, reason.clone());
+        }
+        let rest = &text[e.offset()..];
+        // A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
+        if rest.starts_with('/') {
+            return error(text, e.offset(), Code::StraySlash, "unexpected '/' (comments are // or /* */)");
+        }
+        let found = found(rest);
         let code = expected.as_deref().map_or(Code::SchemaSyntax, syntax_code);
         error(
             text,
@@ -290,6 +310,9 @@ fn parse_file(text: &str, imported_spreads: bool) -> Result<File, Error> {
             expected.map_or_else(|| format!("unexpected {found}"), |what| format!("expected {what}, found {found}")),
         )
     })?;
+    if let Some((pos, code, reason)) = lexical {
+        return Err(error(text, pos, code, reason));
+    }
     let at = |(pos, code, reason): Fail| error(text, pos, code, reason);
     let mut warnings = check(&file).map_err(at)?;
     // Before spreads are copied in, so each use is reported once, where it is written.
@@ -433,12 +456,17 @@ fn string(i: &mut Input) -> ModalResult<String> {
         .parse_next(i)
 }
 
+/// The deepest nesting of parentheses, records and variants in a type (as in every binding).
+const MAX_TYPE_NESTING: usize = 128;
+
 /// Comments, whitespace and `"…"` strings are those of data files (spec
 /// §14): each run of whitespace and comments, and each string, is read by
 /// the data parser, so their mistakes have the codes they have there
 /// (`lone-carriage-return`, `control-character`, `bidi-control`,
 /// `invalid-escape`, `unterminated-string`, …). The arguments of attributes
 /// are data values, read by it later; anything else is left to the grammar.
+/// It also counts how deep types nest (`type-too-deep`), and reports
+/// attribute arguments without their `)`.
 ///
 /// Everything it looks for is ASCII, and in UTF-8 an ASCII byte is never part
 /// of another character, so it scans bytes and slices only at ASCII.
@@ -448,10 +476,23 @@ fn lexis(text: &str) -> Result<(), Fail> {
         haus::parse(&text[start..end]).map(|_| ()).map_err(|e| (start + e.offset, e.code, e.reason))
     };
     let mut i = if text.starts_with('\u{feff}') { 3 } else { 0 };
+    // Parentheses, records and variants nest within a type (type-too-deep).
+    let mut depth = 0usize;
     while let Some(&c) = b.get(i) {
         let rest = &b[i..];
         i = match c {
             b' ' | b'\t' | b'\n' | b'\r' => trivia(b, i, &data)?,
+            b'(' | b'{' | b'<' => {
+                depth += 1;
+                if depth > MAX_TYPE_NESTING {
+                    return Err((i, Code::TypeTooDeep, format!("types nested deeper than {MAX_TYPE_NESTING} levels")));
+                }
+                i + 1
+            }
+            b')' | b'}' | b'>' => {
+                depth = depth.saturating_sub(1);
+                i + 1
+            }
             b'/' if rest.starts_with(b"//") || rest.starts_with(b"/*") => trivia(b, i, &data)?,
             // Only in the arguments of attributes, where the data parser reads them.
             b'"' if rest.starts_with(b"\"\"\"") => return Ok(()),
@@ -465,7 +506,7 @@ fn lexis(text: &str) -> Result<(), Fail> {
                 match b.get(name) {
                     Some(b'(') => match closing_paren(&text[name..]) {
                         Some(close) => name + close + 1,
-                        None => return Ok(()),
+                        None => return Err(unclosed_arguments(text, &text[i + 1..name], name)),
                     },
                     _ => name,
                 }
@@ -474,6 +515,22 @@ fn lexis(text: &str) -> Result<(), Fail> {
         };
     }
     Ok(())
+}
+
+/// The error of attribute arguments whose `(` at `open` has no `)`: what
+/// reading them value by value finds first, as for any arguments. A value
+/// that isn't one is the data parser's error; after the last value, a comma
+/// or nothing means the `(` is unclosed, anything else that a `,` or `)` is
+/// missing.
+fn unclosed_arguments(text: &str, attribute: &str, open: usize) -> Fail {
+    let inner = &text[open + 1..];
+    match haus::parse(inner) {
+        Err(e) => (open + 1 + e.offset, e.code, format!("in the arguments of @{attribute}: {}", e.reason)),
+        Ok(values) if values.is_empty() || inner.trim_end().ends_with(',') => {
+            (open, Code::UnclosedBracket, format!("unclosed '(' of @{attribute}"))
+        }
+        Ok(_) => (text.len(), Code::MissingComma, format!("expected ',' or ')' in the arguments of @{attribute}")),
+    }
 }
 
 /// After the run of whitespace and comments at `i`, which `data` has checked.

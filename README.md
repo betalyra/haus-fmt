@@ -45,7 +45,7 @@ New kinds of events can show up later: a reader that only cares about users just
 
 - **Try it in the browser:** the [playground](https://haus-fmt.org/play) needs nothing installed.
 - **VS Code:** install **haus** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=betalyra.haus), or run `code --install-extension betalyra.haus`. You get highlighting, errors as you type, types on hover, formatting and schema inference.
-- **In your code:** libraries for [TypeScript](typescript/packages/haus) (with an [Effect adapter](typescript/packages/effect) and [typed imports](typescript/packages/import)), [Rust](rust), [Roc](roc) and [Python](python). See [Install](https://haus-fmt.org/docs/install).
+- **In your code:** libraries for [TypeScript](typescript/packages/haus) (with an [Effect adapter](typescript/packages/effect) and [typed imports](typescript/packages/import)), [Rust](rust), [Roc](roc), [Python](python) and [Go](go). See [Install](https://haus-fmt.org/docs/install).
 
 ## Learn more
 
@@ -67,6 +67,7 @@ The documentation lives at [haus-fmt.org/docs](https://haus-fmt.org/docs):
 | [`rust/`](rust) | Parser, `haus-fmt-build` (Rust and Roc types from schemas, with codecs), examples |
 | [`roc/`](roc) | Parser, decoding, encoding, streams, examples |
 | [`python/`](python) | Parser, streams, canonical form and hashing |
+| [`go/`](go) | Parser, formatter, streams, canonical form and hashing, JSON, schemas and checks, the official profiles' codecs, examples |
 | [`extensions/`](extensions) | Official schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) |
 | [`editors/vscode/`](editors/vscode) | The VS Code extension |
 | [`fuzz/`](fuzz) | Differential fuzzing of all implementations against each other and `haus-ref` |
@@ -80,7 +81,8 @@ cd typescript && pnpm install && pnpm test        # TypeScript packages
 cd rust && cargo test --workspace --all-features  # Rust crates, conformance and schema suites
 cd roc/package && roc test ConformanceTest.roc    # Roc conformance suite (also roc/schema-test)
 cd python && uv run pytest                        # Python
+cd go && go test ./...                            # Go
 cd spec/lean && lake build --wfail                # the proofs and haus-ref
 ```
 
-TypeScript, Rust and Roc have the same three examples (quickstart, order, logs); see their READMEs for how to run them.
+TypeScript, Rust and Roc have the same three examples (quickstart, order, logs), and Go the first two; see their READMEs for how to run them.

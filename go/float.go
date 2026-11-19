@@ -4,6 +4,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/betalyra/haus-fmt/go/internal/floats"
 )
 
 // FormatFloat writes a float in the one spelling of spec §15 ("Floats"):
@@ -87,6 +89,6 @@ func floatValue(f float64, bitSize int) Value {
 // A number too large for a float64 gives an infinity and ok false; a number
 // too small rounds to zero, keeping its sign.
 func (n Number) Float64() (f float64, ok bool) {
-	f, _ = strconv.ParseFloat(n.String(), 64)
+	f = floats.Parse(n.String(), 64)
 	return f, !math.IsInf(f, 0)
 }

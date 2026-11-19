@@ -1,10 +1,12 @@
 # Differential testing
 
 Generated inputs go through every haus parser: the Lean reference parser
-(`spec/lean`), Rust, Roc and TypeScript (and, with `--schema`, through
-every schema decoder: see [Schema decoding](#schema-decoding); with `--json`,
-through every JSON converter: see [JSON](#json); with `--format`, through
-the formatters and value writers: see [Formatters](#formatters)). They must agree on every input:
+(`spec/lean`), Rust, Roc, TypeScript, Python and Go (and, with `--schema`,
+through every schema decoder: see [Schema decoding](#schema-decoding); with
+`--json`, through every JSON converter: see [JSON](#json); with `--format`,
+through the formatters and value writers: see [Formatters](#formatters); with
+`--schema-check`, through every schema-file checker: see
+[Schema files](#schema-files)). They must agree on every input:
 accepted with the same values, or rejected. A disagreement is a bug in at
 least one of them, or a gap in the spec.
 
@@ -15,7 +17,10 @@ node fuzz/src/main.ts --seed 7         # repeat a run
 ```
 
 Needs Node 23.6 or later (it runs the TypeScript directly), Lean (elan),
-Rust and Roc. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs every
+Rust, Roc, Python (uv) and Go. The Go runner, [`go/`](go), is one program
+for every fuzzer (`go-runner MODE …`), a module of its own that builds
+against the checkout; it finds the schema files and extensions through the
+path it was built from, as the Rust runners do. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs every
 fuzzer on every pull request with a new seed, and much longer every night;
 a failure prints the seed and keeps the shrunk inputs as an artifact.
 
@@ -24,7 +29,7 @@ a failure prints the seed and keeps the shrunk inputs as an artifact.
 | Step | |
 |---|---|
 | Generate | [`src/generate.ts`](src/generate.ts): random haus text with varied formatting (spacing, comments, CRLF, byte order mark, number spellings, quoted keys, block strings, both payload forms, trailing commas), values at and just past the limits, the conformance suite as seeds. Half of the inputs are then mutated: bytes deleted, edge characters inserted (quotes, `*/`, control and bidi characters, invalid UTF-8), slices duplicated, cut short. |
-| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript and Python run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
+| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python and Go run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
 | Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree, and so must the error codes (spec §17) of runners that report them, wherever two report an error at the same position. |
 | Shrink | A disagreeing input is cut down to the smallest input that still disagrees, and saved to `.out/failures/` with every parser's result. |
 
@@ -33,8 +38,8 @@ but not which error a parser reports first, so they may differ. Error codes
 are compared where positions agree: an error at the same place is the same
 mistake. A runner that reports codes prints `err <line> <column> <code>
 <reason>` and is marked `{ codes: true }` in `runners.ts`; the others print
-`err <line> <column> <reason>`, and their codes aren't compared. Today Lean,
-TypeScript, Python, Roc and Rust report codes.
+`err <line> <column> <reason>`, and their codes aren't compared. Today all of
+them report codes.
 
 ## The runners
 
@@ -45,6 +50,7 @@ TypeScript, Python, Roc and Rust report codes.
 | Roc | [`roc/fuzz/runner.roc`](../roc/fuzz/runner.roc) |
 | TypeScript | in this process ([`src/runners.ts`](src/runners.ts)) |
 | Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) |
+| Go | [`go/`](go) (`go-runner`) |
 | Stream readers | the same runners with `--stream` (TypeScript: in this process) |
 
 A new binding needs a program that reads `DIR/00000.haus` … `DIR/{N-1}.haus`
@@ -65,6 +71,16 @@ in `runners.ts`.
 | TypeScript and Effect rejected a schema file with a record payload field named `_tag` (`< Odd { _tag: Int32 } >`), where the others report only its JSON | fixed: the schema compiles, the case nests its payload as `value` (`--json`, [`json/names.schema.haus`](json/names.schema.haus)) |
 | TypeScript, Effect and Python reported a tagged `Maybe` without `"_tag"` (`{}`) as `unknown-tag`, not `missing-member` | fixed (`--json`, codes; [`json/plain.cases.haus`](../test-suite/json/plain.cases.haus)) |
 | TypeScript, Effect and Rust reported an unknown member of a closed record in plain JSON at the record, not at the member (`$.x`) as when decoding | fixed (`--json`, codes) |
+| Go reported `"""` at the end of input as `unterminated-block-string`, not `block-string-opening`, and a raw control character on an under-indented block-string line before the indent | fixed (parser) |
+| Go's `strconv.ParseFloat` rounds literals of more than 800 significant digits wrongly (a halfway value near the smallest normal float64, 10⁸ too small) | fixed: Go rounds those exactly (`--schema`) |
+| Go's formatter: a comment after a multi-line comment trailed the entry; a comma on its own line made a blank line; a comment between a key and its value went below the entry's blank line; a blank line before a payload record's `}` was lost | fixed (`--format`) |
+| TypeScript and Effect overflowed the stack on a record that reaches its own record case by name (`type C = { s: < S B > }`, `type B = C`) | fixed (`--schema-check`) |
+| Rust had no nesting limit for types (`type-too-deep`), and Go counted each parenthesis twice | fixed (`--schema-check`) |
+| A `/` that starts no comment was `schema-syntax` in every binding, `stray-slash` (as in data) in Lean | fixed in TypeScript, Python, Rust and Go (`--schema-check`) |
+| Attribute arguments without their `)` after a value (`@deprecated("x"`) were `unclosed-bracket` in Rust and Go, `missing-comma` in Lean | fixed (`--schema-check`) |
+| `"""` as a field key was `block-string-key` (Python, Go) or `string-line-break` (TypeScript); Lean reads the key `""` and then a `"` (`schema-syntax`) | fixed (`--schema-check`) |
+| Go reported a quoted key cut by a line break as `unterminated-string`, not `string-line-break` (or `control-character` for CR LF) | fixed (`--schema-check`) |
+| Rust reported a lexical mistake anywhere in the file before a syntax error earlier in it | fixed: the grammar is read up to the lexical mistake (`--schema-check`) |
 
 ## Canonical forms
 
@@ -79,7 +95,7 @@ through `haus-ref --canonical-batch`, the others through their runners with
 The same idea for the std/time checkers (spec §13.2,
 [`std/time.md`](../spec/std/time.md)): generated strings through the Lean
 model ([`spec/lean/Haus/Time`](../spec/lean/Haus/Time), proven to compute
-the rules) and the TypeScript, Rust, Roc and Python checkers, which must agree on
+the rules) and the TypeScript, Rust, Roc, Python and Go checkers, which must agree on
 every one.
 
 ```sh
@@ -103,6 +119,7 @@ above.
 | Roc | [`roc/fuzz/time_runner.roc`](../roc/fuzz/time_runner.roc) |
 | TypeScript | in this process |
 | Python | [`python/fuzz/time_runner.py`](../python/fuzz/time_runner.py) |
+| Go | [`go-runner --time`](go/time.go): `schema.CheckTime` |
 
 ## Profiles
 
@@ -156,9 +173,9 @@ code; reasons are not compared.
 | Rust | [`schema-rust/src/profile_runner.rs`](schema-rust/src/profile_runner.rs): `haus_money::{Iso, IsoCurrency}`, `haus_geo::{Wgs84, Wgs84BBox}` as generated code runs a codec (`haus::de::codec`) |
 | Roc | [`roc/profile_runner.roc`](roc/profile_runner.roc): `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox` of `extensions/*/roc` with `Decode.codec` |
 | Python | [`python/fuzz/profile_runner.py`](../python/fuzz/profile_runner.py): `haus_money.iso` and `haus_geo.wgs84` with `haus.schema.load_schema(…, codecs=…)` |
+| Go | [`go-runner --profile`](go/profile.go): `ext/money`'s `Iso`, `IsoCurrency` and `ext/geo`'s `Wgs84`, `Wgs84BBox` with `Type.DecodeWith` and `EncodeWith` |
 
-Go has no profile codecs yet. So far every binding agrees with Lean on
-every case generated.
+So far every binding agrees with Lean on every case generated.
 
 ## Schema decoding
 
@@ -208,6 +225,7 @@ tests the check: `node --test fuzz/src/`.
 | Rust (`rust-check`) | [`schema-rust/src/check_runner.rs`](schema-rust/src/check_runner.rs): haus-fmt-schema's runtime checker, `Schema::decode` |
 | Roc | [`roc/schema_runner.roc`](roc/schema_runner.roc), with the modules `haus-gen roc` generates ([`roc/gen_schemas.ts`](roc/gen_schemas.ts)) |
 | Python | [`python/fuzz/schema_runner.py`](../python/fuzz/schema_runner.py): `haus.schema.compile_schema`, `decode`, `encode` |
+| Go | [`go-runner --schema`](go/schema.go): package schema's `Parse`, `Type.Decode`, `Type.Encode` |
 
 Nothing is masked: every binding's default host types keep the value (spec
 §13.4), so every runner must agree with Lean exactly. Where Lean and another
@@ -215,7 +233,7 @@ runner both report an error code (spec §17) at the same place, the codes must
 agree too: Lean's `--schema-batch` prints `err <place> <code> <reason>`, and a
 runner made with `external(…, codes = true)` in
 [`src/schema-runners.ts`](src/schema-runners.ts) is read the same way
-(TypeScript and Effect report codes in this process, and Python, Roc and both Rust runners are made so). Lossy host types (Effect's
+(TypeScript and Effect report codes in this process, and Python, Roc, Go and both Rust runners are made so). Lossy host types (Effect's
 `BigDecimal` and `DateTime`) are opt-in codecs that the runners don't use.
 
 ## JSON
@@ -287,6 +305,7 @@ members, elements and characters, haus as for schema decoding.
 | Rust | [`schema-rust/src/json_runner.rs`](schema-rust/src/json_runner.rs): the `ToJson` and `FromJson` code haus-fmt-build generates, `haus::json::to_string` and `from_str`, `haus::to_haus_json`, `from_haus_json`, `import_json` |
 | Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
 | Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_haus_json`, `from_haus_json`, `import_json` |
+| Go | [`go-runner --json MODE`](go/json.go): `Type.Decode` and `Type.ToJSON`, `Type.FromJSON` and `Type.Encode`, `haus.ToHausJSON`, `FromHausJSON`, `ImportJSON` |
 
 Every runner prints an error as `err <place> <code> <reason>`: the place in
 the value (`$.items[2].price`), `$` for an error in the JSON text, and `-` for
@@ -305,9 +324,9 @@ error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
 
 `--format` tests the standard layouts of spec §11 (audit item C2, phase L1
 of [`spec/lean/PLAN.md`](../spec/lean/PLAN.md)). Generated documents go
-through the TypeScript and Rust formatters in the pretty, compact and
+through the TypeScript, Rust and Go formatters in the pretty, compact and
 minimised layouts; the values they hold go through the value writers of
-TypeScript, Rust and Roc.
+TypeScript, Rust, Roc and Go.
 
 ```sh
 sh fuzz/build.sh                               # the Rust and Roc runners
@@ -335,9 +354,9 @@ For every input, and each layout:
 
 | Check | |
 |---|---|
-| Same bytes | TypeScript and Rust write the same text, or both reject the input; a crash is a finding. |
+| Same bytes | TypeScript, Rust and Go write the same text, or all reject the input; a crash is a finding. Go's options take 0 as the default, so Go sits out the batches with an indent or width of 0. |
 | Values | The output parses to the input's values (compared by their canonical forms, spec §12). |
-| Idempotence | Formatting the output again in the same layout gives it back, in both formatters. |
+| Idempotence | Formatting the output again in the same layout gives it back, in every formatter. |
 | Comments | Pretty keeps every comment, in order (a CR LF in one is written as LF); compact and minimised have none. |
 | Lines | Compact and minimised: one top-level item per line, each a value on its own, with a comma in a stream and none for a single item; no carriage return, U+2028 or U+2029 anywhere. |
 | Minimised | No space or tab outside strings and byte strings. Formatted as pretty, it gives what compact formatted as pretty gives, and the pretty file without its comments and blank lines. |
@@ -347,25 +366,87 @@ For every input, and each layout:
 The value writers (no source text: numbers normalized, byte strings in
 lowercase hex) must write the same line for every value: TypeScript's
 `stringify(v, { style })`, Rust's `haus::to_string` and
-`haus::to_string_minimised`, Roc's `Encode.to_str` and `Encode.minimised`.
+`haus::to_string_minimised`, Roc's `Encode.to_str` and `Encode.minimised`, Go's
+`haus.FormatValue`.
 Each line parses back to its value and keeps the layout's rules.
 
 A failing input is shrunk to the smallest input that still fails the same
 check (at most three per check), and saved to `.out/format/failures/` with
-the check, what was seen, and both formatters' output in every layout.
+the check, what was seen, and every formatter's output in every layout.
 
 | Formatter / writer | Runner (`DIR N`, as for the parsers; prints `ok` and the output as a JSON string, or `err …`) |
 |---|---|
 | TypeScript | in this process: `parseDocument`, `format(values, { style, indent, width, source, comments })`, `stringify` |
 | Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `haus::to_string`, `haus::to_string_minimised` (a JSON array of lines) |
 | Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `Encode.to_str`, `Encode.minimised` (a JSON array of lines) |
+| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE`: `haus.FormatValue` |
 
 [`src/format.test.ts`](src/format.test.ts) tests the generator and the
 checks (`node --test fuzz/src/`): the format suite's expected files keep
 every rule, and outputs that break one are caught.
 
 So far the formatters and writers agree, and keep every rule, on every
-input generated.
+input generated (Go's formatter after the fixes below).
+
+## Schema files
+
+`--schema-check` tests the schema-file checkers (spec §14): generated schema
+files go through the Lean reference checker (`Haus.SchemaFile.load`) and
+every binding's, which must agree on accepting or rejecting every file.
+
+```sh
+sh fuzz/build.sh                                      # also builds the schema-file runners
+node fuzz/src/main.ts --schema-check --count 20000    # about 20 seconds
+node fuzz/src/main.ts --schema-check --seed 7 --runners lean,typescript,go
+```
+
+[`src/schema-check-gen.ts`](src/schema-check-gen.ts) writes files of one to
+six definitions: records and variants (open and closed, optional and quoted
+fields, record and positional payloads, spreads of the file's records and
+variants), applications of the prelude's and the file's generic types,
+parameters, std/time imports, attributes this version defines and ones it
+doesn't, doc comments, and the formatting of data files (comments, line
+breaks, CR LF, a byte order mark). Every generic type is used by a type
+`Uses`, so that its instances are checked; recursion through them may be
+unguarded or growing. Half of the files get one mistake of §14: a duplicate,
+unknown or prelude name, a wrong arity, a bad parameter, duplicate fields and
+tags, `closed < >`, spreads of the wrong kind or of themselves, `...r`, the
+attribute errors, `Stream` out of place, unguarded and growing recursion, the
+import errors (unknown modules and names, versions, packages and files,
+which nothing resolves here), the lexical errors of data files, and nesting
+at the limit (128). A sixth of the rest are edited as text, a few get
+invalid UTF-8.
+
+Error codes (spec §17) are compared on the files with exactly one mistake:
+the generator's mistake added to a file that every checker accepts. Which
+error a file with several mistakes reports is not fixed (§17). Positions are
+not compared: Lean reports none. A disagreeing file is shrunk to the
+smallest text with the same pattern of disagreement.
+
+| Checker | Runner (`FILE` of lines `HEX`, a file's bytes as hex; prints `ok` or `err [LINE COLUMN] CODE REASON`) |
+|---|---|
+| Lean | `haus-ref --schema-check-batch FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `Haus.SchemaFile.load`, no position |
+| TypeScript | in this process: `compileSchemaFile` |
+| Effect | in this process: `Haus.compileSchemaFile` (TypeScript's parser and checker, its own schema builder) |
+| Rust | [`schema-rust/src/schema_check_runner.rs`](schema-rust/src/schema_check_runner.rs): `haus_schema::Schema::parse` |
+| Python | [`python/fuzz/schema_check_runner.py`](../python/fuzz/schema_check_runner.py): `haus.schema.compile_schema` |
+| Go | [`go-runner --schema-check`](go/check.go): `schema.Parse` |
+
+Roc has no schema-file checker of its own (its types are generated by
+`haus-gen`, TypeScript's), so it sits out.
+
+Known disagreements with Lean, counted but not failures (the generator
+avoids them; a text edit can still make one):
+
+- Lean checks guarded recursion (§9.9) only on the instances a non-generic
+  type reaches, so it accepts `type Q a = Q a` when nothing uses `Q`; every
+  binding rejects it (`unguarded-recursion`), as §14's list says.
+- Lean runs out of fuel on a spread cycle through nested spreads
+  (`type P = { x: { ...R } }`, `type R = { y: { ...P } }`), and with more
+  types around can accept the file; the bindings report `spread-cycle`.
+- Lean, TypeScript and Python accept a `|` after a variant's last
+  alternative (`< Y | >`), which the grammar doesn't have; Rust and Go
+  reject it.
 
 ## When it finds something
 
