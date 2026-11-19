@@ -132,11 +132,12 @@ func exists(path string) bool {
 	return err == nil
 }
 
-// shown is a path for a message: its control and bidirectional characters
-// escaped, and / as the separator (spec §9.2).
+// shown is a path for a message, as the platform writes it (C:\app\x on
+// Windows, as the other bindings show it), with its control and
+// bidirectional characters escaped (spec §9.2).
 func shown(path string) string {
 	var b strings.Builder
-	for _, r := range filepath.ToSlash(path) {
+	for _, r := range path {
 		if isControlOrBidi(r) {
 			fmt.Fprintf(&b, `\u{%X}`, r)
 		} else {

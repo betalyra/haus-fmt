@@ -161,7 +161,7 @@ impl From<syntax::Error> for Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let path = self.path.as_ref().map(|p| p.display().to_string());
+        let path = self.path.as_deref().map(plain);
         let position = self.position.map(|(line, column)| format!("{line}:{column}"));
         match [path, position].into_iter().flatten().collect::<Vec<_>>().join(":") {
             at if at.is_empty() => f.write_str(&self.reason),
@@ -200,9 +200,32 @@ pub(crate) fn quote(text: &str) -> String {
     out + "…"
 }
 
-/// A path, for a message: its control and bidirectional characters escaped.
+/// A path, for a message: as the platform writes it, with its control and
+/// bidirectional characters escaped.
 pub(crate) fn shown(path: &Path) -> String {
-    path.display().to_string().chars().map(escape).collect()
+    plain(path).chars().map(escape).collect()
+}
+
+/// A path as people write it. On Windows a real path (`canonicalize`)
+/// starts with `\\?\`, which messages leave out, as the other bindings do.
+fn plain(path: &Path) -> String {
+    let text = path.display().to_string();
+    match cfg!(windows) {
+        true => without_verbatim(&text),
+        false => text,
+    }
+}
+
+/// A Windows path without the `\\?\` before a drive or a share:
+/// `\\?\C:\app` is `C:\app`, `\\?\UNC\host\share` is `\\host\share`. Other
+/// paths are kept as they are.
+fn without_verbatim(text: &str) -> String {
+    let drive = |p: &str| p.as_bytes().get(1) == Some(&b':') && p.starts_with(|c: char| c.is_ascii_alphabetic());
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.get(..4).is_some_and(|p| p.eq_ignore_ascii_case(r"UNC\")) => format!(r"\\{}", &rest[4..]),
+        Some(rest) if drive(rest) => rest.to_owned(),
+        _ => text.to_owned(),
+    }
 }
 
 /// A character as a message shows it: control and bidirectional ones as `\u{…}`.
@@ -217,4 +240,31 @@ fn escape(c: char) -> String {
 fn var(key: &str) -> Result<String> {
     let reason = format!("{key} is not set: haus-fmt-build runs in a build script");
     env::var(key).map_err(|_| Error::new(ErrorCode::ImportUnavailable, reason))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_verbatim;
+
+    /// Real paths on Windows, as messages show them (tested on every platform).
+    #[test]
+    fn windows_paths_without_verbatim() {
+        let cases = [
+            (r"\\?\C:\Users\runneradmin\app\x.schema.haus", r"C:\Users\runneradmin\app\x.schema.haus"),
+            (r"\\?\d:\", r"d:\"),
+            (r"\\?\UNC\host\share\app", r"\\host\share\app"),
+            (r"\\?\unc\host\share", r"\\host\share"),
+            // Not a drive or a share: kept.
+            (r"\\?\Volume{0b1c}\app", r"\\?\Volume{0b1c}\app"),
+            (r"\\?\1:\app", r"\\?\1:\app"),
+            (r"\\?\", r"\\?\"),
+            // Not verbatim: kept.
+            (r"C:\app", r"C:\app"),
+            (r"\\host\share\app", r"\\host\share\app"),
+            ("/tmp/app", "/tmp/app"),
+        ];
+        for (path, shown) in cases {
+            assert_eq!(without_verbatim(path), shown, "{path}");
+        }
+    }
 }
