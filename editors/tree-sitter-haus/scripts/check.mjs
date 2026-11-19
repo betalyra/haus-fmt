@@ -81,6 +81,10 @@ const SYNTAX_SCHEMA_CODES = new Set([
   'bidi-control',
   'invalid-utf8',
   'invalid-escape',
+  'string-line-break',
+  'stray-slash',
+  // `@deprecated("x"`: an attribute's arguments without their `)`.
+  'missing-comma',
 ]);
 
 // ── Running tree-sitter ───────────────────────────────────────────────
