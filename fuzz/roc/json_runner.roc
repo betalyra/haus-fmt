@@ -75,7 +75,7 @@ typed = |mode, suite, ty, input| match Str.from_utf8(input) {
 			match JsonValue.parse(s) {
 				Err(e) => "err $ ${e.code} ${clean(e.reason)}"
 				Ok(j) => match JsonSchemas.read(suite, ty, j) {
-					Read(Ok(v)) => "ok ${Encode.canonical(v)}"
+					Read(Ok(v)) => "ok ${Encode.canonical(v) ?? "(no canonical form)"}"
 					Read(Err(e)) => "err ${clean(e)}"
 					NoType => "crash no type ${suite}.${ty}"
 				}
@@ -103,7 +103,7 @@ untyped = |mode, input| match Str.from_utf8(input) {
 
 shown : Try(Value, [Syntax(Value.ParseError), Decode(Decode.Error)]) -> Str
 shown = |r| match r {
-	Ok(v) => "ok ${Encode.canonical(v)}"
+	Ok(v) => "ok ${Encode.canonical(v) ?? "(no canonical form)"}"
 	Err(Syntax(e)) => "err $ ${e.code} ${clean(e.reason)}"
 	Err(Decode(e)) => "err ${ErrorCode.place(e.path)} ${e.code} ${clean(e.reason)}"
 }

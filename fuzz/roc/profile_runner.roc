@@ -79,7 +79,7 @@ run = |line| {
 coded : Value, (Value -> Try(b, Decode.Error)), (b, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), (b -> Try(t, Str)), (t -> b) -> Str
 coded = |v, decode_base, encode_base, decode, encode| match Decode.codec(v, decode_base, decode) {
 	Ok(x) => match Encode.value(encode(x), encode_base) {
-		Ok(encoded) => "ok ${Encode.canonical(encoded)}"
+		Ok(encoded) => "ok ${Encode.canonical(encoded) ?? "(no canonical form)"}"
 		Err(e) => "crash encoding failed: ${one_line(Encode.message(e))}"
 	}
 	Err(e) => "err ${ErrorCode.place(e.path)} ${e.code} ${one_line(e.reason)}"
