@@ -93,10 +93,13 @@ interface Entry {
   readonly valueStart: number | undefined
   /** Written before the value: `key: ` for a record field. */
   readonly prefix: string
+  /** The width of `prefix`, in code points. */
+  readonly prefixWidth: number
   readonly value: Value
 }
 
 type Span = readonly [number, number]
+const NO_SPANS: readonly Span[] = []
 
 /** The entries of one container (or of the file), being written one after the other. */
 interface EntryList {
@@ -105,8 +108,8 @@ interface EntryList {
   readonly sep: string
   readonly blankAfterMultiline: boolean
   /** Comments placed before, after (on the same line) each entry, and after the last one. */
-  readonly leading: readonly Span[][]
-  readonly trailing: readonly Span[][]
+  readonly leading: readonly (readonly Span[])[]
+  readonly trailing: readonly (readonly Span[])[]
   readonly dangling: readonly Span[]
   /** The next entry to write. */
   next: number
@@ -175,77 +178,75 @@ class Formatter {
    * non-empty record or array). Iterative, like `run`.
    */
   private inline(v: Value, pretty: boolean, budget: number, spacing: Spacing = SPACED): string | undefined {
+    // Pretty: a non-empty record or array is always broken over lines.
+    if (pretty && (v.kind === "array" ? v.items.length > 0 : v.kind === "record" && v.fields.size > 0)) return undefined
     const { comma, colon } = spacing
-    const out: string[] = []
-    let length = 0
-    const work: (Value | string)[] = [v]
-    const push = (text: string) => {
-      out.push(text)
-      length += codePoints(text)
-    }
-    /** `values` next, separated by commas, then `close`. */
-    const items = (values: readonly Value[], close: string) => {
-      work.push(close)
-      for (let i = values.length - 1; i >= 0; i--) {
-        work.push(values[i]!)
-        if (i > 0) work.push(comma)
-      }
-    }
-    const record = (r: HRecord): boolean => {
-      if (r.fields.size === 0) push("{}")
-      else if (pretty) return false // pretty: one field per line
-      else {
-        push(spacing.open)
-        work.push(spacing.close)
-        const fields = [...r.fields]
-        for (let i = fields.length - 1; i >= 0; i--) {
-          const [k, x] = fields[i]!
-          work.push(x, `${i > 0 ? comma : ""}${key(k)}${colon}`)
-        }
-      }
-      return true
-    }
+    let out = ""
+    // The width is in code points: `out.length` less the high surrogates in
+    // `out`. Those are counted only once the length is over the budget, each
+    // part of `out` once (up to `counted`).
+    let highs = 0
+    let counted = 0
+    const work: Pending[] = [v]
     while (work.length > 0) {
       const x = work.pop()!
-      if (typeof x === "string") push(x)
-      else {
+      if (typeof x === "string") out += x
+      else if (x instanceof FieldsLeft) {
+        const next = x.fields.next()
+        if (!next.done) {
+          const [k, value] = next.value
+          out += x.first ? key(k) + colon : comma + key(k) + colon
+          x.first = false
+          work.push(x, value)
+        }
+      } else {
         switch (x.kind) {
           case "number":
-            push(this.number(x))
+            out += this.number(x)
             break
           case "string":
             if (pretty && x.value.includes("\n")) return undefined
-            push(this.basicString(x))
+            out += this.basicString(x)
             break
           case "bytes":
-            push(this.bytes(x))
+            out += this.bytes(x)
             break
           case "array":
             if (pretty && x.items.length > 0) return undefined // pretty: one item per line
-            push("[")
-            items(x.items, "]")
+            out += "["
+            pushItems(work, x.items, comma, "]")
             break
           case "record":
-            if (!record(x)) return undefined
+            if (x.fields.size === 0) out += "{}"
+            else if (pretty) return undefined // pretty: one field per line
+            else {
+              out += spacing.open
+              work.push(spacing.close, new FieldsLeft(x.fields.entries()))
+            }
             break
           case "variant": {
-            const [first] = x.args
-            push(x.tag)
-            if (x.args.length === 1 && first?.kind === "record") {
-              push(spacing.tag)
-              if (!record(first)) return undefined
-            } else if (x.args.length > 0) {
-              push("(")
-              items(x.args, ")")
+            const args = x.args
+            const first = args[0]
+            out += x.tag
+            if (args.length === 1 && first!.kind === "record") {
+              out += spacing.tag
+              work.push(first!) // the record, next
+            } else if (args.length > 0) {
+              out += "("
+              pushItems(work, args, comma, ")")
             }
           }
         }
       }
       // Too wide to stay inline anyway: stop early, so nested payloads aren't
       // rendered in full at every level (that would be quadratic in the depth).
-      if (length > budget) return undefined
+      if (out.length > budget) {
+        highs += highSurrogates(out, counted)
+        counted = out.length
+        if (out.length - highs > budget) return undefined
+      }
     }
-    return out.join("")
+    return out
   }
 
   // ── multi-line ─────────────────────────────────────────────
@@ -282,7 +283,9 @@ class Formatter {
 
   /** `v` at indentation `ind`, with `used` columns already taken on the current line: inline if it fits, else broken. */
   private writeValue(v: Value, ind: string, used: number, out: string[], tasks: Task[]): void {
-    if (!this.hasComments(v.start, v.end)) {
+    // A number, string or byte string is written the same whether it fits or not: nothing to try.
+    const leaf = v.kind === "number" || v.kind === "string" || v.kind === "bytes"
+    if (!leaf && !this.hasComments(v.start, v.end)) {
       const flat = this.inline(v, true, this.width - used)
       if (flat !== undefined) return void out.push(flat)
     }
@@ -313,13 +316,14 @@ class Formatter {
 
   /** `r` broken over lines; `span` is where its comments are (default: between its braces). */
   private record(r: HRecord, ind: string, out: string[], tasks: Task[], span: Span | undefined = inside(r)): void {
-    const entries = [...r.fields].map(([k, v]): Entry => ({
-      start: r.keySpans?.get(k)?.[0] ?? v.start,
-      end: v.end,
-      valueStart: v.start,
-      prefix: `${key(k)}: `,
-      value: v,
-    }))
+    const entries: Entry[] = []
+    for (const [k, v] of r.fields) {
+      // A bare key is ASCII: its width is its length.
+      const bare = BARE_KEY.test(k)
+      const prefix = `${bare ? k : quote(k)}: `
+      const prefixWidth = bare ? k.length + 2 : codePoints(prefix)
+      entries.push({ start: r.keySpans?.get(k)?.[0] ?? v.start, end: v.end, valueStart: v.start, prefix, prefixWidth, value: v })
+    }
     this.container("{", "}", span, entries, ind, out, tasks)
   }
 
@@ -336,37 +340,39 @@ class Formatter {
    * ending in "\n", with the comments in [from, to) placed next to them.
    */
   private entryList(from: number | undefined, to: number | undefined, entries: readonly Entry[], ind: string, sep: string, blankAfterMultiline: boolean): EntryList {
+    const src = this.source
+    if (src === undefined || from === undefined || to === undefined || this.comments.length === 0) {
+      // No comments to place: every entry shares one empty list.
+      const none = new Array<readonly Span[]>(entries.length).fill(NO_SPANS)
+      return { entries, ind, sep, blankAfterMultiline, leading: none, trailing: none, dangling: NO_SPANS, next: 0, cursor: from, first: true, prevMultiline: false }
+    }
     const leading: Span[][] = entries.map(() => [])
     const trailing: Span[][] = entries.map(() => [])
     const dangling: Span[] = []
-    const src = this.source
-
-    if (src !== undefined && from !== undefined && to !== undefined) {
-      // Comments and entries are sorted by position, so binary search keeps
-      // this linear in the comments of this container (not all comments).
-      const starts = entries.map((e) => e.start ?? -1)
-      const ends = entries.map((e) => e.end ?? -1)
-      for (let k = firstAtOrAfter(this.comments, from); k < this.comments.length; k++) {
-        const c = this.comments[k]!
-        const [cs, ce] = c
-        if (cs >= to) break
-        if (ce > to) continue
-        const last = countBelow(starts, cs + 1) - 1 // last entry starting at or before cs
-        const owner = last >= 0 && cs < ends[last]! ? last : -1
-        if (owner >= 0) {
-          // Inside an entry: between key and value it moves above the entry;
-          // deeper inside, the nested container places it.
-          const e = entries[owner]!
-          if (e.valueStart !== undefined && cs < e.valueStart) leading[owner]!.push(c)
-          continue
-        }
-        const prev = countBelow(ends, cs + 1) - 1 // last entry ending at or before cs
-        const n = countBelow(starts, ce) // first entry starting at or after ce
-        const next = n < entries.length ? n : -1
-        if (prev >= 0 && !src.slice(entries[prev]!.end, cs).includes("\n")) trailing[prev]!.push(c)
-        else if (next >= 0) leading[next]!.push(c)
-        else dangling.push(c)
+    // Comments and entries are sorted by position, so binary search keeps
+    // this linear in the comments of this container (not all comments).
+    const starts = entries.map((e) => e.start ?? -1)
+    const ends = entries.map((e) => e.end ?? -1)
+    for (let k = firstAtOrAfter(this.comments, from); k < this.comments.length; k++) {
+      const c = this.comments[k]!
+      const [cs, ce] = c
+      if (cs >= to) break
+      if (ce > to) continue
+      const last = countBelow(starts, cs + 1) - 1 // last entry starting at or before cs
+      const owner = last >= 0 && cs < ends[last]! ? last : -1
+      if (owner >= 0) {
+        // Inside an entry: between key and value it moves above the entry;
+        // deeper inside, the nested container places it.
+        const e = entries[owner]!
+        if (e.valueStart !== undefined && cs < e.valueStart) leading[owner]!.push(c)
+        continue
       }
+      const prev = countBelow(ends, cs + 1) - 1 // last entry ending at or before cs
+      const n = countBelow(starts, ce) // first entry starting at or after ce
+      const next = n < entries.length ? n : -1
+      if (prev >= 0 && !src.slice(entries[prev]!.end, cs).includes("\n")) trailing[prev]!.push(c)
+      else if (next >= 0) leading[next]!.push(c)
+      else dangling.push(c)
     }
     return { entries, ind, sep, blankAfterMultiline, leading, trailing, dangling, next: 0, cursor: from, first: true, prevMultiline: false }
   }
@@ -388,7 +394,7 @@ class Formatter {
         { kind: "entries", list },
         { kind: "entryEnd", list, index: i, mark: out.length },
         // The comma after the entry counts towards the width.
-        { kind: "value", value: e.value, ind, used: ind.length + codePoints(e.prefix) + list.sep.length },
+        { kind: "value", value: e.value, ind, used: ind.length + e.prefixWidth + list.sep.length },
       )
       return
     }
@@ -458,8 +464,36 @@ class Formatter {
   }
 }
 
+/** The fields of a record being written on one line, from the next one on. */
+class FieldsLeft {
+  first = true
+  constructor(readonly fields: Iterator<[string, Value]>) {}
+}
+
+/** What `inline` has left to write: text, a value, or the rest of a record's fields. */
+type Pending = Value | string | FieldsLeft
+
+/** `values` next on the `work` stack, separated by commas, then `close`. */
+const pushItems = (work: Pending[], values: readonly Value[], comma: string, close: string): void => {
+  work.push(close)
+  for (let i = values.length - 1; i >= 0; i--) {
+    work.push(values[i]!)
+    if (i > 0) work.push(comma)
+  }
+}
+
+/** The high surrogates in `s` from `from` on. */
+const highSurrogates = (s: string, from: number): number => {
+  let n = 0
+  for (let i = from; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c >= 0xd800 && c <= 0xdbff) n++
+  }
+  return n
+}
+
 /** An array item, a payload argument or a top-level value as an entry. */
-const entryOf = (v: Value): Entry => ({ start: v.start, end: v.end, valueStart: v.start, prefix: "", value: v })
+const entryOf = (v: Value): Entry => ({ start: v.start, end: v.end, valueStart: v.start, prefix: "", prefixWidth: 0, value: v })
 
 /** The source span between a container's brackets. */
 const inside = (v: Value): [number, number] | undefined =>
@@ -520,19 +554,27 @@ export function toHex(data: Uint8Array): string {
 
 /** A `"…"` string with the minimal escapes. */
 export function quote(s: string): string {
+  // Hot: most strings need no escape at all (the regex scan is native, much faster than a loop here).
+  if (!NEEDS_ESCAPE.test(s)) return `"${s}"`
+  // Scan UTF-16 units (no character that needs an escape is a surrogate) and
+  // copy the runs between escapes whole.
   let out = '"'
-  for (const ch of s) {
-    const c = ch.codePointAt(0)!
-    if (ch === '"') out += '\\"'
-    else if (ch === "\\") out += "\\\\"
-    else if (ch === "\n") out += "\\n"
-    else if (ch === "\r") out += "\\r"
-    else if (ch === "\t") out += "\\t"
-    else if (isControl(c) || isBidi(c) || isSeparator(c)) out += hexEscape(c)
-    else out += ch
+  let chunk = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c >= 0x20 && c < 0x7f ? c !== 34 && c !== 92 : !(isControl(c) || isBidi(c) || isSeparator(c))) continue
+    out += s.slice(chunk, i) + escapeOf(c)
+    chunk = i + 1
   }
-  return out + '"'
+  return chunk === 0 ? `"${s}"` : `${out}${s.slice(chunk)}"`
 }
+
+/** A character `quote` escapes: `"`, `\`, control characters (C0, DEL, C1), separators, bidirectional controls. */
+const NEEDS_ESCAPE = /["\\\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/
+
+/** The escape of a character that `quote` doesn't write raw. */
+const escapeOf = (c: number): string =>
+  c === 34 ? '\\"' : c === 92 ? "\\\\" : c === 10 ? "\\n" : c === 13 ? "\\r" : c === 9 ? "\\t" : hexEscape(c)
 
 /**
  * A `"""` block string whose content and closing quotes sit at `ind`. No line

@@ -278,11 +278,15 @@ const countValues = (root: Value, maxDepth: number, cap: number, at: At): number
 const MAX_VALUES = 64 * 1024 * 1024
 
 const decodeAt = (value: Value, limits: Limits, key?: string | number): At => {
+  if (limits.maxSteps !== undefined) return decodeWithin(limits, 0, key)
   const maxDepth = limits.maxDepth ?? DEFAULT_MAX_DEPTH
   const probe = At.root(context("decode", Infinity, limits), key)
-  const steps = limits.maxSteps ?? STEPS_PER_VALUE * countValues(value, maxDepth, MAX_VALUES, probe) + 1024
-  return At.root(context("decode", steps, limits), key)
+  return decodeWithin(limits, countValues(value, maxDepth, MAX_VALUES, probe), key)
 }
+
+/** Decoding a value of `size` values (counted by `countValues`, or by the parser that read it: a tree within the limits). */
+const decodeWithin = (limits: Limits, size: number, key?: string | number): At =>
+  At.root(context("decode", limits.maxSteps ?? STEPS_PER_VALUE * size + 1024, limits), key)
 
 const encodeAt = (limits: Limits, key?: string | number): At => At.root(context("encode", DEFAULT_ENCODE_STEPS, limits), key)
 
@@ -801,9 +805,16 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
   return self
 }
 
-/** defineProperty: a field named "__proto__" must not replace the object's prototype. */
-const setOwn = (out: Record<string, unknown>, key: string, value: unknown) =>
-  Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true })
+/**
+ * A new own property: defineProperty, so that a field named "__proto__" (or
+ * any name the prototype chain has, maybe as a setter or read-only) can't
+ * replace the object's prototype or be refused. Hot: a name the chain doesn't
+ * have is assigned, which makes the same property and is much faster.
+ */
+const setOwn = (out: Record<string, unknown>, key: string, value: unknown): void => {
+  if (key in out) Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true })
+  else out[key] = value
+}
 
 export { record_ as Record }
 
@@ -1260,9 +1271,11 @@ export const decode = <A>(schema: Schema<A>, value: Value, limits: Limits = {}):
 
 /** Parse a text holding exactly one value and decode it. */
 export const parse = <A>(schema: Schema<A>, text: string, limits: Limits = {}): A => {
-  const values = new Parser(text, START, withDefaults(limits)).parseSequence()
+  const parser = new Parser(text, START, withDefaults(limits))
+  const values = parser.parseSequence()
   if (values.length !== 1) throw new HausDecodeError(`expected exactly one value, found ${values.length}`, [], "not-one-value", { expected: "one value", found: `${values.length} values` })
-  return decode(schema, values[0]!, limits)
+  // Hot: the parser counted the values as it read them (a tree, within the same depth limit), so they needn't be counted again.
+  return schema.decode(values[0]!, decodeWithin(limits, parser.valueCount))
 }
 
 /** Parse and decode a stream; each element's errors carry its index in the path. Limits apply per element. */
