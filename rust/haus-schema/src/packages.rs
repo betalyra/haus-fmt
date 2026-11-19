@@ -4,15 +4,22 @@
 //! A package crate's build script calls `haus_build::package()`, which tells
 //! Cargo where its manifest is (`cargo::metadata=haus_package=…`). Cargo
 //! passes that only to crates that depend on it directly, as
-//! `DEP_<LINKS>_HAUS_PACKAGE`: no registry, no network, no transitive lookups.
+//! `DEP_<LINKS>_HAUS_PACKAGE`: no registry, no network.
+//!
+//! A package crate also passes on the packages its schema reaches, directly
+//! or not (`cargo::metadata=haus_graph=<file>`, [`GRAPH`]): the crates that
+//! depend on it then see the packages their dependencies import, for
+//! checking and for the codec closure (spec §13.4), and name their crates
+//! through its re-exports ([`DEPS_MODULE`]). Only packages' files import
+//! them: a crate's own files import its direct dependencies.
 
 use crate::files::{self, FileCache, Kind};
 use crate::locator::{Location, Locator};
 use crate::{Error, Result, quote, shown, syntax, var};
 use haus::ErrorCode;
-use std::collections::HashMap;
-use std::env;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 /// A schema package's manifest.
 pub const MANIFEST: &str = "package.haus";
@@ -20,6 +27,15 @@ pub const MANIFEST: &str = "package.haus";
 pub const SCHEMA: &str = "schema.haus";
 /// The largest manifest, in bytes (64 KiB).
 pub const MAX_MANIFEST: u64 = 64 * 1024;
+/// The file in a package crate's `OUT_DIR` that lists the packages its
+/// schema reaches, other than itself: `[{ name, dir, krate, version }]`,
+/// `krate` being the path of the package's crate from this one
+/// (`haus_money`, `haus_ledger::__haus_deps::haus_money`).
+pub const GRAPH: &str = "haus_graph.haus";
+/// The module of a package crate that re-exports the crates of the schema
+/// packages it depends on, for the code generated in crates that depend on
+/// it: `::haus_orders::__haus_deps::haus_money::Money`.
+pub const DEPS_MODULE: &str = "__haus_deps";
 
 /// `package.haus`: `{ name: "@haus-fmt/money", version: "1.2.0" }`. Other
 /// fields are ignored.
@@ -143,13 +159,22 @@ pub struct Package {
     pub version: Option<String>,
     /// Its types and their number of parameters.
     pub types: HashMap<String, usize>,
+    /// For a package that is not a dependency of this crate, but of a
+    /// dependency's (from its [`GRAPH`]): that dependency's crate. Only
+    /// packages' files import it; `krate` is a path through that crate.
+    pub through: Option<String>,
 }
 
-/// The schema packages among a crate's direct dependencies: a [`Locator`]
-/// for build scripts. They count as declared: Cargo lets a crate use only
-/// its direct dependencies.
+/// The schema packages among a crate's direct dependencies, and those their
+/// schemas reach: a [`Locator`] for build scripts. The direct ones count as
+/// declared: Cargo lets a crate use only its direct dependencies. The others
+/// only packages' files import (see [`Package::through`]).
 #[derive(Default)]
-pub struct Packages(Vec<Package>);
+pub struct Packages {
+    packages: Vec<Package>,
+    /// The [`GRAPH`]s they were read from.
+    graphs: Vec<PathBuf>,
+}
 
 impl Packages {
     /// None: for schemas without package imports.
@@ -157,28 +182,82 @@ impl Packages {
         Packages::default()
     }
 
-    /// The direct dependencies that are schema packages.
+    /// The direct dependencies that are schema packages, then the packages
+    /// their schemas reach (each one's [`GRAPH`]) that aren't among them.
     pub fn from_env() -> Result<Packages> {
-        env::vars()
+        let mut links: Vec<(String, String)> = env::vars()
             .filter_map(|(key, dir)| Some((key.strip_prefix("DEP_")?.strip_suffix("_HAUS_PACKAGE")?.to_owned(), dir)))
+            .collect();
+        links.sort();
+        let direct = links
+            .iter()
             .map(|(links, dir)| {
-                let package = Package::load(Path::new(&dir), var(&format!("DEP_{links}_HAUS_CRATE"))?)?;
+                let package = Package::load(Path::new(dir), var(&format!("DEP_{links}_HAUS_CRATE"))?)?;
                 // Set by haus-fmt-build 0.1.1 and later.
                 Ok(Package { version: env::var(format!("DEP_{links}_HAUS_VERSION")).ok(), ..package })
             })
-            .collect::<Result<_>>()
-            .map(Packages)
+            .collect::<Result<Vec<_>>>()?;
+        let mut packages = Packages { packages: direct, graphs: vec![] };
+        for (links, _) in &links {
+            // Set by haus-fmt-build 0.1.1 and later, for the packages a schema reaches.
+            let Ok(graph) = env::var(format!("DEP_{links}_HAUS_GRAPH")) else { continue };
+            let through = var(&format!("DEP_{links}_HAUS_CRATE"))?;
+            packages.graphs.push(PathBuf::from(&graph));
+            for entry in read_graph(Path::new(&graph))? {
+                if packages.packages.iter().any(|p| same_dir(&p.dir, Path::new(&entry.dir))) {
+                    continue;
+                }
+                let krate = format!("{through}::{DEPS_MODULE}::{}", entry.krate);
+                packages = packages.through(Path::new(&entry.dir), &krate)?;
+                if let Some(p) = packages.packages.last_mut() {
+                    p.version = entry.version;
+                }
+            }
+        }
+        Ok(packages)
     }
 
     /// With the package in `dir`, whose types are in the crate `krate`.
     pub fn with(mut self, dir: &Path, krate: &str) -> Result<Packages> {
-        self.0.push(Package::load(dir, krate.to_owned())?);
+        self.packages.push(Package::load(dir, krate.to_owned())?);
         Ok(self)
+    }
+
+    /// With the package in `dir`, a dependency of a dependency, whose types
+    /// are at the path `krate` through that dependency's crate:
+    /// `haus_orders::__haus_deps::haus_money`. Only packages' files import it.
+    pub fn through(mut self, dir: &Path, krate: &str) -> Result<Packages> {
+        let via = krate.split("::").next().unwrap_or(krate).to_owned();
+        self.packages.push(Package { through: Some(via), ..Package::load(dir, krate.to_owned())? });
+        Ok(self)
+    }
+
+    /// The [`GRAPH`] of a package crate whose schema reached `used` (the
+    /// names of the packages, itself left out), each with the path of its
+    /// crate from this crate.
+    pub fn graph<'a>(&self, used: impl IntoIterator<Item = &'a str>) -> Result<String> {
+        let entries = used
+            .into_iter()
+            .map(|name| {
+                let p = self.find(name)?;
+                let version = p.version.clone().unwrap_or_else(|| p.manifest.version.clone());
+                let dir = p.dir.to_str().ok_or_else(|| {
+                    Error::at(&p.dir, ErrorCode::ImportNotFound, "the directory of a schema package must be UTF-8")
+                })?;
+                Ok(BTreeMap::from([
+                    ("name".to_owned(), name.to_owned()),
+                    ("dir".to_owned(), dir.to_owned()),
+                    ("krate".to_owned(), p.krate.clone()),
+                    ("version".to_owned(), version),
+                ]))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        haus::to_string(&entries).map_err(|e| Error::new(ErrorCode::ImportNotFound, e.to_string()))
     }
 
     /// The one package called `name`.
     pub fn find(&self, name: &str) -> Result<&Package> {
-        match self.0.iter().filter(|p| p.manifest.name == name).collect::<Vec<_>>().as_slice() {
+        match self.packages.iter().filter(|p| p.manifest.name == name).collect::<Vec<_>>().as_slice() {
             [one] => Ok(one),
             [] => Err(Error::new(
                 ErrorCode::ImportNotFound,
@@ -196,21 +275,64 @@ impl Packages {
 
     /// The packages.
     pub fn iter(&self) -> impl Iterator<Item = &Package> {
-        self.0.iter()
+        self.packages.iter()
     }
 
-    /// The files read to find them: each package's manifest and schema file.
-    /// A build script tells Cargo to rerun when one changes (haus-fmt-build
-    /// does); this crate never prints.
+    /// The files read to find them: each package's manifest and schema
+    /// file, and the dependencies' [`GRAPH`]s. A build script tells Cargo to
+    /// rerun when one changes (haus-fmt-build does); this crate never prints.
     pub fn files(&self) -> Vec<PathBuf> {
-        self.0.iter().flat_map(|p| [p.dir.join(MANIFEST), p.dir.join(SCHEMA)]).collect()
+        let own = self.packages.iter().flat_map(|p| [p.dir.join(MANIFEST), p.dir.join(SCHEMA)]);
+        own.chain(self.graphs.iter().cloned()).collect()
     }
 }
 
 impl Locator for Packages {
-    fn locate_in(&self, name: &str, _from: Option<&Path>, _files: &mut FileCache) -> Result<Location> {
-        self.find(name).map(|p| Location { version: p.version.clone(), ..Location::new(&p.dir) })
+    fn locate_in(&self, name: &str, from: Option<&Path>, _files: &mut FileCache) -> Result<Location> {
+        let p = self.find(name)?;
+        // A package's file: its imports were checked when its crate was built.
+        let in_package = from.and_then(Path::parent).is_some_and(|d| self.packages.iter().any(|p| p.dir == d));
+        match &p.through {
+            Some(through) if !in_package => Err(Error::new(
+                ErrorCode::UndeclaredPackage,
+                format!(
+                    "{name} is a dependency of {through}, not of this crate: add the crate that provides it to \
+                     [dependencies] to import it"
+                ),
+            )),
+            _ => Ok(Location { version: p.version.clone(), ..Location::new(&p.dir) }),
+        }
     }
+}
+
+/// An entry of a [`GRAPH`].
+struct Entry {
+    dir: String,
+    krate: String,
+    version: Option<String>,
+}
+
+/// The entries of the [`GRAPH`] at `path`, which a dependency's build script wrote.
+fn read_graph(path: &Path) -> Result<Vec<Entry>> {
+    let text = fs::read_to_string(path).map_err(|e| Error::at(path, ErrorCode::ImportNotFound, e))?;
+    let entries: Vec<BTreeMap<String, String>> =
+        haus::from_str(&text).map_err(|e| Error::at(path, ErrorCode::ImportNotFound, e))?;
+    entries
+        .into_iter()
+        .map(|mut e| {
+            let mut take = |key: &str| e.remove(key);
+            let (dir, krate, version) = (take("dir"), take("krate"), take("version"));
+            match (dir, krate) {
+                (Some(dir), Some(krate)) => Ok(Entry { dir, krate, version }),
+                _ => Err(Error::at(path, ErrorCode::ImportNotFound, "an entry without its dir or krate")),
+            }
+        })
+        .collect()
+}
+
+/// Whether `a` and `b` are the same directory.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || b.canonicalize().is_ok_and(|b| a == b)
 }
 
 impl Package {
@@ -222,10 +344,11 @@ impl Package {
         let text = files.schema(&path, Kind::PackageSchema, || {
             format!("{} has no {SCHEMA} next to its manifest ({})", manifest.name, shown(dir))
         })?;
-        let file = syntax::parse(&text).map_err(|e| Error::from(e).in_file(&path))?;
+        // Its own types are all that is read here: spreads of imported types are left in place.
+        let file = syntax::parse_with_imported_spreads(&text).map_err(|e| Error::from(e).in_file(&path))?;
         imports_no_files(&manifest, &file, &text).map_err(|e| e.in_file(&path))?;
         let types = file.types.into_iter().map(|t| (t.name, t.params.len())).collect();
-        Ok(Package { manifest, dir: dir.to_owned(), krate, version: None, types })
+        Ok(Package { manifest, dir: dir.to_owned(), krate, version: None, types, through: None })
     }
 }
 

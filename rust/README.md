@@ -79,7 +79,14 @@ storage, with the same checks.
 `Encode::encode_with` (and `ToJson::to_json_with`) take a `haus::Encoder`,
 which carries the limits and counts the depth while the native value is
 traversed: a value nested deeper than the limit fails there with the writer's
-error (`[0][0]…: nesting deeper than 256 levels`), however deep it goes. Any
+error (`[0][0]…: nesting deeper than 256 levels`), however deep it goes. It
+also counts the values it makes, against a budget of 16 Mi
+(`Encoder::with_max_steps` sets another): a value whose parts are shared, an
+`Rc` reached many times (a DAG), fails with `step-budget` instead of expanding
+without bound (spec §9.8). `Decode::decode_with` takes a `haus::Decoder` in
+the same way: a `Value` built in code, which no parser limited, fails with
+`nesting-too-deep` at the depth limit before decoding recurses past it, also
+inside an `Any` or the payload of an unknown tag. Any
 other failure comes from a `haus::Value`
 built in code, the raw value of an `Any` or an unknown variant (spec §9.8):
 `Value::Number("abc".into())` is an `EncodeError` (`.extra: not a number
@@ -122,12 +129,44 @@ from `Packages::files()`.
   renamed dependency isn't, and rustc reports `E0433` inside the generated file.
 - Imports are checked as everywhere (spec §13.3): `@org/name@2` with version
   1.4.0 installed is `import-version`, two packages with one name are
-  `duplicate-package`, and only direct dependencies are found (Cargo gives a
-  build script nothing else).
-- A codec applies wherever its type occurs (spec §13.4), but a package
-  crate's types decode their fields themselves: a codec for a type used
-  inside an imported package's type (`@haus-fmt/money@1#Money` inside
-  `@acme/orders@1#Order`) is an error, not applied silently.
+  `duplicate-package`. A crate's own files import only its direct
+  dependencies (`undeclared-package` otherwise); the packages those import
+  are found through them: `haus_build::package()` passes on the packages its
+  schema reaches (`cargo::metadata=haus_graph=…`) and re-exports its
+  dependencies' crates (`__haus_deps`, hidden), so generated code can name
+  `::haus_orders::__haus_deps::haus_ledger::Note` without the crate
+  depending on `haus_ledger`.
+- A codec applies wherever its type occurs (spec §13.4), inside packages'
+  types too: the packages' types that contain the codec's type, directly or
+  not (`@acme/orders@1#Order` with a `@haus-fmt/money@1#Money` inside), are
+  generated again in your crate, one module per package
+  (`order::acme_orders::Order`), with the codec applied. The packages'
+  other types stay their crates' own (`haus_orders::Customer`), so code
+  that uses them works with every crate. Without codecs, nothing is copied,
+  and a type with a codec of its own isn't either: its codec decodes the
+  package's type.
+
+The official profiles (spec §13.3) are codecs of the official crates. They
+reject what the profile rejects and keep the value (spec §13.4):
+
+| Crate | Codec | For | Rust type |
+|---|---|---|---|
+| `haus_money` | `Iso` | `@haus-fmt/money@1#Money` | `IsoMoney { amount: Decimal, currency: CurrencyCode }`: the exact amount, scale kept |
+| `haus_money` | `IsoCurrency` | `@haus-fmt/money@1#Currency` | `CurrencyCode`: three letters A–Z |
+| `haus_geo` | `Wgs84` | `@haus-fmt/geo@1#LatLng` | `Point` (`lat()`, `lng()`): the floats as decoded, `-0` kept |
+| `haus_geo` | `Wgs84BBox` | `@haus-fmt/geo@1#BBox` | `Bounds` (`sw()`, `ne()`, `crosses_antimeridian()`) |
+
+```rust
+haus_build::Config::new()
+    .codec("@haus-fmt/money@1#Money", "haus_money::Iso")
+    .codec("@haus-fmt/money@1#Currency", "haus_money::IsoCurrency")
+    .codec("@haus-fmt/geo@1#LatLng", "haus_geo::Wgs84")
+    .codec("@haus-fmt/geo@1#BBox", "haus_geo::Wgs84BBox")
+    .compile("app.schema.haus")?;
+```
+
+Register both codecs of a package: `Iso` alone leaves a `Currency` outside a
+`Money` unchecked, `Wgs84` alone leaves a `BBox`'s latitude order unchecked.
 
 Streams (spec §6) are read as the values arrive: `haus::stream::decode::<T, _>(reader)`
 is an iterator over any `std::io::Read`, and `haus::stream::encode` writes one value per
@@ -237,6 +276,7 @@ version that takes other limits:
 | | With limits |
 |---|---|
 | haus text | `haus::parse_with`, `haus::stream::Reader::new(Options { limits, .. })`, `stream::values_with` |
+| decoding a `Value` | `Decode::decode_with(&value, Decoder::new(&limits))` |
 | writing for such a reader | `haus::to_string_with`, `haus::ser::write_with`, `stream::encode_with`, `Encode::encode_with(Encoder::new(&limits))` |
 | JSON | `json::parse_with`, `json::write_with`, `json::from_str_with`, `json::to_string_with`, `json::to_haus_json_with`, `json::from_haus_json_with`, `json::import_json_with`, `json::to_self_describing`, `json::from_self_describing`, `json::import`, `FromJson::from_json_with(json, Decoder::new(&limits))` |
 

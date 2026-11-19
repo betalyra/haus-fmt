@@ -1,0 +1,19 @@
+[package]
+name = "haus-test-travel"
+version = "1.0.0"
+description = "@haus-test/travel: a schema package of haus-build-tests (the official profiles' codecs inside another package's types)"
+edition.workspace = true
+publish = false
+# Its library name: crates that depend on it find its schema (haus_build::package).
+links = "haus_test_travel"
+
+[lib]
+name = "haus_test_travel"
+
+[dependencies]
+haus = { package = "haus-fmt", path = "../../../haus" }
+haus-fmt-money = { path = "../../../../extensions/money" }
+haus-fmt-geo = { path = "../../../../extensions/geo" }
+
+[build-dependencies]
+haus-fmt-build = { path = "../../../haus-build" }

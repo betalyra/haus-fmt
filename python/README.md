@@ -248,7 +248,20 @@ s = schema.compile_schema(
 | `DateCodec` | nothing; it rejects the year 0000, which `datetime.date` lacks |
 | `InstantCodec` | fraction digits beyond microseconds, the fraction's spelling (`.25` → `.250000`), `Z` versus `+00:00` (written `Z`); rejects the year 0000 |
 
-A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject. Codecs for your own types use their ids (`my-app/order#Money`).
+A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject. Codecs for your own types use their ids (`my-app/order#Money`). A codec for a type the schema doesn't have is a `ValueError`, except in a `schema.CodecGroup`: codecs given together, such as a profile's, combined with `|`.
+
+The official packages ship the codecs of their profiles: [`haus-fmt-money`](../extensions/money/python) (`haus_money.iso`: currencies are three letters A–Z) and [`haus-fmt-geo`](../extensions/geo/python) (`haus_geo.wgs84`: latitudes and longitudes in range). They keep the value: a currency becomes its tag (`"EUR"`, instead of an `Unknown`), a `LatLng` stays `Tagged("LatLng", (lat, lng))`, `-0.0` included.
+
+```python
+import haus_geo, haus_money
+
+s = schema.load_schema(
+    "order.schema.haus",
+    packages=[haus_money.PACKAGE, haus_geo.PACKAGE],
+    codecs=haus_money.iso | haus_geo.wgs84,
+)
+s["Order"].parse(text)  # Money(1, Eur) or LatLng(91, 0): HausDecodeError
+```
 
 ### Schema files for tools
 

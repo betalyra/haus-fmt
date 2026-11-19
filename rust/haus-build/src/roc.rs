@@ -18,23 +18,50 @@
 //! | `Secret a`                 | `Secret(a)` (`<redacted>` when inspected)     |
 //! | `type Pair a = …`          | `Pair(a)`, with `decode_pair(v, decode_a)`    |
 //!
+//! Records and variants written inline are structural, with helper
+//! functions named after where they are: `decode_order_status`, `…_item`
+//! for an array's items, a map's values or a `Maybe`'s value, `…_err` and
+//! `…_ok` for `Result`'s. `Secret` adds nothing, except as the whole type of
+//! a definition: `type Key = Secret { … }` gives `decode_key_value`.
+//!
 //! Named variants are nominal (`:=`), so they can be recursive, and so are
 //! records and other types that refer to themselves (`Tree := { children :
 //! List(Tree) }`). A type named like a Roc builtin or an imported module
 //! (`List`, `F64`, `Box`, `Value`) gets a `_` at the end in Roc (`List_`);
 //! its functions keep their names (`decode_list`). A codec is a Roc module
-//! with `Target`, `decode : Base -> Try(Target, Str)` and `encode : Target -> Base`.
+//! with `Target`, `decode : Base -> Try(Target, Str)` and `encode : Target -> Base`:
+//! the app's (`Cents`) or a package's (`money.Iso`, imported as `import money.Iso`).
 //!
 //! Roc has no deprecation marker: a `@deprecated` type, field or tag gets a
 //! line in the type's doc comment (`## Deprecated field `mail`: use email.`).
 //!
+//! `decode_<name> : Value -> Try(T, Decode.Error)` checks first that the
+//! value nests at most 256 levels (spec §9.8: a `Value` built in code may be
+//! nested arbitrarily deep, and decoders recurse once per level);
+//! `read_value_<name>` doesn't, and is what the decoders of other types call
+//! (and what to decode with for other limits: `Decode.within_limits`). A
+//! generic type's decoder doesn't check either.
+//!
+//! Encoders take where they are, `encode_<name> : T, Encode.Encoder ->
+//! Try(Encode.Encoded(Value), Encode.Error)` (start with `Encode.top`, or
+//! call `Encode.value(x, encode_<name>)`), and check what they build as the
+//! writer will, at its place (spec §9.8): a container fails with
+//! `nesting-too-deep` at the depth limit before its contents are encoded, so
+//! a deep native value never recurses past it, and an error inside a
+//! `Secret` is reported at the secret, with nothing of the value (§15). They
+//! count the values they make, one step each, and give the count on with the
+//! value: a record's fields, and a tag's arguments, are encoded one after the
+//! other, so that a value whose parts are shared (a DAG) fails with
+//! `step-budget` at `limits.max_steps` instead of expanding without bound.
+//!
 //! With [`RocConfig::json`] (`haus-gen roc --json`), each type also gets
 //! `from_json_<name> : JsonValue -> Try(T, Decode.Error)` and
-//! `to_json_<name> : T -> Try(JsonValue, Encode.Error)` for its schema-based JSON
-//! (spec §16.3). `from_json_<name>` checks that the value it read nests at
-//! most 256 levels as a haus value (§16, "Limits"); `read_json_<name>`
-//! doesn't, and is what the readers of other types call. A generic type's
-//! reader doesn't check either. Whether a `Maybe` writes `None` as `null` depends on whether
+//! `to_json_<name> : T, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)`
+//! for its schema-based JSON (spec §16.3). `from_json_<name>` checks that the
+//! JSON nests at most 4·256 + 1 levels before reading it, and that the value
+//! it read nests at most 256 levels as a haus value (§16, "Limits");
+//! `read_json_<name>` doesn't, and is what the readers of other types call. A
+//! generic type's reader doesn't check either. Whether a `Maybe` writes `None` as `null` depends on whether
 //! its inner type's JSON can be `null`; Roc has no traits, so that is decided
 //! here, and a generic type takes a `Bool` for each parameter
 //! (`from_json_pair(j, from_json_a, nullable_a)`). The schema packages a
@@ -50,7 +77,11 @@
 //! from its directory: `OrderCommon`, `OrderBillingCommon` for
 //! `billing/common.schema.haus`, `OrderUpSharedMoney` for
 //! `../shared/money.schema.haus`; their ids are their paths from there
-//! (`billing/common#Address`).
+//! (`billing/common#Address`). A codec applies inside packages' types too
+//! (spec §13.4): the packages' types that contain its type, directly or
+//! not, are generated again, one module per package (`OrderAcmeOrders` for
+//! `@acme/orders`), with the codec applied; the packages' other types stay
+//! their modules'.
 
 use crate::codegen::unknown_type;
 use crate::graph::{self, Origin, Unit};
@@ -82,7 +113,8 @@ impl RocConfig {
         RocConfig::default()
     }
 
-    /// Use the codec module `module` for the type with this id.
+    /// Use the codec module `module` for the type with this id: a module of
+    /// the app (`Cents`) or of a package it imports (`money.Iso`).
     pub fn codec(mut self, id: impl Into<String>, module: impl Into<String>) -> RocConfig {
         self.codecs.push((id.into(), module.into()));
         self
@@ -132,7 +164,7 @@ impl RocConfig {
             ..LoadOptions::default()
         };
         let loaded = Schema::load_with(schema, &options)?;
-        let units = graph::units(&loaded, self.without_attributes)?;
+        let units = graph::units(&loaded, self.without_attributes, &codec_ids(&self.codecs))?;
         generate_units(&loaded, &units, module, &given, &self.codecs, self.json)
     }
 
@@ -244,12 +276,18 @@ fn generate_text(
     let given = Given::new(packages.iter().map(|p| (p.dir.as_path(), p.krate.as_str())), &[])?;
     let options = LoadOptions { packages: &given.explicit, id: Some(id), ..LoadOptions::default() };
     let loaded = Schema::parse_with(text, &options)?;
-    let units = graph::units(&loaded, false)?;
+    let units = graph::units(&loaded, false, &codec_ids(codecs))?;
     let mut modules = generate_units(&loaded, &units, module, &given, codecs, json)?;
     Ok(modules.remove(0).1)
 }
 
-/// The modules of a schema's files: the root's, named `module`, then one for each file it imports.
+fn codec_ids(codecs: &[(String, String)]) -> Vec<&str> {
+    codecs.iter().map(|(id, _)| id.as_str()).collect()
+}
+
+/// The modules of a schema's files: the root's, named `module`, then one for
+/// each file it imports, and one for each package whose types are copied so
+/// that the codecs apply inside them (the codec closure, spec §13.4).
 fn generate_units(
     schema: &Schema,
     units: &[Unit],
@@ -262,9 +300,7 @@ fn generate_units(
         Some(path) if e.path().is_none() => e.in_file(path),
         _ => e,
     };
-    let owner = |package: &str| format!("the Roc module {}", given.module(package));
-    graph::check_codecs(schema, units, codecs.iter().map(|(id, _)| id.as_str()), owner, "other packages' modules")
-        .map_err(in_root)?;
+    graph::check_codecs(units, codecs.iter().map(|(id, _)| id.as_str())).map_err(in_root)?;
     let names: Vec<String> = std::iter::once(module.to_owned())
         .chain(graph::module_names(&units[1..], &[module], "", |segments| {
             format!("{module}{}", segments.iter().map(|s| pascal(s)).collect::<String>())
@@ -274,8 +310,12 @@ fn generate_units(
     let roc_imports: Vec<Vec<String>> = units
         .iter()
         .map(|unit| {
-            // In the order of the schema's imports.
-            let origins = unit.file.imports.iter().filter_map(|imp| unit.imports.get(&imp.names.first()?.0));
+            // In the order of the schema's imports (the types of one import
+            // may be in two modules: the package's and the codec closure's),
+            // then for the types that entries copied by spreads of imported types name.
+            let imported = unit.file.imports.iter().flat_map(|imp| &imp.names);
+            let origins = imported.filter_map(|(name, _)| unit.imports.get(name));
+            let origins = origins.chain(unit.copied.iter().filter_map(|key| unit.imports.get(key)));
             origins.fold(vec![], |mut imports: Vec<String>, origin| {
                 let module = match origin {
                     Origin::Time => return imports,
@@ -298,23 +338,24 @@ fn generate_units(
             let imports = unit
                 .imports
                 .iter()
-                .map(|(name, origin)| {
+                .map(|(key, origin)| {
+                    let name = graph::type_name(key);
                     let source = match origin {
                         Origin::Time => Source::Time,
                         Origin::Package { package, id, template, .. } => Source::Module {
                             module: package_module(package),
-                            roc: name.clone(),
+                            roc: name.to_owned(),
                             id: id.clone(),
                             template: *template,
                         },
                         Origin::File { unit: to, id, template, .. } => Source::Module {
                             module: names[*to].clone(),
-                            roc: roc_names[*to].get(name).cloned().unwrap_or_else(|| name.clone()),
+                            roc: roc_names[*to].get(name).cloned().unwrap_or_else(|| name.to_owned()),
                             id: id.clone(),
                             template: *template,
                         },
                     };
-                    (name.clone(), source)
+                    (key.clone(), source)
                 })
                 .collect();
             let input = Input {
@@ -386,7 +427,7 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
         .map(|d| format!("{id}#{}", d.name))
         .chain(imports.iter().map(|(n, source)| match source {
             Source::Module { id, .. } => id.clone(),
-            Source::Time => format!("std/time#{n}"),
+            Source::Time => format!("std/time#{}", graph::type_name(n)),
         }))
         .collect();
     // The codecs of its types.
@@ -402,7 +443,7 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
         id,
         defs,
         imports,
-        codecs: codecs.iter().map(|(i, m)| (i.clone(), m.clone())).collect(),
+        codecs: codecs.iter().map(|(i, m)| (i.clone(), codec_name(m).to_owned())).collect(),
         fresh: 0,
         fresh_json: 0,
         helpers: Vec::new(),
@@ -412,6 +453,7 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
         roc_names,
         recursive,
         params: Vec::new(),
+        defining: String::new(),
         json,
         tagged_maybes,
         nullables_used: HashSet::new(),
@@ -427,7 +469,7 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
     // The modules of the codecs it uses.
     let used = |m: &str| items.iter().chain(&g.helpers).any(|i| i.contains(&format!("{m}.")));
     let mut roc_imports = roc_imports.to_vec();
-    for (_, m) in codecs.iter().filter(|(_, m)| used(m)) {
+    for (_, m) in codecs.iter().filter(|(_, m)| used(codec_name(m))) {
         if !roc_imports.contains(m) {
             roc_imports.push(m.clone());
         }
@@ -442,6 +484,12 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+/// The name a codec module is referred to by: `Iso` for `money.Iso` (a
+/// module of the package imported as `money`), which is imported as written.
+fn codec_name(module: &str) -> &str {
+    module.rsplit_once('.').map_or(module, |(_, name)| name)
 }
 
 /// The haus modules every generated module imports.
@@ -463,7 +511,8 @@ enum Source {
     },
 }
 
-/// Decoding or encoding `x`: a function's name, or an expression with `{x}`.
+/// Decoding or encoding `x`: a function's name, or an expression with `{x}`
+/// (and, for encoders and JSON writers, `{e}`: the `Encode.Encoder`).
 #[derive(Clone)]
 enum F {
     Name(String),
@@ -476,6 +525,14 @@ impl F {
         match self {
             F::Name(f) => format!("{f}({arg})"),
             F::Template(t) => t.replace("{x}", arg),
+        }
+    }
+
+    /// An encoder or JSON writer applied to `arg` where the encoder `e` is: `f(arg, e)`.
+    fn apply_at(&self, arg: &str, e: &str) -> String {
+        match self {
+            F::Name(f) => format!("{f}({arg}, {e})"),
+            F::Template(t) => t.replace("{e}", e).replace("{x}", arg),
         }
     }
 }
@@ -551,6 +608,8 @@ struct Gen<'a> {
     recursive: HashSet<String>,
     /// The parameters of the definition being generated, and their names in Roc.
     params: Vec<(String, String)>,
+    /// The name of the definition being generated.
+    defining: String,
     /// Whether to generate `from_json_<name>` and `to_json_<name>`.
     json: bool,
     /// The `Maybe`s that always use the tagged form in JSON, by position.
@@ -642,7 +701,43 @@ impl Gen<'_> {
         })
     }
 
-    /// `f`, a JSON reader or writer, as a function value.
+    /// `f`, a JSON writer, as a function value `|y1, e1| …`.
+    fn json_writer(&mut self, f: &F) -> String {
+        match f {
+            F::Name(n) => n.clone(),
+            F::Template(_) => {
+                self.fresh_json += 1;
+                let n = self.fresh_json;
+                format!("|y{n}, e{n}| {}", f.apply_at(&format!("y{n}"), &format!("e{n}")))
+            }
+        }
+    }
+
+    /// A fresh name for an encoder in a JSON writer.
+    fn json_encoder(&mut self) -> String {
+        self.fresh_json += 1;
+        format!("e{}", self.fresh_json)
+    }
+
+    /// `f`, an encoder, as a function value `|x1, e1| …`.
+    fn encoder(&mut self, f: &F) -> String {
+        match f {
+            F::Name(n) => n.clone(),
+            F::Template(_) => {
+                self.fresh += 1;
+                let n = self.fresh;
+                format!("|x{n}, e{n}| {}", f.apply_at(&format!("x{n}"), &format!("e{n}")))
+            }
+        }
+    }
+
+    /// A fresh name for an encoder in an encoder.
+    fn fresh_encoder(&mut self) -> String {
+        self.fresh += 1;
+        format!("e{}", self.fresh)
+    }
+
+    /// `f`, a JSON reader, as a function value.
     fn json_value(&mut self, f: &F) -> String {
         match f {
             F::Name(n) => n.clone(),
@@ -669,6 +764,7 @@ impl Gen<'_> {
     /// The type, decoder and encoder of a definition.
     fn define(&mut self, def: &TypeDef) -> Result<String> {
         self.params = def.params.iter().map(|p| (p.clone(), self.param_name(p))).collect();
+        self.defining = def.name.clone();
         self.nullables_used.clear();
         let deprecations = deprecations(def);
         let doc: String = def
@@ -720,7 +816,7 @@ impl Gen<'_> {
                 // `type Nested = Array Nested` is `Nested := [Nested(List(Nested))]`.
                 let r = self.lower(ty, &def.name)?;
                 let tag = &def.name;
-                let unwrap = |f: &F| format!("match v {{\n\t\t{tag}(x) => {}\n\t}}", f.apply("x"));
+                let unwrap = |f: &F| format!("match v {{\n\t\t{tag}(x) => {}\n\t}}", f.apply_at("x", "e"));
                 let body = Bodies {
                     de: format!("Ok({tag}({}?))", r.de.apply("v")),
                     en: unwrap(&r.en),
@@ -747,7 +843,7 @@ impl Gen<'_> {
             (true, true) => Json::Unchecked,
             (true, false) => Json::Checked,
         };
-        Ok(functions(&doc, &decl, &snake_name, &head, &body, &p, v, json))
+        Ok(functions(&doc, &decl, &snake_name, &head, &body, &p, v, !params_given, json))
     }
 
     /// A Roc type for a type expression; `hint` names inline types.
@@ -786,12 +882,12 @@ impl Gen<'_> {
             _ => None,
         };
         let (id, base) = if let Some((id, prefix, roc, params)) = named {
-            let s = snake(name);
+            let s = snake(graph::type_name(name));
             if params == 0 {
-                // Its reader without the depth check (see `functions`).
+                // Its decoder and reader without the depth check (see `functions`).
                 let r = R::named(
                     &roc,
-                    &format!("{prefix}decode_{s}"),
+                    &format!("{prefix}read_value_{s}"),
                     &format!("{prefix}encode_{s}"),
                     &format!("{prefix}read_json_{s}"),
                     &format!("{prefix}to_json_{s}"),
@@ -815,26 +911,27 @@ impl Gen<'_> {
                     .map(|(i, a)| self.lower(a, &format!("{hint}{}", i + 1)))
                     .collect::<Result<Vec<_>>>()?;
                 let ty = format!("{roc}({})", rs.iter().map(|r| r.ty.as_str()).collect::<Vec<_>>().join(", "));
-                let (de, en): (Vec<_>, Vec<_>) = rs.iter().map(|r| (self.value(&r.de), self.value(&r.en))).unzip();
+                let (de, en): (Vec<_>, Vec<_>) = rs.iter().map(|r| (self.value(&r.de), self.encoder(&r.en))).unzip();
                 let (from, to): (Vec<_>, Vec<_>) = rs
                     .iter()
                     .map(|r| {
                         let null = self.nullable_code(&r.nullable);
                         (
                             format!("{}, {null}", self.json_value(&r.from_json)),
-                            format!("{}, {null}", self.json_value(&r.to_json)),
+                            format!("{}, {null}", self.json_writer(&r.to_json)),
                         )
                     })
                     .unzip();
                 return Ok(R::new(
                     &ty,
                     F::Template(format!("{prefix}decode_{s}({{x}}, {})", de.join(", "))),
-                    F::Template(format!("{prefix}encode_{s}({{x}}, {})", en.join(", "))),
+                    F::Template(format!("{prefix}encode_{s}({{x}}, {{e}}, {})", en.join(", "))),
                     F::Template(format!("{prefix}from_json_{s}({{x}}, {})", from.join(", "))),
-                    F::Template(format!("{prefix}to_json_{s}({{x}}, {})", to.join(", "))),
+                    F::Template(format!("{prefix}to_json_{s}({{x}}, {{e}}, {})", to.join(", "))),
                 ));
             }
         } else if let Some(Source::Time) = self.imports.get(name) {
+            let name = graph::type_name(name);
             (
                 format!("std/time#{name}"),
                 R::named(
@@ -858,9 +955,9 @@ impl Gen<'_> {
                 R::new(
                     &format!("{codec}.Target"),
                     F::Template(format!("Decode.codec({{x}}, {de}, {codec}.decode)")),
-                    F::Template(base.en.apply(&format!("{codec}.encode({{x}})"))),
+                    F::Template(base.en.apply_at(&format!("{codec}.encode({{x}})"), "{e}")),
                     F::Template(format!("FromJson.codec({{x}}, {from}, {codec}.decode)")),
-                    F::Template(base.to_json.apply(&format!("{codec}.encode({{x}})"))),
+                    F::Template(base.to_json.apply_at(&format!("{codec}.encode({{x}})"), "{e}")),
                 )
             }
         })
@@ -883,7 +980,7 @@ impl Gen<'_> {
             R::new(
                 &ty,
                 F::Name(format!("Decode.{f}")),
-                F::Template("Num({x}.to_str())".into()),
+                F::Template("Encode.number({x}.to_str(), {e})".into()),
                 F::Name(format!("FromJson.{f}")),
                 F::Name(format!("ToJson.{f}")),
             )
@@ -898,16 +995,21 @@ impl Gen<'_> {
             "Any" => R::prelude("Value", "any"),
             "Secret" => {
                 self.uses_secret = true;
-                let a = self.lower(&args[0], hint)?;
-                let (de, en) = (self.value(&a.de), self.value(&a.en));
-                let (from, to) = (self.json_value(&a.from_json), self.json_value(&a.to_json));
+                // It adds nothing to the name, except as the whole type of a
+                // definition, whose name that is: `type Key = Secret { … }` → `KeyValue`.
+                let a = match hint == self.defining {
+                    true => self.lower(&args[0], &format!("{hint}Value"))?,
+                    false => self.lower(&args[0], hint)?,
+                };
+                let (de, en) = (self.value(&a.de), self.encoder(&a.en));
+                let (from, to) = (self.json_value(&a.from_json), self.json_writer(&a.to_json));
                 let what = escape(&format!("Secret {}", args[0]));
                 R::new(
                     &format!("Secret({})", a.ty),
                     F::Template(format!("Decode.secret({{x}}, \"{what}\", {de})")),
-                    F::Template(format!("Encode.secret({{x}}, {en})")),
+                    F::Template(format!("Encode.secret({{x}}, \"{what}\", {{e}}, {en})")),
                     F::Template(format!("FromJson.secret({{x}}, \"{what}\", {from})")),
-                    F::Template(format!("ToJson.secret({{x}}, \"{what}\", {to})")),
+                    F::Template(format!("ToJson.secret({{x}}, \"{what}\", {{e}}, {to})")),
                 )
             }
             "Int" => {
@@ -918,8 +1020,8 @@ impl Gen<'_> {
             "UInt8" | "UInt16" | "UInt32" | "UInt64" => number(format!("U{}", &name[4..])),
             "Array" | "Map" | "Maybe" => {
                 let a = self.lower(&args[0], &format!("{hint}Item"))?;
-                let (de, en) = (self.value(&a.de), self.value(&a.en));
-                let (from, to) = (self.json_value(&a.from_json), self.json_value(&a.to_json));
+                let (de, en) = (self.value(&a.de), self.encoder(&a.en));
+                let (from, to) = (self.json_value(&a.from_json), self.json_writer(&a.to_json));
                 let (ty, helper) = match name {
                     "Array" => (format!("List({})", a.ty), "list"),
                     "Map" => (format!("List((Str, {}))", a.ty), "map"),
@@ -934,23 +1036,24 @@ impl Gen<'_> {
                 R::new(
                     &ty,
                     F::Template(format!("Decode.{helper}({{x}}, {de})")),
-                    F::Template(format!("Encode.{helper}({{x}}, {en})")),
+                    F::Template(format!("Encode.{helper}({{x}}, {{e}}, {en})")),
                     F::Template(format!("FromJson.{helper}({{x}}{null}, {from})")),
-                    F::Template(format!("ToJson.{helper}({{x}}{null}, {to})")),
+                    F::Template(format!("ToJson.{helper}({{x}}, {{e}}{null}, {to})")),
                 )
             }
             "Result" => {
                 let (e, a) =
                     (self.lower(&args[0], &format!("{hint}Err"))?, self.lower(&args[1], &format!("{hint}Ok"))?);
-                let (ade, ede, aen, een) = (self.value(&a.de), self.value(&e.de), self.value(&a.en), self.value(&e.en));
+                let (ade, ede, aen, een) =
+                    (self.value(&a.de), self.value(&e.de), self.encoder(&a.en), self.encoder(&e.en));
                 let (afrom, efrom) = (self.json_value(&a.from_json), self.json_value(&e.from_json));
-                let (ato, eto) = (self.json_value(&a.to_json), self.json_value(&e.to_json));
+                let (ato, eto) = (self.json_writer(&a.to_json), self.json_writer(&e.to_json));
                 R::new(
                     &format!("Try({}, {})", a.ty, e.ty),
                     F::Template(format!("Decode.result({{x}}, {ade}, {ede})")),
-                    F::Template(format!("Encode.result({{x}}, {aen}, {een})")),
+                    F::Template(format!("Encode.result({{x}}, {{e}}, {aen}, {een})")),
                     F::Template(format!("FromJson.result({{x}}, {afrom}, {efrom})")),
-                    F::Template(format!("ToJson.result({{x}}, {ato}, {eto})")),
+                    F::Template(format!("ToJson.result({{x}}, {{e}}, {ato}, {eto})")),
                 )
             }
             _ => {
@@ -993,7 +1096,7 @@ impl Gen<'_> {
         let p = Params::new(passed.iter().map(|p| (p.clone(), true, inner.contains(p))));
         let v = encoded_var(ty);
         let json = if self.json { Json::Unchecked } else { Json::None };
-        self.helpers.push(functions("", "", &s, &rty, &body, &p, v, json));
+        self.helpers.push(functions("", "", &s, &rty, &body, &p, v, false, json));
         Ok(if passed.is_empty() {
             R::named(
                 &rty,
@@ -1007,9 +1110,9 @@ impl Gen<'_> {
             R::new(
                 &rty,
                 F::Template(format!("decode_{s}({{x}}{})", p.de_args)),
-                F::Template(format!("encode_{s}({{x}}{})", p.en_args)),
+                F::Template(format!("encode_{s}({{x}}, {{e}}{})", p.en_args)),
                 F::Template(format!("from_json_{s}({{x}}{from})")),
-                F::Template(format!("to_json_{s}({{x}}{to})")),
+                F::Template(format!("to_json_{s}({{x}}, {{e}}{to})")),
             )
         })
     }
@@ -1042,20 +1145,22 @@ impl Gen<'_> {
         let (decoded, read) = (&parts.decoded, &parts.read);
         let body = Bodies {
             de: format!("{{\n\t\t{fs_name} = Decode.strict_record(v)?\n{}\t\tOk({decoded})\n\t}}", check("Decode")),
-            en: parts.encoded.clone(),
+            en: format!("Encode.record(e, {})", parts.encoded),
             from_json: format!(
                 "{{\n\t\t{fs_name} = FromJson.object(j, \"{}\")?\n{}\t\tOk({read})\n\t}}",
                 escape(owner),
                 check("FromJson")
             ),
-            to_json: format!("ToJson.object([{}])", parts.written),
+            to_json: format!("ToJson.object(e, {})", parts.written),
         };
         Ok((parts.ty, body))
     }
 
     /// A record's type, its `{ … }` built from `fs` (a list of fields of a
-    /// haus record or a JSON object), `Encode.record([…])` of the record
-    /// `var`, and the fields of `ToJson.object([…])`.
+    /// haus record or a JSON object), and the fields of the record `var`
+    /// encoded and written as JSON inside it, each after the one before:
+    /// `[("id", Encode.required(v.id, Encode.int)), ("n", Present(|e1| …)), …]`, for
+    /// `Encode.record(e, …)` and `ToJson.object(e, …)`.
     fn record_parts(&mut self, fs: &[(String, &'static str, &Field, R)], var: &str) -> RecordParts {
         let ty = fs
             .iter()
@@ -1082,25 +1187,33 @@ impl Gen<'_> {
             .collect::<Vec<_>>()
             .join(", ");
         let mut write = |m: &str, f: &dyn Fn(&R) -> &F| {
-            fs.iter()
+            let json = m == "ToJson";
+            let fields = fs
+                .iter()
                 .map(|(n, _, field, r)| {
                     let key = escape(&field.key);
-                    if field.optional {
-                        let en = if m == "ToJson" { self.json_value(f(r)) } else { self.value(f(r)) };
-                        format!("(\"{key}\", {m}.optional({var}.{n}, {en}))")
-                    } else {
-                        format!("(\"{key}\", Present({}))", f(r).apply(&format!("{var}.{n}")))
+                    match (field.optional, f(r)) {
+                        (false, F::Template(_)) => {
+                            let e = if json { self.json_encoder() } else { self.fresh_encoder() };
+                            format!("(\"{key}\", Present(|{e}| {}))", f(r).apply_at(&format!("{var}.{n}"), &e))
+                        }
+                        (optional, en) => {
+                            let en = if json { self.json_writer(en) } else { self.encoder(en) };
+                            let how = if optional { "optional" } else { "required" };
+                            format!("(\"{key}\", {m}.{how}({var}.{n}, {en}))")
+                        }
                     }
                 })
                 .collect::<Vec<_>>()
-                .join(", ")
+                .join(", ");
+            format!("[{fields}]")
         };
         let encoded = write("Encode", &|r| &r.en);
         let written = write("ToJson", &|r| &r.to_json);
         RecordParts {
             ty: format!("{{ {ty} }}"),
             decoded: format!("{{ {decoded} }}"),
-            encoded: format!("Encode.record([{encoded}])"),
+            encoded,
             read: format!("{{ {read} }}"),
             written,
         }
@@ -1136,17 +1249,17 @@ impl Gen<'_> {
                 [] => {
                     tags.push(tag.clone());
                     de.push(format!("Tag(\"{tag}\", []) => Ok({tag})"));
-                    en.push(format!("{tag} => Tag(\"{tag}\", [])"));
+                    en.push(format!("{tag} => Encode.tag(\"{tag}\", e)"));
                     arity.push(format!("Tag(\"{tag}\", _) => Decode.arity(\"{tag}\", 0)"));
                     if names_only {
                         from.push(format!("\"{tag}\" => Ok({tag})"));
-                        to.push(format!("{tag} => ToJson.tag_name(\"{tag}\")"));
+                        to.push(format!("{tag} => ToJson.tag_name(\"{tag}\", e)"));
                     } else {
                         reads_members = true;
                         from.push(format!(
                             "\"{tag}\" => match FromJson.args(ms, 0)? {{\n\t\t\t[] => Ok({tag})\n\t\t\t_ => FromJson.arity(\"{tag}\", 0)\n\t\t}}"
                         ));
-                        to.push(format!("{tag} => ToJson.tagged(\"{tag}\", [])"));
+                        to.push(format!("{tag} => ToJson.tag(\"{tag}\", e)"));
                     }
                 }
                 [Ty::Record { closed: rc, fields, .. }] => {
@@ -1162,7 +1275,7 @@ impl Gen<'_> {
                     de.push(format!(
                         "Tag(\"{tag}\", [p]) => Decode.payload(\"{tag}\", p, |{fs_arg}| {{\n\t\t\t{check}Ok({tag}({decoded}))\n\t\t}})"
                     ));
-                    en.push(format!("{tag}({r}) => Tag(\"{tag}\", [{}])", parts.encoded));
+                    en.push(format!("{tag}({r}) => Encode.tagged_record(\"{tag}\", e, {})", parts.encoded));
                     arity.push(format!("Tag(\"{tag}\", _) => Decode.arity(\"{tag}\", 1)"));
                     // A field named `_tag` or `_args` has no schema-based form (spec §16.3).
                     if let Some(f) = fields.iter().find(|f| f.key == "_tag" || f.key == "_args") {
@@ -1182,7 +1295,7 @@ impl Gen<'_> {
                         reads_members |= *rc || !fields.is_empty();
                         let read = parts.read.replace("(fs, ", "(ms, ");
                         from.push(format!("\"{tag}\" => {{\n{check}\t\t\tOk({tag}({read}))\n\t\t}}"));
-                        to.push(format!("{tag}({r}) => ToJson.tagged_object(\"{tag}\", [{}])", parts.written));
+                        to.push(format!("{tag}({r}) => ToJson.tagged_object(\"{tag}\", e, {})", parts.written));
                     }
                 }
                 // A record case by name (spec §15): `Wrap Box` is `Wrap(Box)` in Roc, and
@@ -1193,7 +1306,11 @@ impl Gen<'_> {
                     tags.push(format!("{tag}({})", r.ty));
                     let f = self.value(&r.de);
                     de.push(format!("Tag(\"{tag}\", [p]) => Ok({tag}(Decode.record_arg(\"{tag}\", p, {f})?))"));
-                    en.push(format!("{tag}(a0) => Tag(\"{tag}\", [{}])", r.en.apply("a0")));
+                    let inner = self.fresh_encoder();
+                    en.push(format!(
+                        "{tag}(a0) => Encode.tagged(\"{tag}\", e, |{inner}| {})",
+                        r.en.apply_at("a0", &inner)
+                    ));
                     arity.push(format!("Tag(\"{tag}\", _) => Decode.arity(\"{tag}\", 1)"));
                     match reserved {
                         // A field named `_tag` or `_args` has no schema-based form (spec §16.3).
@@ -1205,7 +1322,11 @@ impl Gen<'_> {
                             reads_members = true;
                             let f = self.json_value(&r.from_json);
                             from.push(format!("\"{tag}\" => Ok({tag}(FromJson.record_case(ms, {f})?))"));
-                            to.push(format!("{tag}(a0) => ToJson.record_case(\"{tag}\", {})", r.to_json.apply("a0")));
+                            let inner = self.json_encoder();
+                            to.push(format!(
+                                "{tag}(a0) => ToJson.record_case(\"{tag}\", e, |{inner}| {})",
+                                r.to_json.apply_at("a0", &inner)
+                            ));
                         }
                     }
                 }
@@ -1231,8 +1352,23 @@ impl Gen<'_> {
                         .collect::<Vec<_>>()
                         .join(", ");
                     de.push(format!("Tag(\"{tag}\", [{}]) => Ok({tag}({values}))", vars.join(", ")));
-                    let encoded = rs.iter().zip(&vars).map(|(r, var)| r.en.apply(var)).collect::<Vec<_>>().join(", ");
-                    en.push(format!("{tag}({}) => Tag(\"{tag}\", [{encoded}])", vars.join(", ")));
+                    // One argument is the tag's payload; two or more are a list of
+                    // encoders, each run after the one before.
+                    let (en_f, to_f) = match n {
+                        1 => ("Encode.tagged", "ToJson.tagged"),
+                        _ => ("Encode.tagged_args", "ToJson.tagged_args"),
+                    };
+                    let encoded = rs
+                        .iter()
+                        .zip(&vars)
+                        .map(|(r, var)| {
+                            let inner = self.fresh_encoder();
+                            format!("|{inner}| {}", r.en.apply_at(var, &inner))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let encoded = if n == 1 { encoded } else { format!("[{encoded}]") };
+                    en.push(format!("{tag}({}) => {en_f}(\"{tag}\", e, {encoded})", vars.join(", ")));
                     arity.push(format!("Tag(\"{tag}\", _) => Decode.arity(\"{tag}\", {n})"));
                     let read = rs
                         .iter()
@@ -1249,9 +1385,17 @@ impl Gen<'_> {
                         "\"{tag}\" => match FromJson.args(ms, {n})? {{\n\t\t\t[{}] => Ok({tag}({read}))\n\t\t\t_ => FromJson.arity(\"{tag}\", {n})\n\t\t}}",
                         vars.join(", ")
                     ));
-                    let written =
-                        rs.iter().zip(&vars).map(|(r, var)| r.to_json.apply(var)).collect::<Vec<_>>().join(", ");
-                    to.push(format!("{tag}({}) => ToJson.tagged(\"{tag}\", [{written}])", vars.join(", ")));
+                    let written = rs
+                        .iter()
+                        .zip(&vars)
+                        .map(|(r, var)| {
+                            let inner = self.json_encoder();
+                            format!("|{inner}| {}", r.to_json.apply_at(var, &inner))
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let written = if n == 1 { written } else { format!("[{written}]") };
+                    to.push(format!("{tag}({}) => {to_f}(\"{tag}\", e, {written})", vars.join(", ")));
                 }
             }
         }
@@ -1265,9 +1409,9 @@ impl Gen<'_> {
             tags.push("Unknown(Str, List(Value))".into());
             de.extend(arity);
             de.push("Tag(tag, args) => Ok(Unknown(tag, args))".into());
-            en.push("Unknown(tag, args) => Tag(tag, args)".into());
+            en.push("Unknown(tag, args) => Encode.unknown(tag, args, e)".into());
             from.push("_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))".into());
-            to.push("Unknown(tag, args) => ToJson.unknown(tag, args)".into());
+            to.push("Unknown(tag, args) => ToJson.unknown(tag, args, e)".into());
         }
         de.push(format!("_ => Decode.expected(\"a variant ({owner})\", v)"));
         let arms = |arms: &[String], indent: &str| arms.iter().map(|a| format!("{indent}{a}\n")).collect::<String>();
@@ -1311,9 +1455,9 @@ impl Bodies {
     fn of(r: &R) -> Bodies {
         Bodies {
             de: r.de.apply("v"),
-            en: r.en.apply("v"),
+            en: r.en.apply_at("v", "e"),
             from_json: r.from_json.apply("j"),
-            to_json: r.to_json.apply("v"),
+            to_json: r.to_json.apply_at("v", "e"),
         }
     }
 }
@@ -1341,19 +1485,44 @@ enum Json {
 /// A type's (or a helper's) functions: `decode_<s>` and `encode_<s>`, and
 /// with `json` `from_json_<s>` and `to_json_<s>`, after `doc` and `decl`.
 ///
-/// The haus value read from schema-based JSON must nest at most 256 levels (spec
-/// §16, "Limits"), and only the value as a whole can be measured: so the
-/// `from_json_<s>` of a type without parameters encodes its result and
-/// measures it (`FromJson.within_depth`), and calls `read_json_<s>`, which
-/// doesn't, as the readers of other types do.
+/// A `Value` built in code may nest deeper than any parser takes, and
+/// decoders recurse once per level: so the `decode_<s>` of a type without
+/// parameters (`checked`) checks the value's depth first, without recursion
+/// (`Decode.within_depth`, spec §9.8), and calls `read_value_<s>`, which
+/// doesn't, as the decoders of other types do. In the same way, the haus
+/// value read from schema-based JSON must nest at most 256 levels (spec §16,
+/// "Limits"), and only the value as a whole can be measured: so the
+/// `from_json_<s>` of a type without parameters checks the JSON's depth,
+/// calls `read_json_<s>`, which doesn't, as the readers of other types do,
+/// and encodes its result and measures it (`FromJson.within_depth`).
 #[allow(clippy::too_many_arguments)]
-fn functions(doc: &str, decl: &str, s: &str, head: &str, body: &Bodies, p: &Params, v: &str, json: Json) -> String {
+fn functions(
+    doc: &str,
+    decl: &str,
+    s: &str,
+    head: &str,
+    body: &Bodies,
+    p: &Params,
+    v: &str,
+    checked: bool,
+    json: Json,
+) -> String {
     let decl = if decl.is_empty() { String::new() } else { format!("\t{decl}\n\n") };
     let Bodies { de, en, from_json, to_json } = body;
+    let decoders = match checked {
+        true => format!(
+            "\tdecode_{s} : Value -> Try({head}, Decode.Error)\n\tdecode_{s} = |v| Decode.within_depth(v, read_value_{s})\n\n\
+             \tread_value_{s} : Value -> Try({head}, Decode.Error)\n\tread_value_{s} = |v| {de}\n\n"
+        ),
+        false => format!(
+            "\tdecode_{s} : Value{} -> Try({head}, Decode.Error)\n\tdecode_{s} = |v{}| {de}\n\n",
+            p.de_types, p.de_args
+        ),
+    };
     let mut out = format!(
-        "{doc}{decl}\tdecode_{s} : Value{} -> Try({head}, Decode.Error)\n\tdecode_{s} = |v{}| {de}\n\n\
-         \tencode_{s} : {head}{} -> Value\n\tencode_{s} = |{v}{}| {en}\n",
-        p.de_types, p.de_args, p.en_types, p.en_args
+        "{doc}{decl}{decoders}\tencode_{s} : {head}, Encode.Encoder{} -> Try(Encode.Encoded(Value), Encode.Error)\n\
+         \tencode_{s} = |{v}, e{}| {en}\n",
+        p.en_types, p.en_args
     );
     match json {
         Json::None => {}
@@ -1361,7 +1530,7 @@ fn functions(doc: &str, decl: &str, s: &str, head: &str, body: &Bodies, p: &Para
             let _ = write!(
                 out,
                 "\n\tfrom_json_{s} : JsonValue{} -> Try({head}, Decode.Error)\n\tfrom_json_{s} = |j{}| {from_json}\n\n\
-                 \tto_json_{s} : {head}{} -> Try(JsonValue, Encode.Error)\n\tto_json_{s} = |{v}{}| {to_json}\n",
+                 \tto_json_{s} : {head}, Encode.Encoder{} -> Try(Encode.Encoded(JsonValue), Encode.Error)\n\tto_json_{s} = |{v}, e{}| {to_json}\n",
                 p.from_types, p.from_args, p.to_types, p.to_args
             );
         }
@@ -1369,9 +1538,9 @@ fn functions(doc: &str, decl: &str, s: &str, head: &str, body: &Bodies, p: &Para
             let _ = write!(
                 out,
                 "\n\tfrom_json_{s} : JsonValue -> Try({head}, Decode.Error)\n\
-                 \tfrom_json_{s} = |j| FromJson.within_depth(read_json_{s}(j), encode_{s})\n\n\
+                 \tfrom_json_{s} = |j| FromJson.within_depth(j, read_json_{s}, encode_{s})\n\n\
                  \tread_json_{s} : JsonValue -> Try({head}, Decode.Error)\n\tread_json_{s} = |j| {from_json}\n\n\
-                 \tto_json_{s} : {head} -> Try(JsonValue, Encode.Error)\n\tto_json_{s} = |{v}| {to_json}\n",
+                 \tto_json_{s} : {head}, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)\n\tto_json_{s} = |{v}, e| {to_json}\n",
             );
         }
     }
@@ -1403,11 +1572,12 @@ impl Params {
             let null = if null_used { "" } else { "_" };
             let _ = write!(p.de_types, ", (Value -> Try({name}, Decode.Error))");
             let _ = write!(p.de_args, ", {unused}decode_{name}");
-            let _ = write!(p.en_types, ", ({name} -> Value)");
+            let _ = write!(p.en_types, ", ({name}, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error))");
             let _ = write!(p.en_args, ", {unused}encode_{name}");
             let _ = write!(p.from_types, ", (JsonValue -> Try({name}, Decode.Error)), Bool");
             let _ = write!(p.from_args, ", {unused}from_json_{name}, {null}nullable_{name}");
-            let _ = write!(p.to_types, ", ({name} -> Try(JsonValue, Encode.Error)), Bool");
+            let _ =
+                write!(p.to_types, ", ({name}, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool");
             let _ = write!(p.to_args, ", {unused}to_json_{name}, {null}nullable_{name}");
             p
         })
@@ -1575,8 +1745,24 @@ fn quoted(fields: &[Field]) -> String {
     fields.iter().map(|f| format!("\"{}\"", escape(&f.key))).collect::<Vec<_>>().join(", ")
 }
 
+/// `s` inside a Roc string literal: `\`, `"` and `$` escaped, and control
+/// characters (a key may hold any, spec §4) as `\n`, `\r`, `\t` or `\u(…)`.
 fn escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")
+    s.chars().fold(String::new(), |mut out, c| {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '$' => out.push_str("\\$"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u({:X})", u32::from(c));
+            }
+            c => out.push(c),
+        }
+        out
+    })
 }
 
 /// `deliverTo` → `DeliverTo`, `money` → `Money`.
@@ -1645,7 +1831,7 @@ mod tests {
     fn names_of_roc_builtins_get_an_underscore() {
         let code = roc("type F64 = Float64\ntype Box = { w: Int }\ntype Value = Box");
         assert!(code.contains("F64_ : F64") && code.contains("Box_ : { w : Int }"), "{code}");
-        assert!(code.contains("Value_ : Box_") && code.contains("decode_value = |v| decode_box(v)"), "{code}");
+        assert!(code.contains("Value_ : Box_") && code.contains("read_value_value = |v| read_value_box(v)"), "{code}");
     }
 
     #[test]
@@ -1655,8 +1841,17 @@ mod tests {
             code.contains("decode_pair : Value, (Value -> Try(a, Decode.Error)) -> Try(Pair(a), Decode.Error)"),
             "{code}"
         );
-        assert!(code.contains("encode_pair : Pair(a), (a -> Value) -> Value"), "{code}");
-        assert!(code.contains("decode_ints = |v| decode_pair(v, Decode.int)"), "{code}");
+        assert!(
+            code.contains(
+                "encode_pair : Pair(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)"
+            ),
+            "{code}"
+        );
+        assert!(code.contains("encode_ints = |v, e| encode_pair(v, e, Encode.int)"), "{code}");
+        // A type without parameters checks the depth first; a generic one can't recurse unchecked on its own.
+        assert!(code.contains("decode_ints = |v| Decode.within_depth(v, read_value_ints)"), "{code}");
+        assert!(code.contains("read_value_ints = |v| decode_pair(v, Decode.int)"), "{code}");
+        assert!(!code.contains("read_value_pair"), "{code}");
     }
 
     #[test]
@@ -1669,7 +1864,12 @@ mod tests {
             "{code}"
         );
         assert!(code.contains("Decode.field(fs, \"extra\", Decode.any)?"), "{code}");
-        assert!(code.contains("(\"key\", Present(Encode.secret(v.key, Encode.str)))"), "{code}");
+        // Encoders know where they are (`e`), and a secret's encoder its type, for its errors.
+        assert!(code.contains("encode_a = |v, e| Encode.record(e, [(\"key\", Present(|e6| Encode.secret(v.key, \"Secret String\", e6, Encode.str))), "), "{code}");
+        assert!(
+            code.contains("|x3, e3| Encode.secret(x3, \"Secret UInt16\", e3, |x1, e1| Encode.number(x1.to_str(), e1))"),
+            "{code}"
+        );
         assert!(!roc("type A = Int").contains("haus.Secret"));
     }
 
@@ -1717,7 +1917,10 @@ mod tests {
         let code = json("type A = { x: Int32, y?: Maybe Int64 }");
         assert!(code.contains("import haus.JsonValue\nimport haus.FromJson\nimport haus.ToJson\n"), "{code}");
         assert!(code.contains("from_json_a : JsonValue -> Try(A, Decode.Error)"), "{code}");
-        assert!(code.contains("to_json_a : A -> Try(JsonValue, Encode.Error)"), "{code}");
+        assert!(
+            code.contains("to_json_a : A, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)"),
+            "{code}"
+        );
         assert!(
             code.contains("FromJson.optional_field(fs, \"y\", |y1| FromJson.maybe(y1, False, FromJson.i64))?"),
             "{code}"
@@ -1742,11 +1945,12 @@ mod tests {
         );
         assert!(
             code.contains("tag = FromJson.tag_name(j, \"Level\")?")
-                && code.contains("Debug => ToJson.tag_name(\"Debug\")")
+                && code.contains("Debug => ToJson.tag_name(\"Debug\", e)")
         );
         assert!(code.contains("\"Circle\" => FromJson.no_json_form(\"Circle\", \"_tag\")"), "{code}");
         assert!(code.contains("Run(_) => ToJson.no_json_form(\"Run\", \"_args\")"), "{code}");
-        assert!(code.contains("Wrap(a0) => ToJson.tagged(\"Wrap\", [ToJson.i32(a0)])"), "{code}");
+        assert!(code.contains("Wrap(a0) => ToJson.tagged(\"Wrap\", e, |e"), "{code}");
+        assert!(code.contains("Unknown(tag, args) => ToJson.unknown(tag, args, e)"), "{code}");
         assert!(code.contains("_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))"), "{code}");
     }
 
@@ -1762,7 +1966,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("{e}"));
         // A type without parameters measures what it read; the readers of
         // other types, and its own, call the one that doesn't.
-        assert!(code.contains("from_json_l = |j| FromJson.within_depth(read_json_l(j), encode_l)"), "{code}");
+        assert!(code.contains("from_json_l = |j| FromJson.within_depth(j, read_json_l, encode_l)"), "{code}");
         assert!(code.contains("read_json_l = |j| Ok(L(FromJson.maybe(j, True, read_json_l)?))"), "{code}");
         assert!(code.contains("read_json_q = |j| from_json_p(j, read_json_l, False)"), "{code}");
         // A generic type can't encode its parameters, so it doesn't.

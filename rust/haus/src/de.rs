@@ -11,10 +11,12 @@ type R<T> = Result<T, DecodeError>;
 
 /// Where a value is read with a type, as [`Encoder`](crate::Encoder) is
 /// where one is written: the limits of the reader, and how many containers
-/// (records, arrays, payloads) the value is inside. Reading schema-based JSON
-/// ([`FromJson`](crate::FromJson)) takes one, and reading a container takes
-/// [`Decoder::nested`], so that JSON nested deeper than the depth limit fails
-/// there instead of recursing on.
+/// (records, arrays, payloads) the value is inside, counted as the parser
+/// counts them. Decoding ([`Decode`]) and reading schema-based JSON
+/// ([`FromJson`](crate::FromJson)) take one, and reading a container takes
+/// [`Decoder::nested`], so that a value nested deeper than the depth limit
+/// (a [`Value`] or [`Json`](crate::Json) built in code may be nested
+/// arbitrarily deep) fails there instead of recursing on (spec §9.8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Decoder {
     limits: Limits,
@@ -23,12 +25,15 @@ pub struct Decoder {
     /// case whose record is a named type, spec §16.3): `"_tag"` is not one of
     /// its fields. Only the next object read takes it.
     in_tag: bool,
+    /// The value is a tag's only argument: a record here is `Tag { … }`,
+    /// inside the payload's level rather than one more (§7).
+    payload: bool,
 }
 
 impl Decoder {
     /// At the top, for a reader with `limits`.
     pub fn new(limits: &Limits) -> Decoder {
-        Decoder { limits: *limits, depth: 0, in_tag: false }
+        Decoder { limits: *limits, depth: 0, in_tag: false, payload: false }
     }
 
     pub fn limits(&self) -> &Limits {
@@ -43,7 +48,33 @@ impl Decoder {
     /// Inside one more container, if the depth limit allows it. Fails too
     /// if the limit is more than [`crate::MAX_SUPPORTED_DEPTH`].
     pub fn nested(self) -> R<Decoder> {
-        crate::json::open(&self.limits, self.depth).map(|depth| Decoder { depth, in_tag: false, ..self })
+        crate::json::open(&self.limits, self.depth).map(|depth| Decoder {
+            depth,
+            in_tag: false,
+            payload: false,
+            ..self
+        })
+    }
+
+    /// Inside a tag's only argument: like [`Decoder::nested`], but a record
+    /// right inside takes no level of its own (`Tag { … }`).
+    pub fn payload(self) -> R<Decoder> {
+        self.nested().map(|d| Decoder { payload: true, ..d })
+    }
+
+    /// Inside a record or map: one more level, unless the record is a tag's
+    /// only argument and so shares its level.
+    pub fn record_level(self) -> R<Decoder> {
+        match self.payload {
+            true => Ok(Decoder { payload: false, ..self }),
+            false => self.nested(),
+        }
+    }
+
+    /// Inside the arguments of a tag with `n` of them: [`Decoder::payload`]
+    /// for one, [`Decoder::nested`] for more.
+    pub fn args(self, n: usize) -> R<Decoder> {
+        if n == 1 { self.payload() } else { self.nested() }
     }
 
     /// For the record of a record case (spec §15) whose record is a named
@@ -60,8 +91,53 @@ impl Decoder {
 }
 
 /// A Rust type that a haus value decodes to.
+///
+/// Decoding checks the nesting depth as it goes, for a reader with the
+/// limits of a [`Decoder`] (spec §7, §9.8): before each container, so that
+/// a [`Value`] built in code nested deeper than the limit fails with
+/// `nesting-too-deep` instead of recursing on, also inside an `Any`.
 pub trait Decode: Sized {
-    fn decode(v: &Value) -> R<Self>;
+    /// The value, decoded at `d`'s depth, for a reader with `d`'s limits.
+    fn decode_with(v: &Value, d: Decoder) -> R<Self>;
+
+    /// The value, decoded for a reader with the default limits.
+    fn decode(v: &Value) -> R<Self> {
+        Self::decode_with(v, Decoder::default())
+    }
+}
+
+/// Whether `v` nests within the depth limit at `d` (a raw value kept as it
+/// is: an `Any`, or the payload of an unknown tag), counted as the writer
+/// counts it. Stops at the limit, so it recurses at most that deep.
+pub fn within_depth(v: &Value, d: Decoder) -> R<()> {
+    match v {
+        Value::Array(items) => {
+            let inner = d.nested()?;
+            items.iter().enumerate().try_for_each(|(i, x)| within_depth(x, inner).map_err(|e| e.index(i)))
+        }
+        Value::Record(fields) => {
+            let inner = d.record_level()?;
+            fields.iter().try_for_each(|(k, x)| within_depth(x, inner).map_err(|e| e.field(k)))
+        }
+        Value::Variant { tag, args } => args_within_depth(tag, args, d),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the arguments of `tag` nest within the depth limit at `d`, the
+/// variant's place: a record payload's fields are steps from the tag.
+fn args_within_depth(tag: &str, args: &[Value], d: Decoder) -> R<()> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    let inner = d.args(args.len())?;
+    match args {
+        [Value::Record(fields)] => {
+            let inner = inner.record_level()?;
+            fields.iter().try_for_each(|(k, x)| within_depth(x, inner).map_err(|e| e.field(k).tag(tag)))
+        }
+        _ => args.iter().enumerate().try_for_each(|(i, x)| within_depth(x, inner).map_err(|e| e.index(i).tag(tag))),
+    }
 }
 
 /// What a value is, for messages: `a string`, `the tag Open`.
@@ -111,14 +187,17 @@ pub struct Record<'a> {
     index: HashMap<&'a str, &'a Value>,
     /// The payload of this tag, for error paths.
     tag: Option<&'a str>,
+    /// Where the fields are: inside the record.
+    d: Decoder,
 }
 
 impl<'a> Record<'a> {
-    /// `v` as a record; `what` names the expected type in errors.
-    pub fn new(v: &'a Value, what: &str) -> R<Record<'a>> {
+    /// `v` as a record, at `d`; `what` names the expected type in errors.
+    pub fn new(v: &'a Value, d: Decoder, what: &str) -> R<Record<'a>> {
         match v {
             Value::Record(fields) => {
-                Ok(Record { fields, index: fields.iter().map(|(k, v)| (k.as_str(), v)).collect(), tag: None })
+                let index = fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
+                Ok(Record { fields, index, tag: None, d: d.record_level()? })
             }
             _ => Err(mismatch(&format!("a record ({what})"), v)),
         }
@@ -142,9 +221,9 @@ impl<'a> Record<'a> {
         }
     }
 
-    pub fn required<T>(&self, key: &str, f: impl FnOnce(&Value) -> R<T>) -> R<T> {
+    pub fn required<T>(&self, key: &str, f: impl FnOnce(&Value, Decoder) -> R<T>) -> R<T> {
         match self.index.get(key) {
-            Some(v) => f(v).map_err(|e| self.at(e.field(key))),
+            Some(v) => f(v, self.d).map_err(|e| self.at(e.field(key))),
             None => {
                 let e = DecodeError::new(Code::MissingField, format!("missing field {key}"));
                 Err(self.at(e.with_expected(format!("the field '{key}'"))))
@@ -153,8 +232,8 @@ impl<'a> Record<'a> {
     }
 
     /// `key?: T`: the field may be missing.
-    pub fn optional<T>(&self, key: &str, f: impl FnOnce(&Value) -> R<T>) -> R<Option<T>> {
-        self.index.get(key).map(|v| f(v).map_err(|e| self.at(e.field(key)))).transpose()
+    pub fn optional<T>(&self, key: &str, f: impl FnOnce(&Value, Decoder) -> R<T>) -> R<Option<T>> {
+        self.index.get(key).map(|v| f(v, self.d).map_err(|e| self.at(e.field(key)))).transpose()
     }
 }
 
@@ -214,23 +293,29 @@ pub fn record_hint(tag: &str, record: &str) -> String {
     format!("{tag} takes one argument, a record{record}: write `{tag} {{ … }}`.")
 }
 
-/// Decode payload value `i` of `tag`.
-pub fn arg<T>(tag: &str, i: usize, v: &Value, f: impl FnOnce(&Value) -> R<T>) -> R<T> {
-    f(v).map_err(|e| e.index(i).tag(tag))
+/// Decode payload value `i` of `tag`, one of `N`, whose variant is at `d`.
+pub fn arg<const N: usize, T>(
+    tag: &str,
+    i: usize,
+    v: &Value,
+    d: Decoder,
+    f: impl FnOnce(&Value, Decoder) -> R<T>,
+) -> R<T> {
+    f(v, d.args(N)?).map_err(|e| e.index(i).tag(tag))
 }
 
-/// The record payload of `Tag { … }`.
-pub fn payload<'a>(tag: &'a str, args: &'a [Value]) -> R<Record<'a>> {
-    record_payload(tag, args, "")
+/// The record payload of `Tag { … }`, whose variant is at `d`.
+pub fn payload<'a>(tag: &'a str, args: &'a [Value], d: Decoder) -> R<Record<'a>> {
+    record_payload(tag, args, d, "")
 }
 
 /// The record payload of `Tag { … }`, whose record type the schema writes
 /// `record` (`{ r: Float64 }`, for the hint; `""` if not known). Anything
 /// but one record, `Circle(1.5)` too, is the wrong payload (spec §15),
 /// reported at the variant.
-pub fn record_payload<'a>(tag: &'a str, args: &'a [Value], record: &str) -> R<Record<'a>> {
+pub fn record_payload<'a>(tag: &'a str, args: &'a [Value], d: Decoder, record: &str) -> R<Record<'a>> {
     match args {
-        [v @ Value::Record(_)] => Record::new(v, tag).map(|r| Record { tag: Some(tag), ..r }),
+        [v @ Value::Record(_)] => Record::new(v, d.payload()?, tag).map(|r| Record { tag: Some(tag), ..r }),
         _ => Err(not_one_record(tag, args, record)),
     }
 }
@@ -240,9 +325,15 @@ pub fn record_payload<'a>(tag: &'a str, args: &'a [Value], record: &str) -> R<Re
 /// `Tag { … }`, so anything but one record, `Wrap(1)` too, is the wrong
 /// payload, and errors in the record are at the variant's place. `record`
 /// names the type for the hint (`""` if not known).
-pub fn record_arg<T>(tag: &str, args: &[Value], record: &str, f: impl FnOnce(&Value) -> R<T>) -> R<T> {
+pub fn record_arg<T>(
+    tag: &str,
+    args: &[Value],
+    d: Decoder,
+    record: &str,
+    f: impl FnOnce(&Value, Decoder) -> R<T>,
+) -> R<T> {
     match args {
-        [v @ Value::Record(_)] => f(v).map_err(|e| e.tag(tag)),
+        [v @ Value::Record(_)] => f(v, d.payload()?).map_err(|e| e.tag(tag)),
         _ => Err(not_one_record(tag, args, record)),
     }
 }
@@ -279,6 +370,12 @@ impl Unknown {
     }
 }
 
+/// A tag an open variant at `d` doesn't list, kept as it was if its payload
+/// nests within the depth limit (see [`within_depth`]).
+pub fn unknown(tag: &str, args: &[Value], d: Decoder) -> R<Unknown> {
+    args_within_depth(tag, args, d).map(|()| Unknown::new(tag, args))
+}
+
 /// `< >`: a variant with any tag. A bare tag is its name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnyTag {
@@ -297,44 +394,55 @@ impl std::fmt::Display for AnyTag {
 }
 
 impl Decode for AnyTag {
-    fn decode(v: &Value) -> R<Self> {
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
         let (tag, args) = variant(v, "a tag")?;
-        Ok(if args.is_empty() { AnyTag::Bare(tag.to_owned()) } else { AnyTag::Other(Unknown::new(tag, args)) })
+        Ok(if args.is_empty() { AnyTag::Bare(tag.to_owned()) } else { AnyTag::Other(unknown(tag, args, d)?) })
     }
 }
 
 // ── containers ───────────────────────────────────────────────
 
-/// `Array a`.
-pub fn array<T>(v: &Value, f: impl Fn(&Value) -> R<T>) -> R<Vec<T>> {
+/// `Array a`, at `d`.
+pub fn array<T>(v: &Value, d: Decoder, f: impl Fn(&Value, Decoder) -> R<T>) -> R<Vec<T>> {
     match v {
-        Value::Array(items) => items.iter().enumerate().map(|(i, x)| f(x).map_err(|e| e.index(i))).collect(),
+        Value::Array(items) => {
+            let inner = d.nested()?;
+            items.iter().enumerate().map(|(i, x)| f(x, inner).map_err(|e| e.index(i))).collect()
+        }
         _ => Err(mismatch("an array", v)),
     }
 }
 
-/// `Map v`: a record used as a dictionary.
-pub fn map<T>(v: &Value, f: impl Fn(&Value) -> R<T>) -> R<BTreeMap<String, T>> {
+/// `Map v`: a record used as a dictionary, at `d`.
+pub fn map<T>(v: &Value, d: Decoder, f: impl Fn(&Value, Decoder) -> R<T>) -> R<BTreeMap<String, T>> {
     match v {
-        Value::Record(fields) => fields.iter().map(|(k, x)| Ok((k.clone(), f(x).map_err(|e| e.field(k))?))).collect(),
+        Value::Record(fields) => {
+            let inner = d.record_level()?;
+            fields.iter().map(|(k, x)| Ok((k.clone(), f(x, inner).map_err(|e| e.field(k))?))).collect()
+        }
         _ => Err(mismatch("a record (Map)", v)),
     }
 }
 
-/// `Maybe a`: `None` or `Some(a)`.
-pub fn maybe<T>(v: &Value, f: impl FnOnce(&Value) -> R<T>) -> R<Option<T>> {
+/// `Maybe a`: `None` or `Some(a)`, at `d`.
+pub fn maybe<T>(v: &Value, d: Decoder, f: impl FnOnce(&Value, Decoder) -> R<T>) -> R<Option<T>> {
     match variant(v, "Maybe")? {
         ("None", []) => Ok(None),
-        ("Some", [x]) => f(x).map(Some).map_err(|e| e.index(0).tag("Some")),
+        ("Some", [x]) => f(x, d.payload()?).map(Some).map_err(|e| e.index(0).tag("Some")),
         _ => Err(not_case("None or Some(…)", v, &["None", "Some"])),
     }
 }
 
-/// `Result e a`: `Err(e)` or `Ok(a)`.
-pub fn result<A, E>(v: &Value, ok: impl FnOnce(&Value) -> R<A>, err: impl FnOnce(&Value) -> R<E>) -> R<Result<A, E>> {
+/// `Result e a`: `Err(e)` or `Ok(a)`, at `d`.
+pub fn result<A, E>(
+    v: &Value,
+    d: Decoder,
+    ok: impl FnOnce(&Value, Decoder) -> R<A>,
+    err: impl FnOnce(&Value, Decoder) -> R<E>,
+) -> R<Result<A, E>> {
     match variant(v, "Result")? {
-        ("Ok", [x]) => ok(x).map(Ok).map_err(|e| e.index(0).tag("Ok")),
-        ("Err", [x]) => err(x).map(Err).map_err(|e| e.index(0).tag("Err")),
+        ("Ok", [x]) => ok(x, d.payload()?).map(Ok).map_err(|e| e.index(0).tag("Ok")),
+        ("Err", [x]) => err(x, d.payload()?).map(Err).map_err(|e| e.index(0).tag("Err")),
         _ => Err(not_case("Ok(…) or Err(…)", v, &["Ok", "Err"])),
     }
 }
@@ -342,8 +450,8 @@ pub fn result<A, E>(v: &Value, ok: impl FnOnce(&Value) -> R<A>, err: impl FnOnce
 /// `Secret a`: decoded as `a` decodes, but an error says only that the value
 /// isn't a valid `what` (`Secret String`), never what was found or where in
 /// it (spec §15). The path to the secret itself is added on the way out.
-pub fn secret<T>(v: &Value, what: &str, f: impl FnOnce(&Value) -> R<T>) -> R<Secret<T>> {
-    f(v).map(Secret::new).map_err(|_| hidden(what))
+pub fn secret<T>(v: &Value, d: Decoder, what: &str, f: impl FnOnce(&Value, Decoder) -> R<T>) -> R<Secret<T>> {
+    f(v, d).map(Secret::new).map_err(|_| hidden(what))
 }
 
 /// The error for a `Secret` (`what`) whose value doesn't decode: nothing of the value (spec §15).
@@ -352,46 +460,47 @@ pub(crate) fn hidden(what: &str) -> DecodeError {
 }
 
 /// A type decoded by a codec: its base type first, then the codec (spec §13.4).
-pub fn codec<C: Codec>(v: &Value) -> R<C::Target> {
-    C::decode(C::Base::decode(v)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
+pub fn codec<C: Codec>(v: &Value, d: Decoder) -> R<C::Target> {
+    C::decode(C::Base::decode_with(v, d)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
 }
 
 impl<T: Decode> Decode for Vec<T> {
-    fn decode(v: &Value) -> R<Self> {
-        array(v, T::decode)
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
+        array(v, d, T::decode_with)
     }
 }
 impl<T: Decode> Decode for BTreeMap<String, T> {
-    fn decode(v: &Value) -> R<Self> {
-        map(v, T::decode)
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
+        map(v, d, T::decode_with)
     }
 }
 impl<T: Decode> Decode for Option<T> {
-    fn decode(v: &Value) -> R<Self> {
-        maybe(v, T::decode)
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
+        maybe(v, d, T::decode_with)
     }
 }
 impl<A: Decode, E: Decode> Decode for Result<A, E> {
-    fn decode(v: &Value) -> R<Self> {
-        result(v, A::decode, E::decode)
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
+        result(v, d, A::decode_with, E::decode_with)
     }
 }
 impl<T: Decode> Decode for Box<T> {
-    fn decode(v: &Value) -> R<Self> {
-        T::decode(v).map(Box::new)
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
+        T::decode_with(v, d).map(Box::new)
     }
 }
 
 // ── scalars ──────────────────────────────────────────────────
 
+/// `Any`: the value as it is, if it nests within the depth limit here.
 impl Decode for Value {
-    fn decode(v: &Value) -> R<Self> {
-        Ok(v.clone())
+    fn decode_with(v: &Value, d: Decoder) -> R<Self> {
+        within_depth(v, d).map(|()| v.clone())
     }
 }
 
 impl Decode for String {
-    fn decode(v: &Value) -> R<Self> {
+    fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
             Value::String(s) => Ok(s.clone()),
             _ => Err(mismatch("a string", v)),
@@ -404,7 +513,7 @@ impl Decode for String {
 pub struct Bytes(pub Vec<u8>);
 
 impl Decode for Bytes {
-    fn decode(v: &Value) -> R<Self> {
+    fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
             Value::Bytes(b) => Ok(Bytes(b.clone())),
             _ => Err(mismatch("a byte string", v)),
@@ -413,7 +522,7 @@ impl Decode for Bytes {
 }
 
 impl Decode for bool {
-    fn decode(v: &Value) -> R<Self> {
+    fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match variant(v, "Bool")? {
             ("True", []) => Ok(true),
             ("False", []) => Ok(false),
@@ -439,7 +548,7 @@ fn not_whole(name: &str, text: &str) -> DecodeError {
 macro_rules! integers {
     ($($t:ty => $name:literal),*) => {$(
         impl Decode for $t {
-            fn decode(v: &Value) -> R<Self> {
+            fn decode_with(v: &Value, _: Decoder) -> R<Self> {
                 let Value::Number(text) = v else { return Err(mismatch(concat!("a number (", $name, ")"), v)) };
                 let Some(n) = whole(text) else { return Err(not_whole($name, text)) };
                 n.parse().map_err(|_| {
@@ -461,7 +570,7 @@ integers!(i8 => "Int8", i16 => "Int16", i32 => "Int32", i64 => "Int64", u8 => "U
 macro_rules! floats {
     ($($t:ty => $name:literal),*) => {$(
         impl Decode for $t {
-            fn decode(v: &Value) -> R<Self> {
+            fn decode_with(v: &Value, _: Decoder) -> R<Self> {
                 match v {
                     Value::Number(text) => match text.parse::<$t>() {
                         Ok(x) if x.is_finite() => Ok(x),
@@ -536,7 +645,7 @@ impl From<i128> for Int {
 }
 
 impl Decode for Int {
-    fn decode(v: &Value) -> R<Self> {
+    fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
             Value::Number(text) => match whole(text) {
                 Some(n) => Ok(Int(n.to_owned())),
@@ -603,7 +712,7 @@ impl Decimal {
 }
 
 impl Decode for Decimal {
-    fn decode(v: &Value) -> R<Self> {
+    fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
             Value::Number(text) => Ok(Decimal(text.clone())),
             _ => Err(mismatch("a number (Decimal)", v)),

@@ -124,6 +124,35 @@ of a float, `-0` as an integer, fields an open record ignores). `h.InstantAsDate
 millisecond, the offset and the fraction as written (`10:00:00.250+01:00` is
 written back as `09:00:00.250Z`, another value with another hash).
 
+### Codecs
+
+A codec is your choice of host type for a named type of a schema file,
+selected by the type's id (spec §13.4). It runs after the type's schema, so it
+can reject more values, never fewer, and it applies wherever the type occurs,
+in imported packages too. The official packages ship the codecs of their
+profiles:
+
+```ts
+import { iso } from "@haus-fmt/money"   // the profile @haus-fmt/money/iso: currencies are three letters A–Z
+import { wgs84 } from "@haus-fmt/geo"   // the profile @haus-fmt/geo/wgs84: latitudes and longitudes in range
+
+const { schemas } = compileSchemaFile(text, { ...schemaOptions("order.schema.haus"), codecs: [...iso, ...wgs84] })
+h.parse(schemas.Order!, data)   // Money(1, Eur) or LatLng(91, 0): HausDecodeError
+```
+
+They keep the value and the host type: a `Money` is still
+`{ _tag: "Money", values: ["19.90", "EUR"] }` (its currency always a tag,
+never an `Unknown`), a `LatLng` its two floats, `-0` included. For schemas
+written with `h.*`, the packages export the types with their profile too:
+`h.Record({ total: Money, to: LatLng })`.
+
+A codec is `{ id, apply }`: `apply` builds the host type's schema from the
+type's own one, for example with `h.refine(base, check)`, which adds a rule
+(`check` returns why it rejects a value, or `undefined`) and checks it when
+encoding too. Codecs for types the schema doesn't contain are ignored; two for
+one type are an error, and so is one for a record that a variant uses as a
+record case (`< Box R >`), whose fields sit beside `_tag` (`codec-unreachable`).
+
 A `Secret` hides its value from `console.log`, `String()` and
 `JSON.stringify`, and errors inside one name its place and type, never the
 value. Encode one with `h.Secret.make(value)`. `@deprecated` and other

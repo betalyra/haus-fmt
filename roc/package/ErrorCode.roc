@@ -189,7 +189,7 @@ ErrorCode := [].{
 	stream_truncated : Str
 	stream_truncated = "stream-truncated"
 
-	## `schema-syntax` (schema-files): A schema file doesn't follow the grammar: an unexpected token, an unterminated string or comment, a character that has no place there.
+	## `schema-syntax` (schema-files): A schema file doesn't follow the grammar: an unexpected token, a character that has no place there. Mistakes in the comments, whitespace and strings a schema file shares with data files (§14) have the codes they have there: `unterminated-string`, `unterminated-comment`, `lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `invalid-escape`.
 	schema_syntax : Str
 	schema_syntax = "schema-syntax"
 
@@ -253,7 +253,7 @@ ErrorCode := [].{
 	unguarded_recursion : Str
 	unguarded_recursion = "unguarded-recursion"
 
-	## `growing-recursion` (schema-files): A generic type refers to itself with arguments other than its own parameters (§9.10), so its instances could grow without bound.
+	## `growing-recursion` (schema-files): A generic type refers to itself, directly or through definitions that refer back to it, with arguments other than its own parameters (§9.10), so its instances could grow without bound.
 	growing_recursion : Str
 	growing_recursion = "growing-recursion"
 
@@ -325,7 +325,31 @@ ErrorCode := [].{
 	package_path : Str
 	package_path = "package-path"
 
-	## `codec-unreachable` (imports): A codec's type occurs inside a type that another library generated (a package crate, another package's Roc module), where this binding can't apply the codec. Decoding there with the default host type would silently differ from the other bindings (§13.4).
+	## `package-name` (imports): A package manager's name for a schema package differs from its manifest's: the `name` of its `package.json` isn't the `name` of its `package.haus`. On npm, imports find a package by that name, so it must be the manifest's (§13.3). Reported by package checks such as `haus package check`.
+	package_name : Str
+	package_name = "package-name"
+
+	## `package-crate` (imports): A schema package's crate can't be named by the code generated for crates that use its types: its `links` is missing or isn't its library's name (`[lib] name`), or a crate depends on a schema package's crate under another name (`package = …`). Generated code names a schema package's crate by its `links`, which is its library's name. Reported by package checks such as `haus package check`.
+	package_crate : Str
+	package_crate = "package-crate"
+
+	## `package-install-script` (imports): A schema package runs code when it is installed: an npm `preinstall`, `install` or `postinstall` script, or a `binding.gyp`, for which npm runs node-gyp. A schema package is data and MUST NOT need code to install (§13.3).
+	package_install_script : Str
+	package_install_script = "package-install-script"
+
+	## `package-files` (imports): A package manager's configuration doesn't ship a file of the schema package: `package.haus`, `schema.haus`, or a profile's vectors or rule. Read from the configuration (`files` of `package.json`, `include` of `Cargo.toml`, a wheel's build configuration), without packing anything.
+	package_files : Str
+	package_files = "package-files"
+
+	## `profile-vectors` (imports): A profile of a schema package is malformed (§13.3): it has no rule (`profiles/<name>.md`) next to its vectors; a vector isn't `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with string fields and no others (only an `Accept` has an `output`); its `type` isn't a type of the package without parameters; its `value` or `output` isn't one haus value; or an accepted value or its output isn't valid for its type, which a codec running after the schema can't accept. Also a profile name that isn't lowercase, and a vectors file with no vectors.
+	profile_vectors : Str
+	profile_vectors = "profile-vectors"
+
+	## `package-wrapper` (imports): A package manager's file of a schema package can't be read as one: a `package.json` that isn't a JSON object or has no `name`, a `Cargo.toml` or `pyproject.toml` that isn't valid TOML, a `Cargo.toml` without `[package]`. Reported by package checks such as `haus package check`.
+	package_wrapper : Str
+	package_wrapper = "package-wrapper"
+
+	## `codec-unreachable` (imports): A codec's type occurs where this binding can't apply the codec, such as the payload of a record case whose fields sit beside its tag in the host value. Decoding there with the default host type would silently differ from the other bindings (§13.4).
 	codec_unreachable : Str
 	codec_unreachable = "codec-unreachable"
 
@@ -369,7 +393,7 @@ ErrorCode := [].{
 	invalid_time : Str
 	invalid_time = "invalid-time"
 
-	## `invalid-secret` (decoding): A value of a `Secret` type that its type doesn't accept. The error names the place and the type only, never the value or why it failed (§15).
+	## `invalid-secret` (decoding): A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).
 	invalid_secret : Str
 	invalid_secret = "invalid-secret"
 
@@ -451,7 +475,7 @@ ErrorCode := [].{
 
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -535,7 +559,13 @@ ErrorCode := [].{
 		"package-manifest" => "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version."
 		"package-version" => "Release both with the same version: change them together."
 		"package-path" => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too."
-		"codec-unreachable" => "Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs."
+		"package-name" => "Publish the package under its manifest's name: make the `name` of `package.json` the same."
+		"package-crate" => "Set `links` to the library's name in `[package]`, and depend on schema package crates under their own names."
+		"package-install-script" => "Remove the script: a schema package is its manifest, its schema and its profiles, and needs nothing run."
+		"package-files" => "List `package.haus`, `schema.haus` and `profiles` in what the package manager ships."
+		"profile-vectors" => "Write the rule in `profiles/<name>.md`, and each vector as `Accept { type: \"T\", value: \"…\" }` or `Reject { type: \"T\", value: \"…\" }`, with values valid for `T`."
+		"package-wrapper" => "Fix the file so that its package manager can read it."
+		"codec-unreachable" => "Give the codec's type a place of its own (a field), or decode the outer type yourself; the message names where the type occurs."
 		"file-too-large" => "Split the schema into several files, or raise the limit if you trust the file."
 		"too-many-files" => "Import fewer files."
 		"type-mismatch" => "Write a value of the expected type; the message says which."
@@ -651,6 +681,12 @@ ErrorCode := [].{
 		"package-manifest" => "imports"
 		"package-version" => "imports"
 		"package-path" => "imports"
+		"package-name" => "imports"
+		"package-crate" => "imports"
+		"package-install-script" => "imports"
+		"package-files" => "imports"
+		"profile-vectors" => "imports"
+		"package-wrapper" => "imports"
 		"codec-unreachable" => "imports"
 		"file-too-large" => "imports"
 		"too-many-files" => "imports"
@@ -709,11 +745,11 @@ ErrorCode := [].{
 		"{${Str.join_with(members.map(|(name, value)| "\"${name}\":${value}"), ",")}}"
 	}
 
-	## The place of an error in a value as spec §17 writes it, `$.items[2].price`,
+	## The place of an error in a value as spec §15 writes it, `$.items[2].price`,
 	## from the path of a `Decode.Error` or an `Encode.Error` (`.items[2].price`).
-	## There `(Tag)` marks a variant's payload: its value `i` is `[i]`, and a
-	## record payload, the variant's only value, is `[0]` (`(Circle).r` is
-	## `$[0].r`).
+	## There `(Tag)` marks a variant's payload: its value `i` is `[i]`, and the
+	## fields of a record case are steps from the case itself, with no step for
+	## the payload (`(Circle).r` is `$.r`).
 	place : Str -> Str
 	place = |path| {
 		b = path.to_utf8()
@@ -732,9 +768,6 @@ ErrorCode := [].{
 					$close = $close + 1
 				}
 				$i = $close + 1
-				if at(b, $i) != '[' {
-					$out = $out.concat(['[', '0', ']'])
-				}
 			} else {
 				$out = $out.append(c)
 				$i = $i + 1
@@ -744,9 +777,68 @@ ErrorCode := [].{
 	}
 
 	## The path segment of a record key in errors: `.name`, or `["pt-BR"]`
-	## (a JSON string) for a key that isn't an identifier.
+	## (a string in canonical form, spec §12 and §15) for a key that isn't an
+	## identifier.
 	path_key : Str -> Str
-	path_key = |key| if (is_identifier(key)) ".${key}" else "[${quote(key)}]"
+	path_key = |key| if (is_identifier(key)) ".${key}" else "[${haus_string(key)}]"
+
+	## A haus string in canonical form (spec §12): `"…"`, escaping `"`, `\`,
+	## line feed, carriage return and tab, and as `\u{…}` (uppercase hex) the
+	## other control characters (C0, DEL, C1), the bidirectional controls and
+	## the line and paragraph separators. Every other character is itself.
+	haus_string : Str -> Str
+	haus_string = |s| {
+		b = s.to_utf8()
+		var $out = ['"']
+		var $i = 0
+		while $i < b.len() {
+			c = at(b, $i)
+			next = at(b, $i + 1)
+			third = at(b, $i + 2)
+			# The line and paragraph separators and the bidirectional controls
+			# (U+2028–U+2029, U+202A–U+202E, U+2066–U+2069): E2 80 A8–AE, E2 81 A6–A9.
+			bidi = c == 0xE2 and ((next == 0x80 and third >= 0xA8 and third <= 0xAE) or (next == 0x81 and third >= 0xA6 and third <= 0xA9))
+			# C1 controls (U+0080–U+009F): C2 80–9F.
+			c1 = c == 0xC2 and next >= 0x80 and next <= 0x9F
+			if c1 {
+				$out = $out.concat(unicode_escape(next.to_u64()))
+				$i = $i + 2
+			} else if bidi {
+				$out = $out.concat(unicode_escape(if (next == 0x80) 0x2000 + third.to_u64() - 0x80 else 0x2040 + third.to_u64() - 0x80))
+				$i = $i + 3
+			} else {
+				$out =
+					if c == '"' or c == '\\' {
+						$out.append('\\').append(c)
+					} else if c == '\n' {
+						$out.concat(['\\', 'n'])
+					} else if c == '\r' {
+						$out.concat(['\\', 'r'])
+					} else if c == '\t' {
+						$out.concat(['\\', 't'])
+					} else if c < 0x20 or c == 0x7F {
+						$out.concat(unicode_escape(c.to_u64()))
+					} else {
+						$out.append(c)
+					}
+				$i = $i + 1
+			}
+		}
+		Str.from_utf8($out.append('"')) ?? "\"\""
+	}
+}
+
+## `\u{1B}`: a code point as an escape, in uppercase hex without leading zeros.
+unicode_escape : U64 -> List(U8)
+unicode_escape = |n| {
+	var $digits = []
+	var $v = n
+	while $v > 0 or $digits.is_empty() {
+		d = ($v % 16).to_u8_wrap()
+		$digits = [if (d < 10) '0' + d else 'A' + d - 10].concat($digits)
+		$v = $v // 16
+	}
+	['\\', 'u', '{'].concat($digits).append('}')
 }
 
 ## Whether a key is written without quotes: `[a-z_][A-Za-z0-9_]*`.
@@ -800,10 +892,15 @@ at = |b, i| b.get(i) ?? 0
 expect ErrorCode.hint(ErrorCode.missing_comma) == "Add a comma between the two values."
 expect ErrorCode.category("payload-newline") == "syntax" and ErrorCode.category("missing-field") == "decoding" and ErrorCode.hint("nonsense") == ""
 expect ErrorCode.docs("null-literal") == "https://haus-fmt.org/docs/errors#null-literal"
-expect ErrorCode.all.len() >= 108 and ErrorCode.all.contains("invalid-secret") and ErrorCode.all.contains("codec-unreachable")
+expect ErrorCode.all.len() >= 114 and ErrorCode.all.contains("invalid-secret") and ErrorCode.all.contains("codec-unreachable")
 expect ErrorCode.place("") == "$" and ErrorCode.place(".items[2].price") == "$.items[2].price"
-expect ErrorCode.place("(Circle).r") == "$[0].r" and ErrorCode.place(".total(Money)[1]") == "$.total[1]" and ErrorCode.place("(Date)[0]") == "$[0]"
-expect ErrorCode.place("[\"pt-BR\"](Tag)") == "$[\"pt-BR\"][0]" and ErrorCode.place("[\"a\\\"(b\"].c") == "$[\"a\\\"(b\"].c"
+expect ErrorCode.place("(Circle).r") == "$.r" and ErrorCode.place(".total(Money)[1]") == "$.total[1]" and ErrorCode.place("(Date)[0]") == "$[0]"
+expect ErrorCode.place("[\"pt-BR\"](Tag)") == "$[\"pt-BR\"]" and ErrorCode.place("[\"a\\\"(b\"].c") == "$[\"a\\\"(b\"].c"
+expect ErrorCode.place("(Add)[1](Neg).of(Num)[0]") == "$[1].of[0]"
 expect ErrorCode.path_key("price") == ".price" and ErrorCode.path_key("_tag") == "._tag" and ErrorCode.path_key("pt-BR") == "[\"pt-BR\"]" and ErrorCode.path_key("Name") == "[\"Name\"]" and ErrorCode.path_key("") == "[\"\"]"
+# Keys are written as canonical haus strings (spec §12), not JSON ones.
+expect ErrorCode.path_key("a\nb\u(7F)") == "[\"a\\nb\\u{7F}\"]" and ErrorCode.path_key("x\u(202E)y\u(1)") == "[\"x\\u{202E}y\\u{1}\"]"
+expect ErrorCode.path_key("\u(1B)\u(85)\u(2028)\u(2069)\u(2027)") == "[\"\\u{1B}\\u{85}\\u{2028}\\u{2069}\u(2027)\"]"
+expect ErrorCode.path_key("q\"\\\r\t café") == "[\"q\\\"\\\\\\r\\t café\"]"
 expect ErrorCode.json({ code: "missing-comma", message: "expected ','", at: Position(2, 1) }) == "{\"code\":\"missing-comma\",\"message\":\"expected ','\",\"line\":2,\"column\":1,\"hint\":\"Add a comma between the two values.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-comma\"}"
 expect ErrorCode.json({ code: "missing-field", message: "missing field 'id'", at: Path(".items[2]") }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$.items[2]\",\"hint\":\"Add the field, or mark it optional in the schema with `?` after its name.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"

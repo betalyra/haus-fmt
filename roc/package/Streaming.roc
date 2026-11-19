@@ -75,6 +75,9 @@ Streaming := [].{
 	finish = |state| {
 		supported(state.options.limits)?
 		(rest, values) = scan(state, True)?
+		# The scan checks a value's length before each character, so the last value,
+		# with no comma after it, is checked here, after its last character (§7).
+		check_length(rest)?
 		text = utf8(rest.buf, rest.origin)?
 		directive(text, rest.origin)?
 		last = Value.parse_rest_with(text, rest.options.limits).map_err(|e| shift(e, rest.origin))?
@@ -109,6 +112,15 @@ Mode : [Normal, Text, Block, LineComment, Comment(U64)]
 
 Pos : { line : U64, column : U64 }
 
+## The current value has no more characters than the limit (spec §7).
+check_length : Streaming.Reader -> Try({}, Value.ParseError)
+check_length = |s|
+	if s.chars > s.options.max_value_length {
+		Err({ code: ErrorCode.value_too_long, reason: "value longer than ${s.options.max_value_length.to_str()} characters", line: s.origin.line, column: s.origin.column })
+	} else {
+		Ok({})
+	}
+
 ## Finds the commas between values and parses what is before them.
 scan : Streaming.Reader, Bool -> Try((Streaming.Reader, List(Value)), Value.ParseError)
 scan = |start, last| {
@@ -117,9 +129,7 @@ scan = |start, last| {
 	var $i = $s.scanned
 	var $go = True
 	while $go and $i < $s.buf.len() {
-		if $s.chars > $s.options.max_value_length {
-			return Err({ code: ErrorCode.value_too_long, reason: "value longer than ${$s.options.max_value_length.to_str()} characters", line: $s.origin.line, column: $s.origin.column })
-		}
+		check_length($s)?
 		b = $s.buf
 		c = at(b, $i)
 		# `(last or $i + n < b.len())`: is the byte `n` places ahead there (or will it never come)?

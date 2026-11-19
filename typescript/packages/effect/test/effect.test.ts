@@ -233,7 +233,7 @@ describe("decodeStream", () => {
 
 describe("errors", () => {
   it.effect.each([
-    { schema: Order, src: "{ id: \"1\" }", tag: "HausSchemaError", message: "Expected number", code: "type-mismatch" },
+    { schema: Order, src: "{ id: \"1\" }", tag: "HausSchemaError", message: "expected a number", code: "type-mismatch" },
     { schema: AppEvent, src: "Refunded { id: 1 }", tag: "HausSchemaError", message: "", code: "unknown-tag" },
     { schema: Money, src: "Money(19.99, CHF)", tag: "HausSchemaError", message: 'got the tag CHF\n  at ["currency"]', code: "unknown-tag" },
     { schema: Schema.Boolean, src: "true", tag: "HausParseError", message: "booleans are the variants True / False", code: "boolean-literal" },

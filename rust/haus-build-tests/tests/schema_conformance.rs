@@ -1,10 +1,10 @@
 //! The schema conformance suite (test-suite/schema, spec §15), run on the
 //! code haus-fmt-build generates for its schemas (see build.rs).
 //!
-//! Each case is `Ok { type, input, output? }` or `Err { type, input, code }`.
+//! Each case is `Ok { type, input, output? }` or `Err { type, input, code, path }`.
 //! Ok: decoding `input` with `type` succeeds, and encoding the result gives a
 //! value equal to `output` (or `input`). Err: decoding fails with the error
-//! code `code` (spec §17). Every case runs on each schema twice: as written,
+//! code `code` (spec §17) at the place `path` (spec §15, compared as text). Every case runs on each schema twice: as written,
 //! and without its attributes, which must not change any result.
 //!
 //! `invalid/*.schema.haus` must be rejected by haus-fmt-build (spec §14),
@@ -26,6 +26,8 @@ struct Case {
     output: Value,
     /// For an `Err`, the code it fails with.
     code: String,
+    /// For an `Err`, where it fails: `$.items[2].price`.
+    path: String,
 }
 
 impl Case {
@@ -48,6 +50,11 @@ impl Case {
                     Some(Value::String(code)) => code.clone(),
                     _ if ok => String::new(),
                     _ => return Err(format!("an Err case without a code: {}", canonical(v))),
+                },
+                path: match fields.get("path") {
+                    Some(Value::String(path)) => path.clone(),
+                    _ if ok => String::new(),
+                    _ => return Err(format!("an Err case without a path: {}", canonical(v))),
                 },
             }),
             _ => Err(format!("not a case: {}", canonical(v))),
@@ -77,6 +84,9 @@ impl Case {
             (false, Ok(encoded)) => Some(format!("decoded, expected an error (encoded as {})", canonical(&encoded))),
             (false, Err(e)) if e.code.as_str() != self.code => {
                 Some(format!("fails with {} ({e}), expected {}", e.code, self.code))
+            }
+            (false, Err(e)) if e.place() != self.path => {
+                Some(format!("fails at {} ({e}), expected {}", e.place(), self.path))
             }
             (false, Err(_)) => None,
         }
@@ -117,10 +127,17 @@ fn invalid_schemas_are_rejected() {
     let failures: Vec<String> = paths
         .iter()
         .flat_map(|path| {
-            let text = fs::read_to_string(path).unwrap();
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             let expected = fs::read_to_string(path.with_extension("").with_extension("error")).unwrap();
             let expected = expected.trim();
+            // The generators take text: a file that isn't UTF-8 is rejected when it
+            // is read (`invalid-utf8`, checked by haus-fmt-schema's own suite).
+            let Ok(text) = String::from_utf8(fs::read(path).unwrap()) else {
+                return (expected != "invalid-utf8")
+                    .then(|| format!("{name}: not UTF-8, expected {expected}"))
+                    .into_iter()
+                    .collect::<Vec<_>>();
+            };
             let why = |what: &str, result: Result<String, haus_build::Error>| match result {
                 Ok(_) => Some(format!("{name} ({what}): accepted")),
                 Err(e) if e.code().as_str() != expected => {
@@ -130,7 +147,7 @@ fn invalid_schemas_are_rejected() {
             };
             let rust = why("Rust", haus_build::generate(&text, "suite/invalid", &[], &none));
             let roc = why("Roc", haus_build::roc::generate(&text, "Invalid", "suite/invalid", &[], &none));
-            [rust, roc].into_iter().flatten()
+            [rust, roc].into_iter().flatten().collect::<Vec<_>>()
         })
         .collect();
     assert!(failures.is_empty(), "invalid schemas:\n{}", failures.join("\n"));

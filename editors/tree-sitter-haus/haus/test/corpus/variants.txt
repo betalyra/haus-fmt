@@ -1,0 +1,134 @@
+================================================================================
+Tags without payload
+================================================================================
+
+[None, True, False, A1_b]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (array
+    (variant
+      tag: (tag))
+    (variant
+      tag: (tag))
+    (variant
+      tag: (tag))
+    (variant
+      tag: (tag))))
+
+================================================================================
+Positional payloads
+================================================================================
+
+[Some(1), Point(1, 2), Err(NotFound("x")), Polygon([Point(0, 0), Point(1, 1)]), Pair(1, 2,)]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (array
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (number)))
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (number)
+        (number)))
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (variant
+          tag: (tag)
+          payload: (arguments
+            (string
+              (string_content))))))
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (array
+          (variant
+            tag: (tag)
+            payload: (arguments
+              (number)
+              (number)))
+          (variant
+            tag: (tag)
+            payload: (arguments
+              (number)
+              (number))))))
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (number)
+        (number)))))
+
+================================================================================
+Record payloads
+================================================================================
+
+[Circle { radius: 5 }, Circle({ radius: 5 }), Empty {}]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (array
+    (variant
+      tag: (tag)
+      payload: (record
+        (field
+          key: (identifier)
+          value: (number))))
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (record
+          (field
+            key: (identifier)
+            value: (number)))))
+    (variant
+      tag: (tag)
+      payload: (record))))
+
+================================================================================
+Blanks between a tag and its payload
+================================================================================
+
+[Point  (1, 2), Circle	{ r: 1 }]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (array
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (number)
+        (number)))
+    (variant
+      tag: (tag)
+      payload: (record
+        (field
+          key: (identifier)
+          value: (number))))))
+
+================================================================================
+A tag followed by a comment
+================================================================================
+
+[None /* no payload */, Some(1) // trailing
+]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (array
+    (variant
+      tag: (tag))
+    (block_comment)
+    (variant
+      tag: (tag)
+      payload: (arguments
+        (number)))
+    (line_comment)))

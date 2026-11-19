@@ -92,7 +92,7 @@ pub enum ErrorCode {
     NotOneValue,
     /// `stream-truncated`: In strict mode, a stream ended without a comma (or, in JSON Lines, a line feed) after its last value, so the last value may be cut off (§6).
     StreamTruncated,
-    /// `schema-syntax`: A schema file doesn't follow the grammar: an unexpected token, an unterminated string or comment, a character that has no place there.
+    /// `schema-syntax`: A schema file doesn't follow the grammar: an unexpected token, a character that has no place there. Mistakes in the comments, whitespace and strings a schema file shares with data files (§14) have the codes they have there: `unterminated-string`, `unterminated-comment`, `lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `invalid-escape`.
     SchemaSyntax,
     /// `unknown-type`: A type name that is neither defined in the file, imported, nor a prelude type. A type a standard module or official extension has needs its import.
     UnknownType,
@@ -124,7 +124,7 @@ pub enum ErrorCode {
     MisplacedStream,
     /// `unguarded-recursion`: A type refers to itself without a record field, array element or variant payload in between (§9.9), so decoding it would consume no input. `Secret` and names don't count as a step.
     UnguardedRecursion,
-    /// `growing-recursion`: A generic type refers to itself with arguments other than its own parameters (§9.10), so its instances could grow without bound.
+    /// `growing-recursion`: A generic type refers to itself, directly or through definitions that refer back to it, with arguments other than its own parameters (§9.10), so its instances could grow without bound.
     GrowingRecursion,
     /// `type-too-deep`: Type expressions are nested deeper than the schema parser's limit.
     TypeTooDeep,
@@ -160,7 +160,19 @@ pub enum ErrorCode {
     PackageVersion,
     /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
     PackagePath,
-    /// `codec-unreachable`: A codec's type occurs inside a type that another library generated (a package crate, another package's Roc module), where this binding can't apply the codec. Decoding there with the default host type would silently differ from the other bindings (§13.4).
+    /// `package-name`: A package manager's name for a schema package differs from its manifest's: the `name` of its `package.json` isn't the `name` of its `package.haus`. On npm, imports find a package by that name, so it must be the manifest's (§13.3). Reported by package checks such as `haus package check`.
+    PackageName,
+    /// `package-crate`: A schema package's crate can't be named by the code generated for crates that use its types: its `links` is missing or isn't its library's name (`\[lib\] name`), or a crate depends on a schema package's crate under another name (`package = …`). Generated code names a schema package's crate by its `links`, which is its library's name. Reported by package checks such as `haus package check`.
+    PackageCrate,
+    /// `package-install-script`: A schema package runs code when it is installed: an npm `preinstall`, `install` or `postinstall` script, or a `binding.gyp`, for which npm runs node-gyp. A schema package is data and MUST NOT need code to install (§13.3).
+    PackageInstallScript,
+    /// `package-files`: A package manager's configuration doesn't ship a file of the schema package: `package.haus`, `schema.haus`, or a profile's vectors or rule. Read from the configuration (`files` of `package.json`, `include` of `Cargo.toml`, a wheel's build configuration), without packing anything.
+    PackageFiles,
+    /// `profile-vectors`: A profile of a schema package is malformed (§13.3): it has no rule (`profiles/<name>.md`) next to its vectors; a vector isn't `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with string fields and no others (only an `Accept` has an `output`); its `type` isn't a type of the package without parameters; its `value` or `output` isn't one haus value; or an accepted value or its output isn't valid for its type, which a codec running after the schema can't accept. Also a profile name that isn't lowercase, and a vectors file with no vectors.
+    ProfileVectors,
+    /// `package-wrapper`: A package manager's file of a schema package can't be read as one: a `package.json` that isn't a JSON object or has no `name`, a `Cargo.toml` or `pyproject.toml` that isn't valid TOML, a `Cargo.toml` without `\[package\]`. Reported by package checks such as `haus package check`.
+    PackageWrapper,
+    /// `codec-unreachable`: A codec's type occurs where this binding can't apply the codec, such as the payload of a record case whose fields sit beside its tag in the host value. Decoding there with the default host type would silently differ from the other bindings (§13.4).
     CodecUnreachable,
     /// `file-too-large`: A schema file or a package's `package.json` is larger than the tool allows (1 MiB by default). It is not read.
     FileTooLarge,
@@ -182,7 +194,7 @@ pub enum ErrorCode {
     WrongPayload,
     /// `invalid-time`: A std/time value whose text the std/time profile rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md).
     InvalidTime,
-    /// `invalid-secret`: A value of a `Secret` type that its type doesn't accept. The error names the place and the type only, never the value or why it failed (§15).
+    /// `invalid-secret`: A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).
     InvalidSecret,
     /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.
     CannotEncode,
@@ -256,7 +268,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 108] = [
+    pub const ALL: [ErrorCode; 114] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -334,6 +346,12 @@ impl ErrorCode {
         ErrorCode::PackageManifest,
         ErrorCode::PackageVersion,
         ErrorCode::PackagePath,
+        ErrorCode::PackageName,
+        ErrorCode::PackageCrate,
+        ErrorCode::PackageInstallScript,
+        ErrorCode::PackageFiles,
+        ErrorCode::ProfileVectors,
+        ErrorCode::PackageWrapper,
         ErrorCode::CodecUnreachable,
         ErrorCode::FileTooLarge,
         ErrorCode::TooManyFiles,
@@ -447,6 +465,12 @@ impl ErrorCode {
             ErrorCode::PackageManifest => "package-manifest",
             ErrorCode::PackageVersion => "package-version",
             ErrorCode::PackagePath => "package-path",
+            ErrorCode::PackageName => "package-name",
+            ErrorCode::PackageCrate => "package-crate",
+            ErrorCode::PackageInstallScript => "package-install-script",
+            ErrorCode::PackageFiles => "package-files",
+            ErrorCode::ProfileVectors => "profile-vectors",
+            ErrorCode::PackageWrapper => "package-wrapper",
             ErrorCode::CodecUnreachable => "codec-unreachable",
             ErrorCode::FileTooLarge => "file-too-large",
             ErrorCode::TooManyFiles => "too-many-files",
@@ -561,6 +585,12 @@ impl ErrorCode {
             ErrorCode::PackageManifest => ErrorCategory::Imports,
             ErrorCode::PackageVersion => ErrorCategory::Imports,
             ErrorCode::PackagePath => ErrorCategory::Imports,
+            ErrorCode::PackageName => ErrorCategory::Imports,
+            ErrorCode::PackageCrate => ErrorCategory::Imports,
+            ErrorCode::PackageInstallScript => ErrorCategory::Imports,
+            ErrorCode::PackageFiles => ErrorCategory::Imports,
+            ErrorCode::ProfileVectors => ErrorCategory::Imports,
+            ErrorCode::PackageWrapper => ErrorCategory::Imports,
             ErrorCode::CodecUnreachable => ErrorCategory::Imports,
             ErrorCode::FileTooLarge => ErrorCategory::Imports,
             ErrorCode::TooManyFiles => ErrorCategory::Imports,
@@ -675,7 +705,13 @@ impl ErrorCode {
             ErrorCode::PackageManifest => "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version.",
             ErrorCode::PackageVersion => "Release both with the same version: change them together.",
             ErrorCode::PackagePath => "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.",
-            ErrorCode::CodecUnreachable => "Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs.",
+            ErrorCode::PackageName => "Publish the package under its manifest's name: make the `name` of `package.json` the same.",
+            ErrorCode::PackageCrate => "Set `links` to the library's name in `[package]`, and depend on schema package crates under their own names.",
+            ErrorCode::PackageInstallScript => "Remove the script: a schema package is its manifest, its schema and its profiles, and needs nothing run.",
+            ErrorCode::PackageFiles => "List `package.haus`, `schema.haus` and `profiles` in what the package manager ships.",
+            ErrorCode::ProfileVectors => "Write the rule in `profiles/<name>.md`, and each vector as `Accept { type: \"T\", value: \"…\" }` or `Reject { type: \"T\", value: \"…\" }`, with values valid for `T`.",
+            ErrorCode::PackageWrapper => "Fix the file so that its package manager can read it.",
+            ErrorCode::CodecUnreachable => "Give the codec's type a place of its own (a field), or decode the outer type yourself; the message names where the type occurs.",
             ErrorCode::FileTooLarge => "Split the schema into several files, or raise the limit if you trust the file.",
             ErrorCode::TooManyFiles => "Import fewer files.",
             ErrorCode::TypeMismatch => "Write a value of the expected type; the message says which.",

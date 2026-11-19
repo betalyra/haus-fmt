@@ -5,25 +5,30 @@ Ok { type: "User", input: { name: "Ada", id: 1, nick: "ada" } },
 // a missing optional field stays missing; None is a value
 Ok { type: "User", input: { id: 1, name: "Ada", note: None } },
 Ok { type: "User", input: { id: 1, name: "Ada", note: Some("x") } },
-Err { type: "User", input: { id: 1, name: "Ada", nick: None }, code: "type-mismatch" },
-Err { type: "User", input: { id: 1, name: "Ada", note: "x" }, code: "type-mismatch" },
+Err { type: "User", input: { id: 1, name: "Ada", nick: None }, code: "type-mismatch", path: "$.nick" },
+Err { type: "User", input: { id: 1, name: "Ada", note: "x" }, code: "type-mismatch", path: "$.note" },
 // an open record ignores fields it doesn't list
 Ok { type: "User", input: { id: 1, name: "Ada", extra: [1, 2], "x-y": Tag }, output: { id: 1, name: "Ada" } },
-Err { type: "User", input: { id: 1 }, code: "missing-field" },
-Err { type: "User", input: { name: "Ada" }, code: "missing-field" },
-Err { type: "User", input: { id: "1", name: "Ada" }, code: "type-mismatch" },
-Err { type: "User", input: User { id: 1, name: "Ada" }, code: "type-mismatch" },
-Err { type: "User", input: [1, "Ada"], code: "type-mismatch" },
+Err { type: "User", input: { id: 1 }, code: "missing-field", path: "$" },
+Err { type: "User", input: { name: "Ada" }, code: "missing-field", path: "$" },
+Err { type: "User", input: { id: "1", name: "Ada" }, code: "type-mismatch", path: "$.id" },
+Err { type: "User", input: User { id: 1, name: "Ada" }, code: "type-mismatch", path: "$" },
+Err { type: "User", input: [1, "Ada"], code: "type-mismatch", path: "$" },
 
 Ok { type: "Strict", input: { id: 1 } },
 Ok { type: "Strict", input: { id: 1, tags: ["a"] } },
-Err { type: "Strict", input: { id: 1, extra: 2 }, code: "unknown-field" },
-Err { type: "Strict", input: { id: 1, tags: None }, code: "type-mismatch" },
+Err { type: "Strict", input: { id: 1, extra: 2 }, code: "unknown-field", path: "$.extra" },
+Err { type: "Strict", input: { id: 1, tags: None }, code: "type-mismatch", path: "$.tags" },
 
 // a closed record around an open one
 Ok { type: "Outer", input: { user: { id: 1, name: "Ada", x: 1 } }, output: { user: { id: 1, name: "Ada" } } },
-Err { type: "Outer", input: { user: { id: 1, name: "Ada" }, x: 1 }, code: "unknown-field" },
+Err { type: "Outer", input: { user: { id: 1, name: "Ada" }, x: 1 }, code: "unknown-field", path: "$.x" },
 
 Ok { type: "Empty", input: {} },
 Ok { type: "Empty", input: { a: 1 }, output: {} },
-Err { type: "Empty", input: [], code: "type-mismatch" },
+Err { type: "Empty", input: [], code: "type-mismatch", path: "$" },
+
+// quoted keys with escapes: the same keys whether the data escapes them or not
+Ok { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "smile\u{1F600}": True, "q\"\\": 3 } },
+Ok { type: "Quoted", input: { "content-type": "a", "tab\u{9}here": 1, "line\u{A}break": 2, "smile😀": True, "q\u{22}\u{5C}": 3 } },
+Err { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "q\"\\": 3 }, code: "missing-field", path: "$" },

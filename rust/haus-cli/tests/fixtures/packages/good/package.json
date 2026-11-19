@@ -1,0 +1,9 @@
+{
+  "name": "@fixture/good",
+  "version": "1.0.0",
+  "description": "A fixture of haus package check",
+  "files": ["package.haus", "schema.haus", "profiles"],
+  "scripts": { "test": "haus package check" },
+  "peerDependencies": { "@fixture/base": "^1.2.0" },
+  "devDependencies": { "@fixture/base": "file:../base" }
+}

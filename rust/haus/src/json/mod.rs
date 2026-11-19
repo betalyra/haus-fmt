@@ -161,9 +161,11 @@ pub fn write(json: &Json) -> Result<String, EncodeError> {
 
 /// Write JSON on one line, for a reader with `limits`. A [`Json`] built in
 /// code is checked as it is written: numbers must be JSON numbers within the
-/// number limits, strings within the string limit, and the nesting within
-/// what the reader takes. These errors say what, not where: the place could
-/// be inside a `Secret`.
+/// number limits, and the nesting within what the reader takes. These errors
+/// say what, not where: the place could be inside a `Secret`. Lengths count
+/// on the haus value, not on the JSON (spec §16 "Limits"), so the forms check
+/// them where they build the JSON, as the readers do: a string's characters,
+/// keys and tags, bytes as two characters per byte, in hex or base64.
 pub fn write_with(json: &Json, limits: &Limits) -> Result<String, EncodeError> {
     write_form(json, limits, Form::SchemaBased)
 }
@@ -185,7 +187,7 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
         match next {
             Next::Text(t) => out.push_str(t),
             Next::Name(k) => {
-                quote(k, limits, &mut out)?;
+                escape(k, &mut out);
                 out.push(':');
             }
             Next::Close(c) => {
@@ -198,7 +200,7 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
                 check_number(n, limits)?;
                 out.push_str(n);
             }
-            Next::Value(Json::String(s)) => quote(s, limits, &mut out)?,
+            Next::Value(Json::String(s)) => escape(s, &mut out),
             Next::Value(Json::Array(items)) => {
                 if depth >= max {
                     return Err(EncodeError::new(
@@ -269,16 +271,6 @@ pub(crate) fn is_number(n: &str) -> bool {
     (int == "0" || (digits(int) && !int.starts_with('0')))
         && frac.is_none_or(digits)
         && exp.is_none_or(|e| digits(e.strip_prefix(['+', '-']).unwrap_or(e)))
-}
-
-/// A JSON string, escaped as [`escape`] escapes it.
-fn quote(s: &str, limits: &Limits, out: &mut String) -> Result<(), EncodeError> {
-    let max = limits.max_string_length;
-    if s.len() > max && s.chars().count() > max {
-        return Err(EncodeError::new(ErrorCode::StringTooLong, format!("string longer than {max} characters")));
-    }
-    escape(s, out);
-    Ok(())
 }
 
 /// `s` as a JSON string, appended to `out`. Besides what JSON requires, DEL,

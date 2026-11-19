@@ -75,7 +75,7 @@ for schema in sorted((SUITE / "schema").glob("*.schema.haus")):
 types = [t for t in re.findall(r"^type\s+([A-Z][A-Za-z0-9_]*)\s*=", schema_based.read_text(encoding="utf-8"), re.M)]
 write_arms = "".join(f"\t{roc_str(t)} => written(SchemaBased.decode_{snake(t)}(v), SchemaBased.to_json_{snake(t)})\n" for t in types)
 read_arms = "".join(
-    f"\t{roc_str(t)} => SchemaBased.from_json_{snake(t)}(j).map_ok(SchemaBased.encode_{snake(t)})\n" for t in types
+    f"\t{roc_str(t)} => encoded(SchemaBased.from_json_{snake(t)}(j), SchemaBased.encode_{snake(t)})\n" for t in types
 )
 
 imports, tests = [], []
@@ -144,6 +144,7 @@ for path in sorted((SUITE / "valid").glob("*.haus")):
     "import haus.Decode\n"
     "import haus.Encode\n"
     "import haus.JsonValue\n"
+    "import haus.ToJson\n"
     "import SchemaBased\n"
     + "\n".join(imports)
     + """
@@ -302,10 +303,14 @@ read = |ty, j| match ty {
     + """	_ => Decode.fail("no-type", "no type ${ty}")
 }
 
+## The value read, encoded as haus.
+encoded : Try(a, Decode.Error), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, Decode.Error)
+encoded = |read_value, encode| Encode.value(read_value?, encode)
+
 ## The decoded value written as JSON text.
-written : Try(a, Decode.Error), (a -> Try(JsonValue, Encode.Error)) -> Try(Str, Str)
+written : Try(a, Decode.Error), (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)) -> Try(Str, Str)
 written = |decoded, to_json| match decoded {
-	Ok(x) => match to_json(x) {
+	Ok(x) => match ToJson.value(x, to_json) {
 		Ok(j) => JsonValue.to_str(j).map_err(Encode.message)
 		Err(e) => Err("can't write it: ${Encode.message(e)}")
 	}

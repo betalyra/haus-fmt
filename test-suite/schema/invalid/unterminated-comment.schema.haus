@@ -1,0 +1,2 @@
+// A block comment that is never closed, as in data files (spec §14, §1).
+type A = Int /* never closed

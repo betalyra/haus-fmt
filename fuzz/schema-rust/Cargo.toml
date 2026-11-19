@@ -1,7 +1,7 @@
 [package]
 name = "haus-schema-fuzz"
 version = "0.0.0"
-description = "The Rust runners of the schema and JSON fuzzers (fuzz/README.md): the code haus-fmt-build generates, and haus-fmt-schema's runtime checker"
+description = "The Rust runners of the schema, JSON and profile fuzzers (fuzz/README.md): the code haus-fmt-build generates, haus-fmt-schema's runtime checker, and the official profiles' codecs"
 edition = "2024"
 publish = false
 
@@ -20,9 +20,16 @@ path = "src/json_runner.rs"
 name = "check_runner"
 path = "src/check_runner.rs"
 
+[[bin]]
+name = "profile_runner"
+path = "src/profile_runner.rs"
+
 [dependencies]
 haus = { package = "haus-fmt", path = "../../rust/haus" }
 haus-schema = { package = "haus-fmt-schema", path = "../../rust/haus-schema" }
+# The official packages, with their profiles' codecs (profile_runner).
+haus-fmt-money = { path = "../../extensions/money" }
+haus-fmt-geo = { path = "../../extensions/geo" }
 
 [build-dependencies]
 haus-fmt-build = { path = "../../rust/haus-build" }

@@ -274,6 +274,7 @@ pub fn parse_with_imported_spreads(text: &str) -> Result<File, Error> {
 }
 
 fn parse_file(text: &str, imported_spreads: bool) -> Result<File, Error> {
+    lexis(text).map_err(|(pos, code, reason)| error(text, pos, code, reason))?;
     let file = file.parse(LocatingSlice::new(text)).map_err(|e| {
         let expected = e.inner().context().find_map(|c| match c {
             StrContext::Expected(StrContextValue::Description(d)) => Some(d.to_string()),
@@ -417,14 +418,79 @@ fn param(i: &mut Input) -> ModalResult<String> {
     lower.verify(|w: &String| !KEYWORDS.contains(&w.as_str())).context(expected("a type parameter")).parse_next(i)
 }
 
+/// A `"…"` string, with the escapes of data strings (spec §4): [`lexis`]
+/// has checked it, and the data parser reads it.
 fn string(i: &mut Input) -> ModalResult<String> {
-    let escape = preceded('\\', alt(('"'.value('"'), '\\'.value('\\'), 'n'.value('\n'), 't'.value('\t'))));
-    token(delimited(
-        '"',
-        repeat(0.., alt((none_of(['"', '\\', '\n']), escape))),
-        cut_err('"').context(expected(STRING_END)),
-    ))
-    .parse_next(i)
+    let escape = ('\\', any).void();
+    let raw = ('"', repeat::<_, _, (), _, _>(0.., alt((none_of(['"', '\\', '\n']).void(), escape))), cut_err('"'))
+        .take()
+        .context(expected(STRING_END));
+    token(raw)
+        .map(|raw: &str| match haus::parse(raw).as_deref() {
+            Ok([Value::String(s)]) => s.clone(),
+            _ => raw.to_owned(),
+        })
+        .parse_next(i)
+}
+
+/// Comments, whitespace and `"…"` strings are those of data files (spec
+/// §14): each run of whitespace and comments, and each string, is read by
+/// the data parser, so their mistakes have the codes they have there
+/// (`lone-carriage-return`, `control-character`, `bidi-control`,
+/// `invalid-escape`, `unterminated-string`, …). The arguments of attributes
+/// are data values, read by it later; anything else is left to the grammar.
+///
+/// Everything it looks for is ASCII, and in UTF-8 an ASCII byte is never part
+/// of another character, so it scans bytes and slices only at ASCII.
+fn lexis(text: &str) -> Result<(), Fail> {
+    let b = text.as_bytes();
+    let data = |start: usize, end: usize| -> Result<(), Fail> {
+        haus::parse(&text[start..end]).map(|_| ()).map_err(|e| (start + e.offset, e.code, e.reason))
+    };
+    let mut i = if text.starts_with('\u{feff}') { 3 } else { 0 };
+    while let Some(&c) = b.get(i) {
+        let rest = &b[i..];
+        i = match c {
+            b' ' | b'\t' | b'\n' | b'\r' => trivia(b, i, &data)?,
+            b'/' if rest.starts_with(b"//") || rest.starts_with(b"/*") => trivia(b, i, &data)?,
+            // Only in the arguments of attributes, where the data parser reads them.
+            b'"' if rest.starts_with(b"\"\"\"") => return Ok(()),
+            b'"' => {
+                let end = after_string(b, i + 1);
+                data(i, end)?;
+                end
+            }
+            b'@' => {
+                let name = i + 1 + rest[1..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'_').count();
+                match b.get(name) {
+                    Some(b'(') => match closing_paren(&text[name..]) {
+                        Some(close) => name + close + 1,
+                        None => return Ok(()),
+                    },
+                    _ => name,
+                }
+            }
+            _ => i + 1,
+        };
+    }
+    Ok(())
+}
+
+/// After the run of whitespace and comments at `i`, which `data` has checked.
+fn trivia(b: &[u8], start: usize, data: &impl Fn(usize, usize) -> Result<(), Fail>) -> Result<usize, Fail> {
+    let mut i = start;
+    while let Some(&c) = b.get(i) {
+        let rest = &b[i..];
+        i = match c {
+            b' ' | b'\t' | b'\n' | b'\r' => i + 1,
+            b'/' if rest.starts_with(b"//") => rest.iter().position(|&c| c == b'\n').map_or(b.len(), |n| i + n),
+            // Unterminated: the data parser says so.
+            b'/' if rest.starts_with(b"/*") => after_block_comment(b, i).unwrap_or(b.len()),
+            _ => break,
+        };
+    }
+    data(start, i)?;
+    Ok(i)
 }
 
 fn file(i: &mut Input) -> ModalResult<File> {
@@ -434,7 +500,8 @@ fn file(i: &mut Input) -> ModalResult<File> {
     }
     let item = alt((import.map(Item::Import), typedef.map(Item::Type))).context(expected("'type' or 'import'"));
     let items: Vec<Item> =
-        delimited(ws, repeat(0.., item), eof.context(expected("'type' or 'import'"))).parse_next(i)?;
+        delimited((opt('\u{feff}'), ws), repeat(0.., item), eof.context(expected("'type' or 'import'")))
+            .parse_next(i)?;
     let (imports, types) = items.into_iter().fold((vec![], vec![]), |(mut imports, mut types), item| {
         match item {
             Item::Import(imp) => imports.push(imp),
@@ -1111,7 +1178,9 @@ impl Expander {
                     (false, true) => Err((
                         s.pos,
                         Code::InvalidSpread,
-                        format!("{name} is imported; haus-fmt-build can spread only types defined in this file so far"),
+                        format!(
+                            "{name} is imported; spreading it needs the files it comes from (load the schema with its imports)"
+                        ),
                     )),
                     (false, false) => Err((s.pos, Code::UnknownType, unknown_type(&name))),
                 };

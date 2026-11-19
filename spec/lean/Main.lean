@@ -1,6 +1,8 @@
 import Haus.Canonical
 import Haus.Json.SchemaBased
 import Haus.Packages.Suite
+import Haus.Profiles.Vectors
+import Haus.Stream.Limited
 import Lean.Data.Json
 
 /-!
@@ -41,6 +43,18 @@ import Lean.Data.Json
     haus-ref --packages FILE [CASE]      run the package suite FILE (test-suite/packages/cases.haus,
                                   spec §13.3) with the reference resolver, or only the case
                                   CASE, printing its result and the files it read
+    haus-ref --stream-suite DIR          run the stream suite DIR/limits.cases.haus (spec §6, §7)
+                                  with the reference stream reader, each case whole, one
+                                  character at a time and split at every position
+    haus-ref --profile NAME FILE         run the test vectors FILE of the official profile NAME
+                                  (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`; spec §13.3)
+                                  with its reference checker (Haus/Profiles/)
+    haus-ref --profile-batch NAME FILE   for each line `TYPE HEX` of FILE (a value's haus text
+                                  as hex-encoded UTF-8): decode with the type of the profile's
+                                  package and its codec (schema, then checker): `ok <canonical
+                                  form of the encoded result>`, `err <place> <code> <reason>`
+                                  when the schema rejects it, or `err $ - <reason>` when the
+                                  profile does (fuzz/)
 -/
 
 open Haus Lean
@@ -289,18 +303,19 @@ def decodeCanonical (env : Schema.Env) (type : String) (v : Value) : Except Sche
 
 /--
 A case of `NAME.cases.haus`: `Ok { type, input, output? }` or
-`Err { type, input, code }`; for `Err`, the code (spec §17) as the last part.
+`Err { type, input, code, path }`; for `Err`, the code (spec §17) and the
+place (spec §15) as the last part.
 -/
-def schemaCase : Value → Option (Bool × String × Value × Value × String)
+def schemaCase : Value → Option (Bool × String × Value × Value × String × String)
   | .variant tag [.record fs] => do
     let ok ← if tag == "Ok" then some true else if tag == "Err" then some false else none
     let .str type ← fs.lookup "type" | none
     let input ← fs.lookup "input"
-    let code ← match ok, fs.lookup "code" with
-      | true, _ => some ""
-      | false, some (.str c) => some c
-      | false, _ => none
-    return (ok, type, input, (fs.lookup "output").getD input, code)
+    let (code, path) ← match ok, fs.lookup "code", fs.lookup "path" with
+      | true, _, _ => some ("", "")
+      | false, some (.str c), some (.str p) => some (c, p)
+      | false, _, _ => none
+    return (ok, type, input, (fs.lookup "output").getD input, code, path)
   | _ => none
 
 /-- An error's code as the batch runners print it: `-` for none. -/
@@ -324,18 +339,20 @@ def runSchemaSuite (dir types : System.FilePath) : IO UInt32 := do
         let shown := String.ofList (Canonical.canonical c)
         match schemaCase c with
         | none => failures := failures.push s!"{name}: not a case: {shown}"
-        | some (true, type, input, output, _) =>
+        | some (true, type, input, output, _, _) =>
           match decodeCanonical env type input with
           | .ok got =>
             let want := String.ofList (Canonical.canonical output)
             if got != want then failures := failures.push s!"{name}: {shown}: got {got}"
           | .error e => failures := failures.push s!"{name}: {shown}: {e.place}: {e.reason}"
-        | some (false, type, input, _, code) =>
+        | some (false, type, input, _, code, path) =>
           match decodeCanonical env type input with
           | .ok got => failures := failures.push s!"{name}: {shown}: accepted as {got}"
           | .error e =>
             if codeText e.code != code then
               failures := failures.push s!"{name}: {shown}: {codeText e.code} instead of {code} ({e.place}: {e.reason})"
+            else if e.place != path then
+              failures := failures.push s!"{name}: {shown}: at {e.place} instead of {path} ({e.reason})"
   for f in failures do IO.println f
   for s in skipped do IO.println s
   IO.println s!"{count - failures.size}/{count} passed"
@@ -593,7 +610,99 @@ def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := d
   IO.println s!"{count - failed}/{count} passed"
   return if failed == 0 then 0 else 1
 
+/-! ## Profiles (spec §13.3) -/
+
+/-- `--profile NAME FILE`: every vector of FILE, with the reference checker of the profile NAME. -/
+def runProfile (name : String) (file : System.FilePath) : IO UInt32 := do
+  let some p := Profiles.find? name
+    | IO.eprintln s!"unknown profile {name} ({(Profiles.all.map (·.name))})"; return 2
+  let vs ← match parseBytes (← IO.FS.readBinFile file) with
+    | .ok vs => pure vs
+    | .error e => IO.eprintln s!"{file}: {e}"; return 2
+  let mut failed := 0
+  for v in vs do
+    let shown := oneLine (String.ofList (Canonical.canonical v))
+    match Profiles.Vector.ofValue v >>= fun vec => (vec.run p).map (vec, ·) with
+    | .ok (vec, what) => IO.println s!"ok   {if vec.accept then "Accept" else "Reject"} {vec.type} {vec.value}: {what}"
+    | .error why => failed := failed + 1; IO.println s!"FAIL {shown}: {why}"
+  IO.println s!"{vs.length - failed}/{vs.length} passed"
+  return if failed == 0 then 0 else 1
+
+/-- One line of `--profile-batch`: `TYPE HEX`. -/
+def profileLine (p : Profiles.Profile) (line : String) : String :=
+  match line.splitOn " " with
+  | [type, hex] =>
+    match p.check? type, parseBytes (unhex hex) with
+    | none, _ => s!"err $ - {type} is not a type of {p.name}"
+    | some _, .error e => s!"err $ - {oneLine e}"
+    | some check, .ok [v] =>
+      match Schema.decode p.env (.ref type) v, p.decode type check v with
+      | _, .ok x => s!"ok {canonicalText (Schema.encode x)}"
+      | .error e, _ => errLine e
+      | .ok _, .error _ => s!"err $ - not accepted by {p.name}"
+    | some _, .ok _ => "err $ - not a single value"
+  | _ => "err $ - bad line"
+
+def runProfileBatch (name : String) (file : System.FilePath) : IO UInt32 := do
+  let some p := Profiles.find? name | IO.eprintln s!"unknown profile {name}"; return 2
+  runLineBatch (profileLine p) file
+
+/-! ## Streams (spec §6, §7) -/
+
+/-- A case of the stream suite: the text, the reader's options, and the values or the error code. -/
+def streamCase : Value → Option (String × Haus.Stream.Options × Except String (List Value))
+  | .record fs => do
+    let .str text ← fs.lookup "text" | none
+    let .num n ← fs.lookup "maxValueLength" | none
+    let max ← n.toNat?
+    let strict := match fs.lookup "strict" with
+      | some (.variant "True" []) => true
+      | _ => false
+    let result ← match fs.lookup "result" with
+      | some (.variant "Ok" [.arr vs]) => some (.ok vs)
+      | some (.variant "Err" [.str code]) => some (.error code)
+      | _ => none
+    return (text, { maxValueLength := max, strict }, result)
+  | _ => none
+
+/-- The text whole, one character at a time, and in two pieces split at every character. -/
+def streamSplits (t : Text) : List (String × List Text) :=
+  ("whole", [t]) :: ("by character", t.map ([·])) ::
+    (List.range t.length).map fun k => (s!"split at {k}", [t.take k, t.drop k])
+
+/--
+`--stream-suite DIR`: every case of DIR/limits.cases.haus (test-suite/stream)
+read by the reference stream reader (`Stream.readWith`) whole, one character at
+a time, and split at every position.
+-/
+def runStreamSuite (dir : System.FilePath) : IO UInt32 := do
+  let file := dir / "limits.cases.haus"
+  let vs ← match parseBytes (← IO.FS.readBinFile file) with
+    | .ok vs => pure vs
+    | .error e => IO.eprintln s!"{file}: {e}"; return 2
+  let mut failed := 0
+  for v in vs do
+    let shown := oneLine (canonicalText v)
+    let some (text, o, want) := streamCase v
+      | failed := failed + 1; IO.println s!"FAIL (not a case): {shown}"
+    let wrong := (streamSplits text.toList).filterMap fun (how, chunks) =>
+      let (got, err) := Haus.Stream.readWith o {} chunks
+      let same := match want, err with
+        | .ok ws, none => got.length == ws.length && (got.zip ws).all fun (a, b) => Value.equiv a b
+        | .error code, some e => e.code.name == code
+        | _, _ => false
+      if same then none
+      else some s!"{how}: {match err with | some e => e.code.name | none => toString (got.map canonicalText)}"
+    match wrong with
+    | [] => IO.println s!"ok   {shown}"
+    | w :: _ => failed := failed + 1; IO.println s!"FAIL {shown}: {wrong.length} ways, {w}"
+  IO.println s!"{vs.length - failed}/{vs.length} passed"
+  return if failed == 0 then 0 else 1
+
 def main : List String → IO UInt32
+  | ["--stream-suite", dir] => runStreamSuite dir
+  | ["--profile", name, file] => runProfile name file
+  | ["--profile-batch", name, file] => runProfileBatch name file
   | ["--packages", file] => runPackages file none
   | ["--packages", file, name] => runPackages file (some name)
   | ["--suite", dir] => runSuite dir
@@ -625,4 +734,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --packages FILE [CASE]"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2

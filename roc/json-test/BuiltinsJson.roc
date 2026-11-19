@@ -14,233 +14,272 @@ BuiltinsJson := [].{
 	S : Str
 
 	decode_s : Value -> Try(S, Decode.Error)
-	decode_s = |v| Decode.str(v)
+	decode_s = |v| Decode.within_depth(v, read_value_s)
 
-	encode_s : S -> Value
-	encode_s = |v| Encode.str(v)
+	read_value_s : Value -> Try(S, Decode.Error)
+	read_value_s = |v| Decode.str(v)
+
+	encode_s : S, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_s = |v, e| Encode.str(v, e)
 
 	from_json_s : JsonValue -> Try(S, Decode.Error)
-	from_json_s = |j| FromJson.within_depth(read_json_s(j), encode_s)
+	from_json_s = |j| FromJson.within_depth(j, read_json_s, encode_s)
 
 	read_json_s : JsonValue -> Try(S, Decode.Error)
 	read_json_s = |j| FromJson.str(j)
 
-	to_json_s : S -> Try(JsonValue, Encode.Error)
-	to_json_s = |v| ToJson.str(v)
+	to_json_s : S, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_s = |v, e| ToJson.str(v, e)
 
 	## haus type `builtins#B`.
 	B : List(U8)
 
 	decode_b : Value -> Try(B, Decode.Error)
-	decode_b = |v| Decode.bytes(v)
+	decode_b = |v| Decode.within_depth(v, read_value_b)
 
-	encode_b : B -> Value
-	encode_b = |v| Encode.bytes(v)
+	read_value_b : Value -> Try(B, Decode.Error)
+	read_value_b = |v| Decode.bytes(v)
+
+	encode_b : B, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_b = |v, e| Encode.bytes(v, e)
 
 	from_json_b : JsonValue -> Try(B, Decode.Error)
-	from_json_b = |j| FromJson.within_depth(read_json_b(j), encode_b)
+	from_json_b = |j| FromJson.within_depth(j, read_json_b, encode_b)
 
 	read_json_b : JsonValue -> Try(B, Decode.Error)
 	read_json_b = |j| FromJson.bytes(j)
 
-	to_json_b : B -> Try(JsonValue, Encode.Error)
-	to_json_b = |v| ToJson.bytes(v)
+	to_json_b : B, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_b = |v, e| ToJson.bytes(v, e)
 
 	## haus type `builtins#Flag`.
 	Flag : Bool
 
 	decode_flag : Value -> Try(Flag, Decode.Error)
-	decode_flag = |v| Decode.bool(v)
+	decode_flag = |v| Decode.within_depth(v, read_value_flag)
 
-	encode_flag : Flag -> Value
-	encode_flag = |v| Encode.bool(v)
+	read_value_flag : Value -> Try(Flag, Decode.Error)
+	read_value_flag = |v| Decode.bool(v)
+
+	encode_flag : Flag, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_flag = |v, e| Encode.bool(v, e)
 
 	from_json_flag : JsonValue -> Try(Flag, Decode.Error)
-	from_json_flag = |j| FromJson.within_depth(read_json_flag(j), encode_flag)
+	from_json_flag = |j| FromJson.within_depth(j, read_json_flag, encode_flag)
 
 	read_json_flag : JsonValue -> Try(Flag, Decode.Error)
 	read_json_flag = |j| FromJson.bool(j)
 
-	to_json_flag : Flag -> Try(JsonValue, Encode.Error)
-	to_json_flag = |v| ToJson.bool(v)
+	to_json_flag : Flag, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_flag = |v, e| ToJson.bool(v, e)
 
 	## haus type `builtins#MaybeInt`.
 	MaybeInt : [None, Some(Int)]
 
 	decode_maybe_int : Value -> Try(MaybeInt, Decode.Error)
-	decode_maybe_int = |v| Decode.maybe(v, Decode.int)
+	decode_maybe_int = |v| Decode.within_depth(v, read_value_maybe_int)
 
-	encode_maybe_int : MaybeInt -> Value
-	encode_maybe_int = |v| Encode.maybe(v, Encode.int)
+	read_value_maybe_int : Value -> Try(MaybeInt, Decode.Error)
+	read_value_maybe_int = |v| Decode.maybe(v, Decode.int)
+
+	encode_maybe_int : MaybeInt, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_maybe_int = |v, e| Encode.maybe(v, e, Encode.int)
 
 	from_json_maybe_int : JsonValue -> Try(MaybeInt, Decode.Error)
-	from_json_maybe_int = |j| FromJson.within_depth(read_json_maybe_int(j), encode_maybe_int)
+	from_json_maybe_int = |j| FromJson.within_depth(j, read_json_maybe_int, encode_maybe_int)
 
 	read_json_maybe_int : JsonValue -> Try(MaybeInt, Decode.Error)
 	read_json_maybe_int = |j| FromJson.maybe(j, False, FromJson.int)
 
-	to_json_maybe_int : MaybeInt -> Try(JsonValue, Encode.Error)
-	to_json_maybe_int = |v| ToJson.maybe(v, False, ToJson.int)
+	to_json_maybe_int : MaybeInt, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_maybe_int = |v, e| ToJson.maybe(v, e, False, ToJson.int)
 
 	## haus type `builtins#Outcome`.
 	Outcome : Try(Int, Str)
 
 	decode_outcome : Value -> Try(Outcome, Decode.Error)
-	decode_outcome = |v| Decode.result(v, Decode.int, Decode.str)
+	decode_outcome = |v| Decode.within_depth(v, read_value_outcome)
 
-	encode_outcome : Outcome -> Value
-	encode_outcome = |v| Encode.result(v, Encode.int, Encode.str)
+	read_value_outcome : Value -> Try(Outcome, Decode.Error)
+	read_value_outcome = |v| Decode.result(v, Decode.int, Decode.str)
+
+	encode_outcome : Outcome, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_outcome = |v, e| Encode.result(v, e, Encode.int, Encode.str)
 
 	from_json_outcome : JsonValue -> Try(Outcome, Decode.Error)
-	from_json_outcome = |j| FromJson.within_depth(read_json_outcome(j), encode_outcome)
+	from_json_outcome = |j| FromJson.within_depth(j, read_json_outcome, encode_outcome)
 
 	read_json_outcome : JsonValue -> Try(Outcome, Decode.Error)
 	read_json_outcome = |j| FromJson.result(j, FromJson.int, FromJson.str)
 
-	to_json_outcome : Outcome -> Try(JsonValue, Encode.Error)
-	to_json_outcome = |v| ToJson.result(v, ToJson.int, ToJson.str)
+	to_json_outcome : Outcome, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_outcome = |v, e| ToJson.result(v, e, ToJson.int, ToJson.str)
 
 	## haus type `builtins#Ints`.
 	Ints : List(Int)
 
 	decode_ints : Value -> Try(Ints, Decode.Error)
-	decode_ints = |v| Decode.list(v, Decode.int)
+	decode_ints = |v| Decode.within_depth(v, read_value_ints)
 
-	encode_ints : Ints -> Value
-	encode_ints = |v| Encode.list(v, Encode.int)
+	read_value_ints : Value -> Try(Ints, Decode.Error)
+	read_value_ints = |v| Decode.list(v, Decode.int)
+
+	encode_ints : Ints, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_ints = |v, e| Encode.list(v, e, Encode.int)
 
 	from_json_ints : JsonValue -> Try(Ints, Decode.Error)
-	from_json_ints = |j| FromJson.within_depth(read_json_ints(j), encode_ints)
+	from_json_ints = |j| FromJson.within_depth(j, read_json_ints, encode_ints)
 
 	read_json_ints : JsonValue -> Try(Ints, Decode.Error)
 	read_json_ints = |j| FromJson.list(j, FromJson.int)
 
-	to_json_ints : Ints -> Try(JsonValue, Encode.Error)
-	to_json_ints = |v| ToJson.list(v, ToJson.int)
+	to_json_ints : Ints, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_ints = |v, e| ToJson.list(v, e, ToJson.int)
 
 	## haus type `builtins#Counts`.
 	Counts : List((Str, Int))
 
 	decode_counts : Value -> Try(Counts, Decode.Error)
-	decode_counts = |v| Decode.map(v, Decode.int)
+	decode_counts = |v| Decode.within_depth(v, read_value_counts)
 
-	encode_counts : Counts -> Value
-	encode_counts = |v| Encode.map(v, Encode.int)
+	read_value_counts : Value -> Try(Counts, Decode.Error)
+	read_value_counts = |v| Decode.map(v, Decode.int)
+
+	encode_counts : Counts, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_counts = |v, e| Encode.map(v, e, Encode.int)
 
 	from_json_counts : JsonValue -> Try(Counts, Decode.Error)
-	from_json_counts = |j| FromJson.within_depth(read_json_counts(j), encode_counts)
+	from_json_counts = |j| FromJson.within_depth(j, read_json_counts, encode_counts)
 
 	read_json_counts : JsonValue -> Try(Counts, Decode.Error)
 	read_json_counts = |j| FromJson.map(j, FromJson.int)
 
-	to_json_counts : Counts -> Try(JsonValue, Encode.Error)
-	to_json_counts = |v| ToJson.map(v, ToJson.int)
+	to_json_counts : Counts, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_counts = |v, e| ToJson.map(v, e, ToJson.int)
 
 	## haus type `builtins#Day`.
 	Day : Str
 
 	decode_day : Value -> Try(Day, Decode.Error)
-	decode_day = |v| Decode.time("Date")(v)
+	decode_day = |v| Decode.within_depth(v, read_value_day)
 
-	encode_day : Day -> Value
-	encode_day = |v| Encode.time("Date")(v)
+	read_value_day : Value -> Try(Day, Decode.Error)
+	read_value_day = |v| Decode.time("Date")(v)
+
+	encode_day : Day, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_day = |v, e| Encode.time("Date")(v, e)
 
 	from_json_day : JsonValue -> Try(Day, Decode.Error)
-	from_json_day = |j| FromJson.within_depth(read_json_day(j), encode_day)
+	from_json_day = |j| FromJson.within_depth(j, read_json_day, encode_day)
 
 	read_json_day : JsonValue -> Try(Day, Decode.Error)
 	read_json_day = |j| FromJson.time("Date")(j)
 
-	to_json_day : Day -> Try(JsonValue, Encode.Error)
-	to_json_day = |v| ToJson.time(v)
+	to_json_day : Day, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_day = |v, e| ToJson.time(v, e)
 
 	## haus type `builtins#At`.
 	At : Str
 
 	decode_at : Value -> Try(At, Decode.Error)
-	decode_at = |v| Decode.time("Instant")(v)
+	decode_at = |v| Decode.within_depth(v, read_value_at)
 
-	encode_at : At -> Value
-	encode_at = |v| Encode.time("Instant")(v)
+	read_value_at : Value -> Try(At, Decode.Error)
+	read_value_at = |v| Decode.time("Instant")(v)
+
+	encode_at : At, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_at = |v, e| Encode.time("Instant")(v, e)
 
 	from_json_at : JsonValue -> Try(At, Decode.Error)
-	from_json_at = |j| FromJson.within_depth(read_json_at(j), encode_at)
+	from_json_at = |j| FromJson.within_depth(j, read_json_at, encode_at)
 
 	read_json_at : JsonValue -> Try(At, Decode.Error)
 	read_json_at = |j| FromJson.time("Instant")(j)
 
-	to_json_at : At -> Try(JsonValue, Encode.Error)
-	to_json_at = |v| ToJson.time(v)
+	to_json_at : At, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_at = |v, e| ToJson.time(v, e)
 
 	## haus type `builtins#Span`.
 	Span : Str
 
 	decode_span : Value -> Try(Span, Decode.Error)
-	decode_span = |v| Decode.time("Duration")(v)
+	decode_span = |v| Decode.within_depth(v, read_value_span)
 
-	encode_span : Span -> Value
-	encode_span = |v| Encode.time("Duration")(v)
+	read_value_span : Value -> Try(Span, Decode.Error)
+	read_value_span = |v| Decode.time("Duration")(v)
+
+	encode_span : Span, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_span = |v, e| Encode.time("Duration")(v, e)
 
 	from_json_span : JsonValue -> Try(Span, Decode.Error)
-	from_json_span = |j| FromJson.within_depth(read_json_span(j), encode_span)
+	from_json_span = |j| FromJson.within_depth(j, read_json_span, encode_span)
 
 	read_json_span : JsonValue -> Try(Span, Decode.Error)
 	read_json_span = |j| FromJson.time("Duration")(j)
 
-	to_json_span : Span -> Try(JsonValue, Encode.Error)
-	to_json_span = |v| ToJson.time(v)
+	to_json_span : Span, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_span = |v, e| ToJson.time(v, e)
 
 	## haus type `builtins#Payload`.
 	Payload : Value
 
 	decode_payload : Value -> Try(Payload, Decode.Error)
-	decode_payload = |v| Decode.any(v)
+	decode_payload = |v| Decode.within_depth(v, read_value_payload)
 
-	encode_payload : Payload -> Value
-	encode_payload = |v| Encode.any(v)
+	read_value_payload : Value -> Try(Payload, Decode.Error)
+	read_value_payload = |v| Decode.any(v)
+
+	encode_payload : Payload, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_payload = |v, e| Encode.any(v, e)
 
 	from_json_payload : JsonValue -> Try(Payload, Decode.Error)
-	from_json_payload = |j| FromJson.within_depth(read_json_payload(j), encode_payload)
+	from_json_payload = |j| FromJson.within_depth(j, read_json_payload, encode_payload)
 
 	read_json_payload : JsonValue -> Try(Payload, Decode.Error)
 	read_json_payload = |j| FromJson.any(j)
 
-	to_json_payload : Payload -> Try(JsonValue, Encode.Error)
-	to_json_payload = |v| ToJson.any(v)
+	to_json_payload : Payload, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_payload = |v, e| ToJson.any(v, e)
 
 	## haus type `builtins#Key`.
 	Key : Secret(Str)
 
 	decode_key : Value -> Try(Key, Decode.Error)
-	decode_key = |v| Decode.secret(v, "Secret String", Decode.str)
+	decode_key = |v| Decode.within_depth(v, read_value_key)
 
-	encode_key : Key -> Value
-	encode_key = |v| Encode.secret(v, Encode.str)
+	read_value_key : Value -> Try(Key, Decode.Error)
+	read_value_key = |v| Decode.secret(v, "Secret String", Decode.str)
+
+	encode_key : Key, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_key = |v, e| Encode.secret(v, "Secret String", e, Encode.str)
 
 	from_json_key : JsonValue -> Try(Key, Decode.Error)
-	from_json_key = |j| FromJson.within_depth(read_json_key(j), encode_key)
+	from_json_key = |j| FromJson.within_depth(j, read_json_key, encode_key)
 
 	read_json_key : JsonValue -> Try(Key, Decode.Error)
 	read_json_key = |j| FromJson.secret(j, "Secret String", FromJson.str)
 
-	to_json_key : Key -> Try(JsonValue, Encode.Error)
-	to_json_key = |v| ToJson.secret(v, "Secret String", ToJson.str)
+	to_json_key : Key, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_key = |v, e| ToJson.secret(v, "Secret String", e, ToJson.str)
 
 	## haus type `builtins#Config`.
 	Config : { name : Str, key : Secret(Str), pin : [Missing, Present(Secret(Int))], extra : Value }
 
 	decode_config : Value -> Try(Config, Decode.Error)
-	decode_config = |v| {
+	decode_config = |v| Decode.within_depth(v, read_value_config)
+
+	read_value_config : Value -> Try(Config, Decode.Error)
+	read_value_config = |v| {
 		fs = Decode.strict_record(v)?
 		Decode.closed(fs, ["name", "key", "pin", "extra"])?
 		Ok({ name: Decode.field(fs, "name", Decode.str)?, key: Decode.field(fs, "key", |x1| Decode.secret(x1, "Secret String", Decode.str))?, pin: Decode.optional_field(fs, "pin", |x2| Decode.secret(x2, "Secret Int", Decode.int))?, extra: Decode.field(fs, "extra", Decode.any)? })
 	}
 
-	encode_config : Config -> Value
-	encode_config = |v| Encode.record([("name", Present(Encode.str(v.name))), ("key", Present(Encode.secret(v.key, Encode.str))), ("pin", Encode.optional(v.pin, |x3| Encode.secret(x3, Encode.int))), ("extra", Present(Encode.any(v.extra)))])
+	encode_config : Config, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_config = |v, e| Encode.record(e, [("name", Encode.required(v.name, Encode.str)), ("key", Present(|e3| Encode.secret(v.key, "Secret String", e3, Encode.str))), ("pin", Encode.optional(v.pin, |x4, e4| Encode.secret(x4, "Secret Int", e4, Encode.int))), ("extra", Encode.required(v.extra, Encode.any))])
 
 	from_json_config : JsonValue -> Try(Config, Decode.Error)
-	from_json_config = |j| FromJson.within_depth(read_json_config(j), encode_config)
+	from_json_config = |j| FromJson.within_depth(j, read_json_config, encode_config)
 
 	read_json_config : JsonValue -> Try(Config, Decode.Error)
 	read_json_config = |j| {
@@ -249,7 +288,46 @@ BuiltinsJson := [].{
 		Ok({ name: FromJson.field(fs, "name", FromJson.str)?, key: FromJson.field(fs, "key", |y1| FromJson.secret(y1, "Secret String", FromJson.str))?, pin: FromJson.optional_field(fs, "pin", |y2| FromJson.secret(y2, "Secret Int", FromJson.int))?, extra: FromJson.field(fs, "extra", FromJson.any)? })
 	}
 
-	to_json_config : Config -> Try(JsonValue, Encode.Error)
-	to_json_config = |v| ToJson.object([("name", Present(ToJson.str(v.name))), ("key", Present(ToJson.secret(v.key, "Secret String", ToJson.str))), ("pin", ToJson.optional(v.pin, |y3| ToJson.secret(y3, "Secret Int", ToJson.int))), ("extra", Present(ToJson.any(v.extra)))])
+	to_json_config : Config, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_config = |v, e| ToJson.object(e, [("name", ToJson.required(v.name, ToJson.str)), ("key", Present(|e3| ToJson.secret(v.key, "Secret String", e3, ToJson.str))), ("pin", ToJson.optional(v.pin, |y4, e4| ToJson.secret(y4, "Secret Int", e4, ToJson.int))), ("extra", ToJson.required(v.extra, ToJson.any))])
+
+	## haus type `builtins#Vault`.
+	Vault : List((Str, Secret({ id : Int })))
+
+	decode_vault : Value -> Try(Vault, Decode.Error)
+	decode_vault = |v| Decode.within_depth(v, read_value_vault)
+
+	read_value_vault : Value -> Try(Vault, Decode.Error)
+	read_value_vault = |v| Decode.map(v, |x5| Decode.secret(x5, "Secret { … }", decode_vault_item))
+
+	encode_vault : Vault, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_vault = |v, e| Encode.map(v, e, |x6, e6| Encode.secret(x6, "Secret { … }", e6, encode_vault_item))
+
+	from_json_vault : JsonValue -> Try(Vault, Decode.Error)
+	from_json_vault = |j| FromJson.within_depth(j, read_json_vault, encode_vault)
+
+	read_json_vault : JsonValue -> Try(Vault, Decode.Error)
+	read_json_vault = |j| FromJson.map(j, |y5| FromJson.secret(y5, "Secret { … }", from_json_vault_item))
+
+	to_json_vault : Vault, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_vault = |v, e| ToJson.map(v, e, |y6, e6| ToJson.secret(y6, "Secret { … }", e6, to_json_vault_item))
+
+	decode_vault_item : Value -> Try({ id : Int }, Decode.Error)
+	decode_vault_item = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ id: Decode.field(fs, "id", Decode.int)? })
+	}
+
+	encode_vault_item : { id : Int }, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_vault_item = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int))])
+
+	from_json_vault_item : JsonValue -> Try({ id : Int }, Decode.Error)
+	from_json_vault_item = |j| {
+		fs = FromJson.object(j, "VaultItem")?
+		Ok({ id: FromJson.field(fs, "id", FromJson.int)? })
+	}
+
+	to_json_vault_item : { id : Int }, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_vault_item = |v, e| ToJson.object(e, [("id", ToJson.required(v.id, ToJson.int))])
 
 }

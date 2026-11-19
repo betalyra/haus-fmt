@@ -13,7 +13,10 @@ targets in different orders, with class numbers that differ between them:
 that a successful run's last state is closed (every target loaded has its
 checks passed and its imports loaded before it) and that a run in another
 order stays below such a state. It is the same simulation that R6 (folders
-are conservative) needs, and is left for later.
+are conservative) needs, and is left for later. A first step is proven in
+`Haus.Packages.Closed`: in every state of every run, a class imports only
+classes made before it (`classes_topo`), the order the simulation needs for
+packages.
 
 What R2 proves already holds in every order: one package per name, and a
 copy is unified with another only when its files and its imports' packages

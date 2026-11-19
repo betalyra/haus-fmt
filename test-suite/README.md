@@ -24,14 +24,15 @@ cases for it (spec §15), written in haus:
 ```haus
 Ok { type: "F64", input: 0.10, output: 0.1 },   // decodes; encoding gives output
 Ok { type: "I", input: 42 },                     // no output: encoding gives input back
-Err { type: "I", input: 1.0, code: "not-an-integer" },  // decoding fails, with this code
+Err { type: "I", input: 1.0, code: "not-an-integer", path: "$" },  // fails with this code, at this place
 ```
 
 `type` names a definition without parameters. For `Ok`, decode `input` with
 the type, encode the result with the same type, and compare its canonical form
 (§12) with that of `output`, or of `input` when there is no `output`. For
-`Err`, decoding must fail with the error code `code` (spec §17). Error
-messages and places are not compared.
+`Err`, decoding must fail with the error code `code` (spec §17), at the place
+`path` (spec §15, "General rules": `$.items[2].price`, `$.m["pt-BR"]`,
+`$[1].of[0]`), compared as text. Error messages are not compared.
 
 `schema/invalid/NAME.schema.haus` must be rejected by schema checkers (spec §14),
 with the error code in `schema/invalid/NAME.error`.
@@ -76,6 +77,16 @@ Conformance is tested with the default limits from the spec:
 `valid/limits-boundary.haus` sits exactly at the number limits (its hex
 literals have 829 hex digits, and canonical form and JSON write them in
 decimal), and `invalid/*-too-*.haus` goes one past them.
+
+## Stream suite
+
+`stream/limits.cases.haus` checks stream readers (spec §6) against the value
+limit (§7) and strict mode. Each case is a record: `text`, `maxValueLength`,
+`strict` (optional, default `False`), and `result`: `Ok([values])`, compared
+as values (§2), or `Err("code")`. A reader must give the same result for every
+way of splitting `text` into chunks: run each case at least whole, one
+character at a time, and split at every position. The value limit applies to
+stream readers only; parsing the whole text doesn't apply it.
 
 ## JSON suite
 

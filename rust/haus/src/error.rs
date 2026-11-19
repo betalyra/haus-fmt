@@ -330,7 +330,8 @@ impl DecodeError {
     }
 }
 
-/// `$.items[2].price`, as TypeScript's `formatPath` writes it.
+/// `$.items[2].price`, the place of spec §15: a key that isn't an
+/// identifier as a canonical haus string (spec §12), `$.m["pt-BR"]`.
 pub(crate) fn place(path: &[Segment]) -> String {
     let mut out = String::from("$");
     for s in path {
@@ -341,7 +342,7 @@ pub(crate) fn place(path: &[Segment]) -> String {
             }
             Segment::Field(key) => {
                 out.push('[');
-                escape(key, &mut out);
+                crate::ser::quote(key, &mut out);
                 out.push(']');
             }
             Segment::Index(i) => out.push_str(&format!("[{i}]")),
@@ -355,7 +356,12 @@ impl fmt::Display for Segment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Segment::Field(key) if is_identifier(key) => write!(f, ".{key}"),
-            Segment::Field(key) => write!(f, "[{key:?}]"),
+            // As in `place()`: a canonical haus string (spec §12), not Rust's debug quoting.
+            Segment::Field(key) => {
+                let mut quoted = String::new();
+                crate::ser::quote(key, &mut quoted);
+                write!(f, "[{quoted}]")
+            }
             Segment::Index(i) => write!(f, "[{i}]"),
             Segment::Tag(tag) => write!(f, "({tag})"),
         }

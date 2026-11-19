@@ -202,13 +202,28 @@ export function hoverMarkdown(info: HoverInfo): string {
   return parts.join("")
 }
 
-/** Plain text for a tooltip: `status: Status` and a line of detail. */
+/** Lines of a definition a tooltip shows; a longer one ends in `…`. */
+const DEFINITION_LINES = 12
+
+/**
+ * Plain text for a tooltip: `status: Status`, a line of detail, and for a
+ * named type its definition (without its comment, which gave the detail).
+ */
 export function hoverText(info: HoverInfo): string {
   const type = info.schema?.type ?? info.inferred?.type ?? (info.secret ? "secret" : describeValue(info.value))
   const lines = [info.key === undefined ? type : `${info.key}: ${type}`]
-  const doc = info.schema?.definition?.doc.trim()
+  const definition = info.schema?.definition
+  const doc = definition?.doc.trim()
   if (doc) lines.push(doc.split("\n")[0]!)
   // "Instant (std/time): an exact point…" → "std/time: an exact point…": the type is on the first line already.
   else if (info.note) lines.push(info.note.replace(/^[^(]+\((prelude|std\/time)\)/, "$1"))
+  if (definition) {
+    const source = definition.source.split("\n")
+    const start = source.findIndex((l) => !l.trim().startsWith("//"))
+    // Indented as the definition's first line is (in the file, after its comment).
+    const indent = start === -1 ? 0 : /^ */.exec(source[start]!)![0].length
+    const body = start === -1 ? [] : source.slice(start).map((l) => l.replace(new RegExp(`^ {0,${indent}}`), ""))
+    lines.push(...(body.length > DEFINITION_LINES ? [...body.slice(0, DEFINITION_LINES - 1), "…"] : body))
+  }
   return lines.join("\n")
 }

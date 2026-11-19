@@ -3,7 +3,7 @@
 //   import @haus-fmt/geo (LatLng, BBox)
 //
 // Degrees in WGS 84, latitude first. The schema fixes the shape; the ranges
-// are the wgs84 profile (profiles/wgs84.vectors.haus), checked by codecs.
+// are the wgs84 profile (profiles/wgs84.md), checked by codecs.
 
 // A point: LatLng(38.7223, -9.1393) is Lisbon.
 type LatLng = closed < LatLng Float64 Float64 >

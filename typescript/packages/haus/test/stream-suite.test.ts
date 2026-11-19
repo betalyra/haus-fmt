@@ -1,0 +1,83 @@
+/** The stream suite (test-suite/stream, spec §6, §7): every case whole, one character at a time, and split at every position. */
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
+import { describe, expect, it } from "vitest"
+import { canonical, equals, errorCode, parseAll, StreamReader, type Value } from "../src/index.js"
+
+/** HAUS_STREAM_SUITE: another directory with the suite's limits.cases.haus. */
+const CASES = join(process.env.HAUS_STREAM_SUITE ?? join(import.meta.dirname, "../../../../test-suite/stream"), "limits.cases.haus")
+
+interface Case {
+  readonly text: string
+  readonly maxValueLength: number
+  readonly strict: boolean
+  readonly result: { readonly ok: true; readonly values: readonly Value[] } | { readonly ok: false; readonly code: string }
+}
+
+const field = (v: Value, key: string): Value | undefined => (v.kind === "record" ? v.fields.get(key) : undefined)
+
+const toCase = (v: Value): Case => {
+  const text = field(v, "text")
+  const max = field(v, "maxValueLength")
+  const strict = field(v, "strict")
+  const result = field(v, "result")
+  if (text?.kind !== "string" || max?.kind !== "number" || result?.kind !== "variant") throw new Error(`not a case: ${canonical(v)}`)
+  const arg = result.args[0]
+  return {
+    text: text.value,
+    maxValueLength: Number(max.text),
+    strict: strict?.kind === "variant" && strict.tag === "True",
+    result:
+      result.tag === "Ok" && arg?.kind === "array"
+        ? { ok: true, values: arg.items }
+        : result.tag === "Err" && arg?.kind === "string"
+          ? { ok: false, code: arg.value }
+          : (() => { throw new Error(`not a result: ${canonical(result)}`) })(),
+  }
+}
+
+type Outcome = { readonly ok: true; readonly values: readonly Value[] } | { readonly ok: false; readonly code: string }
+
+const read = (c: Case, chunks: readonly string[]): Outcome => {
+  const reader = new StreamReader({ maxValueLength: c.maxValueLength, requireTerminator: c.strict })
+  const values: Value[] = []
+  try {
+    for (const chunk of chunks) values.push(...reader.push(chunk))
+    values.push(...reader.end())
+    return { ok: true, values }
+  } catch (e) {
+    return { ok: false, code: errorCode(e) ?? String(e) }
+  }
+}
+
+/** Whole, one character at a time, and in two pieces split at every position (in code points). */
+const splits = (text: string): [string, readonly string[]][] => {
+  const chars = [...text]
+  return [
+    ["whole", [text]],
+    ["by character", chars],
+    ...chars.map((_, k): [string, readonly string[]] => [`split at ${k}`, [chars.slice(0, k).join(""), chars.slice(k).join("")]]),
+  ]
+}
+
+const same = (got: Outcome, want: Case["result"]): boolean =>
+  got.ok && want.ok
+    ? got.values.length === want.values.length && got.values.every((v, i) => equals(v, want.values[i]!))
+    : !got.ok && !want.ok && got.code === want.code
+
+const show = (o: Outcome): string => (o.ok ? `Ok [${o.values.map(canonical).join(", ")}]` : `Err ${o.code}`)
+
+const cases = parseAll(readFileSync(CASES, "utf8")).map(toCase)
+
+describe("stream suite", () => {
+  it("has all its cases", () => expect(cases.length).toBe(19))
+  for (const c of cases) {
+    it(`${JSON.stringify(c.text)} max ${c.maxValueLength}${c.strict ? " strict" : ""}`, () => {
+      const failures = splits(c.text).flatMap(([how, chunks]) => {
+        const got = read(c, chunks)
+        return same(got, c.result) ? [] : [`${how}: ${show(got)}`]
+      })
+      expect(failures).toEqual([])
+    })
+  }
+})

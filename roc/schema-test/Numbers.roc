@@ -13,72 +13,96 @@ Numbers := [].{
 	I : Int
 
 	decode_i : Value -> Try(I, Decode.Error)
-	decode_i = |v| Decode.int(v)
+	decode_i = |v| Decode.within_depth(v, read_value_i)
 
-	encode_i : I -> Value
-	encode_i = |v| Encode.int(v)
+	read_value_i : Value -> Try(I, Decode.Error)
+	read_value_i = |v| Decode.int(v)
+
+	encode_i : I, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i = |v, e| Encode.int(v, e)
 
 	## haus type `numbers#I8`.
 	I8_ : I8
 
 	decode_i8 : Value -> Try(I8_, Decode.Error)
-	decode_i8 = |v| Decode.i8(v)
+	decode_i8 = |v| Decode.within_depth(v, read_value_i8)
 
-	encode_i8 : I8_ -> Value
-	encode_i8 = |v| Num(v.to_str())
+	read_value_i8 : Value -> Try(I8_, Decode.Error)
+	read_value_i8 = |v| Decode.i8(v)
+
+	encode_i8 : I8_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i8 = |v, e| Encode.number(v.to_str(), e)
 
 	## haus type `numbers#U8`.
 	U8_ : U8
 
 	decode_u8 : Value -> Try(U8_, Decode.Error)
-	decode_u8 = |v| Decode.u8(v)
+	decode_u8 = |v| Decode.within_depth(v, read_value_u8)
 
-	encode_u8 : U8_ -> Value
-	encode_u8 = |v| Num(v.to_str())
+	read_value_u8 : Value -> Try(U8_, Decode.Error)
+	read_value_u8 = |v| Decode.u8(v)
+
+	encode_u8 : U8_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_u8 = |v, e| Encode.number(v.to_str(), e)
 
 	## haus type `numbers#I64`.
 	I64_ : I64
 
 	decode_i64 : Value -> Try(I64_, Decode.Error)
-	decode_i64 = |v| Decode.i64(v)
+	decode_i64 = |v| Decode.within_depth(v, read_value_i64)
 
-	encode_i64 : I64_ -> Value
-	encode_i64 = |v| Num(v.to_str())
+	read_value_i64 : Value -> Try(I64_, Decode.Error)
+	read_value_i64 = |v| Decode.i64(v)
+
+	encode_i64 : I64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i64 = |v, e| Encode.number(v.to_str(), e)
 
 	## haus type `numbers#U64`.
 	U64_ : U64
 
 	decode_u64 : Value -> Try(U64_, Decode.Error)
-	decode_u64 = |v| Decode.u64(v)
+	decode_u64 = |v| Decode.within_depth(v, read_value_u64)
 
-	encode_u64 : U64_ -> Value
-	encode_u64 = |v| Num(v.to_str())
+	read_value_u64 : Value -> Try(U64_, Decode.Error)
+	read_value_u64 = |v| Decode.u64(v)
+
+	encode_u64 : U64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_u64 = |v, e| Encode.number(v.to_str(), e)
 
 	## haus type `numbers#F64`.
 	F64_ : F64
 
 	decode_f64 : Value -> Try(F64_, Decode.Error)
-	decode_f64 = |v| Decode.f64(v)
+	decode_f64 = |v| Decode.within_depth(v, read_value_f64)
 
-	encode_f64 : F64_ -> Value
-	encode_f64 = |v| Encode.f64(v)
+	read_value_f64 : Value -> Try(F64_, Decode.Error)
+	read_value_f64 = |v| Decode.f64(v)
+
+	encode_f64 : F64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_f64 = |v, e| Encode.f64(v, e)
 
 	## haus type `numbers#F32`.
 	F32_ : F32
 
 	decode_f32 : Value -> Try(F32_, Decode.Error)
-	decode_f32 = |v| Decode.f32(v)
+	decode_f32 = |v| Decode.within_depth(v, read_value_f32)
 
-	encode_f32 : F32_ -> Value
-	encode_f32 = |v| Encode.f32(v)
+	read_value_f32 : Value -> Try(F32_, Decode.Error)
+	read_value_f32 = |v| Decode.f32(v)
+
+	encode_f32 : F32_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_f32 = |v, e| Encode.f32(v, e)
 
 	## haus type `numbers#Dec`.
 	Dec_ : Str
 
 	decode_dec : Value -> Try(Dec_, Decode.Error)
-	decode_dec = |v| Decode.decimal(v)
+	decode_dec = |v| Decode.within_depth(v, read_value_dec)
 
-	encode_dec : Dec_ -> Value
-	encode_dec = |v| Encode.decimal(v)
+	read_value_dec : Value -> Try(Dec_, Decode.Error)
+	read_value_dec = |v| Decode.decimal(v)
+
+	encode_dec : Dec_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_dec = |v, e| Encode.decimal(v, e)
 
 }

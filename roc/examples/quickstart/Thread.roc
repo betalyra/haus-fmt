@@ -10,12 +10,15 @@ Thread := [].{
 	Comment := [Comment({ author : Str, at : Str, text : Str, likes : Int, replies : List(Comment) })]
 
 	decode_comment : Value -> Try(Comment, Decode.Error)
-	decode_comment = |v| match v {
+	decode_comment = |v| Decode.within_depth(v, read_value_comment)
+
+	read_value_comment : Value -> Try(Comment, Decode.Error)
+	read_value_comment = |v| match v {
 		Tag("Comment", [p]) => Decode.payload(
 			"Comment",
 			p,
 			|fs| {
-				Ok(Comment({ author: Decode.field(fs, "author", Decode.str)?, at: Decode.field(fs, "at", Decode.time("Instant"))?, text: Decode.field(fs, "text", Decode.str)?, likes: Decode.field(fs, "likes", Decode.int)?, replies: Decode.field(fs, "replies", |x1| Decode.list(x1, decode_comment))? }))
+				Ok(Comment({ author: Decode.field(fs, "author", Decode.str)?, at: Decode.field(fs, "at", Decode.time("Instant"))?, text: Decode.field(fs, "text", Decode.str)?, likes: Decode.field(fs, "likes", Decode.int)?, replies: Decode.field(fs, "replies", |x1| Decode.list(x1, read_value_comment))? }))
 			},
 		)
 		Tag("Comment", _) => Decode.arity("Comment", 1)
@@ -23,18 +26,21 @@ Thread := [].{
 		_ => Decode.expected("a variant (Comment)", v)
 	}
 
-	encode_comment : Comment -> Value
-	encode_comment = |v| match v {
-		Comment(r) => Tag("Comment", [Encode.record([("author", Present(Encode.str(r.author))), ("at", Present(Encode.time("Instant")(r.at))), ("text", Present(Encode.str(r.text))), ("likes", Present(Encode.int(r.likes))), ("replies", Present(Encode.list(r.replies, encode_comment)))])])
+	encode_comment : Comment, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_comment = |v, e| match v {
+		Comment(r) => Encode.tagged_record("Comment", e, [("author", Encode.required(r.author, Encode.str)), ("at", Encode.required(r.at, Encode.time("Instant"))), ("text", Encode.required(r.text, Encode.str)), ("likes", Encode.required(r.likes, Encode.int)), ("replies", Present(|e2| Encode.list(r.replies, e2, encode_comment)))])
 	}
 
 	## haus type `thread#Root`.
 	Root : Comment
 
 	decode_root : Value -> Try(Root, Decode.Error)
-	decode_root = |v| decode_comment(v)
+	decode_root = |v| Decode.within_depth(v, read_value_root)
 
-	encode_root : Root -> Value
-	encode_root = |v| encode_comment(v)
+	read_value_root : Value -> Try(Root, Decode.Error)
+	read_value_root = |v| read_value_comment(v)
+
+	encode_root : Root, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_root = |v, e| encode_comment(v, e)
 
 }

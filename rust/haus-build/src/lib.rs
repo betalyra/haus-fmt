@@ -24,6 +24,14 @@
 //! same in every language (`@haus-fmt/money@1#Money`). Generated code names
 //! the crate by its `links`: don't rename schema package dependencies.
 //!
+//! A codec applies inside packages' types too (spec §13.4): the packages'
+//! types that contain its type, directly or not, are generated again in the
+//! application's output, one module per package (`acme_orders`), with the
+//! codec applied; their other types stay their crates'. For that, a package
+//! crate passes on the packages its schema reaches (`haus_graph`) and
+//! re-exports their crates, so a crate sees its dependencies' packages
+//! without depending on them.
+//!
 //! Imports are loaded and checked by haus-fmt-schema (spec §13.3); files
 //! the schema imports (`import ./common (Address)`) are generated into the
 //! same output, as modules ([`Config::compile`]).
@@ -121,7 +129,7 @@ impl Config {
         let packages = Packages::from_env()?;
         let options =
             Options { packages: &packages, id: Some(&id), project: Some((&krate, &crate_dir)), ..Options::default() };
-        self.emit(&path, &options, &packages, name)
+        self.emit(&path, &options, &packages, name, "").map(|_| ())
     }
 
     /// For a schema package crate: generate the types of its `schema.haus`
@@ -147,13 +155,19 @@ impl Config {
         let lib = crate_lib(&dir)?;
         let schema_path = manifest.schema_path(&dir)?;
         let packages = Packages::from_env()?;
-        self.emit(&schema_path, &Options { packages: &packages, ..Options::default() }, &packages, "schema")?;
+        let options = Options { packages: &packages, ..Options::default() };
+        let schema = self.emit(&schema_path, &options, &packages, "schema", &deps_module(&packages))?;
+        // The packages its schema reaches, for the crates that depend on this one.
+        let graph = PathBuf::from(var("OUT_DIR")?).join(packages::GRAPH);
+        let used = schema.packages().iter().map(|p| p.name.as_str()).filter(|name| *name != manifest.name);
+        fs::write(&graph, packages.graph(used)?).map_err(|e| Error::at(&graph, Code::ImportNotFound, e))?;
         rerun_if_changed(&dir.join(MANIFEST));
         rerun_if_changed(&dir.join("Cargo.toml"));
         println!("cargo::metadata=haus_package={}", dir.display());
         // The name code uses for this crate: its `links`, which is its library name.
         println!("cargo::metadata=haus_crate={lib}");
         println!("cargo::metadata=haus_version={version}");
+        println!("cargo::metadata=haus_graph={}", graph.display());
         Ok(())
     }
 
@@ -169,13 +183,13 @@ impl Config {
     /// The schema at `path`, and its code.
     fn load(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<(Schema, String)> {
         let schema = Schema::load_with(path, &Options { without_attributes: self.without_attributes, ..*options })?;
-        let units = graph::units(&schema, self.without_attributes)?;
+        let units = graph::units(&schema, self.without_attributes, &codec_ids(&self.codecs))?;
         let code = generate_units(&schema, &units, &self.codecs, krate)?;
         Ok((schema, code))
     }
 
-    /// Writes the code for the schema at `path` to `$OUT_DIR/<name>.rs`.
-    fn emit(&self, path: &Path, options: &Options, packages: &Packages, name: &str) -> Result<()> {
+    /// Writes the code for the schema at `path`, then `more`, to `$OUT_DIR/<name>.rs`.
+    fn emit(&self, path: &Path, options: &Options, packages: &Packages, name: &str, more: &str) -> Result<Schema> {
         rerun_if_changed(path);
         // haus-fmt-schema never prints: the build script tells Cargo what it read.
         packages.files().iter().for_each(|f| rerun_if_changed(f));
@@ -191,8 +205,28 @@ impl Config {
             }
         }
         let out = PathBuf::from(var("OUT_DIR")?).join(format!("{name}.rs"));
-        fs::write(&out, code).map_err(|e| Error::at(&out, Code::ImportNotFound, e))
+        fs::write(&out, code + more).map_err(|e| Error::at(&out, Code::ImportNotFound, e))?;
+        Ok(schema)
     }
+}
+
+/// For a package crate: a module that re-exports the crates of the schema
+/// packages it depends on (`pub use ::haus_money;`), through which crates
+/// that depend on it name their types (the codec closure, spec §13.4).
+fn deps_module(packages: &Packages) -> String {
+    let mut crates: Vec<&str> = packages.iter().filter(|p| p.through.is_none()).map(|p| p.krate.as_str()).collect();
+    crates.sort();
+    crates.dedup();
+    if crates.is_empty() {
+        return String::new();
+    }
+    let uses: String = crates.iter().map(|c| format!("    pub use ::{c};\n")).collect();
+    format!(
+        "\n/// The crates of the schema packages this one depends on, for the code that\n\
+         /// haus-fmt-build generates in crates that depend on this one.\n\
+         #[doc(hidden)]\npub mod {} {{\n{uses}}}\n",
+        packages::DEPS_MODULE
+    )
 }
 
 /// [`Config::package`] with no codecs: the whole build script of a schema package.
@@ -203,23 +237,27 @@ pub fn package() -> Result<()> {
 /// Check a schema on its own, without its imports (spec §14): its syntax and
 /// the rules that need no other file. Returns its warnings.
 pub fn check(text: &str) -> Result<Vec<Warning>> {
-    Ok(schema::parse(text)?.warnings.into_iter().map(Error::from).collect())
+    Ok(schema::parse_with_imported_spreads(text)?.warnings.into_iter().map(Error::from).collect())
 }
 
 /// The Rust code for a schema given as text, with the id `id`, without
 /// touching the environment. It imports std modules and `packages`, not files.
 pub fn generate(text: &str, id: &str, codecs: &[Codec], packages: &Packages) -> Result<String> {
     let schema = Schema::parse_with(text, &Options { packages, id: Some(id), ..Options::default() })?;
-    let units = graph::units(&schema, false)?;
+    let units = graph::units(&schema, false, &codec_ids(codecs))?;
     let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
     generate_units(&schema, &units, codecs, &krate)
 }
 
+fn codec_ids(codecs: &[Codec]) -> Vec<&str> {
+    codecs.iter().map(|c| c.id.as_str()).collect()
+}
+
 /// The code of a schema's files: the root's types, then a module for each
-/// file it imports.
+/// file it imports, and one for each package whose types are copied so
+/// that the codecs apply inside them (the codec closure, spec §13.4).
 fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn Fn(&str) -> String) -> Result<String> {
-    graph::check_codecs(schema, units, codecs.iter().map(|c| c.id.as_str()), krate, "other crates' types")
-        .map_err(|e| in_root(e, units))?;
+    graph::check_codecs(units, codecs.iter().map(|c| c.id.as_str())).map_err(|e| in_root(e, units))?;
     let modules = graph::module_names(&units[1..], &[], "_", rust_module);
     let module = |u: usize| format_ident!("{}", modules[u - 1]);
     let items = units
@@ -229,7 +267,8 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
             let imports = unit
                 .imports
                 .iter()
-                .map(|(name, origin)| {
+                .map(|(key, origin)| {
+                    let name = graph::type_name(key);
                     let (path, params) = match origin {
                         Origin::Time => (format!("::haus::time::{name}"), 0),
                         Origin::Package { package, params, .. } => (format!("::{}::{name}", krate(package)), *params),
@@ -239,7 +278,7 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                             (format!("{at}::{}::{name}", modules[to - 1]), *params)
                         }
                     };
-                    (name.clone(), Imported { id: origin.id(name), path, params, shape: origin.shape(schema) })
+                    (key.clone(), Imported { id: origin.id(key), path, params, shape: origin.shape(schema) })
                 })
                 .collect::<HashMap<_, _>>();
             let input =
@@ -255,11 +294,19 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                 0 => items,
                 _ => {
                     let (name, file) = (module(u), unit.path.as_deref().and_then(Path::file_name));
-                    let doc = format!(
-                        " The types of `{}` ({}).",
-                        unit.id,
-                        file.map(|f| f.to_string_lossy()).unwrap_or_default()
-                    );
+                    let doc = match &unit.package {
+                        Some(package) => format!(
+                            " The types of `{}` that contain a codec's type, so that the codec applies inside \
+                             them (spec §13.4). The package's other types are `{}`'s.",
+                            unit.id,
+                            krate(package)
+                        ),
+                        None => format!(
+                            " The types of `{}` ({}).",
+                            unit.id,
+                            file.map(|f| f.to_string_lossy()).unwrap_or_default()
+                        ),
+                    };
                     quote! {
                         #[doc = #doc]
                         pub mod #name { #items }

@@ -8,10 +8,13 @@
 //! schema packages in DIR (its subdirectories with a `package.haus`), each
 //! under the last part of its name (`money` for `@haus-fmt/money`).
 //! Packages are looked for only among these. `--codec ID=MODULE`: the Roc module MODULE is the codec
-//! for the type with this id. Without `--out`, the module is written to
+//! for the type with this id: a module of the app (`Cents`) or of a package
+//! (`money.Iso`, the iso profile's codec of `@haus-fmt/money`). Without `--out`, the module is written to
 //! standard output. The files a schema imports (`import ./common (Address)`)
 //! get modules of their own (`OrderCommon` for the module `Order`), written
-//! next to `--out`, which they then need. `--without-attributes` leaves the
+//! next to `--out`, which they then need; so do the packages' types that a
+//! codec's type is inside (`OrderAcmeOrders`, spec §13.4), which is why
+//! every package the schema reaches is given. `--without-attributes` leaves the
 //! schema's attributes out, for tests that they don't matter (spec §15).
 //! `--json` also generates each type's schema-based JSON reader and writer
 //! (`from_json_<name>`, `to_json_<name>`, spec §16.3).

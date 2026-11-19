@@ -1,0 +1,2 @@
+// A fixture of `haus package check`: a package that passes every check.
+{ name: "@fixture/good", version: "1.0.0" }

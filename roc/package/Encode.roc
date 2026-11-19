@@ -30,7 +30,7 @@ Encode := [].{
 	to_str_with : Value, Value.Limits -> Try(Str, Error)
 	to_str_with = |value, limits| {
 		supported(limits)?
-		line(value, 0, { limits, spaced: True }).map_ok(bytes_to_str)
+		line(value, 0, { limits, spaced: True }, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
 	}
 
 	## One value on one line in the minimised layout (spec §11): the compact
@@ -45,7 +45,7 @@ Encode := [].{
 	minimised_with : Value, Value.Limits -> Try(Str, Error)
 	minimised_with = |value, limits| {
 		supported(limits)?
-		line(value, 0, { limits, spaced: False }).map_ok(bytes_to_str)
+		line(value, 0, { limits, spaced: False }, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
 	}
 
 	## `.extra[1]: not a number literal`, or just the reason at the root.
@@ -132,114 +132,284 @@ Encode := [].{
 	stream_minimised_with = |values, limits| write_stream(values, { limits, spaced: False })
 
 	# ── building blocks ─────────────────────────────────────
+	#
+	# What generated encoders (`encode_<name> : T, Encode.Encoder ->
+	# Try(Encode.Encoded(Value), Encode.Error)`) are built from. Each checks
+	# what it builds as the writer will (spec §9.8), at its place: a container
+	# fails with `nesting-too-deep` at the depth limit, before its contents
+	# are encoded, so a native value nested deeper than the limit (a long
+	# linked list, a deep tree) never recurses past it. Each also counts the
+	# values it makes, one step each, and gives the count on with the value:
+	# a value whose parts are shared (a DAG, which Roc can't tell from a
+	# tree) fails with `step-budget` at `limits.max_steps` instead of
+	# expanding without bound.
 
-	str : Str -> Value
-	str = |s| Text(s)
+	## At the top, for a reader with the default limits: `Thread.encode_comment(c, Encode.top)`.
+	top : Encoder
+	top = top_with(Value.default_limits)
 
-	bytes : List(U8) -> Value
-	bytes = |b| Bytes(b)
+	## At the top, for a reader with `limits`: encode for the limits you
+	## write with (`to_str_with`), so that every error is found here, where
+	## the type is known (an error inside a `Secret` says nothing of the value).
+	top_with : Value.Limits -> Encoder
+	top_with = |limits| { limits, depth: 0, payload: False, steps: 0 }
 
-	bool : Bool -> Value
-	bool = |b| Tag(if (b) "True" else "False", [])
+	## The value `encode` (a generated `encode_<name>`) gives for `x`, for a
+	## reader with the default limits:
+	##
+	##     encoded = Encode.value(comment, Thread.encode_comment)?
+	##     text = Encode.to_str(encoded)?
+	value : a, (a, Encoder -> Try(Encoded(Value), Error)) -> Try(Value, Error)
+	value = |x, encode| value_with(x, encode, Value.default_limits)
+
+	## `value` for a reader with `limits` (see `top_with`).
+	value_with : a, (a, Encoder -> Try(Encoded(Value), Error)), Value.Limits -> Try(Value, Error)
+	value_with = |x, encode, limits| encode(x, top_with(limits)).map_ok(|o| o.value)
+
+	## Inside one more container (a record, an array, a payload): fails with
+	## `nesting-too-deep` at the depth limit, or `unsupported-depth` if the
+	## limit is more than `Value.max_supported_depth`.
+	nested : Encoder -> Try(Encoder, Error)
+	nested = |e| {
+		supported(e.limits)?
+		open(e.depth, e.limits)?
+		Ok({ ..e, depth: e.depth + 1, payload: False })
+	}
+
+	## Inside a record or map: one more level, unless the record is a tag's
+	## only argument (`Tag { … }`) and so shares its level.
+	record_level : Encoder -> Try(Encoder, Error)
+	record_level = |e| if (e.payload) Ok({ ..e, payload: False }) else nested(e)
+
+	## Inside a tag's only argument: one more level, where a record takes none of its own.
+	payload : Encoder -> Try(Encoder, Error)
+	payload = |e| nested(e).map_ok(|inner| { ..inner, payload: True })
+
+	## The steps after one more value made here: `step-budget` beyond
+	## `limits.max_steps`.
+	step : Encoder -> Try(U64, Error)
+	step = |e| counted(e.steps, e.limits)
+
+	## `x`, one value made here (a scalar): `Encode.made(Number(n.to_str()), e)`.
+	made : a, Encoder -> Try(Encoded(a), Error)
+	made = |x, e| Ok({ value: x, steps: step(e)? })
+
+	str : Str, Encoder -> Try(Encoded(Value), Error)
+	str = |s, e| {
+		check_length(s, e.limits)?
+		made(Text(s), e)
+	}
+
+	bytes : List(U8), Encoder -> Try(Encoded(Value), Error)
+	bytes = |b, e| {
+		check_bytes(b, e.limits)?
+		made(Bytes(b), e)
+	}
+
+	bool : Bool, Encoder -> Try(Encoded(Value), Error)
+	bool = |b, e| tag(if (b) "True" else "False", e)
 
 	## `Int`: an integer of any size, as its digits.
-	int : Int -> Value
-	int = |n| Num(n.to_str())
+	int : Int, Encoder -> Try(Encoded(Value), Error)
+	int = |n, e| number(n.to_str(), e)
+
+	## A number literal (`Int8`…`UInt64` as `n.to_str()`), normalized as the
+	## parser reads it, within the number limits.
+	number : Str, Encoder -> Try(Encoded(Value), Error)
+	number = |text, e| made(Num(bytes_to_str(literal(text, e.limits)?)), e)
 
 	## An exact decimal, as its text: `19.90`.
-	decimal : Str -> Value
-	decimal = |text| Num(text)
+	decimal : Str, Encoder -> Try(Encoded(Value), Error)
+	decimal = |text, e| number(text, e)
 
 	## A Float64 in its one spelling (spec §15): the fewest digits that read
 	## back as the same binary64 value, laid out like JavaScript's
 	## `Number.prototype.toString` without `+` in the exponent (`1e21`,
 	## `1.5e-7`, `-0`). NaN and the infinities are tags (prelude).
-	f64 : F64 -> Value
-	f64 = |x|
+	f64 : F64, Encoder -> Try(Encoded(Value), Error)
+	f64 = |x, e|
 		if x != x {
-			Tag("NaN", [])
+			tag("NaN", e)
 		} else if x > 1.7976931348623157e308 {
-			Tag("Infinity", [])
+			tag("Infinity", e)
 		} else if x < -1.7976931348623157e308 {
-			Tag("NegInfinity", [])
+			tag("NegInfinity", e)
 		} else {
 			# Roc's `to_str` has the digits the spec asks for: the fewest that read
 			# back as the same float, the closest of them, ties to even.
-			Num(float_text(x.to_str()))
+			number(float_text(x.to_str()), e)
 		}
 
 	## A Float32 in its one spelling: the fewest digits that read back as the
 	## same binary32 value (`0.1`, not `0.10000000149011612`), laid out as for `f64`.
-	f32 : F32 -> Value
-	f32 = |x|
+	f32 : F32, Encoder -> Try(Encoded(Value), Error)
+	f32 = |x, e|
 		if x != x {
-			Tag("NaN", [])
+			tag("NaN", e)
 		} else if x > 3.4028235e38 {
-			Tag("Infinity", [])
+			tag("Infinity", e)
 		} else if x < -3.4028235e38 {
-			Tag("NegInfinity", [])
+			tag("NegInfinity", e)
 		} else {
-			Num(float_text(x.to_str()))
+			number(float_text(x.to_str()), e)
 		}
 
 	## A std/time value: `Date("2026-11-09")`.
-	time : Str -> (Str -> Value)
-	time = |name| |text| Tag(name, [Text(text)])
+	time : Str -> (Str, Encoder -> Try(Encoded(Value), Error))
+	time = |name| |text, e| tagged(name, e, |inner| str(text, inner))
 
-	list : List(a), (a -> Value) -> Value
-	list = |items, encode| Arr(items.map(encode))
-
-	## `Map v`: a record used as a dictionary.
-	map : List((Str, a)), (a -> Value) -> Value
-	map = |entries, encode| Rec(entries.map(|(k, v)| (k, encode(v))))
-
-	maybe : [None, Some(a)], (a -> Value) -> Value
-	maybe = |m, encode| match m {
-		None => Tag("None", [])
-		Some(x) => Tag("Some", [encode(x)])
+	list : List(a), Encoder, (a, Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	list = |items, e, encode| {
+		inner = nested(e)?
+		var $steps = step(e)?
+		var $out = List.with_capacity(items.len())
+		for x in items {
+			item = at_index(encode(x, { ..inner, steps: $steps }), $out.len(), "")?
+			$out = $out.append(item.value)
+			$steps = item.steps
+		}
+		Ok({ value: Arr($out), steps: $steps })
 	}
 
-	result : Try(a, e), (a -> Value), (e -> Value) -> Value
-	result = |r, ok, err| match r {
-		Ok(x) => Tag("Ok", [ok(x)])
-		Err(x) => Tag("Err", [err(x)])
+	## `Map v`: a record used as a dictionary. A key used twice is `duplicate-key`.
+	map : List((Str, a)), Encoder, (a, Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	map = |entries, e, encode| {
+		inner = record_level(e)?
+		unique_keys(entries.map(|(k, _)| k))?
+		var $steps = step(e)?
+		var $out = List.with_capacity(entries.len())
+		for (k, x) in entries {
+			entry = field(k, encode(x, { ..inner, steps: $steps }), inner)?
+			$out = $out.append((k, entry.value))
+			$steps = entry.steps
+		}
+		Ok({ value: Rec($out), steps: $steps })
 	}
+
+	maybe : [None, Some(a)], Encoder, (a, Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	maybe = |m, e, encode| match m {
+		None => tag("None", e)
+		Some(x) => tagged("Some", e, |inner| encode(x, inner))
+	}
+
+	result : Try(a, x), Encoder, (a, Encoder -> Try(Encoded(Value), Error)), (x, Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	result = |r, e, ok, err| match r {
+		Ok(x) => tagged("Ok", e, |inner| ok(x, inner))
+		Err(x) => tagged("Err", e, |inner| err(x, inner))
+	}
+
+	## A required field: `x`, encoded with `encode` inside the record, after
+	## the fields before it.
+	required : a, (a, Encoder -> Try(Encoded(Value), Error)) -> [Missing, Present(Encoder -> Try(Encoded(Value), Error))]
+	required = |x, encode| Present(|inner| encode(x, inner))
 
 	## An optional field (`key?: T`): left out of the record when `Missing`.
-	optional : [Missing, Present(a)], (a -> Value) -> [Missing, Present(Value)]
+	optional : [Missing, Present(a)], (a, Encoder -> Try(Encoded(Value), Error)) -> [Missing, Present(Encoder -> Try(Encoded(Value), Error))]
 	optional = |o, encode| match o {
 		Missing => Missing
-		Present(x) => Present(encode(x))
+		Present(x) => Present(|inner| encode(x, inner))
 	}
 
 	## A record from its fields in order, leaving out missing optional ones.
-	record : List((Str, [Missing, Present(Value)])) -> Value
-	record = |fields| {
+	## Each field is encoded inside the record, after the one before it:
+	##
+	##     Encode.record(e, [("id", Encode.required(u.id, Encode.int)), ("nick", Encode.optional(u.nick, Encode.str))])
+	record : Encoder, List((Str, [Missing, Present(Encoder -> Try(Encoded(Value), Error))])) -> Try(Encoded(Value), Error)
+	record = |e, fields| {
+		inner = record_level(e)?
+		var $steps = step(e)?
 		var $out = []
-		for (key, field) in fields {
-			match field {
-				Present(v) => {
-					$out = $out.append((key, v))
+		for (k, f) in fields {
+			match f {
+				Present(encode) => {
+					entry = field(k, encode({ ..inner, steps: $steps }), inner)?
+					$out = $out.append((k, entry.value))
+					$steps = entry.steps
 				}
 				Missing => {}
 			}
 		}
-		Rec($out)
+		Ok({ value: Rec($out), steps: $steps })
 	}
 
-	## `Any`: the value as it was.
-	any : Value -> Value
-	any = |v| v
+	## A tag without payload: `None`, `Circle`.
+	tag : Str, Encoder -> Try(Encoded(Value), Error)
+	tag = |name, e| {
+		check_tag(name, e.limits)?
+		made(Tag(name, []), e)
+	}
 
-	## `Secret a`: the value in full (the receiver needs it).
-	secret : Secret(a), (a -> Value) -> Value
-	secret = |s, encoder| encoder(s.expose())
+	## A tag with one argument, which `encode` encodes inside it: `Some(1)`,
+	## and `Wrap { w: 1 }` for a record (`Tag { … }` takes one level, spec §7).
+	tagged : Str, Encoder, (Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	tagged = |name, e, encode| {
+		check_tag(name, e.limits)?
+		inner = payload(e)?
+		match encode({ ..inner, steps: step(e)? }) {
+			Ok(arg) => Ok({ value: Tag(name, [arg.value]), steps: arg.steps })
+			Err(err) => Err({ ..err, path: payload_path(name, err.path) })
+		}
+	}
+
+	## A tag with two or more arguments, each encoded inside it after the
+	## one before: `Point(1, 2)`.
+	tagged_args : Str, Encoder, List(Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	tagged_args = |name, e, encoders| {
+		check_tag(name, e.limits)?
+		inner = nested(e)?
+		var $steps = step(e)?
+		var $out = []
+		for encode in encoders {
+			arg = at_index(encode({ ..inner, steps: $steps }), $out.len(), "(${name})")?
+			$out = $out.append(arg.value)
+			$steps = arg.steps
+		}
+		Ok({ value: Tag(name, $out), steps: $steps })
+	}
+
+	## A tag with a record payload: `Circle { r: 1.5 }`, as `record` takes it.
+	tagged_record : Str, Encoder, List((Str, [Missing, Present(Encoder -> Try(Encoded(Value), Error))])) -> Try(Encoded(Value), Error)
+	tagged_record = |name, e, fields| {
+		check_tag(name, e.limits)?
+		inner = within(payload(e), "(${name})")?
+		r = within(record({ ..inner, steps: step(e)? }, fields), "(${name})")?
+		Ok({ value: Tag(name, [r.value]), steps: r.steps })
+	}
+
+	## An unknown variant kept as it was, checked as the writer checks it.
+	unknown : Str, List(Value), Encoder -> Try(Encoded(Value), Error)
+	unknown = |name, args, e| any(Tag(name, args), e)
+
+	## `Any`: the value as it was, checked as the writer checks it here, a
+	## step for each value in it.
+	any : Value, Encoder -> Try(Encoded(Value), Error)
+	any = |v, e| {
+		supported(e.limits)?
+		# A record that is a tag's only argument shares the tag's level.
+		depth = match v {
+			Rec(_) if e.payload => e.depth - 1
+			_ => e.depth
+		}
+		written_out = line(v, depth, { limits: e.limits, spaced: False }, { bytes: [], steps: e.steps })?
+		Ok({ value: v, steps: written_out.steps })
+	}
+
+	## `Secret a`: the value in full (the receiver needs it). An error inside
+	## it is reported at the secret, saying only that it isn't a valid `what`
+	## (`"Secret Any"`), with the code `invalid-secret`: never the value, nor
+	## where in it, since a key of a `Map` or an `Any` in the path could reveal
+	## it (spec §15).
+	secret : Secret(a), Str, Encoder, (a, Encoder -> Try(Encoded(Value), Error)) -> Try(Encoded(Value), Error)
+	secret = |s, what, e, encode| match encode(s.expose(), e) {
+		Ok(v) => Ok(v)
+		Err(_) => fail(ErrorCode.invalid_secret, "not a valid ${what} (the value is hidden)")
+	}
 
 	## `< >`: a bare tag, or any other variant kept as it was.
-	any_tag : [Bare(Str), Other(Str, List(Value))] -> Value
-	any_tag = |t| match t {
-		Bare(name) => Tag(name, [])
-		Other(name, args) => Tag(name, args)
+	any_tag : [Bare(Str), Other(Str, List(Value))], Encoder -> Try(Encoded(Value), Error)
+	any_tag = |t, e| match t {
+		Bare(name) => any(Tag(name, []), e)
+		Other(name, args) => unknown(name, args, e)
 	}
 }
 
@@ -302,6 +472,85 @@ within = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}"
 fail : Str, Str -> Try(a, Error)
 fail = |code, reason| Err({ code, reason, path: "" })
 
+## Where a value is encoded (spec §7, §9.8): for a reader with `limits`,
+## inside `depth` containers (records, arrays, payloads), counted as the
+## writer counts them, after `steps` values made so far. `payload`: the
+## value is a tag's only argument, so a record here is written `Tag { … }`
+## and takes no level of its own. Start with `Encode.top` or
+## `Encode.top_with(limits)`; containers take `Encode.nested`.
+Encoder : { limits : Value.Limits, depth : U64, payload : Bool, steps : U64 }
+
+## What an encoder gives: the value it made, and the steps taken so far,
+## its own included, for the next value to count on from.
+Encoded(a) : { value : a, steps : U64 }
+
+## The steps after one more value made, after `steps`: `step-budget` beyond
+## `limits.max_steps` (spec §9.8).
+counted : U64, Value.Limits -> Try(U64, Error)
+counted = |steps, limits|
+	if steps >= limits.max_steps {
+		fail(ErrorCode.step_budget, "encode budget of ${limits.max_steps.to_str()} steps exceeded (a value whose parts are shared expands when written)")
+	} else {
+		Ok(steps + 1)
+	}
+
+## A field's value, under its key, with the key checked as the writer checks it.
+field : Str, Try(a, Error), Encoder -> Try(a, Error)
+field = |k, v, e| {
+	segment = ErrorCode.path_key(k)
+	within(check_text(k, "key", e.limits), segment)?
+	within(v, segment)
+}
+
+## Keys are unique (spec §1): a map built in code might repeat one.
+unique_keys : List(Str) -> Try({}, Error)
+unique_keys = |keys| {
+	var $numbered = List.with_capacity(keys.len())
+	for k in keys {
+		$numbered = $numbered.append((k, $numbered.len()))
+	}
+	match Value.first_repeated($numbered) {
+		Ok((k, _)) => Err({ code: ErrorCode.duplicate_key, reason: "the key is used twice in this record", path: ErrorCode.path_key(k) })
+		Err(_) => Ok({})
+	}
+}
+
+## The result of item `i`, with `[i]` after `prefix` in the path of an error.
+at_index : Try(a, Error), U64, Str -> Try(a, Error)
+at_index = |result, i, prefix| match result {
+	Ok(x) => Ok(x)
+	Err(e) => Err({ ..e, path: "${prefix}[${i.to_str()}]${e.path}" })
+}
+
+## Where an error inside a tag's only argument is, as the writer says it: a
+## record's fields are right inside the tag (`(Wrap).w`), anything else is
+## its first argument (`(Some)[0]`).
+payload_path : Str, Str -> Str
+payload_path = |name, path|
+	if path.starts_with(".") or path.starts_with("[\"") {
+		"(${name})${path}"
+	} else {
+		"(${name})[0]${path}"
+	}
+
+## A tag name (`[A-Z][A-Za-z0-9_]*`) within the string limit.
+check_tag : Str, Value.Limits -> Try({}, Error)
+check_tag = |name, limits|
+	if is_tag(name) {
+		check_text(name, "tag", limits)
+	} else {
+		fail(ErrorCode.invalid_tag, "not a tag name: A to Z, then letters, digits and _")
+	}
+
+## A byte string within the string limit: two hex digits per byte.
+check_bytes : List(U8), Value.Limits -> Try({}, Error)
+check_bytes = |b, limits|
+	if b.len() > limits.max_string_length // 2 {
+		fail(ErrorCode.string_too_long, "byte string longer than ${limits.max_string_length.to_str()} characters")
+	} else {
+		Ok({})
+	}
+
 ## Whether this binding supports `limits` (spec §7).
 supported : Value.Limits -> Try({}, Error)
 supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })
@@ -316,47 +565,54 @@ write_stream = |values, writer| {
 	var $out = []
 	var $i = 0.U64
 	for v in values {
-		$out = $out.concat(within(line(v, 0, writer), "[${$i.to_str()}]")?).concat([',', '\n'])
+		# Each value has a budget of its own.
+		written_out = within(line(v, 0, writer, { bytes: $out, steps: 0 }), "[${$i.to_str()}]")?
+		$out = written_out.bytes.concat([',', '\n'])
 		$i = $i + 1
 	}
 	Ok(bytes_to_str($out))
 }
 
-## A value inside `depth` containers (records, arrays, payloads).
-line : Value, U64, Writer -> Try(List(U8), Error)
-line = |value, depth, writer| {
+## The text written so far, and the values written (one step each).
+Out : { bytes : List(U8), steps : U64 }
+
+## `value`, inside `depth` containers (records, arrays, payloads), written
+## after `out`: a step for it and each value in it (spec §9.8), so that a
+## value built in code whose parts are shared (a DAG) fails with
+## `step-budget` instead of expanding without bound.
+line : Value, U64, Writer, Out -> Try(Out, Error)
+line = |value, depth, writer, before| {
 	limits = writer.limits
+	out = { ..before, steps: counted(before.steps, limits)? }
 	match value {
-		Num(text) => number(text, limits)
+		Num(text) => Ok({ ..out, bytes: out.bytes.concat(literal(text, limits)?) })
 		Text(s) => {
 			check_length(s, limits)?
-			Ok(quote(s))
+			Ok({ ..out, bytes: out.bytes.concat(quote(s)) })
 		}
-		Bytes(b) =>
-			if b.len() > limits.max_string_length // 2 {
-				fail(ErrorCode.string_too_long, "byte string longer than ${limits.max_string_length.to_str()} characters")
-			} else {
-				Ok("x\"".to_utf8().concat(hex(b)).append('"'))
-			}
+		Bytes(b) => {
+			check_bytes(b, limits)?
+			Ok({ ..out, bytes: out.bytes.concat("x\"".to_utf8()).concat(hex(b)).append('"') })
+		}
 		Arr(items) => {
 			open(depth, limits)?
-			Ok(['['].concat(items_line(items, depth + 1, writer)?).append(']'))
+			inside = items_line(items, depth + 1, writer, { ..out, bytes: out.bytes.append('[') })?
+			Ok({ ..inside, bytes: inside.bytes.append(']') })
 		}
-		Rec(fields) => record_line(fields, depth, writer)
-		Tag(name, args) =>
-			if !is_tag(name) {
-				fail(ErrorCode.invalid_tag, "not a tag name: A to Z, then letters, digits and _")
-			} else {
-				check_text(name, "tag", limits)?
-				match args {
-					[] => Ok(name.to_utf8())
-					[Rec(fields)] => Ok(name.to_utf8().concat(space(writer)).concat(within(record_line(fields, depth, writer), "(${name})")?))
-					_ => {
-						open(depth, limits)?
-						Ok(name.to_utf8().append('(').concat(within(items_line(args, depth + 1, writer), "(${name})")?).append(')'))
-					}
+		Rec(fields) => record_line(fields, depth, writer, out)
+		Tag(name, args) => {
+			check_tag(name, limits)?
+			named = { ..out, bytes: out.bytes.concat(name.to_utf8()) }
+			match args {
+				[] => Ok(named)
+				[Rec(fields)] => within(record_line(fields, depth, writer, { ..named, bytes: named.bytes.concat(space(writer)) }), "(${name})")
+				_ => {
+					open(depth, limits)?
+					inside = within(items_line(args, depth + 1, writer, { ..named, bytes: named.bytes.append('(') }), "(${name})")?
+					Ok({ ..inside, bytes: inside.bytes.append(')') })
 				}
 			}
+		}
 	}
 }
 
@@ -369,40 +625,38 @@ open : U64, Value.Limits -> Try({}, Error)
 open = |depth, limits| if (depth >= limits.max_depth) fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
 
 ## Items separated by `, ` (`,` minimised), each at `depth`.
-items_line : List(Value), U64, Writer -> Try(List(U8), Error)
-items_line = |items, depth, writer| {
+items_line : List(Value), U64, Writer, Out -> Try(Out, Error)
+items_line = |items, depth, writer, before| {
 	separator = [','].concat(space(writer))
-	var $out = []
+	var $out = before
 	var $i = 0.U64
 	for x in items {
-		item = within(line(x, depth, writer), "[${$i.to_str()}]")?
-		$out = if ($i == 0) item else $out.concat(separator).concat(item)
+		$out = if ($i == 0) $out else { ..$out, bytes: $out.bytes.concat(separator) }
+		$out = within(line(x, depth, writer, $out), "[${$i.to_str()}]")?
 		$i = $i + 1
 	}
 	Ok($out)
 }
 
-record_line : List((Str, Value)), U64, Writer -> Try(List(U8), Error)
-record_line = |fields, depth, writer| {
+record_line : List((Str, Value)), U64, Writer, Out -> Try(Out, Error)
+record_line = |fields, depth, writer, before| {
 	limits = writer.limits
 	open(depth, limits)?
+	if fields.is_empty() {
+		return Ok({ ..before, bytes: before.bytes.concat(['{', '}']) })
+	}
 	# Keys are unique (spec §1): a record built in code might repeat one.
-	var $keys = List.with_capacity(fields.len())
-	for (k, _) in fields {
-		$keys = $keys.append((k, $keys.len()))
-	}
-	match Value.first_repeated($keys) {
-		Ok((k, _)) => return Err({ code: ErrorCode.duplicate_key, reason: "the key is used twice in this record", path: ErrorCode.path_key(k) })
-		Err(_) => {}
-	}
+	unique_keys(fields.map(|(k, _)| k))?
 	sp = space(writer)
-	var $out = []
+	var $out = { ..before, bytes: before.bytes.append('{').concat(sp) }
+	var $first = True
 	for (k, v) in fields {
 		within(check_text(k, "key", limits), ErrorCode.path_key(k))?
-		entry = key(k).append(':').concat(sp).concat(within(line(v, depth + 1, writer), ErrorCode.path_key(k))?)
-		$out = if ($out.is_empty()) entry else $out.append(',').concat(sp).concat(entry)
+		separated = if ($first) $out.bytes else $out.bytes.append(',').concat(sp)
+		$out = within(line(v, depth + 1, writer, { ..$out, bytes: separated.concat(key(k)).append(':').concat(sp) }), ErrorCode.path_key(k))?
+		$first = False
 	}
-	Ok(if ($out.is_empty()) ['{', '}'] else ['{'].concat(sp).concat($out).concat(sp).append('}'))
+	Ok({ ..$out, bytes: $out.bytes.concat(sp).append('}') })
 }
 
 ## A string within the string limit, counted in code points.
@@ -428,8 +682,8 @@ is_tag = |name| {
 
 ## The text a number is written as, or why it can't be: its normalized
 ## literal (spec §2), always decimal, within the limits.
-number : Str, Value.Limits -> Try(List(U8), Error)
-number = |text, limits| {
+literal : Str, Value.Limits -> Try(List(U8), Error)
+literal = |text, limits| {
 	b = text.to_utf8()
 	literal_chars = b.all(|c| (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == 'x' or c == '.' or c == '_' or c == '+' or c == '-')
 	n =
@@ -563,59 +817,9 @@ key = |k| {
 	if (bare) b else quote(k)
 }
 
-## A `"…"` string with the minimal escapes.
+## A `"…"` string with the minimal escapes, as in the canonical form (spec §12).
 quote : Str -> List(U8)
-quote = |s| {
-	b = s.to_utf8()
-	var $out = ['"']
-	var $i = 0
-	while $i < b.len() {
-		c = match b.get($i) {
-			Ok(x) => x
-			Err(_) => 0
-		}
-		# The line and paragraph separators and the bidirectional controls
-		# (U+2028–U+2029, U+202A–U+202E, U+2066–U+2069): E2 80 A8–AE, E2 81 A6–A9.
-		next = match b.get($i + 1) {
-			Ok(x) => x
-			Err(_) => 0
-		}
-		third = match b.get($i + 2) {
-			Ok(x) => x
-			Err(_) => 0
-		}
-		bidi = c == 0xE2 and ((next == 0x80 and third >= 0xA8 and third <= 0xAE) or (next == 0x81 and third >= 0xA6 and third <= 0xA9))
-		# C1 controls (U+0080–U+009F): C2 80–9F.
-		c1 = c == 0xC2 and next >= 0x80 and next <= 0x9F
-		if c1 {
-			$out = $out.concat("\\u{${hex_upper(next.to_u64())}}".to_utf8())
-			$i = $i + 2
-		} else if bidi {
-			cp = if (next == 0x80) 0x2000 + third.to_u64() - 0x80 else 0x2040 + third.to_u64() - 0x80
-			$out = $out.concat("\\u{${hex_upper(cp)}}".to_utf8())
-			$i = $i + 3
-		} else {
-			$out =
-				if c == '"' {
-					$out.concat(['\\', '"'])
-				} else if c == '\\' {
-					$out.concat(['\\', '\\'])
-				} else if c == '\n' {
-					$out.concat(['\\', 'n'])
-				} else if c == '\r' {
-					$out.concat(['\\', 'r'])
-				} else if c == '\t' {
-					$out.concat(['\\', 't'])
-				} else if c < 0x20 or c == 0x7F {
-					$out.concat("\\u{${hex_upper(c.to_u64())}}".to_utf8())
-				} else {
-					$out.append(c)
-				}
-			$i = $i + 1
-		}
-	}
-	$out.append('"')
-}
+quote = |s| ErrorCode.haus_string(s).to_utf8()
 
 digit_chars : List(U8)
 digit_chars = "0123456789abcdef".to_utf8()
@@ -635,19 +839,6 @@ hex_digit = |d| match digit_chars.get(d.to_u64()) {
 	Err(_) => '0'
 }
 
-hex_upper : U64 -> Str
-hex_upper = |n| {
-	var $digits = []
-	var $v = n
-	while $v > 0 or $digits.is_empty() {
-		d = ($v % 16).to_u8_wrap()
-		c = if (d < 10) '0' + d else 'A' + d - 10
-		$digits = [c].concat($digits)
-		$v = $v // 16
-	}
-	bytes_to_str($digits)
-}
-
 bytes_to_str : List(U8) -> Str
 bytes_to_str = |bytes| match Str.from_utf8(bytes) {
 	Ok(s) => s
@@ -662,11 +853,16 @@ expect Encode.to_str(Tag("Money", [Num("44.40"), Tag("EUR", [])])) == Ok("Money(
 expect Encode.to_str(Arr([Bytes([0x0b, 0xff]), Rec([]), Arr([])])) == Ok("[x\"0bff\", {}, []]")
 expect Encode.to_str(Text("a\"b\\\n\u(202E)")) == Ok("\"a\\\"b\\\\\\n\\u{202E}\"")
 expect Encode.stream([Tag("A", []), Num("1")]) == Ok("A,\n1,\n")
-expect Int.from_str("340282366920938463463374607431768211457").map_ok(|n| Encode.to_str(Encode.int(n))) == Ok(Ok("340282366920938463463374607431768211457"))
-expect Encode.to_str(Encode.record([("a", Present(Num("1"))), ("b", Missing)])) == Ok("{ a: 1 }")
+expect Int.from_str("340282366920938463463374607431768211457").map_ok(|n| written(n, Encode.int)) == Ok(Ok("340282366920938463463374607431768211457"))
+expect written({ a: 1.I32, b: Missing }, |r, e| Encode.record(e, [("a", Present(|inner| Encode.number(r.a.to_str(), inner))), ("b", Encode.optional(r.b, Encode.str))])) == Ok("{ a: 1 }")
+expect written({ a: "x", b: Present("y") }, |r, e| Encode.record(e, [("a", Encode.required(r.a, Encode.str)), ("b", Encode.optional(r.b, Encode.str))])) == Ok("{ a: \"x\", b: \"y\" }")
 expect Encode.to_str(Text("\u(1B)\u(7F)\u(85)")) == Ok("\"\\u{1B}\\u{7F}\\u{85}\"")
 # U+2028 and U+2029 are escaped too, so a line never ends inside a string (spec §11).
 expect Encode.to_str(Text("a\u(2028)b\u(2029)\u(2027)\u(202F)")) == Ok("\"a\\u{2028}b\\u{2029}\u(2027)\u(202F)\"")
+
+## `x` encoded with `encode` and written.
+written : a, (a, Encoder -> Try(Encoded(Value), Error)) -> Try(Str, Error)
+written = |x, encode| Encode.to_str(Encode.value(x, encode)?)
 
 # The minimised layout (spec §11): compact without the whitespace between tokens.
 person : Str, Str, Str -> Value
@@ -701,12 +897,12 @@ expect {
 }
 
 # Floats in their one spelling (spec §15).
-expect [1.0, 100.0, 123000.0, 1.5, 12.25, 0.1, 0.000001, 1e-7, 1.5e-7, 1e20, 1e21, -1.5, 0.30000000000000004, 5e-324, 1.7976931348623157e308].map(|x| Encode.to_str(Encode.f64(x)) ?? "") == ["1", "100", "123000", "1.5", "12.25", "0.1", "0.000001", "1e-7", "1.5e-7", "100000000000000000000", "1e21", "-1.5", "0.30000000000000004", "5e-324", "1.7976931348623157e308"]
-expect [0.0, -0.0, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0].map(|x| Encode.to_str(Encode.f64(x)) ?? "") == ["0", "-0", "NaN", "Infinity", "NegInfinity"]
-expect [0.1.F32, 16777216.0, 1.0000001, 3.4028235e38, 1e21, -0.0].map(|x| Encode.to_str(Encode.f32(x)) ?? "") == ["0.1", "16777216", "1.0000001", "3.4028235e38", "1e21", "-0"]
+expect [1.0, 100.0, 123000.0, 1.5, 12.25, 0.1, 0.000001, 1e-7, 1.5e-7, 1e20, 1e21, -1.5, 0.30000000000000004, 5e-324, 1.7976931348623157e308].map(|x| written(x, Encode.f64) ?? "") == ["1", "100", "123000", "1.5", "12.25", "0.1", "0.000001", "1e-7", "1.5e-7", "100000000000000000000", "1e21", "-1.5", "0.30000000000000004", "5e-324", "1.7976931348623157e308"]
+expect [0.0, -0.0, 0.0 / 0.0, 1.0 / 0.0, -1.0 / 0.0].map(|x| written(x, Encode.f64) ?? "") == ["0", "-0", "NaN", "Infinity", "NegInfinity"]
+expect [0.1.F32, 16777216.0, 1.0000001, 3.4028235e38, 1e21, -0.0].map(|x| written(x, Encode.f32) ?? "") == ["0.1", "16777216", "1.0000001", "3.4028235e38", "1e21", "-0"]
 # Exactly half way between the two closest shortest candidates: the even one, like JavaScript.
-expect [1690060720831323.25, -1690060720831323.25].map(|x| Encode.to_str(Encode.f64(x)) ?? "") == ["1690060720831323.2", "-1690060720831323.2"]
-expect [2097152.25.F32, 2097152.75, 1048576.125, 4498.53125].map(|x| Encode.to_str(Encode.f32(x)) ?? "") == ["2097152.2", "2097152.8", "1048576.1", "4498.5312"]
+expect [1690060720831323.25, -1690060720831323.25].map(|x| written(x, Encode.f64) ?? "") == ["1690060720831323.2", "-1690060720831323.2"]
+expect [2097152.25.F32, 2097152.75, 1048576.125, 4498.53125].map(|x| written(x, Encode.f32) ?? "") == ["2097152.2", "2097152.8", "1048576.1", "4498.5312"]
 
 # The canonical form (spec §12): the same cases as the TypeScript and Rust bindings.
 canonical_of : Str -> Str
@@ -849,7 +1045,7 @@ expect {
 
 # Writing for a reader with other limits (`to_str_with`): at each limit, and just past it.
 small : Value.Limits
-small = { max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
+small = { ..Value.default_limits, max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
 
 error_with : Value -> Str
 error_with = |v| match Encode.to_str_with(v, small) {
@@ -885,8 +1081,134 @@ code_of = |v| match Encode.to_str(v) {
 }
 
 expect code_of(Arr([Num("1"), Num("x")])) == "cannot-encode at $[1]" and code_of(Tag("lower", [])) == "invalid-tag at $"
-expect code_of(Rec([("pt-BR", Num("1")), ("pt-BR", Num("2"))])) == "duplicate-key at $[\"pt-BR\"]" and code_of(Tag("A", [Rec([("b", Num("1e9999"))])])) == "exponent-too-large at $[0].b"
+expect code_of(Rec([("pt-BR", Num("1")), ("pt-BR", Num("2"))])) == "duplicate-key at $[\"pt-BR\"]" and code_of(Tag("A", [Rec([("b", Num("1e9999"))])])) == "exponent-too-large at $.b"
 expect code_of(Text("x".repeat(16 * 1024 * 1024 + 1))) == "string-too-long at $" and code_of(Num("9".repeat(1300))) == "number-too-long at $"
 expect code_of(nested(257, Num("1"), |v| Arr([v]))).starts_with("nesting-too-deep at $[0]")
 expect Encode.to_str_with(Rec([("abcde", Num("1"))]), small).map_err(|e| e.code) == Err("key-too-long") and Encode.to_str_with(Tag("Abcde", []), small).map_err(|e| e.code) == Err("tag-too-long")
 expect Encode.to_str(Num("x")).map_err(Encode.error_json) == Err("{\"code\":\"cannot-encode\",\"message\":\"not a number literal\",\"path\":\"$\",\"hint\":\"Pass a value of the host type the binding documents for the type.\",\"docs\":\"https://haus-fmt.org/docs/errors#cannot-encode\"}")
+
+# Encoding native values (spec §9.8): what the writer checks, checked as each value is encoded.
+Login : { user : Str, creds : Secret(List((Str, Value))) }
+
+encode_login : Login, Encoder -> Try(Encoded(Value), Error)
+encode_login = |l, e| Encode.record(e, [("user", Encode.required(l.user, Encode.str)), ("creds", Present(|inner| Encode.secret(l.creds, "Secret (Map Any)", inner, |m, e1| Encode.map(m, e1, Encode.any))))])
+
+login : Value -> Login
+login = |v| { user: "ada", creds: Secret.new([("ok", Text("fine")), ("alice-pw", v)]) }
+
+# An error inside a Secret is at the secret, and says nothing of the value: not the
+# map key, not where in the Any (spec §15), whatever went wrong in it.
+expect {
+	bad = [Num("hunter2"), Rec([("x", Num("1")), ("x", Num("2"))]), Tag("hunter2", []), Text("hunter2hunter2"), nested(5, Num("1"), |v| Arr([v]))]
+	bad.all(
+		|v| match encode_login(login(v), { ..Encode.top, limits: { ..Value.default_limits, max_depth: 4, max_string_length: 10 } }) {
+			Err(e) => e == { code: "invalid-secret", reason: "not a valid Secret (Map Any) (the value is hidden)", path: ".creds" }
+			Ok(_) => False
+		},
+	)
+}
+expect Encode.value(login(Num("1")), encode_login).map_ok(Encode.canonical) == Ok("{creds:{\"alice-pw\":1,ok:\"fine\"},user:\"ada\"}")
+# Inside a tag's argument: the secret's place, as the writer names it.
+expect Encode.value(Some(login(Num("x"))), |m, e| Encode.maybe(m, e, encode_login)).map_err(|e| (e.code, e.path)).map_ok(Encode.canonical) == Err(("invalid-secret", "(Some).creds"))
+# Outside a secret, the place in the value, as the writer gives it.
+expect Encode.value([("a", Num("1")), ("pt-BR", Arr([Num("x")]))], |m, e| Encode.map(m, e, Encode.any)).map_ok(Encode.canonical) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[\"pt-BR\"][0]" })
+expect Encode.value([("a", 1.I32), ("a", 2)], |m, e| Encode.map(m, e, |n, e1| Encode.number(n.to_str(), e1))).map_err(|e| (e.code, e.path)).map_ok(Encode.canonical) == Err(("duplicate-key", ".a"))
+
+# A native value nested far deeper than any limit: the encoder stops at the
+# limit (nesting-too-deep, at the place the writer names), without recursing on.
+# (Encoding all of a chain of 150,000 links, then checking the depth, overflows
+# the stack of `roc test`; Roc can't drop a chain of 250,000, so 200,000 it is.)
+Chain := [End, Link(Chain)]
+
+encode_chain : Chain, Encoder -> Try(Encoded(Value), Error)
+encode_chain = |c, e| match c {
+	End => Encode.tag("End", e)
+	Link(next) => Encode.tagged("Link", e, |inner| encode_chain(next, inner))
+}
+
+chain : U64 -> Chain
+chain = |n| {
+	var $c = End
+	var $i = 0
+	while $i < n {
+		$c = Link($c)
+		$i = $i + 1
+	}
+	$c
+}
+
+expect {
+	deep = Encode.value(chain(200_000), encode_chain)
+	deep.map_err(|e| (e.code, e.reason, e.path.count_utf8_bytes())).map_ok(Encode.canonical) == Err(("nesting-too-deep", "nesting deeper than 256 levels", 256 * "(Link)[0]".count_utf8_bytes()))
+}
+# At the limit, and one past it: the same as the writer, for every limit.
+expect [1, 2, 255, 256].all(|n| encode_chain(chain(n), Encode.top).is_ok()) and encode_chain(chain(257), Encode.top).is_err()
+expect [0, 1, 3, 1024].all(
+	|d| {
+		limits = { ..Value.default_limits, max_depth: d }
+		Encode.value_with(chain(d), encode_chain, limits).is_ok() and Encode.value_with(chain(d + 1), encode_chain, limits).map_ok(Encode.canonical) == Encode.to_str_with(nested(d + 1, Tag("End", []), |v| Tag("Link", [v])), limits)
+	},
+)
+# Records as a tag's only argument share its level (`Tag { … }`), as in the writer.
+expect {
+	tree = |n| nested(n, Rec([]), |v| Rec([("a", v)]))
+	wrap = |v, e| Encode.tagged("A", e, |inner| Encode.any(v, inner))
+	limits = { ..Value.default_limits, max_depth: 3 }
+	[2, 3].all(|n| (wrap(tree(n), Encode.top_with(limits)).map_ok(|_| {})) == (Encode.to_str_with(Tag("A", [tree(n)]), limits).map_ok(|_| {})))
+}
+expect Encode.value_with([1.I32], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), { ..Value.default_limits, max_depth: 2000 }).map_err(|e| e.code).map_ok(Encode.canonical) == Err("unsupported-depth")
+
+# A native value whose parts are shared (a DAG): each level holds the level
+# below twice, so `levels` levels are 2^(levels + 1) − 1 values when written
+# out. Encoding counts the values it makes (spec §9.8) and stops at the budget.
+Dag := [Leaf, Two(Dag, Dag)]
+
+encode_dag : Dag, Encoder -> Try(Encoded(Value), Error)
+encode_dag = |d, e| match d {
+	Leaf => Encode.list([], e, encode_dag)
+	Two(a, b) => Encode.list([a, b], e, encode_dag)
+}
+
+dag : U64 -> Dag
+dag = |levels| {
+	var $d = Leaf
+	var $i = 0
+	while $i < levels {
+		$d = Two($d, $d)
+		$i = $i + 1
+	}
+	$d
+}
+
+## A DAG of Values built in code, as `dag`.
+shared : U64 -> Value
+shared = |levels| {
+	var $v = Arr([])
+	var $i = 0
+	while $i < levels {
+		$v = Arr([$v, $v])
+		$i = $i + 1
+	}
+	$v
+}
+
+budget : U64 -> Value.Limits
+budget = |max| { ..Value.default_limits, max_steps: max }
+
+# 2^41 − 1 values. (At the default budget, 16 Mi, `roc test` takes some 8 seconds to get there.)
+expect Value.default_limits.max_steps == 16 * 1024 * 1024
+expect {
+	e = Encode.value_with(dag(40), encode_dag, budget(100_000)).map_ok(|_| {})
+	e.map_err(|err| (err.code, err.reason)) == Err(("step-budget", "encode budget of 100000 steps exceeded (a value whose parts are shared expands when written)"))
+}
+expect Encode.value_with(dag(40), encode_dag, budget(1000)).map_err(|err| (err.code, err.path.starts_with("[0][0][0][0][0][0][0][0]"))).map_ok(|_| {}) == Err(("step-budget", True))
+# The writer counts the values it writes, and `Any` the values in it.
+expect Encode.to_str_with(shared(40), budget(100_000)).map_err(|err| err.code) == Err("step-budget") and Encode.minimised_with(shared(40), budget(1000)).map_err(|err| err.code) == Err("step-budget")
+expect Encode.value_with(shared(40), Encode.any, budget(1000)).map_err(|err| err.code).map_ok(|_| {}) == Err("step-budget")
+# Exactly a step per value: 2^4 − 1 for three levels, at the budget and one under.
+expect Encode.value_with(dag(3), encode_dag, budget(15)).is_ok() and Encode.value_with(dag(3), encode_dag, budget(14)).is_err()
+expect Encode.to_str_with(shared(3), budget(15)).is_ok() and Encode.to_str_with(shared(3), budget(14)).is_err()
+expect Encode.value_with(shared(3), Encode.any, budget(15)).is_ok() and Encode.value_with(shared(3), Encode.any, budget(14)).is_err()
+expect Encode.value_with([1.I32, 2, 3], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), budget(4)).map_ok(Encode.canonical) == Ok("[1,2,3]")
+# Each value of a stream has a budget of its own.
+expect Encode.stream_with([shared(3), shared(3)], budget(15)).is_ok() and Encode.stream_with([Num("1"), shared(3)], budget(14)).map_err(|err| (err.code, err.path.starts_with("[1][1]"))) == Err(("step-budget", True))

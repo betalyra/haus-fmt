@@ -153,6 +153,9 @@ Err { type: "Mine", json: "null", code: "type-mismatch" },
 Ok { type: "OptLoop", input: None, json: "null" },
 Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
 Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+Ok { type: "InPlace", input: None, json: "null" },
+Ok { type: "InPlace", input: Some(None), json: "{\"_tag\": \"None\"}" },
+Ok { type: "InPlace", input: Some(Some(1)), json: "{\"_tag\": \"Some\", \"value\": 1}" },
 
 // ── unknown tags: a bare tag stays bare; _args must be a non-empty array; _tag must be a tag ──
 Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },

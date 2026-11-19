@@ -1,0 +1,7 @@
+// An application that uses schema packages (packages/): @haus-test/orders,
+// and @haus-test/money, for which build.rs registers a codec. orders imports
+// @haus-test/ledger, which imports money: this crate doesn't depend on ledger.
+import @haus-test/orders@1 (Order, Customer)
+import @haus-test/money@1 (Money, Rate)
+
+type Shop = { orders: Array Order, customer: Customer, price: Money, rate: Rate }

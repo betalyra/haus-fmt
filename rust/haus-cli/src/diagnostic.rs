@@ -2,7 +2,7 @@
 //! and its text with a source excerpt (annotate-snippets).
 
 use crate::json::{Members, n, s};
-use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet};
+use annotate_snippets::{AnnotationKind, Group, Level, Origin, Renderer, Snippet};
 use haus::json::Json;
 use haus::{ErrorCode, SyntaxError};
 use haus_schema::Issue;
@@ -69,6 +69,11 @@ impl Diagnostic {
             hint: code.hint().to_owned(),
             excerpt: None,
         }
+    }
+
+    /// The same diagnostic, with a fix for this case.
+    pub fn with_hint(self, hint: impl Into<String>) -> Diagnostic {
+        Diagnostic { hint: hint.into(), ..self }
     }
 
     /// A syntax error in `text` (None: the text isn't at hand, as in a stream).
@@ -157,23 +162,33 @@ impl Diagnostic {
     /// The text for people: title, place, source line with a caret, the
     /// place in the value, the hint and the docs. `name` is the file checked.
     pub fn render(&self, name: &str, renderer: &Renderer) -> String {
+        let note = self.file.is_some().then(|| format!("while checking {name} against this schema"));
+        self.render_at(self.file.as_deref().unwrap_or(name), note, renderer)
+    }
+
+    /// The text for people, for a diagnostic about its own `file` (or none).
+    pub fn render_alone(&self, renderer: &Renderer) -> String {
+        self.render_at(self.file.as_deref().unwrap_or_default(), None, renderer)
+    }
+
+    fn render_at(&self, file: &str, note: Option<String>, renderer: &Renderer) -> String {
         let level = match self.severity {
             Severity::Error => Level::ERROR,
             Severity::Warning => Level::WARNING,
             Severity::Hint => Level::INFO.with_name("hint"),
         };
-        let file = self.file.as_deref().unwrap_or(name);
         let title = level.primary_title(&self.message).id(self.code.as_str());
         let mut group = match (&self.excerpt, self.position) {
             (Some(x), Some((line, _))) => {
                 let annotation = AnnotationKind::Primary.span(x.span.clone());
                 title.element(Snippet::source(&x.line).path(file).line_start(line).annotation(annotation))
             }
+            _ if file.is_empty() => Group::with_title(title),
             (None, Some((line, column))) => title.element(Origin::path(file).line(line).char_column(column)),
             _ => title.element(Origin::path(file)),
         };
-        if self.file.is_some() {
-            group = group.element(Level::NOTE.message(format!("while checking {name} against this schema")));
+        if let Some(note) = note {
+            group = group.element(Level::NOTE.message(note));
         }
         if let Some(path) = &self.path {
             group = group.element(Level::NOTE.with_name("at").message(path));

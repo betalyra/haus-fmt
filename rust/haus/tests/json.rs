@@ -176,6 +176,57 @@ fn lengths_count_on_the_haus_value() {
     assert_eq!(outcome(json::from_str_with::<Int>(r#""123456""#, &four)), "ok");
 }
 
+/// The code of a write's error, or "ok".
+fn written(write: Result<String, haus::EncodeError>) -> String {
+    write.map_or_else(|e| e.code.as_str().to_owned(), |_| "ok".into())
+}
+
+#[test]
+fn writers_count_lengths_on_the_haus_value() {
+    // What the readers take (above), the writers write, for the same limits:
+    // exactly at the limit is written, one more is not (spec §16 "Limits").
+    let (two, four) =
+        (Limits { max_string_length: 2, ..Limits::default() }, Limits { max_string_length: 4, ..Limits::default() });
+    // A string's characters, not its escapes: `é\n\t"` is 4 characters, 9 in JSON.
+    assert_eq!(written(json::to_string_with("é\n\t\"", &four)), "ok");
+    assert_eq!(written(json::to_string_with("é\n\t\"x", &four)), "string-too-long");
+    let described = |v: Value, limits: &Limits| written(json::to_haus_json_with(&v, limits));
+    assert_eq!(described(Value::String("é\n\t\"".into()), &four), "ok");
+    assert_eq!(described(Value::String("é\n\t\"x".into()), &four), "string-too-long");
+    // Bytes: two characters per byte, in base64 as in hex.
+    let bytes = |n: usize, limits: &Limits| written(json::to_string_with(&Bytes(vec![0; n]), limits));
+    assert_eq!((bytes(2, &four), bytes(3, &four)), ("ok".into(), "string-too-long".into()));
+    // One byte is 2 characters, although its base64 ("AA==") has 4.
+    assert_eq!((bytes(1, &two), bytes(2, &two)), ("ok".into(), "string-too-long".into()));
+    assert_eq!(described(Value::Bytes(vec![0x0b, 0x34]), &four), "ok");
+    assert_eq!(described(Value::Bytes(vec![0x0b, 0x34, 0xff]), &four), "string-too-long");
+    // Keys and tags, with their own codes.
+    let map = |k: &str| written(json::to_string_with(&BTreeMap::from([(k.to_owned(), 1)]), &four));
+    assert_eq!((map("abcd"), map("abcde")), ("ok".into(), "key-too-long".into()));
+    let record = |k: &str| Value::Record(vec![(k.to_owned(), Value::Number("1".into()))]);
+    assert_eq!(described(record("abcd"), &four), "ok");
+    assert_eq!(described(record("abcde"), &four), "key-too-long");
+    let tag = |t: &str| Value::Variant { tag: t.to_owned(), args: vec![] };
+    assert_eq!(described(tag("Abcd"), &four), "ok");
+    assert_eq!(described(tag("Abcde"), &four), "tag-too-long");
+    // What isn't a string of the value doesn't count: the forms' member names
+    // (`_haus`, `_value`, `_num`), and numbers held in strings, which the
+    // number limit bounds.
+    assert_eq!(described(Value::String("ab".into()), &two), "ok");
+    assert_eq!(described(Value::Number("123456".into()), &two), "ok");
+    assert_eq!(written(json::to_string_with(&123456i64, &two)), "ok");
+    assert_eq!(written(json::to_string_with(&Int::from(123456i64), &two)), "ok");
+    assert_eq!(written(json::to_string_with(&f64::INFINITY, &two)), "ok");
+    // std/time: the string inside `Date("…")`, and the tag.
+    let ten = Limits { max_string_length: 10, ..Limits::default() };
+    let date = haus::time::Date::new("2026-11-18").unwrap();
+    assert_eq!(written(json::to_string_with(&date, &ten)), "ok");
+    let nine = Limits { max_string_length: 9, ..Limits::default() };
+    assert_eq!(written(json::to_string_with(&date, &nine)), "string-too-long");
+    // JSON built in code has no haus value: only its numbers and nesting are checked.
+    assert_eq!(written(json::write_with(&Json::String("abcde".into()), &four)), "ok");
+}
+
 #[test]
 fn the_writer_checks_what_it_writes() {
     // Besides what JSON requires, DEL, C1 and the bidi controls are escaped.

@@ -17,7 +17,7 @@ const text = '{ user: "hello", pin: 70000, value: 12345 }'
 const parts = secretParts(env, "Hidden", text)
 
 /** A runner that fails with `message(text)`. */
-const failing = (message: (text: string) => string) => (t: string): Outcome => ({ kind: "err", reason: message(t) })
+const failing = (message: (text: string) => string) => (t: string): Extract<Outcome, { kind: "err" }> => ({ kind: "err", reason: message(t) })
 
 test("the secret's parts include the key `value`", () => {
   assert.ok(parts.includes("value"))

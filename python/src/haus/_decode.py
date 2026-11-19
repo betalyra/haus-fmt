@@ -1549,6 +1549,10 @@ class Builder:
         self.back: dict[_Instance, list[_BackRef]] = {}
         self.used: set[str] = set()
         """The ids of the codecs applied."""
+        self.nodes: dict[int, tuple[Type, _Node]] = {}
+        """The node of each type object, by its id (the object kept, so the id stays its own). Arguments are
+        shared, not copied: a type written once can be reached along exponentially many paths (`P a a` inside
+        `P a a` …) and is built once."""
 
     def coded(self, node: _Node, id: str) -> _Node:
         if (codec := self.codecs.get(id)) is None:
@@ -1574,6 +1578,15 @@ class Builder:
         return node
 
     def build(self, t: Type) -> _Node:
+        if isinstance(t, RefType):
+            return self.ref(t.instance)
+        if (known := self.nodes.get(id(t))) is not None:
+            return known[1]
+        node = self.build_new(t)
+        self.nodes[id(t)] = (t, node)
+        return node
+
+    def build_new(self, t: Type) -> _Node:
         match t:
             case BuiltinType(name):
                 return self.coded(_BUILTINS[name], f"prelude#{name}")

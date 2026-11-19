@@ -1,0 +1,2 @@
+// A raw right-to-left override in a comment, as in data files (spec §14, §1): access‮ denied
+type A = Int

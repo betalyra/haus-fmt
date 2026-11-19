@@ -57,6 +57,12 @@ describe("node resolver: a package is package.haus and schema.haus (spec §13.3)
     expect(identify(join(root, PKG, "schema.haus"))).toBe("@acme/evil@1")
   })
 
+  it("rejects an imported schema file that is not UTF-8 (invalid-utf8)", () => {
+    const root = app({}, "import ./other (A)\ntype Root = A")
+    writeFileSync(join(root, "app/other.schema.haus"), Buffer.from("// \xff\ntype A = Int\n", "latin1"))
+    expect(rejected(root, "invalid-utf8")).toContain("is not UTF-8 text")
+  })
+
   it("ignores other manifest fields, a former `schema` among them", () => {
     const root = app({
       [`${PKG}/package.haus`]: `{ name: "@acme/evil", version: "1.2.0", schema: "../../../../secret/creds.txt", description: "x" }`,

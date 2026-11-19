@@ -15,7 +15,7 @@ import {
   payloadHint, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
-import { Array as Arr, BigDecimal, DateTime, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
+import { Array as Arr, BigDecimal, DateTime, Duration, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
 
 export type Converter = (value: Value) => unknown
 
@@ -214,30 +214,93 @@ const leave = () => {
 /** Whether the parser counts `v` as a level of nesting: records, arrays and `Tag(…)`. */
 const isNested = (v: Value): boolean => v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0)
 
+/** A container being counted by `countValues`. */
+interface Counting {
+  readonly value: Value
+  readonly depth: number
+  /** Its children: an array's items or a variant's arguments by index, a record's fields by iterator. */
+  readonly items: ReadonlyArray<Value> | undefined
+  readonly fields: Iterator<Value> | undefined
+  next: number
+  /** `Tag { … }`: its record is at its own level, as in the parser; `Tag(a, b)` nests its arguments. */
+  readonly payload: boolean
+  /** Values in it, counting a shared one each time it is reached. */
+  size: number
+  /** Levels it needs, its own included. */
+  need: number
+  /** Whether it holds containers: only then can it be in a cycle, and is it remembered. */
+  holds: boolean
+}
+
+/** How `countValues` marks a container while counting it: reaching it again is a cycle. */
+const OPEN = { size: 0, need: 0 }
+
 /**
  * Count the values in a tree, failing when it nests deeper than `maxDepth`
  * levels (counted as the parser counts them) or has too many values. A
  * parsed value is a tree within the parser's limits; a `Value` built in code
- * might be deeper, share nodes (a DAG) or even contain itself.
+ * might be deeper, share nodes (a DAG) or even contain itself. A shared value
+ * counts each time it is reached, as decoding visits it, but is walked once:
+ * its count and the levels it needs are remembered, so a DAG that expands
+ * beyond the limit fails at once instead of after 64 Mi steps.
  */
 const countValues = (value: Value, maxDepth: number): number => {
-  let count = 0
-  // Each value with the number of levels around it.
-  const stack: [Value, number][] = [[value, 0]]
-  while (stack.length > 0) {
-    const [v, depth] = stack.pop()!
-    if (++count > MAX_VALUES) throw new ConversionError("value has too many nodes", "too-many-nodes")
-    if (depth >= maxDepth && isNested(v)) throw new ConversionError(`value nested deeper than ${maxDepth} levels (or cyclic)`, "nesting-too-deep")
-    if (v.kind === "array") for (const x of v.items) stack.push([x, depth + 1])
-    else if (v.kind === "record") for (const x of v.fields.values()) stack.push([x, depth + 1])
-    // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
-    else if (v.kind === "variant") {
-      const [first] = v.args
-      if (v.args.length === 1 && first!.kind === "record") stack.push([first!, depth])
-      else for (const x of v.args) stack.push([x, depth + 1])
+  const tooMany = () => {
+    throw new ConversionError("value has too many nodes", "too-many-nodes")
+  }
+  const tooDeep = () => {
+    throw new ConversionError(`value nested deeper than ${maxDepth} levels (or cyclic)`, "nesting-too-deep")
+  }
+  if (!isNested(value)) return 1
+  /** Containers holding containers, counted (or `OPEN`, being counted). */
+  const known = new Map<Value, { readonly size: number; readonly need: number }>()
+  const stack: Counting[] = []
+  const enter = (v: Value, depth: number) => {
+    if (depth >= maxDepth) tooDeep()
+    const items = v.kind === "array" ? v.items : v.kind === "variant" ? v.args : undefined
+    const fields = v.kind === "record" ? v.fields.values() : undefined
+    const payload = v.kind === "variant" && v.args.length === 1 && v.args[0]!.kind === "record"
+    stack.push({ value: v, depth, items, fields, next: 0, payload, size: 1, need: 1, holds: false })
+  }
+  enter(value, 0)
+  for (;;) {
+    const top = stack[stack.length - 1]!
+    let child: Value
+    if (top.items !== undefined && top.next < top.items.length) child = top.items[top.next++]!
+    else {
+      const field = top.fields?.next()
+      if (field !== undefined && field.done !== true) child = field.value
+      else {
+        stack.pop()
+        if (top.holds) known.set(top.value, { size: top.size, need: top.need })
+        const parent = stack[stack.length - 1]
+        if (parent === undefined) return top.size
+        parent.size += top.size
+        parent.need = Math.max(parent.need, top.depth - parent.depth + top.need)
+        if (parent.size > MAX_VALUES) tooMany()
+        continue
+      }
+    }
+    if (!isNested(child)) {
+      if (++top.size > MAX_VALUES) tooMany()
+      continue
+    }
+    if (!top.holds) {
+      top.holds = true
+      known.set(top.value, OPEN)
+    }
+    const seen = known.get(child)
+    // A value that contains itself nests without end.
+    if (seen === OPEN) tooDeep()
+    const depth = top.payload ? top.depth : top.depth + 1
+    if (seen === undefined) enter(child, depth)
+    else {
+      if (depth + seen.need > maxDepth) tooDeep()
+      top.size += seen.size
+      top.need = Math.max(top.need, depth - top.depth + seen.need)
+      if (top.size > MAX_VALUES) tooMany()
     }
   }
-  return count
 }
 
 /**
@@ -261,6 +324,410 @@ export const encoding = (limits: h.Limits, encode: () => Value): Value => {
   const value = guarded(limits, limits.maxSteps ?? DEFAULT_ENCODE_STEPS, encode)
   countValues(value, depthOf(limits))
   return value
+}
+
+// ── the value handed to Effect's encoder ─────────────────────
+
+/**
+ * Levels of objects a value to encode may nest, for a `maxDepth`: twice as
+ * many plus 16, room for host objects around values (a Redacted, a
+ * BigDecimal, a class around a field), and well below the ~1900 levels at
+ * which Effect's encoder overflows Node's default stack. The value it
+ * produces is then held to `maxDepth` itself (`encoding`).
+ */
+const hostLevelsOf = (maxDepth: number): number => 2 * maxDepth + 16
+
+type Key = string | number
+
+/**
+ * Objects Effect's encoder doesn't walk into: binary data, dates, and
+ * Effect's scalars, whose own properties hold caches (a BigDecimal's normal
+ * form, which refers to itself) rather than values.
+ */
+const isOpaque = (o: object): boolean =>
+  !isPlain(o) && (ArrayBuffer.isView(o) || o instanceof ArrayBuffer || o instanceof Date || o instanceof RegExp
+    || BigDecimal.isBigDecimal(o) || DateTime.isDateTime(o) || Duration.isDuration(o))
+
+/** An array or an object literal: the common case, told apart quickly. */
+const isPlain = (o: object): boolean => {
+  const proto = Object.getPrototypeOf(o)
+  return proto === Object.prototype || proto === Array.prototype || proto === null
+}
+
+/** A Redacted, the one wrapper that adds no level (`isPlain` first: it is quicker). */
+const isSecret = (o: object): o is Redacted.Redacted<unknown> => !isPlain(o) && Redacted.isRedacted(o)
+
+/** A haus `Value` (in a `Haus.Any`, an Unknown's payload), whose levels count as the parser counts them. */
+const isValueNode = (o: object): o is Value => {
+  const v = o as { readonly kind?: unknown; readonly items?: unknown; readonly fields?: unknown; readonly args?: unknown }
+  switch (v.kind) {
+    case "array":
+      return Array.isArray(v.items)
+    case "record":
+      return v.fields instanceof Map
+    case "variant":
+      return Array.isArray(v.args)
+    default:
+      return v.kind === "string" || v.kind === "number" || v.kind === "bytes"
+  }
+}
+
+/** The levels an object adds below the one holding it: a haus value as the parser counts it, a Redacted none, other objects one. */
+const levelsOf = (o: object): number => (isSecret(o) ? 0 : isValueNode(o) ? (isNested(o) ? 1 : 0) : 1)
+
+/** Walk without the schema: everything reachable from the object (see `checkEncodable`). */
+const GENERIC = Symbol("generic")
+
+/** How an object is walked: by a structural node of the schema's type side, or without the schema. */
+type Guide = SchemaAST.Objects | SchemaAST.Arrays | SchemaAST.Declaration | typeof GENERIC
+
+/**
+ * A child of an object, walked by `ast` (or without the schema). `flat`: it
+ * adds no level (a variant's record payload; a class instance's fields,
+ * walked on the instance itself).
+ */
+interface Edge {
+  readonly value: unknown
+  readonly key: Key | undefined
+  readonly ast: AST | typeof GENERIC
+  readonly flat?: boolean
+}
+
+const generic_ = (value: unknown, key: Key | undefined, flat?: boolean): Edge => ({ value, key, ast: GENERIC, ...(flat ? { flat } : {}) })
+
+/** Own enumerable properties of `o`, but `skip`. */
+const ownEdges = (o: object, skip: string): Edge[] => Object.keys(o).flatMap((k) => (k === skip ? [] : [generic_((o as Record<string, unknown>)[k], k)]))
+
+/** Without the schema, the children of an object that isn't an array or an ordinary object: a Redacted's value, Map and Set entries, a haus value's. */
+const genericEdges = (o: object): ReadonlyArray<Edge> | undefined => {
+  if (isSecret(o)) {
+    try {
+      return [generic_(Redacted.value(o), undefined)]
+    } catch {
+      return [] // wiped
+    }
+  }
+  if (o instanceof Map) return Array.from(o, ([k, x]): Edge[] => [generic_(k, undefined), generic_(x, typeof k === "string" || typeof k === "number" ? k : undefined)]).flat()
+  if (o instanceof Set) return Array.from(o, (x): Edge => generic_(x, undefined))
+  if (!isValueNode(o)) return undefined
+  // The parser's levels: `[…]`, `{…}` and `Tag(…)` are one each, `Tag { … }` one in all.
+  switch (o.kind) {
+    case "array":
+      return [...ownEdges(o, "items"), ...Array.from(o.items, (x, i): Edge => generic_(x, i))]
+    case "record":
+      return [...ownEdges(o, "fields"), ...Array.from(o.fields, ([k, x]): Edge => generic_(x, k))]
+    case "variant": {
+      const [first] = o.args
+      const payload = o.args.length === 1 && typeof first === "object" && first !== null && isValueNode(first) && first.kind === "record"
+      return [...ownEdges(o, "args"), ...Array.from(o.args, (x, i): Edge => generic_(x, i, payload))]
+    }
+    default:
+      return ownEdges(o, "")
+  }
+}
+
+/**
+ * How Effect's encoder walks `value` at `ast` (its type side): the structural
+ * node it applies, several for a union whose members the value's tag doesn't
+ * tell apart (Effect may try each), none for a scalar. Union members are
+ * those the tag allows. `Unknown`, `Any` (`Haus.Any`) and `object` are walked
+ * without the schema, as the haus converter after Effect's encoder walks them.
+ */
+const guideOf = (ast: AST, value: object): Guide | ReadonlyArray<Guide> | undefined => {
+  switch (ast._tag) {
+    case "Objects":
+    case "Arrays":
+      return ast
+    case "Suspend":
+      return guideOf(ast.thunk(), value)
+    case "Declaration":
+      return ast.typeParameters.length > 0 ? ast : undefined
+    case "Unknown":
+    case "Any":
+    case "ObjectKeyword":
+      return GENERIC
+    case "Union": {
+      const tag = (value as { readonly _tag?: unknown })._tag
+      const out: Guide[] = []
+      for (const member of ast.types) {
+        if (typeof tag === "string" && Option.getOrElse(tagOf(member), () => tag) !== tag) continue
+        const g = guideOf(member, value)
+        if (isGuides(g)) out.push(...g)
+        else if (g !== undefined) out.push(g)
+      }
+      return out.length === 0 ? undefined : out.length === 1 ? out[0] : out
+    }
+    default:
+      return undefined
+  }
+}
+
+const isGuides = (g: Guide | ReadonlyArray<Guide> | undefined): g is ReadonlyArray<Guide> => Array.isArray(g)
+
+/** The element type at index `i` of an array of `length` (none for an excess element, which Effect rejects without walking it). */
+const elementAst = (ast: SchemaAST.Arrays, i: number, length: number): AST | undefined => {
+  const { elements, rest } = ast
+  if (i < elements.length) return elements[i]
+  if (rest.length === 0) return undefined
+  const restEnd = length - (rest.length - 1)
+  return i < restEnd ? rest[0] : rest[1 + i - restEnd]
+}
+
+/** Iterate `o` if it is iterable (a Map, a Set, a Chunk, a HashMap…); nothing otherwise, which Effect rejects. */
+const entriesOf = (o: object): ReadonlyArray<unknown> => (Symbol.iterator in o ? Array.from(o as Iterable<unknown>) : [])
+
+/**
+ * The children of a declaration with type parameters, as Effect's encoder
+ * reaches them: a class instance's fields (on the instance itself), an
+ * Option's value, a Redacted's value, the entries of a Map, Set, Chunk,
+ * HashMap or HashSet. Other declarations (Exit, Cause, a user's) are walked
+ * without the schema.
+ */
+const declarationEdges = (ast: SchemaAST.Declaration, o: object): ReadonlyArray<Edge> => {
+  const [a, b] = ast.typeParameters as ReadonlyArray<AST>
+  if (ast.annotations?.["~constructor"] !== undefined && ast.typeParameters.length === 1) return [{ value: o, key: undefined, ast: a!, flat: true }]
+  switch (Option.getOrUndefined(declarationId(ast))) {
+    case "effect/schema/Option":
+      return Option.isOption(o) && Option.isSome(o) ? [{ value: o.value, key: "value", ast: a! }] : []
+    case "effect/schema/Redacted":
+      return isSecret(o) ? (genericEdges(o) ?? []).map((e) => ({ ...e, ast: a! })) : []
+    case "effect/schema/ReadonlyMap":
+    case "effect/schema/HashMap":
+      return entriesOf(o).flatMap((entry): Edge[] => {
+        if (!Array.isArray(entry)) return []
+        const [k, x] = entry as [unknown, unknown]
+        return [{ value: k, key: undefined, ast: a! }, { value: x, key: typeof k === "string" || typeof k === "number" ? k : undefined, ast: b! }]
+      })
+    case "effect/schema/ReadonlySet":
+    case "effect/schema/HashSet":
+    case "effect/schema/Chunk":
+      return entriesOf(o).map((x): Edge => ({ value: x, key: undefined, ast: a! }))
+    default:
+      return [{ value: o, key: undefined, ast: GENERIC, flat: true }]
+  }
+}
+
+/** A child still to walk by another guide (a union's other members). */
+interface Pending {
+  readonly value: object
+  readonly key: Key | undefined
+  readonly flat: boolean
+  readonly guide: Guide
+}
+
+/** An object being walked by a guide: where it is, how deep, its children, and what of it is counted so far. */
+interface Frame {
+  readonly node: object
+  readonly guide: Guide
+  readonly key: Key | undefined
+  /** Levels from the root, this object's included. */
+  readonly depth: number
+  /** The children: an array's by index, an object's by key (`keys`, own keys without the schema; `props`, a struct's fields) or listed (`edges`), in that order. */
+  readonly keys: ReadonlyArray<string> | undefined
+  readonly props: ReadonlyArray<SchemaAST.PropertySignature> | undefined
+  readonly edges: ReadonlyArray<Edge> | undefined
+  readonly count: number
+  next: number
+  pending: Pending[] | undefined
+  /** Whether it holds objects: only then can it be in a cycle, and is it remembered. */
+  holdsObjects: boolean
+  /** Values in it, counting a shared object each time it is reached. */
+  size: number
+  /** Most levels below it. */
+  height: number
+}
+
+/** The guides an object is walked by (on the stack, or done): a list, nearly always of one. */
+interface Open {
+  readonly guide: Guide
+  readonly next: Open | undefined
+}
+interface Done extends Open {
+  readonly size: number
+  readonly height: number
+  readonly next: Done | undefined
+}
+
+const hasGuide = (list: Open | undefined, guide: Guide): boolean => {
+  for (let at = list; at !== undefined; at = at.next) if (at.guide === guide) return true
+  return false
+}
+
+const doneBy = (list: Done | undefined, guide: Guide): Done | undefined => {
+  for (let at = list; at !== undefined; at = at.next) if (at.guide === guide) return at
+  return undefined
+}
+
+/**
+ * Check a value before Effect's encoder walks it with `ast` (the schema's
+ * type side; spec §9.8). Effect's encoder has no budget: it visits an object
+ * shared many times (a DAG) each time it is reached, so 30 levels of
+ * `{ a: x, b: x }` cost 2^30 visits there, and it recurses into a cycle until
+ * the stack overflows. This walk follows the schema as Effect's encoder does
+ * (struct fields and index signatures, tuple and array elements, union
+ * members by tag, recursion, the contents of classes, Options, Redacteds,
+ * Maps, Sets, Chunks), visits each object once per schema node, remembering
+ * how many values it holds and how deep it nests, and fails like `h.*` when
+ * encoding:
+ * - `step-budget` beyond `maxSteps` values (16 Mi by default), counting a
+ *   shared object each time it is reached, as Effect's encoder visits them;
+ * - `cyclic-value` for an object that contains itself along the schema;
+ * - `nesting-too-deep` beyond `hostLevelsOf(maxDepth)` levels of objects.
+ * Its work is bounded by the budget, and by the objects in the value: far
+ * less for a DAG. Properties outside the schema aren't walked, so a
+ * back-reference there (an entity's `parent`) is no error.
+ *
+ * Where the schema doesn't say how Effect reaches into a value, the walk
+ * goes through everything reachable (own enumerable properties, Map and Set
+ * entries, a Redacted's value, a haus value's parts): below `Unknown`, `Any`
+ * and `object`, which the haus converter walks just as fully, and in
+ * declarations it doesn't know (Exit, Cause, a user's `Schema.declare`). The
+ * output of a transformation is made by its code while Effect encodes, so it
+ * can't be checked here; the haus converter after Effect's encoder holds it
+ * to the limits. Inside a Redacted, errors name the secret's place only
+ * (spec §15).
+ */
+export const checkEncodable = (js: unknown, ast: AST, limits: h.Limits): void => {
+  if (typeof js !== "object" || js === null || isOpaque(js)) return
+  const maxSteps = limits.maxSteps ?? DEFAULT_ENCODE_STEPS
+  const maxDepth = depthOf(limits)
+  const maxLevels = hostLevelsOf(maxDepth)
+  const done = new Map<object, Done>()
+  const open = new Map<object, Open>()
+  const stack: Frame[] = []
+  let work = 0
+
+  /** The place of the top object's `key`, stopping at a secret. */
+  const path = (key: Key | undefined): ReadonlyArray<Key> => {
+    const out: Key[] = []
+    for (const frame of stack) {
+      if (frame.key !== undefined) out.push(frame.key)
+      if (isSecret(frame.node)) return out
+    }
+    if (key !== undefined) out.push(key)
+    return out
+  }
+  const fail = (message: string, code: ErrorCode, key?: Key): never => {
+    throw new ConversionError(message, code, path(key))
+  }
+  const tooLarge = (key?: Key) =>
+    fail(`encode budget of ${maxSteps} steps exceeded: the value holds more values, counting an object shared in it each time it is reached`, "step-budget", key)
+  const tooDeep = (key?: Key) => fail(`value nested deeper than ${maxLevels} levels of objects (twice maxDepth ${maxDepth}, plus 16)`, "nesting-too-deep", key)
+
+  const push = (node: object, guide: Guide, key: Key | undefined, depth: number) => {
+    if (depth > maxLevels) tooDeep(key)
+    let edges: ReadonlyArray<Edge> | undefined
+    let keys: ReadonlyArray<string> | undefined
+    let props: ReadonlyArray<SchemaAST.PropertySignature> | undefined
+    let count = 0
+    if (guide === GENERIC) {
+      if (Array.isArray(node)) count = node.length
+      else if ((edges = genericEdges(node)) !== undefined) count = edges.length
+      else count = (keys = Object.keys(node)).length
+    } else if (guide._tag === "Arrays") count = Array.isArray(node) ? node.length : 0
+    else if (guide._tag === "Objects") {
+      props = guide.propertySignatures
+      if (guide.indexSignatures.length > 0) {
+        const declared = new Set<PropertyKey>(props.map((p) => p.name))
+        edges = Object.keys(node).flatMap((k) =>
+          declared.has(k) ? [] : guide.indexSignatures.map((is): Edge => ({ value: (node as Record<string, unknown>)[k], key: k, ast: is.type })))
+      }
+      count = props.length + (edges?.length ?? 0)
+    } else count = (edges = declarationEdges(guide, node)).length
+    if ((work += count + 1) > maxSteps) tooLarge(key)
+    stack.push({ node, guide, key, depth, keys, props, edges, count, next: 0, pending: undefined, holdsObjects: false, size: 1, height: 0 })
+  }
+
+  // The root, below a frame of its own that counts nothing: a union may walk it more than once.
+  stack.push({
+    node: {}, guide: GENERIC, key: undefined, depth: 0, keys: undefined, props: undefined, edges: [{ value: js, key: undefined, ast }], count: 1, next: 0,
+    pending: undefined, holdsObjects: false, size: 0, height: 0,
+  })
+
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1]!
+    let value: object
+    let key: Key | undefined
+    let flat = false
+    let guide: Guide
+    const pending = top.pending?.pop()
+    if (pending !== undefined) ({ value, key, flat, guide } = pending)
+    else {
+      if (top.next === top.count) {
+        stack.pop()
+        // An object of primitives is walked again where it is shared: that costs no more than counting it.
+        if (top.holdsObjects) {
+          const below = open.get(top.node)!.next
+          if (below === undefined) open.delete(top.node)
+          else open.set(top.node, below)
+          done.set(top.node, { guide: top.guide, size: top.size, height: top.height, next: done.get(top.node) })
+        }
+        const parent = stack[stack.length - 1]
+        if (parent !== undefined) {
+          parent.size += top.size
+          parent.height = Math.max(parent.height, top.depth - parent.depth + top.height)
+          if (parent.size > maxSteps) tooLarge()
+        }
+        continue
+      }
+      const i = top.next++
+      const node = top.node as Record<PropertyKey, unknown>
+      let child: unknown
+      let at: AST | typeof GENERIC | undefined
+      const nprops = top.props?.length ?? 0
+      if (i < nprops) {
+        const { name, type } = top.props![i]!
+        child = name in node ? node[name] : undefined
+        key = typeof name === "symbol" ? undefined : name
+        at = type
+      } else if (top.edges !== undefined) {
+        const e = top.edges[i - nprops]!
+        child = e.value
+        key = e.key
+        at = e.ast
+        flat = e.flat === true
+      } else if (top.keys !== undefined) {
+        key = top.keys[i]!
+        child = node[key]
+        at = GENERIC
+      } else {
+        key = i
+        child = node[i]
+        at = top.guide === GENERIC ? GENERIC : elementAst(top.guide as SchemaAST.Arrays, i, (node as unknown as ReadonlyArray<unknown>).length)
+      }
+      const g = typeof child !== "object" || child === null || at === undefined || isOpaque(child) ? undefined : at === GENERIC ? GENERIC : guideOf(at, child)
+      if (g === undefined) {
+        // A primitive, or an object where Effect doesn't look inside (a scalar's place, an excess element).
+        if (++top.size > maxSteps) tooLarge()
+        continue
+      }
+      value = child as object
+      if (isGuides(g)) {
+        top.pending = g.slice(1).reverse().map((other): Pending => ({ value, key, flat, guide: other }))
+        guide = g[0]!
+      } else guide = g
+    }
+    // The objects below `top` on the stack each hold the one above: all of them are open.
+    if (!top.holdsObjects) {
+      top.holdsObjects = true
+      open.set(top.node, { guide: top.guide, next: open.get(top.node) })
+    }
+    // Walked without the schema, an object on the stack (by any guide) leads back to itself.
+    const guidesOpen = open.get(value)
+    if (guidesOpen !== undefined && (hasGuide(guidesOpen, guide) || (guide === GENERIC && !flat))) {
+      fail("cyclic value: an object contains itself", "cyclic-value", key)
+    }
+    const levels = flat ? 0 : levelsOf(value)
+    const seen = doneBy(done.get(value), guide)
+    if (seen === undefined) {
+      push(value, guide, key, top.depth + levels)
+      continue
+    }
+    if (top.depth + levels + seen.height > maxLevels) tooDeep(key)
+    top.size += seen.size
+    top.height = Math.max(top.height, levels + seen.height)
+    if (top.size > maxSteps) tooLarge()
+  }
 }
 
 /** Schema-less conversion, used where the schema gives no guidance. */
@@ -359,7 +826,9 @@ const compileNode = (ast: AST): Converter => (ast.annotations?.[VALUE] === true 
 const compileByTag: (ast: AST) => Converter = Match.type<AST>().pipe(
   Match.tag("String", "TemplateLiteral", compileString),
   Match.tag("Number", compileNumber),
-  Match.tag("BigInt", (): Converter => (v) => (v.kind !== "number" ? generic(v) : INTEGER.test(v.text) ? BigInt(v.text) : notInteger(v))),
+  // Nothing but a number can be a bigint: anything else fails here, in the order of the value,
+  // rather than after the conversion, behind errors further on (spec §15: the first error).
+  Match.tag("BigInt", (): Converter => (v) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : notInteger(v))),
   Match.tag("Boolean", (): Converter => (v) =>
     Option.isSome(variant(v, "True", 0)) ? true : Option.isSome(variant(v, "False", 0)) ? false : notCase("True or False", v, BOOL_TAGS)),
   // A literal takes exactly the value it is written as: `EUR` for "EUR", `"a b"` for "a b".
@@ -409,7 +878,7 @@ function compileNumber(ast: SchemaAST.Number): Converter {
   if (type === "Int") return (v) => (v.kind === "number" && INTEGER.test(v.text) ? Number(v.text) + 0 : notInteger(v))
   return (v) =>
     v.kind === "number" ? (toFloat(v.text, type) ?? fail(`${describe(v)} is too large for ${type}`, "out-of-range"))
-    : (specialFloat(v) ?? generic(v))
+    : (specialFloat(v) ?? mismatch(`a number (${type})`, v))
 }
 
 const fail = (message: string, code: ErrorCode): never => {

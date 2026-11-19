@@ -18,9 +18,9 @@ identified by the definition it is written in (`origin`) and its type, so
 with `type D = Maybe T` the `Maybe` of `D` is not the one of `T`. Going back from
 there, every other `Maybe` uses `null` (`chainNull`). The chain is followed
 for at most `nullFuel` steps, the number of types in the environment and in
-`t`, which bounds every chain that doesn't repeat. Whatever `chainNull`
-computes, `usesNull` writes `null` only where the inner JSON can't be `null`,
-so the proofs don't depend on it.
+`t`; from `env.fuel` steps on, the result is the same (`Haus.Json.NullFuel`).
+Whatever `chainNull` computes, `usesNull` writes `null` only where the inner
+JSON can't be `null`, so the round trip doesn't depend on it.
 
 **`Bool`** is the prelude's only (§16.3): a type that is the name `Bool`
 (through named types and `Secret`s) whose definition is `closed < False |
@@ -230,18 +230,25 @@ def lastRef (env : Env) : Nat → Ty → Option String
     | _ => none
 
 /--
-Where the type of `t` is written: the definition `whnf` ends in, or, for a
-type written out in place, `o`, where the type around it is written.
--/
-def origin (env : Env) (o : String) (t : Ty) : String := (lastRef env env.fuel t).getD o
-
-/--
 **The prelude's `Maybe`** (§16.3), by name: `haus-ref` writes each use of it
 as a reference to a definition of its own, named `Maybe#…`, so it is told
 apart from a schema's own `closed < None | Some a >` and each `Maybe` keeps
 the place it is written.
 -/
 def preludeMaybe (o : String) : Bool := o.startsWith "Maybe#"
+
+/-- Where a type written in place inside a type written in `o` is written: `o`, but `""` inside a `Maybe#…`. -/
+def inPlace (o : String) : String := if preludeMaybe o then "" else o
+
+/--
+Where the type of `t` is written: the definition `whnf` ends in, or, for a
+type written out in place, `o`, where the type around it is written. Inside
+the argument of the prelude's `Maybe` (`o` a `Maybe#…`), a type written in
+place is the schema's own, never the prelude's `Maybe`: it gets `""`. So the
+inner variant of `Maybe (closed < None | Some Int >)` is a variant like any
+other (§16.3): `Some(None)` is `{"_tag": "None"}`.
+-/
+def origin (env : Env) (o : String) (t : Ty) : String := (lastRef env env.fuel t).getD (inPlace o)
 
 /-- The argument of `c`, if `c`, written in `o`, is the prelude's `Maybe`. -/
 def maybeAt? (o : String) (c : Ty) : Option Ty := if preludeMaybe o then maybeOf? c else none

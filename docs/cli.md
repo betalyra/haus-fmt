@@ -28,6 +28,7 @@ cargo install haus-fmt-cli    # installs the `haus` command
 | `haus fmt PATH…` | rewrites data files in a standard layout (spec §11): pretty, compact or minimised; `--check` only lists them |
 | `haus canonical [FILE]` | the canonical form (spec §12) of each value, one per line |
 | `haus hash [FILE]` | `hashAll` of the file's values (spec §12); `--each` hashes each value |
+| `haus package check [DIR…]` | a schema package before it is published: its manifest, schema and profiles, and its `package.json`, `Cargo.toml` and `pyproject.toml` |
 | `haus completions SHELL` | a completion script for bash, zsh, fish, elvish or PowerShell |
 
 A `PATH` is a file, a directory or `-` (standard input). `check` and `fmt`
@@ -271,6 +272,104 @@ hash, whatever their comments, key order, spelling or whitespace.
 haus fmt --layout minimised - < order.haus | haus hash   # the same as `haus hash order.haus`
 ```
 
+### `haus package check`
+
+```sh
+haus package check                       # the package in the current directory
+haus package check extensions/*/         # several
+haus package check --json . > report.json
+```
+
+Checks a schema package (spec §13.3) before it is published, as CI for
+packages: everything a user of any language would trip over. The files are
+only read: nothing is run, packed, built or fetched. `DIR` defaults to `.`.
+
+| What | Checked |
+|---|---|
+| `package.haus` | a regular file of at most 64 KiB, one record with a lowercase `@org/name` and a semantic `version` (`package-manifest`); a former `schema` field is ignored (a warning) |
+| `schema.haus` | a regular file next to it, not a link (`package-path`); loaded with its imports and checked like `haus check` does, errors and warnings |
+| profiles | each `profiles/<name>.vectors.haus` has its rule, `profiles/<name>.md`, next to it; the vectors are haus, each `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with no other fields (only an Accept has an `output`); `type` names a type of the package without parameters; `value` and `output` are one haus value each, and an accepted one and its output are valid for `type`, since codecs run after the schema (`profile-vectors`) |
+| versions | the `version` of `package.json`, `Cargo.toml` (also inherited from the workspace) and `pyproject.toml` is the manifest's (`package-version`) |
+| npm | `package.json` is a regular file (`package-path`); its `name` is the manifest's (`package-name`); no `preinstall`, `install` or `postinstall` script and no `binding.gyp` (`package-install-script`) |
+| Cargo | `links` is the library's name (`[lib] name`, or the package's with `_`), which crates that use the package's types name it by; a schema package it depends on isn't renamed (`package = …`) (`package-crate`) |
+| files shipped | `files` of `package.json` (or, without it, `.npmignore`/`.gitignore`), `include` (or `exclude`) of `Cargo.toml`, and hatchling's wheel configuration (`force-include`, `only-include`, `packages`, `include`, `exclude`) ship `package.haus`, `schema.haus` and the profiles (vectors and rules) (`package-files`) |
+| wrappers | each `package.json`, `Cargo.toml` and `pyproject.toml` present can be read: valid JSON or TOML, a `name` in `package.json`, a `[package]` in `Cargo.toml` (`package-wrapper`) |
+| dependencies | every package `schema.haus` imports is declared in every wrapper present (`undeclared-package`): in `peerDependencies`, `dependencies` or `optionalDependencies` of `package.json` (not `devDependencies`; anything but `peerDependencies` is a warning), and among the dependencies of `Cargo.toml` and `pyproject.toml` |
+
+Wrappers that aren't there aren't checked, and a `pyproject.toml` without a
+`[project]` is not a Python distribution. Which package a Cargo or Python
+dependency is can be told from the files only for path dependencies (`path
+= "../money"`, `[tool.uv.sources]`): an import that only a registry or git
+dependency could provide is a warning, not an error. Likewise the files a
+wheel ships with another build backend than hatchling, and a dynamic
+version.
+
+Imports are found as in `haus check`: the packages given with `--package`
+and `--packages`, then the path dependencies of the package's wrappers that
+are schema packages (and theirs), then `node_modules`.
+
+```text
+error[package-version]: package.haus says version 1.0.0, package.json 1.0.1
+ --> good/package.json:3:3
+  |
+3 |   "version": "1.0.1",
+  |   ^^^^^^^^^
+  |
+  = hint: Release both with the same version: change them together.
+  = docs: https://haus-fmt.org/docs/errors#package-version
+
+error[package-crate]: links is "good", but the library is fixture_good: crates that use the package's types name its crate by its links
+ --> good/Cargo.toml:7:9
+  |
+7 | links = "good"
+  |         ^^^^^^
+  |
+  = hint: Set links = "fixture_good", the library's name.
+  = docs: https://haus-fmt.org/docs/errors#package-crate
+
+Checked 1 package: 2 errors.
+```
+
+Every finding has a code from the [error catalogue](/docs/errors), errors
+and warnings alike. Warnings (an ignored manifest field, a dependency that
+can't be told from the files, a build backend whose configuration isn't
+read, a dynamic version, an npm dependency that isn't a peer dependency)
+don't fail the check.
+
+With `--json`, one document, like `haus check`'s:
+
+```json
+{
+  "ok": false,
+  "packages": [
+    {
+      "path": "good",
+      "name": "@fixture/good",
+      "version": "1.0.0",
+      "ok": false,
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "package-version",
+          "message": "package.haus says version 1.0.0, package.json 1.0.1",
+          "file": "good/package.json",
+          "line": 3,
+          "column": 3,
+          "hint": "Release both with the same version: change them together.",
+          "docs": "https://haus-fmt.org/docs/errors#package-version"
+        }
+      ]
+    }
+  ],
+  "summary": { "packages": 1, "errors": 1, "warnings": 0, "unreadable": 0 }
+}
+```
+
+`packages[]` has the directory as given (`path`), the manifest's `name` and
+`version` when it is valid, `ok`, `error` when the directory can't be read,
+and the diagnostics, each with the `file` it is about. A `--package` that can't be used gives the top-level
+`error`, as with `haus check`.
+
 ### Streams and `tail -f`
 
 `haus check -`, `haus canonical`, `haus hash --each` and `haus fmt --layout
@@ -297,8 +396,8 @@ literal: 829 for the default 1000), `--max-exponent N` and
 | Code | Meaning |
 |---|---|
 | 0 | OK. Hints and warnings don't change it. |
-| 1 | Invalid data: a syntax error, an error against the schema, a broken schema; or, with `fmt --check`, files that would change. |
-| 2 | Usage error (unknown option, missing argument, an invalid limit, `--schema` file not found, `fmt` on a schema file, `fmt` that would drop a file's comments without `--drop-comments`) or I/O error (a file that doesn't exist or can't be read or written). Wins over 1. |
+| 1 | Invalid data: a syntax error, an error against the schema, a broken schema; or, with `fmt --check`, files that would change; or, with `package check`, an error in a package. |
+| 2 | Usage error (unknown option, missing argument, an invalid limit, `--schema` file not found, `fmt` on a schema file, `fmt` that would drop a file's comments without `--drop-comments`, a `--package` that can't be used) or I/O error (a file or package directory that doesn't exist or can't be read or written). Wins over 1. |
 
 ## Color
 

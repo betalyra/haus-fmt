@@ -33,7 +33,7 @@ from typing import Any
 
 from . import _decode
 from ._canonical import canonical as _canonical
-from ._codecs import DateCodec, DecimalCodec, InstantCodec
+from ._codecs import CodecGroup, DateCodec, DecimalCodec, InstantCodec, optional_codecs
 from ._decode import Codec, HausDecodeError, HausEncodeError
 from ._errors import HausJsonError, format_path
 from ._host import Maybe, Nothing, Secret, Some, Tagged, Unknown
@@ -106,6 +106,7 @@ __all__ = [
     "BuiltinType",
     "Case",
     "Codec",
+    "CodecGroup",
     "DateCodec",
     "DecimalCodec",
     "Definition",
@@ -295,13 +296,16 @@ class Schema:
 
 
 def from_schema_file(file: SchemaFile, *, codecs: Mapping[str, Codec] | None = None) -> Schema:
-    """The decoders of a checked schema file. `codecs` choose host types by type id (spec §13.4)."""
+    """The decoders of a checked schema file. `codecs` choose host types by type id (spec §13.4).
+
+    A codec for a type the schema doesn't have is a `ValueError`, unless it is in a `CodecGroup`.
+    """
     builder = _decode.Builder(codecs or {})
     types: dict[str, SchemaType] = {}
     for name in file.instances:
         if (inst := file.instance(name)) is not None:
             types[name] = SchemaType(name, inst.definition.id, inst.stream, builder.ref(inst))
-    if unused := set(builder.codecs) - builder.used:
+    if unused := set(builder.codecs) - builder.used - optional_codecs(builder.codecs):
         raise ValueError(f"codecs for {', '.join(sorted(unused))}, but the schema has no such type")
     return Schema(file, types)
 

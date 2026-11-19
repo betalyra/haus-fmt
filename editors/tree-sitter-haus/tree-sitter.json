@@ -1,0 +1,58 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "haus",
+      "camelcase": "Haus",
+      "title": "haus",
+      "scope": "source.haus",
+      "path": "haus",
+      "external-files": [
+        "common/scanner.h"
+      ],
+      "file-types": [
+        "haus"
+      ],
+      "highlights": "haus/queries/highlights.scm",
+      "injection-regex": "^haus$"
+    },
+    {
+      "name": "haus_schema",
+      "camelcase": "HausSchema",
+      "title": "haus schema",
+      "scope": "source.haus.schema",
+      "path": "haus_schema",
+      "external-files": [
+        "common/scanner.h"
+      ],
+      "file-types": [
+        "schema.haus"
+      ],
+      "highlights": "haus_schema/queries/highlights.scm",
+      "locals": "haus_schema/queries/locals.scm",
+      "injection-regex": "^haus[-_]schema$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "haus data files and schema files",
+    "authors": [
+      {
+        "name": "betalyra"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/betalyra/haus-fmt",
+      "homepage": "https://haus-fmt.org"
+    }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false
+  }
+}

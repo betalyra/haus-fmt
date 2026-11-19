@@ -1,0 +1,2 @@
+// A raw bidirectional isolate in a quoted field key, as in data strings (spec §14, §4).
+type A = { "a⁦b": Int }

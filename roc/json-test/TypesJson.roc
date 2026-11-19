@@ -20,8 +20,8 @@ TypesJson := [].{
 		Ok({ first: Decode.field(fs, "first", decode_a)?, second: Decode.field(fs, "second", decode_a)? })
 	}
 
-	encode_pair : Pair(a), (a -> Value) -> Value
-	encode_pair = |v, encode_a| Encode.record([("first", Present(encode_a(v.first))), ("second", Present(encode_a(v.second)))])
+	encode_pair : Pair(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_pair = |v, e, encode_a| Encode.record(e, [("first", Encode.required(v.first, encode_a)), ("second", Encode.required(v.second, encode_a))])
 
 	from_json_pair : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Pair(a), Decode.Error)
 	from_json_pair = |j, from_json_a, _nullable_a| {
@@ -29,26 +29,29 @@ TypesJson := [].{
 		Ok({ first: FromJson.field(fs, "first", from_json_a)?, second: FromJson.field(fs, "second", from_json_a)? })
 	}
 
-	to_json_pair : Pair(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_pair = |v, to_json_a, _nullable_a| ToJson.object([("first", Present(to_json_a(v.first))), ("second", Present(to_json_a(v.second)))])
+	to_json_pair : Pair(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_pair = |v, e, to_json_a, _nullable_a| ToJson.object(e, [("first", ToJson.required(v.first, to_json_a)), ("second", ToJson.required(v.second, to_json_a))])
 
 	## haus type `types#IntPair`.
 	IntPair : Pair(Int)
 
 	decode_int_pair : Value -> Try(IntPair, Decode.Error)
-	decode_int_pair = |v| decode_pair(v, Decode.int)
+	decode_int_pair = |v| Decode.within_depth(v, read_value_int_pair)
 
-	encode_int_pair : IntPair -> Value
-	encode_int_pair = |v| encode_pair(v, Encode.int)
+	read_value_int_pair : Value -> Try(IntPair, Decode.Error)
+	read_value_int_pair = |v| decode_pair(v, Decode.int)
+
+	encode_int_pair : IntPair, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_int_pair = |v, e| encode_pair(v, e, Encode.int)
 
 	from_json_int_pair : JsonValue -> Try(IntPair, Decode.Error)
-	from_json_int_pair = |j| FromJson.within_depth(read_json_int_pair(j), encode_int_pair)
+	from_json_int_pair = |j| FromJson.within_depth(j, read_json_int_pair, encode_int_pair)
 
 	read_json_int_pair : JsonValue -> Try(IntPair, Decode.Error)
 	read_json_int_pair = |j| from_json_pair(j, FromJson.int, False)
 
-	to_json_int_pair : IntPair -> Try(JsonValue, Encode.Error)
-	to_json_int_pair = |v| to_json_pair(v, ToJson.int, False)
+	to_json_int_pair : IntPair, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_int_pair = |v, e| to_json_pair(v, e, ToJson.int, False)
 
 	## haus type `types#List`.
 	List_(a) := [Nil, Cons(a, List_(a)), Unknown(Str, List(Value))]
@@ -63,11 +66,11 @@ TypesJson := [].{
 		_ => Decode.expected("a variant (List)", v)
 	}
 
-	encode_list : List_(a), (a -> Value) -> Value
-	encode_list = |v, encode_a| match v {
-		Nil => Tag("Nil", [])
-		Cons(a0, a1) => Tag("Cons", [encode_a(a0), encode_list(a1, encode_a)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_list : List_(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_list = |v, e, encode_a| match v {
+		Nil => Encode.tag("Nil", e)
+		Cons(a0, a1) => Encode.tagged_args("Cons", e, [|e2| encode_a(a0, e2), |e3| encode_list(a1, e3, encode_a)])
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_list : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(List_(a), Decode.Error)
@@ -86,67 +89,76 @@ TypesJson := [].{
 		}
 	}
 
-	to_json_list : List_(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_list = |v, to_json_a, nullable_a| match v {
-		Nil => ToJson.tagged("Nil", [])
-		Cons(a0, a1) => ToJson.tagged("Cons", [to_json_a(a0), to_json_list(a1, to_json_a, nullable_a)])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_list : List_(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_list = |v, e, to_json_a, nullable_a| match v {
+		Nil => ToJson.tag("Nil", e)
+		Cons(a0, a1) => ToJson.tagged_args("Cons", e, [|e2| to_json_a(a0, e2), |e3| to_json_list(a1, e3, to_json_a, nullable_a)])
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `types#Ints`.
 	Ints : List_(Int)
 
 	decode_ints : Value -> Try(Ints, Decode.Error)
-	decode_ints = |v| decode_list(v, Decode.int)
+	decode_ints = |v| Decode.within_depth(v, read_value_ints)
 
-	encode_ints : Ints -> Value
-	encode_ints = |v| encode_list(v, Encode.int)
+	read_value_ints : Value -> Try(Ints, Decode.Error)
+	read_value_ints = |v| decode_list(v, Decode.int)
+
+	encode_ints : Ints, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_ints = |v, e| encode_list(v, e, Encode.int)
 
 	from_json_ints : JsonValue -> Try(Ints, Decode.Error)
-	from_json_ints = |j| FromJson.within_depth(read_json_ints(j), encode_ints)
+	from_json_ints = |j| FromJson.within_depth(j, read_json_ints, encode_ints)
 
 	read_json_ints : JsonValue -> Try(Ints, Decode.Error)
 	read_json_ints = |j| from_json_list(j, FromJson.int, False)
 
-	to_json_ints : Ints -> Try(JsonValue, Encode.Error)
-	to_json_ints = |v| to_json_list(v, ToJson.int, False)
+	to_json_ints : Ints, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_ints = |v, e| to_json_list(v, e, ToJson.int, False)
 
 	## haus type `types#Tree`.
 	Tree := { name : Str, children : List(Tree) }
 
 	decode_tree : Value -> Try(Tree, Decode.Error)
-	decode_tree = |v| {
+	decode_tree = |v| Decode.within_depth(v, read_value_tree)
+
+	read_value_tree : Value -> Try(Tree, Decode.Error)
+	read_value_tree = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ name: Decode.field(fs, "name", Decode.str)?, children: Decode.field(fs, "children", |x2| Decode.list(x2, decode_tree))? })
+		Ok({ name: Decode.field(fs, "name", Decode.str)?, children: Decode.field(fs, "children", |x4| Decode.list(x4, read_value_tree))? })
 	}
 
-	encode_tree : Tree -> Value
-	encode_tree = |v| Encode.record([("name", Present(Encode.str(v.name))), ("children", Present(Encode.list(v.children, encode_tree)))])
+	encode_tree : Tree, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_tree = |v, e| Encode.record(e, [("name", Encode.required(v.name, Encode.str)), ("children", Present(|e5| Encode.list(v.children, e5, encode_tree)))])
 
 	from_json_tree : JsonValue -> Try(Tree, Decode.Error)
-	from_json_tree = |j| FromJson.within_depth(read_json_tree(j), encode_tree)
+	from_json_tree = |j| FromJson.within_depth(j, read_json_tree, encode_tree)
 
 	read_json_tree : JsonValue -> Try(Tree, Decode.Error)
 	read_json_tree = |j| {
 		fs = FromJson.object(j, "Tree")?
-		Ok({ name: FromJson.field(fs, "name", FromJson.str)?, children: FromJson.field(fs, "children", |y2| FromJson.list(y2, read_json_tree))? })
+		Ok({ name: FromJson.field(fs, "name", FromJson.str)?, children: FromJson.field(fs, "children", |y4| FromJson.list(y4, read_json_tree))? })
 	}
 
-	to_json_tree : Tree -> Try(JsonValue, Encode.Error)
-	to_json_tree = |v| ToJson.object([("name", Present(ToJson.str(v.name))), ("children", Present(ToJson.list(v.children, to_json_tree)))])
+	to_json_tree : Tree, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_tree = |v, e| ToJson.object(e, [("name", ToJson.required(v.name, ToJson.str)), ("children", Present(|e5| ToJson.list(v.children, e5, to_json_tree)))])
 
 	## haus type `types#Expr`.
 	Expr := [Num(Int), Add(Expr, Expr), Neg({ of : Expr })]
 
 	decode_expr : Value -> Try(Expr, Decode.Error)
-	decode_expr = |v| match v {
+	decode_expr = |v| Decode.within_depth(v, read_value_expr)
+
+	read_value_expr : Value -> Try(Expr, Decode.Error)
+	read_value_expr = |v| match v {
 		Tag("Num", [a0]) => Ok(Num(Decode.arg("Num", 0, a0, Decode.int)?))
-		Tag("Add", [a0, a1]) => Ok(Add(Decode.arg("Add", 0, a0, decode_expr)?, Decode.arg("Add", 1, a1, decode_expr)?))
+		Tag("Add", [a0, a1]) => Ok(Add(Decode.arg("Add", 0, a0, read_value_expr)?, Decode.arg("Add", 1, a1, read_value_expr)?))
 		Tag("Neg", [p]) => Decode.payload(
 			"Neg",
 			p,
 			|fs| {
-				Ok(Neg({ of: Decode.field(fs, "of", decode_expr)? }))
+				Ok(Neg({ of: Decode.field(fs, "of", read_value_expr)? }))
 			},
 		)
 		Tag("Num", _) => Decode.arity("Num", 1)
@@ -156,15 +168,15 @@ TypesJson := [].{
 		_ => Decode.expected("a variant (Expr)", v)
 	}
 
-	encode_expr : Expr -> Value
-	encode_expr = |v| match v {
-		Num(a0) => Tag("Num", [Encode.int(a0)])
-		Add(a0, a1) => Tag("Add", [encode_expr(a0), encode_expr(a1)])
-		Neg(r) => Tag("Neg", [Encode.record([("of", Present(encode_expr(r.of)))])])
+	encode_expr : Expr, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_expr = |v, e| match v {
+		Num(a0) => Encode.tagged("Num", e, |e6| Encode.int(a0, e6))
+		Add(a0, a1) => Encode.tagged_args("Add", e, [|e7| encode_expr(a0, e7), |e8| encode_expr(a1, e8)])
+		Neg(r) => Encode.tagged_record("Neg", e, [("of", Encode.required(r.of, encode_expr))])
 	}
 
 	from_json_expr : JsonValue -> Try(Expr, Decode.Error)
-	from_json_expr = |j| FromJson.within_depth(read_json_expr(j), encode_expr)
+	from_json_expr = |j| FromJson.within_depth(j, read_json_expr, encode_expr)
 
 	read_json_expr : JsonValue -> Try(Expr, Decode.Error)
 	read_json_expr = |j| {
@@ -185,11 +197,74 @@ TypesJson := [].{
 		}
 	}
 
-	to_json_expr : Expr -> Try(JsonValue, Encode.Error)
-	to_json_expr = |v| match v {
-		Num(a0) => ToJson.tagged("Num", [ToJson.int(a0)])
-		Add(a0, a1) => ToJson.tagged("Add", [to_json_expr(a0), to_json_expr(a1)])
-		Neg(r) => ToJson.tagged_object("Neg", [("of", Present(to_json_expr(r.of)))])
+	to_json_expr : Expr, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_expr = |v, e| match v {
+		Num(a0) => ToJson.tagged("Num", e, |e6| ToJson.int(a0, e6))
+		Add(a0, a1) => ToJson.tagged_args("Add", e, [|e7| to_json_expr(a0, e7), |e8| to_json_expr(a1, e8)])
+		Neg(r) => ToJson.tagged_object("Neg", e, [("of", ToJson.required(r.of, to_json_expr))])
 	}
+
+	## generics that refer to each other with their own parameters only (§9.10)
+	##
+	## haus type `types#GTree`.
+	GTree(a) := { value : a, kids : Forest(a) }
+
+	decode_g_tree : Value, (Value -> Try(a, Decode.Error)) -> Try(GTree(a), Decode.Error)
+	decode_g_tree = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ value: Decode.field(fs, "value", decode_a)?, kids: Decode.field(fs, "kids", |x9| decode_forest(x9, decode_a))? })
+	}
+
+	encode_g_tree : GTree(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_g_tree = |v, e, encode_a| Encode.record(e, [("value", Encode.required(v.value, encode_a)), ("kids", Present(|e10| encode_forest(v.kids, e10, encode_a)))])
+
+	from_json_g_tree : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(GTree(a), Decode.Error)
+	from_json_g_tree = |j, from_json_a, nullable_a| {
+		fs = FromJson.object(j, "GTree")?
+		Ok({ value: FromJson.field(fs, "value", from_json_a)?, kids: FromJson.field(fs, "kids", |y9| from_json_forest(y9, from_json_a, nullable_a))? })
+	}
+
+	to_json_g_tree : GTree(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_g_tree = |v, e, to_json_a, nullable_a| ToJson.object(e, [("value", ToJson.required(v.value, to_json_a)), ("kids", Present(|e10| to_json_forest(v.kids, e10, to_json_a, nullable_a)))])
+
+	## haus type `types#Forest`.
+	Forest(a) := [Forest(List(GTree(a)))]
+
+	decode_forest : Value, (Value -> Try(a, Decode.Error)) -> Try(Forest(a), Decode.Error)
+	decode_forest = |v, decode_a| Ok(Forest(Decode.list(v, |x11| decode_g_tree(x11, decode_a))?))
+
+	encode_forest : Forest(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_forest = |v, e, encode_a| match v {
+		Forest(x) => Encode.list(x, e, |x12, e12| encode_g_tree(x12, e12, encode_a))
+	}
+
+	from_json_forest : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Forest(a), Decode.Error)
+	from_json_forest = |j, from_json_a, nullable_a| Ok(Forest(FromJson.list(j, |y11| from_json_g_tree(y11, from_json_a, nullable_a))?))
+
+	to_json_forest : Forest(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_forest = |v, e, to_json_a, nullable_a| match v {
+		Forest(x) => ToJson.list(x, e, |y12, e12| to_json_g_tree(y12, e12, to_json_a, nullable_a))
+	}
+
+	## haus type `types#IntTree`.
+	IntTree : GTree(Int)
+
+	decode_int_tree : Value -> Try(IntTree, Decode.Error)
+	decode_int_tree = |v| Decode.within_depth(v, read_value_int_tree)
+
+	read_value_int_tree : Value -> Try(IntTree, Decode.Error)
+	read_value_int_tree = |v| decode_g_tree(v, Decode.int)
+
+	encode_int_tree : IntTree, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_int_tree = |v, e| encode_g_tree(v, e, Encode.int)
+
+	from_json_int_tree : JsonValue -> Try(IntTree, Decode.Error)
+	from_json_int_tree = |j| FromJson.within_depth(j, read_json_int_tree, encode_int_tree)
+
+	read_json_int_tree : JsonValue -> Try(IntTree, Decode.Error)
+	read_json_int_tree = |j| from_json_g_tree(j, FromJson.int, False)
+
+	to_json_int_tree : IntTree, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_int_tree = |v, e| to_json_g_tree(v, e, ToJson.int, False)
 
 }

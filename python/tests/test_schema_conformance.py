@@ -10,7 +10,15 @@ import pytest
 
 import haus
 from haus import Record, String, Value, Variant
-from haus.schema import HausDecodeError, HausSchemaFileError, Schema, compile_schema, without_attributes
+from haus.schema import (
+    HausDecodeError,
+    HausSchemaFileError,
+    Schema,
+    compile_schema,
+    format_path,
+    load_schema,
+    without_attributes,
+)
 
 SUITE = Path(__file__).resolve().parents[2] / "test-suite" / "schema"
 SUITES = sorted(p.name.removesuffix(".schema.haus") for p in SUITE.glob("*.schema.haus"))
@@ -24,6 +32,8 @@ class Case:
     output: Value
     code: str | None
     """`Err`: the error code (spec §17) decoding must fail with."""
+    path: str | None
+    """`Err`: the place of the error (spec §15) as text, `$.items[2].price`."""
 
     @property
     def name(self) -> str:
@@ -31,7 +41,7 @@ class Case:
 
 
 def schema_cases(text: str) -> list[Case]:
-    """`Ok { type, input, output? }` and `Err { type, input, code }`."""
+    """`Ok { type, input, output? }` and `Err { type, input, code, path }`."""
     out: list[Case] = []
     for v in haus.parse_all(text):
         match v:
@@ -39,8 +49,11 @@ def schema_cases(text: str) -> list[Case]:
                 value = fields["input"]
                 code = fields.get("code")
                 code_text = code.value if isinstance(code, String) else None
+                path = fields.get("path")
+                path_text = path.value if isinstance(path, String) else None
                 assert (tag == "Err") == (code_text is not None), f"an Err case has a code: {haus.canonical(v)}"
-                out.append(Case(tag == "Ok", t.value, value, fields.get("output", value), code_text))
+                assert (tag == "Err") == (path_text is not None), f"an Err case has a path: {haus.canonical(v)}"
+                out.append(Case(tag == "Ok", t.value, value, fields.get("output", value), code_text, path_text))
             case _:
                 raise ValueError(f"not a case: {haus.canonical(v)}")
     return out
@@ -54,6 +67,7 @@ def run(schema: Schema, case: Case) -> None:
         with pytest.raises(HausDecodeError) as e:
             t.decode(case.input)
         assert e.value.code == case.code, e.value.reason
+        assert format_path(e.value.path) == case.path, e.value.reason
 
 
 CASES = [
@@ -102,16 +116,24 @@ INVALID = {
     "any-arity": "Any takes no arguments",
     "attribute-on-spread": "attributes can't be put on a spread",
     "attribute-space": "no space is allowed between @deprecated and '('",
+    "bidi-in-comment": "raw bidirectional control character U+202E in comment",
+    "bidi-in-key": "raw bidirectional control character U+2066",
     "closed-empty-variant": "a closed variant needs at least one tag",
+    "control-in-comment": "raw control character U+0007",
+    "control-in-key": "raw control character U+0007",
     "deprecated-number": "@deprecated takes no argument or one string",
     "deprecated-twice": "@deprecated appears twice",
     "deprecated-two-args": "@deprecated takes no argument or one string",
+    "growing-mutual-recursion": "A refers to B, which refers back to A",
     "import-empty-version": "expected a major version after '@'",
     "import-full-version": "an import names only the major version (@haus-fmt/money@1)",
     "import-leading-zero": "a major version has no leading zeros (@haus-fmt/money@1)",
     "import-minor": "an import names only the major version (@haus-fmt/money@1)",
     "import-no-names": "expected a type name",
     "import-not-a-version": "expected a major version after '@'",
+    "invalid-utf8": "is not UTF-8",
+    "invalid-escape-in-key": "invalid escape '\\x'",
+    "lone-carriage-return": "carriage return without a line feed",
     "param-underscore": "must start with a lowercase letter",
     "redefine-any": "Any is a prelude type and can't be redefined",
     "redefine-secret": "Secret is a prelude type and can't be redefined",
@@ -120,6 +142,8 @@ INVALID = {
     "secret-recursion": "type A refers to itself without a record, array or variant in between",
     "spread-cycle": "spreads itself",
     "unguarded-recursion": "refers to itself without a record, array or variant in between",
+    "unterminated-comment": "unterminated block comment",
+    "unterminated-string": "unterminated string",
 }
 
 
@@ -129,7 +153,13 @@ def test_every_invalid_schema_has_a_reason() -> None:
 
 @pytest.mark.parametrize(("name", "reason"), sorted(INVALID.items()))
 def test_invalid_schema(name: str, reason: str) -> None:
+    path = SUITE / "invalid" / f"{name}.schema.haus"
     with pytest.raises(HausSchemaFileError) as e:
-        compile_schema((SUITE / "invalid" / f"{name}.schema.haus").read_text("utf-8"))
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            load_schema(path)  # read as a file is: invalid UTF-8 is invalid-utf8
+        else:
+            compile_schema(text)
     assert reason in e.value.reason
     assert e.value.code == (SUITE / "invalid" / f"{name}.error").read_text("utf-8").strip()

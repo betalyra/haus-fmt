@@ -1,0 +1,7 @@
+node_modules/
+build/
+*.dylib
+*.so
+*.dll
+*.wasm
+log.html

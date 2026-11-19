@@ -93,6 +93,9 @@ import "../../test-suite/valid/unicode-edges.hash" as valid_unicode_edges_hash :
 import "../../test-suite/valid/variants.haus" as valid_variants : List(U8)
 import "../../test-suite/valid/variants.canonical" as valid_variants_canonical : List(U8)
 import "../../test-suite/valid/variants.hash" as valid_variants_hash : List(U8)
+import "../../test-suite/invalid/array-colon.haus" as invalid_array_colon : List(U8)
+import "../../test-suite/invalid/array-comma-wrong-closer.haus" as invalid_array_comma_wrong_closer : List(U8)
+import "../../test-suite/invalid/array-stray-char.haus" as invalid_array_stray_char : List(U8)
 import "../../test-suite/invalid/bad-escape.haus" as invalid_bad_escape : List(U8)
 import "../../test-suite/invalid/bad-hex.haus" as invalid_bad_hex : List(U8)
 import "../../test-suite/invalid/bidi-in-block-comment.haus" as invalid_bidi_in_block_comment : List(U8)
@@ -100,20 +103,26 @@ import "../../test-suite/invalid/bidi-in-block-string.haus" as invalid_bidi_in_b
 import "../../test-suite/invalid/bidi-in-line-comment.haus" as invalid_bidi_in_line_comment : List(U8)
 import "../../test-suite/invalid/bidi-in-string.haus" as invalid_bidi_in_string : List(U8)
 import "../../test-suite/invalid/bidi-isolate-in-string.haus" as invalid_bidi_isolate_in_string : List(U8)
+import "../../test-suite/invalid/bidi-outside-string.haus" as invalid_bidi_outside_string : List(U8)
 import "../../test-suite/invalid/block-closing-not-alone.haus" as invalid_block_closing_not_alone : List(U8)
 import "../../test-suite/invalid/block-content-on-opening-line.haus" as invalid_block_content_on_opening_line : List(U8)
+import "../../test-suite/invalid/block-string-control-after-opening.haus" as invalid_block_string_control_after_opening : List(U8)
 import "../../test-suite/invalid/block-string-key.haus" as invalid_block_string_key : List(U8)
+import "../../test-suite/invalid/block-string-raw-cr.haus" as invalid_block_string_raw_cr : List(U8)
 import "../../test-suite/invalid/block-under-indented.haus" as invalid_block_under_indented : List(U8)
 import "../../test-suite/invalid/block-unterminated.haus" as invalid_block_unterminated : List(U8)
 import "../../test-suite/invalid/bom-after-comma.haus" as invalid_bom_after_comma : List(U8)
+import "../../test-suite/invalid/bytes-control.haus" as invalid_bytes_control : List(U8)
 import "../../test-suite/invalid/bytes-escape.haus" as invalid_bytes_escape : List(U8)
 import "../../test-suite/invalid/bytes-newline.haus" as invalid_bytes_newline : List(U8)
 import "../../test-suite/invalid/bytes-non-hex.haus" as invalid_bytes_non_hex : List(U8)
 import "../../test-suite/invalid/bytes-odd-digits.haus" as invalid_bytes_odd_digits : List(U8)
+import "../../test-suite/invalid/bytes-odd-then-non-hex.haus" as invalid_bytes_odd_then_non_hex : List(U8)
 import "../../test-suite/invalid/bytes-space-after-prefix.haus" as invalid_bytes_space_after_prefix : List(U8)
 import "../../test-suite/invalid/bytes-split-byte.haus" as invalid_bytes_split_byte : List(U8)
 import "../../test-suite/invalid/bytes-unterminated-odd.haus" as invalid_bytes_unterminated_odd : List(U8)
 import "../../test-suite/invalid/bytes-unterminated.haus" as invalid_bytes_unterminated : List(U8)
+import "../../test-suite/invalid/colon-at-end.haus" as invalid_colon_at_end : List(U8)
 import "../../test-suite/invalid/colon-in-array.haus" as invalid_colon_in_array : List(U8)
 import "../../test-suite/invalid/control-c1-in-block-string.haus" as invalid_control_c1_in_block_string : List(U8)
 import "../../test-suite/invalid/control-c1-in-string.haus" as invalid_control_c1_in_string : List(U8)
@@ -122,6 +131,7 @@ import "../../test-suite/invalid/control-del-in-string.haus" as invalid_control_
 import "../../test-suite/invalid/control-esc-in-line-comment.haus" as invalid_control_esc_in_line_comment : List(U8)
 import "../../test-suite/invalid/control-in-quoted-key.haus" as invalid_control_in_quoted_key : List(U8)
 import "../../test-suite/invalid/control-nul-in-block-comment.haus" as invalid_control_nul_in_block_comment : List(U8)
+import "../../test-suite/invalid/control-outside-string.haus" as invalid_control_outside_string : List(U8)
 import "../../test-suite/invalid/double-comma-top-level.haus" as invalid_double_comma_top_level : List(U8)
 import "../../test-suite/invalid/double-comma.haus" as invalid_double_comma : List(U8)
 import "../../test-suite/invalid/double-separator.haus" as invalid_double_separator : List(U8)
@@ -134,10 +144,12 @@ import "../../test-suite/invalid/empty-payload.haus" as invalid_empty_payload : 
 import "../../test-suite/invalid/empty-unicode-escape.haus" as invalid_empty_unicode_escape : List(U8)
 import "../../test-suite/invalid/exponent-too-large.haus" as invalid_exponent_too_large : List(U8)
 import "../../test-suite/invalid/extra-closer.haus" as invalid_extra_closer : List(U8)
+import "../../test-suite/invalid/hash-not-version.haus" as invalid_hash_not_version : List(U8)
 import "../../test-suite/invalid/hex-too-long.haus" as invalid_hex_too_long : List(U8)
 import "../../test-suite/invalid/identifier-value.haus" as invalid_identifier_value : List(U8)
 import "../../test-suite/invalid/invalid-utf8.haus" as invalid_invalid_utf8 : List(U8)
 import "../../test-suite/invalid/json-unicode-escape.haus" as invalid_json_unicode_escape : List(U8)
+import "../../test-suite/invalid/key-at-end.haus" as invalid_key_at_end : List(U8)
 import "../../test-suite/invalid/key-without-value.haus" as invalid_key_without_value : List(U8)
 import "../../test-suite/invalid/leading-comma-array.haus" as invalid_leading_comma_array : List(U8)
 import "../../test-suite/invalid/leading-comma-file.haus" as invalid_leading_comma_file : List(U8)
@@ -167,12 +179,16 @@ import "../../test-suite/invalid/payload-on-next-line.haus" as invalid_payload_o
 import "../../test-suite/invalid/payload-twice.haus" as invalid_payload_twice : List(U8)
 import "../../test-suite/invalid/plus-sign.haus" as invalid_plus_sign : List(U8)
 import "../../test-suite/invalid/raw-tab-in-string.haus" as invalid_raw_tab_in_string : List(U8)
+import "../../test-suite/invalid/record-closer-for-key.haus" as invalid_record_closer_for_key : List(U8)
 import "../../test-suite/invalid/separator-after-dot.haus" as invalid_separator_after_dot : List(U8)
 import "../../test-suite/invalid/single-slash.haus" as invalid_single_slash : List(U8)
 import "../../test-suite/invalid/stray-closer.haus" as invalid_stray_closer : List(U8)
+import "../../test-suite/invalid/string-raw-cr.haus" as invalid_string_raw_cr : List(U8)
+import "../../test-suite/invalid/string-raw-crlf.haus" as invalid_string_raw_crlf : List(U8)
 import "../../test-suite/invalid/surrogate-escape.haus" as invalid_surrogate_escape : List(U8)
 import "../../test-suite/invalid/too-deep.haus" as invalid_too_deep : List(U8)
 import "../../test-suite/invalid/too-large-escape.haus" as invalid_too_large_escape : List(U8)
+import "../../test-suite/invalid/top-comma-closer.haus" as invalid_top_comma_closer : List(U8)
 import "../../test-suite/invalid/trailing-dot.haus" as invalid_trailing_dot : List(U8)
 import "../../test-suite/invalid/trailing-separator.haus" as invalid_trailing_separator : List(U8)
 import "../../test-suite/invalid/trailing-slash.haus" as invalid_trailing_slash : List(U8)
@@ -185,6 +201,7 @@ import "../../test-suite/invalid/unterminated-comment.haus" as invalid_untermina
 import "../../test-suite/invalid/unterminated-string.haus" as invalid_unterminated_string : List(U8)
 import "../../test-suite/invalid/uppercase-hex-prefix.haus" as invalid_uppercase_hex_prefix : List(U8)
 import "../../test-suite/invalid/uppercase-key.haus" as invalid_uppercase_key : List(U8)
+import "../../test-suite/invalid/version-directive-prefix.haus" as invalid_version_directive_prefix : List(U8)
 import "../../spec/errors.haus" as error_catalogue : Str
 
 ConformanceTest := [].{
@@ -689,6 +706,24 @@ expect ConformanceTest.hash(valid_variants) == valid_variants_hash
 # valid/variants.haus, streamed
 expect ConformanceTest.streams(valid_variants)
 
+# invalid/array-colon.haus
+expect ConformanceTest.rejects(invalid_array_colon, "missing-comma")
+
+# invalid/array-colon.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_array_colon, "missing-comma")
+
+# invalid/array-comma-wrong-closer.haus
+expect ConformanceTest.rejects(invalid_array_comma_wrong_closer, "expected-value")
+
+# invalid/array-comma-wrong-closer.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_array_comma_wrong_closer, "expected-value")
+
+# invalid/array-stray-char.haus
+expect ConformanceTest.rejects(invalid_array_stray_char, "missing-comma")
+
+# invalid/array-stray-char.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_array_stray_char, "missing-comma")
+
 # invalid/bad-escape.haus
 expect ConformanceTest.rejects(invalid_bad_escape, "invalid-escape")
 
@@ -731,6 +766,12 @@ expect ConformanceTest.rejects(invalid_bidi_isolate_in_string, "bidi-control")
 # invalid/bidi-isolate-in-string.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_bidi_isolate_in_string, "bidi-control")
 
+# invalid/bidi-outside-string.haus
+expect ConformanceTest.rejects(invalid_bidi_outside_string, "expected-value")
+
+# invalid/bidi-outside-string.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_bidi_outside_string, "expected-value")
+
 # invalid/block-closing-not-alone.haus
 expect ConformanceTest.rejects(invalid_block_closing_not_alone, "block-string-closing")
 
@@ -743,11 +784,23 @@ expect ConformanceTest.rejects(invalid_block_content_on_opening_line, "block-str
 # invalid/block-content-on-opening-line.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_block_content_on_opening_line, "block-string-opening")
 
+# invalid/block-string-control-after-opening.haus
+expect ConformanceTest.rejects(invalid_block_string_control_after_opening, "block-string-opening")
+
+# invalid/block-string-control-after-opening.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_block_string_control_after_opening, "block-string-opening")
+
 # invalid/block-string-key.haus
 expect ConformanceTest.rejects(invalid_block_string_key, "block-string-key")
 
 # invalid/block-string-key.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_block_string_key, "block-string-key")
+
+# invalid/block-string-raw-cr.haus
+expect ConformanceTest.rejects(invalid_block_string_raw_cr, "control-character")
+
+# invalid/block-string-raw-cr.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_block_string_raw_cr, "control-character")
 
 # invalid/block-under-indented.haus
 expect ConformanceTest.rejects(invalid_block_under_indented, "block-string-indent")
@@ -766,6 +819,12 @@ expect ConformanceTest.rejects(invalid_bom_after_comma, "expected-value")
 
 # invalid/bom-after-comma.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_bom_after_comma, "expected-value")
+
+# invalid/bytes-control.haus
+expect ConformanceTest.rejects(invalid_bytes_control, "bytes-not-hex")
+
+# invalid/bytes-control.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_bytes_control, "bytes-not-hex")
 
 # invalid/bytes-escape.haus
 expect ConformanceTest.rejects(invalid_bytes_escape, "bytes-not-hex")
@@ -791,6 +850,12 @@ expect ConformanceTest.rejects(invalid_bytes_odd_digits, "bytes-odd-digits")
 # invalid/bytes-odd-digits.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_bytes_odd_digits, "bytes-odd-digits")
 
+# invalid/bytes-odd-then-non-hex.haus
+expect ConformanceTest.rejects(invalid_bytes_odd_then_non_hex, "bytes-odd-digits")
+
+# invalid/bytes-odd-then-non-hex.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_bytes_odd_then_non_hex, "bytes-odd-digits")
+
 # invalid/bytes-space-after-prefix.haus
 expect ConformanceTest.rejects(invalid_bytes_space_after_prefix, "bare-identifier")
 
@@ -814,6 +879,12 @@ expect ConformanceTest.rejects(invalid_bytes_unterminated, "unterminated-bytes")
 
 # invalid/bytes-unterminated.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_bytes_unterminated, "unterminated-bytes")
+
+# invalid/colon-at-end.haus
+expect ConformanceTest.rejects(invalid_colon_at_end, "expected-value")
+
+# invalid/colon-at-end.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_colon_at_end, "expected-value")
 
 # invalid/colon-in-array.haus
 expect ConformanceTest.rejects(invalid_colon_in_array, "bare-identifier")
@@ -862,6 +933,12 @@ expect ConformanceTest.rejects(invalid_control_nul_in_block_comment, "control-ch
 
 # invalid/control-nul-in-block-comment.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_control_nul_in_block_comment, "control-character")
+
+# invalid/control-outside-string.haus
+expect ConformanceTest.rejects(invalid_control_outside_string, "expected-value")
+
+# invalid/control-outside-string.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_control_outside_string, "expected-value")
 
 # invalid/double-comma-top-level.haus
 expect ConformanceTest.rejects(invalid_double_comma_top_level, "expected-value")
@@ -935,6 +1012,12 @@ expect ConformanceTest.rejects(invalid_extra_closer, "unexpected-closer")
 # invalid/extra-closer.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_extra_closer, "unexpected-closer")
 
+# invalid/hash-not-version.haus
+expect ConformanceTest.rejects(invalid_hash_not_version, "expected-value")
+
+# invalid/hash-not-version.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_hash_not_version, "expected-value")
+
 # invalid/hex-too-long.haus
 expect ConformanceTest.rejects(invalid_hex_too_long, "number-too-long")
 
@@ -958,6 +1041,12 @@ expect ConformanceTest.rejects(invalid_json_unicode_escape, "invalid-unicode-esc
 
 # invalid/json-unicode-escape.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_json_unicode_escape, "invalid-unicode-escape")
+
+# invalid/key-at-end.haus
+expect ConformanceTest.rejects(invalid_key_at_end, "missing-colon")
+
+# invalid/key-at-end.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_key_at_end, "missing-colon")
 
 # invalid/key-without-value.haus
 expect ConformanceTest.rejects(invalid_key_without_value, "expected-value")
@@ -1133,6 +1222,12 @@ expect ConformanceTest.rejects(invalid_raw_tab_in_string, "control-character")
 # invalid/raw-tab-in-string.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_raw_tab_in_string, "control-character")
 
+# invalid/record-closer-for-key.haus
+expect ConformanceTest.rejects(invalid_record_closer_for_key, "expected-key")
+
+# invalid/record-closer-for-key.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_record_closer_for_key, "expected-key")
+
 # invalid/separator-after-dot.haus
 expect ConformanceTest.rejects(invalid_separator_after_dot, "invalid-number")
 
@@ -1151,6 +1246,18 @@ expect ConformanceTest.rejects(invalid_stray_closer, "expected-value")
 # invalid/stray-closer.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_stray_closer, "expected-value")
 
+# invalid/string-raw-cr.haus
+expect ConformanceTest.rejects(invalid_string_raw_cr, "control-character")
+
+# invalid/string-raw-cr.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_string_raw_cr, "control-character")
+
+# invalid/string-raw-crlf.haus
+expect ConformanceTest.rejects(invalid_string_raw_crlf, "control-character")
+
+# invalid/string-raw-crlf.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_string_raw_crlf, "control-character")
+
 # invalid/surrogate-escape.haus
 expect ConformanceTest.rejects(invalid_surrogate_escape, "invalid-unicode-escape")
 
@@ -1168,6 +1275,12 @@ expect ConformanceTest.rejects(invalid_too_large_escape, "invalid-unicode-escape
 
 # invalid/too-large-escape.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_too_large_escape, "invalid-unicode-escape")
+
+# invalid/top-comma-closer.haus
+expect ConformanceTest.rejects(invalid_top_comma_closer, "expected-value")
+
+# invalid/top-comma-closer.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_top_comma_closer, "expected-value")
 
 # invalid/trailing-dot.haus
 expect ConformanceTest.rejects(invalid_trailing_dot, "invalid-number")
@@ -1240,6 +1353,12 @@ expect ConformanceTest.rejects(invalid_uppercase_key, "uppercase-key")
 
 # invalid/uppercase-key.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_uppercase_key, "uppercase-key")
+
+# invalid/version-directive-prefix.haus
+expect ConformanceTest.rejects(invalid_version_directive_prefix, "version-directive")
+
+# invalid/version-directive-prefix.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_version_directive_prefix, "version-directive")
 
 # spec/errors.haus: ErrorCode.roc is up to date (roc/scripts/gen_error_codes.py)
 expect ConformanceTest.catalogue(error_catalogue)

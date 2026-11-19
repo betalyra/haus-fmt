@@ -154,7 +154,7 @@ thread = Decode.one(path.read_utf8!()?, Thread.decode_root)?
 liked = match thread {
     Comment(c) => Comment({ ..c, likes: c.likes + 1 })
 }
-Stdout.line!(Encode.to_str(Thread.encode_comment(liked))?)?
+Stdout.line!(Encode.to_str(Encode.value(liked, Thread.encode_comment)?)?)?
 `;
 
 export const features = [

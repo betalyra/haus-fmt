@@ -16,7 +16,7 @@
 
 use super::import::key;
 use super::{Json, decode_supported, open};
-use crate::ser::{check_key, check_length, check_tag, is_normalized, is_tag, normalized, supported};
+use crate::ser::{check_bytes, check_key, check_length, check_tag, is_normalized, is_tag, normalized, supported};
 use crate::{DecodeError, EncodeError, ErrorCode as Code, Limits, Segment, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -121,15 +121,12 @@ impl Writer<'_> {
     fn scalar(&self, value: &Value) -> W {
         Ok(match value {
             Value::Number(n) => object("_num", Json::String(normalized(n, self.limits)?.into())),
-            Value::String(s) => Json::String(s.clone()),
+            Value::String(s) => {
+                check_length(s, self.limits)?;
+                Json::String(s.clone())
+            }
             Value::Bytes(b) => {
-                if b.len() > self.limits.max_string_length / 2 {
-                    let max = self.limits.max_string_length;
-                    return Err(EncodeError::new(
-                        Code::StringTooLong,
-                        format!("byte string longer than {max} characters"),
-                    ));
-                }
+                check_bytes(b, self.limits)?;
                 object("_bytes", Json::String(hex(b)))
             }
             _ => Json::Null,

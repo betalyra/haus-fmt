@@ -1,0 +1,11 @@
+# A fixture of `haus package check`, read as a file: not built.
+[package]
+name = "fixture-base"
+version = "1.2.0"
+edition = "2024"
+publish = false
+links = "fixture_base"
+include = ["Cargo.toml", "build.rs", "src", "package.haus", "schema.haus"]
+
+[lib]
+name = "fixture_base"

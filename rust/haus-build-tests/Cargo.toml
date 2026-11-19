@@ -7,6 +7,13 @@ publish = false
 
 [dependencies]
 haus = { package = "haus-fmt", path = "../haus" }
+# Schema packages (packages/): shop.schema.haus imports orders and money.
+haus-test-money = { path = "packages/money" }
+haus-test-orders = { path = "packages/orders" }
+# The official packages and their profiles' codecs (travel.schema.haus, tests/profiles.rs).
+haus-fmt-money = { path = "../../extensions/money" }
+haus-fmt-geo = { path = "../../extensions/geo" }
+haus-test-travel = { path = "packages/travel" }
 
 [dev-dependencies]
 haus-fmt-build = { path = "../haus-build" }

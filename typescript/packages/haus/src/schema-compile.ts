@@ -25,9 +25,15 @@
  *
  * Attributes don't change the schemas (spec §15). `@deprecated` becomes a
  * JSDoc `@deprecated` in the declarations.
+ *
+ * Codecs (spec §13.4) choose another host type for named types, by id:
+ *
+ *   compileSchemaFile(text, { ...schemaOptions(path), codecs: iso })   // iso from @haus-fmt/money
  */
 import * as h from "./schema.js"
-import { deprecation, parseSchemaFile, type Attribute, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions, type SchemaFile, type Type } from "./schema-file.js"
+import {
+  deprecation, HausSchemaFileError, parseSchemaFile, type Attribute, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions, type SchemaFile, type Type,
+} from "./schema-file.js"
 
 export interface CompiledSchemaFile {
   readonly file: SchemaFile
@@ -37,9 +43,41 @@ export interface CompiledSchemaFile {
   readonly streams: ReadonlySet<string>
 }
 
+/**
+ * A codec (spec §13.4): the application's host type for the named type `id`
+ * (`@haus-fmt/money@1#Currency`, the same id in every language), built from
+ * the schema the type has without it. It runs after that schema, so it can
+ * reject more values, never fewer, and it encodes back to that schema's values.
+ */
+export interface Codec {
+  readonly id: string
+  readonly apply: (base: h.AnySchema) => h.AnySchema
+}
+
+export interface FromSchemaFileOptions {
+  /**
+   * Codecs, applied wherever their type occurs, inside imported packages too.
+   * Codecs for types the schema doesn't contain are ignored (a profile's
+   * codecs are given together); two for one type are an error.
+   */
+  readonly codecs?: readonly Codec[] | undefined
+}
+
+export interface CompileOptions extends ParseSchemaOptions, FromSchemaFileOptions {}
+
 /** Parse a schema file and build haus schemas for its types. Throws HausSchemaFileError. */
-export const compileSchemaFile = (text: string, options: ParseSchemaOptions = {}): CompiledSchemaFile =>
-  fromSchemaFile(parseSchemaFile(text, options))
+export const compileSchemaFile = (text: string, options: CompileOptions = {}): CompiledSchemaFile =>
+  fromSchemaFile(parseSchemaFile(text, options), options)
+
+/** The codecs by id; two for one type are an error. */
+const codecsById = (codecs: readonly Codec[]): ReadonlyMap<string, Codec> => {
+  const byId = new Map<string, Codec>()
+  for (const c of codecs) {
+    if (byId.has(c.id)) throw new Error(`two codecs for ${c.id}`)
+    byId.set(c.id, c)
+  }
+  return byId
+}
 
 const isEnum = (cases: readonly Case[]) => cases.length > 0 && cases.every((c) => c.payload.kind === "none")
 
@@ -65,7 +103,8 @@ const builtin = (name: Builtin): h.AnySchema => {
 }
 
 /** Build haus schemas for an already checked schema file. */
-export const fromSchemaFile = (file: SchemaFile): CompiledSchemaFile => {
+export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions = {}): CompiledSchemaFile => {
+  const byId = codecsById(options.codecs ?? [])
   const built = new Map<Instance, h.AnySchema>()
   const building = new Set<Instance>()
 
@@ -76,16 +115,44 @@ export const fromSchemaFile = (file: SchemaFile): CompiledSchemaFile => {
     // limited only by the call's nesting depth (spec §9.9).
     if (building.has(inst)) return h.Recursive(inst.key, () => built.get(inst)!)
     building.add(inst)
-    const schema = build(inst.body)
+    let schema = build(inst.body)
+    // Codecs target named types without arguments, by id.
+    const codec = inst.args.length === 0 ? byId.get(inst.definition.id) : undefined
+    if (codec) schema = codec.apply(schema)
     building.delete(inst)
     built.set(inst, schema)
     return schema
   }
 
+  /**
+   * A record case by name (`Box BoxRec`, spec §15) puts the record's fields
+   * beside `_tag`, where a codec's host type for the record can't go: a codec
+   * for the record, or an alias of it, is `codec-unreachable` (§13.4).
+   */
+  const codecFreeRecord = (tag: string, named: Type): void => {
+    for (let t = named; t.kind === "ref"; t = t.instance.body) {
+      const { id } = t.instance.definition
+      if (t.instance.args.length === 0 && byId.has(id)) {
+        throw new HausSchemaFileError(`the codec for ${id} can't apply in the record case ${tag}: a record case's fields sit beside "_tag" in the host value (spec §15)`, 0, 1, 1, "codec-unreachable")
+      }
+    }
+  }
+
   const fields = (fs: readonly Field[]): h.Fields =>
     Object.fromEntries(fs.map((f) => [f.key, f.optional ? h.Optional(build(f.type)) : build(f.type)]))
 
+  // One schema per type object: arguments are shared, not copied, so a type written once can be
+  // reached along exponentially many paths (`P a a` inside `P a a` …) and is built once.
+  const builtTypes = new WeakMap<Type, h.AnySchema>()
   const build = (t: Type): h.AnySchema => {
+    if (t.kind === "ref") return ref(t.instance)
+    const known = builtTypes.get(t)
+    if (known) return known
+    const schema = buildNew(t)
+    builtTypes.set(t, schema)
+    return schema
+  }
+  const buildNew = (t: Exclude<Type, { kind: "ref" }>): h.AnySchema => {
     switch (t.kind) {
       case "builtin":
         return builtin(t.name)
@@ -109,6 +176,7 @@ export const fromSchemaFile = (file: SchemaFile): CompiledSchemaFile => {
             case "none":
               return [c.tag, h.Unit]
             case "record":
+              if (c.payload.named) codecFreeRecord(c.tag, c.payload.named)
               return [c.tag, h.Record(fields(c.payload.record.fields), { closed: c.payload.record.closed })]
             case "positional":
               return [c.tag, h.Tuple(...c.payload.items.map(build))]
@@ -116,8 +184,6 @@ export const fromSchemaFile = (file: SchemaFile): CompiledSchemaFile => {
         }))
         return (t.open ? h.OpenVariant(cases) : h.Variant(cases))
       }
-      case "ref":
-        return ref(t.instance)
       case "param":
         throw new Error(`type parameter ${t.name} in a concrete type`)
     }

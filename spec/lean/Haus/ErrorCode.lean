@@ -24,6 +24,9 @@ inductive Code
   | bytesOddDigits | loneCarriageReturn | unterminatedComment | straySlash
   -- limits (§7)
   | nestingTooDeep | numberTooLong | exponentTooLarge | stringTooLong | keyTooLong | tagTooLong
+  | valueTooLong
+  -- streams (§6)
+  | streamTruncated
   -- decoding with a schema (§15)
   | typeMismatch | notAnInteger | outOfRange | missingField | unknownField | unknownTag
   | wrongPayload | invalidTime | invalidSecret | unguardedRecursion | unknownType
@@ -80,6 +83,8 @@ def Code.name : Code → String
   | .stringTooLong => "string-too-long"
   | .keyTooLong => "key-too-long"
   | .tagTooLong => "tag-too-long"
+  | .valueTooLong => "value-too-long"
+  | .streamTruncated => "stream-truncated"
   | .typeMismatch => "type-mismatch"
   | .notAnInteger => "not-an-integer"
   | .outOfRange => "out-of-range"
@@ -120,5 +125,26 @@ def Code.name : Code → String
   | .outOfFuel => "(out of fuel)"
 
 instance : ToString Code := ⟨Code.name⟩
+
+/-- Every code of the catalogue the reference reports (`outOfFuel` is not one). -/
+def Code.all : List Code := [
+  .invalidUtf8, .versionDirective, .expectedValue, .missingComma, .payloadNewline,
+  .unexpectedCloser, .unclosedBracket, .nullLiteral, .booleanLiteral, .bareIdentifier,
+  .expectedKey, .uppercaseKey, .blockStringKey, .missingColon, .duplicateKey, .emptyPayload,
+  .invalidNumber, .unterminatedString, .stringLineBreak, .controlCharacter, .bidiControl,
+  .invalidEscape, .invalidUnicodeEscape, .blockStringOpening, .blockStringClosing,
+  .blockStringIndent, .unterminatedBlockString, .unterminatedBytes, .bytesNotHex, .bytesOddDigits,
+  .loneCarriageReturn, .unterminatedComment, .straySlash, .nestingTooDeep, .numberTooLong,
+  .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .streamTruncated,
+  .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag,
+  .wrongPayload, .invalidTime, .invalidSecret, .unguardedRecursion, .unknownType, .jsonSyntax,
+  .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes,
+  .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm, .schemaSyntax,
+  .unknownModule, .unknownImport, .duplicateImport, .duplicateType, .importNotFound,
+  .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest,
+  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles]
+
+theorem Code.mem_all (c : Code) (h : c ≠ .outOfFuel) : c ∈ Code.all := by
+  cases c <;> simp_all [Code.all]
 
 end Haus

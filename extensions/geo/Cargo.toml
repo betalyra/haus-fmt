@@ -4,6 +4,8 @@ version = "1.0.0"
 description = "@haus-fmt/geo: Points and boxes on the earth (a haus schema package)"
 edition = "2024"
 license = "MIT"
+# Tested with the Rust workspace (cargo test --workspace in rust/).
+workspace = "../../rust"
 # Its library name: tells crates that depend on this one where its schema is,
 # and which crate has its types (haus_build::package).
 links = "haus_geo"

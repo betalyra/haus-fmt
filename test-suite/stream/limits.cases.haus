@@ -1,0 +1,33 @@
+// Stream readers (spec §6) with a small value limit (§7) and strict mode.
+// Each case: `text`, the reader's `maxValueLength` and `strict` (default
+// False), and the expected result: `Ok([values])` with the values read, or
+// `Err("code")`. A value's characters count from after the previous top-level
+// comma (or the start, after a byte order mark) up to the next one;
+// whitespace and comments count, the commas don't. Readers must give the
+// same result for every way of splitting `text` into chunks.
+
+// ── at the limit and one over ──
+{ text: "12345", maxValueLength: 5, result: Ok([12345]) },
+{ text: "123456", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "1,12345", maxValueLength: 5, result: Ok([1, 12345]) },
+{ text: "1,123456", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "12345,", maxValueLength: 5, result: Ok([12345]) },
+{ text: "123456,", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "123456,1", maxValueLength: 5, result: Err("value-too-long") },
+// whitespace and comments count
+{ text: " 1234", maxValueLength: 5, result: Ok([1234]) },
+{ text: " 12345", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "1, /*c*/ 2", maxValueLength: 8, result: Ok([1, 2]) },
+{ text: "1, /*c*/ 2", maxValueLength: 7, result: Err("value-too-long") },
+// a byte order mark doesn't count
+{ text: "\u{FEFF}12345", maxValueLength: 5, result: Ok([12345]) },
+// the first error in the text wins
+{ text: "1234567, [1,,2]", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "[1,,2], 1", maxValueLength: 9, result: Err("expected-value") },
+
+// ── strict mode: a value after the last comma means the stream was cut off ──
+{ text: "1, 2,", maxValueLength: 64, strict: True, result: Ok([1, 2]) },
+{ text: "1, 2", maxValueLength: 64, strict: True, result: Err("stream-truncated") },
+{ text: "", maxValueLength: 64, strict: True, result: Ok([]) },
+{ text: "// only a comment", maxValueLength: 64, strict: True, result: Ok([]) },
+{ text: "1, 2", maxValueLength: 64, result: Ok([1, 2]) },

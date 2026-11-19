@@ -18,7 +18,8 @@
     ["Outcome",{"variant":{"closed":true,"cases":[{"tag":"Err","payload":{"positional":[{"builtin":"String"}]}},{"tag":"Ok","payload":{"positional":[{"builtin":"Int"}]}}]}}],
     ["Payload",{"builtin":"Any"}],
     ["S",{"builtin":"String"}],
-    ["Span",{"time":"Duration"}]
+    ["Span",{"time":"Duration"}],
+    ["Vault",{"map":{"secret":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}}}]
   ]},
   {"name": "numbers", "defs": [
     ["Dec",{"builtin":"Decimal"}],
@@ -33,12 +34,16 @@
   {"name": "records", "defs": [
     ["Empty",{"record":{"closed":false,"fields":[]}}],
     ["Outer",{"record":{"closed":true,"fields":[{"key":"user","optional":false,"type":{"ref":"User"}}]}}],
+    ["Quoted",{"record":{"closed":true,"fields":[{"key":"content-type","optional":false,"type":{"builtin":"String"}},{"key":"tab\there","optional":false,"type":{"builtin":"Int"}},{"key":"line\nbreak","optional":false,"type":{"builtin":"Int"}},{"key":"smile😀","optional":false,"type":{"builtin":"Bool"}},{"key":"q\"\\","optional":false,"type":{"builtin":"Int"}}]}}],
     ["Strict",{"record":{"closed":true,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"tags","optional":true,"type":{"array":{"builtin":"String"}}}]}}],
     ["User",{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"nick","optional":true,"type":{"builtin":"String"}},{"key":"note","optional":true,"type":{"maybe":{"builtin":"String"}}}]}}]
   ]},
   {"name": "types", "defs": [
     ["Expr",{"variant":{"closed":true,"cases":[{"tag":"Num","payload":{"positional":[{"builtin":"Int"}]}},{"tag":"Add","payload":{"positional":[{"ref":"Expr"},{"ref":"Expr"}]}},{"tag":"Neg","payload":{"record":{"closed":false,"fields":[{"key":"of","optional":false,"type":{"ref":"Expr"}}]}}}]}}],
+    ["Forest(Int)",{"array":{"ref":"GTree(Int)"}}],
+    ["GTree(Int)",{"record":{"closed":false,"fields":[{"key":"value","optional":false,"type":{"builtin":"Int"}},{"key":"kids","optional":false,"type":{"ref":"Forest(Int)"}}]}}],
     ["IntPair",{"ref":"Pair(Int)"}],
+    ["IntTree",{"ref":"GTree(Int)"}],
     ["Ints",{"ref":"List(Int)"}],
     ["List(Int)",{"variant":{"closed":false,"cases":[{"tag":"Nil","payload":"none"},{"tag":"Cons","payload":{"positional":[{"builtin":"Int"},{"ref":"List(Int)"}]}}]}}],
     ["Pair(Int)",{"record":{"closed":false,"fields":[{"key":"first","optional":false,"type":{"builtin":"Int"}},{"key":"second","optional":false,"type":{"builtin":"Int"}}]}}],

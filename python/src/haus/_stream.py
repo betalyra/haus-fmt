@@ -159,6 +159,10 @@ class StreamReader:
         out = self._scan("", final=True)
         # Whatever is left has no top-level comma: zero or one value.
         text = "".join(self._done) + self._buf
+        # The scan checks a value's length before each character, so the last value,
+        # with no comma after it, is checked here, after its last character (§7).
+        if len(text) - (self._first and text.startswith("\ufeff")) > self._max_value_length:
+            raise self._origin.error("value-too-long", f"value longer than {self._max_value_length} characters")
         rest = self._parse(text)
         if rest and self._require_terminator:
             raise self._origin.after(text).error(

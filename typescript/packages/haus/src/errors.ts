@@ -1,4 +1,5 @@
 import { ERROR_CODES, type ErrorCode } from "./error-codes.js"
+import { quote } from "./format.js"
 
 export { ERROR_CODES, type ErrorCategory, type ErrorCode } from "./error-codes.js"
 
@@ -145,9 +146,12 @@ export function locate(text: string, pos: number, origin: Origin): Origin {
 /** A place in a value: field names and array (or argument) indexes. */
 export type Path = readonly (string | number)[]
 
-/** `$.items[2].price` */
+/**
+ * `$.items[2].price`, `$.m["pt-BR"]` (spec §15): a key that isn't an
+ * identifier as a haus string in canonical form (§12).
+ */
 export const formatPath = (path: Path) =>
-  "$" + path.map((p) => (typeof p === "number" ? `[${p}]` : /^[a-z_]\w*$/.test(p) ? `.${p}` : `[${JSON.stringify(p)}]`)).join("")
+  "$" + path.map((p) => (typeof p === "number" ? `[${p}]` : /^[a-z_]\w*$/.test(p) ? `.${p}` : `[${quote(p)}]`)).join("")
 
 /** Valid input (haus or JSON) that doesn't fit what is expected: a schema, or a JSON mapping (spec §15, §16). */
 export class HausDecodeError extends Error {

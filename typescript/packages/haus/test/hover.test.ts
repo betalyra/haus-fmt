@@ -30,9 +30,19 @@ describe("hover", () => {
       type Root = { order: Int, total: Decimal, status: Status }
     `)
     const ctx = hoverContext(data, { file, type: "Root" })
-    expect(hoverText(hoverAt(ctx, at("status"))!)).toBe("status: Status\nWhere an order is.")
+    expect(hoverText(hoverAt(ctx, at("status"))!)).toBe("status: Status\nWhere an order is.\ntype Status = closed < Pending | Shipped { at: Instant } >")
     expect(hoverText(hoverAt(ctx, at("order"))!)).toBe("order: Int")
     expect(hoverMarkdown(hoverAt(ctx, at("status"))!)).toContain("type Status = closed <")
+  })
+
+  it("shows a recursive type's definition at its tag, and cuts a long one", () => {
+    const file = parseSchemaFile(`type Comment = closed < Comment { text: String, replies: Array Comment } >\ntype Root = Comment\ntype Holder = { l: Long }\ntype Long = {\n${Array.from({ length: 20 }, (_, i) => `  f${i}: Int,`).join("\n")}\n}`)
+    const text = `Comment { text: "a", replies: [] }`
+    const ctx = hoverContext(text, { file, type: "Root" })
+    expect(hoverText(hoverAt(ctx, 0)!)).toBe("Comment\ntype Comment = closed < Comment { text: String, replies: Array Comment } >")
+    const long = hoverText(hoverAt(hoverContext("{ l: {} }", { file, type: "Holder" }), 2)!).split("\n")
+    expect(long.length).toBe(13)
+    expect(long.at(-1)).toBe("…")
   })
 
   it("has nothing outside values", () => {

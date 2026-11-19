@@ -1,18 +1,19 @@
 //! The schema conformance suite (test-suite/schema, spec §14, §15), run on
 //! the runtime checker.
 //!
-//! Each case is `Ok { type, input, output? }` or `Err { type, input, code }`.
+//! Each case is `Ok { type, input, output? }` or `Err { type, input, code, path }`.
 //! Ok: decoding `input` with `type` succeeds, giving a value equal to `output`
 //! (or `input`) that the writer takes; checking it finds no error. Err:
-//! decoding fails with the error code `code` (spec §17), and checking finds an
-//! error with that code. Every case runs on each schema twice: as written,
+//! decoding fails with the error code `code` (spec §17) at the place `path`
+//! (spec §15, compared as text), and checking finds an error with that code
+//! at that place. Every case runs on each schema twice: as written,
 //! and without its attributes, which must not change any result.
 //!
 //! `invalid/*.schema.haus` must be rejected (spec §14), with the code in
 //! `invalid/NAME.error`.
 
 use haus::{Value, canonical};
-use haus_schema::{Options, Schema, Severity};
+use haus_schema::{NoImports, Options, Schema, Severity};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +25,8 @@ struct Case {
     output: Value,
     /// For an `Err`, the code it fails with.
     code: String,
+    /// For an `Err`, where it fails: `$.items[2].price`.
+    path: String,
 }
 
 impl Case {
@@ -47,6 +50,11 @@ impl Case {
                     Some(Value::String(code)) => code.clone(),
                     _ if ok => String::new(),
                     _ => return Err(format!("an Err case without a code: {}", canonical(v))),
+                },
+                path: match fields.get("path") {
+                    Some(Value::String(path)) => path.clone(),
+                    _ if ok => String::new(),
+                    _ => return Err(format!("an Err case without a path: {}", canonical(v))),
                 },
             }),
             _ => Err(format!("not a case: {}", canonical(v))),
@@ -78,8 +86,11 @@ impl Case {
             (false, Err(e)) if e.code.as_str() != self.code => {
                 Some(format!("fails with {} ({e}), expected {}", e.code, self.code))
             }
-            (false, Err(_)) if errors.iter().all(|i| i.code.as_str() != self.code) => {
-                Some(format!("the check reports {}, expected {}", errors[0].code, self.code))
+            (false, Err(e)) if e.path_string() != self.path => {
+                Some(format!("fails at {} ({e}), expected {}", e.path_string(), self.path))
+            }
+            (false, Err(_)) if errors.iter().all(|i| i.code.as_str() != self.code || i.path_string() != self.path) => {
+                Some(format!("the check reports {}, expected {} at {}", errors[0], self.code, self.path))
             }
             (false, Err(_)) => None,
         }
@@ -133,7 +144,12 @@ fn invalid_schemas_are_rejected() {
         .filter_map(|path| {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             let expected = fs::read_to_string(path.with_extension("").with_extension("error")).unwrap();
-            match Schema::parse(&fs::read_to_string(path).unwrap()) {
+            // Read as a file is: invalid UTF-8 is invalid-utf8.
+            let parsed = match String::from_utf8(fs::read(path).unwrap()) {
+                Ok(text) => Schema::parse(&text),
+                Err(_) => Schema::load(path, &NoImports),
+            };
+            match parsed {
                 Ok(_) => Some(format!("{name}: accepted")),
                 Err(e) if e.code().as_str() != expected.trim() => {
                     Some(format!("{name}: {} ({e}), expected {}", e.code(), expected.trim()))

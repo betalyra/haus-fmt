@@ -34,8 +34,8 @@ out only fields its record doesn't list: that is how `readCore` and
 as an argument (as in `Haus.Json.RecordCases`), and the theorem holds for
 every `F`, the same on both sides. `toJson` and `fromJson` choose `F` from
 the sizes of the types and the environment (`nullFuel`), which grow from one
-minor version to the next; that the chains are as long as `nullFuel` allows
-at most, so that the choice doesn't matter, is not proven. The names a type
+minor version to the next; the choice doesn't matter from `env.fuel` on, so
+`older_reads_newer_json` in `Haus.Json.NullFuel` states it for them. The names a type
 goes through (`whnf`, `recordOf?`, `origin`, the prelude's `Bool`) are
 compared at any fuel: `Haus.Json.Fuel` proves that `env.fuel` is enough for
 them. A `Maybe` whose argument is written in place can't grow (above).

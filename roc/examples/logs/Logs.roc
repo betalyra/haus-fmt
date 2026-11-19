@@ -9,7 +9,10 @@ Logs := [].{
 	Level := [Debug, Info, Warn, Error]
 
 	decode_level : Value -> Try(Level, Decode.Error)
-	decode_level = |v| match v {
+	decode_level = |v| Decode.within_depth(v, read_value_level)
+
+	read_value_level : Value -> Try(Level, Decode.Error)
+	read_value_level = |v| match v {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Warn", []) => Ok(Warn)
@@ -22,12 +25,12 @@ Logs := [].{
 		_ => Decode.expected("a variant (Level)", v)
 	}
 
-	encode_level : Level -> Value
-	encode_level = |v| match v {
-		Debug => Tag("Debug", [])
-		Info => Tag("Info", [])
-		Warn => Tag("Warn", [])
-		Error => Tag("Error", [])
+	encode_level : Level, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_level = |v, e| match v {
+		Debug => Encode.tag("Debug", e)
+		Info => Encode.tag("Info", e)
+		Warn => Encode.tag("Warn", e)
+		Error => Encode.tag("Error", e)
 	}
 
 	## Open: entries of kinds this schema doesn't know (yet) are kept as unknown
@@ -37,12 +40,15 @@ Logs := [].{
 	Entry := [Log({ at : Str, level : Level, service : Str, message : Str }), Request({ at : Str, method : Str, path : Str, status : U16, ms : U32 }), Unknown(Str, List(Value))]
 
 	decode_entry : Value -> Try(Entry, Decode.Error)
-	decode_entry = |v| match v {
+	decode_entry = |v| Decode.within_depth(v, read_value_entry)
+
+	read_value_entry : Value -> Try(Entry, Decode.Error)
+	read_value_entry = |v| match v {
 		Tag("Log", [p]) => Decode.payload(
 			"Log",
 			p,
 			|fs| {
-				Ok(Log({ at: Decode.field(fs, "at", Decode.time("Instant"))?, level: Decode.field(fs, "level", decode_level)?, service: Decode.field(fs, "service", Decode.str)?, message: Decode.field(fs, "message", Decode.str)? }))
+				Ok(Log({ at: Decode.field(fs, "at", Decode.time("Instant"))?, level: Decode.field(fs, "level", read_value_level)?, service: Decode.field(fs, "service", Decode.str)?, message: Decode.field(fs, "message", Decode.str)? }))
 			},
 		)
 		Tag("Request", [p]) => Decode.payload(
@@ -58,11 +64,11 @@ Logs := [].{
 		_ => Decode.expected("a variant (Entry)", v)
 	}
 
-	encode_entry : Entry -> Value
-	encode_entry = |v| match v {
-		Log(r) => Tag("Log", [Encode.record([("at", Present(Encode.time("Instant")(r.at))), ("level", Present(encode_level(r.level))), ("service", Present(Encode.str(r.service))), ("message", Present(Encode.str(r.message)))])])
-		Request(r) => Tag("Request", [Encode.record([("at", Present(Encode.time("Instant")(r.at))), ("method", Present(Encode.str(r.method))), ("path", Present(Encode.str(r.path))), ("status", Present(Num(r.status.to_str()))), ("ms", Present(Num(r.ms.to_str())))])])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_entry : Entry, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_entry = |v, e| match v {
+		Log(r) => Encode.tagged_record("Log", e, [("at", Encode.required(r.at, Encode.time("Instant"))), ("level", Encode.required(r.level, encode_level)), ("service", Encode.required(r.service, Encode.str)), ("message", Encode.required(r.message, Encode.str))])
+		Request(r) => Encode.tagged_record("Request", e, [("at", Encode.required(r.at, Encode.time("Instant"))), ("method", Encode.required(r.method, Encode.str)), ("path", Encode.required(r.path, Encode.str)), ("status", Present(|e1| Encode.number(r.status.to_str(), e1))), ("ms", Present(|e2| Encode.number(r.ms.to_str(), e2)))])
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	## haus type `logs#Root`.

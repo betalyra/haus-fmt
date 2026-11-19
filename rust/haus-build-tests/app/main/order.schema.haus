@@ -1,7 +1,7 @@
 // An application's schema split into files (spec §13.3): relative imports,
 // `../`, and two files called common.schema.haus in different folders.
 import ../billing/common (Address)
-import ../shipping/common (Parcel)
+import ../shipping/common (Parcel, Status)
 import ../shared/money (Money, Page)
 
 type Order = {
@@ -12,3 +12,11 @@ type Order = {
 }
 
 type Line = { item: String, price: Money }
+
+// Spreads of imported types copy their fields and tags, with the types of the
+// file they come from: billing's Address has a Money (imported there), and
+// shipping's Parcel and Status have shipping's Address (not billing's, which
+// this file imports).
+type Invoice = { ...Address, number: Int }
+type Shipment = closed { id: Int, ...Parcel }
+type Tracking = < ...Status | Lost >

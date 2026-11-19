@@ -17,6 +17,7 @@ use haus::ErrorCode as Code;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 
 const MAX_INSTANCES: usize = 10_000;
 const MAX_FILES: usize = 256;
@@ -204,15 +205,21 @@ impl Schema {
     }
 
     /// A short description of a type, as in a schema: `Array Line`,
-    /// `Maybe Int`, `one of A, B` (for messages).
+    /// `Maybe Int`, `one of A, B` (for messages). Arguments nested deeper than
+    /// a few levels are left out (`P (P (P … …) …) …`): they can be shared, so
+    /// written in full they could double at every level.
     pub fn describe(&self, ty: &Type) -> String {
+        self.describe_at(ty, 0)
+    }
+
+    fn describe_at(&self, ty: &Type, depth: usize) -> String {
         match ty {
             Type::Builtin(b) => b.name().into(),
             Type::Time(name) => (*name).into(),
-            Type::Array(item) => format!("Array {}", self.atom(item)),
-            Type::Map(value) => format!("Map {}", self.atom(value)),
-            Type::Maybe(item) => format!("Maybe {}", self.atom(item)),
-            Type::Secret(item) => format!("Secret {}", self.atom(item)),
+            Type::Array(item) => format!("Array {}", self.atom(item, depth)),
+            Type::Map(value) => format!("Map {}", self.atom(value, depth)),
+            Type::Maybe(item) => format!("Maybe {}", self.atom(item, depth)),
+            Type::Secret(item) => format!("Secret {}", self.atom(item, depth)),
             Type::Record(_) => "a record".into(),
             Type::Variant(v) => tags(v),
             Type::Ref(id) => {
@@ -220,7 +227,10 @@ impl Schema {
                 match inst.args.is_empty() {
                     true => inst.name.clone(),
                     false => {
-                        let args: Vec<String> = inst.args.iter().map(|a| self.atom(a)).collect();
+                        let args: Vec<String> = match depth < 2 {
+                            true => inst.args.iter().map(|a| self.atom(a, depth + 1)).collect(),
+                            false => inst.args.iter().map(|_| "…".to_string()).collect(),
+                        };
                         format!("{} {}", inst.name, args.join(" "))
                     }
                 }
@@ -229,8 +239,8 @@ impl Schema {
         }
     }
 
-    fn atom(&self, ty: &Type) -> String {
-        let d = self.describe(ty);
+    fn atom(&self, ty: &Type, depth: usize) -> String {
+        let d = self.describe_at(ty, depth);
         match d.contains(' ') && !d.starts_with('<') {
             true => format!("({d})"),
             false => d,
@@ -306,12 +316,16 @@ struct Loader<'a> {
     /// loaded), whose imports were resolved too.
     copies: HashSet<PathBuf>,
     instances: Vec<Instance>,
-    /// Per instance: its key, and the definition it applies.
-    keys: Vec<String>,
+    /// Per instance: the definition it applies.
     def_of: Vec<(usize, usize)>,
     /// Per instance: whether its body is being evaluated, or is done.
     state: Vec<State>,
     by_instance_key: HashMap<String, InstanceId>,
+    /// The key of each record's and variant's shape, and of each record and
+    /// variant object (kept, so its address stays its own): see [`Loader::key`].
+    shapes: HashMap<String, String>,
+    records: HashMap<*const Record, (Arc<Record>, String)>,
+    variants: HashMap<*const Variant, (Arc<Variant>, String)>,
     queue: VecDeque<InstanceId>,
     /// Every reference to a named type, to check none names a Stream: (instance, file, offset).
     refs: Vec<(InstanceId, usize, usize)>,
@@ -329,10 +343,12 @@ impl<'a> Loader<'a> {
             files,
             copies: HashSet::new(),
             instances: vec![],
-            keys: vec![],
             def_of: vec![],
             state: vec![],
             by_instance_key: HashMap::new(),
+            shapes: HashMap::new(),
+            records: HashMap::new(),
+            variants: HashMap::new(),
             queue: VecDeque::new(),
             refs: vec![],
         }
@@ -463,7 +479,7 @@ impl<'a> Loader<'a> {
                     let record = match &case.payload {
                         Payload::Record(r) => Some(r),
                         Payload::Named(x) => match self.resolve(x) {
-                            Type::Record(r) => Some(r),
+                            Type::Record(r) => Some(&**r),
                             _ => None,
                         },
                         _ => None,
@@ -802,6 +818,59 @@ impl<'a> Loader<'a> {
                 );
             }
         }
+        self.groups(unit)
+    }
+
+    /// §9.10, through other definitions: in a group of definitions that refer
+    /// to each other, directly or not (a strongly connected component of the
+    /// references), a reference to another member passes only parameters of
+    /// the referring definition, so instances can't grow around the group.
+    /// Checked on the definitions as written, before anything is instantiated.
+    /// (A reference to itself passes its own parameters in order, checked
+    /// before.) Groups are within one file: imports have no cycles.
+    fn groups(&self, unit: usize) -> Result<(), Fail> {
+        let u = &self.units[unit];
+        // Per definition: the file's own definitions it refers to, whether
+        // only with parameters, and where.
+        let refs: Vec<Vec<(usize, bool, usize)>> = u
+            .file
+            .types
+            .iter()
+            .map(|def| {
+                let mut out = vec![];
+                walk(&def.ty, &mut |t| {
+                    if let Ty::Name { name, args, pos } = t
+                        && let Some(&(du, dd)) = u.scope.get(name)
+                        && du == unit
+                    {
+                        out.push((dd, args.iter().all(|a| matches!(a, Ty::Param { .. })), *pos));
+                    }
+                });
+                out
+            })
+            .collect();
+        let edges: Vec<Vec<usize>> = refs.iter().map(|r| r.iter().map(|&(to, ..)| to).collect()).collect();
+        let group = components(&edges);
+        for (d, out) in refs.iter().enumerate() {
+            let Some(&(to, _, pos)) = out.iter().find(|&&(to, params, _)| to != d && group[to] == group[d] && !params)
+            else {
+                continue;
+            };
+            let (def, target) = (&u.file.types[d], &u.file.types[to].name);
+            let name = &def.name;
+            let may = match def.params.is_empty() {
+                true => "has no parameters to pass it".to_string(),
+                false => format!("may pass it only its own parameters ({})", def.params.join(" ")),
+            };
+            return fail(
+                unit,
+                pos,
+                Code::GrowingRecursion,
+                format!(
+                    "{name} refers to {target}, which refers back to {name}: {name} {may}; other arguments could grow without bound"
+                ),
+            );
+        }
         Ok(())
     }
 
@@ -908,7 +977,10 @@ impl<'a> Loader<'a> {
     fn instance(&mut self, u: usize, d: usize, args: Vec<Type>, at: usize, pos: usize) -> Result<InstanceId, Fail> {
         let key = match args.is_empty() {
             true => format!("{u}:{d}"),
-            false => format!("{u}:{d}({})", args.iter().map(|a| self.key(a)).collect::<Vec<_>>().join(",")),
+            false => {
+                let keys: Vec<String> = args.iter().map(|a| self.key(a)).collect();
+                format!("{u}:{d}({})", keys.join(","))
+            }
         };
         if let Some(&id) = self.by_instance_key.get(&key) {
             return Ok(id);
@@ -930,7 +1002,6 @@ impl<'a> Loader<'a> {
             body: Type::Builtin(Builtin::Any),
             stream: false,
         });
-        self.keys.push(key.clone());
         self.def_of.push((u, d));
         self.state.push(State::New);
         self.by_instance_key.insert(key, id);
@@ -938,8 +1009,12 @@ impl<'a> Loader<'a> {
         Ok(id)
     }
 
-    /// A key that tells types apart, for instances.
-    fn key(&self, t: &Type) -> String {
+    /// A key that tells types apart, for instances. It never holds the whole
+    /// of an argument, which can grow exponentially with legitimate nesting
+    /// (`P a a` inside `P a a` …): an instance is keyed by its number, a
+    /// record or variant by the number of its shape, so a key is as long as
+    /// one type expression. Each record and variant object is keyed once.
+    fn key(&mut self, t: &Type) -> String {
         match t {
             Type::Builtin(b) => b.name().into(),
             Type::Time(name) => (*name).into(),
@@ -948,15 +1023,26 @@ impl<'a> Loader<'a> {
             Type::Map(value) => format!("Map({})", self.key(value)),
             Type::Maybe(item) => format!("Maybe({})", self.key(item)),
             Type::Secret(item) => format!("Secret({})", self.key(item)),
-            Type::Ref(id) => self.keys[id.0].clone(),
-            Type::Record(r) => self.record_key(r),
+            Type::Ref(id) => format!("#{}", id.0),
+            Type::Record(r) => {
+                if let Some((_, key)) = self.records.get(&Arc::as_ptr(r)) {
+                    return key.clone();
+                }
+                let shape = self.record_shape(r);
+                let key = self.shape_key(shape);
+                self.records.insert(Arc::as_ptr(r), (r.clone(), key.clone()));
+                key
+            }
             Type::Variant(v) => {
+                if let Some((_, key)) = self.variants.get(&Arc::as_ptr(v)) {
+                    return key.clone();
+                }
                 let cases: Vec<String> = v
                     .cases
                     .iter()
                     .map(|c| match &c.payload {
                         Payload::None => c.tag.clone(),
-                        Payload::Record(r) => format!("{}{}", c.tag, self.record_key(r)),
+                        Payload::Record(r) => format!("{}{}", c.tag, self.record_shape(r)),
                         // Not the key of one positional argument: `X R` and `X a` with R for a differ.
                         Payload::Named(t) => format!("{}{{{}}}", c.tag, self.key(t)),
                         Payload::Positional(items) => {
@@ -964,12 +1050,20 @@ impl<'a> Loader<'a> {
                         }
                     })
                     .collect();
-                format!("<{}{}>", cases.join("|"), if v.open { "|_" } else { "" })
+                let key = self.shape_key(format!("<{}{}>", cases.join("|"), if v.open { "|_" } else { "" }));
+                self.variants.insert(Arc::as_ptr(v), (v.clone(), key.clone()));
+                key
             }
         }
     }
 
-    fn record_key(&self, r: &Record) -> String {
+    /// The number of a shape, as a key.
+    fn shape_key(&mut self, shape: String) -> String {
+        let next = format!("~{}", self.shapes.len());
+        self.shapes.entry(shape).or_insert(next).clone()
+    }
+
+    fn record_shape(&mut self, r: &Record) -> String {
         let fields: Vec<String> = r
             .fields
             .iter()
@@ -1074,7 +1168,7 @@ impl<'a> Loader<'a> {
                 None => fail(u, *pos, Code::UnknownParameter, format!("unknown type parameter {name}")),
             },
             Ty::Record { closed, fields, spreads, .. } => {
-                Ok(Type::Record(self.record(u, *closed, fields, spreads, env)?))
+                Ok(Type::Record(Arc::new(self.record(u, *closed, fields, spreads, env)?)))
             }
             Ty::Variant { closed, cases, spreads, .. } => {
                 let cases = cases
@@ -1100,7 +1194,7 @@ impl<'a> Loader<'a> {
                 let mut copied = vec![];
                 for sp in spreads {
                     if let Type::Variant(v) = self.spread(u, sp, "variant")? {
-                        copied.push((sp, v.cases));
+                        copied.push((sp, v.cases.clone()));
                     }
                 }
                 let cases = insert(cases, copied);
@@ -1108,7 +1202,7 @@ impl<'a> Loader<'a> {
                 if let Some((c, pos)) = cases.iter().find(|(c, _)| !tags.insert(c.tag.as_str())) {
                     return fail(u, *pos, Code::DuplicateTag, format!("duplicate tag {}", c.tag));
                 }
-                Ok(Type::Variant(Variant::new(!closed, cases.into_iter().map(|(c, _)| c).collect())))
+                Ok(Type::Variant(Arc::new(Variant::new(!closed, cases.into_iter().map(|(c, _)| c).collect()))))
             }
             Ty::Name { name, args, pos } => self.named(u, name, args, *pos, env),
         }
@@ -1133,7 +1227,7 @@ impl<'a> Loader<'a> {
         let mut copied = vec![];
         for sp in spreads {
             if let Type::Record(r) = self.spread(u, sp, "record")? {
-                copied.push((sp, r.fields));
+                copied.push((sp, r.fields.clone()));
             }
         }
         let fields = insert(fields, copied);
@@ -1170,7 +1264,7 @@ impl<'a> Loader<'a> {
                         payload: Payload::Positional(vec![*t]),
                         deprecated: None,
                     };
-                    Type::Variant(Variant::new(false, vec![case("Err", err), case("Ok", ok)]))
+                    Type::Variant(Arc::new(Variant::new(false, vec![case("Err", err), case("Ok", ok)])))
                 }
             });
         }
@@ -1235,4 +1329,53 @@ fn walk(t: &Ty, f: &mut impl FnMut(&Ty)) {
         Ty::Record { fields, .. } => fields.iter().for_each(|x| walk(&x.ty, f)),
         Ty::Variant { cases, .. } => cases.iter().flat_map(|c| &c.payload).for_each(|p| walk(p, f)),
     }
+}
+
+/// The strongly connected components of a graph, the edges of node `n` in
+/// `edges[n]`: each node's component (Tarjan's algorithm, with a stack of its
+/// own rather than recursion).
+fn components(edges: &[Vec<usize>]) -> Vec<usize> {
+    const NONE: usize = usize::MAX;
+    let n = edges.len();
+    let (mut index, mut low, mut component) = (vec![NONE; n], vec![0; n], vec![NONE; n]);
+    let (mut stack, mut work, mut next, mut count) = (vec![], vec![], 0, 0);
+    for start in 0..n {
+        if index[start] != NONE {
+            continue;
+        }
+        index[start] = next;
+        low[start] = next;
+        next += 1;
+        stack.push(start);
+        work.push((start, 0));
+        while let Some(&mut (v, ref mut i)) = work.last_mut() {
+            if let Some(&w) = edges[v].get(*i) {
+                *i += 1;
+                if index[w] == NONE {
+                    index[w] = next;
+                    low[w] = next;
+                    next += 1;
+                    stack.push(w);
+                    work.push((w, 0));
+                } else if component[w] == NONE {
+                    low[v] = low[v].min(index[w]);
+                }
+                continue;
+            }
+            work.pop();
+            if let Some(&(parent, _)) = work.last() {
+                low[parent] = low[parent].min(low[v]);
+            }
+            if low[v] == index[v] {
+                while let Some(w) = stack.pop() {
+                    component[w] = count;
+                    if w == v {
+                        break;
+                    }
+                }
+                count += 1;
+            }
+        }
+    }
+    component
 }

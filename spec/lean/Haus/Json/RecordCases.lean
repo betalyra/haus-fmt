@@ -33,8 +33,8 @@ The JSON functions take the fuel `F` of the chains of `Maybe`s as an
 argument; the theorems hold for every `F`. `toJson` takes `F` from the sizes
 of the types (`nullFuel`), and a record written in place counts other nodes
 than its name, so the two variants of `record_case_named` get different
-values of `F` there; that this choice doesn't matter (the bound is large
-enough for every chain) is not proven.
+values of `F` there; the choice doesn't matter (`Haus.Json.NullFuel`,
+`record_case_named_json`).
 -/
 
 namespace Haus.Schema
@@ -118,8 +118,23 @@ theorem whnf_variant {env : Env} {cl : Bool} {cs : List Case} :
 theorem boolTy_variant {env : Env} {cl : Bool} {cs : List Case} : boolTy env (.variant cl cs) = false := by
   unfold boolTy reachesBool; cases env.fuel <;> simp [peel]
 
-theorem origin_variant {env : Env} {o : String} {cl : Bool} {cs : List Case} : origin env o (.variant cl cs) = o := by
+theorem origin_variant {env : Env} {o : String} {cl : Bool} {cs : List Case} :
+    origin env o (.variant cl cs) = inPlace o := by
   unfold origin lastRef; cases env.fuel <;> simp [peel]
+
+theorem inPlace_inPlace (o : String) : inPlace (inPlace o) = inPlace o := by
+  unfold inPlace; split <;> simp_all [preludeMaybe]
+
+theorem origin_inPlace {env : Env} {o : String} {t : Ty} : origin env (inPlace o) t = origin env o t := by
+  simp only [origin, inPlace_inPlace]
+
+theorem toJsonF_inPlace {env : Env} {F : Nat} {o : String} {t : Ty} {x : Typed} :
+    toJsonF env F (inPlace o) t x = toJsonF env F o t x := by
+  simp only [toJsonF, origin_inPlace]
+
+theorem fromJsonF_inPlace {env : Env} {F : Nat} {o : String} {t : Ty} {j : JSON} :
+    fromJsonF env F (inPlace o) t j = fromJsonF env F o t j := by
+  simp only [fromJsonF, origin_inPlace]
 
 /-- Decoding haus text with a variant only sees its resolved cases. -/
 theorem decode_variant_congr {env : Env} {cl : Bool} {cs cs' : List Case}
@@ -234,7 +249,7 @@ theorem positional_one_toJson {env : Env} {F : Nat} {o : String} {cl : Bool} {cs
     (hc : caseOf? env cs tag = some (.positional tag' [t])) (hm : maybeOf? (.variant cl cs) = none) :
     toJsonF env F o (.variant cl cs) (.case tag [y]) =
       (under (.arg tag 0) (toJsonF env F o t y)).map fun j => .obj [("_tag", .str tag), ("value", j)] := by
-  rw [toJsonF_eq _ whnf_variant, boolTy_variant, origin_variant]
+  rw [toJsonF_eq _ whnf_variant, boolTy_variant, origin_variant, ← toJsonF_inPlace (o := o)]
   rw [toJsonC.eq_def]
   simp only [Bool.false_eq_true, ↓reduceIte, nullArg?_none hm, isEnum_false (closed := cl) hc rfl, hc]
   rfl
@@ -250,7 +265,7 @@ theorem positional_one_fromJson {env : Env} {F : Nat} {o : String} {cl : Bool} {
   simp only [Bool.false_eq_true, ↓reduceIte, isEnum_false (closed := cl) hc rfl, List.lookup, beq_self_eq_true, hc,
     List.length_cons, List.length_nil, hidden]
   rw [memberValue, memberValue]
-  simp
+  simp [fromJsonF_inPlace]
 
 theorem caseOf?_result_ok (env : Env) (e a : Ty) :
     caseOf? env [.positional "Err" [e], .positional "Ok" [a]] "Ok" = some (.positional "Ok" [a]) := by

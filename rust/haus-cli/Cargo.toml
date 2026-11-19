@@ -23,6 +23,7 @@ annotate-snippets = "0.12.18"
 clap = { version = "4.6.7", features = ["derive"] }
 clap_complete = "4.6.11"
 ignore = "0.4.34"
+toml = { version = "1.1.8", default-features = false, features = ["std", "parse"] }
 
 [dev-dependencies]
 assert_cmd = "2.2.2"

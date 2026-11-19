@@ -15,8 +15,8 @@ node fuzz/src/main.ts --seed 7         # repeat a run
 ```
 
 Needs Node 23.6 or later (it runs the TypeScript directly), Lean (elan),
-Rust and Roc. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs both
-fuzzers on every pull request with a new seed, and much longer every night;
+Rust and Roc. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs every
+fuzzer on every pull request with a new seed, and much longer every night;
 a failure prints the seed and keeps the shrunk inputs as an artifact.
 
 ## How it works
@@ -103,6 +103,62 @@ above.
 | Roc | [`roc/fuzz/time_runner.roc`](../roc/fuzz/time_runner.roc) |
 | TypeScript | in this process |
 | Python | [`python/fuzz/time_runner.py`](../python/fuzz/time_runner.py) |
+
+## Profiles
+
+The same idea for the codecs of the official profiles (spec §13.3, §13.4;
+audit plan X3): `@haus-fmt/money/iso`
+([`iso.md`](../extensions/money/profiles/iso.md)) and `@haus-fmt/geo/wgs84`
+([`wgs84.md`](../extensions/geo/profiles/wgs84.md)). Generated values and
+near misses of each type go through the Lean reference checkers
+([`spec/lean/Haus/Profiles`](../spec/lean/Haus/Profiles), proven to compute
+the rules) and every binding's codecs, which decode the value with the
+package's schema and the profile, and encode what they decoded.
+
+```sh
+sh fuzz/build.sh                           # also builds the profile runners
+node fuzz/src/profiles.ts --count 200000   # cases per profile; about 75 seconds
+node fuzz/src/profiles.ts --seed 7 --profiles wgs84 --runners rust,python
+```
+
+[`src/profiles.ts`](src/profiles.ts) generates, for `Money` and `Currency`:
+currency tags of 1–6 characters, mostly 2–4 capitals, some with lowercase
+letters, digits, `_` or characters that can't be in a tag, and with payloads
+(`EUR(1)`, `EUR {}`, `EUR([])`); amounts in every spelling of a `Decimal`
+(scales, exponents, `-0.00`, hex and binary, `_`, at the length and exponent
+limits) and things that aren't one (`NaN`, strings, tags). For `LatLng` and
+`BBox`: coordinates at ±90 and ±180 and one float either side, exactly
+halfway to the next float beyond a bound (ties to even: onto the bound) and
+a hair either side, literals that round onto a bound
+(`90.00000000000000001`) or just below it (`89.999…9`), `-0` and `0` in every
+spelling, `NaN` and the infinities, overflow, underflow to zero and
+subnormals, integers and floats, hex and binary, hundreds of digits; boxes
+with the latitudes in and out of order, equal, `-0` against `0` and one float
+apart, across the antimeridian and at ±180. Near misses: the wrong number of
+arguments, record payloads, other tags, other kinds of values, the other type
+of the profile; a few are mutated as text. A disagreeing case is shrunk as
+for std/time, to the smallest text with the same pattern of disagreement.
+
+Compared: accepting or rejecting, and the canonical form (§12) of what is
+written back. Where Lean and a binding report an error code at the same
+place, the codes must agree; a value the schema accepts and the profile
+rejects must be a `type-mismatch` (the profiles' "Encoding"), at any place
+(a binding may report a `BBox`'s corner, where Lean reports the box). Lean
+reports a profile's rejection as `err $ - not accepted by …`, without a
+code; reasons are not compared.
+
+| Codecs | Runner (`FILE` of lines `TYPE HEX`, the value's text as hex UTF-8; prints `ok <canonical>` or `err <place> <code> <reason>`) |
+|---|---|
+| Lean | `haus-ref --profile-batch NAME FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
+| TypeScript | in this process: `@haus-fmt/money`'s `iso` and `@haus-fmt/geo`'s `wgs84` with `compileSchemaFile(schema.haus, { codecs })`, `h.decode`, `h.encode` |
+| TypeScript (`typescript-h`) | in this process: the packages' `h.*` schemas `Money`, `Currency`, `LatLng`, `BBox` |
+| Effect | in this process: the packages' `./effect` codec groups with `Haus.decodeValue(schema, codecs)`, `Haus.encodeValue(schema, codecs)` |
+| Rust | [`schema-rust/src/profile_runner.rs`](schema-rust/src/profile_runner.rs): `haus_money::{Iso, IsoCurrency}`, `haus_geo::{Wgs84, Wgs84BBox}` as generated code runs a codec (`haus::de::codec`) |
+| Roc | [`roc/profile_runner.roc`](roc/profile_runner.roc): `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox` of `extensions/*/roc` with `Decode.codec` |
+| Python | [`python/fuzz/profile_runner.py`](../python/fuzz/profile_runner.py): `haus_money.iso` and `haus_geo.wgs84` with `haus.schema.load_schema(…, codecs=…)` |
+
+Go has no profile codecs yet. So far every binding agrees with Lean on
+every case generated.
 
 ## Schema decoding
 

@@ -3,9 +3,10 @@
  * an error where one is due, never with a hang, a stack overflow or a blowup.
  */
 import { readFileSync } from "node:fs"
+import { HausSchemaFileError } from "../src/schema-file.js"
 import { describe, expect, it } from "vitest"
 import * as h from "../src/schema.js"
-import { arr, format, fromHausJson, importJson, infer, inferSchema, num, parseAll, parseDocument, parseStream, printShape, type Value } from "../src/index.js"
+import { arr, compileSchemaFile, format, fromHausJson, importJson, infer, inferSchema, num, parseAll, parseDocument, parseStream, printShape, type Value } from "../src/index.js"
 
 /** Run `f` and fail the test if it takes longer than `ms`. */
 const within = <A>(ms: number, f: () => A): A => {
@@ -202,6 +203,57 @@ describe("duplicate keys stay linear (spec §7)", () => {
       expect(within(3000, () => importJson(object(keys)))).toMatchObject({ kind: "record" })
       expect(within(3000, () => h.fromJson(Counts, object(keys))).size).toBe(N)
       expect(within(3000, () => fromHausJson(`{"_haus":1,"_value":{"_rec":${object(keys, "", `"v"`)}}}`))).toMatchObject({ kind: "record" })
+    }
+  })
+})
+
+describe("generic types can't grow without bound (spec §9.10)", () => {
+  const codeOf = (text: string): string | undefined => {
+    const e = errorOf(() => compileSchemaFile(text))
+    expect(e).toBeInstanceOf(HausSchemaFileError)
+    return (e as HausSchemaFileError).code
+  }
+
+  it("instances that double through another definition are rejected before any is made", () => {
+    const text = [
+      "type P a b = { l: a, r: b }",
+      "type A a = < X (B (P a a)) | Done >",
+      "type B a = < Y (A (P a a)) | Stop >",
+      "type Root = A Int",
+    ].join("\n")
+    const e = within(1000, () => errorOf(() => compileSchemaFile(text))) as HausSchemaFileError
+    expect(e.code).toBe("growing-recursion")
+    expect([e.line, e.column]).toEqual([2, 17])
+    expect(e.message).toContain("A refers to B, which refers back to A")
+  })
+
+  it("and through three definitions, with the growing argument only on the way back", () => {
+    const text = [
+      "type P a b = { l: a, r: b }",
+      "type A a = < X (B a) | Done >",
+      "type B a = < Y (C a) | Stop >",
+      "type C a = < Z (A (P a a)) | End >",
+      "type Root = A Int",
+    ].join("\n")
+    const e = within(1000, () => errorOf(() => compileSchemaFile(text))) as HausSchemaFileError
+    expect(e.code).toBe("growing-recursion")
+    expect([e.line, e.column]).toEqual([4, 17])
+    expect(e.message).toContain("C refers to A")
+  })
+
+  it("definitions that refer to each other with their own parameters are fine", () => {
+    within(1000, () => compileSchemaFile("type GTree a = { value: a, kids: Forest a }\ntype Forest a = Array (GTree a)\ntype Swap a b = < S (Pair b a) | E >\ntype Pair a b = { p: Swap a b, q: Swap b a }\ntype Root = GTree (Pair Int String)"))
+    expect(codeOf("type L a = < Nil | Cons a (L (Array a)) >")).toBe("growing-recursion")
+  })
+
+  it("arguments nested 30 levels deep in non-recursive generics compile quickly", () => {
+    const levels = 30
+    const chain = (step: string) =>
+      [`type G0 a = { v: a }`, ...Array.from({ length: levels - 1 }, (_, k) => `type G${k + 1} a = G${k} (${step})`), `type Root = G${levels - 1} Int`].join("\n")
+    const nested = `type P a b = { l: a, r: b }\ntype Root = ${"P (".repeat(levels)}P Int Int${") Int".repeat(levels)}`
+    for (const text of [`type P a b = { l: a, r: b }\n${chain("P a a")}`, chain("{ l: a, r: a }"), chain("< L a | R a >"), nested]) {
+      const { schemas } = within(1000, () => compileSchemaFile(text))
+      expect(schemas.Root).toBeDefined()
     }
   })
 })

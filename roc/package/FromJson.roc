@@ -34,8 +34,8 @@ FromJson := [].{
 
 	## `one` with your own limits for reading the JSON (see `JsonValue.parse_with`).
 	## A generated `from_json_<name>` checks the value's depth and lengths
-	## against the default limits; for `limits`, read with `read_json_<name>`
-	## and check with `within_limits`.
+	## against the default limits; for `limits`, check with `within_limits`:
+	## `|j| FromJson.within_limits(j, Order.read_json_order, Order.encode_order, limits)`.
 	one_with : Str, Value.Limits, (JsonValue -> Try(a, Decode.Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)])
 	one_with = |text, limits, reader| {
 		json = JsonValue.parse_with(text, limits).map_err(|e| Syntax(e))?
@@ -60,32 +60,36 @@ FromJson := [].{
 		Ok($out)
 	}
 
-	## A reader's result, if the haus value it encodes to (with `encode`)
-	## nests at most 256 levels (spec §16, "Limits": a form can take
-	## several JSON levels for one haus level, so the JSON may nest deeper and
-	## the value is checked after reading). A generated `from_json_<name>`
-	## checks its result so; the readers it is built from don't.
-	within_depth : Try(a, Decode.Error), (a -> Value) -> Try(a, Decode.Error)
-	within_depth = |result, encode| within_limits(result, encode, Value.default_limits)
+	## What `reader` (a generated `read_json_<name>`) reads from `json`, if
+	## the haus value it encodes to (with `encode`) nests at most 256 levels
+	## (spec §16, "Limits": a form can take several JSON levels for one haus
+	## level, so the JSON may nest deeper and the value is checked after
+	## reading). Before reading, the JSON must nest at most 4·256 + 1 levels,
+	## as the parser takes it, so that JSON built in code nested deeper fails
+	## with `nesting-too-deep` instead of overflowing the stack. A generated
+	## `from_json_<name>` reads so; the readers it is built from don't check.
+	within_depth : JsonValue, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(a, Decode.Error)
+	within_depth = |json, reader, encode| within_limits(json, reader, encode, Value.default_limits)
 
 	## `within_depth` for the depth limit of `limits`, which must be at most
 	## `Value.max_supported_depth`:
 	##
-	##     FromJson.one_with(text, limits, |j| FromJson.within_limits(Order.read_json_order(j), Order.encode_order, limits))
+	##     FromJson.one_with(text, limits, |j| FromJson.within_limits(j, Order.read_json_order, Order.encode_order, limits))
 	##
 	## Lengths are checked here too, on the haus value (spec §16, "Limits"): a
 	## string's characters after its escapes are read, keys and tags as haus keys
 	## and tags, bytes as two characters per byte, as in the hex of a haus byte
-	## string, although JSON spells them in base64.
-	within_limits : Try(a, Decode.Error), (a -> Value), Value.Limits -> Try(a, Decode.Error)
-	within_limits = |result, encode, limits| {
+	## string, although JSON spells them in base64. The value is checked as
+	## `encode` checks it for these limits; like its errors inside a `Secret`,
+	## these say what, not where.
+	within_limits : JsonValue, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), Value.Limits -> Try(a, Decode.Error)
+	within_limits = |json, reader, encode, limits| {
 		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
-		x = result?
-		value = encode(x)
-		if depth(value) > limits.max_depth {
-			Decode.fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels")
-		} else {
-			lengths(value, limits.max_string_length).map_ok(|_| x)
+		nests_within(json, 4 * limits.max_depth + 1)?
+		x = reader(json)?
+		match encode(x, Encode.top_with(limits)) {
+			Ok(_) => Ok(x)
+			Err(e) => Err({ ..e, path: "" })
 		}
 	}
 
@@ -392,70 +396,58 @@ FromJson := [].{
 	no_json_form = |tag, name| Decode.fail(ErrorCode.no_json_form, "${tag} has a field named ${name}, so it has no schema-based JSON form")
 }
 
-## How deep a value nests, counted as the haus writer counts it (`Tag { … }`
-## is one level).
-depth : Value -> U64
-depth = |value| match value {
-	Arr(items) => 1 + deepest(items)
-	Rec(fields) => 1 + deepest(fields.map(|(_, v)| v))
-	Tag(_, [Rec(fields)]) => 1 + deepest(fields.map(|(_, v)| v))
-	Tag(_, []) => 0
-	Tag(_, args) => 1 + deepest(args)
-	_ => 0
-}
-
-## The first string, key, tag or byte string in `value` longer than `max`
-## characters, as an error: counted on the haus value, in code points, and
-## bytes as two characters each.
-lengths : Value, U64 -> Try({}, Decode.Error)
-lengths = |value, max| {
-	long = |s| {
-		b = s.to_utf8()
-		b.len() > max and b.count_if(|c| c < 0x80 or c >= 0xC0) > max
-	}
-	too_long = |code, what| Decode.fail(code, "${what} longer than ${max.to_str()} characters")
-	match value {
-		Text(s) => if (long(s)) too_long(ErrorCode.string_too_long, "string") else Ok({})
-		Bytes(b) => if (b.len() > max // 2) too_long(ErrorCode.string_too_long, "byte string") else Ok({})
-		Arr(items) => {
-			for x in items {
-				lengths(x, max)?
-			}
-			Ok({})
-		}
-		Rec(fields) => {
-			for (k, x) in fields {
-				if long(k) {
-					return too_long(ErrorCode.key_too_long, "key")
+## Whether `json` nests at most `max` levels of arrays and objects, as the
+## parser takes it: `nesting-too-deep` otherwise, at the first array or object
+## too deep. Walked with a list rather than recursion, so that JSON built in
+## code, however deep, is checked without overflowing the stack.
+nests_within : JsonValue, U64 -> Try({}, Decode.Error)
+nests_within = |json, max| {
+	# The containers from `json` down to the one being walked, each with its next item.
+	var $path = []
+	var $next = if (opens(json)) Ok(json) else Err({})
+	while True {
+		match $next {
+			Ok(j) => {
+				if $path.len().to_u64() >= max {
+					return Decode.fail(ErrorCode.nesting_too_deep, "JSON nested deeper than ${max.to_str()} levels")
 				}
-				lengths(x, max)?
+				$path = $path.append((j, 0.U64))
 			}
-			Ok({})
+			Err(_) => {}
 		}
-		Tag(name, args) => {
-			if long(name) {
-				return too_long(ErrorCode.tag_too_long, "tag")
+		match $path.last() {
+			Ok((j, i)) => {
+				$path = $path.drop_last(1)
+				match item(j, i) {
+					Ok(x) => {
+						$path = $path.append((j, i + 1))
+						$next = if (opens(x)) Ok(x) else Err({})
+					}
+					Err(_) => {
+						$next = Err({})
+					}
+				}
 			}
-			for x in args {
-				lengths(x, max)?
+			Err(_) => {
+				return Ok({})
 			}
-			Ok({})
 		}
-		_ => Ok({})
 	}
 }
 
-## The depth of the deepest of `items`; 0 for none.
-deepest : List(Value) -> U64
-deepest = |items| {
-	var $max = 0
-	for x in items {
-		d = depth(x)
-		if d > $max {
-			$max = d
-		}
-	}
-	$max
+## An array or an object.
+opens : JsonValue -> Bool
+opens = |j| match j {
+	Array(_) | Object(_) => True
+	_ => False
+}
+
+## Item `i` of an array, or the value of member `i` of an object.
+item : JsonValue, U64 -> Try(JsonValue, [OutOfBounds])
+item = |j, i| match j {
+	Array(items) => items.get(i)
+	Object(members) => members.get(i).map_ok(|(_, v)| v)
+	_ => Err(OutOfBounds)
 }
 
 ## Prefix the path of an error coming out of a nested reader.
@@ -556,11 +548,11 @@ expect FromJson.one(
 	},
 ) == Err(".pin: not a valid Secret UInt16 (the value is hidden)")
 expect FromJson.lines("1\n2\n", FromJson.u8) == Ok([1, 2])
-expect FromJson.within_depth(Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), |v| v).map_ok(Encode.canonical) == Ok("[{a:Some([])}]")
-expect FromJson.within_depth(Ok(nest(256)), |v| v).is_ok()
-expect FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
-expect FromJson.within_depth(Ok(Tag("Box", [Rec([("w", nest(255))])])), |v| v).is_ok()
-expect FromJson.within_depth(Ok(Tag("Box", [Rec([("w", nest(256))])])), |v| v).is_err()
+expect FromJson.within_depth(Null, |_| Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), Encode.any).map_ok(Encode.canonical) == Ok("[{a:Some([])}]")
+expect FromJson.within_depth(Null, |_| Ok(nest(256)), Encode.any).is_ok()
+expect FromJson.within_depth(Null, |_| Ok(nest(257)), Encode.any).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
+expect FromJson.within_depth(Null, |_| Ok(Tag("Box", [Rec([("w", nest(255))])])), Encode.any).is_ok()
+expect FromJson.within_depth(Null, |_| Ok(Tag("Box", [Rec([("w", nest(256))])])), Encode.any).is_err()
 
 ## `n` nested `Some(…)` around `None`.
 nest : U64 -> Value
@@ -583,43 +575,43 @@ expect FromJson.one_with("[[[[[[[[[[0]]]]]]]]]]", small, |_| Ok({})) == Err(Synt
 expect FromJson.one_with("123", small, FromJson.u16) == Ok(123)
 expect FromJson.one_with("1234", small, FromJson.u16) == Err(Syntax({ code: "number-too-long", reason: "number literal longer than 3 characters", line: 1, column: 1 }))
 expect FromJson.lines_with("123\n123\n", small, FromJson.u16) == Ok([123, 123]) and FromJson.lines_with("123\n1234\n", small, FromJson.u16).is_err()
-expect FromJson.within_limits(Ok(nest(2)), |v| v, small).is_ok()
-expect FromJson.within_limits(Ok(nest(3)), |v| v, small).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 2 levels")
+expect FromJson.within_limits(Null, |_| Ok(nest(2)), Encode.any, small).is_ok()
+expect FromJson.within_limits(Null, |_| Ok(nest(3)), Encode.any, small).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 2 levels")
 
 # Lengths count on the haus value (spec §16, "Limits"): a string's characters after
 # its escapes are read, bytes two characters per byte although JSON spells them in
 # base64. Exactly at the limit is accepted, one more is not.
-limited : Str, U64, (JsonValue -> Try(a, Decode.Error)), (a -> Value) -> Str
+limited : Str, U64, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Str
 limited = |text, max, reader, encode| {
 	limits = { ..Value.default_limits, max_string_length: max }
-	match FromJson.one_with(text, limits, |j| FromJson.within_limits(reader(j), encode, limits)) {
+	match FromJson.one_with(text, limits, |j| FromJson.within_limits(j, reader, encode, limits)) {
 		Ok(_) => "ok"
 		Err(Decode(e)) => e.code
 		Err(Syntax(e)) => e.code
 	}
 }
 
-expect limited("\"\\u00e9\\u00e9\\u00e9\\u00e9\"", 4, FromJson.str, |s| Text(s)) == "ok" and limited("\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"", 4, FromJson.str, |s| Text(s)) == "string-too-long"
-expect limited("\"\\ud83d\\ude00abc\"", 4, FromJson.str, |s| Text(s)) == "ok"
-expect limited("\"AAA=\"", 4, FromJson.bytes, |b| Bytes(b)) == "ok" and limited("\"AAAA\"", 4, FromJson.bytes, |b| Bytes(b)) == "string-too-long"
-expect limited("\"AAAA\"", 6, FromJson.bytes, |b| Bytes(b)) == "ok" and limited("\"AAAAAA==\"", 6, FromJson.bytes, |b| Bytes(b)) == "string-too-long"
+expect limited("\"\\u00e9\\u00e9\\u00e9\\u00e9\"", 4, FromJson.str, Encode.str) == "ok" and limited("\"\\u00e9\\u00e9\\u00e9\\u00e9\\u00e9\"", 4, FromJson.str, Encode.str) == "string-too-long"
+expect limited("\"\\ud83d\\ude00abc\"", 4, FromJson.str, Encode.str) == "ok"
+expect limited("\"AAA=\"", 4, FromJson.bytes, Encode.bytes) == "ok" and limited("\"AAAA\"", 4, FromJson.bytes, Encode.bytes) == "string-too-long"
+expect limited("\"AAAA\"", 6, FromJson.bytes, Encode.bytes) == "ok" and limited("\"AAAAAA==\"", 6, FromJson.bytes, Encode.bytes) == "string-too-long"
 # One byte is 2 characters, although its base64 has 4.
-expect limited("\"AA==\"", 2, FromJson.bytes, |b| Bytes(b)) == "ok"
+expect limited("\"AA==\"", 2, FromJson.bytes, Encode.bytes) == "ok"
 # Map keys are keys; Int64 and Decimal strings are numbers, which the number limit bounds.
-expect limited("{\"abcd\": 1}", 4, |j| FromJson.map(j, FromJson.i32), |m| Rec(m.map(|(k, n)| (k, Num(n.to_str()))))) == "ok"
-expect limited("{\"abcde\": 1}", 4, |j| FromJson.map(j, FromJson.i32), |m| Rec(m.map(|(k, n)| (k, Num(n.to_str()))))) == "key-too-long"
-expect limited("\"123456\"", 4, FromJson.i64, |n| Num(n.to_str())) == "ok"
-expect limited("{\"_tag\": \"Abcde\"}", 4, FromJson.any_tag, |_| Tag("Abcde", [])) == "tag-too-long"
+expect limited("{\"abcd\": 1}", 4, |j| FromJson.map(j, FromJson.i32), |m, e| Encode.map(m, e, |n, e1| Encode.number(n.to_str(), e1))) == "ok"
+expect limited("{\"abcde\": 1}", 4, |j| FromJson.map(j, FromJson.i32), |m, e| Encode.map(m, e, |n, e1| Encode.number(n.to_str(), e1))) == "key-too-long"
+expect limited("\"123456\"", 4, FromJson.i64, |n, e| Encode.number(n.to_str(), e)) == "ok"
+expect limited("{\"_tag\": \"Abcde\"}", 4, FromJson.any_tag, Encode.any_tag) == "tag-too-long"
 
 # Up to the supported depth; a deeper limit is an error that names the maximum.
 at_max : Value.Limits
 at_max = { ..Value.default_limits, max_depth: Value.max_supported_depth }
 
-expect FromJson.within_limits(Ok(nest(1024)), |v| v, at_max).is_ok()
-expect FromJson.within_limits(Ok(nest(1025)), |v| v, at_max).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 1024 levels")
+expect FromJson.within_limits(Null, |_| Ok(nest(1024)), Encode.any, at_max).is_ok()
+expect FromJson.within_limits(Null, |_| Ok(nest(1025)), Encode.any, at_max).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 1024 levels")
 expect {
 	text = "${"{\"_tag\":\"Some\",\"value\":".repeat(1024)}{\"_tag\":\"None\"}${"}".repeat(1024)}"
-	FromJson.one_with(text, at_max, |j| FromJson.within_limits(loop(j), |v| v, at_max)).is_ok()
+	FromJson.one_with(text, at_max, |j| FromJson.within_limits(j, loop, Encode.any, at_max)).is_ok()
 }
 too_deep : Value.Limits
 too_deep = { ..Value.default_limits, max_depth: 1025 }
@@ -628,7 +620,7 @@ unsupported : Str
 unsupported = "max_depth 1025 is more than the supported maximum, 1024"
 expect FromJson.one_with("1", too_deep, FromJson.u16) == Err(Syntax({ code: "unsupported-depth", reason: unsupported, line: 1, column: 1 }))
 expect FromJson.lines_with("1", too_deep, FromJson.u16) == Err(Syntax({ code: "unsupported-depth", reason: unsupported, line: 1, column: 1 }))
-expect FromJson.within_limits(Ok(nest(1)), |v| v, too_deep).map_ok(|_| {}).map_err(Decode.message) == Err(unsupported)
+expect FromJson.within_limits(Null, |_| Ok(nest(1)), Encode.any, too_deep).map_ok(|_| {}).map_err(Decode.message) == Err(unsupported)
 
 ## `type Loop = Maybe Loop` read from schema-based JSON, as its haus value.
 loop : JsonValue -> Try(Value, Decode.Error)
@@ -666,7 +658,7 @@ expect code_of("{\"pin\": 98765}", |j| FromJson.field(FromJson.object(j, "Login"
 expect code_of("{\"id\": 1, \"x\": 2}", |j| FromJson.closed(FromJson.object(j, "Strict")?, ["id"])) == "unknown-field at $.x" and code_of("{}", |j| FromJson.field(FromJson.object(j, "User")?, "id", FromJson.i32)) == "missing-field at $"
 expect code_of("{\"_tag\": \"Point\", \"values\": [1]}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2)) == "wrong-payload at $.values" and code_of("1", FromJson.any) == "haus-json-form at $" and code_of("{\"_haus\": 1, \"_value\": \"x\"}", FromJson.any) == "haus-json-form at $"
 expect code_of("{\"a\": 1, \"a\": 2}", |j| FromJson.map(j, FromJson.i32)) == "duplicate-key" and code_of("{\"pt-BR\": \"x\"}", |j| FromJson.map(j, FromJson.i32)) == "type-mismatch at $[\"pt-BR\"]"
-expect code_of("1", |_| FromJson.no_json_form("Odd", "_args")) == "no-json-form at $" and FromJson.within_depth(Ok(nest(257)), |v| v).map_ok(|_| {}).map_err(|e| e.code) == Err("nesting-too-deep")
+expect code_of("1", |_| FromJson.no_json_form("Odd", "_args")) == "no-json-form at $" and FromJson.within_depth(Null, |_| Ok(nest(257)), Encode.any).map_ok(|_| {}).map_err(|e| e.code) == Err("nesting-too-deep")
 # A record case by name: the record is read from the tag's object, without `"_tag"`.
 expect {
 	box = |j| {
@@ -682,3 +674,32 @@ expect {
 	}
 	FromJson.one("{\"_tag\": \"Box\", \"w\": 1}", box) == Ok(1) and code_of("{\"_tag\": \"Box\", \"w\": 1, \"x\": 2}", box) == "unknown-field at $.x" and code_of("{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", box) == "unknown-field at $.value"
 }
+
+# JSON built in code may nest deeper than any parser takes: `within_depth`
+# checks it before reading (at most 4·256 + 1 levels, as the parser takes it),
+# instead of overflowing the stack. 150,000 levels: about as deep as `roc test`
+# drops a value.
+expect {
+	var $j = Array([])
+	var $i = 0
+	while $i < 150_000 {
+		$j = Array([$j])
+		$i = $i + 1
+	}
+	FromJson.within_depth($j, |x| FromJson.list(x, |_| Ok({})), |_, e| Encode.made(Num("0"), e)).map_ok(|_| {}) == Err({ code: "nesting-too-deep", reason: "JSON nested deeper than 1025 levels", path: "" })
+}
+
+## `n` nested `{"_tag": "Some", "value": …}` around `{"_tag": "None"}`.
+somes : U64 -> JsonValue
+somes = |n| {
+	var $j = Object([("_tag", String("None"))])
+	var $i = 0
+	while $i < n {
+		$j = Object([("_tag", String("Some")), ("value", $j)])
+		$i = $i + 1
+	}
+	$j
+}
+
+expect FromJson.within_depth(somes(256), loop, Encode.any).is_ok() and FromJson.within_depth(somes(257), loop, Encode.any).map_err(|e| e.reason).map_ok(|_| {}) == Err("nesting deeper than 256 levels")
+expect FromJson.within_depth(somes(1026), loop, Encode.any).map_err(|e| e.reason).map_ok(|_| {}) == Err("JSON nested deeper than 1025 levels")

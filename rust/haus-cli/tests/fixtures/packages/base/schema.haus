@@ -1,0 +1,2 @@
+// @fixture/base: an id.
+type Id = Int

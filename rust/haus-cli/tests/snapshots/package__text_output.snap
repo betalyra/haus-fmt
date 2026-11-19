@@ -1,0 +1,23 @@
+---
+source: haus-cli/tests/package.rs
+expression: text
+---
+error[package-version]: package.haus says version 1.0.0, package.json 1.0.1
+ --> good/package.json:3:3
+  |
+3 |   "version": "1.0.1",
+  |   ^^^^^^^^^
+  |
+  = hint: Release both with the same version: change them together.
+  = docs: https://haus-fmt.org/docs/errors#package-version
+
+error[package-crate]: links is "good", but the library is fixture_good: crates that use the package's types name its crate by its links
+ --> good/Cargo.toml:7:9
+  |
+7 | links = "good"
+  |         ^^^^^^
+  |
+  = hint: Set links = "fixture_good", the library's name.
+  = docs: https://haus-fmt.org/docs/errors#package-crate
+
+Checked 1 package: 2 errors.

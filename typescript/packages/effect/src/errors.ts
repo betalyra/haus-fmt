@@ -62,7 +62,7 @@ export class HausParseError extends Schema.TaggedError<HausParseError, { readonl
 
 /**
  * Valid haus, but it doesn't match the schema (or a value can't be encoded).
- * `index` is set for stream elements.
+ * `index` is set for stream elements, whose `place` then starts with it (`$[3].price`).
  */
 export class HausSchemaError extends Schema.TaggedError<HausSchemaError, { readonly brand: unique symbol }>()("HausSchemaError", {
   message: Schema.String,
@@ -150,8 +150,12 @@ export const limitsError = (message: string): HausLimitsError => new HausLimitsE
 /** A HausSchemaError without a place in a value (`not-one-value`, …). */
 export const schemaErrorOf = (message: string, code: ErrorCode): HausSchemaError => new HausSchemaError({ message, ...withCode(code) })
 
-/** The same error for the stream element `index`. */
-export const atIndex = (e: HausSchemaError, index: number): HausSchemaError => new HausSchemaError({ ...fieldsOf(e), index })
+/**
+ * The same error for the stream element `index`: its place starts with the
+ * element's index (spec §15, `$[3].price`); `path` stays the one in the element.
+ */
+export const atIndex = (e: HausSchemaError, index: number): HausSchemaError =>
+  new HausSchemaError({ ...fieldsOf(e), ...(e.place !== undefined ? { place: `$[${index}]${e.place.slice(1)}` } : {}), index })
 
 const fieldsOf = (e: HausSchemaError) => ({
   message: e.message,

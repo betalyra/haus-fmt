@@ -1,0 +1,8 @@
+// Uses @haus-test/money: its Money in a field and in a variant's payloads.
+import @haus-test/money@1 (Money, Rate)
+
+type Entry = { amount: Money, note: Note }
+type Note = { text: String }
+type Move = < Credit Money | Debit { amount: Money } | Fee Rate | Memo Note >
+// Without Money.
+type Terms = { rate: Rate, note: Note }

@@ -1,0 +1,27 @@
+{
+  "name": "tree-sitter-haus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tree-sitter grammars for haus data files (.haus) and haus schema files (.schema.haus)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/betalyra/haus-fmt.git",
+    "directory": "editors/tree-sitter-haus"
+  },
+  "homepage": "https://haus-fmt.org",
+  "keywords": [
+    "tree-sitter",
+    "haus",
+    "parser",
+    "lexer"
+  ],
+  "scripts": {
+    "generate": "cd haus && tree-sitter generate && cd ../haus_schema && tree-sitter generate",
+    "test": "cd haus && tree-sitter test && cd ../haus_schema && tree-sitter test",
+    "check": "node scripts/check.mjs"
+  },
+  "devDependencies": {
+    "tree-sitter-cli": "0.27.1"
+  }
+}

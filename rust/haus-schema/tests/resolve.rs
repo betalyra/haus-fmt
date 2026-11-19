@@ -197,6 +197,127 @@ fn generic_and_recursive_types() {
     assert_eq!(decode(&schema, "List", "Nil"), "error: List needs arguments, so it can't describe a whole file at $");
 }
 
+/// Parses `schema`, which must fail fast (well under a second) with growing-recursion: the code, position and message.
+fn growing(schema: &str) -> ((usize, usize), String) {
+    let start = std::time::Instant::now();
+    let e = Schema::parse(schema).expect_err("an error");
+    assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+    assert_eq!(e.code(), haus::ErrorCode::GrowingRecursion, "{e}");
+    (e.position().expect("a position"), e.reason().to_string())
+}
+
+#[test]
+fn instances_that_double_through_another_definition_are_rejected_before_any_is_made() {
+    let (at, reason) = growing(
+        "type P a b = { l: a, r: b }
+type A a = < X (B (P a a)) | Done >
+type B a = < Y (A (P a a)) | Stop >
+type Root = A Int",
+    );
+    assert_eq!(at, (2, 17));
+    assert!(reason.starts_with("A refers to B, which refers back to A"), "{reason}");
+    // Through three definitions, with the growing argument only on the way back.
+    let (at, reason) = growing(
+        "type P a b = { l: a, r: b }
+type A a = < X (B a) | Done >
+type B a = < Y (C a) | Stop >
+type C a = < Z (A (P a a)) | End >
+type Root = A Int",
+    );
+    assert_eq!(at, (4, 17));
+    assert!(reason.starts_with("C refers to A, which refers back to C"), "{reason}");
+}
+
+#[test]
+fn definitions_that_refer_to_each_other_with_their_own_parameters() {
+    let schema = Schema::parse(
+        "type GTree a = { value: a, kids: Forest a }
+         type Forest a = Array (GTree a)
+         type Swap a b = < S (Pair b a) | E >
+         type Pair a b = { p: Swap a b, q: Swap b a }
+         type Root = GTree (Pair Int String)",
+    )
+    .unwrap();
+    assert_eq!(decode(&schema, "Root", "{ value: { p: E, q: E }, kids: [] }"), "{kids:[],value:{p:E,q:E}}");
+}
+
+#[test]
+fn arguments_nested_30_levels_deep_compile_quickly() {
+    let chain = |step: &str| {
+        let defs = (1..30).map(|k| format!("type G{k} a = G{} ({step})", k - 1));
+        std::iter::once("type G0 a = { v: a }".to_string())
+            .chain(defs)
+            .chain(["type Root = G29 Int".to_string()])
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let nested =
+        format!("type P a b = {{ l: a, r: b }}\ntype Root = {}P Int Int{}", "P (".repeat(30), ") Int".repeat(30));
+    for schema in [
+        format!("type P a b = {{ l: a, r: b }}\n{}", chain("P a a")),
+        chain("{ l: a, r: a }"),
+        chain("< L a | R a >"),
+        nested,
+    ] {
+        let start = std::time::Instant::now();
+        let schema = Schema::parse(&schema).unwrap_or_else(|e| panic!("{e}"));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+        // Messages describe the deep arguments shortly.
+        let e = decode(&schema, "Root", "1");
+        assert!(e.starts_with("error: expected ") && e.len() < 300, "{e}");
+    }
+}
+
+/// The code and position of the error parsing `schema`.
+fn code_at(schema: &str) -> (String, (usize, usize)) {
+    let e = Schema::parse(schema).expect_err("an error");
+    (e.code().as_str().to_string(), e.position().expect("a position"))
+}
+
+#[test]
+fn comments_whitespace_and_strings_are_those_of_data_files() {
+    for (schema, code, at) in [
+        ("type A = { \"x: Int }", "unterminated-string", (1, 12)),
+        ("type A = Int /* never closed", "unterminated-comment", (1, 14)),
+        ("type A = Int\rtype B = Int", "lone-carriage-return", (1, 13)),
+        ("// a\rb\ntype A = Int", "lone-carriage-return", (1, 5)),
+        ("// a\u{7}b\ntype A = Int", "control-character", (1, 5)),
+        ("/* a\u{7f}b */ type A = Int", "control-character", (1, 5)),
+        ("// a\u{85}b\ntype A = Int", "control-character", (1, 5)),
+        ("// access\u{202e} denied\ntype A = Int", "bidi-control", (1, 10)),
+        ("type A = { \"a\u{2066}b\": Int }", "bidi-control", (1, 14)),
+        ("type A = { \"a\u{7}b\": Int }", "control-character", (1, 14)),
+        ("type A = { \"a\nb\": Int }", "string-line-break", (1, 14)),
+        (r#"type A = { "a\x41": Int }"#, "invalid-escape", (1, 14)),
+        (r#"type A = { "a\u{D800}": Int }"#, "invalid-unicode-escape", (1, 14)),
+        // In an attribute's arguments, the data parser's own errors.
+        ("@deprecated(\"a\u{7}b\")\ntype A = Int", "control-character", (1, 15)),
+    ] {
+        assert_eq!(code_at(schema), (code.to_string(), at), "{schema:?}");
+    }
+    // A byte order mark at the start, CRLF line breaks and tabs in comments are fine.
+    Schema::parse("\u{feff}// a\tb\r\ntype A = Int\r\n").unwrap();
+}
+
+#[test]
+fn quoted_keys_take_every_escape_of_data_strings() {
+    let schema =
+        Schema::parse(r#"type A = closed { "tab\there": Int, "cr\r": Int, "\u{1F600}": Int, "q\"\\": Int }"#).unwrap();
+    assert_eq!(
+        decode(&schema, "A", "{ \"tab\\there\": 1, \"cr\\r\": 2, \"\u{1F600}\": 3, \"q\\\"\\\\\": 4 }"),
+        r#"{"cr\r":2,"q\"\\":4,"tab\there":1,"😀":3}"#
+    );
+}
+
+#[test]
+fn a_schema_file_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.schema.haus");
+    std::fs::write(&path, b"// \xff\ntype A = Int\n").unwrap();
+    let e = Schema::load(&path, &haus_schema::NoImports).expect_err("an error");
+    assert_eq!(e.code(), haus::ErrorCode::InvalidUtf8, "{e}");
+}
+
 #[test]
 fn decoding_gives_what_an_encoder_writes() {
     let schema = Schema::parse(

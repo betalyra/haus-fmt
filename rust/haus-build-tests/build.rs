@@ -14,6 +14,14 @@
 //! app/main/order.schema.haus is an application's schema split into files
 //! (relative imports, `../`, two common.schema.haus): tests/files.rs uses
 //! its types, without and with a codec for a type of an imported file.
+//!
+//! shop.schema.haus imports schema packages (packages/): tests/packages.rs
+//! uses its types, without and with a codec for a type that the packages'
+//! types contain (the codec closure, spec §13.4).
+//!
+//! travel.schema.haus uses a package (packages/travel) that uses the
+//! official packages: tests/profiles.rs uses its types with the codecs of
+//! their profiles (`haus_money::Iso`, `haus_geo::Wgs84`, …).
 
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -25,6 +33,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     haus_build::Config::new()
         .codec("haus-build-tests/app/shared/money#Money", "crate::Cents")
         .compile_as("app/main/order.schema.haus", "app_typed")?;
+    haus_build::Config::new().compile_as("shop.schema.haus", "shop")?;
+    haus_build::Config::new()
+        .codec("@haus-test/money@1#Money", "crate::Cents")
+        .compile_as("shop.schema.haus", "shop_typed")?;
+    haus_build::Config::new()
+        .codec("@haus-fmt/money@1#Money", "haus_money::Iso")
+        .codec("@haus-fmt/money@1#Currency", "haus_money::IsoCurrency")
+        .codec("@haus-fmt/geo@1#LatLng", "haus_geo::Wgs84")
+        .codec("@haus-fmt/geo@1#BBox", "haus_geo::Wgs84BBox")
+        .compile_as("travel.schema.haus", "travel")?;
 
     let suite = Path::new(&env::var("CARGO_MANIFEST_DIR")?).join("../../test-suite/schema");
     println!("cargo::rerun-if-changed={}", suite.display());

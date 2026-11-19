@@ -33,7 +33,11 @@ export class StreamReader {
    * chunk, which is quadratic for a large value arriving in small chunks.
    */
   private done: string[] = []
+  /** Characters (code points) in `done`. */
   private doneLength = 0
+  /** Characters (code points) in `buf` before `counted`. */
+  private bufChars = 0
+  private counted = 0
   /** Text not scanned yet (plus at most a few characters of lookahead). */
   private buf = ""
   private i = 0
@@ -70,6 +74,11 @@ export class StreamReader {
   end(): Value[] {
     this.ended = true
     const out = this.scan(true)
+    // The scan checks a value's length before each character it reads, so the
+    // last value is checked here, after its last character (§7).
+    if (this.chars(this.buf.length) > this.maxValueLength) {
+      throw new HausSyntaxError(`value longer than ${this.maxValueLength} characters`, this.origin.offset, this.origin.line, this.origin.column, "value-too-long")
+    }
     // Whatever is left has no top-level comma: zero or one value.
     const text = this.done.join("") + this.buf
     const rest = new Parser(text, this.origin, this.limits).parseSequence()
@@ -80,7 +89,7 @@ export class StreamReader {
     out.push(...rest)
     this.buf = ""
     this.done = []
-    this.doneLength = 0
+    this.doneLength = this.bufChars = this.counted = 0
     return out
   }
 
@@ -94,7 +103,9 @@ export class StreamReader {
     // Move the scanned prefix out of `buf`, so the next chunk is appended to a short string.
     if (this.i > 0) {
       this.done.push(this.buf.slice(0, this.i))
-      this.doneLength += this.i
+      this.doneLength = this.chars(this.i)
+      this.bufChars = 0
+      this.counted = 0
       this.buf = this.buf.slice(this.i)
       this.i = 0
     }
@@ -107,7 +118,7 @@ export class StreamReader {
     const has = (n: number) => final || this.i + n < this.buf.length
 
     while (this.i < this.buf.length) {
-      if (this.doneLength + this.i > this.maxValueLength) {
+      if (this.chars(this.i) > this.maxValueLength) {
         throw new HausSyntaxError(`value longer than ${this.maxValueLength} characters`, this.origin.offset, this.origin.line, this.origin.column, "value-too-long")
       }
       const c = this.buf[this.i]
@@ -205,8 +216,21 @@ export class StreamReader {
     this.buf = this.buf.slice(this.i + 1)
     this.i = 0
     this.done = []
-    this.doneLength = 0
+    this.doneLength = this.bufChars = this.counted = 0
     return value
+  }
+
+  /**
+   * Characters (code points, spec §7) of the current value up to `buf[end]`.
+   * A low surrogate isn't one: it is the second half of a character. Counted
+   * once per position, also when a pair is split between chunks.
+   */
+  private chars(end: number): number {
+    for (; this.counted < end; this.counted++) {
+      const u = this.buf.charCodeAt(this.counted)
+      if (u < 0xdc00 || u > 0xdfff) this.bufChars++
+    }
+    return this.doneLength + this.bufChars
   }
 
   /** The current value's text up to `buf[end]` (exclusive). */

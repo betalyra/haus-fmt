@@ -16,144 +16,168 @@ NumbersJson := [].{
 	I : Int
 
 	decode_i : Value -> Try(I, Decode.Error)
-	decode_i = |v| Decode.int(v)
+	decode_i = |v| Decode.within_depth(v, read_value_i)
 
-	encode_i : I -> Value
-	encode_i = |v| Encode.int(v)
+	read_value_i : Value -> Try(I, Decode.Error)
+	read_value_i = |v| Decode.int(v)
+
+	encode_i : I, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i = |v, e| Encode.int(v, e)
 
 	from_json_i : JsonValue -> Try(I, Decode.Error)
-	from_json_i = |j| FromJson.within_depth(read_json_i(j), encode_i)
+	from_json_i = |j| FromJson.within_depth(j, read_json_i, encode_i)
 
 	read_json_i : JsonValue -> Try(I, Decode.Error)
 	read_json_i = |j| FromJson.int(j)
 
-	to_json_i : I -> Try(JsonValue, Encode.Error)
-	to_json_i = |v| ToJson.int(v)
+	to_json_i : I, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_i = |v, e| ToJson.int(v, e)
 
 	## haus type `numbers#I8`.
 	I8_ : I8
 
 	decode_i8 : Value -> Try(I8_, Decode.Error)
-	decode_i8 = |v| Decode.i8(v)
+	decode_i8 = |v| Decode.within_depth(v, read_value_i8)
 
-	encode_i8 : I8_ -> Value
-	encode_i8 = |v| Num(v.to_str())
+	read_value_i8 : Value -> Try(I8_, Decode.Error)
+	read_value_i8 = |v| Decode.i8(v)
+
+	encode_i8 : I8_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i8 = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_i8 : JsonValue -> Try(I8_, Decode.Error)
-	from_json_i8 = |j| FromJson.within_depth(read_json_i8(j), encode_i8)
+	from_json_i8 = |j| FromJson.within_depth(j, read_json_i8, encode_i8)
 
 	read_json_i8 : JsonValue -> Try(I8_, Decode.Error)
 	read_json_i8 = |j| FromJson.i8(j)
 
-	to_json_i8 : I8_ -> Try(JsonValue, Encode.Error)
-	to_json_i8 = |v| ToJson.i8(v)
+	to_json_i8 : I8_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_i8 = |v, e| ToJson.i8(v, e)
 
 	## haus type `numbers#U8`.
 	U8_ : U8
 
 	decode_u8 : Value -> Try(U8_, Decode.Error)
-	decode_u8 = |v| Decode.u8(v)
+	decode_u8 = |v| Decode.within_depth(v, read_value_u8)
 
-	encode_u8 : U8_ -> Value
-	encode_u8 = |v| Num(v.to_str())
+	read_value_u8 : Value -> Try(U8_, Decode.Error)
+	read_value_u8 = |v| Decode.u8(v)
+
+	encode_u8 : U8_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_u8 = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_u8 : JsonValue -> Try(U8_, Decode.Error)
-	from_json_u8 = |j| FromJson.within_depth(read_json_u8(j), encode_u8)
+	from_json_u8 = |j| FromJson.within_depth(j, read_json_u8, encode_u8)
 
 	read_json_u8 : JsonValue -> Try(U8_, Decode.Error)
 	read_json_u8 = |j| FromJson.u8(j)
 
-	to_json_u8 : U8_ -> Try(JsonValue, Encode.Error)
-	to_json_u8 = |v| ToJson.u8(v)
+	to_json_u8 : U8_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_u8 = |v, e| ToJson.u8(v, e)
 
 	## haus type `numbers#I64`.
 	I64_ : I64
 
 	decode_i64 : Value -> Try(I64_, Decode.Error)
-	decode_i64 = |v| Decode.i64(v)
+	decode_i64 = |v| Decode.within_depth(v, read_value_i64)
 
-	encode_i64 : I64_ -> Value
-	encode_i64 = |v| Num(v.to_str())
+	read_value_i64 : Value -> Try(I64_, Decode.Error)
+	read_value_i64 = |v| Decode.i64(v)
+
+	encode_i64 : I64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i64 = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_i64 : JsonValue -> Try(I64_, Decode.Error)
-	from_json_i64 = |j| FromJson.within_depth(read_json_i64(j), encode_i64)
+	from_json_i64 = |j| FromJson.within_depth(j, read_json_i64, encode_i64)
 
 	read_json_i64 : JsonValue -> Try(I64_, Decode.Error)
 	read_json_i64 = |j| FromJson.i64(j)
 
-	to_json_i64 : I64_ -> Try(JsonValue, Encode.Error)
-	to_json_i64 = |v| ToJson.i64(v)
+	to_json_i64 : I64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_i64 = |v, e| ToJson.i64(v, e)
 
 	## haus type `numbers#U64`.
 	U64_ : U64
 
 	decode_u64 : Value -> Try(U64_, Decode.Error)
-	decode_u64 = |v| Decode.u64(v)
+	decode_u64 = |v| Decode.within_depth(v, read_value_u64)
 
-	encode_u64 : U64_ -> Value
-	encode_u64 = |v| Num(v.to_str())
+	read_value_u64 : Value -> Try(U64_, Decode.Error)
+	read_value_u64 = |v| Decode.u64(v)
+
+	encode_u64 : U64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_u64 = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_u64 : JsonValue -> Try(U64_, Decode.Error)
-	from_json_u64 = |j| FromJson.within_depth(read_json_u64(j), encode_u64)
+	from_json_u64 = |j| FromJson.within_depth(j, read_json_u64, encode_u64)
 
 	read_json_u64 : JsonValue -> Try(U64_, Decode.Error)
 	read_json_u64 = |j| FromJson.u64(j)
 
-	to_json_u64 : U64_ -> Try(JsonValue, Encode.Error)
-	to_json_u64 = |v| ToJson.u64(v)
+	to_json_u64 : U64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_u64 = |v, e| ToJson.u64(v, e)
 
 	## haus type `numbers#F64`.
 	F64_ : F64
 
 	decode_f64 : Value -> Try(F64_, Decode.Error)
-	decode_f64 = |v| Decode.f64(v)
+	decode_f64 = |v| Decode.within_depth(v, read_value_f64)
 
-	encode_f64 : F64_ -> Value
-	encode_f64 = |v| Encode.f64(v)
+	read_value_f64 : Value -> Try(F64_, Decode.Error)
+	read_value_f64 = |v| Decode.f64(v)
+
+	encode_f64 : F64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_f64 = |v, e| Encode.f64(v, e)
 
 	from_json_f64 : JsonValue -> Try(F64_, Decode.Error)
-	from_json_f64 = |j| FromJson.within_depth(read_json_f64(j), encode_f64)
+	from_json_f64 = |j| FromJson.within_depth(j, read_json_f64, encode_f64)
 
 	read_json_f64 : JsonValue -> Try(F64_, Decode.Error)
 	read_json_f64 = |j| FromJson.f64(j)
 
-	to_json_f64 : F64_ -> Try(JsonValue, Encode.Error)
-	to_json_f64 = |v| ToJson.f64(v)
+	to_json_f64 : F64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_f64 = |v, e| ToJson.f64(v, e)
 
 	## haus type `numbers#F32`.
 	F32_ : F32
 
 	decode_f32 : Value -> Try(F32_, Decode.Error)
-	decode_f32 = |v| Decode.f32(v)
+	decode_f32 = |v| Decode.within_depth(v, read_value_f32)
 
-	encode_f32 : F32_ -> Value
-	encode_f32 = |v| Encode.f32(v)
+	read_value_f32 : Value -> Try(F32_, Decode.Error)
+	read_value_f32 = |v| Decode.f32(v)
+
+	encode_f32 : F32_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_f32 = |v, e| Encode.f32(v, e)
 
 	from_json_f32 : JsonValue -> Try(F32_, Decode.Error)
-	from_json_f32 = |j| FromJson.within_depth(read_json_f32(j), encode_f32)
+	from_json_f32 = |j| FromJson.within_depth(j, read_json_f32, encode_f32)
 
 	read_json_f32 : JsonValue -> Try(F32_, Decode.Error)
 	read_json_f32 = |j| FromJson.f32(j)
 
-	to_json_f32 : F32_ -> Try(JsonValue, Encode.Error)
-	to_json_f32 = |v| ToJson.f32(v)
+	to_json_f32 : F32_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_f32 = |v, e| ToJson.f32(v, e)
 
 	## haus type `numbers#Dec`.
 	Dec_ : Str
 
 	decode_dec : Value -> Try(Dec_, Decode.Error)
-	decode_dec = |v| Decode.decimal(v)
+	decode_dec = |v| Decode.within_depth(v, read_value_dec)
 
-	encode_dec : Dec_ -> Value
-	encode_dec = |v| Encode.decimal(v)
+	read_value_dec : Value -> Try(Dec_, Decode.Error)
+	read_value_dec = |v| Decode.decimal(v)
+
+	encode_dec : Dec_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_dec = |v, e| Encode.decimal(v, e)
 
 	from_json_dec : JsonValue -> Try(Dec_, Decode.Error)
-	from_json_dec = |j| FromJson.within_depth(read_json_dec(j), encode_dec)
+	from_json_dec = |j| FromJson.within_depth(j, read_json_dec, encode_dec)
 
 	read_json_dec : JsonValue -> Try(Dec_, Decode.Error)
 	read_json_dec = |j| FromJson.decimal(j)
 
-	to_json_dec : Dec_ -> Try(JsonValue, Encode.Error)
-	to_json_dec = |v| ToJson.decimal(v)
+	to_json_dec : Dec_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_dec = |v, e| ToJson.decimal(v, e)
 
 }

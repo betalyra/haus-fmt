@@ -186,31 +186,92 @@ const context = (mode: "decode" | "encode", maxSteps: number, limits: Limits): C
   ancestors: new Set(),
 })
 
+/** A container, as the parser counts levels: an array, a record, or a variant with arguments (empty or not). */
+const isContainer = (v: Value): boolean => v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0)
+
+/** A container being counted by `countValues`. */
+interface Counting {
+  readonly value: Value
+  readonly depth: number
+  /** Its children: an array's items or a variant's arguments by index, a record's fields by iterator. */
+  readonly items: ReadonlyArray<Value> | undefined
+  readonly fields: Iterator<Value> | undefined
+  next: number
+  /** `Tag { … }`: its record is at its own level, as in the parser; `Tag(a, b)` nests its arguments. */
+  readonly payload: boolean
+  /** Values in it, counting a shared one each time it is reached. */
+  size: number
+  /** Levels it needs, its own included. */
+  need: number
+  /** Whether it holds containers: only then can it be in a cycle, and is it remembered. */
+  holds: boolean
+}
+
+/** How `countValues` marks a container while counting it: reaching it again is a cycle. */
+const OPEN = { size: 0, need: 0 }
+
 /**
  * Count the values in a tree, failing beyond `maxDepth` or `cap` values. A
  * parsed value is a tree within the parser's limits; a `Value` built in code
- * might be deeper, share nodes (a DAG) or even contain itself.
+ * might be deeper, share nodes (a DAG) or even contain itself. A shared
+ * value counts each time it is reached, as decoding visits it, but is walked
+ * once: its count and the levels it needs are remembered, so a DAG that
+ * expands beyond `cap` fails at once instead of after `cap` steps.
  */
 const countValues = (root: Value, maxDepth: number, cap: number, at: At): number => {
-  let count = 0
-  const stack: [Value, number][] = [[root, 0]]
-  while (stack.length > 0) {
-    const [v, depth] = stack.pop()!
-    if (++count > cap) at.reject("too-many-nodes", `value has more than ${cap} nodes`)
-    // A container here is one level more (empty or not), as the parser counts it.
-    if (depth >= maxDepth && (v.kind === "array" || v.kind === "record" || (v.kind === "variant" && v.args.length > 0))) {
-      at.reject("nesting-too-deep", `value nested deeper than ${maxDepth} levels`)
+  const tooMany = () => at.reject("too-many-nodes", `value has more than ${cap} nodes`)
+  const tooDeep = () => at.reject("nesting-too-deep", `value nested deeper than ${maxDepth} levels`)
+  if (!isContainer(root)) return 1
+  /** Containers holding containers, counted (or `OPEN`, being counted). */
+  const known = new Map<Value, { readonly size: number; readonly need: number }>()
+  const stack: Counting[] = []
+  const enter = (v: Value, depth: number) => {
+    // A container here is one level more, as the parser counts it.
+    if (depth >= maxDepth) tooDeep()
+    const items = v.kind === "array" ? v.items : v.kind === "variant" ? v.args : undefined
+    const fields = v.kind === "record" ? v.fields.values() : undefined
+    const payload = v.kind === "variant" && v.args.length === 1 && v.args[0]!.kind === "record"
+    stack.push({ value: v, depth, items, fields, next: 0, payload, size: 1, need: 1, holds: false })
+  }
+  enter(root, 0)
+  for (;;) {
+    const top = stack[stack.length - 1]!
+    let child: Value
+    if (top.items !== undefined && top.next < top.items.length) child = top.items[top.next++]!
+    else {
+      const field = top.fields?.next()
+      if (field !== undefined && field.done !== true) child = field.value
+      else {
+        stack.pop()
+        if (top.holds) known.set(top.value, { size: top.size, need: top.need })
+        const parent = stack[stack.length - 1]
+        if (parent === undefined) return top.size
+        parent.size += top.size
+        parent.need = Math.max(parent.need, top.depth - parent.depth + top.need)
+        if (parent.size > cap) tooMany()
+        continue
+      }
     }
-    if (v.kind === "array") for (const x of v.items) stack.push([x, depth + 1])
-    else if (v.kind === "record") for (const x of v.fields.values()) stack.push([x, depth + 1])
-    // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
-    else if (v.kind === "variant") {
-      const [first] = v.args
-      if (v.args.length === 1 && first!.kind === "record") stack.push([first!, depth])
-      else for (const x of v.args) stack.push([x, depth + 1])
+    if (!isContainer(child)) {
+      if (++top.size > cap) tooMany()
+      continue
+    }
+    if (!top.holds) {
+      top.holds = true
+      known.set(top.value, OPEN)
+    }
+    const seen = known.get(child)
+    // A value that contains itself nests without end.
+    if (seen === OPEN) tooDeep()
+    const depth = top.payload ? top.depth : top.depth + 1
+    if (seen === undefined) enter(child, depth)
+    else {
+      if (depth + seen.need > maxDepth) tooDeep()
+      top.size += seen.size
+      top.need = Math.max(top.need, depth - top.depth + seen.need)
+      if (top.size > cap) tooMany()
     }
   }
-  return count
 }
 
 /** Values beyond this are rejected before decoding (the parser's 64 Mi characters can't produce more). */
@@ -324,6 +385,29 @@ export const withStandard = <A, S extends Omit<Schema<A>, "~standard">>(schema: 
   return self
 }
 
+/**
+ * `schema` with a rule beyond it, as a codec adds one (spec §13.4): a value
+ * that `check` rejects is an error when decoding (`type-mismatch`) and when
+ * encoding (`cannot-encode`). `check` returns undefined, or why it rejects
+ * the value. Accepted values are written as `schema` writes them.
+ *
+ *   const Currency = h.refine(h.AnyTag, (c) => (typeof c === "string" && /^[A-Z]{3}$/.test(c) ? undefined : "three letters A–Z"))
+ */
+export const refine = <A>(schema: Schema<A>, check: (value: A) => string | undefined): Schema<A> =>
+  withStandard<A, Omit<Schema<A>, "~standard">>({
+    expected: schema.expected,
+    json: schema.json,
+    decode: (v, at) => {
+      const a = schema.decode(v, at)
+      const why = check(a)
+      return why === undefined ? a : at.fail(why)
+    },
+    encode: (a, at) => {
+      const why = check(a)
+      return why === undefined ? schema.encode(a, at) : at.fail(why)
+    },
+  })
+
 /** A schema from its decoder and encoder; every application counts one step. */
 const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: (value: A, at: At) => Value, json: JsonType): Schema<A> => {
   const self: Schema<A> = {
@@ -355,6 +439,8 @@ const string_ = make(
 )
 
 const short = (text: string) => (text.length > 30 ? text.slice(0, 30) + "…" : text)
+/** A type's description inside another's, at most 80 characters. */
+const brief = (text: string) => (text.length > 80 ? text.slice(0, 79) + "…" : text)
 
 /**
  * An integer as a number value, always decimal (spec §11): one longer than
@@ -664,7 +750,8 @@ export interface RecordSchema<A> extends Schema<A> {
  */
 const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}): RecordSchema<RecordOf<F>> => {
   const entries = Object.entries(fields)
-  const expected = `{ ${entries.map(([k, s]) => `${k}${s.optional ? "?" : ""}: ${s.expected}`).join(", ")}${options.closed ? "" : " | _"} }`
+  // Field types shortened: records nested in records (P a a inside P a a …) would otherwise double the text at every level.
+  const expected = `{ ${entries.map(([k, s]) => `${k}${s.optional ? "?" : ""}: ${brief(s.expected)}`).join(", ")}${options.closed ? "" : " | _"} }`
   const decodeRecord = (v: HRecord, at: At) => {
     const out: Record<string, unknown> = {}
     for (const [key, schema] of entries) {
