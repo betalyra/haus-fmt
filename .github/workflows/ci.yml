@@ -305,16 +305,19 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter ./packages/haus build
+      # The grammar package's scripts run through the workspace in typescript/:
+      # pnpm run inside editors/ would treat it as a project of its own and
+      # refuse the CLI's install script.
       - name: Generated parsers are up to date
-        working-directory: editors/tree-sitter-haus
+        working-directory: typescript
         run: |
-          pnpm run generate
-          git status --porcelain -- haus/src haus_schema/src
-          test -z "$(git status --porcelain -- haus/src haus_schema/src)"
+          pnpm --filter tree-sitter-haus run generate
+          git status --porcelain -- ../editors/tree-sitter-haus/haus/src ../editors/tree-sitter-haus/haus_schema/src
+          test -z "$(git status --porcelain -- ../editors/tree-sitter-haus/haus/src ../editors/tree-sitter-haus/haus_schema/src)"
       # tree-sitter test in haus/ and haus_schema/, each with its test/corpus.
       - name: Corpus
-        working-directory: editors/tree-sitter-haus
-        run: pnpm test
+        working-directory: typescript
+        run: pnpm --filter tree-sitter-haus test
       # Uses node_modules/.bin/tree-sitter, which pnpm installed above.
       - name: Every haus file, against the reference parser
         working-directory: editors/tree-sitter-haus

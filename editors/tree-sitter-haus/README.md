@@ -95,18 +95,19 @@ scripts/check.mjs         every haus file in the repository, against the referen
 
 This package is part of the pnpm workspace in `typescript/`, so install from
 there; that also downloads the tree-sitter CLI's binary from GitHub and builds
-nothing else:
+nothing else. Run its scripts through the workspace (`pnpm --filter`):
+`pnpm run` inside this folder would treat it as a project of its own.
 
 ```sh
 (cd ../../typescript && pnpm install && pnpm --filter ./packages/haus build)
-pnpm run generate            # haus/src and haus_schema/src from the grammars
-pnpm test                    # tree-sitter test in haus/ and haus_schema/ (their test/corpus)
+(cd ../../typescript && pnpm --filter tree-sitter-haus run generate)   # haus/src, haus_schema/src
+(cd ../../typescript && pnpm --filter tree-sitter-haus test)           # each grammar's test/corpus
 node scripts/check.mjs       # the rest of the repository, against the reference parser
 ```
 
 `src/` of each grammar is generated and committed, as Tree-sitter grammars
-usually do, so editors can build the parsers without the CLI. Run `pnpm run
-generate` after changing a grammar or `common/`; CI fails if the committed
+usually do, so editors can build the parsers without the CLI. Run the generate line
+above after changing a grammar or `common/`; CI fails if the committed
 `src/` differs from what it generates.
 
 ### With a tree-sitter CLI from cargo
