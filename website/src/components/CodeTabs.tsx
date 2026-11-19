@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { PiBirdLight } from "react-icons/pi";
-import { SiEffect, SiPython, SiRust, SiTypescript } from "react-icons/si";
+import { SiEffect, SiGo, SiPython, SiRust, SiTypescript } from "react-icons/si";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** Language marks for the tabs, by name (an island's props must be serializable). Roc has no mark in the set: its bird. */
-const icons = { typescript: SiTypescript, effect: SiEffect, rust: SiRust, python: SiPython, roc: PiBirdLight } as const;
+const icons = { typescript: SiTypescript, effect: SiEffect, rust: SiRust, python: SiPython, go: SiGo, roc: PiBirdLight } as const;
 
 export interface Tab {
   /** Also the name of the Astro slot holding this tab's pre-highlighted code. */

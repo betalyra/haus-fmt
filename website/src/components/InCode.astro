@@ -3,7 +3,7 @@ import SectionHeading from "./SectionHeading.astro";
 import Code from "./Code.astro";
 import CodeTabs from "./CodeTabs";
 import Wash from "./Wash.astro";
-import { codePython, codeRoc, codeRust, codeTs, codeTsPlain, schemaHaus, threadHaus } from "@/content/samples";
+import { codeGo, codePython, codeRoc, codeRust, codeTs, codeTsPlain, schemaHaus, threadHaus } from "@/content/samples";
 import type { Tab } from "./CodeTabs";
 import { links } from "@/lib/links";
 import type { Pigment } from "@/lib/pigments";
@@ -18,6 +18,7 @@ const languageTabs: Tab[] = [
   { value: "effect", icon: "effect", label: "Effect", caption: "The Effect binding: Int becomes bigint, Instant stays its exact text. DateTime is an opt-in." },
   { value: "rust", icon: "rust", label: "Rust", caption: "haus-fmt-build generates the types at compile time." },
   { value: "python", icon: "python", label: "Python", caption: "The parser and streams today, with pattern matching. Typed decoding is on its way." },
+  { value: "go", icon: "go", label: "Go", caption: "Package schema loads the schema and checks values with it at run time." },
   { value: "roc", icon: "roc", label: "Roc", caption: "haus-gen generates the types. The Roc parser is still in progress." },
 ];
 
@@ -36,7 +37,8 @@ const notes: { term: string; rest: string; color: Pigment }[] = [
       <code class="inline-code">.schema.haus</code> file next to your data: your build reads it and gives you
       <strong>real types</strong>. Today in <a href={links.typescript} class="prose-link">TypeScript</a>,
       <a href={links.effect} class="prose-link">Effect</a>, <a href={links.rust} class="prose-link">Rust</a>,
-      <a href={links.python} class="prose-link">Python</a> and <a href={links.roc} class="prose-link">Roc</a>.
+      <a href={links.python} class="prose-link">Python</a>, <a href={links.go} class="prose-link">Go</a> and
+      <a href={links.roc} class="prose-link">Roc</a>.
     </p>
   </div>
 
@@ -63,6 +65,7 @@ const notes: { term: string; rest: string; color: Pigment }[] = [
         <Fragment slot="effect"><Code code={codeTs} lang="ts" label="main.ts" size="sm" /></Fragment>
         <Fragment slot="rust"><Code code={codeRust} lang="rust" label="main.rs" size="sm" /></Fragment>
         <Fragment slot="python"><Code code={codePython} lang="python" label="main.py" size="sm" /></Fragment>
+        <Fragment slot="go"><Code code={codeGo} lang="go" label="main.go" size="sm" /></Fragment>
         <Fragment slot="roc"><Code code={codeRoc} lang="python" label="main.roc" size="sm" /></Fragment>
       </CodeTabs>
     </div>

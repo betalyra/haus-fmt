@@ -138,6 +138,31 @@ let liked = Comment { likes: likes.into(), ..thread };
 println!("{}", haus::to_string(&liked)?);
 `;
 
+/** The body of go/examples/thread/main.go, which go test runs. */
+export const codeGo = `
+import (
+	haus "github.com/betalyra/haus-fmt/go"
+	"github.com/betalyra/haus-fmt/go/schema"
+)
+
+s, _ := schema.Load("thread.schema.haus", schema.Options{})
+root, _ := s.Type("Root")
+text, _ := os.ReadFile("thread.haus")
+v, _ := haus.Parse(text)
+
+thread, err := root.Decode(v) // checked against its schema
+if err != nil {
+	log.Fatal(err) // $.replies[0].likes: expected Int, found the string "lots" [type-mismatch]
+}
+
+c := thread.(haus.Variant).Args[0].(haus.Record)
+author, _ := c.Get("author")   // String        → haus.String
+likes, _ := c.Get("likes")     // Int           → haus.Number, exact
+replies, _ := c.Get("replies") // Array Comment → haus.Array
+
+fmt.Println(author, likes, len(replies.(haus.Array))) // ada 0 1
+`;
+
 export const codeRoc = `
 import haus.Decode
 import haus.Encode

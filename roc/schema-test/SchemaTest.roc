@@ -167,6 +167,8 @@ SchemaTest := [].{
 		"ClosedPayload" => Decoded(encoded(Variants.decode_closed_payload(v), Variants.encode_closed_payload))
 		"AnyTag" => Decoded(encoded(Variants.decode_any_tag(v), Variants.encode_any_tag))
 		"Holder" => Decoded(encoded(Variants.decode_holder(v), Variants.encode_holder))
+		"Node" => Decoded(encoded(Variants.decode_node(v), Variants.encode_node))
+		"Next" => Decoded(encoded(Variants.decode_next(v), Variants.encode_next))
 		_ => NoType
 	}
 }
@@ -942,7 +944,7 @@ expect SchemaTest.check(types_cases, 27, SchemaTest.types)
 expect SchemaTest.check(types_cases, 28, SchemaTest.types)
 
 # variants.cases.haus
-expect SchemaTest.count(variants_cases) == 52
+expect SchemaTest.count(variants_cases) == 57
 
 # Ok { type: "Shape", input: Circle { r: 1.5 } },
 expect SchemaTest.check(variants_cases, 0, SchemaTest.variants)
@@ -1099,6 +1101,21 @@ expect SchemaTest.check(variants_cases, 50, SchemaTest.variants)
 
 # Ok { type: "Holder", input: { shape: Hexagon, any: [EUR, USD(1)] } },
 expect SchemaTest.check(variants_cases, 51, SchemaTest.variants)
+
+# Ok { type: "Node", input: { s: N } },
+expect SchemaTest.check(variants_cases, 52, SchemaTest.variants)
+
+# Ok { type: "Node", input: { s: S { s: S { s: N }, o: T { s: N } } } },
+expect SchemaTest.check(variants_cases, 53, SchemaTest.variants)
+
+# Ok { type: "Next", input: { s: S { s: N, x: 1 } }, output: { s: S { s: N } } },
+expect SchemaTest.check(variants_cases, 54, SchemaTest.variants)
+
+# Err { type: "Node", input: { s: S { s: 1 } }, code: "type-mismatch", path: "$.s.s" },
+expect SchemaTest.check(variants_cases, 55, SchemaTest.variants)
+
+# Err { type: "Node", input: { s: S(1) }, code: "wrong-payload", path: "$.s" },
+expect SchemaTest.check(variants_cases, 56, SchemaTest.variants)
 
 # A value built far deeper than the parser takes (50,000 levels; `roc test`
 # can't drop much deeper ones of this shape): the decoder stops at the depth limit.

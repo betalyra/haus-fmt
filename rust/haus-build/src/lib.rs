@@ -122,8 +122,13 @@ impl Config {
         let krate = var("CARGO_PKG_NAME")?;
         // Files in this crate: `<crate>/<path>`; elsewhere: the schema's name (like the TypeScript binding).
         let crate_dir = crate_dir.canonicalize().unwrap_or(crate_dir);
+        // Joined with `/` on every platform, as the ids of the files it imports are.
         let id = match path.strip_prefix(&crate_dir) {
-            Ok(relative) => format!("{krate}/{}", relative.with_file_name(stem(&path)).display()),
+            Ok(relative) => {
+                let parts = relative.with_file_name(stem(&path));
+                let parts: Vec<_> = parts.components().map(|c| c.as_os_str().to_string_lossy()).collect();
+                format!("{krate}/{}", parts.join("/"))
+            }
             Err(_) => stem(&path),
         };
         let packages = Packages::from_env()?;

@@ -17,13 +17,16 @@
  *     | {"maybe": T} | {"secret": T} | {"ref": KEY}
  *     | {"record": {"closed": B, "fields": [{"key": K, "optional": B, "type": T}]}}
  *     | {"variant": {"closed": B, "cases": [{"tag": TAG, "payload": P}]}}
- *   P = "none" | {"record": {"closed": B, "fields": […]}, "named"?: T} | {"positional": [T]}
+ *   P = "none" | {"record": {"closed": B, "fields": […]}, "named"?: T} | {"named": T} | {"positional": [T]}
  *
  * A record case whose record is written by name (`Box BoxRec`, `Found (Page
  * Int32)`, spec §15) also has `"named"`, T the reference as written: the Lean
  * model reads that and finds the record through the definitions itself
- * (`Case.resolve`); the fuzzers read `"record"`. A case whose one argument is
- * a type parameter stays `positional`, whatever the parameter stands for.
+ * (`Case.resolve`); the fuzzers read `"record"`. Inside that record, a case by
+ * name of the same record (`type C = { s: < S B > }`, `type B = C`) has only
+ * `"named"`: the fuzzers find its record through the definitions (the JSON
+ * can't hold the cycle). A case whose one argument is a type parameter stays
+ * `positional`, whatever the parameter stands for.
  *
  * Attributes are left out: decoding never reads them (spec §15). The script
  * checks that on the TypeScript side too: the file with its attributes
@@ -59,10 +62,20 @@ function resolve(text: string): [string, Json][] {
     closed: r.closed,
     fields: r.fields.map((f: any) => ({ key: f.key, optional: f.optional, type: type(f.type) })),
   })
-  const payload = (p: any): Json =>
-    p.kind === "none" ? "none"
-    : p.kind === "record" ? { record: record(p.record), ...(p.named !== undefined ? { named: type(p.named) } : {}) }
-    : { positional: p.items.map(type) }
+  // The records of the record cases by name being written out: a record that
+  // reaches its own case by name (`type C = { s: < S B > }`, `type B = C`)
+  // has only `"named"` there, or it would never end.
+  const writing = new Set<any>()
+  const payload = (p: any): Json => {
+    if (p.kind === "none") return "none"
+    if (p.kind !== "record") return { positional: p.items.map(type) }
+    if (p.named === undefined) return { record: record(p.record) }
+    if (writing.has(p.record)) return { named: type(p.named) }
+    writing.add(p.record)
+    const r = record(p.record)
+    writing.delete(p.record)
+    return { record: r, named: type(p.named) }
+  }
   const type = (t: any): Json => {
     switch (t.kind) {
       case "builtin": return { builtin: t.name }

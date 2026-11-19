@@ -56,7 +56,7 @@ jobs:
           if printf '%s\n' "$files" | grep -qvE '^(website/|docs/|plans/|[^/]+\.md$|$)'; then code=true; else code=false; fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
           # Package resolution (file systems differ by OS): also run on Windows.
-          if printf '%s\n' "$files" | grep -qE '^(test-suite/packages/|rust/haus-schema/|typescript/packages/haus/(src/(node|schema-file)\.ts|test/(package-suite|node)\.test\.ts)|python/(src/haus/_(resolve|schema_file)\.py|tests/test_package)|go/schema/(files|locator|manifest|resolve|packages_test)|\.github/workflows/ci\.yml)'; then packages=true; else packages=false; fi
+          if printf '%s\n' "$files" | grep -qE '^(test-suite/packages/|rust/haus-schema/|rust/haus-build/(src/(lib|graph|roc)\.rs|tests/package_suite\.rs)|typescript/packages/haus/(src/(node|schema-file)\.ts|test/(package-suite|node)\.test\.ts)|python/(src/haus/_(resolve|schema_file)\.py|tests/test_package)|go/schema/(files|locator|manifest|resolve|packages_test)|\.github/workflows/ci\.yml)'; then packages=true; else packages=false; fi
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           # The Tree-sitter grammars: their sources, and what they are checked against
           # (every haus file, the reference parser, the fuzzer's generator).
@@ -362,6 +362,11 @@ jobs:
         if: success() || failure()
         working-directory: rust
         run: cargo test -p haus-fmt-schema
+      - name: Rust and Roc generators
+        # The package suite through haus-fmt-build and haus-gen roc.
+        if: success() || failure()
+        working-directory: rust
+        run: cargo test -p haus-fmt-build --test package_suite
       - name: Python
         # Run every language, even when one fails.
         if: success() || failure()
@@ -409,6 +414,11 @@ jobs:
         if: success() || failure()
         working-directory: rust
         run: cargo test -p haus-fmt-schema
+      - name: Rust and Roc generators
+        # The package suite through haus-fmt-build and haus-gen roc.
+        if: success() || failure()
+        working-directory: rust
+        run: cargo test -p haus-fmt-build --test package_suite
       - name: Python
         # Run every language, even when one fails.
         if: success() || failure()

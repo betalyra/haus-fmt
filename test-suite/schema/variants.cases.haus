@@ -62,3 +62,10 @@ Ok { type: "AnyTag", input: Money { amount: 19.90, currency: EUR } },
 Err { type: "AnyTag", input: "EUR", code: "type-mismatch", path: "$" },
 Err { type: "AnyTag", input: 1, code: "type-mismatch", path: "$" },
 Ok { type: "Holder", input: { shape: Hexagon, any: [EUR, USD(1)] } },
+
+// ── a record that reaches its own record case by name ──
+Ok { type: "Node", input: { s: N } },
+Ok { type: "Node", input: { s: S { s: S { s: N }, o: T { s: N } } } },
+Ok { type: "Next", input: { s: S { s: N, x: 1 } }, output: { s: S { s: N } } },
+Err { type: "Node", input: { s: S { s: 1 } }, code: "type-mismatch", path: "$.s.s" },
+Err { type: "Node", input: { s: S(1) }, code: "wrong-payload", path: "$.s" },
