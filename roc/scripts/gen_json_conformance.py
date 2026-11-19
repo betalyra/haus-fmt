@@ -103,8 +103,8 @@ tests.append(
 expect {
 	v = Tag("Box", [Rec([("w", Num("1"))])])
 	json = written(SchemaBased.decode_boxed(v), SchemaBased.to_json_boxed)
-	same = written(SchemaBased.decode_paren_box(v), SchemaBased.to_json_paren_box) == json and written(SchemaBased.decode_alias_box(v), SchemaBased.to_json_alias_box) == json
-	json == Ok("{\\"_tag\\":\\"Box\\",\\"w\\":1}") and same
+	other_forms = written(SchemaBased.decode_paren_box(v), SchemaBased.to_json_paren_box) == json and written(SchemaBased.decode_alias_box(v), SchemaBased.to_json_alias_box) == json
+	json == Ok("{\\"_tag\\":\\"Box\\",\\"w\\":1}") and other_forms
 }
 expect {
 	v = Tag("Box", [Rec([("w", Num("1"))])])
