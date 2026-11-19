@@ -1198,10 +1198,11 @@ impl<'a> Loader<'a> {
             }
         };
         if let Some(&(_, n)) = GENERIC.iter().find(|(g, _)| *g == name) {
+            // Arity first, then where it is: `{ e: Stream }` is wrong-arity.
+            arity(n)?;
             if name == "Stream" {
                 return fail(u, pos, Code::MisplacedStream, "Stream is only allowed as the whole type of a definition");
             }
-            arity(n)?;
             let mut evaluated = args.iter().map(|a| self.eval(u, a, env)).collect::<Result<Vec<_>, _>>()?.into_iter();
             let mut next = || Box::new(evaluated.next().unwrap_or(Type::Builtin(Builtin::Any)));
             return Ok(match name {

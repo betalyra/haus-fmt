@@ -515,12 +515,12 @@ Implementations MUST reject:
 - duplicate fields in a record and duplicate tags in a variant, also those copied in by a spread;
 - `closed < >`;
 - a spread of something other than a named variant (in a variant) or a named record (in a record), of a type with parameters, or of a `Stream`;
-- a type that spreads itself, directly or through other types (`type A = < ...B >`, `type B = < ...A >`);
+- a type that spreads itself, directly or through other types, however deep the spreads are written (`type A = < ...B >`, `type B = < ...A >`; `type P = { x: { ...R } }`, `type R = { y: { ...P } }`);
 - `...r`: row parameters are not part of the language;
 - an attribute this version defines with arguments it doesn't take (`@deprecated(1)`), or twice on one type, field or tag (attributes it doesn't define are accepted as they are, §14 above);
-- recursion that doesn't pass through a record field, array element or variant payload (`type A = B`, `type B = A`), §9.9. `Secret a` is not a step of its own: `type A = Secret A` is unguarded;
+- recursion that doesn't pass through a record field, array element or variant payload (`type A = B`, `type B = A`), §9.9, in every type defined, used or not (`type Q a = Q a`). `Secret a` is not a step of its own: `type A = Secret A` is unguarded;
 - generic types whose instances could grow without bound: an expanding edge on a cycle of the parameter graph, §9.10 (`growing-recursion`);
-- `Stream a` anywhere but as the whole type of a definition, and references to such a definition;
+- `Stream a` anywhere but as the whole type of a definition, and references to such a definition. Its number of arguments is checked first: `type Q = Stream` and `{ e: Stream }` are the wrong number of arguments (`wrong-arity`), not a misplaced stream;
 - the import errors of §13.3.
 
 **Which schema describes a file.** The reader decides (§9.2): an application passes its schema to the decoder, and tools take one when given (`--schema`). Without one, tools MAY use the type `Root` of the schema file `x.schema.haus` next to a data file `x.haus`. A data file never names its schema.

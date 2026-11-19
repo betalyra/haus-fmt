@@ -431,7 +431,7 @@ class Fail(Protocol):
     ) -> Never: ...
 
 
-TokenKind: TypeAlias = Literal["upper", "lower", "string", "module", "attribute", "punct", "eof"]
+TokenKind: TypeAlias = Literal["upper", "lower", "string", "attribute", "punct", "eof"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,7 +443,8 @@ class _Token:
 
 _PUNCT = ("...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/")
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_MODULE = re.compile(r"(@[A-Za-z0-9_.~-]+/[A-Za-z0-9_.~-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?/[A-Za-z0-9_./-]*")
+_MODULE = re.compile(r"std/[a-z_][A-Za-z0-9_]*|[@.][A-Za-z0-9_.\-/@~]+")
+"""The module of an import as written (grammar `module`), no whitespace inside; what it names is checked on loading."""
 _MAJOR_VERSION = re.compile(r"0|[1-9][0-9]*")
 """The version an import may name: a major version, without leading zeros (spec §13.3)."""
 _VERSION_DIGITS = re.compile(r"([0-9]+)(\.|$)")
@@ -508,11 +509,7 @@ class _Lexer:
         if m := _IDENT.match(s, pos):
             self.pos = m.end()
             return _Token("upper" if m[0][0].isupper() else "lower", m[0], pos)
-        if (s[pos] == "@" or s.startswith(("./", "../"), pos)) and (m := _MODULE.match(s, pos)):
-            if m[2] is not None and not _MAJOR_VERSION.fullmatch(m[2]):
-                _import_version_error(self.fail, m[1], m[2], pos)
-            self.pos = m.end()
-            return _Token("module", m[0], pos)
+        # (The module after `import` is read by the parser: _SchemaParser.parse_module.)
         if s[pos] == "@":
             if not (m := _ATTRIBUTE.match(s, pos)):
                 self.fail("schema-syntax", "expected an attribute name after '@', like @deprecated", pos)
@@ -779,20 +776,35 @@ class _SchemaParser:
 
     # ── imports and definitions ──
 
+    def parse_module(self) -> str:
+        """The module of an import (grammar `module`), the current token being `import`.
+
+        `std/` and an identifier, or `@` or `.` and the characters a module may have
+        after it, with no whitespace inside (`std/ time` is not a module). Read from
+        the text, as the lexer doesn't know modules; what it names is checked when
+        the import is loaded.
+        """
+        lexer = self.lexer
+        lexer.skip()
+        start = lexer.pos
+        m = _MODULE.match(self.text, start)
+        if not m:
+            self.tok = lexer.next()
+            self.unexpected("a module like std/time, @org/name or ./file")
+        module = m[0]
+        # `@org/name@V`: an import names only a major version (spec §13.3).
+        at = module.find("@", 1) if module.startswith("@") else -1
+        if at >= 0 and not _MAJOR_VERSION.fullmatch(module[at + 1 :]):
+            _import_version_error(self.fail, module[:at], module[at + 1 :], start)
+        lexer.pos = m.end()
+        self.last_end = lexer.pos
+        self.tok = lexer.next()
+        return module
+
     def parse_import(self) -> _ImportDecl:
-        pos = self.advance().pos
-        if self.kind() == "module":
-            module = self.advance().value
-        else:
-            parts: list[str] = []
-            while True:
-                if self.kind() != "lower":
-                    self.unexpected("a module like std/time, @org/name or ./file")
-                parts.append(self.advance().value)
-                if not self.is_("/"):
-                    break
-                self.advance()
-            module = "/".join(parts)
+        # The token after `import` is read by parse_module, not the lexer.
+        pos = self.tok.pos
+        module = self.parse_module()
         self.expect("(")
         names: list[tuple[str, int]] = []
         while not self.is_(")"):
@@ -971,6 +983,9 @@ class _SchemaParser:
             if self.is_(">"):
                 break
             self.expect("|")
+            # The grammar has no '|' after the last alternative: `< Y | >` is an error.
+            if self.is_(">"):
+                self.unexpected("a tag or ...Name after '|'")
         self.advance()
         if closed and not cases and not spreads:
             self.fail(

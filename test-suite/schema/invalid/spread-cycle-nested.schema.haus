@@ -1,0 +1,4 @@
+// A spread copies the fields of its type wherever it is written, also in a
+// nested record: P needs R's fields, which need P's (spec §14).
+type P = { x: { ...R } }
+type R = { y: { ...P } }

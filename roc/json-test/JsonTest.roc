@@ -1190,7 +1190,7 @@ expect JsonTest.self_describing(self_describing_cases, 56)
 expect JsonTest.self_describing(self_describing_cases, 57)
 
 # json/import.cases.haus
-expect JsonTest.count(import_cases) == 16
+expect JsonTest.count(import_cases) == 17
 
 # Read { json: "{\"a\": 1, \"b\": [true, false, null], \"c\": \"x\"}", output: { a: 1, b: [True, False, None], c: "x" } },
 expect JsonTest.imported(import_cases, 0)
@@ -1213,32 +1213,35 @@ expect JsonTest.imported(import_cases, 5)
 # Err { json: "\"\\ud83d\"", code: "unpaired-surrogate" },
 expect JsonTest.imported(import_cases, 6)
 
-# Err { json: "[1,]", code: "json-syntax" },
+# Err { json: "\"\\ud83d\\u\"", code: "invalid-unicode-escape" },
 expect JsonTest.imported(import_cases, 7)
 
-# Err { json: "NaN", code: "json-syntax" },
+# Err { json: "[1,]", code: "json-syntax" },
 expect JsonTest.imported(import_cases, 8)
 
-# Read { json: "\u{FEFF}[1]", output: [1] },
+# Err { json: "NaN", code: "json-syntax" },
 expect JsonTest.imported(import_cases, 9)
 
-# Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 } },
+# Read { json: "\u{FEFF}[1]", output: [1] },
 expect JsonTest.imported(import_cases, 10)
 
-# Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },
+# Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 } },
 expect JsonTest.imported(import_cases, 11)
 
-# Read { json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
+# Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },
 expect JsonTest.imported(import_cases, 12)
 
-# Err { json: "1e-7000", code: "exponent-too-large" },
+# Read { json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
 expect JsonTest.imported(import_cases, 13)
 
-# Err { json: "[1, -2E+6145]", code: "exponent-too-large" },
+# Err { json: "1e-7000", code: "exponent-too-large" },
 expect JsonTest.imported(import_cases, 14)
 
-# Read { json: "1e-6144", output: 1e-6144 },
+# Err { json: "[1, -2E+6145]", code: "exponent-too-large" },
 expect JsonTest.imported(import_cases, 15)
+
+# Read { json: "1e-6144", output: 1e-6144 },
+expect JsonTest.imported(import_cases, 16)
 
 # Loop: 256 nested Somes read, 257 don't
 expect JsonTest.somes("Loop", 256) == Ok({})

@@ -1,0 +1,3 @@
+// A package name is in lowercase, as npm's scoped names (spec §13.3).
+import @Haus/money@1 (Money)
+type A = { total: Money }

@@ -136,6 +136,8 @@ INVALID = {
     "import-minor": "an import names only the major version (@haus-fmt/money@1)",
     "import-no-names": "expected a type name",
     "import-not-a-version": "expected a major version after '@'",
+    "import-package-uppercase": "a package name is @org/name in lowercase",
+    "import-space": "expected a module like std/time, @org/name or ./file",
     "invalid-utf8": "is not UTF-8",
     "invalid-escape-in-key": "invalid escape '\\x'",
     "key-line-break": "line break in string",
@@ -148,10 +150,15 @@ INVALID = {
     "secret-arity": "Secret needs 1 argument",
     "secret-recursion": "type A refers to itself without a record, array or variant in between",
     "spread-cycle": "spreads itself",
+    "spread-cycle-nested": "spreads itself",
     "stray-slash": "unexpected '/'",
+    "stream-arity": "Stream needs 1 argument",
+    "stream-arity-nested": "Stream needs 1 argument",
     "unguarded-recursion": "refers to itself without a record, array or variant in between",
+    "unguarded-unused-generic": "type Q refers to itself without a record, array or variant in between",
     "unterminated-comment": "unterminated block comment",
     "unterminated-string": "unterminated string",
+    "variant-trailing-bar": "expected a tag or ...Name after '|'",
 }
 
 

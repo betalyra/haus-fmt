@@ -1,0 +1,3 @@
+// A '|' may come before the first alternative, never after the last
+// (grammar.ebnf, variant_type).
+type Shape = < Circle | Square | >

@@ -108,37 +108,10 @@ async function runner(name: string): Promise<Runner> {
 
 /**
  * Disagreements with Lean that are known and reported, not counted as
- * failures (fuzz/README.md, "Schema files"). Lean checks guarded recursion
- * (§9.9) only on the instances a non-generic type reaches, so it accepts
- * `type Q a = Q a` when nothing uses Q, which every binding rejects
- * (`unguarded-recursion`), as §14's list says (a text edit can make one; the
- * generator uses every generic type).
+ * failures (fuzz/README.md, "Schema files"). None today: add one only while
+ * the spec decides it, with a test that matches exactly that disagreement.
  */
-const KNOWN: readonly { readonly name: string; readonly test: (rs: readonly Outcome[]) => boolean }[] = [
-  {
-    name: "Lean accepts an unguarded generic type nothing uses",
-    test: (rs) => rs[0]!.kind === "ok" && rs.slice(1).every((o) => o.kind === "err" && o.code === "unguarded-recursion"),
-  },
-  {
-    // `type P = { x: { ...R } }`, `type R = { y: { ...P } }`: Lean runs out of
-    // fuel, and with more around it can even accept such a file.
-    name: "Lean doesn't report a spread cycle through nested spreads",
-    test: (rs) => !(rs[0]!.kind === "err" && rs[0]!.code === "spread-cycle") && rs.slice(1).every((o) => o.kind === "err" && o.code === "spread-cycle"),
-  },
-  {
-    // `< Y | >`: the grammar (spec/grammar.ebnf) has no `|` after the last
-    // alternative; Lean, TypeScript and Python accept one, Rust and Go don't.
-    name: "a '|' after a variant's last alternative",
-    test: (rs) =>
-      rs.every((o, i) => {
-        const name = names[i]
-        return name === "rust" || name === "go" ? o.kind === "err" && o.code === "schema-syntax" : o.kind === "ok"
-      }),
-  },
-]
-
-/** The names of the runners in use, in order (for KNOWN). */
-let names: readonly string[] = []
+const KNOWN: readonly { readonly name: string; readonly test: (rs: readonly Outcome[]) => boolean }[] = []
 
 const show = (o: Outcome) => (o.kind === "ok" ? "ok" : o.kind === "err" ? `err [${o.code}] ${o.reason.slice(0, 200)}` : o.reason)
 const verdict = (o: Outcome) => (o.kind === "crash" ? "crash" : o.kind)
@@ -163,7 +136,6 @@ export async function run(argv: readonly string[]): Promise<number> {
   if (wanted[0] !== "lean") throw new Error("--runners must start with lean, the reference")
   const runners: Runner[] = []
   for (const name of wanted) runners.push(await runner(name))
-  names = runners.map((r) => r.name)
   const file = join(out, "cases.txt")
 
   /** results[case][runner] */

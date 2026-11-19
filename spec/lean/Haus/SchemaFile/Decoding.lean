@@ -81,6 +81,9 @@ theorem load_spec {text : Text} {env : Env} (h : load text = .ok env) :
   obtain ⟨env', he, h⟩ := bind_ok h
   obtain ⟨u2, hcl, h⟩ := bind_ok h
   obtain ⟨u3, hg, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   cases h
   refine ⟨p, F, S, ?_, hF, hc, ?_, he, hcl, hg⟩
   · unfold parseC at hp
