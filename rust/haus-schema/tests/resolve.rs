@@ -177,7 +177,7 @@ fn rules_about_names_and_types() {
     assert_eq!(error("type A = Array (Stream Int)"), "1:17: Stream is only allowed as the whole type of a definition");
     assert_eq!(
         error("type T a = < Leaf a | Node (T (Array a)) >"),
-        "1:29: T must refer to itself with its own parameters (T a); other arguments could grow without bound"
+        "1:29: T passes its parameter a to itself inside a bigger type: instances could grow without bound"
     );
 }
 
@@ -215,7 +215,10 @@ type B a = < Y (A (P a a)) | Stop >
 type Root = A Int",
     );
     assert_eq!(at, (2, 17));
-    assert!(reason.starts_with("A refers to B, which refers back to A"), "{reason}");
+    assert_eq!(
+        reason,
+        "A passes its parameter a to B inside a bigger type, and it comes back (A → B → A): instances could grow without bound"
+    );
     // Through three definitions, with the growing argument only on the way back.
     let (at, reason) = growing(
         "type P a b = { l: a, r: b }
@@ -225,7 +228,59 @@ type C a = < Z (A (P a a)) | End >
 type Root = A Int",
     );
     assert_eq!(at, (4, 17));
-    assert!(reason.starts_with("C refers to A, which refers back to C"), "{reason}");
+    assert_eq!(
+        reason,
+        "C passes its parameter a to A inside a bigger type, and it comes back (C → A → B → C): instances could grow without bound"
+    );
+}
+
+/// §9.10, the expansive-cycle rule: an expanding edge of the parameter graph
+/// on a cycle, wherever it is, and the first one in order.
+#[test]
+fn parameters_that_grow_along_a_cycle_are_rejected() {
+    for (schema, at, reason) in [
+        (
+            "type Pair a b = { l: a, r: b }\ntype T a = < X (T (Pair a a)) | E >",
+            (2, 17),
+            "T passes its parameter a to itself inside a bigger type: instances could grow without bound",
+        ),
+        (
+            "type L a = < X (L (Array a)) | E >",
+            (1, 17),
+            "L passes its parameter a to itself inside a bigger type: instances could grow without bound",
+        ),
+        (
+            "type R a = < X (R { v: a }) | E >",
+            (1, 17),
+            "R passes its parameter a to itself inside a bigger type: instances could grow without bound",
+        ),
+        // The parameters swap places, and one grows on the way back.
+        (
+            "type S a b = < X a (S b (Array a)) | E >",
+            (1, 21),
+            "S passes its parameter a to itself inside a bigger type, and it comes back (S → S → S): instances could grow without bound",
+        ),
+        // One expanding edge on a cycle through three definitions.
+        (
+            "type A a = < X (B a) | E >\ntype B b = < Y (C (Array b)) >\ntype C c = < Z (A c) >",
+            (2, 17),
+            "B passes its parameter b to C inside a bigger type, and it comes back (B → C → A → B): instances could grow without bound",
+        ),
+        // Nested references count on their own: the inner one isn't expanding, the outer one is.
+        (
+            "type P a b = { l: a, r: b }\ntype W a = < X (W (Maybe (P a a))) | E >",
+            (2, 17),
+            "W passes its parameter a to itself inside a bigger type: instances could grow without bound",
+        ),
+        // The second parameter grows, not the first.
+        (
+            "type G a b = < X (G a (Array b)) | E >",
+            (1, 19),
+            "G passes its parameter b to itself inside a bigger type: instances could grow without bound",
+        ),
+    ] {
+        assert_eq!(growing(schema), (at, reason.to_string()), "{schema}");
+    }
 }
 
 #[test]
@@ -239,6 +294,37 @@ fn definitions_that_refer_to_each_other_with_their_own_parameters() {
     )
     .unwrap();
     assert_eq!(decode(&schema, "Root", "{ value: { p: E, q: E }, kids: [] }"), "{kids:[],value:{p:E,q:E}}");
+}
+
+/// §9.10: generic types whose instances can't grow without bound, though they
+/// pass other arguments than their own parameters around a cycle.
+#[test]
+fn parameters_that_grow_off_any_cycle_are_accepted() {
+    let schema = Schema::parse(
+        "type Node a = { value: a, meta: Meta }
+         type Meta = { history: Array (Node String) }
+         type Expr = < Num Int | Call (Apply Expr) >
+         type Apply a = { f: a, args: Array Expr }
+         type Swap a b = < S a (Swap b a) | E >
+         type K a = < X (K Int) | Y a >
+         type Pair a b = { l: a, r: b }
+         type A a = < X (B (Pair a a)) >
+         type B b = < Y b | Z (A Int) >
+         type Root = { n: Node Int, e: Expr, s: Swap Int String, k: K String, a: A String }",
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        decode(
+            &schema,
+            "Root",
+            r#"{ n: { value: 1, meta: { history: [{ value: "x", meta: { history: [] } }] } },
+                e: Call({ f: Num(1), args: [Num(2)] }),
+                s: S(1, S("a", S(2, E))),
+                k: X(X(Y(3))),
+                a: X(Y({ l: "p", r: "q" })) }"#
+        ),
+        r#"{a:X(Y{l:"p",r:"q"}),e:Call{args:[Num(2)],f:Num(1)},k:X(X(Y(3))),n:{meta:{history:[{meta:{history:[]},value:"x"}]},value:1},s:S(1,S("a",S(2,E)))}"#
+    );
 }
 
 #[test]

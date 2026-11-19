@@ -2,7 +2,10 @@
 //! for the prelude types, and the helpers that generated code calls.
 //!
 //! Decoding is linear in the input (spec §9): records are indexed once, and a
-//! variant's case is chosen by its tag, never by trying cases in turn.
+//! variant's case is chosen by its tag, never by trying cases in turn. The
+//! input is a [`Value`], which owns its parts: one built in code can't share
+//! them (a DAG) or contain itself, so it needs no node limit beyond the
+//! memory it takes, only the depth limit of [`Decoder`].
 
 use crate::{Codec, DecodeError, ErrorCode as Code, Limits, Secret, Value};
 use std::collections::{BTreeMap, HashMap};

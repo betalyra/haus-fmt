@@ -13,7 +13,8 @@
  *
  * - recursion must pass through a record field, array element or variant
  *   payload (`type A = B`, `type B = A` is rejected);
- * - a generic type refers to itself only with its own parameters
+ * - generic types can't grow without bound: no type parameter passes,
+ *   inside a bigger type, along a cycle of references back to itself
  *   (`type List a = < Nil | Cons a (List a) >`, not `T (Pair a a)`);
  * - records and variants are open (other fields are ignored, other tags kept
  *   as unknown) unless marked `closed`;
@@ -1049,26 +1050,77 @@ function components<N>(nodes: readonly N[], next: (n: N) => readonly N[]): Map<N
   return component
 }
 
+/** A type parameter of a definition: a node of the parameter graph (§9.10). */
+interface ParamNode {
+  readonly def: Def
+  readonly index: number
+}
+
+/** Parameter `from` occurs in the argument a reference passes to parameter `to`; expanding when the argument isn't `from` itself. */
+interface ParamEdge {
+  readonly from: ParamNode
+  readonly to: ParamNode
+  readonly expanding: boolean
+  readonly ref: DefRef
+}
+
 /**
- * §9.10, through other definitions: in a group of definitions that refer to
- * each other, directly or not (a strongly connected component of the
- * references), a reference to another member passes only parameters of the
- * referring definition, so instances can't grow around the group. Checked on
- * the definitions as written, before anything is instantiated. (A reference
- * to itself must pass its own parameters in order, checked before.)
+ * §9.10, the expansive-cycle rule: a graph with one node per type parameter of
+ * every definition, and for each reference `B t₁ … tₙ` in the body of `A`, an
+ * edge from each parameter of `A` that occurs in `tᵢ` to the i-th parameter of
+ * `B`, expanding when `tᵢ` isn't that parameter itself. An expanding edge on a
+ * cycle (both ends in one strongly connected component) means instances could
+ * grow without bound; without one there are finitely many. Checked on the
+ * definitions as written, before anything is instantiated; the first such edge
+ * (definitions, references, arguments and occurrences in order) is reported.
  */
-function checkGroups(defs: readonly Def[]): void {
-  const refs = new Map(defs.map((d) => [d, refsOf(d)]))
-  const targets = new Map(defs.map((d) => [d, refs.get(d)!.map((r) => r.to)]))
-  const group = components(defs, (d) => targets.get(d) ?? [])
-  for (const def of defs) {
-    for (const r of refs.get(def)!) {
-      if (r.to === def || group.get(r.to) !== group.get(def) || r.args.every((a) => a.t === "var")) continue
-      const name = def.decl.name
-      const may = def.params.length > 0 ? `may pass it only its own parameters (${def.params.join(" ")})` : "has no parameters to pass it"
-      def.unit.fail("growing-recursion", `${name} refers to ${r.to.decl.name}, which refers back to ${name}: ${name} ${may}; other arguments could grow without bound`, r.pos)
+function checkExpansiveCycles(defs: readonly Def[]): void {
+  const nodes = new Map(defs.map((d) => [d, d.params.map((_, index): ParamNode => ({ def: d, index }))]))
+  const edges: ParamEdge[] = defs.flatMap((def) =>
+    refsOf(def).flatMap((ref) =>
+      ref.args.slice(0, ref.to.params.length).flatMap((arg, i) =>
+        [...nodesOf(arg)].flatMap((n): ParamEdge[] => {
+          const from = n.t === "var" ? nodes.get(def)![def.params.indexOf(n.name)] : undefined
+          return from === undefined ? [] : [{ from, to: nodes.get(ref.to)![i]!, expanding: arg.t !== "var", ref }]
+        }))))
+  const out = new Map<ParamNode, ParamNode[]>()
+  for (const e of edges) {
+    const next = out.get(e.from)
+    if (next === undefined) out.set(e.from, [e.to])
+    else next.push(e.to)
+  }
+  const component = components([...nodes.values()].flat(), (n) => out.get(n) ?? [])
+  const growing = edges.find((e) => e.expanding && component.get(e.from) === component.get(e.to))
+  if (growing === undefined) return
+  const { from, to, ref } = growing
+  const name = from.def.decl.name
+  const param = from.def.params[from.index]!
+  if (from === to) {
+    from.def.unit.fail("growing-recursion", `${name} passes its parameter ${param} to itself inside a bigger type: instances could grow without bound`, ref.pos)
+  }
+  const target = to.def === from.def ? "itself" : to.def.decl.name
+  const cycle = [from, ...shortestPath(to, from, (n) => (out.get(n) ?? []).filter((m) => component.get(m) === component.get(from)))]
+  from.def.unit.fail(
+    "growing-recursion",
+    `${name} passes its parameter ${param} to ${target} inside a bigger type, and it comes back (${cycle.map((n) => n.def.decl.name).join(" → ")}): instances could grow without bound`,
+    ref.pos,
+  )
+}
+
+/** The nodes of a shortest path from `start` to `goal` (breadth first), both included; `goal` must be reachable. */
+function shortestPath<N>(start: N, goal: N, next: (n: N) => readonly N[]): N[] {
+  const parent = new Map<N, N | undefined>([[start, undefined]])
+  const queue = [start]
+  for (let i = 0; i < queue.length && !parent.has(goal); i++) {
+    for (const m of next(queue[i]!)) {
+      if (parent.has(m)) continue
+      parent.set(m, queue[i])
+      queue.push(m)
     }
   }
+  const path: N[] = []
+  for (let n: N | undefined = goal; n !== undefined; n = parent.get(n)) path.push(n)
+  return path.reverse()
 }
 
 /** Parse and check a schema file and the files it imports. Throws HausSchemaFileError. */
@@ -1205,22 +1257,13 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   }
 
   const root = load(text, options.key, options.id, rootFail, true)
-  const scopeOf = (def: Def, name: string) => def.unit.scope.get(name)
-
   for (const def of allDefs) {
     const { fail } = def.unit
     const params = new Set(def.params)
     // Every lowercase name in a type must be one of the definition's parameters.
     for (const n of nodesOf(def.decl.body)) if (n.t === "var" && !params.has(n.name)) fail("unknown-parameter", `unknown type parameter ${n.name}`, n.pos)
-    // §9.10: a generic type refers to itself only with its own parameters.
-    const ownParams = (args: readonly Node[]) => args.length === def.params.length && args.every((a, i) => a.t === "var" && a.name === def.params[i])
-    for (const n of nodesOf(def.decl.body)) {
-      if (n.t === "app" && scopeOf(def, n.head) === def && !ownParams(n.args)) {
-        fail("growing-recursion", `${def.decl.name} must refer to itself with its own parameters (${[def.decl.name, ...def.params].join(" ")}); other arguments could grow without bound`, n.pos)
-      }
-    }
   }
-  checkGroups(allDefs)
+  checkExpansiveCycles(allDefs)
 
   // ── evaluation ──
   const instances = new Map<string, Instance>()

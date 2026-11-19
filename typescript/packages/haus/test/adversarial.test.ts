@@ -224,7 +224,7 @@ describe("generic types can't grow without bound (spec §9.10)", () => {
     const e = within(1000, () => errorOf(() => compileSchemaFile(text))) as HausSchemaFileError
     expect(e.code).toBe("growing-recursion")
     expect([e.line, e.column]).toEqual([2, 17])
-    expect(e.message).toContain("A refers to B, which refers back to A")
+    expect(e.message).toContain("A passes its parameter a to B inside a bigger type, and it comes back (A → B → A): instances could grow without bound")
   })
 
   it("and through three definitions, with the growing argument only on the way back", () => {
@@ -238,12 +238,33 @@ describe("generic types can't grow without bound (spec §9.10)", () => {
     const e = within(1000, () => errorOf(() => compileSchemaFile(text))) as HausSchemaFileError
     expect(e.code).toBe("growing-recursion")
     expect([e.line, e.column]).toEqual([4, 17])
-    expect(e.message).toContain("C refers to A")
+    expect(e.message).toContain("C passes its parameter a to A inside a bigger type, and it comes back (C → A → B → C)")
   })
 
-  it("definitions that refer to each other with their own parameters are fine", () => {
-    within(1000, () => compileSchemaFile("type GTree a = { value: a, kids: Forest a }\ntype Forest a = Array (GTree a)\ntype Swap a b = < S (Pair b a) | E >\ntype Pair a b = { p: Swap a b, q: Swap b a }\ntype Root = GTree (Pair Int String)"))
+  it("a type that passes its parameter to itself inside a bigger type is rejected", () => {
+    const e = errorOf(() => compileSchemaFile("type Pair a b = { l: a, r: b }\ntype T a = < X (T (Pair a a)) | E >")) as HausSchemaFileError
+    expect(e.code).toBe("growing-recursion")
+    expect([e.line, e.column]).toEqual([2, 17])
+    expect(e.message).toContain("T passes its parameter a to itself inside a bigger type: instances could grow without bound")
     expect(codeOf("type L a = < Nil | Cons a (L (Array a)) >")).toBe("growing-recursion")
+    // Parameters that swap places, one of them growing on the way.
+    const swap = errorOf(() => compileSchemaFile("type S a b = < X a (S b (Array a)) | E >")) as HausSchemaFileError
+    expect(swap.message).toContain("S passes its parameter a to itself inside a bigger type, and it comes back (S → S → S)")
+  })
+
+  it("generics without an expanding edge on a cycle are fine", () => {
+    for (const text of [
+      "type GTree a = { value: a, kids: Forest a }\ntype Forest a = Array (GTree a)\ntype Swap a b = < S (Pair b a) | E >\ntype Pair a b = { p: Swap a b, q: Swap b a }\ntype Root = GTree (Pair Int String)",
+      "type Node a = { value: a, meta: Meta }\ntype Meta = { history: Node String }\ntype Root = Node Int",
+      "type Expr = < Num Int | Call (Apply Expr) >\ntype Apply a = { f: a, args: Array Expr }\ntype Root = Expr",
+      "type Swap a b = < S a (Swap b a) | E >\ntype Root = Swap Int String",
+      "type K a = < X (K Int) | Y a >\ntype Root = K String",
+      // The expanding edge A → B isn't on a cycle: B comes back to A only with Int.
+      "type P a b = { l: a, r: b }\ntype A a = < X (B (P a a)) >\ntype B b = < Y b | Z (A Int) >\ntype Root = A String",
+    ]) {
+      const { schemas } = within(1000, () => compileSchemaFile(text))
+      expect(schemas.Root).toBeDefined()
+    }
   })
 
   it("arguments nested 30 levels deep in non-recursive generics compile quickly", () => {

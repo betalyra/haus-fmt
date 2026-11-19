@@ -9,3 +9,17 @@ type Expr = closed < Num Int | Add Expr Expr | Neg { of: Expr } >
 type GTree a = { value: a, kids: Forest a }
 type Forest a = Array (GTree a)
 type IntTree = GTree Int
+// generics whose instances can't grow without bound: no parameter passes, inside a
+// bigger type, along a cycle of references back to itself (§9.10, the expansive-cycle rule)
+type Node a = { value: a, meta: Meta }
+type Meta = { history: Array (Node String) }
+type IntNode = Node Int
+type Code = < Num Int | Call (Apply Code) >
+type Apply a = { f: a, args: Array Code }
+type Swap a b = < S a (Swap b a) | E >
+type SwapIntString = Swap Int String
+type K a = < X (K Int) | Y a >
+type KString = K String
+type Up a = < Lift (Down (Array a)) >
+type Down b = < Val b | Restart (Up Int) >
+type UpString = Up String

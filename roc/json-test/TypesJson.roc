@@ -267,4 +267,370 @@ TypesJson := [].{
 	to_json_int_tree : IntTree, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	to_json_int_tree = |v, e| to_json_g_tree(v, e, ToJson.int, False)
 
+	## generics whose instances can't grow without bound: no parameter passes, inside a
+	## bigger type, along a cycle of references back to itself (§9.10, the expansive-cycle rule)
+	##
+	## haus type `types#Node`.
+	Node(a) := { value : a, meta : Meta }
+
+	decode_node : Value, (Value -> Try(a, Decode.Error)) -> Try(Node(a), Decode.Error)
+	decode_node = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ value: Decode.field(fs, "value", decode_a)?, meta: Decode.field(fs, "meta", read_value_meta)? })
+	}
+
+	encode_node : Node(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_node = |v, e, encode_a| Encode.record(e, [("value", Encode.required(v.value, encode_a)), ("meta", Encode.required(v.meta, encode_meta))])
+
+	from_json_node : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Node(a), Decode.Error)
+	from_json_node = |j, from_json_a, _nullable_a| {
+		fs = FromJson.object(j, "Node")?
+		Ok({ value: FromJson.field(fs, "value", from_json_a)?, meta: FromJson.field(fs, "meta", read_json_meta)? })
+	}
+
+	to_json_node : Node(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_node = |v, e, to_json_a, _nullable_a| ToJson.object(e, [("value", ToJson.required(v.value, to_json_a)), ("meta", ToJson.required(v.meta, to_json_meta))])
+
+	## haus type `types#Meta`.
+	Meta := { history : List(Node(Str)) }
+
+	decode_meta : Value -> Try(Meta, Decode.Error)
+	decode_meta = |v| Decode.within_depth(v, read_value_meta)
+
+	read_value_meta : Value -> Try(Meta, Decode.Error)
+	read_value_meta = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ history: Decode.field(fs, "history", |x15| Decode.list(x15, |x13| decode_node(x13, Decode.str)))? })
+	}
+
+	encode_meta : Meta, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_meta = |v, e| Encode.record(e, [("history", Present(|e16| Encode.list(v.history, e16, |x14, e14| encode_node(x14, e14, Encode.str))))])
+
+	from_json_meta : JsonValue -> Try(Meta, Decode.Error)
+	from_json_meta = |j| FromJson.within_depth(j, read_json_meta, encode_meta)
+
+	read_json_meta : JsonValue -> Try(Meta, Decode.Error)
+	read_json_meta = |j| {
+		fs = FromJson.object(j, "Meta")?
+		Ok({ history: FromJson.field(fs, "history", |y15| FromJson.list(y15, |y13| from_json_node(y13, FromJson.str, False)))? })
+	}
+
+	to_json_meta : Meta, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_meta = |v, e| ToJson.object(e, [("history", Present(|e16| ToJson.list(v.history, e16, |y14, e14| to_json_node(y14, e14, ToJson.str, False))))])
+
+	## haus type `types#IntNode`.
+	IntNode : Node(Int)
+
+	decode_int_node : Value -> Try(IntNode, Decode.Error)
+	decode_int_node = |v| Decode.within_depth(v, read_value_int_node)
+
+	read_value_int_node : Value -> Try(IntNode, Decode.Error)
+	read_value_int_node = |v| decode_node(v, Decode.int)
+
+	encode_int_node : IntNode, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_int_node = |v, e| encode_node(v, e, Encode.int)
+
+	from_json_int_node : JsonValue -> Try(IntNode, Decode.Error)
+	from_json_int_node = |j| FromJson.within_depth(j, read_json_int_node, encode_int_node)
+
+	read_json_int_node : JsonValue -> Try(IntNode, Decode.Error)
+	read_json_int_node = |j| from_json_node(j, FromJson.int, False)
+
+	to_json_int_node : IntNode, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_int_node = |v, e| to_json_node(v, e, ToJson.int, False)
+
+	## haus type `types#Code`.
+	Code := [Num(Int), Call(Apply(Code)), Unknown(Str, List(Value))]
+
+	decode_code : Value -> Try(Code, Decode.Error)
+	decode_code = |v| Decode.within_depth(v, read_value_code)
+
+	read_value_code : Value -> Try(Code, Decode.Error)
+	read_value_code = |v| match v {
+		Tag("Num", [a0]) => Ok(Num(Decode.arg("Num", 0, a0, Decode.int)?))
+		Tag("Call", [p]) => Ok(Call(Decode.record_arg("Call", p, |x18| decode_apply(x18, read_value_code))?))
+		Tag("Num", _) => Decode.arity("Num", 1)
+		Tag("Call", _) => Decode.arity("Call", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Code)", v)
+	}
+
+	encode_code : Code, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_code = |v, e| match v {
+		Num(a0) => Encode.tagged("Num", e, |e17| Encode.int(a0, e17))
+		Call(a0) => Encode.tagged("Call", e, |e19| encode_apply(a0, e19, encode_code))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	from_json_code : JsonValue -> Try(Code, Decode.Error)
+	from_json_code = |j| FromJson.within_depth(j, read_json_code, encode_code)
+
+	read_json_code : JsonValue -> Try(Code, Decode.Error)
+	read_json_code = |j| {
+		(tag, ms) = FromJson.variant(j, "Code")?
+		match tag {
+			"Num" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Num(FromJson.arg(1, 0, a0, FromJson.int)?))
+				_ => FromJson.arity("Num", 1)
+			}
+			"Call" => Ok(Call(FromJson.record_case(ms, |y18| from_json_apply(y18, read_json_code, False))?))
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_code : Code, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_code = |v, e| match v {
+		Num(a0) => ToJson.tagged("Num", e, |e17| ToJson.int(a0, e17))
+		Call(a0) => ToJson.record_case("Call", e, |e19| to_json_apply(a0, e19, to_json_code, False))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
+	## haus type `types#Apply`.
+	Apply(a) := { f : a, args : List(Code) }
+
+	decode_apply : Value, (Value -> Try(a, Decode.Error)) -> Try(Apply(a), Decode.Error)
+	decode_apply = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ f: Decode.field(fs, "f", decode_a)?, args: Decode.field(fs, "args", |x20| Decode.list(x20, read_value_code))? })
+	}
+
+	encode_apply : Apply(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_apply = |v, e, encode_a| Encode.record(e, [("f", Encode.required(v.f, encode_a)), ("args", Present(|e21| Encode.list(v.args, e21, encode_code)))])
+
+	from_json_apply : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Apply(a), Decode.Error)
+	from_json_apply = |j, from_json_a, _nullable_a| {
+		fs = FromJson.object(j, "Apply")?
+		Ok({ f: FromJson.field(fs, "f", from_json_a)?, args: FromJson.field(fs, "args", |y20| FromJson.list(y20, read_json_code))? })
+	}
+
+	to_json_apply : Apply(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_apply = |v, e, to_json_a, _nullable_a| ToJson.object(e, [("f", ToJson.required(v.f, to_json_a)), ("args", Present(|e21| ToJson.list(v.args, e21, to_json_code)))])
+
+	## haus type `types#Swap`.
+	Swap(a, b) := [S(a, Swap(b, a)), E, Unknown(Str, List(Value))]
+
+	decode_swap : Value, (Value -> Try(a, Decode.Error)), (Value -> Try(b, Decode.Error)) -> Try(Swap(a, b), Decode.Error)
+	decode_swap = |v, decode_a, decode_b| match v {
+		Tag("S", [a0, a1]) => Ok(S(Decode.arg("S", 0, a0, decode_a)?, Decode.arg("S", 1, a1, |x22| decode_swap(x22, decode_b, decode_a))?))
+		Tag("E", []) => Ok(E)
+		Tag("S", _) => Decode.arity("S", 2)
+		Tag("E", _) => Decode.arity("E", 0)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Swap)", v)
+	}
+
+	encode_swap : Swap(a, b), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), (b, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_swap = |v, e, encode_a, encode_b| match v {
+		S(a0, a1) => Encode.tagged_args("S", e, [|e23| encode_a(a0, e23), |e24| encode_swap(a1, e24, encode_b, encode_a)])
+		E => Encode.tag("E", e)
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	from_json_swap : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool, (JsonValue -> Try(b, Decode.Error)), Bool -> Try(Swap(a, b), Decode.Error)
+	from_json_swap = |j, from_json_a, nullable_a, from_json_b, nullable_b| {
+		(tag, ms) = FromJson.variant(j, "Swap")?
+		match tag {
+			"S" => match FromJson.args(ms, 2)? {
+				[a0, a1] => Ok(S(FromJson.arg(2, 0, a0, from_json_a)?, FromJson.arg(2, 1, a1, |y22| from_json_swap(y22, from_json_b, nullable_b, from_json_a, nullable_a))?))
+				_ => FromJson.arity("S", 2)
+			}
+			"E" => match FromJson.args(ms, 0)? {
+				[] => Ok(E)
+				_ => FromJson.arity("E", 0)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_swap : Swap(a, b), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool, (b, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_swap = |v, e, to_json_a, nullable_a, to_json_b, nullable_b| match v {
+		S(a0, a1) => ToJson.tagged_args("S", e, [|e23| to_json_a(a0, e23), |e24| to_json_swap(a1, e24, to_json_b, nullable_b, to_json_a, nullable_a)])
+		E => ToJson.tag("E", e)
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
+	## haus type `types#SwapIntString`.
+	SwapIntString : Swap(Int, Str)
+
+	decode_swap_int_string : Value -> Try(SwapIntString, Decode.Error)
+	decode_swap_int_string = |v| Decode.within_depth(v, read_value_swap_int_string)
+
+	read_value_swap_int_string : Value -> Try(SwapIntString, Decode.Error)
+	read_value_swap_int_string = |v| decode_swap(v, Decode.int, Decode.str)
+
+	encode_swap_int_string : SwapIntString, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_swap_int_string = |v, e| encode_swap(v, e, Encode.int, Encode.str)
+
+	from_json_swap_int_string : JsonValue -> Try(SwapIntString, Decode.Error)
+	from_json_swap_int_string = |j| FromJson.within_depth(j, read_json_swap_int_string, encode_swap_int_string)
+
+	read_json_swap_int_string : JsonValue -> Try(SwapIntString, Decode.Error)
+	read_json_swap_int_string = |j| from_json_swap(j, FromJson.int, False, FromJson.str, False)
+
+	to_json_swap_int_string : SwapIntString, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_swap_int_string = |v, e| to_json_swap(v, e, ToJson.int, False, ToJson.str, False)
+
+	## haus type `types#K`.
+	K(a) := [X(K(Int)), Y(a), Unknown(Str, List(Value))]
+
+	decode_k : Value, (Value -> Try(a, Decode.Error)) -> Try(K(a), Decode.Error)
+	decode_k = |v, decode_a| match v {
+		Tag("X", [a0]) => Ok(X(Decode.arg("X", 0, a0, |x25| decode_k(x25, Decode.int))?))
+		Tag("Y", [a0]) => Ok(Y(Decode.arg("Y", 0, a0, decode_a)?))
+		Tag("X", _) => Decode.arity("X", 1)
+		Tag("Y", _) => Decode.arity("Y", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (K)", v)
+	}
+
+	encode_k : K(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_k = |v, e, encode_a| match v {
+		X(a0) => Encode.tagged("X", e, |e26| encode_k(a0, e26, Encode.int))
+		Y(a0) => Encode.tagged("Y", e, |e27| encode_a(a0, e27))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	from_json_k : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(K(a), Decode.Error)
+	from_json_k = |j, from_json_a, _nullable_a| {
+		(tag, ms) = FromJson.variant(j, "K")?
+		match tag {
+			"X" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(X(FromJson.arg(1, 0, a0, |y25| from_json_k(y25, FromJson.int, False))?))
+				_ => FromJson.arity("X", 1)
+			}
+			"Y" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Y(FromJson.arg(1, 0, a0, from_json_a)?))
+				_ => FromJson.arity("Y", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_k : K(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_k = |v, e, to_json_a, _nullable_a| match v {
+		X(a0) => ToJson.tagged("X", e, |e26| to_json_k(a0, e26, ToJson.int, False))
+		Y(a0) => ToJson.tagged("Y", e, |e27| to_json_a(a0, e27))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
+	## haus type `types#KString`.
+	KString : K(Str)
+
+	decode_k_string : Value -> Try(KString, Decode.Error)
+	decode_k_string = |v| Decode.within_depth(v, read_value_k_string)
+
+	read_value_k_string : Value -> Try(KString, Decode.Error)
+	read_value_k_string = |v| decode_k(v, Decode.str)
+
+	encode_k_string : KString, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_k_string = |v, e| encode_k(v, e, Encode.str)
+
+	from_json_k_string : JsonValue -> Try(KString, Decode.Error)
+	from_json_k_string = |j| FromJson.within_depth(j, read_json_k_string, encode_k_string)
+
+	read_json_k_string : JsonValue -> Try(KString, Decode.Error)
+	read_json_k_string = |j| from_json_k(j, FromJson.str, False)
+
+	to_json_k_string : KString, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_k_string = |v, e| to_json_k(v, e, ToJson.str, False)
+
+	## haus type `types#Up`.
+	Up(a) := [Lift(Down(List(a))), Unknown(Str, List(Value))]
+
+	decode_up : Value, (Value -> Try(a, Decode.Error)) -> Try(Up(a), Decode.Error)
+	decode_up = |v, decode_a| match v {
+		Tag("Lift", [a0]) => Ok(Lift(Decode.arg("Lift", 0, a0, |x30| decode_down(x30, |x28| Decode.list(x28, decode_a)))?))
+		Tag("Lift", _) => Decode.arity("Lift", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Up)", v)
+	}
+
+	encode_up : Up(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_up = |v, e, encode_a| match v {
+		Lift(a0) => Encode.tagged("Lift", e, |e31| encode_down(a0, e31, |x29, e29| Encode.list(x29, e29, encode_a)))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	from_json_up : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Up(a), Decode.Error)
+	from_json_up = |j, from_json_a, _nullable_a| {
+		(tag, ms) = FromJson.variant(j, "Up")?
+		match tag {
+			"Lift" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Lift(FromJson.arg(1, 0, a0, |y30| from_json_down(y30, |y28| FromJson.list(y28, from_json_a), False))?))
+				_ => FromJson.arity("Lift", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_up : Up(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_up = |v, e, to_json_a, _nullable_a| match v {
+		Lift(a0) => ToJson.tagged("Lift", e, |e31| to_json_down(a0, e31, |y29, e29| ToJson.list(y29, e29, to_json_a), False))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
+	## haus type `types#Down`.
+	Down(b) := [Val(b), Restart(Up(Int)), Unknown(Str, List(Value))]
+
+	decode_down : Value, (Value -> Try(b, Decode.Error)) -> Try(Down(b), Decode.Error)
+	decode_down = |v, decode_b| match v {
+		Tag("Val", [a0]) => Ok(Val(Decode.arg("Val", 0, a0, decode_b)?))
+		Tag("Restart", [a0]) => Ok(Restart(Decode.arg("Restart", 0, a0, |x33| decode_up(x33, Decode.int))?))
+		Tag("Val", _) => Decode.arity("Val", 1)
+		Tag("Restart", _) => Decode.arity("Restart", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Down)", v)
+	}
+
+	encode_down : Down(b), Encode.Encoder, (b, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_down = |v, e, encode_b| match v {
+		Val(a0) => Encode.tagged("Val", e, |e32| encode_b(a0, e32))
+		Restart(a0) => Encode.tagged("Restart", e, |e34| encode_up(a0, e34, Encode.int))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	from_json_down : JsonValue, (JsonValue -> Try(b, Decode.Error)), Bool -> Try(Down(b), Decode.Error)
+	from_json_down = |j, from_json_b, _nullable_b| {
+		(tag, ms) = FromJson.variant(j, "Down")?
+		match tag {
+			"Val" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Val(FromJson.arg(1, 0, a0, from_json_b)?))
+				_ => FromJson.arity("Val", 1)
+			}
+			"Restart" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Restart(FromJson.arg(1, 0, a0, |y33| from_json_up(y33, FromJson.int, False))?))
+				_ => FromJson.arity("Restart", 1)
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_down : Down(b), Encode.Encoder, (b, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_down = |v, e, to_json_b, _nullable_b| match v {
+		Val(a0) => ToJson.tagged("Val", e, |e32| to_json_b(a0, e32))
+		Restart(a0) => ToJson.tagged("Restart", e, |e34| to_json_up(a0, e34, ToJson.int, False))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
+	## haus type `types#UpString`.
+	UpString : Up(Str)
+
+	decode_up_string : Value -> Try(UpString, Decode.Error)
+	decode_up_string = |v| Decode.within_depth(v, read_value_up_string)
+
+	read_value_up_string : Value -> Try(UpString, Decode.Error)
+	read_value_up_string = |v| decode_up(v, Decode.str)
+
+	encode_up_string : UpString, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_up_string = |v, e| encode_up(v, e, Encode.str)
+
+	from_json_up_string : JsonValue -> Try(UpString, Decode.Error)
+	from_json_up_string = |j| FromJson.within_depth(j, read_json_up_string, encode_up_string)
+
+	read_json_up_string : JsonValue -> Try(UpString, Decode.Error)
+	read_json_up_string = |j| from_json_up(j, FromJson.str, False)
+
+	to_json_up_string : UpString, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_up_string = |v, e| to_json_up(v, e, ToJson.str, False)
+
 }

@@ -97,7 +97,7 @@ ConformanceTest := [].{
     ## The canonical form of each value, one per line.
     canonical : List(U8) -> List(U8)
     canonical = |bytes| match Value.parse_bytes(bytes) {
-        Ok(values) => Str.join_with(values.map(|v| "${Encode.canonical(v)}\\n"), "").to_utf8()
+        Ok(values) => Str.join_with(values.map(|v| "${Encode.canonical(v) ?? "(no canonical form)"}\\n"), "").to_utf8()
         Err(_) => []
     }
 
@@ -117,9 +117,9 @@ ConformanceTest := [].{
     hash : List(U8) -> List(U8)
     hash = |bytes| match (Value.parse_bytes(bytes), streamed(bytes, 3)) {
         (Ok(values), Ok(again)) => {
-            whole = Encode.hash_all(values)
-            running = again.fold(Encode.HashAll.empty, Encode.HashAll.add).digest()
-            if (running == whole) "${whole}\\n".to_utf8() else []
+            whole = Encode.hash_all(values) ?? ""
+            running = again.fold(Encode.HashAll.empty, |h, v| h.add(v) ?? h).digest()
+            if (whole != "" and running == whole) "${whole}\\n".to_utf8() else []
         }
         _ => []
     }

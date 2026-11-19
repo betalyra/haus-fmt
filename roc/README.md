@@ -98,6 +98,15 @@ other for that (`Encode.record(e, [("id", Encode.required(u.id, Encode.int)), �
 and the writers count the values they write too (`Encode.to_str`,
 `JsonValue.to_str`), each value of a stream with a budget of its own.
 
+Decoding a `Value` built in code, and reading a `JsonValue` built in code
+(`decode_<name>`, `from_json_<name>`), count its values first, a shared part
+each time it is reached, as decoding visits it: past `Value.max_nodes`, 64 Mi
+as in TypeScript and Go, they fail with `too-many-nodes` before decoding
+anything. Roc has no way to tell a shared part from a copy, so a value that
+shares its parts 2^40 times fails only after counting 64 Mi values: some 1.5
+seconds in a program built with `--opt=speed`, half a minute in `roc test`.
+A parsed value is a tree, no larger than its text.
+
 Encoders and writers check what they build and write (spec §9.8), so they
 return a `Try(…, Encode.Error)`. What can fail is a `Value` built in code, the
 raw value of an `Any` or an unknown variant: `Num("abc")` is an error
@@ -245,17 +254,26 @@ from the package's other modules.)
 canonical form as 64 lowercase hex digits, and `Encode.hash_all(values)` the
 hash of a list, such as a file or a stream: the canonical forms joined by `,`
 (`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`. Every
-value has a canonical form, so none of them can fail: an integer is written
-in decimal with all its digits, however long.
+parsed value has a canonical form, whatever the limits it was parsed with: an
+integer is written in decimal with all its digits, however long. A `Value`
+built in code may not (spec §9.8): nested deeper than
+`Value.max_supported_depth` it fails with `nesting-too-deep`, and with more
+than `Value.max_nodes` values, a shared part counted each time it is reached
+(`x = Arr([y, y])`), with `too-many-nodes`, before anything is written. So
+each of them gives a `Try`: `Encode.equals(a, b) == Ok(True)`, and to sort,
+`values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
 `Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read:
 
 ```roc
 var $hash = Encode.HashAll.empty
 for value in values {
-    $hash = $hash.add(value)
+    $hash = $hash.add(value)?
 }
 $hash.digest() # == Encode.hash_all(values)
 ```
+
+`Value.within_bounds(v, max_depth, max_nodes)` is the check they make, for a
+value built in code, with your own bounds.
 
 (It isn't called `Hasher`, as in TypeScript and Rust, because Roc has a
 builtin `Hasher`.)
@@ -290,8 +308,8 @@ if `max_depth` is larger, with an error that names the maximum (`max_depth
 says so too. With basic-cli 0.26 a program overflows its stack only past about
 24,000 levels on the deepest path (the self-describing JSON of nested variants,
 measured on aarch64 macOS, optimized and dev builds alike), so 1024 leaves a
-wide margin; the canonical form, the hash and `Encode.equals` take no limits
-and recurse further still (about 70,000 levels). Encoders stop at the depth limit
+wide margin; the canonical form, the hash and `Encode.equals` stop at
+`Value.max_supported_depth` too. Encoders stop at the depth limit
 however deep a native value is, and decoders and JSON readers at the depth
 limit however deep a `Value` or `JsonValue` built in code is; Roc itself
 frees a value recursively, so a value nested some hundred thousand levels
@@ -301,7 +319,8 @@ test`), whatever haus does with it.
 
 `max_steps` in `Value.Limits` bounds the work of encoding and writing one
 value (16 Mi steps by default, `step-budget` past it); parsing and decoding
-don't use it.
+don't use it. Decoding, the canonical form, the hash and equality take at
+most `Value.max_nodes` values (64 Mi, `too-many-nodes` past it).
 
 A generated `from_json_<name>` checks the depth of what it read against 256;
 for another depth limit, check with

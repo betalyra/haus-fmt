@@ -39,15 +39,32 @@
     ["User",{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"nick","optional":true,"type":{"builtin":"String"}},{"key":"note","optional":true,"type":{"maybe":{"builtin":"String"}}}]}}]
   ]},
   {"name": "types", "defs": [
+    ["Apply(#18)",{"record":{"closed":false,"fields":[{"key":"f","optional":false,"type":{"ref":"Code"}},{"key":"args","optional":false,"type":{"array":{"ref":"Code"}}}]}}],
+    ["Code",{"variant":{"closed":false,"cases":[{"tag":"Num","payload":{"positional":[{"builtin":"Int"}]}},{"tag":"Call","payload":{"record":{"closed":false,"fields":[{"key":"f","optional":false,"type":{"ref":"Code"}},{"key":"args","optional":false,"type":{"array":{"ref":"Code"}}}]},"named":{"ref":"Apply(#18)"}}}]}}],
+    ["Down(Array(Int))",{"variant":{"closed":false,"cases":[{"tag":"Val","payload":{"positional":[{"array":{"builtin":"Int"}}]}},{"tag":"Restart","payload":{"positional":[{"ref":"Up(Int)"}]}}]}}],
+    ["Down(Array(String))",{"variant":{"closed":false,"cases":[{"tag":"Val","payload":{"positional":[{"array":{"builtin":"String"}}]}},{"tag":"Restart","payload":{"positional":[{"ref":"Up(Int)"}]}}]}}],
     ["Expr",{"variant":{"closed":true,"cases":[{"tag":"Num","payload":{"positional":[{"builtin":"Int"}]}},{"tag":"Add","payload":{"positional":[{"ref":"Expr"},{"ref":"Expr"}]}},{"tag":"Neg","payload":{"record":{"closed":false,"fields":[{"key":"of","optional":false,"type":{"ref":"Expr"}}]}}}]}}],
     ["Forest(Int)",{"array":{"ref":"GTree(Int)"}}],
     ["GTree(Int)",{"record":{"closed":false,"fields":[{"key":"value","optional":false,"type":{"builtin":"Int"}},{"key":"kids","optional":false,"type":{"ref":"Forest(Int)"}}]}}],
+    ["IntNode",{"ref":"Node(Int)"}],
     ["IntPair",{"ref":"Pair(Int)"}],
     ["IntTree",{"ref":"GTree(Int)"}],
     ["Ints",{"ref":"List(Int)"}],
+    ["K(Int)",{"variant":{"closed":false,"cases":[{"tag":"X","payload":{"positional":[{"ref":"K(Int)"}]}},{"tag":"Y","payload":{"positional":[{"builtin":"Int"}]}}]}}],
+    ["K(String)",{"variant":{"closed":false,"cases":[{"tag":"X","payload":{"positional":[{"ref":"K(Int)"}]}},{"tag":"Y","payload":{"positional":[{"builtin":"String"}]}}]}}],
+    ["KString",{"ref":"K(String)"}],
     ["List(Int)",{"variant":{"closed":false,"cases":[{"tag":"Nil","payload":"none"},{"tag":"Cons","payload":{"positional":[{"builtin":"Int"},{"ref":"List(Int)"}]}}]}}],
+    ["Meta",{"record":{"closed":false,"fields":[{"key":"history","optional":false,"type":{"array":{"ref":"Node(String)"}}}]}}],
+    ["Node(Int)",{"record":{"closed":false,"fields":[{"key":"value","optional":false,"type":{"builtin":"Int"}},{"key":"meta","optional":false,"type":{"ref":"Meta"}}]}}],
+    ["Node(String)",{"record":{"closed":false,"fields":[{"key":"value","optional":false,"type":{"builtin":"String"}},{"key":"meta","optional":false,"type":{"ref":"Meta"}}]}}],
     ["Pair(Int)",{"record":{"closed":false,"fields":[{"key":"first","optional":false,"type":{"builtin":"Int"}},{"key":"second","optional":false,"type":{"builtin":"Int"}}]}}],
-    ["Tree",{"record":{"closed":false,"fields":[{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"children","optional":false,"type":{"array":{"ref":"Tree"}}}]}}]
+    ["Swap(Int,String)",{"variant":{"closed":false,"cases":[{"tag":"S","payload":{"positional":[{"builtin":"Int"},{"ref":"Swap(String,Int)"}]}},{"tag":"E","payload":"none"}]}}],
+    ["Swap(String,Int)",{"variant":{"closed":false,"cases":[{"tag":"S","payload":{"positional":[{"builtin":"String"},{"ref":"Swap(Int,String)"}]}},{"tag":"E","payload":"none"}]}}],
+    ["SwapIntString",{"ref":"Swap(Int,String)"}],
+    ["Tree",{"record":{"closed":false,"fields":[{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"children","optional":false,"type":{"array":{"ref":"Tree"}}}]}}],
+    ["Up(Int)",{"variant":{"closed":false,"cases":[{"tag":"Lift","payload":{"positional":[{"ref":"Down(Array(Int))"}]}}]}}],
+    ["Up(String)",{"variant":{"closed":false,"cases":[{"tag":"Lift","payload":{"positional":[{"ref":"Down(Array(String))"}]}}]}}],
+    ["UpString",{"ref":"Up(String)"}]
   ]},
   {"name": "variants", "defs": [
     ["AnyTag",{"variant":{"closed":false,"cases":[]}}],

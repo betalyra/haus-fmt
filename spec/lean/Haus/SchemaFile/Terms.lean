@@ -154,6 +154,100 @@ theorem zip_take : ∀ (ps : List String) (as : List Tm), ps.zip as = ps.zip (as
   | _ :: _, [] => by simp
   | p :: ps, a :: as => by simp [zip_take ps as]
 
+/-- Substitution looks only at the parameters a type uses. -/
+theorem Tm.subst_congr {σ τ : Subst} : ∀ (t : Tm), (∀ v ∈ t.vars, σ.lookup v = τ.lookup v) →
+    t.subst σ = t.subst τ
+  | .var p, h => by simp [h p (by simp)]
+  | .ref n as, h => by
+    simp only [Tm.subst_ref, Tm.ref.injEq, true_and]
+    exact List.map_congr_left fun a ha =>
+      Tm.subst_congr a fun v hv => h v (by simp only [Tm.vars_ref, List.mem_flatMap]; exact ⟨a, ha, hv⟩)
+  | .node l ks, h => by
+    simp only [Tm.subst_node, Tm.node.injEq, true_and]
+    exact List.map_congr_left fun a ha =>
+      Tm.subst_congr a fun v hv => h v (by simp only [Tm.vars_node, List.mem_flatMap]; exact ⟨a, ha, hv⟩)
+termination_by t => sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals
+    have := List.sizeOf_lt_of_mem ha
+    omega
+
+/-- The empty substitution changes nothing. -/
+theorem Tm.subst_nil : ∀ (t : Tm), t.subst [] = t
+  | .var p => by simp
+  | .ref n as => by
+    simp only [Tm.subst_ref, Tm.ref.injEq, true_and]
+    conv => rhs; rw [← List.map_id as]
+    exact List.map_congr_left fun a ha => Tm.subst_nil a
+  | .node l ks => by
+    simp only [Tm.subst_node, Tm.node.injEq, true_and]
+    conv => rhs; rw [← List.map_id ks]
+    exact List.map_congr_left fun a ha => Tm.subst_nil a
+termination_by t => sizeOf t
+decreasing_by
+  all_goals simp_wf
+  all_goals
+    have := List.sizeOf_lt_of_mem ha
+    omega
+
+/-- A type without parameters stays as it is. -/
+theorem Tm.subst_closed {σ : Subst} {t : Tm} (h : t.vars = []) : t.subst σ = t := by
+  rw [Tm.subst_congr (τ := []) t (by simp [h]), Tm.subst_nil]
+
+/-- What a parameter is looked up as is paired with it. -/
+theorem lookup_mem_pair : ∀ (l : Subst) {v : String} {u : Tm}, l.lookup v = some u → (v, u) ∈ l
+  | [], _, _, h => by simp at h
+  | (p, a) :: l, v, u, h => by
+    simp only [List.lookup_cons] at h
+    split at h
+    · next hv =>
+      cases h
+      simp at hv; subst hv; simp
+    · exact List.mem_cons_of_mem _ (lookup_mem_pair l h)
+
+/--
+The arguments a substitution needs for the parameters `P` holds: those, the
+others replaced by the parameters themselves.
+-/
+theorem zip_restrict (P : String → Bool) : ∀ (ps : List String) (as : List Tm), ∃ bs : List Tm,
+    bs.length ≤ ps.length ∧
+    (∀ b ∈ bs, (∃ p, (p, b) ∈ ps.zip as ∧ P p = true) ∨ ∃ p ∈ ps, b = .var p) ∧
+    ∀ v, P v = true → (ps.zip bs).lookup v = (ps.zip as).lookup v
+  | [], _ => ⟨[], by simp, by simp, by simp⟩
+  | _ :: _, [] => ⟨[], by simp, by simp, by simp⟩
+  | p :: ps, a :: as => by
+    obtain ⟨bs, hl, hm, hk⟩ := zip_restrict P ps as
+    refine ⟨(if P p then a else .var p) :: bs, by simp; omega, ?_, ?_⟩
+    · intro b hb
+      rcases List.mem_cons.1 hb with rfl | hb
+      · by_cases hp : P p = true
+        · exact Or.inl ⟨p, by simp [hp], hp⟩
+        · exact Or.inr ⟨p, by simp, by simp [hp]⟩
+      · rcases hm b hb with ⟨q, hq, hP⟩ | ⟨q, hq, rfl⟩
+        · exact Or.inl ⟨q, by simp [hq], hP⟩
+        · exact Or.inr ⟨q, by simp [hq], rfl⟩
+    · intro v hv
+      simp only [List.zip_cons_cons, List.lookup_cons]
+      split
+      · next h => simp at h; subst h; simp [hv]
+      · exact hk v hv
+
+/-- With parameters each written once, a parameter is looked up as the argument paired with it. -/
+theorem lookup_zip_nodup : ∀ (ps : List String) (es : List Tm) {q : String} {e : Tm},
+    ps.Nodup → (q, e) ∈ ps.zip es → (ps.zip es).lookup q = some e
+  | [], _, _, _, _, h => by simp at h
+  | _ :: _, [], _, _, _, h => by simp at h
+  | p :: ps, a :: as, q, e, hn, h => by
+    simp only [List.zip_cons_cons, List.mem_cons, Prod.mk.injEq] at h
+    simp only [List.zip_cons_cons, List.lookup_cons]
+    rcases h with ⟨rfl, rfl⟩ | h
+    · simp
+    · have hq : q ≠ p := fun e => (List.nodup_cons.1 hn).1 (e ▸ (List.of_mem_zip h).1)
+      split
+      · next h' => simp at h'; exact absurd h' hq
+      · exact lookup_zip_nodup ps as (List.nodup_cons.1 hn).2 h
+
 /-! ## Lists of bounded length -/
 
 /-- The lists of at most `n` elements of `X`. -/

@@ -136,7 +136,7 @@ schema_based_case = |cases, i| {
 		_ => {
 			match JsonValue.parse(json) {
 				Ok(j) => match read(ty, j) {
-					Ok(v) => Err("read as ${Encode.canonical(v)}")
+					Ok(v) => Err("read as ${form(v)}")
 					Err(e) => rejected(Err(Decode(e)), fields)
 				}
 				Err(e) => rejected(Err(Syntax(e)), fields)
@@ -166,7 +166,7 @@ import_case = |cases, i| {
 	match (tag, JsonValue.import_json(json)) {
 		("Read", Ok(v)) => {
 			want = value(fields, "output")?
-			if (Encode.equals(v, want)) Ok({}) else Err("read as ${Encode.canonical(v)}")
+			if (same(v, want)) Ok({}) else Err("read as ${form(v)}")
 		}
 		("Read", Err(_)) => Err("can't read it")
 		(_, result) => rejected(result, fields)
@@ -181,7 +181,7 @@ rejected = |result, fields| {
 	code = text(fields, "code")?
 	path = text(fields, "path")
 	match result {
-		Ok(v) => Err("read as ${Encode.canonical(v)}")
+		Ok(v) => Err("read as ${form(v)}")
 		Err(Syntax(e)) =>
 			match path {
 				Ok(p) => Err("failed in the JSON text (${e.code} at ${e.line.to_str()}:${e.column.to_str()}), expected ${code} at ${p}")
@@ -211,8 +211,8 @@ valid_case = |haus, jsonl| {
 		return Err("wrote ${got}")
 	}
 	match JsonValue.from_haus_json_lines(want) {
-		Ok(back) if back.len() == values.len() and back.map2(values, Encode.equals).all(|same| same) => Ok({})
-		Ok(back) => Err("read as ${Str.join_with(back.map(Encode.canonical), ", ")}")
+		Ok(back) if back.len() == values.len() and back.map2(values, same).all(|equal| equal) => Ok({})
+		Ok(back) => Err("read as ${Str.join_with(back.map(form), ", ")}")
 		Err(_) => Err("can't read it")
 	}
 }
@@ -220,8 +220,8 @@ valid_case = |haus, jsonl| {
 ## Reading the self-describing `json` gives a value equal to `want`.
 reads_back : Str, Value -> Try({}, Str)
 reads_back = |json, want| match JsonValue.from_haus_json(json) {
-	Ok(v) if Encode.equals(v, want) => Ok({})
-	Ok(v) => Err("read as ${Encode.canonical(v)}")
+	Ok(v) if same(v, want) => Ok({})
+	Ok(v) => Err("read as ${form(v)}")
 	Err(_) => Err("can't read it")
 }
 
@@ -323,6 +323,14 @@ read = |ty, j| match ty {
 	_ => Decode.fail("no-type", "no type ${ty}")
 }
 
+## The canonical form of a value that has one: every parsed or read value.
+form : Value -> Str
+form = |v| Encode.canonical(v) ?? "(no canonical form)"
+
+## Whether two values are equal (spec §2).
+same : Value, Value -> Bool
+same = |a, b| Encode.equals(a, b) == Ok(True)
+
 ## The value read, encoded as haus.
 encoded : Try(a, Decode.Error), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, Decode.Error)
 encoded = |read_value, encode| Encode.value(read_value?, encode)
@@ -342,7 +350,7 @@ read_as : Str, Str, Value -> Try({}, Str)
 read_as = |ty, json, want| {
 	j = JsonValue.parse(json).map_err(|e| "can't parse the JSON: ${e.reason}")?
 	got = read(ty, j).map_err(Decode.message)?
-	if (Encode.equals(got, want)) Ok({}) else Err("read as ${Encode.canonical(got)}")
+	if (same(got, want)) Ok({}) else Err("read as ${form(got)}")
 }
 
 ## Whether two JSON texts are the same data: member order and whitespace

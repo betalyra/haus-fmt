@@ -4,9 +4,10 @@
 //! [`syntax`](crate::syntax).
 //!
 //! Generic types are applied by instantiating them (`List Int` is a type of
-//! its own), which terminates because a generic type may refer to itself only
-//! with its own parameters (§9.10); a limit on the number of instances is a
-//! second guard.
+//! its own), which terminates because no type parameter passes, inside a
+//! bigger type, along a cycle of references back to itself (§9.10, the
+//! expansive-cycle rule); a limit on the number of instances is a second
+//! guard.
 
 use crate::files::{self, FileCache, Found};
 use crate::locator::{Locator, NoImports, duplicate};
@@ -777,99 +778,50 @@ impl<'a> Loader<'a> {
     }
 
     /// The file's own definitions: in scope, unless a name is also imported;
-    /// generic ones refer to themselves with their own parameters only (§9.10).
+    /// generic ones can't grow without bound (§9.10).
     fn own_types(&mut self, unit: usize) -> Result<(), Fail> {
-        let defs: Vec<(String, usize, Vec<String>)> =
-            self.units[unit].file.types.iter().map(|d| (d.name.clone(), d.pos, d.params.clone())).collect();
-        for (d, (name, pos, _)) in defs.iter().enumerate() {
+        let defs: Vec<(String, usize)> = self.units[unit].file.types.iter().map(|d| (d.name.clone(), d.pos)).collect();
+        for (d, (name, pos)) in defs.iter().enumerate() {
             let u = &mut self.units[unit];
             if u.scope.contains_key(name) || u.std.contains_key(name) {
                 return fail(unit, *pos, Code::DuplicateType, format!("type {name} is already imported"));
             }
             u.own.insert(name.clone(), d);
         }
-        for (d, (name, _, _)) in defs.iter().enumerate() {
+        for (d, (name, _)) in defs.iter().enumerate() {
             self.units[unit].scope.insert(name.clone(), (unit, d));
         }
-        for (d, (name, _, params)) in defs.iter().enumerate() {
-            let mut bad = None;
-            walk(&self.units[unit].file.types[d].ty, &mut |t| {
-                if let Ty::Name { name: n, args, pos } = t
-                    && n == name
-                    && bad.is_none()
-                {
-                    let own = args.len() == params.len()
-                        && args.iter().zip(params).all(|(a, p)| matches!(a, Ty::Param { name, .. } if name == p));
-                    if !own {
-                        bad = Some(*pos);
-                    }
-                }
-            });
-            if let Some(pos) = bad {
-                let whole = std::iter::once(name.as_str()).chain(params.iter().map(String::as_str)).collect::<Vec<_>>();
-                return fail(
-                    unit,
-                    pos,
-                    Code::GrowingRecursion,
-                    format!(
-                        "{name} must refer to itself with its own parameters ({}); other arguments could grow without bound",
-                        whole.join(" ")
-                    ),
-                );
-            }
-        }
-        self.groups(unit)
+        self.growth(unit)
     }
 
-    /// §9.10, through other definitions: in a group of definitions that refer
-    /// to each other, directly or not (a strongly connected component of the
-    /// references), a reference to another member passes only parameters of
-    /// the referring definition, so instances can't grow around the group.
-    /// Checked on the definitions as written, before anything is instantiated.
-    /// (A reference to itself passes its own parameters in order, checked
-    /// before.) Groups are within one file: imports have no cycles.
-    fn groups(&self, unit: usize) -> Result<(), Fail> {
+    /// §9.10, the expansive-cycle rule: no type parameter passes, inside a
+    /// bigger type, along a cycle of references back to itself (see
+    /// [`Growth`]). The first expanding edge on a cycle is reported, at its
+    /// reference: definitions in order, references in body order (outermost
+    /// first), then by argument. Checked on the definitions as written, before
+    /// anything is instantiated. Cycles are within one file: imports have no
+    /// cycles.
+    fn growth(&self, unit: usize) -> Result<(), Fail> {
         let u = &self.units[unit];
-        // Per definition: the file's own definitions it refers to, whether
-        // only with parameters, and where.
-        let refs: Vec<Vec<(usize, bool, usize)>> = u
-            .file
-            .types
-            .iter()
-            .map(|def| {
-                let mut out = vec![];
-                walk(&def.ty, &mut |t| {
-                    if let Ty::Name { name, args, pos } = t
-                        && let Some(&(du, dd)) = u.scope.get(name)
-                        && du == unit
-                    {
-                        out.push((dd, args.iter().all(|a| matches!(a, Ty::Param { .. })), *pos));
-                    }
-                });
-                out
-            })
-            .collect();
-        let edges: Vec<Vec<usize>> = refs.iter().map(|r| r.iter().map(|&(to, ..)| to).collect()).collect();
-        let group = components(&edges);
-        for (d, out) in refs.iter().enumerate() {
-            let Some(&(to, _, pos)) = out.iter().find(|&&(to, params, _)| to != d && group[to] == group[d] && !params)
-            else {
+        let graph = Growth::new(&u.file.types, &u.own);
+        let component = components(&graph.edges);
+        for pass in &graph.passes {
+            let to = graph.first[pass.to] + pass.index;
+            if pass.from.is_none_or(|from| component[from] != component[to]) {
                 continue;
-            };
-            let (def, target) = (&u.file.types[d], &u.file.types[to].name);
-            let name = &def.name;
-            let may = match def.params.is_empty() {
-                true => "has no parameters to pass it".to_string(),
-                false => format!("may pass it only its own parameters ({})", def.params.join(" ")),
-            };
-            return fail(
-                unit,
-                pos,
-                Code::GrowingRecursion,
-                format!(
-                    "{name} refers to {target}, which refers back to {name}: {name} {may}; other arguments could grow without bound"
-                ),
-            );
+            }
+            // The first parameter in the argument that the cycle comes back to.
+            let mut back = None;
+            walk(pass.arg, &mut |t| {
+                if let Ty::Param { name, .. } = t
+                    && back.is_none()
+                {
+                    back = graph.param(pass.def, name).filter(|&a| component[a] == component[to]);
+                }
+            });
+            if let Some(a) = back {
+                return fail(unit, pass.pos, Code::GrowingRecursion, graph.growing(a, to, &component));
+            }
         }
         Ok(())
     }
@@ -1328,6 +1280,213 @@ fn walk(t: &Ty, f: &mut impl FnMut(&Ty)) {
         Ty::Param { .. } => {}
         Ty::Record { fields, .. } => fields.iter().for_each(|x| walk(&x.ty, f)),
         Ty::Variant { cases, .. } => cases.iter().flat_map(|c| &c.payload).for_each(|p| walk(p, f)),
+    }
+}
+
+/// The parameter graph of §9.10 for one file. It has a node per type
+/// parameter of every definition, and for each reference `B t₁ … tₙ` in the
+/// body of a definition `A` to a definition `B` of the file (not one of the
+/// prelude's), an edge from each parameter `a` of `A` occurring in `tᵢ` to the
+/// i-th parameter of `B`: *expanding* unless `tᵢ` is `a` itself. A schema in
+/// which an expanding edge lies on a cycle could have instances that grow
+/// without bound (`type T a = < X (T (Pair a a)) >`).
+///
+/// Built in linear time: rather than an edge per occurrence of a parameter
+/// (`a` nested in n references would count n times), an argument with
+/// several parameters gets a node of its own that they flow into, so that
+/// the node of `tᵢ` reaches exactly the parameters occurring in it, and the
+/// edge from it stands for the edges of all of them. Paths between
+/// parameters, and so cycles, are those of the parameter graph.
+struct Growth<'a> {
+    types: &'a [syntax::TypeDef],
+    own: &'a HashMap<String, usize>,
+    /// Node `first[d] + p` is parameter `p` of definition `d`.
+    first: Vec<usize>,
+    /// Per parameter node: its definition.
+    owner: Vec<usize>,
+    /// The parameter nodes, then the nodes of arguments with several parameters.
+    edges: Vec<Vec<usize>>,
+    /// The arguments other than a bare parameter, each passed to a
+    /// definition of the file, in the order they are checked.
+    passes: Vec<Pass<'a>>,
+}
+
+/// An argument other than a bare parameter passed to a definition of the
+/// file: the `P a a` of `B (P a a)`.
+struct Pass<'a> {
+    /// The definition the reference is in, and where.
+    def: usize,
+    pos: usize,
+    /// The definition referred to, and which of its parameters the argument is for.
+    to: usize,
+    index: usize,
+    arg: &'a Ty,
+    /// The node of the argument's parameters, if it has any.
+    from: Option<usize>,
+}
+
+impl<'a> Growth<'a> {
+    fn new(types: &'a [syntax::TypeDef], own: &'a HashMap<String, usize>) -> Growth<'a> {
+        let first: Vec<usize> = types
+            .iter()
+            .scan(0, |next, def| {
+                let at = *next;
+                *next += def.params.len();
+                Some(at)
+            })
+            .collect();
+        let owner: Vec<usize> =
+            types.iter().enumerate().flat_map(|(d, def)| std::iter::repeat_n(d, def.params.len())).collect();
+        let edges = vec![vec![]; owner.len()];
+        let mut graph = Growth { types, own, first, owner, edges, passes: vec![] };
+        for (d, def) in types.iter().enumerate() {
+            graph.flow(d, &def.ty);
+        }
+        graph
+    }
+
+    /// The definition of the file `name` refers to, if it is one (the
+    /// prelude's generic types come first).
+    fn callee(&self, name: &str) -> Option<usize> {
+        match GENERIC.iter().any(|(g, _)| *g == name) {
+            true => None,
+            false => self.own.get(name).copied(),
+        }
+    }
+
+    /// The node of parameter `name` of definition `d`, if it has one.
+    fn param(&self, d: usize, name: &str) -> Option<usize> {
+        self.types[d].params.iter().position(|p| p == name).map(|p| self.first[d] + p)
+    }
+
+    /// Adds the edges of the references in `t`, in definition `d`; the node
+    /// that the parameters occurring in `t` flow into, if any do.
+    fn flow(&mut self, d: usize, t: &'a Ty) -> Option<usize> {
+        match t {
+            Ty::Param { name, .. } => self.param(d, name),
+            Ty::Name { name, args, pos } => {
+                let callee = self.callee(name).map(|b| (b, args.len().min(self.types[b].params.len())));
+                let nested: Vec<usize> =
+                    callee.map_or(vec![], |(_, n)| (0..n).filter(|&i| !matches!(args[i], Ty::Param { .. })).collect());
+                // This reference's arguments are checked before those of the references inside them.
+                let start = self.passes.len();
+                if let Some((to, _)) = callee {
+                    self.passes.extend(nested.iter().map(|&index| Pass {
+                        def: d,
+                        pos: *pos,
+                        to,
+                        index,
+                        arg: &args[index],
+                        from: None,
+                    }));
+                }
+                let nodes: Vec<Option<usize>> = args.iter().map(|a| self.flow(d, a)).collect();
+                if let Some((to, n)) = callee {
+                    for (i, node) in nodes.iter().enumerate().take(n) {
+                        if let Some(node) = *node {
+                            self.edges[node].push(self.first[to] + i);
+                        }
+                    }
+                    for (k, &i) in nested.iter().enumerate() {
+                        self.passes[start + k].from = nodes[i];
+                    }
+                }
+                self.join(nodes.into_iter().flatten().collect())
+            }
+            Ty::Record { fields, .. } => {
+                let nodes: Vec<Option<usize>> = fields.iter().map(|f| self.flow(d, &f.ty)).collect();
+                self.join(nodes.into_iter().flatten().collect())
+            }
+            Ty::Variant { cases, .. } => {
+                let nodes: Vec<Option<usize>> =
+                    cases.iter().flat_map(|c| &c.payload).map(|p| self.flow(d, p)).collect();
+                self.join(nodes.into_iter().flatten().collect())
+            }
+        }
+    }
+
+    /// One node for `nodes`: none for none, the node for one (or the same one
+    /// again), otherwise a new node they all flow into.
+    fn join(&mut self, nodes: Vec<usize>) -> Option<usize> {
+        let &one = nodes.first()?;
+        if nodes.iter().all(|&n| n == one) {
+            return Some(one);
+        }
+        let joined = self.edges.len();
+        self.edges.push(vec![]);
+        for n in nodes {
+            self.edges[n].push(joined);
+        }
+        Some(joined)
+    }
+
+    /// The message for parameter node `a` passed, inside a bigger type, to
+    /// parameter node `to`, from where it comes back to `a`.
+    fn growing(&self, a: usize, to: usize, component: &[usize]) -> String {
+        let (def, b) = (self.owner[a], self.owner[to]);
+        let (name, param) = (&self.types[def].name, &self.types[def].params[a - self.first[def]]);
+        if a == to {
+            return format!(
+                "{name} passes its parameter {param} to itself inside a bigger type: instances could grow without bound"
+            );
+        }
+        let target = match b == def {
+            true => "itself",
+            false => self.types[b].name.as_str(),
+        };
+        let names = [def, b]
+            .into_iter()
+            .chain(self.way(to, a, component).into_iter().map(|n| self.owner[n]))
+            .map(|d| self.types[d].name.as_str())
+            .collect::<Vec<_>>()
+            .join(" → ");
+        format!(
+            "{name} passes its parameter {param} to {target} inside a bigger type, and it comes back ({names}): instances could grow without bound"
+        )
+    }
+
+    /// A shortest way along the parameter graph's edges from parameter node
+    /// `from` to `to` in the same component: the nodes after `from` (a
+    /// breadth-first search, each node's edges in the order of its references).
+    /// Only for a message, so it builds the edges between parameters itself.
+    fn way(&self, from: usize, to: usize, component: &[usize]) -> Vec<usize> {
+        let mut edges = vec![vec![]; self.owner.len()];
+        for (d, def) in self.types.iter().enumerate() {
+            walk(&def.ty, &mut |t| {
+                let Ty::Name { name, args, .. } = t else { return };
+                let Some(b) = self.callee(name) else { return };
+                for (i, arg) in args.iter().take(self.types[b].params.len()).enumerate() {
+                    walk(arg, &mut |x| {
+                        if let Ty::Param { name, .. } = x
+                            && let Some(p) = self.param(d, name)
+                        {
+                            edges[p].push(self.first[b] + i);
+                        }
+                    });
+                }
+            });
+        }
+        let mut before = vec![None; edges.len()];
+        let mut queue = VecDeque::from([from]);
+        while let Some(n) = queue.pop_front() {
+            if n == to {
+                break;
+            }
+            for &m in &edges[n] {
+                if m != from && before[m].is_none() && component[m] == component[from] {
+                    before[m] = Some(n);
+                    queue.push_back(m);
+                }
+            }
+        }
+        let mut way = vec![];
+        let mut n = to;
+        while let Some(prev) = before[n] {
+            way.push(n);
+            n = prev;
+        }
+        way.reverse();
+        way
     }
 }
 

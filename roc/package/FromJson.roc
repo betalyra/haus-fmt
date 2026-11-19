@@ -66,8 +66,12 @@ FromJson := [].{
 	## level, so the JSON may nest deeper and the value is checked after
 	## reading). Before reading, the JSON must nest at most 4·256 + 1 levels,
 	## as the parser takes it, so that JSON built in code nested deeper fails
-	## with `nesting-too-deep` instead of overflowing the stack. A generated
-	## `from_json_<name>` reads so; the readers it is built from don't check.
+	## with `nesting-too-deep` instead of overflowing the stack, and have at
+	## most `Value.max_nodes` values, so that JSON built in code that shares
+	## its parts (a DAG), which reading visits each time they are reached,
+	## fails with `too-many-nodes` instead of expanding without bound (spec
+	## §9.8). A generated `from_json_<name>` reads so; the readers it is built
+	## from don't check.
 	within_depth : JsonValue, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(a, Decode.Error)
 	within_depth = |json, reader, encode| within_limits(json, reader, encode, Value.default_limits)
 
@@ -83,15 +87,7 @@ FromJson := [].{
 	## `encode` checks it for these limits; like its errors inside a `Secret`,
 	## these say what, not where.
 	within_limits : JsonValue, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), Value.Limits -> Try(a, Decode.Error)
-	within_limits = |json, reader, encode, limits| {
-		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
-		nests_within(json, 4 * limits.max_depth + 1)?
-		x = reader(json)?
-		match encode(x, Encode.top_with(limits)) {
-			Ok(_) => Ok(x)
-			Err(e) => Err({ ..e, path: "" })
-		}
-	}
+	within_limits = |json, reader, encode, limits| read_within(json, reader, encode, limits, Value.max_nodes)
 
 	# ── scalars ─────────────────────────────────────────────
 
@@ -508,15 +504,30 @@ FromJson := [].{
 	no_json_form = |tag, name| Decode.fail(ErrorCode.no_json_form, "${tag} has a field named ${name}, so it has no schema-based JSON form")
 }
 
+## `within_limits`, with at most `max_nodes` values in `json`.
+read_within : JsonValue, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), Value.Limits, U64 -> Try(a, Decode.Error)
+read_within = |json, reader, encode, limits, max_nodes| {
+	Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
+	nests_within(json, 4 * limits.max_depth + 1, max_nodes)?
+	x = reader(json)?
+	match encode(x, Encode.top_with(limits)) {
+		Ok(_) => Ok(x)
+		Err(e) => Err({ ..e, path: "" })
+	}
+}
+
 ## Whether `json` nests at most `max` levels of arrays and objects, as the
-## parser takes it: `nesting-too-deep` otherwise, at the first array or object
-## too deep. Walked with a list rather than recursion, so that JSON built in
-## code, however deep, is checked without overflowing the stack.
-nests_within : JsonValue, U64 -> Try({}, Decode.Error)
-nests_within = |json, max| {
+## parser takes it, and has at most `max_nodes` values, a part shared in JSON
+## built in code counted each time it is reached: `nesting-too-deep` at the
+## first array or object too deep, or `too-many-nodes`, otherwise. Walked
+## with a list rather than recursion, so that JSON built in code, however
+## deep, is checked without overflowing the stack.
+nests_within : JsonValue, U64, U64 -> Try({}, Decode.Error)
+nests_within = |json, max, max_nodes| {
 	# The containers from `json` down to the one being walked, each with its next item.
 	var $path = []
 	var $next = if (opens(json)) Ok(json) else Err({})
+	var $nodes = 1.U64
 	while True {
 		match $next {
 			Ok(j) => {
@@ -532,6 +543,10 @@ nests_within = |json, max| {
 				$path = $path.drop_last(1)
 				match item(j, i) {
 					Ok(x) => {
+						$nodes = $nodes + 1
+						if $nodes > max_nodes {
+							return Decode.fail(ErrorCode.too_many_nodes, "JSON value has more than ${max_nodes.to_str()} nodes")
+						}
 						$path = $path.append((j, i + 1))
 						$next = if (opens(x)) Ok(x) else Err({})
 					}
@@ -622,31 +637,31 @@ expect FromJson.one("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(
 ) == Err(".value: expected a number (Int32), found a string")
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"sides\": 6}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Other(tag, args) => canonical_text(Tag(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon{sides:6}")
 # `_args` alone: the arguments; beside other members, or `args`: a record payload.
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Other(tag, args) => canonical_text(Tag(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon(1,\"a\")")
 expect FromJson.one("{\"_tag\": \"Run\", \"args\": [1, 2]}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Other(tag, args) => canonical_text(Tag(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Run{args:[1,2]}")
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => Encode.canonical(Tag(tag, args))
+		Other(tag, args) => canonical_text(Tag(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon{_args:[{_num:\"1\"}],x:2}")
 # `Any` inside schema-based JSON accepts raw DEL, C1 and bidi controls.
-expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(Encode.canonical) == Ok("\"a\\u{7F}\\u{85}\\u{202E}\"")
+expect FromJson.one("\"a\u(7F)\u(85)\u(202E)\"", FromJson.any).map_ok(canonical_text) == Ok("\"a\\u{7F}\\u{85}\\u{202E}\"")
 expect FromJson.one(
 	"{\"pin\": 98765}",
 	|j| {
@@ -665,7 +680,7 @@ expect FromJson.lines("1\n2\n", FromJson.u8) == Ok([1, 2])
 expect code_of_lines("1\n2\n\"x\"\n", FromJson.u8) == "type-mismatch at $[2]"
 expect code_of_lines("{\"price\": 1}\n{\"price\": \"1\"}", |j| FromJson.field(FromJson.object(j, "Item")?, "price", FromJson.i32)) == "type-mismatch at $[1].price"
 expect code_of_lines("1\n\n2\n", FromJson.u8) == "json-syntax at line 2" and code_of_lines("1\r\n\u(FEFF)2\r\n", FromJson.u8) == "json-syntax at line 2"
-expect FromJson.within_depth(Null, |_| Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), Encode.any).map_ok(Encode.canonical) == Ok("[{a:Some([])}]")
+expect FromJson.within_depth(Null, |_| Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), Encode.any).map_ok(canonical_text) == Ok("[{a:Some([])}]")
 expect FromJson.within_depth(Null, |_| Ok(nest(256)), Encode.any).is_ok()
 expect FromJson.within_depth(Null, |_| Ok(nest(257)), Encode.any).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
 expect FromJson.within_depth(Null, |_| Ok(Tag("Box", [Rec([("w", nest(255))])])), Encode.any).is_ok()
@@ -868,3 +883,37 @@ somes = |n| {
 
 expect FromJson.within_depth(somes(256), loop, Encode.any).is_ok() and FromJson.within_depth(somes(257), loop, Encode.any).map_err(|e| e.reason).map_ok(|_| {}) == Err("nesting deeper than 256 levels")
 expect FromJson.within_depth(somes(1026), loop, Encode.any).map_err(|e| e.reason).map_ok(|_| {}) == Err("JSON nested deeper than 1025 levels")
+
+# JSON built in code may share its parts (a DAG, spec §9.8): `shared_json(n)`
+# is n + 1 arrays in memory but 2^(n + 1) − 1 values, which reading visits.
+# They are counted first, so 2^41 − 1 fail at the limit, before anything is read.
+shared_json : U64 -> JsonValue
+shared_json = |levels| {
+	var $j = Array([])
+	var $i = 0
+	while $i < levels {
+		$j = Array([$j, $j])
+		$i = $i + 1
+	}
+	$j
+}
+
+## The values in nested arrays, as reading visits them.
+values_in : JsonValue -> Try(U64, Decode.Error)
+values_in = |j| FromJson.list(j, values_in).map_ok(|counts| counts.fold(1, |a, b| a + b))
+
+## How `values_in` writes what it read: as many empty arrays.
+encode_count : U64, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+encode_count = |n, e| Encode.list(List.repeat(n, 0), e, |_, e1| Encode.list([], e1, |_, e2| Encode.number("0", e2)))
+
+expect read_within(shared_json(40), values_in, encode_count, Value.default_limits, 100_000).map_ok(|_| {}) == Err({ code: "too-many-nodes", reason: "JSON value has more than 100000 nodes", path: "" })
+# A shared part counts each time it is reached: 2^4 − 1 for three levels, at the limit and one under, read as the tree it stands for.
+expect {
+	tree = JsonValue.parse("[[[[],[]],[[],[]]],[[[],[]],[[],[]]]]") ?? Null
+	[shared_json(3), tree].all(|j| read_within(j, values_in, encode_count, Value.default_limits, 15) == Ok(15) and read_within(j, values_in, encode_count, Value.default_limits, 14).map_err(|e| e.code) == Err("too-many-nodes"))
+		and FromJson.within_depth(shared_json(3), values_in, encode_count) == Ok(15)
+}
+
+## The canonical form of a value that has one: every parsed value.
+canonical_text : Value -> Str
+canonical_text = |v| Encode.canonical(v) ?? "(no canonical form)"

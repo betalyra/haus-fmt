@@ -1,0 +1,3 @@
+// L Int needs L (Array Int), which needs L (Array (Array Int)), and so on (§9.10).
+type L a = < X (L (Array a)) | E >
+type Root = L Int

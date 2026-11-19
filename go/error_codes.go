@@ -123,7 +123,7 @@ const (
 	CodeMisplacedStream ErrorCode = "misplaced-stream"
 	// CodeUnguardedRecursion is "unguarded-recursion": A type refers to itself without a record field, array element or variant payload in between (§9.9), so decoding it would consume no input. `Secret` and names don't count as a step.
 	CodeUnguardedRecursion ErrorCode = "unguarded-recursion"
-	// CodeGrowingRecursion is "growing-recursion": A generic type refers to itself, directly or through definitions that refer back to it, with arguments other than its own parameters (§9.10), so its instances could grow without bound.
+	// CodeGrowingRecursion is "growing-recursion": Generic types whose instances could grow without bound: a type parameter passes, wrapped in a bigger type, along a cycle of references back to itself (`type T a = < X (T (Pair a a)) >`, §9.10).
 	CodeGrowingRecursion ErrorCode = "growing-recursion"
 	// CodeTypeTooDeep is "type-too-deep": Type expressions are nested deeper than the schema parser's limit.
 	CodeTypeTooDeep ErrorCode = "type-too-deep"
@@ -424,7 +424,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeRowParameter:            {CategorySchemaFiles, "A spread of a parameter, `...r`. Row parameters are not part of the language.", "Spread a named type instead, or nest the open part as a field with a type parameter."},
 	CodeMisplacedStream:         {CategorySchemaFiles, "`Stream` used anywhere but as the whole type of a definition, or a reference to such a definition. A stream is a whole file.", "Use `Array` inside types, and `Stream` only as the whole of a definition."},
 	CodeUnguardedRecursion:      {CategorySchemaFiles, "A type refers to itself without a record field, array element or variant payload in between (§9.9), so decoding it would consume no input. `Secret` and names don't count as a step.", "Put the recursion inside a record field, array element or variant payload."},
-	CodeGrowingRecursion:        {CategorySchemaFiles, "A generic type refers to itself, directly or through definitions that refer back to it, with arguments other than its own parameters (§9.10), so its instances could grow without bound.", "Refer to the type inside itself with exactly its own parameters."},
+	CodeGrowingRecursion:        {CategorySchemaFiles, "Generic types whose instances could grow without bound: a type parameter passes, wrapped in a bigger type, along a cycle of references back to itself (`type T a = < X (T (Pair a a)) >`, §9.10).", "Refer to the type inside itself with exactly its own parameters."},
 	CodeTypeTooDeep:             {CategorySchemaFiles, "Type expressions are nested deeper than the schema parser's limit.", "Name the inner types with definitions of their own."},
 	CodeAttributeArguments:      {CategorySchemaFiles, "An attribute this version defines, given arguments it doesn't take: `@deprecated` takes nothing or one string. Also empty parentheses after an attribute.", "Give the attribute only the arguments it takes: `@deprecated` takes none, or one string."},
 	CodeAttributeTwice:          {CategorySchemaFiles, "The same attribute twice on one type, field or tag.", "Keep one of them."},

@@ -45,8 +45,8 @@ SchemaTest := [].{
 						want = field(fields, "output") ?? input
 						match codec(ty, input) {
 							# The writer takes it too (it checks what it writes).
-							Decoded(Ok(got)) if Encode.equals(got, want) => Encode.to_str(got).map_ok(|_| {}).map_err(|e| "can't be written: ${Encode.message(e)}")
-							Decoded(Ok(got)) => Err("wrote ${Encode.canonical(got)}, expected ${Encode.canonical(want)}")
+							Decoded(Ok(got)) if Encode.equals(got, want) == Ok(True) => Encode.to_str(got).map_ok(|_| {}).map_err(|e| "can't be written: ${Encode.message(e)}")
+							Decoded(Ok(got)) => Err("wrote ${form(got)}, expected ${form(want)}")
 							Decoded(Err(e)) => Err("didn't decode: ${Decode.message(e)}")
 							NoType => Err("the schema has no type ${ty}")
 						}
@@ -57,7 +57,7 @@ SchemaTest := [].{
 					(Ok(Text(ty)), Ok(input), Ok(Text(code)), Ok(Text(path))) => match codec(ty, input) {
 						Decoded(Err(e)) if e.code == code and ErrorCode.place(e.path) == path => Ok({})
 						Decoded(Err(e)) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}, expected ${code} at ${path}: ${Decode.message(e)}")
-						Decoded(Ok(got)) => Err("decoded, and wrote ${Encode.canonical(got)}")
+						Decoded(Ok(got)) => Err("decoded, and wrote ${form(got)}")
 						NoType => Err("the schema has no type ${ty}")
 					}
 					_ => Err("a case without a type, an input, a code or a path")
@@ -148,6 +148,12 @@ SchemaTest := [].{
 		"Tree" => Decoded(encoded(Types.decode_tree(v), Types.encode_tree))
 		"Expr" => Decoded(encoded(Types.decode_expr(v), Types.encode_expr))
 		"IntTree" => Decoded(encoded(Types.decode_int_tree(v), Types.encode_int_tree))
+		"Meta" => Decoded(encoded(Types.decode_meta(v), Types.encode_meta))
+		"IntNode" => Decoded(encoded(Types.decode_int_node(v), Types.encode_int_node))
+		"Code" => Decoded(encoded(Types.decode_code(v), Types.encode_code))
+		"SwapIntString" => Decoded(encoded(Types.decode_swap_int_string(v), Types.encode_swap_int_string))
+		"KString" => Decoded(encoded(Types.decode_k_string(v), Types.encode_k_string))
+		"UpString" => Decoded(encoded(Types.decode_up_string(v), Types.encode_up_string))
 		_ => NoType
 	}
 
@@ -174,6 +180,10 @@ field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Ok((_, v)) => Ok(v)
 	Err(_) => Err(Missing)
 }
+
+## The canonical form of a value that has one: every parsed or decoded value.
+form : Value -> Str
+form = |v| Encode.canonical(v) ?? "(no canonical form)"
 
 # attributes.cases.haus
 expect SchemaTest.count(attributes_cases) == 10
@@ -842,7 +852,7 @@ expect SchemaTest.check(records_cases, 22, SchemaTest.records)
 expect SchemaTest.check(records_cases, 23, SchemaTest.records)
 
 # types.cases.haus
-expect SchemaTest.count(types_cases) == 17
+expect SchemaTest.count(types_cases) == 29
 
 # Ok { type: "IntPair", input: { first: 1, second: 2 } },
 expect SchemaTest.check(types_cases, 0, SchemaTest.types)
@@ -894,6 +904,42 @@ expect SchemaTest.check(types_cases, 15, SchemaTest.types)
 
 # Err { type: "IntTree", input: { value: 1, kids: [{ value: "2", kids: [] }] }, code: "type-mismatch", path: "$.kids[0].value" },
 expect SchemaTest.check(types_cases, 16, SchemaTest.types)
+
+# Ok { type: "IntNode", input: { value: 1, meta: { history: [{ value: "a", meta: { history: [] } }] } } },
+expect SchemaTest.check(types_cases, 17, SchemaTest.types)
+
+# Err { type: "IntNode", input: { value: 1, meta: { history: [{ value: 2, meta: { history: [] } }] } }, code: "type-mismatch", path: "$.meta.history[0].value" },
+expect SchemaTest.check(types_cases, 18, SchemaTest.types)
+
+# Ok { type: "Code", input: Call { f: Num(1), args: [Num(2), Call { f: Num(3), args: [] }] } },
+expect SchemaTest.check(types_cases, 19, SchemaTest.types)
+
+# Err { type: "Code", input: Call { f: Num(1), args: [Num("2")] }, code: "type-mismatch", path: "$.args[0][0]" },
+expect SchemaTest.check(types_cases, 20, SchemaTest.types)
+
+# Ok { type: "SwapIntString", input: S(1, S("a", S(2, E))) },
+expect SchemaTest.check(types_cases, 21, SchemaTest.types)
+
+# Err { type: "SwapIntString", input: S(1, S(2, E)), code: "type-mismatch", path: "$[1][0]" },
+expect SchemaTest.check(types_cases, 22, SchemaTest.types)
+
+# Ok { type: "KString", input: Y("a") },
+expect SchemaTest.check(types_cases, 23, SchemaTest.types)
+
+# Ok { type: "KString", input: X(X(Y(1))) },
+expect SchemaTest.check(types_cases, 24, SchemaTest.types)
+
+# Err { type: "KString", input: X(Y("a")), code: "type-mismatch", path: "$[0][0]" },
+expect SchemaTest.check(types_cases, 25, SchemaTest.types)
+
+# Ok { type: "UpString", input: Lift(Val(["a", "b"])) },
+expect SchemaTest.check(types_cases, 26, SchemaTest.types)
+
+# Ok { type: "UpString", input: Lift(Restart(Lift(Val([1, 2])))) },
+expect SchemaTest.check(types_cases, 27, SchemaTest.types)
+
+# Err { type: "UpString", input: Lift(Restart(Lift(Val(["a", 2])))), code: "type-mismatch", path: "$[0][0][0][0][0]" },
+expect SchemaTest.check(types_cases, 28, SchemaTest.types)
 
 # variants.cases.haus
 expect SchemaTest.count(variants_cases) == 52
@@ -1079,5 +1125,5 @@ expect {
 	small = Types.Expr.Add(Types.Expr.Num(Int.from_i128(1)), Types.Expr.Num(Int.from_i128(2)))
 	shared = Encode.value_with($x, Types.encode_expr, budget(100_000)).map_err(|e| e.code).map_ok(|_| {}) == Err("step-budget")
 	# `Add(Num(1), Num(2))`: five values.
-	shared and Encode.value_with(small, Types.encode_expr, budget(5)).map_ok(Encode.canonical) == Ok("Add(Num(1),Num(2))") and Encode.value_with(small, Types.encode_expr, budget(4)).is_err()
+	shared and Encode.value_with(small, Types.encode_expr, budget(5)).map_ok(form) == Ok("Add(Num(1),Num(2))") and Encode.value_with(small, Types.encode_expr, budget(4)).is_err()
 }

@@ -1,0 +1,5 @@
+// One expanding edge on a cycle through three definitions: A a needs B a, then
+// C (Array a), then A (Array a), and so on (§9.10).
+type A a = < X (B a) | E >
+type B b = < Y (C (Array b)) >
+type C c = < Z (A c) >

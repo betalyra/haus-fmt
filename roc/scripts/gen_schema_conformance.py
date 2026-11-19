@@ -98,7 +98,7 @@ expect {
 	small = Types.Expr.Add(Types.Expr.Num(Int.from_i128(1)), Types.Expr.Num(Int.from_i128(2)))
 	shared = Encode.value_with($x, Types.encode_expr, budget(100_000)).map_err(|e| e.code).map_ok(|_| {}) == Err("step-budget")
 	# `Add(Num(1), Num(2))`: five values.
-	shared and Encode.value_with(small, Types.encode_expr, budget(5)).map_ok(Encode.canonical) == Ok("Add(Num(1),Num(2))") and Encode.value_with(small, Types.encode_expr, budget(4)).is_err()
+	shared and Encode.value_with(small, Types.encode_expr, budget(5)).map_ok(form) == Ok("Add(Num(1),Num(2))") and Encode.value_with(small, Types.encode_expr, budget(4)).is_err()
 }
 """
 
@@ -176,8 +176,8 @@ SchemaTest := [].{
 						want = field(fields, "output") ?? input
 						match codec(ty, input) {
 							# The writer takes it too (it checks what it writes).
-							Decoded(Ok(got)) if Encode.equals(got, want) => Encode.to_str(got).map_ok(|_| {}).map_err(|e| "can't be written: ${Encode.message(e)}")
-							Decoded(Ok(got)) => Err("wrote ${Encode.canonical(got)}, expected ${Encode.canonical(want)}")
+							Decoded(Ok(got)) if Encode.equals(got, want) == Ok(True) => Encode.to_str(got).map_ok(|_| {}).map_err(|e| "can't be written: ${Encode.message(e)}")
+							Decoded(Ok(got)) => Err("wrote ${form(got)}, expected ${form(want)}")
 							Decoded(Err(e)) => Err("didn't decode: ${Decode.message(e)}")
 							NoType => Err("the schema has no type ${ty}")
 						}
@@ -188,7 +188,7 @@ SchemaTest := [].{
 					(Ok(Text(ty)), Ok(input), Ok(Text(code)), Ok(Text(path))) => match codec(ty, input) {
 						Decoded(Err(e)) if e.code == code and ErrorCode.place(e.path) == path => Ok({})
 						Decoded(Err(e)) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}, expected ${code} at ${path}: ${Decode.message(e)}")
-						Decoded(Ok(got)) => Err("decoded, and wrote ${Encode.canonical(got)}")
+						Decoded(Ok(got)) => Err("decoded, and wrote ${form(got)}")
 						NoType => Err("the schema has no type ${ty}")
 					}
 					_ => Err("a case without a type, an input, a code or a path")
@@ -219,6 +219,10 @@ field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Ok((_, v)) => Ok(v)
 	Err(_) => Err(Missing)
 }
+
+## The canonical form of a value that has one: every parsed or decoded value.
+form : Value -> Str
+form = |v| Encode.canonical(v) ?? "(no canonical form)"
 
 """
     + "\n\n".join(tests)

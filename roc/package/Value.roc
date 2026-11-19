@@ -131,6 +131,80 @@ Value := [
 	default_limits : Limits
 	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024, max_steps: 16 * 1024 * 1024 }
 
+	## The most values (nodes) in one value that the canonical form, hashing,
+	## equality and decoding take (spec §9.8): 64 Mi, as in TypeScript and Go.
+	## A `Value` built in code may share its parts (`Arr([w, w])` holds `w`
+	## twice, not a copy), and a shared part counts each time it is reached,
+	## as these functions visit it: 40 levels that each hold the one below
+	## twice are 2^41 − 1 values, which fail with `too-many-nodes` instead of
+	## taking days. A parsed value is a tree, no larger than its text.
+	max_nodes : U64
+	max_nodes = 64 * 1024 * 1024
+
+	## `Ok({})` if `v` nests at most `max_depth` levels, counted as the parser
+	## counts them (each array, record and tag with arguments is a level, and
+	## a tag's only argument, a record, shares the tag's: `Tag { … }`), and
+	## has at most `max_nodes` values, a shared part counted each time it is
+	## reached (see `Value.max_nodes`). Otherwise `nesting-too-deep` at the
+	## first container too deep, or `too-many-nodes` at the first value
+	## beyond, with its place (`[0].items[2]`). Walked with a list rather than
+	## recursion, so that a value built in code, however deep, is checked
+	## without overflowing the stack, a step per value counted, so that it
+	## stops after at most `max_nodes` steps however much it shares.
+	##
+	##     Value.within_bounds(Arr([Num("1")]), 256, Value.max_nodes)   # Ok({})
+	within_bounds : Value, U64, U64 -> Try({}, { code : Str, reason : Str, path : Str })
+	within_bounds = |v, depth_limit, node_limit| {
+		too_many = |path| Err({ code: ErrorCode.too_many_nodes, reason: "value has more than ${node_limit.to_str()} nodes", path })
+		too_deep = |path| Err({ code: ErrorCode.nesting_too_deep, reason: "nesting deeper than ${depth_limit.to_str()} levels", path })
+		# `Tag { … }`: its record is a value too, at the tag's level.
+		root_nodes = if (has_payload(v)) 2 else 1
+		if root_nodes > node_limit {
+			return too_many("")
+		}
+		if !opens(v) {
+			return Ok({})
+		}
+		if depth_limit == 0 {
+			return too_deep("")
+		}
+		# The containers from `v` down to the one being walked, and the next item of each.
+		var $containers = [v]
+		var $next = [0.U64]
+		var $nodes = root_nodes
+		while True {
+			match $containers.last() {
+				Ok(container) => {
+					top = $containers.len() - 1
+					i = $next.get(top) ?? 0
+					match child(container, i) {
+						Ok(x) => {
+							$next = $next.set(top, i + 1) ?? $next
+							$nodes = $nodes + (if (has_payload(x)) 2 else 1)
+							if $nodes > node_limit {
+								return too_many(path_of($containers, $next))
+							}
+							if opens(x) {
+								if $containers.len().to_u64() >= depth_limit {
+									return too_deep(path_of($containers, $next))
+								}
+								$containers = $containers.append(x)
+								$next = $next.append(0)
+							}
+						}
+						Err(_) => {
+							$containers = $containers.drop_last(1)
+							$next = $next.drop_last(1)
+						}
+					}
+				}
+				Err(_) => {
+					return Ok({})
+				}
+			}
+		}
+	}
+
 	## The first of `keys` (each with where it is: an offset or an index)
 	## that repeats an earlier one, if any: the key a duplicate-key error
 	## names (spec §1). The keys are sorted and neighbours compared, so this
@@ -186,6 +260,49 @@ Fail : { code : Str, reason : Str, pos : U64 }
 ## Limits this binding doesn't support, as an error at the start.
 unsupported : Str -> ParseError
 unsupported = |reason| { code: ErrorCode.unsupported_depth, reason, line: 1, column: 1 }
+
+# ── the shape of a value (`within_bounds`) ───────────────────
+
+## An array, a record or a tag with arguments: a level.
+opens : Value -> Bool
+opens = |v| match v {
+	Arr(_) | Rec(_) => True
+	Tag(_, args) => !args.is_empty()
+	_ => False
+}
+
+## `Tag { … }`: a tag whose only argument, a record, is at the tag's level.
+has_payload : Value -> Bool
+has_payload = |v| match v {
+	Tag(_, [Rec(_)]) => True
+	_ => False
+}
+
+## Item `i` of a container: of an array, a record's field, a tag's
+## argument; of `Tag { … }`, a field of its record.
+child : Value, U64 -> Try(Value, [OutOfBounds])
+child = |v, i| match v {
+	Arr(items) => items.get(i)
+	Rec(fields) | Tag(_, [Rec(fields)]) => fields.get(i).map_ok(|(_, x)| x)
+	Tag(_, args) => args.get(i)
+	_ => Err(OutOfBounds)
+}
+
+## The place of the item last taken from each of `containers`, given the
+## index of the next item of each, as an error path says it: `[0].a(Some)[0]`.
+path_of : List(Value), List(U64) -> Str
+path_of = |containers, next| Str.join_with(containers.map2(next, |c, n| place_of(c, n - 1)), "")
+
+## Where item `i` of a container is, as an error path says it: `[0]`, `.a`,
+## `(Some)[0]`, `(Circle).r`.
+place_of : Value, U64 -> Str
+place_of = |v, i| match v {
+	Arr(_) => "[${i.to_str()}]"
+	Rec(fields) => fields.get(i).map_ok(|(k, _)| ErrorCode.path_key(k)) ?? ""
+	Tag(name, [Rec(fields)]) => "(${name})${fields.get(i).map_ok(|(k, _)| ErrorCode.path_key(k)) ?? ""}"
+	Tag(name, _) => "(${name})[${i.to_str()}]"
+	_ => ""
+}
 
 # ── structure ────────────────────────────────────────────────
 
@@ -1263,3 +1380,8 @@ many_keys = |n, more| {
 	}
 	"{ ${Str.join_with($parts, ", ")}${more} }"
 }
+
+# `within_bounds` (spec §9.8): `Tag { … }` is two values, and the place of the first one beyond.
+expect Value.within_bounds(Arr([Num("1")]), 256, Value.max_nodes) == Ok({})
+expect Value.within_bounds(Tag("A", [Rec([("b", Num("1"))])]), 1, 3) == Ok({}) and Value.within_bounds(Tag("A", [Rec([("b", Num("1"))])]), 1, 2) == Err({ code: "too-many-nodes", reason: "value has more than 2 nodes", path: "(A).b" })
+expect Value.within_bounds(Arr([Rec([("pt-BR", Arr([]))])]), 2, 9) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 2 levels", path: "[0][\"pt-BR\"]" })

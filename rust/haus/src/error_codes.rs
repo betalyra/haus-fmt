@@ -124,7 +124,7 @@ pub enum ErrorCode {
     MisplacedStream,
     /// `unguarded-recursion`: A type refers to itself without a record field, array element or variant payload in between (§9.9), so decoding it would consume no input. `Secret` and names don't count as a step.
     UnguardedRecursion,
-    /// `growing-recursion`: A generic type refers to itself, directly or through definitions that refer back to it, with arguments other than its own parameters (§9.10), so its instances could grow without bound.
+    /// `growing-recursion`: Generic types whose instances could grow without bound: a type parameter passes, wrapped in a bigger type, along a cycle of references back to itself (`type T a = < X (T (Pair a a)) >`, §9.10).
     GrowingRecursion,
     /// `type-too-deep`: Type expressions are nested deeper than the schema parser's limit.
     TypeTooDeep,

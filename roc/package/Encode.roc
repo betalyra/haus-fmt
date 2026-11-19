@@ -59,24 +59,39 @@ Encode := [].{
 	error_json = |e| ErrorCode.json({ code: e.code, message: e.reason, at: Path(e.path) })
 
 	## The canonical form (spec §12): one exact text per value, the same in
-	## every binding, so equal values (§2) give identical text. Every value
-	## has one, whatever a reader's limits: an integer is written in decimal
-	## with all its digits, however long.
+	## every binding, so equal values (§2) give identical text. Every parsed
+	## value has one, whatever a reader's limits: an integer is written in
+	## decimal with all its digits, however long. A `Value` built in code may
+	## nest deeper than any parser takes, or share its parts so much that its
+	## text would be enormous (spec §9.8): beyond `Value.max_supported_depth`
+	## levels it fails with `nesting-too-deep`, and beyond `Value.max_nodes`
+	## values, a shared part counted each time it is reached, with
+	## `too-many-nodes` (see `Value.within_bounds`).
 	##
-	##     Encode.canonical(Rec([("b", Num("1")), ("a", Num("255"))]))   # "{a:255,b:1}"
-	canonical : Value -> Str
-	canonical = |value| bytes_to_str(canonical_bytes(value))
+	##     Encode.canonical(Rec([("b", Num("1")), ("a", Num("255"))]))   # Ok("{a:255,b:1}")
+	canonical : Value -> Try(Str, Error)
+	canonical = |value| canonical_within(value, Value.max_nodes).map_ok(bytes_to_str)
 
 	## The SHA-256 digest of the canonical form, as 64 lowercase hex digits
-	## (spec §12): the same whatever the layout, comments or key order.
-	hash : Value -> Str
-	hash = |value| Crypto.SHA256.hash(canonical_bytes(value)).to_hex()
+	## (spec §12): the same whatever the layout, comments or key order. Fails
+	## as `canonical` does.
+	hash : Value -> Try(Str, Error)
+	hash = |value| canonical_within(value, Value.max_nodes).map_ok(|bytes| Crypto.SHA256.hash(bytes).to_hex())
 
 	## The hash of a list of values, such as a whole file or stream (spec
 	## §12): the SHA-256 digest of their canonical forms joined by `,`. A list
-	## of one value hashes like the value: `hash_all([v])` is `hash(v)`.
-	hash_all : List(Value) -> Str
-	hash_all = |values| values.fold(HashAll.empty, HashAll.add).digest()
+	## of one value hashes like the value: `hash_all([v])` is `hash(v)`. Fails
+	## as `canonical` does, saying which value: `[3]`.
+	hash_all : List(Value) -> Try(Str, Error)
+	hash_all = |values| {
+		var $hash = HashAll.empty
+		var $i = 0.U64
+		for v in values {
+			$hash = at_index($hash.add(v), $i, "")?
+			$i = $i + 1
+		}
+		Ok($hash.digest())
+	}
 
 	## `hash_all` of a list as it grows, e.g. a stream while it is read: `add`
 	## each value, and `digest` at any time gives `hash_all` of the values
@@ -84,18 +99,19 @@ Encode := [].{
 	##
 	##     var $hash = Encode.HashAll.empty
 	##     for value in values {
-	##         $hash = $hash.add(value)
+	##         $hash = $hash.add(value)?
 	##     }
 	##     $hash.digest() # Encode.hash_all(values)
 	HashAll :: { sha : Crypto.SHA256.Hasher, count : U64 }.{
 		empty : Encode.HashAll
 		empty = { sha: Crypto.SHA256.Hasher.empty(), count: 0 }
 
-		## Add the next value.
-		add : Encode.HashAll, Value -> Encode.HashAll
+		## Add the next value. Fails as `canonical` does, and then adds nothing.
+		add : Encode.HashAll, Value -> Try(Encode.HashAll, Error)
 		add = |h, value| {
+			bytes = canonical_within(value, Value.max_nodes)?
 			sha = if (h.count > 0) h.sha.write([',']) else h.sha
-			{ sha: sha.write(canonical_bytes(value)), count: h.count + 1 }
+			Ok({ sha: sha.write(bytes), count: h.count + 1 })
 		}
 
 		## `hash_all` of the values added so far, as 64 lowercase hex digits.
@@ -103,15 +119,17 @@ Encode := [].{
 		digest = |h| h.sha.finish().to_hex()
 	}
 
-	## Whether two values are equal (spec §2): the same canonical form.
-	equals : Value, Value -> Bool
-	equals = |a, b| canonical_bytes(a) == canonical_bytes(b)
+	## Whether two values are equal (spec §2): the same canonical form. Fails
+	## as `canonical` does.
+	equals : Value, Value -> Try(Bool, Error)
+	equals = |a, b| Ok(canonical_within(a, Value.max_nodes)? == canonical_within(b, Value.max_nodes)?)
 
 	## Orders values by the bytes of their canonical forms (spec §12): a total
-	## order consistent with `equals`, for sorting (`values.sort_with(Encode.compare)`).
-	## Not numeric order: `10` sorts before `9`.
-	compare : Value, Value -> [Before, Same, After]
-	compare = |a, b| compare_bytes(canonical_bytes(a), canonical_bytes(b))
+	## order consistent with `equals`. Not numeric order: `10` sorts before
+	## `9`. Fails as `canonical` does. To sort values, which any parser gave,
+	## `values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
+	compare : Value, Value -> Try([Before, Same, After], Error)
+	compare = |a, b| Ok(compare_bytes(canonical_within(a, Value.max_nodes)?, canonical_within(b, Value.max_nodes)?))
 
 	## A stream: one value per line, each followed by a comma. Errors say
 	## which value: `[3].total`.
@@ -748,6 +766,16 @@ is_normalized = |b| {
 	whole(int) and frac_ok and exp_ok
 }
 
+## The canonical form of a value with at most `max_nodes` values, nested at
+## most `Value.max_supported_depth` levels (spec §9.8), so that a value built
+## in code whose parts are shared (a DAG) fails at once, and the recursion of
+## `canonical_bytes` is bounded.
+canonical_within : Value, U64 -> Try(List(U8), Error)
+canonical_within = |value, max_nodes| {
+	Value.within_bounds(value, Value.max_supported_depth, max_nodes)?
+	Ok(canonical_bytes(value))
+}
+
 ## The canonical form: no spaces, fields sorted by key, numbers as their
 ## normalized decimal literal, however long.
 canonical_bytes : Value -> List(U8)
@@ -887,7 +915,7 @@ expect {
 		and Encode.value_with([], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
 		and Encode.value_with({}, |_, e| Encode.record(e, []), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
 		and Encode.value_with({}, |_, e| Encode.tagged_record("A", e, []), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
-		and Encode.value_with({}, |_, e| Encode.tagged_record("A", e, []), small_depth(1)).map_ok(Encode.canonical) == Ok("A{}")
+		and Encode.value_with({}, |_, e| Encode.tagged_record("A", e, []), small_depth(1)).map_ok(canonical_text) == Ok("A{}")
 		and Encode.value_with([], |l, e| Encode.map(l, e, |n, e1| Encode.number(n.to_str(), e1)), small_depth(0)).map_err(|e| e.code).map_ok(|_| {}) == Err("nesting-too-deep")
 }
 expect Encode.stream_minimised_with([Num("1000000000000")], { ..Value.default_limits, max_number_length: 13 }) == Ok("1000000000000,\n")
@@ -900,7 +928,7 @@ expect {
 		|t| match Value.parse(t) {
 			Ok(v) =>
 				match (Encode.minimised(v), Encode.to_str(v)) {
-					(Ok(m), Ok(c)) => Value.parse(m).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and Value.parse(c).map_ok(Encode.canonical) == Ok(Encode.canonical(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
+					(Ok(m), Ok(c)) => Value.parse(m).map_ok(canonical_text) == Ok(canonical_text(v)) and Value.parse(c).map_ok(canonical_text) == Ok(canonical_text(v)) and m.count_utf8_bytes() < c.count_utf8_bytes()
 					_ => False
 				}
 			Err(_) => False
@@ -919,19 +947,23 @@ expect [2097152.25.F32, 2097152.75, 1048576.125, 4498.53125].map(|x| written(x, 
 # The canonical form (spec §12): the same cases as the TypeScript and Rust bindings.
 canonical_of : Str -> Str
 canonical_of = |src| match Value.parse_all(src) {
-	Ok([v]) => Encode.canonical(v)
+	Ok([v]) => canonical_text(v)
 	_ => "(not one value)"
 }
 
+## The canonical form of a value that has one: every parsed value.
+canonical_text : Value -> Str
+canonical_text = |v| Encode.canonical(v) ?? "(no canonical form)"
+
 equal_texts : Str, Str -> Bool
 equal_texts = |a, b| match (Value.parse_all(a), Value.parse_all(b)) {
-	(Ok([x]), Ok([y])) => Encode.equals(x, y)
+	(Ok([x]), Ok([y])) => Encode.equals(x, y) ?? False
 	_ => False
 }
 
 compare_texts : Str, Str -> [Before, Same, After]
 compare_texts = |a, b| match (Value.parse_all(a), Value.parse_all(b)) {
-	(Ok([x]), Ok([y])) => Encode.compare(x, y)
+	(Ok([x]), Ok([y])) => Encode.compare(x, y) ?? Same
 	_ => Same
 }
 
@@ -955,21 +987,21 @@ expect {
 	form.starts_with("16423496480701302824") and form.ends_with("5554113535") and form.count_utf8_bytes() == 999 and canonical_of("-0x${"f".repeat(829)}") == "-${form}"
 }
 expect match Value.parse_all("9, 10, [], \"😀\", { b: 1, a: 2 }, Some(1), -1") {
-	Ok(vs) => vs.sort_with(Encode.compare).map(Encode.canonical) == ["\"😀\"", "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}"]
+	Ok(vs) => vs.sort_with(|a, b| Encode.compare(a, b) ?? Same).map(canonical_text) == ["\"😀\"", "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}"]
 	_ => False
 }
 expect compare_texts("{ b: 1, a: 2 }", "{ a: 2, b: 1 }") == Same and compare_texts("1.0", "1") == After
 # Hashing (spec §12): SHA-256 of the canonical form; a list joins the forms with `,`.
 expect match Value.parse_all("{ a: 1 }") {
-	Ok([v]) => Encode.hash(v) == "f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261"
+	Ok([v]) => Encode.hash(v) == Ok("f09a9231c12685ac5f0b6f0b06c9154f13dc3a5b3548db5142c19bde1383f261")
 	_ => False
 }
-expect Encode.hash_all([]) == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+expect Encode.hash_all([]) == Ok("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 expect match (Value.parse_all("{ b: 1, a: 0x2 }, \"x\", [None]"), Value.parse_all("{a:2,b:1},\"x\",[None]")) {
 	(Ok(vs), Ok(same)) => {
 		joined = Crypto.SHA256.hash("{a:2,b:1},\"x\",[None]".to_utf8()).to_hex()
 		one = vs.take_first(1)
-		Encode.hash_all(vs) == joined and Encode.hash_all(same) == joined and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
+		Encode.hash_all(vs) == Ok(joined) and Encode.hash_all(same) == Ok(joined) and Encode.hash_all(one) == Encode.hash_all(same.take_first(1)) and one.map(Encode.hash) == [Encode.hash_all(one)]
 	}
 	_ => False
 }
@@ -979,10 +1011,10 @@ expect match Value.parse_all("1, \"two\", Three { n: 3 }") {
 		var $h = Encode.HashAll.empty
 		var $digests = [$h.digest()]
 		for v in vs {
-			$h = $h.add(v)
+			$h = $h.add(v) ?? $h
 			$digests = $digests.append($h.digest())
 		}
-		$digests == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)))
+		$digests == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)) ?? "")
 	}
 	_ => False
 }
@@ -992,18 +1024,18 @@ huge_digits : Str
 huge_digits = "1${"0".repeat(1299)}"
 
 expect match Value.parse_all_with(huge_digits, { ..Value.default_limits, max_number_length: 2000 }) {
-	Ok([v]) => Encode.canonical(v) == huge_digits and Encode.hash(v) == Crypto.SHA256.hash(huge_digits.to_utf8()).to_hex()
+	Ok([v]) => Encode.canonical(v) == Ok(huge_digits) and Encode.hash(v) == Ok(Crypto.SHA256.hash(huge_digits.to_utf8()).to_hex())
 	_ => False
 }
 expect {
 	built = Rec([("b", Num("1")), ("a", Arr([Text("x"), Num(huge_digits)]))])
 	form = "{a:[\"x\",${huge_digits}],b:1}"
-	Encode.canonical(built) == form and Encode.hash(built) == Crypto.SHA256.hash(form.to_utf8()).to_hex() and Encode.hash_all([Num("1"), built]) == Crypto.SHA256.hash("1,${form}".to_utf8()).to_hex() and Encode.HashAll.empty.add(built).digest() == Encode.hash(built)
+	Encode.canonical(built) == Ok(form) and Encode.hash(built) == Ok(Crypto.SHA256.hash(form.to_utf8()).to_hex()) and Encode.hash_all([Num("1"), built]) == Ok(Crypto.SHA256.hash("1,${form}".to_utf8()).to_hex()) and Encode.HashAll.empty.add(built).map_ok(|h| h.digest()) == Encode.hash(built)
 }
-expect Encode.equals(Num(huge_digits), Num("1${"0".repeat(1299)}")) and !Encode.equals(Num(huge_digits), Num("1")) and Encode.compare(Num(huge_digits), Num("2")) == Before
+expect Encode.equals(Num(huge_digits), Num("1${"0".repeat(1299)}")) == Ok(True) and Encode.equals(Num(huge_digits), Num("1")) == Ok(False) and Encode.compare(Num(huge_digits), Num("2")) == Ok(Before)
 # The compact writer writes a huge integer in decimal (spec §11); one too long for the reader is an error.
 expect match Value.parse_all("0x${"f".repeat(829)}") {
-	Ok([v]) => Encode.to_str(v) == Ok(Encode.canonical(v))
+	Ok([v]) => Encode.to_str(v) == Encode.canonical(v)
 	_ => False
 }
 expect Encode.to_str(Num(huge_digits)).map_err(|e| e.code) == Err("number-too-long")
@@ -1049,7 +1081,7 @@ expect {
 	texts = ["${"[".repeat(256)}${"]".repeat(256)}", "0x${"f".repeat(829)}", "-0x${"F".repeat(829)}", "1e6144", "-0", "A { a: [1, B(2)] }"]
 	texts.all(
 		|t| match Value.parse(t) {
-			Ok(v) => Encode.to_str(v).map_ok(|w| Value.parse(w).map_ok(Encode.canonical)) == Ok(Ok(Encode.canonical(v)))
+			Ok(v) => Encode.to_str(v).map_ok(|w| Value.parse(w).map_ok(canonical_text)) == Ok(Ok(canonical_text(v)))
 			Err(_) => False
 		},
 	)
@@ -1119,12 +1151,12 @@ expect {
 		},
 	)
 }
-expect Encode.value(login(Num("1")), encode_login).map_ok(Encode.canonical) == Ok("{creds:{\"alice-pw\":1,ok:\"fine\"},user:\"ada\"}")
+expect Encode.value(login(Num("1")), encode_login).map_ok(canonical_text) == Ok("{creds:{\"alice-pw\":1,ok:\"fine\"},user:\"ada\"}")
 # Inside a tag's argument: the secret's place, as the writer names it.
-expect Encode.value(Some(login(Num("x"))), |m, e| Encode.maybe(m, e, encode_login)).map_err(|e| (e.code, e.path)).map_ok(Encode.canonical) == Err(("invalid-secret", "(Some).creds"))
+expect Encode.value(Some(login(Num("x"))), |m, e| Encode.maybe(m, e, encode_login)).map_err(|e| (e.code, e.path)).map_ok(canonical_text) == Err(("invalid-secret", "(Some).creds"))
 # Outside a secret, the place in the value, as the writer gives it.
-expect Encode.value([("a", Num("1")), ("pt-BR", Arr([Num("x")]))], |m, e| Encode.map(m, e, Encode.any)).map_ok(Encode.canonical) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[\"pt-BR\"][0]" })
-expect Encode.value([("a", 1.I32), ("a", 2)], |m, e| Encode.map(m, e, |n, e1| Encode.number(n.to_str(), e1))).map_err(|e| (e.code, e.path)).map_ok(Encode.canonical) == Err(("duplicate-key", ".a"))
+expect Encode.value([("a", Num("1")), ("pt-BR", Arr([Num("x")]))], |m, e| Encode.map(m, e, Encode.any)).map_ok(canonical_text) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[\"pt-BR\"][0]" })
+expect Encode.value([("a", 1.I32), ("a", 2)], |m, e| Encode.map(m, e, |n, e1| Encode.number(n.to_str(), e1))).map_err(|e| (e.code, e.path)).map_ok(canonical_text) == Err(("duplicate-key", ".a"))
 
 # A native value nested far deeper than any limit: the encoder stops at the
 # limit (nesting-too-deep, at the place the writer names), without recursing on.
@@ -1151,14 +1183,14 @@ chain = |n| {
 
 expect {
 	deep = Encode.value(chain(200_000), encode_chain)
-	deep.map_err(|e| (e.code, e.reason, e.path.count_utf8_bytes())).map_ok(Encode.canonical) == Err(("nesting-too-deep", "nesting deeper than 256 levels", 256 * "(Link)[0]".count_utf8_bytes()))
+	deep.map_err(|e| (e.code, e.reason, e.path.count_utf8_bytes())).map_ok(canonical_text) == Err(("nesting-too-deep", "nesting deeper than 256 levels", 256 * "(Link)[0]".count_utf8_bytes()))
 }
 # At the limit, and one past it: the same as the writer, for every limit.
 expect [1, 2, 255, 256].all(|n| encode_chain(chain(n), Encode.top).is_ok()) and encode_chain(chain(257), Encode.top).is_err()
 expect [0, 1, 3, 1024].all(
 	|d| {
 		limits = { ..Value.default_limits, max_depth: d }
-		Encode.value_with(chain(d), encode_chain, limits).is_ok() and Encode.value_with(chain(d + 1), encode_chain, limits).map_ok(Encode.canonical) == Encode.to_str_with(nested(d + 1, Tag("End", []), |v| Tag("Link", [v])), limits)
+		Encode.value_with(chain(d), encode_chain, limits).is_ok() and Encode.value_with(chain(d + 1), encode_chain, limits).map_ok(canonical_text) == Encode.to_str_with(nested(d + 1, Tag("End", []), |v| Tag("Link", [v])), limits)
 	},
 )
 # Records as a tag's only argument share its level (`Tag { … }`), as in the writer.
@@ -1168,7 +1200,7 @@ expect {
 	limits = { ..Value.default_limits, max_depth: 3 }
 	[2, 3].all(|n| (wrap(tree(n), Encode.top_with(limits)).map_ok(|_| {})) == (Encode.to_str_with(Tag("A", [tree(n)]), limits).map_ok(|_| {})))
 }
-expect Encode.value_with([1.I32], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), { ..Value.default_limits, max_depth: 2000 }).map_err(|e| e.code).map_ok(Encode.canonical) == Err("unsupported-depth")
+expect Encode.value_with([1.I32], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), { ..Value.default_limits, max_depth: 2000 }).map_err(|e| e.code).map_ok(canonical_text) == Err("unsupported-depth")
 
 # A native value whose parts are shared (a DAG): each level holds the level
 # below twice, so `levels` levels are 2^(levels + 1) − 1 values when written
@@ -1221,6 +1253,52 @@ expect Encode.value_with(shared(40), Encode.any, budget(1000)).map_err(|err| err
 expect Encode.value_with(dag(3), encode_dag, budget(15)).is_ok() and Encode.value_with(dag(3), encode_dag, budget(14)).is_err()
 expect Encode.to_str_with(shared(3), budget(15)).is_ok() and Encode.to_str_with(shared(3), budget(14)).is_err()
 expect Encode.value_with(shared(3), Encode.any, budget(15)).is_ok() and Encode.value_with(shared(3), Encode.any, budget(14)).is_err()
-expect Encode.value_with([1.I32, 2, 3], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), budget(4)).map_ok(Encode.canonical) == Ok("[1,2,3]")
+expect Encode.value_with([1.I32, 2, 3], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), budget(4)).map_ok(canonical_text) == Ok("[1,2,3]")
 # Each value of a stream has a budget of its own.
 expect Encode.stream_with([shared(3), shared(3)], budget(15)).is_ok() and Encode.stream_with([Num("1"), shared(3)], budget(14)).map_err(|err| (err.code, err.path.starts_with("[1][1]"))) == Err(("step-budget", True))
+
+# The canonical form, the hash and equality of a DAG (spec §9.8): `shared(n)` is
+# n + 1 arrays in memory, but a tree of 2^(n + 1) − 1 values, which the canonical
+# form writes out. They are counted first, so 2^41 − 1 fail at the limit, before
+# anything is written. (At the default limit, `Value.max_nodes`, that
+# takes some 1.5 seconds built with `--opt=speed`, but half a minute in `roc
+# test`, so these tests take a smaller one.)
+expect {
+	e = canonical_within(shared(40), 100_000).map_ok(|_| {})
+	e.map_err(|err| (err.code, err.reason, err.path.starts_with("[0][0][0][0][0][0][0][0]"))) == Err(("too-many-nodes", "value has more than 100000 nodes", True))
+}
+expect canonical_within(shared(40), 1000).map_err(|e| e.code).map_ok(|_| {}) == Err("too-many-nodes")
+# A shared part counts each time it is reached: as many values as the tree it
+# stands for, 2^4 − 1 for three levels, at the limit and one under, and the
+# same canonical form, hash and order.
+expect {
+	text = "[[[[],[]],[[],[]]],[[[],[]],[[],[]]]]"
+	tree = Value.parse(text) ?? Num("0")
+	[shared(3), tree].all(|v| canonical_within(v, 15).map_ok(bytes_to_str) == Ok(text) and canonical_within(v, 14).map_err(|e| e.code).map_ok(|_| {}) == Err("too-many-nodes"))
+		and Encode.canonical(shared(3)) == Ok(text)
+		and Encode.hash(shared(3)) == Encode.hash(tree)
+		and Encode.hash_all([shared(3), Num("1")]) == Encode.hash_all([tree, Num("1")])
+		and Encode.equals(shared(3), tree) == Ok(True)
+		and Encode.equals(shared(3), shared(2)) == Ok(False)
+		and Encode.compare(shared(2), tree) == Ok(After)
+}
+# `Tag { … }` is two values, the tag and its record, as the parser makes them.
+expect {
+	built = Tag("A", [Rec([("a", Num("1"))])])
+	canonical_within(built, 3).map_ok(bytes_to_str) == Ok("A{a:1}") and canonical_within(built, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "(A).a"))
+}
+# Nested deeper than any parser takes (`Value.max_supported_depth`, 1024 levels):
+# no canonical form, so no hash and no equality, rather than a deep recursion.
+expect {
+	deep = nested(1024, Arr([]), |v| Arr([v]))
+	fails = |r| r.map_err(|e| (e.code, e.reason)).map_ok(|_| {}) == Err(("nesting-too-deep", "nesting deeper than 1024 levels"))
+	Encode.canonical(nested(1023, Arr([]), |v| Arr([v]))).is_ok()
+		and Encode.canonical(deep).map_err(|e| e.path) == Err("[0]".repeat(1024))
+		and fails(Encode.canonical(deep))
+		and fails(Encode.hash(deep))
+		and fails(Encode.HashAll.empty.add(deep))
+		and fails(Encode.equals(Num("1"), deep))
+		and fails(Encode.compare(deep, Num("1")))
+		and Encode.hash_all([Num("1"), deep]).map_err(|e| (e.code, e.path.starts_with("[1][0][0]"))) == Err(("nesting-too-deep", True))
+}
+expect Value.max_nodes == 64 * 1024 * 1024

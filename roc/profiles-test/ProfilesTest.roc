@@ -27,7 +27,7 @@ ProfilesTest := [].{
 			all.keep_oks(
 				|v| match check(v) {
 					Ok({}) => Err({})
-					Err(why) => Ok("${Encode.canonical(v)}: ${why}")
+					Err(why) => Ok("${Encode.canonical(v) ?? "(no canonical form)"}: ${why}")
 				},
 			)
 		Err(e) => ["the vectors don't parse: ${e.reason}"]

@@ -21,3 +21,17 @@ Ok { type: "Ints", input: Cons(99, Cons(98, Cons(97, Cons(96, Cons(95, Cons(94, 
 // ── mutually recursive generics ──
 Ok { type: "IntTree", input: { value: 1, kids: [{ value: 2, kids: [] }] } },
 Err { type: "IntTree", input: { value: 1, kids: [{ value: "2", kids: [] }] }, code: "type-mismatch", path: "$.kids[0].value" },
+
+// ── generics without an expansive cycle (§9.10) ──
+Ok { type: "IntNode", input: { value: 1, meta: { history: [{ value: "a", meta: { history: [] } }] } } },
+Err { type: "IntNode", input: { value: 1, meta: { history: [{ value: 2, meta: { history: [] } }] } }, code: "type-mismatch", path: "$.meta.history[0].value" },
+Ok { type: "Code", input: Call { f: Num(1), args: [Num(2), Call { f: Num(3), args: [] }] } },
+Err { type: "Code", input: Call { f: Num(1), args: [Num("2")] }, code: "type-mismatch", path: "$.args[0][0]" },
+Ok { type: "SwapIntString", input: S(1, S("a", S(2, E))) },
+Err { type: "SwapIntString", input: S(1, S(2, E)), code: "type-mismatch", path: "$[1][0]" },
+Ok { type: "KString", input: Y("a") },
+Ok { type: "KString", input: X(X(Y(1))) },
+Err { type: "KString", input: X(Y("a")), code: "type-mismatch", path: "$[0][0]" },
+Ok { type: "UpString", input: Lift(Val(["a", "b"])) },
+Ok { type: "UpString", input: Lift(Restart(Lift(Val([1, 2])))) },
+Err { type: "UpString", input: Lift(Restart(Lift(Val(["a", 2])))), code: "type-mismatch", path: "$[0][0][0][0][0]" },

@@ -17,10 +17,8 @@ file's definitions as written, before any generic type is applied.
   without parameters (`invalid-spread`), never of itself, directly or not
   (`spread-cycle`); no field or tag twice, those copied in included
   (`duplicate-field`, `duplicate-tag`);
-* regular generics (§9.10, `growing-recursion`): a definition refers to
-  itself only with its own parameters, and to another definition of its group
-  (one that refers back to it, directly or not: `Source.reaches`) only with
-  parameters of its own as arguments.
+* instances that can't grow (§9.10, `growing-recursion`): no expanding
+  edge of the parameter graph (`Source.paramEdges`) lies on a cycle.
 
 Guarded recursion (§9.9, `unguarded-recursion`) is checked on the instances
 (`Haus.SchemaFile.Instances`): `type I a = a` with `type X = I X` is
@@ -200,62 +198,60 @@ def checkSpreadsList (F : Source) (d : Def) : List Tm → C Unit
   | t :: ts => do checkSpreads F d t; checkSpreadsList F d ts
 end
 
-/-! ## Regular generics (§9.10) -/
-
-/-- The definitions `n`'s definition refers to directly. -/
-def Source.next (F : Source) (n : String) : List String :=
-  match F.lookup n with
-  | some d => (F.edges d).map (·.1)
-  | none => []
+/-! ## Instances that can't grow (§9.10) -/
 
 /-- Adds the elements of `ys` that aren't in `xs` yet, each once. -/
 def addNew {α : Type} [BEq α] : List α → List α → List α
   | xs, [] => xs
   | xs, y :: ys => if xs.contains y then addNew xs ys else addNew (xs ++ [y]) ys
 
-/-- `k` rounds of following references from the names in `S`. -/
-def Source.reachIter (F : Source) : Nat → List String → List String
+/-- `k` rounds of following `next` from the elements of `S`. -/
+def iterReach {α : Type} [BEq α] (next : α → List α) : Nat → List α → List α
   | 0, S => S
-  | k + 1, S => F.reachIter k (addNew S (S.flatMap F.next))
+  | k + 1, S => iterReach next k (addNew S (S.flatMap next))
 
-/-- The definitions `m` reaches by references, itself included. -/
-def Source.reachable (F : Source) (m : String) : List String :=
-  F.reachIter (F.defs.length + 1) [m]
-
-/-- Whether `m` refers to `n`, directly or through other definitions (or is `n`). -/
-def Source.reaches (F : Source) (m n : String) : Bool := (F.reachable m).contains n
-
-def Tm.isVar : Tm → Bool
-  | .var _ => true
-  | _ => false
+/-- A type parameter of a definition: the definition's name and the parameter's. -/
+abbrev PNode := String × String
 
 /--
-§9.10 for the reference `(m, es)` in `d`: to itself only with its own
-parameters, in order (or none, which is `wrong-arity` if it has some); to a
-definition of its group only with parameters as the arguments. Without
-`groups`, only the first rule (as the bindings had it before the second).
+The parameter graph of §9.10: for each reference `m es` in the body of a
+definition `d`, an edge from `(d, v)` to `(m, q)` for each parameter `v`
+in the argument `e` that `m`'s parameter `q` gets, *expanding* (`true`)
+when `e` is more than `v` itself (`Pair v v`, `Array v`, `{ x: v }`, …).
 -/
-def growthOk (F : Source) (groups : Bool) (d : Def) (r : String × List Tm) : Bool :=
-  if r.1 == d.name then r.2.isEmpty || r.2 == d.params.map .var
-  else !groups || !F.reaches r.1 d.name || r.2.all Tm.isVar
+def Source.paramEdges (F : Source) : List (PNode × PNode × Bool) :=
+  F.defs.flatMap fun d => (F.edges d).flatMap fun r =>
+    match F.lookup r.1 with
+    | some d' => (d'.params.zip r.2).flatMap fun qe =>
+        qe.2.vars.map fun v => ((d.name, v), (r.1, qe.1), qe.2 != .var v)
+    | none => []
 
-/-- The first reference that breaks §9.10, and where it is. -/
-def growthViolation? (F : Source) (groups : Bool) : Option (Def × String) :=
-  F.defs.findSome? fun d => ((F.edges d).find? (!growthOk F groups d ·)).map fun r => (d, r.1)
+/-- The parameters a parameter passes into, directly. -/
+def Source.pnext (F : Source) (x : PNode) : List PNode :=
+  (F.paramEdges.filter (·.1 == x)).map (·.2.1)
+
+/-- The parameters `x` passes into, directly or not, itself included. -/
+def Source.preachable (F : Source) (x : PNode) : List PNode :=
+  iterReach F.pnext (F.paramEdges.length + 1) [x]
+
+/-- The first expanding edge on a cycle: its two ends. -/
+def Source.expansive? (F : Source) : Option (PNode × PNode) :=
+  (F.paramEdges.find? fun e => e.2.2 && (F.preachable e.2.1).contains e.1).map fun e => (e.1, e.2.1)
 
 /--
-§9.10: a definition refers to itself only with its own parameters, in
-order; and to a definition it is mutually recursive with only with parameters
-of its own as the arguments.
+§9.10, the expansive-cycle rule: no parameter passes, inside a bigger type,
+along a cycle of references back to itself. Without `growth`, no check (only
+to show what it is for: `Finite.doubling_infinite`).
 -/
-def checkGrowth (F : Source) (groups : Bool := true) : C Unit :=
-  match growthViolation? F groups with
+def checkGrowth (F : Source) (growth : Bool := true) : C Unit :=
+  if !growth then pure () else
+  match F.expansive? with
   | none => pure ()
-  | some (d, m) =>
-    if m == d.name then
-      err .growingRecursion s!"{d.name} must refer to itself with its own parameters; other arguments could grow without bound"
+  | some ((a, v), (b, q)) =>
+    if (a, v) == (b, q) then
+      err .growingRecursion s!"{a} passes its parameter {v} to itself inside a bigger type: instances could grow without bound"
     else
-      err .growingRecursion s!"{d.name} refers to {m}, which refers back to {d.name}: {d.name} may pass it only its own parameters; other arguments could grow without bound"
+      err .growingRecursion s!"{a} passes its parameter {v} to {if a == b then "itself" else b} inside a bigger type, and it comes back: instances could grow without bound"
 
 /-! ## All of them -/
 
@@ -267,18 +263,18 @@ def checkParams (d : Def) : C Unit :=
 
 /--
 The static rules of §14 that the definitions must follow, in the order the
-bindings check them. `groups := false` leaves out §9.10's rule for groups of
-definitions (only to show what it is for: `Finite.doubling_infinite`).
+bindings check them. `growth := false` leaves out §9.10's rule (only to show
+what it is for: `Finite.doubling_infinite`).
 -/
-def check (F : Source) (groups : Bool := true) : C Unit := do
+def check (F : Source) (growth : Bool := true) : C Unit := do
   F.defs.forM checkParams
-  checkGrowth F groups
+  checkGrowth F growth
   F.defs.forM fun d => do
     checkNames F d d.body
     checkSpreads F d d.body
 
-theorem check_growth {F : Source} {groups : Bool} (h : check F groups = .ok ()) :
-    checkGrowth F groups = .ok () := by
+theorem check_growth {F : Source} {growth : Bool} (h : check F growth = .ok ()) :
+    checkGrowth F growth = .ok () := by
   simp only [check, bind, Except.bind] at h
   split at h
   · cases h
