@@ -204,10 +204,16 @@ pub fn record_case<T>(json: &Json, d: Decoder, f: impl FnOnce(&Json, Decoder) ->
     f(json, d.in_tag())
 }
 
-/// A closed variant whose tags have no payload: the tag as a string.
+/// A closed variant whose tags have no payload: the tag as a string. A
+/// string that isn't a tag name is `invalid-tag`, as in `"_tag"` (spec §16.3).
 pub fn tag_name<'a>(json: &'a Json, what: &str) -> R<&'a str> {
     match json {
-        Json::String(tag) => Ok(tag),
+        Json::String(tag) if crate::ser::is_tag(tag) => Ok(tag),
+        Json::String(_) => {
+            let found = describe(json);
+            let reason = format!("{found} is not a tag name (A to Z, then letters, digits and _); expected {what}");
+            Err(DecodeError::new(Code::InvalidTag, reason).with_expected_found(what, found))
+        }
         _ => Err(mismatch(&format!("a string ({what})"), json)),
     }
 }

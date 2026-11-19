@@ -610,7 +610,9 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
       | _ => reject .typeMismatch "expected true or false"
     else if isEnum (.variant closed cases) then
       match j with
+      -- A string that isn't a tag is `invalid-tag`, as a `"_tag"` is (§16.3).
       | .str tag =>
+        if !isTag tag.toList then reject .invalidTag "not a tag" else
         match caseOf? env cases tag with
         | some (.bare _) => .ok (.case tag [])
         | _ => reject .unknownTag s!"unknown tag {tag}"
@@ -651,7 +653,7 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
                   match JSON.fromSelfDescribingList (y :: ys) with
                   | .ok vs => .ok (.unknown tag vs)
                   | .error r => .error ⟨.key "_args" :: jsonPlace (JSON.selfDescribingListPlace (y :: ys)), s!"_args: {r.reason}", some r.code⟩
-                | _ => reject .hausJsonForm "_args: not a non-empty array"
+                | _ => .error ⟨[.key "_args"], "_args: not a non-empty array", some .hausJsonForm⟩
               | rest =>
                 match JSON.toValueMembers rest with
                 | .ok fs => .ok (.unknown tag [.record fs])

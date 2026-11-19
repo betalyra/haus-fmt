@@ -811,7 +811,7 @@ Code {
 Code {
   code: "invalid-tag",
   category: Json,
-  means: "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.",
+  means: "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`\"debug\"`, §16.3), or in a value built in code.",
   example: HausJson("{\"_haus\": 1, \"_value\": {\"_tag\": \"lower\"}}"),
   fix: "Start the tag with a capital letter and use only letters, digits and `_`.",
 },

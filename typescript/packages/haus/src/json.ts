@@ -733,7 +733,7 @@ const unwrap = (json: Json, place: Place): Json => {
   }
   const version = json["_haus"]!
   if (!(version instanceof JsonNumber && version.text === VERSION)) {
-    throw new HausDecodeError(`self-describing JSON of version ${describeJson(version)}: this reader reads version 1 ("_haus": 1)`, place.path(), "haus-json-version")
+    throw new HausDecodeError(`self-describing JSON of version ${describeJson(version)}: this reader reads version 1 ("_haus": 1)`, place.child("_haus").path(), "haus-json-version")
   }
   return json["_value"]!
 }

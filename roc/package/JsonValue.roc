@@ -856,7 +856,7 @@ unwrap = |json, limits| match json {
 enveloped : JsonValue, JsonValue, Value.Limits -> Try(Value, Decode.Error)
 enveloped = |version, value, limits| match version {
 	Number("1") => within(described(value, 0, limits), "._value")
-	_ => Decode.fail(ErrorCode.haus_json_version, "expected version 1 of self-describing JSON (\"_haus\": 1), found ${describe_json(version)}")
+	_ => within(Decode.fail(ErrorCode.haus_json_version, "expected version 1 of self-describing JSON (\"_haus\": 1), found ${describe_json(version)}"), "._haus")
 }
 
 forms : Str
@@ -1376,8 +1376,8 @@ expect JsonValue.to_haus_json(Tag("lower", [])).map_err(|e| e.code) == Err("inva
 expect JsonValue.from_haus_json("{\"_value\": \"a\", \"_haus\": 1}").map_ok(canonical_text) == Ok("\"a\"")
 expect json_code(JsonValue.from_haus_json("\"a\"")) == "haus-json-form at $" and json_code(JsonValue.from_haus_json("{\"_num\": \"1\"}")) == "haus-json-form at $"
 expect json_code(JsonValue.from_haus_json("{\"_haus\": 1}")) == "haus-json-form at $" and json_code(JsonValue.from_haus_json("{\"_haus\": 1, \"_value\": \"a\", \"x\": 1}")) == "haus-json-form at $"
-expect json_code(JsonValue.from_haus_json("{\"_haus\": 2, \"_value\": \"a\"}")) == "haus-json-version at $" and json_code(JsonValue.from_haus_json("{\"_haus\": \"1\", \"_value\": \"a\"}")) == "haus-json-version at $"
-expect json_code(JsonValue.from_haus_json("{\"_haus\": 1.0, \"_value\": \"a\"}")) == "haus-json-version at $" and json_code(JsonValue.from_haus_json("{\"_haus\": 2, \"_value\": 1}")) == "haus-json-version at $"
+expect json_code(JsonValue.from_haus_json("{\"_haus\": 2, \"_value\": \"a\"}")) == "haus-json-version at $._haus" and json_code(JsonValue.from_haus_json("{\"_haus\": \"1\", \"_value\": \"a\"}")) == "haus-json-version at $._haus"
+expect json_code(JsonValue.from_haus_json("{\"_haus\": 1.0, \"_value\": \"a\"}")) == "haus-json-version at $._haus" and json_code(JsonValue.from_haus_json("{\"_haus\": 2, \"_value\": 1}")) == "haus-json-version at $._haus"
 # Raw DEL, C1 and bidi controls: rejected in self-describing JSON, accepted elsewhere.
 expect json_code(JsonValue.from_haus_json(env("\"a\u(7F)b\""))) == "control-character at 1:26" and json_code(JsonValue.from_haus_json(env("\"a\u(85)b\""))) == "control-character at 1:26"
 expect json_code(JsonValue.from_haus_json(env("\"a\u(202E)b\""))) == "bidi-control at 1:26" and json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"a\u(2066)\": \"b\"}}"))) == "bidi-control at 1:36"

@@ -419,7 +419,7 @@ report = |result| match result {
 }
 
 # json/schema-based.cases.haus
-expect JsonTest.count(schema_based_cases) == 183
+expect JsonTest.count(schema_based_cases) == 197
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
 expect JsonTest.schema_based(schema_based_cases, 0)
@@ -616,362 +616,404 @@ expect JsonTest.schema_based(schema_based_cases, 63)
 # Err { type: "Level", json: "\"Warn\"", code: "unknown-tag" },
 expect JsonTest.schema_based(schema_based_cases, 64)
 
-# Err { type: "Level", json: "{\"_tag\": \"Debug\"}", code: "type-mismatch" },
+# Err { type: "Level", json: "\"warn\"", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 65)
 
-# Ok { type: "Shape", input: Circle { r: 1.5 }, json: "{\"_tag\": \"Circle\", \"r\": 1.5}" },
+# Err { type: "Level", json: "\"\"", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 66)
 
-# Ok { type: "Shape", input: Point(1, 2), json: "{\"_tag\": \"Point\", \"values\": [1, 2]}" },
+# Err { type: "Level", json: "\"1A\"", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 67)
 
-# Ok { type: "Shape", input: Wrap(3), json: "{\"_tag\": \"Wrap\", \"value\": 3}" },
+# Err { type: "Level", json: "\"Info \"", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 68)
 
-# Ok { type: "Shape", input: Empty, json: "{\"_tag\": \"Empty\"}" },
+# Err { type: "Bits", json: "\"Maybe\"", code: "unknown-tag" },
 expect JsonTest.schema_based(schema_based_cases, 69)
 
-# Ok { type: "Shape", input: Hexagon, json: "{\"_tag\": \"Hexagon\"}" },
+# Err { type: "Bits", json: "\"true\"", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 70)
 
-# Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}" },
+# Err { type: "Level", json: "{\"_tag\": \"Debug\"}", code: "type-mismatch" },
 expect JsonTest.schema_based(schema_based_cases, 71)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Circle\", \"r\": 1.5, \"color\": \"red\"}", output: Circle { r: 1.5 } },
+# Ok { type: "Shape", input: Circle { r: 1.5 }, json: "{\"_tag\": \"Circle\", \"r\": 1.5}" },
 expect JsonTest.schema_based(schema_based_cases, 72)
 
-# Err { type: "Shape", json: "\"Empty\"", code: "type-mismatch" },
+# Ok { type: "Shape", input: Point(1, 2), json: "{\"_tag\": \"Point\", \"values\": [1, 2]}" },
 expect JsonTest.schema_based(schema_based_cases, 73)
 
-# Err { type: "Shape", json: "{\"r\": 1.5}", code: "missing-member" },
+# Ok { type: "Shape", input: Wrap(3), json: "{\"_tag\": \"Wrap\", \"value\": 3}" },
 expect JsonTest.schema_based(schema_based_cases, 74)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1]}", code: "wrong-payload" },
+# Ok { type: "Shape", input: Empty, json: "{\"_tag\": \"Empty\"}" },
 expect JsonTest.schema_based(schema_based_cases, 75)
 
-# Ok { type: "User", input: { id: 1, name: "Ada" }, json: "{\"id\": 1, \"name\": \"Ada\"}" },
+# Ok { type: "Shape", input: Hexagon, json: "{\"_tag\": \"Hexagon\"}" },
 expect JsonTest.schema_based(schema_based_cases, 76)
 
-# Ok { type: "User", input: { id: 1, name: "Ada", note: None }, json: "{\"id\": 1, \"name\": \"Ada\", \"note\": null}" },
+# Ok { type: "Shape", input: Hexagon(1, "a"), json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}" },
 expect JsonTest.schema_based(schema_based_cases, 77)
 
-# Ok { type: "User", input: { id: 1, name: "Ada", nick: "ada", note: Some("x") }, json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": \"ada\", \"note\": \"x\"}" },
+# Read { type: "Shape", json: "{\"_tag\": \"Circle\", \"r\": 1.5, \"color\": \"red\"}", output: Circle { r: 1.5 } },
 expect JsonTest.schema_based(schema_based_cases, 78)
 
-# Read { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"extra\": [1]}", output: { id: 1, name: "Ada" } },
+# Err { type: "Shape", json: "\"Empty\"", code: "type-mismatch" },
 expect JsonTest.schema_based(schema_based_cases, 79)
 
-# Err { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": null}", code: "type-mismatch" },
+# Err { type: "Shape", json: "{\"r\": 1.5}", code: "missing-member" },
 expect JsonTest.schema_based(schema_based_cases, 80)
 
-# Err { type: "User", json: "{\"id\": 1}", code: "missing-field" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1]}", code: "wrong-payload" },
 expect JsonTest.schema_based(schema_based_cases, 81)
 
-# Err { type: "Strict", json: "{\"id\": 1, \"x\": 2}", code: "unknown-field" },
+# Ok { type: "User", input: { id: 1, name: "Ada" }, json: "{\"id\": 1, \"name\": \"Ada\"}" },
 expect JsonTest.schema_based(schema_based_cases, 82)
 
-# Err { type: "B", json: "\"CzR=\"", code: "invalid-base64" },
+# Ok { type: "User", input: { id: 1, name: "Ada", note: None }, json: "{\"id\": 1, \"name\": \"Ada\", \"note\": null}" },
 expect JsonTest.schema_based(schema_based_cases, 83)
 
-# Err { type: "B", json: "\"Cz Q=\"", code: "invalid-base64" },
+# Ok { type: "User", input: { id: 1, name: "Ada", nick: "ada", note: Some("x") }, json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": \"ada\", \"note\": \"x\"}" },
 expect JsonTest.schema_based(schema_based_cases, 84)
 
-# Err { type: "B", json: "\"-_8=\"", code: "invalid-base64" },
+# Read { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"extra\": [1]}", output: { id: 1, name: "Ada" } },
 expect JsonTest.schema_based(schema_based_cases, 85)
 
-# Read { type: "Big", json: "\"-0\"", output: 0 },
+# Err { type: "User", json: "{\"id\": 1, \"name\": \"Ada\", \"nick\": null}", code: "type-mismatch" },
 expect JsonTest.schema_based(schema_based_cases, 86)
 
-# Err { type: "Big", json: "\"007\"", code: "invalid-number" },
+# Err { type: "User", json: "{\"id\": 1}", code: "missing-field" },
 expect JsonTest.schema_based(schema_based_cases, 87)
 
-# Err { type: "Dec", json: "\"0xFF\"", code: "invalid-number" },
+# Err { type: "Strict", json: "{\"id\": 1, \"x\": 2}", code: "unknown-field" },
 expect JsonTest.schema_based(schema_based_cases, 88)
 
-# Err { type: "Dec", json: "\"1_000\"", code: "invalid-number" },
+# Err { type: "B", json: "\"CzR=\"", code: "invalid-base64" },
 expect JsonTest.schema_based(schema_based_cases, 89)
 
-# Ok { type: "Bits", input: True, json: "\"True\"" },
+# Err { type: "B", json: "\"Cz Q=\"", code: "invalid-base64" },
 expect JsonTest.schema_based(schema_based_cases, 90)
 
-# Err { type: "Bits", json: "true", code: "type-mismatch" },
+# Err { type: "B", json: "\"-_8=\"", code: "invalid-base64" },
 expect JsonTest.schema_based(schema_based_cases, 91)
 
-# Ok { type: "Loop", input: None, json: "{\"_tag\": \"None\"}" },
+# Read { type: "Big", json: "\"-0\"", output: 0 },
 expect JsonTest.schema_based(schema_based_cases, 92)
 
-# Ok { type: "Loop", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+# Err { type: "Big", json: "\"007\"", code: "invalid-number" },
 expect JsonTest.schema_based(schema_based_cases, 93)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hexagon { sides: 6 } },
+# Err { type: "Dec", json: "\"0xFF\"", code: "invalid-number" },
 expect JsonTest.schema_based(schema_based_cases, 94)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
+# Err { type: "Dec", json: "\"1_000\"", code: "invalid-number" },
 expect JsonTest.schema_based(schema_based_cases, 95)
 
-# Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
+# Ok { type: "Bits", input: True, json: "\"True\"" },
 expect JsonTest.schema_based(schema_based_cases, 96)
 
-# Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", code: "missing-field" },
+# Err { type: "Bits", json: "true", code: "type-mismatch" },
 expect JsonTest.schema_based(schema_based_cases, 97)
 
-# Ok { type: "ParenBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
+# Ok { type: "Loop", input: None, json: "{\"_tag\": \"None\"}" },
 expect JsonTest.schema_based(schema_based_cases, 98)
 
-# Ok { type: "AliasBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
+# Ok { type: "Loop", input: Some(None), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
 expect JsonTest.schema_based(schema_based_cases, 99)
 
-# Ok { type: "Found", input: Found { items: [1, 2] }, json: "{\"_tag\": \"Found\", \"items\": [1, 2]}" },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"sides\": 6}", output: Hexagon { sides: 6 } },
 expect JsonTest.schema_based(schema_based_cases, 100)
 
-# Read { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1, \"x\": 2}", output: Box { w: 1 } },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"value\": [1, true]}", output: Hexagon { value: [1, True] } },
 expect JsonTest.schema_based(schema_based_cases, 101)
 
-# Err { type: "StrictBox", json: "{\"_tag\": \"Box\", \"id\": 1, \"x\": 2}", code: "unknown-field" },
+# Ok { type: "Boxed", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 102)
 
-# Ok { type: "InnerRec", input: { item: X { w: 1 } }, json: "{\"item\": {\"_tag\": \"X\", \"value\": {\"w\": 1}}}" },
+# Err { type: "Boxed", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}", code: "missing-field" },
 expect JsonTest.schema_based(schema_based_cases, 103)
 
-# Ok { type: "SecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+# Ok { type: "ParenBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 104)
 
-# Ok { type: "InlineSecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+# Ok { type: "AliasBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"w\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 105)
 
-# Ok { type: "GenRec", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
+# Ok { type: "Found", input: Found { items: [1, 2] }, json: "{\"_tag\": \"Found\", \"items\": [1, 2]}" },
 expect JsonTest.schema_based(schema_based_cases, 106)
 
-# Err { type: "GenRec", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}, \"w\": 1}", code: "unexpected-member" },
+# Read { type: "Boxed", json: "{\"_tag\": \"Box\", \"w\": 1, \"x\": 2}", output: Box { w: 1 } },
 expect JsonTest.schema_based(schema_based_cases, 107)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
+# Err { type: "StrictBox", json: "{\"_tag\": \"Box\", \"id\": 1, \"x\": 2}", code: "unknown-field" },
 expect JsonTest.schema_based(schema_based_cases, 108)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
+# Ok { type: "InnerRec", input: { item: X { w: 1 } }, json: "{\"item\": {\"_tag\": \"X\", \"value\": {\"w\": 1}}}" },
 expect JsonTest.schema_based(schema_based_cases, 109)
 
-# Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
+# Ok { type: "SecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.schema_based(schema_based_cases, 110)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", output: Hexagon { _args: [{ _num: "1" }], x: 2 } },
+# Ok { type: "InlineSecretBox", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.schema_based(schema_based_cases, 111)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [1, 2]}", output: Run { args: [1, 2] } },
+# Ok { type: "GenRec", input: Box { w: 1 }, json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}}" },
 expect JsonTest.schema_based(schema_based_cases, 112)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": []}", output: Run { args: [] } },
+# Err { type: "GenRec", json: "{\"_tag\": \"Box\", \"value\": {\"w\": 1}, \"w\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 113)
 
-# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [\"a\"]}", output: Run { args: ["a"] } },
+# Err { type: "Shape", json: "{\"_tag\": \"Empty\", \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 114)
 
-# Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
+# Err { type: "Shape", json: "{\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 115)
 
-# Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
+# Err { type: "Nested", json: "{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", code: "unexpected-member" },
 expect JsonTest.schema_based(schema_based_cases, 116)
 
-# Err { type: "Mine", json: "null", code: "type-mismatch" },
+# Read { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", output: Hexagon { _args: [{ _num: "1" }], x: 2 } },
 expect JsonTest.schema_based(schema_based_cases, 117)
 
-# Ok { type: "OptLoop", input: None, json: "null" },
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [1, 2]}", output: Run { args: [1, 2] } },
 expect JsonTest.schema_based(schema_based_cases, 118)
 
-# Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": []}", output: Run { args: [] } },
 expect JsonTest.schema_based(schema_based_cases, 119)
 
-# Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
+# Read { type: "Shape", json: "{\"_tag\": \"Run\", \"args\": [\"a\"]}", output: Run { args: ["a"] } },
 expect JsonTest.schema_based(schema_based_cases, 120)
 
-# Ok { type: "InPlace", input: None, json: "null" },
+# Ok { type: "Mine", input: None, json: "{\"_tag\": \"None\"}" },
 expect JsonTest.schema_based(schema_based_cases, 121)
 
-# Ok { type: "InPlace", input: Some(None), json: "{\"_tag\": \"None\"}" },
+# Ok { type: "Mine", input: Some(5), json: "{\"_tag\": \"Some\", \"value\": 5}" },
 expect JsonTest.schema_based(schema_based_cases, 122)
 
-# Ok { type: "InPlace", input: Some(Some(1)), json: "{\"_tag\": \"Some\", \"value\": 1}" },
+# Err { type: "Mine", json: "null", code: "type-mismatch" },
 expect JsonTest.schema_based(schema_based_cases, 123)
 
-# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
+# Ok { type: "OptLoop", input: None, json: "null" },
 expect JsonTest.schema_based(schema_based_cases, 124)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
+# Ok { type: "OptLoop", input: Some(None), json: "{\"_tag\": \"None\"}" },
 expect JsonTest.schema_based(schema_based_cases, 125)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+# Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
 expect JsonTest.schema_based(schema_based_cases, 126)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+# Ok { type: "InPlace", input: None, json: "null" },
 expect JsonTest.schema_based(schema_based_cases, 127)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
+# Ok { type: "InPlace", input: Some(None), json: "{\"_tag\": \"None\"}" },
 expect JsonTest.schema_based(schema_based_cases, 128)
 
-# Ok { type: "I64", input: -9223372036854775808, json: "\"-9223372036854775808\"" },
+# Ok { type: "InPlace", input: Some(Some(1)), json: "{\"_tag\": \"Some\", \"value\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 129)
 
-# Err { type: "I64", json: "\"-9223372036854775809\"", code: "out-of-range" },
+# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 130)
 
-# Err { type: "I64", json: "\"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
 expect JsonTest.schema_based(schema_based_cases, 131)
 
-# Err { type: "I64", json: "\"-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
 expect JsonTest.schema_based(schema_based_cases, 132)
 
-# Ok { type: "U64", input: 18446744073709551615, json: "\"18446744073709551615\"" },
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
 expect JsonTest.schema_based(schema_based_cases, 133)
 
-# Ok { type: "U64", input: 0, json: "\"0\"" },
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
 expect JsonTest.schema_based(schema_based_cases, 134)
 
-# Read { type: "U64", json: "\"-0\"", output: 0 },
+# Ok { type: "I64", input: -9223372036854775808, json: "\"-9223372036854775808\"" },
 expect JsonTest.schema_based(schema_based_cases, 135)
 
-# Err { type: "U64", json: "\"18446744073709551616\"", code: "out-of-range" },
+# Err { type: "I64", json: "\"-9223372036854775809\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 136)
 
-# Err { type: "U64", json: "\"-1\"", code: "out-of-range" },
+# Err { type: "I64", json: "\"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 137)
 
-# Err { type: "U64", json: "\"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
+# Err { type: "I64", json: "\"-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 138)
 
-# Err { type: "U64", json: "\"-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
+# Ok { type: "U64", input: 18446744073709551615, json: "\"18446744073709551615\"" },
 expect JsonTest.schema_based(schema_based_cases, 139)
 
-# Err { type: "Big", json: "\"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "number-too-long" },
+# Ok { type: "U64", input: 0, json: "\"0\"" },
 expect JsonTest.schema_based(schema_based_cases, 140)
 
-# Err { type: "F64", json: "1e-7000", code: "exponent-too-large" },
+# Read { type: "U64", json: "\"-0\"", output: 0 },
 expect JsonTest.schema_based(schema_based_cases, 141)
 
-# Err { type: "F64", json: "1e6145", code: "exponent-too-large" },
+# Err { type: "U64", json: "\"18446744073709551616\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 142)
 
-# Err { type: "F64", json: "1e6144", code: "out-of-range" },
+# Err { type: "U64", json: "\"-1\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 143)
 
-# Read { type: "F64", json: "1e-6144", output: 0 },
+# Err { type: "U64", json: "\"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 144)
 
-# Err { type: "Small", json: "1e-7000", code: "exponent-too-large" },
+# Err { type: "U64", json: "\"-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 145)
 
-# Err { type: "Small", json: "0e7000", code: "exponent-too-large" },
+# Err { type: "Big", json: "\"10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\"", code: "number-too-long" },
 expect JsonTest.schema_based(schema_based_cases, 146)
 
-# Err { type: "Opt", json: "1E+7000", code: "exponent-too-large" },
+# Err { type: "F64", json: "1e-7000", code: "exponent-too-large" },
 expect JsonTest.schema_based(schema_based_cases, 147)
 
-# Read { type: "F64", json: "1.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", output: 1 },
+# Err { type: "F64", json: "1e6145", code: "exponent-too-large" },
 expect JsonTest.schema_based(schema_based_cases, 148)
 
-# Err { type: "F64", json: "1.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", code: "number-too-long" },
+# Err { type: "F64", json: "1e6144", code: "out-of-range" },
 expect JsonTest.schema_based(schema_based_cases, 149)
 
-# Err { type: "Small", json: "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", code: "number-too-long" },
+# Read { type: "F64", json: "1e-6144", output: 0 },
 expect JsonTest.schema_based(schema_based_cases, 150)
 
-# Err { type: "Shape", json: "{\"_tag\": 1}", code: "invalid-tag" },
+# Err { type: "Small", json: "1e-7000", code: "exponent-too-large" },
 expect JsonTest.schema_based(schema_based_cases, 151)
 
-# Err { type: "Shape", json: "{\"_tag\": null}", code: "invalid-tag" },
+# Err { type: "Small", json: "0e7000", code: "exponent-too-large" },
 expect JsonTest.schema_based(schema_based_cases, 152)
 
-# Err { type: "Shape", json: "{\"_tag\": [\"Circle\"], \"r\": 1}", code: "invalid-tag" },
+# Err { type: "Opt", json: "1E+7000", code: "exponent-too-large" },
 expect JsonTest.schema_based(schema_based_cases, 153)
 
-# Err { type: "Shape", json: "{\"_tag\": {\"_tag\": \"Empty\"}}", code: "invalid-tag" },
+# Read { type: "F64", json: "1.00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", output: 1 },
 expect JsonTest.schema_based(schema_based_cases, 154)
 
-# Err { type: "Shape", json: "{\"_tag\": \"\"}", code: "invalid-tag" },
+# Err { type: "F64", json: "1.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", code: "number-too-long" },
 expect JsonTest.schema_based(schema_based_cases, 155)
 
-# Err { type: "Nested", json: "{\"_tag\": true, \"value\": 5}", code: "invalid-tag" },
+# Err { type: "Small", json: "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", code: "number-too-long" },
 expect JsonTest.schema_based(schema_based_cases, 156)
 
-# Err { type: "Nested", json: "{\"_tag\": \"some\", \"value\": 5}", code: "invalid-tag" },
+# Err { type: "Shape", json: "{\"_tag\": 1}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 157)
 
-# Err { type: "Mine", json: "{\"_tag\": 1}", code: "invalid-tag" },
+# Err { type: "Shape", json: "{\"_tag\": null}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 158)
 
-# Err { type: "Mine", json: "{\"_tag\": \"none\"}", code: "invalid-tag" },
+# Err { type: "Shape", json: "{\"_tag\": [\"Circle\"], \"r\": 1}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 159)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": 5}", code: "wrong-payload" },
+# Err { type: "Shape", json: "{\"_tag\": {\"_tag\": \"Empty\"}}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 160)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": {\"0\": 1, \"1\": 2}}", code: "wrong-payload" },
+# Err { type: "Shape", json: "{\"_tag\": \"\"}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 161)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": null}", code: "wrong-payload" },
+# Err { type: "Nested", json: "{\"_tag\": true, \"value\": 5}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 162)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": []}", code: "wrong-payload" },
+# Err { type: "Nested", json: "{\"_tag\": \"some\", \"value\": 5}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 163)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1, 2, 3]}", code: "wrong-payload" },
+# Err { type: "Mine", json: "{\"_tag\": 1}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 164)
 
-# Err { type: "Doc", json: "{\"users\": [{\"id\": 1, \"name\": \"Ada\"}, {\"id\": 2, \"name\": 3}]}", code: "type-mismatch", path: "$.users[1].name" },
+# Err { type: "Mine", json: "{\"_tag\": \"none\"}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 165)
 
-# Err { type: "Doc", json: "{\"users\": [{\"id\": 1}]}", code: "missing-field", path: "$.users[0]" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": 5}", code: "wrong-payload" },
 expect JsonTest.schema_based(schema_based_cases, 166)
 
-# Err { type: "Doc", json: "{\"users\": [{\"id\": 1, \"name\": \"Ada\", \"note\": 5}]}", code: "type-mismatch", path: "$.users[0].note" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": {\"0\": 1, \"1\": 2}}", code: "wrong-payload" },
 expect JsonTest.schema_based(schema_based_cases, 167)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Point\", \"values\": [1, \"a\"]}}", code: "type-mismatch", path: "$.shape.values[1]" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": null}", code: "wrong-payload" },
 expect JsonTest.schema_based(schema_based_cases, 168)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Wrap\", \"value\": 1.5}}", code: "not-an-integer", path: "$.shape.value" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": []}", code: "wrong-payload" },
 expect JsonTest.schema_based(schema_based_cases, 169)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Circle\", \"r\": \"x\"}}", code: "type-mismatch", path: "$.shape.r" },
+# Err { type: "Shape", json: "{\"_tag\": \"Point\", \"values\": [1, 2, 3]}", code: "wrong-payload" },
 expect JsonTest.schema_based(schema_based_cases, 170)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Point\", \"values\": [1]}}", code: "wrong-payload", path: "$.shape" },
+# Err { type: "Doc", json: "{\"users\": [{\"id\": 1, \"name\": \"Ada\"}, {\"id\": 2, \"name\": 3}]}", code: "type-mismatch", path: "$.users[1].name" },
 expect JsonTest.schema_based(schema_based_cases, 171)
 
-# Err { type: "Doc", json: "{\"shape\": {\"r\": 1}}", code: "missing-member", path: "$.shape" },
+# Err { type: "Doc", json: "{\"users\": [{\"id\": 1}]}", code: "missing-field", path: "$.users[0]" },
 expect JsonTest.schema_based(schema_based_cases, 172)
 
-# Err { type: "Doc", json: "{\"maybe\": {\"_tag\": \"Some\", \"value\": \"x\"}}", code: "type-mismatch", path: "$.maybe.value" },
+# Err { type: "Doc", json: "{\"users\": [{\"id\": 1, \"name\": \"Ada\", \"note\": 5}]}", code: "type-mismatch", path: "$.users[0].note" },
 expect JsonTest.schema_based(schema_based_cases, 173)
 
-# Err { type: "Doc", json: "{\"maybe\": {\"_tag\": \"Some\", \"value\": 2147483648}}", code: "out-of-range", path: "$.maybe.value" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Point\", \"values\": [1, \"a\"]}}", code: "type-mismatch", path: "$.shape.values[1]" },
 expect JsonTest.schema_based(schema_based_cases, 174)
 
-# Err { type: "Doc", json: "{\"strict\": {\"id\": 1, \"x\": 2}}", code: "unknown-field", path: "$.strict.x" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Wrap\", \"value\": 1.5}}", code: "not-an-integer", path: "$.shape.value" },
 expect JsonTest.schema_based(schema_based_cases, 175)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}}", code: "unexpected-member", path: "$.shape.x" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Circle\", \"r\": \"x\"}}", code: "type-mismatch", path: "$.shape.r" },
 expect JsonTest.schema_based(schema_based_cases, 176)
 
-# Err { type: "Doc", json: "{\"counts\": {\"en\": 1, \"pt-BR\": \"2\"}}", code: "type-mismatch", path: "$.counts[\"pt-BR\"]" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Point\", \"values\": [1]}}", code: "wrong-payload", path: "$.shape" },
 expect JsonTest.schema_based(schema_based_cases, 177)
 
-# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": [{\"_num\": \"1\"}, {\"_num\": \"01\"}]}}", code: "haus-json-number", path: "$.raw._args[1]._num" },
+# Err { type: "Doc", json: "{\"shape\": {\"r\": 1}}", code: "missing-member", path: "$.shape" },
 expect JsonTest.schema_based(schema_based_cases, 178)
 
-# Err { type: "Doc", json: "{\"raw\": {\"_rec\": {\"b\": {\"_bytes\": \"0B\"}}}}", code: "haus-json-bytes", path: "$.raw._rec.b._bytes" },
+# Err { type: "Doc", json: "{\"maybe\": {\"_tag\": \"Some\", \"value\": \"x\"}}", code: "type-mismatch", path: "$.maybe.value" },
 expect JsonTest.schema_based(schema_based_cases, 179)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, 2]}}", code: "haus-json-form", path: "$.shape._args[1]" },
+# Err { type: "Doc", json: "{\"maybe\": {\"_tag\": \"Some\", \"value\": 2147483648}}", code: "out-of-range", path: "$.maybe.value" },
 expect JsonTest.schema_based(schema_based_cases, 180)
 
-# Err { type: "Doc", json: "{\"key\": 5}", code: "invalid-secret", path: "$.key" },
+# Err { type: "Doc", json: "{\"strict\": {\"id\": 1, \"x\": 2}}", code: "unknown-field", path: "$.strict.x" },
 expect JsonTest.schema_based(schema_based_cases, 181)
 
-# Err { type: "Doc", json: "{\"boxed\": {\"_tag\": \"Box\", \"value\": {\"w\": \"1\"}}}", code: "type-mismatch", path: "$.boxed.value.w" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}}", code: "unexpected-member", path: "$.shape.x" },
 expect JsonTest.schema_based(schema_based_cases, 182)
 
+# Err { type: "Doc", json: "{\"counts\": {\"en\": 1, \"pt-BR\": \"2\"}}", code: "type-mismatch", path: "$.counts[\"pt-BR\"]" },
+expect JsonTest.schema_based(schema_based_cases, 183)
+
+# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": [{\"_num\": \"1\"}, {\"_num\": \"01\"}]}}", code: "haus-json-number", path: "$.raw._args[1]._num" },
+expect JsonTest.schema_based(schema_based_cases, 184)
+
+# Err { type: "Doc", json: "{\"raw\": {\"_rec\": {\"b\": {\"_bytes\": \"0B\"}}}}", code: "haus-json-bytes", path: "$.raw._rec.b._bytes" },
+expect JsonTest.schema_based(schema_based_cases, 185)
+
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, 2]}}", code: "haus-json-form", path: "$.shape._args[1]" },
+expect JsonTest.schema_based(schema_based_cases, 186)
+
+# Err { type: "Doc", json: "{\"key\": 5}", code: "invalid-secret", path: "$.key" },
+expect JsonTest.schema_based(schema_based_cases, 187)
+
+# Err { type: "Doc", json: "{\"boxed\": {\"_tag\": \"Box\", \"value\": {\"w\": \"1\"}}}", code: "type-mismatch", path: "$.boxed.value.w" },
+expect JsonTest.schema_based(schema_based_cases, 188)
+
+# Err { type: "Doc", json: "{\"level\": \"Warn\"}", code: "unknown-tag", path: "$.level" },
+expect JsonTest.schema_based(schema_based_cases, 189)
+
+# Err { type: "Doc", json: "{\"level\": \"warn\"}", code: "invalid-tag", path: "$.level" },
+expect JsonTest.schema_based(schema_based_cases, 190)
+
+# Err { type: "Doc", json: "{\"level\": \"\"}", code: "invalid-tag", path: "$.level" },
+expect JsonTest.schema_based(schema_based_cases, 191)
+
+# Err { type: "Doc", json: "{\"bits\": \"1A\"}", code: "invalid-tag", path: "$.bits" },
+expect JsonTest.schema_based(schema_based_cases, 192)
+
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": []}}", code: "haus-json-form", path: "$.shape._args" },
+expect JsonTest.schema_based(schema_based_cases, 193)
+
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": 5}}", code: "haus-json-form", path: "$.shape._args" },
+expect JsonTest.schema_based(schema_based_cases, 194)
+
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": null}}", code: "haus-json-form", path: "$.shape._args" },
+expect JsonTest.schema_based(schema_based_cases, 195)
+
+# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": {}}}", code: "haus-json-form", path: "$.raw._args" },
+expect JsonTest.schema_based(schema_based_cases, 196)
+
 # json/self-describing.cases.haus
-expect JsonTest.count(self_describing_cases) == 52
+expect JsonTest.count(self_describing_cases) == 58
 
 # Ok { input: 19.90, json: "{\"_haus\": 1, \"_value\": {\"_num\": \"19.90\"}}" },
 expect JsonTest.self_describing(self_describing_cases, 0)
@@ -1128,6 +1170,24 @@ expect JsonTest.self_describing(self_describing_cases, 50)
 
 # Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"pt-BR\": {\"_tag\": \"x\"}}}}", code: "invalid-tag", path: "$._value._rec[\"pt-BR\"]" },
 expect JsonTest.self_describing(self_describing_cases, 51)
+
+# Err { json: "{\"_haus\": 2, \"_value\": \"a\"}", code: "haus-json-version", path: "$._haus" },
+expect JsonTest.self_describing(self_describing_cases, 52)
+
+# Err { json: "{\"_haus\": \"1\", \"_value\": \"a\"}", code: "haus-json-version", path: "$._haus" },
+expect JsonTest.self_describing(self_describing_cases, 53)
+
+# Err { json: "{\"_haus\": null, \"_value\": {\"_num\": \"1\"}}", code: "haus-json-version", path: "$._haus" },
+expect JsonTest.self_describing(self_describing_cases, 54)
+
+# Err { json: "{\"_value\": \"a\"}", code: "haus-json-form", path: "$" },
+expect JsonTest.self_describing(self_describing_cases, 55)
+
+# Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": []}}", code: "haus-json-form", path: "$._value._args" },
+expect JsonTest.self_describing(self_describing_cases, 56)
+
+# Err { json: "{\"_haus\": 1, \"_value\": [{\"_tag\": \"T\", \"_args\": \"a\"}]}", code: "haus-json-form", path: "$._value[0]._args" },
+expect JsonTest.self_describing(self_describing_cases, 57)
 
 # json/import.cases.haus
 expect JsonTest.count(import_cases) == 16

@@ -341,8 +341,9 @@ mutual
 /--
 The place of the error of `fromSelfDescribing j`, when it rejects `j`: a
 `_num` or `_bytes` that isn't one is at that member, a part of an array, a
-`_rec` or an `_args` at the first part rejected, and anything else (a tag
-that isn't one, JSON that is no form) at the object itself.
+`_rec` or an `_args` at the first part rejected, an `_args` that isn't a
+non-empty array (with a tag) at that member, and anything else (a tag that
+isn't one, JSON that is no form) at the object itself.
 -/
 def selfDescribingPlace : JSON → List Step
   | .arr xs => selfDescribingListPlaceFrom 0 xs
@@ -353,6 +354,8 @@ def selfDescribingPlace : JSON → List Step
     if (tagOf x).toOption.isSome then .member "_args" :: selfDescribingListPlaceFrom 0 (y :: ys) else []
   | .obj [("_args", .arr (y :: ys)), ("_tag", x)] =>
     if (tagOf x).toOption.isSome then .member "_args" :: selfDescribingListPlaceFrom 0 (y :: ys) else []
+  | .obj [("_tag", x), ("_args", _)] | .obj [("_args", _), ("_tag", x)] =>
+    if (tagOf x).toOption.isSome then [.member "_args"] else []
   | _ => []
 
 /-- The first item from index `i` on that `fromSelfDescribing` rejects, and the place in it. -/
@@ -373,10 +376,15 @@ end
 /-- The place of the error of `fromSelfDescribingList xs`: the first item rejected. -/
 def selfDescribingListPlace (xs : List JSON) : List Step := selfDescribingListPlaceFrom 0 xs
 
-/-- The place of the error of `fromHausJson j`: the envelope itself, or `_value` and the place in it. -/
+/--
+The place of the error of `fromHausJson j`: `_haus` for a version other than
+1, `_value` and the place in it, or else the envelope itself (a text that
+isn't one, a member missing).
+-/
 def hausJsonPlace : JSON → List Step
   | .obj [("_haus", .num "1"), ("_value", j)] => .member "_value" :: selfDescribingPlace j
   | .obj [("_value", j), ("_haus", .num "1")] => .member "_value" :: selfDescribingPlace j
+  | .obj [("_haus", _), ("_value", _)] | .obj [("_value", _), ("_haus", _)] => [.member "_haus"]
   | _ => []
 
 /-- The place of an error in one self-describing JSON text without a byte order mark: none for an error in the text. -/
@@ -991,7 +999,11 @@ private def placeOf (s : String) : Option String :=
 #guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": [\"a\", {\"_bytes\": \"0B\"}]}}" == some "$._value._args[1]._bytes"
 #guard placeOf "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": \"b\", \"pt-BR\": 1}}}" == some "$._value._rec[\"pt-BR\"]"
 #guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": 1}}" == some "$._value"
-#guard placeOf "{\"_haus\": 2, \"_value\": \"a\"}" == some "$"
+#guard placeOf "{\"_haus\": 2, \"_value\": \"a\"}" == some "$._haus"
+#guard placeOf "{\"_value\": \"a\"}" == some "$"
+#guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": []}}" == some "$._value._args"
+#guard placeOf "{\"_haus\": 1, \"_value\": {\"_args\": 5, \"_tag\": \"T\"}}" == some "$._value._args"
+#guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": \"t\", \"_args\": []}}" == some "$._value"
 #guard placeOf "{\"_haus\": 1, \"_value\": \"a\"" == some "$"
 
 end JSON

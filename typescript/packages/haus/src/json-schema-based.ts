@@ -462,6 +462,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
   const readVariant = (t: JsonVariantType, j: Json, at: Place, depth: number): Value => {
     if (isEnum(t)) {
       if (typeof j !== "string") return mismatch(`one of the strings ${tagList(t.cases.keys())}`, j, at)
+      if (!TAG.test(j)) return fail(`not a tag name: ${describeJson(j)}`, at, "invalid-tag")
       return t.cases.has(j) ? variant(j) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
     }
     const o = object(j, `an object with "_tag"`, at)
