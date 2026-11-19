@@ -100,7 +100,7 @@ macro "tstep" : tactic => `(tactic| first
 macro "tdone" : tactic => `(tactic| repeat tstep)
 
 section
-variable {env : Env} {root : Path} {j : Nat}
+variable {env : Env} {root : Path} {j : Nat} {w : Walk}
 
 theorem openFile_spec {p : Path} {limit : Nat} {tl : Nat → Err} (hp : Allowed env.tree root p) :
     Triple env (K env root j) (openFile p limit tl) (fun bs s => K env root j s ∧ bs.length ≤ limit) (K env root j) := by
@@ -362,8 +362,23 @@ theorem classify_spec {c : Class} :
   · tmod; tdone
   · tdone
 
+theorem copyNpm_spec {config : Config} {dir : Path} {owner : String} (hd : PkgDir env.tree dir) :
+    Triple env (K env root j) (copyNpm config dir owner) (fun _ => K env root j) (K env root j) := by
+  unfold copyNpm
+  split
+  · exact packageJsonOf_spec hd
+  · exact Triple.pure fun _ h => h
+
+theorem checkVersion_spec {P : St → Prop} {config : Config} {m : Manifest} {npm : Option NpmInfo} {owner : String} :
+    Triple env P (checkVersion config m npm owner) (fun _ => P) P := by
+  unfold checkVersion; tdone
+
+theorem checkNoFiles_spec {P : St → Prop} {m : Manifest} {sc : Scanned} :
+    Triple env P (checkNoFiles m sc) (fun _ => P) P := by
+  unfold checkNoFiles; tdone
+
 theorem load_spec : ∀ (n : Nat) (T : Target) (j : Nat), GoodTarget env root T →
-    Triple env (K env root j) (load n T) (fun _ => K env root j) (K env root j)
+    Triple env (K env root j) (load w n T) (fun _ => K env root j) (K env root j)
   | 0, _, _, _ => by unfold load; tdone
   | n + 1, .file p, j, hT => by
     unfold load
@@ -379,7 +394,8 @@ theorem load_spec : ∀ (n : Nat) (T : Target) (j : Nat), GoodTarget env root T 
     apply Triple.pre_and; intro _
     refine Triple.bind countFile_spec fun _ => ?_
     refine Triple.bind (decodeScan_spec fun _ h => h.1) fun sc => ?_
-    refine Triple.bind noteImports_spec fun _ => ?_
+    refine Triple.bind (Triple.mono noteImports_spec (fun _ h => h)
+      (fun _ _ h => by rwa [← (w.perm _).length_eq] at h) (fun _ h => h)) fun _ => ?_
     refine Triple.bind (R := fun _ => K env root j)
       (Triple.forIn (fun rest _ => K env root (j + rest.length)) ?_ fun _ _ h => h) fun _ => ?_
     · intro imp rest b _
@@ -404,14 +420,18 @@ theorem load_spec : ∀ (n : Nat) (T : Target) (j : Nat), GoodTarget env root T 
     next =>
       have hdir : PkgDir env.tree dir := hm rfl
       repeat (first
+        | with_reducible refine Triple.bind (copyNpm_spec hdir) fun _ => ?_
+        | with_reducible refine Triple.bind checkVersion_spec fun _ => ?_
+        | with_reducible refine Triple.bind (Triple.mono checkNoFiles_spec (fun _ h => h) (fun _ _ h => h)
+            (fun _ h => K.weaken h)) fun _ => ?_
         | tstep
-        | with_reducible refine Triple.bind (packageJsonOf_spec hdir) fun _ => ?_
         | (with_reducible refine (Triple.bind (openPackageFile_spec (Or.inr (Or.inl rfl)) (Or.inr hdir)) fun _ => ?_)
            apply Triple.pre_and; intro _)
         | with_reducible refine Triple.bind countFile_spec fun _ => ?_
         | with_reducible refine (Triple.bind (decodeScan_spec (P := fun s => K env root j s ∧ s.scanned < s.count)
             fun _ h => h.1) fun _ => ?_)
-        | with_reducible refine Triple.bind noteImports_spec fun _ => ?_
+        | with_reducible refine Triple.bind (Triple.mono noteImports_spec (fun _ h => h)
+            (fun _ _ h => by rwa [← (w.perm _).length_eq] at h) (fun _ h => h)) fun _ => ?_
         | with_reducible exact Triple.bind_fail fun _ h => K.weaken h
         | with_reducible refine (Triple.bind (R := fun _ => K env root j)
             (Triple.forIn (fun rest _ => K env root (j + rest.length)) ?_ fun _ _ h => K.weaken h) fun _ => ?_)
@@ -444,7 +464,7 @@ theorem givenPackages_spec :
         | tstep)
     · tdone
 
-theorem main_spec : Triple env (K env root 0) (main root) (fun _ => K env root 0) (K env root 0) := by
+theorem main_spec : Triple env (K env root 0) (main root w) (fun _ => K env root 0) (K env root 0) := by
   unfold main
   refine Triple.bind givenPackages_spec fun r => ?_
   dsimp only
@@ -457,7 +477,7 @@ theorem main_spec : Triple env (K env root 0) (main root) (fun _ => K env root 0
     split
     · tdone
     · rename_i hkind
-      apply Triple.bind_look
+      apply Triple.bind_cfg
       exact Triple.bind (load_spec _ _ 0 ⟨by simpa using hkind, Or.inr hreal⟩) fun _ => Triple.pure fun _ h => h
   · intro s hs
     rw [go_bind]
@@ -468,7 +488,8 @@ end
 /-! ## A whole run -/
 
 /-- A whole run: its result and its last state. -/
-def runIn (t : Tree) (c : Config) (root : Path) : Except Err Unit × St := go (main root) { tree := t, config := c } {}
+def runIn (t : Tree) (c : Config) (root : Path) (w : Walk := .file) : Except Err Unit × St :=
+  go (main root w) { tree := t, config := c } {}
 
 theorem resolveIn_runIn (t : Tree) (c : Config) (root : Path) : resolveIn t c root = Outcome.of (runIn t c root) := rfl
 

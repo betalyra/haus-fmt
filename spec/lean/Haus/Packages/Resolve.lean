@@ -47,9 +47,9 @@ keeps the paths it opened, and doesn't open one twice: the caches are kept
 by kind, and one file can be of two kinds (a project's `package.json` that
 is a link to a schema file; a root that is a `package.json`).
 
-Recursion: `load` takes fuel, the number of entries of the tree plus one.
-Each call on the stack is loading a different file of the tree (a file
-being loaded again is an import cycle), so the fuel never runs out.
+Recursion: `load` takes fuel, `Limits.files` plus one. Each call on the
+stack has counted its schema file (`countFile`) before it loads the file's
+imports, so `too-many-files` ends a run before the fuel runs out.
 -/
 
 namespace Haus.Packages
@@ -83,6 +83,20 @@ structure Config where
   worldWritable : Path → Bool := fun _ => false
   /-- Whether the SHOULD check of "Package versions" (§13.3) is made. -/
   checkVersions : Bool := true
+
+/--
+The order in which a schema file's imports are walked, as a function of its
+list of imports, each walked once (a permutation). The spec fixes none
+(§13.3); the resolver walks them in the order of the file (`Walk.file`), and
+R3 (`Haus.Packages.Walk`) proves that every order gives the same success or
+failure, and on success the same packages.
+-/
+structure Walk where
+  order : List Import → List Import
+  perm : ∀ l, (order l).Perm l
+
+/-- In the order of the file. -/
+def Walk.file : Walk := ⟨id, fun l => List.Perm.refl l⟩
 
 /-- A valid manifest (`package.haus`). -/
 structure Manifest where
@@ -171,6 +185,17 @@ def Classes.push (cs : Classes) (c : Class) (h : ∀ d ∈ cs.list, d.name ≠ c
       obtain ⟨d, hd, e⟩ := List.mem_map.mp hm
       exact h d hd e)⟩
 
+/-- What `load` loads. -/
+inductive Target where
+  /-- A schema file outside packages, by its real path. -/
+  | file (p : Path)
+  /-- A package's copy, by its directory's real path. -/
+  | copy (dir : Path)
+  deriving DecidableEq
+
+/-- `l` with `T` at its end, unless `T` is in it already. -/
+def addNew (l : List Target) (T : Target) : List Target := if T ∈ l then l else l ++ [T]
+
 structure St where
   /-- Every file opened (and read, unless too large), by real path, in order. -/
   reads : List Path := []
@@ -190,6 +215,8 @@ structure St where
   scanned : Nat := 0
   imports : Nat := 0
   widest : Nat := 0
+  /-- The targets loaded, in the order they were done, each once: only for the proofs of R3. -/
+  finished : List Target := []
   deriving Inhabited
 
 abbrev M := ReaderT Env (ExceptT Err (StateM St))
@@ -390,12 +417,6 @@ structure Loaded where
   types : List String
   cls : Option Nat := none
 
-inductive Target where
-  /-- A schema file outside packages, by its real path. -/
-  | file (p : Path)
-  /-- A package's copy, by its directory's real path. -/
-  | copy (dir : Path)
-
 def checkNames (imp : Import) (types : List String) (what : String) : M Unit := do
   if let some n := imp.names.find? (· ∉ types) then
     fail .unknownImport s!"{what} has no type {n}"
@@ -516,7 +537,27 @@ def classify (c : Class) : M Nat := do
   | .ok (i, cs) => modify fun st => { st with classes := cs }; pure i
   | .error e => throw e
 
-def load : Nat → Target → M Loaded
+/-- A copy's `package.json` with `npm`: what it declares, and the version its package manager gives it. -/
+def copyNpm (config : Config) (dir : Path) (owner : String) : M (Option NpmInfo) :=
+  if config.mode.npm then packageJsonOf dir owner else pure none
+
+/-- The SHOULD check of "Package versions" (§13.3): the `package.json`'s version is the manifest's. -/
+def checkVersion (config : Config) (m : Manifest) (npm : Option NpmInfo) (owner : String) : M Unit := do
+  if config.checkVersions then
+    if let some v := npm.bind (·.version) then
+      if v != m.version then
+        let shown := if isSemver v then quote v else "a version that isn't a semantic version"
+        fail .packageVersion s!"the package.haus of {owner} says version {quote m.version}, its package.json {shown}"
+
+/-- An import of a file. -/
+def Import.isFile (i : Import) : Bool := i.module matches .file _
+
+/-- A package imports packages, never files: checked before anything is looked for. -/
+def checkNoFiles (m : Manifest) (s : Scanned) : M Unit := do
+  if let some i := s.imports.find? Import.isFile then
+    fail .packagePath s!"the schema of {m.name} imports the file {i.module.show}; a package imports only packages, by name"
+
+def load (w : Walk) : Nat → Target → M Loaded
   | 0, _ => fail .outOfFuel "out of fuel"
   | n + 1, .file p => do
     match (← get).files.lookup p with
@@ -524,15 +565,16 @@ def load : Nat → Target → M Loaded
     | some none => fail .importCycle s!"{showPath p} imports itself, directly or not"
     | none => pure ()
     modify fun s => { s with files := (p, none) :: s.files }
-    let limit := (← cfg).limits.schemaFile
+    let config ← cfg
+    let limit := config.limits.schemaFile
     let bytes ← openFile p limit fun size =>
       ⟨.fileTooLarge, s!"{showPath p} has {size} bytes, more than {limit}; it is not read"⟩
     countFile (showPath p)
     let s ← decodeScan bytes (showPath p)
     noteImports s.imports.length
-    for imp in s.imports do
-      let _ ← resolveImport (load n) (.app p) imp
-    modify fun st => { st with files := (p, some s.types) :: st.files }
+    for imp in w.order s.imports do
+      let _ ← resolveImport (load w n) (.app p) imp
+    modify fun st => { st with files := (p, some s.types) :: st.files, finished := addNew st.finished (.file p) }
     return { types := s.types }
   | n + 1, .copy dir => do
     match (← get).copies.lookup dir with
@@ -544,27 +586,20 @@ def load : Nat → Target → M Loaded
     let some m ← manifestOf dir (showPath dir)
       | fail .importNotFound s!"{showPath dir} has no package.haus"
     let owner := s!"{m.name} ({showPath dir})"
-    -- Its package.json: what it declares, and the version its package manager gives it.
-    let npm ← if config.mode.npm then packageJsonOf dir owner else pure none
-    if config.checkVersions then
-      if let some v := npm.bind (·.version) then
-        if v != m.version then
-          let shown := if isSemver v then quote v else "a version that isn't a semantic version"
-          fail .packageVersion s!"the package.haus of {owner} says version {quote m.version}, its package.json {shown}"
+    let npm ← copyNpm config dir owner
+    checkVersion config m npm owner
     let some bytes ← openPackageFile dir "schema.haus" config.limits.schemaFile .fileTooLarge owner
       | fail .importNotFound s!"{owner} has no schema.haus"
     countFile s!"the schema.haus of {owner}"
     let s ← decodeScan bytes s!"the schema.haus of {owner}"
     noteImports s.imports.length
-    -- A package imports packages, never files: checked before anything is looked for.
-    if let some i := s.imports.find? (·.module matches .file _) then
-      fail .packagePath s!"the schema of {m.name} imports the file {i.module.show}; a package imports only packages, by name"
+    checkNoFiles m s
     let mut targets : List Nat := []
-    for imp in s.imports do
-      if let some c ← resolveImport (load n) (.pkg dir m.name npm) imp then targets := targets ++ [c]
+    for imp in w.order s.imports do
+      if let some c ← resolveImport (load w n) (.pkg dir m.name npm) imp then targets := targets ++ [c]
     let c ← classify { name := m.name, version := m.version, manifest := m.bytes, schema := bytes,
                        imports := targets, types := s.types, dir }
-    modify fun st => { st with copies := (dir, .done c) :: st.copies }
+    modify fun st => { st with copies := (dir, .done c) :: st.copies, finished := addNew st.finished (.copy dir) }
     return { types := s.types, cls := some c }
 
 /-! ## The explicit packages, and the whole -/
@@ -614,7 +649,7 @@ def Outcome.of (p : Except Err Unit × St) : Outcome :=
   ⟨p.1.map fun _ => packagesOf p.2.classes.list, p.2.reads, p.2.classes⟩
 
 /-- The whole run: the explicit packages, then the schema file `root` and everything it imports. -/
-def main (root : Path) : M Unit := do
+def main (root : Path) (w : Walk := .file) : M Unit := do
   let (given, broken) ← givenPackages
   withReader (fun e => { e with given, broken }) do
     let real ← match ← look (·.realPath root) with
@@ -622,14 +657,14 @@ def main (root : Path) : M Unit := do
       | .error _ => fail .importNotFound s!"the schema file {showPath root} doesn't exist"
     if (← look (·.kindAt? real)) != some .file then
       fail .importNotFound s!"the schema file {showPath root} is not a regular file"
-    let fuel ← look (·.entries.length + 1)
-    let _ ← load fuel (.file real)
+    let fuel := (← cfg).limits.files + 1
+    let _ ← load w fuel (.file real)
 
 /--
 Loads the schema file `root` of `tree` and everything it imports. On success,
 every package reached, as `name@version`, sorted.
 -/
-def resolveIn (tree : Tree) (config : Config) (root : Path) : Outcome :=
-  Outcome.of ((((main root).run { tree, config }).run).run {})
+def resolveIn (tree : Tree) (config : Config) (root : Path) (w : Walk := .file) : Outcome :=
+  Outcome.of ((((main root w).run { tree, config }).run).run {})
 
 end Haus.Packages

@@ -3,6 +3,7 @@ import Haus.Json.SchemaBased
 import Haus.Packages.Suite
 import Haus.Profiles.Vectors
 import Haus.Stream.Limited
+import Haus.SchemaFile.Instances
 import Lean.Data.Json
 
 /-!
@@ -19,9 +20,11 @@ import Lean.Data.Json
     haus-ref --time TYPE TEXT     whether TEXT is a valid std/time TYPE (exit 0 or 1)
     haus-ref --time-batch FILE    for each line `TYPE HEX` of FILE (the text as hex-encoded
                                   UTF-8): `ok` or `no` (fuzz/)
-    haus-ref --schema-suite DIR [TYPES]  run the schema suite in DIR (spec §15) with the
-                                  resolved types in TYPES (default schema-suite.json,
-                                  written by scripts/schema-types.ts)
+    haus-ref --schema-suite DIR [TYPES]  run the schema suite in DIR (spec §14, §15): each
+                                  NAME.schema.haus read by the Lean schema-file checker,
+                                  invalid/ rejected with its codes, and the cases again with
+                                  the types in TYPES (default schema-suite.json, written by
+                                  scripts/schema-types.ts)
     haus-ref --schema-batch TYPES FILE   for each line `SUITE TYPE HEX` of FILE (a value's haus
                                   text as hex-encoded UTF-8): `ok <canonical form of the
                                   encoded result>` or `err <place> <code> <reason>` (fuzz/;
@@ -323,39 +326,108 @@ def codeText : Option Code → String
   | some c => c.name
   | none => "-"
 
+/-- The cases of a suite with an environment: the failures. -/
+def schemaCases (name : String) (env : Schema.Env) (cases : List Value) : Array String := Id.run do
+  let mut failures : Array String := #[]
+  for c in cases do
+    let shown := String.ofList (Canonical.canonical c)
+    match schemaCase c with
+    | none => failures := failures.push s!"{name}: not a case: {shown}"
+    | some (true, type, input, output, _, _) =>
+      match decodeCanonical env type input with
+      | .ok got =>
+        let want := String.ofList (Canonical.canonical output)
+        if got != want then failures := failures.push s!"{name}: {shown}: got {got}"
+      | .error e => failures := failures.push s!"{name}: {shown}: {e.place}: {e.reason}"
+    | some (false, type, input, _, code, path) =>
+      match decodeCanonical env type input with
+      | .ok got => failures := failures.push s!"{name}: {shown}: accepted as {got}"
+      | .error e =>
+        if codeText e.code != code then
+          failures := failures.push s!"{name}: {shown}: {codeText e.code} instead of {code} ({e.place}: {e.reason})"
+        else if e.place != path then
+          failures := failures.push s!"{name}: {shown}: at {e.place} instead of {path} ({e.reason})"
+  return failures
+
+/-- `NAME.cases.haus` in `dir`: its values. -/
+def readCases (dir : System.FilePath) (name : String) : IO (List Value) := do
+  match parseBytes (← IO.FS.readBinFile (dir / s!"{name}.cases.haus")) with
+  | .ok vs => pure vs
+  | .error e => throw (IO.userError s!"{name}.cases.haus: {e}")
+
+/-- The files in `dir` ending in `ext`, without it, sorted. -/
+def namesIn (dir : System.FilePath) (ext : String) : IO (List String) := do
+  if !(← dir.isDir) then return []
+  let names := (← dir.readDir).toList.filterMap fun e =>
+    if e.fileName.endsWith ext then some (e.fileName.dropEnd ext.length).toString else none
+  return names.mergeSort (· ≤ ·)
+
+/--
+A schema file's bytes read by the reference's schema-file checker
+(`Haus.SchemaFile.load`): decoded as UTF-8 first, with `invalid-utf8` as in
+data (spec §14 shares data's text rules).
+-/
+def loadSchemaFile (file : System.FilePath) : IO (SchemaFile.C Schema.Env) := do
+  match String.fromUTF8? (← IO.FS.readBinFile file) with
+  | none => return .error ⟨.invalidUtf8, "invalid UTF-8"⟩
+  | some text => return SchemaFile.load text.toList
+
+/--
+The schema suite in `dir`: each `NAME.schema.haus` read by the reference's
+own schema-file checker (`Haus.SchemaFile.load`) and its `NAME.cases.haus`
+decoded with it; each `invalid/NAME.schema.haus` rejected with the code in
+`invalid/NAME.error`; and the cases again with the types the TypeScript
+binding resolved (`types`, from `scripts/schema-types.ts`), so that both
+resolutions are compared on every case.
+-/
 def runSchemaSuite (dir types : System.FilePath) : IO UInt32 := do
   let mut failures : Array String := #[]
   let mut skipped : Array String := #[]
+  -- The schema files, read here.
   let mut count := 0
-  for (name, env) in ← readSuites types do
-    let cases ← match parseBytes (← IO.FS.readBinFile (dir / s!"{name}.cases.haus")) with
-      | .ok vs => pure vs
-      | .error e => throw (IO.userError s!"{name}.cases.haus: {e}")
-    match env with
-    | .error e => skipped := skipped.push s!"{name}: {cases.length} cases skipped, the schema file is rejected: {e}"
+  let mut bad := 0
+  for name in ← namesIn dir ".cases.haus" do
+    let cases ← readCases dir name
+    count := count + cases.length
+    match ← loadSchemaFile (dir / s!"{name}.schema.haus") with
+    | .error e =>
+      bad := bad + cases.length
+      failures := failures.push s!"{name}.schema.haus: rejected: {e.message} [{e.code.name}]"
     | .ok env =>
-      for c in cases do
-        count := count + 1
-        let shown := String.ofList (Canonical.canonical c)
-        match schemaCase c with
-        | none => failures := failures.push s!"{name}: not a case: {shown}"
-        | some (true, type, input, output, _, _) =>
-          match decodeCanonical env type input with
-          | .ok got =>
-            let want := String.ofList (Canonical.canonical output)
-            if got != want then failures := failures.push s!"{name}: {shown}: got {got}"
-          | .error e => failures := failures.push s!"{name}: {shown}: {e.place}: {e.reason}"
-        | some (false, type, input, _, code, path) =>
-          match decodeCanonical env type input with
-          | .ok got => failures := failures.push s!"{name}: {shown}: accepted as {got}"
-          | .error e =>
-            if codeText e.code != code then
-              failures := failures.push s!"{name}: {shown}: {codeText e.code} instead of {code} ({e.place}: {e.reason})"
-            else if e.place != path then
-              failures := failures.push s!"{name}: {shown}: at {e.place} instead of {path} ({e.reason})"
+      let fs := schemaCases name env cases
+      bad := bad + fs.size
+      failures := failures ++ fs
+  -- Schema files the checker must reject, with their code.
+  let mut invalid := 0
+  let mut invalidBad := 0
+  for name in ← namesIn (dir / "invalid") ".schema.haus" do
+    invalid := invalid + 1
+    let want := (← IO.FS.readFile (dir / "invalid" / s!"{name}.error")).trimAscii.toString
+    match ← loadSchemaFile (dir / "invalid" / s!"{name}.schema.haus") with
+    | .ok _ =>
+      invalidBad := invalidBad + 1
+      failures := failures.push s!"invalid/{name}.schema.haus: accepted, expected {want}"
+    | .error e =>
+      if e.code.name != want then
+        invalidBad := invalidBad + 1
+        failures := failures.push s!"invalid/{name}.schema.haus: {e.code.name} instead of {want} ({e.message})"
+  -- The same cases with the types of TYPES.
+  let mut typed := 0
+  let mut typedBad := 0
+  for (name, env) in ← readSuites types do
+    let cases ← readCases dir name
+    match env with
+    | .error e => skipped := skipped.push s!"{types}: {name}: {cases.length} cases skipped, the schema file is rejected: {e}"
+    | .ok env =>
+      let fs := schemaCases name env cases
+      typed := typed + cases.length
+      typedBad := typedBad + fs.size
+      failures := failures ++ fs.map (s!"{types}: " ++ ·)
   for f in failures do IO.println f
   for s in skipped do IO.println s
-  IO.println s!"{count - failures.size}/{count} passed"
+  IO.println s!"{count - bad}/{count} passed, schema files read by the Lean checker"
+  IO.println s!"{invalid - invalidBad}/{invalid} invalid schema files rejected with their code"
+  IO.println s!"{typed - typedBad}/{typed} passed with the types of {types}"
   return if failures.isEmpty then 0 else 1
 
 /-- One line of `--schema-batch`: `SUITE TYPE HEX`. -/

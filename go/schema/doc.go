@@ -20,4 +20,9 @@
 // ($.items[2].price). std/time's types are checked by their profile
 // ([CheckTime]). [Codec] chooses host types (spec §13.4), and [Secret]
 // holds a value that is never printed.
+//
+// [Type.ToJSON] and [Type.FromJSON] write and read a type's schema-based
+// JSON (spec §16.3), the JSON a JSON consumer expects. [Schema.CheckText]
+// reports every problem of a data file with its position, and hints for
+// fields and tags an open type doesn't list and for deprecated ones.
 package schema

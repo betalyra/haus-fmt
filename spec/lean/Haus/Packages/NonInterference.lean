@@ -365,6 +365,18 @@ theorem NI.packageJsonOf {dir : Path} {owner : String} : NI D (packageJsonOf dir
     | with_reducible exact NI.openPackageFile
     | nistep)
 
+theorem NI.copyNpm {config : Config} {dir : Path} {owner : String} : NI D (copyNpm config dir owner) := by
+  unfold Haus.Packages.copyNpm
+  repeat (first
+    | with_reducible exact NI.packageJsonOf
+    | nistep)
+
+theorem NI.checkVersion {config : Config} {m : Manifest} {npm : Option NpmInfo} {owner : String} :
+    NI D (checkVersion config m npm owner) := by unfold Haus.Packages.checkVersion; ni
+
+theorem NI.checkNoFiles {m : Manifest} {sc : Scanned} : NI D (checkNoFiles m sc) := by
+  unfold Haus.Packages.checkNoFiles; ni
+
 theorem NI.projectOf {p : Path} : NI D (projectOf p) := by unfold Haus.Packages.projectOf; ni
 
 theorem NI.declared {imp : Importer} : NI D (declared imp) := by
@@ -405,7 +417,7 @@ theorem NI.resolveImport {loadFn : Target → M Loaded} {importer : Importer} {i
     | with_reducible exact hload _
     | nistep)
 
-theorem NI.load : ∀ n T, NI D (load n T)
+theorem NI.load {w : Walk} : ∀ n T, NI D (load w n T)
   | 0, _ => by unfold Haus.Packages.load; ni
   | n + 1, .file p => by
     unfold Haus.Packages.load
@@ -424,6 +436,9 @@ theorem NI.load : ∀ n T, NI D (load n T)
       | with_reducible exact NI.noteImports
       | with_reducible exact NI.manifestOf
       | with_reducible exact NI.packageJsonOf
+      | with_reducible exact NI.copyNpm
+      | with_reducible exact NI.checkVersion
+      | with_reducible exact NI.checkNoFiles
       | with_reducible exact NI.openPackageFile
       | with_reducible exact NI.classify
       | nistep)
@@ -434,7 +449,7 @@ theorem NI.givenPackages : NI D givenPackages := by
     | with_reducible exact NI.manifestOf
     | nistep)
 
-theorem NI.main {root : Path} : NI D (main root) := by
+theorem NI.main {root : Path} {w : Walk} : NI D (main root w) := by
   unfold Haus.Packages.main
   repeat (first
     | with_reducible exact NI.givenPackages

@@ -2,7 +2,6 @@ package haus
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -106,12 +105,13 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 		b.WriteByte(':')
 		b.WriteString(value)
 	}
+	// Strings as JSON writers write them (spec §16): controls, DEL, C1 and
+	// bidi controls and U+2028 and U+2029 escaped.
 	str := func(s string) string {
-		var sb bytes.Buffer
-		enc := json.NewEncoder(&sb)
-		enc.SetEscapeHTML(false)
-		_ = enc.Encode(s) // a string always encodes
-		return strings.TrimSuffix(sb.String(), "\n")
+		if !utf8.ValidString(s) {
+			s = strings.ToValidUTF8(s, "\uFFFD")
+		}
+		return string(appendJSONString(nil, s))
 	}
 	member("code", str(string(e.Code)))
 	member("message", str(e.Message))

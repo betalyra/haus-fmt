@@ -114,7 +114,8 @@ func (s *Schema) Packages() []Package { return slices.Clone(s.packages) }
 
 // Warnings returns what to point out in the file (not in the files it
 // imports), in source order: attributes this version doesn't define
-// (unknown-attribute) and uses of deprecated types (deprecated).
+// (unknown-attribute), uses of deprecated types (deprecated), and record
+// cases with no schema-based JSON form (no-json-form, spec §16.3).
 func (s *Schema) Warnings() []*haus.Error { return slices.Clone(s.warnings) }
 
 // ── loading ──────────────────────────────────────────────────
@@ -307,6 +308,13 @@ func (l *loader) schema(root int) *Schema {
 		line, col := lineCol(u.text, w.pos)
 		s.warnings = append(s.warnings, &haus.Error{Code: w.code, Message: w.msg, Line: line, Column: col})
 	}
+	s.warnings = append(s.warnings, l.noJSONForms(root)...)
+	slices.SortStableFunc(s.warnings, func(a, b *haus.Error) int {
+		if a.Line != b.Line {
+			return a.Line - b.Line
+		}
+		return a.Column - b.Column
+	})
 	names := make([]string, 0, len(l.reached))
 	for name := range l.reached {
 		names = append(names, name)
@@ -789,6 +797,7 @@ func (l *loader) evaluateAll() *fail {
 		}
 		inst.resolved = t
 	}
+	l.markJSONNull()
 	return nil
 }
 

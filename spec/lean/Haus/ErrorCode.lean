@@ -3,7 +3,8 @@
 
 The codes of the catalogue (spec §17, `spec/errors.haus`) that the reference
 reports: the parser's (syntax and limits), the schema decoder's, the JSON
-readers' and writers' (§16) and package resolution's (§13.3). A code
+readers' and writers' (§16), package resolution's (§13.3) and the
+schema-file checker's (§14). A code
 names the mistake, the same in every binding; `Code.name` is its text. The
 TypeScript tests check that every name here is in the catalogue.
 
@@ -37,6 +38,11 @@ inductive Code
   | schemaSyntax | unknownModule | unknownImport | duplicateImport | duplicateType
   | importNotFound | importVersion | importCycle | duplicatePackage | undeclaredPackage
   | packageManifest | packageVersion | packagePath | fileTooLarge | tooManyFiles
+  -- the static rules of schema files (§14), as the schema-file checker reports them
+  | wrongArity | redefinePrelude | unknownParameter | invalidParameter | underscoreType
+  | duplicateField | duplicateTag | closedEmptyVariant | invalidSpread | spreadCycle
+  | rowParameter | misplacedStream | growingRecursion | typeTooDeep | attributeArguments
+  | attributeTwice | attributeSpace | attributeOnSpread | importUnavailable
   /-- A recursive function ran out of fuel. Never reported: the completeness
   proof shows the fuel always suffices. Not a code of the catalogue. -/
   | outOfFuel
@@ -122,6 +128,25 @@ def Code.name : Code → String
   | .packagePath => "package-path"
   | .fileTooLarge => "file-too-large"
   | .tooManyFiles => "too-many-files"
+  | .wrongArity => "wrong-arity"
+  | .redefinePrelude => "redefine-prelude"
+  | .unknownParameter => "unknown-parameter"
+  | .invalidParameter => "invalid-parameter"
+  | .underscoreType => "underscore-type"
+  | .duplicateField => "duplicate-field"
+  | .duplicateTag => "duplicate-tag"
+  | .closedEmptyVariant => "closed-empty-variant"
+  | .invalidSpread => "invalid-spread"
+  | .spreadCycle => "spread-cycle"
+  | .rowParameter => "row-parameter"
+  | .misplacedStream => "misplaced-stream"
+  | .growingRecursion => "growing-recursion"
+  | .typeTooDeep => "type-too-deep"
+  | .attributeArguments => "attribute-arguments"
+  | .attributeTwice => "attribute-twice"
+  | .attributeSpace => "attribute-space"
+  | .attributeOnSpread => "attribute-on-spread"
+  | .importUnavailable => "import-unavailable"
   | .outOfFuel => "(out of fuel)"
 
 instance : ToString Code := ⟨Code.name⟩
@@ -142,7 +167,11 @@ def Code.all : List Code := [
   .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm, .schemaSyntax,
   .unknownModule, .unknownImport, .duplicateImport, .duplicateType, .importNotFound,
   .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest,
-  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles]
+  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles, .wrongArity, .redefinePrelude,
+  .unknownParameter, .invalidParameter, .underscoreType, .duplicateField, .duplicateTag,
+  .closedEmptyVariant, .invalidSpread, .spreadCycle, .rowParameter, .misplacedStream,
+  .growingRecursion, .typeTooDeep, .attributeArguments, .attributeTwice, .attributeSpace,
+  .attributeOnSpread, .importUnavailable]
 
 theorem Code.mem_all (c : Code) (h : c ≠ .outOfFuel) : c ∈ Code.all := by
   cases c <;> simp_all [Code.all]

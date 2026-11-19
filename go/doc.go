@@ -21,5 +21,11 @@
 // [Hash] and [HashAll] implement spec §12. [StreamReader] reads a stream value
 // by value from an [io.Reader] (spec §6).
 //
+// JSON (spec §16): [ImportJSON] reads any JSON as a haus value, and
+// [ToHausJSON] and [FromHausJSON] write and read self-describing JSON, which
+// carries every haus value exactly; JSON Lines with [ToHausJSONLines],
+// [FromHausJSONLines], [ImportJSONLines] and [ReadHausJSONLines]. Schema-based
+// JSON, which needs a type, is in package schema.
+//
 // This package uses only the standard library.
 package haus

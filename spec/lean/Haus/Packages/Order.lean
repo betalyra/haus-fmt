@@ -3,20 +3,16 @@ import Haus.Packages.Suite
 /-!
 # Order of imports (R3, security review F4): what is and isn't proven
 
-**Not proven** (R3): that the result doesn't depend on the order of a file's
-imports or of the walk. The spec intends that on success the packages are
-the same and that success or failure is the same; it does not fix *which*
-error is reported when a schema has two mistakes, and the resolver reports
-the first one it meets, so the error code does depend on the order
-(`twoMistakes` below). The proof would relate two runs that load the same
-targets in different orders, with class numbers that differ between them:
-that a successful run's last state is closed (every target loaded has its
-checks passed and its imports loaded before it) and that a run in another
-order stays below such a state. It is the same simulation that R6 (folders
-are conservative) needs, and is left for later. A first step is proven in
+**Proven** (R3, `Haus.Packages.Walk`): the result doesn't depend on the
+order in which the imports of each file are walked (`Walk`, a permutation of
+a file's imports; `Walk.file` is the order of the file). `resolveIn_walk`:
+if a run succeeds, a run in any other order succeeds with the same packages;
+`resolveIn_walk_error`: if it fails, every other order fails. The spec
+doesn't fix *which* error is reported when a schema has two mistakes, and
+the resolver reports the first one it meets, so the error code does depend
+on the order (`twoMistakes` below), as intended. The proof builds on
 `Haus.Packages.Closed`: in every state of every run, a class imports only
-classes made before it (`classes_topo`), the order the simulation needs for
-packages.
+classes made before it (`classes_topo`).
 
 What R2 proves already holds in every order: one package per name, and a
 copy is unified with another only when its files and its imports' packages
