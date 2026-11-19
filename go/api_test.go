@@ -440,6 +440,11 @@ func TestFormatComments(t *testing.T) {
 		// A blank line before a record payload's '}' stays, before the comments moved inside.
 		{"{b:T(/**/{/**/\n\n}//\n),/**/a:F}//", "{\n  b: T {\n    /**/\n    /**/\n\n    //\n  }, /**/\n  a: F,\n} //\n"},
 		{"F,//\nF({a:0/**/\n\n}\n/**/)", "F, //\nF {\n  a: 0, /**/\n\n  /**/\n},\n"},
+		// In an empty record payload, a blank line between the comments before and after the braces stays.
+		{"T(/**/\n\n{}/*x*/)", "T {\n  /**/\n\n  /*x*/\n}\n"},
+		{"E(//\n\n{}//a\n)", "E {\n  //\n\n  //a\n}\n"},
+		// A comment after the braces doesn't trail an entry whose line a multi-line comment ends.
+		{"N({a:0/*\n*/}//\n)", "N {\n  a: 0, /*\n*/\n  //\n}\n"},
 		// A comment after a multi-line comment starts on a later line: it doesn't trail.
 		{"N(\"\"\"\n\"\"\")/*\n*///", "N(\"\") /*\n*/\n//\n"},
 		{"[A(5)/*\n*/,//c\n\"\"]", "[\n  A(5), /*\n*/\n  //c\n  \"\",\n]\n"},

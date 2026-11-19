@@ -130,7 +130,10 @@ func mergeRecordArg(parens *node) *node {
 	rec.val = parens.val
 	rec.form = formBraces
 	rec.iw = 0
-	// Comments before the record lead its first entry.
+	// Comments before the record lead its first entry. In an empty record a
+	// blank line between them and the record goes to the comment after them
+	// (pending, if that comment comes from after the record).
+	pending := 0
 	if len(arg.leading) > 0 {
 		if len(rec.items) > 0 {
 			first := rec.items[0]
@@ -143,15 +146,18 @@ func mergeRecordArg(parens *node) *node {
 		} else {
 			if len(rec.dangling) > 0 {
 				rec.dangling[0].nl = max(rec.dangling[0].nl, blankNL(arg.blank))
+			} else {
+				pending = blankNL(arg.blank)
 			}
 			rec.dangling = append(append([]comment(nil), arg.leading...), rec.dangling...)
 		}
 	}
 	// Comments after the record: on the line of its last entry they trail
-	// that entry, otherwise they dangle at its end, after the line breaks
-	// before its closing brace (a blank line there stays).
+	// that entry (unless a comment over several lines already ends that
+	// line), otherwise they dangle at its end, after the line breaks before
+	// its closing brace (a blank line there stays).
 	var moved []comment
-	if len(arg.trailing) > 0 && len(rec.items) > 0 && len(rec.dangling) == 0 && rec.sameLine {
+	if len(arg.trailing) > 0 && len(rec.items) > 0 && len(rec.dangling) == 0 && rec.sameLine && !endsMultiline(rec.items[len(rec.items)-1].trailing) {
 		last := rec.items[len(rec.items)-1]
 		last.trailing = append(last.trailing, arg.trailing...)
 	} else {
@@ -159,10 +165,15 @@ func mergeRecordArg(parens *node) *node {
 	}
 	moved = append(moved, parens.dangling...)
 	if len(moved) > 0 {
-		moved[0].nl = max(moved[0].nl, rec.closeNL)
+		moved[0].nl = max(moved[0].nl, rec.closeNL, pending)
 		rec.dangling = append(rec.dangling, moved...)
 	}
 	return rec
+}
+
+// endsMultiline reports whether the last of the comments spans several lines.
+func endsMultiline(cs []comment) bool {
+	return len(cs) > 0 && strings.Contains(cs[len(cs)-1].text, "\n")
 }
 
 func blankNL(blank bool) int {
