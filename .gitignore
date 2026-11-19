@@ -13,3 +13,6 @@ rust/target/
 .vscode/settings.json
 # Local planning notes
 plans/
+# Benchmark downloads and results
+bench/.data/
+bench/.out/
