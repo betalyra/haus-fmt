@@ -39,6 +39,7 @@ lake build
 .lake/build/bin/haus-ref --compact FILE           # FILE's values in a layout of spec §11, from values:
 .lake/build/bin/haus-ref --minimised FILE         #   numbers normalized, keys in source order, no comments
 .lake/build/bin/haus-ref --pretty FILE [INDENT WIDTH]  # default indent 2, width 80
+.lake/build/bin/haus-ref --write-batch pretty 4 40 DIR N  # the same for fuzz/: each value, and the file, as JSON
 .lake/build/bin/haus-ref --time Date 2026-02-29     # a std/time check
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §14, §15)
 .lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
@@ -243,7 +244,9 @@ The expected files of [`test-suite/format`](../../test-suite/format) are
 written by the formatter, which keeps source spellings (`0xFF`, `1_000`,
 `\u{41}`, blanks in byte strings), comments and blank lines; the writers here agree with
 them byte for byte on every input without those (60 of 70 compact and
-minimised files, 30 of 70 pretty files; PLAN.md L3, L5).
+minimised files, 30 of 70 pretty files; PLAN.md L3, L5). The bindings'
+value writers are fuzzed against them (`haus-ref --write-batch`, `node
+fuzz/src/main.ts --format`, [`fuzz/README.md`](../../fuzz/README.md#formatters)).
 
 **About streams** (spec §6), in [`Haus/Stream/`](Haus/Stream). The model in
 [`Haus/Stream.lean`](Haus/Stream.lean) works like the readers of all three

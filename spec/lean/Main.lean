@@ -24,6 +24,10 @@ import Lean.Data.Json
     haus-ref --minimised FILE     the same in the minimised layout (`Layout.minimisedAll`)
     haus-ref --pretty FILE [INDENT WIDTH]  the same in the pretty layout without comments
                                   (`Layout.prettyAll`; default indent 2, width 80)
+    haus-ref --write-batch LAYOUT DIR N  like --batch, writing each file's values in LAYOUT
+                                  (`compact`, `minimised`, or `pretty [INDENT WIDTH]`):
+                                  `ok {"values": [<each value alone>, …], "file": <the
+                                  file>}` (fuzz/, the value writers)
     haus-ref --time TYPE TEXT     whether TEXT is a valid std/time TYPE (exit 0 or 1)
     haus-ref --time-batch FILE    for each line `TYPE HEX` of FILE (the text as hex-encoded
                                   UTF-8): `ok` or `no` (fuzz/)
@@ -115,6 +119,34 @@ def canonicalLine (bytes : ByteArray) : String :=
       match Parser.parse {} s.toList with
       | .ok vs => s!"ok {(Json.arr (vs.map fun v => Json.str (String.ofList (Canonical.canonical v))).toArray).compress}"
       | .error _ => batchLine bytes
+
+/--
+One result of `--write-batch`: the values written in a layout from values
+(spec §11), each on its own (`value` with no line break after it) and the
+whole file (`compactAll`, `minimisedAll`, `prettyAll`), as JSON strings:
+`ok {"values": […], "file": …}`.
+-/
+def writeLine (value : Value → Text) (file : List Value → Text) (bytes : ByteArray) : String :=
+  match String.fromUTF8? bytes with
+  | none => batchLine bytes
+  | some s =>
+      match Parser.parse {} s.toList with
+      | .ok vs =>
+          let values := Json.arr (vs.map fun v => Json.str (String.ofList (value v))).toArray
+          s!"ok {(Json.mkObj [("values", values), ("file", Json.str (String.ofList (file vs)))]).compress}"
+      | .error _ => batchLine bytes
+
+def writeUsage := "usage: haus-ref --write-batch (compact | minimised | pretty [INDENT WIDTH]) DIR N"
+
+/-- The layout `--write-batch` writes: compact, minimised, or pretty with the options. -/
+def writeLayout : List String → Option ((Value → Text) × (List Value → Text))
+  | ["compact"] => some (Layout.compact, Layout.compactAll)
+  | ["minimised"] => some (Layout.minimised, Layout.minimisedAll)
+  | ["pretty"] => some (Layout.pretty {} [] 0, Layout.prettyAll {})
+  | ["pretty", indent, width] =>
+      let o : Layout.Options := { indent := indent.toNat!, width := width.toNat! }
+      some (Layout.pretty o [] 0, Layout.prettyAll o)
+  | _ => none
 
 def runBatch (line : ByteArray → String) (dir : System.FilePath) (n : Nat) : IO UInt32 := do
   let out ← IO.getStdout
@@ -815,6 +847,13 @@ def main : List String → IO UInt32
   | ["--suite", dir] => runSuite dir
   | ["--batch", dir, n] => runBatch batchLine dir n.toNat!
   | ["--canonical-batch", dir, n] => runBatch canonicalLine dir n.toNat!
+  | "--write-batch" :: args =>
+      match args.reverse with
+      | n :: dir :: layout =>
+          match writeLayout layout.reverse with
+          | some (value, file) => runBatch (writeLine value file) dir n.toNat!
+          | none => do IO.eprintln writeUsage; return 2
+      | _ => do IO.eprintln writeUsage; return 2
   | ["--canonical", file] => do
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => for v in vs do IO.println (String.ofList (Canonical.canonical v))
@@ -847,4 +886,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2

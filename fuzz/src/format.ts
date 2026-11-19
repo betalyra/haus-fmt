@@ -3,8 +3,8 @@
  * (format-gen.ts) through the TypeScript, Rust and Go formatters in the
  * pretty, compact and minimised layouts, which must write the same bytes and
  * keep the properties of §11; and generated values through the value writers
- * of TypeScript, Rust, Roc and Go, which must write the same compact and minimised
- * lines. See ../README.md.
+ * of TypeScript, Rust, Roc and Go, which must write what Lean's layout writers
+ * write (compact, minimised and pretty), byte for byte. See ../README.md.
  *
  *   node fuzz/src/main.ts --format [--count N] [--seed S] [--out DIR]
  */
@@ -38,6 +38,7 @@ const root = new URL("../..", import.meta.url).pathname
 const RUST = join(root, "rust/target/release/examples/fuzz_runner")
 const ROC = join(root, "fuzz/.build/roc-runner")
 const GO = join(root, "fuzz/.build/go-runner")
+const LEAN = join(root, "spec/lean/.lake/build/bin/haus-ref")
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 const enc = new TextEncoder()
@@ -441,29 +442,68 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
 
 // ── value writers ────────────────────────────────────────────
 
-const WRITERS = ["compact", "minimised"] as const
+/**
+ * What a value writer wrote for a case: each value alone (no line break
+ * after it), and, where the binding has a writer for them, the whole file
+ * (one value alone, more each followed by a comma; spec §6, §11) or a stream
+ * (every value followed by a comma); or why it couldn't.
+ */
+type Written =
+  | { readonly ok: true; readonly values: readonly string[]; readonly file?: string | null; readonly stream?: string | null }
+  | { readonly ok: false; readonly reason: string }
 
-/** A value writer's lines for every value of a case, or why it couldn't write them. */
-type Lines = { readonly ok: true; readonly lines: readonly string[] } | { readonly ok: false; readonly reason: string }
-
-function externalLines(program: string, args: readonly string[], dir: string, cases: readonly Uint8Array[]): Lines[] {
+function externalWritten(program: string, args: readonly string[], dir: string, cases: readonly Uint8Array[]): Written[] {
   return external(program, args, dir, cases).map((line) => {
     if (line.startsWith("crash ")) return { ok: false, reason: line }
-    const r = parseOut<string[]>(line)
-    return r.ok ? { ok: true, lines: r.json } : { ok: false, reason: r.reason }
+    const r = parseOut<{ values: string[]; file?: string | null; stream?: string | null }>(line)
+    return r.ok ? { ok: true, ...r.json } : { ok: false, reason: r.reason }
   })
 }
 
-const describeLines = (l: Lines) => (l.ok ? JSON.stringify(l.lines) : `err ${l.reason}`)
+const describeValues = (w: Written) => (w.ok ? JSON.stringify(w.values) : `err ${w.reason}`)
+
+/** A value writer that is a separate program, and its arguments for a layout and options (undefined: it can't be given them). */
+interface Writer {
+  readonly name: string
+  readonly program: string
+  readonly args: (style: Style, options: Options) => readonly string[] | undefined
+}
+
+/**
+ * The value writers compared with Lean's: Rust's `to_string`,
+ * `to_string_minimised` and `to_string_all` (`fuzz_runner --write`), Roc's
+ * `Encode.to_str`, `Encode.minimised`, `Encode.stream` and
+ * `Encode.stream_minimised` (`runner.roc --write`), neither with a pretty
+ * writer from values; and Go's `FormatValue` and `FormatValues` in every
+ * layout (`go-runner --write`; its options take 0 as the default, so it sits
+ * out pretty with an indent or width of 0). TypeScript's `stringify` and
+ * `format` run in this process.
+ */
+const WRITERS: readonly Writer[] = [
+  { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
+  { name: "roc", program: ROC, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
+  {
+    name: "go",
+    program: GO,
+    args: (s, o) => (s !== "pretty" ? ["--write", s] : o.indent > 0 && o.width > 0 ? ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] : undefined),
+  },
+]
+
+/** Lean's layout argument: pretty with the options. */
+const leanLayout = (style: Style, o: Options) => (style === "pretty" ? ["pretty", String(o.indent), String(o.width)] : [style])
 
 /**
  * The value writers on the values of the cases that parse (no source text,
- * so numbers are normalized and byte strings lowercase): TypeScript's
- * `stringify`, Rust's `to_string` and `to_string_minimised`, Roc's
- * `Encode.to_str` and `Encode.minimised` must write the same lines, each of
- * which parses back to its value.
+ * so numbers are normalized and byte strings lowercase), in each layout and
+ * with the batch's options, against Lean's layout writers (`haus-ref
+ * --write-batch`: spec/lean/Haus/Layout, proven to parse back): TypeScript's
+ * `stringify` and `format` and the writers of `WRITERS` must write each
+ * value, and the file or stream where they have a writer for it, byte for
+ * byte as Lean does. Lean's text is also read back without any writer: it
+ * must hold the values and keep the layout's rules (`layoutRules`), which
+ * checks the checks.
  */
-export function checkWriters(dir: string, cases: readonly Uint8Array[]): Failure[][] {
+export function checkWriters(dir: string, cases: readonly Uint8Array[], options: Options): Failure[][] {
   const failures: Failure[][] = cases.map(() => [])
   const parsed = cases.map((c) => {
     try {
@@ -472,30 +512,44 @@ export function checkWriters(dir: string, cases: readonly Uint8Array[]): Failure
       return undefined
     }
   })
-  for (const style of WRITERS) {
-    const rust = externalLines(RUST, ["--write", style], join(dir, "input"), cases)
-    const roc = externalLines(ROC, ["--write", style], join(dir, "input"), cases)
-    const go = externalLines(GO, ["--write", style], join(dir, "input"), cases)
+  const input = join(dir, "input")
+  for (const style of STYLES) {
+    const lean = externalWritten(LEAN, ["--write-batch", ...leanLayout(style, options)], input, cases)
+    const writers = WRITERS.flatMap((w) => {
+      const args = w.args(style, options)
+      return args ? [{ name: w.name, out: externalWritten(w.program, args, input, cases) }] : []
+    })
+    const opts = { style, indent: options.indent, width: options.width }
     parsed.forEach((values, i) => {
       if (!values) return
-      let ts: Lines
+      const fail = (check: string, detail: string) => failures[i]!.push({ check: `${check} (${style})`, detail })
+      const reference = lean[i]!
+      if (!reference.ok) return fail("writer: lean rejects", `err ${reference.reason}`)
+      let ts: Written
       try {
-        ts = { ok: true, lines: values.map((v) => stringify(v, { style })) }
+        ts = { ok: true, values: values.map((v) => stringify(v, opts)), file: format(values, opts) }
       } catch (e) {
         ts = { ok: false, reason: String(e) }
       }
-      for (const [name, other] of [["rust", rust[i]!], ["roc", roc[i]!], ["go", go[i]!]] as const) {
-        if (describeLines(other) !== describeLines(ts)) {
-          failures[i]!.push({ check: `writer: ${name} ≠ typescript (${style})`, detail: `typescript ${describeLines(ts)}\n${name.padEnd(10)} ${describeLines(other)}` })
+      const stream = reference.values.map((v) => v + ",\n").join("")
+      for (const { name, out } of [{ name: "typescript", out: ts }, ...writers.map((w) => ({ name: w.name, out: w.out[i]! }))]) {
+        if (describeValues(out) !== describeValues(reference)) {
+          fail(`writer: ${name} ≠ lean`, `lean       ${describeValues(reference)}\n${name.padEnd(10)} ${describeValues(out)}`)
         }
+        if (!out.ok) continue
+        if (out.file != null && out.file !== reference.file) fail(`writer file: ${name} ≠ lean`, `lean       ${show(reference.file!)}\n${name.padEnd(10)} ${show(out.file)}`)
+        if (out.stream != null && out.stream !== stream) fail(`writer stream: ${name} ≠ lean`, `lean       ${show(stream)}\n${name.padEnd(10)} ${show(out.stream)}`)
       }
-      if (!ts.ok) return
-      ts.lines.forEach((line, j) => {
-        const one = valuesOf(line)
-        if (one !== JSON.stringify([canonical(values[j]!)])) failures[i]!.push({ check: `writer values: ${style}`, detail: `${show(line)} reads as ${one ?? "not haus"}, not ${canonical(values[j]!)}` })
-        if (/[\n\r\u2028\u2029]/.test(line)) failures[i]!.push({ check: `writer lines: ${style}`, detail: show(line) })
-        for (const [check, detail] of layoutRules(style, line, { indent: 2, width: 80 })) failures[i]!.push({ check: `writer ${check}: ${style}`, detail })
+      // Lean's text, read back without any writer.
+      reference.values.forEach((text, j) => {
+        const one = valuesOf(text)
+        if (one !== JSON.stringify([canonical(values[j]!)])) fail("writer values", `${show(text)} reads as ${one ?? "not haus"}, not ${canonical(values[j]!)}`)
+        if (style !== "pretty" && /[\n\r\u2028\u2029]/.test(text)) fail("writer lines", show(text))
+        for (const [check, detail] of layoutRules(style, text, options)) fail(`writer ${check}`, detail)
       })
+      const file = reference.file!
+      if (valuesOf(file) !== JSON.stringify(values.map(canonical))) fail("writer file values", `${show(file)} reads as ${valuesOf(file) ?? "not haus"}`)
+      for (const [check, detail] of layoutRules(style, file, options)) fail(`writer file ${check}`, detail)
     })
   }
   return failures
@@ -560,19 +614,20 @@ export async function run(argv: readonly string[]): Promise<number> {
   const rng = new Rng(seed)
   const started = Date.now()
   /** Per check: how many cases failed it, and the shrunk inputs (at most a few per check). */
-  const found = new Map<string, { count: number; inputs: Map<string, { bytes: Uint8Array; options: Options | undefined; failure: Failure }> }>()
+  const found = new Map<string, { count: number; inputs: Map<string, { bytes: Uint8Array; options: Options; formatter: boolean; failure: Failure }> }>()
   let accepted = 0
   let comments = 0
   let streams = 0
   const MAX_SHRUNK = 3
 
-  console.log(`seed ${seed}: ${count} documents through the typescript, rust and go formatters (pretty, compact, minimised), their values through the typescript, rust, roc and go writers`)
+  console.log(`seed ${seed}: ${count} documents through the typescript, rust and go formatters (pretty, compact, minimised), their values through the lean, typescript, rust, roc and go writers`)
   for (let done = 0; done < count; done += batch) {
     // Most batches use the default options; some another indentation and width.
     const options = rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)
     const cases = Array.from({ length: Math.min(batch, count - done) }, () => formatInput(rng, seeds))
     const formatRun: Checker = (d, cs) => checkFormat(d, cs, options)
-    const results = [formatRun(dir("cases"), cases), checkWriters(dir("cases"), cases)]
+    const writeRun: Checker = (d, cs) => checkWriters(d, cs, options)
+    const results = [formatRun(dir("cases"), cases), writeRun(dir("cases"), cases)]
     cases.forEach((c, i) => {
       try {
         const doc = parseDocument(utf8.decode(c))
@@ -586,11 +641,11 @@ export async function run(argv: readonly string[]): Promise<number> {
           found.set(f.check, entry)
           entry.count++
           if (entry.inputs.size >= MAX_SHRUNK) continue
-          const small = shrink(c, f.check, kind === 0 ? formatRun : checkWriters)
+          const small = shrink(c, f.check, kind === 0 ? formatRun : writeRun)
           const key = show(Buffer.from(small).toString("latin1"))
           if (entry.inputs.has(key)) continue
-          const failure = (kind === 0 ? formatRun : checkWriters)(dir("shrink"), [small])[0]!.find((x) => x.check === f.check) ?? f
-          entry.inputs.set(key, { bytes: small, options: kind === 0 ? options : undefined, failure })
+          const failure = (kind === 0 ? formatRun : writeRun)(dir("shrink"), [small])[0]!.find((x) => x.check === f.check) ?? f
+          entry.inputs.set(key, { bytes: small, options, formatter: kind === 0, failure })
         }
       })
     })
@@ -607,14 +662,14 @@ export async function run(argv: readonly string[]): Promise<number> {
   let n = 0
   for (const [check, { count: times, inputs }] of found) {
     console.log(`\nFAILED ${check}: ${times} cases`)
-    for (const { bytes, options, failure } of inputs.values()) {
+    for (const { bytes, options, formatter, failure } of inputs.values()) {
       const name = join(outDir, "format", "failures", String(n++))
       const report = [
         `check: ${check}`,
         `input: ${show(Buffer.from(bytes).toString("utf8"))}`,
-        ...(options ? [`options: indent ${options.indent}, width ${options.width}`] : []),
+        `options: indent ${options.indent}, width ${options.width}`,
         failure.detail,
-        ...(options ? ["outputs:", outputs(bytes, options)] : []),
+        ...(formatter ? ["outputs:", outputs(bytes, options)] : []),
       ].join("\n")
       writeFileSync(`${name}.haus`, bytes)
       writeFileSync(`${name}.txt`, report + "\n")

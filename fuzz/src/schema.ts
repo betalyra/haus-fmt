@@ -14,7 +14,7 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { canonical, parseAll, type Value } from "../../typescript/packages/haus/dist/index.js"
 import { Rng } from "./generate.ts"
-import { Generator, type Env, type Type } from "./schema-gen.ts"
+import { caseRecord, Generator, onlyNamed, type Env, type Type } from "./schema-gen.ts"
 import {
   caseLine, effectRunner, go, lean, python, roc, rust, rustCheck, schemaTexts, typescriptRunner, type Outcome, type SchemaCase, type SchemaRunner,
 } from "./schema-runners.ts"
@@ -208,7 +208,13 @@ export function mentionsSecret(env: Env, t: Type, seen: Set<string> = new Set())
   if ("map" in t) return mentionsSecret(env, t.map, seen)
   if ("maybe" in t) return mentionsSecret(env, t.maybe, seen)
   if ("record" in t) return t.record.fields.some((f) => mentionsSecret(env, f.type, seen))
-  if ("variant" in t) return t.variant.cases.some((k) => k.payload !== "none" && ("record" in k.payload ? k.payload.record.fields.some((f) => mentionsSecret(env, f.type, seen)) : k.payload.positional.some((x) => mentionsSecret(env, x, seen))))
+  if ("variant" in t) {
+    return t.variant.cases.some(({ payload: p }) =>
+      p === "none" ? false
+      : "positional" in p ? p.positional.some((x) => mentionsSecret(env, x, seen))
+      : onlyNamed(p) ? mentionsSecret(env, p.named, seen)
+      : p.record.fields.some((f) => mentionsSecret(env, f.type, seen)))
+  }
   return false
 }
 
@@ -289,7 +295,7 @@ export function secretParts(env: Env, type: string, text: string): string[] {
     if ("variant" in t && x.kind === "variant") {
       const p = t.variant.cases.find((k) => k.tag === x.tag)?.payload
       if (p === undefined || p === "none") return
-      if ("record" in p) return fields(p.record.fields, x.args[0])
+      if (!("positional" in p)) return fields(caseRecord(env, p).fields, x.args[0])
       p.positional.forEach((pt, i) => x.args[i] !== undefined && walk(pt, x.args[i]!, depth + 1))
     }
   }

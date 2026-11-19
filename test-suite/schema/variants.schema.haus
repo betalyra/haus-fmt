@@ -6,3 +6,6 @@ type Strict = closed < A | B Int | C { x: Int } >
 type ClosedPayload = closed < Circle closed { r: Int } >
 type AnyTag = < >
 type Holder = { shape: Shape, any: Array AnyTag }
+// A record that reaches its own record case by name (found by the schema-file fuzzer).
+type Node = { s: < S Next | N >, o?: < T Next > }
+type Next = Node

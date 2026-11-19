@@ -8,8 +8,9 @@
 ## (spec §12) as a JSON array of strings. With `--write compact` or
 ## `--write minimised` (the formatter fuzzer, `main.ts --format`), each value
 ## goes through the value writer, `Encode.to_str` or `Encode.minimised`, and
-## `ok` is followed by the lines as a JSON array of strings; an encoding
-## error is `err 0 0 <code> <reason>`.
+## all of them through the stream writer, `Encode.stream` or
+## `Encode.stream_minimised`: `ok {"values": [<line>, …], "stream": …}`, as
+## JSON strings; an encoding error is `err 0 0 <code> <reason>`.
 app [main!] {
 	haus: "../package/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t.tar.zst",
@@ -41,8 +42,8 @@ main! = |args| {
 		output = match mode {
 			Stream => line(streamed(bytes, $i))
 			Canonical => canonical_line(Value.parse_bytes(bytes))
-			WriteCompact => write_line(Value.parse_bytes(bytes), Encode.to_str)
-			WriteMinimised => write_line(Value.parse_bytes(bytes), Encode.minimised)
+			WriteCompact => write_line(Value.parse_bytes(bytes), Encode.to_str, Encode.stream)
+			WriteMinimised => write_line(Value.parse_bytes(bytes), Encode.minimised, Encode.stream_minimised)
 			Parse => line(Value.parse_bytes(bytes))
 		}
 		Stdout.line!(output)?
@@ -68,13 +69,18 @@ canonical_line = |result| match result {
 	Err(e) => line(Err(e))
 }
 
-## With `--write`: each value through `write` (`Encode.to_str` or `Encode.minimised`), as JSON strings.
-write_line : Try(List(Value), Value.ParseError), (Value -> Try(Str, Encode.Error)) -> Str
-write_line = |result, write| match result {
+## With `--write`: each value through `write` (`Encode.to_str` or
+## `Encode.minimised`), and all of them through `stream` (`Encode.stream` or
+## `Encode.stream_minimised`), as JSON strings.
+write_line : Try(List(Value), Value.ParseError), (Value -> Try(Str, Encode.Error)), (List(Value) -> Try(Str, Encode.Error)) -> Str
+write_line = |result, write, stream| match result {
 	Ok(values) =>
-		match write_all(values, write) {
-			Ok(lines) => "ok [${Str.join_with(lines.map(|text| Value.to_test_json(Text(text))), ",")}]"
-			Err({ code, reason, path: _ }) => "err 0 0 ${code} ${reason.replace_each("\r", "\\r").replace_each("\n", "\\n")}"
+		match (write_all(values, write), stream(values)) {
+			(Ok(lines), Ok(text)) => {
+				written = Str.join_with(lines.map(|l| Value.to_test_json(Text(l))), ",")
+				"ok {\"values\":[${written}],\"stream\":${Value.to_test_json(Text(text))}}"
+			}
+			(Err({ code, reason, path: _ }), _) | (_, Err({ code, reason, path: _ })) => "err 0 0 ${code} ${reason.replace_each("\r", "\\r").replace_each("\n", "\\n")}"
 		}
 	Err(e) => line(Err(e))
 }

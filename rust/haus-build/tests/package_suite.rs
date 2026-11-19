@@ -6,8 +6,10 @@
 //! The `Npm` cases are not run: neither generator reads node_modules (Cargo
 //! gives a build script its dependencies; haus-gen takes packages
 //! explicitly). haus-fmt-schema's own adapter runs every case, with
-//! `NodeModules` too (haus-schema/tests/packages.rs).
-#![cfg(unix)]
+//! `NodeModules` too (haus-schema/tests/packages.rs). It runs on Unix and
+//! Windows (where making links needs Developer Mode or an administrator, as
+//! on CI).
+#![cfg(any(unix, windows))]
 
 use haus::Value;
 use haus::json::Json;

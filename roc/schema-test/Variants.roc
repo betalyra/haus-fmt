@@ -167,4 +167,66 @@ Variants := [].{
 	encode_holder : Holder, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
 	encode_holder = |v, e| Encode.record(e, [("shape", Encode.required(v.shape, encode_shape)), ("any", Present(|e8| Encode.list(v.any, e8, encode_any_tag)))])
 
+	## A record that reaches its own record case by name (found by the schema-file fuzzer).
+	##
+	## haus type `variants#Node`.
+	Node := { s : [S(Next), N, Unknown(Str, List(Value))], o : [Missing, Present([T(Next), Unknown(Str, List(Value))])] }
+
+	decode_node : Value -> Try(Node, Decode.Error)
+	decode_node = |v| Decode.within_depth(v, read_value_node)
+
+	read_value_node : Value -> Try(Node, Decode.Error)
+	read_value_node = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ s: Decode.field(fs, "s", decode_node_s)?, o: Decode.optional_field(fs, "o", decode_node_o)? })
+	}
+
+	encode_node : Node, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_node = |v, e| Encode.record(e, [("s", Encode.required(v.s, encode_node_s)), ("o", Encode.optional(v.o, encode_node_o))])
+
+	## haus type `variants#Next`.
+	Next := [Next(Node)]
+
+	decode_next : Value -> Try(Next, Decode.Error)
+	decode_next = |v| Decode.within_depth(v, read_value_next)
+
+	read_value_next : Value -> Try(Next, Decode.Error)
+	read_value_next = |v| Ok(Next(read_value_node(v)?))
+
+	encode_next : Next, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_next = |v, e| match v {
+		Next(x) => encode_node(x, e)
+	}
+
+	decode_node_s : Value -> Try([S(Next), N, Unknown(Str, List(Value))], Decode.Error)
+	decode_node_s = |v| match v {
+		Tag("S", [p]) => Ok(S(Decode.record_arg("S", p, read_value_next)?))
+		Tag("N", []) => Ok(N)
+		Tag("S", _) => Decode.arity("S", 1)
+		Tag("N", _) => Decode.arity("N", 0)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (NodeS)", v)
+	}
+
+	encode_node_s : [S(Next), N, Unknown(Str, List(Value))], Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_node_s = |v, e| match v {
+		S(a0) => Encode.tagged("S", e, |e9| encode_next(a0, e9))
+		N => Encode.tag("N", e)
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	decode_node_o : Value -> Try([T(Next), Unknown(Str, List(Value))], Decode.Error)
+	decode_node_o = |v| match v {
+		Tag("T", [p]) => Ok(T(Decode.record_arg("T", p, read_value_next)?))
+		Tag("T", _) => Decode.arity("T", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (NodeO)", v)
+	}
+
+	encode_node_o : [T(Next), Unknown(Str, List(Value))], Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_node_o = |v, e| match v {
+		T(a0) => Encode.tagged("T", e, |e10| encode_next(a0, e10))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
 }

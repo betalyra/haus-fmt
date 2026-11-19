@@ -25,10 +25,35 @@ export interface RecordType {
 
 export interface Case {
   readonly tag: string
-  readonly payload: "none" | { readonly record: RecordType } | { readonly positional: readonly Type[] }
+  readonly payload: "none" | RecordPayload | { readonly positional: readonly Type[] }
 }
 
+/**
+ * A record case: its record, and the type it is written by name with (`Wrap
+ * Box`, spec §15). Inside the record of a case by name, a case by name of the
+ * same record has only `named` (schema-types.ts): `caseRecord` finds it.
+ */
+export type RecordPayload = { readonly record: RecordType; readonly named?: Type } | { readonly named: Type }
+
 export type Env = ReadonlyMap<string, Type>
+
+/** The names a type by name goes through to its record (`Next`, `Node` for `type Next = Node`). */
+export function namedRecord(env: Env, t: Type): { readonly record: RecordType; readonly refs: readonly string[] } {
+  const refs: string[] = []
+  while ("ref" in t) {
+    if (refs.includes(t.ref)) break
+    refs.push(t.ref)
+    t = env.get(t.ref)!
+  }
+  if (!("record" in t)) throw new Error(`a record case by name that isn't a record: ${JSON.stringify(t)}`)
+  return { record: t.record, refs }
+}
+
+/** The record of a record case. */
+export const caseRecord = (env: Env, p: RecordPayload): RecordType => ("record" in p ? p.record : namedRecord(env, p.named).record)
+
+/** A case with only `named` (its record reaches it): that ends recursion through a name, as a `ref` does. */
+export const onlyNamed = (p: RecordPayload): p is { readonly named: Type } => !("record" in p)
 
 // ── numbers ──────────────────────────────────────────────────
 
@@ -416,9 +441,10 @@ export class Generator {
       if (miss) return r.pick([`${kase.tag}(1)`, `${kase.tag} { }`, `${kase.tag}()`, `${kase.tag}(None)`])
       return kase.tag
     }
-    if ("record" in p) {
-      if (miss && r.chance(0.5)) return r.pick([kase.tag, `${kase.tag}(1)`, `${kase.tag}(${this.fields(r, p.record, c, depth + 1, 0, false)}, 1)`])
-      const fields = this.fields(r, p.record, c, depth + 1, deep, miss)
+    if (!("positional" in p)) {
+      const rec = caseRecord(this.env, p)
+      if (miss && r.chance(0.5)) return r.pick([kase.tag, `${kase.tag}(1)`, `${kase.tag}(${this.fields(r, rec, c, depth + 1, 0, false)}, 1)`])
+      const fields = this.fields(r, rec, c, depth + 1, deep, miss)
       return r.chance(0.5) ? `${kase.tag}${r.pick([" ", "", "\t"])}${fields}` : `${kase.tag}${sp()}(${ws(r)}${fields}${ws(r)})`
     }
     const types = p.positional
@@ -447,8 +473,8 @@ export class Generator {
   private recurses(k: Case): boolean {
     const p = k.payload
     if (p === "none") return false
-    if ("record" in p) return p.record.fields.some((f) => this.mentionsRef(f.type))
-    return p.positional.some((t) => this.mentionsRef(t))
+    if ("positional" in p) return p.positional.some((t) => this.mentionsRef(t))
+    return onlyNamed(p) || caseRecord(this.env, p).fields.some((f) => this.mentionsRef(f.type))
   }
 
   /** The smallest value `t` accepts (to end recursion), or null if it has none. */
@@ -475,8 +501,8 @@ export class Generator {
     for (const k of [...t.variant.cases].sort((a, b) => Number(this.recurses(a)) - Number(this.recurses(b)))) {
       const p = k.payload
       if (p === "none") return k.tag
-      if ("record" in p) {
-        const f = this.minimalFields(p.record, seen)
+      if (!("positional" in p)) {
+        const f = this.minimalCase(p, seen)
         if (f !== null) return k.tag + f
         continue
       }
@@ -484,6 +510,14 @@ export class Generator {
       if (args.every((a) => a !== null)) return `${k.tag}(${args.join(",")})`
     }
     return null
+  }
+
+  /** The smallest record of a record case, or null; through the names of a case with only `named`, as through a `ref`. */
+  private minimalCase(p: RecordPayload, seen: ReadonlySet<string>): string | null {
+    if (!onlyNamed(p)) return this.minimalFields(caseRecord(this.env, p), seen)
+    const { record, refs } = namedRecord(this.env, p.named)
+    if (refs.some((x) => seen.has(x))) return null
+    return this.minimalFields(record, new Set([...seen, ...refs]))
   }
 
   private minimalFields(rec: RecordType, seen: ReadonlySet<string>): string | null {

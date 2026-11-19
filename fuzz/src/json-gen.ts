@@ -18,7 +18,7 @@ import { parseAll, type Value } from "../../typescript/packages/haus/dist/index.
 import { Rng, value as hausValue } from "./generate.ts"
 import {
   BIG_INTS, bits, decimalLiteral, exact, EXTRA_KEYS, F32, F64, randomFloat, RANGES, shuffle, TIME_TYPES, timeText,
-  type Case, type Env, type RecordType, type Type,
+  caseRecord, namedRecord, onlyNamed, type Case, type Env, type RecordPayload, type RecordType, type Type,
 } from "./schema-gen.ts"
 
 // ── JSON as data ─────────────────────────────────────────────
@@ -746,13 +746,14 @@ export class PlainGen {
       if (miss) return r.pick<J>([tagged(["value", num("1")]), tagged(["x", num("1")]), kase.tag, tagged(["values", []]), tagged(["_args", [obj(["_num", "1"])]]), obj(["_tag", kase.tag], ["_tag", kase.tag])])
       return tagged()
     }
-    if ("record" in p) {
+    if (!("positional" in p)) {
+      const rec = caseRecord(this.env, p)
       if (miss && r.chance(0.5)) {
-        return r.pick<() => J>([() => obj(["_tag", kase.tag], ["value", this.fields(r, p.record, c, depth + 1, 0, false)]), () => this.fields(r, p.record, c, depth + 1, 0, false),
-          () => this.fields(r, p.record, c, depth + 1, 0, false, [["_tag", kase.tag], ["_tag", kase.tag]]), () => kase.tag,
+        return r.pick<() => J>([() => obj(["_tag", kase.tag], ["value", this.fields(r, rec, c, depth + 1, 0, false)]), () => this.fields(r, rec, c, depth + 1, 0, false),
+          () => this.fields(r, rec, c, depth + 1, 0, false, [["_tag", kase.tag], ["_tag", kase.tag]]), () => kase.tag,
           () => obj(["_tag", kase.tag], ["_args", [obj(["_rec", obj()])]])])()
       }
-      return this.fields(r, p.record, c, depth + 1, deep, miss, [["_tag", kase.tag]])
+      return this.fields(r, rec, c, depth + 1, deep, miss, [["_tag", kase.tag]])
     }
     const types = p.positional
     let n = types.length
@@ -782,8 +783,8 @@ export class PlainGen {
   private recurses(k: Case): boolean {
     const p = k.payload
     if (p === "none") return false
-    if ("record" in p) return p.record.fields.some((f) => this.mentionsRef(f.type))
-    return p.positional.some((t) => this.mentionsRef(t))
+    if ("positional" in p) return p.positional.some((t) => this.mentionsRef(t))
+    return onlyNamed(p) || caseRecord(this.env, p).fields.some((f) => this.mentionsRef(f.type))
   }
 
   /** The smallest JSON `t` reads (to end recursion), or undefined if it has none. */
@@ -817,8 +818,8 @@ export class PlainGen {
     for (const k of [...v.cases].sort((a, b) => Number(this.recurses(a)) - Number(this.recurses(b)))) {
       const p = k.payload
       if (p === "none") return obj(["_tag", k.tag])
-      if ("record" in p) {
-        const f = this.minimalFields(p.record, seen, [["_tag", k.tag]])
+      if (!("positional" in p)) {
+        const f = this.minimalCase(p, seen, [["_tag", k.tag]])
         if (f !== undefined) return f
         continue
       }
@@ -826,6 +827,14 @@ export class PlainGen {
       if (args.every((a) => a !== undefined)) return args.length === 1 ? obj(["_tag", k.tag], ["value", args[0]!]) : obj(["_tag", k.tag], ["values", args as J[]])
     }
     return undefined
+  }
+
+  /** The smallest record of a record case; through the names of a case with only `named`, as through a `ref`. */
+  private minimalCase(p: RecordPayload, seen: ReadonlySet<string>, lead: (readonly [string, J])[]): J | undefined {
+    if (!onlyNamed(p)) return this.minimalFields(caseRecord(this.env, p), seen, lead)
+    const { record, refs } = namedRecord(this.env, p.named)
+    if (refs.some((x) => seen.has(x))) return undefined
+    return this.minimalFields(record, new Set([...seen, ...refs]), lead)
   }
 
   private minimalFields(rec: RecordType, seen: ReadonlySet<string>, lead: (readonly [string, J])[]): J | undefined {

@@ -12,8 +12,10 @@ package main
 //     JSON array of strings;
 //   - --format STYLE [--indent N] [--width N]: `ok` and haus.Format's output
 //     as a JSON string;
-//   - --write STYLE: `ok` and each value written by haus.FormatValue, a JSON
-//     array of lines; an encoding error is `err 0 0 <code> <reason>`.
+//   - --write STYLE [--indent N] [--width N]: `ok {"values": [...], "file":
+//     ...}`, each value written alone by haus.FormatValue (without the line
+//     break after it) and all of them by haus.FormatValues, as JSON strings;
+//     an encoding error is `err 0 0 <code> <reason>`.
 
 import (
 	"bufio"
@@ -60,38 +62,47 @@ func fileMode(flags []string) (func([]byte, int) string, error) {
 		return func(src []byte, i int) string { return suiteLine(streamed(src, i)) }, nil
 	case len(flags) == 1 && flags[0] == "--canonical":
 		return func(src []byte, _ int) string { return canonicalLine(haus.ParseAll(src)) }, nil
-	case len(flags) == 2 && flags[0] == "--write":
-		layout, err := layoutOf(flags[1])
+	case len(flags) >= 2 && flags[0] == "--write":
+		opts, err := formatOptions(flags[1:])
 		if err != nil {
 			return nil, err
 		}
-		return func(src []byte, _ int) string { return writeLine(src, layout) }, nil
+		return func(src []byte, _ int) string { return writeLine(src, opts) }, nil
 	case len(flags) >= 2 && flags[0] == "--format":
-		layout, err := layoutOf(flags[1])
+		opts, err := formatOptions(flags[1:])
 		if err != nil {
 			return nil, err
-		}
-		opts := haus.FormatOptions{Layout: layout}
-		rest := flags[2:]
-		for ; len(rest) >= 2; rest = rest[2:] {
-			v, err := strconv.Atoi(rest[1])
-			switch {
-			case err != nil:
-				return nil, errors.New(usage)
-			case rest[0] == "--indent":
-				opts.Indent = v
-			case rest[0] == "--width":
-				opts.Width = v
-			default:
-				return nil, errors.New(usage)
-			}
-		}
-		if len(rest) != 0 {
-			return nil, errors.New(usage)
 		}
 		return func(src []byte, _ int) string { return formatLine(src, opts) }, nil
 	}
 	return nil, errors.New(usage)
+}
+
+// formatOptions reads `STYLE [--indent N] [--width N]`.
+func formatOptions(flags []string) (haus.FormatOptions, error) {
+	layout, err := layoutOf(flags[0])
+	if err != nil {
+		return haus.FormatOptions{}, err
+	}
+	opts := haus.FormatOptions{Layout: layout}
+	rest := flags[1:]
+	for ; len(rest) >= 2; rest = rest[2:] {
+		v, err := strconv.Atoi(rest[1])
+		switch {
+		case err != nil:
+			return opts, errors.New(usage)
+		case rest[0] == "--indent":
+			opts.Indent = v
+		case rest[0] == "--width":
+			opts.Width = v
+		default:
+			return opts, errors.New(usage)
+		}
+	}
+	if len(rest) != 0 {
+		return opts, errors.New(usage)
+	}
+	return opts, nil
 }
 
 func layoutOf(name string) (haus.Layout, error) {
@@ -230,18 +241,22 @@ func formatLine(src []byte, opts haus.FormatOptions) string {
 	return "ok " + toJSON(string(out))
 }
 
-func writeLine(src []byte, layout haus.Layout) string {
+func writeLine(src []byte, opts haus.FormatOptions) string {
 	vs, err := haus.ParseAll(src)
 	if err != nil {
 		return syntaxLine(err)
 	}
-	lines := make([]string, len(vs))
+	values := make([]string, len(vs))
 	for i, v := range vs {
-		b, err := haus.FormatValue(v, haus.FormatOptions{Layout: layout})
+		b, err := haus.FormatValue(v, opts)
 		if err != nil {
 			return syntaxLine(err)
 		}
-		lines[i] = string(bytes.TrimSuffix(b, []byte("\n")))
+		values[i] = string(bytes.TrimSuffix(b, []byte("\n")))
 	}
-	return "ok " + toJSON(lines)
+	file, err := haus.FormatValues(vs, opts)
+	if err != nil {
+		return syntaxLine(err)
+	}
+	return "ok " + toJSON(map[string]any{"values": values, "file": string(file)})
 }

@@ -75,6 +75,7 @@ in `runners.ts`.
 | Go's `strconv.ParseFloat` rounds literals of more than 800 significant digits wrongly (a halfway value near the smallest normal float64, 10⁸ too small) | fixed: Go rounds those exactly (`--schema`) |
 | Go's formatter: a comment after a multi-line comment trailed the entry; a comma on its own line made a blank line; a comment between a key and its value went below the entry's blank line; a blank line before a payload record's `}` was lost | fixed (`--format`) |
 | TypeScript and Effect overflowed the stack on a record that reaches its own record case by name (`type C = { s: < S B > }`, `type B = C`) | fixed (`--schema-check`) |
+| The same schema overflowed the stack in [`schema-types.ts`](../spec/lean/scripts/schema-types.ts), which resolves the suite's types for Lean and these fuzzers (haus-gen, haus-fmt-build, Python and Go were fine) | fixed: inside its own record such a case has only `"named"`; in the schema suite ([`variants.schema.haus`](../test-suite/schema/variants.schema.haus)) |
 | Rust had no nesting limit for types (`type-too-deep`), and Go counted each parenthesis twice | fixed (`--schema-check`) |
 | A `/` that starts no comment was `schema-syntax` in every binding, `stray-slash` (as in data) in Lean | fixed in TypeScript, Python, Rust and Go (`--schema-check`) |
 | Attribute arguments without their `)` after a value (`@deprecated("x"`) were `unclosed-bracket` in Rust and Go, `missing-comma` in Lean | fixed (`--schema-check`) |
@@ -326,11 +327,12 @@ error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
 of [`spec/lean/PLAN.md`](../spec/lean/PLAN.md)). Generated documents go
 through the TypeScript, Rust and Go formatters in the pretty, compact and
 minimised layouts; the values they hold go through the value writers of
-TypeScript, Rust, Roc and Go.
+TypeScript, Rust, Roc and Go, which must write what Lean's layout writers
+write.
 
 ```sh
-sh fuzz/build.sh                               # the Rust and Roc runners
-node fuzz/src/main.ts --format --count 20000   # about 30 seconds
+sh fuzz/build.sh                               # haus-ref and the Rust, Roc and Go runners
+node fuzz/src/main.ts --format --count 20000   # about a minute and a half
 node fuzz/src/main.ts --format --seed 7
 ```
 
@@ -364,11 +366,25 @@ For every input, and each layout:
 | Layout | Read from the output, without either formatter: keys bare when they can be; one space after `:` and `,`, one between a tag and its `{`, none before `(`; every non-empty record and array broken, each entry one level deeper than its brackets, block strings one level deeper than their entry; a positional payload inline exactly when it fits the width (in code points, with the comma after the entry) and holds no comment, block string or non-empty container; at most one blank line in a row; in a pretty stream a comma after every item and a blank line after each multi-line item that another follows. |
 
 The value writers (no source text: numbers normalized, byte strings in
-lowercase hex) must write the same line for every value: TypeScript's
-`stringify(v, { style })`, Rust's `haus::to_string` and
-`haus::to_string_minimised`, Roc's `Encode.to_str` and `Encode.minimised`, Go's
-`haus.FormatValue`.
-Each line parses back to its value and keeps the layout's rules.
+lowercase hex) are compared with Lean's layout writers
+([`spec/lean/Haus/Layout`](../spec/lean/Haus/Layout): `compact`,
+`minimised` and `pretty`, proven to parse back to the values), in each
+layout and with the batch's indentation and width: every binding must write
+each value, and the whole file or stream where it has a writer for one,
+byte for byte as Lean does. Lean's text is read back without any writer too:
+it holds the values and keeps the layout's rules (above), which checks the
+checks.
+
+| Writer | Each value | The file (one value alone, more each with a comma) or a stream (a comma after every value) |
+|---|---|---|
+| Lean (the reference) | `haus-ref --write-batch LAYOUT DIR N`: `Layout.compact`, `minimised`, `pretty o [] 0` | the file: `compactAll`, `minimisedAll`, `prettyAll o` |
+| TypeScript | `stringify(v, { style, indent, width })`, in this process | the file: `format(values, { style, indent, width })` |
+| Rust | `haus::to_string`, `to_string_minimised` (no pretty writer from values) | a stream: `haus::to_string_all` (compact) |
+| Roc | `Encode.to_str`, `Encode.minimised` (no pretty writer from values) | a stream: `Encode.stream`, `Encode.stream_minimised` |
+| Go | `haus.FormatValue` in every layout; it takes 0 as the default indent and width, so it sits out pretty in the batches with a 0 | the file: `haus.FormatValues` |
+
+Python has no layout writers yet: only the canonical form, which the
+parser fuzzer's `--canonical` mode compares.
 
 A failing input is shrunk to the smallest input that still fails the same
 check (at most three per check), and saved to `.out/format/failures/` with
@@ -377,16 +393,18 @@ the check, what was seen, and every formatter's output in every layout.
 | Formatter / writer | Runner (`DIR N`, as for the parsers; prints `ok` and the output as a JSON string, or `err …`) |
 |---|---|
 | TypeScript | in this process: `parseDocument`, `format(values, { style, indent, width, source, comments })`, `stringify` |
-| Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `haus::to_string`, `haus::to_string_minimised` (a JSON array of lines) |
-| Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `Encode.to_str`, `Encode.minimised` (a JSON array of lines) |
-| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE`: `haus.FormatValue` |
+| Lean | `haus-ref --write-batch LAYOUT DIR N` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `ok {"values": […], "file": …}` |
+| Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `ok {"values": […], "stream": …}` |
+| Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `ok {"values": […], "stream": …}` |
+| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE [--indent N --width N]`: `ok {"values": […], "file": …}` |
 
 [`src/format.test.ts`](src/format.test.ts) tests the generator and the
 checks (`node --test fuzz/src/`): the format suite's expected files keep
 every rule, and outputs that break one are caught.
 
 So far the formatters and writers agree, and keep every rule, on every
-input generated (Go's formatter after the fixes below).
+input generated (Go's formatter after the fixes below), and every value
+writer writes what Lean's writes, in every layout.
 
 ## Schema files
 

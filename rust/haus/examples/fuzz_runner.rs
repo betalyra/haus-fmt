@@ -11,8 +11,10 @@
 //! layout STYLE (`pretty`, `compact` or `minimised`) and prints `ok` and the
 //! output as a JSON string; `--write STYLE DIR N` parses each file and writes
 //! every value with the value writer, `haus::to_string` (`compact`) or
-//! `haus::to_string_minimised` (`minimised`), and prints `ok` and the lines as
-//! a JSON array of strings. An encoding error is `err 0 0 <code> <reason>`.
+//! `haus::to_string_minimised` (`minimised`), and the values as a stream with
+//! `haus::to_string_all` (`compact`; `null` for `minimised`, which has no
+//! stream writer), and prints `ok {"values": [<line>, …], "stream": …}`. An
+//! encoding error is `err 0 0 <code> <reason>`.
 
 use haus::Value;
 use serde_json::{Map, Value as Json, json};
@@ -84,18 +86,24 @@ fn format_line(bytes: &[u8], options: &haus::FormatOptions) -> String {
     }
 }
 
-/// With `--write`: every value through the value writer, as JSON strings.
+/// With `--write`: every value through the value writer, and the values
+/// through the stream writer, as JSON strings.
 fn write_line(bytes: &[u8], style: haus::Style) -> String {
     let values = match haus::parse_bytes(bytes) {
         Ok(values) => values,
         Err(e) => return line(Err(e)),
     };
-    let written: Result<Vec<String>, haus::EncodeError> = values
-        .iter()
-        .map(|v| if style == haus::Style::Minimised { haus::to_string_minimised(v) } else { haus::to_string(v) })
-        .collect();
-    match written {
-        Ok(lines) => format!("ok {}", json!(lines)),
+    let minimised = style == haus::Style::Minimised;
+    let written = || -> Result<Json, haus::EncodeError> {
+        let lines = values
+            .iter()
+            .map(|v| if minimised { haus::to_string_minimised(v) } else { haus::to_string(v) })
+            .collect::<Result<Vec<_>, _>>()?;
+        let stream = if minimised { None } else { Some(haus::to_string_all(&values)?) };
+        Ok(json!({ "values": lines, "stream": stream }))
+    };
+    match written() {
+        Ok(out) => format!("ok {out}"),
         Err(e) => format!("err 0 0 {} {}", e.code, e.to_string().replace(['\n', '\r'], " ")),
     }
 }
