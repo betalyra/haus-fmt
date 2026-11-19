@@ -118,6 +118,10 @@ const HEX = /-?0x([0-9A-Fa-f](?:_?[0-9A-Fa-f])*)/y
 const BIN = /-?0b([01](?:_?[01])*)/y
 const DEC = /-?(?:0|[1-9](?:_?[0-9])*)(?:\.[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?/y
 const BLANK = /^[ \t]*$/
+/** A run of identifier characters (see `isIdentChar`). */
+const IDENT_RUN = /[0-9A-Za-z_]*/y
+/** A run of characters a `"…"` string has raw without a check: all but `"`, `\`, control characters and bidirectional controls. */
+const PLAIN_RUN = /[^"\\\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*/y
 
 const describe = (c: string | undefined) =>
   c === undefined ? "end of input" : c === "\n" ? "line break" : `'${c}'`
@@ -132,6 +136,11 @@ export class Parser {
   private depth = 0
   /** With locations: [start, end) of every comment, in source order. */
   readonly comments: [number, number][] = []
+  /**
+   * The values read so far, nested ones included: a record payload `Tag { … }`
+   * is a value of its own. For a single value, the size of its tree.
+   */
+  valueCount = 0
 
   constructor(
     private readonly src: string,
@@ -216,15 +225,16 @@ export class Parser {
   }
 
   private parseValueAt(): Value {
+    this.valueCount++
     const c = this.src.charCodeAt(this.pos)
-    switch (this.src[this.pos]) {
-      case "{":
+    switch (c) {
+      case 123: // {
         return this.parseRecord()
-      case "[":
+      case 91: // [
         return this.parseArray()
-      case '"':
+      case 34: // "
         return this.src.startsWith('"""', this.pos) ? this.parseBlockString() : this.parseBasicString()
-      case "-":
+      case 45: // -
         return this.parseNumber()
     }
     if (isDigit(c)) return this.parseNumber()
@@ -253,24 +263,28 @@ export class Parser {
     this.pos++ // {
     const fields = new Map<string, Value>()
     const keySpans = this.locations ? new Map<string, readonly [number, number]>() : undefined
+    const src = this.src
     this.skipTrivia()
-    while (this.peek() !== "}") {
+    while (src.charCodeAt(this.pos) !== 125) { // }
       if (this.eof()) this.fail("unclosed-bracket", "unclosed '{'", open, { expected: "'}'" })
       const keyPos = this.pos
       const key = this.parseKey()
       keySpans?.set(key, [keyPos, this.pos])
       this.skipTrivia()
-      if (this.peek() !== ":") this.fail("missing-colon", `expected ':' after key '${key}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) })
+      if (src.charCodeAt(this.pos) !== 58) this.fail("missing-colon", `expected ':' after key '${key}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) }) // :
       this.pos++
       this.skipTrivia()
       const value = this.parseValue()
-      if (fields.has(key)) this.fail("duplicate-key", `duplicate key '${key}'`, keyPos)
+      // One lookup: a key seen before leaves the size as it was (the map is dropped with the error).
+      const size = fields.size
       fields.set(key, value)
+      if (fields.size === size) this.fail("duplicate-key", `duplicate key '${key}'`, keyPos)
       this.skipTrivia()
-      if (this.peek() === ",") {
+      const c = src.charCodeAt(this.pos)
+      if (c === 44) { // ,
         this.pos++
         this.skipTrivia()
-      } else if (this.peek() !== "}") {
+      } else if (c !== 125) { // }
         if (this.eof()) this.fail("unclosed-bracket", "unclosed '{'", open, { expected: "'}'" })
         this.failSeparator(value, "expected ',' or '}'", "}")
       }
@@ -282,7 +296,7 @@ export class Parser {
 
   private parseKey(): string {
     const c = this.src.charCodeAt(this.pos)
-    if (this.peek() === '"') {
+    if (c === 34) { // "
       if (this.src.startsWith('"""', this.pos)) this.fail("block-string-key", "block strings can't be record keys")
       return this.parseBasicString().value
     }
@@ -302,19 +316,22 @@ export class Parser {
   /** `open value, value, ... close`, with an optional trailing comma. */
   private parseList(open: string, close: string): Value[] {
     const start = this.pos
+    const src = this.src
+    const closeCode = close.charCodeAt(0)
     this.enter()
     this.pos++
     const items: Value[] = []
     this.skipTrivia()
-    while (this.peek() !== close) {
+    while (src.charCodeAt(this.pos) !== closeCode) {
       if (this.eof()) this.fail("unclosed-bracket", `unclosed '${open}'`, start, { expected: `'${close}'` })
       const item = this.parseValue()
       items.push(item)
       this.skipTrivia()
-      if (this.peek() === ",") {
+      const c = src.charCodeAt(this.pos)
+      if (c === 44) { // ,
         this.pos++
         this.skipTrivia()
-      } else if (this.peek() !== close) {
+      } else if (c !== closeCode) {
         if (this.eof()) this.fail("unclosed-bracket", `unclosed '${open}'`, start, { expected: `'${close}'` })
         this.failSeparator(item, `expected ',' or '${close}'`, close)
       }
@@ -330,15 +347,18 @@ export class Parser {
     // The payload must follow on the same line: only spaces and tabs in between.
     // Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would silently
     // become one variant with a payload.
-    while (this.peek() === " " || this.peek() === "\t") this.pos++
-    if (this.peek() === "(") {
+    const src = this.src
+    while (src.charCodeAt(this.pos) === 32 || src.charCodeAt(this.pos) === 9) this.pos++
+    const c = src.charCodeAt(this.pos)
+    if (c === 40) { // (
       const parenPos = this.pos
       const args = this.parseList("(", ")")
       if (args.length === 0) this.fail("empty-payload", `empty payload: write '${tag}' without parentheses`, parenPos, { hint: `Write ${tag} without parentheses.` })
       return variant(tag, args)
     }
-    if (this.peek() === "{") {
+    if (c === 123) { // {
       const start = this.pos
+      this.valueCount++
       const record = this.parseRecord()
       return variant(tag, [this.locations ? Object.assign(record, { start, end: this.pos }) : record])
     }
@@ -347,6 +367,38 @@ export class Parser {
   }
 
   private parseNumber(): HNumber {
+    return this.plainDecimal() ?? this.parseAnyNumber()
+  }
+
+  /**
+   * Hot: the common literal `-?(0|[1-9][0-9]*)(\.[0-9]+)?` followed by
+   * something that can't continue a number (not an identifier character or
+   * `.`). Its normalized text is itself. Anything else (separators, an
+   * exponent, hex, binary, an error) is left to `parseAnyNumber`: undefined.
+   */
+  private plainDecimal(): HNumber | undefined {
+    const src = this.src
+    const start = this.pos
+    let i = start
+    if (src.charCodeAt(i) === 45) i++ // -
+    const first = src.charCodeAt(i)
+    if (first === 48) i++ // 0
+    else if (first >= 49 && first <= 57) {
+      i++
+      while (isDigit(src.charCodeAt(i))) i++
+    } else return undefined
+    if (src.charCodeAt(i) === 46 && isDigit(src.charCodeAt(i + 1))) { // .
+      i += 2
+      while (isDigit(src.charCodeAt(i))) i++
+    }
+    const next = src.charCodeAt(i)
+    if (isIdentChar(next) || next === 46) return undefined
+    if (i - start > this.limits.maxNumberLength) return undefined
+    this.pos = i
+    return num(src.slice(start, i))
+  }
+
+  private parseAnyNumber(): HNumber {
     const start = this.pos
     // The literal (a linear scan), then what follows it, then the limits, as
     // the reference does: a literal that runs into a letter is invalid however
@@ -438,12 +490,17 @@ export class Parser {
 
   private parseBasicString() {
     const open = this.pos
+    const src = this.src
     this.pos++ // "
     let out = ""
     let chunk = this.pos
     for (;;) {
+      // Hot: skip the run of characters that need no check (a native regex scan, much faster than a loop).
+      PLAIN_RUN.lastIndex = this.pos
+      PLAIN_RUN.test(src)
+      this.pos = PLAIN_RUN.lastIndex
+      const c = src.charCodeAt(this.pos)
       if (this.eof()) this.fail("unterminated-string", "unterminated string", open)
-      const c = this.src.charCodeAt(this.pos)
       if (c === 34) break // "
       if (c === 92) {
         // \
@@ -608,27 +665,34 @@ export class Parser {
   }
 
   private skipTrivia() {
+    // Hot, and small enough to be inlined: most tokens follow each other directly.
+    const c = this.src.charCodeAt(this.pos)
+    if (c === 32 || c === 9 || c === 10 || c === 13 || c === 47) this.skipTriviaAt()
+  }
+
+  private skipTriviaAt() {
     this.skipSpace()
-    if (this.src[this.pos] === "/") this.fail("stray-slash", "unexpected '/' (comments are // or /* */)")
+    if (this.src.charCodeAt(this.pos) === 47) this.fail("stray-slash", "unexpected '/' (comments are // or /* */)") // /
   }
 
   /** Whitespace and comments, up to anything else (a `/` that starts no comment included). */
   private skipSpace() {
+    // Hot: character codes, not one-character strings (past the end: NaN, which matches nothing).
+    const src = this.src
     for (;;) {
-      const c = this.src[this.pos]
-      if (c === " " || c === "\t" || c === "\n") {
+      const c = src.charCodeAt(this.pos)
+      if (c === 32 || c === 9 || c === 10) {
         this.pos++
-      } else if (c === "\r" && this.src[this.pos + 1] === "\n") {
+      } else if (c === 13) {
+        if (src.charCodeAt(this.pos + 1) !== 10) this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)")
         this.pos += 2
-      } else if (c === "\r") {
-        this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)")
-      } else if (c === "/" && this.src[this.pos + 1] === "/") {
-        const nl = this.src.indexOf("\n", this.pos)
-        const end = nl < 0 ? this.src.length : nl
+      } else if (c === 47 && src.charCodeAt(this.pos + 1) === 47) { // //
+        const nl = src.indexOf("\n", this.pos)
+        const end = nl < 0 ? src.length : nl
         this.checkCommentText(this.pos, end)
         if (this.locations) this.comments.push([this.pos, end])
         this.pos = end
-      } else if (c === "/" && this.src[this.pos + 1] === "*") {
+      } else if (c === 47 && src.charCodeAt(this.pos + 1) === 42) { // /*
         this.skipBlockComment()
       } else {
         return
@@ -674,7 +738,9 @@ export class Parser {
 
   private readIdent(): string {
     const start = this.pos
-    while (this.pos < this.src.length && isIdentChar(this.src.charCodeAt(this.pos))) this.pos++
+    IDENT_RUN.lastIndex = start
+    IDENT_RUN.test(this.src)
+    this.pos = IDENT_RUN.lastIndex
     return this.src.slice(start, this.pos)
   }
 
