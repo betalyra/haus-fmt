@@ -32,17 +32,17 @@
  * `Haus.zonedDateTimeAsDateTime` for schema files (`Schema.BigDecimal`,
  * `Schema.DateTimeUtc` and `Schema.DateTimeZoned` work as well, with the same losses).
  */
-import { errorCode, HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Value } from "@haus-fmt/haus"
+import { errorCode, HausSyntaxError, parseAll, parseStream, stringify, type ChunkSource, type FormatOptions, type Path, type Value } from "@haus-fmt/haus"
 import { checkStdTime, normalizeNumber, type StdTimeType } from "@haus-fmt/haus"
 import {
-  fromHausJson as valueOfHausJson, fromSchemaBasedJson, HausDecodeError, HausEncodeError, importJson as importedValue, jsonDepth, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH,
+  fromHausJson as valueOfHausJson, fromSchemaBasedJson, HausDecodeError, HausEncodeError, importJson as importedValue, jsonDepth, JsonPlaces, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH,
   parseJson, parseJsonLines, stringifyJson, toHausJson as hausJsonOf, toSchemaBasedJson, type Json, type JsonType,
 } from "@haus-fmt/haus"
 import type { Limits } from "@haus-fmt/haus/schema"
 import { BigDecimal, DateTime as EffectDateTime, Effect, Option, Schema, SchemaAST, SchemaIssue, SchemaTransformation, Stream } from "effect"
 import { codec, entries, isCodec, setId, type AnyCodec, type Checked, type Decoded, type Named } from "./codec.js"
 import {
-  atIndex as errorAt, CODE, conversionError, HausLimitsError, HausParseError, HausSchemaError, invalidUtf8Error, issueError, jsonError, limitsError, parseError,
+  atIndex as errorAt, CODE, conversionError, HausLimitsError, HausParseError, HausSchemaError, inJson, invalidUtf8Error, issueError, jsonError, limitsError, parseError,
   schemaErrorOf,
   type HausError,
 } from "./errors.js"
@@ -608,12 +608,26 @@ export const toJson = <S extends Schema.Top, const C extends ReadonlyArray<AnyCo
   })
 }
 
-/** Decode schema-based JSON (spec §16.3) that is already parsed (with `parseJson`, which keeps numbers exact). */
+/**
+ * Decode schema-based JSON (spec §16.3) that is already parsed (with `parseJson`, which keeps numbers exact).
+ * Errors are at their place in the JSON (spec §16.3 "Places"), those the schema finds in the value read too.
+ */
 export const fromJsonValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const type = jsonForm(schema, codecs)
   const fromValue = valueDecoder<S, C>(schema, codecs)
-  return (json: Json, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]> =>
-    withLimits(limits, fromSync(() => fromSchemaBasedJson(type, json, limits), jsonErrorOf).pipe(Effect.flatMap((value) => fromValue(value, limits))))
+  return (json: Json, limits: Limits = {}): Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]> => {
+    // Reading again, noting places, only for an error: reading is deterministic.
+    const locate = (path: Path) => {
+      const places = new JsonPlaces()
+      return places.locate(fromSchemaBasedJson(type, json, limits, undefined, places), path)
+    }
+    return withLimits(
+      limits,
+      fromSync(() => fromSchemaBasedJson(type, json, limits), jsonErrorOf).pipe(
+        Effect.flatMap((value) => fromValue(value, limits).pipe(Effect.mapError((e) => (e instanceof HausSchemaError ? inJson(e, locate) : e)))),
+      ),
+    )
+  }
 }
 
 /** `fromJsonValue` for codecs already checked by the caller's signature. */

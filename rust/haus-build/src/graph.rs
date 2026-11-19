@@ -171,11 +171,24 @@ fn substitute(ty: &schema::Ty, params: &[String], args: &[schema::Ty]) -> schema
 /// the packages with types to copy for the codecs with the ids `codecs`
 /// (the codec closure).
 pub(crate) fn units(schema: &Schema, without_attributes: bool, codecs: &[&str]) -> Result<Vec<Unit>> {
+    units_with(schema, without_attributes, codecs, false)
+}
+
+/// [`units`]; with `codec_types`, a package's type that has a codec and
+/// contains another codec's type is copied too, so that the inner codecs
+/// can run first, at their own places (spec §13.4: codecs run from the
+/// inside out). Its codec still decodes the package's own type.
+pub(crate) fn units_with(
+    schema: &Schema,
+    without_attributes: bool,
+    codecs: &[&str],
+    codec_types: bool,
+) -> Result<Vec<Unit>> {
     let files = schema.files();
     let root_dir = files[0].path.as_deref().and_then(Path::parent);
     // The root, and every file outside packages.
     let app: Vec<usize> = (0..files.len()).filter(|&i| i == 0 || files[i].package.is_none()).collect();
-    let copies = closure(schema, &app, codecs);
+    let copies = closure(schema, &app, codecs, codec_types);
     let copied_from = |i: usize| files[i].definitions().iter().any(|d| copies.contains(&d.id));
     let packages = (1..files.len()).filter(|&i| files[i].package.is_some() && copied_from(i));
     let indices: Vec<usize> = app.iter().copied().chain(packages).collect();
@@ -281,9 +294,11 @@ fn used_names(types: &[TypeDef]) -> Vec<String> {
 /// that the codecs with the ids `codecs` apply inside them (spec §13.4):
 /// the types the application's files `app` use, directly or not, that
 /// contain a codec's type, directly or not, and have no codec of their own
-/// (that codec decodes the package's type, as with `Money` and `Currency`).
-/// Packages' other types are their crates' or modules'.
-fn closure(schema: &Schema, app: &[usize], codecs: &[&str]) -> HashSet<String> {
+/// (that codec decodes the package's type, as with `Money` and `Currency`),
+/// unless `codec_types`: then a type with a codec that contains another
+/// codec's type is copied too (see [`units_with`]). Packages' other types
+/// are their crates' or modules'.
+fn closure(schema: &Schema, app: &[usize], codecs: &[&str], codec_types: bool) -> HashSet<String> {
     if codecs.is_empty() {
         return HashSet::new();
     }
@@ -295,15 +310,16 @@ fn closure(schema: &Schema, app: &[usize], codecs: &[&str]) -> HashSet<String> {
     let contains_codec = |d: &Definition| {
         let mut inside = HashSet::new();
         walk(schema, &schema.instance(d.template).body, &mut HashSet::new(), &mut inside);
-        codecs.iter().any(|c| inside.contains(*c))
+        codecs.iter().any(|c| *c != d.id && inside.contains(*c))
     };
+    let has_codec = |d: &Definition| codecs.contains(&d.id.as_str());
     files
         .iter()
         .enumerate()
         .filter(|(i, f)| *i != 0 && f.package.is_some())
         .flat_map(|(_, f)| f.definitions())
         // A type with a codec of its own isn't copied: its codec decodes the package's type.
-        .filter(|d| used.contains(&d.id) && !codecs.contains(&d.id.as_str()) && contains_codec(d))
+        .filter(|d| used.contains(&d.id) && (codec_types || !has_codec(d)) && contains_codec(d))
         .map(|d| d.id.clone())
         .collect()
 }

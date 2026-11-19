@@ -464,6 +464,16 @@ pub fn codec<C: Codec>(v: &Value, d: Decoder) -> R<C::Target> {
     C::decode(C::Base::decode_with(v, d)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
 }
 
+/// [`codec`] for a type that contains other codecs' types: `Inner`, the
+/// type with those codecs (generated code's copy of a package's type),
+/// decodes `v` first, so that they run before `C`, and the first that
+/// rejects gives the error, at its own place (spec §13.4: from the inside
+/// out, `$[1]` for a `Currency` inside a `Money`).
+pub fn codec_inside_out<C: Codec, Inner: Decode>(v: &Value, d: Decoder) -> R<C::Target> {
+    Inner::decode_with(v, d)?;
+    codec::<C>(v, d)
+}
+
 impl<T: Decode> Decode for Vec<T> {
     fn decode_with(v: &Value, d: Decoder) -> R<Self> {
         array(v, d, T::decode_with)

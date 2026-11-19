@@ -417,7 +417,7 @@ theorem isEnum_false {env : Env} {closed : Bool} {cases : List Case} {tag : Stri
 /-- `Tag { … }`, given the round trip of its fields. -/
 theorem recordCase_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {cl : Bool} {fields : List Field} {y : Typed} {b : Bool} {j : JSON}
-    (hc : caseOf? env cases tag = some (.record tag' cl fields))
+    (hc : caseOf? env cases tag = some (.record tag' cl fields)) (htag : isTag tag.toList = true)
     (hb : b = true → isBool (.variant closed cases) = true)
     (IH : hasReservedField fields = false → ∃ ys, y = .record ys ∧ ∀ ms, toJsonFields env F o fields ys = .ok ms →
       missingJ? fields ms = none ∧ readFields env F o cl fields true ms = .ok ys)
@@ -446,13 +446,13 @@ theorem recordCase_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} 
         obtain ⟨ms, hms, rfl⟩ := map_ok.mp h
         obtain ⟨hk, hr⟩ := hys ms (under_ok.mp hms)
         rw [fromJsonC_none _ hn, readCore.eq_def]
-        simp only [Bool.false_eq_true, ↓reduceIte, he, List.lookup, beq_self_eq_true, hc, ht,
-          missingJ?_cons _ hk, readFields_tag, hr, under, Except.map]
+        simp only [Bool.false_eq_true, ↓reduceIte, he, List.lookup, beq_self_eq_true, htag, Bool.not_true, hc, ht,
+          missingJ?_cons _ hk, readFields_tag, hr, Except.map]
 
 /-- `Tag T1 … Tn`, `Some` of a `Maybe` that uses `null` included, given the round trip of the arguments. -/
 theorem positional_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} {cases : List Case} {tag tag' : String}
     {ts : List Ty} {ys : List Typed} {b : Bool} {j : JSON}
-    (hc : caseOf? env cases tag = some (.positional tag' ts))
+    (hc : caseOf? env cases tag = some (.positional tag' ts)) (htag : isTag tag.toList = true)
     (hb : b = true → isBool (.variant closed cases) = true) (hl : ys.length = ts.length)
     (IHargs : ∀ js, toJsonArgs env F o tag 0 ts ys = .ok js → readArgs env F o tag 0 ts js = .ok ys)
     (IHone : ∀ t1, ts = [t1] → ∃ y, ys = [y] ∧ ∀ j, toJsonF env F o t1 y = .ok j → fromJsonF env F o t1 j = .ok y)
@@ -494,26 +494,26 @@ theorem positional_roundTrip {env : Env} {F : Nat} {o : String} {closed : Bool} 
         | cons _ _ => simp at hl
         | nil =>
           simp only [Except.ok.injEq] at h; subst h
-          simp [he, hc, List.lookup]
+          simp [he, hc, htag, List.lookup]
       | [t1], _, IHone, _, h =>
         obtain ⟨y, rfl, hy⟩ := IHone t1 rfl
         obtain ⟨j1, hj1, rfl⟩ := map_ok.mp h
         have hj1' : toJsonF env F o t1 y = .ok j1 := under_ok.mp hj1
-        simp only [Bool.false_eq_true, ↓reduceIte, he, List.lookup, beq_self_eq_true, hc, List.length_cons,
-          List.length_nil]
+        simp only [Bool.false_eq_true, ↓reduceIte, he, List.lookup, beq_self_eq_true, htag, Bool.not_true, hc,
+          List.length_cons, List.length_nil]
         rw [memberValue.eq_def]
         simp only [show ("_tag" = "value") = False by decide, ↓reduceIte]
         rw [memberValue.eq_def]
-        simp [hy j1 hj1', under, Except.map]
+        simp [hy j1 hj1', under, atExtra, Except.map]
       | t1 :: t2 :: rest, hl, _, IHargs, h =>
         obtain ⟨js, hjs, rfl⟩ := map_ok.mp h
         have hlen : js.length = (t1 :: t2 :: rest).length := (toJsonArgs_length hl hjs).trans hl
-        simp only [Bool.false_eq_true, ↓reduceIte, he, List.lookup, beq_self_eq_true, hc, List.length_cons,
-          List.length_nil]
+        simp only [Bool.false_eq_true, ↓reduceIte, he, List.lookup, beq_self_eq_true, htag, Bool.not_true, hc,
+          List.length_cons, List.length_nil]
         rw [memberValues.eq_def]
         simp only [show ("_tag" = "values") = False by decide, ↓reduceIte]
         rw [memberValues.eq_def]
-        simp [hlen, IHargs js hjs, Except.map]
+        simp [hlen, IHargs js hjs, under, atExtra, Except.map]
 
 variable {env : Env} {F : Nat}
 
@@ -614,13 +614,14 @@ theorem Core.roundTrip {c : Ty} {v : Value} {x : Typed} {b : Bool} {j : JSON} :
         · simp only [he, ↓reduceIte, Except.ok.injEq] at h; subst h
           simp [he, hc]
         · simp only [he, Bool.false_eq_true, ↓reduceIte, hc, Except.ok.injEq] at h; subst h
-          simp [he, hc]
+          have htag : isTag tag.toList = true := by simpa [Value.wf, Value.wfList] using hv
+          simp [he, hc, htag]
   | .recordCase hc hd, hv, hb, h => by
     simp only [Value.wf, Value.wfList, Bool.and_eq_true, and_true] at hv
-    exact recordCase_roundTrip hc hb (fun ht => hd.payload rfl hv.2 ht) h
+    exact recordCase_roundTrip hc hv.1 hb (fun ht => hd.payload rfl hv.2 ht) h
   | .positional hc ha, hv, hb, h => by
     simp only [Value.wf, Bool.and_eq_true] at hv
-    exact positional_roundTrip hc hb ha.length_ys (fun js h => ha.roundTrip hv.2 h) (fun t1 hts => ha.one hts hv.2) h
+    exact positional_roundTrip hc hv.1 hb ha.length_ys (fun js h => ha.roundTrip hv.2 h) (fun t1 hts => ha.one hts hv.2) h
   | .unknown (cases := cases) (tag := tag) (args := args) hc, hv, hb, h => by
     simp only [Value.wf, Bool.and_eq_true] at hv
     have hbf : b = false := by

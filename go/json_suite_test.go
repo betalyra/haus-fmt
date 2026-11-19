@@ -74,6 +74,21 @@ func errorCode(err error) ErrorCode {
 	return ""
 }
 
+// checkErr compares an Err case with the error: its code, and its path
+// (the place in the JSON, spec §16.3 "Places") when the case gives one.
+func (c jsonCase) checkErr(t *testing.T, text string, err error) {
+	t.Helper()
+	if code := c.str(t, "code"); errorCode(err) != ErrorCode(code) {
+		t.Errorf("%s: got %v, want %s", text, err, code)
+		return
+	}
+	if want, ok := c.fields.Get("path"); ok {
+		if e := new(Error); !errors.As(err, &e) || e.Path != string(want.(String)) {
+			t.Errorf("%s: got %v, want the place %q", text, err, want.(String))
+		}
+	}
+}
+
 func TestJSONImportSuite(t *testing.T) {
 	n := 0
 	for _, c := range readJSONCases(t, "import.cases.haus") {
@@ -88,9 +103,7 @@ func TestJSONImportSuite(t *testing.T) {
 				t.Errorf("%s: got %s, want %s", text, mustCanonical(t, got), mustCanonical(t, want))
 			}
 		case "Err":
-			if code := c.str(t, "code"); errorCode(err) != ErrorCode(code) {
-				t.Errorf("%s: got %v, want %s", text, err, code)
-			}
+			c.checkErr(t, text, err)
 		default:
 			t.Fatalf("unknown case %s", c.tag)
 		}
@@ -119,9 +132,7 @@ func TestSelfDescribingSuite(t *testing.T) {
 				t.Errorf("write %s: got %s, want %s", mustCanonical(t, input), written, text)
 			}
 		case "Err":
-			if code := c.str(t, "code"); errorCode(err) != ErrorCode(code) {
-				t.Errorf("%s: got %v, want %s", text, err, code)
-			}
+			c.checkErr(t, text, err)
 		default:
 			t.Fatalf("unknown case %s", c.tag)
 		}

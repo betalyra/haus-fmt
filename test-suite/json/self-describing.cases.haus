@@ -52,3 +52,18 @@ Err { json: "{\"_haus\": 1, \"_value\": \"a\u{7F}b\"}", code: "control-character
 Err { json: "{\"_haus\": 1, \"_value\": \"a\u{85}b\"}", code: "control-character" },
 Err { json: "{\"_haus\": 1, \"_value\": \"a\u{202E}b\"}", code: "bidi-control" },
 Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\u{2066}\": \"b\"}}}", code: "bidi-control" },
+
+// ── _tag must be a string (§16.3) ──
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": 1}}", code: "invalid-tag" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": null, \"_args\": [\"a\"]}}", code: "invalid-tag" },
+
+// ── the number limits apply to _num as to a haus literal ──
+Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1e-7000\"}}", code: "exponent-too-large" },
+
+// ── places: member names and array indexes from the JSON text's root, the envelope included (§16.3 "Places") ──
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": [{\"_num\": \"1\"}, {\"_num\": \"01\"}]}}", code: "haus-json-number", path: "$._value._args[1]._num" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_tag\": \"T\", \"_args\": [\"a\", 1]}}", code: "haus-json-form", path: "$._value._args[1]" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_num\": 1}}", code: "haus-json-number", path: "$._value._num" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_bytes\": \"0B34\"}}", code: "haus-json-bytes", path: "$._value._bytes" },
+Err { json: "{\"_haus\": 1, \"_value\": [\"a\", {\"_rec\": {\"b\": [true]}}]}", code: "haus-json-form", path: "$._value[1]._rec.b[0]" },
+Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"pt-BR\": {\"_tag\": \"x\"}}}}", code: "invalid-tag", path: "$._value._rec[\"pt-BR\"]" },

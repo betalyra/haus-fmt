@@ -58,7 +58,7 @@ fn variants() {
     assert_eq!(to_string(&AppEvent::Ping).unwrap(), r#"{"_tag":"Ping"}"#);
     assert_eq!(
         read_error::<AppEvent>(r#"{"_tag":"Shipped"}"#),
-        "._tag: unknown tag Shipped; expected one of Ping, Failed, Placed"
+        "unknown tag Shipped; expected one of Ping, Failed, Placed"
     );
 
     // Recursion through payloads.
@@ -66,9 +66,9 @@ fn variants() {
     assert_eq!(tree, Tree::Node(Box::new(Tree::Leaf), Box::new(Tree::Leaf)));
     assert_eq!(
         read_error::<Tree>(r#"{"_tag":"Node","values":[{"_tag":"Leaf"}]}"#),
-        ".values: expected 2 values, found 1"
+        "expected 2 values in \"values\", found 1"
     );
-    assert_eq!(read_error::<Tree>(r#"{"_tag":"Leaf","value":1}"#), "unexpected member \"value\"");
+    assert_eq!(read_error::<Tree>(r#"{"_tag":"Leaf","value":1}"#), ".value: unexpected member \"value\"");
 
     // Unknown tags of an open variant: the arguments' self-describing values.
     let hexagon = Shape::Unknown(Unknown { tag: "Hexagon".into(), args: vec![Value::Number("1".into())] });
@@ -86,7 +86,10 @@ fn variants() {
     // `args` is a member like any other.
     let run = from_str::<Shape>(r#"{"_tag":"Run","args":["a"]}"#).unwrap();
     assert_eq!(haus::to_string(&run).unwrap(), r#"Run { args: ["a"] }"#);
-    assert_eq!(read_error::<Shape>(r#"{"_tag":"hexagon"}"#), "._tag: \"hexagon\" is not a tag name");
+    assert_eq!(
+        read_error::<Shape>(r#"{"_tag":"hexagon"}"#),
+        "\"hexagon\" is not a tag name (A to Z, then letters, digits and _)"
+    );
 }
 
 #[test]

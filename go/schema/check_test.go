@@ -31,8 +31,9 @@ func issues(is []schema.Issue) string {
 }
 
 // TestCheckText checks every issue of a file, as rust's haus check reports
-// them (haus-schema's check_text), but with a deprecated field's path at
-// the field.
+// them (haus-schema's check_text). A deprecated field's hint is at the
+// field's value and a deprecated tag's at the tagged value, as
+// unlisted-field is (spec §14).
 func TestCheckText(t *testing.T) {
 	s, err := schema.Parse([]byte(checkSchema), schema.Options{})
 	if err != nil {

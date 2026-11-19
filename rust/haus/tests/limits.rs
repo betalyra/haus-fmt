@@ -199,8 +199,8 @@ fn keys_and_tags_count_against_the_string_limit() {
     let rec = |k: &str| Json::Object(vec![("_rec".into(), Json::Object(vec![(k.into(), Json::String("x".into()))]))]);
     let tag_json = |t: &str| Json::Object(vec![("_tag".into(), Json::String(t.into()))]);
     assert!(read(rec("abcd")).is_ok() && read(tag_json("Abcd")).is_ok());
-    assert_eq!(read(rec("abcde")).unwrap_err().to_string(), "._rec.abcde: key longer than 4 characters");
-    assert_eq!(read(tag_json("Abcde")).unwrap_err().to_string(), "._tag: tag longer than 4 characters");
+    assert_eq!(read(rec("abcde")).unwrap_err().to_string(), "._value._rec.abcde: key longer than 4 characters");
+    assert_eq!(read(tag_json("Abcde")).unwrap_err().to_string(), "._value: tag longer than 4 characters");
     let imported = Json::Object(vec![("abcde".into(), Json::Null)]);
     assert_eq!(json::import(&imported, &limits).unwrap_err().to_string(), ".abcde: key longer than 4 characters");
     // The JSON text reader leaves lengths to the forms, which count them on the
@@ -247,4 +247,37 @@ fn a_hex_literal_has_at_most_829_hex_digits() {
     assert!(haus::parse_with(&format!("0x{}", "f".repeat(830)), &raised).is_ok());
     // Binary literals need no limit of their own: 998 binary digits fit in decimal.
     assert!(haus::parse(&format!("-0b{}", "1".repeat(997))).is_ok());
+}
+
+/// Writers and checks of values built in code count an empty record, array
+/// or record payload as a level, as parsing does (spec §7): a value built in
+/// code and the same value parsed have the same depth.
+#[test]
+fn empty_containers_built_in_code_are_levels() {
+    let limits = Limits { max_depth: 2, ..Limits::default() };
+    // Each needs depth 3 when parsed; `T(U {})` and `{ a: [] }` need 2.
+    let too_deep = ["[[[]]]", "{ a: { b: {} } }", "[{ a: [] }]", "T(U(V {}))", "T([[]])", "[T {}, [[]]]"];
+    let at_limit = ["[[]]", "{ a: [] }", "T(U {})", "T {}", "[T {}]", "T(U {}, [])"];
+    for text in too_deep {
+        assert!(haus::parse_with(text, &limits).is_err(), "{text} parses within depth 2");
+        let value = haus::parse(text).unwrap().remove(0);
+        let code = |e: haus::EncodeError| e.code.as_str();
+        assert_eq!(haus::to_string_with(&value, &limits).map_err(code).err(), Some("nesting-too-deep"), "{text}");
+        assert_eq!(json::to_haus_json_with(&value, &limits).map_err(code).err(), Some("nesting-too-deep"), "{text}");
+        assert_eq!(json::to_string_with(&value, &limits).map_err(code).err(), Some("nesting-too-deep"), "{text}");
+        assert_eq!(value.encode_with(Encoder::new(&limits)).map_err(code).err(), Some("nesting-too-deep"), "{text}");
+    }
+    for text in at_limit {
+        assert!(haus::parse_with(text, &limits).is_ok(), "{text} doesn't parse within depth 2");
+        let value = haus::parse(text).unwrap().remove(0);
+        assert!(haus::to_string_with(&value, &limits).is_ok(), "{text}");
+        assert!(json::to_haus_json_with(&value, &limits).is_ok(), "{text}");
+        assert!(json::to_string_with(&value, &limits).is_ok(), "{text}");
+        assert!(value.encode_with(Encoder::new(&limits)).is_ok(), "{text}");
+    }
+    // Typed values: an empty Vec is a level too.
+    let empty: Vec<Vec<Vec<u8>>> = vec![vec![vec![]]];
+    assert_eq!(haus::to_string_with(&empty, &limits).unwrap_err().code.as_str(), "nesting-too-deep");
+    assert_eq!(json::to_string_with(&empty, &limits).unwrap_err().code.as_str(), "nesting-too-deep");
+    assert!(haus::to_string_with(&vec![Vec::<u8>::new()], &limits).is_ok());
 }

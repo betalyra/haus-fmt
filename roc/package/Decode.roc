@@ -317,6 +317,93 @@ Decode := [].{
 		Err(e) => Err(e)
 	}
 
+	## A type with a codec whose parts have codecs of their own (a `Currency`
+	## inside a `Money`): `check` runs the parts' codecs first, each at its
+	## own place, then the base decoder and the codec run (spec §13.4:
+	## codecs run from the inside out, and the first that rejects gives the
+	## error). Generated code builds `check` from the `check_*` functions below.
+	codec_inside : Value, (Value -> Try({}, Error)), (Value -> Try(b, Error)), (b -> Try(t, Str)) -> Try(t, Error)
+	codec_inside = |v, check, base, decode| {
+		check(v)?
+		codec(v, base, decode)
+	}
+
+	# The checks of a codec's type for the codecs of its parts: each runs
+	# `check` on the parts where it applies, and leaves a value of another
+	# shape to the base decoder, which runs next and reports it.
+
+	## Each item of an array.
+	check_items : Value, (Value -> Try({}, Error)) -> Try({}, Error)
+	check_items = |v, check| match v {
+		Arr(items) => {
+			var $i = 0.U64
+			for x in items {
+				at(check(x), "[${$i.to_str()}]")?
+				$i = $i + 1
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
+
+	## Each entry of a `Map`.
+	check_entries : Value, (Value -> Try({}, Error)) -> Try({}, Error)
+	check_entries = |v, check| match v {
+		Rec(fields) => {
+			for (k, x) in fields {
+				at(check(x), ErrorCode.path_key(k))?
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
+
+	## The fields of a record that have checks, where present.
+	check_fields : Value, List((Str, (Value -> Try({}, Error)))) -> Try({}, Error)
+	check_fields = |v, checks| match v {
+		Rec(fields) => {
+			for (k, x) in fields {
+				match checks.find_first(|(name, _)| name == k) {
+					Ok((_, check)) => at(check(x), ErrorCode.path_key(k))?
+					Err(_) => {}
+				}
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
+
+	## The payload of a variant's case: its positional values (`Args`), or
+	## the fields of its record (`Fields`), a step from the case itself.
+	check_cases : Value, List((Str, [Args(List((Value -> Try({}, Error)))), Fields(List((Str, (Value -> Try({}, Error)))))])) -> Try({}, Error)
+	check_cases = |v, cases| match v {
+		Tag(name, args) =>
+			match cases.find_first(|(tag, _)| tag == name) {
+				Ok((_, Args(checks))) if checks.len() == args.len() => {
+					var $i = 0.U64
+					for (x, check) in args.map2(checks, |x, check| (x, check)) {
+						at(check(x), "(${name})[${$i.to_str()}]")?
+						$i = $i + 1
+					}
+					Ok({})
+				}
+				Ok((_, Fields(checks))) =>
+					match args {
+						[r] => at(check_fields(r, checks), "(${name})")
+						_ => Ok({})
+					}
+				_ => Ok({})
+			}
+		_ => Ok({})
+	}
+
+	## Inside a `Secret`: an error says only that it isn't a valid `what`, at the secret.
+	check_secret : Value, Str, (Value -> Try({}, Error)) -> Try({}, Error)
+	check_secret = |v, what, check| match check(v) {
+		Ok({}) => Ok({})
+		Err(_) => fail(ErrorCode.invalid_secret, "not a valid ${what} (the value is hidden)")
+	}
+
 	## A tag with the wrong number of payload values: `wrong-payload`.
 	arity : Str, U64 -> Try(a, Error)
 	arity = |tag, n| fail(
@@ -603,6 +690,46 @@ expect code_of("Date(\"2026-02-30\")", Decode.date) == "invalid-time at $[0]" an
 expect code_of("Date(\"2026-11-13\", \"x\")", Decode.date) == "type-mismatch at $" and code_of("[1, 2]", |v| Decode.secret(v, "Secret Int8", |x| Decode.list(x, Decode.i8))) == "ok"
 expect code_of("[1, 999]", |v| Decode.secret(v, "Secret (Array Int8)", |x| Decode.list(x, Decode.i8))) == "invalid-secret at $"
 expect code_of("1", |v| Decode.codec(v, Decode.i32, |_| Err("no"))) == "type-mismatch at $" and code_of("1, 2", Decode.any) == "not-one-value"
+# Codecs run from the inside out (spec §13.4): a part's codec, checked first, rejects at its own place.
+expect {
+	currency = |c| Decode.codec(
+		c,
+		Decode.any,
+		|x| match x {
+			Tag("EUR", []) => Ok({})
+			_ => Err("not a currency")
+		},
+	)
+	check = |v| Decode.check_cases(v, [("Money", Args([|_| Ok({}), currency]))])
+	money = |v| Decode.codec_inside(
+		v,
+		check,
+		Decode.any,
+		|x| match x {
+			Tag("Money", [_, _]) => Ok({})
+			_ => Err("not money")
+		},
+	)
+	place = |text| match Decode.one(text, |v| Decode.list(v, money)) {
+		Ok(_) => "ok"
+		Err(Decode(e)) => "${e.code} at ${ErrorCode.place(e.path)}"
+		Err(Syntax(e)) => e.code
+	}
+	place("[Money(1, EUR), Money(2, Eur)]") == "type-mismatch at $[1][1]" and place("[Money(1, EUR)]") == "ok" and place("[Money(1)]") == "type-mismatch at $[0]"
+}
+expect {
+	fails = |_| Decode.fail("type-mismatch", "no")
+	place = |v, check| match check(v) {
+		Ok({}) => "ok"
+		Err(e) => ErrorCode.place(e.path)
+	}
+	place(Arr([Num("1"), Num("2")]), |v| Decode.check_items(v, fails)) == "$[0]"
+		and place(Rec([("pt-BR", Num("1"))]), |v| Decode.check_entries(v, fails)) == "$[\"pt-BR\"]"
+		and place(Rec([("a", Num("1")), ("b", Num("2"))]), |v| Decode.check_fields(v, [("b", fails)])) == "$.b"
+		and place(Tag("Circle", [Rec([("r", Num("1"))])]), |v| Decode.check_cases(v, [("Circle", Fields([("r", fails)]))])) == "$.r"
+		and place(Num("1"), |v| Decode.check_items(v, fails)) == "ok"
+		and Decode.check_secret(Num("1"), "Secret Money", fails).map_err(|e| (e.code, e.path)) == Err(("invalid-secret", ""))
+}
 # A closed record: an unknown field at its place; keys that aren't identifiers quoted.
 expect {
 	closed = |v| {
@@ -677,4 +804,14 @@ expect {
 }
 expect Decode.within_limits(deep(1023, |x| Arr([x])), decode_nest, { ..Value.default_limits, max_depth: 1024 }).is_ok()
 expect Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code).map_ok(|_| {}) == Err("unsupported-depth")
+# An empty record, array or record payload is a level, as the parser counts it
+# (spec §7): a value built in code has the depth of the same value parsed.
+expect {
+	limits = |d| { ..Value.default_limits, max_depth: d }
+	built = |v, d| Decode.within_limits(v, Decode.any, limits(d)).is_ok()
+	parsed = |text, d| Value.parse_with(text, limits(d)).is_ok()
+	empties = [(Arr([]), "[]"), (Rec([]), "{}"), (Tag("A", [Rec([])]), "A {}"), (Tag("Some", [Arr([])]), "Some([])"), (Arr([Rec([])]), "[{}]")]
+	empties.map(|(v, _)| (built(v, 0), built(v, 1), built(v, 2))) == [(False, True, True), (False, True, True), (False, True, True), (False, False, True), (False, False, True)]
+		and empties.all(|(v, text)| [0, 1, 2].all(|d| built(v, d) == parsed(text, d)))
+}
 expect Decode.within_limits(Arr([]), Decode.any, { ..Value.default_limits, max_depth: 0 }).map_err(|e| e.path).map_ok(|_| {}) == Err("") and Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 0 }).is_ok()

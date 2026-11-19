@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-  canonical, compileSchemaFile, equals, equalsJson, errorCode, fromHausJson, fromHausJsonLines, HausDecodeError, HausSyntaxError, importJson, parseAll, parseJson,
+  canonical, compileSchemaFile, equals, equalsJson, errorCode, formatPath, fromHausJson, fromHausJsonLines, HausDecodeError, HausSyntaxError, importJson, parseAll, parseJson,
   stringifyJson, toHausJson, toHausJsonLines, toHausJsonValue, type Json, type Value,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
@@ -20,6 +20,8 @@ interface Case {
   readonly json: string
   /** For `Err`: the error code (spec §17). */
   readonly code?: string
+  /** For `Err`, when given: the error's place in the JSON (spec §16.3 "Places"). */
+  readonly path?: string
   readonly name: string
 }
 
@@ -34,6 +36,7 @@ const cases = (text: string): Case[] =>
     const input = field("input")
     const output = field("output") ?? input
     const code = field("code")
+    const path = field("path")
     if (v.tag === "Err" && code?.kind !== "string") throw new Error(`an Err case without a code: ${canonical(v)}`)
     return {
       kind: v.tag as Case["kind"],
@@ -42,6 +45,7 @@ const cases = (text: string): Case[] =>
       ...(output ? { output } : {}),
       json: json.value,
       ...(code?.kind === "string" ? { code: code.value } : {}),
+      ...(path?.kind === "string" ? { path: path.value } : {}),
       name: `${v.tag} ${type?.kind === "string" ? type.value + " " : ""}${json.value}`,
     }
   })
@@ -52,12 +56,13 @@ const expectJson = (actual: Json, json: string) => {
   expect(equalsJson(actual, expected), `${stringifyJson(actual)} is not ${json}`).toBe(true)
 }
 
-const rejects = (f: () => unknown, code: string | undefined) => {
+const rejects = (f: () => unknown, c: Case) => {
   try {
     f()
   } catch (e) {
     expect(e instanceof HausDecodeError || e instanceof HausSyntaxError, String(e)).toBe(true)
-    expect(errorCode(e), String(e)).toBe(code)
+    expect(errorCode(e), String(e)).toBe(c.code)
+    if (c.path !== undefined) expect(e instanceof HausDecodeError ? formatPath(e.path) : undefined, String(e)).toBe(c.path)
     return
   }
   throw new Error("expected an error")
@@ -81,14 +86,14 @@ describe("schema-based (spec §16.3)", () => {
         expect(canonical(h.encode(s, h.fromJson(s, c.json)))).toBe(canonical(c.output!))
         return
       case "Err":
-        return rejects(() => h.fromJson(s, c.json), c.code)
+        return rejects(() => h.fromJson(s, c.json), c)
     }
   })
 })
 
 describe("self-describing (spec §16.2)", () => {
   it.each(cases(read("json/self-describing.cases.haus")))("$name", (c) => {
-    if (c.kind === "Err") return rejects(() => fromHausJson(c.json), c.code)
+    if (c.kind === "Err") return rejects(() => fromHausJson(c.json), c)
     expectJson(toHausJsonValue(c.input!), c.json)
     expectJson(parseJson(toHausJson(c.input!)), c.json)
     expect(canonical(fromHausJson(c.json))).toBe(canonical(c.input!))
@@ -97,7 +102,7 @@ describe("self-describing (spec §16.2)", () => {
 
 describe("import (spec §16.1)", () => {
   it.each(cases(read("json/import.cases.haus")))("$name", (c) => {
-    if (c.kind === "Err") return rejects(() => importJson(c.json), c.code)
+    if (c.kind === "Err") return rejects(() => importJson(c.json), c)
     expect(equals(importJson(c.json), c.output!), canonical(importJson(c.json))).toBe(true)
   })
 })

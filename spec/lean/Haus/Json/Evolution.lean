@@ -826,7 +826,7 @@ theorem MinorTys.length : ∀ {ts ts' : List Ty}, MinorTys env ts ts' → ts.len
 theorem recordCase_older (hE : env.Minor env') {F : Nat} {o : String} {cl : Bool} {cs cs' : List Case}
     {tag tag' : String} {cl' : Bool} {fields' : List Field} {y' : Typed} {b : Bool} {j : JSON}
     (hmc : MinorCases env cl cs cs') (hmm : maybeOf? (.variant cl cs) = none ∨ cs' = cs)
-    (hc : caseOf? env' cs' tag = some (.record tag' cl' fields'))
+    (hc : caseOf? env' cs' tag = some (.record tag' cl' fields')) (htag : isTag tag.toList = true)
     (hb : b = true → isBool (.variant cl cs) = true) (hwf : JSON.WellFormed j)
     (IH : hasReservedField fields' = false → ∃ ys', y' = .record ys' ∧ ∀ ms, toJsonFields env' F o fields' ys' = .ok ms →
       missingJ? fields' ms = none ∧ (∀ m ∈ ms, m.1 ≠ "_tag" ∧ m.1 ≠ "_args") ∧
@@ -871,9 +871,9 @@ theorem recordCase_older (hE : env.Minor env') {F : Nat} {o : String} {cl : Bool
             obtain ⟨ys, hys0, hold⟩ := hread fields0 hmf
             refine ⟨_, ?_, .case (.cons (.record hold) .nil)⟩
             rw [fromJsonC_none _ hN, readCore.eq_def]
-            simp only [Bool.false_eq_true, ↓reduceIte, he0, List.lookup, beq_self_eq_true, h1,
+            simp only [Bool.false_eq_true, ↓reduceIte, he0, List.lookup, beq_self_eq_true, htag, Bool.not_true, h1,
               hasReservedField_minor hmf hr', missingJ?_cons _ (missingJ?_minor hmf hk), readFields_tag, hys0,
-              under, Except.map]
+              Except.map]
         · subst hcl
           have hwm : ∀ m ∈ ms, JSON.WellFormed m.2 := by
             cases hwf with
@@ -885,7 +885,7 @@ theorem recordCase_older (hE : env.Minor env') {F : Nat} {o : String} {cl : Bool
 theorem positional_older (hE : env.Minor env') {F : Nat} {o : String} {cl : Bool} {cs cs' : List Case}
     {tag tag' : String} {ts' : List Ty} {ys' : List Typed} {b : Bool} {j : JSON}
     (hmc : MinorCases env cl cs cs') (hmm : maybeOf? (.variant cl cs) = none ∨ cs' = cs)
-    (hc : caseOf? env' cs' tag = some (.positional tag' ts'))
+    (hc : caseOf? env' cs' tag = some (.positional tag' ts')) (htag : isTag tag.toList = true)
     (hb : b = true → isBool (.variant cl cs) = true) (hl : ys'.length = ts'.length) (hwf : JSON.WellFormed j)
     (IHargs : ∀ ts, MinorTys env ts ts' → ∀ js, toJsonArgs env' F o tag 0 ts' ys' = .ok js →
       ∃ zs, readArgs env F o tag 0 ts js = .ok zs ∧ OlderList ys' zs)
@@ -948,18 +948,18 @@ theorem positional_older (hE : env.Minor env') {F : Nat} {o : String} {cl : Bool
             | cons _ _ => simp at hl
             | nil =>
               simp only [Except.ok.injEq] at h; subst h
-              exact ⟨_, by simp [he0, h1, List.lookup], .refl _⟩
+              exact ⟨_, by simp [he0, h1, htag, List.lookup], .refl _⟩
           | [t1'], [t1], .cons ht1 .nil, _, IHone, _, h =>
             obtain ⟨y, rfl, hy⟩ := IHone t1' rfl
             obtain ⟨j1, hj1, rfl⟩ := map_ok.mp h
             obtain ⟨z, hz, hoz⟩ := hy t1 ht1 j1 (under_ok.mp hj1)
             refine ⟨_, ?_, .case (.cons hoz .nil)⟩
-            simp only [Bool.false_eq_true, ↓reduceIte, he0, List.lookup, beq_self_eq_true, h1, List.length_cons,
-              List.length_nil]
+            simp only [Bool.false_eq_true, ↓reduceIte, he0, List.lookup, beq_self_eq_true, htag, Bool.not_true, h1,
+              List.length_cons, List.length_nil]
             rw [memberValue.eq_def]
             simp only [show ("_tag" = "value") = False by decide, ↓reduceIte]
             rw [memberValue.eq_def]
-            simp [hz, under, Except.map]
+            simp [hz, under, atExtra, Except.map]
           | t1' :: t2' :: rest', t1 :: t2 :: rest0, .cons h1' (.cons h2' hr'), hl, _, IHargs, h =>
             obtain ⟨js, hjs, rfl⟩ := map_ok.mp h
             have hts : MinorTys env (t1 :: t2 :: rest0) (t1' :: t2' :: rest') := .cons h1' (.cons h2' hr')
@@ -967,12 +967,12 @@ theorem positional_older (hE : env.Minor env') {F : Nat} {o : String} {cl : Bool
               rw [hts.length]; exact (toJsonArgs_length hl hjs).trans hl
             obtain ⟨zs, hzs, hoz⟩ := IHargs _ hts js hjs
             refine ⟨_, ?_, .case hoz⟩
-            simp only [Bool.false_eq_true, ↓reduceIte, he0, List.lookup, beq_self_eq_true, h1, List.length_cons,
-              List.length_nil]
+            simp only [Bool.false_eq_true, ↓reduceIte, he0, List.lookup, beq_self_eq_true, htag, Bool.not_true, h1,
+              List.length_cons, List.length_nil]
             rw [memberValues.eq_def]
             simp only [show ("_tag" = "values") = False by decide, ↓reduceIte]
             rw [memberValues.eq_def]
-            simp [hlen, hzs, Except.map]
+            simp [hlen, hzs, under, atExtra, Except.map]
       · subst hcl
         match ts', hl, IHone, h with
         | [], _, _, h =>
@@ -1098,7 +1098,7 @@ theorem Core.older (hE : env.Minor env') {F : Nat} {o : String} {c c' : Ty} {v :
     refine ⟨_, ?_, .record ho⟩
     rw [fromJsonC_none _ (nullArg?_notVariant (by simp)), readCore.eq_def]
     simp [missingJ?_minor hmf hk, hys, Except.map]
-  | .bare (closed := cl) (cases := cs') (tag := tag) hc, _, _, ht, hb, h => by
+  | .bare (closed := cl) (cases := cs') (tag := tag) hc, hv, _, ht, hb, h => by
     cases ht with
     | @variant _ cs _ hmc hmm =>
     have hmt : MinorTy env (.variant cl cs) (.variant cl cs') := .variant hmc hmm
@@ -1141,7 +1141,8 @@ theorem Core.older (hE : env.Minor env') {F : Nat} {o : String} {c c' : Ty} {v :
           · simp only [he, ↓reduceIte, Except.ok.injEq] at h; subst h
             exact ⟨_, by simp [hE0, he, h1], .refl _⟩
           · simp only [he, Bool.false_eq_true, ↓reduceIte, hc, Except.ok.injEq] at h; subst h
-            exact ⟨_, by simp [hE0, he, h1, List.lookup], .refl _⟩
+            have htag : isTag tag.toList = true := by simpa [Value.wf, Value.wfList] using hv
+            exact ⟨_, by simp [hE0, he, h1, htag, List.lookup], .refl _⟩
         · subst hcl
           have he : isEnum (.variant false cs') = false := rfl
           simp only [he, Bool.false_eq_true, ↓reduceIte, hc, Except.ok.injEq] at h; subst h
@@ -1152,14 +1153,14 @@ theorem Core.older (hE : env.Minor env') {F : Nat} {o : String} {c c' : Ty} {v :
     | @variant _ cs _ hmc hmm =>
     have hwf := (Core.recordCase hc hd).wellFormed hu h
     simp only [Value.wf, Value.wfList, Bool.and_eq_true, and_true] at hv
-    exact recordCase_older hE hmc hmm hc hb hwf
+    exact recordCase_older hE hmc hmm hc hv.1 hb hwf
       (fun hr => hd.olderPayload hE rfl hv.2 (uniqueKeys_variant hu _ (List.mem_cons_self ..)) hr) h
   | .positional (cases := cs') (tag := tag) (ts := ts') hc ha, hv, hu, ht, hb, h => by
     cases ht with
     | @variant _ cs _ hmc hmm =>
     have hwf := (Core.positional hc ha).wellFormed hu h
     simp only [Value.wf, Bool.and_eq_true] at hv
-    exact positional_older hE hmc hmm hc hb ha.length_ys hwf
+    exact positional_older hE hmc hmm hc hv.1 hb ha.length_ys hwf
       (fun ts hts js h => ha.older hE hv.2 (uniqueKeys_variant hu) hts h)
       (fun t1 hts => ha.olderOne hE hts hv.2 (uniqueKeys_variant hu)) h
   | .unknown (cases := cs') (tag := tag) (args := args) hc, hv, _, ht, hb, h => by

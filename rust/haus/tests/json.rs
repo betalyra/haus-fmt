@@ -99,7 +99,7 @@ fn the_reader_enforces_limits() {
     // Then the haus value that results is checked against d.
     assert_eq!(
         json::from_haus_json_with(&enveloped(9), &shallow).unwrap_err().to_string(),
-        "[0][0]: nesting deeper than 2 levels"
+        "._value[0][0]: nesting deeper than 2 levels"
     );
     let at_limit = r#"{"_haus":1,"_value":{"_tag":"T","_args":[{"_rec":{"a":{"_rec":{}}}}]}}"#;
     assert_eq!(haus::from_haus_json(at_limit).unwrap(), haus::parse("T { a: {} }").unwrap()[0]);
@@ -365,7 +365,7 @@ fn containers() {
     assert_eq!(read_error::<Option<Option<u8>>>(r#"{"_tag":"Some"}"#), "missing member value");
     assert_eq!(
         read_error::<Option<Option<u8>>>(r#"{"_tag":"Maybe"}"#),
-        "._tag: unknown tag Maybe; expected one of None, Some"
+        "unknown tag Maybe; expected one of None, Some"
     );
 
     // Result: tagged, with the value.
@@ -421,20 +421,21 @@ fn self_describing_json_checks_values_built_in_code() {
     let json = haus::to_haus_json(&big).unwrap();
     assert_eq!(haus::from_haus_json(&json).unwrap(), big);
     let long = haus::from_haus_json(&format!(r#"{{"_haus":1,"_value":{{"_num":"{}"}}}}"#, "9".repeat(1001)));
-    assert_eq!(long.unwrap_err().to_string(), "._num: number literal longer than 1000 characters");
+    assert_eq!(long.unwrap_err().to_string(), "._value._num: number literal longer than 1000 characters");
 }
 
 #[test]
 fn self_describing_json_reads_one_form_per_value() {
     let read = |value: &str| haus::from_haus_json(&format!(r#"{{"_value": {value}, "_haus": 1}}"#));
     let error = |value: &str| read(value).unwrap_err().to_string();
-    assert_eq!(error(r#"{"_num": "1E5"}"#), "._num: \"1E5\" is not a normalized number literal");
-    assert_eq!(error(r#"{"_num": "1e+5"}"#), "._num: \"1e+5\" is not a normalized number literal");
-    assert_eq!(error(r#"{"_num": "1e6145"}"#), "._num: exponent larger than 6144");
-    assert_eq!(error(r#"{"_tag": "T", "_args": 1}"#), "._args: expected an array, found the number 1");
-    assert_eq!(error(r#"[{"_rec": {"a": 1}}]"#).split(": ").next(), Some("[0]._rec.a"));
+    assert_eq!(error(r#"{"_num": "1E5"}"#), "._value._num: \"1E5\" is not a normalized number literal");
+    assert_eq!(error(r#"{"_num": "1e+5"}"#), "._value._num: \"1e+5\" is not a normalized number literal");
+    assert_eq!(error(r#"{"_num": "1e6145"}"#), "._value._num: exponent larger than 6144");
+    assert_eq!(error(r#"{"_tag": "T", "_args": 1}"#), "._value._args: expected an array, found the number 1");
+    assert_eq!(error(r#"[{"_rec": {"a": 1}}]"#).split(": ").next(), Some("._value[0]._rec.a"));
     assert!(read(r#"{"_args": [{"_num": "1"}], "_tag": "T"}"#).is_ok());
-    // The envelope: exactly `_haus` 1 and `_value`, in any order; errors are at `$`.
+    // The envelope: exactly `_haus` 1 and `_value`, in any order; its errors are at `$`, the
+    // value's at `$._value…`.
     let code = |text: &str| haus::from_haus_json(text).unwrap_err().code().map(|c| c.as_str());
     assert_eq!(code(r#"{"_num": "1"}"#), Some("haus-json-form"));
     assert_eq!(code(r#"{"_haus": 1, "_value": "a", "_x": 1}"#), Some("haus-json-form"));
@@ -466,15 +467,39 @@ fn json_lines() {
     assert_eq!(read(""), Ok(vec![]));
     // A byte order mark only at the start of the stream.
     assert_eq!(read("\u{FEFF}1\n2\n"), Ok(vec![1, 2]));
-    assert_eq!(read("1\n\u{FEFF}2\n"), Err("expected a JSON value, found '\u{FEFF}' at 2:1".into()));
-    // Empty lines are errors; errors say which line or value.
-    assert_eq!(read("1\n\n2\n"), Err("expected a JSON value, found end of input at 2:1".into()));
+    let bom = "JSON Lines: a byte order mark at the start of line 2 (only the stream may start with one) at 2:1";
+    assert_eq!(read("1\n\u{FEFF}2\n"), Err(bom.into()));
+    // Empty lines are errors (json-syntax, spec §16 "Streams"); errors say which line or value.
+    let empty = |n: usize| Err(format!("JSON Lines: line {n} is empty (a line holds one JSON text) at {n}:1"));
+    assert_eq!(read("1\n\n2\n"), empty(2));
+    assert_eq!(read("1\r\n\r\n2\n"), empty(2));
+    assert_eq!(read("1\n2\n\n"), empty(3));
+    assert_eq!(read("\n"), empty(1));
+    assert_eq!(read("\u{FEFF}\n1"), empty(1));
+    assert_eq!(read("\u{FEFF}"), Ok(vec![]));
     assert_eq!(read("1\n300\n"), Err("[1]: 300 is out of range for UInt8 (0 to 255)".into()));
+    let code = |text: &str| json::from_str_all::<u8>(text).unwrap_err().code().map(|c| c.as_str());
+    assert_eq!(code("1\n\n2"), Some("json-syntax"));
+    assert_eq!(code("1\n\u{FEFF}2"), Some("json-syntax"));
+    // The place of an error in a line starts with the line's index (spec §16.3 "Places").
+    let place = |e: haus::Error| match e {
+        haus::Error::Decode(e) => e.place(),
+        e => panic!("not a decode error: {e}"),
+    };
+    assert_eq!(place(json::from_str_all::<Vec<u8>>("[1]\n[]\n[1, 300]").unwrap_err()), "$[2][1]");
+    let e = json::from_haus_json_lines("{\"_haus\":1,\"_value\":\"a\"}\n{\"_haus\":1,\"_value\":[{\"_num\":\"01\"}]}")
+        .unwrap_err();
+    assert_eq!(place(e), "$[1]._value[0]._num");
 
     let decoded: Result<Vec<u8>, _> = json::decode("\u{FEFF}1\r\n2".as_bytes()).collect();
     assert_eq!(decoded.unwrap(), [1, 2]);
     let e = json::decode::<u8, _>("1\n\u{FEFF}2\n".as_bytes()).find_map(Result::err).unwrap();
-    assert_eq!(e.to_string(), "expected a JSON value, found '\u{FEFF}' at 2:1");
+    assert_eq!(e.to_string(), bom);
+    let e = json::decode::<u8, _>("1\n\n2\n".as_bytes()).find_map(Result::err).unwrap();
+    assert_eq!(e.code().map(|c| c.as_str()), Some("json-syntax"));
+    assert_eq!(e.to_string(), "JSON Lines: line 2 is empty (a line holds one JSON text) at 2:1");
+    let e = json::decode::<Vec<u8>, _>("[1]\n[300]\n".as_bytes()).find_map(Result::err).unwrap();
+    assert_eq!(place(e), "$[1][0]");
 
     // Self-describing lines: a haus stream as JSON Lines, an envelope per line.
     let values = haus::parse("1, Some(\"a\"),").unwrap();
@@ -488,7 +513,7 @@ fn json_lines() {
     let e = json::from_haus_json_lines("{\"_haus\":1,\"_value\":\"a\"}\n{\"_haus\":1,\"_value\":1}\n").unwrap_err();
     assert_eq!(
         e.to_string(),
-        "[1]: expected a self-describing value: a string, an array, or an object {\"_num\"}, {\"_bytes\"}, {\"_rec\"} or {\"_tag\", \"_args\"?}, found the number 1"
+        "[1]._value: expected a self-describing value: a string, an array, or an object {\"_num\"}, {\"_bytes\"}, {\"_rec\"} or {\"_tag\", \"_args\"?}, found the number 1"
     );
     // As Any, the lines hold no envelope.
     assert_eq!(json::to_string_all(&values).unwrap(), "{\"_num\":\"1\"}\n{\"_tag\":\"Some\",\"_args\":[\"a\"]}\n");

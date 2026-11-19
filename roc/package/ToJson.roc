@@ -411,6 +411,17 @@ small = { ..Value.default_limits, max_depth: 2, max_string_length: 3 }
 expect ToJson.to_str_with("abc", ToJson.str, Encode.str, small) == Ok("\"abc\"") and ToJson.to_str_with("abcd", ToJson.str, Encode.str, small) == Err({ code: "string-too-long", reason: "string longer than 3 characters", path: "" })
 expect ToJson.lines_with(["a", "abcd"], ToJson.str, Encode.str, small) == Err({ code: "string-too-long", reason: "string longer than 3 characters", path: "[1]" })
 expect ToJson.lines_with(["a", "b"], ToJson.str, Encode.str, small) == Ok("\"a\"\n\"b\"\n")
+# An empty array is a level, as when it is parsed (spec §7): `[[]]` needs depth 2.
+expect {
+	inner = |l, e| ToJson.list(l, e, ToJson.u8)
+	outer = |l, e| ToJson.list(l, e, inner)
+	encode_inner = |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1))
+	encode_outer = |l, e| Encode.list(l, e, encode_inner)
+	depth = |d| { ..Value.default_limits, max_depth: d }
+	ToJson.to_str_with([[]], outer, encode_outer, depth(2)) == Ok("[[]]")
+		and ToJson.to_str_with([[]], outer, encode_outer, depth(1)).map_err(|e| e.code) == Err("nesting-too-deep")
+		and ToJson.value_with([], inner, depth(0)).map_err(|e| e.code) == Err("nesting-too-deep")
+}
 expect ToJson.to_str_with("a", ToJson.str, Encode.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
 expect ToJson.lines_with([], ToJson.str, Encode.str, { ..Value.default_limits, max_depth: 1025 }) == Err({ code: "unsupported-depth", reason: "max_depth 1025 is more than the supported maximum, 1024", path: "" })
 # Lengths count on the haus value (spec §16, "Limits"), at the limit and one over:

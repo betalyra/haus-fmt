@@ -341,20 +341,20 @@ def test_only_self_describing_json_rejects_raw_display_controls(raw: str, code: 
 def test_self_describing_envelope() -> None:
     assert haus.to_haus_json(String("a")) == '{"_haus":1,"_value":"a"}'
     assert haus.from_haus_json(' { "_value" : "a" , "_haus" : 1 } ') == String("a")
-    for text, code in [
-        ('"a"', "haus-json-form"),
-        ('{"_rec": {}}', "haus-json-form"),
-        ('{"_haus": 1}', "haus-json-form"),
-        ('{"_haus": 1, "_value": "a", "_tag": "A"}', "haus-json-form"),
-        ('{"_haus": 2, "_value": "a"}', "haus-json-version"),
-        ('{"_haus": 1e0, "_value": "a"}', "haus-json-version"),
-        ('{"_haus": "1", "_value": "a"}', "haus-json-version"),
-        ('{"_haus": null, "_value": "a"}', "haus-json-version"),
-        ('{"_haus": 1, "_value": {"_haus": 1, "_value": "a"}}', "haus-json-form"),
+    for text, code, path in [
+        ('"a"', "haus-json-form", ()),
+        ('{"_rec": {}}', "haus-json-form", ()),
+        ('{"_haus": 1}', "haus-json-form", ()),
+        ('{"_haus": 1, "_value": "a", "_tag": "A"}', "haus-json-form", ()),
+        ('{"_haus": 2, "_value": "a"}', "haus-json-version", ("_haus",)),
+        ('{"_haus": 1e0, "_value": "a"}', "haus-json-version", ("_haus",)),
+        ('{"_haus": "1", "_value": "a"}', "haus-json-version", ("_haus",)),
+        ('{"_haus": null, "_value": "a"}', "haus-json-version", ("_haus",)),
+        ('{"_haus": 1, "_value": {"_haus": 1, "_value": "a"}}', "haus-json-form", ("_value",)),
     ]:
         with pytest.raises(HausJsonError) as e:
             haus.from_haus_json(text)
-        assert (e.value.code, e.value.path) == (code, ()), text
+        assert (e.value.code, e.value.path) == (code, path), text
 
 
 def test_self_describing_round_trip() -> None:
@@ -404,12 +404,20 @@ def test_self_describing_rejects(value: str) -> None:
 
 
 def test_self_describing_errors_have_a_path() -> None:
-    """The envelope adds no path segment."""
+    """The path is the place in the JSON, from the envelope (spec §16.3 "Places")."""
     with pytest.raises(HausJsonError) as e:
         haus.from_haus_json(enveloped('{"_rec": {"items": [{"_num": "1"}, 2]}}'))
-    assert e.value.path == ("_rec", "items", 1)
+    assert e.value.path == ("_value", "_rec", "items", 1)
     assert e.value.line is None
-    assert str(e.value) == "expected the self-describing form of a haus value, found number 2 at $._rec.items[1]"
+    assert str(e.value) == (
+        "expected the self-describing form of a haus value, found number 2 at $._value._rec.items[1]"
+    )
+    with pytest.raises(HausJsonError) as v:
+        haus.from_haus_json('{"_haus": 2, "_value": "a"}')
+    assert (v.value.code, v.value.path) == ("haus-json-version", ("_haus",))
+    with pytest.raises(HausJsonError) as t:
+        haus.from_haus_json(enveloped('[{"_tag": "T", "_args": [{"_tag": 5}]}]'))
+    assert (t.value.code, t.value.path) == ("invalid-tag", ("_value", 0, "_args", 0))
 
 
 def test_self_describing_depth_is_the_values() -> None:
@@ -772,6 +780,33 @@ def test_schema_based_error_paths() -> None:
         assert e.value.path == path, text
 
 
+def test_schema_based_places_are_in_the_json() -> None:
+    """Spec §16.3 "Places": member names and array indexes from the JSON text's root. A whole object's
+    error (a tag, a payload, a missing member) is at the object; a member it doesn't take, at the member."""
+    t = compile_schema(
+        "type S = closed < P Int32 Int32 | W Int32 | E >\n"
+        "type D = { s?: S, m?: Maybe (Maybe Int32), c?: closed { id: Int32 } }"
+    )["D"]
+    for text, code, path in [
+        ('{"s": {"_tag": "P", "values": [1, "2"]}}', "type-mismatch", "$.s.values[1]"),
+        ('{"s": {"_tag": "P", "values": [1]}}', "wrong-payload", "$.s"),
+        ('{"s": {"_tag": "P", "values": {"0": 1}}}', "wrong-payload", "$.s"),
+        ('{"s": {"_tag": 1}}', "invalid-tag", "$.s"),
+        ('{"s": {"_tag": "w"}}', "invalid-tag", "$.s"),
+        ('{"s": {"_tag": "Q"}}', "unknown-tag", "$.s"),
+        ('{"s": {"value": 1}}', "missing-member", "$.s"),
+        ('{"s": {"_tag": "E", "x": 1}}', "unexpected-member", "$.s.x"),
+        ('{"s": {"_tag": "W", "value": 1, "x-y": 1}}', "unexpected-member", '$.s["x-y"]'),
+        ('{"m": {"_tag": "Some", "value": "x"}}', "type-mismatch", "$.m.value"),
+        ('{"m": {"_tag": null}}', "invalid-tag", "$.m"),
+        ('{"m": {"_tag": "Some", "value": null, "v": 1}}', "unexpected-member", "$.m.v"),
+        ('{"c": {"id": 1, "x": 2}}', "unknown-field", "$.c.x"),
+    ]:
+        with pytest.raises(HausDecodeError) as e:
+            t.from_json(text)
+        assert (e.value.code, e.value.to_json()["path"]) == (code, path), text
+
+
 def test_schema_based_with_codecs() -> None:
     s = compile_schema(
         """
@@ -869,6 +904,43 @@ def test_json_lines_byte_order_mark() -> None:
         list(haus.import_json_lines("\ufeff\ufeff1\n"))
 
 
+def test_json_lines_empty_lines_and_later_byte_order_marks_are_syntax_errors() -> None:
+    """Spec §16 "Streams": no JSON text on a line, or a byte order mark after the first line, is
+    `json-syntax`, naming the line, in every reader of JSON Lines."""
+    events = SCHEMA["Events"]
+    readers = (events.from_json_lines, haus.import_json_lines, haus.from_haus_json_lines)
+    lines = {events.from_json_lines: '{"_tag":"Empty"}', haus.import_json_lines: "1", haus.from_haus_json_lines: A}
+    for read in readers:
+        one = lines[read]
+        for text, line in [
+            (f"{one}\n\n{one}\n", 2),
+            (f"{one}\r\n\r\n{one}\r\n", 2),
+            ("\n", 1),
+            (f"{one}\n{one}\n\n", 3),
+            (f"{one}\n{one}\n\ufeff{one}\n", 3),
+            (f"{one}\n\ufeff", 2),
+        ]:
+            with pytest.raises(HausJsonError) as e:
+                list(read(text))
+            assert (e.value.code, e.value.line, e.value.column) == ("json-syntax", line, 1), (read, text)
+            assert e.value.to_json()["line"] == line
+        assert len(list(read(f"\ufeff{one}\n{one}"))) == 2  # at the start of the stream, ignored
+
+
+def test_json_lines_places_start_with_the_line() -> None:
+    """Spec §16.3 "Places": an error in a line's value names its place, after the line's index."""
+    t = compile_schema("type P = { price: Int32 }")["P"]
+    with pytest.raises(HausDecodeError) as e:
+        list(t.from_json_lines('{"price": 1}\n{"price": 2}\n{"price": 3}\n{"price": "4"}\n'))
+    assert e.value.to_json()["path"] == "$[3].price"
+    with pytest.raises(HausJsonError) as f:
+        list(haus.from_haus_json_lines(f'{A}\n{enveloped("""{"_tag": "T", "_args": [{"_num": "01"}]}""")}\n'))
+    assert f.value.to_json()["path"] == "$[1]._value._args[0]._num"
+    with pytest.raises(HausJsonError) as g:
+        list(haus.import_json_lines('1\n{"a": ["x", "' + "y" * 11 + '"]}\n', limits=Limits(max_string_length=10)))
+    assert g.value.to_json()["path"] == "$[1].a[1]"
+
+
 def test_json_lines_without_a_schema() -> None:
     assert list(haus.import_json_lines(['{"a": 1}\n[tr', "ue]\n"])) == [
         Record({"a": Number("1")}),
@@ -882,9 +954,9 @@ def test_json_lines_without_a_schema() -> None:
     assert list(haus.from_haus_json_lines(text)) == values
     # Every line is an envelope of its own; errors carry the line's index first in their path.
     for lines, path in [
-        (f"{A}\n{enveloped('1')}\n", (1,)),
+        (f"{A}\n{enveloped('1')}\n", (1, "_value")),
         (f'{A}\n"b"\n', (1,)),
-        (A + "\n" + enveloped('{"_rec": {"k": 1}}') + "\n", (1, "_rec", "k")),
+        (A + "\n" + enveloped('{"_rec": {"k": 1}}') + "\n", (1, "_value", "_rec", "k")),
     ]:
         with pytest.raises(HausJsonError) as e:
             list(haus.from_haus_json_lines(lines))

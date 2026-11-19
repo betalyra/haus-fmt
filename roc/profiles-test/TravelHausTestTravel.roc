@@ -20,7 +20,7 @@ TravelHausTestTravel := [].{
 	read_value_trip : Value -> Try(Trip, Decode.Error)
 	read_value_trip = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ fare: Decode.field(fs, "fare", |x3| Decode.codec(x3, HausFmtMoney.read_value_money, Iso.decode))?, area: Decode.field(fs, "area", |x4| Decode.codec(x4, HausFmtGeo.read_value_b_box, Wgs84BBox.decode))?, stops: Decode.field(fs, "stops", |x5| Decode.list(x5, |x1| Decode.codec(x1, HausFmtGeo.read_value_lat_lng, Wgs84.decode)))?, legs: Decode.field(fs, "legs", |x6| Decode.list(x6, read_value_leg))? })
+		Ok({ fare: Decode.field(fs, "fare", |x3| Decode.codec_inside(x3, check_codecs_2, HausFmtMoney.read_value_money, Iso.decode))?, area: Decode.field(fs, "area", |x4| Decode.codec_inside(x4, check_codecs_4, HausFmtGeo.read_value_b_box, Wgs84BBox.decode))?, stops: Decode.field(fs, "stops", |x5| Decode.list(x5, |x1| Decode.codec(x1, HausFmtGeo.read_value_lat_lng, Wgs84.decode)))?, legs: Decode.field(fs, "legs", |x6| Decode.list(x6, read_value_leg))? })
 	}
 
 	encode_trip : Trip, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
@@ -39,7 +39,7 @@ TravelHausTestTravel := [].{
 			"Ride",
 			p,
 			|fs| {
-				Ok(Ride({ fare: Decode.field(fs, "fare", |x11| Decode.codec(x11, HausFmtMoney.read_value_money, Iso.decode))?, from: Decode.field(fs, "from", |x12| Decode.codec(x12, HausFmtGeo.read_value_lat_lng, Wgs84.decode))?, to: Decode.field(fs, "to", |x13| Decode.codec(x13, HausFmtGeo.read_value_lat_lng, Wgs84.decode))? }))
+				Ok(Ride({ fare: Decode.field(fs, "fare", |x11| Decode.codec_inside(x11, check_codecs_2, HausFmtMoney.read_value_money, Iso.decode))?, from: Decode.field(fs, "from", |x12| Decode.codec(x12, HausFmtGeo.read_value_lat_lng, Wgs84.decode))?, to: Decode.field(fs, "to", |x13| Decode.codec(x13, HausFmtGeo.read_value_lat_lng, Wgs84.decode))? }))
 			},
 		)
 		Tag("Tip", [a0]) => Ok(Tip(Decode.arg("Tip", 0, a0, |x17| Decode.codec(x17, HausFmtMoney.read_value_currency, IsoCurrency.decode))?))
@@ -57,5 +57,17 @@ TravelHausTestTravel := [].{
 		Tip(a0) => Encode.tagged("Tip", e, |e18| HausFmtMoney.encode_currency(IsoCurrency.encode(a0), e18))
 		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
+
+	check_codecs_1 : Value -> Try({}, Decode.Error)
+	check_codecs_1 = |v| Decode.codec(v, HausFmtMoney.read_value_currency, IsoCurrency.decode).map_ok(|_| {})
+
+	check_codecs_2 : Value -> Try({}, Decode.Error)
+	check_codecs_2 = |v| Decode.check_cases(v, [("Money", Args([|_| Ok({}), check_codecs_1]))])
+
+	check_codecs_3 : Value -> Try({}, Decode.Error)
+	check_codecs_3 = |v| Decode.codec(v, HausFmtGeo.read_value_lat_lng, Wgs84.decode).map_ok(|_| {})
+
+	check_codecs_4 : Value -> Try({}, Decode.Error)
+	check_codecs_4 = |v| Decode.check_cases(v, [("BBox", Args([check_codecs_3, check_codecs_3]))])
 
 }

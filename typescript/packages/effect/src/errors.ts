@@ -8,7 +8,7 @@
  * given the code the core would report for the same value (see `issueError`).
  */
 import {
-  ERROR_CODES, errorDocs, errorHint, errorJson as coreErrorJson, formatPath, HausSyntaxError, type ErrorCode, type ErrorJson, type Path, type Value,
+  ERROR_CODES, errorDocs, errorHint, errorJson as coreErrorJson, formatPath, HausSyntaxError, parseAll, type ErrorCode, type ErrorJson, type Path, type Value,
 } from "@haus-fmt/haus"
 import { Option, Schema, SchemaAST } from "effect"
 import { ConversionError, isRedacted, secretMessage } from "./convert.js"
@@ -156,6 +156,40 @@ export const schemaErrorOf = (message: string, code: ErrorCode): HausSchemaError
  */
 export const atIndex = (e: HausSchemaError, index: number): HausSchemaError =>
   new HausSchemaError({ ...fieldsOf(e), ...(e.place !== undefined ? { place: `$[${index}]${e.place.slice(1)}` } : {}), index })
+
+/** A place as spec §17 writes it (`formatPath`) read back as a path; undefined for anything else. */
+const parsePlace = (place: string): Path | undefined => {
+  if (!place.startsWith("$")) return undefined
+  const out: Array<string | number> = []
+  for (let i = 1; i < place.length;) {
+    const rest = place.slice(i)
+    const step = /^\.([a-z_]\w*)/.exec(rest) ?? /^\[(\d+)\]/.exec(rest)
+    if (step !== null) {
+      out.push(step[0].startsWith(".") ? step[1]! : Number(step[1]))
+      i += step[0].length
+      continue
+    }
+    if (!rest.startsWith(`["`)) return undefined
+    let j = 2
+    while (j < rest.length && rest[j] !== `"`) j += rest[j] === "\\" ? 2 : 1
+    if (rest[j + 1] !== "]") return undefined
+    const [key] = parseAll(rest.slice(1, j + 1))
+    if (key?.kind !== "string") return undefined
+    out.push(key.value)
+    i += j + 2
+  }
+  return out
+}
+
+/**
+ * The same error, decoding a value read from JSON, at its place in the JSON
+ * (spec §16.3 "Places"): `locate` turns the place in the value into one in
+ * the JSON. `path` stays the one in the decoded value.
+ */
+export const inJson = (e: HausSchemaError, locate: (path: Path) => Path): HausSchemaError => {
+  const path = e.place === undefined ? undefined : parsePlace(e.place)
+  return path === undefined ? e : new HausSchemaError({ ...fieldsOf(e), place: formatPath(locate(path)) })
+}
 
 const fieldsOf = (e: HausSchemaError) => ({
   message: e.message,

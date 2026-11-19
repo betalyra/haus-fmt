@@ -40,7 +40,9 @@ pub fn to_self_describing(value: &Value, limits: &Limits) -> Result<Json, Encode
 /// ([`crate::from_haus_json`]) rejects them. Fails if `limits.max_depth` is
 /// more than [`crate::MAX_SUPPORTED_DEPTH`].
 pub fn from_self_describing(json: &Json, limits: &Limits) -> Result<Value, DecodeError> {
-    from_value_at(envelope(json)?, limits, 0)
+    decode_supported(limits)?;
+    // Places are in the JSON read (spec §16.3 "Places"): from the envelope, `$._value…`.
+    from_value_at(envelope(json)?, limits, 0).map_err(|e| e.field("_value"))
 }
 
 /// The `_value` of an envelope whose `_haus` is 1. Errors are at the
@@ -289,18 +291,19 @@ fn mismatch(json: &Json) -> DecodeError {
     super::de::mismatch(FORMS, json).with_code(Code::HausJsonForm)
 }
 
-/// `"Circle"`: a tag name, within the string limit.
-fn tag_name(json: &Json, limits: &Limits) -> Result<String, DecodeError> {
+/// `"Circle"`: a tag name, within the string limit. Errors are at the
+/// variant, the object that holds `"_tag"`, as an unknown tag is (spec §15).
+pub(crate) fn tag_name(json: &Json, limits: &Limits) -> Result<String, DecodeError> {
     match json {
         Json::String(t) if is_tag(t) => match check_tag(t, limits) {
             Ok(()) => Ok(t.clone()),
-            Err(e) => Err(e.into_decode().field("_tag")),
+            Err(e) => Err(e.into_decode()),
         },
         Json::String(t) => {
             let reason = format!("{t:?} is not a tag name (A to Z, then letters, digits and _)");
-            Err(DecodeError::new(Code::InvalidTag, reason).field("_tag"))
+            Err(DecodeError::new(Code::InvalidTag, reason))
         }
-        _ => Err(super::de::mismatch("a string", json).with_code(Code::InvalidTag).field("_tag")),
+        _ => Err(super::de::mismatch(r#"a tag name in a string ("_tag")"#, json).with_code(Code::InvalidTag)),
     }
 }
 

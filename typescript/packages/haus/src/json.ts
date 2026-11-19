@@ -468,6 +468,57 @@ export class Place {
   }
 }
 
+/** The part of `v` one step of a haus path names (spec §15): an item, a field, an argument, a record case's field. */
+const stepInto = (v: Value, step: string | number): Value | undefined => {
+  if (v.kind === "array") return typeof step === "number" ? v.items[step] : undefined
+  if (v.kind === "record") return typeof step === "string" ? v.fields.get(step) : undefined
+  if (v.kind !== "variant") return undefined
+  if (typeof step === "number") return v.args[step]
+  const [payload] = v.args
+  return v.args.length === 1 && payload?.kind === "record" ? payload.fields.get(step) : undefined
+}
+
+/**
+ * Where each value read from JSON is in the JSON (spec §16.3 "Places"). A
+ * reader given one notes the place of every value it makes; `locate` then
+ * turns the place of an error found later in the haus value (a range, a
+ * std/time text, a codec), a path in the value, into its place in the JSON.
+ */
+export class JsonPlaces {
+  private readonly places = new WeakMap<Value, Place>()
+
+  /** `v`, noted at `place` unless it has a place already (a Maybe's `Some(x)` written as `x` shares x's place). */
+  note<V extends Value>(v: V, place: Place): V {
+    if (!this.places.has(v)) this.places.set(v, place)
+    return v
+  }
+
+  /** The place in the JSON of the part of `value` at the haus path `path`: the deepest of its values on the way that has one. */
+  locate(value: Value, path: Path): Path {
+    let best = this.places.get(value)
+    let v: Value | undefined = value
+    for (const step of path) {
+      v = stepInto(v, step)
+      if (v === undefined) break
+      best = this.places.get(v) ?? best
+    }
+    return best?.path() ?? [...path]
+  }
+}
+
+/**
+ * `e`, an error decoding a value read from JSON, at its place in the JSON:
+ * `read` reads the JSON again, noting places (reading is deterministic, so
+ * nothing is noted while the value decodes without an error). `skip` steps
+ * of `e`'s path come before the value's own (a JSON Lines line's index),
+ * and the value's places start with them already.
+ */
+export const atJsonPlace = (e: HausDecodeError, read: (places: JsonPlaces) => Value, skip = 0): HausDecodeError => {
+  const places = new JsonPlaces()
+  const path = places.locate(read(places), e.path.slice(skip))
+  return new HausDecodeError(e.reason, path, e.code, { hint: e.hint, ...(e.expected !== undefined ? { expected: e.expected } : {}), ...(e.found !== undefined ? { found: e.found } : {}) })
+}
+
 /** A short description of a JSON value, for errors. */
 export const describeJson = (j: Json): string =>
   j === null ? "null"
@@ -505,19 +556,24 @@ export const stringOfJson = (s: string, limits: Limits, place: Place) => {
 // ── §16.1: JSON import ───────────────────────────────────────
 
 /** JSON as a haus value (spec §16.1): objects → records, `true`/`false` → `True`/`False`, `null` → `None`, numbers exact. */
-const imported = (j: Json, limits: Limits, depth: number, place: Place): Value => {
+const imported = (j: Json, limits: Limits, depth: number, place: Place, places?: JsonPlaces): Value => {
+  const v = importedHere(j, limits, depth, place, places)
+  return places ? places.note(v, place) : v
+}
+
+const importedHere = (j: Json, limits: Limits, depth: number, place: Place, places: JsonPlaces | undefined): Value => {
   if (j === null) return variant("None")
   if (j === true || j === false) return variant(j ? "True" : "False")
   if (typeof j === "string") return stringOfJson(j, limits, place)
   if (j instanceof JsonNumber) return numberOfJson(j, limits, place)
   if (depth >= limits.maxDepth) throw new HausDecodeError(`nesting deeper than ${limits.maxDepth} levels`, place.path(), "nesting-too-deep")
-  if (Array.isArray(j)) return arr(j.map((x, i) => imported(x, limits, depth + 1, place.child(i))))
+  if (Array.isArray(j)) return arr(j.map((x, i) => imported(x, limits, depth + 1, place.child(i), places)))
   if (typeof j !== "object") throw new HausDecodeError(`not a JSON value: ${typeof j}`, place.path(), "type-mismatch")
-  return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place), imported((j as JsonObject)[k]!, limits, depth + 1, place.child(k))])))
+  return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place.child(k)), imported((j as JsonObject)[k]!, limits, depth + 1, place.child(k), places)])))
 }
 
 /** JSON imported as a haus value (§16.1), from a place inside a larger conversion. */
-export const importedValue = (j: Json, limits: Limits, place: Place): Value => imported(j, limits, 0, place)
+export const importedValue = (j: Json, limits: Limits, place: Place, places?: JsonPlaces): Value => imported(j, limits, 0, place, places)
 
 /**
  * Import JSON text as a haus value, without a schema (spec §16.1): an object
@@ -600,11 +656,17 @@ export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => 
 }
 
 /** A haus value from its self-describing JSON without the envelope (spec §16.2, as inside schema-based JSON); any other JSON is an error. */
-export const valueOfHausJson = (json: Json, limits: Limits, place: Place): Value => {
+export const valueOfHausJson = (json: Json, limits: Limits, place: Place, places?: JsonPlaces): Value => {
   const fail = (reason: string, at: Place, code: ErrorCode = "haus-json-form"): never => {
     throw new HausDecodeError(reason, at.path(), code)
   }
   const read = (j: Json, depth: number, at: Place, payload: boolean): Value => {
+    const v = readHere(j, depth, at, payload)
+    return places ? places.note(v, at) : v
+  }
+  // Errors are at their place in the JSON (spec §16.3 "Places"): a "_num" or "_bytes" that
+  // isn't one at that member, a value as a whole (its tag, its form) at the value.
+  const readHere = (j: Json, depth: number, at: Place, payload: boolean): Value => {
     const open = () => {
       if (!payload && depth >= limits.maxDepth) fail(`nesting deeper than ${limits.maxDepth} levels`, at, "nesting-too-deep")
     }
@@ -619,36 +681,40 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place): Value
     const only = (...names: string[]) => keys.length === names.length && names.every((n) => Object.hasOwn(j, n))
     if (only("_num")) {
       const text = j["_num"]
-      if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"_num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at, "haus-json-number")
+      if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"_num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at.child("_num"), "haus-json-number")
       const issue = numberLimitIssue(text, limits)
-      return issue === undefined ? num(text) : fail(issue.reason, at, issue.code)
+      return issue === undefined ? num(text) : fail(issue.reason, at.child("_num"), issue.code)
     }
     if (only("_bytes")) {
       const hex = j["_bytes"]
-      if (typeof hex !== "string" || !LOWER_HEX.test(hex)) return fail(`"_bytes" must be two lowercase hex digits per byte`, at, "haus-json-bytes")
-      if (hex.length > limits.maxStringLength) fail(`byte string longer than ${limits.maxStringLength} characters`, at, "string-too-long")
+      if (typeof hex !== "string" || !LOWER_HEX.test(hex)) return fail(`"_bytes" must be two lowercase hex digits per byte`, at.child("_bytes"), "haus-json-bytes")
+      if (hex.length > limits.maxStringLength) fail(`byte string longer than ${limits.maxStringLength} characters`, at.child("_bytes"), "string-too-long")
       const out = new Uint8Array(hex.length / 2)
       for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16)
       return bytesValue(out)
     }
     if (only("_rec")) {
       const fields = j["_rec"]!
-      if (!isJsonObject(fields)) return fail(`"_rec" must be an object`, at)
+      const members = at.child("_rec")
+      if (!isJsonObject(fields)) return fail(`"_rec" must be an object`, members)
       open()
-      return rec(new Map(Object.keys(fields).map((k) => [keyOfJson(k, limits, at), read(fields[k]!, inner, at.child(k), false)] as const)))
+      return rec(new Map(Object.keys(fields).map((k) => [keyOfJson(k, limits, members.child(k)), read(fields[k]!, inner, members.child(k), false)] as const)))
     }
     if (only("_tag") || only("_tag", "_args")) {
       const tag = j["_tag"]
-      // The tag first, at its member, then "_args".
-      if (typeof tag !== "string" || !TAG.test(tag)) return fail(`"_tag" must be a tag name ([A-Z][A-Za-z0-9_]*)`, at.child("_tag"), "invalid-tag")
+      // The tag first (a string that is a tag, spec §16.3), then "_args".
+      if (typeof tag !== "string" || !TAG.test(tag)) {
+        return fail(typeof tag === "string" ? `"_tag" must be a tag name ([A-Z][A-Za-z0-9_]*)` : `"_tag" must be a string, found ${describeJson(tag!)}`, at, "invalid-tag")
+      }
       const tagIssue = tagLengthIssue(tag, limits)
       if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
       if (!Object.hasOwn(j, "_args")) return variant(tag)
       const args = j["_args"]!
-      if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array (a tag without arguments has no "_args")`, at)
+      const items = at.child("_args")
+      if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array (a tag without arguments has no "_args")`, items)
       open()
       const single = args.length === 1 && isJsonObject(args[0]!) && Object.hasOwn(args[0], "_rec")
-      return variant(tag, args.map((x, i) => read(x, depth + 1, at.child(i), single)))
+      return variant(tag, args.map((x, i) => read(x, depth + 1, items.child(i), single)))
     }
     const members = keys.slice(0, 5).map((k) => short(k)).join(", ")
     return fail(`not a self-describing form: an object with the members ${members}${keys.length > 5 ? ", …" : ""} (expected {"_num"}, {"_bytes"}, {"_rec"} or {"_tag"[, "_args"]})`, at)
@@ -659,7 +725,7 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place): Value
 /** The envelope of self-describing JSON (spec §16.2): `{"_haus": 1, "_value": …}`. */
 const envelope = (value: Json): JsonObject => jsonObject([["_haus", new JsonNumber(VERSION)], ["_value", value]])
 
-/** The value in an envelope (spec §16.2), at `place`: the envelope adds no path segment. */
+/** The value in an envelope (spec §16.2), the envelope itself at `place`; the value is at its member `_value`. */
 const unwrap = (json: Json, place: Place): Json => {
   const isEnvelope = isJsonObject(json) && Object.keys(json).length === 2 && Object.hasOwn(json, "_haus") && Object.hasOwn(json, "_value")
   if (!isEnvelope) {
@@ -691,7 +757,7 @@ export const toHausJson = (value: Value, limits: Partial<Limits> = {}): string =
  */
 export const fromHausJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => {
   const place = Place.root()
-  return valueOfHausJson(unwrap(json, place), withDefaults(limits), place)
+  return valueOfHausJson(unwrap(json, place), withDefaults(limits), place.child("_value"))
 }
 
 /**
@@ -703,7 +769,7 @@ export const fromHausJsonValue = (json: Json, limits: Partial<Limits> = {}): Val
 export const fromHausJson = (text: string, limits: Partial<Limits> = {}): Value => {
   const l = withDefaults(limits)
   const place = Place.root()
-  return valueOfHausJson(unwrap(readJson(text, hausJsonTextLimits(l), START, true), place), l, place)
+  return valueOfHausJson(unwrap(readJson(text, hausJsonTextLimits(l), START, true), place), l, place.child("_value"))
 }
 
 // ── JSON Lines (spec §16: a stream is one JSON text per value) ─
@@ -741,7 +807,12 @@ export async function* readLines<T>(
     throw new HausSyntaxError(`JSON Lines: line longer than ${maxLineLength} characters`, origin.offset, origin.line, origin.column, "value-too-long")
   }
   const line = (text: string): T => {
-    // A byte order mark at the very start is ignored.
+    // A byte order mark at the very start is ignored; at the start of a later line, as an
+    // empty line, it is no JSON text (spec §16, "Streams"): errors that name the line.
+    if (text === "" || text === "\r") throw new HausSyntaxError(`JSON Lines: line ${origin.line} is empty (every line holds one JSON text)`, origin.offset, origin.line, origin.column, "json-syntax")
+    if (origin.offset !== 0 && text.charCodeAt(0) === 0xfeff) {
+      throw new HausSyntaxError(`JSON Lines: a byte order mark at the start of line ${origin.line} (only the stream may start with one)`, origin.offset, origin.line, origin.column, "json-syntax")
+    }
     const bom = origin.offset === 0 && text.charCodeAt(0) === 0xfeff
     const at = bom ? { offset: 1, line: 1, column: 2 } : origin
     const value = read(bom ? text.slice(1) : text, at, index++)
@@ -795,7 +866,7 @@ export const fromHausJsonLines = (source: ChunkSource, options: JsonLinesOptions
   const limits = withDefaults(options.limits ?? {})
   return readLines(source, options, (text, origin, i) => {
     const place = Place.root(i)
-    return valueOfHausJson(unwrap(readJson(text, hausJsonTextLimits(limits), origin, true), place), limits, place)
+    return valueOfHausJson(unwrap(readJson(text, hausJsonTextLimits(limits), origin, true), place), limits, place.child("_value"))
   })
 }
 

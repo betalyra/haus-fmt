@@ -356,3 +356,28 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
       expect((yield* Effect.flip(Haus.decode(Nest)("[]", { maxDepth: Number.NaN }))).message).toBe("maxDepth must be a whole number from 0 to 512, not NaN")
     }))
 })
+
+describe("an empty record, array or payload is a level, built in code as parsed (spec §7)", () => {
+  const empty = new Map<string, Value>()
+  // Each needs three levels: an empty container innermost.
+  const built: ReadonlyArray<readonly [string, Value]> = [
+    ["[[[]]]", arr([arr([arr([])])])],
+    ["{ a: { b: {} } }", rec(new Map([["a", rec(new Map([["b", rec(empty)]]))]]))],
+    ["A(B(C {}))", variant("A", [variant("B", [variant("C", [rec(empty)])])])],
+  ]
+  for (const [text, value] of built) {
+    it(`${text}: decoding and encoding a value built in code count it as parsing does`, () => {
+      const code = <A, E extends { readonly code: string }>(effect: Effect.Effect<A, E>) => Effect.runSync(Effect.flip(effect)).code
+      expect(code(Haus.decode(Haus.Any)(text, { maxDepth: 2 }))).toBe("nesting-too-deep")
+      expect(code(Haus.decodeValue(Haus.Any)(value, { maxDepth: 2 }))).toBe("nesting-too-deep")
+      expect(code(Haus.encodeValue(Haus.Any)(value, { maxDepth: 2 }))).toBe("nesting-too-deep")
+      expect(code(Haus.toHausJson(value, { maxDepth: 2 }))).toBe("nesting-too-deep")
+      expect(Effect.runSync(Haus.decodeValue(Haus.Any)(value, { maxDepth: 3 }))).toBe(value)
+    })
+  }
+  it("a schema's empty array counts too", () => {
+    const e = Effect.runSync(Effect.flip(Haus.encodeValue(Nest)(nestedArray(3), { maxDepth: 2 })))
+    expect(e.code).toBe("nesting-too-deep")
+    expect(Effect.runSync(Haus.encodeValue(Nest)(nestedArray(3), { maxDepth: 3 }))).toEqual(nestedValue(3))
+  })
+})

@@ -15,6 +15,7 @@ and a reference parser that computes it.
 | [`Haus/DupKeys.lean`](Haus/DupKeys.lean) | Duplicate keys found by sorting (spec §7): the same answer as the parser's scan, in n log n comparisons |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
 | [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
+| [`Haus/Layout/`](Haus/Layout) | The three layouts of spec §11 written from values, without comments: compact and minimised (one writer, the spacing a parameter; minimised is `Canonical.write`) and pretty, with the proofs that they parse back and that a compact or minimised stream splits by lines |
 | [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does; the value limit (§7) and strict mode (§6) on top of it (`Stream/Limited.lean`) |
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
@@ -23,8 +24,8 @@ and a reference parser that computes it.
 | [`Haus/Profiles/`](Haus/Profiles) | The official profiles (spec §13.3) `@haus-fmt/money/iso` and `@haus-fmt/geo/wgs84`: each rule as a definition, a checker proven to compute it, the profile as a codec, and the runner of their test vectors |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new`, with the JSON mappings, the hash, the default limits and the error codes |
 | [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique, that naming a record case's record changes nothing, that an older reader reads a newer writer's JSON (§13.3), and that the readers return no duplicate keys |
-| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, name isolation, and order independence |
-| [`Main.lean`](Main.lean) | `haus-ref`, the parser, the schema-file reader and the decoders on the command line |
+| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, name isolation, order independence, and folders that never change a successful result |
+| [`Main.lean`](Main.lean) | `haus-ref`, the parser, the layout writers, the schema-file reader and the decoders on the command line |
 | [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser: `--json-suite` decodes with them, `--schema-suite` compares them with the Lean reader's on every case; a record case written by name keeps the name, and the model finds the record itself |
 
 It needs [elan](https://github.com/leanprover/elan) (`brew install elan-init`);
@@ -34,6 +35,9 @@ the Lean version is pinned in `lean-toolchain`. No Mathlib.
 lake build
 .lake/build/bin/haus-ref FILE                    # values as self-describing JSON Lines (spec §16.2)
 .lake/build/bin/haus-ref --suite ../../test-suite # the conformance suite
+.lake/build/bin/haus-ref --compact FILE           # FILE's values in a layout of spec §11, from values:
+.lake/build/bin/haus-ref --minimised FILE         #   numbers normalized, keys in source order, no comments
+.lake/build/bin/haus-ref --pretty FILE [INDENT WIDTH]  # default indent 2, width 80
 .lake/build/bin/haus-ref --time Date 2026-02-29     # a std/time check
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §14, §15)
 .lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
@@ -73,7 +77,13 @@ decoder's and the JSON mappings'. `--batch` prints `err LINE COLUMN CODE REASON`
 and the JSON batch modes print `err PLACE CODE REASON` (`-` where there is
 none), and `--suite`, `--schema-suite` and `--json-suite` check the codes
 the suite expects; `--schema-suite` also checks the place (`path`, spec §15
-"General rules": `$.items[2].price`, `$.m["pt-BR"]`, `$[0]` for an argument).
+"General rules": `$.items[2].price`, `$.m["pt-BR"]`, `$[0]` for an argument),
+and `--json-suite` the place in the JSON where a case gives one (§16.3
+"Places": `$.shape.values[1]`, `$._value._args[1]._num`). Schema-based
+JSON's reader names that place itself; the self-describing reader's errors
+are placed by `JSON.hausJsonPlace`, the first part it rejects in reading
+order, and in JSON Lines by `JSON.readHausJsonLinesAt`, the line's index
+first (`$[3]`).
 
 ## What is proven
 
@@ -184,6 +194,30 @@ space or tab of a line as `\u{20}` or `\t`.
 | `blockString_noTrailingBlank` | No line of it ends in a space or a tab |
 | `trimLines_blockString`, `parse_trimLines_blockString` | Trimming the spaces and tabs at the end of every line, as editors do, leaves it unchanged, so it still parses to `s` |
 
+**About the layouts** (spec §11), written from values without comments, in
+[`Haus/Layout/`](Haus/Layout). `compact v` and `minimised v` write a value
+on one line (`Tag { a: 1, b: [1, 2] }`, `Tag{a:1,b:[1,2]}`), `compactAll` and
+`minimisedAll` a file or stream one value per line; `pretty o ind used v` and
+`prettyAll o vs` write the pretty layout with the options `o` (indent, line
+width). Fields in the order given, numbers normalized, bytes as lowercase
+hex, as when a binding serializes values. They hold for any limits and any
+options:
+
+| Theorem | Says |
+|---|---|
+| `minimised_eq_write`, `canonical_eq_minimised` | The minimised layout is `Canonical.write`: the canonical form is the minimised layout of the value in canonical order |
+| `parse_compact`, `parse_minimised` | The compact and the minimised layout of a parsed value parse back to exactly that value, fields in the same order (L3) |
+| `parse_compactAll`, `parse_minimisedAll` | A parsed file or stream in either layout parses back to the same values in the same order (L3) |
+| `Val.line_noLF`, `compactAll_split`, `minimisedAll_split` | A value's compact or minimised layout holds no line feed, so a stream in either layout, split at its line feeds, is one line per value, each parsing alone to its value (L3, like NDJSON) |
+| `parse_pretty` | The pretty layout of a parsed value parses back to exactly that value, at every indent and column, whichever way the width decides each payload (L5) |
+| `parse_prettyAll` | A parsed file or stream in the pretty layout parses back to the same values in the same order (L5) |
+
+The expected files of [`test-suite/format`](../../test-suite/format) are
+written by the formatter, which keeps source spellings (`0xFF`, `1_000`,
+`\u{41}`, blanks in byte strings), comments and blank lines; the writers here agree with
+them byte for byte on every input without those (60 of 70 compact and
+minimised files, 30 of 70 pretty files; PLAN.md L3, L5).
+
 **About streams** (spec §6), in [`Haus/Stream/`](Haus/Stream). The model in
 [`Haus/Stream.lean`](Haus/Stream.lean) works like the readers of all three
 bindings: a scanner finds the commas between top-level values (it tracks
@@ -290,7 +324,11 @@ proven to compute each (`Money.check_iff`, `Geo.check_iff`), and are codecs
 values the schema decodes that the rule accepts, kept as decoded; with
 `codec_keeps`, every law above). `@haus-fmt/money/iso`: a `Currency` is a
 bare tag of three capitals `A`–`Z`, a `Money` any `Decimal` with such a
-currency. `@haus-fmt/geo/wgs84`: the ranges are stated on the exact value of
+currency. Both codecs in one `Money` run from the inside out
+(`Money.decodeInsideOut`, §13.4): the currency's first, so a bad currency
+is rejected at its own place, `$[1]`; together they accept exactly what the
+codec of `Money` alone accepts (`Money.decodeInsideOut_ok`).
+`@haus-fmt/geo/wgs84`: the ranges are stated on the exact value of
 the decoded float as a rational number (`Geo.toRat?`; `NaN` and the
 infinities have none, so they are rejected), and checked with products of
 integers; `BBox` also needs `sw.lat ≤ ne.lat`. The packages' schemas are
@@ -457,9 +495,11 @@ time, with Hoare-style triples for the resolver's monad (`Run.lean`) and
 | `runIn_closed`, `classes_topo` | In every state of every run, a package imports only packages made before it, and every copy loaded names a package made: the packages reached and their imports form a graph without cycles, made imports first (a step of R3, `Closed.lean`) |
 | `resolveIn_walk`, `resolveIn_walk_error` | The result doesn't depend on the order the imports of each file are walked in (`Walk`): a run that succeeds succeeds in every order with the same packages, one that fails fails in every order (R3, F4; the error code may differ; `Walk.lean`) |
 | `load_good`, `load_sim` | A successful run's finished targets pass their checks as properties of the tree and import only targets finished before them (`Done.lean`); a run in another order stays below such a state and never fails (R3, `Walk.lean`) |
+| `resolveIn_addFolders`, `resolveIn_folders` | Adding folders of packages never turns a successful result into a different one: the same packages, or an error; for any settings with more folders and everything else the same (`MoreFolders`), in any walk orders (R6, F2; `Folders.lean`) |
+| `givenPackages_ok`, `load_reach`, `load_wider` | The packages given are exactly those of the directories and folders given; every target a run finishes is reached from the root; two successful loads, the second with more packages in folders (`Wider`: the same packages given by directory), make the same packages (R6) |
 
-Not proven: that a folder of packages never changes a successful result
-(R6); see `PLAN.md` for what is left. With two mistakes in one schema, the
-error reported does depend on the order (`Order.lean`); the spec doesn't
-say which one is reported, and R3 is about success, failure and the
-packages.
+With two mistakes in one schema, the error reported does depend on the
+order (`Order.lean`); the spec doesn't say which one is reported, and R3 is
+about success, failure and the packages. R6 is about two successful runs: a
+folder can turn a success into an error (a second copy of a package with
+other files is `duplicate-package`), as intended.

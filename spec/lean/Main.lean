@@ -1,4 +1,5 @@
 import Haus.Canonical
+import Haus.Layout.Pretty
 import Haus.Json.SchemaBased
 import Haus.Packages.Suite
 import Haus.Profiles.Vectors
@@ -17,6 +18,12 @@ import Lean.Data.Json
                            or `err <line> <column> <code> <reason>` (fuzz/; the code of spec §17)
     haus-ref --canonical FILE     the canonical form of each value in FILE, one per line (spec §12)
     haus-ref --canonical-batch DIR N  like --batch, printing `ok ["<canonical>", …]` (fuzz/)
+    haus-ref --compact FILE       FILE's values in the compact layout from values (spec §11,
+                                  `Layout.compactAll`): one per line, a comma after each when
+                                  there is more than one; numbers normalized, keys in source order
+    haus-ref --minimised FILE     the same in the minimised layout (`Layout.minimisedAll`)
+    haus-ref --pretty FILE [INDENT WIDTH]  the same in the pretty layout without comments
+                                  (`Layout.prettyAll`; default indent 2, width 80)
     haus-ref --time TYPE TEXT     whether TEXT is a valid std/time TYPE (exit 0 or 1)
     haus-ref --time-batch FILE    for each line `TYPE HEX` of FILE (the text as hex-encoded
                                   UTF-8): `ok` or `no` (fuzz/)
@@ -500,13 +507,15 @@ def runSchemaBasedCases (env : Schema.Env) (cases : List Value) : Array String :
       | .ok got => if got != canonicalText output then failures := failures.push s!"schema-based: {shown}: read {got}"
       | .error e => failures := failures.push s!"schema-based: {shown}: reading failed: {schemaErrorText e}"
     | "Err" =>
-      -- `code`: the error code (spec §17) reading must fail with.
+      -- `code`: the error code (spec §17) reading must fail with; `path`, if given, its place in the JSON.
       let some code := strField fs "code" | failures := failures.push s!"schema-based: no code: {shown}"
       match readJsonCanonical env type json with
       | .ok got => failures := failures.push s!"schema-based: {shown}: accepted as {got}"
       | .error e =>
         if codeText e.code != code then
           failures := failures.push s!"schema-based: {shown}: {codeText e.code} instead of {code} ({schemaErrorText e})"
+        else if let some path := strField fs "path" then
+          if e.place != path then failures := failures.push s!"schema-based: {shown}: at {e.place} instead of {path}"
     | _ => failures := failures.push s!"schema-based: not a case: {shown}"
   return failures
 
@@ -530,9 +539,13 @@ def runSelfDescribingCases (cases : List Value) : Array String := Id.run do
       | .error e => failures := failures.push s!"self-describing: {shown}: reading failed: {e}"
     | "Err" =>
       let some code := strField fs "code" | failures := failures.push s!"self-describing: no code: {shown}"
-      match read with
+      match Haus.JSON.readHausJsonAt {} json.toList with
       | .ok v => failures := failures.push s!"self-describing: {shown}: accepted as {canonicalText v}"
-      | .error e => if e.code.name != code then failures := failures.push s!"self-describing: {shown}: {e.code} instead of {code} ({e.reason})"
+      | .error (p, e) =>
+        if e.code.name != code then failures := failures.push s!"self-describing: {shown}: {e.code} instead of {code} ({e.reason})"
+        else if let some path := strField fs "path" then
+          let place := Haus.JSON.placeText p
+          if place != path then failures := failures.push s!"self-describing: {shown}: at {place} instead of {path}"
     | _ => failures := failures.push s!"self-describing: not a case: {shown}"
   return failures
 
@@ -553,7 +566,10 @@ def runImportCases (cases : List Value) : Array String := Id.run do
       let some code := strField fs "code" | failures := failures.push s!"import: no code: {shown}"
       match read with
       | .ok v => failures := failures.push s!"import: {shown}: accepted as {canonicalText v}"
-      | .error e => if e.code.name != code then failures := failures.push s!"import: {shown}: {e.code} instead of {code} ({e.reason})"
+      | .error e =>
+        if e.code.name != code then failures := failures.push s!"import: {shown}: {e.code} instead of {code} ({e.reason})"
+        -- The import's errors are errors in the text (§16.1): they have no place in a value.
+        else if (strField fs "path").isSome then failures := failures.push s!"import: {shown}: no place to compare"
     | _ => failures := failures.push s!"import: not a case: {shown}"
   return failures
 
@@ -771,6 +787,12 @@ def runStreamSuite (dir : System.FilePath) : IO UInt32 := do
   IO.println s!"{vs.length - failed}/{vs.length} passed"
   return if failed == 0 then 0 else 1
 
+/-- `--compact`, `--minimised`, `--pretty`: FILE's values written in a layout, from values. -/
+def runLayout (write : List Value → Text) (file : System.FilePath) : IO UInt32 := do
+  match parseBytes (← IO.FS.readBinFile file) with
+  | .ok vs => IO.print (String.ofList (write vs)); return 0
+  | .error e => IO.eprintln s!"error: {e}"; return 1
+
 def main : List String → IO UInt32
   | ["--stream-suite", dir] => runStreamSuite dir
   | ["--profile", name, file] => runProfile name file
@@ -785,6 +807,11 @@ def main : List String → IO UInt32
       | .ok vs => for v in vs do IO.println (String.ofList (Canonical.canonical v))
                   return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
+  | ["--compact", file] => runLayout Layout.compactAll file
+  | ["--minimised", file] => runLayout Layout.minimisedAll file
+  | ["--pretty", file] => runLayout (Layout.prettyAll {}) file
+  | ["--pretty", file, indent, width] =>
+      runLayout (Layout.prettyAll { indent := indent.toNat!, width := width.toNat! }) file
   | ["--time", ty, text] =>
       match timeType? ty with
       | some t => do
@@ -806,4 +833,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2

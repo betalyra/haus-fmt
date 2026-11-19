@@ -18,7 +18,8 @@ const MaxNodes = 64 << 20
 // limits (spec §7, §9.8): strings and keys are valid UTF-8 (cannot-encode),
 // tags are [A-Z][A-Za-z0-9_]* (invalid-tag), numbers, strings, keys, tags
 // and byte strings are within their limits, nesting is within the depth
-// limit (a record payload, Tag { … }, counting one level, as when writing),
+// limit (a record payload, Tag { … }, counting one level, as when writing,
+// and an empty record or array one level, as when parsing),
 // it has at most [MaxNodes] nodes (too-many-nodes), and it doesn't contain
 // itself (cyclic-value). Fields left at zero in limits take their defaults.
 //
@@ -154,9 +155,6 @@ func (c *valueChecker) value(v Value, depth int) error {
 		}
 		return nil
 	case Array:
-		if len(v) == 0 {
-			return nil
-		}
 		if err := c.enter(v, depth); err != nil {
 			return err
 		}
@@ -170,9 +168,6 @@ func (c *valueChecker) value(v Value, depth int) error {
 		c.guard.pop()
 		return nil
 	case Record:
-		if v.Len() == 0 {
-			return nil
-		}
 		if err := c.enter(v, depth); err != nil {
 			return err
 		}

@@ -769,7 +769,7 @@ Code {
 Code {
   code: "json-syntax",
   category: Json,
-  means: "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.",
+  means: "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.",
   example: HausJson("{\"_haus\": 1,}"),
   fix: "Write valid JSON; the message says what was expected.",
 },
@@ -811,7 +811,7 @@ Code {
 Code {
   code: "invalid-tag",
   category: Json,
-  means: "A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.",
+  means: "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.",
   example: HausJson("{\"_haus\": 1, \"_value\": {\"_tag\": \"lower\"}}"),
   fix: "Start the tag with a capital letter and use only letters, digits and `_`.",
 },

@@ -413,7 +413,7 @@ ErrorCode := [].{
 	too_many_nodes : Str
 	too_many_nodes = "too-many-nodes"
 
-	## `json-syntax` (json): Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines.
+	## `json-syntax` (json): Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.
 	json_syntax : Str
 	json_syntax = "json-syntax"
 
@@ -437,7 +437,7 @@ ErrorCode := [].{
 	haus_json_bytes : Str
 	haus_json_bytes = "haus-json-bytes"
 
-	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`: in a `_tag` of either JSON form, or in a value built in code.
+	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
 	invalid_tag : Str
 	invalid_tag = "invalid-tag"
 

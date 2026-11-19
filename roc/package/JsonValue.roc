@@ -331,14 +331,24 @@ read_json = |text, limits, max, { bom, strict }| {
 ## The JSON texts of JSON Lines, each nested at most `max` levels.
 read_lines : Str, Value.Limits, U64, Bool -> Try(List(JsonValue), Value.ParseError)
 read_lines = |text, limits, max, strict| {
-	body = if (text.ends_with("\n")) text.drop_suffix("\n") else text
-	if body.is_empty() {
+	# No text is no lines; a line feed alone is an empty line.
+	if text.is_empty() {
 		return Ok([])
 	}
+	body = if (text.ends_with("\n")) text.drop_suffix("\n") else text
 	var $out = []
 	var $line = 1.U64
 	for l in body.split_on("\n") {
-		json = read_json(l, limits, max, { bom: $line == 1, strict }).map_err(|e| { ..e, line: $line })?
+		# A line ends with LF or CR LF. An empty line is no JSON text, nor is a
+		# byte order mark, which is ignored only at the start of the stream (spec §16).
+		l1 = l.drop_suffix("\r")
+		if l1.is_empty() {
+			return Err({ code: ErrorCode.json_syntax, reason: "an empty line, which is no JSON text (JSON Lines)", line: $line, column: 1 })
+		}
+		if $line > 1 and l1.starts_with("\u(FEFF)") {
+			return Err({ code: ErrorCode.json_syntax, reason: "a byte order mark at the start of a line after the first (JSON Lines)", line: $line, column: 1 })
+		}
+		json = read_json(l1, limits, max, { bom: $line == 1, strict }).map_err(|e| { ..e, line: $line })?
 		$out = $out.append(json)
 		$line = $line + 1
 	}
@@ -832,8 +842,9 @@ self_describing = |value| match value {
 }
 
 ## The value of a self-describing JSON text: the envelope
-## `{"_haus": 1, "_value": …}` around a self-describing value. The envelope
-## adds no segment to the path.
+## `{"_haus": 1, "_value": …}` around a self-describing value. Paths are
+## places in the JSON from its root (spec §16.3), so the value's start with
+## `._value`.
 unwrap : JsonValue, Value.Limits -> Try(Value, Decode.Error)
 unwrap = |json, limits| match json {
 	Object([("_haus", version), ("_value", value)]) => enveloped(version, value, limits)
@@ -844,7 +855,7 @@ unwrap = |json, limits| match json {
 
 enveloped : JsonValue, JsonValue, Value.Limits -> Try(Value, Decode.Error)
 enveloped = |version, value, limits| match version {
-	Number("1") => described(value, 0, limits)
+	Number("1") => within(described(value, 0, limits), "._value")
 	_ => Decode.fail(ErrorCode.haus_json_version, "expected version 1 of self-describing JSON (\"_haus\": 1), found ${describe_json(version)}")
 }
 
@@ -942,12 +953,13 @@ described_record = |json, depth, limits| match json {
 	_ => Decode.fail(ErrorCode.haus_json_form, "expected an object, found ${describe_json(json)}")
 }
 
-## `"Circle"`: a tag name within the string limit.
+## `"Circle"`: a tag name within the string limit. Errors about the tag are
+## at the variant's object, as in schema-based JSON.
 described_tag : JsonValue, Value.Limits -> Try(Str, Decode.Error)
 described_tag = |json, limits| match json {
-	String(t) if is_tag(t) => within(text_within(t, "tag", limits), "._tag").map_ok(|_| t)
-	String(t) => within(Decode.fail(ErrorCode.invalid_tag, "${quote_str(t)} is not a tag name (A to Z, then letters, digits and _)"), "._tag")
-	_ => within(Decode.fail(ErrorCode.invalid_tag, "expected a string, found ${describe_json(json)}"), "._tag")
+	String(t) if is_tag(t) => text_within(t, "tag", limits).map_ok(|_| t)
+	String(t) => Decode.fail(ErrorCode.invalid_tag, "${quote_str(t)} is not a tag name (A to Z, then letters, digits and _)")
+	_ => Decode.fail(ErrorCode.invalid_tag, "expected a tag name in \"_tag\", found ${describe_json(json)}")
 }
 
 described_variant : JsonValue, JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
@@ -1252,8 +1264,8 @@ expect JsonValue.from_haus_json_with(env("{\"_rec\": {\"abcdef\": \"x\"}}"), sma
 expect JsonValue.import_value(Object([("abcde", Null)])).is_ok()
 expect imported(Object([("abcde", Null)]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err(".abcde: key longer than 4 characters")
 expect described(Object([("_rec", Object([("abcde", String("x"))]))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("._rec.abcde: key longer than 4 characters")
-expect described(Object([("_tag", String("Abcde"))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("._tag: tag longer than 4 characters")
-expect described(Object([("_tag", String("Abcde")), ("_args", Array([String("x")]))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("._tag: tag longer than 4 characters")
+expect described(Object([("_tag", String("Abcde"))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("tag longer than 4 characters")
+expect described(Object([("_tag", String("Abcde")), ("_args", Array([String("x")]))]), 0, small).map_ok(|_| {}).map_err(Decode.message) == Err("tag longer than 4 characters")
 # Lengths count on the haus value (spec §16, "Limits"): a string's characters
 # after its escapes are read, bytes two characters per byte; exactly at the
 # limit is accepted, one more is not. The forms' member names don't count.
@@ -1323,7 +1335,7 @@ expect JsonValue.from_haus_json_with(env("{\"_num\": \"1e10\"}"), small6).map_ok
 		Decode(d) => Decode.message(d)
 		Syntax(_) => ""
 	},
-) == Err("._num: exponent larger than 9")
+) == Err("._value._num: exponent larger than 9")
 
 # Error codes (spec §17).
 json_code : Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)]) -> Str
@@ -1341,18 +1353,22 @@ expect match Value.parse("0x${"f".repeat(829)}") {
 	}
 	Err(_) => False
 }
-expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"1${"0".repeat(1000)}\"}"))) == "number-too-long at $._num"
+expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"1${"0".repeat(1000)}\"}"))) == "number-too-long at $._value._num"
 expect JsonValue.to_haus_json_with(Num("1000000000000"), { ..Value.default_limits, max_number_length: 12 }).map_err(|e| e.code) == Err("number-too-long")
 expect json_code(JsonValue.import_json("[1,]")) == "json-syntax at 1:4" and json_code(JsonValue.import_json("NaN")) == "json-syntax at 1:1" and json_code(JsonValue.import_json("1 2")) == "json-syntax at 1:3"
 expect json_code(JsonValue.import_json("\"\\ud83d\"")) == "unpaired-surrogate at 1:2" and json_code(JsonValue.import_json("\"\\u12\"")) == "invalid-unicode-escape at 1:4"
 expect json_code(JsonValue.import_json("\"\\ud83d\\u12\"")) == "invalid-unicode-escape at 1:10" and json_code(JsonValue.import_json("\"\\ud83d\\u0041\"")) == "unpaired-surrogate at 1:2" and json_code(JsonValue.import_json("\"\\x\"")) == "invalid-escape at 1:2"
 expect json_code(JsonValue.import_json("\"a\u(1)\"")) == "control-character at 1:3" and json_code(JsonValue.import_json("\"a")) == "unterminated-string at 1:1" and json_code(JsonValue.import_json("{\"a\": 1, \"a\": 2}")) == "duplicate-key at 1:10"
 expect json_code(JsonValue.import_json("1.")) == "json-syntax at 1:1" and json_code(JsonValue.import_json(Str.repeat("1", 1001))) == "number-too-long at 1:1" and json_code(JsonValue.import_json("1e6145")) == "exponent-too-large at 1:1"
-expect json_code(JsonValue.from_haus_json(env("1"))) == "haus-json-form at $" and json_code(JsonValue.from_haus_json(env("{\"_num\": \"1\", \"x\": 2}"))) == "haus-json-form at $"
-expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"01\"}"))) == "haus-json-number at $._num" and json_code(JsonValue.from_haus_json(env("{\"_num\": 1}"))) == "haus-json-number at $._num"
-expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"1e9999\"}"))) == "exponent-too-large at $._num" and json_code(JsonValue.from_haus_json(env("{\"_bytes\": \"0B34\"}"))) == "haus-json-bytes at $._bytes"
-expect json_code(JsonValue.from_haus_json(env("{\"_tag\": \"circle\"}"))) == "invalid-tag at $._tag" and json_code(JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": []}"))) == "haus-json-form at $._args"
-expect json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"a\": 1}}"))) == "haus-json-form at $._rec.a" and json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"pt-BR\": 1}}"))) == "haus-json-form at $._rec[\"pt-BR\"]"
+# Places in the JSON from its root (spec §16.3): the envelope's `_value` included.
+expect json_code(JsonValue.from_haus_json(env("1"))) == "haus-json-form at $._value" and json_code(JsonValue.from_haus_json(env("{\"_num\": \"1\", \"x\": 2}"))) == "haus-json-form at $._value"
+expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"01\"}"))) == "haus-json-number at $._value._num" and json_code(JsonValue.from_haus_json(env("{\"_num\": 1}"))) == "haus-json-number at $._value._num"
+expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"1e9999\"}"))) == "exponent-too-large at $._value._num" and json_code(JsonValue.from_haus_json(env("{\"_bytes\": \"0B34\"}"))) == "haus-json-bytes at $._value._bytes"
+expect json_code(JsonValue.from_haus_json(env("{\"_tag\": \"circle\"}"))) == "invalid-tag at $._value" and json_code(JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": []}"))) == "haus-json-form at $._value._args"
+expect json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"a\": 1}}"))) == "haus-json-form at $._value._rec.a" and json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"pt-BR\": 1}}"))) == "haus-json-form at $._value._rec[\"pt-BR\"]"
+# A `_tag` that isn't a string is `invalid-tag` too (spec §16.3), at the variant.
+expect json_code(JsonValue.from_haus_json(env("{\"_tag\": 1}"))) == "invalid-tag at $._value" and json_code(JsonValue.from_haus_json(env("[{\"_tag\": null, \"_args\": [\"a\"]}]"))) == "invalid-tag at $._value[0]"
+expect json_code(JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": [\"a\", {\"_num\": \"1\"}, {\"_num\": \"01\"}]}"))) == "haus-json-number at $._value._args[2]._num"
 expect JsonValue.from_haus_json_value(Object([("_rec", Object([("a", String("x")), ("a", String("y"))]))])).map_ok(|_| {}).map_err(|e| (e.code, e.path)) == Err(("duplicate-key", "._rec.a"))
 expect JsonValue.to_haus_json(Tag("lower", [])).map_err(|e| e.code) == Err("invalid-tag")
 
@@ -1380,7 +1396,13 @@ expect JsonValue.to_haus_json_lines([]) == Ok("")
 expect JsonValue.to_haus_json_lines([Text("a"), Num("x")]).map_err(|e| e.path) == Err("[1]")
 expect JsonValue.from_haus_json_lines("\u(FEFF)${env("\"a\"")}\r\n${env("[]")}").map_ok(|vs| vs.map(Encode.canonical)) == Ok(["\"a\"", "[]"])
 expect JsonValue.from_haus_json_lines("").map_ok(List.len) == Ok(0)
-expect json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n\"b\"\n")) == "haus-json-form at $[1]" and json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n${env("\"\u(85)\"")}")) == "control-character at 2:25"
+# An empty line, and a byte order mark at the start of a line after the
+# first, are no JSON text: `json-syntax`, naming the line (spec §16).
+expect json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n\n${env("\"b\"")}\n")) == "json-syntax at 2:1" and json_code(JsonValue.from_haus_json_lines("\n")) == "json-syntax at 1:1"
+expect json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\r\n\r\n")) == "json-syntax at 2:1" and json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n\n")) == "json-syntax at 2:1"
+expect json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n\u(FEFF)${env("\"b\"")}\n")) == "json-syntax at 2:1" and json_code(JsonValue.from_haus_json_lines("\u(FEFF)${env("\"a\"")}\n\u(FEFF)${env("\"b\"")}")) == "json-syntax at 2:1"
+expect JsonValue.lines("1\n\n2").map_err(|e| (e.code, e.line, e.reason)) == Err(("json-syntax", 2, "an empty line, which is no JSON text (JSON Lines)")) and JsonValue.lines("1\n\u(FEFF)2").map_err(|e| (e.code, e.line)) == Err(("json-syntax", 2)) and JsonValue.lines("\u(FEFF)1\r\n2") == Ok([Number("1"), Number("2")])
+expect json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n\"b\"\n")) == "haus-json-form at $[1]" and json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n${env("{\"_num\": 1}")}\n")) == "haus-json-number at $[1]._value._num" and json_code(JsonValue.from_haus_json_lines("${env("\"a\"")}\n${env("\"\u(85)\"")}")) == "control-character at 2:25"
 # The envelope's level: 4·d + 2 JSON levels for self-describing JSON.
 # `A { a: B { b: 1 } }` nests 2 haus levels and 4·2 + 2 = 10 JSON levels.
 expect {

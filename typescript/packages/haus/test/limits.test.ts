@@ -329,3 +329,40 @@ describe("JSON lengths count on the resulting haus value, not the JSON text (spe
     expect(parseJson(escaped(4), four)).toBe("éééé")
   })
 })
+
+describe("an empty record, array or payload is a level, built in code as parsed (spec §7)", () => {
+  const two = { maxDepth: 2 }
+  const empty = new Map<string, Value>()
+  // Each needs three levels: an empty container innermost.
+  const built: [string, Value][] = [
+    ["[[[]]]", arr([arr([arr([])])])],
+    ["{ a: { b: {} } }", rec(new Map([["a", rec(new Map([["b", rec(empty)]]))]]))],
+    ["A(B(C {}))", variant("A", [variant("B", [variant("C", [rec(empty)])])])],
+    ["A([{}])", variant("A", [arr([rec(empty)])])],
+  ]
+
+  it.each(built)("%s: parsing, checks and writers agree", (text, value) => {
+    expect(() => parse(text, two)).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    expect(() => parse(text, { maxDepth: 3 })).not.toThrow()
+    expect(canonical(parse(text))).toBe(canonical(value))
+    // Decoding a value built in code, writing it raw (Any) and as self-describing JSON.
+    for (const f of [() => h.decode(h.Any, value, two), () => h.encode(h.Any, value, two), () => toHausJson(value, two)]) {
+      expect(f).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    }
+    expect(() => h.decode(h.Any, value, { maxDepth: 3 })).not.toThrow()
+    expect(() => h.encode(h.Any, value, { maxDepth: 3 })).not.toThrow()
+    expect(() => toHausJson(value, { maxDepth: 3 })).not.toThrow()
+  })
+
+  it("schemas encode an empty array, record or record payload as a level", () => {
+    const Arrays = h.Array(h.Array(h.Array(h.Int32)))
+    expect(() => h.encode(Arrays, [[[]]], two)).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    expect(() => h.encode(Arrays, [[]], two)).not.toThrow()
+    const Records = h.Record({ a: h.Record({ b: h.Record({}) }) })
+    expect(() => h.encode(Records, { a: { b: {} } }, two)).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    expect(() => h.encode(Records, { a: { b: {} } }, { maxDepth: 3 })).not.toThrow()
+    const Payloads = h.Array(h.Array(h.Variant({ C: h.Record({}) })))
+    expect(() => h.encode(Payloads, [[{ _tag: "C" as const }]], two)).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
+    expect(() => h.encode(Payloads, [[{ _tag: "C" as const }]], { maxDepth: 3 })).not.toThrow()
+  })
+})

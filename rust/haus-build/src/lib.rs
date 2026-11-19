@@ -183,7 +183,7 @@ impl Config {
     /// The schema at `path`, and its code.
     fn load(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<(Schema, String)> {
         let schema = Schema::load_with(path, &Options { without_attributes: self.without_attributes, ..*options })?;
-        let units = graph::units(&schema, self.without_attributes, &codec_ids(&self.codecs))?;
+        let units = graph::units_with(&schema, self.without_attributes, &codec_ids(&self.codecs), true)?;
         let code = generate_units(&schema, &units, &self.codecs, krate)?;
         Ok((schema, code))
     }
@@ -244,7 +244,7 @@ pub fn check(text: &str) -> Result<Vec<Warning>> {
 /// touching the environment. It imports std modules and `packages`, not files.
 pub fn generate(text: &str, id: &str, codecs: &[Codec], packages: &Packages) -> Result<String> {
     let schema = Schema::parse_with(text, &Options { packages, id: Some(id), ..Options::default() })?;
-    let units = graph::units(&schema, false, &codec_ids(codecs))?;
+    let units = graph::units_with(&schema, false, &codec_ids(codecs), true)?;
     let krate = |package: &str| packages.find(package).map(|p| p.krate.clone()).unwrap_or_default();
     generate_units(&schema, &units, codecs, &krate)
 }
@@ -269,6 +269,8 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                 .iter()
                 .map(|(key, origin)| {
                     let name = graph::type_name(key);
+                    // The application's copy of a package's type (the codec closure).
+                    let copy = matches!(origin, Origin::File { unit: to, .. } if units[*to].package.is_some());
                     let (path, params) = match origin {
                         Origin::Time => (format!("::haus::time::{name}"), 0),
                         Origin::Package { package, params, .. } => (format!("::{}::{name}", krate(package)), *params),
@@ -278,7 +280,7 @@ fn generate_units(schema: &Schema, units: &[Unit], codecs: &[Codec], krate: &dyn
                             (format!("{at}::{}::{name}", modules[to - 1]), *params)
                         }
                     };
-                    (key.clone(), Imported { id: origin.id(key), path, params, shape: origin.shape(schema) })
+                    (key.clone(), Imported { id: origin.id(key), path, params, shape: origin.shape(schema), copy })
                 })
                 .collect::<HashMap<_, _>>();
             let input =

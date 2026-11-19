@@ -81,7 +81,7 @@ func TestJSONLimitsCountTheValue(t *testing.T) {
 func TestSelfDescribingErrorPaths(t *testing.T) {
 	_, err := FromHausJSON([]byte(`{"_haus":1,"_value":{"_rec":{"items":[{"_num":"1"},{"_num":"01"}]}}}`))
 	var e *Error
-	if !errors.As(err, &e) || e.Code != CodeHausJSONNumber || e.Path != "$._rec.items[1]._num" {
+	if !errors.As(err, &e) || e.Code != CodeHausJSONNumber || e.Path != "$._value._rec.items[1]._num" {
 		t.Errorf("got %v", err)
 	}
 }
@@ -128,7 +128,7 @@ func TestJSONLines(t *testing.T) {
 	}{
 		{"{\"_haus\":1,\"_value\":\"a\"}\n\n{\"_haus\":1,\"_value\":\"a\"}\n", CodeJSONSyntax, 2, ""},
 		{"{\"_haus\":1,\"_value\":\"a\"}\n\uFEFF{\"_haus\":1,\"_value\":\"a\"}\n", CodeJSONSyntax, 2, ""},
-		{"{\"_haus\":1,\"_value\":\"a\"}\n{\"_haus\":1,\"_value\":[1]}\n", CodeHausJSONForm, 0, "$[1][0]"},
+		{"{\"_haus\":1,\"_value\":\"a\"}\n{\"_haus\":1,\"_value\":[1]}\n", CodeHausJSONForm, 0, "$[1]._value[0]"},
 		{"{\"_haus\":1,\"_value\":\"a\"}\n[1,\n", CodeJSONSyntax, 2, ""},
 	}
 	for _, tt := range tests {
@@ -144,6 +144,13 @@ func TestJSONLines(t *testing.T) {
 	for _, err := range ReadHausJSONLines(strings.NewReader(long), lim) {
 		if errorCode(err) != CodeValueTooLong {
 			t.Errorf("long line: %v", err)
+		}
+	}
+	for _, text := range []string{"1\n\n2\n", "1\n\uFEFF2\n", "1\r\n\r\n"} {
+		_, err := ImportJSONLines([]byte(text))
+		var e *Error
+		if !errors.As(err, &e) || e.Code != CodeJSONSyntax || e.Line != 2 {
+			t.Errorf("import %q: got %v", text, err)
 		}
 	}
 	values, err := ImportJSONLines([]byte("1\n{\"a\":null}\n"))

@@ -118,7 +118,8 @@ impl<'a> Object<'a> {
             _ => Some("values"),
         };
         if let Some(other) = self.fields().find(|k| Some(*k) != name) {
-            return Err(DecodeError::new(Code::UnexpectedMember, format!("unexpected member {other:?}")));
+            // At the member, as an unknown field of a closed record is (spec §15).
+            return Err(DecodeError::new(Code::UnexpectedMember, format!("unexpected member {other:?}")).field(other));
         }
         let values: Vec<&Json> = match (name, name.and_then(|n| self.index.get(n))) {
             (None, _) => vec![],
@@ -128,12 +129,13 @@ impl<'a> Object<'a> {
             }
             (Some("value"), Some(v)) => vec![*v],
             (Some(_), Some(Json::Array(items))) if items.len() == N => items.iter().collect(),
+            // A wrong payload is at the variant (spec §15, §16.3).
             (Some(n), Some(Json::Array(items))) => {
-                let reason = format!("expected {N} values, found {}", items.len());
-                return Err(DecodeError::new(Code::WrongPayload, reason).field(n));
+                let reason = format!("expected {N} values in \"{n}\", found {}", items.len());
+                return Err(DecodeError::new(Code::WrongPayload, reason));
             }
             (Some(n), Some(v)) => {
-                return Err(mismatch("an array", v).with_code(Code::WrongPayload).field(n));
+                return Err(mismatch(&format!("an array of {N} values (\"{n}\")"), v).with_code(Code::WrongPayload));
             }
         };
         values.try_into().map_err(|_| DecodeError::new(Code::WrongPayload, "wrong number of values"))
@@ -146,10 +148,7 @@ impl<'a> Object<'a> {
     /// import (§16.1), so that a newer writer's case `{"_tag": "Hexagon",
     /// "sides": 6}` reads as `Hexagon { sides: 6 }`.
     pub fn unknown(&self, tag: &str) -> R<Unknown> {
-        if !crate::ser::is_tag(tag) {
-            return Err(DecodeError::new(Code::InvalidTag, format!("{tag:?} is not a tag name")).field("_tag"));
-        }
-        crate::ser::check_tag(tag, self.d.limits()).map_err(|e| e.into_decode().field("_tag"))?;
+        crate::ser::check_tag(tag, self.d.limits()).map_err(EncodeError::into_decode)?;
         let args = match (self.fields().collect::<Vec<_>>().as_slice(), self.index.get("_args")) {
             ([], _) => vec![],
             (["_args"], Some(Json::Array(items))) if !items.is_empty() => {
@@ -173,12 +172,17 @@ impl<'a> Object<'a> {
 }
 
 /// A variant's object at `d`: its `"_tag"`, and the object, whose other
-/// members are its payload.
+/// members are its payload. A `"_tag"` that isn't a string holding a tag
+/// name is `invalid-tag` (spec §16.3), at the variant, as an unknown tag is.
 pub fn variant<'a>(json: &'a Json, d: Decoder, what: &str) -> R<(&'a str, Object<'a>)> {
     let object = Object::any(json, d, what)?;
     match object.index.get("_tag") {
-        Some(Json::String(tag)) => Ok((tag, Object { tagged: true, in_tag: true, ..object })),
-        Some(other) => Err(mismatch("a string", other).with_code(Code::MissingMember).field("_tag")),
+        Some(Json::String(tag)) if crate::ser::is_tag(tag) => {
+            Ok((tag, Object { tagged: true, in_tag: true, ..object }))
+        }
+        Some(other) => Err(super::haus_json::tag_name(other, d.limits())
+            .err()
+            .unwrap_or_else(|| DecodeError::new(Code::InvalidTag, r#"expected a tag name in "_tag""#))),
         None => {
             let e = DecodeError::new(Code::MissingMember, format!(r#"expected an object with "_tag" ({what})"#));
             Err(e.with_expected(r#""_tag""#))
@@ -258,7 +262,7 @@ pub fn maybe<T>(json: &Json, d: Decoder, nullable: bool, f: impl FnOnce(&Json, D
                 let [x] = o.args::<1>()?;
                 arg::<1, _>(0, x, o.inner()?, f).map(Some)
             }
-            (tag, _) => Err(crate::de::unknown_tag(tag, &["None", "Some"]).field("_tag")),
+            (tag, _) => Err(crate::de::unknown_tag(tag, &["None", "Some"])),
         },
     }
 }
@@ -279,7 +283,7 @@ pub fn result<A, E>(
             let [x] = o.args::<1>()?;
             arg::<1, _>(0, x, o.inner()?, err).map(Err)
         }
-        (tag, _) => Err(crate::de::unknown_tag(tag, &["Ok", "Err"]).field("_tag")),
+        (tag, _) => Err(crate::de::unknown_tag(tag, &["Ok", "Err"])),
     }
 }
 
@@ -295,6 +299,16 @@ where
     C::Base: FromJson,
 {
     C::decode(C::Base::from_json_with(json, d)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
+}
+
+/// [`codec`] for a type that contains other codecs' types, which run first
+/// (see [`crate::de::codec_inside_out`]).
+pub fn codec_inside_out<C: Codec, Inner: FromJson>(json: &Json, d: Decoder) -> R<C::Target>
+where
+    C::Base: FromJson,
+{
+    Inner::from_json_with(json, d)?;
+    codec::<C>(json, d)
 }
 
 impl<T: FromJson> FromJson for Vec<T> {

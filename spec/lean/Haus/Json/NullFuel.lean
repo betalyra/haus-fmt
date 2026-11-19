@@ -399,6 +399,7 @@ theorem fromJson_congr (h : ∀ o c, nullArg? env F o c = nullArg? env G o c) :
     | (rw [readCore.eq_def, readCore.eq_def]; simp_all; done)
     | (rw [memberValues.eq_def, memberValues.eq_def]; simp_all; done)
     | (simp_all only [Bool.not_eq_true]; simp only [readFields, *, Bool.false_eq_true, ↓reduceIte]; done)
+    | (rw [readCore.eq_def, readCore.eq_def]; simp only [*, Bool.false_eq_true, ↓reduceIte]; done)
 
 end Congr
 

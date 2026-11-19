@@ -210,6 +210,113 @@ FromJson := [].{
 		Err(e) => Err(e)
 	}
 
+	## A type with a codec whose parts have codecs of their own: `check`
+	## runs the parts' codecs first, each at its own place in the JSON, then
+	## the base reader and the codec run (spec §13.4, as `Decode.codec_inside`).
+	codec_inside : JsonValue, (JsonValue -> Try({}, Decode.Error)), (JsonValue -> Try(b, Decode.Error)), (b -> Try(t, Str)) -> Try(t, Decode.Error)
+	codec_inside = |j, check, base, decode| {
+		check(j)?
+		codec(j, base, decode)
+	}
+
+	# The checks of a codec's type for the codecs of its parts, as
+	# `Decode.check_items` and the others do for haus values: JSON of another
+	# shape is left to the base reader, which runs next and reports it.
+
+	## Each item of an array.
+	check_items : JsonValue, (JsonValue -> Try({}, Decode.Error)) -> Try({}, Decode.Error)
+	check_items = |j, check| match j {
+		Array(items) => {
+			var $i = 0.U64
+			for x in items {
+				at(check(x), "[${$i.to_str()}]")?
+				$i = $i + 1
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
+
+	## Each member of an object used as a `Map`.
+	check_entries : JsonValue, (JsonValue -> Try({}, Decode.Error)) -> Try({}, Decode.Error)
+	check_entries = |j, check| match j {
+		Object(members) => {
+			for (k, x) in members {
+				at(check(x), ErrorCode.path_key(k))?
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
+
+	## The members of a record (or of a record case's object) that have checks, where present.
+	check_fields : JsonValue, List((Str, (JsonValue -> Try({}, Decode.Error)))) -> Try({}, Decode.Error)
+	check_fields = |j, checks| match j {
+		Object(members) => {
+			for (k, x) in members {
+				match checks.find_first(|(name, _)| name == k) {
+					Ok((_, check)) => at(check(x), ErrorCode.path_key(k))?
+					Err(_) => {}
+				}
+			}
+			Ok({})
+		}
+		_ => Ok({})
+	}
+
+	## `Maybe a` (see `maybe`): the value of `Some`.
+	check_maybe : JsonValue, Bool, (JsonValue -> Try({}, Decode.Error)) -> Try({}, Decode.Error)
+	check_maybe = |j, nullable, check|
+		if !nullable {
+			match j {
+				Null => Ok({})
+				_ => check(j)
+			}
+		} else {
+			check_cases(j, [("Some", Args([check]))])
+		}
+
+	## The payload of a variant's case: its positional values (`Args`:
+	## `"value"`, or `"values"` for two or more), or the members of its
+	## record beside `"_tag"` (`Fields`).
+	check_cases : JsonValue, List((Str, [Args(List((JsonValue -> Try({}, Decode.Error)))), Fields(List((Str, (JsonValue -> Try({}, Decode.Error)))))])) -> Try({}, Decode.Error)
+	check_cases = |j, cases| match j {
+		Object(members) =>
+			match members.find_first(|(k, _)| k == "_tag") {
+				Ok((_, String(tag))) =>
+					match cases.find_first(|(name, _)| name == tag) {
+						Ok((_, Fields(checks))) => check_fields(j, checks)
+						Ok((_, Args([check]))) =>
+							match members.find_first(|(k, _)| k == "value") {
+								Ok((_, x)) => at(check(x), ".value")
+								Err(_) => Ok({})
+							}
+						Ok((_, Args(checks))) =>
+							match members.find_first(|(k, _)| k == "values") {
+								Ok((_, Array(items))) if items.len() == checks.len() => {
+									var $i = 0.U64
+									for (x, check) in items.map2(checks, |x, check| (x, check)) {
+										at(check(x), ".values[${$i.to_str()}]")?
+										$i = $i + 1
+									}
+									Ok({})
+								}
+								_ => Ok({})
+							}
+						Err(_) => Ok({})
+					}
+				_ => Ok({})
+			}
+		_ => Ok({})
+	}
+
+	## Inside a `Secret`: an error says only that it isn't a valid `what`, at the secret.
+	check_secret : JsonValue, Str, (JsonValue -> Try({}, Decode.Error)) -> Try({}, Decode.Error)
+	check_secret = |j, what, check| match check(j) {
+		Ok({}) => Ok({})
+		Err(_) => Decode.fail(ErrorCode.invalid_secret, "not a valid ${what} (the value is hidden)")
+	}
+
 	# ── containers ──────────────────────────────────────────
 
 	list : JsonValue, (JsonValue -> Try(a, Decode.Error)) -> Try(List(a), Decode.Error)
@@ -259,7 +366,7 @@ FromJson := [].{
 					[x] => Ok(Some(arg(1, 0, x, reader)?))
 					_ => arity("Some", 1)
 				}
-				_ => at(Decode.unknown_tag(tag, ["None", "Some"]), "._tag")
+				_ => Decode.unknown_tag(tag, ["None", "Some"])
 			}
 		}
 
@@ -268,7 +375,7 @@ FromJson := [].{
 	result = |j, ok, err| {
 		(tag, members) = variant(j, "Result")?
 		if tag != "Ok" and tag != "Err" {
-			return at(Decode.unknown_tag(tag, ["Ok", "Err"]), "._tag")
+			return Decode.unknown_tag(tag, ["Ok", "Err"])
 		}
 		match (tag, args(members, 1)?) {
 			("Ok", [x]) => Ok(Ok(arg(1, 0, x, ok)?))
@@ -308,19 +415,24 @@ FromJson := [].{
 	}
 
 	## A variant's object: its `"_tag"`, and its members (`"_tag"` included).
-	## Without a `"_tag"` that is a string, `missing-member`.
+	## Without a `"_tag"`, `missing-member`; with one that isn't a string, or
+	## isn't a tag (spec §4), `invalid-tag` (spec §16.3). Errors about the tag
+	## are at the variant's object, as an unknown tag is.
 	variant : JsonValue, Str -> Try((Str, List((Str, JsonValue))), Decode.Error)
 	variant = |j, what| match j {
 		Object(members) => match members.find_first(|(k, _)| k == "_tag") {
-			Ok((_, String(tag))) => Ok((tag, members))
-			Ok((_, other)) => at(Decode.fail(ErrorCode.missing_member, "expected a string, found ${JsonValue.describe(other)}"), "._tag")
+			Ok((_, String(tag))) if JsonValue.is_tag_name(tag) => Ok((tag, members))
+			Ok((_, String(_))) => Decode.fail(ErrorCode.invalid_tag, "\"_tag\" is not a tag name (A to Z, then letters, digits and _)")
+			Ok((_, other)) => Decode.fail(ErrorCode.invalid_tag, "expected a tag name in \"_tag\", found ${JsonValue.describe(other)}")
 			Err(_) => Decode.fail(ErrorCode.missing_member, "expected an object with \"_tag\" (${what})")
 		}
 		_ => expected("an object with \"_tag\" (${what})", j)
 	}
 
 	## The payload of a positional case with `n` values: nothing besides
-	## `"_tag"` for none, `"value"` for one, `"values"` (an array of `n`) for more.
+	## `"_tag"` for none, `"value"` for one, `"values"` (an array of `n`) for
+	## more. A `"values"` that isn't an array of `n` is `wrong-payload`, at the
+	## variant's object (spec §16.3).
 	args : List((Str, JsonValue)), U64 -> Try(List(JsonValue), Decode.Error)
 	args = |members, n| {
 		name = if (n == 1) "value" else "values"
@@ -335,8 +447,8 @@ FromJson := [].{
 			Err(_) => Decode.fail(ErrorCode.missing_member, "missing member ${name}")
 			Ok((_, v)) if n == 1 => Ok([v])
 			Ok((_, Array(items))) if items.len() == n => Ok(items)
-			Ok((_, Array(items))) => at(Decode.fail(ErrorCode.wrong_payload, "expected ${n.to_str()} values, found ${items.len().to_str()}"), ".values")
-			Ok((_, other)) => at(Decode.fail(ErrorCode.wrong_payload, "expected an array, found ${JsonValue.describe(other)}"), ".values")
+			Ok((_, Array(items))) => Decode.fail(ErrorCode.wrong_payload, "expected ${n.to_str()} values in \"values\", found ${items.len().to_str()}")
+			Ok((_, other)) => Decode.fail(ErrorCode.wrong_payload, "expected an array of ${n.to_str()} values in \"values\", found ${JsonValue.describe(other)}")
 		}
 	}
 
@@ -356,7 +468,7 @@ FromJson := [].{
 	unknown : Str, List((Str, JsonValue)) -> Try(List(Value), Decode.Error)
 	unknown = |tag, members| {
 		if !JsonValue.is_tag_name(tag) {
-			return at(Decode.fail(ErrorCode.invalid_tag, "\"${tag}\" is not a tag name"), "._tag")
+			return Decode.fail(ErrorCode.invalid_tag, "\"_tag\" is not a tag name (A to Z, then letters, digits and _)")
 		}
 		others = members.keep_if(|(k, _)| k != "_tag")
 		match others {
@@ -548,6 +660,11 @@ expect FromJson.one(
 	},
 ) == Err(".pin: not a valid Secret UInt16 (the value is hidden)")
 expect FromJson.lines("1\n2\n", FromJson.u8) == Ok([1, 2])
+# In JSON Lines a place starts with the line's index (spec §16.3); an empty
+# line, or a byte order mark at the start of a later line, is `json-syntax` at its line.
+expect code_of_lines("1\n2\n\"x\"\n", FromJson.u8) == "type-mismatch at $[2]"
+expect code_of_lines("{\"price\": 1}\n{\"price\": \"1\"}", |j| FromJson.field(FromJson.object(j, "Item")?, "price", FromJson.i32)) == "type-mismatch at $[1].price"
+expect code_of_lines("1\n\n2\n", FromJson.u8) == "json-syntax at line 2" and code_of_lines("1\r\n\u(FEFF)2\r\n", FromJson.u8) == "json-syntax at line 2"
 expect FromJson.within_depth(Null, |_| Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), Encode.any).map_ok(Encode.canonical) == Ok("[{a:Some([])}]")
 expect FromJson.within_depth(Null, |_| Ok(nest(256)), Encode.any).is_ok()
 expect FromJson.within_depth(Null, |_| Ok(nest(257)), Encode.any).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
@@ -631,6 +748,14 @@ loop = |j| FromJson.maybe(j, True, loop).map_ok(
 	},
 )
 
+# Error codes (spec §17) of schema-based JSON Lines, with the place.
+code_of_lines : Str, (JsonValue -> Try(a, Decode.Error)) -> Str
+code_of_lines = |text, reader| match FromJson.lines(text, reader) {
+	Ok(_) => "ok"
+	Err(Decode(e)) => "${e.code} at ${ErrorCode.place(e.path)}"
+	Err(Syntax(e)) => "${e.code} at line ${e.line.to_str()}"
+}
+
 # Error codes (spec §17) of schema-based JSON.
 code_of : Str, (JsonValue -> Try(a, Decode.Error)) -> Str
 code_of = |text, reader| match FromJson.one(text, reader) {
@@ -649,16 +774,56 @@ expect code_of("\"9223372036854775808\"", FromJson.i64) == "out-of-range at $" a
 expect code_of("19.90", FromJson.decimal) == "type-mismatch at $" and code_of("\"19,90\"", FromJson.decimal) == "invalid-number at $" and code_of("\"2026-02-30\"", FromJson.time("Date")) == "invalid-time at $"
 expect code_of("null", |j| FromJson.maybe(j, True, |x| FromJson.maybe(x, False, FromJson.i32))) == "type-mismatch at $"
 expect code_of("{\"_tag\": \"Some\", \"value\": null, \"x\": 1}", |j| FromJson.maybe(j, True, |x| FromJson.maybe(x, False, FromJson.i32))) == "unexpected-member at $.x"
-expect code_of("{\"_tag\": \"Just\", \"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "unknown-tag at $._tag" and code_of("{\"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $"
-expect code_of("{\"_tag\": \"Some\"}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $" and code_of("{\"_tag\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $._tag"
-expect code_of("{\"_tag\": \"Fine\"}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "unknown-tag at $._tag" and code_of("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "type-mismatch at $.value"
-expect code_of("{\"_tag\": \"hexagon\"}", FromJson.any_tag) == "invalid-tag at $._tag" and code_of("{\"_tag\": \"Hexagon\", \"_args\": []}", FromJson.any_tag) == "haus-json-form at $._args" and code_of("{\"_tag\": \"Hexagon\", \"_args\": 5}", FromJson.any_tag) == "haus-json-form at $._args"
+expect code_of("{\"_tag\": \"Just\", \"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "unknown-tag at $" and code_of("{\"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $"
+expect code_of("{\"_tag\": \"Some\"}", |j| FromJson.maybe(j, True, FromJson.i32)) == "missing-member at $" and code_of("{\"_tag\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "invalid-tag at $"
+expect code_of("{\"_tag\": \"Fine\"}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "unknown-tag at $" and code_of("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "type-mismatch at $.value"
+expect code_of("{\"_tag\": \"hexagon\"}", FromJson.any_tag) == "invalid-tag at $" and code_of("{\"_tag\": \"Hexagon\", \"_args\": []}", FromJson.any_tag) == "haus-json-form at $._args" and code_of("{\"_tag\": \"Hexagon\", \"_args\": 5}", FromJson.any_tag) == "haus-json-form at $._args"
 expect code_of("{\"_tag\": \"Hexagon\", \"_args\": [1]}", FromJson.any_tag) == "haus-json-form at $._args[0]" and code_of("{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", FromJson.any_tag) == "haus-json-form at $._args[0]"
 expect code_of("{\"pin\": 98765}", |j| FromJson.field(FromJson.object(j, "Login")?, "pin", |x| FromJson.secret(x, "Secret UInt16", FromJson.u16))) == "invalid-secret at $.pin"
 expect code_of("{\"id\": 1, \"x\": 2}", |j| FromJson.closed(FromJson.object(j, "Strict")?, ["id"])) == "unknown-field at $.x" and code_of("{}", |j| FromJson.field(FromJson.object(j, "User")?, "id", FromJson.i32)) == "missing-field at $"
-expect code_of("{\"_tag\": \"Point\", \"values\": [1]}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2)) == "wrong-payload at $.values" and code_of("1", FromJson.any) == "haus-json-form at $" and code_of("{\"_haus\": 1, \"_value\": \"x\"}", FromJson.any) == "haus-json-form at $"
+expect code_of("{\"_tag\": \"Point\", \"values\": [1]}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2)) == "wrong-payload at $" and code_of("1", FromJson.any) == "haus-json-form at $" and code_of("{\"_haus\": 1, \"_value\": \"x\"}", FromJson.any) == "haus-json-form at $"
 expect code_of("{\"a\": 1, \"a\": 2}", |j| FromJson.map(j, FromJson.i32)) == "duplicate-key" and code_of("{\"pt-BR\": \"x\"}", |j| FromJson.map(j, FromJson.i32)) == "type-mismatch at $[\"pt-BR\"]"
+# A `"_tag"` that isn't a string, or isn't a tag, is `invalid-tag`; a `"values"` that isn't an array of the case's length `wrong-payload`: both at the variant (spec §16.3).
+expect ["{\"_tag\": 1}", "{\"_tag\": null}", "{\"_tag\": [\"A\"]}", "{\"_tag\": \"\"}", "{\"_tag\": \"a\"}"].map(|s| code_of(s, FromJson.any_tag)) == ["invalid-tag at $", "invalid-tag at $", "invalid-tag at $", "invalid-tag at $", "invalid-tag at $"]
+expect code_of("{\"_tag\": \"some\", \"value\": 1}", |j| FromJson.maybe(j, True, FromJson.i32)) == "invalid-tag at $" and code_of("{\"_tag\": true}", |j| FromJson.result(j, FromJson.i32, FromJson.str)) == "invalid-tag at $"
+expect ["5", "null", "{}", "[]", "[1]", "[1, 2, 3]"].map(|vs| code_of("{\"_tag\": \"Point\", \"values\": ${vs}}", |j| FromJson.args(FromJson.variant(j, "Shape")?.1, 2))) == ["wrong-payload at $", "wrong-payload at $", "wrong-payload at $", "wrong-payload at $", "wrong-payload at $", "wrong-payload at $"]
 expect code_of("1", |_| FromJson.no_json_form("Odd", "_args")) == "no-json-form at $" and FromJson.within_depth(Null, |_| Ok(nest(257)), Encode.any).map_ok(|_| {}).map_err(|e| e.code) == Err("nesting-too-deep")
+# Codecs run from the inside out (spec §13.4): a part's codec, checked first,
+# rejects at its own place in the JSON.
+expect {
+	currency = |c| FromJson.codec(
+		c,
+		FromJson.any_tag,
+		|t| match t {
+			Bare("EUR") => Ok({})
+			_ => Err("not a currency")
+		},
+	)
+	check = |j| FromJson.check_cases(j, [("Money", Args([|_| Ok({}), currency]))])
+	money = |j| FromJson.codec_inside(
+		j,
+		check,
+		FromJson.any_tag,
+		|t| match t {
+			Other("Money", _) => Ok({})
+			_ => Err("not money")
+		},
+	)
+	m = |c| "{\"_tag\": \"Money\", \"values\": [\"1\", {\"_tag\": \"${c}\"}]}"
+	code_of("[${m("EUR")}, ${m("Eur")}]", |j| FromJson.list(j, money)) == "type-mismatch at $[1].values[1]" and code_of("[${m("EUR")}]", |j| FromJson.list(j, money)) == "ok"
+}
+expect {
+	fails = |_| Decode.fail("type-mismatch", "no")
+	at_place = |text, check| code_of(text, check)
+	at_place("[1, 2]", |j| FromJson.check_items(j, fails)) == "type-mismatch at $[0]"
+		and at_place("{\"pt-BR\": 1}", |j| FromJson.check_entries(j, fails)) == "type-mismatch at $[\"pt-BR\"]"
+		and at_place("{\"_tag\": \"Circle\", \"r\": 1}", |j| FromJson.check_cases(j, [("Circle", Fields([("r", fails)]))])) == "type-mismatch at $.r"
+		and at_place("{\"_tag\": \"Wrap\", \"value\": 1}", |j| FromJson.check_cases(j, [("Wrap", Args([fails]))])) == "type-mismatch at $.value"
+		and at_place("{\"_tag\": \"Some\", \"value\": 1}", |j| FromJson.check_maybe(j, True, fails)) == "type-mismatch at $.value"
+		and at_place("1", |j| FromJson.check_maybe(j, False, fails)) == "type-mismatch at $" and at_place("null", |j| FromJson.check_maybe(j, False, fails)) == "ok"
+		and at_place("1", |j| FromJson.check_secret(j, "Secret Money", fails)) == "invalid-secret at $"
+}
+
 # A record case by name: the record is read from the tag's object, without `"_tag"`.
 expect {
 	box = |j| {

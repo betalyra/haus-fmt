@@ -87,8 +87,11 @@ func TestSchemaJSONSuite(t *testing.T) {
 			case "Read":
 				checkRead(t, name, ty, got, readErr, get(r, "output"))
 			case "Err":
-				if code, _ := codeAndPath(readErr); string(code) != str(get(r, "code")) {
+				code, path := codeAndPath(readErr)
+				if string(code) != str(get(r, "code")) {
 					t.Errorf("%s: got %v, want %s", name, readErr, str(get(r, "code")))
+				} else if want := get(r, "path"); want != nil && path != str(want) {
+					t.Errorf("%s: got the place %q, want %q (%v)", name, path, str(want), readErr)
 				}
 			default:
 				t.Fatalf("unknown case %s", x.Tag)
@@ -209,6 +212,22 @@ type Events = Stream Event
 	if code, path := codeAndPath(err); code != haus.CodeTypeMismatch || path != "$[1].value" {
 		t.Errorf("line error: %v", err)
 	}
+	// An empty line, and a byte order mark after the first line, are
+	// json-syntax, at the line (spec §16, "Streams").
+	for _, text := range []string{
+		"{\"_tag\":\"Tick\",\"value\":1}\n\n{\"_tag\":\"Tick\",\"value\":2}\n",
+		"{\"_tag\":\"Tick\",\"value\":1}\r\n\r\n",
+		"{\"_tag\":\"Tick\",\"value\":1}\n\uFEFF{\"_tag\":\"Tick\",\"value\":2}\n",
+	} {
+		_, err := events.FromJSONLines([]byte(text))
+		var e *haus.Error
+		if !errors.As(err, &e) || e.Code != haus.CodeJSONSyntax || e.Line != 2 {
+			t.Errorf("%q: got %v", text, err)
+		}
+	}
+	if v, err := events.FromJSONLines([]byte("\uFEFF{\"_tag\":\"Tick\",\"value\":1}\n")); err != nil || len(v) != 1 {
+		t.Errorf("a byte order mark at the start: %v %v", v, err)
+	}
 }
 
 func TestSchemaJSONLimits(t *testing.T) {
@@ -244,5 +263,56 @@ type Open = < A >
 	}
 	if _, err := open.FromJSONWith([]byte(`{"_tag": "B", "x": {"y": [1]}}`), schema.DecodeOptions{Limits: haus.Limits{MaxDepth: 2}}); errCode(err) != haus.CodeNestingTooDeep {
 		t.Errorf("unknown, deep: %v", err)
+	}
+}
+
+// TestEmptyContainersAreLevels: an empty record, array or record payload is
+// a level of nesting (spec §7), when parsing, decoding, reading JSON,
+// checking and encoding a value built in code alike.
+func TestEmptyContainersAreLevels(t *testing.T) {
+	s, err := schema.Parse([]byte(`
+type A = Array (Array Int32)
+type R = { a: Array Int32, r?: { } }
+type V = < P { } | Q (Array Int32) | S { a: Array Int32 } >
+type M = Map (Array Int32)
+type W = { p: V }
+`), schema.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := schema.DecodeOptions{Limits: haus.Limits{MaxDepth: 1}}
+	for _, c := range []struct {
+		ty, text, json string
+		deep           bool
+	}{
+		{"A", "[[]]", "[[]]", true},
+		{"A", "[]", "[]", false},
+		{"R", "{a: []}", `{"a": []}`, true},
+		{"R", "{a: [1], r: {}}", `{"a": [1], "r": {}}`, true},
+		{"V", "Q([])", `{"_tag": "Q", "value": []}`, true},
+		{"V", "P {}", `{"_tag": "P"}`, false},
+		{"V", "S {a: []}", `{"_tag": "S", "a": []}`, true},
+		{"M", "{a: []}", `{"a": []}`, true},
+		{"W", "{p: P {}}", `{"p": {"_tag": "P"}}`, true},
+	} {
+		ty, _ := s.Type(c.ty)
+		_, parseErr := haus.ParseWith([]byte(c.text), haus.Limits{MaxDepth: 1})
+		v, err := haus.Parse([]byte(c.text))
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := ty.Decode(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, decodeErr := ty.DecodeWith(v, one)
+		_, jsonErr := ty.FromJSONWith([]byte(c.json), one)
+		_, encodeErr := ty.EncodeWith(decoded, one)
+		checkErr := haus.CheckValue(v, haus.Limits{MaxDepth: 1})
+		for name, err := range map[string]error{"parse": parseErr, "decode": decodeErr, "read JSON": jsonErr, "encode": encodeErr, "check": checkErr} {
+			if c.deep && errCode(err) != haus.CodeNestingTooDeep || !c.deep && err != nil {
+				t.Errorf("%s %s: %s: %v", c.ty, c.text, name, err)
+			}
+		}
 	}
 }

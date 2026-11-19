@@ -6,7 +6,7 @@ import { Effect, Exit, Schema } from "effect"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { Currency, iso, Money } from "../src/index.js"
+import { Currency, iso, Money, MONEY_ID } from "../src/index.js"
 import { iso as isoEffect } from "../src/effect.js"
 
 const root = join(import.meta.dirname, "../..")
@@ -140,5 +140,38 @@ describe("the Effect codec", () => {
   it("checks what it encodes too", () => {
     const bad = { total: { _tag: "Money" as const, values: ["1", "eur"] as const }, refunds: [] }
     expect(Exit.isFailure(Effect.runSyncExit(Haus.encode(Order, isoEffect)(bad)))).toBe(true)
+  })
+})
+
+// ── several codecs in one value: inside out, the first to reject at its own place (spec §13.4) ──
+
+describe("codecs inside codecs", () => {
+  const rejectAll = "no Money passes here"
+  const json = (currency: string) => `{"_tag": "Money", "values": ["1", {"_tag": "${currency}"}]}`
+
+  it("haus schemas: the Currency inside a Money rejects first, at $[1]; then the Money's own codec, at $", () => {
+    const money = { id: MONEY_ID, apply: (base: h.Schema<unknown>) => h.refine(base, () => rejectAll) }
+    const Money = compileSchemaFile(text, { ...schemaOptions(schemaPath), codecs: [money, ...iso] }).schemas.Money!
+    expect(() => h.parse(Money, "Money(1, Eur)")).toThrow(expect.objectContaining({ path: [1], reason: expect.stringMatching(/"Eur" is not a currency/) }))
+    expect(() => h.parse(Money, "Money(1, EUR)")).toThrow(expect.objectContaining({ path: [], reason: rejectAll }))
+    // In JSON, at the place in the JSON (spec §16.3 "Places").
+    expect(() => h.fromJson(Money, json("Eur"))).toThrow(expect.objectContaining({ path: ["values", 1], reason: expect.stringMatching(/"Eur" is not a currency/) }))
+    expect(() => h.fromJson(Money, json("EUR"))).toThrow(expect.objectContaining({ path: [], reason: rejectAll }))
+  })
+
+  it("Effect: the same order and places", () => {
+    const money = Haus.codecs({
+      [Haus.CodecTypeId]: [{ id: MONEY_ID, apply: (base: Schema.Top) => base.pipe(Schema.refine((_: unknown): _ is never => false, { message: rejectAll })) }],
+    })
+    const Money = Haus.compileSchemaFile(text, schemaOptions(schemaPath)).schemas.Money!
+    const error = (effect: Effect.Effect<unknown, Haus.HausError>) => Effect.runSync(Effect.flip(effect))
+    const placeOf = (effect: Effect.Effect<unknown, Haus.HausError>) => {
+      const e = error(effect)
+      return e instanceof Haus.HausSchemaError ? [e.place, e.message] : [undefined, e.message]
+    }
+    expect(placeOf(Haus.decode(Money, isoEffect, money)("Money(1, Eur)"))).toEqual(["$[1]", expect.stringMatching(/a currency of the iso profile/)])
+    expect(placeOf(Haus.decode(Money, isoEffect, money)("Money(1, EUR)"))).toEqual(["$", rejectAll])
+    expect(placeOf(Haus.fromJson(Money, isoEffect, money)(json("Eur")))).toEqual(["$.values[1]", expect.stringMatching(/a currency of the iso profile/)])
+    expect(placeOf(Haus.fromJson(Money, isoEffect, money)(json("EUR")))).toEqual(["$", rejectAll])
   })
 })

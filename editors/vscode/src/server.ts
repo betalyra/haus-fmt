@@ -203,7 +203,9 @@ function schemaDiagnostics(document: TextDocument, values: Value[]): Diagnostic[
   return checkData(file, link.type, values).map((issue) => ({
     range: range(issue.start, issue.end),
     severity: issue.severity === "error" ? DiagnosticSeverity.Error : DiagnosticSeverity.Hint,
-    ...(issue.severity === "hint" ? { code: "not-in-schema" } : {}),
+    // A deprecated field or tag the data uses is struck through, at the field or the tag (spec §14);
+    // other hints are fields and tags not in the schema (dotted, see extension.ts).
+    ...(issue.code === "deprecated" ? { code: "deprecated", tags: [DiagnosticTag.Deprecated] } : issue.severity === "hint" ? { code: "not-in-schema" } : {}),
     source: `haus (${name})`,
     message: issue.message,
   }))

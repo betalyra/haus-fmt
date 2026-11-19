@@ -487,7 +487,7 @@ def _self_describing_items(items: tuple[Value, ...]) -> list[Json]:
 def from_envelope(j: Json, limits: Limits, prefix: tuple[PathKey, ...] = ()) -> Value:
     """The value of a self-describing JSON text (§16.2): the envelope, then its value.
 
-    The envelope adds no path segment. Raises `HausJsonError` with the path (after `prefix`).
+    Paths start at the envelope (`$._value._args[1]`), after `prefix`. Raises `HausJsonError` with the path.
     """
     reader = _SelfDescribing(limits, prefix)
     if not isinstance(j, dict) or len(j) != 2 or "_haus" not in j or "_value" not in j:
@@ -495,10 +495,10 @@ def from_envelope(j: Json, limits: Limits, prefix: tuple[PathKey, ...] = ()) -> 
     if j["_haus"] != _VERSION:
         reader.fail(
             f"expected version 1 of self-describing JSON in '_haus', found {describe(j['_haus'])}",
-            (),
+            ("_haus",),
             "haus-json-version",
         )
-    return reader.value(j["_value"], 0, ())
+    return reader.value(j["_value"], 0, ("_value",))
 
 
 def from_self_describing(j: Json, limits: Limits, depth: int = 0, path: tuple[PathKey, ...] = ()) -> Value:
@@ -596,9 +596,9 @@ class _SelfDescribing:
 
     def tag(self, tag: Json, path: tuple[PathKey, ...]) -> str:
         if not isinstance(tag, str) or not _TAG.fullmatch(tag):
-            self.fail("expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag'", (*path, "_tag"), "invalid-tag")
+            self.fail(f"expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found {describe(tag)}", path, "invalid-tag")
         if len(tag) > self.limits.max_string_length:
-            self.fail(f"tag longer than {self.limits.max_string_length} characters", (*path, "_tag"), "tag-too-long")
+            self.fail(f"tag longer than {self.limits.max_string_length} characters", path, "tag-too-long")
         return tag
 
 
@@ -714,6 +714,25 @@ def read_lines(
     `strict` is as for `read_json`.
     """
     for i, text in enumerate(json_lines(source, max_line_length)):
+        # An empty line is no JSON text; a byte order mark after the first line is no whitespace (spec §16).
+        if text in ("", "\r"):
+            raise HausJsonError(
+                "empty line: JSON Lines holds one JSON text per line",
+                code="json-syntax",
+                line=i + 1,
+                column=1,
+                expected="a JSON value",
+                found="end of line",
+            )
+        if i > 0 and text.startswith("\ufeff"):
+            raise HausJsonError(
+                "a byte order mark at the start of a line after the first (only the stream may start with one)",
+                code="json-syntax",
+                line=i + 1,
+                column=1,
+                expected="a JSON value",
+                found="U+FEFF",
+            )
         try:
             yield convert(read_json(text, limits, max_depth, bom=i == 0, strict=strict), i)
         except HausJsonError as e:

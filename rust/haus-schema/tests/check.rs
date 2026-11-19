@@ -117,6 +117,17 @@ fn deprecated_fields_and_tags_are_hints() {
         issues(schema, r#"{ mail: "a@b", shape: Square { side: 1 } }"#, "Root"),
         ["hint mail: mail is deprecated: use email", "hint Square: Square is deprecated: use Rect"]
     );
+    // At the field's value or the tagged value, as `unlisted-field` is (spec §14).
+    let schema = format!("{schema}\n      type Order = {{ lines: Array Root }}");
+    let schema = Schema::parse(&schema).unwrap();
+    let data = r#"{ lines: [{ mail: "a@b", shape: Square { side: 1 } }] }"#;
+    let paths: Vec<String> = schema.check_text("Order", data).iter().map(|i| i.path_string()).collect();
+    assert_eq!(paths, ["$.lines[0].mail", "$.lines[0].shape"]);
+    let paths: Vec<String> = schema.check_text("Order", data).iter().map(|i| i.to_string()).collect();
+    assert_eq!(
+        paths,
+        ["mail is deprecated: use email at $.lines[0].mail", "Square is deprecated: use Rect at $.lines[0].shape"]
+    );
 }
 
 #[test]
@@ -165,4 +176,24 @@ fn many_problems_are_reported_up_to_a_limit() {
     let schema = Schema::parse("type Root = Array Int").unwrap();
     let data = format!("[{}]", vec!["\"x\""; 500].join(", "));
     assert_eq!(schema.check_text("Root", &data).len(), haus_schema::MAX_ISSUES);
+}
+
+/// A check of a value built in code counts an empty record, array or record
+/// payload as a level, as parsing does (spec §7).
+#[test]
+fn empty_containers_built_in_code_are_levels() {
+    let schema = Schema::parse("type Root = Any\ntype Items = Array (Array (Array Int))").unwrap();
+    let limits = haus::Limits { max_depth: 2, ..haus::Limits::default() };
+    let decode = |ty: &str, text: &str| {
+        let value = haus::parse(text).unwrap().remove(0);
+        schema.decode_with(ty, &value, &limits).map(|_| ()).map_err(|e| e.code.as_str())
+    };
+    for text in ["[[[]]]", "{ a: { b: {} } }", "T(U(V {}))", "[T {}, [[]]]"] {
+        assert_eq!(decode("Root", text), Err("nesting-too-deep"), "{text}");
+    }
+    for text in ["[[]]", "{ a: [] }", "T(U {})", "T {}"] {
+        assert_eq!(decode("Root", text), Ok(()), "{text}");
+    }
+    assert_eq!(decode("Items", "[[[]]]"), Err("nesting-too-deep"));
+    assert_eq!(decode("Items", "[[]]"), Ok(()));
 }

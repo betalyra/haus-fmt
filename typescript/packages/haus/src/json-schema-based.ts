@@ -14,7 +14,7 @@
 import { HausDecodeError, HausEncodeError, type ErrorCode, type ErrorDetails } from "./errors.js"
 import {
   describeJson, hausJsonOf, importedValue, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, numberOfJson, Place, stringOfJson, tagLengthIssue, valueOfHausJson,
-  type Json, type JsonObject, normalizeJsonNumber,
+  type Json, type JsonObject, type JsonPlaces, normalizeJsonNumber,
 } from "./json.js"
 import { numberLimitIssue } from "./number.js"
 import { longerThan, withDefaults, type Limits } from "./parser.js"
@@ -73,6 +73,9 @@ export type JsonCase =
   | { readonly kind: "unit" }
   | { readonly kind: "record"; readonly record: JsonRecordType }
   | { readonly kind: "positional"; readonly items: readonly JsonType[] }
+
+/** A tag name (spec §4). */
+const TAG = /^[A-Z][A-Za-z0-9_]*$/
 
 /** Fields a record payload can't have in schema-based JSON (spec §16.3): its members sit beside these. */
 const RESERVED_FIELDS = ["_tag", "_args"] as const
@@ -336,9 +339,11 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
  * The haus value of schema-based JSON (spec §16.3) of the type `type`, for the
  * type's schema to decode. Checks the JSON's form: kinds, tags, members;
  * the schema checks the rest (ranges, whole numbers, std/time…). Throws
- * HausDecodeError.
+ * HausDecodeError, at the place in the JSON (spec §16.3 "Places"). With
+ * `places`, notes where each value it makes is in the JSON, for the errors
+ * the schema finds (`atJsonPlace`).
  */
-export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<Limits> = {}, place: Place = Place.root()): Value => {
+export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<Limits> = {}, place: Place = Place.root(), places?: JsonPlaces): Value => {
   const l = withDefaults(limits)
   const maxDepth = jsonDepth(l.maxDepth)
   const fail = (reason: string, at: Place, code: ErrorCode = "type-mismatch", details?: ErrorDetails): never => {
@@ -358,16 +363,28 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     return bounded ? fail(`a whole number of ${s.length} characters is out of range`, at, "out-of-range") : fail(issue.reason, at, issue.code)
   }
   const object = (j: Json, expected: string, at: Place): JsonObject => (isJsonObject(j) ? j : mismatch(expected, j, at))
-  /** Members of a tagged object other than `_tag` and `allowed`: an error. */
+  /** Members of a tagged object other than `_tag` and `allowed`: an error, at the member. */
   const only = (j: JsonObject, allowed: readonly string[], tag: string, at: Place) => {
     for (const k of Object.keys(j)) {
-      if (k !== "_tag" && !allowed.includes(k)) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} for '${tag}'`, at, "unexpected-member")
+      if (k !== "_tag" && !allowed.includes(k)) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} for '${tag}'`, at.child(k), "unexpected-member")
     }
+  }
+  /** The `"_tag"` of a tagged object: a string that is a tag (spec §16.3), else `invalid-tag`; missing, `missing-member`. */
+  const tagOf = (o: JsonObject, expected: string, at: Place): string => {
+    if (!Object.hasOwn(o, "_tag")) return fail(`expected a member "_tag": ${expected}`, at, "missing-member", { expected: `"_tag"` })
+    const tag = o["_tag"]!
+    if (typeof tag !== "string") return fail(`"_tag" must be a string, found ${describeJson(tag)}`, at, "invalid-tag")
+    return TAG.test(tag) ? tag : fail(`"_tag" is not a tag name: ${describeJson(tag)}`, at, "invalid-tag")
   }
   const member = (j: JsonObject, name: string, tag: string, at: Place): Json =>
     Object.hasOwn(j, name) ? j[name]! : fail(`'${tag}' needs a member "${name}"`, at, "missing-member", { expected: `"${name}"` })
 
   const read = (t: JsonType, j: Json, at: Place, depth: number, hops: number): Value => {
+    const v = readHere(t, j, at, depth, hops)
+    return places ? places.note(v, at) : v
+  }
+
+  const readHere = (t: JsonType, j: Json, at: Place, depth: number, hops: number): Value => {
     if (depth > maxDepth) fail(`nesting deeper than ${l.maxDepth} levels`, at, "nesting-too-deep")
     const hop = () => (hops < MAX_HOPS ? hops + 1 : fail("a type that refers only to itself (unguarded recursion)", at, "unguarded-recursion"))
     switch (t.kind) {
@@ -398,7 +415,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
       case "time":
         return typeof j === "string" ? variant(t.tag, [stringOfJson(j, l, at)]) : mismatch(`a ${t.tag} string`, j, at)
       case "any":
-        return valueOfHausJson(j, l, at)
+        return valueOfHausJson(j, l, at, places)
       case "array":
         if (!Array.isArray(j)) return mismatch("an array", j, at)
         return arr(j.map((x, i) => read(t.item, x, at.child(i), depth + 1, 0)))
@@ -409,17 +426,16 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
       }
       case "map": {
         const o = object(j, "an object", at)
-        return rec(new Map(Object.keys(o).map((k) => [key(k, at), read(t.value, o[k]!, at.child(k), depth + 1, 0)] as const)))
+        return rec(new Map(Object.keys(o).map((k) => [key(k, at.child(k)), read(t.value, o[k]!, at.child(k), depth + 1, 0)] as const)))
       }
       case "record":
         return rec(fields(t, object(j, "an object", at), [], at, depth))
       case "maybe": {
         if (usesNull(t)) return j === null ? variant("None") : variant("Some", [read(t.item, j, at, depth, hop())])
         const o = object(j, `{"_tag": "None"} or {"_tag": "Some", "value": …}`, at)
-        const tag = o["_tag"]
+        const tag = tagOf(o, `"None" or "Some"`, at)
         if (tag === "None") return only(o, [], tag, at), variant("None")
         if (tag === "Some") return only(o, ["value"], tag, at), variant("Some", [read(t.item, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
-        if (typeof tag !== "string") return fail(`expected a member "_tag": "None" or "Some"`, at, "missing-member", { expected: `"_tag"` })
         return fail(`expected "_tag": "None" or "Some"`, at, "unknown-tag")
       }
       case "variant":
@@ -449,13 +465,11 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
       return t.cases.has(j) ? variant(j) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
     }
     const o = object(j, `an object with "_tag"`, at)
-    const tag = o["_tag"]
-    if (typeof tag !== "string") return fail(`expected a member "_tag" with the tag, a string`, at, "missing-member", { expected: `"_tag"` })
+    const tag = tagOf(o, "the tag, a string", at)
     const c = t.cases.get(tag)
     if (c === undefined) {
       if (!t.open) return fail(`unknown tag ${describeJson(tag)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
       // An unknown value (spec §16.3).
-      if (!/^[A-Z][A-Za-z0-9_]*$/.test(tag)) return fail(`"_tag" is not a tag name: ${describeJson(tag)}`, at, "invalid-tag")
       const tagIssue = tagLengthIssue(tag, l)
       if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
       const members = Object.keys(o).filter((k) => k !== "_tag")
@@ -463,12 +477,12 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
       // As written: the arguments, self-describing (without the envelope).
       if (members.length === 1 && members[0] === "_args") {
         const args = o["_args"]!
-        if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array`, at, "haus-json-form")
         const place = at.child("_args")
-        return variant(tag, args.map((x, i) => valueOfHausJson(x, l, place.child(i))))
+        if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array`, place, "haus-json-form")
+        return variant(tag, args.map((x, i) => valueOfHausJson(x, l, place.child(i), places)))
       }
       // A newer writer's case: its other members are a record payload, imported (§16.1).
-      return variant(tag, [rec(new Map(members.map((k) => [key(k, at), importedValue(o[k]!, l, at.child(k))] as const)))])
+      return variant(tag, [rec(new Map(members.map((k) => [key(k, at.child(k)), importedValue(o[k]!, l, at.child(k), places)] as const)))])
     }
     if (isUnitCase(c)) return only(o, [], tag, at), variant(tag)
     if (c.kind === "record") {

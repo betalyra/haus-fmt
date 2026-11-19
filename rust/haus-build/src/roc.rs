@@ -81,7 +81,10 @@
 //! (spec §13.4): the packages' types that contain its type, directly or
 //! not, are generated again, one module per package (`OrderAcmeOrders` for
 //! `@acme/orders`), with the codec applied; the packages' other types stay
-//! their modules'.
+//! their modules'. A codec's type that has codecs inside (`Money` with a
+//! codec for `Currency`) is decoded as its package's type, which the codec
+//! takes, after a check that runs the inner codecs first, each at its own
+//! place: codecs run from the inside out (`Decode.codec_inside`).
 
 use crate::codegen::unknown_type;
 use crate::graph::{self, Origin, Unit};
@@ -430,7 +433,8 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
             Source::Time => format!("std/time#{}", graph::type_name(n)),
         }))
         .collect();
-    // The codecs of its types.
+    // The codecs of its types; those of the types inside them apply too, inside codecs' types.
+    let all_codecs = codecs;
     let codecs: Vec<&(String, String)> = codecs.iter().filter(|(cid, _)| ids.contains(cid)).collect();
 
     let defs: HashMap<&str, &TypeDef> = file.types.iter().map(|d| (d.name.as_str(), d)).collect();
@@ -457,6 +461,10 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
         json,
         tagged_maybes,
         nullables_used: HashSet::new(),
+        checks: HashMap::new(),
+        fresh_check: 0,
+        all_codecs: all_codecs.iter().map(|(i, m)| (i.clone(), codec_name(m).to_owned())).collect(),
+        codec_checks: HashMap::new(),
     };
     let items = file.types.iter().map(|d| g.define(d)).collect::<Result<Vec<_>>>()?;
     let haus = HAUS_MODULES
@@ -469,7 +477,7 @@ fn generate_file(file: &schema::File, input: Input) -> Result<String> {
     // The modules of the codecs it uses.
     let used = |m: &str| items.iter().chain(&g.helpers).any(|i| i.contains(&format!("{m}.")));
     let mut roc_imports = roc_imports.to_vec();
-    for (_, m) in codecs.iter().filter(|(_, m)| used(codec_name(m))) {
+    for (_, m) in all_codecs.iter().filter(|(_, m)| used(codec_name(m))) {
         if !roc_imports.contains(m) {
             roc_imports.push(m.clone());
         }
@@ -616,6 +624,16 @@ struct Gen<'a> {
     tagged_maybes: HashSet<usize>,
     /// The parameters whose `nullable_<p>` the function being generated uses.
     nullables_used: HashSet<String>,
+    /// The checks for the codecs inside a codec's type (see `codec_checks`),
+    /// by type and whether they check JSON: their functions' names.
+    checks: HashMap<(InstanceId, bool), String>,
+    /// For the names of those functions.
+    fresh_check: usize,
+    /// Every codec, by its type's id: those of types inside a codec's type
+    /// apply there, whether or not this module has the type.
+    all_codecs: HashMap<String, String>,
+    /// The checks of each codec's type, once made (see `codec_checks`).
+    codec_checks: HashMap<InstanceId, (Option<String>, Option<String>)>,
 }
 
 impl Gen<'_> {
@@ -952,15 +970,246 @@ impl Gen<'_> {
             None => base,
             Some(codec) => {
                 let (de, from) = (self.value(&base.de), self.json_value(&base.from_json));
+                // Codecs of its parts run first, each at its own place (spec §13.4).
+                let (check, check_json) = self.codec_checks(&id, pos)?;
+                let de = match check {
+                    Some(c) => format!("Decode.codec_inside({{x}}, {c}, {de}, {codec}.decode)"),
+                    None => format!("Decode.codec({{x}}, {de}, {codec}.decode)"),
+                };
+                let from = match check_json {
+                    Some(c) => format!("FromJson.codec_inside({{x}}, {c}, {from}, {codec}.decode)"),
+                    None => format!("FromJson.codec({{x}}, {from}, {codec}.decode)"),
+                };
                 R::new(
                     &format!("{codec}.Target"),
-                    F::Template(format!("Decode.codec({{x}}, {de}, {codec}.decode)")),
+                    F::Template(de),
                     F::Template(base.en.apply_at(&format!("{codec}.encode({{x}})"), "{e}")),
-                    F::Template(format!("FromJson.codec({{x}}, {from}, {codec}.decode)")),
+                    F::Template(from),
                     F::Template(base.to_json.apply_at(&format!("{codec}.encode({{x}})"), "{e}")),
                 )
             }
         })
+    }
+
+    /// The checks that run the codecs of the parts of the codec's type `id`
+    /// (a `Currency` inside a `Money`) before its own codec, for haus values
+    /// and for JSON: codecs run from the inside out, and the first that
+    /// rejects gives the error, at its own place (spec §13.4). The codec's
+    /// base is the package's type, which its own module decodes without
+    /// codecs, so a part's codec runs as a check: what it decodes to is not
+    /// kept. None where no codec applies inside.
+    fn codec_checks(&mut self, id: &str, pos: usize) -> Result<(Option<String>, Option<String>)> {
+        let own = id.strip_prefix('#');
+        let template = self
+            .schema
+            .files()
+            .iter()
+            .flat_map(|f| f.definitions())
+            .find(|d| d.id == id || own == Some(d.id.as_str()))
+            .map(|d| d.template);
+        let Some(template) = template else { return Ok((None, None)) };
+        if let Some(known) = self.codec_checks.get(&template) {
+            return Ok(known.clone());
+        }
+        let schema = self.schema;
+        let body = &schema.instance(template).body;
+        let check = self.check_fn(body, false, pos)?;
+        let check_json = if self.json { self.check_fn(body, true, pos)? } else { None };
+        self.codec_checks.insert(template, (check.clone(), check_json.clone()));
+        Ok((check, check_json))
+    }
+
+    /// Whether a codec applies somewhere inside `ty` (its own included, for a named type).
+    fn reaches_codec(&self, ty: &Type, seen: &mut HashSet<InstanceId>) -> bool {
+        match ty {
+            Type::Builtin(_) | Type::Param(_) => false,
+            Type::Time(name) => self.all_codecs.contains_key(&format!("std/time#{name}")),
+            Type::Array(a) | Type::Map(a) | Type::Maybe(a) | Type::Secret(a) => self.reaches_codec(a, seen),
+            Type::Record(r) => r.fields.iter().any(|f| self.reaches_codec(&f.ty, seen)),
+            Type::Variant(v) => v.cases.iter().any(|c| match &c.payload {
+                haus_schema::Payload::None => false,
+                haus_schema::Payload::Record(r) => r.fields.iter().any(|f| self.reaches_codec(&f.ty, seen)),
+                haus_schema::Payload::Named(t) => self.reaches_codec(t, seen),
+                haus_schema::Payload::Positional(ts) => ts.iter().any(|t| self.reaches_codec(t, seen)),
+            }),
+            Type::Ref(id) => {
+                let inst = self.schema.instance(*id);
+                self.all_codecs.contains_key(&inst.id) || (seen.insert(*id) && self.reaches_codec(&inst.body, seen))
+            }
+        }
+    }
+
+    /// Whether the `Maybe` `m` uses the tagged form in JSON (spec §16.3):
+    /// when its item's JSON can be `null`, or it reaches itself through
+    /// `Maybe`, `Secret` and names. `Maybe`s are told apart by where they
+    /// are in the schema.
+    fn maybe_tagged(&self, m: &Type) -> bool {
+        /// Whether a type's JSON can be `null`, or the `Maybe` on the stack it reached again.
+        #[derive(PartialEq)]
+        enum Null {
+            Yes,
+            No,
+            Cycle(*const Type),
+        }
+        fn null(schema: &Schema, ty: &Type, stack: &mut Vec<*const Type>) -> Null {
+            match ty {
+                Type::Maybe(item) => {
+                    let me = ty as *const Type;
+                    if stack.contains(&me) {
+                        return Null::Cycle(me);
+                    }
+                    stack.push(me);
+                    let inner = null(schema, item, stack);
+                    stack.pop();
+                    match inner {
+                        Null::Cycle(p) if p == me => Null::No,
+                        Null::Cycle(p) => Null::Cycle(p),
+                        Null::Yes => Null::No,
+                        Null::No => Null::Yes,
+                    }
+                }
+                Type::Secret(a) => null(schema, a, stack),
+                Type::Ref(id) => null(schema, &schema.instance(*id).body, stack),
+                _ => Null::No,
+            }
+        }
+        null(self.schema, m, &mut Vec::new()) != Null::Yes
+    }
+
+    /// A function that runs the codecs inside `ty` on a haus value (or, with
+    /// `json`, on schema-based JSON), each at its place, or None if no codec
+    /// applies inside. A named type's check is a function of its own, so
+    /// that recursive types are checked by recursion.
+    fn check_fn(&mut self, ty: &Type, json: bool, pos: usize) -> Result<Option<String>> {
+        if !self.reaches_codec(ty, &mut HashSet::new()) {
+            return Ok(None);
+        }
+        let m = if json { "FromJson" } else { "Decode" };
+        let schema = self.schema;
+        let parts = |g: &mut Self, ts: &[&Type]| -> Result<Vec<String>> {
+            ts.iter().map(|t| Ok(g.check_fn(t, json, pos)?.unwrap_or_else(|| "|_| Ok({})".into()))).collect()
+        };
+        let fields = |g: &mut Self, fs: &[haus_schema::Field]| -> Result<String> {
+            let mut out = vec![];
+            for f in fs {
+                if let Some(c) = g.check_fn(&f.ty, json, pos)? {
+                    out.push(format!("(\"{}\", {c})", escape(&f.key)));
+                }
+            }
+            Ok(out.join(", "))
+        };
+        let body = match ty {
+            Type::Ref(id) => {
+                if let Some(name) = self.checks.get(&(*id, json)) {
+                    return Ok(Some(name.clone()));
+                }
+                self.fresh_check += 1;
+                let name = format!("check_{}codecs_{}", if json { "json_" } else { "" }, self.fresh_check);
+                self.checks.insert((*id, json), name.clone());
+                let inst = schema.instance(*id);
+                let body = match self.all_codecs.get(&inst.id).cloned() {
+                    Some(codec) => {
+                        let reader = self.codec_base(&inst.id, json, pos)?;
+                        match self.check_fn(&inst.body, json, pos)? {
+                            Some(c) => {
+                                format!("{m}.codec_inside({{x}}, {c}, {reader}, {codec}.decode).map_ok(|_| {{}})")
+                            }
+                            None => format!("{m}.codec({{x}}, {reader}, {codec}.decode).map_ok(|_| {{}})"),
+                        }
+                    }
+                    None => format!("{}({{x}})", self.check_fn(&inst.body, json, pos)?.unwrap_or_default()),
+                };
+                return Ok(Some(self.check_helper(name, json, &body)));
+            }
+            Type::Time(name) => {
+                let codec = self.all_codecs[&format!("std/time#{name}")].clone();
+                format!("{m}.codec({{x}}, {m}.time(\"{name}\"), {codec}.decode).map_ok(|_| {{}})")
+            }
+            Type::Array(a) => format!("{m}.check_items({{x}}, {})", parts(self, &[a])?.join("")),
+            Type::Map(a) => format!("{m}.check_entries({{x}}, {})", parts(self, &[a])?.join("")),
+            Type::Maybe(a) => {
+                let c = parts(self, &[a])?.join("");
+                match json {
+                    true => format!(
+                        "FromJson.check_maybe({{x}}, {}, {c})",
+                        if self.maybe_tagged(ty) { "True" } else { "False" }
+                    ),
+                    false => format!("Decode.check_cases({{x}}, [(\"Some\", Args([{c}]))])"),
+                }
+            }
+            Type::Secret(a) => {
+                let what = escape(&format!("Secret {}", schema.describe(a)));
+                format!("{m}.check_secret({{x}}, \"{what}\", {})", parts(self, &[a])?.join(""))
+            }
+            Type::Record(r) => format!("{m}.check_fields({{x}}, [{}])", fields(self, &r.fields)?),
+            Type::Variant(v) => {
+                let mut cases = vec![];
+                for c in &v.cases {
+                    let payload = match &c.payload {
+                        haus_schema::Payload::None => continue,
+                        haus_schema::Payload::Record(r) => format!("Fields([{}])", fields(self, &r.fields)?),
+                        haus_schema::Payload::Named(t) => match schema.resolve(t) {
+                            Type::Record(r) => format!("Fields([{}])", fields(self, &r.fields)?),
+                            _ => continue,
+                        },
+                        haus_schema::Payload::Positional(ts) => {
+                            format!("Args([{}])", parts(self, &ts.iter().collect::<Vec<_>>())?.join(", "))
+                        }
+                    };
+                    cases.push(format!("(\"{}\", {payload})", escape(&c.tag)));
+                }
+                format!("{m}.check_cases({{x}}, [{}])", cases.join(", "))
+            }
+            Type::Builtin(_) | Type::Param(_) => return Ok(None),
+        };
+        self.fresh_check += 1;
+        let name = format!("check_{}codecs_{}", if json { "json_" } else { "" }, self.fresh_check);
+        Ok(Some(self.check_helper(name, json, &body)))
+    }
+
+    /// A check function named `name`, whose `body` checks `{x}`.
+    fn check_helper(&mut self, name: String, json: bool, body: &str) -> String {
+        let (x, input) = if json { ("j", "JsonValue") } else { ("v", "Value") };
+        self.helpers.push(format!(
+            "\t{name} : {input} -> Try({{}}, Decode.Error)\n\t{name} = |{x}| {}\n",
+            body.replace("{x}", x)
+        ));
+        name
+    }
+
+    /// The base decoder (or JSON reader) of the codec's type `id` where it
+    /// is a part of another codec's type: the function of the module that
+    /// has the type, this one's, an imported one's, or that of the package
+    /// of a type it imports (`HausFmtMoney.read_value_currency`).
+    fn codec_base(&self, id: &str, json: bool, pos: usize) -> Result<String> {
+        let f = format!("read_{}_{}", if json { "json" } else { "value" }, snake(graph::type_name(id)));
+        if self.defs.keys().any(|n| format!("{}#{n}", self.id) == id) {
+            return Ok(f);
+        }
+        let package = |i: &str| i.rsplit_once('#').map(|(p, _)| p.to_owned());
+        let modules = self.imports.values().filter_map(|s| match s {
+            Source::Module { module, id, .. } => Some((module, id)),
+            Source::Time => None,
+        });
+        let mut same_package = None;
+        for (module, other) in modules {
+            if other == id {
+                return Ok(format!("{module}.{f}"));
+            }
+            if same_package.is_none() && package(other) == package(id) {
+                same_package = Some(module.clone());
+            }
+        }
+        match same_package {
+            Some(module) => Ok(format!("{module}.{f}")),
+            None => self.fail(
+                pos,
+                Code::CodecUnreachable,
+                format!(
+                    "the codec for {id} applies inside another codec's type, but this module doesn't import its package"
+                ),
+            ),
+        }
     }
 
     fn prelude(&mut self, name: &str, args: &[Ty], pos: usize, hint: &str) -> Result<R> {

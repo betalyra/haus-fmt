@@ -706,7 +706,10 @@ impl<'s> Walker<'s> {
             match r.field(key) {
                 Some(f) => {
                     if let Some(d) = &f.deprecated {
+                        // At the field's value, as `unlisted-field` is (spec §14).
+                        self.path.push(Segment::Field(key.clone()));
                         self.report(Severity::Hint, Code::Deprecated, d.note(&quote_key(key)), key_span);
+                        self.path.pop();
                     }
                     match self.child(Segment::Field(key.clone()), |w| w.value(x, &f.ty, at.map(|(_, n)| n))) {
                         Some(x) => out.push((key.clone(), x)),

@@ -941,17 +941,15 @@ class _Maybe(_Node):
             return Nothing() if j is None else Some(self.item.read_json(j, at.deeper()))
         if not isinstance(j, dict):
             _json_mismatch(f'{self.expected} ({{"_tag": "None"}} or {{"_tag": "Some", "value": …}})', j, at)
-        match j.get("_tag"):
+        match _read_tag(j, '"None" or "Some"', at):
             case "None":
                 _only(j, (), "None", at)
                 return Nothing()
             case "Some":
                 _only(j, ("value",), "Some", at)
                 return Some(self.item.read_json(_member(j, "value", "Some", at), at.child("value")))
-            case str():
-                at.fail('expected "_tag": "None" or "Some"', code="unknown-tag")
             case _:
-                at.fail('expected a member "_tag": "None" or "Some"', code="missing-member", expected='"_tag"')
+                at.fail('expected "_tag": "None" or "Some"', code="unknown-tag")
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()
@@ -1275,8 +1273,7 @@ class _Variant(_Node):
             return Tagged(j)
         if not isinstance(j, dict):
             _json_mismatch(f'an object with "_tag" ({self.tags})', j, at)
-        if not isinstance(tag := j.get("_tag"), str):
-            at.fail('expected a member "_tag" with the tag, a string', code="missing-member", expected='"_tag"')
+        tag = _read_tag(j, self.tags, at)
         if tag not in self.cases:
             if not self.open:
                 found = _short(tag)
@@ -1310,10 +1307,6 @@ class _Variant(_Node):
         a newer writer's case, read as a record payload by the import (§16.1):
         `{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`.
         """
-        if not _TAG.fullmatch(tag):
-            at.fail("expected a tag ([A-Z][A-Za-z0-9_]*)", "_tag", code="invalid-tag")
-        if len(tag) > at.ctx.limits.max_string_length:
-            at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", "_tag", code="tag-too-long")
         if len(j) == 1:
             return Variant(tag)
         if len(j) == 2 and "_args" in j:
@@ -1359,11 +1352,25 @@ def _check_payload_keys(case: _RecordCase, at: _At) -> None:
             at.fail(reason, code="no-json-form")
 
 
+def _read_tag(j: dict[str, Json], expected: str, at: _At) -> str:
+    """The `"_tag"` of a tagged object (spec §16.3): a string that is a tag (§4), else `invalid-tag`, at the object."""
+    if "_tag" not in j:
+        at.fail(f'expected a member "_tag" ({expected})', code="missing-member", expected='"_tag"')
+    tag = j["_tag"]
+    if not isinstance(tag, str) or not _TAG.fullmatch(tag):
+        found = describe(tag)
+        reason = f'expected a tag ([A-Z][A-Za-z0-9_]*) in "_tag", found {found}'
+        at.fail(reason, code="invalid-tag", expected=expected, found=found)
+    if len(tag) > at.ctx.limits.max_string_length:
+        at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", code="tag-too-long")
+    return tag
+
+
 def _only(j: dict[str, Json], allowed: tuple[str, ...], tag: str, at: _At) -> None:
-    """A tagged object (spec §16.3) has `_tag` and the members of its form, no others."""
+    """A tagged object (spec §16.3) has `_tag` and the members of its form, no others: an other is an error at it."""
     for k in j:
         if k != "_tag" and k not in allowed:
-            at.fail(f"unexpected member {describe(k)} for '{tag}'", code="unexpected-member")
+            at.member(k).fail(f"unexpected member {describe(k)} for '{tag}'", code="unexpected-member")
 
 
 def _member(j: dict[str, Json], name: str, tag: str, at: _At) -> Json:

@@ -354,6 +354,46 @@ func TestCheckValue(t *testing.T) {
 			t.Errorf("%d: path %s, want %s", i, e.Path, c.path)
 		}
 	}
+	// An empty record, array or record payload is a level, as when parsing
+	// (spec §7): a value built in code and the same value parsed have the
+	// same depth. Writers check it so too.
+	empty, _ := NewRecord()
+	inRecord, _ := NewRecord(Field{Key: "a", Value: empty})
+	for _, c := range []struct {
+		v    Value
+		path string
+	}{
+		{Array{Array{}}, "$[0]"},
+		{inRecord, "$.a"},
+		{Array{Variant{Tag: "T", Args: []Value{empty}}}, "$[0]"},
+		{Variant{Tag: "T", Args: []Value{Array{}}}, "$[0]"},
+	} {
+		one := Limits{MaxDepth: 1}
+		text, err := Canonical(c.v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseWith([]byte(text), one); codeOf(err) != CodeNestingTooDeep {
+			t.Errorf("parse %s: %v", text, err)
+		}
+		if err := CheckValue(c.v, one); codeOf(err) != CodeNestingTooDeep || err.(*Error).Path != c.path {
+			t.Errorf("check %s: %v", text, err)
+		}
+		if _, err := FormatValue(c.v, FormatOptions{Limits: one}); codeOf(err) != CodeNestingTooDeep {
+			t.Errorf("format %s: %v", text, err)
+		}
+		if _, err := AppendHausJSON(nil, c.v, one); codeOf(err) != CodeNestingTooDeep {
+			t.Errorf("self-describing JSON %s: %v", text, err)
+		}
+		if err := CheckValue(c.v, Limits{MaxDepth: 2}); err != nil {
+			t.Errorf("check %s at depth 2: %v", text, err)
+		}
+	}
+	for _, v := range []Value{Array{}, empty, Variant{Tag: "T", Args: []Value{empty}}} {
+		if err := CheckValue(v, Limits{MaxDepth: 1}); err != nil {
+			t.Errorf("%v at depth 1: %v", v, err)
+		}
+	}
 	// Tag { … } is one level, as when writing.
 	payload, _ := NewRecord(Field{Key: "a", Value: NumberFromInt(1)})
 	if err := CheckValue(Variant{Tag: "T", Args: []Value{payload}}, Limits{MaxDepth: 1}); err != nil {
