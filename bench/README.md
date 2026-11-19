@@ -33,6 +33,8 @@ Or step by step:
 | speed | `pnpm --filter haus-bench speed` | ~60 s (11 tasks × 2.5 s × 2 sources) | `bench/.out/<source>/speed.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables; `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
+`convert` and `speed` build `@haus-fmt/haus` and `@haus-fmt/effect` first: they measure the built `dist/`, which git ignores, so after switching branches an old build would otherwise be measured. When running `main.node.ts` directly (Bun, Deno), run `prepare-haus` first.
+
 `pnpm --filter haus-bench smoke` runs the whole pipeline on a sample (40 documents per source, one tokenizer, a 50 ms time budget per speed task) in a few seconds: it checks that every step works, and its numbers are not for publishing.
 
 Options (`pnpm --filter haus-bench convert --limit 40`; `--help` on any command lists them):
