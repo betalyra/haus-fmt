@@ -477,43 +477,25 @@ def _import_version_error(fail: Fail, name: str, version: str, pos: int) -> Neve
 
 
 _ATTRIBUTE = re.compile(r"@([a-z_][A-Za-z0-9_]*)")
-_SPACE = re.compile(r"[ \t\r\n]*")
 _PARAM = re.compile(r"[a-z][A-Za-z0-9_]*")
 
 
 class _Lexer:
-    __slots__ = ("fail", "pos", "text")
+    __slots__ = ("data", "fail", "pos", "text")
 
     def __init__(self, text: str, fail: Fail) -> None:
         self.text = text
         self.fail = fail
         self.pos = 1 if text.startswith("\ufeff") else 0
+        self.data = Parser(text)
+        """Comments, whitespace and `"…"` strings are those of data files (spec §14), read by the data parser."""
 
     def skip(self) -> None:
-        """Skip whitespace and comments (block comments nest)."""
-        s = self.text
-        while True:
-            m = _SPACE.match(s, self.pos)
-            assert m is not None
-            self.pos = m.end()
-            if s.startswith("//", self.pos):
-                end = s.find("\n", self.pos)
-                self.pos = len(s) if end < 0 else end
-            elif s.startswith("/*", self.pos):
-                start, depth = self.pos, 0
-                while True:
-                    if self.pos >= len(s):
-                        self.fail("unterminated-comment", "unterminated block comment", start)
-                    if s.startswith("/*", self.pos):
-                        depth, self.pos = depth + 1, self.pos + 2
-                    elif s.startswith("*/", self.pos):
-                        depth, self.pos = depth - 1, self.pos + 2
-                    else:
-                        self.pos += 1
-                    if depth == 0:
-                        break
-            else:
-                return
+        """Skip whitespace and comments: those of data files (spec §14), read by the data parser."""
+        try:
+            self.pos = self.data.trivia_end(self.pos)
+        except HausSyntaxError as e:
+            self.fail(e.code, e.reason, e.offset)
 
     def next(self) -> _Token:
         self.skip()
@@ -537,7 +519,7 @@ class _Lexer:
             if s.startswith('"""', pos):
                 self.fail("block-string-key", "block strings can't be field names", pos)
             try:
-                value, self.pos = Parser(s).value_at(pos)
+                value, self.pos = self.data.value_at(pos)
             except HausSyntaxError as e:
                 self.fail(e.code, e.reason, e.offset)
             assert isinstance(value, String)
@@ -1107,6 +1089,91 @@ def _plural(n: int) -> str:
     return "" if n == 1 else "s"
 
 
+def _refs_of(d: _Def) -> Iterator[tuple[_Def, tuple[_Node, ...], int]]:
+    """The definitions `d` refers to by name, applied (with its arguments as written) or spread, and where."""
+    for n in _nodes(d.decl.body):
+        match n:
+            case _Name(name, pos):
+                refs: Iterator[tuple[str, tuple[_Node, ...], int]] = iter(((name, (), pos),))
+            case _App(head, args, pos):
+                refs = iter(((head, args, pos),))
+            case _RecordNode(spreads=spreads) | _VariantNode(spreads=spreads):
+                refs = ((sp.name, (), sp.pos) for sp in spreads)
+            case _:
+                continue
+        for name, args, pos in refs:
+            if (to := d.unit.scope.get(name)) is not None:
+                yield to, args, pos
+
+
+def _components(nodes: Sequence[_Def], edges: Callable[[_Def], Sequence[_Def]]) -> dict[_Def, int]:
+    """The strongly connected components of a graph: each node's number (Tarjan's algorithm, without recursion)."""
+    index: dict[_Def, int] = {}
+    low: dict[_Def, int] = {}
+    component: dict[_Def, int] = {}
+    stack: list[_Def] = []
+    work: list[tuple[_Def, Iterator[_Def]]] = []
+
+    def visit(n: _Def) -> None:
+        index[n] = low[n] = len(index)
+        stack.append(n)
+        work.append((n, iter(edges(n))))
+
+    count = 0
+    for start in nodes:
+        if start in index:
+            continue
+        visit(start)
+        while work:
+            n, out = work[-1]
+            if (m := next(out, None)) is not None:
+                if m not in index:
+                    visit(m)
+                elif m not in component:
+                    low[n] = min(low[n], index[m])
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[n])
+            if low[n] == index[n]:
+                while True:
+                    m = stack.pop()
+                    component[m] = count
+                    if m is n:
+                        break
+                count += 1
+    return component
+
+
+def _check_groups(defs: Sequence[_Def]) -> None:
+    """§9.10, through other definitions: in a group of definitions that refer to each other, directly or not
+    (a strongly connected component of the references), a reference to another member passes only parameters
+    of the referring definition, so instances can't grow around the group. Checked on the definitions as
+    written, before anything is instantiated. (A reference to itself passes its own parameters in order,
+    checked before.)
+    """
+    refs = {d: list(_refs_of(d)) for d in defs}
+    targets = {d: [to for to, _, _ in refs[d]] for d in defs}
+    group = _components(defs, lambda d: targets.get(d, []))
+    for d in defs:
+        for to, args, pos in refs[d]:
+            if to is d or group.get(to) != group[d] or all(isinstance(a, _Var) for a in args):
+                continue
+            name = d.decl.name
+            may = (
+                f"may pass it only its own parameters ({' '.join(d.params)})"
+                if d.params
+                else "has no parameters to pass it"
+            )
+            d.unit.fail(
+                "growing-recursion",
+                f"{name} refers to {to.decl.name}, which refers back to {name}: {name} {may}; "
+                "other arguments could grow without bound",
+                pos,
+            )
+
+
 class _Checker:
     """Loads every file, then evaluates every definition: the rules of spec §13.3 and §14."""
 
@@ -1118,6 +1185,10 @@ class _Checker:
         self.packages: dict[str, tuple[str, str]] = {}
         """The key and version of the package with each name: one schema reaches one package per name."""
         self.instances: dict[str, Instance] = {}
+        self.instance_ids: dict[Instance, int] = {}
+        self.shapes: dict[str, str] = {}
+        self.shape_of: dict[int, tuple[Type, str]] = {}
+        """The key of each record and variant object, by its id (the object kept, so the id stays its own)."""
         self.def_of: dict[Instance, _Def] = {}
         self.queue: list[tuple[Instance, _Def]] = []
         self.pending_streams: list[tuple[Instance, int, _Unit]] = []
@@ -1316,7 +1387,7 @@ class _Checker:
         return d.decl.name if d.unit.root else self.definition_of(d).id
 
     def instance(self, d: _Def, args: tuple[Type, ...], pos: int) -> Instance:
-        key = self.name_key(d) if not args else f"{self.name_key(d)}({','.join(map(_key_of, args))})"
+        key = self.name_key(d) if not args else f"{self.name_key(d)}({','.join(map(self.key_of, args))})"
         if (inst := self.instances.get(key)) is not None:
             return inst
         if len(self.instances) >= _MAX_INSTANCES:
@@ -1326,6 +1397,7 @@ class _Checker:
                 pos,
             )
         inst = Instance(self.definition_of(d), args, key)
+        self.instance_ids[inst] = len(self.instances)
         self.instances[key] = inst
         self.def_of[inst] = d
         self.queue.append((inst, d))
@@ -1546,12 +1618,65 @@ class _Checker:
                 self.fail(code, f"{what} {name} appears twice" + (f" ({where})" if where else ""), pos)
             seen[name] = origin
 
+    # ── keys of instances ──
+    # Keys never hold the whole of their arguments, which can grow exponentially with legitimate
+    # nesting (`P a a` inside `P a a` …): an instance is keyed by its number, a record or variant by
+    # the number of its shape, so a key is as long as one type expression. Each object is keyed once.
+
+    def key_of(self, t: Type) -> str:
+        """A key for a type, to share instances of generic types."""
+        match t:
+            case BuiltinType(name) | StdType(name):
+                return name
+            case ParamType(name):
+                return f"'{name}"
+            case ArrayType(item):
+                return f"Array({self.key_of(item)})"
+            case MapType(value):
+                return f"Map({self.key_of(value)})"
+            case MaybeType(item):
+                return f"Maybe({self.key_of(item)})"
+            case SecretType(item):
+                return f"Secret({self.key_of(item)})"
+            case RefType(inst):
+                return f"#{self.instance_ids[inst]}"
+            case RecordType() | VariantType():
+                if (known := self.shape_of.get(id(t))) is not None:
+                    return known[1]
+                shape = self.shape(t)
+                key = self.shapes.setdefault(shape, f"~{len(self.shapes)}")
+                self.shape_of[id(t)] = (t, key)
+                return key
+
+    def shape(self, t: RecordType | VariantType) -> str:
+        match t:
+            case RecordType(fields, closed):
+                inner = ",".join(
+                    f"{json.dumps(f.key)}{'?' if f.optional else ''}:{self.key_of(f.type)}" for f in fields
+                )
+                return "{" + ("|" if closed else "") + inner + "}"
+            case VariantType(cases, open_):
+                return (
+                    "<" + "|".join(c.tag + self.payload_key(c.payload) for c in cases) + ("|_" if open_ else "") + ">"
+                )
+
+    def payload_key(self, p: Payload) -> str:
+        match p:
+            case NoPayload():
+                return ""
+            case RecordPayload(record):
+                return "{" + self.key_of(record) + "}"
+            case PositionalPayload(items, parameter):
+                # A parameter's case writes other JSON than a record case by name: keep them apart.
+                return ("(^" if parameter else "(") + ",".join(map(self.key_of, items)) + ")"
+
     # ── the whole check ──
 
     def check(self, text: str, key: str | None, id: str | None) -> SchemaFile:
         root = self.load(text, key, id, _fail_in(text), root=True)
         for d in self.all_defs:
             self.check_params(d)
+        _check_groups(self.all_defs)
         # Evaluate every definition of every file (templates for generic ones), so all errors surface.
         templates: dict[_Def, Instance] = {}
         for d in self.all_defs:
@@ -1580,41 +1705,6 @@ class _Checker:
         located = ((w, HausSyntaxError.at(text, w.pos, w.kind, w.message)) for w in sorted(raw, key=lambda w: w.pos))
         warnings = tuple(SchemaWarning(w.kind, w.message, at.offset, w.end, at.line, at.column) for w, at in located)
         return SchemaFile(definitions, dict(root.std), imported, id, warnings, instances)
-
-
-def _key_of(t: Type) -> str:
-    """A key for a type, to share instances of generic types."""
-    match t:
-        case BuiltinType(name) | StdType(name):
-            return name
-        case ParamType(name):
-            return f"'{name}"
-        case ArrayType(item):
-            return f"Array({_key_of(item)})"
-        case MapType(value):
-            return f"Map({_key_of(value)})"
-        case MaybeType(item):
-            return f"Maybe({_key_of(item)})"
-        case SecretType(item):
-            return f"Secret({_key_of(item)})"
-        case RefType(inst):
-            return inst.key
-        case RecordType(fields, closed):
-            inner = ",".join(f"{json.dumps(f.key)}{'?' if f.optional else ''}:{_key_of(f.type)}" for f in fields)
-            return "{" + ("|" if closed else "") + inner + "}"
-        case VariantType(cases, open_):
-            return "<" + "|".join(c.tag + _payload_key(c.payload) for c in cases) + ("|_" if open_ else "") + ">"
-
-
-def _payload_key(p: Payload) -> str:
-    match p:
-        case NoPayload():
-            return ""
-        case RecordPayload(record):
-            return _key_of(record)
-        case PositionalPayload(items, parameter):
-            # A parameter's case writes other JSON than a record case by name: keep them apart.
-            return ("(^" if parameter else "(") + ",".join(map(_key_of, items)) + ")"
 
 
 def _in_order(own: Sequence[_T], spreads: Sequence[_Spread], spread: Callable[[_Spread], list[_T]]) -> list[_T]:

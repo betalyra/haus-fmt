@@ -237,9 +237,8 @@ impl FileCache {
     /// packages at its real path. `missing` says why a missing one is missing.
     pub(crate) fn schema(&mut self, path: &Path, kind: Kind, missing: impl FnOnce() -> String) -> Result<String> {
         match self.open(path, kind) {
-            Opened::Read(bytes) => {
-                String::from_utf8(bytes.to_vec()).map_err(|_| not_found(format!("{} is not UTF-8 text", shown(path))))
-            }
+            Opened::Read(bytes) => String::from_utf8(bytes.to_vec())
+                .map_err(|_| Error::new(ErrorCode::InvalidUtf8, format!("{} is not UTF-8 text", shown(path)))),
             Opened::Missing => Err(not_found(missing())),
             Opened::NotRegular if kind == Kind::PackageSchema => {
                 let reason = format!("{} is a symbolic link or not a regular file; it is not read", shown(path));

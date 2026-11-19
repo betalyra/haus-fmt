@@ -4,6 +4,7 @@
 //! is deprecated. Decoding never looks at that.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// A built-in type of the prelude without parameters (spec §13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,9 +90,11 @@ pub enum Type {
     Maybe(Box<Type>),
     /// `Secret a`: the same data as `a`, never shown (spec §15).
     Secret(Box<Type>),
-    Record(Record),
-    /// Also `Result e a`, as `closed < Err e | Ok a >`.
-    Variant(Variant),
+    /// Shared: an argument used twice is not copied (`P a a` inside `P a a` …
+    /// would otherwise double at every level).
+    Record(Arc<Record>),
+    /// Also `Result e a`, as `closed < Err e | Ok a >`. Shared, as records are.
+    Variant(Arc<Variant>),
     /// A named type: `Comment`, `List Int`. Recursive types refer to themselves this way.
     Ref(InstanceId),
     /// A type parameter, only in the template of a generic type.

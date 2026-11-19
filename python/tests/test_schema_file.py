@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 import pytest
 
@@ -23,6 +26,8 @@ from haus.schema import (
     load_schema,
     parse_schema_file,
 )
+
+_R = TypeVar("_R")
 
 
 def rejects(text: str, reason: str, **kwargs: object) -> HausSchemaFileError:
@@ -90,9 +95,119 @@ def test_rejects(text: str, reason: str) -> None:
     rejects(text, reason)
 
 
+@pytest.mark.parametrize(
+    ("text", "code", "at"),
+    [
+        ('type A = { "x: Int }', "unterminated-string", (1, 12)),
+        ("type A = Int /* never closed", "unterminated-comment", (1, 14)),
+        ("type A = Int\rtype B = Int", "lone-carriage-return", (1, 13)),
+        ("// a\rb\ntype A = Int", "lone-carriage-return", (1, 5)),
+        ("// a\x07b\ntype A = Int", "control-character", (1, 5)),
+        ("/* a\x7fb */ type A = Int", "control-character", (1, 5)),
+        ("// a\x85b\ntype A = Int", "control-character", (1, 5)),
+        ("// access\u202e denied\ntype A = Int", "bidi-control", (1, 10)),
+        ('type A = { "a\u2066b": Int }', "bidi-control", (1, 14)),
+        ('type A = { "a\x07b": Int }', "control-character", (1, 14)),
+        ('type A = { "a\nb": Int }', "string-line-break", (1, 14)),
+        ('type A = { "a\\x41": Int }', "invalid-escape", (1, 14)),
+        ('type A = { "a\\u{D800}": Int }', "invalid-unicode-escape", (1, 14)),
+    ],
+)
+def test_comments_whitespace_and_strings_are_those_of_data_files(text: str, code: str, at: tuple[int, int]) -> None:
+    with pytest.raises(HausSchemaFileError) as e:
+        parse_schema_file(text)
+    assert (e.value.code, (e.value.line, e.value.column)) == (code, at), e.value
+
+
+def test_quoted_keys_take_every_escape_of_data_strings() -> None:
+    s = compile_schema('type A = { "tab\\there": Int, "cr\\r": Int, "\\u{1F600}": Int, "q\\"\\\\": Int }')
+    assert s["A"].parse('{ "tab\\there": 1, "cr\\r": 2, "😀": 3, "q\\"\\\\": 4 }') == {
+        "tab\there": 1,
+        "cr\r": 2,
+        "😀": 3,
+        'q"\\': 4,
+    }
+
+
+def test_a_schema_file_that_is_not_utf8(tmp_path: Path) -> None:
+    path = tmp_path / "a.schema.haus"
+    path.write_bytes(b"// \xff\ntype A = Int\n")
+    with pytest.raises(HausSchemaFileError) as e:
+        load_schema(path)
+    assert e.value.code == "invalid-utf8"
+
+
 def test_error_positions() -> None:
     e = rejects("type A = Int\n\ntype B = { x: Nope }", "unknown type Nope")
     assert (e.line, e.column) == (3, 15)
+
+
+def _quickly(f: Callable[[], _R], seconds: float = 1.0) -> _R:
+    start = time.perf_counter()
+    out = f()
+    assert time.perf_counter() - start < seconds
+    return out
+
+
+def test_instances_that_double_through_another_definition_are_rejected_before_any_is_made() -> None:
+    text = "\n".join(
+        [
+            "type P a b = { l: a, r: b }",
+            "type A a = < X (B (P a a)) | Done >",
+            "type B a = < Y (A (P a a)) | Stop >",
+            "type Root = A Int",
+        ]
+    )
+    e = _quickly(lambda: rejects(text, "A refers to B, which refers back to A"))
+    assert (e.code, e.line, e.column) == ("growing-recursion", 2, 17)
+
+
+def test_growing_recursion_through_three_definitions() -> None:
+    text = "\n".join(
+        [
+            "type P a b = { l: a, r: b }",
+            "type A a = < X (B a) | Done >",
+            "type B a = < Y (C a) | Stop >",
+            "type C a = < Z (A (P a a)) | End >",
+            "type Root = A Int",
+        ]
+    )
+    e = _quickly(lambda: rejects(text, "C refers to A, which refers back to C"))
+    assert (e.code, e.line, e.column) == ("growing-recursion", 4, 17)
+
+
+def test_definitions_that_refer_to_each_other_with_their_own_parameters() -> None:
+    s = compile_schema("""
+        type GTree a = { value: a, kids: Forest a }
+        type Forest a = Array (GTree a)
+        type Swap a b = < S (Pair b a) | E >
+        type Pair a b = { p: Swap a b, q: Swap b a }
+        type Root = GTree (Pair Int String)
+    """)
+    assert s["Root"].parse("{ value: { p: E, q: E }, kids: [] }") == {
+        "value": {"p": Tagged("E"), "q": Tagged("E")},
+        "kids": (),
+    }
+
+
+def _chain(step: str, levels: int = 30) -> str:
+    """Non-recursive generics, each passing its argument nested in `step` to the one before: 30 levels deep."""
+    defs = ["type G0 a = { v: a }", *(f"type G{k} a = G{k - 1} ({step})" for k in range(1, levels))]
+    return "\n".join([*defs, f"type Root = G{levels - 1} Int"])
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "type P a b = { l: a, r: b }\n" + _chain("P a a"),
+        _chain("{ l: a, r: a }"),
+        _chain("< L a | R a >"),
+        "type P a b = { l: a, r: b }\ntype Root = " + "P (" * 30 + "P Int Int" + ") Int" * 30,
+    ],
+)
+def test_arguments_nested_30_levels_deep_compile_quickly(text: str) -> None:
+    s = _quickly(lambda: compile_schema(text))
+    assert "Root" in s.types
 
 
 def test_spreads_keep_order_and_their_own_openness() -> None:

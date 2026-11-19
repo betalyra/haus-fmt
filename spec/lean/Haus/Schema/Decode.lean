@@ -107,12 +107,20 @@ structure Error where
   code : Option Code := none
   deriving Repr
 
-/-- The place as `$.items[2].price`; a variant's argument as `.Tag(0)`. -/
+/-- One step of a place (§15, "General rules"). -/
+def Seg.text : Seg → String
+  | .key k => if Canonical.isIdent k then "." ++ k else "[" ++ String.ofList (Canonical.string k) ++ "]"
+  | .index i => s!"[{i}]"
+  | .arg _ i => s!"[{i}]"
+
+/--
+The place as §15 writes it: `$`, then `.key` for an identifier key and
+`["…"]` for any other (the key as a canonical string), `[i]` for an item of
+an array and for an argument of a variant (`$[0]` for `Date("2026-02-30")`).
+The fields of a record case are steps from the case itself (`$.shape.r`).
+-/
 def Error.place (e : Error) : String :=
-  e.path.foldl (fun s seg => s ++ match seg with
-    | .key k => if Canonical.isIdent k then "." ++ k else "[" ++ String.ofList (Canonical.string k) ++ "]"
-    | .index i => s!"[{i}]"
-    | .arg tag i => s!".{tag}({i})") "$"
+  e.path.foldl (fun s seg => s ++ seg.text) "$"
 
 /-- An error from inside a part of the value. -/
 def under {α : Type} (s : Seg) : Except Error α → Except Error α
@@ -264,8 +272,9 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
       match caseOf? env cases tag, args with
       | some (.bare _), [] => .ok (.case tag [])
       -- One argument that is a record: anything else, `Circle(1.5)` too, is the wrong payload.
+      -- Its fields are steps from the case itself, without a step for the payload (§15).
       | some (.record _ cl fields), [.record fs] =>
-        under (.arg tag 0) ((decode env (.record cl fields) (.record fs)).map fun x => .case tag [x])
+        (decode env (.record cl fields) (.record fs)).map fun x => .case tag [x]
       | some (.positional _ ts), args =>
         if args.length = ts.length then (decodeArgs env tag 0 ts args).map (.case tag)
         else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
@@ -311,6 +320,14 @@ def decodeArgs (env : Env) (tag : String) (i : Nat) : List Ty → List Value →
     return y :: ys
   | _, _ => .ok []
 end
+
+/--
+**A stream** (§6, §15): each item decoded with the type, in order; the first
+error, its place starting with the item's index (`$[3].price`,
+`decodeStream_error`).
+-/
+def decodeStream (env : Env) (t : Ty) (items : List Value) : Except Error (List Typed) :=
+  decodeItems env t 0 items
 
 /-- The schema's attributes are not read: decoding is the same without them (§15). -/
 theorem Schema.decode_erase (s : Schema) : decode s.erase.env = decode s.env := rfl

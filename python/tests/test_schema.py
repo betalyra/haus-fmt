@@ -14,6 +14,7 @@ import pytest
 import haus
 from haus import Array, Bytes, Limits, Number, Record, String, Variant
 from haus.schema import (
+    CodecGroup,
     DateCodec,
     DecimalCodec,
     HausDecodeError,
@@ -26,6 +27,7 @@ from haus.schema import (
     Tagged,
     Unknown,
     compile_schema,
+    format_path,
 )
 
 SCHEMA = compile_schema("""
@@ -382,6 +384,26 @@ def test_streams_decode_each_value_with_its_index() -> None:
     assert "".join(t.encode_all([Tagged("Empty"), Tagged("Circle", {"r": 1.0})])) == "Empty,\nCircle{r:1},\n"
 
 
+def test_an_error_in_stream_item_3_is_at_its_index_then_its_place() -> None:
+    """Spec §15: in a stream, the path of an error in an item starts with the item's index."""
+    t = compile_schema("type Item = { price: Float64, sizes: Array Int32 }")["Item"]
+    items = "{ price: 1, sizes: [] }," * 3 + ' { price: 2, sizes: [1, "x"] },'
+    with pytest.raises(HausDecodeError) as e:
+        list(t.parse_stream([items]))
+    assert (e.value.code, format_path(e.value.path)) == ("type-mismatch", "$[3].sizes[1]")
+    with pytest.raises(HausDecodeError) as e:
+        list(t.decode_all(haus.parse_all(items)))
+    assert (e.value.code, format_path(e.value.path)) == ("type-mismatch", "$[3].sizes[1]")
+    lines = '{"price":1,"sizes":[]}\n' * 3 + '{"price":"2","sizes":[]}\n'
+    with pytest.raises(HausDecodeError) as e:
+        list(t.from_json_lines(lines))
+    assert (e.value.code, format_path(e.value.path)) == ("type-mismatch", "$[3].price")
+    item: dict[str, object] = {"price": 1.0, "sizes": []}
+    with pytest.raises(HausEncodeError) as f:
+        list(t.encode_all([item, item, item, {"price": 1.0, "sizes": [0.5]}]))
+    assert (f.value.code, format_path(f.value.path)) == ("cannot-encode", "$[3].sizes[0]")
+
+
 def test_codecs_are_opt_in_host_types() -> None:
     text = "import std/time (Date, Instant)\ntype T = { d: Date, at: Instant, amount: Decimal }"
     s = compile_schema(
@@ -400,6 +422,24 @@ def test_codecs_are_opt_in_host_types() -> None:
         s["T"].encode({"d": "2026-11-13", "at": t["at"], "amount": Decimal(1)})
     with pytest.raises(ValueError, match="no such type"):
         compile_schema(text, codecs={"std/time#Duration": DateCodec()})
+
+
+def test_codec_groups_may_have_members_the_schema_lacks() -> None:
+    text = "import std/time (Date)\ntype T = { d: Date }"
+    group = CodecGroup({"std/time#Date": DateCodec(), "std/time#Instant": InstantCodec()})
+    assert compile_schema(text, codecs=group)["T"].parse('{ d: Date("2026-11-13") }') == {"d": dt.date(2026, 11, 13)}
+    # Combined with `|`: a plain mapping's members stay checked, a group's don't.
+    decimal = CodecGroup({"prelude#Decimal": DecimalCodec()})
+    both = group | decimal
+    assert isinstance(both, CodecGroup)
+    assert dict(both).keys() == {"std/time#Date", "std/time#Instant", "prelude#Decimal"}
+    assert compile_schema(text, codecs=both)["T"].parse('{ d: Date("2026-11-13") }') == {"d": dt.date(2026, 11, 13)}
+    with pytest.raises(ValueError, match="no such type"):
+        compile_schema(text, codecs=group | {"prelude#Decimal": DecimalCodec()})
+    with pytest.raises(ValueError, match="no such type"):
+        compile_schema(text, codecs={"prelude#Decimal": DecimalCodec()} | group)
+    with pytest.raises(ValueError, match="two codecs for std/time#Date"):
+        _ = group | {"std/time#Date": DateCodec()}
 
 
 # ── record cases (spec §15, §16.3) ───────────────────────────

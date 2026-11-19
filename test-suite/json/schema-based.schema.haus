@@ -46,3 +46,5 @@ type InnerRec = Inner BoxRec
 type MyMaybe a = closed < None | Some a >
 type Mine = MyMaybe Int32
 type OptLoop = Maybe Loop
+// a variant written in place inside the prelude Maybe is not itself the prelude Maybe: its None is a tag, not null
+type InPlace = Maybe (closed < None | Some Int32 >)

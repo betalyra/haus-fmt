@@ -107,7 +107,7 @@ theorem decode_sound_all (env : Env) :
       next hc => cases hy; exact .bare hc
       next hc =>
         simp only [hc] at ih
-        obtain ⟨y, h1, rfl⟩ := map_ok.mp (under_ok.mp hy)
+        obtain ⟨y, h1, rfl⟩ := map_ok.mp hy
         exact .recordCase hc (ih y h1)
       next hc =>
         simp only [hc] at ih
@@ -222,7 +222,7 @@ theorem Core.decode {env : Env} {c t : Ty} {s : Nat} {v : Value} {x : Typed} :
   | .recordCase hc hd, hw => by
     have h := hd.decode
     obtain ⟨fs, rfl⟩ := hd.record_value
-    rw [decode, hw]; exact hidden_of (by simp [hc, h, Except.map, under])
+    rw [decode, hw]; exact hidden_of (by simp [hc, h, Except.map])
   | .positional hc ha, hw => by
     rw [decode, hw]; exact hidden_of (by simp [hc, ha.length_eq, ha.decode 0, Except.map])
   | .unknown hc, hw => by rw [decode, hw]; exact hidden_of (by simp [hc])
@@ -254,5 +254,45 @@ end
 /-- **The decoder computes the rules** of §15: it accepts `v` with `x` exactly when they say so. -/
 theorem decode_iff {env : Env} {t : Ty} {v : Value} {x : Typed} : decode env t v = .ok x ↔ Dec env t v x :=
   ⟨decode_sound, Dec.decode⟩
+
+/-! ## Places in a stream -/
+
+/-- An error of `decodeItems` from `i` on is the error of one item, under its index. -/
+theorem decodeItems_error {env : Env} {t : Ty} {e : Error} :
+    ∀ {i : Nat} {vs : List Value}, decodeItems env t i vs = .error e →
+      ∃ j v e', vs[j]? = some v ∧ decode env t v = .error e' ∧ e = { e' with path := .index (i + j) :: e'.path }
+  | _, [], h => by simp [decodeItems] at h
+  | i, x :: xs, h => by
+    cases hx : decode env t x with
+    | error e' =>
+      simp [decodeItems, hx, under, bind, Except.bind] at h
+      exact ⟨0, x, e', rfl, hx, by simp [h]⟩
+    | ok y =>
+      cases hs : decodeItems env t (i + 1) xs with
+      | error e2 =>
+        simp [decodeItems, hx, hs, under, bind, Except.bind] at h
+        obtain ⟨j, v, e', hj, hv, he⟩ := decodeItems_error hs
+        exact ⟨j + 1, v, e', by simpa using hj, hv, by rw [← h, he]; simp [Nat.add_assoc, Nat.add_comm 1]⟩
+      | ok ys => simp [decodeItems, hx, hs, under, bind, Except.bind, pure, Except.pure] at h
+
+/--
+**Streams** (§15, "General rules"): an error decoding a stream is the error
+of one of its items, `j`, with the item's index as the first step of its
+place: `$[3].price` for `$.price` in the item `[3]`. Code and reason are the item's.
+-/
+theorem decodeStream_error {env : Env} {t : Ty} {vs : List Value} {e : Error}
+    (h : decodeStream env t vs = .error e) :
+    ∃ j v e', vs[j]? = some v ∧ decode env t v = .error e' ∧
+      e.path = .index j :: e'.path ∧ e.code = e'.code ∧ e.reason = e'.reason := by
+  obtain ⟨j, v, e', hj, hv, rfl⟩ := decodeItems_error h
+  exact ⟨j, v, e', hj, hv, by simp, rfl, rfl⟩
+
+/-- A stream of offers, the one at index 3 with a price that is a string: the error is at `$[3].price`. -/
+example :
+    (match decodeStream ⟨[("Offer", .record false [.mk "price" false (.int .int)])]⟩ (.ref "Offer")
+      [.record [("price", .num "1")], .record [("price", .num "2")], .record [("price", .num "3")],
+       .record [("price", .str "4")]] with
+      | .error e => some e.place
+      | .ok _ => none) = some "$[3].price" := by decide
 
 end Haus.Schema

@@ -247,6 +247,15 @@ class Parser:
         self.pos = pos
         return self._value(), self.pos
 
+    def trivia_end(self, pos: int) -> int:
+        """Whitespace and comments from `pos`, as between values: the position after them.
+
+        Schema files have the same (spec §14); a `/` that starts no comment is left for the caller.
+        """
+        self.pos = pos
+        self._skip_space()
+        return self.pos
+
     def number_literal(self) -> str | None:
         """The normalized literal if the whole text is one number literal within the limits, else None."""
         if self._peek() not in _NUMBER_START:
@@ -607,6 +616,12 @@ class Parser:
     # ── trivia ─────────────────────────────────────────────────
 
     def _skip_trivia(self) -> None:
+        self._skip_space()
+        if self.src.startswith("/", self.pos):
+            self._fail("stray-slash", "unexpected '/' (comments are // or /* */)")
+
+    def _skip_space(self) -> None:
+        """Whitespace and comments, up to anything else (a `/` that starts no comment included)."""
         src = self.src
         while True:
             self.pos = _run(_WHITESPACE, src, self.pos).end()
@@ -627,7 +642,7 @@ class Parser:
                         "lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)"
                     )
                 case _:
-                    self._fail("stray-slash", "unexpected '/' (comments are // or /* */)")
+                    return
 
     def _skip_block_comment(self) -> None:
         """`/* … */`, which nest."""

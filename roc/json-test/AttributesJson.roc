@@ -18,16 +18,19 @@ AttributesJson := [].{
 	Client : { id : Int, mail : [Missing, Present(Str)], email : [Missing, Present(Str)] }
 
 	decode_client : Value -> Try(Client, Decode.Error)
-	decode_client = |v| {
+	decode_client = |v| Decode.within_depth(v, read_value_client)
+
+	read_value_client : Value -> Try(Client, Decode.Error)
+	read_value_client = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ id: Decode.field(fs, "id", Decode.int)?, mail: Decode.optional_field(fs, "mail", Decode.str)?, email: Decode.optional_field(fs, "email", Decode.str)? })
 	}
 
-	encode_client : Client -> Value
-	encode_client = |v| Encode.record([("id", Present(Encode.int(v.id))), ("mail", Encode.optional(v.mail, Encode.str)), ("email", Encode.optional(v.email, Encode.str))])
+	encode_client : Client, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_client = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("mail", Encode.optional(v.mail, Encode.str)), ("email", Encode.optional(v.email, Encode.str))])
 
 	from_json_client : JsonValue -> Try(Client, Decode.Error)
-	from_json_client = |j| FromJson.within_depth(read_json_client(j), encode_client)
+	from_json_client = |j| FromJson.within_depth(j, read_json_client, encode_client)
 
 	read_json_client : JsonValue -> Try(Client, Decode.Error)
 	read_json_client = |j| {
@@ -35,8 +38,8 @@ AttributesJson := [].{
 		Ok({ id: FromJson.field(fs, "id", FromJson.int)?, mail: FromJson.optional_field(fs, "mail", FromJson.str)?, email: FromJson.optional_field(fs, "email", FromJson.str)? })
 	}
 
-	to_json_client : Client -> Try(JsonValue, Encode.Error)
-	to_json_client = |v| ToJson.object([("id", Present(ToJson.int(v.id))), ("mail", ToJson.optional(v.mail, ToJson.str)), ("email", ToJson.optional(v.email, ToJson.str))])
+	to_json_client : Client, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_client = |v, e| ToJson.object(e, [("id", ToJson.required(v.id, ToJson.int)), ("mail", ToJson.optional(v.mail, ToJson.str)), ("email", ToJson.optional(v.email, ToJson.str))])
 
 	## haus type `attributes#Shape`.
 	##
@@ -45,7 +48,10 @@ AttributesJson := [].{
 	Shape := [Circle({ r : F64 }), Square({ side : F64 }), Dot]
 
 	decode_shape : Value -> Try(Shape, Decode.Error)
-	decode_shape = |v| match v {
+	decode_shape = |v| Decode.within_depth(v, read_value_shape)
+
+	read_value_shape : Value -> Try(Shape, Decode.Error)
+	read_value_shape = |v| match v {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -68,15 +74,15 @@ AttributesJson := [].{
 		_ => Decode.expected("a variant (Shape)", v)
 	}
 
-	encode_shape : Shape -> Value
-	encode_shape = |v| match v {
-		Circle(r) => Tag("Circle", [Encode.record([("r", Present(Encode.f64(r.r)))])])
-		Square(r) => Tag("Square", [Encode.record([("side", Present(Encode.f64(r.side)))])])
-		Dot => Tag("Dot", [])
+	encode_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_shape = |v, e| match v {
+		Circle(r) => Encode.tagged_record("Circle", e, [("r", Encode.required(r.r, Encode.f64))])
+		Square(r) => Encode.tagged_record("Square", e, [("side", Encode.required(r.side, Encode.f64))])
+		Dot => Encode.tag("Dot", e)
 	}
 
 	from_json_shape : JsonValue -> Try(Shape, Decode.Error)
-	from_json_shape = |j| FromJson.within_depth(read_json_shape(j), encode_shape)
+	from_json_shape = |j| FromJson.within_depth(j, read_json_shape, encode_shape)
 
 	read_json_shape : JsonValue -> Try(Shape, Decode.Error)
 	read_json_shape = |j| {
@@ -96,11 +102,11 @@ AttributesJson := [].{
 		}
 	}
 
-	to_json_shape : Shape -> Try(JsonValue, Encode.Error)
-	to_json_shape = |v| match v {
-		Circle(r) => ToJson.tagged_object("Circle", [("r", Present(ToJson.f64(r.r)))])
-		Square(r) => ToJson.tagged_object("Square", [("side", Present(ToJson.f64(r.side)))])
-		Dot => ToJson.tagged("Dot", [])
+	to_json_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_shape = |v, e| match v {
+		Circle(r) => ToJson.tagged_object("Circle", e, [("r", ToJson.required(r.r, ToJson.f64))])
+		Square(r) => ToJson.tagged_object("Square", e, [("side", ToJson.required(r.side, ToJson.f64))])
+		Dot => ToJson.tag("Dot", e)
 	}
 
 	## An attribute this version doesn't define is accepted and ignored.
@@ -111,16 +117,19 @@ AttributesJson := [].{
 	Later : { n : Int, m : [Missing, Present(Int)] }
 
 	decode_later : Value -> Try(Later, Decode.Error)
-	decode_later = |v| {
+	decode_later = |v| Decode.within_depth(v, read_value_later)
+
+	read_value_later : Value -> Try(Later, Decode.Error)
+	read_value_later = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ n: Decode.field(fs, "n", Decode.int)?, m: Decode.optional_field(fs, "m", Decode.int)? })
 	}
 
-	encode_later : Later -> Value
-	encode_later = |v| Encode.record([("n", Present(Encode.int(v.n))), ("m", Encode.optional(v.m, Encode.int))])
+	encode_later : Later, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_later = |v, e| Encode.record(e, [("n", Encode.required(v.n, Encode.int)), ("m", Encode.optional(v.m, Encode.int))])
 
 	from_json_later : JsonValue -> Try(Later, Decode.Error)
-	from_json_later = |j| FromJson.within_depth(read_json_later(j), encode_later)
+	from_json_later = |j| FromJson.within_depth(j, read_json_later, encode_later)
 
 	read_json_later : JsonValue -> Try(Later, Decode.Error)
 	read_json_later = |j| {
@@ -128,23 +137,26 @@ AttributesJson := [].{
 		Ok({ n: FromJson.field(fs, "n", FromJson.int)?, m: FromJson.optional_field(fs, "m", FromJson.int)? })
 	}
 
-	to_json_later : Later -> Try(JsonValue, Encode.Error)
-	to_json_later = |v| ToJson.object([("n", Present(ToJson.int(v.n))), ("m", ToJson.optional(v.m, ToJson.int))])
+	to_json_later : Later, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_later = |v, e| ToJson.object(e, [("n", ToJson.required(v.n, ToJson.int)), ("m", ToJson.optional(v.m, ToJson.int))])
 
 	## haus type `attributes#Uses`.
 	Uses : { client : Client, shape : Shape }
 
 	decode_uses : Value -> Try(Uses, Decode.Error)
-	decode_uses = |v| {
+	decode_uses = |v| Decode.within_depth(v, read_value_uses)
+
+	read_value_uses : Value -> Try(Uses, Decode.Error)
+	read_value_uses = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ client: Decode.field(fs, "client", decode_client)?, shape: Decode.field(fs, "shape", decode_shape)? })
+		Ok({ client: Decode.field(fs, "client", read_value_client)?, shape: Decode.field(fs, "shape", read_value_shape)? })
 	}
 
-	encode_uses : Uses -> Value
-	encode_uses = |v| Encode.record([("client", Present(encode_client(v.client))), ("shape", Present(encode_shape(v.shape)))])
+	encode_uses : Uses, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_uses = |v, e| Encode.record(e, [("client", Encode.required(v.client, encode_client)), ("shape", Encode.required(v.shape, encode_shape))])
 
 	from_json_uses : JsonValue -> Try(Uses, Decode.Error)
-	from_json_uses = |j| FromJson.within_depth(read_json_uses(j), encode_uses)
+	from_json_uses = |j| FromJson.within_depth(j, read_json_uses, encode_uses)
 
 	read_json_uses : JsonValue -> Try(Uses, Decode.Error)
 	read_json_uses = |j| {
@@ -152,7 +164,7 @@ AttributesJson := [].{
 		Ok({ client: FromJson.field(fs, "client", read_json_client)?, shape: FromJson.field(fs, "shape", read_json_shape)? })
 	}
 
-	to_json_uses : Uses -> Try(JsonValue, Encode.Error)
-	to_json_uses = |v| ToJson.object([("client", Present(to_json_client(v.client))), ("shape", Present(to_json_shape(v.shape)))])
+	to_json_uses : Uses, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_uses = |v, e| ToJson.object(e, [("client", ToJson.required(v.client, to_json_client)), ("shape", ToJson.required(v.shape, to_json_shape))])
 
 }

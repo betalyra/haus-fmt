@@ -4,9 +4,12 @@ packages:
   - demos
   - ../extensions/*
   - ../examples
+  - ../editors/tree-sitter-haus
 
 allowBuilds:
   esbuild: true
+  # downloads the tree-sitter CLI binary for the grammar package
+  tree-sitter-cli: true
 
 # @effect/platform-node 4.0.6 accepts any platform-node-shared 4.x, but 4.1 needs effect 4.1.
 minimumReleaseAgeExclude:

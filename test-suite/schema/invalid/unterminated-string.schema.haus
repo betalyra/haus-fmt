@@ -1,0 +1,2 @@
+// A quoted field key that is never closed, as in data files (spec §14, §4).
+type A = { "x: Int }

@@ -12,50 +12,80 @@ Records := [].{
 	User : { id : Int, name : Str, nick : [Missing, Present(Str)], note : [Missing, Present([None, Some(Str)])] }
 
 	decode_user : Value -> Try(User, Decode.Error)
-	decode_user = |v| {
+	decode_user = |v| Decode.within_depth(v, read_value_user)
+
+	read_value_user : Value -> Try(User, Decode.Error)
+	read_value_user = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ id: Decode.field(fs, "id", Decode.int)?, name: Decode.field(fs, "name", Decode.str)?, nick: Decode.optional_field(fs, "nick", Decode.str)?, note: Decode.optional_field(fs, "note", |x1| Decode.maybe(x1, Decode.str))? })
 	}
 
-	encode_user : User -> Value
-	encode_user = |v| Encode.record([("id", Present(Encode.int(v.id))), ("name", Present(Encode.str(v.name))), ("nick", Encode.optional(v.nick, Encode.str)), ("note", Encode.optional(v.note, |x2| Encode.maybe(x2, Encode.str)))])
+	encode_user : User, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_user = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("name", Encode.required(v.name, Encode.str)), ("nick", Encode.optional(v.nick, Encode.str)), ("note", Encode.optional(v.note, |x2, e2| Encode.maybe(x2, e2, Encode.str)))])
 
 	## haus type `records#Strict`.
 	Strict : { id : Int, tags : [Missing, Present(List(Str))] }
 
 	decode_strict : Value -> Try(Strict, Decode.Error)
-	decode_strict = |v| {
+	decode_strict = |v| Decode.within_depth(v, read_value_strict)
+
+	read_value_strict : Value -> Try(Strict, Decode.Error)
+	read_value_strict = |v| {
 		fs = Decode.strict_record(v)?
 		Decode.closed(fs, ["id", "tags"])?
 		Ok({ id: Decode.field(fs, "id", Decode.int)?, tags: Decode.optional_field(fs, "tags", |x3| Decode.list(x3, Decode.str))? })
 	}
 
-	encode_strict : Strict -> Value
-	encode_strict = |v| Encode.record([("id", Present(Encode.int(v.id))), ("tags", Encode.optional(v.tags, |x4| Encode.list(x4, Encode.str)))])
+	encode_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_strict = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("tags", Encode.optional(v.tags, |x4, e4| Encode.list(x4, e4, Encode.str)))])
 
 	## haus type `records#Outer`.
 	Outer : { user : User }
 
 	decode_outer : Value -> Try(Outer, Decode.Error)
-	decode_outer = |v| {
+	decode_outer = |v| Decode.within_depth(v, read_value_outer)
+
+	read_value_outer : Value -> Try(Outer, Decode.Error)
+	read_value_outer = |v| {
 		fs = Decode.strict_record(v)?
 		Decode.closed(fs, ["user"])?
-		Ok({ user: Decode.field(fs, "user", decode_user)? })
+		Ok({ user: Decode.field(fs, "user", read_value_user)? })
 	}
 
-	encode_outer : Outer -> Value
-	encode_outer = |v| Encode.record([("user", Present(encode_user(v.user)))])
+	encode_outer : Outer, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_outer = |v, e| Encode.record(e, [("user", Encode.required(v.user, encode_user))])
 
 	## haus type `records#Empty`.
 	Empty : {}
 
 	decode_empty : Value -> Try(Empty, Decode.Error)
-	decode_empty = |v| {
+	decode_empty = |v| Decode.within_depth(v, read_value_empty)
+
+	read_value_empty : Value -> Try(Empty, Decode.Error)
+	read_value_empty = |v| {
 		_fs = Decode.strict_record(v)?
 		Ok({})
 	}
 
-	encode_empty : Empty -> Value
-	encode_empty = |_v| Encode.record([])
+	encode_empty : Empty, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_empty = |_v, e| Encode.record(e, [])
+
+	## Quoted field keys take the escapes of data strings (spec §14, §4).
+	##
+	## haus type `records#Quoted`.
+	Quoted : { content_type : Str, tab_here : Int, line_break : Int, smile_ : Bool, q_ : Int }
+
+	decode_quoted : Value -> Try(Quoted, Decode.Error)
+	decode_quoted = |v| Decode.within_depth(v, read_value_quoted)
+
+	read_value_quoted : Value -> Try(Quoted, Decode.Error)
+	read_value_quoted = |v| {
+		fs = Decode.strict_record(v)?
+		Decode.closed(fs, ["content-type", "tab\there", "line\nbreak", "smile😀", "q\"\\"])?
+		Ok({ content_type: Decode.field(fs, "content-type", Decode.str)?, tab_here: Decode.field(fs, "tab\there", Decode.int)?, line_break: Decode.field(fs, "line\nbreak", Decode.int)?, smile_: Decode.field(fs, "smile😀", Decode.bool)?, q_: Decode.field(fs, "q\"\\", Decode.int)? })
+	}
+
+	encode_quoted : Quoted, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_quoted = |v, e| Encode.record(e, [("content-type", Encode.required(v.content_type, Encode.str)), ("tab\there", Encode.required(v.tab_here, Encode.int)), ("line\nbreak", Encode.required(v.line_break, Encode.int)), ("smile😀", Encode.required(v.smile_, Encode.bool)), ("q\"\\", Encode.required(v.q_, Encode.int))])
 
 }

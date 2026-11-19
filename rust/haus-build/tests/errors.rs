@@ -13,7 +13,8 @@ fn syntax() {
     assert_eq!(error("type a = String"), "1:6: expected a type name, found 'a'");
     assert_eq!(error("type A = closed [ ]"), "1:17: expected '{' or '<' after closed, found '['");
     assert_eq!(error("type A = String\n= Int"), "2:1: expected 'type' or 'import', found '='");
-    assert_eq!(error("/* never closed\ntype A = String"), "2:16: expected */ closing the comment, found end of file");
+    // Where the comment starts, as in data files (spec §14).
+    assert_eq!(error("/* never closed\ntype A = String"), "1:1: unterminated block comment");
 }
 
 #[test]
@@ -239,7 +240,30 @@ fn any_and_secret() {
     assert!(code.contains("pub key: ::haus::Secret<::std::string::String>"), "{code}");
     assert!(code.contains("pub extra: ::haus::Value"), "{code}");
     assert!(
-        code.contains("::haus::de::secret(\n                        x,\n                        \"Secret String\","),
+        code.contains("::haus::de::secret(\n                        x,\n                        __d,\n                        \"Secret String\","),
         "{code}"
     );
+}
+
+#[test]
+fn inline_types_in_a_whole_maybe_or_secret_are_named_after_the_definition() {
+    // `Maybe` and `Secret` add nothing to the name of an inline type, so as
+    // the whole type of a definition they would take the definition's own.
+    let text = "type InPlace = Maybe (closed < None | Some Int32 >)\ntype Key = Secret { id: Int }\n\
+                type Rec = { note: Maybe { text: String } }";
+    let rust = generate(text, "test/schema", &[], &Packages::none()).unwrap();
+    for part in [
+        "pub type InPlace = ::std::option::Option<InPlaceValue>;",
+        "pub enum InPlaceValue {",
+        "pub type Key = ::haus::Secret<KeyValue>;",
+        "pub struct KeyValue {",
+        // Elsewhere, the name of the place.
+        "pub note: ::std::option::Option<RecNote>,",
+    ] {
+        assert!(rust.contains(part), "{part}\n{rust}");
+    }
+    let roc = haus_build::roc::generate(text, "Schema", "test/schema", &[], &Packages::none()).unwrap();
+    for part in ["decode_in_place_item", "decode_key_value", "decode_rec_note_item"] {
+        assert!(roc.contains(part), "{part}\n{roc}");
+    }
 }

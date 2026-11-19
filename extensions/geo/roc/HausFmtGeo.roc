@@ -11,16 +11,19 @@ HausFmtGeo := [].{
 	LatLng := [LatLng(F64, F64)]
 
 	decode_lat_lng : Value -> Try(LatLng, Decode.Error)
-	decode_lat_lng = |v| match v {
+	decode_lat_lng = |v| Decode.within_depth(v, read_value_lat_lng)
+
+	read_value_lat_lng : Value -> Try(LatLng, Decode.Error)
+	read_value_lat_lng = |v| match v {
 		Tag("LatLng", [a0, a1]) => Ok(LatLng(Decode.arg("LatLng", 0, a0, Decode.f64)?, Decode.arg("LatLng", 1, a1, Decode.f64)?))
 		Tag("LatLng", _) => Decode.arity("LatLng", 2)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["LatLng"])
 		_ => Decode.expected("a variant (LatLng)", v)
 	}
 
-	encode_lat_lng : LatLng -> Value
-	encode_lat_lng = |v| match v {
-		LatLng(a0, a1) => Tag("LatLng", [Encode.f64(a0), Encode.f64(a1)])
+	encode_lat_lng : LatLng, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_lat_lng = |v, e| match v {
+		LatLng(a0, a1) => Encode.tagged_args("LatLng", e, [|e1| Encode.f64(a0, e1), |e2| Encode.f64(a1, e2)])
 	}
 
 	## A box from its south-west to its north-east corner.
@@ -29,16 +32,19 @@ HausFmtGeo := [].{
 	BBox := [BBox(LatLng, LatLng)]
 
 	decode_b_box : Value -> Try(BBox, Decode.Error)
-	decode_b_box = |v| match v {
-		Tag("BBox", [a0, a1]) => Ok(BBox(Decode.arg("BBox", 0, a0, decode_lat_lng)?, Decode.arg("BBox", 1, a1, decode_lat_lng)?))
+	decode_b_box = |v| Decode.within_depth(v, read_value_b_box)
+
+	read_value_b_box : Value -> Try(BBox, Decode.Error)
+	read_value_b_box = |v| match v {
+		Tag("BBox", [a0, a1]) => Ok(BBox(Decode.arg("BBox", 0, a0, read_value_lat_lng)?, Decode.arg("BBox", 1, a1, read_value_lat_lng)?))
 		Tag("BBox", _) => Decode.arity("BBox", 2)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["BBox"])
 		_ => Decode.expected("a variant (BBox)", v)
 	}
 
-	encode_b_box : BBox -> Value
-	encode_b_box = |v| match v {
-		BBox(a0, a1) => Tag("BBox", [encode_lat_lng(a0), encode_lat_lng(a1)])
+	encode_b_box : BBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_b_box = |v, e| match v {
+		BBox(a0, a1) => Encode.tagged_args("BBox", e, [|e3| encode_lat_lng(a0, e3), |e4| encode_lat_lng(a1, e4)])
 	}
 
 }

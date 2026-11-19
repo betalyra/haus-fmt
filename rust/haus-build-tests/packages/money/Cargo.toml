@@ -1,0 +1,17 @@
+[package]
+name = "haus-test-money"
+version = "1.0.0"
+description = "@haus-test/money: a schema package of haus-build-tests (the codec closure, spec §13.4)"
+edition.workspace = true
+publish = false
+# Its library name: crates that depend on it find its schema (haus_build::package).
+links = "haus_test_money"
+
+[lib]
+name = "haus_test_money"
+
+[dependencies]
+haus = { package = "haus-fmt", path = "../../../haus" }
+
+[build-dependencies]
+haus-fmt-build = { path = "../../../haus-build" }

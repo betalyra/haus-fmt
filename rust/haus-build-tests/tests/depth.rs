@@ -95,3 +95,49 @@ fn json_too_deep_for_a_recursive_type_fails_at_the_depth_limit() {
         assert!(e.ends_with(&format!("nesting deeper than {MAX} levels")), "{e:.100}");
     });
 }
+
+/// A [`haus::Value`] dropped level by level, without recursion.
+fn dismantle(mut v: haus::Value) {
+    loop {
+        v = match v {
+            haus::Value::Array(mut items) | haus::Value::Variant { args: mut items, .. } => match items.pop() {
+                Some(inner) => inner,
+                None => break,
+            },
+            haus::Value::Record(mut fields) => match fields.pop() {
+                Some((_, inner)) => inner,
+                None => break,
+            },
+            _ => break,
+        }
+    }
+}
+
+#[test]
+fn values_built_a_million_levels_deep_fail_at_the_depth_limit() {
+    // A `Value` built in code isn't limited by a parser: decoding it with a
+    // recursive type stops at the depth limit instead of recursing on.
+    in_small_thread(|| {
+        use haus::{Decode, Value};
+        let leaf = || Value::Variant { tag: "Leaf".into(), args: vec![] };
+        // `Node(Leaf, Node(Leaf, …))`, the deep side last, so the value is dropped from it.
+        let tree = (0..1_000_000).fold(leaf(), |t, _| Value::Variant { tag: "Node".into(), args: vec![leaf(), t] });
+        let e = Tree::decode(&tree).map(|_| ());
+        // Taken apart before checking, so that a failing check doesn't drop it recursively.
+        dismantle(tree);
+        let e = e.unwrap_err();
+        assert_eq!(e.code, haus::ErrorCode::NestingTooDeep);
+        assert_eq!(e.to_string(), format!("{}: nesting deeper than {MAX} levels", "(Node)[1]".repeat(MAX)));
+        // `{ text: "", reply: Some { text: "", reply: … } }`: a level per reply (spec §7).
+        let reply = |v: Value| Value::Record(vec![("text".into(), Value::String(String::new())), ("reply".into(), v)]);
+        let thread = (0..1_000_000).fold(reply(Value::Variant { tag: "None".into(), args: vec![] }), |t, _| {
+            reply(Value::Variant { tag: "Some".into(), args: vec![t] })
+        });
+        let e = Thread::decode(&thread).map(|_| ());
+        dismantle(thread);
+        assert_eq!(
+            e.unwrap_err().to_string(),
+            format!("{}.reply: nesting deeper than {MAX} levels", ".reply(Some)[0]".repeat(MAX - 1))
+        );
+    });
+}

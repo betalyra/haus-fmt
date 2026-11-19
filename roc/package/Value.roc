@@ -94,10 +94,14 @@ Value := [
 	## number literal, the largest absolute exponent (6144 allows `1e6144`, not
 	## `1e6145`), and characters (code points) in one decoded string, record
 	## key or tag, or between the quotes of a byte string. A value of exactly
-	## a limit is accepted.
+	## a limit is accepted. `max_steps` bounds the work of encoding and
+	## writing one value instead (spec §9.8): the values made or written, a
+	## step each, so that a value whose parts are shared (a DAG) fails with
+	## `step-budget` instead of expanding without bound; parsing and decoding
+	## don't use it.
 	##
 	##     Value.parse_all_with(text, { ..Value.default_limits, max_depth: 64 })
-	Limits : { max_depth : U64, max_number_length : U64, max_exponent : U64, max_string_length : U64 }
+	Limits : { max_depth : U64, max_number_length : U64, max_exponent : U64, max_string_length : U64, max_steps : U64 }
 
 	## The largest `max_depth` this binding supports (spec §7): 1024. The
 	## parser, decoding, encoding and the JSON mappings recurse once per level
@@ -122,9 +126,10 @@ Value := [
 
 	## The spec's defaults: depth 256, number literals of 1000 characters,
 	## exponents up to 6144, strings of 16 Mi characters. Every reader must
-	## take what is within them.
+	## take what is within them. Encoding and writing one value take at most
+	## 16 Mi steps, as in TypeScript and Rust.
 	default_limits : Limits
-	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024 }
+	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024, max_steps: 16 * 1024 * 1024 }
 
 	## The first of `keys` (each with where it is: an offset or an index)
 	## that repeats an earlier one, if any: the key a duplicate-key error
@@ -1125,7 +1130,7 @@ expect Value.parse_all(" #haus 2").map_ok(|vs| vs.len()).map_err(|e| e.reason) =
 
 # Your own limits (`parse_all_with`): each at the limit, and just past it.
 small : Value.Limits
-small = { max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
+small = { ..Value.default_limits, max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
 
 within_small : Str -> Try(U64, Str)
 within_small = |text| Value.parse_all_with(text, small).map_ok(|vs| vs.len()).map_err(|e| "${e.code}: ${e.reason} at ${e.line.to_str()}:${e.column.to_str()}")

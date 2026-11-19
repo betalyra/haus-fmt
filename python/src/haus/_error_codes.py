@@ -93,6 +93,12 @@ ErrorCode: TypeAlias = Literal[
     "package-manifest",
     "package-version",
     "package-path",
+    "package-name",
+    "package-crate",
+    "package-install-script",
+    "package-files",
+    "profile-vectors",
+    "package-wrapper",
     "codec-unreachable",
     "file-too-large",
     "too-many-files",
@@ -283,9 +289,28 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
             "imports",
             "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too.",
         ),
+        "package-name": ErrorInfo(
+            "imports", "Publish the package under its manifest's name: make the `name` of `package.json` the same."
+        ),
+        "package-crate": ErrorInfo(
+            "imports",
+            "Set `links` to the library's name in `[package]`, and depend on schema package crates under their own names.",
+        ),
+        "package-install-script": ErrorInfo(
+            "imports",
+            "Remove the script: a schema package is its manifest, its schema and its profiles, and needs nothing run.",
+        ),
+        "package-files": ErrorInfo(
+            "imports", "List `package.haus`, `schema.haus` and `profiles` in what the package manager ships."
+        ),
+        "profile-vectors": ErrorInfo(
+            "imports",
+            'Write the rule in `profiles/<name>.md`, and each vector as `Accept { type: "T", value: "…" }` or `Reject { type: "T", value: "…" }`, with values valid for `T`.',
+        ),
+        "package-wrapper": ErrorInfo("imports", "Fix the file so that its package manager can read it."),
         "codec-unreachable": ErrorInfo(
             "imports",
-            "Use the codec only for types your own schema files contain, or decode the outer type yourself; the message names where the type occurs.",
+            "Give the codec's type a place of its own (a field), or decode the outer type yourself; the message names where the type occurs.",
         ),
         "file-too-large": ErrorInfo(
             "imports", "Split the schema into several files, or raise the limit if you trust the file."

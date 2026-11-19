@@ -39,9 +39,6 @@ const root = new URL("../..", import.meta.url).pathname
 
 export const caseLine = (c: SchemaCase) => `${c.suite} ${c.type} ${Buffer.from(c.text, "utf8").toString("hex")}`
 
-/** A place as TypeScript writes it: Lean's `.Tag(1)` for a variant's argument is `[1]`. */
-const samePlace = (place: string) => place.replace(/\.[A-Z][A-Za-z0-9_]*\((\d+)\)/g, "[$1]")
-
 /**
  * One line of a runner's output. With `codes`, an error is
  * `err PLACE CODE REASON` (the code of spec §17, `-` for none); otherwise
@@ -51,7 +48,7 @@ export function parseOutcome(line: string, codes: boolean): Outcome {
   if (line.startsWith("ok ")) return { kind: "ok", text: line.slice(3) }
   if (codes) {
     const m = /^err (\S+) (\S+) ?(.*)$/s.exec(line)
-    if (m) return { kind: "err", reason: `${m[1]} ${m[3]}`, place: samePlace(m[1]!), ...(m[2] === "-" ? {} : { code: m[2]! }) }
+    if (m) return { kind: "err", reason: `${m[1]} ${m[3]}`, place: m[1]!, ...(m[2] === "-" ? {} : { code: m[2]! }) }
   }
   if (line.startsWith("err")) return { kind: "err", reason: line.slice(4) }
   return { kind: "crash", reason: `unexpected output: ${line.slice(0, 200)}` }

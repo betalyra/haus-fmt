@@ -236,6 +236,16 @@ fn the_json_form() {
     );
 }
 
+#[test]
+fn messages_name_keys_as_the_path_does() {
+    // A key that isn't an identifier is a canonical haus string (spec §12, §15),
+    // in the message as in the path: never Rust's debug quoting.
+    let e = haus::from_str::<std::collections::BTreeMap<String, i64>>(r#"{ "a\nb\u{7F}": 1.5 }"#).unwrap_err();
+    let haus::Error::Decode(e) = e else { panic!("{e}") };
+    assert_eq!(e.place(), r#"$["a\nb\u{7F}"]"#);
+    assert_eq!(e.to_string(), r#"["a\nb\u{7F}"]: expected a whole number (Int64), found 1.5"#);
+}
+
 /// Where one input could be read as several mistakes, the reference
 /// (spec/lean/Haus/Parser.lean) decides; these follow it.
 #[test]

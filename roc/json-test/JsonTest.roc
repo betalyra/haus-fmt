@@ -3,6 +3,7 @@ import haus.Value
 import haus.Decode
 import haus.Encode
 import haus.JsonValue
+import haus.ToJson
 import SchemaBased
 import "../../test-suite/json/schema-based.cases.haus" as schema_based_cases : Str
 import "../../test-suite/json/self-describing.cases.haus" as self_describing_cases : Str
@@ -250,59 +251,65 @@ write = |ty, v| match ty {
 	"InnerRec" => written(SchemaBased.decode_inner_rec(v), SchemaBased.to_json_inner_rec)
 	"Mine" => written(SchemaBased.decode_mine(v), SchemaBased.to_json_mine)
 	"OptLoop" => written(SchemaBased.decode_opt_loop(v), SchemaBased.to_json_opt_loop)
+	"InPlace" => written(SchemaBased.decode_in_place(v), SchemaBased.to_json_in_place)
 	_ => Err("no type ${ty}")
 }
 
 ## Read `j` with the type `ty` of schema-based.schema.haus, and encode the result.
 read : Str, JsonValue -> Try(Value, Decode.Error)
 read = |ty, j| match ty {
-	"S" => SchemaBased.from_json_s(j).map_ok(SchemaBased.encode_s)
-	"B" => SchemaBased.from_json_b(j).map_ok(SchemaBased.encode_b)
-	"Flag" => SchemaBased.from_json_flag(j).map_ok(SchemaBased.encode_flag)
-	"Small" => SchemaBased.from_json_small(j).map_ok(SchemaBased.encode_small)
-	"Byte" => SchemaBased.from_json_byte(j).map_ok(SchemaBased.encode_byte)
-	"Big" => SchemaBased.from_json_big(j).map_ok(SchemaBased.encode_big)
-	"I64" => SchemaBased.from_json_i64(j).map_ok(SchemaBased.encode_i64)
-	"F64" => SchemaBased.from_json_f64(j).map_ok(SchemaBased.encode_f64)
-	"F32" => SchemaBased.from_json_f32(j).map_ok(SchemaBased.encode_f32)
-	"Dec" => SchemaBased.from_json_dec(j).map_ok(SchemaBased.encode_dec)
-	"Day" => SchemaBased.from_json_day(j).map_ok(SchemaBased.encode_day)
-	"At" => SchemaBased.from_json_at(j).map_ok(SchemaBased.encode_at)
-	"Raw" => SchemaBased.from_json_raw(j).map_ok(SchemaBased.encode_raw)
-	"Key" => SchemaBased.from_json_key(j).map_ok(SchemaBased.encode_key)
-	"Ints" => SchemaBased.from_json_ints(j).map_ok(SchemaBased.encode_ints)
-	"Counts" => SchemaBased.from_json_counts(j).map_ok(SchemaBased.encode_counts)
-	"Opt" => SchemaBased.from_json_opt(j).map_ok(SchemaBased.encode_opt)
-	"Nested" => SchemaBased.from_json_nested(j).map_ok(SchemaBased.encode_nested)
-	"OptBig" => SchemaBased.from_json_opt_big(j).map_ok(SchemaBased.encode_opt_big)
-	"Outcome" => SchemaBased.from_json_outcome(j).map_ok(SchemaBased.encode_outcome)
-	"Level" => SchemaBased.from_json_level(j).map_ok(SchemaBased.encode_level)
-	"Shape" => SchemaBased.from_json_shape(j).map_ok(SchemaBased.encode_shape)
-	"User" => SchemaBased.from_json_user(j).map_ok(SchemaBased.encode_user)
-	"Strict" => SchemaBased.from_json_strict(j).map_ok(SchemaBased.encode_strict)
-	"Bits" => SchemaBased.from_json_bits(j).map_ok(SchemaBased.encode_bits)
-	"Loop" => SchemaBased.from_json_loop(j).map_ok(SchemaBased.encode_loop)
-	"BoxRec" => SchemaBased.from_json_box_rec(j).map_ok(SchemaBased.encode_box_rec)
-	"Boxed" => SchemaBased.from_json_boxed(j).map_ok(SchemaBased.encode_boxed)
-	"BoxAlias" => SchemaBased.from_json_box_alias(j).map_ok(SchemaBased.encode_box_alias)
-	"ParenBox" => SchemaBased.from_json_paren_box(j).map_ok(SchemaBased.encode_paren_box)
-	"AliasBox" => SchemaBased.from_json_alias_box(j).map_ok(SchemaBased.encode_alias_box)
-	"Found" => SchemaBased.from_json_found(j).map_ok(SchemaBased.encode_found)
-	"GenRec" => SchemaBased.from_json_gen_rec(j).map_ok(SchemaBased.encode_gen_rec)
-	"StrictBox" => SchemaBased.from_json_strict_box(j).map_ok(SchemaBased.encode_strict_box)
-	"SecretRec" => SchemaBased.from_json_secret_rec(j).map_ok(SchemaBased.encode_secret_rec)
-	"SecretBox" => SchemaBased.from_json_secret_box(j).map_ok(SchemaBased.encode_secret_box)
-	"InlineSecretBox" => SchemaBased.from_json_inline_secret_box(j).map_ok(SchemaBased.encode_inline_secret_box)
-	"InnerRec" => SchemaBased.from_json_inner_rec(j).map_ok(SchemaBased.encode_inner_rec)
-	"Mine" => SchemaBased.from_json_mine(j).map_ok(SchemaBased.encode_mine)
-	"OptLoop" => SchemaBased.from_json_opt_loop(j).map_ok(SchemaBased.encode_opt_loop)
+	"S" => encoded(SchemaBased.from_json_s(j), SchemaBased.encode_s)
+	"B" => encoded(SchemaBased.from_json_b(j), SchemaBased.encode_b)
+	"Flag" => encoded(SchemaBased.from_json_flag(j), SchemaBased.encode_flag)
+	"Small" => encoded(SchemaBased.from_json_small(j), SchemaBased.encode_small)
+	"Byte" => encoded(SchemaBased.from_json_byte(j), SchemaBased.encode_byte)
+	"Big" => encoded(SchemaBased.from_json_big(j), SchemaBased.encode_big)
+	"I64" => encoded(SchemaBased.from_json_i64(j), SchemaBased.encode_i64)
+	"F64" => encoded(SchemaBased.from_json_f64(j), SchemaBased.encode_f64)
+	"F32" => encoded(SchemaBased.from_json_f32(j), SchemaBased.encode_f32)
+	"Dec" => encoded(SchemaBased.from_json_dec(j), SchemaBased.encode_dec)
+	"Day" => encoded(SchemaBased.from_json_day(j), SchemaBased.encode_day)
+	"At" => encoded(SchemaBased.from_json_at(j), SchemaBased.encode_at)
+	"Raw" => encoded(SchemaBased.from_json_raw(j), SchemaBased.encode_raw)
+	"Key" => encoded(SchemaBased.from_json_key(j), SchemaBased.encode_key)
+	"Ints" => encoded(SchemaBased.from_json_ints(j), SchemaBased.encode_ints)
+	"Counts" => encoded(SchemaBased.from_json_counts(j), SchemaBased.encode_counts)
+	"Opt" => encoded(SchemaBased.from_json_opt(j), SchemaBased.encode_opt)
+	"Nested" => encoded(SchemaBased.from_json_nested(j), SchemaBased.encode_nested)
+	"OptBig" => encoded(SchemaBased.from_json_opt_big(j), SchemaBased.encode_opt_big)
+	"Outcome" => encoded(SchemaBased.from_json_outcome(j), SchemaBased.encode_outcome)
+	"Level" => encoded(SchemaBased.from_json_level(j), SchemaBased.encode_level)
+	"Shape" => encoded(SchemaBased.from_json_shape(j), SchemaBased.encode_shape)
+	"User" => encoded(SchemaBased.from_json_user(j), SchemaBased.encode_user)
+	"Strict" => encoded(SchemaBased.from_json_strict(j), SchemaBased.encode_strict)
+	"Bits" => encoded(SchemaBased.from_json_bits(j), SchemaBased.encode_bits)
+	"Loop" => encoded(SchemaBased.from_json_loop(j), SchemaBased.encode_loop)
+	"BoxRec" => encoded(SchemaBased.from_json_box_rec(j), SchemaBased.encode_box_rec)
+	"Boxed" => encoded(SchemaBased.from_json_boxed(j), SchemaBased.encode_boxed)
+	"BoxAlias" => encoded(SchemaBased.from_json_box_alias(j), SchemaBased.encode_box_alias)
+	"ParenBox" => encoded(SchemaBased.from_json_paren_box(j), SchemaBased.encode_paren_box)
+	"AliasBox" => encoded(SchemaBased.from_json_alias_box(j), SchemaBased.encode_alias_box)
+	"Found" => encoded(SchemaBased.from_json_found(j), SchemaBased.encode_found)
+	"GenRec" => encoded(SchemaBased.from_json_gen_rec(j), SchemaBased.encode_gen_rec)
+	"StrictBox" => encoded(SchemaBased.from_json_strict_box(j), SchemaBased.encode_strict_box)
+	"SecretRec" => encoded(SchemaBased.from_json_secret_rec(j), SchemaBased.encode_secret_rec)
+	"SecretBox" => encoded(SchemaBased.from_json_secret_box(j), SchemaBased.encode_secret_box)
+	"InlineSecretBox" => encoded(SchemaBased.from_json_inline_secret_box(j), SchemaBased.encode_inline_secret_box)
+	"InnerRec" => encoded(SchemaBased.from_json_inner_rec(j), SchemaBased.encode_inner_rec)
+	"Mine" => encoded(SchemaBased.from_json_mine(j), SchemaBased.encode_mine)
+	"OptLoop" => encoded(SchemaBased.from_json_opt_loop(j), SchemaBased.encode_opt_loop)
+	"InPlace" => encoded(SchemaBased.from_json_in_place(j), SchemaBased.encode_in_place)
 	_ => Decode.fail("no-type", "no type ${ty}")
 }
 
+## The value read, encoded as haus.
+encoded : Try(a, Decode.Error), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, Decode.Error)
+encoded = |read_value, encode| Encode.value(read_value?, encode)
+
 ## The decoded value written as JSON text.
-written : Try(a, Decode.Error), (a -> Try(JsonValue, Encode.Error)) -> Try(Str, Str)
+written : Try(a, Decode.Error), (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)) -> Try(Str, Str)
 written = |decoded, to_json| match decoded {
-	Ok(x) => match to_json(x) {
+	Ok(x) => match ToJson.value(x, to_json) {
 		Ok(j) => JsonValue.to_str(j).map_err(Encode.message)
 		Err(e) => Err("can't write it: ${Encode.message(e)}")
 	}
@@ -383,7 +390,7 @@ report = |result| match result {
 }
 
 # json/schema-based.cases.haus
-expect JsonTest.count(schema_based_cases) == 126
+expect JsonTest.count(schema_based_cases) == 129
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
 expect JsonTest.schema_based(schema_based_cases, 0)
@@ -748,20 +755,29 @@ expect JsonTest.schema_based(schema_based_cases, 119)
 # Ok { type: "OptLoop", input: Some(Some(None)), json: "{\"_tag\": \"Some\", \"value\": {\"_tag\": \"None\"}}" },
 expect JsonTest.schema_based(schema_based_cases, 120)
 
-# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
+# Ok { type: "InPlace", input: None, json: "null" },
 expect JsonTest.schema_based(schema_based_cases, 121)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
+# Ok { type: "InPlace", input: Some(None), json: "{\"_tag\": \"None\"}" },
 expect JsonTest.schema_based(schema_based_cases, 122)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+# Ok { type: "InPlace", input: Some(Some(1)), json: "{\"_tag\": \"Some\", \"value\": 1}" },
 expect JsonTest.schema_based(schema_based_cases, 123)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+# Err { type: "Shape", json: "{\"_tag\": \"hexagon\"}", code: "invalid-tag" },
 expect JsonTest.schema_based(schema_based_cases, 124)
 
-# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": []}", code: "haus-json-form" },
 expect JsonTest.schema_based(schema_based_cases, 125)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": 5}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 126)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [1]}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 127)
+
+# Err { type: "Shape", json: "{\"_tag\": \"Hexagon\", \"_args\": [{\"_haus\": 1, \"_value\": \"a\"}]}", code: "haus-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 128)
 
 # json/self-describing.cases.haus
 expect JsonTest.count(self_describing_cases) == 43

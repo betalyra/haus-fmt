@@ -1,3 +1,4 @@
 // Another Address than billing's: same file name, same type name.
 type Address = closed { line: String }
 type Parcel = { to: Address, weight: Int }
+type Status = < Packed | Sent { to: Address } >

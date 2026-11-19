@@ -8,8 +8,9 @@
 //! dropping them.
 
 use haus::json::{self, Json, ToJson};
-use haus::{Encode, EncodeError, Encoder, Limits, Secret, Value, ser};
+use haus::{Encode, EncodeError, Encoder, ErrorCode, Limits, Secret, Value, ser};
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 /// A native recursive type: an array of itself.
 struct Nest(Vec<Nest>);
@@ -37,6 +38,30 @@ impl Encode for Nest {
 impl ToJson for Nest {
     fn to_json_with(&self, e: Encoder) -> Result<Json, EncodeError> {
         json::ser::array(&self.0, e, Nest::to_json_with)
+    }
+}
+
+/// A native value whose parts are shared (a DAG): each level holds the
+/// level below twice, so `levels` levels are 2^(levels + 1) − 1 values when
+/// written out.
+struct Dag(Vec<Rc<Dag>>);
+
+impl Dag {
+    fn new(levels: usize) -> Dag {
+        let below = (1..levels).fold(Rc::new(Dag(vec![])), |d, _| Rc::new(Dag(vec![d.clone(), d])));
+        Dag(if levels == 0 { vec![] } else { vec![below.clone(), below] })
+    }
+}
+
+impl Encode for Dag {
+    fn encode_with(&self, e: Encoder) -> Result<Value, EncodeError> {
+        ser::array(&self.0, e, |d, e| d.encode_with(e))
+    }
+}
+
+impl ToJson for Dag {
+    fn to_json_with(&self, e: Encoder) -> Result<Json, EncodeError> {
+        json::ser::array(&self.0, e, |d, e| d.to_json_with(e))
     }
 }
 
@@ -157,4 +182,42 @@ fn errors_inside_a_secret_name_only_the_secret() {
     // Outside a secret, the error says where.
     let e = haus::to_string_with(keys.expose(), &small).unwrap_err();
     assert_eq!(e.to_string(), ".hunter2: key longer than 4 characters");
+}
+
+#[test]
+fn shared_parts_expand_only_within_the_step_budget() {
+    // 2^41 − 1 values written out, from 41 in memory: the encoders stop at
+    // the budget (spec §9.8), one step per value made.
+    let dag = Dag::new(40);
+    let budget = |max: u64| Encoder::default().with_max_steps(max);
+    let reason = "encode budget of 100000 steps exceeded (a value whose parts are shared expands when written)";
+    let e = dag.encode_with(budget(100_000)).unwrap_err();
+    assert_eq!((e.code, e.reason.as_str()), (ErrorCode::StepBudget, reason));
+    assert!(e.to_string().starts_with("[0][0][0]") && e.to_string().ends_with(reason), "{e}");
+    let e = dag.to_json_with(budget(100_000)).unwrap_err();
+    assert_eq!((e.code, e.reason.as_str()), (ErrorCode::StepBudget, reason));
+    assert_eq!(Encoder::default().max_steps(), ser::DEFAULT_MAX_STEPS);
+    assert_eq!(ser::DEFAULT_MAX_STEPS, 16 * 1024 * 1024);
+
+    // Exactly as many steps as values: 2^4 − 1 for three levels.
+    assert_eq!(dag_text(3).matches('[').count(), 15);
+    assert!(Dag::new(3).encode_with(budget(15)).is_ok() && Dag::new(3).to_json_with(budget(15)).is_ok());
+    assert_eq!(Dag::new(3).encode_with(budget(14)).unwrap_err().code, ErrorCode::StepBudget);
+    assert_eq!(Dag::new(3).to_json_with(budget(14)).unwrap_err().code, ErrorCode::StepBudget);
+    // Leaves and raw values count too: an array of nine numbers is ten values.
+    assert!(vec![1u8; 9].encode_with(budget(10)).is_ok() && vec![1u8; 9].to_json_with(budget(10)).is_ok());
+    assert!(vec![1u8; 10].encode_with(budget(10)).is_err() && vec![1u8; 10].to_json_with(budget(10)).is_err());
+    let raw = Value::Array(vec![Value::Number("1".into()); 9]);
+    assert!(raw.encode_with(budget(10)).is_ok() && raw.to_json_with(budget(10)).is_ok());
+    assert_eq!(raw.encode_with(budget(9)).unwrap_err().code, ErrorCode::StepBudget);
+    assert_eq!(raw.to_json_with(budget(9)).unwrap_err().code, ErrorCode::StepBudget);
+    // Each encoding has its own budget.
+    for _ in 0..3 {
+        assert!(Dag::new(3).encode_with(budget(15)).is_ok());
+    }
+}
+
+/// The compact text of [`Dag::new`]`(levels)`.
+fn dag_text(levels: usize) -> String {
+    haus::to_string(&Dag::new(levels)).unwrap()
 }

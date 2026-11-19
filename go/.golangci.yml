@@ -1,0 +1,45 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gocritic
+    - revive
+  settings:
+    revive:
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow
+        - name: errorf
+        - name: error-return
+        - name: error-strings
+        - name: receiver-naming
+        - name: unexported-return
+        - name: blank-imports
+        - name: context-as-argument
+        - name: dot-imports
+        - name: range
+        - name: superfluous-else
+        - name: unreachable-code
+        - name: redefines-builtin-id
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+      disabled-checks:
+        # Kept for clarity in the byte-level scanners.
+        - ifElseChain
+        - singleCaseSwitch
+  exclusions:
+    generated: strict
+
+formatters:
+  enable:
+    - gofmt

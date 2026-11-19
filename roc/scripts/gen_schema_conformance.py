@@ -58,7 +58,7 @@ def haus_gen(*args: str) -> str:
 def codec(name: str, schema: Path, module: str, types: list[str], label: str = "") -> str:
     """`name : Str, Value -> Codec`: decode a value with a type of the module, and encode the result."""
     arms = "".join(
-        f'\t\t{roc_str(t)} => Decoded({module}.decode_{snake(t)}(v).map_ok({module}.encode_{snake(t)}))\n' for t in types
+        f'\t\t{roc_str(t)} => Decoded(encoded({module}.decode_{snake(t)}(v), {module}.encode_{snake(t)}))\n' for t in types
     )
     return (
         f"\t## Decode a value with a type of {schema.name}{label}, and encode the result.\n"
@@ -69,6 +69,39 @@ def codec(name: str, schema: Path, module: str, types: list[str], label: str = "
 
 OUT.mkdir(exist_ok=True)
 schemas = sorted(SUITE.glob("*.schema.haus"))
+# Generated code with values built in code (spec §9.8), with `Expr` of
+# types.schema.haus: a decoder checks the depth before it recurses, and an
+# encoder counts the values it makes.
+VALUES_BUILT_IN_CODE = """
+# A value built far deeper than the parser takes (50,000 levels; `roc test`
+# can't drop much deeper ones of this shape): the decoder stops at the depth limit.
+expect {
+	var $v = Tag("Num", [Num("1")])
+	var $i = 0
+	while $i < 50_000 {
+		$v = Tag("Neg", [Rec([("of", $v)])])
+		$i = $i + 1
+	}
+	Types.decode_expr($v).map_ok(|_| {}).map_err(|e| (e.code, e.path == "(Neg).of".repeat(256))) == Err(("nesting-too-deep", True))
+}
+
+# A value whose parts are shared: 2^41 − 1 values written out. The encoder
+# stops at the budget, a step per value.
+expect {
+	var $x = Types.Expr.Num(Int.from_i128(1))
+	var $i = 0
+	while $i < 40 {
+		$x = Types.Expr.Add($x, $x)
+		$i = $i + 1
+	}
+	budget = |max| { ..Value.default_limits, max_steps: max }
+	small = Types.Expr.Add(Types.Expr.Num(Int.from_i128(1)), Types.Expr.Num(Int.from_i128(2)))
+	shared = Encode.value_with($x, Types.encode_expr, budget(100_000)).map_err(|e| e.code).map_ok(|_| {}) == Err("step-budget")
+	# `Add(Num(1), Num(2))`: five values.
+	shared and Encode.value_with(small, Types.encode_expr, budget(5)).map_ok(Encode.canonical) == Ok("Add(Num(1),Num(2))") and Encode.value_with(small, Types.encode_expr, budget(4)).is_err()
+}
+"""
+
 modules, imports, codecs, tests = [], [], [], []
 for schema in schemas:
     name = schema.name.removesuffix(".schema.haus")
@@ -111,6 +144,8 @@ for schema in schemas:
     "import haus.Value\n"
     "import haus.Decode\n"
     "import haus.Encode\n"
+    "import haus.ErrorCode\n"
+    "import haus.Int\n"
     + "".join(f"import {m}\n" for m in modules)
     + "\n".join(imports)
     + """
@@ -129,8 +164,9 @@ SchemaTest := [].{
 	## Case `i` of a cases file (see test-suite/schema/numbers.cases.haus):
 	## `Ok { type, input, output? }` decodes `input` with `type`, and encoding
 	## the result gives the canonical form of `output` (or of `input`), which
-	## the writer takes; `Err { type, input, code }` doesn't decode, and fails
-	## with the error code `code` (spec §17).
+	## the writer takes; `Err { type, input, code, path }` doesn't decode, and
+	## fails with the error code `code` (spec §17) at the place `path`
+	## (spec §15, as `ErrorCode.place` writes it), compared as text.
 	check : Str, U64, (Str, Value -> Codec) -> Bool
 	check = |cases, i, codec| {
 		ok = match Value.parse_all(cases) {
@@ -148,14 +184,14 @@ SchemaTest := [].{
 					}
 					_ => Err("a case without a type or an input")
 				}
-				Ok(Tag("Err", [Rec(fields)])) => match (field(fields, "type"), field(fields, "input"), field(fields, "code")) {
-					(Ok(Text(ty)), Ok(input), Ok(Text(code))) => match codec(ty, input) {
-						Decoded(Err(e)) if e.code == code => Ok({})
-						Decoded(Err(e)) => Err("failed with ${e.code}, expected ${code}: ${Decode.message(e)}")
+				Ok(Tag("Err", [Rec(fields)])) => match (field(fields, "type"), field(fields, "input"), field(fields, "code"), field(fields, "path")) {
+					(Ok(Text(ty)), Ok(input), Ok(Text(code)), Ok(Text(path))) => match codec(ty, input) {
+						Decoded(Err(e)) if e.code == code and ErrorCode.place(e.path) == path => Ok({})
+						Decoded(Err(e)) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}, expected ${code} at ${path}: ${Decode.message(e)}")
 						Decoded(Ok(got)) => Err("decoded, and wrote ${Encode.canonical(got)}")
 						NoType => Err("the schema has no type ${ty}")
 					}
-					_ => Err("a case without a type, an input or a code")
+					_ => Err("a case without a type, an input, a code or a path")
 				}
 				_ => Err("no case ${i.to_str()}")
 			}
@@ -174,6 +210,10 @@ SchemaTest := [].{
     + "\n".join(codecs)
     + """}
 
+## The decoded value, encoded again.
+encoded : Try(a, Decode.Error), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, Decode.Error)
+encoded = |decoded, encode| Encode.value(decoded?, encode)
+
 field : List((Str, Value)), Str -> Try(Value, [Missing])
 field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Ok((_, v)) => Ok(v)
@@ -182,7 +222,8 @@ field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 
 """
     + "\n\n".join(tests)
-    + "\n",
+    + "\n"
+    + (VALUES_BUILT_IN_CODE if "Types" in modules else ""),
     encoding="utf-8",
 )
 for f in [OUT / "main.roc", OUT / "SchemaTest.roc", *(OUT / f"{m}.roc" for m in modules)]:

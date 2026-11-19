@@ -66,19 +66,52 @@ like a Roc builtin or an imported module gets a `_` in Roc (`type List a`
 is `List_(a)`, `type F64 = Float64` is `F64_`); its functions keep their
 names (`decode_list`).
 
-A `Secret` is written in full when encoded, but a decode error inside it names
-only its place and type (`.pin: not a valid Secret Int (the value is hidden)`),
-with the code `invalid-secret`.
+A `Secret` is written in full when encoded, but an error inside it, decoding
+or encoding, names only its place and type (`.pin: not a valid Secret Int
+(the value is hidden)`), with the code `invalid-secret`.
 
-`Encode.to_str` (and `Encode.stream`) check what they write, so they return
-a `Try(Str, Encode.Error)`. What a generated encoder gives is always fine;
-what can fail is a `Value` built in code, the raw value of an `Any` or an
-unknown variant (spec §9.8): `Num("abc")` is an error (`.extra: not a number
-literal`), as are a tag that isn't a tag name, a key used twice in a record,
-and nesting, strings and numbers beyond the parser's limits. Number literals
-are written as the parser reads them (`Num("1E5")` as `1e5`), integers always
-in decimal: one longer than the number limit is `number-too-long`.
-`Encode.message(e)` gives the error with its path.
+A generated encoder takes where it is, an `Encode.Encoder`, and gives the
+value with the steps it took (`Encode.Encoded(Value)`). `Encode.value` runs
+one at the top, for the default limits (`Encode.value_with` for others):
+
+```roc
+encoded = Encode.value(comment, Thread.encode_comment)?
+text = Encode.to_str(encoded)?
+```
+
+A generated decoder, `decode_<name>`, checks first that the value nests at
+most 256 levels (spec §9.8): a `Value` built in code isn't limited by a
+parser, and decoders recurse once per level, so a deeper one fails with
+`nesting-too-deep` at the first container too deep instead of overflowing
+the stack. `read_value_<name>` doesn't check: the decoders of other types
+call it, and it is what to decode with for other limits,
+`Decode.within_limits(value, Thread.read_value_comment, limits)`, or with
+`Decode.one_with(text, limits, Thread.read_value_comment)`, as the parser has
+checked the depth then. A generic type's decoder doesn't check either.
+
+Encoding counts the values it makes, one step each (spec §9.8): a native
+value or a `Value` whose parts are shared (`x = Two(y, y)`, a DAG, which Roc
+can't tell from a tree) expands when written out, so encoding fails with
+`step-budget` past `limits.max_steps`, 16 Mi by default, as in TypeScript and
+Rust. A record's fields and a tag's arguments are encoded one after the
+other for that (`Encode.record(e, [("id", Encode.required(u.id, Encode.int)), …])`),
+and the writers count the values they write too (`Encode.to_str`,
+`JsonValue.to_str`), each value of a stream with a budget of its own.
+
+Encoders and writers check what they build and write (spec §9.8), so they
+return a `Try(…, Encode.Error)`. What can fail is a `Value` built in code, the
+raw value of an `Any` or an unknown variant: `Num("abc")` is an error
+(`.extra: not a number literal`), as are a tag that isn't a tag name, a key
+used twice in a record or map, and nesting, strings and numbers beyond the
+limits. The encoder checks at each place, so a container fails with
+`nesting-too-deep` at the depth limit before its contents are encoded (a
+native value nested deeper never recurses past it), and an error inside a
+`Secret` says nothing of the value, not even a key of its `Map` or a place in
+its `Any`. Encode for the limits you write with: the writer checks again, and
+it doesn't know where the secrets are. Number literals are written as the
+parser reads them (`Num("1E5")` as `1e5`), integers always in decimal: one
+longer than the number limit is `number-too-long`. `Encode.message(e)` gives
+the error with its path.
 
 `Encode.to_str` and `Encode.stream` write the compact layout (spec §11), with
 spaces: `Person { name: "Ada", age: 36 }`. `Encode.minimised` and
@@ -98,7 +131,35 @@ fit, the schema says `Int64` (out of range is a decode error).
 
 A codec is a Roc module with a `Target` type, `decode : Base -> Try(Target, Str)`
 and `encode : Target -> Base` ([`Cents.roc`](examples/order/Cents.roc)), chosen
-with `--codec ID=MODULE` when generating.
+with `--codec ID=MODULE` when generating; `MODULE` is the app's (`Cents`) or a
+package's (`money.Iso`). It applies wherever its type occurs
+(spec §13.4), inside packages' types too: the packages' types that contain it,
+directly or not, get modules of their own next to `--out` (`OrderAcmeOrders`
+for `@acme/orders` and the module `Order`), with the codec applied; the
+packages' other types stay their packages' modules' (`AcmeOrders.Customer`).
+Give `--package` for every package the schema reaches, so that these modules
+can import them ([`closure-test`](closure-test)). A type with a codec of its
+own isn't copied: its codec decodes the package's type.
+
+The official profiles (spec §13.3) are codecs of the official Roc packages.
+They reject what the profile rejects and keep the value (spec §13.4):
+
+| Package | Codec | For | `Target` |
+|---|---|---|---|
+| `extensions/money/roc` | `Iso` | `@haus-fmt/money@1#Money` | `{ amount : Str, currency : Str }`: the exact amount, scale kept |
+| `extensions/money/roc` | `IsoCurrency` | `@haus-fmt/money@1#Currency` | `Str`: three letters A–Z |
+| `extensions/geo/roc` | `Wgs84` | `@haus-fmt/geo@1#LatLng` | `{ lat : F64, lng : F64 }`: the floats as decoded, `-0` kept |
+| `extensions/geo/roc` | `Wgs84BBox` | `@haus-fmt/geo@1#BBox` | `{ sw : Wgs84.Target, ne : Wgs84.Target }` |
+
+```sh
+haus-gen roc app.schema.haus --module App --out App.roc \
+  --package ../extensions/money=money --package ../extensions/geo=geo \
+  --codec "@haus-fmt/money@1#Money=money.Iso" --codec "@haus-fmt/money@1#Currency=money.IsoCurrency" \
+  --codec "@haus-fmt/geo@1#LatLng=geo.Wgs84" --codec "@haus-fmt/geo@1#BBox=geo.Wgs84BBox"
+```
+
+[`profiles-test`](profiles-test) checks them against the profiles' test
+vectors, and inside the types of a package that uses the official ones.
 
 ## Error codes
 
@@ -131,10 +192,13 @@ fix), `ErrorCode.category(code)` and `ErrorCode.docs(code)`
 ```
 
 A decode or encode error has a `path` instead of a line and column, as spec
-§17 writes it (`ErrorCode.place`): `$.items[2].price`, a variant's payload
-value `i` as `[i]` (`(Money)[1]` in this binding's messages), a record
-payload as `[0]`. A key that isn't an identifier is written as a JSON
-string, `["pt-BR"]`, in both. Invalid UTF-8 is reported where it is.
+§15 writes it (`ErrorCode.place`): `$.items[2].price`, a variant's payload
+value `i` as `[i]` (`(Money)[1]` in this binding's messages), and the fields
+of a record case directly after the case, `$.shape.r` (`.shape(Circle).r`
+in messages). A key that isn't an identifier is written as a haus string
+in canonical form (spec §12), `["pt-BR"]`, `["a\u{7F}"]`, in both. In a
+stream the path starts with the item's index, `$[3].price`. Invalid UTF-8
+is reported where it is.
 
 The codes are those of the reference parser and decoder (spec/lean) where a
 mistake could be read two ways: a `(` or `{` after a tag without payload on
@@ -214,7 +278,8 @@ Value.parse_all_with(text, limits)
 | haus text | `Value.parse_all_with`, `Value.parse_with`, `Value.parse_bytes_with`, `Decode.all_with`, `Decode.one_with` |
 | a stream | `Streaming.reader({ ..Streaming.defaults, limits })` |
 | JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.import_json_with`, `JsonValue.from_haus_json_with`, `JsonValue.from_haus_json_lines_with`, `FromJson.one_with`, `FromJson.lines_with` |
-| writing haus for such a reader | `Encode.to_str_with`, `Encode.stream_with`, `Encode.minimised_with`, `Encode.stream_minimised_with` |
+| decoding a `Value` built in code | `Decode.within_limits(value, read_value_<name>, limits)` |
+| writing haus for such a reader | `Encode.value_with`, `Encode.to_str_with`, `Encode.stream_with`, `Encode.minimised_with`, `Encode.stream_minimised_with` |
 | writing JSON for such a reader | `JsonValue.to_str_with`, `JsonValue.write_lines_with`, `JsonValue.to_haus_json_with`, `JsonValue.to_haus_json_lines_with`, `JsonValue.haus_json_value_with`, `ToJson.to_str_with`, `ToJson.lines_with` |
 
 `Value.max_supported_depth` is 1024: the parser, decoding, encoding and the
@@ -226,15 +291,31 @@ says so too. With basic-cli 0.26 a program overflows its stack only past about
 24,000 levels on the deepest path (the self-describing JSON of nested variants,
 measured on aarch64 macOS, optimized and dev builds alike), so 1024 leaves a
 wide margin; the canonical form, the hash and `Encode.equals` take no limits
-and recurse further still (about 70,000 levels).
+and recurse further still (about 70,000 levels). Encoders stop at the depth limit
+however deep a native value is, and decoders and JSON readers at the depth
+limit however deep a `Value` or `JsonValue` built in code is; Roc itself
+frees a value recursively, so a value nested some hundred thousand levels
+deep overflows the stack when it is dropped (about 250,000 links of a list,
+150,000 levels of `Arr`, fewer than 140,000 of `Tag("Some", …)` under `roc
+test`), whatever haus does with it.
+
+`max_steps` in `Value.Limits` bounds the work of encoding and writing one
+value (16 Mi steps by default, `step-budget` past it); parsing and decoding
+don't use it.
 
 A generated `from_json_<name>` checks the depth of what it read against 256;
-for another depth limit, read with `read_json_<name>` and check with
-`FromJson.within_limits(result, encode_<name>, limits)`. A generated
-`to_json_<name>` doesn't check the depth of the haus value: for a reader with
-other limits, write with `ToJson.to_str_with(x, to_json_<name>, limits)`, which
-checks the JSON's numbers, strings and nesting (4·d + 1 levels). The canonical
-form and the hash don't depend on limits.
+for another depth limit, check with
+`FromJson.within_limits(json, read_json_<name>, encode_<name>, limits)`. A generated
+`to_json_<name>` takes an `Encode.Encoder` like `encode_<name>` and checks
+the haus value's depth as it writes, but not its lengths: `ToJson.to_str(x,
+to_json_<name>)` checks the depth and the JSON's numbers and nesting. For a
+reader with limits, write with `ToJson.to_str_with(x, to_json_<name>,
+encode_<name>, limits)`, which also checks the haus value that
+`encode_<name>` gives: its depth, numbers and lengths. Lengths count on that
+value, not on the JSON (spec §16, "Limits"), as the readers count them: a
+string's characters, not its escapes, and bytes as two characters per byte,
+although base64 spells one byte in four. The canonical form and the hash
+don't depend on limits.
 
 ## JSON
 
@@ -260,7 +341,7 @@ U+2029; reading self-describing JSON rejects DEL, C1 and bidi controls raw
 every reader accepts U+2028 and U+2029 raw.
 
 `haus-gen roc --json` adds `from_json_<name> : JsonValue -> Try(T, Decode.Error)`
-and `to_json_<name> : T -> Try(JsonValue, Encode.Error)` to each type, built
+and `to_json_<name> : T, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)` to each type, built
 from `FromJson` and `ToJson` as decoders are from `Decode` and `Encode`. The
 JSON is the same as in Rust and TypeScript: `Int`, `Int64` and `UInt64` as
 strings, `Decimal` as a string with its scale, `Bytes` as base64, a closed
@@ -280,8 +361,10 @@ JSON needs the packages it imports generated with `--json` too.
 A schema-based JSON text may nest 4·256 + 1 levels, as one haus level can
 take several JSON levels, and the value read must then nest at most 256
 levels as a haus value (spec §16); a self-describing one a level more, for
-the envelope. `from_json_<name>` checks that by encoding what it
-read (`FromJson.within_depth`); `read_json_<name>`, which the readers of other
+the envelope. `from_json_<name>` checks the JSON's depth before reading it
+(so JSON built in code nested deeper fails instead of overflowing the
+stack), and the haus value's by encoding what it read
+(`FromJson.within_depth`); `read_json_<name>`, which the readers of other
 types call, doesn't. A generic type's `from_json_pair` doesn't check either,
 as it can't encode its parameters: read through a type without parameters
 (`type Pairs = Pair Int`).
@@ -303,6 +386,7 @@ cd package && roc test JsonValue.roc && roc test FromJson.roc && roc test ToJson
 cd examples/shop && roc test main.roc
 cd schema-test && roc test main.roc
 cd json-test && roc test main.roc
+cd closure-test && roc test main.roc
 ```
 
 `ConformanceTest.roc` is generated from `../test-suite` by

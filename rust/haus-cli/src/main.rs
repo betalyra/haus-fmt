@@ -9,11 +9,12 @@ mod highlight;
 mod input;
 mod json;
 mod output;
+mod package;
 mod pieces;
 mod values;
 
 use clap::{CommandFactory, Parser};
-use cli::{Cli, Command};
+use cli::{Cli, Command, PackageCommand};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         Command::Fmt(args) => fmt::run(&args, cli.color),
         Command::Canonical(args) => values::canonical(&args, cli.color),
         Command::Hash(args) => values::hash(&args, cli.color),
+        Command::Package(PackageCommand::Check(args)) => package::check(&args, cli.color),
         Command::Completions { shell } => {
             clap_complete::generate(shell, &mut Cli::command(), "haus", &mut std::io::stdout());
             output::Status::Ok

@@ -3,3 +3,5 @@ type User = { id: Int, name: String, nick?: String, note?: Maybe String }
 type Strict = closed { id: Int, tags?: Array String }
 type Outer = closed { user: User }
 type Empty = {}
+// Quoted field keys take the escapes of data strings (spec §14, §4).
+type Quoted = closed { "content-type": String, "tab\there": Int, "line\nbreak": Int, "smile\u{1F600}": Bool, "q\"\\": Int }

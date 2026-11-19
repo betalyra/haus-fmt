@@ -14,367 +14,430 @@ SchemaBased := [].{
 	S : Str
 
 	decode_s : Value -> Try(S, Decode.Error)
-	decode_s = |v| Decode.str(v)
+	decode_s = |v| Decode.within_depth(v, read_value_s)
 
-	encode_s : S -> Value
-	encode_s = |v| Encode.str(v)
+	read_value_s : Value -> Try(S, Decode.Error)
+	read_value_s = |v| Decode.str(v)
+
+	encode_s : S, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_s = |v, e| Encode.str(v, e)
 
 	from_json_s : JsonValue -> Try(S, Decode.Error)
-	from_json_s = |j| FromJson.within_depth(read_json_s(j), encode_s)
+	from_json_s = |j| FromJson.within_depth(j, read_json_s, encode_s)
 
 	read_json_s : JsonValue -> Try(S, Decode.Error)
 	read_json_s = |j| FromJson.str(j)
 
-	to_json_s : S -> Try(JsonValue, Encode.Error)
-	to_json_s = |v| ToJson.str(v)
+	to_json_s : S, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_s = |v, e| ToJson.str(v, e)
 
 	## haus type `schema-based#B`.
 	B : List(U8)
 
 	decode_b : Value -> Try(B, Decode.Error)
-	decode_b = |v| Decode.bytes(v)
+	decode_b = |v| Decode.within_depth(v, read_value_b)
 
-	encode_b : B -> Value
-	encode_b = |v| Encode.bytes(v)
+	read_value_b : Value -> Try(B, Decode.Error)
+	read_value_b = |v| Decode.bytes(v)
+
+	encode_b : B, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_b = |v, e| Encode.bytes(v, e)
 
 	from_json_b : JsonValue -> Try(B, Decode.Error)
-	from_json_b = |j| FromJson.within_depth(read_json_b(j), encode_b)
+	from_json_b = |j| FromJson.within_depth(j, read_json_b, encode_b)
 
 	read_json_b : JsonValue -> Try(B, Decode.Error)
 	read_json_b = |j| FromJson.bytes(j)
 
-	to_json_b : B -> Try(JsonValue, Encode.Error)
-	to_json_b = |v| ToJson.bytes(v)
+	to_json_b : B, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_b = |v, e| ToJson.bytes(v, e)
 
 	## haus type `schema-based#Flag`.
 	Flag : Bool
 
 	decode_flag : Value -> Try(Flag, Decode.Error)
-	decode_flag = |v| Decode.bool(v)
+	decode_flag = |v| Decode.within_depth(v, read_value_flag)
 
-	encode_flag : Flag -> Value
-	encode_flag = |v| Encode.bool(v)
+	read_value_flag : Value -> Try(Flag, Decode.Error)
+	read_value_flag = |v| Decode.bool(v)
+
+	encode_flag : Flag, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_flag = |v, e| Encode.bool(v, e)
 
 	from_json_flag : JsonValue -> Try(Flag, Decode.Error)
-	from_json_flag = |j| FromJson.within_depth(read_json_flag(j), encode_flag)
+	from_json_flag = |j| FromJson.within_depth(j, read_json_flag, encode_flag)
 
 	read_json_flag : JsonValue -> Try(Flag, Decode.Error)
 	read_json_flag = |j| FromJson.bool(j)
 
-	to_json_flag : Flag -> Try(JsonValue, Encode.Error)
-	to_json_flag = |v| ToJson.bool(v)
+	to_json_flag : Flag, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_flag = |v, e| ToJson.bool(v, e)
 
 	## haus type `schema-based#Small`.
 	Small : I32
 
 	decode_small : Value -> Try(Small, Decode.Error)
-	decode_small = |v| Decode.i32(v)
+	decode_small = |v| Decode.within_depth(v, read_value_small)
 
-	encode_small : Small -> Value
-	encode_small = |v| Num(v.to_str())
+	read_value_small : Value -> Try(Small, Decode.Error)
+	read_value_small = |v| Decode.i32(v)
+
+	encode_small : Small, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_small = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_small : JsonValue -> Try(Small, Decode.Error)
-	from_json_small = |j| FromJson.within_depth(read_json_small(j), encode_small)
+	from_json_small = |j| FromJson.within_depth(j, read_json_small, encode_small)
 
 	read_json_small : JsonValue -> Try(Small, Decode.Error)
 	read_json_small = |j| FromJson.i32(j)
 
-	to_json_small : Small -> Try(JsonValue, Encode.Error)
-	to_json_small = |v| ToJson.i32(v)
+	to_json_small : Small, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_small = |v, e| ToJson.i32(v, e)
 
 	## haus type `schema-based#Byte`.
 	Byte : U8
 
 	decode_byte : Value -> Try(Byte, Decode.Error)
-	decode_byte = |v| Decode.u8(v)
+	decode_byte = |v| Decode.within_depth(v, read_value_byte)
 
-	encode_byte : Byte -> Value
-	encode_byte = |v| Num(v.to_str())
+	read_value_byte : Value -> Try(Byte, Decode.Error)
+	read_value_byte = |v| Decode.u8(v)
+
+	encode_byte : Byte, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_byte = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_byte : JsonValue -> Try(Byte, Decode.Error)
-	from_json_byte = |j| FromJson.within_depth(read_json_byte(j), encode_byte)
+	from_json_byte = |j| FromJson.within_depth(j, read_json_byte, encode_byte)
 
 	read_json_byte : JsonValue -> Try(Byte, Decode.Error)
 	read_json_byte = |j| FromJson.u8(j)
 
-	to_json_byte : Byte -> Try(JsonValue, Encode.Error)
-	to_json_byte = |v| ToJson.u8(v)
+	to_json_byte : Byte, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_byte = |v, e| ToJson.u8(v, e)
 
 	## haus type `schema-based#Big`.
 	Big : Int
 
 	decode_big : Value -> Try(Big, Decode.Error)
-	decode_big = |v| Decode.int(v)
+	decode_big = |v| Decode.within_depth(v, read_value_big)
 
-	encode_big : Big -> Value
-	encode_big = |v| Encode.int(v)
+	read_value_big : Value -> Try(Big, Decode.Error)
+	read_value_big = |v| Decode.int(v)
+
+	encode_big : Big, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_big = |v, e| Encode.int(v, e)
 
 	from_json_big : JsonValue -> Try(Big, Decode.Error)
-	from_json_big = |j| FromJson.within_depth(read_json_big(j), encode_big)
+	from_json_big = |j| FromJson.within_depth(j, read_json_big, encode_big)
 
 	read_json_big : JsonValue -> Try(Big, Decode.Error)
 	read_json_big = |j| FromJson.int(j)
 
-	to_json_big : Big -> Try(JsonValue, Encode.Error)
-	to_json_big = |v| ToJson.int(v)
+	to_json_big : Big, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_big = |v, e| ToJson.int(v, e)
 
 	## haus type `schema-based#I64`.
 	I64_ : I64
 
 	decode_i64 : Value -> Try(I64_, Decode.Error)
-	decode_i64 = |v| Decode.i64(v)
+	decode_i64 = |v| Decode.within_depth(v, read_value_i64)
 
-	encode_i64 : I64_ -> Value
-	encode_i64 = |v| Num(v.to_str())
+	read_value_i64 : Value -> Try(I64_, Decode.Error)
+	read_value_i64 = |v| Decode.i64(v)
+
+	encode_i64 : I64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_i64 = |v, e| Encode.number(v.to_str(), e)
 
 	from_json_i64 : JsonValue -> Try(I64_, Decode.Error)
-	from_json_i64 = |j| FromJson.within_depth(read_json_i64(j), encode_i64)
+	from_json_i64 = |j| FromJson.within_depth(j, read_json_i64, encode_i64)
 
 	read_json_i64 : JsonValue -> Try(I64_, Decode.Error)
 	read_json_i64 = |j| FromJson.i64(j)
 
-	to_json_i64 : I64_ -> Try(JsonValue, Encode.Error)
-	to_json_i64 = |v| ToJson.i64(v)
+	to_json_i64 : I64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_i64 = |v, e| ToJson.i64(v, e)
 
 	## haus type `schema-based#F64`.
 	F64_ : F64
 
 	decode_f64 : Value -> Try(F64_, Decode.Error)
-	decode_f64 = |v| Decode.f64(v)
+	decode_f64 = |v| Decode.within_depth(v, read_value_f64)
 
-	encode_f64 : F64_ -> Value
-	encode_f64 = |v| Encode.f64(v)
+	read_value_f64 : Value -> Try(F64_, Decode.Error)
+	read_value_f64 = |v| Decode.f64(v)
+
+	encode_f64 : F64_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_f64 = |v, e| Encode.f64(v, e)
 
 	from_json_f64 : JsonValue -> Try(F64_, Decode.Error)
-	from_json_f64 = |j| FromJson.within_depth(read_json_f64(j), encode_f64)
+	from_json_f64 = |j| FromJson.within_depth(j, read_json_f64, encode_f64)
 
 	read_json_f64 : JsonValue -> Try(F64_, Decode.Error)
 	read_json_f64 = |j| FromJson.f64(j)
 
-	to_json_f64 : F64_ -> Try(JsonValue, Encode.Error)
-	to_json_f64 = |v| ToJson.f64(v)
+	to_json_f64 : F64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_f64 = |v, e| ToJson.f64(v, e)
 
 	## haus type `schema-based#F32`.
 	F32_ : F32
 
 	decode_f32 : Value -> Try(F32_, Decode.Error)
-	decode_f32 = |v| Decode.f32(v)
+	decode_f32 = |v| Decode.within_depth(v, read_value_f32)
 
-	encode_f32 : F32_ -> Value
-	encode_f32 = |v| Encode.f32(v)
+	read_value_f32 : Value -> Try(F32_, Decode.Error)
+	read_value_f32 = |v| Decode.f32(v)
+
+	encode_f32 : F32_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_f32 = |v, e| Encode.f32(v, e)
 
 	from_json_f32 : JsonValue -> Try(F32_, Decode.Error)
-	from_json_f32 = |j| FromJson.within_depth(read_json_f32(j), encode_f32)
+	from_json_f32 = |j| FromJson.within_depth(j, read_json_f32, encode_f32)
 
 	read_json_f32 : JsonValue -> Try(F32_, Decode.Error)
 	read_json_f32 = |j| FromJson.f32(j)
 
-	to_json_f32 : F32_ -> Try(JsonValue, Encode.Error)
-	to_json_f32 = |v| ToJson.f32(v)
+	to_json_f32 : F32_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_f32 = |v, e| ToJson.f32(v, e)
 
 	## haus type `schema-based#Dec`.
 	Dec_ : Str
 
 	decode_dec : Value -> Try(Dec_, Decode.Error)
-	decode_dec = |v| Decode.decimal(v)
+	decode_dec = |v| Decode.within_depth(v, read_value_dec)
 
-	encode_dec : Dec_ -> Value
-	encode_dec = |v| Encode.decimal(v)
+	read_value_dec : Value -> Try(Dec_, Decode.Error)
+	read_value_dec = |v| Decode.decimal(v)
+
+	encode_dec : Dec_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_dec = |v, e| Encode.decimal(v, e)
 
 	from_json_dec : JsonValue -> Try(Dec_, Decode.Error)
-	from_json_dec = |j| FromJson.within_depth(read_json_dec(j), encode_dec)
+	from_json_dec = |j| FromJson.within_depth(j, read_json_dec, encode_dec)
 
 	read_json_dec : JsonValue -> Try(Dec_, Decode.Error)
 	read_json_dec = |j| FromJson.decimal(j)
 
-	to_json_dec : Dec_ -> Try(JsonValue, Encode.Error)
-	to_json_dec = |v| ToJson.decimal(v)
+	to_json_dec : Dec_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_dec = |v, e| ToJson.decimal(v, e)
 
 	## haus type `schema-based#Day`.
 	Day : Str
 
 	decode_day : Value -> Try(Day, Decode.Error)
-	decode_day = |v| Decode.time("Date")(v)
+	decode_day = |v| Decode.within_depth(v, read_value_day)
 
-	encode_day : Day -> Value
-	encode_day = |v| Encode.time("Date")(v)
+	read_value_day : Value -> Try(Day, Decode.Error)
+	read_value_day = |v| Decode.time("Date")(v)
+
+	encode_day : Day, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_day = |v, e| Encode.time("Date")(v, e)
 
 	from_json_day : JsonValue -> Try(Day, Decode.Error)
-	from_json_day = |j| FromJson.within_depth(read_json_day(j), encode_day)
+	from_json_day = |j| FromJson.within_depth(j, read_json_day, encode_day)
 
 	read_json_day : JsonValue -> Try(Day, Decode.Error)
 	read_json_day = |j| FromJson.time("Date")(j)
 
-	to_json_day : Day -> Try(JsonValue, Encode.Error)
-	to_json_day = |v| ToJson.time(v)
+	to_json_day : Day, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_day = |v, e| ToJson.time(v, e)
 
 	## haus type `schema-based#At`.
 	At : Str
 
 	decode_at : Value -> Try(At, Decode.Error)
-	decode_at = |v| Decode.time("Instant")(v)
+	decode_at = |v| Decode.within_depth(v, read_value_at)
 
-	encode_at : At -> Value
-	encode_at = |v| Encode.time("Instant")(v)
+	read_value_at : Value -> Try(At, Decode.Error)
+	read_value_at = |v| Decode.time("Instant")(v)
+
+	encode_at : At, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_at = |v, e| Encode.time("Instant")(v, e)
 
 	from_json_at : JsonValue -> Try(At, Decode.Error)
-	from_json_at = |j| FromJson.within_depth(read_json_at(j), encode_at)
+	from_json_at = |j| FromJson.within_depth(j, read_json_at, encode_at)
 
 	read_json_at : JsonValue -> Try(At, Decode.Error)
 	read_json_at = |j| FromJson.time("Instant")(j)
 
-	to_json_at : At -> Try(JsonValue, Encode.Error)
-	to_json_at = |v| ToJson.time(v)
+	to_json_at : At, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_at = |v, e| ToJson.time(v, e)
 
 	## haus type `schema-based#Raw`.
 	Raw : Value
 
 	decode_raw : Value -> Try(Raw, Decode.Error)
-	decode_raw = |v| Decode.any(v)
+	decode_raw = |v| Decode.within_depth(v, read_value_raw)
 
-	encode_raw : Raw -> Value
-	encode_raw = |v| Encode.any(v)
+	read_value_raw : Value -> Try(Raw, Decode.Error)
+	read_value_raw = |v| Decode.any(v)
+
+	encode_raw : Raw, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_raw = |v, e| Encode.any(v, e)
 
 	from_json_raw : JsonValue -> Try(Raw, Decode.Error)
-	from_json_raw = |j| FromJson.within_depth(read_json_raw(j), encode_raw)
+	from_json_raw = |j| FromJson.within_depth(j, read_json_raw, encode_raw)
 
 	read_json_raw : JsonValue -> Try(Raw, Decode.Error)
 	read_json_raw = |j| FromJson.any(j)
 
-	to_json_raw : Raw -> Try(JsonValue, Encode.Error)
-	to_json_raw = |v| ToJson.any(v)
+	to_json_raw : Raw, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_raw = |v, e| ToJson.any(v, e)
 
 	## haus type `schema-based#Key`.
 	Key : Secret(Str)
 
 	decode_key : Value -> Try(Key, Decode.Error)
-	decode_key = |v| Decode.secret(v, "Secret String", Decode.str)
+	decode_key = |v| Decode.within_depth(v, read_value_key)
 
-	encode_key : Key -> Value
-	encode_key = |v| Encode.secret(v, Encode.str)
+	read_value_key : Value -> Try(Key, Decode.Error)
+	read_value_key = |v| Decode.secret(v, "Secret String", Decode.str)
+
+	encode_key : Key, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_key = |v, e| Encode.secret(v, "Secret String", e, Encode.str)
 
 	from_json_key : JsonValue -> Try(Key, Decode.Error)
-	from_json_key = |j| FromJson.within_depth(read_json_key(j), encode_key)
+	from_json_key = |j| FromJson.within_depth(j, read_json_key, encode_key)
 
 	read_json_key : JsonValue -> Try(Key, Decode.Error)
 	read_json_key = |j| FromJson.secret(j, "Secret String", FromJson.str)
 
-	to_json_key : Key -> Try(JsonValue, Encode.Error)
-	to_json_key = |v| ToJson.secret(v, "Secret String", ToJson.str)
+	to_json_key : Key, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_key = |v, e| ToJson.secret(v, "Secret String", e, ToJson.str)
 
 	## haus type `schema-based#Ints`.
 	Ints : List(I32)
 
 	decode_ints : Value -> Try(Ints, Decode.Error)
-	decode_ints = |v| Decode.list(v, Decode.i32)
+	decode_ints = |v| Decode.within_depth(v, read_value_ints)
 
-	encode_ints : Ints -> Value
-	encode_ints = |v| Encode.list(v, |x1| Num(x1.to_str()))
+	read_value_ints : Value -> Try(Ints, Decode.Error)
+	read_value_ints = |v| Decode.list(v, Decode.i32)
+
+	encode_ints : Ints, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_ints = |v, e| Encode.list(v, e, |x1, e1| Encode.number(x1.to_str(), e1))
 
 	from_json_ints : JsonValue -> Try(Ints, Decode.Error)
-	from_json_ints = |j| FromJson.within_depth(read_json_ints(j), encode_ints)
+	from_json_ints = |j| FromJson.within_depth(j, read_json_ints, encode_ints)
 
 	read_json_ints : JsonValue -> Try(Ints, Decode.Error)
 	read_json_ints = |j| FromJson.list(j, FromJson.i32)
 
-	to_json_ints : Ints -> Try(JsonValue, Encode.Error)
-	to_json_ints = |v| ToJson.list(v, ToJson.i32)
+	to_json_ints : Ints, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_ints = |v, e| ToJson.list(v, e, ToJson.i32)
 
 	## haus type `schema-based#Counts`.
 	Counts : List((Str, I32))
 
 	decode_counts : Value -> Try(Counts, Decode.Error)
-	decode_counts = |v| Decode.map(v, Decode.i32)
+	decode_counts = |v| Decode.within_depth(v, read_value_counts)
 
-	encode_counts : Counts -> Value
-	encode_counts = |v| Encode.map(v, |x2| Num(x2.to_str()))
+	read_value_counts : Value -> Try(Counts, Decode.Error)
+	read_value_counts = |v| Decode.map(v, Decode.i32)
+
+	encode_counts : Counts, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_counts = |v, e| Encode.map(v, e, |x2, e2| Encode.number(x2.to_str(), e2))
 
 	from_json_counts : JsonValue -> Try(Counts, Decode.Error)
-	from_json_counts = |j| FromJson.within_depth(read_json_counts(j), encode_counts)
+	from_json_counts = |j| FromJson.within_depth(j, read_json_counts, encode_counts)
 
 	read_json_counts : JsonValue -> Try(Counts, Decode.Error)
 	read_json_counts = |j| FromJson.map(j, FromJson.i32)
 
-	to_json_counts : Counts -> Try(JsonValue, Encode.Error)
-	to_json_counts = |v| ToJson.map(v, ToJson.i32)
+	to_json_counts : Counts, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_counts = |v, e| ToJson.map(v, e, ToJson.i32)
 
 	## haus type `schema-based#Opt`.
 	Opt : [None, Some(I32)]
 
 	decode_opt : Value -> Try(Opt, Decode.Error)
-	decode_opt = |v| Decode.maybe(v, Decode.i32)
+	decode_opt = |v| Decode.within_depth(v, read_value_opt)
 
-	encode_opt : Opt -> Value
-	encode_opt = |v| Encode.maybe(v, |x3| Num(x3.to_str()))
+	read_value_opt : Value -> Try(Opt, Decode.Error)
+	read_value_opt = |v| Decode.maybe(v, Decode.i32)
+
+	encode_opt : Opt, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_opt = |v, e| Encode.maybe(v, e, |x3, e3| Encode.number(x3.to_str(), e3))
 
 	from_json_opt : JsonValue -> Try(Opt, Decode.Error)
-	from_json_opt = |j| FromJson.within_depth(read_json_opt(j), encode_opt)
+	from_json_opt = |j| FromJson.within_depth(j, read_json_opt, encode_opt)
 
 	read_json_opt : JsonValue -> Try(Opt, Decode.Error)
 	read_json_opt = |j| FromJson.maybe(j, False, FromJson.i32)
 
-	to_json_opt : Opt -> Try(JsonValue, Encode.Error)
-	to_json_opt = |v| ToJson.maybe(v, False, ToJson.i32)
+	to_json_opt : Opt, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_opt = |v, e| ToJson.maybe(v, e, False, ToJson.i32)
 
 	## haus type `schema-based#Nested`.
 	Nested : [None, Some([None, Some(I32)])]
 
 	decode_nested : Value -> Try(Nested, Decode.Error)
-	decode_nested = |v| Decode.maybe(v, |x5| Decode.maybe(x5, Decode.i32))
+	decode_nested = |v| Decode.within_depth(v, read_value_nested)
 
-	encode_nested : Nested -> Value
-	encode_nested = |v| Encode.maybe(v, |x6| Encode.maybe(x6, |x4| Num(x4.to_str())))
+	read_value_nested : Value -> Try(Nested, Decode.Error)
+	read_value_nested = |v| Decode.maybe(v, |x5| Decode.maybe(x5, Decode.i32))
+
+	encode_nested : Nested, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_nested = |v, e| Encode.maybe(v, e, |x6, e6| Encode.maybe(x6, e6, |x4, e4| Encode.number(x4.to_str(), e4)))
 
 	from_json_nested : JsonValue -> Try(Nested, Decode.Error)
-	from_json_nested = |j| FromJson.within_depth(read_json_nested(j), encode_nested)
+	from_json_nested = |j| FromJson.within_depth(j, read_json_nested, encode_nested)
 
 	read_json_nested : JsonValue -> Try(Nested, Decode.Error)
 	read_json_nested = |j| FromJson.maybe(j, True, |y1| FromJson.maybe(y1, False, FromJson.i32))
 
-	to_json_nested : Nested -> Try(JsonValue, Encode.Error)
-	to_json_nested = |v| ToJson.maybe(v, True, |y2| ToJson.maybe(y2, False, ToJson.i32))
+	to_json_nested : Nested, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_nested = |v, e| ToJson.maybe(v, e, True, |y2, e2| ToJson.maybe(y2, e2, False, ToJson.i32))
 
 	## haus type `schema-based#OptBig`.
 	OptBig : [None, Some(Int)]
 
 	decode_opt_big : Value -> Try(OptBig, Decode.Error)
-	decode_opt_big = |v| Decode.maybe(v, Decode.int)
+	decode_opt_big = |v| Decode.within_depth(v, read_value_opt_big)
 
-	encode_opt_big : OptBig -> Value
-	encode_opt_big = |v| Encode.maybe(v, Encode.int)
+	read_value_opt_big : Value -> Try(OptBig, Decode.Error)
+	read_value_opt_big = |v| Decode.maybe(v, Decode.int)
+
+	encode_opt_big : OptBig, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_opt_big = |v, e| Encode.maybe(v, e, Encode.int)
 
 	from_json_opt_big : JsonValue -> Try(OptBig, Decode.Error)
-	from_json_opt_big = |j| FromJson.within_depth(read_json_opt_big(j), encode_opt_big)
+	from_json_opt_big = |j| FromJson.within_depth(j, read_json_opt_big, encode_opt_big)
 
 	read_json_opt_big : JsonValue -> Try(OptBig, Decode.Error)
 	read_json_opt_big = |j| FromJson.maybe(j, False, FromJson.int)
 
-	to_json_opt_big : OptBig -> Try(JsonValue, Encode.Error)
-	to_json_opt_big = |v| ToJson.maybe(v, False, ToJson.int)
+	to_json_opt_big : OptBig, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_opt_big = |v, e| ToJson.maybe(v, e, False, ToJson.int)
 
 	## haus type `schema-based#Outcome`.
 	Outcome : Try(I32, Str)
 
 	decode_outcome : Value -> Try(Outcome, Decode.Error)
-	decode_outcome = |v| Decode.result(v, Decode.i32, Decode.str)
+	decode_outcome = |v| Decode.within_depth(v, read_value_outcome)
 
-	encode_outcome : Outcome -> Value
-	encode_outcome = |v| Encode.result(v, |x7| Num(x7.to_str()), Encode.str)
+	read_value_outcome : Value -> Try(Outcome, Decode.Error)
+	read_value_outcome = |v| Decode.result(v, Decode.i32, Decode.str)
+
+	encode_outcome : Outcome, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_outcome = |v, e| Encode.result(v, e, |x7, e7| Encode.number(x7.to_str(), e7), Encode.str)
 
 	from_json_outcome : JsonValue -> Try(Outcome, Decode.Error)
-	from_json_outcome = |j| FromJson.within_depth(read_json_outcome(j), encode_outcome)
+	from_json_outcome = |j| FromJson.within_depth(j, read_json_outcome, encode_outcome)
 
 	read_json_outcome : JsonValue -> Try(Outcome, Decode.Error)
 	read_json_outcome = |j| FromJson.result(j, FromJson.i32, FromJson.str)
 
-	to_json_outcome : Outcome -> Try(JsonValue, Encode.Error)
-	to_json_outcome = |v| ToJson.result(v, ToJson.i32, ToJson.str)
+	to_json_outcome : Outcome, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_outcome = |v, e| ToJson.result(v, e, ToJson.i32, ToJson.str)
 
 	## haus type `schema-based#Level`.
 	Level := [Debug, Info]
 
 	decode_level : Value -> Try(Level, Decode.Error)
-	decode_level = |v| match v {
+	decode_level = |v| Decode.within_depth(v, read_value_level)
+
+	read_value_level : Value -> Try(Level, Decode.Error)
+	read_value_level = |v| match v {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Debug", _) => Decode.arity("Debug", 0)
@@ -383,14 +446,14 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (Level)", v)
 	}
 
-	encode_level : Level -> Value
-	encode_level = |v| match v {
-		Debug => Tag("Debug", [])
-		Info => Tag("Info", [])
+	encode_level : Level, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_level = |v, e| match v {
+		Debug => Encode.tag("Debug", e)
+		Info => Encode.tag("Info", e)
 	}
 
 	from_json_level : JsonValue -> Try(Level, Decode.Error)
-	from_json_level = |j| FromJson.within_depth(read_json_level(j), encode_level)
+	from_json_level = |j| FromJson.within_depth(j, read_json_level, encode_level)
 
 	read_json_level : JsonValue -> Try(Level, Decode.Error)
 	read_json_level = |j| {
@@ -402,17 +465,20 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_level : Level -> Try(JsonValue, Encode.Error)
-	to_json_level = |v| match v {
-		Debug => ToJson.tag_name("Debug")
-		Info => ToJson.tag_name("Info")
+	to_json_level : Level, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_level = |v, e| match v {
+		Debug => ToJson.tag_name("Debug", e)
+		Info => ToJson.tag_name("Info", e)
 	}
 
 	## haus type `schema-based#Shape`.
 	Shape := [Circle({ r : F64 }), Point(F64, F64), Wrap(I32), Empty, Unknown(Str, List(Value))]
 
 	decode_shape : Value -> Try(Shape, Decode.Error)
-	decode_shape = |v| match v {
+	decode_shape = |v| Decode.within_depth(v, read_value_shape)
+
+	read_value_shape : Value -> Try(Shape, Decode.Error)
+	read_value_shape = |v| match v {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -431,17 +497,17 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (Shape)", v)
 	}
 
-	encode_shape : Shape -> Value
-	encode_shape = |v| match v {
-		Circle(r) => Tag("Circle", [Encode.record([("r", Present(Encode.f64(r.r)))])])
-		Point(a0, a1) => Tag("Point", [Encode.f64(a0), Encode.f64(a1)])
-		Wrap(a0) => Tag("Wrap", [Num(a0.to_str())])
-		Empty => Tag("Empty", [])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_shape = |v, e| match v {
+		Circle(r) => Encode.tagged_record("Circle", e, [("r", Encode.required(r.r, Encode.f64))])
+		Point(a0, a1) => Encode.tagged_args("Point", e, [|e8| Encode.f64(a0, e8), |e9| Encode.f64(a1, e9)])
+		Wrap(a0) => Encode.tagged("Wrap", e, |e10| Encode.number(a0.to_str(), e10))
+		Empty => Encode.tag("Empty", e)
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_shape : JsonValue -> Try(Shape, Decode.Error)
-	from_json_shape = |j| FromJson.within_depth(read_json_shape(j), encode_shape)
+	from_json_shape = |j| FromJson.within_depth(j, read_json_shape, encode_shape)
 
 	read_json_shape : JsonValue -> Try(Shape, Decode.Error)
 	read_json_shape = |j| {
@@ -466,54 +532,60 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_shape : Shape -> Try(JsonValue, Encode.Error)
-	to_json_shape = |v| match v {
-		Circle(r) => ToJson.tagged_object("Circle", [("r", Present(ToJson.f64(r.r)))])
-		Point(a0, a1) => ToJson.tagged("Point", [ToJson.f64(a0), ToJson.f64(a1)])
-		Wrap(a0) => ToJson.tagged("Wrap", [ToJson.i32(a0)])
-		Empty => ToJson.tagged("Empty", [])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_shape = |v, e| match v {
+		Circle(r) => ToJson.tagged_object("Circle", e, [("r", ToJson.required(r.r, ToJson.f64))])
+		Point(a0, a1) => ToJson.tagged_args("Point", e, [|e3| ToJson.f64(a0, e3), |e4| ToJson.f64(a1, e4)])
+		Wrap(a0) => ToJson.tagged("Wrap", e, |e5| ToJson.i32(a0, e5))
+		Empty => ToJson.tag("Empty", e)
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#User`.
 	User : { id : I32, name : Str, nick : [Missing, Present(Str)], note : [Missing, Present([None, Some(Str)])] }
 
 	decode_user : Value -> Try(User, Decode.Error)
-	decode_user = |v| {
+	decode_user = |v| Decode.within_depth(v, read_value_user)
+
+	read_value_user : Value -> Try(User, Decode.Error)
+	read_value_user = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ id: Decode.field(fs, "id", Decode.i32)?, name: Decode.field(fs, "name", Decode.str)?, nick: Decode.optional_field(fs, "nick", Decode.str)?, note: Decode.optional_field(fs, "note", |x8| Decode.maybe(x8, Decode.str))? })
+		Ok({ id: Decode.field(fs, "id", Decode.i32)?, name: Decode.field(fs, "name", Decode.str)?, nick: Decode.optional_field(fs, "nick", Decode.str)?, note: Decode.optional_field(fs, "note", |x11| Decode.maybe(x11, Decode.str))? })
 	}
 
-	encode_user : User -> Value
-	encode_user = |v| Encode.record([("id", Present(Num(v.id.to_str()))), ("name", Present(Encode.str(v.name))), ("nick", Encode.optional(v.nick, Encode.str)), ("note", Encode.optional(v.note, |x9| Encode.maybe(x9, Encode.str)))])
+	encode_user : User, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_user = |v, e| Encode.record(e, [("id", Present(|e12| Encode.number(v.id.to_str(), e12))), ("name", Encode.required(v.name, Encode.str)), ("nick", Encode.optional(v.nick, Encode.str)), ("note", Encode.optional(v.note, |x13, e13| Encode.maybe(x13, e13, Encode.str)))])
 
 	from_json_user : JsonValue -> Try(User, Decode.Error)
-	from_json_user = |j| FromJson.within_depth(read_json_user(j), encode_user)
+	from_json_user = |j| FromJson.within_depth(j, read_json_user, encode_user)
 
 	read_json_user : JsonValue -> Try(User, Decode.Error)
 	read_json_user = |j| {
 		fs = FromJson.object(j, "User")?
-		Ok({ id: FromJson.field(fs, "id", FromJson.i32)?, name: FromJson.field(fs, "name", FromJson.str)?, nick: FromJson.optional_field(fs, "nick", FromJson.str)?, note: FromJson.optional_field(fs, "note", |y3| FromJson.maybe(y3, False, FromJson.str))? })
+		Ok({ id: FromJson.field(fs, "id", FromJson.i32)?, name: FromJson.field(fs, "name", FromJson.str)?, nick: FromJson.optional_field(fs, "nick", FromJson.str)?, note: FromJson.optional_field(fs, "note", |y6| FromJson.maybe(y6, False, FromJson.str))? })
 	}
 
-	to_json_user : User -> Try(JsonValue, Encode.Error)
-	to_json_user = |v| ToJson.object([("id", Present(ToJson.i32(v.id))), ("name", Present(ToJson.str(v.name))), ("nick", ToJson.optional(v.nick, ToJson.str)), ("note", ToJson.optional(v.note, |y4| ToJson.maybe(y4, False, ToJson.str)))])
+	to_json_user : User, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_user = |v, e| ToJson.object(e, [("id", ToJson.required(v.id, ToJson.i32)), ("name", ToJson.required(v.name, ToJson.str)), ("nick", ToJson.optional(v.nick, ToJson.str)), ("note", ToJson.optional(v.note, |y7, e7| ToJson.maybe(y7, e7, False, ToJson.str)))])
 
 	## haus type `schema-based#Strict`.
 	Strict : { id : I32 }
 
 	decode_strict : Value -> Try(Strict, Decode.Error)
-	decode_strict = |v| {
+	decode_strict = |v| Decode.within_depth(v, read_value_strict)
+
+	read_value_strict : Value -> Try(Strict, Decode.Error)
+	read_value_strict = |v| {
 		fs = Decode.strict_record(v)?
 		Decode.closed(fs, ["id"])?
 		Ok({ id: Decode.field(fs, "id", Decode.i32)? })
 	}
 
-	encode_strict : Strict -> Value
-	encode_strict = |v| Encode.record([("id", Present(Num(v.id.to_str())))])
+	encode_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_strict = |v, e| Encode.record(e, [("id", Present(|e14| Encode.number(v.id.to_str(), e14)))])
 
 	from_json_strict : JsonValue -> Try(Strict, Decode.Error)
-	from_json_strict = |j| FromJson.within_depth(read_json_strict(j), encode_strict)
+	from_json_strict = |j| FromJson.within_depth(j, read_json_strict, encode_strict)
 
 	read_json_strict : JsonValue -> Try(Strict, Decode.Error)
 	read_json_strict = |j| {
@@ -522,14 +594,17 @@ SchemaBased := [].{
 		Ok({ id: FromJson.field(fs, "id", FromJson.i32)? })
 	}
 
-	to_json_strict : Strict -> Try(JsonValue, Encode.Error)
-	to_json_strict = |v| ToJson.object([("id", Present(ToJson.i32(v.id)))])
+	to_json_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_strict = |v, e| ToJson.object(e, [("id", ToJson.required(v.id, ToJson.i32))])
 
 	## haus type `schema-based#Bits`.
 	Bits := [False, True]
 
 	decode_bits : Value -> Try(Bits, Decode.Error)
-	decode_bits = |v| match v {
+	decode_bits = |v| Decode.within_depth(v, read_value_bits)
+
+	read_value_bits : Value -> Try(Bits, Decode.Error)
+	read_value_bits = |v| match v {
 		Tag("False", []) => Ok(False)
 		Tag("True", []) => Ok(True)
 		Tag("False", _) => Decode.arity("False", 0)
@@ -538,14 +613,14 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (Bits)", v)
 	}
 
-	encode_bits : Bits -> Value
-	encode_bits = |v| match v {
-		False => Tag("False", [])
-		True => Tag("True", [])
+	encode_bits : Bits, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_bits = |v, e| match v {
+		False => Encode.tag("False", e)
+		True => Encode.tag("True", e)
 	}
 
 	from_json_bits : JsonValue -> Try(Bits, Decode.Error)
-	from_json_bits = |j| FromJson.within_depth(read_json_bits(j), encode_bits)
+	from_json_bits = |j| FromJson.within_depth(j, read_json_bits, encode_bits)
 
 	read_json_bits : JsonValue -> Try(Bits, Decode.Error)
 	read_json_bits = |j| {
@@ -557,48 +632,54 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_bits : Bits -> Try(JsonValue, Encode.Error)
-	to_json_bits = |v| match v {
-		False => ToJson.tag_name("False")
-		True => ToJson.tag_name("True")
+	to_json_bits : Bits, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_bits = |v, e| match v {
+		False => ToJson.tag_name("False", e)
+		True => ToJson.tag_name("True", e)
 	}
 
 	## haus type `schema-based#Loop`.
 	Loop := [Loop([None, Some(Loop)])]
 
 	decode_loop : Value -> Try(Loop, Decode.Error)
-	decode_loop = |v| Ok(Loop(Decode.maybe(v, decode_loop)?))
+	decode_loop = |v| Decode.within_depth(v, read_value_loop)
 
-	encode_loop : Loop -> Value
-	encode_loop = |v| match v {
-		Loop(x) => Encode.maybe(x, encode_loop)
+	read_value_loop : Value -> Try(Loop, Decode.Error)
+	read_value_loop = |v| Ok(Loop(Decode.maybe(v, read_value_loop)?))
+
+	encode_loop : Loop, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_loop = |v, e| match v {
+		Loop(x) => Encode.maybe(x, e, encode_loop)
 	}
 
 	from_json_loop : JsonValue -> Try(Loop, Decode.Error)
-	from_json_loop = |j| FromJson.within_depth(read_json_loop(j), encode_loop)
+	from_json_loop = |j| FromJson.within_depth(j, read_json_loop, encode_loop)
 
 	read_json_loop : JsonValue -> Try(Loop, Decode.Error)
 	read_json_loop = |j| Ok(Loop(FromJson.maybe(j, True, read_json_loop)?))
 
-	to_json_loop : Loop -> Try(JsonValue, Encode.Error)
-	to_json_loop = |v| match v {
-		Loop(x) => ToJson.maybe(x, True, to_json_loop)
+	to_json_loop : Loop, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_loop = |v, e| match v {
+		Loop(x) => ToJson.maybe(x, e, True, to_json_loop)
 	}
 
 	## haus type `schema-based#BoxRec`.
 	BoxRec : { w : I32 }
 
 	decode_box_rec : Value -> Try(BoxRec, Decode.Error)
-	decode_box_rec = |v| {
+	decode_box_rec = |v| Decode.within_depth(v, read_value_box_rec)
+
+	read_value_box_rec : Value -> Try(BoxRec, Decode.Error)
+	read_value_box_rec = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ w: Decode.field(fs, "w", Decode.i32)? })
 	}
 
-	encode_box_rec : BoxRec -> Value
-	encode_box_rec = |v| Encode.record([("w", Present(Num(v.w.to_str())))])
+	encode_box_rec : BoxRec, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_box_rec = |v, e| Encode.record(e, [("w", Present(|e15| Encode.number(v.w.to_str(), e15)))])
 
 	from_json_box_rec : JsonValue -> Try(BoxRec, Decode.Error)
-	from_json_box_rec = |j| FromJson.within_depth(read_json_box_rec(j), encode_box_rec)
+	from_json_box_rec = |j| FromJson.within_depth(j, read_json_box_rec, encode_box_rec)
 
 	read_json_box_rec : JsonValue -> Try(BoxRec, Decode.Error)
 	read_json_box_rec = |j| {
@@ -606,28 +687,31 @@ SchemaBased := [].{
 		Ok({ w: FromJson.field(fs, "w", FromJson.i32)? })
 	}
 
-	to_json_box_rec : BoxRec -> Try(JsonValue, Encode.Error)
-	to_json_box_rec = |v| ToJson.object([("w", Present(ToJson.i32(v.w)))])
+	to_json_box_rec : BoxRec, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_box_rec = |v, e| ToJson.object(e, [("w", ToJson.required(v.w, ToJson.i32))])
 
 	## haus type `schema-based#Boxed`.
 	Boxed := [Box(BoxRec), Unknown(Str, List(Value))]
 
 	decode_boxed : Value -> Try(Boxed, Decode.Error)
-	decode_boxed = |v| match v {
-		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, decode_box_rec)?))
+	decode_boxed = |v| Decode.within_depth(v, read_value_boxed)
+
+	read_value_boxed : Value -> Try(Boxed, Decode.Error)
+	read_value_boxed = |v| match v {
+		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, read_value_box_rec)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (Boxed)", v)
 	}
 
-	encode_boxed : Boxed -> Value
-	encode_boxed = |v| match v {
-		Box(a0) => Tag("Box", [encode_box_rec(a0)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_boxed : Boxed, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_boxed = |v, e| match v {
+		Box(a0) => Encode.tagged("Box", e, |e16| encode_box_rec(a0, e16))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_boxed : JsonValue -> Try(Boxed, Decode.Error)
-	from_json_boxed = |j| FromJson.within_depth(read_json_boxed(j), encode_boxed)
+	from_json_boxed = |j| FromJson.within_depth(j, read_json_boxed, encode_boxed)
 
 	read_json_boxed : JsonValue -> Try(Boxed, Decode.Error)
 	read_json_boxed = |j| {
@@ -638,35 +722,41 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_boxed : Boxed -> Try(JsonValue, Encode.Error)
-	to_json_boxed = |v| match v {
-		Box(a0) => ToJson.record_case("Box", to_json_box_rec(a0))
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_boxed : Boxed, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_boxed = |v, e| match v {
+		Box(a0) => ToJson.record_case("Box", e, |e8| to_json_box_rec(a0, e8))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#BoxAlias`.
 	BoxAlias : BoxRec
 
 	decode_box_alias : Value -> Try(BoxAlias, Decode.Error)
-	decode_box_alias = |v| decode_box_rec(v)
+	decode_box_alias = |v| Decode.within_depth(v, read_value_box_alias)
 
-	encode_box_alias : BoxAlias -> Value
-	encode_box_alias = |v| encode_box_rec(v)
+	read_value_box_alias : Value -> Try(BoxAlias, Decode.Error)
+	read_value_box_alias = |v| read_value_box_rec(v)
+
+	encode_box_alias : BoxAlias, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_box_alias = |v, e| encode_box_rec(v, e)
 
 	from_json_box_alias : JsonValue -> Try(BoxAlias, Decode.Error)
-	from_json_box_alias = |j| FromJson.within_depth(read_json_box_alias(j), encode_box_alias)
+	from_json_box_alias = |j| FromJson.within_depth(j, read_json_box_alias, encode_box_alias)
 
 	read_json_box_alias : JsonValue -> Try(BoxAlias, Decode.Error)
 	read_json_box_alias = |j| read_json_box_rec(j)
 
-	to_json_box_alias : BoxAlias -> Try(JsonValue, Encode.Error)
-	to_json_box_alias = |v| to_json_box_rec(v)
+	to_json_box_alias : BoxAlias, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_box_alias = |v, e| to_json_box_rec(v, e)
 
 	## haus type `schema-based#ParenBox`.
 	ParenBox := [Box({ w : I32 }), Unknown(Str, List(Value))]
 
 	decode_paren_box : Value -> Try(ParenBox, Decode.Error)
-	decode_paren_box = |v| match v {
+	decode_paren_box = |v| Decode.within_depth(v, read_value_paren_box)
+
+	read_value_paren_box : Value -> Try(ParenBox, Decode.Error)
+	read_value_paren_box = |v| match v {
 		Tag("Box", [p]) => Decode.payload(
 			"Box",
 			p,
@@ -679,14 +769,14 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (ParenBox)", v)
 	}
 
-	encode_paren_box : ParenBox -> Value
-	encode_paren_box = |v| match v {
-		Box(r) => Tag("Box", [Encode.record([("w", Present(Num(r.w.to_str())))])])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_paren_box : ParenBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_paren_box = |v, e| match v {
+		Box(r) => Encode.tagged_record("Box", e, [("w", Present(|e17| Encode.number(r.w.to_str(), e17)))])
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_paren_box : JsonValue -> Try(ParenBox, Decode.Error)
-	from_json_paren_box = |j| FromJson.within_depth(read_json_paren_box(j), encode_paren_box)
+	from_json_paren_box = |j| FromJson.within_depth(j, read_json_paren_box, encode_paren_box)
 
 	read_json_paren_box : JsonValue -> Try(ParenBox, Decode.Error)
 	read_json_paren_box = |j| {
@@ -699,31 +789,34 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_paren_box : ParenBox -> Try(JsonValue, Encode.Error)
-	to_json_paren_box = |v| match v {
-		Box(r) => ToJson.tagged_object("Box", [("w", Present(ToJson.i32(r.w)))])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_paren_box : ParenBox, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_paren_box = |v, e| match v {
+		Box(r) => ToJson.tagged_object("Box", e, [("w", ToJson.required(r.w, ToJson.i32))])
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#AliasBox`.
 	AliasBox := [Box(BoxAlias), Unknown(Str, List(Value))]
 
 	decode_alias_box : Value -> Try(AliasBox, Decode.Error)
-	decode_alias_box = |v| match v {
-		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, decode_box_alias)?))
+	decode_alias_box = |v| Decode.within_depth(v, read_value_alias_box)
+
+	read_value_alias_box : Value -> Try(AliasBox, Decode.Error)
+	read_value_alias_box = |v| match v {
+		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, read_value_box_alias)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (AliasBox)", v)
 	}
 
-	encode_alias_box : AliasBox -> Value
-	encode_alias_box = |v| match v {
-		Box(a0) => Tag("Box", [encode_box_alias(a0)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_alias_box : AliasBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_alias_box = |v, e| match v {
+		Box(a0) => Encode.tagged("Box", e, |e18| encode_box_alias(a0, e18))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_alias_box : JsonValue -> Try(AliasBox, Decode.Error)
-	from_json_alias_box = |j| FromJson.within_depth(read_json_alias_box(j), encode_alias_box)
+	from_json_alias_box = |j| FromJson.within_depth(j, read_json_alias_box, encode_alias_box)
 
 	read_json_alias_box : JsonValue -> Try(AliasBox, Decode.Error)
 	read_json_alias_box = |j| {
@@ -734,10 +827,10 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_alias_box : AliasBox -> Try(JsonValue, Encode.Error)
-	to_json_alias_box = |v| match v {
-		Box(a0) => ToJson.record_case("Box", to_json_box_alias(a0))
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_alias_box : AliasBox, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_alias_box = |v, e| match v {
+		Box(a0) => ToJson.record_case("Box", e, |e9| to_json_box_alias(a0, e9))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#Page`.
@@ -746,54 +839,57 @@ SchemaBased := [].{
 	decode_page : Value, (Value -> Try(a, Decode.Error)) -> Try(Page(a), Decode.Error)
 	decode_page = |v, decode_a| {
 		fs = Decode.strict_record(v)?
-		Ok({ items: Decode.field(fs, "items", |x10| Decode.list(x10, decode_a))? })
+		Ok({ items: Decode.field(fs, "items", |x19| Decode.list(x19, decode_a))? })
 	}
 
-	encode_page : Page(a), (a -> Value) -> Value
-	encode_page = |v, encode_a| Encode.record([("items", Present(Encode.list(v.items, encode_a)))])
+	encode_page : Page(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_page = |v, e, encode_a| Encode.record(e, [("items", Present(|e20| Encode.list(v.items, e20, encode_a)))])
 
 	from_json_page : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Page(a), Decode.Error)
 	from_json_page = |j, from_json_a, _nullable_a| {
 		fs = FromJson.object(j, "Page")?
-		Ok({ items: FromJson.field(fs, "items", |y5| FromJson.list(y5, from_json_a))? })
+		Ok({ items: FromJson.field(fs, "items", |y10| FromJson.list(y10, from_json_a))? })
 	}
 
-	to_json_page : Page(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_page = |v, to_json_a, _nullable_a| ToJson.object([("items", Present(ToJson.list(v.items, to_json_a)))])
+	to_json_page : Page(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_page = |v, e, to_json_a, _nullable_a| ToJson.object(e, [("items", Present(|e11| ToJson.list(v.items, e11, to_json_a)))])
 
 	## haus type `schema-based#Found`.
 	Found := [Found(Page(I32)), Unknown(Str, List(Value))]
 
 	decode_found : Value -> Try(Found, Decode.Error)
-	decode_found = |v| match v {
-		Tag("Found", [p]) => Ok(Found(Decode.record_arg("Found", p, |x12| decode_page(x12, Decode.i32))?))
+	decode_found = |v| Decode.within_depth(v, read_value_found)
+
+	read_value_found : Value -> Try(Found, Decode.Error)
+	read_value_found = |v| match v {
+		Tag("Found", [p]) => Ok(Found(Decode.record_arg("Found", p, |x22| decode_page(x22, Decode.i32))?))
 		Tag("Found", _) => Decode.arity("Found", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (Found)", v)
 	}
 
-	encode_found : Found -> Value
-	encode_found = |v| match v {
-		Found(a0) => Tag("Found", [encode_page(a0, |x11| Num(x11.to_str()))])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_found : Found, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_found = |v, e| match v {
+		Found(a0) => Encode.tagged("Found", e, |e23| encode_page(a0, e23, |x21, e21| Encode.number(x21.to_str(), e21)))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_found : JsonValue -> Try(Found, Decode.Error)
-	from_json_found = |j| FromJson.within_depth(read_json_found(j), encode_found)
+	from_json_found = |j| FromJson.within_depth(j, read_json_found, encode_found)
 
 	read_json_found : JsonValue -> Try(Found, Decode.Error)
 	read_json_found = |j| {
 		(tag, ms) = FromJson.variant(j, "Found")?
 		match tag {
-			"Found" => Ok(Found(FromJson.record_case(ms, |y6| from_json_page(y6, FromJson.i32, False))?))
+			"Found" => Ok(Found(FromJson.record_case(ms, |y12| from_json_page(y12, FromJson.i32, False))?))
 			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
 		}
 	}
 
-	to_json_found : Found -> Try(JsonValue, Encode.Error)
-	to_json_found = |v| match v {
-		Found(a0) => ToJson.record_case("Found", to_json_page(a0, ToJson.i32, False))
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_found : Found, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_found = |v, e| match v {
+		Found(a0) => ToJson.record_case("Found", e, |e13| to_json_page(a0, e13, ToJson.i32, False))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#GenBox`.
@@ -807,10 +903,10 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (GenBox)", v)
 	}
 
-	encode_gen_box : GenBox(a), (a -> Value) -> Value
-	encode_gen_box = |v, encode_a| match v {
-		Box(a0) => Tag("Box", [encode_a(a0)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_gen_box : GenBox(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_gen_box = |v, e, encode_a| match v {
+		Box(a0) => Encode.tagged("Box", e, |e24| encode_a(a0, e24))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_gen_box : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(GenBox(a), Decode.Error)
@@ -825,49 +921,55 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_gen_box : GenBox(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_gen_box = |v, to_json_a, _nullable_a| match v {
-		Box(a0) => ToJson.tagged("Box", [to_json_a(a0)])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_gen_box : GenBox(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_gen_box = |v, e, to_json_a, _nullable_a| match v {
+		Box(a0) => ToJson.tagged("Box", e, |e14| to_json_a(a0, e14))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#GenRec`.
 	GenRec : GenBox(BoxRec)
 
 	decode_gen_rec : Value -> Try(GenRec, Decode.Error)
-	decode_gen_rec = |v| decode_gen_box(v, decode_box_rec)
+	decode_gen_rec = |v| Decode.within_depth(v, read_value_gen_rec)
 
-	encode_gen_rec : GenRec -> Value
-	encode_gen_rec = |v| encode_gen_box(v, encode_box_rec)
+	read_value_gen_rec : Value -> Try(GenRec, Decode.Error)
+	read_value_gen_rec = |v| decode_gen_box(v, read_value_box_rec)
+
+	encode_gen_rec : GenRec, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_gen_rec = |v, e| encode_gen_box(v, e, encode_box_rec)
 
 	from_json_gen_rec : JsonValue -> Try(GenRec, Decode.Error)
-	from_json_gen_rec = |j| FromJson.within_depth(read_json_gen_rec(j), encode_gen_rec)
+	from_json_gen_rec = |j| FromJson.within_depth(j, read_json_gen_rec, encode_gen_rec)
 
 	read_json_gen_rec : JsonValue -> Try(GenRec, Decode.Error)
 	read_json_gen_rec = |j| from_json_gen_box(j, read_json_box_rec, False)
 
-	to_json_gen_rec : GenRec -> Try(JsonValue, Encode.Error)
-	to_json_gen_rec = |v| to_json_gen_box(v, to_json_box_rec, False)
+	to_json_gen_rec : GenRec, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_gen_rec = |v, e| to_json_gen_box(v, e, to_json_box_rec, False)
 
 	## haus type `schema-based#StrictBox`.
 	StrictBox := [Box(Strict), Unknown(Str, List(Value))]
 
 	decode_strict_box : Value -> Try(StrictBox, Decode.Error)
-	decode_strict_box = |v| match v {
-		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, decode_strict)?))
+	decode_strict_box = |v| Decode.within_depth(v, read_value_strict_box)
+
+	read_value_strict_box : Value -> Try(StrictBox, Decode.Error)
+	read_value_strict_box = |v| match v {
+		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, read_value_strict)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (StrictBox)", v)
 	}
 
-	encode_strict_box : StrictBox -> Value
-	encode_strict_box = |v| match v {
-		Box(a0) => Tag("Box", [encode_strict(a0)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_strict_box : StrictBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_strict_box = |v, e| match v {
+		Box(a0) => Encode.tagged("Box", e, |e25| encode_strict(a0, e25))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_strict_box : JsonValue -> Try(StrictBox, Decode.Error)
-	from_json_strict_box = |j| FromJson.within_depth(read_json_strict_box(j), encode_strict_box)
+	from_json_strict_box = |j| FromJson.within_depth(j, read_json_strict_box, encode_strict_box)
 
 	read_json_strict_box : JsonValue -> Try(StrictBox, Decode.Error)
 	read_json_strict_box = |j| {
@@ -878,49 +980,55 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_strict_box : StrictBox -> Try(JsonValue, Encode.Error)
-	to_json_strict_box = |v| match v {
-		Box(a0) => ToJson.record_case("Box", to_json_strict(a0))
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_strict_box : StrictBox, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_strict_box = |v, e| match v {
+		Box(a0) => ToJson.record_case("Box", e, |e15| to_json_strict(a0, e15))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#SecretRec`.
 	SecretRec : Secret(BoxRec)
 
 	decode_secret_rec : Value -> Try(SecretRec, Decode.Error)
-	decode_secret_rec = |v| Decode.secret(v, "Secret BoxRec", decode_box_rec)
+	decode_secret_rec = |v| Decode.within_depth(v, read_value_secret_rec)
 
-	encode_secret_rec : SecretRec -> Value
-	encode_secret_rec = |v| Encode.secret(v, encode_box_rec)
+	read_value_secret_rec : Value -> Try(SecretRec, Decode.Error)
+	read_value_secret_rec = |v| Decode.secret(v, "Secret BoxRec", read_value_box_rec)
+
+	encode_secret_rec : SecretRec, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_secret_rec = |v, e| Encode.secret(v, "Secret BoxRec", e, encode_box_rec)
 
 	from_json_secret_rec : JsonValue -> Try(SecretRec, Decode.Error)
-	from_json_secret_rec = |j| FromJson.within_depth(read_json_secret_rec(j), encode_secret_rec)
+	from_json_secret_rec = |j| FromJson.within_depth(j, read_json_secret_rec, encode_secret_rec)
 
 	read_json_secret_rec : JsonValue -> Try(SecretRec, Decode.Error)
 	read_json_secret_rec = |j| FromJson.secret(j, "Secret BoxRec", read_json_box_rec)
 
-	to_json_secret_rec : SecretRec -> Try(JsonValue, Encode.Error)
-	to_json_secret_rec = |v| ToJson.secret(v, "Secret BoxRec", to_json_box_rec)
+	to_json_secret_rec : SecretRec, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_secret_rec = |v, e| ToJson.secret(v, "Secret BoxRec", e, to_json_box_rec)
 
 	## haus type `schema-based#SecretBox`.
 	SecretBox := [Box(SecretRec), Unknown(Str, List(Value))]
 
 	decode_secret_box : Value -> Try(SecretBox, Decode.Error)
-	decode_secret_box = |v| match v {
-		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, decode_secret_rec)?))
+	decode_secret_box = |v| Decode.within_depth(v, read_value_secret_box)
+
+	read_value_secret_box : Value -> Try(SecretBox, Decode.Error)
+	read_value_secret_box = |v| match v {
+		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, read_value_secret_rec)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (SecretBox)", v)
 	}
 
-	encode_secret_box : SecretBox -> Value
-	encode_secret_box = |v| match v {
-		Box(a0) => Tag("Box", [encode_secret_rec(a0)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_secret_box : SecretBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_secret_box = |v, e| match v {
+		Box(a0) => Encode.tagged("Box", e, |e26| encode_secret_rec(a0, e26))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_secret_box : JsonValue -> Try(SecretBox, Decode.Error)
-	from_json_secret_box = |j| FromJson.within_depth(read_json_secret_box(j), encode_secret_box)
+	from_json_secret_box = |j| FromJson.within_depth(j, read_json_secret_box, encode_secret_box)
 
 	read_json_secret_box : JsonValue -> Try(SecretBox, Decode.Error)
 	read_json_secret_box = |j| {
@@ -934,48 +1042,51 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_secret_box : SecretBox -> Try(JsonValue, Encode.Error)
-	to_json_secret_box = |v| match v {
-		Box(a0) => ToJson.tagged("Box", [to_json_secret_rec(a0)])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_secret_box : SecretBox, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_secret_box = |v, e| match v {
+		Box(a0) => ToJson.tagged("Box", e, |e16| to_json_secret_rec(a0, e16))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#InlineSecretBox`.
 	InlineSecretBox := [Box(Secret({ w : I32 })), Unknown(Str, List(Value))]
 
 	decode_inline_secret_box : Value -> Try(InlineSecretBox, Decode.Error)
-	decode_inline_secret_box = |v| match v {
-		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, |x13| Decode.secret(x13, "Secret { … }", decode_inline_secret_box_box))?))
+	decode_inline_secret_box = |v| Decode.within_depth(v, read_value_inline_secret_box)
+
+	read_value_inline_secret_box : Value -> Try(InlineSecretBox, Decode.Error)
+	read_value_inline_secret_box = |v| match v {
+		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, |x28| Decode.secret(x28, "Secret { … }", decode_inline_secret_box_box))?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
 		_ => Decode.expected("a variant (InlineSecretBox)", v)
 	}
 
-	encode_inline_secret_box : InlineSecretBox -> Value
-	encode_inline_secret_box = |v| match v {
-		Box(a0) => Tag("Box", [Encode.secret(a0, encode_inline_secret_box_box)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_inline_secret_box : InlineSecretBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_inline_secret_box = |v, e| match v {
+		Box(a0) => Encode.tagged("Box", e, |e29| Encode.secret(a0, "Secret { … }", e29, encode_inline_secret_box_box))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_inline_secret_box : JsonValue -> Try(InlineSecretBox, Decode.Error)
-	from_json_inline_secret_box = |j| FromJson.within_depth(read_json_inline_secret_box(j), encode_inline_secret_box)
+	from_json_inline_secret_box = |j| FromJson.within_depth(j, read_json_inline_secret_box, encode_inline_secret_box)
 
 	read_json_inline_secret_box : JsonValue -> Try(InlineSecretBox, Decode.Error)
 	read_json_inline_secret_box = |j| {
 		(tag, ms) = FromJson.variant(j, "InlineSecretBox")?
 		match tag {
 			"Box" => match FromJson.args(ms, 1)? {
-				[a0] => Ok(Box(FromJson.arg(1, 0, a0, |y7| FromJson.secret(y7, "Secret { … }", from_json_inline_secret_box_box))?))
+				[a0] => Ok(Box(FromJson.arg(1, 0, a0, |y17| FromJson.secret(y17, "Secret { … }", from_json_inline_secret_box_box))?))
 				_ => FromJson.arity("Box", 1)
 			}
 			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
 		}
 	}
 
-	to_json_inline_secret_box : InlineSecretBox -> Try(JsonValue, Encode.Error)
-	to_json_inline_secret_box = |v| match v {
-		Box(a0) => ToJson.tagged("Box", [ToJson.secret(a0, "Secret { … }", to_json_inline_secret_box_box)])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_inline_secret_box : InlineSecretBox, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_inline_secret_box = |v, e| match v {
+		Box(a0) => ToJson.tagged("Box", e, |e18| ToJson.secret(a0, "Secret { … }", e18, to_json_inline_secret_box_box))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `schema-based#Holder`.
@@ -987,8 +1098,8 @@ SchemaBased := [].{
 		Ok({ item: Decode.field(fs, "item", decode_v)? })
 	}
 
-	encode_holder : Holder(v), (v -> Value) -> Value
-	encode_holder = |v, encode_v| Encode.record([("item", Present(encode_v(v.item)))])
+	encode_holder : Holder(v), Encode.Encoder, (v, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_holder = |v, e, encode_v| Encode.record(e, [("item", Encode.required(v.item, encode_v))])
 
 	from_json_holder : JsonValue, (JsonValue -> Try(v, Decode.Error)), Bool -> Try(Holder(v), Decode.Error)
 	from_json_holder = |j, from_json_v, _nullable_v| {
@@ -996,41 +1107,44 @@ SchemaBased := [].{
 		Ok({ item: FromJson.field(fs, "item", from_json_v)? })
 	}
 
-	to_json_holder : Holder(v), (v -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_holder = |v, to_json_v, _nullable_v| ToJson.object([("item", Present(to_json_v(v.item)))])
+	to_json_holder : Holder(v), Encode.Encoder, (v, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_holder = |v, e, to_json_v, _nullable_v| ToJson.object(e, [("item", ToJson.required(v.item, to_json_v))])
 
 	## haus type `schema-based#Inner`.
 	Inner(a) : Holder([X(a), Unknown(Str, List(Value))])
 
 	decode_inner : Value, (Value -> Try(a, Decode.Error)) -> Try(Inner(a), Decode.Error)
-	decode_inner = |v, decode_a| decode_holder(v, |x14| decode_inner1(x14, decode_a))
+	decode_inner = |v, decode_a| decode_holder(v, |x31| decode_inner1(x31, decode_a))
 
-	encode_inner : Inner(a), (a -> Value) -> Value
-	encode_inner = |v, encode_a| encode_holder(v, |x15| encode_inner1(x15, encode_a))
+	encode_inner : Inner(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_inner = |v, e, encode_a| encode_holder(v, e, |x32, e32| encode_inner1(x32, e32, encode_a))
 
 	from_json_inner : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Inner(a), Decode.Error)
-	from_json_inner = |j, from_json_a, nullable_a| from_json_holder(j, |y8| from_json_inner1(y8, from_json_a, nullable_a), False)
+	from_json_inner = |j, from_json_a, nullable_a| from_json_holder(j, |y20| from_json_inner1(y20, from_json_a, nullable_a), False)
 
-	to_json_inner : Inner(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_inner = |v, to_json_a, nullable_a| to_json_holder(v, |y9| to_json_inner1(y9, to_json_a, nullable_a), False)
+	to_json_inner : Inner(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_inner = |v, e, to_json_a, nullable_a| to_json_holder(v, e, |y21, e21| to_json_inner1(y21, e21, to_json_a, nullable_a), False)
 
 	## haus type `schema-based#InnerRec`.
 	InnerRec : Inner(BoxRec)
 
 	decode_inner_rec : Value -> Try(InnerRec, Decode.Error)
-	decode_inner_rec = |v| decode_inner(v, decode_box_rec)
+	decode_inner_rec = |v| Decode.within_depth(v, read_value_inner_rec)
 
-	encode_inner_rec : InnerRec -> Value
-	encode_inner_rec = |v| encode_inner(v, encode_box_rec)
+	read_value_inner_rec : Value -> Try(InnerRec, Decode.Error)
+	read_value_inner_rec = |v| decode_inner(v, read_value_box_rec)
+
+	encode_inner_rec : InnerRec, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_inner_rec = |v, e| encode_inner(v, e, encode_box_rec)
 
 	from_json_inner_rec : JsonValue -> Try(InnerRec, Decode.Error)
-	from_json_inner_rec = |j| FromJson.within_depth(read_json_inner_rec(j), encode_inner_rec)
+	from_json_inner_rec = |j| FromJson.within_depth(j, read_json_inner_rec, encode_inner_rec)
 
 	read_json_inner_rec : JsonValue -> Try(InnerRec, Decode.Error)
 	read_json_inner_rec = |j| from_json_inner(j, read_json_box_rec, False)
 
-	to_json_inner_rec : InnerRec -> Try(JsonValue, Encode.Error)
-	to_json_inner_rec = |v| to_json_inner(v, to_json_box_rec, False)
+	to_json_inner_rec : InnerRec, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_inner_rec = |v, e| to_json_inner(v, e, to_json_box_rec, False)
 
 	## haus type `schema-based#MyMaybe`.
 	MyMaybe(a) := [None, Some(a)]
@@ -1045,10 +1159,10 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (MyMaybe)", v)
 	}
 
-	encode_my_maybe : MyMaybe(a), (a -> Value) -> Value
-	encode_my_maybe = |v, encode_a| match v {
-		None => Tag("None", [])
-		Some(a0) => Tag("Some", [encode_a(a0)])
+	encode_my_maybe : MyMaybe(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_my_maybe = |v, e, encode_a| match v {
+		None => Encode.tag("None", e)
+		Some(a0) => Encode.tagged("Some", e, |e33| encode_a(a0, e33))
 	}
 
 	from_json_my_maybe : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(MyMaybe(a), Decode.Error)
@@ -1067,47 +1181,76 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_my_maybe : MyMaybe(a), (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_my_maybe = |v, to_json_a, _nullable_a| match v {
-		None => ToJson.tagged("None", [])
-		Some(a0) => ToJson.tagged("Some", [to_json_a(a0)])
+	to_json_my_maybe : MyMaybe(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_my_maybe = |v, e, to_json_a, _nullable_a| match v {
+		None => ToJson.tag("None", e)
+		Some(a0) => ToJson.tagged("Some", e, |e22| to_json_a(a0, e22))
 	}
 
 	## haus type `schema-based#Mine`.
 	Mine : MyMaybe(I32)
 
 	decode_mine : Value -> Try(Mine, Decode.Error)
-	decode_mine = |v| decode_my_maybe(v, Decode.i32)
+	decode_mine = |v| Decode.within_depth(v, read_value_mine)
 
-	encode_mine : Mine -> Value
-	encode_mine = |v| encode_my_maybe(v, |x16| Num(x16.to_str()))
+	read_value_mine : Value -> Try(Mine, Decode.Error)
+	read_value_mine = |v| decode_my_maybe(v, Decode.i32)
+
+	encode_mine : Mine, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_mine = |v, e| encode_my_maybe(v, e, |x34, e34| Encode.number(x34.to_str(), e34))
 
 	from_json_mine : JsonValue -> Try(Mine, Decode.Error)
-	from_json_mine = |j| FromJson.within_depth(read_json_mine(j), encode_mine)
+	from_json_mine = |j| FromJson.within_depth(j, read_json_mine, encode_mine)
 
 	read_json_mine : JsonValue -> Try(Mine, Decode.Error)
 	read_json_mine = |j| from_json_my_maybe(j, FromJson.i32, False)
 
-	to_json_mine : Mine -> Try(JsonValue, Encode.Error)
-	to_json_mine = |v| to_json_my_maybe(v, ToJson.i32, False)
+	to_json_mine : Mine, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_mine = |v, e| to_json_my_maybe(v, e, ToJson.i32, False)
 
 	## haus type `schema-based#OptLoop`.
 	OptLoop : [None, Some(Loop)]
 
 	decode_opt_loop : Value -> Try(OptLoop, Decode.Error)
-	decode_opt_loop = |v| Decode.maybe(v, decode_loop)
+	decode_opt_loop = |v| Decode.within_depth(v, read_value_opt_loop)
 
-	encode_opt_loop : OptLoop -> Value
-	encode_opt_loop = |v| Encode.maybe(v, encode_loop)
+	read_value_opt_loop : Value -> Try(OptLoop, Decode.Error)
+	read_value_opt_loop = |v| Decode.maybe(v, read_value_loop)
+
+	encode_opt_loop : OptLoop, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_opt_loop = |v, e| Encode.maybe(v, e, encode_loop)
 
 	from_json_opt_loop : JsonValue -> Try(OptLoop, Decode.Error)
-	from_json_opt_loop = |j| FromJson.within_depth(read_json_opt_loop(j), encode_opt_loop)
+	from_json_opt_loop = |j| FromJson.within_depth(j, read_json_opt_loop, encode_opt_loop)
 
 	read_json_opt_loop : JsonValue -> Try(OptLoop, Decode.Error)
 	read_json_opt_loop = |j| FromJson.maybe(j, False, read_json_loop)
 
-	to_json_opt_loop : OptLoop -> Try(JsonValue, Encode.Error)
-	to_json_opt_loop = |v| ToJson.maybe(v, False, to_json_loop)
+	to_json_opt_loop : OptLoop, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_opt_loop = |v, e| ToJson.maybe(v, e, False, to_json_loop)
+
+	## a variant written in place inside the prelude Maybe is not itself the prelude Maybe: its None is a tag, not null
+	##
+	## haus type `schema-based#InPlace`.
+	InPlace : [None, Some([None, Some(I32)])]
+
+	decode_in_place : Value -> Try(InPlace, Decode.Error)
+	decode_in_place = |v| Decode.within_depth(v, read_value_in_place)
+
+	read_value_in_place : Value -> Try(InPlace, Decode.Error)
+	read_value_in_place = |v| Decode.maybe(v, decode_in_place_item)
+
+	encode_in_place : InPlace, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_in_place = |v, e| Encode.maybe(v, e, encode_in_place_item)
+
+	from_json_in_place : JsonValue -> Try(InPlace, Decode.Error)
+	from_json_in_place = |j| FromJson.within_depth(j, read_json_in_place, encode_in_place)
+
+	read_json_in_place : JsonValue -> Try(InPlace, Decode.Error)
+	read_json_in_place = |j| FromJson.maybe(j, False, from_json_in_place_item)
+
+	to_json_in_place : InPlace, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_in_place = |v, e| ToJson.maybe(v, e, False, to_json_in_place_item)
 
 	decode_inline_secret_box_box : Value -> Try({ w : I32 }, Decode.Error)
 	decode_inline_secret_box_box = |v| {
@@ -1115,8 +1258,8 @@ SchemaBased := [].{
 		Ok({ w: Decode.field(fs, "w", Decode.i32)? })
 	}
 
-	encode_inline_secret_box_box : { w : I32 } -> Value
-	encode_inline_secret_box_box = |v| Encode.record([("w", Present(Num(v.w.to_str())))])
+	encode_inline_secret_box_box : { w : I32 }, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_inline_secret_box_box = |v, e| Encode.record(e, [("w", Present(|e27| Encode.number(v.w.to_str(), e27)))])
 
 	from_json_inline_secret_box_box : JsonValue -> Try({ w : I32 }, Decode.Error)
 	from_json_inline_secret_box_box = |j| {
@@ -1124,8 +1267,8 @@ SchemaBased := [].{
 		Ok({ w: FromJson.field(fs, "w", FromJson.i32)? })
 	}
 
-	to_json_inline_secret_box_box : { w : I32 } -> Try(JsonValue, Encode.Error)
-	to_json_inline_secret_box_box = |v| ToJson.object([("w", Present(ToJson.i32(v.w)))])
+	to_json_inline_secret_box_box : { w : I32 }, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_inline_secret_box_box = |v, e| ToJson.object(e, [("w", ToJson.required(v.w, ToJson.i32))])
 
 	decode_inner1 : Value, (Value -> Try(a, Decode.Error)) -> Try([X(a), Unknown(Str, List(Value))], Decode.Error)
 	decode_inner1 = |v, decode_a| match v {
@@ -1135,10 +1278,10 @@ SchemaBased := [].{
 		_ => Decode.expected("a variant (Inner1)", v)
 	}
 
-	encode_inner1 : [X(a), Unknown(Str, List(Value))], (a -> Value) -> Value
-	encode_inner1 = |v, encode_a| match v {
-		X(a0) => Tag("X", [encode_a(a0)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_inner1 : [X(a), Unknown(Str, List(Value))], Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_inner1 = |v, e, encode_a| match v {
+		X(a0) => Encode.tagged("X", e, |e30| encode_a(a0, e30))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_inner1 : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try([X(a), Unknown(Str, List(Value))], Decode.Error)
@@ -1153,10 +1296,48 @@ SchemaBased := [].{
 		}
 	}
 
-	to_json_inner1 : [X(a), Unknown(Str, List(Value))], (a -> Try(JsonValue, Encode.Error)), Bool -> Try(JsonValue, Encode.Error)
-	to_json_inner1 = |v, to_json_a, _nullable_a| match v {
-		X(a0) => ToJson.tagged("X", [to_json_a(a0)])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_inner1 : [X(a), Unknown(Str, List(Value))], Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_inner1 = |v, e, to_json_a, _nullable_a| match v {
+		X(a0) => ToJson.tagged("X", e, |e19| to_json_a(a0, e19))
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
+	decode_in_place_item : Value -> Try([None, Some(I32)], Decode.Error)
+	decode_in_place_item = |v| match v {
+		Tag("None", []) => Ok(None)
+		Tag("Some", [a0]) => Ok(Some(Decode.arg("Some", 0, a0, Decode.i32)?))
+		Tag("None", _) => Decode.arity("None", 0)
+		Tag("Some", _) => Decode.arity("Some", 1)
+		Tag(tag, _) => Decode.unknown_tag(tag, ["None", "Some"])
+		_ => Decode.expected("a variant (InPlaceItem)", v)
+	}
+
+	encode_in_place_item : [None, Some(I32)], Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_in_place_item = |v, e| match v {
+		None => Encode.tag("None", e)
+		Some(a0) => Encode.tagged("Some", e, |e35| Encode.number(a0.to_str(), e35))
+	}
+
+	from_json_in_place_item : JsonValue -> Try([None, Some(I32)], Decode.Error)
+	from_json_in_place_item = |j| {
+		(tag, ms) = FromJson.variant(j, "InPlaceItem")?
+		match tag {
+			"None" => match FromJson.args(ms, 0)? {
+				[] => Ok(None)
+				_ => FromJson.arity("None", 0)
+			}
+			"Some" => match FromJson.args(ms, 1)? {
+				[a0] => Ok(Some(FromJson.arg(1, 0, a0, FromJson.i32)?))
+				_ => FromJson.arity("Some", 1)
+			}
+			_ => Decode.unknown_tag(tag, ["None", "Some"])
+		}
+	}
+
+	to_json_in_place_item : [None, Some(I32)], Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_in_place_item = |v, e| match v {
+		None => ToJson.tag("None", e)
+		Some(a0) => ToJson.tagged("Some", e, |e23| ToJson.i32(a0, e23))
 	}
 
 }

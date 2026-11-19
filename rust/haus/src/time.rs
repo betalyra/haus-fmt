@@ -4,7 +4,7 @@
 //! Each type keeps its text: validated, never converted. Codecs map them to
 //! `jiff`, `chrono` or `time` types (spec §13.4).
 
-use crate::de::{Decode, mismatch, variant};
+use crate::de::{Decode, Decoder, mismatch, variant};
 use crate::ser::{self, Encode};
 use crate::{DecodeError, ErrorCode, Value};
 use std::fmt;
@@ -36,11 +36,15 @@ macro_rules! types {
         }
 
         impl Decode for $name {
-            fn decode(v: &Value) -> Result<Self, DecodeError> {
+            fn decode_with(v: &Value, d: Decoder) -> Result<Self, DecodeError> {
                 const NAME: &str = stringify!($name);
                 match variant(v, NAME)? {
-                    (NAME, [Value::String(s)]) => $name::new(s.as_str())
-                        .map_err(|e| DecodeError::new(ErrorCode::InvalidTime, e).index(0).tag(NAME)),
+                    // The string is a payload, a level of its own (spec §7).
+                    (NAME, [Value::String(s)]) => {
+                        d.payload()?;
+                        $name::new(s.as_str())
+                            .map_err(|e| DecodeError::new(ErrorCode::InvalidTime, e).index(0).tag(NAME))
+                    }
                     (NAME, _) => Err(DecodeError::new(
                         ErrorCode::TypeMismatch,
                         concat!("write ", stringify!($name), "(\"…\") with one string"),

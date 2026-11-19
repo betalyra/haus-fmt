@@ -1,0 +1,18 @@
+# A fixture of `haus package check`, read as a file: not built.
+[package]
+name = "fixture-good"
+version = "1.0.0"
+edition = "2024"
+publish = false
+links = "fixture_good"
+include = ["Cargo.toml", "build.rs", "src", "package.haus", "schema.haus", "profiles"]
+
+[lib]
+name = "fixture_good"
+
+[dependencies]
+haus = { package = "haus-fmt", version = "0.1.0" }
+fixture-base = { path = "../base" }
+
+[build-dependencies]
+haus-fmt-build = "0.1.0"

@@ -96,6 +96,7 @@ Two values are equal when they have the same kind and:
   ```
   is the string `"Dear Ada,\n  thank you."`.
 - **Raw control characters:** the raw control characters U+0000–U+001F, U+007F (DEL) and U+0080–U+009F (C1) MUST NOT appear anywhere in the input, except tab and line breaks (LF, CR LF) where whitespace, block strings and comments allow them. A carriage return is only allowed directly before a line feed. Control characters can rewrite what a terminal displays (ESC and CSI sequences) or truncate text (NUL), so a file could show different content from what it contains. Inside strings, write them as escapes, e.g. `\u{1B}`.
+- **Which error.** A raw control character in a string, block string or comment is `control-character`, and so is a carriage return in a `"…"` string, also one directly before a line feed; a raw line feed in a `"…"` string is `string-line-break`. A carriage return not followed by a line feed in whitespace or a comment is `lone-carriage-return`. Outside strings and comments a control or bidi character is not a token, so the error is the one for that place: `expected-value` where a value is expected, `expected-key` where a key is, `missing-comma` after a value.
 - **Bidirectional controls:** the raw characters U+202A–U+202E and U+2066–U+2069 MUST NOT appear anywhere in the input, including strings, block strings and comments. They can make source text display differently from what is parsed ("Trojan Source"). Inside strings, write them as escapes, e.g. `\u{202E}`.
 - **Key comparison:** keys are compared by code point, with **no normalization**. `"café"` (NFC) and `"café"` (NFD) are different keys. Producers that need normalized keys must normalize before writing.
 - **NUL characters:** `\u{0}` is allowed. Consumers that pass strings to C APIs must handle embedded NUL characters.
@@ -122,10 +123,10 @@ Implementations MUST enforce limits while parsing and MUST let users configure t
 | characters in one number literal | 1000 |
 | hex digits in one hex literal (`_` not counted) | 829: derived from the number limit *n* as the largest *h* with 16<sup>*h*</sup> ≤ 10<sup>*n*−1</sup>, so that every integer's decimal form, sign included, fits in *n* characters |
 | absolute exponent | 6144 |
-| characters in one string, record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
+| characters in one string (its value, after escapes and a block string's indent are processed), record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
 | characters in one top-level value of a stream | 64 Mi (67,108,864) |
 
-A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: whitespace and comments before the value count, the commas don't. A value of exactly the limit is accepted.
+A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: whitespace and comments before the value count, the commas don't. A value of exactly the limit is accepted. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
 
 Nesting depth is counted on the text as written, since it is checked while parsing: each record, array and parenthesized payload `Tag( … )` is one level, and so is a record payload written without parentheses, `Tag { … }`. A value outside any of them, like `1`, is at depth 0. So `Some(1)`, `[1]` and `Some { a: 1 }` need depth 1, while `Some({ a: 1 })`, `Some([])` and `A(B(1))` need 2, although `Some({ a: 1 })` and `Some { a: 1 }` are the same value. Writers and checks of values built in code count a record payload as one level, the shorter spelling, which is also the one the canonical form uses (§12).
 
@@ -154,7 +155,7 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
    - check a raw value kept for an unknown variant (item 5) with the same limits before writing it again;
    - build error messages in constant time: no printing of whole schemas or values.
 9. **Recursive types** (a type that contains itself, like a tree) are allowed but MUST be explicit (e.g. `h.Recursive`). Every cycle MUST pass through a record field, array element or variant payload, so that each level of recursion consumes a level of input. A schema that applies itself to the same value again MUST fail. By default, recursive values are limited only by the nesting depth of §7 (256), so every binding accepts the same values; bindings MAY let applications set a smaller limit for a recursive type.
-10. **Schemas are declarative.** The schema language describes structure only: records, arrays, variants, prelude types and recursion. Generic types MAY refer to themselves only with the same parameters (`type List a = < Nil | Cons a (List a) >`; not `T (Pair a a)`). There are no type-level functions, conditions on values, references between values, or user code in schemas, and no syntax for rules about values: the only such rules are those of built-in types (§13.1), which run in linear time. Checking a value against a schema then always terminates in linear time; anything more belongs in application code, where the work budget (item 8) still applies.
+10. **Schemas are declarative.** The schema language describes structure only: records, arrays, variants, prelude types and recursion. Generic types MAY refer to themselves only with the same parameters (`type List a = < Nil | Cons a (List a) >`; not `T (Pair a a)`), and that holds through other definitions too: in a group of definitions that refer to each other, directly or not, a reference to a member of the group passes only parameters of the referring definition as arguments (`type Tree a = { kids: Forest a }` with `type Forest a = Array (Tree a)` is fine; `type A a = < X (B (P a a)) >` with `type B a = < Y (A (P a a)) >` is not, as its instances double in size at every step). There are no type-level functions, conditions on values, references between values, or user code in schemas, and no syntax for rules about values: the only such rules are those of built-in types (§13.1), which run in linear time. Checking a value against a schema then always terminates in linear time; anything more belongs in application code, where the work budget (item 8) still applies.
 11. **A hash hides nothing.** `hash` and `hashAll` (§12) are unkeyed: anyone who can guess a document's content can compute its hash and confirm the guess. A value with little entropy (a short password, a PIN, an email address, an amount) inside an otherwise predictable document is exposed by publishing the document's hash, whether or not a schema marks it `Secret` (§15), since the hash doesn't depend on a schema. Don't publish hashes or signatures of documents with private content on their own; use a keyed hash (HMAC) or keep the hash as private as the data.
 
 ## 10. Evolution and versions
@@ -167,7 +168,7 @@ This specification is versioned. Versions 0.x are drafts, in which anything may 
 - **New syntax MUST be a syntax error in every earlier version,** so an old parser fails loudly instead of misreading newer data.
 - **The prelude is fixed at 1.0.** A schema may not redefine a prelude type (§14), so adding one would break schemas that define a type of that name. Built-in types added later go into standard modules, which a schema imports (§13.2).
 
-**No version header.** A file doesn't say which version it is written in: every version reads every earlier version's text the same way. Files whose first character (after a byte order mark) is `#` are reserved for a version directive, such as `#haus 2`, should a version that breaks compatibility ever become unavoidable. Such a version would require the directive in every file, and a file without one would always be read by the rules of 1.x. Parsers SHOULD report a file starting with `#haus` as needing a newer version of haus, rather than as an ordinary syntax error.
+**No version header.** A file doesn't say which version it is written in: every version reads every earlier version's text the same way. Files whose first character (after a byte order mark) is `#` are reserved for a version directive, such as `#haus 2`, should a version that breaks compatibility ever become unavoidable. Such a version would require the directive in every file, and a file without one would always be read by the rules of 1.x. Parsers SHOULD report a file starting with `#haus` (whatever follows it: `#haus 2`, `#haus2`, `#hausfoo`) as needing a newer version of haus (`version-directive`), rather than as an ordinary syntax error; a file starting with any other `#` is an ordinary syntax error (`expected-value`).
 
 **Conformance.** An implementation states the version it implements ("haus 1.1"). The conformance suite (`../test-suite`) is tagged for each version. Media types MAY carry the version as a parameter: `application/vnd.haus; version=1.1`.
 
@@ -179,7 +180,7 @@ There are three official layouts, and like `gofmt` they have no other style
 options (indent width defaults to 2 spaces; line width, default 80, only
 affects positional payloads in pretty). Formatters MUST produce them exactly.
 
-| | Comments | Key order and spellings | Whitespace | For |
+| | Comments | Key order, number spellings | Whitespace | For |
 |---|---|---|---|---|
 | **Pretty** | kept | as written | one entry per line | people who edit |
 | **Compact** | dropped | as written | spaces, one item per line | logs and streams people look at |
@@ -206,7 +207,7 @@ For people.
   ```
 - **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry, so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
 - **Spacing:** one space after `:` and `,`; one space between a tag and its `{`; none between a tag and its `(`. Empty containers are written `{}` and `[]`.
-- **Keys** are bare when they can be, otherwise quoted.
+- **Keys** are bare when they can be, otherwise quoted, written from the key itself with the minimal escapes below, in every layout: a key never keeps its spelling (`"caf\u{E9}"` is written `"café"`, `"a"` is written `a`).
 - **Byte strings** keep their source spelling when a document is reformatted. When serializing values, they are written as lowercase hex without spaces, `x"0b34ff"`.
 - **Strings** containing a line feed are written as `"""` block strings (§4), the indent one level deeper than the entry. All other strings use `"…"` with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`, and `\u{…}` for control and bidi characters and U+2028, U+2029. In a block string, a quote followed by two more quotes is escaped, a carriage return is `\r`, and **no line ends in a space or tab**: the last space or tab of a content line that ends in one is written as an escape (`\u{20}`, `\t`), so an editor that trims trailing whitespace can't change the value:
   ```haus
@@ -215,15 +216,18 @@ For people.
     Ring twice
     """,
   ```
-- **Numbers and strings keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the number limit (§7) of the reader written for can't be written (`number-too-long`).
+- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the number limit (§7) of the reader written for can't be written (`number-too-long`).
 - **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows. A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
 - **Comments** are kept (they are part of the layout, not of the data model):
   - A comment on its own line stays above the entry that follows it.
   - A comment after an entry on the same line stays after that entry's comma.
   - Comments before a closing bracket stay at the end of the container.
-  - A comment between a key and its value moves above the entry.
-  - `Tag({ … })` is written `Tag { … }`: comments inside its parentheses but outside the braces move inside the braces.
-- **Blank lines** between entries (and between comments and entries) are kept, at most one.
+  - A comment after an opening bracket, on the same line, moves above the container's first entry.
+  - A comment between a key and its colon, or between the colon and the value, moves above the entry, after the entry's own comments above it.
+  - `Tag({ … })` is written `Tag { … }`: comments inside its parentheses but outside the braces move inside the braces. A comment after the closing `)` on the same line stays after the last entry when the `}` was on that entry's line, and otherwise goes at the end of the container.
+  - A comment after an entry's comma doesn't count toward the line width (above).
+  - A positional payload that holds a comment or a multi-line string never fits on one line.
+- **Blank lines** between entries (and between comments and entries) are kept, at most one. Blank lines right after an opening bracket or right before a closing one are dropped.
 - **Line endings:** LF everywhere, inside comments too (a CR LF in a comment is written as LF; block strings already join their lines with LF), and the file ends with a line break.
 
 ### Compact
@@ -253,7 +257,7 @@ Person{name:"Jane Smith",age:28,type:Designer},
 
 - **Each top-level item on a single line,** with no space or tab anywhere outside strings and byte strings. Streams as in compact: every item is followed by `,`.
 - **Literals stay as written:** digit separators (`1_000`), the case of hex digits, and the blanks inside a byte string (`x"9f86 d081"`) are spelling, not whitespace between tokens. When serializing values with no source text, they are written as in pretty.
-- **Comments are dropped,** as in compact. Key order and spellings are kept, so formatting a minimised file as pretty gives back the pretty file without its comments and blank lines.
+- **Comments are dropped,** as in compact. Key order and number spellings are kept, so formatting a minimised file as pretty gives back the pretty file without its comments and blank lines.
 - Encoders MAY offer minimised for the wire and storage; compact stays their default.
 
 **Comments and layouts.** Tools that cannot keep comments MUST refuse to format in the pretty layout rather than drop them. A tool that rewrites a file in place in the compact or minimised layout MUST refuse when the file has comments, unless the user asked to drop them; writing to standard output or another file needs no such check.
@@ -450,7 +454,7 @@ A field or tag that an open type doesn't list is reserved for later versions of 
 
 An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range: `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
 
-**Profiles.** A package MAY define profiles: rules beyond its shape that codecs can implement, named like `@haus-fmt/money/iso`. A profile is defined by test vectors (`profiles/<name>.vectors.haus`): values a codec implementing it accepts, values it rejects, and values that encode back to the same text. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
+**Profiles.** A package MAY define profiles: rules beyond its shape that codecs can implement, named like `@haus-fmt/money/iso`. A profile is defined by its **rule**, written in prose in `profiles/<name>.md`: which values a codec implementing it accepts, stated on the value the type's schema decoded (§13.4), never on how it was written. Its **test vectors** (`profiles/<name>.vectors.haus`) are examples of the rule that every implementation must pass: values it accepts, with the text they encode back to where that differs from the input, and values it rejects. Vectors can't define a rule (two codecs can pass all of them and still disagree), so where a rule and its vectors disagree, the vectors are wrong. The official profiles also have a reference checker in Lean, which the bindings' codecs are fuzzed against. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
 
 ### 13.4 Codecs
 
@@ -462,13 +466,13 @@ A schema binding MAY let applications choose the host type of a named type witho
 
 Host types differ in what they can hold, as `Decimal` does: Python's `datetime` and .NET's `DateTime` can't hold the year `0000` of std/time, while JavaScript's Temporal, Go's `time.Time` and `java.time` can. A binding whose language lacks a type for the whole range keeps the value another way (the checked text, or a type of its own) by default, and offers the native type as a codec that rejects what it can't hold. A host type may keep less than the haus value: `Temporal.Instant` or a JavaScript `Date` keeps the instant but not the offset it was written with, and a decimal type may forget `-0` or exponent notation. Encoding through it then writes a value that means the same but is not equal (§2), with another canonical form and hash. A binding's default host types MUST keep the value, so that encoding what the defaults decoded always gives back an equal value, with the exceptions of §15 only. A host type that keeps less is offered only as a choice the application makes explicitly (a codec, or a schema variant such as `InstantAsDate`), and its documentation MUST say what it drops. Hash and sign parsed values, not re-encoded ones (§12).
 
-A codec applies wherever its type occurs, inside the types of imported packages too. A binding that can't apply it somewhere, such as generated code that reuses a type another library generated, MUST report an error instead of decoding there with the default host type.
+A codec applies wherever its type occurs, inside the types of imported packages too. Where a package's types are generated once, in its own library (a crate, a Roc package), the application's generated code generates again those of the package's types that contain the codec's type, directly or not, and uses the package's own types for the rest; it needs the schema files of the packages its packages import, transitively. A binding that can't apply a codec somewhere, such as a host value that has no place of its own for a record case's payload, MUST report an error (`codec-unreachable`) instead of decoding there with the default host type.
 
 Codecs are part of the application, not of the schema. Two applications reading the same file with different codecs agree on what the file says, and may disagree only on what they accept. A codec for a standard type changes the host type only (§13.1).
 
 ## 14. Schema files
 
-A schema file (`.schema.haus`, grammar in [`grammar.ebnf`](grammar.ebnf)) is a list of imports (§13) and type definitions.
+A schema file (`.schema.haus`, grammar in [`grammar.ebnf`](grammar.ebnf)) is a list of imports (§13) and type definitions. It has the same comments, whitespace and quoted strings as data files (§4, §5), with the same rules and error codes: a lone carriage return, a raw control or bidi character in a comment, invalid UTF-8, an unterminated string or comment, and a bad escape in a quoted field key are reported as in data (`lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `unterminated-string`, `unterminated-comment`, `invalid-escape`), and a quoted field key takes every escape a data string does.
 
 **Open by default.** Records and variants are open: a reader ignores fields the schema doesn't list (they are not part of the decoded value) and decodes tags it doesn't list as an *unknown* value that keeps the raw data. Writers can add fields and tags without breaking older readers. `closed { … }` and `closed < … >` forbid anything not listed. `< >` is a variant with any tags.
 
@@ -513,7 +517,7 @@ Implementations MUST reject:
 - `...r`: row parameters are not part of the language;
 - an attribute this version defines with arguments it doesn't take (`@deprecated(1)`), or twice on one type, field or tag (attributes it doesn't define are accepted as they are, §14 above);
 - recursion that doesn't pass through a record field, array element or variant payload (`type A = B`, `type B = A`), §9.9. `Secret a` is not a step of its own: `type A = Secret A` is unguarded;
-- a generic type that refers to itself with arguments other than its own parameters, §9.10;
+- a generic type that refers to itself with arguments other than its own parameters, or to a definition it is mutually recursive with, with arguments other than its own parameters, §9.10 (`growing-recursion`);
 - `Stream a` anywhere but as the whole type of a definition, and references to such a definition;
 - the import errors of §13.3.
 
@@ -527,7 +531,12 @@ A schema binding (§13.1) decodes a value with a type. The result is a value of 
 
 - Decoding depends only on the type and the value: never on other values in the file, on layout or comments, or on spellings that §2 treats as the same value. `0xFF` and `255` decode alike, and so do `Tag({ … })` and `Tag { … }`.
 - A value the type doesn't accept is an error. Decoders MUST NOT convert between kinds of values: the string `"42"` is not an `Int`, a bare `32` is not `Some(32)`, and a missing field is not `None` (§1).
-- An error names the place of the failing value, for example `$.items[2].price`. Reporting the first error is enough (§9.6).
+- An error names the place of the failing value, for example `$.items[2].price`. Reporting the first error is enough (§9.6). The place is a path from `$`, the decoded value, with one step per level:
+  - a field of a record, or an entry of a `Map`: `.key` when the key is an identifier (`ident` in the grammar: `[a-z_][A-Za-z0-9_]*`), otherwise `[` the key as a string in canonical form (§12) `]`: `$.m["pt-BR"]`, `$.m["A"]`, `$.m[""]`;
+  - an item of an array: `[i]`, counted from 0;
+  - an argument of a variant case: `[i]`, counted from 0, also for `Some(x)` and the tags of `std/time` (`$[0]` for `Date("2026-02-30")`). The fields of a record case are steps from the case itself, without a step for the payload: `$.shape.r` for `{ shape: Circle { r: "x" } }`, however the record case is written (§15 "Variants").
+
+  An error about a value as a whole is at that value: a wrong kind of value, a missing field (at the record), a wrong payload or an unknown tag (at the variant). An unknown field of a closed record is at the field. An error inside a `Secret` is at the secret, with no step into it (`Secret` below). In a stream (§6), the path of an error in an item starts with the item's index, `$[3].price`.
 - Decoding is linear in the input whatever the schema, within the limits of §9.8 and §9.9.
 
 **Numbers.** Decoding works on the exact decimal a literal denotes (§3).

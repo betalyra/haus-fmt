@@ -4,7 +4,7 @@ mod features {
     haus::include_schema!("features");
 }
 
-use features::{AppEvent, Item, Kind, Login, Person, Scores, Shape, Tree, Vault};
+use features::{AppEvent, ByName, Dims, Item, Kind, Login, Person, Scores, Shape, Tree, Vault};
 use haus::{DecodeError, Error, Unknown, Value, from_str, to_string};
 
 const ADA: &str = r#"{ name: "Ada", email: Some("ada@example.com"), type: Member { since: Date("1843-01-01") }, createdAt: Instant("2026-11-09T14:30:00Z"), address: { street: "St James's Square", city: "London" }, scores: { maths: 100 }, check: Ok(7), friends: [], shape: Circle(1.5), tree: Node(Leaf, Node(Leaf, Leaf)) }"#;
@@ -90,6 +90,30 @@ fn errors_say_where() {
 
     let deep = decode_error::<Person>(&ADA.replace("Node(Leaf, Leaf)", "Node(Leaf, 1)"));
     assert_eq!(deep.to_string(), ".tree(Node)[1](Node)[1]: expected a variant (Tree), found the number 1");
+}
+
+#[test]
+fn stream_errors_start_with_the_index_of_the_value() {
+    let place = |e: Error| match e {
+        Error::Decode(e) => e.place(),
+        other => panic!("expected a decode error, got {other:?}"),
+    };
+    let items = r#"{ id: 0, label: "a" }, { id: 1, label: "b" }, { id: 2, label: "c" }, { id: "3", label: "d" },"#;
+    assert_eq!(place(haus::from_str_all::<Item>(items).unwrap_err()), "$[3].id");
+    let first_error = haus::stream::decode::<Item, _>(items.as_bytes()).find_map(Result::err).unwrap();
+    assert_eq!(place(first_error), "$[3].id");
+
+    let shapes = "Circle(1.0), Circle(2.0), Rect(1.0, 2.0), Rect(1.0, \"2\"),";
+    assert_eq!(place(haus::from_str_all::<Shape>(shapes).unwrap_err()), "$[3][1]");
+    // Int is a string in schema-based JSON (spec §16.3): the number 3 is the mistake.
+    let lines = r#"{"id":"0","label":"a"}
+{"id":"1","label":"b"}
+{"id":"2","label":"c"}
+{"id":3,"label":"d"}
+"#;
+    assert_eq!(place(haus::json::from_str_all::<Item>(lines).unwrap_err()), "$[3].id");
+    let first_error = haus::json::decode::<Item, _>(lines.as_bytes()).find_map(Result::err).unwrap();
+    assert_eq!(place(first_error), "$[3].id");
 }
 
 #[test]
@@ -273,4 +297,20 @@ fn generated_keys_and_tags_count_against_the_string_limit() {
         haus::to_string_with(&item, &limits(4)).unwrap_err().to_string(),
         ".label: key longer than 4 characters"
     );
+
+    // Schema-based JSON counts them alike, on the haus value; the form's
+    // member names (`_tag`, `values`) don't count.
+    fn json<T: haus::ToJson>(x: &T, n: usize) -> Result<String, String> {
+        let limits = haus::Limits { max_string_length: n, ..haus::Limits::default() };
+        haus::json::to_string_with(x, &limits).map_err(|e| e.to_string())
+    }
+    assert!(json(&leaf, 4).is_ok() && json(&tree, 4).is_ok());
+    assert_eq!(json(&leaf, 3).unwrap_err(), "tag longer than 3 characters");
+    assert_eq!(json(&tree, 3).unwrap_err(), "tag longer than 3 characters");
+    assert!(json(&item, 5).is_ok());
+    assert_eq!(json(&item, 4).unwrap_err(), ".label: key longer than 4 characters");
+    // A record case whose record is a named type.
+    let sized = ByName::Sized(Dims { w: 1, h: None });
+    assert!(json(&sized, 5).is_ok());
+    assert_eq!(json(&sized, 4).unwrap_err(), "tag longer than 4 characters");
 }

@@ -4,6 +4,8 @@ dist/
 # Roc build output
 roc/**/build/
 .claude/settings.local.json
+# Agent worktrees (git worktree checkouts of this repository)
+.claude/worktrees/
 # Rust build output
 rust/target/
 # Demo Time recordings (local only)

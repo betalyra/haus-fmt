@@ -115,6 +115,9 @@ impl Reader {
     pub fn finish(mut self) -> Result<Vec<Value>, SyntaxError> {
         self.supported()?;
         let mut out = self.scan(true)?;
+        // The scan checks a value's length before each character, so the last
+        // value, with no comma after it, is checked here, after its last character (§7).
+        self.check_length()?;
         let text = self.text(self.buf.len())?;
         let rest = parse_rest(text, &self.options.limits, self.at_file_start()).map_err(|e| e.from(self.origin))?;
         if !rest.is_empty() && self.options.require_terminator {
@@ -134,6 +137,15 @@ impl Reader {
         }
     }
 
+    /// The current value has no more characters than the limit (spec §7).
+    fn check_length(&self) -> Result<(), SyntaxError> {
+        if self.chars <= self.options.max_value_length {
+            return Ok(());
+        }
+        let reason = format!("value longer than {} characters", self.options.max_value_length);
+        Err(SyntaxError::new(ErrorCode::ValueTooLong, reason, self.origin))
+    }
+
     /// Finds the commas between values and parses what is before them.
     fn scan(&mut self, last: bool) -> Result<Vec<Value>, SyntaxError> {
         let mut out = Vec::new();
@@ -141,10 +153,7 @@ impl Reader {
         let has = |buf: &[u8], i: usize, n: usize| last || i + n < buf.len();
         let mut i = self.scanned;
         while i < self.buf.len() {
-            if self.chars > self.options.max_value_length {
-                let reason = format!("value longer than {} characters", self.options.max_value_length);
-                return Err(SyntaxError::new(ErrorCode::ValueTooLong, reason, self.origin));
-            }
+            self.check_length()?;
             let c = self.buf[i];
             // `step` bytes are part of the value; 0: wait for more input.
             let step = match self.mode {

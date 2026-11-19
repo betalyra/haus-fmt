@@ -1,7 +1,9 @@
 //! The build-script side of schema packages, with the variables Cargo sets
 //! (spec §13.3): a package crate's checks in `haus_build::package()` (its
 //! version is its manifest's, its `links` is its library name), and a
-//! dependent crate's (the version a package crate gives, the `@major`).
+//! dependent crate's (the version a package crate gives, the `@major`); the
+//! packages a package crate passes on (`haus_graph`), for the codec closure
+//! (spec §13.4).
 //!
 //! The variables are the process's, so this file has one test.
 #![cfg(unix)]
@@ -79,4 +81,58 @@ fn package_crates_and_their_dependents() {
     write(&app.join("src/app.schema.haus"), "import @acme/ids@2 (Id)\ntype A = { id: Id }");
     let e = haus_build::Config::new().compile("src/app.schema.haus").unwrap_err();
     assert_eq!(e.code(), ErrorCode::ImportVersion, "{e}");
+
+    // A package crate that depends on ids: it re-exports its dependencies'
+    // crates and passes on the packages its schema reaches (haus_graph).
+    let (orders, orders_out) = (dir.path().join("orders"), dir.path().join("orders_out"));
+    write(&orders.join("package.haus"), "{ name: \"@acme/orders\", version: \"2.0.0\" }");
+    write(&orders.join("schema.haus"), "import @acme/ids@1 (Id, Tag)\ntype Order = { id: Id, tag: Tag }");
+    write(
+        &orders.join("Cargo.toml"),
+        "[package]\nname = \"acme-orders\"\nversion = \"2.0.0\"\nlinks = \"haus_orders\"\n\n[lib]\nname = \"haus_orders\"\n",
+    );
+    write(&ids.join("schema.haus"), "type Id = Int\ntype Tag = { name: String }");
+    fs::create_dir_all(&orders_out).unwrap();
+    set("OUT_DIR", &orders_out);
+    set("CARGO_MANIFEST_DIR", &orders);
+    set("CARGO_PKG_NAME", "acme-orders");
+    set("CARGO_PKG_VERSION", "2.0.0");
+    set("CARGO_MANIFEST_LINKS", "haus_orders");
+    haus_build::package().unwrap();
+    let code = fs::read_to_string(orders_out.join("schema.rs")).unwrap();
+    assert!(code.contains("pub mod __haus_deps {\n    pub use ::haus_ids;\n}"), "{code}");
+    let graph = fs::read_to_string(orders_out.join("haus_graph.haus")).unwrap();
+    let ids_dir = ids.canonicalize().unwrap();
+    let entry = format!(
+        "[{{ dir: {:?}, krate: \"haus_ids\", name: \"@acme/ids\", version: \"1.0.0\" }}]",
+        ids_dir.display().to_string()
+    );
+    assert_eq!(graph, entry);
+
+    // A crate that depends on orders only: ids is visible to orders' schema,
+    // its crate named through orders, and a codec applies inside Order.
+    unset("CARGO_MANIFEST_LINKS");
+    ["PACKAGE", "CRATE", "VERSION"].iter().for_each(|k| unset(&format!("DEP_HAUS_IDS_HAUS_{k}")));
+    set("DEP_HAUS_ORDERS_HAUS_PACKAGE", &orders);
+    set("DEP_HAUS_ORDERS_HAUS_CRATE", "haus_orders");
+    set("DEP_HAUS_ORDERS_HAUS_VERSION", "2.0.0");
+    set("DEP_HAUS_ORDERS_HAUS_GRAPH", orders_out.join("haus_graph.haus"));
+    set("OUT_DIR", &out);
+    set("CARGO_MANIFEST_DIR", &app);
+    set("CARGO_PKG_NAME", "app");
+    write(&app.join("src/app.schema.haus"), "import @acme/orders@2 (Order)\ntype A = { order: Order }");
+    haus_build::Config::new().codec("@acme/ids@1#Id", "crate::Code").compile("src/app.schema.haus").unwrap();
+    let code = fs::read_to_string(out.join("app.rs")).unwrap();
+    for part in [
+        "pub order: self::acme_orders::Order,",
+        "pub id: <crate::Code as ::haus::Codec>::Target,",
+        "pub tag: ::haus_orders::__haus_deps::haus_ids::Tag,",
+    ] {
+        assert!(code.contains(part), "{part}\n{code}");
+    }
+    // Its own files import only its dependencies.
+    write(&app.join("src/app.schema.haus"), "import @acme/ids@1 (Id)\ntype A = { id: Id }");
+    let e = haus_build::Config::new().compile("src/app.schema.haus").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::UndeclaredPackage, "{e}");
+    assert!(e.to_string().contains("@acme/ids is a dependency of haus_orders, not of this crate"), "{e}");
 }

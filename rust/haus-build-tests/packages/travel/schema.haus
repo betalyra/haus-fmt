@@ -1,0 +1,9 @@
+// Uses the official packages: their types in fields, arrays and a variant's
+// payloads. The application has their profiles' codecs (tests/profiles.rs).
+import @haus-fmt/money@1 (Money, Currency)
+import @haus-fmt/geo@1 (LatLng, BBox)
+
+type Trip = { fare: Money, area: BBox, stops: Array LatLng, legs: Array Leg }
+type Leg = < Walk | Ride { fare: Money, from: LatLng, to: LatLng } | Tip Currency >
+// Without the packages' types.
+type Traveller = { name: String }

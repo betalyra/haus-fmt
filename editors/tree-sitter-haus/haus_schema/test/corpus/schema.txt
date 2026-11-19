@@ -1,0 +1,338 @@
+================================================================================
+Imports
+================================================================================
+
+import std/time (Date, Instant)
+import @haus-fmt/money (Money)
+import @haus-fmt/money@1 (Money,)
+import ./common (Address)
+import ../shared/ids (Id)
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (import
+    module: (module)
+    name: (type_name)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name)))
+
+================================================================================
+Type definitions
+================================================================================
+
+type Id = Int
+type Ids = Array Id
+type Lookup = Map (Maybe String)
+type Events = Stream Event
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (type_name))
+  (type_definition
+    name: (type_name)
+    type: (type_application
+      constructor: (type_name)
+      argument: (type_name)))
+  (type_definition
+    name: (type_name)
+    type: (type_application
+      constructor: (type_name)
+      argument: (parenthesized_type
+        (type_application
+          constructor: (type_name)
+          argument: (type_name)))))
+  (type_definition
+    name: (type_name)
+    type: (type_application
+      constructor: (type_name)
+      argument: (type_name))))
+
+================================================================================
+Generic types
+================================================================================
+
+type Pair a b = { first: a, second: b }
+type List a = < Nil | Cons a (List a) >
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    parameter: (type_parameter)
+    parameter: (type_parameter)
+    type: (record_type
+      (field_declaration
+        key: (identifier)
+        type: (type_parameter))
+      (field_declaration
+        key: (identifier)
+        type: (type_parameter))))
+  (type_definition
+    name: (type_name)
+    parameter: (type_parameter)
+    type: (variant_type
+      (case
+        tag: (tag))
+      (case
+        tag: (tag)
+        argument: (type_parameter)
+        argument: (parenthesized_type
+          (type_application
+            constructor: (type_name)
+            argument: (type_parameter)))))))
+
+================================================================================
+Record types
+================================================================================
+
+type Person = closed {
+  id: Int,
+  name?: String,
+  "content-type": String,
+  ...Base,
+}
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (record_type
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        key: (string
+          (string_content))
+        type: (type_name))
+      (spread
+        name: (type_name)))))
+
+================================================================================
+Variant types
+================================================================================
+
+type Level = closed < Debug | Info | Warn | Error >
+type Shape = <
+  | Circle { r: Float64 }
+  | Rect { w: Float64, h: Float64 }
+  | Point Float64 Float64
+  | ...Other
+>
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (variant_type
+      (case
+        tag: (tag))
+      (case
+        tag: (tag))
+      (case
+        tag: (tag))
+      (case
+        tag: (tag))))
+  (type_definition
+    name: (type_name)
+    type: (variant_type
+      (case
+        tag: (tag)
+        argument: (record_type
+          (field_declaration
+            key: (identifier)
+            type: (type_name))))
+      (case
+        tag: (tag)
+        argument: (record_type
+          (field_declaration
+            key: (identifier)
+            type: (type_name))
+          (field_declaration
+            key: (identifier)
+            type: (type_name))))
+      (case
+        tag: (tag)
+        argument: (type_name)
+        argument: (type_name))
+      (spread
+        name: (type_name)))))
+
+================================================================================
+Variants with any tags
+================================================================================
+
+type Open = < >
+type AlsoOpen = < | >
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (variant_type))
+  (type_definition
+    name: (type_name)
+    type: (variant_type)))
+
+================================================================================
+Nested types
+================================================================================
+
+type Entity = { kind: closed < Person | Robot >, tags: Array (closed { k: String }) }
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (record_type
+      (field_declaration
+        key: (identifier)
+        type: (variant_type
+          (case
+            tag: (tag))
+          (case
+            tag: (tag))))
+      (field_declaration
+        key: (identifier)
+        type: (type_application
+          constructor: (type_name)
+          argument: (parenthesized_type
+            (record_type
+              (field_declaration
+                key: (identifier)
+                type: (type_name)))))))))
+
+================================================================================
+Attributes
+================================================================================
+
+@deprecated("use Customer")
+type Client = { id: Int, @deprecated("use email") mail?: String, email?: String }
+type Shape = < Circle { r: Float64 } | @deprecated Square { side: Float64 } >
+@experimental @future(1, Some { a: x"ff" },)
+type X = Int
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    (attribute
+      name: (identifier)
+      arguments: (attribute_arguments
+        (string
+          (string_content))))
+    name: (type_name)
+    type: (record_type
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        (attribute
+          name: (identifier)
+          arguments: (attribute_arguments
+            (string
+              (string_content))))
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        key: (identifier)
+        type: (type_name))))
+  (type_definition
+    name: (type_name)
+    type: (variant_type
+      (case
+        tag: (tag)
+        argument: (record_type
+          (field_declaration
+            key: (identifier)
+            type: (type_name))))
+      (case
+        (attribute
+          name: (identifier))
+        tag: (tag)
+        argument: (record_type
+          (field_declaration
+            key: (identifier)
+            type: (type_name))))))
+  (type_definition
+    (attribute
+      name: (identifier))
+    (attribute
+      name: (identifier)
+      arguments: (attribute_arguments
+        (number)
+        (variant
+          tag: (tag)
+          payload: (record
+            (field
+              key: (identifier)
+              value: (bytes))))))
+    name: (type_name)
+    type: (type_name)))
+
+================================================================================
+Comments in schema files
+================================================================================
+
+// Prelude types are always in scope.
+type A = { /* inline */ a: Int, // trailing
+}
+/* /* nested */ */
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (line_comment)
+  (type_definition
+    name: (type_name)
+    type: (record_type
+      (block_comment)
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (line_comment)))
+  (block_comment))
+
+================================================================================
+Keywords as field names
+================================================================================
+
+type T = { type: String, import: Int, closed: Bool }
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (record_type
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        key: (identifier)
+        type: (type_name)))))

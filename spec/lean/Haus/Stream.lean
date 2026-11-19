@@ -20,10 +20,10 @@ that this makes the result independent of the split, and
 `Haus.Stream.Correct` that the result is exactly what `parse` gives for the
 whole text.
 
-Not modelled: the limit on one value's length (§7, it bounds memory and
-only adds an error), strict mode (an error when the last value has no
-comma), the decoding of UTF-8 bytes, and the exact error messages and
-positions (errors are those of the parser on the piece).
+The limit on one value's length (§7) and strict mode (§6) are added on top
+of this reader in `Haus.Stream.Limited` (`readWith`). Not modelled: the
+decoding of UTF-8 bytes, and the exact error messages and positions (errors
+are those of the parser on the piece).
 -/
 
 namespace Haus.Stream

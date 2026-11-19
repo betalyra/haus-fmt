@@ -19,6 +19,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "haus-fmt-geo"
+version = "1.0.0"
+dependencies = [
+ "haus-fmt",
+ "haus-fmt-build",
+]
+
+[[package]]
+name = "haus-fmt-money"
+version = "1.0.0"
+dependencies = [
+ "haus-fmt",
+ "haus-fmt-build",
+]
+
+[[package]]
 name = "haus-fmt-schema"
 version = "0.1.0"
 dependencies = [
@@ -33,6 +49,8 @@ version = "0.0.0"
 dependencies = [
  "haus-fmt",
  "haus-fmt-build",
+ "haus-fmt-geo",
+ "haus-fmt-money",
  "haus-fmt-schema",
 ]
 

@@ -1,0 +1,4 @@
+// @fixture/good: an order, with an id from @fixture/base.
+import @fixture/base@1 (Id)
+
+type Order = { id: Id, total: Int }

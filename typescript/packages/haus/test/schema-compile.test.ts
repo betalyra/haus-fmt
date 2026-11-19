@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { compileSchemaFile, parseSchemaFile, schemaDeclarations, type StandardSchemaV1 } from "../src/index.js"
-import { schemaOptions } from "../src/node.js"
+import { compileSchemaFile, HausSchemaFileError, parseSchemaFile, schemaDeclarations, type Codec, type StandardSchemaV1 } from "../src/index.js"
+import { nodeResolver, schemaOptions } from "../src/node.js"
 import * as h from "../src/schema.js"
 
 const examples = join(import.meta.dirname, "../../../../examples")
@@ -182,6 +182,44 @@ describe("schemas from schema files", () => {
   })
 })
 
+describe("codecs", () => {
+  const repo = join(import.meta.dirname, "../../../..")
+  const packages = { "@haus-fmt/money": join(repo, "extensions/money") }
+  const capitals: Codec = {
+    id: "@haus-fmt/money@1#Currency",
+    apply: (base) => h.refine(base, (c) => (typeof c === "string" && /^[A-Z]{3}$/.test(c) ? undefined : "a currency is three letters A–Z")),
+  }
+  const order = (codecs: readonly Codec[]) =>
+    compileSchemaFile(`import @haus-fmt/money (Money)\ntype Order = { total: Money, paid: Array Money }`, { resolver: nodeResolver({ packages }), codecs }).schemas.Order!
+
+  it("apply wherever their type occurs, inside imported packages too", () => {
+    const text = `{ total: Money(19.90, EUR), paid: [Money(1, USD)] }`
+    expect(h.stringify(order([capitals]), h.parse(order([capitals]), text), { style: "compact" })).toBe(text)
+    expect(() => h.parse(order([]), text.replace("USD", "Usd"))).not.toThrow()
+    expect(() => h.parse(order([capitals]), text.replace("USD", "Usd"))).toThrow(/three letters A–Z at \$\.paid\[0\]\[1\]/)
+    // Encoding checks the rule too.
+    expect(() => h.stringify(order([capitals]), { total: { _tag: "Money", values: ["1", "eur"] }, paid: [] })).toThrow(/three letters/)
+  })
+
+  it("for types the schema doesn't contain are ignored; two for one type are an error", () => {
+    const other: Codec = { id: "@haus-fmt/geo@1#LatLng", apply: (base) => base }
+    expect(() => order([capitals, other])).not.toThrow()
+    expect(() => order([capitals, capitals])).toThrow("two codecs for @haus-fmt/money@1#Currency")
+  })
+
+  it("apply to recursive types", () => {
+    const shallow: Codec = { id: "Tree", apply: (base) => h.refine(base, (t) => ((t as { kids: unknown[] }).kids.length <= 1 ? undefined : "at most one child")) }
+    const { schemas } = compileSchemaFile(`type Tree = { kids: Array Tree }`, { codecs: [shallow] })
+    expect(() => h.parse(schemas.Tree!, `{ kids: [{ kids: [] }] }`)).not.toThrow()
+    expect(() => h.parse(schemas.Tree!, `{ kids: [{ kids: [{ kids: [] }, { kids: [] }] }] }`)).toThrow(/at most one child at \$\.kids\[0\]/)
+  })
+
+  it("can't apply to a record case by name: codec-unreachable", () => {
+    const rec: Codec = { id: "R", apply: (base) => base }
+    expect(() => compileSchemaFile(`type R = { w: Int32 }\ntype V = < Box R >`, { codecs: [rec] })).toThrow(expect.objectContaining({ code: "codec-unreachable" }))
+  })
+})
+
 describe("declarations", () => {
   it("declare types and schemas", () => {
     const decl = schemaDeclarations(parseSchemaFile(`
@@ -196,5 +234,44 @@ describe("declarations", () => {
     expect(decl).toContain(`export type Root = { readonly level: Level; readonly n: List<bigint>; readonly at: string; readonly when?: h$.Maybe<string> };`)
     expect(decl).toContain(`export declare const Root: h$.Schema<Root>;`)
     expect(decl).not.toContain("export declare const List")
+  })
+})
+
+describe("comments, whitespace and strings are those of data files (spec §14)", () => {
+  const codeAt = (text: string): [string, number, number] => {
+    try {
+      parseSchemaFile(text)
+    } catch (e) {
+      if (!(e instanceof HausSchemaFileError)) throw e
+      return [e.code, e.line, e.column]
+    }
+    throw new Error("accepted")
+  }
+
+  it.each([
+    ['type A = { "x: Int }', "unterminated-string", 1, 12],
+    ["type A = Int /* never closed", "unterminated-comment", 1, 14],
+    ["type A = Int\rtype B = Int", "lone-carriage-return", 1, 13],
+    ["// a\rb\ntype A = Int", "lone-carriage-return", 1, 5],
+    ["// a\x07b\ntype A = Int", "control-character", 1, 5],
+    ["/* a\x7fb */ type A = Int", "control-character", 1, 5],
+    ["// a\x85b\ntype A = Int", "control-character", 1, 5],
+    ["// access\u202e denied\ntype A = Int", "bidi-control", 1, 10],
+    ['type A = { "a\u2066b": Int }', "bidi-control", 1, 14],
+    ['type A = { "a\x07b": Int }', "control-character", 1, 14],
+    ['type A = { "a\nb": Int }', "string-line-break", 1, 14],
+    ['type A = { "a\\x41": Int }', "invalid-escape", 1, 14],
+    ['type A = { "a\\u{D800}": Int }', "invalid-unicode-escape", 1, 14],
+  ])("%j: %s", (text, code, line, column) => {
+    expect(codeAt(text)).toEqual([code, line, column])
+  })
+
+  it("a byte order mark at the start, CRLF line breaks and tabs in comments are fine", () => {
+    expect(() => parseSchemaFile("\ufeff// a\tb\r\ntype A = Int\r\n")).not.toThrow()
+  })
+
+  it("quoted keys take every escape of data strings", () => {
+    const { schemas } = compileSchemaFile('type A = closed { "tab\\there": Int, "cr\\r": Int, "\\u{1F600}": Int, "q\\"\\\\": Int }')
+    expect(h.parse(schemas.A!, '{ "tab\\there": 1, "cr\\r": 2, "😀": 3, "q\\"\\\\": 4 }')).toEqual({ "tab\there": 1n, "cr\r": 2n, "😀": 3n, 'q"\\': 4n })
   })
 })

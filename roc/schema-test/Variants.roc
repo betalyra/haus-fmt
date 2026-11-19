@@ -12,19 +12,25 @@ Variants := [].{
 	Box_ : { w : Int }
 
 	decode_box : Value -> Try(Box_, Decode.Error)
-	decode_box = |v| {
+	decode_box = |v| Decode.within_depth(v, read_value_box)
+
+	read_value_box : Value -> Try(Box_, Decode.Error)
+	read_value_box = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ w: Decode.field(fs, "w", Decode.int)? })
 	}
 
-	encode_box : Box_ -> Value
-	encode_box = |v| Encode.record([("w", Present(Encode.int(v.w)))])
+	encode_box : Box_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_box = |v, e| Encode.record(e, [("w", Encode.required(v.w, Encode.int))])
 
 	## haus type `variants#Shape`.
 	Shape := [Circle({ r : F64 }), Point(F64, F64), Empty, Wrap(Box_), Pair(Int, Str), Unknown(Str, List(Value))]
 
 	decode_shape : Value -> Try(Shape, Decode.Error)
-	decode_shape = |v| match v {
+	decode_shape = |v| Decode.within_depth(v, read_value_shape)
+
+	read_value_shape : Value -> Try(Shape, Decode.Error)
+	read_value_shape = |v| match v {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -34,7 +40,7 @@ Variants := [].{
 		)
 		Tag("Point", [a0, a1]) => Ok(Point(Decode.arg("Point", 0, a0, Decode.f64)?, Decode.arg("Point", 1, a1, Decode.f64)?))
 		Tag("Empty", []) => Ok(Empty)
-		Tag("Wrap", [p]) => Ok(Wrap(Decode.record_arg("Wrap", p, decode_box)?))
+		Tag("Wrap", [p]) => Ok(Wrap(Decode.record_arg("Wrap", p, read_value_box)?))
 		Tag("Pair", [a0, a1]) => Ok(Pair(Decode.arg("Pair", 0, a0, Decode.int)?, Decode.arg("Pair", 1, a1, Decode.str)?))
 		Tag("Circle", _) => Decode.arity("Circle", 1)
 		Tag("Point", _) => Decode.arity("Point", 2)
@@ -45,21 +51,24 @@ Variants := [].{
 		_ => Decode.expected("a variant (Shape)", v)
 	}
 
-	encode_shape : Shape -> Value
-	encode_shape = |v| match v {
-		Circle(r) => Tag("Circle", [Encode.record([("r", Present(Encode.f64(r.r)))])])
-		Point(a0, a1) => Tag("Point", [Encode.f64(a0), Encode.f64(a1)])
-		Empty => Tag("Empty", [])
-		Wrap(a0) => Tag("Wrap", [encode_box(a0)])
-		Pair(a0, a1) => Tag("Pair", [Encode.int(a0), Encode.str(a1)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_shape = |v, e| match v {
+		Circle(r) => Encode.tagged_record("Circle", e, [("r", Encode.required(r.r, Encode.f64))])
+		Point(a0, a1) => Encode.tagged_args("Point", e, [|e1| Encode.f64(a0, e1), |e2| Encode.f64(a1, e2)])
+		Empty => Encode.tag("Empty", e)
+		Wrap(a0) => Encode.tagged("Wrap", e, |e3| encode_box(a0, e3))
+		Pair(a0, a1) => Encode.tagged_args("Pair", e, [|e4| Encode.int(a0, e4), |e5| Encode.str(a1, e5)])
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	## haus type `variants#Level`.
 	Level := [Debug, Info]
 
 	decode_level : Value -> Try(Level, Decode.Error)
-	decode_level = |v| match v {
+	decode_level = |v| Decode.within_depth(v, read_value_level)
+
+	read_value_level : Value -> Try(Level, Decode.Error)
+	read_value_level = |v| match v {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Debug", _) => Decode.arity("Debug", 0)
@@ -68,17 +77,20 @@ Variants := [].{
 		_ => Decode.expected("a variant (Level)", v)
 	}
 
-	encode_level : Level -> Value
-	encode_level = |v| match v {
-		Debug => Tag("Debug", [])
-		Info => Tag("Info", [])
+	encode_level : Level, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_level = |v, e| match v {
+		Debug => Encode.tag("Debug", e)
+		Info => Encode.tag("Info", e)
 	}
 
 	## haus type `variants#Strict`.
 	Strict := [A, B(Int), C({ x : Int })]
 
 	decode_strict : Value -> Try(Strict, Decode.Error)
-	decode_strict = |v| match v {
+	decode_strict = |v| Decode.within_depth(v, read_value_strict)
+
+	read_value_strict : Value -> Try(Strict, Decode.Error)
+	read_value_strict = |v| match v {
 		Tag("A", []) => Ok(A)
 		Tag("B", [a0]) => Ok(B(Decode.arg("B", 0, a0, Decode.int)?))
 		Tag("C", [p]) => Decode.payload(
@@ -95,18 +107,21 @@ Variants := [].{
 		_ => Decode.expected("a variant (Strict)", v)
 	}
 
-	encode_strict : Strict -> Value
-	encode_strict = |v| match v {
-		A => Tag("A", [])
-		B(a0) => Tag("B", [Encode.int(a0)])
-		C(r) => Tag("C", [Encode.record([("x", Present(Encode.int(r.x)))])])
+	encode_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_strict = |v, e| match v {
+		A => Encode.tag("A", e)
+		B(a0) => Encode.tagged("B", e, |e6| Encode.int(a0, e6))
+		C(r) => Encode.tagged_record("C", e, [("x", Encode.required(r.x, Encode.int))])
 	}
 
 	## haus type `variants#ClosedPayload`.
 	ClosedPayload := [Circle({ r : Int })]
 
 	decode_closed_payload : Value -> Try(ClosedPayload, Decode.Error)
-	decode_closed_payload = |v| match v {
+	decode_closed_payload = |v| Decode.within_depth(v, read_value_closed_payload)
+
+	read_value_closed_payload : Value -> Try(ClosedPayload, Decode.Error)
+	read_value_closed_payload = |v| match v {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -120,30 +135,36 @@ Variants := [].{
 		_ => Decode.expected("a variant (ClosedPayload)", v)
 	}
 
-	encode_closed_payload : ClosedPayload -> Value
-	encode_closed_payload = |v| match v {
-		Circle(r) => Tag("Circle", [Encode.record([("r", Present(Encode.int(r.r)))])])
+	encode_closed_payload : ClosedPayload, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_closed_payload = |v, e| match v {
+		Circle(r) => Encode.tagged_record("Circle", e, [("r", Encode.required(r.r, Encode.int))])
 	}
 
 	## haus type `variants#AnyTag`.
 	AnyTag : [Bare(Str), Other(Str, List(Value))]
 
 	decode_any_tag : Value -> Try(AnyTag, Decode.Error)
-	decode_any_tag = |v| Decode.any_tag(v)
+	decode_any_tag = |v| Decode.within_depth(v, read_value_any_tag)
 
-	encode_any_tag : AnyTag -> Value
-	encode_any_tag = |v| Encode.any_tag(v)
+	read_value_any_tag : Value -> Try(AnyTag, Decode.Error)
+	read_value_any_tag = |v| Decode.any_tag(v)
+
+	encode_any_tag : AnyTag, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_any_tag = |v, e| Encode.any_tag(v, e)
 
 	## haus type `variants#Holder`.
 	Holder : { shape : Shape, any : List(AnyTag) }
 
 	decode_holder : Value -> Try(Holder, Decode.Error)
-	decode_holder = |v| {
+	decode_holder = |v| Decode.within_depth(v, read_value_holder)
+
+	read_value_holder : Value -> Try(Holder, Decode.Error)
+	read_value_holder = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ shape: Decode.field(fs, "shape", decode_shape)?, any: Decode.field(fs, "any", |x1| Decode.list(x1, decode_any_tag))? })
+		Ok({ shape: Decode.field(fs, "shape", read_value_shape)?, any: Decode.field(fs, "any", |x7| Decode.list(x7, read_value_any_tag))? })
 	}
 
-	encode_holder : Holder -> Value
-	encode_holder = |v| Encode.record([("shape", Present(encode_shape(v.shape))), ("any", Present(Encode.list(v.any, encode_any_tag)))])
+	encode_holder : Holder, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_holder = |v, e| Encode.record(e, [("shape", Encode.required(v.shape, encode_shape)), ("any", Present(|e8| Encode.list(v.any, e8, encode_any_tag)))])
 
 }

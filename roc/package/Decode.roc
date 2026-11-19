@@ -48,7 +48,10 @@ Decode := [].{
 	one : Str, (Value -> Try(a, Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Error)])
 	one = |text, decoder| one_with(text, Value.default_limits, decoder)
 
-	## `one` with your own parser limits (see `Value.Limits`).
+	## `one` with your own parser limits (see `Value.Limits`). A generated
+	## `decode_<name>` checks the value's depth against the default limits;
+	## for a deeper limit, decode with `read_value_<name>`: the parser has
+	## checked the depth already.
 	one_with : Str, Value.Limits, (Value -> Try(a, Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Error)])
 	one_with = |text, limits, decoder| {
 		v = Value.parse_with(text, limits).map_err(|e| Syntax(e))?
@@ -58,6 +61,27 @@ Decode := [].{
 	## Item `i` of a stream, already parsed: errors say which (`[3].total`).
 	item : Value, U64, (Value -> Try(a, Error)) -> Try(a, Error)
 	item = |v, i, decoder| at(decoder(v), "[${i.to_str()}]")
+
+	## What `decoder` (a generated `read_value_<name>`) gives for `v`, if `v`
+	## nests at most 256 levels (spec §7, §9.8), counted as the parser counts
+	## them: else `nesting-too-deep`, at the first container too deep. A
+	## parsed value is within the parser's limits, but a `Value` built in code
+	## may nest arbitrarily deep, and decoders recurse once per level, so the
+	## depth is checked first, without recursion. A generated `decode_<name>`
+	## decodes so; the decoders it is built from don't check.
+	within_depth : Value, (Value -> Try(a, Error)) -> Try(a, Error)
+	within_depth = |v, decoder| within_limits(v, decoder, Value.default_limits)
+
+	## `within_depth` for the depth limit of `limits`, which must be at most
+	## `Value.max_supported_depth`:
+	##
+	##     Decode.within_limits(value, Order.read_value_order, limits)
+	within_limits : Value, (Value -> Try(a, Error)), Value.Limits -> Try(a, Error)
+	within_limits = |v, decoder, limits| {
+		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
+		nests_within(v, limits.max_depth)?
+		decoder(v)
+	}
 
 	# ── scalars ─────────────────────────────────────────────
 
@@ -359,6 +383,77 @@ whole = |v, name, min, max, from_str| match v {
 ## identifier as `["pt-BR"]`). The same paths as the Rust binding.
 Error : { code : Str, reason : Str, path : Str }
 
+## Whether `v` nests at most `max` levels, counted as the parser and the
+## writer count them: each array, record and tag with arguments is a level,
+## and a tag's only argument, a record, shares the tag's (`Tag { … }`).
+## `nesting-too-deep` otherwise, at the first container too deep. Walked
+## with a list rather than recursion, so that a value built in code, however
+## deep, is checked without overflowing the stack.
+nests_within : Value, U64 -> Try({}, Error)
+nests_within = |v, max| {
+	# The containers from `v` down to the one being walked, each with its next item.
+	var $path = []
+	var $next = if (opens(v)) Ok(v) else Err({})
+	while True {
+		match $next {
+			Ok(container) => {
+				if $path.len().to_u64() >= max {
+					segments = $path.map(|(c, i)| place_of(c, i - 1))
+					return Err({ code: ErrorCode.nesting_too_deep, reason: "nesting deeper than ${max.to_str()} levels", path: Str.join_with(segments, "") })
+				}
+				$path = $path.append((container, 0.U64))
+			}
+			Err(_) => {}
+		}
+		match $path.last() {
+			Ok((container, i)) => {
+				$path = $path.drop_last(1)
+				match child(container, i) {
+					Ok(x) => {
+						$path = $path.append((container, i + 1))
+						$next = if (opens(x)) Ok(x) else Err({})
+					}
+					Err(_) => {
+						$next = Err({})
+					}
+				}
+			}
+			Err(_) => {
+				return Ok({})
+			}
+		}
+	}
+}
+
+## An array, a record or a tag with arguments: a level (`nests_within`).
+opens : Value -> Bool
+opens = |v| match v {
+	Arr(_) | Rec(_) => True
+	Tag(_, args) => !args.is_empty()
+	_ => False
+}
+
+## Item `i` of a container: of an array, a record's field, a tag's
+## argument; of `Tag { … }`, a field of its record.
+child : Value, U64 -> Try(Value, [OutOfBounds])
+child = |v, i| match v {
+	Arr(items) => items.get(i)
+	Rec(fields) | Tag(_, [Rec(fields)]) => fields.get(i).map_ok(|(_, x)| x)
+	Tag(_, args) => args.get(i)
+	_ => Err(OutOfBounds)
+}
+
+## Where item `i` of a container is, as an error path says it: `[0]`, `.a`,
+## `(Some)[0]`, `(Circle).r`.
+place_of : Value, U64 -> Str
+place_of = |v, i| match v {
+	Arr(_) => "[${i.to_str()}]"
+	Rec(fields) => fields.get(i).map_ok(|(k, _)| ErrorCode.path_key(k)) ?? ""
+	Tag(name, [Rec(fields)]) => "(${name})${fields.get(i).map_ok(|(k, _)| ErrorCode.path_key(k)) ?? ""}"
+	Tag(name, _) => "(${name})[${i.to_str()}]"
+	_ => ""
+}
+
 ## Prefix the path of an error coming out of a nested decoder.
 at : Try(a, Error), Str -> Try(a, Error)
 at = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
@@ -429,6 +524,14 @@ expect Decode.one("{ hash: x\"9f86 D0\" }", |v| Decode.field(Decode.record(v)?, 
 expect Decode.one("x\"\"", Decode.bytes) == Ok([])
 expect Decode.one("x\"00\"", Decode.str) == Err(Decode({ code: "type-mismatch", reason: "expected String, found bytes", path: "" }))
 expect Decode.one("\"00\"", Decode.bytes) == Err(Decode({ code: "type-mismatch", reason: "expected Bytes, found a string", path: "" }))
+# In a stream, the place of an error in an item starts with the item's index (spec §15).
+expect {
+	price = |v| Decode.field(Decode.record(v)?, "price", Decode.u64)
+	match Decode.all("{ price: 1 }, { price: 2 }, { price: 3 }, { price: \"4\" },", price) {
+		Err(Decode(e)) => e.code == "type-mismatch" and ErrorCode.place(e.path) == "$[3].price"
+		_ => False
+	}
+}
 expect Decode.all("1, 2, x", Decode.u64) == Err(Syntax({ code: "bare-identifier", reason: "unexpected identifier 'x': lowercase identifiers can only be record keys", line: 1, column: 7 }))
 
 # A partial update: `name?: String, nickname?: Maybe String`.
@@ -515,7 +618,7 @@ expect {
 		Tag("Shape", [p]) => Decode.payload("Shape", p, |fs| Decode.field(fs, "r", Decode.i32))
 		_ => Decode.expected("Shape { … }", v)
 	}
-	code_of("Shape { r: \"1\" }", shape) == "type-mismatch at $[0].r" and code_of("Shape(1)", shape) == "wrong-payload at $" and code_of("Shape([1])", shape) == "wrong-payload at $"
+	code_of("Shape { r: \"1\" }", shape) == "type-mismatch at $.r" and code_of("Shape(1)", shape) == "wrong-payload at $" and code_of("Shape([1])", shape) == "wrong-payload at $"
 }
 expect {
 	shape = |v| match v {
@@ -524,8 +627,54 @@ expect {
 	}
 	Decode.one("Circle(1.5)", shape) == Err(Decode({ code: "wrong-payload", reason: "Circle takes one argument, a record, found number 1.5: write `Circle { … }`", path: "" }))
 }
-expect Decode.error_json({ code: "missing-field", reason: "missing field 'id'", path: "[2](Item)" }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$[2][0]\",\"hint\":\"Add the field, or mark it optional in the schema with `?` after its name.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"
+expect Decode.error_json({ code: "missing-field", reason: "missing field 'id'", path: "[2](Item)" }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$[2]\",\"hint\":\"Add the field, or mark it optional in the schema with `?` after its name.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"
 # A record case by name: one record, as `Tag { … }`; anything else is the wrong payload.
 expect Decode.record_arg("Wrap", Rec([("w", Num("1"))]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)) == Ok(1)
 expect Decode.record_arg("Wrap", Num("1"), |v| Decode.i32(v)).map_err(|e| e.code) == Err("wrong-payload")
 expect Decode.record_arg("Wrap", Rec([]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)).map_err(|e| (e.code, e.path)) == Err(("missing-field", "(Wrap)"))
+
+# A value built in code may nest deeper than any parser takes (spec §9.8):
+# `within_depth` checks the depth before the decoder recurses, as the parser
+# and the writer count it, and fails at the limit instead of overflowing.
+deep : U64, (Value -> Value) -> Value
+deep = |n, wrap| {
+	var $v = Arr([])
+	var $i = 0
+	while $i < n {
+		$v = wrap($v)
+		$i = $i + 1
+	}
+	$v
+}
+
+Nest := [Nest(List(Nest))]
+
+decode_nest : Value -> Try(Nest, Error)
+decode_nest = |v| Decode.list(v, decode_nest).map_ok(|items| Nest(items))
+
+# Far deeper than the call stack takes: about as deep as `roc test` drops a value
+# (an array 150,000 levels deep; 180,000 overflow its stack, as do 140,000 of `Some`).
+expect {
+	v = deep(150_000, |x| Arr([x]))
+	Decode.within_depth(v, decode_nest).map_err(|e| (e.code, e.reason, e.path == "[0]".repeat(256))).map_ok(|_| {}) == Err(("nesting-too-deep", "nesting deeper than 256 levels", True))
+}
+expect Decode.within_depth(deep(100_000, |x| Tag("Some", [x])), Decode.any).map_err(|e| e.path.count_utf8_bytes()).map_ok(|_| {}) == Err(256 * "(Some)[0]".count_utf8_bytes())
+# At the limit and one past it, at the place the writer names: arrays, records,
+# payloads, and records as a tag's only argument, which share its level (`Tag { … }`).
+expect [(|x| Arr([x]), "[0]"), (|x| Rec([("a", x)]), ".a"), (|x| Tag("Some", [x]), "(Some)[0]"), (|x| Tag("A", [Rec([("a", x)])]), "(A).a"), (|x| Tag("P", [Num("1"), x]), "(P)[1]")].all(
+	|(wrap, place)| {
+		at_limit = deep(255, wrap)
+		decoded = Decode.within_depth(wrap(at_limit), Decode.any).map_ok(|_| {})
+		Decode.within_depth(at_limit, Decode.any).is_ok() and decoded == Err({ code: "nesting-too-deep", reason: "nesting deeper than 256 levels", path: place.repeat(256) })
+	},
+)
+expect Decode.within_depth(deep(3, |x| Tag("A", [Rec([("pt-BR", x)])])), Decode.any).is_ok()
+# Your own limits, at most `Value.max_supported_depth`.
+expect {
+	three = { ..Value.default_limits, max_depth: 3 }
+	ok = Decode.within_limits(deep(2, |x| Arr([x])), decode_nest, three).is_ok()
+	ok and Decode.within_limits(deep(3, |x| Arr([x])), decode_nest, three).map_ok(|_| {}) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 3 levels", path: "[0][0][0]" })
+}
+expect Decode.within_limits(deep(1023, |x| Arr([x])), decode_nest, { ..Value.default_limits, max_depth: 1024 }).is_ok()
+expect Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code).map_ok(|_| {}) == Err("unsupported-depth")
+expect Decode.within_limits(Arr([]), Decode.any, { ..Value.default_limits, max_depth: 0 }).map_err(|e| e.path).map_ok(|_| {}) == Err("") and Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 0 }).is_ok()

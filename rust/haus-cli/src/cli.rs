@@ -63,6 +63,9 @@ pub enum Command {
     /// minimised layouts and the canonical form of the same data all have
     /// the same hash, whatever their comments, key order or spelling.
     Hash(HashArgs),
+    /// Schema packages (spec §13.3): `haus package check`.
+    #[command(subcommand)]
+    Package(PackageCommand),
     /// Print a shell completion script.
     Completions {
         #[arg(value_enum)]
@@ -113,6 +116,34 @@ pub struct PackageArgs {
     /// (not deeper; one whose manifest is invalid is left out). Repeatable.
     #[arg(long = "packages", value_name = "FOLDER")]
     pub packages: Vec<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PackageCommand {
+    /// Check a schema package before publishing it.
+    ///
+    /// Its manifest (package.haus) and schema (schema.haus, with its imports
+    /// resolved), its profiles' test vectors, and the wrappers of package
+    /// managers next to them: package.json, Cargo.toml and pyproject.toml
+    /// give the manifest's version, ship package.haus, schema.haus and the
+    /// profiles, declare every package the schema imports, and run nothing
+    /// when installed (no npm install scripts). The files are only read:
+    /// nothing is run, packed or fetched.
+    Check(PackageCheckArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PackageCheckArgs {
+    /// Package directories, each with a package.haus.
+    #[arg(value_name = "DIR", default_value = ".")]
+    pub dirs: Vec<PathBuf>,
+
+    /// Print one JSON document instead of text.
+    #[arg(long)]
+    pub json: bool,
+
+    #[command(flatten)]
+    pub packages: PackageArgs,
 }
 
 #[derive(Debug, Args)]

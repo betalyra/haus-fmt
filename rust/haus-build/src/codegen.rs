@@ -16,7 +16,11 @@
 //! code itself allows their use, so only code that touches them is warned.
 //!
 //! Records and variants written inline get a name from where they are:
-//! `Order.status` becomes `OrderStatus`. The code is built as tokens with
+//! `Order.status` becomes `OrderStatus`, an array's items `…Item`, a map's
+//! values `…Value`, `Result`'s `…Err` and `…Ok`, an argument of a generic
+//! type `…1`, `…2`. `Maybe` and `Secret` add nothing, except as the whole
+//! type of a definition, whose name that is: `type InPlace = Maybe < … >`
+//! names the variant `InPlaceValue`. The code is built as tokens with
 //! `quote!` and printed with `prettyplease`.
 
 use crate::graph::Shape;
@@ -239,20 +243,15 @@ enum Fun {
 }
 
 impl Fun {
-    /// As a function value: `f`, or `|x| expr`.
+    /// A decoder, which also takes the `::haus::Decoder` `__d`, as a
+    /// function value: `f`, or `|x, __d| expr`.
     fn value(&self) -> TokenStream {
-        match self {
-            Fun::Path(f) => f.clone(),
-            Fun::Expr(e) => quote!(|x| #e),
-        }
+        self.reader()
     }
 
-    /// Applied to `arg`.
+    /// A decoder applied to `arg`, with `__d` in scope.
     fn call(&self, arg: TokenStream) -> TokenStream {
-        match self {
-            Fun::Path(f) => quote!(#f(#arg)),
-            Fun::Expr(e) => quote!({ let x = #arg; #e }),
-        }
+        self.read(arg)
     }
 
     /// An encoder, which also takes the `::haus::Encoder` `__e`, as a
@@ -300,8 +299,8 @@ impl Fun {
 
 /// A Rust type, how to decode it from `x: &Value` and encode `x: &T`, and
 /// how to read it from `x: &Json` and write `x: &T` as schema-based JSON. Encoding
-/// and writing also take `__e: ::haus::Encoder`, and reading JSON
-/// `__d: ::haus::Decoder`, which count the depth.
+/// and writing also take `__e: ::haus::Encoder`, and decoding and reading
+/// JSON `__d: ::haus::Decoder`, which count the depth.
 struct Rs {
     ty: TokenStream,
     de: Fun,
@@ -322,7 +321,7 @@ impl Rs {
     /// [`Rs::plain`], with the shadow type given.
     fn named(ty: TokenStream, shadow: TokenStream) -> Rs {
         Rs {
-            de: Fun::Path(quote!(<#ty as ::haus::Decode>::decode)),
+            de: Fun::Path(quote!(<#ty as ::haus::Decode>::decode_with)),
             en: Fun::Path(quote!(::haus::Encode::encode_with)),
             from_json: Fun::Path(quote!(<#ty as ::haus::FromJson>::from_json_with)),
             to_json: Fun::Path(quote!(::haus::ToJson::to_json_with)),
@@ -345,7 +344,7 @@ impl Rs {
         let (from, to): (Vec<_>, Vec<_>) = items.iter().map(|r| (r.from_json.reader(), r.to_json.encoder())).unzip();
         Rs {
             ty,
-            de: Fun::Expr(quote!(::haus::de::#helper(x, #(#de),*))),
+            de: Fun::Expr(quote!(::haus::de::#helper(x, __d, #(#de),*))),
             en: Fun::Expr(quote!(::haus::ser::#helper(x, __e, #(#en),*))),
             from_json: Fun::Expr(quote!(::haus::json::de::#helper(x, __d, #(#from),*))),
             to_json: Fun::Expr(quote!(::haus::json::ser::#helper(x, __e, #(#to),*))),
@@ -479,6 +478,13 @@ impl<'a> At<'a> {
     fn contained(&self) -> At<'a> {
         At { contained: true, ..self.clone() }
     }
+
+    /// Inside `Maybe` or `Secret`, which add nothing to the name: this
+    /// place's name, except at the top of a definition, whose own name that
+    /// is: `type InPlace = Maybe < … >` names the variant `InPlaceValue`.
+    fn wrapped(&self) -> At<'a> {
+        if self.hint == self.owner.name { self.inner("Value") } else { self.clone() }
+    }
 }
 
 /// A type being defined: its name, generics and documentation.
@@ -539,7 +545,8 @@ impl Item<'_> {
 
             #[allow(deprecated)]
             impl #de_g ::haus::Decode for #name #g {
-                fn decode(v: &::haus::Value) -> ::std::result::Result<Self, ::haus::DecodeError> {
+                #[allow(unused_variables)]
+                fn decode_with(v: &::haus::Value, __d: ::haus::Decoder) -> ::std::result::Result<Self, ::haus::DecodeError> {
                     #decode
                 }
             }
@@ -714,13 +721,13 @@ impl<'a> Gen<'a> {
             "Float32" | "Float64" => scalar(format_ident!("f{}", &name[5..]).into_token_stream()),
             "Any" => scalar(quote!(::haus::Value)),
             "Secret" => {
-                let inner = self.lower(&args[0], at)?;
+                let inner = self.lower(&args[0], &at.wrapped())?;
                 let (ty, shadow, de, en) = (&inner.ty, &inner.shadow, inner.de.value(), inner.en.encoder());
                 let (from, to) = (inner.from_json.reader(), inner.to_json.encoder());
                 let what = format!("Secret {}", args[0]);
                 Ok(Rs {
                     ty: quote!(::haus::Secret<#ty>),
-                    de: Fun::Expr(quote!(::haus::de::secret(x, #what, #de))),
+                    de: Fun::Expr(quote!(::haus::de::secret(x, __d, #what, #de))),
                     en: Fun::Expr(quote!(::haus::ser::secret(x, __e, #what, #en))),
                     from_json: Fun::Expr(quote!(::haus::json::de::secret(x, __d, #what, #from))),
                     to_json: Fun::Expr(quote!(::haus::json::ser::secret(x, __e, #what, #to))),
@@ -743,7 +750,7 @@ impl<'a> Gen<'a> {
                 ))
             }
             "Maybe" => {
-                let some = self.lower(&args[0], at)?;
+                let some = self.lower(&args[0], &at.wrapped())?;
                 let (ty, shadow) = (&some.ty, &some.shadow);
                 let (from, to) = (some.from_json.reader(), some.to_json.encoder());
                 // `true` forces the tagged form, as for an inner type whose JSON can be null.
@@ -842,7 +849,7 @@ impl<'a> Gen<'a> {
                 let imported = |name: &str| imports.get(name).map(|i| i.shape.clone());
                 match crate::graph::record_case(one, &self.defs, &imported) {
                     Some(reserved) => {
-                        Payload::Named { rs: Box::new(self.lower(one, &at)?), shown: one.to_string(), reserved }
+                        Payload::Named { rs: Box::new(self.lower(one, &at)?), shown: written(one), reserved }
                     }
                     None => Payload::Tuple(vec![self.lower(one, &at)?]),
                 }
@@ -867,7 +874,7 @@ impl<'a> Gen<'a> {
             let n = &f.name;
             f.en(quote!(self.#n), false)
         });
-        let bind = bind_record(quote!(::haus::de::Record::new(v, #label)), closed, fields);
+        let bind = bind_record(quote!(::haus::de::Record::new(v, __d, #label)), closed, fields);
         let json_bind = bind_record(quote!(::haus::json::de::Object::new(j, __d, #label)), closed, fields);
         let read = fs.iter().map(FieldRs::read_json);
         let written = fs.iter().map(|f| {
@@ -953,7 +960,7 @@ impl<'a> Gen<'a> {
                         #check
                         ::std::result::Result::Ok(Self)
                     },
-                    to: quote!(::haus::json::ser::tag_name(#tag)),
+                    to: quote!(::haus::json::ser::tag_name(#tag, __e)),
                 },
             ),
             Payload::Tuple(items) => {
@@ -995,13 +1002,13 @@ impl<'a> Gen<'a> {
                         from: quote! { #tagged ::haus::json::de::record_case(j, __d, #from).map(Self) },
                         to: quote! {
                             let Self(a0) = self;
-                            ::haus::json::ser::record_case(#tag, #written)
+                            ::haus::json::ser::record_case(#tag, __e, #written)
                         },
                     },
                 };
                 (
                     quote!(pub struct #name #g (pub #ty);),
-                    quote!(::haus::de::record_arg(tag, args, #shown, #de).map(Self)),
+                    quote!(::haus::de::record_arg(tag, args, __d, #shown, #de).map(Self)),
                     quote! {
                         let Self(a0) = self;
                         ::haus::ser::tagged(#tag, __e, |__e| [#encoded])
@@ -1089,7 +1096,7 @@ impl<'a> Gen<'a> {
                             false => quote!(#tag => { r.args::<0>()?; ::std::result::Result::Ok(Self::#v) }),
                         },
                         to_json: match names_only {
-                            true => quote!(Self::#v => ::haus::json::ser::tag_name(#tag)),
+                            true => quote!(Self::#v => ::haus::json::ser::tag_name(#tag, __e)),
                             false => quote!(Self::#v => ::haus::json::ser::tagged(#tag, __e, |_| [])),
                         },
                     },
@@ -1119,12 +1126,12 @@ impl<'a> Gen<'a> {
                             ),
                             None => (
                                 quote!(#tag => ::haus::json::de::record_case(j, __d, #from).map(Self::#v),),
-                                quote!(Self::#v(a0) => ::haus::json::ser::record_case(#tag, #written)),
+                                quote!(Self::#v(a0) => ::haus::json::ser::record_case(#tag, __e, #written)),
                             ),
                         };
                         Arm {
                             decl: quote!(#deprecated #v(#ty)),
-                            de: quote!(#tag => ::haus::de::record_arg(tag, args, #shown, #de).map(Self::#v),),
+                            de: quote!(#tag => ::haus::de::record_arg(tag, args, __d, #shown, #de).map(Self::#v),),
                             en: quote!(Self::#v(a0) => ::haus::ser::tagged(#tag, __e, |__e| [#encoded])),
                             from_json,
                             to_json,
@@ -1190,7 +1197,7 @@ impl<'a> Gen<'a> {
                     /// A tag this schema doesn't list, kept as it was.
                     Unknown(::haus::Unknown),
                 },
-                quote!(_ => ::std::result::Result::Ok(Self::Unknown(::haus::Unknown::new(tag, args)))),
+                quote!(_ => ::std::result::Result::Ok(Self::Unknown(::haus::de::unknown(tag, args, __d)?))),
                 quote!(Self::Unknown(u) => ::haus::Encode::encode_with(u, __e),),
                 quote!(_ => ::std::result::Result::Ok(Self::Unknown(r.unknown(tag)?))),
                 quote!(Self::Unknown(u) => ::haus::json::ser::unknown(u, __e),),
@@ -1248,6 +1255,23 @@ struct Arm {
 
 // ── helpers ──────────────────────────────────────────────────
 
+/// `ty` as the schema writes it, for hints: `Array Money`, also where a
+/// spread copied it from another file and names its types by their ids
+/// (see [`crate::graph::type_name`]).
+fn written(ty: &Ty) -> String {
+    fn names(ty: &Ty) -> Ty {
+        match ty {
+            Ty::Name { name, args, pos } => Ty::Name {
+                name: crate::graph::type_name(name).to_owned(),
+                args: args.iter().map(names).collect(),
+                pos: *pos,
+            },
+            other => other.clone(),
+        }
+    }
+    names(ty).to_string()
+}
+
 /// `a0, a1, …`: the payload values, bound by a pattern.
 fn vars(n: usize) -> Vec<Ident> {
     (0..n).map(|i| format_ident!("a{i}")).collect()
@@ -1257,7 +1281,7 @@ fn vars(n: usize) -> Vec<Ident> {
 /// and the decoded values; `types` are the case's, which the hint names.
 fn tuple_de(items: &[Rs], types: &[Ty]) -> (TokenStream, Vec<TokenStream>) {
     let (vars, n) = (vars(items.len()), Literal::usize_unsuffixed(items.len()));
-    let types = types.iter().map(|t| t.to_string());
+    let types = types.iter().map(written);
     let bind = quote!(let [#(#vars),*] = ::haus::de::typed_args::<#n>(tag, args, &[#(#types),*])?;);
     let values = items
         .iter()
@@ -1265,7 +1289,7 @@ fn tuple_de(items: &[Rs], types: &[Ty]) -> (TokenStream, Vec<TokenStream>) {
         .enumerate()
         .map(|(i, (r, var))| {
             let (i, f) = (Literal::usize_unsuffixed(i), r.de.value());
-            quote!(::haus::de::arg(tag, #i, #var, #f)?)
+            quote!(::haus::de::arg::<#n, _>(tag, #i, #var, __d, #f)?)
         })
         .collect();
     (bind, values)
@@ -1281,7 +1305,7 @@ fn record_payload(fields: &[Field]) -> TokenStream {
             let word = f.key.chars().next().is_some_and(|c| c.is_ascii_lowercase() || c == '_')
                 && f.key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             let key = if word { f.key.clone() } else { format!("{:?}", f.key) };
-            format!("{key}{}: {}", if f.optional { "?" } else { "" }, f.ty)
+            format!("{key}{}: {}", if f.optional { "?" } else { "" }, written(&f.ty))
         })
         .collect();
     let more = if fields.len() > 6 { ", …" } else { "" };
@@ -1289,7 +1313,7 @@ fn record_payload(fields: &[Field]) -> TokenStream {
         true => "{}".to_owned(),
         false => format!("{{ {}{more} }}", shown.join(", ")),
     };
-    quote!(::haus::de::record_payload(tag, args, #record))
+    quote!(::haus::de::record_payload(tag, args, __d, #record))
 }
 
 /// The encoded payload values `a0`, `a1`, ….

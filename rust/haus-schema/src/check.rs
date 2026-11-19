@@ -118,14 +118,15 @@ impl Issue {
         .write()
     }
 
-    /// The path as `$.items[2].price`.
+    /// The path as `$.items[2].price` (spec §15): a key that isn't an
+    /// identifier as a canonical haus string (spec §12), `$.m["pt-BR"]`.
     pub fn path_string(&self) -> String {
         let mut out = String::from("$");
         for s in &self.path {
             match s {
                 Segment::Index(i) => out.push_str(&format!("[{i}]")),
                 Segment::Field(k) if is_word(k) => out.push_str(&format!(".{k}")),
-                Segment::Field(k) => out.push_str(&format!("[{}]", json_quote(k))),
+                Segment::Field(k) => out.push_str(&format!("[{}]", haus::canonical(&Value::String(k.clone())))),
             }
         }
         out

@@ -11,6 +11,12 @@ importers:
 
   .: {}
 
+  ../editors/tree-sitter-haus:
+    devDependencies:
+      tree-sitter-cli:
+        specifier: 0.27.1
+        version: 0.27.1
+
   ../examples:
     dependencies:
       '@haus-fmt/geo':
@@ -20,9 +26,53 @@ importers:
         specifier: workspace:*
         version: link:../extensions/money
 
-  ../extensions/geo: {}
+  ../extensions/geo:
+    devDependencies:
+      '@effect/tsgo':
+        specifier: 0.69.0
+        version: 0.69.0
+      '@haus-fmt/effect':
+        specifier: workspace:*
+        version: link:../../typescript/packages/effect
+      '@haus-fmt/haus':
+        specifier: workspace:*
+        version: link:../../typescript/packages/haus
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.10.1)(vite@8.3.6(@types/node@24.10.1))
 
-  ../extensions/money: {}
+  ../extensions/money:
+    devDependencies:
+      '@effect/tsgo':
+        specifier: 0.69.0
+        version: 0.69.0
+      '@haus-fmt/effect':
+        specifier: workspace:*
+        version: link:../../typescript/packages/effect
+      '@haus-fmt/haus':
+        specifier: workspace:*
+        version: link:../../typescript/packages/haus
+      '@types/node':
+        specifier: 24.10.1
+        version: 24.10.1
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.10.1)(vite@8.3.6(@types/node@24.10.1))
 
   demos:
     dependencies:
@@ -889,6 +939,11 @@ packages:
     resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
+  tree-sitter-cli@0.27.1:
+    resolution: {integrity: sha512-WFPEjxwscCjZP9uYj0rxT2TyGBkDcXUkGTthrMpxZFGvzXEYsbC3J0633Ps8dd2mMsdsbU8oVwmQ148lLHI7Xw==}
+    engines: {node: '>=12.0.0'}
+    hasBin: true
+
   ts-content-mapper@0.1.1:
     resolution: {integrity: sha512-Lkci00riJ6+7cPxwhC6ENLTVEcT8vXb0zFeatJQ1fQInkcS0HWDyN/zE/SKWRxNHW7mev3OURfMUbUA+F3+WCA==}
     engines: {node: ^22.18.0 || >=24.11.0}
@@ -1488,6 +1543,8 @@ snapshots:
     dependencies:
       fdir: 6.5.0(picomatch@4.0.7)
       picomatch: 4.0.7
+
+  tree-sitter-cli@0.27.1: {}
 
   ts-content-mapper@0.1.1:
     dependencies:

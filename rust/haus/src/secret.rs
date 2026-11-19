@@ -55,8 +55,8 @@ impl<T> fmt::Display for Secret<T> {
 
 /// Errors say only that the value isn't a valid `Secret` (see [`crate::de::secret`]).
 impl<T: Decode> Decode for Secret<T> {
-    fn decode(v: &Value) -> Result<Self, DecodeError> {
-        crate::de::secret(v, "Secret", T::decode)
+    fn decode_with(v: &Value, d: crate::Decoder) -> Result<Self, DecodeError> {
+        crate::de::secret(v, d, "Secret", T::decode_with)
     }
 }
 
@@ -87,9 +87,10 @@ mod tests {
             let hidden = DecodeError::new(ErrorCode::InvalidSecret, "not a valid Secret (the value is hidden)");
             assert_eq!(e, hidden, "{text}");
         }
-        let nested = crate::de::Record::new(&crate::parse("{ pin: 9999 }").unwrap()[0], "Config")
-            .and_then(|r| r.required("pin", <Secret<u8> as crate::Decode>::decode))
-            .unwrap_err();
+        let nested =
+            crate::de::Record::new(&crate::parse("{ pin: 9999 }").unwrap()[0], crate::Decoder::default(), "Config")
+                .and_then(|r| r.required("pin", <Secret<u8> as crate::Decode>::decode_with))
+                .unwrap_err();
         assert_eq!(nested.to_string(), ".pin: not a valid Secret (the value is hidden)");
         assert!(!nested.to_string().contains("9999"));
         // A secret whose inner error has a path of its own (a key of the data) loses it too.

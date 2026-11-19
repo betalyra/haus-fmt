@@ -85,7 +85,7 @@ fn an_application_split_into_files_in_roc() {
         "import OrderUpBillingCommon\nimport OrderUpShippingCommon\nimport OrderUpSharedMoney\n",
         "bill : OrderUpBillingCommon.Address",
         "lines : OrderUpSharedMoney.Page(OrderUpSharedMoney.Money)",
-        "OrderUpSharedMoney.decode_page(x1, OrderUpSharedMoney.decode_money)",
+        "OrderUpSharedMoney.decode_page(x1, OrderUpSharedMoney.read_value_money)",
     ] {
         assert!(order.contains(part), "{part}\n{order}");
     }
@@ -196,67 +196,162 @@ fn the_version_of_a_package_json_is_the_manifests() {
     assert!(e.to_string().contains("1.0.0") && e.to_string().contains("1.2.0"), "{e}");
 }
 
-/// `@acme/orders` uses `@haus-fmt/money`'s Money; the app imports Order.
-fn orders(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let (orders, money) = (root.join("orders"), root.join("money"));
-    package(&money, "@haus-fmt/money", "1.0.0", "type Money = { amount: Decimal }");
-    package(&orders, "@acme/orders", "1.0.0", "import @haus-fmt/money@1 (Money)\ntype Order = { total: Money }");
-    (orders, money)
+/// `@acme/orders` imports `@acme/ledger`, which imports `@haus-fmt/money`:
+/// Money in ledger's types directly, in a field and in a variant's payloads,
+/// and in orders' types two levels deep, in arrays. The app imports Order
+/// and Customer, and Money.
+fn closure(root: &Path) -> [std::path::PathBuf; 4] {
+    let (orders, ledger, money) = (root.join("orders"), root.join("ledger"), root.join("money"));
+    package(&money, "@haus-fmt/money", "1.0.0", "type Money = { amount: Decimal }\ntype Rate = { percent: Int }");
+    package(
+        &ledger,
+        "@acme/ledger",
+        "1.0.0",
+        "import @haus-fmt/money@1 (Money, Rate)\ntype Entry = { amount: Money, note: Note }\n\
+         type Note = { text: String }\ntype Move = < Credit Money | Debit { amount: Money } | Memo Note >\n\
+         type Terms = { rate: Rate }",
+    );
+    package(
+        &orders,
+        "@acme/orders",
+        "1.0.0",
+        "import @acme/ledger@1 (Entry, Move, Terms)\n\
+         type Order = { entries: Array Entry, moves: Array Move, terms: Terms, customer: Customer }\n\
+         type Customer = { name: String }",
+    );
+    let a = root.join("a.schema.haus");
+    write(
+        &a,
+        "import @acme/orders@1 (Order, Customer)\nimport @haus-fmt/money@1 (Money)\n\
+         type A = { order: Order, customer: Customer, price: Money }",
+    );
+    [a, orders, ledger, money]
 }
 
 #[test]
-fn a_codec_cant_reach_into_another_crates_type() {
+fn a_codec_applies_inside_other_crates_types() {
     let dir = tempfile::tempdir().unwrap();
-    let (orders, money) = orders(dir.path());
-    let cargo = Packages::none().with(&orders, "haus_orders").unwrap().with(&money, "haus_money").unwrap();
-    let codec = Codec { id: "@haus-fmt/money@1#Money".into(), path: "crate::Cents".into() };
-    let generate = |text: &str| haus_build::generate(text, "app", std::slice::from_ref(&codec), &cargo);
-    let e = generate("import @acme/orders@1 (Order)\ntype A = { order: Order }").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::CodecUnreachable, "{e}");
-    assert_eq!(
-        e.to_string(),
-        "@haus-fmt/money@1#Money is used inside @acme/orders@1#Order, which haus_orders generates; \
-         codecs can't reach into other crates' types yet"
-    );
-    // Imported directly too: still not applied inside Order.
-    let e = generate(
-        "import @acme/orders@1 (Order)\nimport @haus-fmt/money@1 (Money)\ntype A = { order: Order, m: Money }",
-    )
-    .unwrap_err();
-    assert_eq!(e.code(), ErrorCode::CodecUnreachable, "{e}");
-    // Where the app's own code has the type, the codec applies.
-    generate("import @haus-fmt/money@1 (Money)\ntype A = { m: Money }").unwrap();
+    let [a, orders, ledger, money] = closure(dir.path());
+    let explicit = Explicit::new().package(&orders).unwrap().package(&ledger).unwrap().package(&money).unwrap();
+    let code = rust(&Config::new().codec("@haus-fmt/money@1#Money", "crate::Cents"), &a, &explicit).unwrap();
+    let cents = "<crate::Cents as ::haus::Codec>::Target";
+    for part in [
+        // The packages' types that contain Money are copied, each package's in a module.
+        "pub order: self::acme_orders::Order,",
+        "pub customer: ::acme_orders::Customer,",
+        &format!("pub price: {cents},"),
+        "pub mod acme_orders {",
+        "pub entries: ::std::vec::Vec<super::acme_ledger::Entry>,",
+        "pub moves: ::std::vec::Vec<super::acme_ledger::Move>,",
+        // Their other types are the crates'.
+        "pub terms: ::acme_ledger::Terms,",
+        "pub customer: ::acme_orders::Customer,",
+        "pub mod acme_ledger {",
+        &format!("pub amount: {cents},"),
+        "pub note: ::acme_ledger::Note,",
+        &format!("Credit({cents}),"),
+        &format!("Debit {{ amount: {cents} }},"),
+        "Memo(::acme_ledger::Note),",
+        // With the ids of the packages' types.
+        "pub const ID: &'static str = \"@acme/orders@1#Order\";",
+        "pub const ID: &'static str = \"@acme/ledger@1#Move\";",
+    ] {
+        assert!(code.contains(part), "{part}\n{code}");
+    }
+    for kept in ["pub struct Customer", "pub struct Note", "pub struct Terms", "pub struct Rate", "pub struct Money"] {
+        assert!(!code.contains(kept), "{kept}\n{code}");
+    }
+    assert_eq!(code.matches("pub mod ").count(), 2, "{code}");
+    // Without the codec, nothing is copied.
+    let plain = rust(&Config::new(), &a, &explicit).unwrap();
+    assert!(plain.contains("pub order: ::acme_orders::Order,") && !plain.contains("pub mod "), "{plain}");
+    // A codec only for a type inside packages' types: Rate is in ledger's Terms.
+    let code = rust(&Config::new().codec("@haus-fmt/money@1#Rate", "crate::Percent"), &a, &explicit).unwrap();
+    assert!(code.contains("pub terms: super::acme_ledger::Terms,"), "{code}");
+    assert!(code.contains("pub rate: <crate::Percent as ::haus::Codec>::Target,"), "{code}");
+    assert!(code.contains("pub entries: ::std::vec::Vec<::acme_ledger::Entry>,"), "{code}");
     // A type the schema doesn't have at all.
-    let e = haus_build::generate(
-        "type A = Int",
-        "app",
-        &[Codec { id: "@haus-fmt/money@1#Money".into(), path: "crate::Cents".into() }],
-        &cargo,
-    )
-    .unwrap_err();
+    let e = rust(&Config::new().codec("@haus-fmt/money@1#Coin", "crate::Cents"), &a, &explicit).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::UnknownType, "{e}");
     assert!(e.to_string().contains("the schema has no such type"), "{e}");
 }
 
 #[test]
-fn a_codec_cant_reach_into_another_packages_roc_module() {
+fn a_crate_names_its_dependencies_dependencies_through_them() {
     let dir = tempfile::tempdir().unwrap();
-    let (orders, money) = orders(dir.path());
-    let a = dir.path().join("a.schema.haus");
-    write(&a, "import @acme/orders@1 (Order)\ntype A = { order: Order }");
-    let e = RocConfig::new()
+    let [a, orders, ledger, money] = closure(dir.path());
+    // The crate depends on orders and money; ledger is orders' dependency (its haus_graph).
+    let cargo = Packages::none()
+        .with(&orders, "haus_orders")
+        .unwrap()
+        .with(&money, "haus_money")
+        .unwrap()
+        .through(&ledger, "haus_orders::__haus_deps::haus_ledger")
+        .unwrap();
+    let codec = Codec { id: "@haus-fmt/money@1#Money".into(), path: "crate::Cents".into() };
+    let text = fs::read_to_string(&a).unwrap();
+    let code = haus_build::generate(&text, "app", std::slice::from_ref(&codec), &cargo).unwrap();
+    for part in [
+        "pub customer: ::haus_orders::Customer,",
+        "pub terms: ::haus_orders::__haus_deps::haus_ledger::Terms,",
+        "pub note: ::haus_orders::__haus_deps::haus_ledger::Note,",
+    ] {
+        assert!(code.contains(part), "{part}\n{code}");
+    }
+    // Only packages' files import it: the crate's own files import its dependencies.
+    let e = haus_build::generate("import @acme/ledger@1 (Note)\ntype B = Note", "app", &[], &cargo).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::UndeclaredPackage, "{e}");
+    assert!(e.to_string().contains("@acme/ledger is a dependency of haus_orders, not of this crate"), "{e}");
+}
+
+#[test]
+fn a_codec_applies_inside_other_packages_roc_modules() {
+    let dir = tempfile::tempdir().unwrap();
+    let [a, orders, ledger, money] = closure(dir.path());
+    let modules = RocConfig::new()
+        .json()
         .package(&orders, "orders")
+        .package(&ledger, "ledger")
         .package(&money, "money")
         .codec("@haus-fmt/money@1#Money", "Cents")
         .modules(&a, "A", "a")
-        .unwrap_err();
-    assert_eq!(e.code(), ErrorCode::CodecUnreachable, "{e}");
-    assert!(
-        e.to_string().ends_with(
-            "@haus-fmt/money@1#Money is used inside @acme/orders@1#Order, which the Roc module orders.AcmeOrders \
-             generates; codecs can't reach into other packages' modules yet"
+        .unwrap();
+    let names: Vec<&str> = modules.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, ["A", "AAcmeOrders", "AAcmeLedger"]);
+    let code = |name: &str| modules.iter().find(|(n, _)| n == name).map(|(_, c)| c.as_str()).unwrap();
+    for (module, parts) in [
+        (
+            "A",
+            &[
+                "import AAcmeOrders\nimport orders.AcmeOrders\nimport money.HausFmtMoney\nimport Cents\n",
+                "A_ : { order : AAcmeOrders.Order, customer : AcmeOrders.Customer, price : Cents.Target }",
+            ][..],
         ),
-        "{e}"
-    );
+        (
+            "AAcmeOrders",
+            &[
+                "## Generated by haus-gen from @acme/orders@1. Don't edit.",
+                "import orders.AcmeOrders\nimport AAcmeLedger\nimport ledger.AcmeLedger\n",
+                "Order : { entries : List(AAcmeLedger.Entry), moves : List(AAcmeLedger.Move), terms : AcmeLedger.Terms, customer : AcmeOrders.Customer }",
+                "AAcmeLedger.read_value_entry",
+                "AcmeLedger.read_json_terms",
+            ][..],
+        ),
+        (
+            "AAcmeLedger",
+            &[
+                "import money.HausFmtMoney\nimport ledger.AcmeLedger\nimport Cents\n",
+                "Entry : { amount : Cents.Target, note : AcmeLedger.Note }",
+                "Move := [Credit(Cents.Target), Debit({ amount : Cents.Target }), Memo(AcmeLedger.Note), Unknown(Str, List(Value))]",
+                "Decode.codec(x1, HausFmtMoney.read_value_money, Cents.decode)",
+            ][..],
+        ),
+    ] {
+        for part in parts {
+            assert!(code(module).contains(part), "{part}\n{}", code(module));
+        }
+    }
+    assert!(!code("AAcmeLedger").contains("Terms :") && !code("AAcmeOrders").contains("Customer :"));
 }
 
 #[test]
@@ -271,4 +366,179 @@ fn a_codec_for_a_type_of_an_imported_file() {
         assert_eq!(code.contains("import Cents\n"), uses, "{name}: {code}");
     }
     assert!(modules.iter().any(|(_, code)| code.contains("import Cents\n")));
+}
+
+/// Spreads of imported types (spec §14): `main/order` spreads billing's
+/// Address (whose `owes` is a Money that order doesn't import), shipping's
+/// Parcel (whose `to` is shipping's Address, not the billing Address order
+/// imports) and shipping's Status, a variant.
+fn spreads(root: &Path) -> std::path::PathBuf {
+    let main = app(root);
+    write(
+        &main,
+        "import ../billing/common (Address)\nimport ../shipping/common (Parcel, Status)\n\
+         type Invoice = { ...Address, number: Int }\ntype Shipment = closed { id: Int, ...Parcel }\n\
+         type Tracking = < ...Status | Lost >",
+    );
+    write(
+        &root.join("app/shipping/common.schema.haus"),
+        "type Address = { line: String }\ntype Parcel = { to: Address }\ntype Status = < Packed | Sent { to: Address } >",
+    );
+    main
+}
+
+/// `@acme/base` has a record and a variant whose fields are `@haus-fmt/money`'s
+/// Money, and spreads Money itself; the app spreads the first two and
+/// imports nothing from money itself.
+fn spread_package(root: &Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let (base, money) = (root.join("base"), root.join("money"));
+    package(&money, "@haus-fmt/money", "1.0.0", "type Money = { amount: Decimal }");
+    package(
+        &base,
+        "@acme/base",
+        "1.0.0",
+        "import @haus-fmt/money@1 (Money)\ntype Base = { id: Int, total: Money }\n\
+         type Events = < Created | Paid { amount: Money } >\ntype Priced = { ...Money, label: String }",
+    );
+    let a = root.join("a.schema.haus");
+    write(
+        &a,
+        "import @acme/base@1 (Base, Events)\ntype Order = { ...Base, note: String }\n\
+         type Event = closed < ...Events | Shipped >",
+    );
+    (a, base, money)
+}
+
+#[test]
+fn spreads_of_imported_types_in_rust() {
+    let dir = tempfile::tempdir().unwrap();
+    let code = rust(&Config::new(), &spreads(dir.path()), &Explicit::new()).unwrap();
+    for part in [
+        // The types of copied fields are those of the file they come from.
+        "pub struct Invoice {\n    pub street: ::std::string::String,\n    pub owes: ::std::option::Option<self::up_shared_money::Money>,\n    pub number: ::haus::Int,\n}",
+        "pub struct Shipment {\n    pub id: ::haus::Int,\n    pub to: self::up_shipping_common::Address,\n}",
+        "r.closed(&[\"id\", \"to\"])?;",
+        "pub enum Tracking {\n    Packed,\n    Sent { to: self::up_shipping_common::Address },\n    Lost,\n",
+        // JSON too.
+        "<self::up_shared_money::Money as ::haus::FromJson>::from_json_with",
+    ] {
+        assert!(code.contains(part), "{part}\n{code}");
+    }
+
+    let (a, base, money) = spread_package(dir.path());
+    let packages = Explicit::new().package(&base).unwrap().package(&money).unwrap();
+    let code = rust(&Config::new(), &a, &packages).unwrap();
+    for part in [
+        "pub struct Order {\n    pub id: ::haus::Int,\n    pub total: ::haus_fmt_money::Money,\n    pub note: ::std::string::String,\n}",
+        "pub enum Event {\n    Created,\n    Paid { amount: ::haus_fmt_money::Money },\n    Shipped,\n}",
+        "<::haus_fmt_money::Money as ::haus::FromJson>::from_json_with",
+        // Hints name types as the schema writes them.
+        "record_payload(tag, args, __d, \"{ amount: Money }\")",
+    ] {
+        assert!(code.contains(part), "{part}\n{code}");
+    }
+
+    // A package's own code, which spreads another package's type, and a crate that uses it.
+    let cargo = Packages::none().with(&base, "haus_base").unwrap().with(&money, "haus_money").unwrap();
+    let schema = fs::read_to_string(base.join("schema.haus")).unwrap();
+    let own = haus_build::generate(&schema, "@acme/base@1", &[], &cargo).unwrap();
+    let priced = "pub struct Priced {\n    pub amount: ::haus::Decimal,\n    pub label: ::std::string::String,\n}";
+    assert!(own.contains(priced), "{own}");
+    let user =
+        haus_build::generate("import @acme/base@1 (Priced)\ntype A = { p: Priced }", "app", &[], &cargo).unwrap();
+    assert!(user.contains("pub p: ::haus_base::Priced,"), "{user}");
+}
+
+#[test]
+fn spreads_of_imported_types_in_roc() {
+    let dir = tempfile::tempdir().unwrap();
+    let modules = RocConfig::new().json().modules(&spreads(dir.path()), "Order", "order").unwrap();
+    let order = &modules.iter().find(|(n, _)| n == "Order").unwrap().1;
+    for part in [
+        // Order imports no Money: the copied field brings its module in.
+        "import OrderUpBillingCommon\nimport OrderUpShippingCommon\nimport OrderUpSharedMoney\n",
+        "Invoice : { street : Str, owes : [Missing, Present(OrderUpSharedMoney.Money)], number : Int }",
+        "Shipment : { id : Int, to : OrderUpShippingCommon.Address }",
+        "Tracking := [Packed, Sent({ to : OrderUpShippingCommon.Address }), Lost, Unknown(Str, List(Value))]",
+        "FromJson.optional_field(fs, \"owes\", OrderUpSharedMoney.read_json_money)",
+    ] {
+        assert!(order.contains(part), "{part}\n{order}");
+    }
+
+    let (a, base, money) = spread_package(dir.path());
+    let modules =
+        RocConfig::new().json().package(&base, "base").package(&money, "money").modules(&a, "A", "a").unwrap();
+    let code = &modules[0].1;
+    for part in [
+        "import base.AcmeBase\nimport money.HausFmtMoney\n",
+        "Order : { id : Int, total : HausFmtMoney.Money, note : Str }",
+        "Event := [Created, Paid({ amount : HausFmtMoney.Money }), Shipped]",
+        "ToJson.tagged_object(\"Paid\", e, [(\"amount\", ToJson.required(r.amount, HausFmtMoney.to_json_money))])",
+    ] {
+        assert!(code.contains(part), "{part}\n{code}");
+    }
+}
+
+#[test]
+fn a_spread_of_a_std_time_type_is_invalid() {
+    let dir = tempfile::tempdir().unwrap();
+    let a = dir.path().join("a.schema.haus");
+    for text in
+        ["import std/time (Date)\ntype B = { ...Date, x: Int }", "import std/time (Date)\ntype B = < ...Date | X >"]
+    {
+        write(&a, text);
+        let e = rust(&Config::new(), &a, &Explicit::new()).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::InvalidSpread, "{e}");
+        let e = RocConfig::new().modules(&a, "A", "a").unwrap_err();
+        assert_eq!(e.code(), ErrorCode::InvalidSpread, "{e}");
+    }
+}
+
+/// Whether a `Maybe` of a package's type writes `None` as `null` (spec
+/// §16.3) depends on that type's JSON, which the package's schema decides:
+/// not only types written `Maybe` there (a `Maybe` that reaches itself, a
+/// variant written in place that only looks like one, a `Secret` or a
+/// generic type around one).
+#[test]
+fn a_maybe_of_a_package_type_whose_json_can_be_null_in_roc() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("p");
+    package(
+        &p,
+        "@acme/p",
+        "1.0.0",
+        "type Opt = Maybe Int32\ntype Plain = Int32\ntype Loop = Maybe Loop\ntype Gen a = Maybe a\n\
+         type InPlace = closed < None | Some Int32 >\ntype Hidden = Secret Opt\ntype Named = Opt",
+    );
+    let a = dir.path().join("a.schema.haus");
+    write(
+        &a,
+        "import @acme/p@1 (Opt, Plain, Loop, Gen, InPlace, Hidden, Named)\n\
+         type A = { opt: Maybe Opt, plain: Maybe Plain, loop: Maybe Loop, gen: Maybe (Gen Int32), \
+         genPlain: Maybe (Gen Plain), inPlace: Maybe InPlace, hidden: Maybe Hidden, named: Maybe Named, held: Gen Opt }",
+    );
+    let modules = RocConfig::new().json().package(&p, "p").modules(&a, "A", "a").unwrap();
+    let code = &modules[0].1;
+    // Whether the field's writer writes `None` as `null`: the flag after its encoder.
+    let flag = |field: &str| {
+        let after = code.split(&format!("ToJson.maybe(v.{field}, ")).nth(1)?;
+        after.split(", ").nth(1).map(str::to_owned)
+    };
+    for (field, tagged, reader) in [
+        ("opt", "True", "AcmeP.read_json_opt"),
+        ("plain", "False", "AcmeP.read_json_plain"),
+        ("loop", "False", "AcmeP.read_json_loop"),
+        ("gen", "True", "|y1| AcmeP.from_json_gen("),
+        ("gen_plain", "True", "|y3| AcmeP.from_json_gen("),
+        ("in_place", "False", "AcmeP.read_json_in_place"),
+        ("hidden", "True", "AcmeP.read_json_hidden"),
+        ("named", "True", "AcmeP.read_json_named"),
+    ] {
+        assert_eq!(flag(field).as_deref(), Some(tagged), "{field}\n{code}");
+        // The reader reads the same form.
+        assert!(code.contains(&format!(", {tagged}, {reader}")), "{field}\n{code}");
+    }
+    // A generic type of the package takes whether its argument's JSON can be null.
+    assert!(code.contains("AcmeP.to_json_gen(v.held, e"), "{code}");
+    assert!(code.contains(", AcmeP.to_json_opt, True)"), "{code}");
 }

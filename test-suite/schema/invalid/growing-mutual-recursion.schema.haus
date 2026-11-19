@@ -1,0 +1,6 @@
+// Instances grow through another definition: A Int needs B (P Int Int),
+// which needs A (P (P Int Int) (P Int Int)), and so on (§9.10).
+type P a b = { l: a, r: b }
+type A a = < X (B (P a a)) | Done >
+type B a = < Y (A (P a a)) | Stop >
+type Root = A Int

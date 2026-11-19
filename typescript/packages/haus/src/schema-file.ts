@@ -306,29 +306,28 @@ const importVersionError = (fail: Fail, name: string, version: string, pos: numb
 }
 
 class Lexer {
-  pos = 0
-  constructor(readonly text: string, readonly fail: Fail) {}
+  /** After a byte order mark at the start, as in data files. */
+  pos: number
+  /** Comments, whitespace and `"…"` strings are those of data files (spec §14), read by the data parser. */
+  private readonly data: Parser
+  constructor(readonly text: string, readonly fail: Fail) {
+    this.pos = text.startsWith("\ufeff") ? 1 : 0
+    this.data = new Parser(text, START, DEFAULT_LIMITS)
+  }
+
+  /** Runs the data parser, its errors (with their codes) put where they are in the schema file. */
+  private read<R>(f: () => R): R {
+    try {
+      return f()
+    } catch (e) {
+      if (e instanceof HausSyntaxError) this.fail(e.code, e.reason, e.offset)
+      throw e
+    }
+  }
 
   /** Skip whitespace and comments. */
   skip(): void {
-    const s = this.text
-    while (this.pos < s.length) {
-      const c = s[this.pos]!
-      if (c === " " || c === "\t" || c === "\n" || c === "\r") this.pos++
-      else if (s.startsWith("//", this.pos)) {
-        const end = s.indexOf("\n", this.pos)
-        this.pos = end < 0 ? s.length : end
-      } else if (s.startsWith("/*", this.pos)) {
-        const start = this.pos
-        let depth = 0
-        do {
-          if (this.pos >= s.length) this.fail("unterminated-comment", "unterminated block comment", start)
-          if (s.startsWith("/*", this.pos)) depth++, (this.pos += 2)
-          else if (s.startsWith("*/", this.pos)) depth--, (this.pos += 2)
-          else this.pos++
-        } while (depth > 0)
-      } else return
-    }
+    this.pos = this.read(() => this.data.triviaEnd(this.pos))
   }
 
   next(): Token {
@@ -366,16 +365,9 @@ class Lexer {
       return { t: "attribute", value: am[1]!, pos }
     }
     if (s[pos] === '"') {
-      const str = /"(?:[^"\\\n]|\\.)*"/y
-      str.lastIndex = pos
-      const sm = str.exec(s)
-      if (!sm) this.fail("unterminated-string", "unterminated string", pos)
-      this.pos += sm[0].length
-      try {
-        return { t: "string", value: JSON.parse(sm[0]) as string, pos }
-      } catch {
-        return this.fail("invalid-escape", "invalid escape in string", pos)
-      }
+      const { value, end } = this.read(() => this.data.basicStringAt(pos))
+      this.pos = end
+      return { t: "string", value, pos }
     }
     for (const p of PUNCT) {
       if (s.startsWith(p, pos)) {
@@ -989,6 +981,96 @@ const deprecatedUses = (unit: Unit): RawWarning[] =>
       return message === undefined ? [] : [{ kind: "deprecated", message, pos, end: pos + name.length }]
     })
 
+/** A reference to a definition in another one's body: by name, applied (with its arguments as written) or spread. */
+interface DefRef {
+  readonly to: Def
+  readonly args: readonly Node[]
+  readonly pos: number
+}
+
+/** The definitions `def` refers to, where it does. */
+const refsOf = (def: Def): DefRef[] => {
+  const at = (name: string, args: readonly Node[], pos: number): DefRef[] => {
+    const to = def.unit.scope.get(name)
+    return to === undefined ? [] : [{ to, args, pos }]
+  }
+  return [...nodesOf(def.decl.body)].flatMap((n) =>
+    n.t === "name" ? at(n.name, [], n.pos)
+    : n.t === "app" ? at(n.head, n.args, n.pos)
+    : n.t === "record" || n.t === "variant" ? n.spreads.flatMap((sp) => at(sp.name, [], sp.pos))
+    : [])
+}
+
+/**
+ * The strongly connected components of a graph (Tarjan's algorithm, with a
+ * stack of its own rather than recursion): the number of each node's component.
+ */
+function components<N>(nodes: readonly N[], next: (n: N) => readonly N[]): Map<N, number> {
+  const index = new Map<N, number>()
+  const low = new Map<N, number>()
+  const component = new Map<N, number>()
+  const stack: N[] = []
+  let count = 0
+  const visit = (n: N, work: [N, number][]) => {
+    const i = index.size
+    index.set(n, i)
+    low.set(n, i)
+    stack.push(n)
+    work.push([n, 0])
+  }
+  for (const start of nodes) {
+    if (index.has(start)) continue
+    const work: [N, number][] = []
+    visit(start, work)
+    while (work.length > 0) {
+      const frame = work[work.length - 1]!
+      const [n, i] = frame
+      const out = next(n)
+      if (i < out.length) {
+        frame[1] = i + 1
+        const m = out[i]!
+        if (!index.has(m)) visit(m, work)
+        else if (!component.has(m)) low.set(n, Math.min(low.get(n)!, index.get(m)!))
+        continue
+      }
+      work.pop()
+      const parent = work[work.length - 1]
+      if (parent !== undefined) low.set(parent[0], Math.min(low.get(parent[0])!, low.get(n)!))
+      if (low.get(n) === index.get(n)) {
+        let m: N
+        do {
+          m = stack.pop()!
+          component.set(m, count)
+        } while (m !== n)
+        count++
+      }
+    }
+  }
+  return component
+}
+
+/**
+ * §9.10, through other definitions: in a group of definitions that refer to
+ * each other, directly or not (a strongly connected component of the
+ * references), a reference to another member passes only parameters of the
+ * referring definition, so instances can't grow around the group. Checked on
+ * the definitions as written, before anything is instantiated. (A reference
+ * to itself must pass its own parameters in order, checked before.)
+ */
+function checkGroups(defs: readonly Def[]): void {
+  const refs = new Map(defs.map((d) => [d, refsOf(d)]))
+  const targets = new Map(defs.map((d) => [d, refs.get(d)!.map((r) => r.to)]))
+  const group = components(defs, (d) => targets.get(d) ?? [])
+  for (const def of defs) {
+    for (const r of refs.get(def)!) {
+      if (r.to === def || group.get(r.to) !== group.get(def) || r.args.every((a) => a.t === "var")) continue
+      const name = def.decl.name
+      const may = def.params.length > 0 ? `may pass it only its own parameters (${def.params.join(" ")})` : "has no parameters to pass it"
+      def.unit.fail("growing-recursion", `${name} refers to ${r.to.decl.name}, which refers back to ${name}: ${name} ${may}; other arguments could grow without bound`, r.pos)
+    }
+  }
+}
+
 /** Parse and check a schema file and the files it imports. Throws HausSchemaFileError. */
 export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}): SchemaFile {
   const rootFail = failIn(text)
@@ -1138,6 +1220,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
       }
     }
   }
+  checkGroups(allDefs)
 
   // ── evaluation ──
   const instances = new Map<string, Instance>()
@@ -1155,6 +1238,13 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     }
   }
 
+  // Keys tell instances apart. They never hold the whole of their arguments, which can grow
+  // exponentially with legitimate nesting (`P a a` inside `P a a` …): an instance is keyed by
+  // its number, a record or variant by the number of its shape, so a key is as long as one type
+  // expression. Each record or variant object is keyed once.
+  const instanceIds = new Map<Instance, number>()
+  const shapes = new Map<string, string>()
+  const shapeOf = new WeakMap<Type, string>()
   const keyOf = (t: Type): string => {
     switch (t.kind) {
       case "builtin":
@@ -1171,15 +1261,23 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
       case "secret":
         return `Secret(${keyOf(t.item)})`
       case "ref":
-        return t.instance.key
+        return `#${instanceIds.get(t.instance)!}`
       case "record":
-        return `{${t.closed ? "|" : ""}${t.fields.map((f) => `${JSON.stringify(f.key)}${f.optional ? "?" : ""}:${keyOf(f.type)}`).join(",")}}`
-      case "variant":
-        return `<${t.cases.map((c) => c.tag + payloadKey(c.payload)).join("|")}${t.open ? "|_" : ""}>`
+      case "variant": {
+        const known = shapeOf.get(t)
+        if (known !== undefined) return known
+        const shape = t.kind === "record" ? recordShape(t) : `<${t.cases.map((c) => c.tag + payloadKey(c.payload)).join("|")}${t.open ? "|_" : ""}>`
+        let key = shapes.get(shape)
+        if (key === undefined) shapes.set(shape, (key = `~${shapes.size}`))
+        shapeOf.set(t, key)
+        return key
+      }
     }
   }
+  const recordShape = (r: RecordType): string =>
+    `{${r.closed ? "|" : ""}${r.fields.map((f) => `${JSON.stringify(f.key)}${f.optional ? "?" : ""}:${keyOf(f.type)}`).join(",")}}`
   const payloadKey = (p: Payload): string =>
-    p.kind === "none" ? "" : p.kind === "record" ? keyOf(p.record) : `(${p.items.map(keyOf).join(",")})`
+    p.kind === "none" ? "" : p.kind === "record" ? `{${keyOf(p.record)}}` : `(${p.items.map(keyOf).join(",")})`
 
   /** Types of other files are keyed by their id, so equal names in two files stay apart. */
   const nameKey = (def: Def) => (def.unit.root ? def.decl.name : definitionOf(def).id)
@@ -1190,6 +1288,7 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
     if (inst) return inst
     if (instances.size >= MAX_INSTANCES) fail("growing-recursion", `more than ${MAX_INSTANCES} type instances: a generic type grows without bound`, pos)
     inst = new Instance(definitionOf(def), args, key)
+    instanceIds.set(inst, instances.size)
     instances.set(key, inst)
     defOf.set(inst, def)
     queue.push([inst, def])

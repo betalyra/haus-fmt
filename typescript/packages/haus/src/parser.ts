@@ -589,7 +589,31 @@ export class Parser {
     if (this.origin.offset === 0 && this.pos === 0 && this.src.charCodeAt(0) === 0xfeff) this.pos = 1
   }
 
+  /**
+   * Whitespace and comments from `start`, as between values: the offset after
+   * them. Schema files have the same (spec §14); a `/` that starts no comment
+   * is left for the caller.
+   */
+  triviaEnd(start: number): number {
+    this.pos = start
+    this.skipSpace()
+    return this.pos
+  }
+
+  /** The `"…"` string at `start`, with the offset after it (spec §4): schema files' quoted keys (§14). */
+  basicStringAt(start: number): { readonly value: string; readonly end: number } {
+    this.pos = start
+    const { value } = this.parseBasicString()
+    return { value, end: this.pos }
+  }
+
   private skipTrivia() {
+    this.skipSpace()
+    if (this.src[this.pos] === "/") this.fail("stray-slash", "unexpected '/' (comments are // or /* */)")
+  }
+
+  /** Whitespace and comments, up to anything else (a `/` that starts no comment included). */
+  private skipSpace() {
     for (;;) {
       const c = this.src[this.pos]
       if (c === " " || c === "\t" || c === "\n") {
@@ -606,8 +630,6 @@ export class Parser {
         this.pos = end
       } else if (c === "/" && this.src[this.pos + 1] === "*") {
         this.skipBlockComment()
-      } else if (c === "/") {
-        this.fail("stray-slash", "unexpected '/' (comments are // or /* */)")
       } else {
         return
       }

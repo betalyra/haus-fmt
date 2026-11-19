@@ -182,6 +182,27 @@ describe("errors", () => {
       const e = yield* Effect.flip(collect(h.decodeStream(Event, ["Heartbeat, UserCreated { id: 1 },"])))
       expect(e.message).toBe("missing field 'email' at $[1]")
     }))
+
+  it.effect("an error in stream item 3 is at $[3], then its place in the item (spec §15)", () =>
+    Effect.gen(function* () {
+      const Item = h.Record({ price: h.Float64, sizes: h.Array(h.Int32) })
+      const items = `${"{ price: 1, sizes: [] },".repeat(3)} { price: 2, sizes: [1, \"x\"] },`
+      const e = yield* Effect.flip(collect(h.decodeStream(Item, [items])))
+      expect([e.code, h.formatPath(e.path)]).toEqual(["type-mismatch", "$[3].sizes[1]"])
+      const lines = `${'{"price":1,"sizes":[]}\n'.repeat(3)}{"price":"2","sizes":[]}\n`
+      const json = yield* Effect.flip(collect(h.decodeJsonLines(Item, [lines])))
+      expect([json.code, h.formatPath(json.path)]).toEqual(["type-mismatch", "$[3].price"])
+      const item = { price: 1, sizes: [] as number[] }
+      const encoding = (f: () => unknown) => {
+        try {
+          f()
+        } catch (x) {
+          return x instanceof h.HausEncodeError ? [x.code, h.formatPath(x.path)] : x
+        }
+      }
+      const bad = { price: 1, sizes: [0.5] }
+      expect(encoding(() => h.formatAll(Item, [item, item, item, bad]))).toEqual(["cannot-encode", "$[3].sizes[0]"])
+    }))
 })
 
 describe("encoding", () => {

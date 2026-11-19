@@ -67,19 +67,21 @@ JsonValue := [
 
 	## Write JSON on one line, without spaces. A `JsonValue` built in code is checked
 	## as it is written: numbers must be JSON numbers within the number limits,
-	## strings within the string limit, member names unique and the nesting
-	## within what the reader takes. These errors say what, not where (the
-	## place could be inside a `Secret`).
+	## member names unique and the nesting within what the reader takes. These
+	## errors say what, not where (the place could be inside a `Secret`).
+	## Lengths count on the haus value, not on the JSON (spec §16, "Limits"),
+	## so the forms check them: `to_haus_json` on the value it writes, and
+	## `ToJson.to_str_with` on the value `encode_<name>` gives.
 	to_str : JsonValue -> Try(Str, Encode.Error)
 	to_str = |json| to_str_with(json, Value.default_limits)
 
-	## `to_str` for a reader with other limits (see `parse_with`): numbers and
-	## strings within them, and the JSON nested at most 4·d + 1 levels for a
-	## depth limit d.
+	## `to_str` for a reader with other limits (see `parse_with`): numbers
+	## within them, and the JSON nested at most 4·d + 1 levels for a depth
+	## limit d.
 	to_str_with : JsonValue, Value.Limits -> Try(Str, Encode.Error)
 	to_str_with = |json, limits| {
 		supported(limits)?
-		write(json, 0, json_depth(limits), limits).map_ok(bytes_to_str)
+		write(json, 0, json_depth(limits), limits, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
 	}
 
 	## The same JSON: the same members in the same order.
@@ -147,7 +149,7 @@ JsonValue := [
 	to_haus_json_with : Value, Value.Limits -> Try(Str, Encode.Error)
 	to_haus_json_with = |value, limits| {
 		envelope = Object([("_haus", Number("1")), ("_value", haus_json_value_with(value, limits)?)])
-		write(envelope, 0, haus_json_depth(limits), limits).map_ok(bytes_to_str)
+		write(envelope, 0, haus_json_depth(limits), limits, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
 	}
 
 	## Read self-describing JSON, and nothing else: a text without the
@@ -252,8 +254,8 @@ JsonValue := [
 		var $out = []
 		var $i = 0.U64
 		for v in values {
-			line = write(v, 0, json_depth(limits), limits).map_err(|e| { ..e, path: "[${$i.to_str()}]${e.path}" })?
-			$out = $out.concat(line).append('\n')
+			line = write(v, 0, json_depth(limits), limits, { bytes: $out, steps: 0 }).map_err(|e| { ..e, path: "[${$i.to_str()}]${e.path}" })?
+			$out = line.bytes.append('\n')
 			$i = $i + 1
 		}
 		Ok(bytes_to_str($out))
@@ -638,46 +640,56 @@ skip_digits = |src, start| {
 supported : Value.Limits -> Try({}, Encode.Error)
 supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })
 
-## `json` at `depth`, nested at most `max` levels.
-write : JsonValue, U64, U64, Value.Limits -> Try(List(U8), Encode.Error)
-write = |json, depth, max, limits| match json {
-	Null => Ok("null".to_utf8())
-	Boolean(b) => Ok((if (b) "true" else "false").to_utf8())
-	Number(n) => {
-		b = n.to_utf8()
-		if number_end(b, 0) != Ok(b.len()) {
-			fail(ErrorCode.cannot_encode, "not a JSON number")
-		} else {
-			check_number(b, limits).map_err(|{ code, reason }| { code, reason, path: "" })?
-			Ok(b)
-		}
-	}
-	String(s) => quote(s, limits)
-	Array(items) => {
-		open(depth, max)?
-		var $out = ['[']
-		for x in items {
-			item = write(x, depth + 1, max, limits)?
-			$out = if ($out.len() == 1) $out.concat(item) else $out.append(',').concat(item)
-		}
-		Ok($out.append(']'))
-	}
-	Object(members) => {
-		open(depth, max)?
-		# An object built in code may repeat a name: an error where it does.
-		repeated = Value.first_repeated(indexed(members))
-		var $out = ['{']
-		var $i = 0.U64
-		for (k, v) in members {
-			match repeated {
-				Ok((_, at_index)) if at_index == $i => return fail(ErrorCode.duplicate_key, "a member name is used twice in an object")
-				_ => {}
+## The JSON written so far, and the values written (one step each).
+Out : { bytes : List(U8), steps : U64 }
+
+## `json` at `depth`, nested at most `max` levels, written after `before`:
+## a step for it and each value in it (spec §9.8), so that JSON built in
+## code whose parts are shared (a DAG) fails with `step-budget` instead of
+## expanding without bound.
+write : JsonValue, U64, U64, Value.Limits, Out -> Try(Out, Encode.Error)
+write = |json, depth, max, limits, before| {
+	out = { ..before, steps: Encode.step({ ..Encode.top_with(limits), steps: before.steps })? }
+	match json {
+		Null => Ok({ ..out, bytes: out.bytes.concat("null".to_utf8()) })
+		Boolean(b) => Ok({ ..out, bytes: out.bytes.concat((if (b) "true" else "false").to_utf8()) })
+		Number(n) => {
+			b = n.to_utf8()
+			if number_end(b, 0) != Ok(b.len()) {
+				fail(ErrorCode.cannot_encode, "not a JSON number")
+			} else {
+				check_number(b, limits).map_err(|{ code, reason }| { code, reason, path: "" })?
+				Ok({ ..out, bytes: out.bytes.concat(b) })
 			}
-			$i = $i + 1
-			member = quote(k, limits)?.append(':').concat(write(v, depth + 1, max, limits)?)
-			$out = if ($out.len() == 1) $out.concat(member) else $out.append(',').concat(member)
 		}
-		Ok($out.append('}'))
+		String(s) => Ok({ ..out, bytes: out.bytes.concat(quote(s)) })
+		Array(items) => {
+			open(depth, max)?
+			var $out = { ..out, bytes: out.bytes.append('[') }
+			var $first = True
+			for x in items {
+				$out = write(x, depth + 1, max, limits, if ($first) $out else { ..$out, bytes: $out.bytes.append(',') })?
+				$first = False
+			}
+			Ok({ ..$out, bytes: $out.bytes.append(']') })
+		}
+		Object(members) => {
+			open(depth, max)?
+			# An object built in code may repeat a name: an error where it does.
+			repeated = Value.first_repeated(indexed(members))
+			var $out = { ..out, bytes: out.bytes.append('{') }
+			var $i = 0.U64
+			for (k, v) in members {
+				match repeated {
+					Ok((_, at_index)) if at_index == $i => return fail(ErrorCode.duplicate_key, "a member name is used twice in an object")
+					_ => {}
+				}
+				separated = if ($i == 0) $out.bytes else $out.bytes.append(',')
+				$out = write(v, depth + 1, max, limits, { ..$out, bytes: separated.concat(quote(k)).append(':') })?
+				$i = $i + 1
+			}
+			Ok({ ..$out, bytes: $out.bytes.append('}') })
+		}
 	}
 }
 
@@ -691,13 +703,9 @@ fail = |code, reason| Err({ code, reason, path: "" })
 
 ## A JSON string. Escaped: what JSON requires, DEL, C1 and the bidi
 ## controls, and U+2028 and U+2029 (spec §16, "JSON that is written").
-quote : Str, Value.Limits -> Try(List(U8), Encode.Error)
-quote = |s, limits| {
+quote : Str -> List(U8)
+quote = |s| {
 	b = s.to_utf8()
-	max = limits.max_string_length
-	if b.len() > max and code_points(b) > max {
-		return fail(ErrorCode.string_too_long, "string longer than ${max.to_str()} characters")
-	}
 	var $out = ['"']
 	var $i = 0.U64
 	while $i < b.len() {
@@ -727,7 +735,7 @@ quote = |s, limits| {
 			}
 		$i = if (cp > 0xFF) $i + 3 else if (cp > 0x7F) $i + 2 else $i + 1
 	}
-	Ok($out.append('"'))
+	$out.append('"')
 }
 
 ## U+2028 or U+2029 if it starts at `pos` in UTF-8 (E2 80 A8–A9), or 0:
@@ -1115,10 +1123,7 @@ bytes_to_str = |bytes| match Str.from_utf8(bytes) {
 
 ## A string in quotes, for messages.
 quote_str : Str -> Str
-quote_str = |s| match quote(s, Value.default_limits) {
-	Ok(b) => bytes_to_str(b)
-	Err(_) => "\"…\""
-}
+quote_str = |s| bytes_to_str(quote(s))
 
 ## What is at `pos`, for messages: a whole character.
 describe : List(U8), U64 -> Str
@@ -1224,7 +1229,7 @@ expect JsonValue.lines("1\n\n2").map_err(|e| e.line) == Err(2)
 
 # Your own limits (`_with`): at each limit, and just past it.
 small : Value.Limits
-small = { max_depth: 2, max_number_length: 4, max_exponent: 9, max_string_length: 4 }
+small = { ..Value.default_limits, max_depth: 2, max_number_length: 4, max_exponent: 9, max_string_length: 4 }
 
 expect JsonValue.parse_with("[\"abcd\", 1234, 1e9, [[[[[[[[0]]]]]]]]]", small).is_ok()
 # The text reader leaves lengths to the forms, which count them on the haus value.
@@ -1267,16 +1272,27 @@ expect read_code(JsonValue.from_haus_json_with(env("{\"_bytes\": \"0b34\"}"), sm
 expect read_code(JsonValue.from_haus_json_with(env("{\"_bytes\": \"0b34ff\"}"), small)) == "string-too-long"
 expect read_code(JsonValue.from_haus_json_with(env("{\"_num\": \"123456\"}"), { ..small, max_number_length: 6 })) == "ok"
 expect read_code(JsonValue.from_haus_json_with(env("\"ab\""), { ..small, max_string_length: 2 })) == "ok"
-# Writing for a reader with other limits.
+# Writing for a reader with other limits. The text writer leaves lengths to the
+# forms, which count them on the haus value.
 expect JsonValue.to_str_with(Array([Array([String("abcd"), Number("1234")])]), small) == Ok("[[\"abcd\",1234]]")
-expect JsonValue.to_str_with(String("abcde"), small) == Err({ code: "string-too-long", reason: "string longer than 4 characters", path: "" })
+expect JsonValue.to_str_with(Object([("abcde", String("abcde"))]), small) == Ok("{\"abcde\":\"abcde\"}")
 expect JsonValue.to_str_with(Number("12345"), small) == Err({ code: "number-too-long", reason: "number literal longer than 4 characters", path: "" })
 expect JsonValue.to_str_with(Array([Array([Array([Array([Array([Array([Array([Array([Array([Null])])])])])])])])]), small) == Ok("[[[[[[[[[null]]]]]]]]]")
 expect JsonValue.to_str_with(Array([Array([Array([Array([Array([Array([Array([Array([Array([Array([Null])])])])])])])])])]), small) == Err({ code: "nesting-too-deep", reason: "JSON nested deeper than 9 levels", path: "" })
-expect JsonValue.write_lines_with([Number("1"), String("abcde")], small) == Err({ code: "string-too-long", reason: "string longer than 4 characters", path: "[1]" })
+expect JsonValue.write_lines_with([Number("1"), String("abcde")], small) == Ok("1\n\"abcde\"\n")
+expect JsonValue.write_lines_with([Number("1"), Number("12345")], small) == Err({ code: "number-too-long", reason: "number literal longer than 4 characters", path: "[1]" })
 expect JsonValue.to_haus_json_with(Arr([Arr([Num("1")])]), small6) == Ok(enveloped_as_written("[[{\"_num\":\"1\"}]]"))
 expect JsonValue.to_haus_json_with(Arr([Arr([Arr([Num("1")])])]), small) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 2 levels", path: "[0][0]" })
 expect JsonValue.to_haus_json_with(Rec([("abcde", Num("1"))]), small) == Err({ code: "key-too-long", reason: "key longer than 4 characters", path: ".abcde" })
+# Self-describing JSON counts lengths on the haus value too: a string's characters,
+# not its escapes; bytes two characters per byte; a number's literal by the
+# number limit, although `_num` spells it as a string. At the limit, and one over.
+expect JsonValue.to_haus_json_with(Text("\u(E9)\n\t\""), small) == Ok(enveloped_as_written("\"\u(E9)\\n\\t\\\"\""))
+expect JsonValue.to_haus_json_with(Text("\u(E9)\n\t\"x"), small) == Err({ code: "string-too-long", reason: "string longer than 4 characters", path: "" })
+expect JsonValue.to_haus_json_with(Bytes([0x0B, 0x34]), small) == Ok(enveloped_as_written("{\"_bytes\":\"0b34\"}"))
+expect JsonValue.to_haus_json_with(Bytes([0x0B, 0x34, 0xFF]), small) == Err({ code: "string-too-long", reason: "byte string longer than 4 characters", path: "" })
+expect JsonValue.to_haus_json_with(Num("123456"), { ..small, max_string_length: 2, max_number_length: 6 }) == Ok(enveloped_as_written("{\"_num\":\"123456\"}"))
+expect JsonValue.to_haus_json_with(Tag("Abcd", []), small) == Ok(enveloped_as_written("{\"_tag\":\"Abcd\"}")) and JsonValue.to_haus_json_with(Tag("Abcde", []), small) == Err({ code: "tag-too-long", reason: "tag longer than 4 characters", path: "" })
 # Up to the supported depth; a deeper limit is an error that names the maximum.
 deepest : Value.Limits
 deepest = { ..Value.default_limits, max_depth: Value.max_supported_depth }

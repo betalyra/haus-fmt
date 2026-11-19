@@ -144,6 +144,11 @@ fn fail(json: bool, failure: Failure) -> Status {
 
 /// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`, then node_modules.
 fn packages(args: &PackageArgs) -> Result<Or<Explicit, NodeModules>, Failure> {
+    explicit(args).map(|explicit| explicit.or(NodeModules))
+}
+
+/// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`.
+pub(crate) fn explicit(args: &PackageArgs) -> Result<Explicit, Failure> {
     let given = |flag: &str, arg: &str, e: haus_schema::Error| Failure {
         code: e.code(),
         message: format!("{flag} {arg}: {e}"),
@@ -162,10 +167,9 @@ fn packages(args: &PackageArgs) -> Result<Or<Explicit, NodeModules>, Failure> {
             _ => Ok(all),
         }
     })?;
-    let explicit = args.packages.iter().try_fold(explicit, |all, folder| {
+    args.packages.iter().try_fold(explicit, |all, folder| {
         all.folder(folder).map_err(|e| given("--packages", &folder.display().to_string(), e))
-    })?;
-    Ok(explicit.or(NodeModules))
+    })
 }
 
 /// The text output, written as it is found: each file's diagnostics once it
@@ -452,7 +456,7 @@ impl Checker {
 
 /// Where the value is in a value's `text`, without the whitespace and
 /// comments around it.
-fn value_span(text: &str) -> Range<usize> {
+pub(crate) fn value_span(text: &str) -> Range<usize> {
     let solid: Vec<Range<usize>> = tokens(text)
         .into_iter()
         .filter(|(token, range)| *token != Token::Comment && !text[range.clone()].trim().is_empty())
@@ -476,14 +480,14 @@ fn adjacent_schema(path: &Path) -> Option<PathBuf> {
 
 /// Why a check couldn't run at all (exit code 2): with --json, the
 /// document's top-level `error`, in the error form of spec §17.
-struct Failure {
-    code: ErrorCode,
-    message: String,
-    hint: String,
+pub(crate) struct Failure {
+    pub code: ErrorCode,
+    pub message: String,
+    pub hint: String,
 }
 
 impl Failure {
-    fn to_json(&self) -> Json {
+    pub fn to_json(&self) -> Json {
         let mut m = Members::default();
         m.add("code", s(self.code.as_str()));
         m.add("message", s(&self.message));

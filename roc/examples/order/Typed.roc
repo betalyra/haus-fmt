@@ -15,23 +15,29 @@ Typed := [].{
 	UserId := [UserId(Str)]
 
 	decode_user_id : Value -> Try(UserId, Decode.Error)
-	decode_user_id = |v| match v {
+	decode_user_id = |v| Decode.within_depth(v, read_value_user_id)
+
+	read_value_user_id : Value -> Try(UserId, Decode.Error)
+	read_value_user_id = |v| match v {
 		Tag("UserId", [a0]) => Ok(UserId(Decode.arg("UserId", 0, a0, Decode.str)?))
 		Tag("UserId", _) => Decode.arity("UserId", 1)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["UserId"])
 		_ => Decode.expected("a variant (UserId)", v)
 	}
 
-	encode_user_id : UserId -> Value
-	encode_user_id = |v| match v {
-		UserId(a0) => Tag("UserId", [Encode.str(a0)])
+	encode_user_id : UserId, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_user_id = |v, e| match v {
+		UserId(a0) => Encode.tagged("UserId", e, |e1| Encode.str(a0, e1))
 	}
 
 	## haus type `order#Status`.
 	Status := [Pending, Shipped({ tracking : Str }), Cancelled]
 
 	decode_status : Value -> Try(Status, Decode.Error)
-	decode_status = |v| match v {
+	decode_status = |v| Decode.within_depth(v, read_value_status)
+
+	read_value_status : Value -> Try(Status, Decode.Error)
+	read_value_status = |v| match v {
 		Tag("Pending", []) => Ok(Pending)
 		Tag("Shipped", [p]) => Decode.payload(
 			"Shipped",
@@ -48,23 +54,26 @@ Typed := [].{
 		_ => Decode.expected("a variant (Status)", v)
 	}
 
-	encode_status : Status -> Value
-	encode_status = |v| match v {
-		Pending => Tag("Pending", [])
-		Shipped(r) => Tag("Shipped", [Encode.record([("tracking", Present(Encode.str(r.tracking)))])])
-		Cancelled => Tag("Cancelled", [])
+	encode_status : Status, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_status = |v, e| match v {
+		Pending => Encode.tag("Pending", e)
+		Shipped(r) => Encode.tagged_record("Shipped", e, [("tracking", Encode.required(r.tracking, Encode.str))])
+		Cancelled => Encode.tag("Cancelled", e)
 	}
 
 	## haus type `order#Root`.
 	Root : { id : Int, customer : UserId, placed : CivilDate.Target, total : Cents.Target, deliver_to : GeoJson.Target, status : Status }
 
 	decode_root : Value -> Try(Root, Decode.Error)
-	decode_root = |v| {
+	decode_root = |v| Decode.within_depth(v, read_value_root)
+
+	read_value_root : Value -> Try(Root, Decode.Error)
+	read_value_root = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", decode_user_id)?, placed: Decode.field(fs, "placed", |x1| Decode.codec(x1, Decode.time("Date"), CivilDate.decode))?, total: Decode.field(fs, "total", |x2| Decode.codec(x2, HausFmtMoney.decode_money, Cents.decode))?, deliver_to: Decode.field(fs, "deliverTo", |x3| Decode.codec(x3, HausFmtGeo.decode_lat_lng, GeoJson.decode))?, status: Decode.field(fs, "status", decode_status)? })
+		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", read_value_user_id)?, placed: Decode.field(fs, "placed", |x2| Decode.codec(x2, Decode.time("Date"), CivilDate.decode))?, total: Decode.field(fs, "total", |x3| Decode.codec(x3, HausFmtMoney.read_value_money, Cents.decode))?, deliver_to: Decode.field(fs, "deliverTo", |x4| Decode.codec(x4, HausFmtGeo.read_value_lat_lng, GeoJson.decode))?, status: Decode.field(fs, "status", read_value_status)? })
 	}
 
-	encode_root : Root -> Value
-	encode_root = |v| Encode.record([("id", Present(Encode.int(v.id))), ("customer", Present(encode_user_id(v.customer))), ("placed", Present(Encode.time("Date")(CivilDate.encode(v.placed)))), ("total", Present(HausFmtMoney.encode_money(Cents.encode(v.total)))), ("deliverTo", Present(HausFmtGeo.encode_lat_lng(GeoJson.encode(v.deliver_to)))), ("status", Present(encode_status(v.status)))])
+	encode_root : Root, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_root = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("customer", Encode.required(v.customer, encode_user_id)), ("placed", Present(|e5| Encode.time("Date")(CivilDate.encode(v.placed), e5))), ("total", Present(|e6| HausFmtMoney.encode_money(Cents.encode(v.total), e6))), ("deliverTo", Present(|e7| HausFmtGeo.encode_lat_lng(GeoJson.encode(v.deliver_to), e7))), ("status", Encode.required(v.status, encode_status))])
 
 }

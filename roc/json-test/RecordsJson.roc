@@ -15,16 +15,19 @@ RecordsJson := [].{
 	User : { id : Int, name : Str, nick : [Missing, Present(Str)], note : [Missing, Present([None, Some(Str)])] }
 
 	decode_user : Value -> Try(User, Decode.Error)
-	decode_user = |v| {
+	decode_user = |v| Decode.within_depth(v, read_value_user)
+
+	read_value_user : Value -> Try(User, Decode.Error)
+	read_value_user = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ id: Decode.field(fs, "id", Decode.int)?, name: Decode.field(fs, "name", Decode.str)?, nick: Decode.optional_field(fs, "nick", Decode.str)?, note: Decode.optional_field(fs, "note", |x1| Decode.maybe(x1, Decode.str))? })
 	}
 
-	encode_user : User -> Value
-	encode_user = |v| Encode.record([("id", Present(Encode.int(v.id))), ("name", Present(Encode.str(v.name))), ("nick", Encode.optional(v.nick, Encode.str)), ("note", Encode.optional(v.note, |x2| Encode.maybe(x2, Encode.str)))])
+	encode_user : User, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_user = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("name", Encode.required(v.name, Encode.str)), ("nick", Encode.optional(v.nick, Encode.str)), ("note", Encode.optional(v.note, |x2, e2| Encode.maybe(x2, e2, Encode.str)))])
 
 	from_json_user : JsonValue -> Try(User, Decode.Error)
-	from_json_user = |j| FromJson.within_depth(read_json_user(j), encode_user)
+	from_json_user = |j| FromJson.within_depth(j, read_json_user, encode_user)
 
 	read_json_user : JsonValue -> Try(User, Decode.Error)
 	read_json_user = |j| {
@@ -32,24 +35,27 @@ RecordsJson := [].{
 		Ok({ id: FromJson.field(fs, "id", FromJson.int)?, name: FromJson.field(fs, "name", FromJson.str)?, nick: FromJson.optional_field(fs, "nick", FromJson.str)?, note: FromJson.optional_field(fs, "note", |y1| FromJson.maybe(y1, False, FromJson.str))? })
 	}
 
-	to_json_user : User -> Try(JsonValue, Encode.Error)
-	to_json_user = |v| ToJson.object([("id", Present(ToJson.int(v.id))), ("name", Present(ToJson.str(v.name))), ("nick", ToJson.optional(v.nick, ToJson.str)), ("note", ToJson.optional(v.note, |y2| ToJson.maybe(y2, False, ToJson.str)))])
+	to_json_user : User, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_user = |v, e| ToJson.object(e, [("id", ToJson.required(v.id, ToJson.int)), ("name", ToJson.required(v.name, ToJson.str)), ("nick", ToJson.optional(v.nick, ToJson.str)), ("note", ToJson.optional(v.note, |y2, e2| ToJson.maybe(y2, e2, False, ToJson.str)))])
 
 	## haus type `records#Strict`.
 	Strict : { id : Int, tags : [Missing, Present(List(Str))] }
 
 	decode_strict : Value -> Try(Strict, Decode.Error)
-	decode_strict = |v| {
+	decode_strict = |v| Decode.within_depth(v, read_value_strict)
+
+	read_value_strict : Value -> Try(Strict, Decode.Error)
+	read_value_strict = |v| {
 		fs = Decode.strict_record(v)?
 		Decode.closed(fs, ["id", "tags"])?
 		Ok({ id: Decode.field(fs, "id", Decode.int)?, tags: Decode.optional_field(fs, "tags", |x3| Decode.list(x3, Decode.str))? })
 	}
 
-	encode_strict : Strict -> Value
-	encode_strict = |v| Encode.record([("id", Present(Encode.int(v.id))), ("tags", Encode.optional(v.tags, |x4| Encode.list(x4, Encode.str)))])
+	encode_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_strict = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("tags", Encode.optional(v.tags, |x4, e4| Encode.list(x4, e4, Encode.str)))])
 
 	from_json_strict : JsonValue -> Try(Strict, Decode.Error)
-	from_json_strict = |j| FromJson.within_depth(read_json_strict(j), encode_strict)
+	from_json_strict = |j| FromJson.within_depth(j, read_json_strict, encode_strict)
 
 	read_json_strict : JsonValue -> Try(Strict, Decode.Error)
 	read_json_strict = |j| {
@@ -58,24 +64,27 @@ RecordsJson := [].{
 		Ok({ id: FromJson.field(fs, "id", FromJson.int)?, tags: FromJson.optional_field(fs, "tags", |y3| FromJson.list(y3, FromJson.str))? })
 	}
 
-	to_json_strict : Strict -> Try(JsonValue, Encode.Error)
-	to_json_strict = |v| ToJson.object([("id", Present(ToJson.int(v.id))), ("tags", ToJson.optional(v.tags, |y4| ToJson.list(y4, ToJson.str)))])
+	to_json_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_strict = |v, e| ToJson.object(e, [("id", ToJson.required(v.id, ToJson.int)), ("tags", ToJson.optional(v.tags, |y4, e4| ToJson.list(y4, e4, ToJson.str)))])
 
 	## haus type `records#Outer`.
 	Outer : { user : User }
 
 	decode_outer : Value -> Try(Outer, Decode.Error)
-	decode_outer = |v| {
+	decode_outer = |v| Decode.within_depth(v, read_value_outer)
+
+	read_value_outer : Value -> Try(Outer, Decode.Error)
+	read_value_outer = |v| {
 		fs = Decode.strict_record(v)?
 		Decode.closed(fs, ["user"])?
-		Ok({ user: Decode.field(fs, "user", decode_user)? })
+		Ok({ user: Decode.field(fs, "user", read_value_user)? })
 	}
 
-	encode_outer : Outer -> Value
-	encode_outer = |v| Encode.record([("user", Present(encode_user(v.user)))])
+	encode_outer : Outer, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_outer = |v, e| Encode.record(e, [("user", Encode.required(v.user, encode_user))])
 
 	from_json_outer : JsonValue -> Try(Outer, Decode.Error)
-	from_json_outer = |j| FromJson.within_depth(read_json_outer(j), encode_outer)
+	from_json_outer = |j| FromJson.within_depth(j, read_json_outer, encode_outer)
 
 	read_json_outer : JsonValue -> Try(Outer, Decode.Error)
 	read_json_outer = |j| {
@@ -84,23 +93,26 @@ RecordsJson := [].{
 		Ok({ user: FromJson.field(fs, "user", read_json_user)? })
 	}
 
-	to_json_outer : Outer -> Try(JsonValue, Encode.Error)
-	to_json_outer = |v| ToJson.object([("user", Present(to_json_user(v.user)))])
+	to_json_outer : Outer, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_outer = |v, e| ToJson.object(e, [("user", ToJson.required(v.user, to_json_user))])
 
 	## haus type `records#Empty`.
 	Empty : {}
 
 	decode_empty : Value -> Try(Empty, Decode.Error)
-	decode_empty = |v| {
+	decode_empty = |v| Decode.within_depth(v, read_value_empty)
+
+	read_value_empty : Value -> Try(Empty, Decode.Error)
+	read_value_empty = |v| {
 		_fs = Decode.strict_record(v)?
 		Ok({})
 	}
 
-	encode_empty : Empty -> Value
-	encode_empty = |_v| Encode.record([])
+	encode_empty : Empty, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_empty = |_v, e| Encode.record(e, [])
 
 	from_json_empty : JsonValue -> Try(Empty, Decode.Error)
-	from_json_empty = |j| FromJson.within_depth(read_json_empty(j), encode_empty)
+	from_json_empty = |j| FromJson.within_depth(j, read_json_empty, encode_empty)
 
 	read_json_empty : JsonValue -> Try(Empty, Decode.Error)
 	read_json_empty = |j| {
@@ -108,7 +120,38 @@ RecordsJson := [].{
 		Ok({})
 	}
 
-	to_json_empty : Empty -> Try(JsonValue, Encode.Error)
-	to_json_empty = |_v| ToJson.object([])
+	to_json_empty : Empty, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_empty = |_v, e| ToJson.object(e, [])
+
+	## Quoted field keys take the escapes of data strings (spec §14, §4).
+	##
+	## haus type `records#Quoted`.
+	Quoted : { content_type : Str, tab_here : Int, line_break : Int, smile_ : Bool, q_ : Int }
+
+	decode_quoted : Value -> Try(Quoted, Decode.Error)
+	decode_quoted = |v| Decode.within_depth(v, read_value_quoted)
+
+	read_value_quoted : Value -> Try(Quoted, Decode.Error)
+	read_value_quoted = |v| {
+		fs = Decode.strict_record(v)?
+		Decode.closed(fs, ["content-type", "tab\there", "line\nbreak", "smile😀", "q\"\\"])?
+		Ok({ content_type: Decode.field(fs, "content-type", Decode.str)?, tab_here: Decode.field(fs, "tab\there", Decode.int)?, line_break: Decode.field(fs, "line\nbreak", Decode.int)?, smile_: Decode.field(fs, "smile😀", Decode.bool)?, q_: Decode.field(fs, "q\"\\", Decode.int)? })
+	}
+
+	encode_quoted : Quoted, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_quoted = |v, e| Encode.record(e, [("content-type", Encode.required(v.content_type, Encode.str)), ("tab\there", Encode.required(v.tab_here, Encode.int)), ("line\nbreak", Encode.required(v.line_break, Encode.int)), ("smile😀", Encode.required(v.smile_, Encode.bool)), ("q\"\\", Encode.required(v.q_, Encode.int))])
+
+	from_json_quoted : JsonValue -> Try(Quoted, Decode.Error)
+	from_json_quoted = |j| FromJson.within_depth(j, read_json_quoted, encode_quoted)
+
+	read_json_quoted : JsonValue -> Try(Quoted, Decode.Error)
+	read_json_quoted = |j| {
+		fs = FromJson.object(j, "Quoted")?
+		FromJson.closed(fs, ["content-type", "tab\there", "line\nbreak", "smile😀", "q\"\\"])?
+		Ok({ content_type: FromJson.field(fs, "content-type", FromJson.str)?, tab_here: FromJson.field(fs, "tab\there", FromJson.int)?, line_break: FromJson.field(fs, "line\nbreak", FromJson.int)?, smile_: FromJson.field(fs, "smile😀", FromJson.bool)?, q_: FromJson.field(fs, "q\"\\", FromJson.int)? })
+	}
+
+	to_json_quoted : Quoted, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_quoted = |v, e| ToJson.object(e, [("content-type", ToJson.required(v.content_type, ToJson.str)), ("tab\there", ToJson.required(v.tab_here, ToJson.int)), ("line\nbreak", ToJson.required(v.line_break, ToJson.int)), ("smile😀", ToJson.required(v.smile_, ToJson.bool)), ("q\"\\", ToJson.required(v.q_, ToJson.int))])
 
 }

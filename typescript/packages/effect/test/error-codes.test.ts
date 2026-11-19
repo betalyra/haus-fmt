@@ -36,15 +36,16 @@ describe("the errors' codes, hints, docs and JSON form", () => {
 
   it.effect("a HausSchemaError: the message without the place, the place as a path", () =>
     Effect.gen(function* () {
-      const S = Schema.Struct({ items: Schema.Array(Schema.Struct({ qty: Schema.Finite })) })
-      const e = yield* Effect.flip(Haus.decode(S)(`{ items: [{ qty: 1 }, { qty: "2" }] }`))
+      // A check of Effect's decoder (not the conversion before it), whose message ends in the Effect path.
+      const S = Schema.Struct({ items: Schema.Array(Schema.Struct({ qty: Schema.Int })) })
+      const e = yield* Effect.flip(Haus.decode(S)(`{ items: [{ qty: 1 }, { qty: 2.5 }] }`))
       expect(e._tag === "HausSchemaError" && e.path).toEqual(["items", 1, "qty"])
       expect(Haus.errorJson(e)).toEqual({
-        code: "type-mismatch",
-        message: "Expected number",
+        code: "not-an-integer",
+        message: "Expected an integer",
         path: "$.items[1].qty",
-        hint: "Write a value of the expected type; the message says which.",
-        docs: "https://haus-fmt.org/docs/errors#type-mismatch",
+        hint: "Write the integer without a fraction or exponent.",
+        docs: "https://haus-fmt.org/docs/errors#not-an-integer",
       })
     }))
 
@@ -63,10 +64,23 @@ describe("the errors' codes, hints, docs and JSON form", () => {
   it.effect("stream errors keep their code and index", () =>
     Effect.gen(function* () {
       const e = yield* Stream.runCollect(Haus.decodeStream(Schema.Finite)(["1, \"x\","])).pipe(Effect.flip)
-      expect(e._tag === "HausSchemaError" && [e.code, e.index, e.place]).toEqual(["type-mismatch", 1, "$"])
-      expect(Haus.errorJson(e)).toMatchObject({ code: "type-mismatch", index: 1 })
+      expect(e._tag === "HausSchemaError" && [e.code, e.index, e.place]).toEqual(["type-mismatch", 1, "$[1]"])
+      expect(Haus.errorJson(e)).toMatchObject({ code: "type-mismatch", path: "$[1]", index: 1 })
       const json = yield* Stream.runCollect(Haus.decodeJsonLines(Schema.Int)(["1\n1.5\n"])).pipe(Effect.flip)
-      expect(json._tag === "HausSchemaError" && [json.code, json.index, json.place]).toEqual(["not-an-integer", 1, "$"])
+      expect(json._tag === "HausSchemaError" && [json.code, json.index, json.place]).toEqual(["not-an-integer", 1, "$[1]"])
+    }))
+
+  it.effect("an error in stream item 3 is at $[3], then its place in the item (spec §15)", () =>
+    Effect.gen(function* () {
+      const Item = Schema.Struct({ price: Schema.Finite, sizes: Schema.Array(Schema.Finite) })
+      const items = `${'{ price: 1, sizes: [] },'.repeat(3)} { price: 2, sizes: [1, "x"] },`
+      const e = yield* Stream.runCollect(Haus.decodeStream(Item)([items])).pipe(Effect.flip)
+      expect(e._tag === "HausSchemaError" && [e.code, e.index, e.place]).toEqual(["type-mismatch", 3, "$[3].sizes[1]"])
+      const lines = `${'{"price":1,"sizes":[]}\n'.repeat(3)}{"price":"2","sizes":[]}\n`
+      const json = yield* Stream.runCollect(Haus.decodeJsonLines(Item)([lines])).pipe(Effect.flip)
+      expect(json._tag === "HausSchemaError" && [json.code, json.index, json.place]).toEqual(["type-mismatch", 3, "$[3].price"])
+      const encoded = yield* Stream.runCollect(Haus.encodeStream(Item)(Stream.make(...Array(3).fill({ price: 1, sizes: [] }), { price: 1, sizes: ["x"] } as never))).pipe(Effect.flip)
+      expect(encoded._tag === "HausSchemaError" && [encoded.code, encoded.index, encoded.place]).toEqual(["cannot-encode", 3, "$[3].sizes[0]"])
     }))
 
   it.effect("invalid UTF-8 in a byte stream is a HausParseError invalid-utf8, without a position", () =>

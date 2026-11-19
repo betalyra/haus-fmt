@@ -69,4 +69,6 @@ export { contextOf, describeValue, hoverAt, hoverContext, hoverMarkdown, hoverTe
 export { completeAt, type Completion } from "./complete.js"
 export { HausValidationError, parseWith, parseWithAsync, type StandardSchemaV1 } from "./standard.js"
 export { parsePlain, toPlain } from "./plain.js"
-export { compileSchemaFile, fromSchemaFile, schemaDeclarations, definitionDoc, deprecatedDoc, type CompiledSchemaFile, type DeclarationOptions } from "./schema-compile.js"
+export {
+  compileSchemaFile, fromSchemaFile, schemaDeclarations, definitionDoc, deprecatedDoc, type Codec, type CompiledSchemaFile, type CompileOptions, type DeclarationOptions, type FromSchemaFileOptions,
+} from "./schema-compile.js"

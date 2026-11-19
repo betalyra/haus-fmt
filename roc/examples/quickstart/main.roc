@@ -33,7 +33,8 @@ main! = |_args| {
 	liked = match decoded {
 		Comment(c) => Comment({ ..c, likes: Int.from_i128((c.likes.to_i128() ?? 0) + 1) })
 	}
-	Stdout.line!(Encode.to_str(Thread.encode_comment(liked)).map_err(|e| Encode(e))?)?
+	encoded = Encode.value(liked, Thread.encode_comment).map_err(|e| Encode(e))?
+	Stdout.line!(Encode.to_str(encoded).map_err(|e| Encode(e))?)?
 
 	# 3. A value that doesn't match the schema is an error that says where.
 	Stdout.line!(error(Decode.one(reply.replace_first("likes: 0", "likes: \"lots\""), Thread.decode_comment)))?

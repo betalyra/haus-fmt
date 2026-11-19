@@ -11,7 +11,7 @@ mod app_typed {
     haus::include_schema!("app_typed");
 }
 
-use app::{Line, Order};
+use app::{Invoice, Line, Order, Shipment, Tracking};
 use haus::{Codec, from_str, to_string};
 
 const ORDER: &str = r#"{ bill: { street: "Main St", owes: { amount: 1.50, currency: "EUR" } }, ship: { to: { line: "Dock 4" }, weight: 3 }, total: { amount: 9.90, currency: "EUR" }, lines: { items: [{ item: "tea", price: { amount: 9.90, currency: "EUR" } }] } }"#;
@@ -66,4 +66,38 @@ fn a_codec_applies_in_every_file() {
     assert_eq!(to_string(&order).unwrap(), ORDER);
     let e = from_str::<app_typed::Order>(&ORDER.replace("1.50", "1.505")).unwrap_err();
     assert!(e.to_string().contains("more than 2 decimal places"), "{e}");
+}
+
+#[test]
+fn spreads_of_imported_types_copy_their_fields_and_tags() {
+    // billing's Address, with its Money (from the file billing imports it from).
+    const INVOICE: &str = r#"{ street: "Main St", owes: { amount: 1.50, currency: "EUR" }, number: 7 }"#;
+    let invoice: Invoice = from_str(INVOICE).unwrap();
+    let owes: &Option<app::up_shared_money::Money> = &invoice.owes;
+    assert_eq!(owes.as_ref().map(|m| m.amount.as_str()), Some("1.50"));
+    assert_eq!(to_string(&invoice).unwrap(), INVOICE);
+    let json = haus::json::to_string(&invoice).unwrap();
+    assert_eq!(json, r#"{"street":"Main St","owes":{"amount":"1.50","currency":"EUR"},"number":"7"}"#);
+    assert_eq!(haus::json::from_str::<Invoice>(&json).unwrap(), invoice);
+
+    // shipping's Parcel, whose Address is shipping's, in a closed record.
+    const SHIPMENT: &str = r#"{ id: 1, to: { line: "Dock 4" }, weight: 3 }"#;
+    let shipment: Shipment = from_str(SHIPMENT).unwrap();
+    let to: &app::up_shipping_common::Address = &shipment.to;
+    assert_eq!(to.line, "Dock 4");
+    assert_eq!(to_string(&shipment).unwrap(), SHIPMENT);
+    assert!(from_str::<Shipment>(&SHIPMENT.replace("weight", "extra: 0, weight")).is_err());
+    assert!(from_str::<Shipment>(r#"{ id: 1, to: { line: "x", floor: 2 }, weight: 3 }"#).is_err());
+
+    // shipping's Status, a variant, and a tag of its own.
+    let sent: Tracking = from_str(r#"Sent { to: { line: "Dock 4" } }"#).unwrap();
+    assert!(matches!(&sent, Tracking::Sent { to } if to.line == "Dock 4"));
+    assert!(matches!(from_str::<Tracking>("Lost").unwrap(), Tracking::Lost));
+    let json = haus::json::to_string(&sent).unwrap();
+    assert_eq!(json, r#"{"_tag":"Sent","to":{"line":"Dock 4"}}"#);
+    assert_eq!(haus::json::from_str::<Tracking>(&json).unwrap(), sent);
+
+    // A codec for Money applies to the copied field too.
+    let typed: app_typed::Invoice = from_str(INVOICE).unwrap();
+    assert_eq!(typed.owes, Some((150, "EUR".to_owned())));
 }

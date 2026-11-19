@@ -11,16 +11,19 @@ HausFmtMoney := [].{
 	Money := [Money(Str, Currency)]
 
 	decode_money : Value -> Try(Money, Decode.Error)
-	decode_money = |v| match v {
-		Tag("Money", [a0, a1]) => Ok(Money(Decode.arg("Money", 0, a0, Decode.decimal)?, Decode.arg("Money", 1, a1, decode_currency)?))
+	decode_money = |v| Decode.within_depth(v, read_value_money)
+
+	read_value_money : Value -> Try(Money, Decode.Error)
+	read_value_money = |v| match v {
+		Tag("Money", [a0, a1]) => Ok(Money(Decode.arg("Money", 0, a0, Decode.decimal)?, Decode.arg("Money", 1, a1, read_value_currency)?))
 		Tag("Money", _) => Decode.arity("Money", 2)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["Money"])
 		_ => Decode.expected("a variant (Money)", v)
 	}
 
-	encode_money : Money -> Value
-	encode_money = |v| match v {
-		Money(a0, a1) => Tag("Money", [Encode.decimal(a0), encode_currency(a1)])
+	encode_money : Money, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_money = |v, e| match v {
+		Money(a0, a1) => Encode.tagged_args("Money", e, [|e1| Encode.decimal(a0, e1), |e2| encode_currency(a1, e2)])
 	}
 
 	## A currency, written as a bare tag: EUR, USD, BTC.
@@ -29,9 +32,12 @@ HausFmtMoney := [].{
 	Currency : [Bare(Str), Other(Str, List(Value))]
 
 	decode_currency : Value -> Try(Currency, Decode.Error)
-	decode_currency = |v| Decode.any_tag(v)
+	decode_currency = |v| Decode.within_depth(v, read_value_currency)
 
-	encode_currency : Currency -> Value
-	encode_currency = |v| Encode.any_tag(v)
+	read_value_currency : Value -> Try(Currency, Decode.Error)
+	read_value_currency = |v| Decode.any_tag(v)
+
+	encode_currency : Currency, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_currency = |v, e| Encode.any_tag(v, e)
 
 }

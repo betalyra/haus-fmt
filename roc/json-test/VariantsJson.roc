@@ -15,16 +15,19 @@ VariantsJson := [].{
 	Box_ : { w : Int }
 
 	decode_box : Value -> Try(Box_, Decode.Error)
-	decode_box = |v| {
+	decode_box = |v| Decode.within_depth(v, read_value_box)
+
+	read_value_box : Value -> Try(Box_, Decode.Error)
+	read_value_box = |v| {
 		fs = Decode.strict_record(v)?
 		Ok({ w: Decode.field(fs, "w", Decode.int)? })
 	}
 
-	encode_box : Box_ -> Value
-	encode_box = |v| Encode.record([("w", Present(Encode.int(v.w)))])
+	encode_box : Box_, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_box = |v, e| Encode.record(e, [("w", Encode.required(v.w, Encode.int))])
 
 	from_json_box : JsonValue -> Try(Box_, Decode.Error)
-	from_json_box = |j| FromJson.within_depth(read_json_box(j), encode_box)
+	from_json_box = |j| FromJson.within_depth(j, read_json_box, encode_box)
 
 	read_json_box : JsonValue -> Try(Box_, Decode.Error)
 	read_json_box = |j| {
@@ -32,14 +35,17 @@ VariantsJson := [].{
 		Ok({ w: FromJson.field(fs, "w", FromJson.int)? })
 	}
 
-	to_json_box : Box_ -> Try(JsonValue, Encode.Error)
-	to_json_box = |v| ToJson.object([("w", Present(ToJson.int(v.w)))])
+	to_json_box : Box_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_box = |v, e| ToJson.object(e, [("w", ToJson.required(v.w, ToJson.int))])
 
 	## haus type `variants#Shape`.
 	Shape := [Circle({ r : F64 }), Point(F64, F64), Empty, Wrap(Box_), Pair(Int, Str), Unknown(Str, List(Value))]
 
 	decode_shape : Value -> Try(Shape, Decode.Error)
-	decode_shape = |v| match v {
+	decode_shape = |v| Decode.within_depth(v, read_value_shape)
+
+	read_value_shape : Value -> Try(Shape, Decode.Error)
+	read_value_shape = |v| match v {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -49,7 +55,7 @@ VariantsJson := [].{
 		)
 		Tag("Point", [a0, a1]) => Ok(Point(Decode.arg("Point", 0, a0, Decode.f64)?, Decode.arg("Point", 1, a1, Decode.f64)?))
 		Tag("Empty", []) => Ok(Empty)
-		Tag("Wrap", [p]) => Ok(Wrap(Decode.record_arg("Wrap", p, decode_box)?))
+		Tag("Wrap", [p]) => Ok(Wrap(Decode.record_arg("Wrap", p, read_value_box)?))
 		Tag("Pair", [a0, a1]) => Ok(Pair(Decode.arg("Pair", 0, a0, Decode.int)?, Decode.arg("Pair", 1, a1, Decode.str)?))
 		Tag("Circle", _) => Decode.arity("Circle", 1)
 		Tag("Point", _) => Decode.arity("Point", 2)
@@ -60,18 +66,18 @@ VariantsJson := [].{
 		_ => Decode.expected("a variant (Shape)", v)
 	}
 
-	encode_shape : Shape -> Value
-	encode_shape = |v| match v {
-		Circle(r) => Tag("Circle", [Encode.record([("r", Present(Encode.f64(r.r)))])])
-		Point(a0, a1) => Tag("Point", [Encode.f64(a0), Encode.f64(a1)])
-		Empty => Tag("Empty", [])
-		Wrap(a0) => Tag("Wrap", [encode_box(a0)])
-		Pair(a0, a1) => Tag("Pair", [Encode.int(a0), Encode.str(a1)])
-		Unknown(tag, args) => Tag(tag, args)
+	encode_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_shape = |v, e| match v {
+		Circle(r) => Encode.tagged_record("Circle", e, [("r", Encode.required(r.r, Encode.f64))])
+		Point(a0, a1) => Encode.tagged_args("Point", e, [|e1| Encode.f64(a0, e1), |e2| Encode.f64(a1, e2)])
+		Empty => Encode.tag("Empty", e)
+		Wrap(a0) => Encode.tagged("Wrap", e, |e3| encode_box(a0, e3))
+		Pair(a0, a1) => Encode.tagged_args("Pair", e, [|e4| Encode.int(a0, e4), |e5| Encode.str(a1, e5)])
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 
 	from_json_shape : JsonValue -> Try(Shape, Decode.Error)
-	from_json_shape = |j| FromJson.within_depth(read_json_shape(j), encode_shape)
+	from_json_shape = |j| FromJson.within_depth(j, read_json_shape, encode_shape)
 
 	read_json_shape : JsonValue -> Try(Shape, Decode.Error)
 	read_json_shape = |j| {
@@ -97,21 +103,24 @@ VariantsJson := [].{
 		}
 	}
 
-	to_json_shape : Shape -> Try(JsonValue, Encode.Error)
-	to_json_shape = |v| match v {
-		Circle(r) => ToJson.tagged_object("Circle", [("r", Present(ToJson.f64(r.r)))])
-		Point(a0, a1) => ToJson.tagged("Point", [ToJson.f64(a0), ToJson.f64(a1)])
-		Empty => ToJson.tagged("Empty", [])
-		Wrap(a0) => ToJson.record_case("Wrap", to_json_box(a0))
-		Pair(a0, a1) => ToJson.tagged("Pair", [ToJson.int(a0), ToJson.str(a1)])
-		Unknown(tag, args) => ToJson.unknown(tag, args)
+	to_json_shape : Shape, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_shape = |v, e| match v {
+		Circle(r) => ToJson.tagged_object("Circle", e, [("r", ToJson.required(r.r, ToJson.f64))])
+		Point(a0, a1) => ToJson.tagged_args("Point", e, [|e1| ToJson.f64(a0, e1), |e2| ToJson.f64(a1, e2)])
+		Empty => ToJson.tag("Empty", e)
+		Wrap(a0) => ToJson.record_case("Wrap", e, |e3| to_json_box(a0, e3))
+		Pair(a0, a1) => ToJson.tagged_args("Pair", e, [|e4| ToJson.int(a0, e4), |e5| ToJson.str(a1, e5)])
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
 	## haus type `variants#Level`.
 	Level := [Debug, Info]
 
 	decode_level : Value -> Try(Level, Decode.Error)
-	decode_level = |v| match v {
+	decode_level = |v| Decode.within_depth(v, read_value_level)
+
+	read_value_level : Value -> Try(Level, Decode.Error)
+	read_value_level = |v| match v {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Debug", _) => Decode.arity("Debug", 0)
@@ -120,14 +129,14 @@ VariantsJson := [].{
 		_ => Decode.expected("a variant (Level)", v)
 	}
 
-	encode_level : Level -> Value
-	encode_level = |v| match v {
-		Debug => Tag("Debug", [])
-		Info => Tag("Info", [])
+	encode_level : Level, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_level = |v, e| match v {
+		Debug => Encode.tag("Debug", e)
+		Info => Encode.tag("Info", e)
 	}
 
 	from_json_level : JsonValue -> Try(Level, Decode.Error)
-	from_json_level = |j| FromJson.within_depth(read_json_level(j), encode_level)
+	from_json_level = |j| FromJson.within_depth(j, read_json_level, encode_level)
 
 	read_json_level : JsonValue -> Try(Level, Decode.Error)
 	read_json_level = |j| {
@@ -139,17 +148,20 @@ VariantsJson := [].{
 		}
 	}
 
-	to_json_level : Level -> Try(JsonValue, Encode.Error)
-	to_json_level = |v| match v {
-		Debug => ToJson.tag_name("Debug")
-		Info => ToJson.tag_name("Info")
+	to_json_level : Level, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_level = |v, e| match v {
+		Debug => ToJson.tag_name("Debug", e)
+		Info => ToJson.tag_name("Info", e)
 	}
 
 	## haus type `variants#Strict`.
 	Strict := [A, B(Int), C({ x : Int })]
 
 	decode_strict : Value -> Try(Strict, Decode.Error)
-	decode_strict = |v| match v {
+	decode_strict = |v| Decode.within_depth(v, read_value_strict)
+
+	read_value_strict : Value -> Try(Strict, Decode.Error)
+	read_value_strict = |v| match v {
 		Tag("A", []) => Ok(A)
 		Tag("B", [a0]) => Ok(B(Decode.arg("B", 0, a0, Decode.int)?))
 		Tag("C", [p]) => Decode.payload(
@@ -166,15 +178,15 @@ VariantsJson := [].{
 		_ => Decode.expected("a variant (Strict)", v)
 	}
 
-	encode_strict : Strict -> Value
-	encode_strict = |v| match v {
-		A => Tag("A", [])
-		B(a0) => Tag("B", [Encode.int(a0)])
-		C(r) => Tag("C", [Encode.record([("x", Present(Encode.int(r.x)))])])
+	encode_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_strict = |v, e| match v {
+		A => Encode.tag("A", e)
+		B(a0) => Encode.tagged("B", e, |e6| Encode.int(a0, e6))
+		C(r) => Encode.tagged_record("C", e, [("x", Encode.required(r.x, Encode.int))])
 	}
 
 	from_json_strict : JsonValue -> Try(Strict, Decode.Error)
-	from_json_strict = |j| FromJson.within_depth(read_json_strict(j), encode_strict)
+	from_json_strict = |j| FromJson.within_depth(j, read_json_strict, encode_strict)
 
 	read_json_strict : JsonValue -> Try(Strict, Decode.Error)
 	read_json_strict = |j| {
@@ -195,18 +207,21 @@ VariantsJson := [].{
 		}
 	}
 
-	to_json_strict : Strict -> Try(JsonValue, Encode.Error)
-	to_json_strict = |v| match v {
-		A => ToJson.tagged("A", [])
-		B(a0) => ToJson.tagged("B", [ToJson.int(a0)])
-		C(r) => ToJson.tagged_object("C", [("x", Present(ToJson.int(r.x)))])
+	to_json_strict : Strict, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_strict = |v, e| match v {
+		A => ToJson.tag("A", e)
+		B(a0) => ToJson.tagged("B", e, |e6| ToJson.int(a0, e6))
+		C(r) => ToJson.tagged_object("C", e, [("x", ToJson.required(r.x, ToJson.int))])
 	}
 
 	## haus type `variants#ClosedPayload`.
 	ClosedPayload := [Circle({ r : Int })]
 
 	decode_closed_payload : Value -> Try(ClosedPayload, Decode.Error)
-	decode_closed_payload = |v| match v {
+	decode_closed_payload = |v| Decode.within_depth(v, read_value_closed_payload)
+
+	read_value_closed_payload : Value -> Try(ClosedPayload, Decode.Error)
+	read_value_closed_payload = |v| match v {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -220,13 +235,13 @@ VariantsJson := [].{
 		_ => Decode.expected("a variant (ClosedPayload)", v)
 	}
 
-	encode_closed_payload : ClosedPayload -> Value
-	encode_closed_payload = |v| match v {
-		Circle(r) => Tag("Circle", [Encode.record([("r", Present(Encode.int(r.r)))])])
+	encode_closed_payload : ClosedPayload, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_closed_payload = |v, e| match v {
+		Circle(r) => Encode.tagged_record("Circle", e, [("r", Encode.required(r.r, Encode.int))])
 	}
 
 	from_json_closed_payload : JsonValue -> Try(ClosedPayload, Decode.Error)
-	from_json_closed_payload = |j| FromJson.within_depth(read_json_closed_payload(j), encode_closed_payload)
+	from_json_closed_payload = |j| FromJson.within_depth(j, read_json_closed_payload, encode_closed_payload)
 
 	read_json_closed_payload : JsonValue -> Try(ClosedPayload, Decode.Error)
 	read_json_closed_payload = |j| {
@@ -240,51 +255,57 @@ VariantsJson := [].{
 		}
 	}
 
-	to_json_closed_payload : ClosedPayload -> Try(JsonValue, Encode.Error)
-	to_json_closed_payload = |v| match v {
-		Circle(r) => ToJson.tagged_object("Circle", [("r", Present(ToJson.int(r.r)))])
+	to_json_closed_payload : ClosedPayload, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_closed_payload = |v, e| match v {
+		Circle(r) => ToJson.tagged_object("Circle", e, [("r", ToJson.required(r.r, ToJson.int))])
 	}
 
 	## haus type `variants#AnyTag`.
 	AnyTag : [Bare(Str), Other(Str, List(Value))]
 
 	decode_any_tag : Value -> Try(AnyTag, Decode.Error)
-	decode_any_tag = |v| Decode.any_tag(v)
+	decode_any_tag = |v| Decode.within_depth(v, read_value_any_tag)
 
-	encode_any_tag : AnyTag -> Value
-	encode_any_tag = |v| Encode.any_tag(v)
+	read_value_any_tag : Value -> Try(AnyTag, Decode.Error)
+	read_value_any_tag = |v| Decode.any_tag(v)
+
+	encode_any_tag : AnyTag, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_any_tag = |v, e| Encode.any_tag(v, e)
 
 	from_json_any_tag : JsonValue -> Try(AnyTag, Decode.Error)
-	from_json_any_tag = |j| FromJson.within_depth(read_json_any_tag(j), encode_any_tag)
+	from_json_any_tag = |j| FromJson.within_depth(j, read_json_any_tag, encode_any_tag)
 
 	read_json_any_tag : JsonValue -> Try(AnyTag, Decode.Error)
 	read_json_any_tag = |j| FromJson.any_tag(j)
 
-	to_json_any_tag : AnyTag -> Try(JsonValue, Encode.Error)
-	to_json_any_tag = |v| ToJson.any_tag(v)
+	to_json_any_tag : AnyTag, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_any_tag = |v, e| ToJson.any_tag(v, e)
 
 	## haus type `variants#Holder`.
 	Holder : { shape : Shape, any : List(AnyTag) }
 
 	decode_holder : Value -> Try(Holder, Decode.Error)
-	decode_holder = |v| {
+	decode_holder = |v| Decode.within_depth(v, read_value_holder)
+
+	read_value_holder : Value -> Try(Holder, Decode.Error)
+	read_value_holder = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ shape: Decode.field(fs, "shape", decode_shape)?, any: Decode.field(fs, "any", |x1| Decode.list(x1, decode_any_tag))? })
+		Ok({ shape: Decode.field(fs, "shape", read_value_shape)?, any: Decode.field(fs, "any", |x7| Decode.list(x7, read_value_any_tag))? })
 	}
 
-	encode_holder : Holder -> Value
-	encode_holder = |v| Encode.record([("shape", Present(encode_shape(v.shape))), ("any", Present(Encode.list(v.any, encode_any_tag)))])
+	encode_holder : Holder, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_holder = |v, e| Encode.record(e, [("shape", Encode.required(v.shape, encode_shape)), ("any", Present(|e8| Encode.list(v.any, e8, encode_any_tag)))])
 
 	from_json_holder : JsonValue -> Try(Holder, Decode.Error)
-	from_json_holder = |j| FromJson.within_depth(read_json_holder(j), encode_holder)
+	from_json_holder = |j| FromJson.within_depth(j, read_json_holder, encode_holder)
 
 	read_json_holder : JsonValue -> Try(Holder, Decode.Error)
 	read_json_holder = |j| {
 		fs = FromJson.object(j, "Holder")?
-		Ok({ shape: FromJson.field(fs, "shape", read_json_shape)?, any: FromJson.field(fs, "any", |y1| FromJson.list(y1, read_json_any_tag))? })
+		Ok({ shape: FromJson.field(fs, "shape", read_json_shape)?, any: FromJson.field(fs, "any", |y7| FromJson.list(y7, read_json_any_tag))? })
 	}
 
-	to_json_holder : Holder -> Try(JsonValue, Encode.Error)
-	to_json_holder = |v| ToJson.object([("shape", Present(to_json_shape(v.shape))), ("any", Present(ToJson.list(v.any, to_json_any_tag)))])
+	to_json_holder : Holder, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_holder = |v, e| ToJson.object(e, [("shape", ToJson.required(v.shape, to_json_shape)), ("any", Present(|e8| ToJson.list(v.any, e8, to_json_any_tag)))])
 
 }

@@ -128,6 +128,15 @@ type Reader = (path: string, limit: number, follow?: boolean) => Read
 const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException | undefined)?.code
 const isMissing = (e: unknown): boolean => errno(e) === "ENOENT" || errno(e) === "ENOTDIR"
 
+/** The text of a file read: UTF-8, as every haus file (spec §1). */
+const utf8 = (bytes: Uint8Array, path: string): string => {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes)
+  } catch {
+    throw new ModuleError("invalid-utf8", `${shown(path)} is not UTF-8 text`)
+  }
+}
+
 /**
  * Open the file at `path`, whose last component must not be a link, and read
  * it. It is opened without following links (O_NOFOLLOW) and without blocking
@@ -175,7 +184,7 @@ const openRegular = (path: string): Opened | { readonly kind: "missing" } | { re
       if (total > MAX_READ) return { kind: "file", size: BigInt(total), text: undefined }
       chunks.push(chunk.subarray(0, n))
     }
-    return { kind: "file", size: BigInt(total), text: Buffer.concat(chunks).toString("utf8") }
+    return { kind: "file", size: BigInt(total), text: utf8(Buffer.concat(chunks), path) }
   } finally {
     closeSync(fd)
   }

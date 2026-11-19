@@ -15,10 +15,12 @@ and a reference parser that computes it.
 | [`Haus/DupKeys.lean`](Haus/DupKeys.lean) | Duplicate keys found by sorting (spec §7): the same answer as the parser's scan, in n log n comparisons |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
 | [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
-| [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does |
+| [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does; the value limit (§7) and strict mode (§6) on top of it (`Stream/Limited.lean`) |
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
-| [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new` |
+| [`Haus/Schema/Codec.lean`](Haus/Schema/Codec.lean) | Codecs (spec §13.4): a codec as a check on the value the schema decoded, and the laws of §13.4 proven once for every codec |
+| [`Haus/Profiles/`](Haus/Profiles) | The official profiles (spec §13.3) `@haus-fmt/money/iso` and `@haus-fmt/geo/wgs84`: each rule as a definition, a checker proven to compute it, the profile as a codec, and the runner of their test vectors |
+| [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new`, with the JSON mappings, the hash, the default limits and the error codes |
 | [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique, that naming a record case's record changes nothing, that an older reader reads a newer writer's JSON (§13.3), and that the readers return no duplicate keys |
 | [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, and name isolation |
 | [`Main.lean`](Main.lean) | `haus-ref`, the parser on the command line |
@@ -35,6 +37,8 @@ lake build
 .lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §15)
 .lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
 .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus  # the package suite (spec §13.3)
+.lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus  # a profile's vectors
+.lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
 ```
 
 The schema suite's schema files are parsed by the TypeScript binding
@@ -51,14 +55,19 @@ For fuzzing the JSON mappings, one case per line: `--json-batch TYPES FILE`
 type), `--haus-json-batch FILE` (a haus value: its self-describing JSON, in
 the envelope), `--haus-json-read-batch FILE` (an envelope read as a haus
 value) and `--import-batch FILE` (any JSON text imported as a haus value).
-Each prints `ok …` or `err …`.
+Each prints `ok …` or `err …`. `--profile-batch NAME FILE` does the same for
+an official profile's codec (`TYPE HEX`, a haus value of a type of the
+profile's package): `ok <canonical form>` when it is accepted, `err PLACE
+CODE REASON` when the schema rejects it and `err $ - REASON` when the
+profile does.
 
 Errors carry the code of spec §17 ([`Haus/ErrorCode.lean`](Haus/ErrorCode.lean)):
 the parser's (syntax and limits), the schema decoder's and the JSON
 mappings'. `--batch` prints `err LINE COLUMN CODE REASON`, `--schema-batch`
 and the JSON batch modes print `err PLACE CODE REASON` (`-` where there is
 none), and `--suite`, `--schema-suite` and `--json-suite` check the codes
-the suite expects.
+the suite expects; `--schema-suite` also checks the place (`path`, spec §15
+"General rules": `$.items[2].price`, `$.m["pt-BR"]`, `$[0]` for an argument).
 
 ## What is proven
 
@@ -182,8 +191,23 @@ decide), and each piece is parsed on its own.
 | `read_correct` | The reader returns `vs` without an error exactly when `parse` accepts the whole text with `vs` |
 | `read_error` | When `parse` rejects a text, the reader reports an error |
 
-Not modelled: the limit on one value's length (§7), strict mode, UTF-8
-decoding and error positions.
+The value limit (§7) and strict mode (§6) are added on top
+([`Stream/Limited.lean`](Haus/Stream/Limited.lean), `readWith`). A value's
+characters are counted from the previous top-level comma (or the start,
+after a byte order mark) up to the next one, the text after the last comma
+included (`valueLengths`); the limit is checked on a value before it is
+parsed, so the first error in the stream wins. The whole-text `parse` doesn't
+apply it.
+
+| Theorem | Says |
+|---|---|
+| `readWith_chunks` | However the text is split, the same values and error |
+| `readWith_cases` | For any text, the reader gives what `read` gives, or stops with `value-too-long` or, in strict mode, `stream-truncated`, after some of `read`'s values |
+| `readWith_valid` | For a text `parse` accepts: `value-too-long` exactly when some value's characters exceed the limit (`Fits`), else `stream-truncated` exactly when in strict mode a value follows the last top-level comma (`Terminated`), else no error; the values are the first values of the whole text, all of them without an error |
+| `readWith_correct` | The reader returns `vs` without an error exactly when `parse` accepts the whole text with `vs`, every value fits, and in strict mode the stream is terminated |
+| `readWith_eq_read` | Within the limit and not strict, it is `read` |
+
+Not modelled: UTF-8 decoding and error positions.
 
 **About schema decoding** (spec §15), in [`Haus/Schema/`](Haus/Schema).
 `Ty` is a resolved type: built-in types, `Secret`, `Array`, `Map`, records
@@ -199,6 +223,7 @@ arithmetic ([`Float.lean`](Haus/Schema/Float.lean)). All cases of
 | Theorem | Says |
 |---|---|
 | `decode_iff` | The decoder computes the rules of §15, written as an inductive relation (`Dec`, one rule per row of §15's tables): `decode env t v = .ok x ↔ Dec env t v x` |
+| `decodeStream_error` | An error decoding a stream (`decodeStream`) is the error of one item, its place starting with the item's index (`$[3].price`, §15) |
 | `decode_encode` | Decode, encode, decode is decode: when `t` accepts `v` as `x`, it accepts `encode x`, again as `x` |
 | `encode_agree` | `encode x` is `v`, except for the fields an open record ignores, the spelling of floats and `-0` decoded as an integer (`Agree`) |
 | `floatLaw` | The spelling of a decoded float (`Float64` or `Float32`) decodes to the same float |
@@ -213,6 +238,44 @@ the search for the shortest spelling always finds one within its 1100 tries
 and exponent it was given (`decBody_layout`). Rounding and spelling also
 matched JavaScript's `Number` and `toString` exactly on 20,000 random
 literals.
+
+**About codecs and profiles** (spec §13.3, §13.4). A codec
+([`Schema/Codec.lean`](Haus/Schema/Codec.lean)) reads the value the type's
+schema decoded into a host type, or rejects it, and writes a host value
+back as a decoded value for the schema's encoder; a profile is a check, a
+codec that keeps the decoded value (`Codec.check`). The laws of §13.4 are
+proven once, for every codec that keeps the value (`Codec.Keeps`, which
+every check does):
+
+| Theorem | Says |
+|---|---|
+| `Codec.decode_ok`, `Codec.decode_schema` | It accepts only what the schema accepts: exactly what it reads from a value the schema decoded |
+| `Codec.decode_error` | It rejects more, never fewer: what the schema rejects, it rejects with the schema's error |
+| `Codec.decode_encode` | Decode, encode, decode is decode, from the schema's `decode_encode` |
+| `Codec.decoded`, `Codec.dec` | What it decodes is the value the schema decoded (and so follows the rules of §15) |
+| `Codec.encode_eq`, `Codec.encode_equiv`, `Codec.encode_agree` | Encoding through it writes what the schema's encoding of the decoded value writes: equal (§2), the same canonical form and hash, and the input except where §15 says |
+| `Codec.same_value` | Two codecs that both accept a value agree on what it is; they differ only in what they accept |
+| `Codec.decode_encode_of` | A codec whose host type keeps less (a `Date` for an `Instant`) still has decode, encode, decode, when what it writes is a value of the type that reads back as the same host value |
+
+The official profiles ([`Haus/Profiles/`](Haus/Profiles)) state their
+rules (`extensions/*/profiles/*.md`) on the decoded value, with a checker
+proven to compute each (`Money.check_iff`, `Geo.check_iff`), and are codecs
+(`Money.codec_decode`, `Geo.codec_decode`: the codec accepts exactly the
+values the schema decodes that the rule accepts, kept as decoded; with
+`codec_keeps`, every law above). `@haus-fmt/money/iso`: a `Currency` is a
+bare tag of three capitals `A`–`Z`, a `Money` any `Decimal` with such a
+currency. `@haus-fmt/geo/wgs84`: the ranges are stated on the exact value of
+the decoded float as a rational number (`Geo.toRat?`; `NaN` and the
+infinities have none, so they are rejected), and checked with products of
+integers; `BBox` also needs `sw.lat ≤ ne.lat`. The packages' schemas are
+written in Lean (`Money.env`, `Geo.env`), as `scripts/schema-types.ts`
+resolves `extensions/*/schema.haus` (compared by hand, not in CI). `haus-ref --profile NAME FILE` runs a vectors file: an
+`Accept` passes when the codec accepts `value` and writes back the same
+value as `output` (or `value`), and exactly `output` when one is given; a
+`Reject` when `value` is valid for the schema of its type (the shape) and
+the profile rejects it, so the rejection comes from the rule: a `Reject` the
+schema already rejects fails, with the schema's error. Both vectors files
+pass.
 
 **About JSON** (spec §16), in [`Haus/Json/`](Haus/Json). JSON is modelled
 as data (`JSON`): numbers keep their text, and `JSON.Equiv` compares as §16
@@ -256,16 +319,18 @@ normalized literals and its tags are tags, as every parsed value is
 | `JSON.toValue_uniqueKeys`, `JSON.readImport_uniqueKeys` | What the JSON import returns has no duplicate keys (`UniqueKeys`), as `parse_uniqueKeys` says of the haus parser |
 | `JSON.fromSelfDescribing_uniqueKeys`, `JSON.fromHausJson_uniqueKeys`, `JSON.readHausJson_uniqueKeys`, `JSON.readHausJsonLines_uniqueKeys` | The same for the self-describing reader, without and with the envelope, from text and from JSON Lines |
 | `json_paths_agree` | A value's self-describing JSON read back and decoded with `t` gives what its schema-based JSON read with `t` gives |
+| `toJson_eq`, `fromJson_eq`, `toJsonF_fuel`, `fromJsonF_fuel`, `chainNull_fuel` | `nullFuel` is enough for every chain of `Maybe`s: from `env.fuel` on, the fuel changes nothing, and `toJson`/`fromJson` are `toJsonF`/`fromJsonF` at any such fuel |
+| `record_case_named_json`, `older_reads_newer_json` | J11 and J9 for `toJson` and `fromJson` themselves, each type and schema with its own `nullFuel` |
 
 A case is a record case when it is written `Tag { … }` or when its one
 argument, written as a name or in parentheses, is a record through
 references (`Case.resolve`, `recordOf?`); `caseOf?` returns the resolved
 case, so decoding, the rules and both JSON directions see record cases only
-as `Tag { … }`, and the round trip covers record cases written by name. Not
-proven: that `toJson`'s choice of fuel (`nullFuel`, from the sizes of the
-types, which a record written in place and its name don't share) doesn't
-change the result; `record_case_named` holds for each fuel.
-[`Json/RecordCases.lean`](Haus/Json/RecordCases.lean) has the theorems.
+as `Tag { … }`, and the round trip covers record cases written by name.
+`record_case_named` holds for each fuel, and `record_case_named_json` for
+`toJson` and `fromJson` themselves, whose fuel (`nullFuel`) counts the two
+types differently. [`Json/RecordCases.lean`](Haus/Json/RecordCases.lean) has
+the theorems.
 
 The schema-based round trip goes by induction on the rules of decoding (`Dec`),
 with `floatLaw` for floats. A `Maybe` writes `None` as `null` only when its
@@ -293,20 +358,49 @@ a chain that ends visits each name once, so `whnf_enough`), so more fuel
 gives the same results (`whnf_fuel`, `recordOf?_fuel`, `lastRef_fuel`,
 `reachesBool_fuel`). Types are compared structurally (`Ty.beq`, lawful);
 the derived `BEq` was a `partial` function nothing could be proven about.
-Not proven: that `toJson`'s and `fromJson`'s chain fuel (`nullFuel`, from the
-sizes of the types and definitions, which grow from one minor version to the
-next) is enough for every chain of `Maybe`s, so the theorem is stated for one
-fuel `F` on both sides; and a `Maybe`'s argument written in place (`Maybe <
-A | B >`, rather than a name) can't grow in the model.
+The theorem is stated for one fuel `F` of the `Maybe` chains on both sides;
+`older_reads_newer_json` states it for `toJson` and `fromJson`, each schema
+with its own `nullFuel`. Not modelled: a `Maybe`'s argument written in place
+(`Maybe < A | B >`, rather than a name) can't grow.
+
+**The chains of `Maybe`s** (J9, J11), in
+[`Json/NullFuel.lean`](Haus/Json/NullFuel.lean). After its first link, a
+chain goes on only at the body of a definition of the prelude's `Maybe`
+(`links_mem`; a type written in place inside one is the schema's own,
+`origin`), so it meets at most `env.fuel` links that go on; for any function
+with such a bound, a chain ends at the same place from that many steps on
+(`endOf_stable`, by pigeonholes). So `chainNull_fuel`, `nullArg?_fuel`; the
+JSON functions see the fuel only through `nullArg?` (`toJson_congr`,
+`fromJson_congr`, by their functional induction), so `toJsonF_fuel`,
+`fromJsonF_fuel`; and `nullFuel env t ≥ env.fuel` (`fuel_le_nullFuel`), so
+`toJson_eq`, `fromJson_eq`: `toJson` and `fromJson` are `toJsonF` and
+`fromJsonF` at every fuel from `env.fuel` on.
 
 **About versions** (spec §10), in [`Haus/Version.lean`](Haus/Version.lean).
-A `Version` is what a version fixes: its files, its canonical form, its
-built-in types and its schema files. `Extends old new` says every text
-`old` accepts, `new` accepts with the same values, and on what `old` can
-express the canonical form, the built-in types and the types of every
-schema `old` accepts are the same. `Extends.refl`, `Extends.trans` and
-`current_extends_self` are proven; each release will prove that it extends
-the one before.
+A `Version` is what a version fixes: its default limits (§7, the stream
+value limit too), its catalogue of error codes and the codes it fixes for
+texts with one mistake (§17), its files (values, or an error's code), its
+canonical form and what `hash` and `hashAll` hash (§12), its built-in types
+and schema files, each type with its decoder and its schema-based JSON
+(§16.3), and its self-describing JSON and JSON import (§16.1, §16.2).
+Everything is written on haus values and texts, with codes by name, so
+versions with different host types and catalogues compare. `Extends old
+new` says: every text `old` accepts, `new` accepts with the same values; on
+what `old` can express, the canonical form, the hash, the self-describing
+JSON, and every built-in type and type of a schema `old` accepts (decoding
+and schema-based JSON) are the same; each JSON reader reads what the old one
+reads, alike; the default limits only grow; no code leaves the catalogue;
+and a text whose code `old` fixes keeps it, unless it has become valid.
+Proven: `Extends.refl`, `Extends.trans`, `Extends.expresses`,
+`Extends.hash`, `Extends.hashAll_parse`, `Extends.readHausJson_write` and
+`current_extends_self`; for this version, `current_hash` (`hash` hashes the
+canonical form) and `current_parse_code` (every code its parser reports is
+in its catalogue). Each release will prove that it extends the one before.
+
+Codes are compared only where §17 fixes them, for a text with one mistake
+(the suite's error cases, `fixed`): with several mistakes, a larger limit or
+new syntax can legitimately change which one is found first. The decoders'
+and JSON readers' error codes are not compared, only what they accept.
 
 **About package resolution** (spec §13.3), in
 [`Haus/Packages/`](Haus/Packages). A file tree with directories, regular
@@ -334,8 +428,10 @@ time, with Hoare-style triples for the resolver's monad (`Run.lean`) and
 | `lookups_le`, `lookups_le_files` | The searches for a package are at most the imports of the files loaded: files × the most imports in one file (R4) |
 | `candidates_from` | A package found for `@org/name` is one given explicitly with that name, or what the npm walk finds (R5) |
 | `npmLookup_eq`, `npmLookup_isolated`, `walk_mem`, `walk_skips_scope` | The walk reads no file and depends only on the real paths of `D/node_modules/@org/name`, for the directories `D` from the importer's up that §13.3 keeps: never `node_modules/@scope/node_modules` (R5, F1). Node's walk does try it (`nodeWalk_scope`) and finds a planted package (`#guard`) |
+| `runIn_closed`, `classes_topo` | In every state of every run, a package imports only packages made before it, and every copy loaded names a package made: the packages reached and their imports form a graph without cycles, made imports first (a step of R3, `Closed.lean`) |
 
 Not proven: that the result doesn't depend on the order of imports (R3) and
-that a folder of packages never changes a successful result (R6). With two
+that a folder of packages never changes a successful result (R6); see
+`PLAN.md` for what is left. With two
 mistakes in one schema, the error reported does depend on the order
 (`Order.lean`); the spec doesn't say which one is reported.

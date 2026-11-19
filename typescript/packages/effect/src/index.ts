@@ -48,7 +48,7 @@ import {
 } from "./errors.js"
 import { withCodecs } from "./schema-file.js"
 import {
-  checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decoding, encoding, NUMBER, POSITIONAL, PRELUDE_TAG, UNKNOWN_TAG, VALUE,
+  checkEncodable, checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decoding, encoding, NUMBER, POSITIONAL, PRELUDE_TAG, UNKNOWN_TAG, VALUE,
 } from "./convert.js"
 import { jsonTypeOf } from "./json.js"
 
@@ -58,8 +58,9 @@ export type { Json, Value }
  * Limits for one call (spec §7), as in the core's `h.decode`: the parser's
  * `maxDepth` (256 by default, at most `MAX_SUPPORTED_DEPTH`, 512),
  * `maxNumberLength`, `maxExponent` and `maxStringLength`, and `maxSteps` for
- * the conversion. Unset ones keep their defaults. Every decoder takes them
- * with its input, every encoder with its value (`Haus.encode` and
+ * the conversion (and for the walk over a value to encode, `encodeValue`).
+ * Unset ones keep their defaults. Every decoder takes them with its input,
+ * every encoder with its value (`Haus.encode` and
  * `Haus.encodeStream` as `limits` in their options):
  * `Haus.decode(Root)(text, { maxDepth: 512 })`. Encode with the limits you
  * decode with, and a decoded value always encodes again. A `maxDepth` above
@@ -385,8 +386,10 @@ export const convert = <S extends Schema.Top, const C extends ReadonlyArray<AnyC
   const encode = Schema.encodeEffect(schema as unknown as Schema.Codec<S["Type"], S["Encoded"]>)
   const decode = Schema.decodeUnknownEffect(target(schema, codecs))
   return (value: S["Type"]): Effect.Effect<Decoded<S, C>, HausSchemaError> =>
-    encode(value).pipe(
-      Effect.mapError((e) => issueError(e, undefined, "encode")),
+    // Bounded before Effect's encoder walks the value (see `checkEncodable`).
+    fromSync(() => checkEncodable(value, schema.ast, {}), conversionErrorOf()).pipe(
+      Effect.flatMap(() => encode(value)),
+      Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "encode"))),
       Effect.flatMap((encoded) => decode(encoded, decodeOptions).pipe(Effect.mapError((e) => issueError(e, undefined, "decode")))),
     ) as Effect.Effect<Decoded<S, C>, HausSchemaError>
 }
@@ -457,7 +460,10 @@ export const decodeStream = <S extends Schema.Top, const C extends ReadonlyArray
 /**
  * Encode a typed value into a haus `Value` (Effect's encoder runs first:
  * transformations, filters…), within the limits: the value nests at most
- * `maxDepth` levels, so that the parser reads it again.
+ * `maxDepth` levels, so that the parser reads it again. Before Effect's
+ * encoder sees it, the value is walked once along the schema, within
+ * `maxSteps` (counting an object shared in it each time it is reached) and
+ * without cycles, since Effect's encoder has no budget of its own (spec §9.8).
  */
 export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<AnyCodec> = []>(schema: S, ...codecs: C & Checked<S, C>) => {
   const s = target(schema, codecs)
@@ -468,8 +474,10 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
   return (value: Decoded<S, C>, limits: Limits = {}): Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]> =>
     withLimits(
       limits,
-      encode(value, { errors: "first" }).pipe(
-        Effect.mapError((e) => issueError(e, undefined, "encode")),
+      // Effect's encoder has no budget: the value is checked first (see `checkEncodable`).
+      fromSync(() => checkEncodable(value, s.ast, limits), conversionErrorOf()).pipe(
+        Effect.flatMap(() => encode(value, { errors: "first" })),
+        Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "encode"))),
         Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), conversionErrorOf())),
       ),
     ) as Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>

@@ -12,23 +12,29 @@ Order := [].{
 	UserId := [UserId(Str)]
 
 	decode_user_id : Value -> Try(UserId, Decode.Error)
-	decode_user_id = |v| match v {
+	decode_user_id = |v| Decode.within_depth(v, read_value_user_id)
+
+	read_value_user_id : Value -> Try(UserId, Decode.Error)
+	read_value_user_id = |v| match v {
 		Tag("UserId", [a0]) => Ok(UserId(Decode.arg("UserId", 0, a0, Decode.str)?))
 		Tag("UserId", _) => Decode.arity("UserId", 1)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["UserId"])
 		_ => Decode.expected("a variant (UserId)", v)
 	}
 
-	encode_user_id : UserId -> Value
-	encode_user_id = |v| match v {
-		UserId(a0) => Tag("UserId", [Encode.str(a0)])
+	encode_user_id : UserId, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_user_id = |v, e| match v {
+		UserId(a0) => Encode.tagged("UserId", e, |e1| Encode.str(a0, e1))
 	}
 
 	## haus type `order#Status`.
 	Status := [Pending, Shipped({ tracking : Str }), Cancelled]
 
 	decode_status : Value -> Try(Status, Decode.Error)
-	decode_status = |v| match v {
+	decode_status = |v| Decode.within_depth(v, read_value_status)
+
+	read_value_status : Value -> Try(Status, Decode.Error)
+	read_value_status = |v| match v {
 		Tag("Pending", []) => Ok(Pending)
 		Tag("Shipped", [p]) => Decode.payload(
 			"Shipped",
@@ -45,23 +51,26 @@ Order := [].{
 		_ => Decode.expected("a variant (Status)", v)
 	}
 
-	encode_status : Status -> Value
-	encode_status = |v| match v {
-		Pending => Tag("Pending", [])
-		Shipped(r) => Tag("Shipped", [Encode.record([("tracking", Present(Encode.str(r.tracking)))])])
-		Cancelled => Tag("Cancelled", [])
+	encode_status : Status, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_status = |v, e| match v {
+		Pending => Encode.tag("Pending", e)
+		Shipped(r) => Encode.tagged_record("Shipped", e, [("tracking", Encode.required(r.tracking, Encode.str))])
+		Cancelled => Encode.tag("Cancelled", e)
 	}
 
 	## haus type `order#Root`.
 	Root : { id : Int, customer : UserId, placed : Str, total : HausFmtMoney.Money, deliver_to : HausFmtGeo.LatLng, status : Status }
 
 	decode_root : Value -> Try(Root, Decode.Error)
-	decode_root = |v| {
+	decode_root = |v| Decode.within_depth(v, read_value_root)
+
+	read_value_root : Value -> Try(Root, Decode.Error)
+	read_value_root = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", decode_user_id)?, placed: Decode.field(fs, "placed", Decode.time("Date"))?, total: Decode.field(fs, "total", HausFmtMoney.decode_money)?, deliver_to: Decode.field(fs, "deliverTo", HausFmtGeo.decode_lat_lng)?, status: Decode.field(fs, "status", decode_status)? })
+		Ok({ id: Decode.field(fs, "id", Decode.int)?, customer: Decode.field(fs, "customer", read_value_user_id)?, placed: Decode.field(fs, "placed", Decode.time("Date"))?, total: Decode.field(fs, "total", HausFmtMoney.read_value_money)?, deliver_to: Decode.field(fs, "deliverTo", HausFmtGeo.read_value_lat_lng)?, status: Decode.field(fs, "status", read_value_status)? })
 	}
 
-	encode_root : Root -> Value
-	encode_root = |v| Encode.record([("id", Present(Encode.int(v.id))), ("customer", Present(encode_user_id(v.customer))), ("placed", Present(Encode.time("Date")(v.placed))), ("total", Present(HausFmtMoney.encode_money(v.total))), ("deliverTo", Present(HausFmtGeo.encode_lat_lng(v.deliver_to))), ("status", Present(encode_status(v.status)))])
+	encode_root : Root, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_root = |v, e| Encode.record(e, [("id", Encode.required(v.id, Encode.int)), ("customer", Encode.required(v.customer, encode_user_id)), ("placed", Encode.required(v.placed, Encode.time("Date"))), ("total", Encode.required(v.total, HausFmtMoney.encode_money)), ("deliverTo", Encode.required(v.deliver_to, HausFmtGeo.encode_lat_lng)), ("status", Encode.required(v.status, encode_status))])
 
 }

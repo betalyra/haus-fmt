@@ -4,8 +4,10 @@
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
 use crate::{Codec, EncodeError, ErrorCode as Code, Limits, Secret, Segment, Value};
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A Rust type that encodes to a haus value.
 ///
@@ -13,7 +15,11 @@ use std::fmt::Write as _;
 /// [`Encoder`] (spec §7, §9.8): the nesting depth before each container, so
 /// that a value nested deeper than the limit fails with the writer's error
 /// instead of recursing on, and every number, string and raw [`Value`] in it.
-/// An error inside a [`Secret`] is reported at the secret (spec §15).
+/// It also counts the values it makes against a budget (16 Mi by default,
+/// see [`Encoder::with_max_steps`]), so that a value whose parts are shared
+/// (an `Rc` reached many times, a DAG) fails with `step-budget` instead of
+/// expanding without bound. An error inside a [`Secret`] is reported at the
+/// secret (spec §15).
 pub trait Encode {
     /// The haus value, checked for a writer with `e`'s limits, at `e`'s depth.
     fn encode_with(&self, e: Encoder) -> R;
@@ -29,19 +35,104 @@ type R = Result<Value, EncodeError>;
 /// Where a value is encoded: the limits of the reader it is for, and how
 /// many containers (records, arrays, payloads) it is inside, counted as the
 /// writer counts them. Encoding a container takes [`Encoder::nested`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+///
+/// Every value made counts one step against the budget of the encoding the
+/// encoder belongs to, which [`Encoder::new`] starts (spec §9.8): the
+/// encoders made from it by [`Encoder::nested`] share it. The count is kept
+/// per thread, for the encoding that counted last: start another encoding
+/// in the middle of one (a hand-written [`Encode`] that calls
+/// [`Encode::encode`] instead of passing its encoder on) and the outer one
+/// counts again from 0 when it continues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Encoder {
     limits: Limits,
     depth: usize,
     /// The value is a tag's only payload: a record here is written
     /// `Tag { … }`, inside the payload's level rather than one more (§7).
     payload: bool,
+    budget: Budget,
+}
+
+impl Default for Encoder {
+    /// At the top, for a reader with the default limits.
+    fn default() -> Encoder {
+        Encoder::new(&Limits::default())
+    }
+}
+
+/// The most values one encoding makes by default (spec §9.8: TypeScript's
+/// 16 Mi steps when encoding): see [`Encoder::with_max_steps`].
+pub const DEFAULT_MAX_STEPS: u64 = 16 * 1024 * 1024;
+
+/// The budget of one encoding: its id, and the most steps it may take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Budget {
+    id: u64,
+    max: u64,
+}
+
+/// Ids of encodings, unique in the process.
+static ENCODINGS: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    /// The encoding that took a step last on this thread, and its steps.
+    static STEPS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+}
+
+impl Budget {
+    fn new(max: u64) -> Budget {
+        Budget { id: ENCODINGS.fetch_add(1, Ordering::Relaxed), max }
+    }
+
+    /// Take `n` more steps: `step-budget` beyond the most.
+    fn take(self, n: u64) -> Result<(), EncodeError> {
+        let steps = STEPS.with(|cell| {
+            let (id, steps) = cell.get();
+            let steps = if id == self.id { steps } else { 0 }.saturating_add(n);
+            cell.set((self.id, steps));
+            steps
+        });
+        match steps > self.max {
+            true => Err(EncodeError::new(
+                Code::StepBudget,
+                format!(
+                    "encode budget of {} steps exceeded (a value whose parts are shared expands when written)",
+                    self.max
+                ),
+            )),
+            false => Ok(()),
+        }
+    }
 }
 
 impl Encoder {
-    /// At the top, for a reader with `limits`.
+    /// At the top, for a reader with `limits`, starting an encoding with a
+    /// budget of [`DEFAULT_MAX_STEPS`].
     pub fn new(limits: &Limits) -> Encoder {
-        Encoder { limits: *limits, depth: 0, payload: false }
+        Encoder { limits: *limits, depth: 0, payload: false, budget: Budget::new(DEFAULT_MAX_STEPS) }
+    }
+
+    /// The same encoding, with a budget of `max` steps, one per value made:
+    /// beyond it, encoding fails with `step-budget`.
+    pub fn with_max_steps(self, max: u64) -> Encoder {
+        Encoder { budget: Budget { max, ..self.budget }, ..self }
+    }
+
+    /// The most steps this encoding may take.
+    pub fn max_steps(&self) -> u64 {
+        self.budget.max
+    }
+
+    /// One more value made: `step-budget` beyond the budget. Encoders of
+    /// values that are no container and use none of the [`Encoder`]'s
+    /// methods (a `ToJson` for a number, say) take theirs here.
+    pub fn step(&self) -> Result<(), EncodeError> {
+        self.budget.take(1)
+    }
+
+    /// `n` more values made.
+    pub(crate) fn steps(&self, n: u64) -> Result<(), EncodeError> {
+        self.budget.take(n)
     }
 
     pub fn limits(&self) -> &Limits {
@@ -56,7 +147,9 @@ impl Encoder {
     /// Inside one more container, if the depth limit allows it. Fails too
     /// if the limit is more than [`crate::MAX_SUPPORTED_DEPTH`].
     pub fn nested(self) -> Result<Encoder, EncodeError> {
-        open(&self.limits, self.depth).map(|depth| Encoder { depth, payload: false, ..self })
+        let depth = open(&self.limits, self.depth)?;
+        self.step()?;
+        Ok(Encoder { depth, payload: false, ..self })
     }
 
     /// Inside a tag's only payload: like [`Encoder::nested`], but a record
@@ -69,36 +162,41 @@ impl Encoder {
     /// only payload and so shares its level.
     pub(crate) fn record_level(self) -> Result<Encoder, EncodeError> {
         match self.payload {
-            true => Ok(Encoder { payload: false, ..self }),
+            true => self.step().map(|()| Encoder { payload: false, ..self }),
             false => self.nested(),
         }
     }
 
     /// A number literal, if the writer takes it.
     pub fn number(self, text: &str) -> R {
+        self.step()?;
         Ok(Value::Number(normalized(text, &self.limits)?.into_owned()))
     }
 
     /// A tag without a payload: `None`, `Circle`, if it is a tag name within
     /// the string limit.
     pub fn tag(self, tag: &str) -> R {
+        self.step()?;
         check_tag(tag, &self.limits)?;
         Ok(variant(tag, vec![]))
     }
 
     /// A string, if it is within the string limit.
     pub fn string(self, s: &str) -> R {
+        self.step()?;
         check_length(s, &self.limits)?;
         Ok(Value::String(s.to_owned()))
     }
 
     /// A byte string, if it is within the string limit.
     pub fn bytes(self, b: &[u8]) -> R {
+        self.step()?;
         check_bytes(b, &self.limits)?;
         Ok(Value::Bytes(b.to_vec()))
     }
 
-    /// A [`Value`] built in code, if the writer takes it here.
+    /// A [`Value`] built in code, if the writer takes it here: a step for
+    /// each value in it.
     pub fn value(self, v: &Value) -> R {
         self.check(v)?;
         Ok(v.clone())
@@ -112,7 +210,9 @@ impl Encoder {
             (true, Value::Record(_)) => self.depth - 1,
             _ => self.depth,
         };
-        Writer { out: &mut String::new(), limits: &self.limits, spaced: true }.value(v, depth)
+        let mut writer = Writer { out: &mut String::new(), limits: &self.limits, spaced: true, values: 0 };
+        writer.value(v, depth)?;
+        self.budget.take(writer.values)
     }
 }
 
@@ -378,7 +478,7 @@ pub fn write_minimised_with(v: &Value, limits: &Limits) -> Result<String, Encode
 fn write_line(v: &Value, limits: &Limits, spaced: bool) -> Result<String, EncodeError> {
     supported(limits)?;
     let mut out = String::new();
-    Writer { out: &mut out, limits, spaced }.value(v, 0)?;
+    Writer { out: &mut out, limits, spaced, values: 0 }.value(v, 0)?;
     Ok(out)
 }
 
@@ -387,6 +487,8 @@ struct Writer<'a> {
     limits: &'a Limits,
     /// Compact has spaces between tokens; minimised has none.
     spaced: bool,
+    /// Values written so far.
+    values: u64,
 }
 
 type W = Result<(), EncodeError>;
@@ -396,6 +498,7 @@ impl Writer<'_> {
     /// functions of their own, so that this frame stays small (see
     /// [`crate::MAX_SUPPORTED_DEPTH`]).
     fn value(&mut self, v: &Value, depth: usize) -> W {
+        self.values += 1;
         match v {
             Value::Array(items) => self.list('[', items, depth, ']'),
             Value::Record(fields) => self.record(fields, depth),
@@ -487,6 +590,16 @@ impl Writer<'_> {
     /// `spaced` as written in compact, or without its spaces in minimised.
     fn gap(&self, spaced: &'static str) -> &'static str {
         if self.spaced { spaced } else { spaced.trim() }
+    }
+}
+
+/// How many values `v` holds, itself included. Recurses as deep as `v` is
+/// nested: for values checked against the depth limit.
+pub(crate) fn size(v: &Value) -> u64 {
+    match v {
+        Value::Array(items) | Value::Variant { args: items, .. } => 1 + items.iter().map(size).sum::<u64>(),
+        Value::Record(fields) => 1 + fields.iter().map(|(_, x)| size(x)).sum::<u64>(),
+        _ => 1,
     }
 }
 

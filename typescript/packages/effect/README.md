@@ -125,7 +125,8 @@ a haus `Value` (spec §16.1). The caller says which form it reads: only
 
 Decoders take limits (spec §7) with their input, encoders with their value.
 They are the core's: `maxDepth` (256 by default), `maxNumberLength`,
-`maxExponent`, `maxStringLength`, and `maxSteps` for the conversion.
+`maxExponent`, `maxStringLength`, and `maxSteps` for the conversion (and for
+the walk over a value before encoding, below).
 
 ```ts
 const order = yield* Haus.decode(Order)(text, { maxDepth: 64 })
@@ -139,9 +140,36 @@ with the same limits. `maxDepth` is at most `Haus.MAX_SUPPORTED_DEPTH`, 512:
 the parser, the converters and Effect's own schema decoder recurse, and 512
 levels fit Node's default stack with room to spare (Effect's decoder, the
 shallowest path, overflows near 800). A larger `maxDepth` fails with a
-`HausLimitsError` naming the maximum, in the error channel. Effect's encoder
-also recurses over the value it is given, before haus sees it: a value built
-in code nested a thousand levels or more can overflow there.
+`HausLimitsError` naming the maximum, in the error channel.
+
+Effect's encoder runs before haus sees the value, and has no budget of its
+own: it visits an object each time it is reached, so a value built in code
+that shares objects (30 levels of `{ a: x, b: x }`) would cost it 2^30
+visits, and a cycle or a very deep value overflows its stack. So the
+encoders (and `Haus.convert`) first walk the value along the schema, as
+Effect's encoder will, visiting each object once, and fail with a
+`HausSchemaError` before Effect's encoder starts:
+
+- `step-budget`: more than `maxSteps` values (16 Mi by default), counting a
+  shared object each time it is reached, as Effect's encoder would;
+- `cyclic-value`: an object that contains itself along the schema;
+- `nesting-too-deep`: more than 2 × `maxDepth` + 16 levels of objects (room
+  for objects around values, like a `Redacted`); the encoded value is then
+  held to `maxDepth` itself.
+
+The walk follows struct fields and record entries, tuple and array elements,
+union members by their tag, recursion, and the contents of classes,
+`Option`s, `Redacted`s, `Map`s, `Set`s, `Chunk`s, `HashMap`s and `HashSet`s.
+Properties outside the schema aren't walked, so an entity's back-reference to
+its `parent`, or a cache, is no error. Where the schema doesn't say what
+Effect reads, the walk goes through everything reachable (own enumerable
+properties, `Map` and `Set` entries, a `Redacted`'s value, a haus value's
+parts): below `Schema.Unknown`, `Schema.Any` (and `Haus.Any`) and
+`Schema.ObjectKeyword`, which haus then converts just as fully, and in declarations
+it doesn't know (`Exit`, `Cause`, your own `Schema.declare`). What a
+transformation returns is made by its code while Effect encodes, so it is
+checked only afterwards, by haus's own limits on the encoded value. Errors
+inside a `Redacted` name the secret's place, never a path into it.
 
 ## Errors
 
@@ -182,7 +210,8 @@ of Effect's own decoder, also in schemas you write by hand:
 in Effect's messages); `place` is where it is in the haus value, as the core
 writes it (`$.items[0].qty`; a variant's argument as `[i]`, the text of
 `Date("…")` as `$.on[0]`), and the JSON form's `path`. A `HausLimitsError` is
-`unsupported-depth`. Stream errors keep their `index`.
+`unsupported-depth`. Stream errors keep their `index`, and their `place`
+starts with it (`$[3].price`).
 
 ## Schema files
 
@@ -217,3 +246,17 @@ const order = yield* Haus.decode(Order, cents)(text)   // order.total: Cents
 ```
 
 See the [order example](../../examples/order) for a complete one.
+
+The official packages ship the codecs of their profiles, as groups (a schema
+that lacks some of their types takes them too):
+
+```ts
+import { iso } from "@haus-fmt/money/effect"   // @haus-fmt/money/iso: currencies are three letters A–Z
+import { wgs84 } from "@haus-fmt/geo/effect"   // @haus-fmt/geo/wgs84: latitudes and longitudes in range
+
+const order = yield* Haus.decode(Order, iso, wgs84)(text)   // Money(1, Eur) or LatLng(91, 0) fails
+```
+
+They keep the value: a `Money` is still `{ _tag: "Money", values: ["19.90", "EUR"] }`,
+its currency typed `string` (a tag, never a `Haus.Unknown`), and a `LatLng` its
+two floats, `-0` included.

@@ -1,0 +1,2 @@
+// A quoted field key takes the escapes of data strings, and only those (spec §14, §4).
+type A = { "a\x41": Int }

@@ -1,0 +1,6 @@
+// Uses @haus-test/ledger, and through it @haus-test/money, which it doesn't
+// import: Money two levels deep, in arrays.
+import @haus-test/ledger@1 (Entry, Move, Note, Terms)
+
+type Order = { id: Int, entries: Array Entry, moves: Array Move, terms: Terms, customer: Customer }
+type Customer = { name: String, note?: Note }

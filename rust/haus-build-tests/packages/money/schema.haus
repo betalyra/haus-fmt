@@ -1,0 +1,4 @@
+// A schema package of the tests of the codec closure (spec §13.4): the
+// application has a codec for Money.
+type Money = { amount: Decimal, currency: String }
+type Rate = { percent: Int }

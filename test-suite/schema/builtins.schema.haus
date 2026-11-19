@@ -14,3 +14,4 @@ type Span = Duration
 type Payload = Any
 type Key = Secret String
 type Config = closed { name: String, key: Secret String, pin?: Secret Int, extra: Any }
+type Vault = Map (Secret { id: Int })

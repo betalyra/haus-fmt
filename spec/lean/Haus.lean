@@ -37,12 +37,14 @@ import Haus.Stream
 import Haus.Stream.Chunks
 import Haus.Stream.Scan
 import Haus.Stream.Correct
+import Haus.Stream.Limited
 import Haus.Schema.Types
 import Haus.Schema.Float
 import Haus.Schema.Decode
 import Haus.Schema.Rules
 import Haus.Schema.Correct
 import Haus.Schema.RoundTrip
+import Haus.Schema.Codec
 import Haus.Version
 import Haus.Json.Data
 import Haus.Json.Base64
@@ -60,6 +62,7 @@ import Haus.Json.WellFormed
 import Haus.Json.Correct
 import Haus.Json.Fuel
 import Haus.Json.Evolution
+import Haus.Json.NullFuel
 import Haus.Json.Readers
 import Haus.Pretty.BlockString
 import Haus.Packages.Fs
@@ -73,3 +76,7 @@ import Haus.Packages.NonInterference
 import Haus.Packages.Isolation
 import Haus.Packages.Suite
 import Haus.Packages.Order
+import Haus.Packages.Closed
+import Haus.Profiles.Money
+import Haus.Profiles.Geo
+import Haus.Profiles.Vectors
