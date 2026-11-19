@@ -253,7 +253,7 @@ ErrorCode := [].{
 	unguarded_recursion : Str
 	unguarded_recursion = "unguarded-recursion"
 
-	## `growing-recursion` (schema-files): A generic type refers to itself, directly or through definitions that refer back to it, with arguments other than its own parameters (§9.10), so its instances could grow without bound.
+	## `growing-recursion` (schema-files): Generic types whose instances could grow without bound: a type parameter passes, wrapped in a bigger type, along a cycle of references back to itself (`type T a = < X (T (Pair a a)) >`, §9.10).
 	growing_recursion : Str
 	growing_recursion = "growing-recursion"
 

@@ -4,39 +4,38 @@ import Haus.SchemaFile.Instances
 /-!
 # Finitely many instances (spec §9.10, PLAN I6)
 
-`reach_finite`: in a file with `GrowthOk` (§9.10, which `check` ensures:
-`check_finite`), the instances reachable from any types `ts` are among
-`Source.universe F ts`, a list of at most `Source.instBound F ts` instances,
-an explicit number computed from the file and `ts` alone.
+`reach_finite`: in a file with `GrowthOk` (§9.10, no expanding edge of the
+parameter graph on a cycle, which `check` ensures: `check_finite`), the
+instances reachable from any types `ts` are among `Source.universe F ts`, a
+list of at most `Source.instBound F ts` instances, an explicit number
+computed from the file and `ts` alone.
 
-Why. Order the definitions by how many definitions each reaches
-(`Source.level`: the fewer, the higher). A reference from `a` to `b` never
-goes down a level, and goes up one unless `b` refers back to `a` (then they
-are in one group, and §9.10 says the arguments are parameters of `a`: the
-instance of `b` gets some of `a`'s arguments, nothing new). So the arguments
-of the instances at level `k` are in `argSet k`: the parts of `ts` and the
-parameters at level 0, and at level `k + 1` also each argument written in
-the file with its parameters replaced by lists of level `k`. There are as
-many levels as definitions, so every instance is a definition with at most
-`arity` arguments from `argSet N` (`reach_universe`).
+Why. Give each parameter a height (`Source.height`): how many expanding
+edges lead to it, i.e. have a path from their end to it. An edge never goes
+down in height (`height_edge`), and an expanding edge goes up
+(`height_edge_lt`), since its own end leads to its target but, with §9.10,
+not back to its start. So the argument an instance gives a parameter of
+height `k` is in `argSet k` (`good_succ`, `reach_inv`): the parts of `ts`,
+the parameters and the arguments written in the file at height 0, and at
+height `k + 1` also each written argument with its parameters replaced by
+lists of height `k`. An argument kept as it is (`v` for `v`) stays at its
+height; one inside a bigger type (`Pair v v`) is built from lower ones.
+There are as many heights as expanding edges, so every instance is a
+definition with at most `arity` arguments from `argSet top`
+(`reach_universe`). The converse is in `Haus.SchemaFile.Cycles`.
 
 `doubling_infinite` shows the rule is needed: the file of §9.10's example,
 `type A a = < X (B (P a a)) | Done >` and `type B a = < Y (A (P a a)) | Stop >`,
-passes every other check (`doubling_checks_without_groups`), and reaches
+passes every other check (`doubling_checks_without_growth`), and reaches
 infinitely many instances (`A Int`, `A (P (P Int Int) (P Int Int))`, …), so no
 list holds them all; `check` rejects it with `growing-recursion`.
 -/
 
 namespace Haus.SchemaFile
 
-/-! ## Levels -/
+/-! ## Heights -/
 
-open Classical in
-/-- `N` minus how many definitions `n` reaches: lower for definitions that reach more. -/
-noncomputable def Source.level (F : Source) (n : String) : Nat :=
-  F.defs.length - (F.names.filter fun x => decide (F.Reaches n x)).length
-
-theorem filter_length_le {l : List String} {p q : String → Bool} (h : ∀ x ∈ l, p x = true → q x = true) :
+theorem filter_length_le {α : Type} {l : List α} {p q : α → Bool} (h : ∀ x ∈ l, p x = true → q x = true) :
     (l.filter p).length ≤ (l.filter q).length := by
   induction l with
   | nil => simp
@@ -49,8 +48,8 @@ theorem filter_length_le {l : List String} {p q : String → Bool} (h : ∀ x �
       · simp [hp, hq]; omega
       · simp [hp, hq]; omega
 
-theorem filter_length_lt {l : List String} {p q : String → Bool} (h : ∀ x ∈ l, p x = true → q x = true)
-    {a : String} (ha : a ∈ l) (hq : q a = true) (hp : p a = false) :
+theorem filter_length_lt {α : Type} {l : List α} {p q : α → Bool} (h : ∀ x ∈ l, p x = true → q x = true)
+    {a : α} (ha : a ∈ l) (hq : q a = true) (hp : p a = false) :
     (l.filter p).length < (l.filter q).length := by
   induction l with
   | nil => simp at ha
@@ -68,34 +67,50 @@ theorem filter_length_lt {l : List String} {p q : String → Bool} (h : ∀ x �
 
 theorem Source.length_names (F : Source) : F.names.length = F.defs.length := by simp [Source.names]
 
-theorem Source.level_le (F : Source) (n : String) : F.level n ≤ F.defs.length := by
-  unfold Source.level; omega
+/-- The expanding edges of the parameter graph. -/
+def Source.expEdges (F : Source) : List (PNode × PNode) :=
+  (F.paramEdges.filter (·.2.2)).map fun e => (e.1, e.2.1)
 
-theorem Source.edge_names {F : Source} {a b : String} (e : F.Edge a b) : a ∈ F.names := by
-  obtain ⟨d, hd, _⟩ := e
-  exact Source.mem_names (by simp [Source.defined, hd])
+theorem Source.mem_expEdges {F : Source} {x y : PNode} (h : (x, y, true) ∈ F.paramEdges) : (x, y) ∈ F.expEdges :=
+  List.mem_map.2 ⟨(x, y, true), List.mem_filter.2 ⟨h, rfl⟩, rfl⟩
 
-/-- A reference never goes down a level. -/
-theorem Source.level_edge {F : Source} {a b : String} (e : F.Edge a b) : F.level a ≤ F.level b := by
+open Classical in
+/-- How many expanding edges lead to a parameter: from where they lead, a path leads to it. -/
+noncomputable def Source.height (F : Source) (x : PNode) : Nat :=
+  (F.expEdges.filter fun e => decide (F.PReach e.2 x)).length
+
+theorem Source.height_le (F : Source) (x : PNode) : F.height x ≤ F.expEdges.length := by
+  unfold Source.height; exact List.length_filter_le _ _
+
+/-- An edge never goes down in height. -/
+theorem Source.height_edge {F : Source} {x y : PNode} {b : Bool} (e : (x, y, b) ∈ F.paramEdges) :
+    F.height x ≤ F.height y := by
   classical
-  have := filter_length_le (l := F.names) (p := fun x => decide (F.Reaches b x))
-    (q := fun x => decide (F.Reaches a x)) (fun x _ h => by simpa using (Source.Reaches.single e).trans (by simpa using h))
-  have hlen := List.length_filter_le (fun x => decide (F.Reaches a x)) F.names
-  rw [Source.length_names] at hlen
-  unfold Source.level
-  omega
+  unfold Source.height
+  apply filter_length_le
+  intro z _ h
+  have hxy : F.PReach x y := Path.single (Source.mem_pnext.2 ⟨b, e⟩)
+  simpa using (of_decide_eq_true h).trans hxy
 
-/-- A reference to a definition that doesn't refer back goes up a level. -/
-theorem Source.level_edge_lt {F : Source} {a b : String} (e : F.Edge a b) (h : ¬ F.Reaches b a) :
-    F.level a < F.level b := by
+/-- With §9.10, an expanding edge goes up: it leads to `y` itself, but not to `x`. -/
+theorem Source.height_edge_lt {F : Source} (hG : GrowthOk F) {x y : PNode} (e : (x, y, true) ∈ F.paramEdges) :
+    F.height x < F.height y := by
   classical
-  have := filter_length_lt (l := F.names) (p := fun x => decide (F.Reaches b x))
-    (q := fun x => decide (F.Reaches a x)) (fun x _ h => by simpa using (Source.Reaches.single e).trans (by simpa using h))
-    (Source.edge_names e) (by simpa using Source.Reaches.refl a) (by simpa using h)
-  have hlen := List.length_filter_le (fun x => decide (F.Reaches a x)) F.names
-  rw [Source.length_names] at hlen
-  unfold Source.level
-  omega
+  unfold Source.height
+  apply filter_length_lt (a := (x, y)) _ (Source.mem_expEdges e)
+  · simpa using (Path.refl y : F.PReach y y)
+  · simpa using hG x y e
+  intro z _ h
+  have hxy : F.PReach x y := Path.single (Source.mem_pnext.2 ⟨true, e⟩)
+  simpa using (of_decide_eq_true h).trans hxy
+
+theorem Source.mem_paramEdges {F : Source} {d d' : Def} {m q v : String} {es : List Tm} {e : Tm}
+    (hd : d ∈ F.defs) (hr : (m, es) ∈ F.edges d) (hl : F.lookup m = some d') (hq : (q, e) ∈ d'.params.zip es)
+    (hv : v ∈ e.vars) : ((d.name, v), (m, q), e != .var v) ∈ F.paramEdges := by
+  simp only [Source.paramEdges, List.mem_flatMap]
+  refine ⟨d, hd, (m, es), hr, ?_⟩
+  simp only [hl, List.mem_flatMap, List.mem_map]
+  exact ⟨(q, e), hq, v, hv, rfl⟩
 
 /-! ## The arguments instances can have -/
 
@@ -103,11 +118,12 @@ theorem Source.level_edge_lt {F : Source} {a b : String} (e : F.Edge a b) (h : �
 def Source.argExprs (F : Source) : List (List String × Tm) :=
   F.defs.flatMap fun d => d.body.refs.flatMap fun r => r.2.map fun e => (d.params, e)
 
-/-- The parts of `ts`, and the parameters of the definitions as types. -/
+/-- The parts of `ts`, the parameters of the definitions as types, and the arguments written. -/
 def Source.base (F : Source) (ts : List Tm) : List Tm :=
-  ts.flatMap Tm.subterms ++ (F.defs.flatMap fun d => d.body.vars).map .var
+  ts.flatMap Tm.subterms ++ (F.defs.flatMap fun d => d.body.vars ++ d.params).map .var ++
+    F.argExprs.map (·.2)
 
-/-- The arguments of instances up to level `k`. -/
+/-- The arguments of instances up to height `k`. -/
 def Source.argSet (F : Source) (ts : List Tm) : Nat → List Tm
   | 0 => F.base ts
   | k + 1 => F.argSet ts k ++ F.argExprs.flatMap fun (ps, e) =>
@@ -120,9 +136,12 @@ def Source.arity (F : Source) (ts : List Tm) : Nat :=
 /-- The most parameters of a definition. -/
 def Source.paramMax (F : Source) : Nat := (F.defs.map (·.params.length)).foldr max 0
 
-/-- Every instance a definition with arguments of the last level could be. -/
+/-- The height every argument is within: one more than the number of expanding edges. -/
+def Source.top (F : Source) : Nat := F.expEdges.length + 1
+
+/-- Every instance a definition with arguments of the top height could be. -/
 def Source.universe (F : Source) (ts : List Tm) : List Inst :=
-  F.names.flatMap fun n => (tuples (F.argSet ts F.defs.length) (F.arity ts)).map (n, ·)
+  F.names.flatMap fun n => (tuples (F.argSet ts F.top) (F.arity ts)).map (n, ·)
 
 theorem le_foldr_max {l : List Nat} {x : Nat} (h : x ∈ l) : x ≤ l.foldr max 0 := by
   induction l with
@@ -154,11 +173,52 @@ theorem Source.argSet_step {F : Source} {ts : List Tm} {k : Nat} {ps : List Stri
   simp only [Source.argSet, List.mem_append, List.mem_flatMap, List.mem_map]
   exact Or.inr ⟨(ps, e), he, as, mem_tuples _ _ _ hl ha, rfl⟩
 
+theorem Source.argExprs_base {F : Source} {ps : List String} {e : Tm} (he : (ps, e) ∈ F.argExprs) (ts : List Tm) :
+    e ∈ F.base ts := by
+  simp only [Source.base, List.mem_append]
+  exact Or.inr (List.mem_map.2 ⟨(ps, e), he, rfl⟩)
+
+theorem Source.argExprs_params {F : Source} {ps : List String} {e : Tm} (he : (ps, e) ∈ F.argExprs)
+    (ts : List Tm) : ∀ p ∈ ps, Tm.var p ∈ F.base ts := by
+  simp only [Source.argExprs, List.mem_flatMap, List.mem_map, Prod.mk.injEq] at he
+  obtain ⟨d, hd, _, _, _, _, rfl, _⟩ := he
+  intro p hp
+  simp only [Source.base, List.mem_append, List.mem_map, List.mem_flatMap]
+  exact Or.inl (Or.inr ⟨p, ⟨d, hd, Or.inr hp⟩, rfl⟩)
+
+/-- A written argument, its parameters replaced by arguments of height `k`, is of height `k + 1`. -/
+theorem Source.subst_step {F : Source} {ts : List Tm} {k : Nat} {ps : List String} {e : Tm} {args : List Tm}
+    (he : (ps, e) ∈ F.argExprs) (ha : ∀ p a, (p, a) ∈ ps.zip args → p ∈ e.vars → a ∈ F.argSet ts k) :
+    e.subst (ps.zip args) ∈ F.argSet ts (k + 1) := by
+  obtain ⟨bs, hl, hm, hk⟩ := zip_restrict (fun p => decide (p ∈ e.vars)) ps args
+  have : e.subst (ps.zip args) = e.subst (ps.zip bs) :=
+    Tm.subst_congr e fun v hv => (hk v (by simpa using hv)).symm
+  rw [this]
+  apply Source.argSet_step he hl
+  intro b hb
+  rcases hm b hb with ⟨p, hp, hP⟩ | ⟨p, hp, rfl⟩
+  · exact ha p b hp (by simpa using hP)
+  · exact F.base_sub ts k (Source.argExprs_params he ts p hp)
+
+/-- A parameter, replaced by an argument of height `k`, is of height `k`. -/
+theorem Source.subst_var {F : Source} {ts : List Tm} {k : Nat} {ps : List String} {v : String} {args : List Tm}
+    (hv : Tm.var v ∈ F.base ts) (ha : ∀ a, (v, a) ∈ ps.zip args → a ∈ F.argSet ts k) :
+    (Tm.var v).subst (ps.zip args) ∈ F.argSet ts k := by
+  simp only [Tm.subst_var]
+  cases hl : (ps.zip args).lookup v with
+  | some u => exact ha u (lookup_mem_pair _ hl)
+  | none => exact F.base_sub ts k hv
+
 /-! ## The invariant -/
 
-/-- An instance's arguments are of its level, and not too many. -/
+/--
+An instance's arguments are of the top height, each of the height of the
+parameter it is for, and not too many.
+-/
 def Source.Good (F : Source) (ts : List Tm) (i : Inst) : Prop :=
-  (∀ a ∈ i.2, a ∈ F.argSet ts (F.level i.1)) ∧ i.2.length ≤ F.arity ts
+  (∀ a ∈ i.2, a ∈ F.argSet ts F.top) ∧
+  (∀ d, F.lookup i.1 = some d → ∀ p a, (p, a) ∈ d.params.zip i.2 → a ∈ F.argSet ts (F.height (i.1, p))) ∧
+  i.2.length ≤ F.arity ts
 
 /-- An instance, and the instances in its arguments, are `Good`. -/
 def Source.Inv (F : Source) (ts : List Tm) (i : Inst) : Prop :=
@@ -170,40 +230,62 @@ theorem Source.edges_arity {F : Source} {ts : List Tm} {d : Def} (hd : d ∈ F.d
   simp only [List.mem_map, List.mem_append, List.mem_flatMap]
   exact ⟨r, Or.inr ⟨d, hd, hr⟩, rfl⟩
 
+theorem Source.argExprs_mem {F : Source} {d : Def} (hd : d ∈ F.defs) {m : String} {es : List Tm}
+    (hes : (m, es) ∈ d.body.refs) {e : Tm} (he : e ∈ es) : (d.params, e) ∈ F.argExprs := by
+  simp only [Source.argExprs, List.mem_flatMap, List.mem_map]
+  exact ⟨d, hd, (m, es), hes, e, he, rfl⟩
+
 /-- The step: the instances an instance's type mentions are `Good`. -/
 theorem Source.good_succ {F : Source} {ts : List Tm} (hG : GrowthOk F) {n : String} {args : List Tm} {d : Def}
     (hd : F.lookup n = some d) (hgood : F.Good ts (n, args)) (hinv : F.Inv ts (n, args)) :
     ∀ j ∈ (d.body.subst (d.params.zip args)).refs, F.defined j.1 = true → F.Good ts j := by
   rintro ⟨m, es'⟩ hj hdef
-  have hdm := (Source.lookup_mem hd).1
+  obtain ⟨hdm, hdn⟩ := Source.lookup_mem hd
+  have hH : ∀ p a, (p, a) ∈ d.params.zip args → a ∈ F.argSet ts (F.height (n, p)) := hgood.2.1 d hd
+  have hTop : ∀ p a, (p, a) ∈ d.params.zip args → a ∈ F.argSet ts F.expEdges.length :=
+    fun p a h => F.argSet_mono ts (F.height_le _) (hH p a h)
   rcases Tm.refs_subst _ d.body hj with ⟨es, hes, rfl⟩ | ⟨v, _, u, hu, hmu⟩
-  · have edge : F.Edge n m := ⟨d, hd, es, Source.mem_edges.2 ⟨hes, hdef⟩⟩
-    refine ⟨?_, by simpa using Source.edges_arity (ts := ts) hdm hes⟩
-    simp only [List.mem_map]
-    rintro a ⟨e, he, rfl⟩
-    by_cases hr : F.Reaches m n
-    · have hvar := hG n d hd m es (Source.mem_edges.2 ⟨hes, hdef⟩) hr e he
+  · have hedge : (m, es) ∈ F.edges d := Source.mem_edges.2 ⟨hes, hdef⟩
+    have hx : ∀ e ∈ es, (d.params, e) ∈ F.argExprs := fun e he => Source.argExprs_mem hdm hes he
+    refine ⟨?_, ?_, by simpa using Source.edges_arity (ts := ts) hdm hes⟩
+    · -- every argument is of the top height
+      simp only [List.mem_map]
+      rintro a ⟨e, he, rfl⟩
       cases e with
       | var v =>
-        simp only [Tm.subst_var]
-        cases hl : (d.params.zip args).lookup v with
-        | some u =>
-          exact F.argSet_mono ts (Source.level_edge edge) (hgood.1 u (lookup_zip_mem _ _ hl))
-        | none =>
-          apply F.base_sub ts
-          simp only [Source.base, List.mem_append, List.mem_map, List.mem_flatMap, Option.getD_none]
-          exact Or.inr ⟨v, ⟨d, hdm, Tm.refs_args_vars d.body hes (.var v) he v (by simp)⟩, rfl⟩
-      | ref _ _ => simp [Tm.isVar] at hvar
-      | node _ _ => simp [Tm.isVar] at hvar
-    · have hlt := Source.level_edge_lt edge hr
-      rw [zip_take]
-      apply F.argSet_mono ts (show F.level n + 1 ≤ F.level m by omega)
-      apply Source.argSet_step
-      · simp only [Source.argExprs, List.mem_flatMap, List.mem_map]
-        exact ⟨d, hdm, (m, es), hes, e, he, rfl⟩
-      · simp only [List.length_take]; exact Nat.min_le_left _ _
-      · intro a ha
-        exact hgood.1 a (List.mem_of_mem_take ha)
+        exact F.argSet_mono ts (Nat.le_succ _)
+          (Source.subst_var (Source.argExprs_base (hx _ he) ts) fun a h => hTop v a h)
+      | ref _ _ | node _ _ => exact Source.subst_step (hx _ he) fun p a h _ => hTop p a h
+    · -- each argument is of the height of its parameter
+      intro d' hl q a' hq
+      rw [List.zip_map_right, List.mem_map] at hq
+      obtain ⟨⟨q', e⟩, hqe, he⟩ := hq
+      simp only [Prod.map, id, Prod.mk.injEq] at he
+      obtain ⟨rfl, rfl⟩ := he
+      have hem : e ∈ es := (List.of_mem_zip hqe).2
+      have hedges : ∀ v ∈ e.vars, ((n, v), (m, q'), e != .var v) ∈ F.paramEdges := fun v hv => by
+        simpa [hdn] using Source.mem_paramEdges hdm hedge hl hqe hv
+      have hexp : (∀ w, e ≠ .var w) → ∀ v ∈ e.vars, ((n, v), (m, q'), true) ∈ F.paramEdges := fun hne v hv => by
+        have := hedges v hv
+        rwa [bne_iff_ne.2 (hne v)] at this
+      cases e with
+      | var v =>
+        apply Source.subst_var (Source.argExprs_base (hx _ hem) ts)
+        intro a ha
+        exact F.argSet_mono ts (Source.height_edge (hedges v (by simp))) (hH v a ha)
+      | ref _ _ | node _ _ =>
+        cases hvars : Tm.vars _ with
+        | nil =>
+          rw [Tm.subst_closed hvars]
+          exact F.base_sub ts _ (Source.argExprs_base (hx _ hem) ts)
+        | cons v0 _ =>
+          have hlt := Source.height_edge_lt hG (hexp (fun w h => by cases h) v0 (by simp [hvars]))
+          have : F.height (m, q') = (F.height (m, q') - 1) + 1 := by omega
+          rw [this]
+          apply Source.subst_step (hx _ hem)
+          intro p a ha hp
+          have := Source.height_edge_lt hG (hexp (fun w h => by cases h) p hp)
+          exact F.argSet_mono ts (by omega) (hH p a ha)
   · have hua := lookup_zip_mem _ _ hu
     apply hinv (m, es') _ hdef
     simp only [Tm.refs_ref, List.mem_cons, List.mem_flatMap]
@@ -219,12 +301,13 @@ theorem Source.reach_inv {F : Source} {ts : List Tm} (hG : GrowthOk F) {i : Inst
     obtain ⟨t, ht, hi⟩ := hi
     intro j hj _
     have hjt := Tm.refs_ref_sub t hi j hj
-    refine ⟨fun a ha => F.base_sub ts _ ?_, ?_⟩
-    · simp only [Source.base, List.mem_append, List.mem_flatMap]
-      exact Or.inl ⟨t, ht, Tm.refs_args_subterms t hjt a ha⟩
-    · apply le_foldr_max
-      simp only [List.mem_map, List.mem_append, List.mem_flatMap]
-      exact ⟨j, Or.inl ⟨t, ht, hjt⟩, rfl⟩
+    have hbase : ∀ a ∈ j.2, a ∈ F.base ts := fun a ha => by
+      simp only [Source.base, List.mem_append, List.mem_flatMap]
+      exact Or.inl (Or.inl ⟨t, ht, Tm.refs_args_subterms t hjt a ha⟩)
+    refine ⟨fun a ha => F.base_sub ts _ (hbase a ha), fun d _ p a hpa => F.base_sub ts _ (hbase a (List.of_mem_zip hpa).2), ?_⟩
+    apply le_foldr_max
+    simp only [List.mem_map, List.mem_append, List.mem_flatMap]
+    exact ⟨j, Or.inl ⟨t, ht, hjt⟩, rfl⟩
   | @step i j _ hj ih =>
     obtain ⟨n, args⟩ := i
     simp only [Source.succs] at hj
@@ -239,17 +322,17 @@ theorem Source.reach_inv {F : Source} {ts : List Tm} (hG : GrowthOk F) {i : Inst
 
 /-! ## The bound -/
 
-/-- `argBound b e p k`: the bound on `argSet` at level `k`. -/
+/-- `argBound b e p k`: the bound on `argSet` at height `k`. -/
 def argBound (b e p : Nat) : Nat → Nat
   | 0 => b
   | k + 1 => argBound b e p k + e * (argBound b e p k + 1) ^ p
 
 /--
 The number of instances a file `F` can reach from `ts`: definitions times
-the lists of at most `arity` arguments from the last level.
+the lists of at most `arity` arguments of the top height.
 -/
 def Source.instBound (F : Source) (ts : List Tm) : Nat :=
-  F.defs.length * (argBound (F.base ts).length F.argExprs.length F.paramMax F.defs.length + 1) ^ F.arity ts
+  F.defs.length * (argBound (F.base ts).length F.argExprs.length F.paramMax F.top + 1) ^ F.arity ts
 
 theorem length_flatMap_le {α β : Type} (l : List α) (f : α → List β) (c : Nat) (h : ∀ x ∈ l, (f x).length ≤ c) :
     (l.flatMap f).length ≤ l.length * c := by
@@ -261,7 +344,7 @@ theorem length_flatMap_le {α β : Type} (l : List α) (f : α → List β) (c :
     simp only [List.flatMap_cons, List.length_append, List.length_cons, Nat.succ_mul]
     omega
 
-theorem Source.argExprs_params {F : Source} {ps : List String} {e : Tm} (h : (ps, e) ∈ F.argExprs) :
+theorem Source.argExprs_paramMax {F : Source} {ps : List String} {e : Tm} (h : (ps, e) ∈ F.argExprs) :
     ps.length ≤ F.paramMax := by
   simp only [Source.argExprs, List.mem_flatMap, List.mem_map, Prod.mk.injEq] at h
   obtain ⟨d, hd, _, _, _, _, rfl, _⟩ := h
@@ -283,18 +366,18 @@ theorem Source.length_argSet (F : Source) (ts : List Tm) : ∀ k : Nat,
       calc (tuples (F.argSet ts k) ps.length).length
           ≤ ((F.argSet ts k).length + 1) ^ ps.length := length_tuples_le _ _
         _ ≤ ((F.argSet ts k).length + 1) ^ F.paramMax :=
-          Nat.pow_le_pow_right (by omega) (Source.argExprs_params he)
+          Nat.pow_le_pow_right (by omega) (Source.argExprs_paramMax he)
         _ ≤ _ := Nat.pow_le_pow_left (by omega) _
     omega
 
 theorem Source.length_universe (F : Source) (ts : List Tm) : (F.universe ts).length ≤ F.instBound ts := by
   unfold Source.universe Source.instBound
-  have := length_flatMap_le F.names (fun n => (tuples (F.argSet ts F.defs.length) (F.arity ts)).map (n, ·))
-    ((argBound (F.base ts).length F.argExprs.length F.paramMax F.defs.length + 1) ^ F.arity ts) (by
+  have := length_flatMap_le F.names (fun n => (tuples (F.argSet ts F.top) (F.arity ts)).map (n, ·))
+    ((argBound (F.base ts).length F.argExprs.length F.paramMax F.top + 1) ^ F.arity ts) (by
       intro n _
       simp only [List.length_map]
       exact Nat.le_trans (length_tuples_le _ _)
-        (Nat.pow_le_pow_left (by have := F.length_argSet ts F.defs.length; omega) _))
+        (Nat.pow_le_pow_left (by have := F.length_argSet ts F.top; omega) _))
   rwa [Source.length_names] at this
 
 /-! ## Finitely many instances -/
@@ -303,14 +386,13 @@ theorem Source.length_universe (F : Source) (ts : List Tm) : (F.universe ts).len
 theorem Source.reach_universe {F : Source} {ts : List Tm} (hG : GrowthOk F) {i : Inst} (h : Reach F ts i) :
     i ∈ F.universe ts := by
   obtain ⟨hdef, hinv⟩ := Source.reach_inv hG h
-  obtain ⟨hargs, hlen⟩ := hinv i (by simp) hdef
+  obtain ⟨hargs, _, hlen⟩ := hinv i (by simp) hdef
   simp only [Source.universe, List.mem_flatMap, List.mem_map]
-  exact ⟨i.1, Source.mem_names hdef, i.2,
-    mem_tuples _ _ _ hlen fun a ha => F.argSet_mono ts (F.level_le i.1) (hargs a ha), rfl⟩
+  exact ⟨i.1, Source.mem_names hdef, i.2, mem_tuples _ _ _ hlen hargs, rfl⟩
 
 /--
-**I6.** In a file with regular generics (§9.10), the instances reachable
-from any types are finitely many: at most `instBound`.
+**I6.** In a file without an expansive cycle (§9.10), the instances
+reachable from any types are finitely many: at most `instBound`.
 -/
 theorem Source.reach_finite {F : Source} (hG : GrowthOk F) (ts : List Tm) :
     ∃ L : List Inst, L.length ≤ F.instBound ts ∧ ∀ i, Reach F ts i → i ∈ L :=
@@ -322,7 +404,7 @@ theorem check_finite {F : Source} (h : check F = .ok ()) (ts : List Tm) :
   Source.reach_finite (checkGrowth_ok (check_growth h)) ts
 
 
-/-! ## Why the rule for groups is needed: the doubling example of §9.10 -/
+/-! ## Why the rule is needed: the doubling example of §9.10 -/
 
 /-- The example of §9.10: `A Int` needs `B (P Int Int)`, which needs `A (P (P Int Int) (P Int Int))`, … -/
 def doublingText : String :=
@@ -353,8 +435,8 @@ def doubling : Source where
   | .error e => e.code == .growingRecursion
   | .ok _ => false
 
-/-- Every other rule holds: without §9.10's rule for groups, `check` accepts it. -/
-theorem doubling_checks_without_groups : (check doubling (groups := false)).toBool = true := by decide
+/-- Every other rule holds: without §9.10's rule, `check` accepts it. -/
+theorem doubling_checks_without_growth : (check doubling (growth := false)).toBool = true := by decide
 
 /-- The instances `A Int`, `A (P (P Int Int) (P Int Int))`, …: the argument doubles twice per step. -/
 def doubled : Nat → Tm
@@ -386,7 +468,7 @@ theorem size_doubled : ∀ k, k + 1 ≤ (doubled k).size
     omega
 
 /--
-**Without §9.10's rule for groups, instances can be infinitely many**: the
+**Without §9.10's rule, instances can be infinitely many**: the
 doubling example passes every other check, yet no list holds all the
 instances it reaches.
 -/

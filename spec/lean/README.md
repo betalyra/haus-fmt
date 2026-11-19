@@ -13,6 +13,7 @@ and a reference parser that computes it.
 | [`Haus/Complete/`](Haus/Complete) | Proofs that the parser accepts everything the grammar allows |
 | [`Haus/Correct.lean`](Haus/Correct.lean) | Both together, and unambiguity |
 | [`Haus/DupKeys.lean`](Haus/DupKeys.lean) | Duplicate keys found by sorting (spec §7): the same answer as the parser's scan, in n log n comparisons |
+| [`Haus/Linear/`](Haus/Linear), [`Haus/Stream/Cost.lean`](Haus/Stream/Cost.lean) | Linear time (spec §7): a cost model (steps counted next to results), a reference parser with a trie of keys that returns what the parser returns and takes at most `256 · n + 68` steps, the stream reader's buffer in at most `3 · n + 3 · p + 6` steps, the design before S17 shown quadratic |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
 | [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
 | [`Haus/Layout/`](Haus/Layout) | The three layouts of spec §11 written from values, without comments: compact and minimised (one writer, the spacing a parameter; minimised is `Canonical.write`) and pretty, with the proofs that they parse back and that a compact or minimised stream splits by lines |
@@ -125,9 +126,31 @@ the keys and comparing neighbours (`keysDup`, a merge sort that counts its
 comparisons) reports a duplicate exactly when the parser's scan does
 (`keysDup_eq_scanDup`, `keysDup_iff`: exactly when the keys aren't
 distinct), in at most `n · (log₂ n + 2)` comparisons of two keys
-(`keysDup_cost`; `msort_cost`: `n ≤ 2^k` keys sort in `n · k`). Not done
-(the rest of P3): a reference parser that uses it, and a bound on the
-parser's steps as a whole.
+(`keysDup_cost`; `msort_cost`: `n ≤ 2^k` keys sort in `n · k`).
+
+**Linear time** (spec §7, plan phase P, design review S17 and C6), in
+[`Haus/Linear/`](Haus/Linear) and
+[`Haus/Stream/Cost.lean`](Haus/Stream/Cost.lean). Lean proofs say nothing
+about time by themselves, so the cost model is explicit: the counting
+functions return their steps next to their result (`PC`, a parser monad
+with a step count, [`Linear/Monad.lean`](Haus/Linear/Monad.lean)). The
+input is an array (a position, an error's position and skipping take one
+step); a list function takes one step per element it visits; arithmetic one
+step per operation. Steps are proven with a small Hoare-style calculus
+(`Spec`, [`Linear/Spec.lean`](Haus/Linear/Spec.lean)).
+
+| Theorem | Says |
+|---|---|
+| `parseC_eq` | `parseC`, the reference parser written with step counts, returns exactly what `parse` returns: values, errors and positions. Its one change: a record's keys are kept in a `KeySet`, a binary trie over the 21 bits of each code point, so a duplicate check takes `21 · n + 1` steps for a key of `n` characters, with no hashing and no `log` factor (`mem_keySet`, `KeySet.memC_cost`, `KeySet.insertC_cost`) |
+| `parseC_cost` | On any input of `n` characters, valid or not, crafted or not, `parseC` takes at most `256 · n + 68` steps |
+| `splitB_view`, `splitB_steps` | The stream reader with one buffer (`Buf`: offsets for the current value and the scan, the completed values dropped once per chunk, as Rust's reader since S17) finds the pieces of `split`, and takes at most `3 · n + 3 · p + 6` steps for `n` characters in `p` chunks: each character appended once, scanned once, moved at most once |
+| `splitOld_view`, `splitOld_steps_vals`, `splitOld_not_linear` | The design before S17 (each value's bytes dropped as its comma is found) finds the same pieces, but `k` values `0,` in one chunk take at least `k · (k + 1)` steps, so no linear bound holds for it |
+| `readCost_le` | The whole stream reader, scanning and parsing every piece: at most `259 · n + 3 · p + 75` steps |
+
+Not covered: the bindings' own code and constant factors (the benchmarks'
+doubling tests are for that), and bit-level costs of big numbers (a hex
+literal's conversion is quadratic in its digits, at most
+`maxNumberLength`). Schema decoding (I7) is open.
 
 Both directions are proven one file per part of the parser: numbers and
 strings, whitespace and nested comments, byte strings, block strings, and
@@ -293,9 +316,10 @@ cases of `test-suite/schema` pass with it, and every schema file in
 
 | Theorem | Says |
 |---|---|
-| `Source.reach_finite` (I6) | In a file with regular generics (§9.10: `GrowthOk`), the instances reachable from any types `ts` are at most `instBound F ts`, a number computed from the file and `ts` |
-| `check_finite` (I6) | The same for every file `check` accepts: its rule for §9.10 (`checkGrowth`) gives `GrowthOk` (`checkGrowth_ok`, through `reaches_complete`: the checker finds every definition a definition reaches) |
-| `doubling_infinite`, `doubling_checks_without_groups`, `doubling_rejected` | §9.10's example (`type A a = < X (B (P a a)) \| Done >`, `type B a = < Y (A (P a a)) \| Stop >`) passes every other rule, reaches infinitely many instances, and is rejected by the rule for groups |
+| `Source.reach_finite` (I6) | In a file without an expansive cycle (§9.10: `GrowthOk`, no expanding edge of the parameter graph on a cycle), the instances reachable from any types `ts` are at most `instBound F ts`, a number computed from the file and `ts` |
+| `check_finite` (I6) | The same for every file `check` accepts: its rule for §9.10 (`checkGrowth`) holds exactly when `GrowthOk` does (`checkGrowth_iff`, through `iterReach_complete`/`iterReach_sound`: the checker's rounds find exactly the parameters a parameter leads to) |
+| `Source.infinite_of_expansive`, `Source.growthOk_iff_finite`, `checkGrowth_iff_finite` (I6) | The converse: in a file `declare` and `checkParams` accept (`WellFormed`), an expanding edge on a cycle makes a type without parameters (`A Int … Int`) reach infinitely many instances; so §9.10 holds exactly when every type reaches finitely many, and `checkGrowth` decides it |
+| `doubling_infinite`, `doubling_checks_without_growth`, `doubling_rejected` | §9.10's example (`type A a = < X (B (P a a)) \| Done >`, `type B a = < Y (A (P a a)) \| Stop >`) passes every other rule, reaches infinitely many instances, and is rejected by §9.10's rule |
 | `Source.instances_reach`, `Source.instances_some` | What the reference computes is exactly the reachable instances; for a checked file it returns whenever `instBound` is within the bindings' limit |
 | `load_decode` (I4) | For every schema file `load` accepts and every name in it, decoding any value never fails with `unknown-type` or `unguarded-recursion`; `whnf_ok`: following names succeeds on every closed type within `env.fuel` steps |
 

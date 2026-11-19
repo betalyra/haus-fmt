@@ -64,7 +64,7 @@ line = |result| match result {
 ## With `--canonical`: the canonical form of each value (spec §12), as JSON strings.
 canonical_line : Try(List(Value), Value.ParseError) -> Str
 canonical_line = |result| match result {
-	Ok(values) => "ok [${Str.join_with(values.map(|v| Value.to_test_json(Text(Encode.canonical(v)))), ",")}]"
+	Ok(values) => "ok [${Str.join_with(values.map(|v| Value.to_test_json(Text(Encode.canonical(v) ?? "(no canonical form)"))), ",")}]"
 	Err(e) => line(Err(e))
 }
 

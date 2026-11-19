@@ -147,4 +147,194 @@ Types := [].{
 	encode_int_tree : IntTree, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
 	encode_int_tree = |v, e| encode_g_tree(v, e, Encode.int)
 
+	## generics whose instances can't grow without bound: no parameter passes, inside a
+	## bigger type, along a cycle of references back to itself (§9.10, the expansive-cycle rule)
+	##
+	## haus type `types#Node`.
+	Node(a) := { value : a, meta : Meta }
+
+	decode_node : Value, (Value -> Try(a, Decode.Error)) -> Try(Node(a), Decode.Error)
+	decode_node = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ value: Decode.field(fs, "value", decode_a)?, meta: Decode.field(fs, "meta", read_value_meta)? })
+	}
+
+	encode_node : Node(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_node = |v, e, encode_a| Encode.record(e, [("value", Encode.required(v.value, encode_a)), ("meta", Encode.required(v.meta, encode_meta))])
+
+	## haus type `types#Meta`.
+	Meta := { history : List(Node(Str)) }
+
+	decode_meta : Value -> Try(Meta, Decode.Error)
+	decode_meta = |v| Decode.within_depth(v, read_value_meta)
+
+	read_value_meta : Value -> Try(Meta, Decode.Error)
+	read_value_meta = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ history: Decode.field(fs, "history", |x15| Decode.list(x15, |x13| decode_node(x13, Decode.str)))? })
+	}
+
+	encode_meta : Meta, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_meta = |v, e| Encode.record(e, [("history", Present(|e16| Encode.list(v.history, e16, |x14, e14| encode_node(x14, e14, Encode.str))))])
+
+	## haus type `types#IntNode`.
+	IntNode : Node(Int)
+
+	decode_int_node : Value -> Try(IntNode, Decode.Error)
+	decode_int_node = |v| Decode.within_depth(v, read_value_int_node)
+
+	read_value_int_node : Value -> Try(IntNode, Decode.Error)
+	read_value_int_node = |v| decode_node(v, Decode.int)
+
+	encode_int_node : IntNode, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_int_node = |v, e| encode_node(v, e, Encode.int)
+
+	## haus type `types#Code`.
+	Code := [Num(Int), Call(Apply(Code)), Unknown(Str, List(Value))]
+
+	decode_code : Value -> Try(Code, Decode.Error)
+	decode_code = |v| Decode.within_depth(v, read_value_code)
+
+	read_value_code : Value -> Try(Code, Decode.Error)
+	read_value_code = |v| match v {
+		Tag("Num", [a0]) => Ok(Num(Decode.arg("Num", 0, a0, Decode.int)?))
+		Tag("Call", [p]) => Ok(Call(Decode.record_arg("Call", p, |x18| decode_apply(x18, read_value_code))?))
+		Tag("Num", _) => Decode.arity("Num", 1)
+		Tag("Call", _) => Decode.arity("Call", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Code)", v)
+	}
+
+	encode_code : Code, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_code = |v, e| match v {
+		Num(a0) => Encode.tagged("Num", e, |e17| Encode.int(a0, e17))
+		Call(a0) => Encode.tagged("Call", e, |e19| encode_apply(a0, e19, encode_code))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	## haus type `types#Apply`.
+	Apply(a) := { f : a, args : List(Code) }
+
+	decode_apply : Value, (Value -> Try(a, Decode.Error)) -> Try(Apply(a), Decode.Error)
+	decode_apply = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ f: Decode.field(fs, "f", decode_a)?, args: Decode.field(fs, "args", |x20| Decode.list(x20, read_value_code))? })
+	}
+
+	encode_apply : Apply(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_apply = |v, e, encode_a| Encode.record(e, [("f", Encode.required(v.f, encode_a)), ("args", Present(|e21| Encode.list(v.args, e21, encode_code)))])
+
+	## haus type `types#Swap`.
+	Swap(a, b) := [S(a, Swap(b, a)), E, Unknown(Str, List(Value))]
+
+	decode_swap : Value, (Value -> Try(a, Decode.Error)), (Value -> Try(b, Decode.Error)) -> Try(Swap(a, b), Decode.Error)
+	decode_swap = |v, decode_a, decode_b| match v {
+		Tag("S", [a0, a1]) => Ok(S(Decode.arg("S", 0, a0, decode_a)?, Decode.arg("S", 1, a1, |x22| decode_swap(x22, decode_b, decode_a))?))
+		Tag("E", []) => Ok(E)
+		Tag("S", _) => Decode.arity("S", 2)
+		Tag("E", _) => Decode.arity("E", 0)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Swap)", v)
+	}
+
+	encode_swap : Swap(a, b), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), (b, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_swap = |v, e, encode_a, encode_b| match v {
+		S(a0, a1) => Encode.tagged_args("S", e, [|e23| encode_a(a0, e23), |e24| encode_swap(a1, e24, encode_b, encode_a)])
+		E => Encode.tag("E", e)
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	## haus type `types#SwapIntString`.
+	SwapIntString : Swap(Int, Str)
+
+	decode_swap_int_string : Value -> Try(SwapIntString, Decode.Error)
+	decode_swap_int_string = |v| Decode.within_depth(v, read_value_swap_int_string)
+
+	read_value_swap_int_string : Value -> Try(SwapIntString, Decode.Error)
+	read_value_swap_int_string = |v| decode_swap(v, Decode.int, Decode.str)
+
+	encode_swap_int_string : SwapIntString, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_swap_int_string = |v, e| encode_swap(v, e, Encode.int, Encode.str)
+
+	## haus type `types#K`.
+	K(a) := [X(K(Int)), Y(a), Unknown(Str, List(Value))]
+
+	decode_k : Value, (Value -> Try(a, Decode.Error)) -> Try(K(a), Decode.Error)
+	decode_k = |v, decode_a| match v {
+		Tag("X", [a0]) => Ok(X(Decode.arg("X", 0, a0, |x25| decode_k(x25, Decode.int))?))
+		Tag("Y", [a0]) => Ok(Y(Decode.arg("Y", 0, a0, decode_a)?))
+		Tag("X", _) => Decode.arity("X", 1)
+		Tag("Y", _) => Decode.arity("Y", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (K)", v)
+	}
+
+	encode_k : K(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_k = |v, e, encode_a| match v {
+		X(a0) => Encode.tagged("X", e, |e26| encode_k(a0, e26, Encode.int))
+		Y(a0) => Encode.tagged("Y", e, |e27| encode_a(a0, e27))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	## haus type `types#KString`.
+	KString : K(Str)
+
+	decode_k_string : Value -> Try(KString, Decode.Error)
+	decode_k_string = |v| Decode.within_depth(v, read_value_k_string)
+
+	read_value_k_string : Value -> Try(KString, Decode.Error)
+	read_value_k_string = |v| decode_k(v, Decode.str)
+
+	encode_k_string : KString, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_k_string = |v, e| encode_k(v, e, Encode.str)
+
+	## haus type `types#Up`.
+	Up(a) := [Lift(Down(List(a))), Unknown(Str, List(Value))]
+
+	decode_up : Value, (Value -> Try(a, Decode.Error)) -> Try(Up(a), Decode.Error)
+	decode_up = |v, decode_a| match v {
+		Tag("Lift", [a0]) => Ok(Lift(Decode.arg("Lift", 0, a0, |x30| decode_down(x30, |x28| Decode.list(x28, decode_a)))?))
+		Tag("Lift", _) => Decode.arity("Lift", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Up)", v)
+	}
+
+	encode_up : Up(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_up = |v, e, encode_a| match v {
+		Lift(a0) => Encode.tagged("Lift", e, |e31| encode_down(a0, e31, |x29, e29| Encode.list(x29, e29, encode_a)))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	## haus type `types#Down`.
+	Down(b) := [Val(b), Restart(Up(Int)), Unknown(Str, List(Value))]
+
+	decode_down : Value, (Value -> Try(b, Decode.Error)) -> Try(Down(b), Decode.Error)
+	decode_down = |v, decode_b| match v {
+		Tag("Val", [a0]) => Ok(Val(Decode.arg("Val", 0, a0, decode_b)?))
+		Tag("Restart", [a0]) => Ok(Restart(Decode.arg("Restart", 0, a0, |x33| decode_up(x33, Decode.int))?))
+		Tag("Val", _) => Decode.arity("Val", 1)
+		Tag("Restart", _) => Decode.arity("Restart", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (Down)", v)
+	}
+
+	encode_down : Down(b), Encode.Encoder, (b, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_down = |v, e, encode_b| match v {
+		Val(a0) => Encode.tagged("Val", e, |e32| encode_b(a0, e32))
+		Restart(a0) => Encode.tagged("Restart", e, |e34| encode_up(a0, e34, Encode.int))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	## haus type `types#UpString`.
+	UpString : Up(Str)
+
+	decode_up_string : Value -> Try(UpString, Decode.Error)
+	decode_up_string = |v| Decode.within_depth(v, read_value_up_string)
+
+	read_value_up_string : Value -> Try(UpString, Decode.Error)
+	read_value_up_string = |v| decode_up(v, Decode.str)
+
+	encode_up_string : UpString, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_up_string = |v, e| encode_up(v, e, Encode.str)
+
 }

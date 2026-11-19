@@ -485,20 +485,37 @@ func TestDecodeKeepsInput(t *testing.T) {
 	}
 }
 
-// Generic types whose instances would grow through another definition are
-// rejected where the growing reference is written, before any instance is
-// made (§9.10): through two definitions, and through three with the growing
-// argument only on the way back.
+// Generic types whose instances could grow without bound (§9.10, the
+// expansive-cycle rule: an expanding edge of the parameter graph on a cycle)
+// are rejected where the first growing reference is written, before any
+// instance is made.
 func TestGrowingInstances(t *testing.T) {
+	const grow = ": instances could grow without bound"
 	for _, c := range []struct {
 		schema    string
 		line, col int
-		start     string
+		message   string
 	}{
 		{"type P a b = { l: a, r: b }\ntype A a = < X (B (P a a)) | Done >\ntype B a = < Y (A (P a a)) | Stop >\ntype Root = A Int",
-			2, 17, "A refers to B, which refers back to A"},
+			2, 17, "A passes its parameter a to B inside a bigger type, and it comes back (A → B → A)" + grow},
+		// Through three definitions, with the growing argument only on the way back.
 		{"type P a b = { l: a, r: b }\ntype A a = < X (B a) | Done >\ntype B a = < Y (C a) | Stop >\ntype C a = < Z (A (P a a)) | End >\ntype Root = A Int",
-			4, 17, "C refers to A, which refers back to C"},
+			4, 17, "C passes its parameter a to A inside a bigger type, and it comes back (C → A → B → C)" + grow},
+		{"type Pair a b = { l: a, r: b }\ntype T a = < X (T (Pair a a)) | E >",
+			2, 17, "T passes its parameter a to itself inside a bigger type" + grow},
+		{"type L a = < X (L (Array a)) | E >", 1, 17, "L passes its parameter a to itself inside a bigger type" + grow},
+		{"type R a = < X (R { v: a }) | E >", 1, 17, "R passes its parameter a to itself inside a bigger type" + grow},
+		// The parameters swap places, and one grows on the way back.
+		{"type S a b = < X a (S b (Array a)) | E >",
+			1, 21, "S passes its parameter a to itself inside a bigger type, and it comes back (S → S → S)" + grow},
+		// One expanding edge on a cycle through three definitions.
+		{"type A a = < X (B a) | E >\ntype B b = < Y (C (Array b)) >\ntype C c = < Z (A c) >",
+			2, 17, "B passes its parameter b to C inside a bigger type, and it comes back (B → C → A → B)" + grow},
+		// Nested references count on their own: the inner one isn't expanding, the outer one is.
+		{"type P a b = { l: a, r: b }\ntype W a = < X (W (Maybe (P a a))) | E >",
+			2, 17, "W passes its parameter a to itself inside a bigger type" + grow},
+		// The second parameter grows, not the first.
+		{"type G a b = < X (G a (Array b)) | E >", 1, 19, "G passes its parameter b to itself inside a bigger type" + grow},
 	} {
 		start := time.Now()
 		_, err := schema.Parse([]byte(c.schema), schema.Options{})
@@ -506,8 +523,8 @@ func TestGrowingInstances(t *testing.T) {
 			t.Errorf("took %v", d)
 		}
 		var e *haus.Error
-		if !errors.As(err, &e) || e.Code != haus.CodeGrowingRecursion || e.Line != c.line || e.Column != c.col || !strings.HasPrefix(e.Message, c.start) {
-			t.Errorf("got %v", err)
+		if !errors.As(err, &e) || e.Code != haus.CodeGrowingRecursion || e.Line != c.line || e.Column != c.col || e.Message != c.message {
+			t.Errorf("%q: got %v", c.schema, err)
 		}
 	}
 	s := mustSchema(t, "type GTree a = { value: a, kids: Forest a }\ntype Forest a = Array (GTree a)\n"+
@@ -518,6 +535,39 @@ func TestGrowingInstances(t *testing.T) {
 	}
 	if _, err := s.Decode("Root", v); err != nil {
 		t.Error(err)
+	}
+}
+
+// Generic types whose instances can't grow without bound, though they pass
+// other arguments than their own parameters around a cycle (§9.10).
+func TestParametersThatGrowOffAnyCycle(t *testing.T) {
+	s := mustSchema(t, `type Node a = { value: a, meta: Meta }
+type Meta = { history: Array (Node String) }
+type Expr = < Num Int | Call (Apply Expr) >
+type Apply a = { f: a, args: Array Expr }
+type Swap a b = < S a (Swap b a) | E >
+type K a = < X (K Int) | Y a >
+type Pair a b = { l: a, r: b }
+type A a = < X (B (Pair a a)) >
+type B b = < Y b | Z (A Int) >
+type Root = { n: Node Int, e: Expr, s: Swap Int String, k: K String, a: A String }`)
+	v, err := haus.Parse([]byte(`{ n: { value: 1, meta: { history: [{ value: "x", meta: { history: [] } }] } },
+  e: Call({ f: Num(1), args: [Num(2)] }),
+  s: S(1, S("a", S(2, E))),
+  k: X(X(Y(3))),
+  a: X(Y({ l: "p", r: "q" })) }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Decode("Root", v); err != nil {
+		t.Error(err)
+	}
+	bad, err := haus.Parse([]byte(`{ n: { value: "1", meta: { history: [] } }, e: Num(1), s: E, k: Y("k"), a: X(Z(X(Y({ l: 1, r: 2 })))) }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Decode("Root", bad); err == nil {
+		t.Error("Node Int takes a string")
 	}
 }
 

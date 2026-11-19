@@ -2,44 +2,19 @@ import Haus.SchemaFile.Check
 import Haus.SchemaFile.Terms
 
 /-!
-# Groups of definitions (spec §9.10)
+# The parameter graph (spec §9.10)
 
-`Source.Reaches F m n`: the definition `m` refers to `n`, directly or through
-other definitions (or is `n`). `reaches_complete`: the checker's
-`Source.reaches`, a fixed number of rounds of following references, finds
-every such `n`, since the names found grow every round until none is added
-and there are only so many names. So `checkGrowth_ok`: a file that passes
-`checkGrowth` has `GrowthOk`, the property the finiteness of instances needs
-(`Haus.SchemaFile.Finite`).
+`Path next a b`: following `next` leads from `a` to `b` (or `a` is `b`).
+`iterReach_complete`: a fixed number of rounds of following `next` (the
+checker's `iterReach`) finds every such `b`, since the elements found grow
+every round until none is added, and there are only so many of them;
+`iterReach_sound`: it finds nothing else. For the parameter graph
+(`Source.paramEdges`), `checkGrowth_iff`: a file passes `checkGrowth` exactly
+when it has `GrowthOk`, no expanding edge on a cycle, the property the
+finiteness of instances needs (`Haus.SchemaFile.Finite`).
 -/
 
 namespace Haus.SchemaFile
-
-/-- `a`'s definition refers to the definition `b`. -/
-def Source.Edge (F : Source) (a b : String) : Prop :=
-  ∃ d, F.lookup a = some d ∧ ∃ es, (b, es) ∈ F.edges d
-
-/-- `a` refers to `b`, directly or not, or is `b`. -/
-inductive Source.Reaches (F : Source) : String → String → Prop
-  | refl (a : String) : Source.Reaches F a a
-  | step {a b c : String} : F.Edge a b → Source.Reaches F b c → Source.Reaches F a c
-
-theorem Source.Reaches.trans {F : Source} {a b c : String} (h₁ : F.Reaches a b) (h₂ : F.Reaches b c) :
-    F.Reaches a c := by
-  induction h₁ with
-  | refl => exact h₂
-  | step e _ ih => exact .step e (ih h₂)
-
-theorem Source.Reaches.single {F : Source} {a b : String} (e : F.Edge a b) : F.Reaches a b :=
-  .step e (.refl b)
-
-/--
-§9.10, the property: wherever a definition `a` refers to a definition `m`
-that refers back to it (directly or not, or is `a`), every argument is a
-parameter.
--/
-def GrowthOk (F : Source) : Prop :=
-  ∀ a d, F.lookup a = some d → ∀ m es, (m, es) ∈ F.edges d → F.Reaches m a → ∀ e ∈ es, Tm.isVar e = true
 
 /-! ## The definitions -/
 
@@ -62,16 +37,6 @@ theorem Source.mem_names {F : Source} {n : String} (h : F.defined n = true) : n 
 theorem Source.mem_edges {F : Source} {d : Def} {r : String × List Tm} :
     r ∈ F.edges d ↔ r ∈ d.body.refs ∧ F.defined r.1 = true := by
   simp [Source.edges]
-
-theorem Source.mem_next {F : Source} {a b : String} : b ∈ F.next a ↔ F.Edge a b := by
-  unfold Source.next Source.Edge
-  cases hl : F.lookup a with
-  | none => simp
-  | some d => simp
-
-theorem Source.next_names {F : Source} {a b : String} (h : b ∈ F.next a) : b ∈ F.names := by
-  obtain ⟨d, _, es, hb⟩ := Source.mem_next.1 h
-  exact Source.mem_names (Source.mem_edges.1 hb).2
 
 /-! ## Adding new elements -/
 
@@ -137,165 +102,229 @@ theorem addNew_stable {xs ys : List α} (h : (addNew xs ys).length = xs.length) 
 
 end
 
-/-! ## Rounds of following references -/
+/-! ## Rounds of following `next` -/
 
-/-- One round: the names, and those they refer to. -/
-def Source.round (F : Source) (S : List String) : List String := addNew S (S.flatMap F.next)
+/-- Following `next` leads from `a` to `b`, or `a` is `b`. -/
+inductive Path {α : Type} (next : α → List α) : α → α → Prop
+  | refl (a : α) : Path next a a
+  | step {a b c : α} : b ∈ next a → Path next b c → Path next a c
 
-theorem Source.reachIter_succ (F : Source) : ∀ (k : Nat) (S : List String),
-    F.reachIter (k + 1) S = F.round (F.reachIter k S)
+theorem Path.trans {α : Type} {next : α → List α} {a b c : α} (h₁ : Path next a b) (h₂ : Path next b c) :
+    Path next a c := by
+  induction h₁ with
+  | refl => exact h₂
+  | step e _ ih => exact .step e (ih h₂)
+
+theorem Path.single {α : Type} {next : α → List α} {a b : α} (e : b ∈ next a) : Path next a b :=
+  .step e (.refl b)
+
+section
+variable {α : Type} [BEq α] [LawfulBEq α] (next : α → List α)
+variable {next}
+
+variable (next) in
+/-- One round: the elements, and where `next` leads from them. -/
+def round (S : List α) : List α := addNew S (S.flatMap next)
+
+omit [LawfulBEq α] in
+theorem iterReach_succ : ∀ (k : Nat) (S : List α),
+    iterReach next (k + 1) S = round next (iterReach next k S)
   | 0, S => rfl
   | k + 1, S => by
-    rw [Source.reachIter, Source.reachIter_succ F k]
+    rw [iterReach, iterReach_succ k]
     rfl
 
-theorem Source.reachIter_add (F : Source) : ∀ (j k : Nat) (S : List String),
-    F.reachIter (j + k) S = F.reachIter j (F.reachIter k S)
+omit [LawfulBEq α] in
+theorem iterReach_add : ∀ (j k : Nat) (S : List α),
+    iterReach next (j + k) S = iterReach next j (iterReach next k S)
   | j, 0, S => rfl
   | j, k + 1, S => by
-    show F.reachIter ((j + k) + 1) S = _
-    rw [Source.reachIter, Source.reachIter_add F j k]
+    show iterReach next ((j + k) + 1) S = _
+    rw [iterReach, iterReach_add j k]
     rfl
 
-theorem Source.mem_round {F : Source} {S : List String} {x : String} :
-    x ∈ F.round S ↔ x ∈ S ∨ ∃ y ∈ S, F.Edge y x := by
-  simp [Source.round, mem_addNew, Source.mem_next]
+theorem mem_round {S : List α} {x : α} : x ∈ round next S ↔ x ∈ S ∨ ∃ y ∈ S, x ∈ next y := by
+  simp [round, mem_addNew]
 
-theorem Source.sub_round (F : Source) (S : List String) : S ⊆ F.round S :=
-  fun _ h => Source.mem_round.2 (Or.inl h)
+theorem sub_round (S : List α) : S ⊆ round next S := fun _ h => mem_round.2 (Or.inl h)
 
-theorem Source.round_mono {F : Source} {S T : List String} (h : S ⊆ T) : F.round S ⊆ F.round T := by
+theorem round_mono {S T : List α} (h : S ⊆ T) : round next S ⊆ round next T := by
   intro x hx
-  rcases Source.mem_round.1 hx with hx | ⟨y, hy, e⟩
-  · exact Source.mem_round.2 (Or.inl (h hx))
-  · exact Source.mem_round.2 (Or.inr ⟨y, h hy, e⟩)
+  rcases mem_round.1 hx with hx | ⟨y, hy, e⟩
+  · exact mem_round.2 (Or.inl (h hx))
+  · exact mem_round.2 (Or.inr ⟨y, h hy, e⟩)
 
-theorem Source.reachIter_mono {F : Source} : ∀ (k : Nat) {S T : List String}, S ⊆ T →
-    F.reachIter k S ⊆ F.reachIter k T
+theorem iterReach_mono : ∀ (k : Nat) {S T : List α}, S ⊆ T → iterReach next k S ⊆ iterReach next k T
   | 0, _, _, h => h
-  | k + 1, _, _, h => Source.reachIter_mono k (Source.round_mono h)
+  | k + 1, _, _, h => iterReach_mono k (round_mono h)
 
-theorem Source.reachIter_le {F : Source} {S : List String} : ∀ {j k : Nat}, j ≤ k →
-    F.reachIter j S ⊆ F.reachIter k S
+theorem iterReach_le {S : List α} : ∀ {j k : Nat}, j ≤ k → iterReach next j S ⊆ iterReach next k S
   | j, k, h => by
     induction k with
     | zero => have : j = 0 := by omega
               subst this; exact List.Subset.refl _
     | succ k ih =>
       rcases Nat.lt_or_ge j (k + 1) with hj | hj
-      · rw [Source.reachIter_succ]
-        exact List.Subset.trans (ih (by omega)) (Source.sub_round F _)
+      · rw [iterReach_succ]
+        exact List.Subset.trans (ih (by omega)) (sub_round _)
       · have : j = k + 1 := by omega
         subst this; exact List.Subset.refl _
 
 /-- Once a round adds nothing, no round does. -/
-theorem Source.reachIter_closed {F : Source} {S : List String} (h : F.round S ⊆ S) :
-    ∀ k, F.reachIter k S ⊆ S
+theorem iterReach_closed {S : List α} (h : round next S ⊆ S) : ∀ k, iterReach next k S ⊆ S
   | 0 => List.Subset.refl _
   | k + 1 => by
-    rw [Source.reachIter_succ]
+    rw [iterReach_succ]
     intro x hx
-    rcases Source.mem_round.1 hx with hx | ⟨y, hy, e⟩
-    · exact Source.reachIter_closed h k hx
-    · exact h (Source.mem_round.2 (Or.inr ⟨y, Source.reachIter_closed h k hy, e⟩))
+    rcases mem_round.1 hx with hx | ⟨y, hy, e⟩
+    · exact iterReach_closed h k hx
+    · exact h (mem_round.2 (Or.inr ⟨y, iterReach_closed h k hy, e⟩))
 
-theorem Source.reachIter_nodup {F : Source} : ∀ (k : Nat) {S : List String}, S.Nodup →
-    (F.reachIter k S).Nodup
+theorem iterReach_nodup : ∀ (k : Nat) {S : List α}, S.Nodup → (iterReach next k S).Nodup
   | 0, _, h => h
-  | k + 1, _, h => Source.reachIter_nodup k (nodup_addNew h)
+  | k + 1, _, h => iterReach_nodup k (nodup_addNew h)
 
-theorem Source.reachIter_names {F : Source} {m : String} : ∀ (k : Nat),
-    F.reachIter k [m] ⊆ m :: F.names
-  | 0 => by simp [Source.reachIter]
+theorem iterReach_sub {U : List α} (hU : ∀ a, ∀ b ∈ next a, b ∈ U) {m : α} : ∀ (k : Nat),
+    iterReach next k [m] ⊆ m :: U
+  | 0 => by simp [iterReach]
   | k + 1 => by
-    rw [Source.reachIter_succ]
+    rw [iterReach_succ]
     intro x hx
-    rcases Source.mem_round.1 hx with hx | ⟨y, _, e⟩
-    · exact Source.reachIter_names k hx
-    · exact List.mem_cons_of_mem _ (Source.next_names (Source.mem_next.2 e))
+    rcases mem_round.1 hx with hx | ⟨y, _, e⟩
+    · exact iterReach_sub hU k hx
+    · exact List.mem_cons_of_mem _ (hU y x e)
 
+omit [LawfulBEq α] in
 /-- Each round that adds something makes the list longer. -/
-theorem Source.reachIter_grows {F : Source} {m : String} : ∀ (i : Nat),
-    (∀ j < i, ¬ F.round (F.reachIter j [m]) ⊆ F.reachIter j [m]) → i + 1 ≤ (F.reachIter i [m]).length
-  | 0, _ => by simp [Source.reachIter]
+theorem iterReach_grows {m : α} : ∀ (i : Nat),
+    (∀ j < i, ¬ round next (iterReach next j [m]) ⊆ iterReach next j [m]) →
+    i + 1 ≤ (iterReach next i [m]).length
+  | 0, _ => by simp [iterReach]
   | i + 1, h => by
-    have ih := Source.reachIter_grows i (fun j hj => h j (by omega))
-    rw [Source.reachIter_succ]
-    obtain ⟨zs, hz⟩ := addNew_prefix (F.reachIter i [m]) ((F.reachIter i [m]).flatMap F.next)
+    have ih := iterReach_grows i (fun j hj => h j (by omega))
+    rw [iterReach_succ]
+    obtain ⟨zs, hz⟩ := addNew_prefix (iterReach next i [m]) ((iterReach next i [m]).flatMap next)
     have hne : zs ≠ [] := by
       intro e
       subst e
       apply h i (by omega)
       intro x hx
-      simpa [Source.round, hz] using hx
+      simpa [round, hz] using hx
     have : 0 < zs.length := List.length_pos_iff.2 hne
-    simp only [Source.round, hz, List.length_append]
+    simp only [round, hz, List.length_append]
     omega
 
-/-- After as many rounds as there are definitions, and one more, nothing is added. -/
-theorem Source.reachIter_all (F : Source) (m : String) (k : Nat) :
-    F.reachIter k [m] ⊆ F.reachable m := by
-  have : ∃ j ≤ F.defs.length, F.round (F.reachIter j [m]) ⊆ F.reachIter j [m] := by
+/-- After as many rounds as there are places to go, and one more, nothing is added. -/
+theorem iterReach_all {U : List α} (hU : ∀ a, ∀ b ∈ next a, b ∈ U) (m : α) (k : Nat) :
+    iterReach next k [m] ⊆ iterReach next (U.length + 1) [m] := by
+  have : ∃ j ≤ U.length, round next (iterReach next j [m]) ⊆ iterReach next j [m] := by
     apply Classical.byContradiction
     intro hno
-    have h := Source.reachIter_grows (F := F) (m := m) (F.defs.length + 1) (fun j hj hs =>
+    have h := iterReach_grows (next := next) (m := m) (U.length + 1) (fun j hj hs =>
       hno ⟨j, by omega, hs⟩)
-    have hle := List.Nodup.length_le_of_subset (Source.reachIter_nodup (F.defs.length + 1) (by simp))
-      (Source.reachIter_names (F := F) (m := m) (F.defs.length + 1))
-    simp [Source.names] at hle
+    have hle := List.Nodup.length_le_of_subset (iterReach_nodup (U.length + 1) (by simp))
+      (iterReach_sub hU (m := m) (U.length + 1))
+    simp at hle
     omega
   obtain ⟨j, hj, hs⟩ := this
-  have hT : F.reachIter j [m] ⊆ F.reachable m := Source.reachIter_le (by omega)
+  have hT : iterReach next j [m] ⊆ iterReach next (U.length + 1) [m] := iterReach_le (by omega)
   rcases Nat.lt_or_ge k j with hk | hk
-  · exact List.Subset.trans (Source.reachIter_le (by omega)) hT
+  · exact List.Subset.trans (iterReach_le (by omega)) hT
   · have : k = (k - j) + j := by omega
-    rw [this, Source.reachIter_add]
-    exact List.Subset.trans (Source.reachIter_closed hs _) hT
+    rw [this, iterReach_add]
+    exact List.Subset.trans (iterReach_closed hs _) hT
 
-theorem Source.reaches_rounds {F : Source} {m n : String} (h : F.Reaches m n) :
-    ∃ k, n ∈ F.reachIter k [m] := by
+theorem path_rounds {m n : α} (h : Path next m n) : ∃ k, n ∈ iterReach next k [m] := by
   induction h with
-  | refl a => exact ⟨0, by simp [Source.reachIter]⟩
+  | refl a => exact ⟨0, by simp [iterReach]⟩
   | @step a b c e _ ih =>
     obtain ⟨k, hk⟩ := ih
     refine ⟨k + 1, ?_⟩
-    have : [b] ⊆ F.round [a] := by
+    have : [b] ⊆ round next [a] := by
       intro x hx
       simp at hx; subst hx
-      exact Source.mem_round.2 (Or.inr ⟨a, by simp, e⟩)
-    exact Source.reachIter_mono k this hk
+      exact mem_round.2 (Or.inr ⟨a, by simp, e⟩)
+    exact iterReach_mono k this hk
 
-/-- The checker finds every definition a definition reaches. -/
-theorem Source.reaches_complete {F : Source} {m n : String} (h : F.Reaches m n) : F.reaches m n = true := by
-  obtain ⟨k, hk⟩ := Source.reaches_rounds h
-  simpa [Source.reaches] using Source.reachIter_all F m k hk
+/-- The rounds find every element a path leads to. -/
+theorem iterReach_complete {U : List α} (hU : ∀ a, ∀ b ∈ next a, b ∈ U) {m n : α} (h : Path next m n) :
+    n ∈ iterReach next (U.length + 1) [m] := by
+  obtain ⟨k, hk⟩ := path_rounds h
+  exact iterReach_all hU m k hk
+
+/-- The rounds find nothing a path doesn't lead to. -/
+theorem iterReach_sound : ∀ (k : Nat) {S : List α} {x : α}, x ∈ iterReach next k S → ∃ s ∈ S, Path next s x
+  | 0, S, x, h => ⟨x, h, .refl x⟩
+  | k + 1, S, x, h => by
+    obtain ⟨s, hs, p⟩ := iterReach_sound k h
+    rcases mem_round.1 hs with hs | ⟨y, hy, e⟩
+    · exact ⟨s, hs, p⟩
+    · exact ⟨y, hy, (Path.single e).trans p⟩
+
+end
+
+/-! ## The parameter graph -/
+
+/-- Following the edges of the parameter graph leads from `x` to `y`. -/
+abbrev Source.PReach (F : Source) : PNode → PNode → Prop := Path F.pnext
+
+theorem Source.mem_pnext {F : Source} {x y : PNode} : y ∈ F.pnext x ↔ ∃ b, (x, y, b) ∈ F.paramEdges := by
+  simp only [Source.pnext, List.mem_map, List.mem_filter, beq_iff_eq]
+  constructor
+  · rintro ⟨⟨x', y', b⟩, ⟨h, rfl⟩, rfl⟩
+    exact ⟨b, h⟩
+  · rintro ⟨b, h⟩
+    exact ⟨(x, y, b), ⟨h, rfl⟩, rfl⟩
+
+theorem Source.pnext_targets (F : Source) : ∀ a, ∀ b ∈ F.pnext a, b ∈ F.paramEdges.map (·.2.1) := by
+  intro a b hb
+  obtain ⟨c, h⟩ := Source.mem_pnext.1 hb
+  exact List.mem_map.2 ⟨_, h, rfl⟩
+
+theorem Source.mem_preachable {F : Source} {x y : PNode} : y ∈ F.preachable x ↔ F.PReach x y := by
+  constructor
+  · intro h
+    obtain ⟨s, hs, p⟩ := iterReach_sound _ h
+    simp at hs; subst hs; exact p
+  · intro h
+    have := iterReach_complete F.pnext_targets h
+    simpa [Source.preachable] using this
+
+/--
+§9.10, the property: no expanding edge of the parameter graph lies on a
+cycle, i.e. from the parameter it leads to, no path leads back.
+-/
+def GrowthOk (F : Source) : Prop :=
+  ∀ x y, (x, y, true) ∈ F.paramEdges → ¬ F.PReach y x
+
+theorem Source.expansive?_none {F : Source} : F.expansive? = none ↔ GrowthOk F := by
+  unfold Source.expansive? GrowthOk
+  rw [Option.map_eq_none_iff, List.find?_eq_none]
+  constructor
+  · intro h x y hxy hr
+    have := h _ hxy
+    simp [Source.mem_preachable.2 hr] at this
+  · rintro h ⟨x, y, b⟩ hxy
+    cases b with
+    | false => simp
+    | true =>
+      have := h x y hxy
+      simpa [Source.mem_preachable] using this
+
+/-- **The checker is exact**: a file passes `checkGrowth` exactly when it has `GrowthOk`. -/
+theorem checkGrowth_iff {F : Source} : checkGrowth F = .ok () ↔ GrowthOk F := by
+  rw [← Source.expansive?_none]
+  unfold checkGrowth
+  simp only [Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+  split
+  · next h => simp only [h, iff_true]; rfl
+  · next h =>
+    rw [h]
+    constructor
+    · intro e; split at e <;> cases e
+    · intro e; cases e
 
 /-- A file that passes `checkGrowth` has `GrowthOk`. -/
-theorem checkGrowth_ok {F : Source} (h : checkGrowth F = .ok ()) : GrowthOk F := by
-  have hv : growthViolation? F true = none := by
-    unfold checkGrowth at h
-    split at h
-    · assumption
-    · split at h <;> cases h
-  intro a d hd m es hm hr e he
-  obtain ⟨hdm, rfl⟩ := Source.lookup_mem hd
-  have hok : growthOk F true d (m, es) = true := by
-    unfold growthViolation? at hv
-    rw [List.findSome?_eq_none_iff] at hv
-    have := hv d hdm
-    rw [Option.map_eq_none_iff, List.find?_eq_none] at this
-    simpa using this (m, es) hm
-  unfold growthOk at hok
-  split at hok
-  · next hmn =>
-    simp at hok
-    rcases hok with rfl | rfl
-    · simp at he
-    · simp at he
-      obtain ⟨p, _, rfl⟩ := he
-      rfl
-  · have hreach := Source.reaches_complete hr
-    simp [hreach] at hok
-    exact hok e he
+theorem checkGrowth_ok {F : Source} (h : checkGrowth F = .ok ()) : GrowthOk F := checkGrowth_iff.1 h
 
 end Haus.SchemaFile

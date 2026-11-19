@@ -8,7 +8,8 @@
 The result is a set of resolved types (`Type`) that `haus.schema` turns into
 decoders. The checker enforces what keeps decoding linear (spec §9.9, §9.10):
 recursion passes through a record field, array element or variant payload,
-and a generic type refers to itself only with its own parameters.
+and generic types can't grow without bound: no type parameter passes, inside a
+bigger type, along a cycle of references back to itself.
 
 A port of typescript/packages/haus/src/schema-file.ts. Errors are
 `HausSchemaFileError`, with the position in the schema file.
@@ -1106,15 +1107,18 @@ def _refs_of(d: _Def) -> Iterator[tuple[_Def, tuple[_Node, ...], int]]:
                 yield to, args, pos
 
 
-def _components(nodes: Sequence[_Def], edges: Callable[[_Def], Sequence[_Def]]) -> dict[_Def, int]:
-    """The strongly connected components of a graph: each node's number (Tarjan's algorithm, without recursion)."""
-    index: dict[_Def, int] = {}
-    low: dict[_Def, int] = {}
-    component: dict[_Def, int] = {}
-    stack: list[_Def] = []
-    work: list[tuple[_Def, Iterator[_Def]]] = []
+_N = TypeVar("_N")
 
-    def visit(n: _Def) -> None:
+
+def _components(nodes: Sequence[_N], edges: Callable[[_N], Sequence[_N]]) -> dict[_N, int]:
+    """The strongly connected components of a graph: each node's number (Tarjan's algorithm, without recursion)."""
+    index: dict[_N, int] = {}
+    low: dict[_N, int] = {}
+    component: dict[_N, int] = {}
+    stack: list[_N] = []
+    work: list[tuple[_N, Iterator[_N]]] = []
+
+    def visit(n: _N) -> None:
         index[n] = low[n] = len(index)
         stack.append(n)
         work.append((n, iter(edges(n))))
@@ -1140,38 +1144,89 @@ def _components(nodes: Sequence[_Def], edges: Callable[[_Def], Sequence[_Def]]) 
                 while True:
                     m = stack.pop()
                     component[m] = count
-                    if m is n:
+                    if m == n:
                         break
                 count += 1
     return component
 
 
-def _check_groups(defs: Sequence[_Def]) -> None:
-    """§9.10, through other definitions: in a group of definitions that refer to each other, directly or not
-    (a strongly connected component of the references), a reference to another member passes only parameters
-    of the referring definition, so instances can't grow around the group. Checked on the definitions as
-    written, before anything is instantiated. (A reference to itself passes its own parameters in order,
-    checked before.)
+def _shortest_path(start: _N, goal: _N, edges: Callable[[_N], Sequence[_N]]) -> list[_N]:
+    """The nodes of a shortest path from `start` to `goal` (breadth first), both included; `goal` must be reachable."""
+    parent: dict[_N, _N | None] = {start: None}
+    queue = [start]
+    i = 0
+    while i < len(queue) and goal not in parent:
+        for m in edges(queue[i]):
+            if m not in parent:
+                parent[m] = queue[i]
+                queue.append(m)
+        i += 1
+    path = [goal]
+    while (p := parent[path[-1]]) is not None:
+        path.append(p)
+    return path[::-1]
+
+
+_ParamNode: TypeAlias = tuple[_Def, int]
+"""A type parameter of a definition, by its index: a node of the parameter graph (§9.10)."""
+
+
+@dataclass(frozen=True, slots=True)
+class _ParamEdge:
+    """Parameter `source` occurs in the argument a reference (at `pos`) passes to parameter `target`;
+    expanding when the argument isn't `source` itself."""
+
+    source: _ParamNode
+    target: _ParamNode
+    expanding: bool
+    pos: int
+
+
+def _param_edges(d: _Def) -> Iterator[_ParamEdge]:
+    """The edges of the parameter graph from `d`'s parameters: references, arguments and occurrences in order."""
+    params = d.params
+    for to, args, pos in _refs_of(d):
+        for i, arg in enumerate(args[: len(to.params)]):
+            for n in _nodes(arg):
+                if isinstance(n, _Var):
+                    yield _ParamEdge((d, params.index(n.name)), (to, i), not isinstance(arg, _Var), pos)
+
+
+def _check_expansive_cycles(defs: Sequence[_Def]) -> None:
+    """§9.10, the expansive-cycle rule: a graph with one node per type parameter of every definition, and for
+    each reference `B t1 … tn` in the body of `A`, an edge from each parameter of `A` that occurs in `ti` to the
+    i-th parameter of `B`, expanding when `ti` isn't that parameter itself. An expanding edge on a cycle (both
+    ends in one strongly connected component) means instances could grow without bound; without one there are
+    finitely many. Checked on the definitions as written, before anything is instantiated; the first such edge
+    (definitions, references, arguments and occurrences in order) is reported.
     """
-    refs = {d: list(_refs_of(d)) for d in defs}
-    targets = {d: [to for to, _, _ in refs[d]] for d in defs}
-    group = _components(defs, lambda d: targets.get(d, []))
-    for d in defs:
-        for to, args, pos in refs[d]:
-            if to is d or group.get(to) != group[d] or all(isinstance(a, _Var) for a in args):
-                continue
-            name = d.decl.name
-            may = (
-                f"may pass it only its own parameters ({' '.join(d.params)})"
-                if d.params
-                else "has no parameters to pass it"
-            )
-            d.unit.fail(
-                "growing-recursion",
-                f"{name} refers to {to.decl.name}, which refers back to {name}: {name} {may}; "
-                "other arguments could grow without bound",
-                pos,
-            )
+    edges = [e for d in defs for e in _param_edges(d)]
+    out: dict[_ParamNode, list[_ParamNode]] = {}
+    for e in edges:
+        out.setdefault(e.source, []).append(e.target)
+    nodes = [(d, i) for d in defs for i in range(len(d.params))]
+    component = _components(nodes, lambda n: out.get(n, []))
+    growing = next((e for e in edges if e.expanding and component[e.source] == component[e.target]), None)
+    if growing is None:
+        return
+    (d, index), target = growing.source, growing.target
+    name, param = d.decl.name, d.params[index]
+    if growing.source == target:
+        d.unit.fail(
+            "growing-recursion",
+            f"{name} passes its parameter {param} to itself inside a bigger type: instances could grow without bound",
+            growing.pos,
+        )
+    to = "itself" if target[0] is d else target[0].decl.name
+    same = component[growing.source]
+    path = _shortest_path(target, growing.source, lambda n: [m for m in out.get(n, []) if component[m] == same])
+    cycle = " → ".join(n[0].decl.name for n in (growing.source, *path))
+    d.unit.fail(
+        "growing-recursion",
+        f"{name} passes its parameter {param} to {to} inside a bigger type, and it comes back ({cycle}): "
+        "instances could grow without bound",
+        growing.pos,
+    )
 
 
 class _Checker:
@@ -1342,20 +1397,6 @@ class _Checker:
         for n in _nodes(d.decl.body):
             if isinstance(n, _Var) and n.name not in params:
                 fail("unknown-parameter", f"unknown type parameter {n.name}", n.pos)
-        # §9.10: a generic type refers to itself only with its own parameters.
-        for n in _nodes(d.decl.body):
-            if not isinstance(n, _App) or d.unit.scope.get(n.head) is not d:
-                continue
-            if len(n.args) != len(params) or any(
-                not isinstance(a, _Var) or a.name != p for a, p in zip(n.args, params, strict=False)
-            ):
-                own = " ".join((d.decl.name, *params))
-                fail(
-                    "growing-recursion",
-                    f"{d.decl.name} must refer to itself with its own parameters ({own}); "
-                    "other arguments could grow without bound",
-                    n.pos,
-                )
 
     # ── evaluation ──
 
@@ -1676,7 +1717,7 @@ class _Checker:
         root = self.load(text, key, id, _fail_in(text), root=True)
         for d in self.all_defs:
             self.check_params(d)
-        _check_groups(self.all_defs)
+        _check_expansive_cycles(self.all_defs)
         # Evaluate every definition of every file (templates for generic ones), so all errors surface.
         templates: dict[_Def, Instance] = {}
         for d in self.all_defs:

@@ -71,8 +71,8 @@ def rejects(text: str, reason: str, **kwargs: object) -> HausSchemaFileError:
         ("type A = B\ntype B = A", "refers to itself without a record, array or variant"),
         ("type A = Secret A", "refers to itself without a record, array or variant"),
         ("type A = Secret (Secret A)", "refers to itself without a record, array or variant"),
-        ("type L a = < Nil | Cons a (L (Array a)) >", "must refer to itself with its own parameters"),
-        ("type L a b = < Nil | Cons a (L b a) >", "must refer to itself with its own parameters"),
+        ("type L a = < Nil | Cons a (L (Array a)) >", "L passes its parameter a to itself inside a bigger type"),
+        ("type L a b = < Nil | Cons a (L b (Array a)) >", "it comes back (L → L → L)"),
         ("type A = { x: b }", "unknown type parameter b"),
         ("type A a a = Int", "parameter a appears twice"),
         ("type A = { s: Stream Int }", "Stream can only be the whole type of a definition"),
@@ -158,7 +158,13 @@ def test_instances_that_double_through_another_definition_are_rejected_before_an
             "type Root = A Int",
         ]
     )
-    e = _quickly(lambda: rejects(text, "A refers to B, which refers back to A"))
+    e = _quickly(
+        lambda: rejects(
+            text,
+            "A passes its parameter a to B inside a bigger type, and it comes back (A → B → A): "
+            "instances could grow without bound",
+        )
+    )
     assert (e.code, e.line, e.column) == ("growing-recursion", 2, 17)
 
 
@@ -172,7 +178,9 @@ def test_growing_recursion_through_three_definitions() -> None:
             "type Root = A Int",
         ]
     )
-    e = _quickly(lambda: rejects(text, "C refers to A, which refers back to C"))
+    e = _quickly(
+        lambda: rejects(text, "C passes its parameter a to A inside a bigger type, and it comes back (C → A → B → C)")
+    )
     assert (e.code, e.line, e.column) == ("growing-recursion", 4, 17)
 
 
@@ -188,6 +196,44 @@ def test_definitions_that_refer_to_each_other_with_their_own_parameters() -> Non
         "value": {"p": Tagged("E"), "q": Tagged("E")},
         "kids": (),
     }
+
+
+def test_a_type_that_passes_its_parameter_to_itself_inside_a_bigger_type() -> None:
+    text = "type Pair a b = { l: a, r: b }\ntype T a = < X (T (Pair a a)) | E >"
+    e = rejects(text, "T passes its parameter a to itself inside a bigger type: instances could grow without bound")
+    assert (e.code, e.line, e.column) == ("growing-recursion", 2, 17)
+
+
+@pytest.mark.parametrize(
+    ("text", "value", "expected"),
+    [
+        (
+            "type Node a = { value: a, meta: Meta }\ntype Meta = { history: Array (Node String) }\n"
+            "type Root = Node Int",
+            '{ value: 1, meta: { history: [{ value: "a", meta: { history: [] } }] } }',
+            None,
+        ),
+        (
+            "type Expr = < Num Int | Call (Apply Expr) >\ntype Apply a = { f: a, args: Array Expr }\ntype Root = Expr",
+            "Call { f: Num(1), args: [Num(2)] }",
+            None,
+        ),
+        ("type Swap a b = < S a (Swap b a) | E >\ntype Root = Swap Int String", 'S(1, S("a", E))', None),
+        ("type K a = < X (K Int) | Y a >\ntype Root = K String", "X(Y(1))", Tagged("X", (Tagged("Y", (1,)),))),
+        # The expanding edge A → B isn't on a cycle: B comes back to A only with Int.
+        (
+            "type P a b = { l: a, r: b }\ntype A a = < X (B (P a a)) >\ntype B b = < Y b | Z (A Int) >\n"
+            "type Root = A String",
+            'X(Y({ l: "a", r: "b" }))',
+            None,
+        ),
+    ],
+)
+def test_generics_without_an_expanding_edge_on_a_cycle(text: str, value: str, expected: object) -> None:
+    root = _quickly(lambda: compile_schema(text))["Root"]
+    out = root.parse(value)
+    if expected is not None:
+        assert out == expected
 
 
 def _chain(step: str, levels: int = 30) -> str:

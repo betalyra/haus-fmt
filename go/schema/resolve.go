@@ -13,9 +13,10 @@ import (
 
 // A schema file with its imports: names looked up, generic types applied,
 // and every rule of spec §14 checked. Generic types are applied by
-// instantiating them (List Int is a type of its own), which ends because a
-// generic type may refer to itself only with its own parameters (§9.10); a
-// limit on the number of instances is a second guard.
+// instantiating them (List Int is a type of its own), which ends because no
+// type parameter passes, inside a bigger type, along a cycle of references
+// back to itself (§9.10, the expansive-cycle rule); a limit on the number of
+// instances is a second guard.
 
 // maxInstances bounds the instances of generic types one schema makes.
 const maxInstances = 10_000
@@ -570,8 +571,7 @@ func (l *loader) copyImports(u, pos int, label string, original int, copyPath st
 }
 
 // ownTypes puts the file's own definitions in scope, unless a name is also
-// imported, and checks that generic ones refer to themselves with their own
-// parameters only (§9.10).
+// imported, and checks that generic ones can't grow without bound (§9.10).
 func (l *loader) ownTypes(u int) *fail {
 	unit := l.units[u]
 	for d, def := range unit.file.types {
@@ -585,87 +585,255 @@ func (l *loader) ownTypes(u int) *fail {
 	for d, def := range unit.file.types {
 		unit.scope[def.name] = defRef{u, d}
 	}
-	for _, def := range unit.file.types {
-		bad := -1
-		walkTy(def.ty, func(t *ty) {
-			if t.kind != tyName || t.name != def.name || bad >= 0 {
-				return
-			}
-			own := len(t.args) == len(def.params)
-			for i, a := range t.args {
-				own = own && a.kind == tyParam && a.name == def.params[i]
-			}
-			if !own {
-				bad = t.pos
-			}
-		})
-		if bad >= 0 {
-			whole := strings.Join(append([]string{def.name}, def.params...), " ")
-			return failIn(u, bad, haus.CodeGrowingRecursion,
-				"%s must refer to itself with its own parameters (%s); other arguments could grow without bound", def.name, whole)
-		}
-	}
-	return l.groups(u)
+	return l.growth(u)
 }
 
-// defUse is a reference in a definition to one of its file's definitions:
-// by name, applied or spread.
-type defUse struct {
-	to     int  // the definition referred to
-	params bool // with parameters of the referring definition only (or no arguments)
-	pos    int
-}
-
-// groups checks §9.10 through other definitions: in a group of definitions
-// that refer to each other, directly or not (a strongly connected component
-// of the references), a reference to another member passes only parameters
-// of the referring definition, so instances can't grow around the group.
-// Checked on the definitions as written, before anything is instantiated.
-// (A reference to itself passes its own parameters in order, checked
-// before.) Groups are within one file: imports have no cycles.
-func (l *loader) groups(u int) *fail {
-	unit := l.units[u]
-	types := unit.file.types
-	uses := make([][]defUse, len(types))
-	edges := make([][]int, len(types))
-	for d, def := range types {
-		add := func(name string, args []*ty, pos int) {
-			ref, ok := unit.scope[name]
-			if !ok || ref.u != u {
+// growth checks §9.10, the expansive-cycle rule: no type parameter passes,
+// inside a bigger type, along a cycle of references back to itself (see
+// [growthGraph]). The first expanding edge on a cycle is reported, at its
+// reference: definitions in order, references in body order (outermost
+// first), then by argument. Checked on the definitions as written, before
+// anything is instantiated. Cycles are within one file: imports have no
+// cycles.
+func (l *loader) growth(u int) *fail {
+	g := newGrowthGraph(l.units[u])
+	component := components(g.edges)
+	for _, p := range g.passes {
+		to := g.first[p.to] + p.index
+		if p.from < 0 || component[p.from] != component[to] {
+			continue
+		}
+		// The first parameter in the argument that the cycle comes back to.
+		back := -1
+		walkTy(p.arg, func(t *ty) {
+			if t.kind != tyParam || back >= 0 {
 				return
 			}
-			params := true
-			for _, a := range args {
-				params = params && a.kind == tyParam
-			}
-			uses[d] = append(uses[d], defUse{ref.d, params, pos})
-			edges[d] = append(edges[d], ref.d)
-		}
-		walkTy(def.ty, func(t *ty) {
-			if t.kind == tyName {
-				add(t.name, t.args, t.pos)
-			}
-			for _, sp := range t.spreads {
-				add(sp.name, nil, sp.pos)
+			if a := g.param(p.def, t.name); a >= 0 && component[a] == component[to] {
+				back = a
 			}
 		})
-	}
-	group := components(edges)
-	for d, def := range types {
-		for _, use := range uses[d] {
-			if use.to == d || group[use.to] != group[d] || use.params {
-				continue
-			}
-			may := "has no parameters to pass it"
-			if len(def.params) > 0 {
-				may = fmt.Sprintf("may pass it only its own parameters (%s)", strings.Join(def.params, " "))
-			}
-			return failIn(u, use.pos, haus.CodeGrowingRecursion,
-				"%s refers to %s, which refers back to %s: %s %s; other arguments could grow without bound",
-				def.name, types[use.to].name, def.name, def.name, may)
+		if back >= 0 {
+			return failIn(u, p.pos, haus.CodeGrowingRecursion, "%s", g.growing(back, to, component))
 		}
 	}
 	return nil
+}
+
+// growthGraph is the parameter graph of §9.10 for one file. It has a node
+// per type parameter of every definition, and for each reference B t₁ … tₙ
+// in the body of a definition A to a definition B of the file (not one of
+// the prelude's), an edge from each parameter a of A occurring in tᵢ to the
+// i-th parameter of B: expanding unless tᵢ is a itself. A schema in which an
+// expanding edge lies on a cycle could have instances that grow without
+// bound (type T a = < X (T (Pair a a)) >).
+//
+// It is built in linear time: rather than an edge per occurrence of a
+// parameter (a nested in n references would count n times), an argument with
+// several parameters gets a node of its own that they flow into, so that the
+// node of tᵢ reaches exactly the parameters occurring in it, and the edge
+// from it stands for the edges of all of them. Paths between parameters, and
+// so cycles, are those of the parameter graph.
+type growthGraph struct {
+	unit  *unit
+	types []*typeDef
+	first []int // node first[d] + p is parameter p of definition d
+	owner []int // per parameter node: its definition
+	// The parameter nodes, then the nodes of arguments with several parameters.
+	edges [][]int
+	// The arguments other than a bare parameter, each passed to a definition
+	// of the file, in the order they are checked.
+	passes []growthPass
+}
+
+// growthPass is an argument other than a bare parameter passed to a
+// definition of the file: the P a a of B (P a a).
+type growthPass struct {
+	def, pos  int // the definition the reference is in, and where
+	to, index int // the definition referred to, and which of its parameters the argument is for
+	arg       *ty
+	from      int // the node of the argument's parameters; -1 if it has none
+}
+
+func newGrowthGraph(unit *unit) *growthGraph {
+	g := &growthGraph{unit: unit, types: unit.file.types}
+	for d, def := range g.types {
+		g.first = append(g.first, len(g.owner))
+		for range def.params {
+			g.owner = append(g.owner, d)
+		}
+	}
+	g.edges = make([][]int, len(g.owner))
+	for d, def := range g.types {
+		g.flow(d, def.ty)
+	}
+	return g
+}
+
+// callee is the definition of the file name refers to; -1 if it isn't one
+// (the prelude's generic types come first).
+func (g *growthGraph) callee(name string) int {
+	if _, ok := generic[name]; ok {
+		return -1
+	}
+	if d, ok := g.unit.own[name]; ok {
+		return d
+	}
+	return -1
+}
+
+// param is the node of parameter name of definition d; -1 if it has none.
+func (g *growthGraph) param(d int, name string) int {
+	if p := slices.Index(g.types[d].params, name); p >= 0 {
+		return g.first[d] + p
+	}
+	return -1
+}
+
+// flow adds the edges of the references in t, in definition d, and returns
+// the node that the parameters occurring in t flow into; -1 if none do.
+func (g *growthGraph) flow(d int, t *ty) int {
+	var nodes []int
+	add := func(n int) {
+		if n >= 0 {
+			nodes = append(nodes, n)
+		}
+	}
+	switch t.kind {
+	case tyParam:
+		return g.param(d, t.name)
+	case tyName:
+		to, n := g.callee(t.name), 0
+		if to >= 0 {
+			n = min(len(t.args), len(g.types[to].params))
+		}
+		// This reference's arguments are checked before those of the
+		// references inside them.
+		start := len(g.passes)
+		var nested []int
+		for i, a := range t.args[:n] {
+			if a.kind != tyParam {
+				nested = append(nested, i)
+				g.passes = append(g.passes, growthPass{def: d, pos: t.pos, to: to, index: i, arg: a, from: -1})
+			}
+		}
+		argNodes := make([]int, len(t.args))
+		for i, a := range t.args {
+			argNodes[i] = g.flow(d, a)
+			add(argNodes[i])
+		}
+		for i, node := range argNodes[:n] {
+			if node >= 0 {
+				g.edges[node] = append(g.edges[node], g.first[to]+i)
+			}
+		}
+		for k, i := range nested {
+			g.passes[start+k].from = argNodes[i]
+		}
+	case tyRecord:
+		for _, f := range t.fields {
+			add(g.flow(d, f.ty))
+		}
+	case tyVariant:
+		for _, c := range t.cases {
+			for _, p := range c.payload {
+				add(g.flow(d, p))
+			}
+		}
+	}
+	return g.join(nodes)
+}
+
+// join returns one node for nodes: -1 for none, the node for one (or the
+// same one again), otherwise a new node they all flow into.
+func (g *growthGraph) join(nodes []int) int {
+	if len(nodes) == 0 {
+		return -1
+	}
+	one := nodes[0]
+	if !slices.ContainsFunc(nodes, func(n int) bool { return n != one }) {
+		return one
+	}
+	joined := len(g.edges)
+	g.edges = append(g.edges, nil)
+	for _, n := range nodes {
+		g.edges[n] = append(g.edges[n], joined)
+	}
+	return joined
+}
+
+// growing is the message for parameter node a passed, inside a bigger type,
+// to parameter node to, from where it comes back to a.
+func (g *growthGraph) growing(a, to int, component []int) string {
+	def, b := g.owner[a], g.owner[to]
+	name, param := g.types[def].name, g.types[def].params[a-g.first[def]]
+	if a == to {
+		return fmt.Sprintf("%s passes its parameter %s to itself inside a bigger type: instances could grow without bound", name, param)
+	}
+	target := g.types[b].name
+	if b == def {
+		target = "itself"
+	}
+	names := []string{name, g.types[b].name}
+	for _, n := range g.way(to, a, component) {
+		names = append(names, g.types[g.owner[n]].name)
+	}
+	return fmt.Sprintf("%s passes its parameter %s to %s inside a bigger type, and it comes back (%s): instances could grow without bound",
+		name, param, target, strings.Join(names, " → "))
+}
+
+// way is a shortest way along the parameter graph's edges from parameter
+// node from to to in the same component: the nodes after from (a
+// breadth-first search, each node's edges in the order of its references).
+// It is only for a message, so it builds the edges between parameters
+// itself.
+func (g *growthGraph) way(from, to int, component []int) []int {
+	edges := make([][]int, len(g.owner))
+	for d, def := range g.types {
+		walkTy(def.ty, func(t *ty) {
+			if t.kind != tyName {
+				return
+			}
+			b := g.callee(t.name)
+			if b < 0 {
+				return
+			}
+			for i, arg := range t.args[:min(len(t.args), len(g.types[b].params))] {
+				walkTy(arg, func(x *ty) {
+					if x.kind != tyParam {
+						return
+					}
+					if p := g.param(d, x.name); p >= 0 {
+						edges[p] = append(edges[p], g.first[b]+i)
+					}
+				})
+			}
+		})
+	}
+	before := make([]int, len(edges))
+	for i := range before {
+		before[i] = -1
+	}
+	queue := []int{from}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if n == to {
+			break
+		}
+		for _, m := range edges[n] {
+			if m != from && before[m] < 0 && component[m] == component[from] {
+				before[m] = n
+				queue = append(queue, m)
+			}
+		}
+	}
+	var way []int
+	for n := to; before[n] >= 0; n = before[n] {
+		way = append(way, n)
+	}
+	slices.Reverse(way)
+	return way
 }
 
 // components returns the strongly connected component of each node of a

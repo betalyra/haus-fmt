@@ -7,6 +7,13 @@
 //! let v = haus::from_str::<haus::Value>(r#"Order { total: 19.90, id: 0xFF, "x-y": 1e+5 }"#).unwrap();
 //! assert_eq!(haus::canonical(&v), r#"Order{id:255,total:19.90,"x-y":1e5}"#);
 //! ```
+//!
+//! They need no work budget (spec §9.8): a [`Value`] owns its parts, so it
+//! can't share them (a DAG) or contain itself, and its canonical form is
+//! linear in the memory it takes, whether it was parsed or built in code. A
+//! native value whose parts are shared (`Rc`) expands when it is encoded,
+//! which the encoder's step budget bounds. Writing takes a stack rather than
+//! recursion, so a value built in code may nest any depth.
 
 use crate::Value;
 use crate::ser::{key, quote};

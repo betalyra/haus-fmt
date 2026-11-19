@@ -64,10 +64,14 @@ Decode := [].{
 
 	## What `decoder` (a generated `read_value_<name>`) gives for `v`, if `v`
 	## nests at most 256 levels (spec §7, §9.8), counted as the parser counts
-	## them: else `nesting-too-deep`, at the first container too deep. A
-	## parsed value is within the parser's limits, but a `Value` built in code
-	## may nest arbitrarily deep, and decoders recurse once per level, so the
-	## depth is checked first, without recursion. A generated `decode_<name>`
+	## them, and has at most `Value.max_nodes` values: else `nesting-too-deep`,
+	## at the first container too deep, or `too-many-nodes`. A parsed value is
+	## within the parser's limits, but a `Value` built in code may nest
+	## arbitrarily deep, and decoders recurse once per level, so the depth is
+	## checked first, without recursion. It may also share its parts (a DAG),
+	## which decoding visits each time they are reached: 40 levels that each
+	## hold the one below twice are 2^41 − 1 values to decode, so the values
+	## are counted first, and stop at the limit. A generated `decode_<name>`
 	## decodes so; the decoders it is built from don't check.
 	within_depth : Value, (Value -> Try(a, Error)) -> Try(a, Error)
 	within_depth = |v, decoder| within_limits(v, decoder, Value.default_limits)
@@ -77,11 +81,7 @@ Decode := [].{
 	##
 	##     Decode.within_limits(value, Order.read_value_order, limits)
 	within_limits : Value, (Value -> Try(a, Error)), Value.Limits -> Try(a, Error)
-	within_limits = |v, decoder, limits| {
-		Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
-		nests_within(v, limits.max_depth)?
-		decoder(v)
-	}
+	within_limits = |v, decoder, limits| decode_within(v, decoder, limits, Value.max_nodes)
 
 	# ── scalars ─────────────────────────────────────────────
 
@@ -470,75 +470,17 @@ whole = |v, name, min, max, from_str| match v {
 ## identifier as `["pt-BR"]`). The same paths as the Rust binding.
 Error : { code : Str, reason : Str, path : Str }
 
-## Whether `v` nests at most `max` levels, counted as the parser and the
-## writer count them: each array, record and tag with arguments is a level,
-## and a tag's only argument, a record, shares the tag's (`Tag { … }`).
-## `nesting-too-deep` otherwise, at the first container too deep. Walked
-## with a list rather than recursion, so that a value built in code, however
-## deep, is checked without overflowing the stack.
-nests_within : Value, U64 -> Try({}, Error)
-nests_within = |v, max| {
-	# The containers from `v` down to the one being walked, each with its next item.
-	var $path = []
-	var $next = if (opens(v)) Ok(v) else Err({})
-	while True {
-		match $next {
-			Ok(container) => {
-				if $path.len().to_u64() >= max {
-					segments = $path.map(|(c, i)| place_of(c, i - 1))
-					return Err({ code: ErrorCode.nesting_too_deep, reason: "nesting deeper than ${max.to_str()} levels", path: Str.join_with(segments, "") })
-				}
-				$path = $path.append((container, 0.U64))
-			}
-			Err(_) => {}
-		}
-		match $path.last() {
-			Ok((container, i)) => {
-				$path = $path.drop_last(1)
-				match child(container, i) {
-					Ok(x) => {
-						$path = $path.append((container, i + 1))
-						$next = if (opens(x)) Ok(x) else Err({})
-					}
-					Err(_) => {
-						$next = Err({})
-					}
-				}
-			}
-			Err(_) => {
-				return Ok({})
-			}
-		}
-	}
-}
-
-## An array, a record or a tag with arguments: a level (`nests_within`).
-opens : Value -> Bool
-opens = |v| match v {
-	Arr(_) | Rec(_) => True
-	Tag(_, args) => !args.is_empty()
-	_ => False
-}
-
-## Item `i` of a container: of an array, a record's field, a tag's
-## argument; of `Tag { … }`, a field of its record.
-child : Value, U64 -> Try(Value, [OutOfBounds])
-child = |v, i| match v {
-	Arr(items) => items.get(i)
-	Rec(fields) | Tag(_, [Rec(fields)]) => fields.get(i).map_ok(|(_, x)| x)
-	Tag(_, args) => args.get(i)
-	_ => Err(OutOfBounds)
-}
-
-## Where item `i` of a container is, as an error path says it: `[0]`, `.a`,
-## `(Some)[0]`, `(Circle).r`.
-place_of : Value, U64 -> Str
-place_of = |v, i| match v {
-	Arr(_) => "[${i.to_str()}]"
-	Rec(fields) => fields.get(i).map_ok(|(k, _)| ErrorCode.path_key(k)) ?? ""
-	Tag(name, [Rec(fields)]) => "(${name})${fields.get(i).map_ok(|(k, _)| ErrorCode.path_key(k)) ?? ""}"
-	Tag(name, _) => "(${name})[${i.to_str()}]"
-	_ => ""
+## `within_limits` with at most `max_nodes` values: what `decoder` gives for
+## `v` if `v` nests within `limits.max_depth` levels, counted as the parser
+## and the writer count them, and has at most `max_nodes` values, a part
+## shared in a value built in code counted each time it is reached, as
+## decoding visits it (spec §9.8): `nesting-too-deep` or `too-many-nodes`
+## otherwise (see `Value.within_bounds`).
+decode_within : Value, (Value -> Try(a, Error)), Value.Limits, U64 -> Try(a, Error)
+decode_within = |v, decoder, limits, max_nodes| {
+	Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
+	Value.within_bounds(v, limits.max_depth, max_nodes)?
+	decoder(v)
 }
 
 ## Prefix the path of an error coming out of a nested decoder.
@@ -815,3 +757,39 @@ expect {
 		and empties.all(|(v, text)| [0, 1, 2].all(|d| built(v, d) == parsed(text, d)))
 }
 expect Decode.within_limits(Arr([]), Decode.any, { ..Value.default_limits, max_depth: 0 }).map_err(|e| e.path).map_ok(|_| {}) == Err("") and Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 0 }).is_ok()
+
+# A value built in code may share its parts (a DAG, spec §9.8): `deep(n, twice)`
+# is n + 1 arrays in memory but a tree of 2^(n + 1) − 1 values, which decoding
+# visits. They are counted first, so 2^41 − 1 fail at the limit, without
+# decoding anything. (At the default limit, `Value.max_nodes`, that
+# takes some 1.5 seconds built with `--opt=speed`, but half a minute in `roc
+# test`, so these tests take a smaller one.)
+twice : Value -> Value
+twice = |x| Arr([x, x])
+
+## The values in nested arrays, as decoding visits them.
+values_in : Value -> Try(U64, Error)
+values_in = |v| Decode.list(v, values_in).map_ok(|counts| counts.fold(1, |a, b| a + b))
+
+expect Value.max_nodes == 64 * 1024 * 1024
+expect {
+	e = decode_within(deep(40, twice), values_in, Value.default_limits, 100_000).map_ok(|_| {})
+	e.map_err(|err| (err.code, err.reason, err.path.starts_with("[0][0][0][0][0][0][0][0]"))) == Err(("too-many-nodes", "value has more than 100000 nodes", True))
+}
+expect decode_within(deep(40, twice), Decode.any, Value.default_limits, 1000).map_err(|e| e.code).map_ok(|_| {}) == Err("too-many-nodes")
+# A shared part counts each time it is reached: as many values as the tree it
+# stands for, and decoded as it is. 2^4 − 1 for three levels, at the limit and one under.
+expect {
+	tree = Value.parse("[[[[], []], [[], []]], [[[], []], [[], []]]]") ?? Num("0")
+	[deep(3, twice), tree].all(
+		|v| decode_within(v, values_in, Value.default_limits, 15) == Ok(15) and decode_within(v, values_in, Value.default_limits, 14).map_err(|e| e.code) == Err("too-many-nodes"),
+	)
+		and Decode.within_depth(deep(3, twice), values_in) == Ok(15)
+}
+# `Tag { … }` is two values, the tag and its record, as the parser makes them.
+expect {
+	built = Tag("A", [Rec([("a", Num("1"))])])
+	parsed = Value.parse("A { a: 1 }") ?? Num("0")
+	[built, parsed].all(|v| decode_within(v, Decode.any, Value.default_limits, 3).is_ok() and decode_within(v, Decode.any, Value.default_limits, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "(A).a")))
+}
+expect decode_within(Arr([Num("1"), Rec([("pt-BR", Num("2"))])]), Decode.any, Value.default_limits, 3).map_err(|e| e.path).map_ok(|_| {}) == Err("[1][\"pt-BR\"]")

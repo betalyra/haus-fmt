@@ -1,0 +1,3 @@
+// T a needs T (Pair a a), which needs T (Pair (Pair a a) (Pair a a)), and so on (§9.10).
+type Pair a b = { l: a, r: b }
+type T a = < X (T (Pair a a)) | E >

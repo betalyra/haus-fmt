@@ -236,7 +236,7 @@ type Root = { i: Instant, z: ZonedDateTime }`
     expect(schemaError("type A = B")).toBe("unknown type B at 1:10")
     expect(schemaError("type A = Date")).toContain("import std/time (Date)")
     expect(schemaError("type A = B\ntype B = A")).toContain("refers to itself without a record")
-    expect(schemaError("type T a = < L a | N (T (Array a)) >")).toContain("with its own parameters")
+    expect(schemaError("type T a = < L a | N (T (Array a)) >")).toContain("passes its parameter a to itself inside a bigger type")
     expect(schemaError("type A = { a: Int, a: String }")).toContain("field a appears twice")
     expect(schemaError("type A = < X | X >")).toContain("tag X appears twice")
     expect(schemaError("type A = Maybe")).toContain("needs 1 argument")

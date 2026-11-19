@@ -1,0 +1,3 @@
+// The parameters swap places, and one of them grows on the way: S Int String needs
+// S String (Array Int), then S (Array Int) (Array String), and so on (§9.10).
+type S a b = < X a (S b (Array a)) | E >

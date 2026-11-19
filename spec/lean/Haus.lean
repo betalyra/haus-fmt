@@ -38,6 +38,15 @@ import Haus.Stream.Chunks
 import Haus.Stream.Scan
 import Haus.Stream.Correct
 import Haus.Stream.Limited
+import Haus.Stream.Cost
+import Haus.Linear.Monad
+import Haus.Linear.KeySet
+import Haus.Linear.Parser
+import Haus.Linear.Agree
+import Haus.Linear.Spec
+import Haus.Linear.Leaves
+import Haus.Linear.Bound
+import Haus.Linear.Stream
 import Haus.Schema.Types
 import Haus.Schema.Float
 import Haus.Schema.Decode
@@ -53,6 +62,7 @@ import Haus.SchemaFile.Terms
 import Haus.SchemaFile.Groups
 import Haus.SchemaFile.Finite
 import Haus.SchemaFile.Closure
+import Haus.SchemaFile.Cycles
 import Haus.SchemaFile.Decoding
 import Haus.Version
 import Haus.Json.Data

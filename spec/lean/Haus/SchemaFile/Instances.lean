@@ -313,13 +313,23 @@ private def loadCode (src : String) : Option Code :=
 #guard loadCode "type A = Secret A" == some .unguardedRecursion
 #guard loadCode "type I a = a\ntype X = I X" == some .unguardedRecursion
 #guard loadCode "type L a = < Nil | Cons a (L (L a)) >\ntype X = L Int" == some .growingRecursion
+#guard loadCode "type P a b = { l: a, r: b }\ntype T a = < X (T (P a a)) | E >" == some .growingRecursion
+#guard loadCode "type L a = < X (L (Array a)) | E >" == some .growingRecursion
+#guard loadCode "type S a b = < X a (S b (Array a)) | E >" == some .growingRecursion
+#guard loadCode "type A a = < X (B a) | E >\ntype B b = < Y (C (Array b)) >\ntype C c = < Z (A c) >" == some .growingRecursion
 #guard loadCode "import std/money (Money)\ntype A = Money" == some .unknownModule
 #guard loadCode "import std/time (Date, Date)\ntype A = Date" == some .duplicateImport
 #guard loadCode "import std/time (Day)\ntype A = Day" == some .unknownImport
 #guard loadCode "import ./common (A)\ntype B = A" == some .importUnavailable
--- Accepted: spreads through names and instances, generics in groups with their parameters, Result, std/time.
+-- Accepted: spreads through names and instances, mutually recursive generics, Result, std/time.
 #guard loadCode "type P a = { x: a }\ntype Q = P Int\ntype A = closed { ...Q, y: Int }" == none
 #guard loadCode "type T a = { kids: F a }\ntype F a = Array (T a)\ntype X = T Int" == none
+-- No expansive cycle (§9.10): a parameter grows only off every cycle, or arguments only permute.
+#guard loadCode "type Node a = { value: a, meta: Meta }\ntype Meta = { history: Node String }\ntype X = Node Int" == none
+#guard loadCode "type Expr = < Num Int | Call (Apply Expr) >\ntype Apply a = { f: a, args: Array Expr }" == none
+#guard loadCode "type Swap a b = < S a (Swap b a) | E >\ntype X = Swap Int String" == none
+#guard loadCode "type K a = < X (K Int) | Y a >\ntype Z = K String" == none
+#guard loadCode "type P a b = { l: a, r: b }\ntype A a = < X (B (P a a)) >\ntype B b = < Y b | Z (A Int) >\ntype R = A String" == none
 #guard loadCode "import std/time (Date)\ntype A = Result String (Maybe Date)\ntype E = Stream A" == none
 #guard (load "type P a = { x: a }\ntype Q = P (P Int)".toList).toOption.map (·.defs.map (·.1)) ==
   some ["Q", "P(P(Int))", "P(Int)"]
