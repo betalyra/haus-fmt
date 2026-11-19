@@ -13,16 +13,31 @@ importers:
 
   ../bench:
     dependencies:
+      '@effect/platform-bun':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)
+      '@effect/platform-node':
+        specifier: 4.0.6
+        version: 4.0.6(effect@4.0.6)(redis@6.3.1)
+      '@haus-fmt/effect':
+        specifier: workspace:*
+        version: link:../typescript/packages/effect
       '@haus-fmt/haus':
         specifier: workspace:*
         version: link:../typescript/packages/haus
       '@huggingface/tokenizers':
         specifier: 0.2.0
         version: 0.2.0
+      effect:
+        specifier: 4.0.6
+        version: 4.0.6
       tinybench:
         specifier: 6.2.3
         version: 6.2.3
     devDependencies:
+      '@effect/tsgo':
+        specifier: 0.69.0
+        version: 0.69.0
       '@types/node':
         specifier: 24.10.1
         version: 24.10.1
@@ -271,6 +286,11 @@ importers:
         version: 5.0.5(@types/node@24.10.1)(vite@8.3.6(@types/node@24.10.1))
 
 packages:
+
+  '@effect/platform-bun@4.0.6':
+    resolution: {integrity: sha512-RAsGcIVcqhV4aBiM07VnMeNWDyewp8WDwTdIUtiklUDBRtddDllYzPsTlsn+0gLdpdz2lGnMEOFzoNaNrcMfSA==}
+    peerDependencies:
+      effect: ^4.0.6
 
   '@effect/platform-node-shared@4.0.6':
     resolution: {integrity: sha512-0PhyC4uG30xGtsajnxjkcBWfTjNRzUh4ZKl1Kvo/MNyCTb+W2O+fBzf7wCRCoqt+nLudiq4V7vX40Q8XIBuMaQ==}
@@ -1101,6 +1121,14 @@ packages:
     resolution: {integrity: sha512-JInaHOamG8pt5+Ey8kGmdcAcg3OL9reK8ltczgHTAwNhMys/6ThXHityHxVV2p3fkw/c+MAvBHFVYHFZDmjMCQ==}
 
 snapshots:
+
+  '@effect/platform-bun@4.0.6(effect@4.0.6)':
+    dependencies:
+      '@effect/platform-node-shared': 4.0.6(effect@4.0.6)
+      effect: 4.0.6
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   '@effect/platform-node-shared@4.0.6(effect@4.0.6)':
     dependencies:

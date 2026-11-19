@@ -1,6 +1,8 @@
 /**
- * The GitHub corpus: every example response in the REST API description,
- * one document per example.
+ * The corpora, from the files fetch stored. Pure: the callers read the files.
+ *
+ * OpenAPI examples (GitHub): every example response in the REST API
+ * description, one document per example.
  *
  * Examples are found where the description puts them: under a response's
  * `content.<media type>.examples`, either inline (`value`) or as a `$ref`
@@ -14,8 +16,8 @@
  * `repository`, …; an array of X counts as X), or the operation for an
  * inline schema.
  */
-import { readFileSync } from "node:fs"
-import { isJsonObject, parseJson, stringifyJson, type Json, type JsonObject } from "@haus-fmt/haus"
+import { isJsonObject, stringifyJson, type Json, type JsonObject } from "@haus-fmt/haus"
+import { JSON_SCHEMA, OPENAPI, type ConverterOptions } from "./openapi.ts"
 
 export interface Document {
   /** Stable name: the component example's name, or `METHOD path status#example` for an inline one. */
@@ -32,7 +34,14 @@ export interface Document {
 }
 
 export interface Corpus {
+  /** What the documents' schemas `$ref` into: the OpenAPI description, the JSON Schema. */
   readonly description: JsonObject
+  /** How to read the schemas. */
+  readonly converter: ConverterOptions
+  /** What the generated schema is generated from, for its header. */
+  readonly schemaFrom: string
+  /** What a document is, for the report: "example responses", "specifications". */
+  readonly unit: string
   readonly documents: readonly Document[]
   /** Examples left out, by reason. */
   readonly skipped: Readonly<Record<string, number>>
@@ -61,9 +70,8 @@ const schemaName = (schema: Json | undefined): string | undefined => {
   return undefined
 }
 
-export const readCorpus = (path: string): Corpus => {
-  const description = parseJson(readFileSync(path, "utf8"), { maxDepth: 512 })
-  if (!isJsonObject(description)) throw new Error(`${path}: not an OpenAPI description`)
+/** The documents of an OpenAPI description (parsed with `parseJson`, numbers exact). Pure. */
+export const corpusOf = (description: JsonObject): Corpus => {
   const examples = obj(obj(description["components"])?.["examples"]) ?? {}
   const documents: Document[] = []
   const seenNames = new Set<string>()
@@ -104,5 +112,36 @@ export const readCorpus = (path: string): Corpus => {
       }
     }
   }
-  return { description, documents, skipped }
+  return { description, converter: OPENAPI, schemaFrom: "GitHub's REST API description (OpenAPI 3.1)", unit: "example responses", documents, skipped }
+}
+
+/** What a Vega-Lite specification is, for listings: its composition, or `unit`. */
+const COMPOSITIONS = ["layer", "facet", "repeat", "concat", "hconcat", "vconcat"]
+
+/**
+ * JSON Schema documents (Vega-Lite): one document per file, all of the type
+ * the schema's root `$ref` names. A file that isn't an object or array, or
+ * repeats another file's JSON, is left out (counted).
+ */
+export const jsonSchemaCorpus = (schema: JsonObject, files: readonly { readonly name: string; readonly json: Json }[], schemaFrom: string): Corpus => {
+  const root = schema["$ref"]
+  const seenJson = new Set<string>()
+  const skipped: Record<string, number> = {}
+  const skip = (why: string) => (skipped[why] = (skipped[why] ?? 0) + 1)
+  const documents: Document[] = []
+  for (const { name, json } of files) {
+    if (json === null || typeof json !== "object") {
+      skip("not an object or array")
+      continue
+    }
+    const text = stringifyJson(json)
+    if (seenJson.has(text)) {
+      skip("same JSON as another file")
+      continue
+    }
+    seenJson.add(text)
+    const kind = COMPOSITIONS.find((c) => obj(json)?.[c] !== undefined) ?? "unit"
+    documents.push({ id: name, kind, schema: typeof root === "string" ? { $ref: root } : schema, array: false, responseName: "Document", json })
+  }
+  return { description: schema, converter: JSON_SCHEMA, schemaFrom, unit: "specifications", documents, skipped }
 }
