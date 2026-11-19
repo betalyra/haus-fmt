@@ -2,7 +2,7 @@
 
 **A data format for humans: friendly to write, pleasant to read, and at home in your code.**
 
-> **Highly experimental.** This module has the parser, the formatter, the stream reader, the canonical form and hashing, and schemas (package `schema`). The JSON mappings come next.
+> **Highly experimental.** This module has the parser, the formatter, the stream reader, the canonical form and hashing, the three JSON mappings, schemas and checks (package `schema`), and the codecs of the official extensions (`ext/money`, `ext/geo`).
 
 ```sh
 go get github.com/betalyra/haus-fmt/go
@@ -116,6 +116,53 @@ Every rule of spec §14 and §13.3 is checked when a schema loads: names, aritie
 
 Codecs (`schema.Codec`, spec §13.4) choose host types for named types by their id; with the `Value` API they run after the schema and may reject more values (`DecodeOptions{Codecs: …}`), and `schema.DecodeAs` gives the host value. `schema.InstantTime` is an opt-in codec from `Instant` to `time.Time`, which keeps the instant and its offset but not the spelling. `schema.Secret[T]` holds a value that prints, formats, logs and marshals as `<redacted>`, until `Reveal`.
 
+## JSON
+
+Three forms connect haus and JSON (spec §16). The caller says which form it reads; the data never decides.
+
+```go
+v, _ := haus.ImportJSON([]byte(`{"price": 19.90, "tags": ["a"], "note": null}`)) // any JSON: { price: 19.90, tags: ["a"], note: None }
+out, _ := haus.ToHausJSON(v)   // self-describing: {"_haus":1,"_value":{"_rec":{"price":{"_num":"19.90"},…}}}
+back, _ := haus.FromHausJSON(out) // equal to v (spec §2), and every accepted text is the form of exactly one value
+```
+
+Numbers keep their exact text (never a float), readers accept only I-JSON (no duplicate member names, no unpaired surrogates), and the limits of §7 count the haus value: a string's characters after its escapes, bytes as two characters a byte. JSON Lines: `haus.ToHausJSONLines`, `haus.FromHausJSONLines`, `haus.ImportJSONLines`, and `haus.ReadHausJSONLines(r, opts)`, which holds one line at a time.
+
+Schema-based JSON (§16.3) is the JSON a JSON consumer expects, written and read with a type:
+
+```go
+order, _ := s.Type("Order")
+j, err := order.ToJSON(v)     // {"id":"7",…,"total":{"_tag":"Money","values":["44.40",{"_tag":"EUR"}]},"status":{"_tag":"Shipped","tracking":"DE-4711"}}
+d, err := order.FromJSON(j)   // the decoded value, as order.Decode gives it
+```
+
+`Int`, `Int64`, `UInt64` and `Decimal` are strings, bytes base64, the prelude's `Maybe` is `null` or the value where that is unambiguous (tagged otherwise), a closed enum is its tag as a string, and other variants are objects with `"_tag"`. Reading applies the rules of decoding (open records ignore members, unknown tags of open variants are unknown values) and the codecs of `DecodeOptions`. `Type.ToJSONLines`, `FromJSONLines` and `ReadJSONLines` do the same for JSON Lines. A record case with a field named `_tag` or `_args` has no JSON form: converters fail on its values (`no-json-form`), and `Schema.Warnings` points at it when the schema loads.
+
+## Checking data
+
+`Schema.CheckText(typeName, text)` reports every problem of a data file, not only the first, with positions: errors, and hints for fields and tags an open type doesn't list (`unlisted-field`, `unlisted-tag`, with a "did you mean") and for deprecated fields and tags the data uses. A problem inside a `Secret` is one error at the secret, and nothing inside a secret is shown.
+
+```go
+for _, issue := range s.CheckText("Root", text) {
+	fmt.Println(issue) // 4:17: $.lines[1].qyt: qyt is not a field of this closed record. Did you mean qty? [unknown-field]
+}
+```
+
+`Schema.Check` does the same for values without text; `Issue` has `Severity`, `Code`, `Message`, `Path`, `Line`, `Column`, byte `Offset` and `End`, and marshals to the JSON form of spec §17.
+
+## The official extensions
+
+`github.com/betalyra/haus-fmt/go/ext/money` and `…/ext/geo` hold the codecs of the profiles `@haus-fmt/money/iso` (`money.Iso`, `money.IsoCurrency`) and `@haus-fmt/geo/wgs84` (`geo.Wgs84`, `geo.Wgs84BBox`), tested against the profiles' vectors. The schemas themselves are found like any package's: in `node_modules`, or with `schema.NewExplicit()`.
+
+```go
+codecs, _ := schema.NewCodecs(money.Iso, geo.Wgs84)
+v, err := order.DecodeWith(value, schema.DecodeOptions{Codecs: codecs}) // $.total: … Eur is not a currency [type-mismatch]
+```
+
+## Examples
+
+`examples/quickstart` and `examples/order` do the steps of the Rust and TypeScript examples on the shared files in `../examples`: `go run ./examples/quickstart`.
+
 ## Development
 
 ```sh
@@ -123,6 +170,9 @@ go test ./...                 # the conformance suites in ../test-suite, and uni
 go test -race ./...
 go test -run '^$' -fuzz FuzzParse -fuzztime 1m .
 go test -run '^$' -fuzz FuzzSchemaParse -fuzztime 1m ./schema
+go test -run '^$' -fuzz FuzzJSON -fuzztime 1m .
+go test -run '^$' -fuzz FuzzSchemaJSON -fuzztime 1m ./schema
+go test -run '^$' -bench JSON -benchmem . ./schema
 golangci-lint run ./...
 go generate                   # after editing spec/errors.haus: rewrites error_codes.go
 ```

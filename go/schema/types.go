@@ -65,6 +65,9 @@ type typ struct {
 	rec  *recordType
 	vrt  *variantType
 	inst *instance // kRef
+	// jsonNull is set for a kMaybe whose schema-based JSON writes None as
+	// null (spec §16.3); see markJSONNull.
+	jsonNull bool
 }
 
 // recordType is { … } or closed { … }.
@@ -121,10 +124,18 @@ type variantType struct {
 	open  bool
 	cases []caseType
 	index map[string]int
+	// enum is set for a closed variant whose tags have no payload: its
+	// schema-based JSON is the tag as a string (spec §16.3).
+	enum bool
 }
 
 func newVariant(open bool, cases []caseType) *variantType {
-	v := &variantType{open: open, cases: cases}
+	v := &variantType{open: open, cases: cases, enum: !open}
+	for _, c := range cases {
+		if c.payload != payloadNone {
+			v.enum = false
+		}
+	}
 	if len(cases) >= indexFrom {
 		v.index = make(map[string]int, len(cases))
 		for i, c := range cases {

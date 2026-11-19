@@ -25,6 +25,7 @@ Each package also ships the codecs of its profiles, tested against the vectors:
 | Python | `haus-fmt-money`, `haus-fmt-geo` (`python/`), imported as `haus_money`, `haus_geo` | `load_schema(path, packages=[haus_money.PACKAGE], codecs=haus_money.iso \| haus_geo.wgs84)` |
 | Rust | the crates `haus-fmt-money`, `haus-fmt-geo` (`src/`), imported as `haus_money`, `haus_geo` | in `build.rs`: `.codec("@haus-fmt/money@1#Money", "haus_money::Iso")`, `haus_money::IsoCurrency`, `haus_geo::Wgs84`, `haus_geo::Wgs84BBox` ([rust/README.md](../rust/README.md)) |
 | Roc | the Roc packages (`roc/`) | modules `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox`: `haus-gen roc … --codec "@haus-fmt/money@1#Money=money.Iso"` ([roc/README.md](../roc/README.md)) |
+| Go | `github.com/betalyra/haus-fmt/go/ext/money`, `…/ext/geo` (in the Go module, `go/ext/`) | `schema.NewCodecs(money.Iso, money.IsoCurrency, geo.Wgs84, geo.Wgs84BBox)`, passed as `DecodeOptions{Codecs: …}` ([go/README.md](../go/README.md)); the schemas are found like any package's |
 
 There is no haus registry (spec §13.3, *Distribution*). Anyone can publish a
 schema package as an ordinary dependency: to npm, crates.io, PyPI or a private

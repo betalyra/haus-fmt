@@ -115,7 +115,11 @@ func DecodeAs[T any](t Type, v haus.Value, codec Codec) (T, error) {
 	}
 	x, err := codec.Decode(out)
 	if err != nil {
-		return zero, err
+		code := codeOf(err)
+		if code == "" {
+			code = haus.CodeTypeMismatch
+		}
+		return zero, &haus.Error{Code: code, Message: fmt.Sprintf("%s rejects the value: %s", codec.TypeID(), messageOf(err)), Path: "$"}
 	}
 	host, ok := x.(T)
 	if !ok {

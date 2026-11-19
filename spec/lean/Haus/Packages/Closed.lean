@@ -114,6 +114,17 @@ theorem Keeps.packageJsonOf {dir : Path} {owner : String} : Keeps (Closed L) (pa
   unfold Haus.Packages.packageJsonOf
   repeat (first | with_reducible exact Keeps.openPackageFile | kstep)
 
+theorem Keeps.copyNpm {config : Config} {dir : Path} {owner : String} : Keeps (Closed L) (copyNpm config dir owner) := by
+  unfold Haus.Packages.copyNpm
+  repeat (first | with_reducible exact Keeps.packageJsonOf | kstep)
+
+theorem Keeps.checkVersion {config : Config} {m : Manifest} {npm : Option NpmInfo} {owner : String} :
+    Keeps (Closed L) (checkVersion config m npm owner) := by
+  unfold Haus.Packages.checkVersion; keeps
+
+theorem Keeps.checkNoFiles {m : Manifest} {sc : Scanned} : Keeps (Closed L) (checkNoFiles m sc) := by
+  unfold Haus.Packages.checkNoFiles; keeps
+
 theorem Keeps.projectOf {p : Path} : Keeps (Closed L) (projectOf p) := by
   unfold Haus.Packages.projectOf
   repeat (first | with_reducible exact Keeps.openFile | kstep)
@@ -259,6 +270,9 @@ macro "cstep" : tactic => `(tactic| first
   | with_reducible refine Triple.bind (Keeps.manifestOf _) fun _ => ?_
   | with_reducible refine Triple.bind (Keeps.candidates _) fun _ => ?_
   | with_reducible refine Triple.bind (Keeps.packageJsonOf _) fun _ => ?_
+  | with_reducible refine Triple.bind (Keeps.copyNpm _) fun _ => ?_
+  | with_reducible refine Triple.bind (Keeps.checkVersion _) fun _ => ?_
+  | with_reducible refine Triple.bind (Keeps.checkNoFiles _) fun _ => ?_
   | with_reducible refine Triple.bind (Keeps.openPackageFile _) fun _ => ?_
   | with_reducible refine Triple.bind (Keeps.openFile _) fun _ => ?_
   | with_reducible refine Triple.bind (Keeps.countFile _) fun _ => ?_
@@ -337,7 +351,7 @@ theorem appendStep {L c : Nat} {ts : List Nat} {s : St} (h : ClsOk (boundList L 
   rw [boundList_append]; have := h.1.len; have := h.2 c rfl; simp only [St.made] at *; omega
 
 theorem markDone {L i : Nat} {dir : Path} {s : St} (h : Closed L s) (hi : i < s.made) :
-    ClsOk L (some i) { s with copies := (dir, .done i) :: s.copies } := by
+    ClsOk L (some i) { s with copies := (dir, .done i) :: s.copies, finished := addNew s.finished (.copy dir) } := by
   refine ⟨⟨h.len, h.topo, fun d k hk => ?_⟩, fun k e => by cases e; exact hi⟩
   rcases List.mem_cons.mp hk with e | hk
   · cases e; exact hi
@@ -345,12 +359,12 @@ theorem markDone {L i : Nat} {dir : Path} {s : St} (h : Closed L s) (hi : i < s.
 
 -- The many branches of `load`'s copy case (each with the loop and `classify` after it) need more time.
 set_option maxHeartbeats 800000 in
-theorem load_closed {env : Env} : ∀ (n : Nat) (T : Target) (L : Nat),
-    Triple env (Closed L) (load n T) (fun r => ClsOk L r.cls) (Closed L)
+theorem load_closed {env : Env} {w : Walk} : ∀ (n : Nat) (T : Target) (L : Nat),
+    Triple env (Closed L) (load w n T) (fun r => ClsOk L r.cls) (Closed L)
   | 0, _, L => by unfold load; exact Triple.fail fun _ h => h
   | n + 1, .file p, L => by
     unfold load
-    have himp : ∀ (imp : Import), Triple env (Closed L) (resolveImport (load n) (.app p) imp)
+    have himp : ∀ (imp : Import), Triple env (Closed L) (resolveImport (load w n) (.app p) imp)
         (fun _ => Closed L) (Closed L) := fun imp =>
       Triple.mono (resolveImport_closed (fun T L => load_closed n T L) L) (fun _ h => h) (fun _ _ h => h.1)
         (fun _ h => h)
@@ -391,7 +405,7 @@ theorem Keeps.givenPackages {L : Nat} : Keeps (Closed L) givenPackages := by
   unfold Haus.Packages.givenPackages
   repeat (first | with_reducible exact Keeps.manifestOf | kstep)
 
-theorem main_closed {env : Env} {root : Path} : Triple env (Closed 0) (main root) (fun _ => Closed 0) (Closed 0) := by
+theorem main_closed {env : Env} {root : Path} {w : Walk} : Triple env (Closed 0) (main root w) (fun _ => Closed 0) (Closed 0) := by
   unfold main
   refine Triple.bind (Keeps.givenPackages env) fun _ => ?_
   dsimp only

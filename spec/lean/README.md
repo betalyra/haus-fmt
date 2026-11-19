@@ -18,13 +18,14 @@ and a reference parser that computes it.
 | [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does; the value limit (§7) and strict mode (§6) on top of it (`Stream/Limited.lean`) |
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
+| [`Haus/SchemaFile/`](Haus/SchemaFile) | Schema files (spec §14): types as written, a reader for `.schema.haus` text, the checker of §14's static rules, instances of generic types and their resolved types (`load`: text to the environment decoding reads); the proofs that a checked file has finitely many instances (§9.10, with a bound) and that decoding with what `load` returns never fails because of the schema |
 | [`Haus/Schema/Codec.lean`](Haus/Schema/Codec.lean) | Codecs (spec §13.4): a codec as a check on the value the schema decoded, and the laws of §13.4 proven once for every codec |
 | [`Haus/Profiles/`](Haus/Profiles) | The official profiles (spec §13.3) `@haus-fmt/money/iso` and `@haus-fmt/geo/wgs84`: each rule as a definition, a checker proven to compute it, the profile as a codec, and the runner of their test vectors |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new`, with the JSON mappings, the hash, the default limits and the error codes |
 | [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique, that naming a record case's record changes nothing, that an older reader reads a newer writer's JSON (§13.3), and that the readers return no duplicate keys |
-| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, and name isolation |
-| [`Main.lean`](Main.lean) | `haus-ref`, the parser on the command line |
-| [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser for `haus-ref --schema-suite` and `--json-suite`; a record case written by name keeps the name, and the model finds the record itself |
+| [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, name isolation, and order independence |
+| [`Main.lean`](Main.lean) | `haus-ref`, the parser, the schema-file reader and the decoders on the command line |
+| [`scripts/schema-types.ts`](scripts/schema-types.ts), [`schema-suite.json`](schema-suite.json), [`json-suite.json`](json-suite.json) | The schema suite's and the JSON suite's types, resolved by the TypeScript binding's schema-file parser: `--json-suite` decodes with them, `--schema-suite` compares them with the Lean reader's on every case; a record case written by name keeps the name, and the model finds the record itself |
 
 It needs [elan](https://github.com/leanprover/elan) (`brew install elan-init`);
 the Lean version is pinned in `lean-toolchain`. No Mathlib.
@@ -34,18 +35,23 @@ lake build
 .lake/build/bin/haus-ref FILE                    # values as self-describing JSON Lines (spec §16.2)
 .lake/build/bin/haus-ref --suite ../../test-suite # the conformance suite
 .lake/build/bin/haus-ref --time Date 2026-02-29     # a std/time check
-.lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §15)
+.lake/build/bin/haus-ref --schema-suite ../../test-suite/schema  # the schema suite (spec §14, §15)
 .lake/build/bin/haus-ref --json-suite ../../test-suite/json      # the JSON suite (spec §16)
 .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus  # the package suite (spec §13.3)
 .lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus  # a profile's vectors
 .lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
 ```
 
-The schema suite's schema files are parsed by the TypeScript binding
-(`typescript/packages/haus`, built with `pnpm build`), not in Lean.
-[`scripts/schema-types.ts`](scripts/schema-types.ts) writes the types they
-define, resolved, to [`schema-suite.json`](schema-suite.json); run it again
-after changing a schema file (`node scripts/schema-types.ts > schema-suite.json`).
+`--schema-suite` reads each `NAME.schema.haus` of the schema suite itself
+(its bytes decoded as UTF-8 first, `invalid-utf8` as in data; then
+`Haus.SchemaFile.load`: parsed, checked, its generic types instantiated)
+and decodes `NAME.cases.haus` with it; every `invalid/NAME.schema.haus` must
+be rejected with the code in `invalid/NAME.error`. It then runs the cases
+again with the types the TypeScript binding (`typescript/packages/haus`,
+built with `pnpm build`) resolved:
+[`scripts/schema-types.ts`](scripts/schema-types.ts) writes them to
+[`schema-suite.json`](schema-suite.json); run it again after changing a
+schema file (`node scripts/schema-types.ts > schema-suite.json`).
 `haus-ref --schema-batch TYPES FILE` decodes one value per line, for fuzzing.
 The JSON suite's types are written the same way, from `test-suite/json`
 (`node scripts/schema-types.ts ../../test-suite/json > json-suite.json`).
@@ -62,8 +68,8 @@ CODE REASON` when the schema rejects it and `err $ - REASON` when the
 profile does.
 
 Errors carry the code of spec §17 ([`Haus/ErrorCode.lean`](Haus/ErrorCode.lean)):
-the parser's (syntax and limits), the schema decoder's and the JSON
-mappings'. `--batch` prints `err LINE COLUMN CODE REASON`, `--schema-batch`
+the parser's (syntax and limits), the schema-file checker's, the schema
+decoder's and the JSON mappings'. `--batch` prints `err LINE COLUMN CODE REASON`, `--schema-batch`
 and the JSON batch modes print `err PLACE CODE REASON` (`-` where there is
 none), and `--suite`, `--schema-suite` and `--json-suite` check the codes
 the suite expects; `--schema-suite` also checks the place (`path`, spec §15
@@ -238,6 +244,26 @@ the search for the shortest spelling always finds one within its 1100 tries
 and exponent it was given (`decBody_layout`). Rounding and spelling also
 matched JavaScript's `Number` and `toString` exactly on 20,000 random
 literals.
+
+**About schema files** (spec §14), in [`Haus/SchemaFile/`](Haus/SchemaFile).
+A type as written is a term `Tm`: a parameter, a name applied to arguments,
+or a record or variant node (a spread `...Name` is the name `Name` in it).
+`parse` reads a schema file's text (with the data parser's comments,
+strings and attribute values), `declare` and `check` apply the static rules
+of §14, `Source.instances` finds the instances of generic types that the
+definitions without parameters reach, `translate` turns each into a `Ty`
+(spreads copied in), and guarded recursion (§9.9) is checked on the result
+with the decoder's own `whnf`; `load` does all of it, text to `Env`. All
+cases of `test-suite/schema` pass with it, and every schema file in
+`test-suite/schema/invalid` is rejected with its code.
+
+| Theorem | Says |
+|---|---|
+| `Source.reach_finite` (I6) | In a file with regular generics (§9.10: `GrowthOk`), the instances reachable from any types `ts` are at most `instBound F ts`, a number computed from the file and `ts` |
+| `check_finite` (I6) | The same for every file `check` accepts: its rule for §9.10 (`checkGrowth`) gives `GrowthOk` (`checkGrowth_ok`, through `reaches_complete`: the checker finds every definition a definition reaches) |
+| `doubling_infinite`, `doubling_checks_without_groups`, `doubling_rejected` | §9.10's example (`type A a = < X (B (P a a)) \| Done >`, `type B a = < Y (A (P a a)) \| Stop >`) passes every other rule, reaches infinitely many instances, and is rejected by the rule for groups |
+| `Source.instances_reach`, `Source.instances_some` | What the reference computes is exactly the reachable instances; for a checked file it returns whenever `instBound` is within the bindings' limit |
+| `load_decode` (I4) | For every schema file `load` accepts and every name in it, decoding any value never fails with `unknown-type` or `unguarded-recursion`; `whnf_ok`: following names succeeds on every closed type within `env.fuel` steps |
 
 **About codecs and profiles** (spec §13.3, §13.4). A codec
 ([`Schema/Codec.lean`](Haus/Schema/Codec.lean)) reads the value the type's
@@ -429,9 +455,11 @@ time, with Hoare-style triples for the resolver's monad (`Run.lean`) and
 | `candidates_from` | A package found for `@org/name` is one given explicitly with that name, or what the npm walk finds (R5) |
 | `npmLookup_eq`, `npmLookup_isolated`, `walk_mem`, `walk_skips_scope` | The walk reads no file and depends only on the real paths of `D/node_modules/@org/name`, for the directories `D` from the importer's up that §13.3 keeps: never `node_modules/@scope/node_modules` (R5, F1). Node's walk does try it (`nodeWalk_scope`) and finds a planted package (`#guard`) |
 | `runIn_closed`, `classes_topo` | In every state of every run, a package imports only packages made before it, and every copy loaded names a package made: the packages reached and their imports form a graph without cycles, made imports first (a step of R3, `Closed.lean`) |
+| `resolveIn_walk`, `resolveIn_walk_error` | The result doesn't depend on the order the imports of each file are walked in (`Walk`): a run that succeeds succeeds in every order with the same packages, one that fails fails in every order (R3, F4; the error code may differ; `Walk.lean`) |
+| `load_good`, `load_sim` | A successful run's finished targets pass their checks as properties of the tree and import only targets finished before them (`Done.lean`); a run in another order stays below such a state and never fails (R3, `Walk.lean`) |
 
-Not proven: that the result doesn't depend on the order of imports (R3) and
-that a folder of packages never changes a successful result (R6); see
-`PLAN.md` for what is left. With two
-mistakes in one schema, the error reported does depend on the order
-(`Order.lean`); the spec doesn't say which one is reported.
+Not proven: that a folder of packages never changes a successful result
+(R6); see `PLAN.md` for what is left. With two mistakes in one schema, the
+error reported does depend on the order (`Order.lean`); the spec doesn't
+say which one is reported, and R3 is about success, failure and the
+packages.

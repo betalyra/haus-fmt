@@ -5,6 +5,20 @@ import "github.com/betalyra/haus-fmt/go/internal/hooks"
 func init() {
 	hooks.RecordOwned = recordOwned
 	hooks.NumberLit = func(lit string) Number { return Number{lit: lit} }
+	hooks.ParseSchemaJSON = func(src string, lim Limits, skipBOM bool) (Value, error) {
+		return parseJSON(src, lim, jsonSchema, skipBOM)
+	}
+	hooks.SelfDescribing = func(j Value, lim Limits, depth int, prefix string) (Value, error) {
+		s := selfDescribing{lim: lim, prefix: prefix}
+		return s.value(j, depth)
+	}
+	hooks.SelfDescribingArgs = func(tag string, args Value, lim Limits, depth int, prefix string) (Value, error) {
+		s := selfDescribing{lim: lim, prefix: prefix}
+		return s.variant(tag, args, depth)
+	}
+	hooks.AppendSelfDescribing = appendSelfDescribing
+	hooks.AppendJSONString = appendJSONString
+	hooks.JSONLines = jsonLines
 }
 
 // recordOwned builds a record from fields with distinct keys, which it keeps.

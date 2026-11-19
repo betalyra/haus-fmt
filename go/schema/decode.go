@@ -230,6 +230,7 @@ func pathString(steps []step) string {
 type walker struct {
 	lim      haus.Limits
 	encoding bool
+	reading  bool // v is JSON read as by the import: schema-based JSON (§16.3)
 	codecs   *Codecs
 	root     haus.Value
 	path     []step
@@ -247,6 +248,12 @@ func (w *walker) fail(code haus.ErrorCode, format string, args ...any) error {
 // child decodes v with t one level deeper, at the step s.
 func (w *walker) child(s step, v haus.Value, t *typ) (haus.Value, bool, error) {
 	w.path = append(w.path, s)
+	return w.nest(v, t, 1)
+}
+
+// nest decodes v with t one level deeper; on success it drops the last
+// pop steps of the path.
+func (w *walker) nest(v haus.Value, t *typ, pop int) (haus.Value, bool, error) {
 	if w.depth >= w.lim.MaxDepth {
 		code := haus.CodeNestingTooDeep
 		// Only a value built in code can contain itself; at the depth limit
@@ -268,7 +275,7 @@ func (w *walker) child(s step, v haus.Value, t *typ) (haus.Value, bool, error) {
 	out, changed, err := w.value(v, t)
 	w.depth--
 	if err == nil {
-		w.path = w.path[:len(w.path)-1]
+		w.path = w.path[:len(w.path)-pop]
 	}
 	return out, changed, err
 }
@@ -281,7 +288,17 @@ func (w *walker) value(v haus.Value, t *typ) (haus.Value, bool, error) {
 			"decode budget of %d steps exceeded (a schema doing more work than the input justifies)", w.budget)
 	}
 	rt := resolve(t)
-	out, changed, err := w.resolved(v, rt, t)
+	var (
+		out     haus.Value
+		changed bool
+		err     error
+	)
+	if w.reading {
+		out, err = w.readJSON(v, rt, t)
+		changed = true
+	} else {
+		out, changed, err = w.resolved(v, rt, t)
+	}
 	if err != nil || w.codecs == nil || len(w.codecs.byID) == 0 {
 		return out, changed, err
 	}

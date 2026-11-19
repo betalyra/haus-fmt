@@ -45,6 +45,15 @@ import Haus.Schema.Rules
 import Haus.Schema.Correct
 import Haus.Schema.RoundTrip
 import Haus.Schema.Codec
+import Haus.SchemaFile.Syntax
+import Haus.SchemaFile.Parse
+import Haus.SchemaFile.Check
+import Haus.SchemaFile.Instances
+import Haus.SchemaFile.Terms
+import Haus.SchemaFile.Groups
+import Haus.SchemaFile.Finite
+import Haus.SchemaFile.Closure
+import Haus.SchemaFile.Decoding
 import Haus.Version
 import Haus.Json.Data
 import Haus.Json.Base64
@@ -77,6 +86,9 @@ import Haus.Packages.Isolation
 import Haus.Packages.Suite
 import Haus.Packages.Order
 import Haus.Packages.Closed
+import Haus.Packages.Steps
+import Haus.Packages.Done
+import Haus.Packages.Walk
 import Haus.Profiles.Money
 import Haus.Profiles.Geo
 import Haus.Profiles.Vectors

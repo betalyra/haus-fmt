@@ -155,3 +155,57 @@ func TestCodesAreConstants(t *testing.T) {
 		}
 	}
 }
+
+// FuzzSchemaJSON: reading schema-based JSON with the suite's types never
+// panics and reports catalogue codes; what it reads is a decoded value,
+// whose JSON reads back to the same value (spec §16.3, "Round trip").
+func FuzzSchemaJSON(f *testing.F) {
+	s, err := schema.Load("../../test-suite/json/schema-based.schema.haus", schema.Options{})
+	if err != nil {
+		f.Fatal(err)
+	}
+	var types []schema.Type
+	for _, d := range s.Definitions() {
+		if len(d.Params) == 0 {
+			ty, _ := s.Type(d.Name)
+			types = append(types, ty)
+		}
+	}
+	src, _ := os.ReadFile("../../test-suite/json/schema-based.cases.haus")
+	values, _ := haus.ParseAll(src)
+	for _, v := range values {
+		r := v.(haus.Variant).Args[0].(haus.Record)
+		name, _ := r.Get("type")
+		j, _ := r.Get("json")
+		for i, ty := range types {
+			if ty.Name() == string(name.(haus.String)) {
+				f.Add(uint8(i), []byte(j.(haus.String)))
+			}
+		}
+	}
+	f.Fuzz(func(t *testing.T, which uint8, data []byte) {
+		ty := types[int(which)%len(types)]
+		v, err := ty.FromJSON(data)
+		if err != nil {
+			var e *haus.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("not an *Error: %v", err)
+			}
+			if _, ok := e.Code.Info(); !ok {
+				t.Fatalf("code %q is not in the catalogue", e.Code)
+			}
+			return
+		}
+		out, err := ty.ToJSON(v)
+		if err != nil {
+			t.Fatalf("%s: write %v: %v", ty.Name(), v, err)
+		}
+		back, err := ty.FromJSON(out)
+		if err != nil {
+			t.Fatalf("%s: read back %s: %v", ty.Name(), out, err)
+		}
+		if !haus.Equals(back, v) {
+			t.Fatalf("%s: %s reads back to another value", ty.Name(), out)
+		}
+	})
+}
