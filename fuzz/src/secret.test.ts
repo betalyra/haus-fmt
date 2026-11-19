@@ -53,3 +53,11 @@ test("disguise keeps the shape", () => {
   assert.equal(disguise("value"), "wbmvf")
   assert.equal(disguise("Zz-09"), "Aa-11")
 })
+
+test("a key of a Map above a secret is public, also when a secret holds the same string", () => {
+  const env: Env = new Map([["Vault", { map: { secret: { record: { closed: false, fields: [{ key: "id", optional: false, type: { builtin: "Int" } }] } } } }]])
+  // "Upper" is a key of the map (public) and a key inside one of the secrets.
+  const parts = secretParts(env, "Vault", `{ Upper: { id: "x" }, other: { Upper: 1, id: 2 } }`)
+  assert.equal(parts.includes("Upper"), false)
+  assert.equal(parts.includes("other"), false)
+})

@@ -248,7 +248,10 @@ export const disguise = (s: string): string =>
 
 /**
  * The strings, numbers and keys at secret places of a case's value (at least
- * 5 characters, so that they don't turn up in a message by chance).
+ * 5 characters, so that they don't turn up in a message by chance). A string
+ * that is also a key of a `Map` on the way to a secret is left out: that key
+ * is public (an error inside the secret names it in its path, §15), so seeing
+ * it proves nothing.
  */
 export function secretParts(env: Env, type: string, text: string): string[] {
   let v: Value
@@ -260,6 +263,7 @@ export function secretParts(env: Env, type: string, text: string): string[] {
     return []
   }
   const out = new Set<string>()
+  const shown = new Set<string>()
   const all = (x: Value): void => {
     if (x.kind === "string") out.add(x.value)
     else if (x.kind === "number") out.add(x.text)
@@ -272,7 +276,10 @@ export function secretParts(env: Env, type: string, text: string): string[] {
     if ("secret" in t) return all(x)
     if ("ref" in t) return walk(env.get(t.ref)!, x, depth + 1)
     if ("array" in t && x.kind === "array") return x.items.forEach((y) => walk(t.array, y, depth + 1))
-    if ("map" in t && x.kind === "record") return x.fields.forEach((y) => walk(t.map, y, depth + 1))
+    if ("map" in t && x.kind === "record") {
+      for (const [k, y] of x.fields) (shown.add(k), walk(t.map, y, depth + 1))
+      return
+    }
     if ("maybe" in t && x.kind === "variant") return x.args.forEach((y) => walk(t.maybe, y, depth + 1))
     const fields = (fs: RecordFields, y: Value | undefined) => {
       if (y?.kind === "record") for (const f of fs) if (y.fields.has(f.key)) walk(f.type, y.fields.get(f.key)!, depth + 1)
@@ -286,7 +293,7 @@ export function secretParts(env: Env, type: string, text: string): string[] {
     }
   }
   walk({ ref: type }, v, 0)
-  return [...out].filter((x) => [...x].length >= 5)
+  return [...out].filter((x) => [...x].length >= 5 && !shown.has(x))
 }
 
 type RecordFields = readonly { readonly key: string; readonly type: Type }[]
