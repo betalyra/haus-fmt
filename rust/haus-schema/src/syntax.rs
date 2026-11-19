@@ -794,10 +794,12 @@ fn record<'a>(closed: bool) -> impl Parser<Input<'a>, Ty, E> {
     let field = (pos, key, cut_err((opt(sym("?")), preceded(sym(":"), ty)))).map(|(pos, key, (optional, ty))| {
         Member::Own(Field { key, optional: optional.is_some(), ty, pos, attrs: vec![] })
     });
-    let body = terminated(
-        separated(0.., attributed("a field after the attributes", alt((spread, field))), sym(",")),
+    // A trailing comma only after a member: `{,}` is not a record (grammar: record_type).
+    let body = opt(terminated(
+        separated(1.., attributed("a field after the attributes", alt((spread, field))), sym(",")),
         opt(sym(",")),
-    );
+    ))
+    .map(Option::unwrap_or_default);
     (pos, preceded(sym("{"), cut_err(terminated(body, sym("}"))))).map(move |(pos, members)| {
         let (fields, spreads) = split(members, |f, attrs| Field { attrs, ..f });
         Ty::Record { closed, fields, spreads, pos }
