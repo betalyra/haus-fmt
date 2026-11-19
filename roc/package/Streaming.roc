@@ -265,12 +265,17 @@ unbalanced = |s, i| {
 	match utf8(piece, s.origin) {
 		Err(e) => e
 		Ok(text) =>
-			match Value.parse_rest_with(text, s.options.limits) {
-				Err(e) => shift(e, s.origin)
-				Ok(_) => {
-					end = after(s.origin, s.buf.sublist({ start: 0, len: i }))
-					{ code: ErrorCode.unexpected_closer, reason: "unexpected closing bracket", line: end.line, column: end.column }
-				}
+		# A version directive comes first, as in `cut` and `finish`: `#haus}`.
+			match directive(text, s.origin) {
+				Err(e) => e
+				Ok(_) =>
+					match Value.parse_rest_with(text, s.options.limits) {
+						Err(e) => shift(e, s.origin)
+						Ok(_) => {
+							end = after(s.origin, s.buf.sublist({ start: 0, len: i }))
+							{ code: ErrorCode.unexpected_closer, reason: "unexpected closing bracket", line: end.line, column: end.column }
+						}
+					}
 			}
 	}
 }
@@ -420,6 +425,8 @@ expect {
 expect Streaming.all(["#haus 2\n1,\n2,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("the file starts with a version directive (#haus): it needs a newer version of haus")
 expect Streaming.all(["\u(FEFF)#ha".to_utf8(), "us 2\n1,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| (e.reason, e.column)) == Err(("the file starts with a version directive (#haus): it needs a newer version of haus", 2))
 expect Streaming.all(["1,\n#haus 2,\n".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.reason) == Err("expected a value, found '#'")
+# A version directive before an unbalanced closer is still the directive (found by the fuzzer).
+expect Streaming.all(["#haus}".to_utf8()]).map_ok(|vs| vs.len()).map_err(|e| e.code) == Err("version-directive")
 
 # The parser's limits apply to each value (`Options.limits`), with positions in the whole stream.
 expect {
