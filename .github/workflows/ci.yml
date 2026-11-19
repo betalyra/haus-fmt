@@ -371,8 +371,7 @@ jobs:
         # Run every language, even when one fails.
         if: success() || failure()
         working-directory: go
-        # All of ./schema: on Unix this includes the package suite, which makes
-        # symbolic links; on Windows the rest (as Rust's step does).
+        # All of ./schema, the package suite (which makes symbolic links) included.
         run: go test ./schema
 
   packages-macos:
@@ -419,8 +418,7 @@ jobs:
         # Run every language, even when one fails.
         if: success() || failure()
         working-directory: go
-        # All of ./schema: on Unix this includes the package suite, which makes
-        # symbolic links; on Windows the rest (as Rust's step does).
+        # All of ./schema, the package suite (which makes symbolic links) included.
         run: go test ./schema
 
   fuzz-build:

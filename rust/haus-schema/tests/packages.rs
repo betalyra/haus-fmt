@@ -2,7 +2,9 @@
 //! tree, written into a temporary directory, a schema file loaded from it
 //! with packages found in `node_modules` (`Npm`) or given explicitly
 //! (`Explicit`), and the result. See test-suite/README.md, "Package suite".
-#![cfg(unix)]
+//! It runs on Unix and Windows (where making links needs Developer Mode or
+//! an administrator, as on CI).
+#![cfg(any(unix, windows))]
 
 use haus::Value;
 use haus::json::Json;

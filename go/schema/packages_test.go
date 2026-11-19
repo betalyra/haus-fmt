@@ -1,8 +1,3 @@
-//go:build unix
-
-// The package suite makes symbolic links, so it runs on Unix only, as Rust's
-// does; the other tests of this package run everywhere.
-
 package schema_test
 
 import (
@@ -65,6 +60,9 @@ func create(t *testing.T, root string, entry haus.Variant) {
 		b, _ := json.Marshal(doc)
 		write(t, filepath.Join(root, at(0), "package.json"), string(b))
 	case "Link":
+		// On Windows, making links needs Developer Mode or an administrator
+		// (as on CI); os.Symlink writes the target with \ and makes a link to
+		// a directory as one if the directory exists: links are made last.
 		path := filepath.Join(root, at(0))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -125,6 +123,8 @@ func load(root string, c haus.Record) ([]string, error) {
 	return reached, nil
 }
 
+// writeTree writes a case's files under root: links last, once their
+// targets exist.
 func writeTree(t *testing.T, root string, c haus.Record) {
 	files := get(c, "files").(haus.Array)
 	for _, links := range []bool{false, true} {
