@@ -1389,11 +1389,12 @@ func (l *loader) named(u int, t *ty, env map[string]*typ) (*typ, *fail) {
 		return out, nil
 	}
 	if n, ok := generic[t.name]; ok {
-		if t.name == "Stream" {
-			return nil, failIn(u, t.pos, haus.CodeMisplacedStream, "Stream is only allowed as the whole type of a definition")
-		}
+		// Arity first, then where it is: `{ e: Stream }` is wrong-arity.
 		if f := arity(n); f != nil {
 			return nil, f
+		}
+		if t.name == "Stream" {
+			return nil, failIn(u, t.pos, haus.CodeMisplacedStream, "Stream is only allowed as the whole type of a definition")
 		}
 		args, f := evalArgs()
 		if f != nil {

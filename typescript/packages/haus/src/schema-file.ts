@@ -278,7 +278,7 @@ export interface SchemaFile {
 // ── lexer ────────────────────────────────────────────────────
 
 type Token =
-  | { readonly t: "upper" | "lower" | "string" | "module" | "attribute"; readonly value: string; readonly pos: number }
+  | { readonly t: "upper" | "lower" | "string" | "attribute"; readonly value: string; readonly pos: number }
   | { readonly t: "punct"; readonly value: string; readonly pos: number }
   | { readonly t: "eof"; readonly value: ""; readonly pos: number }
 
@@ -345,19 +345,7 @@ class Lexer {
       this.pos += m[0].length
       return { t: /^[A-Z]/.test(m[0]) ? "upper" : "lower", value: m[0], pos }
     }
-    // A package or file after `import`: @org/name, @org/name@1, ./file, ../dir/file.
-    // Package names are checked when the import is loaded (lowercase, spec §13.3), for a clear message.
-    const module = /(@[A-Za-z0-9_.~-]+\/[A-Za-z0-9_.~-]+)(?:@([A-Za-z0-9_.+-]*))?|\.\.?\/[A-Za-z0-9_./-]*/y
-    if (s[pos] === "@" || s.startsWith("./", pos) || s.startsWith("../", pos)) {
-      module.lastIndex = pos
-      const mm = module.exec(s)
-      if (mm) {
-        const [, name, version] = mm
-        if (version !== undefined && !MAJOR.test(version)) importVersionError(this.fail, name!, version, pos)
-        this.pos += mm[0].length
-        return { t: "module", value: mm[0], pos }
-      }
-    }
+    // (The module after `import` is read by the parser: SchemaParser.parseModule.)
     // An attribute: @deprecated (its arguments are parsed by the parser).
     if (s[pos] === "@") {
       const attribute = /@([a-z_][A-Za-z0-9_]*)/y
@@ -614,16 +602,37 @@ class SchemaParser {
     return values
   }
 
-  private parseImport(): ImportDecl {
-    const pos = this.advance().pos
-    const parts: string[] = []
-    if (this.cur().t === "module") parts.push(this.advance().value)
-    else {
-      do {
-        if (this.tok.t !== "lower") this.unexpected("a module like std/time, @org/name or ./file")
-        parts.push(this.advance().value)
-      } while (this.is("/") && this.advance())
+  /**
+   * The module of an import (grammar `module`), the current token being
+   * `import`: `std/` and an identifier, or `@` or `.` and the characters a
+   * module may have after it, with no whitespace inside (`std/ time` is not
+   * a module). Read from the text, as the lexer doesn't know modules; what
+   * it names is checked when the import is loaded.
+   */
+  private parseModule(): string {
+    const lexer = this.lexer
+    lexer.skip()
+    const start = lexer.pos
+    const module = /std\/[a-z_][A-Za-z0-9_]*|[@.][A-Za-z0-9_.\-/@~]+/y
+    module.lastIndex = start
+    const m = module.exec(this.text)
+    if (!m) {
+      this.tok = lexer.next()
+      return this.unexpected("a module like std/time, @org/name or ./file")
     }
+    // `@org/name@V`: an import names only a major version (spec §13.3).
+    const at = m[0].startsWith("@") ? m[0].indexOf("@", 1) : -1
+    if (at >= 0 && !MAJOR.test(m[0].slice(at + 1))) importVersionError(this.fail, m[0].slice(0, at), m[0].slice(at + 1), start)
+    lexer.pos = start + m[0].length
+    this.lastEnd = lexer.pos
+    this.tok = lexer.next()
+    return m[0]
+  }
+
+  private parseImport(): ImportDecl {
+    // The token after `import` is read by parseModule, not the lexer.
+    const pos = this.tok.pos
+    const module = this.parseModule()
     this.expect("(")
     const names: { name: string; pos: number }[] = []
     while (!this.is(")")) {
@@ -634,7 +643,7 @@ class SchemaParser {
     }
     if (names.length === 0) this.unexpected("a type name (an import names at least one type)", "unknown-import")
     this.advance()
-    return { module: parts.join("/"), names, pos, end: this.lastEnd }
+    return { module, names, pos, end: this.lastEnd }
   }
 
   private parseType(attributes: readonly AttributeNode[]): TypeDecl {
@@ -766,6 +775,8 @@ class SchemaParser {
       } else this.unexpected(attributes.length > 0 ? "a tag after the attribute" : "a tag, ...Name or '>'")
       if (this.is(">")) break
       this.expect("|")
+      // The grammar has no '|' after the last alternative: `< Y | >` is an error.
+      if (this.is(">")) this.unexpected("a tag or ...Name after '|'")
     }
     this.advance()
     if (closed && cases.length === 0 && spreads.length === 0) this.fail("closed-empty-variant", "a closed variant needs at least one tag", pos)

@@ -7,6 +7,8 @@ Read { json: "19.90", output: 19.90 },
 Read { json: "\"\\ud83d\\ude00\"", output: "\u{1F600}" },
 Err { json: "{\"a\": 1, \"a\": 2}", code: "duplicate-key" },
 Err { json: "\"\\ud83d\"", code: "unpaired-surrogate" },
+// A \u after a high surrogate needs its four hex digits like any other.
+Err { json: "\"\\ud83d\\u\"", code: "invalid-unicode-escape" },
 Err { json: "[1,]", code: "json-syntax" },
 Err { json: "NaN", code: "json-syntax" },
 Read { json: "\u{FEFF}[1]", output: [1] },

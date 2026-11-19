@@ -1,0 +1,3 @@
+// Stream without its argument is wrong-arity wherever it is written: the
+// arity is checked before the place (spec §14).
+type A = { events: Stream }

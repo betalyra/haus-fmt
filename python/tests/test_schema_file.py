@@ -448,7 +448,9 @@ def test_import_errors() -> None:
     rejects("import std/time (Date)\nimport std/time (Date)", "Date is imported twice")
     rejects("import std/time (Date)\ntype Date = Int", "type Date is already imported")
     rejects("import std/time ()", "expected a type name")
-    rejects("import money (Money)", "unknown module money")
+    rejects("import money (Money)", "expected a module like std/time, @org/name or ./file")
+    rejects("import .x (A)", "unknown module .x")
+    rejects("import std/ time (Date)", "expected a module like std/time, @org/name or ./file")
 
     # One package per name: two copies found in different places, or two major versions.
     @dataclass(frozen=True, slots=True)

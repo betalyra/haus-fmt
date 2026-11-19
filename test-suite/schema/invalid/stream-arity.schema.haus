@@ -1,0 +1,3 @@
+// Stream takes one argument, the type of its items: its arity is checked
+// before where it is (spec §14).
+type Events = Stream

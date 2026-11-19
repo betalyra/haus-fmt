@@ -1,0 +1,3 @@
+// A module is one word: no whitespace inside it (grammar.ebnf, module).
+import std/ time (Date)
+type A = { day: Date }

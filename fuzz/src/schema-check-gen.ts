@@ -201,9 +201,9 @@ function parts(r: Rng): Parts {
   })
   const w = new Writer(r)
   const texts = defs.map((d) => w.definition(d, { defs, params: [], time }))
-  // Every generic type is used, so that its instances are checked (§9.9: Lean checks guarded recursion on instances).
+  // Sometimes every generic type is used too, so that instances of it are checked; unused ones are checked all the same (§14).
   const generic = defs.filter((d) => d.params.length > 0)
-  if (generic.length > 0) texts.push(`type Uses = { ${generic.map((d, i) => `u${i}: ${d.name}${" Int".repeat(d.params.length)}`).join(", ")} }`)
+  if (generic.length > 0 && r.chance(0.5)) texts.push(`type Uses = { ${generic.map((d, i) => `u${i}: ${d.name}${" Int".repeat(d.params.length)}`).join(", ")} }`)
   return { defs, imports, texts }
 }
 
@@ -213,14 +213,14 @@ const MISTAKES: readonly ((r: Rng, f: Parts) => void)[] = [
   (r, f) => f.texts.push(`type ${r.pick(f.defs).name} = Int`), // duplicate-type
   (r, f) => f.texts.push(`type ${r.pick([...BUILTINS, "Maybe", "Result", "Stream", "Array", "Secret"])} = Int`), // redefine-prelude
   (r, f) => f.texts.push(`type Q = { x: ${r.pick(["Strng", "Foo", "Q2", "Date", "Instant"])} }`), // unknown-type (std/time types unless imported)
-  (r, f) => f.texts.push(`type Q = ${r.pick(["Array", "Map Int Int", "Result Int", "Secret", "Any Int", "Int String", "Maybe", "Array Int Int", "{ x: Maybe }"])}`), // wrong-arity
+  (r, f) => f.texts.push(`type Q = ${r.pick(["Array", "Map Int Int", "Result Int", "Secret", "Any Int", "Int String", "Maybe", "Array Int Int", "{ x: Maybe }", "Stream", "Stream Int Int", "{ x: Stream }", "Array Stream"])}`), // wrong-arity (Stream's arity before its place)
   (r, f) => {
     const g = f.defs.find((d) => d.params.length > 0)
     f.texts.push(g ? `type Q = { x: ${g.name}${r.chance(0.5) ? "" : " Int".repeat(g.params.length + 1)} }` : "type Q = { x: b }")
   },
   (r, f) => f.texts.push(r.pick(["type P a a = { x: a }", "type P _a = { x: _a }", "type P a = { x: _ }", "type P closed = Int", "type P type = Int", "type P A = Int", "type P a = { x: b }", "type Q = _"])),
   // fields, tags, spreads
-  (r, f) => f.texts.push(r.pick(["type Q = { x: Int, x: String }", 'type Q = { x: Int, "x": String }', 'type Q = { "\\u{78}": Int, x: String }', "type Q = < X | X Int >", "type Q = closed < >", "type Q = closed <>", "type Q = < >", "type Q = closed { }"])),
+  (r, f) => f.texts.push(r.pick(["type Q = { x: Int, x: String }", 'type Q = { x: Int, "x": String }', 'type Q = { "\\u{78}": Int, x: String }', "type Q = < X | X Int >", "type Q = closed < >", "type Q = closed <>", "type Q = < >", "type Q = closed { }", "type Q = < X | >", "type Q = < | X | >", "type Q = closed < X | Y | >", "type Q = < | >"])),
   (r, f) => {
     const rec = f.defs.find((d) => d.kind === "record" && d.params.length === 0)?.name
     const vrt = f.defs.find((d) => d.kind === "variant" && d.params.length === 0)?.name
@@ -234,6 +234,9 @@ const MISTAKES: readonly ((r: Rng, f: Parts) => void)[] = [
       "type Q = < ...a >",
       "type Q = { ...Q }",
       "type Q = < ...R >\ntype R = < ...Q >",
+      "type Q = { x: { ...R } }\ntype R = { y: { ...Q } }",
+      "type Q = { x: Array { ...R } }\ntype R = { y: < Y { ...S } > }\ntype S = Q",
+      "type Q = < X { ...R } >\ntype R = { y: Maybe { ...Q } }",
       "type G a = { x: a }\ntype Q = { ...G }",
       "type G a = { x: a }\ntype Q = { ...G Int }",
       "type R = { x: Int }\ntype Q = { ...R, ...R }",
@@ -254,7 +257,8 @@ const MISTAKES: readonly ((r: Rng, f: Parts) => void)[] = [
     "type L a = < Nil | Cons a (L (L a)) >\ntype Q = L Int", "type P a b = { l: a, r: b }\ntype T a = < X (T (P a a)) | E >", "type L a = < X (L (Array a)) | E >",
     "type S a b = < X a (S b (Array a)) | E >", "type A1 a = < X (B1 a) | E >\ntype B1 b = < Y (C1 (Array b)) >\ntype C1 c = < Z (A1 c) >",
     "type Sw a b = < S a (Sw b a) | E >\ntype Q = Sw Int String", "type Q a = { x: Q (Maybe a) }", "type Q a = { x: Maybe (Q a) }",
-    "type Q a = < N | C (Q a) >\ntype R = Q (Q Int)", "type Q = { x: Secret (Maybe Q) }", "type Q a = Q a\ntype U = { u: Q Int }", "type Q a = Secret (Q a)\ntype U = { u: Q Int }",
+    "type Q a = < N | C (Q a) >\ntype R = Q (Q Int)", "type Q = { x: Secret (Maybe Q) }", "type Q a = Q a\ntype U = { u: Q Int }", "type Q a = Secret (Q a)\ntype U = { u: Q Int }", "type Q a = Q a", "type Q a = Secret (Q a)",
+    "type Q a b = R b a\ntype R a b = Q a b", "type I a = a\ntype Q a = I (Q a)",
     "type Q a = { kids: Array (Q (Q a)) }", "type Nd a = { value: a, meta: Mt }\ntype Mt = { history: Nd String }", "type Q a = { x: R a }\ntype R b = { y: Q (Array b) }",
   ])),
   // imports
@@ -262,6 +266,8 @@ const MISTAKES: readonly ((r: Rng, f: Parts) => void)[] = [
     "import std/time (Date, Date)", "import std/money (Money)", "import std/time (Day)", "import ./common (A9)", "import ../x/y (A9)",
     "import @haus-fmt/money@1 (Money)", "import @haus-fmt/money@1.1 (Money)", "import @haus-fmt/money@01 (Money)", "import @haus-fmt/money@ (Money)",
     "import @haus-fmt/money (Money)", "import std/time ()", "import std/time", "import std/time (date)",
+    "import @Haus/money@1 (Money)", "import @haus-fmt/node_modules (Money)", "import @haus-fmt (Money)", "import .x (A9)", "import @a/b/c (A9)",
+    "import std/ time (Date)", "import std /time (Date)", "import std/time/x (Date)", "import std (Date)", "import foo/bar (A9)", "import @a/b@1~x (A9)",
     "import std/time (Date)\nimport std/time (Date)", "import std/time(Date)", "import std/time (Date) import std/time (Time)",
   ])),
   // lexical errors, as in data, and syntax

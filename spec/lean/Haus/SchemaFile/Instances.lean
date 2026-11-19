@@ -73,6 +73,15 @@ def Source.instances (F : Source) (ts : List Tm) : Option (List Inst) :=
 def Source.roots (F : Source) : List Tm :=
   (F.defs.filter (·.params.isEmpty)).map fun d => .ref d.name []
 
+/--
+Every definition as a type, a generic one with `Any` for each parameter: what
+§14 checks guarded recursion on, used or not (`type Q a = Q a` is unguarded
+even when nothing uses `Q`). A parameter stands for a type that consumes
+input, as `Any` does.
+-/
+def Source.templates (F : Source) : List Tm :=
+  F.defs.map fun d => .ref d.name (d.params.map fun _ => .ref "Any" [])
+
 /-! ## Names of instances -/
 
 mutual
@@ -277,6 +286,8 @@ def Source.instancesC (F : Source) (ts : List Tm) : C (List Inst) :=
 A schema file's text to the environment decoding reads (§14, §15): parsed,
 declared, checked, its instances computed and resolved, guarded recursion
 checked. The definitions without parameters are in it under their names.
+Guarded recursion is also checked on every definition, used or not
+(`Source.templates`, §14), which adds nothing to the environment.
 -/
 def load (text : Text) : C Env := do
   let F ← declare (← parseC text)
@@ -285,6 +296,7 @@ def load (text : Text) : C Env := do
   let env ← F.envOf S
   closedEnv env
   guarded env
+  guarded (← F.envOf (← F.instancesC F.templates))
   return env
 
 private def loadCode (src : String) : Option Code :=
@@ -308,10 +320,18 @@ private def loadCode (src : String) : Option Code :=
 #guard loadCode "type B a = { x: a }\ntype A = { ...B }" == some .invalidSpread
 #guard loadCode "type A = { ...Int }" == some .invalidSpread
 #guard loadCode "type A = { x: { ...A } }" == some .spreadCycle
+#guard loadCode "type P = { x: { ...R } }\ntype R = { y: { ...P } }" == some .spreadCycle
+#guard loadCode "type P = { x: Array { ...R } }\ntype R = { y: { ...S } }\ntype S = P" == some .spreadCycle
 #guard loadCode "type E = Stream Int\ntype A = { e: E }" == some .misplacedStream
 #guard loadCode "type A = { e: Stream Int }" == some .misplacedStream
+#guard loadCode "type A = Stream" == some .wrongArity
+#guard loadCode "type A = { e: Stream }" == some .wrongArity
+#guard loadCode "type A = Stream Int Int" == some .wrongArity
 #guard loadCode "type A = Secret A" == some .unguardedRecursion
 #guard loadCode "type I a = a\ntype X = I X" == some .unguardedRecursion
+#guard loadCode "type Q a = Q a\ntype R = Int" == some .unguardedRecursion
+#guard loadCode "type Q a = Secret (Q a)" == some .unguardedRecursion
+#guard loadCode "type I a = a\ntype J a = I a" == none
 #guard loadCode "type L a = < Nil | Cons a (L (L a)) >\ntype X = L Int" == some .growingRecursion
 #guard loadCode "type P a b = { l: a, r: b }\ntype T a = < X (T (P a a)) | E >" == some .growingRecursion
 #guard loadCode "type L a = < X (L (Array a)) | E >" == some .growingRecursion
@@ -321,6 +341,13 @@ private def loadCode (src : String) : Option Code :=
 #guard loadCode "import std/time (Date, Date)\ntype A = Date" == some .duplicateImport
 #guard loadCode "import std/time (Day)\ntype A = Day" == some .unknownImport
 #guard loadCode "import ./common (A)\ntype B = A" == some .importUnavailable
+#guard loadCode "import @haus-fmt/money@1 (Money)\ntype A = Money" == some .importUnavailable
+#guard loadCode "import @Haus/money@1 (Money)\ntype A = Money" == some .unknownModule
+#guard loadCode "import @haus-fmt/node_modules (Money)\ntype A = Money" == some .unknownModule
+#guard loadCode "import .x (A)\ntype B = A" == some .unknownModule
+#guard loadCode "import @haus-fmt/money@1.1 (Money)\ntype A = Money" == some .importVersion
+#guard loadCode "import @haus-fmt/money@01 (Money)\ntype A = Money" == some .importVersion
+#guard loadCode "import @haus-fmt/money@ (Money)\ntype A = Money" == some .importVersion
 -- Accepted: spreads through names and instances, mutually recursive generics, Result, std/time.
 #guard loadCode "type P a = { x: a }\ntype Q = P Int\ntype A = closed { ...Q, y: Int }" == none
 #guard loadCode "type T a = { kids: F a }\ntype F a = Array (T a)\ntype X = T Int" == none

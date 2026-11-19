@@ -420,7 +420,10 @@ func (r *jsonReader) escape(b []byte, i int) (out []byte, next int, err error) {
 	case unit >= 0xD800 && unit <= 0xDBFF:
 		low, ok := rune(-1), false
 		if strings.HasPrefix(s[i+6:], `\u`) {
-			low, ok = hex4(s, i+8)
+			// A \u after a high surrogate is an escape like any other: four hex digits first.
+			if low, ok = hex4(s, i+8); !ok {
+				return nil, 0, r.fail(i+8, CodeInvalidUnicodeEscape, "expected four hex digits after \\u")
+			}
 		}
 		if !ok || low < 0xDC00 || low > 0xDFFF {
 			return nil, 0, r.fail(i, CodeUnpairedSurrogate, "an unpaired surrogate in a \\u escape")

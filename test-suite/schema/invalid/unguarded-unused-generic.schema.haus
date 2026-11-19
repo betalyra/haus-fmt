@@ -1,0 +1,4 @@
+// Guarded recursion is checked on every type a file defines, used or not
+// (spec §14, §9.9): Q refers only to itself, whatever its argument.
+type Q a = Q a
+type A = { x: Int }

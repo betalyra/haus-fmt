@@ -150,7 +150,11 @@ step per operation. Steps are proven with a small Hoare-style calculus
 Not covered: the bindings' own code and constant factors (the benchmarks'
 doubling tests are for that), and bit-level costs of big numbers (a hex
 literal's conversion is quadratic in its digits, at most
-`maxNumberLength`). Schema decoding (I7) is open.
+`maxNumberLength`). Schema decoding (I7): `decode_linear` in
+[`Linear/Decode.lean`](Haus/Linear/Decode.lean), at most
+`costK env M k · inputSize v` steps, `M` the size of the largest type, for
+leaf costs (float rounding, std/time checks) linear in their literal, which
+are assumed, not counted.
 
 Both directions are proven one file per part of the parser: numbers and
 strings, whitespace and nested comments, byte strings, block strings, and
@@ -310,8 +314,16 @@ strings and attribute values), `declare` and `check` apply the static rules
 of §14, `Source.instances` finds the instances of generic types that the
 definitions without parameters reach, `translate` turns each into a `Ty`
 (spreads copied in), and guarded recursion (§9.9) is checked on the result
-with the decoder's own `whnf`; `load` does all of it, text to `Env`. All
-cases of `test-suite/schema` pass with it, and every schema file in
+with the decoder's own `whnf`, and on every definition, used or not (a
+generic one with `Any` for its parameters, `Source.templates`); `load` does
+all of it, text to `Env`. Spread cycles are found at any depth
+(`checkSpreadCycles`: the definitions a definition's spreads, and the names
+they stand for, need built first, without fuel). A package or file import is
+checked as the bindings check it (`checkModule`: `unknown-module` with the
+package model's `isPackageName`, `import-version`) and is then
+`import-unavailable`: resolving it (finding the package and bringing its
+definitions in) is `Haus.Packages`'s, and not wired into `load`. All cases
+of `test-suite/schema` pass with it, and every schema file in
 `test-suite/schema/invalid` is rejected with its code.
 
 | Theorem | Says |
@@ -319,6 +331,7 @@ cases of `test-suite/schema` pass with it, and every schema file in
 | `Source.reach_finite` (I6) | In a file without an expansive cycle (§9.10: `GrowthOk`, no expanding edge of the parameter graph on a cycle), the instances reachable from any types `ts` are at most `instBound F ts`, a number computed from the file and `ts` |
 | `check_finite` (I6) | The same for every file `check` accepts: its rule for §9.10 (`checkGrowth`) holds exactly when `GrowthOk` does (`checkGrowth_iff`, through `iterReach_complete`/`iterReach_sound`: the checker's rounds find exactly the parameters a parameter leads to) |
 | `Source.infinite_of_expansive`, `Source.growthOk_iff_finite`, `checkGrowth_iff_finite` (I6) | The converse: in a file `declare` and `checkParams` accept (`WellFormed`), an expanding edge on a cycle makes a type without parameters (`A Int … Int`) reach infinitely many instances; so §9.10 holds exactly when every type reaches finitely many, and `checkGrowth` decides it |
+| `wellFormed_of_declare`, `check_wellFormed`, `load_wellFormed`, `declare_checkGrowth_iff_finite` | `WellFormed` is what `declare` and `checkParams` check (names found, parameters distinct, bodies using their own), proven, not assumed: so §9.10's check passes exactly when every type reaches finitely many instances, for every file `declare` and `checkParams` accept |
 | `doubling_infinite`, `doubling_checks_without_growth`, `doubling_rejected` | §9.10's example (`type A a = < X (B (P a a)) \| Done >`, `type B a = < Y (A (P a a)) \| Stop >`) passes every other rule, reaches infinitely many instances, and is rejected by §9.10's rule |
 | `Source.instances_reach`, `Source.instances_some` | What the reference computes is exactly the reachable instances; for a checked file it returns whenever `instBound` is within the bindings' limit |
 | `load_decode` (I4) | For every schema file `load` accepts and every name in it, decoding any value never fails with `unknown-type` or `unguarded-recursion`; `whnf_ok`: following names succeeds on every closed type within `env.fuel` steps |

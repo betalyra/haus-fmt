@@ -87,6 +87,12 @@ const SYNTAX_SCHEMA_CODES = new Set([
   'missing-comma',
 ]);
 
+// Schema error codes that are syntax errors for some files and not for
+// others: `unknown-module` is a package name the grammar's `segment` rules out
+// (`@Haus/money`, spec §13.3) or a module it allows that doesn't exist
+// (`std/money`).
+const EITHER_SCHEMA_CODES = new Set(['unknown-module']);
+
 // ── Running tree-sitter ───────────────────────────────────────────────
 
 // Each grammar is compiled once into a shared library, which every
@@ -335,6 +341,7 @@ async function checkSchema(file, code) {
   const error = broken(out, tree);
   if (code === undefined) return error ? { problem: 'the tree has an error' } : {};
   if (SYNTAX_SCHEMA_CODES.has(code)) return error ? {} : { problem: `parses, but it has a syntax error: ${code}` };
+  if (EITHER_SCHEMA_CODES.has(code)) return error ? {} : { note: `parses; ${code} is a check beyond the syntax` };
   return error ? { problem: `the tree has an error, but ${code} is not a syntax error` } : { note: `parses; ${code} is a check beyond the syntax` };
 }
 

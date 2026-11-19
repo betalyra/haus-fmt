@@ -150,7 +150,8 @@ the TypeScript reference parser, and compares:
   the reason is one a grammar can't check (above);
 - schema files must parse without error, except in
   `test-suite/schema/invalid`, where files with a syntax error code must give
-  an error and the others must not.
+  an error and the others must not (`unknown-module` may do either: the
+  grammar rules out `@Haus/money`, not `std/money`).
 
 `--fuzz N [--seed S] [--mutate]` adds N documents from the differential
 fuzzer's generator ([`fuzz/src/generate.ts`](../../fuzz/src/generate.ts)),

@@ -9,19 +9,24 @@ file's definitions as written, before any generic type is applied.
 
 * names: every type is defined, imported or the prelude's (`unknown-type`),
   with as many arguments as it has parameters (`wrong-arity`); every
-  parameter is one of its definition's (`unknown-parameter`); `Stream` only as
-  the whole of a definition, never referred to (`misplaced-stream`);
+  parameter is one of its definition's (`unknown-parameter`); `Stream` with
+  one argument (`wrong-arity`, checked first), and only as the whole of a
+  definition, never referred to (`misplaced-stream`);
+* imports: `std/time` and its types, or a package or file import that is
+  well formed (`unknown-module`, `import-version`) and then needs package
+  resolution (`import-unavailable` here);
 * definitions: none twice (`duplicate-type`), none of the prelude's
   (`redefine-prelude`), no parameter twice (`invalid-parameter`);
 * spreads: of a named record into a record or a named variant into a variant,
-  without parameters (`invalid-spread`), never of itself, directly or not
-  (`spread-cycle`); no field or tag twice, those copied in included
-  (`duplicate-field`, `duplicate-tag`);
+  without parameters (`invalid-spread`), never of itself, directly or not,
+  at any depth (`spread-cycle`, `checkSpreadCycles`); no field or tag twice,
+  those copied in included (`duplicate-field`, `duplicate-tag`);
 * instances that can't grow (§9.10, `growing-recursion`): no expanding
   edge of the parameter graph (`Source.paramEdges`) lies on a cycle.
 
 Guarded recursion (§9.9, `unguarded-recursion`) is checked on the instances
-(`Haus.SchemaFile.Instances`): `type I a = a` with `type X = I X` is
+(`Haus.SchemaFile.Instances`), of every definition, used or not (a generic
+one with `Any` for its parameters): `type I a = a` with `type X = I X` is
 unguarded, which only the instance `I X` shows.
 
 `Haus.SchemaFile.Finite` proves what the last rule gives: from any type, a
@@ -48,30 +53,95 @@ def firstDup : List String → Option String
 
 /-! ## Declarations -/
 
+/-- The package a package import names, without its `@major`: `@haus-fmt/money` for `@haus-fmt/money@1`. -/
+def packageOf (m : String) : String :=
+  match m.toList with
+  | '@' :: r => "@" ++ String.ofList (r.takeWhile (· != '@'))
+  | _ => m
+
 /--
-The definitions in scope: the file's own and the std/time types it imports.
-Only `std/…` modules are found here; a package or another file needs package
-resolution (`Haus.Packages`), which brings its definitions in as more
-definitions (`import-unavailable` without it).
+`@org/name@V`: what is wrong with `V` (`import-version`), as the bindings
+say it: an import names only a major version, without leading zeros
+(§13.3). `none` for a module without a version, or with a good one.
 -/
-def declare (p : Parsed) : C Source := do
-  let mut std : List String := []
-  for i in p.imports do
+def importVersion? (m : String) : Option String :=
+  match m.toList with
+  | '@' :: r =>
+    match r.dropWhile (· != '@') with
+    | '@' :: v =>
+      let name := packageOf m
+      let version := String.ofList v
+      let ds := v.takeWhile isDigit
+      let rest := v.drop ds.length
+      let major := String.ofList (match ds.dropWhile (· == '0') with | [] => ['0'] | m => m)
+      if ds.isEmpty || !(rest.isEmpty || rest.head? == some '.') then
+        some s!"{name}@{version}: expected a major version after '@', like {name}@1"
+      else if !rest.isEmpty then
+        some s!"{name}@{version}: an import names only the major version ({name}@{major})"
+      else if ds.length != major.length then
+        some s!"{name}@{version}: a major version has no leading zeros ({name}@{major})"
+      else none
+    | _ => none
+  | _ => none
+
+/--
+An import of something other than `std/…`, checked as the bindings check it
+(§13.3): a major version only (`import-version`), a package name in
+lowercase (`Haus.Packages.isPackageName`, the package model's own check;
+`unknown-module`), a package `@org/name` or a file `./…`, `../…`
+(`unknown-module` otherwise). A good one needs package resolution
+(`Haus.Packages`), which would bring the definitions it names in as more
+definitions; reading a schema from its text alone, as here and in the
+bindings' text loaders, it is `import-unavailable`.
+-/
+def checkModule (m : String) : C Unit := do
+  if let some e := importVersion? m then err .importVersion e
+  if m.startsWith "@" && !Packages.isPackageName (packageOf m) then
+    err .unknownModule s!"unknown module {m}: a package is @org/name, in lowercase letters, digits, -, . and _ (not node_modules)"
+  if !((m.startsWith "@" && m.contains '/') || m.startsWith "./" || m.startsWith "../") then
+    err .unknownModule s!"unknown module {m}: import std/…, a package @org/name or a file ./name"
+  err .importUnavailable s!"can't import {m}: no module resolver (only std modules are found here)"
+
+/-- The names a `std/time` import brings in, after those of `std`: each a std/time type, none twice. -/
+def stdNames (m : String) : List String → List String → C (List String)
+  | std, [] => pure std
+  | std, n :: ns =>
+    if !(stdTime.any (·.1 == n)) then
+      err .unknownImport s!"{m} has no type {n} (it has {", ".intercalate (stdTime.map (·.1))})"
+    else if std.contains n then err .duplicateImport s!"{n} is imported twice"
+    else stdNames m (std ++ [n]) ns
+
+/-- The std/time types the imports bring in, after those of `std`, in order. -/
+def declareImports : List String → List Import → C (List String)
+  | std, [] => pure std
+  | std, i :: is =>
     if i.module.startsWith "std/" then
       if i.module != "std/time" then err .unknownModule s!"unknown module {i.module}: the standard modules are std/time"
-      for n in i.names do
-        if !(stdTime.any (·.1 == n)) then
-          err .unknownImport s!"{i.module} has no type {n} (it has {", ".intercalate (stdTime.map (·.1))})"
-        if std.contains n then err .duplicateImport s!"{n} is imported twice"
-        std := std ++ [n]
-    else err .importUnavailable s!"can't import {i.module}: no module resolver (only std modules are found here)"
-  let mut seen : List String := []
-  for d in p.defs do
+      else do declareImports (← stdNames i.module std i.names) is
+    else do checkModule i.module; declareImports std is
+
+/--
+The definitions, after those named `seen`: none twice, none imported
+(`std`), none of the prelude's, no parameter twice.
+-/
+def declareDefs (std : List String) : List String → List Def → C Unit
+  | _, [] => pure ()
+  | seen, d :: ds =>
     if seen.contains d.name then err .duplicateType s!"type {d.name} is defined twice"
-    if std.contains d.name then err .duplicateType s!"type {d.name} is already imported"
-    if preludeNames.contains d.name then err .redefinePrelude s!"{d.name} is a prelude type and can't be redefined"
-    if let some p := firstDup d.params then err .invalidParameter s!"parameter {p} appears twice"
-    seen := seen ++ [d.name]
+    else if std.contains d.name then err .duplicateType s!"type {d.name} is already imported"
+    else if preludeNames.contains d.name then err .redefinePrelude s!"{d.name} is a prelude type and can't be redefined"
+    else match firstDup d.params with
+      | some p => err .invalidParameter s!"parameter {p} appears twice"
+      | none => declareDefs std (seen ++ [d.name]) ds
+
+/--
+The definitions in scope: the file's own and the std/time types it imports.
+Only `std/…` modules are found here; any other import is checked
+(`checkModule`), and is `import-unavailable` without package resolution.
+-/
+def declare (p : Parsed) : C Source := do
+  let std ← declareImports [] p.imports
+  declareDefs std [] p.defs
   return { std, defs := p.defs }
 
 /-! ## Which kids of a node are spreads -/
@@ -89,7 +159,10 @@ def checkNames (F : Source) (d : Def) : Tm → C Unit
   | .var p =>
     if d.params.contains p then pure () else err .unknownParameter s!"unknown type parameter {p}"
   | .ref n as => do
-    if n == "Stream" then err .misplacedStream "Stream can only be the whole type of a definition: type Events = Stream Event"
+    -- Arity first, then where it is: `type Q = Stream` is `wrong-arity`.
+    if n == "Stream" then
+      if as.length != 1 then err .wrongArity "Stream needs 1 argument"
+      err .misplacedStream "Stream can only be the whole type of a definition: type Events = Stream Event"
     match preludeGeneric.lookup n with
     | some k =>
       if as.length != k then err .wrongArity s!"{n} needs {k} argument{if k == 1 then "" else "s"}"
@@ -253,6 +326,73 @@ def checkGrowth (F : Source) (growth : Bool := true) : C Unit :=
     else
       err .growingRecursion s!"{a} passes its parameter {v} to {if a == b then "itself" else b} inside a bigger type, and it comes back: instances could grow without bound"
 
+/-! ## Spread cycles (§14)
+
+A spread copies what it names when the type is built, wherever it is
+written: `type P = { x: { ...R } }` needs `R`'s fields to build `P`, and so
+does every name `R` stands for on the way (`type R = S`). A file whose types
+need themselves this way, directly or not, can't be built (`spread-cycle`):
+`type P = { x: { ...R } }` with `type R = { y: { ...P } }` would be an
+infinite type. `spreadCycle?` finds such a cycle among the definitions,
+however deep the spreads are written. -/
+
+mutual
+/-- The names spread anywhere in a type (`...Name`), at any depth. -/
+def spreadsIn : Tm → List String
+  | .var _ => []
+  | .ref _ as => spreadsInList as
+  | .node l ks => spreadsInKids l.spreadKids ks
+
+def spreadsInList : List Tm → List String
+  | [] => []
+  | t :: ts => spreadsIn t ++ spreadsInList ts
+
+/-- The kids of a node, `true` for a spread. -/
+def spreadsInKids : List Bool → List Tm → List String
+  | _, [] => []
+  | true :: ss, .ref n [] :: ts => n :: spreadsInKids ss ts
+  | _ :: ss, t :: ts => spreadsIn t ++ spreadsInKids ss ts
+  | [], t :: ts => spreadsIn t ++ spreadsInKids [] ts
+end
+
+/--
+The definitions whose types are built to resolve a spread of `t`: `t`'s
+name, and the names it stands for in turn (`unalias`), their parameters
+replaced. Stops at anything but a defined name, or out of fuel (a cycle of
+names, which `unalias` reports as unguarded recursion).
+-/
+def aliasChain (F : Source) : Nat → Tm → List String
+  | 0, _ => []
+  | fuel + 1, .ref n as =>
+    match F.lookup n with
+    | some d => n :: aliasChain F fuel (d.body.subst (d.params.zip as))
+    | none => []
+  | _ + 1, _ => []
+
+/--
+Enough fuel for `aliasChain`: following names never makes a term bigger than
+the file's terms with the arguments of a definition put in, a bound the
+translation's fuel (`translate`) has too.
+-/
+def Source.chainFuel (F : Source) : Nat :=
+  (F.defs.length + 2) * (F.defs.foldl (fun n d => n + d.body.size) 0 + 2) * 2
+
+/-- The definitions building a definition's type builds first: those of every spread in it. -/
+def Source.spreadNext (F : Source) (n : String) : List String :=
+  match F.lookup n with
+  | some d => (spreadsIn d.body).flatMap fun m => aliasChain F F.chainFuel (.ref m [])
+  | none => []
+
+/-- The first definition that needs itself to be built, through spreads (`F.defs.length` rounds reach every definition reachable at all). -/
+def Source.spreadCycle? (F : Source) : Option String :=
+  (F.defs.find? fun d => (iterReach F.spreadNext F.defs.length (F.spreadNext d.name)).contains d.name).map (·.name)
+
+/-- No type spreads itself, directly or through other types, at any depth (§14, `spread-cycle`). -/
+def checkSpreadCycles (F : Source) : C Unit :=
+  match F.spreadCycle? with
+  | none => pure ()
+  | some n => err .spreadCycle s!"type {n} spreads itself (directly or through another type)"
+
 /-! ## All of them -/
 
 /-- The definitions' parameters: every one a type uses is declared. -/
@@ -269,6 +409,9 @@ what it is for: `Finite.doubling_infinite`).
 def check (F : Source) (growth : Bool := true) : C Unit := do
   F.defs.forM checkParams
   checkGrowth F growth
+  -- Before what a spread copies is checked, as the bindings, which find a
+  -- cycle while building the types (`< X { ...R } >` with `{ y: { ...Q } }`).
+  checkSpreadCycles F
   F.defs.forM fun d => do
     checkNames F d d.body
     checkSpreads F d d.body

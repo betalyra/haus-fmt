@@ -47,6 +47,7 @@ import Haus.Linear.Spec
 import Haus.Linear.Leaves
 import Haus.Linear.Bound
 import Haus.Linear.Stream
+import Haus.Linear.Decode
 import Haus.Schema.Types
 import Haus.Schema.Float
 import Haus.Schema.Decode
@@ -64,6 +65,7 @@ import Haus.SchemaFile.Finite
 import Haus.SchemaFile.Closure
 import Haus.SchemaFile.Cycles
 import Haus.SchemaFile.Decoding
+import Haus.SchemaFile.WellFormed
 import Haus.Version
 import Haus.Json.Data
 import Haus.Json.Base64

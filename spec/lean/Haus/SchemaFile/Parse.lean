@@ -10,11 +10,12 @@ import Haus.SchemaFile.Syntax
 out: attributes (`attribute-space`, `attribute-arguments`, `attribute-twice`,
 `attribute-on-spread`), `...r` (`row-parameter`), `closed < >`
 (`closed-empty-variant`), a parameter starting with `_`
-(`invalid-parameter`), `_` as a type (`underscore-type`), import versions
-(`import-version`), types nested too deep (`type-too-deep`). Comments,
-whitespace and quoted field keys are read by the data parser's own functions
-(`Parser.ws`, `Parser.basicString`), so they have the same rules and codes as
-in data (§14), and so are an attribute's arguments (`Parser.value`).
+(`invalid-parameter`), `_` as a type (`underscore-type`), types nested too
+deep (`type-too-deep`). Comments, whitespace and quoted field keys are read
+by the data parser's own functions (`Parser.ws`, `Parser.basicString`), so
+they have the same rules and codes as in data (§14), and so are an
+attribute's arguments (`Parser.value`). A module is read as the bindings read
+it; what it names is checked by `declare`.
 
 Everything else is checked on what this returns (`Haus.SchemaFile.Check`).
 Like the data parser, every function is total: recursion takes fuel, and
@@ -305,56 +306,43 @@ def alts : Nat → Nat → List Alt → List Tm → P (List Alt × List Tm)
       | [] => unexpected (if attrs.isEmpty then "a tag, ...Name or '>'" else "a tag after the attribute")
     if ← isNext '>' then skip; return (as, ks)
     punct '|'
+    -- The grammar has no `|` after the last alternative: `< Y | >` is an error.
+    if ← isNext '>' then unexpected "a tag or ...Name after '|'"
     alts fuel depth as ks
 end
 
 /-! ## Imports and definitions -/
 
-def isModuleChar (c : Char) : Bool := isIdentChar c || c == '.' || c == '~' || c == '-'
+/--
+A character of a package or file module after its `@` or `.`, as every
+binding reads one: what it names (a package name, a major version, a path) is
+checked by `declare`, with `unknown-module` and `import-version` (§13.3).
+-/
+def isModuleChar (c : Char) : Bool :=
+  isIdentChar c || c == '.' || c == '-' || c == '/' || c == '@' || c == '~'
 
-/-- `@org/name@1.1`, `@01`, `@x`: an import names only a major version (§13.3). -/
-def versionError {α : Type} (name version : String) : P α :=
-  let ds := version.toList.takeWhile isDigit
-  let major := String.ofList (match ds.dropWhile (· == '0') with | [] => ['0'] | m => m)
-  if !ds.isEmpty && (version.toList.drop ds.length).head? == some '.' then
-    fail .importVersion s!"{name}@{version}: an import names only the major version ({name}@{major})"
-  else if !ds.isEmpty && ds.length == version.length then
-    fail .importVersion s!"{name}@{version}: a major version has no leading zeros ({name}@{major})"
-  else fail .importVersion s!"{name}@{version}: expected a major version after '@', like {name}@1"
-
-/-- The module of an import: `std/time`, `@org/name`, `@org/name@1`, `./file`, `../dir/file`. -/
+/--
+The module of an import (grammar `module`): `std/` and an identifier, or `@`
+or `.` and the module characters after it (`@org/name`, `@org/name@1`,
+`./file`, `../dir/file`). No whitespace inside: `std/ time` is not a module.
+-/
 def module : P String := do
   ws
   let t ← get
   match t with
-  | '@' :: r =>
-    let org := r.takeWhile isModuleChar
-    match r.drop org.length with
-    | '/' :: r' =>
-      let name := r'.takeWhile isModuleChar
-      if org.isEmpty || name.isEmpty then unexpected "a module like std/time, @org/name or ./file"
-      let full := "@" ++ String.ofList org ++ "/" ++ String.ofList name
-      match r'.drop name.length with
-      | '@' :: v =>
-        let version := v.takeWhile fun c => isIdentChar c || c == '.' || c == '+' || c == '-'
-        if !(Packages.isMajor (String.ofList version)) then versionError full (String.ofList version)
-        set (v.drop version.length)
-        return full ++ "@" ++ String.ofList version
-      | rest => set rest; return full
-    | _ => unexpected "a module like std/time, @org/name or ./file"
-  | '.' :: '/' :: _ | '.' :: '.' :: '/' :: _ =>
-    let path := t.takeWhile fun c => isIdentChar c || c == '.' || c == '/' || c == '-'
-    set (t.drop path.length)
-    return String.ofList path
-  | _ =>
-    -- `std/time`: lowercase identifiers joined by `/`.
-    let m := t.takeWhile fun c => isIdentChar c || c == '/'
-    match m with
-    | c :: _ =>
-      if isUpper c then unexpected "a module like std/time, @org/name or ./file"
-      set (t.drop m.length)
-      return String.ofList m
-    | [] => unexpected "a module like std/time, @org/name or ./file"
+  | 's' :: 't' :: 'd' :: '/' :: c :: r =>
+    if isLowerIdentStart c then
+      let w := r.takeWhile isIdentChar
+      set (r.drop w.length)
+      return "std/" ++ String.ofList (c :: w)
+    else unexpected "a module like std/time, @org/name or ./file"
+  | c :: r =>
+    let m := r.takeWhile isModuleChar
+    if (c == '@' || c == '.') && !m.isEmpty then
+      set (r.drop m.length)
+      return String.ofList (c :: m)
+    else unexpected "a module like std/time, @org/name or ./file"
+  | [] => unexpected "a module like std/time, @org/name or ./file"
 
 /-- `( Name, … )`, after the `(`. -/
 def importNames : Nat → List String → P (List String)
@@ -443,9 +431,12 @@ private def codeOf (src : String) : Option Code :=
 #guard codeOf "type A = closed < >" == some .closedEmptyVariant
 #guard codeOf "type A r = { x: Int, ...r }" == some .rowParameter
 #guard codeOf "type P _x = { a: _x }" == some .invalidParameter
-#guard codeOf "import @haus-fmt/money@1.1 (Money)" == some .importVersion
-#guard codeOf "import @haus-fmt/money@01 (Money)" == some .importVersion
-#guard codeOf "import @haus-fmt/money@ (Money)" == some .importVersion
+#guard codeOf "type A = < Y | >" == some .schemaSyntax
+#guard codeOf "type A = < | Y >" == none
+#guard codeOf "type A = < | >" == none
+#guard codeOf "import std/ time (Date)" == some .schemaSyntax
+#guard codeOf "import foo/bar (A)" == some .schemaSyntax
+#guard codeOf "import std/time/x (Date)" == some .straySlash
 #guard codeOf "import std/time ()" == some .unknownImport
 #guard codeOf "type A = < X | Y Int (List a) | Z { a: Int, \"b c\"?: Maybe a } | ...B >\n// c\ntype B = Int" == none
 #guard (parse "type List a = < Nil | Cons a (List a) >".toList).toOption.map (·.defs.map (·.body)) ==
