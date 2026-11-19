@@ -1,5 +1,8 @@
 //go:build unix
 
+// The package suite makes symbolic links, so it runs on Unix only, as Rust's
+// does; the other tests of this package run everywhere.
+
 package schema_test
 
 import (
@@ -27,16 +30,6 @@ func strs(v haus.Value) []string {
 		out[i] = str(x)
 	}
 	return out
-}
-
-func write(t *testing.T, path, text string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // create writes one entry of a case's files under root.

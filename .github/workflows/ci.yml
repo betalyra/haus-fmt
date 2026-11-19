@@ -371,7 +371,9 @@ jobs:
         # Run every language, even when one fails.
         if: success() || failure()
         working-directory: go
-        run: go test -run 'TestPackageSuite|TestCopiesInEitherOrder' ./schema
+        # All of ./schema: on Unix this includes the package suite, which makes
+        # symbolic links; on Windows the rest (as Rust's step does).
+        run: go test ./schema
 
   packages-macos:
     name: Package resolution on macOS
@@ -417,7 +419,9 @@ jobs:
         # Run every language, even when one fails.
         if: success() || failure()
         working-directory: go
-        run: go test -run 'TestPackageSuite|TestCopiesInEitherOrder' ./schema
+        # All of ./schema: on Unix this includes the package suite, which makes
+        # symbolic links; on Windows the rest (as Rust's step does).
+        run: go test ./schema
 
   fuzz-build:
     name: Fuzzing / build the runners
