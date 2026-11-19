@@ -582,6 +582,7 @@ func (s *selfDescribing) envelope(j Value) (Value, error) {
 		return nil, s.fail(CodeHausJSONForm, `expected the envelope {"_haus": 1, "_value": …}, found %s`, describeJSON(j))
 	}
 	if n, ok := h.(Number); !ok || n.lit != "1" {
+		s.push(key("_haus"))
 		return nil, s.fail(CodeHausJSONVersion, "expected version 1 of self-describing JSON in '_haus', found %s", describeJSON(h))
 	}
 	s.push(key("_value"))

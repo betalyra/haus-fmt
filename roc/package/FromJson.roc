@@ -491,10 +491,13 @@ FromJson := [].{
 	record_case : List((Str, JsonValue)), (JsonValue -> Try(a, Decode.Error)) -> Try(a, Decode.Error)
 	record_case = |members, reader| reader(Object(members.keep_if(|(k, _)| k != "_tag")))
 
-	## A closed variant whose tags have no payload: the tag, a string.
+	## A closed variant whose tags have no payload: the tag, a string. A
+	## string that isn't a tag (spec §4) is `invalid-tag`, as in `"_tag"`
+	## (spec §16.3).
 	tag_name : JsonValue, Str -> Try(Str, Decode.Error)
 	tag_name = |j, what| match j {
-		String(tag) => Ok(tag)
+		String(tag) if JsonValue.is_tag_name(tag) => Ok(tag)
+		String(_) => Decode.fail(ErrorCode.invalid_tag, "expected a tag name (A to Z, then letters, digits and _) for ${what}, found ${JsonValue.describe(j)}")
 		_ => expected("a string (${what})", j)
 	}
 

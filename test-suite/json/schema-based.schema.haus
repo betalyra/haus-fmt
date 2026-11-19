@@ -50,4 +50,4 @@ type OptLoop = Maybe Loop
 type InPlace = Maybe (closed < None | Some Int32 >)
 type U64 = UInt64
 // a document for the places of errors (spec §16.3 "Places")
-type Doc = { shape?: Shape, maybe?: Nested, users?: Array User, strict?: Strict, counts?: Counts, raw?: Raw, key?: Key, boxed?: GenRec }
+type Doc = { shape?: Shape, maybe?: Nested, users?: Array User, strict?: Strict, counts?: Counts, raw?: Raw, key?: Key, boxed?: GenRec, level?: Level, bits?: Bits }

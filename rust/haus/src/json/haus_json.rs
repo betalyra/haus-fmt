@@ -45,8 +45,9 @@ pub fn from_self_describing(json: &Json, limits: &Limits) -> Result<Value, Decod
     from_value_at(envelope(json)?, limits, 0).map_err(|e| e.field("_value"))
 }
 
-/// The `_value` of an envelope whose `_haus` is 1. Errors are at the
-/// envelope (`$`): it adds no place of its own.
+/// The `_value` of an envelope whose `_haus` is 1. A text that isn't an
+/// envelope is at the envelope (`$`), a `_haus` other than 1 at the member
+/// (`$._haus`).
 fn envelope(json: &Json) -> Result<&Json, DecodeError> {
     let (version, value) = match json {
         Json::Object(members) => match members.as_slice() {
@@ -61,7 +62,8 @@ fn envelope(json: &Json) -> Result<&Json, DecodeError> {
         other => Err(DecodeError::new(
             Code::HausJsonVersion,
             format!("self-describing JSON version {}; this reader reads version 1", describe_version(other)),
-        )),
+        )
+        .field("_haus")),
     }
 }
 

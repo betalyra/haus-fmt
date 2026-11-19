@@ -215,7 +215,7 @@ const (
 	CodeHausJSONNumber ErrorCode = "haus-json-number"
 	// CodeHausJSONBytes is "haus-json-bytes": A self-describing `_bytes` that isn't two lowercase hex digits per byte.
 	CodeHausJSONBytes ErrorCode = "haus-json-bytes"
-	// CodeInvalidTag is "invalid-tag": A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
+	// CodeInvalidTag is "invalid-tag": A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code.
 	CodeInvalidTag ErrorCode = "invalid-tag"
 	// CodeInvalidBase64 is "invalid-base64": Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
 	CodeInvalidBase64 ErrorCode = "invalid-base64"
@@ -470,7 +470,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeHausJSONVersion:         {CategoryJson, "A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.", "Read it with a newer version of haus, or write `\"_haus\": 1`."},
 	CodeHausJSONNumber:          {CategoryJson, "A self-describing `_num` that isn't a normalized number literal (§2): `\"1E5\"`, `\"01\"`, `\"0xff\"`, or not a string.", "Write the number's normalized literal (§2) as a string."},
 	CodeHausJSONBytes:           {CategoryJson, "A self-describing `_bytes` that isn't two lowercase hex digits per byte.", "Write the bytes as lowercase hex, two digits per byte."},
-	CodeInvalidTag:              {CategoryJson, "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.", "Start the tag with a capital letter and use only letters, digits and `_`."},
+	CodeInvalidTag:              {CategoryJson, "A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `\"_tag\"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`\"debug\"`, §16.3), or in a value built in code.", "Start the tag with a capital letter and use only letters, digits and `_`."},
 	CodeInvalidBase64:           {CategoryJson, "Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.", "Write standard base64, with padding."},
 	CodeMissingMember:           {CategoryJson, "Schema-based JSON: an object lacks a member its form needs, such as `\"_tag\"` for a variant or `\"value\"` for a tag with one argument.", "Add the member the message names."},
 	CodeUnexpectedMember:        {CategoryJson, "Schema-based JSON: an object has a member its form doesn't have, such as `\"value\"` next to a tag without payload (§16.3).", "Remove the member."},

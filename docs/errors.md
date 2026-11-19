@@ -1096,7 +1096,7 @@ Read as self-describing JSON:
 
 ## invalid-tag
 
-*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
+*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code.
 
 Read as self-describing JSON:
 

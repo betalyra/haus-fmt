@@ -12,7 +12,7 @@
     ["Counts",{"map":{"builtin":"Int32"}}],
     ["Day",{"time":"Date"}],
     ["Dec",{"builtin":"Decimal"}],
-    ["Doc",{"record":{"closed":false,"fields":[{"key":"shape","optional":true,"type":{"ref":"Shape"}},{"key":"maybe","optional":true,"type":{"ref":"Nested"}},{"key":"users","optional":true,"type":{"array":{"ref":"User"}}},{"key":"strict","optional":true,"type":{"ref":"Strict"}},{"key":"counts","optional":true,"type":{"ref":"Counts"}},{"key":"raw","optional":true,"type":{"ref":"Raw"}},{"key":"key","optional":true,"type":{"ref":"Key"}},{"key":"boxed","optional":true,"type":{"ref":"GenRec"}}]}}],
+    ["Doc",{"record":{"closed":false,"fields":[{"key":"shape","optional":true,"type":{"ref":"Shape"}},{"key":"maybe","optional":true,"type":{"ref":"Nested"}},{"key":"users","optional":true,"type":{"array":{"ref":"User"}}},{"key":"strict","optional":true,"type":{"ref":"Strict"}},{"key":"counts","optional":true,"type":{"ref":"Counts"}},{"key":"raw","optional":true,"type":{"ref":"Raw"}},{"key":"key","optional":true,"type":{"ref":"Key"}},{"key":"boxed","optional":true,"type":{"ref":"GenRec"}},{"key":"level","optional":true,"type":{"ref":"Level"}},{"key":"bits","optional":true,"type":{"ref":"Bits"}}]}}],
     ["F32",{"builtin":"Float32"}],
     ["F64",{"builtin":"Float64"}],
     ["Flag",{"builtin":"Bool"}],

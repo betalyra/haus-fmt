@@ -434,15 +434,15 @@ fn self_describing_json_reads_one_form_per_value() {
     assert_eq!(error(r#"{"_tag": "T", "_args": 1}"#), "._value._args: expected an array, found the number 1");
     assert_eq!(error(r#"[{"_rec": {"a": 1}}]"#).split(": ").next(), Some("._value[0]._rec.a"));
     assert!(read(r#"{"_args": [{"_num": "1"}], "_tag": "T"}"#).is_ok());
-    // The envelope: exactly `_haus` 1 and `_value`, in any order; its errors are at `$`, the
-    // value's at `$._value…`.
+    // The envelope: exactly `_haus` 1 and `_value`, in any order; its errors are at `$`, a
+    // `_haus` other than 1 at `$._haus`, the value's at `$._value…`.
     let code = |text: &str| haus::from_haus_json(text).unwrap_err().code().map(|c| c.as_str());
     assert_eq!(code(r#"{"_num": "1"}"#), Some("haus-json-form"));
     assert_eq!(code(r#"{"_haus": 1, "_value": "a", "_x": 1}"#), Some("haus-json-form"));
     assert_eq!(code(r#"{"_haus": 1.0, "_value": "a"}"#), Some("haus-json-version"));
     assert_eq!(
         haus::from_haus_json(r#"{"_haus": 2, "_value": "a"}"#).unwrap_err().to_string(),
-        "self-describing JSON version 2; this reader reads version 1"
+        "._haus: self-describing JSON version 2; this reader reads version 1"
     );
     assert_eq!(
         haus::from_haus_json(r#""a""#).unwrap_err().to_string(),

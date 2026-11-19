@@ -1267,6 +1267,10 @@ class _Variant(_Node):
         if self.as_string:
             if not isinstance(j, str):
                 _json_mismatch(f"one of the strings {self.tags}", j, at)
+            if not _TAG.fullmatch(j):
+                found = describe(j)
+                reason = f"expected a tag ([A-Z][A-Za-z0-9_]*), {expected}, found {found}"
+                at.fail(reason, code="invalid-tag", expected=expected, found=found)
             if j not in self.cases:
                 found = describe(j)
                 at.fail(f"unknown tag {found}, {expected}", code="unknown-tag", expected=expected, found=found)

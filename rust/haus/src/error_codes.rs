@@ -216,7 +216,7 @@ pub enum ErrorCode {
     HausJsonNumber,
     /// `haus-json-bytes`: A self-describing `_bytes` that isn't two lowercase hex digits per byte.
     HausJsonBytes,
-    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, or in a value built in code.
+    /// `invalid-tag`: A tag name that isn't `\[A-Z\]\[A-Za-z0-9_\]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code.
     InvalidTag,
     /// `invalid-base64`: Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
     InvalidBase64,

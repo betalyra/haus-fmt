@@ -462,6 +462,9 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		if !ok {
 			return w.jsonMismatch(j, t, "a string")
 		}
+		if !isTagName(string(s)) {
+			return nil, w.fail(haus.CodeInvalidTag, "expected a tag ([A-Z][A-Za-z0-9_]*), one of %s, found %s", tags(vt), quote(shortText(string(s))))
+		}
 		c := vt.caseOf(string(s))
 		if c == nil {
 			return nil, w.fail(haus.CodeUnknownTag, "%s is not allowed here: expected %s", quote(string(s)), tags(vt))

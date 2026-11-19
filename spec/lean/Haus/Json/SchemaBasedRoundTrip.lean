@@ -612,7 +612,8 @@ theorem Core.roundTrip {c : Ty} {v : Value} {x : Typed} {b : Bool} {j : JSON} :
         rw [fromJsonC_none _ hn, readCore.eq_def]
         by_cases he : isEnum (.variant closed cases) = true
         · simp only [he, ↓reduceIte, Except.ok.injEq] at h; subst h
-          simp [he, hc]
+          have htag : isTag tag.toList = true := by simpa [Value.wf, Value.wfList] using hv
+          simp [he, hc, htag]
         · simp only [he, Bool.false_eq_true, ↓reduceIte, hc, Except.ok.injEq] at h; subst h
           have htag : isTag tag.toList = true := by simpa [Value.wf, Value.wfList] using hv
           simp [he, hc, htag]

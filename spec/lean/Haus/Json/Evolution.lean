@@ -1139,7 +1139,8 @@ theorem Core.older (hE : env.Minor env') {F : Nat} {o : String} {c c' : Ty} {v :
           rw [fromJsonC_none _ hN, readCore.eq_def]
           by_cases he : isEnum (.variant cl cs') = true
           · simp only [he, ↓reduceIte, Except.ok.injEq] at h; subst h
-            exact ⟨_, by simp [hE0, he, h1], .refl _⟩
+            have htag : isTag tag.toList = true := by simpa [Value.wf, Value.wfList] using hv
+            exact ⟨_, by simp [hE0, he, h1, htag], .refl _⟩
           · simp only [he, Bool.false_eq_true, ↓reduceIte, hc, Except.ok.injEq] at h; subst h
             have htag : isTag tag.toList = true := by simpa [Value.wf, Value.wfList] using hv
             exact ⟨_, by simp [hE0, he, h1, htag, List.lookup], .refl _⟩
