@@ -1,0 +1,68 @@
+// What the benchmark reads, pinned. `fetch.ts` downloads every file into
+// bench/.data/ (git-ignored) and checks its SHA-256; nothing here is committed
+// but the manifest itself.
+//
+// corpus:      sources of JSON documents (plans/benchmarks.md §4.1).
+// tokenizers:  tokenizer.json + tokenizer_config.json from the Hugging Face Hub,
+//              pinned by commit, read by tokenizers.js (§11). Adding a tokenizer is
+//              one entry here.
+{
+  corpus: [
+    {
+      name: "github-rest",
+      title: "GitHub REST API description (OpenAPI 3.1): example responses",
+      category: ApiResponses,
+      license: "MIT",
+      // Fetched with git from github.com (a shallow, blob-less fetch of this commit):
+      // the archive and raw hosts (codeload.github.com, raw.githubusercontent.com)
+      // are not reachable from the sandbox the benchmark was set up in.
+      repo: "https://github.com/github/rest-api-description",
+      commit: "c9c95fe34ced05fe076001f5c55704742bc8e7f8",
+      committed: Instant("2026-11-17T12:33:12Z"),
+      path: "descriptions-next/api.github.com/api.github.com.2026-03-10.json",
+      sha256: "ccee9ddc5f80053a35fcd375ae6a68dc88af1a058644459c394b2d69fc06491a",
+    },
+  ],
+  tokenizers: [
+    {
+      name: "o200k",
+      family: "OpenAI GPT-4o, GPT-5.x (o200k_base)",
+      repo: "Xenova/gpt-4o",
+      revision: "7956d98f2a83b2751a98ea7136fdf7fe6cf54e69",
+      files: [
+        { file: "tokenizer.json", sha256: "43a3ad4618a6a938f8c2614154ea10c31ad53a62d5683ae0b0e6133575cef07e" },
+        { file: "tokenizer_config.json", sha256: "71424d4750066a6f9bcfea0699576c4284327ff25d388d42419506bcfb5535ab" },
+      ],
+    },
+    {
+      name: "gemma4",
+      family: "Google Gemma 4 (closest public proxy for Gemini)",
+      repo: "google/gemma-4-31B-it",
+      revision: "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      files: [
+        { file: "tokenizer.json", sha256: "cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f" },
+        { file: "tokenizer_config.json", sha256: "9f4fec4b1dc6ecddf8f4a92e9caea5971c0e67d81309f3f9066a2bee8c362633" },
+      ],
+    },
+    {
+      name: "qwen3.8",
+      family: "Alibaba Qwen 3.8",
+      repo: "Qwen/Qwen3.8-27B",
+      revision: "37561816e66b5b9153b1b64c10968c18c1e6f4a0",
+      files: [
+        { file: "tokenizer.json", sha256: "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3" },
+        { file: "tokenizer_config.json", sha256: "207c03c41a06a9c3b0cc527d8a56115159c1eac6b59a4ffae85b646e773d074e" },
+      ],
+    },
+    {
+      name: "deepseek-v4",
+      family: "DeepSeek V4",
+      repo: "deepseek-ai/DeepSeek-V4-Pro-0813",
+      revision: "72e1d3230f6c080a530b0a1d46f8eb4602340597",
+      files: [
+        { file: "tokenizer.json", sha256: "8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf" },
+        { file: "tokenizer_config.json", sha256: "6ac8c8dc065ed118161d02dd532749ae3f52c243deac27872134fae2f50d8547" },
+      ],
+    },
+  ],
+}

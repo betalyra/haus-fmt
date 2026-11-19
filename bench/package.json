@@ -1,0 +1,26 @@
+{
+  "name": "haus-bench",
+  "private": true,
+  "description": "Benchmarks: haus against JSON (size, tokens, TypeScript speed) on real data",
+  "type": "module",
+  "scripts": {
+    "prepare-haus": "pnpm --filter @haus-fmt/haus build",
+    "fetch": "node --use-env-proxy fetch.ts",
+    "convert": "node convert.ts",
+    "tokens": "node tokens.ts",
+    "speed": "node --expose-gc speed.bench.ts",
+    "report": "node report.ts",
+    "all": "pnpm run prepare-haus && pnpm run fetch && pnpm run convert && pnpm run tokens && pnpm run speed && pnpm run report",
+    "smoke": "pnpm run prepare-haus && pnpm run fetch && node convert.ts --limit 40 && node tokens.ts --tokenizers o200k && node --expose-gc speed.bench.ts --quick && pnpm run report",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@haus-fmt/haus": "workspace:*",
+    "@huggingface/tokenizers": "0.2.0",
+    "tinybench": "6.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "5.9.3"
+  }
+}

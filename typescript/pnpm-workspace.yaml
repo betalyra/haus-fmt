@@ -5,6 +5,7 @@ packages:
   - ../extensions/*
   - ../examples
   - ../editors/tree-sitter-haus
+  - ../bench
 
 allowBuilds:
   esbuild: true
