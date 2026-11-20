@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule } from "@haus-fmt/haus"
+import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule, type SchemaFile } from "@haus-fmt/haus"
 import { generateCodecs } from "@haus-fmt/haus/codegen"
 import { isSchemaFile, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
 import { resolverOf } from "./runtime/shared.js"
@@ -124,15 +124,21 @@ function recording(path: string, packages: NodeResolverOptions) {
   return { options, modules, files: () => [...short.keys()] }
 }
 
-/** Module source that rebuilds a schema file's schemas at runtime (`const schema = …`), and the files it was built from. */
-function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[]; options: ParseSchemaOptions } {
+/**
+ * Module source that rebuilds a schema file's schemas at runtime (`const
+ * schema = …`), the files it was built from, the file as parsed now, and
+ * options that parse it as the runtime does.
+ */
+function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[]; file: SchemaFile; text: string; options: ParseSchemaOptions } {
   const text = readFileSync(schemaPath, "utf8")
   const r = recording(schemaPath, packages)
-  parseSchemaFile(text, r.options) // resolves (and records) every import, and reports errors now
+  const file = parseSchemaFile(text, r.options) // resolves (and records) every import, and reports errors now
   return {
     code: `import { compiled, decodeData } from ${JSON.stringify(runtime)};\n` +
       `const schema = compiled(${JSON.stringify(text)}, ${JSON.stringify(r.modules)}, ${JSON.stringify(r.options.key)}, ${JSON.stringify(r.options.id)});\n`,
     files: r.files(),
+    file,
+    text,
     // The same keys as the runtime's: what is built now is what it builds.
     options: { key: r.options.key!, id: r.options.id!, resolver: resolverOf(r.modules) },
   }
@@ -146,8 +152,8 @@ function compiledSchema(schemaPath: string, runtime: string, packages: NodeResol
  * uses the function for a marked schema once it has generated the same
  * source again from the schemas built at runtime. Empty if nothing is generated.
  */
-function prebuiltCodecs(path: string, options: ParseSchemaOptions, optimize: readonly string[]): string {
-  const { schemas } = fromSchemaFile(parseSchemaFile(readFileSync(path, "utf8"), options))
+function prebuiltCodecs(text: string, options: ParseSchemaOptions, optimize: readonly string[]): string {
+  const { schemas } = fromSchemaFile(parseSchemaFile(text, options))
   const source = generateCodecs(schemas, optimize)
   if (source === undefined) return ""
   return `prebuilt(schema, ${JSON.stringify(optimize)}, ${JSON.stringify(source)}, function (rt, env) {\n${source}});\n`
@@ -158,9 +164,9 @@ function prebuiltCodecs(path: string, options: ParseSchemaOptions, optimize: rea
  * the generated codecs of the types `optimize` (plain target), generated now.
  */
 export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}, optimize: readonly string[] = []): { code: string; files: string[] } {
-  const { code, files, options } = compiledSchema(path, runtime, packages)
-  const names = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, packages)).definitions.filter((d) => d.params.length === 0).map((d) => d.name)
-  const prebuilt = optimize.length > 0 ? prebuiltCodecs(path, options, optimize) : ""
+  const { code, files, file, text, options } = compiledSchema(path, runtime, packages)
+  const names = file.definitions.filter((d) => d.params.length === 0).map((d) => d.name)
+  const prebuilt = optimize.length > 0 ? prebuiltCodecs(text, options, optimize) : ""
   const header = prebuilt === "" ? "" : `import { prebuilt } from ${JSON.stringify(runtime)};\n`
   return { code: header + code + prebuilt + names.map((n) => `export const ${n} = schema.schemas[${JSON.stringify(n)}];\n`).join(""), files }
 }

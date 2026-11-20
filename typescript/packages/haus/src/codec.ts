@@ -41,13 +41,14 @@
  * Recursive reaches a schema written by hand without a value in between
  * (which could do the same).
  */
+import { BARE_KEY, TAG } from "./chars.js"
 import type { Origin } from "./errors.js"
-import { quote, stringify as stringifyValue, toHex } from "./format.js"
+import { keyText, quote, stringify as stringifyValue, toHex } from "./format.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { readValue, readVariantAfter } from "./parser.js"
 import { ARGS, ARRAY, BYTES, CLOSE_ARGS, CLOSE_ARRAY, NO_PAYLOAD, NUMBER, PAYLOAD_RECORD, Reader, RECORD, STRING, VARIANT } from "./reader.js"
-import { At, checkedValue, decodeContext, decodeSteps, encodeContext, recursionOf, shapeOf, type AnySchema, type CaseShape, type Context, type Limits, type Shape } from "./schema.js"
+import { At, checkedValue, decodeContext, decodeSteps, encodeContext, Maybe, recursionOf, shapeOf, type AnySchema, type CaseShape, type Context, type Limits, type Shape, type Unknown } from "./schema.js"
 import { Secret } from "./secret.js"
 import { variant, type HVariant, type Value } from "./value.js"
 
@@ -76,7 +77,8 @@ const step = (cx: Context): void => {
 /** A schema that can't be compiled; compiling gives up. */
 export class NotCompilable extends Error {}
 
-type RecursiveShape = Extract<Shape, { kind: "recursive" }>
+export type RecursiveShape = Extract<Shape, { kind: "recursive" }>
+export type RecordShape = Extract<Shape, { kind: "record" }>
 
 /**
  * Entering a Recursive, as `run` in schema.ts: one step, and one level more of
@@ -121,11 +123,17 @@ export const checkChain = (s: AnySchema): void => {
 
 // ── readers ──────────────────────────────────────────────────
 
-/** `{ _tag: "@unknown", tag, value }`, as `unknownOf` in schema.ts builds it. */
-export const unknownOf = (v: HVariant) => ({ _tag: "@unknown", tag: v.tag, value: v })
+/** The value of a variant an open type doesn't list (schema.ts decodes it so too): the tag, and the variant as it was parsed. */
+export const unknownOf = (v: HVariant): Unknown => ({ _tag: "@unknown", tag: v.tag, value: v })
 
 /** The value is a number: its normalized text. */
 const numberText = (r: Reader): string => (r.next() === NUMBER ? r.number() : fail())
+
+/** After the last argument a variant's schema takes: its `)` (another argument gives up). */
+const endArguments = (r: Reader): void => {
+  r.endItem(CLOSE_ARGS)
+  if (r.more(CLOSE_ARGS)) fail()
+}
 
 /**
  * After a variant's tag and `payload`: its one argument, read by `read` at
@@ -136,13 +144,9 @@ const oneArgument = (r: Reader, cx: Context, depth: number, payload: number, rea
   if (payload === PAYLOAD_RECORD) return read(r, cx, depth)
   if (payload !== ARGS) fail()
   const value = read(r, cx, depth)
-  r.endItem(CLOSE_ARGS)
-  if (r.more(CLOSE_ARGS)) fail()
+  endArguments(r)
   return value
 }
-
-/** A key that is written bare (spec §3: an identifier starting with a lowercase letter or `_`). */
-const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
 
 /** A placeholder in a record's slots: the field hasn't been read. */
 export const HOLE: unknown = Symbol("hole")
@@ -166,11 +170,18 @@ interface Fields {
   readonly bare: readonly boolean[]
 }
 
-const DATA = { enumerable: true, writable: true, configurable: true }
+/**
+ * A new own data property `key` of `o`, defined, not assigned: a key the
+ * prototype chain has (`__proto__`, maybe a setter or read-only) can't
+ * replace the prototype or be refused.
+ */
+export const defineOwn = (o: object, key: string, value: unknown): void => {
+  Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true })
+}
 
 /** Set field `i` on `out`: a new own data property. */
 const setField = (f: Fields, out: Record<string, unknown>, i: number, value: unknown): void => {
-  if (f.special[i]) Object.defineProperty(out, f.keys[i]!, { ...DATA, value })
+  if (f.special[i]) defineOwn(out, f.keys[i]!, value)
   else out[f.keys[i]!] = value
 }
 
@@ -251,10 +262,10 @@ const recordPayload = (r: Reader, cx: Context, depth: number, payload: number, f
   if (payload === PAYLOAD_RECORD) return r.next() === RECORD ? fields(r, cx, depth, tag) : fail()
   if (payload !== ARGS || r.next() !== RECORD) fail()
   const out = fields(r, cx, depth, tag)
-  r.endItem(CLOSE_ARGS)
-  if (r.more(CLOSE_ARGS)) fail()
+  endArguments(r)
   return out
 }
+
 /** Reads a variant's payload, after its tag. */
 type CaseRead = (r: Reader, cx: Context, depth: number, tag: string) => unknown
 
@@ -336,8 +347,7 @@ export class ReadCompiler {
           step(cx)
           if (r.next() !== VARIANT || r.tag() !== tag || r.payload(tag) !== ARGS || r.next() !== STRING) fail()
           const text = r.string()
-          r.endItem(CLOSE_ARGS)
-          if (r.more(CLOSE_ARGS)) fail()
+          endArguments(r)
           const out = format.test(text) ? convert(text) : undefined
           return out === undefined ? fail() : out
         }
@@ -551,36 +561,47 @@ const floatRead = (name: FloatType): Read => (r, cx) => {
   return specialFloat(variant(tag)) ?? fail()
 }
 
-const readers = new WeakMap<AnySchema, Read | null>()
-
-/** The compiled reader of `schema`, built on first use; undefined if it can't be compiled. */
-export const compiledReader = (schema: AnySchema): Read | undefined => {
-  let read = readers.get(schema)
-  if (read === undefined) {
+/**
+ * `cache`'s codec of `schema`, compiled by `compile` on first use (once,
+ * whatever the outcome); undefined if it can't be compiled.
+ */
+const compiledOnce = <F>(cache: WeakMap<AnySchema, F | null>, schema: AnySchema, compile: (schema: AnySchema) => F): F | undefined => {
+  let f = cache.get(schema)
+  if (f === undefined) {
     try {
-      read = new ReadCompiler().read(schema)
+      f = compile(schema)
     } catch {
-      read = null
+      f = null
     }
-    readers.set(schema, read)
+    cache.set(schema, f)
   }
-  return read ?? undefined
+  return f ?? undefined
 }
 
+const readers = new WeakMap<AnySchema, Read | null>()
+
+const compileReader = (s: AnySchema): Read => new ReadCompiler().read(s)
+
+/** The compiled reader of `schema`, built on first use; undefined if it can't be compiled. */
+export const compiledReader = (schema: AnySchema): Read | undefined => compiledOnce(readers, schema, compileReader)
+
 /**
- * Decode `text` (exactly one value) with a compiled reader; undefined to say
- * "run the generic path" (for anything wrong at all).
+ * Decode one value with a compiled reader: a whole text (`item` false), or
+ * one item of a stream (its text with the comma that ends it, and where it
+ * starts), as `Parser.parseSequence` and `Parser.parseSingle` read them.
+ * Undefined to say "run the generic path" (for anything wrong at all).
  */
-export const decodeCompiled = (read: Read, text: string, limits: Limits): { readonly value: unknown } | undefined => {
+const decodeOne = (read: Read, text: string, origin: Origin | undefined, limits: Limits, item: boolean): { readonly value: unknown } | undefined => {
   try {
     // A text has at most as many values as characters: the default step
     // budget for that many bounds the work; the exact one is checked below.
     const cx = decodeContext(limits, text.length)
-    const r = new Reader(text, undefined, cx.values)
+    const r = new Reader(text, origin, cx.values)
     r.begin()
     if (r.atEnd()) return undefined // no value
     const value = read(r, cx, 0)
-    if (r.nextTop()) return undefined // more values
+    if (item) r.endSingle()
+    else if (r.nextTop()) return undefined // more values
     // The budget of the generic path, now that the values are counted.
     if (cx.steps > decodeSteps(limits, r.valueCount)) return undefined
     return { value }
@@ -589,25 +610,14 @@ export const decodeCompiled = (read: Read, text: string, limits: Limits): { read
   }
 }
 
+/** Decode `text` (exactly one value) with a compiled reader; undefined to say "run the generic path". */
+export const decodeCompiled = (read: Read, text: string, limits: Limits): { readonly value: unknown } | undefined => decodeOne(read, text, undefined, limits, false)
+
 /**
  * Decode one item of a stream (its text, with the comma that ends it, and
- * where it starts) with a compiled reader, as `Parser.parseSingle` reads it;
- * undefined to say "run the generic path".
+ * where it starts) with a compiled reader; undefined to say "run the generic path".
  */
-export const decodeItem = (read: Read, text: string, origin: Origin, limits: Limits): { readonly value: unknown } | undefined => {
-  try {
-    const cx = decodeContext(limits, text.length)
-    const r = new Reader(text, origin, cx.values)
-    r.begin()
-    if (r.atEnd()) return undefined
-    const value = read(r, cx, 0)
-    r.endSingle()
-    if (cx.steps > decodeSteps(limits, r.valueCount)) return undefined
-    return { value }
-  } catch {
-    return undefined
-  }
-}
+export const decodeItem = (read: Read, text: string, origin: Origin, limits: Limits): { readonly value: unknown } | undefined => decodeOne(read, text, origin, limits, true)
 
 // ── writers ──────────────────────────────────────────────────
 
@@ -635,18 +645,8 @@ export class Out {
   }
 }
 
-/** A record key as the formatter writes it: bare if it can be, else quoted. */
-const keyText = (k: string) => (BARE_KEY.test(k) ? k : quote(k))
-
 /** An integer's decimal text, within the number limit of the reader written for (spec §7). */
 const integerText = (text: string, cx: Context): string => (text.length > cx.values.maxNumberLength ? fail() : text)
-
-/** Whether `u` is a Maybe, as `Maybe.is` in schema.ts. */
-export const isMaybe = (u: unknown): u is { readonly _tag: "None" } | { readonly _tag: "Some"; readonly value: unknown } =>
-  typeof u === "object" && u !== null &&
-  ((u as { _tag?: unknown })._tag === "None" || ((u as { _tag?: unknown })._tag === "Some" && Object.hasOwn(u, "value")))
-
-const TAG = /^[A-Z][A-Za-z0-9_]*$/
 
 /** What a record's fields writer needs, built once per record schema. */
 interface FieldWriters {
@@ -843,12 +843,11 @@ export class WriteCompiler {
         const inner = this.argument(shape.inner)
         return (w, a, cx, depth) => {
           step(cx)
-          if (!isMaybe(a)) fail()
-          const m = a as { readonly _tag: string; readonly value?: unknown }
-          if (m._tag === "None") return void (w.s += "None")
+          if (!Maybe.is(a)) return fail()
+          if (a._tag === "None") return void (w.s += "None")
           if (depth >= cx.maxDepth) fail() // `at.child(0)`
           w.s += "Some"
-          inner(w, m.value, cx, depth + 1)
+          inner(w, a.value, cx, depth + 1)
         }
       }
       case "record": {
@@ -1048,19 +1047,10 @@ export class WriteCompiler {
 
 const writers = new WeakMap<AnySchema, Write | null>()
 
+const compileWriter = (s: AnySchema): Write => new WriteCompiler().write(s)
+
 /** The compiled writer of `schema`, built on first use; undefined if it can't be compiled. */
-export const compiledWriter = (schema: AnySchema): Write | undefined => {
-  let write = writers.get(schema)
-  if (write === undefined) {
-    try {
-      write = new WriteCompiler().write(schema)
-    } catch {
-      write = null
-    }
-    writers.set(schema, write)
-  }
-  return write ?? undefined
-}
+export const compiledWriter = (schema: AnySchema): Write | undefined => compiledOnce(writers, schema, compileWriter)
 
 /** Encode `value` as one line of text with a compiled writer; undefined to say "run the generic path". */
 export const encodeCompiled = (write: Write, value: unknown, limits: Limits, style: "compact" | "minimised"): string | undefined => {

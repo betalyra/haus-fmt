@@ -27,7 +27,7 @@ import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
-import { decodeCompiled, decodeItem, encodeCompiled } from "./codec.js"
+import { decodeCompiled, decodeItem, defineOwn, encodeCompiled, unknownOf } from "./codec.js"
 import { codecOf, optimize as markOptimized, readerFor, writerFor } from "./codegen.js"
 import { atJsonPlace, jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions, type JsonPlaces } from "./json.js"
 import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
@@ -926,7 +926,7 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
  * have is assigned, which makes the same property and is much faster.
  */
 const setOwn = (out: Record<string, unknown>, key: string, value: unknown): void => {
-  if (key in out) Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true })
+  if (key in out) defineOwn(out, key, value)
   else out[key] = value
 }
 
@@ -972,9 +972,6 @@ export interface Unknown {
   readonly tag: string
   readonly value: HVariant
 }
-
-/** The unknown value for a variant an open type doesn't list: the tag, and the variant as it was parsed. */
-const unknownOf = (v: HVariant): Unknown => ({ _tag: "@unknown", tag: v.tag, value: v })
 
 /** Whether `u` is an `Unknown` (to encode: its raw value, after `checkedValue`). */
 const isUnknown = (u: unknown): u is { readonly _tag: "@unknown"; readonly value: unknown } =>
@@ -1443,11 +1440,11 @@ export type Options = Limits
  * Returns the same schema, now marked (every later use of it, anywhere, is
  * optimized); marking it again changes nothing. The code is the one
  * @haus-fmt/import built ahead (its `optimize` option, which marks the types
- * it lists itself; `h.optimize` adds a type they reach), else it
- * is made at first use with `new Function`, which needs `eval` (not under a
- * content security policy without 'unsafe-eval'); where neither is there,
- * the schema keeps the closures. Values, texts and errors are the same on
- * every path.
+ * it lists itself; `h.optimize` adds a type they reach), else it is made at
+ * first use with `new Function`, which needs `eval` (not under a content
+ * security policy without 'unsafe-eval'); where neither is there, the
+ * schema keeps the closures. Values, texts and errors are the same on every
+ * path.
  *
  *   const Issue = h.optimize(schemas.Issue)
  *   for (const text of texts) h.parse(Issue, text)

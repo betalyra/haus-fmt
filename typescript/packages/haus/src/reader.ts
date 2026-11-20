@@ -28,7 +28,17 @@
  * Duplicate keys are the consumer's to detect (it knows which keys it has
  * seen), with `failDuplicate` after the value, as the generic parser does.
  */
+import * as chars from "./chars.js"
+import { codePoints, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper } from "./chars.js"
 import { HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin } from "./errors.js"
+
+// Hot: the character codes as constants of this module. V8 reads an imported
+// binding through its module cell at every use, which measured 3-5% slower
+// reading; a constant of the module is folded into the code.
+const {
+  BACKSLASH, BYTE_ORDER_MARK, CLOSE_BRACE, CLOSE_BRACKET, CLOSE_PAREN, COLON, COMMA, CR, DIGIT_0, DIGIT_1, DIGIT_9, DOT,
+  LF, LOWER_X, MINUS, OPEN_BRACE, OPEN_BRACKET, OPEN_PAREN, QUOTE, SLASH, SPACE, STAR, TAB, UPPER_A, UPPER_Z,
+} = chars
 
 /** Resource limits. Every parser enforces them while parsing (spec: "Limits"). */
 export interface Limits {
@@ -72,8 +82,8 @@ export const ARGS = 1
 export const PAYLOAD_RECORD = 2
 
 // The closing brackets of lists, for `more` and `endItem`.
-export const CLOSE_ARRAY = 93 // ]
-export const CLOSE_ARGS = 41 // )
+export const CLOSE_ARRAY = CLOSE_BRACKET
+export const CLOSE_ARGS = CLOSE_PAREN
 
 /** log₁₆ 10: a power of ten 10^e is 16^(e · this). */
 const HEX_PER_DECIMAL = Math.log(10) / Math.log(16)
@@ -109,17 +119,11 @@ export const maxHexDigits = (maxNumberLength: number): number => {
 /** Whether `s` has more than `max` characters (code points: an emoji is one character, but two UTF-16 units). */
 export const longerThan = (s: string, max: number): boolean => s.length > max && codePoints(s) > max
 
-/** Raw bidirectional controls (U+202A–U+202E, U+2066–U+2069) are not allowed outside escapes. */
-const isBidiControl = (c: number) => (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
-/** Raw control characters (C0, DEL, C1): allowed raw only as tab and line breaks, where the grammar says. */
-const isControl = (c: number) => c < 0x20 || (c >= 0x7f && c <= 0x9f)
+/** A character code as error messages write it: `U+` and this. */
 const hex4 = (c: number) => c.toString(16).toUpperCase().padStart(4, "0")
 
-const isIdentChar = (c: number) =>
-  (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95
-const isUpper = (c: number) => c >= 65 && c <= 90
-const isLowerStart = (c: number) => (c >= 97 && c <= 122) || c === 95
-const isDigit = (c: number) => c >= 48 && c <= 57
+/** Whether a number literal that ends before `c` runs on into it (a letter, digit, `_` or `.`), which makes it invalid. Not past the end (NaN). */
+const continuesNumber = (c: number) => isIdentChar(c) || c === DOT
 
 const HEX = /-?0x([0-9A-Fa-f](?:_?[0-9A-Fa-f])*)/y
 const BIN = /-?0b([01](?:_?[01])*)/y
@@ -133,12 +137,12 @@ const PLAIN_RUN = /[^"\\\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*/y
 /** The kind of value an ASCII character starts (0: none, or not that simply: `x"…"` and errors). */
 const STARTS = (() => {
   const t = new Uint8Array(128)
-  t[123] = RECORD // {
-  t[91] = ARRAY // [
-  t[34] = STRING // "
-  t[45] = NUMBER // -
-  for (let c = 48; c <= 57; c++) t[c] = NUMBER // 0-9
-  for (let c = 65; c <= 90; c++) t[c] = VARIANT // A-Z
+  t[OPEN_BRACE] = RECORD
+  t[OPEN_BRACKET] = ARRAY
+  t[QUOTE] = STRING
+  t[MINUS] = NUMBER
+  for (let c = DIGIT_0; c <= DIGIT_9; c++) t[c] = NUMBER
+  for (let c = UPPER_A; c <= UPPER_Z; c++) t[c] = VARIANT
   return t
 })()
 
@@ -202,7 +206,7 @@ export class Reader {
   nextTop(): boolean {
     this.skipTrivia()
     if (this.atEnd()) return false
-    if (this.src.charCodeAt(this.pos) !== 44) this.failSeparator("expected ',' between top-level values") // ,
+    if (this.src.charCodeAt(this.pos) !== COMMA) this.failSeparator("expected ',' between top-level values")
     this.pos++
     this.skipTrivia()
     return !this.atEnd()
@@ -214,7 +218,7 @@ export class Reader {
    */
   endSingle(): void {
     this.skipTrivia()
-    if (!this.atEnd() && !(this.src.charCodeAt(this.pos) === 44 && this.pos === this.src.length - 1)) this.failSeparator("expected ',' between top-level values")
+    if (!this.atEnd() && !(this.src.charCodeAt(this.pos) === COMMA && this.pos === this.src.length - 1)) this.failSeparator("expected ',' between top-level values")
   }
 
   /**
@@ -232,7 +236,7 @@ export class Reader {
 
   /** A byte order mark is skipped only at the start of the whole input, not of a later stream item. */
   private skipBom() {
-    if (this.origin.offset === 0 && this.pos === 0 && this.src.charCodeAt(0) === 0xfeff) this.pos = 1
+    if (this.origin.offset === 0 && this.pos === 0 && this.src.charCodeAt(0) === BYTE_ORDER_MARK) this.pos = 1
   }
 
   // ── values ─────────────────────────────────────────────────
@@ -252,7 +256,7 @@ export class Reader {
 
   /** A value starting with a character `STARTS` doesn't know: a byte string, or an error. */
   private otherStart(c: number): number {
-    if (c === 120 && this.src.charCodeAt(this.pos + 1) === 34) return BYTES // x"
+    if (c === LOWER_X && this.src.charCodeAt(this.pos + 1) === QUOTE) return BYTES
     if (isLowerStart(c)) {
       const word = this.readIdent()
       const [code, hint]: [ErrorCode, string] =
@@ -292,15 +296,15 @@ export class Reader {
     // Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would silently
     // become one variant with a payload.
     const src = this.src
-    while (src.charCodeAt(this.pos) === 32 || src.charCodeAt(this.pos) === 9) this.pos++
+    while (src.charCodeAt(this.pos) === SPACE || src.charCodeAt(this.pos) === TAB) this.pos++
     const c = src.charCodeAt(this.pos)
-    if (c === 40) { // (
+    if (c === OPEN_PAREN) {
       const parenPos = this.pos
       this.openList()
-      if (src.charCodeAt(this.pos) === 41) this.fail("empty-payload", `empty payload: write '${tag}' without parentheses`, parenPos, { hint: `Write ${tag} without parentheses.` }) // )
+      if (src.charCodeAt(this.pos) === CLOSE_PAREN) this.fail("empty-payload", `empty payload: write '${tag}' without parentheses`, parenPos, { hint: `Write ${tag} without parentheses.` })
       return ARGS
     }
-    if (c === 123) return PAYLOAD_RECORD // {
+    if (c === OPEN_BRACE) return PAYLOAD_RECORD
     this.pos = afterTag
     this.bareTag = tag
     this.bareTagEnd = afterTag
@@ -328,17 +332,17 @@ export class Reader {
    */
   key(): string | undefined {
     const src = this.src
-    if (src.charCodeAt(this.pos) === 125) { // }
+    if (src.charCodeAt(this.pos) === CLOSE_BRACE) {
       this.pos++
       this.depth--
       return undefined
     }
-    if (this.atEnd()) this.failUnclosed(125)
+    if (this.atEnd()) this.failUnclosed(CLOSE_BRACE)
     this.keyStart = this.pos
     const key = this.readKey()
     this.keyEnd = this.pos
     this.skipTrivia()
-    if (src.charCodeAt(this.pos) !== 58) this.fail("missing-colon", `expected ':' after key '${key}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) }) // :
+    if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${key}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) })
     this.pos++
     this.skipTrivia()
     return key
@@ -359,7 +363,7 @@ export class Reader {
     this.keyEnd = end
     this.pos = end
     this.skipTrivia()
-    if (src.charCodeAt(this.pos) !== 58) this.fail("missing-colon", `expected ':' after key '${name}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) }) // :
+    if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${name}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) })
     this.pos++
     this.skipTrivia()
     return true
@@ -369,11 +373,11 @@ export class Reader {
   endField(): void {
     this.skipTrivia()
     const c = this.src.charCodeAt(this.pos)
-    if (c === 44) { // ,
+    if (c === COMMA) {
       this.pos++
       this.skipTrivia()
-    } else if (c !== 125) { // }
-      if (this.atEnd()) this.failUnclosed(125)
+    } else if (c !== CLOSE_BRACE) {
+      if (this.atEnd()) this.failUnclosed(CLOSE_BRACE)
       this.failSeparator("expected ',' or '}'", "}")
     }
   }
@@ -409,7 +413,7 @@ export class Reader {
   endItem(close: number): void {
     this.skipTrivia()
     const c = this.src.charCodeAt(this.pos)
-    if (c === 44) { // ,
+    if (c === COMMA) {
       this.pos++
       this.skipTrivia()
     } else if (c !== close) {
@@ -427,7 +431,7 @@ export class Reader {
 
   private readKey(): string {
     const c = this.src.charCodeAt(this.pos)
-    if (c === 34) { // "
+    if (c === QUOTE) {
       if (this.src.startsWith('"""', this.pos)) this.fail("block-string-key", "block strings can't be record keys")
       return this.basicString()
     }
@@ -459,19 +463,18 @@ export class Reader {
     const src = this.src
     const start = this.pos
     let i = start
-    if (src.charCodeAt(i) === 45) i++ // -
+    if (src.charCodeAt(i) === MINUS) i++
     const first = src.charCodeAt(i)
-    if (first === 48) i++ // 0
-    else if (first >= 49 && first <= 57) {
+    if (first === DIGIT_0) i++
+    else if (first >= DIGIT_1 && first <= DIGIT_9) {
       i++
       while (isDigit(src.charCodeAt(i))) i++
     } else return undefined
-    if (src.charCodeAt(i) === 46 && isDigit(src.charCodeAt(i + 1))) { // .
+    if (src.charCodeAt(i) === DOT && isDigit(src.charCodeAt(i + 1))) {
       i += 2
       while (isDigit(src.charCodeAt(i))) i++
     }
-    const next = src.charCodeAt(i)
-    if (isIdentChar(next) || next === 46) return undefined
+    if (continuesNumber(src.charCodeAt(i))) return undefined
     if (i - start > this.limits.maxNumberLength) return undefined
     this.pos = i
     return src.slice(start, i)
@@ -500,10 +503,9 @@ export class Reader {
       if (!DEC.exec(this.src)) this.fail("invalid-number", "invalid number", start)
       end = DEC.lastIndex
     }
-    const next = this.src.charCodeAt(end)
-    if (isIdentChar(next) || this.src[end] === ".") {
+    if (continuesNumber(this.src.charCodeAt(end))) {
       let to = end
-      while (to < this.src.length && (isIdentChar(this.src.charCodeAt(to)) || this.src[to] === ".")) to++
+      while (continuesNumber(this.src.charCodeAt(to))) to++
       this.fail("invalid-number", `invalid number '${this.src.slice(start, to)}'`, start)
     }
     const literal = this.src.slice(start, end)
@@ -540,8 +542,8 @@ export class Reader {
     for (;;) {
       if (this.atEnd()) this.fail("unterminated-bytes", "unterminated byte string", open)
       const c = this.src.charCodeAt(this.pos)
-      if (c === 34) break // "
-      if (c === 32 || c === 9) {
+      if (c === QUOTE) break
+      if (c === SPACE || c === TAB) {
         this.pos++
         continue
       }
@@ -549,7 +551,7 @@ export class Reader {
       if (hi < 0) {
         this.fail(
           "bytes-not-hex",
-          c === 10 || c === 13 ? "line break in byte string (keep x\"…\" on one line)"
+          c === LF || c === CR ? "line break in byte string (keep x\"…\" on one line)"
           : `invalid character ${describe(this.src[this.pos]!)} in byte string (expected hex digits)`,
         )
       }
@@ -587,9 +589,8 @@ export class Reader {
       this.pos = PLAIN_RUN.lastIndex
       const c = src.charCodeAt(this.pos)
       if (this.atEnd()) this.fail("unterminated-string", "unterminated string", open)
-      if (c === 34) break // "
-      if (c === 92) {
-        // \
+      if (c === QUOTE) break
+      if (c === BACKSLASH) {
         out += this.src.slice(chunk, this.pos)
         out += this.readEscape()
         chunk = this.pos
@@ -598,9 +599,9 @@ export class Reader {
       if (isBidiControl(c)) this.fail("bidi-control", `raw bidirectional control character U+${hex4(c)} (write it as \\u{${hex4(c)}})`)
       if (isControl(c)) {
         this.fail(
-          c === 10 ? "string-line-break" : "control-character",
-          c === 10 ? "line break in string (use \\n or a \"\"\" block string)"
-          : c === 9 ? "raw tab in string (use \\t)"
+          c === LF ? "string-line-break" : "control-character",
+          c === LF ? "line break in string (use \\n or a \"\"\" block string)"
+          : c === TAB ? "raw tab in string (use \\t)"
           : `raw control character U+${hex4(c)} in string (write it as \\u{${hex4(c)}})`,
         )
       }
@@ -649,8 +650,8 @@ export class Reader {
     let close = -1
     for (let i = this.pos; i < this.src.length; i++) {
       const c = this.src.charCodeAt(i)
-      if (c === 92) i++
-      else if (c === 34 && this.src.startsWith('"""', i)) {
+      if (c === BACKSLASH) i++
+      else if (c === QUOTE && this.src.startsWith('"""', i)) {
         close = i
         break
       }
@@ -666,7 +667,7 @@ export class Reader {
         lines.push({ text: this.src.slice(at, close), at })
         break
       }
-      const end = nl > at && this.src.charCodeAt(nl - 1) === 13 ? nl - 1 : nl
+      const end = nl > at && this.src.charCodeAt(nl - 1) === CR ? nl - 1 : nl
       lines.push({ text: this.src.slice(at, end), at })
       at = nl + 1
     }
@@ -708,7 +709,7 @@ export class Reader {
     let chunk = 0
     while (i < text.length) {
       const c = text.charCodeAt(i)
-      if (c === 92) {
+      if (c === BACKSLASH) {
         out += text.slice(chunk, i)
         const saved = this.pos
         this.pos = at + i
@@ -717,7 +718,7 @@ export class Reader {
         this.pos = saved
         chunk = i
       } else {
-        if (isControl(c) && c !== 9) this.fail("control-character", `raw control character U+${hex4(c)} in block string (write it as \\u{${hex4(c)}})`, at + i)
+        if (isControl(c) && c !== TAB) this.fail("control-character", `raw control character U+${hex4(c)} in block string (write it as \\u{${hex4(c)}})`, at + i)
         if (isBidiControl(c)) this.fail("bidi-control", `raw bidirectional control character U+${hex4(c)} (write it as \\u{${hex4(c)}})`, at + i)
         i++
       }
@@ -742,12 +743,12 @@ export class Reader {
   skipTrivia(): void {
     // Hot, and small enough to be inlined: most tokens follow each other directly.
     const c = this.src.charCodeAt(this.pos)
-    if (c === 32 || c === 9 || c === 10 || c === 13 || c === 47) this.skipTriviaAt()
+    if (c === SPACE || c === TAB || c === LF || c === CR || c === SLASH) this.skipTriviaAt()
   }
 
   private skipTriviaAt() {
     this.skipSpace()
-    if (this.src.charCodeAt(this.pos) === 47) this.fail("stray-slash", "unexpected '/' (comments are // or /* */)") // /
+    if (this.src.charCodeAt(this.pos) === SLASH) this.fail("stray-slash", "unexpected '/' (comments are // or /* */)")
   }
 
   /** Whitespace and comments, up to anything else (a `/` that starts no comment included). */
@@ -756,18 +757,18 @@ export class Reader {
     const src = this.src
     for (;;) {
       const c = src.charCodeAt(this.pos)
-      if (c === 32 || c === 9 || c === 10) {
+      if (c === SPACE || c === TAB || c === LF) {
         this.pos++
-      } else if (c === 13) {
-        if (src.charCodeAt(this.pos + 1) !== 10) this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)")
+      } else if (c === CR) {
+        if (src.charCodeAt(this.pos + 1) !== LF) this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)")
         this.pos += 2
-      } else if (c === 47 && src.charCodeAt(this.pos + 1) === 47) { // //
+      } else if (c === SLASH && src.charCodeAt(this.pos + 1) === SLASH) { // a line comment
         const nl = src.indexOf("\n", this.pos)
         const end = nl < 0 ? src.length : nl
         this.checkCommentText(this.pos, end)
         if (this.locations) this.comments.push([this.pos, end])
         this.pos = end
-      } else if (c === 47 && src.charCodeAt(this.pos + 1) === 42) { // /*
+      } else if (c === SLASH && src.charCodeAt(this.pos + 1) === STAR) { // a block comment
         this.skipBlockComment()
       } else {
         return
@@ -804,9 +805,9 @@ export class Reader {
     for (let i = start; i < end; i++) {
       const c = this.src.charCodeAt(i)
       if (isBidiControl(c)) this.fail("bidi-control", `raw bidirectional control character U+${hex4(c)} in comment`, i)
-      if (!isControl(c) || c === 9 || c === 10) continue
-      if (c === 13 && this.src.charCodeAt(i + 1) === 10) continue
-      if (c === 13) this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)", i)
+      if (!isControl(c) || c === TAB || c === LF) continue
+      if (c === CR && this.src.charCodeAt(i + 1) === LF) continue
+      if (c === CR) this.fail("lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)", i)
       this.fail("control-character", `raw control character U+${hex4(c)} in comment`, i)
     }
   }
@@ -860,20 +861,6 @@ export class Reader {
     throw new HausSyntaxError(reason, p.offset, p.line, p.column, code, details)
   }
 }
-
-/** The number of code points: each surrogate pair counts once. */
-const codePoints = (s: string): number => {
-  let n = s.length
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c >= 0xd800 && c <= 0xdbff) n--
-  }
-  return n
-}
-
-/** The value of a hex digit, or -1. */
-const hexValue = (c: number): number =>
-  c >= 48 && c <= 57 ? c - 48 : c >= 97 && c <= 102 ? c - 87 : c >= 65 && c <= 70 ? c - 55 : -1
 
 /** The exponent of a decimal literal as its value (§2): `1e+05` is `1e5`, `1e-0` is `1e0`. */
 function normalizeExponent(text: string): string {
