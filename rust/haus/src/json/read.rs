@@ -5,7 +5,7 @@
 //! value that results, by the reader of each form.
 
 use super::Json;
-use crate::parser::{is_bidi, is_control};
+use crate::scan::{is_bidi, is_control};
 use crate::{ErrorCode as Code, Limits, SyntaxError};
 use std::collections::HashSet;
 

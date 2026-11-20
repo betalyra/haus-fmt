@@ -3,7 +3,7 @@
 
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
 use crate::keys::first_repeated;
-use crate::parser::{STRING_STOP, is_ident, plain_decimal, skip_plain_ascii};
+use crate::scan::{Special, is_ident, next_special, plain_decimal};
 use crate::{Codec, EncodeError, ErrorCode as Code, Limits, Secret, Segment, Value};
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -804,46 +804,23 @@ pub(crate) fn is_normalized(text: &str) -> bool {
 pub(crate) fn quote(s: &str, out: &mut String) {
     out.reserve(s.len() + 2);
     out.push('"');
-    let b = s.as_bytes();
     // Runs of characters written as they are, copied whole.
     let mut run = 0;
-    let mut i = 0;
-    loop {
-        i = skip_plain_ascii(b, i);
-        let end = (i + 8).min(b.len());
-        while i < end && !STRING_STOP[usize::from(b[i])] {
-            i += 1;
-        }
-        let Some(&c) = b.get(i) else { break };
-        if !STRING_STOP[usize::from(c)] {
-            continue;
-        }
-        let (escape, len): (Option<&str>, usize) = match c {
-            b'"' => (Some("\\\""), 1),
-            b'\\' => (Some("\\\\"), 1),
-            b'\n' => (Some("\\n"), 1),
-            b'\r' => (Some("\\r"), 1),
-            b'\t' => (Some("\\t"), 1),
-            // C1 controls, U+0080–U+009F.
-            0xC2 if (0x80..=0x9F).contains(&b[i + 1]) => (None, 2),
-            // Bidi controls, and the line and paragraph separators.
-            0xE2 if matches!((b[i + 1], b[i + 2]), (0x80, 0xA8..=0xAE) | (0x81, 0xA6..=0xA9)) => (None, 3),
-            0xC2 | 0xE2 => {
-                i += 1;
-                continue;
-            }
-            _ => (None, 1),
-        };
-        out.push_str(&s[run..i]);
-        match escape {
-            Some(e) => out.push_str(e),
-            None => {
-                let ch = s[i..].chars().next().unwrap_or_default();
-                let _ = write!(out, "\\u{{{:X}}}", u32::from(ch));
+    while let Some((at, special)) = next_special(s, run) {
+        out.push_str(&s[run..at]);
+        match (special, s.as_bytes()[at]) {
+            (Special::Quote, _) => out.push_str("\\\""),
+            (Special::Backslash, _) => out.push_str("\\\\"),
+            (Special::Control, b'\n') => out.push_str("\\n"),
+            (Special::Control, b'\r') => out.push_str("\\r"),
+            (Special::Control, b'\t') => out.push_str("\\t"),
+            // The other controls, the bidirectional ones and the separators.
+            (Special::Control | Special::C1 | Special::Bidi | Special::LineSeparator, _) => {
+                let c = s[at..].chars().next().unwrap_or_default();
+                let _ = write!(out, "\\u{{{:X}}}", u32::from(c));
             }
         }
-        i += len;
-        run = i;
+        run = at + special.width();
     }
     out.push_str(&s[run..]);
     out.push('"');

@@ -288,7 +288,7 @@ pub(crate) fn escape(s: &str, out: &mut String) {
             '\t' => out.push_str("\\t"),
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
-            c if crate::parser::is_control(c) || crate::parser::is_bidi(c) || matches!(c, '\u{2028}' | '\u{2029}') => {
+            c if crate::scan::is_control(c) || crate::scan::is_bidi(c) || matches!(c, '\u{2028}' | '\u{2029}') => {
                 out.push_str(&format!("\\u{:04x}", u32::from(c)));
             }
             c => out.push(c),

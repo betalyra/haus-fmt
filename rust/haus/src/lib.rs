@@ -42,6 +42,7 @@ mod formatter;
 pub mod json;
 mod keys;
 mod parser;
+mod scan;
 mod secret;
 pub mod ser;
 pub mod stream;

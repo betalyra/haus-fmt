@@ -289,16 +289,67 @@ struct Walker<'s, 'v> {
     /// The work budget or the depth limit is exceeded: nothing more is checked.
     fatal: bool,
     located: bool,
-    /// For the records being walked, innermost last: which of the type's
-    /// fields the value has, by their place in the type.
+    /// Which fields the records being walked have.
+    marks: Marks,
+}
+
+/// For the records being walked, innermost last: which of its type's fields
+/// each has, and where each of its fields is in the type. A record's marks
+/// are on top while its fields are walked, and taken off after.
+#[derive(Default)]
+struct Marks {
+    /// Which of the type's fields the value has, by their place in the type.
     present: Vec<bool>,
-    /// For the records being walked, innermost last: the place in the type
-    /// of each of the value's fields, `NOT_LISTED` for none.
+    /// The place in the type of each of the value's fields, `NOT_LISTED` for none.
     places: Vec<usize>,
 }
 
-/// In [`Walker::places`]: a field the record type doesn't list.
+/// In [`Marks::places`]: a field the record type doesn't list.
 const NOT_LISTED: usize = usize::MAX;
+
+/// Where one record's marks start in [`Marks`].
+#[derive(Clone, Copy)]
+struct Mark {
+    present: usize,
+    places: usize,
+}
+
+impl Marks {
+    /// Marks the fields of a record with type `r`, on top of the others.
+    fn push(&mut self, fields: &[(String, Value)], r: &Record) -> Mark {
+        let mark = Mark { present: self.present.len(), places: self.places.len() };
+        self.present.resize(mark.present + r.fields.len(), false);
+        for (k, _) in fields {
+            let place = r.position(k);
+            if let Some(i) = place {
+                self.present[mark.present + i] = true;
+            }
+            self.places.push(place.unwrap_or(NOT_LISTED));
+        }
+        mark
+    }
+
+    /// Takes the marks of the record at `mark` (the top one) off.
+    fn pop(&mut self, mark: Mark) {
+        self.present.truncate(mark.present);
+        self.places.truncate(mark.places);
+    }
+
+    /// Whether the record at `mark` has the field at `i` of its type `r`
+    /// (the field its key finds).
+    fn has(&self, mark: Mark, r: &Record, i: usize) -> bool {
+        self.present[mark.present + r.found(i)]
+    }
+
+    /// The place in the type of the record's field at `i`, None if the
+    /// type doesn't list it.
+    fn place(&self, mark: Mark, i: usize) -> Option<usize> {
+        match self.places[mark.places + i] {
+            NOT_LISTED => None,
+            place => Some(place),
+        }
+    }
+}
 
 /// Nothing: what the walk gives for a value when it only checks.
 const NOTHING: Value = Value::Array(Vec::new());
@@ -316,8 +367,7 @@ impl<'s, 'v> Walker<'s, 'v> {
             max_steps: 0,
             fatal: false,
             located: nodes.is_some(),
-            present: vec![],
-            places: vec![],
+            marks: Marks::default(),
         }
     }
 
@@ -746,35 +796,18 @@ impl<'s, 'v> Walker<'s, 'v> {
     }
 
     fn record(&mut self, fields: &'v [(String, Value)], r: &Record, loc: Loc) -> Option<Value> {
-        // Where each field is in the type, and which of the type's fields
-        // are there, above the outer records'.
-        let (at, places) = (self.present.len(), self.places.len());
-        self.present.resize(at + r.fields.len(), false);
-        for (k, _) in fields {
-            let place = r.position(k);
-            if let Some(i) = place {
-                self.present[at + i] = true;
-            }
-            self.places.push(place.unwrap_or(NOT_LISTED));
-        }
-        let out = self.record_fields(fields, r, (at, places), loc);
-        self.present.truncate(at);
-        self.places.truncate(places);
+        let mark = self.marks.push(fields, r);
+        let out = self.record_fields(fields, r, mark, loc);
+        self.marks.pop(mark);
         out
     }
 
-    /// [`Walker::record`], with which of `r`'s fields are there at `at` in
-    /// `present`, and the places of the value's fields at `places` in `places`.
-    fn record_fields(
-        &mut self,
-        fields: &'v [(String, Value)],
-        r: &Record,
-        (at, places): (usize, usize),
-        loc: Loc,
-    ) -> Option<Value> {
-        let present = |w: &Self, i: usize| w.present[at + r.found(i)];
-        let missing: Vec<String> =
-            r.required().iter().filter(|&&i| !present(self, i)).map(|&i| quote_key(&r.fields[i].key)).collect();
+    /// [`Walker::record`], with the record's fields marked at `mark`.
+    fn record_fields(&mut self, fields: &'v [(String, Value)], r: &Record, mark: Mark, loc: Loc) -> Option<Value> {
+        let missing: Vec<String> = (r.required().iter())
+            .filter(|&&i| !self.marks.has(mark, r, i))
+            .map(|&i| quote_key(&r.fields[i].key))
+            .collect();
         let mut ok = true;
         if !missing.is_empty() {
             let s = if missing.len() > 1 { "s" } else { "" };
@@ -789,7 +822,7 @@ impl<'s, 'v> Walker<'s, 'v> {
             }
             let at = field_of(loc, i);
             let key_span = at.map(|((s, e), _)| *s..*e).or_else(|| span(loc));
-            match r.fields.get(self.places[places + i]) {
+            match self.marks.place(mark, i).map(|place| &r.fields[place]) {
                 Some(f) => {
                     if let Some(d) = &f.deprecated {
                         // At the field's value, as `unlisted-field` is (spec §14).
@@ -804,8 +837,9 @@ impl<'s, 'v> Walker<'s, 'v> {
                 }
                 None if self.decoding() && !r.closed => {}
                 None => {
-                    let unused =
-                        (r.fields.iter().enumerate()).filter(|&(i, _)| !present(self, i)).map(|(_, f)| f.key.as_str());
+                    let unused = (r.fields.iter().enumerate())
+                        .filter(|&(i, _)| !self.marks.has(mark, r, i))
+                        .map(|(_, f)| f.key.as_str());
                     let hint = suggest(key, unused);
                     self.path.push(Step::Field(key));
                     if r.closed {
