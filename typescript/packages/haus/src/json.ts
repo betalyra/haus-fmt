@@ -9,9 +9,11 @@
  * Schema-based JSON with a schema type (§16.3) is in json-schema-based.ts,
  * and in `h.toJson` / `h.fromJson` for schemas.
  */
+import { hex4, isBidiControl, TAG } from "./chars.js"
 import { HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
 import { toHex } from "./format.js"
 import { isNormalizedNumber, normalizeNumber, numberLimitIssue } from "./number.js"
+import { defineOwn } from "./own.js"
 import { checkLimits, longerThan, MAX_DEPTH, MAX_SUPPORTED_DEPTH, withDefaults, type Limits } from "./parser.js"
 import { chunks, type ChunkSource } from "./stream.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type Value } from "./value.js"
@@ -52,12 +54,9 @@ export const isJsonObject = (j: Json): j is JsonObject => typeof j === "object" 
 /** An object with these members, in this order. A member named `__proto__` is an own property, never the prototype. */
 export const jsonObject = (entries: Iterable<readonly [string, Json]>): JsonObject => {
   const out = Object.create(null) as Record<string, Json>
-  for (const [k, v] of entries) setMember(out, k, v)
+  for (const [k, v] of entries) defineOwn(out, k, v)
   return out
 }
-
-const setMember = (out: Record<string, Json>, key: string, value: Json) =>
-  Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true })
 
 /**
  * Whether two JSON values are the same data (spec §16): member order and
@@ -97,7 +96,6 @@ export const normalizeJsonNumber = (text: string): string => {
   return exponent === undefined ? mantissa! : `${mantissa}e${sign === "-" && exponent !== "0" ? "-" : ""}${exponent}`
 }
 
-const hex4 = (c: number) => c.toString(16).toUpperCase().padStart(4, "0")
 const short = (s: string) => JSON.stringify(s.length > 30 ? s.slice(0, 30) + "…" : s)
 
 /**
@@ -108,7 +106,6 @@ const short = (s: string) => JSON.stringify(s.length > 30 ? s.slice(0, 30) + "�
  */
 const DISPLAY_CONTROL = /[\u007f-\u009f\u202a-\u202e\u2066-\u2069\u2028\u2029]/
 const DISPLAY_CONTROLS = new RegExp(DISPLAY_CONTROL.source, "g")
-const isBidi = (c: number) => (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
 
 /**
  * Recursive descent over one JSON text (RFC 8259) restricted to I-JSON
@@ -231,7 +228,7 @@ class Reader {
       if (this.src[this.pos] !== ":") this.fail("json-syntax", `expected ':', found ${this.found()}`, this.pos, { expected: "':'", found: this.found() })
       this.pos++
       this.space()
-      setMember(out, key, this.value(depth + 1))
+      defineOwn(out, key, this.value(depth + 1))
       this.space()
       const c = this.src[this.pos]
       if (c !== "," && c !== "}") this.fail("json-syntax", `expected ',' or '}', found ${this.found()}`, this.pos, { expected: "',' or '}'", found: this.found() })
@@ -257,9 +254,9 @@ class Reader {
         start = this.pos
       } else if (c < 0x20) {
         this.fail("control-character", `raw control character U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
-      } else if (this.rejectControls && (c === 0x7f || (c >= 0x80 && c <= 0x9f) || isBidi(c))) {
+      } else if (this.rejectControls && (c === 0x7f || (c >= 0x80 && c <= 0x9f) || isBidiControl(c))) {
         // Self-describing JSON is written by haus tools only, which escape these (§16).
-        if (isBidi(c)) this.fail("bidi-control", `raw bidi control U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
+        if (isBidiControl(c)) this.fail("bidi-control", `raw bidi control U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
         this.fail("control-character", `raw control character U+${hex4(c)} in a string (write it as \\u${hex4(c)})`)
       } else if (c >= 0xd800 && c <= 0xdfff) {
         const d = this.src.charCodeAt(this.pos + 1)
@@ -592,7 +589,6 @@ export const importJsonValue = (json: Json, limits: Partial<Limits> = {}): Value
 
 // ── §16.2: self-describing JSON ──────────────────────────────
 
-const TAG = /^[A-Z][A-Za-z0-9_]*$/
 const LOWER_HEX = /^(?:[0-9a-f]{2})*$/
 
 /** The version of self-describing JSON, `_haus` in the envelope. */

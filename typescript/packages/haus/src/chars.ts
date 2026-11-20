@@ -48,6 +48,9 @@ export const isLowerStart = (c: number): boolean => (c >= LOWER_A && c <= LOWER_
 /** What an identifier (key, tag) continues with: `[A-Za-z0-9_]`. */
 export const isIdentChar = (c: number): boolean => isDigit(c) || isUpper(c) || isLowerStart(c)
 
+/** A character code as error messages write it after `U+`: four or more uppercase hex digits. */
+export const hex4 = (c: number): string => c.toString(16).toUpperCase().padStart(4, "0")
+
 /** The value of a hex digit, or -1. */
 export const hexValue = (c: number): number =>
   isDigit(c) ? c - DIGIT_0

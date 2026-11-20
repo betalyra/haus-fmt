@@ -41,10 +41,11 @@
  */
 import { BARE_KEY } from "./chars.js"
 import {
-  argumentForm, checkChain, compiledReader, compiledWriter, defineOwn, fail, HOLE, isEnumerable, NotCompilable, Out, ReadCompiler, unknownOf, WriteCompiler,
+  argumentForm, checkChain, compiledReader, compiledWriter, fail, HOLE, isEnumerable, NotCompilable, Out, ReadCompiler, unknownOf, WriteCompiler,
   type Read, type RecordShape, type RecursiveShape, type Write,
 } from "./codec.js"
 import { keyText, quote } from "./format.js"
+import { defineOwn } from "./own.js"
 import { readValue, readVariantAfter } from "./parser.js"
 import { ARGS, ARRAY, CLOSE_ARGS, CLOSE_ARRAY, NO_PAYLOAD, PAYLOAD_RECORD, RECORD, VARIANT } from "./reader.js"
 import { At, checkedValue, Maybe, recursionOf, shapeOf, type AnySchema, type CaseShape, type Shape } from "./schema.js"

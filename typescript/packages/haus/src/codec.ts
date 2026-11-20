@@ -46,6 +46,7 @@ import type { Origin } from "./errors.js"
 import { keyText, quote, stringify as stringifyValue, toHex } from "./format.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
+import { defineOwn } from "./own.js"
 import { readValue, readVariantAfter } from "./parser.js"
 import { ARGS, ARRAY, BYTES, CLOSE_ARGS, CLOSE_ARRAY, NO_PAYLOAD, NUMBER, PAYLOAD_RECORD, Reader, RECORD, STRING, VARIANT } from "./reader.js"
 import { At, checkedValue, decodeContext, decodeSteps, encodeContext, Maybe, recursionOf, shapeOf, type AnySchema, type CaseShape, type Context, type Limits, type Shape, type Unknown } from "./schema.js"
@@ -168,15 +169,6 @@ interface Fields {
   readonly closed: boolean
   /** Keys that can be written bare (identifiers): matched in place (`Reader.keyIs`). */
   readonly bare: readonly boolean[]
-}
-
-/**
- * A new own data property `key` of `o`, defined, not assigned: a key the
- * prototype chain has (`__proto__`, maybe a setter or read-only) can't
- * replace the prototype or be refused.
- */
-export const defineOwn = (o: object, key: string, value: unknown): void => {
-  Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true })
 }
 
 /** Set field `i` on `out`: a new own data property. */
@@ -777,7 +769,7 @@ export class WriteCompiler {
         return (w, a, cx) => {
           step(cx)
           const v = typeof a === "number" ? (floatValue(a, name) ?? fail()) : fail()
-          w.s += v.kind === "number" ? v.text : (v as HVariant).tag
+          w.s += v.kind === "number" ? v.text : v.tag
         }
       }
       case "decimal":

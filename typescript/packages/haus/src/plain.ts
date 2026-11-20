@@ -13,6 +13,7 @@
  *   fields missing from some records → key?: T
  *   types nested in themselves       → named type aliases (type Comment = …)
  */
+import { defineOwn } from "./own.js"
 import { Parser } from "./parser.js"
 import { infer, isMaybeShape, printShape, recursiveNames, resolve, type RecordShape, type Shape, type VariantShape } from "./infer.js"
 import type { Value } from "./value.js"
@@ -184,8 +185,8 @@ function plain(v: Value, shape: Shape): unknown {
 function fields(r: Extract<Value, { kind: "record" }>, rs: RecordShape): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, x] of r.fields) {
-    // defineProperty: a "__proto__" key is data, not the object's prototype.
-    Object.defineProperty(out, k, { value: plain(x, rs.fields.get(k)!.shape), enumerable: true, writable: true, configurable: true })
+    // Defined: a "__proto__" key is data, not the object's prototype.
+    defineOwn(out, k, plain(x, rs.fields.get(k)!.shape))
   }
   return out
 }
