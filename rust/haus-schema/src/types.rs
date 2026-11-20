@@ -4,7 +4,40 @@
 //! is deprecated. Decoding never looks at that.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::Arc;
+
+/// The hash of the indexes of a schema's own names (fields, tags): fast and
+/// fixed. Only the schema puts names in them; data only looks names up,
+/// which takes no longer for names made to collide than comparing them with
+/// each of the schema's names would (spec §9.8).
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct NameHasher(u64);
+
+impl NameHasher {
+    fn mix(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl Hasher for NameHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.mix(u64::from_le_bytes(word));
+        }
+    }
+    fn write_u8(&mut self, n: u8) {
+        self.mix(u64::from(n));
+    }
+    fn finish(&self) -> u64 {
+        self.0 ^ self.0 >> 32
+    }
+}
+
+/// An index of names, by [`NameHasher`].
+type Names = HashMap<String, usize, BuildHasherDefault<NameHasher>>;
 
 /// A built-in type of the prelude without parameters (spec §13).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,18 +141,40 @@ pub struct Record {
     pub closed: bool,
     pub fields: Vec<Field>,
     /// Each key's field.
-    index: HashMap<String, usize>,
+    index: Names,
+    /// For each field, the place of the field its key finds (itself, but
+    /// for a record built in code with a key twice).
+    found: Vec<usize>,
+    /// The places of the fields that aren't optional.
+    required: Vec<usize>,
 }
 
 impl Record {
     pub fn new(closed: bool, fields: Vec<Field>) -> Record {
-        let index = fields.iter().enumerate().map(|(i, f)| (f.key.clone(), i)).collect();
-        Record { closed, fields, index }
+        let index: Names = fields.iter().enumerate().map(|(i, f)| (f.key.clone(), i)).collect();
+        let found = fields.iter().map(|f| index[&f.key]).collect();
+        let required = (0..fields.len()).filter(|&i| !fields[i].optional).collect();
+        Record { closed, fields, index, found, required }
     }
 
     /// The field `key`.
     pub fn field(&self, key: &str) -> Option<&Field> {
-        self.index.get(key).map(|&i| &self.fields[i])
+        self.position(key).map(|i| &self.fields[i])
+    }
+
+    /// The place of the field `key`.
+    pub(crate) fn position(&self, key: &str) -> Option<usize> {
+        self.index.get(key).copied()
+    }
+
+    /// The place of the field that the key of the field at `i` finds.
+    pub(crate) fn found(&self, i: usize) -> usize {
+        self.found[i]
+    }
+
+    /// The places of the fields that aren't optional, in order.
+    pub(crate) fn required(&self) -> &[usize] {
+        &self.required
     }
 }
 
@@ -139,7 +194,7 @@ pub struct Variant {
     pub open: bool,
     pub cases: Vec<Case>,
     /// Each tag's case: dispatch is one lookup (spec §9.8).
-    index: HashMap<String, usize>,
+    index: Names,
 }
 
 impl Variant {

@@ -88,6 +88,8 @@ pub struct Schema {
     instances: Vec<Instance>,
     /// The file's own definitions in source order, then the imported ones.
     definitions: Vec<Definition>,
+    /// Each name's first definition in `definitions`.
+    by_name: HashMap<String, usize>,
     own: usize,
     warnings: Vec<Warning>,
     packages: Vec<SchemaPackage>,
@@ -182,7 +184,7 @@ impl Schema {
 
     /// The definition called `name` in the file, its own or imported.
     pub fn definition(&self, name: &str) -> Option<&Definition> {
-        self.definitions.iter().find(|d| d.name == name)
+        self.by_name.get(name).map(|&i| &self.definitions[i])
     }
 
     pub fn instance(&self, id: InstanceId) -> &Instance {
@@ -407,7 +409,11 @@ impl<'a> Loader<'a> {
             .into_values()
             .map(|r| SchemaPackage { name: r.found.manifest.name, version: r.found.manifest.version, dir: r.found.dir })
             .collect();
-        Ok(Schema { instances: self.instances, own, definitions, warnings, packages, files })
+        let mut by_name = HashMap::with_capacity(definitions.len());
+        for (i, d) in definitions.iter().enumerate() {
+            by_name.entry(d.name.clone()).or_insert(i);
+        }
+        Ok(Schema { instances: self.instances, own, definitions, by_name, warnings, packages, files })
     }
 
     /// A loaded file: its own definitions in source order, then the imported ones by name.
