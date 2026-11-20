@@ -1,9 +1,21 @@
 # haus vs JSON: benchmarks
 
-A first, small benchmark of haus against JSON, in TypeScript:
+A first, small benchmark of haus against JSON:
 
-1. **Size and tokens**: bytes and LLM tokens of the same documents as JSON and as haus.
-2. **Speed**: parsing and writing with the TypeScript binding against `JSON.parse` and `JSON.stringify`.
+1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify` (`speed/ts/`), Rust against `serde_json` (`speed/rust/`). Every language reads the same documents, which `convert` exports as plain files.
+
+```
+bench/
+  sources.haus            the manifest (one, shared)
+  package.json, main.*.ts the TypeScript program (one Effect CLI, entries per runtime) and its dependencies
+  size/                   TypeScript: fetch, convert, tokens, compress, report (src/), the hand-written BFCL schema (schemas/)
+  speed/
+    ts/                   TypeScript speed: tinybench (speed.ts, the `speed` command of the same CLI)
+    rust/                 Rust speed: criterion (its own Cargo crate, outside the rust/ workspace)
+  .data/                  downloads (git-ignored)
+  .out/<source>/          results (git-ignored); corpus/ is the exported corpus every language's speed benchmark reads
+```
 
 The data is real, from seven sources in five categories, each measured and reported on its own (never averaged together, not even within a category):
 
@@ -13,7 +25,7 @@ The data is real, from seven sources in five categories, each measured and repor
 | API responses | **`stripe`** | the example objects of Stripe's fixtures file ([stripe/openapi](https://github.com/stripe/openapi), MIT) | generated from Stripe's OpenAPI 3.0 description |
 | Configuration | **`vega-lite`** | every example specification of [Vega-Lite](https://github.com/vega/vega-lite) (BSD-3-Clause) | generated from Vega-Lite's JSON Schema (draft-07) |
 | Configuration | **`kubernetes`** | every YAML manifest of [kubernetes/examples](https://github.com/kubernetes/examples) (Apache-2.0), one document per YAML document | generated from the OpenAPI v3 description of Kubernetes v1.37.2 (Apache-2.0) |
-| LLM tool calls | **`bfcl`** | the single-turn entries of the [Berkeley Function Calling Leaderboard](https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard) (Apache-2.0): function definitions, question and expected call | **hand-written** (`schemas/bfcl.schema.haus`): BFCL has none |
+| LLM tool calls | **`bfcl`** | the single-turn entries of the [Berkeley Function Calling Leaderboard](https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard) (Apache-2.0): function definitions, question and expected call | **hand-written** (`size/schemas/bfcl.schema.haus`): BFCL has none |
 | Events and logs | **`gh-archive`** | ~2,000 public GitHub events of one hour of [GH Archive](https://www.gharchive.org), stratified by event type; also measured as one stream (JSON Lines against a haus stream) | the event schemas of GitHub's OpenAPI description |
 | Geo (number-heavy) | **`geojson`** | the 177 country features of Natural Earth's 1:110m admin-0 countries ([nvkelso/natural-earth-vector](https://github.com/nvkelso/natural-earth-vector), public domain) | the GeoJSON Feature JSON Schema ([geojson/schema](https://github.com/geojson/schema), MIT) |
 
@@ -26,7 +38,9 @@ From a fresh checkout, with Node 26 (TypeScript run by Node's type stripping) an
 ```sh
 cd typescript
 pnpm install                          # the bench package is part of the workspace
-pnpm --filter haus-bench all          # every step below, in order (about 2 minutes)
+pnpm --filter haus-bench all          # every TypeScript step below, in order (about 25 minutes, most of it tokens)
+pnpm --filter haus-bench speed-rust   # the Rust speed benchmark (cargo bench, about 7 minutes), after convert
+pnpm --filter haus-bench report       # the report again, with Rust's speed beside TypeScript's
 ```
 
 Or step by step:
@@ -35,11 +49,12 @@ Or step by step:
 |---|---|---|---|
 | build the bindings | `pnpm --filter haus-bench prepare-haus` | ~10 s | `typescript/packages/{haus,effect}/dist/` |
 | download | `pnpm --filter haus-bench fetch` | ~1 min (~140 MB, once) | `bench/.data/` |
-| convert | `pnpm --filter haus-bench convert` | ~15 s | `bench/.out/<source>/corpus.json`, `<source>.schema.haus`, `<source>-strings.schema.haus`, `<source>.haus` |
+| convert | `pnpm --filter haus-bench convert` | ~15 s | `bench/.out/<source>/corpus.json`, `<source>.schema.haus`, `<source>-strings.schema.haus`, `<source>.haus`; the exported corpus `bench/.out/<source>/corpus/` ([below](#the-exported-corpus)) |
 | tokens | `pnpm --filter haus-bench tokens` | ~15 min (4 tokenizers × 7 sources; bfcl and gh-archive are most of it) | `bench/.out/<source>/tokens.json` |
-| compress | `node main.node.ts compress` (from `bench/`) | ~3 min (brotli 11 is most of it) | `bench/.out/<source>/compression.json` |
-| speed | `pnpm --filter haus-bench speed` | ~6 min (11 tasks × 2.5 s × 7 sources, and the checks before timing; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed.json` |
-| report | `pnpm --filter haus-bench report` | < 1 s | prints the tables; `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
+| compress | `pnpm --filter haus-bench compress` | ~3 min (brotli 11 is most of it) | `bench/.out/<source>/compression.json` |
+| speed (TypeScript) | `pnpm --filter haus-bench speed` | ~6 min (11 tasks × 2.5 s × 7 sources, and the checks before timing; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed-typescript.json` |
+| speed (Rust) | `pnpm --filter haus-bench speed-rust`, or `cargo bench` in `bench/speed/rust/` | ~7 min (11 tasks × ~4.5 s × 7 sources, and the first build) | `bench/.out/<source>/speed-rust.json` |
+| report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
 `convert` and `speed` build `@haus-fmt/haus` and `@haus-fmt/effect` first: they measure the built `dist/`, which git ignores, so after switching branches an old build would otherwise be measured. When running `main.node.ts` directly (Bun, Deno), run `prepare-haus` first.
 
@@ -55,9 +70,22 @@ Options (`pnpm --filter haus-bench convert --limit 40`; `--help` on any command 
 
 Nothing large is committed: `bench/.data/` (downloads) and `bench/.out/` (results) are git-ignored. `fetch` downloads what `sources.haus` pins and checks every file's SHA-256; files already there with the right hash are kept.
 
+`all` and `smoke` run the TypeScript steps only. The Rust benchmark needs only `convert`'s export (and Rust 1.99, the version `rust/` uses):
+
+```sh
+cd bench/speed/rust
+cargo bench                                       # every source in sources.haus; criterion, release build
+HAUS_BENCH_SOURCES=vega-lite,geojson cargo bench  # only these sources
+HAUS_BENCH_QUICK=1 cargo bench                    # 10 samples in 0.3 s per task: checks the harness, not for publishing
+HAUS_BENCH_OUT=/elsewhere cargo bench             # the results directory convert wrote to (default bench/.out)
+cargo bench -- --test                             # runs every task once (no results written)
+```
+
+Options go in the environment, since criterion owns the command line (its own flags, such as `--save-baseline` or a name filter, still work; a source whose tasks a filter leaves out gets no results file). Then `pnpm --filter haus-bench report` shows both languages.
+
 ### Node, Bun and Deno
 
-One program, one thin entry per runtime; everything else is runtime-neutral (`src/`). The pnpm scripts use Node. From `bench/`, after `pnpm install` and `prepare-haus`:
+One program, one thin entry per runtime; everything else is runtime-neutral (`size/src/`, `speed/ts/`). The pnpm scripts use Node. From `bench/`, after `pnpm install` and `prepare-haus`:
 
 | Runtime | Command | Platform layer |
 |---|---|---|
@@ -73,20 +101,22 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 
 | File | |
 |---|---|
-| `sources.haus` | the manifest: the corpus sources (repository, commit, license, category, the pinned files: a single file, or a whole directory or tree by the SHA-256 of its listing; a second repository for a schema kept apart, a file downloaded over HTTPS, a file of an npm package; and the converter rules a source turns on) and the tokenizers (Hub repository, revision, files and SHA-256s). Adding a tokenizer is one entry. Read with the haus Effect binding (`@haus-fmt/effect`) into an Effect Schema. |
+| `sources.haus` | the manifest: the corpus sources (repository, commit, license, category, the pinned files: a single file, or a whole directory or tree by the SHA-256 of its listing; a second repository for a schema kept apart, a file downloaded over HTTPS, a file of an npm package; and the converter rules a source turns on) and the tokenizers (Hub repository, revision, files and SHA-256s). Adding a tokenizer is one entry. Read with the haus Effect binding (`@haus-fmt/effect`) into an Effect Schema; the Rust benchmark reads its source names with `haus::parse`. |
 | `main.node.ts`, `main.bun.ts` | the entries: the CLI with the runtime's platform layer |
-| `src/cli.ts` | the commands and their flags (`effect/cli`) |
-| `src/steps/fetch.ts` | downloads into `bench/.data/` and checks hashes: git (child process) for the corpora, `HttpClient` for GH Archive and the tokenizers (a few at a time), and the hash of the npm package file GeoJSON's schema comes from |
-| `src/steps/convert.ts` | every document → haus (three forms), with the round trip checked |
-| `src/steps/tokens.ts` | token counts with tokenizers.js, per document and of all documents as one stream |
-| `src/steps/compress.ts`, `src/compress.ts` | compressed sizes: gzip, brotli, zstd (node:zlib), per document and as one stream |
-| `src/steps/speed.ts` | tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify` |
-| `src/steps/report.ts` | the tables, as markdown and as `results.haus` |
-| `src/openapi.ts` | OpenAPI 3.0/3.1 / JSON Schema → haus schema types, and the JSON ↔ haus mapping for those types |
-| `src/hand.ts`, `schemas/bfcl.schema.haus` | a hand-written haus schema → the same types (for BFCL, which has no schema) |
-| `src/corpus.ts` | the documents of each source (YAML 1.1 → JSON for Kubernetes, with `yaml` 2.9.1) |
-| `src/manifest.ts`, `src/results.ts` | the manifest and results files, as Effect Schemas; the `Manifest` and `Results` services |
-| `src/paths.ts`, `src/host.ts`, `src/sources.ts`, `src/listing.ts`, `src/stats.ts`, `src/errors.ts` | directories (`BenchPaths`), the machine and its garbage collector (`Host`), source selection, directory listings, statistics and tables, errors |
+| `size/src/cli.ts` | the commands and their flags (`effect/cli`) |
+| `size/src/steps/fetch.ts` | downloads into `bench/.data/` and checks hashes: git (child process) for the corpora, `HttpClient` for GH Archive and the tokenizers (a few at a time), and the hash of the npm package file GeoJSON's schema comes from |
+| `size/src/steps/convert.ts` | every document → haus (three forms), with the round trip checked |
+| `size/src/export.ts` | the exported corpus (`<source>/corpus/`): written by convert, read by the TypeScript speed step (the Rust benchmark has its own reader, `speed/rust/src/corpus.rs`) |
+| `size/src/steps/tokens.ts` | token counts with tokenizers.js, per document and of all documents as one stream |
+| `size/src/steps/compress.ts`, `size/src/compress.ts` | compressed sizes: gzip, brotli, zstd (node:zlib), per document and as one stream |
+| `size/src/steps/report.ts` | the tables, as markdown and as `results.haus`, with every language's speed results |
+| `size/src/openapi.ts` | OpenAPI 3.0/3.1 / JSON Schema → haus schema types, and the JSON ↔ haus mapping for those types |
+| `size/src/hand.ts`, `size/schemas/bfcl.schema.haus` | a hand-written haus schema → the same types (for BFCL, which has no schema) |
+| `size/src/corpus.ts` | the documents of each source (YAML 1.1 → JSON for Kubernetes, with `yaml` 2.9.1) |
+| `size/src/manifest.ts`, `size/src/results.ts` | the manifest and results files, as Effect Schemas (the speed results' shape is shared by every language); the `Manifest` and `Results` services |
+| `size/src/paths.ts`, `size/src/host.ts`, `size/src/sources.ts`, `size/src/listing.ts`, `size/src/stats.ts`, `size/src/errors.ts` | directories (`BenchPaths`), the machine and its garbage collector (`Host`), source selection, directory listings, statistics and tables, errors |
+| `speed/ts/speed.ts` | TypeScript speed, tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify` (the CLI's `speed` command) |
+| `speed/rust/` | Rust speed, criterion: `benches/speed.rs` (the tasks and checks), `src/corpus.rs` (reads the export and the manifest), `src/results.rs` (criterion's samples → `speed-rust.json`), `src/machine.rs` |
 
 Services: `BenchPaths` (from `--data-dir`/`--out-dir`), `Manifest` (reads `sources.haus`), `Results` (reads and writes the results files, checked with their schemas), `Host` (provided by each entry); from the platform: `FileSystem`, `Path`, `Crypto` (SHA-256), `ChildProcessSpawner` (git), `HttpClient`. tinybench stays the timing engine: the timed functions are the plain library calls, built before the run, with no Effect inside them.
 
@@ -127,7 +157,7 @@ YAML is read with [`yaml`](https://eemeli.org/yaml/) 2.9.1 (2026-09-11) as **YAM
 
 The data files of [BFCL v4](https://github.com/ShishirPatil/gorilla/tree/main/berkeley-function-call-leaderboard) at commit `6ea57973c7a6097fd7c5915698c54c17c5b1b6c8` (2026-03-23): `bfcl_eval/data/*.json` (20 question files, JSON Lines despite the name) and `bfcl_eval/data/possible_answer/*.json` (16 answer files), each set pinned by a listing. One document is one entry of the ten single-turn categories (`simple_python`, `simple_java`, `simple_javascript`, `multiple`, `parallel`, `parallel_multiple` and the four `live_` ones): its `id`, `question` (the messages), `function` (the function definitions, each with a JSON Schema for its parameters) and, from the answer file, `ground_truth` (the expected calls, with every acceptable value of each argument): **2,501 documents, 5.7 MB of minified JSON**. Left out, 2,196 entries of the other categories, whose shape is another or that have no call: multi-turn (800: several turns, an initial state, calls as Python strings), irrelevance and relevance (1,140: no expected call), memory (155) and web search (100: no function definitions), and `format_sensitivity` (a list of ids).
 
-BFCL has no schema for its files, so its schema is **written by hand**, [`schemas/bfcl.schema.haus`](schemas/bfcl.schema.haus), and labelled so: `Entry`, `Message` (role a closed variant `User | System | Assistant`, `"user"` in JSON), `Function`, `Parameters` and `Parameter` (the JSON Schema keywords BFCL uses; defaults, enum values and items as `Any`); the expected calls are `Array (Map (Map (Array Any)))`, since arguments are free-form. `src/hand.ts` turns it into the converter's types; the JSON mapping is the same as for generated schemas.
+BFCL has no schema for its files, so its schema is **written by hand**, [`size/schemas/bfcl.schema.haus`](size/schemas/bfcl.schema.haus), and labelled so: `Entry`, `Message` (role a closed variant `User | System | Assistant`, `"user"` in JSON), `Function`, `Parameters` and `Parameter` (the JSON Schema keywords BFCL uses; defaults, enum values and items as `Any`); the expected calls are `Array (Map (Map (Array Any)))`, since arguments are free-form. `size/src/hand.ts` turns it into the converter's types; the JSON mapping is the same as for generated schemas.
 
 ### `gh-archive`: GitHub events
 
@@ -151,7 +181,7 @@ Each document is measured in three haus forms, next to JSON minified (`JSON.stri
 
 Each is written minimised (spec §11, `{a:1,b:[1,2]}`, the counterpart of minified JSON), compact (`{ a: 1, b: [1, 2] }`) and pretty (2 spaces, the counterpart of pretty JSON).
 
-### The schema: OpenAPI → haus (`src/openapi.ts`)
+### The schema: OpenAPI → haus (`size/src/openapi.ts`)
 
 The generated schema is `bench/.out/github-rest/github-rest.schema.haus` (enums as tags) and `github-rest-strings.schema.haus` (enums as strings). Rules, with how often each applied on the GitHub corpus (types reachable from the 619 documents' response types, each type once):
 
@@ -257,6 +287,25 @@ What this says, source by source:
 
 Compression shrinks every difference: the stream ratios are all within about ±5% of JSON, the per-document ones within ±8%. haus's savings come from what a compressor removes anyway (quotes, repeated keys); its costs (tags, `Some`) are new bytes, which survive.
 
+## Results: speed per language
+
+The first Rust run (criterion, `rustc 1.99.0`, M1 Max), per document, haus against serde_json into `serde_json::Value`: MB/s of each format's own text, and haus's time relative to serde_json's for the same task (typed: relative to serde_json's parse). The corpus input (one text) gives the same picture. The full tables of both languages, with TypeScript's beside, are in `bench/.out/results.md`.
+
+| Source | parse: haus / serde_json MB/s | haus time | typed (parse + `Schema::decode`) MB/s | haus time | write minimised: haus / serde_json MB/s | haus time |
+|---|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 124 / 243 | 1.9× | 64 | 3.7× | 92 / 766 | 8.1× |
+| `vega-lite` | 60 / 119 | 1.9× | 25 | 4.5× | 44 / 424 | 9.1× |
+| `kubernetes` | 68 / 136 | 1.8× | 33 | 3.6× | 46 / 502 | 9.6× |
+| `bfcl` | 113 / 228 | 1.9× | 59 | 3.7× | 85 / 620 | 6.9× |
+| `stripe` | 66 / 137 | 2.0× | 33 | 3.9× | 51 / 512 | 9.4× |
+| `gh-archive` | 131 / 324 | 2.4× | 77 | 4.1× | 106 / 841 | 7.8× |
+| `geojson` | 74 / 134 | 1.8× | 27 | 5.0× | 70 / 544 | 7.7× |
+
+- **Parsing** is 1.8–2.4× serde_json's time, within the plan's guess (1.5–3× to `Value`), though not yet near its throughput guess (150–300 MB/s). On GeoJSON, where serde_json converts every coordinate to `f64` and haus keeps the text, haus is still 1.8× slower.
+- **Writing** is the weak spot: 7–10× serde_json's time, and slower than the TypeScript binding (whose writers were sped up 5–7.5× recently; the Rust binding hasn't had that pass).
+- **The Rust binding is slower than the TypeScript one** in MB/s on every source (per document, same files, same machine): TypeScript parses at 74–173 MB/s and writes minimised at 88–250 MB/s, Rust at 60–131 and 44–106 MB/s. Against its own language's JSON library, Rust's parse ratio is about TypeScript's (1.7–2.5× both), its write ratio worse (7–10× against 1.4–10×).
+- A first profile (macOS `sample`, bfcl): parse time goes to `Parser::basic_string` (a byte-at-a-time loop with a bounds-checked `peek`, a full `char` decode for every non-ASCII character, a `String` grown by `push_str`), to `malloc`/`free` (a `String` per key and per string), and to the duplicate-key check (a `HashSet<String>` per record: SipHash, cloned keys, rehashing), about 8%. Writing goes to `ser::quote` (per-character escaping), to `Value::clone` (`Encoder::value` checks the value, then clones the whole tree before writing it) and `malloc`/`free`, and to `unique_keys`. Not optimised here: this benchmark measures.
+
 ## Measurements
 
 ### Size and tokens
@@ -281,7 +330,24 @@ Every source is also measured as one file of all its documents: **JSON Lines** (
 
 ### Compressed
 
-Over the wire, JSON is usually compressed. `compress` (`src/compress.ts`) measures, for minified JSON, minimised haus and plain haus (and the pretty forms), the bytes after **gzip** (levels 6 and 9), **brotli** (quality 4, as for dynamic responses, and 11, as for static files) and **zstd** (level 3), with the runtime's `node:zlib` (Node 26; Bun and Deno have the same functions): each document compressed alone (the sum over documents: small documents compress badly) and all documents as one stream (JSON Lines, a haus stream), since a large stream compresses very differently. Ratios are haus / JSON.
+Over the wire, JSON is usually compressed. `compress` (`size/src/compress.ts`) measures, for minified JSON, minimised haus and plain haus (and the pretty forms), the bytes after **gzip** (levels 6 and 9), **brotli** (quality 4, as for dynamic responses, and 11, as for static files) and **zstd** (level 3), with the runtime's `node:zlib` (Node 26; Bun and Deno have the same functions): each document compressed alone (the sum over documents: small documents compress badly) and all documents as one stream (JSON Lines, a haus stream), since a large stream compresses very differently. Ratios are haus / JSON.
+
+### The exported corpus
+
+Size and tokens are measured on the texts convert writes; speed is measured per language, and every language must read exactly the same documents. So `convert` exports each source's measured documents (only those that round-trip) as plain files, in convert's order (`size/src/export.ts`):
+
+```
+bench/.out/<source>/corpus/
+  index.haus             { source, schema, documents: [{ id, root, file }] }, in order
+  <source>.schema.haus   the schema (enums as tags); each document's `root` is a type of it
+  NNNN.haus              document NNNN, idiomatic haus, minimised (the wire form)
+  NNNN.pretty.haus       the same, pretty
+  NNNN.json              the same document, minified JSON (numbers as written in the source)
+  all.haus               every document as one haus stream, minimised (each item followed by `,` and a line feed)
+  all.json               every document as one JSON array, minified
+```
+
+Each file holds exactly the measured text (no newline added); `NNNN` is the document's position, so the names sort in index order. A later convert removes the files an earlier one wrote that it doesn't (a `--limit` run after a full one). The TypeScript speed step reads these files too, not `corpus.json`.
 
 ### Speed (TypeScript)
 
@@ -295,7 +361,25 @@ Over the wire, JSON is usually compressed. `compress` (`src/compress.ts`) measur
 
 Each runs on the **corpus** (one text: a JSON array, a haus stream) and **per document** (every document on its own; the time is for all of them). The report gives MB/s (against each format's own bytes), µs per document, ops/s, mean, p75 and p99, and the time relative to JSON for the same task and input.
 
-Before timing, each pair is checked once: the haus text parses to a value that writes back to the same text, the typed decode succeeds, the haus stream reads as the same values as the documents, and `JSON.parse` → `JSON.stringify` gives the same text (where it doesn't, because a number can't be held exactly in a JS number, the count is reported). Every output is consumed into a checksum that is recorded. The machine, OS and runtime version are recorded in the results.
+Before timing, each pair is checked once: the haus text parses to a value that writes back to the same text, the typed decode succeeds, the haus stream reads as the same values as the documents (and is their minimised stream; `all.json` is their array), and `JSON.parse` → `JSON.stringify` gives the same text (where it doesn't, because a number can't be held exactly in a JS number, the count is reported). Every output is consumed into a checksum that is recorded. The machine, OS and runtime version are recorded in the results (`speed-typescript.json`).
+
+### Speed (Rust)
+
+`bench/speed/rust/`, a crate of its own (`haus-bench-speed`, `publish = false`, its own `[workspace]`, so the `rust/` workspace and its CI don't build it), with path dependencies on `rust/haus` and `rust/haus-schema`. [criterion](https://github.com/criterion-rs/criterion.rs) 0.8.2 and `serde_json` 1.0.154, pinned exactly; `cargo bench` builds with the release profile. The same tasks as TypeScript, on the same files:
+
+| Task | JSON | haus |
+|---|---|---|
+| parse | `serde_json::from_str::<serde_json::Value>` | `haus::parse`: text → `haus::Value`, no schema |
+| typed | | `haus::parse` + `haus_schema::Schema::decode(root, &value)`: the runtime decoder (spec §15) with the document's type |
+| write | `serde_json::to_string(&Value)` | `haus::to_string_minimised` (a stream: each value's, followed by `,` and a line feed) and `haus::to_string` (compact) |
+
+Each on the corpus and per document, as in TypeScript; bytes are the same as TypeScript's. Criterion: flat sampling (equal batches: the corpus tasks take tens of milliseconds, too long for its linear sampling), 50 samples, 3 s per task after 1 s of warm-up; the mean is criterion's estimate, p75 and p99 are over the samples (each the mean time of a batch of calls, not of one call as in tinybench, so they are narrower). Criterion keeps its samples in `bench/speed/rust/target/criterion/`, and its console output compares a run with the one before.
+
+Why criterion, not divan: its samples are saved as files (`sample.json`, `estimates.json`), which turn into the shared results format without parsing console output; divan (0.1) prints its results only. Divan counts allocations, which this benchmark doesn't report yet. Both work with CodSpeed, if that is used for regression tracking later.
+
+The checks before timing are TypeScript's, in Rust: every haus document parses to a value that `to_string_minimised` writes back as the same text, its pretty text reads as the same value, it decodes with its type, `all.haus` reads as the documents' values and is what `to_string_minimised` writes for them, and serde_json reads every JSON document and `all.json`. serde_json's `Value` (default features) sorts members and holds numbers as `f64`/`i64`/`u64`; the results count the documents it writes back as another document by haus's equality (exact numbers, member order aside), where TypeScript counts the texts `JSON.stringify` changes. Results: `speed-rust.json`, the same shape as `speed-typescript.json` (`lang`, `harness`, `machine` with the compiler version, `options`, `rows`).
+
+`typed` uses the runtime decoder (`haus_schema`), a `Value` → `Value` decode that checks every rule of the schema. It has no JSON counterpart here: serde_json into typed structs would need Rust types for the seven schemas (and serde attributes for each source's JSON mapping: enum strings, discriminators, the keyed unions). Types generated by `haus-fmt-build` against serde-derived structs are still to do.
 
 ## Caveats
 
@@ -305,5 +389,5 @@ Before timing, each pair is checked once: the haus text parses to a value that w
 - **A hand-written schema** (BFCL) is one reasonable schema, not the only one; it types what is regular (messages, functions, parameter keywords) and leaves arguments and defaults `Any`.
 - **Minimised vs compact.** Compact haus keeps a space after `:` and `,` and is larger than minified JSON; the like-for-like comparison is minimised haus against minified JSON.
 - **Unlisted members** (388 in GitHub's corpus) are kept as imported JSON, so the haus text holds all of the document's data; a strict reader with a closed schema would reject these documents.
-- **Speed**: pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; one machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick mode (`--quick`, used by `smoke`) is a harness check only.
+- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't). One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
 - **Tokenizers are proxies** for what each provider bills, and tokenizers.js reproduces each tokenizer's regex closely but not perfectly in every edge case (see its README).

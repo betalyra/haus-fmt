@@ -5,8 +5,10 @@
  *   results.haus   every number, for tools (`{ sources: [...] }`, one record per source)
  *
  * Reads each source's corpus.json (convert) and, when present, tokens.json
- * (tokens) and speed.json (speed). Results of another convert run (another
- * sample) are left out, with a warning. Sources are never merged.
+ * (tokens), compression.json (compress) and every language's
+ * speed-<lang>.json (bench/speed/ts: the speed step; bench/speed/rust: cargo
+ * bench). Results of another convert run (another sample) are left out, with
+ * a warning. Sources are never merged.
  *
  * Ratios are haus / JSON: below 1 means haus is smaller or faster. "total"
  * is the ratio of the sums over all documents (large documents weigh
@@ -17,7 +19,7 @@
  */
 import { arr, format, normalizeNumber, num, rec, str, variant, type Value } from "@haus-fmt/haus"
 import { Console, Effect, Option } from "effect"
-import { COMPRESSION, CORPUS, Results, SPEED, TOKENS, type CompressionOut, type CorpusOut, type Form, type SpeedOut, type SpeedRow, type TokensOut } from "../results.ts"
+import { COMPRESSION, CORPUS, LANGS, Results, speedFile, TOKENS, type CompressionOut, type CorpusOut, type Form, type Lang, type SpeedOut, type SpeedRow, type TokensOut } from "../results.ts"
 import { streamText, type CompressedForm } from "../compress.ts"
 import { selectSources, type Selection } from "../sources.ts"
 import { countBy, fixed3, mean, pct, ratio, sum, table, tally, utf8Length, type Ratio } from "../stats.ts"
@@ -67,6 +69,60 @@ export const unions = (decisions: Readonly<Record<string, number>>): string => {
 const sameDocuments = (corpus: CorpusOut, ids: readonly string[]): boolean =>
   ids.length === corpus.documents.length && ids.every((id, i) => id === corpus.documents[i]!.id)
 
+const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust" }
+
+/** The JSON task a row is compared with: same group and input (typed: JSON parse). */
+const baselineOf = (rows: readonly SpeedRow[], r: SpeedRow): SpeedRow | undefined =>
+  rows.find((x) => x.input === r.input && (x.group === r.group || (r.group === "typed" && x.group === "parse")) && x.format === "json")
+
+const versus = (rows: readonly SpeedRow[], r: SpeedRow): string => {
+  const b = baselineOf(rows, r)
+  return b ? `${(r.mean_ms / b.mean_ms).toFixed(1)}×` : ""
+}
+
+/** One language's speed table, with the machine and harness. Pure. */
+export const speedTable = (sp: SpeedOut): string[] => {
+  const m = sp.machine
+  const jsonNote = sp.lang === "typescript"
+    ? `JSON.parse → JSON.stringify changed the text of ${sp.jsonNotStable} documents (numbers a JS number can't hold exactly).`
+    : `serde_json's \`Value\` wrote ${sp.jsonNotStable} documents back as another document (numbers in another spelling; it also sorts members, which isn't counted).`
+  return [
+    `### ${LANG_NAMES[sp.lang]}`,
+    "",
+    `${m.cpu} (${m.cores} cores, ${m.memory_gb} GB), ${m.os}, ${m.runtime}` + (sp.lang === "typescript" ? `, GC between tasks: ${m.gc ? "yes" : "no"}` : "") +
+      `. ${sp.harness}, ${sp.options.time_ms} ms per task after ${sp.options.warmup_ms} ms warm-up.` +
+      (sp.options.quick ? " **Quick run: a harness check, not a measurement.**" : ""),
+    `${sp.lang === "rust" ? "p75 and p99 are over criterion's samples (each the mean of a batch of calls). " : ""}${jsonNote}`,
+    "",
+    ...table(
+      ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", "vs JSON"],
+      sp.rows.map((r) => [r.group, r.input, r.impl, r.mb_s.toFixed(1), r.us_per_doc.toFixed(2), r.hz.toFixed(1), r.mean_ms.toFixed(3), r.p75_ms.toFixed(3), r.p99_ms.toFixed(3), versus(sp.rows, r)]),
+    ),
+  ]
+}
+
+/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`. */
+const hausTask = (r: SpeedRow): string => (r.group === "write" ? `write ${r.impl.includes("compact") ? "compact" : "minimised"}` : r.group)
+
+/** haus in every language side by side: MB/s and time against the language's JSON. Pure. */
+export const speedSummary = (speed: readonly SpeedOut[]): string[] => {
+  const keys = [...new Set(speed.flatMap((sp) => sp.rows.filter((r) => r.format === "haus").map((r) => `${hausTask(r)}|${r.input}`)))]
+  return [
+    "haus in each language (MB/s of haus text; time relative to the language's JSON task):",
+    "",
+    ...table(
+      ["Task", "Input", ...speed.flatMap((sp) => [`${LANG_NAMES[sp.lang]} MB/s`, `${LANG_NAMES[sp.lang]} vs JSON`])],
+      keys.map((key) => {
+        const [task, input] = key.split("|") as [string, string]
+        return [task, input, ...speed.flatMap((sp) => {
+          const r = sp.rows.find((x) => x.format === "haus" && x.input === input && hausTask(x) === task)
+          return r ? [r.mb_s.toFixed(1), versus(sp.rows, r)] : ["", ""]
+        })]
+      }),
+    ),
+  ]
+}
+
 export interface Report {
   readonly markdown: string
   /** Every number, as plain data (written as haus by `toValue`). */
@@ -75,13 +131,14 @@ export interface Report {
 }
 
 /** The report of a convert run, with the token counts and speed results that belong to it. Pure. */
-export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<TokensOut>, speedRead: Option.Option<SpeedOut>, compressionRead: Option.Option<CompressionOut> = Option.none()): Report => {
+export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<TokensOut>, speedRead: readonly SpeedOut[], compressionRead: Option.Option<CompressionOut> = Option.none()): Report => {
   const current = <T extends { readonly documents: readonly string[] }>(what: string, results: Option.Option<T>) => ({
     value: Option.filter(results, (r) => sameDocuments(corpus, r.documents)),
     warnings: Option.isSome(results) && !sameDocuments(corpus, results.value.documents) ? [`warning: ${what} are from another convert run; run them again (left out)`] : [],
   })
   const tokens = current("token counts", tokensRead)
-  const speed = current("speed results", speedRead)
+  const speeds = speedRead.map((sp) => current(`${LANG_NAMES[sp.lang]} speed results`, Option.some(sp)))
+  const speed = speeds.flatMap((sp) => Option.toArray(sp.value))
   const compression = current("compressed sizes", compressionRead)
 
   const docs = corpus.documents
@@ -201,28 +258,14 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
     },
   })
 
-  const speedSection = Option.match(speed.value, {
-    onNone: (): string[] => [],
-    onSome: (sp) => {
-      const m = sp.machine
-      const baseline = (r: SpeedRow) => sp.rows.find((x) => x.input === r.input && (x.group === r.group || (r.group === "typed" && x.group === "parse")) && x.impl.startsWith("JSON"))
-      return [
-        "## Speed (TypeScript)",
-        "",
-        `${m.cpu} (${m.cores} cores, ${m.memory_gb} GB), ${m.os}, ${m.runtime}, GC between tasks: ${m.gc ? "yes" : "no"}. tinybench, ${sp.options.time_ms} ms per task after ${sp.options.warmup_ms} ms warm-up.` +
-          (sp.options.quick ? " **Quick run: a harness check, not a measurement.**" : ""),
-        `MB/s is against each format's own bytes. "vs JSON" is the time relative to the JSON task of the same group and input. JSON.parse → JSON.stringify changed the text of ${sp.jsonNotStable} documents (numbers a JS number can't hold exactly).`,
-        "",
-        ...table(
-          ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", "vs JSON"],
-          sp.rows.map((r) => {
-            const b = baseline(r)
-            return [r.group, r.input, r.impl, r.mb_s.toFixed(1), r.us_per_doc.toFixed(2), r.hz.toFixed(1), r.mean_ms.toFixed(3), r.p75_ms.toFixed(3), r.p99_ms.toFixed(3), b ? `${(r.mean_ms / b.mean_ms).toFixed(1)}×` : ""]
-          }),
-        ),
-      ]
-    },
-  })
+  const speedSection = speed.length === 0 ? [] : [
+    "## Speed",
+    "",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema), write (value → text). MB/s is against each format's own bytes; \"vs JSON\" is the time relative to the language's JSON task of the same group and input (for typed, JSON parse).",
+    "",
+    ...(speed.length > 1 ? speedSummary(speed) : []),
+    ...speed.flatMap(speedTable),
+  ]
 
   const results = {
     source: corpus.source,
@@ -234,16 +277,13 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
       onSome: ({ t, ratios }) => ({ tokenizers: t.tokenizers.map(({ seconds: _, ...tk }) => tk), ratios, stream: t.stream }),
     }),
     compression: Option.getOrNull(compression.value),
-    speed: Option.match(speed.value, {
-      onNone: () => null,
-      onSome: (sp) => ({ machine: sp.machine, options: sp.options, jsonNotStable: sp.jsonNotStable, rows: sp.rows }),
-    }),
+    speed: speed.length === 0 ? null : Object.fromEntries(speed.map((sp) => [sp.lang, { harness: sp.harness, machine: sp.machine, options: sp.options, jsonNotStable: sp.jsonNotStable, rows: sp.rows }])),
   }
 
   return {
     markdown: [...header, ...size, ...tokenSection, ...stream, ...compressionSection, ...speedSection].join("\n"),
     data: results,
-    warnings: [...tokens.warnings, ...compression.warnings, ...speed.warnings].map((w) => `${s.name}: ${w}`),
+    warnings: [...tokens.warnings, ...compression.warnings, ...speeds.flatMap((sp) => sp.warnings)].map((w) => `${s.name}: ${w}`),
   }
 }
 
@@ -257,7 +297,8 @@ export const report = Effect.fn("bench.report")(function* (options: { readonly s
   const reports = yield* Effect.forEach(sources, (s) =>
     Effect.gen(function* () {
       const corpus = yield* results.read(s.name, CORPUS, "convert")
-      return renderReport(corpus, yield* results.readOptional(s.name, TOKENS), yield* results.readOptional(s.name, SPEED), yield* results.readOptional(s.name, COMPRESSION))
+      const speeds = yield* Effect.forEach(LANGS, (lang) => results.readOptional(s.name, speedFile(lang)))
+      return renderReport(corpus, yield* results.readOptional(s.name, TOKENS), speeds.flatMap(Option.toArray), yield* results.readOptional(s.name, COMPRESSION))
     }))
   yield* Effect.forEach(reports.flatMap((r) => r.warnings), Console.error, { discard: true })
   const markdown = reports.map((r) => r.markdown).join("\n")
@@ -265,7 +306,7 @@ export const report = Effect.fn("bench.report")(function* (options: { readonly s
   const md = yield* results.writeText(["results.md"], markdown + "\n")
   const haus = yield* results.writeText(
     ["results.haus"],
-    `// haus vs JSON benchmark results, one record per corpus source, written by bench/src/steps/report.ts\n${format([toValue({ sources: reports.map((r) => r.data) })])}`,
+    `// haus vs JSON benchmark results, one record per corpus source, written by bench/size/src/steps/report.ts\n${format([toValue({ sources: reports.map((r) => r.data) })])}`,
   )
   yield* Console.log(`\nwrote ${md} and ${haus}`)
 })

@@ -9,8 +9,8 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun"
 import { Effect, Layer, Option } from "effect"
 import { FetchHttpClient } from "effect/http"
-import { cli } from "./src/cli.ts"
-import { Host } from "./src/host.ts"
+import { cli } from "./size/src/cli.ts"
+import { Host } from "./size/src/host.ts"
 
 declare const Bun: { readonly gc: (force: boolean) => void }
 

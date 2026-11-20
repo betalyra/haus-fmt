@@ -5,9 +5,11 @@
  *
  *   speed [--quick] [--sources vega-lite]     --quick: tiny time budget, to check the harness runs
  *
- * Inputs are the wire forms: minified JSON and minimised haus (enums as tags).
+ * Reads the corpus convert exported (<out>/<source>/corpus/, size/src/export.ts),
+ * the same files every language's speed benchmark reads. Inputs are the
+ * wire forms: minified JSON and minimised haus (enums as tags).
  *
- *   corpus    the whole corpus in one text: a JSON array, a haus stream
+ *   corpus    the whole corpus in one text: a JSON array (all.json), a haus stream (all.haus)
  *   per doc   every document on its own, one call each (the time is for all of them)
  *
  * Tasks:
@@ -23,24 +25,29 @@
  * printed), and before timing each pair is checked once: haus text parses to
  * a value that writes back to the same text, JSON.parse gives a value that
  * JSON.stringify writes back to the same text (where it doesn't, because of
- * number spelling, the count is reported), the typed decode succeeds. Garbage
+ * number spelling, the count is reported), the typed decode succeeds, and
+ * the corpus texts are the documents' (the same values, in order). Garbage
  * is collected before each task when the runtime exposes a collector (Host).
  *
- * Writes <source>/speed.json, one source after the other.
+ * Writes <source>/speed-typescript.json, one source after the other.
  */
 import { compileSchemaFile, equals, format, parse, parseAll, stringify, type Value } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import { Console, Effect, Option } from "effect"
 import { Bench } from "tinybench"
-import { BenchmarkError, messageOf, SpeedCheckError } from "../errors.ts"
-import { Host } from "../host.ts"
-import { CORPUS, Results, SPEED, type Converted, type SpeedOut, type SpeedRow } from "../results.ts"
-import { selectSources, type Selection } from "../sources.ts"
-import { sum, utf8Length } from "../stats.ts"
+import { BenchmarkError, messageOf, SpeedCheckError } from "../../size/src/errors.ts"
+import { allJson, readExport, type Exported } from "../../size/src/export.ts"
+import { Host } from "../../size/src/host.ts"
+import { Results, speedFile, type SpeedOut, type SpeedRow } from "../../size/src/results.ts"
+import { selectSources, type Selection } from "../../size/src/sources.ts"
+import { sum, utf8Length } from "../../size/src/stats.ts"
+
+/** The harness, as recorded in the results (the version bench/package.json pins). */
+const HARNESS = "tinybench 6.2.3"
 
 /** Inputs, prepared once. */
 interface Inputs {
-  readonly docs: readonly Converted[]
+  readonly ids: readonly string[]
   readonly schemaOf: readonly h.AnySchema[]
   readonly jsonTexts: readonly string[]
   readonly hausTexts: readonly string[]
@@ -50,22 +57,23 @@ interface Inputs {
   readonly jsValues: readonly unknown[]
 }
 
-const prepare = Effect.fn("speed.prepare")(function* (docs: readonly Converted[], schemaText: string) {
+const prepare = Effect.fn("speed.prepare")(function* (exported: Exported) {
+  const docs = exported.documents
   if (docs.length === 0) return yield* new SpeedCheckError({ message: "no documents: run convert first" })
-  const schemas = yield* Effect.try({ try: () => compileSchemaFile(schemaText).schemas, catch: (e) => new SpeedCheckError({ message: `the schema: ${messageOf(e)}` }) })
+  const schemas = yield* Effect.try({ try: () => compileSchemaFile(exported.schemaText).schemas, catch: (e) => new SpeedCheckError({ message: `the schema: ${messageOf(e)}` }) })
   const schemaOf = yield* Effect.forEach(docs, (d) => {
     const s = schemas[d.root]
     return s === undefined ? Effect.fail(new SpeedCheckError({ message: `no schema ${d.root}` })) : Effect.succeed(s)
   })
   return yield* Effect.try({
     try: (): Inputs => {
-      const jsonTexts = docs.map((d) => d.json_min)
-      const hausTexts = docs.map((d) => d.haus_min)
-      const hausValues = hausTexts.map((t) => parse(t))
+      const jsonTexts = docs.map((d) => d.json)
+      const hausTexts = docs.map((d) => d.haus)
       return {
-        docs, schemaOf, jsonTexts, hausTexts, hausValues,
-        jsonCorpus: `[${jsonTexts.join(",")}]`,
-        hausCorpus: format(hausValues, { style: "minimised" }),
+        ids: docs.map((d) => d.id), schemaOf, jsonTexts, hausTexts,
+        hausValues: hausTexts.map((t) => parse(t)),
+        jsonCorpus: exported.allJson,
+        hausCorpus: exported.allHaus,
         jsValues: jsonTexts.map((t) => JSON.parse(t) as unknown),
       }
     },
@@ -77,27 +85,28 @@ const prepare = Effect.fn("speed.prepare")(function* (docs: readonly Converted[]
 const check = (i: Inputs) =>
   Effect.try({
     try: () => {
-      const jsonNotStable = i.docs.filter((d, k) => {
-        if (stringify(i.hausValues[k]!, { style: "minimised" }) !== d.haus_min) throw new Error(`${d.id}: haus parse → stringify is not the same text`)
+      const jsonNotStable = i.ids.filter((id, k) => {
+        if (stringify(i.hausValues[k]!, { style: "minimised" }) !== i.hausTexts[k]) throw new Error(`${id}: haus parse → stringify is not the same text`)
         h.decode(i.schemaOf[k]!, i.hausValues[k]!)
-        return JSON.stringify(i.jsValues[k]) !== d.json_min
+        return JSON.stringify(i.jsValues[k]) !== i.jsonTexts[k]
       }).length
       const corpusValues = parseAll(i.hausCorpus)
-      if (corpusValues.length !== i.docs.length || !corpusValues.every((v, k) => equals(v, i.hausValues[k]!))) throw new Error("the haus corpus stream reads as other values")
-      if ((JSON.parse(i.jsonCorpus) as unknown[]).length !== i.docs.length) throw new Error("the JSON corpus array has the wrong length")
+      if (corpusValues.length !== i.ids.length || !corpusValues.every((v, k) => equals(v, i.hausValues[k]!))) throw new Error("the haus corpus stream reads as other values")
+      if (format(i.hausValues, { style: "minimised" }) !== i.hausCorpus) throw new Error("the haus corpus stream isn't the documents' minimised stream")
+      if (allJson(i.jsonTexts) !== i.jsonCorpus) throw new Error("the JSON corpus isn't the documents' array")
       return jsonNotStable
     },
     catch: (e) => new SpeedCheckError({ message: messageOf(e) }),
   })
 
-type Meta = Pick<SpeedRow, "group" | "input" | "impl" | "bytes" | "docs">
+type Meta = Pick<SpeedRow, "group" | "input" | "format" | "impl" | "bytes" | "docs">
 
 /**
  * The tinybench tasks. Each body is the plain library call in a loop, its
  * output consumed into `checksum`.
  */
 const makeBench = (i: Inputs, options: { readonly time: number; readonly warmupTime: number; readonly gc: Option.Option<() => void> }) => {
-  const { docs, schemaOf, jsonTexts, hausTexts, jsonCorpus, hausValues, hausCorpus, jsValues } = i
+  const { ids, schemaOf, jsonTexts, hausTexts, jsonCorpus, hausValues, hausCorpus, jsValues } = i
   const gc = Option.getOrUndefined(options.gc)
   let checksum = 0
   const bench = new Bench({ time: options.time, warmup: true, warmupTime: options.warmupTime, throws: true, setup: () => gc?.() })
@@ -105,7 +114,7 @@ const makeBench = (i: Inputs, options: { readonly time: number; readonly warmupT
   const meta = new Map<string, Meta>()
   const task = (group: SpeedRow["group"], input: SpeedRow["input"], impl: string, size: number, fn: () => void) => {
     const name = `${group} | ${input} | ${impl}`
-    meta.set(name, { group, input, impl, bytes: size, docs: docs.length })
+    meta.set(name, { group, input, format: impl.startsWith("JSON") ? "json" : "haus", impl, bytes: size, docs: ids.length })
     bench.add(name, fn)
   }
 
@@ -143,7 +152,7 @@ const makeBench = (i: Inputs, options: { readonly time: number; readonly warmupT
   task("write", "per doc", "haus stringify minimised", bytes(hausTexts), () => {
     for (const v of hausValues) checksum += stringify(v, { style: "minimised" }).length
   })
-  task("write", "per doc", "haus stringify compact", bytes(docs.map((d) => d.haus_compact)), () => {
+  task("write", "per doc", "haus stringify compact", bytes(hausValues.map((v) => stringify(v, { style: "compact" }))), () => {
     for (const v of hausValues) checksum += stringify(v, { style: "compact" }).length
   })
   return { bench, meta, checksum: () => checksum }
@@ -172,25 +181,27 @@ export const speedLines = (out: SpeedOut): string[] => [
 const speedOf = Effect.fn("speed.source")(function* (source: string, quick: boolean) {
   const results = yield* Results
   const host = yield* Host
-  const corpus = yield* results.read(source, CORPUS, "convert")
   const time = quick ? 50 : 2000
   const warmupTime = quick ? 10 : 500
 
-  const inputs = yield* prepare(corpus.documents, corpus.schemas.tags)
+  const exported = yield* readExport(source)
+  const inputs = yield* prepare(exported)
   const jsonNotStable = yield* check(inputs)
   const { bench, meta, checksum } = makeBench(inputs, { time, warmupTime, gc: host.gc })
   yield* Effect.tryPromise({ try: () => bench.run(), catch: (e) => new BenchmarkError({ task: "run", message: messageOf(e) }) })
   const rows = yield* Effect.forEach(bench.tasks, (t) => rowOf(meta.get(t.name)!, t))
 
   const out: SpeedOut = {
+    lang: "typescript",
+    harness: HARNESS,
     machine: { cpu: host.cpu, cores: host.cores, memory_gb: host.memoryGb, os: host.os, runtime: `${bench.runtime} ${bench.runtimeVersion}`, gc: Option.isSome(host.gc) },
     options: { time_ms: time, warmup_ms: warmupTime, quick },
-    documents: corpus.documents.map((d) => d.id),
+    documents: inputs.ids,
     jsonNotStable,
     rows,
     checksum: checksum(),
   }
-  yield* results.write(source, SPEED, out)
+  yield* results.write(source, speedFile("typescript"), out)
   yield* Console.log([source, ...speedLines(out)].join("\n"))
 })
 

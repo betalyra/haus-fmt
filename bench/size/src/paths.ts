@@ -38,7 +38,7 @@ export class BenchPaths extends Context.Service<BenchPaths, BenchPathsShape>()("
       BenchPaths,
       Effect.gen(function* () {
         const path = yield* Path.Path
-        const root = yield* path.fromFileUrl(new URL("../", import.meta.url)).pipe(Effect.orDie)
+        const root = yield* path.fromFileUrl(new URL("../../", import.meta.url)).pipe(Effect.orDie)
         const data = path.resolve(Option.getOrElse(dirs.data, () => path.join(root, ".data")))
         const out = path.resolve(Option.getOrElse(dirs.out, () => path.join(root, ".out")))
         return BenchPaths.of({

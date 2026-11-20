@@ -135,7 +135,7 @@
           "live_simple", "live_multiple", "live_parallel", "live_parallel_multiple",
         ],
         // Hand-written: BFCL's files have no schema of their own.
-        schema: "schemas/bfcl.schema.haus",
+        schema: "size/schemas/bfcl.schema.haus",
       },
     },
     {

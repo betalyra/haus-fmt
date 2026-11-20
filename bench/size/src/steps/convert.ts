@@ -10,6 +10,8 @@
  *   <source>.schema.haus           the schema, enums as tags (the main, idiomatic form)
  *   <source>-strings.schema.haus   the same, enums as strings (exact §16.3 mapping for enums)
  *   <source>.haus                  all documents in the idiomatic form, pretty, for reading
+ *   corpus/                        the documents that round-trip, as plain files, for every language's
+ *                                  speed benchmark (export.ts: index.haus, NNNN.haus, NNNN.json, …)
  *
  * Round trip, per document and per enum style (a failure excludes the
  * document from every number, with its reason):
@@ -34,6 +36,7 @@ import {
   corpusOf, fixturesCorpus, functionCallCorpus, geoJsonCorpus, ghArchiveCorpus, jsonSchemaCorpus, kubernetesCorpus, type Corpus, type Document, type TextFile,
 } from "../corpus.ts"
 import { CorpusError, messageOf } from "../errors.ts"
+import { writeExport } from "../export.ts"
 import { defineSchemaFile } from "../hand.ts"
 import { listingFile, parseListing } from "../listing.ts"
 import { sourcePath, type CorpusSource } from "../manifest.ts"
@@ -303,6 +306,7 @@ export const convert = Effect.fn("bench.convert")(function* (options: { readonly
       const conversion = convertCorpus(source, yield* readCorpus(source), options.limit)
       yield* results.write(source.name, CORPUS, conversion.out)
       yield* Effect.forEach(conversionFiles(source, conversion), ([file, text]) => results.writeText([source.name, file], text))
+      yield* writeExport(conversion.out)
       yield* Console.log(summary(conversion))
     }), { discard: true })
 })
