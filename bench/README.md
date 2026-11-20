@@ -3,7 +3,7 @@
 A first, small benchmark of haus against JSON:
 
 1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
-2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`). Every language reads the same documents, which `convert` exports as plain files.
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` (`speed/go/`). Every language reads the same documents, which `convert` exports as plain files.
 
 ```
 bench/
@@ -13,6 +13,7 @@ bench/
   speed/
     ts/                   TypeScript speed: tinybench (speed.ts, the `speed` command of the same CLI)
     rust/                 Rust speed: criterion (its own Cargo crate, outside the rust/ workspace)
+    go/                   Go speed: testing.B (its own Go module, outside go/'s)
   .data/                  downloads (git-ignored)
   .out/<source>/          results (git-ignored); corpus/ is the exported corpus every language's speed benchmark reads
 ```
@@ -40,7 +41,8 @@ cd typescript
 pnpm install                          # the bench package is part of the workspace
 pnpm --filter haus-bench all          # every TypeScript step below, in order (about 25 minutes, most of it tokens)
 pnpm --filter haus-bench speed-rust   # the Rust speed benchmark (cargo bench, about 7 minutes), after convert
-pnpm --filter haus-bench report       # the report again, with Rust's speed beside TypeScript's
+pnpm --filter haus-bench speed-go     # the Go speed benchmark (go run ./cmd/speed, about 6 minutes), after convert
+pnpm --filter haus-bench report       # the report again, with Rust's and Go's speed beside TypeScript's
 ```
 
 Or step by step:
@@ -54,6 +56,7 @@ Or step by step:
 | compress | `pnpm --filter haus-bench compress` | ~3 min (brotli 11 is most of it) | `bench/.out/<source>/compression.json` |
 | speed (TypeScript) | `pnpm --filter haus-bench speed` | ~8 min (21 tasks × 2.5 s × 7 sources, and building the JSON validators and writers and the checks before timing: fast-json-stringify takes ~25 s for Stripe's 173 types; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed-typescript.json` |
 | speed (Rust) | `pnpm --filter haus-bench speed-rust`, or `cargo bench` in `bench/speed/rust/` | ~7 min (11 tasks × ~4.5 s × 7 sources, and the first build) | `bench/.out/<source>/speed-rust.json` |
+| speed (Go) | `pnpm --filter haus-bench speed-go`, or `go run ./cmd/speed` in `bench/speed/go/` | ~6 min (11 tasks × ~4.5 s × 7 sources) | `bench/.out/<source>/speed-go.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
 `convert` and `speed` build `@haus-fmt/haus` and `@haus-fmt/effect` first: they measure the built `dist/`, which git ignores, so after switching branches an old build would otherwise be measured. When running `main.node.ts` directly (Bun, Deno), run `prepare-haus` first.
@@ -82,6 +85,18 @@ cargo bench -- --test                             # runs every task once (no res
 ```
 
 Options go in the environment, since criterion owns the command line (its own flags, such as `--save-baseline` or a name filter, still work; a source whose tasks a filter leaves out gets no results file). Then `pnpm --filter haus-bench report` shows both languages.
+
+The Go benchmark, the same way (Go 1.24 or later, the version `go/` asks for):
+
+```sh
+cd bench/speed/go
+go run ./cmd/speed                                   # every source in sources.haus; writes speed-go.json
+HAUS_BENCH_SOURCES=vega-lite,geojson go run ./cmd/speed
+HAUS_BENCH_QUICK=1 go run ./cmd/speed                # 5 samples of 30 ms per task: checks the harness, not for publishing
+go test -bench . -benchmem -count 10 > new.txt       # the same tasks as go test benchmarks (BenchmarkSpeed/<source>/<task>), for benchstat
+```
+
+`cmd/speed` prints every sample in `go test -bench`'s format too, so its output also feeds [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat) (`go install golang.org/x/perf/cmd/benchstat@latest`; a tool for comparing two runs, not a dependency of anything here).
 
 ### Node, Bun and Deno
 
@@ -118,6 +133,7 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 | `size/src/paths.ts`, `size/src/host.ts`, `size/src/sources.ts`, `size/src/listing.ts`, `size/src/stats.ts`, `size/src/errors.ts` | directories (`BenchPaths`), the machine and its garbage collector (`Host`), source selection, directory listings, statistics and tables, errors |
 | `speed/ts/speed.ts` | TypeScript speed, tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify`, and the typed tasks against JSON with validation (the CLI's `speed` command) |
 | `speed/ts/validators.ts`, `speed/ts/mutate.ts` | the JSON baselines of the typed tasks, built from the source's JSON Schema: Zod (a translation), Ajv, TypeBox, fast-json-stringify; the mutated documents they must reject |
+| `speed/go/` | Go speed, testing.B: `tasks.go` (the tasks and checks), `corpus.go` (reads the export and the manifest), `results.go` (the samples → `speed-go.json`), `machine*.go`, `speed_test.go` (`BenchmarkSpeed`), `cmd/speed` (the runner) |
 | `speed/rust/` | Rust speed, criterion: `benches/speed.rs` (the tasks and checks), `src/corpus.rs` (reads the export and the manifest), `src/results.rs` (criterion's samples → `speed-rust.json`), `src/machine.rs` |
 
 Services: `BenchPaths` (from `--data-dir`/`--out-dir`), `Manifest` (reads `sources.haus`), `Results` (reads and writes the results files, checked with their schemas), `Host` (provided by each entry); from the platform: `FileSystem`, `Path`, `Crypto` (SHA-256), `ChildProcessSpawner` (git), `HttpClient`. tinybench stays the timing engine: the timed functions are the plain library calls, built before the run, with no Effect inside them.
@@ -308,6 +324,25 @@ The first Rust run (criterion, `rustc 1.99.0`, M1 Max), per document, haus again
 - **The Rust binding is slower than the TypeScript one** in MB/s on every source (per document, same files, same machine): TypeScript parses at 74–173 MB/s and writes minimised at 88–250 MB/s, Rust at 60–131 and 44–106 MB/s. Against its own language's JSON library, Rust's parse ratio is about TypeScript's (1.7–2.5× both), its write ratio worse (7–10× against 1.4–10×).
 - A first profile (macOS `sample`, bfcl): parse time goes to `Parser::basic_string` (a byte-at-a-time loop with a bounds-checked `peek`, a full `char` decode for every non-ASCII character, a `String` grown by `push_str`), to `malloc`/`free` (a `String` per key and per string), and to the duplicate-key check (a `HashSet<String>` per record: SipHash, cloned keys, rehashing), about 8%. Writing goes to `ser::quote` (per-character escaping), to `Value::clone` (`Encoder::value` checks the value, then clones the whole tree before writing it) and `malloc`/`free`, and to `unique_keys`. Not optimised here: this benchmark measures.
 
+### Go
+
+The Go benchmark (`testing.Benchmark`, Go 1.27.4, M1 Max, shared with other work while it ran), per document, haus against encoding/json (into `any`, `json.Marshal`), after the optimisations below. Typed is haus's parse and decode, against encoding/json's parse alone (no Go structs on the JSON side, as in Rust).
+
+| Source | parse: haus / encoding/json MB/s | haus | typed MB/s | haus | write minimised: haus / json.Marshal MB/s | haus | write compact |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 201 / 102 | 2.0× faster | 153 | 1.55× faster | 480 / 181 | 2.7× faster | 2.8× faster |
+| `vega-lite` | 145 / 48 | 3.2× faster | 87 | 1.91× faster | 313 / 124 | 2.7× faster | 2.6× faster |
+| `kubernetes` | 136 / 41 | 3.8× faster | 80 | 2.2× faster | 235 / 108 | 2.5× faster | 2.4× faster |
+| `stripe` | 132 / 65 | 2.2× faster | 81 | 1.33× faster | 336 / 128 | 2.8× faster | 2.7× faster |
+| `bfcl` | 298 / 96 | 3.3× faster | 204 | 2.2× faster | 510 / 291 | 1.85× faster | 1.65× faster |
+| `gh-archive` | 218 / 85 | 2.6× faster | 136 | 1.64× faster | 595 / 219 | 2.9× faster | 3.4× faster |
+| `geojson` | 155 / 63 | 2.5× faster | 73 | 1.17× faster | 524 / 144 | 3.7× faster | 3.4× faster |
+
+- **encoding/json is slow to `any`** (reflection, a `map[string]any` per object, every number parsed to `float64`; Go 1.27's v1 API runs on json/v2), so haus parses 2–3.8× faster and its typed parse, which also checks every rule of the schema, is still faster than encoding/json's untyped parse.
+- **Writing** was the weak spot before (1.05–2.1× slower than `json.Marshal`): the compact and minimised writers built the pretty layout's syntax tree, a node and an item per value. They now write as they check (`go/lines.go`), with the same checks in the same order as the pretty layout's builder (so the same errors), into a pooled buffer: 3.4–6.5× faster per document, and 1.65–3.7× faster than `json.Marshal`, which sorts every object's keys.
+- **Parsing** builds each container's entries on a scratch stack and copies them out at their exact length, with the parsers (and their stacks) pooled: about 1.1× faster per document, 15–38% fewer bytes allocated.
+- Tried and left out (no clear gain on this machine): one shared value for `None`, `True` and `False` (5–20% fewer allocations, no faster), a pooled set for the duplicate-key check of large records (slower), a byte table for identifier characters, and writing a decoded float's spelling into a stack buffer (18% fewer allocations on GeoJSON, 2% faster).
+
 ### TypeScript: typed against JSON with validation
 
 haus's typed parse reads and checks in one pass; the fair JSON counterpart is `JSON.parse` followed by a validator of the same schema, and for writing, a JSON writer compiled from the same schema ([the baselines](#the-json-baselines-of-the-typed-tasks)). Per document, Node 26 (M1 Max, shared with other benchmarks while it ran): the median of three full runs, the range of the three in parentheses where it matters. Ratios are haus's time over the JSON task's time on the same documents (below 1: haus is faster); MB/s is each format's own bytes.
@@ -393,7 +428,7 @@ Each file holds exactly the measured text (no newline added); `NNNN` is the docu
 | write | `JSON.stringify` of the parsed JS value | `stringify` / `format` of the `Value` tree, minimised and compact |
 | write, typed | fast-json-stringify, compiled from the same schema, of the parsed JS value | `h.stringify(schema, value)` of the decoded value, minimised |
 
-Each runs on the **corpus** (one text: a JSON array, a haus stream) and **per document** (every document on its own; the time is for all of them). The typed writers have no one call for a corpus of several types (GitHub's and Stripe's documents each have their own), so their corpus task writes each document and joins them (`[a,b]`, a haus stream). The report gives MB/s (against each format's own bytes: bytes read, or bytes written), µs per document, ops/s, mean, p75 and p99, the time relative to the plain JSON task of the same input (`JSON.parse` for parse and typed, `JSON.stringify` for write), and a table of haus's typed tasks against each JSON task that checks or writes with the same schema.
+Each runs on the **corpus** (one text: a JSON array, a haus stream) and **per document** (every document on its own; the time is for all of them). The typed writers have no one call for a corpus of several types (GitHub's and Stripe's documents each have their own), so their corpus task writes each document and joins them (`[a,b]`, a haus stream). The report gives MB/s (against each format's own bytes: bytes read, or bytes written), µs per document, ops/s, mean, p75 and p99, how much faster or slower haus is than the plain JSON task of the same input ("2.8× slower", "1.4× faster", "≈ equal" within 5%; against `JSON.parse` for parse and typed, `JSON.stringify` for write; the results files keep the times), and a table of haus's typed tasks against each JSON task that checks or writes with the same schema.
 
 Before timing, each pair is checked once: the haus text parses to a value that writes back to the same text, the typed decode succeeds, the haus stream reads as the same values as the documents (and is their minimised stream; `all.json` is their array), and `JSON.parse` → `JSON.stringify` gives the same text (where it doesn't, because a number can't be held exactly in a JS number, the count is reported). The JSON baselines: every validator accepts every document; each rejects every mutated document ([below](#the-json-baselines-of-the-typed-tasks)); fast-json-stringify's text is JSON of the value Zod gives (the members the schema lists); the typed haus write reads back as the same values. Every output is consumed into a checksum that is recorded. The machine, OS and runtime version are recorded in the results (`speed-typescript.json`, with the baselines' versions and checks under `typedBaselines`).
 
@@ -452,6 +487,22 @@ Why criterion, not divan: its samples are saved as files (`sample.json`, `estima
 The checks before timing are TypeScript's, in Rust: every haus document parses to a value that `to_string_minimised` writes back as the same text, its pretty text reads as the same value, it decodes with its type, `all.haus` reads as the documents' values and is what `to_string_minimised` writes for them, and serde_json reads every JSON document and `all.json`. serde_json's `Value` (default features) sorts members and holds numbers as `f64`/`i64`/`u64`; the results count the documents it writes back as another document by haus's equality (exact numbers, member order aside), where TypeScript counts the texts `JSON.stringify` changes. Results: `speed-rust.json`, the same shape as `speed-typescript.json` (`lang`, `harness`, `machine` with the compiler version, `options`, `rows`).
 
 `typed` uses the runtime decoder (`haus_schema`), a `Value` → `Value` decode that checks every rule of the schema. It has no JSON counterpart here: serde_json into typed structs would need Rust types for the seven schemas (and serde attributes for each source's JSON mapping: enum strings, discriminators, the keyed unions). Types generated by `haus-fmt-build` against serde-derived structs are still to do.
+
+### Speed (Go)
+
+`bench/speed/go/`, a module of its own (`github.com/betalyra/haus-fmt/bench/speed/go`, `go 1.24`, a `replace` to `../../../go`, so `go/`'s module and its CI don't build it), with no dependency but `go/`. The same tasks as TypeScript and Rust, on the same files:
+
+| Task | JSON | haus |
+|---|---|---|
+| parse | `json.Unmarshal` into `any` | `haus.Parse` (per document), `haus.ParseAll` (the corpus): text → `haus.Value`, no schema |
+| typed | | `haus.Parse` + `schema.Type.Decode` with the document's type (looked up once): the runtime decoder (spec §15) |
+| write | `json.Marshal` of the `any` value | `haus.FormatValue` minimised and compact, `haus.FormatValues` minimised (the corpus as a stream) |
+
+Each on the corpus and per document. Bytes are those of the text read, as in the other languages, or written: `FormatValue` writes a file, so each document's text and a line feed; `json.Marshal` escapes `<`, `>` and `&` and sorts members, so its text is other than `all.json`. The tasks are `testing.B` benchmarks (`b.Loop`), `BenchmarkSpeed/<source>/<task>`: `go test -bench .` runs them, with `-benchmem` and `-count` for benchstat. `cmd/speed` runs each with `testing.Benchmark`: once untimed (for the checksum), 1 s of warm-up, then 20 runs of 150 ms, each run one sample (the mean of its calls, as criterion's samples are); the mean is over all calls of all samples, p75 and p99 over the samples. `testing` collects garbage before each run (`gc: true`) and counts allocations, which the results keep (`allocs`, `alloc_bytes` per iteration) and the report shows per document.
+
+The checks before timing, in Go: every haus document parses to a value that `FormatValue` (minimised) writes back as the same text (and a line feed), its pretty text reads as a value written the same way, it decodes with its type, `all.haus` reads as the documents' values and is what `FormatValues` writes for them, and encoding/json reads every JSON document and `all.json`. `jsonNotStable` counts the documents encoding/json writes back through `any` as another document by haus's equality (numbers become `float64`; it sorts members, which isn't counted). Results: `speed-go.json`, the shape of the others (`lang: "go"`, the Go version as `machine.runtime`).
+
+`typed` has no JSON counterpart, as in Rust: encoding/json into structs would need Go types for the seven schemas and each source's JSON mapping.
 
 ## Caveats
 

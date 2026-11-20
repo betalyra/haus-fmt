@@ -10,10 +10,11 @@
  * bench). Results of another convert run (another sample) are left out, with
  * a warning. Sources are never merged.
  *
- * Ratios are haus / JSON: below 1 means haus is smaller or faster. "total"
- * is the ratio of the sums over all documents (large documents weigh
+ * Size and token ratios are haus / JSON: below 1 means haus is smaller.
+ * "total" is the ratio of the sums over all documents (large documents weigh
  * more); "median" and "geomean" are over the per-document ratios (every
- * document weighs the same).
+ * document weighs the same). Speed is shown from haus's side, "2.8× slower",
+ * "1.4× faster" or "≈ equal" (within 5%); the results data keeps the times.
  *
  * `renderReport` is pure; the step reads the results and writes the files.
  */
@@ -69,7 +70,18 @@ export const unions = (decisions: Readonly<Record<string, number>>): string => {
 const sameDocuments = (corpus: CorpusOut, ids: readonly string[]): boolean =>
   ids.length === corpus.documents.length && ids.every((id, i) => id === corpus.documents[i]!.id)
 
-const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust" }
+const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go" }
+
+/**
+ * haus's time against a JSON task's time on the same documents, from haus's
+ * side: "2.8× slower", "1.4× faster", or "≈ equal" within 5%. Pure.
+ */
+export const speedRatio = (hausMs: number, jsonMs: number): string => {
+  const t = hausMs / jsonMs
+  const factor = Math.max(t, 1 / t)
+  if (factor < 1.05) return "≈ equal"
+  return `${factor < 2 ? factor.toFixed(2) : factor.toFixed(1)}× ${t > 1 ? "slower" : "faster"}`
+}
 
 /**
  * The JSON task a row is compared with: the language's plain JSON task of the
@@ -81,28 +93,44 @@ const baselineOf = (rows: readonly SpeedRow[], r: SpeedRow): SpeedRow | undefine
 
 const versus = (rows: readonly SpeedRow[], r: SpeedRow): string => {
   const b = baselineOf(rows, r)
-  return b ? `${(r.mean_ms / b.mean_ms).toFixed(1)}×` : ""
+  return b === r ? "baseline" : b ? speedRatio(r.mean_ms, b.mean_ms) : ""
+}
+
+const JSON_NOTES: Record<Lang, (n: number) => string> = {
+  typescript: (n) => `JSON.parse → JSON.stringify changed the text of ${n} documents (numbers a JS number can't hold exactly).`,
+  rust: (n) => `serde_json's \`Value\` wrote ${n} documents back as another document (numbers in another spelling; it also sorts members, which isn't counted).`,
+  go: (n) => `encoding/json through \`any\` wrote ${n} documents back as another document (numbers as float64; it also sorts members, which isn't counted).`,
+}
+
+const SAMPLE_NOTES: Record<Lang, string> = {
+  typescript: "",
+  rust: "p75 and p99 are over criterion's samples (each the mean of a batch of calls). ",
+  go: "p75 and p99 are over the samples (each the mean of one testing.Benchmark run); allocations are testing's (-benchmem). ",
 }
 
 /** One language's speed table, with the machine and harness. Pure. */
 export const speedTable = (sp: SpeedOut): string[] => {
   const m = sp.machine
-  const jsonNote = sp.lang === "typescript"
-    ? `JSON.parse → JSON.stringify changed the text of ${sp.jsonNotStable} documents (numbers a JS number can't hold exactly).`
-    : `serde_json's \`Value\` wrote ${sp.jsonNotStable} documents back as another document (numbers in another spelling; it also sorts members, which isn't counted).`
+  const allocs = sp.rows.some((r) => r.allocs !== undefined)
+  const perDoc = (r: SpeedRow, x: number | undefined, digits: number) => (x === undefined ? "" : (x / r.docs).toFixed(digits))
   return [
     `### ${LANG_NAMES[sp.lang]}`,
     "",
-    `${m.cpu} (${m.cores} cores, ${m.memory_gb} GB), ${m.os}, ${m.runtime}` + (sp.lang === "typescript" ? `, GC between tasks: ${m.gc ? "yes" : "no"}` : "") +
+    `${m.cpu} (${m.cores} cores, ${m.memory_gb} GB), ${m.os}, ${m.runtime}` + (sp.lang !== "rust" ? `, GC between tasks: ${m.gc ? "yes" : "no"}` : "") +
       `. ${sp.harness}, ${sp.options.time_ms} ms per task after ${sp.options.warmup_ms} ms warm-up.` +
       (sp.options.quick ? " **Quick run: a harness check, not a measurement.**" : ""),
-    `${sp.lang === "rust" ? "p75 and p99 are over criterion's samples (each the mean of a batch of calls). " : ""}${jsonNote}`,
+    `${SAMPLE_NOTES[sp.lang]}${JSON_NOTES[sp.lang](sp.jsonNotStable)}`,
     "",
     ...table(
-      ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", "vs JSON"],
-      sp.rows.map((r) => [r.group, r.input, r.impl, r.mb_s.toFixed(1), r.us_per_doc.toFixed(2), r.hz.toFixed(1), r.mean_ms.toFixed(3), r.p75_ms.toFixed(3), r.p99_ms.toFixed(3), versus(sp.rows, r)]),
+      ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", ...(allocs ? ["allocs / doc", "KB allocated / doc"] : []), "vs JSON"],
+      sp.rows.map((r) => [
+        r.group, r.input, r.impl, r.mb_s.toFixed(1), r.us_per_doc.toFixed(2), r.hz.toFixed(1), r.mean_ms.toFixed(3), r.p75_ms.toFixed(3), r.p99_ms.toFixed(3),
+        ...(allocs ? [perDoc(r, r.allocs, 0), perDoc(r, r.alloc_bytes === undefined ? undefined : r.alloc_bytes / 1024, 1)] : []),
+        versus(sp.rows, r),
+      ]),
     ),
-    ...typedVersusTable(sp),
+    // Only TypeScript has JSON baselines that check or write with the schema.
+    ...(sp.typedBaselines ? typedVersusTable(sp) : []),
   ]
 }
 
@@ -113,15 +141,15 @@ const hausTask = (r: SpeedRow): string =>
 /**
  * The typed tasks against the JSON baselines that check or use the same
  * schema (TypeScript: JSON.parse + Zod, Ajv, TypeBox; fast-json-stringify),
- * and against the plain JSON task. "haus time / JSON time" is per the same
- * documents, so it is the comparison; MB/s is each format's own bytes. Pure.
+ * and against the plain JSON task. "haus vs JSON" compares the times on the
+ * same documents, so it is the comparison; MB/s is each format's own bytes. Pure.
  */
 export const typedVersusTable = (sp: SpeedOut): string[] => {
   const pairs = sp.rows.flatMap((h) => {
     if (h.format !== "haus" || (h.group !== "typed" && hausTask(h) !== "write typed")) return []
     const read = h.group === "typed"
     const json = sp.rows.filter((x) => x.format === "json" && x.input === h.input && (read ? x.group === "parse" || x.group === "typed" : x.group === "write"))
-    return json.map((j) => [read ? "typed (parse + check)" : "typed write", h.input, h.impl, j.impl, j.mb_s.toFixed(1), h.mb_s.toFixed(1), `${(h.mean_ms / j.mean_ms).toFixed(2)}×`])
+    return json.map((j) => [read ? "typed (parse + check)" : "typed write", h.input, h.impl, j.impl, j.mb_s.toFixed(1), h.mb_s.toFixed(1), speedRatio(h.mean_ms, j.mean_ms)])
   })
   if (pairs.length === 0) return []
   const b = sp.typedBaselines
@@ -132,16 +160,16 @@ export const typedVersusTable = (sp: SpeedOut): string[] => {
         (b.jsonWriterKeyedAsAny ? `; fast-json-stringify writes the unions told apart by keys as JSON.stringify does (it can't build them) for ${b.jsonWriterKeyedAsAny.join(", ")}` : "") +
         `. ${Object.entries(b.versions).map(([k, v]) => `${k} ${v}`).join(", ")}.` : ""),
     "",
-    ...table(["Task", "Input", "haus", "JSON", "JSON MB/s", "haus MB/s", "haus time / JSON time"], pairs),
+    ...table(["Task", "Input", "haus", "JSON", "JSON MB/s", "haus MB/s", "haus vs JSON"], pairs),
   ]
 }
 
-/** haus in every language side by side: MB/s and time against the language's JSON. Pure. */
+/** haus in every language side by side: MB/s, and how fast against the language's JSON. Pure. */
 export const speedSummary = (speed: readonly SpeedOut[]): string[] => {
   // (TypeScript's typed write has no counterpart in the other languages yet: it is in the typed table.)
   const keys = [...new Set(speed.flatMap((sp) => sp.rows.filter((r) => r.format === "haus" && hausTask(r) !== "write typed").map((r) => `${hausTask(r)}|${r.input}`)))]
   return [
-    "haus in each language (MB/s of haus text; time relative to the language's JSON task):",
+    "haus in each language (MB/s of haus text; faster or slower than the language's JSON task of the same input):",
     "",
     ...table(
       ["Task", "Input", ...speed.flatMap((sp) => [`${LANG_NAMES[sp.lang]} MB/s`, `${LANG_NAMES[sp.lang]} vs JSON`])],
@@ -294,7 +322,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const speedSection = speed.length === 0 ? [] : [
     "## Speed",
     "",
-    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify). MB/s is against each format's own bytes; \"vs JSON\" is the time relative to the language's plain JSON task of the same input (JSON.parse for parse and typed, JSON.stringify for write).",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json), \"≈ equal\" within 5%.",
     "",
     ...(speed.length > 1 ? speedSummary(speed) : []),
     ...speed.flatMap(speedTable),

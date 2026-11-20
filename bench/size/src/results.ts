@@ -126,6 +126,9 @@ export const SpeedRow = Schema.Struct({
   samples: Schema.Finite,
   mb_s: Schema.Finite,
   us_per_doc: Schema.Finite,
+  /** Allocations and bytes allocated per iteration, where the harness counts them (Go: testing's -benchmem). */
+  allocs: Schema.optionalKey(Schema.Finite),
+  alloc_bytes: Schema.optionalKey(Schema.Finite),
 })
 export type SpeedRow = typeof SpeedRow.Type
 
@@ -134,26 +137,26 @@ export const Machine = Schema.Struct({
   cores: Schema.Finite,
   memory_gb: Schema.Finite,
   os: Schema.String,
-  /** `node v26.13.1`, `bun 1.4.0`, `rustc 1.99.0 (…)`. */
+  /** `node v26.13.1`, `bun 1.4.0`, `rustc 1.99.0 (…)`, `go1.27.4`. */
   runtime: Schema.String,
-  /** Garbage collected before each task (false where there is no collector: Rust). */
+  /** Garbage collected before each task (false where there is no collector: Rust; Go's testing collects before each run). */
   gc: Schema.Boolean,
 })
 export type Machine = typeof Machine.Type
 
 /** The languages with a speed benchmark (bench/speed/<lang>/), in report order. */
-export const LANGS = ["typescript", "rust"] as const
+export const LANGS = ["typescript", "rust", "go"] as const
 export const Lang = Schema.Literals(LANGS)
 export type Lang = typeof Lang.Type
 
 /**
  * One language's speed results on one source, the same shape for every
  * language: speed-typescript.json (bench/speed/ts), speed-rust.json
- * (bench/speed/rust).
+ * (bench/speed/rust), speed-go.json (bench/speed/go).
  */
 export const SpeedOut = Schema.Struct({
   lang: Lang,
-  /** The harness: `tinybench 6.2.3`, `criterion 0.8.2`. */
+  /** The harness: `tinybench 6.2.3`, `criterion 0.8.2`, `testing.Benchmark (b.Loop)`. */
   harness: Schema.String,
   machine: Machine,
   options: Schema.Struct({ time_ms: Schema.Finite, warmup_ms: Schema.Finite, quick: Schema.Boolean }),
@@ -164,7 +167,8 @@ export const SpeedOut = Schema.Struct({
    * library's values: TypeScript, JSON.parse → JSON.stringify gives other
    * text (numbers a JS number can't hold exactly); Rust, serde_json's
    * `Value` writes another document (numbers in another spelling; serde_json
-   * sorts members, which isn't counted).
+   * sorts members, which isn't counted); Go, the same with encoding/json
+   * through `any` (numbers as float64).
    */
   jsonNotStable: Schema.Finite,
   /**
@@ -198,7 +202,7 @@ export interface ResultsFile<S extends Schema.Codec<any, any>> {
 
 export const CORPUS = { file: "corpus.json", schema: CorpusOut } as const satisfies ResultsFile<typeof CorpusOut>
 export const TOKENS = { file: "tokens.json", schema: TokensOut } as const satisfies ResultsFile<typeof TokensOut>
-/** A language's speed results: `speed-typescript.json`, `speed-rust.json`. */
+/** A language's speed results: `speed-typescript.json`, `speed-rust.json`, `speed-go.json`. */
 export const speedFile = (lang: Lang) => ({ file: `speed-${lang}.json`, schema: SpeedOut, indent: 2 }) as const satisfies ResultsFile<typeof SpeedOut>
 export const COMPRESSION = { file: "compression.json", schema: CompressionOut, indent: 2 } as const satisfies ResultsFile<typeof CompressionOut>
 
