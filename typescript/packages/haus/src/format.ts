@@ -13,6 +13,7 @@
  * stays after that entry's comma. The output has LF line endings only, in
  * comments too.
  */
+import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB } from "./chars.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
 /**
@@ -65,8 +66,6 @@ export function stringify(value: Value, options: FormatOptions = {}): string {
 
 /** Compact and minimised write every top-level item on one line. */
 const oneLine = (options: FormatOptions) => options.style === "compact" || options.style === "minimised"
-
-const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
 
 /** The whitespace between the tokens of a line: compact and pretty have it, minimised has none. */
 interface Spacing {
@@ -195,7 +194,7 @@ class Formatter {
         const next = x.fields.next()
         if (!next.done) {
           const [k, value] = next.value
-          out += x.first ? key(k) + colon : comma + key(k) + colon
+          out += x.first ? keyText(k) + colon : comma + keyText(k) + colon
           x.first = false
           work.push(x, value)
         }
@@ -482,32 +481,12 @@ const pushItems = (work: Pending[], values: readonly Value[], comma: string, clo
   }
 }
 
-/** The high surrogates in `s` from `from` on. */
-const highSurrogates = (s: string, from: number): number => {
-  let n = 0
-  for (let i = from; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c >= 0xd800 && c <= 0xdbff) n++
-  }
-  return n
-}
-
 /** An array item, a payload argument or a top-level value as an entry. */
 const entryOf = (v: Value): Entry => ({ start: v.start, end: v.end, valueStart: v.start, prefix: "", prefixWidth: 0, value: v })
 
 /** The source span between a container's brackets. */
 const inside = (v: Value): [number, number] | undefined =>
   v.start !== undefined && v.end !== undefined ? [v.start + 1, v.end - 1] : undefined
-
-/** The number of code points: the width of text (spec §8 counts columns so too). */
-const codePoints = (s: string): number => {
-  let n = s.length
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c >= 0xd800 && c <= 0xdbff) n--
-  }
-  return n
-}
 
 /** How many of the ascending numbers `xs` are below `x`. */
 const countBelow = (xs: readonly number[], x: number): number => {
@@ -533,14 +512,11 @@ const firstAtOrAfter = (comments: readonly (readonly [number, number])[], offset
   return lo
 }
 
-const key = (k: string) => (BARE_KEY.test(k) ? k : quote(k))
+/** A record key as every writer writes it: bare if it can be, else quoted. */
+export const keyText = (k: string): string => (BARE_KEY.test(k) ? k : quote(k))
 
-const isBidi = (c: number) => (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
-/** The line and paragraph separators U+2028, U+2029: some software splits lines at them, so every writer escapes them (spec §11). */
-const isSeparator = (c: number) => c === 0x2028 || c === 0x2029
+/** The line and paragraph separators (`isLineSeparator`), to escape in a string's original spelling. */
 const SEPARATORS = /[\u2028\u2029]/g
-/** C0, DEL and C1 control characters: written as escapes (spec §4). */
-const isControl = (c: number) => c < 0x20 || (c >= 0x7f && c <= 0x9f)
 const hexEscape = (c: number) => `\\u{${c.toString(16).toUpperCase()}}`
 
 const HEX = Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, "0"))
@@ -562,7 +538,8 @@ export function quote(s: string): string {
   let chunk = 0
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i)
-    if (c >= 0x20 && c < 0x7f ? c !== 34 && c !== 92 : !(isControl(c) || isBidi(c) || isSeparator(c))) continue
+    // Printable ASCII is raw but for `"` and `\`; above it, all but the classes that are escaped.
+    if (c >= 0x20 && c < 0x7f ? c !== QUOTE && c !== BACKSLASH : !(isControl(c) || isBidiControl(c) || isLineSeparator(c))) continue
     out += s.slice(chunk, i) + escapeOf(c)
     chunk = i + 1
   }
@@ -574,7 +551,7 @@ const NEEDS_ESCAPE = /["\\\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u20
 
 /** The escape of a character that `quote` doesn't write raw. */
 const escapeOf = (c: number): string =>
-  c === 34 ? '\\"' : c === 92 ? "\\\\" : c === 10 ? "\\n" : c === 13 ? "\\r" : c === 9 ? "\\t" : hexEscape(c)
+  c === QUOTE ? '\\"' : c === BACKSLASH ? "\\\\" : c === LF ? "\\n" : c === CR ? "\\r" : c === TAB ? "\\t" : hexEscape(c)
 
 /**
  * A `"""` block string whose content and closing quotes sit at `ind`. No line
@@ -589,7 +566,7 @@ function blockString(s: string, ind: string): string {
       const c = ch.codePointAt(0)!
       if (ch === "\\") out += "\\\\"
       else if (ch === "\r") out += "\\r"
-      else if ((isControl(c) && ch !== "\t") || isBidi(c) || isSeparator(c)) out += hexEscape(c)
+      else if ((isControl(c) && ch !== "\t") || isBidiControl(c) || isLineSeparator(c)) out += hexEscape(c)
       else out += ch
     }
     // A run of three quotes would close the string early: escape every quote

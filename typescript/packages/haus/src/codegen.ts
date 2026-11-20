@@ -22,10 +22,10 @@
  * - built ahead: @haus-fmt/import generates it for the types its `optimize`
  *   option lists (and the types they reach), puts it in the module it builds
  *   as a function, next to the source as a string, registers both
- *   (`registerCodecs`) and marks the listed types. No `eval`. At first use the source is generated
- *   again from the schemas, which also gives the runtime objects it refers
- *   to (the `env`); the built-ahead function is used only if that source is
- *   the string it came with.
+ *   (`registerCodecs`) and marks the listed types. No `eval`. At first use
+ *   the source is generated again from the schemas, which also gives the
+ *   runtime objects it refers to (the `env`); the built-ahead function is
+ *   used only if that source is the string it came with.
  * - at runtime with `new Function`, when the platform allows it (tried once),
  *   schema by schema as each is first used, calling the functions generated
  *   before for the types they share.
@@ -39,11 +39,15 @@
  * `readerFor` and `writerFor` pick the path; tests and the fuzzer force one
  * with `withCodec`.
  */
-import { quote } from "./format.js"
-import { argumentForm, checkChain, compiledReader, compiledWriter, fail, HOLE, isEnumerable, isMaybe, Out, ReadCompiler, unknownOf, WriteCompiler, type Read, type Write } from "./codec.js"
+import { BARE_KEY } from "./chars.js"
+import {
+  argumentForm, checkChain, compiledReader, compiledWriter, defineOwn, fail, HOLE, isEnumerable, NotCompilable, Out, ReadCompiler, unknownOf, WriteCompiler,
+  type Read, type RecordShape, type RecursiveShape, type Write,
+} from "./codec.js"
+import { keyText, quote } from "./format.js"
 import { readValue, readVariantAfter } from "./parser.js"
 import { ARGS, ARRAY, CLOSE_ARGS, CLOSE_ARRAY, NO_PAYLOAD, PAYLOAD_RECORD, RECORD, VARIANT } from "./reader.js"
-import { At, checkedValue, recursionOf, shapeOf, type AnySchema, type CaseShape, type Shape } from "./schema.js"
+import { At, checkedValue, Maybe, recursionOf, shapeOf, type AnySchema, type CaseShape, type Shape } from "./schema.js"
 import { Secret } from "./secret.js"
 
 /** The helpers generated code calls, as `rt`. Built on first use: schema.ts may still be loading when this module is. */
@@ -56,11 +60,11 @@ const runtime = () => ({
   unknownOf,
   At,
   checkedValue,
-  isMaybe,
+  isMaybe: Maybe.is,
   isEnumerable,
   hasOwn: Object.hasOwn,
-  /** A new own data property, as `setOwn` in schema.ts makes one for a key of the prototype chain. */
-  define: (o: object, key: string, value: unknown) => Object.defineProperty(o, key, { value, enumerable: true, writable: true, configurable: true }),
+  /** A new own data property, for a key of the prototype chain (`setOwn` in schema.ts). */
+  define: defineOwn,
   Out,
   Secret,
   quote,
@@ -68,9 +72,6 @@ const runtime = () => ({
 })
 
 let rt: ReturnType<typeof runtime> | undefined
-
-/** A record key as the formatter writes it: bare if it can be, else quoted. */
-const keyText = (k: string) => (BARE_KEY.test(k) ? k : quote(k))
 
 const PRELUDE = `"use strict"\nconst { fail, HOLE, readValue, readVariantAfter, recursionOf, unknownOf, At, checkedValue, isMaybe, isEnumerable, hasOwn, define, Out, Secret, quote, keyText } = rt\n`
 
@@ -98,7 +99,6 @@ export interface Generated {
  */
 const published: Record<Kind, WeakMap<AnySchema, unknown>> = { read: new WeakMap(), fields: new WeakMap(), write: new WeakMap(), fieldWrite: new WeakMap() }
 
-const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 const STEP = "if (++cx.steps > cx.maxSteps) fail()"
 
@@ -128,8 +128,6 @@ const member = (key: string) => (IDENTIFIER.test(key) ? `.${key}` : `[${JSON.str
 
 /** A property of an object literal: a quoted key, `__proto__` computed (a plain `__proto__:` would set the prototype). */
 const literalKey = (key: string) => (key === "__proto__" ? `["__proto__"]` : JSON.stringify(key))
-
-type RecursiveShape = Extract<Shape, { kind: "recursive" }>
 
 /**
  * One generation: the functions of every schema the roots reach, once. With
@@ -310,7 +308,7 @@ ${oneArgument("value", inner)}
   state.depth--
   return out`
     } else if (shape?.kind === "record") body = this.fieldsBody(shape)
-    else throw new Error("a record case written by hand")
+    else throw new NotCompilable("a record case written by hand")
     this.define("fields", s, name, "r, cx, depth, tag", body)
     return name
   }
@@ -320,7 +318,7 @@ ${oneArgument("value", inner)}
    * an unknown one of a closed record fails), then the object in the schema's
    * order: one literal when every field is there, else field by field.
    */
-  private fieldsBody(shape: Extract<Shape, { kind: "record" }>): string {
+  private fieldsBody(shape: RecordShape): string {
     const entries = shape.entries
     const keys = entries.map(([k]) => k)
     const optional = entries.map(([, schema]) => schema.optional === true)
@@ -559,7 +557,7 @@ ${indent}w.s += part.s.startsWith("{") ? w.tag + part.s : "(" + part.s + ")"`
       const inner = this.fieldWriter(shape.body())
       body = `${this.enterRecursive(shape)}\n  ${inner}(w, a, cx, depth, enumerable)\n  state.depth--`
     } else if (shape?.kind === "record") body = this.fieldWriterBody(shape)
-    else throw new Error("a record case written by hand")
+    else throw new NotCompilable("a record case written by hand")
     this.define("fieldWrite", s, name, "w, a, cx, depth, enumerable", body)
     return name
   }
@@ -617,7 +615,7 @@ ${indent}w.s += part.s.startsWith("{") ? w.tag + part.s : "(" + part.s + ")"`
    * As codec.ts's `writeFields`: each field after its separator and key as
    * one constant text in each layout, leaves (and Maybes of them) with them.
    */
-  private fieldWriterBody(shape: Extract<Shape, { kind: "record" }>): string {
+  private fieldWriterBody(shape: RecordShape): string {
     const lines = [
       "  if (typeof a !== \"object\" || a === null) fail()",
       "  if (depth >= cx.maxDepth) fail()",
