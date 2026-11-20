@@ -100,8 +100,9 @@ struct SchemaJSONSuiteTests {
 }
 
 struct SchemaTests {
-    /// Schemas the spec rejects (§13.3, §14), each with its code.
-    @Test(arguments: [
+    /// Schemas the spec rejects (§13.3, §14), each with its code. A typed constant: written
+    /// inline in `@Test(arguments:)`, the list takes the type checker too long.
+    static let rejected: [(String, String)] = [
         ("type A = { x Int }", "schema-syntax"),
         ("type A = Strin", "unknown-type"),
         ("type A = Array", "wrong-arity"),
@@ -152,7 +153,9 @@ struct SchemaTests {
         ("import acme (A)\ntype B = A", "schema-syntax"),
         ("type A = { ...r }", "row-parameter"),
         ("type A = closed < >", "closed-empty-variant"),
-    ])
+    ]
+
+    @Test(arguments: rejected)
     func rejects(_ text: String, _ code: String) {
         let error = #expect(throws: HausError.self) { try HausSchema(parsing: text) }
         #expect(error?.code.rawValue == code, "\(String(describing: error))")
