@@ -300,13 +300,12 @@ The canonical form parses back to the same value.
 - **Equality:** `equals(a, b)` is equality as in §2. Comparing canonical forms is one correct way to compute it.
 - **Order:** `compare(a, b)` orders values by the bytes of their canonical forms (UTF-8), shorter first when one is a prefix of the other. It is a total order consistent with equality, for sorting and for values as keys of ordered maps; it is not numeric order (`10` sorts before `9`).
 - **Hashing:** `hash(value)` is the SHA-256 digest of the canonical form, written as 64 lowercase hex digits.
-- **Files and streams:** `hashAll(values)` hashes a list of values, such as a whole file or stream (§1, §6): the SHA-256 digest of their canonical forms joined by `,`, with nothing else between them and no trailing comma, as 64 lowercase hex digits. `1, "a", Order { id: 0xFF },` is hashed as `1,"a",Order{id:255}`.
+- **Files:** `hashAll(values)` hashes a list of values, such as a whole file (§1): the SHA-256 digest of their canonical forms joined by `,`, with nothing else between them and no trailing comma, as 64 lowercase hex digits. `1, "a", Order { id: 0xFF },` is hashed as `1,"a",Order{id:255}`.
   - A file with one value hashes like the value: `hashAll([v])` is `hash(v)`. `v` and `v,` are the same file, so they have the same hash.
   - The empty file hashes to the digest of the empty text.
   - The joined text is a valid file and parses back to the same list, so two lists have the same text exactly when they have the same length and equal values in the same order. Order matters.
-  - It can be computed while a stream is read: hash each value as the reader gives it, after a `,` unless it is the first. Memory stays bounded by the largest value, and the hash of the values read so far is available at any time. A cut-off stream gives the hash of a shorter list; strict mode (§6) catches a cut that leaves a valid value.
 
-  Bindings that provide `hash` SHOULD provide `hashAll`, and SHOULD let applications hash a stream as it is read.
+  Bindings that provide `hash` SHOULD provide `hashAll`. The items of a stream (§6) are hashed one by one with `hash`; the format defines no hash of a whole stream as it is read.
 - **What is hashed:** values, not their text. Layout, comments, key order and the different spellings of the same value (`0xFF` and `255`, `"\u{41}"` and `"A"`, `Tag({ … })` and `Tag { … }`) don't change the hash. What §2 tells apart does: `1.0` and `1`, a missing field and `None`, NFC and NFD strings. Hash the values a parser or encoder gives, not native values after decoding, which may have lost such differences (a JavaScript `number` can't tell `1.0` from `1`).
 - **Stability:** this is version 1 of the canonical form and of `hash`. It will not change: a change would change every stored hash. Another hash algorithm or form, if one is ever added, gets its own name.
 

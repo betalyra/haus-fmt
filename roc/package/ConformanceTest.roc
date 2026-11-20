@@ -234,13 +234,11 @@ ConformanceTest := [].{
 	}
 
 	## `hash_all` of the values, as the suite writes it: hex and a line break.
-	## The running hash of the values as they are streamed gives the same.
 	hash : List(U8) -> List(U8)
-	hash = |bytes| match (Value.parse_bytes(bytes), streamed(bytes, 3)) {
-		(Ok(values), Ok(again)) => {
+	hash = |bytes| match Value.parse_bytes(bytes) {
+		Ok(values) => {
 			whole = Encode.hash_all(values) ?? ""
-			running = again.fold(Encode.HashAll.empty, |h, v| h.add(v) ?? h).digest()
-			if (whole != "" and running == whole) "${whole}\n".to_utf8() else []
+			if (whole != "") "${whole}\n".to_utf8() else []
 		}
 		_ => []
 	}

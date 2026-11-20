@@ -78,45 +78,21 @@ Encode := [].{
 	hash : Value -> Try(Str, Error)
 	hash = |value| canonical_within(value, Value.max_nodes).map_ok(|bytes| Crypto.SHA256.hash(bytes).to_hex())
 
-	## The hash of a list of values, such as a whole file or stream (spec
-	## §12): the SHA-256 digest of their canonical forms joined by `,`. A list
-	## of one value hashes like the value: `hash_all([v])` is `hash(v)`. Fails
-	## as `canonical` does, saying which value: `[3]`.
+	## The hash of a list of values, such as a whole file (spec §12): the
+	## SHA-256 digest of their canonical forms joined by `,`. A list of one
+	## value hashes like the value: `hash_all([v])` is `hash(v)`. The items of
+	## a stream are hashed one by one with `hash`. Fails as `canonical` does,
+	## saying which value: `[3]`.
 	hash_all : List(Value) -> Try(Str, Error)
 	hash_all = |values| {
-		var $hash = HashAll.empty
+		var $bytes = []
 		var $i = 0.U64
 		for v in values {
-			$hash = at_index($hash.add(v), $i, "")?
+			form = at_index(canonical_within(v, Value.max_nodes), $i, "")?
+			$bytes = if ($i > 0) $bytes.append(',').concat(form) else form
 			$i = $i + 1
 		}
-		Ok($hash.digest())
-	}
-
-	## `hash_all` of a list as it grows, e.g. a stream while it is read: `add`
-	## each value, and `digest` at any time gives `hash_all` of the values
-	## added so far. Memory stays bounded by the largest value.
-	##
-	##     var $hash = Encode.HashAll.empty
-	##     for value in values {
-	##         $hash = $hash.add(value)?
-	##     }
-	##     $hash.digest() # Encode.hash_all(values)
-	HashAll :: { sha : Crypto.SHA256.Hasher, count : U64 }.{
-		empty : Encode.HashAll
-		empty = { sha: Crypto.SHA256.Hasher.empty(), count: 0 }
-
-		## Add the next value. Fails as `canonical` does, and then adds nothing.
-		add : Encode.HashAll, Value -> Try(Encode.HashAll, Error)
-		add = |h, value| {
-			bytes = canonical_within(value, Value.max_nodes)?
-			sha = if (h.count > 0) h.sha.write([',']) else h.sha
-			Ok({ sha: sha.write(bytes), count: h.count + 1 })
-		}
-
-		## `hash_all` of the values added so far, as 64 lowercase hex digits.
-		digest : Encode.HashAll -> Str
-		digest = |h| h.sha.finish().to_hex()
+		Ok(Crypto.SHA256.hash($bytes).to_hex())
 	}
 
 	## Whether two values are equal (spec §2): the same canonical form. Fails
@@ -1005,19 +981,6 @@ expect match (Value.parse_all("{ b: 1, a: 0x2 }, \"x\", [None]"), Value.parse_al
 	}
 	_ => False
 }
-# The running hash gives `hash_all` of what was added so far, at any time.
-expect match Value.parse_all("1, \"two\", Three { n: 3 }") {
-	Ok(vs) => {
-		var $h = Encode.HashAll.empty
-		var $digests = [$h.digest()]
-		for v in vs {
-			$h = $h.add(v) ?? $h
-			$digests = $digests.append($h.digest())
-		}
-		$digests == [0, 1, 2, 3].map(|n| Encode.hash_all(vs.take_first(n)) ?? "")
-	}
-	_ => False
-}
 # Every value has a canonical form and a hash, whatever a reader's limits (spec §12): a 1300-digit
 # integer, parsed with a raised limit or built in code, is written with all its digits.
 huge_digits : Str
@@ -1030,7 +993,7 @@ expect match Value.parse_all_with(huge_digits, { ..Value.default_limits, max_num
 expect {
 	built = Rec([("b", Num("1")), ("a", Arr([Text("x"), Num(huge_digits)]))])
 	form = "{a:[\"x\",${huge_digits}],b:1}"
-	Encode.canonical(built) == Ok(form) and Encode.hash(built) == Ok(Crypto.SHA256.hash(form.to_utf8()).to_hex()) and Encode.hash_all([Num("1"), built]) == Ok(Crypto.SHA256.hash("1,${form}".to_utf8()).to_hex()) and Encode.HashAll.empty.add(built).map_ok(|h| h.digest()) == Encode.hash(built)
+	Encode.canonical(built) == Ok(form) and Encode.hash(built) == Ok(Crypto.SHA256.hash(form.to_utf8()).to_hex()) and Encode.hash_all([Num("1"), built]) == Ok(Crypto.SHA256.hash("1,${form}".to_utf8()).to_hex()) and Encode.hash_all([built]) == Encode.hash(built)
 }
 expect Encode.equals(Num(huge_digits), Num("1${"0".repeat(1299)}")) == Ok(True) and Encode.equals(Num(huge_digits), Num("1")) == Ok(False) and Encode.compare(Num(huge_digits), Num("2")) == Ok(Before)
 # The compact writer writes a huge integer in decimal (spec §11); one too long for the reader is an error.
@@ -1296,7 +1259,7 @@ expect {
 		and Encode.canonical(deep).map_err(|e| e.path) == Err("[0]".repeat(1024))
 		and fails(Encode.canonical(deep))
 		and fails(Encode.hash(deep))
-		and fails(Encode.HashAll.empty.add(deep))
+		and fails(Encode.hash_all([deep]))
 		and fails(Encode.equals(Num("1"), deep))
 		and fails(Encode.compare(deep, Num("1")))
 		and Encode.hash_all([Num("1"), deep]).map_err(|e| (e.code, e.path.starts_with("[1][0][0]"))) == Err(("nesting-too-deep", True))

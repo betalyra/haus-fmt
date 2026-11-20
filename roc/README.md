@@ -262,21 +262,8 @@ than `Value.max_nodes` values, a shared part counted each time it is reached
 (`x = Arr([y, y])`), with `too-many-nodes`, before anything is written. So
 each of them gives a `Try`: `Encode.equals(a, b) == Ok(True)`, and to sort,
 `values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
-`Encode.HashAll` hashes a list as it grows, e.g. a stream while it is read:
-
-```roc
-var $hash = Encode.HashAll.empty
-for value in values {
-    $hash = $hash.add(value)?
-}
-$hash.digest() # == Encode.hash_all(values)
-```
-
 `Value.within_bounds(v, max_depth, max_nodes)` is the check they make, for a
 value built in code, with your own bounds.
-
-(It isn't called `Hasher`, as in TypeScript and Rust, because Roc has a
-builtin `Hasher`.)
 
 ## Limits
 
@@ -410,8 +397,7 @@ cd closure-test && roc test main.roc
 
 `ConformanceTest.roc` is generated from `../test-suite` by
 `scripts/gen_conformance.py`: for each valid file the values, the canonical
-forms, the hash (`.hash`, also computed with `Encode.HashAll` on the values
-streamed) and the stream reader giving the same values in chunks of any
+forms, the hash (`.hash`) and the stream reader giving the same values in chunks of any
 size; for each invalid file a rejection with the code of its `.error`, also
 by the stream reader, whose error positions after a byte order mark are the
 whole-file parser's; and the check that `ErrorCode.roc` matches

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"hash"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -98,65 +97,25 @@ func Compare(a, b Value) int {
 // Hash returns the SHA-256 digest of the canonical form of a value, as 64
 // lowercase hex digits (spec §12). It fails as [Canonical] does.
 func Hash(v Value) (string, error) {
-	h := NewHasher()
-	if err := h.Add(v); err != nil {
-		return "", err
-	}
-	return h.Sum(), nil
+	return HashAll([]Value{v})
 }
 
-// HashAll returns the hash of a list of values, such as a whole file or
-// stream (spec §12): the SHA-256 digest of their canonical forms joined by
-// ",". A list of one value hashes like the value, and the empty list to the
-// digest of the empty text.
+// HashAll returns the hash of a list of values, such as a whole file (spec
+// §12): the SHA-256 digest of their canonical forms joined by ",". A list of
+// one value hashes like the value, and the empty list to the digest of the
+// empty text. The items of a stream are hashed one by one with [Hash].
 func HashAll(vs []Value) (string, error) {
-	h := NewHasher()
-	for _, v := range vs {
-		if err := h.Add(v); err != nil {
+	w := canonicalWriter{check: true}
+	for i, v := range vs {
+		if i > 0 {
+			w.b = append(w.b, ',')
+		}
+		if err := w.value(v, 0); err != nil {
 			return "", err
 		}
 	}
-	return h.Sum(), nil
-}
-
-// Hasher computes [HashAll] value by value, as a stream is read: memory
-// stays bounded by the largest value, and the hash of the values added so
-// far is available at any time. The zero Hasher is not usable; call
-// [NewHasher].
-type Hasher struct {
-	h   hash.Hash
-	n   int
-	buf []byte
-}
-
-// NewHasher returns a Hasher of the empty list.
-func NewHasher() *Hasher {
-	return &Hasher{h: sha256.New()}
-}
-
-// Add adds a value to the list. It fails as [Canonical] does, and then
-// leaves the Hasher unchanged.
-func (h *Hasher) Add(v Value) error {
-	w := canonicalWriter{b: h.buf[:0], check: true}
-	if h.n > 0 {
-		w.b = append(w.b, ',')
-	}
-	if err := w.value(v, 0); err != nil {
-		return err
-	}
-	h.h.Write(w.b)
-	h.buf = w.b
-	h.n++
-	return nil
-}
-
-// Count returns the number of values added.
-func (h *Hasher) Count() int { return h.n }
-
-// Sum returns the hash of the values added so far, as 64 lowercase hex
-// digits. It doesn't change the Hasher.
-func (h *Hasher) Sum() string {
-	return hex.EncodeToString(h.h.Sum(nil))
+	sum := sha256.Sum256(w.b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // canonicalWriter writes the canonical form. With check, it fails for values

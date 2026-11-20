@@ -120,8 +120,4 @@ fn hashes_an_integer_of_any_size() {
     let huge = parse_long(&"9".repeat(1300));
     assert_eq!(haus::hash(&huge).len(), 64);
     assert_ne!(haus::hash(&huge), haus::hash(&parse_long(&"9".repeat(1299))));
-    let values = [parse("1"), parse_long(&format!("{{ a: [{}] }}", "9".repeat(1300)))];
-    let mut hasher = haus::Hasher::new();
-    hasher.add(&values[0]).add(&values[1]);
-    assert_eq!(hasher.digest(), haus::hash_all(&values));
 }

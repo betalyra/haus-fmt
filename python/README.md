@@ -71,15 +71,7 @@ sorted(values, key=functools.cmp_to_key(haus.compare))  # by canonical form, not
 
 Every value has a canonical form, and `canonical` and `hash` never fail: an integer is written in decimal with all its digits, however long (a parser with a larger number limit, or code, can make one longer than 1000 characters).
 
-A whole file or stream has one hash too: `haus.hash_all(values)` hashes the canonical forms joined by `,` (a file of one value hashes like the value). `haus.Hasher` computes it while a stream is read:
-
-```python
-hasher = haus.Hasher()
-with open("events.haus", "rb") as f:
-    for event in haus.parse_stream(f):
-        hasher.add(event)
-hasher.digest()  # == haus.hash_all(all events)
-```
+A whole file has one hash too: `haus.hash_all(values)` hashes the canonical forms joined by `,` (a file of one value hashes like the value). The items of a stream are hashed one by one with `haus.hash`.
 
 ## JSON
 

@@ -53,9 +53,10 @@ pub fn hash(value: &Value) -> String {
     hex(&Sha256::digest(canonical(value).as_bytes()))
 }
 
-/// The hash of a list of values, such as a whole file or stream (spec §12):
-/// the SHA-256 digest of their canonical forms joined by `,`. A list of one
-/// value hashes like the value. Needs the `hash` feature.
+/// The hash of a list of values, such as a whole file (spec §12): the
+/// SHA-256 digest of their canonical forms joined by `,`. A list of one value
+/// hashes like the value. The items of a stream are hashed one by one with
+/// [`hash`]. Needs the `hash` feature.
 ///
 /// ```
 /// let vs = haus::parse("1, \"a\",").unwrap();
@@ -63,45 +64,12 @@ pub fn hash(value: &Value) -> String {
 /// ```
 #[cfg(feature = "hash")]
 pub fn hash_all<'a>(values: impl IntoIterator<Item = &'a Value>) -> String {
-    let mut hasher = Hasher::new();
-    for v in values {
-        hasher.add(v);
-    }
-    hasher.digest()
-}
-
-/// Hashes a list of values as it grows, e.g. a stream while it is read (spec
-/// §12): [`Hasher::digest`] gives [`hash_all`] of the values added so far, at
-/// any time. Memory stays bounded by the largest value. Needs the `hash` feature.
-#[cfg(feature = "hash")]
-#[derive(Clone, Default)]
-pub struct Hasher {
-    sha: sha2::Sha256,
-    count: usize,
-}
-
-#[cfg(feature = "hash")]
-impl Hasher {
-    pub fn new() -> Hasher {
-        Hasher::default()
-    }
-
-    /// Add the next value.
-    pub fn add(&mut self, value: &Value) -> &mut Hasher {
-        use sha2::Digest;
-        if self.count > 0 {
-            self.sha.update(b",");
-        }
-        self.count += 1;
-        self.sha.update(canonical(value).as_bytes());
-        self
-    }
-
-    /// [`hash_all`] of the values added so far, as 64 lowercase hex digits.
-    pub fn digest(&self) -> String {
-        use sha2::Digest;
-        hex(&self.sha.clone().finalize())
-    }
+    use sha2::{Digest, Sha256};
+    let sha = values.into_iter().enumerate().fold(Sha256::new(), |sha, (i, v)| {
+        let sha = if i > 0 { sha.chain_update(b",") } else { sha };
+        sha.chain_update(canonical(v).as_bytes())
+    });
+    hex(&sha.finalize())
 }
 
 #[cfg(feature = "hash")]

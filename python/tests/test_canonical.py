@@ -101,7 +101,6 @@ def test_a_1300_digit_integer_has_a_decimal_canonical_form_and_hash() -> None:
     want = hashlib.sha256(digits.encode()).hexdigest()
     hashers: list[Callable[[haus.Value], str]] = [
         haus.hash,
-        lambda v: haus.Hasher().add(v).digest(),
         lambda v: haus.hash_all([v]),
     ]
     for h in hashers:
