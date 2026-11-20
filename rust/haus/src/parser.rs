@@ -2,6 +2,7 @@
 //! TypeScript reference parser (typescript/packages/haus/src/parser.ts).
 
 use crate::keys::Keys;
+use crate::scan::{Special, ident_end, is_bidi, is_control, is_ident, next_special, plain_decimal};
 use crate::{ErrorCode as Code, SyntaxError as Error, Value};
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -96,18 +97,7 @@ pub(crate) fn parse_item(src: &str, limits: &Limits, at_start: bool) -> Result<V
 /// as the parser reads it (`1e5`, `255`, `1000`); None if it isn't one or is
 /// beyond the limits.
 pub(crate) fn number_literal(text: &str, limits: &Limits) -> Option<String> {
-    let max_hex_digits = limits.max_hex_digits();
-    let mut p = Parser {
-        src: text,
-        b: text.as_bytes(),
-        pos: 0,
-        depth: 0,
-        limits,
-        max_hex_digits,
-        file_start: None,
-        items: Vec::new(),
-        fields: Vec::new(),
-    };
+    let mut p = Parser::build(text, limits, 0, None);
     match p.number() {
         Ok(Value::Number(n)) if p.pos == text.len() => Some(n),
         _ => None,
@@ -183,97 +173,6 @@ struct Parser<'a> {
     fields: Vec<(String, Value)>,
 }
 
-/// Bytes that end a run of plain text in a string: the closing quote, a
-/// backslash, the control characters (C0 and DEL), and the lead bytes of the
-/// characters a string can't hold raw (spec §4): `0xC2` starts the C1
-/// controls (U+0080–U+009F), `0xE2` the bidirectional ones (and the line
-/// and paragraph separators, which the writer escapes).
-pub(crate) static STRING_STOP: [bool; 256] = {
-    let mut t = [false; 256];
-    let mut c = 0;
-    while c < 0x20 {
-        t[c] = true;
-        c += 1;
-    }
-    t[b'"' as usize] = true;
-    t[b'\\' as usize] = true;
-    t[0x7F] = true;
-    t[0xC2] = true;
-    t[0xE2] = true;
-    t
-};
-
-const ONES: u64 = 0x0101_0101_0101_0101;
-const HIGH: u64 = 0x8080_8080_8080_8080;
-
-/// Whether one of the eight bytes of `x` is zero.
-const fn has_zero(x: u64) -> bool {
-    x.wrapping_sub(ONES) & !x & HIGH != 0
-}
-
-/// Whether one of the eight bytes of `x` might end a run of plain string
-/// text: not ASCII, a control character, `"`, `\\` or DEL.
-const fn may_stop(x: u64) -> bool {
-    x & HIGH != 0
-        || x.wrapping_sub(ONES * 0x20) & HIGH != 0
-        || has_zero(x ^ (ONES * b'"' as u64))
-        || has_zero(x ^ (ONES * b'\\' as u64))
-        || has_zero(x ^ (ONES * 0x7F))
-}
-
-/// Where the identifier bytes (`[A-Za-z0-9_]`) from `i` end: eight bytes
-/// at a time, each tested for the three ranges and `_` at once.
-fn ident_end(b: &[u8], mut i: usize) -> usize {
-    // For bytes below 0x80 (no carry crosses a byte): the high bit of each
-    // byte is set where it is at least `lo`, or within `lo..=hi`.
-    let at_least = |x: u64, lo: u8| x.wrapping_add(ONES * u64::from(0x80 - lo));
-    let within = |x: u64, lo: u8, hi: u8| at_least(x, lo) & !at_least(x, hi + 1);
-    while let Some(chunk) = b.get(i..i + 8) {
-        let x = u64::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]]);
-        let ascii = x & !HIGH;
-        // The high bit of each byte that is `_`: set where `ascii ^ '_'` is zero.
-        let underscore = ascii ^ (ONES * u64::from(b'_'));
-        let is_underscore = !((underscore & !HIGH).wrapping_add(!HIGH) | underscore);
-        let ident = (within(ascii, b'0', b'9') | within(ascii | (ONES * 0x20), b'a', b'z') | is_underscore) & !x & HIGH;
-        let other = !ident & HIGH;
-        if other != 0 {
-            return i + (other.trailing_zeros() / 8) as usize;
-        }
-        i += 8;
-    }
-    i + b[i..].iter().position(|&c| !IDENT[usize::from(c)]).unwrap_or(b.len() - i)
-}
-
-/// Past the blocks of eight bytes of plain ASCII string text from `i` (see
-/// [`may_stop`]), up to the first block that might hold a [`STRING_STOP`].
-pub(crate) fn skip_plain_ascii(b: &[u8], mut i: usize) -> usize {
-    while let Some(chunk) = b.get(i..i + 8) {
-        let x = u64::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]]);
-        if may_stop(x) {
-            break;
-        }
-        i += 8;
-    }
-    i
-}
-
-/// Raw bidirectional controls (U+202A–U+202E, U+2066–U+2069) are not allowed outside escapes.
-pub(crate) fn is_bidi(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
-}
-pub(crate) fn is_ident(c: u8) -> bool {
-    IDENT[usize::from(c)]
-}
-/// The bytes of identifiers: `[A-Za-z0-9_]`.
-static IDENT: [bool; 256] = {
-    let mut t = [false; 256];
-    let mut c = 0;
-    while c < 256 {
-        t[c] = (c as u8).is_ascii_alphanumeric() || c == b'_' as usize;
-        c += 1;
-    }
-    t
-};
 fn is_lower_start(c: u8) -> bool {
     c.is_ascii_lowercase() || c == b'_'
 }
@@ -296,20 +195,22 @@ impl<'a> Parser<'a> {
     fn new(src: &'a str, limits: &'a Limits, pos: usize, file_start: Option<usize>) -> R<Parser<'a>> {
         match limits.unsupported() {
             Some(reason) => Err(Error::at(src, 0, Code::UnsupportedDepth, reason)),
-            None => {
-                let max_hex_digits = limits.max_hex_digits();
-                Ok(Parser {
-                    src,
-                    b: src.as_bytes(),
-                    pos,
-                    depth: 0,
-                    limits,
-                    max_hex_digits,
-                    file_start,
-                    items: Vec::new(),
-                    fields: Vec::new(),
-                })
-            }
+            None => Ok(Parser::build(src, limits, pos, file_start)),
+        }
+    }
+
+    /// A parser at `pos`, for limits this binding supports.
+    fn build(src: &'a str, limits: &'a Limits, pos: usize, file_start: Option<usize>) -> Parser<'a> {
+        Parser {
+            src,
+            b: src.as_bytes(),
+            pos,
+            depth: 0,
+            limits,
+            max_hex_digits: limits.max_hex_digits(),
+            file_start,
+            items: Vec::new(),
+            fields: Vec::new(),
         }
     }
 
@@ -451,11 +352,10 @@ impl<'a> Parser<'a> {
     /// Adds a field to the record whose fields start at `base`, if its key
     /// is new (spec §1).
     fn add_field(&mut self, base: usize, keys: &mut Keys, key_pos: usize, key: Cow<'a, str>, value: Value) -> R<()> {
-        self.fields.push((key.into_owned(), value));
-        if keys.repeated(&self.fields[base..]) {
-            let key = self.fields.pop().map(|(k, _)| k).unwrap_or_default();
+        if !keys.insert(&self.fields[base..], &key) {
             return Err(self.fail_at(key_pos, Code::DuplicateKey, format!("duplicate key '{key}'")));
         }
+        self.fields.push((key.into_owned(), value));
         Ok(())
     }
 
@@ -842,36 +742,16 @@ impl<'a> Parser<'a> {
 
     /// The plain text of a string from `i`: where it ends, at a quote, a
     /// backslash or the end of the input; an error at a character a string
-    /// can't hold raw. Eight ASCII bytes at a time where it can.
+    /// can't hold raw.
     fn plain(&self, mut i: usize) -> R<usize> {
-        let b = self.b;
         loop {
-            i = skip_plain_ascii(b, i);
-            // Then at most eight bytes, one at a time, up to the next stop.
-            let end = (i + 8).min(b.len());
-            while i < end && !STRING_STOP[usize::from(b[i])] {
-                i += 1;
+            match next_special(self.src, i) {
+                None => return Ok(self.b.len()),
+                Some((at, Special::Quote | Special::Backslash)) => return Ok(at),
+                // Taken raw (the writers escape them).
+                Some((at, special @ Special::LineSeparator)) => i = at + special.width(),
+                Some((at, Special::Control | Special::C1 | Special::Bidi)) => return Err(self.raw_char_error(at)),
             }
-            match b.get(i) {
-                None | Some(b'"' | b'\\') => return Ok(i),
-                Some(&c) if STRING_STOP[usize::from(c)] => i = self.raw_special(i, c)?,
-                Some(_) => {}
-            }
-        }
-    }
-
-    /// At a stop byte `c` (at `i`) other than a quote or a backslash: an
-    /// error for a raw control or bidirectional character, or where the
-    /// next character starts.
-    fn raw_special(&self, i: usize, c: u8) -> R<usize> {
-        let next = |n: usize| self.b.get(i + n).copied().unwrap_or(0);
-        match c {
-            0xC2 if (0x80..=0x9F).contains(&next(1)) => Err(self.raw_char_error(i)),
-            0xE2 if matches!((next(1), next(2)), (0x80, 0xAA..=0xAE) | (0x81, 0xA6..=0xA9)) => {
-                Err(self.raw_char_error(i))
-            }
-            0xC2 | 0xE2 => Ok(i + 1),
-            _ => Err(self.raw_char_error(i)),
         }
     }
 
@@ -1160,11 +1040,6 @@ impl<'a> Parser<'a> {
     }
 }
 
-/// A raw control character: C0, DEL or C1 (spec §4).
-pub(crate) fn is_control(c: char) -> bool {
-    matches!(c as u32, 0..0x20 | 0x7F..=0x9F)
-}
-
 fn control_message(c: char, place: &str) -> String {
     let code = c as u32;
     format!("raw control character U+{code:04X} in {place} (write it as \\u{{{code:04X}}})")
@@ -1173,32 +1048,6 @@ fn control_message(c: char, place: &str) -> String {
 fn bidi_message(c: char) -> String {
     let code = c as u32;
     format!("raw bidirectional control character U+{code:04X} (write it as \\u{{{code:04X}}})")
-}
-
-/// The length of the decimal literal without separators or exponent at the
-/// start of `b`, `-?(0|[1-9][0-9]*)(.[0-9]+)?`, if there is one: the
-/// literal is then normalized (spec §2).
-pub(crate) fn plain_decimal(b: &[u8]) -> Option<usize> {
-    let digits = |mut i: usize| {
-        while matches!(b.get(i), Some(b'0'..=b'9')) {
-            i += 1;
-        }
-        i
-    };
-    let mut i = usize::from(b.first() == Some(&b'-'));
-    i = match b.get(i) {
-        Some(b'0') => i + 1,
-        Some(b'1'..=b'9') => digits(i + 1),
-        _ => return None,
-    };
-    if b.get(i) == Some(&b'.') {
-        let fraction = i + 1;
-        i = digits(fraction);
-        if i == fraction {
-            return None;
-        }
-    }
-    Some(i)
 }
 
 /// The exponent digits of a decimal literal with an exponent

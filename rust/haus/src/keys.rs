@@ -35,24 +35,25 @@ pub(crate) struct Keys {
 }
 
 impl Keys {
-    /// Adds the key of the last of `fields` (whose other keys were added
-    /// before): whether one of them is the same.
-    pub(crate) fn repeated(&mut self, fields: &[(String, Value)]) -> bool {
-        let Some(((key, _), before)) = fields.split_last() else { return false };
-        if self.heads.is_empty() && fields.len() <= FEW {
+    /// Adds `key`, the key of the field after `before` (whose keys were
+    /// added before it), if none of them is the same: whether it is new.
+    pub(crate) fn insert(&mut self, before: &[(String, Value)], key: &str) -> bool {
+        // The number of keys with this one.
+        let count = before.len() + 1;
+        if self.heads.is_empty() && count <= FEW {
             let bit = 1 << sketch(key);
             let maybe = self.sketches & bit != 0;
             self.sketches |= bit;
-            return maybe && before.iter().any(|(k, _)| k == key);
+            return !(maybe && before.iter().any(|(k, _)| k == key));
         }
-        if 2 * fields.len() > self.heads.len() {
-            self.rebuild(before, 4 * fields.len());
+        if 2 * count > self.heads.len() {
+            self.rebuild(before, 4 * count);
         }
         let mut at = self.heads[self.bucket(key)];
         let mut walked = 0;
         while at != END {
-            if before[at as usize].0 == *key {
-                return true;
+            if before[at as usize].0 == key {
+                return false;
             }
             at = self.next[at as usize];
             walked += 1;
@@ -62,7 +63,7 @@ impl Keys {
             self.rebuild(before, self.heads.len());
         }
         self.add(key, before.len());
-        false
+        true
     }
 
     /// Chains `keys` again, in `size` (rounded up to a power of two) chains.
@@ -98,7 +99,7 @@ pub(crate) fn first_repeated(fields: &[(String, Value)]) -> Option<usize> {
         true => Keys::default(),
         false => Keys { heads: vec![END; (2 * fields.len()).next_power_of_two()], ..Keys::default() },
     };
-    (1..=fields.len()).find(|&n| keys.repeated(&fields[..n])).map(|n| n - 1)
+    (0..fields.len()).find(|&i| !keys.insert(&fields[..i], &fields[i].0))
 }
 
 /// Six bits of a key: its length and first and last byte.
@@ -137,7 +138,7 @@ mod tests {
     fn first_repeat(keys: &[String]) -> Option<usize> {
         let fields = fields(keys);
         let mut seen = Keys::default();
-        let first = (1..=fields.len()).find(|&n| seen.repeated(&fields[..n])).map(|n| n - 1);
+        let first = (0..fields.len()).find(|&i| !seen.insert(&fields[..i], &fields[i].0));
         assert_eq!(first_repeated(&fields), first);
         first
     }
@@ -166,7 +167,7 @@ mod tests {
         assert_eq!(first_repeat(&repeated), Some(3000));
         let fields = fields(&keys);
         let mut all = Keys::default();
-        assert!((1..=fields.len()).all(|n| !all.repeated(&fields[..n])));
+        assert!((0..fields.len()).all(|i| all.insert(&fields[..i], &fields[i].0)));
         assert!(all.seeded.is_some());
     }
 }
