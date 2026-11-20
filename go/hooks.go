@@ -8,6 +8,16 @@ func init() {
 	hooks.ParseSchemaJSON = func(src string, lim Limits, skipBOM bool) (Value, error) {
 		return parseJSON(src, lim, jsonSchema, skipBOM)
 	}
+	hooks.ParseValues = func(src string) ([]Value, error) {
+		lim, err := Limits{}.resolve()
+		if err != nil {
+			return nil, err
+		}
+		p := newParser(src, lim, false)
+		p.fileStart = false
+		vs, _, err := p.file()
+		return vs, err
+	}
 	hooks.SelfDescribing = func(j Value, lim Limits, depth int, prefix string) (Value, error) {
 		s := selfDescribing{lim: lim, prefix: prefix}
 		return s.value(j, depth)

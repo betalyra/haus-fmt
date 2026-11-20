@@ -202,6 +202,7 @@ import "../../test-suite/invalid/unterminated-comment.haus" as invalid_untermina
 import "../../test-suite/invalid/unterminated-string.haus" as invalid_unterminated_string : List(U8)
 import "../../test-suite/invalid/uppercase-hex-prefix.haus" as invalid_uppercase_hex_prefix : List(U8)
 import "../../test-suite/invalid/uppercase-key.haus" as invalid_uppercase_key : List(U8)
+import "../../test-suite/invalid/version-directive-after-comma.haus" as invalid_version_directive_after_comma : List(U8)
 import "../../test-suite/invalid/version-directive-prefix.haus" as invalid_version_directive_prefix : List(U8)
 import "../../spec/errors.haus" as error_catalogue : Str
 
@@ -1360,6 +1361,12 @@ expect ConformanceTest.rejects(invalid_uppercase_key, "uppercase-key")
 
 # invalid/uppercase-key.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_uppercase_key, "uppercase-key")
+
+# invalid/version-directive-after-comma.haus
+expect ConformanceTest.rejects(invalid_version_directive_after_comma, "expected-value")
+
+# invalid/version-directive-after-comma.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_version_directive_after_comma, "expected-value")
 
 # invalid/version-directive-prefix.haus
 expect ConformanceTest.rejects(invalid_version_directive_prefix, "version-directive")

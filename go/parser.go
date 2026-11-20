@@ -57,12 +57,12 @@ type parser struct {
 	depth int
 	keep  bool // also build the syntax tree, with comments, for the formatter
 
-	skipBOM   bool // a byte order mark at src[0] is skipped
+	fileStart bool // src starts the file: a byte order mark at src[0] is skipped, and #haus after it is a version directive
 	line, col int  // the position of src[0] in the whole input, 1-based
 }
 
 func newParser(src string, lim Limits, keep bool) *parser {
-	return &parser{src: src, lim: lim, keep: keep, skipBOM: true, line: 1, col: 1}
+	return &parser{src: src, lim: lim, keep: keep, fileStart: true, line: 1, col: 1}
 }
 
 // fail returns an error at byte offset pos.
@@ -116,10 +116,10 @@ func (p *parser) file() ([]Value, *fileNode, error) {
 	if !utf8.ValidString(p.src) {
 		return nil, nil, p.fail(invalidUTF8(p.src), CodeInvalidUTF8, "invalid UTF-8")
 	}
-	if p.skipBOM && strings.HasPrefix(p.src, bom) {
+	if p.fileStart && strings.HasPrefix(p.src, bom) {
 		p.pos = len(bom)
 	}
-	if strings.HasPrefix(p.src[p.pos:], "#haus") {
+	if p.fileStart && strings.HasPrefix(p.src[p.pos:], "#haus") {
 		return nil, nil, p.fail(p.pos, CodeVersionDirective,
 			"the file starts with a version directive: it needs a newer version of haus")
 	}

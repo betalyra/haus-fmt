@@ -85,6 +85,9 @@ const SYNTAX_SCHEMA_CODES = new Set([
   'stray-slash',
   // `@deprecated("x"`: an attribute's arguments without their `)`.
   'missing-comma',
+  // `@deprecated(#haus)`, or a byte order mark there: an attribute's
+  // arguments that aren't values.
+  'expected-value',
 ]);
 
 // Schema error codes that are syntax errors for some files and not for
