@@ -6,8 +6,10 @@
 import { existsSync, readFileSync } from "node:fs"
 import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkData, definitionDoc, HausSyntaxError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule } from "@haus-fmt/haus"
+import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule } from "@haus-fmt/haus"
+import { generateCodecs } from "@haus-fmt/haus/codegen"
 import { isSchemaFile, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
+import { resolverOf } from "./runtime/shared.js"
 
 export interface Diagnostic {
   readonly message: string
@@ -123,7 +125,7 @@ function recording(path: string, packages: NodeResolverOptions) {
 }
 
 /** Module source that rebuilds a schema file's schemas at runtime (`const schema = …`), and the files it was built from. */
-function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[] } {
+function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[]; options: ParseSchemaOptions } {
   const text = readFileSync(schemaPath, "utf8")
   const r = recording(schemaPath, packages)
   parseSchemaFile(text, r.options) // resolves (and records) every import, and reports errors now
@@ -131,14 +133,34 @@ function compiledSchema(schemaPath: string, runtime: string, packages: NodeResol
     code: `import { compiled, decodeData } from ${JSON.stringify(runtime)};\n` +
       `const schema = compiled(${JSON.stringify(text)}, ${JSON.stringify(r.modules)}, ${JSON.stringify(r.options.key)}, ${JSON.stringify(r.options.id)});\n`,
     files: r.files(),
+    // The same keys as the runtime's: what is built now is what it builds.
+    options: { key: r.options.key!, id: r.options.id!, resolver: resolverOf(r.modules) },
   }
 }
 
-/** Module source for a `.schema.haus` file: its schemas as named exports. */
-export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}): { code: string; files: string[] } {
-  const { code, files } = compiledSchema(path, runtime, packages)
+/**
+ * The compiled codecs of a schema file's schemas, generated now (no `eval` at
+ * runtime): `prebuilt(schema, hash, factory)`, which @haus-fmt/haus uses
+ * once it has generated the same source again from the schemas built at
+ * runtime (the hash says so). Plain target only; empty if nothing is generated.
+ */
+function prebuiltCodecs(path: string, packages: NodeResolverOptions, options: ParseSchemaOptions): string {
+  const { schemas } = fromSchemaFile(parseSchemaFile(readFileSync(path, "utf8"), options))
+  const generated = generateCodecs(schemas)
+  if (generated === undefined) return ""
+  return `prebuilt(schema, ${JSON.stringify(generated.hash)}, function (rt, env) {\n${generated.source}});\n`
+}
+
+/**
+ * Module source for a `.schema.haus` file: its schemas as named exports, and
+ * with `codecs` (plain target) their compiled codecs, generated now.
+ */
+export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}, codecs = false): { code: string; files: string[] } {
+  const { code, files, options } = compiledSchema(path, runtime, packages)
   const names = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, packages)).definitions.filter((d) => d.params.length === 0).map((d) => d.name)
-  return { code: code + names.map((n) => `export const ${n} = schema.schemas[${JSON.stringify(n)}];\n`).join(""), files }
+  const prebuilt = codecs ? prebuiltCodecs(path, packages, options) : ""
+  const header = prebuilt === "" ? "" : `import { prebuilt } from ${JSON.stringify(runtime)};\n`
+  return { code: header + code + prebuilt + names.map((n) => `export const ${n} = schema.schemas[${JSON.stringify(n)}];\n`).join(""), files }
 }
 
 /** Module source for a data file with a schema: decoded with it when the module loads. */

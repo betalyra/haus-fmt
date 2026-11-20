@@ -24,6 +24,12 @@ Two parts make an import work, and both come from one generator
 | `"plain"` (default) | haus schemas (Standard Schemas) | decoded with them | plain JS values | nothing |
 | `"effect"` | Effect schemas | decoded with Effect | plain JS values | `effect`, `@haus-fmt/effect` |
 
+With the plain target, a schema file's module also carries the compiled
+codecs of its schemas, generated when the module is built: `h.parse` and
+`h.stringify` use them for the schemas used often, without `eval` (under a
+strict content security policy too), once the same code generated again from
+the schemas at runtime has the same hash.
+
 Plain, without a schema: strings, `bigint` for whole numbers, `string` for decimals
 (exact), `boolean`, `Uint8Array`, string literal unions for tags without payload,
 `{ _tag, … }` for other variants, `None` and `Some(x)` included (`{ _tag: "None" }`,

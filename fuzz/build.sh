@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 (cd spec/lean && lake build haus-ref)
 (cd rust && cargo build -q --release -p haus-fmt --example fuzz_runner --example time_runner)
 (cd python && uv sync -q)
-(cd typescript && pnpm --filter ./packages/haus build >/dev/null && pnpm --filter ./packages/effect build >/dev/null)
+(cd typescript && pnpm --filter ./packages/haus build >/dev/null && pnpm --filter ./packages/effect build >/dev/null && pnpm --filter ./packages/import build >/dev/null)
 (cd typescript && pnpm --filter ../extensions/money --filter ../extensions/geo build >/dev/null)
 (cd fuzz/schema-rust && cargo build -q --release)
 mkdir -p fuzz/.build

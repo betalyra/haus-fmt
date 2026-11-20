@@ -15,13 +15,14 @@ import { parseArgs } from "node:util"
 import { canonical, parseAll, type Value } from "../../typescript/packages/haus/dist/index.js"
 import { Rng } from "./generate.ts"
 import { caseRecord, Generator, onlyNamed, type Env, type Type } from "./schema-gen.ts"
+import { codecStats } from "./codec.ts"
 import {
-  caseLine, effectRunner, go, lean, python, roc, rust, rustCheck, schemaTexts, typescriptRunner, type Outcome, type SchemaCase, type SchemaRunner,
+  caseLine, codecRunner, effectRunner, go, lean, python, roc, rust, rustCheck, schemaTexts, typescriptRunner, type Outcome, type SchemaCase, type SchemaRunner,
 } from "./schema-runners.ts"
 
 const root = new URL("../..", import.meta.url).pathname
 const SCHEMA_DIRS = [join(root, "test-suite/schema"), join(root, "fuzz/schema")]
-const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "rust-check", "roc", "python", "go"]
+const ALL_RUNNERS = ["lean", "typescript", "typescript-codec", "effect", "rust", "rust-check", "roc", "python", "go"]
 
 export async function run(argv: readonly string[]): Promise<number> {
   const { values: args } = parseArgs({
@@ -67,6 +68,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   for (const name of wanted) {
     if (name === "lean") runners.push(lean(typesFile))
     else if (name === "typescript") runners.push(typescriptRunner(texts))
+    else if (name === "typescript-codec") runners.push(await codecRunner(texts, SCHEMA_DIRS, out))
     else if (name === "effect") runners.push(await effectRunner(texts))
     else if (name === "rust") runners.push(rust())
     else if (name === "rust-check") runners.push(rustCheck())
@@ -146,6 +148,10 @@ export async function run(argv: readonly string[]): Promise<number> {
   }
 
   console.log(`${accepted} accepted, ${count - accepted} rejected (by lean); ${codesCompared} error codes compared (at the same place)`)
+  if (wanted.includes("typescript-codec")) {
+    const s = codecStats
+    console.log(`typescript-codec: ${s.decodes} decodes and ${s.encodes} encodes, each compared on 3 compiled paths with the generic path (${s.compiledDecodes} and ${s.compiledEncodes} accepted on a compiled path; ${s.builtAhead} decodes with codecs built ahead)`)
+  }
   for (const [k, s] of perType) console.log(`  ${k.padEnd(22)} ${String(s.ok).padStart(6)} accepted of ${s.total}`)
   if (found.size === 0) console.log("no disagreements")
   const report: string[] = []

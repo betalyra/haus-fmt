@@ -30,6 +30,7 @@
  *
  *   compileSchemaFile(text, { ...schemaOptions(path), codecs: iso })   // iso from @haus-fmt/money
  */
+import { groupSchemas } from "./codegen.js"
 import * as h from "./schema.js"
 import {
   deprecation, HausSchemaFileError, parseSchemaFile, type Attribute, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions, type SchemaFile, type Type,
@@ -202,6 +203,8 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
     Object.defineProperty(schemas, d.name, { value: ref(d.template), enumerable: true })
     if (d.template.stream) streams.add(d.name)
   }
+  // Generated together when one of them is first used (codegen.ts).
+  groupSchemas(schemas)
   return { file, schemas, streams }
 }
 

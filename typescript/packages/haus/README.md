@@ -64,6 +64,20 @@ const back = h.stringify(Order, order)   // haus text again
 for await (const o of h.decodeStream(Order, response.body!)) { … }
 ```
 
+Each schema is compiled once, on first use, into a reader and a writer:
+`h.parse` reads straight from the text into the values, without the generic
+`Value` tree in between, and `h.stringify` in the `compact` and `minimised`
+layouts writes straight from them. By default they are closures (no `eval`),
+or generated code where `@haus-fmt/import` (plain target) built it ahead:
+a fixed object shape per record and keys as constant text, with no `eval`
+either. The values, texts and errors are those of the generic path; on any
+error, the generic path runs again to report it, so a syntax error later in
+the text still wins over a mismatch before it. The `codec` option picks a
+path: `"generated"`, `"closures"` or `"generic"`. `"generated"` makes the
+code with `new Function` where it wasn't built ahead and the platform allows
+it; it pays off for a schema read or written many times (up to 40% faster),
+not for many schemas each used a few times.
+
 Schemas from `.schema.haus` files:
 
 ```ts

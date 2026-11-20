@@ -117,7 +117,7 @@ export function typesFor(text: string, fileName: string, b: Backend): { text: st
  */
 export function moduleFor(text: string, fileName: string, b: Backend, importRuntime: (path: string) => string): { code: string; files: string[] } {
   const runtime = importRuntime(b.runtime)
-  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime, b.packages)
+  if (isSchemaFile(fileName)) return schemaModuleSource(fileName, runtime, b.packages, b.target === "plain")
   const link = schemaFor(fileName)
   if (link) return dataModuleSource(text, fileName, link, runtime, b.packages)
   return { code: `export default ${js(parsePlain(text))};\n`, files: [] }
