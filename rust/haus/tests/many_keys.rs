@@ -1,8 +1,11 @@
-//! Duplicate keys can't make parsing quadratic (spec §7): every check uses
+//! Duplicate keys can't make parsing quadratic (spec §7): the checks use
 //! `HashSet`/`HashMap` with the standard library's `RandomState` (SipHash
-//! with keys random per process), so keys can't be crafted to collide. A
-//! record or object with many keys parses well within a bound that a list
-//! scan or a hash with a known seed would miss by orders of magnitude.
+//! with keys random per process), so keys can't be crafted to collide; the
+//! parser and the writers chain keys by a cheap hash first, and switch to
+//! that one as soon as a chain grows long (`tests/linear.rs` times keys made
+//! to collide in the cheap hash). A record or object with many keys parses
+//! well within a bound that a list scan or a hash with a known seed would
+//! miss by orders of magnitude.
 
 use haus::{ErrorCode, Value};
 use std::time::{Duration, Instant};

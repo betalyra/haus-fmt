@@ -2,10 +2,12 @@
 //! (spec §11: one value per line, normal spacing), which checks what it writes.
 
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
+use crate::keys::first_repeated;
+use crate::parser::{STRING_STOP, is_ident, plain_decimal, skip_plain_ascii};
 use crate::{Codec, EncodeError, ErrorCode as Code, Limits, Secret, Segment, Value};
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -27,6 +29,13 @@ pub trait Encode {
     /// The haus value, checked for a writer with the default limits.
     fn encode(&self) -> R {
         self.encode_with(Encoder::default())
+    }
+
+    /// The [`Value`] itself, if this is one: the writers write it as it is,
+    /// checking it as they go, instead of encoding a copy of it first.
+    #[doc(hidden)]
+    fn as_value(&self) -> Option<&Value> {
+        None
     }
 }
 
@@ -202,15 +211,16 @@ impl Encoder {
         Ok(v.clone())
     }
 
-    /// Whether the writer takes `v` here: it writes it, and drops the text.
-    fn check(self, v: &Value) -> Result<(), EncodeError> {
+    /// Whether the writer takes `v` here, as [`Encoder::value`] checks it,
+    /// without copying it: a step for each value in it.
+    pub fn check(self, v: &Value) -> Result<(), EncodeError> {
         supported(&self.limits)?;
         // A record that is a tag's only payload shares the payload's level.
         let depth = match (self.payload, v) {
             (true, Value::Record(_)) => self.depth - 1,
             _ => self.depth,
         };
-        let mut writer = Writer { out: &mut String::new(), limits: &self.limits, spaced: true, values: 0 };
+        let mut writer = Writer { out: &mut Discard, limits: &self.limits, spaced: true, values: 0 };
         writer.value(v, depth)?;
         self.budget.take(writer.values)
     }
@@ -336,6 +346,9 @@ impl<T: Encode + ?Sized> Encode for &T {
     fn encode_with(&self, e: Encoder) -> R {
         (**self).encode_with(e)
     }
+    fn as_value(&self) -> Option<&Value> {
+        (**self).as_value()
+    }
 }
 impl<T: Encode> Encode for Secret<T> {
     fn encode_with(&self, e: Encoder) -> R {
@@ -345,6 +358,9 @@ impl<T: Encode> Encode for Secret<T> {
 impl<T: Encode> Encode for Box<T> {
     fn encode_with(&self, e: Encoder) -> R {
         (**self).encode_with(e)
+    }
+    fn as_value(&self) -> Option<&Value> {
+        (**self).as_value()
     }
 }
 impl<T: Encode> Encode for Vec<T> {
@@ -376,6 +392,9 @@ impl<A: Encode, E: Encode> Encode for Result<A, E> {
 impl Encode for Value {
     fn encode_with(&self, e: Encoder) -> R {
         e.value(self)
+    }
+    fn as_value(&self) -> Option<&Value> {
+        Some(self)
     }
 }
 impl Encode for String {
@@ -482,8 +501,62 @@ fn write_line(v: &Value, limits: &Limits, spaced: bool) -> Result<String, Encode
     Ok(out)
 }
 
-struct Writer<'a> {
-    out: &'a mut String,
+/// What [`crate::to_string_with`] and [`crate::to_string_minimised_with`]
+/// do for a [`Value`] (`Encoder::new(limits).value(v)`, then
+/// [`write_with`]), in one pass and without copying the value: the same
+/// text, and the same errors in the same order (the writer's first, then the
+/// step budget).
+pub(crate) fn write_value(v: &Value, limits: &Limits, spaced: bool) -> Result<String, EncodeError> {
+    supported(limits)?;
+    let mut out = String::new();
+    let mut writer = Writer { out: &mut out, limits, spaced, values: 0 };
+    writer.value(v, 0)?;
+    Budget::new(DEFAULT_MAX_STEPS).take(writer.values)?;
+    Ok(out)
+}
+
+/// Where a [`Writer`] writes: a `String`, or nowhere when it only checks.
+trait Sink {
+    fn push(&mut self, c: char);
+    fn push_str(&mut self, s: &str);
+    /// `"…"`, as [`quote`] writes it.
+    fn quote(&mut self, s: &str);
+    /// Bytes as hex digits.
+    fn hex(&mut self, b: &[u8]);
+}
+
+impl Sink for String {
+    fn push(&mut self, c: char) {
+        String::push(self, c);
+    }
+    fn push_str(&mut self, s: &str) {
+        String::push_str(self, s);
+    }
+    fn quote(&mut self, s: &str) {
+        quote(s, self);
+    }
+    fn hex(&mut self, b: &[u8]) {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        self.reserve(2 * b.len());
+        for &x in b {
+            String::push(self, char::from(DIGITS[usize::from(x >> 4)]));
+            String::push(self, char::from(DIGITS[usize::from(x & 0xF)]));
+        }
+    }
+}
+
+/// Writes nothing: for checking.
+struct Discard;
+
+impl Sink for Discard {
+    fn push(&mut self, _: char) {}
+    fn push_str(&mut self, _: &str) {}
+    fn quote(&mut self, _: &str) {}
+    fn hex(&mut self, _: &[u8]) {}
+}
+
+struct Writer<'a, O: Sink> {
+    out: &'a mut O,
     limits: &'a Limits,
     /// Compact has spaces between tokens; minimised has none.
     spaced: bool,
@@ -493,7 +566,7 @@ struct Writer<'a> {
 
 type W = Result<(), EncodeError>;
 
-impl Writer<'_> {
+impl<O: Sink> Writer<'_, O> {
     /// `v`, inside `depth` containers. The steps that don't recurse are
     /// functions of their own, so that this frame stays small (see
     /// [`crate::MAX_SUPPORTED_DEPTH`]).
@@ -524,14 +597,12 @@ impl Writer<'_> {
             Value::Number(n) => self.out.push_str(&normalized(n, self.limits)?),
             Value::String(s) => {
                 check_length(s, self.limits)?;
-                quote(s, self.out);
+                self.out.quote(s);
             }
             Value::Bytes(b) => {
                 check_bytes(b, self.limits)?;
                 self.out.push_str("x\"");
-                for x in b {
-                    let _ = write!(self.out, "{x:02x}");
-                }
+                self.out.hex(b);
                 self.out.push('"');
             }
             _ => {}
@@ -552,7 +623,7 @@ impl Writer<'_> {
         self.out.push(open);
         for (i, x) in items.iter().enumerate() {
             if i > 0 {
-                self.out.push_str(self.gap(", "));
+                self.out.push_str(self.gap(", ", ","));
             }
             self.value(x, depth).map_err(|e| e.within(Segment::Index(i)))?;
         }
@@ -567,29 +638,32 @@ impl Writer<'_> {
             return Ok(());
         }
         unique_keys(fields)?;
-        self.out.push_str(self.gap("{ "));
+        self.out.push_str(self.gap("{ ", "{"));
         for (i, (k, v)) in fields.iter().enumerate() {
             self.key(i, k)?;
             self.value(v, depth).map_err(|e| e.within(Segment::Field(k.clone())))?;
         }
-        self.out.push_str(self.gap(" }"));
+        self.out.push_str(self.gap(" }", "}"));
         Ok(())
     }
 
     /// The `i`th key of a record, with `: ` after it (`:` minimised).
     fn key(&mut self, i: usize, k: &str) -> W {
         if i > 0 {
-            self.out.push_str(self.gap(", "));
+            self.out.push_str(self.gap(", ", ","));
         }
         check_key(k, self.limits).map_err(|e| e.within(Segment::Field(k.to_owned())))?;
-        key(k, self.out);
-        self.out.push_str(self.gap(": "));
+        match is_bare_key(k) {
+            true => self.out.push_str(k),
+            false => self.out.quote(k),
+        }
+        self.out.push_str(self.gap(": ", ":"));
         Ok(())
     }
 
-    /// `spaced` as written in compact, or without its spaces in minimised.
-    fn gap(&self, spaced: &'static str) -> &'static str {
-        if self.spaced { spaced } else { spaced.trim() }
+    /// `spaced` as written in compact, or `minimised`, the same without its spaces.
+    fn gap(&self, spaced: &'static str, minimised: &'static str) -> &'static str {
+        if self.spaced { spaced } else { minimised }
     }
 }
 
@@ -605,10 +679,9 @@ pub(crate) fn size(v: &Value) -> u64 {
 
 /// Keys are unique (spec §1): a record built in code might repeat one.
 pub(crate) fn unique_keys(fields: &[(String, Value)]) -> W {
-    let mut seen = HashSet::with_capacity(fields.len());
-    match fields.iter().find(|(k, _)| !seen.insert(k.as_str())) {
-        Some((k, _)) => Err(EncodeError::new(Code::DuplicateKey, "the key is used twice in this record")
-            .within(Segment::Field(k.clone()))),
+    match first_repeated(fields) {
+        Some(i) => Err(EncodeError::new(Code::DuplicateKey, "the key is used twice in this record")
+            .within(Segment::Field(fields[i].0.clone()))),
         None => Ok(()),
     }
 }
@@ -657,14 +730,17 @@ pub(crate) fn check_bytes(b: &[u8], limits: &Limits) -> W {
 
 /// A tag name: `[A-Z][A-Za-z0-9_]*`.
 pub(crate) fn is_tag(tag: &str) -> bool {
-    tag.starts_with(|c: char| c.is_ascii_uppercase()) && tag.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+    tag.as_bytes().first().is_some_and(u8::is_ascii_uppercase) && tag.bytes().all(is_ident)
 }
 
 /// A key: bare if it is an identifier (`[a-z_][A-Za-z0-9_]*`), quoted otherwise.
 pub(crate) fn key(k: &str, out: &mut String) {
-    let bare = k.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
-        && k.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_');
-    if bare { out.push_str(k) } else { quote(k, out) }
+    if is_bare_key(k) { out.push_str(k) } else { quote(k, out) }
+}
+
+/// Whether a key is an identifier (`[a-z_][A-Za-z0-9_]*`), written bare.
+fn is_bare_key(k: &str) -> bool {
+    k.as_bytes().first().is_some_and(|&c| c.is_ascii_lowercase() || c == b'_') && k.bytes().all(is_ident)
 }
 
 /// A number's normalized literal (spec §2), always in decimal, if it can be
@@ -676,6 +752,10 @@ pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, s
         let reason = format!("number literal longer than {} characters", limits.max_number_length);
         EncodeError::new(Code::NumberTooLong, reason)
     };
+    // The common case: a decimal without exponent, already normalized.
+    if plain_decimal(text.as_bytes()) == Some(text.len()) && text.len() <= limits.max_number_length {
+        return Ok(text.into());
+    }
     let n: Cow<str> = if is_normalized(text) {
         text.into()
     } else if text.len() > limits.max_number_length {
@@ -722,21 +802,49 @@ pub(crate) fn is_normalized(text: &str) -> bool {
 /// controls and the line and paragraph separators U+2028 and U+2029 (spec
 /// §11, §12). The same in every layout and in the canonical form.
 pub(crate) fn quote(s: &str, out: &mut String) {
+    out.reserve(s.len() + 2);
     out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if matches!(u32::from(c), 0..0x20 | 0x7F..=0x9F)
-                || matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{2028}' | '\u{2029}') =>
-            {
-                let _ = write!(out, "\\u{{{:X}}}", u32::from(c));
-            }
-            c => out.push(c),
+    let b = s.as_bytes();
+    // Runs of characters written as they are, copied whole.
+    let mut run = 0;
+    let mut i = 0;
+    loop {
+        i = skip_plain_ascii(b, i);
+        let end = (i + 8).min(b.len());
+        while i < end && !STRING_STOP[usize::from(b[i])] {
+            i += 1;
         }
+        let Some(&c) = b.get(i) else { break };
+        if !STRING_STOP[usize::from(c)] {
+            continue;
+        }
+        let (escape, len): (Option<&str>, usize) = match c {
+            b'"' => (Some("\\\""), 1),
+            b'\\' => (Some("\\\\"), 1),
+            b'\n' => (Some("\\n"), 1),
+            b'\r' => (Some("\\r"), 1),
+            b'\t' => (Some("\\t"), 1),
+            // C1 controls, U+0080–U+009F.
+            0xC2 if (0x80..=0x9F).contains(&b[i + 1]) => (None, 2),
+            // Bidi controls, and the line and paragraph separators.
+            0xE2 if matches!((b[i + 1], b[i + 2]), (0x80, 0xA8..=0xAE) | (0x81, 0xA6..=0xA9)) => (None, 3),
+            0xC2 | 0xE2 => {
+                i += 1;
+                continue;
+            }
+            _ => (None, 1),
+        };
+        out.push_str(&s[run..i]);
+        match escape {
+            Some(e) => out.push_str(e),
+            None => {
+                let ch = s[i..].chars().next().unwrap_or_default();
+                let _ = write!(out, "\\u{{{:X}}}", u32::from(ch));
+            }
+        }
+        i += len;
+        run = i;
     }
+    out.push_str(&s[run..]);
     out.push('"');
 }

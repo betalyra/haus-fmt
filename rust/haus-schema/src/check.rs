@@ -19,7 +19,6 @@ use crate::locate::{Lines, Node, locate};
 use crate::resolve::{Schema, tags};
 use crate::types::{Builtin, Case, Instance, Payload, Record, Type, Variant};
 use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Value};
-use std::collections::HashSet;
 use std::fmt;
 use std::ops::Range;
 
@@ -243,7 +242,7 @@ impl Schema {
         let node = |i: usize| nodes.and_then(|n| n.get(i));
         if root.stream {
             for (i, v) in values.iter().enumerate() {
-                w.path.push(Segment::Index(i));
+                w.path.push(Step::Index(i));
                 w.value(v, &root.body, node(i));
                 w.path.pop();
             }
@@ -277,25 +276,35 @@ enum Mode {
 
 type Loc<'n> = Option<&'n Node>;
 
-struct Walker<'s> {
+struct Walker<'s, 'v> {
     schema: &'s Schema,
     limits: Limits,
     mode: Mode,
     issues: Vec<Issue>,
-    path: Vec<Segment>,
+    /// Where the walk is, borrowing the keys of the value: an issue copies it.
+    path: Vec<Step<'v>>,
     depth: usize,
     steps: usize,
     max_steps: usize,
     /// The work budget or the depth limit is exceeded: nothing more is checked.
     fatal: bool,
     located: bool,
+    /// For the records being walked, innermost last: which of the type's
+    /// fields the value has, by their place in the type.
+    present: Vec<bool>,
+    /// For the records being walked, innermost last: the place in the type
+    /// of each of the value's fields, `NOT_LISTED` for none.
+    places: Vec<usize>,
 }
+
+/// In [`Walker::places`]: a field the record type doesn't list.
+const NOT_LISTED: usize = usize::MAX;
 
 /// Nothing: what the walk gives for a value when it only checks.
 const NOTHING: Value = Value::Array(Vec::new());
 
-impl<'s> Walker<'s> {
-    fn new(schema: &'s Schema, limits: Limits, mode: Mode, nodes: Option<&[Node]>) -> Walker<'s> {
+impl<'s, 'v> Walker<'s, 'v> {
+    fn new(schema: &'s Schema, limits: Limits, mode: Mode, nodes: Option<&[Node]>) -> Walker<'s, 'v> {
         Walker {
             schema,
             limits,
@@ -307,13 +316,57 @@ impl<'s> Walker<'s> {
             max_steps: 0,
             fatal: false,
             located: nodes.is_some(),
+            present: vec![],
+            places: vec![],
         }
     }
 
     /// Sets the work budget: 16 steps per value of the input, and 1024.
     /// Fails for a value built in code that is deeper than the limit or has
     /// more than 64 Mi values.
+    ///
+    /// Counted by going through the containers only. Which error a value
+    /// with both problems gets depends on the order values are counted in,
+    /// so beyond 64 Mi values they are counted again, one by one, in the
+    /// order that decides it ([`Walker::count_all`]).
     fn budget(&mut self, values: &[Value]) -> Result<(), (Code, String)> {
+        let max = self.limits.max_depth;
+        let mut count = values.len();
+        let mut deep = false;
+        let mut stack: Vec<(&Value, usize)> = values.iter().filter(|v| is_container(v)).map(|v| (v, 0)).collect();
+        while let Some((v, depth)) = stack.pop() {
+            deep |= depth >= max;
+            let mut inside = |x, depth| {
+                count += 1;
+                if is_container(x) {
+                    stack.push((x, depth));
+                }
+            };
+            match v {
+                Value::Array(items) => items.iter().for_each(|x| inside(x, depth + 1)),
+                Value::Record(fields) => fields.iter().for_each(|(_, x)| inside(x, depth + 1)),
+                // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
+                Value::Variant { args, .. } => match args.as_slice() {
+                    [r @ Value::Record(_)] => inside(r, depth),
+                    args => args.iter().for_each(|x| inside(x, depth + 1)),
+                },
+                _ => {}
+            }
+            if count > MAX_VALUES {
+                return self.count_all(values);
+            }
+        }
+        if deep {
+            return Err((Code::NestingTooDeep, format!("value nested deeper than {max} levels")));
+        }
+        self.max_steps = STEPS_PER_VALUE.saturating_mul(count).saturating_add(1024);
+        Ok(())
+    }
+
+    /// [`Walker::budget`] for more than 64 Mi values: every value counted
+    /// on its own, in order, failing at the first problem.
+    #[cold]
+    fn count_all(&mut self, values: &[Value]) -> Result<(), (Code, String)> {
         let max = self.limits.max_depth;
         let mut count = 0usize;
         let mut stack: Vec<(&Value, usize)> = values.iter().map(|v| (v, 0)).collect();
@@ -372,7 +425,7 @@ impl<'s> Walker<'s> {
             self.issues.push(Issue {
                 span,
                 fix: fix.map(String::into_boxed_str),
-                ..Issue::new(severity, code, message, self.path.clone())
+                ..Issue::new(severity, code, message, self.path.iter().map(Step::segment).collect())
             });
         }
     }
@@ -447,7 +500,7 @@ impl<'s> Walker<'s> {
     }
 
     /// `f` on a child value at `segment`, one level deeper.
-    fn child<T>(&mut self, segment: Segment, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
+    fn child<T>(&mut self, segment: Step<'v>, f: impl FnOnce(&mut Self) -> Option<T>) -> Option<T> {
         self.path.push(segment);
         let out = match self.depth >= self.limits.max_depth {
             true => self.fatal(Code::NestingTooDeep, format!("nesting deeper than {} levels", self.limits.max_depth)),
@@ -471,7 +524,7 @@ impl<'s> Walker<'s> {
     }
 
     /// `v` with type `ty`: the value decoded (when decoding), or None after a problem.
-    fn value(&mut self, v: &Value, ty: &Type, loc: Loc) -> Option<Value> {
+    fn value(&mut self, v: &'v Value, ty: &Type, loc: Loc) -> Option<Value> {
         if self.stopped() {
             return None;
         }
@@ -488,7 +541,7 @@ impl<'s> Walker<'s> {
                     let out: Vec<Option<Value>> = items
                         .iter()
                         .enumerate()
-                        .map(|(i, x)| self.child(Segment::Index(i), |w| w.value(x, item, item_of(loc, i))))
+                        .map(|(i, x)| self.child(Step::Index(i), |w| w.value(x, item, item_of(loc, i))))
                         .collect();
                     out.into_iter().collect::<Option<Vec<_>>>().map(|xs| self.out(|| Value::Array(xs)))
                 }
@@ -501,7 +554,7 @@ impl<'s> Walker<'s> {
                         .enumerate()
                         .map(|(i, (k, x))| {
                             let at = field_of(loc, i).map(|(_, n)| n);
-                            self.child(Segment::Field(k.clone()), |w| w.value(x, value, at)).map(|x| (k.clone(), x))
+                            self.child(Step::Field(k), |w| w.value(x, value, at)).map(|x| (k.clone(), x))
                         })
                         .collect();
                     out.into_iter().collect::<Option<Vec<_>>>().map(|fs| self.out(|| Value::Record(fs)))
@@ -511,7 +564,7 @@ impl<'s> Walker<'s> {
             Type::Maybe(item) => match v {
                 Value::Variant { tag, args } if tag == "None" && args.is_empty() => Some(self.keep(v)),
                 Value::Variant { tag, args } if tag == "Some" && args.len() == 1 => {
-                    let x = self.child(Segment::Index(0), |w| w.value(&args[0], item, item_of(loc, 0)))?;
+                    let x = self.child(Step::Index(0), |w| w.value(&args[0], item, item_of(loc, 0)))?;
                     Some(self.out(|| haus::ser::variant("Some", vec![x])))
                 }
                 _ => {
@@ -558,7 +611,7 @@ impl<'s> Walker<'s> {
     /// Check what's inside, then replace whatever was found there (messages
     /// quote values, keys and tags of the data, and paths may name keys) by
     /// one error at the secret, with its type only.
-    fn secret(&mut self, v: &Value, item: &Type, loc: Loc) -> Option<Value> {
+    fn secret(&mut self, v: &'v Value, item: &Type, loc: Loc) -> Option<Value> {
         let before = self.issues.len();
         let out = self.value(v, item, loc);
         let inside: Vec<Issue> = self.issues.drain(before..).collect();
@@ -588,6 +641,9 @@ impl<'s> Walker<'s> {
                 self.wrong_payload(message, fix, loc)
             }
             (Builtin::Bool, Value::Variant { .. }) => self.mismatch_as(not_case(v, &["True", "False"]), v, ty, loc),
+            (Builtin::Float64 | Builtin::Float32, Value::Number(text)) if self.spelled(b, text) => {
+                Some(self.out(|| Value::Number(text.clone())))
+            }
             (Builtin::Float64, Value::Number(text)) => self.float(text.parse::<f64>(), text, name, v, ty, loc),
             (Builtin::Float32, Value::Number(text)) => self.float(text.parse::<f32>(), text, name, v, ty, loc),
             (Builtin::Decimal, Value::Number(text)) => match Encoder::new(&self.limits).number(text) {
@@ -619,6 +675,14 @@ impl<'s> Walker<'s> {
         self.error(Code::NotAnInteger, format!("expected a whole number ({name}), found {}", short(text)), loc)
     }
 
+    /// Whether `text` is already the one spelling (spec §15) of the float of
+    /// type `b` it reads as, within the number limit: then it is decoded as
+    /// it is, without reading and writing the float (see [`spelled`]).
+    fn spelled(&self, b: Builtin, text: &str) -> bool {
+        let digits = if b == Builtin::Float64 { f64::DIGITS } else { f32::DIGITS };
+        text.len() <= self.limits.max_number_length && spelled(text, digits as usize)
+    }
+
     /// A float: the nearest value of the type, written in its one spelling (spec §15).
     fn float<F: Encode + FloatLike>(
         &mut self,
@@ -645,8 +709,8 @@ impl<'s> Walker<'s> {
     /// A raw value kept as it is (an `Any`, an unknown tag): one a writer
     /// takes, within the limits (spec §9.8).
     fn raw(&mut self, v: &Value, loc: Loc) -> Option<Value> {
-        match Encoder::new(&self.limits).value(v) {
-            Ok(_) => Some(self.keep(v)),
+        match Encoder::new(&self.limits).check(v) {
+            Ok(()) => Some(self.keep(v)),
             Err(e) => self.encode_error(e, loc),
         }
     }
@@ -675,20 +739,42 @@ impl<'s> Walker<'s> {
                     true => reason.replacen(&format!("{s:?}"), &json_quote(&shorten(s, 40)), 1),
                     false => reason,
                 };
-                self.child(Segment::Index(0), |w| w.error::<Value>(Code::InvalidTime, reason, item_of(loc, 0)));
+                self.child(Step::Index(0), |w| w.error::<Value>(Code::InvalidTime, reason, item_of(loc, 0)));
                 None
             }
         }
     }
 
-    fn record(&mut self, fields: &[(String, Value)], r: &Record, loc: Loc) -> Option<Value> {
-        let present: HashSet<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
-        let missing: Vec<String> = r
-            .fields
-            .iter()
-            .filter(|f| !f.optional && !present.contains(f.key.as_str()))
-            .map(|f| quote_key(&f.key))
-            .collect();
+    fn record(&mut self, fields: &'v [(String, Value)], r: &Record, loc: Loc) -> Option<Value> {
+        // Where each field is in the type, and which of the type's fields
+        // are there, above the outer records'.
+        let (at, places) = (self.present.len(), self.places.len());
+        self.present.resize(at + r.fields.len(), false);
+        for (k, _) in fields {
+            let place = r.position(k);
+            if let Some(i) = place {
+                self.present[at + i] = true;
+            }
+            self.places.push(place.unwrap_or(NOT_LISTED));
+        }
+        let out = self.record_fields(fields, r, (at, places), loc);
+        self.present.truncate(at);
+        self.places.truncate(places);
+        out
+    }
+
+    /// [`Walker::record`], with which of `r`'s fields are there at `at` in
+    /// `present`, and the places of the value's fields at `places` in `places`.
+    fn record_fields(
+        &mut self,
+        fields: &'v [(String, Value)],
+        r: &Record,
+        (at, places): (usize, usize),
+        loc: Loc,
+    ) -> Option<Value> {
+        let present = |w: &Self, i: usize| w.present[at + r.found(i)];
+        let missing: Vec<String> =
+            r.required().iter().filter(|&&i| !present(self, i)).map(|&i| quote_key(&r.fields[i].key)).collect();
         let mut ok = true;
         if !missing.is_empty() {
             let s = if missing.len() > 1 { "s" } else { "" };
@@ -696,31 +782,32 @@ impl<'s> Walker<'s> {
             self.report(Severity::Error, Code::MissingField, format!("missing field{s} {}", missing.join(", ")), start);
             ok = false;
         }
-        let mut out = vec![];
+        let mut out = Vec::with_capacity(fields.len());
         for (i, (key, x)) in fields.iter().enumerate() {
             if self.stopped() {
                 return None;
             }
             let at = field_of(loc, i);
             let key_span = at.map(|((s, e), _)| *s..*e).or_else(|| span(loc));
-            match r.field(key) {
+            match r.fields.get(self.places[places + i]) {
                 Some(f) => {
                     if let Some(d) = &f.deprecated {
                         // At the field's value, as `unlisted-field` is (spec §14).
-                        self.path.push(Segment::Field(key.clone()));
+                        self.path.push(Step::Field(key));
                         self.report(Severity::Hint, Code::Deprecated, d.note(&quote_key(key)), key_span);
                         self.path.pop();
                     }
-                    match self.child(Segment::Field(key.clone()), |w| w.value(x, &f.ty, at.map(|(_, n)| n))) {
+                    match self.child(Step::Field(key), |w| w.value(x, &f.ty, at.map(|(_, n)| n))) {
                         Some(x) => out.push((key.clone(), x)),
                         None => ok = false,
                     }
                 }
                 None if self.decoding() && !r.closed => {}
                 None => {
-                    let unused = r.fields.iter().map(|f| f.key.as_str()).filter(|k| !present.contains(k));
+                    let unused =
+                        (r.fields.iter().enumerate()).filter(|&(i, _)| !present(self, i)).map(|(_, f)| f.key.as_str());
                     let hint = suggest(key, unused);
-                    self.path.push(Segment::Field(key.clone()));
+                    self.path.push(Step::Field(key));
                     if r.closed {
                         self.report(
                             Severity::Error,
@@ -740,7 +827,7 @@ impl<'s> Walker<'s> {
         ok.then(|| self.out(|| Value::Record(out)))
     }
 
-    fn variant(&mut self, v: &Value, var: &Variant, ty: &Type, loc: Loc) -> Option<Value> {
+    fn variant(&mut self, v: &'v Value, var: &Variant, ty: &Type, loc: Loc) -> Option<Value> {
         let Value::Variant { tag, args } = v else { return self.mismatch(v, ty, loc) };
         let tag_span = loc.map(|n| n.start..n.tag_end);
         let Some(case) = var.case(tag) else {
@@ -777,7 +864,7 @@ impl<'s> Walker<'s> {
         self.wrong_payload(format!("{tag} takes one argument, a record; found {got}"), fix, loc)
     }
 
-    fn payload(&mut self, tag: &str, args: &[Value], case: &Case, loc: Loc) -> Option<Value> {
+    fn payload(&mut self, tag: &str, args: &'v [Value], case: &Case, loc: Loc) -> Option<Value> {
         match &case.payload {
             Payload::None if args.is_empty() => Some(self.out(|| haus::ser::variant(tag, vec![]))),
             Payload::None => {
@@ -814,10 +901,36 @@ impl<'s> Walker<'s> {
                     .iter()
                     .zip(items)
                     .enumerate()
-                    .map(|(i, (x, t))| self.child(Segment::Index(i), |w| w.value(x, t, item_of(loc, i))))
+                    .map(|(i, (x, t))| self.child(Step::Index(i), |w| w.value(x, t, item_of(loc, i))))
                     .collect();
                 out.into_iter().collect::<Option<Vec<_>>>().map(|xs| self.out(|| haus::ser::variant(tag, xs)))
             }
+        }
+    }
+}
+
+/// Whether a value has values inside it: an array, a record, or a variant
+/// with a payload.
+fn is_container(v: &Value) -> bool {
+    match v {
+        Value::Array(_) | Value::Record(_) => true,
+        Value::Variant { args, .. } => !args.is_empty(),
+        _ => false,
+    }
+}
+
+/// One step into a value, borrowing its key: a [`Segment`] once an issue has it.
+#[derive(Debug, Clone, Copy)]
+enum Step<'v> {
+    Field(&'v str),
+    Index(usize),
+}
+
+impl Step<'_> {
+    fn segment(&self) -> Segment {
+        match *self {
+            Step::Field(k) => Segment::Field(k.to_owned()),
+            Step::Index(i) => Segment::Index(i),
         }
     }
 }
@@ -880,6 +993,37 @@ fn whole(text: &str) -> Option<&str> {
     let digits = text.strip_prefix('-').unwrap_or(text);
     let is_whole = !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit());
     is_whole.then_some(if digits.bytes().all(|c| c == b'0') { "0" } else { text })
+}
+
+/// Whether the number literal `text` is the one spelling (spec §15) of the
+/// float it reads as, for a float type whose values keep `digits`
+/// significant decimal digits (15 for Float64, 6 for Float32): a decimal
+/// without exponent, `-?(0|[1-9][0-9]*)(.[0-9]*[1-9])?`, with at most
+/// `digits` significant digits and at most five zeros after `0.`. No other
+/// decimal of as few digits reads as the same float (two decimals of
+/// `digits` digits never do), so these are its shortest digits, and
+/// JavaScript's layout writes them as they are here.
+fn spelled(text: &str, digits: usize) -> bool {
+    let unsigned = text.strip_prefix('-').unwrap_or(text);
+    let (int, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let int_ok = int == "0" || (int.starts_with(|c: char| ('1'..='9').contains(&c)) && is_digits(int));
+    let fraction_ok =
+        (fraction.is_empty() && !unsigned.ends_with('.')) || (is_digits(fraction) && !fraction.ends_with('0'));
+    let significant = match int {
+        "0" => {
+            let zeros = fraction.len() - fraction.trim_start_matches('0').len();
+            if zeros > 5 {
+                return false;
+            }
+            fraction.len() - zeros
+        }
+        _ => int.len() + fraction.len(),
+    };
+    int_ok && fraction_ok && significant <= digits
+}
+
+fn is_digits(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit())
 }
 
 /// At most `n` characters of `text`, then `…`.
@@ -969,4 +1113,71 @@ fn suggest<'a>(word: &str, candidates: impl Iterator<Item = &'a str>) -> String 
         }
     }
     best.map_or(String::new(), |(c, _)| format!(" Did you mean {c}?"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spelled;
+    use haus::{Encode, EncodeError, Value};
+
+    /// Decimals of up to 17 digits before the point and 19 after, from a
+    /// fixed sequence (xorshift), with many zeros and nines.
+    fn literals() -> impl Iterator<Item = String> {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        let digits = |next: &mut dyn FnMut(u64) -> u64, n: u64| -> String {
+            (0..n)
+                .map(|_| match next(4) {
+                    0 => '0',
+                    1 => '9',
+                    _ => char::from(b'0' + next(10) as u8),
+                })
+                .collect()
+        };
+        std::iter::repeat_with(move || {
+            let n = next(18);
+            let int = digits(&mut next, n);
+            let int = match int.trim_start_matches('0') {
+                "" => "0",
+                d => d,
+            }
+            .to_owned();
+            let n = next(20);
+            let fraction = digits(&mut next, n);
+            let sign = if next(3) == 0 { "-" } else { "" };
+            match fraction.is_empty() {
+                true => format!("{sign}{int}"),
+                false => format!("{sign}{int}.{fraction}"),
+            }
+        })
+    }
+
+    /// The literals `spelled` takes are what reading and writing the float gives.
+    #[test]
+    fn spelled_floats_are_written_as_they_are() {
+        let written = |v: Result<Value, EncodeError>| v.ok().map(|v| haus::canonical(&v));
+        let (mut f64s, mut f32s) = (0, 0);
+        for text in literals().take(400_000) {
+            if spelled(&text, 15) {
+                assert_eq!(written(text.parse::<f64>().unwrap().encode()), Some(text.clone()), "Float64 {text}");
+                f64s += 1;
+            }
+            if spelled(&text, 6) {
+                assert_eq!(written(text.parse::<f32>().unwrap().encode()), Some(text.clone()), "Float32 {text}");
+                f32s += 1;
+            }
+        }
+        assert!(f64s > 20_000 && f32s > 5_000, "{f64s} {f32s}");
+        for text in ["0", "-0", "0.5", "-61.68", "0.000001", "123456789012345", "999999"] {
+            assert!(spelled(text, 15), "{text}");
+        }
+        for text in ["1.0", "0.0000001", "1234567890123456", "01", "1e5", "0.", ".5", "-", ""] {
+            assert!(!spelled(text, 15), "{text}");
+        }
+    }
 }

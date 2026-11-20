@@ -40,6 +40,7 @@ mod error_codes;
 mod float;
 mod formatter;
 pub mod json;
+mod keys;
 mod parser;
 mod secret;
 pub mod ser;
@@ -113,7 +114,10 @@ pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
 /// [`to_string`], for a reader with `limits`: the value must be within them,
 /// integers included, which are written in decimal.
 pub fn to_string_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
-    ser::write_with(&value.encode_with(Encoder::new(limits))?, limits)
+    match value.as_value() {
+        Some(v) => ser::write_value(v, limits, true),
+        None => ser::write_with(&value.encode_with(Encoder::new(limits))?, limits),
+    }
 }
 
 /// Write one value on one line in the minimised layout (spec §11): the
@@ -130,7 +134,10 @@ pub fn to_string_minimised<T: Encode + ?Sized>(value: &T) -> Result<String, Enco
 
 /// [`to_string_minimised`], for a reader with `limits` (see [`to_string_with`]).
 pub fn to_string_minimised_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
-    ser::write_minimised_with(&value.encode_with(Encoder::new(limits))?, limits)
+    match value.as_value() {
+        Some(v) => ser::write_value(v, limits, false),
+        None => ser::write_minimised_with(&value.encode_with(Encoder::new(limits))?, limits),
+    }
 }
 
 /// Write a stream: one value per line, each followed by `,`. Errors say which value: `[3].total: …`.
