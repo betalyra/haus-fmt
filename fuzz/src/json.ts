@@ -27,7 +27,7 @@ import {
   anyJ, badEnvelopeJ, badHausValueJ, envelope, hausJsonJ, hausValueJ, mutateJ, nested, normJ, NOT_JSON, Obj, parseJ, PlainGen, single, smallerJ, textOf, wrongJ, writeJ, type J,
 } from "./json-gen.ts"
 import {
-  caseBytes, caseLine, effectRunner, go, lean, MODES, python, roc, rust, typed, typescriptRunner, writes, type JsonCase, type JsonRunner, type Mode,
+  caseBytes, caseLine, effectRunner, go, jvm, lean, MODES, python, roc, rust, typed, typescriptRunner, writes, type JsonCase, type JsonRunner, type Mode,
 } from "./json-runners.ts"
 import { shrinkCase } from "./schema.ts"
 import { Generator, type Env, type Type } from "./schema-gen.ts"
@@ -35,7 +35,7 @@ import { schemaTexts, type Outcome } from "./schema-runners.ts"
 
 const root = new URL("../..", import.meta.url).pathname
 const SCHEMA_DIRS = [join(root, "test-suite/schema"), join(root, "fuzz/schema"), join(root, "test-suite/json"), join(root, "fuzz/json")]
-const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "roc", "python", "go"]
+const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "roc", "python", "go", "jvm"]
 
 export async function run(argv: readonly string[]): Promise<number> {
   const { values: args } = parseArgs({
@@ -93,13 +93,16 @@ export async function run(argv: readonly string[]): Promise<number> {
     else if (name === "roc") runners.push(roc())
     else if (name === "python") runners.push(python())
     else if (name === "go") runners.push(go())
+    else if (name === "jvm") runners.push(jvm())
     else throw new Error(`unknown runner ${name} (${ALL_RUNNERS.join(", ")})`)
   }
 
+  /** The runners of a mode: lean first, then the others that run it. */
+  const runnersFor = (mode: Mode) => runners.filter((r) => r.modes?.includes(mode) ?? true)
   /** Every runner's outcome for each case: written JSON is compared as data. */
   const runAll = (mode: Mode, cases: readonly JsonCase[]): Outcome[][] => {
     const file = join(out, "cases.txt")
-    const byRunner = runners.map((r) => r.run(mode, file, cases))
+    const byRunner = runnersFor(mode).map((r) => r.run(mode, file, cases))
     return cases.map((_, i) => byRunner.map((rs) => rs[i]!))
   }
 
@@ -284,7 +287,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       `DISAGREEMENT ${key} (${f.hits} cases; shrunk)`,
       `  case: ${f.case.mode} ${typedKey(f.case)} ${f.case.bytes ? `bytes ${Buffer.from(f.case.bytes).toString("hex")}` : JSON.stringify(f.case.text)}`,
       `  line: ${caseLine(f.case)}`,
-      ...f.outcomes.map((o, i) => `  ${runners[i]!.name.padEnd(10)} ${o.kind === "ok" ? `ok ${o.text.slice(0, 600)}` : `${o.kind} ${o.kind === "err" && o.code !== undefined ? `[${o.code} at ${o.place}] ` : ""}${o.reason.slice(0, 300)}`}`),
+      ...f.outcomes.map((o, i) => `  ${runnersFor(f.case.mode)[i]!.name.padEnd(10)} ${o.kind === "ok" ? `ok ${o.text.slice(0, 600)}` : `${o.kind} ${o.kind === "err" && o.code !== undefined ? `[${o.code} at ${o.place}] ` : ""}${o.reason.slice(0, 300)}`}`),
     ]
     report.push(lines.join("\n"))
     console.log("\n" + lines.join("\n"))

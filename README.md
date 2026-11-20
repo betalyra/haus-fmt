@@ -69,6 +69,7 @@ The documentation lives at [haus-fmt.org/docs](https://haus-fmt.org/docs):
 | [`python/`](python) | Parser, streams, canonical form and hashing |
 | [`go/`](go) | Parser, formatter, streams, canonical form and hashing, JSON, schemas and checks, the official profiles' codecs, examples |
 | [`swift/`](swift) | Parser, formatter, streams, canonical form and hashing |
+| [`jvm/`](jvm) | Java core and Kotlin wrapper (JVM, Android): parser, formatter, streams, canonical form, hashing, JSON |
 | [`extensions/`](extensions) | Official schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) |
 | [`editors/vscode/`](editors/vscode) | The VS Code extension |
 | [`fuzz/`](fuzz) | Differential fuzzing of all implementations against each other and `haus-ref` |
@@ -84,6 +85,7 @@ cd roc/package && roc test ConformanceTest.roc    # Roc conformance suite (also 
 cd python && uv run pytest                        # Python
 cd go && go test ./...                            # Go
 cd swift && swift test                            # Swift
+cd jvm && ./gradlew build                         # Java and Kotlin
 cd spec/lean && lake build --wfail                # the proofs and haus-ref
 ```
 

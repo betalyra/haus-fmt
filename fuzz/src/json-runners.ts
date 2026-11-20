@@ -43,6 +43,8 @@ export interface JsonCase {
 
 export interface JsonRunner {
   readonly name: string
+  /** The modes it runs, if not all: a binding without schemas runs only the modes without a type. */
+  readonly modes?: readonly Mode[]
   run(mode: Mode, file: string, cases: readonly JsonCase[]): Outcome[]
 }
 
@@ -92,6 +94,11 @@ export const roc = () => external("roc", (mode, file) => [join(root, "fuzz/.buil
 export const python = () =>
   external("python", (mode, file) => [join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/json_runner.py"), mode, file]], true)
 export const go = () => external("go", (mode, file) => [join(root, "fuzz/.build/go-runner"), ["--json", mode, file]], true)
+/** The JVM runner: self-describing JSON and the import (its schemas come later). */
+export const jvm = (): JsonRunner => ({
+  ...external("jvm", (mode, file) => [join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--json", mode, file]], true),
+  modes: MODES.filter((m) => !typed(m)),
+})
 
 // ── in this process ──────────────────────────────────────────
 
