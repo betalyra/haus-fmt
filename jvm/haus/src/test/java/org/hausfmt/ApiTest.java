@@ -138,7 +138,9 @@ class ApiTest {
     }
     Value deepestValue = v;
     assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Value.array(deepestValue)));
-    assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Haus.write(deepestValue)));
+    // A configured depth below the value's depth is reported by the writers.
+    FormatOptions shallower = FormatOptions.of(Layout.COMPACT).withLimits(Limits.DEFAULT.withMaxDepth(Limits.MAX_SUPPORTED_DEPTH - 1));
+    assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Haus.write(deepestValue, shallower)));
   }
 
   @Test
