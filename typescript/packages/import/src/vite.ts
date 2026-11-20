@@ -5,6 +5,7 @@
  *   import haus from "@haus-fmt/import/vite"
  *   export default { plugins: [haus({ target: "effect" })] }
  *   export default { plugins: [haus({ packages: ["vendor/money"], folders: ["schemas"] })] }   // relative to Vite's root
+ *   export default { plugins: [haus({ optimize: { "src/github.schema.haus": ["Issue"] } })] }  // Issue optimized, code built ahead
  *
  * Use the same target as in tsconfig.json, so the types match the values.
  * Data without a schema is baked into the bundle as JS values, so no haus
@@ -14,11 +15,13 @@
  */
 import type { Plugin } from "vite"
 import { readFileSync } from "node:fs"
-import { backend, moduleFor, packagesOf, targetOf, type Backend, type ImportOptions } from "./generate.js"
+import { backend, moduleFor, optimizeOf, packagesOf, targetOf, type Backend, type ImportOptions } from "./generate.js"
 
 export default function haus(options: ImportOptions = {}): Plugin {
   const target = targetOf(options)
-  packagesOf(options, process.cwd()) // the options' shape, checked now
+  // The options' shape, checked now.
+  packagesOf(options, process.cwd())
+  optimizeOf(options, process.cwd())
   let root = process.cwd()
   let b: Promise<Backend> | undefined
   return {
@@ -31,7 +34,7 @@ export default function haus(options: ImportOptions = {}): Plugin {
     async load(id) {
       const path = id.split("?")[0]!
       if (!path.endsWith(".haus")) return null
-      b ??= backend(target, packagesOf(options, root))
+      b ??= backend(target, packagesOf(options, root), optimizeOf(options, root))
       const { code, files } = moduleFor(readFileSync(path, "utf8"), path, await b, (p) => `@haus-fmt/import/${p}`)
       for (const f of files) this.addWatchFile(f)
       return { code, map: null }

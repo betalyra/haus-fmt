@@ -145,24 +145,27 @@ export function typescriptRunner(texts: ReadonlyMap<string, string>): SchemaRunn
  * `h.stringify` (minimised) of the result, on the generic path, checked
  * against the closures (codec.ts), generated code made at runtime, and code
  * generated ahead of time by @haus-fmt/import (each suite file built into a
- * module and loaded, codegen.ts `prebuilt`), in this process (codec.ts here),
- * on the case and on texts and values near it: a difference is a crash. The
+ * module with `optimize` for all its types and loaded, codegen.ts `prebuilt`,
+ * which marks them as `h.optimize` does), in this process (codec.ts here), on
+ * the case and on texts and values near it: a difference is a crash. The
  * generic path's outcome is compared with Lean's, as for the other runners.
  */
 export async function codecRunner(texts: ReadonlyMap<string, string>, dirs: readonly string[], out: string): Promise<SchemaRunner> {
   const compiled = new Map([...texts].map(([s, t]) => [s, compileSchemaFile(t).schemas as Record<string, h.Schema<unknown>>]))
-  // Each schema file as @haus-fmt/import builds it for the plain target, codecs generated ahead.
+  // Each schema file as @haus-fmt/import builds it for the plain target, codecs generated ahead for every type.
   const dist = join(root, "typescript/packages/import/dist")
-  const { backend, moduleFor } = await import(pathToFileURL(join(dist, "generate.js")).href)
-  const plain = await backend("plain")
+  const { backend, moduleFor, optimizeOf } = await import(pathToFileURL(join(dist, "generate.js")).href)
   const built = new Map<string, Record<string, h.Schema<unknown>>>()
   for (const dir of dirs) {
     for (const f of readdirSync(dir).filter((f) => f.endsWith(".schema.haus"))) {
       const path = join(dir, f)
-      const { code } = moduleFor(readFileSync(path, "utf8"), path, plain, (p: string) => pathToFileURL(join(dist, `${p}.js`)).href)
+      const text = readFileSync(path, "utf8")
+      const plain = await backend("plain", {}, optimizeOf({ optimize: { [f]: Object.keys(compileSchemaFile(text).schemas) } }, dir))
+      const { code } = moduleFor(text, path, plain, (p: string) => pathToFileURL(join(dist, `${p}.js`)).href)
       if (!code.includes("prebuilt(schema, ")) throw new Error(`${f}: @haus-fmt/import generated no codecs`)
       const file = join(out, `built-${f}.mjs`)
       writeFileSync(file, code)
+      // Every type is listed, so the module marks each as h.optimize does.
       built.set(f.replace(".schema.haus", ""), await import(pathToFileURL(file).href))
     }
   }

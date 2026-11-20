@@ -4,17 +4,17 @@
  *   node --import @haus-fmt/import/register main.ts           (target "plain")
  *   node --import @haus-fmt/import/register/effect main.ts    (target "effect")
  *
- * or, with options, from your own register file: `await register({ target: "effect", packages: ["vendor/money"] })`
- * (paths relative to the working directory).
+ * or, with options, from your own register file: `await register({ target: "effect", packages: ["vendor/money"] })`,
+ * `await register({ optimize: { "src/github.schema.haus": ["Issue"] } })` (paths relative to the working directory).
  * Use the same target as in tsconfig.json, so the types match the values.
  */
 import { readFileSync } from "node:fs"
 import { registerHooks } from "node:module"
 import { fileURLToPath } from "node:url"
-import { backend, moduleFor, packagesOf, targetOf, type ImportOptions } from "./generate.js"
+import { backend, moduleFor, optimizeOf, packagesOf, targetOf, type ImportOptions } from "./generate.js"
 
 export async function register(options: ImportOptions = {}): Promise<void> {
-  const b = await backend(targetOf(options), packagesOf(options, process.cwd()))
+  const b = await backend(targetOf(options), packagesOf(options, process.cwd()), optimizeOf(options, process.cwd()))
   const importRuntime = (path: string) => import.meta.resolve(`./${path}.js`)
   registerHooks({
     load(url, context, nextLoad) {

@@ -9,7 +9,7 @@
  * path) only where there is an error.
  */
 import { decodeCompiled, encodeCompiled } from "../../typescript/packages/haus/dist/codec.js"
-import { generatedOrigin, readerFor, writerFor } from "../../typescript/packages/haus/dist/codegen.js"
+import { generatedOrigin, readerFor, withCodec, writerFor } from "../../typescript/packages/haus/dist/codegen.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 import { Secret } from "../../typescript/packages/haus/dist/secret.js"
 
@@ -132,15 +132,15 @@ export const codecStats = { decodes: 0, encodes: 0, compiledDecodes: 0, compiled
 
 /**
  * A type's schemas to check: `schema` from compileSchemaFile, and `built`,
- * the same type from a module @haus-fmt/import generated (its codecs built
- * ahead, `prebuilt`).
+ * the same type from a module @haus-fmt/import generated with `optimize`
+ * for every type (its codecs built ahead, `prebuilt`), which marks them as `h.optimize` does.
  */
 export interface Schemas {
   readonly schema: h.AnySchema
   readonly built: h.AnySchema
 }
 
-/** The compiled codecs checked against the generic path: generated (`new Function`), closures, and generated ahead of time (by default, as users get them). */
+/** The compiled codecs checked against the generic path: generated (`new Function`), closures, and generated ahead of time (by default for a type listed in `optimize`, as users get them). */
 const paths = (s: Schemas) => [
   { name: "generated", schema: s.schema, codec: "generated" },
   { name: "closures", schema: s.schema, codec: "closures" },
@@ -148,10 +148,10 @@ const paths = (s: Schemas) => [
 ] as const
 
 const decodeAll = (s: Schemas, text: string): { readonly generic: Outcome; readonly problem?: string } => {
-  const generic = outcome(() => h.parse(s.schema, text, { codec: "generic" }))
+  const generic = outcome(() => h.parse(s.schema, text, withCodec({}, "generic")))
   codecStats.decodes++
   for (const path of paths(s)) {
-    const d = differ(outcome(() => h.parse(path.schema, text, { codec: path.codec })), generic)
+    const d = differ(outcome(() => h.parse(path.schema, text, withCodec({}, path.codec))), generic)
     if (d !== undefined) return { generic, problem: `decoding ${JSON.stringify(text.slice(0, 200))} (${path.name}): ${d}` }
     const read = readerFor(path.schema, path.codec)
     if (generic.ok && read !== undefined) {
@@ -167,11 +167,11 @@ const decodeAll = (s: Schemas, text: string): { readonly generic: Outcome; reado
 const encodeAll = (s: Schemas, value: unknown): { readonly generic: Outcome; readonly problem?: string } => {
   let first: Outcome | undefined
   for (const style of ["minimised", "compact"] as const) {
-    const generic = outcome(() => h.stringify(s.schema, value, { style, codec: "generic" }))
+    const generic = outcome(() => h.stringify(s.schema, value, withCodec({ style }, "generic")))
     codecStats.encodes++
     first ??= generic
     for (const path of paths(s)) {
-      const d = differ(outcome(() => h.stringify(path.schema, value, { style, codec: path.codec })), generic)
+      const d = differ(outcome(() => h.stringify(path.schema, value, withCodec({ style }, path.codec))), generic)
       if (d !== undefined) return { generic, problem: `encoding (${style}, ${path.name}): ${d}` }
       const write = writerFor(path.schema, path.codec)
       if (generic.ok && write !== undefined) {

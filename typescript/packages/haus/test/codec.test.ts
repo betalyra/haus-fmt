@@ -15,7 +15,7 @@ import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { compileSchemaFile, parse, stringify as stringifyValue, type Value } from "../src/index.js"
 import { decodeCompiled, encodeCompiled } from "../src/codec.js"
-import { readerFor, writerFor, type CodecChoice } from "../src/codegen.js"
+import { generatedOrigin, readerFor, withCodec, writerFor, type CodecChoice } from "../src/codegen.js"
 import * as h from "../src/schema.js"
 import { schemaCases } from "./schema-conformance.test.js"
 
@@ -72,10 +72,10 @@ const errorView = (e: unknown) =>
 const COMPILED = ["generated", "closures"] as const
 
 /** Generated code, closures and the generic path give the same outcome. */
-const expectSame = (run: (options: { readonly codec: CodecChoice }) => unknown): Outcome => {
-  const generic = outcome(() => run({ codec: "generic" }))
+const expectSame = (run: (codec: CodecChoice) => unknown): Outcome => {
+  const generic = outcome(() => run("generic"))
   for (const codec of COMPILED) {
-    const compiled = outcome(() => run({ codec }))
+    const compiled = outcome(() => run(codec))
     if (compiled.ok && generic.ok) expect(difference(compiled.value, generic.value), codec).toBeUndefined()
     else {
       expect(compiled.ok, compiled.ok ? `${codec}: succeeded where the generic path failed` : "").toBe(false)
@@ -92,7 +92,7 @@ const expectSame = (run: (options: { readonly codec: CodecChoice }) => unknown):
  * slow): giving up is for errors only.
  */
 const decodeSame = (schema: h.AnySchema, text: string, limits: h.Limits = {}): Outcome => {
-  const generic = expectSame((o) => h.parse(schema, text, { ...limits, ...o }))
+  const generic = expectSame((c) => h.parse(schema, text, withCodec(limits, c)))
   for (const codec of COMPILED) {
     const read = readerFor(schema, codec)
     if (generic.ok && read !== undefined) expect(decodeCompiled(read, text, limits), `${codec}: the reader gave up on ${text}`).toBeDefined()
@@ -103,12 +103,12 @@ const decodeSame = (schema: h.AnySchema, text: string, limits: h.Limits = {}): O
 /** Encoding `value`: the same outcome on every path, and the compiled writers don't give up on what the generic path writes. */
 const encodeSame = (schema: h.AnySchema, value: unknown, limits: h.Limits = {}): void => {
   for (const style of ["compact", "minimised"] as const) {
-    const generic = expectSame((o) => h.stringify(schema, value, { style, ...limits, ...o }))
+    const generic = expectSame((c) => h.stringify(schema, value, withCodec({ style, ...limits }, c)))
     for (const codec of COMPILED) {
       const write = writerFor(schema, codec)
       if (generic.ok && write !== undefined) expect(encodeCompiled(write, value, limits, style), `${codec}: the writer gave up`).toBeDefined()
     }
-    expectSame((o) => h.formatAll(schema, [value, value], { style, ...limits, ...o }))
+    expectSame((c) => h.formatAll(schema, [value, value], withCodec({ style, ...limits }, c)))
   }
 }
 
@@ -339,12 +339,32 @@ describe("schemas in code", () => {
     encodeSame(Expr, hidden)
   })
 
+  it("records: optional fields first or absent, nested; fields in another order, extra, inherited, hidden or getters", () => {
+    const Inner = h.Record({ a: h.Optional(h.String), b: h.Int32, c: h.Optional(h.Maybe(h.Bool)) })
+    const Outer = h.Record({ x: h.Optional(h.Int32), inner: Inner, list: h.Array(Inner), m: h.Maybe(h.String) })
+    for (const text of ['{ inner: { b: 1 }, list: [{ b: 2 }, { a: "s", b: 3, c: Some(True) }], m: None }', '{ x: 1, inner: { c: None, b: 1, a: "z" }, list: [], m: Some("q") }']) {
+      const decoded = decodeSame(Outer, text)
+      expect(decoded.ok).toBe(true)
+      encodeSame(Outer, (decoded as { value: unknown }).value)
+    }
+    encodeSame(Inner, Object.assign(Object.create({ a: "inherited", c: h.Maybe.none }), { b: 1 }))
+    encodeSame(Inner, { c: h.Maybe.none, b: 1, a: "x" })
+    encodeSame(Inner, { b: 1, extra: 2, a: "x" })
+    encodeSame(Inner, Object.defineProperty({ b: 1 }, "a", { value: "hidden", enumerable: false }))
+    encodeSame(Inner, new (class { b = 1; get a() { return "got" } })())
+    const Cases = h.Variant({ R: Inner, N: h.Unit })
+    encodeSame(Cases, { _tag: "R", b: 1, a: "x" })
+    encodeSame(Cases, { b: 1, _tag: "R" })
+    encodeSame(Cases, Object.defineProperty({ _tag: "R", b: 1 }, "a", { value: "hidden", enumerable: false }))
+    encodeSame(Cases, Object.assign(Object.create({ a: "inherited" }), { _tag: "R", b: 1 }))
+  })
+
   it("a schema that is only itself fails on first use as it does on the generic path", () => {
     // Built ahead by the compiler, a failing build is tried again on the generic path. (Each path
     // gets its own schema: on both, a second use says "used while it is being built" instead.)
     const loop = () => h.Recursive<number>("Loop", (self) => self)
     const compiled = outcome(() => h.parse(loop(), "1"))
-    const generic = outcome(() => h.parse(loop(), "1", { codec: "generic" }))
+    const generic = outcome(() => h.parse(loop(), "1", withCodec({}, "generic")))
     expect(errorView((compiled as { error: unknown }).error)).toEqual(errorView((generic as { error: unknown }).error))
     expect(String((generic as { error: unknown }).error)).toContain("unguarded recursion")
     const Again = h.Recursive<unknown>("Again", (self) => h.Secret(self) as h.Schema<unknown>)
@@ -360,7 +380,7 @@ describe("decodeStream", () => {
     const chunks = Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size))
     const values: unknown[] = []
     try {
-      for await (const v of h.decodeStream(schema, chunks, { codec })) values.push(v)
+      for await (const v of h.decodeStream(schema, chunks, withCodec({}, codec))) values.push(v)
       return { values, error: undefined }
     } catch (e) {
       return { values, error: errorView(e) }
@@ -392,4 +412,35 @@ describe("decodeStream", () => {
 it("decoded Any values are the generic parser's", () => {
   const v = h.parse(h.Any, "Foo { a: [1, 2.50] }") as Value
   expect(v).toEqual(parse("Foo { a: [1, 2.50] }"))
+})
+
+describe("h.optimize", () => {
+  const text = '{ id: 1, tags: ["a", "b"], owner: { login: "ada" }, state: Open }'
+  const make = () => {
+    const { schemas } = compileSchemaFile("type Issue = { id: Int, tags: Array String, owner: User, state: < Open | Closed > }\ntype User = { login: String }\ntype Other = { n: Int }")
+    return schemas as Record<"Issue" | "User" | "Other", h.Schema<unknown>>
+  }
+
+  it("by default, no code is generated: the closures", () => {
+    const { Issue } = make()
+    h.stringify(Issue, h.parse(Issue, text), { style: "minimised" })
+    expect(generatedOrigin(Issue)).toBeUndefined()
+    expect(readerFor(Issue)).toBe(readerFor(Issue, "closures"))
+    expect(writerFor(Issue)).toBe(writerFor(Issue, "closures"))
+  })
+
+  it("marks the schema itself, once; generated code gives the same values and texts", () => {
+    const { Issue, Other } = make()
+    const closures = h.parse(Issue, text)
+    expect(h.optimize(Issue)).toBe(Issue)
+    expect(h.optimize(h.optimize(Issue))).toBe(Issue)
+    const optimized = h.parse(Issue, text)
+    expect(generatedOrigin(Issue)).toBe("new Function") // nothing built ahead here
+    expect(readerFor(Issue)).toBe(readerFor(Issue, "generated"))
+    expect(writerFor(Issue)).toBe(writerFor(Issue, "generated"))
+    expect(difference(optimized, closures)).toBeUndefined()
+    expect(h.stringify(Issue, optimized, { style: "compact" })).toBe(h.stringify(Issue, closures, withCodec({ style: "compact" }, "generic")))
+    h.parse(Other, "{ n: 1 }")
+    expect(generatedOrigin(Other)).toBeUndefined() // only what is marked
+  })
 })

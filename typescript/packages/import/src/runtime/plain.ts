@@ -17,12 +17,18 @@ export function compiled(text: string, modules: Modules, key: string, id: string
 }
 
 /**
- * The compiled codecs @haus-fmt/import generated for `schema`'s schemas when
- * it built the module (source with this hash): used at runtime once the
- * same source is generated again from the schemas, without `eval`.
+ * The generated codecs @haus-fmt/import built for the types `types` of
+ * `schema` when it built the module (`source`, made into `factory`). Those
+ * types are marked as by `h.optimize`, so the code is used, without `eval`,
+ * once the same source is generated again from the schemas; so is it for a
+ * type they reach that `h.optimize` marks.
  */
-export function prebuilt(schema: CompiledSchemaFile, hash: string, factory: Factory): void {
-  registerCodecs(schema.schemas, hash, factory)
+export function prebuilt(schema: CompiledSchemaFile, types: readonly string[], source: string, factory: Factory): void {
+  registerCodecs(schema.schemas, types, source, factory)
+  for (const t of types) {
+    const s = Object.hasOwn(schema.schemas, t) ? schema.schemas[t] : undefined
+    if (s !== undefined) h.optimize(s)
+  }
 }
 
 /** The place of a decode error's path inside a parsed value. */
