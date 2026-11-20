@@ -12,7 +12,7 @@ types. `Date("2026-02-30")` is just a tag with a string.
 
 from __future__ import annotations
 
-from ._canonical import Hasher, canonical, compare, equals, hash, hash_all
+from ._canonical import canonical, compare, equals, hash, hash_all
 from ._error_codes import ERROR_CODES, ErrorCategory, ErrorCode, ErrorInfo
 from ._errors import HausError, HausJsonError, HausLimitsError, HausSyntaxError, error_docs, is_error_code
 from ._json_api import (
@@ -39,7 +39,6 @@ __all__ = [
     "ErrorCategory",
     "ErrorCode",
     "ErrorInfo",
-    "Hasher",
     "HausError",
     "HausJsonError",
     "HausLimitsError",

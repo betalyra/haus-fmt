@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable, Mapping
-from typing import Self
 
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
@@ -112,46 +111,11 @@ def hash(value: Value) -> str:
     return hashlib.sha256(canonical(value).encode("utf-8")).hexdigest()
 
 
-class Hasher:
-    """Hashes a list of values as it grows, e.g. a stream while it is read (spec §12).
-
-    `digest()` gives `hash_all` of the values added so far, at any time.
-    Memory stays bounded by the largest value.
-
-        >>> import haus
-        >>> h = haus.Hasher()
-        >>> for v in haus.parse_all("1, 2,"):
-        ...     _ = h.add(v)
-        >>> h.digest() == haus.hash_all(haus.parse_all("1, 2"))
-        True
-    """
-
-    __slots__ = ("_empty", "_sha")
-
-    def __init__(self) -> None:
-        self._sha = hashlib.sha256()
-        self._empty = True
-
-    def add(self, value: Value) -> Self:
-        """Add the next value."""
-        if not self._empty:
-            self._sha.update(b",")
-        self._empty = False
-        self._sha.update(canonical(value).encode("utf-8"))
-        return self
-
-    def digest(self) -> str:
-        """`hash_all` of the values added so far, as 64 lowercase hex digits."""
-        return self._sha.copy().hexdigest()
-
-
 def hash_all(values: Iterable[Value]) -> str:
-    """The hash of a list of values, such as a whole file or stream (spec §12).
+    """The hash of a list of values, such as a whole file (spec §12).
 
     The SHA-256 digest of their canonical forms joined by `,`. A list of one
-    value hashes like the value: `hash_all([v]) == hash(v)`.
+    value hashes like the value: `hash_all([v]) == hash(v)`. The items of a
+    stream are hashed one by one with `hash`.
     """
-    hasher = Hasher()
-    for v in values:
-        hasher.add(v)
-    return hasher.digest()
+    return hashlib.sha256(",".join(map(canonical, values)).encode("utf-8")).hexdigest()

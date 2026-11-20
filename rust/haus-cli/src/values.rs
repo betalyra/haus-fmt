@@ -1,5 +1,7 @@
 //! `haus canonical` and `haus hash` (spec §12), on a stream: values are
-//! handled as they are read, so memory stays bounded by the largest value.
+//! handled as they are read, so memory stays bounded by the largest value
+//! (except `haus hash` of a whole file, which hashes all its values at the
+//! end; `--each` hashes them one by one).
 //! When the input may come slowly (a pipe, a terminal, a FIFO), what was
 //! written for the values so far is flushed before waiting for more.
 
@@ -29,13 +31,15 @@ pub fn hash(args: &HashArgs, color: Color) -> Status {
     if args.each {
         return each_value(file, &args.limits, color, |out, v| writeln!(out, "{}", haus::hash(v)));
     }
-    let mut hasher = haus::Hasher::new();
+    let mut values = Vec::new();
     let add = |_: &mut dyn Write, v: &Value| {
-        hasher.add(v);
+        values.push(v.clone());
         Ok(())
     };
     match each_value(file, &args.limits, color, add) {
-        Status::Ok => output::print(&format!("{}\n", hasher.digest())).map_or_else(output::fail, |()| Status::Ok),
+        Status::Ok => {
+            output::print(&format!("{}\n", haus::hash_all(&values))).map_or_else(output::fail, |()| Status::Ok)
+        }
         status => status,
     }
 }

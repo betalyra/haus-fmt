@@ -17,7 +17,7 @@ export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, type Limit
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
 export * from "./value.js"
 export { format, quote, stringify, type FormatOptions, type FormatStyle } from "./format.js"
-export { canonical, compare, compareCodePoints, equals, hash, hashAll, Hasher } from "./canonical.js"
+export { canonical, compare, compareCodePoints, equals, hash, hashAll } from "./canonical.js"
 export { floatText, floatValue, specialFloat, toFloat, toFloat32, toFloat64, type FloatType } from "./float.js"
 export { normalizeNumber } from "./number.js"
 export { infer, inferSchema, printShape, recursiveNames, RecordShape, resolve, Shape, VariantShape, type Inference, type PrintOptions } from "./infer.js"

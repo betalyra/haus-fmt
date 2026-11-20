@@ -253,10 +253,7 @@ binding; hashes are SHA-256 of it (the `hash` feature):
 let v = haus::parse(r#"Order { total: 19.90, id: 0xFF }"#)?.remove(0);
 haus::canonical(&v);                   // String: Order{id:255,total:19.90}
 haus::hash(&v);                        // String: 64 lowercase hex digits
-haus::hash_all(&values);               // a whole file or stream: the forms joined by `,`
-let mut hasher = haus::Hasher::new();  // the same, as values arrive
-hasher.add(&v).add(&w);                // &mut Hasher
-hasher.digest();
+haus::hash_all(&values);               // a whole file: the forms joined by `,`
 haus::equals(&a, &b);                  // bool
 haus::compare(&a, &b);                 // Ordering, by the canonical bytes
 ```

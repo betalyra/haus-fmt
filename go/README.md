@@ -88,7 +88,7 @@ s, _ := haus.Canonical(v) // Order{id:255,total:19.90,"x-y":1e5}
 h, _ := haus.Hash(v)      // SHA-256 of the canonical form, 64 hex digits
 ```
 
-`haus.HashAll(values)` hashes a whole file or stream, and `haus.NewHasher()` does the same value by value as a stream is read. `haus.Compare` orders values by their canonical forms. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
+`haus.HashAll(values)` hashes a whole file; the items of a stream are hashed one by one with `haus.Hash`. `haus.Compare` orders values by their canonical forms. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
 
 ## Schemas
 

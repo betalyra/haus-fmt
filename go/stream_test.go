@@ -127,24 +127,6 @@ func TestStreamValueLength(t *testing.T) {
 	}
 }
 
-func TestStreamHash(t *testing.T) {
-	src := []byte("1, \"a\", Order { id: 0xFF },")
-	h := NewHasher()
-	for v, err := range ParseStream(bytes.NewReader(src)) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := h.Add(v); err != nil {
-			t.Fatal(err)
-		}
-	}
-	vs, _ := ParseAll([]byte(`1,"a",Order{id:255}`))
-	want, _ := HashAll(vs)
-	if h.Sum() != want || h.Count() != 3 {
-		t.Errorf("got %s, want %s", h.Sum(), want)
-	}
-}
-
 // TestStreamErrorSticky: after an error, Next keeps returning it.
 func TestStreamErrorSticky(t *testing.T) {
 	r := NewStreamReader(strings.NewReader("1, ]"), StreamOptions{})
