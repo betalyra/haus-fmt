@@ -24,14 +24,20 @@
  * `convertCorpus` is the whole conversion, pure; the step around it reads
  * the description and writes the results.
  */
-import { equals, equalsJson, HausDecodeError, importJsonValue, isJsonObject, parse, parseJson, stringify } from "@haus-fmt/haus"
+import {
+  equals, equalsJson, HausDecodeError, importJsonValue, isJsonObject, jsonObject, JsonNumber, normalizeNumber, parse, parseJson, stringify, type Json,
+} from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import { Array as Arr, Console, Effect, FileSystem, Option, Path, Result } from "effect"
-import { corpusOf, jsonSchemaCorpus, type Corpus, type Document } from "../corpus.ts"
+import { gunzipSync } from "node:zlib"
+import {
+  corpusOf, fixturesCorpus, functionCallCorpus, geoJsonCorpus, ghArchiveCorpus, jsonSchemaCorpus, kubernetesCorpus, type Corpus, type Document, type TextFile,
+} from "../corpus.ts"
 import { CorpusError, messageOf } from "../errors.ts"
-import { listingFile } from "../listing.ts"
+import { defineSchemaFile } from "../hand.ts"
+import { listingFile, parseListing } from "../listing.ts"
 import { sourcePath, type CorpusSource } from "../manifest.ts"
-import { compile, Converter, fromImported, Mismatch, reachable, toHaus, toJson, type EnumStyle } from "../openapi.ts"
+import { compile, Converter, fromImported, Mismatch, reachable, RESERVED, toHaus, toJson, type EnumStyle } from "../openapi.ts"
 import { BenchPaths } from "../paths.ts"
 import { CORPUS, Results, type Converted, type CorpusOut, type Excluded } from "../results.ts"
 import { selectSources, type Selection } from "../sources.ts"
@@ -53,6 +59,20 @@ export const sample = <A>(all: readonly A[], limit: Option.Option<number>): read
     onSome: (n) => Array.from({ length: n }, (_, i) => all[Math.floor((i * all.length) / n)]!),
   })
 
+/** JSON with every number in haus's normalized spelling (`1e-09` → `1e-9`, `1E5` → `1e5`; spec §3). */
+const normalizedNumbers = (j: Json): Json =>
+  j instanceof JsonNumber ? new JsonNumber(normalizeNumber(j.text) ?? j.text)
+  : Array.isArray(j) ? j.map(normalizedNumbers)
+  : j !== null && typeof j === "object" ? jsonObject(Object.entries(j).map(([k, v]) => [k, normalizedNumbers(v)] as const))
+  : j
+
+/**
+ * The same JSON, numbers compared by their normalized text: haus keeps a
+ * number's digits and scale but writes its exponent one way (`1e-9`), so
+ * `1e-09` comes back as `1e-9` (counted as respelled).
+ */
+const sameJson = (a: Json, b: Json): boolean => equalsJson(a, b) || equalsJson(normalizedNumbers(a), normalizedNumbers(b))
+
 const reasonOf = (e: unknown): { reason: string; path: string } =>
   e instanceof Mismatch ? { reason: e.reason, path: e.path }
   : e instanceof HausDecodeError ? { reason: `decode: ${e.code}`, path: e.path.join(".") }
@@ -67,6 +87,7 @@ export interface Conversion {
 /** The converter's decisions over every named type of the corpus's schema. Pure. */
 export const schemaWide = (corpus: Corpus): Record<string, number> => {
   const converter = new Converter(corpus.description, corpus.converter)
+  corpus.prepare?.(converter)
   converter.convertAll()
   return converter.counts
 }
@@ -76,16 +97,23 @@ export const convertCorpus = (source: CorpusSource, corpus: Corpus, limit: Optio
   const all = corpus.documents
   const docs = sample(all, limit)
   const converter = new Converter(corpus.description, corpus.converter)
-  const roots = new Map(docs.map((d) => [d, converter.root(d.schema, d.responseName)]))
+  corpus.prepare?.(converter)
+  const roots = new Map(docs.map((d) => [d, d.root ?? converter.root(d.schema, d.responseName)]))
 
   // Survey: a date-time or date type stays one only if every example value there is valid.
   // (A document that fails here fails below, with its reason.)
   for (const d of docs) attempt(() => toHaus(d.json, converter.typeOf(roots.get(d)!), { enums: "tags", survey: true }))
 
   const rootNames = [...new Set(roots.values())]
-  const schemas = { tags: converter.schemaText(rootNames, "tags", corpus.schemaFrom), strings: converter.schemaText(rootNames, "strings", corpus.schemaFrom) }
+  // The documents as one file (spec §6): a stream of the root type.
+  const stream = corpus.stream !== undefined && rootNames.length === 1 ? `\n// The documents as one file.\ntype ${corpus.stream} = Stream ${rootNames[0]}\n` : ""
+  const schemas = {
+    tags: (corpus.schemaText ?? converter.schemaText(rootNames, "tags", corpus.schemaFrom)) + stream,
+    strings: converter.schemaText(rootNames, "strings", corpus.schemaFrom) + stream,
+  }
   const compiled = { tags: compile(schemas.tags), strings: compile(schemas.strings) }
   const unlisted = { count: 0 }
+  const respelled = { count: 0 }
 
   const convertDocument = (d: Document): Converted => {
     const root = roots.get(d)!
@@ -98,7 +126,7 @@ export const convertCorpus = (source: CorpusSource, corpus: Corpus, limit: Optio
       const read = parse(min)
       if (!equals(read, value) || !equals(parse(compact), value) || !equals(parse(pretty), value)) throw new Mismatch("the haus text reads as another value", "$")
       h.decode(compiled[enums][root]!, read)
-      if (!equalsJson(toJson(read, type, { enums }), d.json)) throw new Mismatch(`haus → JSON differs from the original (enums as ${enums})`, "$")
+      if (!sameJson(toJson(read, type, { enums }), d.json)) throw new Mismatch(`haus → JSON differs from the original (enums as ${enums})`, "$")
       return { min, compact, pretty }
     }
     const tags = form("tags")
@@ -106,7 +134,9 @@ export const convertCorpus = (source: CorpusSource, corpus: Corpus, limit: Optio
     const plain = importJsonValue(d.json, { maxDepth: 512 })
     const plain_min = stringify(plain, { style: "minimised" })
     const plain_pretty = stringify(plain)
-    if (!equalsJson(fromImported(parse(plain_min)), d.json)) throw new Mismatch("plain haus → JSON differs from the original", "$")
+    const back = fromImported(parse(plain_min))
+    if (!sameJson(back, d.json)) throw new Mismatch("plain haus → JSON differs from the original", "$")
+    if (!equalsJson(back, d.json)) respelled.count++
 
     // JSON as people write it: JSON.stringify, numbers exactly as in the source (JsonNumber → JSON.rawJSON).
     const json_min = JSON.stringify(d.json)
@@ -143,6 +173,7 @@ export const convertCorpus = (source: CorpusSource, corpus: Corpus, limit: Optio
     schemaWide: schemaWide(corpus),
     positions,
     unlistedMembers: unlisted.count,
+    ...(respelled.count > 0 ? { respelledNumbers: respelled.count } : {}),
     notes: converter.notes,
   }
   return { out, readable: documents.map((d) => `// ${d.id} (${d.root})\n${d.haus_pretty},\n`).join("\n") }
@@ -157,7 +188,7 @@ export const summary = ({ out }: Conversion): string => {
     ...tally(out.excluded.map((e) => e.reason)).map(([reason, n]) => `  ${String(n).padStart(4)}  ${reason}`),
     `types reachable: ${JSON.stringify(out.positions)}`,
     `decisions: ${JSON.stringify(out.decisions)}`,
-    `unlisted members kept: ${out.unlistedMembers}`,
+    `unlisted members kept: ${out.unlistedMembers}${out.respelledNumbers ? `; documents with numbers in haus's spelling (1e-09 → 1e-9): ${out.respelledNumbers}` : ""}`,
     `bytes: JSON min ${bytes("json_min")}, pretty ${bytes("json_pretty")} | haus min ${bytes("haus_min")}, compact ${bytes("haus_compact")}, pretty ${bytes("haus_pretty")} | enums as strings min ${bytes("str_min")} | plain min ${bytes("plain_min")}`,
   ].join("\n")
 }
@@ -177,29 +208,85 @@ const readObject = Effect.fn("convert.readObject")(function* (path: string, what
   return isJsonObject(json) ? json : yield* new CorpusError({ path, message: `not ${what}` })
 })
 
+/** The files of a pinned directory fetch stored, in the listing's order, as text. */
+const readListed = Effect.fn("convert.readListed")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem
+  const p = yield* Path.Path
+  const names = parseListing(yield* fs.readFileString(listingFile(dir))).map((e) => e.name)
+  return yield* Effect.forEach(names, (name) => fs.readFileString(p.join(dir, name)).pipe(Effect.map((text): TextFile => ({ name, text }))))
+})
+
+/** Parses JSON text read from a file (an object), numbers exact. */
+const jsonOf = (path: string, text: string, what: string) =>
+  Effect.try({ try: () => parseJson(text, { maxDepth: 512 }), catch: (e) => new CorpusError({ path, message: messageOf(e) }) }).pipe(
+    Effect.filterOrFail(isJsonObject, () => new CorpusError({ path, message: `not ${what}` })),
+  )
+
 /** The documents of a source, from the files fetch stored. */
 const readCorpus = Effect.fn("convert.readCorpus")(function* (source: CorpusSource) {
   const paths = yield* BenchPaths
   const fs = yield* FileSystem.FileSystem
-  const p = yield* Path.Path
+  const path = yield* Path.Path
+  const p = (dir: string, name: string) => path.join(dir, name)
   const pure = (path: string, f: () => Corpus) => Effect.try({ try: f, catch: (e) => new CorpusError({ path, message: messageOf(e) }) })
-  switch (source.layout._tag) {
+  const at = (path: string, repo = source.repo, commit = source.commit) => `${path} at ${repo} @ ${commit.slice(0, 12)}`
+  const l = source.layout
+  switch (l._tag) {
     case "OpenApiExamples": {
-      const path = paths.corpusFile(source.name, source.layout.description.path)
+      const path = paths.corpusFile(source.name, l.description.path)
       const description = yield* readObject(path, "an OpenAPI description")
       return yield* pure(path, () => corpusOf(description))
     }
+    case "OpenApiFixtures": {
+      const path = paths.corpusFile(source.name, l.description.path)
+      const description = yield* readObject(path, "an OpenAPI description")
+      const fixtures = yield* readObject(paths.corpusFile(source.name, l.fixtures.path), "a fixtures file")
+      return yield* pure(path, () => fixturesCorpus(description, fixtures, `${at(l.description.path)} (OpenAPI ${String(description["openapi"])})`))
+    }
     case "JsonSchemaDocuments": {
-      const { schema, documents } = source.layout
+      const { schema, documents } = l
       const schemaPath = paths.corpusFile(source.name, schema.path)
       const dir = paths.corpusDir(source.name, documents.dir)
       const description = yield* readObject(schemaPath, "a JSON Schema")
-      const names = (yield* fs.readFileString(listingFile(dir))).split("\n").filter((l) => l !== "").map((l) => l.split("\t")[0]!)
-      const files = yield* Effect.forEach(names, (name) => readJson(p.join(dir, name)).pipe(Effect.map((json) => ({ name, json }))))
-      return yield* pure(dir, () => jsonSchemaCorpus(description, files, `${schema.path} at ${source.repo} @ ${source.commit.slice(0, 12)} (JSON Schema)`))
+      const files = yield* readListed(dir)
+      const docs = yield* Effect.forEach(files, (f) =>
+        Effect.try({ try: () => ({ name: f.name, json: parseJson(f.text, { maxDepth: 512 }) }), catch: (e) => new CorpusError({ path: p(dir, f.name), message: messageOf(e) }) }))
+      return yield* pure(dir, () => jsonSchemaCorpus(description, docs, `${at(schema.path)} (JSON Schema)`))
+    }
+    case "KubernetesManifests": {
+      const dir = paths.corpusDir(source.name, l.documents.dir)
+      const specDir = paths.corpusDir(source.name, l.schema.files.dir)
+      const specs = yield* Effect.forEach(yield* readListed(specDir), (f) => jsonOf(p(specDir, f.name), f.text, "an OpenAPI description"))
+      const files = yield* readListed(dir)
+      const from = l.schema.from
+      return yield* pure(dir, () => kubernetesCorpus(specs, files, `${at(`${l.schema.files.dir}/*${l.schema.files.suffixes.join("")}`, from.repo, from.commit)}${from.tag ? ` (${from.tag})` : ""}, merged`, RESERVED))
+    }
+    case "FunctionCalls": {
+      const schemaPath = p(paths.root, l.schema)
+      const schemaText = yield* fs.readFileString(schemaPath)
+      const questions = yield* readListed(paths.corpusDir(source.name, l.questions.dir))
+      const answers = yield* readListed(paths.corpusDir(source.name, l.answers.dir))
+      return yield* pure(schemaPath, () => functionCallCorpus(questions, answers, l.categories, schemaText, `bench/${l.schema} (hand-written)`, (c, text) => void defineSchemaFile(c, text)))
+    }
+    case "GeoJsonFeatures": {
+      const path = paths.corpusFile(source.name, l.documents.path)
+      const collection = yield* readObject(path, "a GeoJSON FeatureCollection")
+      const schemaPath = paths.packageFile(l.schema.package, l.schema.file)
+      const schema = yield* readObject(schemaPath, "a JSON Schema")
+      return yield* pure(path, () => geoJsonCorpus(collection, schema, `${l.schema.file} of the npm package ${l.schema.package}@${l.schema.version} (GeoJSON JSON Schema, draft-07)`))
+    }
+    case "GhArchiveEvents": {
+      const archive = paths.corpusFile(source.name, l.archive.url)
+      const lines = yield* fs.readFile(archive).pipe(
+        Effect.flatMap((gz) => Effect.try({ try: () => new TextDecoder().decode(gunzipSync(gz)), catch: (e) => new CorpusError({ path: archive, message: messageOf(e) }) })),
+      )
+      const descriptionPath = paths.corpusFile(source.name, l.schema.description.path)
+      const description = yield* readObject(descriptionPath, "an OpenAPI description")
+      const from = l.schema.from
+      return yield* pure(archive, () => ghArchiveCorpus(description, lines, l.sample, l.seed, `the event schemas of ${at(l.schema.description.path, from.repo, from.commit)} (OpenAPI 3.1)`))
     }
   }
-})
+}, (effect, source) => Effect.map(effect, (corpus): Corpus => ({ ...corpus, converter: { ...corpus.converter, ...source.rules } })))
 
 /** The results files of one conversion, by name, in the source's results directory. */
 export const conversionFiles = (source: CorpusSource, c: Conversion): [string, string][] => [

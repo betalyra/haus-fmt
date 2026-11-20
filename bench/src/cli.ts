@@ -5,6 +5,7 @@
  *   haus-bench fetch                         download and check what sources.haus pins
  *   haus-bench convert [--limit N]           every document → haus, round trip checked
  *   haus-bench tokens [--tokenizers a,b]     token counts
+ *   haus-bench compress                      compressed sizes (gzip, brotli, zstd)
  *   haus-bench speed [--quick]               tinybench
  *   haus-bench report                        tables, results.md, results.haus
  *   haus-bench all                           every step, in order
@@ -20,6 +21,7 @@ import { Manifest } from "./manifest.ts"
 import { BenchPaths, type Dirs } from "./paths.ts"
 import { Results } from "./results.ts"
 import type { Selection } from "./sources.ts"
+import { compress } from "./steps/compress.ts"
 import { convert } from "./steps/convert.ts"
 import { fetchSources } from "./steps/fetch.ts"
 import { report } from "./steps/report.ts"
@@ -66,6 +68,7 @@ const all = (s: Selection) =>
     yield* fetchSources()
     yield* convert({ sources: s, limit: Option.none() })
     yield* tokens({ sources: s, tokenizers: Option.none() })
+    yield* compress({ sources: s })
     yield* speed({ sources: s, quick: false })
     yield* report({ sources: s })
   })
@@ -75,6 +78,7 @@ const smoke = (s: Selection) =>
     yield* fetchSources()
     yield* convert({ sources: s, limit: Option.some(40) })
     yield* tokens({ sources: s, tokenizers: Option.some(["o200k"]) })
+    yield* compress({ sources: s })
     yield* speed({ sources: s, quick: true })
     yield* report({ sources: s })
   })
@@ -88,6 +92,9 @@ const subcommands = [
   ),
   Command.make("tokens", { dirs, sources, tokenizers: tokenizerNames }, (c) => tokens(c).pipe(inBench(c.dirs))).pipe(
     Command.withDescription("Token counts per document, form and tokenizer"),
+  ),
+  Command.make("compress", { dirs, sources }, (c) => compress(c).pipe(inBench(c.dirs))).pipe(
+    Command.withDescription("Compressed sizes per document and as one stream (gzip, brotli, zstd)"),
   ),
   Command.make("speed", { dirs, sources, quick }, (c) => speed(c).pipe(inBench(c.dirs))).pipe(
     Command.withDescription("Parse and write speed against JSON (tinybench)"),

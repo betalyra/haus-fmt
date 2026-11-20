@@ -44,11 +44,159 @@
         // The SHA-256 of the listing `<name>\t<SHA-256 of the file>\n`, sorted by name.
         documents: {
           dir: "examples/specs",
-          suffix: ".vl.json",
+          suffixes: [".vl.json"],
           count: 633,
           sha256: "bea5bde6024ba524a3d82536c4d4cd8807d1274039d98dea3c845e0bfc7a567c",
         },
       },
+    },
+    {
+      name: "kubernetes",
+      title: "Kubernetes example manifests (YAML), with the OpenAPI v3 description of Kubernetes v1.37.2",
+      category: Config,
+      license: "Apache-2.0",
+      repo: "https://github.com/kubernetes/examples",
+      commit: "22934a040acbb0c0aa103023ccbd871507bf17f6",
+      committed: Instant("2026-10-27T18:21:20Z"),
+      layout: KubernetesManifests {
+        // Every YAML file of the repository, in every directory (`_archived/` too).
+        documents: {
+          dir: ".",
+          suffixes: [".yaml", ".yml"],
+          recursive: True,
+          count: 250,
+          sha256: "bfbd6a45bf74356c0effa3969ba186407a9683056e390ecda71e7cece9ba1371",
+        },
+        schema: {
+          from: {
+            repo: "https://github.com/kubernetes/kubernetes",
+            tag: "v1.37.2",
+            commit: "c50e5395f1ae2d4a2c05f28fdcc38c0916cc1a32",
+            committed: Instant("2026-10-27T12:01:04Z"),
+            license: "Apache-2.0",
+          },
+          files: {
+            dir: "api/openapi-spec/v3",
+            suffixes: ["_openapi.json"],
+            count: 65,
+            sha256: "7341161ba35e4f732fc9b75bd4e0fa81fcfd56314a3ecef6703f9965d6ec7606",
+          },
+        },
+      },
+      rules: { constDiscriminators: True, keyedUnions: True },
+    },
+    {
+      name: "stripe",
+      title: "Stripe API fixtures (example objects), with Stripe's OpenAPI 3.0 description",
+      category: ApiResponses,
+      license: "MIT",
+      repo: "https://github.com/stripe/openapi",
+      // v2590
+      commit: "af2d19d63ea42049abecf784482898c654ab42d5",
+      committed: Instant("2026-10-23T17:01:56Z"),
+      layout: OpenApiFixtures {
+        description: {
+          path: "openapi/spec3.json",
+          sha256: "7cff4cc46d0654101a36a3302f7544640f5f73e4f3cad6f264f0e23c19fa1776",
+        },
+        fixtures: {
+          path: "openapi/fixtures3.json",
+          sha256: "e6822f7ee6fd71bdde6228537368aafcfb7191109340fe119d9aca27c6e9396d",
+        },
+      },
+      // Stripe names each object's type in a one-value enum `object`.
+      rules: { constDiscriminators: True, keyedUnions: True },
+    },
+    {
+      name: "bfcl",
+      title: "Berkeley Function Calling Leaderboard (BFCL v4): questions with their function definitions and possible answers",
+      category: ToolCalls,
+      license: "Apache-2.0",
+      repo: "https://github.com/ShishirPatil/gorilla",
+      commit: "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8",
+      committed: Instant("2026-03-23T11:40:47Z"),
+      layout: FunctionCalls {
+        // JSON Lines, one entry per line, despite the .json names.
+        questions: {
+          dir: "berkeley-function-call-leaderboard/bfcl_eval/data",
+          suffixes: [".json"],
+          count: 20,
+          sha256: "053b5323b03c7b0d0be0abed31fbed71c17c2f29f5776fed9518b179e72dd735",
+        },
+        answers: {
+          dir: "berkeley-function-call-leaderboard/bfcl_eval/data/possible_answer",
+          suffixes: [".json"],
+          count: 16,
+          sha256: "0711a7d8033c327f70c4309ee693a400d32eb850161ed062a06c0b40da5c4c2a",
+        },
+        // The single-turn categories, whose entries are function definitions and a call.
+        categories: [
+          "simple_python", "simple_java", "simple_javascript", "multiple", "parallel", "parallel_multiple",
+          "live_simple", "live_multiple", "live_parallel", "live_parallel_multiple",
+        ],
+        // Hand-written: BFCL's files have no schema of their own.
+        schema: "schemas/bfcl.schema.haus",
+      },
+    },
+    {
+      name: "gh-archive",
+      title: "GitHub events (GH Archive, one hour, sampled), with the event schemas of GitHub's OpenAPI description",
+      category: Events,
+      // GH Archive's code is MIT and its website CC-BY-4.0; neither covers the event archives, which are
+      // public GitHub events under GitHub's terms. Downloaded and measured only: never committed or
+      // redistributed, and no sample documents are published; only aggregate results.
+      license: "none for the data (public GitHub events, GitHub's terms)",
+      repo: "https://www.gharchive.org",
+      // The hour (UTC) of the archive file.
+      commit: "2026-11-02-15",
+      committed: Instant("2026-11-02T16:05:03Z"),
+      layout: GhArchiveEvents {
+        archive: {
+          url: "https://data.gharchive.org/2026-11-02-15.json.gz",
+          sha256: "41472831de798c243e5f3969a6acb81576071ff7d828169e589b8243c7b759a9",
+        },
+        // About 2,000 events: each type's share, at least 20 (or all) of each.
+        sample: 2000,
+        seed: 20261102,
+        schema: {
+          from: {
+            repo: "https://github.com/github/rest-api-description",
+            commit: "c9c95fe34ced05fe076001f5c55704742bc8e7f8",
+            committed: Instant("2026-11-17T12:33:12Z"),
+            license: "MIT",
+          },
+          description: {
+            path: "descriptions-next/api.github.com/api.github.com.2026-03-10.json",
+            sha256: "ccee9ddc5f80053a35fcd375ae6a68dc88af1a058644459c394b2d69fc06491a",
+          },
+        },
+      },
+      // A new source: the rules github-rest keeps off are on.
+      rules: { constDiscriminators: True, keyedUnions: True },
+    },
+    {
+      name: "geojson",
+      title: "Natural Earth admin-0 countries (1:110m), one GeoJSON feature per document, with the GeoJSON Feature JSON Schema",
+      category: Geo,
+      license: "Public domain (Natural Earth); schema MIT",
+      repo: "https://github.com/nvkelso/natural-earth-vector",
+      commit: "ca96624a56bd078437bca8184e78163e5039ad19",
+      committed: Instant("2022-06-02T07:25:00Z"),
+      layout: GeoJsonFeatures {
+        documents: {
+          path: "geojson/ne_110m_admin_0_countries.geojson",
+          sha256: "6866c877d39cba9c357620878839b336d569f8c662d3cfab4cb1dbe2d39c977f",
+        },
+        // The npm package geojson-schema 1.0.5: the JSON Schemas built from github.com/geojson/schema at tag 1.0.5
+        // (MIT), whose repository holds only their JavaScript sources.
+        schema: {
+          package: "geojson-schema",
+          version: "1.0.5",
+          file: "Feature.json",
+          sha256: "3957840b2ff19f9450ea97a12f85944d938c68a7a6bf115a2e69b98e007b9922",
+        },
+      },
+      rules: { constDiscriminators: True, keyedUnions: True },
     },
   ],
   tokenizers: [

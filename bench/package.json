@@ -9,6 +9,7 @@
     "fetch": "node --use-env-proxy main.node.ts fetch",
     "convert": "pnpm run prepare-haus && node main.node.ts convert",
     "tokens": "node main.node.ts tokens",
+    "compress": "node main.node.ts compress",
     "speed": "pnpm run prepare-haus && node --expose-gc main.node.ts speed",
     "report": "node main.node.ts report",
     "all": "pnpm run prepare-haus && node --use-env-proxy --expose-gc main.node.ts all",
@@ -23,7 +24,9 @@
     "@haus-fmt/haus": "workspace:*",
     "@huggingface/tokenizers": "0.2.0",
     "effect": "4.0.6",
-    "tinybench": "6.2.3"
+    "geojson-schema": "1.0.5",
+    "tinybench": "6.2.3",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@effect/tsgo": "0.69.0",

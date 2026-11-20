@@ -24,6 +24,8 @@ export interface BenchPathsShape {
   readonly corpusDir: (name: string, dir: string) => string
   /** The bare git repository fetch uses for a corpus source. */
   readonly gitDir: (name: string) => string
+  /** A file of an npm package bench/ depends on (bench/node_modules/<package>/<file>). */
+  readonly packageFile: (pkg: string, file: string) => string
   /** Where fetch puts a tokenizer's file. */
   readonly tokenizerFile: (name: string, file: string) => string
   /** A file in the results directory: `outFile("results.md")`, or a source's, `outFile("vega-lite", "corpus.json")`. */
@@ -45,8 +47,9 @@ export class BenchPaths extends Context.Service<BenchPaths, BenchPathsShape>()("
           data,
           out,
           corpusFile: (name, file) => path.join(data, "corpus", name, path.basename(file)),
-          corpusDir: (name, dir) => path.join(data, "corpus", name, path.basename(dir)),
+          corpusDir: (name, dir) => path.join(data, "corpus", name, dir === "." || dir === "" ? "repo" : path.basename(dir)),
           gitDir: (name) => path.join(data, "git", `${name}.git`),
+          packageFile: (pkg, file) => path.join(root, "node_modules", pkg, file),
           tokenizerFile: (name, file) => path.join(data, "tokenizers", name, file),
           outFile: (...segments) => path.join(out, ...segments),
         })

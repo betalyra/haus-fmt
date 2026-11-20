@@ -1,0 +1,56 @@
+// HAND-WRITTEN for the benchmark (bench/schemas/bfcl.schema.haus): the data
+// files of the Berkeley Function Calling Leaderboard (BFCL v4,
+// github.com/ShishirPatil/gorilla, berkeley-function-call-leaderboard/) come
+// without a schema, so this one was written by hand from the files, not
+// generated.
+//
+// One document is one entry of a single-turn category: the question file's
+// entry (`id`, `question`, `function`) with its possible answer's
+// `ground_truth` added.
+//
+// JSON mapping: the converter's (bench/src/hand.ts): a Role tag is its name
+// in snake_case in JSON (`User` ↔ "user"); records are open, so members not
+// listed here are kept as imported JSON.
+
+type Entry = {
+  id: String,
+  // The conversation: turns, each a list of messages.
+  question: Array (Array Message),
+  // The functions the model may call.
+  function: Array Function,
+  // The expected calls, one per call: { function name: { argument: [acceptable values] } }.
+  // Arguments are free-form, so the values are Any.
+  ground_truth: Array (Map (Map (Array Any))),
+}
+
+type Message = {
+  role: Role,
+  content: String,
+}
+
+type Role = closed < User | System | Assistant >
+
+type Function = {
+  name: String,
+  description: String,
+  parameters: Parameters,
+}
+
+// A JSON Schema object, in BFCL's dialect (`type: "dict"`, and Java and
+// JavaScript type names for those languages' functions).
+type Parameters = {
+  type: String,
+  properties: Map Parameter,
+  required: Array String,
+}
+
+// One parameter: a JSON Schema, its common keywords typed. Defaults and enum
+// values are values of the parameter's type, so Any.
+type Parameter = {
+  type: String,
+  description?: String,
+  default?: Any,
+  enum?: Array Any,
+  items?: Any,
+  properties?: Map Any,
+}
