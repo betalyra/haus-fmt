@@ -99,8 +99,8 @@ class LinearTest {
             n -> parsing(joined(n, "[", "]", i -> "{ a: " + i + ", b: \"x\", c: None }"), d))),
         dynamicTest("long string", () -> assertLinear(200_000,
             n -> parsing("\"" + repeat("abc\\n\\u{1F600}é", n / 10) + "\"", d))),
-        dynamicTest("deep nesting", () -> assertLinear(250, n -> parsing(repeat("[", n) + repeat("]", n), deep))),
-        dynamicTest("deep payloads", () -> assertLinear(250, n -> parsing(repeat("Some(", n) + "1" + repeat(")", n), deep))),
+        dynamicTest("deep nesting", () -> assertLinear(60, n -> parsing(repeat("[", n) + repeat("]", n), deep))),
+        dynamicTest("deep payloads", () -> assertLinear(60, n -> parsing(repeat("Some(", n) + "1" + repeat(")", n), deep))),
         dynamicTest("many short values", () -> assertLinear(50_000, n -> parsing(joined(n, "[", "]", i -> String.valueOf(i % 10)), d))));
   }
 
@@ -131,7 +131,7 @@ class LinearTest {
       if (layout == Layout.PRETTY) {
         continue; // its indentation makes the text of deep nesting quadratic
       }
-      tests.add(dynamicTest(layout + " deep nesting", () -> assertLinear(120, n -> {
+      tests.add(dynamicTest(layout + " deep nesting", () -> assertLinear(30, n -> {
         Value v = nested.apply(n);
         return () -> Haus.write(v, o.withLimits(deep));
       })));

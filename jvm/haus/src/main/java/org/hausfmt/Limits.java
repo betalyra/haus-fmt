@@ -26,7 +26,7 @@ public record Limits(
    * default stack of a thread; a larger {@link #maxDepth} is rejected with the code {@code
    * unsupported-depth}. No value, parsed or built in code, is nested deeper.
    */
-  public static final int MAX_SUPPORTED_DEPTH = 1000;
+  public static final int MAX_SUPPORTED_DEPTH = 256;
 
   /** The default limits of spec §7. */
   public static final Limits DEFAULT = new Limits(256, 1000, 6144, 16 << 20, 64 << 20);

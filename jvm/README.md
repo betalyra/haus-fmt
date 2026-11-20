@@ -81,7 +81,7 @@ try {
 
 ## Limits
 
-`Haus.parse(text, Limits.DEFAULT.withMaxDepth(64))` sets limits (spec §7): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string, and 64 Mi characters per top-level value of a stream (which only the stream reader applies). `maxDepth` can be at most `Limits.MAX_SUPPORTED_DEPTH`, 1000: the parser, the writers and the canonical form recurse once per level, and 1000 levels stay within the default stack of a thread. A larger limit is rejected with the code `unsupported-depth`, and no value, parsed or built in code, is nested deeper. Duplicate keys are found in linear time also for keys made to collide: large records use a table with a hash seeded at random per process.
+`Haus.parse(text, Limits.DEFAULT.withMaxDepth(64))` sets limits (spec §7): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string, and 64 Mi characters per top-level value of a stream (which only the stream reader applies). `maxDepth` can be at most `Limits.MAX_SUPPORTED_DEPTH`, 256 (the default, as in Rust): the parser, the writers, the canonical form and the JSON conversions recurse once per level (self-describing JSON up to four times), and 256 levels stay well within the default stack of any thread, Android's included. A larger limit is rejected with the code `unsupported-depth`, and no value, parsed or built in code, is nested deeper. Duplicate keys are found in linear time also for keys made to collide: large records use a table with a hash seeded at random per process.
 
 ## Streams
 
