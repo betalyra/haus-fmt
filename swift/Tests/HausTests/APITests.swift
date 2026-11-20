@@ -92,20 +92,6 @@ struct APITests {
         #expect(code == .nestingTooDeep)
     }
 
-    /// Runs `body` on a thread with a stack of the size given.
-    func onStack<T: Sendable>(kibibytes: Int, _ body: @escaping @Sendable () throws -> T) throws -> T {
-        nonisolated(unsafe) var result: Result<T, any Error>?
-        let done = DispatchSemaphore(value: 0)
-        let thread = Thread {
-            result = Result(catching: body)
-            done.signal()
-        }
-        thread.stackSize = kibibytes << 10
-        thread.start()
-        done.wait()
-        return try result!.get()
-    }
-
     /// Repeated keys are found in linear time, also among keys made to
     /// collide (spec §7): 200 000 keys take well under a second.
     @Test(.timeLimit(.minutes(1))) func manyKeys() throws {

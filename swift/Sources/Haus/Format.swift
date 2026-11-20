@@ -67,13 +67,31 @@ public func stringify(_ value: HausValue, _ options: FormatOptions = FormatOptio
 /// stream with a comma after each. See ``stringify(_:_:)``.
 public func stringifyAll(_ values: [HausValue], _ options: FormatOptions = FormatOptions()) throws(HausError) -> String
 {
-    var builder = Builder(limits: try options.limits.checked())
+    let limits = try options.limits.checked()
+    guard options.layout == .pretty else { return try writeLines(values, options.layout, limits) }
     var file = FileNode()
     for (i, value) in values.enumerated() {
-        builder.path = values.count > 1 ? [.index(i)] : []
-        file.items.append(Item(node: try builder.node(value, depth: 0)))
+        var walk = Walk(TreeSpelling(), checks: .writer(limits), prefix: values.count > 1 ? [.index(i)] : [])
+        var nothing: [UInt8] = []
+        try walk.write(value, to: &nothing)
+        file.items.append(Item(node: walk.spelling.root!))
     }
     return Printer(options).file(file)
+}
+
+/// Writes values in the compact or minimised layout, directly: one line per
+/// value, with a comma after each in a stream.
+private func writeLines(_ values: [HausValue], _ layout: Layout, _ limits: Limits) throws(HausError) -> String {
+    let spelling = layout == .compact ? HausSpelling.compact : .minimised
+    let stream = values.count > 1
+    var out: [UInt8] = []
+    for (i, value) in values.enumerated() {
+        var walk = Walk(spelling, checks: .writer(limits), prefix: stream ? [.index(i)] : [])
+        try walk.write(value, to: &out)
+        if stream { out.append(ASCII.comma) }
+        out.append(ASCII.lf)
+    }
+    return String(decoding: out, as: UTF8.self)
 }
 
 // ── values to syntax nodes ──────────────────────────────────────
@@ -99,96 +117,61 @@ func pathString(_ steps: [PathStep]) -> String {
     }
 }
 
-/// Turns values built in code into syntax nodes, checking that they can be
-/// written. The path to the value being built is written out only for an
-/// error.
-struct Builder {
-    let limits: Limits
-    var path: [PathStep] = []
+/// Builds the syntax tree of a value written by a ``Walk``, which checks it,
+/// for the pretty layout. A container's node stands for its kind (and tag);
+/// its items are the nodes of its items.
+struct TreeSpelling: Spelling {
+    var sortsKeys: Bool { false }
+    /// The containers being built, the outermost first, with their items so far.
+    private var open: [(node: Node, items: [Item])] = []
+    /// The key of the next field.
+    private var pending: String?
+    /// The value's node, once it is built.
+    private(set) var root: Node?
 
-    @inline(never)
-    func fail(_ code: HausError.Code, _ message: String) -> HausError {
-        HausError(code, message, path: pathString(path))
-    }
-
-    /// Starts a container at `depth`, one level deeper.
-    func enter(_ depth: Int) throws(HausError) {
-        if depth + 1 > limits.maxDepth {
-            throw fail(.nestingTooDeep, "nesting deeper than the limit of \(limits.maxDepth)")
-        }
-    }
-
-    /// The node of `value`, at `depth` levels. The containers recurse
-    /// through here, so it only dispatches: the scalars are built in a
-    /// function of their own, which keeps this frame small.
-    mutating func node(_ value: HausValue, depth: Int) throws(HausError) -> Node {
-        switch value {
-        case .array(let elements):
-            try enter(depth)
-            return Node(value, items: try items(elements, depth: depth))
-        case .record(let r):
-            try enter(depth)
-            return Node(value, items: try fields(r, depth: depth))
-        case .variant(let tag, let args) where !args.isEmpty:
-            try checkTag(tag)
-            try enter(depth)
-            if args.count == 1, case .record(let r) = args[0] {
-                return Node(value, form: .braces, items: try fields(r, depth: depth))
-            }
-            return Node(value, form: .parens, items: try items(args, depth: depth))
-        default:
-            return try leaf(value)
-        }
-    }
-
-    /// The node of a string, number, byte string or tag without payload.
-    @inline(never)
-    func leaf(_ value: HausValue) throws(HausError) -> Node {
-        switch value {
+    mutating func leaf(_ v: HausValue, to out: inout [UInt8]) {
+        switch v {
         case .number(let n):
-            guard n.literal.utf8.count <= limits.maxNumberLength else {
-                throw fail(
-                    .numberTooLong,
-                    "a number of \(n.literal.utf8.count) characters, more than the limit of \(limits.maxNumberLength)")
-            }
-            return Node(value, text: Array(n.literal.utf8))
+            add(Node(v, text: Array(n.literal.utf8)))
         case .bytes(let bytes):
-            return Node(value, text: Array(("x\"" + bytes.map(hexByte).joined() + "\"").utf8))
-        case .variant(let tag, _):
-            try checkTag(tag)
-            return Node(value)
-        case .string, .array, .record:
-            return Node(value)
+            var text = Array(#"x""#.utf8)
+            appendHex(bytes, to: &text)
+            text.append(ASCII.quote)
+            add(Node(v, text: text))
+        default:
+            add(Node(v))
         }
     }
 
-    /// Fails with `invalid-tag` if `tag` can't be written.
-    func checkTag(_ tag: String) throws(HausError) {
-        if !isTag(tag) { throw fail(.invalidTag, invalidTag(tag)) }
+    mutating func open(_ c: Opening, to out: inout [UInt8]) {
+        let node =
+            switch c {
+            case .array: Node(.array([]))
+            case .record: Node(.record(HausRecord()))
+            case .payload(let tag): Node(.variant(tag, []), form: .parens)
+            case .recordPayload(let tag, _): Node(.variant(tag, []), form: .braces)
+            }
+        add(node)
+        open.append((node, []))
     }
 
-    /// The node of `value`, at `step` from the current value.
-    mutating func child(_ step: PathStep, _ value: HausValue, depth: Int) throws(HausError) -> Node {
-        path.append(step)
-        let node = try self.node(value, depth: depth)
-        path.removeLast()
-        return node
+    mutating func close(_ c: Opening, to out: inout [UInt8]) {
+        let (node, items) = open.removeLast()
+        node.items = items
     }
 
-    mutating func items(_ values: [HausValue], depth: Int) throws(HausError) -> [Item] {
-        var items: [Item] = []
-        for (i, value) in values.enumerated() {
-            items.append(Item(node: try child(.index(i), value, depth: depth + 1)))
+    mutating func separator(to out: inout [UInt8]) {}
+
+    mutating func key(_ key: String, to out: inout [UInt8]) { pending = key }
+
+    /// Adds a node to the container being built, or makes it the root.
+    private mutating func add(_ node: Node) {
+        guard !open.isEmpty else {
+            root = node
+            return
         }
-        return items
-    }
-
-    mutating func fields(_ r: HausRecord, depth: Int) throws(HausError) -> [Item] {
-        var items: [Item] = []
-        for (key, value) in r.fields {
-            items.append(Item(key: key, node: try child(.key(key), value, depth: depth + 1)))
-        }
-        return items
+        open[open.count - 1].items.append(Item(key: pending, node: node))
+        pending = nil
     }
 }
 
@@ -258,17 +241,30 @@ struct Printer {
     }
 
     /// An item on its line(s), and whether its value took more than one line.
+    /// The pretty layout recurses through here, `value(_:level:column:suffix:)`
+    /// and `container(_:level:)`, which keep small frames (also in a debug
+    /// build, which inlines nothing): their work is done by functions that
+    /// return before the recursion goes on.
     mutating func entry(_ item: Item, level: Int, comma: Bool) -> Bool {
-        writeIndent(level)
-        var column = level * indent
-        if let key = item.key {
-            let start = out.count
-            appendKey(key, to: &out)
-            out += ": ".utf8
-            column += codePoints(in: out[start...])
-        }
+        let column = startEntry(item, level: level)
         let start = out.count
         value(item.node, level: level, column: column, suffix: comma ? 1 : 0)
+        return endEntry(item, from: start, comma: comma)
+    }
+
+    /// Writes the indent and key of an entry: the column its value starts at.
+    mutating func startEntry(_ item: Item, level: Int) -> Int {
+        writeIndent(level)
+        guard let key = item.key else { return level * indent }
+        let start = out.count
+        appendKey(key, to: &out)
+        out += ": ".utf8
+        return level * indent + codePoints(in: out[start...])
+    }
+
+    /// Ends an entry whose value starts at `start`: whether it took more
+    /// than one line.
+    mutating func endEntry(_ item: Item, from start: Int, comma: Bool) -> Bool {
         let multiline = out[start...].contains(ASCII.lf)
         if comma { out.append(ASCII.comma) }
         for comment in item.trailing {
@@ -282,11 +278,17 @@ struct Printer {
     /// A value in the pretty layout, starting at `column` (in code points),
     /// with `suffix` characters to follow it on its last line.
     mutating func value(_ node: Node, level: Int, column: Int, suffix: Int) {
+        if startValue(node, level: level, column: column, suffix: suffix) { container(node, level: level) }
+    }
+
+    /// Writes a value that has no entries of its own lines, or the start of
+    /// one that has: whether its container comes next.
+    mutating func startValue(_ node: Node, level: Int, column: Int, suffix: Int) -> Bool {
         switch node.value {
         case .string(let s) where s.utf8.contains(ASCII.lf):
             blockString(s, level: level)
         case .record, .array:
-            container(node, level: level)
+            return true
         case .variant(let tag, _):
             switch node.form {
             case .bare:
@@ -294,18 +296,19 @@ struct Printer {
             case .braces:
                 out += tag.utf8
                 out.append(ASCII.space)
-                container(node, level: level)
+                return true
             case .parens:
                 if let w = inlineWidth(node), column + w + suffix <= width {
                     compact(node)
                 } else {
                     out += tag.utf8
-                    container(node, level: level)
+                    return true
                 }
             }
         default:
             scalar(node)
         }
+        return false
     }
 
     /// The brackets of a record, array or payload.
@@ -319,20 +322,34 @@ struct Printer {
 
     /// A record, array or payload, one entry per line.
     mutating func container(_ node: Node, level: Int) {
+        guard openContainer(node) else { return }
+        var first = true
+        var i = 0
+        while i < node.items.count {
+            leading(node.items[i], level: level + 1, first: &first, forceBlank: false)
+            _ = entry(node.items[i], level: level + 1, comma: true)
+            i += 1
+        }
+        closeContainer(node, level: level, first: &first)
+    }
+
+    /// Writes the opening bracket and line break of a container: false if it
+    /// is empty, written whole.
+    mutating func openContainer(_ node: Node) -> Bool {
         let (open, close) = brackets(node)
         guard !node.items.isEmpty || !node.dangling.isEmpty else {
             out += [open, close]
-            return
+            return false
         }
         out += [open, ASCII.lf]
-        var first = true
-        for item in node.items {
-            leading(item, level: level + 1, first: &first, forceBlank: false)
-            _ = entry(item, level: level + 1, comma: true)
-        }
+        return true
+    }
+
+    /// Writes the comments at the end of a container and its closer.
+    mutating func closeContainer(_ node: Node, level: Int, first: inout Bool) {
         comments(node.dangling, level: level + 1, first: &first)
         writeIndent(level)
-        out.append(close)
+        out.append(brackets(node).close)
     }
 
     /// The width of a value written on one line in the compact layout, or nil

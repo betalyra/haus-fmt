@@ -58,8 +58,12 @@ func withBytes<T>(_ bytes: some Collection<UInt8>, _ body: (Bytes) throws(HausEr
         .get()
 }
 
-/// Calls `body` with the UTF-8 of `text`.
+/// Calls `body` with the UTF-8 of `text`: a native string's own bytes, or a
+/// contiguous copy of a bridged one.
 func withUTF8<T, E: Error>(_ text: String, _ body: (Bytes) throws(E) -> T) throws(E) -> T {
+    if let result = text.utf8.withContiguousStorageIfAvailable({ b in Result { () throws(E) in try body(b) } }) {
+        return try result.get()
+    }
     var text = text
     return try text.withUTF8 { b in Result { () throws(E) in try body(b) } }.get()
 }
@@ -104,15 +108,7 @@ struct Parser {
 
     /// The position of byte offset `i` in the whole input (spec §8).
     func position(of i: Int) -> SourcePosition {
-        let i = min(i, b.count)
-        var lines = 0
-        var lineStart = 0
-        for k in 0..<i where b[k] == ASCII.lf {
-            lines += 1
-            lineStart = k + 1
-        }
-        let col = codePoints(in: b[lineStart..<i]) + 1
-        return SourcePosition(line: line + lines, column: lines == 0 ? column + col - 1 : col)
+        sourcePosition(of: i, in: b, from: SourcePosition(line: line, column: column))
     }
 
     @inline(never)

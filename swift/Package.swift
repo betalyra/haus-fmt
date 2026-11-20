@@ -10,5 +10,10 @@ let package = Package(
     targets: [
         .target(name: "Haus"),
         .testTarget(name: "HausTests", dependencies: ["Haus"]),
+        // The examples (`swift run quickstart`, `swift run order`); expected.txt is the
+        // output they share with the other bindings' examples.
+        .executableTarget(
+            name: "quickstart", dependencies: ["Haus"], path: "Examples/quickstart", exclude: ["expected.txt"]),
+        .executableTarget(name: "order", dependencies: ["Haus"], path: "Examples/order", exclude: ["expected.txt"]),
     ]
 )

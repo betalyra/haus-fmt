@@ -308,11 +308,18 @@ jobs:
       - uses: actions/checkout@v5
       - run: swift --version
       - name: Format
-        run: swift format lint --strict --configuration .swift-format -r Sources Tests Package.swift ../fuzz/swift-runner
+        run: swift format lint --strict --configuration .swift-format -r Sources Tests Examples Package.swift ../fuzz/swift-runner
       - name: Build
         run: swift build -Xswiftc -warnings-as-errors
       - name: Test
         run: swift test
+      # The examples print what the other bindings' examples print (Examples/*/expected.txt, Go's output).
+      - name: Examples
+        run: |
+          for example in quickstart order; do
+            swift run -q "$example" > "$RUNNER_TEMP/$example.out"
+            diff "$RUNNER_TEMP/$example.out" "Examples/$example/expected.txt"
+          done
       - name: Build the fuzz runner
         working-directory: fuzz/swift-runner
         run: swift build -c release -Xswiftc -warnings-as-errors

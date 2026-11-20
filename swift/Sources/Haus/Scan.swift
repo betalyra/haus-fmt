@@ -343,3 +343,53 @@ func firstInvalidUTF8(_ b: Bytes) -> Int? {
     }
     return nil
 }
+
+// ── record keys ─────────────────────────────────────────────────
+
+/// Whether two runs of bytes are the same, compared eight bytes at a time.
+func sameBytes(_ a: Bytes, _ b: Bytes) -> Bool {
+    guard a.count == b.count else { return false }
+    var i = 0
+    while i + 8 <= a.count {
+        guard word(a, at: i) == word(b, at: i) else { return false }
+        i += 8
+    }
+    while i < a.count {
+        guard a[i] == b[i] else { return false }
+        i += 1
+    }
+    return true
+}
+
+/// The bits of a ``keySketch(_:)``: one of the 64 bits of a word.
+let keySketchBits = 64
+
+/// Six bits of a key: its length and first and last byte, so that keys of
+/// a small record are compared only when their sketches are the same.
+func keySketch(_ b: Bytes) -> Int {
+    let first = Int(b.first ?? 0)
+    let last = Int(b.last ?? 0)
+    return (b.count &* 7 &+ first &* 3 &+ last) % keySketchBits
+}
+
+/// The odd constant of Fibonacci hashing, 2^64 divided by the golden ratio.
+private let golden: UInt64 = 0x9E37_79B9_7F4A_7C15
+
+/// A hash of a key's length and its first and last eight bytes: cheap,
+/// spread well for the keys records have, and easy to make collide (which
+/// ``KeyIndex`` notices, switching to Swift's seeded `Hasher`).
+func cheapHash(_ b: Bytes) -> UInt64 {
+    let n = b.count
+    /// Up to eight bytes from `i`, the first lowest.
+    func bytes(_ i: Int, _ k: Int) -> UInt64 {
+        k == 8 ? word(b, at: i) : b[i..<(i + k)].reversed().reduce(0) { $0 << 8 | UInt64($1) }
+    }
+    let (first, last): (UInt64, UInt64) =
+        switch n {
+        case 8...: (word(b, at: 0), word(b, at: n - 8))
+        case 4..<8: (bytes(0, 4), bytes(n - 4, 4))
+        default: (bytes(0, n), 0)
+        }
+    let mixed = (first ^ (last << 32 | last >> 32) ^ UInt64(n)) &* golden
+    return mixed ^ mixed >> 29
+}

@@ -68,7 +68,7 @@ The documentation lives at [haus-fmt.org/docs](https://haus-fmt.org/docs):
 | [`roc/`](roc) | Parser, decoding, encoding, streams, examples |
 | [`python/`](python) | Parser, streams, canonical form and hashing |
 | [`go/`](go) | Parser, formatter, streams, canonical form and hashing, JSON, schemas and checks, the official profiles' codecs, examples |
-| [`swift/`](swift) | Parser, formatter, streams, canonical form and hashing |
+| [`swift/`](swift) | Parser, formatter, streams, canonical form and hashing, JSON, schemas and typed decoding (Codable), examples |
 | [`jvm/`](jvm) | Java core and Kotlin wrapper (JVM, Android): parser, formatter, streams, canonical form, hashing, JSON |
 | [`extensions/`](extensions) | Official schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) |
 | [`editors/vscode/`](editors/vscode) | The VS Code extension |

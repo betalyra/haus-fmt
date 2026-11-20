@@ -2,7 +2,7 @@
 
 **A data format for humans: friendly to write, pleasant to read, and at home in your code.**
 
-> **Highly experimental.** This package has the parser, the formatter, the stream reader, and the canonical form and hashing. Schemas, JSON and codecs are not there yet.
+> **Highly experimental.** This package has the parser, the formatter, the stream reader, the canonical form and hashing, the three JSON forms, schemas with their packages, and typed decoding into Swift types with Codable.
 
 It follows the [specification](../spec/README.md): exact numbers, limits enforced while parsing, error positions in code points, and an error code from the catalogue on every error. It needs Swift 6.0 or later, runs on macOS 13, iOS 16 and Linux, and has no dependencies.
 
@@ -61,9 +61,9 @@ do {
 
 `parseAll(text, limits: Limits(maxDepth: 64))` sets limits (spec §7); the defaults are the spec's: depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string (counted on the value, after escapes; for a byte string, between the quotes), and 64 Mi characters per top-level value of a stream (`maxValueLength`, which only the stream reader applies: it bounds the reader's memory, while `parseAll` already holds the whole text).
 
-`maxDepth` can be at most `Limits.maxSupportedDepth`, 1024; a larger limit is rejected with the code `unsupported-depth`. The parser doesn't recurse, but the writers, the canonical form, equality and releasing a value recurse once per level of nesting: in an optimized build each of them handles 1024 levels within 512 KiB of stack, the size of the threads of Swift's concurrency pool. A debug build needs several times more per level, and handles the default depth in 512 KiB.
+`maxDepth` can be at most `Limits.maxSupportedDepth`, 256, the spec's minimum and the default; a larger limit is rejected with the code `unsupported-depth`. The parser, the JSON reader, the one-line writers (compact, minimised, canonical form, self-describing JSON), the value checker and equality don't recurse. The pretty writer, decoding with a schema, the Codable coders and releasing a value recurse once per level, and each handles the deepest value within 512 KiB of stack, the size of the threads of Swift's concurrency pool, in a debug build too (self-describing JSON takes up to 4·d + 2 JSON levels for d levels, spec §16). `checkValue(value, limits:)` checks a value built in code against the limits, and against `Limits.maxNodes` nodes: Swift's arrays share their storage, so a value can hold an array many times.
 
-Duplicate keys are found in linear time whatever the keys: small records are scanned, larger ones indexed with Swift's `Hasher`, which is seeded at random per process (unless `SWIFT_DETERMINISTIC_HASHING` is set).
+Duplicate keys are found in linear time whatever the keys: the keys of a small record are compared only when a cheap sketch of them (length, first and last byte) matches, those of a larger one are chained by a cheap hash of their length and first and last eight bytes, and a chain that grows long, as only keys made to collide do, switches the record to Swift's `Hasher`, which is seeded at random per process (unless `SWIFT_DETERMINISTIC_HASHING` is set).
 
 ## Streams
 
@@ -87,6 +87,48 @@ while let value = try reader.next() { handle(value) } // stream-truncated if the
 
 `stringify(value, options)` and `stringifyAll(values, options)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes, and a stream with a comma after every value. A value's `description` is its compact layout.
 
+## JSON
+
+The three JSON forms of spec §16, with numbers kept exact:
+
+```swift
+let v = try importJSON(#"{"total": 19.90, "paid": true}"#)  // { total: 19.90, paid: True }: any JSON (§16.1)
+let text = try toHausJSON(v)                                 // {"_haus":1,"_value":{"_rec":{…}}}: every haus value (§16.2)
+let back = try fromHausJSON(text)                            // the same value
+```
+
+Readers take I-JSON: duplicate member names are `duplicate-key`, unpaired surrogates `unpaired-surrogate`, and errors in the text have their position, errors in the form their place (`$._value._rec.price._num`). `toHausJSONLines`, `fromHausJSONLines` and `importJSONLines` do JSON Lines, and a `JSONLinesReader(.selfDescribing)` reads it from chunks, one line at a time. Schema-based JSON, the JSON a JSON consumer expects, goes with a type: `type.toJSON(value)` and `type.fromJSON(text)` (below).
+
+## Schemas
+
+`HausSchema` reads a schema file (spec §14) with its imports: `std/time`, files next to it, and schema packages (§13.3), which a `PackageLocator` finds: `.explicit(packages:folders:)`, `.nodeModules` by npm's rules, or both (`.explicit(…).or(.nodeModules)`). Every rule of §13.3 and §14 is checked when it loads, so a type decodes in time linear in the input.
+
+```swift
+let schema = try HausSchema(contentsOf: "order.schema.haus", options: .init(packages: .nodeModules))
+let order = try schema.type("Order")
+let decoded = try order.decode(try parse(text))  // the value an encoder writes back (§15)
+let json = try order.toJSON(decoded)             // schema-based JSON (§16.3)
+```
+
+Errors have a code and the place of the failing value, `$.items[2].price`. `checkTime("Date", "2026-02-30")` checks a std/time text by its profile, and `Secret<T>` holds a value that is never printed.
+
+### Swift types
+
+Types that are `Codable` decode with a schema type and encode back; the schema checks the value first, so its errors keep their codes and places:
+
+```swift
+struct UserId: Codable { let id: String }                  // UserId("usr_ada"): one argument, one field
+enum Status: Codable { case pending, shipped(tracking: String), cancelled }
+struct Order: Codable { let id: Int; let customer: UserId; let status: Status }
+
+let order = try schema.type("Order").decode(Order.self, fromText: text)
+let value = try schema.type("Order").encode(order)       // a HausValue the type accepts
+```
+
+Records are structs (or `[String: V]` for a `Map`), variants enums whose cases are the tags with a lowercase first letter (`Shipped` is `shipped`, `HTTPError` `httpError`), with the fields of a record case as labelled values and positional arguments as `_0`, `_1`. A payload-less closed variant can also be a `String` raw-value enum. `Maybe` is an `Optional`, integers any fixed-width integer (range checked, `out-of-range`), `Float64` a `Double`, `Decimal` a `HausNumber` (exact), `Bytes` `[UInt8]`, a std/time value its text, `Any` a `HausValue`. An enum with a case `unknown(HausValue)` keeps the tags an open variant doesn't list; without it, they are `unknown-tag`. A `HausCodec` chooses another host type for a named type by its id (§13.4), such as Foundation's `Date` for `std/time#Date`.
+
+[`Examples/quickstart`](Examples/quickstart/main.swift) and [`Examples/order`](Examples/order/main.swift) do the same as the other bindings' examples, on the same files: `swift run quickstart`, `swift run order`.
+
 ## Canonical form and hashing
 
 ```swift
@@ -109,4 +151,4 @@ swift format -i --configuration .swift-format -r Sources Tests ../fuzz/swift-run
 
 The differential fuzzers (`../fuzz`) run the Swift parser, stream reader, canonical form and formatters against the other bindings and the Lean reference parser, through [`../fuzz/swift-runner`](../fuzz/swift-runner).
 
-Byte scanning lives in [`Sources/Haus/Scan.swift`](Sources/Haus/Scan.swift), shared by the parser and the writers: the classes of bytes, the characters a string can't hold raw (named code-point ranges and the UTF-8 lead bytes they start with), and plain ASCII skipped eight bytes at a time.
+Byte scanning lives in [`Sources/Haus/Scan.swift`](Sources/Haus/Scan.swift), shared by the parser and the writers: the classes of bytes, the characters a string can't hold raw (named code-point ranges and the UTF-8 lead bytes they start with), plain ASCII skipped eight bytes at a time, and the sketch, cheap hash and comparison of record keys. The writers of one-line text (compact, minimised, canonical form, self-describing JSON) and the value checker share one walk without recursion, [`Sources/Haus/Walk.swift`](Sources/Haus/Walk.swift), each with its own spelling.

@@ -5,15 +5,15 @@
 /// let values = try parseAll(text, limits: Limits(maxDepth: 64))
 /// ```
 public struct Limits: Sendable, Hashable {
-    /// The deepest nesting supported. The parser doesn't recurse, but the
-    /// writers, the canonical form, equality and releasing a value do, once
-    /// per level. In an optimized build each of them handles this depth
-    /// within 512 KiB of stack, the size of the threads of Swift's
-    /// concurrency pool; an unoptimized (debug) build needs several times
-    /// more per level, and handles the default depth, 256, in 512 KiB. A
-    /// larger ``maxDepth`` is rejected with the code `unsupported-depth`
-    /// (spec §7).
-    public static let maxSupportedDepth = 1024
+    /// The deepest nesting supported: 256, the spec's minimum and the
+    /// default. The parser and the JSON reader don't recurse, but the
+    /// writers, the canonical form, equality, releasing a value, the JSON
+    /// forms and decoding with a schema do, once per level; self-describing
+    /// JSON takes up to 4·d + 2 JSON levels for d levels (spec §16). Each of
+    /// them handles this depth within 512 KiB of stack, the size of the
+    /// threads of Swift's concurrency pool, also in a debug build. A larger
+    /// ``maxDepth`` is rejected with the code `unsupported-depth` (spec §7).
+    public static let maxSupportedDepth = 256
 
     /// The deepest nesting of records, arrays and payloads, counted on the
     /// text as written (spec §7). Default 256; at most ``maxSupportedDepth``.

@@ -1,9 +1,9 @@
 /**
  * Differential testing of the std/time checkers: generated strings through
- * the Lean model (spec/lean/Haus/Time) and the TypeScript, Rust, Roc and
- * Python checkers, reporting where they disagree. See ../README.md.
+ * the Lean model (spec/lean/Haus/Time) and the TypeScript, Rust, Roc,
+ * Python, Go and Swift checkers, reporting where they disagree. See ../README.md.
  *
- *   node fuzz/src/time.ts [--count N] [--seed S] [--out DIR]
+ *   node fuzz/src/time.ts [--count N] [--seed S] [--out DIR] [--runners lean,go,…]
  */
 import { spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -17,6 +17,7 @@ const { values: args } = parseArgs({
     count: { type: "string", default: "20000" },
     seed: { type: "string", default: String(Date.now() % 1_000_000) },
     out: { type: "string", default: "fuzz/.out/time" },
+    runners: { type: "string" }, // a subset, lean first; default: all
   },
 })
 const count = Number(args.count)
@@ -161,14 +162,22 @@ function external(program: string, args: readonly string[] = []): (file: string,
   }
 }
 
-const runners: ReadonlyArray<{ readonly name: string; run(file: string, cases: readonly Case[]): Outcome[] }> = [
+const ALL_RUNNERS: ReadonlyArray<{ readonly name: string; run(file: string, cases: readonly Case[]): Outcome[] }> = [
   { name: "lean", run: external(join(root, "spec/lean/.lake/build/bin/haus-ref"), ["--time-batch"]) },
   { name: "typescript", run: (_f, cases) => cases.map((c) => (checkStdTime(c.type, c.text) === undefined ? "ok" : "no")) },
   { name: "rust", run: external(join(root, "rust/target/release/examples/time_runner")) },
   { name: "roc", run: external(join(root, "fuzz/.build/roc-time-runner")) },
   { name: "python", run: external(join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/time_runner.py")]) },
   { name: "go", run: external(join(root, "fuzz/.build/go-runner"), ["--time"]) },
+  { name: "swift", run: external(join(root, "fuzz/.build/swift-runner"), ["--time"]) },
 ]
+const wanted = args.runners?.split(",") ?? ALL_RUNNERS.map((r) => r.name)
+if (wanted[0] !== "lean") throw new Error("--runners must start with lean, the reference")
+const runners = wanted.map((name) => {
+  const r = ALL_RUNNERS.find((r) => r.name === name)
+  if (!r) throw new Error(`unknown runner ${name} (${ALL_RUNNERS.map((r) => r.name).join(", ")})`)
+  return r
+})
 
 /** results[case][runner] */
 function runAll(cases: readonly Case[]): Outcome[][] {
