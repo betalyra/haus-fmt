@@ -117,6 +117,7 @@ export default defineConfig({
           label: 'Reference',
           items: [
             { label: 'Design and FAQ', slug: 'docs/design' },
+            { label: 'Why you can trust haus', slug: 'docs/trust' },
             { label: 'Where types come from', slug: 'docs/types' },
             { label: 'Error codes', slug: 'docs/errors' },
             { label: 'Specification', slug: 'docs/spec' },

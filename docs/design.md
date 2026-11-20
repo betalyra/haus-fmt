@@ -197,8 +197,8 @@ The reference parser, written in Lean, is. Proven in Lean:
 
 Not proven:
 
-- **The bindings you use.** TypeScript, Effect, Rust, Python and Roc are checked against the reference by the conformance suites and by differential fuzzing in CI. That has found real bugs, but it is testing, not proof.
-- **Running time.** Linear time is a rule of the spec, and regression tests check it, but neither the proofs nor the fuzzer measure time.
-- **Some parts below the model.** The model reads Unicode code points, so UTF-8 decoding isn't covered; the proofs cover the text that is hashed, not SHA-256 itself; the stream model leaves out the limit on one value's length, strict mode and error positions; and schema files are parsed by the TypeScript binding before the Lean decoder sees them.
+- **The bindings you use.** TypeScript, Effect, Rust, Python, Go and Roc are checked against the reference by the conformance suites and by differential fuzzing in CI. That has found real bugs, but it is testing, not proof.
+- **Running time in the bindings.** The reference parser is proven linear in a cost model that counts its steps, and so is the reference decoder, assuming float rounding and `std/time` checks are linear in their literal. The bindings' own speed is checked by tests with hostile inputs, not proven.
+- **Some parts below the model.** The model reads Unicode code points, so UTF-8 decoding isn't covered, and neither are error positions; the proofs cover the text that is hashed, not SHA-256 itself.
 
-The theorems, with their names: [`spec/lean/README.md`](https://github.com/betalyra/haus-fmt/blob/main/spec/lean/README.md).
+In plain words, with what each proof assumes: [Why you can trust haus](/docs/trust#proven). The theorems, with their names: [`spec/lean/README.md`](https://github.com/betalyra/haus-fmt/blob/main/spec/lean/README.md).
