@@ -1,9 +1,9 @@
 /**
  * Differential testing of the formatters (spec §11): generated documents
- * (format-gen.ts) through the TypeScript, Rust and Go formatters in the
+ * (format-gen.ts) through the TypeScript, Rust, Go and Swift formatters in the
  * pretty, compact and minimised layouts, which must write the same bytes and
  * keep the properties of §11; and generated values through the value writers
- * of TypeScript, Rust, Roc and Go, which must write what Lean's layout writers
+ * of TypeScript, Rust, Roc, Go and Swift, which must write what Lean's layout writers
  * write (compact, minimised and pretty), byte for byte. See ../README.md.
  *
  *   node fuzz/src/main.ts --format [--count N] [--seed S] [--out DIR]
@@ -38,6 +38,7 @@ const root = new URL("../..", import.meta.url).pathname
 const RUST = join(root, "rust/target/release/examples/fuzz_runner")
 const ROC = join(root, "fuzz/.build/roc-runner")
 const GO = join(root, "fuzz/.build/go-runner")
+const SWIFT = join(root, "fuzz/.build/swift-runner")
 const LEAN = join(root, "spec/lean/.lake/build/bin/haus-ref")
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
@@ -334,14 +335,16 @@ interface Formatter {
 }
 
 /**
- * The formatters compared with TypeScript's: Rust's (`fuzz_runner --format`)
- * and Go's (`go-runner --format`, `haus.Format`). Go's options take 0 as
- * the default (indent 2, width 80), so it can't be given an indent or width
- * of 0 and sits out those batches.
+ * The formatters compared with TypeScript's: Rust's (`fuzz_runner --format`),
+ * Go's (`go-runner --format`, `haus.Format`) and Swift's (`swift-runner
+ * --format`, `format`). Go's options take 0 as the default (indent 2, width
+ * 80), so it can't be given an indent or width of 0 and sits out those
+ * batches.
  */
 const FORMATTERS: readonly Formatter[] = [
   { name: "rust", program: RUST, takes: () => true },
   { name: "go", program: GO, takes: (o) => o.indent > 0 && o.width > 0 },
+  { name: "swift", program: SWIFT, takes: () => true },
 ]
 
 const formattersFor = (options: Options) => FORMATTERS.filter((f) => f.takes(options))
@@ -476,8 +479,9 @@ interface Writer {
  * `Encode.stream_minimised` (`runner.roc --write`), neither with a pretty
  * writer from values; and Go's `FormatValue` and `FormatValues` in every
  * layout (`go-runner --write`; its options take 0 as the default, so it sits
- * out pretty with an indent or width of 0). TypeScript's `stringify` and
- * `format` run in this process.
+ * out pretty with an indent or width of 0); and Swift's `stringify` and
+ * `stringifyAll` in every layout (`swift-runner --write`). TypeScript's
+ * `stringify` and `format` run in this process.
  */
 const WRITERS: readonly Writer[] = [
   { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
@@ -487,6 +491,7 @@ const WRITERS: readonly Writer[] = [
     program: GO,
     args: (s, o) => (s !== "pretty" ? ["--write", s] : o.indent > 0 && o.width > 0 ? ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] : undefined),
   },
+  { name: "swift", program: SWIFT, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
 ]
 
 /** Lean's layout argument: pretty with the options. */
@@ -620,7 +625,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   let streams = 0
   const MAX_SHRUNK = 3
 
-  console.log(`seed ${seed}: ${count} documents through the typescript, rust and go formatters (pretty, compact, minimised), their values through the lean, typescript, rust, roc and go writers`)
+  console.log(`seed ${seed}: ${count} documents through the typescript, rust, go and swift formatters (pretty, compact, minimised), their values through the lean, typescript, rust, roc, go and swift writers`)
   for (let done = 0; done < count; done += batch) {
     // Most batches use the default options; some another indentation and width.
     const options = rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)

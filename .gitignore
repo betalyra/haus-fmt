@@ -8,6 +8,11 @@ roc/**/build/
 .claude/worktrees/
 # Rust build output
 rust/target/
+# Swift build output
+swift/.build/
+swift/.swiftpm/
+/.build/
+/.swiftpm/
 bench/speed/rust/target/
 # Demo Time recordings (local only)
 .demo/

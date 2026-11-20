@@ -31,6 +31,8 @@ export interface Format {
 const root = new URL("../..", import.meta.url).pathname
 /** The Go runner (fuzz/go): every fuzzer's modes in one program. */
 export const GO = join(root, "fuzz/.build/go-runner")
+/** The Swift runner (fuzz/swift-runner): the parser, stream reader, canonical form and formatters. */
+export const SWIFT = join(root, "fuzz/.build/swift-runner")
 
 /** JSON with object keys sorted, so field order doesn't matter. */
 export function normalize(json: string): string {
@@ -148,12 +150,14 @@ export const runners: readonly Runner[] = [
   typescript,
   external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py")], { codes: true }),
   external("go", GO, [], { codes: true }),
+  external("swift", SWIFT, [], { codes: true }),
   // The stream readers, on the same inputs in chunks: they must give what parsing the whole input gives.
   external("rust-stream", join(root, "rust/target/release/examples/fuzz_runner"), ["--stream"], { codes: true }),
   external("roc-stream", join(root, "fuzz/.build/roc-runner"), ["--stream"], { codes: true }),
   typescriptStream,
   external("python-stream", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py"), "--stream"], { codes: true }),
   external("go-stream", GO, ["--stream"], { codes: true }),
+  external("swift-stream", SWIFT, ["--stream"], { codes: true }),
 ]
 
 /**
@@ -167,6 +171,7 @@ export const canonicalRunners: readonly Runner[] = [
   { name: "typescript", run: (_dir, cases) => cases.map((bytes) => result(() => parseAll(utf8.decode(bytes)), canonical)) },
   external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/runner.py"), "--canonical"], { codes: true }),
   external("go", GO, ["--canonical"], { codes: true }),
+  external("swift", SWIFT, ["--canonical"], { codes: true }),
 ]
 
 /** The runners in use: the parsers, or with `--canonical` the canonical forms. */

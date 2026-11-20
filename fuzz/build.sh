@@ -10,6 +10,9 @@ cd "$(dirname "$0")/.."
 (cd fuzz/schema-rust && cargo build -q --release)
 mkdir -p fuzz/.build
 (cd fuzz/go && go build -o ../.build/go-runner .)
+# On Linux the Swift runner links Swift's standard library in, so the fuzz jobs run it without Swift.
+swift_static=""; [ "$(uname)" = Linux ] && swift_static="--static-swift-stdlib"
+(cd fuzz/swift-runner && swift build -q -c release $swift_static && cp "$(swift build -c release --show-bin-path)/swift-runner" ../.build/swift-runner)
 (cd roc/fuzz && roc build --output=../../fuzz/.build/roc-runner runner.roc >/dev/null)
 (cd roc/fuzz && roc build --output=../../fuzz/.build/roc-time-runner time_runner.roc >/dev/null)
 (cd fuzz/roc && roc build --output=../.build/roc-profile-runner profile_runner.roc >/dev/null)
@@ -17,4 +20,4 @@ node fuzz/roc/gen_schemas.ts >/dev/null
 (cd fuzz/roc && roc build --output=../.build/roc-schema-runner schema_runner.roc >/dev/null)
 node fuzz/roc/gen_json_schemas.ts >/dev/null
 (cd fuzz/roc && roc build --output=../.build/roc-json-runner json_runner.roc >/dev/null)
-echo "built: lean, rust, typescript, effect, roc, python, go"
+echo "built: lean, rust, typescript, effect, roc, python, go, swift"

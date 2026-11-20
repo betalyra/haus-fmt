@@ -1,0 +1,386 @@
+// Generated from spec/errors.haus by Tests/HausTests/ErrorCodeTests.swift. Don't edit: edit
+// spec/errors.haus and run `HAUS_WRITE_ERROR_CODES=1 swift test --filter ErrorCodeTests`.
+// swift-format-ignore-file
+
+extension HausError {
+    /// An error code (spec §17): which mistake an error is. Stable, and the same in every binding.
+    /// Its raw value is its name, `payload-newline`; ``hint`` is the usual fix.
+    public enum Code: String, Sendable, CaseIterable {
+        /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.
+        case invalidUtf8 = "invalid-utf8"
+        /// `version-directive`: The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.
+        case versionDirective = "version-directive"
+        /// `expected-value`: A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be.
+        case expectedValue = "expected-value"
+        /// `missing-comma`: Two values, fields or top-level values follow each other without a comma between them.
+        case missingComma = "missing-comma"
+        /// `payload-newline`: A tag is followed by `(` or `{` on a later line, or after a comment. A payload must start on the tag's line (§5), so the two are read as separate values, and a comma is missing between them.
+        case payloadNewline = "payload-newline"
+        /// `unexpected-closer`: A closing bracket that doesn't match the open one, or that has no open one.
+        case unexpectedCloser = "unexpected-closer"
+        /// `unclosed-bracket`: A `{`, `[` or `(` is never closed: the input ends first.
+        case unclosedBracket = "unclosed-bracket"
+        /// `null-literal`: `null` is not a value: haus has no null (§1).
+        case nullLiteral = "null-literal"
+        /// `boolean-literal`: `true` and `false` are not values: booleans are the tags `True` and `False` (§1).
+        case booleanLiteral = "boolean-literal"
+        /// `bare-identifier`: A lowercase word where a value should be. Lowercase identifiers are only record keys.
+        case bareIdentifier = "bare-identifier"
+        /// `expected-key`: Something that can't be a record key where a key should be, such as a number or a comma.
+        case expectedKey = "expected-key"
+        /// `uppercase-key`: A record key starts with a capital letter. Bare keys start with a lowercase letter or `_`; capitalized words are tags.
+        case uppercaseKey = "uppercase-key"
+        /// `block-string-key`: A block string (`"""`) is used as a record key.
+        case blockStringKey = "block-string-key"
+        /// `missing-colon`: A record key is not followed by `:`.
+        case missingColon = "missing-colon"
+        /// `duplicate-key`: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16).
+        case duplicateKey = "duplicate-key"
+        /// `empty-payload`: A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.
+        case emptyPayload = "empty-payload"
+        /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
+        case invalidNumber = "invalid-number"
+        /// `unterminated-string`: A string has no closing `"` (in haus or JSON).
+        case unterminatedString = "unterminated-string"
+        /// `string-line-break`: A raw line break inside a `"…"` string.
+        case stringLineBreak = "string-line-break"
+        /// `control-character`: A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `"…"` strings. Also a raw control character in a JSON string: C0 in any JSON, DEL and C1 in self-describing JSON (§16).
+        case controlCharacter = "control-character"
+        /// `bidi-control`: A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, or in a self-describing JSON string (§16), where it could reorder how the text is displayed ("Trojan Source", §9).
+        case bidiControl = "bidi-control"
+        /// `invalid-escape`: A backslash followed by a character that doesn't start an escape. haus has `\"`, `\\`, `\n`, `\r`, `\t` and `\u{…}`; JSON has its own set.
+        case invalidEscape = "invalid-escape"
+        /// `invalid-unicode-escape`: A `\u` escape that isn't `\u{` 1 to 6 hex digits `}`, or names no Unicode scalar value (a surrogate, or above 10FFFF). In JSON: `\u` not followed by four hex digits.
+        case invalidUnicodeEscape = "invalid-unicode-escape"
+        /// `block-string-opening`: Text after the opening `"""` of a block string. The content starts on the next line.
+        case blockStringOpening = "block-string-opening"
+        /// `block-string-closing`: The closing `"""` of a block string has text before it on its line.
+        case blockStringClosing = "block-string-closing"
+        /// `block-string-indent`: A line of a block string is indented less than the closing `"""`, whose indentation every line must start with.
+        case blockStringIndent = "block-string-indent"
+        /// `unterminated-block-string`: A block string has no closing `"""`.
+        case unterminatedBlockString = "unterminated-block-string"
+        /// `unterminated-bytes`: A byte string `x"…` has no closing `"`.
+        case unterminatedBytes = "unterminated-bytes"
+        /// `bytes-not-hex`: A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break.
+        case bytesNotHex = "bytes-not-hex"
+        /// `bytes-odd-digits`: A byte in a byte string has only one hex digit: an odd number of digits, or a space inside a byte.
+        case bytesOddDigits = "bytes-odd-digits"
+        /// `lone-carriage-return`: A carriage return (CR) not followed by a line feed. Line breaks are LF or CRLF.
+        case loneCarriageReturn = "lone-carriage-return"
+        /// `unterminated-comment`: A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`.
+        case unterminatedComment = "unterminated-comment"
+        /// `stray-slash`: A `/` that doesn't start a comment. Comments are `//` and `/* */`; haus has no operators.
+        case straySlash = "stray-slash"
+        /// `nesting-too-deep`: Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16).
+        case nestingTooDeep = "nesting-too-deep"
+        /// `number-too-long`: A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7).
+        case numberTooLong = "number-too-long"
+        /// `exponent-too-large`: A number's exponent is larger than the limit (default 6144), in either direction.
+        case exponentTooLarge = "exponent-too-large"
+        /// `string-too-long`: A string or byte string has more characters than the limit (default 16 Mi).
+        case stringTooLong = "string-too-long"
+        /// `key-too-long`: A record key has more characters than the string limit (default 16 Mi).
+        case keyTooLong = "key-too-long"
+        /// `tag-too-long`: A tag has more characters than the string limit (default 16 Mi).
+        case tagTooLong = "tag-too-long"
+        /// `value-too-long`: One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).
+        case valueTooLong = "value-too-long"
+        /// `unsupported-depth`: The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input.
+        case unsupportedDepth = "unsupported-depth"
+        /// `not-one-value`: One value was expected (a single document, a type that isn't a `Stream`), and the input holds none or several.
+        case notOneValue = "not-one-value"
+        /// `stream-truncated`: In strict mode, a stream ended without a comma (or, in JSON Lines, a line feed) after its last value, so the last value may be cut off (§6).
+        case streamTruncated = "stream-truncated"
+        /// `schema-syntax`: A schema file doesn't follow the grammar: an unexpected token, a character that has no place there. Mistakes in the comments, whitespace and strings a schema file shares with data files (§14) have the codes they have there: `unterminated-string`, `unterminated-comment`, `lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `invalid-escape`.
+        case schemaSyntax = "schema-syntax"
+        /// `unknown-type`: A type name that is neither defined in the file, imported, nor a prelude type. A type a standard module or official extension has needs its import.
+        case unknownType = "unknown-type"
+        /// `wrong-arity`: A type is used with the wrong number of arguments: `Array` without its element type, `Int` with one, a generic type of your own with too few or too many.
+        case wrongArity = "wrong-arity"
+        /// `duplicate-type`: Two definitions of the same type name, or a definition with the name of an imported type.
+        case duplicateType = "duplicate-type"
+        /// `redefine-prelude`: A definition with the name of a prelude type (`Int`, `Any`, `Secret`, `Maybe`, …), which schemas can't redefine.
+        case redefinePrelude = "redefine-prelude"
+        /// `unknown-parameter`: A lowercase name in a type that is not a parameter of the definition.
+        case unknownParameter = "unknown-parameter"
+        /// `invalid-parameter`: A type parameter named `_`, or the same parameter twice.
+        case invalidParameter = "invalid-parameter"
+        /// `underscore-type`: `_` used as a type. Types are open by default, so there is no wildcard.
+        case underscoreType = "underscore-type"
+        /// `duplicate-field`: A record type lists the same field twice, also one copied in by a spread.
+        case duplicateField = "duplicate-field"
+        /// `duplicate-tag`: A variant type lists the same tag twice, also one copied in by a spread.
+        case duplicateTag = "duplicate-tag"
+        /// `closed-empty-variant`: `closed < >`: a closed variant without tags accepts nothing.
+        case closedEmptyVariant = "closed-empty-variant"
+        /// `invalid-spread`: A spread of something that can't be spread: not a named type, a type with parameters, a `Stream`, or a record spread into a variant (or a variant into a record).
+        case invalidSpread = "invalid-spread"
+        /// `spread-cycle`: A type spreads itself, directly or through other types.
+        case spreadCycle = "spread-cycle"
+        /// `row-parameter`: A spread of a parameter, `...r`. Row parameters are not part of the language.
+        case rowParameter = "row-parameter"
+        /// `misplaced-stream`: `Stream` used anywhere but as the whole type of a definition, or a reference to such a definition. A stream is a whole file.
+        case misplacedStream = "misplaced-stream"
+        /// `unguarded-recursion`: A type refers to itself without a record field, array element or variant payload in between (§9.9), so decoding it would consume no input. `Secret` and names don't count as a step.
+        case unguardedRecursion = "unguarded-recursion"
+        /// `growing-recursion`: Generic types whose instances could grow without bound: a type parameter passes, wrapped in a bigger type, along a cycle of references back to itself (`type T a = < X (T (Pair a a)) >`, §9.10).
+        case growingRecursion = "growing-recursion"
+        /// `type-too-deep`: Type expressions are nested deeper than the schema parser's limit.
+        case typeTooDeep = "type-too-deep"
+        /// `attribute-arguments`: An attribute this version defines, given arguments it doesn't take: `@deprecated` takes nothing or one string. Also empty parentheses after an attribute.
+        case attributeArguments = "attribute-arguments"
+        /// `attribute-twice`: The same attribute twice on one type, field or tag.
+        case attributeTwice = "attribute-twice"
+        /// `attribute-space`: A space between an attribute's name and its `(`.
+        case attributeSpace = "attribute-space"
+        /// `attribute-on-spread`: An attribute on a spread. The fields and tags a spread copies keep their own attributes.
+        case attributeOnSpread = "attribute-on-spread"
+        /// `unknown-module`: An import of a module that doesn't exist: an unknown standard module, a former standard module, or a name that is neither `std/…`, a package `@org/name` nor a file `./name`.
+        case unknownModule = "unknown-module"
+        /// `unknown-import`: An import names a type the module doesn't have, or no type at all.
+        case unknownImport = "unknown-import"
+        /// `duplicate-import`: The same type name is imported twice.
+        case duplicateImport = "duplicate-import"
+        /// `import-unavailable`: The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there.
+        case importUnavailable = "import-unavailable"
+        /// `import-not-found`: An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.
+        case importNotFound = "import-not-found"
+        /// `import-version`: An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.
+        case importVersion = "import-version"
+        /// `import-cycle`: Schema files import each other in a cycle.
+        case importCycle = "import-cycle"
+        /// `duplicate-package`: One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package.
+        case duplicatePackage = "duplicate-package"
+        /// `undeclared-package`: A file imports a package that its package or project doesn't declare as a dependency (with npm: in the package's own `package.json`, or the nearest one above an application file), or a file with no `package.json` above it imports a package that wasn't given explicitly. A package found only because the package manager placed it nearby, such as a hoisted dependency of a dependency, could be replaced by another one placed there. Checked before the package is looked for.
+        case undeclaredPackage = "undeclared-package"
+        /// `package-manifest`: A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB.
+        case packageManifest = "package-manifest"
+        /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3).
+        case packageVersion = "package-version"
+        /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
+        case packagePath = "package-path"
+        /// `package-name`: A package manager's name for a schema package differs from its manifest's: the `name` of its `package.json` isn't the `name` of its `package.haus`. On npm, imports find a package by that name, so it must be the manifest's (§13.3). Reported by package checks such as `haus package check`.
+        case packageName = "package-name"
+        /// `package-crate`: A schema package's crate can't be named by the code generated for crates that use its types: its `links` is missing or isn't its library's name (`[lib] name`), or a crate depends on a schema package's crate under another name (`package = …`). Generated code names a schema package's crate by its `links`, which is its library's name. Reported by package checks such as `haus package check`.
+        case packageCrate = "package-crate"
+        /// `package-install-script`: A schema package runs code when it is installed: an npm `preinstall`, `install` or `postinstall` script, or a `binding.gyp`, for which npm runs node-gyp. A schema package is data and MUST NOT need code to install (§13.3).
+        case packageInstallScript = "package-install-script"
+        /// `package-files`: A package manager's configuration doesn't ship a file of the schema package: `package.haus`, `schema.haus`, or a profile's vectors or rule. Read from the configuration (`files` of `package.json`, `include` of `Cargo.toml`, a wheel's build configuration), without packing anything.
+        case packageFiles = "package-files"
+        /// `profile-vectors`: A profile of a schema package is malformed (§13.3): it has no rule (`profiles/<name>.md`) next to its vectors; a vector isn't `Accept { type, value, output?, note? }` or `Reject { type, value, note? }` with string fields and no others (only an `Accept` has an `output`); its `type` isn't a type of the package without parameters; its `value` or `output` isn't one haus value; or an accepted value or its output isn't valid for its type, which a codec running after the schema can't accept. Also a profile name that isn't lowercase, and a vectors file with no vectors.
+        case profileVectors = "profile-vectors"
+        /// `package-wrapper`: A package manager's file of a schema package can't be read as one: a `package.json` that isn't a JSON object or has no `name`, a `Cargo.toml` or `pyproject.toml` that isn't valid TOML, a `Cargo.toml` without `[package]`. Reported by package checks such as `haus package check`.
+        case packageWrapper = "package-wrapper"
+        /// `codec-unreachable`: A codec's type occurs where this binding can't apply the codec, such as the payload of a record case whose fields sit beside its tag in the host value. Decoding there with the default host type would silently differ from the other bindings (§13.4).
+        case codecUnreachable = "codec-unreachable"
+        /// `file-too-large`: A schema file or a package's `package.json` is larger than the tool allows (1 MiB by default). It is not read.
+        case fileTooLarge = "file-too-large"
+        /// `too-many-files`: A schema imports more schema files, directly or not, than the tool allows (256 by default, the root included), or a folder of packages has more entries than allowed (4096).
+        case tooManyFiles = "too-many-files"
+        /// `type-mismatch`: A value of another kind than the type accepts: a string for an `Int`, an array for a record, a tag that isn't `True` or `False` for a `Bool`. Decoders never convert between kinds (§15).
+        case typeMismatch = "type-mismatch"
+        /// `not-an-integer`: A number with a fraction or an exponent where an integer type is expected. `1.0` and `1e3` are not whole numbers by spelling (§15).
+        case notAnInteger = "not-an-integer"
+        /// `out-of-range`: A number outside the type's range: an `Int8` above 127, a negative `UInt32`, a float too large for `Float32`. Never wrapped or clamped.
+        case outOfRange = "out-of-range"
+        /// `missing-field`: A record lacks a field the type requires. Only fields with `?` may be missing; `None` is not missing.
+        case missingField = "missing-field"
+        /// `unknown-field`: A field a closed record doesn't list. Open records ignore such fields (see `unlisted-field`).
+        case unknownField = "unknown-field"
+        /// `unknown-tag`: A tag a closed variant doesn't list. Open variants read it as an unknown value (see `unlisted-tag`).
+        case unknownTag = "unknown-tag"
+        /// `wrong-payload`: A listed tag with another payload than its case says: arguments for a tag without payload, the wrong number of arguments, a positional payload where a record is expected, such as `Circle(1.5)` for the case `Circle { r: Float64 }` (§15).
+        case wrongPayload = "wrong-payload"
+        /// `invalid-time`: A std/time value whose text the std/time profile rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md).
+        case invalidTime = "invalid-time"
+        /// `invalid-secret`: A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).
+        case invalidSecret = "invalid-secret"
+        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.
+        case cannotEncode = "cannot-encode"
+        /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
+        case cyclicValue = "cyclic-value"
+        /// `step-budget`: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).
+        case stepBudget = "step-budget"
+        /// `too-many-nodes`: A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
+        case tooManyNodes = "too-many-nodes"
+        /// `json-syntax`: Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.
+        case jsonSyntax = "json-syntax"
+        /// `unpaired-surrogate`: A JSON string with half of a UTF-16 surrogate pair, raw or as `\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).
+        case unpairedSurrogate = "unpaired-surrogate"
+        /// `haus-json-form`: JSON that isn't self-describing JSON (§16.2): a text without the envelope `{"_haus": 1, "_value": …}`, an envelope with other members, a bare number, `true`, `null`, an object with other members, a `_rec` that isn't an object, an `_args` that isn't a non-empty array.
+        case hausJsonForm = "haus-json-form"
+        /// `haus-json-version`: A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.
+        case hausJsonVersion = "haus-json-version"
+        /// `haus-json-number`: A self-describing `_num` that isn't a normalized number literal (§2): `"1E5"`, `"01"`, `"0xff"`, or not a string.
+        case hausJsonNumber = "haus-json-number"
+        /// `haus-json-bytes`: A self-describing `_bytes` that isn't two lowercase hex digits per byte.
+        case hausJsonBytes = "haus-json-bytes"
+        /// `invalid-tag`: A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code.
+        case invalidTag = "invalid-tag"
+        /// `invalid-base64`: Schema-based JSON `Bytes` that aren't canonical base64 with padding (RFC 4648 §4): whitespace, the URL alphabet, missing padding, non-zero pad bits.
+        case invalidBase64 = "invalid-base64"
+        /// `missing-member`: Schema-based JSON: an object lacks a member its form needs, such as `"_tag"` for a variant or `"value"` for a tag with one argument.
+        case missingMember = "missing-member"
+        /// `unexpected-member`: Schema-based JSON: an object has a member its form doesn't have, such as `"value"` next to a tag without payload (§16.3).
+        case unexpectedMember = "unexpected-member"
+        /// `no-json-form`: A value or type that has no JSON form: a string with an unpaired surrogate, a record payload with a field named `_tag` or `_args` in schema-based JSON (§16.3), a type with no schema-based form.
+        case noJsonForm = "no-json-form"
+        /// `unknown-attribute`: A warning: an attribute this version of haus doesn't define. It is accepted and has no meaning (§14).
+        case unknownAttribute = "unknown-attribute"
+        /// `deprecated`: A hint: the schema or the data uses a type, field or tag marked `@deprecated` (§14).
+        case deprecated = "deprecated"
+        /// `unlisted-field`: A hint: a field an open record doesn't list. A reader ignores it, but it may be a typo.
+        case unlistedField = "unlisted-field"
+        /// `unlisted-tag`: A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo.
+        case unlistedTag = "unlisted-tag"
+    }
+
+    /// The part of the catalogue a code belongs to (spec §17).
+    public enum Category: Sendable, CaseIterable {
+        case syntax
+        case limits
+        case streams
+        case schemaFiles
+        case imports
+        case decoding
+        case json
+        case hints
+    }
+}
+
+extension HausError.Code {
+    /// The part of the catalogue the code belongs to.
+    public var category: HausError.Category {
+        switch self {
+        case .invalidUtf8, .versionDirective, .expectedValue, .missingComma, .payloadNewline, .unexpectedCloser, .unclosedBracket, .nullLiteral, .booleanLiteral, .bareIdentifier, .expectedKey, .uppercaseKey, .blockStringKey, .missingColon, .duplicateKey, .emptyPayload, .invalidNumber, .unterminatedString, .stringLineBreak, .controlCharacter, .bidiControl, .invalidEscape, .invalidUnicodeEscape, .blockStringOpening, .blockStringClosing, .blockStringIndent, .unterminatedBlockString, .unterminatedBytes, .bytesNotHex, .bytesOddDigits, .loneCarriageReturn, .unterminatedComment, .straySlash: .syntax
+        case .nestingTooDeep, .numberTooLong, .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .unsupportedDepth: .limits
+        case .notOneValue, .streamTruncated: .streams
+        case .schemaSyntax, .unknownType, .wrongArity, .duplicateType, .redefinePrelude, .unknownParameter, .invalidParameter, .underscoreType, .duplicateField, .duplicateTag, .closedEmptyVariant, .invalidSpread, .spreadCycle, .rowParameter, .misplacedStream, .unguardedRecursion, .growingRecursion, .typeTooDeep, .attributeArguments, .attributeTwice, .attributeSpace, .attributeOnSpread: .schemaFiles
+        case .unknownModule, .unknownImport, .duplicateImport, .importUnavailable, .importNotFound, .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest, .packageVersion, .packagePath, .packageName, .packageCrate, .packageInstallScript, .packageFiles, .profileVectors, .packageWrapper, .codecUnreachable, .fileTooLarge, .tooManyFiles: .imports
+        case .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag, .wrongPayload, .invalidTime, .invalidSecret, .cannotEncode, .cyclicValue, .stepBudget, .tooManyNodes: .decoding
+        case .jsonSyntax, .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes, .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm: .json
+        case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag: .hints
+        }
+    }
+
+    /// The catalogue's fix for the code: the hint reported with it.
+    public var hint: String {
+        switch self {
+        case .invalidUtf8: "Save the file as UTF-8."
+        case .versionDirective: "Read the file with a version of haus that supports it."
+        case .expectedValue: "Write a value here, or remove the extra comma or bracket."
+        case .missingComma: "Add a comma between the two values."
+        case .payloadNewline: "Put the payload on the tag's line, or add a comma if they are two values."
+        case .unexpectedCloser: "Close each bracket with its own kind (`{` `}`, `[` `]`, `(` `)`) and remove extra closing brackets."
+        case .unclosedBracket: "Add the closing bracket."
+        case .nullLiteral: "Write `None` (with a `Maybe` type), or leave the field out."
+        case .booleanLiteral: "Write `True` or `False`."
+        case .bareIdentifier: "Quote it as a string, or start it with a capital letter to make it a tag."
+        case .expectedKey: "Write a key: a lowercase identifier or a string."
+        case .uppercaseKey: "Quote the key, or start it with a lowercase letter."
+        case .blockStringKey: "Write the key as a basic string, `\"…\"`."
+        case .missingColon: "Add `:` between the key and its value."
+        case .duplicateKey: "Remove or rename one of the two."
+        case .emptyPayload: "Remove the empty parentheses after the tag."
+        case .invalidNumber: "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits."
+        case .unterminatedString: "Add the closing quote. A quote inside the string is written `\\\"`."
+        case .stringLineBreak: "Write the line break as `\\n`, or use a `\"\"\"` block string."
+        case .controlCharacter: "Write the character as an escape, `\\u{…}`."
+        case .bidiControl: "Write it as an escape (`\\u{…}`) inside a string, or remove it."
+        case .invalidEscape: "Use one of the escapes of §4, or write `\\\\` for a backslash."
+        case .invalidUnicodeEscape: "Write the escape with braces, `\\u{…}`, for a character from U+0000 to U+10FFFF other than a surrogate."
+        case .blockStringOpening: "Start the content on the line after `\"\"\"`."
+        case .blockStringClosing: "Put the closing `\"\"\"` on its own line; its indentation is removed from every line."
+        case .blockStringIndent: "Indent every line at least as far as the closing `\"\"\"`."
+        case .unterminatedBlockString: "Add the closing `\"\"\"` on its own line."
+        case .unterminatedBytes: "Add the closing quote."
+        case .bytesNotHex: "Write two hex digits per byte, on one line."
+        case .bytesOddDigits: "Write each byte as two hex digits."
+        case .loneCarriageReturn: "Save the file with LF or CRLF line endings."
+        case .unterminatedComment: "Add `*/`, one for each `/*`."
+        case .straySlash: "Write `//` or `/*` for a comment, or remove the `/`."
+        case .nestingTooDeep: "Flatten the data, or raise the depth limit if you trust the input."
+        case .numberTooLong: "Write a shorter number (a `String` or `Bytes` for very long data), or raise the number length limit."
+        case .exponentTooLarge: "Write a number with a smaller exponent, or raise the exponent limit."
+        case .stringTooLong: "Split the string, or raise the string length limit."
+        case .keyTooLong: "Use a shorter key, or raise the string length limit."
+        case .tagTooLong: "Use a shorter tag, or raise the string length limit."
+        case .valueTooLong: "Send smaller values, or raise the value length limit."
+        case .unsupportedDepth: "Configure a depth limit within the binding's documented maximum."
+        case .notOneValue: "Give exactly one value, or read the input as a stream."
+        case .streamTruncated: "End every value with a comma, or check that the stream wasn't cut off."
+        case .schemaSyntax: "Write it as the grammar says (grammar.ebnf); the message names what was expected."
+        case .unknownType: "Define the type, fix its spelling, or import it from the module that defines it."
+        case .wrongArity: "Give the type exactly as many arguments as it has parameters."
+        case .duplicateType: "Rename one of them."
+        case .redefinePrelude: "Give your type another name."
+        case .unknownParameter: "Declare the parameter after the type's name, or use a type name."
+        case .invalidParameter: "Give each parameter its own lowercase name."
+        case .underscoreType: "Write `< >` for a variant with any tags, `Any` for any value, or use a type parameter."
+        case .duplicateField: "Remove or rename one of them."
+        case .duplicateTag: "Remove or rename one of them."
+        case .closedEmptyVariant: "List its tags, or write `< >` for a variant with any tags."
+        case .invalidSpread: "Spread a named variant into a variant, or a named record into a record, without parameters."
+        case .spreadCycle: "Break the cycle: let one of the types list its tags or fields itself."
+        case .rowParameter: "Spread a named type instead, or nest the open part as a field with a type parameter."
+        case .misplacedStream: "Use `Array` inside types, and `Stream` only as the whole of a definition."
+        case .unguardedRecursion: "Put the recursion inside a record field, array element or variant payload."
+        case .growingRecursion: "Refer to the type inside itself with exactly its own parameters."
+        case .typeTooDeep: "Name the inner types with definitions of their own."
+        case .attributeArguments: "Give the attribute only the arguments it takes: `@deprecated` takes none, or one string."
+        case .attributeTwice: "Keep one of them."
+        case .attributeSpace: "Write the parenthesis right after the attribute's name, without a space."
+        case .attributeOnSpread: "Put the attribute on the fields or tags in the spread type."
+        case .unknownModule: "Fix the module's name; a former standard module is now a package, which the message names."
+        case .unknownImport: "Import a type the module defines; the message lists them."
+        case .duplicateImport: "Import each name once."
+        case .importUnavailable: "Read the schema with a resolver that loads imports (from files or packages), or inline the types."
+        case .importNotFound: "Install the package, or fix the path."
+        case .importVersion: "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
+        case .importCycle: "Move the shared types to a file both import."
+        case .duplicatePackage: "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`."
+        case .undeclaredPackage: "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`)."
+        case .packageManifest: "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version."
+        case .packageVersion: "Release both with the same version: change them together."
+        case .packagePath: "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too."
+        case .packageName: "Publish the package under its manifest's name: make the `name` of `package.json` the same."
+        case .packageCrate: "Set `links` to the library's name in `[package]`, and depend on schema package crates under their own names."
+        case .packageInstallScript: "Remove the script: a schema package is its manifest, its schema and its profiles, and needs nothing run."
+        case .packageFiles: "List `package.haus`, `schema.haus` and `profiles` in what the package manager ships."
+        case .profileVectors: "Write the rule in `profiles/<name>.md`, and each vector as `Accept { type: \"T\", value: \"…\" }` or `Reject { type: \"T\", value: \"…\" }`, with values valid for `T`."
+        case .packageWrapper: "Fix the file so that its package manager can read it."
+        case .codecUnreachable: "Give the codec's type a place of its own (a field), or decode the outer type yourself; the message names where the type occurs."
+        case .fileTooLarge: "Split the schema into several files, or raise the limit if you trust the file."
+        case .tooManyFiles: "Import fewer files."
+        case .typeMismatch: "Write a value of the expected type; the message says which."
+        case .notAnInteger: "Write the integer without a fraction or exponent."
+        case .outOfRange: "Write a value within the range, or use a larger type (`Int`, `Float64`, `Decimal`)."
+        case .missingField: "Add the field, or mark it optional in the schema with `?` after its name."
+        case .unknownField: "Remove the field, fix its spelling, or add it to the schema."
+        case .unknownTag: "Use one of the variant's tags, fix the spelling, or add the tag to the schema."
+        case .wrongPayload: "Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which."
+        case .invalidTime: "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type."
+        case .invalidSecret: "Write a value of the secret's type; the value isn't shown, so check it where it comes from."
+        case .cannotEncode: "Pass a value of the host type the binding documents for the type."
+        case .cyclicValue: "Break the cycle before encoding."
+        case .stepBudget: "Simplify the schema, or raise the step limit if the work is expected."
+        case .tooManyNodes: "Build a smaller value, or raise the limit."
+        case .jsonSyntax: "Write valid JSON; the message says what was expected."
+        case .unpairedSurrogate: "Write both halves of the surrogate pair, or the character itself."
+        case .hausJsonForm: "Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead."
+        case .hausJsonVersion: "Read it with a newer version of haus, or write `\"_haus\": 1`."
+        case .hausJsonNumber: "Write the number's normalized literal (§2) as a string."
+        case .hausJsonBytes: "Write the bytes as lowercase hex, two digits per byte."
+        case .invalidTag: "Start the tag with a capital letter and use only letters, digits and `_`."
+        case .invalidBase64: "Write standard base64, with padding."
+        case .missingMember: "Add the member the message names."
+        case .unexpectedMember: "Remove the member."
+        case .noJsonForm: "Rename the field, or use self-describing JSON."
+        case .unknownAttribute: "Check the spelling; attributes of a later version are fine."
+        case .deprecated: "Use what the deprecation note says instead."
+        case .unlistedField: "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
+        case .unlistedTag: "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
+        }
+    }
+}

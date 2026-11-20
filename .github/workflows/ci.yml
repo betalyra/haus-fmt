@@ -284,6 +284,38 @@ jobs:
           go test -run '^$' -fuzz '^FuzzJSON$' -fuzztime "$fuzztime" .
           go test -run '^$' -fuzz '^FuzzSchemaJSON$' -fuzztime "$fuzztime" ./schema
 
+  swift:
+    name: Swift (${{ matrix.name }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    # Linux runs in the official Swift image; macOS with the runner's Xcode (CryptoKit, so hashing is tested there).
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux, os: ubuntu-latest, container: "swift:6.4" }
+          - { name: macOS, os: macos-latest }
+    defaults:
+      run:
+        working-directory: swift
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift --version
+      - name: Format
+        run: swift format lint --strict --configuration .swift-format -r Sources Tests Package.swift ../fuzz/swift-runner
+      - name: Build
+        run: swift build -Xswiftc -warnings-as-errors
+      - name: Test
+        run: swift test
+      - name: Build the fuzz runner
+        working-directory: fuzz/swift-runner
+        run: swift build -c release -Xswiftc -warnings-as-errors
+      - name: Build the root manifest (Package.swift, for SwiftPM users)
+        working-directory: .
+        run: swift build -Xswiftc -warnings-as-errors
+
   tree-sitter:
     name: Tree-sitter grammars
     needs: changes
@@ -467,6 +499,10 @@ jobs:
           cache-dependency-path: typescript/pnpm-lock.yaml
       - name: Install Roc
         run: sh .github/install-roc.sh
+      # The Swift runner (fuzz/swift-runner) is built with the runner image's Swift, its standard
+      # library linked in (fuzz/build.sh), so the fuzz jobs don't need Swift.
+      - name: Swift
+        run: swift --version
       - name: Build the parsers and checkers under test
         run: |
           (cd typescript && pnpm install --frozen-lockfile)

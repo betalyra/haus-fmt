@@ -1,7 +1,7 @@
 # Differential testing
 
 Generated inputs go through every haus parser: the Lean reference parser
-(`spec/lean`), Rust, Roc, TypeScript, Python and Go (and, with `--schema`,
+(`spec/lean`), Rust, Roc, TypeScript, Python, Go and Swift (and, with `--schema`,
 through every schema decoder: see [Schema decoding](#schema-decoding); with
 `--json`, through every JSON converter: see [JSON](#json); with `--format`,
 through the formatters and value writers: see [Formatters](#formatters); with
@@ -17,7 +17,7 @@ node fuzz/src/main.ts --seed 7         # repeat a run
 ```
 
 Needs Node 23.6 or later (it runs the TypeScript directly), Lean (elan),
-Rust, Roc, Python (uv) and Go. The Go runner, [`go/`](go), is one program
+Rust, Roc, Python (uv), Go and Swift. The Go runner, [`go/`](go), is one program
 for every fuzzer (`go-runner MODE …`), a module of its own that builds
 against the checkout; it finds the schema files and extensions through the
 path it was built from, as the Rust runners do. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs every
@@ -29,7 +29,7 @@ a failure prints the seed and keeps the shrunk inputs as an artifact.
 | Step | |
 |---|---|
 | Generate | [`src/generate.ts`](src/generate.ts): random haus text with varied formatting (spacing, comments, CRLF, byte order mark, number spellings, quoted keys, block strings, both payload forms, trailing commas), values at and just past the limits, the conformance suite as seeds. Half of the inputs are then mutated: bytes deleted, edge characters inserted (quotes, `*/`, control and bidi characters, invalid UTF-8), slices duplicated, cut short. |
-| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python and Go run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
+| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python, Go and Swift run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
 | Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree, and so must the error codes (spec §17) of runners that report them, wherever two report an error at the same position. |
 | Shrink | A disagreeing input is cut down to the smallest input that still disagrees, and saved to `.out/failures/` with every parser's result. |
 
@@ -51,6 +51,7 @@ them report codes.
 | TypeScript | in this process ([`src/runners.ts`](src/runners.ts)) |
 | Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) |
 | Go | [`go/`](go) (`go-runner`) |
+| Swift | [`swift-runner/`](swift-runner): a package of its own on [`../swift`](../swift) (a directory named `swift` would clash with it: SwiftPM names packages by their directory) |
 | Stream readers | the same runners with `--stream` (TypeScript: in this process) |
 
 A new binding needs a program that reads `DIR/00000.haus` … `DIR/{N-1}.haus`
@@ -329,13 +330,13 @@ error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
 
 `--format` tests the standard layouts of spec §11 (audit item C2, phase L1
 of [`spec/lean/PLAN.md`](../spec/lean/PLAN.md)). Generated documents go
-through the TypeScript, Rust and Go formatters in the pretty, compact and
+through the TypeScript, Rust, Go and Swift formatters in the pretty, compact and
 minimised layouts; the values they hold go through the value writers of
-TypeScript, Rust, Roc and Go, which must write what Lean's layout writers
+TypeScript, Rust, Roc, Go and Swift, which must write what Lean's layout writers
 write.
 
 ```sh
-sh fuzz/build.sh                               # haus-ref and the Rust, Roc and Go runners
+sh fuzz/build.sh                               # haus-ref and the Rust, Roc, Go and Swift runners
 node fuzz/src/main.ts --format --count 20000   # about a minute and a half
 node fuzz/src/main.ts --format --seed 7
 ```
@@ -360,7 +361,7 @@ For every input, and each layout:
 
 | Check | |
 |---|---|
-| Same bytes | TypeScript, Rust and Go write the same text, or all reject the input; a crash is a finding. Go's options take 0 as the default, so Go sits out the batches with an indent or width of 0. |
+| Same bytes | TypeScript, Rust, Go and Swift write the same text, or all reject the input; a crash is a finding. Go's options take 0 as the default, so Go sits out the batches with an indent or width of 0. |
 | Values | The output parses to the input's values (compared by their canonical forms, spec §12). |
 | Idempotence | Formatting the output again in the same layout gives it back, in every formatter. |
 | Comments | Pretty keeps every comment, in order (a CR LF in one is written as LF); compact and minimised have none. |
@@ -386,6 +387,7 @@ checks.
 | Rust | `haus::to_string`, `to_string_minimised` (no pretty writer from values) | a stream: `haus::to_string_all` (compact) |
 | Roc | `Encode.to_str`, `Encode.minimised` (no pretty writer from values) | a stream: `Encode.stream`, `Encode.stream_minimised` |
 | Go | `haus.FormatValue` in every layout; it takes 0 as the default indent and width, so it sits out pretty in the batches with a 0 | the file: `haus.FormatValues` |
+| Swift | `stringify` in every layout | the file: `stringifyAll` |
 
 Python has no layout writers yet: only the canonical form, which the
 parser fuzzer's `--canonical` mode compares.
@@ -401,6 +403,7 @@ the check, what was seen, and every formatter's output in every layout.
 | Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `ok {"values": […], "stream": …}` |
 | Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `ok {"values": […], "stream": …}` |
 | Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE [--indent N --width N]`: `ok {"values": […], "file": …}` |
+| Swift | [`swift-runner`](swift-runner/Sources/swift-runner/main.swift) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
 
 [`src/format.test.ts`](src/format.test.ts) tests the generator and the
 checks (`node --test fuzz/src/`): the format suite's expected files keep
