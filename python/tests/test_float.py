@@ -13,7 +13,7 @@ from fractions import Fraction
 
 import pytest
 
-from haus._float import float_text, to_float32, to_float64
+from haus._float import _layout, _repr_digits, float_text, to_float32, to_float64  # pyright: ignore[reportPrivateUsage]
 
 # ── helpers ──────────────────────────────────────────────────
 
@@ -343,6 +343,15 @@ def test_random_float64() -> None:
         if math.isfinite(x):
             check_spelling(x, "Float64")
             assert len(significant(float_text(x, "Float64"))) <= 17
+
+
+def test_float64_repr_range() -> None:
+    """Where repr's layout is JavaScript's (no exponent), float_text takes repr as it is: the same text."""
+    r = random.Random(3)
+    values = [r.uniform(0, 10.0**e) for e in range(-6, 18) for _ in range(500)]
+    values += [float(10**e) for e in range(17)] + [10.0**-e for e in range(1, 7)]
+    for x in values:
+        assert float_text(x, "Float64") == _layout(*_repr_digits(x)), x
 
 
 def test_float64_ties() -> None:

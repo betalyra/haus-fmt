@@ -1,0 +1,19 @@
+[project]
+name = "haus-bench-speed"
+version = "0.0.0"
+description = "Speed benchmark of the haus Python binding against json, orjson, pydantic and msgspec (bench/README.md)"
+requires-python = ">=3.14"
+dependencies = ["haus-fmt", "orjson==3.13.0", "pydantic==2.14.3", "msgspec==0.22.0"]
+
+[tool.uv]
+exclude-newer = "2026-11-06T00:00:00Z"
+
+[tool.uv.sources]
+haus-fmt = { path = "../../../python", editable = true }
+
+[build-system]
+requires = ["uv_build>=0.13.8,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "haus_bench_speed"

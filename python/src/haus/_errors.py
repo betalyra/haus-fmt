@@ -4,22 +4,20 @@ a message (`reason`), a hint, and a JSON form for tools and agents (`to_json`).
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
-from ._canonical import quote
 from ._error_codes import ERROR_CODES, ErrorCode
+from ._scan import BARE_KEY, quote
 
 PathKey = str | int
 """A step of a path to a value: a record key or an index."""
 
-_KEY = re.compile(r"[a-z_][A-Za-z0-9_]*")
 DOCS = "https://haus-fmt.org/docs/errors"
 
 
 def format_path(path: Iterable[PathKey]) -> str:
     """`$.items[2].price`, `$["x-y"]`: a key that isn't an identifier as a canonical haus string (spec §12, §15)."""
-    parts = (f"[{p}]" if isinstance(p, int) else f".{p}" if _KEY.fullmatch(p) else f"[{quote(p)}]" for p in path)
+    parts = (f"[{p}]" if isinstance(p, int) else f".{p}" if BARE_KEY.fullmatch(p) else f"[{quote(p)}]" for p in path)
     return "$" + "".join(parts)
 
 

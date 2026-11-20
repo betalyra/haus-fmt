@@ -22,3 +22,5 @@ plans/
 # Benchmark downloads and results
 bench/.data/
 bench/.out/
+bench/speed/py/.venv/
+bench/speed/py/**/__pycache__/
