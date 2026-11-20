@@ -1,0 +1,26 @@
+[package]
+name = "haus-bench-speed"
+version = "0.0.0"
+description = "Speed of the haus Rust binding against serde_json, on the corpus bench/ exports (cargo bench)"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+publish = false
+
+# Its own workspace: not a member of rust/ (CI's cargo fmt, clippy and test
+# there don't build it), with its own lock file.
+[workspace]
+
+[dependencies]
+haus = { package = "haus-fmt", path = "../../../rust/haus" }
+haus-schema = { package = "haus-fmt-schema", path = "../../../rust/haus-schema" }
+# The JSON baseline, and the results file (bench/.out/<source>/speed-rust.json).
+serde_json = "=1.0.154"
+
+[dev-dependencies]
+# Without plots (no plotters); rayon makes criterion's bootstrap faster.
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support", "rayon"] }
+
+[[bench]]
+name = "speed"
+harness = false

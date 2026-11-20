@@ -1,6 +1,7 @@
 /**
  * What the steps write to the results directory and read back, as Effect
- * Schemas: convert → corpus.json, tokens → tokens.json, speed → speed.json.
+ * Schemas: convert → corpus.json, tokens → tokens.json, compress →
+ * compression.json, speed → speed-<lang>.json (every language, one shape).
  * The `Results` service reads and writes them as JSON, checked both ways.
  */
 import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
@@ -111,12 +112,15 @@ export type CompressionOut = typeof CompressionOut.Type
 export const SpeedRow = Schema.Struct({
   group: Schema.Literals(["parse", "typed", "write"]),
   input: Schema.Literals(["corpus", "per doc"]),
+  /** What the task reads or writes: the JSON rows are the baseline of the haus rows of the same group and input. */
+  format: Schema.Literals(["json", "haus"]),
   impl: Schema.String,
   /** Bytes read (parse, typed) or written (write) per iteration. */
   bytes: Schema.Finite,
   docs: Schema.Finite,
   hz: Schema.Finite,
   mean_ms: Schema.Finite,
+  /** Quantiles over the samples: one call each in TypeScript (tinybench), the mean of a batch of calls in Rust (criterion). */
   p75_ms: Schema.Finite,
   p99_ms: Schema.Finite,
   samples: Schema.Finite,
@@ -130,17 +134,38 @@ export const Machine = Schema.Struct({
   cores: Schema.Finite,
   memory_gb: Schema.Finite,
   os: Schema.String,
+  /** `node v26.13.1`, `bun 1.4.0`, `rustc 1.99.0 (…)`. */
   runtime: Schema.String,
+  /** Garbage collected before each task (false where there is no collector: Rust). */
   gc: Schema.Boolean,
 })
 export type Machine = typeof Machine.Type
 
+/** The languages with a speed benchmark (bench/speed/<lang>/), in report order. */
+export const LANGS = ["typescript", "rust"] as const
+export const Lang = Schema.Literals(LANGS)
+export type Lang = typeof Lang.Type
+
+/**
+ * One language's speed results on one source, the same shape for every
+ * language: speed-typescript.json (bench/speed/ts), speed-rust.json
+ * (bench/speed/rust).
+ */
 export const SpeedOut = Schema.Struct({
+  lang: Lang,
+  /** The harness: `tinybench 6.2.3`, `criterion 0.8.2`. */
+  harness: Schema.String,
   machine: Machine,
   options: Schema.Struct({ time_ms: Schema.Finite, warmup_ms: Schema.Finite, quick: Schema.Boolean }),
   /** The documents measured (ids, in order), to match the results to a convert run. */
   documents: Schema.Array(Schema.String),
-  /** Documents whose JSON.parse → JSON.stringify doesn't give the same text (numbers JS can't hold exactly). */
+  /**
+   * Documents whose JSON doesn't come back as it was through the JSON
+   * library's values: TypeScript, JSON.parse → JSON.stringify gives other
+   * text (numbers a JS number can't hold exactly); Rust, serde_json's
+   * `Value` writes another document (numbers in another spelling; serde_json
+   * sorts members, which isn't counted).
+   */
   jsonNotStable: Schema.Finite,
   rows: Schema.Array(SpeedRow),
   checksum: Schema.Finite,
@@ -156,7 +181,8 @@ export interface ResultsFile<S extends Schema.Codec<any, any>> {
 
 export const CORPUS = { file: "corpus.json", schema: CorpusOut } as const satisfies ResultsFile<typeof CorpusOut>
 export const TOKENS = { file: "tokens.json", schema: TokensOut } as const satisfies ResultsFile<typeof TokensOut>
-export const SPEED = { file: "speed.json", schema: SpeedOut, indent: 2 } as const satisfies ResultsFile<typeof SpeedOut>
+/** A language's speed results: `speed-typescript.json`, `speed-rust.json`. */
+export const speedFile = (lang: Lang) => ({ file: `speed-${lang}.json`, schema: SpeedOut, indent: 2 }) as const satisfies ResultsFile<typeof SpeedOut>
 export const COMPRESSION = { file: "compression.json", schema: CompressionOut, indent: 2 } as const satisfies ResultsFile<typeof CompressionOut>
 
 /**

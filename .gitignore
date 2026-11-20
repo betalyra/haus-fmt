@@ -8,6 +8,7 @@ roc/**/build/
 .claude/worktrees/
 # Rust build output
 rust/target/
+bench/speed/rust/target/
 # Demo Time recordings (local only)
 .demo/
 .vscode/settings.json

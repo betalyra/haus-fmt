@@ -1,7 +1,7 @@
 {
   "name": "haus-bench",
   "private": true,
-  "description": "Benchmarks: haus against JSON (size, tokens, TypeScript speed) on real data",
+  "description": "Benchmarks: haus against JSON on real data: size, tokens and compression (size/), TypeScript speed (speed/ts/); Rust speed is speed/rust/ (cargo bench)",
   "type": "module",
   "scripts": {
     "prepare-haus": "pnpm --dir ../typescript --filter @haus-fmt/haus --filter @haus-fmt/effect build",
@@ -11,6 +11,7 @@
     "tokens": "node main.node.ts tokens",
     "compress": "node main.node.ts compress",
     "speed": "pnpm run prepare-haus && node --expose-gc main.node.ts speed",
+    "speed-rust": "cargo bench --manifest-path speed/rust/Cargo.toml",
     "report": "node main.node.ts report",
     "all": "pnpm run prepare-haus && node --use-env-proxy --expose-gc main.node.ts all",
     "smoke": "pnpm run prepare-haus && node --use-env-proxy --expose-gc main.node.ts smoke",

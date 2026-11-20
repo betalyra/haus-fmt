@@ -3,11 +3,11 @@
  * (main.node.ts, main.bun.ts) runs `cli` with its platform layer.
  *
  *   haus-bench fetch                         download and check what sources.haus pins
- *   haus-bench convert [--limit N]           every document → haus, round trip checked
+ *   haus-bench convert [--limit N]           every document → haus, round trip checked; exports <source>/corpus/
  *   haus-bench tokens [--tokenizers a,b]     token counts
  *   haus-bench compress                      compressed sizes (gzip, brotli, zstd)
- *   haus-bench speed [--quick]               tinybench
- *   haus-bench report                        tables, results.md, results.haus
+ *   haus-bench speed [--quick]               TypeScript speed, tinybench (bench/speed/ts; Rust: bench/speed/rust, cargo bench)
+ *   haus-bench report                        tables (every language's speed results found), results.md, results.haus
  *   haus-bench all                           every step, in order
  *   haus-bench smoke                         every step on a sample (40 documents, o200k, --quick)
  *
@@ -25,7 +25,7 @@ import { compress } from "./steps/compress.ts"
 import { convert } from "./steps/convert.ts"
 import { fetchSources } from "./steps/fetch.ts"
 import { report } from "./steps/report.ts"
-import { speed } from "./steps/speed.ts"
+import { speed } from "../../speed/ts/speed.ts"
 import { tokens } from "./steps/tokens.ts"
 
 const dirs = {
@@ -97,7 +97,7 @@ const subcommands = [
     Command.withDescription("Compressed sizes per document and as one stream (gzip, brotli, zstd)"),
   ),
   Command.make("speed", { dirs, sources, quick }, (c) => speed(c).pipe(inBench(c.dirs))).pipe(
-    Command.withDescription("Parse and write speed against JSON (tinybench)"),
+    Command.withDescription("TypeScript parse and write speed against JSON (tinybench), on the corpus convert exported"),
   ),
   Command.make("report", { dirs, sources }, (c) => report(c).pipe(inBench(c.dirs))).pipe(
     Command.withDescription("The tables: results.md and results.haus"),

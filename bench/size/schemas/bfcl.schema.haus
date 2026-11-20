@@ -1,4 +1,4 @@
-// HAND-WRITTEN for the benchmark (bench/schemas/bfcl.schema.haus): the data
+// HAND-WRITTEN for the benchmark (bench/size/schemas/bfcl.schema.haus): the data
 // files of the Berkeley Function Calling Leaderboard (BFCL v4,
 // github.com/ShishirPatil/gorilla, berkeley-function-call-leaderboard/) come
 // without a schema, so this one was written by hand from the files, not
@@ -8,7 +8,7 @@
 // entry (`id`, `question`, `function`) with its possible answer's
 // `ground_truth` added.
 //
-// JSON mapping: the converter's (bench/src/hand.ts): a Role tag is its name
+// JSON mapping: the converter's (bench/size/src/hand.ts): a Role tag is its name
 // in snake_case in JSON (`User` ↔ "user"); records are open, so members not
 // listed here are kept as imported JSON.
 

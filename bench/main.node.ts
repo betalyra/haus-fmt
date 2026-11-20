@@ -10,7 +10,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
-import { cli } from "./src/cli.ts"
-import { Host } from "./src/host.ts"
+import { cli } from "./size/src/cli.ts"
+import { Host } from "./size/src/host.ts"
 
 cli.pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer, Host.v8)), NodeRuntime.runMain)
