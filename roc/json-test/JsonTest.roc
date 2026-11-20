@@ -419,7 +419,7 @@ report = |result| match result {
 }
 
 # json/schema-based.cases.haus
-expect JsonTest.count(schema_based_cases) == 197
+expect JsonTest.count(schema_based_cases) == 199
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
 expect JsonTest.schema_based(schema_based_cases, 0)
@@ -970,47 +970,53 @@ expect JsonTest.schema_based(schema_based_cases, 181)
 # Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Wrap\", \"value\": 3, \"x\": 1}}", code: "unexpected-member", path: "$.shape.x" },
 expect JsonTest.schema_based(schema_based_cases, 182)
 
-# Err { type: "Doc", json: "{\"counts\": {\"en\": 1, \"pt-BR\": \"2\"}}", code: "type-mismatch", path: "$.counts[\"pt-BR\"]" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Empty\", \"\": 0}}", code: "unexpected-member", path: "$.shape[\"\"]" },
 expect JsonTest.schema_based(schema_based_cases, 183)
 
-# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": [{\"_num\": \"1\"}, {\"_num\": \"01\"}]}}", code: "haus-json-number", path: "$.raw._args[1]._num" },
+# Err { type: "Doc", json: "{\"maybe\": {\"_tag\": \"None\", \"\": 0}}", code: "unexpected-member", path: "$.maybe[\"\"]" },
 expect JsonTest.schema_based(schema_based_cases, 184)
 
-# Err { type: "Doc", json: "{\"raw\": {\"_rec\": {\"b\": {\"_bytes\": \"0B\"}}}}", code: "haus-json-bytes", path: "$.raw._rec.b._bytes" },
+# Err { type: "Doc", json: "{\"counts\": {\"en\": 1, \"pt-BR\": \"2\"}}", code: "type-mismatch", path: "$.counts[\"pt-BR\"]" },
 expect JsonTest.schema_based(schema_based_cases, 185)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, 2]}}", code: "haus-json-form", path: "$.shape._args[1]" },
+# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": [{\"_num\": \"1\"}, {\"_num\": \"01\"}]}}", code: "haus-json-number", path: "$.raw._args[1]._num" },
 expect JsonTest.schema_based(schema_based_cases, 186)
 
-# Err { type: "Doc", json: "{\"key\": 5}", code: "invalid-secret", path: "$.key" },
+# Err { type: "Doc", json: "{\"raw\": {\"_rec\": {\"b\": {\"_bytes\": \"0B\"}}}}", code: "haus-json-bytes", path: "$.raw._rec.b._bytes" },
 expect JsonTest.schema_based(schema_based_cases, 187)
 
-# Err { type: "Doc", json: "{\"boxed\": {\"_tag\": \"Box\", \"value\": {\"w\": \"1\"}}}", code: "type-mismatch", path: "$.boxed.value.w" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, 2]}}", code: "haus-json-form", path: "$.shape._args[1]" },
 expect JsonTest.schema_based(schema_based_cases, 188)
 
-# Err { type: "Doc", json: "{\"level\": \"Warn\"}", code: "unknown-tag", path: "$.level" },
+# Err { type: "Doc", json: "{\"key\": 5}", code: "invalid-secret", path: "$.key" },
 expect JsonTest.schema_based(schema_based_cases, 189)
 
-# Err { type: "Doc", json: "{\"level\": \"warn\"}", code: "invalid-tag", path: "$.level" },
+# Err { type: "Doc", json: "{\"boxed\": {\"_tag\": \"Box\", \"value\": {\"w\": \"1\"}}}", code: "type-mismatch", path: "$.boxed.value.w" },
 expect JsonTest.schema_based(schema_based_cases, 190)
 
-# Err { type: "Doc", json: "{\"level\": \"\"}", code: "invalid-tag", path: "$.level" },
+# Err { type: "Doc", json: "{\"level\": \"Warn\"}", code: "unknown-tag", path: "$.level" },
 expect JsonTest.schema_based(schema_based_cases, 191)
 
-# Err { type: "Doc", json: "{\"bits\": \"1A\"}", code: "invalid-tag", path: "$.bits" },
+# Err { type: "Doc", json: "{\"level\": \"warn\"}", code: "invalid-tag", path: "$.level" },
 expect JsonTest.schema_based(schema_based_cases, 192)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": []}}", code: "haus-json-form", path: "$.shape._args" },
+# Err { type: "Doc", json: "{\"level\": \"\"}", code: "invalid-tag", path: "$.level" },
 expect JsonTest.schema_based(schema_based_cases, 193)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": 5}}", code: "haus-json-form", path: "$.shape._args" },
+# Err { type: "Doc", json: "{\"bits\": \"1A\"}", code: "invalid-tag", path: "$.bits" },
 expect JsonTest.schema_based(schema_based_cases, 194)
 
-# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": null}}", code: "haus-json-form", path: "$.shape._args" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": []}}", code: "haus-json-form", path: "$.shape._args" },
 expect JsonTest.schema_based(schema_based_cases, 195)
 
-# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": {}}}", code: "haus-json-form", path: "$.raw._args" },
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": 5}}", code: "haus-json-form", path: "$.shape._args" },
 expect JsonTest.schema_based(schema_based_cases, 196)
+
+# Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": null}}", code: "haus-json-form", path: "$.shape._args" },
+expect JsonTest.schema_based(schema_based_cases, 197)
+
+# Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": {}}}", code: "haus-json-form", path: "$.raw._args" },
+expect JsonTest.schema_based(schema_based_cases, 198)
 
 # json/self-describing.cases.haus
 expect JsonTest.count(self_describing_cases) == 58

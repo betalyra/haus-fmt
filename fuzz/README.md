@@ -82,6 +82,9 @@ in `runners.ts`.
 | `"""` as a field key was `block-string-key` (Python, Go) or `string-line-break` (TypeScript); Lean reads the key `""` and then a `"` (`schema-syntax`) | fixed (`--schema-check`) |
 | Go reported a quoted key cut by a line break as `unterminated-string`, not `string-line-break` (or `control-character` for CR LF) | fixed (`--schema-check`) |
 | Rust reported a lexical mistake anywhere in the file before a syntax error earlier in it | fixed: the grammar is read up to the lexical mistake (`--schema-check`) |
+| Rust and Go read an attribute's arguments as a file of their own: a byte order mark at their start was skipped (`@deprecated(` U+FEFF `"x")` accepted), and `#haus` there was `version-directive`; both are `expected-value` | fixed (`--schema-check`) |
+| Go read `{"_tag": "A", "": 0}` for a tag without payload as `A`: a member named `""` passed as the payload member a tag without one doesn't have | fixed: `unexpected-member` (`--json`) |
+| Go's stream reader reported `#haus` after a comma (`1,#haus 2`) as `version-directive`, not `expected-value` | fixed (found with the above) |
 
 ## Canonical forms
 

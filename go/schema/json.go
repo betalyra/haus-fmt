@@ -400,10 +400,10 @@ func (w *walker) member(r haus.Record, name, tag string) (haus.Value, error) {
 }
 
 // onlyMembers checks that an object has no members besides "_tag" and
-// name (if not "").
+// name (if not "": then a member named "" is unexpected too).
 func (w *walker) onlyMembers(r haus.Record, name string) error {
 	for k := range r.All() {
-		if k != "_tag" && k != name {
+		if k != "_tag" && (name == "" || k != name) {
 			w.path = append(w.path, step{key: k, index: -1})
 			return w.fail(haus.CodeUnexpectedMember, "unexpected member %s", quote(k))
 		}

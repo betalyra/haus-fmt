@@ -17,6 +17,11 @@ var (
 	// (spec §16.3) as the value the import gives (§16.1), with the nesting
 	// limit 4·d+1 and no string limits; lim is resolved.
 	ParseSchemaJSON any
+	// ParseValues is a func(src string) ([]haus.Value, error) that parses
+	// values within a file, as the arguments of an attribute (spec §14):
+	// src doesn't start the file, so a byte order mark is no more skipped
+	// there than after a comma, and #haus is no version directive.
+	ParseValues any
 	// SelfDescribing is a func(j haus.Value, lim haus.Limits, depth int,
 	// prefix string) (haus.Value, error) that reads the self-describing
 	// form (§16.2, no envelope) j at nesting depth; error paths start with

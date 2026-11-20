@@ -524,13 +524,22 @@ fn lexis(text: &str) -> Result<(), Fail> {
 /// missing.
 fn unclosed_arguments(text: &str, attribute: &str, open: usize) -> Fail {
     let inner = &text[open + 1..];
-    match haus::parse(inner) {
-        Err(e) => (open + 1 + e.offset, e.code, format!("in the arguments of @{attribute}: {}", e.reason)),
+    match arguments(inner) {
+        Err(e) => (open + e.offset, e.code, format!("in the arguments of @{attribute}: {}", e.reason)),
         Ok(values) if values.is_empty() || inner.trim_end().ends_with(',') => {
             (open, Code::UnclosedBracket, format!("unclosed '(' of @{attribute}"))
         }
         Ok(_) => (text.len(), Code::MissingComma, format!("expected ',' or ')' in the arguments of @{attribute}")),
     }
+}
+
+/// The values of attribute arguments: `inner`, the text after their `(`.
+/// They don't start the file, so a byte order mark at their start is a
+/// mistake, as after a comma, and `#haus` no version directive. They are
+/// parsed after a space that stands for the `(`: an error's offset is from
+/// the `(`.
+fn arguments(inner: &str) -> Result<Vec<Value>, haus::SyntaxError> {
+    haus::parse(&format!(" {inner}"))
 }
 
 /// After the run of whitespace and comments at `i`, which `data` has checked.
@@ -615,15 +624,15 @@ fn attribute(i: &mut Input) -> ModalResult<Attribute> {
         let Some(close) = closing_paren(rest) else {
             return cut_err(fail.context(expected(ATTRIBUTE_CLOSE))).parse_next(i);
         };
-        let start = i.current_token_start() + 1;
+        let open = i.current_token_start();
         let inner = &rest[1..close];
         let _ = i.next_slice(close + 1);
-        match haus::parse(inner) {
+        match arguments(inner) {
             Ok(args) if args.is_empty() => {
-                Err((start - 1, Code::AttributeArguments, format!("empty parentheses: write @{name} without them")))
+                Err((open, Code::AttributeArguments, format!("empty parentheses: write @{name} without them")))
             }
             Ok(args) => Ok(args),
-            Err(e) => Err((start + e.offset, e.code, format!("in the arguments of @{name}: {}", e.reason))),
+            Err(e) => Err((open + e.offset, e.code, format!("in the arguments of @{name}: {}", e.reason))),
         }
     } else {
         // `@deprecated ("x")` would be an attribute without arguments, then `("x")`.

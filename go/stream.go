@@ -161,7 +161,7 @@ func (s *StreamReader) fill() error {
 // and the comma after it, if any. It returns nil if there is no value.
 func (s *StreamReader) parse(chunk []byte) (Value, error) {
 	p := newParser(string(chunk), s.lim, false)
-	p.skipBOM = s.first
+	p.fileStart = s.first
 	p.line, p.col = s.line, s.col
 	vs, _, err := p.file()
 	if err != nil {

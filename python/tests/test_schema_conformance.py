@@ -114,9 +114,11 @@ def test_stripping_removes_every_attribute(suite: str) -> None:
 # Each invalid schema, with a piece of the reason it must be rejected for.
 INVALID = {
     "any-arity": "Any takes no arguments",
+    "attribute-bom": "expected a value, found '\ufeff'",
     "attribute-on-spread": "attributes can't be put on a spread",
     "attribute-space": "no space is allowed between @deprecated and '('",
     "attribute-unclosed": "expected ',' or ')' in the attribute's arguments",
+    "attribute-version-directive": "expected a value, found '#'",
     "bidi-in-comment": "raw bidirectional control character U+202E in comment",
     "bidi-in-key": "raw bidirectional control character U+2066",
     "closed-empty-variant": "a closed variant needs at least one tag",

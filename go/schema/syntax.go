@@ -6,7 +6,12 @@ import (
 	"unicode/utf8"
 
 	haus "github.com/betalyra/haus-fmt/go"
+	"github.com/betalyra/haus-fmt/go/internal/hooks"
 )
+
+// parseValues parses the arguments of an attribute: values within the file,
+// where a byte order mark is a mistake and #haus no version directive.
+var parseValues = hooks.ParseValues.(func(string) ([]haus.Value, error))
 
 // The syntax tree of one schema file (spec §14, grammar.ebnf "Schema
 // files"), and its parser: a recursive descent over the text with a cursor.
@@ -494,7 +499,7 @@ func (p *parser) attribute() (attribute, *synErr) {
 			return a, p.unclosedArguments(p.pos, a.name)
 		}
 		inner := s[p.pos+1 : end]
-		values, err := haus.ParseAll([]byte(inner))
+		values, err := parseValues(inner)
 		if err != nil {
 			return a, p.dataError(err, p.pos+1, "in the arguments of @"+a.name)
 		}
@@ -521,7 +526,7 @@ func (p *parser) attribute() (attribute, *synErr) {
 // that a ',' or ')' is missing.
 func (p *parser) unclosedArguments(open int, name string) *synErr {
 	inner := p.src[open+1:]
-	values, err := haus.ParseAll([]byte(inner))
+	values, err := parseValues(inner)
 	switch {
 	case err != nil:
 		return p.dataError(err, open+1, "in the arguments of @"+name)
