@@ -1,0 +1,464 @@
+/// One of the three standard layouts (spec §11).
+public enum Layout: String, Sendable, Hashable, CaseIterable {
+    /// For people who edit: one entry per line, comments and blank lines kept.
+    case pretty
+    /// Each top-level item on one line, with spaces, comments dropped: for
+    /// logs and streams people look at.
+    case compact
+    /// Compact without whitespace between tokens: for the wire and storage.
+    case minimised
+}
+
+/// How to write text: the layout, and in the pretty layout the indentation
+/// and line width.
+public struct FormatOptions: Sendable, Hashable {
+    public var layout: Layout
+    /// The number of spaces per level in the pretty layout. Default 2.
+    public var indent: Int
+    /// The line width in code points, which only decides whether a
+    /// positional payload fits on one line in the pretty layout. Default 80.
+    public var width: Int
+    /// The limits of the text read (``format(_:_:)``), or of the reader the
+    /// text is written for (``stringify(_:_:)``, ``stringifyAll(_:_:)``).
+    public var limits: Limits
+
+    public init(layout: Layout = .pretty, indent: Int = 2, width: Int = 80, limits: Limits = Limits()) {
+        self.layout = layout
+        self.indent = indent
+        self.width = width
+        self.limits = limits
+    }
+}
+
+/// Reformats haus text in a standard layout (spec §11). Numbers, byte
+/// strings and `"…"` strings keep their spelling. The pretty layout keeps
+/// comments and blank lines; compact and minimised drop them (see
+/// ``hasComments(_:limits:)`` for tools that rewrite files in place).
+public func format(_ text: String, _ options: FormatOptions = FormatOptions()) throws(HausError) -> String {
+    let file = try parseFile(text, limits: options.limits, keep: true).syntax!
+    return Printer(options).file(file)
+}
+
+/// Whether haus text has comments, which the compact and minimised layouts
+/// drop (spec §11: a tool that rewrites a file in place in those layouts
+/// refuses when it has comments, unless asked to drop them).
+public func hasComments(_ text: String, limits: Limits = Limits()) throws(HausError) -> Bool {
+    try parseFile(text, limits: limits, keep: true).syntax!.hasComments
+}
+
+/// Writes one value in a layout, as a file holding it alone, with a line
+/// break at the end. With no source text, numbers are written normalized and
+/// in decimal, byte strings in lowercase hex without spaces, and strings with
+/// the fewest escapes.
+///
+/// ```swift
+/// try stringify(["a": 1], FormatOptions(layout: .compact)) // "{ a: 1 }\n"
+/// ```
+///
+/// It fails for values that have no text: a number longer than the number
+/// limit (`number-too-long`), nesting deeper than the depth limit
+/// (`nesting-too-deep`, a record payload counting one level), or a tag that
+/// isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`).
+public func stringify(_ value: HausValue, _ options: FormatOptions = FormatOptions()) throws(HausError) -> String {
+    try stringifyAll([value], options)
+}
+
+/// Writes values as a file (spec §6): one value alone, two or more as a
+/// stream with a comma after each. See ``stringify(_:_:)``.
+public func stringifyAll(_ values: [HausValue], _ options: FormatOptions = FormatOptions()) throws(HausError) -> String
+{
+    var builder = Builder(limits: try options.limits.checked())
+    var file = FileNode()
+    for (i, value) in values.enumerated() {
+        builder.path = values.count > 1 ? [.index(i)] : []
+        file.items.append(Item(node: try builder.node(value, depth: 0)))
+    }
+    return Printer(options).file(file)
+}
+
+// ── values to syntax nodes ──────────────────────────────────────
+
+/// One step of a path (spec §15): a key or an index.
+enum PathStep {
+    case key(String)
+    case index(Int)
+}
+
+/// A path from `$` (spec §15): `.key` for an identifier, `["key"]` with the
+/// key in canonical form otherwise, `[i]` for an index.
+func pathString(_ steps: [PathStep]) -> String {
+    steps.reduce(into: "$") { path, step in
+        switch step {
+        case .index(let i): path += "[\(i)]"
+        case .key(let key) where isIdentifier(key): path += "." + key
+        case .key(let key):
+            var quoted: [UInt8] = []
+            appendQuoted(key, to: &quoted)
+            path += "[" + String(decoding: quoted, as: UTF8.self) + "]"
+        }
+    }
+}
+
+/// Turns values built in code into syntax nodes, checking that they can be
+/// written. The path to the value being built is written out only for an
+/// error.
+struct Builder {
+    let limits: Limits
+    var path: [PathStep] = []
+
+    @inline(never)
+    func fail(_ code: HausError.Code, _ message: String) -> HausError {
+        HausError(code, message, path: pathString(path))
+    }
+
+    /// Starts a container at `depth`, one level deeper.
+    func enter(_ depth: Int) throws(HausError) {
+        if depth + 1 > limits.maxDepth {
+            throw fail(.nestingTooDeep, "nesting deeper than the limit of \(limits.maxDepth)")
+        }
+    }
+
+    /// The node of `value`, at `depth` levels. The containers recurse
+    /// through here, so it only dispatches: the scalars are built in a
+    /// function of their own, which keeps this frame small.
+    mutating func node(_ value: HausValue, depth: Int) throws(HausError) -> Node {
+        switch value {
+        case .array(let elements):
+            try enter(depth)
+            return Node(value, items: try items(elements, depth: depth))
+        case .record(let r):
+            try enter(depth)
+            return Node(value, items: try fields(r, depth: depth))
+        case .variant(let tag, let args) where !args.isEmpty:
+            try checkTag(tag)
+            try enter(depth)
+            if args.count == 1, case .record(let r) = args[0] {
+                return Node(value, form: .braces, items: try fields(r, depth: depth))
+            }
+            return Node(value, form: .parens, items: try items(args, depth: depth))
+        default:
+            return try leaf(value)
+        }
+    }
+
+    /// The node of a string, number, byte string or tag without payload.
+    @inline(never)
+    func leaf(_ value: HausValue) throws(HausError) -> Node {
+        switch value {
+        case .number(let n):
+            guard n.literal.utf8.count <= limits.maxNumberLength else {
+                throw fail(
+                    .numberTooLong,
+                    "a number of \(n.literal.utf8.count) characters, more than the limit of \(limits.maxNumberLength)")
+            }
+            return Node(value, text: Array(n.literal.utf8))
+        case .bytes(let bytes):
+            return Node(value, text: Array(("x\"" + bytes.map(hexByte).joined() + "\"").utf8))
+        case .variant(let tag, _):
+            try checkTag(tag)
+            return Node(value)
+        case .string, .array, .record:
+            return Node(value)
+        }
+    }
+
+    /// Fails with `invalid-tag` if `tag` can't be written.
+    func checkTag(_ tag: String) throws(HausError) {
+        if !isTag(tag) { throw fail(.invalidTag, invalidTag(tag)) }
+    }
+
+    /// The node of `value`, at `step` from the current value.
+    mutating func child(_ step: PathStep, _ value: HausValue, depth: Int) throws(HausError) -> Node {
+        path.append(step)
+        let node = try self.node(value, depth: depth)
+        path.removeLast()
+        return node
+    }
+
+    mutating func items(_ values: [HausValue], depth: Int) throws(HausError) -> [Item] {
+        var items: [Item] = []
+        for (i, value) in values.enumerated() {
+            items.append(Item(node: try child(.index(i), value, depth: depth + 1)))
+        }
+        return items
+    }
+
+    mutating func fields(_ r: HausRecord, depth: Int) throws(HausError) -> [Item] {
+        var items: [Item] = []
+        for (key, value) in r.fields {
+            items.append(Item(key: key, node: try child(.key(key), value, depth: depth + 1)))
+        }
+        return items
+    }
+}
+
+// ── syntax nodes to text ────────────────────────────────────────
+
+/// Writes a syntax tree in a layout.
+struct Printer {
+    var out: [UInt8] = []
+    let indent: Int
+    let width: Int
+    let layout: Layout
+
+    init(_ options: FormatOptions) {
+        indent = options.indent
+        width = options.width
+        layout = options.layout
+    }
+
+    consuming func file(_ file: FileNode) -> String {
+        let stream = file.items.count > 1
+        if layout == .pretty {
+            var first = true
+            var multiline = false
+            for (i, item) in file.items.enumerated() {
+                leading(item, level: 0, first: &first, forceBlank: i > 0 && multiline)
+                multiline = entry(item, level: 0, comma: stream)
+            }
+            comments(file.dangling, level: 0, first: &first)
+        } else {
+            for item in file.items {
+                compact(item.node)
+                if stream { out.append(ASCII.comma) }
+                out.append(ASCII.lf)
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
+    }
+
+    // ── pretty ──────────────────────────────────────────────────
+
+    /// A blank line if one is wanted and this isn't the first thing in its container.
+    mutating func blankLine(_ blank: Bool, first: inout Bool) {
+        if blank && !first { out.append(ASCII.lf) }
+        first = false
+    }
+
+    mutating func writeIndent(_ level: Int) {
+        out += repeatElement(ASCII.space, count: level * indent)
+    }
+
+    /// Comments on lines of their own. `forceBlank` asks for a blank line
+    /// before the first.
+    mutating func comments(_ comments: [Comment], level: Int, first: inout Bool, forceBlank: Bool = false) {
+        for (i, comment) in comments.enumerated() {
+            blankLine(comment.blank || forceBlank && i == 0, first: &first)
+            writeIndent(level)
+            out += comment.text
+            out.append(ASCII.lf)
+        }
+    }
+
+    /// The comments above an item and the blank line before it. `forceBlank`
+    /// asks for a blank line before whatever comes first.
+    mutating func leading(_ item: Item, level: Int, first: inout Bool, forceBlank: Bool) {
+        comments(item.leading, level: level, first: &first, forceBlank: forceBlank)
+        blankLine(item.blank || forceBlank && item.leading.isEmpty, first: &first)
+    }
+
+    /// An item on its line(s), and whether its value took more than one line.
+    mutating func entry(_ item: Item, level: Int, comma: Bool) -> Bool {
+        writeIndent(level)
+        var column = level * indent
+        if let key = item.key {
+            let start = out.count
+            appendKey(key, to: &out)
+            out += ": ".utf8
+            column += codePoints(in: out[start...])
+        }
+        let start = out.count
+        value(item.node, level: level, column: column, suffix: comma ? 1 : 0)
+        let multiline = out[start...].contains(ASCII.lf)
+        if comma { out.append(ASCII.comma) }
+        for comment in item.trailing {
+            out.append(ASCII.space)
+            out += comment.text
+        }
+        out.append(ASCII.lf)
+        return multiline
+    }
+
+    /// A value in the pretty layout, starting at `column` (in code points),
+    /// with `suffix` characters to follow it on its last line.
+    mutating func value(_ node: Node, level: Int, column: Int, suffix: Int) {
+        switch node.value {
+        case .string(let s) where s.utf8.contains(ASCII.lf):
+            blockString(s, level: level)
+        case .record, .array:
+            container(node, level: level)
+        case .variant(let tag, _):
+            switch node.form {
+            case .bare:
+                out += tag.utf8
+            case .braces:
+                out += tag.utf8
+                out.append(ASCII.space)
+                container(node, level: level)
+            case .parens:
+                if let w = inlineWidth(node), column + w + suffix <= width {
+                    compact(node)
+                } else {
+                    out += tag.utf8
+                    container(node, level: level)
+                }
+            }
+        default:
+            scalar(node)
+        }
+    }
+
+    /// The brackets of a record, array or payload.
+    func brackets(_ node: Node) -> (open: UInt8, close: UInt8) {
+        switch (node.value, node.form) {
+        case (.array, _): (ASCII.openBracket, ASCII.closeBracket)
+        case (.variant, .parens): (ASCII.openParen, ASCII.closeParen)
+        default: (ASCII.openBrace, ASCII.closeBrace)
+        }
+    }
+
+    /// A record, array or payload, one entry per line.
+    mutating func container(_ node: Node, level: Int) {
+        let (open, close) = brackets(node)
+        guard !node.items.isEmpty || !node.dangling.isEmpty else {
+            out += [open, close]
+            return
+        }
+        out += [open, ASCII.lf]
+        var first = true
+        for item in node.items {
+            leading(item, level: level + 1, first: &first, forceBlank: false)
+            _ = entry(item, level: level + 1, comma: true)
+        }
+        comments(node.dangling, level: level + 1, first: &first)
+        writeIndent(level)
+        out.append(close)
+    }
+
+    /// The width of a value written on one line in the compact layout, or nil
+    /// if the pretty layout never writes it on one line: it holds a
+    /// non-empty record or array, a multi-line string or a comment.
+    func inlineWidth(_ node: Node) -> Int? {
+        if let known = node.inlineWidth { return known }
+        let w = measure(node)
+        node.inlineWidth = .some(w)
+        return w
+    }
+
+    func measure(_ node: Node) -> Int? {
+        let empty = node.items.isEmpty && node.dangling.isEmpty
+        switch node.value {
+        case .string(let s):
+            if s.utf8.contains(ASCII.lf) { return nil }
+            var text: [UInt8] = []
+            if let spelling = node.text { appendSpelling(spelling, to: &text) } else { appendQuoted(s, to: &text) }
+            return codePoints(in: text[...])
+        case .record, .array:
+            return empty ? 2 : nil
+        case .variant(let tag, _):
+            switch node.form {
+            case .bare: return tag.utf8.count
+            case .braces: return empty ? tag.utf8.count + 3 : nil
+            case .parens:
+                guard node.dangling.isEmpty else { return nil }
+                var w = tag.utf8.count + 2 + 2 * (node.items.count - 1)
+                for item in node.items {
+                    guard item.leading.isEmpty, item.trailing.isEmpty, let a = inlineWidth(item.node) else {
+                        return nil
+                    }
+                    w += a
+                }
+                return w
+            }
+        case .number, .bytes:
+            return codePoints(in: node.text![...])
+        }
+    }
+
+    /// A number, byte string or single-line string.
+    mutating func scalar(_ node: Node) {
+        if let text = node.text {
+            appendSpelling(text, to: &out)
+        } else if case .string(let s) = node.value {
+            appendQuoted(s, to: &out)
+        }
+    }
+
+    /// A string with line feeds as a `"""` block string, its content one level
+    /// deeper than the entry (spec §11).
+    mutating func blockString(_ s: String, level: Int) {
+        out += #"""""#.utf8
+        out.append(ASCII.lf)
+        for line in Array(s.utf8).split(separator: ASCII.lf, omittingEmptySubsequences: false) {
+            if !line.isEmpty {
+                writeIndent(level + 1)
+                appendBlockLine(line, to: &out)
+            }
+            out.append(ASCII.lf)
+        }
+        writeIndent(level + 1)
+        out += #"""""#.utf8
+    }
+
+    // ── compact and minimised ───────────────────────────────────
+
+    /// A value on one line, in the compact or minimised layout.
+    mutating func compact(_ node: Node) {
+        switch (node.value, node.form) {
+        case (.record, _):
+            fields(node)
+        case (.array, _):
+            items(node)
+        case (.variant(let tag, _), let form):
+            out += tag.utf8
+            switch form {
+            case .bare: break
+            case .braces:
+                space()
+                fields(node)
+            case .parens: items(node)
+            }
+        default:
+            scalar(node)
+        }
+    }
+
+    /// A space, except in the minimised layout.
+    mutating func space() {
+        if layout != .minimised { out.append(ASCII.space) }
+    }
+
+    /// A comma between items, and a space after it except in the minimised layout.
+    mutating func separator() {
+        out.append(ASCII.comma)
+        space()
+    }
+
+    mutating func items(_ node: Node) {
+        let (open, close) = brackets(node)
+        out.append(open)
+        for (i, item) in node.items.enumerated() {
+            if i > 0 { separator() }
+            compact(item.node)
+        }
+        out.append(close)
+    }
+
+    mutating func fields(_ node: Node) {
+        guard !node.items.isEmpty else {
+            out += [ASCII.openBrace, ASCII.closeBrace]
+            return
+        }
+        out.append(ASCII.openBrace)
+        space()
+        for (i, item) in node.items.enumerated() {
+            if i > 0 { separator() }
+            appendKey(item.key!, to: &out)
+            out.append(ASCII.colon)
+            space()
+            compact(item.node)
+        }
+        space()
+        out.append(ASCII.closeBrace)
+    }
+}
