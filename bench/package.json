@@ -4,7 +4,7 @@
   "description": "Benchmarks: haus against JSON (size, tokens, TypeScript speed) on real data",
   "type": "module",
   "scripts": {
-    "prepare-haus": "pnpm --filter @haus-fmt/haus --filter @haus-fmt/effect build",
+    "prepare-haus": "pnpm --dir ../typescript --filter @haus-fmt/haus --filter @haus-fmt/effect build",
     "bench": "node --use-env-proxy --expose-gc main.node.ts",
     "fetch": "node --use-env-proxy main.node.ts fetch",
     "convert": "pnpm run prepare-haus && node main.node.ts convert",
