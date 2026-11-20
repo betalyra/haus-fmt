@@ -2,7 +2,7 @@
  * Floats with a schema (spec §15): decoding a number literal to the nearest
  * binary64 or binary32 value, and writing a float in its one spelling.
  */
-import { num, variant, type Value } from "./value.js"
+import { num, variant, type HNumber, type HVariant, type Value } from "./value.js"
 
 export type FloatType = "Float64" | "Float32"
 
@@ -85,7 +85,7 @@ export const specialFloat = (v: Value): number | undefined =>
  * `NegInfinity`, or the number in its one spelling; a Float32 as the nearest
  * binary32 value of `x`. Undefined when `x` is out of the type's range.
  */
-export const floatValue = (x: number, type: FloatType): Value | undefined => {
+export const floatValue = (x: number, type: FloatType): HNumber | HVariant | undefined => {
   if (Number.isNaN(x)) return variant("NaN")
   if (x === Infinity) return variant("Infinity")
   if (x === -Infinity) return variant("NegInfinity")

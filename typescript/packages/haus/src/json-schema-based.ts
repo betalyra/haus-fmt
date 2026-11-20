@@ -11,6 +11,7 @@
  *   closed < Debug | Info > → "Debug"                                 other variants → {"_tag": "Circle", "r": 1.5}, "value", "values"
  *   an unknown value → {"_tag": "Hexagon", "_args": [self-describing…]}
  */
+import { TAG } from "./chars.js"
 import { HausDecodeError, HausEncodeError, type ErrorCode, type ErrorDetails } from "./errors.js"
 import {
   describeJson, hausJsonOf, importedValue, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, numberOfJson, Place, stringOfJson, tagLengthIssue, valueOfHausJson,
@@ -73,9 +74,6 @@ export type JsonCase =
   | { readonly kind: "unit" }
   | { readonly kind: "record"; readonly record: JsonRecordType }
   | { readonly kind: "positional"; readonly items: readonly JsonType[] }
-
-/** A tag name (spec §4). */
-const TAG = /^[A-Z][A-Za-z0-9_]*$/
 
 /** Fields a record payload can't have in schema-based JSON (spec §16.3): its members sit beside these. */
 const RESERVED_FIELDS = ["_tag", "_args"] as const

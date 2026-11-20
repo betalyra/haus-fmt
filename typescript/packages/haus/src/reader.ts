@@ -29,7 +29,7 @@
  * seen), with `failDuplicate` after the value, as the generic parser does.
  */
 import * as chars from "./chars.js"
-import { codePoints, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper } from "./chars.js"
+import { codePoints, hex4, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper } from "./chars.js"
 import { HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin } from "./errors.js"
 
 // Hot: the character codes as constants of this module. V8 reads an imported
@@ -118,9 +118,6 @@ export const maxHexDigits = (maxNumberLength: number): number => {
 
 /** Whether `s` has more than `max` characters (code points: an emoji is one character, but two UTF-16 units). */
 export const longerThan = (s: string, max: number): boolean => s.length > max && codePoints(s) > max
-
-/** A character code as error messages write it: `U+` and this. */
-const hex4 = (c: number) => c.toString(16).toUpperCase().padStart(4, "0")
 
 /** Whether a number literal that ends before `c` runs on into it (a letter, digit, `_` or `.`), which makes it invalid. Not past the end (NaN). */
 const continuesNumber = (c: number) => isIdentChar(c) || c === DOT

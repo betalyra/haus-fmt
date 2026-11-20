@@ -18,9 +18,10 @@ export interface StreamOptions {
 }
 
 /**
- * What a stream reader makes of each item: by default its `Value`. `text`
- * gets an item's text (with the comma that ends it) and where it starts;
- * `value`, the last item when it has no comma, parsed already.
+ * What a stream reader makes of each item (`ItemStreamReader`; its `Value`
+ * for `StreamReader`). `text` gets an item's text (with the comma that ends
+ * it) and where it starts; `value`, the last item when it has no comma,
+ * parsed already.
  */
 export interface ItemReader<T> {
   readonly text: (text: string, origin: Origin, limits: Limits) => T
@@ -33,15 +34,9 @@ const VALUES: ItemReader<Value> = {
 }
 
 /**
- * Incremental reader: feed text chunks with `push`, receive every value that
- * has been completed (terminated by a top-level comma). Call `end` once the
- * input is exhausted to receive the last value if it had no trailing comma.
- *
- * Chunks can be split anywhere: inside strings, escapes, comments or `"""`.
- * Memory use is bounded by the largest single value, not the whole stream.
- * After a HausSyntaxError the reader is unusable.
+ * `StreamReader`, each item made by `items` (see `ItemReader`).
  */
-export class StreamReader<T = Value> {
+export class ItemStreamReader<T> {
   /**
    * Text of the current value already scanned, as pieces. Appending to one
    * growing string and indexing into it would flatten V8's rope on every
@@ -67,9 +62,9 @@ export class StreamReader<T = Value> {
   private readonly requireTerminator: boolean
 
   constructor(
-    options: StreamOptions = {},
-    /** What each item becomes (see `ItemReader`); its Value by default. */
-    private readonly items: ItemReader<T> = VALUES as unknown as ItemReader<T>,
+    options: StreamOptions,
+    /** What each item becomes (see `ItemReader`). */
+    private readonly items: ItemReader<T>,
   ) {
     this.limits = withDefaults(options.limits ?? {})
     this.maxValueLength = options.maxValueLength ?? 64 * 1024 * 1024
@@ -266,6 +261,21 @@ export class StreamReader<T = Value> {
   }
 }
 
+/**
+ * Incremental reader: feed text chunks with `push`, receive every value that
+ * has been completed (terminated by a top-level comma). Call `end` once the
+ * input is exhausted to receive the last value if it had no trailing comma.
+ *
+ * Chunks can be split anywhere: inside strings, escapes, comments or `"""`.
+ * Memory use is bounded by the largest single value, not the whole stream.
+ * After a HausSyntaxError the reader is unusable.
+ */
+export class StreamReader extends ItemStreamReader<Value> {
+  constructor(options: StreamOptions = {}) {
+    super(options, VALUES)
+  }
+}
+
 export type ChunkSource =
   | AsyncIterable<string | Uint8Array>
   | Iterable<string | Uint8Array>
@@ -278,12 +288,12 @@ export type ChunkSource =
  *   for await (const event of parseStream(response.body!)) { ... }
  */
 export async function* parseStream(source: ChunkSource, options: StreamOptions = {}): AsyncGenerator<Value, void, undefined> {
-  yield* readStream(source, options)
+  yield* readStream(source, options, VALUES)
 }
 
 /** `parseStream`, each item made by `items` (see `ItemReader`). */
-export async function* readStream<T = Value>(source: ChunkSource, options: StreamOptions = {}, items?: ItemReader<T>): AsyncGenerator<T, void, undefined> {
-  const reader = new StreamReader<T>(options, items)
+export async function* readStream<T>(source: ChunkSource, options: StreamOptions, items: ItemReader<T>): AsyncGenerator<T, void, undefined> {
+  const reader = new ItemStreamReader(options, items)
   // ignoreBOM: the reader skips a byte order mark at the start; the decoder must not remove one too.
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
   for await (const chunk of chunks(source)) {

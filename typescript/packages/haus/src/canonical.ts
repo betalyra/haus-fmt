@@ -7,10 +7,9 @@
  *   canonical(parse('Order { total: 19.90, id: 0xFF, "x-y": 1e+5 }'))
  *   // 'Order{id:255,total:19.90,"x-y":1e5}'
  */
+import { BARE_KEY } from "./chars.js"
 import { quote, toHex } from "./format.js"
 import type { Value } from "./value.js"
-
-const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
 
 /**
  * Orders strings by code point, which is the order of their UTF-8 bytes.

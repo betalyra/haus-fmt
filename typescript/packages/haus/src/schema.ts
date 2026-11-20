@@ -18,6 +18,7 @@
  * dispatch on the tag, depth is limited, and every call has a work budget.
  * Types that contain themselves are declared with `h.Recursive`.
  */
+import { TAG } from "./chars.js"
 import { HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
@@ -27,7 +28,8 @@ import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
-import { decodeCompiled, decodeItem, defineOwn, encodeCompiled, unknownOf } from "./codec.js"
+import { decodeCompiled, decodeItem, encodeCompiled, unknownOf } from "./codec.js"
+import { defineOwn } from "./own.js"
 import { codecOf, optimize as markOptimized, readerFor, writerFor } from "./codegen.js"
 import { atJsonPlace, jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions, type JsonPlaces } from "./json.js"
 import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
@@ -1215,8 +1217,6 @@ export const AnyTag: Schema<string | Unknown> = make(
   { kind: "anyTag" },
 )
 
-const TAG = /^[A-Z][A-Za-z0-9_]*$/
-
 // ── Any and Secret ───────────────────────────────────────────
 
 /**
@@ -1484,9 +1484,9 @@ const parseGeneric = <A>(schema: Schema<A>, text: string, limits: Limits): A => 
  */
 export async function* decodeStream<A>(schema: Schema<A>, source: ChunkSource, options: Options = {}): AsyncGenerator<A, void, undefined> {
   type Item = { readonly decoded: true; readonly value: A } | { readonly decoded: false; readonly value: Value }
+  const read = readerFor(schema, codecOf(options))
   const items: ItemReader<Item> = {
     text: (text, origin, limits) => {
-      const read = readerFor(schema, codecOf(options))
       const done = read === undefined ? undefined : decodeItem(read, text, origin, options)
       return done !== undefined ? { decoded: true, value: done.value as A } : { decoded: false, value: new Parser(text, origin, limits).parseSingle() }
     },
