@@ -3,7 +3,7 @@
 A first, small benchmark of haus against JSON:
 
 1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
-2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify` (`speed/ts/`), Rust against `serde_json` (`speed/rust/`). Every language reads the same documents, which `convert` exports as plain files.
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`). Every language reads the same documents, which `convert` exports as plain files.
 
 ```
 bench/
@@ -49,10 +49,10 @@ Or step by step:
 |---|---|---|---|
 | build the bindings | `pnpm --filter haus-bench prepare-haus` | ~10 s | `typescript/packages/{haus,effect}/dist/` |
 | download | `pnpm --filter haus-bench fetch` | ~1 min (~140 MB, once) | `bench/.data/` |
-| convert | `pnpm --filter haus-bench convert` | ~15 s | `bench/.out/<source>/corpus.json`, `<source>.schema.haus`, `<source>-strings.schema.haus`, `<source>.haus`; the exported corpus `bench/.out/<source>/corpus/` ([below](#the-exported-corpus)) |
+| convert | `pnpm --filter haus-bench convert` | ~15 s | `bench/.out/<source>/corpus.json`, `<source>.schema.haus`, `<source>-strings.schema.haus`, `<source>.haus`; the exported corpus `bench/.out/<source>/corpus/` ([below](#the-exported-corpus)), with the schema as a JSON Schema too |
 | tokens | `pnpm --filter haus-bench tokens` | ~15 min (4 tokenizers × 7 sources; bfcl and gh-archive are most of it) | `bench/.out/<source>/tokens.json` |
 | compress | `pnpm --filter haus-bench compress` | ~3 min (brotli 11 is most of it) | `bench/.out/<source>/compression.json` |
-| speed (TypeScript) | `pnpm --filter haus-bench speed` | ~6 min (11 tasks × 2.5 s × 7 sources, and the checks before timing; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed-typescript.json` |
+| speed (TypeScript) | `pnpm --filter haus-bench speed` | ~8 min (21 tasks × 2.5 s × 7 sources, and building the JSON validators and writers and the checks before timing: fast-json-stringify takes ~25 s for Stripe's 173 types; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed-typescript.json` |
 | speed (Rust) | `pnpm --filter haus-bench speed-rust`, or `cargo bench` in `bench/speed/rust/` | ~7 min (11 tasks × ~4.5 s × 7 sources, and the first build) | `bench/.out/<source>/speed-rust.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
@@ -107,6 +107,7 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 | `size/src/steps/fetch.ts` | downloads into `bench/.data/` and checks hashes: git (child process) for the corpora, `HttpClient` for GH Archive and the tokenizers (a few at a time), and the hash of the npm package file GeoJSON's schema comes from |
 | `size/src/steps/convert.ts` | every document → haus (three forms), with the round trip checked |
 | `size/src/export.ts` | the exported corpus (`<source>/corpus/`): written by convert, read by the TypeScript speed step (the Rust benchmark has its own reader, `speed/rust/src/corpus.rs`) |
+| `size/src/jsonschema.ts` | the converter's types → a JSON Schema (draft-07) of the documents' JSON, through convert's JSON mapping: what the JSON baselines of the typed tasks are built from |
 | `size/src/steps/tokens.ts` | token counts with tokenizers.js, per document and of all documents as one stream |
 | `size/src/steps/compress.ts`, `size/src/compress.ts` | compressed sizes: gzip, brotli, zstd (node:zlib), per document and as one stream |
 | `size/src/steps/report.ts` | the tables, as markdown and as `results.haus`, with every language's speed results |
@@ -115,7 +116,8 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 | `size/src/corpus.ts` | the documents of each source (YAML 1.1 → JSON for Kubernetes, with `yaml` 2.9.1) |
 | `size/src/manifest.ts`, `size/src/results.ts` | the manifest and results files, as Effect Schemas (the speed results' shape is shared by every language); the `Manifest` and `Results` services |
 | `size/src/paths.ts`, `size/src/host.ts`, `size/src/sources.ts`, `size/src/listing.ts`, `size/src/stats.ts`, `size/src/errors.ts` | directories (`BenchPaths`), the machine and its garbage collector (`Host`), source selection, directory listings, statistics and tables, errors |
-| `speed/ts/speed.ts` | TypeScript speed, tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify` (the CLI's `speed` command) |
+| `speed/ts/speed.ts` | TypeScript speed, tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify`, and the typed tasks against JSON with validation (the CLI's `speed` command) |
+| `speed/ts/validators.ts`, `speed/ts/mutate.ts` | the JSON baselines of the typed tasks, built from the source's JSON Schema: Zod (a translation), Ajv, TypeBox, fast-json-stringify; the mutated documents they must reject |
 | `speed/rust/` | Rust speed, criterion: `benches/speed.rs` (the tasks and checks), `src/corpus.rs` (reads the export and the manifest), `src/results.rs` (criterion's samples → `speed-rust.json`), `src/machine.rs` |
 
 Services: `BenchPaths` (from `--data-dir`/`--out-dir`), `Manifest` (reads `sources.haus`), `Results` (reads and writes the results files, checked with their schemas), `Host` (provided by each entry); from the platform: `FileSystem`, `Path`, `Crypto` (SHA-256), `ChildProcessSpawner` (git), `HttpClient`. tinybench stays the timing engine: the timed functions are the plain library calls, built before the run, with no Effect inside them.
@@ -306,6 +308,36 @@ The first Rust run (criterion, `rustc 1.99.0`, M1 Max), per document, haus again
 - **The Rust binding is slower than the TypeScript one** in MB/s on every source (per document, same files, same machine): TypeScript parses at 74–173 MB/s and writes minimised at 88–250 MB/s, Rust at 60–131 and 44–106 MB/s. Against its own language's JSON library, Rust's parse ratio is about TypeScript's (1.7–2.5× both), its write ratio worse (7–10× against 1.4–10×).
 - A first profile (macOS `sample`, bfcl): parse time goes to `Parser::basic_string` (a byte-at-a-time loop with a bounds-checked `peek`, a full `char` decode for every non-ASCII character, a `String` grown by `push_str`), to `malloc`/`free` (a `String` per key and per string), and to the duplicate-key check (a `HashSet<String>` per record: SipHash, cloned keys, rehashing), about 8%. Writing goes to `ser::quote` (per-character escaping), to `Value::clone` (`Encoder::value` checks the value, then clones the whole tree before writing it) and `malloc`/`free`, and to `unique_keys`. Not optimised here: this benchmark measures.
 
+### TypeScript: typed against JSON with validation
+
+haus's typed parse reads and checks in one pass; the fair JSON counterpart is `JSON.parse` followed by a validator of the same schema, and for writing, a JSON writer compiled from the same schema ([the baselines](#the-json-baselines-of-the-typed-tasks)). Per document, Node 26 (M1 Max, shared with other benchmarks while it ran): the median of three full runs, the range of the three in parentheses where it matters. Ratios are haus's time over the JSON task's time on the same documents (below 1: haus is faster); MB/s is each format's own bytes.
+
+| Source | haus `h.parse` MB/s | `JSON.parse` MB/s | + Zod | + Ajv | + TypeBox | haus / `JSON.parse` | haus / + Zod | haus / + Ajv | haus / + TypeBox |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 142 | 405 | 143 | 290 | 239 | 2.8× | 1.03× | 2.0× | 1.65× |
+| `vega-lite` | 57 | 151 | 18 | 65 | 57 | 2.5× | **0.29×** | 1.11× | 0.99× |
+| `kubernetes` | 66 | 148 | 36 | 81 | 71 | 2.0× | **0.45×** | 1.02× | 0.96× |
+| `stripe` | 70 | 233 | 57 | 168 | 170 | 3.3× | **0.76×** | 2.3× | 2.2× |
+| `bfcl` | 166 | 311 | 159 | 293 | 245 | 1.8× (0.8–2.0) | **0.90×** | 1.65× | 1.38× |
+| `gh-archive` | 148 | 495 | 237 | 419 | 372 | 2.8× | 1.87× (1.2–2.1) | 2.3× | 2.3× |
+| `geojson` | 73 | 100 | 37 | 103 | 118 | 1.4× (1.2–2.0) | **0.87×** (0.4–1.0) | 1.7× | 2.1× |
+
+| Source | haus `h.stringify` (typed) MB/s | `JSON.stringify` MB/s | fast-json-stringify MB/s | haus / `JSON.stringify` | haus / fast-json-stringify |
+|---|---:|---:|---:|---:|---:|
+| `github-rest` | 233 | 988 | 308 | 4.0× | 1.28× |
+| `vega-lite` | 56 | 517 | 557 | 8.8× | 8.7× (fast-json-stringify writes its specs as `JSON.stringify` does: it can't build them) |
+| `kubernetes` | 107 | 629 | 57 | 5.2× | **0.47×** |
+| `stripe` | 170 | 772 | 139 | 4.5× | **0.85×** |
+| `bfcl` | 245 | 1,148 | 376 | 4.5× | 1.42× |
+| `gh-archive` | 253 | 814 | 312 | 3.1× | 1.20× |
+| `geojson` | 98 | 102 | 118 | 1.9× (1.0–2.6) | 1.30× |
+
+- **Against `JSON.parse` + Zod, haus's typed parse is as fast or faster on 6 of 7 sources** (0.29–1.03× Zod's time: 3.4× faster on Vega-Lite, 2.2× on Kubernetes, likely because Zod's `z.union` tries the cases of the unions told apart by keys one after the other), and slower on GH Archive (1.9×; its events carry 3,178 members the schema doesn't list, which haus still reads as text and Zod never looks at).
+- **Against `JSON.parse` + Ajv or TypeBox** (compiled validators that only check, building nothing), haus is at par on Vega-Lite and Kubernetes (0.96–1.11×) and 1.4–2.3× their time elsewhere, against 1.4–3.3× `JSON.parse` alone. Checking what haus checks closes part of the gap to `JSON.parse` (all of it on Vega-Lite and Kubernetes, about a fifth on GitHub and Stripe, with Ajv); the rest is haus's reader, slower than the engine's native `JSON.parse`.
+- **Writing:** haus's typed write (which checks the value as it writes) is 0.47–1.42× fast-json-stringify's time, Vega-Lite aside (faster on Kubernetes and Stripe, where fast-json-stringify picks branches of unions and nullable references with Ajv at run time), and 1.9–8.8× `JSON.stringify`'s, which knows no schema.
+- **The corpus input** (one text, all documents) is slower for haus's typed parse (3.1–6.4× `JSON.parse`; 0.53–3.1× Zod's time): it takes the generic path (`parseAll`, then `h.decode` each value), not the compiled reader `h.parse` uses per document. The full tables, with the corpus input, are in `bench/.out/results.md`.
+- **Spread:** the machine was shared, and single tasks moved by up to 2× between runs (BFCL's and GeoJSON's `JSON.parse`, GH Archive's corpus tasks); the ratios above are each run's own, then the median. Bun 1.4 and Deno 2.9 ran the same tasks and checks in quick mode (harness checks, not measurements): every validator accepts every document and rejects the mutated ones there too.
+
 ## Measurements
 
 ### Size and tokens
@@ -340,6 +372,7 @@ Size and tokens are measured on the texts convert writes; speed is measured per 
 bench/.out/<source>/corpus/
   index.haus             { source, schema, documents: [{ id, root, file }] }, in order
   <source>.schema.haus   the schema (enums as tags); each document's `root` is a type of it
+  <source>.schema.json   the same types as a JSON Schema of the documents' JSON (definitions/<root>), for JSON validators
   NNNN.haus              document NNNN, idiomatic haus, minimised (the wire form)
   NNNN.pretty.haus       the same, pretty
   NNNN.json              the same document, minified JSON (numbers as written in the source)
@@ -356,12 +389,51 @@ Each file holds exactly the measured text (no newline added); `NNNN` is the docu
 | Task | JSON | haus |
 |---|---|---|
 | parse | `JSON.parse` | `parse` / `parseAll`: text → `Value` tree, no schema |
-| typed | | `h.parse(schema, text)`: parse and decode with the document's schema |
+| typed | `JSON.parse`, then a validator of the same schema: Zod, Ajv, TypeBox ([below](#the-json-baselines-of-the-typed-tasks)) | `h.parse(schema, text)`: parse and decode with the document's schema (the corpus: `parseAll`, then `h.decode` each) |
 | write | `JSON.stringify` of the parsed JS value | `stringify` / `format` of the `Value` tree, minimised and compact |
+| write, typed | fast-json-stringify, compiled from the same schema, of the parsed JS value | `h.stringify(schema, value)` of the decoded value, minimised |
 
-Each runs on the **corpus** (one text: a JSON array, a haus stream) and **per document** (every document on its own; the time is for all of them). The report gives MB/s (against each format's own bytes), µs per document, ops/s, mean, p75 and p99, and the time relative to JSON for the same task and input.
+Each runs on the **corpus** (one text: a JSON array, a haus stream) and **per document** (every document on its own; the time is for all of them). The typed writers have no one call for a corpus of several types (GitHub's and Stripe's documents each have their own), so their corpus task writes each document and joins them (`[a,b]`, a haus stream). The report gives MB/s (against each format's own bytes: bytes read, or bytes written), µs per document, ops/s, mean, p75 and p99, the time relative to the plain JSON task of the same input (`JSON.parse` for parse and typed, `JSON.stringify` for write), and a table of haus's typed tasks against each JSON task that checks or writes with the same schema.
 
-Before timing, each pair is checked once: the haus text parses to a value that writes back to the same text, the typed decode succeeds, the haus stream reads as the same values as the documents (and is their minimised stream; `all.json` is their array), and `JSON.parse` → `JSON.stringify` gives the same text (where it doesn't, because a number can't be held exactly in a JS number, the count is reported). Every output is consumed into a checksum that is recorded. The machine, OS and runtime version are recorded in the results (`speed-typescript.json`).
+Before timing, each pair is checked once: the haus text parses to a value that writes back to the same text, the typed decode succeeds, the haus stream reads as the same values as the documents (and is their minimised stream; `all.json` is their array), and `JSON.parse` → `JSON.stringify` gives the same text (where it doesn't, because a number can't be held exactly in a JS number, the count is reported). The JSON baselines: every validator accepts every document; each rejects every mutated document ([below](#the-json-baselines-of-the-typed-tasks)); fast-json-stringify's text is JSON of the value Zod gives (the members the schema lists); the typed haus write reads back as the same values. Every output is consumed into a checksum that is recorded. The machine, OS and runtime version are recorded in the results (`speed-typescript.json`, with the baselines' versions and checks under `typedBaselines`).
+
+#### The JSON baselines of the typed tasks
+
+haus's typed parse checks the document against its schema while it reads it. `JSON.parse` checks nothing but the syntax, so the fair JSON counterpart is `JSON.parse` followed by a validator of the same schema. The validators are built from **the same types** the haus schema is generated from: convert writes them as a JSON Schema (draft-07) of the documents' JSON, `corpus/<source>.schema.json` (`size/src/jsonschema.ts`), through the JSON mapping convert reads each source with (enums as their JSON strings, `null` for `Maybe`, a discriminated union's tag as its member, the unions told apart by keys, the per-source rules of `sources.haus`):
+
+| haus (as convert maps it from JSON) | JSON Schema | Zod 4 |
+|---|---|---|
+| `String`, `Bool`, `Float64` | `type: string`, `boolean`, `number` | `z.string()`, `z.boolean()`, `z.number()` |
+| `Int` | `type: integer` | `z.int()` |
+| `Instant`, `Date` (std/time) | `type: string`, `format: date-time`, `date` | `z.iso.datetime({ offset: true })`, `z.iso.date()` |
+| an enum | `enum` of the JSON strings | `z.enum` |
+| `Maybe T` | `T` or `null` (`type: [t, "null"]`, or `anyOf [null, T]`) | `.nullable()` |
+| `Array T`, `Map V` | `items`, `additionalProperties` | `z.array`, `z.record(z.string(), …)` |
+| a record (open, as haus's are here), `field?` | `properties`, `required`; other members allowed | `z.object` (other members allowed and dropped, as haus's decoder drops them), `.optional()` |
+| a variant by a member (`kind`, `type`, an OpenAPI discriminator) | `oneOf`, the member a `const` in each branch, and Ajv's `discriminator` keyword | `z.discriminatedUnion` |
+| a variant by required keys (Vega-Lite's specs, …) | `oneOf [{ required: keys }…]` (exactly one case's keys, as convert's reader asks) and `allOf [{ if: { required: keys }, then: case }…]` | `z.union` of the cases, each requiring its keys, and a check that exactly one case's keys are there |
+| `Any` | `{}` | `z.unknown()` |
+
+- **Zod** 4.6.7: the JSON Schema translated to Zod (`speed/ts/validators.ts`, which reads exactly the subset `jsonschema.ts` writes); `schema.parse(value)`, which builds a new value (members the schema doesn't list dropped).
+- **Ajv** 8.20.0 with **ajv-formats** 3.0.1 (`date-time`, `date`, full mode): the JSON Schema as it is, one compiled validator per document type, `discriminator: true`; it only checks (no new value).
+- **TypeBox** 1.4.4 (`typebox/schema`, `Schema.Compile`): the JSON Schema as it is, with its own formats; it only checks. It doesn't know Ajv's `discriminator`, so it evaluates the `oneOf` of a discriminated variant as JSON Schema says (every branch, exactly one must match).
+- **fast-json-stringify** 7.3.1: compiled from the JSON Schema, for writing: records write the members they list (other members are dropped, as in the decoded value haus writes), in the schema's order; a variant by keys is an `anyOf` of its cases. For `anyOf`/`oneOf` (nullable references, unions) it picks the branch at run time with Ajv, part of its cost. It can't build Vega-Lite's root type (its unions told apart by keys refer back to themselves, and building recurses without end: "Maximum call stack size exceeded"), so for `TopLevelSpec` every union told apart by keys is written as `{}`: JSON.stringify of that value, all its members (recorded as `jsonWriterKeyedAsAny`).
+
+All five are dependencies of `bench/` pinned exactly (in `bench/package.json` and `typescript/pnpm-lock.yaml`), each published at least two weeks before it was added.
+
+**The spot check.** Before timing, mutated documents are made from the corpus (`speed/ts/mutate.ts`), up to 5 of each kind, at places the JSON Schema types, where convert's reader (`toHaus`) rejects them too, so haus's typed parse would: a typed value of another JSON type (a string replaced by `12345`, a number, boolean, object or array by `"x"`), a required member removed, an enum value the enum doesn't list, a date-time or date that isn't one. Zod, Ajv and TypeBox must reject every one (the counts are in `typedBaselines.rejected`; a source without enums or dates has none of that kind).
+
+**What they don't check the same way** (none of these occur in the corpora: every validator accepts every document, and haus decodes every one):
+
+| | haus (`h.parse`) | JSON.parse + validator |
+|---|---|---|
+| a key twice in an object | rejected | `JSON.parse` keeps the last; the validator never sees the first |
+| `Int` | any size (a `bigint`); `1.0` and `1e3` rejected | a JS number: Ajv's and TypeBox's `integer` accept `1.0`, `1e3` and integers beyond 2⁵³ (rounded); `z.int()` accepts `1.0` and `1e3`, rejects integers beyond 2⁵³ |
+| `Instant` (`date-time`) | `T` and `Z` upper case, seconds required, 1–9 fraction digits, no leap second (`:60`), not `-00:00`, the day must exist | ajv-formats: also `t`, `z`, a space for `T`, `:60`, `-00:00`, any number of fraction digits; TypeBox: the same but the space; Zod: also `-00:00` and any number of fraction digits |
+| what comes out | typed values: `bigint`s, `Maybe` as `{ _tag }`, maps as `ReadonlyMap`, variants with `_tag` | Zod: a new plain object, members not listed dropped; Ajv, TypeBox: nothing (the parsed value, checked), less work |
+| limits | depth, sizes, number lengths (haus's defaults) | none |
+
+On the writing side, `h.stringify` checks the value against the schema while it writes it; fast-json-stringify doesn't (it writes what it is given, and truncates a non-integer where the schema says `integer`). `JSON.stringify` writes every member; the typed writers only the schema's, so their text is another (counted: `typedWriteOtherText`, `jsonWriterOtherText`; member order is the schema's), and MB/s is of the bytes each writes.
 
 ### Speed (Rust)
 

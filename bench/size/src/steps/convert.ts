@@ -37,6 +37,7 @@ import {
 } from "../corpus.ts"
 import { CorpusError, messageOf } from "../errors.ts"
 import { writeExport } from "../export.ts"
+import { jsonSchemaFile, type JsonSchemaFile } from "../jsonschema.ts"
 import { defineSchemaFile } from "../hand.ts"
 import { listingFile, parseListing } from "../listing.ts"
 import { sourcePath, type CorpusSource } from "../manifest.ts"
@@ -85,6 +86,8 @@ export interface Conversion {
   readonly out: CorpusOut
   /** The documents in the idiomatic form, pretty, one after the other: for reading. */
   readonly readable: string
+  /** The schema's types as a JSON Schema of the documents' JSON (exported beside the haus schema). */
+  readonly jsonSchema: JsonSchemaFile
 }
 
 /** The converter's decisions over every named type of the corpus's schema. Pure. */
@@ -179,7 +182,11 @@ export const convertCorpus = (source: CorpusSource, corpus: Corpus, limit: Optio
     ...(respelled.count > 0 ? { respelledNumbers: respelled.count } : {}),
     notes: converter.notes,
   }
-  return { out, readable: documents.map((d) => `// ${d.id} (${d.root})\n${d.haus_pretty},\n`).join("\n") }
+  return {
+    out,
+    readable: documents.map((d) => `// ${d.id} (${d.root})\n${d.haus_pretty},\n`).join("\n"),
+    jsonSchema: jsonSchemaFile(rootNames, (name) => converter.typeOf(name), corpus.schemaFrom),
+  }
 }
 
 /** The summary printed after a conversion. Pure. */
@@ -306,7 +313,7 @@ export const convert = Effect.fn("bench.convert")(function* (options: { readonly
       const conversion = convertCorpus(source, yield* readCorpus(source), options.limit)
       yield* results.write(source.name, CORPUS, conversion.out)
       yield* Effect.forEach(conversionFiles(source, conversion), ([file, text]) => results.writeText([source.name, file], text))
-      yield* writeExport(conversion.out)
+      yield* writeExport(conversion.out, conversion.jsonSchema)
       yield* Console.log(summary(conversion))
     }), { discard: true })
 })

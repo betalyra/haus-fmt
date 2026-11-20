@@ -71,9 +71,13 @@ const sameDocuments = (corpus: CorpusOut, ids: readonly string[]): boolean =>
 
 const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust" }
 
-/** The JSON task a row is compared with: same group and input (typed: JSON parse). */
+/**
+ * The JSON task a row is compared with: the language's plain JSON task of the
+ * same input, parse (for typed too) or write: the first JSON row of that
+ * group (JSON.parse, JSON.stringify; serde_json).
+ */
 const baselineOf = (rows: readonly SpeedRow[], r: SpeedRow): SpeedRow | undefined =>
-  rows.find((x) => x.input === r.input && (x.group === r.group || (r.group === "typed" && x.group === "parse")) && x.format === "json")
+  rows.find((x) => x.input === r.input && x.group === (r.group === "typed" ? "parse" : r.group) && x.format === "json")
 
 const versus = (rows: readonly SpeedRow[], r: SpeedRow): string => {
   const b = baselineOf(rows, r)
@@ -98,15 +102,44 @@ export const speedTable = (sp: SpeedOut): string[] => {
       ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", "vs JSON"],
       sp.rows.map((r) => [r.group, r.input, r.impl, r.mb_s.toFixed(1), r.us_per_doc.toFixed(2), r.hz.toFixed(1), r.mean_ms.toFixed(3), r.p75_ms.toFixed(3), r.p99_ms.toFixed(3), versus(sp.rows, r)]),
     ),
+    ...typedVersusTable(sp),
   ]
 }
 
-/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`. */
-const hausTask = (r: SpeedRow): string => (r.group === "write" ? `write ${r.impl.includes("compact") ? "compact" : "minimised"}` : r.group)
+/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`; `write typed` (TypeScript's h.stringify). */
+const hausTask = (r: SpeedRow): string =>
+  r.group !== "write" ? r.group : r.impl.includes("(typed)") ? "write typed" : `write ${r.impl.includes("compact") ? "compact" : "minimised"}`
+
+/**
+ * The typed tasks against the JSON baselines that check or use the same
+ * schema (TypeScript: JSON.parse + Zod, Ajv, TypeBox; fast-json-stringify),
+ * and against the plain JSON task. "haus time / JSON time" is per the same
+ * documents, so it is the comparison; MB/s is each format's own bytes. Pure.
+ */
+export const typedVersusTable = (sp: SpeedOut): string[] => {
+  const pairs = sp.rows.flatMap((h) => {
+    if (h.format !== "haus" || (h.group !== "typed" && hausTask(h) !== "write typed")) return []
+    const read = h.group === "typed"
+    const json = sp.rows.filter((x) => x.format === "json" && x.input === h.input && (read ? x.group === "parse" || x.group === "typed" : x.group === "write"))
+    return json.map((j) => [read ? "typed (parse + check)" : "typed write", h.input, h.impl, j.impl, j.mb_s.toFixed(1), h.mb_s.toFixed(1), `${(h.mean_ms / j.mean_ms).toFixed(2)}×`])
+  })
+  if (pairs.length === 0) return []
+  const b = sp.typedBaselines
+  return [
+    `haus typed against JSON with the same schema (${LANG_NAMES[sp.lang]}): the validators and the writer are built from the JSON Schema convert derives from the haus schema (\`corpus/<source>.schema.json\`).` +
+      (b ? ` Before timing, every validator accepted every document and rejected ${Object.entries(b.rejected).map(([k, n]) => `${n} mutated (${k})`).join(", ")}; ` +
+        `the typed haus write writes other text than the document (members in the schema's order, members it doesn't list dropped) for ${b.typedWriteOtherText} documents, fast-json-stringify writes other text than JSON.stringify for ${b.jsonWriterOtherText}` +
+        (b.jsonWriterKeyedAsAny ? `; fast-json-stringify writes the unions told apart by keys as JSON.stringify does (it can't build them) for ${b.jsonWriterKeyedAsAny.join(", ")}` : "") +
+        `. ${Object.entries(b.versions).map(([k, v]) => `${k} ${v}`).join(", ")}.` : ""),
+    "",
+    ...table(["Task", "Input", "haus", "JSON", "JSON MB/s", "haus MB/s", "haus time / JSON time"], pairs),
+  ]
+}
 
 /** haus in every language side by side: MB/s and time against the language's JSON. Pure. */
 export const speedSummary = (speed: readonly SpeedOut[]): string[] => {
-  const keys = [...new Set(speed.flatMap((sp) => sp.rows.filter((r) => r.format === "haus").map((r) => `${hausTask(r)}|${r.input}`)))]
+  // (TypeScript's typed write has no counterpart in the other languages yet: it is in the typed table.)
+  const keys = [...new Set(speed.flatMap((sp) => sp.rows.filter((r) => r.format === "haus" && hausTask(r) !== "write typed").map((r) => `${hausTask(r)}|${r.input}`)))]
   return [
     "haus in each language (MB/s of haus text; time relative to the language's JSON task):",
     "",
@@ -261,7 +294,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const speedSection = speed.length === 0 ? [] : [
     "## Speed",
     "",
-    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema), write (value → text). MB/s is against each format's own bytes; \"vs JSON\" is the time relative to the language's JSON task of the same group and input (for typed, JSON parse).",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify). MB/s is against each format's own bytes; \"vs JSON\" is the time relative to the language's plain JSON task of the same input (JSON.parse for parse and typed, JSON.stringify for write).",
     "",
     ...(speed.length > 1 ? speedSummary(speed) : []),
     ...speed.flatMap(speedTable),
@@ -277,7 +310,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
       onSome: ({ t, ratios }) => ({ tokenizers: t.tokenizers.map(({ seconds: _, ...tk }) => tk), ratios, stream: t.stream }),
     }),
     compression: Option.getOrNull(compression.value),
-    speed: speed.length === 0 ? null : Object.fromEntries(speed.map((sp) => [sp.lang, { harness: sp.harness, machine: sp.machine, options: sp.options, jsonNotStable: sp.jsonNotStable, rows: sp.rows }])),
+    speed: speed.length === 0 ? null : Object.fromEntries(speed.map((sp) => [sp.lang, { harness: sp.harness, machine: sp.machine, options: sp.options, jsonNotStable: sp.jsonNotStable, ...(sp.typedBaselines ? { typedBaselines: sp.typedBaselines } : {}), rows: sp.rows }])),
   }
 
   return {

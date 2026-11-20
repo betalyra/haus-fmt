@@ -24,10 +24,15 @@
     "@haus-fmt/effect": "workspace:*",
     "@haus-fmt/haus": "workspace:*",
     "@huggingface/tokenizers": "0.2.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "effect": "4.0.6",
+    "fast-json-stringify": "7.3.1",
     "geojson-schema": "1.0.5",
     "tinybench": "6.2.3",
-    "yaml": "2.9.1"
+    "typebox": "1.4.4",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@effect/tsgo": "0.69.0",
