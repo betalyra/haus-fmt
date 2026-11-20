@@ -102,6 +102,22 @@ public struct SourcePosition: Sendable, Hashable, CustomStringConvertible {
     public var description: String { "\(line):\(column)" }
 }
 
+/// The position of byte offset `i` of valid UTF-8 text whose first byte is
+/// at `start` (spec §8).
+func sourcePosition(of i: Int, in b: Bytes, from start: SourcePosition = SourcePosition(line: 1, column: 1))
+    -> SourcePosition
+{
+    let i = min(i, b.count)
+    var lines = 0
+    var lineStart = 0
+    for k in 0..<i where b[k] == ASCII.lf {
+        lines += 1
+        lineStart = k + 1
+    }
+    let column = codePoints(in: b[lineStart..<i]) + 1
+    return SourcePosition(line: start.line + lines, column: lines == 0 ? start.column + column - 1 : column)
+}
+
 // ── text for messages ───────────────────────────────────────────
 
 /// `text` quoted for an error message: quotes and backslashes escaped,
@@ -138,19 +154,7 @@ func codePointName(_ c: UInt32) -> String {
 /// A JSON string, with the characters writers never write raw escaped
 /// (spec §16).
 func jsonString(_ s: String) -> String {
-    var out = "\""
-    for c in s.unicodeScalars {
-        switch c {
-        case "\"": out += "\\\""
-        case "\\": out += "\\\\"
-        case "\n": out += "\\n"
-        case "\r": out += "\\r"
-        case "\t": out += "\\t"
-        case _ where needsEscape(c.value):
-            let hex = String(c.value, radix: 16)
-            out += "\\u" + String(repeating: "0", count: 4 - hex.count) + hex
-        default: out.unicodeScalars.append(c)
-        }
-    }
-    return out + "\""
+    var out: [UInt8] = []
+    appendJSONString(s, to: &out)
+    return String(decoding: out, as: UTF8.self)
 }

@@ -11,11 +11,15 @@
 //                                      `ok {"values": [...], "file": ...}`: each value written
 //                                      alone by `stringify` (without its line break), and all of
 //                                      them by `stringifyAll`
+//
+// and the modes that read a FILE of lines (Lines.swift): --time, --schema,
+// --schema-check and --json MODE.
 import Foundation
 import Haus
 
 let usage =
     "usage: swift-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N"
+    + " | --time FILE | --schema FILE | --schema-check FILE | --json MODE FILE"
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
@@ -155,6 +159,10 @@ func mode(_ flags: ArraySlice<String>) -> ([UInt8], Int) -> String {
 }
 
 let args = CommandLine.arguments.dropFirst()
+if let (file, one) = lineMode(args) {
+    runLines(file, one)
+    exit(0)
+}
 guard args.count >= 2, let count = Int(args.last!) else { fail(usage) }
 let dir = URL(fileURLWithPath: args[args.endIndex - 2])
 let run = mode(args.dropLast(2))

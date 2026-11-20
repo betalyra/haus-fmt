@@ -18,20 +18,28 @@ private func escape(_ special: Special, at i: Int, in b: Bytes, to out: inout [U
     }
 }
 
-/// Appends `s` as a `"…"` string with the fewest escapes: the same in every
-/// layout and in the canonical form.
-func appendQuoted(_ s: String, to out: inout [UInt8]) {
+/// Appends `s` in quotes, each ``Special`` character in it replaced by what
+/// `escape` appends for it (the character at `i` of `b`, the UTF-8 of `s`).
+func appendQuoted(
+    _ s: String, to out: inout [UInt8], escaping escape: (Special, _ i: Int, _ b: Bytes, inout [UInt8]) -> Void
+) {
     out.append(ASCII.quote)
     withUTF8(s) { b in
         var plain = 0
         while let (at, special) = nextSpecial(b, from: plain, to: b.count) {
             out += b[plain..<at]
-            escape(special, at: at, in: b, to: &out)
+            escape(special, at, b, &out)
             plain = at + special.width
         }
         out += b[plain...]
     }
     out.append(ASCII.quote)
+}
+
+/// Appends `s` as a `"…"` string with the fewest escapes: the same in every
+/// layout and in the canonical form.
+func appendQuoted(_ s: String, to out: inout [UInt8]) {
+    appendQuoted(s, to: &out) { special, i, b, out in escape(special, at: i, in: b, to: &out) }
 }
 
 /// Appends a scalar as written in the source, with raw U+2028 and U+2029

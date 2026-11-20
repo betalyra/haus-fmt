@@ -99,6 +99,7 @@ export const jvm = (): JsonRunner => ({
   ...external("jvm", (mode, file) => [join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--json", mode, file]], true),
   modes: MODES.filter((m) => !typed(m)),
 })
+export const swift = () => external("swift", (mode, file) => [join(root, "fuzz/.build/swift-runner"), ["--json", mode, file]], true)
 
 // ── in this process ──────────────────────────────────────────
 

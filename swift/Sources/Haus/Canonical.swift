@@ -17,7 +17,7 @@
 /// ``Limits/maxSupportedDepth`` (`nesting-too-deep`).
 public func canonical(_ value: HausValue) throws(HausError) -> String {
     var out: [UInt8] = []
-    try writeCanonical(value, depth: 0, to: &out)
+    try appendCanonical(value, to: &out)
     return String(decoding: out, as: UTF8.self)
 }
 
@@ -40,66 +40,29 @@ public func canonical(_ value: HausValue) throws(HausError) -> String {
         var out: [UInt8] = []
         for (i, value) in values.enumerated() {
             if i > 0 { out.append(ASCII.comma) }
-            try writeCanonical(value, depth: 0, to: &out)
+            try appendCanonical(value, to: &out)
         }
-        return SHA256.hash(data: out).map { hexByte($0) }.joined()
+        var hex: [UInt8] = []
+        appendHex(SHA256.hash(data: out), to: &hex)
+        return String(decoding: hex, as: UTF8.self)
     }
 #endif
 
-/// Two lowercase hex digits.
-func hexByte(_ byte: UInt8) -> String {
-    let digits = Array("0123456789abcdef".utf8)
-    return String(decoding: [digits[Int(byte >> 4)], digits[Int(byte & 0xF)]], as: UTF8.self)
+/// The lowercase hex digits.
+private let hexDigits = Array("0123456789abcdef".utf8)
+
+/// Appends two lowercase hex digits per byte.
+func appendHex(_ bytes: some Sequence<UInt8>, to out: inout [UInt8]) {
+    for byte in bytes {
+        out.append(hexDigits[Int(byte >> 4)])
+        out.append(hexDigits[Int(byte & 0xF)])
+    }
 }
 
-/// Appends the canonical form of `value`, a container at `depth` levels.
-private func writeCanonical(_ value: HausValue, depth: Int, to out: inout [UInt8]) throws(HausError) {
-    func enter() throws(HausError) {
-        if depth >= Limits.maxSupportedDepth {
-            throw HausError(.nestingTooDeep, "nesting deeper than the limit of \(Limits.maxSupportedDepth)")
-        }
-    }
-    func items(_ items: [HausValue], _ open: UInt8, _ close: UInt8) throws(HausError) {
-        try enter()
-        out.append(open)
-        for (i, item) in items.enumerated() {
-            if i > 0 { out.append(ASCII.comma) }
-            try writeCanonical(item, depth: depth + 1, to: &out)
-        }
-        out.append(close)
-    }
-    func record(_ r: HausRecord) throws(HausError) {
-        try enter()
-        let inOrder = zip(r.fields, r.fields.dropFirst()).allSatisfy { !precedes($1.key, $0.key) }
-        let fields = inOrder ? r.fields : r.fields.sorted { precedes($0.key, $1.key) }
-        out.append(ASCII.openBrace)
-        for (i, field) in fields.enumerated() {
-            if i > 0 { out.append(ASCII.comma) }
-            appendKey(field.key, to: &out)
-            out.append(ASCII.colon)
-            try writeCanonical(field.value, depth: depth + 1, to: &out)
-        }
-        out.append(ASCII.closeBrace)
-    }
-
-    switch value {
-    case .number(let n): out += n.literal.utf8
-    case .string(let s): appendQuoted(s, to: &out)
-    case .bytes(let bytes):
-        out += #"x""#.utf8
-        out += bytes.map(hexByte).joined().utf8
-        out.append(ASCII.quote)
-    case .array(let elements): try items(elements, ASCII.openBracket, ASCII.closeBracket)
-    case .record(let r): try record(r)
-    case .variant(let tag, let args):
-        try checkTag(tag)
-        out += tag.utf8
-        switch args.first {
-        case nil: break
-        case .record(let r) where args.count == 1: try record(r)
-        default: try items(args, ASCII.openParen, ASCII.closeParen)
-        }
-    }
+/// Appends the canonical form of `value`.
+func appendCanonical(_ value: HausValue, to out: inout [UInt8]) throws(HausError) {
+    var walk = Walk(HausSpelling.canonical, checks: .canonical)
+    try walk.write(value, to: &out)
 }
 
 /// Whether key `a` sorts before key `b`: by their code points, which is the

@@ -6,7 +6,8 @@
 /// their keys and values whatever the order, and `Tag { … }` the same as
 /// `Tag({ … })`, both a variant with one record argument.
 ///
-/// Equality, hashing and releasing a value recurse once per level of
+/// Equality doesn't recurse, and hashing covers the first
+/// ``hashedLevels`` levels; releasing a value recurses once per level of
 /// nesting: the parser never gives values deeper than
 /// ``Limits/maxSupportedDepth``, and values built in code should stay within
 /// it too.
@@ -63,19 +64,47 @@ extension HausValue {
 // ── equality (spec §2) ──────────────────────────────────────────
 
 extension HausValue: Hashable {
+    /// Haus equality (spec §2). It doesn't recurse: the pairs of values
+    /// still to compare are kept in a list.
     public static func == (a: HausValue, b: HausValue) -> Bool {
-        switch (a, b) {
-        case (.number(let x), .number(let y)): x == y
-        case (.string(let x), .string(let y)): sameCodePoints(x, y)
-        case (.bytes(let x), .bytes(let y)): x == y
-        case (.array(let x), .array(let y)): x == y
-        case (.record(let x), .record(let y)): x == y
-        case (.variant(let t, let x), .variant(let u, let y)): sameCodePoints(t, u) && x == y
-        default: false
+        var pending = [(a, b)]
+        while let (x, y) = pending.popLast() {
+            guard x.sameShape(y, adding: &pending) else { return false }
+        }
+        return true
+    }
+
+    /// Whether this value and `other` are the same but for their items, which
+    /// are added to `pending` in pairs.
+    private func sameShape(_ other: HausValue, adding pending: inout [(HausValue, HausValue)]) -> Bool {
+        switch (self, other) {
+        case (.number(let x), .number(let y)): return x == y
+        case (.string(let x), .string(let y)): return sameCodePoints(x, y)
+        case (.bytes(let x), .bytes(let y)): return x == y
+        case (.array(let x), .array(let y)): return sameItems(x, y, adding: &pending)
+        case (.variant(let t, let x), .variant(let u, let y)):
+            return sameCodePoints(t, u) && sameItems(x, y, adding: &pending)
+        case (.record(let x), .record(let y)):
+            guard x.count == y.count else { return false }
+            for (key, value) in x.fields {
+                guard let other = y[key] else { return false }
+                pending.append((value, other))
+            }
+            return true
+        default: return false
         }
     }
 
+    /// The levels of a value that its hash covers: values that differ only
+    /// deeper down hash alike, which keeps hashing linear and flat.
+    static let hashedLevels = 4
+
     public func hash(into hasher: inout Hasher) {
+        hash(into: &hasher, levels: Self.hashedLevels)
+    }
+
+    /// Hashes this value, and its items down to `levels` levels.
+    func hash(into hasher: inout Hasher, levels: Int) {
         switch self {
         case .number(let n):
             hasher.combine(0)
@@ -88,28 +117,44 @@ extension HausValue: Hashable {
             hasher.combine(b)
         case .array(let items):
             hasher.combine(3)
-            hasher.combine(items)
+            hashItems(items, into: &hasher, levels: levels)
         case .record(let r):
             hasher.combine(4)
-            hasher.combine(r)
+            r.hash(into: &hasher, levels: levels)
         case .variant(let tag, let args):
             hasher.combine(5)
             hashCodePoints(tag, into: &hasher)
-            hasher.combine(args)
+            hashItems(args, into: &hasher, levels: levels)
         }
     }
+}
+
+/// Whether two lists of items have the same length, adding their items to
+/// `pending` in pairs unless they are the same storage.
+private func sameItems(_ x: [HausValue], _ y: [HausValue], adding pending: inout [(HausValue, HausValue)]) -> Bool {
+    guard x.count == y.count else { return false }
+    let shared = x.withUnsafeBufferPointer { a in y.withUnsafeBufferPointer { b in a.baseAddress == b.baseAddress } }
+    if !shared { pending += zip(x, y) }
+    return true
+}
+
+/// Hashes the number of items, and the items down to `levels` levels.
+private func hashItems(_ items: [HausValue], into hasher: inout Hasher, levels: Int) {
+    hasher.combine(items.count)
+    guard levels > 0 else { return }
+    for item in items { item.hash(into: &hasher, levels: levels - 1) }
 }
 
 /// Whether two strings are the same code points (spec §2, §4). Swift's `==`
 /// compares strings by canonical equivalence, which haus doesn't.
 func sameCodePoints(_ a: String, _ b: String) -> Bool {
-    a.utf8.count == b.utf8.count && a.utf8.elementsEqual(b.utf8)
+    a.utf8.count == b.utf8.count && withUTF8(a) { x in withUTF8(b) { y in sameBytes(x, y) } }
 }
 
 /// Hashes the code points of a string, consistent with ``sameCodePoints(_:_:)``.
 func hashCodePoints(_ s: String, into hasher: inout Hasher) {
     hasher.combine(s.utf8.count)
-    for c in s.utf8 { hasher.combine(c) }
+    withUTF8(s) { hasher.combine(bytes: UnsafeRawBufferPointer($0)) }
 }
 
 /// A string compared and hashed by its code points, for dictionaries of
@@ -167,13 +212,8 @@ public struct HausRecord: Sendable, Hashable, RandomAccessCollection {
 
     /// The fields, in order.
     public let fields: [Field]
-    /// Where each key is, for records of at least ``indexFrom`` fields.
-    private let index: [CodePointKey: Int]?
-
-    /// The number of fields from which a record keeps an index of its keys;
-    /// smaller ones are searched in order. Swift's `Hasher` is seeded at
-    /// random per process, as spec §7 asks of duplicate-key checks.
-    static let indexFrom = 17
+    /// Where each key is.
+    private let index: KeyIndex
 
     /// A record of the fields, in order. It fails with the code
     /// `duplicate-key` if two fields have the same key.
@@ -188,22 +228,33 @@ public struct HausRecord: Sendable, Hashable, RandomAccessCollection {
         self = builder.record
     }
 
-    /// A record of fields with distinct keys, and their index if there are
-    /// at least ``indexFrom``.
-    fileprivate init(unique fields: [Field], index: [CodePointKey: Int]?) {
+    /// A record of fields with distinct keys, and their index.
+    fileprivate init(unique fields: [Field], index: KeyIndex) {
         self.fields = fields
         self.index = index
     }
 
+    /// A record of fields whose keys are known to be distinct.
+    init(distinct fields: [Field]) {
+        var builder = RecordBuilder()
+        for (key, value) in fields {
+            _ = builder.isNew(key)
+            builder.append(key, value)
+        }
+        self = builder.record
+    }
+
     /// The empty record.
-    public init() { self.init(unique: [], index: nil) }
+    public init() { self.init(unique: [], index: KeyIndex()) }
+
+    /// The record with the keys of `record`, in order, and `values`, one per key.
+    init(keysOf record: HausRecord, values: [HausValue]) {
+        self.init(unique: zip(record.fields, values).map { ($0.key, $1) }, index: record.index)
+    }
 
     /// The value of the field `key`, or nil if there is none.
     public subscript(key: String) -> HausValue? {
-        guard let index else {
-            return fields.first { sameCodePoints($0.key, key) }?.value
-        }
-        return index[CodePointKey(string: key)].map { fields[$0].value }
+        index.find(key, in: fields).map { fields[$0].value }
     }
 
     /// The keys, in order.
@@ -214,44 +265,43 @@ public struct HausRecord: Sendable, Hashable, RandomAccessCollection {
     public subscript(position: Int) -> Field { fields[position] }
 
     public static func == (a: HausRecord, b: HausRecord) -> Bool {
-        a.count == b.count && a.fields.allSatisfy { field in b[field.key] == field.value }
+        HausValue.record(a) == .record(b)
     }
 
-    /// Hashes the fields whatever their order.
+    /// Hashes the fields whatever their order, down to
+    /// ``HausValue/hashedLevels`` levels.
     public func hash(into hasher: inout Hasher) {
+        hash(into: &hasher, levels: HausValue.hashedLevels)
+    }
+
+    func hash(into hasher: inout Hasher, levels: Int) {
         hasher.combine(count)
+        guard levels > 0 else { return }
         hasher.combine(
             fields.reduce(0) { sum, field in
                 var h = Hasher()
                 hashCodePoints(field.key, into: &h)
-                h.combine(field.value)
+                field.value.hash(into: &h, levels: levels - 1)
                 return sum &+ h.finalize()
             })
     }
 }
 
-/// The fields of a record being built, for the parser and
+/// The fields of a record being built, for the parsers and
 /// ``HausRecord/init(_:)``: repeated keys are found in linear time whatever
-/// the keys (spec §7), by a scan while the record is small and by an index
-/// of its keys (`Hasher`, seeded at random) from ``HausRecord/indexFrom`` on.
+/// the keys (spec §7, ``KeyIndex``).
 struct RecordBuilder {
     private var fields: [HausRecord.Field] = []
-    private var index: [CodePointKey: Int]?
+    private var index = KeyIndex()
 
-    /// Whether no field so far has the key `key`.
-    @inline(never)
+    /// Whether no field so far has the key `key`. If so, the key is added:
+    /// the next field appended must have it.
     mutating func isNew(_ key: String) -> Bool {
-        if let index { return index[CodePointKey(string: key)] == nil }
-        guard !fields.contains(where: { sameCodePoints($0.key, key) }) else { return false }
-        if fields.count + 1 >= HausRecord.indexFrom {
-            index = Dictionary(uniqueKeysWithValues: fields.enumerated().map { (CodePointKey(string: $1.key), $0) })
-        }
-        return true
+        index.insert(key, after: fields)
     }
 
-    /// Adds a field whose key ``isNew(_:)`` said is new.
+    /// Adds the field of the key ``isNew(_:)`` added.
     mutating func append(_ key: String, _ value: HausValue) {
-        index?[CodePointKey(string: key)] = fields.count
         fields.append((key, value))
     }
 

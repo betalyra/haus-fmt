@@ -33,7 +33,7 @@ struct ValueTests {
     }
 
     @Test func keysCompareByCodePointInLargeRecords() throws {
-        // From HausRecord.indexFrom fields on, keys are found by an index.
+        // From KeyIndex.few fields on, keys are chained by a hash.
         let many = (0..<40).map { (key: "k\($0)", value: HausValue(integerLiteral: $0)) }
         let r = try HausRecord(many + [(nfc, 1), (nfd, 2)])
         #expect(r[nfc] == 1 && r[nfd] == 2 && r["k39"] == 39 && r["k40"] == nil)
@@ -44,6 +44,17 @@ struct ValueTests {
         let error = #expect(throws: HausError.self) {
             try parse("{" + many.map { "\($0.key): 1" }.joined(separator: ", ") + ", k7: 2 }")
         }
+        #expect(error?.code == .duplicateKey)
+    }
+
+    /// Keys made to collide in the cheap hash (same length, same first and
+    /// last eight bytes) switch the index to the seeded one.
+    @Test func collidingKeys() throws {
+        let keys = (0..<3000).map { "aaaaaaaa" + String(1_000_000 + $0).dropFirst() + "zzzzzzzz" }
+        let fields = keys.map { (key: $0, value: HausValue(integerLiteral: 1)) }
+        let r = try HausRecord(fields)
+        #expect(keys.allSatisfy { r[$0] == 1 } && r["aaaaaaaa999999zzzzzzzz"] == nil)
+        let error = #expect(throws: HausError.self) { try HausRecord(fields + [(keys[1234], 2)]) }
         #expect(error?.code == .duplicateKey)
     }
 
