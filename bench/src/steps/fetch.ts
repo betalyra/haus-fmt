@@ -20,7 +20,7 @@ import { HttpClient, HttpClientResponse } from "effect/http"
 import { ChildProcess } from "effect/process"
 import { DownloadError, GitError, HashMismatchError } from "../errors.ts"
 import { listingFile, listingText, parseListing } from "../listing.ts"
-import { Manifest, type CorpusSource, type PinnedFile, type PinnedFiles, type TokenizerFile, type TokenizerSource } from "../manifest.ts"
+import { Manifest, type CorpusSource, type PackageFile, type PinnedFile, type PinnedFiles, type TokenizerFile, type TokenizerSource, type Upstream } from "../manifest.ts"
 import { BenchPaths } from "../paths.ts"
 
 /** Downloads at once from the Hub. */
@@ -87,26 +87,39 @@ export const splitBatch = (out: Uint8Array): Uint8Array[] => {
 
 const gitText =(args: readonly string[]) => git(args).pipe(Effect.map((bytes) => new TextDecoder().decode(bytes)))
 
-/** The git repository of a corpus source, with the pinned commit's trees (no blobs: git fetches those as they are read). */
-const repository = Effect.fn("fetch.repository")(function* (s: CorpusSource) {
+/** Where a source's files come from: its own repository, or another one (a schema kept apart). */
+interface Origin {
+  /** The source's name, for messages and where files go. */
+  readonly source: string
+  /** The bare repository's name in the data directory. */
+  readonly git: string
+  readonly repo: string
+  readonly commit: string
+}
+
+const own = (s: CorpusSource): Origin => ({ source: s.name, git: s.name, repo: s.repo, commit: s.commit })
+const upstream = (s: CorpusSource, u: Upstream): Origin => ({ source: s.name, git: `${s.name}-schema`, repo: u.repo, commit: u.commit })
+
+/** The git repository of an origin, with the pinned commit's trees (no blobs: git fetches those as they are read). */
+const repository = Effect.fn("fetch.repository")(function* (o: Origin) {
   const paths = yield* BenchPaths
   const fs = yield* FileSystem.FileSystem
   const p = yield* Path.Path
-  const repo = paths.gitDir(s.name)
+  const repo = paths.gitDir(o.git)
   yield* fs.makeDirectory(repo, { recursive: true })
   if (!(yield* fs.exists(p.join(repo, "HEAD")))) yield* git(["init", "--quiet", "--bare", repo])
-  yield* Console.log(`fetch   ${s.repo} @ ${s.commit}`)
-  yield* git(["-C", repo, "fetch", "--quiet", "--depth=1", "--filter=blob:none", s.repo, s.commit])
+  yield* Console.log(`fetch   ${o.repo} @ ${o.commit}`)
+  yield* git(["-C", repo, "fetch", "--quiet", "--depth=1", "--filter=blob:none", o.repo, o.commit])
   return repo
 })
 
-/** One pinned file of a source, unless it's there already. */
-const fetchFile = Effect.fn("fetch.file")(function* (s: CorpusSource, file: PinnedFile) {
+/** One pinned file of an origin, unless it's there already. */
+const fetchFile = Effect.fn("fetch.file")(function* (o: Origin, file: PinnedFile) {
   const paths = yield* BenchPaths
-  const target = paths.corpusFile(s.name, file.path)
-  if (yield* hasFile(target, file.sha256)) return yield* Console.log(`ok      ${s.name}: ${file.path} (${target})`)
-  const repo = yield* repository(s)
-  yield* store(target, yield* git(["-C", repo, "cat-file", "blob", `${s.commit}:${file.path}`]), file.sha256, `${s.name}: ${file.path}`)
+  const target = paths.corpusFile(o.source, file.path)
+  if (yield* hasFile(target, file.sha256)) return yield* Console.log(`ok      ${o.source}: ${file.path} (${target})`)
+  const repo = yield* repository(o)
+  yield* store(target, yield* git(["-C", repo, "cat-file", "blob", `${o.commit}:${file.path}`]), file.sha256, `${o.source}: ${file.path}`)
   yield* Console.log(`stored  ${target}`)
 })
 
@@ -124,26 +137,36 @@ const storedListing = Effect.fn("fetch.storedListing")(function* (dir: string, p
   return ok.every(Boolean)
 })
 
+/** `dir/*.json`, `./**\/{.yaml,.yml}`: a pin, for messages. */
+const pattern = (pin: PinnedFiles) => `${pin.dir}/${pin.recursive ? "**/" : ""}*${pin.suffixes.join("|")}`
+
+/**
+ * The blobs of a tree listing (`git ls-tree [-r]`): `<mode> blob <oid>\t<path>` per entry,
+ * those whose path ends in one of `suffixes`. Pure.
+ */
+export const treeBlobs = (listing: string, suffixes: readonly string[]): { readonly name: string; readonly oid: string }[] =>
+  listing
+    .split("\n")
+    .map((line) => line.split("\t") as [string, string])
+    .filter(([meta, name]) => name !== undefined && meta.split(" ")[1] === "blob" && suffixes.some((s) => name.endsWith(s)))
+    .map(([meta, name]) => ({ name, oid: meta.split(" ")[2]! }))
+
 /**
  * Every file of a pinned directory: the tree's blobs in one request, then
  * each file, the listing checked against the pin before anything is stored.
  */
-const fetchFiles = Effect.fn("fetch.files")(function* (s: CorpusSource, pin: PinnedFiles) {
+const fetchFiles = Effect.fn("fetch.files")(function* (o: Origin, pin: PinnedFiles) {
   const paths = yield* BenchPaths
   const fs = yield* FileSystem.FileSystem
   const p = yield* Path.Path
-  const dir = paths.corpusDir(s.name, pin.dir)
-  if (yield* storedListing(dir, pin)) return yield* Console.log(`ok      ${s.name}: ${pin.dir}/*${pin.suffix} (${pin.count} files in ${dir})`)
-  const repo = yield* repository(s)
-  // `<mode> blob <oid>\t<name>` per entry
-  const entries = (yield* gitText(["-C", repo, "ls-tree", `${s.commit}:${pin.dir}`]))
-    .split("\n")
-    .map((line) => line.split("\t") as [string, string])
-    .filter(([meta, name]) => name !== undefined && meta.split(" ")[1] === "blob" && name.endsWith(pin.suffix))
-    .map(([meta, name]) => ({ name, oid: meta.split(" ")[2]! }))
-  yield* Console.log(`fetch   ${entries.length} files of ${pin.dir}/*${pin.suffix}`)
+  const dir = paths.corpusDir(o.source, pin.dir)
+  if (yield* storedListing(dir, pin)) return yield* Console.log(`ok      ${o.source}: ${pattern(pin)} (${pin.count} files in ${dir})`)
+  const repo = yield* repository(o)
+  const tree = `${o.commit}:${pin.dir === "." ? "" : pin.dir}`
+  const entries = treeBlobs(yield* gitText(["-C", repo, "ls-tree", ...(pin.recursive ? ["-r"] : []), tree]), pin.suffixes)
+  yield* Console.log(`fetch   ${entries.length} files of ${pattern(pin)}`)
   const oids = entries.map((e) => e.oid)
-  yield* git(["-C", repo, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", s.repo, ...oids])
+  yield* git(["-C", repo, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", o.repo, ...oids])
   const blobs = yield* git(["-C", repo, "cat-file", "--batch"], oids.map((oid) => `${oid}\n`).join("")).pipe(Effect.map(splitBatch))
   if (blobs.length !== entries.length) return yield* new GitError({ args: ["cat-file", "--batch"], exitCode: 0, message: `git cat-file --batch gave ${blobs.length} objects for ${entries.length}` })
   const files = yield* Effect.forEach(entries, (e, i) => sha256(blobs[i]!).pipe(Effect.map((hash) => ({ name: e.name, data: blobs[i]!, sha256: hash }))))
@@ -151,25 +174,69 @@ const fetchFiles = Effect.fn("fetch.files")(function* (s: CorpusSource, pin: Pin
   const actual = yield* sha256(new TextEncoder().encode(listing))
   if (actual !== pin.sha256 || files.length !== pin.count) {
     return yield* new HashMismatchError({
-      what: `${s.name}: ${pin.dir}`,
+      what: `${o.source}: ${pin.dir}`,
       expected: pin.sha256,
       actual,
-      message: `${s.name}: ${pin.dir}/*${pin.suffix}: ${files.length} files, listing SHA-256 ${actual}; the manifest pins ${pin.count} files, ${pin.sha256}`,
+      message: `${o.source}: ${pattern(pin)}: ${files.length} files, listing SHA-256 ${actual}; the manifest pins ${pin.count} files, ${pin.sha256}`,
     })
   }
-  yield* Effect.forEach(files, (f) => store(p.join(dir, f.name), f.data, f.sha256, `${s.name}: ${pin.dir}/${f.name}`), { concurrency: CONCURRENCY, discard: true })
+  yield* Effect.forEach(files, (f) => store(p.join(dir, f.name), f.data, f.sha256, `${o.source}: ${pin.dir}/${f.name}`), { concurrency: CONCURRENCY, discard: true })
   yield* fs.writeFileString(listingFile(dir), listing)
   yield* Console.log(`stored  ${files.length} files in ${dir}`)
 })
 
-const fetchCorpus = (s: CorpusSource) => {
-  switch (s.layout._tag) {
-    case "OpenApiExamples":
-      return fetchFile(s, s.layout.description)
-    case "JsonSchemaDocuments":
-      return Effect.andThen(fetchFile(s, s.layout.schema), fetchFiles(s, s.layout.documents))
+/** A file over HTTPS, unless it's there already. */
+const download = Effect.fn("fetch.download")(function* (url: string, target: string, hash: string, what: string) {
+  if (yield* hasFile(target, hash)) return yield* Console.log(`ok      ${what} (${target})`)
+  yield* Console.log(`fetch   ${url}`)
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.get(url)
+  const data = yield* HttpClientResponse.matchStatus(response, {
+    "2xx": (r) => r.arrayBuffer,
+    orElse: (r) => Effect.fail(new DownloadError({ url, status: r.status, message: `${url}: HTTP ${r.status}` })),
+  })
+  yield* store(target, new Uint8Array(data), hash, what)
+  yield* Console.log(`stored  ${target}`)
+})
+
+/** A file of an npm package bench/ depends on: there, with the pinned hash (pnpm installed it). */
+const checkPackageFile = Effect.fn("fetch.packageFile")(function* (s: CorpusSource, f: PackageFile) {
+  const paths = yield* BenchPaths
+  const fs = yield* FileSystem.FileSystem
+  const path = paths.packageFile(f.package, f.file)
+  const actual = (yield* fs.exists(path)) ? yield* sha256(yield* fs.readFile(path)) : "missing"
+  if (actual !== f.sha256) {
+    return yield* new HashMismatchError({ what: `${s.name}: ${f.package}/${f.file}`, expected: f.sha256, actual, message: `${s.name}: ${path}: SHA-256 ${actual}, the manifest pins ${f.sha256} (pnpm install?)` })
   }
-}
+  yield* Console.log(`ok      ${s.name}: ${f.package}@${f.version}/${f.file}`)
+})
+
+const fetchCorpus = Effect.fn("fetch.corpus")(function* (s: CorpusSource) {
+  const paths = yield* BenchPaths
+  const l = s.layout
+  switch (l._tag) {
+    case "OpenApiExamples":
+      return yield* fetchFile(own(s), l.description)
+    case "OpenApiFixtures":
+      yield* fetchFile(own(s), l.description)
+      return yield* fetchFile(own(s), l.fixtures)
+    case "JsonSchemaDocuments":
+      yield* fetchFile(own(s), l.schema)
+      return yield* fetchFiles(own(s), l.documents)
+    case "KubernetesManifests":
+      yield* fetchFiles(own(s), l.documents)
+      return yield* fetchFiles(upstream(s, l.schema.from), l.schema.files)
+    case "FunctionCalls":
+      yield* fetchFiles(own(s), l.questions)
+      return yield* fetchFiles(own(s), l.answers)
+    case "GeoJsonFeatures":
+      yield* fetchFile(own(s), l.documents)
+      return yield* checkPackageFile(s, l.schema)
+    case "GhArchiveEvents":
+      yield* download(l.archive.url, paths.corpusFile(s.name, l.archive.url), l.archive.sha256, `${s.name}: ${l.archive.url}`)
+      return yield* fetchFile(upstream(s, l.schema.from), l.schema.description)
+  }
+})
 
 const fetchTokenizerFile = Effect.fn("fetch.tokenizerFile")(function* (t: TokenizerSource, f: TokenizerFile) {
   const paths = yield* BenchPaths

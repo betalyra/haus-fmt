@@ -65,6 +65,8 @@ export const CorpusOut = Schema.Struct({
   schemaWide: Counts,
   /** Members in the examples that the description doesn't list (kept, as imported JSON). */
   unlistedMembers: Schema.Finite,
+  /** Documents with a number haus writes in its normalized spelling (`1e-09` → `1e-9`): the same number, other text. */
+  respelledNumbers: Schema.optionalKey(Schema.Finite),
   notes: Schema.Array(Schema.String),
 })
 export type CorpusOut = typeof CorpusOut.Type
@@ -88,8 +90,23 @@ export const TokensOut = Schema.Struct({
   documents: Schema.Array(Schema.String),
   /** counts[tokenizer][form][i]: tokens of document i. */
   counts: Schema.Record(Schema.String, FormCounts),
+  /** stream[tokenizer][form]: tokens of all documents as one stream (JSON Lines, a haus stream; compress.ts `streamText`). */
+  stream: Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Finite)),
 })
 export type TokensOut = typeof TokensOut.Type
+
+/** One form compressed (compress.ts): uncompressed bytes, and by codec the sum over documents and the stream. */
+export const FormCompression = Schema.Struct({ bytes: Schema.Finite, streamBytes: Schema.Finite, perDoc: Counts, stream: Counts })
+
+export const CompressionOut = Schema.Struct({
+  /** The runtime (`navigator.userAgent`): its compressor builds decide the exact sizes. */
+  runtime: Schema.String,
+  codecs: Schema.Array(Schema.String),
+  /** The documents compressed (ids, in order), to match the results to a convert run. */
+  documents: Schema.Array(Schema.String),
+  forms: Schema.Record(Schema.String, FormCompression),
+})
+export type CompressionOut = typeof CompressionOut.Type
 
 export const SpeedRow = Schema.Struct({
   group: Schema.Literals(["parse", "typed", "write"]),
@@ -140,6 +157,7 @@ export interface ResultsFile<S extends Schema.Codec<any, any>> {
 export const CORPUS = { file: "corpus.json", schema: CorpusOut } as const satisfies ResultsFile<typeof CorpusOut>
 export const TOKENS = { file: "tokens.json", schema: TokensOut } as const satisfies ResultsFile<typeof TokensOut>
 export const SPEED = { file: "speed.json", schema: SpeedOut, indent: 2 } as const satisfies ResultsFile<typeof SpeedOut>
+export const COMPRESSION = { file: "compression.json", schema: CompressionOut, indent: 2 } as const satisfies ResultsFile<typeof CompressionOut>
 
 /**
  * Reads and writes the results directory: each corpus source's results in

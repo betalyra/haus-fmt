@@ -18,6 +18,7 @@ import { BenchPaths } from "../paths.ts"
 import { CORPUS, FORMS, Results, TOKENS, type Converted, type CorpusOut, type Form, type FormCounts, type TokenizerInfo } from "../results.ts"
 import { selectSources, type Selection } from "../sources.ts"
 import { sum } from "../stats.ts"
+import { streamText } from "../compress.ts"
 
 interface TokenizerJson {
   readonly model?: { readonly vocab?: unknown }
@@ -37,6 +38,13 @@ export const vocabSize = (tokenizerJson: TokenizerJson): number => {
 /** Tokens of every document in every form. */
 export const countForms = (count: (text: string) => number, documents: readonly Converted[]): FormCounts =>
   Object.fromEntries(FORMS.map((f) => [f, documents.map((d) => count(d[f]))])) as Record<Form, number[]>
+
+/** The forms counted as one stream too: the wire forms (JSON Lines against a haus stream). */
+export const STREAM_FORMS = ["json_min", "haus_min", "plain_min"] as const satisfies readonly Form[]
+
+/** Tokens of all documents as one stream (compress.ts `streamText`), per wire form. */
+export const countStreams = (count: (text: string) => number, documents: readonly Converted[]): Record<string, number> =>
+  Object.fromEntries(STREAM_FORMS.map((f) => [f, count(streamText(f, documents.map((d) => d[f])))]))
 
 /** The tokenizers to run: all, or those `--tokenizers` names (each must be in the manifest). */
 const select = Effect.fn("tokens.select")(function* (all: readonly TokenizerSource[], only: Option.Option<readonly string[]>) {
@@ -71,11 +79,11 @@ const runTokenizer = Effect.fn("tokens.run")(function* (t: TokenizerSource, corp
   const [loading, { count, vocab }] = yield* Effect.timed(load(t))
   return yield* Effect.forEach(corpora, ([source, corpus]) =>
     Effect.gen(function* () {
-      const [counting, counts] = yield* Effect.timed(Effect.sync(() => countForms(count, corpus.documents)))
+      const [counting, [counts, stream]] = yield* Effect.timed(Effect.sync(() => [countForms(count, corpus.documents), countStreams(count, corpus.documents)] as const))
       const info: TokenizerInfo = { name: t.name, family: t.family, repo: t.repo, revision: t.revision, vocab, seconds: seconds(loading) + seconds(counting) }
       const total = (f: Form) => sum(counts[f])
       yield* Console.log(`${source.padEnd(12)} ${t.name.padEnd(12)} ${info.seconds.toFixed(1).padStart(6)} s   JSON min ${total("json_min")}, haus min ${total("haus_min")}, JSON pretty ${total("json_pretty")}, haus pretty ${total("haus_pretty")}`)
-      return { source, info, counts }
+      return { source, info, counts, stream }
     }))
 })
 
@@ -92,6 +100,7 @@ export const tokens = Effect.fn("bench.tokens")(function* (options: { readonly s
       tokenizers: mine.map((r) => r.info),
       documents: corpus.documents.map((d) => d.id),
       counts: Object.fromEntries(mine.map((r) => [r.info.name, r.counts])),
+      stream: Object.fromEntries(mine.map((r) => [r.info.name, r.stream])),
     })
   }, { discard: true })
 })

@@ -72,9 +72,23 @@ export type HType =
   | { readonly k: "array"; readonly item: HType }
   | { readonly k: "map"; readonly value: HType }
   | RecordType
-  /** A discriminated union: `member` holds the tag's value in JSON. */
-  | { readonly k: "variant"; readonly member: string; readonly cases: ReadonlyMap<string, { readonly value: string; readonly record: RecordType }> }
+  /**
+   * A closed variant. With a `member`, that member holds each case's `value` in JSON (a
+   * discriminated union; the payload is the record without it). Without one, the JSON doesn't
+   * name the case: the case is the one whose `keys` the object has (a union of records told
+   * apart by required keys), and the whole object is its payload.
+   */
+  | { readonly k: "variant"; readonly member: string | undefined; readonly cases: ReadonlyMap<string, VariantCase> }
   | { readonly k: "ref"; readonly name: string; readonly target: () => HType }
+
+export interface VariantCase {
+  /** A record (`Tag { … }`), or, for a case that is itself a union, that union's type (`Tag Any`). */
+  readonly payload: HType
+  /** The member's value in JSON, for a variant with a `member`. */
+  readonly value?: string
+  /** The keys that pick this case, for a variant without a `member`. */
+  readonly keys?: readonly string[]
+}
 
 /** How enums are written in haus: as tags (the idiomatic form) or as the JSON strings. */
 export type EnumStyle = "tags" | "strings"
@@ -91,13 +105,13 @@ export const tagName = (value: string): string => {
 }
 
 /** `pull-request-simple` → PullRequestSimple. */
-const typeName = (key: string): string => {
+export const typeName = (key: string): string => {
   const name = key.split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0]!.toUpperCase() + w.slice(1)).join("")
   return /^[A-Z]/.test(name) ? name : `T${name}`
 }
 
 /** Names a schema type can't take: built-in and std/time types. */
-const RESERVED = new Set([
+export const RESERVED: ReadonlySet<string> = new Set([
   "String", "Bytes", "Bool", "Int", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64", "Decimal",
   "Any", "Array", "Map", "Maybe", "Result", "Secret", "Stream", "Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone",
 ])
@@ -135,12 +149,19 @@ export interface ConverterOptions {
   readonly prefix: string
   /** Unions of records told apart by a `const` property become variants. */
   readonly constDiscriminators: boolean
+  /**
+   * Unions of records told apart by required keys become variants (the tag isn't in the
+   * JSON); the other unions are counted by what they mix (records, other types).
+   */
+  readonly keyedUnions: boolean
+  /** The haus name of a named type, from its key (default: PascalCase, `typeName`). */
+  readonly typeName?: (key: string) => string
 }
 
 /** An OpenAPI description, with the rules GitHub's numbers were measured with. */
-export const OPENAPI: ConverterOptions = { prefix: "#/components/schemas/", constDiscriminators: false }
+export const OPENAPI: ConverterOptions = { prefix: "#/components/schemas/", constDiscriminators: false, keyedUnions: false }
 /** A JSON Schema (draft-07, `definitions`). */
-export const JSON_SCHEMA: ConverterOptions = { prefix: "#/definitions/", constDiscriminators: true }
+export const JSON_SCHEMA: ConverterOptions = { prefix: "#/definitions/", constDiscriminators: true, keyedUnions: true }
 
 /** Why a position is `Any`, and other mapping decisions, counted. */
 export type Counts = Record<string, number>
@@ -195,7 +216,7 @@ export class Converter {
     if (!entry) {
       const schema = this.schemaAt(key)
       if (schema === undefined) throw new Error(`no schema ${this.options.prefix}${key}`)
-      entry = { name: this.freshName(typeName(key)), type: undefined }
+      entry = { name: this.freshName((this.options.typeName ?? typeName)(key)), type: undefined }
       this.named.set(key, entry)
       entry.type = this.convert(schema)
     }
@@ -216,6 +237,14 @@ export class Converter {
     const name = this.freshName(typeName(fallbackName))
     this.inlineNames.set(key, name)
     this.extra.set(name, this.convert(key))
+    return name
+  }
+
+  /** Defines a named type that isn't in the description (a corpus's root union); returns its name. */
+  define(name: string, build: () => HType): string {
+    if (this.usedNames.has(name)) throw new Error(`type name ${name} is taken`)
+    this.usedNames.add(name)
+    this.extra.set(name, build())
     return name
   }
 
@@ -261,7 +290,8 @@ export class Converter {
       if (discriminator !== undefined) return wrap(this.variant(discriminator, nonNull))
       const inferred = this.options.constDiscriminators ? this.constDiscriminator(nonNull) : undefined
       if (inferred !== undefined) return wrap(this.variantOf(inferred.member, inferred.pairs, "variant (const discriminator)"))
-      return wrap(this.any(`${key} without a discriminator`))
+      if (!this.options.keyedUnions) return wrap(this.any(`${key} without a discriminator`))
+      return wrap(this.keyedUnion(nonNull))
     }
 
     if (s["allOf"] !== undefined) {
@@ -381,16 +411,19 @@ export class Converter {
     return this.variantOf(member, pairs, "variant (discriminated union)")
   }
 
-  /** A closed variant: one case per (value of `member`, schema of that branch). */
-  private variantOf(member: string, pairs: readonly (readonly [string, Json])[], what: string): HType {
-    const cases = new Map<string, { value: string; record: RecordType }>()
-    for (const [value, schema] of pairs) {
+  /**
+   * A closed variant: one case per (value of `member`, schema of that branch), the tag
+   * `tags[i]` or the value by the enum convention.
+   */
+  variantOf(member: string, pairs: readonly (readonly [string, Json])[], what: string, tags?: readonly string[]): HType {
+    const cases = new Map<string, VariantCase>()
+    for (const [i, [value, schema]] of pairs.entries()) {
       const u = unref(this.convert(schema))
       if (u.k !== "record") return this.any(`discriminated union with a case that isn't a record`)
-      const tag = tagName(value)
+      const tag = tags?.[i] ?? tagName(value)
       if (cases.has(tag)) return this.any(`discriminated union whose values give the same tag`)
       const fields = new Map([...u.fields].filter(([k]) => k !== member))
-      cases.set(tag, { value, record: { k: "record", fields, spreads: [] } })
+      cases.set(tag, { value, payload: { k: "record", fields, spreads: [] } })
     }
     this.count(what)
     return { k: "variant", member, cases }
@@ -401,6 +434,109 @@ export class Converter {
     const o = asObject(schema)
     const r = o?.["$ref"]
     return typeof r === "string" && r.startsWith(this.options.prefix) ? this.schemaAt(r.slice(this.options.prefix.length)) : o
+  }
+
+  /** The schema at the end of a chain of `$ref`s, and the last name on the way (the definition's key). */
+  private resolvedNamed(schema: Json): { schema: JsonObject | undefined; key: string | undefined } {
+    let o = asObject(schema)
+    let key: string | undefined
+    for (let i = 0; i < 64; i++) {
+      const r = o?.["$ref"]
+      if (typeof r !== "string" || !r.startsWith(this.options.prefix)) break
+      key = r.slice(this.options.prefix.length)
+      o = this.schemaAt(key)
+    }
+    // `allOf: [one]` (a `$ref` with siblings, in OpenAPI 3.0 style) is that one
+    const all = list(o?.["allOf"])
+    if (o !== undefined && all.length === 1 && o["properties"] === undefined) {
+      const inner = this.resolvedNamed(all[0]!)
+      return { schema: inner.schema, key: inner.key ?? key }
+    }
+    return { schema: o, key }
+  }
+
+  /** What a union's branch is, for telling the cases apart: its declared and required keys. */
+  private shape(schema: Json, depth = 0): { kind: "record" | "union"; declared: Set<string>; required: Set<string> } | { kind: "other" | "mixed" } {
+    const s = this.resolvedNamed(schema).schema
+    if (s === undefined) return { kind: "other" }
+    const branches = [...list(s["anyOf"]), ...list(s["oneOf"])].filter((b) => !isNullSchema(b))
+    if (branches.length > 0) {
+      if (depth > 0) return { kind: "mixed" }
+      const shapes = branches.map((b) => this.shape(b, depth + 1))
+      const records = shapes.filter((x): x is { kind: "record"; declared: Set<string>; required: Set<string> } => x.kind === "record")
+      if (records.length === 0) return { kind: "other" }
+      if (records.length < shapes.length) return { kind: "mixed" }
+      // a union of records, as one case: picked by the keys all its records require
+      const required = records.map((r) => r.required).reduce((a, b) => new Set([...a].filter((k) => b.has(k))))
+      return { kind: "union", declared: new Set(records.flatMap((r) => [...r.declared])), required }
+    }
+    const own = new Set(list(s["required"]).filter((r): r is string => typeof r === "string"))
+    const parts = list(s["allOf"])
+    if (parts.length > 0) {
+      // the records of an allOf, merged
+      const shapes = parts.map((p) => this.shape(p, depth + 1))
+      if (shapes.some((x) => x.kind !== "record")) return { kind: "other" }
+      const records = shapes as { kind: "record"; declared: Set<string>; required: Set<string> }[]
+      const declared = new Set([...Object.keys(asObject(s["properties"]) ?? {}), ...records.flatMap((r) => [...r.declared])])
+      return { kind: "record", declared, required: new Set([...own, ...records.flatMap((r) => [...r.required])]) }
+    }
+    const properties = asObject(s["properties"])
+    const types = Array.isArray(s["type"]) ? s["type"] : [s["type"]]
+    if (properties === undefined && !(types.includes("object") && s["additionalProperties"] === false)) return { kind: "other" }
+    return { kind: "record", declared: new Set(Object.keys(properties ?? {})), required: own }
+  }
+
+  /**
+   * A union without a discriminator (`keyedUnions`). If every branch is a record (or a
+   * union of records) and each has required keys no other branch declares (one key, or else
+   * all its required keys together), it is a closed variant whose tag the JSON doesn't
+   * spell: the tag is the branch's definition name, with the words every branch's name
+   * starts and ends with left out (`TopLevelUnitSpec`, `TopLevelLayerSpec` → Unit, Layer),
+   * or the first identifying key for an inline branch (`layer` → Layer). Otherwise `Any`,
+   * counted by what the union mixes.
+   */
+  private keyedUnion(union: readonly Json[]): HType {
+    const shapes = union.map((b) => this.shape(b))
+    if (shapes.every((s) => s.kind === "other")) return this.any("union of non-records (string | number, …)")
+    if (shapes.some((s) => s.kind !== "record" && s.kind !== "union")) return this.any("union mixing records and other types (string | ExprRef, …)")
+    type Shape = { kind: "record" | "union"; declared: Set<string>; required: Set<string> }
+    /** The keys that pick each case, if every case has some. */
+    const identify = (cases: readonly Shape[]) => {
+      const keys = cases.map((c, i) => {
+        const others = cases.filter((_, j) => j !== i)
+        const single = [...c.required].find((k) => others.every((o) => !o.declared.has(k)))
+        if (single !== undefined) return [single]
+        const all = [...c.required]
+        return all.length > 0 && others.every((o) => all.some((k) => !o.declared.has(k))) ? all : undefined
+      })
+      return keys.every((k) => k !== undefined) ? keys : undefined
+    }
+    // A branch that is itself a union of records counts as its records (the union flattened),
+    // or, when they can't be told apart that way, as one case: its type, picked by the keys
+    // all its records require.
+    const flat = union.flatMap((b, i) => {
+      if (shapes[i]!.kind === "record") return [b]
+      const s = this.resolvedNamed(b).schema!
+      return [...list(s["anyOf"]), ...list(s["oneOf"])].filter((x) => !isNullSchema(x))
+    })
+    const flatKeys = flat.length > union.length ? identify(flat.map((b) => this.shape(b) as Shape)) : undefined
+    const branches = flatKeys !== undefined ? flat : union
+    const keys = flatKeys ?? identify(shapes as Shape[])
+    if (keys === undefined) return this.any("union of records not told apart by required keys")
+    if (flatKeys !== undefined) this.count("union of unions, flattened")
+    const names = branches.map((b) => this.resolvedNamed(b).key)
+    const tags = keyedTags(names.map((n) => (n === undefined ? undefined : (this.options.typeName ?? typeName)(n))), keys.map((k) => tagName(k![0]!)))
+    if (tags === undefined) {
+      this.notes.push(`union of ${names.join(", ")}: two cases give the same tag; kept as Any`)
+      return this.any("union of records whose tags collide")
+    }
+    const variantCases = new Map<string, VariantCase>()
+    for (const [i, b] of branches.entries()) {
+      const payload = this.convert(b)
+      variantCases.set(tags[i]!, { payload, keys: keys[i]! })
+    }
+    this.count("variant (records told apart by required keys)")
+    return { k: "variant", member: undefined, cases: variantCases }
   }
 
   /**
@@ -453,7 +589,8 @@ export class Converter {
         case "map": return `Map ${paren(print(t.value, ind))}`
         case "record": return printRecord(t, ind)
         case "variant": {
-          const cases = [...t.cases].map(([tag, c]) => `${ind}  | ${tag} ${printRecord(c.record, ind + "    ")}\n`)
+          const cases = [...t.cases].map(([tag, c]) =>
+            `${ind}  | ${tag} ${c.payload.k === "record" ? printRecord(c.payload, ind + "    ") : paren(print(c.payload, ind + "    "))}\n`)
           return `closed <\n${cases.join("")}${ind}>`
         }
       }
@@ -482,6 +619,33 @@ export class Converter {
     const imports = time.size > 0 ? `import std/time (${[...time].sort().join(", ")})\n\n` : ""
     return `// Generated by bench/openapi.ts from ${from}.\n// Enums: ${enums === "tags" ? "closed variants of tags" : "strings"}.\n\n${imports}${definitions.join("\n")}`
   }
+}
+
+/** `TopLevelVConcatSpec` → Top, Level, V, Concat, Spec. */
+const words = (name: string): string[] => name.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/)
+
+/**
+ * The tags of a union told apart by keys: the cases' type names without the words they
+ * all start and end with (at least one word kept), when every case is named; a case
+ * without a name takes `fallback` (its key). The untrimmed names when trimming makes two
+ * tags the same, undefined when those collide too.
+ */
+export const keyedTags = (names: readonly (string | undefined)[], fallback: readonly string[]): string[] | undefined => {
+  const split = names.map((n) => (n === undefined ? undefined : words(n)))
+  let prefix = 0
+  let suffix = 0
+  if (names.length >= 2 && split.every((w) => w !== undefined)) {
+    const ws = split as string[][]
+    const first = ws[0]!
+    const min = Math.min(...ws.map((w) => w.length))
+    while (prefix < min - 1 && ws.every((w) => w[prefix] === first[prefix])) prefix++
+    while (suffix < min - 1 - prefix && ws.every((w) => w[w.length - 1 - suffix] === first[first.length - 1 - suffix])) suffix++
+  }
+  const ok = (tags: readonly string[]) => tags.every((t) => TAG.test(t)) && new Set(tags).size === tags.length
+  const trimmed = split.map((w, i) => (w === undefined ? fallback[i]! : w.slice(prefix, w.length - suffix).join("")))
+  if (ok(trimmed)) return trimmed
+  const full = names.map((n, i) => n ?? fallback[i]!)
+  return ok(full) ? full : undefined
 }
 
 const BARE_KEY = /^[a-z_][A-Za-z0-9_]*$/
@@ -559,11 +723,18 @@ export const toHaus = (json: Json, t: HType, o: MapOptions, path = "$"): Value =
       return recordToHaus(json, t, o, path)
     case "variant": {
       if (json === null || !isJsonObject(json)) return fail("expected an object", path)
-      const value = json[t.member]
+      if (t.member === undefined) {
+        const matches = [...t.cases].filter(([, c]) => (c.keys ?? []).every((k) => Object.hasOwn(json, k)))
+        if (matches.length !== 1) return fail(matches.length === 0 ? "no case of the union has these keys" : "the keys of several cases of the union", path)
+        const [tag, c] = matches[0]!
+        return variant(tag, [toHaus(json, c.payload, o, path)])
+      }
+      const member = t.member
+      const value = json[member]
       const entry = [...t.cases].find(([, c]) => c.value === value)
       if (!entry) return fail(`a discriminator value the union doesn't list`, path)
-      const rest = jsonObject(Object.entries(json).filter(([k]) => k !== t.member))
-      return variant(entry[0], [recordToHaus(rest, entry[1].record, o, path)])
+      const rest = jsonObject(Object.entries(json).filter(([k]) => k !== member))
+      return variant(entry[0], [toHaus(rest, entry[1].payload, o, path)])
     }
   }
 }
@@ -628,9 +799,12 @@ export const toJson = (v: Value, t: HType, o: MapOptions, path = "$"): Json => {
     case "record":
       return v.kind === "record" ? recordToJson(v.fields, t, o, path) : fail("expected a record", path)
     case "variant": {
-      const c = v.kind === "variant" && v.args.length === 1 && v.args[0]!.kind === "record" ? t.cases.get(v.tag) : undefined
-      if (!c || v.kind !== "variant" || v.args[0]!.kind !== "record") return fail("expected a case of the union", path)
-      return jsonObject([[t.member, c.value], ...Object.entries(recordToJson(v.args[0]!.fields, c.record, o, path))])
+      const c = v.kind === "variant" && v.args.length === 1 ? t.cases.get(v.tag) : undefined
+      if (!c || v.kind !== "variant") return fail("expected a case of the union", path)
+      const payload = toJson(v.args[0]!, c.payload, o, path)
+      if (t.member === undefined) return payload
+      if (payload === null || !isJsonObject(payload)) return fail("expected a record payload", path)
+      return jsonObject([[t.member, c.value ?? ""], ...Object.entries(payload)])
     }
   }
 }
@@ -653,7 +827,11 @@ export const reachable = (roots: readonly HType[]): HType[] => {
     else if (t.k === "maybe" || t.k === "array") stack.push(t.item)
     else if (t.k === "map") stack.push(t.value)
     else if (t.k === "record") for (const f of t.fields.values()) stack.push(f.type)
-    else if (t.k === "variant") for (const c of t.cases.values()) for (const f of c.record.fields.values()) stack.push(f.type)
+    else if (t.k === "variant") for (const c of t.cases.values()) {
+      // a record payload is part of the variant (not counted as a record of its own)
+      if (c.payload.k === "record") for (const f of c.payload.fields.values()) stack.push(f.type)
+      else stack.push(c.payload)
+    }
   }
   return [...seen]
 }

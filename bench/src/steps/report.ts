@@ -17,7 +17,8 @@
  */
 import { arr, format, normalizeNumber, num, rec, str, variant, type Value } from "@haus-fmt/haus"
 import { Console, Effect, Option } from "effect"
-import { CORPUS, Results, SPEED, TOKENS, type CorpusOut, type Form, type SpeedOut, type SpeedRow, type TokensOut } from "../results.ts"
+import { COMPRESSION, CORPUS, Results, SPEED, TOKENS, type CompressionOut, type CorpusOut, type Form, type SpeedOut, type SpeedRow, type TokensOut } from "../results.ts"
+import { streamText, type CompressedForm } from "../compress.ts"
 import { selectSources, type Selection } from "../sources.ts"
 import { countBy, fixed3, mean, pct, ratio, sum, table, tally, utf8Length, type Ratio } from "../stats.ts"
 
@@ -30,6 +31,7 @@ export const PAIRS = [
   ["str_pretty", "json_pretty", "haus pretty, enums as strings / JSON pretty"],
   ["plain_min", "json_min", "plain haus minimised (no schema) / JSON minified"],
   ["plain_pretty", "json_pretty", "plain haus pretty (no schema) / JSON pretty"],
+  ["haus_min", "plain_min", "typed haus / plain haus, minimised (what the schema's types cost or save)"],
 ] as const satisfies readonly (readonly [Form, Form, string])[]
 
 /** Plain data as a haus value: objects → records, null → None, booleans → True/False. */
@@ -45,10 +47,20 @@ export const toValue = (x: unknown): Value => {
 /** How the unions came out: variants (by how they're told apart) and `Any` fallbacks. Pure. */
 export const unions = (decisions: Readonly<Record<string, number>>): string => {
   const n = (key: string) => decisions[key] ?? 0
-  const variants = n("variant (discriminated union)") + n("variant (const discriminator)")
-  const any = n("Any: oneOf without a discriminator") + n("Any: anyOf without a discriminator")
-  return `${variants} closed variants (${n("variant (discriminated union)")} by an OpenAPI discriminator, ${n("variant (const discriminator)")} by a const property), ` +
-    `${any} \`Any\` (no discriminator: ${n("Any: oneOf without a discriminator")} oneOf, ${n("Any: anyOf without a discriminator")} anyOf)`
+  const keyed = n("variant (records told apart by required keys)")
+  const variants = n("variant (discriminated union)") + n("variant (const discriminator)") + keyed
+  const byKind = [
+    ["union of non-records (string | number, …)", "of non-records"],
+    ["union mixing records and other types (string | ExprRef, …)", "mixing records and other types"],
+    ["union of records not told apart by required keys", "of records not told apart by keys"],
+    ["union of records whose tags collide", "of records whose tags collide"],
+  ].map(([key, label]) => [n(`Any: ${key}`), label] as const)
+  const kinds = byKind.reduce((a, [k]) => a + k, 0)
+  const any = n("Any: oneOf without a discriminator") + n("Any: anyOf without a discriminator") + kinds
+  return `${variants} closed variants (${n("variant (discriminated union)")} by an OpenAPI discriminator, ${n("variant (const discriminator)")} by a const property, ${keyed} by required keys), ` +
+    `${any} \`Any\` (` +
+    (kinds > 0 ? byKind.map(([k, label]) => `${k} ${label}`).join(", ") : `no discriminator: ${n("Any: oneOf without a discriminator")} oneOf, ${n("Any: anyOf without a discriminator")} anyOf`) +
+    ")"
 }
 
 /** Results that belong to these documents (same ids, same order). */
@@ -63,13 +75,14 @@ export interface Report {
 }
 
 /** The report of a convert run, with the token counts and speed results that belong to it. Pure. */
-export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<TokensOut>, speedRead: Option.Option<SpeedOut>): Report => {
+export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<TokensOut>, speedRead: Option.Option<SpeedOut>, compressionRead: Option.Option<CompressionOut> = Option.none()): Report => {
   const current = <T extends { readonly documents: readonly string[] }>(what: string, results: Option.Option<T>) => ({
     value: Option.filter(results, (r) => sameDocuments(corpus, r.documents)),
     warnings: Option.isSome(results) && !sameDocuments(corpus, results.value.documents) ? [`warning: ${what} are from another convert run; run them again (left out)`] : [],
   })
   const tokens = current("token counts", tokensRead)
   const speed = current("speed results", speedRead)
+  const compression = current("compressed sizes", compressionRead)
 
   const docs = corpus.documents
   const bytesOf = (f: Form) => docs.map((d) => utf8Length(d[f]))
@@ -80,7 +93,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const header = [
     `# haus vs JSON: ${s.name}`,
     "",
-    `Source: ${s.repo} @ \`${s.commit.slice(0, 12)}\`, \`${s.path}\` (${s.license}). Category: ${s.category}.`,
+    `Source: ${s.repo} @ \`${/^[0-9a-f]{40}$/.test(s.commit) ? s.commit.slice(0, 12) : s.commit}\`, \`${s.path}\` (${s.license}). Category: ${s.category}.`,
     `${corpus.examples} ${s.unit}; ${corpus.found} documents (skipped: ${Object.entries(corpus.skipped).map(([k, v]) => `${v} ${k}`).join(", ") || "none"}).` +
       (corpus.sample ? ` **Sample of ${corpus.sample} documents** (\`--limit\`): not for publishing.` : ""),
     `Round trip: **${docs.length} documents measured**, ${corpus.excluded.length} excluded (they don't match the source's own schema).`,
@@ -88,12 +101,13 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
     ...(reasons.length > 0
       ? ["Most common reasons for exclusion:", "", ...table(["Reason", "Documents"], reasons.slice(0, 10).map(([r, n]) => [r.replaceAll("|", "\\|"), String(n)]))]
       : []),
-    "Schema (generated from the source's schema), types reachable from the documents:",
+    `Schema (\`${s.name}.schema.haus\`), types reachable from the documents:`,
     "",
     ...table(["Type", "Count"], Object.entries(corpus.positions).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, String(v)])),
     `Unions reachable from the documents (oneOf/anyOf, each converted once): ${unions(corpus.decisions)}. In the whole schema (every named type converted): ${unions(corpus.schemaWide)}.`,
     "",
-    `Converter decisions: ${Object.entries(corpus.decisions).map(([k, v]) => `${k}: ${v}`).join("; ")}. Members kept that the schema doesn't list: ${corpus.unlistedMembers}.`,
+    `Converter decisions: ${Object.entries(corpus.decisions).map(([k, v]) => `${k}: ${v}`).join("; ") || "none (a hand-written schema)"}. Members kept that the schema doesn't list: ${corpus.unlistedMembers}.` +
+      (corpus.respelledNumbers ? ` Documents with a number haus spells its own way (\`1e-09\` → \`1e-9\`, the same number): ${corpus.respelledNumbers}.` : ""),
     "",
   ]
 
@@ -105,6 +119,48 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
       PAIRS.map(([a, b, label]) => [label, String(sum(bytesOf(a))), String(sum(bytesOf(b))), ...ratioCells(ratio(bytesOf(a), bytesOf(b)))]),
     ),
   ]
+
+  const r3 = (a: number, b: number) => `${fixed3(a / b)} (${pct(a / b)})`
+  const streamBytes = (f: Form) => utf8Length(streamText(f, docs.map((d) => d[f])))
+  const streamTokens = Option.map(tokens.value, (t) => t.tokenizers.map((tk) => [tk.name, t.stream[tk.name]!] as const))
+  const streamRow = (label: string, haus: number, plain: number, json: number) => [label, String(haus), String(plain), String(json), r3(haus, json), r3(plain, json)]
+  const stream = [
+    "## The documents as one stream",
+    "",
+    "All documents as one file: JSON Lines (minified JSON, one per line) against a haus stream (minimised, every item followed by `,` and a line feed; spec §6, §11).",
+    "",
+    ...table(
+      ["Measure", "haus stream", "plain haus stream", "JSON Lines", "haus / JSON", "plain / JSON"],
+      [
+        streamRow("bytes", streamBytes("haus_min"), streamBytes("plain_min"), streamBytes("json_min")),
+        ...Option.getOrElse(Option.map(streamTokens, (rows) => rows.map(([name, st]) => streamRow(`tokens, ${name}`, st["haus_min"]!, st["plain_min"]!, st["json_min"]!))), () => []),
+      ],
+    ),
+  ]
+
+  const compressionSection = Option.match(compression.value, {
+    onNone: (): string[] => [],
+    onSome: (c) => {
+      const form = (f: CompressedForm) => c.forms[f]!
+      const cells = (pick: (f: CompressedForm) => { readonly per: number; readonly st: number }) => {
+        const [jm, hm, pm, jp, hp] = (["json_min", "haus_min", "plain_min", "json_pretty", "haus_pretty"] as const).map(pick)
+        return [String(jm!.per), String(hm!.per), r3(hm!.per, jm!.per), r3(pm!.per, jm!.per), String(jm!.st), String(hm!.st), r3(hm!.st, jm!.st), r3(pm!.st, jm!.st), r3(hp!.per, jp!.per), r3(hp!.st, jp!.st)]
+      }
+      return [
+        "## Compressed",
+        "",
+        `Bytes after compression (node:zlib of ${c.runtime}; other runtimes' builds give slightly other sizes): each document alone (the sum over documents; small documents compress badly), and all documents as one stream (JSON Lines and a haus stream; for pretty, the texts one after the other). Ratios are haus / JSON; plain is plain haus (no schema).`,
+        "",
+        ...table(
+          ["Codec", "JSON min, per doc", "haus min, per doc", "haus / JSON", "plain / JSON", "JSON Lines", "haus stream", "haus / JSON", "plain / JSON", "pretty, per doc: haus / JSON", "pretty, stream: haus / JSON"],
+          [
+            ["none", ...cells((f) => ({ per: form(f).bytes, st: form(f).streamBytes }))],
+            ...c.codecs.map((name) => [name, ...cells((f) => ({ per: form(f).perDoc[name]!, st: form(f).stream[name]! }))]),
+          ],
+        ),
+      ]
+    },
+  })
 
   const tokenRatios = Option.map(tokens.value, (t) =>
     Object.fromEntries(t.tokenizers.map((tk) => {
@@ -175,8 +231,9 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
     bytes: Object.fromEntries(PAIRS.map(([a, b]) => [`${a}/${b}`, { ...ratio(bytesOf(a), bytesOf(b)), haus: sum(bytesOf(a)), json: sum(bytesOf(b)) }])),
     tokens: Option.match(Option.all({ t: tokens.value, ratios: tokenRatios }), {
       onNone: () => null,
-      onSome: ({ t, ratios }) => ({ tokenizers: t.tokenizers.map(({ seconds: _, ...tk }) => tk), ratios }),
+      onSome: ({ t, ratios }) => ({ tokenizers: t.tokenizers.map(({ seconds: _, ...tk }) => tk), ratios, stream: t.stream }),
     }),
+    compression: Option.getOrNull(compression.value),
     speed: Option.match(speed.value, {
       onNone: () => null,
       onSome: (sp) => ({ machine: sp.machine, options: sp.options, jsonNotStable: sp.jsonNotStable, rows: sp.rows }),
@@ -184,9 +241,9 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   }
 
   return {
-    markdown: [...header, ...size, ...tokenSection, ...speedSection].join("\n"),
+    markdown: [...header, ...size, ...tokenSection, ...stream, ...compressionSection, ...speedSection].join("\n"),
     data: results,
-    warnings: [...tokens.warnings, ...speed.warnings].map((w) => `${s.name}: ${w}`),
+    warnings: [...tokens.warnings, ...compression.warnings, ...speed.warnings].map((w) => `${s.name}: ${w}`),
   }
 }
 
@@ -200,7 +257,7 @@ export const report = Effect.fn("bench.report")(function* (options: { readonly s
   const reports = yield* Effect.forEach(sources, (s) =>
     Effect.gen(function* () {
       const corpus = yield* results.read(s.name, CORPUS, "convert")
-      return renderReport(corpus, yield* results.readOptional(s.name, TOKENS), yield* results.readOptional(s.name, SPEED))
+      return renderReport(corpus, yield* results.readOptional(s.name, TOKENS), yield* results.readOptional(s.name, SPEED), yield* results.readOptional(s.name, COMPRESSION))
     }))
   yield* Effect.forEach(reports.flatMap((r) => r.warnings), Console.error, { discard: true })
   const markdown = reports.map((r) => r.markdown).join("\n")
