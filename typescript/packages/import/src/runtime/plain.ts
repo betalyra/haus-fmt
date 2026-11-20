@@ -5,6 +5,7 @@
  * generated and travel with it.
  */
 import { fromSchemaFile, parseSchemaFile, parseWithLocations, type CompiledSchemaFile, type Value } from "@haus-fmt/haus"
+import { registerCodecs, type Factory } from "@haus-fmt/haus/codegen"
 import * as h from "@haus-fmt/haus/schema"
 import { located, resolverOf, type Modules } from "./shared.js"
 
@@ -13,6 +14,15 @@ export type { Modules }
 /** Build the schemas of a schema file, its imports answered from `modules`. */
 export function compiled(text: string, modules: Modules, key: string, id: string): CompiledSchemaFile {
   return fromSchemaFile(parseSchemaFile(text, { key, id, resolver: resolverOf(modules) }))
+}
+
+/**
+ * The compiled codecs @haus-fmt/import generated for `schema`'s schemas when
+ * it built the module (source with this hash): used at runtime once the
+ * same source is generated again from the schemas, without `eval`.
+ */
+export function prebuilt(schema: CompiledSchemaFile, hash: string, factory: Factory): void {
+  registerCodecs(schema.schemas, hash, factory)
 }
 
 /** The place of a decode error's path inside a parsed value. */

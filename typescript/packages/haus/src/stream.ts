@@ -18,6 +18,21 @@ export interface StreamOptions {
 }
 
 /**
+ * What a stream reader makes of each item: by default its `Value`. `text`
+ * gets an item's text (with the comma that ends it) and where it starts;
+ * `value`, the last item when it has no comma, parsed already.
+ */
+export interface ItemReader<T> {
+  readonly text: (text: string, origin: Origin, limits: Limits) => T
+  readonly value: (value: Value) => T
+}
+
+const VALUES: ItemReader<Value> = {
+  text: (text, origin, limits) => new Parser(text, origin, limits).parseSingle(),
+  value: (value) => value,
+}
+
+/**
  * Incremental reader: feed text chunks with `push`, receive every value that
  * has been completed (terminated by a top-level comma). Call `end` once the
  * input is exhausted to receive the last value if it had no trailing comma.
@@ -26,7 +41,7 @@ export interface StreamOptions {
  * Memory use is bounded by the largest single value, not the whole stream.
  * After a HausSyntaxError the reader is unusable.
  */
-export class StreamReader {
+export class StreamReader<T = Value> {
   /**
    * Text of the current value already scanned, as pieces. Appending to one
    * growing string and indexing into it would flatten V8's rope on every
@@ -51,13 +66,17 @@ export class StreamReader {
   private readonly maxValueLength: number
   private readonly requireTerminator: boolean
 
-  constructor(options: StreamOptions = {}) {
+  constructor(
+    options: StreamOptions = {},
+    /** What each item becomes (see `ItemReader`); its Value by default. */
+    private readonly items: ItemReader<T> = VALUES as unknown as ItemReader<T>,
+  ) {
     this.limits = withDefaults(options.limits ?? {})
     this.maxValueLength = options.maxValueLength ?? 64 * 1024 * 1024
     this.requireTerminator = options.requireTerminator ?? false
   }
 
-  push(chunk: string): Value[] {
+  push(chunk: string): T[] {
     if (this.ended) throw new Error("StreamReader: push() after end()")
     this.buf += chunk
     if (!this.started && this.buf.length > 0) {
@@ -71,7 +90,7 @@ export class StreamReader {
     return this.scan(false)
   }
 
-  end(): Value[] {
+  end(): T[] {
     this.ended = true
     const out = this.scan(true)
     // The scan checks a value's length before each character it reads, so the
@@ -86,7 +105,7 @@ export class StreamReader {
       const p = locate(text, text.length, this.origin)
       throw new HausSyntaxError("stream ended without ',' after the last value (truncated?)", p.offset, p.line, p.column, "stream-truncated", { expected: "','" })
     }
-    out.push(...rest)
+    out.push(...rest.map(this.items.value))
     this.buf = ""
     this.done = []
     this.doneLength = this.bufChars = this.counted = 0
@@ -98,7 +117,7 @@ export class StreamReader {
    * depth, strings and comments. Everything else is checked by the Parser
    * when it parses the piece.
    */
-  private scan(final: boolean): Value[] {
+  private scan(final: boolean): T[] {
     const out = this.scanBuffer(final)
     // Move the scanned prefix out of `buf`, so the next chunk is appended to a short string.
     if (this.i > 0) {
@@ -112,8 +131,8 @@ export class StreamReader {
     return out
   }
 
-  private scanBuffer(final: boolean): Value[] {
-    const out: Value[] = []
+  private scanBuffer(final: boolean): T[] {
+    const out: T[] = []
     // Is the character `n` positions ahead available (or will it never come)?
     const has = (n: number) => final || this.i + n < this.buf.length
 
@@ -208,10 +227,10 @@ export class StreamReader {
   }
 
   /** Parse the piece before the comma at `i` and drop it from the buffer. */
-  private cut(): Value {
+  private cut(): T {
     const text = this.scanned(this.i + 1) // including the comma
     // With its comma, so an empty item fails as in the whole text: "found ','".
-    const value = new Parser(text, this.origin, this.limits).parseSingle()
+    const value = this.items.text(text, this.origin, this.limits)
     this.origin = locate(text, text.length, this.origin)
     this.buf = this.buf.slice(this.i + 1)
     this.i = 0
@@ -259,7 +278,12 @@ export type ChunkSource =
  *   for await (const event of parseStream(response.body!)) { ... }
  */
 export async function* parseStream(source: ChunkSource, options: StreamOptions = {}): AsyncGenerator<Value, void, undefined> {
-  const reader = new StreamReader(options)
+  yield* readStream(source, options)
+}
+
+/** `parseStream`, each item made by `items` (see `ItemReader`). */
+export async function* readStream<T = Value>(source: ChunkSource, options: StreamOptions = {}, items?: ItemReader<T>): AsyncGenerator<T, void, undefined> {
+  const reader = new StreamReader<T>(options, items)
   // ignoreBOM: the reader skips a byte order mark at the start; the decoder must not remove one too.
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
   for await (const chunk of chunks(source)) {

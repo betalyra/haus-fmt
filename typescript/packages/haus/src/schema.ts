@@ -22,11 +22,13 @@ import { HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload,
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
-import { parseStream, type ChunkSource } from "./stream.js"
+import { readStream, type ChunkSource, type ItemReader } from "./stream.js"
 import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
+import { decodeCompiled, decodeItem, encodeCompiled } from "./codec.js"
+import { readerFor, writerFor, type CodecChoice } from "./codegen.js"
 import { atJsonPlace, jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions, type JsonPlaces } from "./json.js"
 import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
 import { Secret as SecretValue } from "./secret.js"
@@ -65,7 +67,8 @@ const DEFAULT_MAX_DEPTH = 256
 const STEPS_PER_VALUE = 16
 const DEFAULT_ENCODE_STEPS = 16 * 1024 * 1024
 
-interface Context {
+/** @internal The state of one decode or encode call, shared by every place in it. */
+export interface Context {
   readonly mode: "decode" | "encode"
   /** The parser's limits, for raw values. */
   readonly values: ValueLimits
@@ -94,6 +97,14 @@ export class At {
   /** @internal */
   static root(ctx: Context, key?: string | number): At {
     return new At(ctx, undefined, key, 0)
+  }
+
+  /**
+   * @internal A place `depth` levels down, without its path: for the compiled
+   * codecs (codec.ts), whose errors are all reported again by the generic path.
+   */
+  static nested(ctx: Context, depth: number): At {
+    return new At(ctx, undefined, undefined, depth)
   }
 
   /** The position of a child value. Fails beyond the depth limit. */
@@ -151,9 +162,7 @@ export class At {
 
   /** @internal Bookkeeping for `h.Recursive`. */
   recursion(schema: object) {
-    let state = this.ctx.recursion.get(schema)
-    if (!state) this.ctx.recursion.set(schema, (state = { depth: 0, current: NOTHING }))
-    return state
+    return recursionOf(this.ctx, schema)
   }
 
   /** Encoding: is `value` an object currently being encoded further up? */
@@ -176,7 +185,15 @@ export class At {
 
 const NOTHING = Symbol("nothing")
 
-const context = (mode: "decode" | "encode", maxSteps: number, limits: Limits): Context => ({
+/** @internal Per `h.Recursive` in a call: how deeply it is nested, and the value it was last entered with. */
+export const recursionOf = (ctx: Context, schema: object): { depth: number; current: unknown } => {
+  let state = ctx.recursion.get(schema)
+  if (!state) ctx.recursion.set(schema, (state = { depth: 0, current: NOTHING }))
+  return state
+}
+
+/** @internal */
+export const context = (mode: "decode" | "encode", maxSteps: number, limits: Limits): Context => ({
   mode,
   values: withDefaults(limits),
   maxDepth: limits.maxDepth ?? DEFAULT_MAX_DEPTH,
@@ -285,10 +302,18 @@ const decodeAt = (value: Value, limits: Limits, key?: string | number): At => {
 }
 
 /** Decoding a value of `size` values (counted by `countValues`, or by the parser that read it: a tree within the limits). */
-const decodeWithin = (limits: Limits, size: number, key?: string | number): At =>
-  At.root(context("decode", limits.maxSteps ?? STEPS_PER_VALUE * size + 1024, limits), key)
+const decodeWithin = (limits: Limits, size: number, key?: string | number): At => At.root(decodeContext(limits, size), key)
 
-const encodeAt = (limits: Limits, key?: string | number): At => At.root(context("encode", DEFAULT_ENCODE_STEPS, limits), key)
+/** @internal The step budget of decoding `size` values: the call's, or 16 per value plus 1024. */
+export const decodeSteps = (limits: Limits, size: number): number => limits.maxSteps ?? STEPS_PER_VALUE * size + 1024
+
+/** @internal The state of a decode call over `size` values. */
+export const decodeContext = (limits: Limits, size: number): Context => context("decode", decodeSteps(limits, size), limits)
+
+/** @internal The state of an encode call. */
+export const encodeContext = (limits: Limits): Context => context("encode", DEFAULT_ENCODE_STEPS, limits)
+
+const encodeAt = (limits: Limits, key?: string | number): At => At.root(encodeContext(limits), key)
 
 /**
  * Every schema is also a Standard Schema (standard.ts), so it plugs into
@@ -398,7 +423,7 @@ export const withStandard = <A, S extends Omit<Schema<A>, "~standard">>(schema: 
  *   const Currency = h.refine(h.AnyTag, (c) => (typeof c === "string" && /^[A-Z]{3}$/.test(c) ? undefined : "three letters A–Z"))
  */
 export const refine = <A>(schema: Schema<A>, check: (value: A) => string | undefined): Schema<A> =>
-  withStandard<A, Omit<Schema<A>, "~standard">>({
+  shaped(withStandard<A, Omit<Schema<A>, "~standard">>({
     expected: schema.expected,
     json: schema.json,
     decode: (v, at) => {
@@ -410,10 +435,88 @@ export const refine = <A>(schema: Schema<A>, check: (value: A) => string | undef
       const why = check(a)
       return why === undefined ? schema.encode(a, at) : at.fail(why)
     },
-  })
+  }), { kind: "refine", inner: schema, check: check as (a: never) => string | undefined })
+
+// ── shapes, for the compiled codecs ──────────────────────────
+
+/**
+ * @internal What a schema of this module is, so that codec.ts can compile a
+ * reader and a writer for it that do what its `decode` and `encode` do.
+ * Schemas written by hand have none: the compiled codecs call their own
+ * `decode` and `encode`.
+ */
+export type Shape =
+  | { readonly kind: "string" | "int" | "decimal" | "bool" | "bytes" | "any" | "anyTag" }
+  | { readonly kind: "smallInt"; readonly min: number; readonly max: number }
+  | { readonly kind: "bigInt"; readonly min: bigint; readonly max: bigint }
+  | { readonly kind: "float"; readonly name: FloatType }
+  | {
+    readonly kind: "tagged"
+    readonly tag: string
+    readonly format: RegExp
+    readonly convert: (s: string) => unknown
+    readonly toText: (a: never) => string
+  }
+  | { readonly kind: "array"; readonly item: AnySchema }
+  | { readonly kind: "map"; readonly value: AnySchema }
+  | { readonly kind: "maybe"; readonly inner: AnySchema; readonly none: Maybe<never> }
+  | { readonly kind: "record"; readonly entries: ReadonlyArray<readonly [string, AnySchema]>; readonly closed: boolean }
+  | { readonly kind: "variant"; readonly open: boolean; readonly cases: () => ReadonlyMap<string, CaseShape> }
+  | { readonly kind: "enum"; readonly tags: ReadonlySet<string> }
+  | { readonly kind: "secret"; readonly inner: AnySchema }
+  | { readonly kind: "refine"; readonly inner: AnySchema; readonly check: (a: never) => string | undefined }
+  | {
+    readonly kind: "recursive"
+    /** The key of its bookkeeping (`recursionOf`). */
+    readonly self: object
+    readonly body: () => AnySchema
+    readonly maxDepth: number
+  }
+
+/**
+ * @internal A variant's case as it is decoded: no payload, a record payload
+ * (`schema` has the shape of a record, or of a Recursive that is one; its
+ * fields nested in `value` when one is named `_tag`), positional arguments,
+ * or one value.
+ */
+export type CaseShape =
+  | { readonly kind: "unit" }
+  | { readonly kind: "record"; readonly schema: AnySchema; readonly nests: boolean }
+  | { readonly kind: "tuple"; readonly items: readonly AnySchema[] }
+  | { readonly kind: "value"; readonly schema: AnySchema }
+
+/** A schema's shape, with the functions it was registered with (a copy that replaces them is another schema). */
+interface Registered {
+  readonly shape: Shape
+  readonly decode: unknown
+  readonly encode: unknown
+  readonly decodeRecord: unknown
+  readonly encodeRecord: unknown
+}
+
+const shapes = new WeakMap<object, Registered>()
+
+/** Registers `schema` as having `shape`, and returns it. */
+const shaped = <S extends AnySchema>(schema: S, shape: Shape): S => {
+  const { decode, encode, decodeRecord, encodeRecord } = schema as Partial<RecordSchema<unknown>>
+  shapes.set(schema, { shape, decode, encode, decodeRecord, encodeRecord })
+  return schema
+}
+
+/**
+ * @internal The shape of a schema of this module, or undefined for one
+ * written by hand (or a copy of one of this module's whose functions were
+ * replaced: `{ ...h.String, decode }`).
+ */
+export const shapeOf = (schema: AnySchema): Shape | undefined => {
+  const r = shapes.get(schema)
+  if (r === undefined) return undefined
+  const s = schema as Partial<RecordSchema<unknown>>
+  return r.decode === s.decode && r.encode === s.encode && r.decodeRecord === s.decodeRecord && r.encodeRecord === s.encodeRecord ? r.shape : undefined
+}
 
 /** A schema from its decoder and encoder; every application counts one step. */
-const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: (value: A, at: At) => Value, json: JsonType): Schema<A> => {
+const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: (value: A, at: At) => Value, json: JsonType, shape: Shape): Schema<A> => {
   const self: Schema<A> = {
   "~standard": standard(() => self),
   expected,
@@ -427,7 +530,7 @@ const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: 
     return encode(a, at)
   },
   }
-  return self
+  return shaped(self, shape)
 }
 
 const invalid = (what: string, value: unknown, at: At): never =>
@@ -439,6 +542,7 @@ const string_ = make(
   "String",
   (v, p) => (v.kind === "string" ? v.value : mismatch("String", v, p)),
   (s, p) => (typeof s === "string" ? str(s) : invalid("a string", s, p)),
+  { kind: "string" },
   { kind: "string" },
 )
 
@@ -459,6 +563,7 @@ const int = make(
   (v, p) => (v.kind === "number" && INTEGER.test(v.text) ? BigInt(v.text) : notInteger("Int", v, p)),
   (n, p) => (typeof n === "bigint" ? integer(n.toString(), p) : invalid("a bigint", n, p)),
   { kind: "integer", quoted: true },
+  { kind: "int" },
 )
 
 /** A bounded integer as a JS number (Int8 … UInt32). Out of range is an error. */
@@ -467,7 +572,7 @@ const smallInt = (name: string, min: number, max: number) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = Number(v.text) + 0 // exact within these ranges (a longer literal is out of range anyway); + 0 turns -0 into 0
     return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
-  }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? integer(String(n), p) : invalid(`an integer from ${min} to ${max}`, n, p)), { kind: "integer", quoted: false })
+  }, (n, p) => (typeof n === "number" && Number.isInteger(n) && n >= min && n <= max ? integer(String(n), p) : invalid(`an integer from ${min} to ${max}`, n, p)), { kind: "integer", quoted: false }, { kind: "smallInt", min, max })
 
 /** A bounded integer as a bigint (Int64, UInt64). Out of range is an error. */
 const bigInt = (name: string, min: bigint, max: bigint) =>
@@ -475,7 +580,7 @@ const bigInt = (name: string, min: bigint, max: bigint) =>
     if (v.kind !== "number" || !INTEGER.test(v.text)) return notInteger(name, v, p)
     const n = BigInt(v.text)
     return n >= min && n <= max ? n : p.reject("out-of-range", `${short(v.text)} is out of range for ${name} (${min} to ${max})`, { expected: `${name} (${min} to ${max})`, found: short(v.text) })
-  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? integer(n.toString(), p) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true, bounded: true })
+  }, (n, p) => (typeof n === "bigint" && n >= min && n <= max ? integer(n.toString(), p) : invalid(`a bigint from ${min} to ${max}`, n, p)), { kind: "integer", quoted: true, bounded: true }, { kind: "bigInt", min, max })
 
 const int8 = smallInt("Int8", -128, 127)
 const int16 = smallInt("Int16", -32768, 32767)
@@ -501,6 +606,7 @@ const float = (name: FloatType) => make(
     : (specialFloat(v) ?? mismatch(name, v, p)),
   (n, p) => (typeof n === "number" ? (floatValue(n, name) ?? invalid(`a number within the range of ${name}`, n, p)) : invalid("a number", n, p)),
   { kind: "float" },
+  { kind: "float", name },
 )
 
 const float64 = float("Float64")
@@ -515,6 +621,7 @@ const decimal = make(
   "Decimal",
   (v, p) => (v.kind === "number" ? v.text : mismatch("Decimal", v, p)),
   (d, p) => numberFromText(d, 'a decimal string like "19.90"', p),
+  { kind: "decimal" },
   { kind: "decimal" },
 )
 
@@ -538,6 +645,7 @@ const bool = make(
       : notCase("Bool (True | False)", v, p, BOOL_TAGS),
   (b, p) => (typeof b === "boolean" ? variant(b ? "True" : "False") : invalid("a boolean", b, p)),
   { kind: "bool" },
+  { kind: "bool" },
 )
 
 /** A byte string, `x"0b34ff"`, as a Uint8Array. */
@@ -545,6 +653,7 @@ const bytes_ = make(
   "Bytes",
   (v, p) => (v.kind === "bytes" ? v.bytes : mismatch("Bytes", v, p)),
   (b, p) => (b instanceof Uint8Array ? bytesValue(b) : invalid("a Uint8Array", b, p)),
+  { kind: "bytes" },
   { kind: "bytes" },
 )
 
@@ -561,7 +670,7 @@ const taggedString = <A>(tag: string, format: RegExp, convert: (s: string) => A 
     const text = toText(a)
     if (!format.test(text) || convert(text) === undefined) return invalid(`a valid ${tag}`, text, p)
     return variant(tag, [str(text)])
-  }, { kind: "time", tag })
+  }, { kind: "time", tag }, { kind: "tagged", tag, format, convert, toText: toText as (a: never) => string })
 
 /** `Date("2026-11-07")`, returned as the validated ISO string. */
 const date = taggedString("Date", /^\d{4}-\d{2}-\d{2}$/, (s) => (checkStdTime("Date", s) === undefined ? s : undefined), (s) => s)
@@ -624,6 +733,7 @@ const array_ = <A>(item: Schema<A>): Schema<readonly A[]> =>
       return p.enter(xs, () => arr((xs as readonly A[]).map((x, i) => item.encode(x, p.child(i)))))
     },
     { kind: "array", item: jsonType(item) },
+    { kind: "array", item },
   )
 
 export { array_ as Array }
@@ -652,6 +762,7 @@ const map_ = <A>(value: Schema<A>): Schema<ReadonlyMap<string, A>> =>
       }))))
     },
     { kind: "map", value: jsonType(value) },
+    { kind: "map", value },
   )
 
 export { map_ as Map }
@@ -690,6 +801,7 @@ const maybe_ = <A>(inner: Schema<A>): Schema<Maybe<A>> =>
       return p.enter(a, () => variant("Some", [inner.encode((a as { readonly value: A }).value, p.child(0))]))
     },
     { kind: "maybe", item: jsonType(inner) },
+    { kind: "maybe", inner, none },
   )
 
 export const Maybe = Object.assign(maybe_, {
@@ -722,7 +834,9 @@ export const Maybe = Object.assign(maybe_, {
  */
 export const Optional = <A>(inner: Schema<A>): OptionalSchema<A> => {
   const self: OptionalSchema<A> = { ...inner, "~standard": standard(() => self), optional: true }
-  return self
+  // The same decoder and encoder as `inner`: the same shape, if it has one.
+  const shape = shapeOf(inner)
+  return shape === undefined ? self : shaped(self, shape)
 }
 
 export interface OptionalSchema<A> extends Schema<A> {
@@ -802,7 +916,7 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
       return encodeRecord(a, at)
     },
   }
-  return self
+  return shaped(self, { kind: "record", entries, closed: options.closed ?? false })
 }
 
 /**
@@ -966,7 +1080,27 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
       }
       return variant(tag, [(c as AnySchema).encode(obj.value, at.child(0))])
     })
-  }, json)
+  }, json, { kind: "variant", open, cases: () => new Map(written.map(([tag, c]) => [tag, caseShape(c)])) })
+}
+
+/**
+ * A case as the compiled codecs see it (`CaseShape`), as `caseOf` decides it:
+ * a Recursive whose body is a record (through other Recursives) is a record
+ * case. Through the Recursives' shapes, not `recordBodies`: a build that
+ * fails here fails again on first use, as it would have (see `Recursive`).
+ */
+const caseShape = (c: Case): CaseShape => {
+  if (c === Unit) return { kind: "unit" }
+  if (isTuple(c)) return { kind: "tuple", items: c.items }
+  const seen = new Set<object>()
+  for (let x: Case = c; ;) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (isRecordSchema(x)) return { kind: "record", schema: c as AnySchema, nests: nestsPayload(x as RecordSchema<any>) }
+    const shape = shapeOf(x as AnySchema)
+    if (shape?.kind !== "recursive" || seen.has(x)) return { kind: "value", schema: c as AnySchema }
+    seen.add(x)
+    x = shape.body()
+  }
 }
 
 /** The schema-based JSON form of a variant case: a record payload's fields go beside `_tag`, other payloads are positional. */
@@ -996,7 +1130,7 @@ const mapSame = <T>(xs: readonly T[], f: (x: T, i: number) => T): readonly T[] =
  * parser would (`1E5` → `1e5`); parts without such a change are kept as they
  * are (the same objects), so a parsed value comes back unchanged.
  */
-const checkedValue = (raw: unknown, at: At): Value => {
+export const checkedValue = (raw: unknown, at: At): Value => {
   at.step()
   if (!isValueNode(raw)) return invalid("a haus value", raw, at)
   const { maxStringLength } = at.limits
@@ -1064,6 +1198,7 @@ export const Enum = <const T extends readonly string[]>(...tags: T): Schema<T[nu
         : notCase(`one of ${tagList(tags)}`, v, at, known),
     (t, at) => (typeof t === "string" && known.has(t) ? variant(t) : invalid(`one of ${tagList(tags)}`, t, at)),
     { kind: "variant", open: false, cases: new Map(tags.map((t) => [t, { kind: "unit" }])) },
+    { kind: "enum", tags: known },
   )
 }
 
@@ -1080,6 +1215,7 @@ export const AnyTag: Schema<string | Unknown> = make(
     : isUnknown(a) ? checkedValue(a.value, at)
     : invalid("a tag name or an Unknown", a, at),
   { kind: "variant", open: true, cases: new Map() },
+  { kind: "anyTag" },
 )
 
 const TAG = /^[A-Z][A-Za-z0-9_]*$/
@@ -1092,7 +1228,7 @@ const TAG = /^[A-Z][A-Za-z0-9_]*$/
  * shape. Encoding writes it back unchanged, after checking that it is a haus
  * value within the limits. Treat its content as untrusted data.
  */
-const any_: Schema<Value> = make("Any", (v) => v, (a, at) => checkedValue(a, at), { kind: "any" })
+const any_: Schema<Value> = make("Any", (v) => v, (a, at) => checkedValue(a, at), { kind: "any" }, { kind: "any" })
 
 export { any_ as Any }
 
@@ -1132,6 +1268,7 @@ export const Secret = Object.assign(
         s instanceof SecretValue ? concealed(inner.expected, at, () => inner.encode(s.expose(), at))
         : at.reject("cannot-encode", `expected a Secret (h.Secret.make(…)), got ${s === null ? "null" : Array.isArray(s) ? "an array" : typeof s}`),
       { kind: "secret", item: jsonType(inner), expected: inner.expected },
+      { kind: "secret", inner },
     ),
   {
     /** A secret holding `value`, to encode. */
@@ -1236,6 +1373,20 @@ export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>
     decode: (v, at) => run(v, at, (b) => b.decode(v, at)),
     encode: (a, at) => run(a, at, (b) => b.encode(a, at)),
   }
+  /** The record this Recursive's body is, as a record case (a RecordSchema, or another Recursive that is one). */
+  const recordOf = (body: Schema<A>) => (isRecordSchema(body) ? (body as RecordSchema<A>) : recordBodies.get(body)?.())
+  // For the compiled codecs, which build the body before the first use: a
+  // failed build is tried again on that use, so it fails as it would have.
+  const tryForce = (): Schema<A> => {
+    try {
+      return force()
+    } catch (e) {
+      building = false
+      throw e
+    }
+  }
+  const shape: Shape = { kind: "recursive", self, body: tryForce, maxDepth }
+  shaped(self, shape)
   // As a record case: the record's own decodeRecord and encodeRecord, entered through this
   // Recursive (its depth and cycle checks). Decided once, when first asked, after it is built.
   let asRecord: RecordSchema<A> | null | undefined
@@ -1246,9 +1397,8 @@ export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>
     if (resolving) return undefined
     resolving = true
     try {
-      const body = force()
-      const record = isRecordSchema(body) ? (body as RecordSchema<A>) : recordBodies.get(body)?.()
-      asRecord = record === undefined ? null : {
+      const record = recordOf(force())
+      asRecord = record === undefined ? null : shaped<RecordSchema<A>>({
         ...self,
         kind: "record",
         expected: record.expected,
@@ -1256,7 +1406,7 @@ export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>
         json: record.json,
         decodeRecord: (v, at) => run(v, at, () => record.decodeRecord(v, at)),
         encodeRecord: (a, at) => run(a, at, () => record.encodeRecord(a, at)),
-      }
+      }, shape)
     } finally {
       resolving = false
     }
@@ -1269,8 +1419,42 @@ export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>
 
 export const decode = <A>(schema: Schema<A>, value: Value, limits: Limits = {}): A => schema.decode(value, decodeAt(value, limits))
 
-/** Parse a text holding exactly one value and decode it. */
-export const parse = <A>(schema: Schema<A>, text: string, limits: Limits = {}): A => {
+/**
+ * Options of the typed entry points (`parse`, `stringify`, `formatAll`,
+ * `encodeStream`): the limits, and which path to take.
+ */
+export interface Options extends Limits {
+  /**
+   * Which codec to use. Each schema's codecs are compiled once, on first use:
+   * decoding then reads straight from the text into the values, and compact
+   * or minimised writing writes straight from them.
+   * - `"auto"` (default): generated code where @haus-fmt/import built it
+   *   ahead, else closures (codec.ts); the generic path for a schema that
+   *   doesn't compile;
+   * - `"generated"` or `"closures"`: only that codec, else the generic path.
+   *   `"generated"` makes the code with `new Function` where it wasn't built
+   *   ahead and the platform allows it: faster for a schema used many times;
+   * - `"generic"`: parse to a `Value`, then decode; encode to a `Value`, then format.
+   *
+   * All give the same values, texts and errors; the choice is for tests and debugging.
+   */
+  readonly codec?: CodecChoice
+}
+
+/**
+ * Parse a text holding exactly one value and decode it. With the schema's
+ * compiled reader when it has one (see `Options.codec`).
+ */
+export const parse = <A>(schema: Schema<A>, text: string, options: Options = {}): A => {
+  const read = readerFor(schema, options.codec)
+  const decoded = read === undefined ? undefined : decodeCompiled(read, text, options)
+  // Undefined: not compiled, or anything at all is wrong; the generic path reports it.
+  if (decoded !== undefined) return decoded.value as A
+  return parseGeneric(schema, text, options)
+}
+
+/** `parse` on the generic path: the `Value` tree first, then the schema's `decode`. */
+const parseGeneric = <A>(schema: Schema<A>, text: string, limits: Limits): A => {
   const parser = new Parser(text, START, withDefaults(limits))
   const values = parser.parseSequence()
   if (values.length !== 1) throw new HausDecodeError(`expected exactly one value, found ${values.length}`, [], "not-one-value", { expected: "one value", found: `${values.length} values` })
@@ -1278,11 +1462,26 @@ export const parse = <A>(schema: Schema<A>, text: string, limits: Limits = {}): 
   return schema.decode(values[0]!, decodeWithin(limits, parser.valueCount))
 }
 
-/** Parse and decode a stream; each element's errors carry its index in the path. Limits apply per element. */
-export async function* decodeStream<A>(schema: Schema<A>, source: ChunkSource, limits: Limits = {}): AsyncGenerator<A, void, undefined> {
+/**
+ * Parse and decode a stream; each element's errors carry its index in the
+ * path. Limits apply per element. Each item is read by the schema's compiled
+ * reader (see `Options.codec`) when it can be; one it can't is parsed (all
+ * the items of a chunk are, before any is decoded) and decoded on the
+ * generic path when it is its turn, so errors come as they always did.
+ */
+export async function* decodeStream<A>(schema: Schema<A>, source: ChunkSource, options: Options = {}): AsyncGenerator<A, void, undefined> {
+  type Item = { readonly decoded: true; readonly value: A } | { readonly decoded: false; readonly value: Value }
+  const items: ItemReader<Item> = {
+    text: (text, origin, limits) => {
+      const read = readerFor(schema, options.codec)
+      const done = read === undefined ? undefined : decodeItem(read, text, origin, options)
+      return done !== undefined ? { decoded: true, value: done.value as A } : { decoded: false, value: new Parser(text, origin, limits).parseSingle() }
+    },
+    value: (value) => ({ decoded: false, value }),
+  }
   let i = 0
-  for await (const value of parseStream(source, { limits })) {
-    yield schema.decode(value, decodeAt(value, limits, i))
+  for await (const item of readStream(source, { limits: options }, items)) {
+    yield item.decoded ? item.value : schema.decode(item.value, decodeAt(item.value, options, i))
     i++
   }
 }
@@ -1290,14 +1489,29 @@ export async function* decodeStream<A>(schema: Schema<A>, source: ChunkSource, l
 /** Encode a typed value into a haus `Value`. */
 export const encode = <A>(schema: Schema<A>, value: A, limits: Limits = {}): Value => schema.encode(value, encodeAt(limits))
 
+/**
+ * `value` as one line of compact or minimised text by the schema's compiled
+ * writer, or undefined: another layout, not compiled, or anything wrong (the
+ * generic path then reports it). A `source` to keep spellings from is the
+ * formatter's.
+ */
+const lineCompiled = (schema: AnySchema, value: unknown, options: FormatOptions & Options, style: FormatOptions["style"]): string | undefined => {
+  if (options.source !== undefined || (style !== "compact" && style !== "minimised")) return undefined
+  const write = writerFor(schema, options.codec)
+  return write === undefined ? undefined : encodeCompiled(write, value, options, style)
+}
+
 /** Encode and write as haus text in the standard format (no trailing newline). */
-export const stringify = <A>(schema: Schema<A>, value: A, options: FormatOptions & Limits = {}): string =>
-  stringifyValue(encode(schema, value, options), options)
+export const stringify = <A>(schema: Schema<A>, value: A, options: FormatOptions & Options = {}): string =>
+  lineCompiled(schema, value, options, options.style) ?? stringifyValue(encode(schema, value, options), options)
 
 /** Encode several values as a stream file: a comma after every value. */
-export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: FormatOptions & Limits = {}): string => {
+export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: FormatOptions & Options = {}): string => {
   checkLimits(options)
-  return format([...values].map((v, i) => schema.encode(v, encodeAt(options, i))), options)
+  const all = [...values]
+  const lines = all.map((v) => lineCompiled(schema, v, options, options.style))
+  if (lines.every((l) => l !== undefined)) return lines.length === 0 ? "" : lines.length === 1 ? `${lines[0]}\n` : lines.map((l) => `${l},\n`).join("")
+  return format(all.map((v, i) => schema.encode(v, encodeAt(options, i))), options)
 }
 
 /**
@@ -1307,11 +1521,15 @@ export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: Fo
 export async function* encodeStream<A>(
   schema: Schema<A>,
   values: AsyncIterable<A> | Iterable<A>,
-  options: FormatOptions & Limits = {},
+  options: FormatOptions & Options = {},
 ): AsyncGenerator<string, void, undefined> {
   let i = 0
   // Streams default to compact: one item per line.
-  for await (const v of values) yield stringifyValue(schema.encode(v, encodeAt(options, i++)), { style: "compact", ...options }) + ",\n"
+  const layout: FormatOptions & Options = { style: "compact", ...options }
+  for await (const v of values) {
+    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyValue(schema.encode(v, encodeAt(options, i)), layout)) + ",\n"
+    i++
+  }
 }
 
 // ── JSON (spec §16.3) ────────────────────────────────────────

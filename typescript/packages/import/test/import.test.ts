@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -114,6 +115,84 @@ describe("Secret, Any and attributes", async () => {
       expect(failed).not.toContain("98765432")
     })
   }
+})
+
+describe("compiled codecs built ahead (plain target)", async () => {
+  const plain = await backend("plain")
+  const suite = join(import.meta.dirname, "../../../../test-suite/schema")
+  // The haus modules the generated module's runtime loads, so that the check runs against the same ones.
+  // Native Node runs these modules (not Vitest), so the runtime is the built one.
+  const builtRuntime = (path: string) => pathToFileURL(join(import.meta.dirname, `../dist/${path}.js`)).href
+  const hausOf = (entry: string) => pathToFileURL(realpathSync(createRequire(join(import.meta.dirname, "../dist/runtime/plain.js")).resolve(entry))).href
+  /**
+   * Run in a Node process of its own (one instance of each module): every
+   * case of the suite decoded, and encoded again, by default (the codecs built ahead)
+   * and on the generic path. Prints what differs, where each schema's
+   * generated codecs came from, and how many cases were compared.
+   */
+  const check = (cases: string) => `
+import { isDeepStrictEqual } from "node:util"
+import * as m from "./module.mjs"
+import * as h from ${JSON.stringify(hausOf("@haus-fmt/haus/schema"))}
+import { parseAll, stringify } from ${JSON.stringify(hausOf("@haus-fmt/haus"))}
+import { generatedOrigin } from ${JSON.stringify(hausOf("@haus-fmt/haus/codegen"))}
+/** Own keys in order, all the way down: isDeepStrictEqual doesn't compare their order. */
+const keys = (v) => v === null || typeof v !== "object" ? "" : v instanceof Map ? [...v].map(([k, x]) => k + keys(x)).join() : Reflect.ownKeys(v).map((k) => String(k) + "(" + keys(v[k]) + ")").join()
+const outcome = (f) => { try { return { ok: true, value: f() } } catch (e) { return { ok: false, error: { name: e.name, message: e.message, code: e.code, path: e.path } } } }
+const same = (a, b) => a.ok === b.ok && (a.ok ? isDeepStrictEqual(a.value, b.value) && keys(a.value) === keys(b.value) : isDeepStrictEqual(a.error, b.error))
+const differences = []
+let compared = 0
+for (const c of parseAll(${JSON.stringify(cases)})) {
+  const f = c.args[0].fields
+  const type = f.get("type").value
+  const schema = m[type]
+  const text = stringify(f.get("input"), { style: "minimised" })
+  const generated = outcome(() => h.parse(schema, text))
+  const generic = outcome(() => h.parse(schema, text, { codec: "generic" }))
+  compared++
+  if (!same(generated, generic)) differences.push("decode " + type + " " + text)
+  if (generic.ok) {
+    const a = outcome(() => h.stringify(schema, generic.value, { style: "minimised" }))
+    const b = outcome(() => h.stringify(schema, generic.value, { style: "minimised", codec: "generic" }))
+    if (!same(a, b)) differences.push("encode " + type + " " + text)
+  }
+}
+const origins = [...new Set(Object.values(m).map((s) => generatedOrigin(s) ?? "none"))]
+console.log(JSON.stringify({ differences, origins, compared }))
+`
+  const files = readdirSync(suite).filter((f) => f.endsWith(".schema.haus"))
+  it.each(files)("%s: generated when the module is built, used without eval, the same as the generic path", (file) => {
+    const path = join(suite, file)
+    const { code } = moduleFor(readFileSync(path, "utf8"), path, plain, builtRuntime)
+    expect(code).toContain("prebuilt(schema, ")
+    const dir = mkdtempSync(join(tmpdir(), "haus-codecs-"))
+    writeFileSync(join(dir, "module.mjs"), code)
+    writeFileSync(join(dir, "check.mjs"), check(readFileSync(path.replace(".schema.haus", ".cases.haus"), "utf8")))
+    const result = JSON.parse(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8" })) as { differences: string[]; origins: string[]; compared: number }
+    expect(result.differences).toEqual([])
+    expect(result.origins).toEqual(["built ahead"])
+    expect(result.compared).toBeGreaterThan(0)
+  })
+
+  it("code built for other schemas is not used: the hash differs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "haus-codecs-"))
+    writeFileSync(join(dir, "x.schema.haus"), "type Root = { n: Int }")
+    const { code } = moduleFor("type Root = { n: Int }", join(dir, "x.schema.haus"), plain, builtRuntime)
+    // The runtime builds `{ n: String }` from the module's text; the code was generated for `{ n: Int }`.
+    const changed = code.replace(/compiled\("type Root = \{ n: Int \}"/, 'compiled("type Root = { n: String }"')
+    expect(changed).not.toBe(code)
+    writeFileSync(join(dir, "module.mjs"), changed)
+    writeFileSync(join(dir, "check.mjs"), `
+import { Root } from "./module.mjs"
+import * as h from ${JSON.stringify(hausOf("@haus-fmt/haus/schema"))}
+import { generatedOrigin } from ${JSON.stringify(hausOf("@haus-fmt/haus/codegen"))}
+const auto = h.parse(Root, '{ n: "x" }')
+const afterAuto = generatedOrigin(Root) ?? "none"
+console.log(JSON.stringify([auto, afterAuto, h.parse(Root, '{ n: "x" }', { codec: "generated" }), generatedOrigin(Root) ?? "none"]))
+`)
+    // By default the closures, with no code generated at run time; on request, `new Function`.
+    expect(JSON.parse(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8" }))).toEqual([{ n: "x" }, "none", { n: "x" }, "new Function"])
+  })
 })
 
 describe("vite plugin", () => {

@@ -19,6 +19,10 @@
     "./plain": {
       "types": "./dist/plain.d.ts",
       "default": "./dist/plain.js"
+    },
+    "./codegen": {
+      "types": "./dist/codegen.d.ts",
+      "default": "./dist/codegen.js"
     }
   },
   "files": [

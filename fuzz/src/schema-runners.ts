@@ -11,8 +11,9 @@ import { readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { join } from "node:path"
 import { pathToFileURL } from "node:url"
-import { canonical, compileSchemaFile, parseAll } from "../../typescript/packages/haus/dist/index.js"
+import { canonical, compileSchemaFile, HausSyntaxError, parseAll } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
+import { checkCase } from "./codec.ts"
 
 /**
  * `ok` with the canonical form of the encoded result, `err` (any reason), or
@@ -137,6 +138,60 @@ export function typescriptRunner(texts: ReadonlyMap<string, string>): SchemaRunn
       throw e
     }
   })
+}
+
+/**
+ * @haus-fmt/haus's compiled codecs: `h.parse` of the case's text and
+ * `h.stringify` (minimised) of the result, on the generic path, checked
+ * against the closures (codec.ts), generated code made at runtime, and code
+ * generated ahead of time by @haus-fmt/import (each suite file built into a
+ * module and loaded, codegen.ts `prebuilt`), in this process (codec.ts here),
+ * on the case and on texts and values near it: a difference is a crash. The
+ * generic path's outcome is compared with Lean's, as for the other runners.
+ */
+export async function codecRunner(texts: ReadonlyMap<string, string>, dirs: readonly string[], out: string): Promise<SchemaRunner> {
+  const compiled = new Map([...texts].map(([s, t]) => [s, compileSchemaFile(t).schemas as Record<string, h.Schema<unknown>>]))
+  // Each schema file as @haus-fmt/import builds it for the plain target, codecs generated ahead.
+  const dist = join(root, "typescript/packages/import/dist")
+  const { backend, moduleFor } = await import(pathToFileURL(join(dist, "generate.js")).href)
+  const plain = await backend("plain")
+  const built = new Map<string, Record<string, h.Schema<unknown>>>()
+  for (const dir of dirs) {
+    for (const f of readdirSync(dir).filter((f) => f.endsWith(".schema.haus"))) {
+      const path = join(dir, f)
+      const { code } = moduleFor(readFileSync(path, "utf8"), path, plain, (p: string) => pathToFileURL(join(dist, `${p}.js`)).href)
+      if (!code.includes("prebuilt(schema, ")) throw new Error(`${f}: @haus-fmt/import generated no codecs`)
+      const file = join(out, `built-${f}.mjs`)
+      writeFileSync(file, code)
+      built.set(f.replace(".schema.haus", ""), await import(pathToFileURL(file).href))
+    }
+  }
+  return {
+    name: "typescript-codec",
+    run: (_file, cases) =>
+      cases.map((c): Outcome => {
+        const schema = compiled.get(c.suite)?.[c.type]
+        const ahead = built.get(c.suite)?.[c.type]
+        if (!schema || !ahead) return { kind: "crash", reason: `CRASH: no type ${c.suite}.${c.type}` }
+        try {
+          const r = checkCase({ schema, built: ahead }, c.text)
+          if (r.problem !== undefined) return { kind: "crash", reason: `CRASH: the compiled and generic paths differ: ${r.problem}`.slice(0, 400) }
+          if (!r.decoded.ok) {
+            const e = r.decoded.error
+            // Not one value (as the other in-process runners say it): no code.
+            if (e instanceof HausSyntaxError || (e instanceof h.HausDecodeError && e.code === "not-one-value")) return { kind: "err", reason: e.message }
+            if (e instanceof h.HausDecodeError) return { kind: "err", reason: e.message, code: e.code, place: h.formatPath(e.path) }
+            throw e
+          }
+          const encoded = r.encoded!
+          // Encoding what was decoded must work (spec §15): an encode error is a finding.
+          if (!encoded.ok) return { kind: "crash", reason: `CRASH: encoding failed: ${String(encoded.error)}` }
+          return { kind: "ok", text: canonical(parseAll(encoded.value as string)[0]!) }
+        } catch (e) {
+          return { kind: "crash", reason: `CRASH: ${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`.slice(0, 300) }
+        }
+      }),
+  }
 }
 
 /** @haus-fmt/effect: `Haus.compileSchemaFile`, `decodeValue`, `encodeValue`. */
