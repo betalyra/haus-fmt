@@ -1,14 +1,23 @@
 """The haus parser: recursive descent over one complete text (spec §1 to §8).
 
 A port of typescript/packages/haus/src/parser.ts, with the same error
-messages. Runs of ordinary characters are matched with regular expressions,
-so the Python loop only runs at delimiters, escapes and errors. Every pattern
-is linear: the possessive quantifiers (`*+`, `++`) never give back input.
+messages. Runs of ordinary characters are matched with regular expressions
+(`_scan`), so the Python loop only runs at delimiters, escapes and errors.
+Every pattern is linear: the possessive quantifiers (`*+`, `++`) never give
+back input.
 
-Each nesting level costs two or three Python frames (`_value` → `_record` /
-`_list` → `_value`; the `_items` generator is suspended, not on the stack,
-while an item is parsed). `make_room` raises Python's recursion limit, when
-needed, for the configured depth (at most `MAX_SUPPORTED_DEPTH`).
+Valid text is read first by a loop for valid text (`_read_valid`): no
+recursion, the common forms whole (a plain string, a plain decimal, a
+`key: value,` field, an array of numbers) in one match each. Anything it
+doesn't read, every error included, is read again from the start by
+recursive descent, which has every check and message: an invalid text is
+read at most twice, so parsing stays linear.
+
+Recursive descent costs two or three Python frames per nesting level
+(`_value` → `_record` / `_list` → `_value`; the `_items` generator is
+suspended, not on the stack, while an item is parsed). `make_room` raises
+Python's recursion limit, when needed, for the configured depth (at most
+`MAX_SUPPORTED_DEPTH`).
 """
 
 from __future__ import annotations
@@ -16,15 +25,49 @@ from __future__ import annotations
 import functools
 import inspect
 import re
-import string
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from decimal import Context, Decimal
-from typing import Final, Literal, Never, cast
+from typing import Any, Final, Literal, Never, cast
 
 from ._error_codes import ErrorCode
 from ._errors import HausLimitsError, HausSyntaxError
+from ._scan import (
+    BIN_LITERAL,
+    BLANKS,
+    BLOCK_BODY,
+    BLOCK_RUN,
+    BYTES_RUN,
+    COMMENT_DELIMITER,
+    COMMENT_SUSPECT,
+    DEC_LITERAL,
+    DECIMAL_ARRAY,
+    HEX_DIGITS,
+    HEX_LITERAL,
+    IDENT_OR_DOT,
+    IDENT_REST,
+    KEY_COLON,
+    KEY_START,
+    LITERAL_EXPONENT,
+    NUMBER_START,
+    PLAIN_NUMBER,
+    PLAIN_STRING,
+    RUN_STOP,
+    SCALAR_FIELD,
+    SCALAR_ITEM,
+    SIMPLE_ESCAPES,
+    STRING_RUN,
+    TAG_START,
+    TRIVIA_START,
+    UNICODE_ESCAPE,
+    WHITESPACE,
+    is_bidi,
+    match_blanks,
+    match_separator,
+    match_tag_word,
+    match_whitespace,
+)
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
 MAX_SUPPORTED_DEPTH: Final = 512
@@ -117,35 +160,6 @@ def make_room(max_depth: int) -> None:
         sys.setrecursionlimit(need)
 
 
-_WHITESPACE = re.compile(r"[ \t\n]*+")
-_BLANKS = re.compile(r"[ \t]*+")
-_IDENT = re.compile(r"[A-Za-z0-9_]*+")
-_IDENT_OR_DOT = re.compile(r"[A-Za-z0-9_.]*+")
-
-_HEX = re.compile(r"-?0x([0-9A-Fa-f](?:_?[0-9A-Fa-f])*+)")
-_BIN = re.compile(r"-?0b([01](?:_?[01])*+)")
-_DEC = re.compile(r"-?(?:0|[1-9](?:_?[0-9])*+)(?:\.[0-9](?:_?[0-9])*+)?(?:[eE][+-]?[0-9](?:_?[0-9])*+)?")
-_EXPONENT = re.compile(r"[eE][+-]?([0-9_]++)$")
-
-# Characters a string may hold raw: no quote, backslash, control or bidi character.
-_STRING_RUN = re.compile(r'[^"\\\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*+')
-# Block string lines also allow tabs and quotes.
-_BLOCK_RUN = re.compile(r"[^\\\x00-\x08\x0a-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]*+")
-# Everything up to the closing `"""`, skipping escaped characters.
-_BLOCK_BODY = re.compile(r'(?:[^\\"]++|\\.|"(?!""))*+', re.DOTALL)
-_BLANK_LINE = re.compile(r"[ \t]*+")
-_UNICODE_ESCAPE = re.compile(r"\{([0-9A-Fa-f]{1,6})\}")
-_BYTES_RUN = re.compile(r"(?:[0-9A-Fa-f]{2}|[ \t])*+")
-
-# Not allowed raw in comments: controls (tab and LF are fine; CR only before LF) and bidi.
-_COMMENT_SUSPECT = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]")
-_COMMENT_DELIMITER = re.compile(r"/\*|\*/")
-
-_NUMBER_START = frozenset("-" + string.digits)
-_TAG_START = frozenset(string.ascii_uppercase)
-_KEY_START = frozenset(string.ascii_lowercase + "_")
-_HEX_DIGITS = frozenset(string.hexdigits)
-_SIMPLE_ESCAPES = {'"': '"', "\\": "\\", "n": "\n", "r": "\r", "t": "\t"}
 _BOOLEAN: tuple[ErrorCode, str] = ("boolean-literal", " (booleans are the variants True / False)")
 # A lowercase word where a value should be: its code, and what the message adds.
 _WORDS: dict[str, tuple[ErrorCode, str]] = {
@@ -153,8 +167,15 @@ _WORDS: dict[str, tuple[ErrorCode, str]] = {
     "false": _BOOLEAN,
     "null": ("null-literal", " (use the variant None)"),
 }
-_TRIVIA_START = frozenset("\r/")  # what can follow whitespace and still be trivia (or a trivia error)
 _CLOSERS = frozenset("}])")
+_RADIX: Final[dict[re.Pattern[str], int]] = {HEX_LITERAL: 16, BIN_LITERAL: 2}
+"""The base of the integer literals that aren't decimal, by their pattern."""
+_PAYLOAD_CLOSERS: Final = {"(": ")", "{": "}"}
+"""What closes a payload, by what opens it."""
+
+
+class _Reread(Exception):
+    """The loop for valid text met something it doesn't read: recursive descent reads the text again."""
 
 
 def _run(pattern: re.Pattern[str], src: str, pos: int, end: int = sys.maxsize) -> re.Match[str]:
@@ -164,11 +185,6 @@ def _run(pattern: re.Pattern[str], src: str, pos: int, end: int = sys.maxsize) -
     return m
 
 
-def _is_bidi(c: str) -> bool:
-    """Raw bidirectional controls aren't allowed outside escapes ("Trojan Source", spec §4)."""
-    return "\u202a" <= c <= "\u202e" or "\u2066" <= c <= "\u2069"
-
-
 def _code(c: str) -> str:
     return f"U+{ord(c):04X}"
 
@@ -176,7 +192,7 @@ def _code(c: str) -> str:
 def _raw_character(c: str, where: str) -> tuple[ErrorCode, str]:
     """The code and message for a raw control or bidi character inside a string."""
     escape = f"\\u{{{ord(c):04X}}}"
-    if _is_bidi(c):
+    if is_bidi(c):
         return "bidi-control", f"raw bidirectional control character {_code(c)} (write it as {escape})"
     return "control-character", f"raw control character {_code(c)} {where} (write it as {escape})"
 
@@ -228,7 +244,15 @@ class Parser:
         """The value just parsed in a list, record or file: what decides the error when no comma follows."""
 
     def parse_sequence(self) -> list[Value]:
-        """A whole file: zero or more comma-separated values (spec §6)."""
+        """A whole file: zero or more comma-separated values (spec §6).
+
+        Valid text is read by `_read_valid`, without recursion. Anything else is read again from the
+        start by recursive descent, which reports the error: it has every check and message.
+        """
+        try:
+            return self._read_valid()
+        except (_Reread, HausSyntaxError, IndexError):
+            self.pos = self.depth = 0
         make_room(self.limits.max_depth)
         try:
             return self._sequence()
@@ -258,13 +282,268 @@ class Parser:
 
     def number_literal(self) -> str | None:
         """The normalized literal if the whole text is one number literal within the limits, else None."""
-        if self._peek() not in _NUMBER_START:
+        if self._peek() not in NUMBER_START:
             return None
         try:
             number = self._number()
         except HausSyntaxError:
             return None
         return number.text if self._eof() else None
+
+    # ── valid text, without recursion ──────────────────────────
+
+    def _read_valid(self) -> list[Value]:
+        """The values of a file, read in one loop with a stack of the open containers.
+
+        It reads the common forms itself (bare keys, plain strings and decimals, tags and
+        brackets; runs of such items in one match each) and calls the recursive reader's methods
+        for the rest (escapes, block strings, other numbers, byte strings, quoted keys, comments).
+        At anything that isn't valid, or that a limit refuses, it raises `_Reread`, a
+        `HausSyntaxError` or, at the end of the text, an `IndexError`: then `parse_sequence` reads
+        the text again by recursive descent.
+        """
+        src = self.src
+        end = len(src)
+        limits = self.limits
+        max_depth = limits.max_depth
+        max_string = limits.max_string_length
+        max_number = limits.max_number_length
+        # No word or string of a text that short can be over the string limit: runs needn't check.
+        runs = end <= max_string
+        whitespace = match_whitespace
+        separator = match_separator
+        key_colon = KEY_COLON.match
+        plain_string = PLAIN_STRING.match
+        plain_number = PLAIN_NUMBER.match
+        decimal_array = DECIMAL_ARRAY.match
+        tag_word = match_tag_word
+        blanks = match_blanks
+        trivia_start = TRIVIA_START
+        number_start = NUMBER_START
+        tag_start = TAG_START
+
+        pos = 1 if src.startswith("\ufeff") else 0
+        if self.directive and src.startswith("#haus", pos):
+            raise _Reread
+        values: list[Value] = []
+        # The open containers, innermost last: [closer, items (a dict for records), tag, the pending key].
+        stack: list[list[Any]] = []
+        # What starts at pos inside the innermost container: a record's next key, or an array's or payload's next item.
+        key_next = item_next = False
+        pos = whitespace(src, pos).end()
+        if pos < end and src[pos] in trivia_start:
+            pos = self._trivia_end(pos)
+        while pos < end:
+            v: Value | None = None
+            if key_next:
+                key_next = False
+                if runs:
+                    v, pos = self._scalar_fields(pos, stack[-1])
+                if v is None:
+                    # ── a record key and its colon ──
+                    if (m := key_colon(src, pos)) is not None and len(key := m[1] or m[2]) <= max_string:
+                        pos = m.end()
+                    else:
+                        key, pos = self._key_and_colon(pos)
+                    if src[pos] in trivia_start:
+                        pos = self._trivia_end(pos)
+                    stack[-1][3] = key
+            elif item_next:
+                item_next = False
+                if runs:
+                    v, pos = self._scalar_items(pos, stack[-1][1])
+            if v is None:
+                # ── a value at pos ──
+                c = src[pos]
+                closer = ""
+                tag: str | None = None
+                if c == '"':
+                    if (m := plain_string(src, pos)) is not None and len(s := m[1]) <= max_string:
+                        v = String(s)
+                        pos = m.end()
+                    else:
+                        self.pos = pos
+                        v = self._block_string() if src.startswith('"""', pos) else String(self._string())
+                        pos = self.pos
+                elif c in number_start:
+                    if (m := plain_number(src, pos)) is not None and m.end() - pos <= max_number:
+                        v = Number(m[0])
+                        pos = m.end()
+                    else:
+                        self.pos = pos
+                        v = self._number()
+                        pos = self.pos
+                elif c in tag_start:
+                    m = tag_word(src, pos)
+                    if len(tag := m[0]) > max_string:
+                        raise _Reread
+                    pos = m.end()
+                    payload = blanks(src, pos).end()
+                    if closer := _PAYLOAD_CLOSERS.get(src[payload : payload + 1], ""):
+                        pos = payload
+                    else:
+                        v = Variant(tag)
+                elif c == "{":
+                    closer = "}"
+                elif c == "[":
+                    if (m := decimal_array(src, pos)) is not None:
+                        numbers = m[1].split(",")
+                        if len(stack) >= max_depth or (len(m[1]) > max_number and max(map(len, numbers)) > max_number):
+                            raise _Reread
+                        v = Array(tuple(map(Number, map(str.strip, numbers))))
+                        pos = m.end()
+                    else:
+                        closer = "]"
+                elif c == "x" and src.startswith('"', pos + 1):
+                    self.pos = pos
+                    v = self._bytes()
+                    pos = self.pos
+                else:
+                    raise _Reread
+                if closer:
+                    # ── a container opens: its first item next, or its end ──
+                    if len(stack) >= max_depth:
+                        raise _Reread
+                    pos = whitespace(src, pos + 1).end()
+                    if src[pos] in trivia_start:
+                        pos = self._trivia_end(pos)
+                    if src[pos] != closer:
+                        stack.append([closer, {} if closer == "}" else [], tag, None])
+                        key_next = closer == "}"
+                        item_next = not key_next
+                        continue
+                    if closer == ")":
+                        raise _Reread  # an empty payload
+                    pos += 1
+                    v = Array(()) if closer == "]" else Record({}) if tag is None else Variant(tag, (Record({}),))
+            # ── a value v ends at pos: an item of the innermost container, or a top-level value ──
+            while stack:
+                frame = stack[-1]
+                closer, items = frame[0], frame[1]
+                if closer == "}":
+                    if (key := frame[3]) in items:
+                        raise _Reread  # a duplicate key
+                    items[key] = v
+                else:
+                    items.append(v)
+                m = separator(src, pos)
+                comma = m[1]
+                if (c := src[m.end()]) in trivia_start:
+                    pos, comma = self._separator_end(pos)
+                    c = src[pos]
+                else:
+                    pos = m.end()
+                if c != closer:
+                    if not comma:
+                        raise _Reread
+                    key_next = closer == "}"
+                    item_next = not key_next
+                    break  # the next item
+                pos += 1
+                stack.pop()
+                if closer == "]":
+                    v = Array(tuple(items))
+                elif closer == ")":
+                    v = Variant(frame[2], tuple(items))
+                elif (tag := frame[2]) is None:
+                    v = Record(items)
+                else:
+                    v = Variant(tag, (Record(items),))
+            else:
+                assert v is not None  # every way to here reads a value
+                values.append(v)
+                m = separator(src, pos)
+                comma = m[1]
+                if m.end() < end and src[m.end()] in trivia_start:
+                    pos, comma = self._separator_end(pos)
+                else:
+                    pos = m.end()
+                if pos < end and not comma:
+                    raise _Reread
+        if stack:
+            raise _Reread
+        return values
+
+    def _scalar_fields(self, pos: int, frame: list[Any]) -> tuple[Value | None, int]:
+        """A run of record fields `key: scalar,` at `pos`, in one match each, into the frame's record.
+
+        Scalars are plain strings, plain decimals and tags without a payload. The run's last field,
+        the one not followed by a comma and another key, is not stored: its value and the position
+        after it are returned (its key in the frame), for the loop to finish as any other item.
+        None, and where the run stopped, when the next field isn't a scalar field (it starts there).
+        """
+        src = self.src
+        items: dict[str, Value] = frame[1]
+        field = SCALAR_FIELD.match
+        max_number = self.limits.max_number_length
+        while (m := field(src, pos)) is not None:
+            key = m[1] or m[2]
+            if (s := m[3]) is not None:
+                v: Value = String(s)
+                value_end = m.end(3) + 1
+            elif (n := m[4]) is not None:
+                if len(n) > max_number:
+                    raise _Reread
+                v = Number(n)
+                value_end = m.end(4)
+            else:
+                v = Variant(m[5])
+                value_end = m.end(5)
+            pos = m.end()
+            if not m[6] or src[pos] in RUN_STOP:
+                frame[3] = key
+                return v, value_end
+            if key in items:
+                raise _Reread  # a duplicate key
+            items[key] = v
+        return None, pos
+
+    def _scalar_items(self, pos: int, items: list[Value]) -> tuple[Value | None, int]:
+        """A run of array or payload items `scalar,` at `pos`, as `_scalar_fields` reads fields."""
+        src = self.src
+        item = SCALAR_ITEM.match
+        max_number = self.limits.max_number_length
+        while (m := item(src, pos)) is not None:
+            if (s := m[1]) is not None:
+                v: Value = String(s)
+                value_end = m.end(1) + 1
+            elif (n := m[2]) is not None:
+                if len(n) > max_number:
+                    raise _Reread
+                v = Number(n)
+                value_end = m.end(2)
+            else:
+                v = Variant(m[3])
+                value_end = m.end(3)
+            pos = m.end()
+            if not m[4] or src[pos] in RUN_STOP:
+                return v, value_end
+            items.append(v)
+        return None, pos
+
+    def _key_and_colon(self, pos: int) -> tuple[str, int]:
+        """A record key that isn't a bare or plain quoted key, or that has comments around its colon,
+        and the position after the colon."""
+        self.pos = pos
+        key = self._key()
+        pos = self._trivia_end(self.pos)
+        if self.src[pos] != ":":
+            raise _Reread
+        return key, self._trivia_end(pos + 1)
+
+    def _separator_end(self, pos: int) -> tuple[int, bool]:
+        """What follows a value at `pos` when it has comments: the position after the trivia, a comma
+        and the trivia after it, and whether there was a comma."""
+        pos = self._trivia_end(pos)
+        if not self.src.startswith(",", pos):
+            return pos, False
+        return self._trivia_end(pos + 1), True
+
+    def _trivia_end(self, pos: int) -> int:
+        """Whitespace and comments from `pos` (errors as the recursive reader has them): the position after them."""
+        self.pos = pos
+        self._skip_trivia()
+        return self.pos
 
     def _sequence(self) -> list[Value]:
         if self.src.startswith("\ufeff"):
@@ -301,11 +580,11 @@ class Parser:
                 return String(self._string())
             case "x" if self.src.startswith('"', self.pos + 1):
                 return self._bytes()
-            case c if c in _NUMBER_START:
+            case c if c in NUMBER_START:
                 return self._number()
-            case c if c in _TAG_START:
+            case c if c in TAG_START:
                 return self._variant()
-            case c if c in _KEY_START:
+            case c if c in KEY_START:
                 word = self._ident()
                 code, more = _WORDS.get(word, ("bare-identifier", ""))
                 self._fail(
@@ -388,9 +667,9 @@ class Parser:
                 self._fail("block-string-key", "block strings can't be record keys")
             case '"':
                 return self._string()
-            case c if c in _KEY_START:
+            case c if c in KEY_START:
                 return self._checked_word(self._ident(), "key")
-            case c if c in _TAG_START:
+            case c if c in TAG_START:
                 word = self._ident()
                 self._fail(
                     "uppercase-key",
@@ -410,7 +689,7 @@ class Parser:
         # The payload must follow on the same line: only spaces and tabs in between.
         # Otherwise `Heartbeat⏎{ a: 1 }` with a forgotten comma would silently
         # become one variant with a payload (spec §5).
-        self.pos = _run(_BLANKS, self.src, after_tag).end()
+        self.pos = _run(BLANKS, self.src, after_tag).end()
         match self._peek():
             case "(":
                 paren = self.pos
@@ -435,16 +714,12 @@ class Parser:
         that runs into a letter is invalid however long it is. Converted only within the limits."""
         start = self.pos
         src = self.src
-        radix = m = None
-        for pattern, base in ((_HEX, 16), (_BIN, 2)):
-            if m := pattern.match(src, start):
-                radix = base
-                break
-        else:
-            if not (m := _DEC.match(src, start)):
-                self._fail("invalid-number", "invalid number", start)
+        m = HEX_LITERAL.match(src, start) or BIN_LITERAL.match(src, start) or DEC_LITERAL.match(src, start)
+        if m is None:
+            raise HausSyntaxError.at(src, start, "invalid-number", "invalid number")
+        radix = _RADIX.get(m.re)
         end = m.end()
-        if (after := _run(_IDENT_OR_DOT, src, end).end()) > end:
+        if (after := _run(IDENT_OR_DOT, src, end).end()) > end:
             self._fail("invalid-number", f"invalid number '{src[start:after]}'", start)
         if end - start > self.limits.max_number_length:
             self._fail(
@@ -458,7 +733,7 @@ class Parser:
             n = int(m[1].replace("_", ""), radix)
             # The sign stays, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
             return Number(("-" if src[start] == "-" else "") + _decimal_text(n))
-        if (e := _EXPONENT.search(m[0])) and _exceeds(e[1], self.limits.max_exponent):
+        if (e := LITERAL_EXPONENT.search(m[0])) and _exceeds(e[1], self.limits.max_exponent):
             self._fail("exponent-too-large", f"exponent larger than {self.limits.max_exponent}", start)
         return Number(_normalize_exponent(m[0].replace("_", "").replace("E", "e")))
 
@@ -468,7 +743,7 @@ class Parser:
         """`x"0b34 ff"`: two hex digits per byte; spaces and tabs between bytes."""
         start = self.pos
         body = start + 2  # after x"
-        end = _run(_BYTES_RUN, self.src, body).end()
+        end = _run(BYTES_RUN, self.src, body).end()
         # The limit counts up to the last whole byte read, as in the reference.
         limit = self.limits.max_string_length
         if end - body > limit and len(self.src[body:end].rstrip(" \t")) > limit:
@@ -478,12 +753,12 @@ class Parser:
                 pass
             case "":
                 self._fail("unterminated-bytes", "unterminated byte string", start)
-            case c if c in _HEX_DIGITS and end + 1 == len(self.src):
+            case c if c in HEX_DIGITS and end + 1 == len(self.src):
                 # A digit at the end of the input: unterminated, reported at the start (like the reference).
                 self._fail("unterminated-bytes", "unterminated byte string", start)
             case "\r" | "\n":
                 self._fail("bytes-not-hex", 'line break in byte string (keep x"…" on one line)', end)
-            case c if c in _HEX_DIGITS:
+            case c if c in HEX_DIGITS:
                 self._fail(
                     "bytes-odd-digits",
                     "a byte needs two hex digits (an odd number of digits, or a space inside a byte)",
@@ -505,7 +780,7 @@ class Parser:
         pos = start + 1
         out: list[str] = []
         while True:
-            m = _run(_STRING_RUN, src, pos)
+            m = _run(STRING_RUN, src, pos)
             out.append(m[0])
             pos = m.end()
             match src[pos : pos + 1]:
@@ -528,10 +803,10 @@ class Parser:
     def _escape(self, at: int) -> tuple[str, int]:
         """At a backslash: the escaped text and the position after the escape."""
         match self.src[at + 1 : at + 2]:
-            case e if e in _SIMPLE_ESCAPES:
-                return _SIMPLE_ESCAPES[e], at + 2
+            case e if e in SIMPLE_ESCAPES:
+                return SIMPLE_ESCAPES[e], at + 2
             case "u":
-                if not (m := _UNICODE_ESCAPE.match(self.src, at + 2)):
+                if not (m := UNICODE_ESCAPE.match(self.src, at + 2)):
                     self._fail("invalid-unicode-escape", "invalid unicode escape: expected \\u{1-6 hex digits}", at)
                 cp = int(m[1], 16)
                 if cp > 0x10FFFF or 0xD800 <= cp <= 0xDFFF:
@@ -543,7 +818,7 @@ class Parser:
     def _block_string(self) -> String:
         start = self.pos
         src = self.src
-        self.pos = _run(_BLANKS, src, start + 3).end()
+        self.pos = _run(BLANKS, src, start + 3).end()
         if src.startswith("\r\n", self.pos):
             self.pos += 2
         elif src.startswith("\n", self.pos):
@@ -556,7 +831,7 @@ class Parser:
             )
 
         content = self.pos
-        close = _run(_BLOCK_BODY, src, content).end()
+        close = _run(BLOCK_BODY, src, content).end()
         if not src.startswith('"""', close):
             self._fail("unterminated-block-string", "unterminated block string", start)
 
@@ -568,14 +843,14 @@ class Parser:
             lines.append((at, end))
             at = newline + 1
         indent = src[at:close]
-        if not _BLANK_LINE.fullmatch(indent):
+        if not BLANKS.fullmatch(indent):
             self._fail("block-string-closing", 'closing """ must be on its own line', close)
 
         out: list[str] = []
         for line_start, line_end in lines:
             if src.startswith(indent, line_start, line_end):
                 out.append(self._block_line(line_start + len(indent), line_end))
-            elif _BLANK_LINE.fullmatch(src, line_start, line_end):
+            elif BLANKS.fullmatch(src, line_start, line_end):
                 out.append("")
             else:
                 self._fail("block-string-indent", 'line is indented less than the closing """', line_start)
@@ -588,7 +863,7 @@ class Parser:
         out: list[str] = []
         pos = start
         while True:
-            m = _run(_BLOCK_RUN, src, pos, end)
+            m = _run(BLOCK_RUN, src, pos, end)
             out.append(m[0])
             pos = m.end()
             if pos >= end:
@@ -624,8 +899,8 @@ class Parser:
         """Whitespace and comments, up to anything else (a `/` that starts no comment included)."""
         src = self.src
         while True:
-            self.pos = _run(_WHITESPACE, src, self.pos).end()
-            if src[self.pos : self.pos + 1] not in _TRIVIA_START:
+            self.pos = _run(WHITESPACE, src, self.pos).end()
+            if src[self.pos : self.pos + 1] not in TRIVIA_START:
                 return
             match src[self.pos : self.pos + 2]:
                 case "\r\n":
@@ -648,7 +923,7 @@ class Parser:
         """`/* … */`, which nest."""
         start = self.pos
         depth = 0
-        for m in _COMMENT_DELIMITER.finditer(self.src, start):
+        for m in COMMENT_DELIMITER.finditer(self.src, start):
             depth += 1 if m[0] == "/*" else -1
             if depth == 0:
                 self._check_comment(start, m.end())
@@ -660,7 +935,7 @@ class Parser:
         """Comments are where "Trojan Source" attacks hide reordered text, and where
         control characters (ESC, CSI, NUL) can rewrite what a terminal shows.
         Allowed: tab, and in block comments line breaks (CR only before LF)."""
-        for m in _COMMENT_SUSPECT.finditer(self.src, start, end):
+        for m in COMMENT_SUSPECT.finditer(self.src, start, end):
             i = m.start()
             match m[0]:
                 case "\r" if self.src.startswith("\n", i + 1):
@@ -669,7 +944,7 @@ class Parser:
                     self._fail(
                         "lone-carriage-return", "carriage return without a line feed (line breaks are LF or CRLF)", i
                     )
-                case c if _is_bidi(c):
+                case c if is_bidi(c):
                     self._fail("bidi-control", f"raw bidirectional control character {_code(c)} in comment", i)
                 case c:
                     self._fail("control-character", f"raw control character {_code(c)} in comment", i)
@@ -678,7 +953,7 @@ class Parser:
 
     def _ident(self) -> str:
         start = self.pos
-        self.pos = _run(_IDENT, self.src, start).end()
+        self.pos = _run(IDENT_REST, self.src, start).end()
         return self.src[start : self.pos]
 
     def _peek(self) -> str:

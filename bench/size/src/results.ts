@@ -145,14 +145,15 @@ export const Machine = Schema.Struct({
 export type Machine = typeof Machine.Type
 
 /** The languages with a speed benchmark (bench/speed/<lang>/), in report order. */
-export const LANGS = ["typescript", "rust", "go"] as const
+export const LANGS = ["typescript", "rust", "go", "python"] as const
 export const Lang = Schema.Literals(LANGS)
 export type Lang = typeof Lang.Type
 
 /**
  * One language's speed results on one source, the same shape for every
  * language: speed-typescript.json (bench/speed/ts), speed-rust.json
- * (bench/speed/rust), speed-go.json (bench/speed/go).
+ * (bench/speed/rust), speed-go.json (bench/speed/go), speed-python.json
+ * (bench/speed/py).
  */
 export const SpeedOut = Schema.Struct({
   lang: Lang,
@@ -168,18 +169,20 @@ export const SpeedOut = Schema.Struct({
    * text (numbers a JS number can't hold exactly); Rust, serde_json's
    * `Value` writes another document (numbers in another spelling; serde_json
    * sorts members, which isn't counted); Go, the same with encoding/json
-   * through `any` (numbers as float64).
+   * through `any` (numbers as float64); Python, json.loads → json.dumps
+   * gives another document (numbers as float).
    */
   jsonNotStable: Schema.Finite,
   /**
    * TypeScript: the checks of the JSON baselines of the typed tasks (JSON.parse
    * + a validator, a schema-compiled JSON writer), built from the source's JSON
-   * Schema (bench/speed/ts/validators.ts).
+   * Schema (bench/speed/ts/validators.ts); Python: pydantic and msgspec, models
+   * generated from the same JSON Schema (bench/speed/py, models.py).
    */
   typedBaselines: Schema.optionalKey(Schema.Struct({
     /** The libraries and their versions. */
     versions: Schema.Record(Schema.String, Schema.String),
-    /** Mutated documents every validator rejected, by kind of mutation (bench/speed/ts/mutate.ts). */
+    /** Mutated documents every validator rejected, by kind of mutation (bench/speed/ts/mutate.ts; Python: bench/speed/py, mutate.py). */
     rejected: Schema.Record(Schema.String, Schema.Finite),
     /** Documents whose typed haus write isn't the document's text: members in the schema's order, members it doesn't list dropped (decoding drops them). */
     typedWriteOtherText: Schema.Finite,
@@ -202,7 +205,7 @@ export interface ResultsFile<S extends Schema.Codec<any, any>> {
 
 export const CORPUS = { file: "corpus.json", schema: CorpusOut } as const satisfies ResultsFile<typeof CorpusOut>
 export const TOKENS = { file: "tokens.json", schema: TokensOut } as const satisfies ResultsFile<typeof TokensOut>
-/** A language's speed results: `speed-typescript.json`, `speed-rust.json`, `speed-go.json`. */
+/** A language's speed results: `speed-typescript.json`, `speed-rust.json`, `speed-go.json`, `speed-python.json`. */
 export const speedFile = (lang: Lang) => ({ file: `speed-${lang}.json`, schema: SpeedOut, indent: 2 }) as const satisfies ResultsFile<typeof SpeedOut>
 export const COMPRESSION = { file: "compression.json", schema: CompressionOut, indent: 2 } as const satisfies ResultsFile<typeof CompressionOut>
 

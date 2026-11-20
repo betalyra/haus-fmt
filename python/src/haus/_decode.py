@@ -17,7 +17,7 @@ import re
 import struct
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from decimal import Decimal
-from typing import Final, Never, Protocol, TypeVar, cast
+from typing import Any, Final, Never, Protocol, TypeVar, cast
 
 from ._error_codes import ErrorCode
 from ._errors import HausError, HausJsonError, PathKey, format_path
@@ -37,6 +37,7 @@ from ._json import (
 )
 from ._number import INTEGER, int_text, normalize_number, number_limit_issue, to_int
 from ._parser import Limits, make_room
+from ._scan import TAG
 from ._schema_file import (
     ArrayType,
     BuiltinType,
@@ -57,7 +58,6 @@ from ._schema_file import Instance as _Instance
 from ._time import check as check_time
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
-_TAG = re.compile(r"[A-Z][A-Za-z0-9_]*")
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 T = TypeVar("T")
@@ -133,6 +133,8 @@ class _Context:
 _NO_KEY: Final = object()
 _NOTHING: Final = object()
 """`Nothing()` where a `Some`'s value is expected."""
+_MISS: Final = object()
+"""What `_Node.quick` gives for a value it doesn't decode: `decode` then decodes it, or says what is wrong."""
 
 
 class _At:
@@ -352,7 +354,7 @@ def _mapping(x: object, at: _At, what: str) -> Mapping[object, object]:
 
 
 def _checked_tag(tag: object, at: _At) -> str:
-    if not isinstance(tag, str) or not _TAG.fullmatch(tag):
+    if not isinstance(tag, str) or not TAG.fullmatch(tag):
         _invalid("a tag name", tag, at, "invalid-tag" if at.ctx.json else "cannot-encode")
     if len(tag) > at.ctx.limits.max_string_length:
         at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", code="tag-too-long")
@@ -438,12 +440,20 @@ class _Node:
 
     __slots__ = ("expected",)
 
+    has_quick = False
+    """Whether `quick` decodes some values: the loops over a container's children call it first."""
+
     def __init__(self, expected: str) -> None:
         self.expected = expected
         """What it accepts, for error messages."""
 
     def decode(self, v: Value, at: _At) -> object:
         raise NotImplementedError
+
+    def quick(self, v: Value) -> object:
+        """A scalar's usual value decoded without its place (one step, which the caller counts), or
+        `_MISS`: for anything else, and for every error, `decode` with the place is called."""
+        return _MISS
 
     def encode(self, x: object, at: _At) -> Value:
         raise NotImplementedError
@@ -457,6 +467,10 @@ class _Node:
 
 class _String(_Node):
     __slots__ = ()
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        return v.value if type(v) is String else _MISS
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
@@ -505,10 +519,17 @@ class _Bytes(_Node):
 
 
 _TRUE, _FALSE = Variant("True"), Variant("False")
+_BOOLS: Final[Mapping[str, object]] = {"True": True, "False": False}
 
 
 class _Bool(_Node):
     __slots__ = ()
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        if type(v) is Variant and not v.args:
+            return _BOOLS.get(v.tag, _MISS)
+        return _MISS
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
@@ -545,6 +566,15 @@ class _Int(_Node):
     """`Int` (any size) and the sized integers, as `int`. Out of range is an error, never clamped."""
 
     __slots__ = ("high", "low")
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        if type(v) is not Number or not INTEGER.fullmatch(text := v.text):
+            return _MISS
+        if self.low is None or self.high is None:
+            return to_int(text)
+        # A literal longer than the bounds' can't be in range.
+        return n if len(text) <= 21 and self.low <= (n := int(text)) <= self.high else _MISS
 
     def __init__(self, name: str, low: int | None = None, high: int | None = None) -> None:
         super().__init__(name)
@@ -631,6 +661,13 @@ class _Float(_Node):
     """`Float64`, `Float32` as `float`: the nearest value; too large is an error (spec §15)."""
 
     __slots__ = ("kind",)
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        if type(v) is not Number:
+            return _MISS
+        x = to_float32(v.text) if self.kind == "Float32" else to_float64(v.text)
+        return _MISS if x is None else x
 
     def __init__(self, kind: FloatKind) -> None:
         super().__init__(kind)
@@ -698,6 +735,10 @@ class _Decimal(_Node):
     """`Decimal` as the normalized literal text: `"19.90"`, `"1.5e3"` (spec §15)."""
 
     __slots__ = ()
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        return v.text if type(v) is Number else _MISS
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
@@ -733,6 +774,14 @@ class _StdTime(_Node):
     """A std/time type as its checked text: `Date("2026-11-13")` → `"2026-11-13"`."""
 
     __slots__ = ()
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        if type(v) is Variant and v.tag == self.expected and len(args := v.args) == 1 and type(args[0]) is String:
+            text = args[0].value
+            if check_time(self.expected, text) is None:
+                return text
+        return _MISS
 
     def _checked(self, text: str, at: _At, child: PathKey | None = None) -> str:
         if (reason := check_time(self.expected, text)) is not None:
@@ -770,6 +819,10 @@ class _Any(_Node):
     """
 
     __slots__ = ()
+    has_quick = True
+
+    def quick(self, v: Value) -> object:
+        return v
 
     def decode(self, v: Value, at: _At) -> object:
         at.step()
@@ -809,10 +862,15 @@ class _Array(_Node):
         at.step()
         if not isinstance(v, Array):
             _mismatch(self.expected, v, at)
-        item = self.item
+        item, ctx, child = self.item, at.ctx, at.child
+        quick = item.quick if item.has_quick else None
         out: list[object] = []
         for i, x in enumerate(v.items):
-            out.append(item.decode(x, at.child(i)))
+            if quick is None or (y := quick(x)) is _MISS or ctx.steps >= ctx.max_steps:
+                y = item.decode(x, child(i))
+            else:
+                ctx.steps += 1
+            out.append(y)
         return tuple(out)
 
     def encode(self, x: object, at: _At) -> Value:
@@ -860,10 +918,15 @@ class _Map(_Node):
         at.step()
         if not isinstance(v, Record):
             _mismatch(f"{self.expected} (a record)", v, at)
-        value = self.value
+        value, ctx, child = self.value, at.ctx, at.child
+        quick = value.quick if value.has_quick else None
         out: dict[str, object] = {}
         for k, x in v.fields.items():
-            out[k] = value.decode(x, at.child(k))
+            if quick is None or (y := quick(x)) is _MISS or ctx.steps >= ctx.max_steps:
+                y = value.decode(x, child(k))
+            else:
+                ctx.steps += 1
+            out[k] = y
         return out
 
     def encode(self, x: object, at: _At) -> Value:
@@ -1026,10 +1089,15 @@ class _Field:
         self.optional = optional
 
 
+_Entries = tuple[tuple[str, Callable[[Any], object] | None, Callable[[Any, "_At"], Any], bool], ...]
+"""A record's fields for one direction: each key, the field's node's `quick` when decoding (else
+None), its method for the direction (both bound), and whether the field is optional."""
+
+
 class _Record(_Node):
     """`{ … }` as a dict. A missing optional field stays missing: never `None` (spec §1)."""
 
-    __slots__ = ("closed", "fields", "keys")
+    __slots__ = ("closed", "decoders", "encoders", "fields", "json_readers", "json_writers", "keys")
 
     def __init__(self, fields: tuple[_Field, ...], closed: bool) -> None:
         super().__init__("closed record" if closed else "record")
@@ -1037,25 +1105,38 @@ class _Record(_Node):
         self.keys = frozenset(f.key for f in fields)
         self.closed = closed
 
+        def entries(method: str, quick: bool = False) -> _Entries:
+            return tuple(
+                (f.key, f.node.quick if quick and f.node.has_quick else None, getattr(f.node, method), f.optional)
+                for f in fields
+            )
+
+        # The loops call the fields' methods directly, bound once here.
+        self.decoders = entries("decode", quick=True)
+        self.encoders = entries("encode")
+        self.json_readers = entries("read_json")
+        self.json_writers = entries("write_json")
+
     def decode(self, v: Value, at: _At) -> object:
         at.step()
         if not isinstance(v, Record):
             _mismatch("a record", v, at)
-        return self.decode_fields(v.fields, at)
+        return self.read_fields(v.fields, at, self.decoders)
 
-    def decode_fields(self, fields: Mapping[str, Value], at: _At) -> dict[str, object]:
-        return self.read_fields(fields, at, _decode_with)
-
-    def read_fields(
-        self, fields: Mapping[str, V], at: _At, read: Callable[[_Node, V, _At], object]
-    ) -> dict[str, object]:
+    def read_fields(self, fields: Mapping[str, object], at: _At, readers: _Entries) -> dict[str, object]:
         """The listed fields of `fields` (haus values or JSON members), each read with its type."""
         out: dict[str, object] = {}
-        for f in self.fields:
-            if f.key in fields:
-                out[f.key] = read(f.node, fields[f.key], at.child(f.key))
-            elif not f.optional:
-                at.fail(f"missing field '{f.key}'", code="missing-field", expected=f"the field '{f.key}'")
+        ctx, child = at.ctx, at.child
+        for key, quick, read, optional in readers:
+            if key in fields:
+                x = fields[key]
+                if quick is None or (y := quick(x)) is _MISS or ctx.steps >= ctx.max_steps:
+                    y = read(x, child(key))
+                else:
+                    ctx.steps += 1
+                out[key] = y
+            elif not optional:
+                at.fail(f"missing field '{key}'", code="missing-field", expected=f"the field '{key}'")
         if self.closed:
             for k in fields:
                 if k not in self.keys:
@@ -1064,22 +1145,20 @@ class _Record(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        return Record(self.encode_fields(x, at))
+        return Record(self.write_fields(x, at, self.encoders))
 
-    def encode_fields(self, x: object, at: _At) -> dict[str, Value]:
-        return self.write_fields(x, at, _encode_with)
-
-    def write_fields(self, x: object, at: _At, write: Callable[[_Node, object, _At], T]) -> dict[str, T]:
+    def write_fields(self, x: object, at: _At, writers: _Entries) -> dict[str, Any]:
         """The fields of a Python mapping, each written with its type: haus values or JSON."""
         given = _mapping(x, at, "a mapping of fields")
         at.container()
         at.enter(x)
-        out: dict[str, T] = {}
-        for f in self.fields:
-            if f.key in given:
-                out[f.key] = write(f.node, given[f.key], at.child(f.key))
-            elif not f.optional:
-                at.fail(f"missing field '{f.key}'")
+        out: dict[str, Any] = {}
+        child = at.child
+        for key, _, write, optional in writers:
+            if key in given:
+                out[key] = write(given[key], child(key))
+            elif not optional:
+                at.fail(f"missing field '{key}'")
         if self.closed:
             for k in given:
                 if k not in self.keys:
@@ -1091,27 +1170,11 @@ class _Record(_Node):
         at.step()
         if not isinstance(j, dict):
             _json_mismatch("a record (an object)", j, at)
-        return self.read_fields(j, at, _read_json_with)
+        return self.read_fields(j, at, self.json_readers)
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()
-        return self.write_fields(x, at, _write_json_with)
-
-
-def _decode_with(node: _Node, v: Value, at: _At) -> object:
-    return node.decode(v, at)
-
-
-def _encode_with(node: _Node, x: object, at: _At) -> Value:
-    return node.encode(x, at)
-
-
-def _read_json_with(node: _Node, j: Json, at: _At) -> object:
-    return node.read_json(j, at)
-
-
-def _write_json_with(node: _Node, x: object, at: _At) -> Json:
-    return node.write_json(x, at)
+        return self.write_fields(x, at, self.json_writers)
 
 
 class _RecordCase:
@@ -1119,6 +1182,7 @@ class _RecordCase:
 
     By name (`Circle Disc`), `node` is the named type's node: codecs and back references around
     the record, applied here, so the case's data is that of `Circle { … }` whatever the host type.
+    The direction (decoding, JSON, …) is given as the record's entries for it: `_Record.decoders`.
     """
 
     __slots__ = ("_chain", "node")
@@ -1147,18 +1211,34 @@ class _RecordCase:
     def record(self) -> _Record:
         return self.chain()[1]
 
-    def read_fields(self, fields: Mapping[str, V], at: _At, read: Callable[[_Node, V, _At], object]) -> object:
+    def read_fields(self, fields: Mapping[str, object], at: _At, readers: Callable[[_Record], _Entries]) -> object:
         coded, record = self.chain()
-        x: object = record.read_fields(fields, at, read)
+        x: object = record.read_fields(fields, at, readers(record))
         for c in reversed(coded):
             x = c.decoded(x, at)
         return x
 
-    def write_fields(self, x: object, at: _At, write: Callable[[_Node, object, _At], T]) -> dict[str, T]:
+    def write_fields(self, x: object, at: _At, writers: Callable[[_Record], _Entries]) -> dict[str, Any]:
         coded, record = self.chain()
         for c in coded:
             x = c.encoded(x, at)
-        return record.write_fields(x, at, write)
+        return record.write_fields(x, at, writers(record))
+
+
+def _decoders(r: _Record) -> _Entries:
+    return r.decoders
+
+
+def _encoders(r: _Record) -> _Entries:
+    return r.encoders
+
+
+def _json_readers(r: _Record) -> _Entries:
+    return r.json_readers
+
+
+def _json_writers(r: _Record) -> _Entries:
+    return r.json_writers
 
 
 _CasePayload = _RecordCase | tuple[_Node, ...] | None
@@ -1205,7 +1285,7 @@ class _Variant(_Node):
                 _wrong_payload(tag, payload, "one argument, a record", f"{len(args)} argument(s)", at)
             if not isinstance(args[0], Record):
                 _wrong_payload(tag, payload, "one argument, a record", _describe(args[0]), at)
-            return Tagged(tag, cast("Mapping[str, object]", payload.read_fields(args[0].fields, at, _decode_with)))
+            return Tagged(tag, cast("Mapping[str, object]", payload.read_fields(args[0].fields, at, _decoders)))
         if len(args) != len(payload):
             _wrong_payload(tag, payload, f"{len(payload)} argument(s)", f"{len(args)} argument(s)", at)
         out: list[object] = []
@@ -1251,7 +1331,7 @@ class _Variant(_Node):
         if case is None:
             return Variant(tag)
         if isinstance(case, _RecordCase):
-            return Variant(tag, (Record(case.write_fields(given, at, _encode_with)),))
+            return Variant(tag, (Record(case.write_fields(given, at, _encoders)),))
         args = self._arguments(tag, given, case, at)
         at.container()
         at.enter(given)
@@ -1267,7 +1347,7 @@ class _Variant(_Node):
         if self.as_string:
             if not isinstance(j, str):
                 _json_mismatch(f"one of the strings {self.tags}", j, at)
-            if not _TAG.fullmatch(j):
+            if not TAG.fullmatch(j):
                 found = describe(j)
                 reason = f"expected a tag ([A-Z][A-Za-z0-9_]*), {expected}, found {found}"
                 at.fail(reason, code="invalid-tag", expected=expected, found=found)
@@ -1290,7 +1370,7 @@ class _Variant(_Node):
         if isinstance(case, _RecordCase):
             _check_payload_keys(case, at)
             fields = {k: x for k, x in j.items() if k != "_tag"}
-            return Tagged(tag, cast("Mapping[str, object]", case.read_fields(fields, at, _read_json_with)))
+            return Tagged(tag, cast("Mapping[str, object]", case.read_fields(fields, at, _json_readers)))
         if len(case) == 1:
             _only(j, ("value",), tag, at)
             return Tagged(tag, (case[0].read_json(_member(j, "value", tag, at), at.child("value")),))
@@ -1333,7 +1413,7 @@ class _Variant(_Node):
             return tag if self.as_string else {"_tag": tag}
         if isinstance(case, _RecordCase):
             _check_payload_keys(case, at)
-            return {"_tag": tag, **case.write_fields(given, at, _write_json_with)}
+            return {"_tag": tag, **case.write_fields(given, at, _json_writers)}
         args = self._arguments(tag, given, case, at)
         at.container()
         at.enter(given)
@@ -1361,7 +1441,7 @@ def _read_tag(j: dict[str, Json], expected: str, at: _At) -> str:
     if "_tag" not in j:
         at.fail(f'expected a member "_tag" ({expected})', code="missing-member", expected='"_tag"')
     tag = j["_tag"]
-    if not isinstance(tag, str) or not _TAG.fullmatch(tag):
+    if not isinstance(tag, str) or not TAG.fullmatch(tag):
         found = describe(tag)
         reason = f'expected a tag ([A-Z][A-Za-z0-9_]*) in "_tag", found {found}'
         at.fail(reason, code="invalid-tag", expected=expected, found=found)
@@ -1639,29 +1719,41 @@ class Builder:
 # ── entry points ─────────────────────────────────────────────
 
 
+def _is_container(v: Value) -> bool:
+    """A record, an array or a variant with a payload: one level of nesting, as the parser counts it."""
+    return isinstance(v, Array | Record) or (isinstance(v, Variant) and bool(v.args))
+
+
 def _count_values(root: Value, max_depth: int, at: _At) -> int:
-    """The values in a tree, failing beyond `max_depth` (a Value built in code may be deeper than parsed ones)."""
+    """The values in a tree, level by level, failing beyond `max_depth` (a Value built in code may be
+    deeper than parsed ones)."""
     count = 0
-    stack: list[tuple[Value, int]] = [(root, 0)]
-    while stack:
-        v, depth = stack.pop()
-        count += 1
+    level: list[Value] = [root]
+    depth = 0
+    while level:
+        count += len(level)
         if count > _MAX_VALUES:
             at.fail(f"value has more than {_MAX_VALUES} nodes", code="too-many-nodes")
         # A container here is one level more (empty or not), as the parser counts it.
-        if depth >= max_depth and isinstance(v, Array | Record | Variant) and (not isinstance(v, Variant) or v.args):
+        if depth >= max_depth and any(_is_container(v) for v in level):
             at.fail(f"value nested deeper than {max_depth} levels", code="nesting-too-deep")
-        match v:
-            case Array(items):
-                stack += ((x, depth + 1) for x in items)
-            case Record(fields):
-                stack += ((x, depth + 1) for x in fields.values())
-            case Variant(_, (Record() as record,)):
-                stack.append((record, depth))  # `Tag { … }` is one level, as in the parser
-            case Variant(_, args):
-                stack += ((x, depth + 1) for x in args)
-            case _:
-                pass
+        below: list[Value] = []
+        for v in level:
+            if type(v) is String or type(v) is Number:
+                continue
+            if isinstance(v, Record):
+                below += v.fields.values()
+            elif isinstance(v, Array):
+                below += v.items
+            elif isinstance(v, Variant):
+                match v.args:
+                    case (Record(fields),):
+                        count += 1  # `Tag { … }` is one level, as in the parser
+                        below += fields.values()
+                    case args:
+                        below += args
+        level = below
+        depth += 1
     return count
 
 

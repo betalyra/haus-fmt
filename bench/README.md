@@ -3,7 +3,7 @@
 A first, small benchmark of haus against JSON:
 
 1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
-2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` (`speed/go/`). Every language reads the same documents, which `convert` exports as plain files.
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`). Every language reads the same documents, which `convert` exports as plain files.
 
 ```
 bench/
@@ -14,6 +14,7 @@ bench/
     ts/                   TypeScript speed: tinybench (speed.ts, the `speed` command of the same CLI)
     rust/                 Rust speed: criterion (its own Cargo crate, outside the rust/ workspace)
     go/                   Go speed: testing.B (its own Go module, outside go/'s)
+    py/                   Python speed: its own uv project, outside python/ (json, orjson, pydantic, msgspec)
   .data/                  downloads (git-ignored)
   .out/<source>/          results (git-ignored); corpus/ is the exported corpus every language's speed benchmark reads
 ```
@@ -42,7 +43,8 @@ pnpm install                          # the bench package is part of the workspa
 pnpm --filter haus-bench all          # every TypeScript step below, in order (about 25 minutes, most of it tokens)
 pnpm --filter haus-bench speed-rust   # the Rust speed benchmark (cargo bench, about 7 minutes), after convert
 pnpm --filter haus-bench speed-go     # the Go speed benchmark (go run ./cmd/speed, about 6 minutes), after convert
-pnpm --filter haus-bench report       # the report again, with Rust's and Go's speed beside TypeScript's
+pnpm --filter haus-bench speed-py     # the Python speed benchmark (uv run, about 15 minutes), after convert
+pnpm --filter haus-bench report       # the report again, with Rust's, Go's and Python's speed beside TypeScript's
 ```
 
 Or step by step:
@@ -57,6 +59,7 @@ Or step by step:
 | speed (TypeScript) | `pnpm --filter haus-bench speed` | ~8 min (21 tasks × 2.5 s × 7 sources, and building the JSON validators and writers and the checks before timing: fast-json-stringify takes ~25 s for Stripe's 173 types; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed-typescript.json` |
 | speed (Rust) | `pnpm --filter haus-bench speed-rust`, or `cargo bench` in `bench/speed/rust/` | ~7 min (11 tasks × ~4.5 s × 7 sources, and the first build) | `bench/.out/<source>/speed-rust.json` |
 | speed (Go) | `pnpm --filter haus-bench speed-go`, or `go run ./cmd/speed` in `bench/speed/go/` | ~6 min (11 tasks × ~4.5 s × 7 sources) | `bench/.out/<source>/speed-go.json` |
+| speed (Python) | `pnpm --filter haus-bench speed-py`, or `uv run python -m haus_bench_speed` in `bench/speed/py/` | ~15 min (19 tasks × ~3.5 s × 7 sources, and building and checking the models) | `bench/.out/<source>/speed-python.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
 `convert` and `speed` build `@haus-fmt/haus` and `@haus-fmt/effect` first: they measure the built `dist/`, which git ignores, so after switching branches an old build would otherwise be measured. When running `main.node.ts` directly (Bun, Deno), run `prepare-haus` first.
@@ -98,6 +101,16 @@ go test -bench . -benchmem -count 10 > new.txt       # the same tasks as go test
 
 `cmd/speed` prints every sample in `go test -bench`'s format too, so its output also feeds [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat) (`go install golang.org/x/perf/cmd/benchstat@latest`; a tool for comparing two runs, not a dependency of anything here).
 
+The Python benchmark, the same way ([uv](https://docs.astral.sh/uv/) and CPython 3.14; the haus binding is `python/`, installed editable):
+
+```sh
+cd bench/speed/py
+uv run python -m haus_bench_speed                                  # every source in sources.haus; writes speed-python.json
+HAUS_BENCH_SOURCES=vega-lite,geojson uv run python -m haus_bench_speed
+HAUS_BENCH_QUICK=1 uv run python -m haus_bench_speed               # 3 samples in 0.3 s per task: checks the harness, not for publishing
+HAUS_BENCH_TASKS=parse-doc-haus,typed-doc-haus uv run python -m haus_bench_speed   # only these tasks; no results written
+```
+
 ### Node, Bun and Deno
 
 One program, one thin entry per runtime; everything else is runtime-neutral (`size/src/`, `speed/ts/`). The pnpm scripts use Node. From `bench/`, after `pnpm install` and `prepare-haus`:
@@ -134,6 +147,7 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 | `speed/ts/speed.ts` | TypeScript speed, tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify`, and the typed tasks against JSON with validation (the CLI's `speed` command) |
 | `speed/ts/validators.ts`, `speed/ts/mutate.ts` | the JSON baselines of the typed tasks, built from the source's JSON Schema: Zod (a translation), Ajv, TypeBox, fast-json-stringify; the mutated documents they must reject |
 | `speed/go/` | Go speed, testing.B: `tasks.go` (the tasks and checks), `corpus.go` (reads the export and the manifest), `results.go` (the samples → `speed-go.json`), `machine*.go`, `speed_test.go` (`BenchmarkSpeed`), `cmd/speed` (the runner) |
+| `speed/py/` | Python speed (`src/haus_bench_speed/`): `tasks.py` (the tasks and checks), `models.py` (the JSON Schema → pydantic models and msgspec Structs, as generated Python source), `mutate.py` (the mutated documents they must reject, as TypeScript's `mutate.ts`), `corpus.py` (reads the export and the manifest), `harness.py` (the timing, and the rows of `speed-python.json`), `machine.py`, `__main__.py` (the runner) |
 | `speed/rust/` | Rust speed, criterion: `benches/speed.rs` (the tasks and checks), `src/corpus.rs` (reads the export and the manifest), `src/results.rs` (criterion's samples → `speed-rust.json`), `src/machine.rs` |
 
 Services: `BenchPaths` (from `--data-dir`/`--out-dir`), `Manifest` (reads `sources.haus`), `Results` (reads and writes the results files, checked with their schemas), `Host` (provided by each entry); from the platform: `FileSystem`, `Path`, `Crypto` (SHA-256), `ChildProcessSpawner` (git), `HttpClient`. tinybench stays the timing engine: the timed functions are the plain library calls, built before the run, with no Effect inside them.
@@ -343,6 +357,36 @@ The Go benchmark (`testing.Benchmark`, Go 1.27.4, M1 Max, shared with other work
 - **Parsing** builds each container's entries on a scratch stack and copies them out at their exact length, with the parsers (and their stacks) pooled: about 1.1× faster per document, 15–38% fewer bytes allocated.
 - Tried and left out (no clear gain on this machine): one shared value for `None`, `True` and `False` (5–20% fewer allocations, no faster), a pooled set for the duplicate-key check of large records (slower), a byte table for identifier characters, and writing a decoded float's spelling into a stack buffer (18% fewer allocations on GeoJSON, 2% faster).
 
+### Python
+
+The Python benchmark (CPython 3.14.10, M1 Max, shared with builds and fuzzers of other work while it ran), per document, after the optimisations below: haus (pure Python, no dependencies) against `json` and orjson, and its typed parse and write against pydantic 2.14 (strict) and msgspec 0.22 models generated from the same schema. "before" is the binding before this round, from a run paired with the one after it. haus's write is the canonical form (the binding has no compact or minimised writer yet).
+
+| Source | parse: haus / json.loads / orjson MB/s | haus vs json.loads | vs orjson | before: vs json.loads | write: haus.canonical / json.dumps / orjson MB/s | haus vs json.dumps | vs orjson | before: vs json.dumps |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 30.7 / 195 / 438 | 6.2× slower | 13.9× slower | 14.8× slower | 63.8 / 183 / 1847 | 2.8× slower | 28.2× slower | 4.1× slower |
+| `vega-lite` | 9.8 / 69 / 112 | 6.6× slower | 10.8× slower | 14.3× slower | 24.2 / 87 / 743 | 3.4× slower | 29.1× slower | 5.1× slower |
+| `kubernetes` | 12.4 / 84 / 175 | 5.9× slower | 12.4× slower | 12.0× slower | 25.0 / 83 / 886 | 2.9× slower | 31.2× slower | 4.0× slower |
+| `stripe` | 13.5 / 115 / 277 | 7.9× slower | 19.2× slower | 17.4× slower | 27.2 / 117 / 857 | 4.0× slower | 29.5× slower | 5.3× slower |
+| `bfcl` | 9.0 / 49 / 50 | 5.1× slower | 5.3× slower | 8.4× slower | 42.9 / 147 / 1543 | 3.2× slower | 34.1× slower | 4.5× slower |
+| `gh-archive` | 20.5 / 206 / 485 | 9.8× slower | 23.0× slower | 15.1× slower | 69.3 / 203 / 2054 | 2.9× slower | 28.9× slower | 4.3× slower |
+| `geojson` | 12.5 / 88 / 204 | 7.0× slower | 16.2× slower | 18.8× slower | 54.7 / 81 / 844 | 1.47× slower | 15.4× slower | 3.9× slower |
+
+| Source | typed: haus / pydantic / msgspec MB/s | haus vs pydantic | vs msgspec | before: vs pydantic | typed write: haus / pydantic / msgspec MB/s | haus vs pydantic | vs msgspec | before: vs pydantic |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 23.3 / 187 / 512 | 7.8× slower | 21.4× slower | 16.7× slower | 28.6 / 343 / 1018 | 11.6× slower | 34.6× slower | 14.0× slower |
+| `vega-lite` | 7.7 / 25 / 48 | 3.1× slower | 5.8× slower | 6.2× slower | 8.7 / 53 / 406 | 5.8× slower | 44.1× slower | 6.7× slower |
+| `kubernetes` | 8.4 / 40 / 159 | 4.2× slower | 16.7× slower | 8.0× slower | 9.6 / 50 / 586 | 4.6× slower | 53.8× slower | 5.1× slower |
+| `stripe` | 8.9 / 73 / 359 | 7.7× slower | 38.0× slower | 18.0× slower | 12.7 / 153 / 642 | 11.3× slower | 47.4× slower | 12.7× slower |
+| `bfcl` | 12.0 / 28 / 76 | 2.2× slower | 6.0× slower | 4.5× slower | 18.7 / 274 / 1096 | 13.9× slower | 55.7× slower | 16.5× slower |
+| `gh-archive` | 22.7 / 99 / 604 | 4.2× slower | 25.9× slower | 9.6× slower | 33.3 / 301 / 1556 | 8.8× slower | 45.7× slower | 10.6× slower |
+| `geojson` | 10.7 / 124 / 182 | 11.6× slower | 16.9× slower | 34.0× slower | 11.0 / 233 / 553 | 21.0× slower | 49.9× slower | 30.9× slower |
+
+- **haus is pure Python, the baselines are not**: `json`'s scanner and `dumps` are C, orjson and msgspec C (Rust for orjson), pydantic-core Rust. haus parses 5–10× slower than `json.loads` (before: 8–19×), writes 1.5–4× slower than `json.dumps` (before: 4–5×), and its typed parse, which checks every rule of the schema, is 2.2–12× pydantic's time (before: 4.5–34×) and 6–38× msgspec's. The typed write (`SchemaType.canonical`: encode to a `haus.Value`, then write it) stays the slowest task.
+- **Parsing** is 1.4–2.7× faster (paired A/B runs of haus alone, 3 rounds, medians: 1.9× BFCL to 3.2× GeoJSON): valid text is read in one loop without recursion, the common forms in one regular-expression match each (a plain string, a plain decimal, a bare or plain quoted key, a `key: scalar,` field, an `item,` of an array, a whole array of plain decimals), and the recursive parser, unchanged, reads anything else again from the start, for the exact error. BFCL gains least: long strings with escapes, read by the recursive parser's string reader.
+- **Decoding** is 1.7–2.2× faster: a scalar field is decoded without making its place (`_Node.quick`: the place is made, and the full decode run, only for anything else or an error), the step budget's count walks the value level by level instead of value by value, and each record calls its fields' bound methods directly.
+- **The canonical form** is 1.3–2.6× faster: scalars written where they are met, an array of numbers joined at once, `key:` texts reused across records.
+- Tried and left out: letting a run of items close its container (2%, within the noise).
+
 ### TypeScript: typed against JSON with validation
 
 haus's typed parse reads and checks in one pass; the fair JSON counterpart is `JSON.parse` followed by a validator of the same schema, and for writing, a JSON writer compiled from the same schema ([the baselines](#the-json-baselines-of-the-typed-tasks)). Per document, Node 26 (M1 Max, shared with other benchmarks while it ran): the median of three full runs, the range of the three in parentheses where it matters. Ratios are haus's time over the JSON task's time on the same documents (below 1: haus is faster); MB/s is each format's own bytes.
@@ -504,6 +548,46 @@ The checks before timing, in Go: every haus document parses to a value that `For
 
 `typed` has no JSON counterpart, as in Rust: encoding/json into structs would need Go types for the seven schemas and each source's JSON mapping.
 
+### Speed (Python)
+
+`bench/speed/py/`, a uv project of its own (`haus-bench-speed`, CPython 3.14, outside `python/`, so the binding's checks and CI don't see it), with the binding `python/` as an editable path dependency and the baselines pinned exactly, each released at least two weeks before it was added (`exclude-newer` in `pyproject.toml`): **orjson** 3.13.0, **pydantic** 2.14.3 (pydantic-core 2.50.4), **msgspec** 0.22.0. The binding itself still has no dependencies. The same tasks as the other languages, on the same files, and the typed tasks against JSON with a schema as in TypeScript:
+
+| Task | JSON | haus |
+|---|---|---|
+| parse | `json.loads`, `orjson.loads` (into `dict`, `list`, …) | `haus.parse` (per document), `haus.parse_all` (the corpus): text → `haus.Value`, no schema |
+| typed | pydantic `TypeAdapter(T).validate_json(text, strict=True)`, msgspec `msgspec.json.Decoder(T).decode` (per document) | `SchemaType.parse` (per document; the corpus: `parse_all`, then `SchemaType.decode` each) |
+| write | `json.dumps` (minified, characters as they are), `orjson.dumps` of the parsed value | `haus.canonical` of the parsed value; the corpus as a stream (each followed by `,` and a line feed) |
+| write, typed | pydantic `dump_json(by_alias=True, exclude_unset=True)`, msgspec `Encoder.encode` of the values they decoded | `SchemaType.canonical` of the decoded value |
+
+**The Python binding has no compact or minimised writer yet** (its README: the formatter is on its way), so haus's write is the canonical form (spec §12): minimised, with keys sorted and numbers normalized. That is a little more work than minimised (sorting), and the report labels it `write canonical`.
+
+The JSON libraries read bytes (`json.loads` decodes them itself), haus reads `str` (its API: `haus.parse_bytes` decodes first); bytes are those of each format's text. Timing (`harness.py`): each task runs once untimed (its output's size goes into the checksum), garbage collected, then 0.5 s of warm-up and 10 samples in 3 s, each sample one batch of equal size (at least one call), the mean of its calls, as Go's and criterion's samples are; the mean is over all calls, p75 and p99 over the samples. GC stays on while timing.
+
+**The typed baselines** (`models.py`) are generated from `corpus/<source>.schema.json`, the JSON Schema TypeScript builds Zod and Ajv from, as Python source run as a module of its own (recursive types are plain forward references):
+
+| JSON Schema (jsonschema.ts's subset) | pydantic v2 | msgspec |
+|---|---|---|
+| `string`, `integer`, `number`, `boolean` | `str`, `int`, `float`, `bool`, validated with `strict=True` (no `"1"` for an `int`, no `1.0` either) | the same (msgspec is strict by default) |
+| `format: date-time`, `date` | `AwareDatetime`, `date` | `datetime` with `Meta(tz=True)`, `date` |
+| `enum` | `Literal[…]` | `Literal[…]` |
+| `T` or `null` | `T \| None` | `T \| None` |
+| `items`, `additionalProperties` | `list[T]`, `dict[str, T]` | the same |
+| a record (open) | a `BaseModel` (members it doesn't list ignored); `field?` defaults to `None` and is written with `exclude_unset` | a `Struct` (unknown members ignored); `field?` defaults to `UNSET`, never written |
+| a variant by a member | `Annotated[A \| B, Field(discriminator=member)]`, the member a `Literal` in each case | tagged Structs (`tag_field` the member) |
+| a variant by keys | `Annotated[Union[…], Discriminator(f)]`: `f` picks the one case whose keys are all there | msgspec has no such unions: a wrapper type that `dec_hook` builds with `msgspec.convert` of the one case whose keys are all there (its subtree is read as plain JSON first) |
+| `{}` | `Any` | `Any` |
+
+Before timing, the checks of the other languages (every haus document decodes, its pretty text reads as the same value, `all.haus` reads as the documents), and of the baselines: pydantic and msgspec accept every document, their typed writes read back as the same values, and both reject every mutated document (`mutate.py`, TypeScript's mutations: a typed value of another JSON type, a required member removed, an enum value the enum doesn't list, a date that isn't one); the counts are in `typedBaselines`. Where they differ from haus's typed parse (none of it occurs in the corpora):
+
+| | haus (`SchemaType.parse`) | pydantic (strict) | msgspec |
+|---|---|---|---|
+| a key twice in an object | rejected | the last one wins | the last one wins |
+| `Int` | any size; `1.0` and `1e3` rejected | the same | the same |
+| `Instant` (`date-time`) | `T` and `Z` upper case, seconds required, 1–9 fraction digits, no leap second (`:60`), not `-00:00` | also a space or `t` for `T`, `z`, `-00:00`, any number of fraction digits, no seconds | the same as pydantic, but seconds required |
+| a variant by a member with one case | the member is required | the member is required (a `Literal`) | the tag may be missing (a tagged Struct read alone) |
+| what comes out | dicts, tuples, `Tagged`, `Some`, the numbers' exact text for `Decimal` | model instances | Struct instances (the variants by keys inside a wrapper) |
+| limits | depth, sizes, number lengths, a step budget (haus's defaults) | none | none |
+
 ## Caveats
 
 - **Examples, not traffic.** GitHub's and Stripe's documents are hand-written examples, small (a few hundred bytes to a few KB) and heavy in URLs and ids, which neither format can shorten; Vega-Lite's and Kubernetes' are examples too. Only `gh-archive` is traffic, and one hour of it. Tabular data is still to come (plan §4.1).
@@ -512,5 +596,5 @@ The checks before timing, in Go: every haus document parses to a value that `For
 - **A hand-written schema** (BFCL) is one reasonable schema, not the only one; it types what is regular (messages, functions, parameter keywords) and leaves arguments and defaults `Any`.
 - **Minimised vs compact.** Compact haus keeps a space after `:` and `,` and is larger than minified JSON; the like-for-like comparison is minimised haus against minified JSON.
 - **Unlisted members** (388 in GitHub's corpus) are kept as imported JSON, so the haus text holds all of the document's data; a strict reader with a closed schema would reject these documents.
-- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't). One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
+- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't); in Python, pure-Python haus (no C extension, no dependencies) against C (json's scanner, orjson and msgspec, pydantic-core in Rust). One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
 - **Tokenizers are proxies** for what each provider bills, and tokenizers.js reproduces each tokenizer's regex closely but not perfectly in every edge case (see its README).

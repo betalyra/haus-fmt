@@ -77,7 +77,8 @@ def to_float64(literal: str) -> float | None:
     >>> to_float64("19.90"), to_float64("-1e-400"), to_float64("1e400")
     (19.9, -0.0, None)
     """
-    _decimal(literal)  # only literals: `float` would also read "inf", "1_0" and " 1"
+    if _LITERAL.fullmatch(literal) is None:  # only literals: `float` would also read "inf", "1_0" and " 1"
+        raise ValueError(f"not a normalized number literal: {literal!r}")
     x = float(literal)
     return x if math.isfinite(x) else None
 
@@ -182,6 +183,10 @@ def float_text(x: float, kind: FloatKind) -> str:
         return sign + "0"
     if kind == "Float64":
         # repr gives the fewest digits that read back, the closest, ties to even (David Gay's dtoa).
+        text = repr(abs(x))
+        if "e" not in text:
+            # From 1e-4 to 1e16 repr's layout is JavaScript's, but for a whole number's `.0`.
+            return sign + text.removesuffix(".0")
         return sign + _layout(*_repr_digits(abs(x)))
     parts = _parts(x, _BINARY32)
     return sign + ("0" if parts[0] == 0 else _layout(*_shortest(_BINARY32, parts)))

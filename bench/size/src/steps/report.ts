@@ -70,7 +70,7 @@ export const unions = (decisions: Readonly<Record<string, number>>): string => {
 const sameDocuments = (corpus: CorpusOut, ids: readonly string[]): boolean =>
   ids.length === corpus.documents.length && ids.every((id, i) => id === corpus.documents[i]!.id)
 
-const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go" }
+const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go", python: "Python" }
 
 /**
  * haus's time against a JSON task's time on the same documents, from haus's
@@ -100,13 +100,18 @@ const JSON_NOTES: Record<Lang, (n: number) => string> = {
   typescript: (n) => `JSON.parse → JSON.stringify changed the text of ${n} documents (numbers a JS number can't hold exactly).`,
   rust: (n) => `serde_json's \`Value\` wrote ${n} documents back as another document (numbers in another spelling; it also sorts members, which isn't counted).`,
   go: (n) => `encoding/json through \`any\` wrote ${n} documents back as another document (numbers as float64; it also sorts members, which isn't counted).`,
+  python: (n) => `json.loads → json.dumps wrote ${n} documents back as another document (numbers as float).`,
 }
 
 const SAMPLE_NOTES: Record<Lang, string> = {
   typescript: "",
   rust: "p75 and p99 are over criterion's samples (each the mean of a batch of calls). ",
   go: "p75 and p99 are over the samples (each the mean of one testing.Benchmark run); allocations are testing's (-benchmem). ",
+  python: "p75 and p99 are over the samples (each the mean of a batch of calls). The Python binding has no compact or minimised writer yet: haus's write is `haus.canonical` (minimised, keys sorted). ",
 }
+
+/** The schema-compiled JSON writers of the typed write, where a language has them. */
+const JSON_WRITERS: Partial<Record<Lang, string>> = { typescript: "fast-json-stringify", python: "pydantic or msgspec" }
 
 /** One language's speed table, with the machine and harness. Pure. */
 export const speedTable = (sp: SpeedOut): string[] => {
@@ -129,18 +134,22 @@ export const speedTable = (sp: SpeedOut): string[] => {
         versus(sp.rows, r),
       ]),
     ),
-    // Only TypeScript has JSON baselines that check or write with the schema.
+    // Only TypeScript and Python have JSON baselines that check or write with the schema.
     ...(sp.typedBaselines ? typedVersusTable(sp) : []),
   ]
 }
 
-/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`; `write typed` (TypeScript's h.stringify). */
+/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`; `write typed` (TypeScript's h.stringify, Python's SchemaType.canonical); `write canonical` (Python). */
 const hausTask = (r: SpeedRow): string =>
-  r.group !== "write" ? r.group : r.impl.includes("(typed)") ? "write typed" : `write ${r.impl.includes("compact") ? "compact" : "minimised"}`
+  r.group !== "write" ? r.group
+  : r.impl.includes("(typed)") ? "write typed"
+  : r.impl.includes("canonical") ? "write canonical"
+  : `write ${r.impl.includes("compact") ? "compact" : "minimised"}`
 
 /**
  * The typed tasks against the JSON baselines that check or use the same
- * schema (TypeScript: JSON.parse + Zod, Ajv, TypeBox; fast-json-stringify),
+ * schema (TypeScript: JSON.parse + Zod, Ajv, TypeBox; fast-json-stringify;
+ * Python: pydantic, msgspec),
  * and against the plain JSON task. "haus vs JSON" compares the times on the
  * same documents, so it is the comparison; MB/s is each format's own bytes. Pure.
  */
@@ -156,7 +165,7 @@ export const typedVersusTable = (sp: SpeedOut): string[] => {
   return [
     `haus typed against JSON with the same schema (${LANG_NAMES[sp.lang]}): the validators and the writer are built from the JSON Schema convert derives from the haus schema (\`corpus/<source>.schema.json\`).` +
       (b ? ` Before timing, every validator accepted every document and rejected ${Object.entries(b.rejected).map(([k, n]) => `${n} mutated (${k})`).join(", ")}; ` +
-        `the typed haus write writes other text than the document (members in the schema's order, members it doesn't list dropped) for ${b.typedWriteOtherText} documents, fast-json-stringify writes other text than JSON.stringify for ${b.jsonWriterOtherText}` +
+        `the typed haus write writes other text than the document (members in the schema's order, members it doesn't list dropped) for ${b.typedWriteOtherText} documents, ${JSON_WRITERS[sp.lang]} writes other text than ${sp.lang === "python" ? "the document" : "JSON.stringify"} for ${b.jsonWriterOtherText}` +
         (b.jsonWriterKeyedAsAny ? `; fast-json-stringify writes the unions told apart by keys as JSON.stringify does (it can't build them) for ${b.jsonWriterKeyedAsAny.join(", ")}` : "") +
         `. ${Object.entries(b.versions).map(([k, v]) => `${k} ${v}`).join(", ")}.` : ""),
     "",
@@ -166,7 +175,7 @@ export const typedVersusTable = (sp: SpeedOut): string[] => {
 
 /** haus in every language side by side: MB/s, and how fast against the language's JSON. Pure. */
 export const speedSummary = (speed: readonly SpeedOut[]): string[] => {
-  // (TypeScript's typed write has no counterpart in the other languages yet: it is in the typed table.)
+  // (The typed writes of TypeScript and Python have no counterpart in the other languages yet: they are in the typed table.)
   const keys = [...new Set(speed.flatMap((sp) => sp.rows.filter((r) => r.format === "haus" && hausTask(r) !== "write typed").map((r) => `${hausTask(r)}|${r.input}`)))]
   return [
     "haus in each language (MB/s of haus text; faster or slower than the language's JSON task of the same input):",
@@ -322,7 +331,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const speedSection = speed.length === 0 ? [] : [
     "## Speed",
     "",
-    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json), \"≈ equal\" within 5%.",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Python typed: pydantic, msgspec, SchemaType.canonical). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json, json.loads and json.dumps), \"≈ equal\" within 5%.",
     "",
     ...(speed.length > 1 ? speedSummary(speed) : []),
     ...speed.flatMap(speedTable),

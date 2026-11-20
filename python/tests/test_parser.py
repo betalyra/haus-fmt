@@ -134,7 +134,9 @@ def test_recursion_limit_is_a_syntax_error(monkeypatch: pytest.MonkeyPatch) -> N
     old = sys.getrecursionlimit()
     sys.setrecursionlimit(200)
     try:
-        e = error("[" * 300 + "]" * 300, Limits(max_depth=512))
+        # Valid text is read without recursion; an error is found by recursive descent.
+        assert haus.parse("[" * 300 + "]" * 300, limits=Limits(max_depth=512)) is not None
+        e = error("[" * 300 + "]" * 299, Limits(max_depth=512))
     finally:
         sys.setrecursionlimit(old)
     assert "recursion limit" in e.reason

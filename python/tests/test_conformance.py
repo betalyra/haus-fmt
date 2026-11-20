@@ -9,6 +9,7 @@ import pytest
 
 import haus
 from haus import Array, Bytes, Number, Record, String, Value, Variant
+from haus._parser import Parser
 
 SUITE = Path(__file__).resolve().parents[2] / "test-suite"
 
@@ -45,6 +46,13 @@ def test_valid(path: Path) -> None:
     expected = [json.loads(line) for line in lines]
     values = haus.parse_bytes(path.read_bytes())
     assert [{"_haus": 1, "_value": self_describing(v)} for v in values] == expected
+
+
+@pytest.mark.parametrize("path", cases("valid"), ids=lambda p: p.stem)
+def test_valid_is_read_in_one_pass(path: Path) -> None:
+    """Valid text is read by the parser's loop for valid text, without a second, recursive pass."""
+    text = path.read_bytes().decode("utf-8")
+    assert Parser(text)._read_valid() == Parser(text)._sequence()  # pyright: ignore[reportPrivateUsage]
 
 
 def expected_code(path: Path) -> str:

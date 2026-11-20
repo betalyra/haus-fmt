@@ -23,6 +23,7 @@ from ._error_codes import ErrorCode
 from ._errors import HausJsonError, PathKey
 from ._number import number_limit_issue
 from ._parser import Limits
+from ._scan import TAG
 from ._stream import Readable
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
@@ -402,7 +403,6 @@ def _string(s: str) -> str:
 # Loops rather than comprehensions: one Python frame per level of nesting.
 
 _TRUE, _FALSE, _NONE = Variant("True"), Variant("False"), Variant("None")
-_TAG = re.compile(r"[A-Z][A-Za-z0-9_]*")
 _HEX_BYTES = re.compile(r"(?:[0-9a-f]{2})*+")
 _NORMALIZED = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
 _VERSION: Final = JsonNumber("1")
@@ -595,7 +595,7 @@ class _SelfDescribing:
         return Record(out)
 
     def tag(self, tag: Json, path: tuple[PathKey, ...]) -> str:
-        if not isinstance(tag, str) or not _TAG.fullmatch(tag):
+        if not isinstance(tag, str) or not TAG.fullmatch(tag):
             self.fail(f"expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found {describe(tag)}", path, "invalid-tag")
         if len(tag) > self.limits.max_string_length:
             self.fail(f"tag longer than {self.limits.max_string_length} characters", path, "tag-too-long")

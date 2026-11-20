@@ -11,78 +11,120 @@ spelling of the document the value came from.
 from __future__ import annotations
 
 import hashlib
-import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from itertools import chain, repeat
+from typing import Final
 
+from ._scan import ESCAPED, key_text, quote
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
-_BARE_KEY = re.compile(r"[a-z_][A-Za-z0-9_]*")
-# What a string can't hold raw: quote, backslash, control and bidi characters,
-# and the line and paragraph separators U+2028 and U+2029.
-_ESCAPED = re.compile(r'["\\\x00-\x1f\x7f-\x9f\u2028-\u202e\u2066-\u2069]')
-_SHORT_ESCAPES = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_Children = Iterator[tuple[str, Value]]
+"""What is left to write of a container: each child with the text before it (`,`, `key:`, `,key:`)."""
+
+_FIRST_KEYS: dict[str, str] = {}
+"""`key:` of keys written before: field names repeat, from record to record and value to value."""
+_NEXT_KEYS: dict[str, str] = {}
+"""`,key:` the same way."""
+_KEYS_KEPT: Final = 4096
+"""At most this many keys in each of them (they start over when full), each at most `_KEY_KEPT` long."""
+_KEY_KEPT: Final = 64
 
 
-def _escape(m: re.Match[str]) -> str:
-    c = m[0]
-    return _SHORT_ESCAPES.get(c) or f"\\u{{{ord(c):X}}}"
+def _key_prefix(key: str, keys: dict[str, str], comma: str) -> str:
+    text = keys.get(key)
+    if text is None:
+        text = f"{comma}{key_text(key)}:"
+        if len(key) <= _KEY_KEPT:
+            if len(keys) >= _KEYS_KEPT:
+                keys.clear()
+            keys[key] = text
+    return text
 
 
-def quote(s: str) -> str:
-    """A `"…"` string with the minimal escapes; the rest as `\\u{…}` in uppercase hex."""
-    return '"' + _ESCAPED.sub(_escape, s) + '"'
+def _fields(fields: Mapping[str, Value]) -> _Children:
+    # `str` order is code point order, which is the order of the UTF-8 bytes.
+    keys = sorted(fields)
+    texts = [_NEXT_KEYS.get(k) or _key_prefix(k, _NEXT_KEYS, ",") for k in keys]
+    if keys:
+        texts[0] = _FIRST_KEYS.get(keys[0]) or _key_prefix(keys[0], _FIRST_KEYS, "")
+    return zip(texts, map(fields.__getitem__, keys), strict=True)
+
+
+def _items(values: tuple[Value, ...]) -> _Children:
+    return zip(chain(("",), repeat(",")), values, strict=False)
+
+
+def _numbers(values: tuple[Value, ...]) -> str | None:
+    """An array of numbers (a vector, coordinates) written at once; None for any other."""
+    if not values or type(values[0]) is not Number:
+        return None
+    texts = [x.text for x in values if type(x) is Number]
+    return "[" + ",".join(texts) + "]" if len(texts) == len(values) else None
 
 
 def _write(root: Value) -> str:
-    """Iterative, with a stack of what is left to write (values, and text between them): any depth works."""
+    """Iterative, with a stack of the open containers: any depth works.
+
+    Scalars are written where they are met; a container is opened, and its children are written
+    before the rest of its parent's.
+    """
     out: list[str] = []
-    work: list[Value | str] = [root]
-
-    def items(values: tuple[Value, ...], close: str) -> None:
-        work.append(close)
-        for i in range(len(values) - 1, -1, -1):
-            work.append(values[i])
-            if i:
-                work.append(",")
-
-    def record(fields: Mapping[str, Value]) -> None:
-        # `str` order is code point order, which is the order of the UTF-8 bytes.
-        out.append("{")
-        work.append("}")
-        keys = sorted(fields)
-        for i in range(len(keys) - 1, -1, -1):
-            work.append(fields[keys[i]])
-            work.append(("," if i else "") + _key(keys[i]) + ":")
-
-    while work:
-        match work.pop():
-            case str() as text:
-                out.append(text)
-            case Number(text):
-                # Always the normalized decimal literal, however long (spec §12).
-                out.append(text)
-            case String(s):
-                out.append(quote(s))
-            case Bytes(data):
-                out.append(f'x"{data.hex()}"')
-            case Array(values):
-                out.append("[")
-                items(values, "]")
-            case Record(fields):
-                record(fields)
-            case Variant(tag, ()):
-                out.append(tag)
-            case Variant(tag, (Record(fields),)):
-                out.append(tag)
-                record(fields)
-            case Variant(tag, args):
-                out.append(f"{tag}(")
-                items(args, ")")
-    return "".join(out)
-
-
-def _key(k: str) -> str:
-    return k if _BARE_KEY.fullmatch(k) else quote(k)
+    write = out.append
+    escaped = ESCAPED.search
+    stack: list[tuple[_Children, str]] = []
+    children: _Children = iter((("", root),))
+    closer = ""
+    while True:
+        for prefix, v in children:
+            write(prefix)
+            # The most common first, by exact type (subclasses below).
+            if type(v) is String:
+                s = v.value
+                write(f'"{s}"' if escaped(s) is None else quote(s))
+                continue
+            if type(v) is Number:
+                write(v.text)  # always the normalized decimal literal, however long (spec §12)
+                continue
+            if type(v) is Record:
+                write("{")
+                inner, inner_closer = _fields(v.fields), "}"
+            elif type(v) is Array and (numbers := _numbers(v.items)) is not None:
+                write(numbers)
+                continue
+            else:
+                match v:
+                    case String(s):
+                        write(quote(s))
+                        continue
+                    case Number(text):
+                        write(text)
+                        continue
+                    case Bytes(data):
+                        write(f'x"{data.hex()}"')
+                        continue
+                    case Array(values):
+                        write("[")
+                        inner, inner_closer = _items(values), "]"
+                    case Record(fields):
+                        write("{")
+                        inner, inner_closer = _fields(fields), "}"
+                    case Variant(tag, ()):
+                        write(tag)
+                        continue
+                    case Variant(tag, (Record(fields),)):
+                        write(tag + "{")
+                        inner, inner_closer = _fields(fields), "}"
+                    case Variant(tag, args):
+                        write(tag + "(")
+                        inner, inner_closer = _items(args), ")"
+            stack.append((children, closer))
+            children, closer = inner, inner_closer
+            break
+        else:
+            write(closer)
+            if not stack:
+                return "".join(out)
+            children, closer = stack.pop()
 
 
 def canonical(value: Value) -> str:
