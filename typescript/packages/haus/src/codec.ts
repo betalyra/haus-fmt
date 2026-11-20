@@ -4,8 +4,9 @@
  * in between, and a writer that encodes straight into compact or minimised
  * text. Each is built once per schema object (cached in a WeakMap) out of
  * closures, without `eval`, and used by `h.parse`, `h.stringify`,
- * `h.formatAll` and `h.encodeStream` (`codec: "closures"`). codegen.ts
- * writes the same codecs out as source, and chooses between them.
+ * `h.formatAll`, `h.encodeStream` and `h.decodeStream` by default. codegen.ts
+ * writes the same codecs out as source (for schemas marked by `h.optimize`),
+ * and chooses between them.
  *
  * The generic path (parse to a `Value`, then `schema.decode`; `schema.encode`,
  * then the formatter) stays the reference. The compiled codecs give the same
@@ -672,9 +673,18 @@ const writeFields = (f: FieldWriters, w: Out, a: unknown, cx: Context, depth: nu
   const { keys, writers, optional } = f
   const prefix = w.tight ? f.tight : f.spaced
   let first = true
+  // Its own enumerable keys, in order (a variant's record case has its `_tag`
+  // first, not a field): a field that is the next of them is its own, the
+  // others are checked. An object built in the schema's order has them all.
+  const own = Object.keys(obj)
+  let j = enumerable && own[0] === "_tag" ? 1 : 0
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i]!
-    const value = (enumerable ? isEnumerable.call(obj, key) : Object.hasOwn(obj, key)) ? obj[key] : undefined
+    let value: unknown
+    if (own[j] === key) {
+      j++
+      value = obj[key]
+    } else value = (enumerable ? isEnumerable.call(obj, key) : Object.hasOwn(obj, key)) ? obj[key] : undefined
     if (optional[i] && value === undefined) continue
     if (first) {
       w.s += w.open
@@ -1058,7 +1068,8 @@ export const encodeCompiled = (write: Write, value: unknown, limits: Limits, sty
     const cx = encodeContext(limits)
     const w = new Out(style)
     write(w, value, cx, 0)
-    return w.s
+    // Generated code counts a leaf's step without checking it (codegen.ts): the budget, checked once more.
+    return cx.steps > cx.maxSteps ? undefined : w.s
   } catch {
     return undefined
   }

@@ -5,7 +5,9 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
 import { describe, expect, it } from "vitest"
-import { backend, moduleFor, packagesOf, typesFor } from "../src/generate.js"
+import { compileSchemaFile } from "@haus-fmt/haus"
+import { schemaOptions } from "@haus-fmt/haus/node"
+import { backend, moduleFor, optimizeOf, packagesOf, typesFor } from "../src/generate.js"
 import haus from "../src/vite.js"
 
 const examples = join(import.meta.dirname, "../../../../examples")
@@ -117,81 +119,140 @@ describe("Secret, Any and attributes", async () => {
   }
 })
 
-describe("compiled codecs built ahead (plain target)", async () => {
-  const plain = await backend("plain")
+describe("generated code built ahead (plain target, optimize)", async () => {
   const suite = join(import.meta.dirname, "../../../../test-suite/schema")
-  // The haus modules the generated module's runtime loads, so that the check runs against the same ones.
+  // The haus modules the generated module's runtime loads, so that the checks run against the same ones.
   // Native Node runs these modules (not Vitest), so the runtime is the built one.
   const builtRuntime = (path: string) => pathToFileURL(join(import.meta.dirname, `../dist/${path}.js`)).href
   const hausOf = (entry: string) => pathToFileURL(realpathSync(createRequire(join(import.meta.dirname, "../dist/runtime/plain.js")).resolve(entry))).href
-  /**
-   * Run in a Node process of its own (one instance of each module): every
-   * case of the suite decoded, and encoded again, by default (the codecs built ahead)
-   * and on the generic path. Prints what differs, where each schema's
-   * generated codecs came from, and how many cases were compared.
-   */
-  const check = (cases: string) => `
+  const imports = `
 import { isDeepStrictEqual } from "node:util"
 import * as m from "./module.mjs"
 import * as h from ${JSON.stringify(hausOf("@haus-fmt/haus/schema"))}
 import { parseAll, stringify } from ${JSON.stringify(hausOf("@haus-fmt/haus"))}
-import { generatedOrigin } from ${JSON.stringify(hausOf("@haus-fmt/haus/codegen"))}
+import { generatedOrigin, readerFor, withCodec } from ${JSON.stringify(hausOf("@haus-fmt/haus/codegen"))}
 /** Own keys in order, all the way down: isDeepStrictEqual doesn't compare their order. */
 const keys = (v) => v === null || typeof v !== "object" ? "" : v instanceof Map ? [...v].map(([k, x]) => k + keys(x)).join() : Reflect.ownKeys(v).map((k) => String(k) + "(" + keys(v[k]) + ")").join()
 const outcome = (f) => { try { return { ok: true, value: f() } } catch (e) { return { ok: false, error: { name: e.name, message: e.message, code: e.code, path: e.path } } } }
 const same = (a, b) => a.ok === b.ok && (a.ok ? isDeepStrictEqual(a.value, b.value) && keys(a.value) === keys(b.value) : isDeepStrictEqual(a.error, b.error))
+const origin = (s) => generatedOrigin(s) ?? "none"
+`
+  /** Run `script` in a Node process of its own (one instance of each module) next to the module `code`; what it prints, as JSON. */
+  const run = (code: string, script: string): unknown => {
+    const dir = mkdtempSync(join(tmpdir(), "haus-codecs-"))
+    writeFileSync(join(dir, "module.mjs"), code)
+    writeFileSync(join(dir, "check.mjs"), imports + script)
+    return JSON.parse(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8" }))
+  }
+  /**
+   * Every case of the suite decoded, and encoded again, as the module loads
+   * them (every type listed in `optimize`, so marked: the code built ahead),
+   * against the generic path. Prints what differs, where the generated code
+   * came from, and how many cases were compared.
+   */
+  const check = (cases: string) => `
 const differences = []
 let compared = 0
 for (const c of parseAll(${JSON.stringify(cases)})) {
-  const f = c.args[0].fields
-  const type = f.get("type").value
-  const schema = m[type]
-  const text = stringify(f.get("input"), { style: "minimised" })
-  const generated = outcome(() => h.parse(schema, text))
-  const generic = outcome(() => h.parse(schema, text, { codec: "generic" }))
-  compared++
-  if (!same(generated, generic)) differences.push("decode " + type + " " + text)
-  if (generic.ok) {
-    const a = outcome(() => h.stringify(schema, generic.value, { style: "minimised" }))
-    const b = outcome(() => h.stringify(schema, generic.value, { style: "minimised", codec: "generic" }))
-    if (!same(a, b)) differences.push("encode " + type + " " + text)
-  }
+    const f = c.args[0].fields
+    const type = f.get("type").value
+    const schema = m[type]
+    const text = stringify(f.get("input"), { style: "minimised" })
+    const generic = outcome(() => h.parse(schema, text, withCodec({}, "generic")))
+    compared++
+    if (!same(outcome(() => h.parse(schema, text)), generic)) differences.push("decode " + type + " " + text)
+    if (generic.ok) {
+      const a = outcome(() => h.stringify(schema, generic.value, { style: "minimised" }))
+      const b = outcome(() => h.stringify(schema, generic.value, withCodec({ style: "minimised" }, "generic")))
+      if (!same(a, b)) differences.push("encode " + type + " " + text)
+    }
 }
-const origins = [...new Set(Object.values(m).map((s) => generatedOrigin(s) ?? "none"))]
+const origins = [...new Set(Object.values(m).map(origin))]
 console.log(JSON.stringify({ differences, origins, compared }))
 `
+  /** A schema file in a fresh directory (its real path: the files a module was built from are known by theirs). */
+  const schemaFile = (text: string) => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "haus-optimize-")))
+    mkdirSync(join(dir, "src"))
+    writeFileSync(join(dir, "src/github.schema.haus"), text)
+    return { root: dir, path: join(dir, "src/github.schema.haus") }
+  }
+  const GITHUB = "type Issue = { title: String, user: User, labels: Array String }\ntype User = { login: String }\ntype Other = { unrelatedField: Int }"
+
   const files = readdirSync(suite).filter((f) => f.endsWith(".schema.haus"))
-  it.each(files)("%s: generated when the module is built, used without eval, the same as the generic path", (file) => {
+  it.each(files)("%s: built for every type, used without eval or h.optimize, the same as the generic path", async (file) => {
     const path = join(suite, file)
-    const { code } = moduleFor(readFileSync(path, "utf8"), path, plain, builtRuntime)
+    const types = Object.keys(compileSchemaFile(readFileSync(path, "utf8"), schemaOptions(path)).schemas)
+    const b = await backend("plain", {}, optimizeOf({ optimize: { [file]: types } }, suite))
+    const { code } = moduleFor(readFileSync(path, "utf8"), path, b, builtRuntime)
     expect(code).toContain("prebuilt(schema, ")
-    const dir = mkdtempSync(join(tmpdir(), "haus-codecs-"))
-    writeFileSync(join(dir, "module.mjs"), code)
-    writeFileSync(join(dir, "check.mjs"), check(readFileSync(path.replace(".schema.haus", ".cases.haus"), "utf8")))
-    const result = JSON.parse(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8" })) as { differences: string[]; origins: string[]; compared: number }
+    const result = run(code, check(readFileSync(path.replace(".schema.haus", ".cases.haus"), "utf8"))) as { differences: string[]; origins: string[]; compared: number }
     expect(result.differences).toEqual([])
     expect(result.origins).toEqual(["built ahead"])
     expect(result.compared).toBeGreaterThan(0)
   })
 
-  it("code built for other schemas is not used: the hash differs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "haus-codecs-"))
-    writeFileSync(join(dir, "x.schema.haus"), "type Root = { n: Int }")
-    const { code } = moduleFor("type Root = { n: Int }", join(dir, "x.schema.haus"), plain, builtRuntime)
+  it("only for the types listed (used without h.optimize) and the types they reach (with it); the others get new Function after h.optimize, the closures without", async () => {
+    const { root, path } = schemaFile(GITHUB)
+    const b = await backend("plain", {}, optimizeOf({ optimize: { "src/github.schema.haus": ["Issue"] } }, root))
+    const { code } = moduleFor(GITHUB, path, b, builtRuntime)
+    const built = code.slice(code.indexOf("prebuilt(schema, "))
+    expect(built).toMatch(/^prebuilt\(schema, \["Issue"\], /)
+    expect(built).toContain("login") // User, reached by Issue
+    expect(built).not.toContain("unrelatedField")
+    expect(run(code, `
+const issue = '{ title: "t", user: { login: "ada" }, labels: ["bug"] }'
+const value = h.parse(m.Issue, issue, withCodec({}, "generic"))
+const optimized = h.parse(m.Issue, issue)
+h.parse(m.User, '{ login: "x" }')
+h.parse(m.Other, "{ unrelatedField: 1 }")
+// User's code is there (reached by Issue) but not used until h.optimize marks it.
+const before = [origin(m.Issue), readerFor(m.User) === readerFor(m.User, "closures") ? "closures" : "generated", origin(m.Other)]
+h.optimize(m.User)
+h.optimize(m.Other)
+h.parse(m.User, '{ login: "x" }')
+h.parse(m.Other, "{ unrelatedField: 1 }")
+console.log(JSON.stringify({ before, after: [origin(m.Issue), origin(m.User), origin(m.Other)], same: same({ ok: true, value }, { ok: true, value: optimized }), text: h.stringify(m.Issue, optimized, { style: "compact" }) }))
+`)).toEqual({ before: ["built ahead", "closures", "none"], after: ["built ahead", "built ahead", "new Function"], same: true, text: '{ title: "t", user: { login: "ada" }, labels: ["bug"] }' })
+  })
+
+  it("without the option, a module has no generated code", async () => {
+    const { path } = schemaFile(GITHUB)
+    const { code } = moduleFor(GITHUB, path, await backend("plain"), builtRuntime)
+    expect(code).not.toContain("prebuilt")
+    expect(code).not.toContain("function (rt, env)")
+    expect(run(code, `h.optimize(m.Issue); h.parse(m.Issue, '{ title: "t", user: { login: "a" }, labels: [] }'); console.log(JSON.stringify(origin(m.Issue)))`)).toBe("new Function")
+  })
+
+  it("code built for other schemas is not used: the source differs", async () => {
+    const { root, path } = schemaFile("type Root = { n: Int }")
+    const b = await backend("plain", {}, optimizeOf({ optimize: { "src/github.schema.haus": ["Root"] } }, root))
+    const { code } = moduleFor("type Root = { n: Int }", path, b, builtRuntime)
     // The runtime builds `{ n: String }` from the module's text; the code was generated for `{ n: Int }`.
     const changed = code.replace(/compiled\("type Root = \{ n: Int \}"/, 'compiled("type Root = { n: String }"')
     expect(changed).not.toBe(code)
-    writeFileSync(join(dir, "module.mjs"), changed)
-    writeFileSync(join(dir, "check.mjs"), `
-import { Root } from "./module.mjs"
-import * as h from ${JSON.stringify(hausOf("@haus-fmt/haus/schema"))}
-import { generatedOrigin } from ${JSON.stringify(hausOf("@haus-fmt/haus/codegen"))}
-const auto = h.parse(Root, '{ n: "x" }')
-const afterAuto = generatedOrigin(Root) ?? "none"
-console.log(JSON.stringify([auto, afterAuto, h.parse(Root, '{ n: "x" }', { codec: "generated" }), generatedOrigin(Root) ?? "none"]))
-`)
-    // By default the closures, with no code generated at run time; on request, `new Function`.
-    expect(JSON.parse(execFileSync(process.execPath, [join(dir, "check.mjs")], { encoding: "utf8" }))).toEqual([{ n: "x" }, "none", { n: "x" }, "new Function"])
+    // Root is marked as the module loads; the code built ahead is not it, so `new Function`.
+    expect(run(changed, `console.log(JSON.stringify([h.parse(m.Root, '{ n: "x" }'), origin(m.Root)]))`)).toEqual([{ n: "x" }, "new Function"])
+  })
+
+  it("reports schema files and types that don't exist, a wrong shape, and the Effect target", async () => {
+    const { root } = schemaFile(GITHUB + "\ntype Box a = { item: a }")
+    const at = (optimize: unknown) => optimizeOf({ optimize }, root)
+    await expect(backend("plain", {}, at({ "src/nope.schema.haus": ["Issue"] }))).rejects.toThrow(/optimize: the schema file src\/nope\.schema\.haus doesn't exist/)
+    await expect(backend("plain", {}, at({ "src/github.schema.haus": ["Issues"] }))).rejects.toThrow(/optimize: src\/github\.schema\.haus has no type Issues/)
+    await expect(backend("plain", {}, at({ "src/github.schema.haus": ["Box"] }))).rejects.toThrow(/Box has type parameters/)
+    await expect(backend("effect", {}, at({ "src/github.schema.haus": ["Issue"] }))).rejects.toThrow(/optimize is for the plain target/)
+    expect(() => at(["Issue"])).toThrow(/optimize must map schema files to lists of type names/)
+    expect(() => haus({ optimize: { "src/github.schema.haus": "Issue" } as never })).toThrow(/optimize must map/)
+  })
+
+  it("vite: relative to Vite's root", async () => {
+    const { root, path } = schemaFile(GITHUB)
+    const plugin = haus({ optimize: { "src/github.schema.haus": ["Issue"] } })
+    ;(plugin.configResolved as (config: { root: string }) => void)({ root })
+    const loadHook = plugin.load as (this: unknown, id: string) => Promise<{ code: string } | null>
+    const out = await loadHook.call({ addWatchFile: () => undefined }, path)
+    expect(out?.code).toContain('prebuilt(schema, ["Issue"], ')
   })
 })
 

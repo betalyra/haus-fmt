@@ -24,12 +24,6 @@ Two parts make an import work, and both come from one generator
 | `"plain"` (default) | haus schemas (Standard Schemas) | decoded with them | plain JS values | nothing |
 | `"effect"` | Effect schemas | decoded with Effect | plain JS values | `effect`, `@haus-fmt/effect` |
 
-With the plain target, a schema file's module also carries the compiled
-codecs of its schemas, generated when the module is built: `h.parse` and
-`h.stringify` use them for the schemas used often, without `eval` (under a
-strict content security policy too), once the same code generated again from
-the schemas at runtime has the same hash.
-
 Plain, without a schema: strings, `bigint` for whole numbers, `string` for decimals
 (exact), `boolean`, `Uint8Array`, string literal unions for tags without payload,
 `{ _tag, … }` for other variants, `None` and `Some(x)` included (`{ _tag: "None" }`,
@@ -115,6 +109,48 @@ await register({ packages: ["vendor/money"], folders: ["schemas"] })
 
 A package directory or folder that doesn't exist is an error when the loader
 starts, not at some import.
+
+## Optimizing hot schemas
+
+A schema read or written very often can use generated code instead of the
+default closures (12–40% faster for one type used over and over). The
+`optimize` option (plain target) builds that code ahead, into the schema
+file's module, and switches the listed types to it when the module loads: no
+`eval` (under a strict content security policy too), and no change to your code:
+
+```ts
+// vite.config.ts
+export default { plugins: [haus({ optimize: { "src/github.schema.haus": ["Issue"] } })] }
+
+// register.ts, then: node --import ./register.ts main.ts
+import { register } from "@haus-fmt/import/node"
+await register({ optimize: { "src/github.schema.haus": ["Issue"] } })
+```
+
+```ts
+import { Issue } from "./github.schema.haus"
+h.parse(Issue, text)   // the code built ahead for Issue
+```
+
+| `optimize` option | `h.optimize(Issue)` in the code | what runs for `Issue` |
+|---|---|---|
+| no | no | closures (the default); no generated code in the bundle |
+| no | yes | code made at first use with `new Function` (needs `eval`) |
+| yes, lists `Issue` | not needed | code built ahead, no `eval` |
+
+Only the listed types, and the types they reach (`User` inside `Issue`), get
+code in the module; a module without the option has none, so bundles stay
+small. A reached type that isn't listed keeps the closures unless you call
+`h.optimize(User)`, which then uses the code built ahead too. Code for a whole large schema file can run to megabytes, so list only
+the types you measured as hot. Paths are relative to the project root (Vite's
+`root`, the working directory for the Node loader); a schema file or type that
+doesn't exist is an error when the loader starts. The content mapper ignores
+the option: types are the same either way.
+
+At first use, the code is generated again from the schemas and must be the
+same as the code built ahead (the module carries it as text too); otherwise,
+after a change the module didn't see, `new Function` or the closures take
+over. Values, texts and errors are the same on every path.
 
 ## Without imports
 

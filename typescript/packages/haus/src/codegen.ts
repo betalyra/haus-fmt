@@ -2,38 +2,49 @@
  * Generated codecs: the compiled codecs of codec.ts written out as JavaScript
  * source, one function per record, array, map, Maybe, variant, Secret,
  * refinement and Recursive, calling each other directly. Leaves (strings,
- * numbers, tags, `Any`, schemas written by hand) are codec.ts's closures.
- * Over the closures alone, this gives every record its own code: an object
- * literal of a fixed shape, keys matched in place in the schema's order (a
- * `switch` on the next expected field), fields written as constant text, and
- * call sites that each see one schema.
+ * numbers, tags, `Any`, schemas written by hand) are read by codec.ts's
+ * closures; the simple ones (strings, integers, booleans, enums, and Maybes
+ * of them) are written in place. (Reading them in place measured no faster:
+ * V8 inlines the closures.) Over the closures alone, this gives every record
+ * its own code: an object literal of a fixed shape, keys matched in place in
+ * the schema's order (a `switch` on the next expected field), each field
+ * written after its separator and key as one constant text, and call sites
+ * that each see one schema.
  *
- * The source is run in one of two ways:
- * - built ahead: @haus-fmt/import generates it for a schema file's schemas
- *   together, puts it in the module it builds as a function, and registers it
- *   (`registerCodecs`) with the hash of the source. No `eval`. At first use
- *   the source is generated again from the schemas, which also gives the
- *   runtime objects it refers to (the `env`); the built-ahead function is
- *   used only if the hashes agree.
+ * Generated code is used only for schemas marked by `h.optimize` (or by
+ * @haus-fmt/import, for the types its `optimize` option lists): it is
+ * faster for a schema read or written many times (+12-40%), while a workload
+ * of hundreds of types, each used a few times, runs as fast or faster on the
+ * closures, which V8 optimizes once for all types; and code built ahead for a
+ * whole schema file can be large. Every other schema takes the closures.
+ *
+ * For a marked schema, the source is run in one of two ways:
+ * - built ahead: @haus-fmt/import generates it for the types its `optimize`
+ *   option lists (and the types they reach), puts it in the module it builds
+ *   as a function, next to the source as a string, registers both
+ *   (`registerCodecs`) and marks the listed types. No `eval`. At first use the source is generated
+ *   again from the schemas, which also gives the runtime objects it refers
+ *   to (the `env`); the built-ahead function is used only if that source is
+ *   the string it came with.
  * - at runtime with `new Function`, when the platform allows it (tried once),
  *   schema by schema as each is first used, calling the functions generated
  *   before for the types they share.
+ * Else (no code built ahead, no `eval`) it takes the closures.
  *
  * The contract is codec.ts's, unchanged: the same values, texts and errors as
  * the generic path, step counts as `decode` and `encode` count them, and on
  * any error the generic path runs again and reports it. A schema the closures
  * can't compile isn't generated either.
  *
- * `readerFor` and `writerFor` pick the path (`Options.codec`): by default the
- * code built ahead where there is some, else the closures.
+ * `readerFor` and `writerFor` pick the path; tests and the fuzzer force one
+ * with `withCodec`.
  */
-import { quote, toHex } from "./format.js"
+import { quote } from "./format.js"
 import { argumentForm, checkChain, compiledReader, compiledWriter, fail, HOLE, isEnumerable, isMaybe, Out, ReadCompiler, unknownOf, WriteCompiler, type Read, type Write } from "./codec.js"
 import { readValue, readVariantAfter } from "./parser.js"
 import { ARGS, ARRAY, CLOSE_ARGS, CLOSE_ARRAY, NO_PAYLOAD, PAYLOAD_RECORD, RECORD, VARIANT } from "./reader.js"
 import { At, checkedValue, recursionOf, shapeOf, type AnySchema, type CaseShape, type Shape } from "./schema.js"
 import { Secret } from "./secret.js"
-import { Sha256 } from "./sha256.js"
 
 /** The helpers generated code calls, as `rt`. Built on first use: schema.ts may still be loading when this module is. */
 const runtime = () => ({
@@ -73,11 +84,10 @@ export type Factory = (rt: unknown, env: readonly unknown[]) => { readonly roots
 /** What a generated function is: a reader, a record's fields reader, a writer or a record's fields writer, of a schema. */
 type Kind = "read" | "fields" | "write" | "fieldWrite"
 
-/** Generated source for some schemas, the runtime objects it refers to (`env`), its hash, and the functions it defines. */
+/** Generated source for some schemas, the runtime objects it refers to (`env`), and the functions it defines. */
 export interface Generated {
   readonly source: string
   readonly env: readonly unknown[]
-  readonly hash: string
   readonly made: readonly (readonly [Kind, AnySchema])[]
 }
 
@@ -95,7 +105,7 @@ const STEP = "if (++cx.steps > cx.maxSteps) fail()"
 /** Shapes read and written by codec.ts's closures (no structure to generate). */
 const LEAVES: ReadonlySet<Shape["kind"]> = new Set(["string", "int", "smallInt", "bigInt", "float", "decimal", "bool", "bytes", "tagged", "enum", "anyTag", "any"])
 
-/** A leaf as the source names it, so that the hash covers what each runtime object is. */
+/** A leaf as the source names it, so that comparing sources (built-ahead code) covers what each runtime object is. */
 const leafNote = (s: AnySchema, shape: Shape | undefined): string => {
   if (shape === undefined) return `written by hand: ${s.expected}`
   switch (shape.kind) {
@@ -448,15 +458,15 @@ ${reads}
   private writeBody(s: AnySchema, shape: Shape): string {
     switch (shape.kind) {
       case "array": {
-        const item = this.write(shape.item)
+        const item = this.writeAfter(shape.item, "v", `(i > 0 ? w.comma : "")`)
         return `  ${STEP}
   if (!Array.isArray(a) || depth >= cx.maxDepth) fail()
+  let v, x, t
   w.s += "["
   for (let i = 0; i < a.length; i++) {
-    if (i > 0) w.s += w.comma
-    const x = a[i]
-    if (x === undefined && !(i in a)) fail()
-    ${item}(w, x, cx, depth + 1)
+    v = a[i]
+    if (v === undefined && !(i in a)) fail()
+    ${item}
   }
   w.s += "]"`
       }
@@ -476,6 +486,16 @@ ${reads}
   w.s += w.close`
       }
       case "maybe": {
+        const leaf = argumentForm(shape.inner) === "other" ? this.leafWrite(shape.inner, "x") : undefined
+        if (leaf !== undefined) {
+          return `  ${STEP}
+  if (!isMaybe(a)) fail()
+  if (a._tag === "None") { w.s += "None"; return }
+  if (depth >= cx.maxDepth) fail()
+  let x = a.value, t
+  ${leaf.check}
+  w.s += "Some(" + ${leaf.text} + ")"`
+        }
         const inner = this.argument(shape.inner, "a.value", "  ")
         return `  ${STEP}
   if (!isMaybe(a)) fail()
@@ -544,38 +564,91 @@ ${indent}w.s += part.s.startsWith("{") ? w.tag + part.s : "(" + part.s + ")"`
     return name
   }
 
-  /** As codec.ts's `writeFields`, each field with its key as constant text. */
+  /**
+   * A leaf written in place: statements that check `v` (and set `t` where
+   * needed), and an expression of its text, as its closure writes it
+   * (codec.ts). Its step is counted without the check (`encodeCompiled`
+   * checks the budget at the end: a leaf's work is bounded). Undefined for
+   * anything else.
+   */
+  private leafWrite(s: AnySchema, v: string): { readonly check: string; readonly text: string } | undefined {
+    const shape = shapeOf(s)
+    const integer = `t = ${v}.toString(); if (t.length > cx.values.maxNumberLength) fail()`
+    switch (shape?.kind) {
+      case "string":
+        return { check: `if (typeof ${v} !== "string") fail(); cx.steps++`, text: `quote(${v})` }
+      case "bool":
+        return { check: `if (typeof ${v} !== "boolean") fail(); cx.steps++`, text: `(${v} ? "True" : "False")` }
+      case "int":
+        return { check: `if (typeof ${v} !== "bigint") fail(); cx.steps++; ${integer}`, text: "t" }
+      case "smallInt":
+        return { check: `if (typeof ${v} !== "number" || !Number.isInteger(${v}) || !(${v} >= ${numberLiteral(shape.min)} && ${v} <= ${numberLiteral(shape.max)})) fail(); cx.steps++; ${integer}`, text: "t" }
+      case "bigInt":
+        return { check: `if (typeof ${v} !== "bigint" || !(${v} >= ${shape.min}n && ${v} <= ${shape.max}n)) fail(); cx.steps++; ${integer}`, text: "t" }
+      case "enum": {
+        const tags = this.ref(shape.tags, leafNote(s, shape))
+        return { check: `if (typeof ${v} !== "string" || !${tags}.has(${v})) fail(); cx.steps++`, text: v }
+      }
+      default:
+        return undefined
+    }
+  }
+
+  /**
+   * Statements that write `s`'s value `v` (one level deeper than `depth`)
+   * after the constant text `before` (an expression): a leaf, or a Maybe of
+   * one, in place, as one piece of text; anything else by a call.
+   */
+  private writeAfter(s: AnySchema, v: string, before: string): string {
+    const leaf = this.leafWrite(s, v)
+    if (leaf !== undefined) return `${leaf.check}; w.s += ${before} + ${leaf.text}`
+    const shape = shapeOf(s)
+    if (shape?.kind === "maybe") {
+      const inner = this.leafWrite(shape.inner, "x")
+      if (inner !== undefined && argumentForm(shape.inner) === "other") {
+        // As the Maybe's writer (one level deeper), its argument one more.
+        return `if (!isMaybe(${v})) fail(); cx.steps++; if (${v}._tag === "None") w.s += ${before} + "None"; else { if (depth + 1 >= cx.maxDepth) fail(); x = ${v}.value; ${inner.check}; w.s += ${before} + "Some(" + ${inner.text} + ")" }`
+      }
+    }
+    return `w.s += ${before}; ${this.write(s)}(w, ${v}, cx, depth + 1)`
+  }
+
+  /**
+   * As codec.ts's `writeFields`: each field after its separator and key as
+   * one constant text in each layout, leaves (and Maybes of them) with them.
+   */
   private fieldWriterBody(shape: Extract<Shape, { kind: "record" }>): string {
     const lines = [
       "  if (typeof a !== \"object\" || a === null) fail()",
       "  if (depth >= cx.maxDepth) fail()",
       "  const tight = w.tight",
-      "  let v",
+      "  let v, x, t",
     ]
+    // A variant's record case has its `_tag` first, which is not a field.
+    if (shape.entries.length > 0) lines.push("  const ks = Object.keys(a)", '  let j = enumerable && ks[0] === "_tag" ? 1 : 0')
     // Whether something was written before a field: no, yes, or only known when writing.
     let written: "no" | "yes" | "maybe" = "no"
     const usesFirst = shape.entries.some(([, schema]) => schema.optional === true)
     if (usesFirst) lines.push("  let first = true")
+    /** The separator and key in both layouts, as an expression. */
+    const prefix = (separator: "{" | ",", text: string) =>
+      `(tight ? ${JSON.stringify(`${separator}${text}:`)} : ${JSON.stringify(separator === "{" ? `{ ${text}: ` : `, ${text}: `)})`
     for (const [key, schema] of shape.entries) {
-      const writer = this.write(schema)
       const k = JSON.stringify(key)
       const text = keyText(key)
-      const separator = written === "no" ? "w.open" : written === "yes" ? "w.comma" : "(first ? w.open : w.comma)"
-      const write = [
-        `w.s += ${separator} + (tight ? ${JSON.stringify(`${text}:`)} : ${JSON.stringify(`${text}: `)})`,
-        ...(usesFirst ? ["first = false"] : []),
-        `${writer}(w, v, cx, depth + 1)`,
-      ]
-      lines.push(`  v = (enumerable ? isEnumerable.call(a, ${k}) : hasOwn(a, ${k})) ? a${member(key)} : undefined`)
+      const before = written === "no" ? prefix("{", text) : written === "yes" ? prefix(",", text) : `(first ? ${prefix("{", text)} : ${prefix(",", text)})`
+      const write = `${this.writeAfter(schema, "v", before)}${usesFirst ? "; first = false" : ""}`
+      // The next of its own enumerable keys, in order: its own field (an object built in the schema's order has every one); else checked.
+      lines.push(`  v = ks[j] === ${k} ? (j++, a${member(key)}) : (enumerable ? isEnumerable.call(a, ${k}) : hasOwn(a, ${k})) ? a${member(key)} : undefined`)
       if (schema.optional === true) {
-        lines.push(`  if (v !== undefined) { ${write.join("; ")} }`)
+        lines.push(`  if (v !== undefined) { ${write} }`)
         if (written === "no") written = "maybe"
       } else {
-        lines.push(`  ${write.join("; ")}`)
+        lines.push(`  ${write}`)
         written = "yes"
       }
     }
-    lines.push(written === "no" ? '  w.s += "{}"' : written === "yes" ? "  w.s += w.close" : '  w.s += first ? "{}" : w.close')
+    lines.push(written === "no" ? '  w.s += "{}"' : written === "yes" ? '  w.s += tight ? "}" : " }"' : '  w.s += first ? "{}" : tight ? "}" : " }"')
     return lines.join("\n")
   }
 
@@ -635,7 +708,8 @@ ${indent}  r.endItem(${CLOSE_ARGS})
 ${indent}  if (r.more(${CLOSE_ARGS})) fail()
 ${indent}}`
 
-const hashOf = (source: string): string => toHex(new Sha256().update(new TextEncoder().encode(source)).digest())
+/** A number as source (an infinite bound too). */
+const numberLiteral = (n: number): string => (Number.isFinite(n) ? String(n) : n > 0 ? "Infinity" : "-Infinity")
 
 /**
  * The generated source for `roots` (each must have closure-compiled codecs:
@@ -646,7 +720,7 @@ export const generate = (roots: readonly AnySchema[], reuse = false): Generated 
   const g = new Generator(reuse)
   const pairs = roots.map((s) => `[${g.read(s)}, ${g.write(s)}]`)
   const source = g.source(pairs)
-  return { source, env: g.env, hash: hashOf(source), made: g.made }
+  return { source, env: g.env, made: g.made }
 }
 
 /** Whether the closures compile both of `s`'s codecs: only then is it generated. */
@@ -655,49 +729,54 @@ const compilable = (s: AnySchema): boolean => compiledReader(s) !== undefined &&
 // ── groups, built-ahead code, and the choice of path ─────────
 
 /**
- * A schema file's schemas (`groupSchemas`), and the code @haus-fmt/import
- * built ahead for them (`registerCodecs`), generated as one unit.
+ * A schema file's schemas by name (`groupSchemas`), and the code
+ * @haus-fmt/import built ahead for some of them (`registerCodecs`).
  */
 interface Group {
-  readonly roots: readonly AnySchema[]
-  prebuilt?: { readonly hash: string; readonly factory: Factory } | undefined
+  readonly schemas: Readonly<Record<string, AnySchema>>
+  prebuilt?: { readonly names: readonly string[]; readonly source: string; readonly factory: Factory } | undefined
 }
 
 const groupOfSchemas = new WeakMap<object, Group>()
 const groupOf = new WeakMap<AnySchema, Group>()
 
-/** Mark `schemas` (a schema file's, by name) as one group, for code built ahead for them (`registerCodecs`). */
+/** Mark `schemas` (a schema file's, by name) as one group, for code built ahead for some of them (`registerCodecs`). */
 export const groupSchemas = (schemas: Readonly<Record<string, AnySchema>>): void => {
-  const group: Group = { roots: Object.values(schemas) }
+  const group: Group = { schemas }
   groupOfSchemas.set(schemas, group)
-  for (const s of group.roots) groupOf.set(s, group)
+  for (const s of Object.values(schemas)) groupOf.set(s, group)
 }
 
 /**
- * The code @haus-fmt/import generated ahead for `schemas` (grouped by
- * `groupSchemas`, as `fromSchemaFile` does), with the hash of its source.
- * It is used if the source generated again at first use has the same hash.
+ * The code @haus-fmt/import generated ahead for the types `names` of
+ * `schemas` (grouped by `groupSchemas`, as `fromSchemaFile` does): the
+ * `source` `generateCodecs` gave, and the function the module made of it.
+ * Used for a schema marked by `optimize` if the source generated again from
+ * the schemas at first use is `source`.
  */
-export const registerCodecs = (schemas: Readonly<Record<string, AnySchema>>, hash: string, factory: Factory): void => {
+export const registerCodecs = (schemas: Readonly<Record<string, AnySchema>>, names: readonly string[], source: string, factory: Factory): void => {
   const group = groupOfSchemas.get(schemas)
-  if (group !== undefined) group.prebuilt = { hash, factory }
+  if (group !== undefined) group.prebuilt = { names, source, factory }
 }
 
-/** The roots of a group that are generated: those the closures compile. */
-const groupRoots = (schemas: Readonly<Record<string, AnySchema>>): AnySchema[] => Object.values(schemas).filter(compilable)
+/** The roots generated for the types `names`: those the closures compile, in order. */
+const rootsOf = (schemas: Readonly<Record<string, AnySchema>>, names: readonly string[]): AnySchema[] =>
+  names.flatMap((n) => {
+    const s = Object.hasOwn(schemas, n) ? schemas[n] : undefined
+    return s !== undefined && compilable(s) ? [s] : []
+  })
 
 /**
- * The source @haus-fmt/import puts in a module for a schema file's schemas
- * (`fromSchemaFile`'s): the body of a `Factory` and its hash, as
- * `registerCodecs` takes them, generated as at first use. Undefined if
- * nothing can be generated.
+ * The source @haus-fmt/import puts in a module for the types `names` of a
+ * schema file's schemas (`fromSchemaFile`'s) and the types they reach: the
+ * body of a `Factory`, as `registerCodecs` takes it, generated as at first
+ * use. Undefined if nothing can be generated.
  */
-export const generateCodecs = (schemas: Readonly<Record<string, AnySchema>>): { readonly source: string; readonly hash: string } | undefined => {
-  const roots = groupRoots(schemas)
+export const generateCodecs = (schemas: Readonly<Record<string, AnySchema>>, names: readonly string[]): string | undefined => {
+  const roots = rootsOf(schemas, names)
   if (roots.length === 0) return undefined
   try {
-    const { source, hash } = generate(roots)
-    return { source, hash }
+    return generate(roots).source
   } catch {
     return undefined
   }
@@ -727,23 +806,37 @@ interface Codec {
 /** Each schema's generated codecs once settled (null: none). */
 const codecs = new WeakMap<AnySchema, Codec | null>()
 
-/** Run a generation: its functions published for later ones, its roots' codecs settled. */
-const run = (gen: Generated, roots: readonly AnySchema[], factory: Factory, origin: Codec["origin"]): void => {
+/**
+ * Run a generation: its functions published for later ones, its roots'
+ * codecs settled, and those of the schemas of `named` it made a reader and a
+ * writer for (the named types the roots reach).
+ */
+const run = (gen: Generated, roots: readonly AnySchema[], factory: Factory, origin: Codec["origin"], named: readonly AnySchema[] = []): void => {
   const { roots: pairs, made } = factory((rt ??= runtime()), gen.env)
+  const reads = new Map<AnySchema, Read>()
+  const writes = new Map<AnySchema, Write>()
   gen.made.forEach(([kind, s], i) => {
     if (!published[kind].has(s)) published[kind].set(s, made[i])
+    if (kind === "read") reads.set(s, made[i] as Read)
+    if (kind === "write") writes.set(s, made[i] as Write)
   })
   roots.forEach((s, i) => codecs.set(s, { read: pairs[i]![0], write: pairs[i]![1], origin }))
+  for (const s of named) {
+    const read = reads.get(s)
+    const write = writes.get(s)
+    if (!codecs.has(s) && read !== undefined && write !== undefined) codecs.set(s, { read, write, origin })
+  }
 }
 
 /**
  * The generated codecs of `schema`, made on first use: the code built ahead
- * for its group if its hash is right (generated again here, which also gives
- * the runtime objects it uses), else with `new Function`, schema by schema
- * (calling what was generated before), unless `atRunTime` is false.
+ * for its group if it is the right code (the source generated again here,
+ * which also gives the runtime objects it uses, is the one it came with) and
+ * covers `schema` (one of its types, or reached by them); else with
+ * `new Function`, schema by schema (calling what was generated before).
  * Undefined where there is none.
  */
-const generated = (schema: AnySchema, atRunTime = true): Codec | undefined => {
+const generated = (schema: AnySchema): Codec | undefined => {
   const known = codecs.get(schema)
   if (known !== undefined) return known ?? undefined
   const group = groupOf.get(schema)
@@ -752,16 +845,15 @@ const generated = (schema: AnySchema, atRunTime = true): Codec | undefined => {
     // Once per group, whatever the outcome.
     group.prebuilt = undefined
     try {
-      const roots = group.roots.filter(compilable)
+      const roots = rootsOf(group.schemas, prebuilt.names)
       const gen = generate(roots)
-      if (gen.hash === prebuilt.hash) run(gen, roots, prebuilt.factory, "built ahead")
+      if (gen.source === prebuilt.source) run(gen, roots, prebuilt.factory, "built ahead", Object.values(group.schemas))
     } catch {
-      // The generic path or `new Function` below.
+      // `new Function` below.
     }
     const settled = codecs.get(schema)
     if (settled !== undefined) return settled ?? undefined
   }
-  if (!atRunTime) return undefined
   codecs.set(schema, null)
   if (!canEval() || !compilable(schema)) return undefined
   try {
@@ -773,32 +865,44 @@ const generated = (schema: AnySchema, atRunTime = true): Codec | undefined => {
   return codecs.get(schema) ?? undefined
 }
 
-/** For tests and debugging: where `schema`'s generated codecs came from, once made (`codec: "generated"` makes them). */
+/** For tests and debugging: where `schema`'s generated codecs came from, once made (by `optimize`, or `withCodec(…, "generated")`). */
 export const generatedOrigin = (schema: AnySchema): Codec["origin"] | undefined => codecs.get(schema)?.origin
 
+/** Schemas marked by `optimize`. */
+const optimized = new WeakSet<AnySchema>()
+
+/** Mark `schema` for generated code (`h.optimize`, which documents it). */
+export const optimize = (schema: AnySchema): void => {
+  optimized.add(schema)
+}
+
 /**
- * Which codecs `h.parse` and `h.stringify` use (`Options.codec`):
- * - `"auto"` (default): generated code where @haus-fmt/import built it ahead,
- *   else the closures; the generic path for a schema neither compiles;
- * - `"generated"`, `"closures"`: only that kind of codec (`"generated"` makes
- *   it with `new Function` where it wasn't built ahead), else the generic path;
+ * The paths a schema can take, for tests, the fuzzer and debugging (`withCodec`):
+ * - `"auto"`, what users get: the closures, or generated code for a schema
+ *   marked by `optimize` (built ahead, else `new Function`, else the
+ *   closures); the generic path for a schema the closures don't compile;
+ * - `"generated"`, `"closures"`: only that kind of codec (`"generated"`: built
+ *   ahead, else made with `new Function`), else the generic path;
  * - `"generic"`: parse to a `Value` and decode; encode to a `Value` and format.
  *
- * All give the same values, texts and errors. `"auto"` never generates code at
- * run time: generated code is faster only for a schema used many times (up to
- * 40% for one type read and written over and over), while a corpus of hundreds
- * of types, each used a few times, runs as fast or faster on the closures,
- * which V8 optimizes once for all types. Choose `"generated"` for the former.
+ * All give the same values, texts and errors.
  */
 export type CodecChoice = "auto" | "generated" | "closures" | "generic"
 
-/** The codecs @haus-fmt/import built ahead for `schema`, once they are settled; undefined if there are none. */
-const builtAhead = (schema: AnySchema): Codec | undefined => {
-  const known = codecs.get(schema)
-  if (known === undefined && groupOf.get(schema)?.prebuilt === undefined) return undefined
-  const codec = known ?? generated(schema, false)
-  return codec?.origin === "built ahead" ? codec : undefined
-}
+/** Where `withCodec` puts the path in the options: not a key of `Options`. */
+const CODEC: unique symbol = Symbol("haus codec path")
+
+/**
+ * For tests, the fuzzer and debugging: `options` for `h.parse`,
+ * `h.stringify`, `h.formatAll`, `h.encodeStream` or `h.decodeStream` that
+ * make them take the path `choice`.
+ *
+ *   h.parse(schema, text, withCodec({}, "generic"))
+ */
+export const withCodec = <const O extends object>(options: O, choice: CodecChoice): O => ({ ...options, [CODEC]: choice })
+
+/** The path `withCodec` put in `options`, else `"auto"`. */
+export const codecOf = (options: object): CodecChoice => (options as { readonly [CODEC]?: CodecChoice })[CODEC] ?? "auto"
 
 /** The reader `h.parse` uses for `schema`, or undefined for the generic path. */
 export const readerFor = (schema: AnySchema, choice: CodecChoice = "auto"): Read | undefined => {
@@ -806,7 +910,7 @@ export const readerFor = (schema: AnySchema, choice: CodecChoice = "auto"): Read
     case "generic": return undefined
     case "closures": return compiledReader(schema)
     case "generated": return generated(schema)?.read
-    default: return builtAhead(schema)?.read ?? compiledReader(schema)
+    default: return (optimized.has(schema) ? generated(schema)?.read : undefined) ?? compiledReader(schema)
   }
 }
 
@@ -816,6 +920,6 @@ export const writerFor = (schema: AnySchema, choice: CodecChoice = "auto"): Writ
     case "generic": return undefined
     case "closures": return compiledWriter(schema)
     case "generated": return generated(schema)?.write
-    default: return builtAhead(schema)?.write ?? compiledWriter(schema)
+    default: return (optimized.has(schema) ? generated(schema)?.write : undefined) ?? compiledWriter(schema)
   }
 }

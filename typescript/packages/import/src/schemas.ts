@@ -139,26 +139,28 @@ function compiledSchema(schemaPath: string, runtime: string, packages: NodeResol
 }
 
 /**
- * The compiled codecs of a schema file's schemas, generated now (no `eval` at
- * runtime): `prebuilt(schema, hash, factory)`, which @haus-fmt/haus uses
- * once it has generated the same source again from the schemas built at
- * runtime (the hash says so). Plain target only; empty if nothing is generated.
+ * The generated codecs of the types `optimize` of a schema file (and the
+ * types they reach), generated now (no `eval` at runtime):
+ * `prebuilt(schema, types, source, factory)`, the source both as a string
+ * and as a function; it marks the types as `h.optimize` does. @haus-fmt/haus
+ * uses the function for a marked schema once it has generated the same
+ * source again from the schemas built at runtime. Empty if nothing is generated.
  */
-function prebuiltCodecs(path: string, packages: NodeResolverOptions, options: ParseSchemaOptions): string {
+function prebuiltCodecs(path: string, options: ParseSchemaOptions, optimize: readonly string[]): string {
   const { schemas } = fromSchemaFile(parseSchemaFile(readFileSync(path, "utf8"), options))
-  const generated = generateCodecs(schemas)
-  if (generated === undefined) return ""
-  return `prebuilt(schema, ${JSON.stringify(generated.hash)}, function (rt, env) {\n${generated.source}});\n`
+  const source = generateCodecs(schemas, optimize)
+  if (source === undefined) return ""
+  return `prebuilt(schema, ${JSON.stringify(optimize)}, ${JSON.stringify(source)}, function (rt, env) {\n${source}});\n`
 }
 
 /**
  * Module source for a `.schema.haus` file: its schemas as named exports, and
- * with `codecs` (plain target) their compiled codecs, generated now.
+ * the generated codecs of the types `optimize` (plain target), generated now.
  */
-export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}, codecs = false): { code: string; files: string[] } {
+export function schemaModuleSource(path: string, runtime: string, packages: NodeResolverOptions = {}, optimize: readonly string[] = []): { code: string; files: string[] } {
   const { code, files, options } = compiledSchema(path, runtime, packages)
   const names = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, packages)).definitions.filter((d) => d.params.length === 0).map((d) => d.name)
-  const prebuilt = codecs ? prebuiltCodecs(path, packages, options) : ""
+  const prebuilt = optimize.length > 0 ? prebuiltCodecs(path, options, optimize) : ""
   const header = prebuilt === "" ? "" : `import { prebuilt } from ${JSON.stringify(runtime)};\n`
   return { code: header + code + prebuilt + names.map((n) => `export const ${n} = schema.schemas[${JSON.stringify(n)}];\n`).join(""), files }
 }

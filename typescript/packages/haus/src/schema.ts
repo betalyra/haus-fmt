@@ -28,7 +28,7 @@ import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
 import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
 import { decodeCompiled, decodeItem, encodeCompiled } from "./codec.js"
-import { readerFor, writerFor, type CodecChoice } from "./codegen.js"
+import { codecOf, optimize as markOptimized, readerFor, writerFor } from "./codegen.js"
 import { atJsonPlace, jsonTextLimits, parseJson, Place, readJson, readLines, stringifyJson, type Json, type JsonLinesOptions, type JsonPlaces } from "./json.js"
 import { fromSchemaBasedJson, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType } from "./json-schema-based.js"
 import { Secret as SecretValue } from "./secret.js"
@@ -1421,32 +1421,48 @@ export const decode = <A>(schema: Schema<A>, value: Value, limits: Limits = {}):
 
 /**
  * Options of the typed entry points (`parse`, `stringify`, `formatAll`,
- * `encodeStream`): the limits, and which path to take.
+ * `encodeStream`, `decodeStream`): the limits.
+ *
+ * Each schema's codecs are compiled once, on first use: decoding then reads
+ * straight from the text into the values, and compact or minimised writing
+ * writes straight from them, with closures (no `eval`); for a schema marked
+ * by `optimize`, with generated code. The values, texts and errors are those
+ * of the generic path (parse to a `Value`, then decode; encode to a `Value`,
+ * then format), which also runs again to report any error.
  */
-export interface Options extends Limits {
-  /**
-   * Which codec to use. Each schema's codecs are compiled once, on first use:
-   * decoding then reads straight from the text into the values, and compact
-   * or minimised writing writes straight from them.
-   * - `"auto"` (default): generated code where @haus-fmt/import built it
-   *   ahead, else closures (codec.ts); the generic path for a schema that
-   *   doesn't compile;
-   * - `"generated"` or `"closures"`: only that codec, else the generic path.
-   *   `"generated"` makes the code with `new Function` where it wasn't built
-   *   ahead and the platform allows it: faster for a schema used many times;
-   * - `"generic"`: parse to a `Value`, then decode; encode to a `Value`, then format.
-   *
-   * All give the same values, texts and errors; the choice is for tests and debugging.
-   */
-  readonly codec?: CodecChoice
+export type Options = Limits
+
+/**
+ * Mark a schema as read or written very often, so that `parse`,
+ * `stringify`, `formatAll`, `encodeStream` and `decodeStream` use generated
+ * code for it: a function per record, array, variant…, with a fixed object
+ * shape per record and keys as constant text. That is 12-40% faster for
+ * one type used over and over; for many types each used a few times, the
+ * default (closures shared by all schemas) is as fast or faster.
+ *
+ * Returns the same schema, now marked (every later use of it, anywhere, is
+ * optimized); marking it again changes nothing. The code is the one
+ * @haus-fmt/import built ahead (its `optimize` option, which marks the types
+ * it lists itself; `h.optimize` adds a type they reach), else it
+ * is made at first use with `new Function`, which needs `eval` (not under a
+ * content security policy without 'unsafe-eval'); where neither is there,
+ * the schema keeps the closures. Values, texts and errors are the same on
+ * every path.
+ *
+ *   const Issue = h.optimize(schemas.Issue)
+ *   for (const text of texts) h.parse(Issue, text)
+ */
+export const optimize = <S extends AnySchema>(schema: S): S => {
+  markOptimized(schema)
+  return schema
 }
 
 /**
  * Parse a text holding exactly one value and decode it. With the schema's
- * compiled reader when it has one (see `Options.codec`).
+ * compiled reader when it has one (see `Options`).
  */
 export const parse = <A>(schema: Schema<A>, text: string, options: Options = {}): A => {
-  const read = readerFor(schema, options.codec)
+  const read = readerFor(schema, codecOf(options))
   const decoded = read === undefined ? undefined : decodeCompiled(read, text, options)
   // Undefined: not compiled, or anything at all is wrong; the generic path reports it.
   if (decoded !== undefined) return decoded.value as A
@@ -1465,7 +1481,7 @@ const parseGeneric = <A>(schema: Schema<A>, text: string, limits: Limits): A => 
 /**
  * Parse and decode a stream; each element's errors carry its index in the
  * path. Limits apply per element. Each item is read by the schema's compiled
- * reader (see `Options.codec`) when it can be; one it can't is parsed (all
+ * reader (see `Options`) when it can be; one it can't is parsed (all
  * the items of a chunk are, before any is decoded) and decoded on the
  * generic path when it is its turn, so errors come as they always did.
  */
@@ -1473,7 +1489,7 @@ export async function* decodeStream<A>(schema: Schema<A>, source: ChunkSource, o
   type Item = { readonly decoded: true; readonly value: A } | { readonly decoded: false; readonly value: Value }
   const items: ItemReader<Item> = {
     text: (text, origin, limits) => {
-      const read = readerFor(schema, options.codec)
+      const read = readerFor(schema, codecOf(options))
       const done = read === undefined ? undefined : decodeItem(read, text, origin, options)
       return done !== undefined ? { decoded: true, value: done.value as A } : { decoded: false, value: new Parser(text, origin, limits).parseSingle() }
     },
@@ -1497,7 +1513,7 @@ export const encode = <A>(schema: Schema<A>, value: A, limits: Limits = {}): Val
  */
 const lineCompiled = (schema: AnySchema, value: unknown, options: FormatOptions & Options, style: FormatOptions["style"]): string | undefined => {
   if (options.source !== undefined || (style !== "compact" && style !== "minimised")) return undefined
-  const write = writerFor(schema, options.codec)
+  const write = writerFor(schema, codecOf(options))
   return write === undefined ? undefined : encodeCompiled(write, value, options, style)
 }
 

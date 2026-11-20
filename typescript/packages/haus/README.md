@@ -64,19 +64,13 @@ const back = h.stringify(Order, order)   // haus text again
 for await (const o of h.decodeStream(Order, response.body!)) { … }
 ```
 
-Each schema is compiled once, on first use, into a reader and a writer:
-`h.parse` reads straight from the text into the values, without the generic
-`Value` tree in between, and `h.stringify` in the `compact` and `minimised`
-layouts writes straight from them. By default they are closures (no `eval`),
-or generated code where `@haus-fmt/import` (plain target) built it ahead:
-a fixed object shape per record and keys as constant text, with no `eval`
-either. The values, texts and errors are those of the generic path; on any
-error, the generic path runs again to report it, so a syntax error later in
-the text still wins over a mismatch before it. The `codec` option picks a
-path: `"generated"`, `"closures"` or `"generic"`. `"generated"` makes the
-code with `new Function` where it wasn't built ahead and the platform allows
-it; it pays off for a schema read or written many times (up to 40% faster),
-not for many schemas each used a few times.
+Each schema is compiled once, on first use, into a reader and a writer
+(closures, no `eval`): `h.parse` reads straight from the text into the
+values, without the generic `Value` tree in between, and `h.stringify` in the
+`compact` and `minimised` layouts writes straight from them. The values,
+texts and errors are those of the generic path; on any error, the generic
+path runs again to report it, so a syntax error later in the text still wins
+over a mismatch before it.
 
 Schemas from `.schema.haus` files:
 
@@ -137,6 +131,29 @@ of a float, `-0` as an integer, fields an open record ignores). `h.InstantAsDate
 `Date`: it keeps the instant to the millisecond, and drops digits below the
 millisecond, the offset and the fraction as written (`10:00:00.250+01:00` is
 written back as `09:00:00.250Z`, another value with another hash).
+
+### Optimizing a hot schema
+
+For a schema read or written very often, `h.optimize` switches it to
+generated code: one function per record, array and variant, a fixed object
+shape per record, keys written as constant text. That is 12–40% faster for
+one type used over and over. For many types each used a few times, the
+default is as fast or faster, so optimize only the schemas you measured as hot.
+
+```ts
+const Issue = h.optimize(schemas.Issue!)   // the same schema object, now marked
+for (const text of texts) h.parse(Issue, text)
+```
+
+`h.optimize` marks the schema itself and returns it; every later
+`h.parse`, `h.stringify`, `h.formatAll`, `h.encodeStream` and
+`h.decodeStream` with it uses the generated code, and calling it again changes
+nothing. The code is made at first use with `new Function`, so it needs
+`eval` (not under a content security policy without `'unsafe-eval'`), unless
+[`@haus-fmt/import`](../import) built it ahead: its `optimize` option builds
+the code and marks the listed types itself, so no `h.optimize` call is needed
+for them. Where neither works, the schema keeps the closures. Values, texts and errors are the
+same either way.
 
 ### Codecs
 
