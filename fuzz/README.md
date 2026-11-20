@@ -1,7 +1,7 @@
 # Differential testing
 
 Generated inputs go through every haus parser: the Lean reference parser
-(`spec/lean`), Rust, Roc, TypeScript, Python, Go and Swift (and, with `--schema`,
+(`spec/lean`), Rust, Roc, TypeScript, Python, Go, Swift and the JVM (and, with `--schema`,
 through every schema decoder: see [Schema decoding](#schema-decoding); with
 `--json`, through every JSON converter: see [JSON](#json); with `--format`,
 through the formatters and value writers: see [Formatters](#formatters); with
@@ -17,10 +17,12 @@ node fuzz/src/main.ts --seed 7         # repeat a run
 ```
 
 Needs Node 23.6 or later (it runs the TypeScript directly), Lean (elan),
-Rust, Roc, Python (uv), Go and Swift. The Go runner, [`go/`](go), is one program
+Rust, Roc, Python (uv), Go, Swift and a JDK 17 or later (`JAVA_HOME`). The Go runner, [`go/`](go), is one program
 for every fuzzer (`go-runner MODE …`), a module of its own that builds
 against the checkout; it finds the schema files and extensions through the
-path it was built from, as the Rust runners do. CI ([`ci.yml`](../.github/workflows/ci.yml)) runs every
+path it was built from, as the Rust runners do. The JVM runner, [`jvm/`](jvm),
+is a project of the Gradle build in [`../jvm`](../jvm), installed into
+`.build/jvm-runner` (`jvm-runner MODE …`, the same protocol as Go's). CI ([`ci.yml`](../.github/workflows/ci.yml)) runs every
 fuzzer on every pull request with a new seed, and much longer every night;
 a failure prints the seed and keeps the shrunk inputs as an artifact.
 
@@ -29,7 +31,7 @@ a failure prints the seed and keeps the shrunk inputs as an artifact.
 | Step | |
 |---|---|
 | Generate | [`src/generate.ts`](src/generate.ts): random haus text with varied formatting (spacing, comments, CRLF, byte order mark, number spellings, quoted keys, block strings, both payload forms, trailing commas), values at and just past the limits, the conformance suite as seeds. Half of the inputs are then mutated: bytes deleted, edge characters inserted (quotes, `*/`, control and bidi characters, invalid UTF-8), slices duplicated, cut short. |
-| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python, Go and Swift run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
+| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python, Go, Swift and the JVM run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
 | Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree, and so must the error codes (spec §17) of runners that report them, wherever two report an error at the same position. |
 | Shrink | A disagreeing input is cut down to the smallest input that still disagrees, and saved to `.out/failures/` with every parser's result. |
 
@@ -52,6 +54,7 @@ them report codes.
 | Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) |
 | Go | [`go/`](go) (`go-runner`) |
 | Swift | [`swift-runner/`](swift-runner): a package of its own on [`../swift`](../swift) (a directory named `swift` would clash with it: SwiftPM names packages by their directory) |
+| JVM | [`jvm/`](jvm) (`jvm-runner`) |
 | Stream readers | the same runners with `--stream` (TypeScript: in this process) |
 
 A new binding needs a program that reads `DIR/00000.haus` … `DIR/{N-1}.haus`
@@ -312,6 +315,7 @@ members, elements and characters, haus as for schema decoding.
 | Roc | [`roc/json_runner.roc`](roc/json_runner.roc), with the modules `haus-gen roc --json` generates ([`roc/gen_json_schemas.ts`](roc/gen_json_schemas.ts)) and `JsonValue` |
 | Python | [`python/fuzz/json_runner.py`](../python/fuzz/json_runner.py): `SchemaType.to_json` and `from_json`, `haus.to_haus_json`, `from_haus_json`, `import_json` |
 | Go | [`go-runner --json MODE`](go/json.go): `Type.Decode` and `Type.ToJSON`, `Type.FromJSON` and `Type.Encode`, `haus.ToHausJSON`, `FromHausJSON`, `ImportJSON` |
+| JVM | [`jvm-runner --json MODE`](jvm/src/main/java/org/hausfmt/fuzz/Runner.java): `HausJson.toHausJson`, `fromHausJson`, `importJson`; the modes without a type only, until it has schemas |
 
 Every runner prints an error as `err <place> <code> <reason>`: the place in
 the value (`$.items[2].price`), `$` for an error in the JSON text, and `-` for
@@ -404,6 +408,7 @@ the check, what was seen, and every formatter's output in every layout.
 | Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `ok {"values": […], "stream": …}` |
 | Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE [--indent N --width N]`: `ok {"values": […], "file": …}` |
 | Swift | [`swift-runner`](swift-runner/Sources/swift-runner/main.swift) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
+| JVM | [`jvm-runner`](jvm/src/main/java/org/hausfmt/fuzz/Runner.java) `--format STYLE --indent N --width N`: `Haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
 
 [`src/format.test.ts`](src/format.test.ts) tests the generator and the
 checks (`node --test fuzz/src/`): the format suite's expected files keep

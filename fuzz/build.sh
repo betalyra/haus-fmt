@@ -1,5 +1,6 @@
 #!/bin/sh
 # Build the parsers, std/time checkers, profile codecs, schema decoders, schema-file checkers, JSON converters and formatters under test (fuzz/README.md).
+# Needs a JDK 17 or later (JAVA_HOME) for the JVM runner.
 set -e
 cd "$(dirname "$0")/.."
 (cd spec/lean && lake build haus-ref)
@@ -13,6 +14,8 @@ mkdir -p fuzz/.build
 # On Linux the Swift runner links Swift's standard library in, so the fuzz jobs run it without Swift.
 swift_static=""; [ "$(uname)" = Linux ] && swift_static="--static-swift-stdlib"
 (cd fuzz/swift-runner && swift build -q -c release $swift_static && cp "$(swift build -c release --show-bin-path)/swift-runner" ../.build/swift-runner)
+# The JVM runner (fuzz/jvm): Gradle installs it into fuzz/.build/jvm-runner.
+(cd jvm && ./gradlew -q --no-daemon :fuzz-runner:installDist)
 (cd roc/fuzz && roc build --output=../../fuzz/.build/roc-runner runner.roc >/dev/null)
 (cd roc/fuzz && roc build --output=../../fuzz/.build/roc-time-runner time_runner.roc >/dev/null)
 (cd fuzz/roc && roc build --output=../.build/roc-profile-runner profile_runner.roc >/dev/null)
@@ -20,4 +23,4 @@ node fuzz/roc/gen_schemas.ts >/dev/null
 (cd fuzz/roc && roc build --output=../.build/roc-schema-runner schema_runner.roc >/dev/null)
 node fuzz/roc/gen_json_schemas.ts >/dev/null
 (cd fuzz/roc && roc build --output=../.build/roc-json-runner json_runner.roc >/dev/null)
-echo "built: lean, rust, typescript, effect, roc, python, go, swift"
+echo "built: lean, rust, typescript, effect, roc, python, go, swift, jvm"

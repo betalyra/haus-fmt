@@ -38,6 +38,7 @@ jobs:
       code: ${{ steps.diff.outputs.code }}
       packages: ${{ steps.diff.outputs.packages }}
       tree_sitter: ${{ steps.diff.outputs.tree_sitter }}
+      jvm: ${{ steps.diff.outputs.jvm }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -47,10 +48,10 @@ jobs:
           case "${{ github.event_name }}" in
             pull_request) range="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"; base="${{ github.event.pull_request.base.sha }}" ;;
             push) range="${{ github.event.before }}..${{ github.sha }}"; base="${{ github.event.before }}" ;;
-            *) printf 'code=true\npackages=true\ntree_sitter=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *) printf 'code=true\npackages=true\ntree_sitter=true\njvm=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # A new branch or a force push has no usable base: run everything.
-          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then printf 'code=true\npackages=true\ntree_sitter=true\n' >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then printf 'code=true\npackages=true\ntree_sitter=true\njvm=true\n' >> "$GITHUB_OUTPUT"; exit 0; fi
           files=$(git diff --name-only "$range")
           printf '%s\n' "$files"
           if printf '%s\n' "$files" | grep -qvE '^(website/|docs/|plans/|[^/]+\.md$|$)'; then code=true; else code=false; fi
@@ -62,6 +63,9 @@ jobs:
           # (every haus file, the reference parser, the fuzzer's generator).
           if printf '%s\n' "$files" | grep -qE '^(editors/tree-sitter-haus/|spec/grammar\.ebnf|typescript/packages/haus/|fuzz/src/generate\.ts|\.github/workflows/ci\.yml)|\.(haus|pretty|compact|minimised|error)$'; then tree_sitter=true; else tree_sitter=false; fi
           echo "tree_sitter=$tree_sitter" >> "$GITHUB_OUTPUT"
+          # The JVM binding: its sources, the suites and examples it runs, and the error catalogue it is generated from.
+          if printf '%s\n' "$files" | grep -qE '^(jvm/|fuzz/jvm/|test-suite/|examples/|spec/errors\.haus|spec/scripts/errors\.ts|\.github/workflows/ci\.yml)'; then jvm=true; else jvm=false; fi
+          echo "jvm=$jvm" >> "$GITHUB_OUTPUT"
 
   docs:
     name: Generated docs are up to date
@@ -316,6 +320,26 @@ jobs:
         working-directory: .
         run: swift build -Xswiftc -warnings-as-errors
 
+  jvm:
+    name: JVM (Java and Kotlin)
+    needs: changes
+    if: needs.changes.outputs.jvm == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: jvm
+    steps:
+      - uses: actions/checkout@v5
+      # Built and tested with a current JDK; the code is Java 17 bytecode and APIs (release 17).
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Build and test
+        # The conformance, format, stream and JSON suites, the linearity tests, Kotlin and the examples.
+        run: ./gradlew build :haus:javadoc --no-daemon
+
   tree-sitter:
     name: Tree-sitter grammars
     needs: changes
@@ -489,6 +513,12 @@ jobs:
         with:
           go-version: "1.27.x"
           cache-dependency-path: fuzz/go/go.mod
+      # The JVM runner (fuzz/jvm), installed by Gradle into fuzz/.build/jvm-runner (its jars travel with fuzz/.build).
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v5
       - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -558,6 +588,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      # The JVM runner needs a Java runtime.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
       - uses: actions/download-artifact@v4
         with:
           name: fuzz-runners

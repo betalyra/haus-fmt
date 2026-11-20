@@ -5,6 +5,7 @@
  *   spec/errors.md                                  the catalogue, as tables per category
  *   docs/errors.md                                  the docs page, one `## code` section per code
  *   typescript/packages/haus/src/error-codes.ts     the TypeScript binding's table
+ *   jvm/haus/src/main/java/org/hausfmt/ErrorCode.java   the JVM binding's enum
  *
  *   node spec/scripts/errors.ts            write them
  *   node spec/scripts/errors.ts --check    exit 1 if one is out of date (the TypeScript tests run this)
@@ -221,6 +222,76 @@ export function typescriptTable(entries: readonly Entry[]): string {
   ].join("\n")
 }
 
+// ── jvm/haus/src/main/java/org/hausfmt/ErrorCode.java ───────
+
+/** Text for a Javadoc comment: HTML, the comment's own markers and backslashes (a backslash and u start a Unicode escape in Java source) escaped. */
+const javadoc = (s: string) =>
+  s.replaceAll("&", "&amp;").replaceAll("\\", "&#92;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("@", "&#64;").replaceAll("*/", "*&#47;")
+
+/** A Java constant name: invalid-utf8 → INVALID_UTF8. */
+const javaName = (s: string) => s.toUpperCase().replaceAll("-", "_")
+
+export function javaEnum(entries: readonly Entry[]): string {
+  return [
+    "// Generated from spec/errors.haus by spec/scripts/errors.ts. Don't edit: edit spec/errors.haus and run `node spec/scripts/errors.ts`.",
+    "package org.hausfmt;",
+    "",
+    "/** The error codes of the catalogue (spec §17): stable, the same in every binding. */",
+    "public enum ErrorCode {",
+    entries
+      .map((e) => `  /** {@code ${e.code}}: ${javadoc(e.means)} */\n  ${javaName(e.code)}(${JSON.stringify(e.code)}, ErrorCategory.${javaName(e.category)}, ${JSON.stringify(e.fix)})`)
+      .join(",\n") + ";",
+    "",
+    "  private final String code;",
+    "  private final ErrorCategory category;",
+    "  private final String hint;",
+    "",
+    "  ErrorCode(String code, ErrorCategory category, String hint) {",
+    "    this.code = code;",
+    "    this.category = category;",
+    "    this.hint = hint;",
+    "  }",
+    "",
+    "  /** The code as the catalogue writes it, such as {@code payload-newline}. */",
+    "  public String code() {",
+    "    return code;",
+    "  }",
+    "",
+    "  /** The part of the catalogue the code belongs to. */",
+    "  public ErrorCategory category() {",
+    "    return category;",
+    "  }",
+    "",
+    "  /** The catalogue's usual fix for the mistake. */",
+    "  public String hint() {",
+    "    return hint;",
+    "  }",
+    "",
+    "  /** The URL that documents the code. */",
+    "  public String docs() {",
+    `    return ${JSON.stringify(DOCS + "#")} + code;`,
+    "  }",
+    "",
+    "  /** The code, such as {@code payload-newline}. */",
+    "  @Override",
+    "  public String toString() {",
+    "    return code;",
+    "  }",
+    "",
+    "  /** The constant for a code such as {@code payload-newline}, or null if the catalogue has none. */",
+    "  public static ErrorCode fromCode(String code) {",
+    "    for (ErrorCode c : values()) {",
+    "      if (c.code.equals(code)) {",
+    "        return c;",
+    "      }",
+    "    }",
+    "    return null;",
+    "  }",
+    "}",
+    "",
+  ].join("\n")
+}
+
 // ── main ─────────────────────────────────────────────────────
 
 if (import.meta.main) {
@@ -229,6 +300,7 @@ if (import.meta.main) {
     ["spec/errors.md", specMarkdown(entries)],
     ["docs/errors.md", docsMarkdown(entries)],
     ["typescript/packages/haus/src/error-codes.ts", typescriptTable(entries)],
+    ["jvm/haus/src/main/java/org/hausfmt/ErrorCode.java", javaEnum(entries)],
   ]
   if (process.argv.includes("--check")) {
     const stale = outputs.filter(([file, content]) => {
