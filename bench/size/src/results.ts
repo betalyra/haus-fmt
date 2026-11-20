@@ -167,6 +167,23 @@ export const SpeedOut = Schema.Struct({
    * sorts members, which isn't counted).
    */
   jsonNotStable: Schema.Finite,
+  /**
+   * TypeScript: the checks of the JSON baselines of the typed tasks (JSON.parse
+   * + a validator, a schema-compiled JSON writer), built from the source's JSON
+   * Schema (bench/speed/ts/validators.ts).
+   */
+  typedBaselines: Schema.optionalKey(Schema.Struct({
+    /** The libraries and their versions. */
+    versions: Schema.Record(Schema.String, Schema.String),
+    /** Mutated documents every validator rejected, by kind of mutation (bench/speed/ts/mutate.ts). */
+    rejected: Schema.Record(Schema.String, Schema.Finite),
+    /** Documents whose typed haus write isn't the document's text: members in the schema's order, members it doesn't list dropped (decoding drops them). */
+    typedWriteOtherText: Schema.Finite,
+    /** Documents whose fast-json-stringify text isn't JSON.stringify's (members the schema doesn't list, member order). */
+    jsonWriterOtherText: Schema.Finite,
+    /** Root types whose fast-json-stringify writer writes the variants by keys as JSON.stringify does: it can't build them (bench/speed/ts/validators.ts). */
+    jsonWriterKeyedAsAny: Schema.optionalKey(Schema.Array(Schema.String)),
+  })),
   rows: Schema.Array(SpeedRow),
   checksum: Schema.Finite,
 })

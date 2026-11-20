@@ -6,6 +6,8 @@
  *   <out>/<source>/corpus/
  *     index.haus             the documents, in convert's order: `{ source, schema, documents: [{ id, root, file }] }`
  *     <source>.schema.haus   the schema (enums as tags): `root` is a type of it
+ *     <source>.schema.json   the same types as a JSON Schema of the documents' JSON (jsonschema.ts),
+ *                            for the JSON validators and writers the TypeScript speed benchmark compares with
  *     NNNN.haus              document NNNN, idiomatic haus, minimised (the wire form)
  *     NNNN.pretty.haus       the same, pretty
  *     NNNN.json              the same document, minified JSON (numbers as written in the source)
@@ -21,6 +23,7 @@ import { format, parse } from "@haus-fmt/haus"
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { CorpusError, messageOf, ResultsFileError } from "./errors.ts"
 import { BenchPaths } from "./paths.ts"
+import type { JsonSchemaFile } from "./jsonschema.ts"
 import type { Converted, CorpusOut } from "./results.ts"
 
 export const CorpusDocument = Schema.Struct({
@@ -46,6 +49,9 @@ export const INDEX = "index.haus"
 export const ALL_HAUS = "all.haus"
 export const ALL_JSON = "all.json"
 
+/** The JSON Schema of a source's documents, beside its haus schema. */
+export const jsonSchemaName = (source: string) => `${source}.schema.json`
+
 const fileOf = (i: number): string => String(i).padStart(4, "0")
 
 /** The corpus inputs as one text: a JSON array, a haus stream. Pure. */
@@ -56,7 +62,7 @@ const encodeIndex = Haus.encode(CorpusIndex)
 const decodeIndex = Haus.decode(CorpusIndex)
 
 /** The files of the export, by name in the corpus directory. */
-export const exportFiles = Effect.fn("export.files")(function* (out: CorpusOut) {
+export const exportFiles = Effect.fn("export.files")(function* (out: CorpusOut, jsonSchema: JsonSchemaFile) {
   const name = out.source.name
   const schema = `${name}.schema.haus`
   const index: CorpusIndex = { source: name, schema, documents: out.documents.map((d, i) => ({ id: d.id, root: d.root, file: fileOf(i) })) }
@@ -69,6 +75,7 @@ export const exportFiles = Effect.fn("export.files")(function* (out: CorpusOut) 
   const files: [string, string][] = [
     [INDEX, `// The documents of ${name} that bench convert measured, in order (written by bench/size/src/export.ts).\n${indexText}\n`],
     [schema, out.schemas.tags],
+    [jsonSchemaName(name), `${JSON.stringify(jsonSchema, null, 2)}\n`],
     [ALL_HAUS, allHaus(out.documents.map((d) => d.haus_min))],
     [ALL_JSON, allJson(out.documents.map((d) => d.json_min))],
     ...perDocument,
@@ -80,12 +87,12 @@ export const exportFiles = Effect.fn("export.files")(function* (out: CorpusOut) 
  * Writes the export of one source, and removes the files of an earlier
  * export that this one doesn't have (a run with `--limit` after a full one).
  */
-export const writeExport = Effect.fn("export.write")(function* (out: CorpusOut) {
+export const writeExport = Effect.fn("export.write")(function* (out: CorpusOut, jsonSchema: JsonSchemaFile) {
   const paths = yield* BenchPaths
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const dir = paths.outFile(out.source.name, CORPUS_DIR)
-  const files = yield* exportFiles(out)
+  const files = yield* exportFiles(out, jsonSchema)
   yield* Effect.gen(function* () {
     yield* fs.makeDirectory(dir, { recursive: true })
     yield* Effect.forEach(files, ([file, text]) => fs.writeFileString(path.join(dir, file), text), { concurrency: 16, discard: true })
@@ -105,6 +112,8 @@ export interface ExportedDocument extends CorpusDocument {
 export interface Exported {
   readonly index: CorpusIndex
   readonly schemaText: string
+  /** `<source>.schema.json`: the schema's types as a JSON Schema of the documents' JSON. */
+  readonly jsonSchema: JsonSchemaFile
   readonly documents: readonly ExportedDocument[]
   readonly allHaus: string
   readonly allJson: string
@@ -128,6 +137,9 @@ export const readExport = Effect.fn("export.read")(function* (source: string) {
   const exported: Exported = {
     index,
     schemaText: yield* read(index.schema),
+    jsonSchema: yield* read(jsonSchemaName(source)).pipe(
+      Effect.flatMap((text) => Effect.try({ try: () => JSON.parse(text) as JsonSchemaFile, catch: (e) => new CorpusError({ path: path.join(dir, jsonSchemaName(source)), message: messageOf(e) }) })),
+    ),
     documents,
     allHaus: yield* read(ALL_HAUS),
     allJson: yield* read(ALL_JSON),
