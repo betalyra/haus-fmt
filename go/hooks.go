@@ -14,6 +14,7 @@ func init() {
 			return nil, err
 		}
 		p := newParser(src, lim, false)
+		defer p.release()
 		p.fileStart = false
 		vs, _, err := p.file()
 		return vs, err

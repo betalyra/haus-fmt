@@ -75,6 +75,7 @@ func Format(src []byte, opts FormatOptions) ([]byte, error) {
 		return nil, err
 	}
 	p := newParser(string(src), lim, true)
+	defer p.release()
 	_, f, err := p.file()
 	if err != nil {
 		return nil, err
@@ -96,6 +97,7 @@ func HasCommentsWith(src []byte, limits Limits) (bool, error) {
 		return false, err
 	}
 	p := newParser(string(src), lim, true)
+	defer p.release()
 	_, f, err := p.file()
 	if err != nil {
 		return false, err
@@ -148,7 +150,11 @@ func FormatValues(vs []Value, opts FormatOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	b := builder{lim: lim}
+	if opts.Layout != Pretty {
+		// No layout decisions to make: written as the values are checked.
+		return writeLines(vs, lim, opts.Layout == Minimised)
+	}
+	b := builder{writeCheck: writeCheck{lim: lim}}
 	f := &fileNode{items: make([]*item, len(vs))}
 	for i, v := range vs {
 		b.path = b.path[:0]
@@ -164,42 +170,73 @@ func FormatValues(vs []Value, opts FormatOptions) ([]byte, error) {
 	return printFile(f, opts), nil
 }
 
-// builder turns values built in code into syntax nodes, checking that they
-// can be written. The path to the value being built is kept as steps and
+// writeCheck is what the writers of values built in code share: the checks
+// that a value can be written, in one order, so that both writers fail with
+// the same error. The path to the value being written is kept as steps and
 // written out only for an error.
-type builder struct {
+type writeCheck struct {
 	lim   Limits
 	path  []step
 	guard cycleGuard
 }
 
-func (b *builder) fail(code ErrorCode, format string, args ...any) error {
-	return &Error{Code: code, Message: fmt.Sprintf(format, args...), Path: pathString(b.path)}
+func (c *writeCheck) fail(code ErrorCode, format string, args ...any) error {
+	return &Error{Code: code, Message: fmt.Sprintf(format, args...), Path: pathString(c.path)}
 }
 
 // enter starts the container v at depth, one level deeper.
-func (b *builder) enter(v Value, depth int) error {
-	if depth+1 > b.lim.MaxDepth {
-		e := b.guard.depthError(v, b.lim.MaxDepth)
-		e.Path = pathString(b.path)
+func (c *writeCheck) enter(v Value, depth int) error {
+	if depth+1 > c.lim.MaxDepth {
+		e := c.guard.depthError(v, c.lim.MaxDepth)
+		e.Path = pathString(c.path)
 		return e
 	}
-	b.guard.push(v)
+	c.guard.push(v)
 	return nil
+}
+
+// The errors of values that can't be written.
+func (c *writeCheck) invalidString() error {
+	return c.fail(CodeCannotEncode, "a string that isn't valid UTF-8")
+}
+
+func (c *writeCheck) invalidKey() error {
+	return c.fail(CodeCannotEncode, "a key that isn't valid UTF-8")
+}
+
+func (c *writeCheck) numberTooLong(text string) error {
+	return c.fail(CodeNumberTooLong,
+		"a number of %d characters, more than the limit of %d", len(text), c.lim.MaxNumberLength)
+}
+
+func (c *writeCheck) invalidTag(tag string) error {
+	return c.fail(CodeInvalidTag, "the tag %s isn't [A-Z][A-Za-z0-9_]*", quoteForMessage(tag))
+}
+
+func (c *writeCheck) unknownValue(v Value) error {
+	if v == nil {
+		return c.fail(CodeCannotEncode, "a nil value")
+	}
+	return c.fail(CodeCannotEncode, "an unknown kind of value")
+}
+
+// builder turns values built in code into syntax nodes for the pretty
+// layout, checking that they can be written.
+type builder struct {
+	writeCheck
 }
 
 func (b *builder) node(v Value, depth int) (*node, error) {
 	switch v := v.(type) {
 	case String:
 		if !utf8.ValidString(string(v)) {
-			return nil, b.fail(CodeCannotEncode, "a string that isn't valid UTF-8")
+			return nil, b.invalidString()
 		}
 		return &node{val: v}, nil
 	case Number:
 		text := v.String()
 		if len(text) > b.lim.MaxNumberLength {
-			return nil, b.fail(CodeNumberTooLong,
-				"a number of %d characters, more than the limit of %d", len(text), b.lim.MaxNumberLength)
+			return nil, b.numberTooLong(text)
 		}
 		return &node{val: v, text: text}, nil
 	case Bytes:
@@ -230,7 +267,7 @@ func (b *builder) node(v Value, depth int) (*node, error) {
 		return n, nil
 	case Variant:
 		if !isTag(v.Tag) {
-			return nil, b.fail(CodeInvalidTag, "the tag %s isn't [A-Z][A-Za-z0-9_]*", quoteForMessage(v.Tag))
+			return nil, b.invalidTag(v.Tag)
 		}
 		if len(v.Args) == 0 {
 			return &node{val: v}, nil
@@ -259,10 +296,8 @@ func (b *builder) node(v Value, depth int) (*node, error) {
 		}
 		b.guard.pop()
 		return n, nil
-	case nil:
-		return nil, b.fail(CodeCannotEncode, "a nil value")
 	}
-	return nil, b.fail(CodeCannotEncode, "an unknown kind of value")
+	return nil, b.unknownValue(v)
 }
 
 // child builds the node of v, at the step s from the current value.
@@ -279,7 +314,7 @@ func (b *builder) fields(r Record, n *node, depth int) (*node, error) {
 	n.items = make([]*item, len(r.fields))
 	for i, f := range r.fields {
 		if !utf8.ValidString(f.Key) {
-			return nil, b.fail(CodeCannotEncode, "a key that isn't valid UTF-8")
+			return nil, b.invalidKey()
 		}
 		c, err := b.child(step{key: f.Key, index: -1}, f.Value, depth+1)
 		if err != nil {
@@ -632,13 +667,6 @@ func (pr *printer) blockString(s string, level int) {
 	pr.b = append(pr.b, `"""`...)
 }
 
-// needsEscape reports whether a character is never written raw in a string:
-// control characters, bidi controls, and the line and paragraph separators.
-func needsEscape(r rune) bool {
-	return r < 0x20 || r >= 0x7f && r <= 0x9f || r >= 0x202A && r <= 0x202E ||
-		r >= 0x2066 && r <= 0x2069 || r == 0x2028 || r == 0x2029
-}
-
 const hexDigits = "0123456789ABCDEF"
 
 func writeUnicodeEscape(b *strings.Builder, r rune) {
@@ -663,17 +691,27 @@ func appendUnicodeEscape(b []byte, r rune) []byte {
 // appendQuoted appends s as a "…" string with the fewest escapes (the same
 // as the canonical form).
 func appendQuoted(b []byte, s string) []byte {
+	b, _ = appendQuotedValid(b, s)
+	return b
+}
+
+// appendQuotedValid is appendQuoted, and reports whether s is valid UTF-8
+// (bytes that aren't are written as they are).
+func appendQuotedValid(b []byte, s string) ([]byte, bool) {
+	valid := true
 	b = append(b, '"')
 	plain := 0
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c >= 0x20 && c < 0x7f && c != '"' && c != '\\' {
-			i++
-			continue
+	for i := 0; ; {
+		if i = plainRun(s, i, &quoteStop); i == len(s) {
+			break
 		}
+		c := s[i]
 		r, size := rune(c), 1
 		if c >= utf8.RuneSelf {
 			r, size = utf8.DecodeRuneInString(s[i:])
+			if r == utf8.RuneError && size == 1 {
+				valid = false
+			}
 			if !needsEscape(r) {
 				i += size
 				continue
@@ -698,7 +736,7 @@ func appendQuoted(b []byte, s string) []byte {
 		plain = i
 	}
 	b = append(b, s[plain:]...)
-	return append(b, '"')
+	return append(b, '"'), valid
 }
 
 // appendSpelling appends a scalar as written in the source, with raw U+2028

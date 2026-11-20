@@ -2,7 +2,9 @@ package haus
 
 import (
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -41,6 +43,7 @@ func ParseAllWith(src []byte, limits Limits) ([]Value, error) {
 		return nil, err
 	}
 	p := newParser(string(src), lim, false)
+	defer p.release()
 	vs, _, err := p.file()
 	return vs, err
 }
@@ -59,10 +62,55 @@ type parser struct {
 
 	fileStart bool // src starts the file: a byte order mark at src[0] is skipped, and #haus after it is a version directive
 	line, col int  // the position of src[0] in the whole input, 1-based
+
+	// Scratch stacks, the innermost container's entries last: the fields
+	// of the records and the items of the arrays and payloads being read.
+	// A container's entries are copied out at its closer, into a slice of
+	// their exact length. used is the most entries either has held.
+	fields []Field
+	items  []Value
+	used   int
 }
 
+// parsers keeps parsers for reuse, so that their scratch stacks don't grow
+// anew for every text.
+var parsers = sync.Pool{New: func() any { return new(parser) }}
+
+// maxPooledScratch is the most entries a scratch stack of a parser that
+// goes back to the pool may have room for.
+const maxPooledScratch = 4096
+
 func newParser(src string, lim Limits, keep bool) *parser {
-	return &parser{src: src, lim: lim, keep: keep, fileStart: true, line: 1, col: 1}
+	p := parsers.Get().(*parser)
+	*p = parser{src: src, lim: lim, keep: keep, fileStart: true, line: 1, col: 1,
+		fields: p.fields[:0], items: p.items[:0]}
+	return p
+}
+
+// release returns p to the pool, its scratch stacks cleared of the values
+// they held. p must not be used after.
+func (p *parser) release() {
+	if cap(p.fields) > maxPooledScratch || cap(p.items) > maxPooledScratch {
+		return
+	}
+	used := max(p.used, len(p.fields), len(p.items))
+	clear(p.fields[:min(used, cap(p.fields))])
+	clear(p.items[:min(used, cap(p.items))])
+	*p = parser{fields: p.fields[:0], items: p.items[:0]}
+	parsers.Put(p)
+}
+
+// popScratch takes a container's entries, from base, off a scratch stack,
+// as a slice of their exact length (nil for none), and records in used the
+// most entries the stack has held.
+func popScratch[T any](stack *[]T, base int, used *int) []T {
+	if len(*stack) == base {
+		return nil
+	}
+	entries := slices.Clone((*stack)[base:])
+	*used = max(*used, len(*stack))
+	*stack = (*stack)[:base]
+	return entries
 }
 
 // fail returns an error at byte offset pos.
@@ -179,63 +227,6 @@ func (p *parser) gap(g *gap) *gap {
 		return g
 	}
 	return nil
-}
-
-// rawCharCode returns the code for a character at s[i] that may not appear
-// raw where it is (spec §4): a control character other than tab and line
-// feed, a carriage return not followed by a line feed, or a bidirectional
-// control. It returns "" for any other character.
-func rawCharCode(s string, i int) ErrorCode {
-	c := s[i]
-	switch {
-	case c == '\t' || c == '\n':
-		return ""
-	case c == '\r':
-		if i+1 < len(s) && s[i+1] == '\n' {
-			return ""
-		}
-		return CodeLoneCarriageReturn
-	case c < 0x20 || c == 0x7f:
-		return CodeControlCharacter
-	case c == 0xC2:
-		if i+1 < len(s) && s[i+1] >= 0x80 && s[i+1] <= 0x9F {
-			return CodeControlCharacter
-		}
-	case c == 0xE2:
-		if i+2 < len(s) {
-			c1, c2 := s[i+1], s[i+2]
-			if c1 == 0x80 && c2 >= 0xAA && c2 <= 0xAE || c1 == 0x81 && c2 >= 0xA6 && c2 <= 0xA9 {
-				return CodeBidiControl
-			}
-		}
-	}
-	return ""
-}
-
-// rawCheck marks the bytes that need a closer look in text that may hold
-// any other character (comments, block strings): control characters other
-// than tab, and the first bytes of C1 controls and of bidi controls.
-var rawCheck = byteTable("\x7f\xC2\xE2", true)
-
-// stringStop marks the bytes that end a plain run in a "…" string: rawCheck,
-// tab, line feed, quote and backslash.
-var stringStop = byteTable("\x7f\xC2\xE2\t\n\"\\", true)
-
-// commentStop marks the bytes that end a plain run in a block comment.
-var commentStop = byteTable("\x7f\xC2\xE2*/", true)
-
-// byteTable marks the bytes of set, and the control characters but tab and
-// line feed if controls is true.
-func byteTable(set string, controls bool) (t [256]bool) {
-	if controls {
-		for c := 0; c < 0x20; c++ {
-			t[c] = c != '\t' && c != '\n'
-		}
-	}
-	for i := 0; i < len(set); i++ {
-		t[set[i]] = true
-	}
-	return t
 }
 
 func (p *parser) rawCharError(i int, code ErrorCode, where string) error {
@@ -477,7 +468,7 @@ func (p *parser) record() (Record, *node, error) {
 		return Record{}, nil, err
 	}
 	p.pos++
-	var fields []Field
+	base := len(p.fields) // this record's fields are p.fields[base:]
 	var index map[string]int
 	var syn *node
 	var g gap
@@ -497,7 +488,7 @@ func (p *parser) record() (Record, *node, error) {
 		if s[p.pos] == '}' {
 			p.pos++
 			p.depth--
-			r := Record{fields: fields, index: index}
+			r := Record{fields: popScratch(&p.fields, base, &p.used), index: index}
 			if p.keep {
 				syn.val = r
 				syn.dangling, syn.sameLine, syn.closeNL = closeItems(prev, &g)
@@ -510,6 +501,7 @@ func (p *parser) record() (Record, *node, error) {
 			return Record{}, nil, err
 		}
 		// Duplicate keys: a scan for small records, a map for larger ones.
+		fields := p.fields[base:]
 		if index != nil {
 			if _, dup := index[key]; dup {
 				return Record{}, nil, p.duplicateKey(keyAt, key)
@@ -551,7 +543,7 @@ func (p *parser) record() (Record, *node, error) {
 		if err != nil {
 			return Record{}, nil, err
 		}
-		fields = append(fields, Field{Key: key, Value: v})
+		p.fields = append(p.fields, Field{Key: key, Value: v})
 		if p.keep {
 			// Comments between the key and the value move above the entry,
 			// after its blank line.
@@ -635,7 +627,7 @@ func (p *parser) sequence(closer byte) ([]Value, *node, error) {
 		return nil, nil, err
 	}
 	p.pos++
-	var values []Value
+	base := len(p.items) // the values read so far are p.items[base:]
 	var syn *node
 	var g gap
 	gp := p.gap(&g)
@@ -652,11 +644,12 @@ func (p *parser) sequence(closer byte) ([]Value, *node, error) {
 			return nil, nil, p.unclosed(open, closer)
 		}
 		if s[p.pos] == closer {
-			if closer == ')' && len(values) == 0 {
+			if closer == ')' && len(p.items) == base {
 				return nil, nil, p.fail(open, CodeEmptyPayload, "empty parentheses after a tag: write the tag alone")
 			}
 			p.pos++
 			p.depth--
+			values := popScratch(&p.items, base, &p.used)
 			if p.keep {
 				syn.dangling, syn.sameLine, syn.closeNL = closeItems(prev, &g)
 			}
@@ -670,7 +663,7 @@ func (p *parser) sequence(closer byte) ([]Value, *node, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		values = append(values, v)
+		p.items = append(p.items, v)
 		if p.keep {
 			it.val = n
 			syn.items = append(syn.items, it)
@@ -753,9 +746,7 @@ func (p *parser) basicString(tooLong ErrorCode) (string, error) {
 	var b []byte // the value, once an escape needs decoding
 	plain := i   // start of the current run of plain characters
 	for {
-		for i < len(s) && !stringStop[s[i]] {
-			i++
-		}
+		i = plainRun(s, i, &stringStop)
 		if i >= len(s) {
 			return "", p.fail(start, CodeUnterminatedString, "a string without its closing '\"'")
 		}
