@@ -1,0 +1,12 @@
+// std/time (spec §13.2, spec/std/time.md): every type of the module, for the
+// rows of the profile's rules table.
+import std/time (Date, Time, DateTime, Instant, ZonedDateTime, Duration, YearMonth, TimeZone)
+
+type Day = Date
+type Clock = Time
+type Local = DateTime
+type At = Instant
+type Zoned = ZonedDateTime
+type Span = Duration
+type Month = YearMonth
+type Zone = TimeZone

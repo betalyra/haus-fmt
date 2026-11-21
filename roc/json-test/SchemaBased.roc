@@ -1302,6 +1302,73 @@ SchemaBased := [].{
 	to_json_doc : Doc, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	to_json_doc = |v, e| ToJson.object(e, [("shape", ToJson.optional(v.shape, to_json_shape)), ("maybe", ToJson.optional(v.maybe, to_json_nested)), ("users", ToJson.optional(v.users, |y25, e25| ToJson.list(y25, e25, to_json_user))), ("strict", ToJson.optional(v.strict, to_json_strict)), ("counts", ToJson.optional(v.counts, to_json_counts)), ("raw", ToJson.optional(v.raw, to_json_raw)), ("key", ToJson.optional(v.key, to_json_key)), ("boxed", ToJson.optional(v.boxed, to_json_gen_rec)), ("level", ToJson.optional(v.level, to_json_level)), ("bits", ToJson.optional(v.bits, to_json_bits))])
 
+	## a record case with a field named _tag has no schema-based form; the other cases have (spec §16.3)
+	##
+	## haus type `schema-based#NoForm`.
+	NoForm := [Tagged({ tag : I32 }), Plain, Fine({ tag : I32 }), Unknown(Str, List(Value))]
+
+	decode_no_form : Value -> Try(NoForm, Decode.Error)
+	decode_no_form = |v| Decode.within_depth(v, read_value_no_form)
+
+	read_value_no_form : Value -> Try(NoForm, Decode.Error)
+	read_value_no_form = |v| match v {
+		Tag("Tagged", [p]) => Decode.payload(
+			"Tagged",
+			p,
+			|fs| {
+				Ok(Tagged({ tag: Decode.field(fs, "_tag", Decode.i32)? }))
+			},
+		)
+		Tag("Plain", []) => Ok(Plain)
+		Tag("Fine", [p]) => Decode.payload(
+			"Fine",
+			p,
+			|fs| {
+				Ok(Fine({ tag: Decode.field(fs, "tag", Decode.i32)? }))
+			},
+		)
+		Tag("Tagged", _) => Decode.arity("Tagged", 1)
+		Tag("Plain", _) => Decode.arity("Plain", 0)
+		Tag("Fine", _) => Decode.arity("Fine", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (NoForm)", v)
+	}
+
+	encode_no_form : NoForm, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_no_form = |v, e| match v {
+		Tagged(r) => Encode.tagged_record("Tagged", e, [("_tag", Present(|e38| Encode.number(r.tag.to_str(), e38)))])
+		Plain => Encode.tag("Plain", e)
+		Fine(r) => Encode.tagged_record("Fine", e, [("tag", Present(|e39| Encode.number(r.tag.to_str(), e39)))])
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
+	from_json_no_form : JsonValue -> Try(NoForm, Decode.Error)
+	from_json_no_form = |j| FromJson.within_depth(j, read_json_no_form, encode_no_form)
+
+	read_json_no_form : JsonValue -> Try(NoForm, Decode.Error)
+	read_json_no_form = |j| {
+		(tag, ms) = FromJson.variant(j, "NoForm")?
+		match tag {
+			"Tagged" => FromJson.no_json_form("Tagged", "_tag")
+			"Plain" => match FromJson.args(ms, 0)? {
+				[] => Ok(Plain)
+				_ => FromJson.arity("Plain", 0)
+			}
+			"Fine" => {
+				Ok(Fine({ tag: FromJson.field(ms, "tag", FromJson.i32)? }))
+			}
+			_ => Ok(Unknown(tag, FromJson.unknown(tag, ms)?))
+		}
+	}
+
+	to_json_no_form : NoForm, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_no_form = |v, e| match v {
+		Tagged(_) => ToJson.no_json_form("Tagged", "_tag")
+		Plain => ToJson.tag("Plain", e)
+		Fine(r) => ToJson.tagged_object("Fine", e, [("tag", ToJson.required(r.tag, ToJson.i32))])
+		Unknown(tag, args) => ToJson.unknown(tag, args, e)
+	}
+
 	decode_inline_secret_box_box : Value -> Try({ w : I32 }, Decode.Error)
 	decode_inline_secret_box_box = |v| {
 		fs = Decode.strict_record(v)?

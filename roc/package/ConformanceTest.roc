@@ -42,12 +42,18 @@ import "../../test-suite/valid/escaped-controls.hash" as valid_escaped_controls_
 import "../../test-suite/valid/exponents.haus" as valid_exponents : List(U8)
 import "../../test-suite/valid/exponents.canonical" as valid_exponents_canonical : List(U8)
 import "../../test-suite/valid/exponents.hash" as valid_exponents_hash : List(U8)
+import "../../test-suite/valid/key-order-code-points.haus" as valid_key_order_code_points : List(U8)
+import "../../test-suite/valid/key-order-code-points.canonical" as valid_key_order_code_points_canonical : List(U8)
+import "../../test-suite/valid/key-order-code-points.hash" as valid_key_order_code_points_hash : List(U8)
 import "../../test-suite/valid/keys.haus" as valid_keys : List(U8)
 import "../../test-suite/valid/keys.canonical" as valid_keys_canonical : List(U8)
 import "../../test-suite/valid/keys.hash" as valid_keys_hash : List(U8)
 import "../../test-suite/valid/limits-boundary.haus" as valid_limits_boundary : List(U8)
 import "../../test-suite/valid/limits-boundary.canonical" as valid_limits_boundary_canonical : List(U8)
 import "../../test-suite/valid/limits-boundary.hash" as valid_limits_boundary_hash : List(U8)
+import "../../test-suite/valid/limits-separators.haus" as valid_limits_separators : List(U8)
+import "../../test-suite/valid/limits-separators.canonical" as valid_limits_separators_canonical : List(U8)
+import "../../test-suite/valid/limits-separators.hash" as valid_limits_separators_hash : List(U8)
 import "../../test-suite/valid/line-separators.haus" as valid_line_separators : List(U8)
 import "../../test-suite/valid/line-separators.canonical" as valid_line_separators_canonical : List(U8)
 import "../../test-suite/valid/line-separators.hash" as valid_line_separators_hash : List(U8)
@@ -90,6 +96,9 @@ import "../../test-suite/valid/trailing-commas.hash" as valid_trailing_commas_ha
 import "../../test-suite/valid/unicode-edges.haus" as valid_unicode_edges : List(U8)
 import "../../test-suite/valid/unicode-edges.canonical" as valid_unicode_edges_canonical : List(U8)
 import "../../test-suite/valid/unicode-edges.hash" as valid_unicode_edges_hash : List(U8)
+import "../../test-suite/valid/value-rules-not-parsed.haus" as valid_value_rules_not_parsed : List(U8)
+import "../../test-suite/valid/value-rules-not-parsed.canonical" as valid_value_rules_not_parsed_canonical : List(U8)
+import "../../test-suite/valid/value-rules-not-parsed.hash" as valid_value_rules_not_parsed_hash : List(U8)
 import "../../test-suite/valid/variants.haus" as valid_variants : List(U8)
 import "../../test-suite/valid/variants.canonical" as valid_variants_canonical : List(U8)
 import "../../test-suite/valid/variants.hash" as valid_variants_hash : List(U8)
@@ -98,6 +107,7 @@ import "../../test-suite/invalid/array-comma-wrong-closer.haus" as invalid_array
 import "../../test-suite/invalid/array-stray-char.haus" as invalid_array_stray_char : List(U8)
 import "../../test-suite/invalid/bad-escape.haus" as invalid_bad_escape : List(U8)
 import "../../test-suite/invalid/bad-hex.haus" as invalid_bad_hex : List(U8)
+import "../../test-suite/invalid/bidi-after-value.haus" as invalid_bidi_after_value : List(U8)
 import "../../test-suite/invalid/bidi-in-block-comment.haus" as invalid_bidi_in_block_comment : List(U8)
 import "../../test-suite/invalid/bidi-in-block-string.haus" as invalid_bidi_in_block_string : List(U8)
 import "../../test-suite/invalid/bidi-in-line-comment.haus" as invalid_bidi_in_line_comment : List(U8)
@@ -133,6 +143,7 @@ import "../../test-suite/invalid/control-esc-in-line-comment.haus" as invalid_co
 import "../../test-suite/invalid/control-in-quoted-key.haus" as invalid_control_in_quoted_key : List(U8)
 import "../../test-suite/invalid/control-nul-in-block-comment.haus" as invalid_control_nul_in_block_comment : List(U8)
 import "../../test-suite/invalid/control-outside-string.haus" as invalid_control_outside_string : List(U8)
+import "../../test-suite/invalid/control-where-key.haus" as invalid_control_where_key : List(U8)
 import "../../test-suite/invalid/double-comma-top-level.haus" as invalid_double_comma_top_level : List(U8)
 import "../../test-suite/invalid/double-comma.haus" as invalid_double_comma : List(U8)
 import "../../test-suite/invalid/double-separator.haus" as invalid_double_separator : List(U8)
@@ -146,6 +157,7 @@ import "../../test-suite/invalid/empty-unicode-escape.haus" as invalid_empty_uni
 import "../../test-suite/invalid/exponent-too-large.haus" as invalid_exponent_too_large : List(U8)
 import "../../test-suite/invalid/extra-closer.haus" as invalid_extra_closer : List(U8)
 import "../../test-suite/invalid/hash-not-version.haus" as invalid_hash_not_version : List(U8)
+import "../../test-suite/invalid/hex-separators-too-long.haus" as invalid_hex_separators_too_long : List(U8)
 import "../../test-suite/invalid/hex-too-long.haus" as invalid_hex_too_long : List(U8)
 import "../../test-suite/invalid/identifier-value.haus" as invalid_identifier_value : List(U8)
 import "../../test-suite/invalid/invalid-utf8.haus" as invalid_invalid_utf8 : List(U8)
@@ -171,7 +183,10 @@ import "../../test-suite/invalid/missing-comma-top-level.haus" as invalid_missin
 import "../../test-suite/invalid/negative-exponent-too-large.haus" as invalid_negative_exponent_too_large : List(U8)
 import "../../test-suite/invalid/newline-in-string.haus" as invalid_newline_in_string : List(U8)
 import "../../test-suite/invalid/null.haus" as invalid_null : List(U8)
+import "../../test-suite/invalid/number-exponent-too-long.haus" as invalid_number_exponent_too_long : List(U8)
 import "../../test-suite/invalid/number-key.haus" as invalid_number_key : List(U8)
+import "../../test-suite/invalid/number-separators-too-long.haus" as invalid_number_separators_too_long : List(U8)
+import "../../test-suite/invalid/number-sign-too-long.haus" as invalid_number_sign_too_long : List(U8)
 import "../../test-suite/invalid/number-then-ident.haus" as invalid_number_then_ident : List(U8)
 import "../../test-suite/invalid/number-too-long.haus" as invalid_number_too_long : List(U8)
 import "../../test-suite/invalid/payload-after-comment.haus" as invalid_payload_after_comment : List(U8)
@@ -187,6 +202,8 @@ import "../../test-suite/invalid/stray-closer.haus" as invalid_stray_closer : Li
 import "../../test-suite/invalid/string-raw-cr.haus" as invalid_string_raw_cr : List(U8)
 import "../../test-suite/invalid/string-raw-crlf.haus" as invalid_string_raw_crlf : List(U8)
 import "../../test-suite/invalid/surrogate-escape.haus" as invalid_surrogate_escape : List(U8)
+import "../../test-suite/invalid/too-deep-by-one.haus" as invalid_too_deep_by_one : List(U8)
+import "../../test-suite/invalid/too-deep-paren-record.haus" as invalid_too_deep_paren_record : List(U8)
 import "../../test-suite/invalid/too-deep.haus" as invalid_too_deep : List(U8)
 import "../../test-suite/invalid/too-large-escape.haus" as invalid_too_large_escape : List(U8)
 import "../../test-suite/invalid/top-comma-closer.haus" as invalid_top_comma_closer : List(U8)
@@ -203,7 +220,10 @@ import "../../test-suite/invalid/unterminated-string.haus" as invalid_unterminat
 import "../../test-suite/invalid/uppercase-hex-prefix.haus" as invalid_uppercase_hex_prefix : List(U8)
 import "../../test-suite/invalid/uppercase-key.haus" as invalid_uppercase_key : List(U8)
 import "../../test-suite/invalid/version-directive-after-comma.haus" as invalid_version_directive_after_comma : List(U8)
+import "../../test-suite/invalid/version-directive-bom.haus" as invalid_version_directive_bom : List(U8)
+import "../../test-suite/invalid/version-directive-no-space.haus" as invalid_version_directive_no_space : List(U8)
 import "../../test-suite/invalid/version-directive-prefix.haus" as invalid_version_directive_prefix : List(U8)
+import "../../test-suite/invalid/version-directive-space.haus" as invalid_version_directive_space : List(U8)
 import "../../spec/errors.haus" as error_catalogue : Str
 
 ConformanceTest := [].{
@@ -502,6 +522,18 @@ expect ConformanceTest.hash(valid_exponents) == valid_exponents_hash
 # valid/exponents.haus, streamed
 expect ConformanceTest.streams(valid_exponents)
 
+# valid/key-order-code-points.haus
+expect ConformanceTest.run(valid_key_order_code_points) == "[{\"rec\":{\"😀\":{\"num\":\"2\"},\"｡\":{\"num\":\"1\"}}}]"
+
+# valid/key-order-code-points.canonical
+expect ConformanceTest.canonical(valid_key_order_code_points) == valid_key_order_code_points_canonical
+
+# valid/key-order-code-points.hash
+expect ConformanceTest.hash(valid_key_order_code_points) == valid_key_order_code_points_hash
+
+# valid/key-order-code-points.haus, streamed
+expect ConformanceTest.streams(valid_key_order_code_points)
+
 # valid/keys.haus
 expect ConformanceTest.run(valid_keys) == "[{\"rec\":{\"snake_case\":{\"num\":\"1\"},\"camelCase\":{\"num\":\"2\"},\"_private\":{\"num\":\"3\"},\"x9\":{\"num\":\"4\"},\"content-type\":{\"num\":\"5\"},\"Upper\":{\"num\":\"6\"},\"\":{\"num\":\"7\"},\"with space\":{\"num\":\"8\"}}}]"
 
@@ -525,6 +557,18 @@ expect ConformanceTest.hash(valid_limits_boundary) == valid_limits_boundary_hash
 
 # valid/limits-boundary.haus, streamed
 expect ConformanceTest.streams(valid_limits_boundary)
+
+# valid/limits-separators.haus
+expect ConformanceTest.run(valid_limits_separators) == "[[{\"num\":\"-999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999\"},{\"num\":\"999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999\"},{\"num\":\"1.5555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555e5\"},{\"num\":\"164234964807013028240249441062194481953144051752131477468311245646927324254404654772745904991605240992921002852135344761002405681372336240870169765953973393094296632765013362813020432606625105383474587438786740548166732265307106883232362781112099779703125409164605006026534576320722199331277510996380688506951414287508848272078297365385569618566122144141954400755826896743108898288587874761216724554699771858107112562234232948645902318315401631619183911286592604964139905911776715064657973419327991091490555226633581310625704030770858688577686208120337410217424770322420297186704445945167884103430816997616560035488653171055424185809713956922054293830378903440588851880145740571301935777430587586878950249156453176414254731831060300029768390406158020882745188672430615119994225045597252611017846707424211105293945013943871139451848545539069888856779961794922368444726560389164764991761007570217245649524005137037477216664129769956010017114026614917086286635032197456350937956758343625740535554113535\"},{\"num\":\"-164234964807013028240249441062194481953144051752131477468311245646927324254404654772745904991605240992921002852135344761002405681372336240870169765953973393094296632765013362813020432606625105383474587438786740548166732265307106883232362781112099779703125409164605006026534576320722199331277510996380688506951414287508848272078297365385569618566122144141954400755826896743108898288587874761216724554699771858107112562234232948645902318315401631619183911286592604964139905911776715064657973419327991091490555226633581310625704030770858688577686208120337410217424770322420297186704445945167884103430816997616560035488653171055424185809713956922054293830378903440588851880145740571301935777430587586878950249156453176414254731831060300029768390406158020882745188672430615119994225045597252611017846707424211105293945013943871139451848545539069888856779961794922368444726560389164764991761007570217245649524005137037477216664129769956010017114026614917086286635032197456350937956758343625740535554113535\"}]]"
+
+# valid/limits-separators.canonical
+expect ConformanceTest.canonical(valid_limits_separators) == valid_limits_separators_canonical
+
+# valid/limits-separators.hash
+expect ConformanceTest.hash(valid_limits_separators) == valid_limits_separators_hash
+
+# valid/limits-separators.haus, streamed
+expect ConformanceTest.streams(valid_limits_separators)
 
 # valid/line-separators.haus
 expect ConformanceTest.run(valid_line_separators) == "[[\"a b\",\"c d\",\"  \",{\"rec\":{\"k \":\"v \"}},\"block \\ntext \"]]"
@@ -694,6 +738,18 @@ expect ConformanceTest.hash(valid_unicode_edges) == valid_unicode_edges_hash
 # valid/unicode-edges.haus, streamed
 expect ConformanceTest.streams(valid_unicode_edges)
 
+# valid/value-rules-not-parsed.haus
+expect ConformanceTest.run(valid_value_rules_not_parsed) == "[[{\"tag\":\"Date\",\"args\":[\"2026-02-30\"]},{\"tag\":\"Int8\",\"args\":[{\"num\":\"300\"}]}]]"
+
+# valid/value-rules-not-parsed.canonical
+expect ConformanceTest.canonical(valid_value_rules_not_parsed) == valid_value_rules_not_parsed_canonical
+
+# valid/value-rules-not-parsed.hash
+expect ConformanceTest.hash(valid_value_rules_not_parsed) == valid_value_rules_not_parsed_hash
+
+# valid/value-rules-not-parsed.haus, streamed
+expect ConformanceTest.streams(valid_value_rules_not_parsed)
+
 # valid/variants.haus
 expect ConformanceTest.run(valid_variants) == "[[{\"tag\":\"None\"},{\"tag\":\"Some\",\"args\":[{\"num\":\"1\"}]},{\"tag\":\"Point\",\"args\":[{\"num\":\"1\"},{\"num\":\"2\"}]},{\"tag\":\"Circle\",\"args\":[{\"rec\":{\"radius\":{\"num\":\"5\"}}}]},{\"tag\":\"Circle\",\"args\":[{\"rec\":{\"radius\":{\"num\":\"5\"}}}]},{\"tag\":\"Circle\",\"args\":[{\"rec\":{\"radius\":{\"num\":\"5\"}}}]},{\"tag\":\"Err\",\"args\":[{\"tag\":\"NotFound\",\"args\":[\"x\"]}]},{\"tag\":\"Polygon\",\"args\":[[{\"tag\":\"Point\",\"args\":[{\"num\":\"0\"},{\"num\":\"0\"}]},{\"tag\":\"Point\",\"args\":[{\"num\":\"1\"},{\"num\":\"1\"}]}]]},{\"tag\":\"True\"},{\"tag\":\"False\"},{\"tag\":\"A1_b\"}]]"
 
@@ -735,6 +791,12 @@ expect ConformanceTest.rejects(invalid_bad_hex, "invalid-number")
 
 # invalid/bad-hex.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_bad_hex, "invalid-number")
+
+# invalid/bidi-after-value.haus
+expect ConformanceTest.rejects(invalid_bidi_after_value, "missing-comma")
+
+# invalid/bidi-after-value.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_bidi_after_value, "missing-comma")
 
 # invalid/bidi-in-block-comment.haus
 expect ConformanceTest.rejects(invalid_bidi_in_block_comment, "bidi-control")
@@ -946,6 +1008,12 @@ expect ConformanceTest.rejects(invalid_control_outside_string, "expected-value")
 # invalid/control-outside-string.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_control_outside_string, "expected-value")
 
+# invalid/control-where-key.haus
+expect ConformanceTest.rejects(invalid_control_where_key, "expected-key")
+
+# invalid/control-where-key.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_control_where_key, "expected-key")
+
 # invalid/double-comma-top-level.haus
 expect ConformanceTest.rejects(invalid_double_comma_top_level, "expected-value")
 
@@ -1023,6 +1091,12 @@ expect ConformanceTest.rejects(invalid_hash_not_version, "expected-value")
 
 # invalid/hash-not-version.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_hash_not_version, "expected-value")
+
+# invalid/hex-separators-too-long.haus
+expect ConformanceTest.rejects(invalid_hex_separators_too_long, "number-too-long")
+
+# invalid/hex-separators-too-long.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_hex_separators_too_long, "number-too-long")
 
 # invalid/hex-too-long.haus
 expect ConformanceTest.rejects(invalid_hex_too_long, "number-too-long")
@@ -1174,11 +1248,29 @@ expect ConformanceTest.rejects(invalid_null, "null-literal")
 # invalid/null.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_null, "null-literal")
 
+# invalid/number-exponent-too-long.haus
+expect ConformanceTest.rejects(invalid_number_exponent_too_long, "number-too-long")
+
+# invalid/number-exponent-too-long.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_number_exponent_too_long, "number-too-long")
+
 # invalid/number-key.haus
 expect ConformanceTest.rejects(invalid_number_key, "expected-key")
 
 # invalid/number-key.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_number_key, "expected-key")
+
+# invalid/number-separators-too-long.haus
+expect ConformanceTest.rejects(invalid_number_separators_too_long, "number-too-long")
+
+# invalid/number-separators-too-long.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_number_separators_too_long, "number-too-long")
+
+# invalid/number-sign-too-long.haus
+expect ConformanceTest.rejects(invalid_number_sign_too_long, "number-too-long")
+
+# invalid/number-sign-too-long.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_number_sign_too_long, "number-too-long")
 
 # invalid/number-then-ident.haus
 expect ConformanceTest.rejects(invalid_number_then_ident, "invalid-number")
@@ -1269,6 +1361,18 @@ expect ConformanceTest.rejects(invalid_surrogate_escape, "invalid-unicode-escape
 
 # invalid/surrogate-escape.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_surrogate_escape, "invalid-unicode-escape")
+
+# invalid/too-deep-by-one.haus
+expect ConformanceTest.rejects(invalid_too_deep_by_one, "nesting-too-deep")
+
+# invalid/too-deep-by-one.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_too_deep_by_one, "nesting-too-deep")
+
+# invalid/too-deep-paren-record.haus
+expect ConformanceTest.rejects(invalid_too_deep_paren_record, "nesting-too-deep")
+
+# invalid/too-deep-paren-record.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_too_deep_paren_record, "nesting-too-deep")
 
 # invalid/too-deep.haus
 expect ConformanceTest.rejects(invalid_too_deep, "nesting-too-deep")
@@ -1366,11 +1470,29 @@ expect ConformanceTest.rejects(invalid_version_directive_after_comma, "expected-
 # invalid/version-directive-after-comma.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_version_directive_after_comma, "expected-value")
 
+# invalid/version-directive-bom.haus
+expect ConformanceTest.rejects(invalid_version_directive_bom, "version-directive")
+
+# invalid/version-directive-bom.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_version_directive_bom, "version-directive")
+
+# invalid/version-directive-no-space.haus
+expect ConformanceTest.rejects(invalid_version_directive_no_space, "version-directive")
+
+# invalid/version-directive-no-space.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_version_directive_no_space, "version-directive")
+
 # invalid/version-directive-prefix.haus
 expect ConformanceTest.rejects(invalid_version_directive_prefix, "version-directive")
 
 # invalid/version-directive-prefix.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_version_directive_prefix, "version-directive")
+
+# invalid/version-directive-space.haus
+expect ConformanceTest.rejects(invalid_version_directive_space, "version-directive")
+
+# invalid/version-directive-space.haus, streamed
+expect ConformanceTest.stream_rejects(invalid_version_directive_space, "version-directive")
 
 # spec/errors.haus: ErrorCode.roc is up to date (roc/scripts/gen_error_codes.py)
 expect ConformanceTest.catalogue(error_catalogue)

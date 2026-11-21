@@ -35,10 +35,14 @@ import "../../test-suite/valid/escaped-controls.haus" as valid_escaped_controls 
 import "../../test-suite/valid/escaped-controls.jsonl" as valid_escaped_controls_jsonl : List(U8)
 import "../../test-suite/valid/exponents.haus" as valid_exponents : List(U8)
 import "../../test-suite/valid/exponents.jsonl" as valid_exponents_jsonl : List(U8)
+import "../../test-suite/valid/key-order-code-points.haus" as valid_key_order_code_points : List(U8)
+import "../../test-suite/valid/key-order-code-points.jsonl" as valid_key_order_code_points_jsonl : List(U8)
 import "../../test-suite/valid/keys.haus" as valid_keys : List(U8)
 import "../../test-suite/valid/keys.jsonl" as valid_keys_jsonl : List(U8)
 import "../../test-suite/valid/limits-boundary.haus" as valid_limits_boundary : List(U8)
 import "../../test-suite/valid/limits-boundary.jsonl" as valid_limits_boundary_jsonl : List(U8)
+import "../../test-suite/valid/limits-separators.haus" as valid_limits_separators : List(U8)
+import "../../test-suite/valid/limits-separators.jsonl" as valid_limits_separators_jsonl : List(U8)
 import "../../test-suite/valid/line-separators.haus" as valid_line_separators : List(U8)
 import "../../test-suite/valid/line-separators.jsonl" as valid_line_separators_jsonl : List(U8)
 import "../../test-suite/valid/negative-zero-hex.haus" as valid_negative_zero_hex : List(U8)
@@ -67,6 +71,8 @@ import "../../test-suite/valid/trailing-commas.haus" as valid_trailing_commas : 
 import "../../test-suite/valid/trailing-commas.jsonl" as valid_trailing_commas_jsonl : List(U8)
 import "../../test-suite/valid/unicode-edges.haus" as valid_unicode_edges : List(U8)
 import "../../test-suite/valid/unicode-edges.jsonl" as valid_unicode_edges_jsonl : List(U8)
+import "../../test-suite/valid/value-rules-not-parsed.haus" as valid_value_rules_not_parsed : List(U8)
+import "../../test-suite/valid/value-rules-not-parsed.jsonl" as valid_value_rules_not_parsed_jsonl : List(U8)
 import "../../test-suite/valid/variants.haus" as valid_variants : List(U8)
 import "../../test-suite/valid/variants.jsonl" as valid_variants_jsonl : List(U8)
 
@@ -271,6 +277,7 @@ write = |ty, v| match ty {
 	"InPlace" => written(SchemaBased.decode_in_place(v), SchemaBased.to_json_in_place)
 	"U64" => written(SchemaBased.decode_u64(v), SchemaBased.to_json_u64)
 	"Doc" => written(SchemaBased.decode_doc(v), SchemaBased.to_json_doc)
+	"NoForm" => written(SchemaBased.decode_no_form(v), SchemaBased.to_json_no_form)
 	_ => Err("no type ${ty}")
 }
 
@@ -320,6 +327,7 @@ read = |ty, j| match ty {
 	"InPlace" => encoded(SchemaBased.from_json_in_place(j), SchemaBased.encode_in_place)
 	"U64" => encoded(SchemaBased.from_json_u64(j), SchemaBased.encode_u64)
 	"Doc" => encoded(SchemaBased.from_json_doc(j), SchemaBased.encode_doc)
+	"NoForm" => encoded(SchemaBased.from_json_no_form(j), SchemaBased.encode_no_form)
 	_ => Decode.fail("no-type", "no type ${ty}")
 }
 
@@ -419,7 +427,7 @@ report = |result| match result {
 }
 
 # json/schema-based.cases.haus
-expect JsonTest.count(schema_based_cases) == 199
+expect JsonTest.count(schema_based_cases) == 205
 
 # Ok { type: "S", input: "café \u{1F600}", json: "\"café \u{1F600}\"" },
 expect JsonTest.schema_based(schema_based_cases, 0)
@@ -1018,8 +1026,26 @@ expect JsonTest.schema_based(schema_based_cases, 197)
 # Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": {}}}", code: "haus-json-form", path: "$.raw._args" },
 expect JsonTest.schema_based(schema_based_cases, 198)
 
+# Read { type: "S", json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
+expect JsonTest.schema_based(schema_based_cases, 199)
+
+# Ok { type: "S", input: "a\u{2028}b\u{2029}c", json: "\"a\u{2028}b\u{2029}c\"" },
+expect JsonTest.schema_based(schema_based_cases, 200)
+
+# Err { type: "Raw", json: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", code: "nesting-too-deep" },
+expect JsonTest.schema_based(schema_based_cases, 201)
+
+# Ok { type: "NoForm", input: Plain, json: "{\"_tag\": \"Plain\"}" },
+expect JsonTest.schema_based(schema_based_cases, 202)
+
+# Ok { type: "NoForm", input: Fine { tag: 1 }, json: "{\"_tag\": \"Fine\", \"tag\": 1}" },
+expect JsonTest.schema_based(schema_based_cases, 203)
+
+# Err { type: "NoForm", json: "{\"_tag\": \"Tagged\"}", code: "no-json-form" },
+expect JsonTest.schema_based(schema_based_cases, 204)
+
 # json/self-describing.cases.haus
-expect JsonTest.count(self_describing_cases) == 58
+expect JsonTest.count(self_describing_cases) == 60
 
 # Ok { input: 19.90, json: "{\"_haus\": 1, \"_value\": {\"_num\": \"19.90\"}}" },
 expect JsonTest.self_describing(self_describing_cases, 0)
@@ -1195,8 +1221,14 @@ expect JsonTest.self_describing(self_describing_cases, 56)
 # Err { json: "{\"_haus\": 1, \"_value\": [{\"_tag\": \"T\", \"_args\": \"a\"}]}", code: "haus-json-form", path: "$._value[0]._args" },
 expect JsonTest.self_describing(self_describing_cases, 57)
 
+# Ok { input: "a\u{2028}b\u{2029}c", json: "{\"_haus\": 1, \"_value\": \"a\u{2028}b\u{2029}c\"}" },
+expect JsonTest.self_describing(self_describing_cases, 58)
+
+# Err { json: "{\"_haus\": 1, \"_value\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}", code: "nesting-too-deep" },
+expect JsonTest.self_describing(self_describing_cases, 59)
+
 # json/import.cases.haus
-expect JsonTest.count(import_cases) == 17
+expect JsonTest.count(import_cases) == 19
 
 # Read { json: "{\"a\": 1, \"b\": [true, false, null], \"c\": \"x\"}", output: { a: 1, b: [True, False, None], c: "x" } },
 expect JsonTest.imported(import_cases, 0)
@@ -1248,6 +1280,12 @@ expect JsonTest.imported(import_cases, 15)
 
 # Read { json: "1e-6144", output: 1e-6144 },
 expect JsonTest.imported(import_cases, 16)
+
+# Read { json: "\"a\u{2028}b\u{2029}c\"", output: "a\u{2028}b\u{2029}c" },
+expect JsonTest.imported(import_cases, 17)
+
+# Err { json: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", code: "nesting-too-deep" },
+expect JsonTest.imported(import_cases, 18)
 
 # Loop: 256 nested Somes read, 257 don't
 expect JsonTest.somes("Loop", 256) == Ok({})
@@ -1324,11 +1362,17 @@ expect JsonTest.valid(valid_escaped_controls, valid_escaped_controls_jsonl)
 # valid/exponents.jsonl
 expect JsonTest.valid(valid_exponents, valid_exponents_jsonl)
 
+# valid/key-order-code-points.jsonl
+expect JsonTest.valid(valid_key_order_code_points, valid_key_order_code_points_jsonl)
+
 # valid/keys.jsonl
 expect JsonTest.valid(valid_keys, valid_keys_jsonl)
 
 # valid/limits-boundary.jsonl
 expect JsonTest.valid(valid_limits_boundary, valid_limits_boundary_jsonl)
+
+# valid/limits-separators.jsonl
+expect JsonTest.valid(valid_limits_separators, valid_limits_separators_jsonl)
 
 # valid/line-separators.jsonl
 expect JsonTest.valid(valid_line_separators, valid_line_separators_jsonl)
@@ -1371,6 +1415,9 @@ expect JsonTest.valid(valid_trailing_commas, valid_trailing_commas_jsonl)
 
 # valid/unicode-edges.jsonl
 expect JsonTest.valid(valid_unicode_edges, valid_unicode_edges_jsonl)
+
+# valid/value-rules-not-parsed.jsonl
+expect JsonTest.valid(valid_value_rules_not_parsed, valid_value_rules_not_parsed_jsonl)
 
 # valid/variants.jsonl
 expect JsonTest.valid(valid_variants, valid_variants_jsonl)

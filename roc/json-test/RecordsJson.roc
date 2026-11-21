@@ -123,6 +123,35 @@ RecordsJson := [].{
 	to_json_empty : Empty, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	to_json_empty = |_v, e| ToJson.object(e, [])
 
+	## A Maybe field is required: written as None or Some(…), never left out (spec §1).
+	##
+	## haus type `records#Profile`.
+	Profile : { nickname : [None, Some(Str)] }
+
+	decode_profile : Value -> Try(Profile, Decode.Error)
+	decode_profile = |v| Decode.within_depth(v, read_value_profile)
+
+	read_value_profile : Value -> Try(Profile, Decode.Error)
+	read_value_profile = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ nickname: Decode.field(fs, "nickname", |x5| Decode.maybe(x5, Decode.str))? })
+	}
+
+	encode_profile : Profile, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_profile = |v, e| Encode.record(e, [("nickname", Present(|e6| Encode.maybe(v.nickname, e6, Encode.str)))])
+
+	from_json_profile : JsonValue -> Try(Profile, Decode.Error)
+	from_json_profile = |j| FromJson.within_depth(j, read_json_profile, encode_profile)
+
+	read_json_profile : JsonValue -> Try(Profile, Decode.Error)
+	read_json_profile = |j| {
+		fs = FromJson.object(j, "Profile")?
+		Ok({ nickname: FromJson.field(fs, "nickname", |y5| FromJson.maybe(y5, False, FromJson.str))? })
+	}
+
+	to_json_profile : Profile, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_profile = |v, e| ToJson.object(e, [("nickname", Present(|e6| ToJson.maybe(v.nickname, e6, False, ToJson.str)))])
+
 	## Quoted field keys take the escapes of data strings (spec §14, §4).
 	##
 	## haus type `records#Quoted`.

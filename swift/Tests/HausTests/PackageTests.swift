@@ -29,7 +29,7 @@ struct PackageSuiteTests {
     }()
 
     @Test func everyCase() {
-        #expect(Self.cases.count == 76)
+        #expect(Self.cases.count == 85)
     }
 
     @Test(arguments: cases)

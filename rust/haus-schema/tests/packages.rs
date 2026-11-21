@@ -183,7 +183,7 @@ fn package_suite() {
     let should =
         cases.iter().filter(|c| field(c, "should").is_some_and(|s| matches!(variant(s), ("True", [])))).count();
     println!("package suite: {} cases run ({should} of them the SHOULD version check), 0 skipped", cases.len());
-    assert_eq!(cases.len(), 76, "the suite's cases");
+    assert_eq!(cases.len(), 85, "the suite's cases");
     assert!(failures.is_empty(), "{} of {} cases fail:\n{}", failures.len(), cases.len(), failures.join("\n"));
 }
 

@@ -1,0 +1,5 @@
+// rule: schema.reject.invalid-spread
+// A spread of a Stream is invalid-spread (spec §14), not a misplaced reference
+// to a Stream definition: every binding reports invalid-spread.
+type S = Stream Int
+type A = < ...S >

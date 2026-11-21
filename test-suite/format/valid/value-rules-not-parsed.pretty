@@ -1,0 +1,6 @@
+// A parser knows no types: these are a tag with a string and a tag with a
+// number, although a schema binding rejects both (spec §13.1).
+[
+  Date("2026-02-30"),
+  Int8(300),
+]

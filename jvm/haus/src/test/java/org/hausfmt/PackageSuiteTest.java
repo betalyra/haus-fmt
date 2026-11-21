@@ -29,7 +29,7 @@ import org.junit.jupiter.api.io.TempDir;
  */
 class PackageSuiteTest {
   /** The cases in the suite, and how many of them find packages in node_modules. */
-  private static final int CASES = 76;
+  private static final int CASES = 85;
   private static final int NPM_CASES = 33;
 
   @TempDir Path temp;

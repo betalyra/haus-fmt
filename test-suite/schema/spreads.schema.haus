@@ -1,0 +1,14 @@
+// Spreads (spec §14): `...Name` copies the tags of a named variant, or the
+// fields of a named record, where it is written. The result is open or closed
+// by its own `closed` alone, never by the type it copies from.
+type UserEvent = < UserCreated { id: Int } | UserRenamed { id: Int, to: String } >
+type AppEvent = closed < ...UserEvent | Heartbeat >
+type ServerEvent = < ...UserEvent >
+
+type Base = { id: Int, name: String }
+type Person = closed { ...Base, email: String }
+
+type Sealed = closed { id: Int }
+type Unsealed = { ...Sealed, note?: String }
+type Fixed = closed < A | B Int >
+type Extended = < ...Fixed | C >

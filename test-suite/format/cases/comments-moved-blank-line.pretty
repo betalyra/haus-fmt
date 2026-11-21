@@ -1,0 +1,10 @@
+{
+  a: 1,
+
+  /* between key and colon */
+  b: 2,
+
+  // above c
+  /* between colon and value */
+  c: 3,
+}

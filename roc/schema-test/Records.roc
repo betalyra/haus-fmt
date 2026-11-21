@@ -70,6 +70,23 @@ Records := [].{
 	encode_empty : Empty, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
 	encode_empty = |_v, e| Encode.record(e, [])
 
+	## A Maybe field is required: written as None or Some(…), never left out (spec §1).
+	##
+	## haus type `records#Profile`.
+	Profile : { nickname : [None, Some(Str)] }
+
+	decode_profile : Value -> Try(Profile, Decode.Error)
+	decode_profile = |v| Decode.within_depth(v, read_value_profile)
+
+	read_value_profile : Value -> Try(Profile, Decode.Error)
+	read_value_profile = |v| {
+		fs = Decode.strict_record(v)?
+		Ok({ nickname: Decode.field(fs, "nickname", |x5| Decode.maybe(x5, Decode.str))? })
+	}
+
+	encode_profile : Profile, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_profile = |v, e| Encode.record(e, [("nickname", Present(|e6| Encode.maybe(v.nickname, e6, Encode.str)))])
+
 	## Quoted field keys take the escapes of data strings (spec §14, §4).
 	##
 	## haus type `records#Quoted`.

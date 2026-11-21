@@ -51,3 +51,5 @@ type InPlace = Maybe (closed < None | Some Int32 >)
 type U64 = UInt64
 // a document for the places of errors (spec §16.3 "Places")
 type Doc = { shape?: Shape, maybe?: Nested, users?: Array User, strict?: Strict, counts?: Counts, raw?: Raw, key?: Key, boxed?: GenRec, level?: Level, bits?: Bits }
+// a record case with a field named _tag has no schema-based form; the other cases have (spec §16.3)
+type NoForm = < Tagged { _tag: Int32 } | Plain | Fine { tag: Int32 } >

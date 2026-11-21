@@ -70,7 +70,7 @@ const show = (o: Outcome): string => (o.ok ? `Ok [${o.values.map(canonical).join
 const cases = parseAll(readFileSync(CASES, "utf8")).map(toCase)
 
 describe("stream suite", () => {
-  it("has all its cases", () => expect(cases.length).toBe(19))
+  it("has all its cases", () => expect(cases.length).toBe(21))
   for (const c of cases) {
     it(`${JSON.stringify(c.text)} max ${c.maxValueLength}${c.strict ? " strict" : ""}`, () => {
       const failures = splits(c.text).flatMap(([how, chunks]) => {
