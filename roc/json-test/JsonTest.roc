@@ -27,6 +27,8 @@ import "../../test-suite/valid/crlf-line-endings.haus" as valid_crlf_line_ending
 import "../../test-suite/valid/crlf-line-endings.jsonl" as valid_crlf_line_endings_jsonl : List(U8)
 import "../../test-suite/valid/deep-nesting.haus" as valid_deep_nesting : List(U8)
 import "../../test-suite/valid/deep-nesting.jsonl" as valid_deep_nesting_jsonl : List(U8)
+import "../../test-suite/valid/depth-limit.haus" as valid_depth_limit : List(U8)
+import "../../test-suite/valid/depth-limit.jsonl" as valid_depth_limit_jsonl : List(U8)
 import "../../test-suite/valid/empty-containers.haus" as valid_empty_containers : List(U8)
 import "../../test-suite/valid/empty-containers.jsonl" as valid_empty_containers_jsonl : List(U8)
 import "../../test-suite/valid/empty-file.haus" as valid_empty_file : List(U8)
@@ -1349,6 +1351,9 @@ expect JsonTest.valid(valid_crlf_line_endings, valid_crlf_line_endings_jsonl)
 
 # valid/deep-nesting.jsonl
 expect JsonTest.valid(valid_deep_nesting, valid_deep_nesting_jsonl)
+
+# valid/depth-limit.jsonl
+expect JsonTest.valid(valid_depth_limit, valid_depth_limit_jsonl)
 
 # valid/empty-containers.jsonl
 expect JsonTest.valid(valid_empty_containers, valid_empty_containers_jsonl)

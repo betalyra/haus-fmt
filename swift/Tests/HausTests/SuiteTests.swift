@@ -15,8 +15,10 @@ struct SuiteTests {
         let file = Self.validFiles.appendingPathComponent(name)
         let values = try parseAll(bytes: read(file.appendingPathExtension("haus")))
 
-        let expected = try readText(file.appendingPathExtension("jsonl")).split(separator: "\n").map {
-            try fromSuiteJSON(JSON.parse(String($0))["_value"]!)
+        let expected = try onStack(kibibytes: suiteStack) {
+            try readText(file.appendingPathExtension("jsonl")).split(separator: "\n").map {
+                try fromSuiteJSON(JSON.parse(String($0))["_value"]!)
+            }
         }
         #expect(values == expected)
 

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import haus
-from haus import ERROR_CODES, Record, String, Variant
+from haus import ERROR_CODES, Array, Record, String, Variant
 from haus.schema import HausDecodeError, HausEncodeError, HausSchemaFileError, compile_schema, parse_schema_file
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -239,6 +239,15 @@ def test_an_encoding_error_has_a_code() -> None:
     with pytest.raises(HausEncodeError) as info:
         schema["U"].encode({"n": 300})
     assert (info.value.code, info.value.to_json()["path"]) == ("cannot-encode", "$.n")
+
+
+def test_a_bad_tag_in_an_any_is_invalid_tag() -> None:
+    # As in `to_haus` and spec/errors.haus: a tag that isn't [A-Z][A-Za-z0-9_]* in a value built in code.
+    schema = compile_schema("type U = { v: Any }")
+    for encode in (schema["U"].encode, schema["U"].canonical, schema["U"].to_json):
+        with pytest.raises(HausEncodeError) as info:
+            encode({"v": Array((Variant("lower"),))})
+        assert (info.value.code, info.value.to_json()["path"]) == ("invalid-tag", "$.v[0]")
 
 
 def test_a_secret_shows_nothing_of_the_value() -> None:

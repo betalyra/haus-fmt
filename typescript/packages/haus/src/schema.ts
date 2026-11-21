@@ -535,8 +535,8 @@ const make = <A>(expected: string, decode: (value: Value, at: At) => A, encode: 
   return shaped(self, shape)
 }
 
-const invalid = (what: string, value: unknown, at: At): never =>
-  at.reject("cannot-encode", `expected ${what}, got ${describeJs(value)}`, { expected: what, found: describeJs(value) })
+const invalid = (what: string, value: unknown, at: At, code: ErrorCode = "cannot-encode"): never =>
+  at.reject(code, `expected ${what}, got ${describeJs(value)}`, { expected: what, found: describeJs(value) })
 
 // ── scalars ──────────────────────────────────────────────────
 
@@ -1167,7 +1167,7 @@ export const checkedValue = (raw: unknown, at: At): Value => {
       return changed ? rec(fields) : raw
     }
     case "variant": {
-      if (typeof raw.tag !== "string" || !TAG.test(raw.tag)) return invalid("a tag name", raw.tag, at)
+      if (typeof raw.tag !== "string" || !TAG.test(raw.tag)) return invalid("a tag name", raw.tag, at, "invalid-tag")
       checkedString(raw.tag, "a tag name", "tag")
       if (!Array.isArray(raw.args)) return invalid("an array of arguments", raw.args, at)
       if (raw.args.length > 0) at.open()

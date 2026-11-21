@@ -30,9 +30,14 @@ func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.pat
 
 /// JSON, as read for the suite: objects keep their members in order, and
 /// strings their code points (Foundation's reader keys a dictionary by
-/// Swift strings, which equal NFC and NFD).
+/// Swift strings, which equal NFC and NFD). Unlike `importJSON`, it has no
+/// depth limit: the `.jsonl` of a value 256 levels deep has more JSON levels.
+/// It recurses once per level, so deep JSON goes on a big stack
+/// (``suiteStack``).
 indirect enum JSON {
     case string(String)
+    /// A number, or `true`, `false` or `null`, as written.
+    case number(String)
     case array([JSON])
     case object([(String, JSON)])
 
@@ -106,7 +111,7 @@ private struct JSONReader {
             // Numbers: the suite writes the haus envelope's version, `1`.
             let start = i
             while i < bytes.count && !",]} \n".utf8.contains(bytes[i]) { i += 1 }
-            return .string(String(decoding: bytes[start..<i], as: UTF8.self))
+            return .number(String(decoding: bytes[start..<i], as: UTF8.self))
         }
     }
 
@@ -155,10 +160,33 @@ private struct JSONReader {
     }
 }
 
+/// Whether two JSON values are the same data: member order doesn't matter,
+/// strings compare by code points, numbers by their text.
+func sameData(_ a: JSON, _ b: JSON) -> Bool {
+    switch (a, b) {
+    case (.string(let x), .string(let y)), (.number(let x), .number(let y)):
+        return x.utf8.elementsEqual(y.utf8)
+    case (.array(let xs), .array(let ys)):
+        return xs.count == ys.count && zip(xs, ys).allSatisfy { sameData($0, $1) }
+    case (.object(let xs), .object(let ys)):
+        let byKey = { (members: [(String, JSON)]) in members.sorted { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) } }
+        return xs.count == ys.count
+            && zip(byKey(xs), byKey(ys)).allSatisfy { $0.0.utf8.elementsEqual($1.0.utf8) && sameData($0.1, $1.1) }
+    default:
+        return false
+    }
+}
+
+/// The stack, in KiB, for reading and comparing a suite file's JSON: the
+/// suite's JSON reader and ``sameData(_:_:)`` recurse once per JSON level,
+/// and `valid/depth-limit.jsonl` has more than 500 (a test thread has 512 KiB).
+let suiteStack = 64 << 10
+
 /// A value of the suite's JSON encoding (test-suite/README.md, "Expected output encoding").
 func fromSuiteJSON(_ j: JSON) throws -> HausValue {
     switch j {
     case .string(let s): return .string(s)
+    case .number: break
     case .array(let items): return .array(try items.map(fromSuiteJSON))
     case .object:
         if case .object(let fields)? = j["_rec"] {

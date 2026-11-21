@@ -5,7 +5,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
@@ -19,7 +22,116 @@ class JsonSuiteTest {
 
   /** JSON compared as data: member order and whitespace don't matter, numbers compare by their text. */
   static void sameJson(String want, String got) {
-    assertEquals(HausJson.importJson(want), HausJson.importJson(got), got);
+    assertEquals(new JsonData(want).read(), new JsonData(got).read(), got);
+  }
+
+  /**
+   * JSON as data, to compare: a string, a {@link Literal} (a number's text, true, false, null), a
+   * list, or a map of the members, whose order doesn't matter. Not {@link HausJson#importJson},
+   * which stops at 256 JSON levels (spec §16): the .jsonl of a value 256 levels deep has more.
+   */
+  private static final class JsonData {
+    record Literal(String text) {}
+
+    private final String s;
+    private int i;
+
+    JsonData(String s) {
+      this.s = s;
+    }
+
+    Object read() {
+      Object v = value();
+      space();
+      if (i != s.length()) {
+        throw new IllegalArgumentException("text after the JSON at " + i + ": " + s);
+      }
+      return v;
+    }
+
+    private void space() {
+      while (i < s.length() && " \t\r\n".indexOf(s.charAt(i)) >= 0) {
+        i++;
+      }
+    }
+
+    private void expect(char c) {
+      space();
+      if (i >= s.length() || s.charAt(i) != c) {
+        throw new IllegalArgumentException("expected " + c + " at " + i + ": " + s);
+      }
+      i++;
+    }
+
+    /** Whether the next character, after whitespace, is {@code c}; if so, it is read. */
+    private boolean next(char c) {
+      space();
+      if (i < s.length() && s.charAt(i) == c) {
+        i++;
+        return true;
+      }
+      return false;
+    }
+
+    private Object value() {
+      space();
+      if (next('[')) {
+        List<Object> items = new ArrayList<>();
+        if (!next(']')) {
+          do {
+            items.add(value());
+          } while (next(','));
+          expect(']');
+        }
+        return items;
+      }
+      if (next('{')) {
+        Map<String, Object> members = new HashMap<>();
+        if (!next('}')) {
+          do {
+            space();
+            String key = string();
+            expect(':');
+            members.put(key, value());
+          } while (next(','));
+          expect('}');
+        }
+        return members;
+      }
+      if (i < s.length() && s.charAt(i) == '"') {
+        return string();
+      }
+      int start = i;
+      while (i < s.length() && ",]} \t\r\n".indexOf(s.charAt(i)) < 0) {
+        i++;
+      }
+      return new Literal(s.substring(start, i));
+    }
+
+    private String string() {
+      expect('"');
+      StringBuilder out = new StringBuilder();
+      for (char c = s.charAt(i++); c != '"'; c = s.charAt(i++)) {
+        if (c != '\\') {
+          out.append(c);
+          continue;
+        }
+        char e = s.charAt(i++);
+        switch (e) {
+          case 'n' -> out.append('\n');
+          case 'r' -> out.append('\r');
+          case 't' -> out.append('\t');
+          case 'b' -> out.append('\b');
+          case 'f' -> out.append('\f');
+          case 'u' -> {
+            out.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+            i += 4;
+          }
+          default -> out.append(e);
+        }
+      }
+      return out.toString();
+    }
   }
 
   /** An Err case: the code, and the path when the case gives one. */

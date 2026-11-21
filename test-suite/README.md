@@ -79,9 +79,12 @@ literals have 829 hex digits, and canonical form and JSON write them in
 decimal), and `invalid/*-too-*.haus` goes one past them.
 `valid/limits-separators.haus` has literals of exactly 1000 characters
 counting the sign, the `0x` prefix, digit separators and the exponent, which
-all count toward the number limit (spec §7); `invalid/too-deep-by-one.haus`
-has 257 levels, and `invalid/too-deep-paren-record.haus` 257 counted as §7
-does (each `Tag({ … })` is two levels).
+all count toward the number limit (spec §7); `valid/depth-limit.haus` has
+values of exactly 256 levels counted as §7 does (`Tag { … }` is one level,
+`Tag({ … })` two), `invalid/too-deep-by-one.haus` has 257 levels, and
+`invalid/too-deep-paren-record.haus` 257 counted as §7 does. The `.jsonl` of a
+value 256 levels deep has more than 256 JSON levels (up to four per level), so
+a runner compares it without the JSON depth limit of §16.
 
 ## Stream suite
 

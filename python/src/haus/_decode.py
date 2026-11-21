@@ -355,7 +355,7 @@ def _mapping(x: object, at: _At, what: str) -> Mapping[object, object]:
 
 def _checked_tag(tag: object, at: _At) -> str:
     if not isinstance(tag, str) or not TAG.fullmatch(tag):
-        _invalid("a tag name", tag, at, "invalid-tag" if at.ctx.json else "cannot-encode")
+        _invalid("a tag name", tag, at, "invalid-tag")
     if len(tag) > at.ctx.limits.max_string_length:
         at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", code="tag-too-long")
     return tag

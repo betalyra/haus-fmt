@@ -162,6 +162,9 @@ Err { type: "Span", input: Duration("p1d"), code: "invalid-time", path: "$[0]" }
 Err { type: "Span", input: Duration("P1DT0S"), code: "invalid-time", path: "$[0]" },
 Err { type: "Span", input: Duration("P1Y0M"), code: "invalid-time", path: "$[0]" },
 Err { type: "Span", input: Duration("-PT0S"), code: "invalid-time", path: "$[0]" },
+// Zero seconds with a fraction of zeros are zero too: alone, without a sign.
+Err { type: "Span", input: Duration("-PT0.0S"), code: "invalid-time", path: "$[0]" },
+Err { type: "Span", input: Duration("P1DT0.0S"), code: "invalid-time", path: "$[0]" },
 
 // ── Other ISO 8601 forms: none ──
 // rule: time.rules.other-iso-forms
@@ -184,6 +187,7 @@ Ok { type: "Zoned", input: ZonedDateTime("2026-07-01T10:00:00+05:00[Europe/Lisbo
 Ok { type: "Clock", input: Time("12:00:00.000") },
 Ok { type: "At", input: Instant("2026-11-09T10:00:00.000Z") },
 Ok { type: "Span", input: Duration("PT1.50S") },
+Ok { type: "Span", input: Duration("PT0.0S") },
 // rule: time.values.offset-zero
 Ok { type: "At", input: Instant("2026-11-09T13:30:00+00:00") },
 Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T13:30:00+00:00[Europe/London]") },

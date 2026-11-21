@@ -136,6 +136,19 @@ fn import() {
 /// data), and reading it gives them back.
 #[test]
 fn valid_files_are_self_describing_cases() {
+    // `sorted` and `==` on `Json` recurse once per JSON level, and
+    // valid/depth-limit.jsonl has more than 500. A 2 MiB test thread holds
+    // about 1000 in a debug build on macOS; a bigger stack leaves room on
+    // every platform.
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(compare_valid_files)
+        .unwrap()
+        .join()
+        .unwrap_or_else(|e| std::panic::resume_unwind(e));
+}
+
+fn compare_valid_files() {
     let mut paths: Vec<_> = fs::read_dir(suite("valid"))
         .unwrap()
         .map(|e| e.unwrap().path())
