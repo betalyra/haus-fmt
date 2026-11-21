@@ -4,6 +4,17 @@ import "github.com/betalyra/haus-fmt/go/internal/hooks"
 
 func init() {
 	hooks.RecordOwned = recordOwned
+	hooks.RecordFields = func(r Record) []Field { return r.fields }
+	hooks.AppendQuoted = appendQuotedValid
+	hooks.AppendLine = func(b []byte, v Value, lim Limits, minimised bool, depth int) ([]byte, error) {
+		w := lineWriter{writeCheck: writeCheck{lim: lim}, b: b, minimised: minimised}
+		err := w.value(v, depth)
+		return w.b, err
+	}
+	hooks.CheckWritten = func(v Value, lim Limits) error {
+		c := valueChecker{lim: lim, written: true}
+		return c.value(v, 0)
+	}
 	hooks.NumberLit = func(lit string) Number { return Number{lit: lit} }
 	hooks.ParseSchemaJSON = func(src string, lim Limits, skipBOM bool) (Value, error) {
 		return parseJSON(src, lim, jsonSchema, skipBOM)

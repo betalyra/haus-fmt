@@ -9,6 +9,24 @@ var (
 	// RecordOwned is a func([]haus.Field) haus.Record that takes ownership of
 	// fields whose keys are known to be distinct, without copying them.
 	RecordOwned any
+	// RecordFields is a func(haus.Record) []haus.Field that returns a
+	// record's fields, in order, without copying them; they must not be
+	// changed.
+	RecordFields any
+	// AppendQuoted is a func([]byte, string) ([]byte, bool) that appends a
+	// "…" string as the writers write it, and reports whether the string is
+	// valid UTF-8.
+	AppendQuoted any
+	// AppendLine is a func(b []byte, v haus.Value, lim haus.Limits,
+	// minimised bool, depth int) ([]byte, error) that appends a value built
+	// in code in the compact or minimised layout, as FormatValue writes it
+	// at nesting depth (a container there is at depth+1), with its checks;
+	// lim is resolved. An error's path starts at the value.
+	AppendLine any
+	// CheckWritten is a func(v haus.Value, lim haus.Limits) error that is
+	// CheckValue for a value AppendLine has written (with no error), without
+	// checking again that its strings and keys are UTF-8; lim is resolved.
+	CheckWritten any
 	// NumberLit is a func(string) haus.Number for a normalized literal
 	// (spec §2), which it doesn't check.
 	NumberLit any

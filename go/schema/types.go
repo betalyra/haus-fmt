@@ -72,9 +72,10 @@ type typ struct {
 
 // recordType is { … } or closed { … }.
 type recordType struct {
-	closed bool
-	fields []fieldType
-	index  map[string]int // for records with many fields; nil for small ones
+	closed   bool
+	fields   []fieldType
+	index    map[string]int // for records with many fields; nil for small ones
+	required int            // the fields that aren't optional
 }
 
 // indexFrom is the number of fields or cases from which lookups use a map.
@@ -88,19 +89,45 @@ func newRecord(closed bool, fields []fieldType) *recordType {
 			r.index[f.key] = i
 		}
 	}
+	for i := range fields {
+		f := &fields[i]
+		if !f.optional {
+			r.required++
+		}
+		if isIdent(f.key) {
+			f.written = f.key
+		} else {
+			b, _ := appendQuoted(nil, f.key)
+			f.written = string(b)
+		}
+	}
 	return r
 }
 
 // field returns the field key, or nil.
 func (r *recordType) field(key string) *fieldType {
+	next := 0
+	return r.fieldAt(key, &next)
+}
+
+// fieldAt is field for the fields of a value in turn: *next is the index
+// after the last field found, which the next key is tried at first (values
+// often have their fields in the schema's order).
+func (r *recordType) fieldAt(key string, next *int) *fieldType {
+	if i := *next; i < len(r.fields) && r.fields[i].key == key {
+		*next = i + 1
+		return &r.fields[i]
+	}
 	if r.index != nil {
 		if i, ok := r.index[key]; ok {
+			*next = i + 1
 			return &r.fields[i]
 		}
 		return nil
 	}
 	for i := range r.fields {
 		if r.fields[i].key == key {
+			*next = i + 1
 			return &r.fields[i]
 		}
 	}
@@ -112,6 +139,7 @@ type fieldType struct {
 	optional   bool
 	typ        *typ
 	deprecated *deprecated
+	written    string // the key as the writers write it: bare, or quoted
 }
 
 // deprecated is @deprecated or @deprecated("why") (spec §14).

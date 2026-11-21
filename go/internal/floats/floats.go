@@ -49,3 +49,67 @@ func significant(lit string) int {
 	m = strings.TrimLeft(strings.TrimPrefix(m, "-"), "0.")
 	return len(m) - strings.Count(m, ".")
 }
+
+// Append appends a finite float in the one spelling of spec §15 (bits 32 or
+// 64): the shortest digits that read back to the same float, laid out as
+// JavaScript's Number.prototype.toString does, with no + in the exponent
+// (0.1, 1e21, 1.5e-7, -0). It allocates nothing when dst has room.
+func Append(dst []byte, f float64, bits int) []byte {
+	if f == 0 {
+		if math.Signbit(f) {
+			return append(dst, "-0"...)
+		}
+		return append(dst, '0')
+	}
+	// d.ddde±x: the shortest digits, correctly rounded.
+	var buf [32]byte
+	e := strconv.AppendFloat(buf[:0], f, 'e', -1, bits)
+	if e[0] == '-' {
+		dst = append(dst, '-')
+		e = e[1:]
+	}
+	at := 1
+	for e[at] != 'e' {
+		at++
+	}
+	mant, exp := e[:at], e[at+1:]
+	var digits [24]byte
+	k := copy(digits[:], mant[:1])
+	if len(mant) > 1 {
+		k += copy(digits[k:], mant[2:]) // without the point
+	}
+	x := 0
+	for _, c := range exp[1:] {
+		x = 10*x + int(c-'0')
+	}
+	if exp[0] == '-' {
+		x = -x
+	}
+	d, n := digits[:k], x+1 // the value is 0.d1…dk × 10^n
+	switch {
+	case k <= n && n <= 21:
+		dst = append(dst, d...)
+		for range n - k {
+			dst = append(dst, '0')
+		}
+	case 0 < n && n <= 21:
+		dst = append(dst, d[:n]...)
+		dst = append(dst, '.')
+		dst = append(dst, d[n:]...)
+	case -6 < n && n <= 0:
+		dst = append(dst, "0."...)
+		for range -n {
+			dst = append(dst, '0')
+		}
+		dst = append(dst, d...)
+	default:
+		dst = append(dst, d[0])
+		if k > 1 {
+			dst = append(dst, '.')
+			dst = append(dst, d[1:]...)
+		}
+		dst = append(dst, 'e')
+		dst = strconv.AppendInt(dst, int64(n-1), 10)
+	}
+	return dst
+}

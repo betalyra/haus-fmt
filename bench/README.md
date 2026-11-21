@@ -347,36 +347,37 @@ Reading (parse: text → generic value; typed: text → checked typed value):
 
 | Source | haus parse MB/s | encoding/json into `any` | go-json into `any` | haus typed MB/s | encoding/json into the Go types | go-json into the Go types |
 |---|---:|---:|---:|---:|---:|---:|
-| `github-rest` | 334 | 2.5× faster (136 MB/s) | 1.42× slower (489) | 232 | 1.16× faster (206 MB/s) | 2.4× slower (580) |
-| `vega-lite` | 177 | 3.2× faster (58) | 1.08× faster (171) | 106 | 2.9× faster (38) | ≈ equal (112) |
-| `kubernetes` | 192 | 3.5× faster (62) | 1.14× faster (193) | 122 | 2.3× faster (59) | 1.10× slower (150) |
-| `stripe` | 180 | 2.4× faster (80) | 1.35× slower (259) | 117 | 1.09× slower (138) | 3.8× slower (478) |
-| `bfcl` | 350 | 3.4× faster (109) | 1.18× faster (312) | 250 | 1.59× faster (166) | 1.73× slower (455) |
-| `gh-archive` | 374 | 2.5× faster (151) | 1.51× slower (576) | 296 | 2.6× faster (119) | 1.57× slower (477) |
-| `geojson` | 158 | 2.5× faster (65; 2.4–2.9) | 1.70× slower (277; 1.40–1.77) | 80 | 1.19× faster (68) | 2.9× slower (237) |
+| `github-rest` | 263 | 2.6× faster (104 MB/s; 2.46–2.67) | 1.41× slower (381 MB/s; 1.11–1.42) | 217 | 1.37× faster (162 MB/s) | 1.96× slower (444 MB/s; 1.81–2.01) |
+| `vega-lite` | 132 | 3.1× faster (45) | 1.06× faster (133) | 115 | 4.2× faster (29) | 1.42× faster (85) |
+| `kubernetes` | 148 | 3.4× faster (49; 3.35–3.48) | 1.21× faster (139) | 114 | 2.9× faster (45; 2.60–2.88) | ≈ equal (124) |
+| `stripe` | 150 | 2.6× faster (62; 2.51–2.65) | 1.16× slower (186) | 110 | 1.14× faster (105) | 2.8× slower (324; 2.68–3.02) |
+| `bfcl` | 272 | 3.4× faster (84; 3.40–3.57) | ≈ equal (275) | 226 | 1.86× faster (128) | 1.58× slower (377) |
+| `gh-archive` | 320 | 2.9× faster (114; 2.79–2.96) | 1.32× slower (444) | 263 | 3.0× faster (92) | 1.36× slower (364) |
+| `geojson` | 140 | 2.8× faster (50) | 1.68× slower (231) | 79 | 1.51× faster (52) | 2.5× slower (198; 2.48–2.59) |
 
-Writing (minimised; typed: haus's `Type.Encode` + `FormatValue` of the decoded value, against `Marshal` of the Go types' values):
+Writing (minimised; typed: haus's `Type.Format` of the decoded value, against `Marshal` of the Go types' values):
 
 | Source | haus write MB/s | encoding/json of `any` | go-json of `any` | haus typed write MB/s | encoding/json of the Go types | go-json of the Go types |
 |---|---:|---:|---:|---:|---:|---:|
-| `github-rest` | 697 | 2.9× faster (250 MB/s) | 1.17× faster (615) | 339 | 1.14× slower (394 MB/s) | 2.7× slower (953) |
-| `vega-lite` | 385 | 2.9× faster (142) | 1.83× faster (224) | 161 | 1.96× faster (87) | 1.11× faster (155) |
-| `kubernetes` | 379 | 2.7× faster (156) | 1.64× faster (261) | 152 | 1.37× faster (126) | 1.06× slower (184) |
-| `stripe` | 471 | 3.3× faster (151) | 1.49× faster (336) | 168 | 2.1× slower (294) | 5.2× slower (735) |
-| `bfcl` | 656 | 2.3× faster (299) | 1.51× faster (461) | 329 | 1.19× faster (293) | 2.7× slower (941) |
-| `gh-archive` | 737 | 2.3× faster (340) | 1.23× faster (632) | 361 | 1.28× faster (296; 1.08–1.36) | 1.47× slower (557; 1.39–1.75) |
-| `geojson` | 580 | 3.8× faster (151) | 2.5× faster (234) | 109 | 1.06× faster (103) | 2.2× slower (236) |
+| `github-rest` | 574 | 3.0× faster (194 MB/s; 2.40–3.04) | 1.23× faster (473 MB/s; 1.02–1.27) | 451 | 1.53× faster (305 MB/s) | 1.51× slower (717 MB/s; 1.35–1.55) |
+| `vega-lite` | 320 | 3.2× faster (105) | 2.0× faster (164; 1.99–2.10) | 152 | 2.4× faster (67) | 1.36× faster (115) |
+| `kubernetes` | 296 | 2.8× faster (120; 2.72–2.83) | 1.68× faster (201; 1.59–1.70) | 248 | 2.9× faster (97; 2.64–2.92) | 1.98× faster (142; 1.81–1.98) |
+| `stripe` | 402 | 3.7× faster (117; 3.59–3.80) | 1.63× faster (260) | 296 | 1.12× faster (224) | 2.3× slower (572; 2.23–2.42) |
+| `bfcl` | 510 | 2.4× faster (229) | 1.55× faster (353) | 358 | 1.69× faster (221) | 1.89× slower (713) |
+| `gh-archive` | 605 | 2.4× faster (261) | 1.26× faster (506; 1.21–1.32) | 496 | 2.3× faster (230; 2.21–2.34) | 1.21× faster (425; 1.19–1.29) |
+| `geojson` | 449 | 3.9× faster (113; 3.91–4.06) | 2.5× faster (180) | 118 | 1.50× faster (80; 1.39–1.52) | 1.52× slower (181; 1.49–1.60) |
 
-- **encoding/json into `any` flatters haus.** It is slow (reflection, a `map[string]any` per object, every number parsed to `float64`; Go 1.27's v1 API runs on json/v2), so haus parses 2.4–3.5× faster than it. Against go-json into `any`, haus's parse is between 1.18× faster (BFCL) and 1.70× slower (GeoJSON).
-- **Typed, against the Go types:** haus's typed parse (which checks every rule of the schema) is 1.09× slower (Stripe) to 2.9× faster (Vega-Lite) than encoding/json into the generated structs, faster where the schema has unions (Vega-Lite's specs, Kubernetes' manifests, GH Archive's events: each variant reads its object again with encoding/json); go-json into the same structs is 1.6–3.8× faster than haus but on Vega-Lite (equal) and Kubernetes (1.10×). Stripe is haus's worst case: 2,703 nullable fields, which haus decodes as `Some(…)` values and the Go types as pointers.
-- **Writing:** haus's untyped writers are faster than both libraries' writers of `any` (1.17–3.8×). The typed write (`Type.Encode` checks the value against the type before `FormatValue` writes it, two passes) is about half the untyped writer's speed: 0.5–2× encoding/json's time for the Go types, 1.06–5.2× go-json's (faster only on Vega-Lite), which write what the structs hold without any check.
-- **Spread:** the three runs agree within a few percent but for GeoJSON (the first run's encoding/json and go-json tasks were faster or slower by up to 20%) and GH Archive's typed writes (one run's go-json write 1.75× instead of 1.47×).
+- **encoding/json into `any` flatters haus.** It is slow (reflection, a `map[string]any` per object, every number parsed to `float64`; Go 1.27's v1 API runs on json/v2), so haus parses 2.6–3.4× faster than it. Against go-json into `any`, haus's parse is between 1.21× faster (Kubernetes) and 1.68× slower (GeoJSON).
+- **Typed, against the Go types:** haus's typed parse (`Type.Parse`, which checks every rule of the schema) is 1.14× (Stripe) to 4.2× (Vega-Lite) faster than encoding/json into the generated structs, most where the schema has unions (Vega-Lite's specs, Kubernetes' manifests, GH Archive's events: each variant reads its object again with encoding/json); go-json into the same structs is 1.36–2.8× faster than haus, but equal on Kubernetes and 1.42× slower on Vega-Lite. Stripe is haus's worst case: 2,703 nullable fields, which haus decodes as `Some(…)` values and the Go types as pointers. Most of haus's typed parse is the parse itself (a `haus.Value` tree: a box per value) and the garbage collector; the decoding walk is a quarter of it on Stripe.
+- **Writing:** haus's untyped writers are faster than both libraries' writers of `any` (1.23–3.9×). The typed write (`Type.Format` checks the value against the type as it writes it, one pass) is 1.12× (Stripe) to 2.9× (Kubernetes) faster than encoding/json writing the Go types, and against go-json between 1.98× faster (Kubernetes) and 2.3× slower (Stripe); go-json writes what the structs hold without any check.
+- **Spread:** the machine was shared with other work, more than for the earlier runs: every task's MB/s is 10–25% lower than in those, haus's untyped tasks as much as the JSON libraries' (their code is unchanged), so compare the ratios, which are each run's own. The runs agree within a few percent but where the parentheses say otherwise (GitHub's untyped JSON tasks moved most).
 
 Earlier optimisations of the Go binding, measured against encoding/json into `any`:
 
 - **Writing** was the weak spot before (1.05–2.1× slower than `json.Marshal`): the compact and minimised writers built the pretty layout's syntax tree, a node and an item per value. They now write as they check (`go/lines.go`), with the same checks in the same order as the pretty layout's builder (so the same errors), into a pooled buffer: 3.4–6.5× faster per document, and 1.65–3.7× faster than `json.Marshal`, which sorts every object's keys.
 - **Parsing** builds each container's entries on a scratch stack and copies them out at their exact length, with the parsers (and their stacks) pooled: about 1.1× faster per document, 15–38% fewer bytes allocated.
-- Tried and left out (no clear gain on this machine): one shared value for `None`, `True` and `False` (5–20% fewer allocations, no faster), a pooled set for the duplicate-key check of large records (slower), a byte table for identifier characters, and writing a decoded float's spelling into a stack buffer (18% fewer allocations on GeoJSON, 2% faster).
+- **Typed parse and write** (this round): `Type.Format` writes the value as it checks it, in one pass, through the decoder's walk (every check of `Type.Encode` in its order, the writer's checks of `FormatValue` too; on any error it starts again in two passes, which give the exact error, so the errors are the same by construction); a field's written key is kept with the schema. The walk itself: no box per unchanged record or float (the input value is returned), a record's required fields counted as they are decoded (a record lacking one fails with missing-field first, as before), the field lookup tried at the next schema field first, no copy of a record's fields to drop one, a shorter way for scalars kept as they are (strings, enum tags, `None`, integers), pooled walkers, and a float's one spelling written into a stack buffer (`floats.Append`) and compared without allocating. `Type.Parse` is `haus.Parse` + `Type.Decode` without checking an `Any`'s parts again. Against encoding/json's time (the measure the shared machine left comparable), typed writing is 1.2–2.4× faster than before (Stripe most) and typed parsing 1.16–1.42×.
+- Tried and left out (no clear gain on this machine): one shared value for `None`, `True` and `False`, and in this round a parser cache that boxes recurring strings, numbers and tags once (21% fewer allocations on Stripe, no faster); a pooled set for the duplicate-key check of large records (slower). Not tried: a parser that decodes as it reads (it would save the walk, about a quarter of Stripe's typed parse, with a second decoder to keep in step).
 
 ### Python
 
@@ -560,9 +561,9 @@ The checks before timing are TypeScript's, in Rust: every haus document parses t
 | Task | JSON | haus |
 |---|---|---|
 | parse | `Unmarshal` into `any`: encoding/json (the baseline of "vs JSON"), go-json | `haus.Parse` (per document), `haus.ParseAll` (the corpus): text → `haus.Value`, no schema |
-| typed | `Unmarshal` into the document's root type, Go types generated from the source's JSON Schema ([below](#the-go-types-of-the-typed-tasks)): encoding/json, go-json (per document) | `haus.Parse` + `schema.Type.Decode` with the document's type (looked up once): the runtime decoder (spec §15) |
+| typed | `Unmarshal` into the document's root type, Go types generated from the source's JSON Schema ([below](#the-go-types-of-the-typed-tasks)): encoding/json, go-json (per document) | `schema.Type.Parse` with the document's type (looked up once): `haus.Parse` and the runtime decoder (spec §15), `Type.Decode`; the corpus: `haus.ParseAll` + `Type.Decode` |
 | write | `Marshal` of the `any` value: encoding/json (the baseline), go-json | `haus.FormatValue` minimised and compact, `haus.FormatValues` minimised (the corpus as a stream) |
-| write, typed | `Marshal` of the Go types' values: encoding/json, go-json (per document) | `schema.Type.Encode` (checks the value against the type) + `haus.FormatValue` minimised, of the decoded value (per document) |
+| write, typed | `Marshal` of the Go types' values: encoding/json, go-json (per document) | `schema.Type.Format` minimised, of the decoded value (per document): `Type.Encode` (checks the value against the type) + `haus.FormatValue`, in one pass |
 
 Each on the corpus and per document (the typed JSON tasks per document only: GitHub's and Stripe's corpora mix root types). Bytes are those of the text read, as in the other languages, or written: `FormatValue` writes a file, so each document's text and a line feed; `Marshal` escapes `<`, `>` and `&` and sorts a map's members, so its text is other than `all.json`; the Go types write the members the schema lists, in its order. The tasks are `testing.B` benchmarks (`b.Loop`), `BenchmarkSpeed/<source>/<task>`: `go test -bench .` runs them, with `-benchmem` and `-count` for benchstat. `cmd/speed` runs each with `testing.Benchmark`: once untimed (for the checksum), 1 s of warm-up, then 20 runs of 150 ms, each run one sample (the mean of its calls, as criterion's samples are); the mean is over all calls of all samples, p75 and p99 over the samples. `testing` collects garbage before each run (`gc: true`) and counts allocations, which the results keep (`allocs`, `alloc_bytes` per iteration) and the report shows per document.
 
@@ -601,7 +602,7 @@ A struct that would hold itself by value gets a pointer there. The variants' met
 
 (A missing member is rejected only where it is a variant's member or one of its keys: Kubernetes' `kind`, GH Archive's `type`.)
 
-| | haus (`Parse` + `Type.Decode`) | encoding/json, go-json into the Go types |
+| | haus (`Type.Parse`: `Parse` + `Type.Decode`) | encoding/json, go-json into the Go types |
 |---|---|---|
 | a required member missing | rejected | accepted, the field's zero value (written back as `0`, `""`, `null`), but where it tells a variant's case |
 | an enum value the enum doesn't list | rejected | accepted (a string) |
@@ -615,7 +616,7 @@ A struct that would hold itself by value gets a pointer there. The variants' met
 | what comes out | a `haus.Value` tree, checked, numbers as their text (the Go binding has no generated types: a program maps it to its own) | Go structs of the schema's types, ready to use; `any` for `Any` (`float64` numbers) |
 | limits | depth, sizes, number lengths (haus's defaults) | a depth limit (encoding/json: 10,000) |
 
-On the writing side, `Type.Encode` checks the value against the type (and for cycles, invalid UTF-8, shared nodes) before `FormatValue` writes it; `Marshal` writes what the structs hold, checking nothing of the schema.
+On the writing side, `Type.Format` checks the value against the type (and for cycles, invalid UTF-8, shared nodes) as it writes it, the checks of `Type.Encode` and `FormatValue`; `Marshal` writes what the structs hold, checking nothing of the schema.
 
 ### Speed (Python)
 

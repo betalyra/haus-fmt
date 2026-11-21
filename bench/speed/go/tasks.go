@@ -223,6 +223,17 @@ func (in *Inputs) checkTyped() (TypedBaselines, error) {
 		if again, err := in.Types[i].Decode(back); err != nil || !haus.Equals(again, in.Decoded[i]) {
 			return out, fmt.Errorf("%s: the typed haus write doesn't read back as the same values", d.ID)
 		}
+		// The one-pass calls the tasks time give what the two passes give.
+		enc, err := in.Types[i].Encode(in.Decoded[i])
+		if err != nil {
+			return out, fmt.Errorf("%s: Type.Encode: %w", d.ID, err)
+		}
+		if two, err := haus.FormatValue(enc, minimised); err != nil || !bytes.Equal(two, text) {
+			return out, fmt.Errorf("%s: Type.Format isn't Type.Encode + FormatValue", d.ID)
+		}
+		if parsed, err := in.Types[i].Parse(d.Haus); err != nil || !haus.Equals(parsed, in.Decoded[i]) {
+			return out, fmt.Errorf("%s: Type.Parse isn't haus.Parse + Type.Decode", d.ID)
+		}
 		if !bytes.Equal(text, append(bytes.Clone(d.Haus), '\n')) {
 			out.TypedWriteOtherText++
 		}
@@ -256,14 +267,11 @@ func (in *Inputs) checkTyped() (TypedBaselines, error) {
 	return out, nil
 }
 
-// typedWrite is the typed haus write of document i: Type.Encode (which
-// checks the value against the type) and FormatValue, minimised.
+// typedWrite is the typed haus write of document i: Type.Format, minimised,
+// which checks the value against the type as it writes it (the text and
+// errors of Type.Encode followed by FormatValue, in one pass).
 func (in *Inputs) typedWrite(i int) ([]byte, error) {
-	v, err := in.Types[i].Encode(in.Decoded[i])
-	if err != nil {
-		return nil, err
-	}
-	return haus.FormatValue(v, minimised)
+	return in.Types[i].Format(in.Decoded[i], minimised)
 }
 
 // Task is one timed task: what it is, and its body, one iteration of the
@@ -449,14 +457,10 @@ func (in *Inputs) Tasks() ([]Task, error) {
 			}})
 	}
 	typed = append(typed, Task{ID: "typed-doc-haus", Group: "typed", Input: "per doc", Format: "haus",
-		Impl: "haus.Parse + Type.Decode", Bytes: hausBytes,
+		Impl: "haus Type.Parse (haus.Parse + Type.Decode)", Bytes: hausBytes,
 		Run: func() (int, error) {
 			for i, d := range docs {
-				v, err := haus.Parse(d.Haus)
-				if err != nil {
-					return 0, err
-				}
-				if _, err := in.Types[i].Decode(v); err != nil {
+				if _, err := in.Types[i].Parse(d.Haus); err != nil {
 					return 0, err
 				}
 			}
@@ -528,7 +532,7 @@ func (in *Inputs) Tasks() ([]Task, error) {
 			Impl: "haus.FormatValue (compact)", Bytes: compactBytes,
 			Run: func() (int, error) { return formatEach(in.Values, compact) }},
 		Task{ID: "write-doc-haus-typed", Group: "write", Input: "per doc", Format: "haus",
-			Impl: "haus Type.Encode + FormatValue minimised (typed)", Bytes: typedWriteBytes,
+			Impl: "haus Type.Format minimised (typed: Type.Encode + FormatValue in one pass)", Bytes: typedWriteBytes,
 			Run: func() (int, error) {
 				n := 0
 				for i := range docs {

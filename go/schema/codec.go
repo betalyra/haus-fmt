@@ -68,6 +68,9 @@ func NewCodecs(codecs ...Codec) (*Codecs, error) {
 	return c, nil
 }
 
+// none reports whether there are no codecs; c may be nil.
+func (c *Codecs) none() bool { return c == nil || len(c.byID) == 0 }
+
 // forType returns the codec for a named type without arguments, or nil.
 func (c *Codecs) forType(t *typ) Codec {
 	switch {
