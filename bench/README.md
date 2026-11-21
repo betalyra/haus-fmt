@@ -3,7 +3,7 @@
 A first, small benchmark of haus against JSON:
 
 1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
-2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` and goccy/go-json, into `any` and into Go types generated from the same schema (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`). Every language reads the same documents, which `convert` exports as plain files.
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` and goccy/go-json, into `any` and into Go types generated from the same schema (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`), the JVM against Jackson (`speed/jvm/`). Every language reads the same documents, which `convert` exports as plain files.
 
 ```
 bench/
@@ -15,6 +15,7 @@ bench/
     rust/                 Rust speed: criterion (its own Cargo crate, outside the rust/ workspace)
     go/                   Go speed: testing.B (its own Go module, outside go/'s)
     py/                   Python speed: its own uv project, outside python/ (json, orjson, pydantic, msgspec)
+    jvm/                  JVM speed: JMH (its own Gradle build, outside jvm/'s)
   .data/                  downloads (git-ignored)
   .out/<source>/          results (git-ignored); corpus/ is the exported corpus every language's speed benchmark reads
 ```
@@ -44,7 +45,8 @@ pnpm --filter haus-bench all          # every TypeScript step below, in order (a
 pnpm --filter haus-bench speed-rust   # the Rust speed benchmark (cargo bench, about 7 minutes), after convert
 pnpm --filter haus-bench speed-go     # the Go speed benchmark (go generate, then go run ./cmd/speed: about 10 minutes), after convert
 pnpm --filter haus-bench speed-py     # the Python speed benchmark (uv run, about 15 minutes), after convert
-pnpm --filter haus-bench report       # the report again, with Rust's, Go's and Python's speed beside TypeScript's
+pnpm --filter haus-bench speed-jvm    # the JVM speed benchmark (JMH through jvm/'s Gradle wrapper, about 20 minutes), after convert
+pnpm --filter haus-bench report       # the report again, with Rust's, Go's, Python's and the JVM's speed beside TypeScript's
 ```
 
 Or step by step:
@@ -60,6 +62,7 @@ Or step by step:
 | speed (Rust) | `pnpm --filter haus-bench speed-rust`, or `cargo bench` in `bench/speed/rust/` | ~7 min (11 tasks × ~4.5 s × 7 sources, and the first build) | `bench/.out/<source>/speed-rust.json` |
 | speed (Go) | `pnpm --filter haus-bench speed-go`, or `go generate` then `go run ./cmd/speed` in `bench/speed/go/` | ~10 min (20 tasks × ~4 s × 7 sources; generating the Go types a few seconds) | `bench/speed/go/jsontypes/gen/`, `jsontypes_gen.go` (the Go types, git-ignored); `bench/.out/<source>/speed-go.json` |
 | speed (Python) | `pnpm --filter haus-bench speed-py`, or `uv run python -m haus_bench_speed` in `bench/speed/py/` | ~15 min (19 tasks × ~3.5 s × 7 sources, and building and checking the models) | `bench/.out/<source>/speed-python.json` |
+| speed (JVM) | `pnpm --filter haus-bench speed-jvm`, or `../../../jvm/gradlew run` in `bench/speed/jvm/` | ~20 min (14 tasks × 7 sources, a fork of ~12 s each: start, reading the corpus, 2 s of warm-up, 3 s measured, a collection between iterations; `HAUS_BENCH_ROUNDS=3` ~1 hour); `HAUS_BENCH_QUICK=1` ~10 min | `bench/.out/<source>/speed-jvm.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
 `convert` and `speed` build `@haus-fmt/haus` and `@haus-fmt/effect` first: they measure the built `dist/`, which git ignores, so after switching branches an old build would otherwise be measured. When running `main.node.ts` directly (Bun, Deno), run `prepare-haus` first.
@@ -112,6 +115,18 @@ HAUS_BENCH_QUICK=1 uv run python -m haus_bench_speed               # 3 samples i
 HAUS_BENCH_TASKS=parse-doc-haus,typed-doc-haus uv run python -m haus_bench_speed   # only these tasks; no results written
 ```
 
+The JVM benchmark, the same way (a JDK 17 or later; JDK 25 is what it was run with), through `jvm/`'s Gradle wrapper:
+
+```sh
+cd bench/speed/jvm
+../../../jvm/gradlew run                                       # every source in sources.haus; writes speed-jvm.json
+HAUS_BENCH_SOURCES=vega-lite,geojson ../../../jvm/gradlew run
+HAUS_BENCH_QUICK=1 ../../../jvm/gradlew run                    # 3 iterations of 100 ms per task: checks the harness, not for publishing
+HAUS_BENCH_TASKS=parse-doc-json,parse-doc-haus HAUS_BENCH_PROFILERS=stack ../../../jvm/gradlew run   # a profile of some tasks (no results written)
+```
+
+`HAUS_BENCH_ROUNDS` sets the number of rounds (default 1; 3 rounds take three times as long and give each haus task's ratio to its baseline in three forks). `HAUS_BENCH_TASKS`, `HAUS_BENCH_PROFILERS` (JMH's profilers with their options as on its command line: `stack:lines=4`, `gc`, …) and `HAUS_BENCH_JVM_ARGS` (more options for the forks, such as `-XX:StartFlightRecording=settings=profile,filename=fork-%p.jfr` for a Flight Recorder profile per fork, read with `jfr view hot-methods`) are for looking closer; a run with any of them writes no results file.
+
 ### Node, Bun and Deno
 
 One program, one thin entry per runtime; everything else is runtime-neutral (`size/src/`, `speed/ts/`). The pnpm scripts use Node. From `bench/`, after `pnpm install` and `prepare-haus`:
@@ -149,6 +164,7 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 | `speed/ts/validators.ts`, `speed/ts/mutate.ts` | the JSON baselines of the typed tasks, built from the source's JSON Schema: Zod (a translation), Ajv, TypeBox, fast-json-stringify; the mutated documents they must reject |
 | `speed/go/` | Go speed, testing.B: `tasks.go` (the tasks and checks), `typed.go` (the typed JSON baselines and their round trip), `mutate.go` (the mutated documents), `corpus.go` (reads the export and the manifest), `results.go` (the samples → `speed-go.json`), `machine*.go`, `speed_test.go` (`BenchmarkSpeed`), `cmd/speed` (the runner), `cmd/jsontypes` (the Go types from the JSON Schema, `go generate`), `jsontypes/` (their registry; reads the JSON Schema) |
 | `speed/py/` | Python speed (`src/haus_bench_speed/`): `tasks.py` (the tasks and checks), `models.py` (the JSON Schema → pydantic models and msgspec Structs, as generated Python source), `mutate.py` (the mutated documents they must reject, as TypeScript's `mutate.ts`), `corpus.py` (reads the export and the manifest), `harness.py` (the timing, and the rows of `speed-python.json`), `machine.py`, `__main__.py` (the runner) |
+| `speed/jvm/` | JVM speed, JMH: `Inputs.java` (the tasks and checks), `Corpus.java` (reads the export and the manifest), `SpeedBenchmark.java` (the JMH benchmark: one task of one source per fork), `Speed.java` (the runner: rounds of JMH runs → `speed-jvm.json`), `Results.java`, `Machine.java`, `Settings.java` |
 | `speed/rust/` | Rust speed, criterion: `benches/speed.rs` (the tasks and checks), `src/corpus.rs` (reads the export and the manifest), `src/results.rs` (criterion's samples → `speed-rust.json`), `src/machine.rs` |
 
 Services: `BenchPaths` (from `--data-dir`/`--out-dir`), `Manifest` (reads `sources.haus`), `Results` (reads and writes the results files, checked with their schemas), `Host` (provided by each entry); from the platform: `FileSystem`, `Path`, `Crypto` (SHA-256), `ChildProcessSpawner` (git), `HttpClient`. tinybench stays the timing engine: the timed functions are the plain library calls, built before the run, with no Effect inside them.
@@ -409,6 +425,28 @@ The Python benchmark (CPython 3.14.10, M1 Max, shared with builds and fuzzers of
 - **The canonical form** is 1.3–2.6× faster: scalars written where they are met, an array of numbers joined at once, `key:` texts reused across records.
 - Tried and left out: letting a run of items close its container (2%, within the noise).
 
+### JVM
+
+The JVM benchmark (JMH 1.37, Temurin 25.0.5, M1 Max, shared with builds and fuzzers of other work while it ran), haus's time against Jackson 2.20's for the same task and input (below 1: haus is faster; typed against Jackson's plain parse, typed write and canonical against its plain write), before → after the optimisations below, from one full run of each with the default settings (one fork per task, 2 s of warm-up, 3 s measured); MB/s is haus's, after.
+
+| Source | parse corpus | parse doc | typed doc | write corpus | write doc | typed write doc | canonical doc |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 1.75 → 1.51 (313) | 1.66 → 1.09 (438) | 2.52 → 1.65 (289) | 2.87 → 1.27 (483) | 2.26 → 1.49 (459) | 3.83 → 2.16 (306) | 2.05 → 1.82 (376) |
+| `vega-lite` | 1.26 → 1.27 (166) | 1.17 → 0.99 (193) | 1.78 → 1.63 (117) | 1.88 → 1.29 (271) | 1.93 → 1.23 (308) | 3.07 → 2.32 (164) | 1.84 → 1.66 (229) |
+| `kubernetes` | 1.20 → 1.05 (242) | 1.09 → 0.89 (254) | 1.54 → 1.36 (166) | 2.12 → 1.08 (401) | 1.91 → 1.28 (320) | 3.23 → 1.94 (210) | 2.04 → 1.32 (309) |
+| `stripe` | 1.83 → 1.57 (195) | 1.85 → 1.62 (181) | 3.27 → 2.35 (125) | 2.11 → 1.01 (561) | 2.12 → 1.02 (484) | 4.06 → 2.17 (223) | 1.96 → 1.16 (425) |
+| `bfcl` | 1.18 → 1.07 (396) | 1.14 → 1.03 (357) | 1.58 → 1.39 (265) | 1.31 → 0.97 (532) | 1.90 → 2.03* (287) | 3.35 → 1.90 (306) | 1.61 → 1.84* (317) |
+| `gh-archive` | 1.66 → 1.22 (508) | 1.55 → 1.20 (489) | 2.30 → 1.74 (337) | 2.12 → 1.09 (575) | 2.23 → 1.14 (587) | 3.62 → 1.87 (354) | 1.83 → 1.38 (487) |
+| `geojson` | 1.26 → 0.84 (239) | 1.28 → 0.84 (231) | 2.72 → 1.46 (132) | 0.78 → 0.72 (353) | 0.78 → 0.55 (291) | 3.18 → 2.04 (78) | 1.27 → 0.66 (240) |
+
+\* One slow fork: BFCL's minimised write took 18.7 ms there, more than its typed write (17.5 ms), which does the same write after a check, and 11.7 ms over 3 rounds of the same build; its canonical form 11.4 ms over those rounds (Jackson's sorted writer: 12.6 ms). A single fork per task is cheap, not stable: rows with a wide p75–p99 spread are worth a second run (`HAUS_BENCH_ROUNDS=3`).
+
+- **Writing** was 1.3–2.9× Jackson's time (GeoJSON aside, where Jackson writes doubles): every string was scanned twice, once for unpaired surrogates (`Quoting.hasLoneSurrogate`, about a third of the time) and once to quote it, and every key was looked at to see whether it is an identifier. The surrogate check is now part of quoting (the same error at the same place), printable ASCII is told apart by a table and written in one piece, a record whose keys the parser read as identifiers knows it (`bareKeys`) so its keys are appended as they are, and the writers test a value's class instead of calling `kind()`. Writing is now 0.6–1.5× Jackson's time.
+- **Parsing**: the UTF-8 check was a pass of its own over the whole text; it is now done in strings and comments as they are read (the only places bytes beyond ASCII can stand), and over the whole text only when something else is wrong, so invalid UTF-8 is still the error wherever it is. The duplicate-key table of large records hashed every key with a polynomial modulo a prime at a random point (a division per character); it now starts with `String.hashCode` and rebuilds itself with the polynomial (reduced without a division) once any key lands more than 24 slots from its own, so crafted keys still cost linear time. Each value's depth is worked out while reading rather than asked of its items, strings known to be ASCII are made without a UTF-8 decode, the integers 0–99 are shared values, and the scratch stacks aren't cleared (the parser lives for one text). Parsing is now 0.8–1.6× Jackson's tree.
+- **Decoding**: a record looks up each key's field once (it looked up every required field among the keys, which is quadratic in small records) and keeps the key table when only values change; integer ranges are checked with `long`s instead of `BigInteger`s; a float literal that is already the one spelling of its float (at most 15 significant digits, no exponent, between 10⁻⁶ and 10²¹) is kept without rounding and printing it, checked against the rounding in `SchemaFloatsTest`. The typed parse is 1.4–2.4× Jackson's untyped parse, the typed write 1.9–2.3× its plain write.
+- **The canonical form** sorts a record's keys by insertion up to 24 keys (no boxing) and skips the identifier check for bare keys.
+- Tried and left out: a table of the keys and tags read, so a repeated key is one string (Jackson does this): 12% slower on GitHub's and Stripe's documents, the same on GH Archive; starting the writer's buffer at 16 KiB (GH Archive per document 1.49× instead of 1.59×, GitHub 1.12× instead of ≈ equal).
+
 ### TypeScript: typed against JSON with validation
 
 haus's typed parse reads and checks in one pass; the fair JSON counterpart is `JSON.parse` followed by a validator of the same schema, and for writing, a JSON writer compiled from the same schema ([the baselines](#the-json-baselines-of-the-typed-tasks)). Per document, Node 26 (M1 Max, shared with other benchmarks while it ran): the median of three full runs, the range of the three in parentheses where it matters. Ratios are haus's time over the JSON task's time on the same documents (below 1: haus is faster); MB/s is each format's own bytes.
@@ -658,6 +696,24 @@ Before timing, the checks of the other languages (every haus document decodes, i
 | what comes out | dicts, tuples, `Tagged`, `Some`, the numbers' exact text for `Decimal` | model instances | Struct instances (the variants by keys inside a wrapper) |
 | limits | depth, sizes, number lengths, a step budget (haus's defaults) | none | none |
 
+### Speed (JVM)
+
+`bench/speed/jvm/`, a Gradle build of its own (`haus-bench-speed-jvm`, outside `jvm/`, so `jvm/`'s build and its CI don't build it), with the binding from the checkout through a composite build (`includeBuild("../../../jvm")`: `org.haus-fmt:haus` is `jvm/`'s `:haus`). [JMH](https://github.com/openjdk/jmh) 1.37 (`jmh-core` and its annotation processor, no Gradle plugin) and [Jackson](https://github.com/FasterXML/jackson-databind) 2.20.1 (`jackson-databind`), pinned exactly and used only here; the bench code is Java 17. The same tasks as the other languages, on the same files, and the canonical form:
+
+| Task | JSON | haus |
+|---|---|---|
+| parse | `ObjectMapper.readTree` (a `JsonNode` tree) | `Haus.parse` (per document), `Haus.parseAll` (the corpus): bytes → `Value`, no schema |
+| typed | (the plain parse) | `Haus.parse` + `SchemaType.decode` with the document's type (per document), `Haus.parseAll` + `SchemaType.decode` of each (the corpus) |
+| write | `ObjectMapper.writeValueAsString` of the tree | `Haus.write` minimised and compact, `Haus.writeAll` minimised (the corpus as a stream) |
+| write, typed | | `SchemaType.encode` of the decoded value (the check of a value built in code) + `Haus.write` minimised (per document) |
+| write, canonical | `writeValueAsString` with `JsonNodeFeature.WRITE_PROPERTIES_SORTED` (every object's members sorted by name) | `Haus.canonical` (spec §12; per document) |
+
+Parse and write on the corpus and per document, the others per document. The typed tasks have no JSON counterpart, as in Go and Rust: Jackson's databind would need Java types for the seven schemas, so their baseline is the plain parse (and write); `SchemaType.decode` returns a `Value`, as Go's `Type.Decode` does (the JVM's typed codecs, `HausCodec`, build records on top of it). The canonical form is in the write group, as in Python: its baseline is the plain write, and Jackson's sorted writer is a JSON row beside it. Both read the files' bytes and write a `String`; bytes are those of the text read, or the UTF-8 size of the text written (`Haus.write` writes a file: each document's text and a line feed). Jackson is used as it comes (`new ObjectMapper()`): numbers with a fraction or exponent become `double`, integers `int`, `long` or `BigInteger`. JSON has no canonical form of its own; the nearest counterpart is Jackson writing members sorted, which is less work than haus's canonical form: it sorts by UTF-16 code units (haus by UTF-8 bytes: the same order, except between characters beyond U+FFFF and those from U+E000 to U+FFFF) and writes numbers as it holds them, where haus normalizes every number's text.
+
+Timing: JMH, average time, a fork per task with a fixed heap (`-Xms2g -Xmx2g`, the default collector), garbage collected between iterations (`gc: true`), the outputs consumed by JMH's `Blackhole`. A run is one round by default (`HAUS_BENCH_ROUNDS` for more); each round runs every task in order, a JSON task and then its haus counterparts, each in a fork of its own, so the pairs follow each other closely. A fork warms up for 4 iterations of 500 ms and measures 6 of 500 ms (5 s of timing per task, about the other languages' budget); every measured iteration is one sample (the mean of its calls), so a row has 6 per round. The mean is JMH's score over all of them, p75 and p99 are over the samples, and bytes allocated per iteration come from JMH's gc profiler (`gc.alloc.rate.norm`; the number of allocations isn't counted). Besides the results file, the terminal shows each haus task against its baseline: with several rounds, the median of the rounds' time ratios and their range. Most of a fork's time is starting it and reading the corpus (each task's bytes are only computed by the runner, not in the forks).
+
+The checks before timing, in Java: every haus document parses to a value that `Haus.write` (minimised) writes back as the same text (and a line feed), its pretty text reads as a value written the same way, its canonical form reads back as the same value and the same form, it decodes with its type (`<source>.schema.haus`, the document's root) and the typed write reads back as the decoded value, which decodes to itself, `all.haus` reads as the documents' values and is what `Haus.writeAll` writes for them; Jackson reads every JSON document and `all.json` (an array of the same trees), and its sorted writer writes the same tree with every object's members in order. `jsonNotStable` counts the documents Jackson writes back through its tree as another document by haus's equality (`HausJson.importJson` of both texts: exact numbers, member order aside). Each task runs once untimed, and its output's size goes into the checksum. Results: `speed-jvm.json`, the shape of the others (`lang: "jvm"`, the JDK as `machine.runtime`).
+
 ## Caveats
 
 - **Examples, not traffic.** GitHub's and Stripe's documents are hand-written examples, small (a few hundred bytes to a few KB) and heavy in URLs and ids, which neither format can shorten; Vega-Lite's and Kubernetes' are examples too. Only `gh-archive` is traffic, and one hour of it. Tabular data is still to come (plan §4.1).
@@ -666,5 +722,5 @@ Before timing, the checks of the other languages (every haus document decodes, i
 - **A hand-written schema** (BFCL) is one reasonable schema, not the only one; it types what is regular (messages, functions, parameter keywords) and leaves arguments and defaults `Any`.
 - **Minimised vs compact.** Compact haus keeps a space after `:` and `,` and is larger than minified JSON; the like-for-like comparison is minimised haus against minified JSON.
 - **Unlisted members** (388 in GitHub's corpus) are kept as imported JSON, so the haus text holds all of the document's data; a strict reader with a closed schema would reject these documents.
-- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't); in Go, encoding/json into `any` is slow (reflection, a map per object) and flatters haus: the typed rows and go-json are the fairer comparison, and Go types check less than haus's schema ([above](#the-go-types-of-the-typed-tasks)); in Python, pure-Python haus (no C extension, no dependencies) against C (json's scanner, orjson and msgspec, pydantic-core in Rust). One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
+- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't); in Go, encoding/json into `any` is slow (reflection, a map per object) and flatters haus: the typed rows and go-json are the fairer comparison, and Go types check less than haus's schema ([above](#the-go-types-of-the-typed-tasks)); in Python, pure-Python haus (no C extension, no dependencies) against C (json's scanner, orjson and msgspec, pydantic-core in Rust); on the JVM, against Jackson's `JsonNode` tree, which converts numbers the same way. One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
 - **Tokenizers are proxies** for what each provider bills, and tokenizers.js reproduces each tokenizer's regex closely but not perfectly in every edge case (see its README).

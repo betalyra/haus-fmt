@@ -104,11 +104,14 @@ final class SchemaTypes {
   static final class RecordType {
     final boolean closed;
     final FieldType[] fields;
+    /** The fields that aren't optional, in order. */
+    final FieldType[] required;
     private final Map<String, Integer> index; // for records with many fields; null for small ones
 
     RecordType(boolean closed, List<FieldType> fields) {
       this.closed = closed;
       this.fields = fields.toArray(new FieldType[0]);
+      this.required = fields.stream().filter(f -> !f.optional()).toArray(FieldType[]::new);
       if (this.fields.length >= INDEX_FROM) {
         index = new HashMap<>();
         for (int i = 0; i < this.fields.length; i++) {

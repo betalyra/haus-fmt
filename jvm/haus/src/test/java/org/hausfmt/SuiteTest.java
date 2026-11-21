@@ -24,6 +24,9 @@ class SuiteTest {
       List<Value> values = Haus.parseAll(Suite.bytes(dir.resolve(name + ".haus")));
       List<Value> want = HausJson.fromHausJsonLines(Suite.text(dir.resolve(name + ".jsonl")));
       assertEquals(want, values, "values");
+      for (int i = 0; i < values.size(); i++) {
+        assertReadAlike(want.get(i), values.get(i));
+      }
       StringBuilder canonical = new StringBuilder();
       for (Value v : values) {
         canonical.append(Haus.canonical(v)).append('\n');
@@ -31,6 +34,28 @@ class SuiteTest {
       assertEquals(Suite.text(dir.resolve(name + ".canonical")), canonical.toString(), "canonical");
       assertEquals(Suite.text(dir.resolve(name + ".hash")).trim(), Haus.hashAll(values), "hash");
     }));
+  }
+
+  /**
+   * What the parser works out as it reads, without asking the values: each value's depth, the
+   * same as for a value built in code, and records whose keys it read as identifiers.
+   */
+  private static void assertReadAlike(Value built, Value read) {
+    assertEquals(built.depth(), read.depth(), "depth of " + read);
+    if (read instanceof Value.Record r) {
+      for (int i = 0; i < r.size(); i++) {
+        assertTrue(!r.bareKeys() || Scan.isIdent(r.keyAt(i)), "a bare key that isn't an identifier: " + r.keyAt(i));
+        assertReadAlike(((Value.Record) built).get(r.keyAt(i)), r.valueAt(i));
+      }
+    } else if (read instanceof Value.Array a) {
+      for (int i = 0; i < a.size(); i++) {
+        assertReadAlike(((Value.Array) built).get(i), a.get(i));
+      }
+    } else if (read instanceof Value.Variant v) {
+      for (int i = 0; i < v.size(); i++) {
+        assertReadAlike(((Value.Variant) built).get(i), v.get(i));
+      }
+    }
   }
 
   @TestFactory

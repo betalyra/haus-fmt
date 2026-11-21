@@ -58,11 +58,22 @@ final class Scan {
    */
   static final boolean[] RAW_CHECK = table(DEL, C1_LEAD, BIDI_LEAD);
 
-  /** The bytes that end a plain run in a {@code "…"} string: {@link #RAW_CHECK}, tab, line feed, quote and backslash. */
-  static final boolean[] STRING_STOP = table(DEL, C1_LEAD, BIDI_LEAD, '\t', '\n', '"', '\\');
+  /**
+   * The bytes that end a plain run in a {@code "…"} string: {@link #RAW_CHECK}, tab, line feed,
+   * quote and backslash, and every byte beyond ASCII, whose sequence is checked to be UTF-8.
+   */
+  static final boolean[] STRING_STOP = beyondAscii(table(DEL, C1_LEAD, BIDI_LEAD, '\t', '\n', '"', '\\'));
 
   /** The bytes that end a plain run in a block comment. */
   static final boolean[] COMMENT_STOP = table(DEL, C1_LEAD, BIDI_LEAD, '*', '/');
+
+  /** Marks every byte from 0x80 in {@code t} too. */
+  private static boolean[] beyondAscii(boolean[] t) {
+    for (int c = 0x80; c < 0x100; c++) {
+      t[c] = true;
+    }
+    return t;
+  }
 
   /** Marks the control characters but tab and line feed, and {@code bytes}. */
   private static boolean[] table(int... bytes) {
@@ -152,9 +163,18 @@ final class Scan {
     return c >= 'A' && c <= 'Z';
   }
 
+  /** The characters that continue an identifier or tag, {@code [A-Za-z0-9_]}, by their ASCII code. */
+  private static final boolean[] WORD = new boolean[128];
+
+  static {
+    for (int c = 0; c < 128; c++) {
+      WORD[c] = isLower(c) || isUpper(c) || isDigit(c) || c == '_';
+    }
+  }
+
   /** Whether c can continue an identifier or tag: {@code [A-Za-z0-9_]}. */
   static boolean isWordChar(int c) {
-    return isLower(c) || isUpper(c) || isDigit(c) || c == '_';
+    return c >= 0 && c < 128 && WORD[c];
   }
 
   /** Whether c may not directly follow a number: {@code [A-Za-z0-9_.]} (grammar). */
@@ -237,6 +257,14 @@ final class Scan {
   static int invalidUtf8(byte[] s, int from, int to) {
     int i = from;
     while (i < to) {
+      // ASCII, eight bytes at a time: no byte has its high bit set.
+      while (i + 8 <= to
+          && (s[i] | s[i + 1] | s[i + 2] | s[i + 3] | s[i + 4] | s[i + 5] | s[i + 6] | s[i + 7]) >= 0) {
+        i += 8;
+      }
+      if (i >= to) {
+        break;
+      }
       int b = s[i];
       if (b >= 0) {
         i++;
@@ -252,7 +280,7 @@ final class Scan {
   }
 
   /** The length of the valid multi-byte sequence at {@code s[i]}, or 0 (RFC 3629). */
-  private static int validSequence(byte[] s, int i, int to) {
+  static int validSequence(byte[] s, int i, int to) {
     int b = s[i] & 0xFF;
     int n;
     int lo = 0x80;

@@ -54,30 +54,23 @@ final class LineWriter extends WriteCheck {
     }
   }
 
+  // The kinds by their classes, the most common first: a class test is cheaper than kind(), which
+  // each kind implements.
   void value(Value v, int depth) {
-    switch (v.kind()) {
-      case STRING:
-        String s = ((Value.Text) v).value();
-        checkString(s);
-        Quoting.appendQuoted(b, s);
-        break;
-      case NUMBER:
-        b.append(literal((Value.Number) v));
-        break;
-      case BYTES:
-        appendBytes(b, (Value.Bytes) v);
-        break;
-      case ARRAY:
-        enter(depth);
-        items('[', ']', ((Value.Array) v).unsafeItems(), depth);
-        break;
-      case RECORD:
-        enter(depth);
-        fields((Value.Record) v, depth);
-        break;
-      case VARIANT:
-        variant((Value.Variant) v, depth);
-        break;
+    if (v instanceof Value.Text) {
+      appendString(b, ((Value.Text) v).value());
+    } else if (v instanceof Value.Number) {
+      b.append(literal((Value.Number) v));
+    } else if (v instanceof Value.Record) {
+      enter(depth);
+      fields((Value.Record) v, depth);
+    } else if (v instanceof Value.Variant) {
+      variant((Value.Variant) v, depth);
+    } else if (v instanceof Value.Array) {
+      enter(depth);
+      items('[', ']', ((Value.Array) v).unsafeItems(), depth);
+    } else {
+      appendBytes(b, (Value.Bytes) v);
     }
   }
 
@@ -120,13 +113,17 @@ final class LineWriter extends WriteCheck {
     }
     b.append('{');
     space();
+    boolean bare = r.bareKeys();
     for (int i = 0; i < r.size(); i++) {
       if (i > 0) {
         separator();
       }
       String key = r.keyAt(i);
-      checkKey(key);
-      appendKey(b, key);
+      if (bare) {
+        b.append(key);
+      } else {
+        appendCheckedKey(b, key);
+      }
       b.append(':');
       space();
       path.key(key);

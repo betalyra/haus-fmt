@@ -19,13 +19,50 @@ final class Quoting {
    * holds; it is written as <code>&#92;u{FFFD}</code>.
    */
   static boolean appendQuoted(StringBuilder b, String s) {
-    boolean valid = true;
+    int n = s.length();
+    int i = 0;
+    while (i < n && isPlain(s.charAt(i))) {
+      i++;
+    }
     b.append('"');
+    if (i == n) {
+      // The common case: printable ASCII but quote and backslash, written as it is.
+      b.append(s).append('"');
+      return true;
+    }
+    return appendQuotedFrom(b, s, i);
+  }
+
+  /** Printable ASCII but {@code "} and {@code \\}: the characters that need no look in a {@code "…"} string. */
+  private static final boolean[] PLAIN = new boolean[128];
+
+  static {
+    for (int c = 0x20; c < Scan.DEL; c++) {
+      PLAIN[c] = c != '"' && c != '\\';
+    }
+  }
+
+  private static boolean isPlain(char c) {
+    return c < 128 && PLAIN[c];
+  }
+
+  /**
+   * Most characters beyond ASCII, which are written raw: not the C1 controls, the line and
+   * paragraph separators, the bidi controls (U+2028–U+2069 holds them all) or a surrogate. False
+   * for some that are written raw too, which {@link Scan#needsEscape} then tells apart.
+   */
+  private static boolean isPlainBeyondAscii(char c) {
+    return c >= 0xA0 && (c < 0x2028 || c > 0x2069 && c < Character.MIN_SURROGATE || c > Character.MAX_SURROGATE);
+  }
+
+  /** {@link #appendQuoted} from {@code s[from]}, the first character that isn't plain; the quote is written. */
+  private static boolean appendQuotedFrom(StringBuilder b, String s, int from) {
+    boolean valid = true;
     int plain = 0;
     int n = s.length();
-    for (int i = 0; i < n; i++) {
+    for (int i = from; i < n; i++) {
       char c = s.charAt(i);
-      if (c >= 0x20 && c < Scan.DEL && c != '"' && c != '\\') {
+      if (isPlain(c) || isPlainBeyondAscii(c)) {
         continue;
       }
       if (Character.isHighSurrogate(c) && i + 1 < n && Character.isLowSurrogate(s.charAt(i + 1))) {
@@ -89,7 +126,15 @@ final class Quoting {
 
   /** Whether {@code s} has an unpaired surrogate, which no UTF-8 text holds. */
   static boolean hasLoneSurrogate(String s) {
-    for (int i = 0; i < s.length(); i++) {
+    int n = s.length();
+    for (int i = 0; i < n; i++) {
+      // Four characters below the surrogates at a time: most text has none.
+      while (i + 4 <= n && (s.charAt(i) | s.charAt(i + 1) | s.charAt(i + 2) | s.charAt(i + 3)) < Character.MIN_SURROGATE) {
+        i += 4;
+      }
+      if (i >= n) {
+        break;
+      }
       char c = s.charAt(i);
       if (!Character.isSurrogate(c)) {
         continue;

@@ -37,14 +37,38 @@ abstract class WriteCheck {
   /** A string, which must have a UTF-8 form: no unpaired surrogate. */
   final void checkString(String s) {
     if (check && Quoting.hasLoneSurrogate(s)) {
-      throw path.error(ErrorCode.CANNOT_ENCODE, "a string with an unpaired surrogate, which has no UTF-8 form");
+      throw notEncodable("string");
     }
   }
 
   /** A key, which must have a UTF-8 form: no unpaired surrogate. */
   final void checkKey(String key) {
     if (check && Quoting.hasLoneSurrogate(key)) {
-      throw path.error(ErrorCode.CANNOT_ENCODE, "a key with an unpaired surrogate, which has no UTF-8 form");
+      throw notEncodable("key");
+    }
+  }
+
+  /** The error for a string or key with an unpaired surrogate, here. */
+  final HausException notEncodable(String what) {
+    return path.error(ErrorCode.CANNOT_ENCODE, "a " + what + " with an unpaired surrogate, which has no UTF-8 form");
+  }
+
+  /**
+   * Appends a string as {@link Quoting#appendQuoted} does, checked as {@link #checkString} checks
+   * it, in one pass: an unpaired surrogate is the same error, at the same place.
+   */
+  final void appendString(StringBuilder b, String s) {
+    if (!Quoting.appendQuoted(b, s) && check) {
+      throw notEncodable("string");
+    }
+  }
+
+  /** Appends a key as {@link #appendKey} does, checked as {@link #checkKey} checks it, in one pass. */
+  final void appendCheckedKey(StringBuilder b, String key) {
+    if (Scan.isIdent(key)) {
+      b.append(key);
+    } else if (!Quoting.appendQuoted(b, key) && check) {
+      throw notEncodable("key");
     }
   }
 

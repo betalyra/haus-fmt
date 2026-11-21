@@ -36,6 +36,46 @@ final class SchemaFloats {
   }
 
   /**
+   * Whether a normalized literal is already the one spelling of the float nearest to it, found
+   * from its text alone; false where that takes the work of {@link #parse} and {@link #format}.
+   * True for a literal without an exponent, not zero, with no trailing zero after a decimal point,
+   * whose value is at least 10^-6 and below 10^21 (where the spelling has no exponent), with at
+   * most 15 significant digits (6 for {@code Float32}). Every decimal of so few digits rounds to a
+   * float that no other decimal of so few digits rounds to (the precision of binary64 and binary32
+   * in decimal digits), so its own digits are the fewest that round back, and the only ones of
+   * their length; spelled without an exponent, they are the literal.
+   */
+  static boolean isOneSpelling(String literal, boolean float32) {
+    int n = literal.length();
+    int i = literal.charAt(0) == '-' ? 1 : 0;
+    int first = -1; // the first significant digit
+    int last = -1; // the last significant digit
+    int dot = -1;
+    for (int k = i; k < n; k++) {
+      char c = literal.charAt(k);
+      if (c == '.') {
+        dot = k;
+      } else if (c >= '1' && c <= '9') {
+        if (first < 0) {
+          first = k;
+        }
+        last = k;
+      } else if (c != '0') {
+        return false; // an exponent
+      }
+    }
+    if (first < 0 || dot >= 0 && literal.charAt(n - 1) == '0') {
+      return false; // zero, or a trailing zero after the point
+    }
+    int intDigits = (dot < 0 ? n : dot) - i;
+    if (intDigits > 21 || dot >= 0 && literal.charAt(i) == '0' && first - dot - 1 > 5) {
+      return false; // 10^21 or more, or below 10^-6
+    }
+    int significant = last - first + 1 - (dot > first && dot < last ? 1 : 0);
+    return significant <= (float32 ? 6 : 15);
+  }
+
+  /**
    * A finite float in the one spelling of spec §15: the fewest digits that round back to it (the
    * closest of them, then the one ending in an even digit), laid out as JavaScript's {@code
    * Number.prototype.toString} does, without {@code +} in the exponent.

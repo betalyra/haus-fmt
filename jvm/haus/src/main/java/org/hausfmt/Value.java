@@ -417,8 +417,13 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     /** An array that keeps {@code items}, which nothing else changes. */
     Array(Value[] items) {
+      this(items, containerDepth(items));
+    }
+
+    /** {@link #Array(Value[])} of a depth known already: one more than its deepest item's. */
+    Array(Value[] items, int depth) {
       this.items = items;
-      this.depth = containerDepth(items);
+      this.depth = depth;
     }
 
     @Override
@@ -490,13 +495,39 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     /** The fields by key, for records of {@link Keys#FEW} fields or more; null for smaller ones. */
     private final Keys index;
     private final int depth;
+    /**
+     * Whether every key is known to be an identifier, written bare (the parser read each as one);
+     * false where that isn't known, and each key is looked at when it is written.
+     */
+    private final boolean bareKeys;
 
     /** A record that keeps its arrays, whose keys are distinct and which nothing else changes. */
     Record(String[] keys, Value[] values, Keys index) {
+      this(keys, values, index, false);
+    }
+
+    /** {@link #Record(String[], Value[], Keys)}, and whether every key is known to be an identifier. */
+    Record(String[] keys, Value[] values, Keys index, boolean bareKeys) {
+      this(keys, values, index, bareKeys, containerDepth(values));
+    }
+
+    /** {@link #Record(String[], Value[], Keys, boolean)} of a depth known already: one more than its deepest value's. */
+    Record(String[] keys, Value[] values, Keys index, boolean bareKeys, int depth) {
       this.keys = keys;
       this.values = values;
       this.index = index;
-      this.depth = containerDepth(values);
+      this.depth = depth;
+      this.bareKeys = bareKeys;
+    }
+
+    /** Whether every key is known to be an identifier, which is written bare. */
+    boolean bareKeys() {
+      return bareKeys;
+    }
+
+    /** The index of the keys, or null for a small record. */
+    Keys index() {
+      return index;
     }
 
     /** A record of fields whose keys are checked to be distinct. */
@@ -640,15 +671,24 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     /** A variant that keeps {@code args}, which nothing else changes; the tag is valid. */
     Variant(String tag, Value[] args) {
+      this(tag, args, depthOf(args));
+    }
+
+    /** {@link #Variant(String, Value[])} of a depth known already. */
+    Variant(String tag, Value[] args, int depth) {
       this.tag = tag;
       this.args = args;
+      this.depth = depth;
+    }
+
+    private static int depthOf(Value[] args) {
       if (args.length == 0) {
-        depth = 0;
-      } else if (args.length == 1 && args[0] instanceof Record) {
-        depth = args[0].depth(); // Tag { … }: the record is the payload's one level
-      } else {
-        depth = containerDepth(args);
+        return 0;
       }
+      if (args.length == 1 && args[0] instanceof Record) {
+        return args[0].depth(); // Tag { … }: the record is the payload's one level
+      }
+      return containerDepth(args);
     }
 
     static String checkTag(String tag) {

@@ -35,7 +35,8 @@ final class Parser {
 
   // Scratch stacks, the innermost container's entries last: the fields of the records and the
   // items of the arrays and payloads being read. A container's entries are copied out at its
-  // closer, into arrays of their exact length.
+  // closer, into arrays of their exact length. Entries above the top aren't cleared: the parser
+  // lives for one text.
   private String[] keyStack = new String[16];
   private Value[] fieldStack = new Value[16];
   private int fieldTop;
@@ -43,6 +44,19 @@ final class Parser {
   private int itemTop;
   /** Decoded string bytes, when a string has escapes. */
   private byte[] buffer = new byte[64];
+  /** The depth ({@link Value#depth}) of the value read last. */
+  private int height;
+  /** The integers 0 to 99, shared: values never change. */
+  private static final Value.Number[] SMALL_INTEGERS = new Value.Number[100];
+
+  static {
+    for (int i = 0; i < SMALL_INTEGERS.length; i++) {
+      SMALL_INTEGERS[i] = new Value.Number(Integer.toString(i));
+    }
+  }
+
+  /** The arguments of a tag without payload, shared: an empty array never changes. */
+  private static final Value[] NO_ARGS = new Value[0];
 
   Parser(Source src, Limits lim, boolean keep, boolean fileStart) {
     this.s = src.bytes;
@@ -122,9 +136,38 @@ final class Parser {
 
   // ── The file ──
 
-  /** Reads the whole text: a sequence of top-level values (spec §6). */
+  /**
+   * Reads the whole text: a sequence of top-level values (spec §6).
+   *
+   * <p>Invalid UTF-8 anywhere in the text is the error, whatever else is wrong with it (spec §4).
+   * The text is checked as a whole only once something is wrong: bytes beyond ASCII can only stand
+   * in strings and comments, which are checked as they are read, and anywhere else they are an
+   * error, so text read without an error is valid UTF-8.
+   */
   List<Value> file() {
-    new Source(s, pos, end, 1, 1).checkUtf8();
+    int from = pos;
+    try {
+      return values();
+    } catch (RuntimeException e) { // a SyntaxError, or anything else invalid UTF-8 led to
+      new Source(s, from, end, 1, 1).checkUtf8();
+      throw e;
+    }
+  }
+
+  /** An error at invalid UTF-8 found in a string or comment ({@link #file} reports the first). */
+  private SyntaxError invalidUtf8(int at) {
+    return fail(at, ErrorCode.INVALID_UTF8, "invalid UTF-8");
+  }
+
+  /** Checks that {@code s[from..to)}, a comment or the content of a block string, is valid UTF-8. */
+  private void checkUtf8(int from, int to) {
+    int bad = Scan.invalidUtf8(s, from, to);
+    if (bad < to) {
+      throw invalidUtf8(bad);
+    }
+  }
+
+  private List<Value> values() {
     if (fileStart && Scan.isBom(s, pos, end)) {
       pos += Scan.BOM_BYTES.length;
     }
@@ -210,6 +253,7 @@ final class Parser {
           } else {
             throw fail(i, ErrorCode.STRAY_SLASH, "a '/' that doesn't start a comment");
           }
+          checkUtf8(start, i);
           if (g != null) {
             g.comment(Scan.utf8(s, start, i).replace("\r\n", "\n"));
           }
@@ -296,8 +340,9 @@ final class Parser {
     if (c == '[') {
       return array(it);
     }
+    height = 0; // a scalar, or a tag (which sets its own)
     if (c == '"') {
-      if (Scan.startsWith(s, pos, end, "\"\"\"")) {
+      if (pos + 2 < end && s[pos + 1] == '"' && s[pos + 2] == '"') {
         Value v = blockString();
         node(it, v, null);
         return v;
@@ -305,6 +350,20 @@ final class Parser {
       Value v = new Value.Text(basicString(ErrorCode.STRING_TOO_LONG));
       node(it, v, keep ? Scan.utf8(s, start, pos) : null);
       return v;
+    }
+    if (Scan.isDigit(c)) {
+      // One or two digits, not followed by more of a number: one of the shared small integers.
+      int j = pos + 1;
+      int small = c - '0';
+      if (c != '0' && j < end && Scan.isDigit(s[j])) {
+        small = 10 * small + s[j++] - '0';
+      }
+      if ((j >= end || !Scan.isWordByte(s[j])) && j - pos <= lim.maxNumberLength()) {
+        pos = j;
+        Value v = SMALL_INTEGERS[small];
+        node(it, v, keep ? Scan.ascii(s, start, pos) : null);
+        return v;
+      }
     }
     if (c == '-' || c == '+' || c == '.' || Scan.isDigit(c)) {
       Numbers.Scanned n = Numbers.scan(s, pos, end, lim);
@@ -353,6 +412,8 @@ final class Parser {
     pos++;
     int base = fieldTop; // this record's fields are the stacks' entries from base
     Keys index = null;
+    boolean bare = true; // every key so far an identifier
+    int deepest = 0; // the depth of the deepest value so far
     Node syn = it != null ? new Node(null, null) : null;
     Gap g = keep ? new Gap() : null;
     ws(g);
@@ -364,7 +425,8 @@ final class Parser {
       if (s[pos] == '}') {
         pos++;
         depth--;
-        Value v = popRecord(base, index, tag);
+        height = deepest + 1;
+        Value v = popRecord(base, index, tag, bare, height);
         if (syn != null) {
           syn.value = v;
           syn.form = tag != null ? Form.BRACES : Form.BARE;
@@ -374,6 +436,7 @@ final class Parser {
         return v;
       }
       int keyAt = pos;
+      bare &= s[keyAt] != '"';
       String key = key();
       int count = fieldTop - base;
       if (index == null && count + 1 >= Keys.FEW) {
@@ -399,6 +462,7 @@ final class Parser {
       endRun(g);
       ws(g);
       Value v = value(field);
+      deepest = Math.max(deepest, height);
       pushField(key, v);
       if (field != null) {
         // Comments between the key and the value move above the entry, after its blank line.
@@ -442,14 +506,13 @@ final class Parser {
   }
 
   /** Takes a record's fields, from base, off the stacks. */
-  private Value popRecord(int base, Keys index, String tag) {
+  private Value popRecord(int base, Keys index, String tag, boolean bare, int depth) {
     String[] keys = Arrays.copyOfRange(keyStack, base, fieldTop);
     Value[] values = Arrays.copyOfRange(fieldStack, base, fieldTop);
-    Arrays.fill(keyStack, base, fieldTop, null);
-    Arrays.fill(fieldStack, base, fieldTop, null);
     fieldTop = base;
-    Value.Record r = new Value.Record(keys, values, index);
-    return tag == null ? r : new Value.Variant(tag, new Value[] {r});
+    Value.Record r = new Value.Record(keys, values, index, bare, depth);
+    // Tag { … }: the record is the payload's one level.
+    return tag == null ? r : new Value.Variant(tag, new Value[] {r}, depth);
   }
 
   /** Reads a record key at {@code pos}: an identifier or a {@code "…"} string. */
@@ -480,7 +543,8 @@ final class Parser {
   /** Reads {@code [ … ]} at {@code pos}. */
   private Value array(Item it) {
     Node syn = it != null ? new Node(null, null) : null;
-    Value v = new Value.Array(sequence(']', syn));
+    Value[] items = sequence(']', syn);
+    Value v = new Value.Array(items, height);
     if (syn != null) {
       syn.value = v;
       it.node = syn;
@@ -497,6 +561,7 @@ final class Parser {
     enter(open);
     pos++;
     int base = itemTop;
+    int deepest = 0; // the depth of the deepest value so far
     Gap g = keep ? new Gap() : null;
     ws(g);
     Item previous = null;
@@ -510,8 +575,8 @@ final class Parser {
         }
         pos++;
         depth--;
+        height = deepest + 1;
         Value[] items = Arrays.copyOfRange(itemStack, base, itemTop);
-        Arrays.fill(itemStack, base, itemTop, null);
         itemTop = base;
         if (syn != null) {
           Syntax.close(syn, previous, g);
@@ -520,6 +585,7 @@ final class Parser {
       }
       Item it = keep ? Syntax.newItem(previous, g) : null;
       Value v = value(it);
+      deepest = Math.max(deepest, height);
       if (itemTop == itemStack.length) {
         itemStack = Arrays.copyOf(itemStack, 2 * itemTop);
       }
@@ -548,7 +614,8 @@ final class Parser {
     }
     if (j >= end || s[j] != '(' && s[j] != '{') {
       pos = tagEnd;
-      Value v = new Value.Variant(tag, new Value[0]);
+      height = 0;
+      Value v = new Value.Variant(tag, NO_ARGS, 0);
       node(it, v, null);
       return v;
     }
@@ -558,7 +625,10 @@ final class Parser {
     }
     Node syn = it != null ? new Node(null, null) : null;
     Value[] args = sequence(')', syn);
-    Value v = new Value.Variant(tag, args);
+    if (args.length == 1 && args[0] instanceof Value.Record) {
+      height--; // Tag({ … }) is Tag { … }: the record is the payload's one level
+    }
+    Value v = new Value.Variant(tag, args, height);
     if (syn != null) {
       syn.value = v;
       syn.form = Form.PARENS;
@@ -575,6 +645,7 @@ final class Parser {
     int i = start + 1;
     int length = 0; // of the decoded bytes in buffer, once an escape needs decoding
     boolean escaped = false;
+    boolean ascii = true; // no byte beyond ASCII so far
     int plain = i; // start of the current run of plain characters
     while (true) {
       i = Scan.plainRun(s, i, end, Scan.STRING_STOP);
@@ -586,7 +657,7 @@ final class Parser {
         pos = i + 1;
         if (!escaped) {
           checkLength(s, plain, i, start, tooLong);
-          return Scan.utf8(s, plain, i);
+          return ascii ? Scan.ascii(s, plain, i) : Scan.utf8(s, plain, i);
         }
         length = append(length, plain, i);
         checkLength(buffer, 0, length, start, tooLong);
@@ -609,7 +680,16 @@ final class Parser {
         if (code != null || c == '\t') {
           throw rawCharError(i, code != null ? code : ErrorCode.CONTROL_CHARACTER, "in a string: write it as an escape");
         }
-        i++;
+        if (c >= 0) {
+          i++;
+        } else {
+          int n = Scan.validSequence(s, i, end);
+          if (n == 0) {
+            throw invalidUtf8(i);
+          }
+          i += n;
+          ascii = false;
+        }
       }
     }
   }
@@ -748,6 +828,7 @@ final class Parser {
     if (close < 0) {
       throw fail(start, ErrorCode.UNTERMINATED_BLOCK_STRING, "a block string without its closing \"\"\"");
     }
+    checkUtf8(i, close);
     List<int[]> lines = new ArrayList<>(); // {from, to} of each line, without its line break
     for (int at = i; ; ) {
       int nl = at;

@@ -110,18 +110,15 @@ final class Canonical {
 
   private void record(Value.Record r) {
     String[] keys = r.unsafeKeys();
-    Integer[] order = new Integer[keys.length];
-    for (int i = 0; i < order.length; i++) {
-      order[i] = i;
-    }
-    Arrays.sort(order, (x, y) -> Scan.compareCodePoints(keys[x], keys[y]));
+    int[] order = sortedOrder(keys);
+    boolean bare = r.bareKeys();
     b.append('{');
     for (int k = 0; k < order.length; k++) {
       if (k > 0) {
         b.append(',');
       }
       String key = keys[order[k]];
-      if (Scan.isIdent(key)) {
+      if (bare || Scan.isIdent(key)) {
         b.append(key);
       } else {
         string(key, "key");
@@ -130,5 +127,42 @@ final class Canonical {
       value(r.valueAt(order[k]));
     }
     b.append('}');
+  }
+
+  /** Records with at most this many keys are sorted by insertion. */
+  private static final int INSERTION_SORT = 24;
+
+  /**
+   * The places of the keys in code point order. The keys of a record are distinct, so the order
+   * is the same however it is found: by insertion for a few keys (quadratic only in a bounded
+   * number), by the library's merge sort otherwise.
+   */
+  private static int[] sortedOrder(String[] keys) {
+    int n = keys.length;
+    int[] order = new int[n];
+    for (int i = 0; i < n; i++) {
+      order[i] = i;
+    }
+    if (n <= INSERTION_SORT) {
+      for (int i = 1; i < n; i++) {
+        int x = order[i];
+        int j = i - 1;
+        while (j >= 0 && Scan.compareCodePoints(keys[order[j]], keys[x]) > 0) {
+          order[j + 1] = order[j];
+          j--;
+        }
+        order[j + 1] = x;
+      }
+      return order;
+    }
+    Integer[] boxed = new Integer[n];
+    for (int i = 0; i < n; i++) {
+      boxed[i] = i;
+    }
+    Arrays.sort(boxed, (x, y) -> Scan.compareCodePoints(keys[x], keys[y]));
+    for (int i = 0; i < n; i++) {
+      order[i] = boxed[i];
+    }
+    return order;
   }
 }
