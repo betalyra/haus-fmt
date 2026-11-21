@@ -134,6 +134,28 @@ def test_self_describing(case: Case) -> None:
         expect_error(e.value, case)
 
 
+# ── JSON Lines of self-describing JSON (spec §16, "Streams") ──
+
+
+def lines_cases() -> list[Case]:
+    """`Ok { json, output }` (output: an array of the values read) and `Err { json, code, path? }`."""
+    out = load("lines.cases.haus")
+    assert all(c.kind in ("Ok", "Err") for c in out)
+    return out
+
+
+@pytest.mark.parametrize("case", lines_cases(), ids=lambda c: c.name)
+def test_json_lines(case: Case) -> None:
+    if case.kind == "Ok":
+        assert isinstance(case.output, haus.Array)
+        read = list(haus.from_haus_json_lines(case.json))
+        assert [haus.canonical(v) for v in read] == [haus.canonical(v) for v in case.output.items]
+    else:
+        with pytest.raises(HausError) as e:
+            list(haus.from_haus_json_lines(case.json))
+        expect_error(e.value, case)
+
+
 VALID = sorted((SUITE / "valid").glob("*.haus"))
 
 

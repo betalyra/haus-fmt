@@ -127,6 +127,11 @@ expect written(SchemaBased.decode_gen_rec(Tag("Box", [Rec([("w", Num("1"))])])),
 # by name, any payload but one record is the wrong payload, as inline
 expect [SchemaBased.decode_boxed(Tag("Box", [Num("1")])), SchemaBased.decode_boxed(Tag("Box", [])), SchemaBased.decode_boxed(Tag("Box", [Num("1"), Num("2")]))].map(|r| r.map_ok(|_| {}).map_err(|e| e.code)) == [Err("wrong-payload"), Err("wrong-payload"), Err("wrong-payload")]"""
 )
+# JSON Lines of self-describing JSON (lines.cases.haus): every case in one
+# `expect`, which reports each failing case, so the file can change without
+# regenerating this module.
+imports.append('import "../../test-suite/json/lines.cases.haus" as lines_cases : Str')
+tests.append("# json/lines.cases.haus\nexpect JsonTest.lines(lines_cases)")
 for path in sorted((SUITE / "valid").glob("*.haus")):
     name = "valid_" + re.sub(r"[^a-z0-9]", "_", path.stem.lower())
     imports.append(f'import "../../test-suite/valid/{path.name}" as {name} : List(U8)')
@@ -183,6 +188,32 @@ JsonTest := [].{
 	## as self-describing JSON Lines, both ways.
 	valid : List(U8), List(U8) -> Bool
 	valid = |haus, jsonl| report(valid_case(haus, jsonl))
+
+	## Every case of lines.cases.haus (spec §16, "Streams"), read with
+	## `JsonValue.from_haus_json_lines`: `Ok { json, output }` reads the
+	## values `output`; `Err { json, code, path? }` fails with `code`, at
+	## `path` when the case gives one (starting with the line's index).
+	lines : Str -> Bool
+	lines = |cases| match Value.parse_all(cases) {
+		Ok(all) => {
+			failures = all.keep_oks(
+				|c| match lines_case(c) {
+					Ok({}) => Err({})
+					Err(reason) => Ok("${form(c)}: ${reason}")
+				},
+			)
+			if failures.is_empty() {
+				!all.is_empty()
+			} else {
+				dbg failures
+				False
+			}
+		}
+		Err(e) => {
+			dbg e.reason
+			False
+		}
+	}
 
 	## Reading `n` nested `{"_tag": "Some", "value": …}` around
 	## `{"_tag": "None"}` with the type `ty` (`Loop`, `OptLoop`). The haus
@@ -278,6 +309,31 @@ rejected = |result, fields| {
 
 same_code : Str, Str, Str -> Try({}, Str)
 same_code = |want, got, message| if (got == want) Ok({}) else Err("failed with ${got}, expected ${want}: ${message}")
+
+lines_case : Value -> Try({}, Str)
+lines_case = |c| match c {
+	Tag(tag, [Rec(fields)]) => {
+		json = text(fields, "json")?
+		read_lines = JsonValue.from_haus_json_lines(json)
+		match (tag, read_lines) {
+			("Ok", Ok(got)) => {
+				want = match value(fields, "output")? {
+					Arr(items) => items
+					_ => return Err("a case whose output isn't an array")
+				}
+				if got.len() == want.len() and got.map2(want, same).all(|equal| equal) {
+					Ok({})
+				} else {
+					Err("read as [${Str.join_with(got.map(form), ", ")}]")
+				}
+			}
+			("Ok", Err(Syntax(e))) => Err("failed with ${e.code} at ${e.line.to_str()}:${e.column.to_str()}")
+			("Ok", Err(Decode(e))) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}")
+			(_, result) => rejected(result.map_ok(|vs| Arr(vs)), fields)
+		}
+	}
+	_ => Err("not a case")
+}
 
 valid_case : List(U8), List(U8) -> Try({}, Str)
 valid_case = |haus, jsonl| {

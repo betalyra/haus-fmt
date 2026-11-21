@@ -157,3 +157,25 @@ describe("format suite", () => {
     }, { arbitrary: { runs: 500 } })
   })
 })
+
+/** options.cases.haus: the pretty layout's indent and width, 0 and negative (spec §11). */
+describe("format options", () => {
+  const options = parseAll(readFileSync(join(FORMAT, "options.cases.haus"), "utf8")).map((v) => {
+    if (v.kind !== "record") throw new Error("expected a record")
+    const f = (k: string) => v.fields.get(k)
+    const input = f("input")
+    const result = f("result")
+    const int = (k: string) => {
+      const n = f(k)
+      return n?.kind === "number" ? { [k]: Number(n.text) } : {}
+    }
+    if (input?.kind !== "string" || result?.kind !== "variant") throw new Error("not a case")
+    const ok = result.tag === "Ok" && result.args[0]?.kind === "string" ? result.args[0].value : undefined
+    return { input: input.value, options: { ...int("indent"), ...int("width") } as FormatOptions, ok, name: `${input.value} ${JSON.stringify({ ...int("indent"), ...int("width") })}` }
+  })
+  it.each(options)("$name", ({ input, options, ok }) => {
+    const out = () => run(input, options, "pretty")
+    if (ok === undefined) expect(out).toThrow()
+    else expect(out()).toBe(ok)
+  })
+})

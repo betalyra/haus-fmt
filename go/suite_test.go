@@ -378,6 +378,58 @@ func TestFormatNegativeOptions(t *testing.T) {
 	}
 }
 
+// TestFormatOptionsSuite runs format/options.cases.haus: the pretty
+// layout's indent and width, given or left unset (spec §11). FormatOptions
+// holds them as ints: an unset one is the default (DefaultFormatOptions), a
+// negative one is passed as it is and must be refused with ErrInvalidOptions.
+func TestFormatOptionsSuite(t *testing.T) {
+	vs, err := ParseAll(readSuite(t, "format", "options.cases.haus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d cases", len(vs))
+	if len(vs) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, v := range vs {
+		r, _ := v.(Record)
+		input, _ := r.Get("input")
+		result, _ := r.Get("result")
+		src, okInput := input.(String)
+		res, okResult := result.(Variant)
+		if !okInput || !okResult {
+			t.Fatalf("not a case: %v", v)
+		}
+		o := DefaultFormatOptions()
+		for k, field := range map[string]*int{"indent": &o.Indent, "width": &o.Width} {
+			if n, ok := r.Get(k); ok {
+				i, ok := n.(Number).BigInt()
+				if !ok || !i.IsInt64() {
+					t.Fatalf("not an option: %v", n)
+				}
+				*field = int(i.Int64())
+			}
+		}
+		name := mustCanonical(t, v)
+		got, err := Format([]byte(src), o)
+		switch res.Tag {
+		case "Ok":
+			want := res.Args[0].(String)
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			} else if string(got) != string(want) {
+				t.Errorf("%s:\n--- got\n%s\n--- want\n%s", name, got, want)
+			}
+		case "Rejected":
+			if !errors.Is(err, ErrInvalidOptions) {
+				t.Errorf("%s: not rejected with ErrInvalidOptions: %v, formatted as\n%s", name, err, got)
+			}
+		default:
+			t.Fatalf("not a result: %v", result)
+		}
+	}
+}
+
 // withoutComments formats src as pretty with its comments removed.
 func withoutComments(t *testing.T, src []byte, o FormatOptions) []byte {
 	p := newParser(string(src), DefaultLimits(), true)

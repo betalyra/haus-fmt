@@ -1,0 +1,53 @@
+// Checkers (spec §14, §15, §16): what tools that check schema files and data
+// point out without failing. Two kinds of case:
+//
+// - `Schema { schema, warnings }`: load the schema text (a schema file of
+//   its own, no imports). It loads, and its warnings are exactly `warnings`,
+//   in the order of their places: `Warning(code, line, column)`, where the
+//   line and column (spec §8) are those of what the warning is about.
+// - `Data { schema, type, data, issues }`: check the data text against the
+//   schema's type `type` (a `Stream` type checks every value). The issues are
+//   exactly `issues`, in the order of their places: `Hint(code, path)` and
+//   `Error(code, path)`, with the path of spec §15.
+
+// ── unknown attributes: accepted, with a warning ──
+Schema { schema: "@since(\"1.2\")\ntype A = Int", warnings: [Warning("unknown-attribute", 1, 1)] },
+Schema { schema: "type A = { @since(\"1.2\") x: Int, y: Int }", warnings: [Warning("unknown-attribute", 1, 12)] },
+Schema { schema: "type A = < @since(\"1.2\") X | Y >", warnings: [Warning("unknown-attribute", 1, 12)] },
+Schema { schema: "@deprecated @since(\"2\")\ntype A = Int", warnings: [Warning("unknown-attribute", 1, 13)] },
+
+// ── a schema's use of a deprecated type: once where it is written ──
+Schema { schema: "type A = { @deprecated x?: Int }", warnings: [] },
+Schema { schema: "@deprecated\ntype Old = Int\ntype A = { x: Old }", warnings: [Warning("deprecated", 3, 15)] },
+Schema { schema: "@deprecated\ntype Old = Int\ntype A = { x: Old, y: Old }", warnings: [Warning("deprecated", 3, 15), Warning("deprecated", 3, 23)] },
+Schema { schema: "@deprecated\ntype Old = Int\ntype B = Old", warnings: [Warning("deprecated", 3, 10)] },
+Schema { schema: "@deprecated(\"use New\")\ntype Old = { x: Int }\ntype A = { ...Old, y: Int }", warnings: [Warning("deprecated", 3, 15)] },
+Schema { schema: "@deprecated\ntype Old = < A | B >\ntype V = < ...Old | C >", warnings: [Warning("deprecated", 3, 15)] },
+
+// ── a case without a schema-based JSON form: a warning, the schema is valid ──
+Schema { schema: "type Odd = < Box { _tag: Int32 } | Fine >", warnings: [Warning("no-json-form", 1, 14)] },
+Schema { schema: "type Odd = < Box { _args: Int32 } >", warnings: [Warning("no-json-form", 1, 14)] },
+Schema { schema: "type R = { _tag: Int32 }", warnings: [] },
+
+// ── open types: what they don't list is a hint; closed types: an error ──
+Data { schema: "type Root = { name: String }", type: "Root", data: "{ name: \"a\", nmae: \"b\" }", issues: [Hint("unlisted-field", "$.nmae")] },
+Data { schema: "type Root = { name: String }", type: "Root", data: "{ name: \"\u{1F600}\", nmae: \"b\" }", issues: [Hint("unlisted-field", "$.nmae")] },
+Data { schema: "type Root = { \"pt-BR\"?: Int }", type: "Root", data: "{ \"pt-PT\": 1 }", issues: [Hint("unlisted-field", "$[\"pt-PT\"]")] },
+Data { schema: "type Root = { items: Array Item }\ntype Item = { id: Int }", type: "Root", data: "{ items: [{ id: 1 }, { id: 2, idd: 3 }] }", issues: [Hint("unlisted-field", "$.items[1].idd")] },
+Data { schema: "type Root = < Red | Green >", type: "Root", data: "Gren", issues: [Hint("unlisted-tag", "$")] },
+Data { schema: "type Root = { v: < A | B > }", type: "Root", data: "{ v: C(1) }", issues: [Hint("unlisted-tag", "$.v")] },
+Data { schema: "type Root = Stream Item\ntype Item = { id: Int }", type: "Root", data: "{ id: 1 },\n{ id: 2, ix: 3 },", issues: [Hint("unlisted-field", "$[1].ix")] },
+Data { schema: "type Root = closed { a: Int }", type: "Root", data: "{ a: 1, b: 2 }", issues: [Error("unknown-field", "$.b")] },
+Data { schema: "type Root = closed < Red | Green >", type: "Root", data: "Gren", issues: [Error("unknown-tag", "$")] },
+Data { schema: "type Root = { m: Map Int }", type: "Root", data: "{ m: { \"x y\": 1 } }", issues: [] },
+
+// ── deprecated fields and tags the data uses: a hint at the field's value or the tagged value ──
+Data { schema: "type Root = { @deprecated(\"use email\") mail?: String, email?: String }", type: "Root", data: "{ mail: \"a@b.c\" }", issues: [Hint("deprecated", "$.mail")] },
+Data { schema: "type Root = { @deprecated(\"use email\") mail?: String, email?: String }", type: "Root", data: "{ email: \"a@b.c\" }", issues: [] },
+Data { schema: "type Root = { lines: Array Line }\ntype Line = { @deprecated count?: Int }", type: "Root", data: "{ lines: [{ count: 2 }] }", issues: [Hint("deprecated", "$.lines[0].count")] },
+Data { schema: "type Root = < @deprecated Old | New >", type: "Root", data: "Old", issues: [Hint("deprecated", "$")] },
+Data { schema: "type Root = < Some Int | @deprecated Gone { a: Int } >", type: "Root", data: "Gone { a: 1 }", issues: [Hint("deprecated", "$")] },
+
+// ── a field or tag copied by a spread keeps its attributes ──
+Data { schema: "type Base = { @deprecated x?: Int }\ntype Root = { ...Base, y: Int }", type: "Root", data: "{ x: 1, y: 2 }", issues: [Hint("deprecated", "$.x")] },
+Data { schema: "type Base = < @deprecated Old | New >\ntype Root = < ...Base | Other >", type: "Root", data: "Old", issues: [Hint("deprecated", "$")] },

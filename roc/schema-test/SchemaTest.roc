@@ -13,6 +13,7 @@ import Spreads
 import Time
 import Types
 import Variants
+import StreamTyped
 import "../../test-suite/schema/attributes.cases.haus" as attributes_cases : Str
 import "../../test-suite/schema/builtins.cases.haus" as builtins_cases : Str
 import "../../test-suite/schema/numbers.cases.haus" as numbers_cases : Str
@@ -21,6 +22,7 @@ import "../../test-suite/schema/spreads.cases.haus" as spreads_cases : Str
 import "../../test-suite/schema/time.cases.haus" as time_cases : Str
 import "../../test-suite/schema/types.cases.haus" as types_cases : Str
 import "../../test-suite/schema/variants.cases.haus" as variants_cases : Str
+import "../../test-suite/stream/typed.cases.haus" as typed_cases : Str
 
 SchemaTest := [].{
 
@@ -1618,6 +1620,102 @@ expect SchemaTest.check(variants_cases, 55, SchemaTest.variants)
 
 # Err { type: "Node", input: { s: S(1) }, code: "wrong-payload", path: "$.s" },
 expect SchemaTest.check(variants_cases, 56, SchemaTest.variants)
+
+# stream/typed.cases.haus
+expect typed_streams(typed_cases)
+
+## Every case of stream/typed.cases.haus: `Ok { type, text, output }` decodes
+## `text` with `type`, and encoding the result gives `output` (an array, a
+## value per item, for a stream), compared as values; `Err { type, text, code,
+## path }` fails with `code` at `path`. A parse error has no path: its place is
+## the whole document, `$` (the one case: `not-one-value`).
+typed_streams : Str -> Bool
+typed_streams = |cases| match Value.parse_all(cases) {
+	Ok(all) => {
+		failures = all.keep_oks(
+			|c| match typed_case(c) {
+				Ok({}) => Err({})
+				Err(reason) => Ok("${form(c)}: ${reason}")
+			},
+		)
+		if failures.is_empty() {
+			!all.is_empty()
+		} else {
+			dbg failures
+			False
+		}
+	}
+	Err(e) => {
+		dbg e.reason
+		False
+	}
+}
+
+## What decoding a text gave: the result encoded again, or the error's code,
+## place and message.
+Typed : [Decoded(Try(Value, (Str, Str, Str))), NoType]
+
+typed_case : Value -> Try({}, Str)
+typed_case = |c| match c {
+	Tag(tag, [Rec(fields)]) => match (tag, field(fields, "type"), field(fields, "text")) {
+		("Ok", Ok(Text(ty)), Ok(Text(text))) => {
+			want = field(fields, "output") ?? Text("(no output)")
+			match stream_typed(ty, text) {
+				Decoded(Ok(got)) if Encode.equals(got, want) == Ok(True) => Ok({})
+				Decoded(Ok(got)) => Err("wrote ${form(got)}")
+				Decoded(Err((code, place, message))) => Err("failed with ${code} at ${place}: ${message}")
+				NoType => Err("the schema has no type ${ty}")
+			}
+		}
+		("Err", Ok(Text(ty)), Ok(Text(text))) => match (field(fields, "code"), field(fields, "path")) {
+			(Ok(Text(code)), Ok(Text(path))) => match stream_typed(ty, text) {
+				Decoded(Err((got_code, got_place, _))) if got_code == code and got_place == path => Ok({})
+				Decoded(Err((got_code, got_place, message))) => Err("failed with ${got_code} at ${got_place}: ${message}")
+				Decoded(Ok(got)) => Err("decoded, and wrote ${form(got)}")
+				NoType => Err("the schema has no type ${ty}")
+			}
+			_ => Err("a case without a code or a path")
+		}
+		_ => Err("not a case")
+	}
+	_ => Err("not a case")
+}
+
+## Decode `text` with a type of stream/typed.schema.haus, and encode the result.
+stream_typed : Str, Str -> Typed
+stream_typed = |ty, text| match ty {
+	"Entry" => Decoded(encoded_one(Decode.one(text, StreamTyped.decode_entry), StreamTyped.encode_entry))
+	"Level" => Decoded(encoded_one(Decode.one(text, StreamTyped.decode_level), StreamTyped.encode_level))
+	"Log" => Decoded(encoded_items(Decode.all(text, StreamTyped.decode_entry), StreamTyped.encode_entry))
+	"Point" => Decoded(encoded_one(Decode.one(text, StreamTyped.decode_point), StreamTyped.encode_point))
+	"Points" => Decoded(encoded_items(Decode.all(text, StreamTyped.decode_point), StreamTyped.encode_point))
+	_ => NoType
+}
+
+## A failed read: its code, its place (`$` for a parse error) and its message.
+read_error : [Syntax(Value.ParseError), Decode(Decode.Error)] -> (Str, Str, Str)
+read_error = |e| match e {
+	Syntax(p) => (p.code, "$", "${p.reason} at ${p.line.to_str()}:${p.column.to_str()}")
+	Decode(d) => (d.code, ErrorCode.place(d.path), Decode.message(d))
+}
+
+## The decoded items of a stream, each encoded again: an array.
+encoded_items : Try(List(a), [Syntax(Value.ParseError), Decode(Decode.Error)]), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, (Str, Str, Str))
+encoded_items = |decoded, encode| {
+	items = decoded.map_err(read_error)?
+	var $out = []
+	for x in items {
+		$out = $out.append(Encode.value(x, encode).map_err(|e| (e.code, "(encoding)", Encode.message(e)))?)
+	}
+	Ok(Arr($out))
+}
+
+## The decoded value, encoded again.
+encoded_one : Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)]), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, (Str, Str, Str))
+encoded_one = |decoded, encode| {
+	x = decoded.map_err(read_error)?
+	Encode.value(x, encode).map_err(|e| (e.code, "(encoding)", Encode.message(e)))
+}
 
 # A value built far deeper than the parser takes (50,000 levels; `roc test`
 # can't drop much deeper ones of this shape): the decoder stops at the depth limit.

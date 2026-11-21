@@ -1,0 +1,41 @@
+// Error positions (spec §8). Each case: `text`, which has one mistake, and
+// the error it must be rejected with: `code` (spec §17), `line` and
+// `column`, 1-based. Columns count code points: a character outside the
+// Basic Multilingual Plane is one column, and so is each combining mark. A
+// byte order mark at the start is the first column. Only a line feed ends a
+// line: a carriage return before it belongs to that line break, and U+2028
+// and U+2029 start no line. Parse the whole text (as `parseAll`).
+// Most cases put a raw control character (`\u{1}`, U+0001) inside a string,
+// which is rejected at that character.
+
+// ── lines and columns ──
+{ text: "\"\u{1}\"", code: "control-character", line: 1, column: 2 },
+{ text: "\t\"\u{1}\"", code: "control-character", line: 1, column: 3 },
+{ text: "1,\n  \"a\u{1}\"", code: "control-character", line: 2, column: 5 },
+{ text: "\"\u{1F600}\",\n\"\u{1F600}\u{1F600}\",\n\"\u{1F600}\u{1}\"", code: "control-character", line: 3, column: 3 },
+
+// ── columns count code points ──
+{ text: "\"\u{1F600}\u{1}\"", code: "control-character", line: 1, column: 3 },
+{ text: "\"e\u{301}\u{1}\"", code: "control-character", line: 1, column: 4 },
+{ text: "\"\u{1F1E9}\u{1F1EA}\u{1}\"", code: "control-character", line: 1, column: 4 },
+{ text: "\"\u{1F468}\u{200D}\u{1F469}\u{1}\"", code: "control-character", line: 1, column: 5 },
+{ text: "\"\u{1F600}\u{202E}\"", code: "bidi-control", line: 1, column: 3 },
+{ text: "\"\u{1F600}\\q\"", code: "invalid-escape", line: 1, column: 3 },
+{ text: "{ \"\u{1F600}\": 1, \"\u{1F600}\": 2 }", code: "duplicate-key", line: 1, column: 11 },
+
+// ── a byte order mark is the first column ──
+{ text: "\u{FEFF}\"\u{1}\"", code: "control-character", line: 1, column: 3 },
+{ text: "\u{FEFF}1,\n\"\u{1}\"", code: "control-character", line: 2, column: 2 },
+
+// ── line breaks: LF, and CR LF as one ──
+{ text: "1,\r\n\"\u{1}\"", code: "control-character", line: 2, column: 2 },
+{ text: "\r\n\r\n\"\u{1}\"", code: "control-character", line: 3, column: 2 },
+{ text: "1,\r2", code: "lone-carriage-return", line: 1, column: 3 },
+{ text: "1,\r\r\n2", code: "lone-carriage-return", line: 1, column: 3 },
+{ text: "// a\rb\n1", code: "lone-carriage-return", line: 1, column: 5 },
+
+// ── U+2028 and U+2029 start no line ──
+{ text: "\"\u{2028}\u{1}\"", code: "control-character", line: 1, column: 3 },
+{ text: "\"a\u{2029}b\u{1}\"", code: "control-character", line: 1, column: 5 },
+{ text: "/* \u{2028} */ \"\u{1}\"", code: "control-character", line: 1, column: 10 },
+{ text: "1, // a\u{2028}b\n\"\u{1}\"", code: "control-character", line: 2, column: 2 },

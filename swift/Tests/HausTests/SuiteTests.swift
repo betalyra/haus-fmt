@@ -135,10 +135,73 @@ struct FormatSuiteTests {
         }
         #expect(try Self.sameValues(trimmed.joined(separator: "\n"), input))
     }
+
+    /// A case of options.cases.haus: the pretty layout's `indent` and `width`.
+    struct OptionsCase: CustomTestStringConvertible, Sendable {
+        let input: String
+        /// The options given; nil: not given, the default applies.
+        let indent: Int?
+        let width: Int?
+        /// The pretty result, or nil for `Rejected`.
+        let result: String?
+        var testDescription: String {
+            "\(input.debugDescription) indent \(indent.map(String.init) ?? "-") width \(width.map(String.init) ?? "-")"
+        }
+    }
+
+    static let optionsCases: [OptionsCase] = {
+        let values = try! parseAll(readText(suite.appendingPathComponent("format/options.cases.haus")))
+        return values.map { v in
+            guard case .string(let input)? = v["input"], case .variant(let tag, let args)? = v["result"] else {
+                fatalError("not a case: \(v)")
+            }
+            func int(_ key: String) -> Int? {
+                guard let n = v[key] else { return nil }
+                guard case .number(let n) = n, let i = n.integer() else { fatalError("not an option: \(v)") }
+                return i
+            }
+            let result: String? =
+                switch (tag, args.first) {
+                case ("Ok", .string(let text)?): text
+                case ("Rejected", nil): nil
+                default: fatalError("not a result: \(v)")
+                }
+            return OptionsCase(input: input, indent: int("indent"), width: int("width"), result: result)
+        }
+    }()
+
+    @Test func hasOptionsCases() {
+        #expect(!Self.optionsCases.isEmpty)
+    }
+
+    /// The options of the pretty layout themselves (format/README.md): 0 is 0,
+    /// and a negative number is rejected (`format` throws).
+    @Test(arguments: optionsCases)
+    func options(_ c: OptionsCase) async throws {
+        let (input, indent, width) = (c.input, c.indent ?? 2, c.width ?? 80)
+        guard c.result == nil else {
+            #expect(try Haus.format(input, FormatOptions(indent: indent, width: width)) == c.result)
+            return
+        }
+        // Rejected: in a process of its own, so that a formatter that traps on
+        // the options fails this case and not the whole run. Exit code 0:
+        // rejected (thrown); 2: formatted anyway; a signal: it trapped.
+        await #expect(processExitsWith: .success) {
+            [input = input as String, indent = indent as Int, width = width as Int] in
+            do {
+                _ = try Haus.format(input, FormatOptions(indent: indent, width: width))
+                exit(2)
+            } catch {
+                exit(0)
+            }
+        }
+    }
 }
 
 /// The stream suite (test-suite/README.md, "Stream suite"): each case whole,
-/// one character at a time, and split in two at every byte.
+/// one character at a time, and split in two at every byte; the cases with
+/// `whole` parsed whole; single documents (document.cases.haus). Typed
+/// streams are `TypedStreamSuiteTests`, in SchemaTests.swift.
 struct StreamSuiteTests {
     /// The values read, or the code of the error.
     enum Outcome: Equatable, Sendable {
@@ -151,6 +214,8 @@ struct StreamSuiteTests {
         let maxValueLength: Int
         let strict: Bool
         let result: Outcome
+        /// `whole`: the values of parsing the whole text, which doesn't apply the value limit.
+        let whole: [HausValue]?
         var testDescription: String { "\(text.debugDescription) max \(maxValueLength)\(strict ? " strict" : "")" }
     }
 
@@ -166,7 +231,16 @@ struct StreamSuiteTests {
                 case ("Err", .string(let code)?): .error(HausError.Code(rawValue: code)!)
                 default: fatalError("not a result: \(v)")
                 }
-            return Case(text: text, maxValueLength: max.integer()!, strict: v["strict"] == .tag("True"), result: result)
+            let whole: [HausValue]? =
+                switch v["whole"] {
+                case nil: nil
+                case .variant("Ok", let args)? where args.count == 1:
+                    if case .array(let values) = args[0] { values } else { fatalError("not a whole: \(v)") }
+                default: fatalError("not a whole: \(v)")
+                }
+            return Case(
+                text: text, maxValueLength: max.integer()!, strict: v["strict"] == .tag("True"), result: result,
+                whole: whole)
         }
     }()
 
@@ -199,5 +273,56 @@ struct StreamSuiteTests {
         for pieces in splits {
             #expect(Self.read(c, pieces) == c.result, "\(pieces)")
         }
+    }
+
+    @Test func hasWholeCases() {
+        #expect(Self.cases.contains { $0.whole != nil })
+    }
+
+    /// `whole`: parsing the whole text (as `parseAll`, default limits) doesn't
+    /// apply the value limit (spec §7).
+    @Test(arguments: cases.filter { $0.whole != nil })
+    func parsedWhole(_ c: Case) throws {
+        #expect(try parseAll(c.text) == c.whole)
+    }
+
+    /// A case of document.cases.haus: a text, and what `parse` gives for it.
+    struct Document: CustomTestStringConvertible, Sendable {
+        let text: String
+        let result: Outcome
+        var testDescription: String { text.debugDescription }
+    }
+
+    static let documents: [Document] = {
+        let values = try! parseAll(readText(suite.appendingPathComponent("stream/document.cases.haus")))
+        return values.map { v in
+            guard case .string(let text)? = v["text"], case .variant(let tag, let args)? = v["result"] else {
+                fatalError("not a case: \(v)")
+            }
+            let result: Outcome =
+                switch (tag, args.first) {
+                case ("Ok", let value?): .values([value])
+                case ("Err", .string(let code)?): .error(HausError.Code(rawValue: code)!)
+                default: fatalError("not a result: \(v)")
+                }
+            return Document(text: text, result: result)
+        }
+    }()
+
+    @Test func hasDocuments() {
+        #expect(!Self.documents.isEmpty)
+    }
+
+    /// Single documents (spec §6, as `parse`): one value, with or without a
+    /// comma after it; none, or two or more, is `not-one-value`.
+    @Test(arguments: documents)
+    func document(_ d: Document) {
+        let got: Outcome
+        do {
+            got = .values([try parse(d.text)])
+        } catch {
+            got = .error(error.code)
+        }
+        #expect(got == d.result)
     }
 }

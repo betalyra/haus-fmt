@@ -297,6 +297,57 @@ fn indent_and_width() {
     assert_eq!(haus::format(text, &compact).unwrap(), "{ a: Point(1, 2), b: \"x\\ny\" }\n");
 }
 
+/// test-suite/format/options.cases.haus: the pretty layout with the case's
+/// `indent` and `width` (the default where not given) gives `Ok(text)`. The
+/// options are `usize`, so a negative one (a `Rejected` case) can't be
+/// expressed: rejected by the types, and the case passes.
+#[test]
+fn format_options() {
+    let path = suite().join("format/options.cases.haus");
+    let cases = haus::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert!(!cases.is_empty(), "no cases in {}", path.display());
+    let failures: Vec<String> = cases
+        .iter()
+        .filter_map(|c| {
+            let (Some(Value::String(input)), Some(result)) = (c.get("input"), c.get("result")) else {
+                panic!("not a case: {}", haus::canonical(c))
+            };
+            // None: a negative number, which `usize` can't hold.
+            let option = |key: &str| match c.get(key) {
+                Some(Value::Number(n)) => n.parse::<usize>().ok().map(Some),
+                None => Some(None),
+                _ => panic!("not a case: {}", haus::canonical(c)),
+            };
+            let (indent, width) = (option("indent"), option("width"));
+            let expected = match result {
+                Value::Variant { tag, args } if tag == "Ok" => match args.as_slice() {
+                    [Value::String(text)] => Some(text),
+                    _ => panic!("not a case: {}", haus::canonical(c)),
+                },
+                Value::Variant { tag, args } if tag == "Rejected" && args.is_empty() => None,
+                _ => panic!("not a case: {}", haus::canonical(c)),
+            };
+            let (Some(indent), Some(width)) = (indent, width) else {
+                // Not expressible with these types: passes if it is to be rejected.
+                return expected.map(|_| format!("{}: options a usize can't hold", haus::canonical(c)));
+            };
+            let defaults = FormatOptions::default();
+            let options = FormatOptions {
+                indent: indent.unwrap_or(defaults.indent),
+                width: width.unwrap_or(defaults.width),
+                ..defaults
+            };
+            match (haus::format(input, &options), expected) {
+                (Ok(out), Some(text)) if &out == text => None,
+                (Ok(out), Some(text)) => Some(format!("{input:?} {options:?}: got {out:?}, expected {text:?}")),
+                (Err(e), Some(_)) => Some(format!("{input:?} {options:?}: {e}")),
+                (got, None) => Some(format!("{input:?} {options:?}: {got:?}, expected it to be rejected")),
+            }
+        })
+        .collect();
+    assert!(failures.is_empty(), "{} of {} cases failed:\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
 /// Every kind of nesting, with comments, `MAX_SUPPORTED_DEPTH` levels deep.
 fn deep_text(depth: usize) -> String {
     let opens = ["[ // array\n", "{ a: /* key */ ", "Some(", "Tag { b: 1, c: ", "{ \"k\": [1, "];

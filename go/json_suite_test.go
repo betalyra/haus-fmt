@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -139,6 +142,49 @@ func TestSelfDescribingSuite(t *testing.T) {
 		n++
 	}
 	t.Logf("%d self-describing cases", n)
+}
+
+// TestJSONLinesSuite runs json/lines.cases.haus: self-describing JSON Lines
+// read as a stream (ReadHausJSONLines) and whole (FromHausJSONLines).
+func TestJSONLinesSuite(t *testing.T) {
+	cases := readJSONCases(t, "lines.cases.haus")
+	t.Logf("%d cases", len(cases))
+	if len(cases) == 0 {
+		t.Fatal("no cases")
+	}
+	readers := map[string]func([]byte) ([]Value, error){
+		"stream": func(b []byte) ([]Value, error) {
+			var out []Value
+			for v, err := range ReadHausJSONLines(bytes.NewReader(b), JSONLinesOptions{}) {
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, v)
+			}
+			return out, nil
+		},
+		"whole": FromHausJSONLines,
+	}
+	for _, c := range cases {
+		text := c.str(t, "json")
+		for how, read := range readers {
+			got, err := read([]byte(text))
+			name := fmt.Sprintf("%s (%s)", strconv.Quote(text), how)
+			switch c.tag {
+			case "Ok":
+				want := c.value(t, "output").(Array)
+				if err != nil {
+					t.Errorf("%s: %v", name, err)
+				} else if !slices.EqualFunc(got, want, Equals) {
+					t.Errorf("%s: got %s", name, mustCanonical(t, Array(got)))
+				}
+			case "Err":
+				c.checkErr(t, name, err)
+			default:
+				t.Fatalf("unknown case %s", c.tag)
+			}
+		}
+	}
 }
 
 // TestValidSuiteJSONLines reads every valid/NAME.jsonl as self-describing

@@ -137,3 +137,46 @@ def test_pretty_survives_trimming_trailing_whitespace(case: Case) -> None:
     out = haus.format(text, **case.options())
     assert trailing_blanks(out) == []
     assert same_values(re.sub(r"[ \t]+$", "", out, flags=re.MULTILINE), text)
+
+
+# ── options.cases.haus: the pretty layout's indent and width, 0 and negative (spec §11) ──
+
+
+@dataclass(frozen=True)
+class OptionsCase:
+    input: str
+    options: Options
+    result: str | None
+    """The pretty text, or None: the formatter must refuse the options."""
+
+
+def _options_case(v: haus.Value) -> OptionsCase:
+    assert isinstance(v, Record), haus.canonical(v)
+    f = v.fields
+    options = Options()
+    for key in ("indent", "width"):
+        if isinstance(n := f.get(key), Number):
+            options[key] = int(n.text)
+    match f.get("input"), f.get("result"):
+        case haus.String(text), haus.Variant("Ok", (haus.String(out),)):
+            return OptionsCase(text, options, out)
+        case haus.String(text), haus.Variant("Rejected", ()):
+            return OptionsCase(text, options, None)
+        case _:
+            raise AssertionError(f"not a case: {haus.canonical(v)}")
+
+
+OPTIONS = [_options_case(v) for v in haus.parse_all((FORMAT / "options.cases.haus").read_text("utf-8"))]
+
+
+def test_the_options_suite_has_cases() -> None:
+    assert len(OPTIONS) > 0
+
+
+@pytest.mark.parametrize("case", OPTIONS, ids=[f"{c.input} {dict(c.options)}" for c in OPTIONS])
+def test_options(case: OptionsCase) -> None:
+    if case.result is None:
+        with pytest.raises(ValueError):
+            haus.format(case.input, **case.options)
+    else:
+        assert haus.format(case.input, **case.options) == case.result

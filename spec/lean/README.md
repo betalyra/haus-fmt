@@ -48,7 +48,31 @@ lake build
 .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus  # the package suite (spec §13.3)
 .lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus  # a profile's vectors
 .lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
+.lake/build/bin/haus-ref --stream-suite ../../test-suite/stream  # the stream suite (spec §6, §7, §15 "Streams")
+.lake/build/bin/haus-ref --positions ../../test-suite/positions/cases.haus  # error lines and columns (spec §8)
+.lake/build/bin/haus-ref --equality ../../test-suite/equality/cases.haus    # equals and compare (spec §2, §12)
+.lake/build/bin/haus-ref --format-options ../../test-suite/format/options.cases.haus  # the pretty layout's options (spec §11)
 ```
+
+The other suites: `--stream-suite` reads each case of `limits.cases.haus`
+with the stream reader (`Stream.readWith`) whole, one character at a time and
+split at every position, and parses a case's `whole` text with `parse`
+(default limits). It decodes `typed.cases.haus` with `typed.schema.haus`
+(read by `SchemaFile.load`): a `Stream a` definition by
+`Schema.decodeStream`, which puts the item's index in the place, any other
+type's one value by `Schema.decode`. The model has no single-document reader
+(spec §6, `not-one-value`), so `document.cases.haus` isn't run, and neither
+are the typed cases whose text doesn't hold one value for a type that isn't a
+stream: the runner counts them as skipped. `--json-suite` also reads
+`lines.cases.haus` as JSON Lines (`JSON.readHausJsonLines`, places by
+`JSON.readHausJsonLinesAt`). `--positions` parses each text whole and
+compares the code, line and column (1-based, columns in characters).
+`--equality` compares `Value.equiv` and `compare`, the order of the UTF-8
+bytes of the canonical forms (§12), in both directions. `--format-options`
+writes each input with `Layout.prettyAll` (the inputs have no comments); the
+options are natural numbers, so a negative one is rejected by the types. The
+model has no checker that reports warnings or hints, so
+`test-suite/check` isn't run.
 
 `--schema-suite` reads each `NAME.schema.haus` of the schema suite itself
 (its bytes decoded as UTF-8 first, `invalid-utf8` as in data; then

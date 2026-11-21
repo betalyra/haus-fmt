@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -19,6 +20,9 @@ type streamCase struct {
 	strict bool
 	values []Value
 	code   string
+	// whole is the values of parsing the text whole (ParseAll, default
+	// limits), when the case gives them; nil otherwise.
+	whole []Value
 }
 
 func toStreamCase(t *testing.T, v Value) streamCase {
@@ -36,6 +40,16 @@ func toStreamCase(t *testing.T, v Value) streamCase {
 		t.Fatalf("not a case: %v", v)
 	}
 	c := streamCase{text: string(s), max: limitValue, strict: Equals(strict, Variant{Tag: "True"})}
+	if whole, ok := r.Get("whole"); ok {
+		w, okWhole := whole.(Variant)
+		if !okWhole || w.Tag != "Ok" || len(w.Args) != 1 {
+			t.Fatalf("not a whole result: %v", whole)
+		}
+		c.whole, okWhole = w.Args[0].(Array)
+		if !okWhole {
+			t.Fatalf("not a whole result: %v", whole)
+		}
+	}
 	switch arg := res.Args[0].(type) {
 	case Array:
 		if res.Tag == "Ok" {
@@ -96,14 +110,15 @@ func streamSplits(text string) map[string][]string {
 	return out
 }
 
-// TestStreamSuite runs the stream suite (spec §6, §7). HAUS_STREAM_SUITE
-// names another directory holding the suite's file.
-func TestStreamSuite(t *testing.T) {
+// readStreamSuite reads the cases of a file of the stream suite, from
+// HAUS_STREAM_SUITE when set.
+func readStreamSuite(t *testing.T, name string) []Value {
+	t.Helper()
 	dir := os.Getenv("HAUS_STREAM_SUITE")
 	if dir == "" {
 		dir = filepath.Join(suite, "stream")
 	}
-	src, err := os.ReadFile(filepath.Join(dir, "limits.cases.haus"))
+	src, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +126,13 @@ func TestStreamSuite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return vs
+}
+
+// TestStreamSuite runs the stream suite (spec §6, §7). HAUS_STREAM_SUITE
+// names another directory holding the suite's file.
+func TestStreamSuite(t *testing.T) {
+	vs := readStreamSuite(t, "limits.cases.haus")
 	if len(vs) != 24 {
 		t.Errorf("%d cases, want 24", len(vs))
 	}
@@ -126,6 +148,88 @@ func TestStreamSuite(t *testing.T) {
 			if !same {
 				t.Errorf("%s, %s: %v %q", name, how, values, code)
 			}
+		}
+	}
+}
+
+// sameValueList reports whether two lists hold equal values (spec §2).
+func sameValueList(a, b []Value) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !Equals(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalList(t *testing.T, vs []Value) string {
+	t.Helper()
+	parts := make([]string, len(vs))
+	for i, v := range vs {
+		parts[i] = mustCanonical(t, v)
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// TestStreamSuiteWhole parses the cases with `whole` as one text: the value
+// limit applies to stream readers only (spec §7).
+func TestStreamSuiteWhole(t *testing.T) {
+	vs := readStreamSuite(t, "limits.cases.haus")
+	n := 0
+	for _, v := range vs {
+		c := toStreamCase(t, v)
+		if c.whole == nil {
+			continue
+		}
+		n++
+		got, err := ParseAll([]byte(c.text))
+		if err != nil {
+			t.Errorf("%q: %v, want %s", c.text, err, canonicalList(t, c.whole))
+		} else if !sameValueList(got, c.whole) {
+			t.Errorf("%q: got %s, want %s", c.text, canonicalList(t, got), canonicalList(t, c.whole))
+		}
+	}
+	t.Logf("%d cases with whole", n)
+	if n == 0 {
+		t.Error("no cases with whole")
+	}
+}
+
+// TestDocumentSuite runs stream/document.cases.haus: a single document
+// (spec §6), read with Parse.
+func TestDocumentSuite(t *testing.T) {
+	vs := readStreamSuite(t, "document.cases.haus")
+	t.Logf("%d cases", len(vs))
+	if len(vs) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, v := range vs {
+		r, _ := v.(Record)
+		text, _ := r.Get("text")
+		result, _ := r.Get("result")
+		s, okText := text.(String)
+		res, okResult := result.(Variant)
+		if !okText || !okResult || len(res.Args) != 1 {
+			t.Fatalf("not a case: %v", v)
+		}
+		var want string
+		if code, ok := res.Args[0].(String); res.Tag == "Err" && ok {
+			want = "Err " + string(code)
+		} else if res.Tag == "Ok" {
+			want = "Ok " + mustCanonical(t, res.Args[0])
+		} else {
+			t.Fatalf("not a result: %v", result)
+		}
+		doc, err := Parse([]byte(s))
+		got := "Err " + string(errorCode(err))
+		if err == nil {
+			got = "Ok " + mustCanonical(t, doc)
+		}
+		if got != want {
+			t.Errorf("%q: got %s (%v), want %s", string(s), got, err, want)
 		}
 	}
 }

@@ -227,6 +227,8 @@ import "../../test-suite/invalid/version-directive-bom.haus" as invalid_version_
 import "../../test-suite/invalid/version-directive-no-space.haus" as invalid_version_directive_no_space : List(U8)
 import "../../test-suite/invalid/version-directive-prefix.haus" as invalid_version_directive_prefix : List(U8)
 import "../../test-suite/invalid/version-directive-space.haus" as invalid_version_directive_space : List(U8)
+import "../../test-suite/positions/cases.haus" as positions_cases : Str
+import "../../test-suite/equality/cases.haus" as equality_cases : Str
 import "../../spec/errors.haus" as error_catalogue : Str
 
 ConformanceTest := [].{
@@ -301,6 +303,17 @@ ConformanceTest := [].{
 		rejected and same_place
 	}
 
+	## Every case of positions/cases.haus (spec §8): parsing `text` whole fails
+	## with `code` at `line`:`column` (1-based, columns in code points).
+	positions : Str -> Bool
+	positions = |cases| all_cases(cases, position_case)
+
+	## Every case of equality/cases.haus (spec §2, §12): `Encode.equals` both
+	## ways is `equal`, and `Encode.compare(a, b)` is `order` (-1, 0, 1),
+	## `compare(b, a)` the opposite.
+	equality : Str -> Bool
+	equality = |cases| all_cases(cases, equality_case)
+
 	## The catalogue of error codes (spec/errors.haus, read with this parser)
 	## and ErrorCode.roc have the same codes, in the same order, with the same
 	## categories and fixes.
@@ -335,6 +348,77 @@ field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Ok((_, v)) => v
 	Err(_) => Text("")
 }
+
+## The cases of a cases file all pass (and there are some); each failing
+## case is reported.
+all_cases : Str, (List((Str, Value)) -> Try({}, Str)) -> Bool
+all_cases = |text, run_case| match Value.parse_all(text) {
+	Ok(cases) => {
+		failures = cases.keep_oks(
+			|c| match c {
+				Rec(fields) => match run_case(fields) {
+					Ok({}) => Err({})
+					Err(reason) => Ok(reason)
+				}
+				_ => Ok("not a case: ${Value.to_test_json(c)}")
+			},
+		)
+		if failures.is_empty() {
+			!cases.is_empty()
+		} else {
+			dbg failures
+			False
+		}
+	}
+	Err(e) => {
+		dbg e.reason
+		False
+	}
+}
+
+position_case : List((Str, Value)) -> Try({}, Str)
+position_case = |fields| match (field(fields, "text"), field(fields, "code"), field(fields, "line"), field(fields, "column")) {
+	(Text(text), Text(code), Num(line), Num(column)) => {
+		want = "${code} ${line}:${column}"
+		got = match Value.parse_all(text) {
+			Ok(_) => "parsed"
+			Err(e) => "${e.code} ${e.line.to_str()}:${e.column.to_str()}"
+		}
+		if (got == want) Ok({}) else Err("${Encode.canonical(Text(text)) ?? text}: ${got}, expected ${want}")
+	}
+	_ => Err("not a case")
+}
+
+equality_case : List((Str, Value)) -> Try({}, Str)
+equality_case = |fields| {
+	a = field(fields, "a")
+	b = field(fields, "b")
+	equal = match field(fields, "equal") {
+		Tag("True", []) => True
+		_ => False
+	}
+	order = match field(fields, "order") {
+		Num("-1") => Before
+		Num("0") => Same
+		Num("1") => After
+		_ => return Err("not a case")
+	}
+	opposite = match order {
+		Before => After
+		Same => Same
+		After => Before
+	}
+	want = (Ok(equal), Ok(equal), Ok(order), Ok(opposite))
+	got = (Encode.equals(a, b), Encode.equals(b, a), Encode.compare(a, b), Encode.compare(b, a))
+	if got == want {
+		Ok({})
+	} else {
+		Err("${form(a)} ${form(b)}: equals ${Str.inspect(got.0)}, ${Str.inspect(got.1)}; compare ${Str.inspect(got.2)}, ${Str.inspect(got.3)}; expected equal ${Str.inspect(equal)}, order ${Str.inspect(order)}")
+	}
+}
+
+form : Value -> Str
+form = |v| Encode.canonical(v) ?? "(no canonical form)"
 
 ## `SchemaFiles` → `schema-files`
 kebab : Str -> Str
@@ -1508,6 +1592,12 @@ expect ConformanceTest.rejects(invalid_version_directive_space, "version-directi
 
 # invalid/version-directive-space.haus, streamed
 expect ConformanceTest.stream_rejects(invalid_version_directive_space, "version-directive")
+
+# positions/cases.haus
+expect ConformanceTest.positions(positions_cases)
+
+# equality/cases.haus
+expect ConformanceTest.equality(equality_cases)
 
 # spec/errors.haus: ErrorCode.roc is up to date (roc/scripts/gen_error_codes.py)
 expect ConformanceTest.catalogue(error_catalogue)

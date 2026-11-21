@@ -131,6 +131,31 @@ fn import() {
     assert!(failures.is_empty(), "import cases failed:\n{}", failures.join("\n"));
 }
 
+/// `Ok { json, output }`: reading `json` as self-describing JSON Lines gives
+/// the values `output`. `Err { json, code, path? }`: reading fails with
+/// `code`, at `path` (which starts with the line's index) if it gives one.
+#[test]
+fn json_lines() {
+    let failures: Vec<String> = cases("lines.cases.haus")
+        .iter()
+        .filter_map(|(tag, fields)| {
+            let json = text(fields, "json");
+            let read = haus::json::from_haus_json_lines(&json);
+            let failure = match (tag.as_str(), fields.get("output")) {
+                ("Ok", Some(Value::Array(output))) => match read {
+                    Ok(v) if v.len() == output.len() && v.iter().zip(output).all(|(a, b)| haus::equals(a, b)) => None,
+                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)))),
+                    Err(e) => Some(format!("can't read it: {:?} ({e})", e.code())),
+                },
+                ("Err", None) => rejected(read.map(Value::Array), fields),
+                _ => panic!("not a case: {}", canonical(fields)),
+            };
+            failure.map(|why| format!("{tag} {json:?}: {why}"))
+        })
+        .collect();
+    assert!(failures.is_empty(), "JSON Lines cases failed:\n{}", failures.join("\n"));
+}
+
 /// Every `valid/NAME.jsonl` is the file's values as self-describing JSON
 /// Lines, an envelope per value: writing them gives it (line by line, as
 /// data), and reading it gives them back.

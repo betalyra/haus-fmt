@@ -59,7 +59,16 @@ import Lean.Data.Json
                                   CASE, printing its result and the files it read
     haus-ref --stream-suite DIR          run the stream suite DIR/limits.cases.haus (spec §6, §7)
                                   with the reference stream reader, each case whole, one
-                                  character at a time and split at every position
+                                  character at a time and split at every position, and
+                                  `whole` by parsing the text whole; then DIR/typed.cases.haus
+                                  with DIR/typed.schema.haus (spec §15, "Streams"); then
+                                  DIR/document.cases.haus, each text as a single document
+    haus-ref --positions FILE            the error positions FILE (test-suite/positions/cases.haus,
+                                  spec §8): code, line and column of each text parsed whole
+    haus-ref --equality FILE             equals and compare (test-suite/equality/cases.haus, spec
+                                  §2, §12) in both directions; compare from the canonical forms
+    haus-ref --format-options FILE       the pretty layout's options (test-suite/format/
+                                  options.cases.haus, spec §11) with `Layout.prettyAll`
     haus-ref --profile NAME FILE         run the test vectors FILE of the official profile NAME
                                   (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`; spec §13.3)
                                   with its reference checker (Haus/Profiles/)
@@ -174,6 +183,10 @@ instance : ToString JSON.Error := ⟨fun e => s!"{e.reason} [{e.code}]"⟩
 def jsonText (j : Haus.JSON) : String := String.ofList (Haus.JSON.write j)
 
 def canonicalText (v : Value) : String := String.ofList (Canonical.canonical v)
+
+/-- Two lists of values, equal pairwise (§2). -/
+def valuesEquiv (got want : List Value) : Bool :=
+  got.length == want.length && (got.zip want).all fun (a, b) => Value.equiv a b
 
 /--
 `valid/NAME.jsonl`: the file's values as self-describing JSON Lines (spec
@@ -605,6 +618,36 @@ def runImportCases (cases : List Value) : Array String := Id.run do
     | _ => failures := failures.push s!"import: not a case: {shown}"
   return failures
 
+/--
+`lines.cases.haus`: JSON Lines of self-describing JSON read as a stream
+(`readHausJsonLines`, spec §16 "Streams"): `Ok { json, output }`, the values
+read; `Err { json, code, path? }`, the error and its place
+(`readHausJsonLinesAt`), which starts with the line's index.
+-/
+def runLinesCases (cases : List Value) : Array String := Id.run do
+  let mut failures : Array String := #[]
+  for c in cases do
+    let shown := canonicalText c
+    let some (tag, fs) := jsonCase c | failures := failures.push s!"lines: not a case: {shown}"
+    let some json := strField fs "json" | failures := failures.push s!"lines: no json: {shown}"
+    match tag with
+    | "Ok" =>
+      let some (.arr output) := fs.lookup "output" | failures := failures.push s!"lines: no output: {shown}"
+      match Haus.JSON.readHausJsonLines {} json.toList with
+      | .ok vs => if !valuesEquiv vs output then failures := failures.push s!"lines: {shown}: read {vs.map canonicalText}"
+      | .error e => failures := failures.push s!"lines: {shown}: reading failed: {e}"
+    | "Err" =>
+      let some code := strField fs "code" | failures := failures.push s!"lines: no code: {shown}"
+      match Haus.JSON.readHausJsonLinesAt {} json.toList with
+      | .ok vs => failures := failures.push s!"lines: {shown}: accepted as {vs.map canonicalText}"
+      | .error (p, e) =>
+        if e.code.name != code then failures := failures.push s!"lines: {shown}: {e.code} instead of {code} ({e.reason})"
+        else if let some path := strField fs "path" then
+          let place := Haus.JSON.placeText p
+          if place != path then failures := failures.push s!"lines: {shown}: at {place} instead of {path}"
+    | _ => failures := failures.push s!"lines: not a case: {shown}"
+  return failures
+
 def runJsonSuite (dir types : System.FilePath) : IO UInt32 := do
   let cases (name : String) : IO (List Value) := do
     match parseBytes (← IO.FS.readBinFile (dir / s!"{name}.cases.haus")) with
@@ -624,6 +667,9 @@ def runJsonSuite (dir types : System.FilePath) : IO UInt32 := do
   let imports ← cases "import"
   count := count + imports.length
   failures := failures ++ runImportCases imports
+  let lines ← cases "lines"
+  count := count + lines.length
+  failures := failures ++ runLinesCases lines
   -- Every valid/NAME.jsonl is a self-describing case too: one envelope per value of NAME.haus.
   let valid := dir / ".." / "valid"
   for entry in (← valid.readDir).qsort (·.fileName < ·.fileName) do
@@ -782,8 +828,12 @@ def runProfileBatch (name : String) (file : System.FilePath) : IO UInt32 := do
 
 /-! ## Streams (spec §6, §7) -/
 
-/-- A case of the stream suite: the text, the reader's options, and the values or the error code. -/
-def streamCase : Value → Option (String × Haus.Stream.Options × Except String (List Value))
+/--
+A case of the stream suite: the text, the reader's options, the values or the
+error code, and `whole`, where given: the values of parsing the whole text
+instead (with the default limits; the value limit is a stream reader's only).
+-/
+def streamCase : Value → Option (String × Haus.Stream.Options × Except String (List Value) × Option (List Value))
   | .record fs => do
     let .str text ← fs.lookup "text" | none
     let .num n ← fs.lookup "maxValueLength" | none
@@ -795,8 +845,13 @@ def streamCase : Value → Option (String × Haus.Stream.Options × Except Strin
       | some (.variant "Ok" [.arr vs]) => some (.ok vs)
       | some (.variant "Err" [.str code]) => some (.error code)
       | _ => none
-    return (text, { maxValueLength := max, strict }, result)
+    let whole ← match fs.lookup "whole" with
+      | none => some none
+      | some (.variant "Ok" [.arr vs]) => some (some vs)
+      | some _ => none
+    return (text, { maxValueLength := max, strict }, result, whole)
   | _ => none
+
 
 /-- The text whole, one character at a time, and in two pieces split at every character. -/
 def streamSplits (t : Text) : List (String × List Text) :=
@@ -804,9 +859,131 @@ def streamSplits (t : Text) : List (String × List Text) :=
     (List.range t.length).map fun k => (s!"split at {k}", [t.take k, t.drop k])
 
 /--
+A case of `typed.cases.haus`: `Ok { type, text, output }` (the output
+`.ok`) or `Err { type, text, code, path }` (the code and the place `.error`).
+-/
+def typedCase : Value → Option (String × String × Except (String × String) Value)
+  | .variant tag [.record fs] => do
+    let type ← strField fs "type"
+    let text ← strField fs "text"
+    match tag with
+    | "Ok" => return (type, text, .ok (← fs.lookup "output"))
+    | "Err" => return (type, text, .error (← strField fs "code", ← strField fs "path"))
+    | _ => none
+  | _ => none
+
+/-- The verdict on a case: passed, failed (why), or not run (why). -/
+inductive Verdict
+  | right
+  | wrong (why : String)
+  | skip (why : String)
+
+/--
+A typed case (`typedCase`) decoded: a `Stream a` type (one of `streams`) by
+the model's stream decoding, any other type's one value by `Schema.decode`.
+-/
+def typedCheck (env : Schema.Env) (streams : List String) (type text : String)
+    (want : Except (String × String) Value) : Verdict :=
+  match Parser.parse {} text.toList with
+  | .error e =>
+    let (l, c) := position text.toList e
+    .wrong s!"the text: {e.code} at {l}:{c}"
+  | .ok vs =>
+    -- A type that isn't a stream reads its text as a single document
+    -- (`Parser.parseDocument`): anything but one value is `not-one-value`,
+    -- placed at the root (`$`).
+    let decoded : Option (Except Schema.Error Value) :=
+      if streams.contains type then
+        some ((Schema.decodeStream env (.ref type) vs).map fun xs => .arr (xs.map Schema.encode))
+      else match vs with
+        | [v] => some ((Schema.decode env (.ref type) v).map Schema.encode)
+        | _ => none
+    match want, decoded with
+    | .error (code, path), none =>
+      if code != Code.notOneValue.name then .wrong s!"not-one-value instead of {code} ({vs.length} values)"
+      else if path != "$" then .wrong s!"not-one-value at $ instead of {path}"
+      else .right
+    | .ok _, none => .wrong s!"not-one-value: {vs.length} values for {type}, not a stream"
+    | .ok w, some (.ok got) => if Value.equiv got w then .right else .wrong s!"got {canonicalText got}"
+    | .ok _, some (.error e) => .wrong s!"rejected: {schemaErrorText e}"
+    | .error _, some (.ok got) => .wrong s!"accepted as {canonicalText got}"
+    | .error (code, path), some (.error e) =>
+      if codeText e.code != code then .wrong s!"{codeText e.code} instead of {code} ({schemaErrorText e})"
+      else if e.place != path then .wrong s!"at {e.place} instead of {path} ({e.reason})"
+      else .right
+
+/--
+The typed stream cases of DIR (`typed.schema.haus`, `typed.cases.haus`; spec
+§15, "Streams"): the schema read by the reference's schema-file checker, a
+`Stream a` definition's text parsed whole and its values decoded by the
+model's stream decoding (`Schema.decodeStream`, which puts the item's index
+in the place), and any other type's text as a single document: its one value
+by `Schema.decode`, anything else `not-one-value` at `$` (spec §6).
+The results: (passed, failed, skipped) and a line per case.
+-/
+def runTypedStreams (dir : System.FilePath) : IO (Nat × Nat × Nat) := do
+  let schemaFile := dir / "typed.schema.haus"
+  let cases ← readCases dir "typed"
+  let env ← match ← loadSchemaFile schemaFile with
+    | .ok env => pure env
+    | .error e => throw (IO.userError s!"{schemaFile}: rejected: {e.message} [{e.code.name}]")
+  -- Which definitions are `Stream a`: the loaded environment has the item type only.
+  let streams ← match SchemaFile.parse (← IO.FS.readFile schemaFile).toList with
+    | .ok p => pure ((p.defs.filter (·.stream)).map (·.name))
+    | .error e => throw (IO.userError s!"{schemaFile}: {e.reason}")
+  let mut passed := 0
+  let mut failed := 0
+  let mut skipped := 0
+  for c in cases do
+    let shown := oneLine (canonicalText c)
+    let some (type, text, want) := typedCase c
+      | failed := failed + 1; IO.println s!"FAIL typed (not a case): {shown}"
+    match typedCheck env streams type text want with
+    | .skip why => skipped := skipped + 1; IO.println s!"skip typed {shown}: {why}"
+    | .wrong why => failed := failed + 1; IO.println s!"FAIL typed {shown}: {why}"
+    | .right => passed := passed + 1; IO.println s!"ok   typed {shown}"
+  return (passed, failed, skipped)
+
+/-- A single-document case: `text` and `Ok(value)` or `Err("code")`. -/
+def documentCase : Value → Option (String × Except String Value)
+  | .record fs => do
+    let text ← strField fs "text"
+    match fs.lookup "result" with
+    | some (.variant "Ok" [v]) => return (text, .ok v)
+    | some (.variant "Err" [.str code]) => return (text, .error code)
+    | _ => none
+  | _ => none
+
+/--
+The single documents of DIR/document.cases.haus (spec §6): each text read by
+the reference's single-document reader (`Parser.parseDocument`, default
+limits), its value compared as a value (§2), or its error code.
+The results: (passed, failed) and a line per case.
+-/
+def runDocuments (dir : System.FilePath) : IO (Nat × Nat) := do
+  let mut passed := 0
+  let mut failed := 0
+  for c in ← readCases dir "document" do
+    let shown := oneLine (canonicalText c)
+    let some (text, want) := documentCase c
+      | failed := failed + 1; IO.println s!"FAIL document (not a case): {shown}"
+    let wrong : Option String := match want, Parser.parseDocument {} text.toList with
+      | .ok w, .ok got => if Value.equiv got w then none else some s!"got {canonicalText got}"
+      | .ok _, .error e => some s!"rejected: {e.code}"
+      | .error _, .ok got => some s!"accepted as {canonicalText got}"
+      | .error code, .error e => if e.code.name == code then none else some s!"{e.code} instead of {code}"
+    match wrong with
+    | none => passed := passed + 1; IO.println s!"ok   document {shown}"
+    | some why => failed := failed + 1; IO.println s!"FAIL document {shown}: {why}"
+  return (passed, failed)
+
+/--
 `--stream-suite DIR`: every case of DIR/limits.cases.haus (test-suite/stream)
 read by the reference stream reader (`Stream.readWith`) whole, one character at
-a time, and split at every position.
+a time, and split at every position, and a case's `whole` values by parsing the
+whole text (`Parser.parse`, default limits); then the typed streams of
+`runTypedStreams`; then DIR/document.cases.haus, each text read as a single
+document (`Parser.parseDocument`, spec §6, `runDocuments`).
 -/
 def runStreamSuite (dir : System.FilePath) : IO UInt32 := do
   let file := dir / "limits.cases.haus"
@@ -814,14 +991,16 @@ def runStreamSuite (dir : System.FilePath) : IO UInt32 := do
     | .ok vs => pure vs
     | .error e => IO.eprintln s!"{file}: {e}"; return 2
   let mut failed := 0
+  let mut wholes := 0
+  let mut wholeFailed := 0
   for v in vs do
     let shown := oneLine (canonicalText v)
-    let some (text, o, want) := streamCase v
+    let some (text, o, want, whole) := streamCase v
       | failed := failed + 1; IO.println s!"FAIL (not a case): {shown}"
     let wrong := (streamSplits text.toList).filterMap fun (how, chunks) =>
       let (got, err) := Haus.Stream.readWith o {} chunks
       let same := match want, err with
-        | .ok ws, none => got.length == ws.length && (got.zip ws).all fun (a, b) => Value.equiv a b
+        | .ok ws, none => valuesEquiv got ws
         | .error code, some e => e.code.name == code
         | _, _ => false
       if same then none
@@ -829,8 +1008,135 @@ def runStreamSuite (dir : System.FilePath) : IO UInt32 := do
     match wrong with
     | [] => IO.println s!"ok   {shown}"
     | w :: _ => failed := failed + 1; IO.println s!"FAIL {shown}: {wrong.length} ways, {w}"
+    -- `whole`: the text parsed whole, where the value limit doesn't apply.
+    if let some ws := whole then
+      wholes := wholes + 1
+      match Parser.parse {} text.toList with
+      | .ok got =>
+        if valuesEquiv got ws then IO.println s!"ok   parsed whole: {shown}"
+        else
+          wholeFailed := wholeFailed + 1
+          IO.println s!"FAIL parsed whole: {shown}: got {got.map canonicalText}"
+      | .error e =>
+        wholeFailed := wholeFailed + 1
+        IO.println s!"FAIL parsed whole: {shown}: {e.code}"
+  let (typedOk, typedFailed, typedSkipped) ← runTypedStreams dir
+  let (docOk, docFailed) ← runDocuments dir
   IO.println s!"{vs.length - failed}/{vs.length} passed"
-  return if failed == 0 then 0 else 1
+  IO.println s!"{wholes - wholeFailed}/{wholes} parsed whole as `whole` says"
+  IO.println s!"{typedOk}/{typedOk + typedFailed} typed cases passed, {typedSkipped} skipped"
+  IO.println s!"{docOk}/{docOk + docFailed} single documents passed"
+  return if failed == 0 && wholeFailed == 0 && typedFailed == 0 && docFailed == 0 then 0 else 1
+
+/-! ## Error positions, equality and order, layout options -/
+
+/-- A whole number field: `none` when missing; `some none` when it is no natural number (a negative one). -/
+def natField? (fs : List (String × Value)) (k : String) : Option (Option Nat) :=
+  match fs.lookup k with
+  | some (.num n) => some n.toNat?
+  | _ => none
+
+/-- A file of cases: its values, or the reason it can't be read. -/
+def readCaseFile (file : System.FilePath) : IO (List Value) := do
+  match parseBytes (← IO.FS.readBinFile file) with
+  | .ok vs => pure vs
+  | .error e => throw (IO.userError s!"{file}: {e}")
+
+/-- The cases of FILE judged by `check`: a line each, then the counts. -/
+def runCases (file : System.FilePath) (check : Value → Verdict) : IO UInt32 := do
+  let vs ← readCaseFile file
+  let mut failed := 0
+  let mut skipped := 0
+  for v in vs do
+    let shown := oneLine (canonicalText v)
+    match check v with
+    | .right => IO.println s!"ok   {shown}"
+    | .wrong why => failed := failed + 1; IO.println s!"FAIL {shown}: {why}"
+    | .skip why => skipped := skipped + 1; IO.println s!"skip {shown}: {why}"
+  IO.println s!"{vs.length - failed - skipped}/{vs.length - skipped} passed{if skipped == 0 then "" else s!", {skipped} skipped"}"
+  return if failed == 0 && vs.length > 0 then 0 else 1
+
+/--
+A case of `positions/cases.haus` (spec §8): `text`, with one mistake, parsed
+whole (`Parser.parse`, as `parseAll`) must be rejected with `code` at `line`
+and `column` (1-based, columns in code points: `position`).
+-/
+def positionCase : Value → Verdict
+  | .record fs =>
+    match strField fs "text", strField fs "code", natField? fs "line", natField? fs "column" with
+    | some text, some code, some (some line), some (some column) =>
+      match Parser.parse {} text.toList with
+      | .ok vs => .wrong s!"accepted: {vs.map canonicalText}"
+      | .error e =>
+        let (l, c) := position text.toList e
+        if e.code.name != code || l != line || c != column then
+          .wrong s!"{e.code} at {l}:{c} instead of {code} at {line}:{column} ({e.reason})"
+        else .right
+    | _, _, _, _ => .wrong "not a case"
+  | _ => .wrong "not a case"
+
+/-- The order of two byte strings: -1, 0 or 1, a prefix first. -/
+def bytesOrder : List UInt8 → List UInt8 → Int
+  | [], [] => 0
+  | [], _ :: _ => -1
+  | _ :: _, [] => 1
+  | x :: xs, y :: ys => if x < y then -1 else if y < x then 1 else bytesOrder xs ys
+
+/-- `compare` (spec §12): the order of the UTF-8 bytes of the canonical forms. -/
+def compareValues (a b : Value) : Int :=
+  bytesOrder (canonicalText a).toUTF8.toList (canonicalText b).toUTF8.toList
+
+/--
+A case of `equality/cases.haus` (spec §2, §12): `equals` (`Value.equiv`) and
+`compare` (`compareValues`, from the model's canonical writer) in both
+directions.
+-/
+def equalityCase : Value → Verdict
+  | .record fs =>
+    let equal := match fs.lookup "equal" with
+      | some (.variant "True" []) => some true
+      | some (.variant "False" []) => some false
+      | _ => none
+    let order := match fs.lookup "order" with
+      | some (.num n) => n.toInt?
+      | _ => none
+    match fs.lookup "a", fs.lookup "b", equal, order with
+    | some a, some b, some equal, some order =>
+      let got := (Value.equiv a b, Value.equiv b a, compareValues a b, compareValues b a)
+      if got == (equal, equal, order, -order) then .right
+      else .wrong s!"equals {got.1}/{got.2.1}, compare {got.2.2.1}/{got.2.2.2} instead of {equal}, {order}/{-order}"
+    | _, _, _, _ => .wrong "not a case"
+  | _ => .wrong "not a case"
+
+/--
+A case of `format/options.cases.haus` (spec §11): `input` in the pretty
+layout (`Layout.prettyAll`; the input has no comments) with `indent` and
+`width` where given, the defaults otherwise. The options are natural numbers:
+a negative one can't be given, it is rejected by the types (and the case
+passes when `Rejected` is expected).
+-/
+def optionsCase : Value → Verdict
+  | .record fs =>
+    let indent := natField? fs "indent"
+    let width := natField? fs "width"
+    match strField fs "input", fs.lookup "result" with
+    | some input, some result =>
+      match indent, width with
+      | some none, _ | _, some none =>
+        match result with
+        | .variant "Rejected" [] => .right
+        | _ => .wrong "a negative option, not a natural number"
+      | _, _ =>
+        let o : Layout.Options := { indent := (indent.join).getD 2, width := (width.join).getD 80 }
+        match Parser.parse {} input.toList, result with
+        | .error e, _ => .wrong s!"the input: {e.code}"
+        | .ok vs, .variant "Ok" [.str want] =>
+          let got := String.ofList (Layout.prettyAll o vs)
+          if got == want then .right else .wrong s!"got {oneLine got}"
+        | .ok vs, .variant "Rejected" [] => .wrong s!"not rejected: {oneLine (String.ofList (Layout.prettyAll o vs))}"
+        | .ok _, _ => .wrong "not a case"
+    | _, _ => .wrong "not a case"
+  | _ => .wrong "not a case"
 
 /-- `--compact`, `--minimised`, `--pretty`: FILE's values written in a layout, from values. -/
 def runLayout (write : List Value → Text) (file : System.FilePath) : IO UInt32 := do
@@ -839,6 +1145,9 @@ def runLayout (write : List Value → Text) (file : System.FilePath) : IO UInt32
   | .error e => IO.eprintln s!"error: {e}"; return 1
 
 def main : List String → IO UInt32
+  | ["--positions", file] => runCases file positionCase
+  | ["--equality", file] => runCases file equalityCase
+  | ["--format-options", file] => runCases file optionsCase
   | ["--stream-suite", dir] => runStreamSuite dir
   | ["--profile", name, file] => runProfile name file
   | ["--profile-batch", name, file] => runProfileBatch name file
@@ -896,4 +1205,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE"; return 2

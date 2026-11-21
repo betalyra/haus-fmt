@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -146,6 +147,88 @@ func TestSchemaSuite(t *testing.T) {
 		}
 	}
 	t.Logf("schema suite: %d cases (each schema with and without its attributes)", count)
+}
+
+// TestTypedStreamSuite runs test-suite/stream/typed.cases.haus (spec §15,
+// "Streams"): a Stream type decodes with Type.DecodeStream, whose errors
+// carry the item's index; any other type with Type.Parse, one document.
+// The decoded values are encoded and compared with output.
+func TestTypedStreamSuite(t *testing.T) {
+	dir := filepath.Join(suite, "..", "stream")
+	src, err := os.ReadFile(filepath.Join(dir, "typed.schema.haus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := schema.Parse(src, schema.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := os.ReadFile(filepath.Join(dir, "typed.cases.haus"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := haus.ParseAll(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d cases", len(values))
+	if len(values) == 0 {
+		t.Fatal("no cases")
+	}
+	for _, v := range values {
+		x, ok := v.(haus.Variant)
+		if !ok || x.Tag != "Ok" && x.Tag != "Err" || len(x.Args) != 1 {
+			t.Fatalf("not a case: %v", v)
+		}
+		r := x.Args[0].(haus.Record)
+		data := str(get(r, "text"))
+		want := "Err " + str(get(r, "code")) + " at " + str(get(r, "path"))
+		if x.Tag == "Ok" {
+			want = "Ok " + canonical(t, get(r, "output"))
+		}
+		typ, err := s.Type(str(get(r, "type")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := decodeText(t, typ, []byte(data))
+		if got != want {
+			t.Errorf("%s %q: got %s (%v), want %s", typ.Name(), data, got, err, want)
+		}
+	}
+}
+
+// decodeText decodes a text with the type and encodes the result: "Ok"
+// and its canonical form (an array of the items for a stream), or "Err",
+// the code and the path.
+func decodeText(t *testing.T, typ schema.Type, data []byte) (string, error) {
+	t.Helper()
+	fail := func(err error) (string, error) {
+		code, path := codeAndPath(err)
+		return "Err " + string(code) + " at " + path, err
+	}
+	if !typ.IsStream() {
+		v, err := typ.Parse(data)
+		if err != nil {
+			return fail(err)
+		}
+		enc, err := typ.Encode(v)
+		if err != nil {
+			return fail(err)
+		}
+		return "Ok " + canonical(t, enc), nil
+	}
+	out := haus.Array{}
+	for v, err := range typ.DecodeStream(bytes.NewReader(data), haus.StreamOptions{}) {
+		if err != nil {
+			return fail(err)
+		}
+		enc, err := typ.Encode(v)
+		if err != nil {
+			return fail(err)
+		}
+		out = append(out, enc)
+	}
+	return "Ok " + canonical(t, out), nil
 }
 
 // TestInvalidSchemas: every schema in test-suite/schema/invalid is rejected

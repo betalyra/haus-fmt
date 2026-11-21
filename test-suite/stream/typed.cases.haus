@@ -1,0 +1,28 @@
+// Streams decoded with a type (spec §15, "Streams"; schema in typed.schema.haus).
+// `type` names a definition; `text` is a haus text. For a `Stream a` type,
+// each top-level value of `text` decodes as an `a`, on its own; for any
+// other type, `text` must hold exactly one value (§6).
+//
+// - `Ok { type, text, output }`: decoding succeeds, and encoding the decoded
+//   values with the type gives `output`, compared as values (§2): an array
+//   with one value per item for a stream, the one value otherwise.
+// - `Err { type, text, code, path }`: decoding fails with the error code
+//   `code` (§17) at the place `path` (§15). In a stream, the path of an
+//   error in an item starts with the item's index: `$[1].level`.
+
+// ── a stream: each value decodes on its own ──
+Ok { type: "Log", text: "{ level: Info, msg: \"a\" },\n{ level: Warn, msg: \"b\", at: 2 },", output: [{ level: Info, msg: "a" }, { level: Warn, msg: "b", at: 2 }] },
+Ok { type: "Log", text: "{ level: Info, msg: \"a\" }", output: [{ level: Info, msg: "a" }] },
+Ok { type: "Log", text: "", output: [] },
+Ok { type: "Log", text: "// no entries yet\n", output: [] },
+Ok { type: "Points", text: "{ x: 0x10, y: -0 }, { x: 1_000, y: 2 }", output: [{ x: 16, y: 0 }, { x: 1000, y: 2 }] },
+
+// ── an error names the item's index ──
+Err { type: "Log", text: "{ level: Info, msg: \"a\" },\n{ level: Debug, msg: \"b\" },", code: "unknown-tag", path: "$[1].level" },
+Err { type: "Log", text: "{ level: Info, msg: \"a\" }, { level: Info }, { level: Warn, msg: \"c\" }", code: "missing-field", path: "$[1]" },
+Err { type: "Log", text: "{ level: Info, msg: \"a\" }, [1]", code: "type-mismatch", path: "$[1]" },
+Err { type: "Points", text: "{ x: 1, y: 2 }, { x: 1, y: 2.5 }, { x: 0, y: 0 }", code: "not-an-integer", path: "$[1].y" },
+Err { type: "Points", text: "{ x: 1, y: 2 }, { x: 1, y: 2 }, { x: 0, y: 99999999999 }", code: "out-of-range", path: "$[2].y" },
+
+// ── a type that isn't a stream takes one value ──
+Ok { type: "Point", text: "{ x: 1, y: 2 },", output: { x: 1, y: 2 } },
