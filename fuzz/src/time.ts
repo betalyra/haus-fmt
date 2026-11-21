@@ -171,6 +171,7 @@ const ALL_RUNNERS: ReadonlyArray<{ readonly name: string; run(file: string, case
   { name: "go", run: external(join(root, "fuzz/.build/go-runner"), ["--time"]) },
   { name: "swift", run: external(join(root, "fuzz/.build/swift-runner"), ["--time"]) },
   { name: "jvm", run: external(join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--time"]) },
+  { name: "zig", run: external(join(root, "zig/zig-out/bin/zig-runner"), ["--time"]) },
 ]
 const wanted = args.runners?.split(",") ?? ALL_RUNNERS.map((r) => r.name)
 if (wanted[0] !== "lean") throw new Error("--runners must start with lean, the reference")

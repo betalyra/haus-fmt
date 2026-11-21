@@ -9,6 +9,7 @@ const Value = haus.Value;
 const Allocator = std.mem.Allocator;
 
 var io: std.Io = undefined;
+var environ: *std.process.Environ.Map = undefined;
 var gpa: Allocator = undefined;
 var suite_dir: []const u8 = build_options.suite_dir;
 var failures: usize = 0;
@@ -479,15 +480,523 @@ fn formatSuite() !void {
     try tally.report();
 }
 
+// ── schemas (test-suite/schema, stream/typed, check) ─────────
+
+/// The schema text with every attribute removed (test-suite/README.md:
+/// attributes don't matter).
+fn withoutAttributes(arena: Allocator, text: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < text.len) {
+        const c = text[i];
+        if (c == '"') {
+            const start = i;
+            i += 1;
+            while (i < text.len and text[i] != '"') : (i += 1) {
+                if (text[i] == '\\') i += 1;
+            }
+            i += 1;
+            try out.appendSlice(arena, text[start..@min(i, text.len)]);
+        } else if (c == '/' and i + 1 < text.len and text[i + 1] == '/') {
+            const end = std.mem.indexOfScalarPos(u8, text, i, '\n') orelse text.len;
+            try out.appendSlice(arena, text[i..end]);
+            i = end;
+        } else if (c == '@') {
+            i += 1;
+            while (i < text.len and (std.ascii.isAlphanumeric(text[i]) or text[i] == '_')) i += 1;
+            if (i < text.len and text[i] == '(') {
+                var depth: usize = 0;
+                while (i < text.len) : (i += 1) {
+                    if (text[i] == '"') {
+                        i += 1;
+                        while (i < text.len and text[i] != '"') : (i += 1) {
+                            if (text[i] == '\\') i += 1;
+                        }
+                    } else if (text[i] == '(' or text[i] == '[' or text[i] == '{') {
+                        depth += 1;
+                    } else if (text[i] == ')' or text[i] == ']' or text[i] == '}') {
+                        depth -= 1;
+                        if (depth == 0) {
+                            i += 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            try out.append(arena, c);
+            i += 1;
+        }
+    }
+    return out.items;
+}
+
+fn loadSchema(text: []const u8, d: *haus.Diagnostic) !*haus.schema.Schema {
+    return haus.schema.load(gpa, text, .{ .diagnostic = d });
+}
+
+fn schemaInvalidSuite() !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const dir = try suitePath(arena, "schema/invalid");
+    var tally = Tally{ .name = "schema/invalid/*.error" };
+    for (try listFiles(arena, dir, ".schema.haus")) |name| {
+        const text = try readFile(arena, try std.fmt.allocPrint(arena, "{s}/{s}.schema.haus", .{ dir, name }));
+        const want = std.mem.trimEnd(u8, try readFile(arena, try std.fmt.allocPrint(arena, "{s}/{s}.error", .{ dir, name })), "\n");
+        var d: haus.Diagnostic = .{};
+        if (loadSchema(text, &d)) |s| {
+            s.deinit();
+            tally.check(false, "{s}: accepted, want {s}", .{ name, want });
+        } else |_| {
+            tally.check(std.mem.eql(u8, d.code.name(), want), "{s}: {f}, want {s}", .{ name, d, want });
+        }
+    }
+    try tally.report();
+}
+
+/// One case of a schema suite: `Ok { type, input, output? }` or
+/// `Err { type, input, code, path }`. Returns why it failed, or null.
+fn schemaCase(arena: Allocator, s: *const haus.schema.Schema, case: haus.Variant) !?[]const u8 {
+    const fields = case.args[0];
+    const type_name = get(fields, "type").?.string;
+    const def = s.get(type_name) orelse return try std.fmt.allocPrint(arena, "no type {s}", .{type_name});
+    const input = get(fields, "input").?;
+    var d: haus.Diagnostic = .{};
+    const decoded = haus.decoding.decode(arena, def, input, .{ .diagnostic = &d });
+    if (std.mem.eql(u8, case.tag, "Ok")) {
+        const got = decoded catch return try std.fmt.allocPrint(arena, "{s} {s}: rejected: {s} at {s}: {s}", .{ type_name, try canon(arena, input), d.code.name(), d.path(), d.message() });
+        const encoded = haus.decoding.encode(arena, def, got, .{ .diagnostic = &d }) catch return try std.fmt.allocPrint(arena, "{s} {s}: encoding failed: {s} at {s}: {s}", .{ type_name, try canon(arena, input), d.code.name(), d.path(), d.message() });
+        const want = get(fields, "output") orelse input;
+        const a = try canon(arena, encoded);
+        const b = try canon(arena, want);
+        if (!std.mem.eql(u8, a, b)) return try std.fmt.allocPrint(arena, "{s} {s}: encoded {s}, want {s}", .{ type_name, try canon(arena, input), a, b });
+        return null;
+    }
+    const code = get(fields, "code").?.string;
+    const path = get(fields, "path").?.string;
+    if (decoded) |_| return try std.fmt.allocPrint(arena, "{s} {s}: accepted, want {s} at {s}", .{ type_name, try canon(arena, input), code, path }) else |_| {}
+    if (!std.mem.eql(u8, d.code.name(), code) or !std.mem.eql(u8, d.path(), path)) {
+        return try std.fmt.allocPrint(arena, "{s} {s}: {s} at {s} ({s}), want {s} at {s}", .{ type_name, try canon(arena, input), d.code.name(), d.path(), d.message(), code, path });
+    }
+    return null;
+}
+
+fn schemaSuite() !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const dir = try suitePath(arena, "schema");
+    var tally = Tally{ .name = "schema/*.cases.haus" };
+    var bare = Tally{ .name = "schema/*.cases.haus without attributes" };
+    for (try listFiles(arena, dir, ".cases.haus")) |name| {
+        const text = try readFile(arena, try std.fmt.allocPrint(arena, "{s}/{s}.schema.haus", .{ dir, name }));
+        var d: haus.Diagnostic = .{};
+        const s = loadSchema(text, &d) catch {
+            tally.check(false, "{s}.schema.haus rejected: {f}", .{ name, d });
+            continue;
+        };
+        defer s.deinit();
+        const plain = loadSchema(try withoutAttributes(arena, text), &d) catch {
+            bare.check(false, "{s}.schema.haus without attributes rejected: {f}", .{ name, d });
+            continue;
+        };
+        defer plain.deinit();
+        for (try readCases(arena, try std.fmt.allocPrint(arena, "schema/{s}.cases.haus", .{name}))) |case| {
+            const why = try schemaCase(arena, s, case.variant);
+            tally.check(why == null, "{s}: {s}", .{ name, why orelse "" });
+            const why_bare = try schemaCase(arena, plain, case.variant);
+            bare.check(why_bare == null, "{s}: {s}", .{ name, why_bare orelse "" });
+        }
+    }
+    try tally.report();
+    try bare.report();
+}
+
+fn typedSuite() !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tally = Tally{ .name = "stream/typed.cases.haus" };
+    var d: haus.Diagnostic = .{};
+    const s = try loadSchema(try readFile(arena, try suitePath(arena, "stream/typed.schema.haus")), &d);
+    defer s.deinit();
+    for (try readCases(arena, "stream/typed.cases.haus")) |case| {
+        const fields = case.variant.args[0];
+        const def = s.get(get(fields, "type").?.string).?;
+        const text = get(fields, "text").?.string;
+        const got = haus.decoding.decodeText(gpa, arena, def, text, .{ .diagnostic = &d });
+        if (std.mem.eql(u8, case.variant.tag, "Ok")) {
+            const decoded = got catch {
+                tally.check(false, "{any}: {f} at {s}", .{ text, d, d.path() });
+                continue;
+            };
+            const encoded = try haus.decoding.encodeText(arena, def, decoded, .{});
+            tally.check(std.mem.eql(u8, try canon(arena, encoded), try canon(arena, get(fields, "output").?)), "{any}: encoded {s}", .{ text, try canon(arena, encoded) });
+        } else {
+            const code = get(fields, "code").?.string;
+            const path = get(fields, "path").?.string;
+            if (got) |_| {
+                tally.check(false, "{any}: accepted, want {s}", .{ text, code });
+            } else |_| tally.check(std.mem.eql(u8, d.code.name(), code) and std.mem.eql(u8, d.path(), path), "{any}: {s} at {s}, want {s} at {s}", .{ text, d.code.name(), d.path(), code, path });
+        }
+    }
+    try tally.report();
+}
+
+fn checkSuite() !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var schemas = Tally{ .name = "check/cases.haus Schema" };
+    var datas = Tally{ .name = "check/cases.haus Data" };
+    for (try readCases(arena, "check/cases.haus")) |case| {
+        const fields = case.variant.args[0];
+        var d: haus.Diagnostic = .{};
+        const text = get(fields, "schema").?.string;
+        const tally = if (std.mem.eql(u8, case.variant.tag, "Schema")) &schemas else &datas;
+        const s = loadSchema(text, &d) catch {
+            tally.check(false, "{any}: rejected: {f}", .{ text, d });
+            continue;
+        };
+        defer s.deinit();
+        var got: std.ArrayList(u8) = .empty;
+        var want: std.ArrayList(u8) = .empty;
+        if (tally == &schemas) {
+            for (s.warnings) |w| try got.print(arena, "{s} {d}:{d}; ", .{ w.code.name(), w.line, w.column });
+            for (get(fields, "warnings").?.array) |w| try want.print(arena, "{s} {s}:{s}; ", .{ w.variant.args[0].string, w.variant.args[1].number, w.variant.args[2].number });
+        } else {
+            const def = s.get(get(fields, "type").?.string).?;
+            const issues = try haus.decoding.check(gpa, arena, def, get(fields, "data").?.string);
+            for (issues) |i| try got.print(arena, "{s} {s} {s}; ", .{ if (i.kind == .hint) "Hint" else "Error", i.code.name(), i.path });
+            for (get(fields, "issues").?.array) |i| try want.print(arena, "{s} {s} {s}; ", .{ i.variant.tag, i.variant.args[0].string, i.variant.args[1].string });
+        }
+        tally.check(std.mem.eql(u8, got.items, want.items), "{any}: got [{s}], want [{s}]", .{ text, got.items, want.items });
+    }
+    try schemas.report();
+    try datas.report();
+}
+
+// ── JSON (test-suite/json) ───────────────────────────────────
+
+/// JSON compared as data: member order and whitespace don't matter,
+/// numbers compare by their text.
+fn jsonEqual(a: haus.json.Json, b: haus.json.Json) bool {
+    switch (a) {
+        .null => return b == .null,
+        .bool => |x| return b == .bool and b.bool == x,
+        .number => |x| return b == .number and std.mem.eql(u8, x, b.number),
+        .string => |x| return b == .string and std.mem.eql(u8, x, b.string),
+        .array => |xs| {
+            if (b != .array or b.array.len != xs.len) return false;
+            for (xs, b.array) |x, y| if (!jsonEqual(x, y)) return false;
+            return true;
+        },
+        .object => |ms| {
+            if (b != .object or b.object.len != ms.len) return false;
+            for (ms) |m| {
+                const other = b.get(m.name) orelse return false;
+                if (!jsonEqual(m.value, other)) return false;
+            }
+            return true;
+        },
+    }
+}
+
+fn sameJson(arena: Allocator, a: []const u8, b: []const u8) bool {
+    const ja = haus.json.parse(arena, gpa, a, 100000, .{}) catch return false;
+    const jb = haus.json.parse(arena, gpa, b, 100000, .{}) catch return false;
+    return jsonEqual(ja, jb);
+}
+
+/// The outcome of a reader that fails with a diagnostic: null, or why the
+/// error isn't the expected one.
+fn errMismatch(arena: Allocator, d: *const haus.Diagnostic, fields: Value) !?[]const u8 {
+    const code = get(fields, "code").?.string;
+    if (!std.mem.eql(u8, d.code.name(), code)) return try std.fmt.allocPrint(arena, "{s} at {s} ({s}), want {s}", .{ d.code.name(), d.path(), d.message(), code });
+    if (get(fields, "path")) |p| if (!std.mem.eql(u8, d.path(), p.string)) {
+        return try std.fmt.allocPrint(arena, "{s} at {s}, want {s} at {s}", .{ d.code.name(), d.path(), code, p.string });
+    };
+    return null;
+}
+
+fn schemaJsonCase(arena: Allocator, s: *const haus.schema.Schema, case: haus.Variant) !?[]const u8 {
+    const fields = case.args[0];
+    const type_name = get(fields, "type").?.string;
+    const def = s.get(type_name) orelse return try std.fmt.allocPrint(arena, "no type {s}", .{type_name});
+    const json_text = get(fields, "json").?.string;
+    var d: haus.Diagnostic = .{};
+    if (std.mem.eql(u8, case.tag, "Ok")) {
+        const input = get(fields, "input").?;
+        const decoded = haus.decoding.decode(arena, def, input, .{ .diagnostic = &d }) catch return try std.fmt.allocPrint(arena, "{s}: input rejected: {f}", .{ type_name, d });
+        const written = haus.json.toJson(arena, def, decoded, .{ .diagnostic = &d }) catch return try std.fmt.allocPrint(arena, "{s}: writing failed: {f}", .{ type_name, d });
+        if (!sameJson(arena, written, json_text)) return try std.fmt.allocPrint(arena, "{s}: wrote {s}, want {s}", .{ type_name, written, json_text });
+    }
+    if (std.mem.eql(u8, case.tag, "Err")) {
+        if (haus.json.fromJson(arena, gpa, def, json_text, .{ .diagnostic = &d })) |_| {
+            return try std.fmt.allocPrint(arena, "{s} {s}: accepted, want {s}", .{ type_name, json_text, get(fields, "code").?.string });
+        } else |_| {}
+        if (try errMismatch(arena, &d, fields)) |why| return try std.fmt.allocPrint(arena, "{s} {s}: {s}", .{ type_name, json_text, why });
+        return null;
+    }
+    const read = haus.json.fromJson(arena, gpa, def, json_text, .{ .diagnostic = &d }) catch return try std.fmt.allocPrint(arena, "{s} {s}: rejected: {f} at {s}", .{ type_name, json_text, d, d.path() });
+    const encoded = haus.decoding.encode(arena, def, read, .{ .diagnostic = &d }) catch return try std.fmt.allocPrint(arena, "{s} {s}: encoding failed: {f}", .{ type_name, json_text, d });
+    const want = get(fields, "output") orelse get(fields, "input").?;
+    const a = try canon(arena, encoded);
+    const b = try canon(arena, want);
+    if (!std.mem.eql(u8, a, b)) return try std.fmt.allocPrint(arena, "{s} {s}: read {s}, want {s}", .{ type_name, json_text, a, b });
+    return null;
+}
+
+fn hausJsonCase(arena: Allocator, case: haus.Variant) !?[]const u8 {
+    const fields = case.args[0];
+    const json_text = get(fields, "json").?.string;
+    var d: haus.Diagnostic = .{};
+    if (std.mem.eql(u8, case.tag, "Ok")) {
+        const input = get(fields, "input").?;
+        const written = try haus.json.toHausJson(arena, input, .{});
+        if (!sameJson(arena, written, json_text)) return try std.fmt.allocPrint(arena, "wrote {s}, want {s}", .{ written, json_text });
+        const read = haus.json.fromHausJson(arena, gpa, json_text, .{ .diagnostic = &d }) catch return try std.fmt.allocPrint(arena, "{s}: rejected: {f}", .{ json_text, d });
+        if (!std.mem.eql(u8, try canon(arena, read), try canon(arena, input))) return try std.fmt.allocPrint(arena, "{s}: read {s}", .{ json_text, try canon(arena, read) });
+        return null;
+    }
+    if (haus.json.fromHausJson(arena, gpa, json_text, .{ .diagnostic = &d })) |_| {
+        return try std.fmt.allocPrint(arena, "{s}: accepted, want {s}", .{ json_text, get(fields, "code").?.string });
+    } else |_| {}
+    if (try errMismatch(arena, &d, fields)) |why| return try std.fmt.allocPrint(arena, "{s}: {s}", .{ json_text, why });
+    return null;
+}
+
+fn importCase(arena: Allocator, case: haus.Variant) !?[]const u8 {
+    const fields = case.args[0];
+    const json_text = get(fields, "json").?.string;
+    var d: haus.Diagnostic = .{};
+    const got = haus.json.importJson(arena, gpa, json_text, .{ .diagnostic = &d });
+    if (std.mem.eql(u8, case.tag, "Read")) {
+        const val = got catch return try std.fmt.allocPrint(arena, "{s}: rejected: {f}", .{ json_text, d });
+        const a = try canon(arena, val);
+        const b = try canon(arena, get(fields, "output").?);
+        if (!std.mem.eql(u8, a, b)) return try std.fmt.allocPrint(arena, "{s}: read {s}, want {s}", .{ json_text, a, b });
+        return null;
+    }
+    if (got) |_| return try std.fmt.allocPrint(arena, "{s}: accepted", .{json_text}) else |_| {}
+    if (try errMismatch(arena, &d, fields)) |why| return try std.fmt.allocPrint(arena, "{s}: {s}", .{ json_text, why });
+    return null;
+}
+
+fn linesCase(arena: Allocator, case: haus.Variant) !?[]const u8 {
+    const fields = case.args[0];
+    const json_text = get(fields, "json").?.string;
+    var d: haus.Diagnostic = .{};
+    const got = haus.json.fromHausJsonLines(arena, gpa, json_text, .{ .diagnostic = &d });
+    if (std.mem.eql(u8, case.tag, "Ok")) {
+        const vals = got catch return try std.fmt.allocPrint(arena, "{any}: rejected: {f}", .{ json_text, d });
+        const a = try canon(arena, .{ .array = vals });
+        const b = try canon(arena, get(fields, "output").?);
+        if (!std.mem.eql(u8, a, b)) return try std.fmt.allocPrint(arena, "{any}: read {s}, want {s}", .{ json_text, a, b });
+        return null;
+    }
+    if (got) |_| return try std.fmt.allocPrint(arena, "{any}: accepted", .{json_text}) else |_| {}
+    if (try errMismatch(arena, &d, fields)) |why| return try std.fmt.allocPrint(arena, "{any}: {s}", .{ json_text, why });
+    return null;
+}
+
+fn jsonSuite() !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var d: haus.Diagnostic = .{};
+    {
+        var tally = Tally{ .name = "json/schema-based.cases.haus" };
+        const s = try loadSchema(try readFile(arena, try suitePath(arena, "json/schema-based.schema.haus")), &d);
+        defer s.deinit();
+        for (try readCases(arena, "json/schema-based.cases.haus")) |case| {
+            const why = try schemaJsonCase(arena, s, case.variant);
+            tally.check(why == null, "{s}", .{why orelse ""});
+        }
+        try tally.report();
+    }
+    {
+        var tally = Tally{ .name = "json/self-describing.cases.haus" };
+        for (try readCases(arena, "json/self-describing.cases.haus")) |case| {
+            const why = try hausJsonCase(arena, case.variant);
+            tally.check(why == null, "{s}", .{why orelse ""});
+        }
+        try tally.report();
+    }
+    {
+        // Every valid/NAME.jsonl: one envelope per value of the file.
+        var tally = Tally{ .name = "json: valid/*.jsonl as self-describing JSON" };
+        const dir = try suitePath(arena, "valid");
+        for (try listFiles(arena, dir, ".haus")) |name| {
+            const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ dir, name });
+            const vals = (try haus.parseAll(arena, try readFile(arena, try std.fmt.allocPrint(arena, "{s}.haus", .{path})), .{})).value;
+            const jsonl = try readFile(arena, try std.fmt.allocPrint(arena, "{s}.jsonl", .{path}));
+            var lines = std.mem.splitScalar(u8, jsonl, '\n');
+            var i: usize = 0;
+            while (lines.next()) |line| : (i += 1) {
+                if (line.len == 0) break;
+                const read = haus.json.fromHausJson(arena, gpa, line, .{ .diagnostic = &d }) catch {
+                    tally.check(false, "{s}[{d}]: rejected: {f}", .{ name, i, d });
+                    continue;
+                };
+                const same = i < vals.len and std.mem.eql(u8, try canon(arena, read), try canon(arena, vals[i]));
+                const written = try haus.json.toHausJson(arena, vals[i], .{});
+                tally.check(same and sameJson(arena, written, line), "{s}[{d}]: differs", .{ name, i });
+            }
+        }
+        try tally.report();
+    }
+    {
+        var tally = Tally{ .name = "json/import.cases.haus" };
+        for (try readCases(arena, "json/import.cases.haus")) |case| {
+            const why = try importCase(arena, case.variant);
+            tally.check(why == null, "{s}", .{why orelse ""});
+        }
+        try tally.report();
+    }
+    {
+        var tally = Tally{ .name = "json/lines.cases.haus" };
+        for (try readCases(arena, "json/lines.cases.haus")) |case| {
+            const why = try linesCase(arena, case.variant);
+            tally.check(why == null, "{s}", .{why orelse ""});
+        }
+        try tally.report();
+    }
+}
+
+// ── packages (test-suite/packages) ───────────────────────────
+
+/// A JSON value of a `package.json` from a case's haus value: a list of
+/// names is an object from the names to "*".
+fn packageJsonValue(arena: Allocator, out: *std.ArrayList(u8), val: Value) !void {
+    switch (val) {
+        .string => |s| try haus.json.appendString(arena, out, s),
+        .number => |n| try out.appendSlice(arena, n),
+        .array => |names| {
+            try out.append(arena, '{');
+            for (names, 0..) |n, i| {
+                if (i > 0) try out.append(arena, ',');
+                try haus.json.appendString(arena, out, n.string);
+                try out.appendSlice(arena, ":\"*\"");
+            }
+            try out.append(arena, '}');
+        },
+        else => try haus.json.appendHausValue(arena, out, val),
+    }
+}
+
+fn writeCaseFile(dir: std.Io.Dir, sub: []const u8, bytes: []const u8) !void {
+    if (std.fs.path.dirname(sub)) |parent| try dir.createDirPath(io, parent);
+    try dir.writeFile(io, .{ .sub_path = sub, .data = bytes });
+}
+
+fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?[]const u8 {
+    const case_dir = try std.fmt.allocPrint(arena, "{s}/{d}", .{ base, index });
+    try std.Io.Dir.cwd().createDirPath(io, case_dir);
+    var dir = try std.Io.Dir.cwd().openDir(io, case_dir, .{});
+    defer dir.close(io);
+    for (get(case, "files").?.array) |f| {
+        const x = f.variant;
+        if (std.mem.eql(u8, x.tag, "File")) {
+            try writeCaseFile(dir, x.args[0].string, x.args[1].string);
+        } else if (std.mem.eql(u8, x.tag, "Package")) {
+            var manifest: std.ArrayList(u8) = .empty;
+            try manifest.appendSlice(arena, "{ name: ");
+            try haus.canonical_form.appendQuoted(arena, &manifest, x.args[1].string);
+            try manifest.appendSlice(arena, ", version: ");
+            try haus.canonical_form.appendQuoted(arena, &manifest, x.args[2].string);
+            try manifest.appendSlice(arena, " }");
+            try writeCaseFile(dir, try std.fmt.allocPrint(arena, "{s}/package.haus", .{x.args[0].string}), manifest.items);
+            try writeCaseFile(dir, try std.fmt.allocPrint(arena, "{s}/schema.haus", .{x.args[0].string}), x.args[3].string);
+        } else if (std.mem.eql(u8, x.tag, "Npm")) {
+            var out: std.ArrayList(u8) = .empty;
+            try out.append(arena, '{');
+            for (x.args[1].record, 0..) |field, i| {
+                if (i > 0) try out.append(arena, ',');
+                try haus.json.appendString(arena, &out, field.key);
+                try out.append(arena, ':');
+                try packageJsonValue(arena, &out, field.value);
+            }
+            try out.append(arena, '}');
+            try writeCaseFile(dir, try std.fmt.allocPrint(arena, "{s}/package.json", .{x.args[0].string}), out.items);
+        } else if (std.mem.eql(u8, x.tag, "Link")) {
+            const path = x.args[0].string;
+            if (std.fs.path.dirname(path)) |parent| try dir.createDirPath(io, parent);
+            try dir.symLink(io, x.args[1].string, path, .{});
+        } else return try std.fmt.allocPrint(arena, "unknown file entry {s}", .{x.tag});
+    }
+    var options: haus.packages.Options = .{};
+    const mode = get(case, "mode").?.variant;
+    options.npm = std.mem.eql(u8, mode.tag, "Npm");
+    var packages: std.ArrayList([]const u8) = .empty;
+    var folders: std.ArrayList([]const u8) = .empty;
+    if (mode.args.len > 0) {
+        if (get(mode.args[0], "packages")) |ps| for (ps.array) |p| try packages.append(arena, try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, p.string }));
+        if (get(mode.args[0], "folders")) |fs| for (fs.array) |p| try folders.append(arena, try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, p.string }));
+    }
+    options.packages = packages.items;
+    options.folders = folders.items;
+    var d: haus.Diagnostic = .{};
+    options.diagnostic = &d;
+    const root = try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, get(case, "root").?.string });
+    const expect = get(case, "expect").?.variant;
+    const got = haus.packages.build(gpa, io, root, options);
+    if (std.mem.eql(u8, expect.tag, "Ok")) {
+        const b = got catch return try std.fmt.allocPrint(arena, "rejected: {f}", .{d});
+        defer b.deinit();
+        const list = try b.packageList(arena);
+        var have: std.ArrayList(u8) = .empty;
+        for (list) |p| try have.print(arena, "{s} ", .{p});
+        var want: std.ArrayList(u8) = .empty;
+        for (get(expect.args[0], "packages").?.array) |p| try want.print(arena, "{s} ", .{p.string});
+        if (!std.mem.eql(u8, have.items, want.items)) return try std.fmt.allocPrint(arena, "packages [{s}], want [{s}]", .{ have.items, want.items });
+        return null;
+    }
+    const code = get(expect.args[0], "code").?.string;
+    if (got) |b| {
+        b.deinit();
+        return try std.fmt.allocPrint(arena, "accepted, want {s}", .{code});
+    } else |_| {}
+    if (!std.mem.eql(u8, d.code.name(), code)) return try std.fmt.allocPrint(arena, "{f}, want {s}", .{ d, code });
+    const message = d.message();
+    if (get(expect.args[0], "mentions")) |ms| for (ms.array) |m| {
+        if (std.mem.indexOf(u8, message, m.string) == null) return try std.fmt.allocPrint(arena, "{f}: doesn't mention {s}", .{ d, m.string });
+    };
+    if (get(expect.args[0], "hides")) |hs| for (hs.array) |h| {
+        if (std.mem.indexOf(u8, message, h.string) != null) return try std.fmt.allocPrint(arena, "{f}: shows {s}", .{ d, h.string });
+    };
+    return null;
+}
+
+fn packagesSuite() !void {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tally = Tally{ .name = "packages/cases.haus" };
+    // A fresh directory for the trees (left in place: nothing is deleted).
+    const tmp = environ.get("TMPDIR") orelse "/tmp";
+    const now = std.Io.Clock.real.now(io).nanoseconds;
+    const base = try std.fmt.allocPrint(arena, "{s}/haus-zig-packages-{d}", .{ std.mem.trimEnd(u8, tmp, "/"), now });
+    for (try readCases(arena, "packages/cases.haus"), 0..) |case, i| {
+        const fields = case.variant.args[0];
+        const name = get(fields, "name").?.string;
+        const why = packageCase(arena, base, i, fields) catch |e| try std.fmt.allocPrint(arena, "adapter error {s}", .{@errorName(e)});
+        tally.check(why == null, "{s}: {s}", .{ name, why orelse "" });
+    }
+    try tally.report();
+}
+
 pub fn main(init: std.process.Init) !void {
     io = init.io;
     gpa = init.gpa;
+    environ = init.environ_map;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len > 1) suite_dir = args[1];
     var buf: [4096]u8 = undefined;
-    var w: std.Io.File.Writer = .init(.stdout(), io, &buf);
+    var w: std.Io.File.Writer = .initStreaming(.stdout(), io, &buf);
     stdout = &w.interface;
-    const suites = .{ validSuite, invalidSuite, positionsSuite, equalitySuite, documentSuite, streamSuite, formatSuite };
+    const suites = .{ validSuite, invalidSuite, positionsSuite, equalitySuite, documentSuite, streamSuite, formatSuite, schemaInvalidSuite, schemaSuite, typedSuite, checkSuite, jsonSuite, packagesSuite };
     inline for (suites) |run| try run();
     try stdout.print("{s}\n", .{if (failures == 0) "conformance suite: all passed" else "conformance suite: FAILED"});
     try stdout.flush();

@@ -20,7 +20,8 @@ extern "C" {
 #define HAUS_OK 0
 #define HAUS_ERROR 1            /* a mistake with a code of spec §17: see haus_error */
 #define HAUS_OUT_OF_MEMORY 2
-#define HAUS_INVALID_ARGUMENT 3 /* a null pointer, a negative indent or width, an unknown layout */
+#define HAUS_INVALID_ARGUMENT 3 /* a null pointer, a negative indent or width, an unknown layout or type */
+#define HAUS_SCHEMA_ERROR 4     /* a mistake in a schema file (spec §14): see haus_error */
 
 /* Layouts (spec §11). */
 #define HAUS_PRETTY 0
@@ -32,6 +33,8 @@ typedef struct haus_error {
     uint32_t line;      /* 1-based (spec §8); 0 where there is no position */
     uint32_t column;    /* in code points */
     char message[192];  /* for people, NUL-terminated */
+    char path[256];     /* the place in a value (spec §15: "$.items[2].price"),
+                           for an error of a decoder or JSON reader; else empty */
 } haus_error;
 
 /* The canonical form (spec §12) of each value of a file, each followed by
@@ -46,6 +49,24 @@ int haus_hash_all(const char *text, size_t len, char out[65], haus_error *err);
  * taken literally); a negative one is HAUS_INVALID_ARGUMENT. */
 int haus_format(const char *text, size_t len, int layout, int indent, int width,
                 char **out, size_t *out_len, haus_error *err);
+
+/* Checks a haus text against the type type_name (NUL-terminated) of a
+ * schema file (spec §14, §15): every value for a Stream type, exactly one
+ * otherwise. A mistake in the schema file is HAUS_SCHEMA_ERROR; one in the
+ * text or the value is HAUS_ERROR, with the value's place in err->path. An
+ * unknown or generic type is HAUS_INVALID_ARGUMENT. */
+int haus_check(const char *schema, size_t schema_len, const char *type_name,
+               const char *text, size_t len, haus_error *err);
+
+/* Decodes a haus text (one value) with a type and writes its schema-based
+ * JSON (spec §16.3). */
+int haus_to_json(const char *schema, size_t schema_len, const char *type_name,
+                 const char *text, size_t len, char **out, size_t *out_len, haus_error *err);
+
+/* Reads schema-based JSON with a type and writes the value it encodes to,
+ * in canonical form (spec §12). */
+int haus_from_json(const char *schema, size_t schema_len, const char *type_name,
+                   const char *json, size_t len, char **out, size_t *out_len, haus_error *err);
 
 /* Releases a buffer the library returned. */
 void haus_free(char *ptr, size_t len);

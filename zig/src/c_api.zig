@@ -15,6 +15,8 @@ pub const HAUS_OUT_OF_MEMORY: c_int = 2;
 /// A misuse of the API: a null pointer, a negative indent or width, an
 /// unknown layout (no code of §17 applies).
 pub const HAUS_INVALID_ARGUMENT: c_int = 3;
+/// A mistake in the schema file (spec §14), with its code and position.
+pub const HAUS_SCHEMA_ERROR: c_int = 4;
 
 pub const haus_error = extern struct {
     /// The code of spec §17, NUL-terminated; empty for statuses other than
@@ -24,6 +26,9 @@ pub const haus_error = extern struct {
     line: u32,
     column: u32,
     message: [192]u8,
+    /// The place in a value (spec §15, §16.3: `$.items[2].price`) for an
+    /// error of a decoder or a JSON reader; empty for an error in text.
+    path: [256]u8,
 };
 
 fn clear(err: ?*haus_error) void {
@@ -32,6 +37,7 @@ fn clear(err: ?*haus_error) void {
         e.line = 0;
         e.column = 0;
         e.message[0] = 0;
+        e.path[0] = 0;
     }
 }
 
@@ -52,6 +58,7 @@ fn report(err: ?*haus_error, e: haus.Error, d: *const haus.Diagnostic) c_int {
                 out.line = d.line;
                 out.column = d.column;
                 copyZ(&out.message, d.message());
+                copyZ(&out.path, d.path());
             }
             return HAUS_ERROR;
         },
@@ -146,6 +153,100 @@ pub export fn haus_spec_version() [*:0]const u8 {
     return haus.spec_version;
 }
 
+// ── schemas (spec §14–§16) ───────────────────────────────────
+
+/// A schema file and one of its types, for the calls below.
+const Typed = struct {
+    schema: *haus.schema.Schema,
+    def: *const haus.schema.Def,
+
+    fn deinit(t: Typed) void {
+        t.schema.deinit();
+    }
+};
+
+fn loadType(schema: ?[*]const u8, schema_len: usize, type_name: ?[*:0]const u8, err: ?*haus_error, status: *c_int) ?Typed {
+    const s = input(schema, schema_len) orelse {
+        status.* = HAUS_INVALID_ARGUMENT;
+        return null;
+    };
+    const name = std.mem.span(type_name orelse {
+        status.* = HAUS_INVALID_ARGUMENT;
+        return null;
+    });
+    var d: haus.Diagnostic = .{};
+    const loaded = haus.schema.load(allocator, s, .{ .diagnostic = &d }) catch |e| {
+        status.* = if (report(err, e, &d) == HAUS_ERROR) HAUS_SCHEMA_ERROR else HAUS_OUT_OF_MEMORY;
+        return null;
+    };
+    const def = loaded.get(name) orelse {
+        loaded.deinit();
+        status.* = HAUS_INVALID_ARGUMENT;
+        return null;
+    };
+    if (def.params.len > 0) {
+        loaded.deinit();
+        status.* = HAUS_INVALID_ARGUMENT;
+        return null;
+    }
+    return .{ .schema = loaded, .def = def };
+}
+
+/// Checks a haus text against the type `type_name` of a schema file (spec
+/// §14, §15): every value for a `Stream` type, exactly one otherwise. A
+/// mistake in the schema file is HAUS_SCHEMA_ERROR; one in the text or the
+/// value is HAUS_ERROR, with the value's place in `path`.
+pub export fn haus_check(schema: ?[*]const u8, schema_len: usize, type_name: ?[*:0]const u8, text: ?[*]const u8, len: usize, err: ?*haus_error) c_int {
+    clear(err);
+    const t = input(text, len) orelse return HAUS_INVALID_ARGUMENT;
+    var status: c_int = HAUS_OK;
+    const typed = loadType(schema, schema_len, type_name, err, &status) orelse return status;
+    defer typed.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    var d: haus.Diagnostic = .{};
+    _ = haus.decoding.decodeText(allocator, arena_state.allocator(), typed.def, t, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
+    return HAUS_OK;
+}
+
+/// Decodes a haus text with a type of a schema file and writes it as
+/// schema-based JSON (spec §16.3).
+pub export fn haus_to_json(schema: ?[*]const u8, schema_len: usize, type_name: ?[*:0]const u8, text: ?[*]const u8, len: usize, out: ?*?[*]u8, out_len: ?*usize, err: ?*haus_error) c_int {
+    clear(err);
+    const t = input(text, len) orelse return HAUS_INVALID_ARGUMENT;
+    if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
+    var status: c_int = HAUS_OK;
+    const typed = loadType(schema, schema_len, type_name, err, &status) orelse return status;
+    defer typed.deinit();
+    if (typed.def.stream) return HAUS_INVALID_ARGUMENT;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    var d: haus.Diagnostic = .{};
+    const decoded = haus.decoding.decodeText(allocator, arena_state.allocator(), typed.def, t, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
+    const json = haus.json.toJson(allocator, typed.def, decoded, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
+    return give(json, out, out_len);
+}
+
+/// Reads schema-based JSON (spec §16.3) with a type of a schema file and
+/// writes the value it encodes to in canonical form (spec §12).
+pub export fn haus_from_json(schema: ?[*]const u8, schema_len: usize, type_name: ?[*:0]const u8, json: ?[*]const u8, len: usize, out: ?*?[*]u8, out_len: ?*usize, err: ?*haus_error) c_int {
+    clear(err);
+    const j = input(json, len) orelse return HAUS_INVALID_ARGUMENT;
+    if (out == null or out_len == null) return HAUS_INVALID_ARGUMENT;
+    var status: c_int = HAUS_OK;
+    const typed = loadType(schema, schema_len, type_name, err, &status) orelse return status;
+    defer typed.deinit();
+    if (typed.def.stream) return HAUS_INVALID_ARGUMENT;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var d: haus.Diagnostic = .{};
+    const decoded = haus.json.fromJson(arena, allocator, typed.def, j, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
+    const val = haus.decoding.encode(arena, typed.def, decoded, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
+    const c = haus.canonical(allocator, val, .{ .diagnostic = &d }) catch |e| return report(err, e, &d);
+    return give(c, out, out_len);
+}
+
 // ── tests, through the C ABI ─────────────────────────────────
 
 fn callCanonical(text: []const u8, err: *haus_error) !?[]u8 {
@@ -203,4 +304,33 @@ test "format through the C ABI" {
     try std.testing.expectEqual(HAUS_OK, haus_format(text, text.len, HAUS_MINIMISED, 0, 0, &min, &out_len, &err));
     defer haus_free(min, out_len);
     try std.testing.expectEqualStrings("{a:Point(1,2)}\n", min.?[0..out_len]);
+}
+
+test "schemas through the C ABI" {
+    var err: haus_error = undefined;
+    const schema = "type Order = { id: Int, lines: Array Line }\ntype Line = { qty: UInt8 }\ntype Log = Stream Line";
+    const ok = "{ id: 1, lines: [{ qty: 2 }] }";
+    try std.testing.expectEqual(HAUS_OK, haus_check(schema, schema.len, "Order", ok, ok.len, &err));
+    const bad = "{ id: 1, lines: [{ qty: 300 }] }";
+    try std.testing.expectEqual(HAUS_ERROR, haus_check(schema, schema.len, "Order", bad, bad.len, &err));
+    try std.testing.expectEqualStrings("out-of-range", std.mem.sliceTo(&err.code, 0));
+    try std.testing.expectEqualStrings("$.lines[0].qty", std.mem.sliceTo(&err.path, 0));
+    const log = "{ qty: 1 },\n{ qty: \"x\" },";
+    try std.testing.expectEqual(HAUS_ERROR, haus_check(schema, schema.len, "Log", log, log.len, &err));
+    try std.testing.expectEqualStrings("$[1].qty", std.mem.sliceTo(&err.path, 0));
+    const broken = "type A = B";
+    try std.testing.expectEqual(HAUS_SCHEMA_ERROR, haus_check(broken, broken.len, "A", ok, ok.len, &err));
+    try std.testing.expectEqualStrings("unknown-type", std.mem.sliceTo(&err.code, 0));
+    try std.testing.expectEqual(HAUS_INVALID_ARGUMENT, haus_check(schema, schema.len, "Nope", ok, ok.len, &err));
+
+    var out: ?[*]u8 = null;
+    var out_len: usize = 0;
+    try std.testing.expectEqual(HAUS_OK, haus_to_json(schema, schema.len, "Order", ok, ok.len, &out, &out_len, &err));
+    try std.testing.expectEqualStrings("{\"id\":\"1\",\"lines\":[{\"qty\":2}]}", out.?[0..out_len]);
+    var back: ?[*]u8 = null;
+    var back_len: usize = 0;
+    try std.testing.expectEqual(HAUS_OK, haus_from_json(schema, schema.len, "Order", out.?, out_len, &back, &back_len, &err));
+    haus_free(out, out_len);
+    defer haus_free(back, back_len);
+    try std.testing.expectEqualStrings("{id:1,lines:[{qty:2}]}", back.?[0..back_len]);
 }

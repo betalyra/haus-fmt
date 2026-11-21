@@ -97,6 +97,8 @@ export const go = () => external("go", (mode, file) => [join(root, "fuzz/.build/
 /** The JVM runner: every mode (schema-based JSON with `SchemaType.toJson` and `fromJson`). */
 export const jvm = () => external("jvm", (mode, file) => [join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--json", mode, file]], true)
 export const swift = () => external("swift", (mode, file) => [join(root, "fuzz/.build/swift-runner"), ["--json", mode, file]], true)
+/** The Zig binding (zig/src/json.zig), in the Zig runner: every mode. */
+export const zig = () => external("zig", (mode, file) => [join(root, "zig/zig-out/bin/zig-runner"), ["--json", mode, file]], true)
 
 // ── in this process ──────────────────────────────────────────
 

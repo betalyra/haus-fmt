@@ -27,7 +27,7 @@ import {
   anyJ, badEnvelopeJ, badHausValueJ, envelope, hausJsonJ, hausValueJ, mutateJ, nested, normJ, NOT_JSON, Obj, parseJ, PlainGen, single, smallerJ, textOf, wrongJ, writeJ, type J,
 } from "./json-gen.ts"
 import {
-  caseBytes, caseLine, effectRunner, go, jvm, lean, MODES, python, roc, rust, swift, typed, typescriptRunner, writes, type JsonCase, type JsonRunner, type Mode,
+  caseBytes, caseLine, effectRunner, go, jvm, lean, MODES, python, roc, rust, swift, typed, typescriptRunner, writes, zig, type JsonCase, type JsonRunner, type Mode,
 } from "./json-runners.ts"
 import { shrinkCase } from "./schema.ts"
 import { Generator, type Env, type Type } from "./schema-gen.ts"
@@ -35,7 +35,7 @@ import { schemaTexts, type Outcome } from "./schema-runners.ts"
 
 const root = new URL("../..", import.meta.url).pathname
 const SCHEMA_DIRS = [join(root, "test-suite/schema"), join(root, "fuzz/schema"), join(root, "test-suite/json"), join(root, "fuzz/json")]
-const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "roc", "python", "go", "swift", "jvm"]
+const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "roc", "python", "go", "swift", "jvm", "zig"]
 
 export async function run(argv: readonly string[]): Promise<number> {
   const { values: args } = parseArgs({
@@ -95,6 +95,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     else if (name === "go") runners.push(go())
     else if (name === "jvm") runners.push(jvm())
     else if (name === "swift") runners.push(swift())
+    else if (name === "zig") runners.push(zig())
     else throw new Error(`unknown runner ${name} (${ALL_RUNNERS.join(", ")})`)
   }
 

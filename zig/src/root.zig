@@ -17,6 +17,11 @@ pub const canonical_form = @import("canonical.zig");
 pub const stream = @import("stream.zig");
 pub const write = @import("write.zig");
 pub const format_source = @import("format.zig");
+pub const time = @import("time.zig");
+pub const schema = @import("schema.zig");
+pub const decoding = @import("decode.zig");
+pub const json = @import("json.zig");
+pub const packages = @import("packages.zig");
 
 pub const Value = value.Value;
 pub const Field = value.Field;
@@ -150,6 +155,11 @@ test {
     _ = stream;
     _ = write;
     _ = format_source;
+    _ = time;
+    _ = schema;
+    _ = decoding;
+    _ = json;
+    _ = packages;
 }
 
 test "parse and canonical" {

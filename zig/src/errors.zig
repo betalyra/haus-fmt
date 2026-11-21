@@ -55,6 +55,81 @@ pub const Code = enum {
     // Values built in code
     @"invalid-tag",
     @"too-many-nodes",
+    // Schema files (§14)
+    @"schema-syntax",
+    @"unknown-type",
+    @"wrong-arity",
+    @"duplicate-type",
+    @"redefine-prelude",
+    @"unknown-parameter",
+    @"invalid-parameter",
+    @"underscore-type",
+    @"duplicate-field",
+    @"duplicate-tag",
+    @"closed-empty-variant",
+    @"invalid-spread",
+    @"spread-cycle",
+    @"row-parameter",
+    @"misplaced-stream",
+    @"unguarded-recursion",
+    @"growing-recursion",
+    @"type-too-deep",
+    @"attribute-arguments",
+    @"attribute-twice",
+    @"attribute-space",
+    @"attribute-on-spread",
+    // Imports (§13.3)
+    @"unknown-module",
+    @"unknown-import",
+    @"duplicate-import",
+    @"import-unavailable",
+    @"import-not-found",
+    @"import-version",
+    @"import-cycle",
+    @"duplicate-package",
+    @"undeclared-package",
+    @"package-manifest",
+    @"package-version",
+    @"package-path",
+    @"package-name",
+    @"package-crate",
+    @"package-install-script",
+    @"package-files",
+    @"profile-vectors",
+    @"package-wrapper",
+    @"codec-unreachable",
+    @"file-too-large",
+    @"too-many-files",
+    // Decoding and encoding (§15)
+    @"type-mismatch",
+    @"not-an-integer",
+    @"out-of-range",
+    @"missing-field",
+    @"unknown-field",
+    @"unknown-tag",
+    @"wrong-payload",
+    @"invalid-time",
+    @"invalid-secret",
+    @"codec-rejected",
+    @"cannot-encode",
+    @"cyclic-value",
+    @"step-budget",
+    // JSON (§16)
+    @"json-syntax",
+    @"unpaired-surrogate",
+    @"haus-json-form",
+    @"haus-json-version",
+    @"haus-json-number",
+    @"haus-json-bytes",
+    @"invalid-base64",
+    @"missing-member",
+    @"unexpected-member",
+    @"no-json-form",
+    // Hints and warnings (§14)
+    @"unknown-attribute",
+    deprecated,
+    @"unlisted-field",
+    @"unlisted-tag",
 
     pub fn name(code: Code) []const u8 {
         return @tagName(code);
@@ -77,6 +152,22 @@ pub const Diagnostic = struct {
     offset: usize = 0,
     message_buf: [160]u8 = undefined,
     message_len: usize = 0,
+    /// The place in a value (spec §15), for an error of a decoder or a
+    /// JSON reader: `$.items[2].price`. Empty for an error in text.
+    path_buf: [path_capacity]u8 = undefined,
+    path_len: usize = 0,
+
+    pub const path_capacity = 4096;
+
+    pub fn path(d: *const Diagnostic) []const u8 {
+        return d.path_buf[0..d.path_len];
+    }
+
+    pub fn setPath(d: *Diagnostic, p: []const u8) void {
+        const n = @min(p.len, path_capacity);
+        @memcpy(d.path_buf[0..n], p[0..n]);
+        d.path_len = n;
+    }
 
     pub fn message(d: *const Diagnostic) []const u8 {
         return d.message_buf[0..d.message_len];
@@ -86,6 +177,7 @@ pub const Diagnostic = struct {
     /// position is set separately.
     pub fn set(d: *Diagnostic, code: Code, comptime fmt: []const u8, args: anytype) void {
         d.code = code;
+        d.path_len = 0;
         const out = std.fmt.bufPrint(&d.message_buf, fmt, args) catch blk: {
             // Too long: cut, and mark the cut.
             const cut = "…";

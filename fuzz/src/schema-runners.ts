@@ -231,3 +231,5 @@ export const go = () => external("go", join(root, "fuzz/.build/go-runner"), ["--
 export const swift = () => external("swift", join(root, "fuzz/.build/swift-runner"), ["--schema"], true)
 /** The JVM binding's schemas (`SchemaType.decode`, `encode`), in the JVM runner. */
 export const jvm = () => external("jvm", join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--schema"], true)
+/** The Zig binding (zig/src/decode.zig: `schema.load`, `decoding.decode`, `decoding.encode`), in the Zig runner. */
+export const zig = () => external("zig", join(root, "zig/zig-out/bin/zig-runner"), ["--schema"], true)
