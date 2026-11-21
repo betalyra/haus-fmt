@@ -262,6 +262,10 @@ Every value has a canonical form, and none of these fail: numbers are
 written in decimal, an integer of any size with all its digits, also one
 built in code or parsed with a larger `max_number_length`.
 
+## Threads
+
+Every type you share is `Send` and `Sync`, checked at compile time: values, `Limits`, `FormatOptions`, errors and a built `haus_schema::Schema`. Parsing, writing, formatting, the canonical form, hashing and equality keep their state in the call, so they can run on many threads at once (spec §9).
+
 ## Limits
 
 Reading enforces the limits of spec §7, `haus::Limits`: by default a depth of

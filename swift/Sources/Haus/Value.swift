@@ -159,7 +159,7 @@ func hashCodePoints(_ s: String, into hasher: inout Hasher) {
 
 /// A string compared and hashed by its code points, for dictionaries of
 /// record keys.
-struct CodePointKey: Hashable {
+struct CodePointKey: Hashable, Sendable {
     let string: String
 
     static func == (a: CodePointKey, b: CodePointKey) -> Bool { sameCodePoints(a.string, b.string) }

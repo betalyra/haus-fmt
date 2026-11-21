@@ -90,6 +90,10 @@ h, _ := haus.Hash(v)      // SHA-256 of the canonical form, 64 hex digits
 
 `haus.HashAll(values)` hashes a whole file; the items of a stream are hashed one by one with `haus.Hash`. `haus.Compare` orders values by their canonical forms. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
 
+## Goroutines
+
+Parsing, writing, formatting, `Canonical`, `Hash` and `Equals` keep their state in the call (pooled parsers and buffers are taken for one call), and a `*schema.Schema`, its `Type`s and `*Codecs` don't change once built, so goroutines can share them; the tests check this under `-race`. A `StreamReader` belongs to one stream, and an `Explicit` is built before the loads that use it.
+
 ## Schemas
 
 Package `schema` reads schema files (`.schema.haus`, spec §14) with their imports, and decodes values with their types (spec §15):

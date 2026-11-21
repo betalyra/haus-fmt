@@ -154,6 +154,10 @@ Haus.hash(v);        // SHA-256 of the canonical form (java.security.MessageDige
 
 `Haus.hashAll(values)` hashes a whole file; `Haus.compare` orders values by their canonical forms. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
 
+## Threads
+
+Values, `Limits`, the options, `Codecs`, `Schema`, `SchemaType` and `HausCodec` are immutable and safe for concurrent use, and parsing, writing, formatting, the canonical form, hashing and JSON keep their state in the call. A `StreamReader` or `JsonLinesReader` belongs to one stream. The Kotlin functions hold no state.
+
 ## JSON
 
 ```java

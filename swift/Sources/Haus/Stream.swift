@@ -305,3 +305,5 @@ where Chunks.Element: Collection, Chunks.Element.Element == UInt8 {
         }
     }
 }
+
+extension HausValues: Sendable where Chunks: Sendable {}

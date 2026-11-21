@@ -141,6 +141,10 @@ let digest = try hash(v)    // SHA-256 of the canonical form, 64 hex digits
 
 `hash` and `hashAll` use CryptoKit, so they exist where CryptoKit does (Apple platforms). On Linux, `canonical` gives the bytes to hash with a SHA-256 of your choice.
 
+## Concurrency
+
+The package builds in the Swift 6 language mode, and the types you share are `Sendable`: values, `Limits`, `FormatOptions`, `HausError`, `HausSchema` and `SchemaType`. A schema doesn't change once built, so tasks can share one; a `StreamReader` is a value, one per stream.
+
 ## Development
 
 ```sh

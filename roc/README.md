@@ -265,6 +265,10 @@ each of them gives a `Try`: `Encode.equals(a, b) == Ok(True)`, and to sort,
 `Value.within_bounds(v, max_depth, max_nodes)` is the check they make, for a
 value built in code, with your own bounds.
 
+## Threads
+
+The package is pure: it has no mutable state and no effects, so a platform may run it on many threads at once.
+
 ## Limits
 
 The parser enforces the limits of spec §7. The reading functions use the

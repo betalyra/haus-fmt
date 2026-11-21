@@ -293,6 +293,10 @@ s["Order"].parse(text)  # Money(1, Eur) or LatLng(91, 0): HausDecodeError
 
 `schema.parse_schema_file(text, …)` gives the checked file without building decoders: its definitions (with `doc`, `source`, `attributes` and `id`), the resolved types, imports and warnings. `schema.without_attributes(text)` blanks every attribute out (positions stay), which never changes decoding (spec §15).
 
+## Threads
+
+Parsing, writing, formatting, the canonical form, hashing and the JSON functions keep their state in the call, and a built `Schema` and its types don't change, so threads can share them, also on free-threaded CPython (the test suite passes on 3.14t). A `FileResolver` may be shared by threads loading schemas: it resolves one import at a time. A `StreamReader` belongs to one stream.
+
 ## Error codes
 
 Every error has a **code** from the spec's catalogue (§17, [`errors.md`](https://github.com/betalyra/haus-fmt/tree/main/spec/errors.md)): a short name such as `payload-newline`, `null-literal` or `missing-field` that says which mistake was made. Messages are for people and may change; codes are for programs, tools and agents, never change and are the same in every haus binding. Match on them:
