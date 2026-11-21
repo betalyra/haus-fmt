@@ -9,6 +9,7 @@ import SchemaBased
 import "../../test-suite/json/schema-based.cases.haus" as schema_based_cases : Str
 import "../../test-suite/json/self-describing.cases.haus" as self_describing_cases : Str
 import "../../test-suite/json/import.cases.haus" as import_cases : Str
+import "../../test-suite/json/lines.cases.haus" as lines_cases : Str
 import "../../test-suite/valid/bare-values.haus" as valid_bare_values : List(U8)
 import "../../test-suite/valid/bare-values.jsonl" as valid_bare_values_jsonl : List(U8)
 import "../../test-suite/valid/bidi-escaped.haus" as valid_bidi_escaped : List(U8)
@@ -113,6 +114,32 @@ JsonTest := [].{
 	valid : List(U8), List(U8) -> Bool
 	valid = |haus, jsonl| report(valid_case(haus, jsonl))
 
+	## Every case of lines.cases.haus (spec §16, "Streams"), read with
+	## `JsonValue.from_haus_json_lines`: `Ok { json, output }` reads the
+	## values `output`; `Err { json, code, path? }` fails with `code`, at
+	## `path` when the case gives one (starting with the line's index).
+	lines : Str -> Bool
+	lines = |cases| match Value.parse_all(cases) {
+		Ok(all) => {
+			failures = all.keep_oks(
+				|c| match lines_case(c) {
+					Ok({}) => Err({})
+					Err(reason) => Ok("${form(c)}: ${reason}")
+				},
+			)
+			if failures.is_empty() {
+				!all.is_empty()
+			} else {
+				dbg failures
+				False
+			}
+		}
+		Err(e) => {
+			dbg e.reason
+			False
+		}
+	}
+
 	## Reading `n` nested `{"_tag": "Some", "value": …}` around
 	## `{"_tag": "None"}` with the type `ty` (`Loop`, `OptLoop`). The haus
 	## value must nest at most 256 levels (spec §16, "Limits").
@@ -207,6 +234,31 @@ rejected = |result, fields| {
 
 same_code : Str, Str, Str -> Try({}, Str)
 same_code = |want, got, message| if (got == want) Ok({}) else Err("failed with ${got}, expected ${want}: ${message}")
+
+lines_case : Value -> Try({}, Str)
+lines_case = |c| match c {
+	Tag(tag, [Rec(fields)]) => {
+		json = text(fields, "json")?
+		read_lines = JsonValue.from_haus_json_lines(json)
+		match (tag, read_lines) {
+			("Ok", Ok(got)) => {
+				want = match value(fields, "output")? {
+					Arr(items) => items
+					_ => return Err("a case whose output isn't an array")
+				}
+				if got.len() == want.len() and got.map2(want, same).all(|equal| equal) {
+					Ok({})
+				} else {
+					Err("read as [${Str.join_with(got.map(form), ", ")}]")
+				}
+			}
+			("Ok", Err(Syntax(e))) => Err("failed with ${e.code} at ${e.line.to_str()}:${e.column.to_str()}")
+			("Ok", Err(Decode(e))) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}")
+			(_, result) => rejected(result.map_ok(|vs| Arr(vs)), fields)
+		}
+	}
+	_ => Err("not a case")
+}
 
 valid_case : List(U8), List(U8) -> Try({}, Str)
 valid_case = |haus, jsonl| {
@@ -1324,6 +1376,9 @@ expect written(SchemaBased.decode_found(Tag("Found", [Rec([("items", Arr([Num("1
 expect written(SchemaBased.decode_gen_rec(Tag("Box", [Rec([("w", Num("1"))])])), SchemaBased.to_json_gen_rec) == Ok("{\"_tag\":\"Box\",\"value\":{\"w\":1}}")
 # by name, any payload but one record is the wrong payload, as inline
 expect [SchemaBased.decode_boxed(Tag("Box", [Num("1")])), SchemaBased.decode_boxed(Tag("Box", [])), SchemaBased.decode_boxed(Tag("Box", [Num("1"), Num("2")]))].map(|r| r.map_ok(|_| {}).map_err(|e| e.code)) == [Err("wrong-payload"), Err("wrong-payload"), Err("wrong-payload")]
+
+# json/lines.cases.haus
+expect JsonTest.lines(lines_cases)
 
 # valid/bare-values.jsonl
 expect JsonTest.valid(valid_bare_values, valid_bare_values_jsonl)

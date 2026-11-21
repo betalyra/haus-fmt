@@ -94,7 +94,61 @@ limit (§7) and strict mode. Each case is a record: `text`, `maxValueLength`,
 as values (§2), or `Err("code")`. A reader must give the same result for every
 way of splitting `text` into chunks: run each case at least whole, one
 character at a time, and split at every position. The value limit applies to
-stream readers only; parsing the whole text doesn't apply it.
+stream readers only; parsing the whole text doesn't apply it: a case with
+`whole: Ok([values])` must also parse whole (as `parseAll`, default limits)
+to these values.
+
+`stream/document.cases.haus` checks readers of a single document (spec §6,
+as `parse`): `text`, and `result`: `Ok(value)` or `Err("code")`. One value,
+with or without a comma after it, is a document; no value, or two or more,
+is `not-one-value`.
+
+`stream/typed.schema.haus` and `stream/typed.cases.haus` decode a text with
+a type (spec §15, "Streams"). `Ok { type, text, output }`: a `Stream a` type
+decodes each top-level value of `text` as an `a`, and encoding the results
+gives the array `output`; a type that isn't a stream decodes the one value
+of `text`, and encoding it gives `output`. Values are compared as values
+(§2). `Err { type, text, code, path }`: decoding fails with the code `code`
+at the place `path` (§15), which starts with the item's index in a stream
+(`$[1].level`). Runners use their binding's stream decoding (not a loop of
+their own), so that the index comes from the binding.
+
+## Error positions
+
+`positions/cases.haus` checks the line and column of errors (spec §8). Each
+case: `text`, with one mistake at one character, and the `code`, `line` and
+`column` it must be rejected with when the whole text is parsed (as
+`parseAll`). Lines and columns are 1-based; columns count code points (an
+emoji is one column, and so is each combining mark), a byte order mark at the
+start is column 1, and only a line feed (or CR LF) ends a line: U+2028 and
+U+2029 don't.
+
+## Equality and order
+
+`equality/cases.haus` checks `equals` and `compare` (spec §2, §12): `a` and
+`b`, two values written in the file itself, `equal` (`True` or `False`), and
+`order`, the sign of `compare(a, b)`: `-1`, `0` or `1`. Runners check both
+directions: `equals(b, a)` is `equal`, and `compare(b, a)` has the opposite
+sign.
+
+## Checker suite
+
+`check/cases.haus` checks what tools that check schema files and data report
+without failing (spec §14, §15, §16). Schemas are given as text in each
+case, one file without imports.
+
+- `Schema { schema, warnings }`: the schema loads, and its warnings are
+  exactly `warnings`, in the order of their places: `Warning(code, line,
+  column)`, at what the warning is about (an unknown attribute's `@`, the
+  use of a deprecated type, a case without a schema-based JSON form).
+- `Data { schema, type, data, issues }`: checking the text `data` against
+  `type` (every value for a `Stream` type, else exactly one) gives exactly
+  `issues`, in the order of their places: `Hint(code, path)` for what is
+  allowed but pointed out (`unlisted-field`, `unlisted-tag`, `deprecated`),
+  `Error(code, path)` for what the type forbids. `path` is the place of
+  spec §15.
+
+A binding without a data checker runs the `Schema` cases only, and says so.
 
 ## JSON suite
 
@@ -109,6 +163,10 @@ haus, with JSON text in strings:
 - `self-describing.cases.haus`: self-describing JSON, without a type (`Ok { input, json }`, `Err { json, code }`).
   Every `valid/NAME.jsonl` is a case too, one envelope per value of the file.
 - `import.cases.haus`: the JSON import, without a schema (`Read { json, output }`, `Err { json, code }`).
+- `lines.cases.haus`: JSON Lines of self-describing JSON, read as a stream
+  (`Ok { json, output }` with `output` an array of the values read,
+  `Err { json, code, path? }`). The place of an error in a line starts with
+  the line's index: `$[1]._value._num`.
 
 JSON is compared as data: member order and whitespace don't matter, and
 numbers compare by their text.

@@ -1,0 +1,12 @@
+// The pretty layout's two options (spec §11): `indent` and `width`, whole
+// numbers of zero or more. Each case: `input` (a haus text without
+// comments), the options given (an option not given is left unset, so its
+// default applies), and the result of formatting `input` in the pretty
+// layout: `Ok(text)`, the formatted text, or `Rejected`, a formatter that
+// refuses the options (a misuse of its API, so no error code is compared).
+// A binding whose API can't express an option set (a negative number in an
+// unsigned type) rejects it by its types, and passes the case.
+
+// ── options not given: the defaults (indent 2, width 80) ──
+{ input: "{ a: Point(1, 2) }", result: Ok("{\n  a: Point(1, 2),\n}\n") },
+

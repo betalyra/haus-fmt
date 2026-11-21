@@ -120,6 +120,15 @@ jobs:
       - name: Stream suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --stream-suite ../../test-suite/stream
+      - name: Position suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --positions ../../test-suite/positions/cases.haus
+      - name: Equality suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --equality ../../test-suite/equality/cases.haus
+      - name: Format options suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --format-options ../../test-suite/format/options.cases.haus
       - name: Profile vectors
         working-directory: spec/lean
         run: |

@@ -1,8 +1,9 @@
 /** The stream suite (test-suite/stream, spec §6, §7): every case whole, one character at a time, and split at every position. */
 import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { canonical, equals, errorCode, parseAll, StreamReader, type Value } from "../src/index.js"
+import { arr, canonical, compileSchemaFile, equals, errorCode, formatPath, HausDecodeError, parse, parseAll, StreamReader, type Value } from "../src/index.js"
+import * as h from "../src/schema.js"
 
 /** HAUS_STREAM_SUITE: another directory with the suite's limits.cases.haus. */
 const CASES = join(process.env.HAUS_STREAM_SUITE ?? join(import.meta.dirname, "../../../../test-suite/stream"), "limits.cases.haus")
@@ -80,4 +81,67 @@ describe("stream suite", () => {
       expect(failures).toEqual([])
     })
   }
+})
+
+/** `whole`: parsing the whole text doesn't apply the value limit (spec §7). */
+describe("stream suite, parsed whole", () => {
+  const wholes = parseAll(readFileSync(CASES, "utf8")).flatMap((v) => {
+    const whole = field(v, "whole")
+    const text = field(v, "text")
+    if (whole === undefined) return []
+    if (text?.kind !== "string" || whole.kind !== "variant" || whole.tag !== "Ok" || whole.args[0]?.kind !== "array") throw new Error(`not a case: ${canonical(v)}`)
+    return [{ text: text.value, values: whole.args[0].items }]
+  })
+  it("has cases", () => expect(wholes.length).toBeGreaterThan(0))
+  it.each(wholes)("$text", ({ text, values }) => expect(parseAll(text).map(canonical)).toEqual(values.map(canonical)))
+})
+
+/** document.cases.haus: single documents (spec §6). */
+describe("single documents", () => {
+  const docs = parseAll(readFileSync(join(dirname(CASES), "document.cases.haus"), "utf8")).map((v) => {
+    const text = field(v, "text")
+    const result = field(v, "result")
+    if (text?.kind !== "string" || result?.kind !== "variant" || result.args[0] === undefined) throw new Error(`not a case: ${canonical(v)}`)
+    return { text: text.value, want: result.tag === "Ok" ? `Ok ${canonical(result.args[0])}` : `Err ${result.args[0].kind === "string" ? result.args[0].value : "?"}` }
+  })
+  it("has cases", () => expect(docs.length).toBeGreaterThan(0))
+  it.each(docs)("$text", ({ text, want }) => {
+    let got: string
+    try {
+      got = `Ok ${canonical(parse(text))}`
+    } catch (e) {
+      got = `Err ${errorCode(e) ?? String(e)}`
+    }
+    expect(got).toBe(want)
+  })
+})
+
+/** typed.schema.haus and typed.cases.haus: streams decoded with a type (spec §15). */
+describe("typed streams", () => {
+  const dir = dirname(CASES)
+  const { schemas, streams } = compileSchemaFile(readFileSync(join(dir, "typed.schema.haus"), "utf8"))
+  const typed = parseAll(readFileSync(join(dir, "typed.cases.haus"), "utf8")).map((v) => {
+    if (v.kind !== "variant" || v.args[0] === undefined) throw new Error(`not a case: ${canonical(v)}`)
+    const f = (k: string) => field(v.args[0]!, k)
+    const type = f("type")
+    const text = f("text")
+    if (type?.kind !== "string" || text?.kind !== "string") throw new Error(`not a case: ${canonical(v)}`)
+    const want = v.tag === "Ok" ? `Ok ${canonical(f("output")!)}` : `Err ${(f("code") as { value: string }).value} ${(f("path") as { value: string }).value}`
+    return { type: type.value, text: text.value, want }
+  })
+  it("has cases", () => expect(typed.length).toBeGreaterThan(0))
+  it.each(typed)("$type $text", async ({ type, text, want }) => {
+    const schema = schemas[type]!
+    let got: string
+    try {
+      if (streams.has(type)) {
+        const out: Value[] = []
+        for await (const item of h.decodeStream(schema, [text])) out.push(h.encode(schema, item))
+        got = `Ok ${canonical(arr(out))}`
+      } else got = `Ok ${canonical(h.encode(schema, h.parse(schema, text)))}`
+    } catch (e) {
+      got = `Err ${errorCode(e) ?? String(e)} ${e instanceof HausDecodeError ? formatPath(e.path) : "-"}`
+    }
+    expect(got).toBe(want)
+  })
 })

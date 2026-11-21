@@ -7,8 +7,10 @@ NAME.roc (its types, decoders and encoders), and SchemaTest.roc gets one
 parsed by the test, so the inputs keep their exact spelling. A schema whose
 module changes without its attributes also gets NAMEBare.roc, generated with
 `--without-attributes`, and each case runs on it too: attributes don't change
-decoding or encoding (spec §15). Needs Rust (cargo) for haus-gen. Re-run after
-changing test-suite/schema/ or roc.rs:
+decoding or encoding (spec §15). The typed streams of the stream suite
+(test-suite/stream/typed.schema.haus, typed.cases.haus) run here too, on the
+module StreamTyped. Needs Rust (cargo) for haus-gen. Re-run after changing
+test-suite/schema/, test-suite/stream/typed.schema.haus or roc.rs:
 
     python3 roc/scripts/gen_schema_conformance.py
     cd roc/schema-test && roc test main.roc
@@ -134,6 +136,121 @@ for schema in schemas:
         if has_bare:
             tests.append(f"# Without attributes: {line}\nexpect SchemaTest.check({src}, {i}, SchemaTest.{snake(name)}_bare)")
 
+# Streams decoded with a type (test-suite/stream/typed.*, spec §15 "Streams"):
+# the module StreamTyped from typed.schema.haus. A `Stream a` type has no
+# decoder of its own (haus-gen writes a comment): its items decode with
+# `Decode.all`, the binding's stream decoding, which puts the item's index in
+# the path; any other type with `Decode.one`. Every case runs in one `expect`,
+# which reports each failing case, so the file can change without
+# regenerating this module.
+STREAM = ROOT / "test-suite" / "stream"
+typed_schema = STREAM / "typed.schema.haus"
+modules.append("StreamTyped")
+(OUT / "StreamTyped.roc").write_text(haus_gen("roc", str(typed_schema), "--module", "StreamTyped"), encoding="utf-8")
+typed_text = typed_schema.read_text(encoding="utf-8")
+typed_streams = dict(re.findall(r"^type\s+([A-Z][A-Za-z0-9_]*)\s*=\s*Stream\s+([A-Z][A-Za-z0-9_]*)\s*$", typed_text, re.M))
+typed_arms = "".join(
+    f"\t{roc_str(t)} => Decoded(encoded_items(Decode.all(text, StreamTyped.decode_{snake(item)}), StreamTyped.encode_{snake(item)}))\n"
+    if (item := typed_streams.get(t))
+    else f"\t{roc_str(t)} => Decoded(encoded_one(Decode.one(text, StreamTyped.decode_{snake(t)}), StreamTyped.encode_{snake(t)}))\n"
+    for t in re.findall(r"^type\s+([A-Z][A-Za-z0-9_]*)\s*=", typed_text, re.M)
+)
+imports.append('import "../../test-suite/stream/typed.cases.haus" as typed_cases : Str')
+tests.append("# stream/typed.cases.haus\nexpect typed_streams(typed_cases)")
+TYPED_STREAMS = (
+    """
+## Every case of stream/typed.cases.haus: `Ok { type, text, output }` decodes
+## `text` with `type`, and encoding the result gives `output` (an array, a
+## value per item, for a stream), compared as values; `Err { type, text, code,
+## path }` fails with `code` at `path`. A parse error has no path: its place is
+## the whole document, `$` (the one case: `not-one-value`).
+typed_streams : Str -> Bool
+typed_streams = |cases| match Value.parse_all(cases) {
+	Ok(all) => {
+		failures = all.keep_oks(
+			|c| match typed_case(c) {
+				Ok({}) => Err({})
+				Err(reason) => Ok("${form(c)}: ${reason}")
+			},
+		)
+		if failures.is_empty() {
+			!all.is_empty()
+		} else {
+			dbg failures
+			False
+		}
+	}
+	Err(e) => {
+		dbg e.reason
+		False
+	}
+}
+
+## What decoding a text gave: the result encoded again, or the error's code,
+## place and message.
+Typed : [Decoded(Try(Value, (Str, Str, Str))), NoType]
+
+typed_case : Value -> Try({}, Str)
+typed_case = |c| match c {
+	Tag(tag, [Rec(fields)]) => match (tag, field(fields, "type"), field(fields, "text")) {
+		("Ok", Ok(Text(ty)), Ok(Text(text))) => {
+			want = field(fields, "output") ?? Text("(no output)")
+			match stream_typed(ty, text) {
+				Decoded(Ok(got)) if Encode.equals(got, want) == Ok(True) => Ok({})
+				Decoded(Ok(got)) => Err("wrote ${form(got)}")
+				Decoded(Err((code, place, message))) => Err("failed with ${code} at ${place}: ${message}")
+				NoType => Err("the schema has no type ${ty}")
+			}
+		}
+		("Err", Ok(Text(ty)), Ok(Text(text))) => match (field(fields, "code"), field(fields, "path")) {
+			(Ok(Text(code)), Ok(Text(path))) => match stream_typed(ty, text) {
+				Decoded(Err((got_code, got_place, _))) if got_code == code and got_place == path => Ok({})
+				Decoded(Err((got_code, got_place, message))) => Err("failed with ${got_code} at ${got_place}: ${message}")
+				Decoded(Ok(got)) => Err("decoded, and wrote ${form(got)}")
+				NoType => Err("the schema has no type ${ty}")
+			}
+			_ => Err("a case without a code or a path")
+		}
+		_ => Err("not a case")
+	}
+	_ => Err("not a case")
+}
+
+## Decode `text` with a type of stream/typed.schema.haus, and encode the result.
+stream_typed : Str, Str -> Typed
+stream_typed = |ty, text| match ty {
+"""
+    + typed_arms
+    + """	_ => NoType
+}
+
+## A failed read: its code, its place (`$` for a parse error) and its message.
+read_error : [Syntax(Value.ParseError), Decode(Decode.Error)] -> (Str, Str, Str)
+read_error = |e| match e {
+	Syntax(p) => (p.code, "$", "${p.reason} at ${p.line.to_str()}:${p.column.to_str()}")
+	Decode(d) => (d.code, ErrorCode.place(d.path), Decode.message(d))
+}
+
+## The decoded items of a stream, each encoded again: an array.
+encoded_items : Try(List(a), [Syntax(Value.ParseError), Decode(Decode.Error)]), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, (Str, Str, Str))
+encoded_items = |decoded, encode| {
+	items = decoded.map_err(read_error)?
+	var $out = []
+	for x in items {
+		$out = $out.append(Encode.value(x, encode).map_err(|e| (e.code, "(encoding)", Encode.message(e)))?)
+	}
+	Ok(Arr($out))
+}
+
+## The decoded value, encoded again.
+encoded_one : Try(a, [Syntax(Value.ParseError), Decode(Decode.Error)]), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Value, (Str, Str, Str))
+encoded_one = |decoded, encode| {
+	x = decoded.map_err(read_error)?
+	Encode.value(x, encode).map_err(|e| (e.code, "(encoding)", Encode.message(e)))
+}
+"""
+)
+
 (OUT / "main.roc").write_text(
     "# GENERATED by roc/scripts/gen_schema_conformance.py. Do not edit.\n"
     f"package [SchemaTest, {', '.join(modules)}] {{ haus: \"../package/main.roc\" }}\n",
@@ -227,6 +344,7 @@ form = |v| Encode.canonical(v) ?? "(no canonical form)"
 """
     + "\n\n".join(tests)
     + "\n"
+    + TYPED_STREAMS
     + (VALUES_BUILT_IN_CODE if "Types" in modules else ""),
     encoding="utf-8",
 )

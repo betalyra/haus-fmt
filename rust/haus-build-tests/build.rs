@@ -11,6 +11,10 @@
 //! and encoded.
 //! tests/json_conformance.rs runs its cases.
 //!
+//! For the typed streams of the stream suite (test-suite/stream, spec §15
+//! "Streams") it generates the types of typed.schema.haus:
+//! tests/stream_suite.rs decodes its cases' texts with them.
+//!
 //! app/main/order.schema.haus is an application's schema split into files
 //! (relative imports, `../`, two common.schema.haus): tests/files.rs uses
 //! its types, without and with a codec for a type of an imported file.
@@ -72,6 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     haus_build::Config::new().compile_as(&schema_based, "suite_json_schema_based")?;
     let module = json_module(&fs::read_to_string(&schema_based)?);
     fs::write(Path::new(&env::var("OUT_DIR")?).join("json_suite.rs"), module)?;
+
+    let typed = suite.join("../stream/typed.schema.haus");
+    println!("cargo::rerun-if-changed={}", typed.display());
+    haus_build::Config::new().compile_as(&typed, "suite_stream_typed")?;
     Ok(())
 }
 

@@ -1,0 +1,31 @@
+// JSON Lines of self-describing JSON (spec §16, "Streams"; §16.2): one
+// envelope per line. `json` is the text read as a stream.
+//
+// - `Ok { json, output }`: reading gives the values `output`, in order,
+//   compared as values (§2).
+// - `Err { json, code, path? }`: reading fails with the error code `code`
+//   (§17). `path`, where given, is the error's place (§16.3 "Places"),
+//   which starts with the line's index: `$[1]._value._num`.
+
+// ── what readers accept ──
+Ok { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}\n", output: ["a", 1] },
+Ok { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: ["a", 1] },
+Ok { json: "{\"_haus\": 1, \"_value\": \"a\"}\r\n{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}\r\n", output: ["a", 1] },
+Ok { json: "\u{FEFF}{\"_haus\": 1, \"_value\": \"a\"}\n", output: ["a"] },
+Ok { json: "{\"_haus\": 1, \"_value\": \"a\"}\n  {\"_haus\": 1, \"_value\": \"b\"}  \n", output: ["a", "b"] },
+Ok { json: "", output: [] },
+
+// ── an empty line, or a byte order mark after the start, is no JSON text ──
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n\n{\"_haus\": 1, \"_value\": \"b\"}\n", code: "json-syntax" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 1, \"_value\": \"b\"}\n\n", code: "json-syntax" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\r\n\r\n", code: "json-syntax" },
+Err { json: "\n", code: "json-syntax" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n\u{FEFF}{\"_haus\": 1, \"_value\": \"b\"}\n", code: "json-syntax" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 1, \"_value\": \"b\"} {\"_haus\": 1, \"_value\": \"c\"}\n", code: "json-syntax" },
+
+// ── places start with the line's index ──
+Err { json: "{\"_haus\": 1, \"_value\": {\"_rec\": {\"a\": {\"_bytes\": \"0g\"}}}}\n", code: "haus-json-bytes", path: "$[0]._value._rec.a._bytes" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 1, \"_value\": {\"_num\": \"x\"}}\n", code: "haus-json-number", path: "$[1]._value._num" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 1, \"_value\": \"b\"}\n{\"_haus\": 1, \"_value\": {\"_tag\": \"Point\", \"_args\": [{\"_num\": \"1\"}, {\"_num\": \"1.5e\"}]}}\n", code: "haus-json-number", path: "$[2]._value._args[1]._num" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_haus\": 2, \"_value\": \"b\"}\n", code: "haus-json-version", path: "$[1]._haus" },
+Err { json: "{\"_haus\": 1, \"_value\": \"a\"}\n{\"_value\": \"b\"}\n", code: "haus-json-form", path: "$[1]" },

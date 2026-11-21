@@ -1,0 +1,44 @@
+// Equality and order (spec §2, §12): `equals(a, b)` and `compare(a, b)`.
+// Each case: two values `a` and `b`, whether they are equal (`equal`), and
+// `order`: -1, 0 or 1, the sign of `compare(a, b)`. compare orders values by
+// the UTF-8 bytes of their canonical forms, shorter first when one is a
+// prefix of the other: not numeric order. Runners check both directions:
+// `equals(b, a)` is `equal` too, and `compare(b, a)` has the opposite sign.
+
+// ── equal values ──
+{ a: 0x10, b: 16, equal: True, order: 0 },
+{ a: 0b101, b: 5, equal: True, order: 0 },
+{ a: 1_000, b: 1000, equal: True, order: 0 },
+{ a: 1e2, b: 1E+2, equal: True, order: 0 },
+{ a: "\u{41}", b: "A", equal: True, order: 0 },
+{ a: x"FF", b: x"ff", equal: True, order: 0 },
+{ a: x"0a 0b", b: x"0A0B", equal: True, order: 0 },
+{ a: { a: 1, b: 2 }, b: { b: 2, a: 1 }, equal: True, order: 0 },
+{ a: Some({ a: 1 }), b: Some { a: 1 }, equal: True, order: 0 },
+{ a: [1, 2], b: [1, 2,], equal: True, order: 0 },
+
+// ── numbers: scale and exponent are kept (§2) ──
+{ a: 1.0, b: 1.00, equal: False, order: -1 },
+{ a: 1e2, b: 100, equal: False, order: 1 },
+{ a: 1e-2, b: 0.01, equal: False, order: 1 },
+{ a: 12e3, b: 1.2e4, equal: False, order: 1 },
+{ a: -0, b: 0, equal: False, order: -1 },
+{ a: -0x0, b: 0, equal: False, order: -1 },
+{ a: 0.0, b: -0.0, equal: False, order: 1 },
+
+// ── order is by canonical bytes, not by number or by kind ──
+{ a: 10, b: 9, equal: False, order: -1 },
+{ a: 1, b: 12, equal: False, order: -1 },
+{ a: 1, b: "1", equal: False, order: 1 },
+{ a: "a", b: "b", equal: False, order: -1 },
+{ a: "ab", b: "abc", equal: False, order: -1 },
+{ a: [], b: [1], equal: False, order: 1 },
+{ a: {}, b: [], equal: False, order: 1 },
+{ a: { a: 1 }, b: { a: 1, b: 2 }, equal: False, order: 1 },
+{ a: None, b: Some(None), equal: False, order: -1 },
+{ a: Point(1, 2), b: Point(2, 1), equal: False, order: -1 },
+{ a: "\u{7F}", b: "\u{80}", equal: False, order: -1 },
+
+// ── strings compare by code points (UTF-8 bytes), not UTF-16 units; no normalization ──
+{ a: "\u{1F600}", b: "\u{FF5A}", equal: False, order: 1 },
+{ a: "\u{E9}", b: "e\u{301}", equal: False, order: 1 },

@@ -1,0 +1,8 @@
+// Types for stream/typed.cases.haus: streams decoded with a type (spec §15, "Streams").
+
+type Entry = { level: Level, msg: String, at?: Int }
+type Level = closed < Info | Warn | Error >
+type Log = Stream Entry
+
+type Point = { x: Int32, y: Int32 }
+type Points = Stream Point

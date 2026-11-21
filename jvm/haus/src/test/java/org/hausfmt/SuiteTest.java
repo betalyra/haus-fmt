@@ -159,4 +159,35 @@ class SuiteTest {
   private static String withoutBlankLines(String s) {
     return s.replaceAll("(?m)^\n", "");
   }
+
+  /**
+   * format/options.cases.haus: the pretty layout with {@code indent} and {@code width} where the
+   * case gives them, the defaults otherwise. FormatOptions refuses a negative number with an
+   * IllegalArgumentException: {@code Rejected}.
+   */
+  @TestFactory
+  Stream<DynamicTest> formatOptions() {
+    List<Value> cases = Haus.parseAll(Suite.bytes(Suite.suite("format", "options.cases.haus")));
+    assertTrue(cases.size() > 0, "no cases");
+    return cases.stream().map(c -> dynamicTest(c.toString(), () -> {
+      Value.Record r = (Value.Record) c;
+      String input = ((Value.Text) r.get("input")).value();
+      Value.Variant result = (Value.Variant) r.get("result");
+      String want = result.tag().equals("Ok") ? "Ok(" + ((Value.Text) result.get(0)).value() + ")" : "Rejected";
+      String got;
+      try {
+        FormatOptions o = FormatOptions.PRETTY;
+        if (r.get("indent") != null) {
+          o = o.withIndent(((Value.Number) r.get("indent")).toBigInteger().intValueExact());
+        }
+        if (r.get("width") != null) {
+          o = o.withWidth(((Value.Number) r.get("width")).toBigInteger().intValueExact());
+        }
+        got = "Ok(" + Haus.format(input, o) + ")";
+      } catch (IllegalArgumentException e) {
+        got = "Rejected";
+      }
+      assertEquals(want, got);
+    }));
+  }
 }

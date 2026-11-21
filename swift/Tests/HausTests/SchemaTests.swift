@@ -99,6 +99,48 @@ struct SchemaJSONSuiteTests {
     }
 }
 
+/// Typed streams (test-suite/stream/typed.schema.haus and typed.cases.haus,
+/// spec §15 "Streams"): a `Stream a` type decodes the text's values with
+/// `SchemaType.decodeAll`, which puts the item's index in an error's path;
+/// any other type decodes the text's one value (`parse`, then `decode`).
+/// Encoding the decoded values gives `output` (an array for a stream).
+struct TypedStreamSuiteTests {
+    static let dir = suite.appendingPathComponent("stream")
+    static let schema = try! HausSchema(bytes: read(dir.appendingPathComponent("typed.schema.haus")))
+    static let cases = SuiteCase.cases(in: dir.appendingPathComponent("typed.cases.haus"))
+
+    @Test func hasCases() {
+        #expect(!Self.cases.isEmpty)
+    }
+
+    /// `Ok <canonical output>`, or `Err <code> <path>` (`-` without a path).
+    static func want(_ c: SuiteCase) throws -> String {
+        switch c.tag {
+        case "Ok": return "Ok \(try canonical(try #require(c.fields["output"])))"
+        case "Err": return "Err \(try #require(c.string("code"))) \(try #require(c.string("path")))"
+        default: fatalError("unknown case \(c.tag)")
+        }
+    }
+
+    @Test(arguments: cases)
+    func typed(_ c: SuiteCase) throws {
+        let type = try Self.schema.type(try #require(c.string("type")))
+        let text = try #require(c.string("text"))
+        let got: String
+        do throws(HausError) {
+            if type.isStream {
+                let items = try type.decodeAll(parseAll(text))
+                got = "Ok \(try canonical(.array(try items.map { (v) throws(HausError) in try type.encode(v) })))"
+            } else {
+                got = "Ok \(try canonical(type.encode(type.decode(parse(text)))))"
+            }
+        } catch {
+            got = "Err \(error.code.rawValue) \(error.path ?? "-")"
+        }
+        #expect(got == (try Self.want(c)), "got \(got)")
+    }
+}
+
 struct SchemaTests {
     /// Schemas the spec rejects (§13.3, §14), each with its code. A typed constant: written
     /// inline in `@Test(arguments:)`, the list takes the type checker too long.

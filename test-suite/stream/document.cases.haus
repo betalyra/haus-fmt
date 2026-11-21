@@ -1,0 +1,24 @@
+// Single documents (spec §6): a reader that expects one value (as `parse`)
+// takes exactly one, with or without a comma after it. Each case: `text` and
+// the expected result, `Ok(value)`, compared as values (§2), or `Err("code")`.
+
+// ── one value ──
+{ text: "1", result: Ok(1) },
+{ text: "1,", result: Ok(1) },
+{ text: "{ a: 1 },", result: Ok({ a: 1 }) },
+{ text: "Some(1),\n", result: Ok(Some(1)) },
+{ text: "/* a */ 1 // b\n", result: Ok(1) },
+{ text: "1,\n// c\n", result: Ok(1) },
+{ text: "\u{FEFF}1", result: Ok(1) },
+
+// ── no value ──
+{ text: "", result: Err("not-one-value") },
+{ text: " \n\t", result: Err("not-one-value") },
+{ text: "// only a comment", result: Err("not-one-value") },
+{ text: "/* a */\n// b\n", result: Err("not-one-value") },
+{ text: "\u{FEFF}", result: Err("not-one-value") },
+
+// ── more than one ──
+{ text: "1, 2", result: Err("not-one-value") },
+{ text: "1, 2,", result: Err("not-one-value") },
+{ text: "[1], [2], [3]", result: Err("not-one-value") },

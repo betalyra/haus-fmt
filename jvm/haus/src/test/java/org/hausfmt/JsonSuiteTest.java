@@ -2,21 +2,27 @@ package org.hausfmt;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.DynamicTest.dynamicTest;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.TestFactory;
 import org.junit.jupiter.api.function.Executable;
 
 /**
- * The JSON suite (test-suite/README.md, "JSON suite") for the forms without a schema: the import
- * and self-describing JSON, and every valid/NAME.jsonl as self-describing JSON Lines.
+ * The JSON suite (test-suite/README.md, "JSON suite") for the forms without a schema: the import,
+ * self-describing JSON, self-describing JSON Lines (lines.cases.haus), and every valid/NAME.jsonl
+ * as self-describing JSON Lines.
  */
 class JsonSuiteTest {
 
@@ -176,6 +182,47 @@ class JsonSuiteTest {
             break;
           case "Err":
             checkErr(c, () -> HausJson.fromHausJson(json));
+            break;
+          default:
+            throw new AssertionError("unknown case " + c.tag());
+        }
+      });
+    });
+  }
+
+  /** Reads self-describing JSON Lines as a stream, with {@link HausJson#hausJsonLinesReader}. */
+  private static List<Value> readLines(String json) throws IOException {
+    List<Value> values = new ArrayList<>();
+    try (JsonLinesReader r = HausJson.hausJsonLinesReader(
+        new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), Limits.DEFAULT)) {
+      for (Value v; (v = r.read()) != null; ) {
+        values.add(v);
+      }
+    }
+    return values;
+  }
+
+  private static String canonical(List<Value> values) {
+    return values.stream().map(Haus::canonical).collect(Collectors.joining(",", "[", "]"));
+  }
+
+  /** lines.cases.haus: each case read as a stream, and as a whole text ({@link HausJson#fromHausJsonLines}). */
+  @TestFactory
+  Stream<DynamicTest> jsonLines() {
+    List<Value.Variant> cases = Suite.cases(Suite.suite("json", "lines.cases.haus"));
+    assertTrue(cases.size() > 0, "no cases");
+    return cases.stream().map(c -> {
+      String json = Suite.str(c, "json");
+      return dynamicTest(c.tag() + " " + json, () -> {
+        switch (c.tag()) {
+          case "Ok":
+            String want = canonical(((Value.Array) c.payload().get("output")).items());
+            assertEquals(want, canonical(readLines(json)), "as a stream");
+            assertEquals(want, canonical(HausJson.fromHausJsonLines(json)), "whole");
+            break;
+          case "Err":
+            checkErr(c, () -> readLines(json));
+            checkErr(c, () -> HausJson.fromHausJsonLines(json));
             break;
           default:
             throw new AssertionError("unknown case " + c.tag());

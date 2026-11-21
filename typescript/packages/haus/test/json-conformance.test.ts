@@ -113,6 +113,20 @@ const collect = async <T>(items: AsyncIterable<T>): Promise<T[]> => {
   return out
 }
 
+describe("JSON Lines (spec §16, \"Streams\")", () => {
+  it.each(cases(read("json/lines.cases.haus")))("$name", async (c) => {
+    let values: Value[]
+    try {
+      values = await collect(fromHausJsonLines([c.json]))
+    } catch (e) {
+      if (c.kind !== "Err") throw e
+      return rejects(() => { throw e }, c)
+    }
+    expect(c.kind, values.map(canonical).join(", ")).toBe("Ok")
+    expect(c.output?.kind === "array" && c.output.items.length === values.length && values.every((v, i) => equals(v, (c.output as { items: Value[] }).items[i]!)), values.map(canonical).join(", ")).toBe(true)
+  })
+})
+
 describe("valid/NAME.jsonl as self-describing cases", () => {
   const names = readdirSync(join(SUITE, "valid")).filter((f) => f.endsWith(".haus")).map((f) => f.slice(0, -".haus".length)).sort()
   it.each(names)("%s", async (name) => {

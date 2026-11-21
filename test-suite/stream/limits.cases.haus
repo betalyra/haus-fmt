@@ -4,19 +4,22 @@
 // `Err("code")`. A value's characters count from after the previous top-level
 // comma (or the start, after a byte order mark) up to the next one;
 // whitespace and comments count, the commas don't. Readers must give the
-// same result for every way of splitting `text` into chunks.
+// same result for every way of splitting `text` into chunks. `whole`, where
+// given, is the result of parsing the whole text instead (as `parseAll`, with
+// the default limits): the value limit applies to stream readers only, so a
+// value over it parses whole (`limits.value.stream-only`).
 
 // ── at the limit and one over ──
 { text: "12345", maxValueLength: 5, result: Ok([12345]) },
-{ text: "123456", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "123456", maxValueLength: 5, result: Err("value-too-long"), whole: Ok([123456]) },
 { text: "1,12345", maxValueLength: 5, result: Ok([1, 12345]) },
-{ text: "1,123456", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "1,123456", maxValueLength: 5, result: Err("value-too-long"), whole: Ok([1, 123456]) },
 { text: "12345,", maxValueLength: 5, result: Ok([12345]) },
 { text: "123456,", maxValueLength: 5, result: Err("value-too-long") },
 { text: "123456,1", maxValueLength: 5, result: Err("value-too-long") },
 // whitespace and comments count
 { text: " 1234", maxValueLength: 5, result: Ok([1234]) },
-{ text: " 12345", maxValueLength: 5, result: Err("value-too-long") },
+{ text: " 12345", maxValueLength: 5, result: Err("value-too-long"), whole: Ok([12345]) },
 { text: "1, /*c*/ 2", maxValueLength: 8, result: Ok([1, 2]) },
 { text: "1, /*c*/ 2", maxValueLength: 7, result: Err("value-too-long") },
 // after the last comma, the text up to the end counts, also without a value (§7)
@@ -27,7 +30,7 @@
 { text: "\u{FEFF}12345", maxValueLength: 5, result: Ok([12345]) },
 // characters are code points: an emoji is one, also where a language stores it as two UTF-16 units
 { text: "\"\u{1F600}\u{1F600}\"", maxValueLength: 4, result: Ok(["\u{1F600}\u{1F600}"]) },
-{ text: "\"\u{1F600}\u{1F600}\"", maxValueLength: 3, result: Err("value-too-long") },
+{ text: "\"\u{1F600}\u{1F600}\"", maxValueLength: 3, result: Err("value-too-long"), whole: Ok(["\u{1F600}\u{1F600}"]) },
 // one mistake each: a value over the limit before a valid one, a syntax error within the limit
 { text: "1234567, [1,2]", maxValueLength: 5, result: Err("value-too-long") },
 { text: "[1,,2], 1", maxValueLength: 9, result: Err("expected-value") },

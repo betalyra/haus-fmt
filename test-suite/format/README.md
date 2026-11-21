@@ -28,6 +28,13 @@ For each input:
   layout, `{ indent: 4, width: 40 }`. Without it, the defaults apply: indent
   2, width 80.
 
+`options.cases.haus` checks the two options of the pretty layout themselves:
+each case is `input`, `indent` and `width` where given (unset otherwise, so
+the default applies), and `result`: `Ok(text)`, the pretty result, or
+`Rejected` for options a formatter must refuse (a negative number, spec §11).
+Rejecting is an API error, with no code of §17; a binding whose option types
+can't hold a negative number rejects it by its types and passes the case.
+
 Inputs are raw bytes (some have a BOM or CRLF line endings): read them as
 UTF-8 without removing a byte order mark (the parser skips it). The expected
 files are UTF-8 too.

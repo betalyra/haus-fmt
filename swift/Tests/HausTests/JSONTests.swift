@@ -42,7 +42,7 @@ func sameJSON(_ a: String, _ b: String) -> Bool {
     return x == y
 }
 
-/// The JSON suite (test-suite/json): the import and self-describing JSON.
+/// The JSON suite (test-suite/json): the import, self-describing JSON and its JSON Lines.
 struct JSONSuiteTests {
     static let dir = suite.appendingPathComponent("json")
     static let importCases = SuiteCase.cases(in: dir.appendingPathComponent("import.cases.haus"))
@@ -74,6 +74,41 @@ struct JSONSuiteTests {
             c.check(#expect(throws: HausError.self) { try fromHausJSON(text) })
         default:
             Issue.record("unknown case \(c.tag)")
+        }
+    }
+
+    static let linesCases = SuiteCase.cases(in: dir.appendingPathComponent("lines.cases.haus"))
+
+    @Test func hasLinesCases() {
+        #expect(!Self.linesCases.isEmpty)
+    }
+
+    /// JSON Lines of self-describing JSON (lines.cases.haus): read whole,
+    /// and as a stream from chunks of one byte.
+    @Test(arguments: linesCases)
+    func jsonLines(_ c: SuiteCase) throws {
+        let text = try #require(c.string("json"))
+        let whole = Result { () throws(HausError) in try fromHausJSONLines(text) }
+        let chunked = Result { () throws(HausError) in
+            var reader = JSONLinesReader(.selfDescribing)
+            var values: [HausValue] = []
+            for byte in text.utf8 {
+                reader.push([byte])
+                while let v = try reader.next() { values.append(v) }
+            }
+            reader.finish()
+            while let v = try reader.next() { values.append(v) }
+            return values
+        }
+        for read in [whole, chunked] {
+            switch (c.tag, read) {
+            case ("Ok", .success(let values)):
+                #expect(.array(values) == c.fields["output"])
+            case ("Err", .failure(let error)):
+                c.check(error)
+            default:
+                Issue.record("\(c.testDescription): read \(read)")
+            }
         }
     }
 

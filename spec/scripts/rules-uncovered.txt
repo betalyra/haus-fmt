@@ -1,34 +1,14 @@
 # Rules of the spec that no conformance-suite case covers yet (spec/scripts/rules.ts).
 # This list may only shrink: `node spec/scripts/rules.ts --check` fails on an uncovered rule
 # that isn't listed, and on a listed rule that is covered now.
-streams.document.one-value
-streams.document.no-value
-streams.document.trailing-comma
 limits.string.default
 limits.value.default
-limits.value.stream-only
-positions.text.line-column
-positions.text.code-points
-positions.text.bom-column
-positions.text.line-breaks
 format.options.reject-negative
 format.bytes.serialized
 format.numbers.serialized
 canonical.form.parses-back
-canonical.api.equals
-canonical.api.compare
 packages.limits.manifest
 packages.limits.file-size
 packages.limits.folder-entries
-schema.check.open-hints
-schema.deprecated.hint-data
-schema.deprecated.hint-schema
-schema.deprecated.spread-keeps
-schema.attributes.unknown-warn
-decode.path.stream-index
-decode.types.stream
 json.write.escapes
 json.limits.lengths-on-value
-json.lines.reader-tolerance
-json.schema.no-form-warn
-json.places.lines-index
