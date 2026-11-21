@@ -1,10 +1,11 @@
 /**
  * Differential testing of the formatters (spec §11): generated documents
- * (format-gen.ts) through the TypeScript, Rust, Go and Swift formatters in the
- * pretty, compact and minimised layouts, which must write the same bytes and
- * keep the properties of §11; and generated values through the value writers
- * of TypeScript, Rust, Roc, Go and Swift, which must write what Lean's layout writers
- * write (compact, minimised and pretty), byte for byte. See ../README.md.
+ * (format-gen.ts) through the TypeScript, Rust, Go, Swift, JVM and Python
+ * formatters in the pretty, compact and minimised layouts, which must write the
+ * same bytes and keep the properties of §11; and generated values through the
+ * value writers of TypeScript, Rust, Roc, Go, Swift, the JVM and Python, which
+ * must write what Lean's layout writers write (compact, minimised and pretty),
+ * byte for byte. See ../README.md.
  *
  *   node fuzz/src/main.ts --format [--count N] [--seed S] [--out DIR]
  */
@@ -41,6 +42,8 @@ const GO = join(root, "fuzz/.build/go-runner")
 const SWIFT = join(root, "fuzz/.build/swift-runner")
 const JVM = join(root, "fuzz/.build/jvm-runner/bin/jvm-runner")
 const LEAN = join(root, "spec/lean/.lake/build/bin/haus-ref")
+const PYTHON = join(root, "python/.venv/bin/python")
+const PYTHON_RUNNER = join(root, "python/fuzz/runner.py")
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 const enc = new TextEncoder()
@@ -331,6 +334,8 @@ function external(program: string, args: readonly string[], dir: string, cases: 
 interface Formatter {
   readonly name: string
   readonly program: string
+  /** Arguments before the mode's: the script, for a program that runs one. */
+  readonly script?: readonly string[]
   /** Whether it can be given these options. */
   readonly takes: (options: Options) => boolean
 }
@@ -338,16 +343,18 @@ interface Formatter {
 /**
  * The formatters compared with TypeScript's: Rust's (`fuzz_runner --format`),
  * Go's (`go-runner --format`, `haus.Format`), Swift's (`swift-runner
- * --format`, `format`) and the JVM's (`jvm-runner --format`, `Haus.format`).
- * Go's options take 0 as the default (indent 2, width 80), so it can't be
- * given an indent or width of 0 and sits out those batches; the JVM takes
- * every option.
+ * --format`, `format`), the JVM's (`jvm-runner --format`, `Haus.format`) and
+ * Python's (`python/fuzz/runner.py --format`, `haus.format`). Go's options
+ * take 0 as the default (indent 2, width 80), so it can't be given an indent
+ * or width of 0 and sits out those batches; the JVM and Python take every
+ * option.
  */
 const FORMATTERS: readonly Formatter[] = [
   { name: "rust", program: RUST, takes: () => true },
   { name: "go", program: GO, takes: (o) => o.indent > 0 && o.width > 0 },
   { name: "swift", program: SWIFT, takes: () => true },
   { name: "jvm", program: JVM, takes: () => true },
+  { name: "python", program: PYTHON, script: [PYTHON_RUNNER], takes: () => true },
 ]
 
 const formattersFor = (options: Options) => FORMATTERS.filter((f) => f.takes(options))
@@ -356,7 +363,7 @@ const formattersFor = (options: Options) => FORMATTERS.filter((f) => f.takes(opt
 function externalFormat(f: Formatter, dir: string, cases: readonly Uint8Array[], style: Style, options: Options): Out[] {
   if (cases.length === 0) return []
   const args = ["--format", style, "--indent", String(options.indent), "--width", String(options.width)]
-  return external(f.program, args, dir, cases).map((line) => {
+  return external(f.program, [...(f.script ?? []), ...args], dir, cases).map((line) => {
     if (line.startsWith("crash ")) return { ok: false, crash: line }
     const r = parseOut<string>(line)
     return r.ok ? { ok: true, text: r.json } : { ok: false }
@@ -485,8 +492,9 @@ interface Writer {
  * out pretty with an indent or width of 0); Swift's `stringify` and
  * `stringifyAll` in every layout (`swift-runner --write`); and the JVM's
  * `Haus.write` and `Haus.writeAll` in every layout, with every option
- * (`jvm-runner --write`). TypeScript's `stringify` and `format` run in this
- * process.
+ * (`jvm-runner --write`); and Python's `haus.stringify` and
+ * `haus.stringify_all`, the same (`python/fuzz/runner.py --write`).
+ * TypeScript's `stringify` and `format` run in this process.
  */
 const WRITERS: readonly Writer[] = [
   { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
@@ -498,6 +506,7 @@ const WRITERS: readonly Writer[] = [
   },
   { name: "swift", program: SWIFT, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "jvm", program: JVM, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
+  { name: "python", program: PYTHON, args: (s, o) => [PYTHON_RUNNER, "--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
 ]
 
 /** Lean's layout argument: pretty with the options. */
@@ -631,7 +640,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   let streams = 0
   const MAX_SHRUNK = 3
 
-  console.log(`seed ${seed}: ${count} documents through the typescript, rust, go, swift and jvm formatters (pretty, compact, minimised), their values through the lean, typescript, rust, roc, go, swift and jvm writers`)
+  console.log(`seed ${seed}: ${count} documents through the typescript, rust, go, swift, jvm and python formatters (pretty, compact, minimised), their values through the lean, typescript, rust, roc, go, swift, jvm and python writers`)
   for (let done = 0; done < count; done += batch) {
     // Most batches use the default options; some another indentation and width.
     const options = rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)

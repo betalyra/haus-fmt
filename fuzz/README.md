@@ -341,13 +341,13 @@ error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
 
 `--format` tests the standard layouts of spec §11 (audit item C2, phase L1
 of [`spec/lean/PLAN.md`](../spec/lean/PLAN.md)). Generated documents go
-through the TypeScript, Rust, Go and Swift formatters in the pretty, compact and
-minimised layouts; the values they hold go through the value writers of
-TypeScript, Rust, Roc, Go and Swift, which must write what Lean's layout writers
-write.
+through the TypeScript, Rust, Go, Swift, JVM and Python formatters in the pretty,
+compact and minimised layouts; the values they hold go through the value writers
+of TypeScript, Rust, Roc, Go, Swift, the JVM and Python, which must write what
+Lean's layout writers write.
 
 ```sh
-sh fuzz/build.sh                               # haus-ref and the Rust, Roc, Go and Swift runners
+sh fuzz/build.sh                               # haus-ref and the Rust, Roc, Go, Swift, JVM and Python runners
 node fuzz/src/main.ts --format --count 20000   # about a minute and a half
 node fuzz/src/main.ts --format --seed 7
 ```
@@ -372,7 +372,7 @@ For every input, and each layout:
 
 | Check | |
 |---|---|
-| Same bytes | TypeScript, Rust, Go and Swift write the same text, or all reject the input; a crash is a finding. Go's options take 0 as the default, so Go sits out the batches with an indent or width of 0. |
+| Same bytes | TypeScript, Rust, Go, Swift, the JVM and Python write the same text, or all reject the input; a crash is a finding. Go's options take 0 as the default, so Go sits out the batches with an indent or width of 0. |
 | Values | The output parses to the input's values (compared by their canonical forms, spec §12). |
 | Idempotence | Formatting the output again in the same layout gives it back, in every formatter. |
 | Comments | Pretty keeps every comment, in order (a CR LF in one is written as LF); compact and minimised have none. |
@@ -399,9 +399,8 @@ checks.
 | Roc | `Encode.to_str`, `Encode.minimised` (no pretty writer from values) | a stream: `Encode.stream`, `Encode.stream_minimised` |
 | Go | `haus.FormatValue` in every layout; it takes 0 as the default indent and width, so it sits out pretty in the batches with a 0 | the file: `haus.FormatValues` |
 | Swift | `stringify` in every layout | the file: `stringifyAll` |
-
-Python has no layout writers yet: only the canonical form, which the
-parser fuzzer's `--canonical` mode compares.
+| JVM | `Haus.write` in every layout, every option | the file: `Haus.writeAll` |
+| Python | `haus.stringify` in every layout, every option (0 included) | the file: `haus.stringify_all` |
 
 A failing input is shrunk to the smallest input that still fails the same
 check (at most three per check), and saved to `.out/format/failures/` with
@@ -416,6 +415,7 @@ the check, what was seen, and every formatter's output in every layout.
 | Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE [--indent N --width N]`: `ok {"values": […], "file": …}` |
 | Swift | [`swift-runner`](swift-runner/Sources/swift-runner/main.swift) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
 | JVM | [`jvm-runner`](jvm/src/main/java/org/hausfmt/fuzz/Runner.java) `--format STYLE --indent N --width N`: `Haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
+| Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) `--format STYLE --indent N --width N`: `haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
 
 [`src/format.test.ts`](src/format.test.ts) tests the generator and the
 checks (`node --test fuzz/src/`): the format suite's expected files keep

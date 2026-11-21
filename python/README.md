@@ -2,7 +2,7 @@
 
 **A data format for humans: friendly to write, pleasant to read, and at home in your code.**
 
-> ⚠️ **Highly experimental.** This package has the parser, the stream reader, the canonical form, decoding with schemas and the JSON mappings. The formatter is on its way.
+> ⚠️ **Highly experimental.** This package has the parser, the stream reader, the formatter and value writers, the canonical form, decoding with schemas and the JSON mappings.
 
 ```sh
 pip install haus-fmt
@@ -56,6 +56,40 @@ reader.push(b"Heartbeat,\nUserCreated { id")  # [Variant(tag='Heartbeat', args=(
 reader.push(b": 1 },\n")  # [Variant(tag='UserCreated', args=(Record(...),))]
 reader.finish()  # []
 ```
+
+## Formatting
+
+`haus.format` reformats haus text in one of the three standard layouts (spec §11), keeping comments, blank lines and the spelling of numbers, byte strings and `"…"` strings:
+
+```python
+text = '{ "name": "Ada", // who\n tags: [0xFF, 1_000], price: Money(7.90, EUR) }'
+print(haus.format(text), end="")
+# {
+#   name: "Ada", // who
+#   tags: [
+#     0xFF,
+#     1_000,
+#   ],
+#   price: Money(7.90, EUR),
+# }
+haus.format(text, style="compact")  # '{ name: "Ada", tags: [0xFF, 1_000], price: Money(7.90, EUR) }\n'
+haus.format(text, style="minimised")  # '{name:"Ada",tags:[0xFF,1_000],price:Money(7.90,EUR)}\n'
+haus.has_comments(text)  # True: compact and minimised drop them
+```
+
+**Pretty** (the default) is for people who edit: one entry per line in every non-empty record and array, comments and blank lines kept (at most one in a row), strings with line feeds as `"""` block strings, and positional payloads like `Money(7.90, EUR)` on one line when they fit. **Compact** writes each top-level item on one line, for logs; **minimised** is compact without the spaces, for the wire and storage. Both drop comments, so a tool that rewrites a file in place in them must refuse when `has_comments` says it has some, unless asked to drop them (spec §11). The options are `indent` (spaces per level, 2 by default) and `width` (80 by default, in code points, counting the comma after the entry), both whole numbers taken as given: `indent=0` doesn't indent, and with `width=0` every payload is broken over lines. The text is a `str` or UTF-8 `bytes`; invalid text raises the parser's `HausSyntaxError`, with the same code and position, and formatting the output again changes nothing.
+
+`haus.stringify(value)` writes one value built in code (without a line break after it) and `haus.stringify_all(values)` a whole file: one value alone, more as a stream with a comma after each. They take the same `style`, `indent`, `width` and `limits`, and write numbers normalized, byte strings in lowercase hex and strings with the fewest escapes:
+
+```python
+haus.stringify(Record({"id": Number("7"), "at": Variant("Point", (Number("1E+05"), Number("0xFF")))}), style="compact")
+# '{ id: 7, at: Point(1e5, 255) }'
+haus.stringify_all([Variant("Ping"), Variant("Pong")], style="compact")  # 'Ping,\nPong,\n'
+```
+
+A value with no text within the limits raises `haus.schema.HausEncodeError` with its `path`: a number longer than the number limit (`number-too-long`), nesting deeper than the depth limit (`nesting-too-deep`), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a value that contains itself (`cyclic-value`), a string with a lone surrogate or anything that isn't a haus value (`cannot-encode`).
+
+The formatter and the writers recurse a few Python frames per level, raising Python's recursion limit for the configured depth as the parser does, and take time linear in the text (`tests/test_linear.py`). They run in the [differential fuzzer](../fuzz) against the TypeScript reference, the other bindings and Lean's layout writers.
 
 ## Canonical form and hashing
 
@@ -307,6 +341,6 @@ uv run pytest            # unit tests and the shared conformance suites in ../te
 uv run ruff check . && uv run mypy && uv run pyright
 ```
 
-The parser, the stream reader and `canonical` also run in the [differential fuzzer](../fuzz) against the Lean reference and the Rust, Roc and TypeScript bindings, error codes included, and so do the std/time check (`node fuzz/src/time.ts`) and schema decoding (`node fuzz/src/main.ts --schema`, through [`fuzz/schema_runner.py`](fuzz/schema_runner.py)). The std/time profile (`haus._time`) and float rounding and spelling (`haus._float`, spec §15) are the building blocks of schema decoding; floats are rounded to binary32 exactly, from the decimal, never through binary64.
+The parser, the stream reader and `canonical` also run in the [differential fuzzer](../fuzz) against the Lean reference and the Rust, Roc and TypeScript bindings, error codes included, the formatter and the value writers against the other formatters and Lean's layout writers (`node fuzz/src/main.ts --format`), and so do the std/time check (`node fuzz/src/time.ts`) and schema decoding (`node fuzz/src/main.ts --schema`, through [`fuzz/schema_runner.py`](fuzz/schema_runner.py)). The std/time profile (`haus._time`) and float rounding and spelling (`haus._float`, spec §15) are the building blocks of schema decoding; floats are rounded to binary32 exactly, from the decimal, never through binary64.
 
-Speed is measured in [`bench/speed/py`](../bench/speed/py) (see [`bench/README.md`](../bench/README.md)), against `json`, orjson, pydantic and msgspec. The binding stays pure Python: the parser reads valid text in one loop, the common forms (a plain string, a `key: value,` field, an array of numbers) in one regular-expression match each ([`_scan.py`](src/haus/_scan.py) has every pattern), and reads anything else again by recursive descent for the exact error; `tests/test_linear.py` checks that parsing, writing and decoding stay linear in the input.
+Speed is measured in [`bench/speed/py`](../bench/speed/py) (see [`bench/README.md`](../bench/README.md)), against `json`, orjson, pydantic and msgspec. The binding stays pure Python: the parser reads valid text in one loop, the common forms (a plain string, a `key: value,` field, an array of numbers) in one regular-expression match each ([`_scan.py`](src/haus/_scan.py) has every pattern), and reads anything else again by recursive descent for the exact error; `tests/test_linear.py` checks that parsing, formatting, writing and decoding stay linear in the input.
