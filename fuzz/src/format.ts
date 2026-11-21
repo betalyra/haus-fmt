@@ -320,14 +320,18 @@ function external(program: string, args: readonly string[], dir: string, cases: 
     writeCases(dir, cases)
     written.set(dir, cases)
   }
-  const p = spawnSync(program, [...args, dir, String(cases.length)], { maxBuffer: 1 << 30, encoding: "utf8" })
-  if (p.error) throw new Error(`${program}: ${p.error.message} (run sh fuzz/build.sh)`)
+  // A hang counts as a crash: a batch gets 5 minutes, one case 20 seconds.
+  const timeout = cases.length === 1 ? 20_000 : 300_000
+  const p = spawnSync(program, [...args, dir, String(cases.length)], { maxBuffer: 1 << 30, encoding: "utf8", timeout })
+  const hung = (p.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT"
+  if (p.error && !hung) throw new Error(`${program}: ${p.error.message} (run sh fuzz/build.sh)`)
+  if (hung && cases.length > 1) console.error(`${program}: no answer for ${cases.length} cases within ${timeout / 1000} s; running them one by one`)
   if (p.status === 0) {
     const lines = p.stdout.split("\n").filter((l) => l !== "")
     if (lines.length !== cases.length) throw new Error(`${program}: ${lines.length} results for ${cases.length} cases`)
     return lines
   }
-  if (cases.length === 1) return [`crash ${(p.stderr || String(p.signal)).trim().split("\n").slice(0, 3).join(" ")}`]
+  if (cases.length === 1) return [hung ? `crash hang: no answer within ${timeout / 1000} s` : `crash ${(p.stderr || String(p.signal)).trim().split("\n").slice(0, 3).join(" ")}`]
   return cases.map((c) => external(program, args, `${dir}-single`, [c])[0]!)
 }
 

@@ -1,28 +1,63 @@
 #!/bin/sh
 # Build the parsers, std/time checkers, profile codecs, schema decoders, schema-file checkers, JSON converters and formatters under test (fuzz/README.md).
 # Needs a JDK 17 or later (JAVA_HOME) for the JVM runner.
+#
+#   sh fuzz/build.sh              everything
+#   sh fuzz/build.sh lean swift   only those parts (CI builds each part on its own runner)
+#
+# Parts: lean, rust, typescript, python, go, zig, swift, jvm, roc.
 set -e
 cd "$(dirname "$0")/.."
-(cd spec/lean && lake build haus-ref)
-(cd rust && cargo build -q --release -p haus-fmt --example fuzz_runner --example time_runner)
-(cd python && uv sync -q)
-(cd typescript && pnpm --filter ./packages/haus build >/dev/null && pnpm --filter ./packages/effect build >/dev/null && pnpm --filter ./packages/import build >/dev/null)
-(cd typescript && pnpm --filter ../extensions/money --filter ../extensions/geo build >/dev/null)
-(cd fuzz/schema-rust && cargo build -q --release)
-mkdir -p fuzz/.build
-(cd fuzz/go && go build -o ../.build/go-runner .)
+
+lean() { (cd spec/lean && lake build haus-ref); }
+
+rust() {
+  (cd rust && cargo build -q --release -p haus-fmt --example fuzz_runner --example time_runner)
+  (cd fuzz/schema-rust && cargo build -q --release)
+}
+
+typescript() {
+  (cd typescript && pnpm --filter ./packages/haus build >/dev/null && pnpm --filter ./packages/effect build >/dev/null && pnpm --filter ./packages/import build >/dev/null)
+  (cd typescript && pnpm --filter ../extensions/money --filter ../extensions/geo build >/dev/null)
+}
+
+python() { (cd python && uv sync -q); }
+
+go() {
+  mkdir -p fuzz/.build
+  (cd fuzz/go && command go build -o ../.build/go-runner .)
+}
+
 # The Zig runner (zig/test/fuzz_runner.zig): zig/zig-out/bin/zig-runner.
-(cd zig && zig build fuzz-runner -Doptimize=ReleaseSafe)
-# On Linux the Swift runner links Swift's standard library in, so the fuzz jobs run it without Swift.
-swift_static=""; [ "$(uname)" = Linux ] && swift_static="--static-swift-stdlib"
-(cd fuzz/swift-runner && swift build -q -c release $swift_static && cp "$(swift build -c release --show-bin-path)/swift-runner" ../.build/swift-runner)
+zig() { (cd zig && command zig build fuzz-runner -Doptimize=ReleaseSafe); }
+
+swift() {
+  mkdir -p fuzz/.build
+  # On Linux the Swift runner links Swift's standard library in, so the fuzz jobs run it without Swift.
+  swift_static=""; [ "$(uname)" = Linux ] && swift_static="--static-swift-stdlib"
+  (cd fuzz/swift-runner && command swift build -q -c release $swift_static && cp "$(command swift build -c release --show-bin-path)/swift-runner" ../.build/swift-runner)
+}
+
 # The JVM runner (fuzz/jvm): Gradle installs it into fuzz/.build/jvm-runner.
-(cd jvm && ./gradlew -q --no-daemon :fuzz-runner:installDist)
-(cd roc/fuzz && roc build --output=../../fuzz/.build/roc-runner runner.roc >/dev/null)
-(cd roc/fuzz && roc build --output=../../fuzz/.build/roc-time-runner time_runner.roc >/dev/null)
-(cd fuzz/roc && roc build --output=../.build/roc-profile-runner profile_runner.roc >/dev/null)
-node fuzz/roc/gen_schemas.ts >/dev/null
-(cd fuzz/roc && roc build --output=../.build/roc-schema-runner schema_runner.roc >/dev/null)
-node fuzz/roc/gen_json_schemas.ts >/dev/null
-(cd fuzz/roc && roc build --output=../.build/roc-json-runner json_runner.roc >/dev/null)
-echo "built: lean, rust, typescript, effect, roc, python, go, zig, swift, jvm"
+jvm() { (cd jvm && ./gradlew -q --no-daemon :fuzz-runner:installDist); }
+
+# The schema and JSON runners' modules are generated with haus-gen, so this part needs Rust (cargo) too.
+roc() {
+  mkdir -p fuzz/.build
+  (cd roc/fuzz && command roc build --output=../../fuzz/.build/roc-runner runner.roc >/dev/null)
+  (cd roc/fuzz && command roc build --output=../../fuzz/.build/roc-time-runner time_runner.roc >/dev/null)
+  (cd fuzz/roc && command roc build --output=../.build/roc-profile-runner profile_runner.roc >/dev/null)
+  node fuzz/roc/gen_schemas.ts >/dev/null
+  (cd fuzz/roc && command roc build --output=../.build/roc-schema-runner schema_runner.roc >/dev/null)
+  node fuzz/roc/gen_json_schemas.ts >/dev/null
+  (cd fuzz/roc && command roc build --output=../.build/roc-json-runner json_runner.roc >/dev/null)
+}
+
+parts=${*:-lean rust typescript python go zig swift jvm roc}
+for part in $parts; do
+  case $part in
+    lean | rust | typescript | python | go | zig | swift | jvm | roc) $part ;;
+    *) echo "fuzz/build.sh: unknown part '$part'" >&2; exit 2 ;;
+  esac
+done
+echo "built: $parts"

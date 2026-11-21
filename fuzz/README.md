@@ -12,6 +12,7 @@ least one of them, or a gap in the spec.
 
 ```sh
 sh fuzz/build.sh                       # build the parsers under test
+sh fuzz/build.sh lean rust             # or only some (parts: lean rust typescript python go zig swift jvm roc)
 node fuzz/src/main.ts --count 100000   # about a minute
 node fuzz/src/main.ts --seed 7         # repeat a run
 ```
