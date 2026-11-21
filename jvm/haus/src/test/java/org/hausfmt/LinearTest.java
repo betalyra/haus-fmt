@@ -22,12 +22,27 @@ class LinearTest {
   private static final int RUNS = 5;
   private static final int TRIES = 4;
 
+  /** The shortest time one measured run lasts, in nanoseconds. */
+  private static final long MIN_RUN = 20_000_000;
+
+  /**
+   * The shortest time per call over RUNS runs. Each run starts after a collection and repeats the
+   * call until it lasts MIN_RUN, so a collection the larger input triggers is spread over its calls
+   * instead of landing on one of them.
+   */
   private static long fastest(Runnable work) {
     long best = Long.MAX_VALUE;
     for (int i = 0; i < RUNS; i++) {
+      System.gc();
+      long calls = 0;
       long start = System.nanoTime();
-      work.run();
-      best = Math.min(best, System.nanoTime() - start);
+      long elapsed;
+      do {
+        work.run();
+        calls++;
+        elapsed = System.nanoTime() - start;
+      } while (elapsed < MIN_RUN);
+      best = Math.min(best, elapsed / calls);
     }
     return best;
   }
@@ -36,8 +51,9 @@ class LinearTest {
   private static void assertLinear(int n, IntFunction<Runnable> work) {
     Runnable small = work.apply(n);
     Runnable large = work.apply(4 * n);
-    for (int i = 0; i < 3; i++) {
-      large.run(); // warm up
+    for (int i = 0; i < 3; i++) { // warm up
+      small.run();
+      large.run();
     }
     double ratio = 0;
     for (int i = 0; i < TRIES; i++) {
