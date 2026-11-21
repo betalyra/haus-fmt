@@ -1,0 +1,5 @@
+// rule: schema.reject.duplicate-tag
+// rule: schema.reject.duplicate-via-spread
+// The spread copies X into A, which lists X again (spec §14).
+type B = < X | Y >
+type A = < ...B | X >

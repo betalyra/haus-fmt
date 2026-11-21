@@ -1,0 +1,4 @@
+// rule: packages.imports.reject-duplicate-name
+// The same name imported twice (spec §13.3, Imports).
+import std/time (Date, Date)
+type A = { day: Date }

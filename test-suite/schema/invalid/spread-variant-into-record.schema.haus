@@ -1,0 +1,4 @@
+// rule: schema.reject.invalid-spread
+// Only a named record can be spread into a record, not a variant (spec §14).
+type V = < X | Y >
+type A = { ...V }

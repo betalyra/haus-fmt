@@ -1,0 +1,4 @@
+// rule: schema.reject.duplicate-type
+// A type defined twice (spec §14).
+type A = Int
+type A = String

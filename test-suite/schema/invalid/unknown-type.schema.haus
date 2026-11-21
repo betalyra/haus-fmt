@@ -1,0 +1,3 @@
+// rule: schema.reject.unknown-type
+// A type name that is neither defined in the file, imported, nor a prelude type (spec §14).
+type A = { x: Foo }

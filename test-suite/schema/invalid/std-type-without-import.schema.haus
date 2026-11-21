@@ -1,0 +1,4 @@
+// rule: schema.reject.unknown-type
+// rule: prelude.scope.import
+// Only the prelude is always in scope: a std/time type needs its import (spec §13).
+type A = { day: Date }
