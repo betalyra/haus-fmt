@@ -11,7 +11,7 @@ StreamSuiteTest := [].{}
 
 expect {
 	cases = Value.parse_bytes(stream_suite) ?? []
-	cases.len() == 21 and cases.all(|c| stream_case(c).is_ok())
+	cases.len() == 24 and cases.all(|c| stream_case(c).is_ok())
 }
 
 ## A case of the stream suite: Ok, or the ways of reading it that went wrong.
