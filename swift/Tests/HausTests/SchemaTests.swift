@@ -221,6 +221,14 @@ struct SchemaTests {
 
     /// Values as deep as the depth limit decode on the 512 KiB stack of a
     /// test's thread, in a debug build too.
+    /// Instances are told apart by their structure: a generic type applied
+    /// to inline records and variants again and again makes few distinct
+    /// instances (found by the schema-check fuzzer, seed 935288).
+    @Test func instancesOfInlineArguments() throws {
+        let text = #"type B a b=<Y{n:Maybe(B(<>)(b)),x:B a({@e("")s:Int,y:Result{a:B a a,s:B(Float32)(Bool)}a})}>//"#
+        #expect(throws: Never.self) { try HausSchema(parsing: text) }
+    }
+
     @Test func deepestValues() throws {
         let schema = try HausSchema(
             parsing: """

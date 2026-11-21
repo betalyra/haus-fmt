@@ -1,0 +1,3 @@
+// A stray '"' makes the key `a: Int, b: `: the next '"' is where ':' must be, a syntax
+// error there, whatever the string it would start runs into (the line break; spec §14).
+type A = { "a: Int, b: "" }
