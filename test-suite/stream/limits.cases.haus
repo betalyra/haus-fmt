@@ -19,6 +19,10 @@
 { text: " 12345", maxValueLength: 5, result: Err("value-too-long") },
 { text: "1, /*c*/ 2", maxValueLength: 8, result: Ok([1, 2]) },
 { text: "1, /*c*/ 2", maxValueLength: 7, result: Err("value-too-long") },
+// after the last comma, the text up to the end counts, also without a value (§7)
+{ text: "1,     ", maxValueLength: 5, result: Ok([1]) },
+{ text: "1,      ", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "1, /* c */", maxValueLength: 5, result: Err("value-too-long") },
 // a byte order mark doesn't count
 { text: "\u{FEFF}12345", maxValueLength: 5, result: Ok([12345]) },
 // characters are code points: an emoji is one, also where a language stores it as two UTF-16 units

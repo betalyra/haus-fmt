@@ -993,13 +993,25 @@ const BIDI = /^[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]$/
  * cut with `…`.
  */
 export function quoteText(text: string, max = 40): string {
-  const chars = [...text]
-  const shown = chars.slice(0, max).map((c) => {
-    const cp = c.codePointAt(0)!
-    const escape = cp < 0x20 || (cp >= 0x7f && cp < 0xa0) || cp === 0x2028 || cp === 0x2029 || (cp >= 0xd800 && cp <= 0xdfff) || BIDI.test(c)
-    return escape ? `\\u{${cp.toString(16)}}` : c
-  })
-  return chars.length > max ? `${shown.join("")}…` : shown.join("")
+  const pieces = [...text].map(shownChar)
+  const length = (piece: string) => [...piece].length
+  if (pieces.reduce((n, piece) => n + length(piece), 0) <= max) return pieces.join("")
+  // Cut between characters, never inside an escape: whole pieces in max - 1 characters, then the `…`.
+  let used = 0
+  const kept = []
+  for (const piece of pieces) {
+    used += length(piece)
+    if (used > max - 1) break
+    kept.push(piece)
+  }
+  return `${kept.join("")}…`
+}
+
+/** A character as a message shows it: control and bidirectional characters escaped. */
+function shownChar(c: string): string {
+  const cp = c.codePointAt(0)!
+  const escape = cp < 0x20 || (cp >= 0x7f && cp < 0xa0) || cp === 0x2028 || cp === 0x2029 || (cp >= 0xd800 && cp <= 0xdfff) || BIDI.test(c)
+  return escape ? `\\u{${cp.toString(16)}}` : c
 }
 
 const majorOf = (version: string) => /^v?(\d+)/.exec(version)?.[1]

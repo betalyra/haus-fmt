@@ -444,6 +444,11 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
   }
 
   const key = (k: string, at: Place) => (longerThan(k, l.maxStringLength) ? fail(`key longer than ${l.maxStringLength} characters`, at, "key-too-long") : k)
+  /** A tag of the value read (a `"_tag"`, or an enum's string), within the string limit (spec §16 "Limits"). */
+  const tagWithin = (tag: string, at: Place): string => {
+    const issue = tagLengthIssue(tag, l)
+    return issue === undefined ? tag : fail(issue.reason, at, issue.code)
+  }
 
   /** The fields of a record (or record payload): listed members read with their types; others ignored (open) or an error (closed). */
   const fields = (t: JsonRecordType, o: JsonObject, skip: readonly string[], at: Place, depth: number): Map<string, Value> => {
@@ -451,7 +456,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     for (const k of Object.keys(o)) {
       if (skip.includes(k)) continue
       const type = t.fields.get(k)
-      if (type !== undefined) out.set(k, read(type, o[k]!, at.child(k), depth + 1, 0))
+      if (type !== undefined) out.set(key(k, at.child(k)), read(type, o[k]!, at.child(k), depth + 1, 0))
       else if (t.closed) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} (the record is closed)`, at.child(k), "unknown-field")
     }
     return out
@@ -461,16 +466,15 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     if (isEnum(t)) {
       if (typeof j !== "string") return mismatch(`one of the strings ${tagList(t.cases.keys())}`, j, at)
       if (!TAG.test(j)) return fail(`not a tag name: ${describeJson(j)}`, at, "invalid-tag")
-      return t.cases.has(j) ? variant(j) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
+      return t.cases.has(j) ? variant(tagWithin(j, at)) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
     }
     const o = object(j, `an object with "_tag"`, at)
     const tag = tagOf(o, "the tag, a string", at)
     const c = t.cases.get(tag)
+    if (c === undefined && !t.open) return fail(`unknown tag ${describeJson(tag)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
+    tagWithin(tag, at)
     if (c === undefined) {
-      if (!t.open) return fail(`unknown tag ${describeJson(tag)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
       // An unknown value (spec §16.3).
-      const tagIssue = tagLengthIssue(tag, l)
-      if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
       const members = Object.keys(o).filter((k) => k !== "_tag")
       if (members.length === 0) return variant(tag)
       // As written: the arguments, self-describing (without the envelope).

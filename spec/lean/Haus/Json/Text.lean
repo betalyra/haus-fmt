@@ -25,7 +25,10 @@ limit codes that name the same mistake in haus (`control-character`,
 
 Limits (§16, "Limits"):
 
-- a string at most `maxStringLength` characters;
+- a string at most `maxStringLength` characters. The three forms give the
+  reader a string limit the text can't reach (`textLimits`) and count the
+  lengths on the haus value that results, where a member name is a key and a
+  `_tag` a tag (`key-too-long`, `tag-too-long`);
 - a number token, as written, at most `maxNumberLength` characters, with an
   exponent at most `maxExponent`;
 - JSON nesting at most `4 · maxDepth + 1` for schema-based JSON (`parse`),
@@ -259,6 +262,18 @@ def dropBom : Text → Text
 def parseText (L : Limits) (strict : Bool) (depth : Nat) (t : Text) : Except Error JSON := do
   let (j, r) ← value L strict (2 * t.length + 4) depth (skipWs t)
   if skipWs r = [] then .ok j else .error ⟨.jsonSyntax, "text after the value"⟩
+
+/--
+The limits the three forms give the JSON text reader (§16, "Limits"). Lengths
+are counted on the haus value that results, not on the JSON text, so the
+reader's string limit is one the text can't reach (a string of a text is no
+longer than the text), and the forms check the lengths on the value, where
+each string's role is known: a member name is a key (`key-too-long`), a
+`_tag` or the string of a closed enum a tag (`tag-too-long`), a string a
+string (`string-too-long`). The number limits apply to JSON number tokens as
+written, unchanged.
+-/
+def textLimits (L : Limits) (t : Text) : Limits := { L with maxStringLength := max L.maxStringLength t.length }
 
 /-- JSON text nested at most `depth`, after an optional byte order mark. -/
 def parseDepth (L : Limits) (depth : Nat) (t : Text) : Except Error JSON := parseText L false depth (dropBom t)

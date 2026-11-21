@@ -27,7 +27,7 @@ inductive Code
   | nestingTooDeep | numberTooLong | exponentTooLarge | stringTooLong | keyTooLong | tagTooLong
   | valueTooLong
   -- streams (§6)
-  | streamTruncated
+  | streamTruncated | notOneValue
   -- decoding with a schema (§15)
   | typeMismatch | notAnInteger | outOfRange | missingField | unknownField | unknownTag
   | wrongPayload | invalidTime | invalidSecret | unguardedRecursion | unknownType
@@ -91,6 +91,7 @@ def Code.name : Code → String
   | .tagTooLong => "tag-too-long"
   | .valueTooLong => "value-too-long"
   | .streamTruncated => "stream-truncated"
+  | .notOneValue => "not-one-value"
   | .typeMismatch => "type-mismatch"
   | .notAnInteger => "not-an-integer"
   | .outOfRange => "out-of-range"
@@ -160,7 +161,7 @@ def Code.all : List Code := [
   .invalidEscape, .invalidUnicodeEscape, .blockStringOpening, .blockStringClosing,
   .blockStringIndent, .unterminatedBlockString, .unterminatedBytes, .bytesNotHex, .bytesOddDigits,
   .loneCarriageReturn, .unterminatedComment, .straySlash, .nestingTooDeep, .numberTooLong,
-  .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .streamTruncated,
+  .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .streamTruncated, .notOneValue,
   .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag,
   .wrongPayload, .invalidTime, .invalidSecret, .unguardedRecursion, .unknownType, .jsonSyntax,
   .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes,

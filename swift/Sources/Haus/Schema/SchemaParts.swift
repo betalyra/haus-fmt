@@ -49,7 +49,8 @@ final class Parts {
     let steps: Steps
     /// A step before the parts' own: the `"values"` of a payload in JSON.
     let prefix: PathStep?
-    /// Whether the keys are checked against the string limit (a `Map` read from JSON).
+    /// Whether the keys are checked against the string limit: a `Map`'s, and
+    /// a record's listed fields', read from JSON (§16, "Limits").
     let checkKeys: Bool
 
     init(

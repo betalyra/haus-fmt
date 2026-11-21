@@ -213,7 +213,7 @@ ErrorCode := [].{
 	unknown_parameter : Str
 	unknown_parameter = "unknown-parameter"
 
-	## `invalid-parameter` (schema-files): A type parameter named `_`, or the same parameter twice.
+	## `invalid-parameter` (schema-files): A type parameter starting with `_`, or the same parameter twice in one definition.
 	invalid_parameter : Str
 	invalid_parameter = "invalid-parameter"
 
@@ -405,7 +405,7 @@ ErrorCode := [].{
 	cyclic_value : Str
 	cyclic_value = "cyclic-value"
 
-	## `step-budget` (decoding): Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).
+	## `step-budget` (decoding): Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).
 	step_budget : Str
 	step_budget = "step-budget"
 

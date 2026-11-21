@@ -748,9 +748,19 @@ def textError (e : JSON.Error) : Error := { path := [], reason := e.reason, code
 
 /-- Schema-based JSON text read with a type, within the limits: the value it encodes to (§15) must fit them. -/
 def readJson (L : Limits) (env : Env) (t : Ty) (text : Text) : Except Error Typed := do
-  let j ← (JSON.parse L text).mapError textError
+  let j ← (JSON.parseDepth (JSON.textLimits L text) (JSON.jsonDepth L) text).mapError textError
   let x ← fromJson env t j
   if (encode x).fits L then .ok x
+  else .error { path := [], reason := "outside the limits", code := some ((encode x).limitCode L) }
+
+/--
+**Encoding within the limits** (§9.8, §15): the value a decoded result
+encodes to, checked against the limits before it is written. A value built in
+code may be outside them, and so may an `Any` or an unknown value kept from
+input read with larger limits (§9.5); the error is the limit's code.
+-/
+def encodeChecked (L : Limits) (x : Typed) : Except Error Value :=
+  if (encode x).fits L then .ok (encode x)
   else .error { path := [], reason := "outside the limits", code := some ((encode x).limitCode L) }
 
 /-- The text of a decoded value's schema-based JSON. -/
@@ -823,5 +833,29 @@ private def readPlace (t : String) (json : String) : Option String :=
   | .ok _ => none
 #guard readPlace "Shape" "{\"_tag\":\"Empty\",\"x\":1}" == some "$.x"
 #guard readCode "Shape" "{\"_tag\":\"Empty\",\"x\":1}" == some .unexpectedMember
+-- Encoding checks the value against the limits (§9.8): an `Any` deeper than the depth limit, an unknown
+-- value's long tag, an integer longer than the number limit.
+private def encodeCode (L : Limits) (x : Typed) : Option Code :=
+  match encodeChecked L x with
+  | .error e => e.code
+  | .ok _ => none
+#guard encodeCode { maxDepth := 2 } (.any (.arr [.arr [.arr []]])) == some .nestingTooDeep
+#guard encodeCode { maxDepth := 3 } (.any (.arr [.arr [.arr []]])) == none
+#guard encodeCode { maxStringLength := 3 } (.unknown "Abcd" []) == some .tagTooLong
+#guard encodeCode {} (.int (10 ^ 1000)) == some .numberTooLong && encodeCode {} (.int (10 ^ 999)) == none
+-- Lengths are counted on the value the result encodes to (§16, "Limits"): a member name as a key, a
+-- `"_tag"` and the string of a closed enum as a tag, a string as a string.
+private def limitEnv : Env := ⟨[("M", .map .string), ("Open", .variant false [.bare "A"]),
+  ("Enum", .variant true [.bare "A", .bare "Abcdefg"]), ("S", .string)]⟩
+private def limitCode (t : String) (json : String) : Option Code :=
+  match readJson { maxStringLength := 6 } limitEnv (.ref t) json.toList with
+  | .error e => e.code
+  | .ok _ => none
+#guard limitCode "M" "{\"abcdefg\": \"x\"}" == some .keyTooLong
+#guard limitCode "M" "{\"abcdef\": \"abcdefg\"}" == some .stringTooLong
+#guard limitCode "Open" "{\"_tag\": \"Abcdefg\"}" == some .tagTooLong
+#guard limitCode "Enum" "\"Abcdefg\"" == some .tagTooLong
+#guard limitCode "S" "\"abcdefg\"" == some .stringTooLong
+#guard limitCode "Open" "{\"_tag\": \"Abcdef\"}" == none
 
 end Haus.Schema

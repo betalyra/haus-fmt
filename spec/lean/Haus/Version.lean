@@ -2,6 +2,7 @@ import Haus.Canonical
 import Haus.Schema.Decode
 import Haus.Json.SchemaBased
 import Haus.Stream.Limited
+import Haus.Layout.Compact
 
 /-!
 # Versions (spec §10)
@@ -10,7 +11,8 @@ From 1.0 on, haus only grows: a later version may make invalid text valid,
 but never makes valid text invalid, never changes what valid text means,
 what an existing schema accepts or decodes to, or the canonical form or
 hash of a value. Default limits may only grow (§7). The three JSON mappings
-never change (§16). Error codes are never renamed or removed, and an input
+never change (§16), and neither do the compact and minimised layouts (§11;
+the pretty layout may change, as only people read it). Error codes are never renamed or removed, and an input
 with one mistake gets the same code everywhere (§17). `Extends old new`
 states all of that for two versions, each given by what it fixes.
 
@@ -70,6 +72,10 @@ structure Version where
   readHausJson : Reads Value
   /-- The JSON import (§16.1). -/
   readImport : Reads Value
+  /-- The compact layout (§11): the text written for a file's values. -/
+  compactAll : List Value → Text
+  /-- The minimised layout (§11): the text written for a file's values. -/
+  minimisedAll : List Value → Text
 
 /-- What `hash` hashes for one value (§12). -/
 def Version.hash (V : Version) (v : Value) : Text := V.hashAll [v]
@@ -105,8 +111,9 @@ canonical form, the hash and the self-describing JSON are the same; every
 built-in type and every type of a schema `old` accepts decodes alike and
 has the same schema-based JSON there; each JSON reader reads what the old
 one reads, alike; the default limits only grow; no code leaves the
-catalogue; and a text with one mistake keeps its code, unless it has
-become valid.
+catalogue; a text with one mistake keeps its code, unless it has
+become valid; and the compact and minimised layouts write what `old` can
+express as `old` does (§10).
 -/
 structure Extends (old new : Version) : Prop where
   parse : Keeps old.parse new.parse
@@ -121,6 +128,8 @@ structure Extends (old new : Version) : Prop where
   maxValueLength : old.maxValueLength ≤ new.maxValueLength
   codes : old.codes ⊆ new.codes
   fixed : ∀ t c, old.fixed t = some c → new.fixed t = some c ∨ ∃ vs, new.parse t = .ok vs
+  compactAll : ∀ vs, (∀ v ∈ vs, old.Expresses v) → new.compactAll vs = old.compactAll vs
+  minimisedAll : ∀ vs, (∀ v ∈ vs, old.Expresses v) → new.minimisedAll vs = old.minimisedAll vs
 
 namespace Keeps
 
@@ -176,6 +185,8 @@ theorem refl (V : Version) : Extends V V where
   maxValueLength := Nat.le_refl _
   codes := List.Subset.refl _
   fixed _ _ h := .inl h
+  compactAll _ _ := rfl
+  minimisedAll _ _ := rfl
 
 theorem sameType_trans {a b : Version} (hab : Extends a b) {T T' T'' : TypeV}
     (s1 : a.SameType T T') (s2 : b.SameType T' T'') : a.SameType T T'' :=
@@ -208,6 +219,8 @@ theorem trans {a b c : Version} (hab : Extends a b) (hbc : Extends b c) : Extend
     rcases hab.fixed t c h with h' | ⟨vs, hp⟩
     · exact hbc.fixed t c h'
     · exact .inr ⟨vs, hbc.parse t vs hp⟩
+  compactAll vs hv := (hbc.compactAll vs fun v hm => hab.expresses (hv v hm)).trans (hab.compactAll vs hv)
+  minimisedAll vs hv := (hbc.minimisedAll vs fun v hm => hab.expresses (hv v hm)).trans (hab.minimisedAll vs hv)
 
 end Extends
 
@@ -258,6 +271,8 @@ def current (resolve : Text → Option Env) (fixed : Text → Option String := f
   writeHausJson := JSON.writeHausJson
   readHausJson t := (JSON.readHausJson {} t).mapError (·.code.name)
   readImport t := (JSON.readImport {} t).mapError (·.code.name)
+  compactAll := Layout.compactAll
+  minimisedAll := Layout.minimisedAll
 
 /-- `hash v` of this version hashes the canonical form of `v` (§12). -/
 theorem current_hash (resolve : Text → Option Env) (fixed : Text → Option String) (v : Value) :
