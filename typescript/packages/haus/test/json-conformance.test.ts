@@ -123,7 +123,8 @@ describe("JSON Lines (spec §16, \"Streams\")", () => {
       return rejects(() => { throw e }, c)
     }
     expect(c.kind, values.map(canonical).join(", ")).toBe("Ok")
-    expect(c.output?.kind === "array" && c.output.items.length === values.length && values.every((v, i) => equals(v, (c.output as { items: Value[] }).items[i]!)), values.map(canonical).join(", ")).toBe(true)
+    const output = c.output
+    expect(output?.kind === "array" && output.items.length === values.length && values.every((v, i) => equals(v, output.items[i]!)), values.map(canonical).join(", ")).toBe(true)
   })
 })
 
