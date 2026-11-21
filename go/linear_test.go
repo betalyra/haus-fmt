@@ -19,15 +19,23 @@ import (
 const (
 	linearRuns  = 5
 	linearTries = 4
+	// minRun is the shortest time one measured run lasts.
+	minRun = 20 * time.Millisecond
 )
 
-// fastest returns the shortest time of linearRuns calls of f.
+// fastest returns the shortest time per call of f over linearRuns runs.
 func fastest(f func()) time.Duration {
 	best := time.Duration(1<<63 - 1)
 	for range linearRuns {
-		start := time.Now()
-		f()
-		best = min(best, time.Since(start))
+		// Repeat the call until the run lasts at least minRun: a clock that
+		// ticks coarsely (Windows: every 0.5–15.6 ms) would measure a fast call
+		// as 0 and make any ratio huge.
+		calls, start := 0, time.Now()
+		for calls == 0 || time.Since(start) < minRun {
+			f()
+			calls++
+		}
+		best = min(best, time.Since(start)/time.Duration(calls))
 	}
 	return best
 }
