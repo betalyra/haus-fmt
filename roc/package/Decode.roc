@@ -44,7 +44,8 @@ Decode := [].{
 		Ok($out)
 	}
 
-	## Parse a text holding exactly one value and decode it.
+	## Parse a text holding exactly one value and decode it. A text with none
+	## or several is `not-one-value`, a decoding error at the root (`$`).
 	one : Str, (Value -> Try(a, Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Error)])
 	one = |text, decoder| one_with(text, Value.default_limits, decoder)
 
@@ -54,8 +55,11 @@ Decode := [].{
 	## checked the depth already.
 	one_with : Str, Value.Limits, (Value -> Try(a, Error)) -> Try(a, [Syntax(Value.ParseError), Decode(Error)])
 	one_with = |text, limits, decoder| {
-		v = Value.parse_with(text, limits).map_err(|e| Syntax(e))?
-		decoder(v).map_err(|e| Decode(e))
+		values = Value.parse_all_with(text, limits).map_err(|e| Syntax(e))?
+		match values {
+			[v] => decoder(v).map_err(|e| Decode(e))
+			_ => Err(Decode({ code: ErrorCode.not_one_value, reason: "expected exactly one value, found ${values.len().to_str()}", path: "" }))
+		}
 	}
 
 	## Item `i` of a stream, already parsed: errors say which (`[3].total`).
@@ -101,7 +105,7 @@ Decode := [].{
 	## `Int`: an integer of any size, kept as its digits (see `Int`).
 	int : Value -> Try(Int, Error)
 	int = |v| match v {
-		Num(text) => Int.from_str(text).map_err(|_| { code: ErrorCode.not_an_integer, reason: "expected a whole number (Int), found ${text}", path: "" })
+		Num(text) => Int.from_str(text).map_err(|_| { code: ErrorCode.not_an_integer, reason: "expected a whole number (Int), found ${ErrorCode.shown(text)}", path: "" })
 		_ => expected("a number (Int)", v)
 	}
 
@@ -134,7 +138,7 @@ Decode := [].{
 	## a Float64 is an error, not an infinity.
 	f64 : Value -> Try(F64, Error)
 	f64 = |v| match v {
-		Num(text) => F64.from_str(text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${text} is too large for Float64", path: "" })
+		Num(text) => F64.from_str(text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${ErrorCode.shown(text)} is too large for Float64", path: "" })
 		Tag("NaN", []) => Ok(0.0 / 0.0)
 		Tag("Infinity", []) => Ok(1.0 / 0.0)
 		Tag("NegInfinity", []) => Ok(-1.0 / 0.0)
@@ -146,7 +150,7 @@ Decode := [].{
 	## `NaN`, `Infinity`, `NegInfinity`. Too large for a Float32 is an error.
 	f32 : Value -> Try(F32, Error)
 	f32 = |v| match v {
-		Num(text) => F32.from_str(text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${text} is too large for Float32", path: "" })
+		Num(text) => F32.from_str(text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${ErrorCode.shown(text)} is too large for Float32", path: "" })
 		Tag("NaN", []) => Ok(0.0 / 0.0)
 		Tag("Infinity", []) => Ok(1.0 / 0.0)
 		Tag("NegInfinity", []) => Ok(-1.0 / 0.0)
@@ -261,7 +265,7 @@ Decode := [].{
 	## A closed record has only the fields listed: another is `unknown-field`, at its place.
 	closed : List((Str, Value)), List(Str) -> Try({}, Error)
 	closed = |fields, known| match fields.find_first(|(k, _)| !known.contains(k)) {
-		Ok((k, _)) => at(fail(ErrorCode.unknown_field, "unknown field '${k}' in a closed record"), ErrorCode.path_key(k))
+		Ok((k, _)) => at(fail(ErrorCode.unknown_field, "unknown field '${ErrorCode.shown(k)}' in a closed record"), ErrorCode.path_key(k))
 		Err(_) => Ok({})
 	}
 
@@ -310,10 +314,10 @@ Decode := [].{
 	}
 
 	## A type with a codec: its base decoder first, then the codec (spec §13.4).
-	## A value the codec rejects is a `type-mismatch`.
+	## A value the codec rejects is `codec-rejected`.
 	codec : Value, (Value -> Try(b, Error)), (b -> Try(t, Str)) -> Try(t, Error)
 	codec = |v, base, decode| match base(v) {
-		Ok(x) => decode(x).map_err(|reason| { code: ErrorCode.type_mismatch, reason, path: "" })
+		Ok(x) => decode(x).map_err(|reason| { code: ErrorCode.codec_rejected, reason, path: "" })
 		Err(e) => Err(e)
 	}
 
@@ -413,7 +417,7 @@ Decode := [].{
 
 	## A tag a closed variant doesn't list: `unknown-tag`.
 	unknown_tag : Str, List(Str) -> Try(a, Error)
-	unknown_tag = |tag, known| fail(ErrorCode.unknown_tag, "unknown tag ${tag}; expected one of ${Str.join_with(known, ", ")}")
+	unknown_tag = |tag, known| fail(ErrorCode.unknown_tag, "unknown tag ${ErrorCode.shown(tag)}; expected one of ${Str.join_with(known, ", ")}")
 
 	## An array, decoding each item.
 	list : Value, (Value -> Try(a, Error)) -> Try(List(a), Error)
@@ -457,10 +461,10 @@ whole = |v, name, min, max, from_str| match v {
 	Num(text) => {
 		digits = if (text.starts_with("-")) text.drop_prefix("-") else text
 		if digits.is_empty() or !digits.to_utf8().all(|b| b >= '0' and b <= '9') {
-			return Decode.fail(ErrorCode.not_an_integer, "expected a whole number (${name}), found ${text}")
+			return Decode.fail(ErrorCode.not_an_integer, "expected a whole number (${name}), found ${ErrorCode.shown(text)}")
 		}
 		# `-0` is 0, also for the unsigned types.
-		from_str(if (text == "-0") "0" else text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${text} is out of range for ${name} (${min} to ${max})", path: "" })
+		from_str(if (text == "-0") "0" else text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${ErrorCode.shown(text)} is out of range for ${name} (${min} to ${max})", path: "" })
 	}
 	_ => Decode.expected("a number (${name})", v)
 }
@@ -508,12 +512,12 @@ tagged_string = |name, v| match v {
 
 describe : Value -> Str
 describe = |v| match v {
-	Num(t) => "number ${t}"
+	Num(t) => "number ${ErrorCode.shown(t)}"
 	Text(_) => "a string"
 	Bytes(_) => "bytes"
 	Arr(_) => "an array"
 	Rec(_) => "a record"
-	Tag(name, _) => "variant ${name}"
+	Tag(name, _) => "variant ${ErrorCode.shown(name)}"
 }
 
 # ── tests ────────────────────────────────────────────────────
@@ -631,7 +635,7 @@ expect code_of("1e3", Decode.i32) == "not-an-integer at $" and code_of("1.0", De
 expect code_of("Date(\"2026-02-30\")", Decode.date) == "invalid-time at $[0]" and code_of("Instant(\"2026-11-13T10:00:00Z\")", Decode.date) == "type-mismatch at $"
 expect code_of("Date(\"2026-11-13\", \"x\")", Decode.date) == "type-mismatch at $" and code_of("[1, 2]", |v| Decode.secret(v, "Secret Int8", |x| Decode.list(x, Decode.i8))) == "ok"
 expect code_of("[1, 999]", |v| Decode.secret(v, "Secret (Array Int8)", |x| Decode.list(x, Decode.i8))) == "invalid-secret at $"
-expect code_of("1", |v| Decode.codec(v, Decode.i32, |_| Err("no"))) == "type-mismatch at $" and code_of("1, 2", Decode.any) == "not-one-value"
+expect code_of("1", |v| Decode.codec(v, Decode.i32, |_| Err("no"))) == "codec-rejected at $" and code_of("1, 2", Decode.any) == "not-one-value at $" and code_of("", Decode.any) == "not-one-value at $"
 # Codecs run from the inside out (spec §13.4): a part's codec, checked first, rejects at its own place.
 expect {
 	currency = |c| Decode.codec(
@@ -657,7 +661,7 @@ expect {
 		Err(Decode(e)) => "${e.code} at ${ErrorCode.place(e.path)}"
 		Err(Syntax(e)) => e.code
 	}
-	place("[Money(1, EUR), Money(2, Eur)]") == "type-mismatch at $[1][1]" and place("[Money(1, EUR)]") == "ok" and place("[Money(1)]") == "type-mismatch at $[0]"
+	place("[Money(1, EUR), Money(2, Eur)]") == "codec-rejected at $[1][1]" and place("[Money(1, EUR)]") == "ok" and place("[Money(1)]") == "codec-rejected at $[0]"
 }
 expect {
 	fails = |_| Decode.fail("type-mismatch", "no")

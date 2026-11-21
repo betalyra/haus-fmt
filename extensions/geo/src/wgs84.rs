@@ -17,9 +17,15 @@ impl Point {
     /// The point at `lat`, `lng`; an error if either is out of range, NaN or infinite.
     pub fn new(lat: f64, lng: f64) -> Result<Point, String> {
         if !(-90.0..=90.0).contains(&lat) {
-            Err(format!("latitude {lat} out of range: the wgs84 profile takes -90 to 90"))
+            Err(format!(
+                "latitude {} out of range: the wgs84 profile takes -90 to 90",
+                haus::for_message(&lat.to_string())
+            ))
         } else if !(-180.0..=180.0).contains(&lng) {
-            Err(format!("longitude {lng} out of range: the wgs84 profile takes -180 to 180"))
+            Err(format!(
+                "longitude {} out of range: the wgs84 profile takes -180 to 180",
+                haus::for_message(&lng.to_string())
+            ))
         } else {
             Ok(Point { lat, lng })
         }

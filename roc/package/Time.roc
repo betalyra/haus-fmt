@@ -3,6 +3,8 @@
 ##
 ## Each type reads its whole shape first, then checks the values: a string
 ## with the wrong shape says how to write it, whatever its values.
+import ErrorCode
+
 Time := [].{
 
 	## Whether `text` is a valid value of the std/time type `name`, and if not, why.
@@ -22,8 +24,8 @@ Time := [].{
 		}
 		match result {
 			Ok({}) => Ok({})
-			Err(Shape) => Err("\"${text}\" is not a ${name}; write it like ${example(name)}")
-			Err(Invalid(reason)) => Err("\"${text}\" is not a valid ${name}: ${reason}")
+			Err(Shape) => Err("\"${ErrorCode.shown(text)}\" is not a ${name}; write it like ${example(name)}")
+			Err(Invalid(reason)) => Err("\"${ErrorCode.shown(text)}\" is not a valid ${name}: ${reason}")
 		}
 	}
 
@@ -333,8 +335,11 @@ zone = |s| {
 	if s.len() == 6 and (at(s, 0) == '+' or at(s, 0) == '-') and offset_end(s, 0) == Ok(6) {
 		return offset(s, 0, 6)
 	}
+	if s == ['Z'] {
+		return invalid("Z is the offset letter, not a zone: write an IANA zone name (like Europe/Lisbon) or an offset (like +00:00)")
+	}
 	z = text(s, 0, s.len())
-	bad = invalid("\"${z}\" is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)")
+	bad = invalid("\"${ErrorCode.shown(z)}\" is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)")
 	first = at(s, 0)
 	if s.len() > 255 or !((first >= 'a' and first <= 'z') or (first >= 'A' and first <= 'Z')) {
 		return bad

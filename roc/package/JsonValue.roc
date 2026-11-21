@@ -902,7 +902,7 @@ described_number = |json, limits| match json {
 				_ => Bool.False
 			}
 			# A literal beyond the limits has the limit's code.
-			Err(e) => return Decode.fail(if (e.code == ErrorCode.cannot_encode) ErrorCode.haus_json_number else e.code, e.reason)
+			Err(e) => return Decode.fail(if (e.code == ErrorCode.invalid_number) ErrorCode.haus_json_number else e.code, e.reason)
 		}
 		if (same) Ok(Num(n)) else Decode.fail(ErrorCode.haus_json_number, "${quote_str(n)} is not a normalized number literal")
 	}
@@ -984,7 +984,7 @@ describe_json = |json| match json {
 	Null => "null"
 	Boolean(True) => "true"
 	Boolean(False) => "false"
-	Number(n) => "the number ${n}"
+	Number(n) => "the number ${ErrorCode.shown(n)}"
 	String(_) => "a string"
 	Array(_) => "an array"
 	Object(_) => "an object"
@@ -1135,9 +1135,9 @@ bytes_to_str = |bytes| match Str.from_utf8(bytes) {
 
 ## A string in quotes, for messages.
 quote_str : Str -> Str
-quote_str = |s| bytes_to_str(quote(s))
+quote_str = |s| "\"${ErrorCode.shown(s)}\""
 
-## What is at `pos`, for messages: a whole character.
+## What is at `pos`, for messages: a whole character, escaped as messages show text (spec §9).
 describe : List(U8), U64 -> Str
 describe = |src, pos| {
 	c = at(src, pos)
@@ -1147,7 +1147,7 @@ describe = |src, pos| {
 		"line break"
 	} else {
 		len = if (c < 0x80) 1 else if (c < 0xE0) 2 else if (c < 0xF0) 3 else 4
-		"'${bytes_to_str(src.sublist({ start: pos, len }))}'"
+		"'${ErrorCode.shown(bytes_to_str(src.sublist({ start: pos, len })))}'"
 	}
 }
 
@@ -1218,7 +1218,7 @@ enveloped_as_written = |value| "{\"_haus\":1,\"_value\":${value}}"
 expect JsonValue.to_haus_json(Tag("Point", [Num("1"), Num("2.50")])) == Ok(enveloped_as_written("{\"_tag\":\"Point\",\"_args\":[{\"_num\":\"1\"},{\"_num\":\"2.50\"}]}"))
 expect JsonValue.to_haus_json(Num("1E5")) == Ok(enveloped_as_written("{\"_num\":\"1e5\"}"))
 expect JsonValue.haus_json_value(Num("1E5")) == Ok(Object([("_num", String("1e5"))]))
-expect JsonValue.to_haus_json(Arr([Num("1"), Num("abc")])) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
+expect JsonValue.to_haus_json(Arr([Num("1"), Num("abc")])) == Err({ code: "invalid-number", reason: "not a number literal", path: "[1]" })
 expect JsonValue.from_haus_json(env("{\"_num\": \"1E5\"}")).is_err()
 expect JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": []}")).is_err()
 expect JsonValue.from_haus_json(env("{\"_args\": [{\"_num\": \"1\"}], \"_tag\": \"T\"}")).map_ok(canonical_text) == Ok("T(1)")

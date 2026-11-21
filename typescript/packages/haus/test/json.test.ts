@@ -203,7 +203,6 @@ describe("import (spec §16.1)", () => {
     await expect(collect(fromHausJsonLines([`{"_haus":1,"_value":"a"}\n\n`]))).rejects.toMatchObject({ code: "json-syntax", line: 2 })
     expect(await collect(parseJsonLines(["1\n2"]))).toEqual([new JsonNumber("1"), new JsonNumber("2")])
     await expect(collect(parseJsonLines(["1\n2"], { requireTerminator: true }))).rejects.toThrow(/truncated/)
-    await expect(collect(parseJsonLines(["[1, 2]\n"], { maxLineLength: 3 }))).rejects.toThrow(/longer than 3/)
     // A byte order mark is ignored at the start of the stream only, as in haus streams.
     expect(await collect(parseJsonLines(["\uFEFF1\n2\n"]))).toEqual([new JsonNumber("1"), new JsonNumber("2")])
     expect(await collect(parseJsonLines([new Uint8Array([0xef, 0xbb, 0xbf, 0x31, 0x0a])]))).toEqual([new JsonNumber("1")])

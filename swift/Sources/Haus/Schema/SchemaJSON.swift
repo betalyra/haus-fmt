@@ -76,18 +76,18 @@ extension SchemaType {
     public func fromJSONLines(bytes: some Collection<UInt8>, limits: Limits = Limits()) throws(HausError)
         -> [HausValue]
     {
-        var reader = JSONLinesReader(limits: limits, bounded: false, convert: lineReader)
+        var reader = JSONLinesReader(limits: limits, convert: lineReader)
         return try reader.readAll(bytes)
     }
 
     /// A reader of JSON Lines (spec §16, "Streams") from chunks, each line
     /// the schema-based JSON of a value of the type (of a stream's value,
-    /// for a `Stream` definition). It holds one line at a time, at most
-    /// ``Limits/maxValueLength`` characters (`value-too-long`). Errors in a
+    /// for a `Stream` definition). It holds one line at a time, of any
+    /// length (JSON Lines has no limit on a line). Errors in a
     /// line's text have the line's number; errors in a value have a path
     /// that starts with its index, `$[3].total`.
     public func jsonLinesReader(limits: Limits = Limits()) -> JSONLinesReader {
-        JSONLinesReader(limits: limits, bounded: true, convert: lineReader)
+        JSONLinesReader(limits: limits, convert: lineReader)
     }
 
     var lineReader: JSONLinesReader.Convert {

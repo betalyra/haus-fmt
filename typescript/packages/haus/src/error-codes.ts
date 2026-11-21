@@ -97,6 +97,7 @@ export const ERROR_CODES = {
   "wrong-payload": { category: "decoding", hint: "Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which." },
   "invalid-time": { category: "decoding", hint: "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type." },
   "invalid-secret": { category: "decoding", hint: "Write a value of the secret's type; the value isn't shown, so check it where it comes from." },
+  "codec-rejected": { category: "decoding", hint: "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which." },
   "cannot-encode": { category: "decoding", hint: "Pass a value of the host type the binding documents for the type." },
   "cyclic-value": { category: "decoding", hint: "Break the cycle before encoding." },
   "step-budget": { category: "decoding", hint: "Simplify the schema, or raise the step limit if the work is expected." },

@@ -5,7 +5,7 @@ package haus
 
 // The error codes of the catalogue (spec §17).
 const (
-	// CodeInvalidUTF8 is "invalid-utf8": The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.
+	// CodeInvalidUTF8 is "invalid-utf8": The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.
 	CodeInvalidUTF8 ErrorCode = "invalid-utf8"
 	// CodeVersionDirective is "version-directive": The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.
 	CodeVersionDirective ErrorCode = "version-directive"
@@ -33,11 +33,11 @@ const (
 	CodeBlockStringKey ErrorCode = "block-string-key"
 	// CodeMissingColon is "missing-colon": A record key is not followed by `:`.
 	CodeMissingColon ErrorCode = "missing-colon"
-	// CodeDuplicateKey is "duplicate-key": A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16).
+	// CodeDuplicateKey is "duplicate-key": A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).
 	CodeDuplicateKey ErrorCode = "duplicate-key"
 	// CodeEmptyPayload is "empty-payload": A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.
 	CodeEmptyPayload ErrorCode = "empty-payload"
-	// CodeInvalidNumber is "invalid-number": A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
+	// CodeInvalidNumber is "invalid-number": A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).
 	CodeInvalidNumber ErrorCode = "invalid-number"
 	// CodeUnterminatedString is "unterminated-string": A string has no closing `"` (in haus or JSON).
 	CodeUnterminatedString ErrorCode = "unterminated-string"
@@ -83,7 +83,7 @@ const (
 	CodeKeyTooLong ErrorCode = "key-too-long"
 	// CodeTagTooLong is "tag-too-long": A tag has more characters than the string limit (default 16 Mi).
 	CodeTagTooLong ErrorCode = "tag-too-long"
-	// CodeValueTooLong is "value-too-long": One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).
+	// CodeValueTooLong is "value-too-long": One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).
 	CodeValueTooLong ErrorCode = "value-too-long"
 	// CodeUnsupportedDepth is "unsupported-depth": The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input.
 	CodeUnsupportedDepth ErrorCode = "unsupported-depth"
@@ -195,7 +195,9 @@ const (
 	CodeInvalidTime ErrorCode = "invalid-time"
 	// CodeInvalidSecret is "invalid-secret": A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).
 	CodeInvalidSecret ErrorCode = "invalid-secret"
-	// CodeCannotEncode is "cannot-encode": Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.
+	// CodeCodecRejected is "codec-rejected": A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
+	CodeCodecRejected ErrorCode = "codec-rejected"
+	// CodeCannotEncode is "cannot-encode": Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.
 	CodeCannotEncode ErrorCode = "cannot-encode"
 	// CodeCyclicValue is "cyclic-value": Encoding: a value contains itself, so it has no finite text.
 	CodeCyclicValue ErrorCode = "cyclic-value"
@@ -343,6 +345,7 @@ var errorCodeList = []ErrorCode{
 	CodeWrongPayload,
 	CodeInvalidTime,
 	CodeInvalidSecret,
+	CodeCodecRejected,
 	CodeCannotEncode,
 	CodeCyclicValue,
 	CodeStepBudget,
@@ -365,7 +368,7 @@ var errorCodeList = []ErrorCode{
 }
 
 var errorCatalogue = map[ErrorCode]ErrorInfo{
-	CodeInvalidUTF8:             {CategorySyntax, "The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.", "Save the file as UTF-8."},
+	CodeInvalidUTF8:             {CategorySyntax, "The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.", "Save the file as UTF-8."},
 	CodeVersionDirective:        {CategorySyntax, "The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.", "Read the file with a version of haus that supports it."},
 	CodeExpectedValue:           {CategorySyntax, "A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be.", "Write a value here, or remove the extra comma or bracket."},
 	CodeMissingComma:            {CategorySyntax, "Two values, fields or top-level values follow each other without a comma between them.", "Add a comma between the two values."},
@@ -379,9 +382,9 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeUppercaseKey:            {CategorySyntax, "A record key starts with a capital letter. Bare keys start with a lowercase letter or `_`; capitalized words are tags.", "Quote the key, or start it with a lowercase letter."},
 	CodeBlockStringKey:          {CategorySyntax, "A block string (`\"\"\"`) is used as a record key.", "Write the key as a basic string, `\"…\"`."},
 	CodeMissingColon:            {CategorySyntax, "A record key is not followed by `:`.", "Add `:` between the key and its value."},
-	CodeDuplicateKey:            {CategorySyntax, "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16).", "Remove or rename one of the two."},
+	CodeDuplicateKey:            {CategorySyntax, "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).", "Remove or rename one of the two."},
 	CodeEmptyPayload:            {CategorySyntax, "A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.", "Remove the empty parentheses after the tag."},
-	CodeInvalidNumber:           {CategorySyntax, "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).", "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits."},
+	CodeInvalidNumber:           {CategorySyntax, "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).", "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits."},
 	CodeUnterminatedString:      {CategorySyntax, "A string has no closing `\"` (in haus or JSON).", "Add the closing quote. A quote inside the string is written `\\\"`."},
 	CodeStringLineBreak:         {CategorySyntax, "A raw line break inside a `\"…\"` string.", "Write the line break as `\\n`, or use a `\"\"\"` block string."},
 	CodeControlCharacter:        {CategorySyntax, "A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `\"…\"` strings. Also a raw control character in a JSON string: C0 in any JSON, DEL and C1 in self-describing JSON (§16).", "Write the character as an escape, `\\u{…}`."},
@@ -404,7 +407,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeStringTooLong:           {CategoryLimits, "A string or byte string has more characters than the limit (default 16 Mi).", "Split the string, or raise the string length limit."},
 	CodeKeyTooLong:              {CategoryLimits, "A record key has more characters than the string limit (default 16 Mi).", "Use a shorter key, or raise the string length limit."},
 	CodeTagTooLong:              {CategoryLimits, "A tag has more characters than the string limit (default 16 Mi).", "Use a shorter tag, or raise the string length limit."},
-	CodeValueTooLong:            {CategoryLimits, "One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).", "Send smaller values, or raise the value length limit."},
+	CodeValueTooLong:            {CategoryLimits, "One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).", "Send smaller values, or raise the value length limit."},
 	CodeUnsupportedDepth:        {CategoryLimits, "The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input.", "Configure a depth limit within the binding's documented maximum."},
 	CodeNotOneValue:             {CategoryStreams, "One value was expected (a single document, a type that isn't a `Stream`), and the input holds none or several.", "Give exactly one value, or read the input as a stream."},
 	CodeStreamTruncated:         {CategoryStreams, "In strict mode, a stream ended without a comma (or, in JSON Lines, a line feed) after its last value, so the last value may be cut off (§6).", "End every value with a comma, or check that the stream wasn't cut off."},
@@ -460,7 +463,8 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeWrongPayload:            {CategoryDecoding, "A listed tag with another payload than its case says: arguments for a tag without payload, the wrong number of arguments, a positional payload where a record is expected, such as `Circle(1.5)` for the case `Circle { r: Float64 }` (§15).", "Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which."},
 	CodeInvalidTime:             {CategoryDecoding, "A std/time value whose text the std/time profile rejects: a day that doesn't exist, a missing offset, a lowercase `t` (spec/std/time.md).", "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type."},
 	CodeInvalidSecret:           {CategoryDecoding, "A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).", "Write a value of the secret's type; the value isn't shown, so check it where it comes from."},
-	CodeCannotEncode:            {CategoryDecoding, "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.", "Pass a value of the host type the binding documents for the type."},
+	CodeCodecRejected:           {CategoryDecoding, "A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.", "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which."},
+	CodeCannotEncode:            {CategoryDecoding, "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.", "Pass a value of the host type the binding documents for the type."},
 	CodeCyclicValue:             {CategoryDecoding, "Encoding: a value contains itself, so it has no finite text.", "Break the cycle before encoding."},
 	CodeStepBudget:              {CategoryDecoding, "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).", "Simplify the schema, or raise the step limit if the work is expected."},
 	CodeTooManyNodes:            {CategoryDecoding, "A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.", "Build a smaller value, or raise the limit."},

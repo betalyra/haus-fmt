@@ -24,7 +24,7 @@ public interface Codec<T> {
 
   /**
    * Turns a value the type's schema decoded into the host value, or rejects it by throwing: a
-   * {@link HausException} keeps its code, any other exception is {@code type-mismatch}.
+   * {@link HausException} keeps its code, any other exception is {@code codec-rejected}.
    */
   T decode(Value v);
 

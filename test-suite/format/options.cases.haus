@@ -10,3 +10,13 @@
 // ── options not given: the defaults (indent 2, width 80) ──
 { input: "{ a: Point(1, 2) }", result: Ok("{\n  a: Point(1, 2),\n}\n") },
 
+// ── 0 means 0, not the default ──
+{ input: "{ a: { b: [1] } }", indent: 0, result: Ok("{\na: {\nb: [\n1,\n],\n},\n}\n") },
+{ input: "Point(1, 2)", width: 0, result: Ok("Point(\n  1,\n  2,\n)\n") },
+{ input: "Point(1, 2)", indent: 0, width: 0, result: Ok("Point(\n1,\n2,\n)\n") },
+{ input: "{ a: Point(1, 2) }", width: 0, result: Ok("{\n  a: Point(\n    1,\n    2,\n  ),\n}\n") },
+
+// ── a negative option is rejected, not clamped or read as the default ──
+{ input: "{ a: Point(1, 2) }", width: -1, result: Rejected },
+{ input: "{ a: Point(1, 2) }", indent: -1, result: Rejected },
+{ input: "{ a: Point(1, 2) }", indent: -2, width: 40, result: Rejected },

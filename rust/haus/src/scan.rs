@@ -31,6 +31,38 @@ pub(crate) fn is_bidi(c: char) -> bool {
     BIDI_EMBEDDINGS.contains(&c) || BIDI_ISOLATES.contains(&c)
 }
 
+/// The most characters a message shows of a text from the input (spec §9).
+const SHOWN: usize = 40;
+
+/// Text from the input, as a message shows it (spec §9): control, bidi and
+/// line-separator characters as `\u{…}` (uppercase hex, as the canonical form
+/// writes them), and at most 40 characters as shown, after escaping. A longer
+/// text is cut to whole characters (never inside an escape) within 39 and
+/// marked with `…`, which is within the 40.
+pub(crate) fn shown(text: &str) -> String {
+    let piece = |c: char| match is_control(c) || is_bidi(c) || LINE_SEPARATORS.contains(&c) {
+        true => format!("\\u{{{:X}}}", u32::from(c)),
+        false => c.to_string(),
+    };
+    let width = |c: char| match is_control(c) || is_bidi(c) || LINE_SEPARATORS.contains(&c) {
+        true => format!("{:X}", u32::from(c)).len() + 4,
+        false => 1,
+    };
+    if text.chars().map(width).sum::<usize>() <= SHOWN {
+        return text.chars().map(piece).collect();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        used += width(c);
+        if used > SHOWN - 1 {
+            break;
+        }
+        out.push_str(&piece(c));
+    }
+    out + "…"
+}
+
 /// A character that ends a run of plain string text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Special {
@@ -236,7 +268,7 @@ pub(crate) fn plain_decimal(b: &[u8]) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Special, ident_end, is_bidi, is_control, next_special, plain_decimal, skip_plain_ascii};
+    use super::{Special, ident_end, is_bidi, is_control, next_special, plain_decimal, shown, skip_plain_ascii};
 
     /// A fixed sequence of numbers below `n` (xorshift).
     fn numbers() -> impl FnMut(usize) -> usize {
@@ -351,5 +383,20 @@ mod tests {
         ] {
             assert_eq!(plain_decimal(text.as_bytes()), len, "{text}");
         }
+    }
+
+    /// Text in messages (spec §9): escaped first, then at most 40 characters
+    /// as shown, cut between whole characters, never inside an escape.
+    #[test]
+    fn shown_text_is_escaped_then_cut() {
+        assert_eq!(shown("a\u{202E}b\u{1}\u{2028}é"), "a\\u{202E}b\\u{1}\\u{2028}é");
+        assert_eq!(shown(&"x".repeat(40)), "x".repeat(40));
+        assert_eq!(shown(&"x".repeat(41)), "x".repeat(39) + "…");
+        // 36 characters, then an escape of 8 that would end past 39: cut before it.
+        assert_eq!(shown(&("y".repeat(36) + "\u{202E}z")), "y".repeat(36) + "…");
+        // Escapes of 5 characters: 8 are 40 as shown, 9 are cut to 7 within 39.
+        assert_eq!(shown(&"\u{1}".repeat(8)), "\\u{1}".repeat(8));
+        assert_eq!(shown(&"\u{1}".repeat(9)), "\\u{1}".repeat(7) + "…");
+        assert_eq!(shown(&"😀".repeat(41)), "😀".repeat(39) + "…");
     }
 }

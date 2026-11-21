@@ -177,6 +177,19 @@ fn imports_name_only_major_versions() {
 }
 
 #[test]
+fn a_file_path_has_no_tilde() {
+    // Grammar `path`: `./a~b` ends before the `~`, where `(` is expected.
+    for module in ["./a~b", "../x~y"] {
+        let e = Schema::parse(&format!("import {module} (A)\ntype T = A")).expect_err(module);
+        assert_eq!(e.code(), ErrorCode::SchemaSyntax, "{module}: {e}");
+        assert!(e.to_string().starts_with(&format!("1:{}:", module.find('~').unwrap() + 8)), "{module}: {e}");
+    }
+    // A package's version is read to its end: `1~x` is not a major version.
+    let e = Schema::parse("import @a/b@1~x (A)\ntype T = A").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ImportVersion, "{e}");
+}
+
+#[test]
 fn schema_files_and_package_json_have_a_size_limit() {
     let big = format!("type Money = Int\n//{}", "x".repeat(1024 * 1024));
     let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", &big)]);
@@ -235,6 +248,6 @@ fn messages_escape_and_cut_text_from_files() {
         ("schema.haus", MONEY),
     ]);
     let message = app.rejected(ErrorCode::PackageManifest);
-    assert!(message.contains("\"@acme/\\u{202e}xxxx") && message.contains("x…\""), "{message}");
+    assert!(message.contains("\"@acme/\\u{202E}xxxx") && message.contains("x…\""), "{message}");
     assert!(!message.contains('\u{202e}') && !message.contains(&"x".repeat(40)), "{message}");
 }

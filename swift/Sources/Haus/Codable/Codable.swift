@@ -29,12 +29,13 @@ extension SchemaType {
         try decodeTyped(type, decode(value, limits: limits), prefix: [])
     }
 
-    /// Reads haus text holding one value and decodes it as a `T`. See
+    /// Reads haus text holding one value and decodes it as a `T`: none, or
+    /// two or more, is `not-one-value` at the path `$`. See
     /// ``decode(_:from:limits:)``.
     public func decode<T: Decodable>(_ type: T.Type, fromText text: String, limits: Limits = Limits())
         throws(HausError) -> T
     {
-        try decode(type, from: parse(text, limits: limits), limits: limits)
+        try decode(type, from: one(parseAll(text, limits: limits)), limits: limits)
     }
 
     /// Reads schema-based JSON (spec §16.3) and decodes it as a `T`.
@@ -122,7 +123,7 @@ func catching<T>(_ body: () throws -> T) throws(HausError) -> T {
 /// }
 /// ```
 ///
-/// A rejection is `type-mismatch` at the value's place, with the message
+/// A rejection is `codec-rejected` at the value's place, with the message
 /// `<id> rejects the value: <the error>`. Decoding runs codecs from the
 /// inside out: a part's codec before the codec of the value that holds it.
 public protocol HausCodec: Codable {

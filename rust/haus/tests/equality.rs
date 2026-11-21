@@ -17,22 +17,22 @@ fn equality_and_order() {
             let (Some(a), Some(b), Some(Value::Variant { tag: equal, .. }), Some(Value::Number(order))) =
                 (c.get("a"), c.get("b"), c.get("equal"), c.get("order"))
             else {
-                panic!("not a case: {}", canonical(c))
+                panic!("not a case: {}", canonical(c).unwrap())
             };
             let equal = equal == "True";
             let order = match order.as_str() {
                 "-1" => Ordering::Less,
                 "0" => Ordering::Equal,
                 "1" => Ordering::Greater,
-                _ => panic!("not a case: {}", canonical(c)),
+                _ => panic!("not a case: {}", canonical(c).unwrap()),
             };
-            let got = (equals(a, b), equals(b, a), compare(a, b), compare(b, a));
+            let got = (equals(a, b), equals(b, a), compare(a, b).unwrap(), compare(b, a).unwrap());
             let want = (equal, equal, order, order.reverse());
             (got != want).then(|| {
                 format!(
                     "a {} b {}: (equals(a, b), equals(b, a), compare(a, b), compare(b, a)) = {got:?}, expected {want:?}",
-                    canonical(a),
-                    canonical(b)
+                    canonical(a).unwrap(),
+                    canonical(b).unwrap()
                 )
             })
         })

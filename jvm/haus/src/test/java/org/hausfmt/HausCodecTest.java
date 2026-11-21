@@ -192,6 +192,36 @@ class HausCodecTest {
     assertEquals("{ total: Money(44.40, \"EUR\") }\n", c.encode(p, FormatOptions.COMPACT));
     HausException e = assertThrows(HausException.class, () -> c.decode("{ total: Money(44.405, \"EUR\") }"));
     assertEquals("$.total", e.path());
+    // A codec's rejection that isn't a HausException is codec-rejected (spec §13.4).
+    assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
+  }
+
+  record Zone(java.time.ZoneId zone) {}
+
+  @Test
+  void hostTypeThatCantHoldAValueIsCodecRejected() {
+    Schema s = Schema.parse("import std/time (TimeZone)\ntype Zone = { zone: TimeZone }");
+    HausCodec<Zone> c = s.codec("Zone", Zone.class);
+    assertEquals(new Zone(java.time.ZoneId.of("Europe/Lisbon")), c.decode("{ zone: TimeZone(\"Europe/Lisbon\") }"));
+    HausException e = assertThrows(HausException.class, () -> c.decode("{ zone: TimeZone(\"Europe/Atlantis\") }"));
+    assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
+  }
+
+  record Point(long x, long y) {}
+
+  @Test
+  void typedSingleDocumentNotOneValueAtTheRoot() {
+    Schema s = Schema.parse("type Point = { x: Int32, y: Int32 }");
+    HausCodec<Point> c = s.codec("Point", Point.class);
+    for (String text : new String[] {"", "{ x: 1, y: 2 }, { x: 1, y: 2 }"}) {
+      HausException e = assertThrows(HausException.class, () -> c.decode(text));
+      assertEquals(ErrorCode.NOT_ONE_VALUE, e.code(), e.getMessage());
+      assertEquals("$", e.path(), e.getMessage());
+    }
+    HausException e = assertThrows(HausException.class, () -> s.type("Point").decodeAll(List.of()));
+    assertEquals("$", e.path(), e.getMessage());
+    // Untyped text has no path.
+    assertEquals(null, assertThrows(HausException.class, () -> Haus.parse("")).path());
   }
 
   record Times(Instant at) {}

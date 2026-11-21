@@ -11,7 +11,6 @@ errors never show its value. The host types are described in `haus.schema`.
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import struct
@@ -35,9 +34,9 @@ from ._json import (
     self_describing_arguments,
     to_base64,
 )
-from ._number import INTEGER, int_text, normalize_number, number_limit_issue, to_int
+from ._number import INTEGER, UNLIMITED, int_text, normalize_number, number_limit_issue, to_int
 from ._parser import Limits, make_room
-from ._scan import TAG
+from ._scan import TAG, quote_for_message
 from ._schema_file import (
     ArrayType,
     BuiltinType,
@@ -105,7 +104,8 @@ class Codec(Protocol):
     """A host type chosen by the application for a named type without arguments (spec §13.4).
 
     `decode` runs after the type's own decoding, on its default host value, and may reject
-    more values (raise `ValueError`); `encode` gives back a default host value.
+    more values (raise `ValueError`: a `HausDecodeError` with the code `codec-rejected`);
+    `encode` gives back a default host value.
     """
 
     def decode(self, value: object, /) -> object: ...
@@ -222,7 +222,9 @@ def _path_key(k: object) -> PathKey:
 
 
 def _short(text: str, n: int = 30) -> str:
-    return text if len(text) <= n else text[:n] + "…"
+    """Text as a message shows it (spec §9.2): control and bidi characters escaped, then cut to `n`
+    characters and `…` (never inside an escape)."""
+    return quote_for_message(text, n + 1)
 
 
 def _describe(v: Value) -> str:
@@ -230,7 +232,7 @@ def _describe(v: Value) -> str:
         case Number(text):
             return f"number {_short(text)}"
         case String(s):
-            return f"string {json.dumps(_short(s), ensure_ascii=False)}"
+            return f'string "{_short(s)}"'
         case Bytes(data):
             return f"bytes ({len(data)})"
         case Array():
@@ -253,7 +255,7 @@ def _describe_py(x: object) -> str:
         case float():
             return float.__repr__(x)
         case str():
-            return json.dumps(_short(x), ensure_ascii=False)
+            return f'"{_short(x)}"'
         case _:
             return f"a {type(x).__name__}"
 
@@ -332,9 +334,11 @@ def _checked_bytes(b: object, at: _At) -> bytes:
     return bytes(b)
 
 
-def _checked_number(text: object, at: _At, what: str) -> str:
-    if not isinstance(text, str) or (normalized := normalize_number(text, at.ctx.limits)) is None:
+def _checked_number(text: object, at: _At, what: str, code: ErrorCode = "cannot-encode") -> str:
+    if not isinstance(text, str):
         _invalid(what, text, at)
+    if (normalized := normalize_number(text, UNLIMITED)) is None:
+        _invalid(what, text, at, code)
     if (issue := number_limit_issue(normalized, at.ctx.limits)) is not None:
         at.fail(issue[1], code=issue[0])
     return normalized
@@ -371,7 +375,8 @@ def checked_value(raw: object, at: _At) -> Value:
     at.step()
     match raw:
         case Number(text):
-            normalized = _checked_number(text, at, "a number literal")
+            # A `Number` whose text isn't a literal (spec §11, values built in code).
+            normalized = _checked_number(text, at, "a number literal", "invalid-number")
             return raw if normalized == text else Number(normalized)
         case String(s):
             _checked_string(s, at)
@@ -1543,7 +1548,7 @@ class _Coded(_Node):
             return self.codec.decode(x)
         except (ValueError, TypeError, OverflowError) as e:
             reason = _short(str(e), 100)
-        at.fail(f"the codec for {self.id} rejects it: {reason}")
+        at.fail(f"the codec for {self.id} rejects it: {reason}", code="codec-rejected")
 
     def encoded(self, x: object, at: _At) -> object:
         at.step()

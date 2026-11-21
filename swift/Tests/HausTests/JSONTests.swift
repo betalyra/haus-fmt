@@ -258,12 +258,12 @@ struct JSONTests {
         }
     }
 
-    @Test func jsonLinesBoundLines() {
+    /// JSON Lines has no limit on a line's length: `maxValueLength` bounds
+    /// haus streams only.
+    @Test func jsonLinesHaveNoLineLimit() throws {
         var reader = JSONLinesReader(.import, limits: Limits(maxValueLength: 3))
         reader.push("[1]\n[1, 2]\n")
-        #expect((try? reader.next()) == [1])
-        let error = #expect(throws: HausError.self) { try reader.next() }
-        #expect(error?.code == .valueTooLong)
-        #expect(error?.position == SourcePosition(line: 2, column: 1))
+        #expect(try reader.next() == [1])
+        #expect(try reader.next() == [1, 2])
     }
 }

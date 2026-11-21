@@ -107,7 +107,8 @@ is `not-one-value`.
 a type (spec §15, "Streams"). `Ok { type, text, output }`: a `Stream a` type
 decodes each top-level value of `text` as an `a`, and encoding the results
 gives the array `output`; a type that isn't a stream decodes the one value
-of `text`, and encoding it gives `output`. Values are compared as values
+of `text`, and encoding it gives `output`. For such a type, a `text` with no
+value or with several is `not-one-value`, at `$`. Values are compared as values
 (§2). `Err { type, text, code, path }`: decoding fails with the code `code`
 at the place `path` (§15), which starts with the item's index in a stream
 (`$[1].level`). Runners use their binding's stream decoding (not a loop of
@@ -121,7 +122,8 @@ case: `text`, with one mistake at one character, and the `code`, `line` and
 `parseAll`). Lines and columns are 1-based; columns count code points (an
 emoji is one column, and so is each combining mark), a byte order mark at the
 start is column 1, and only a line feed (or CR LF) ends a line: U+2028 and
-U+2029 don't.
+U+2029 don't. An error inside a block string is at the offending character,
+not at the opening `"""` (spec §8).
 
 ## Equality and order
 

@@ -346,8 +346,15 @@ struct SchemaParser {
             guard let c = byte(pos), isLower(c) || c == ASCII.underscore else { throw expected(noModule) }
             pos = wordEnd(pos)
         } else if let c = byte(pos), c == UInt8(ascii: "@") || c == ASCII.dot {
+            // A package's version may hold `~` (`@a/b@1~x` is `import-version`); a
+            // file path can't (grammar `path`): `./a~b` ends before it.
+            let package = c == UInt8(ascii: "@")
             pos += 1
-            while let c = byte(pos), classOf(c).contains(.ident) || Self.moduleBytes.contains(c) { pos += 1 }
+            while let c = byte(pos), classOf(c).contains(.ident) || Self.moduleBytes.contains(c),
+                package || c != UInt8(ascii: "~")
+            {
+                pos += 1
+            }
             if pos == start + 1 {
                 pos = start
                 throw expected(noModule)

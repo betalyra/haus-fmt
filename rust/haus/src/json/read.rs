@@ -188,7 +188,12 @@ impl Reader<'_> {
         }
         let name = self.string()?;
         if !seen.insert(name.clone()) {
-            return Err(SyntaxError::at(self.src, at, Code::DuplicateKey, format!("duplicate member name {name:?}")));
+            return Err(SyntaxError::at(
+                self.src,
+                at,
+                Code::DuplicateKey,
+                format!("duplicate member name \"{}\"", crate::scan::shown(&name)),
+            ));
         }
         self.whitespace();
         if !self.eat(b':') {
@@ -406,7 +411,7 @@ impl Reader<'_> {
         match self.src[self.pos..].chars().next() {
             None => "end of input".into(),
             Some('\n') => "line break".into(),
-            Some(c) => format!("'{c}'"),
+            Some(c) => format!("'{}'", crate::scan::shown(c.encode_utf8(&mut [0; 4]))),
         }
     }
 

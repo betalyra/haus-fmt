@@ -241,7 +241,7 @@ def members (L : Limits) (strict : Bool) : Nat → Nat → Text → List (String
     match t with
     | '"' :: r => do
       let (k, r) ← strChars L strict (r.length + 1) r [] 0
-      if keys.contains k then .error ⟨.duplicateKey, s!"duplicate member name {String.ofList (Canonical.string k)}"⟩ else
+      if keys.contains k then .error ⟨.duplicateKey, s!"duplicate member name \"{msgText k}\""⟩ else
       match skipWs r with
       | ':' :: r =>
         let (x, r) ← value L strict fuel depth (skipWs r)

@@ -295,7 +295,7 @@ describe("files and limits (spec §13.3)", () => {
     // A bidirectional override, written as an escape in the manifest (raw ones are a syntax error).
     const root = pkg({ [`${PKG}/package.haus`]: `{ name: "@acme/EVIL\\u{202e}${"x".repeat(60)}", version: "1.2.0" }` })
     const message = rejected(root, "package-manifest")
-    expect(message).toContain("\\u{202e}")
+    expect(message).toContain("\\u{202E}")
     expect(message).not.toContain("‮")
     expect(message).toContain("…")
     expect(message).not.toContain("x".repeat(41))

@@ -106,20 +106,7 @@ func cut(_ s: Substring, at separator: Character) -> (Substring, Substring?) {
 /// characters escaped as `\u{…}`, at most 40 characters, cut with an
 /// ellipsis. Unlike ``quoteForMessage(_:)``, it adds no quotes.
 func quoteFromFile(_ text: String) -> String {
-    let maxCharacters = 40
-    // One character more than fits is enough to know whether to cut.
-    let pieces = text.unicodeScalars.prefix(maxCharacters + 1).map { c in
-        isControlOrBidi(c.value) ? unicodeEscape(c.value) : String(c)
-    }
-    let lengths = pieces.map(\.unicodeScalars.count)
-    if lengths.reduce(0, +) <= maxCharacters { return pieces.joined() }
-    // Whole pieces in 39 characters, and the ellipsis.
-    var used = 0
-    let kept = zip(pieces, lengths).prefix { _, n in
-        used += n
-        return used < maxCharacters
-    }
-    return kept.map(\.0).joined() + "…"
+    capped(text) { c in isControlOrBidi(c.value) ? unicodeEscape(c.value) : String(c) }
 }
 
 /// A path for a message, with its control and bidirectional characters

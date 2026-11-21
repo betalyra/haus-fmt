@@ -216,7 +216,7 @@ struct CodableTests {
         let rejected = #expect(throws: HausError.self) {
             try bill.decode(Bill.self, fromText: "{ total: Money(44.405, EUR) }")
         }
-        #expect(rejected?.code == .typeMismatch)
+        #expect(rejected?.code == .codecRejected)
         #expect(rejected?.path == "$.total")
         #expect(rejected?.message == "Money rejects the value: not two decimal places")
         let elsewhere = #expect(throws: HausError.self) {

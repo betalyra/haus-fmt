@@ -24,7 +24,7 @@ fn value(text: &str) -> Value {
 /// The decoded value, canonical, or the error.
 fn decode(schema: &Schema, ty: &str, text: &str) -> String {
     match schema.decode(ty, &value(text)) {
-        Ok(v) => canonical(&v),
+        Ok(v) => canonical(&v).unwrap(),
         Err(e) => format!("error: {e}"),
     }
 }
@@ -433,7 +433,7 @@ fn streams_decode_each_value() {
         r#"expected Int, found the string "3" at $[2].n"#
     );
     let out = schema.decode_stream("Root", &values[..2]).unwrap();
-    assert_eq!(out.iter().map(canonical).collect::<Vec<_>>(), ["{n:1}", "{n:2}"]);
+    assert_eq!(out.iter().map(|v| canonical(v).unwrap()).collect::<Vec<_>>(), ["{n:1}", "{n:2}"]);
 }
 
 #[test]

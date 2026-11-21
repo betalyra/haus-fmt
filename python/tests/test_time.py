@@ -49,7 +49,7 @@ VALID: list[tuple[str, str]] = [
     ("ZonedDateTime", "2026-11-09T14:30:00Z[+01:00]"),
     ("ZonedDateTime", "2026-11-09T14:30:00-05:00[America/Port-au-Prince]"),
     ("TimeZone", "UTC"),
-    ("TimeZone", "Z"),
+    ("TimeZone", "Europe/Z"),
     ("TimeZone", "Etc/GMT+1"),
     ("TimeZone", "Etc/GMT+5"),
     ("TimeZone", "-03:30"),
@@ -85,6 +85,10 @@ VALID: list[tuple[str, str]] = [
 ]
 
 INVALID: list[tuple[str, str, str]] = [
+    # Z is the offset letter, not a zone name
+    ("TimeZone", "Z", "offset letter"),
+    ("ZonedDateTime", "2026-11-09T14:30:00Z[Z]", "offset letter"),
+    ("ZonedDateTime", "2026-11-09T14:30:00+00:00[Z]", "offset letter"),
     # Year
     ("Date", "+12026-11-09", "write it like"),
     ("Date", "-0001-01-01", "write it like"),

@@ -756,7 +756,7 @@ fn canonical_and_hash_each_print_each_value_as_it_comes() {
     assert_eq!(live.line(), "B(2.50)");
     assert_eq!(live.close(), (vec![], 0));
 
-    let hash = |text: &str| haus::hash(&haus::parse(text).unwrap()[0]);
+    let hash = |text: &str| haus::hash(&haus::parse(text).unwrap()[0]).unwrap();
     let mut live = Live::start(&fixtures(), &["hash", "--each", "-"]);
     live.send("A { x: 1 },\n");
     assert_eq!(live.line(), hash("A { x: 1 }"));

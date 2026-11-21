@@ -5,8 +5,8 @@
 
 /// Reads JSON Lines (spec §16, "Streams") from chunks of UTF-8, one line at
 /// a time: self-describing JSON (an envelope per line, §16.2) or the JSON
-/// import (§16.1). It holds at most one line, of at most
-/// ``Limits/maxValueLength`` characters (`value-too-long`).
+/// import (§16.1). It holds at most one line; JSON Lines has no limit on a
+/// line's length, only the limits of the value read from it.
 ///
 /// ```swift
 /// var reader = JSONLinesReader(.selfDescribing)
@@ -34,9 +34,6 @@ public struct JSONLinesReader: Sendable {
 
     private let convert: Convert
     private let limits: Limits
-    /// Whether ``Limits/maxValueLength`` bounds a line: not when the whole
-    /// text is held already.
-    private let bounded: Bool
     /// The error of the limits, or the first error read: sticky.
     private var failure: HausError?
     private var buffer: [UInt8] = []
@@ -51,12 +48,11 @@ public struct JSONLinesReader: Sendable {
 
     /// A reader of `form`, with these limits for each value.
     public init(_ form: Form, limits: Limits = Limits()) {
-        self.init(limits: limits, bounded: true, convert: Self.converter(form))
+        self.init(limits: limits, convert: Self.converter(form))
     }
 
-    init(limits: Limits, bounded: Bool, convert: @escaping Convert) {
+    init(limits: Limits, convert: @escaping Convert) {
         self.limits = limits
-        self.bounded = bounded
         self.convert = convert
         do {
             _ = try limits.checked()
@@ -108,20 +104,15 @@ public struct JSONLinesReader: Sendable {
         let lineFeed = buffer[scanned...].firstIndex(of: ASCII.lf)
         guard let end = lineFeed ?? (ended ? buffer.count : nil) else {
             scanned = buffer.count
-            try checkBuffered(buffer.count - start)
             return nil
         }
         guard end > start || lineFeed != nil else { return nil }  // the end, after the last line feed
-        try checkBuffered(end - start + (lineFeed == nil ? 0 : 1))
         let n = line
         var text = buffer[start..<end]
         if text.last == ASCII.cr { text = text.dropLast() }
         start = lineFeed.map { $0 + 1 } ?? end
         scanned = start
         line += 1
-        if bounded && text.count > limits.maxValueLength && codePoints(in: text) > limits.maxValueLength {
-            throw lineTooLong(n)
-        }
         guard !text.isEmpty else {
             throw HausError(
                 .jsonSyntax, "an empty line in JSON Lines", position: SourcePosition(line: n + 1, column: 1),
@@ -132,18 +123,6 @@ public struct JSONLinesReader: Sendable {
         } catch {
             throw error.inLine(n)
         }
-    }
-
-    /// Fails if a line of `count` bytes so far is surely over the limit:
-    /// four bytes per character, and a line feed.
-    private func checkBuffered(_ count: Int) throws(HausError) {
-        if bounded && count > 4 * limits.maxValueLength + 1 { throw lineTooLong(line) }
-    }
-
-    private func lineTooLong(_ n: Int) -> HausError {
-        HausError(
-            .valueTooLong, "a line longer than the limit of \(limits.maxValueLength) characters",
-            position: SourcePosition(line: n + 1, column: 1))
     }
 
     /// Every value of a whole text, or the first error.
@@ -181,7 +160,7 @@ public func fromHausJSONLines(_ text: String, limits: Limits = Limits()) throws(
 public func fromHausJSONLines(bytes: some Collection<UInt8>, limits: Limits = Limits()) throws(HausError)
     -> [HausValue]
 {
-    var reader = JSONLinesReader(limits: limits, bounded: false, convert: JSONLinesReader.converter(.selfDescribing))
+    var reader = JSONLinesReader(limits: limits, convert: JSONLinesReader.converter(.selfDescribing))
     return try reader.readAll(bytes)
 }
 
@@ -194,7 +173,7 @@ public func importJSONLines(_ text: String, limits: Limits = Limits()) throws(Ha
 public func importJSONLines(bytes: some Collection<UInt8>, limits: Limits = Limits()) throws(HausError)
     -> [HausValue]
 {
-    var reader = JSONLinesReader(limits: limits, bounded: false, convert: JSONLinesReader.converter(.import))
+    var reader = JSONLinesReader(limits: limits, convert: JSONLinesReader.converter(.import))
     return try reader.readAll(bytes)
 }
 

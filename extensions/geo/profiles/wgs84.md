@@ -47,5 +47,5 @@ A codec writes back exactly the floats it decoded, in the spelling of spec
 §15 ("Floats"), so a value it accepted encodes to the same value.
 
 A value that breaks the rule is a decoding error with the code
-`type-mismatch`, at the value's place (spec §15). A codec checks the rule when
+`codec-rejected`, at the value's place (spec §13.4, §15). A codec checks the rule when
 encoding too: a host value that breaks it is not written (`cannot-encode`).

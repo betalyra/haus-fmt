@@ -11,8 +11,8 @@
  * the error with its path (errors.ts gives Effect's issues their codes).
  */
 import {
-  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
-  payloadHint, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
+  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as coreRec, specialFloat, str as coreStr, toFloat,
+  payloadHint, quoteText, unpairedSurrogate, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import { Array as Arr, BigDecimal, DateTime, Duration, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
@@ -81,6 +81,20 @@ export class ConversionError {
   constructor(readonly message: string, readonly code: ErrorCode, readonly path: ReadonlyArray<string | number> = [], readonly hint?: string) {}
 }
 
+/**
+ * A string or key of the host value, as it is written: an unpaired surrogate,
+ * which a JavaScript string can hold, has no UTF-8 form (spec §4).
+ */
+const writable = (s: string, what: "string" | "key"): string => {
+  if (unpairedSurrogate(s) >= 0) throw new ConversionError(`a ${what} with an unpaired surrogate, which has no UTF-8 form`, "cannot-encode")
+  return s
+}
+const vStr = (s: string): Value => coreStr(writable(s, "string"))
+const vRec = (fields: ReadonlyMap<string, Value>): Value => {
+  for (const k of fields.keys()) writable(k, "key")
+  return coreRec(fields)
+}
+
 /** Convert the value at `key`: an error inside names its place. */
 const at = <A>(key: string | number, f: () => A): A => {
   try {
@@ -95,9 +109,9 @@ const at = <A>(key: string | number, f: () => A): A => {
 const describe = (v: Value): string => {
   switch (v.kind) {
     case "string":
-      return v.value.length > 40 ? `a string ${JSON.stringify(v.value.slice(0, 40))}…` : `a string ${JSON.stringify(v.value)}`
+      return `a string "${quoteText(v.value)}"`
     case "number":
-      return `the number ${v.text.length > 40 ? v.text.slice(0, 40) + "…" : v.text}`
+      return `the number ${quoteText(v.text)}`
     case "bytes":
       return "a byte string"
     case "array":
@@ -105,7 +119,7 @@ const describe = (v: Value): string => {
     case "record":
       return "a record"
     case "variant":
-      return v.args.length === 0 ? `the tag ${v.tag}` : `${v.tag} with ${v.args.length === 1 && v.args[0]!.kind === "record" ? "a record" : `${v.args.length} argument(s)`}`
+      return v.args.length === 0 ? `the tag ${quoteText(v.tag)}` : `${quoteText(v.tag)} with ${v.args.length === 1 && v.args[0]!.kind === "record" ? "a record" : `${v.args.length} argument(s)`}`
   }
 }
 
@@ -947,7 +961,7 @@ function compileObject(ast: SchemaAST.Objects): Converter {
       }
       const prop = props.get(key)
       if (prop !== undefined) setOwn(out, key, at(key, () => prop.convert(field)))
-      else if (closed) throw new ConversionError(`unexpected field ${JSON.stringify(key)} in a closed record`, "unknown-field", [key])
+      else if (closed) throw new ConversionError(`unexpected field "${quoteText(key)}" in a closed record`, "unknown-field", [key])
       else setOwn(out, key, at(key, () => rest(field))) // excess property: ignored by the decoder (records are open), or a Map entry
     }
     return out

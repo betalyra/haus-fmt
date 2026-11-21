@@ -43,7 +43,7 @@ class StdTimeTest {
     {"Duration", "P104249991374DT0.999999999S"}, {"Duration", "P104249991374DT27391S"},
     {"YearMonth", "2026-11"}, {"YearMonth", "0000-01"},
     {"TimeZone", "Europe/Lisbon"}, {"TimeZone", "UTC"}, {"TimeZone", "Etc/GMT+1"}, {"TimeZone", "-03:30"},
-    {"TimeZone", "Z"}, {"TimeZone", "a/..."}, {"TimeZone", "x.y/_z"}, {"TimeZone", "a".repeat(255)},
+    {"TimeZone", "Europe/Z"}, {"TimeZone", "a/..."}, {"TimeZone", "x.y/_z"}, {"TimeZone", "a".repeat(255)},
   };
 
   private static final String[][] INVALID = {
@@ -131,6 +131,10 @@ class StdTimeTest {
     {"TimeZone", "Europe//Lisbon", "not an IANA zone name"},
     {"TimeZone", "Europe/./Lisbon", "not an IANA zone name"},
     {"TimeZone", "+24:00", "offset +24:00 is out of range"},
+    // Z is the offset letter, not a zone name.
+    {"TimeZone", "Z", "the offset letter"},
+    {"ZonedDateTime", "2027-03-29T10:00:00Z[Z]", "the offset letter"},
+    {"ZonedDateTime", "2027-03-29T10:00:00+00:00[Z]", "the offset letter"},
     // Only ASCII: a digit or letter of another script is not one of the profile.
     {"Date", "２026-11-09", "write it like"}, // a fullwidth 2
     {"Date", "2026-11-0٩", "write it like"}, // an Arabic-Indic 9

@@ -195,19 +195,18 @@ final class Quoting {
 
   /**
    * Quotes text for an error message: quotes and backslashes escaped, control, bidi and
-   * line-separator characters written as escapes, and long text cut to 40 characters (spec §9).
+   * line-separator characters written as escapes, and long text at most 40 characters as shown
+   * between the quotes, after escaping: cut to whole characters (never inside an escape) within 39
+   * and marked with {@code …} (spec §9).
    */
   static String forMessage(String s) {
     StringBuilder b = new StringBuilder("\"");
-    int chars = 0;
+    int shown = 0; // characters between the quotes so far, escapes as written
+    int cut = -1; // the length of b where the text is cut if it passes 40
     for (int i = 0; i < s.length(); ) {
-      if (chars == MESSAGE_CHARS) {
-        b.append('…');
-        break;
-      }
-      chars++;
       int cp = s.codePointAt(i);
       i += Character.charCount(cp);
+      int before = b.length();
       if (cp == '"' || cp == '\\') {
         b.append('\\').append((char) cp);
       } else if (Character.isSurrogate((char) cp) && cp <= 0xFFFF) {
@@ -216,6 +215,16 @@ final class Quoting {
         appendUnicodeEscape(b, cp);
       } else {
         b.appendCodePoint(cp);
+      }
+      int n = b.codePointCount(before, b.length());
+      if (cut < 0 && shown + n > MESSAGE_CHARS - 1) {
+        cut = before;
+      }
+      shown += n;
+      if (shown > MESSAGE_CHARS) {
+        b.setLength(cut);
+        b.append('…');
+        break;
       }
     }
     return b.append('"').toString();

@@ -108,5 +108,5 @@ func short(s string) string {
 }
 
 func rejected(msg string) error {
-	return &haus.Error{Code: haus.CodeTypeMismatch, Message: msg}
+	return &haus.Error{Code: haus.CodeCodecRejected, Message: msg}
 }

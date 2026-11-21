@@ -11,7 +11,7 @@
  *   closed < Debug | Info > → "Debug"                                 other variants → {"_tag": "Circle", "r": 1.5}, "value", "values"
  *   an unknown value → {"_tag": "Hexagon", "_args": [self-describing…]}
  */
-import { TAG } from "./chars.js"
+import { quoteText, TAG } from "./chars.js"
 import { HausDecodeError, HausEncodeError, type ErrorCode, type ErrorDetails } from "./errors.js"
 import {
   describeJson, hausJsonOf, importedValue, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, numberOfJson, Place, stringOfJson, tagLengthIssue, valueOfHausJson,
@@ -258,7 +258,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
         if (v.kind !== "number" || !SMALL_INTEGER.test(v.text)) return mismatch("a whole number", v, at, v.kind === "number" ? "not-an-integer" : "type-mismatch")
         return t.quoted ? v.text : new JsonNumber(v.text)
       case "float":
-        if (v.kind === "number") return isJsonNumber(v.text) ? new JsonNumber(v.text) : fail(`${v.text.slice(0, 30)} has no JSON form`, at, "no-json-form")
+        if (v.kind === "number") return isJsonNumber(v.text) ? new JsonNumber(v.text) : fail(`${quoteText(v.text)} has no JSON form`, at, "no-json-form")
         return (v.kind === "variant" && v.args.length === 0 ? SPECIAL_FLOATS.get(v.tag) : undefined) ?? mismatch("a number, NaN, Infinity or NegInfinity", v, at)
       case "decimal":
         return v.kind === "number" ? v.text : mismatch("a number", v, at)
@@ -299,7 +299,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
   const fields = (t: JsonRecordType, fs: ReadonlyMap<string, Value>, at: Place, depth: number): [string, Json][] =>
     [...fs].map(([k, x]) => {
       const type = t.fields.get(k)
-      if (type === undefined) return fail(`field '${k.slice(0, 30)}' is not in the record type`, at, "unknown-field")
+      if (type === undefined) return fail(`field '${quoteText(k)}' is not in the record type`, at, "unknown-field")
       return [text(k, at), write(type, x, at.child(k), depth + 1, 0)]
     })
 
@@ -311,18 +311,18 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
       const args = v.args.map((x, i) => hausJsonOf(x, l, at.child(i)))
       return jsonObject([["_tag", v.tag], ...(args.length > 0 ? [["_args", args] as const] : [])])
     }
-    if (isEnum(t)) return v.args.length === 0 ? v.tag : fail(`'${v.tag}' takes no payload`, at, "wrong-payload")
+    if (isEnum(t)) return v.args.length === 0 ? v.tag : fail(`'${quoteText(v.tag)}' takes no payload`, at, "wrong-payload")
     const tag = ["_tag", v.tag] as const
-    if (isUnitCase(c)) return v.args.length === 0 ? jsonObject([tag]) : fail(`'${v.tag}' takes no payload`, at, "wrong-payload")
+    if (isUnitCase(c)) return v.args.length === 0 ? jsonObject([tag]) : fail(`'${quoteText(v.tag)}' takes no payload`, at, "wrong-payload")
     if (c.kind === "record") {
       const [payload] = v.args
-      if (v.args.length !== 1 || payload!.kind !== "record") return fail(`'${v.tag}' takes a record payload`, at, "wrong-payload")
+      if (v.args.length !== 1 || payload!.kind !== "record") return fail(`'${quoteText(v.tag)}' takes a record payload`, at, "wrong-payload")
       const reserved = RESERVED_FIELDS.find((k) => c.record.fields.has(k) || payload!.fields.has(k))
-      if (reserved !== undefined) return fail(`'${v.tag}' has a field named ${reserved}: a record payload with one has no schema-based JSON form`, at, "no-json-form")
+      if (reserved !== undefined) return fail(`'${quoteText(v.tag)}' has a field named ${reserved}: a record payload with one has no schema-based JSON form`, at, "no-json-form")
       return jsonObject([tag, ...fields(c.record, payload!.fields, at, depth)])
     }
     const { items } = c as Extract<JsonCase, { kind: "positional" }>
-    if (v.args.length !== items.length) return fail(`'${v.tag}' takes ${items.length} argument(s), found ${v.args.length}`, at, "wrong-payload")
+    if (v.args.length !== items.length) return fail(`'${quoteText(v.tag)}' takes ${items.length} argument(s), found ${v.args.length}`, at, "wrong-payload")
     if (items.length === 1) return jsonObject([tag, ["value", write(items[0]!, v.args[0]!, at.child("value"), depth + 1, 0)]])
     const values = at.child("values")
     return jsonObject([tag, ["values", v.args.map((x, i) => write(items[i]!, x, values.child(i), depth + 2, 0))]])
@@ -364,7 +364,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
   /** Members of a tagged object other than `_tag` and `allowed`: an error, at the member. */
   const only = (j: JsonObject, allowed: readonly string[], tag: string, at: Place) => {
     for (const k of Object.keys(j)) {
-      if (k !== "_tag" && !allowed.includes(k)) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} for '${tag}'`, at.child(k), "unexpected-member")
+      if (k !== "_tag" && !allowed.includes(k)) fail(`unexpected member "${quoteText(k)}" for '${quoteText(tag)}'`, at.child(k), "unexpected-member")
     }
   }
   /** The `"_tag"` of a tagged object: a string that is a tag (spec §16.3), else `invalid-tag`; missing, `missing-member`. */
@@ -457,7 +457,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
       if (skip.includes(k)) continue
       const type = t.fields.get(k)
       if (type !== undefined) out.set(key(k, at.child(k)), read(type, o[k]!, at.child(k), depth + 1, 0))
-      else if (t.closed) fail(`unexpected member ${JSON.stringify(k.slice(0, 30))} (the record is closed)`, at.child(k), "unknown-field")
+      else if (t.closed) fail(`unexpected member "${quoteText(k)}" (the record is closed)`, at.child(k), "unknown-field")
     }
     return out
   }

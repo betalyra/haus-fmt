@@ -33,6 +33,16 @@ export const normalizeNumber = (text: string, limits: Limits = DEFAULT_LIMITS): 
   }
 }
 
+/** No limits: the canonical form has none (spec §12). */
+const UNLIMITED: Limits = { ...DEFAULT_LIMITS, maxNumberLength: Infinity, maxExponent: Infinity }
+
+/**
+ * The canonical form of a number built in code (spec §12): its normalized
+ * literal, whatever its length or exponent, or undefined when `text` is not
+ * exactly one number literal (`"01"`, `"NaN"`, `""`).
+ */
+export const canonicalNumber = (text: string): string | undefined => normalizeNumber(text, UNLIMITED)
+
 /**
  * Why the normalized number `text` is outside `limits` (spec §9.8), or
  * undefined: a literal longer than `maxNumberLength` (always decimal, so an

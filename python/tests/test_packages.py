@@ -486,7 +486,7 @@ def test_messages_escape_and_shorten_text_from_files(tmp_path: Path) -> None:
     assert '"@acme/' + "x" * 33 + '…"' in reason
     write(tmp_path / "money" / "package.haus", '{ name: "@acme/money", version: "1.0.0-\\u{202e}\\u{1b}" }')
     reason = failure("package-manifest", USE, FileResolver(tmp_path, [tmp_path / "money"]))
-    assert '"1.0.0-\\u{202e}\\u{1b}"' in reason
+    assert '"1.0.0-\\u{202E}\\u{1B}"' in reason
     # Tokens of a schema file, too.
     e = compile_error('type Root = Int\n"' + "x" * 100 + '"')
     assert "x" * 40 not in str(e) and "'" + "x" * 39 + "…'" in str(e)

@@ -25,7 +25,7 @@ fn one_line(s: &str) -> String {
 fn run<C: Codec>(v: &haus::Value) -> String {
     match haus::de::codec::<C>(v, haus::Decoder::default()) {
         Ok(x) => match C::encode(&x).encode() {
-            Ok(encoded) => format!("ok {}", haus::canonical(&encoded)),
+            Ok(encoded) => format!("ok {}", haus::canonical(&encoded).expect("a value read or written has a canonical form")),
             Err(e) => format!("crash encoding failed: {}", one_line(&e.to_string())),
         },
         Err(e) => format!("err {} {} {}", e.place(), e.code, one_line(&e.to_string())),

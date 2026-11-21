@@ -80,9 +80,17 @@ public final class Haus {
   }
 
   private static Value one(List<Value> values) {
+    return one(values, null);
+  }
+
+  /**
+   * The one value of a single document (spec §6), or {@code not-one-value}; {@code path} is the
+   * error's path: {@code $} when the value is read with a type, none for untyped text.
+   */
+  static Value one(List<Value> values, String path) {
     if (values.size() != 1) {
       throw new HausException(ErrorCode.NOT_ONE_VALUE, "expected exactly one value, found " + values.size(),
-          0, 0, null, "one value", values.size() + " values");
+          0, 0, path, "one value", values.size() + " values");
     }
     return values.get(0);
   }

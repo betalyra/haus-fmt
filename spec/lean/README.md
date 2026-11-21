@@ -8,7 +8,7 @@ and a reference parser that computes it.
 | [`Haus/Value.lean`](Haus/Value.lean) | The data model (spec §1) and equality (§2) |
 | [`Haus/Grammar.lean`](Haus/Grammar.lean) | [`grammar.ebnf`](../grammar.ebnf) as a relation: `File L t vs` says text `t` is a file with values `vs` within the limits `L` (§7). This is the specification. |
 | [`Haus/Parser.lean`](Haus/Parser.lean) | The reference parser: total functions that compute `File` |
-| [`Haus/Lexical.lean`](Haus/Lexical.lean) | Character classes, limits, number normalization |
+| [`Haus/Lexical.lean`](Haus/Lexical.lean) | Character classes, limits, number normalization, and text quoted in messages (spec §9.2: escaped, at most 40 characters) |
 | [`Haus/Sound/`](Haus/Sound) | Proofs that the parser only accepts what the grammar allows |
 | [`Haus/Complete/`](Haus/Complete) | Proofs that the parser accepts everything the grammar allows |
 | [`Haus/Correct.lean`](Haus/Correct.lean) | Both together, and unambiguity |
@@ -60,10 +60,10 @@ split at every position, and parses a case's `whole` text with `parse`
 (default limits). It decodes `typed.cases.haus` with `typed.schema.haus`
 (read by `SchemaFile.load`): a `Stream a` definition by
 `Schema.decodeStream`, which puts the item's index in the place, any other
-type's one value by `Schema.decode`. The model has no single-document reader
-(spec §6, `not-one-value`), so `document.cases.haus` isn't run, and neither
-are the typed cases whose text doesn't hold one value for a type that isn't a
-stream: the runner counts them as skipped. `--json-suite` also reads
+type's one value by `Schema.decode`; a text that doesn't hold one value for
+such a type is `not-one-value`, at `$`. It reads each text of
+`document.cases.haus` as a single document (`Parser.parseDocument`, spec
+§6). `--json-suite` also reads
 `lines.cases.haus` as JSON Lines (`JSON.readHausJsonLines`, places by
 `JSON.readHausJsonLinesAt`). `--positions` parses each text whole and
 compares the code, line and column (1-based, columns in characters).
@@ -96,8 +96,8 @@ value) and `--import-batch FILE` (any JSON text imported as a haus value).
 Each prints `ok …` or `err …`. `--profile-batch NAME FILE` does the same for
 an official profile's codec (`TYPE HEX`, a haus value of a type of the
 profile's package): `ok <canonical form>` when it is accepted, `err PLACE
-CODE REASON` when the schema rejects it and `err $ - REASON` when the
-profile does.
+CODE REASON` when the schema rejects it and `err $ codec-rejected REASON`
+when the profile does.
 
 Errors carry the code of spec §17 ([`Haus/ErrorCode.lean`](Haus/ErrorCode.lean)):
 the parser's (syntax and limits), the schema-file checker's, the schema

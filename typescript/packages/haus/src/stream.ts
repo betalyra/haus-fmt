@@ -1,4 +1,4 @@
-import { HausSyntaxError, locate, START, type Origin } from "./errors.js"
+import { checkWellFormed, HausSyntaxError, locate, START, type Origin } from "./errors.js"
 import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
@@ -95,6 +95,7 @@ export class ItemStreamReader<T> {
     }
     // Whatever is left has no top-level comma: zero or one value.
     const text = this.done.join("") + this.buf
+    checkWellFormed(text, this.origin)
     const rest = new Parser(text, this.origin, this.limits).parseSequence()
     if (rest.length > 0 && this.requireTerminator) {
       const p = locate(text, text.length, this.origin)
@@ -225,6 +226,7 @@ export class ItemStreamReader<T> {
   private cut(): T {
     const text = this.scanned(this.i + 1) // including the comma
     // With its comma, so an empty item fails as in the whole text: "found ','".
+    checkWellFormed(text, this.origin)
     const value = this.items.text(text, this.origin, this.limits)
     this.origin = locate(text, text.length, this.origin)
     this.buf = this.buf.slice(this.i + 1)
@@ -255,6 +257,7 @@ export class ItemStreamReader<T> {
   private failUnbalanced(): never {
     // Let the Parser produce the precise message.
     const text = this.scanned(this.i + 1)
+    checkWellFormed(text, this.origin)
     new Parser(text, this.origin, this.limits).parseSingle()
     const p = locate(text, text.length - 1, this.origin)
     throw new HausSyntaxError(`unexpected '${this.buf[this.i]}'`, p.offset, p.line, p.column, "unexpected-closer", { found: `'${this.buf[this.i]}'` })

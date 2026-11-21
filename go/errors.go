@@ -147,31 +147,53 @@ func newError(code ErrorCode, msg string) *Error {
 	return &Error{Code: code, Message: msg}
 }
 
-// quoteForMessage quotes text for an error message: control, bidi and
-// line-separator characters are escaped, and long text is cut to 40
-// characters (spec §9).
+// quoteForMessage quotes text for an error message (spec §9): control,
+// bidi and line-separator characters (and bytes that aren't UTF-8) are
+// escaped, quotes and backslashes too, and then the text as shown is at
+// most 40 characters. A longer one is cut to whole characters within 39
+// and marked with …, so a cut never falls inside an escape.
 func quoteForMessage(s string) string {
 	const maxChars = 40
-	var b strings.Builder
-	b.WriteByte('"')
-	n := 0
+	// The pieces as shown, one per character, until they pass the limit.
+	var pieces []string
+	shown := 0
 	for i, r := range s {
-		if n == maxChars {
-			b.WriteString("…")
+		var piece string
+		switch {
+		case r == utf8.RuneError && !strings.HasPrefix(s[i:], "�"):
+			piece = `\u{FFFD}`
+		case r == '"' || r == '\\':
+			piece = `\` + string(r)
+		case needsEscape(r):
+			var e strings.Builder
+			writeUnicodeEscape(&e, r)
+			piece = e.String()
+		default:
+			piece = string(r)
+		}
+		pieces = append(pieces, piece)
+		shown += utf8.RuneCountInString(piece)
+		if shown > maxChars {
 			break
 		}
-		n++
-		switch {
-		case r == utf8.RuneError && !strings.HasPrefix(s[i:], "\uFFFD"):
-			b.WriteString(`\u{FFFD}`)
-		case r == '"' || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case needsEscape(r):
-			writeUnicodeEscape(&b, r)
-		default:
-			b.WriteRune(r)
+	}
+	var b strings.Builder
+	b.WriteByte('"')
+	if shown <= maxChars {
+		for _, p := range pieces {
+			b.WriteString(p)
 		}
+	} else {
+		used := 0
+		for _, p := range pieces {
+			n := utf8.RuneCountInString(p)
+			if used+n > maxChars-1 {
+				break
+			}
+			b.WriteString(p)
+			used += n
+		}
+		b.WriteString("…")
 	}
 	b.WriteByte('"')
 	return b.String()

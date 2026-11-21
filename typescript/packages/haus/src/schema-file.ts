@@ -30,9 +30,12 @@
  *
  * Errors are HausSchemaFileError, with the position in the schema file.
  */
+import { quoteText, unpairedSurrogate } from "./chars.js"
 import { HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails } from "./errors.js"
 import { DEFAULT_LIMITS, Parser } from "./parser.js"
 import type { Value } from "./value.js"
+
+export { quoteText }
 
 /** A type used without its import, and the standard module or official extension that has it. */
 export interface MissingImport {
@@ -622,13 +625,16 @@ class SchemaParser {
    * `import`: `std/` and an identifier, or `@` or `.` and the characters a
    * module may have after it, with no whitespace inside (`std/ time` is not
    * a module). Read from the text, as the lexer doesn't know modules; what
-   * it names is checked when the import is loaded.
+   * it names is checked when the import is loaded. A package module reads
+   * `~` too, so that what follows its version's `@` (`@a/b@1~x`) is the
+   * version (`import-version`); a file path has none (grammar `path`), so
+   * `./a~b` ends before it.
    */
   private parseModule(): string {
     const lexer = this.lexer
     lexer.skip()
     const start = lexer.pos
-    const module = /std\/[a-z_][A-Za-z0-9_]*|[@.][A-Za-z0-9_.\-/@~]+/y
+    const module = /std\/[a-z_][A-Za-z0-9_]*|@[A-Za-z0-9_.\-/@~]+|\.[A-Za-z0-9_.\-/@]+/y
     module.lastIndex = start
     const m = module.exec(this.text)
     if (!m) {
@@ -984,36 +990,6 @@ export const isPackageName = (name: string): boolean => {
   return m !== null && m[1] !== "node_modules" && m[2] !== "node_modules"
 }
 
-/** Bidirectional controls and marks, shown escaped in messages. */
-const BIDI = /^[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]$/
-
-/**
- * Text from a file, for a message (spec §9.2): control and bidirectional
- * characters escaped as `\u{…}` and at most `max` characters (default 40),
- * cut with `…`.
- */
-export function quoteText(text: string, max = 40): string {
-  const pieces = [...text].map(shownChar)
-  const length = (piece: string) => [...piece].length
-  if (pieces.reduce((n, piece) => n + length(piece), 0) <= max) return pieces.join("")
-  // Cut between characters, never inside an escape: whole pieces in max - 1 characters, then the `…`.
-  let used = 0
-  const kept = []
-  for (const piece of pieces) {
-    used += length(piece)
-    if (used > max - 1) break
-    kept.push(piece)
-  }
-  return `${kept.join("")}…`
-}
-
-/** A character as a message shows it: control and bidirectional characters escaped. */
-function shownChar(c: string): string {
-  const cp = c.codePointAt(0)!
-  const escape = cp < 0x20 || (cp >= 0x7f && cp < 0xa0) || cp === 0x2028 || cp === 0x2029 || (cp >= 0xd800 && cp <= 0xdfff) || BIDI.test(c)
-  return escape ? `\\u{${cp.toString(16)}}` : c
-}
-
 const majorOf = (version: string) => /^v?(\d+)/.exec(version)?.[1]
 
 /**
@@ -1189,6 +1165,9 @@ export function parseSchemaFile(text: string, options: ParseSchemaOptions = {}):
   // ── loading: parse each file once, build its scope ──
   const load = (text: string, key: string | undefined, id: string | undefined, fail: Fail, root: boolean): Unit => {
     if (files() >= MAX_FILES) fail("too-many-files", `more than ${MAX_FILES} schema files are imported`, 0)
+    // A string can hold an unpaired surrogate, which has no UTF-8 form (spec §4, §14).
+    const unpaired = unpairedSurrogate(text)
+    if (unpaired >= 0) fail("invalid-utf8", "an unpaired surrogate, which has no UTF-8 form", unpaired)
     const parser = new SchemaParser(text, fail)
     const { imports, types } = parser.parseFile()
     const unit: Unit = { root, id, text, fail, own: new Map(), scope: new Map(), std: new Map(), warnings: parser.warnings }

@@ -248,7 +248,7 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
 /// Whether `n` is a JSON number within the number limits.
 fn check_number(n: &str, limits: &Limits) -> Result<(), EncodeError> {
     if !is_number(n) {
-        return Err(EncodeError::new(ErrorCode::CannotEncode, "not a JSON number"));
+        return Err(EncodeError::new(ErrorCode::InvalidNumber, "not a JSON number"));
     }
     if n.len() > limits.max_number_length {
         let reason = format!("number literal longer than {} characters", limits.max_number_length);

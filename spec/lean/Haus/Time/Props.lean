@@ -71,7 +71,7 @@ theorem ZoneName.chars {z : Text} (h : ZoneName z) : ∀ c ∈ z, c = '/' ∨ is
 
 /-- Every zone of a valid `TimeZone` or `ZonedDateTime` is an offset (nothing to look up) or such a name. -/
 theorem Zone.lookup_inside {z : Text} (h : Zone z) (base : List Text) : NumOffset z ∨ base <+: lookup base z :=
-  h.imp id fun h => h.lookup_inside base
+  h.imp id fun h => h.2.lookup_inside base
 
 /-! ## T4 -/
 

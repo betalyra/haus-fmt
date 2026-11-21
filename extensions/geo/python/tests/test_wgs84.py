@@ -51,8 +51,9 @@ def test_vector(vector: Tagged) -> None:
     coded, base = CODED[f["type"]], BASE[f["type"]]
     base.parse(f["value"])  # valid under the schema: what the codec rejects, the profile rejects
     if vector.tag == "Reject":
-        with pytest.raises(HausDecodeError):
+        with pytest.raises(HausDecodeError) as e:
             coded.parse(f["value"])
+        assert e.value.code == "codec-rejected"
         return
     decoded = coded.parse(f["value"])
     encoded = coded.canonical(decoded)

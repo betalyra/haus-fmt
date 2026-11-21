@@ -185,9 +185,16 @@ func (c *fileCache) open(path string, kind fileKind) (string, openResult) {
 	return key, within(r, kind)
 }
 
+// notAPackageJSON is the value of a package.json that isn't valid JSON, or (a
+// project's) isn't a regular file: it declares nothing and gives no
+// version, and a project's ends the search for one (spec §13.3).
+var notAPackageJSON any = notJSON{}
+
+type notJSON struct{}
+
 // packageJSON reads a package.json (kind says whose). present is false if
-// there is none (or, for a project's, it isn't a regular file); the value is
-// nil if it isn't valid JSON: it declares nothing and gives no version.
+// there is none; the value is notAPackageJSON if it isn't valid JSON or, for a
+// project's, isn't a regular file (a directory, a broken link).
 func (c *fileCache) packageJSON(path string, kind fileKind) (value any, present bool, err error) {
 	key, r := c.open(path, kind)
 	switch r.state {
@@ -195,7 +202,7 @@ func (c *fileCache) packageJSON(path string, kind fileKind) (value any, present 
 		return nil, false, nil
 	case notRegular:
 		if kind == kindProjectJSON {
-			return nil, false, nil
+			return notAPackageJSON, true, nil
 		}
 		return nil, false, newError(haus.CodePackagePath, "%s is a symbolic link or not a regular file; it is not read", shown(path))
 	case tooLarge:
@@ -208,7 +215,7 @@ func (c *fileCache) packageJSON(path string, kind fileKind) (value any, present 
 	}
 	var v any
 	if !utf8.Valid(r.bytes) || json.Unmarshal(r.bytes, &v) != nil {
-		v = nil
+		v = notAPackageJSON
 	}
 	c.json[key] = v
 	return v, true, nil

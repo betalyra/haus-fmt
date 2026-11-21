@@ -20,6 +20,9 @@ INTEGER = re.compile(r"-?[0-9]+")
 _NORMALIZED = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
 _EXPONENT = re.compile(r"e-?([0-9]+)$")
 
+UNLIMITED = Limits(max_number_length=1 << 62, max_exponent=1 << 62)
+"""Limits that let `normalize_number` read any literal: for the canonical form, which has none (spec §12)."""
+
 
 def normalize_number(text: str, limits: Limits = DEFAULT_LIMITS) -> str | None:
     """The normalized text of one number literal (`1_000` → `1000`), or None if `text` isn't one."""

@@ -260,7 +260,6 @@ class SchemaType:
         source: str | bytes | Readable | Iterable[str | bytes],
         *,
         limits: Limits = DEFAULT_LIMITS,
-        max_line_length: int = DEFAULT_MAX_VALUE_LENGTH,
     ) -> Iterator[Any]:
         """Read JSON Lines (a text, a file, or chunks split anywhere) and decode each line as it arrives.
 
@@ -270,7 +269,7 @@ class SchemaType:
         def convert(j: Json, i: int) -> Any:
             return _decode.from_schema_json(self._node, j, limits, None, i)
 
-        return read_lines(source, limits, schema_json_depth(limits), convert, max_line_length)
+        return read_lines(source, limits, schema_json_depth(limits), convert)
 
 
 @dataclass(frozen=True, slots=True)

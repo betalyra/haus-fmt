@@ -48,7 +48,8 @@ import java.util.stream.Stream;
  *   <li>std/time types: the text, a String, which keeps the value; or, keeping what it means but
  *       not how it is written (spec §13.4): {@code LocalDate} (Date), {@code YearMonth}, {@code
  *       LocalTime} (Time), {@code LocalDateTime} (DateTime), {@code java.time.Instant} (which drops
- *       the offset) or {@code OffsetDateTime} (Instant), {@code ZoneId} (TimeZone);
+ *       the offset) or {@code OffsetDateTime} (Instant), {@code ZoneId} (TimeZone); a value the
+ *       host type can't hold, such as a zone the JDK doesn't know, is {@code codec-rejected};
  *   <li>any type as a {@link Value} of its kind; a named type with a {@link Codec} as the codec's
  *       host type.
  * </ul>
@@ -112,12 +113,12 @@ public final class HausCodec<T> {
 
   /** The host value of haus text holding one value. */
   public T decode(String text) {
-    return fromValue(Haus.parse(text, options.limits()));
+    return fromValue(Haus.one(Haus.parseAll(text, options.limits()), "$"));
   }
 
   /** The host value of haus text holding one value, as UTF-8 bytes. */
   public T decode(byte[] text) {
-    return fromValue(Haus.parse(text, options.limits()));
+    return fromValue(Haus.one(Haus.parseAll(text, options.limits()), "$"));
   }
 
   /** {@code x} as haus text in the layout of {@code format}, ending with a line break. */

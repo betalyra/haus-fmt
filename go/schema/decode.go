@@ -125,7 +125,9 @@ func (t Type) EncodeWith(v haus.Value, opts DecodeOptions) (haus.Value, error) {
 func (t Type) DecodeAll(values []haus.Value) ([]haus.Value, error) {
 	if !t.stream {
 		if len(values) != 1 {
-			return nil, newError(haus.CodeNotOneValue, "%s is not a Stream: expected one value, found %d", t.name, len(values))
+			e := newError(haus.CodeNotOneValue, "%s is not a Stream: expected one value, found %d", t.name, len(values))
+			e.Path = "$"
+			return nil, e
 		}
 		v, err := t.Decode(values[0])
 		return []haus.Value{v}, err
@@ -1235,7 +1237,7 @@ func found(v haus.Value) string {
 		if utf8.RuneCountInString(string(v)) > 20 || !utf8.ValidString(string(v)) {
 			return "a string"
 		}
-		return "the string " + strconv.Quote(quote(string(v)))
+		return "the string " + `"` + quote(string(v)) + `"`
 	case haus.Number:
 		return "the number " + short(v.String())
 	case haus.Bytes:

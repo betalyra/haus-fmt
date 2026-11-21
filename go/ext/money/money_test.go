@@ -63,11 +63,11 @@ type Order = { total: Money, lines: Array Money }`), schema.Options{Packages: pa
 		}
 		_, err = c.ty.DecodeWith(v, opts)
 		var e *haus.Error
-		if !errors.As(err, &e) || e.Code != haus.CodeTypeMismatch || e.Path != c.path {
+		if !errors.As(err, &e) || e.Code != haus.CodeCodecRejected || e.Path != c.path {
 			t.Errorf("decode %s: got %v, want the place %s", c.text, err, c.path)
 		}
 		_, err = c.ty.FromJSONWith([]byte(c.json), opts)
-		if !errors.As(err, &e) || e.Code != haus.CodeTypeMismatch || e.Path != c.inJSON {
+		if !errors.As(err, &e) || e.Code != haus.CodeCodecRejected || e.Path != c.inJSON {
 			t.Errorf("read %s: got %v, want the place %s", c.json, err, c.inJSON)
 		}
 	}

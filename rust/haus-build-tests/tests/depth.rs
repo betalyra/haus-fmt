@@ -96,23 +96,6 @@ fn json_too_deep_for_a_recursive_type_fails_at_the_depth_limit() {
     });
 }
 
-/// A [`haus::Value`] dropped level by level, without recursion.
-fn dismantle(mut v: haus::Value) {
-    loop {
-        v = match v {
-            haus::Value::Array(mut items) | haus::Value::Variant { args: mut items, .. } => match items.pop() {
-                Some(inner) => inner,
-                None => break,
-            },
-            haus::Value::Record(mut fields) => match fields.pop() {
-                Some((_, inner)) => inner,
-                None => break,
-            },
-            _ => break,
-        }
-    }
-}
-
 #[test]
 fn values_built_a_million_levels_deep_fail_at_the_depth_limit() {
     // A `Value` built in code isn't limited by a parser: decoding it with a
@@ -124,7 +107,6 @@ fn values_built_a_million_levels_deep_fail_at_the_depth_limit() {
         let tree = (0..1_000_000).fold(leaf(), |t, _| Value::Variant { tag: "Node".into(), args: vec![leaf(), t] });
         let e = Tree::decode(&tree).map(|_| ());
         // Taken apart before checking, so that a failing check doesn't drop it recursively.
-        dismantle(tree);
         let e = e.unwrap_err();
         assert_eq!(e.code, haus::ErrorCode::NestingTooDeep);
         assert_eq!(e.to_string(), format!("{}: nesting deeper than {MAX} levels", "(Node)[1]".repeat(MAX)));
@@ -134,7 +116,6 @@ fn values_built_a_million_levels_deep_fail_at_the_depth_limit() {
             reply(Value::Variant { tag: "Some".into(), args: vec![t] })
         });
         let e = Thread::decode(&thread).map(|_| ());
-        dismantle(thread);
         assert_eq!(
             e.unwrap_err().to_string(),
             format!("{}.reply: nesting deeper than {MAX} levels", ".reply(Some)[0]".repeat(MAX - 1))

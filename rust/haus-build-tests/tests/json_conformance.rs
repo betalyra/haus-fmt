@@ -59,7 +59,7 @@ struct Case {
 
 impl Case {
     fn parse(v: &Value) -> Result<Case, String> {
-        let not_a_case = || format!("not a case: {}", canonical(v));
+        let not_a_case = || format!("not a case: {}", canonical(v).unwrap());
         let Value::Variant { tag, args } = v else { return Err(not_a_case()) };
         let [fields @ Value::Record(_)] = args.as_slice() else { return Err(not_a_case()) };
         let kind = match tag.as_str() {
@@ -96,8 +96,8 @@ impl Case {
     fn failure(&self) -> Option<String> {
         let read = || suite::schema_based::read(&self.ty, &self.json).ok_or_else(|| format!("no type {}", self.ty));
         let expect_read = |expected: &Value| match read() {
-            Ok(Ok(v)) if canonical(&v) == canonical(expected) => None,
-            Ok(Ok(v)) => Some(format!("read as {}, expected {}", canonical(&v), canonical(expected))),
+            Ok(Ok(v)) if canonical(&v).unwrap() == canonical(expected).unwrap() => None,
+            Ok(Ok(v)) => Some(format!("read as {}, expected {}", canonical(&v).unwrap(), canonical(expected).unwrap())),
             Ok(Err(e)) => Some(format!("can't read the JSON: {e}")),
             Err(e) => Some(e),
         };
@@ -116,7 +116,7 @@ impl Case {
             }
             (Kind::Read, _, Some(output)) => expect_read(output),
             (Kind::Err, None, None) => match read() {
-                Ok(Ok(v)) => Some(format!("read as {}, expected an error", canonical(&v))),
+                Ok(Ok(v)) => Some(format!("read as {}, expected an error", canonical(&v).unwrap())),
                 Ok(Err(e)) if e.code().map(|c| c.as_str()) != self.code.as_deref() => {
                     Some(format!("fails with {:?} ({e}), expected {:?}", e.code(), self.code))
                 }

@@ -797,7 +797,7 @@ final class Binder {
         return ZoneId.of(text);
       } catch (DateTimeException e) {
         path.index(0);
-        throw error(path, ErrorCode.TYPE_MISMATCH, "the host type " + host.getSimpleName() + " can't hold " + name + " "
+        throw error(path, ErrorCode.CODEC_REJECTED, "the host type " + host.getSimpleName() + " can't hold " + name + " "
             + SchemaText.quoted(text));
       }
     }

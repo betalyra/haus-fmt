@@ -32,7 +32,7 @@ from decimal import Context, Decimal
 from typing import Any, Final, Literal, Never, cast
 
 from ._error_codes import ErrorCode
-from ._errors import HausLimitsError, HausSyntaxError
+from ._errors import UNPAIRED_SURROGATE, HausLimitsError, HausSyntaxError, unpaired_surrogate
 from ._scan import (
     BIN_LITERAL,
     BLANKS,
@@ -67,6 +67,7 @@ from ._scan import (
     match_separator,
     match_tag_word,
     match_whitespace,
+    quote_for_message,
 )
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
@@ -204,7 +205,7 @@ def _describe(c: str) -> str:
         case "\n":
             return "line break"
         case _:
-            return f"'{c}'"
+            return f"'{quote_for_message(c)}'"
 
 
 def _decimal_text(n: int) -> str:
@@ -248,7 +249,12 @@ class Parser:
 
         Valid text is read by `_read_valid`, without recursion. Anything else is read again from the
         start by recursive descent, which reports the error: it has every check and message.
+
+        A `str` can hold a lone surrogate, which UTF-8 can't: text with one is `invalid-utf8` at the
+        first, before anything else, as bytes that aren't UTF-8 are (spec §4).
         """
+        if (at := unpaired_surrogate(self.src)) is not None:
+            self._fail("invalid-utf8", UNPAIRED_SURROGATE, at)
         try:
             return self._read_valid()
         except (_Reread, HausSyntaxError, IndexError):
@@ -587,12 +593,13 @@ class Parser:
             case c if c in KEY_START:
                 word = self._ident()
                 code, more = _WORDS.get(word, ("bare-identifier", ""))
+                shown = quote_for_message(word)
                 self._fail(
                     code,
-                    f"unexpected identifier '{word}': lowercase identifiers can only be record keys{more}",
+                    f"unexpected identifier '{shown}': lowercase identifiers can only be record keys{more}",
                     self.pos - len(word),
                     expected="a value",
-                    found=f"'{word}'",
+                    found=f"'{shown}'",
                 )
             case c:
                 # `+1` and `.5`: a number written the way other languages allow.
@@ -643,13 +650,16 @@ class Parser:
             if (c := self._peek()) != ":":
                 found = _describe(c)
                 self._fail(
-                    "missing-colon", f"expected ':' after key '{key}', found {found}", expected="':'", found=found
+                    "missing-colon",
+                    f"expected ':' after key '{quote_for_message(key)}', found {found}",
+                    expected="':'",
+                    found=found,
                 )
             self.pos += 1
             self._skip_trivia()
             value = self._value()
             if key in fields:
-                self._fail("duplicate-key", f"duplicate key '{key}'", key_pos)
+                self._fail("duplicate-key", f"duplicate key '{quote_for_message(key)}'", key_pos)
             fields[key] = self.last = value
         return Record(fields)
 
@@ -671,11 +681,12 @@ class Parser:
                 return self._checked_word(self._ident(), "key")
             case c if c in TAG_START:
                 word = self._ident()
+                shown = quote_for_message(word)
                 self._fail(
                     "uppercase-key",
-                    f"record keys must start with a lowercase letter or '_'; quote it: \"{word}\"",
+                    f"record keys must start with a lowercase letter or '_'; quote it: \"{shown}\"",
                     self.pos - len(word),
-                    hint=f'Quote the key: "{word}".',
+                    hint=f'Quote the key: "{shown}".',
                 )
             case c:
                 found = _describe(c)
@@ -696,9 +707,9 @@ class Parser:
                 if not (args := self._list("(", ")")):
                     self._fail(
                         "empty-payload",
-                        f"empty payload: write '{tag}' without parentheses",
+                        f"empty payload: write '{quote_for_message(tag)}' without parentheses",
                         paren,
-                        hint=f"Write {tag} without parentheses.",
+                        hint=f"Write {quote_for_message(tag)} without parentheses.",
                     )
                 return Variant(tag, args)
             case "{":
@@ -720,7 +731,7 @@ class Parser:
         radix = _RADIX.get(m.re)
         end = m.end()
         if (after := _run(IDENT_OR_DOT, src, end).end()) > end:
-            self._fail("invalid-number", f"invalid number '{src[start:after]}'", start)
+            self._fail("invalid-number", f"invalid number '{quote_for_message(src[start:after])}'", start)
         if end - start > self.limits.max_number_length:
             self._fail(
                 "number-too-long", f"number literal longer than {self.limits.max_number_length} characters", start
@@ -813,7 +824,7 @@ class Parser:
                     self._fail("invalid-unicode-escape", f"\\u{{{m[1]}}} is not a Unicode scalar value", at)
                 return chr(cp), m.end()
             case e:
-                self._fail("invalid-escape", f"invalid escape '\\{e}'", at)
+                self._fail("invalid-escape", f"invalid escape '\\{quote_for_message(e)}'", at)
 
     def _block_string(self) -> String:
         start = self.pos
@@ -977,12 +988,13 @@ class Parser:
         found = _describe(c)
         reason = f"{message}, found {found}"
         if c in ("(", "{") and isinstance(previous, Variant) and not previous.args:
+            tag = quote_for_message(previous.tag)
             self._fail(
                 "payload-newline",
                 reason,
                 expected="','",
                 found=found,
-                hint=f"Put the payload on the same line as {previous.tag}, or add a comma if they are two values.",
+                hint=f"Put the payload on the same line as {tag}, or add a comma if they are two values.",
             )
         if c in _CLOSERS:
             self._fail(

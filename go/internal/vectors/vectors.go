@@ -18,7 +18,7 @@ import (
 //   - Accept: value (haus text of type) is accepted, and encoding what the
 //     codec decoded writes exactly output, or value when there is none.
 //   - Reject: value is valid for the schema of type, and the codec rejects
-//     it with type-mismatch, at the value.
+//     it with codec-rejected, at the value.
 //
 // It returns the number of Accept and Reject vectors.
 func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accepted, rejected int) {
@@ -100,11 +100,11 @@ func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accept
 			}
 			// With the type's own codec, at the value; with all of them, a
 			// codec of a part may reject it first, at the part.
-			if _, err := schema.DecodeAs[any](ty, value, codec); !isMismatch(err, "$") {
-				t.Errorf("%s: got %v, want type-mismatch at $", text, err)
+			if _, err := schema.DecodeAs[any](ty, value, codec); !isRejected(err, "$") {
+				t.Errorf("%s: got %v, want codec-rejected at $", text, err)
 			}
-			if _, err := ty.DecodeWith(value, schema.DecodeOptions{Codecs: set}); !isMismatch(err, "") {
-				t.Errorf("%s: got %v, want type-mismatch", text, err)
+			if _, err := ty.DecodeWith(value, schema.DecodeOptions{Codecs: set}); !isRejected(err, "") {
+				t.Errorf("%s: got %v, want codec-rejected", text, err)
 			}
 		default:
 			t.Fatalf("unknown vector %s", x.Tag)
@@ -113,8 +113,8 @@ func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accept
 	return accepted, rejected
 }
 
-// isMismatch reports whether err is type-mismatch, at path unless "".
-func isMismatch(err error, path string) bool {
+// isRejected reports whether err is codec-rejected, at path unless "".
+func isRejected(err error, path string) bool {
 	var e *haus.Error
-	return errors.As(err, &e) && e.Code == haus.CodeTypeMismatch && (path == "" || e.Path == path || e.Path == "")
+	return errors.As(err, &e) && e.Code == haus.CodeCodecRejected && (path == "" || e.Path == path || e.Path == "")
 }

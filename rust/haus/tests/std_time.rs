@@ -21,6 +21,8 @@ const VALID: &[(&str, &str)] = &[
     ("ZonedDateTime", "2027-03-29T10:00:00+05:00[Europe/Lisbon]"),   // an offset that doesn't match the zone is valid
     ("ZonedDateTime", "2026-11-09T14:30:00Z[+01:00]"),
     ("ZonedDateTime", "2026-11-09T14:30:00-05:00[America/Port-au-Prince]"),
+    ("ZonedDateTime", "2026-11-09T14:30:00Z[Europe/Z]"),
+    ("TimeZone", "Europe/Z"),
     ("Duration", "PT30S"),
     ("Duration", "P1Y2M3W4DT5H6M7.5S"),
     ("Duration", "-PT1H"),
@@ -66,6 +68,10 @@ const INVALID: &[(&str, &str, &str)] = &[
     ("ZonedDateTime", "2027-03-29T10:00:00+01:00[!Europe/Lisbon]", "not an IANA zone name"),
     ("ZonedDateTime", "2027-03-29T10:00:00+01:00[Europe/Lisbon][u-ca=iso8601]", "write it like"),
     ("ZonedDateTime", "2027-03-29T10:00:00+01:00[Europe/../etc]", "not an IANA zone name"),
+    // Z is the offset letter, not a zone name.
+    ("ZonedDateTime", "2027-03-29T10:00:00Z[Z]", "Z is an offset, not a zone"),
+    ("ZonedDateTime", "2027-03-29T10:00:00+00:00[Z]", "Z is an offset, not a zone"),
+    ("TimeZone", "Z", "Z is an offset, not a zone"),
     ("Duration", "P", "at least one component"),
     ("Duration", "PT", "at least one component"),
     ("Duration", "P1DT", "T must be followed"),

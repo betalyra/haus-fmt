@@ -902,8 +902,10 @@ def test_json_lines_errors() -> None:
     with pytest.raises(HausJsonError) as g:
         list(events.from_json_lines('{"_tag":"Empty"}\n{"_tag" "Empty"}\n'))
     assert (g.value.line, g.value.column) == (2, 9)
-    with pytest.raises(HausJsonError, match="line longer than 10"):
-        list(events.from_json_lines('{"_tag":"Empty"}\n', max_line_length=10))
+    # No length limit per line (spec §16): a line longer than the stream value limit reads.
+    long_line = '{"_tag":"Wrap","value":' + " " * haus.DEFAULT_MAX_VALUE_LENGTH + "3}\n"
+    assert list(events.from_json_lines(long_line)) == [Tagged("Wrap", (3,))]
+    assert len(list(haus.import_json_lines([long_line[:100], long_line[100:]]))) == 1
     with pytest.raises(HausJsonError, match="invalid UTF-8"):
         list(haus.import_json_lines([b'"\xc3', b'"\n"\xff"\n']))
     with pytest.raises(HausEncodeError) as h:

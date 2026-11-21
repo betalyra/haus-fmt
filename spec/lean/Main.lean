@@ -76,8 +76,8 @@ import Lean.Data.Json
                                   as hex-encoded UTF-8): decode with the type of the profile's
                                   package and its codec (schema, then checker): `ok <canonical
                                   form of the encoded result>`, `err <place> <code> <reason>`
-                                  when the schema rejects it, or `err $ - <reason>` when the
-                                  profile does (fuzz/)
+                                  when the schema rejects it, or `err $ codec-rejected <reason>`
+                                  when the profile does (fuzz/)
 -/
 
 open Haus Lean
@@ -818,7 +818,7 @@ def profileLine (p : Profiles.Profile) (line : String) : String :=
       match Schema.decode p.env (.ref type) v, p.decode type check v with
       | _, .ok x => s!"ok {canonicalText (Schema.encode x)}"
       | .error e, _ => errLine e
-      | .ok _, .error _ => s!"err $ - not accepted by {p.name}"
+      | .ok _, .error _ => s!"err $ {Code.codecRejected.name} not accepted by {p.name}"
     | some _, .ok _ => "err $ - not a single value"
   | _ => "err $ - bad line"
 

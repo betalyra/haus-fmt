@@ -130,7 +130,7 @@ final class SchemaDecoder: Place, Decoder, SingleValueDecodingContainer {
 
     /// A codec's rejection of the value (spec §13.4).
     func rejection(_ id: String, _ error: any Error) -> HausError {
-        place.fail(.typeMismatch, "\(id) rejects the value: \(error)")
+        place.fail(.codecRejected, "\(id) rejects the value: \(error)")
     }
 
     /// An error of a conformance, as a ``HausError`` at this value.

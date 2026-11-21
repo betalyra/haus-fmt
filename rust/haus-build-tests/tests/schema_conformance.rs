@@ -36,9 +36,9 @@ impl Case {
         let (ok, fields) = match v {
             Value::Variant { tag, args } if tag == "Ok" || tag == "Err" => match args.as_slice() {
                 [fields @ Value::Record(_)] => (tag == "Ok", fields),
-                _ => return Err(format!("not a case: {}", canonical(v))),
+                _ => return Err(format!("not a case: {}", canonical(v).unwrap())),
             },
-            _ => return Err(format!("not a case: {}", canonical(v))),
+            _ => return Err(format!("not a case: {}", canonical(v).unwrap())),
         };
         match (fields.get("type"), fields.get("input")) {
             (Some(Value::String(ty)), Some(input)) => Ok(Case {
@@ -49,21 +49,21 @@ impl Case {
                 code: match fields.get("code") {
                     Some(Value::String(code)) => code.clone(),
                     _ if ok => String::new(),
-                    _ => return Err(format!("an Err case without a code: {}", canonical(v))),
+                    _ => return Err(format!("an Err case without a code: {}", canonical(v).unwrap())),
                 },
                 path: match fields.get("path") {
                     Some(Value::String(path)) => path.clone(),
                     _ if ok => String::new(),
-                    _ => return Err(format!("an Err case without a path: {}", canonical(v))),
+                    _ => return Err(format!("an Err case without a path: {}", canonical(v).unwrap())),
                 },
             }),
-            _ => Err(format!("not a case: {}", canonical(v))),
+            _ => Err(format!("not a case: {}", canonical(v).unwrap())),
         }
     }
 
     /// `Ok F64 1.0`.
     fn name(&self) -> String {
-        format!("{} {} {}", if self.ok { "Ok" } else { "Err" }, self.ty, canonical(&self.input))
+        format!("{} {} {}", if self.ok { "Ok" } else { "Err" }, self.ty, canonical(&self.input).unwrap())
     }
 
     /// Runs the case on the schema `file` (without its attributes if `bare`):
@@ -73,15 +73,19 @@ impl Case {
             return Some(format!("no type {}", self.ty));
         };
         match (self.ok, result) {
-            (true, Ok(encoded)) if canonical(&encoded) == canonical(&self.output) => {
+            (true, Ok(encoded)) if canonical(&encoded).unwrap() == canonical(&self.output).unwrap() => {
                 // The writer takes it too (it checks what it writes).
                 haus::ser::write(&encoded).err().map(|e| format!("encoded, but can't be written: {e}"))
             }
-            (true, Ok(encoded)) => {
-                Some(format!("encoded as {}, expected {}", canonical(&encoded), canonical(&self.output)))
-            }
+            (true, Ok(encoded)) => Some(format!(
+                "encoded as {}, expected {}",
+                canonical(&encoded).unwrap(),
+                canonical(&self.output).unwrap()
+            )),
             (true, Err(e)) => Some(format!("failed to decode: {e}")),
-            (false, Ok(encoded)) => Some(format!("decoded, expected an error (encoded as {})", canonical(&encoded))),
+            (false, Ok(encoded)) => {
+                Some(format!("decoded, expected an error (encoded as {})", canonical(&encoded).unwrap()))
+            }
             (false, Err(e)) if e.code.as_str() != self.code => {
                 Some(format!("fails with {} ({e}), expected {}", e.code, self.code))
             }

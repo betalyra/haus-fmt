@@ -1,4 +1,4 @@
-import { HausSyntaxError } from "./errors.js"
+import { checkWellFormed, HausSyntaxError } from "./errors.js"
 import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
@@ -20,6 +20,7 @@ export { format, quote, stringify, type FormatOptions, type FormatStyle } from "
 export { canonical, compare, compareCodePoints, equals, hash, hashAll } from "./canonical.js"
 export { floatText, floatValue, specialFloat, toFloat, toFloat32, toFloat64, type FloatType } from "./float.js"
 export { normalizeNumber } from "./number.js"
+export { unpairedSurrogate } from "./chars.js"
 export { infer, inferSchema, printShape, recursiveNames, RecordShape, resolve, Shape, VariantShape, type Inference, type PrintOptions } from "./infer.js"
 
 /**
@@ -29,6 +30,7 @@ export { infer, inferSchema, printShape, recursiveNames, RecordShape, resolve, S
  * MAX_SUPPORTED_DEPTH (512).
  */
 export function parseAll(text: string, limits: Partial<Limits> = {}): Value[] {
+  checkWellFormed(text)
   return new Parser(text, undefined, withDefaults(limits)).parseSequence()
 }
 
@@ -37,11 +39,13 @@ export function parseAll(text: string, limits: Partial<Limits> = {}): Value[] {
  * carry `keySpans`. Slower; meant for editors and language servers.
  */
 export function parseWithLocations(text: string, limits: Partial<Limits> = {}): Value[] {
+  checkWellFormed(text)
   return new Parser(text, undefined, withDefaults(limits), true).parseSequence()
 }
 
 /** Values with locations plus the [start, end) span of every comment (for editors). */
 export function parseDocument(text: string, limits: Partial<Limits> = {}): { values: Value[]; comments: [number, number][] } {
+  checkWellFormed(text)
   const parser = new Parser(text, undefined, withDefaults(limits), true)
   const values = parser.parseSequence()
   return { values, comments: parser.comments }
@@ -60,7 +64,7 @@ export {
   type Attribute, type Builtin, type Case, type Definition, type Field, type ModuleResolver, type ParseSchemaOptions, type Payload, type RecordType,
   type ResolvedModule, type SchemaFile, type SchemaWarning, type SchemaWarningKind, type StdType, type Type, type VariantType,
 } from "./schema-file.js"
-export { importHint, moduleOfType, OFFICIAL_EXTENSIONS, schemaOutline, type MissingImport, type SchemaOutline } from "./schema-file.js"
+export { importHint, moduleOfType, OFFICIAL_EXTENSIONS, quoteText, schemaOutline, type MissingImport, type SchemaOutline } from "./schema-file.js"
 export { importEdits, missingImports, type ImportEdit } from "./schema-imports.js"
 export { Secret } from "./secret.js"
 export { checkStdTime, isStdTimeType, STD_TIME_TYPES, type StdTimeType } from "./std-time.js"

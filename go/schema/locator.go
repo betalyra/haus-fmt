@@ -346,8 +346,10 @@ func declared(name, from, dir string, files *fileCache) error {
 }
 
 // project finds the nearest package.json above dir that has a name or a
-// dependency field: the project's. One that isn't valid JSON is the
-// project's too, and declares nothing: the search stops there.
+// dependency field: the project's. One that is valid JSON but not an
+// object is skipped. One that isn't valid JSON or isn't a regular file (a
+// directory, a broken link) is the project's too, and declares nothing:
+// the search stops there.
 func project(dir string, files *fileCache) (path string, doc any, ok bool, err error) {
 	for d := dir; ; {
 		path = filepath.Join(d, "package.json")
@@ -356,7 +358,7 @@ func project(dir string, files *fileCache) (path string, doc any, ok bool, err e
 			return "", nil, false, err
 		}
 		if present {
-			if v == nil || hasMember(v, "name") {
+			if v == notAPackageJSON || hasMember(v, "name") {
 				return path, v, true, nil
 			}
 			for _, f := range dependencyFields {

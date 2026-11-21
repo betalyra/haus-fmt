@@ -120,7 +120,7 @@ public final class GeoCodecs {
     return null;
   }
 
-  /** A value the profile rejects: the decoder reports it as {@code type-mismatch}, at the value. */
+  /** A value the profile rejects: the decoder reports it as {@code codec-rejected}, at the value. */
   private static IllegalArgumentException rejected(String message) {
     return new IllegalArgumentException(message);
   }

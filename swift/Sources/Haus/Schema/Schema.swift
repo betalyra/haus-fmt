@@ -181,18 +181,23 @@ public struct SchemaType: Sendable {
     /// Decodes the values of a file: each one on its own with the type a
     /// `Stream` definition holds (an error's path starts with the value's
     /// index: `$[3].total`); any other type expects exactly one value
-    /// (`not-one-value`).
+    /// (`not-one-value`, at the path `$`).
     public func decodeAll(_ values: [HausValue], limits: Limits = Limits()) throws(HausError) -> [HausValue] {
-        guard isStream else {
-            guard values.count == 1 else {
-                throw HausError(.notOneValue, "\(name) is not a Stream: expected one value, found \(values.count)")
-            }
-            return [try decode(values[0], limits: limits)]
-        }
+        guard isStream else { return [try decode(one(values), limits: limits)] }
         var out: [HausValue] = []
         out.reserveCapacity(values.count)
         for (i, v) in values.enumerated() { out.append(try decode(v, index: i, limits: limits)) }
         return out
+    }
+
+    /// The one value of a file read with this type (spec §6): none, or two or
+    /// more, is `not-one-value`, at the path `$`.
+    func one(_ values: [HausValue]) throws(HausError) -> HausValue {
+        guard values.count == 1 else {
+            throw HausError(
+                .notOneValue, "\(name) is not a Stream: expected one value, found \(values.count)", path: "$")
+        }
+        return values[0]
     }
 
     func run(_ value: HausValue, limits: Limits, encoding: Bool, path: [PathStep]) throws(HausError) -> HausValue {

@@ -41,6 +41,16 @@ final class Source {
    *     no UTF-8 form
    */
   static byte[] utf8(String s) {
+    checkSurrogates(s);
+    return s.getBytes(StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Checks that a string has a UTF-8 form.
+   *
+   * @throws HausException with the code {@code invalid-utf8} at its first unpaired surrogate
+   */
+  static void checkSurrogates(String s) {
     for (int i = 0; i < s.length(); i++) {
       char c = s.charAt(i);
       if (!Character.isSurrogate(c)) {
@@ -56,7 +66,6 @@ final class Source {
       int column = 1 + before.codePointCount(lineStart, before.length());
       throw new HausException(ErrorCode.INVALID_UTF8, "an unpaired surrogate, which has no UTF-8 form", line, column, null, null, null);
     }
-    return s.getBytes(StandardCharsets.UTF_8);
   }
 
   /** The first invalid UTF-8 byte (spec §4), as an error, or nothing if the text is valid. */

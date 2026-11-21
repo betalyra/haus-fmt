@@ -202,14 +202,16 @@ impl FileCache {
         (key, within(opened.clone(), kind))
     }
 
-    /// A `package.json` (`kind` says whose): None if there is none (or, for a
-    /// project's, it isn't a regular file), JSON `null` if it isn't valid
-    /// JSON (it declares nothing and gives no version).
+    /// A `package.json` (`kind` says whose): None if there is none, JSON
+    /// `null` if it isn't valid JSON or, for a project's, isn't a regular file
+    /// (it declares nothing and gives no version).
     pub(crate) fn package_json(&mut self, path: &Path, kind: Kind) -> Result<Option<Rc<Json>>> {
         let (key, opened) = self.opened_at(path, kind);
         match opened {
             Opened::Missing => Ok(None),
-            Opened::NotRegular if kind == Kind::ProjectJson => Ok(None),
+            // A project's that isn't a regular file (a directory, a broken link) stops the
+            // search, as one that isn't valid JSON does: it declares nothing (spec §13.3).
+            Opened::NotRegular if kind == Kind::ProjectJson => Ok(Some(Rc::new(Json::Null))),
             Opened::NotRegular => {
                 let reason = format!("{} is a symbolic link or not a regular file; it is not read", shown(path));
                 Err(Error::new(ErrorCode::PackagePath, reason))

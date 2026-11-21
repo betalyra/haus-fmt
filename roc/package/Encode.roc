@@ -54,7 +54,7 @@ Encode := [].{
 
 	## The JSON form of an error (spec §17), on one line, with its place as
 	## `$.extra[1]` (see `ErrorCode.place`):
-	## `{"code":"cannot-encode","message":"not a number literal","path":"$.extra[1]","hint":…,"docs":…}`.
+	## `{"code":"invalid-number","message":"not a number literal","path":"$.extra[1]","hint":…,"docs":…}`.
 	error_json : Error -> Str
 	error_json = |e| ErrorCode.json({ code: e.code, message: e.reason, at: Path(e.path) })
 
@@ -454,7 +454,9 @@ layout = |d, n| {
 
 ## What's wrong: its code (spec §17, `ErrorCode`) and reason, and where in the
 ## value (`.extra[1]`, empty at the root): the same paths as `Decode.Error`.
-## A number that isn't a literal is `cannot-encode`, a tag that isn't a tag
+## A `Num` whose text isn't a number literal is `invalid-number` (spec §11,
+## "Values built in code"; a host number type's text that isn't one, such as
+## a `Decimal`'s, is `cannot-encode`), a tag that isn't a tag
 ## name `invalid-tag`, a key used twice `duplicate-key`; what is beyond the
 ## limits has the limit's code (`string-too-long`).
 Error : { code : Str, reason : Str, path : Str }
@@ -579,7 +581,7 @@ line = |value, depth, writer, before| {
 	limits = writer.limits
 	out = { ..before, steps: counted(before.steps, limits)? }
 	match value {
-		Num(text) => Ok({ ..out, bytes: out.bytes.concat(literal(text, limits)?) })
+		Num(text) => Ok({ ..out, bytes: out.bytes.concat(value_literal(text, limits)?) })
 		Text(s) => {
 			check_length(s, limits)?
 			Ok({ ..out, bytes: out.bytes.concat(quote(s)) })
@@ -679,11 +681,10 @@ is_tag = |name| {
 literal : Str, Value.Limits -> Try(List(U8), Error)
 literal = |text, limits| {
 	b = text.to_utf8()
-	literal_chars = b.all(|c| (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == 'x' or c == '.' or c == '_' or c == '+' or c == '-')
 	n =
 		if is_normalized(b) {
 			b
-		} else if !literal_chars {
+		} else if !literal_chars(b) {
 			return fail(ErrorCode.cannot_encode, "not a number literal")
 		} else if b.len() > limits.max_number_length {
 			return fail(ErrorCode.number_too_long, "number literal longer than ${limits.max_number_length.to_str()} characters")
@@ -715,6 +716,11 @@ literal = |text, limits| {
 		Ok(n)
 	}
 }
+
+## `literal` for a `Num` built in code: text that isn't a number literal is
+## `invalid-number` (spec §11, "Values built in code").
+value_literal : Str, Value.Limits -> Try(List(U8), Error)
+value_literal = |text, limits| literal(text, limits).map_err(|e| if (e.code == ErrorCode.cannot_encode) { ..e, code: ErrorCode.invalid_number } else e)
 
 ## Whether a literal is normalized (spec §2), as the parser gives it:
 ## `-?(0|[1-9][0-9]*)(.[0-9]+)?(e(0|-?[1-9][0-9]*))?`.
@@ -749,30 +755,81 @@ is_normalized = |b| {
 canonical_within : Value, U64 -> Try(List(U8), Error)
 canonical_within = |value, max_nodes| {
 	Value.within_bounds(value, Value.max_supported_depth, max_nodes)?
-	Ok(canonical_bytes(value))
+	canonical_bytes(value)
 }
 
 ## The canonical form: no spaces, fields sorted by key, numbers as their
-## normalized decimal literal, however long.
-canonical_bytes : Value -> List(U8)
+## normalized decimal literal, however long. A value built in code is checked
+## as the writer checks it, without limits: a number that isn't a literal is
+## `invalid-number`, a tag that isn't a tag name `invalid-tag`, a key used
+## twice `duplicate-key`.
+canonical_bytes : Value -> Try(List(U8), Error)
 canonical_bytes = |value| match value {
-	Num(text) => text.to_utf8()
-	Text(s) => quote(s)
-	Bytes(b) => "x\"".to_utf8().concat(hex(b)).append('"')
-	Arr(items) => ['['].concat(comma_joined(items.map(canonical_bytes))).append(']')
+	Num(text) => canonical_number(text)
+	Text(s) => Ok(quote(s))
+	Bytes(b) => Ok("x\"".to_utf8().concat(hex(b)).append('"'))
+	Arr(items) => Ok(['['].concat(comma_joined(canonical_items(items, "")?)).append(']'))
 	Rec(fields) => canonical_record(fields)
-	Tag(name, []) => name.to_utf8()
-	Tag(name, [Rec(fields)]) => name.to_utf8().concat(canonical_record(fields))
-	Tag(name, args) => name.to_utf8().append('(').concat(comma_joined(args.map(canonical_bytes))).append(')')
+	Tag(name, args) => {
+		if !is_tag(name) {
+			return fail(ErrorCode.invalid_tag, "not a tag name: A to Z, then letters, digits and _")
+		}
+		match args {
+			[] => Ok(name.to_utf8())
+			[Rec(fields)] => Ok(name.to_utf8().concat(within(canonical_record(fields), "(${name})")?))
+			_ => Ok(name.to_utf8().append('(').concat(comma_joined(canonical_items(args, "(${name})")?)).append(')'))
+		}
+	}
+}
+
+## The canonical forms of items, an error with `[i]` after `prefix` in its path.
+canonical_items : List(Value), Str -> Try(List(List(U8)), Error)
+canonical_items = |items, prefix| {
+	var $out = List.with_capacity(items.len())
+	var $i = 0.U64
+	for x in items {
+		$out = $out.append(at_index(canonical_bytes(x), $i, prefix)?)
+		$i = $i + 1
+	}
+	Ok($out)
 }
 
 ## Fields sorted by their keys' UTF-8 bytes, which is the order of code points.
-canonical_record : List((Str, Value)) -> List(U8)
+canonical_record : List((Str, Value)) -> Try(List(U8), Error)
 canonical_record = |fields| {
+	unique_keys(fields.map(|(k, _)| k))?
 	sorted = fields.map(|(k, v)| (k.to_utf8(), k, v)).sort_with(|(a, _, _), (b, _, _)| compare_bytes(a, b))
-	entries = sorted.map(|(_, k, v)| key(k).append(':').concat(canonical_bytes(v)))
-	['{'].concat(comma_joined(entries)).append('}')
+	var $entries = List.with_capacity(sorted.len())
+	for (_, k, v) in sorted {
+		$entries = $entries.append(key(k).append(':').concat(within(canonical_bytes(v), ErrorCode.path_key(k))?))
+	}
+	Ok(['{'].concat(comma_joined($entries)).append('}'))
 }
+
+## A number's normalized literal (spec §2), always decimal, without limits
+## (`1e+05` is `1e5`, `0xFF` is `255`); `invalid-number` for a text that isn't
+## a number literal (`01`, `NaN`).
+canonical_number : Str -> Try(List(U8), Error)
+canonical_number = |text| {
+	b = text.to_utf8()
+	if is_normalized(b) {
+		Ok(b)
+	} else if !literal_chars(b) {
+		fail(ErrorCode.invalid_number, "not a number literal")
+	} else {
+		# No limits: hex has fewer digits than its decimal, and any exponent goes.
+		unlimited = { ..Value.default_limits, max_number_length: 2 * b.len() + 8, max_exponent: 18446744073709551615 }
+		match Value.parse_with(text, unlimited) {
+			Ok(Num(normalized)) => Ok(normalized.to_utf8())
+			_ => fail(ErrorCode.invalid_number, "not a number literal")
+		}
+	}
+}
+
+## Whether a text has only characters of number literals, so that parsing it
+## alone reads nothing but a number (no comment, comma or space).
+literal_chars : List(U8) -> Bool
+literal_chars = |b| b.all(|c| (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F') or c == 'x' or c == '.' or c == '_' or c == '+' or c == '-')
 
 compare_bytes : List(U8), List(U8) -> [Before, Same, After]
 compare_bytes = |a, b| {
@@ -880,7 +937,7 @@ expect Encode.minimised(Rec([("pt-BR", Rec([("a", Arr([Num("1"), Num("2")]))])),
 expect Encode.minimised(Text("two\nlines\t\u(2028)\u(202E)")) == Ok("\"two\\nlines\\t\\u{2028}\\u{202E}\"")
 # Checked as `to_str` checks, with the same places in errors.
 expect Encode.minimised(Rec([("extra", Arr([Num("1"), Num("abc")]))])).map_err(Encode.message) == Err(".extra[1]: not a number literal")
-expect Encode.stream_minimised([Num("1"), Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
+expect Encode.stream_minimised([Num("1"), Num("x")]) == Err({ code: "invalid-number", reason: "not a number literal", path: "[1]" })
 expect Encode.minimised_with(Arr([Arr([Num("1")])]), { ..Value.default_limits, max_depth: 1 }).map_err(|e| e.code) == Err("nesting-too-deep")
 # An empty record, array or record payload is a level, written or built (spec §7).
 expect {
@@ -973,6 +1030,15 @@ expect match Value.parse_all("{ a: 1 }") {
 	_ => False
 }
 expect Encode.hash_all([]) == Ok("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+# A value built in code is checked as the writer checks it, without limits: a
+# literal that isn't normalized is normalized, so equal values hash alike.
+expect Encode.canonical(Num("1e+05")) == Ok("1e5") and Encode.canonical(Num("0xFF")) == Ok("255") and Encode.canonical(Num("1_000")) == Ok("1000")
+expect Encode.hash(Num("1E+05")) == Encode.hash(Num("1e5")) and Encode.canonical(Num("0x${Str.repeat("F", 1200)}")).is_ok()
+expect ["01", "NaN", "", "1 // c", "1,"].map(|n| Encode.canonical(Num(n)).map_err(|e| e.code)) == List.repeat(Err("invalid-number"), 5)
+expect Encode.canonical(Arr([Num("1"), Tag("lower", [])])) == Err({ code: "invalid-tag", reason: "not a tag name: A to Z, then letters, digits and _", path: "[1]" })
+expect Encode.canonical(Tag("Some", [Rec([("a", Num("1")), ("a", Num("2"))])])).map_err(|e| (e.code, e.path)) == Err(("duplicate-key", "(Some).a"))
+expect Encode.hash(Rec([("x", Arr([Num("01")]))])).map_err(|e| (e.code, e.path)) == Err(("invalid-number", ".x[0]"))
+expect Encode.hash_all([Num("1"), Tag("x", [])]).map_err(|e| (e.code, e.path)) == Err(("invalid-tag", "[1]"))
 expect match (Value.parse_all("{ b: 1, a: 0x2 }, \"x\", [None]"), Value.parse_all("{a:2,b:1},\"x\",[None]")) {
 	(Ok(vs), Ok(same)) => {
 		joined = Crypto.SHA256.hash("{a:2,b:1},\"x\",[None]".to_utf8()).to_hex()
@@ -1023,7 +1089,7 @@ expect error_of(Tag("Hexagon", [Rec([("side", Num("x"))])])) == "(Hexagon).side:
 expect error_of(Rec([("a", Num("1")), ("a", Num("2"))])) == ".a: the key is used twice in this record"
 expect error_of(Bytes(List.repeat(0, 8 * 1024 * 1024 + 1))) == "byte string longer than 16777216 characters"
 expect error_of(Text("x".repeat(16 * 1024 * 1024 + 1))) == "string longer than 16777216 characters"
-expect Encode.stream([Num("1"), Num("x")]) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[1]" })
+expect Encode.stream([Num("1"), Num("x")]) == Err({ code: "invalid-number", reason: "not a number literal", path: "[1]" })
 # Nesting: as deep as the parser reads, and no deeper.
 nested : U64, Value, (Value -> Value) -> Value
 nested = |n, inner, wrap| {
@@ -1087,12 +1153,12 @@ code_of = |v| match Encode.to_str(v) {
 	Err(e) => "${e.code} at ${ErrorCode.place(e.path)}"
 }
 
-expect code_of(Arr([Num("1"), Num("x")])) == "cannot-encode at $[1]" and code_of(Tag("lower", [])) == "invalid-tag at $"
+expect code_of(Arr([Num("1"), Num("x")])) == "invalid-number at $[1]" and code_of(Tag("lower", [])) == "invalid-tag at $"
 expect code_of(Rec([("pt-BR", Num("1")), ("pt-BR", Num("2"))])) == "duplicate-key at $[\"pt-BR\"]" and code_of(Tag("A", [Rec([("b", Num("1e9999"))])])) == "exponent-too-large at $.b"
 expect code_of(Text("x".repeat(16 * 1024 * 1024 + 1))) == "string-too-long at $" and code_of(Num("9".repeat(1300))) == "number-too-long at $"
 expect code_of(nested(257, Num("1"), |v| Arr([v]))).starts_with("nesting-too-deep at $[0]")
 expect Encode.to_str_with(Rec([("abcde", Num("1"))]), small).map_err(|e| e.code) == Err("key-too-long") and Encode.to_str_with(Tag("Abcde", []), small).map_err(|e| e.code) == Err("tag-too-long")
-expect Encode.to_str(Num("x")).map_err(Encode.error_json) == Err("{\"code\":\"cannot-encode\",\"message\":\"not a number literal\",\"path\":\"$\",\"hint\":\"Pass a value of the host type the binding documents for the type.\",\"docs\":\"https://haus-fmt.org/docs/errors#cannot-encode\"}")
+expect Encode.to_str(Num("x")).map_err(Encode.error_json) == Err("{\"code\":\"invalid-number\",\"message\":\"not a number literal\",\"path\":\"$\",\"hint\":\"${ErrorCode.hint("invalid-number")}\",\"docs\":\"https://haus-fmt.org/docs/errors#invalid-number\"}")
 
 # Encoding native values (spec §9.8): what the writer checks, checked as each value is encoded.
 Login : { user : Str, creds : Secret(List((Str, Value))) }
@@ -1118,7 +1184,7 @@ expect Encode.value(login(Num("1")), encode_login).map_ok(canonical_text) == Ok(
 # Inside a tag's argument: the secret's place, as the writer names it.
 expect Encode.value(Some(login(Num("x"))), |m, e| Encode.maybe(m, e, encode_login)).map_err(|e| (e.code, e.path)).map_ok(canonical_text) == Err(("invalid-secret", "(Some).creds"))
 # Outside a secret, the place in the value, as the writer gives it.
-expect Encode.value([("a", Num("1")), ("pt-BR", Arr([Num("x")]))], |m, e| Encode.map(m, e, Encode.any)).map_ok(canonical_text) == Err({ code: "cannot-encode", reason: "not a number literal", path: "[\"pt-BR\"][0]" })
+expect Encode.value([("a", Num("1")), ("pt-BR", Arr([Num("x")]))], |m, e| Encode.map(m, e, Encode.any)).map_ok(canonical_text) == Err({ code: "invalid-number", reason: "not a number literal", path: "[\"pt-BR\"][0]" })
 expect Encode.value([("a", 1.I32), ("a", 2)], |m, e| Encode.map(m, e, |n, e1| Encode.number(n.to_str(), e1))).map_err(|e| (e.code, e.path)).map_ok(canonical_text) == Err(("duplicate-key", ".a"))
 
 # A native value nested far deeper than any limit: the encoder stops at the

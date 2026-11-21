@@ -33,7 +33,7 @@ from typing import Final, Literal, Never, cast
 from ._decode import HausEncodeError
 from ._error_codes import ErrorCode
 from ._errors import HausSyntaxError, PathKey
-from ._number import normalize_number, number_limit_issue
+from ._number import UNLIMITED, normalize_number, number_limit_issue
 from ._parser import DEFAULT_LIMITS, Limits, Parser, make_room
 from ._scan import (
     BIDI,
@@ -414,8 +414,6 @@ class _Scanner:
 # ── the tree of values built in code ─────────────────────────
 
 _SURROGATE: Final = re.compile(r"[\ud800-\udfff]")
-_LAX: Final = Limits(max_number_length=1 << 31, max_exponent=1 << 62)
-"""Limits that let `normalize_number` read any literal: the writer's limits are checked after."""
 
 
 class _Builder:
@@ -458,9 +456,12 @@ class _Builder:
             return node
         if isinstance(v, Number):
             text = cast("object", v.text)  # anything, in a value built in code
-            normalized = normalize_number(text, _LAX) if isinstance(text, str) else None
+            if not isinstance(text, str):
+                self.fail("cannot-encode", f"a number whose text isn't a str: {type(text).__name__}")
+            # Any literal is normalized; the limits are checked after.
+            normalized = normalize_number(text, UNLIMITED)
             if normalized is None:
-                self.fail("cannot-encode", f"a number that isn't a number literal: {text!r}")
+                self.fail("invalid-number", f"a number that isn't a number literal: {text!r}")
             if (issue := number_limit_issue(normalized, self.limits)) is not None:
                 self.fail(issue[0], f"{issue[1]}: {len(normalized)} characters")
             return _Node(_NUMBER, normalized)
@@ -874,9 +875,9 @@ def stringify_all(
     Raises `haus.schema.HausEncodeError` (a `ValueError`, with the `path` of the value) for a value
     that has no text within `limits`: a number longer than the number limit (`number-too-long`) or with
     a larger exponent (`exponent-too-large`), nesting deeper than the depth limit (`nesting-too-deep`; a
-    record payload is one level), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a value that
-    contains itself (`cyclic-value`), or a string or key with a lone surrogate, a number literal that
-    isn't one, or an object that isn't a haus value (`cannot-encode`).
+    record payload is one level), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a number whose
+    text isn't a number literal (`invalid-number`), a value that contains itself (`cyclic-value`), or a
+    string or key with a lone surrogate or an object that isn't a haus value (`cannot-encode`).
     """
     _options(style, indent, width)
     vs = list(values)

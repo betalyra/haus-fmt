@@ -54,6 +54,25 @@ SCHEMA = compile_schema("""
 """)
 
 
+@pytest.mark.parametrize("text", ["", "Empty, Empty", "Empty, Empty,"])
+def test_a_single_document_holds_one_value(text: str) -> None:
+    with pytest.raises(HausDecodeError) as e:
+        SCHEMA["Shape"].parse(text)
+    assert (e.value.code, format_path(e.value.path)) == ("not-one-value", "$")
+
+
+def test_a_number_built_in_code_must_be_a_literal() -> None:
+    """Spec §11: a number whose text isn't a literal is `invalid-number`; another spelling is normalized."""
+    payload = SCHEMA["Payload"]
+    assert payload.canonical(Array((Number("1E+05"), Number("0xFF")))) == "[1e5,255]"
+    with pytest.raises(HausEncodeError) as e:
+        payload.encode(Array((Number("1"), Number("01"))))
+    assert (e.value.code, format_path(e.value.path)) == ("invalid-number", "$[1]")
+    with pytest.raises(HausEncodeError) as j:
+        haus.to_haus_json(Number("NaN"))
+    assert j.value.code == "invalid-number"
+
+
 def roundtrip(type_name: str, text: str, schema: Schema = SCHEMA) -> str:
     t = schema[type_name]
     return haus.canonical(t.encode(t.parse(text)))
@@ -416,8 +435,9 @@ def test_codecs_are_opt_in_host_types() -> None:
     assert t["amount"] == Decimal("1500")
     # Lossy, as documented: the fraction's spelling and the exponent change.
     assert s["T"].canonical(t) == '{amount:1.5e3,at:Instant("2026-11-13T10:00:00.250000+01:00"),d:Date("2026-11-13")}'
-    with pytest.raises(HausDecodeError, match="codec for std/time#Date"):
+    with pytest.raises(HausDecodeError, match="codec for std/time#Date") as e:
         s["T"].parse('{ d: Date("0000-01-01"), at: Instant("2026-11-13T10:00:00Z"), amount: 1 }')
+    assert (e.value.code, e.value.path) == ("codec-rejected", ("d",))  # datetime.date has no year 0
     with pytest.raises(HausEncodeError, match="codec"):
         s["T"].encode({"d": "2026-11-13", "at": t["at"], "amount": Decimal(1)})
     with pytest.raises(ValueError, match="no such type"):
@@ -589,6 +609,7 @@ def test_codecs_in_one_value_run_inside_out() -> None:
         with pytest.raises(HausDecodeError) as e:
             order.parse(text)
         assert e.value.to_json()["path"] == path, text
+        assert e.value.code == "codec-rejected"
     for json, path in [
         ('{"total": {"_tag": "Money", "values": ["-1", {"_tag": "EURO"}]}}', "$.total.values[1]"),
         ('{"total": {"_tag": "Money", "values": ["-1", {"_tag": "EUR"}]}}', "$.total"),
@@ -596,6 +617,7 @@ def test_codecs_in_one_value_run_inside_out() -> None:
         with pytest.raises(HausDecodeError) as e:
             order.from_json(json)
         assert e.value.to_json()["path"] == path, json
+        assert e.value.code == "codec-rejected"
 
 
 def test_values_built_in_code_count_empty_containers_as_levels() -> None:

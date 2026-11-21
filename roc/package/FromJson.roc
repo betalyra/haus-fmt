@@ -406,7 +406,7 @@ FromJson := [].{
 	## A closed record has only the members listed (a record payload lists `"_tag"` too).
 	closed : List((Str, JsonValue)), List(Str) -> Try({}, Decode.Error)
 	closed = |members, known| match members.find_first(|(k, _)| !known.contains(k)) {
-		Ok((k, _)) => at(Decode.fail(ErrorCode.unknown_field, "unknown member \"${k}\" in a closed record"), ErrorCode.path_key(k))
+		Ok((k, _)) => at(Decode.fail(ErrorCode.unknown_field, "unknown member \"${ErrorCode.shown(k)}\" in a closed record"), ErrorCode.path_key(k))
 		Err(_) => Ok({})
 	}
 
@@ -433,7 +433,7 @@ FromJson := [].{
 	args = |members, n| {
 		name = if (n == 1) "value" else "values"
 		match members.find_first(|(k, _)| k != "_tag" and (n == 0 or k != name)) {
-			Ok((k, _)) => return at(Decode.fail(ErrorCode.unexpected_member, "unexpected member \"${k}\""), ErrorCode.path_key(k))
+			Ok((k, _)) => return at(Decode.fail(ErrorCode.unexpected_member, "unexpected member \"${ErrorCode.shown(k)}\""), ErrorCode.path_key(k))
 			Err(_) => {}
 		}
 		if n == 0 {

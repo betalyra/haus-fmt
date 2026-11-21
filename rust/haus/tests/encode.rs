@@ -3,9 +3,9 @@
 //! with the writer's error instead of overflowing the stack, and an error
 //! inside a `Secret` is reported at the secret, without anything inside it.
 //!
-//! Rust drops a deeply nested value recursively, so these tests take deep
-//! values apart in a loop ([`Nest::dismantle`], [`dismantle`]) rather than
-//! dropping them.
+//! A [`Value`] drops without recursion; Rust drops a deeply nested native
+//! value recursively, so these tests take one apart in a loop
+//! ([`Nest::dismantle`]) rather than dropping it.
 
 use haus::json::{self, Json, ToJson};
 use haus::{Encode, EncodeError, Encoder, ErrorCode, Limits, Secret, Value, ser};
@@ -65,16 +65,6 @@ impl ToJson for Dag {
     }
 }
 
-/// A [`Value`] dropped level by level, without recursion.
-fn dismantle(mut v: Value) {
-    while let Value::Array(mut items) | Value::Variant { args: mut items, .. } = v {
-        match items.pop() {
-            Some(inner) => v = inner,
-            None => break,
-        }
-    }
-}
-
 /// `n` levels of `[...]` as the error path.
 fn path(n: usize) -> String {
     "[0]".repeat(n)
@@ -113,10 +103,6 @@ fn native_values_beyond_the_depth_limit_fail_at_the_limit() {
     let one_more = Some(options.clone());
     assert!(haus::to_string(&one_more).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
     assert!(json::to_string(&one_more).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
-    dismantle(options);
-    if let Some(v) = one_more {
-        dismantle(v);
-    }
 }
 
 #[test]
@@ -135,7 +121,7 @@ fn very_deep_native_values_fail_without_overflowing_the_stack() {
 fn very_deep_values_built_in_code_have_a_canonical_form() {
     // The canonical form takes no call stack per level: it has no limit (spec §12).
     let deep = (0..1_000_000).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
-    let text = haus::canonical(&deep);
+    let text = haus::canonical(&deep).unwrap();
     assert_eq!(text.len(), 2 * 1_000_001);
     assert!(text.starts_with("[[[") && text.ends_with("]]]"));
     assert!(haus::equals(&deep, &deep));
@@ -143,7 +129,32 @@ fn very_deep_values_built_in_code_have_a_canonical_form() {
     assert!(haus::to_string(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
     assert!(haus::to_haus_json(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
     assert!(json::to_string(&deep).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
-    dismantle(deep);
+}
+
+/// A [`Value`] built in code a million levels deep, of every kind of container.
+fn very_deep(bottom: &str) -> Value {
+    (0..1_000_000).fold(Value::Number(bottom.into()), |v, i| match i % 3 {
+        0 => Value::Array(vec![Value::Bytes(vec![1]), v]),
+        1 => Value::Record(vec![("a".into(), v), ("b".into(), Value::String("x".into()))]),
+        _ => Value::Variant { tag: "Some".into(), args: vec![v] },
+    })
+}
+
+#[test]
+fn very_deep_values_built_in_code_drop_clone_and_compare_without_recursion() {
+    // A thread of its own, with the default stack (2 MiB): far too small to
+    // take a million levels by recursion.
+    std::thread::spawn(|| {
+        let deep = very_deep("1");
+        let copy = deep.clone();
+        assert!(copy == deep);
+        assert!(very_deep("2") != deep, "a difference at the bottom");
+        assert!(haus::equals(&copy, &deep));
+        drop(copy);
+        drop(deep);
+    })
+    .join()
+    .expect("no stack overflow");
 }
 
 /// A record with a key that names the secret, and a value the writer rejects.
@@ -170,7 +181,6 @@ fn errors_inside_a_secret_name_only_the_secret() {
         for e in [haus::to_string(&in_a_record).unwrap_err(), json::to_string(&in_a_record).unwrap_err()] {
             assert_eq!(e.to_string(), format!(".vault: {hidden}"));
         }
-        dismantle(secret.into_inner());
     }
 
     // Native values inside a secret, too: a map key in the path would reveal it.

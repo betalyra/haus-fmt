@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from typing import Final, Never, TypeAlias, TypeVar
 
 from ._error_codes import ErrorCode
-from ._errors import HausJsonError, PathKey
+from ._errors import UNPAIRED_SURROGATE, HausJsonError, PathKey, unpaired_surrogate
 from ._number import number_limit_issue
 from ._parser import Limits
-from ._scan import TAG
+from ._scan import TAG, quote_for_message
 from ._stream import Readable
 from ._value import Array, Bytes, Number, Record, String, Value, Variant
 
@@ -137,7 +137,7 @@ class _Reader:
         """Text that isn't JSON: `expected` should be at `pos` (here by default)."""
         at = self.pos if pos is None else pos
         c = self.text[at : at + 1]
-        found = "end of input" if c == "" else f"U+{ord(c):04X}" if c < " " else f"'{c}'"
+        found = "end of input" if c == "" else f"U+{ord(c):04X}" if c < " " else f"'{quote_for_message(c)}'"
         self.fail("json-syntax", reason, at, expected=expected, found=found)
 
     def skip(self) -> None:
@@ -197,7 +197,7 @@ class _Reader:
             self.syntax("a member name", "expected a member name (a string)")
         key = self.string()
         if key in container.items:
-            self.fail("duplicate-key", f"duplicate member name {json.dumps(key, ensure_ascii=False)}", start)
+            self.fail("duplicate-key", f'duplicate member name "{quote_for_message(key)}"', start)
         self.skip()
         if not self.text.startswith(":", self.pos):
             self.syntax("':'", "expected ':' after the member name")
@@ -297,8 +297,10 @@ class _Reader:
 
 
 def json_text(data: str | bytes) -> str:
-    """The text of JSON input: bytes must be UTF-8."""
+    """The text of JSON input: bytes must be UTF-8, and a `str` Unicode text (no lone surrogate)."""
     if isinstance(data, str):
+        if (at := unpaired_surrogate(data)) is not None:
+            raise HausJsonError.at(data, at, "invalid-utf8", UNPAIRED_SURROGATE)
         return data
     try:
         return data.decode("utf-8")
@@ -651,10 +653,11 @@ def to_base64(data: bytes) -> str:
 _CHUNK_SIZE = 64 * 1024
 
 
-def json_lines(source: str | bytes | Readable | Iterable[str | bytes], max_line_length: int) -> Iterator[str]:
+def json_lines(source: str | bytes | Readable | Iterable[str | bytes]) -> Iterator[str]:
     """The lines of JSON Lines, without their line feeds, from a text, a file or chunks split anywhere.
 
-    A last line without a line feed is a line too; nothing after the last line feed is not.
+    A last line without a line feed is a line too; nothing after the last line feed is not. A line
+    has no length limit of its own (spec §16): the limits apply to the value read from it.
     """
     decoder = codecs.getincrementaldecoder("utf-8")("strict")
     pending = ""
@@ -666,19 +669,11 @@ def json_lines(source: str | bytes | Readable | Iterable[str | bytes], max_line_
             raise HausJsonError("invalid UTF-8", code="invalid-utf8", line=line, column=len(pending) + 1) from None
         start = 0
         while (end := text.find("\n", start)) >= 0:
-            if len(pending) + end - start > max_line_length:
-                raise HausJsonError(
-                    f"line longer than {max_line_length} characters", code="value-too-long", line=line, column=1
-                )
             yield pending + text[start:end]
             pending = ""
             start = end + 1
             line += 1
         pending += text[start:]
-        if len(pending) > max_line_length:
-            raise HausJsonError(
-                f"line longer than {max_line_length} characters", code="value-too-long", line=line, column=1
-            )
     try:
         pending += decoder.decode(b"", final=True)
     except UnicodeDecodeError:
@@ -704,7 +699,6 @@ def read_lines(
     limits: Limits,
     max_depth: int,
     convert: Callable[[Json, int], R],
-    max_line_length: int,
     *,
     strict: bool = False,
 ) -> Iterator[R]:
@@ -713,7 +707,7 @@ def read_lines(
     A byte order mark is ignored only at the start of the stream, as in haus streams (spec §16).
     `strict` is as for `read_json`.
     """
-    for i, text in enumerate(json_lines(source, max_line_length)):
+    for i, text in enumerate(json_lines(source)):
         # An empty line is no JSON text; a byte order mark after the first line is no whitespace (spec §16).
         if text in ("", "\r"):
             raise HausJsonError(

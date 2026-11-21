@@ -394,8 +394,15 @@ func (p *parser) importDecl() (importDecl, *synErr) {
 		}
 		p.pos += len(p.peekWord())
 	case p.pos < len(s) && (s[p.pos] == '@' || s[p.pos] == '.'):
+		// A package module (@org/name@1) is read to its end with its
+		// version, so that @a/b@1~x is import-version; a file path has no
+		// '~' (grammar path), so ./a~b ends before it, a syntax error.
+		chars := "_.-/@"
+		if s[p.pos] == '@' {
+			chars = "_.-/@~"
+		}
 		p.pos++
-		for p.pos < len(s) && (isWord(s[p.pos]) || strings.IndexByte("_.-/@~", s[p.pos]) >= 0) {
+		for p.pos < len(s) && (isWord(s[p.pos]) || strings.IndexByte(chars, s[p.pos]) >= 0) {
 			p.pos++
 		}
 		if p.pos == start+1 {

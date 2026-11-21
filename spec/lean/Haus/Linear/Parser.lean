@@ -278,7 +278,7 @@ mutual
       match ← get with
       | t@('(' :: _) =>
           let xs ← itemsC L fuel budget ')'
-          if xs.isEmpty then failAtC .emptyPayload s!"empty payload: write '{name}' without parentheses" t
+          if xs.isEmpty then failAtC .emptyPayload s!"empty payload: write '{msgText name}' without parentheses" t
           return .variant name xs
       | '{' :: _ => return .variant name [.record (← recordC L fuel budget)]
       | _ => set afterTag; return .variant name []
@@ -304,13 +304,13 @@ mutual
       | t =>
           let k ← keyC L
           wsC
-          expectC ':' .missingColon s!"expected ':' after key '{k}'"
+          expectC ':' .missingColon s!"expected ':' after key '{msgText k}'"
           wsC
           let v ← valueC L fuel budget
           let p := keyBits k.toList
           tick (p.length + 1)
           tick (ks.memC p).2
-          if (ks.memC p).1 then failAtC .duplicateKey s!"duplicate key '{k}'" t
+          if (ks.memC p).1 then failAtC .duplicateKey s!"duplicate key '{msgText k}'" t
           tick (ks.insertC p).2
           wsC
           tick 1

@@ -139,7 +139,7 @@ final class Decoder {
     } catch (HausException e) {
       throw fail(e.code(), codec.typeId() + " rejects the value: " + e.reason());
     } catch (RuntimeException e) {
-      throw fail(ErrorCode.TYPE_MISMATCH, codec.typeId() + " rejects the value: " + e.getMessage());
+      throw fail(ErrorCode.CODEC_REJECTED, codec.typeId() + " rejects the value: " + e.getMessage());
     }
   }
 
@@ -828,7 +828,7 @@ final class Decoder {
   private Value intString(String s, Kind k) {
     if (!isDecimalInteger(s)) {
       ErrorCode code = isJsonNumber(s) ? ErrorCode.NOT_AN_INTEGER : ErrorCode.INVALID_NUMBER;
-      throw fail(code, "expected a decimal integer in a string (" + k.builtin + "), found " + SchemaText.quote(shortText(s)));
+      throw fail(code, "expected a decimal integer in a string (" + k.builtin + "), found " + SchemaText.quote(s));
     }
     // A sized type checks its range: a number too long for the limit is out of range for it.
     if (k == Kind.INT && s.length() > lim.maxNumberLength()) {
@@ -841,7 +841,7 @@ final class Decoder {
   /** Reads a Decimal: a JSON number literal in a string, normalized (spec §2). */
   private Value decimalString(String s) {
     if (!isJsonNumber(s)) {
-      throw fail(ErrorCode.INVALID_NUMBER, "expected a number literal in a string (Decimal), found " + SchemaText.quote(shortText(s)));
+      throw fail(ErrorCode.INVALID_NUMBER, "expected a number literal in a string (Decimal), found " + SchemaText.quote(s));
     }
     Value.Number n = new Value.Number(normalizeJsonNumber(s));
     HausException e = Numbers.overLimits(n.literal(), lim);
@@ -886,7 +886,7 @@ final class Decoder {
     }
     String s = ((Value.Text) j).value();
     if (!Scan.isTag(s)) {
-      throw fail(ErrorCode.INVALID_TAG, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found " + SchemaText.quote(shortText(s)));
+      throw fail(ErrorCode.INVALID_TAG, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found " + SchemaText.quote(s));
     }
     return s;
   }
@@ -945,7 +945,7 @@ final class Decoder {
       String s = ((Value.Text) j).value();
       if (!Scan.isTag(s)) {
         throw fail(ErrorCode.INVALID_TAG, "expected a tag ([A-Z][A-Za-z0-9_]*), one of " + SchemaTypes.tags(vt)
-            + ", found " + SchemaText.quote(shortText(s)));
+            + ", found " + SchemaText.quote(s));
       }
       CaseType c = vt.caseOf(s);
       if (c == null) {
@@ -1175,19 +1175,11 @@ final class Decoder {
     return Base64.getEncoder().encodeToString(b).equals(s) ? b : null;
   }
 
-  /** At most 30 characters of {@code s}, for messages. */
-  static String shortText(String s) {
-    if (s.codePointCount(0, s.length()) <= 30) {
-      return s;
-    }
-    return s.substring(0, s.offsetByCodePoints(0, 30)) + "…";
-  }
-
   /** A short description of JSON (read as the import reads it), for messages. */
   static String describeJson(Value j) {
     switch (j.kind()) {
       case STRING:
-        return "the string " + SchemaText.quote(shortText(((Value.Text) j).value()));
+        return "the string " + SchemaText.quote(((Value.Text) j).value());
       case NUMBER:
         return "the number " + shortNumber(((Value.Number) j).literal());
       case ARRAY:

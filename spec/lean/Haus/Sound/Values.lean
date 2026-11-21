@@ -213,7 +213,7 @@ theorem fields_step (L : Limits) (fuel : Nat) (hv : ValueOk L fuel) (hf : Fields
       | ok res =>
         obtain ⟨⟨⟩, r2⟩ := res
         simp only [hw1] at h
-        cases he : (expect ':' .missingColon s!"expected ':' after key '{k}'").run r2 with
+        cases he : (expect ':' .missingColon s!"expected ':' after key '{msgText k}'").run r2 with
         | error e => simp [he] at h
         | ok res =>
           obtain ⟨⟨⟩, r3⟩ := res

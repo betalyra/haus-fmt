@@ -88,8 +88,8 @@ pub fn check(ty: &str, text: &str) -> Result<(), String> {
         return Err(format!("{ty} is not a std/time type"));
     };
     (kind.check)(&mut Cursor { s: text.as_bytes(), i: 0 }).map_err(|invalid| match invalid {
-        Invalid::Shape => format!("{text:?} is not a {ty}; write it like {}", kind.example),
-        Invalid::Value(reason) => format!("{text:?} is not a valid {ty}: {reason}"),
+        Invalid::Shape => format!("\"{}\" is not a {ty}; write it like {}", crate::scan::shown(text), kind.example),
+        Invalid::Value(reason) => format!("\"{}\" is not a valid {ty}: {reason}", crate::scan::shown(text)),
     })
 }
 
@@ -268,8 +268,14 @@ fn offset(o: &str) -> Check {
     }
 }
 
-/// An IANA zone name by its syntax (not looked up), or an offset.
+/// An IANA zone name by its syntax (not looked up), or an offset `±hh:mm`.
+/// `Z` is neither: it is the offset letter, not a zone name.
 fn zone(z: &str) -> Check {
+    if z == "Z" {
+        return invalid(
+            "Z is an offset, not a zone: write a zone name (like Europe/Lisbon) or an offset (like +00:00)",
+        );
+    }
     let mut c = Cursor { s: z.as_bytes(), i: 0 };
     if let Ok(o) = c.offset()
         && c.at_end()
@@ -282,7 +288,10 @@ fn zone(z: &str) -> Check {
     if z.len() <= 255 && z.starts_with(|c: char| c.is_ascii_alphabetic()) && z.split('/').all(part) {
         Ok(())
     } else {
-        invalid(format!("{z:?} is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)"))
+        invalid(format!(
+            "\"{}\" is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)",
+            crate::scan::shown(z)
+        ))
     }
 }
 

@@ -102,6 +102,7 @@ final class SchemaLoader {
 
   /** Reads a schema from text; its relative imports fail, as it has no place among files. */
   static Schema parse(String text, SchemaOptions opts) {
+    Source.checkSurrogates(text); // text with no UTF-8 form is invalid-utf8, as in a file (spec §4)
     return new SchemaLoader(opts, new SchemaFiles()).run(text, null);
   }
 

@@ -52,8 +52,8 @@ namespace Codec
 
 variable {H : Type}
 
-/-- The error of a value the schema accepts and the codec doesn't. Its message is the binding's. -/
-def rejected : Error := { path := [], reason := "rejected by the codec" }
+/-- The error of a value the schema accepts and the codec doesn't (`codec-rejected`). Its message is the binding's. -/
+def rejected : Error := { path := [], reason := "rejected by the codec", code := some .codecRejected }
 
 /-- Decoding with a codec: the schema first, then the codec on what it decoded. -/
 def decode (c : Codec H) (env : Env) (t : Ty) (v : Value) : Except Error H :=

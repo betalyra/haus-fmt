@@ -3,8 +3,9 @@
 //! before each container and fails at the limit with `nesting-too-deep`
 //! instead of overflowing the stack, also inside an `Any`.
 //!
-//! Rust drops a deeply nested value recursively, so these tests take deep
-//! values apart in a loop ([`dismantle`]) rather than dropping them.
+//! A [`Value`] drops without recursion; Rust drops a deeply nested [`Json`]
+//! recursively, so these tests take deep JSON apart in a loop
+//! ([`dismantle_json`]) rather than dropping it.
 
 use haus::json::{self, Json};
 use haus::{Decode, DecodeError, Decoder, ErrorCode, FromJson, Limits, Unknown, Value, de};
@@ -57,23 +58,6 @@ fn tagged_record(v: Value) -> Value {
     Value::Variant { tag: "A".into(), args: vec![record(v)] }
 }
 
-/// A [`Value`] dropped level by level, without recursion.
-fn dismantle(mut v: Value) {
-    loop {
-        v = match v {
-            Value::Array(mut items) | Value::Variant { args: mut items, .. } => match items.pop() {
-                Some(inner) => inner,
-                None => break,
-            },
-            Value::Record(mut fields) => match fields.pop() {
-                Some((_, inner)) => inner,
-                None => break,
-            },
-            _ => break,
-        }
-    }
-}
-
 /// A [`Json`] dropped level by level, without recursion.
 fn dismantle_json(mut j: Json) {
     while let Json::Array(mut items) = j {
@@ -107,8 +91,6 @@ fn a_value_built_a_million_levels_deep_fails_at_the_depth_limit() {
     let wrapped = Value::Record(vec![("raw".into(), v)]);
     let e = <std::collections::BTreeMap<String, Value>>::decode(&wrapped).unwrap_err();
     assert_eq!(e.to_string(), deeper(&format!(".raw{}", "[0]".repeat(255))));
-    dismantle(wrapped);
-    dismantle(chain);
 }
 
 #[test]

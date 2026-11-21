@@ -54,7 +54,7 @@ fn line(schemas: &HashMap<String, Result<Schema, String>>, text: &str) -> String
         _ => return "err $ - not a single value".into(),
     };
     match schema.decode(ty, &value) {
-        Ok(decoded) => format!("ok {}", haus::canonical(&decoded)),
+        Ok(decoded) => format!("ok {}", haus::canonical(&decoded).expect("a value read or written has a canonical form")),
         Err(e) => format!("err {} {} {}", e.path_string(), e.code, one_line(&e.message)),
     }
 }

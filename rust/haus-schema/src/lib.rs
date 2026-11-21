@@ -9,7 +9,7 @@
 //! // Decoding gives the value a writer writes back (spec §15): `0x10` is `16`,
 //! // and the open record drops the field it doesn't list.
 //! let decoded = schema.decode("Root", &value).unwrap();
-//! assert_eq!(haus::canonical(&decoded), r#"{id:16,tags:["a"]}"#);
+//! assert_eq!(haus::canonical(&decoded).unwrap(), r#"{id:16,tags:["a"]}"#);
 //!
 //! // Checking reports every problem, with its place in the text, and hints.
 //! let issues = schema.check_text("Root", "{\n  id: \"7\",\n  tgs: [],\n}");
@@ -251,10 +251,13 @@ fn without_verbatim(text: &str) -> String {
 }
 
 /// A character as a message shows it: control and bidirectional ones as `\u{…}`.
+/// A character as a message shows it (spec §9): control, bidirectional and
+/// line-separator characters as `\u{…}`, in uppercase hex as the canonical
+/// form writes them (spec §12).
 fn escape(c: char) -> String {
     let bidi = matches!(c, '\u{61c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-    match c.is_control() || bidi {
-        true => format!("\\u{{{:x}}}", c as u32),
+    match c.is_control() || bidi || matches!(c, '\u{2028}' | '\u{2029}') {
+        true => format!("\\u{{{:X}}}", c as u32),
         false => c.to_string(),
     }
 }

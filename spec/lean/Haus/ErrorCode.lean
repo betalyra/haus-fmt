@@ -30,7 +30,7 @@ inductive Code
   | streamTruncated | notOneValue
   -- decoding with a schema (§15)
   | typeMismatch | notAnInteger | outOfRange | missingField | unknownField | unknownTag
-  | wrongPayload | invalidTime | invalidSecret | unguardedRecursion | unknownType
+  | wrongPayload | invalidTime | invalidSecret | codecRejected | unguardedRecursion | unknownType
   -- JSON (§16)
   | jsonSyntax | unpairedSurrogate | hausJsonForm | hausJsonVersion | hausJsonNumber | hausJsonBytes | invalidTag
   | invalidBase64 | missingMember | unexpectedMember | noJsonForm
@@ -101,6 +101,7 @@ def Code.name : Code → String
   | .wrongPayload => "wrong-payload"
   | .invalidTime => "invalid-time"
   | .invalidSecret => "invalid-secret"
+  | .codecRejected => "codec-rejected"
   | .unguardedRecursion => "unguarded-recursion"
   | .unknownType => "unknown-type"
   | .jsonSyntax => "json-syntax"
@@ -163,7 +164,7 @@ def Code.all : List Code := [
   .loneCarriageReturn, .unterminatedComment, .straySlash, .nestingTooDeep, .numberTooLong,
   .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .streamTruncated, .notOneValue,
   .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag,
-  .wrongPayload, .invalidTime, .invalidSecret, .unguardedRecursion, .unknownType, .jsonSyntax,
+  .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .unguardedRecursion, .unknownType, .jsonSyntax,
   .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes,
   .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm, .schemaSyntax,
   .unknownModule, .unknownImport, .duplicateImport, .duplicateType, .importNotFound,

@@ -127,6 +127,22 @@ struct APITests {
             })?.code == .numberTooLong)
     }
 
+    /// Indent and width are taken literally (spec §11): 0 is 0, and options
+    /// with a negative one can't be made (no trap, no error code).
+    @Test func formatOptionsTakenLiterally() throws {
+        #expect(
+            try format("{ a: { b: [1] } }", FormatOptions(indent: 0)) == "{\na: {\nb: [\n1,\n],\n},\n}\n")
+        #expect(try format("Point(1, 2)", FormatOptions(width: 0)) == "Point(\n  1,\n  2,\n)\n")
+        #expect(try format("Point(1, 2)", FormatOptions(indent: 0, width: 0)) == "Point(\n1,\n2,\n)\n")
+        #expect(
+            try format("{ a: Point(1, 2) }", FormatOptions(width: 0)) == "{\n  a: Point(\n    1,\n    2,\n  ),\n}\n")
+        for (indent, width) in [(2, -1), (-1, 80), (-2, 40), (Int.min, 80), (2, Int.min)] {
+            let error = #expect(throws: FormatOptionsError.self) { try FormatOptions(indent: indent, width: width) }
+            #expect(error?.message.contains("must be 0 or more") == true)
+        }
+        #expect(FormatOptions().indent == 2 && FormatOptions().width == 80)
+    }
+
     @Test func formatAndComments() throws {
         let text = "{ a: 1, // one\n  b: [2,3] }"
         #expect(try format(text) == "{\n  a: 1, // one\n  b: [\n    2,\n    3,\n  ],\n}\n")

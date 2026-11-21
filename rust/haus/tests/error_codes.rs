@@ -38,7 +38,7 @@ fn catalogue() -> Vec<Entry> {
     haus::parse(&source)
         .expect("spec/errors.haus is haus")
         .into_iter()
-        .map(|v| match v {
+        .map(|v| match &v {
             Value::Variant { tag, args } if tag == "Code" => match args.as_slice() {
                 [Value::Record(fields)] => Entry {
                     code: text(fields, "code").to_owned(),

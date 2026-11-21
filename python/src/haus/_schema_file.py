@@ -24,8 +24,9 @@ from dataclasses import dataclass, field
 from typing import Literal, Never, Protocol, TypeAlias, TypeVar
 
 from ._error_codes import ERROR_CODES, ErrorCode
-from ._errors import HausSyntaxError, error_docs
+from ._errors import UNPAIRED_SURROGATE, HausSyntaxError, error_docs, unpaired_surrogate
 from ._parser import Parser
+from ._scan import escape_for_message, quote_for_message
 from ._time import STD_TIME_TYPES
 from ._value import String, Value
 
@@ -379,38 +380,10 @@ class ModuleError(Exception):
         self.code: ErrorCode = code
 
 
-_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]")
-"""Control and bidirectional characters, which a terminal or a log would act on (spec §9.2)."""
-MAX_QUOTED = 40
-"""Text quoted from a file is at most 40 characters long in a message (spec §9.2)."""
-
-
-def escape(text: str) -> str:
-    r"""`text` with control and bidirectional characters escaped as `\u{…}`, for a message (spec §9.2).
-
-    >>> escape("a\x1b[31mb\u202e")
-    'a\\u{1b}[31mb\\u{202e}'
-    """
-    return _UNSAFE.sub(lambda m: f"\\u{{{ord(m[0]):x}}}", text)
-
-
-def quote(text: str) -> str:
-    """Text from a file (a token, a name, a version) as a message quotes it: escaped, at most 40 characters.
-
-    >>> quote("x" * 50)
-    'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…'
-    """
-    escaped = escape(text)
-    if len(escaped) <= MAX_QUOTED:
-        return escaped
-    out: list[str] = []
-    size = 0
-    for piece in map(escape, text):  # cut between characters, never inside an escape
-        if size + len(piece) > MAX_QUOTED - 1:
-            break
-        out.append(piece)
-        size += len(piece)
-    return "".join(out) + "…"
+escape = escape_for_message
+"""`text` with control and bidirectional characters escaped as `\\u{…}`, for a message (spec §9.2)."""
+quote = quote_for_message
+"""Text from a file (a token, a name, a version) as a message quotes it: escaped, at most 40 characters."""
 
 
 # ── lexer ────────────────────────────────────────────────────
@@ -447,8 +420,11 @@ class _Token:
 
 _PUNCT = ("...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/")
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_MODULE = re.compile(r"std/[a-z_][A-Za-z0-9_]*|[@.][A-Za-z0-9_.\-/@~]+")
-"""The module of an import as written (grammar `module`), no whitespace inside; what it names is checked on loading."""
+_MODULE = re.compile(r"std/[a-z_][A-Za-z0-9_]*|@[A-Za-z0-9_.\-/@~]+|\.[A-Za-z0-9_.\-/@]+")
+"""The module of an import as written (grammar `module`), no whitespace inside; what it names is checked on loading.
+
+A package (`@org/name@1`) is read to the end of its version, so `@a/b@1~x` names the version `1~x`
+(`import-version`); a file path (`./name`) has no `~` (grammar `path`), so `./a~b` ends before it."""
 _MAJOR_VERSION = re.compile(r"0|[1-9][0-9]*")
 """The version an import may name: a major version, without leading zeros (spec §13.3)."""
 _VERSION_DIGITS = re.compile(r"([0-9]+)(\.|$)")
@@ -652,6 +628,8 @@ class _SchemaParser:
     """Recursive descent over the tokens, following spec/grammar.ebnf."""
 
     def __init__(self, text: str, fail: Fail) -> None:
+        if (at := unpaired_surrogate(text)) is not None:
+            fail("invalid-utf8", UNPAIRED_SURROGATE, at)  # a str can hold one; UTF-8 can't (spec §4)
         self.text = text
         self.fail = fail
         self.lexer = _Lexer(text, fail)

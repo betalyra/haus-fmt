@@ -28,6 +28,8 @@ haus.parse_bytes(open("data.haus", "rb").read())  # UTF-8 checked, BOM skipped
 
 Values are `Number`, `String`, `Bytes`, `Array`, `Record` and `Variant`, frozen dataclasses you can `match` on. Equality follows the spec: record field order doesn't matter, `1.0 != 1`, and `Tag { … }` equals `Tag({ … })`.
 
+Text given as a `str` is read as the UTF-8 it encodes to: a lone surrogate, which a `str` can hold and UTF-8 can't, is `invalid-utf8` at its line and column, as in bytes (also in `format`, the JSON readers and schema files).
+
 Errors are `haus.HausSyntaxError`, a `ValueError` with a `code`, `reason`, `line` and `column` (see [Error codes](#error-codes)):
 
 ```python
@@ -87,7 +89,7 @@ haus.stringify(Record({"id": Number("7"), "at": Variant("Point", (Number("1E+05"
 haus.stringify_all([Variant("Ping"), Variant("Pong")], style="compact")  # 'Ping,\nPong,\n'
 ```
 
-A value with no text within the limits raises `haus.schema.HausEncodeError` with its `path`: a number longer than the number limit (`number-too-long`), nesting deeper than the depth limit (`nesting-too-deep`), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a value that contains itself (`cyclic-value`), a string with a lone surrogate or anything that isn't a haus value (`cannot-encode`).
+A value with no text within the limits raises `haus.schema.HausEncodeError` with its `path`: a number longer than the number limit (`number-too-long`), nesting deeper than the depth limit (`nesting-too-deep`), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a number whose text isn't a number literal (`invalid-number`), a value that contains itself (`cyclic-value`), a string with a lone surrogate or anything that isn't a haus value (`cannot-encode`).
 
 The formatter and the writers recurse a few Python frames per level, raising Python's recursion limit for the configured depth as the parser does, and take time linear in the text (`tests/test_linear.py`). They run in the [differential fuzzer](../fuzz) against the TypeScript reference, the other bindings and Lean's layout writers.
 
@@ -103,7 +105,7 @@ haus.equals(haus.parse("1.0"), haus.parse("1"))  # False: different numbers
 sorted(values, key=functools.cmp_to_key(haus.compare))  # by canonical form, not numeric: 10 before 9
 ```
 
-Every value has a canonical form, and `canonical` and `hash` never fail: an integer is written in decimal with all its digits, however long (a parser with a larger number limit, or code, can make one longer than 1000 characters).
+Every value has a canonical form: an integer is written in decimal with all its digits, however long (a parser with a larger number limit, or code, can make one longer than 1000 characters). A value built in code is checked as `stringify` checks it, without the limits: a number is written normalized (`Number("1E+05")` as `1e5`, equal to the parsed `1e5`), and one that has no text raises `haus.schema.HausEncodeError` with its `path` in `canonical`, `hash`, `hash_all`, `equals` and `compare`: a number whose text isn't a number literal (`Number("01")`, `invalid-number`), a string or key with a lone surrogate, or anything that isn't a haus value (`cannot-encode`), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a value that contains itself (`cyclic-value`).
 
 A whole file has one hash too: `haus.hash_all(values)` hashes the canonical forms joined by `,` (a file of one value hashes like the value). The items of a stream are hashed one by one with `haus.hash`.
 
@@ -274,7 +276,7 @@ s = schema.compile_schema(
 | `DateCodec` | nothing; it rejects the year 0000, which `datetime.date` lacks |
 | `InstantCodec` | fraction digits beyond microseconds, the fraction's spelling (`.25` → `.250000`), `Z` versus `+00:00` (written `Z`); rejects the year 0000 |
 
-A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject. Codecs for your own types use their ids (`my-app/order#Money`). A codec for a type the schema doesn't have is a `ValueError`, except in a `schema.CodecGroup`: codecs given together, such as a profile's, combined with `|`.
+A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject, which `HausDecodeError` reports with the code `codec-rejected`. Codecs for your own types use their ids (`my-app/order#Money`). A codec for a type the schema doesn't have is a `ValueError`, except in a `schema.CodecGroup`: codecs given together, such as a profile's, combined with `|`.
 
 The official packages ship the codecs of their profiles: [`haus-fmt-money`](../extensions/money/python) (`haus_money.iso`: currencies are three letters A–Z) and [`haus-fmt-geo`](../extensions/geo/python) (`haus_geo.wgs84`: latitudes and longitudes in range). They keep the value: a currency becomes its tag (`"EUR"`, instead of an `Unknown`), a `LatLng` stays `Tagged("LatLng", (lat, lng))`, `-0.0` included.
 

@@ -79,6 +79,59 @@ export const highSurrogates = (s: string, from = 0): number => {
 /** The number of code points (characters, as the limits and widths count them): a surrogate pair counts once. */
 export const codePoints = (s: string): number => s.length - highSurrogates(s)
 
+// ── unpaired surrogates ──────────────────────────────────────
+
+/** An unpaired surrogate: a high one without a low one after it, or a low one without a high one before it. */
+const UNPAIRED = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
+/** `String.prototype.isWellFormed` (ES2024), where the runtime has it. */
+const isWellFormed: ((this: string) => boolean) | undefined = (String.prototype as { isWellFormed?: (this: string) => boolean }).isWellFormed
+
+/**
+ * The index of the first unpaired surrogate in `text`, or -1. A JavaScript
+ * string can hold one; it has no UTF-8 form (spec §4).
+ */
+export function unpairedSurrogate(text: string): number {
+  if (isWellFormed !== undefined && isWellFormed.call(text)) return -1
+  return text.search(UNPAIRED)
+}
+
+// ── quoting in messages ──────────────────────────────────────
+
+/** Bidirectional controls and marks, shown escaped in messages. */
+const isBidiMark = (c: number): boolean => isBidiControl(c) || c === 0x061c || c === 0x200e || c === 0x200f
+
+/**
+ * A character as a message shows it (spec §9.2): control, bidi and
+ * line-separator characters (and a lone surrogate) as `\u{…}`, in uppercase
+ * hex as the canonical form writes them (§12).
+ */
+const shownChar = (cp: number): string =>
+  isControl(cp) || isBidiMark(cp) || isLineSeparator(cp) || (cp >= 0xd800 && cp <= 0xdfff) ? `\\u{${cp.toString(16).toUpperCase()}}` : String.fromCodePoint(cp)
+
+/**
+ * Text from the input, for a message (spec §9.2): control and bidirectional
+ * characters escaped as `\u{…}`, then at most `max` characters (default 40)
+ * as shown, after escaping. A longer text is cut to whole characters in
+ * `max - 1` and marked with `…`, within the `max`; a cut never falls inside
+ * an escape. Reads only as much of `text` as it shows.
+ */
+export function quoteText(text: string, max = 40): string {
+  const pieces: string[] = []
+  let shown = 0
+  // The shown length of the pieces that fit in max - 1, should the text need a cut.
+  let kept = -1
+  for (const ch of text) {
+    const piece = shownChar(ch.codePointAt(0)!)
+    const width = piece === ch ? 1 : piece.length
+    if (shown + width > max - 1 && kept < 0) kept = pieces.length
+    shown += width
+    if (shown > max) return `${pieces.slice(0, kept).join("")}…`
+    pieces.push(piece)
+  }
+  return pieces.join("")
+}
+
 // ── names ────────────────────────────────────────────────────
 
 /** A record key written bare (spec §3): an identifier starting with a lowercase letter or `_`. Any other key is quoted. */

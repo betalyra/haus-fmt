@@ -220,7 +220,7 @@ for `Bool`, `Maybe`, `Result` and closed variants an unknown tag is
 is a record case's argument that isn't a record (`Circle(1.5)`, also for
 a record case by name, `Wrap(1)` with `Wrap Box`, at the
 variant, with the case in the message: "Circle takes one argument, a record"); anything
-inside a `Secret` is `invalid-secret`. A codec's error is a `type-mismatch`.
+inside a `Secret` is `invalid-secret`. A codec's error is `codec-rejected`.
 
 `ErrorCode.roc` is partly generated from the catalogue,
 [`../spec/errors.haus`](../spec/errors.haus), by

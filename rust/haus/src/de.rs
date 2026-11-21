@@ -146,13 +146,13 @@ fn args_within_depth(tag: &str, args: &[Value], d: Decoder) -> R<()> {
 /// What a value is, for messages: `a string`, `the tag Open`.
 pub fn describe(v: &Value) -> String {
     match v {
-        Value::Number(n) => format!("the number {n}"),
+        Value::Number(n) => format!("the number {}", crate::scan::shown(n)),
         Value::String(_) => "a string".into(),
         Value::Bytes(_) => "a byte string".into(),
         Value::Array(_) => "an array".into(),
         Value::Record(_) => "a record".into(),
-        Value::Variant { tag, args } if args.is_empty() => format!("the tag {tag}"),
-        Value::Variant { tag, .. } => format!("{tag}(…)"),
+        Value::Variant { tag, args } if args.is_empty() => format!("the tag {}", crate::scan::shown(tag)),
+        Value::Variant { tag, .. } => format!("{}(…)", crate::scan::shown(tag)),
     }
 }
 
@@ -217,7 +217,10 @@ impl<'a> Record<'a> {
     pub fn closed(&self, known: &[&str]) -> R<()> {
         match self.fields.iter().find(|(k, _)| !known.contains(&k.as_str())) {
             Some((k, _)) => {
-                let e = DecodeError::new(Code::UnknownField, format!("unknown field {k:?} in a closed record"));
+                let e = DecodeError::new(
+                    Code::UnknownField,
+                    format!("unknown field \"{}\" in a closed record", crate::scan::shown(k)),
+                );
                 Err(self.at(e.field(k)))
             }
             None => Ok(()),
@@ -356,7 +359,7 @@ fn not_one_record(tag: &str, args: &[Value], record: &str) -> DecodeError {
 /// A tag a closed variant doesn't list.
 pub fn unknown_tag(tag: &str, known: &[&str]) -> DecodeError {
     let expected = format!("one of {}", known.join(", "));
-    DecodeError::new(Code::UnknownTag, format!("unknown tag {tag}; expected {expected}"))
+    DecodeError::new(Code::UnknownTag, format!("unknown tag {}; expected {expected}", crate::scan::shown(tag)))
         .with_expected_found(expected, tag)
 }
 
@@ -464,7 +467,7 @@ pub(crate) fn hidden(what: &str) -> DecodeError {
 
 /// A type decoded by a codec: its base type first, then the codec (spec §13.4).
 pub fn codec<C: Codec>(v: &Value, d: Decoder) -> R<C::Target> {
-    C::decode(C::Base::decode_with(v, d)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
+    C::decode(C::Base::decode_with(v, d)?).map_err(|reason| DecodeError::new(Code::CodecRejected, reason))
 }
 
 /// [`codec`] for a type that contains other codecs' types: `Inner`, the
@@ -554,8 +557,11 @@ fn whole(text: &str) -> Option<&str> {
 
 /// A number with a fraction or an exponent where an integer type (`name`) is expected.
 fn not_whole(name: &str, text: &str) -> DecodeError {
-    DecodeError::new(Code::NotAnInteger, format!("expected a whole number ({name}), found {text}"))
-        .with_expected_found(name, text)
+    DecodeError::new(
+        Code::NotAnInteger,
+        format!("expected a whole number ({name}), found {}", crate::scan::shown(text)),
+    )
+    .with_expected_found(name, text)
 }
 
 macro_rules! integers {
@@ -566,7 +572,7 @@ macro_rules! integers {
                 let Some(n) = whole(text) else { return Err(not_whole($name, text)) };
                 n.parse().map_err(|_| {
                     let range = format!("{} ({} to {})", $name, <$t>::MIN, <$t>::MAX);
-                    DecodeError::new(Code::OutOfRange, format!("{text} is out of range for {range}"))
+                    DecodeError::new(Code::OutOfRange, format!("{} is out of range for {range}", crate::scan::shown(text)))
                         .with_expected_found(range, text.as_str())
                 })
             }
@@ -587,9 +593,9 @@ macro_rules! floats {
                 match v {
                     Value::Number(text) => match text.parse::<$t>() {
                         Ok(x) if x.is_finite() => Ok(x),
-                        Ok(_) => Err(DecodeError::new(Code::OutOfRange, format!("{text} is too large for {}", $name))
+                        Ok(_) => Err(DecodeError::new(Code::OutOfRange, format!("{} is too large for {}", crate::scan::shown(text), $name))
                             .with_expected_found($name, text.as_str())),
-                        Err(_) => Err(DecodeError::new(Code::TypeMismatch, format!("{text} is not a {}", $name))),
+                        Err(_) => Err(DecodeError::new(Code::TypeMismatch, format!("{} is not a {}", crate::scan::shown(text), $name))),
                     },
                     Value::Variant { tag, args } if args.is_empty() && tag == "NaN" => Ok(<$t>::NAN),
                     Value::Variant { tag, args } if args.is_empty() && tag == "Infinity" => Ok(<$t>::INFINITY),

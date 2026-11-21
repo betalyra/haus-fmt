@@ -421,6 +421,36 @@ def test_imports() -> None:
     assert s["Address"].id == "app/common#Address"
 
 
+@pytest.mark.parametrize(
+    ("text", "code", "column"),
+    [
+        # A file path has no `~` (grammar `path`): the module ends before it, and `(` is missing there.
+        ("import ./a~b (A)\ntype T = A", "schema-syntax", 11),
+        ("import ../x~y (A)\ntype T = A", "schema-syntax", 12),
+        # A package module is read to the end of its version: `1~x` isn't a major version.
+        ("import @a/b@1~x (A)\ntype T = A", "import-version", 8),
+    ],
+)
+def test_a_tilde_ends_a_file_path_but_not_a_package_version(text: str, code: str, column: int) -> None:
+    with pytest.raises(HausSchemaFileError) as e:
+        parse_schema_file(text)
+    assert (e.value.code, e.value.line, e.value.column) == (code, 1, column)
+
+
+@pytest.mark.parametrize(
+    ("text", "line", "column"),
+    [
+        ("type A = { x: Int32 } // \ud800", 1, 26),
+        ('type A = { "a\udc00": Int32 }', 1, 14),
+        ("// 😀\n  type A = \ud83d\ude00", 2, 12),  # in a str, a surrogate pair is two lone surrogates
+    ],
+)
+def test_a_lone_surrogate_in_a_str_is_invalid_utf8(text: str, line: int, column: int) -> None:
+    with pytest.raises(HausSchemaFileError) as e:
+        parse_schema_file(text)
+    assert (e.value.code, e.value.line, e.value.column) == ("invalid-utf8", line, column)
+
+
 def test_import_errors() -> None:
     resolver = MemoryResolver(
         {

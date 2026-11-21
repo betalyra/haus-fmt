@@ -261,12 +261,14 @@ func checkDeclared(_ name: String, from: String?, dir: String, files: SchemaFile
 }
 
 /// The nearest package.json above `dir` that has a name or a dependency
-/// field: the project's. One that isn't valid JSON is the project's too, and
-/// declares nothing: the search stops there.
+/// field: the project's. One that isn't valid JSON, or isn't a regular file
+/// (a directory, a broken link), is the project's too, and declares nothing:
+/// the search stops there.
 func project(above dir: String, files: SchemaFiles) throws(HausError) -> (path: String, doc: PackageJSON)? {
     for d in ancestors(of: dir) {
         let path = FilePath.join(d, "package.json")
-        guard let doc = try files.packageJSON(path, .projectJSON) else { continue }
+        guard exists(path) else { continue }
+        guard let doc = try files.packageJSON(path, .projectJSON) else { return (path, PackageJSON.unreadable) }
         if !doc.isValid || doc.members.contains("name") || dependencyFields.contains(where: doc.members.contains) {
             return (path, doc)
         }

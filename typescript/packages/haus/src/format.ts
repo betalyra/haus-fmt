@@ -13,7 +13,9 @@
  * stays after that entry's comma. The output has LF line endings only, in
  * comments too.
  */
-import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB } from "./chars.js"
+import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, quoteText, TAB, TAG, unpairedSurrogate } from "./chars.js"
+import { HausEncodeError } from "./errors.js"
+import { canonicalNumber, isNormalizedNumber } from "./number.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
 /**
@@ -62,6 +64,16 @@ export function format(values: readonly Value[], options: FormatOptions = {}): s
 export function stringify(value: Value, options: FormatOptions = {}): string {
   const f = new Formatter(options)
   return oneLine(options) ? f.line(value) : f.value(value)
+}
+
+/**
+ * An indent or width as given (spec §11): a whole number of at least 0,
+ * taken literally (0 means 0). Anything else is a misuse of the API, not a
+ * haus error: a `RangeError`.
+ */
+const wholeOption = (name: "indent" | "width", n: number): number => {
+  if (!Number.isSafeInteger(n) || n < 0) throw new RangeError(`${name} must be a whole number of at least 0, not ${String(n)}`)
+  return n
 }
 
 /** Compact and minimised write every top-level item on one line. */
@@ -139,8 +151,8 @@ class Formatter {
 
   constructor(options: FormatOptions) {
     this.spacing = options.style === "minimised" ? TIGHT : SPACED
-    this.step = " ".repeat(options.indent ?? 2)
-    this.width = options.width ?? 80
+    this.step = " ".repeat(wholeOption("indent", options.indent ?? 2))
+    this.width = wholeOption("width", options.width ?? 80)
     this.source = options.source
     this.comments = options.source === undefined ? [] : [...(options.comments ?? [])].sort((a, b) => a[0] - b[0])
   }
@@ -226,7 +238,7 @@ class Formatter {
           case "variant": {
             const args = x.args
             const first = args[0]
-            out += x.tag
+            out += writtenTag(x.tag)
             if (args.length === 1 && first!.kind === "record") {
               out += spacing.tag
               work.push(first!) // the record, next
@@ -292,7 +304,7 @@ class Formatter {
       case "number":
         return void out.push(this.number(v))
       case "string":
-        return void out.push(v.value.includes("\n") ? blockString(v.value, ind + this.step) : this.basicString(v))
+        return void out.push(v.value.includes("\n") ? blockString(writable(v.value), ind + this.step) : this.basicString(v))
       case "bytes":
         return void out.push(this.bytes(v))
       case "array":
@@ -301,7 +313,7 @@ class Formatter {
         return this.record(v, ind, out, tasks)
       case "variant": {
         const [first] = v.args
-        out.push(v.tag)
+        out.push(writtenTag(v.tag))
         if (v.args.length === 0) return
         if (v.args.length === 1 && first?.kind === "record") {
           out.push(" ")
@@ -440,7 +452,7 @@ class Formatter {
 
   /** The source spelling when reformatting (`0xFF` stays `0xFF`), else the normalized literal, always decimal (spec §11). */
   private number(v: Extract<Value, { kind: "number" }>): string {
-    return this.original(v) ?? v.text
+    return this.original(v) ?? writtenNumber(v.text)
   }
 
   /** `x"…"`: the source spelling when reformatting (spaces kept), else lowercase hex. */
@@ -512,6 +524,44 @@ const firstAtOrAfter = (comments: readonly (readonly [number, number])[], offset
   return lo
 }
 
+// ── values built in code (spec §4, §12) ─────────────────────
+
+/**
+ * Text that can be written: without an unpaired surrogate, which a
+ * JavaScript string can hold and UTF-8 can't (spec §4). Else
+ * HausEncodeError `cannot-encode`.
+ */
+export const writable = (s: string): string => {
+  if (unpairedSurrogate(s) >= 0) throw new HausEncodeError("a string or key with an unpaired surrogate, which has no UTF-8 form", [], "cannot-encode")
+  return s
+}
+
+/**
+ * A number built in code, as written: its text if that is a number literal
+ * (spec §3), else HausEncodeError `invalid-number` (`"01"`, `"NaN"`, `""`; spec §11).
+ */
+export const writtenNumber = (text: string): string => {
+  if (!isNormalizedNumber(text) && canonicalNumber(text) === undefined) throw notALiteral(text)
+  return text
+}
+
+/**
+ * A number built in code in the canonical form (spec §12): its normalized
+ * literal (`1e+05` → `1e5`, `0xFF` → `255`), else HausEncodeError
+ * `invalid-number`. Without limits.
+ */
+export const normalizedNumber = (text: string): string => (isNormalizedNumber(text) ? text : (canonicalNumber(text) ?? notALiteral(text)))
+
+const notALiteral = (text: string): never => {
+  throw new HausEncodeError(`a number that isn't a number literal: '${quoteText(text)}'`, [], "invalid-number")
+}
+
+/** A tag built in code, as written: `[A-Z][A-Za-z0-9_]*` (spec §4), else HausEncodeError `invalid-tag`. */
+export const writtenTag = (tag: string): string => {
+  if (!TAG.test(tag)) throw new HausEncodeError(`the tag '${quoteText(tag)}' isn't [A-Z][A-Za-z0-9_]*`, [], "invalid-tag")
+  return tag
+}
+
 /** A record key as every writer writes it: bare if it can be, else quoted. */
 export const keyText = (k: string): string => (BARE_KEY.test(k) ? k : quote(k))
 
@@ -528,8 +578,17 @@ export function toHex(data: Uint8Array): string {
   return out
 }
 
-/** A `"…"` string with the minimal escapes. */
+/**
+ * A `"…"` string with the minimal escapes. A string with an unpaired
+ * surrogate has no UTF-8 form (spec §4), so it can't be written:
+ * HausEncodeError `cannot-encode`.
+ */
 export function quote(s: string): string {
+  return escaped(writable(s))
+}
+
+/** `quote` without the check, for messages (a key in an error's path). */
+export function escaped(s: string): string {
   // Hot: most strings need no escape at all (the regex scan is native, much faster than a loop here).
   if (!NEEDS_ESCAPE.test(s)) return `"${s}"`
   // Scan UTF-16 units (no character that needs an escape is a surrogate) and

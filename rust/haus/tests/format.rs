@@ -7,8 +7,11 @@ use haus::{FormatOptions, Limits, MAX_SUPPORTED_DEPTH, Style, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// The suite; `HAUS_SUITE` names another directory holding it.
 fn suite() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite")
+    std::env::var_os("HAUS_SUITE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite"))
 }
 
 struct Case {
@@ -310,26 +313,26 @@ fn format_options() {
         .iter()
         .filter_map(|c| {
             let (Some(Value::String(input)), Some(result)) = (c.get("input"), c.get("result")) else {
-                panic!("not a case: {}", haus::canonical(c))
+                panic!("not a case: {}", haus::canonical(c).unwrap())
             };
             // None: a negative number, which `usize` can't hold.
             let option = |key: &str| match c.get(key) {
                 Some(Value::Number(n)) => n.parse::<usize>().ok().map(Some),
                 None => Some(None),
-                _ => panic!("not a case: {}", haus::canonical(c)),
+                _ => panic!("not a case: {}", haus::canonical(c).unwrap()),
             };
             let (indent, width) = (option("indent"), option("width"));
             let expected = match result {
                 Value::Variant { tag, args } if tag == "Ok" => match args.as_slice() {
                     [Value::String(text)] => Some(text),
-                    _ => panic!("not a case: {}", haus::canonical(c)),
+                    _ => panic!("not a case: {}", haus::canonical(c).unwrap()),
                 },
                 Value::Variant { tag, args } if tag == "Rejected" && args.is_empty() => None,
-                _ => panic!("not a case: {}", haus::canonical(c)),
+                _ => panic!("not a case: {}", haus::canonical(c).unwrap()),
             };
             let (Some(indent), Some(width)) = (indent, width) else {
                 // Not expressible with these types: passes if it is to be rejected.
-                return expected.map(|_| format!("{}: options a usize can't hold", haus::canonical(c)));
+                return expected.map(|_| format!("{}: options a usize can't hold", haus::canonical(c).unwrap()));
             };
             let defaults = FormatOptions::default();
             let options = FormatOptions {

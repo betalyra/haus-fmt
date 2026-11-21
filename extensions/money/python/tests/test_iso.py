@@ -50,8 +50,9 @@ def test_vector(vector: Tagged) -> None:
     coded, base = CODED[f["type"]], BASE[f["type"]]
     base.parse(f["value"])  # valid under the schema: what the codec rejects, the profile rejects
     if vector.tag == "Reject":
-        with pytest.raises(HausDecodeError):
+        with pytest.raises(HausDecodeError) as e:
             coded.parse(f["value"])
+        assert e.value.code == "codec-rejected"
         return
     decoded = coded.parse(f["value"])
     encoded = coded.canonical(decoded)
@@ -82,8 +83,9 @@ def test_the_amount_is_kept_exactly(amount: str) -> None:
 
 
 def test_it_applies_inside_imported_types() -> None:
-    with pytest.raises(HausDecodeError, match="Usd is not a currency of the iso profile"):
+    with pytest.raises(HausDecodeError, match="Usd is not a currency of the iso profile") as e:
         ORDER.parse("{ total: Money(1, EUR), refunds: [Money(1, Usd)] }")
+    assert (e.value.code, e.value.path) == ("codec-rejected", ("refunds", 0, 1))
 
 
 @pytest.mark.parametrize("currency", ["Eur", "EURO", "EU", "E1R", "EUR(1)", "EUR { x: 1 }", "E_R"])

@@ -120,16 +120,16 @@ public final class HausJson {
   }
 
   /**
-   * A reader of self-describing JSON Lines from {@code in}, holding one line at a time, at most
-   * {@link Limits#maxValueLength()} characters ({@code value-too-long}).
+   * A reader of self-describing JSON Lines from {@code in}, holding one line at a time; each value
+   * is read within {@code limits} (a line has no length limit of its own).
    */
   public static JsonLinesReader hausJsonLinesReader(InputStream in, Limits limits) {
-    return new JsonLinesReader(in, limits.maxValueLength(), hausJsonLine(limits));
+    return new JsonLinesReader(in, hausJsonLine(limits));
   }
 
   /** A reader of JSON Lines from {@code in} with the JSON import, as {@link #hausJsonLinesReader}. */
   public static JsonLinesReader importJsonLinesReader(InputStream in, Limits limits) {
-    return new JsonLinesReader(in, limits.maxValueLength(), importLine(limits));
+    return new JsonLinesReader(in, importLine(limits));
   }
 
   private static JsonLinesReader.Converter hausJsonLine(Limits limits) {

@@ -16,6 +16,19 @@ Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 
 Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },
 Read { json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
 
+// ── I-JSON (§16): one reading for each text ──
+// Member names are compared after their escapes are read, by code point.
+Err { json: "{\"a\": 1, \"\\u0061\": 2}", code: "duplicate-key" },
+Read { json: "{\"a\": 1, \"A\": 2}", output: { a: 1, "A": 2 } },
+Err { json: "\"\\udc00\"", code: "unpaired-surrogate" },
+Read { json: "\"\\u0000\"", output: "\u{0}" },
+// A raw control character below U+0020 is no JSON (RFC 8259).
+Err { json: "\"a\u{1}b\"", code: "control-character" },
+// One JSON text, and one byte order mark, before it.
+Err { json: "[1] x", code: "json-syntax" },
+Err { json: "{\"a\": 1} {\"b\": 2}", code: "json-syntax" },
+Err { json: "\u{FEFF}\u{FEFF}[1]", code: "json-syntax" },
+
 // ── the number limits apply to JSON number tokens as written (§16) ──
 Err { json: "1e-7000", code: "exponent-too-large" },
 Err { json: "[1, -2E+6145]", code: "exponent-too-large" },
