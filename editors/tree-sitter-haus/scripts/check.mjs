@@ -69,7 +69,6 @@ const SYNTAX_SCHEMA_CODES = new Set([
   'attribute-on-spread',
   'row-parameter',
   'import-version',
-  'invalid-parameter',
   // Comments, whitespace and quoted keys are those of data files, with their
   // codes (spec §14).
   'unterminated-string',
@@ -93,8 +92,9 @@ const SYNTAX_SCHEMA_CODES = new Set([
 // (`@Haus/money`, spec §13.3) or a module it allows that doesn't exist
 // (`std/money`); `unknown-import` is an empty list of names, which the grammar
 // rules out (`import std/time ()`), or a name the module doesn't have
-// (`import std/time (Moment)`).
-const EITHER_SCHEMA_CODES = new Set(['unknown-module', 'unknown-import']);
+// (`import std/time (Moment)`); `invalid-parameter` is a parameter the grammar
+// rules out (`type A _x = …`) or one declared twice (`type A a a = …`).
+const EITHER_SCHEMA_CODES = new Set(['unknown-module', 'unknown-import', 'invalid-parameter']);
 
 // ── Running tree-sitter ───────────────────────────────────────────────
 
