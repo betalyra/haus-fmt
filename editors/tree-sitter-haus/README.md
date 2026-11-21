@@ -150,9 +150,10 @@ the TypeScript reference parser, and compares:
   the reason is one a grammar can't check (above);
 - schema files must parse without error, except in
   `test-suite/schema/invalid`, where files with a syntax error code must give
-  an error and the others must not (`unknown-module` and `unknown-import` may
-  do either: the grammar rules out `@Haus/money` and `import std/time ()`, not
-  `std/money` or `import std/time (Moment)`).
+  an error and the others must not (`unknown-module`, `unknown-import` and
+  `invalid-parameter` may do either: the grammar rules out `@Haus/money`,
+  `import std/time ()` and `type A _x = …`, not `std/money`,
+  `import std/time (Moment)` or `type A a a = …`).
 
 `--fuzz N [--seed S] [--mutate]` adds N documents from the differential
 fuzzer's generator ([`fuzz/src/generate.ts`](../../fuzz/src/generate.ts)),

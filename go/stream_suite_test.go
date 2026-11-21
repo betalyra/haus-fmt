@@ -111,8 +111,8 @@ func TestStreamSuite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(vs) != 21 {
-		t.Errorf("%d cases, want 21", len(vs))
+	if len(vs) != 24 {
+		t.Errorf("%d cases, want 24", len(vs))
 	}
 	for _, v := range vs {
 		c := toStreamCase(t, v)

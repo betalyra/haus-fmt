@@ -35,6 +35,8 @@ the Lean version is pinned in `lean-toolchain`. No Mathlib.
 ```sh
 lake build
 .lake/build/bin/haus-ref FILE                    # values as self-describing JSON Lines (spec §16.2)
+.lake/build/bin/haus-ref --document FILE         # a single document (spec §6): its one value as self-describing JSON,
+                                                 #   or not-one-value for none or several (a trailing comma allowed)
 .lake/build/bin/haus-ref --suite ../../test-suite # the conformance suite
 .lake/build/bin/haus-ref --compact FILE           # FILE's values in a layout of spec §11, from values:
 .lake/build/bin/haus-ref --minimised FILE         #   numbers normalized, keys in source order, no comments
@@ -486,7 +488,8 @@ value limit too), its catalogue of error codes and the codes it fixes for
 texts with one mistake (§17), its files (values, or an error's code), its
 canonical form and what `hash` and `hashAll` hash (§12), its built-in types
 and schema files, each type with its decoder and its schema-based JSON
-(§16.3), and its self-describing JSON and JSON import (§16.1, §16.2).
+(§16.3), its self-describing JSON and JSON import (§16.1, §16.2), and its
+compact and minimised layouts (§11).
 Everything is written on haus values and texts, with codes by name, so
 versions with different host types and catalogues compare. `Extends old
 new` says: every text `old` accepts, `new` accepts with the same values; on
@@ -494,7 +497,9 @@ what `old` can express, the canonical form, the hash, the self-describing
 JSON, and every built-in type and type of a schema `old` accepts (decoding
 and schema-based JSON) are the same; each JSON reader reads what the old one
 reads, alike; the default limits only grow; no code leaves the catalogue;
-and a text whose code `old` fixes keeps it, unless it has become valid.
+a text whose code `old` fixes keeps it, unless it has become valid; and the
+compact and minimised layouts write what `old` can express as `old` does
+(the pretty layout may change, §10).
 Proven: `Extends.refl`, `Extends.trans`, `Extends.expresses`,
 `Extends.hash`, `Extends.hashAll_parse`, `Extends.readHausJson_write` and
 `current_extends_self`; for this version, `current_hash` (`hash` hashes the

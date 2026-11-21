@@ -104,7 +104,7 @@ extension HausError {
         case redefinePrelude = "redefine-prelude"
         /// `unknown-parameter`: A lowercase name in a type that is not a parameter of the definition.
         case unknownParameter = "unknown-parameter"
-        /// `invalid-parameter`: A type parameter named `_`, or the same parameter twice.
+        /// `invalid-parameter`: A type parameter starting with `_`, or the same parameter twice in one definition.
         case invalidParameter = "invalid-parameter"
         /// `underscore-type`: `_` used as a type. Types are open by default, so there is no wildcard.
         case underscoreType = "underscore-type"
@@ -200,7 +200,7 @@ extension HausError {
         case cannotEncode = "cannot-encode"
         /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
         case cyclicValue = "cyclic-value"
-        /// `step-budget`: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).
+        /// `step-budget`: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).
         case stepBudget = "step-budget"
         /// `too-many-nodes`: A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
         case tooManyNodes = "too-many-nodes"

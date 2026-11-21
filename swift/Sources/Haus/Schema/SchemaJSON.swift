@@ -117,7 +117,7 @@ extension SchemaWalker {
             return .parts(Parts(.fields(r), .all(element), .record, checkKeys: true))
         case (.record(let shape), .record(let r)):
             try checkRequired(shape) { r[$0] != nil }
-            return .parts(Parts(.fields(r), .shape(shape, payload: false), .record))
+            return .parts(Parts(.fields(r), .shape(shape, payload: false), .record, checkKeys: true))
         case (.map, _), (.record, _):
             throw jsonMismatch(j, t, "an object")
         case (.maybe(let element), _):
@@ -285,6 +285,7 @@ extension SchemaWalker {
                     "expected a tag ([A-Z][A-Za-z0-9_]*), \(shape.tagList), found \(quoteForMessage(s))")
             }
             guard let c = shape.caseOf(s) else { throw unknownTag(s, shape) }
+            try checkTagLength(c.tag)
             return .done(.tag(c.tag))
         }
         guard case .record(let r) = j else { throw jsonMismatch(j, t, #"an object with "_tag""#) }
@@ -293,6 +294,7 @@ extension SchemaWalker {
             if !shape.open { throw unknownTag(tag, shape) }
             return .done(try unknownJSON(tag, r))
         }
+        try checkTagLength(c.tag)
         switch c.payload {
         case .none:
             try onlyMembers(r, nil)
@@ -301,7 +303,7 @@ extension SchemaWalker {
             try checkReserved(c)
             // The record's fields beside "_tag", at the variant's level and place.
             try checkRequired(fields) { r[$0] != nil }
-            return .parts(Parts(.fields(r), .shape(fields, payload: true), .payload(c.tag)))
+            return .parts(Parts(.fields(r), .shape(fields, payload: true), .payload(c.tag), checkKeys: true))
         case .named(let named):
             try checkReserved(c)
             let fields = HausValue.record(HausRecord(distinct: r.fields.filter { !sameCodePoints($0.key, "_tag") }))
@@ -329,6 +331,14 @@ extension SchemaWalker {
         return a
     }
 
+    /// Checks a tag of the value read, a `"_tag"` or an enum's string,
+    /// against the string limit (§16, "Limits"). Tags are ASCII.
+    func checkTagLength(_ tag: String) throws(HausError) {
+        if tag.utf8.count > limits.maxStringLength {
+            throw fail(.tagTooLong, "a tag longer than the limit of \(limits.maxStringLength) characters")
+        }
+    }
+
     /// Fails for a record case with a field named `_tag` or `_args`, which
     /// has no schema-based form (§16.3).
     func checkReserved(_ c: CaseType) throws(HausError) {
@@ -341,9 +351,7 @@ extension SchemaWalker {
     /// `"_args"` alone, its arguments as self-describing values; otherwise
     /// its other members as a record payload, by the import.
     mutating func unknownJSON(_ tag: String, _ r: HausRecord) throws(HausError) -> HausValue {
-        if tag.utf8.count > limits.maxStringLength {
-            throw fail(.tagTooLong, "a tag longer than the limit of \(limits.maxStringLength) characters")
-        }
+        try checkTagLength(tag)
         if r.count == 1 { return .tag(tag) }
         if r.count == 2, let args = r["_args"] {
             var form = SelfDescribing(limits: limits, path: path)

@@ -518,7 +518,7 @@ type Box = { item: a }
 
 ## invalid-parameter
 
-*Schema files.* A type parameter named `_`, or the same parameter twice.
+*Schema files.* A type parameter starting with `_`, or the same parameter twice in one definition.
 
 ```haus-schema
 type Pair _ = { a: Int }
@@ -1008,7 +1008,7 @@ For example: const a = { children: [] }; a.children.push(a); encode(Tree, a).
 
 ## step-budget
 
-*Decoding and encoding.* Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).
+*Decoding and encoding.* Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).
 
 For example: a hand-written schema that decodes each value many times.
 

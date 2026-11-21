@@ -103,7 +103,7 @@ const (
 	CodeRedefinePrelude ErrorCode = "redefine-prelude"
 	// CodeUnknownParameter is "unknown-parameter": A lowercase name in a type that is not a parameter of the definition.
 	CodeUnknownParameter ErrorCode = "unknown-parameter"
-	// CodeInvalidParameter is "invalid-parameter": A type parameter named `_`, or the same parameter twice.
+	// CodeInvalidParameter is "invalid-parameter": A type parameter starting with `_`, or the same parameter twice in one definition.
 	CodeInvalidParameter ErrorCode = "invalid-parameter"
 	// CodeUnderscoreType is "underscore-type": `_` used as a type. Types are open by default, so there is no wildcard.
 	CodeUnderscoreType ErrorCode = "underscore-type"
@@ -199,7 +199,7 @@ const (
 	CodeCannotEncode ErrorCode = "cannot-encode"
 	// CodeCyclicValue is "cyclic-value": Encoding: a value contains itself, so it has no finite text.
 	CodeCyclicValue ErrorCode = "cyclic-value"
-	// CodeStepBudget is "step-budget": Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).
+	// CodeStepBudget is "step-budget": Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).
 	CodeStepBudget ErrorCode = "step-budget"
 	// CodeTooManyNodes is "too-many-nodes": A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
 	CodeTooManyNodes ErrorCode = "too-many-nodes"
@@ -414,7 +414,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeDuplicateType:           {CategorySchemaFiles, "Two definitions of the same type name, or a definition with the name of an imported type.", "Rename one of them."},
 	CodeRedefinePrelude:         {CategorySchemaFiles, "A definition with the name of a prelude type (`Int`, `Any`, `Secret`, `Maybe`, …), which schemas can't redefine.", "Give your type another name."},
 	CodeUnknownParameter:        {CategorySchemaFiles, "A lowercase name in a type that is not a parameter of the definition.", "Declare the parameter after the type's name, or use a type name."},
-	CodeInvalidParameter:        {CategorySchemaFiles, "A type parameter named `_`, or the same parameter twice.", "Give each parameter its own lowercase name."},
+	CodeInvalidParameter:        {CategorySchemaFiles, "A type parameter starting with `_`, or the same parameter twice in one definition.", "Give each parameter its own lowercase name."},
 	CodeUnderscoreType:          {CategorySchemaFiles, "`_` used as a type. Types are open by default, so there is no wildcard.", "Write `< >` for a variant with any tags, `Any` for any value, or use a type parameter."},
 	CodeDuplicateField:          {CategorySchemaFiles, "A record type lists the same field twice, also one copied in by a spread.", "Remove or rename one of them."},
 	CodeDuplicateTag:            {CategorySchemaFiles, "A variant type lists the same tag twice, also one copied in by a spread.", "Remove or rename one of them."},
@@ -462,7 +462,7 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeInvalidSecret:           {CategoryDecoding, "A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).", "Write a value of the secret's type; the value isn't shown, so check it where it comes from."},
 	CodeCannotEncode:            {CategoryDecoding, "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.", "Pass a value of the host type the binding documents for the type."},
 	CodeCyclicValue:             {CategoryDecoding, "Encoding: a value contains itself, so it has no finite text.", "Break the cycle before encoding."},
-	CodeStepBudget:              {CategoryDecoding, "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).", "Simplify the schema, or raise the step limit if the work is expected."},
+	CodeStepBudget:              {CategoryDecoding, "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).", "Simplify the schema, or raise the step limit if the work is expected."},
 	CodeTooManyNodes:            {CategoryDecoding, "A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.", "Build a smaller value, or raise the limit."},
 	CodeJSONSyntax:              {CategoryJson, "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.", "Write valid JSON; the message says what was expected."},
 	CodeUnpairedSurrogate:       {CategoryJson, "A JSON string with half of a UTF-16 surrogate pair, raw or as `\\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).", "Write both halves of the surrogate pair, or the character itself."},

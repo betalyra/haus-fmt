@@ -101,7 +101,7 @@ public enum ErrorCode {
   REDEFINE_PRELUDE("redefine-prelude", ErrorCategory.SCHEMA_FILES, "Give your type another name."),
   /** {@code unknown-parameter}: A lowercase name in a type that is not a parameter of the definition. */
   UNKNOWN_PARAMETER("unknown-parameter", ErrorCategory.SCHEMA_FILES, "Declare the parameter after the type's name, or use a type name."),
-  /** {@code invalid-parameter}: A type parameter named `_`, or the same parameter twice. */
+  /** {@code invalid-parameter}: A type parameter starting with `_`, or the same parameter twice in one definition. */
   INVALID_PARAMETER("invalid-parameter", ErrorCategory.SCHEMA_FILES, "Give each parameter its own lowercase name."),
   /** {@code underscore-type}: `_` used as a type. Types are open by default, so there is no wildcard. */
   UNDERSCORE_TYPE("underscore-type", ErrorCategory.SCHEMA_FILES, "Write `< >` for a variant with any tags, `Any` for any value, or use a type parameter."),
@@ -197,7 +197,7 @@ public enum ErrorCode {
   CANNOT_ENCODE("cannot-encode", ErrorCategory.DECODING, "Pass a value of the host type the binding documents for the type."),
   /** {@code cyclic-value}: Encoding: a value contains itself, so it has no finite text. */
   CYCLIC_VALUE("cyclic-value", ErrorCategory.DECODING, "Break the cycle before encoding."),
-  /** {@code step-budget}: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8). */
+  /** {@code step-budget}: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8). */
   STEP_BUDGET("step-budget", ErrorCategory.DECODING, "Simplify the schema, or raise the step limit if the work is expected."),
   /** {@code too-many-nodes}: A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits. */
   TOO_MANY_NODES("too-many-nodes", ErrorCategory.DECODING, "Build a smaller value, or raise the limit."),

@@ -52,6 +52,21 @@ inductive Fits (L : Limits) : Nat → JSON → Prop
   | obj (d : Nat) (ms : List (String × JSON)) :
       (∀ m ∈ ms, m.1.length ≤ L.maxStringLength) → (∀ m ∈ ms, Fits L d m.2) → Fits L (d + 1) (.obj ms)
 
+/-- JSON within the limits is within limits with a larger string limit (`textLimits`). -/
+theorem Fits.widen {L : Limits} {n d : Nat} {j : JSON} (h : Fits L d j) (hn : L.maxStringLength ≤ n) :
+    Fits { L with maxStringLength := n } d j := by
+  induction h with
+  | null d => exact .null d
+  | bool d b => exact .bool d b
+  | num d t ht => exact .num d t ht
+  | str d s hs => exact .str d s (by simp only; omega)
+  | arr d xs _ ih => exact .arr d xs ih
+  | obj d ms hk _ ih => exact .obj d ms (fun m hm => by have := hk m hm; simp only; omega) ih
+
+theorem Fits.textLimits {L : Limits} {d : Nat} {j : JSON} (h : Fits L d j) (t : Text) :
+    Fits (JSON.textLimits L t) d j :=
+  h.widen (Nat.le_max_left _ _)
+
 /-- **JSON Lines** (§16, "Streams"): each value compactly, followed by a line feed. -/
 def writeLines (js : List JSON) : Text := js.flatMap fun j => write j ++ ['\n']
 

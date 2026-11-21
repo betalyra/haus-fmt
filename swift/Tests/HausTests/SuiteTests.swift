@@ -188,7 +188,7 @@ struct StreamSuiteTests {
     }
 
     @Test func count() {
-        #expect(Self.cases.count == 21)
+        #expect(Self.cases.count == 24)
     }
 
     @Test(arguments: cases)

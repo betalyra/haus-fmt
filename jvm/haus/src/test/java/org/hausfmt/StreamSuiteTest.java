@@ -84,7 +84,7 @@ class StreamSuiteTest {
   @TestFactory
   Stream<DynamicTest> limits() {
     List<Value> cases = Haus.parseAll(Suite.bytes(Suite.suite("stream", "limits.cases.haus")));
-    assertEquals(21, cases.size());
+    assertEquals(24, cases.size());
     return cases.stream().map(c -> {
       Value.Record r = (Value.Record) c;
       String text = ((Value.Text) r.get("text")).value();

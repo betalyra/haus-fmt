@@ -300,6 +300,27 @@ func (w *walker) length(s string, code haus.ErrorCode, what string) error {
 	return nil
 }
 
+// keyLength checks the name of a member that is a key of the value read
+// (a listed field's) against the string limit, at that member.
+func (w *walker) keyLength(k string) error {
+	if len(k) <= w.lim.MaxStringLength {
+		return nil
+	}
+	w.path = append(w.path, step{key: k, index: -1})
+	err := w.length(k, haus.CodeKeyTooLong, "key")
+	w.path = w.path[:len(w.path)-1]
+	return err
+}
+
+// tagLength checks a tag of the value read, a "_tag" or an enum's string,
+// against the string limit (§16, "Limits"). Tags are ASCII.
+func (w *walker) tagLength(tag string) error {
+	if len(tag) > w.lim.MaxStringLength {
+		return w.fail(haus.CodeTagTooLong, "a tag longer than the limit of %d characters", w.lim.MaxStringLength)
+	}
+	return nil
+}
+
 // intString reads Int, Int64 and UInt64, written as a string of a decimal
 // integer: -?(0|[1-9][0-9]*), "-0" being 0.
 func (w *walker) intString(s string, k kind) (haus.Value, error) {
@@ -447,6 +468,9 @@ func (w *walker) readRecord(r haus.Record, rt *recordType, payload bool) (haus.V
 			}
 			continue
 		}
+		if err := w.keyLength(k); err != nil {
+			return nil, err
+		}
 		y, _, err := w.child(step{key: k, index: -1}, x, f.typ)
 		if err != nil {
 			return nil, err
@@ -469,6 +493,9 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		if c == nil {
 			return nil, w.fail(haus.CodeUnknownTag, "%s is not allowed here: expected %s", quote(string(s)), tags(vt))
 		}
+		if err := w.tagLength(c.tag); err != nil {
+			return nil, err
+		}
 		return haus.Variant{Tag: c.tag}, nil
 	}
 	r, ok := j.(haus.Record)
@@ -485,6 +512,9 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 			return nil, w.fail(haus.CodeUnknownTag, "%s is not allowed here: expected %s", quote(tag), tags(vt))
 		}
 		return w.unknownJSON(tag, r)
+	}
+	if err := w.tagLength(c.tag); err != nil {
+		return nil, err
 	}
 	switch c.payload {
 	case payloadNone:
@@ -557,8 +587,8 @@ func (w *walker) unknownJSON(tag string, r haus.Record) (haus.Value, error) {
 	if !isTagName(tag) {
 		return nil, w.fail(haus.CodeInvalidTag, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found %s", quote(shortText(tag)))
 	}
-	if len(tag) > w.lim.MaxStringLength {
-		return nil, w.fail(haus.CodeTagTooLong, "a tag longer than the limit of %d characters", w.lim.MaxStringLength)
+	if err := w.tagLength(tag); err != nil {
+		return nil, err
 	}
 	if r.Len() == 1 {
 		return haus.Variant{Tag: tag}, nil
