@@ -70,8 +70,6 @@ const SYNTAX_SCHEMA_CODES = new Set([
   'row-parameter',
   'import-version',
   'invalid-parameter',
-  // `import std/time ()`: the grammar requires at least one name.
-  'unknown-import',
   // Comments, whitespace and quoted keys are those of data files, with their
   // codes (spec §14).
   'unterminated-string',
@@ -93,8 +91,10 @@ const SYNTAX_SCHEMA_CODES = new Set([
 // Schema error codes that are syntax errors for some files and not for
 // others: `unknown-module` is a package name the grammar's `segment` rules out
 // (`@Haus/money`, spec §13.3) or a module it allows that doesn't exist
-// (`std/money`).
-const EITHER_SCHEMA_CODES = new Set(['unknown-module']);
+// (`std/money`); `unknown-import` is an empty list of names, which the grammar
+// rules out (`import std/time ()`), or a name the module doesn't have
+// (`import std/time (Moment)`).
+const EITHER_SCHEMA_CODES = new Set(['unknown-module', 'unknown-import']);
 
 // ── Running tree-sitter ───────────────────────────────────────────────
 
