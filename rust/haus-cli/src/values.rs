@@ -57,9 +57,9 @@ fn each_value(
         Some(path) => match File::open(path) {
             Ok(f) => {
                 let live = !pieces::is_file(&f);
-                (path.display().to_string(), Box::new(f), live)
+                (output::shown(path), Box::new(f), live)
             }
-            Err(e) => return output::fail(format!("cannot read {}: {e}", path.display())),
+            Err(e) => return output::fail(format!("cannot read {}: {e}", output::shown(path))),
         },
         None if file.is_none() && io::stdin().is_terminal() => {
             return output::fail("no input: give a FILE, or pipe the data in (`-` reads standard input)");

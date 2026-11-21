@@ -8,6 +8,7 @@ less than 8x. The best of a few runs of each counts, and a busy machine gets a f
 
 from __future__ import annotations
 
+import gc
 import time
 from collections.abc import Callable
 
@@ -23,11 +24,19 @@ DEEP = Limits(max_depth=haus.MAX_SUPPORTED_DEPTH)
 
 
 def fastest(f: Callable[[], object]) -> float:
+    """The best of `RUNS` runs of `f`, with the garbage collector off as `timeit` has it: a
+    collection during a run costs time for every object alive, not for the work being timed."""
     best = float("inf")
-    for _ in range(RUNS):
-        start = time.perf_counter()
-        f()
-        best = min(best, time.perf_counter() - start)
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(RUNS):
+            start = time.perf_counter()
+            f()
+            best = min(best, time.perf_counter() - start)
+    finally:
+        if collecting:
+            gc.enable()
     return best
 
 
