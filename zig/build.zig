@@ -47,14 +47,20 @@ pub fn build(b: *std.Build) void {
     suite_step.dependOn(&run_suite.step);
     test_step.dependOn(&run_suite.step);
 
-    // The runner of the differential fuzzer (../fuzz).
+    // The runner of the differential fuzzer (../fuzz). It finds the schema
+    // files of the schema and JSON fuzzers in the checkout it is built from.
+    const runner_options = b.addOptions();
+    runner_options.addOption([]const u8, "repo_dir", b.pathResolve(&.{b.root.joinString(b.graph.arena, "..") catch @panic("OOM")}));
     const runner = b.addExecutable(.{
         .name = "zig-runner",
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/fuzz_runner.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "haus", .module = haus }},
+            .imports = &.{
+                .{ .name = "haus", .module = haus },
+                .{ .name = "build_options", .module = runner_options.createModule() },
+            },
         }),
     });
     const install_runner = b.addInstallArtifact(runner, .{});

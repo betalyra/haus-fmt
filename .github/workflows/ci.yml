@@ -355,8 +355,9 @@ jobs:
         working-directory: .
         run: swift build -Xswiftc -warnings-as-errors
 
-  # The Zig binding (zig/, a clean-room implementation of the data format from
-  # the spec and the suites). zig/** counts as code in `changes`.
+  # The Zig binding (zig/, a clean-room implementation from the spec and the
+  # suites: the data format, schemas, decoding, JSON and packages). zig/** counts
+  # as code in `changes`.
   zig:
     name: Zig
     needs: changes
@@ -372,7 +373,8 @@ jobs:
           version: 0.17.1
       - name: Format
         run: zig fmt --check build.zig src test
-      # The unit tests, the C ABI's tests and the conformance suite, in a safe build mode.
+      # The unit tests, the C ABI's tests and the conformance suite (data, format, schema,
+      # schema/invalid, stream/typed, check, json and packages), in a safe build mode.
       - name: Test
         run: zig build test -Doptimize=ReleaseSafe --summary all
       - name: Conformance suite (debug)

@@ -112,21 +112,21 @@ pub const Parser = struct {
     }
 
     /// "found X" for a message: the character at `offset`, or end of input.
-    fn found(p: *const Parser, offset: usize, buf: []u8) []const u8 {
+    pub fn found(p: *const Parser, offset: usize, buf: []u8) []const u8 {
         if (offset >= p.end) return "end of input";
         const d = v.decode(p.text, offset);
         return errors.quoteChar(buf, d.cp);
     }
 
-    inline fn eof(p: *const Parser) bool {
+    pub inline fn eof(p: *const Parser) bool {
         return p.pos >= p.end;
     }
 
-    inline fn peek(p: *const Parser) u8 {
+    pub inline fn peek(p: *const Parser) u8 {
         return p.text[p.pos];
     }
 
-    fn startsWith(p: *const Parser, at: usize, s: []const u8) bool {
+    pub fn startsWith(p: *const Parser, at: usize, s: []const u8) bool {
         return at + s.len <= p.end and std.mem.eql(u8, p.text[at .. at + s.len], s);
     }
 
@@ -513,7 +513,7 @@ pub const Parser = struct {
         return .{ .tag = tag };
     }
 
-    fn payload(p: *Parser) Error![]const Value {
+    pub fn payload(p: *Parser) Error![]const Value {
         const open = p.pos;
         try p.enter(open);
         p.pos += 1;
@@ -548,7 +548,7 @@ pub const Parser = struct {
         return p.basicString(.string);
     }
 
-    const StringKind = enum { string, key };
+    pub const StringKind = enum { string, key };
 
     fn tooLong(p: *Parser, kind: StringKind, at: usize) Error {
         return switch (kind) {
@@ -558,7 +558,7 @@ pub const Parser = struct {
     }
 
     /// `"…"`.
-    fn basicString(p: *Parser, kind: StringKind) Error![]const u8 {
+    pub fn basicString(p: *Parser, kind: StringKind) Error![]const u8 {
         const open = p.pos;
         p.chars.clearRetainingCapacity();
         var count: usize = 0;

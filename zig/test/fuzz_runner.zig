@@ -5,6 +5,7 @@
 //!   zig-runner --canonical DIR N     `ok ["<canonical form>", …]`
 //!   zig-runner --format STYLE --indent N --width N DIR N   `ok "<formatted text>"` or `err REASON`
 //!   zig-runner --write STYLE --indent N --width N DIR N    `ok {"values": […], "file": "…"}` or `err REASON`
+//!   zig-runner --schema FILE | --schema-check FILE | --time FILE | --json MODE FILE   (fuzz_schema.zig)
 //!
 //! Values are printed in the suite's JSON encoding with the keys the
 //! fuzzer's in-process runner uses (`num`, `bytes`, `rec`, `tag`, `args`).
@@ -13,6 +14,8 @@ const std = @import("std");
 const haus = @import("haus");
 const Value = haus.Value;
 const Allocator = std.mem.Allocator;
+
+const fuzz_schema = @import("fuzz_schema.zig");
 
 const Mode = enum { parse, stream, canonical, format, write };
 
@@ -191,6 +194,12 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const gpa = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len == 3) {
+        if (std.meta.stringToEnum(fuzz_schema.FileMode, if (args[1].len > 2) args[1][2..] else "")) |m| {
+            if (std.mem.startsWith(u8, args[1], "--")) return fuzz_schema.run(io, gpa, m, args[2]);
+        }
+    }
+    if (args.len == 4 and std.mem.eql(u8, args[1], "--json")) return fuzz_schema.runJson(io, gpa, args[2], args[3]);
     var mode: Mode = .parse;
     var options: haus.FormatOptions = .{};
     var positional: std.ArrayList([]const u8) = .empty;
@@ -223,7 +232,7 @@ pub fn main(init: std.process.Init) !void {
     defer dir.close(io);
 
     var buf: [1 << 16]u8 = undefined;
-    var stdout: std.Io.File.Writer = .init(.stdout(), io, &buf);
+    var stdout: std.Io.File.Writer = .initStreaming(.stdout(), io, &buf);
     const out = &stdout.interface;
     for (0..n) |case| {
         var arena_state = std.heap.ArenaAllocator.init(gpa);
