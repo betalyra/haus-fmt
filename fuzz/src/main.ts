@@ -2,7 +2,7 @@
  * Differential testing: the same generated inputs through every haus parser,
  * reporting where they disagree. See ../README.md.
  *
- *   node fuzz/src/main.ts [--count N] [--seed S] [--out DIR] [--canonical]
+ *   node fuzz/src/main.ts [--count N] [--seed S] [--out DIR] [--canonical] [--runners lean,go,zig]
  *   node fuzz/src/main.ts --schema [--count N] [--seed S] [--runners …]   schema decoding (schema.ts)
  *   node fuzz/src/main.ts --json [--count N] [--seed S] [--modes …] [--runners …]   the JSON mappings (json.ts)
  *   node fuzz/src/main.ts --format [--count N] [--seed S]   the formatters and value writers (format.ts)
@@ -12,7 +12,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { input, Rng } from "./generate.ts"
-import { activeRunners, runAll, useCanonical, type Result } from "./runners.ts"
+import { activeRunners, runAll, selectRunners, useCanonical, type Result } from "./runners.ts"
 import { run as runFormat } from "./format.ts"
 import { run as runJson } from "./json.ts"
 import { run as runSchema } from "./schema.ts"
@@ -39,6 +39,7 @@ const { values: args } = parseArgs({
   },
 })
 if (args.canonical) useCanonical()
+if (args.runners && !args.schema && !args.json && !args.format && !args["schema-check"]) selectRunners(args.runners.split(","))
 const runners = activeRunners()
 const count = Number(args.count)
 const seed = Number(args.seed)

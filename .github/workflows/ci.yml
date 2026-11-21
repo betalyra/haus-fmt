@@ -340,6 +340,31 @@ jobs:
         working-directory: .
         run: swift build -Xswiftc -warnings-as-errors
 
+  # The Zig binding (zig/, a clean-room implementation of the data format from
+  # the spec and the suites). zig/** counts as code in `changes`.
+  zig:
+    name: Zig
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: zig
+    steps:
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.17.1
+      - name: Format
+        run: zig fmt --check build.zig src test
+      # The unit tests, the C ABI's tests and the conformance suite, in a safe build mode.
+      - name: Test
+        run: zig build test -Doptimize=ReleaseSafe --summary all
+      - name: Conformance suite (debug)
+        run: zig build suite
+      - name: Build the library, the header and the fuzz runner
+        run: zig build fuzz-runner install -Doptimize=ReleaseSafe
+
   jvm:
     name: JVM (Java and Kotlin)
     needs: changes

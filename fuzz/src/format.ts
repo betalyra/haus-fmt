@@ -44,6 +44,7 @@ const JVM = join(root, "fuzz/.build/jvm-runner/bin/jvm-runner")
 const LEAN = join(root, "spec/lean/.lake/build/bin/haus-ref")
 const PYTHON = join(root, "python/.venv/bin/python")
 const PYTHON_RUNNER = join(root, "python/fuzz/runner.py")
+const ZIG = join(root, "zig/zig-out/bin/zig-runner")
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
 const enc = new TextEncoder()
@@ -346,12 +347,13 @@ interface Formatter {
  * takes every option, an indent or width of 0 included (spec §11: taken
  * literally, not as the default).
  */
-const FORMATTERS: readonly Formatter[] = [
+let FORMATTERS: readonly Formatter[] = [
   { name: "rust", program: RUST },
   { name: "go", program: GO },
   { name: "swift", program: SWIFT },
   { name: "jvm", program: JVM },
   { name: "python", program: PYTHON, script: [PYTHON_RUNNER] },
+  { name: "zig", program: ZIG },
 ]
 
 /** An external formatter's outputs. */
@@ -489,13 +491,14 @@ interface Writer {
  * `haus.stringify_all`, the same (`python/fuzz/runner.py --write`).
  * TypeScript's `stringify` and `format` run in this process.
  */
-const WRITERS: readonly Writer[] = [
+let WRITERS: readonly Writer[] = [
   { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
   { name: "roc", program: ROC, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
   { name: "go", program: GO, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "swift", program: SWIFT, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "jvm", program: JVM, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "python", program: PYTHON, args: (s, o) => [PYTHON_RUNNER, "--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
+  { name: "zig", program: ZIG, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
 ]
 
 /** Lean's layout argument: pretty with the options. */
@@ -610,12 +613,19 @@ export async function run(argv: readonly string[]): Promise<number> {
       seed: { type: "string", default: String(Date.now() % 1_000_000) },
       out: { type: "string", default: "fuzz/.out" },
       batch: { type: "string", default: "1000" },
+      runners: { type: "string" },
     },
   })
   const count = Number(args.count)
   const seed = Number(args.seed)
   const batch = Number(args.batch)
   outDir = String(args.out)
+  // `--runners rust,go,zig`: only these external formatters and writers (TypeScript and Lean always run).
+  if (typeof args.runners === "string") {
+    const names = args.runners.split(",")
+    FORMATTERS = FORMATTERS.filter((f) => names.includes(f.name))
+    WRITERS = WRITERS.filter((w) => names.includes(w.name))
+  }
   const suite = join(root, "test-suite")
   const seeds = [join(suite, "valid"), join(suite, "format/cases"), join(suite, "format/examples")].flatMap((d) =>
     readdirSync(d).filter((f) => f.endsWith(".haus")).map((f) => new Uint8Array(readFileSync(join(d, f)))))

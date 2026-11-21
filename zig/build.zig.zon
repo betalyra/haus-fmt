@@ -1,0 +1,14 @@
+.{
+    .name = .haus,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.1",
+    .fingerprint = 0xd870cd2d0a8dbd8,
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "include",
+        "README.md",
+    },
+}
