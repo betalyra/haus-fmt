@@ -35,6 +35,8 @@ export const GO = join(root, "fuzz/.build/go-runner")
 export const SWIFT = join(root, "fuzz/.build/swift-runner")
 /** The JVM runner (fuzz/jvm, installed by Gradle into fuzz/.build/jvm-runner): the parser's, formatter's, JSON and std/time fuzzers' modes. */
 export const JVM = join(root, "fuzz/.build/jvm-runner/bin/jvm-runner")
+/** The Zig runner (zig/test/fuzz_runner.zig, built by `zig build fuzz-runner`): the parser, stream reader, canonical form, formatter and writers. */
+export const ZIG = join(root, "zig/zig-out/bin/zig-runner")
 
 /** JSON with object keys sorted, so field order doesn't matter. */
 export function normalize(json: string): string {
@@ -162,6 +164,8 @@ export const runners: readonly Runner[] = [
   external("go-stream", GO, ["--stream"], { codes: true }),
   external("swift-stream", SWIFT, ["--stream"], { codes: true }),
   external("jvm-stream", JVM, ["--stream"], { codes: true }),
+  external("zig", ZIG, [], { codes: true }),
+  external("zig-stream", ZIG, ["--stream"], { codes: true }),
 ]
 
 /**
@@ -177,6 +181,7 @@ export const canonicalRunners: readonly Runner[] = [
   external("go", GO, ["--canonical"], { codes: true }),
   external("swift", SWIFT, ["--canonical"], { codes: true }),
   external("jvm", JVM, ["--canonical"], { codes: true }),
+  external("zig", ZIG, ["--canonical"], { codes: true }),
 ]
 
 /** The runners in use: the parsers, or with `--canonical` the canonical forms. */
@@ -185,6 +190,10 @@ export const useCanonical = () => {
   active = canonicalRunners
 }
 export const activeRunners = () => active
+/** Only the named runners (`--runners lean,go`; a parser's name selects its stream reader too). */
+export const selectRunners = (names: readonly string[]) => {
+  active = active.filter((r) => names.some((n) => r.name === n || r.name === `${n}-stream` || (n === "typescript" && r.name === "ts-stream")))
+}
 
 /** Writes the cases to `dir` and runs every runner in use on them: results[case][runner]. */
 export function runAll(dir: string, cases: readonly Uint8Array[]): Result[][] {
