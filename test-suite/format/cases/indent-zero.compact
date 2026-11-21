@@ -1,0 +1,1 @@
+{ a: [1, Point(1, 2)], b: { c: "x", note: "one\ntwo" }, d: Some { e: 1 } }

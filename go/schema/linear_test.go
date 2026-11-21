@@ -151,7 +151,8 @@ func TestTypedIsLinear(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					fopts := haus.FormatOptions{Layout: layout, Limits: c.limits}
+					fopts := withLayout(layout)
+					fopts.Limits = c.limits
 					return func() {
 						_, err := ty.Format(v, fopts)
 						check(t, err)

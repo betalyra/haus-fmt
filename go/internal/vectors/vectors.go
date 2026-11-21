@@ -82,7 +82,7 @@ func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accept
 				t.Errorf("%s: encode: %v", text, err)
 				continue
 			}
-			out, err := haus.FormatValue(encoded, haus.FormatOptions{})
+			out, err := haus.FormatValue(encoded, haus.DefaultFormatOptions())
 			if err != nil {
 				t.Fatal(err)
 			}

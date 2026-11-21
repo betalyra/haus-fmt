@@ -92,7 +92,7 @@ cargo bench -- --test                             # runs every task once (no res
 
 Options go in the environment, since criterion owns the command line (its own flags, such as `--save-baseline` or a name filter, still work; a source whose tasks a filter leaves out gets no results file). Then `pnpm --filter haus-bench report` shows both languages.
 
-The Go benchmark, the same way (Go 1.24 or later, the version `go/` asks for):
+The Go benchmark, the same way (Go 1.26 or later, the version `go/` asks for):
 
 ```sh
 cd bench/speed/go
@@ -594,7 +594,7 @@ The checks before timing are TypeScript's, in Rust: every haus document parses t
 
 ### Speed (Go)
 
-`bench/speed/go/`, a module of its own (`github.com/betalyra/haus-fmt/bench/speed/go`, `go 1.24`, a `replace` to `../../../go`, so `go/`'s module and its CI don't build it). Its dependencies besides `go/`: [goccy/go-json](https://github.com/goccy/go-json) **v0.12.0** (2026-10-29), pinned in `go.mod` and `go.sum`, for the benchmark only (`go/` stays standard library only). The same tasks as TypeScript and Rust, on the same files, with two JSON libraries: encoding/json (Go 1.27's, whose v1 API runs on json/v2's implementation) and goccy/go-json, the most established fast drop-in replacement that builds with Go 1.27 (sonic is faster on amd64 but tracks each Go release's runtime; `encoding/json/v2` is what encoding/json already runs on):
+`bench/speed/go/`, a module of its own (`github.com/betalyra/haus-fmt/bench/speed/go`, `go 1.26`, a `replace` to `../../../go`, so `go/`'s module and its CI don't build it). Its dependencies besides `go/`: [goccy/go-json](https://github.com/goccy/go-json) **v0.12.0** (2026-10-29), pinned in `go.mod` and `go.sum`, for the benchmark only (`go/` stays standard library only). The same tasks as TypeScript and Rust, on the same files, with two JSON libraries: encoding/json (Go 1.27's, whose v1 API runs on json/v2's implementation) and goccy/go-json, the most established fast drop-in replacement that builds with Go 1.27 (sonic is faster on amd64 but tracks each Go release's runtime; `encoding/json/v2` is what encoding/json already runs on):
 
 | Task | JSON | haus |
 |---|---|---|

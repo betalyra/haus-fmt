@@ -59,7 +59,7 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("canonical form %q parses to other values", canon.Bytes())
 		}
 		for _, l := range []Layout{Pretty, Compact, Minimised} {
-			out, err := Format(src, FormatOptions{Layout: l})
+			out, err := Format(src, inLayout(l))
 			if err != nil {
 				t.Fatalf("%s: %v", l, err)
 			}
@@ -70,13 +70,13 @@ func FuzzParse(f *testing.F) {
 			if got, _ := HashAll(vs); got != want {
 				t.Fatalf("%s output %q parses to other values", l, out)
 			}
-			again, err := Format(out, FormatOptions{Layout: l})
+			again, err := Format(out, inLayout(l))
 			if err != nil || !bytes.Equal(again, out) {
 				t.Fatalf("%s is not stable:\n%q\n%q", l, out, again)
 			}
 		}
 		for _, l := range []Layout{Pretty, Compact, Minimised} {
-			out, err := FormatValues(values, FormatOptions{Layout: l, Limits: Limits{MaxDepth: MaxSupportedDepth}})
+			out, err := FormatValues(values, withLimits(inLayout(l), Limits{MaxDepth: MaxSupportedDepth}))
 			if err != nil {
 				t.Fatalf("%s from values: %v", l, err)
 			}
@@ -154,7 +154,7 @@ func FuzzFormatString(f *testing.F) {
 		values := []Value{String(s), rec, Variant{Tag: "Note", Args: []Value{String(s), String(s)}}}
 		for _, vs := range [][]Value{values, values[:1], values[1:2]} {
 			for _, l := range []Layout{Pretty, Compact, Minimised} {
-				out, err := FormatValues(vs, FormatOptions{Layout: l})
+				out, err := FormatValues(vs, inLayout(l))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -162,7 +162,7 @@ func FuzzFormatString(f *testing.F) {
 				if err != nil || !Equals(Array(back), Array(vs)) {
 					t.Fatalf("%s: %q reads back as %v (%v)", l, out, back, err)
 				}
-				again, err := Format(out, FormatOptions{Layout: l})
+				again, err := Format(out, inLayout(l))
 				if err != nil || !bytes.Equal(again, out) {
 					t.Fatalf("%s is not stable: %q, %q", l, out, again)
 				}

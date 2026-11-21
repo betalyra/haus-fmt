@@ -143,7 +143,7 @@ func TestWriteIsLinear(t *testing.T) {
 		return v
 	}
 	for _, layout := range []Layout{Pretty, Compact, Minimised} {
-		opts := FormatOptions{Layout: layout}
+		opts := inLayout(layout)
 		t.Run(layout.String()+"/many keys", func(t *testing.T) {
 			assertLinear(t, 10_000, func(n int) func() {
 				v := record(n)
@@ -156,7 +156,7 @@ func TestWriteIsLinear(t *testing.T) {
 		t.Run(layout.String()+"/deep nesting", func(t *testing.T) {
 			assertLinear(t, 1_000, func(n int) func() {
 				v := nested(n)
-				return func() { mustFormat(t, v, FormatOptions{Layout: layout, Limits: deep}) }
+				return func() { mustFormat(t, v, withLimits(inLayout(layout), deep)) }
 			})
 		})
 	}

@@ -2,6 +2,7 @@ package haus
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -35,15 +36,22 @@ func (l Layout) String() string {
 	return fmt.Sprintf("Layout(%d)", int(l))
 }
 
-// FormatOptions configure [Format], [FormatValue] and [FormatValues]. The
-// zero value is the pretty layout with the default indent and width.
+// FormatOptions configure [Format], [FormatValue] and [FormatValues].
+//
+// Indent and Width are taken literally (spec §11), 0 included, so the zero
+// value is not the default layout: it is the pretty layout with no
+// indentation and a width of 0, where nothing fits on one line. Start from
+// [DefaultFormatOptions] for the default. A negative Indent or Width is
+// rejected with [ErrInvalidOptions].
 type FormatOptions struct {
 	Layout Layout
-	// Indent is the number of spaces per level in the pretty layout;
-	// 0 means 2.
+	// Indent is the number of spaces per level in the pretty layout: with 0
+	// no line is indented. The compact and minimised layouts ignore it.
 	Indent int
 	// Width is the line width in code points, which only decides whether a
-	// positional payload fits on one line in the pretty layout; 0 means 80.
+	// positional payload fits on one line in the pretty layout: with 0
+	// nothing fits, and every positional payload is written one argument per
+	// line. The compact and minimised layouts ignore it.
 	Width int
 	// Limits are the limits of the text read (Format), or of the reader the
 	// text is written for (FormatValue, FormatValues). Zero fields take their
@@ -51,25 +59,40 @@ type FormatOptions struct {
 	Limits Limits
 }
 
-func (o FormatOptions) indent() int {
-	if o.Indent <= 0 {
-		return 2
-	}
-	return o.Indent
+// DefaultFormatOptions returns the default options: the pretty layout with
+// an indent of 2, a width of 80 and the default limits.
+func DefaultFormatOptions() FormatOptions {
+	return FormatOptions{Layout: Pretty, Indent: 2, Width: 80}
 }
 
-func (o FormatOptions) width() int {
-	if o.Width <= 0 {
-		return 80
+// ErrInvalidOptions is the error, wrapped with the detail, of a call given
+// options no layout takes: a negative indent or width. It is a mistake in the
+// calling program, not in the text or the values, so it isn't an [*Error]
+// and has no code (spec §17).
+var ErrInvalidOptions = errors.New("haus: invalid format options")
+
+// Check returns an error wrapping [ErrInvalidOptions] if the indent or width
+// is negative, in any layout, and nil otherwise. [Format], [FormatValue] and
+// [FormatValues] check their options so before doing anything else.
+func (o FormatOptions) Check() error {
+	switch {
+	case o.Indent < 0:
+		return fmt.Errorf("%w: indent %d is negative", ErrInvalidOptions, o.Indent)
+	case o.Width < 0:
+		return fmt.Errorf("%w: width %d is negative", ErrInvalidOptions, o.Width)
 	}
-	return o.Width
+	return nil
 }
 
 // Format reformats haus text in a standard layout (spec §11). Numbers, byte
 // strings and "…" strings keep their spelling. The pretty layout keeps
 // comments and blank lines; compact and minimised drop them (see
-// [HasComments] for tools that rewrite files in place).
+// [HasComments] for tools that rewrite files in place). A negative indent or
+// width fails with [ErrInvalidOptions] before the text is read.
 func Format(src []byte, opts FormatOptions) ([]byte, error) {
+	if err := opts.Check(); err != nil {
+		return nil, err
+	}
 	lim, err := opts.Limits.resolve()
 	if err != nil {
 		return nil, err
@@ -137,7 +160,9 @@ func (n *node) hasComments() bool {
 // limit (number-too-long), nesting deeper than the depth limit
 // (nesting-too-deep, a record payload counting one level), a tag that isn't
 // [A-Z][A-Za-z0-9_]* (invalid-tag), a string that isn't UTF-8
-// (cannot-encode), or a value that contains itself (cyclic-value).
+// (cannot-encode), or a value that contains itself (cyclic-value). A
+// negative indent or width fails with [ErrInvalidOptions] before any value
+// is looked at.
 func FormatValue(v Value, opts FormatOptions) ([]byte, error) {
 	return FormatValues([]Value{v}, opts)
 }
@@ -146,6 +171,9 @@ func FormatValue(v Value, opts FormatOptions) ([]byte, error) {
 // more as a stream with a comma after each. See [FormatValue]. A value that
 // contains itself fails with the code cyclic-value.
 func FormatValues(vs []Value, opts FormatOptions) ([]byte, error) {
+	if err := opts.Check(); err != nil {
+		return nil, err
+	}
 	lim, err := opts.Limits.resolve()
 	if err != nil {
 		return nil, err
@@ -361,7 +389,7 @@ type printer struct {
 }
 
 func printFile(f *fileNode, opts FormatOptions) []byte {
-	pr := &printer{indent: opts.indent(), width: opts.width(), layout: opts.Layout}
+	pr := &printer{indent: opts.Indent, width: opts.Width, layout: opts.Layout}
 	stream := len(f.items) > 1
 	if opts.Layout != Pretty {
 		for _, it := range f.items {

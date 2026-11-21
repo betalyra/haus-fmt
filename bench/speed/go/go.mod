@@ -1,6 +1,6 @@
 module github.com/betalyra/haus-fmt/bench/speed/go
 
-go 1.24
+go 1.26
 
 require (
 	github.com/betalyra/haus-fmt/go v0.0.0

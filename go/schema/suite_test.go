@@ -125,7 +125,7 @@ func TestSchemaSuite(t *testing.T) {
 					} else if canonical(t, enc) != canonical(t, out) {
 						t.Errorf("%s: encoded as %s", label, canonical(t, enc))
 					}
-					if _, err := haus.FormatValue(out, haus.FormatOptions{}); err != nil {
+					if _, err := haus.FormatValue(out, haus.DefaultFormatOptions()); err != nil {
 						t.Errorf("%s: decoded, but can't be written: %v", label, err)
 					}
 				case err == nil:

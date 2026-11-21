@@ -151,6 +151,8 @@
 { rule: "format.layouts.exact", cases: ["format/cases/already-formatted", "format/cases/containers", "format/cases/spellings", "format/examples/order"] },
 { rule: "format.options.defaults", cases: ["format/cases/width", "format/cases/containers"] },
 { rule: "format.options.width-positional-only", cases: ["format/cases/width-options", "format/cases/containers"] },
+{ rule: "format.options.zero-literal", cases: ["format/cases/indent-zero", "format/cases/width-zero"] },
+{ rule: "format.options.zero-not-default", cases: ["format/cases/indent-zero", "format/cases/width-zero"] },
 { rule: "format.options.unset-separate", cases: [], untestable: True, note: "API shape (an absent option)" },
 { rule: "format.options.compact-minimised-none", cases: ["format/cases/width-options"] },
 { rule: "format.pretty.keeps-comments", cases: ["format/cases/comments-line", "format/cases/comments-block", "format/cases/comments-containers"] },
