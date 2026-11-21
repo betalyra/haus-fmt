@@ -176,10 +176,29 @@ pub fn stdin_is_file() -> bool {
     let handle = std::os::windows::io::AsHandle::as_handle(&io::stdin()).try_clone_to_owned();
     #[cfg(not(any(unix, windows)))]
     let handle: io::Result<File> = Err(io::ErrorKind::Unsupported.into());
-    handle.map(File::from).and_then(|f| f.metadata()).is_ok_and(|m| m.is_file())
+    handle.map(File::from).is_ok_and(|f| is_file(&f))
 }
 
 /// Whether the open file `f` is a regular file, rather than a FIFO or a device.
 pub fn is_file(f: &File) -> bool {
-    f.metadata().is_ok_and(|m| m.is_file())
+    f.metadata().is_ok_and(|m| m.is_file()) && on_disk(f)
+}
+
+/// Whether `f` is a file on disk. Windows needs the check: there, std's
+/// metadata calls a pipe a regular file.
+#[cfg(windows)]
+fn on_disk(f: &File) -> bool {
+    use std::os::windows::io::AsRawHandle;
+    const FILE_TYPE_DISK: u32 = 1;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileType(file: *mut std::ffi::c_void) -> u32;
+    }
+    // SAFETY: GetFileType only reads the handle, which `f` keeps open.
+    unsafe { GetFileType(f.as_raw_handle()) == FILE_TYPE_DISK }
+}
+
+#[cfg(not(windows))]
+fn on_disk(_: &File) -> bool {
+    true
 }

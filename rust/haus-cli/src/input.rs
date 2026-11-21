@@ -21,7 +21,7 @@ impl Target {
     pub fn name(&self) -> String {
         match self {
             Target::Stdin => STDIN.to_owned(),
-            Target::File(path) => path.display().to_string(),
+            Target::File(path) => crate::output::shown(path),
             Target::Failed(name, _) => name.clone(),
         }
     }
@@ -70,7 +70,7 @@ fn expand(path: &Path, wanted: fn(&Path) -> bool) -> Vec<Target> {
         return vec![Target::Stdin];
     }
     match std::fs::metadata(path) {
-        Err(e) => vec![Target::Failed(path.display().to_string(), e.to_string())],
+        Err(e) => vec![Target::Failed(crate::output::shown(path), e.to_string())],
         Ok(meta) if meta.is_dir() => walk(path, wanted),
         Ok(_) => vec![Target::File(path.to_owned())],
     }
@@ -86,7 +86,7 @@ fn walk(dir: &Path, wanted: fn(&Path) -> bool) -> Vec<Target> {
                 Some(Target::File(e.into_path()))
             }
             Ok(_) => None,
-            Err(e) => Some(Target::Failed(dir.display().to_string(), e.to_string())),
+            Err(e) => Some(Target::Failed(crate::output::shown(dir), e.to_string())),
         })
         .collect()
 }

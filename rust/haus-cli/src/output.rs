@@ -3,6 +3,7 @@
 use crate::cli::Color;
 use annotate_snippets::Renderer;
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 
 /// How a command ended: its exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,6 +24,13 @@ pub fn colored(choice: Color, stream: &impl IsTerminal) -> bool {
         Color::Never => false,
         Color::Auto => stream.is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
     }
+}
+
+/// How a path is shown: as given or found, with `/` between its parts on
+/// every system, so output and JSON reports read the same on Windows.
+pub fn shown(path: impl AsRef<Path>) -> String {
+    let text = path.as_ref().display().to_string();
+    if cfg!(windows) { text.replace('\\', "/") } else { text }
 }
 
 /// The diagnostics renderer, styled or plain.

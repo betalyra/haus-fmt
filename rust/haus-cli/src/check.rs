@@ -99,7 +99,7 @@ struct Checking {
 pub fn run(args: &CheckArgs, color: Color) -> Status {
     let forced = match args.schema.as_deref().map(split_schema_arg) {
         Some((file, _)) if !file.is_file() => {
-            let message = format!("--schema {}: no such file", file.display());
+            let message = format!("--schema {}: no such file", output::shown(file));
             let hint = "Fix the path given with --schema.".into();
             return fail(args.json, Failure { code: ErrorCode::ImportNotFound, message, hint });
         }
@@ -168,7 +168,7 @@ pub(crate) fn explicit(args: &PackageArgs) -> Result<Explicit, Failure> {
         }
     })?;
     args.packages.iter().try_fold(explicit, |all, folder| {
-        all.folder(folder).map_err(|e| given("--packages", &folder.display().to_string(), e))
+        all.folder(folder).map_err(|e| given("--packages", &output::shown(folder), e))
     })
 }
 
@@ -331,24 +331,23 @@ impl Checker {
     /// used, why. None: no schema.
     fn checking(&mut self, adjacent: Option<PathBuf>) -> Option<(String, Result<Checking, Vec<Diagnostic>>)> {
         let r = self.schema_for(adjacent)?;
-        let label = format!("{}#{}", r.file.display(), r.type_name);
+        let label = format!("{}#{}", output::shown(&r.file), r.type_name);
         let checking = match self.load(&r.file) {
             Err(e) if e.position().is_some() => {
                 let schema_text = std::fs::read_to_string(&r.file).ok();
                 Err(vec![
-                    Diagnostic::schema(&e, Severity::Error, schema_text.as_deref())
-                        .in_file(r.file.display().to_string()),
+                    Diagnostic::schema(&e, Severity::Error, schema_text.as_deref()).in_file(output::shown(&r.file)),
                 ])
             }
             Err(e) => {
                 let message = match r.file.exists() {
-                    false => format!("the schema {} does not exist", r.file.display()),
-                    true => format!("cannot load the schema {}: {}", r.file.display(), e.reason()),
+                    false => format!("the schema {} does not exist", output::shown(&r.file)),
+                    true => format!("cannot load the schema {}: {}", output::shown(&r.file), e.reason()),
                 };
                 Err(vec![Diagnostic::new(Severity::Error, e.code(), message)])
             }
             Ok(schema) if schema.definition(&r.type_name).is_none() => {
-                let message = format!("the schema {} has no type {}", r.file.display(), r.type_name);
+                let message = format!("the schema {} has no type {}", output::shown(&r.file), r.type_name);
                 Err(vec![Diagnostic::new(Severity::Error, ErrorCode::UnknownType, message)])
             }
             Ok(schema) => Ok(Checking { schema, type_name: r.type_name }),

@@ -192,7 +192,7 @@ struct Package<'a> {
 
 impl Package<'_> {
     fn check(dir: &Path, given: &Explicit) -> Report {
-        let mut report = Report { path: dir.display().to_string(), manifest: None, error: None, diagnostics: vec![] };
+        let mut report = Report { path: output::shown(dir), manifest: None, error: None, diagnostics: vec![] };
         match fs::metadata(dir) {
             Ok(meta) if meta.is_dir() => {}
             Ok(_) => return Report { error: Some("not a directory".into()), ..report },
@@ -201,7 +201,7 @@ impl Package<'_> {
         let mut p = Package { dir, out: vec![] };
         if dir.join(MANIFEST).symlink_metadata().is_err() {
             // Not a package: nothing else to check.
-            let message = format!("{} is not a schema package: it has no {MANIFEST}", dir.display());
+            let message = format!("{} is not a schema package: it has no {MANIFEST}", output::shown(dir));
             let d = Diagnostic::new(Severity::Error, ErrorCode::ImportNotFound, message)
                 .with_hint("Give the directory of a schema package: the one with package.haus and schema.haus.");
             p.report(d, MANIFEST, None);
@@ -233,7 +233,7 @@ impl Package<'_> {
 
     /// How a file of the package is shown: `extensions/money/Cargo.toml`.
     fn shown(&self, file: &str) -> String {
-        self.dir.join(file).display().to_string()
+        output::shown(self.dir.join(file))
     }
 
     /// Reports `d` about `file`, at `span` of its `text` if given.
@@ -335,7 +335,7 @@ impl Package<'_> {
                             let message = format!(
                                 "the dependency {} ({}) is not a valid schema package: {}",
                                 dep.name,
-                                dir.display(),
+                                output::shown(dir),
                                 e.reason()
                             );
                             let at = dep.span.clone().map(|span| (d.text.as_str(), span));
