@@ -2,6 +2,8 @@ package haus
 
 import (
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +28,12 @@ const (
 // fastest returns the shortest time per call of f over linearRuns runs.
 func fastest(f func()) time.Duration {
 	best := time.Duration(1<<63 - 1)
+	// The garbage collector is off while timing, as in Python's timeit: a
+	// collection scans the whole stack, which a deep value makes cost more
+	// per call the deeper it is, though the work itself is linear.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	for range linearRuns {
+		runtime.GC()
 		// Repeat the call until the run lasts at least minRun: a clock that
 		// ticks coarsely (Windows: every 0.5–15.6 ms) would measure a fast call
 		// as 0 and make any ratio huge.

@@ -2,6 +2,8 @@ package schema_test
 
 import (
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +27,12 @@ const (
 
 func fastest(f func()) time.Duration {
 	best := time.Duration(1<<63 - 1)
+	// The garbage collector is off while timing, as in Python's timeit: a
+	// collection scans the whole stack, which a deep value makes cost more
+	// per call the deeper it is, though the work itself is linear.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	for range linearRuns {
+		runtime.GC()
 		// Repeat the call until the run lasts at least minRun: a clock that
 		// ticks coarsely (Windows: every 0.5–15.6 ms) would measure a fast call
 		// as 0 and make any ratio huge.
@@ -109,9 +116,9 @@ func TestTypedIsLinear(t *testing.T) {
 				return fmt.Sprintf("k%d: { f%d: %d, unknown%d: 1, f%d: 2 }", i, i%40, i, i, (i+1)%40)
 			})
 		}, haus.Limits{}, false},
-		// 500 and 2000 levels: at 8000 levels the recursion's stack outgrows the
-		// CPU caches of CI runners, which made a linear Format look 9× slower.
-		{"deep", "Deep", 500, func(n int) string {
+		// 125 and 500 levels: deeper, the recursion's stack outgrows the CPU
+		// caches of CI runners, which made a linear Format look 9–14× slower.
+		{"deep", "Deep", 125, func(n int) string {
 			return strings.Repeat("Node(", n) + "Leaf" + strings.Repeat(")", n)
 		}, deep, false},
 		{"large any", "Raw", 20_000, func(n int) string {
