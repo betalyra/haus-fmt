@@ -73,6 +73,30 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     return Number.parse(n.toString());
   }
 
+  /**
+   * The float {@code f} as the schema type {@code Float64} writes it (spec §15): a number in its
+   * one spelling (the fewest digits that read back to {@code f}), or the tag {@code NaN}, {@code
+   * Infinity} or {@code NegInfinity}.
+   */
+  static Value float64(double f) {
+    return floatValue(f, false);
+  }
+
+  /** The float {@code f} as the schema type {@code Float32} writes it; see {@link #float64}. */
+  static Value float32(float f) {
+    return floatValue(f, true);
+  }
+
+  private static Value floatValue(double f, boolean float32) {
+    if (Double.isNaN(f)) {
+      return new Variant("NaN", new Value[0]);
+    }
+    if (Double.isInfinite(f)) {
+      return new Variant(f > 0 ? "Infinity" : "NegInfinity", new Value[0]);
+    }
+    return new Number(SchemaFloats.format(f, float32));
+  }
+
   /** The string {@code s}. */
   static Text string(String s) {
     return new Text(s);
@@ -237,6 +261,14 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
      */
     public boolean isInteger() {
       return literal.indexOf('.') < 0 && literal.indexOf('e') < 0;
+    }
+
+    /**
+     * The nearest double (ties to even), rounded directly from the exact decimal; {@code -0} is
+     * negative zero, and a number too large for a double is infinite.
+     */
+    public double toDouble() {
+      return Double.parseDouble(literal);
     }
 
     /** The exact value; {@code -0} is zero. */

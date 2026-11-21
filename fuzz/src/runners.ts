@@ -33,7 +33,7 @@ const root = new URL("../..", import.meta.url).pathname
 export const GO = join(root, "fuzz/.build/go-runner")
 /** The Swift runner (fuzz/swift-runner): the parser, stream reader, canonical form and formatters. */
 export const SWIFT = join(root, "fuzz/.build/swift-runner")
-/** The JVM runner (fuzz/jvm, installed by Gradle into fuzz/.build/jvm-runner): the parser's, formatter's and JSON fuzzers' modes. */
+/** The JVM runner (fuzz/jvm, installed by Gradle into fuzz/.build/jvm-runner): the parser's, formatter's, JSON and std/time fuzzers' modes. */
 export const JVM = join(root, "fuzz/.build/jvm-runner/bin/jvm-runner")
 
 /** JSON with object keys sorted, so field order doesn't matter. */

@@ -33,8 +33,11 @@ public final class HausException extends RuntimeException {
     this.found = found;
   }
 
-  /** An error without a place. */
-  static HausException of(ErrorCode code, String reason) {
+  /**
+   * An error without a place, with a code from the catalogue: for codecs ({@link Codec}) that
+   * reject a value or a host value with a code of their own, such as {@code cannot-encode}.
+   */
+  public static HausException of(ErrorCode code, String reason) {
     return new HausException(code, reason, 0, 0, null, null, null);
   }
 

@@ -94,11 +94,8 @@ export const roc = () => external("roc", (mode, file) => [join(root, "fuzz/.buil
 export const python = () =>
   external("python", (mode, file) => [join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/json_runner.py"), mode, file]], true)
 export const go = () => external("go", (mode, file) => [join(root, "fuzz/.build/go-runner"), ["--json", mode, file]], true)
-/** The JVM runner: self-describing JSON and the import (its schemas come later). */
-export const jvm = (): JsonRunner => ({
-  ...external("jvm", (mode, file) => [join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--json", mode, file]], true),
-  modes: MODES.filter((m) => !typed(m)),
-})
+/** The JVM runner: every mode (schema-based JSON with `SchemaType.toJson` and `fromJson`). */
+export const jvm = () => external("jvm", (mode, file) => [join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--json", mode, file]], true)
 export const swift = () => external("swift", (mode, file) => [join(root, "fuzz/.build/swift-runner"), ["--json", mode, file]], true)
 
 // ── in this process ──────────────────────────────────────────

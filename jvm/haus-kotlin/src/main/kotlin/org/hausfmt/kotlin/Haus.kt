@@ -14,11 +14,15 @@ package org.hausfmt.kotlin
 import java.io.InputStream
 import java.math.BigDecimal
 import java.math.BigInteger
+import org.hausfmt.DecodeOptions
 import org.hausfmt.FormatOptions
 import org.hausfmt.Haus
+import org.hausfmt.HausCodec
 import org.hausfmt.HausJson
 import org.hausfmt.Layout
 import org.hausfmt.Limits
+import org.hausfmt.Schema
+import org.hausfmt.SchemaType
 import org.hausfmt.StreamOptions
 import org.hausfmt.StreamReader
 import org.hausfmt.Value
@@ -169,3 +173,22 @@ public val Boolean.haus: Value.Variant get() = Value.bool(this)
 
 /** The bytes as a haus byte string (a copy). */
 public val ByteArray.haus: Value.Bytes get() = Value.bytes(this)
+
+// ── Schemas and typed codecs ──
+
+/**
+ * The typed codec of the schema type [name] as [T], a data class, sealed interface or enum; see
+ * [HausCodec]. Data classes need parameter names: `compilerOptions { javaParameters.set(true) }`.
+ *
+ * ```kotlin
+ * data class Line(val sku: String, val qty: Int)
+ * val lines = schema.codec<Line>("Line")
+ * val line = lines.decode("""{ sku: "a", qty: 2 }""")
+ * ```
+ */
+public inline fun <reified T : Any> Schema.codec(name: String, options: DecodeOptions = DecodeOptions.DEFAULT): HausCodec<T> =
+    codec(name, T::class.java, options)
+
+/** This haus text decoded with the schema type: the value an encoder writes back; see [SchemaType.decode]. */
+public fun String.decodeHaus(type: SchemaType, options: DecodeOptions = DecodeOptions.DEFAULT): Value =
+    type.decode(Haus.parse(this, options.limits()), options)

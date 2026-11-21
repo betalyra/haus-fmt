@@ -229,3 +229,5 @@ export const python = () => external("python", join(root, "python/.venv/bin/pyth
 /** Package schema of the Go binding (`schema.Parse`, `Type.Decode`, `Type.Encode`). */
 export const go = () => external("go", join(root, "fuzz/.build/go-runner"), ["--schema"], true)
 export const swift = () => external("swift", join(root, "fuzz/.build/swift-runner"), ["--schema"], true)
+/** The JVM binding's schemas (`SchemaType.decode`, `encode`), in the JVM runner. */
+export const jvm = () => external("jvm", join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--schema"], true)

@@ -1,6 +1,6 @@
 // The order in Kotlin: the same steps as Order.java (and go/examples/order), on the same file,
-// with the app's types as data classes and a sealed interface. Run: ./gradlew :examples:orderKotlin
-// (from jvm/).
+// with the app's types as data classes and a sealed interface, and codecs for Money and LatLng.
+// Run: ./gradlew :examples:orderKotlin (from jvm/).
 package org.hausfmt.examples.order
 
 import java.math.BigDecimal
@@ -8,19 +8,25 @@ import java.math.BigInteger
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
+import org.hausfmt.Codec
+import org.hausfmt.Codecs
+import org.hausfmt.DecodeOptions
+import org.hausfmt.FormatOptions
+import org.hausfmt.HausException
+import org.hausfmt.PackageLocator
+import org.hausfmt.Schema
+import org.hausfmt.SchemaOptions
 import org.hausfmt.Value
 import org.hausfmt.examples.SharedFiles
-import org.hausfmt.kotlin.bigDecimal
-import org.hausfmt.kotlin.bigInteger
-import org.hausfmt.kotlin.component1
-import org.hausfmt.kotlin.component2
+import org.hausfmt.ext.geo.GeoCodecs
+import org.hausfmt.ext.geo.LatLng
+import org.hausfmt.ext.money.Currency
+import org.hausfmt.ext.money.Money
+import org.hausfmt.ext.money.MoneyCodecs
+import org.hausfmt.kotlin.codec
+import org.hausfmt.kotlin.decodeHaus
 import org.hausfmt.kotlin.get
-import org.hausfmt.kotlin.haus
-import org.hausfmt.kotlin.hausRecord
-import org.hausfmt.kotlin.hausVariant
-import org.hausfmt.kotlin.parseHaus
 import org.hausfmt.kotlin.string
-import org.hausfmt.kotlin.toHaus
 
 /** Integer cents, as payment APIs want them, and an ISO 4217 currency. */
 public data class Amount(val cents: BigInteger, val currency: String)
@@ -30,64 +36,60 @@ public data class LngLat(val lng: Double, val lat: Double) {
     override fun toString(): String = "[$lng, $lat]"
 }
 
+/** The schema's `closed < UserId String >`. */
+public data class UserId(val id: String)
+
 public sealed interface Status {
     public data object Pending : Status
     public data class Shipped(val tracking: String) : Status
     public data object Cancelled : Status
 }
 
+/** The app's type for the schema's `Root`, with the codecs' types. */
 public data class AppOrder(
     val id: BigInteger,
-    val customer: String,
+    val customer: UserId,
     val placed: LocalDate,
     val total: Amount,
     val deliverTo: LngLat,
     val status: Status,
 )
 
-/** The order as the app's types: Money(44.40, EUR) is 4440 cents, LatLng(lat, lng) is [lng, lat]. */
-public fun Value.toAppOrder(): AppOrder {
-    val (_, money) = this["total"] as Value.Variant
-    val (_, at) = this["deliverTo"] as Value.Variant
-    val status = this["status"] as Value.Variant
-    return AppOrder(
-        id = this["id"]!!.bigInteger!!,
-        customer = this["customer"]?.get(0)?.string!!,
-        placed = LocalDate.parse(this["placed"]?.get(0)?.string),
-        total = Amount(money[0].bigDecimal!!.movePointRight(2).toBigIntegerExact(), (money[1] as Value.Variant).tag()),
-        deliverTo = LngLat(lng = at[1].bigDecimal!!.toDouble(), lat = at[0].bigDecimal!!.toDouble()),
-        status = when (status.tag()) {
-            "Pending" -> Status.Pending
-            "Cancelled" -> Status.Cancelled
-            else -> Status.Shipped(status.payload()["tracking"]?.string!!)
-        },
-    )
-}
-
-/** The order as haus values again. */
-public fun AppOrder.toHausValue(): Value = hausRecord(
-    "id" to id.haus,
-    "customer" to hausVariant("UserId", customer.haus),
-    "placed" to hausVariant("Date", placed.toString().haus),
-    "total" to hausVariant("Money", BigDecimal(total.cents, 2).haus, hausVariant(total.currency)),
-    "deliverTo" to hausVariant("LatLng", BigDecimal.valueOf(deliverTo.lat).haus, BigDecimal.valueOf(deliverTo.lng).haus),
-    "status" to when (status) {
-        Status.Pending -> hausVariant("Pending")
-        Status.Cancelled -> hausVariant("Cancelled")
-        is Status.Shipped -> hausVariant("Shipped", hausRecord("tracking" to status.tracking.haus))
+/** Money(44.40, EUR) ↔ Amount(4440, "EUR"), on top of the iso profile. */
+private val cents = Codec.of(
+    MoneyCodecs.MONEY_ID, Amount::class.java,
+    { v ->
+        val m = MoneyCodecs.ISO.decode(v)
+        val cents = m.amount().toBigDecimal().movePointRight(2)
+        require(cents.stripTrailingZeros().scale() <= 0) { "${m.amount().literal()} has more than 2 decimal places" }
+        Amount(cents.toBigIntegerExact(), m.currency().code())
     },
+    { a -> MoneyCodecs.ISO.encode(Money(Value.number(BigDecimal(a.cents, 2)), Currency(a.currency))) },
+)
+
+/** LatLng(38.7223, -9.1393) ↔ [-9.1393, 38.7223], on top of the wgs84 profile. */
+private val geoJson = Codec.of(
+    GeoCodecs.LATLNG_ID, LngLat::class.java,
+    { v -> GeoCodecs.WGS84.decode(v).let { LngLat(lng = it.lng(), lat = it.lat()) } },
+    { p -> GeoCodecs.WGS84.encode(LatLng(p.lat, p.lng)) },
 )
 
 public fun main() {
-    val order = SharedFiles.read("order.haus").parseHaus()
+    // The packages the schema imports, @haus-fmt/money and @haus-fmt/geo, given by their folder.
+    val packages = PackageLocator.explicit().folder(SharedFiles.root().resolve("extensions"))
+    val schema = Schema.load(SharedFiles.path("order.schema.haus"), SchemaOptions.DEFAULT.withPackages(packages))
+    val root = schema.type("Root")
+    val order = SharedFiles.read("order.haus").decodeToString()
 
-    // Plain values: Money(44.40, EUR) is a tag with a number, kept exactly, and a tag.
-    val (_, money) = order["total"] as Value.Variant
-    println("plain:  ${order["customer"]?.get(0)?.string} pays ${money[0]} ${(money[1] as Value.Variant).tag()}")
+    // Without codecs: Money is Money(Decimal, Currency), the Decimal as its exact text.
+    val plain = order.decodeHaus(root)
+    val total = plain["total"] as Value.Variant
+    println("plain:  ${plain["customer"]?.get(0)?.string} pays ${total[0]} ${(total[1] as Value.Variant).tag()}")
 
-    // The app's types.
-    val typed = order.toAppOrder()
-    println("typed:  ${typed.customer} pays ${typed.total.cents} cents, deliver to [lng, lat] ${typed.deliverTo}")
+    // With codecs: the fields have the codecs' types.
+    val orders = schema.codec<AppOrder>("Root", DecodeOptions.DEFAULT.withCodecs(Codecs.of(cents, geoJson)))
+    val typed = orders.decode(order)
+    println("typed:  ${typed.customer.id} pays ${typed.total.cents} cents, deliver to [lng, lat] ${typed.deliverTo}")
     println("placed: ${typed.placed}, a ${typed.placed.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.ENGLISH)}")
 
     // The status is a sealed interface: `when` is exhaustive.
@@ -96,6 +98,21 @@ public fun main() {
         Status.Pending, Status.Cancelled -> println("status: not on its way")
     }
 
-    // Writing the app's order gives back the same haus text.
-    println(typed.toHausValue().toHaus())
+    // Encoding with the same codecs gives back the same haus text.
+    print(orders.encode(typed, FormatOptions.COMPACT))
+
+    // Codecs add rules on top of the schema's: Eur is a valid tag, but not ISO-shaped.
+    val eur = order.replaceFirst("EUR", "Eur")
+    eur.decodeHaus(root)
+    println("Eur without codecs: accepted")
+    try {
+        orders.decode(eur)
+    } catch (e: HausException) {
+        println("Eur with codecs: ${e.message}")
+    }
+    try {
+        orders.decode(order.replaceFirst("44.40", "44.405"))
+    } catch (e: HausException) {
+        println("44.405 with codecs: ${e.message}")
+    }
 }

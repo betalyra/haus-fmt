@@ -17,12 +17,12 @@ import { Rng } from "./generate.ts"
 import { caseRecord, Generator, onlyNamed, type Env, type Type } from "./schema-gen.ts"
 import { codecStats } from "./codec.ts"
 import {
-  caseLine, codecRunner, effectRunner, go, lean, python, roc, rust, rustCheck, schemaTexts, swift, typescriptRunner, type Outcome, type SchemaCase, type SchemaRunner,
+  caseLine, codecRunner, effectRunner, go, jvm, lean, python, roc, rust, rustCheck, schemaTexts, swift, typescriptRunner, type Outcome, type SchemaCase, type SchemaRunner,
 } from "./schema-runners.ts"
 
 const root = new URL("../..", import.meta.url).pathname
 const SCHEMA_DIRS = [join(root, "test-suite/schema"), join(root, "fuzz/schema")]
-const ALL_RUNNERS = ["lean", "typescript", "typescript-codec", "effect", "rust", "rust-check", "roc", "python", "go", "swift"]
+const ALL_RUNNERS = ["lean", "typescript", "typescript-codec", "effect", "rust", "rust-check", "roc", "python", "go", "swift", "jvm"]
 
 export async function run(argv: readonly string[]): Promise<number> {
   const { values: args } = parseArgs({
@@ -76,6 +76,7 @@ export async function run(argv: readonly string[]): Promise<number> {
     else if (name === "python") runners.push(python())
     else if (name === "go") runners.push(go())
     else if (name === "swift") runners.push(swift())
+    else if (name === "jvm") runners.push(jvm())
     else throw new Error(`unknown runner ${name} (${ALL_RUNNERS.join(", ")})`)
   }
 

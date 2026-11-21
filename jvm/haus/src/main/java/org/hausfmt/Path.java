@@ -45,6 +45,17 @@ final class Path {
     keys[--size] = null;
   }
 
+  /** The number of steps. */
+  int size() {
+    return size;
+  }
+
+  /** Drops the steps after the first {@code n}. */
+  void truncate(int n) {
+    Arrays.fill(keys, n, size, null);
+    size = n;
+  }
+
   void clear() {
     Arrays.fill(keys, 0, size, null);
     size = 0;

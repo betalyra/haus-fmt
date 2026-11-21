@@ -8,17 +8,14 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.Test;
 
 /**
- * Runs the examples and compares their output with the lines of go/examples/quickstart and
- * go/examples/order. Lines that need a schema there (its errors, and the codecs' rules) are the
- * JVM binding's own until it has schemas; error messages are each binding's own (spec §17 fixes
- * codes, not messages).
+ * Runs the examples, in Java and Kotlin, and compares their output with the lines of
+ * go/examples/quickstart and go/examples/order, line for line, error messages included.
  */
 class ExamplesTest {
   private static final String QUICKSTART = String.join("\n",
       "thread by ada: 15 levels, 30 likes",
       "Comment { author: \"me\", at: Instant(\"2026-11-16T09:00:00Z\"), text: \"+1\", likes: 1, replies: [] }",
-      // go: error: $.likes: expected Int, found the string "lots" [type-mismatch]
-      "error: 1:81: a lowercase word, \"lots\", where a value must be [bare-identifier]",
+      "error: $.likes: expected Int, found the string \"lots\" [type-mismatch]",
       "");
 
   private static final String ORDER = String.join("\n",
@@ -28,7 +25,11 @@ class ExamplesTest {
       "status: shipped, tracking DE-4711",
       "{ id: 7, customer: UserId(\"usr_ada\"), placed: Date(\"2026-11-09\"), total: Money(44.40, EUR), "
           + "deliverTo: LatLng(38.7223, -9.1393), status: Shipped { tracking: \"DE-4711\" } }",
-      // go: the Eur and 44.405 lines, which need the codecs' iso rules
+      "Eur without codecs: accepted",
+      "Eur with codecs: $.total: @haus-fmt/money@1#Money rejects the value: Eur is not a currency: three letters A–Z "
+          + "(ISO 4217) [type-mismatch]",
+      "44.405 with codecs: $.total: @haus-fmt/money@1#Money rejects the value: 44.405 has more than 2 decimal places "
+          + "[type-mismatch]",
       "");
 
   private static String output(Runnable main) {

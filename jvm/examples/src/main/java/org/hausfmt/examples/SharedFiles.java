@@ -19,6 +19,16 @@ public final class SharedFiles {
     }
   }
 
+  /** The path of examples/{@code name}. */
+  public static Path path(String name) {
+    return dir().resolve(name);
+  }
+
+  /** The repository's directory, which holds examples/ and extensions/. */
+  public static Path root() {
+    return dir().getParent();
+  }
+
   private static Path dir() {
     for (Path p = Paths.get("").toAbsolutePath(); p != null; p = p.getParent()) {
       if (Files.exists(p.resolve("examples/thread.haus"))) {
