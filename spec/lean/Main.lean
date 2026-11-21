@@ -1,5 +1,6 @@
 import Haus.Canonical
 import Haus.Layout.Pretty
+import Haus.Layout.Format
 import Haus.Json.SchemaBased
 import Haus.Packages.Suite
 import Haus.Profiles.Vectors
@@ -69,6 +70,15 @@ import Lean.Data.Json
                                   §2, §12) in both directions; compare from the canonical forms
     haus-ref --format-options FILE       the pretty layout's options (test-suite/format/
                                   options.cases.haus, spec §11) with `Layout.prettyAll`
+    haus-ref --format-batch STYLE INDENT WIDTH DIR N  like --batch, reformatting each file with
+                                  the standard formatter (`Format.format`, spec §11: comments,
+                                  blank lines and spellings kept) in STYLE (`pretty`, `compact`,
+                                  `minimised`): `ok <the text as a JSON string>`, the parser's
+                                  `err <line> <column> <code> <reason>`, or `crash <reason>`
+                                  for a bug of the model (fuzz/, the formatters)
+    haus-ref --format-suite DIR          run the format suite DIR (test-suite/format) with
+                                  `Format.format`: every check of its README, for cases/,
+                                  examples/ and valid/, and options.cases.haus
     haus-ref --profile NAME FILE         run the test vectors FILE of the official profile NAME
                                   (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`; spec §13.3)
                                   with its reference checker (Haus/Profiles/)
@@ -1138,6 +1148,193 @@ def optionsCase : Value → Verdict
     | _, _ => .wrong "not a case"
   | _ => .wrong "not a case"
 
+/-! ## The standard formatter (spec §11) -/
+
+/-- The standard formatter on text: the result, or the parser's error. -/
+def formatText (style : Format.Style) (o : Layout.Options) (s : String) : Except String String :=
+  match Format.format {} style o s.toList with
+  | .ok t => .ok (String.ofList t)
+  | .error e => .error s!"{e.reason} [{e.code}]"
+
+/--
+One result of `--format-batch`: `ok` and the formatted text as a JSON
+string, the parser's error as `--batch` prints it, or `crash` when the
+model's tree disagrees with the parser (a bug of the model).
+-/
+def formatLine (style : Format.Style) (o : Layout.Options) (bytes : ByteArray) : String :=
+  match String.fromUTF8? bytes with
+  | none => batchLine bytes
+  | some s =>
+    match Parser.parse {} s.toList with
+    | .error _ => batchLine bytes
+    | .ok _ =>
+      match Format.format {} style o s.toList with
+      | .ok t => s!"ok {(Json.str (String.ofList t)).compress}"
+      | .error e => s!"crash {oneLine e.reason}"
+
+def formatUsage := "usage: haus-ref --format-batch (pretty | compact | minimised) INDENT WIDTH DIR N"
+
+/-- The values of a text, or none when it isn't haus. -/
+def valuesOf (s : String) : Option (List Value) := (Parser.parse {} s.toList).toOption
+
+/--
+Which characters of a haus text are inside a comment: a scan that skips
+strings, block strings and byte strings (whose text may look like a
+comment) and marks `//` to the end of its line and `/* … */`, nested.
+-/
+def commentMask : Nat → Text → List Bool
+  | 0, _ => []
+  | _ + 1, [] => []
+  | fuel + 1, t@('/' :: '/' :: r) =>
+    let n := 2 + (r.takeWhile fun c => c != '\n' && c != '\r').length
+    List.replicate n true ++ commentMask fuel (t.drop n)
+  | fuel + 1, t@('/' :: '*' :: r) =>
+    let n := match Parser.blockComment t 1 r with
+      | .ok rest => t.length - rest.length
+      | .error _ => t.length
+    List.replicate n true ++ commentMask fuel (t.drop n)
+  | fuel + 1, t@('"' :: '"' :: '"' :: r) =>
+    let n := match Parser.findClose r with
+      | some (_, rest) => t.length - rest.length
+      | none => t.length
+    List.replicate n false ++ commentMask fuel (t.drop n)
+  | fuel + 1, t@('"' :: r) =>
+    let n := 1 + Format.quotedLength r
+    List.replicate n false ++ commentMask fuel (t.drop n)
+  | fuel + 1, _ :: r => false :: commentMask fuel r
+
+/-- The offsets of the lines' last characters that are a space or a tab outside a comment. -/
+def trailingBlanks (s : String) : List Nat :=
+  let t := s.toList
+  let mask := commentMask (t.length + 1) t
+  let next := (t.drop 1).map some ++ [none]
+  ((t.zip next).zip mask).zipIdx.filterMap fun (((c, n), inComment), i) =>
+    if isBlank c && (n == none || n == some '\n') && !inComment then some i else none
+
+/-- What an editor that trims trailing whitespace makes of a text. -/
+def trimLines (s : String) : String :=
+  "\n".intercalate ((s.splitOn "\n").map fun l => String.ofList (Pretty.trimEnd l.toList))
+
+-- A blank at the end of a line outside a comment (and none inside a string or comment that looks like one).
+#guard trailingBlanks "[1, \n  // b \n  /* c\n */ \"x // \", \"\"\"\n  // \n  \"\"\" \n]\t" == [3, 41, 48, 51]
+#guard trimLines "a \n\t\nb\t " == "a\n\nb"
+
+def withoutBlankLines (s : String) : String :=
+  "\n".intercalate ((s.splitOn "\n").filter (· != ""))
+
+/-- `NAME.options`: `{ indent: 4, width: 40 }`, for every layout; the default for an option not given. -/
+def readFormatOptions (file : System.FilePath) : IO Layout.Options := do
+  if !(← file.pathExists) then return {}
+  match ← readCaseFile file with
+  | [.record fs] =>
+    let get (k : String) (d : Nat) := ((natField? fs k).join).getD d
+    return { indent := get "indent" 2, width := get "width" 80 }
+  | _ => throw (IO.userError s!"{file}: expected a record")
+
+def styleName : Format.Style → String
+  | .pretty => "pretty"
+  | .compact => "compact"
+  | .minimised => "minimised"
+
+/--
+The checks of `test-suite/format/README.md` for one input: the three
+layouts give the expected files; formatting each result again changes
+nothing, and it has the input's values; the minimised result formatted as
+pretty is the compact one formatted as pretty, and the pretty file without
+its comments (the input formatted without them, F15), blank lines aside;
+no line of the pretty result ends in a blank outside a comment, and it has
+the same values with its lines trimmed. The failures.
+-/
+def formatChecks (name input : String) (o : Layout.Options) (expected : Format.Style → IO String) :
+    IO (Array String) := do
+  let mut failures : Array String := #[]
+  let some values := valuesOf input | return #[s!"{name}: the input isn't haus"]
+  let mut outs : List (Format.Style × String) := []
+  for style in [Format.Style.pretty, .compact, .minimised] do
+    let label := s!"{name} ({styleName style})"
+    match formatText style o input with
+    | .error e => failures := failures.push s!"{label}: rejected: {e}"
+    | .ok out =>
+      outs := outs ++ [(style, out)]
+      let want ← expected style
+      if out != want then failures := failures.push s!"{label}:\n  got  {oneLine out}\n  want {oneLine want}"
+      if out.contains '\r' then failures := failures.push s!"{label}: a carriage return"
+      match formatText style o out with
+      | .ok again => if again != out then failures := failures.push s!"{label}: formatted again: {oneLine again}"
+      | .error e => failures := failures.push s!"{label}: the output is rejected: {e}"
+      if valuesOf out != some values then failures := failures.push s!"{label}: other values"
+      if style != .pretty && out.any isLineSep then failures := failures.push s!"{label}: a raw U+2028 or U+2029"
+  match outs.lookup .pretty, outs.lookup .compact, outs.lookup .minimised with
+  | some pretty, some compact, some minimised =>
+    let fromMinimised := (formatText .pretty o minimised).toOption
+    if fromMinimised != (formatText .pretty o compact).toOption then
+      failures := failures.push s!"{name}: minimised and compact formatted as pretty differ"
+    let bare := (Format.read {} input.toList).toOption.map fun f => String.ofList (Format.prettyFile o f.dropComments)
+    if fromMinimised.map withoutBlankLines != bare.map withoutBlankLines then
+      failures := failures.push s!"{name}: minimised formatted as pretty isn't the pretty file without comments: {oneLine (fromMinimised.getD "")}"
+    let blanks := trailingBlanks pretty
+    if !blanks.isEmpty then failures := failures.push s!"{name} (pretty): lines ending in a blank, at {blanks}"
+    if valuesOf (trimLines pretty) != some values then failures := failures.push s!"{name} (pretty): trimming the lines changes the values"
+  | _, _, _ => pure ()
+  return failures
+
+/--
+A case of `format/options.cases.haus` with the standard formatter, as
+`optionsCase` (`--format-options`) checks it with `Layout.prettyAll`.
+-/
+def formatOptionsCase : Value → Verdict
+  | .record fs =>
+    let indent := natField? fs "indent"
+    let width := natField? fs "width"
+    match strField fs "input", fs.lookup "result" with
+    | some input, some result =>
+      match indent, width with
+      | some none, _ | _, some none =>
+        match result with
+        | .variant "Rejected" [] => .right
+        | _ => .wrong "a negative option, not a natural number"
+      | _, _ =>
+        let o : Layout.Options := { indent := (indent.join).getD 2, width := (width.join).getD 80 }
+        match formatText .pretty o input, result with
+        | .error e, _ => .wrong s!"the input: {e}"
+        | .ok got, .variant "Ok" [.str want] => if got == want then .right else .wrong s!"got {oneLine got}"
+        | .ok got, .variant "Rejected" [] => .wrong s!"not rejected: {oneLine got}"
+        | .ok _, _ => .wrong "not a case"
+    | _, _ => .wrong "not a case"
+  | _ => .wrong "not a case"
+
+/--
+`--format-suite DIR`: the format suite (`test-suite/format/README.md`) with
+the standard formatter: `DIR/cases` and `DIR/examples` (inputs and expected
+files side by side), the conformance suite's `DIR/../valid` (expected files
+in `DIR/valid`), then `DIR/options.cases.haus`.
+-/
+def runFormatSuite (dir : System.FilePath) : IO UInt32 := do
+  let mut failures : Array String := #[]
+  let mut failed := 0
+  let mut count := 0
+  let groups : List (String × System.FilePath × System.FilePath) :=
+    [("cases", dir / "cases", dir / "cases"), ("examples", dir / "examples", dir / "examples"),
+     ("valid", dir / ".." / "valid", dir / "valid")]
+  for (group, inputs, outputs) in groups do
+    for name in ← namesIn inputs ".haus" do
+      count := count + 1
+      let label := s!"{group}/{name}"
+      let some input := String.fromUTF8? (← IO.FS.readBinFile (inputs / s!"{name}.haus"))
+        | failures := failures.push s!"{label}: invalid UTF-8"; failed := failed + 1; continue
+      let o ← readFormatOptions (outputs / s!"{name}.options")
+      let expected (s : Format.Style) : IO String := do
+        let file := outputs / s!"{name}.{styleName s}"
+        if ← file.pathExists then IO.FS.readFile file else return s!"({file} is missing)"
+      let found ← formatChecks label input o expected
+      if !found.isEmpty then failed := failed + 1
+      failures := failures ++ found
+  for f in failures do IO.println s!"FAIL {f}"
+  IO.println s!"{count - failed}/{count} inputs passed every check"
+  IO.println "options.cases.haus:"
+  let options ← runCases (dir / "options.cases.haus") formatOptionsCase
+  return if failures.isEmpty && options == 0 then 0 else 1
+
 /-- `--compact`, `--minimised`, `--pretty`: FILE's values written in a layout, from values. -/
 def runLayout (write : List Value → Text) (file : System.FilePath) : IO UInt32 := do
   match parseBytes (← IO.FS.readBinFile file) with
@@ -1148,6 +1345,11 @@ def main : List String → IO UInt32
   | ["--positions", file] => runCases file positionCase
   | ["--equality", file] => runCases file equalityCase
   | ["--format-options", file] => runCases file optionsCase
+  | ["--format-suite", dir] => runFormatSuite dir
+  | ["--format-batch", style, indent, width, dir, n] =>
+      match Format.Style.ofString? style, indent.toNat?, width.toNat? with
+      | some style, some indent, some width => runBatch (formatLine style { indent, width }) dir n.toNat!
+      | _, _, _ => do IO.eprintln formatUsage; return 2
   | ["--stream-suite", dir] => runStreamSuite dir
   | ["--profile", name, file] => runProfile name file
   | ["--profile-batch", name, file] => runProfileBatch name file
@@ -1205,4 +1407,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE | --format-suite DIR | --format-batch STYLE INDENT WIDTH DIR N"; return 2

@@ -1,8 +1,10 @@
 /**
  * Differential testing of the formatters (spec §11): generated documents
- * (format-gen.ts) through the TypeScript, Rust, Go, Swift, JVM and Python
- * formatters in the pretty, compact and minimised layouts, which must write the
- * same bytes and keep the properties of §11; and generated values through the
+ * (format-gen.ts) through Lean's model of the formatter (`haus-ref
+ * --format-batch`, spec/lean/Haus/Layout/Format.lean), the reference, and the
+ * TypeScript, Rust, Go, Swift, JVM, Python and Zig formatters in the pretty,
+ * compact and minimised layouts, which must write the same bytes as Lean and
+ * keep the properties of §11; and generated values through the
  * value writers of TypeScript, Rust, Roc, Go, Swift, the JVM and Python, which
  * must write what Lean's layout writers write (compact, minimised and pretty),
  * byte for byte. See ../README.md.
@@ -341,10 +343,23 @@ interface Formatter {
   readonly program: string
   /** Arguments before the mode's: the script, for a program that runs one. */
   readonly script?: readonly string[]
+  /** The mode's arguments, when they aren't `--format STYLE --indent N --width N`. */
+  readonly args?: (style: Style, options: Options) => readonly string[]
 }
 
 /**
- * The formatters compared with TypeScript's: Rust's (`fuzz_runner --format`),
+ * The reference: Lean's model of the formatter (`haus-ref --format-batch
+ * STYLE INDENT WIDTH`, `Format.format`), which every other formatter must
+ * agree with, TypeScript's included.
+ */
+const LEAN_FORMATTER: Formatter = {
+  name: "lean",
+  program: LEAN,
+  args: (style, o) => ["--format-batch", style, String(o.indent), String(o.width)],
+}
+
+/**
+ * The formatters compared with Lean's, besides TypeScript's: Rust's (`fuzz_runner --format`),
  * Go's (`go-runner --format`, `haus.Format`), Swift's (`swift-runner
  * --format`, `format`), the JVM's (`jvm-runner --format`, `Haus.format`) and
  * Python's (`python/fuzz/runner.py --format`, `haus.format`). Every one
@@ -363,7 +378,7 @@ let FORMATTERS: readonly Formatter[] = [
 /** An external formatter's outputs. */
 function externalFormat(f: Formatter, dir: string, cases: readonly Uint8Array[], style: Style, options: Options): Out[] {
   if (cases.length === 0) return []
-  const args = ["--format", style, "--indent", String(options.indent), "--width", String(options.width)]
+  const args = f.args?.(style, options) ?? ["--format", style, "--indent", String(options.indent), "--width", String(options.width)]
   return external(f.program, [...(f.script ?? []), ...args], dir, cases).map((line) => {
     if (line.startsWith("crash ")) return { ok: false, crash: line }
     const r = parseOut<string>(line)
@@ -375,60 +390,66 @@ const describeOut = (o: Out | undefined) => (o === undefined ? "-" : o.ok ? show
 const same = (a: Out, b: Out) => (a.ok && b.ok ? a.text === b.text : a.ok === b.ok && !a.crash && !b.crash)
 
 /**
- * Every property of §11 for each case, in each layout: the TypeScript,
- * Rust and Go formatters agree byte for byte, the output keeps the values
- * (and in pretty every comment, in order), formatting it again changes
- * nothing, minimised formatted as pretty is compact formatted as pretty and
- * the pretty file without its comments and blank lines, and the layouts' own
- * rules hold (`layoutFailures`). Returns the failures of each case.
+ * Every property of §11 for each case, in each layout: TypeScript's
+ * formatter and the external ones agree with Lean's model byte for byte,
+ * the output keeps the values (and in pretty every comment, in order),
+ * formatting it again changes nothing, minimised formatted as pretty is
+ * compact formatted as pretty and the pretty file without its comments and
+ * blank lines, and the layouts' own rules hold (`layoutFailures`, on Lean's
+ * output). Returns the failures of each case.
  */
 export function checkFormat(dir: string, cases: readonly Uint8Array[], options: Options): Failure[][] {
   const failures: Failure[][] = cases.map(() => [])
-  /** A failure for each external formatter whose output differs from TypeScript's. */
-  const compare = (i: number, what: string, t: Out, others: readonly Out[]) =>
-    FORMATTERS.forEach((f, k) => {
+  /** The formatters compared with Lean's: TypeScript's, then the external ones. */
+  const names = ["typescript", ...FORMATTERS.map((f) => f.name)]
+  /** A failure for each formatter whose output differs from Lean's. */
+  const compare = (i: number, what: string, lean: Out, others: readonly Out[]) =>
+    names.forEach((name, k) => {
       const o = others[k]!
-      if (!same(t, o)) failures[i]!.push({ check: `${f.name} ≠ typescript: ${what}`, detail: `typescript ${describeOut(t)}\n${f.name.padEnd(10)} ${describeOut(o)}` })
+      if (!same(lean, o)) failures[i]!.push({ check: `${name} ≠ lean: ${what}`, detail: `lean       ${describeOut(lean)}\n${name.padEnd(10)} ${describeOut(o)}` })
     })
+  /** Lean's outputs, and those of the formatters in `names`. */
+  const formatAll = (d: string, inputs: readonly Uint8Array[], style: Style): [Out[], Out[][]] => [
+    externalFormat(LEAN_FORMATTER, d, inputs, style, options),
+    [inputs.map((c) => tsFormat(c, style, options)), ...FORMATTERS.map((f) => externalFormat(f, d, inputs, style, options))],
+  ]
   const outs = new Map<Style, Out[]>()
   for (const style of STYLES) {
-    const ts = cases.map((c) => tsFormat(c, style, options))
-    const others = FORMATTERS.map((f) => externalFormat(f, join(dir, "input"), cases, style, options))
-    outs.set(style, ts)
-    ts.forEach((t, i) => {
-      if (t.crash) failures[i]!.push({ check: `crash: typescript ${style}`, detail: t.crash })
-      FORMATTERS.forEach((f, k) => {
+    const [lean, others] = formatAll(join(dir, "input"), cases, style)
+    outs.set(style, lean)
+    lean.forEach((t, i) => {
+      if (t.crash) failures[i]!.push({ check: `crash: lean ${style}`, detail: t.crash })
+      names.forEach((name, k) => {
         const crash = others[k]![i]!.crash
-        if (crash) failures[i]!.push({ check: `crash: ${f.name} ${style}`, detail: crash })
+        if (crash) failures[i]!.push({ check: `crash: ${name} ${style}`, detail: crash })
       })
       compare(i, style, t, others.map((o) => o[i]!))
       if (t.ok) failures[i]!.push(...layoutFailures(style, utf8.decode(cases[i]!), t.text, options))
     })
   }
 
-  // Round two, on the outputs: each layout again (idempotence), and compact and minimised as pretty.
+  // Round two, on Lean's outputs: each layout again (idempotence), and compact and minimised as pretty.
   const accepted = cases.flatMap((_, i) => (STYLES.every((s) => outs.get(s)![i]!.ok) ? [i] : []))
   const text = (s: Style, i: number) => (outs.get(s)![i] as { text: string }).text
   const inputsOf = new Map<Style, Uint8Array[]>()
-  /** Every formatter's output, TypeScript's first, for each accepted case. */
+  /** Every formatter's output, Lean's first, for each accepted case. */
   const again = (input: Style, style: Style): (readonly Out[])[] => {
     const inputs = inputsOf.get(input) ?? accepted.map((i) => enc.encode(text(input, i)))
     inputsOf.set(input, inputs)
-    const ts = inputs.map((c) => tsFormat(c, style, options))
-    const others = FORMATTERS.map((f) => externalFormat(f, join(dir, input), inputs, style, options))
+    const [lean, others] = formatAll(join(dir, input), inputs, style)
     return accepted.map((i, k) => {
-      const all = [ts[k]!, ...others.map((o) => o[k]!)]
+      const all = [lean[k]!, ...others.map((o) => o[k]!)]
       compare(i, `${input} → ${style}`, all[0]!, all.slice(1))
       return all
     })
   }
-  const names = ["typescript", ...FORMATTERS.map((f) => f.name)]
+  const allNames = ["lean", ...names]
   for (const style of STYLES) {
     again(style, style).forEach((all, k) => {
       const i = accepted[k]!
       const out = text(style, i)
       all.forEach((o, n) => {
-        if (!o.ok || o.text !== out) failures[i]!.push({ check: `idempotence: ${style} (${names[n]})`, detail: `once  ${show(out)}\ntwice ${describeOut(o)}` })
+        if (!o.ok || o.text !== out) failures[i]!.push({ check: `idempotence: ${style} (${allNames[n]})`, detail: `once  ${show(out)}\ntwice ${describeOut(o)}` })
       })
     })
   }
@@ -437,9 +458,9 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
     const i = accepted[k]!
     all.forEach((m, n) => {
       const c = fromCompact[k]![n]!
-      if (!same(m, c)) failures[i]!.push({ check: `minimised → pretty (${names[n]})`, detail: `pretty(minimised) ${describeOut(m)}\npretty(compact)   ${describeOut(c)}` })
+      if (!same(m, c)) failures[i]!.push({ check: `minimised → pretty (${allNames[n]})`, detail: `pretty(minimised) ${describeOut(m)}\npretty(compact)   ${describeOut(c)}` })
     })
-    // The pretty file without its comments and blank lines (spec §11).
+    // The pretty file without its comments and blank lines (spec §11; F15: the input formatted without its comments).
     const t = all[0]!
     if (t.ok) {
       const input = utf8.decode(cases[i]!)
@@ -597,12 +618,13 @@ function shrink(bytes: Uint8Array, check: string, run: Checker): Uint8Array {
 let outDir = "fuzz/.out"
 const dir = (name: string) => join(outDir, "format", name)
 
-/** Every layout's output of both formatters, for a report. */
+/** Every layout's output of every formatter, Lean's first, for a report. */
 function outputs(bytes: Uint8Array, options: Options): string {
   return STYLES.flatMap((style) => {
-    const t = tsFormat(bytes, style, options)
+    const lean = describeOut(externalFormat(LEAN_FORMATTER, dir("report"), [bytes], style, options)[0])
+    const ts = `  ${"".padEnd(9)} ${"typescript".padEnd(10)} ${describeOut(tsFormat(bytes, style, options))}`
     const others = FORMATTERS.map((f) => `  ${"".padEnd(9)} ${f.name.padEnd(10)} ${describeOut(externalFormat(f, dir("report"), [bytes], style, options)[0])}`)
-    return [`  ${style.padEnd(9)} typescript ${describeOut(t)}`, ...others]
+    return [`  ${style.padEnd(9)} ${"lean".padEnd(10)} ${lean}`, ts, ...others]
   }).join("\n")
 }
 
@@ -643,7 +665,9 @@ export async function run(argv: readonly string[]): Promise<number> {
   let streams = 0
   const MAX_SHRUNK = 3
 
-  console.log(`seed ${seed}: ${count} documents through the typescript, rust, go, swift, jvm and python formatters (pretty, compact, minimised), their values through the lean, typescript, rust, roc, go, swift, jvm and python writers`)
+  console.log(
+    `seed ${seed}: ${count} documents through the lean (reference), typescript${FORMATTERS.map((f) => `, ${f.name}`).join("")} formatters (pretty, compact, minimised), their values through the lean, typescript${WRITERS.map((w) => `, ${w.name}`).join("")} writers`,
+  )
   for (let done = 0; done < count; done += batch) {
     // Most batches use the default options; some another indentation and width.
     const options = rng.chance(0.7) ? { indent: 2, width: 80 } : rng.pick(OPTIONS)
