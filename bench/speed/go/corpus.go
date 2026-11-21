@@ -5,9 +5,11 @@
 //
 //	parse   json.Unmarshal into any (encoding/json, go-json)       vs  haus.Parse, haus.ParseAll (text → Value, no schema)
 //	typed   json.Unmarshal into Go types generated from the
-//	        source's JSON Schema (encoding/json, go-json)          vs  haus.Parse + schema Type.Decode with the document's type
+//	        source's JSON Schema (encoding/json, go-json)          vs  schema Type.Parse with the document's type (haus.Parse +
+//	                                                                   Type.Decode); the corpus: haus.ParseAll + Type.Decode
 //	write   json.Marshal of the any value, of the Go types         vs  haus.FormatValue minimised and compact, FormatValues
-//	                                                                   (a stream); typed: Type.Encode + FormatValue
+//	                                                                   (a stream); typed: Type.Format (Type.Encode +
+//	                                                                   FormatValue, in one pass)
 //
 // each on the whole corpus as one text (all.json, a JSON array; all.haus, a
 // haus stream) and on every document on its own (the time is for all of

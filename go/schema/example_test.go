@@ -32,3 +32,21 @@ type Order = { id: Int, total: Decimal, items: Array { sku: String, price: Float
 	// {id:16,items:[{price:0.1,sku:"A1"}],total:19.90}
 	// type-mismatch $.items[0].price
 }
+
+func ExampleType_Format() {
+	s, err := schema.Parse([]byte(`type Order = { id: Int, total: Decimal, items: Array { sku: String, price: Float64 } }`), schema.Options{})
+	if err != nil {
+		panic(err)
+	}
+	order, _ := s.Type("Order")
+
+	decoded, _ := order.Parse([]byte(`{ id: 0x10, total: 19.90, items: [{ sku: "A1", price: 0.10 }], note: "ignored" }`))
+	text, _ := order.Format(decoded, haus.FormatOptions{Layout: haus.Minimised})
+	fmt.Print(string(text))
+
+	_, err = order.Format(haus.Array{}, haus.FormatOptions{Layout: haus.Minimised})
+	fmt.Println(err)
+	// Output:
+	// {id:16,total:19.90,items:[{sku:"A1",price:0.1}]}
+	// $: expected Order, found an array [type-mismatch]
+}

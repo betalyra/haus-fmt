@@ -216,7 +216,7 @@ func (w *walker) readJSON(j haus.Value, rt, t *typ) (haus.Value, error) {
 	case kFloat32, kFloat64:
 		switch x := j.(type) {
 		case haus.Number:
-			out, _, err := w.float(x, rt.kind)
+			out, _, err := w.float(j, x, rt.kind)
 			return out, err
 		case haus.String:
 			switch x {

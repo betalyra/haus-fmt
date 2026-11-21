@@ -133,6 +133,9 @@ type valueChecker struct {
 	guard cycleGuard
 	path  []step
 	nodes int
+	// written is set for a value a writer has written: its strings and
+	// keys are known to be UTF-8.
+	written bool
 }
 
 func (c *valueChecker) fail(code ErrorCode, format string, args ...any) error {
@@ -230,7 +233,7 @@ func (c *valueChecker) enter(v Value, depth int) error {
 func (c *valueChecker) fields(r Record, depth int) error {
 	for _, f := range r.fields {
 		c.path = append(c.path, step{key: f.Key, index: -1})
-		if !utf8.ValidString(f.Key) {
+		if !c.written && !utf8.ValidString(f.Key) {
 			return c.fail(CodeCannotEncode, "a key that isn't valid UTF-8")
 		}
 		if len(f.Key) > c.lim.MaxStringLength && utf8.RuneCountInString(f.Key) > c.lim.MaxStringLength {
@@ -245,7 +248,7 @@ func (c *valueChecker) fields(r Record, depth int) error {
 }
 
 func (c *valueChecker) text(s string, tooLong ErrorCode, what string) error {
-	if !utf8.ValidString(s) {
+	if !c.written && !utf8.ValidString(s) {
 		return c.fail(CodeCannotEncode, "a %s that isn't valid UTF-8", what)
 	}
 	if len(s) > c.lim.MaxStringLength {

@@ -16,9 +16,16 @@ type numError struct {
 func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 // isWordChar reports whether c can continue an identifier or tag: [A-Za-z0-9_].
-func isWordChar(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || isDigit(c) || c == '_'
-}
+func isWordChar(c byte) bool { return wordChars[c] }
+
+// wordChars marks [A-Za-z0-9_].
+var wordChars = func() (t [256]bool) {
+	for c := range t {
+		t[c] = c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+	}
+	return t
+}()
+
 func isHexDigit(c byte) bool { return isDigit(c) || (c|0x20) >= 'a' && (c|0x20) <= 'f' }
 
 // isWordByte reports whether c may not directly follow a number (grammar:

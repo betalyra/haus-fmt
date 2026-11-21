@@ -112,6 +112,13 @@ if errors.As(err, &e) {
 
 `Decode` gives the value an encoder writes back: integers in decimal (`-0` as `0`), floats in their one spelling (`0.10` as a `Float64` is `0.1`), the fields an open record doesn't list left out, and everything else as it was (sharing memory with the input). Errors have the code and the path of the failing value; an error inside a `Secret` is `invalid-secret`, at the secret, with nothing of its value. `Encode` checks a value built in code against the type and also reports values that contain themselves (`cyclic-value`). `DecodeAll` and `DecodeStream` decode a file or a stream with a `Stream` definition; paths then start with the value's index, `$[3].total`.
 
+`Type.Parse` reads text and decodes it, as `haus.Parse` and `Decode` do, without checking again what the parser checked; `Type.Format` encodes a value and writes it, the text and errors of `Encode` and `haus.FormatValue`, in one pass in the compact and minimised layouts (it writes the value as it checks it, without building the encoded value):
+
+```go
+decoded, err := order.Parse([]byte(`{ id: 0x10, total: 19.90 }`))
+text, err := order.Format(decoded, haus.FormatOptions{Layout: haus.Minimised}) // {id:16,total:19.90}
+```
+
 Every rule of spec §14 and §13.3 is checked when a schema loads: names, arities, spreads, guarded and non-growing recursion, attributes, imports. `std/time` is built in (`schema.CheckTime` is its profile). Packages are found by a `Locator`: `schema.NodeModules{}` (the npm rules of spec §13.3), `schema.NewExplicit().Package(dir)` and `.Folder(dir)` (packages given explicitly), or both with `schema.Or{First: explicit, Second: schema.NodeModules{}}`. A package's files are opened without following links and read once, within the limits of spec §13.3 (64 KiB manifests, 1 MiB schema files, 256 files, 4096 entries per folder). `schema.Parse` reads a schema from text; it imports std/time and packages, but no files.
 
 Codecs (`schema.Codec`, spec §13.4) choose host types for named types by their id; with the `Value` API they run after the schema and may reject more values (`DecodeOptions{Codecs: …}`), and `schema.DecodeAs` gives the host value. `schema.InstantTime` is an opt-in codec from `Instant` to `time.Time`, which keeps the instant and its offset but not the spelling. `schema.Secret[T]` holds a value that prints, formats, logs and marshals as `<redacted>`, until `Reveal`.
