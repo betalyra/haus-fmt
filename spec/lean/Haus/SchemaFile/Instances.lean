@@ -350,6 +350,12 @@ private def loadCode (src : String) : Option Code :=
 #guard loadCode "import @haus-fmt/money@1.1 (Money)\ntype A = Money" == some .importVersion
 #guard loadCode "import @haus-fmt/money@01 (Money)\ntype A = Money" == some .importVersion
 #guard loadCode "import @haus-fmt/money@ (Money)\ntype A = Money" == some .importVersion
+-- A package import's version runs to the module's end, `~` included, as the bindings read it.
+#guard loadCode "import @a/b@1~x (A9)\ntype B = A9" == some .importVersion
+#guard loadCode "import @a/b@1.1 (A)\ntype B = A" == some .importVersion
+#guard loadCode "import @a/b@01 (A)\ntype B = A" == some .importVersion
+#guard loadCode "import @a/b@x (A)\ntype B = A" == some .importVersion
+#guard loadCode "import @a/b@1!x (A)\ntype B = A" == some .schemaSyntax
 -- Accepted: spreads through names and instances, mutually recursive generics, Result, std/time.
 #guard loadCode "type P a = { x: a }\ntype Q = P Int\ntype A = closed { ...Q, y: Int }" == none
 #guard loadCode "type T a = { kids: F a }\ntype F a = Array (T a)\ntype X = T Int" == none

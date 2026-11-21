@@ -157,7 +157,11 @@ def module (m : String) : R Module :=
 /-- An import, after `import`. -/
 def importDecl (t : Text) : R (Import × Text) := do
   let t ← ws t
-  let tok := t.takeWhile fun c => !(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(')
+  -- A package module ends where the bindings end it: after its path, `@` and `~` characters
+  -- (`@a/b@1~x` has the version `1~x`, `import-version`; `@a/b@1!x` ends before `!`).
+  let tok := match t with
+    | '@' :: _ => t.takeWhile fun c => isPathChar c || c == '@' || c == '~'
+    | _ => t.takeWhile fun c => !(c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '(')
   let m ← module (String.ofList tok)
   let t ← ws (t.drop tok.length)
   match t with
@@ -231,6 +235,11 @@ private def scanCode (s : String) : Option Code :=
 #guard scanOk "import std/time (Date)\ntype A = { at: Date, s: \"type\" }" == some ([.std "time"], [["Date"]], ["A"])
 #guard scanCode "import @acme/common@1.1 (A)" == some .importVersion
 #guard scanCode "import @acme/common@01 (A)" == some .importVersion
+#guard scanCode "import @a/b@1~x (A9)" == some .importVersion
+#guard scanCode "import @a/b@1.1 (A)" == some .importVersion
+#guard scanCode "import @a/b@01 (A)" == some .importVersion
+#guard scanCode "import @a/b@x (A)" == some .importVersion
+#guard scanCode "import @a/b@1!x (A)" == some .schemaSyntax
 #guard scanCode "import std/money (Money)" == some .unknownModule
 #guard scanCode "import @Acme/common (A)" == some .unknownModule
 #guard scanCode "import @acme/a (A)\nimport @acme/b (A)" == some .duplicateImport

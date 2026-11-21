@@ -322,6 +322,15 @@ def isModuleChar (c : Char) : Bool :=
   isIdentChar c || c == '.' || c == '-' || c == '/' || c == '@'
 
 /--
+A character of a package module after its `@`: a module character or `~`.
+The bindings read a package import to its end this way, so what follows the
+version's `@` (`@a/b@1~x`) is the version, and anything but a `major` there is
+`import-version`. A file path has no `~` (grammar `path`): `./a~b` ends
+before it, a syntax error.
+-/
+def isPackageModuleChar (c : Char) : Bool := isModuleChar c || c == '~'
+
+/--
 The module of an import (grammar `module`): `std/` and an identifier, or `@`
 or `.` and the module characters after it (`@org/name`, `@org/name@1`,
 `./file`, `../dir/file`). No whitespace inside: `std/ time` is not a module.
@@ -337,7 +346,7 @@ def module : P String := do
       return "std/" ++ String.ofList (c :: w)
     else unexpected "a module like std/time, @org/name or ./file"
   | c :: r =>
-    let m := r.takeWhile isModuleChar
+    let m := r.takeWhile (if c == '@' then isPackageModuleChar else isModuleChar)
     if (c == '@' || c == '.') && !m.isEmpty then
       set (r.drop m.length)
       return String.ofList (c :: m)
