@@ -15,6 +15,7 @@ from __future__ import annotations
 from ._canonical import canonical, compare, equals, hash, hash_all
 from ._error_codes import ERROR_CODES, ErrorCategory, ErrorCode, ErrorInfo
 from ._errors import HausError, HausJsonError, HausLimitsError, HausSyntaxError, error_docs, is_error_code
+from ._format import Style, format, has_comments, stringify, stringify_all
 from ._json_api import (
     from_haus_json,
     from_haus_json_lines,
@@ -49,6 +50,7 @@ __all__ = [
     "Record",
     "StreamReader",
     "String",
+    "Style",
     "Value",
     "Variant",
     "__version__",
@@ -56,8 +58,10 @@ __all__ = [
     "compare",
     "equals",
     "error_docs",
+    "format",
     "from_haus_json",
     "from_haus_json_lines",
+    "has_comments",
     "hash",
     "hash_all",
     "import_json",
@@ -67,6 +71,8 @@ __all__ = [
     "parse_all",
     "parse_bytes",
     "parse_stream",
+    "stringify",
+    "stringify_all",
     "to_haus_json",
     "to_haus_json_lines",
 ]

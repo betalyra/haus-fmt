@@ -113,3 +113,49 @@ def test_decode_is_linear() -> None:
         return joined(n, "[", "]", lambda i: f'{{ a: {i}, b: "x{i}", c: Some([1.5, {i}]) }}')
 
     assert_linear(1_000, lambda n: (lambda t: lambda: s["T"].parse(t))(text(n)))
+
+
+FORMAT_CASES: dict[str, tuple[int, Callable[[int], str]]] = {
+    "many keys": (5_000, lambda n: joined(n, "{ ", " }", lambda i: f'k{i}: "v{i}"')),
+    "long line": (20_000, lambda n: joined(n, "[", "]", lambda i: str(i % 10))),
+    "long string": (50_000, lambda n: '"' + "abc\\n\\u{1F600}é" * (n // 10) + '"'),
+    "wide payload": (5_000, lambda n: joined(n, "P(", ")", lambda i: f"Q({i}, R)")),
+    "deep nesting": (100, lambda n: "[" * n + "]" * n),
+    "deep payloads": (100, lambda n: "Some(" * n + "1" + ")" * n),
+    "deep record payloads": (60, lambda n: "T({ a: " * n + "1" + " })" * n),  # two levels each
+    "many comments": (2_000, lambda n: joined(n, "[", "]", lambda i: f"/* {i} */ {i} // x\n\n")),
+    "stream": (5_000, lambda n: "".join(f"{{ a: [{i}] }},\n" for i in range(n))),
+    "long comments": (100, lambda n: "// " + "x" * (100 * n) + "\n/* " + "y\n" * (10 * n) + "*/ 1"),
+}
+
+
+@pytest.mark.parametrize("style", ["pretty", "compact", "minimised"])
+@pytest.mark.parametrize("name", FORMAT_CASES)
+def test_format_is_linear(name: str, style: haus.Style) -> None:
+    """Formatting text takes time linear in the text. The pretty layout indents nothing here: with
+    indentation, the text of deep nesting is itself quadratic in the depth."""
+    n, text = FORMAT_CASES[name]
+
+    def work(n: int) -> Callable[[], object]:
+        t = text(n)
+        return lambda: haus.format(t, style=style, indent=0, limits=DEEP)
+
+    assert_linear(n, work)
+
+
+@pytest.mark.parametrize("style", ["pretty", "compact", "minimised"])
+def test_writing_is_linear(style: haus.Style) -> None:
+    def record(n: int) -> Value:
+        return Record({f"key {i}": String("a\tb") for i in range(n)})
+
+    def nested(n: int) -> Value:
+        v: Value = Variant("Leaf", (haus.Number("1"),))
+        for i in range(n):
+            v = Variant("Some", (haus.Array((v,)), haus.Number(str(i))))
+        return v
+
+    def writing(v: Value) -> Callable[[], object]:
+        return lambda: haus.stringify(v, style=style, indent=0, limits=DEEP)
+
+    assert_linear(5_000, lambda n: writing(record(n)))
+    assert_linear(60, lambda n: writing(nested(n)))  # two levels each
