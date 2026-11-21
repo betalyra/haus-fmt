@@ -319,7 +319,7 @@ binding reads one: what it names (a package name, a major version, a path) is
 checked by `declare`, with `unknown-module` and `import-version` (§13.3).
 -/
 def isModuleChar (c : Char) : Bool :=
-  isIdentChar c || c == '.' || c == '-' || c == '/' || c == '@' || c == '~'
+  isIdentChar c || c == '.' || c == '-' || c == '/' || c == '@'
 
 /--
 The module of an import (grammar `module`): `std/` and an identifier, or `@`

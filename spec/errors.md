@@ -93,7 +93,7 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 | `duplicate-type` | Two definitions of the same type name, or a definition with the name of an imported type. | `type A = Int ⏎ type A = String` | Rename one of them. |
 | `redefine-prelude` | A definition with the name of a prelude type (`Int`, `Any`, `Secret`, `Maybe`, …), which schemas can't redefine. | `type Any = String` | Give your type another name. |
 | `unknown-parameter` | A lowercase name in a type that is not a parameter of the definition. | `type Box = { item: a }` | Declare the parameter after the type's name, or use a type name. |
-| `invalid-parameter` | A type parameter named `_`, or the same parameter twice. | `type Pair _ = { a: Int }` | Give each parameter its own lowercase name. |
+| `invalid-parameter` | A type parameter starting with `_`, or the same parameter twice in one definition. | `type Pair _ = { a: Int }` | Give each parameter its own lowercase name. |
 | `underscore-type` | `_` used as a type. Types are open by default, so there is no wildcard. | `type A = { x: _ }` | Write `< >` for a variant with any tags, `Any` for any value, or use a type parameter. |
 | `duplicate-field` | A record type lists the same field twice, also one copied in by a spread. | `type A = { x: Int, x: String }` | Remove or rename one of them. |
 | `duplicate-tag` | A variant type lists the same tag twice, also one copied in by a spread. | `type A = < B \| B >` | Remove or rename one of them. |
@@ -155,7 +155,7 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 | `invalid-secret` | A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15). | `{ key: 42 }` with `type Root = { key: Secret String }` | Write a value of the secret's type; the value isn't shown, so check it where it comes from. |
 | `cannot-encode` | Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. | encode(h.Int, 5): Int is a bigint, 5 is a number | Pass a value of the host type the binding documents for the type. |
 | `cyclic-value` | Encoding: a value contains itself, so it has no finite text. | const a = { children: [] }; a.children.push(a); encode(Tree, a) | Break the cycle before encoding. |
-| `step-budget` | Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8). | a hand-written schema that decodes each value many times | Simplify the schema, or raise the step limit if the work is expected. |
+| `step-budget` | Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8). | a hand-written schema that decodes each value many times | Simplify the schema, or raise the step limit if the work is expected. |
 | `too-many-nodes` | A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits. | a value built in code whose arrays share one another a million times | Build a smaller value, or raise the limit. |
 
 ## JSON

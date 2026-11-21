@@ -341,6 +341,8 @@ private def loadCode (src : String) : Option Code :=
 #guard loadCode "import std/time (Date, Date)\ntype A = Date" == some .duplicateImport
 #guard loadCode "import std/time (Day)\ntype A = Day" == some .unknownImport
 #guard loadCode "import ./common (A)\ntype B = A" == some .importUnavailable
+-- `~` is no character of a module (grammar `path`): the same code as the package reader gives.
+#guard loadCode "import ./a~b (A)\ntype B = A" == some .schemaSyntax
 #guard loadCode "import @haus-fmt/money@1 (Money)\ntype A = Money" == some .importUnavailable
 #guard loadCode "import @Haus/money@1 (Money)\ntype A = Money" == some .unknownModule
 #guard loadCode "import @haus-fmt/node_modules (Money)\ntype A = Money" == some .unknownModule

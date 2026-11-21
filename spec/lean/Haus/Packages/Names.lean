@@ -75,14 +75,44 @@ def majorOf (v : String) : String := (v.splitOn ".").headD v
 /-- The major version an import names: `0` or `[1-9][0-9]*`. -/
 def isMajor (s : String) : Bool := isNumeric s
 
-/-- Text from a file, for a message (§9.2): control and bidi characters escaped, at most 40 characters. -/
-def quote (s : String) : String :=
-  let cs := s.toList
-  let shown := (cs.take 40).flatMap fun c =>
-    if isRawControl c || isBidi c || isLineSep c then
-      s!"\\u\{{String.ofList (Nat.toDigits 16 c.toNat)}}".toList
-    else [c]
-  "\"" ++ String.ofList shown ++ (if cs.length > 40 then "…" else "") ++ "\""
+/-- A character as a message shows it (§9.2): control, bidi and line-separator
+characters as `\u{…}`, in uppercase hex as the canonical form writes them (§12). -/
+def shownChar (c : Char) : List Char :=
+  if isRawControl c || isBidi c || isLineSep c then
+    s!"\\u\{{String.ofList ((Nat.toDigits 16 c.toNat).map Char.toUpper)}}".toList
+  else [c]
+
+/-- The pieces that fit in `n` characters, from the front, whole: a cut never
+falls inside an escape. -/
+def keepPieces : Nat → List (List Char) → List Char
+  | _, [] => []
+  | n, p :: ps => if p.length ≤ n then p ++ keepPieces (n - p.length) ps else []
+
+/-- Text from a file, for a message (§9.2): control and bidi characters
+escaped, and at most 40 characters as shown, after escaping. A longer text is
+cut to whole characters in 39 and marked with `…`, which is within the 40. -/
+def quoteBody (s : String) : List Char :=
+  if (s.toList.map shownChar).flatten.length ≤ 40 then (s.toList.map shownChar).flatten
+  else keepPieces 39 (s.toList.map shownChar) ++ ['…']
+
+/-- `quoteBody` between quotes. -/
+def quote (s : String) : String := "\"" ++ String.ofList (quoteBody s) ++ "\""
+
+theorem keepPieces_length_le (n : Nat) (ps : List (List Char)) : (keepPieces n ps).length ≤ n := by
+  induction ps generalizing n with
+  | nil => simp [keepPieces]
+  | cons p ps ih =>
+    unfold keepPieces
+    split
+    · have := ih (n - p.length); simp; omega
+    · simp
+
+/-- What a message shows of a text is at most 40 characters, the `…` included (§9.2). -/
+theorem quoteBody_length_le (s : String) : (quoteBody s).length ≤ 40 := by
+  unfold quoteBody
+  split
+  · assumption
+  · have := keepPieces_length_le 39 (s.toList.map shownChar); simp; omega
 
 #guard isPackageName "@haus-fmt/money"
 #guard isPackageName "@acme/l00a"
@@ -106,6 +136,12 @@ def quote (s : String) : String :=
 #guard !isSemver "1.0.0+"
 #guard isMajor "0" && isMajor "18446744073709551616" && !isMajor "01" && !isMajor "1.1" && !isMajor ""
 #guard majorOf "0.3.0-rc.1+build.7" = "0"
-#guard quote "a\nb" = "\"a\\u{a}b\""
+#guard quote "a\nb" = "\"a\\u{A}b\""
+-- At most 40 characters as shown, after escaping, the `…` within the 40 (§9.2).
+#guard quote (String.ofList (List.replicate 40 'a')) = "\"" ++ String.ofList (List.replicate 40 'a') ++ "\""
+#guard quote (String.ofList (List.replicate 45 'a')) = "\"" ++ String.ofList (List.replicate 39 'a') ++ "…\""
+#guard quote (String.ofList (List.replicate 41 '\x01')) = "\"" ++ String.join (List.replicate 7 "\\u{1}") ++ "…\""
+#guard quote (String.ofList (List.replicate 36 'a' ++ ['\x01'])) = "\"" ++ String.ofList (List.replicate 36 'a') ++ "…\""
+#guard quote "\x1b[2J" = "\"\\u{1B}[2J\""
 
 end Haus.Packages

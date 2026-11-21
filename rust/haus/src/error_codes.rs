@@ -104,7 +104,7 @@ pub enum ErrorCode {
     RedefinePrelude,
     /// `unknown-parameter`: A lowercase name in a type that is not a parameter of the definition.
     UnknownParameter,
-    /// `invalid-parameter`: A type parameter named `_`, or the same parameter twice.
+    /// `invalid-parameter`: A type parameter starting with `_`, or the same parameter twice in one definition.
     InvalidParameter,
     /// `underscore-type`: `_` used as a type. Types are open by default, so there is no wildcard.
     UnderscoreType,
@@ -200,7 +200,7 @@ pub enum ErrorCode {
     CannotEncode,
     /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
     CyclicValue,
-    /// `step-budget`: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MAY bound the work per call (§9.8).
+    /// `step-budget`: Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).
     StepBudget,
     /// `too-many-nodes`: A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
     TooManyNodes,

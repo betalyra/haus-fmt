@@ -808,6 +808,22 @@ final class Decoder {
     }
   }
 
+  /** Checks the name of a member that is a key of the value read (a listed field's), at that member. */
+  private void keyLength(String k) {
+    if (k.length() > lim.maxStringLength()) {
+      path.key(k);
+      length(k, ErrorCode.KEY_TOO_LONG, "key");
+      path.pop();
+    }
+  }
+
+  /** Checks a tag of the value read, a {@code "_tag"} or an enum's string, against the string limit (§16, "Limits"). */
+  private void tagLength(String tag) {
+    if (tag.length() > lim.maxStringLength()) {
+      throw fail(ErrorCode.TAG_TOO_LONG, "a tag longer than the limit of " + lim.maxStringLength() + " characters");
+    }
+  }
+
   /** Reads Int, Int64 and UInt64, written as a string of a decimal integer: {@code -?(0|[1-9][0-9]*)}. */
   private Value intString(String s, Kind k) {
     if (!isDecimalInteger(s)) {
@@ -914,6 +930,7 @@ final class Decoder {
         }
         continue;
       }
+      keyLength(k);
       keys[n] = f.key();
       values[n++] = childAt(k, r.valueAt(i), f.typ());
     }
@@ -934,6 +951,7 @@ final class Decoder {
       if (c == null) {
         throw fail(ErrorCode.UNKNOWN_TAG, SchemaText.quote(s) + " is not allowed here: expected " + SchemaTypes.tags(vt));
       }
+      tagLength(c.tag);
       return new Value.Variant(c.tag, new Value[0]);
     }
     if (!(j instanceof Value.Record)) {
@@ -948,6 +966,7 @@ final class Decoder {
       }
       return unknownJson(tag, r);
     }
+    tagLength(c.tag);
     switch (c.payload) {
       case NONE:
         onlyMembers(r, null);
@@ -1004,9 +1023,7 @@ final class Decoder {
    * import.
    */
   private Value unknownJson(String tag, Value.Record r) {
-    if (tag.length() > lim.maxStringLength()) {
-      throw fail(ErrorCode.TAG_TOO_LONG, "a tag longer than the limit of " + lim.maxStringLength() + " characters");
-    }
+    tagLength(tag);
     if (r.size() == 1) {
       return new Value.Variant(tag, new Value[0]);
     }

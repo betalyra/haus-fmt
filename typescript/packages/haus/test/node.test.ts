@@ -301,6 +301,15 @@ describe("files and limits (spec §13.3)", () => {
     expect(message).not.toContain("x".repeat(41))
     expect(quoteText("a\u0007b")).toBe("a\\u{7}b")
   })
+
+  it("counts quoted text as shown, after escaping, the … within the 40 (spec §9.2)", () => {
+    expect(quoteText("a".repeat(40))).toBe("a".repeat(40))
+    expect(quoteText("a".repeat(45))).toBe(`${"a".repeat(39)}…`)
+    // Each U+0001 is shown as \u{1}, five characters: seven fit in 39, never cut inside one.
+    expect(quoteText("\u0001".repeat(41))).toBe(`${"\\u{1}".repeat(7)}…`)
+    expect([...quoteText("\u0001".repeat(41))].length).toBeLessThanOrEqual(40)
+    expect(quoteText(`${"a".repeat(36)}\u0001`)).toBe(`${"a".repeat(36)}…`)
+  })
 })
 
 describe("identical copies (spec §13.3)", () => {

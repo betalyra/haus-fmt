@@ -266,6 +266,44 @@ type Open = < A >
 	}
 }
 
+// TestSchemaJSONLengthsOnTheValue: lengths count on the value read (§16,
+// "Limits"): a map's member names and a listed field's are keys, a "_tag"
+// (listed or not) and an enum's string are tags; an ignored member of an
+// open record isn't in the value and doesn't count.
+func TestSchemaJSONLengthsOnTheValue(t *testing.T) {
+	s := mustSchema(t, `
+type M = Map String
+type Open = < A >
+type Known = < Abcdefg | Abcdef >
+type Enum = closed < A | Abcdefg | Abcdef >
+type R = { a: String }
+type Long = { abcdefg: String }
+`)
+	six := schema.DecodeOptions{Limits: haus.Limits{MaxStringLength: 6}}
+	for _, c := range []struct {
+		ty, json string
+		code     haus.ErrorCode
+	}{
+		{"M", `{"abcdefg": "x"}`, haus.CodeKeyTooLong},
+		{"M", `{"abcdef": "abcdefg"}`, haus.CodeStringTooLong},
+		{"Open", `{"_tag": "Abcdefg"}`, haus.CodeTagTooLong},
+		{"Known", `{"_tag": "Abcdefg"}`, haus.CodeTagTooLong},
+		{"Enum", `"Abcdefg"`, haus.CodeTagTooLong},
+		{"Long", `{"abcdefg": "x"}`, haus.CodeKeyTooLong},
+		{"M", `{"abcdef": "x"}`, ""},
+		{"Open", `{"_tag": "Abcdef"}`, ""},
+		{"Known", `{"_tag": "Abcdef"}`, ""},
+		{"Enum", `"Abcdef"`, ""},
+		{"R", `{"a": "x", "abcdefg": 1}`, ""},
+		{"R", `{"a": "x", "b": "abcdefg"}`, ""},
+	} {
+		_, err := mustType(t, s, c.ty).FromJSONWith([]byte(c.json), six)
+		if got := errCode(err); got != c.code {
+			t.Errorf("%s %s: got %q (%v), want %q", c.ty, c.json, got, err, c.code)
+		}
+	}
+}
+
 // TestEmptyContainersAreLevels: an empty record, array or record payload is
 // a level of nesting (spec §7), when parsing, decoding, reading JSON,
 // checking and encoding a value built in code alike.

@@ -236,5 +236,6 @@ private def scanCode (s : String) : Option Code :=
 #guard scanCode "import @acme/a (A)\nimport @acme/b (A)" == some .duplicateImport
 #guard scanCode "import @acme/a (A)\ntype A = Int" == some .duplicateType
 #guard scanCode "API_TOKEN=do-not-print" == some .schemaSyntax
+#guard scanCode "import ./a~b (A)" == some .schemaSyntax
 
 end Haus.Packages

@@ -32,7 +32,8 @@ theorem readHausJsonText_write {L : Limits} {v : Value} (hwf : v.wf = true) (hu 
     (hL : L.SelfDescribingOk) (hfit : v.fits L = true) :
     readHausJsonText L (write (hausJson v)) = .ok v := by
   have hw := hausJson_wellFormed hu
-  simp only [readHausJsonText, parseText_write (strict := true) hw (hausJson_fits hL hfit), bind, Except.bind,
+  simp only [readHausJsonText, parseText_write (strict := true) hw ((hausJson_fits hL hfit).textLimits _), bind,
+    Except.bind,
     fromHausJson_hausJson v hwf, checkFits, hfit, ↓reduceIte]
 
 /--
@@ -118,7 +119,8 @@ theorem readJson_write {L : Limits} {env : Env} {t : Ty} {v : Value} {x : Typed}
     (h : decode env t v = .ok x) (hv : v.wf = true) (hu : UniqueKeys v) (hj : toJson env t x = .ok j)
     (hL : L.SchemaBasedOk) (hfit : (encode x).fits L = true) :
     readJson L env t (JSON.write j) = .ok x := by
-  simp [readJson, JSON.parse_write (toJson_wellFormed h hu hj) (toJson_fits hL h hfit hj), bind, Except.bind,
+  simp [readJson, JSON.parseDepth_write (toJson_wellFormed h hu hj) ((toJson_fits hL h hfit hj).textLimits _), bind,
+    Except.bind,
     schemaBased_round_trip h hv hj, Except.mapError, hfit]
 
 /-- The self-describing text round trip for every parsed value within the limits it is read with. -/

@@ -315,13 +315,30 @@ describe("JSON lengths count on the resulting haus value, not the JSON text (spe
     const one = { maxStringLength: 1 }
     // "_haus", "_value", "_bytes", "_num", "_rec", "_tag", "_args" are longer than 1.
     expect(canonical(fromHausJson(`{"_haus": 1, "_value": [{"_bytes": ""}, {"_num": "12"}, {"_rec": {"a": "b"}}, {"_tag": "A", "_args": ["c"]}]}`, one))).toBe('[x"",12,{a:"b"},A("c")]')
-    const Shape = h.Variant({ Circle: h.Record({ r: h.Int32 }), Pair: h.Tuple(h.Int32, h.Int32) })
-    expect(h.fromJson(h.Array(Shape), `[{"_tag": "Circle", "r": 1}, {"_tag": "Pair", "values": [1, 2]}]`, one)).toEqual([{ _tag: "Circle", r: 1 }, { _tag: "Pair", values: [1, 2] }])
+    const Shape = h.Variant({ C: h.Record({ r: h.Int32 }), P: h.Tuple(h.Int32, h.Int32) })
+    expect(h.fromJson(h.Array(Shape), `[{"_tag": "C", "r": 1}, {"_tag": "P", "values": [1, 2]}]`, one)).toEqual([{ _tag: "C", r: 1 }, { _tag: "P", values: [1, 2] }])
   })
 
   it("a map's member names are keys", () => {
     expect(h.fromJson(h.Map(h.Int32), `{"\\u0061bcd": 1}`, four)).toEqual(new Map([["abcd", 1]]))
     expect(codeOf(() => h.fromJson(h.Map(h.Int32), `{"abcde": 1}`, four))).toBe("key-too-long")
+  })
+
+  it("schema-based: a variant's \"_tag\" and an enum's string are tags, a record's listed member names keys; ignored members don't count", () => {
+    const six = { maxStringLength: 6 }
+    const Open = h.OpenVariant({ A: h.Unit })
+    expect(codeOf(() => h.fromJson(Open, `{"_tag": "Abcdefg"}`, six))).toBe("tag-too-long")
+    expect(codeOf(() => h.fromJson(Open, `{"_tag": "Abcdef"}`, six))).toBe(undefined)
+    const Known = h.OpenVariant({ Abcdefg: h.Unit, Abcdef: h.Unit })
+    expect(codeOf(() => h.fromJson(Known, `{"_tag": "Abcdefg"}`, six))).toBe("tag-too-long")
+    expect(h.fromJson(Known, `{"_tag": "Abcdef"}`, six)).toEqual({ _tag: "Abcdef" })
+    const Enum = h.Enum("A", "Abcdefg", "Abcdef")
+    expect(codeOf(() => h.fromJson(Enum, `"Abcdefg"`, six))).toBe("tag-too-long")
+    expect(h.fromJson(Enum, `"Abcdef"`, six)).toBe("Abcdef")
+    expect(codeOf(() => h.fromJson(h.Record({ abcdefg: h.Int32 }), `{"abcdefg": 1}`, six))).toBe("key-too-long")
+    const R = h.Record({ a: h.String })
+    expect(h.fromJson(R, `{"a": "x", "abcdefg": 1}`, six)).toEqual({ a: "x" })
+    expect(h.fromJson(R, `{"a": "x", "b": "abcdefg"}`, six)).toEqual({ a: "x" })
   })
 
   it("raw JSON (parseJson) still limits its strings as JSON strings", () => {

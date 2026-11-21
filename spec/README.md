@@ -71,7 +71,7 @@ A large document is updated by sending only what changes: a record of the same s
 
 ## 2. Equality
 
-Two values are equal when they have the same kind and:
+Two values (whose records have unique keys, §1) are equal when they have the same kind and:
 
 <!-- rule: equality.numbers.normalize -->
 <!-- rule: equality.numbers.scale-kept -->
@@ -145,7 +145,7 @@ Two values are equal when they have the same kind and:
   <!-- rule: strings.control.reject-raw -->
   <!-- rule: strings.control.tab-and-line-breaks -->
   <!-- rule: strings.cr.only-before-lf -->
-- **Raw control characters:** the raw control characters U+0000–U+001F, U+007F (DEL) and U+0080–U+009F (C1) MUST NOT appear anywhere in the input, except tab and line breaks (LF, CR LF) where whitespace, block strings and comments allow them. A carriage return is only allowed directly before a line feed. Control characters can rewrite what a terminal displays (ESC and CSI sequences) or truncate text (NUL), so a file could show different content from what it contains. Inside strings, write them as escapes, e.g. `\u{1B}`.
+- **Raw control characters:** the raw control characters U+0000–U+001F, U+007F (DEL) and U+0080–U+009F (C1) MUST NOT appear anywhere in the input, except tab and line breaks (LF, CR LF) where whitespace, block strings and comments allow them, and tab in byte strings and between a tag and its payload. A carriage return is only allowed directly before a line feed. Control characters can rewrite what a terminal displays (ESC and CSI sequences) or truncate text (NUL), so a file could show different content from what it contains. Inside strings, write them as escapes, e.g. `\u{1B}`.
   <!-- rule: strings.error.control-character -->
   <!-- rule: strings.error.string-line-break -->
   <!-- rule: strings.error.lone-carriage-return -->
@@ -153,6 +153,9 @@ Two values are equal when they have the same kind and:
   <!-- rule: strings.error.outside-key -->
   <!-- rule: strings.error.outside-after-value -->
 - **Which error.** A raw control character in a string, block string or comment is `control-character`, and so is a carriage return in a `"…"` string, also one directly before a line feed; a raw line feed in a `"…"` string is `string-line-break`. A carriage return not followed by a line feed in whitespace or a comment is `lone-carriage-return`. Outside strings and comments a control or bidi character is not a token, so the error is the one for that place: `expected-value` where a value is expected, `expected-key` where a key is, `missing-comma` after a value.
+  <!-- rule: strings.error.block-opening -->
+  <!-- rule: strings.error.bytes-not-hex -->
+  The opening line of a block string is empty: anything but spaces and tabs after the opening `"""` on its line, a control character or a lone carriage return included, is `block-string-opening`. Inside a byte string, any character other than hex digits, spaces and tabs, a line break or a control or bidi character included, is `bytes-not-hex`.
   <!-- rule: strings.bidi.reject -->
   <!-- rule: strings.bidi.escapes-allowed -->
 - **Bidirectional controls:** the raw characters U+202A–U+202E and U+2066–U+2069 MUST NOT appear anywhere in the input, including strings, block strings and comments. They can make source text display differently from what is parsed ("Trojan Source"). Inside strings, write them as escapes, e.g. `\u{202E}`.
@@ -213,7 +216,9 @@ Implementations MUST enforce limits while parsing and MUST let users configure t
 
 <!-- rule: limits.value.counting -->
 <!-- rule: limits.value.stream-only -->
-A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: whitespace and comments before the value count, the commas don't. A value of exactly the limit is accepted. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
+A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: everything between the two commas counts, whitespace and comments before and after the value included, and the commas don't. A value of exactly the limit is accepted.
+<!-- rule: limits.value.after-last-comma -->
+After the last comma, the text up to the end of the stream counts too, also when it holds no value (only whitespace or comments): a stream reader can't know that no value follows, and must bound what it holds while it waits. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
 
 <!-- rule: limits.depth.counting -->
 <!-- rule: limits.depth.values-in-code -->
@@ -228,7 +233,7 @@ A binding whose parser, decoder or encoder uses the call stack MAY support only 
 
 <!-- rule: limits.time.linear -->
 <!-- rule: limits.duplicate-keys.unpredictable -->
-Parsing time MUST be linear in the input size for any input within the limits, also for input crafted against the implementation, with one allowance: duplicate keys (§1) MAY be found with a sorted structure in O(n log n). Otherwise they are found with a hash table whose hash an attacker can't predict (seeded at random per process, as SipHash in Rust, Python and JavaScript engines are); never with a list scan or a hash with a fixed seed, which crafted keys turn quadratic.
+Parsing time MUST be linear in the input size for any input within the limits, also for input crafted against the implementation, with one allowance: duplicate keys (§1) MAY be found with a sorted structure in O(n log n). Otherwise they are found with a method that is linear in the worst case, whatever the keys, such as a trie over the keys' code points (the Lean reference model uses one), or with a hash table whose hash an attacker can't predict (seeded at random per process, as SipHash in Rust, Python and JavaScript engines are); never with a list scan or a hash with a fixed seed, which crafted keys turn quadratic.
 
 ## 8. Error positions
 
@@ -350,7 +355,7 @@ The canonical form (§12) is the fourth way to write values; it sorts keys and n
 **Empty files.** A file with no values and no comments (empty, or only whitespace) is written as empty text in every layout, without a line break. So is a file with only comments in compact and minimised, which drop them.
 
 <!-- rule: format.strings.escaped-alike -->
-Strings are escaped alike in every layout: `\"`, `\\`, and `\u{…}` for raw control characters, bidi controls and the line and paragraph separators U+2028 and U+2029 (which some software splits lines at); a string is never written with any of them raw.
+Strings are escaped alike in every layout: `\"`, `\\`, line feed, carriage return and tab as `\n`, `\r` and `\t` (in `"…"` strings; pretty's block strings below), and `\u{…}` for the other raw control characters, bidi controls and the line and paragraph separators U+2028 and U+2029 (which some software splits lines at); a string is never written with any of them raw. A string written from its value spells `\u{…}` as the canonical form does (§12): uppercase hex digits, no leading zeros (`\u{1B}`).
 
 ### Pretty (default)
 
@@ -372,7 +377,7 @@ For people.
   <!-- rule: format.pretty.width.code-points -->
   <!-- rule: format.pretty.width.whole-line -->
   <!-- rule: format.pretty.container-payload-never-fits -->
-- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry, so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
+- **Positional payloads stay inline when they fit** the line width (`Money(7.90, EUR)`, `Point(1, 2)`). Otherwise they get one argument per line. The width is counted in code points, as columns are (§8), over the whole line including the comma after the entry (a single top-level item has none, so nothing is added for it), so a pretty line is never wider than the width when it can fit. A payload holding a non-empty record or array never fits, as those are always one entry per line: `Some([1])` is written over five lines.
   <!-- rule: format.pretty.spacing -->
 - **Spacing:** one space after `:` and `,`; one space between a tag and its `{`; none between a tag and its `(`. Empty containers are written `{}` and `[]`.
   <!-- rule: format.keys.minimal -->
@@ -384,7 +389,7 @@ For people.
   <!-- rule: format.strings.minimal-escapes -->
   <!-- rule: format.pretty.block-escapes -->
   <!-- rule: format.pretty.block-trailing-blank -->
-- **Strings** containing a line feed are written as `"""` block strings (§4), the indent one level deeper than the entry. All other strings use `"…"` with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`, and `\u{…}` for control and bidi characters and U+2028, U+2029. In a block string, a quote followed by two more quotes is escaped, a carriage return is `\r`, and **no line ends in a space or tab**: the last space or tab of a content line that ends in one is written as an escape (`\u{20}`, `\t`), so an editor that trims trailing whitespace can't change the value:
+- **Strings** containing a line feed are written as `"""` block strings (§4), the indent one level deeper than the entry. All other strings use `"…"` with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`, and `\u{…}` for control and bidi characters and U+2028, U+2029. In a block string, a quote followed by two more quotes is escaped, a carriage return is `\r`, and **no line ends in a space or tab**: the last space or tab of a content line that ends in one is written as an escape (`\u{20}`, `\t`), so an editor that trims trailing whitespace can't change the value. An empty content line is written empty, without the indent, and the closing `"""` stands at the indent of the content:
   ```haus
   note: """
     Delivery to the back door \u{20}
@@ -442,7 +447,7 @@ Person { name: "Jane Smith", age: 28, type: Designer },
   <!-- rule: format.compact.no-multiline-strings -->
 - **Strings never span lines:** multi-line text uses `\n` escapes, and U+2028 and U+2029 are escaped too, so a compact stream can be split by lines (like NDJSON) and is still valid haus.
   <!-- rule: format.compact.stream-commas -->
-- **Streams:** a file with more than one item puts `,` after every item; a single item is written without one, as in pretty.
+- **Streams:** a file with more than one item puts `,` after every item; a single item is written without one, as in pretty. Every item's line ends with a line feed, the last one's too (empty files above).
   <!-- rule: format.compact.comments-dropped -->
 - **Comments are dropped,** also those between top-level items.
   <!-- rule: format.compact.spellings-kept -->
@@ -551,7 +556,7 @@ Types come from four places:
 <!-- rule: prelude.packages.codecs-optional -->
 | Tier | Contents | Rules about values | Bindings |
 |---|---|---|---|
-| **Prelude** ([`prelude.schema.haus`](prelude.schema.haus)) | the data model: `Bool`, `Maybe`, `Result`, `String`, `Bytes`, `Array a`, `Map v`, records, `Int`, `Int8`…`UInt64`, `Float32`, `Float64`, `Decimal`, `Any`, `Secret a` | built in (ranges of `Int8`…) | MUST support |
+| **Prelude** ([`prelude.schema.haus`](prelude.schema.haus)) | the data model: `Bool`, `Maybe`, `Result`, `String`, `Bytes`, `Array a`, `Map v`, records, `Stream a` (only as the whole type of a definition, §14), `Int`, `Int8`…`UInt64`, `Float32`, `Float64`, `Decimal`, `Any`, `Secret a` | built in (ranges of `Int8`…) | MUST support |
 | **Standard modules** ([`std/`](std)) | [`std/time`](std/time.schema.haus) only | built in: the [std/time profile](std/time.md) | MUST support |
 | **Official extensions** ([`../extensions`](../extensions)) | schema packages `@haus-fmt/…`, e.g. `@haus-fmt/money`, `@haus-fmt/geo` | none; profiles for codecs | MAY offer codecs |
 | **Community packages** | schema packages of any other organisation | none | MAY offer codecs |
@@ -644,7 +649,7 @@ Where an implementation looks for packages is part of the security model (§9.2)
 <!-- rule: packages.explicit.folder-children -->
 <!-- rule: packages.explicit.directory-wins -->
 <!-- rule: packages.explicit.folder-no-override -->
-- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
+- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. A subdirectory of such a folder whose manifest can't be read or breaks the rules (below) is skipped, not rejected, and named when an import isn't found; a package given by its directory with such a manifest is rejected. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
   <!-- rule: packages.lookup.build-dependencies -->
 - the dependencies of the build, as its package manager installed them: `node_modules` (below), the crate's dependencies (Cargo);
 
@@ -860,6 +865,8 @@ Implementations MUST reject:
 <!-- rule: schema.reject.duplicate-type -->
 <!-- rule: schema.reject.redefine-prelude -->
 - unknown types, types used with the wrong number of arguments, types defined twice, and redefinitions of prelude types;
+  <!-- rule: schema.reject.parameters -->
+- a type parameter declared twice in one definition or starting with `_` (`type P a a = …`, `invalid-parameter`), and a lowercase name in a definition that isn't one of its parameters (`type Box = { item: a }`, `unknown-parameter`);
   <!-- rule: schema.reject.duplicate-field -->
   <!-- rule: schema.reject.duplicate-tag -->
   <!-- rule: schema.reject.duplicate-via-spread -->
@@ -873,7 +880,7 @@ Implementations MUST reject:
 - `...r`: row parameters are not part of the language;
   <!-- rule: schema.reject.attribute-arguments -->
   <!-- rule: schema.reject.attribute-twice -->
-- an attribute this version defines with arguments it doesn't take (`@deprecated(1)`), or twice on one type, field or tag (attributes it doesn't define are accepted as they are, §14 above);
+- an attribute this version defines with arguments it doesn't take (`@deprecated(1)`), or twice on one type, field or tag (attributes it doesn't define are accepted as they are when they follow the grammar, §14 above: `@foo()`, with no value in the parentheses, is `attribute-arguments`);
   <!-- rule: schema.reject.unguarded-recursion -->
 - recursion that doesn't pass through a record field, array element or variant payload (`type A = B`, `type B = A`), §9.9, in every type defined, used or not (`type Q a = Q a`). `Secret a` is not a step of its own: `type A = Secret A` is unguarded;
   <!-- rule: schema.reject.growing-recursion -->
@@ -1056,7 +1063,7 @@ Three forms connect haus and JSON:
 - **JSON import** (16.1) reads any JSON as a haus value, without a schema. It only reads.
 
 <!-- rule: json.forms.stable -->
-All three are version 1 and never change; a different mapping would get a new name (§10). A key that starts with `_` is always haus's, never data: `_tag` in schema-based JSON, `_haus`, `_value`, `_tag`, `_args`, `_rec`, `_num` and `_bytes` in self-describing JSON.
+All three are version 1 and never change; a different mapping would get a new name (§10). In self-describing JSON every object is exactly one of its forms (16.2: the envelope, `_num`, `_bytes`, `_rec`, `_tag` with or without `_args`), so its member names are haus's, and the keys of a record live inside `_rec`, where any key, `_tag` too, is data. In schema-based JSON only `_tag` and `_args` in a variant's object are haus's (16.3); every other key is data, also one that starts with `_` (MongoDB's `_id`, HAL's `_links`). No other names are reserved.
 
 **Which form.** The party that knows least decides. When every reader has the schema, use schema-based JSON. When a reader lacks the schema but uses haus and needs the exact values, use self-describing JSON. When a reader lacks the schema and wants ordinary JSON, use schema-based JSON, which any JSON library reads.
 
@@ -1071,7 +1078,7 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 <!-- rule: json.read.numbers-exact -->
 <!-- rule: json.read.self-describing-controls -->
 <!-- rule: json.read.raw-controls-accepted -->
-**JSON that is read.** Readers read JSON (RFC 8259) restricted to I-JSON (RFC 7493): UTF-8, no duplicate member names, no unpaired surrogates in `\u` escapes. A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a reader MUST NOT round them through a binary float, except where schema-based JSON says a float. JSON is compared as data: member order and whitespace don't matter. The self-describing reader also rejects raw DEL, C1 and bidi controls (§4) in strings and member names (`control-character`, `bidi-control`), as only haus tools write that form and they escape them. The schema-based reader and the import accept them raw, as other software writes them so (`JSON.stringify` does).
+**JSON that is read.** Readers read JSON (RFC 8259) restricted to I-JSON (RFC 7493): UTF-8, no duplicate member names (`duplicate-key`), no unpaired surrogates in `\u` escapes. A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a reader MUST NOT round them through a binary float, except where schema-based JSON says a float. JSON is compared as data: member order and whitespace don't matter. The self-describing reader also rejects raw DEL, C1 and bidi controls (§4) in strings and member names (`control-character`, `bidi-control`), as only haus tools write that form and they escape them. The schema-based reader and the import accept them raw, as other software writes them so (`JSON.stringify` does).
 
 <!-- rule: json.write.escapes -->
 <!-- rule: json.read.raw-separators -->
@@ -1081,7 +1088,7 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 <!-- rule: json.limits.number-tokens -->
 <!-- rule: json.limits.lengths-on-value -->
 <!-- rule: json.limits.nesting -->
-**Limits.** The limits of §7 apply to the haus value that results (with a type: the value the decoded result encodes to), and the number limits (characters in a number literal, and the absolute exponent) also to JSON number tokens as written, as to haus number literals: `1e-7000` is `exponent-too-large` whatever the type, as it is in haus text. Lengths are counted on that value, not on the JSON text: a string's characters after its escapes are read (`"\u00e9"` is one character), a key or tag as a haus key or tag, and bytes as two characters per byte, as in the hex of a haus byte string, whether the JSON spells them in hex (`_bytes`) or base64. A form can need several JSON levels for one haus level (`Tag { … }` is `{"_tag": …, "_args": [{"_rec": {…}}]}`), so the JSON nesting is limited to 4·d + 1, where d is the depth limit of §7, plus 1 for the envelope of self-describing JSON, and the depth of the resulting haus value is then checked against d. The import's JSON nesting is limited to d.
+**Limits.** The limits of §7 apply to the haus value that results (with a type: the value the decoded result encodes to), and the number limits (characters in a number literal, and the absolute exponent) also to JSON number tokens as written, as to haus number literals: `1e-7000` is `exponent-too-large` whatever the type, as it is in haus text. Lengths are counted on that value, not on the JSON text: a string's characters after its escapes are read (`"\u00e9"` is one character), a key or tag as a haus key or tag (a member name too long for a key is `key-too-long`, a `_tag` or a closed enum's string too long for a tag `tag-too-long`), and bytes as two characters per byte, as in the hex of a haus byte string, whether the JSON spells them in hex (`_bytes`) or base64. A member that an open record ignores is not part of that value, so its name and content are not counted (its number tokens still are, as written). A form can need several JSON levels for one haus level (`Tag { … }` is `{"_tag": …, "_args": [{"_rec": {…}}]}`), so the JSON nesting is limited to 4·d + 1, where d is the depth limit of §7, plus 1 for the envelope of self-describing JSON, and the depth of the resulting haus value is then checked against d, counted as §7 counts values built in code (`Tag { … }` is one level). The import's JSON nesting is limited to d.
 
 <!-- rule: json.lines.format -->
 <!-- rule: json.lines.reader-tolerance -->
@@ -1115,7 +1122,7 @@ A JSON text in this form is an envelope, an object with exactly two members: `{"
 <!-- rule: json.self-describing.number -->
 <!-- rule: json.self-describing.bytes -->
 <!-- rule: json.self-describing.no-envelope-inside -->
-Reading accepts exactly these forms and rejects every other JSON (`haus-json-form`): a text without the envelope, an envelope with other members or a `_haus` other than 1 (`haus-json-version`), a bare number, `true`, `false`, `null`, an object with other members, a `_num` that isn't a normalized literal (`"1E5"` and `"01"` are rejected, `haus-json-number`) or longer than the number limit (§7), uppercase hex in `_bytes` (`haus-json-bytes`), a `_tag` that isn't a tag, an empty `_args`. So every haus value has one self-describing form, reading it gives an equal value (§2), and each accepted JSON text is the form of exactly one value. Inside schema-based JSON (`Any`, unknown values, 16.3) the value appears without an envelope. The conformance suite's `.jsonl` files use this form, one envelope per value of the file.
+Reading accepts exactly these forms and rejects every other JSON (`haus-json-form`): a text without the envelope, an envelope with other members or a `_haus` other than the JSON number `1` written so (`1.0`, `1e0` and `"1"` are rejected, `haus-json-version`), a bare number, `true`, `false`, `null`, an object with other members, a `_num` that isn't a normalized literal (`"1E5"` and `"01"` are rejected, `haus-json-number`) or is outside the number limits (§7: `number-too-long`, and `exponent-too-large` for a large exponent), uppercase hex in `_bytes` (`haus-json-bytes`), a `_tag` that isn't a string or isn't a tag (`invalid-tag`), an empty `_args`. So every haus value has one self-describing form, reading it gives an equal value (§2), and each accepted JSON text is the form of exactly one value. Inside schema-based JSON (`Any`, unknown values, 16.3) the value appears without an envelope. The conformance suite's `.jsonl` files use this form, one envelope per value of the file.
 
 ### 16.3 Schema-based JSON
 
@@ -1141,7 +1148,7 @@ With a schema type, the decoded value (§15) is written as:
 | `Bytes` | a string, base64 with padding (RFC 4648 §4); readers accept only this canonical form: no whitespace, no URL alphabet, zero pad bits |
 | `Bool` | `true` or `false` (the prelude's `Bool` only; a schema's own `closed < False \| True >` is a closed enum like any other) |
 | `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32` | a number: the decimal integer |
-| `Int`, `Int64`, `UInt64` | a string: the decimal integer (`"-12"`), since many JSON parsers round integers beyond 2⁵³. Readers accept `-?(0|[1-9][0-9]*)` (`"-0"` is 0). For `Int64` and `UInt64` a value outside the range is `out-of-range` whatever its length; for `Int`, which has no range, the number limit of §7 applies (`number-too-long`). |
+| `Int`, `Int64`, `UInt64` | a string: the decimal integer (`"-12"`), since many JSON parsers round integers beyond 2⁵³. Readers accept `-?(0|[1-9][0-9]*)` (`"-0"` is 0): a string that isn't a JSON number (`"007"`, `"+1"`, `"0x1"`) is `invalid-number`, a JSON number that isn't whole (`"1.5"`, `"1e3"`) is `not-an-integer`. For `Int64` and `UInt64` a value outside the range is `out-of-range` whatever its length; for `Int`, which has no range, the number limit of §7 applies (`number-too-long`). |
 | `Float32`, `Float64` | a number in the spelling of §15; `NaN`, `Infinity` and `NegInfinity` as the strings `"NaN"`, `"Infinity"` and `"-Infinity"` |
 | `Decimal` | a string: the normalized literal (`"19.90"`), so that float parsers can't round it. Readers accept a JSON number literal in the string (`"1E+05"` is `1e5`), not hex or digit separators. |
 | `Any` | its self-describing value (16.2), without the envelope |
@@ -1162,11 +1169,11 @@ A type's JSON can be `null` only if it is a `Maybe` that uses `null`, directly o
 <!-- rule: json.schema.read-unknown-tag -->
 <!-- rule: json.schema.read-invalid-tag -->
 <!-- rule: json.schema.read-values -->
-**Reading** with a type accepts the forms above and the rules of §15 apply: an open record or record payload ignores members it doesn't list, a closed one rejects them, and every other object (a tagged `Maybe`, a case without payload or with positional arguments) rejects members besides its own; an integer type accepts only a whole number by spelling (`1.0` is not one); a float type rounds as in §15, and a number too large for it is an error; a `"_tag"` an open variant doesn't list reads as an unknown value, and MUST be a tag (§4): with no other member, the bare tag; with `"_args"` and no other member, its arguments read as self-describing values, and an `"_args"` that isn't a non-empty array is an error; otherwise all its other members read as a record payload by the import (16.1): `{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`. Anything else is an error. A `"_tag"` that isn't a string, or isn't a tag (§4), is `invalid-tag`. The string of a closed variant whose tags have no payload reads as a `"_tag"` does: one that isn't a tag (`"debug"`, `""`, `"1A"`) is `invalid-tag`, a tag the variant doesn't list (`"Warn"`) is `unknown-tag`. A positional case whose `"values"` isn't an array, or has the wrong number of elements, is `wrong-payload`, as in haus text (§15).
+**Reading** with a type accepts the forms above and the rules of §15 apply: an open record or record payload ignores members it doesn't list, a closed one rejects them, and every other object (a tagged `Maybe`, a case without payload or with positional arguments) rejects members besides its own; an integer type accepts only a whole number by spelling (`1.0` is not one); a float type rounds as in §15, and a number too large for it is an error; a `"_tag"` an open variant doesn't list reads as an unknown value, and MUST be a tag (§4): with no other member, the bare tag; with `"_args"` and no other member, its arguments read as self-describing values, and an `"_args"` that isn't a non-empty array is an error (`haus-json-form`); otherwise all its other members read as a record payload by the import (16.1): `{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`. Anything else is an error. A `"_tag"` that isn't a string, or isn't a tag (§4), is `invalid-tag`. The string of a closed variant whose tags have no payload reads as a `"_tag"` does: one that isn't a tag (`"debug"`, `""`, `"1A"`) is `invalid-tag`, a tag the variant doesn't list (`"Warn"`) is `unknown-tag`. A positional case whose `"values"` isn't an array, or has the wrong number of elements, is `wrong-payload`, as in haus text (§15).
 
 <!-- rule: json.places.json-root -->
 <!-- rule: json.places.lines-index -->
-**Places.** An error reading JSON names its place in the JSON: member names and array indexes from the JSON text's root (`$.shape.values[1]`, `$.maybe.value`), so it can be found in the document read. As in §15, an error about an object as a whole is at the object: a missing member (an envelope without `_haus` is at `$`), a `"_tag"` that isn't a tag or isn't listed. These are at the member: a `_haus` other than 1 (`$._haus`), an `"_args"` that isn't a non-empty array (`$.shape._args`, `$._value._args`), a `_num` or `_bytes` that isn't one. The string of a closed variant whose tags have no payload is the variant's value, so an error about it is at the string (`$.level`). In JSON Lines the place starts with the line's index, `$[3].price`.
+**Places.** An error reading JSON names its place in the JSON: member names and array indexes from the JSON text's root (`$.shape.values[1]`, `$.maybe.value`), so it can be found in the document read. As in §15, an error about an object as a whole is at the object: a missing member (an envelope without `_haus`, `haus-json-form`, is at `$`), a `"_tag"` that isn't a tag or isn't listed. These are at the member: a `_haus` other than 1 (`$._haus`), an `"_args"` that isn't a non-empty array (`$.shape._args`, `$._value._args`), a `_num` or `_bytes` that isn't one. The string of a closed variant whose tags have no payload is the variant's value, so an error about it is at the string (`$.level`). In JSON Lines the place starts with the line's index, `$[3].price`.
 
 <!-- rule: json.schema.newer-minor -->
 So a reader accepts the schema-based JSON of a newer minor version of its schema (§13.3): it ignores the new fields and reads the new tags as unknown values. Such an unknown value is the import's reading of the newer case, not that case ("Which form", above).

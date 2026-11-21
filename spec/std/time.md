@@ -56,7 +56,7 @@ nothing depends on a registry.
 | Offset | `Z` or `±hh:mm`, up to `±23:59` | `-00:00` (write `Z`), `+24:00`, `+0100` |
 | Zone | an IANA name by its syntax: at most 255 characters, parts of `A–Z a–z 0–9 . _ + -` separated by `/`, the first starting with a letter, no empty, `.` or `..` parts; or an offset `±hh:mm` | `[!Europe/Lisbon]`, `[Europe/../etc]`, `[Europe//Lisbon]` |
 | RFC 9557 tags | exactly one zone | `[Europe/Lisbon][u-ca=iso8601]`, other calendars |
-| Duration | at least one component; `T` followed by at least one; numbers without leading zeros; no component that is zero (the zero duration is `PT0S`); `-` only before a duration that isn't zero; years, months and weeks below 2³²; days and time together below 2⁵³ seconds | `P`, `PT`, `P1DT`, `+PT1H`, `p1d`, `P01D`, `P0D`, `P1DT0S`, `-PT0S` |
+| Duration | at least one component; `T` followed by at least one; numbers without leading zeros; no component that is zero (the zero duration is `PT0S`); `-` only before a duration that isn't zero; years, months and weeks below 2³²; days and time together below 2⁵³ seconds, a fraction of a second not counted (`PT9007199254740991.999999999S` is valid) and weeks counted only toward their own bound | `P`, `PT`, `P1DT`, `+PT1H`, `p1d`, `P01D`, `P0D`, `P1DT0S`, `-PT0S` |
 | Other ISO 8601 forms | — | week dates (`2026-W45-1`), ordinal dates (`2026-313`), the basic format (`20261109`), intervals (`…/…`), repetitions (`R5/…`) |
 
 ## What is not checked
@@ -105,8 +105,14 @@ same time:
 <!-- rule: time.compare.semantics -->
 How values compare:
 
-- `Instant` is a point on the timeline.
-- `ZonedDateTime` is an instant and a zone: two are the same when both are.
+- `Instant` is a point on the timeline with the offset it was written with:
+  two are the same value only when both the instant and the offset are the
+  same. `…T10:00:00+01:00` and `…T09:00:00Z` are the same instant but
+  different values; `Z` and `+00:00` are one offset (above), and as haus
+  values (spec §2) they still differ. Whether two values are the same
+  instant is a question an application may ask, as for any other field.
+- `ZonedDateTime` is an `Instant` (with its offset) and a zone: two are the
+  same when both are.
   The zone decides the local time and the daylight-saving rules, so
   `…T10:00:00Z[Europe/Lisbon]` and `…T11:00:00+01:00[Europe/Paris]` are
   different values (as in Temporal).

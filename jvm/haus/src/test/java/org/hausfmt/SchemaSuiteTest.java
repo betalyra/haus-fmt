@@ -3,6 +3,7 @@ package org.hausfmt;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -202,6 +203,37 @@ class SchemaSuiteTest {
       HausException e = catching(() -> order.fromJson(t[0]));
       assertEquals(t[1] + " " + t[2], e == null ? "none" : code(e) + " " + path(e), t[0]);
       assertTrue(!e.getMessage().contains("7") || !t[1].equals("invalid-secret"));
+    }
+  }
+
+  /**
+   * Schema-based lengths count on the value read (§16, "Limits"): a {@code "_tag"} (listed or not)
+   * and an enum's string are tags, a map's and a listed field's member names keys; an open record's
+   * unlisted members aren't in the value and don't count.
+   */
+  @Test
+  void jsonLengthsOnTheValue() {
+    Schema s = Schema.parse("type M = Map String\ntype Open = < A >\ntype Known = < Abcdefg | Abcdef >\n"
+        + "type Enum = closed < A | Abcdefg | Abcdef >\ntype Long = { abcdefg: String }\ntype R = { a: String }\n");
+    DecodeOptions six = DecodeOptions.DEFAULT.withLimits(Limits.DEFAULT.withMaxStringLength(6));
+    String[][] tests = {
+      {"M", "{\"abcdefg\": \"x\"}", "key-too-long"},
+      {"M", "{\"abcdef\": \"abcdefg\"}", "string-too-long"},
+      {"Open", "{\"_tag\": \"Abcdefg\"}", "tag-too-long"},
+      {"Known", "{\"_tag\": \"Abcdefg\"}", "tag-too-long"},
+      {"Enum", "\"Abcdefg\"", "tag-too-long"},
+      {"Long", "{\"abcdefg\": \"x\"}", "key-too-long"},
+      {"M", "{\"abcdef\": \"x\"}", "none"},
+      {"Open", "{\"_tag\": \"Abcdef\"}", "none"},
+      {"Known", "{\"_tag\": \"Abcdef\"}", "none"},
+      {"Enum", "\"Abcdef\"", "none"},
+      {"R", "{\"a\": \"x\", \"abcdefg\": 1}", "none"},
+      {"R", "{\"a\": \"x\", \"b\": \"abcdefg\"}", "none"},
+    };
+    for (String[] t : tests) {
+      SchemaType type = s.type(t[0]);
+      HausException e = catching(() -> type.fromJson(t[1].getBytes(StandardCharsets.UTF_8), six));
+      assertEquals(t[2], e == null ? "none" : code(e), t[0] + " " + t[1]);
     }
   }
 }

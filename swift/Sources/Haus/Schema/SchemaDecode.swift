@@ -152,17 +152,13 @@ struct SchemaWalker {
     }
 
     /// The type of part `i`, or nil for a field an open record drops; it
-    /// fails for a field a closed record doesn't list, and for a key over
-    /// the limit in JSON.
+    /// fails for a field a closed record doesn't list, and for a key of the
+    /// value read over the limit in JSON (a `Map`'s, a listed field's).
     @inline(never)
     mutating func partType(_ parts: Parts, _ i: Int) throws(HausError) -> SchemaNode? {
         switch parts.types {
         case .all(let t):
-            if parts.checkKeys, case .fields(let r) = parts.source {
-                path.append(.key(r[i].key))
-                try checkLength(r[i].key, .keyTooLong, "key")
-                path.removeLast()
-            }
+            if parts.checkKeys, case .fields(let r) = parts.source { try checkKey(r[i].key) }
             return t
         case .each(let types):
             return types[i]
@@ -174,8 +170,16 @@ struct SchemaWalker {
                 if shape.closed { throw unknownField(key) }
                 return nil
             }
+            if parts.checkKeys { try checkKey(key) }
             return f.type
         }
+    }
+
+    /// Checks a key of the value read against the string limit, at its member.
+    mutating func checkKey(_ key: String) throws(HausError) {
+        path.append(.key(key))
+        try checkLength(key, .keyTooLong, "key")
+        path.removeLast()
     }
 
     /// Checks a string or key of the value read against the string limit,

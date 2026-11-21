@@ -153,6 +153,44 @@ struct JSONTests {
         #expect(long?.code == .keyTooLong)
     }
 
+    /// Schema-based lengths count on the value read (§16, "Limits"): a
+    /// `"_tag"` (listed or not) and an enum's string are tags, a map's and a
+    /// listed field's member names keys; an open record's unlisted members
+    /// aren't in the value and don't count.
+    @Test func schemaBasedLengthsCountOnTheValue() throws {
+        let schema = try HausSchema(
+            parsing: """
+                type M = Map String
+                type Open = < A >
+                type Known = < Abcdefg | Abcdef >
+                type Enum = closed < A | Abcdefg | Abcdef >
+                type Long = { abcdefg: String }
+                type R = { a: String }
+                """)
+        let six = Limits(maxStringLength: 6)
+        let over: [(String, String, HausError.Code)] = [
+            ("M", #"{"abcdefg": "x"}"#, .keyTooLong),
+            ("M", #"{"abcdef": "abcdefg"}"#, .stringTooLong),
+            ("Open", #"{"_tag": "Abcdefg"}"#, .tagTooLong),
+            ("Known", #"{"_tag": "Abcdefg"}"#, .tagTooLong),
+            ("Enum", #""Abcdefg""#, .tagTooLong),
+            ("Long", #"{"abcdefg": "x"}"#, .keyTooLong),
+        ]
+        for (name, json, code) in over {
+            let type = try schema.type(name)
+            let e = #expect(throws: HausError.self) { try type.fromJSON(json, limits: six) }
+            #expect(e?.code == code, "\(name) \(json)")
+        }
+        let within: [(String, String)] = [
+            ("M", #"{"abcdef": "x"}"#), ("Open", #"{"_tag": "Abcdef"}"#), ("Known", #"{"_tag": "Abcdef"}"#),
+            ("Enum", #""Abcdef""#), ("R", #"{"a": "x", "abcdefg": 1}"#), ("R", #"{"a": "x", "b": "abcdefg"}"#),
+        ]
+        for (name, json) in within {
+            let type = try schema.type(name)
+            #expect(throws: Never.self) { try type.fromJSON(json, limits: six) }
+        }
+    }
+
     @Test func jsonLines() throws {
         let text = "\u{FEFF}{\"_haus\":1,\"_value\":{\"_num\":\"1\"}}\r\n{\"_haus\":1,\"_value\":\"x\"}"
         #expect(try fromHausJSONLines(text) == [1, "x"])

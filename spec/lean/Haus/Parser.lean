@@ -486,6 +486,34 @@ def parse (L : Limits) (input : Text) : Except Error (List Value) :=
   let fuel := 4 * (t.length + 1)
   ((do ws; fileLoop L fuel fuel []).run' t).mapError (directive t)
 
+/--
+**A single document** (§6): exactly one value. A sequence of two or more
+values, and an input with no value (empty, or only whitespace and comments),
+are `not-one-value`, reported at the end of the input; a comma after the one
+value is allowed, as in a stream (`1,` is a single document).
+-/
+def parseDocument (L : Limits) (input : Text) : Except Error Value :=
+  match parse L input with
+  | .error e => .error e
+  | .ok [v] => .ok v
+  | .ok [] => .error ⟨.notOneValue, "expected one value, found none", 0⟩
+  | .ok _ => .error ⟨.notOneValue, "expected one value, found more than one", 0⟩
+
+/-- A single document is a file of one value (§1). -/
+theorem parseDocument_ok_iff {L : Limits} {input : Text} {v : Value} :
+    parseDocument L input = .ok v ↔ parse L input = .ok [v] := by
+  unfold parseDocument
+  split <;> simp_all
+
+private def documentCode (src : String) : Option Code :=
+  match parseDocument {} src.toList with
+  | .error e => some e.code
+  | .ok _ => none
+#guard documentCode "1" == none && documentCode "1," == none && documentCode " // c\n{ a: 1 }, // d\n" == none
+#guard documentCode "" == some .notOneValue && documentCode " /* c */ \n" == some .notOneValue
+#guard documentCode "1, 2" == some .notOneValue && documentCode "1, 2," == some .notOneValue
+#guard documentCode "1 2" == some .missingComma && documentCode "," == some .expectedValue
+
 -- Record keys and tags count against the string limit (§7), like strings.
 private def accepts (src : String) : Bool := (parse { maxStringLength := 3 } src.toList).toOption.isSome
 #guard accepts "{abc: Abc, \"xyz\": Abc(1), q: Abc { r: 1 }}"

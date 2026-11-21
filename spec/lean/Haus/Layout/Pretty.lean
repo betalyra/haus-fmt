@@ -136,4 +136,49 @@ private def prettyOf (src : String) (o : Options := {}) : Option String :=
     { indent := 4, width := 40 } ==
   some "{\n    short: Point(1, 2),\n    long: Pair(\n        \"aaaaaaaaaa\",\n        \"bbbbbbbbbbbbbbbb\",\n    ),\n    longer: Pair(\n        \"aaaaaaaaaa\",\n        \"bbbbbbbbbbbbbbbbb\",\n    ),\n    list: [\n        Money(7.90, EUR),\n        Money(12.50, EUR),\n    ],\n    text: \"\"\"\n        a\n        b\n        \"\"\",\n}\n"
 
+/-! ## Writing within the number limit (§11)
+
+The layouts write a value's numbers in normalized form, always in decimal,
+and an integer whose decimal form is longer than the writer's number limit
+can't be written (`number-too-long`): a reader with that limit couldn't read
+it back. Parsed values within the limits always fit (a hex literal is bounded
+so that its decimal form fits, §7); values built in code, or parsed with
+larger limits, may not. The writers above are total; `checked` is the
+writer an API exposes. -/
+
+/-- An integer literal: digits, with an optional `-`. -/
+def isIntLiteral : Text → Bool
+  | '-' :: ds => !ds.isEmpty && ds.all isDigit
+  | ds => !ds.isEmpty && ds.all isDigit
+
+mutual
+/-- Every integer of a value has a decimal form within the number limit. -/
+def intsFit (L : Limits) : Value → Bool
+  | .num s => !isIntLiteral s.toList || s.length ≤ L.maxNumberLength
+  | .arr xs => intsFitList L xs
+  | .record fs => intsFitFields L fs
+  | .variant _ xs => intsFitList L xs
+  | _ => true
+
+def intsFitList (L : Limits) : List Value → Bool
+  | [] => true
+  | x :: xs => intsFit L x && intsFitList L xs
+
+def intsFitFields (L : Limits) : List (String × Value) → Bool
+  | [] => true
+  | (_, x) :: fs => intsFit L x && intsFitFields L fs
+end
+
+/-- **A layout writer within the limits `L`** (§11): the text, or `number-too-long`. -/
+def checked (L : Limits) (write : List Value → Text) (vs : List Value) : Except Code Text :=
+  if vs.all (intsFit L) then .ok (write vs) else .error .numberTooLong
+
+#guard (checked {} compactAll [.num (toString (10 ^ 999))]).toOption == some ((toString (10 ^ 999)).toList ++ ['\n'])
+#guard checked {} compactAll [.num ("-" ++ toString (10 ^ 998))] |>.toOption |>.isSome
+#guard checked {} minimisedAll [.arr [.num (toString (10 ^ 1000))]] matches .error .numberTooLong
+#guard checked {} (prettyAll {}) [.num "1", .variant "Some" [.num ("-" ++ toString (10 ^ 999))]] matches .error .numberTooLong
+-- Only integers: a decimal is written as its literal.
+#guard checked { maxNumberLength := 3 } compactAll [.num "1.25"] |>.toOption |>.isSome
+#guard checked { maxNumberLength := 3 } compactAll [.num "1000"] matches .error .numberTooLong
+
 end Haus.Layout

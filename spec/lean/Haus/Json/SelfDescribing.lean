@@ -293,7 +293,7 @@ def checkFits (L : Limits) (v : Value) : Except Error Value :=
 
 /-- The JSON import of a text, within the limits (§16.1): JSON nesting at most `d`. -/
 def readImport (L : Limits) (t : Text) : Except Error Value := do
-  checkFits L (← toValue (← parseDepth L L.maxDepth t))
+  checkFits L (← toValue (← parseDepth (textLimits L t) L.maxDepth t))
 
 /--
 One self-describing JSON text without a byte order mark, within the limits
@@ -302,7 +302,7 @@ a string or member name (§16). Only haus writes this form, and it escapes
 them.
 -/
 def readHausJsonText (L : Limits) (t : Text) : Except Error Value := do
-  let j ← parseText L true (hausJsonDepth L) t
+  let j ← parseText (textLimits L t) true (hausJsonDepth L) t
   checkFits L (← fromHausJson j)
 
 /-- **Self-describing JSON text** (§16.2), within the limits, after an optional byte order mark. -/
@@ -389,7 +389,7 @@ def hausJsonPlace : JSON → List Step
 
 /-- The place of an error in one self-describing JSON text without a byte order mark: none for an error in the text. -/
 def hausJsonTextPlace (L : Limits) (t : Text) : List Step :=
-  match parseText L true (hausJsonDepth L) t with
+  match parseText (textLimits L t) true (hausJsonDepth L) t with
   | .ok j => if (fromHausJson j).toOption.isSome then [] else hausJsonPlace j
   | .error _ => []
 
@@ -1005,6 +1005,22 @@ private def placeOf (s : String) : Option String :=
 #guard placeOf "{\"_haus\": 1, \"_value\": {\"_args\": 5, \"_tag\": \"T\"}}" == some "$._value._args"
 #guard placeOf "{\"_haus\": 1, \"_value\": {\"_tag\": \"t\", \"_args\": []}}" == some "$._value"
 #guard placeOf "{\"_haus\": 1, \"_value\": \"a\"" == some "$"
+
+-- Lengths are counted on the haus value (§16, "Limits"): a member name as a key, a `_tag` as a tag.
+private def codeIn (read : Text → Except Error Value) (s : String) : Option Code :=
+  match read s.toList with
+  | .error e => some e.code
+  | .ok _ => none
+#guard codeIn (readImport { maxStringLength := 3 }) "{\"abcd\": 1}" == some .keyTooLong
+#guard codeIn (readImport { maxStringLength := 3 }) "[\"abcd\"]" == some .stringTooLong
+#guard codeIn (readImport { maxStringLength := 4 }) "{\"_tag\": \"Abcde\"}" == some .stringTooLong
+#guard codeIn (readImport { maxStringLength := 3 }) "{\"abc\": \"abc\"}" == none
+#guard codeIn (readHausJson { maxStringLength := 6 }) "{\"_haus\": 1, \"_value\": {\"_tag\": \"Abcdefg\"}}" == some .tagTooLong
+#guard codeIn (readHausJson { maxStringLength := 6 }) "{\"_haus\": 1, \"_value\": {\"_rec\": {\"abcdefg\": \"x\"}}}" == some .keyTooLong
+#guard codeIn (readHausJson { maxStringLength := 6 }) "{\"_haus\": 1, \"_value\": [\"abcdefg\"]}" == some .stringTooLong
+#guard codeIn (readHausJson { maxStringLength := 6 }) "{\"_haus\": 1, \"_value\": {\"_tag\": \"Abcdef\"}}" == none
+-- Bytes count two characters per byte, as in the hex of a haus byte string.
+#guard codeIn (readHausJson { maxStringLength := 6 }) "{\"_haus\": 1, \"_value\": {\"_bytes\": \"00112233\"}}" == some .stringTooLong
 
 end JSON
 end Haus

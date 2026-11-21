@@ -135,16 +135,13 @@ def test_a_string_with_escapes_exactly_at_the_limit_is_read() -> None:
     assert haus.import_json(at, limits=FOUR) == String('é\n"😀')
     assert haus.from_haus_json(enveloped(at), limits=FOUR) == String('é\n"😀')
     assert SCHEMA["Raw"].from_json(at, limits=FOUR) == String('é\n"😀')
-    assert SCHEMA["Order"].from_json(
-        f'{{"id": "1", "items": [{{"sku": {at}, "qty": 1, "price": "1"}}]}}', limits=FOUR
-    ) == {"id": 1, "items": ({"sku": 'é\n"😀', "qty": 1, "price": "1"},)}
+    # A listed field's name is a key of the value: Config's "name" and "key" are within the limit.
+    assert SCHEMA["Config"].from_json(f'{{"name": {at}, "key": "k"}}', limits=FOUR)["name"] == 'é\n"😀'
     for read in (
         lambda: haus.import_json(over, limits=FOUR),
         lambda: haus.from_haus_json(enveloped(over), limits=FOUR),
         lambda: SCHEMA["Raw"].from_json(over, limits=FOUR),
-        lambda: SCHEMA["Order"].from_json(
-            f'{{"id": "1", "items": [{{"sku": {over}, "qty": 1, "price": "1"}}]}}', limits=FOUR
-        ),
+        lambda: SCHEMA["Config"].from_json(f'{{"name": {over}, "key": "k"}}', limits=FOUR),
     ):
         with pytest.raises((HausJsonError, HausDecodeError), match="string longer than 4 characters") as info:
             read()
@@ -183,6 +180,38 @@ def test_keys_and_tags_count_as_keys_and_tags() -> None:
     with pytest.raises(HausDecodeError) as decoded:
         SCHEMA["Counts"].from_json('{"abcde": 1}', limits=FOUR)
     assert decoded.value.code == "key-too-long"
+
+
+def test_schema_based_lengths_count_on_the_value_read() -> None:
+    """A `"_tag"` (listed or not) and an enum's string are tags, a listed member's name a key (spec §16, "Limits").
+
+    An open record's unlisted members aren't in the value: they don't count.
+    """
+    schema = compile_schema("""
+        type Open = < A >
+        type Known = < Abcdefg | Abcdef >
+        type Enum = closed < A | Abcdefg | Abcdef >
+        type Long = { abcdefg: String }
+        type R = { a: String }
+        type Closed = closed < A | B Int32 >
+    """)
+    six = Limits(max_string_length=6)
+    for name, text, code in (
+        # A tag a closed variant doesn't list is unknown first: no value results.
+        ("Closed", '{"_tag": "Abcdefg"}', "unknown-tag"),
+        ("Open", '{"_tag": "Abcdefg"}', "tag-too-long"),
+        ("Known", '{"_tag": "Abcdefg"}', "tag-too-long"),
+        ("Enum", '"Abcdefg"', "tag-too-long"),
+        ("Long", '{"abcdefg": "x"}', "key-too-long"),
+    ):
+        with pytest.raises(HausDecodeError) as info:
+            schema[name].from_json(text, limits=six)
+        assert info.value.code == code, (name, text)
+    assert schema["Open"].from_json('{"_tag": "Abcdef"}', limits=six) == Unknown(Variant("Abcdef"))
+    assert schema["Known"].from_json('{"_tag": "Abcdef"}', limits=six) == Tagged("Abcdef")
+    assert schema["Enum"].from_json('"Abcdef"', limits=six) == Tagged("Abcdef")
+    assert schema["R"].from_json('{"a": "x", "abcdefg": 1}', limits=six) == {"a": "x"}
+    assert schema["R"].from_json('{"a": "x", "b": "abcdefg"}', limits=six) == {"a": "x"}
 
 
 def test_json_strings_that_are_not_haus_strings_are_not_counted() -> None:

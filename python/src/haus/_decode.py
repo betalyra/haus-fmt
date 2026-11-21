@@ -1129,6 +1129,9 @@ class _Record(_Node):
         ctx, child = at.ctx, at.child
         for key, quick, read, optional in readers:
             if key in fields:
+                if ctx.json:
+                    # A listed member's name is a key of the value read (spec §16, "Limits").
+                    _checked_string(key, at, kind="key")
                 x = fields[key]
                 if quick is None or (y := quick(x)) is _MISS or ctx.steps >= ctx.max_steps:
                     y = read(x, child(key))
@@ -1354,14 +1357,16 @@ class _Variant(_Node):
             if j not in self.cases:
                 found = describe(j)
                 at.fail(f"unknown tag {found}, {expected}", code="unknown-tag", expected=expected, found=found)
-            return Tagged(j)
+            return Tagged(_checked_tag(j, at))
         if not isinstance(j, dict):
             _json_mismatch(f'an object with "_tag" ({self.tags})', j, at)
         tag = _read_tag(j, self.tags, at)
+        if tag not in self.cases and not self.open:
+            found = _short(tag)
+            at.fail(f"unknown tag '{found}', {expected}", code="unknown-tag", expected=expected, found=found)
+        # A tag of the value read, listed or not (spec §16, "Limits").
+        _checked_tag(tag, at)
         if tag not in self.cases:
-            if not self.open:
-                found = _short(tag)
-                at.fail(f"unknown tag '{found}', {expected}", code="unknown-tag", expected=expected, found=found)
             return Unknown(self._read_unknown(tag, j, at))
         case = self.cases[tag]
         if case is None:
@@ -1445,8 +1450,6 @@ def _read_tag(j: dict[str, Json], expected: str, at: _At) -> str:
         found = describe(tag)
         reason = f'expected a tag ([A-Z][A-Za-z0-9_]*) in "_tag", found {found}'
         at.fail(reason, code="invalid-tag", expected=expected, found=found)
-    if len(tag) > at.ctx.limits.max_string_length:
-        at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", code="tag-too-long")
     return tag
 
 
