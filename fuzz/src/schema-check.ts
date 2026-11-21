@@ -92,7 +92,7 @@ async function effectRunner(): Promise<Runner> {
   return inProcess("effect", (t) => Haus.compileSchemaFile(t))
 }
 
-const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "python", "go", "swift"]
+const ALL_RUNNERS = ["lean", "typescript", "effect", "rust", "python", "go", "swift", "jvm"]
 
 async function runner(name: string): Promise<Runner> {
   switch (name) {
@@ -103,6 +103,7 @@ async function runner(name: string): Promise<Runner> {
     case "python": return external("python", join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/schema_check_runner.py")])
     case "go": return external("go", join(root, "fuzz/.build/go-runner"), ["--schema-check"])
     case "swift": return external("swift", join(root, "fuzz/.build/swift-runner"), ["--schema-check"])
+    case "jvm": return external("jvm", join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--schema-check"])
   }
   throw new Error(`unknown runner ${name} (${ALL_RUNNERS.join(", ")}; Roc has no schema-file checker of its own)`)
 }

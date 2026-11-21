@@ -1,19 +1,17 @@
 package org.hausfmt.examples;
 
 import java.math.BigInteger;
-import java.util.ArrayList;
 import java.util.List;
 import org.hausfmt.FormatOptions;
-import org.hausfmt.Haus;
+import org.hausfmt.HausCodec;
 import org.hausfmt.HausException;
-import org.hausfmt.Value;
+import org.hausfmt.Schema;
 
 /**
  * The quickstart: the steps of go/examples/quickstart and rust/examples/quickstart, on the same
- * files: read a recursive thread, change a comment and write it back, and an error that says
- * where. The other bindings check the data with examples/thread.schema.haus; this one reads the
- * values as they are, until the JVM binding has schemas, so its error is one in the text.
- * Run: {@code ./gradlew :examples:quickstart} (from jvm/).
+ * files: data checked by its schema (examples/thread.schema.haus), decoded into records, changed,
+ * encoded back, and an error that says where. Run: {@code ./gradlew :examples:quickstart} (from
+ * jvm/).
  */
 public final class Quickstart {
   private Quickstart() {}
@@ -21,49 +19,38 @@ public final class Quickstart {
   static final String REPLY =
       "Comment { author: \"me\", at: Instant(\"2026-11-16T09:00:00Z\"), text: \"+1\", likes: 0, replies: [] }";
 
-  /** The record of a {@code Comment { … }}. */
-  private static Value.Record comment(Value v) {
-    return ((Value.Variant) v).payload();
-  }
-
-  private static List<Value> replies(Value v) {
-    return ((Value.Array) comment(v).get("replies")).items();
-  }
-
-  /** The likes of a comment and of all its replies. */
-  private static BigInteger likes(Value v) {
-    BigInteger n = ((Value.Number) comment(v).get("likes")).toBigInteger();
-    for (Value r : replies(v)) {
-      n = n.add(likes(r));
+  /**
+   * A comment: the one case of the schema's closed variant {@code Comment}. The instant is kept as
+   * its text, which keeps the value exactly; {@code java.time.Instant} would keep the instant.
+   */
+  record Comment(String author, String at, String text, BigInteger likes, List<Comment> replies) {
+    /** The likes of the comment and of all its replies. */
+    BigInteger allLikes() {
+      return replies.stream().map(Comment::allLikes).reduce(likes, BigInteger::add);
     }
-    return n;
-  }
 
-  /** How many levels of comments the thread has. */
-  private static int depth(Value v) {
-    return 1 + replies(v).stream().mapToInt(Quickstart::depth).max().orElse(0);
+    /** How many levels of comments the thread has. */
+    int depth() {
+      return 1 + replies.stream().mapToInt(Comment::depth).max().orElse(0);
+    }
   }
 
   public static void main(String[] args) {
-    // 1. The thread: a Comment, whose replies are Comments.
-    Value thread = Haus.parse(SharedFiles.read("thread.haus"));
-    String author = ((Value.Text) comment(thread).get("author")).value();
-    System.out.printf("thread by %s: %d levels, %s likes%n", author, depth(thread), likes(thread));
+    Schema schema = Schema.load(SharedFiles.path("thread.schema.haus"));
+    HausCodec<Comment> comments = schema.codec("Comment", Comment.class);
 
-    // 2. Read haus text, change it, write it back.
-    List<Value.Field> fields = new ArrayList<>();
-    for (Value.Field f : comment(Haus.parse(REPLY))) {
-      Value value = f.key().equals("likes")
-          ? Value.number(((Value.Number) f.value()).toBigInteger().add(BigInteger.ONE))
-          : f.value();
-      fields.add(Value.field(f.key(), value));
-    }
-    Value liked = Value.variant("Comment", Value.record(fields));
-    System.out.print(Haus.write(liked, FormatOptions.COMPACT));
+    // 1. The thread, checked with its schema: Root is a Comment, whose replies are Comments.
+    Comment thread = schema.codec("Root", Comment.class).decode(SharedFiles.read("thread.haus"));
+    System.out.printf("thread by %s: %d levels, %s likes%n", thread.author(), thread.depth(), thread.allLikes());
 
-    // 3. Text that isn't haus is an error that says where.
+    // 2. Decode haus text with the schema, change it, encode it back.
+    Comment reply = comments.decode(REPLY);
+    Comment liked = new Comment(reply.author(), reply.at(), reply.text(), reply.likes().add(BigInteger.ONE), reply.replies());
+    System.out.print(comments.encode(liked, FormatOptions.COMPACT));
+
+    // 3. A value that doesn't match the schema is an error that says where.
     try {
-      Haus.parse(REPLY.replace("likes: 0", "likes: lots"));
+      comments.decode(REPLY.replace("likes: 0", "likes: \"lots\""));
     } catch (HausException e) {
       System.out.println("error: " + e.getMessage());
     }

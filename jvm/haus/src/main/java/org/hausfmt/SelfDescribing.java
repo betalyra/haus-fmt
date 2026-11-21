@@ -20,6 +20,19 @@ final class SelfDescribing {
     return new SelfDescribing(lim, root).envelope(j);
   }
 
+  /**
+   * The self-describing value {@code j} without the envelope, as inside schema-based JSON (§16.3:
+   * {@code Any}), for a value at {@code depth}; error paths start at {@code root}.
+   */
+  static Value value(Value j, Limits lim, int depth, String root) {
+    return new SelfDescribing(lim, root).value(j, depth);
+  }
+
+  /** The {@code _args} of an unknown tag of schema-based JSON (§16.3), as self-describing values. */
+  static Value args(String tag, Value args, Limits lim, int depth, String root) {
+    return new SelfDescribing(lim, root).variant(tag, args, depth);
+  }
+
   private HausException fail(ErrorCode code, String reason) {
     return path.error(code, reason);
   }

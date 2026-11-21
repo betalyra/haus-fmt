@@ -1,7 +1,7 @@
 /**
  * Differential testing of the std/time checkers: generated strings through
  * the Lean model (spec/lean/Haus/Time) and the TypeScript, Rust, Roc,
- * Python, Go and Swift checkers, reporting where they disagree. See ../README.md.
+ * Python, Go, Swift and JVM checkers, reporting where they disagree. See ../README.md.
  *
  *   node fuzz/src/time.ts [--count N] [--seed S] [--out DIR] [--runners lean,go,…]
  */
@@ -170,6 +170,7 @@ const ALL_RUNNERS: ReadonlyArray<{ readonly name: string; run(file: string, case
   { name: "python", run: external(join(root, "python/.venv/bin/python"), [join(root, "python/fuzz/time_runner.py")]) },
   { name: "go", run: external(join(root, "fuzz/.build/go-runner"), ["--time"]) },
   { name: "swift", run: external(join(root, "fuzz/.build/swift-runner"), ["--time"]) },
+  { name: "jvm", run: external(join(root, "fuzz/.build/jvm-runner/bin/jvm-runner"), ["--time"]) },
 ]
 const wanted = args.runners?.split(",") ?? ALL_RUNNERS.map((r) => r.name)
 if (wanted[0] !== "lean") throw new Error("--runners must start with lean, the reference")

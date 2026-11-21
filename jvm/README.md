@@ -2,13 +2,13 @@
 
 **A data format for humans: friendly to write, pleasant to read, and at home in your code.**
 
-> **Highly experimental.** This is the core: the parser, the formatter, the stream reader, the canonical form and hashing, and the two JSON forms that need no schema. Schemas, typed codecs and a benchmark come next.
+> **Highly experimental.** The parser, the formatter, the stream reader, the canonical form and hashing, the three JSON forms, schemas (with std/time, schema packages and the official profiles), and typed codecs for records, sealed interfaces and Kotlin data classes. A benchmark comes next.
 
 Two modules, for the JVM and Android:
 
 | Module | | Depends on |
 |---|---|---|
-| `haus` | the Java library, package `org.hausfmt` | nothing |
+| `haus` | the Java library, package `org.hausfmt`; the official profiles in `org.hausfmt.ext.money` and `org.hausfmt.ext.geo` | nothing |
 | `haus-kotlin` | Kotlin extensions over it, package `org.hausfmt.kotlin` | `haus`, `kotlin-stdlib` |
 
 They follow the [specification](../spec): exact numbers, limits enforced while parsing, error positions in code points, and an error code from the catalogue on every error. The code is Java 17 (bytecode and APIs), built and tested with JDK 25; the Kotlin wrapper targets JVM 17 and calls the Java code, so it is as fast.
@@ -61,7 +61,48 @@ File("events.haus").inputStream().use { input ->
 }
 ```
 
+Typed codecs take data classes and sealed interfaces (`data object` for a tag without payload), with `schema.codec<Order>("Order")`; the Kotlin compiler must keep parameter names (`kotlin { compilerOptions { javaParameters.set(true) } }`), which the codec maps data classes by. `"…".decodeHaus(type)` decodes text with a schema type.
+
 `parseHaus`, `parseHausAll`, `formatHaus`, `toHaus`, `canonical`, `hash`, `hashAll`, `toHausJson`, `fromHausJson` and `importJson` are extensions over strings, byte arrays and values; `value["key"]` and `value[0]` look into records, arrays and payloads (null where there is nothing), and variants and fields destructure.
+
+## Schemas
+
+```java
+Schema schema = Schema.load(Path.of("order.schema.haus"),
+    SchemaOptions.DEFAULT.withPackages(PackageLocator.explicit().folder(Path.of("extensions"))));
+SchemaType root = schema.type("Root");
+Value order = root.decode(Haus.parse(text));   // the value an encoder writes back
+Value checked = root.encode(builtInCode);      // checks a value built in code, the same way
+```
+
+`Schema.load` reads a schema file (spec §14), its relative imports (`import ./common (Address)`) and the packages it imports (§13.3); `Schema.parse` reads one from text. Every rule of §13.3 and §14 is checked when a schema loads, so its types decode in time linear in the input; an error in an imported file is reported at the import, with its place in that file. Packages are found only where the application says (§9.2): `PackageLocator.explicit()` with `packageDir(dir)` for one package and `folder(dir)` for a folder of them, combined with `PackageLocator.or`. There is no `node_modules` lookup on the JVM. `schema.warnings()` lists unknown attributes, uses of deprecated types and record cases without a schema-based JSON form; `definitions()`, `imported()` and `packages()` describe the schema.
+
+`SchemaType.decode` follows §15: integers in decimal (`-0` is `0`), floats rounded from the exact decimal and written in their one spelling, the fields an open record doesn't list left out, the tags an open variant doesn't list kept as they are. Errors are `HausException`s with the code (spec §17) and the path of the failing value, `$.items[2].price`; an error inside a `Secret` is at the secret and never shows the value. `decodeAll` and `decodeStream` read files and streams of a `Stream` definition, with the item's index in the path (`$[3].total`). std/time's types are checked by their profile, also on their own: `StdTime.check("Date", "2026-02-30")`.
+
+Codecs (§13.4) let the application choose host types for named types, selected by the type's id: `Codec.of("@haus-fmt/money@1#Money", Amount.class, decode, encode)`, given in `DecodeOptions.DEFAULT.withCodecs(Codecs.of(...))`. A codec runs after the schema and may reject more values (a `HausException` keeps its code, any other exception is `type-mismatch`). The official profiles are codecs too: `MoneyCodecs.ISO` and `ISO_CURRENCY` (`@haus-fmt/money`'s iso profile), `GeoCodecs.WGS84` and `WGS84_BBOX` (`@haus-fmt/geo`'s wgs84).
+
+Schema-based JSON (§16.3): `root.toJson(value)` and `root.fromJson(json)`, and JSON Lines with `toJsonLines`, `fromJsonLines` and `jsonLinesReader`.
+
+## Typed codecs
+
+A `HausCodec<T>` decodes and encodes a schema type as the application's own types, checked against each other once, when the codec is built:
+
+```java
+record Line(String sku, BigDecimal price, int qty) {}
+record Order(long id, List<Line> lines, Optional<String> note, Status status) {}
+sealed interface Status permits Pending, Shipped {}
+record Pending() implements Status {}
+record Shipped(String tracking) implements Status {}
+
+HausCodec<Order> orders = schema.codec("Order", Order.class);
+Order o = orders.decode(text);                          // parse, check with the schema, build the records
+String back = orders.encode(o, FormatOptions.COMPACT);  // build the value, check it, write it
+String json = orders.toJson(o);                         // schema-based JSON
+```
+
+A record is a Java record (or a Kotlin data class) whose components are its fields, by name (`@HausName("pt-BR")` where the key isn't a Java name). A variant is a sealed interface with a record per tag, named like the tag, or an enum for a closed variant of tags without payload; in an open variant, a record with one `Value.Variant` component keeps the tags the schema doesn't list. `Maybe a` is `Optional<A>`, or `A` with null for `None`; an optional field (`note?: String`) is null when it is missing. Integers are `long`, `int`, `short`, `byte` or `BigInteger` (a value the host type can't hold is `out-of-range`), floats `double` or `float`, `Decimal` a `BigDecimal` or a `Value.Number` (which keeps `-0` and exponents as written), `Secret a` a `Secret<A>`, `Any` a `Value`. std/time values are their text, a `String`, which keeps them exactly; `LocalDate`, `YearMonth`, `LocalTime`, `LocalDateTime`, `OffsetDateTime`, `java.time.Instant` and `ZoneId` keep what they mean but not how they were written (spec §13.4). Generic types take a parameterized `Type` (`HausCodec.of(type, Envelope<Event>'s Type, options)`), recursive types work, and a component of a codec's host type uses the codec.
+
+The codec is built by reflection, once; decoding runs the schema's decoder and then builds the objects, so every rule, error code and path is the decoder's. No annotation processor or generated code is needed: a record is all a codec needs.
 
 ## Errors
 
@@ -121,11 +162,11 @@ String json = HausJson.toHausJson(v);   // {"_haus":1,"_value":{"_rec":{"price":
 Value back = HausJson.fromHausJson(json);   // equal to v
 ```
 
-The JSON import (§16.1) reads any JSON; self-describing JSON (§16.2) writes every haus value exactly and reads it back. Numbers keep their exact text, readers accept only I-JSON, and the limits of §7 count the haus value. JSON Lines: `toHausJsonLines`, `fromHausJsonLines`, `importJsonLines`, and `hausJsonLinesReader(in, limits)`, which holds one line at a time. Schema-based JSON (§16.3) comes with schemas.
+The JSON import (§16.1) reads any JSON; self-describing JSON (§16.2) writes every haus value exactly and reads it back. Numbers keep their exact text, readers accept only I-JSON, and the limits of §7 count the haus value. JSON Lines: `toHausJsonLines`, `fromHausJsonLines`, `importJsonLines`, and `hausJsonLinesReader(in, limits)`, which holds one line at a time. Schema-based JSON (§16.3) is on `SchemaType` (see [Schemas](#schemas)).
 
 ## Examples
 
-[`examples`](examples) has the `quickstart` and `order` examples of the other bindings, in Java and Kotlin, on the shared files in [`../examples`](../examples): `./gradlew :examples:quickstart`, `:examples:order`, `:examples:quickstartKotlin`, `:examples:orderKotlin`. Until the JVM binding has schemas, they read the files as plain values (the other bindings check them with their schemas and codecs), and their lines are compared with Go's in `ExamplesTest`.
+[`examples`](examples) has the `quickstart` and `order` examples of the other bindings, in Java and Kotlin, on the shared files in [`../examples`](../examples): `./gradlew :examples:quickstart`, `:examples:order`, `:examples:quickstartKotlin`, `:examples:orderKotlin`. They check the files with their schemas, decode them into records and data classes, with codecs for `Money` and `LatLng` on top of the official profiles, and their output is compared with Go's line for line in `ExamplesTest`.
 
 ## Building
 
@@ -133,4 +174,4 @@ The JSON import (§16.1) reads any JSON; self-describing JSON (§16.2) writes ev
 ./gradlew build   # compile, the conformance suite, the linearity tests, the Kotlin tests and the examples
 ```
 
-The tests run the shared conformance suite in [`../test-suite`](../test-suite): the valid and invalid files, the format suite, the stream suite and the JSON suite (import and self-describing JSON), byte for byte. The differential fuzzer runs the JVM binding through [`../fuzz/jvm`](../fuzz/jvm) (`jvm-runner`), built by `fuzz/build.sh`.
+The tests run the shared conformance suite in [`../test-suite`](../test-suite): the valid and invalid files, the format suite, the stream suite, the JSON suite (all three forms), the schema suite (each schema with and without its attributes), the invalid schemas and the package suite (its `Explicit` cases; the `Npm` cases are for bindings that read `node_modules`), byte for byte, and the test vectors of the official profiles. The differential fuzzers run the JVM binding through [`../fuzz/jvm`](../fuzz/jvm) (`jvm-runner`), built by `fuzz/build.sh`: the parser, formatters, std/time, the profiles, schema decoding, schema files and all JSON modes, against the Lean reference.

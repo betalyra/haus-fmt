@@ -16,7 +16,12 @@ final class JsonReader {
     /** The import (§16.1): nesting up to d, and the string limits checked on every string and member name. */
     IMPORT,
     /** Self-describing JSON (§16.2): nesting up to 4·d + 2 (the envelope), raw DEL, C1 and bidi controls rejected. */
-    SELF_DESCRIBING
+    SELF_DESCRIBING,
+    /**
+     * Schema-based JSON (§16.3): nesting up to 4·d + 1, read as the import reads it but with the
+     * string limits left to the walk with the type, which counts the haus value.
+     */
+    SCHEMA
   }
 
   private final byte[] s;
@@ -35,7 +40,7 @@ final class JsonReader {
     this.mode = mode;
     // A form can take four JSON levels for one haus level (Tag { … } is {"_tag": …, "_args":
     // [{"_rec": {…}}]}), and the envelope one more (spec §16, "Limits").
-    this.maxDepth = mode == Mode.IMPORT ? lim.maxDepth() : 4 * lim.maxDepth() + 2;
+    this.maxDepth = mode == Mode.IMPORT ? lim.maxDepth() : mode == Mode.SCHEMA ? 4 * lim.maxDepth() + 1 : 4 * lim.maxDepth() + 2;
   }
 
   /**

@@ -33,11 +33,16 @@ import org.hausfmt.Value;
  * jvm-runner [--stream | --canonical] DIR N                       the parser, stream reader, canonical form
  * jvm-runner --format STYLE [--indent N] [--width N] DIR N        Haus.format
  * jvm-runner --write STYLE [--indent N] [--width N] DIR N         the value writers, Haus.write and writeAll
- * jvm-runner --json MODE FILE                                     haus-json-write, haus-json-read, import
+ * jvm-runner --json MODE FILE                                     write, read (schema-based JSON), haus-json-write, haus-json-read, import
+ * jvm-runner --schema FILE                                        decoding with a schema (SchemaModes)
+ * jvm-runner --schema-check FILE                                  schema files, as Schema.parse reads them
+ * jvm-runner --time FILE                                          StdTime.check (TimeMode)
+ * jvm-runner --profile FILE                                       the codecs of ext.money and ext.geo (ProfileMode)
  * </pre>
  *
- * <p>The modes with DIR N read DIR/00000.haus … DIR/{N-1}.haus; --json reads a FILE of lines, each a
- * case's bytes in hex. Each prints one line per case:
+ * <p>The modes with DIR N read DIR/00000.haus … DIR/{N-1}.haus; --json, --time and --profile read
+ * a FILE of lines, each a case's bytes in hex (after the std/time type, for --time; after the type's
+ * name, for --profile). Each prints one line per case:
  *
  * <ul>
  *   <li>parse: {@code ok <values>} in the test-suite JSON encoding, or {@code err <line> <column>
@@ -49,13 +54,16 @@ import org.hausfmt.Value;
  *   <li>--write: {@code ok {"values": [...], "file": ...}}, each value written alone (without the
  *       line break after it) and all of them as a file;
  *   <li>--json: {@code ok <JSON>} (haus-json-write) or {@code ok <canonical form>}, or {@code err
- *       <place> <code> <reason>}, the place in the value ({@code $} for an error in the text).
+ *       <place> <code> <reason>}, the place in the value ({@code $} for an error in the text);
+ *   <li>--time: {@code ok} or {@code no}, or {@code err invalid UTF-8};
+ *   <li>--profile: {@code ok <canonical form>} of what was decoded and encoded again, or {@code err
+ *       <place> <code> <reason>}.
  * </ul>
  */
 public final class Runner {
   private static final String USAGE =
       "usage: jvm-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N"
-          + " | --json MODE FILE";
+          + " | --json MODE FILE | --time FILE | --profile FILE | --schema FILE | --schema-check FILE";
   private static final int[] CHUNKS = {1, 2, 3, 5, 8, 13, 64};
 
   private Runner() {}
@@ -76,16 +84,25 @@ public final class Runner {
     if (args.length == 0) {
       throw new IllegalArgumentException(USAGE);
     }
+    if (args[0].equals("--time") && args.length == 2) {
+      TimeMode.run(Paths.get(args[1]), out);
+      return;
+    }
     if (args[0].equals("--json")) {
       if (args.length != 3) {
         throw new IllegalArgumentException(USAGE);
       }
-      Function<byte[], String> one = jsonMode(args[1]);
-      for (String line : Files.readAllLines(Paths.get(args[2]), StandardCharsets.UTF_8)) {
-        if (!line.isEmpty()) {
-          out.println(oneLine(one.apply(unhex(line))));
-        }
-      }
+      boolean typed = args[1].equals("write") || args[1].equals("read");
+      Function<String, String> one = typed ? SchemaModes.json(args[1]) : jsonMode(args[1]).compose(Runner::unhex);
+      perLine(Paths.get(args[2]), one, out);
+      return;
+    }
+    if (args[0].equals("--profile") && args.length == 2) {
+      perLine(Paths.get(args[1]), ProfileMode.lines(), out);
+      return;
+    }
+    if (args.length == 2 && (args[0].equals("--schema") || args[0].equals("--schema-check"))) {
+      perLine(Paths.get(args[1]), args[0].equals("--schema") ? SchemaModes.schema() : SchemaModes.schemaCheck(), out);
       return;
     }
     if (args.length < 2) {
@@ -97,6 +114,15 @@ public final class Runner {
     for (int i = 0; i < n; i++) {
       byte[] src = Files.readAllBytes(dir.resolve(String.format("%05d.haus", i)));
       out.println(oneLine(one.apply(src, i)));
+    }
+  }
+
+  /** Runs {@code one} for each non-empty line of {@code file} and prints its result on a line of its own. */
+  private static void perLine(Path file, Function<String, String> one, PrintStream out) throws IOException {
+    for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+      if (!line.isEmpty()) {
+        out.println(oneLine(one.apply(line)));
+      }
     }
   }
 
@@ -308,7 +334,7 @@ public final class Runner {
   }
 
   /** {@code err <place> <code> <reason>}: the place in the value, {@code $} for one in the text. */
-  private static String placed(HausException e) {
+  static String placed(HausException e) {
     return "err " + (e.path() == null ? "$" : e.path()) + " " + e.code() + " " + e.reason();
   }
 
@@ -386,7 +412,7 @@ public final class Runner {
   }
 
   /** A case's bytes, written in hex. */
-  private static byte[] unhex(String s) {
+  static byte[] unhex(String s) {
     byte[] b = new byte[s.length() / 2];
     for (int i = 0; i < b.length; i++) {
       b[i] = (byte) Integer.parseInt(s.substring(2 * i, 2 * i + 2), 16);

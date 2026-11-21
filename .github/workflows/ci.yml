@@ -64,7 +64,7 @@ jobs:
           if printf '%s\n' "$files" | grep -qE '^(editors/tree-sitter-haus/|spec/grammar\.ebnf|typescript/packages/haus/|fuzz/src/generate\.ts|\.github/workflows/ci\.yml)|\.(haus|pretty|compact|minimised|error)$'; then tree_sitter=true; else tree_sitter=false; fi
           echo "tree_sitter=$tree_sitter" >> "$GITHUB_OUTPUT"
           # The JVM binding: its sources, the suites and examples it runs, and the error catalogue it is generated from.
-          if printf '%s\n' "$files" | grep -qE '^(jvm/|fuzz/jvm/|test-suite/|examples/|spec/errors\.haus|spec/scripts/errors\.ts|\.github/workflows/ci\.yml)'; then jvm=true; else jvm=false; fi
+          if printf '%s\n' "$files" | grep -qE '^(jvm/|fuzz/jvm/|test-suite/|examples/|extensions/|spec/std/|spec/errors\.haus|spec/scripts/errors\.ts|\.github/workflows/ci\.yml)'; then jvm=true; else jvm=false; fi
           echo "jvm=$jvm" >> "$GITHUB_OUTPUT"
 
   docs:
