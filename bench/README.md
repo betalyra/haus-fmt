@@ -3,7 +3,7 @@
 A first, small benchmark of haus against JSON:
 
 1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
-2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`). Every language reads the same documents, which `convert` exports as plain files.
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` and goccy/go-json, into `any` and into Go types generated from the same schema (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`). Every language reads the same documents, which `convert` exports as plain files.
 
 ```
 bench/
@@ -42,7 +42,7 @@ cd typescript
 pnpm install                          # the bench package is part of the workspace
 pnpm --filter haus-bench all          # every TypeScript step below, in order (about 25 minutes, most of it tokens)
 pnpm --filter haus-bench speed-rust   # the Rust speed benchmark (cargo bench, about 7 minutes), after convert
-pnpm --filter haus-bench speed-go     # the Go speed benchmark (go run ./cmd/speed, about 6 minutes), after convert
+pnpm --filter haus-bench speed-go     # the Go speed benchmark (go generate, then go run ./cmd/speed: about 10 minutes), after convert
 pnpm --filter haus-bench speed-py     # the Python speed benchmark (uv run, about 15 minutes), after convert
 pnpm --filter haus-bench report       # the report again, with Rust's, Go's and Python's speed beside TypeScript's
 ```
@@ -58,7 +58,7 @@ Or step by step:
 | compress | `pnpm --filter haus-bench compress` | ~3 min (brotli 11 is most of it) | `bench/.out/<source>/compression.json` |
 | speed (TypeScript) | `pnpm --filter haus-bench speed` | ~8 min (21 tasks × 2.5 s × 7 sources, and building the JSON validators and writers and the checks before timing: fast-json-stringify takes ~25 s for Stripe's 173 types; `--quick` alone takes ~3 min) | `bench/.out/<source>/speed-typescript.json` |
 | speed (Rust) | `pnpm --filter haus-bench speed-rust`, or `cargo bench` in `bench/speed/rust/` | ~7 min (11 tasks × ~4.5 s × 7 sources, and the first build) | `bench/.out/<source>/speed-rust.json` |
-| speed (Go) | `pnpm --filter haus-bench speed-go`, or `go run ./cmd/speed` in `bench/speed/go/` | ~6 min (11 tasks × ~4.5 s × 7 sources) | `bench/.out/<source>/speed-go.json` |
+| speed (Go) | `pnpm --filter haus-bench speed-go`, or `go generate` then `go run ./cmd/speed` in `bench/speed/go/` | ~10 min (20 tasks × ~4 s × 7 sources; generating the Go types a few seconds) | `bench/speed/go/jsontypes/gen/`, `jsontypes_gen.go` (the Go types, git-ignored); `bench/.out/<source>/speed-go.json` |
 | speed (Python) | `pnpm --filter haus-bench speed-py`, or `uv run python -m haus_bench_speed` in `bench/speed/py/` | ~15 min (19 tasks × ~3.5 s × 7 sources, and building and checking the models) | `bench/.out/<source>/speed-python.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
@@ -93,6 +93,7 @@ The Go benchmark, the same way (Go 1.24 or later, the version `go/` asks for):
 
 ```sh
 cd bench/speed/go
+go generate                                          # the Go types of the typed JSON baselines, from convert's JSON Schemas (again after each convert)
 go run ./cmd/speed                                   # every source in sources.haus; writes speed-go.json
 HAUS_BENCH_SOURCES=vega-lite,geojson go run ./cmd/speed
 HAUS_BENCH_QUICK=1 go run ./cmd/speed                # 5 samples of 30 ms per task: checks the harness, not for publishing
@@ -146,7 +147,7 @@ The steps are [Effect](https://effect.website) programs (Effect 4): services and
 | `size/src/paths.ts`, `size/src/host.ts`, `size/src/sources.ts`, `size/src/listing.ts`, `size/src/stats.ts`, `size/src/errors.ts` | directories (`BenchPaths`), the machine and its garbage collector (`Host`), source selection, directory listings, statistics and tables, errors |
 | `speed/ts/speed.ts` | TypeScript speed, tinybench: haus parse/decode/stringify against `JSON.parse`/`JSON.stringify`, and the typed tasks against JSON with validation (the CLI's `speed` command) |
 | `speed/ts/validators.ts`, `speed/ts/mutate.ts` | the JSON baselines of the typed tasks, built from the source's JSON Schema: Zod (a translation), Ajv, TypeBox, fast-json-stringify; the mutated documents they must reject |
-| `speed/go/` | Go speed, testing.B: `tasks.go` (the tasks and checks), `corpus.go` (reads the export and the manifest), `results.go` (the samples → `speed-go.json`), `machine*.go`, `speed_test.go` (`BenchmarkSpeed`), `cmd/speed` (the runner) |
+| `speed/go/` | Go speed, testing.B: `tasks.go` (the tasks and checks), `typed.go` (the typed JSON baselines and their round trip), `mutate.go` (the mutated documents), `corpus.go` (reads the export and the manifest), `results.go` (the samples → `speed-go.json`), `machine*.go`, `speed_test.go` (`BenchmarkSpeed`), `cmd/speed` (the runner), `cmd/jsontypes` (the Go types from the JSON Schema, `go generate`), `jsontypes/` (their registry; reads the JSON Schema) |
 | `speed/py/` | Python speed (`src/haus_bench_speed/`): `tasks.py` (the tasks and checks), `models.py` (the JSON Schema → pydantic models and msgspec Structs, as generated Python source), `mutate.py` (the mutated documents they must reject, as TypeScript's `mutate.ts`), `corpus.py` (reads the export and the manifest), `harness.py` (the timing, and the rows of `speed-python.json`), `machine.py`, `__main__.py` (the runner) |
 | `speed/rust/` | Rust speed, criterion: `benches/speed.rs` (the tasks and checks), `src/corpus.rs` (reads the export and the manifest), `src/results.rs` (criterion's samples → `speed-rust.json`), `src/machine.rs` |
 
@@ -340,19 +341,39 @@ The first Rust run (criterion, `rustc 1.99.0`, M1 Max), per document, haus again
 
 ### Go
 
-The Go benchmark (`testing.Benchmark`, Go 1.27.4, M1 Max, shared with other work while it ran), per document, haus against encoding/json (into `any`, `json.Marshal`), after the optimisations below. Typed is haus's parse and decode, against encoding/json's parse alone (no Go structs on the JSON side, as in Rust).
+The Go benchmark (`testing.Benchmark`, Go 1.27.4, M1 Max, shared with other work while it ran), per document: the median of three full runs, each ratio taken within its run (haus's time over the JSON task's on the same documents), the runs' spread in parentheses where they differ by more than 0.1×. MB/s is each format's own bytes. Two JSON libraries, encoding/json and goccy/go-json 0.12.0, each into `any` (generic, like haus's untyped parse) and into Go types generated from the source's JSON Schema ([the typed baselines](#the-go-types-of-the-typed-tasks), which check less than haus's schema: not required members, not enum values).
 
-| Source | parse: haus / encoding/json MB/s | haus | typed MB/s | haus | write minimised: haus / json.Marshal MB/s | haus | write compact |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `github-rest` | 201 / 102 | 2.0× faster | 153 | 1.55× faster | 480 / 181 | 2.7× faster | 2.8× faster |
-| `vega-lite` | 145 / 48 | 3.2× faster | 87 | 1.91× faster | 313 / 124 | 2.7× faster | 2.6× faster |
-| `kubernetes` | 136 / 41 | 3.8× faster | 80 | 2.2× faster | 235 / 108 | 2.5× faster | 2.4× faster |
-| `stripe` | 132 / 65 | 2.2× faster | 81 | 1.33× faster | 336 / 128 | 2.8× faster | 2.7× faster |
-| `bfcl` | 298 / 96 | 3.3× faster | 204 | 2.2× faster | 510 / 291 | 1.85× faster | 1.65× faster |
-| `gh-archive` | 218 / 85 | 2.6× faster | 136 | 1.64× faster | 595 / 219 | 2.9× faster | 3.4× faster |
-| `geojson` | 155 / 63 | 2.5× faster | 73 | 1.17× faster | 524 / 144 | 3.7× faster | 3.4× faster |
+Reading (parse: text → generic value; typed: text → checked typed value):
 
-- **encoding/json is slow to `any`** (reflection, a `map[string]any` per object, every number parsed to `float64`; Go 1.27's v1 API runs on json/v2), so haus parses 2–3.8× faster and its typed parse, which also checks every rule of the schema, is still faster than encoding/json's untyped parse.
+| Source | haus parse MB/s | encoding/json into `any` | go-json into `any` | haus typed MB/s | encoding/json into the Go types | go-json into the Go types |
+|---|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 334 | 2.5× faster (136 MB/s) | 1.42× slower (489) | 232 | 1.16× faster (206 MB/s) | 2.4× slower (580) |
+| `vega-lite` | 177 | 3.2× faster (58) | 1.08× faster (171) | 106 | 2.9× faster (38) | ≈ equal (112) |
+| `kubernetes` | 192 | 3.5× faster (62) | 1.14× faster (193) | 122 | 2.3× faster (59) | 1.10× slower (150) |
+| `stripe` | 180 | 2.4× faster (80) | 1.35× slower (259) | 117 | 1.09× slower (138) | 3.8× slower (478) |
+| `bfcl` | 350 | 3.4× faster (109) | 1.18× faster (312) | 250 | 1.59× faster (166) | 1.73× slower (455) |
+| `gh-archive` | 374 | 2.5× faster (151) | 1.51× slower (576) | 296 | 2.6× faster (119) | 1.57× slower (477) |
+| `geojson` | 158 | 2.5× faster (65; 2.4–2.9) | 1.70× slower (277; 1.40–1.77) | 80 | 1.19× faster (68) | 2.9× slower (237) |
+
+Writing (minimised; typed: haus's `Type.Encode` + `FormatValue` of the decoded value, against `Marshal` of the Go types' values):
+
+| Source | haus write MB/s | encoding/json of `any` | go-json of `any` | haus typed write MB/s | encoding/json of the Go types | go-json of the Go types |
+|---|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 697 | 2.9× faster (250 MB/s) | 1.17× faster (615) | 339 | 1.14× slower (394 MB/s) | 2.7× slower (953) |
+| `vega-lite` | 385 | 2.9× faster (142) | 1.83× faster (224) | 161 | 1.96× faster (87) | 1.11× faster (155) |
+| `kubernetes` | 379 | 2.7× faster (156) | 1.64× faster (261) | 152 | 1.37× faster (126) | 1.06× slower (184) |
+| `stripe` | 471 | 3.3× faster (151) | 1.49× faster (336) | 168 | 2.1× slower (294) | 5.2× slower (735) |
+| `bfcl` | 656 | 2.3× faster (299) | 1.51× faster (461) | 329 | 1.19× faster (293) | 2.7× slower (941) |
+| `gh-archive` | 737 | 2.3× faster (340) | 1.23× faster (632) | 361 | 1.28× faster (296; 1.08–1.36) | 1.47× slower (557; 1.39–1.75) |
+| `geojson` | 580 | 3.8× faster (151) | 2.5× faster (234) | 109 | 1.06× faster (103) | 2.2× slower (236) |
+
+- **encoding/json into `any` flatters haus.** It is slow (reflection, a `map[string]any` per object, every number parsed to `float64`; Go 1.27's v1 API runs on json/v2), so haus parses 2.4–3.5× faster than it. Against go-json into `any`, haus's parse is between 1.18× faster (BFCL) and 1.70× slower (GeoJSON).
+- **Typed, against the Go types:** haus's typed parse (which checks every rule of the schema) is 1.09× slower (Stripe) to 2.9× faster (Vega-Lite) than encoding/json into the generated structs, faster where the schema has unions (Vega-Lite's specs, Kubernetes' manifests, GH Archive's events: each variant reads its object again with encoding/json); go-json into the same structs is 1.6–3.8× faster than haus but on Vega-Lite (equal) and Kubernetes (1.10×). Stripe is haus's worst case: 2,703 nullable fields, which haus decodes as `Some(…)` values and the Go types as pointers.
+- **Writing:** haus's untyped writers are faster than both libraries' writers of `any` (1.17–3.8×). The typed write (`Type.Encode` checks the value against the type before `FormatValue` writes it, two passes) is about half the untyped writer's speed: 0.5–2× encoding/json's time for the Go types, 1.06–5.2× go-json's (faster only on Vega-Lite), which write what the structs hold without any check.
+- **Spread:** the three runs agree within a few percent but for GeoJSON (the first run's encoding/json and go-json tasks were faster or slower by up to 20%) and GH Archive's typed writes (one run's go-json write 1.75× instead of 1.47×).
+
+Earlier optimisations of the Go binding, measured against encoding/json into `any`:
+
 - **Writing** was the weak spot before (1.05–2.1× slower than `json.Marshal`): the compact and minimised writers built the pretty layout's syntax tree, a node and an item per value. They now write as they check (`go/lines.go`), with the same checks in the same order as the pretty layout's builder (so the same errors), into a pooled buffer: 3.4–6.5× faster per document, and 1.65–3.7× faster than `json.Marshal`, which sorts every object's keys.
 - **Parsing** builds each container's entries on a scratch stack and copies them out at their exact length, with the parsers (and their stacks) pooled: about 1.1× faster per document, 15–38% fewer bytes allocated.
 - Tried and left out (no clear gain on this machine): one shared value for `None`, `True` and `False` (5–20% fewer allocations, no faster), a pooled set for the duplicate-key check of large records (slower), a byte table for identifier characters, and writing a decoded float's spelling into a stack buffer (18% fewer allocations on GeoJSON, 2% faster).
@@ -534,19 +555,67 @@ The checks before timing are TypeScript's, in Rust: every haus document parses t
 
 ### Speed (Go)
 
-`bench/speed/go/`, a module of its own (`github.com/betalyra/haus-fmt/bench/speed/go`, `go 1.24`, a `replace` to `../../../go`, so `go/`'s module and its CI don't build it), with no dependency but `go/`. The same tasks as TypeScript and Rust, on the same files:
+`bench/speed/go/`, a module of its own (`github.com/betalyra/haus-fmt/bench/speed/go`, `go 1.24`, a `replace` to `../../../go`, so `go/`'s module and its CI don't build it). Its dependencies besides `go/`: [goccy/go-json](https://github.com/goccy/go-json) **v0.12.0** (2026-10-29), pinned in `go.mod` and `go.sum`, for the benchmark only (`go/` stays standard library only). The same tasks as TypeScript and Rust, on the same files, with two JSON libraries: encoding/json (Go 1.27's, whose v1 API runs on json/v2's implementation) and goccy/go-json, the most established fast drop-in replacement that builds with Go 1.27 (sonic is faster on amd64 but tracks each Go release's runtime; `encoding/json/v2` is what encoding/json already runs on):
 
 | Task | JSON | haus |
 |---|---|---|
-| parse | `json.Unmarshal` into `any` | `haus.Parse` (per document), `haus.ParseAll` (the corpus): text → `haus.Value`, no schema |
-| typed | | `haus.Parse` + `schema.Type.Decode` with the document's type (looked up once): the runtime decoder (spec §15) |
-| write | `json.Marshal` of the `any` value | `haus.FormatValue` minimised and compact, `haus.FormatValues` minimised (the corpus as a stream) |
+| parse | `Unmarshal` into `any`: encoding/json (the baseline of "vs JSON"), go-json | `haus.Parse` (per document), `haus.ParseAll` (the corpus): text → `haus.Value`, no schema |
+| typed | `Unmarshal` into the document's root type, Go types generated from the source's JSON Schema ([below](#the-go-types-of-the-typed-tasks)): encoding/json, go-json (per document) | `haus.Parse` + `schema.Type.Decode` with the document's type (looked up once): the runtime decoder (spec §15) |
+| write | `Marshal` of the `any` value: encoding/json (the baseline), go-json | `haus.FormatValue` minimised and compact, `haus.FormatValues` minimised (the corpus as a stream) |
+| write, typed | `Marshal` of the Go types' values: encoding/json, go-json (per document) | `schema.Type.Encode` (checks the value against the type) + `haus.FormatValue` minimised, of the decoded value (per document) |
 
-Each on the corpus and per document. Bytes are those of the text read, as in the other languages, or written: `FormatValue` writes a file, so each document's text and a line feed; `json.Marshal` escapes `<`, `>` and `&` and sorts members, so its text is other than `all.json`. The tasks are `testing.B` benchmarks (`b.Loop`), `BenchmarkSpeed/<source>/<task>`: `go test -bench .` runs them, with `-benchmem` and `-count` for benchstat. `cmd/speed` runs each with `testing.Benchmark`: once untimed (for the checksum), 1 s of warm-up, then 20 runs of 150 ms, each run one sample (the mean of its calls, as criterion's samples are); the mean is over all calls of all samples, p75 and p99 over the samples. `testing` collects garbage before each run (`gc: true`) and counts allocations, which the results keep (`allocs`, `alloc_bytes` per iteration) and the report shows per document.
+Each on the corpus and per document (the typed JSON tasks per document only: GitHub's and Stripe's corpora mix root types). Bytes are those of the text read, as in the other languages, or written: `FormatValue` writes a file, so each document's text and a line feed; `Marshal` escapes `<`, `>` and `&` and sorts a map's members, so its text is other than `all.json`; the Go types write the members the schema lists, in its order. The tasks are `testing.B` benchmarks (`b.Loop`), `BenchmarkSpeed/<source>/<task>`: `go test -bench .` runs them, with `-benchmem` and `-count` for benchstat. `cmd/speed` runs each with `testing.Benchmark`: once untimed (for the checksum), 1 s of warm-up, then 20 runs of 150 ms, each run one sample (the mean of its calls, as criterion's samples are); the mean is over all calls of all samples, p75 and p99 over the samples. `testing` collects garbage before each run (`gc: true`) and counts allocations, which the results keep (`allocs`, `alloc_bytes` per iteration) and the report shows per document.
 
-The checks before timing, in Go: every haus document parses to a value that `FormatValue` (minimised) writes back as the same text (and a line feed), its pretty text reads as a value written the same way, it decodes with its type, `all.haus` reads as the documents' values and is what `FormatValues` writes for them, and encoding/json reads every JSON document and `all.json`. `jsonNotStable` counts the documents encoding/json writes back through `any` as another document by haus's equality (numbers become `float64`; it sorts members, which isn't counted). Results: `speed-go.json`, the shape of the others (`lang: "go"`, the Go version as `machine.runtime`).
+The checks before timing, in Go: every haus document parses to a value that `FormatValue` (minimised) writes back as the same text (and a line feed), its pretty text reads as a value written the same way, it decodes with its type, `all.haus` reads as the documents' values and is what `FormatValues` writes for them, and encoding/json and go-json read every JSON document and `all.json`. `jsonNotStable` counts the documents encoding/json writes back through `any` as another document by haus's equality (numbers become `float64`; it sorts members, which isn't counted). The typed tasks: the typed haus write reads back as the same values; **both libraries decode every document into the Go types** (no document of any source is rejected), and their typed round trip (decode, encode) gives the members the schema lists with the same values, compared by the schema (numbers by value, a date-time by its instant), counting what the Go types change: numbers float64 rounds (none), date-times time.Time respells (`+00:00` → `Z`, trailing zeros of a fraction: 4 GitHub documents, 5 GH Archive events), optional members that are null and so left out (below). Then the mutated documents of TypeScript's spot check (`mutate.go`, the same four kinds as `speed/ts/mutate.ts`, up to 5 of each), each of which haus's typed parse rejects: the results count those every Go baseline rejects. Results: `speed-go.json`, the shape of the others (`lang: "go"`, the Go version as `machine.runtime`), with `typedBaselines` (versions, `mutated` and `rejected` by kind, `roundTrip` per library).
 
-`typed` has no JSON counterpart, as in Rust: encoding/json into structs would need Go types for the seven schemas and each source's JSON mapping.
+#### The Go types of the typed tasks
+
+`cmd/jsontypes` (`go generate` in `bench/speed/go/`, after convert) writes Go types from `corpus/<source>.schema.json`, the JSON Schema TypeScript's validators are built from, as a Go code generator for JSON Schema would: one package per source and library under `jsontypes/gen/` (git-ignored, a few seconds; GitHub's and Stripe's are about 0.5 MB of Go each), whose `init` registers the root types; `jsontypes_gen.go` (git-ignored) imports them, and `cmd/speed` stops with a message when they are missing or were generated from another schema (by its SHA-256).
+
+| haus (as convert maps it from JSON) | JSON Schema | Go type |
+|---|---|---|
+| `String`, `Bool`, `Float64` | `type: string`, `boolean`, `number` | `string`, `bool`, `float64` |
+| `Int` | `type: integer` | `int64` |
+| `Instant`, `Date` (std/time) | `format: date-time`, `date` | `time.Time` (its `UnmarshalJSON` checks RFC 3339); `date`, a string checked with `time.Parse(time.DateOnly)` |
+| an enum | `enum` of the JSON strings | a string type (the values aren't checked) |
+| `Maybe T` | `T` or `null` | `*T`, or `T` where nil is its null (a slice, a map, `any`) |
+| `Array T`, `Map V` | `items`, `additionalProperties` | `[]T`, `map[string]V` |
+| a record, `field?` | `properties`, `required` | a struct, members by tag; an optional member `*T` (or `T` where nil is its null) with `omitzero`; members it doesn't list ignored |
+| a variant by a member (`kind`, `type`, an OpenAPI discriminator) | `oneOf` with a `const` member, `discriminator` | a struct holding one of its case structs (an interface), with `UnmarshalJSON` (`Unmarshal` into a struct of the member alone, then into the case) and `MarshalJSON` (the case) |
+| a variant by required keys (Vega-Lite's specs, …) | `oneOf [{ required }…]`, `allOf [{ if, then }…]` | the same, the case picked by which of the keys are there (exactly one case's, as convert's reader asks; a probe struct of `seen` fields); a case struct embeds its payload's type, so its members are the case's |
+| `Any` | `{}` | `any` (`map[string]any`, `float64`, …) |
+
+A struct that would hold itself by value gets a pointer there. The variants' methods call their package's library (so go-json's types never fall back to encoding/json), and each level of a variant reads its object twice more (the probe, then the case), what any Go code pays for a union with these libraries; Vega-Lite's nested specs, GH Archive's events and Kubernetes' manifests are variants.
+
+**What they don't check the same way.** The spot check counts, per kind, the mutated documents every Go baseline rejects (the two libraries reject the same ones); haus's typed parse rejects all of them:
+
+| Source | type | missing | enum | format |
+|---|---:|---:|---:|---:|
+| `github-rest` | 5 of 5 | 0 of 5 | 0 of 5 | 5 of 5 |
+| `vega-lite` | 5 of 5 | 1 of 5 | 0 of 5 | |
+| `kubernetes` | 5 of 5 | 5 of 5 | | |
+| `stripe` | 5 of 5 | 0 of 5 | 0 of 5 | |
+| `bfcl` | 5 of 5 | 0 of 5 | 0 of 5 | |
+| `gh-archive` | 5 of 5 | 5 of 5 | 0 of 5 | 5 of 5 |
+| `geojson` | 5 of 5 | 0 of 5 | 0 of 5 | |
+
+(A missing member is rejected only where it is a variant's member or one of its keys: Kubernetes' `kind`, GH Archive's `type`.)
+
+| | haus (`Parse` + `Type.Decode`) | encoding/json, go-json into the Go types |
+|---|---|---|
+| a required member missing | rejected | accepted, the field's zero value (written back as `0`, `""`, `null`), but where it tells a variant's case |
+| an enum value the enum doesn't list | rejected | accepted (a string) |
+| a key twice in an object | rejected | accepted, the last one wins |
+| a member's name | exactly | `"ID"` fills the field of `id` too (both match names without case where no field has the exact name) |
+| `Int` | any size; `1.0` and `1e3` rejected | `int64`: `1.0`, `1e3` and integers beyond ±2⁶³ rejected |
+| `Float64` | the number as written | `float64` (no document's number is rounded here) |
+| `Instant` (`date-time`) | `T` and `Z` upper case, seconds required, 1–9 fraction digits, no leap second (`:60`), not `-00:00`, the day must exist | `time.Time`: the same, but `-00:00` and more than 9 fraction digits (truncated) accepted |
+| `Maybe` in an optional member (`field?: Maybe T`) | absent and `None` are two values | both are nil: a `null` member is left out when written back (54 GitHub documents, 35 Vega-Lite, 112 Stripe, 321 BFCL, 720 GH Archive) |
+| invalid UTF-8 in a string | rejected | replaced by U+FFFD |
+| what comes out | a `haus.Value` tree, checked, numbers as their text (the Go binding has no generated types: a program maps it to its own) | Go structs of the schema's types, ready to use; `any` for `Any` (`float64` numbers) |
+| limits | depth, sizes, number lengths (haus's defaults) | a depth limit (encoding/json: 10,000) |
+
+On the writing side, `Type.Encode` checks the value against the type (and for cycles, invalid UTF-8, shared nodes) before `FormatValue` writes it; `Marshal` writes what the structs hold, checking nothing of the schema.
 
 ### Speed (Python)
 
@@ -596,5 +665,5 @@ Before timing, the checks of the other languages (every haus document decodes, i
 - **A hand-written schema** (BFCL) is one reasonable schema, not the only one; it types what is regular (messages, functions, parameter keywords) and leaves arguments and defaults `Any`.
 - **Minimised vs compact.** Compact haus keeps a space after `:` and `,` and is larger than minified JSON; the like-for-like comparison is minimised haus against minified JSON.
 - **Unlisted members** (388 in GitHub's corpus) are kept as imported JSON, so the haus text holds all of the document's data; a strict reader with a closed schema would reject these documents.
-- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't); in Python, pure-Python haus (no C extension, no dependencies) against C (json's scanner, orjson and msgspec, pydantic-core in Rust). One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
+- **Speed**: in TypeScript, pure-JS haus against the engine's native `JSON.parse`/`JSON.stringify`; in Rust, against serde_json into its generic `Value` (which converts numbers to `f64`/`i64`/`u64`, where haus keeps their text: on number-heavy data such as GeoJSON, that is work serde_json does and haus doesn't); in Go, encoding/json into `any` is slow (reflection, a map per object) and flatters haus: the typed rows and go-json are the fairer comparison, and Go types check less than haus's schema ([above](#the-go-types-of-the-typed-tasks)); in Python, pure-Python haus (no C extension, no dependencies) against C (json's scanner, orjson and msgspec, pydantic-core in Rust). One machine, wall-clock. Ratios measured in the same run are more stable than absolute numbers. The quick modes (`--quick`, used by `smoke`; `HAUS_BENCH_QUICK=1`) are harness checks only.
 - **Tokenizers are proxies** for what each provider bills, and tokenizers.js reproduces each tokenizer's regex closely but not perfectly in every edge case (see its README).

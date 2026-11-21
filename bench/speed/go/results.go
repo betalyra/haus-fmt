@@ -93,8 +93,10 @@ type Results struct {
 	// JSONNotStable counts the documents encoding/json writes back as
 	// another document through any (numbers as float64; it sorts members,
 	// which isn't counted).
-	JSONNotStable int   `json:"jsonNotStable"`
-	Rows          []Row `json:"rows"`
+	JSONNotStable int `json:"jsonNotStable"`
+	// TypedBaselines are the checks of the typed JSON baselines.
+	TypedBaselines TypedBaselines `json:"typedBaselines"`
+	Rows           []Row          `json:"rows"`
 	// Checksum is the sum of the sizes of every task's output, once:
 	// it changes when an output changes.
 	Checksum int64 `json:"checksum"`

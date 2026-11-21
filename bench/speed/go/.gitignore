@@ -1,0 +1,4 @@
+# The Go types of the typed JSON baselines: generated from bench/.out by
+# cmd/jsontypes (go generate), after convert.
+/jsontypes/gen/
+/jsontypes_gen.go

@@ -1,5 +1,6 @@
-// Command speed times the haus Go binding against encoding/json on the
-// exported corpus and writes bench/.out/<source>/speed-go.json for the
+// Command speed times the haus Go binding against encoding/json and
+// goccy/go-json (into any, and into Go types generated from the source's
+// JSON Schema: run `go generate` first) on the exported corpus and writes bench/.out/<source>/speed-go.json for the
 // report (pnpm --filter haus-bench speed-go, or go run ./cmd/speed in
 // bench/speed/go). Options come from the environment: HAUS_BENCH_SOURCES,
 // HAUS_BENCH_QUICK, HAUS_BENCH_OUT (see speed.Settings).
@@ -60,7 +61,7 @@ func bench(settings speed.Settings, machine speed.Machine, source string) error 
 	if err != nil {
 		return err
 	}
-	jsonNotStable, err := in.Check()
+	jsonNotStable, typed, err := in.Check()
 	if err != nil {
 		return err
 	}
@@ -79,12 +80,13 @@ func bench(settings speed.Settings, machine speed.Machine, source string) error 
 	o := settings.Options
 	docs := len(c.Documents)
 	out := speed.Results{
-		Lang:          "go",
-		Harness:       harness,
-		Machine:       machine,
-		Options:       speed.OptionsOut{TimeMs: o.Time.Milliseconds(), WarmupMs: o.Warmup.Milliseconds(), Quick: o.Quick},
-		JSONNotStable: jsonNotStable,
-		Checksum:      checksum,
+		Lang:           "go",
+		Harness:        harness,
+		Machine:        machine,
+		Options:        speed.OptionsOut{TimeMs: o.Time.Milliseconds(), WarmupMs: o.Warmup.Milliseconds(), Quick: o.Quick},
+		JSONNotStable:  jsonNotStable,
+		TypedBaselines: typed,
+		Checksum:       checksum,
 	}
 	for _, d := range c.Documents {
 		out.Documents = append(out.Documents, d.ID)
@@ -120,6 +122,8 @@ func bench(settings speed.Settings, machine speed.Machine, source string) error 
 	for _, r := range out.Rows {
 		fmt.Println(r.Line())
 	}
-	fmt.Printf("encoding/json wrote %d documents back as another document; wrote %s\n\n", jsonNotStable, path)
+	fmt.Printf("encoding/json wrote %d documents back as another document through any\n", jsonNotStable)
+	fmt.Printf("typed JSON baselines: mutated %v, rejected by every Go baseline %v; round trip %+v\n", typed.Mutated, typed.Rejected, typed.RoundTrip)
+	fmt.Printf("wrote %s\n\n", path)
 	return nil
 }
