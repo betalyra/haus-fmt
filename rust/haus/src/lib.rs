@@ -62,6 +62,39 @@ pub use secret::Secret;
 pub use ser::{Encode, Encoder};
 pub use value::Value;
 
+// Every type a program shares between threads is Send and Sync (checked
+// here, at compile time): values, options and limits are plain data, and
+// parsing, writing, formatting, the canonical form, hashing and equality
+// keep their state in the call. An encoding's step budget is counted in a
+// thread-local cell, keyed by the encoding, so encodings on different
+// threads never share it.
+const _: () = {
+    const fn shared<T: Send + Sync>() {}
+    shared::<Value>();
+    shared::<Limits>();
+    shared::<FormatOptions>();
+    shared::<Style>();
+    shared::<Error>();
+    shared::<SyntaxError>();
+    shared::<DecodeError>();
+    shared::<EncodeError>();
+    shared::<ErrorCode>();
+    shared::<Decoder>();
+    shared::<Encoder>();
+    shared::<Json>();
+    shared::<Int>();
+    shared::<Decimal>();
+    shared::<Bytes>();
+    shared::<Unknown>();
+    shared::<AnyTag>();
+    shared::<Secret<String>>();
+    shared::<stream::Options>();
+    shared::<stream::Reader>();
+    shared::<stream::Values<std::io::Empty>>();
+    shared::<time::Date>();
+    shared::<time::Instant>();
+};
+
 /// Include the Rust types haus-fmt-build generated for a schema:
 /// `haus::include_schema!("order")` for `order.schema.haus`.
 #[macro_export]

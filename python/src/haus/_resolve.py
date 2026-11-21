@@ -37,6 +37,7 @@ import importlib.util
 import os
 import re
 import stat
+import threading
 import tomllib
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -374,9 +375,22 @@ class FileResolver:
     reach the same packages, since packages are found by name only.
 
     Each file is read once by a resolver: make a new one to see changed files.
+    A resolver may be shared by threads loading schemas at once: it resolves
+    one import at a time.
     """
 
-    __slots__ = ("_by_name", "_dirs", "_files", "_folders", "_invalid", "_listings", "_modules", "_named", "base")
+    __slots__ = (
+        "_by_name",
+        "_dirs",
+        "_files",
+        "_folders",
+        "_invalid",
+        "_listings",
+        "_lock",
+        "_modules",
+        "_named",
+        "base",
+    )
 
     base: Path
     """Where relative imports of a root file without a key resolve from, and relative directories."""
@@ -412,6 +426,8 @@ class FileResolver:
         self._modules: dict[str, ResolvedModule] = {}
         """Every module resolved, by real path for files and by name for packages."""
         self._listings: dict[Path, frozenset[str]] = {}
+        self._lock = threading.Lock()
+        """Held by `resolve`: the caches above are read and filled by one import at a time."""
 
     def _path(self, path: StrPath) -> Path:
         return Path(os.path.abspath(self.base / path))
@@ -585,10 +601,11 @@ class FileResolver:
         return module, resolver
 
     def resolve(self, module: str, from_key: str | None) -> ResolvedModule:
-        if module.startswith(("./", "../")):
-            return self._file(module, from_key)
-        # The package directory may be a symbolic link (pnpm, workspaces); its files may not be.
-        return self._package(module)
+        with self._lock:
+            if module.startswith(("./", "../")):
+                return self._file(module, from_key)
+            # The package directory may be a symbolic link (pnpm, workspaces); its files may not be.
+            return self._package(module)
 
 
 def installed_package(name: str) -> Path:

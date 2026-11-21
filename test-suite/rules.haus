@@ -134,6 +134,7 @@
 { rule: "security.recursion.smaller-limit", cases: [], untestable: True, note: "MAY: application setting" },
 { rule: "security.schemas.expansive-cycle", cases: ["schema/invalid/growing-array", "schema/invalid/growing-mutual-recursion", "schema/invalid/growing-self-recursion", "schema/invalid/growing-swap", "schema/invalid/growing-three-cycle", "schema/types"] },
 { rule: "security.hash.hides-nothing", cases: [], untestable: True, note: "advice on publishing hashes" },
+{ rule: "security.calls.independent", cases: [], untestable: True, note: "concurrent and repeated calls: tested per binding (Go under -race, JVM and Python with threads, Swift with tasks, Rust and Swift at compile time)" },
 
 // ── §10 Evolution and versions ──
 { rule: "versions.minor.additions", cases: [], untestable: True, note: "policy for the specification" },

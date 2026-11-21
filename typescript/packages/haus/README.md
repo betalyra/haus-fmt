@@ -306,6 +306,10 @@ levels, up to `hausJsonDepth(512)`, 2050, as many as 512 haus levels take in
 self-describing JSON (`jsonDepth(512)`, 2049, in schema-based JSON).
 Formatting, the canonical form and hashing don't recurse: they take any depth.
 
+## Workers
+
+JavaScript runs one call at a time. Parsing, writing and formatting keep their state in the call, and a schema's compiled reader and writer are cached once per schema, whatever the outcome, so a call that throws leaves nothing behind. Nothing uses workers or shared memory: a worker imports the package and builds its own schemas.
+
 ## Errors
 
 Every error has a `code` (spec §17): a short name for the mistake, such as

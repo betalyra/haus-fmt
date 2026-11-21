@@ -60,6 +60,28 @@ pub use packages::{Manifest, Packages};
 pub use resolve::{Definition, Options, Schema, SchemaFile, SchemaPackage};
 pub use types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
 
+// A built schema, its types and its errors are Send and Sync (checked here,
+// at compile time): a schema doesn't change once it is built, so threads
+// may share one. A FileCache (Rc inside) belongs to one load on one thread.
+const _: () = {
+    const fn shared<T: Send + Sync>() {}
+    shared::<Schema>();
+    shared::<SchemaFile>();
+    shared::<SchemaPackage>();
+    shared::<Definition>();
+    shared::<Type>();
+    shared::<Instance>();
+    shared::<Record>();
+    shared::<Variant>();
+    shared::<Issue>();
+    shared::<Error>();
+    shared::<Manifest>();
+    shared::<Packages>();
+    shared::<Explicit>();
+    shared::<NodeModules>();
+    shared::<syntax::File>();
+};
+
 use haus::ErrorCode;
 use std::env;
 use std::fmt::{self, Display};

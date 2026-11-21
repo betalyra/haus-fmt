@@ -46,8 +46,13 @@ enum Builtin: String, CaseIterable, Sendable {
 }
 
 /// A resolved type.
+///
+/// `@unchecked Sendable`: `jsonNull` is the only `var`, and it is set by
+/// `markJSONNull` while `SchemaLoader` builds the schema, on the loading
+/// thread, before any `HausSchema` holding the node exists; after that the
+/// node is never changed, so threads may share it.
 final class SchemaNode: @unchecked Sendable {
-    enum Kind {
+    enum Kind: Sendable {
         case builtin(Builtin)
         /// A std/time type, by name.
         case time(String)
@@ -90,7 +95,7 @@ final class SchemaNode: @unchecked Sendable {
 let shapeIndexFrom = 9
 
 /// `{ … }` or `closed { … }`.
-final class RecordShape: @unchecked Sendable {
+final class RecordShape: Sendable {
     let closed: Bool
     let fields: [FieldType]
     private let index: [CodePointKey: Int]?
@@ -112,7 +117,7 @@ final class RecordShape: @unchecked Sendable {
     }
 }
 
-struct FieldType {
+struct FieldType: Sendable {
     let key: String
     let optional: Bool
     let type: SchemaNode
@@ -120,12 +125,12 @@ struct FieldType {
 }
 
 /// `@deprecated` or `@deprecated("why")` (spec §14).
-struct Deprecation {
+struct Deprecation: Sendable {
     let why: String
 }
 
 /// `< … >` or `closed < … >`.
-final class VariantShape: @unchecked Sendable {
+final class VariantShape: Sendable {
     let open: Bool
     let cases: [CaseType]
     private let index: [String: Int]?
@@ -151,7 +156,7 @@ final class VariantShape: @unchecked Sendable {
 }
 
 /// What a tag takes (spec §15, "Variants").
-enum Payload {
+enum Payload: Sendable {
     /// `Tag`
     case none
     /// `Tag { … }`: one record.
@@ -162,7 +167,7 @@ enum Payload {
     case positional([SchemaNode])
 }
 
-struct CaseType {
+struct CaseType: Sendable {
     let tag: String
     let payload: Payload
     let deprecated: Deprecation?
@@ -184,6 +189,11 @@ struct CaseType {
 }
 
 /// A named type applied to arguments: its body with the parameters replaced.
+///
+/// `@unchecked Sendable`: `body`, `resolved` and `stream` are set while
+/// `SchemaLoader` builds the schema, on the loading thread, before any
+/// `HausSchema` holding the instance exists; after that the instance is
+/// never changed, so threads may share it.
 final class Instance: @unchecked Sendable {
     let name: String
     /// The type's id (spec §13.3): `@haus-fmt/money@1#Money`, `Order`.
