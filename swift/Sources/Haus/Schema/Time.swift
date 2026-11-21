@@ -299,7 +299,8 @@ private func checkOffset(_ o: ArraySlice<UInt8>) throws(TimeMistake) {
 func checkZone(_ z: ArraySlice<UInt8>) -> Result<Void, TimeMistake> {
     // `Z` is the offset letter, not a zone name, and so is `z`.
     if z.elementsEqual("Z".utf8) || z.elementsEqual("z".utf8) {
-        return .failure(.invalid("\(string(z)) is an offset letter, not a zone: write +00:00, or a zone name like Etc/UTC"))
+        return .failure(
+            .invalid("\(string(z)) is an offset letter, not a zone: write +00:00, or a zone name like Etc/UTC"))
     }
     var c = TimeCursor(Array(z))
     if let o = try? c.offset(), c.atEnd {
