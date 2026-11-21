@@ -6,11 +6,13 @@
    Structure
    ───────────────────────────────────────────────────────────────────── *)
 
+(* rule: grammar.structure.file *)
 file        ::= ws ( value ws ( "," ws value ws )* ( "," ws )? )?
                 (* A file is a sequence of zero or more values. A "document"
                    is a sequence of one. Writers of streams SHOULD put a comma
                    after every value, including the last. *)
 
+(* rule: grammar.structure.containers *)
 value       ::= record | array | variant | string | bytes | number
 
 record      ::= "{" ws ( field ws ( "," ws field ws )* ( "," ws )? )? "}"
@@ -19,6 +21,7 @@ key         ::= ident | basic_string
 
 array       ::= "[" ws ( value ws ( "," ws value ws )* ( "," ws )? )? "]"
 
+(* rule: grammar.structure.variant *)
 variant     ::= tag ( [ \t]* payload )?
 payload     ::= "(" ws value ws ( "," ws value ws )* ( "," ws )? ")"
               | record
@@ -33,9 +36,11 @@ payload     ::= "(" ws value ws ( "," ws value ws )* ( "," ws )? ")"
    Lexical
    ───────────────────────────────────────────────────────────────────── *)
 
+(* rule: grammar.lexical.ident-tag *)
 ident       ::= [a-z_] [A-Za-z0-9_]*       (* record keys only *)
 tag         ::= [A-Z] [A-Za-z0-9_]*        (* variant tags only *)
 
+(* rule: grammar.lexical.number *)
 number      ::= "-"? ( decimal | hex | binary )
 decimal     ::= int frac? exp?
 int         ::= "0" | [1-9] ( "_"? [0-9] )*
@@ -47,6 +52,7 @@ binary      ::= "0b" [01] ( "_"? [01] )*
                 (* A number must not be directly followed by [A-Za-z0-9_.].
                    So `007`, `1.`, `1_`, `0x` and `1e` are errors. *)
 
+(* rule: grammar.lexical.bytes *)
 bytes       ::= 'x"' [ \t]* ( hex_byte ( [ \t]* hex_byte )* [ \t]* )? '"'
 hex_byte    ::= hex_digit hex_digit
                 (* A byte string: two hex digits per byte, upper or lower case.
@@ -55,6 +61,7 @@ hex_byte    ::= hex_digit hex_digit
                    Example: x"9f86d081 884c7d65". The prefix is a lowercase x
                    directly followed by the quote. *)
 
+(* rule: grammar.lexical.string *)
 string      ::= basic_string | block_string
 
 basic_string ::= '"' ( basic_char | escape )* '"'
@@ -68,6 +75,7 @@ escape      ::= "\" ( '"' | "\" | "n" | "r" | "t" | "u{" hex_digit hex_digit? he
                    surrogate (D800-DFFF). *)
 hex_digit   ::= [0-9A-Fa-f]
 
+(* rule: grammar.lexical.block-string *)
 block_string ::= '"""' [ \t]* newline block_line* [ \t]* '"""'
 block_line  ::= ( block_char | escape )* newline
 block_char  ::= [^\#x00-#x08#x0A-#x1F#x7F-#x9F#x202A-#x202E#x2066-#x2069]  (* tab allowed *)
@@ -82,9 +90,11 @@ block_char  ::= [^\#x00-#x08#x0A-#x1F#x7F-#x9F#x202A-#x202E#x2066-#x2069]  (* ta
                    `"""` is not part of the value. Escapes are processed after
                    indentation is removed. *)
 
+(* rule: grammar.lexical.newline *)
 newline     ::= #x0A | #x0D #x0A
                 (* A carriage return on its own is an error. *)
 
+(* rule: grammar.lexical.comments *)
 ws          ::= ( [ \t] | newline | comment )*
 comment     ::= line_comment | block_comment
 line_comment  ::= "//" text_char*
@@ -106,6 +116,7 @@ block_comment ::= "/*" ( block_comment | text_char | newline )* "*/"
    §9.9 and §9.10 of spec/README.md) are listed in spec/README.md §14.
    ───────────────────────────────────────────────────────────────────── *)
 
+(* rule: grammar.schema.imports *)
 schema_file ::= ws ( ( import | typedef ) ws )*
 import      ::= "import" ws module ws "(" ws type_name ( ws "," ws type_name )* ws [ "," ws ] ")"
 module      ::= "std/" ident                              (* a standard module: std/time *)
@@ -114,12 +125,14 @@ module      ::= "std/" ident                              (* a standard module: 
 segment     ::= [a-z0-9] [a-z0-9._-]*                    (* npm's rules for scoped names, lowercase; not node_modules *)
 major       ::= "0" | [1-9] [0-9]*                        (* a major version only: not @1.1, not @01 *)
 path        ::= [A-Za-z0-9_./-]*
+(* rule: grammar.schema.typedefs *)
 typedef     ::= ( attribute ws )* "type" ws type_name ( ws param )* ws "=" ws type
 attribute   ::= "@" ident [ "(" ws value ( ws "," ws value )* ws [ "," ws ] ")" ]
                 (* metadata for tools, never for decoding: @deprecated("use email").
                    No space between the name and "(". The attributes are listed
                    in spec/README.md §14. *)
 
+(* rule: grammar.schema.types *)
 type        ::= type_name ( ws atom )+                    (* application: Array Point *)
               | atom
 atom        ::= type_name | param | "(" ws type ws ")"

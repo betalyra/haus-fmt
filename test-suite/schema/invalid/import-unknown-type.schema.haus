@@ -1,0 +1,4 @@
+// rule: packages.imports.reject-not-found
+// std/time defines no type Moment (spec §13.3, Imports).
+import std/time (Moment)
+type A = { at: Moment }

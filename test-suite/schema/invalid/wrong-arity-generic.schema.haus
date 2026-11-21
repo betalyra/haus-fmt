@@ -1,0 +1,4 @@
+// rule: schema.reject.wrong-arity
+// A generic type of the file used with more arguments than it has parameters (spec §14).
+type P a = { x: a }
+type A = { p: P Int String }

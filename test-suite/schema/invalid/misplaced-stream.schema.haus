@@ -1,0 +1,3 @@
+// rule: schema.reject.misplaced-stream
+// Stream is only the whole type of a definition, never the type of a field (spec §14).
+type A = { events: Stream Int }

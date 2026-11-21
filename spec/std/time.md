@@ -11,6 +11,14 @@ nothing depends on a registry.
 
 ## Types
 
+<!-- rule: time.date.form -->
+<!-- rule: time.time.form -->
+<!-- rule: time.datetime.form -->
+<!-- rule: time.instant.form -->
+<!-- rule: time.zoned.form -->
+<!-- rule: time.duration.form -->
+<!-- rule: time.yearmonth.form -->
+<!-- rule: time.timezone.form -->
 | Type | Form | Example |
 |---|---|---|
 | `Date` | `YYYY-MM-DD` | `Date("2026-11-09")` |
@@ -24,6 +32,18 @@ nothing depends on a registry.
 
 ## Rules
 
+<!-- rule: time.rules.year -->
+<!-- rule: time.rules.day -->
+<!-- rule: time.rules.month -->
+<!-- rule: time.rules.clock -->
+<!-- rule: time.rules.leap-seconds -->
+<!-- rule: time.rules.fraction -->
+<!-- rule: time.rules.separators -->
+<!-- rule: time.rules.offset -->
+<!-- rule: time.rules.zone -->
+<!-- rule: time.rules.rfc9557-tags -->
+<!-- rule: time.rules.duration -->
+<!-- rule: time.rules.other-iso-forms -->
 | Rule | Accepted | Rejected |
 |---|---|---|
 | Year | `0000`–`9999`, exactly 4 digits; `0000` is 1 BC, as in ISO 8601 | `+12026-11-09`, `-0001-01-01` |
@@ -43,7 +63,9 @@ nothing depends on a registry.
 
 Nothing that depends on a registry:
 
+<!-- rule: time.no-registry.zone-names -->
 - whether a zone name exists in the tz database (`Europe/Atlantis` is valid);
+  <!-- rule: time.no-registry.offset-match -->
 - whether the offset of a `ZonedDateTime` matches its zone at that time. When
   the tz database changes, a stored `…+01:00[Europe/Lisbon]` may stop matching;
   it stays valid, and the application decides what to do (like Temporal's
@@ -53,6 +75,7 @@ Nothing that depends on a registry:
 
 ## Values
 
+<!-- rule: time.values.haus-equality -->
 std/time never changes what a haus value is. `Instant("…T10:00:00.250Z")` is
 a tag with a string, and haus equality, the canonical form and `hash` (spec
 §2, §12) compare that string as written: `.250` and `.25`, or `Z` and `+00:00`,
@@ -60,14 +83,17 @@ give different hashes, as `19.90` and `19.9` do. What std/time adds, for a schem
 for its types, is which strings are valid and which valid strings denote the
 same time:
 
+<!-- rule: time.values.fraction-zeros -->
 - **Fractions of a second:** trailing zeros don't change the value, in every
   type with seconds. `.250` and `.25` are the same fraction, and `.0` or
   `.000` the same as none (`12:00:00.000` is `12:00:00`, `PT1.50S` is
   `PT1.5S`). They are accepted because common writers produce them
   (JavaScript's `toISOString` always writes three digits).
+  <!-- rule: time.values.offset-kept -->
 - **Offsets:** `…T14:30:00+01:00` and `…T13:30:00Z` are the same instant.
   The offset also says which local time was meant, so it isn't just a
   spelling: an encoder keeps it.
+  <!-- rule: time.values.offset-zero -->
 - **Offset zero:** `Z` and `+00:00` are both the offset zero, so
   `…T13:30:00Z` and `…T13:30:00+00:00` are the same value. Both are accepted
   because common writers produce `+00:00` (Python's `isoformat`); `-00:00`
@@ -76,6 +102,7 @@ same time:
   letters and separators have one case, a duration leaves out components
   that are zero, and the zero duration is `PT0S`, without a sign.
 
+<!-- rule: time.compare.semantics -->
 How values compare:
 
 - `Instant` is a point on the timeline.
@@ -97,6 +124,8 @@ cover every row above.
 
 ## Host types
 
+<!-- rule: time.host.whole-range -->
+<!-- rule: time.host.native-opt-in -->
 Every binding accepts the same values: the whole range above, in every type.
 How a program holds them is the binding's choice (spec §13.4). JavaScript's
 Temporal, Go's `time.Time` and `java.time` hold the whole range. Python's

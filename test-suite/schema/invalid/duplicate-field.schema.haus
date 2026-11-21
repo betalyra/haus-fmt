@@ -1,0 +1,3 @@
+// rule: schema.reject.duplicate-field
+// A record type that lists the same field twice (spec §14).
+type A = { x: Int, x: String }
