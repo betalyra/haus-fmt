@@ -5,8 +5,13 @@ data.absence.maybe-required
 strings.error.outside-key
 strings.error.outside-after-value
 streams.document.one-value
+streams.document.no-value
+streams.document.trailing-comma
 limits.string.default
 limits.value.default
+limits.characters.code-points
+limits.number.whole-literal
+limits.hex.both-limits
 limits.value.stream-only
 limits.depth.counting
 positions.text.line-column
@@ -19,6 +24,9 @@ format.options.reject-negative
 format.options.zero-not-default
 format.bytes.serialized
 format.numbers.serialized
+format.pretty.stream.multiline-by-value
+format.comments.after-multiline-comment
+format.comments.moved-blank-line
 format.comments.width-excluded
 canonical.form.parses-back
 canonical.api.equals

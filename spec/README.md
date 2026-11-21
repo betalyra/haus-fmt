@@ -180,7 +180,9 @@ Two values are equal when they have the same kind and:
   <!-- rule: streams.truncation.strict-mode -->
 - **Truncation:** a cut-off last value can look valid, e.g. `100` instead of `1000`. Readers of network streams SHOULD offer a strict mode that requires the comma after the last value and reports a truncated stream otherwise.
   <!-- rule: streams.document.one-value -->
-- **One value too many:** a reader expecting a single document MUST reject a sequence of two or more values.
+  <!-- rule: streams.document.no-value -->
+  <!-- rule: streams.document.trailing-comma -->
+- **One value too many:** a reader expecting a single document MUST reject a sequence of two or more values, and also an input with no value at all (empty, or only whitespace and comments); both are `not-one-value`. A comma after the one value is allowed, as in a stream: `1,` is a single document.
 
 ## 7. Limits
 
@@ -204,6 +206,11 @@ Implementations MUST enforce limits while parsing and MUST let users configure t
 | characters in one string (its value, after escapes and a block string's indent are processed), record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
 | characters in one top-level value of a stream | 64 Mi (67,108,864) |
 
+<!-- rule: limits.characters.code-points -->
+<!-- rule: limits.number.whole-literal -->
+<!-- rule: limits.hex.both-limits -->
+**Characters** are Unicode code points throughout this specification, whatever a language uses for its strings: an emoji is one character, also where the language stores it as two UTF-16 units. A number literal's characters are all of it as written: its sign, `0x` or `0b` prefix, digit separators `_` and exponent count. A hex literal stays within both of its limits: at most 829 hex digits (its `_` not counted) and at most 1000 characters as a whole (its `_` counted).
+
 <!-- rule: limits.value.counting -->
 <!-- rule: limits.value.stream-only -->
 A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: whitespace and comments before the value count, the commas don't. A value of exactly the limit is accepted. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
@@ -221,7 +228,7 @@ A binding whose parser, decoder or encoder uses the call stack MAY support only 
 
 <!-- rule: limits.time.linear -->
 <!-- rule: limits.duplicate-keys.unpredictable -->
-Parsing time MUST be linear in the input size for any input within the limits, also for input crafted against the implementation, with one allowance: duplicate keys (§3) MAY be found with a sorted structure in O(n log n). Otherwise they are found with a hash table whose hash an attacker can't predict (seeded at random per process, as SipHash in Rust, Python and JavaScript engines are); never with a list scan or a hash with a fixed seed, which crafted keys turn quadratic.
+Parsing time MUST be linear in the input size for any input within the limits, also for input crafted against the implementation, with one allowance: duplicate keys (§1) MAY be found with a sorted structure in O(n log n). Otherwise they are found with a hash table whose hash an attacker can't predict (seeded at random per process, as SipHash in Rust, Python and JavaScript engines are); never with a list scan or a hash with a fixed seed, which crafted keys turn quadratic.
 
 ## 8. Error positions
 
@@ -242,7 +249,7 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
    <!-- rule: security.errors.quoted-text-escaped -->
    <!-- rule: security.errors.version-quoted-if-valid -->
    <!-- rule: security.packages.declared-places -->
-2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that errors quote from files (a token, a name, a version) is escaped (control and bidirectional characters) and at most 40 characters long; a version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used.
+2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that errors quote from files (a token, a name, a version) is escaped (control and bidirectional characters) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40; a version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used.
    <!-- rule: security.limits.while-parsing -->
 3. **Enforce limits while parsing** (§7), not afterwards.
    <!-- rule: security.keys.data-only -->
@@ -319,9 +326,11 @@ fits on one line. Formatters MUST produce them exactly.
 Both numbers are whole numbers of zero or more, and mean what they say: indent 0
 writes every line without indentation, and width 0 is a width nothing fits in,
 so every positional payload gets one argument per line. A formatter MUST reject
-a negative indent or width rather than clamp it, and MUST NOT read 0 as "use the
-default": an API that needs a way to leave an option unset uses a separate value
-for it (an absent option, not 0). Compact and minimised take neither.
+a negative indent or width rather than clamp it, as a misuse of its API (the
+codes of §17 name mistakes in documents, so none applies), and MUST NOT read 0
+as "use the default": an API that needs a way to leave an option unset uses a
+separate value for it (an absent option, not 0). Compact and minimised don't use
+them; an API may accept them there and ignore them.
 
 <!-- rule: format.pretty.keeps-comments -->
 <!-- rule: format.compact.drops-comments -->
@@ -334,6 +343,9 @@ for it (an absent option, not 0). Compact and minimised take neither.
 
 <!-- rule: format.layouts.same-values -->
 The canonical form (§12) is the fourth way to write values; it sorts keys and normalizes spellings, for hashing. All four forms of the same values have the same hash (§12), as they parse to the same values.
+
+<!-- rule: format.empty.file -->
+**Empty files.** A file with no values and no comments (empty, or only whitespace) is written as empty text in every layout, without a line break. So is a file with only comments in compact and minimised, which drop them.
 
 <!-- rule: format.strings.escaped-alike -->
 Strings are escaped alike in every layout: `\"`, `\\`, and `\u{…}` for raw control characters, bidi controls and the line and paragraph separators U+2028 and U+2029 (which some software splits lines at); a string is never written with any of them raw.
@@ -382,22 +394,27 @@ For people.
   <!-- rule: format.strings.form-change -->
   <!-- rule: format.numbers.serialized -->
   <!-- rule: format.numbers.too-long-unwritable -->
-- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the number limit (§7) of the reader written for can't be written (`number-too-long`).
+- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the writer's number limit (§7, the default unless configured otherwise) can't be written (`number-too-long`).
   <!-- rule: format.pretty.stream.commas -->
   <!-- rule: format.pretty.stream.blank-after-multiline -->
   <!-- rule: format.pretty.stream.trailing-comments -->
-- **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows. A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
+  <!-- rule: format.pretty.stream.multiline-by-value -->
+- **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows (an item is multi-line when its value is written over more than one line; comments after it don't make it so). A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
 - **Comments** are kept (they are part of the layout, not of the data model):
   <!-- rule: format.comments.own-line -->
   - A comment on its own line stays above the entry that follows it.
     <!-- rule: format.comments.after-entry -->
   - A comment after an entry on the same line stays after that entry's comma.
+    <!-- rule: format.comments.after-multiline-comment -->
+  - Once such a comment spans lines (a block comment with a line break), the comments that follow it lead the next entry instead.
     <!-- rule: format.comments.before-closer -->
   - Comments before a closing bracket stay at the end of the container.
     <!-- rule: format.comments.after-opener -->
   - A comment after an opening bracket, on the same line, moves above the container's first entry.
     <!-- rule: format.comments.key-colon -->
   - A comment between a key and its colon, or between the colon and the value, moves above the entry, after the entry's own comments above it.
+    <!-- rule: format.comments.moved-blank-line -->
+  - When comments move above an entry (from between its key and value, or out of `Tag( … )`, below), a blank line the entry had above it goes before the moved comments.
     <!-- rule: format.comments.paren-record -->
   - `Tag({ … })` is written `Tag { … }`: comments inside its parentheses but outside the braces move inside the braces. A comment after the closing `)` on the same line stays after the last entry when the `}` was on that entry's line, and otherwise goes at the end of the container.
     <!-- rule: format.comments.width-excluded -->
@@ -407,7 +424,7 @@ For people.
   <!-- rule: format.pretty.blank-lines -->
 - **Blank lines** between entries (and between comments and entries) are kept, at most one. Blank lines right after an opening bracket or right before a closing one are dropped.
   <!-- rule: format.pretty.line-endings -->
-- **Line endings:** LF everywhere, inside comments too (a CR LF in a comment is written as LF; block strings already join their lines with LF), and the file ends with a line break.
+- **Line endings:** LF everywhere, inside comments too (a CR LF in a comment is written as LF; block strings already join their lines with LF), and a file with anything in it ends with a line break (empty files above).
 
 ### Compact
 
@@ -423,7 +440,7 @@ Person { name: "Jane Smith", age: 28, type: Designer },
   <!-- rule: format.compact.no-multiline-strings -->
 - **Strings never span lines:** multi-line text uses `\n` escapes, and U+2028 and U+2029 are escaped too, so a compact stream can be split by lines (like NDJSON) and is still valid haus.
   <!-- rule: format.compact.stream-commas -->
-- **Streams:** every item is followed by `,`.
+- **Streams:** a file with more than one item puts `,` after every item; a single item is written without one, as in pretty.
   <!-- rule: format.compact.comments-dropped -->
 - **Comments are dropped,** also those between top-level items.
   <!-- rule: format.compact.spellings-kept -->
@@ -441,7 +458,7 @@ Person{name:"Jane Smith",age:28,type:Designer},
 ```
 
 <!-- rule: format.minimised.no-whitespace -->
-- **Each top-level item on a single line,** with no space or tab anywhere outside strings and byte strings. Streams as in compact: every item is followed by `,`.
+- **Each top-level item on a single line,** with no space or tab anywhere outside strings and byte strings. Streams as in compact: `,` after every item when there is more than one.
   <!-- rule: format.minimised.literals-as-written -->
 - **Literals stay as written:** digit separators (`1_000`), the case of hex digits, and the blanks inside a byte string (`x"9f86 d081"`) are spelling, not whitespace between tokens. When serializing values with no source text, they are written as in pretty.
   <!-- rule: format.minimised.comments-dropped -->
@@ -777,7 +794,10 @@ Codecs are part of the application, not of the schema. Two applications reading 
 
 <!-- rule: schema.lexical.as-data -->
 <!-- rule: schema.keys.escapes -->
-A schema file (`.schema.haus`, grammar in [`grammar.ebnf`](grammar.ebnf)) is a list of imports (§13) and type definitions. It has the same comments, whitespace and quoted strings as data files (§4, §5), with the same rules and error codes: a lone carriage return, a raw control or bidi character in a comment, invalid UTF-8, an unterminated string or comment, and a bad escape in a quoted field key are reported as in data (`lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `unterminated-string`, `unterminated-comment`, `invalid-escape`), and a quoted field key takes every escape a data string does.
+A schema file (`.schema.haus`, grammar in [`grammar.ebnf`](grammar.ebnf)) is a list of imports (§13) and type definitions. It has the same comments, whitespace and quoted strings as data files (§4 and the grammar), with the same rules and error codes: a lone carriage return, a raw control or bidi character in a comment, invalid UTF-8, an unterminated string or comment, and a bad escape in a quoted field key are reported as in data (`lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `unterminated-string`, `unterminated-comment`, `invalid-escape`), and a quoted field key takes every escape a data string does.
+
+<!-- rule: schema.types.max-nesting -->
+Type expressions nest at most 128 levels deep, a fixed limit: each parenthesized type, record `{ … }` and variant `< … >` is one level, and deeper nesting is `type-too-deep`.
 
 <!-- rule: schema.open.default -->
 <!-- rule: schema.open.closed -->
@@ -1169,7 +1189,7 @@ The catalogue is [`errors.md`](errors.md), generated from its machine-readable s
   <!-- rule: errors.code.one-mistake -->
 - A code names one mistake that its user can fix, not one message: a missing comma between two values is `missing-comma`, and a payload on the line after its tag is `payload-newline`, although both are found as "no comma where one is needed".
   <!-- rule: errors.code.same-everywhere -->
-- Which error is reported when an input has several is not fixed (§8, §15). For an input with one mistake, every implementation reports the same code; the conformance suite checks this (test-suite/README.md).
+- Which error is reported when an input has several is not fixed. For an input with one mistake, every implementation reports the same code; the conformance suite checks this (test-suite/README.md).
 
 <!-- rule: errors.json.object -->
 **JSON form.** An implementation that reports errors to programs, as a library or a command-line tool, SHOULD offer each error as a JSON object:
