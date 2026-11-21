@@ -491,3 +491,38 @@ errors), in every checker.
 
 Decide what the spec says, fix the parser (or the spec), and add the shrunk
 input to [`../test-suite`](../test-suite) so it stays fixed.
+
+## Coverage
+
+[`src/coverage.ts`](src/coverage.ts) measures what the fuzzers exercise: it
+makes one corpus per mode with the fuzzers' own generators (parse,
+canonical, format, json, schema, schema-check; 3000 cases each by default,
+seed 1), replays it through instrumented builds of the Rust, Go and
+TypeScript runners, and lists per source file the lines, regions or
+statements and functions the corpus never reaches. Not run in CI.
+
+```sh
+node fuzz/src/coverage.ts                          # about a minute; builds what it needs
+node fuzz/src/coverage.ts --langs go --modes schema,json --count 10000
+node fuzz/src/coverage.ts --no-generate --no-build # replay the corpus again
+node fuzz/src/coverage.ts --report RUN --no-build  # only the reports again, from .out/coverage/raw/RUN
+```
+
+| Language | Instrumented with | Counts |
+|---|---|---|
+| Rust | `RUSTFLAGS=-C instrument-coverage` (the runners of `rust/haus` and [`schema-rust`](schema-rust), built into `.out/coverage/build`), `llvm-profdata` and `llvm-cov` of rustc's LLVM version (rustup's `llvm-tools`, or one on `PATH`; `LLVM_PROFDATA` and `LLVM_COV` override) | lines, regions (an arm, a `?`, an operand of `&&`: stable rustc has no branch counters) |
+| Go | `go build -cover` of [`go/`](go) over the module's packages, `GOCOVERDIR`, `go tool covdata` and `go tool cover` | lines, statements (Go counts nothing finer) |
+| TypeScript | Node's own block coverage (`NODE_V8_COVERAGE`) of the in-process runners, mapped from `typescript/packages/haus/dist` to `src` through the source maps; no dependency | lines, places never run (V8 folds a block that ran into its parent, so there is no total to divide by) |
+
+The corpus goes to `.out/corpus/<mode>/`, in the runners' input formats
+(with a `manifest.json`); the reports to `.out/coverage/<lang>/`
+(`summary.md` per area and file, `uncovered.txt` with every function never
+called and every place never reached, with its source line, and HTML) and
+`.out/coverage/summary.md`. Raw profiles go to `.out/coverage/raw/<run>/`,
+a directory per run that the script never deletes. The corpus follows the
+fuzzers' generation loops, with two differences: the formatter batches are
+250 cases (so a small corpus sees the other options), and the third of
+`read` that the JSON fuzzer seeds from Lean's JSON is seeded from
+TypeScript's (the fuzzer keeps them equal), so Lean needn't be built.
+std/time and the profiles (`time.ts`, `profiles.ts`) and the Effect runners
+are not measured.
