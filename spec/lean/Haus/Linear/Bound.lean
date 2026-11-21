@@ -197,6 +197,15 @@ theorem boundAt_succ (L : Limits) (fuel : Nat) (ih : BoundAt L fuel) : BoundAt L
     · refine spec_bind (keyC_spec L t) (fun k t1 c1 ⟨h1, hb, hk, h1'⟩ => ?_) (fun c1 h1 => ?_)
       rotate_left
       · have := blanks_le t; unfold ErrB; omega
+      have hkb := keyBits_string_length k
+      have hm := KeySet.memC_cost ks (keyBits k.toList)
+      have hi := KeySet.insertC_cost ks (keyBits k.toList)
+      apply spec_tick_bind
+      apply spec_tick_bind
+      refine spec_ite (fun _ => spec_bind (spec_failAtC (S := fun _ _ _ => False) (F := fun n => n = 1) rfl) (fun _ _ _ h => h.elim)
+        (fun c6 h6 => ?_)) (fun _ => ?_)
+      · subst h6; unfold ErrB; omega
+      apply spec_tick_bind
       refine spec_bind (wsC_spec t1) (fun _ t2 c2 ⟨h2, h2'⟩ => ?_) (fun c2 h2 => ?_)
       rotate_left
       · unfold ErrB; omega
@@ -211,15 +220,6 @@ theorem boundAt_succ (L : Limits) (fuel : Nat) (ih : BoundAt L fuel) : BoundAt L
       rotate_left
       · unfold ErrB at *; simp only [List.length_cons] at *; omega
       unfold OkB at h5
-      have hkb := keyBits_string_length k
-      have hm := KeySet.memC_cost ks (keyBits k.toList)
-      have hi := KeySet.insertC_cost ks (keyBits k.toList)
-      apply spec_tick_bind
-      apply spec_tick_bind
-      refine spec_ite (fun _ => spec_bind (spec_failAtC (S := fun _ _ _ => False) (F := fun n => n = 1) rfl) (fun _ _ _ h => h.elim)
-        (fun c6 h6 => ?_)) (fun _ => ?_)
-      · subst h6; have := blanks_le t5; unfold ErrB; simp only [List.length_cons] at *; omega
-      apply spec_tick_bind
       refine spec_bind (wsC_spec t5) (fun _ t6 c6 ⟨h6, h6'⟩ => ?_) (fun c6 h6 => ?_)
       rotate_left
       · have := blanks_le t5; unfold ErrB; simp only [List.length_cons] at *; omega

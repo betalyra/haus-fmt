@@ -38,6 +38,14 @@ type Limits struct {
 	// [StreamReader] applies it, as it bounds the reader's memory; [ParseAll]
 	// and the other functions given the whole text don't (spec §7).
 	MaxValueLength int
+	// MaxNodes is the most values written for one top-level value built in
+	// code: the value and every element, field value and argument inside
+	// it, each as often as it is written (spec §7, "Values written"). A
+	// value whose arrays or records share one another (a DAG) is small in
+	// memory and can be exponentially larger written out; writers,
+	// [CheckValue], [Canonical] and [Hash] stop at this limit with
+	// too-many-nodes. Default 64 Mi.
+	MaxNodes int
 }
 
 // The default limits of spec §7.
@@ -47,6 +55,7 @@ const (
 	DefaultMaxExponent     = 6144
 	DefaultMaxStringLength = 16 << 20
 	DefaultMaxValueLength  = 64 << 20
+	DefaultMaxNodes        = 64 << 20
 )
 
 // DefaultLimits returns the default limits of spec §7.
@@ -57,6 +66,7 @@ func DefaultLimits() Limits {
 		MaxExponent:     DefaultMaxExponent,
 		MaxStringLength: DefaultMaxStringLength,
 		MaxValueLength:  DefaultMaxValueLength,
+		MaxNodes:        DefaultMaxNodes,
 	}
 }
 
@@ -75,6 +85,7 @@ func (l Limits) resolve() (Limits, error) {
 		MaxExponent:     pick(l.MaxExponent, d.MaxExponent),
 		MaxStringLength: pick(l.MaxStringLength, d.MaxStringLength),
 		MaxValueLength:  pick(l.MaxValueLength, d.MaxValueLength),
+		MaxNodes:        pick(l.MaxNodes, d.MaxNodes),
 	}
 	if r.MaxDepth > MaxSupportedDepth {
 		return r, newError(CodeUnsupportedDepth,

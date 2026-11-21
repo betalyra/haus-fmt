@@ -89,7 +89,7 @@ fn same(got: &Outcome, want: &Outcome) -> bool {
 #[test]
 fn stream_suite() {
     let cases = cases();
-    assert_eq!(cases.len(), 24, "the suite's cases");
+    assert_eq!(cases.len(), 26, "the suite's cases");
     let mut failures = Vec::new();
     for c in &cases {
         for (how, chunks) in splits(&c.text) {

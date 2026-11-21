@@ -64,7 +64,7 @@ func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accept
 		if err != nil {
 			t.Fatalf("%s: %v", text, err)
 		}
-		switch x.Tag {
+		switch x.Tag.String() {
 		case "Accept":
 			accepted++
 			host, err := schema.DecodeAs[any](ty, value, codec)
@@ -107,7 +107,7 @@ func Run(t *testing.T, dir, file string, codecs map[string]schema.Codec) (accept
 				t.Errorf("%s: got %v, want codec-rejected", text, err)
 			}
 		default:
-			t.Fatalf("unknown vector %s", x.Tag)
+			t.Fatalf("unknown vector %s", x.Tag.String())
 		}
 	}
 	return accepted, rejected

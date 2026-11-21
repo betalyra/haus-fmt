@@ -28,9 +28,9 @@ final class Parts {
         /// A record of the fields kept.
         case record
         /// The variant `tag` with the parts as its arguments.
-        case variant(String)
+        case variant(HausTag)
         /// The variant `tag` with the fields kept as its record payload.
-        case payload(String)
+        case payload(HausTag)
     }
 
     /// The steps of the parts in the path.

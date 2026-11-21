@@ -12,3 +12,13 @@ type Sealed = closed { id: Int }
 type Unsealed = { ...Sealed, note?: String }
 type Fixed = closed < A | B Int >
 type Extended = < ...Fixed | C >
+
+// A spread through other names: an alias, an instance of a generic type (spec §14, "Spreads").
+type AliasEvent = UserEvent
+type ViaAlias = closed < ...AliasEvent | Ping >
+type Page a = { items: Array a }
+type IntPage = Page Int
+type Listing = closed { ...IntPage, total: Int }
+// A closed variant of spreads that copy no tag: accepted as written, it accepts no tag (spec §14).
+type NoTags = < >
+type ClosedNoTags = closed < ...NoTags >

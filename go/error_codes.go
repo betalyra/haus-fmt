@@ -9,15 +9,15 @@ const (
 	CodeInvalidUTF8 ErrorCode = "invalid-utf8"
 	// CodeVersionDirective is "version-directive": The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.
 	CodeVersionDirective ErrorCode = "version-directive"
-	// CodeExpectedValue is "expected-value": A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be.
+	// CodeExpectedValue is "expected-value": A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be, also a closing bracket (`[}`, `]`, `1,]`). After a key's colon the end of the input is this error too; anywhere else inside a bracket it is `unclosed-bracket`.
 	CodeExpectedValue ErrorCode = "expected-value"
 	// CodeMissingComma is "missing-comma": Two values, fields or top-level values follow each other without a comma between them.
 	CodeMissingComma ErrorCode = "missing-comma"
 	// CodePayloadNewline is "payload-newline": A tag is followed by `(` or `{` on a later line, or after a comment. A payload must start on the tag's line (§5), so the two are read as separate values, and a comma is missing between them.
 	CodePayloadNewline ErrorCode = "payload-newline"
-	// CodeUnexpectedCloser is "unexpected-closer": A closing bracket that doesn't match the open one, or that has no open one.
+	// CodeUnexpectedCloser is "unexpected-closer": A closing bracket after a value that doesn't match the open one (`[1}`), or that has no open one (`{ a: 1 }}`). Where a value or key is expected, a closing bracket is `expected-value` or `expected-key`.
 	CodeUnexpectedCloser ErrorCode = "unexpected-closer"
-	// CodeUnclosedBracket is "unclosed-bracket": A `{`, `[` or `(` is never closed: the input ends first.
+	// CodeUnclosedBracket is "unclosed-bracket": A `{`, `[` or `(` is never closed: the input ends first (`[1,`, `Some(`), except right after a key's colon, where it is `expected-value`.
 	CodeUnclosedBracket ErrorCode = "unclosed-bracket"
 	// CodeNullLiteral is "null-literal": `null` is not a value: haus has no null (§1).
 	CodeNullLiteral ErrorCode = "null-literal"
@@ -47,11 +47,11 @@ const (
 	CodeControlCharacter ErrorCode = "control-character"
 	// CodeBidiControl is "bidi-control": A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, or in a self-describing JSON string (§16), where it could reorder how the text is displayed ("Trojan Source", §9).
 	CodeBidiControl ErrorCode = "bidi-control"
-	// CodeInvalidEscape is "invalid-escape": A backslash followed by a character that doesn't start an escape. haus has `\"`, `\\`, `\n`, `\r`, `\t` and `\u{…}`; JSON has its own set.
+	// CodeInvalidEscape is "invalid-escape": A backslash followed by a character that doesn't start an escape, or by the end of the input. haus has `\"`, `\\`, `\n`, `\r`, `\t` and `\u{…}`; JSON has its own set.
 	CodeInvalidEscape ErrorCode = "invalid-escape"
 	// CodeInvalidUnicodeEscape is "invalid-unicode-escape": A `\u` escape that isn't `\u{` 1 to 6 hex digits `}`, or names no Unicode scalar value (a surrogate, or above 10FFFF). In JSON: `\u` not followed by four hex digits.
 	CodeInvalidUnicodeEscape ErrorCode = "invalid-unicode-escape"
-	// CodeBlockStringOpening is "block-string-opening": Text after the opening `"""` of a block string. The content starts on the next line.
+	// CodeBlockStringOpening is "block-string-opening": Text after the opening `"""` of a block string, or the end of the input right after it. The content starts on the next line.
 	CodeBlockStringOpening ErrorCode = "block-string-opening"
 	// CodeBlockStringClosing is "block-string-closing": The closing `"""` of a block string has text before it on its line.
 	CodeBlockStringClosing ErrorCode = "block-string-closing"
@@ -61,9 +61,9 @@ const (
 	CodeUnterminatedBlockString ErrorCode = "unterminated-block-string"
 	// CodeUnterminatedBytes is "unterminated-bytes": A byte string `x"…` has no closing `"`.
 	CodeUnterminatedBytes ErrorCode = "unterminated-bytes"
-	// CodeBytesNotHex is "bytes-not-hex": A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break.
+	// CodeBytesNotHex is "bytes-not-hex": A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break, where a byte starts. After a byte's first digit, anything but a second one is `bytes-odd-digits`.
 	CodeBytesNotHex ErrorCode = "bytes-not-hex"
-	// CodeBytesOddDigits is "bytes-odd-digits": A byte in a byte string has only one hex digit: an odd number of digits, or a space inside a byte.
+	// CodeBytesOddDigits is "bytes-odd-digits": A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x"az"`).
 	CodeBytesOddDigits ErrorCode = "bytes-odd-digits"
 	// CodeLoneCarriageReturn is "lone-carriage-return": A carriage return (CR) not followed by a line feed. Line breaks are LF or CRLF.
 	CodeLoneCarriageReturn ErrorCode = "lone-carriage-return"
@@ -111,9 +111,9 @@ const (
 	CodeDuplicateField ErrorCode = "duplicate-field"
 	// CodeDuplicateTag is "duplicate-tag": A variant type lists the same tag twice, also one copied in by a spread.
 	CodeDuplicateTag ErrorCode = "duplicate-tag"
-	// CodeClosedEmptyVariant is "closed-empty-variant": `closed < >`: a closed variant without tags accepts nothing.
+	// CodeClosedEmptyVariant is "closed-empty-variant": `closed < >`: a closed variant without tags accepts nothing. Checked as written: `closed < ...E >` is accepted even when `E` has no tags.
 	CodeClosedEmptyVariant ErrorCode = "closed-empty-variant"
-	// CodeInvalidSpread is "invalid-spread": A spread of something that can't be spread: not a named type, a type with parameters, a `Stream`, or a record spread into a variant (or a variant into a record).
+	// CodeInvalidSpread is "invalid-spread": A spread of something that can't be spread: not a named type, a type with parameters, a `Stream`, a type of the prelude (`...Bool`), or a record spread into a variant (or a variant into a record). An alias or a generic instance is spread as what it stands for.
 	CodeInvalidSpread ErrorCode = "invalid-spread"
 	// CodeSpreadCycle is "spread-cycle": A type spreads itself, directly or through other types.
 	CodeSpreadCycle ErrorCode = "spread-cycle"
@@ -129,13 +129,13 @@ const (
 	CodeTypeTooDeep ErrorCode = "type-too-deep"
 	// CodeAttributeArguments is "attribute-arguments": An attribute this version defines, given arguments it doesn't take: `@deprecated` takes nothing or one string. Also empty parentheses after an attribute.
 	CodeAttributeArguments ErrorCode = "attribute-arguments"
-	// CodeAttributeTwice is "attribute-twice": The same attribute twice on one type, field or tag.
+	// CodeAttributeTwice is "attribute-twice": The same attribute twice on one type, field or tag, for an attribute this version defines. One it doesn't define may appear twice, with a warning each (`unknown-attribute`).
 	CodeAttributeTwice ErrorCode = "attribute-twice"
 	// CodeAttributeSpace is "attribute-space": A space between an attribute's name and its `(`.
 	CodeAttributeSpace ErrorCode = "attribute-space"
 	// CodeAttributeOnSpread is "attribute-on-spread": An attribute on a spread. The fields and tags a spread copies keep their own attributes.
 	CodeAttributeOnSpread ErrorCode = "attribute-on-spread"
-	// CodeUnknownModule is "unknown-module": An import of a module that doesn't exist: an unknown standard module, a former standard module, or a name that is neither `std/…`, a package `@org/name` nor a file `./name`.
+	// CodeUnknownModule is "unknown-module": An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf).
 	CodeUnknownModule ErrorCode = "unknown-module"
 	// CodeUnknownImport is "unknown-import": An import names a type the module doesn't have, or no type at all.
 	CodeUnknownImport ErrorCode = "unknown-import"
@@ -145,7 +145,7 @@ const (
 	CodeImportUnavailable ErrorCode = "import-unavailable"
 	// CodeImportNotFound is "import-not-found": An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.
 	CodeImportNotFound ErrorCode = "import-not-found"
-	// CodeImportVersion is "import-version": An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.
+	// CodeImportVersion is "import-version": An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf).
 	CodeImportVersion ErrorCode = "import-version"
 	// CodeImportCycle is "import-cycle": Schema files import each other in a cycle.
 	CodeImportCycle ErrorCode = "import-cycle"
@@ -155,7 +155,7 @@ const (
 	CodeUndeclaredPackage ErrorCode = "undeclared-package"
 	// CodePackageManifest is "package-manifest": A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB.
 	CodePackageManifest ErrorCode = "package-manifest"
-	// CodePackageVersion is "package-version": A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3).
+	// CodePackageVersion is "package-version": A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly that has a `package.json` next to its manifest.
 	CodePackageVersion ErrorCode = "package-version"
 	// CodePackagePath is "package-path": A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.
 	CodePackagePath ErrorCode = "package-path"
@@ -203,9 +203,9 @@ const (
 	CodeCyclicValue ErrorCode = "cyclic-value"
 	// CodeStepBudget is "step-budget": Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).
 	CodeStepBudget ErrorCode = "step-budget"
-	// CodeTooManyNodes is "too-many-nodes": A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.
+	// CodeTooManyNodes is "too-many-nodes": A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it.
 	CodeTooManyNodes ErrorCode = "too-many-nodes"
-	// CodeJSONSyntax is "json-syntax": Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.
+	// CodeJSONSyntax is "json-syntax": Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first. A string that isn't closed, and a bad escape, have the codes of haus text: `unterminated-string`, `invalid-escape`, `invalid-unicode-escape`.
 	CodeJSONSyntax ErrorCode = "json-syntax"
 	// CodeUnpairedSurrogate is "unpaired-surrogate": A JSON string with half of a UTF-16 surrogate pair, raw or as `\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).
 	CodeUnpairedSurrogate ErrorCode = "unpaired-surrogate"
@@ -370,11 +370,11 @@ var errorCodeList = []ErrorCode{
 var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeInvalidUTF8:             {CategorySyntax, "The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.", "Save the file as UTF-8."},
 	CodeVersionDirective:        {CategorySyntax, "The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.", "Read the file with a version of haus that supports it."},
-	CodeExpectedValue:           {CategorySyntax, "A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be.", "Write a value here, or remove the extra comma or bracket."},
+	CodeExpectedValue:           {CategorySyntax, "A value is missing: after a key's colon, between commas, or at the start of a file, something else comes where a value must be, also a closing bracket (`[}`, `]`, `1,]`). After a key's colon the end of the input is this error too; anywhere else inside a bracket it is `unclosed-bracket`.", "Write a value here, or remove the extra comma or bracket."},
 	CodeMissingComma:            {CategorySyntax, "Two values, fields or top-level values follow each other without a comma between them.", "Add a comma between the two values."},
 	CodePayloadNewline:          {CategorySyntax, "A tag is followed by `(` or `{` on a later line, or after a comment. A payload must start on the tag's line (§5), so the two are read as separate values, and a comma is missing between them.", "Put the payload on the tag's line, or add a comma if they are two values."},
-	CodeUnexpectedCloser:        {CategorySyntax, "A closing bracket that doesn't match the open one, or that has no open one.", "Close each bracket with its own kind (`{` `}`, `[` `]`, `(` `)`) and remove extra closing brackets."},
-	CodeUnclosedBracket:         {CategorySyntax, "A `{`, `[` or `(` is never closed: the input ends first.", "Add the closing bracket."},
+	CodeUnexpectedCloser:        {CategorySyntax, "A closing bracket after a value that doesn't match the open one (`[1}`), or that has no open one (`{ a: 1 }}`). Where a value or key is expected, a closing bracket is `expected-value` or `expected-key`.", "Close each bracket with its own kind (`{` `}`, `[` `]`, `(` `)`) and remove extra closing brackets."},
+	CodeUnclosedBracket:         {CategorySyntax, "A `{`, `[` or `(` is never closed: the input ends first (`[1,`, `Some(`), except right after a key's colon, where it is `expected-value`.", "Add the closing bracket."},
 	CodeNullLiteral:             {CategorySyntax, "`null` is not a value: haus has no null (§1).", "Write `None` (with a `Maybe` type), or leave the field out."},
 	CodeBooleanLiteral:          {CategorySyntax, "`true` and `false` are not values: booleans are the tags `True` and `False` (§1).", "Write `True` or `False`."},
 	CodeBareIdentifier:          {CategorySyntax, "A lowercase word where a value should be. Lowercase identifiers are only record keys.", "Quote it as a string, or start it with a capital letter to make it a tag."},
@@ -389,15 +389,15 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeStringLineBreak:         {CategorySyntax, "A raw line break inside a `\"…\"` string.", "Write the line break as `\\n`, or use a `\"\"\"` block string."},
 	CodeControlCharacter:        {CategorySyntax, "A raw control character (C0, DEL, C1) in a string, block string or comment, where it could change what a terminal shows. A raw tab is allowed in block strings and comments, not in `\"…\"` strings. Also a raw control character in a JSON string: C0 in any JSON, DEL and C1 in self-describing JSON (§16).", "Write the character as an escape, `\\u{…}`."},
 	CodeBidiControl:             {CategorySyntax, "A raw bidirectional control character (U+202A–U+202E, U+2066–U+2069) in a string or comment, or in a self-describing JSON string (§16), where it could reorder how the text is displayed (\"Trojan Source\", §9).", "Write it as an escape (`\\u{…}`) inside a string, or remove it."},
-	CodeInvalidEscape:           {CategorySyntax, "A backslash followed by a character that doesn't start an escape. haus has `\\\"`, `\\\\`, `\\n`, `\\r`, `\\t` and `\\u{…}`; JSON has its own set.", "Use one of the escapes of §4, or write `\\\\` for a backslash."},
+	CodeInvalidEscape:           {CategorySyntax, "A backslash followed by a character that doesn't start an escape, or by the end of the input. haus has `\\\"`, `\\\\`, `\\n`, `\\r`, `\\t` and `\\u{…}`; JSON has its own set.", "Use one of the escapes of §4, or write `\\\\` for a backslash."},
 	CodeInvalidUnicodeEscape:    {CategorySyntax, "A `\\u` escape that isn't `\\u{` 1 to 6 hex digits `}`, or names no Unicode scalar value (a surrogate, or above 10FFFF). In JSON: `\\u` not followed by four hex digits.", "Write the escape with braces, `\\u{…}`, for a character from U+0000 to U+10FFFF other than a surrogate."},
-	CodeBlockStringOpening:      {CategorySyntax, "Text after the opening `\"\"\"` of a block string. The content starts on the next line.", "Start the content on the line after `\"\"\"`."},
+	CodeBlockStringOpening:      {CategorySyntax, "Text after the opening `\"\"\"` of a block string, or the end of the input right after it. The content starts on the next line.", "Start the content on the line after `\"\"\"`."},
 	CodeBlockStringClosing:      {CategorySyntax, "The closing `\"\"\"` of a block string has text before it on its line.", "Put the closing `\"\"\"` on its own line; its indentation is removed from every line."},
 	CodeBlockStringIndent:       {CategorySyntax, "A line of a block string is indented less than the closing `\"\"\"`, whose indentation every line must start with.", "Indent every line at least as far as the closing `\"\"\"`."},
 	CodeUnterminatedBlockString: {CategorySyntax, "A block string has no closing `\"\"\"`.", "Add the closing `\"\"\"` on its own line."},
 	CodeUnterminatedBytes:       {CategorySyntax, "A byte string `x\"…` has no closing `\"`.", "Add the closing quote."},
-	CodeBytesNotHex:             {CategorySyntax, "A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break.", "Write two hex digits per byte, on one line."},
-	CodeBytesOddDigits:          {CategorySyntax, "A byte in a byte string has only one hex digit: an odd number of digits, or a space inside a byte.", "Write each byte as two hex digits."},
+	CodeBytesNotHex:             {CategorySyntax, "A byte string holds something other than hex digits, spaces and tabs, such as a letter after `f`, an escape or a line break, where a byte starts. After a byte's first digit, anything but a second one is `bytes-odd-digits`.", "Write two hex digits per byte, on one line."},
+	CodeBytesOddDigits:          {CategorySyntax, "A byte in a byte string has only one hex digit: an odd number of digits, or anything but a second hex digit after the first (a space, a letter after `f`, a line break: `x\"az\"`).", "Write each byte as two hex digits."},
 	CodeLoneCarriageReturn:      {CategorySyntax, "A carriage return (CR) not followed by a line feed. Line breaks are LF or CRLF.", "Save the file with LF or CRLF line endings."},
 	CodeUnterminatedComment:     {CategorySyntax, "A `/*` comment is never closed. Block comments nest, so each `/*` needs its own `*/`.", "Add `*/`, one for each `/*`."},
 	CodeStraySlash:              {CategorySyntax, "A `/` that doesn't start a comment. Comments are `//` and `/* */`; haus has no operators.", "Write `//` or `/*` for a comment, or remove the `/`."},
@@ -421,8 +421,8 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeUnderscoreType:          {CategorySchemaFiles, "`_` used as a type. Types are open by default, so there is no wildcard.", "Write `< >` for a variant with any tags, `Any` for any value, or use a type parameter."},
 	CodeDuplicateField:          {CategorySchemaFiles, "A record type lists the same field twice, also one copied in by a spread.", "Remove or rename one of them."},
 	CodeDuplicateTag:            {CategorySchemaFiles, "A variant type lists the same tag twice, also one copied in by a spread.", "Remove or rename one of them."},
-	CodeClosedEmptyVariant:      {CategorySchemaFiles, "`closed < >`: a closed variant without tags accepts nothing.", "List its tags, or write `< >` for a variant with any tags."},
-	CodeInvalidSpread:           {CategorySchemaFiles, "A spread of something that can't be spread: not a named type, a type with parameters, a `Stream`, or a record spread into a variant (or a variant into a record).", "Spread a named variant into a variant, or a named record into a record, without parameters."},
+	CodeClosedEmptyVariant:      {CategorySchemaFiles, "`closed < >`: a closed variant without tags accepts nothing. Checked as written: `closed < ...E >` is accepted even when `E` has no tags.", "List its tags, or write `< >` for a variant with any tags."},
+	CodeInvalidSpread:           {CategorySchemaFiles, "A spread of something that can't be spread: not a named type, a type with parameters, a `Stream`, a type of the prelude (`...Bool`), or a record spread into a variant (or a variant into a record). An alias or a generic instance is spread as what it stands for.", "Spread a named variant into a variant, or a named record into a record, without parameters."},
 	CodeSpreadCycle:             {CategorySchemaFiles, "A type spreads itself, directly or through other types.", "Break the cycle: let one of the types list its tags or fields itself."},
 	CodeRowParameter:            {CategorySchemaFiles, "A spread of a parameter, `...r`. Row parameters are not part of the language.", "Spread a named type instead, or nest the open part as a field with a type parameter."},
 	CodeMisplacedStream:         {CategorySchemaFiles, "`Stream` used anywhere but as the whole type of a definition, or a reference to such a definition. A stream is a whole file.", "Use `Array` inside types, and `Stream` only as the whole of a definition."},
@@ -430,20 +430,20 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeGrowingRecursion:        {CategorySchemaFiles, "Generic types whose instances could grow without bound: a type parameter passes, wrapped in a bigger type, along a cycle of references back to itself (`type T a = < X (T (Pair a a)) >`, §9.10).", "Refer to the type inside itself with exactly its own parameters."},
 	CodeTypeTooDeep:             {CategorySchemaFiles, "Type expressions are nested deeper than the schema parser's limit.", "Name the inner types with definitions of their own."},
 	CodeAttributeArguments:      {CategorySchemaFiles, "An attribute this version defines, given arguments it doesn't take: `@deprecated` takes nothing or one string. Also empty parentheses after an attribute.", "Give the attribute only the arguments it takes: `@deprecated` takes none, or one string."},
-	CodeAttributeTwice:          {CategorySchemaFiles, "The same attribute twice on one type, field or tag.", "Keep one of them."},
+	CodeAttributeTwice:          {CategorySchemaFiles, "The same attribute twice on one type, field or tag, for an attribute this version defines. One it doesn't define may appear twice, with a warning each (`unknown-attribute`).", "Keep one of them."},
 	CodeAttributeSpace:          {CategorySchemaFiles, "A space between an attribute's name and its `(`.", "Write the parenthesis right after the attribute's name, without a space."},
 	CodeAttributeOnSpread:       {CategorySchemaFiles, "An attribute on a spread. The fields and tags a spread copies keep their own attributes.", "Put the attribute on the fields or tags in the spread type."},
-	CodeUnknownModule:           {CategoryImports, "An import of a module that doesn't exist: an unknown standard module, a former standard module, or a name that is neither `std/…`, a package `@org/name` nor a file `./name`.", "Fix the module's name; a former standard module is now a package, which the message names."},
+	CodeUnknownModule:           {CategoryImports, "An import of a module that doesn't exist: an unknown standard module, a former standard module, a package name that breaks npm's rules (`@Haus/money`), or a module that starts with `.` but not with `./` or `../` (`.../a`). Any other word where a module belongs (`foo/bar`) is `schema-syntax` (grammar.ebnf).", "Fix the module's name; a former standard module is now a package, which the message names."},
 	CodeUnknownImport:           {CategoryImports, "An import names a type the module doesn't have, or no type at all.", "Import a type the module defines; the message lists them."},
 	CodeDuplicateImport:         {CategoryImports, "The same type name is imported twice.", "Import each name once."},
 	CodeImportUnavailable:       {CategoryImports, "The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there.", "Read the schema with a resolver that loads imports (from files or packages), or inline the types."},
 	CodeImportNotFound:          {CategoryImports, "An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.", "Install the package, or fix the path."},
-	CodeImportVersion:           {CategoryImports, "An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`.", "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."},
+	CodeImportVersion:           {CategoryImports, "An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf).", "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."},
 	CodeImportCycle:             {CategoryImports, "Schema files import each other in a cycle.", "Move the shared types to a file both import."},
 	CodeDuplicatePackage:        {CategoryImports, "One schema reaches two different packages with the same name: two versions of one package (also two major versions), two copies of one version whose files differ, or two packages that call themselves the same. Byte-identical copies are one package.", "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`."},
 	CodeUndeclaredPackage:       {CategoryImports, "A file imports a package that its package or project doesn't declare as a dependency (with npm: in the package's own `package.json`, or the nearest one above an application file), or a file with no `package.json` above it imports a package that wasn't given explicitly. A package found only because the package manager placed it nearby, such as a hoisted dependency of a dependency, could be replaced by another one placed there. Checked before the package is looked for.", "Add the package to the dependencies of the importing package or project (on npm, `peerDependencies` for a package). Outside an npm project, such as in a Cargo or Python project, give the package explicitly (`--package`, `--packages`, the editor's `haus.packages`, Python's `packages=`)."},
 	CodePackageManifest:         {CategoryImports, "A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB.", "Write `{ name: \"@org/name\", version: \"1.2.0\" }`, in lowercase, with a full version."},
-	CodePackageVersion:          {CategoryImports, "A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3).", "Release both with the same version: change them together."},
+	CodePackageVersion:          {CategoryImports, "A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly that has a `package.json` next to its manifest.", "Release both with the same version: change them together."},
 	CodePackagePath:             {CategoryImports, "A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read.", "A package is its `package.haus` and one `schema.haus`, and imports other packages by name (`import @org/name`); import a package by name from your own files too."},
 	CodePackageName:             {CategoryImports, "A package manager's name for a schema package differs from its manifest's: the `name` of its `package.json` isn't the `name` of its `package.haus`. On npm, imports find a package by that name, so it must be the manifest's (§13.3). Reported by package checks such as `haus package check`.", "Publish the package under its manifest's name: make the `name` of `package.json` the same."},
 	CodePackageCrate:            {CategoryImports, "A schema package's crate can't be named by the code generated for crates that use its types: its `links` is missing or isn't its library's name (`[lib] name`), or a crate depends on a schema package's crate under another name (`package = …`). Generated code names a schema package's crate by its `links`, which is its library's name. Reported by package checks such as `haus package check`.", "Set `links` to the library's name in `[package]`, and depend on schema package crates under their own names."},
@@ -467,8 +467,8 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeCannotEncode:            {CategoryDecoding, "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value (an object of another type where a value or a number is expected).", "Pass a value of the host type the binding documents for the type."},
 	CodeCyclicValue:             {CategoryDecoding, "Encoding: a value contains itself, so it has no finite text.", "Break the cycle before encoding."},
 	CodeStepBudget:              {CategoryDecoding, "Decoding or encoding took more steps than the input justifies, a sign of a schema doing unbounded work. Bindings MUST bound the work of one decode (§9.8).", "Simplify the schema, or raise the step limit if the work is expected."},
-	CodeTooManyNodes:            {CategoryDecoding, "A value built in code (not parsed) has more nodes than the call allows, or shares nodes so much that it would expand beyond the limits.", "Build a smaller value, or raise the limit."},
-	CodeJSONSyntax:              {CategoryJson, "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first.", "Write valid JSON; the message says what was expected."},
+	CodeTooManyNodes:            {CategoryDecoding, "A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it.", "Build a smaller value, or raise the limit."},
+	CodeJSONSyntax:              {CategoryJson, "Text that isn't JSON (RFC 8259): a missing comma or colon, an unquoted name, a trailing comma, a comment, text after the value. Also an empty line in JSON Lines, or a byte order mark at the start of a line after the first. A string that isn't closed, and a bad escape, have the codes of haus text: `unterminated-string`, `invalid-escape`, `invalid-unicode-escape`.", "Write valid JSON; the message says what was expected."},
 	CodeUnpairedSurrogate:       {CategoryJson, "A JSON string with half of a UTF-16 surrogate pair, raw or as `\\uD800`. I-JSON forbids them, and they are no Unicode characters (§16).", "Write both halves of the surrogate pair, or the character itself."},
 	CodeHausJSONForm:            {CategoryJson, "JSON that isn't self-describing JSON (§16.2): a text without the envelope `{\"_haus\": 1, \"_value\": …}`, an envelope with other members, a bare number, `true`, `null`, an object with other members, a `_rec` that isn't an object, an `_args` that isn't a non-empty array.", "Write the envelope with one of the forms of §16.2 in `_value`: a string, an array, or an object with `_num`, `_bytes`, `_rec`, or `_tag` (and `_args`). For ordinary JSON, read it with a schema or import it instead."},
 	CodeHausJSONVersion:         {CategoryJson, "A self-describing JSON envelope whose `_haus` isn't 1, the only version of the form (§16.2): it was written for a later version of haus, or isn't haus.", "Read it with a newer version of haus, or write `\"_haus\": 1`."},

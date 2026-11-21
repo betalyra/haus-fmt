@@ -54,6 +54,7 @@ export const withDefaults = (limits: Partial<Limits>): Limits => {
     maxNumberLength: limits.maxNumberLength ?? DEFAULT_LIMITS.maxNumberLength,
     maxExponent: limits.maxExponent ?? DEFAULT_LIMITS.maxExponent,
     maxStringLength: limits.maxStringLength ?? DEFAULT_LIMITS.maxStringLength,
+    maxNodes: limits.maxNodes ?? DEFAULT_LIMITS.maxNodes,
   }
 }
 
@@ -83,13 +84,10 @@ const readRecord = (r: Reader): HRecord => {
   r.openRecord()
   const fields = new Map<string, Value>()
   const keySpans = r.locations ? new Map<string, readonly [number, number]>() : undefined
-  for (let key = r.key(); key !== undefined; key = r.key()) {
+  // A key seen before is a duplicate, reported at the key before its value is read (spec §8).
+  for (let key = r.key(fields); key !== undefined; key = r.key(fields)) {
     keySpans?.set(key, [r.keyStart, r.keyEnd])
-    const value = readValue(r)
-    // One lookup: a key seen before leaves the size as it was (the map is dropped with the error).
-    const size = fields.size
-    fields.set(key, value)
-    if (fields.size === size) r.failDuplicate(key)
+    fields.set(key, readValue(r))
     r.endField()
   }
   return uncheckedRec(fields, keySpans)

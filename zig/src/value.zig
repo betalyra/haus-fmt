@@ -47,6 +47,11 @@ pub const Limits = struct {
     max_string_length: u32 = 16 * 1024 * 1024,
     /// Characters in one top-level value of a stream (stream readers only).
     max_value_length: u64 = 64 * 1024 * 1024,
+    /// Values written for one value built in code (spec §7, "Values
+    /// written"): writers, the canonical form and hashing count each value
+    /// as often as it is written, so a value whose parts share each other
+    /// can't expand without bound.
+    max_nodes: u64 = 64 * 1024 * 1024,
 
     /// The deepest nesting this binding supports (spec §7): the parser,
     /// writers and formatter recurse, one call per level.

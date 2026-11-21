@@ -42,6 +42,7 @@ final class Decoder {
   private final boolean reading; // the value is JSON read as by the import: schema-based JSON (§16.3)
   private final Codecs codecs;
   private final Path path;
+  private final String root;
   private int depth;
   private int nodes;
   private int steps;
@@ -59,6 +60,7 @@ final class Decoder {
     this.encoding = encoding;
     this.reading = reading;
     this.codecs = codecs;
+    this.root = root;
     this.path = new Path(root);
   }
 
@@ -95,8 +97,8 @@ final class Decoder {
     if (depth >= lim.maxDepth()) {
       throw fail(ErrorCode.NESTING_TOO_DEEP, "nesting deeper than " + lim.maxDepth() + " levels");
     }
-    if (++nodes > ValueCheck.MAX_NODES) {
-      throw fail(ErrorCode.TOO_MANY_NODES, "the value has more than " + ValueCheck.MAX_NODES + " nodes");
+    if (++nodes > lim.maxNodes()) {
+      throw WriteCheck.tooManyNodes(new Path(root), lim);
     }
     budget += STEPS_PER_VALUE;
     depth++;

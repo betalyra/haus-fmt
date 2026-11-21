@@ -166,7 +166,8 @@ ConformanceTest := [].{
     }
 
     ## Every case of positions/cases.haus (spec §8): parsing `text` whole fails
-    ## with `code` at `line`:`column` (1-based, columns in code points).
+    ## with `code` at `line`:`column` (1-based, columns in code points); a
+    ## case with `document: True` reads the text as one document (`Value.parse`).
     positions : Str -> Bool
     positions = |cases| all_cases(cases, position_case)
 
@@ -252,7 +253,13 @@ position_case : List((Str, Value)) -> Try({}, Str)
 position_case = |fields| match (field(fields, "text").view(), field(fields, "code").view(), field(fields, "line").view(), field(fields, "column").view()) {
     (Text(text), Text(code), Num(line), Num(column)) => {
         want = "${code} ${line}:${column}"
-        got = match Value.parse_all(text) {
+        # `document: True`: the text is one document, read as `parse` reads it.
+        document = match field(fields, "document").view() {
+            Tag("True", []) => True
+            _ => False
+        }
+        parsed = if (document) Value.parse(text).map_ok(|_| {}) else Value.parse_all(text).map_ok(|_| {})
+        got = match parsed {
             Ok(_) => "parsed"
             Err(e) => "${e.code} ${e.line.to_str()}:${e.column.to_str()}"
         }

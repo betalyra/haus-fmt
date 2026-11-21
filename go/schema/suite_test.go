@@ -56,17 +56,17 @@ func readCases(t *testing.T, path string) []schemaCase {
 	var cases []schemaCase
 	for _, v := range values {
 		x, ok := v.(haus.Variant)
-		if !ok || x.Tag != "Ok" && x.Tag != "Err" || len(x.Args) != 1 {
+		if !ok || x.Tag.String() != "Ok" && x.Tag.String() != "Err" || len(x.Args) != 1 {
 			t.Fatalf("%s: not a case: %v", path, v)
 		}
 		r := x.Args[0].(haus.Record)
-		c := schemaCase{ok: x.Tag == "Ok", typ: str(get(r, "type")), input: get(r, "input"),
+		c := schemaCase{ok: x.Tag.String() == "Ok", typ: str(get(r, "type")), input: get(r, "input"),
 			code: str(get(r, "code")), path: str(get(r, "path"))}
 		c.output = get(r, "output")
 		if c.output == nil {
 			c.output = c.input
 		}
-		c.name = x.Tag + " " + c.typ + " " + canonical(t, c.input)
+		c.name = x.Tag.String() + " " + c.typ + " " + canonical(t, c.input)
 		cases = append(cases, c)
 	}
 	return cases
@@ -177,13 +177,13 @@ func TestTypedStreamSuite(t *testing.T) {
 	}
 	for _, v := range values {
 		x, ok := v.(haus.Variant)
-		if !ok || x.Tag != "Ok" && x.Tag != "Err" || len(x.Args) != 1 {
+		if !ok || x.Tag.String() != "Ok" && x.Tag.String() != "Err" || len(x.Args) != 1 {
 			t.Fatalf("not a case: %v", v)
 		}
 		r := x.Args[0].(haus.Record)
 		data := str(get(r, "text"))
 		want := "Err " + str(get(r, "code")) + " at " + str(get(r, "path"))
-		if x.Tag == "Ok" {
+		if x.Tag.String() == "Ok" {
 			want = "Ok " + canonical(t, get(r, "output"))
 		}
 		typ, err := s.Type(str(get(r, "type")))

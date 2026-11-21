@@ -17,6 +17,7 @@ import { defineOwn } from "./own.js"
 import { checkLimits, longerThan, MAX_DEPTH, MAX_SUPPORTED_DEPTH, withDefaults, type Limits } from "./parser.js"
 import { chunks, type ChunkSource } from "./stream.js"
 import { uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedStr, uncheckedVariant, type Value } from "./value.js"
+import { nodesWithin, tooManyNodes } from "./written.js"
 
 // ── the JSON data model ──────────────────────────────────────
 
@@ -641,6 +642,8 @@ export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => 
       }
     }
   }
+  // A value whose parts share each other expands when written: the node limit first (spec §7).
+  if (!nodesWithin(value, limits.maxNodes)) fail(tooManyNodes(limits.maxNodes), place, "too-many-nodes")
   return write(value, 0, place, false)
 }
 

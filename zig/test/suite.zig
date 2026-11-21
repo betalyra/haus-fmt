@@ -218,10 +218,16 @@ fn positionsSuite() !void {
         const code = get(case, "code").?.string;
         const line = try std.fmt.parseInt(u32, get(case, "line").?.number, 10);
         const column = try std.fmt.parseInt(u32, get(case, "column").?.number, 10);
+        // `document: True`: read as a single document (`parse`), else as a file.
+        const document = if (get(case, "document")) |doc| std.mem.eql(u8, doc.variant.tag, "True") else false;
         var d: haus.Diagnostic = .{};
-        if (haus.parseAll(arena, text, .{ .diagnostic = &d })) |_| {
+        const accepted = if (document)
+            (if (haus.parse(arena, text, .{ .diagnostic = &d })) |_| true else |_| false)
+        else
+            (if (haus.parseAll(arena, text, .{ .diagnostic = &d })) |_| true else |_| false);
+        if (accepted) {
             tally.check(false, "{any}: accepted", .{text});
-        } else |_| {
+        } else {
             tally.check(std.mem.eql(u8, d.code.name(), code) and d.line == line and d.column == column, "{any}: {f}, want {s} {d}:{d}", .{ text, d, code, line, column });
         }
     }
@@ -896,6 +902,7 @@ fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?
     try std.Io.Dir.cwd().createDirPath(io, case_dir);
     var dir = try std.Io.Dir.cwd().openDir(io, case_dir, .{});
     defer dir.close(io);
+    var links: std.ArrayList(haus.Variant) = .empty;
     for (get(case, "files").?.array) |f| {
         const x = f.variant;
         if (std.mem.eql(u8, x.tag, "File")) {
@@ -921,10 +928,18 @@ fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?
             try out.append(arena, '}');
             try writeCaseFile(dir, try std.fmt.allocPrint(arena, "{s}/package.json", .{x.args[0].string}), out.items);
         } else if (std.mem.eql(u8, x.tag, "Link")) {
-            const path = x.args[0].string;
-            if (std.fs.path.dirname(path)) |parent| try dir.createDirPath(io, parent);
-            try dir.symLink(io, x.args[1].string, path, .{});
+            try links.append(arena, x);
         } else return try std.fmt.allocPrint(arena, "unknown file entry {s}", .{x.tag});
+    }
+    // The links last, in order, once what they point to is there: Windows
+    // needs to know whether a link is to a directory when it is made.
+    for (links.items) |x| {
+        const path = x.args[0].string;
+        const parent = std.fs.path.dirname(path);
+        if (parent) |p| try dir.createDirPath(io, p);
+        const target = try std.fs.path.join(arena, &.{ parent orelse ".", x.args[1].string });
+        const is_directory = if (dir.statFile(io, target, .{})) |st| st.kind == .directory else |_| false;
+        try dir.symLink(io, x.args[1].string, path, .{ .is_directory = is_directory });
     }
     var options: haus.packages.Options = .{};
     const mode = get(case, "mode").?.variant;
@@ -975,7 +990,7 @@ fn packagesSuite() !void {
     const arena = arena_state.allocator();
     var tally = Tally{ .name = "packages/cases.haus" };
     // A fresh directory for the trees (left in place: nothing is deleted).
-    const tmp = environ.get("TMPDIR") orelse "/tmp";
+    const tmp = environ.get("TMPDIR") orelse environ.get("TEMP") orelse environ.get("TMP") orelse "/tmp";
     const now = std.Io.Clock.real.now(io).nanoseconds;
     const base = try std.fmt.allocPrint(arena, "{s}/haus-zig-packages-{d}", .{ std.mem.trimEnd(u8, tmp, "/"), now });
     for (try readCases(arena, "packages/cases.haus"), 0..) |case, i| {

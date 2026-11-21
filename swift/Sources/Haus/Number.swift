@@ -14,10 +14,13 @@ public struct HausNumber: Sendable, Hashable, CustomStringConvertible {
     /// The integer `value`.
     public init(_ value: some BinaryInteger) { self.literal = String(value) }
 
-    /// Reads a number literal (spec §3, §7), such as `19.90`, `-1e10`, `0xFF`
-    /// or `1_000`. It fails with `invalid-number` if `literal` is not one,
-    /// or with the code of the limit it is over.
-    public init(_ literal: String, limits: Limits = Limits()) throws(HausError) {
+    /// Reads a number literal (spec §3), such as `19.90`, `-1e10`, `0xFF` or
+    /// `1_000`, normalized as the parser does: `1E+05` is `1e5`, `0xFF` is
+    /// `255`. It fails with `invalid-number` if `literal` is not one. It
+    /// applies no limit (spec §11): a literal of any length, with any
+    /// exponent, is a number, and a writer rejects one over its limits
+    /// (`number-too-long`, `exponent-too-large`).
+    public init(_ literal: String) throws(HausError) {
         self = try withUTF8(literal) { (b) throws(HausError) -> HausNumber in
             let notANumber = HausError(.invalidNumber, "not a number literal: \(quoteForMessage(literal))")
             guard let first = b.first, isDigit(first) || [ASCII.minus, ASCII.plus, ASCII.dot].contains(first) else {
@@ -25,7 +28,7 @@ public struct HausNumber: Sendable, Hashable, CustomStringConvertible {
             }
             let scanned: (end: Int, normalized: String)
             do throws(NumberError) {
-                scanned = try scanNumber(b, at: 0, limits: limits)
+                scanned = try scanNumber(b, at: 0, limits: nil)
             } catch {
                 throw HausError(error.code, error.message)
             }
@@ -48,7 +51,8 @@ public struct HausNumber: Sendable, Hashable, CustomStringConvertible {
     }
 }
 
-/// A mistake in a number literal, at a byte offset.
+/// A mistake in a number literal, at a byte offset: the literal's first
+/// character, a sign or a leading `.` included (spec §8).
 struct NumberError: Error {
     let code: HausError.Code
     let message: String
@@ -57,11 +61,13 @@ struct NumberError: Error {
 
 /// Reads the number literal that starts at `b[pos]` (a `-` or a digit, or a
 /// `+` or `.` to report). Returns the end of the literal and its normalized
-/// text (spec §2).
-func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> (end: Int, normalized: String) {
+/// text (spec §2). With `limits` it fails for a literal over the number
+/// limits (spec §7); without, it applies none, as a constructor (spec §11).
+/// Every error is at the literal's first character (spec §8).
+func scanNumber(_ b: Bytes, at pos: Int, limits: Limits?) throws(NumberError) -> (end: Int, normalized: String) {
     let start = pos
-    func invalid(_ at: Int, _ message: String) -> NumberError {
-        NumberError(code: .invalidNumber, message: message, at: at)
+    func invalid(_ message: String) -> NumberError {
+        NumberError(code: .invalidNumber, message: message, at: start)
     }
     func byte(_ i: Int) -> UInt8? { i < b.count ? b[i] : nil }
     func describe(_ i: Int) -> String { describeCharacter(at: i, in: b) }
@@ -71,7 +77,7 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
         while true {
             if byte(i) == ASCII.underscore {
                 guard let next = byte(i + 1), isDigit(next) else {
-                    throw invalid(i, "'_' must stand between two digits")
+                    throw invalid("'_' must stand between two digits")
                 }
                 i += 2
             } else if let c = byte(i), isDigit(c) {
@@ -84,9 +90,9 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
     /// The number must not be followed directly by `[A-Za-z0-9_.]`.
     func checkEnd(_ i: Int) throws(NumberError) {
         if let c = byte(i), c == ASCII.dot || classOf(c).contains(.ident) {
-            throw invalid(i, "a number can't be followed directly by \(describe(i))")
+            throw invalid("a number can't be followed directly by \(describe(i))")
         }
-        if i - start > limits.maxNumberLength {
+        if let limits, i - start > limits.maxNumberLength {
             throw NumberError(
                 code: .numberTooLong,
                 message:
@@ -100,12 +106,12 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
 
     var i = pos
     if let c = byte(i), c == ASCII.plus || c == ASCII.dot {
-        throw invalid(i, "a number can't start with '\(Character(Unicode.Scalar(c)))'")
+        throw invalid("a number can't start with '\(Character(Unicode.Scalar(c)))'")
     }
     let negative = byte(i) == ASCII.minus
     if negative { i += 1 }
     guard let first = byte(i), isDigit(first) else {
-        throw invalid(i, "expected a digit after '-', found \(describe(i))")
+        throw invalid("expected a digit after '-', found \(describe(i))")
     }
 
     // 0x… and 0b…: integers, written in decimal.
@@ -117,13 +123,12 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
                 base == 16 ? { classOf($0).contains(.hexDigit) } : { $0 == ASCII.zero || $0 == ASCII.one }
             let from = i + 2
             guard let d = byte(from), isDigitOfBase(d) else {
-                throw invalid(
-                    from, "expected a digit after '0\(Character(Unicode.Scalar(prefix)))', found \(describe(from))")
+                throw invalid("expected a digit after '0\(Character(Unicode.Scalar(prefix)))', found \(describe(from))")
             }
             let end = try digits(from: from, isDigitOfBase)
             try checkEnd(end)
             let values = withoutSeparators(from, end).map { hexValue($0)! }
-            if base == 16 && values.count > limits.maxHexDigits {
+            if let limits, base == 16 && values.count > limits.maxHexDigits {
                 throw NumberError(
                     code: .numberTooLong,
                     message:
@@ -132,9 +137,9 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
             }
             return (end, (negative ? "-" : "") + decimal(digits: values, base: base))
         case ASCII.X, ASCII.B:
-            throw invalid(i + 1, "the prefix is lowercase: '0\(Character(Unicode.Scalar(prefix | 0x20)))'")
+            throw invalid("the prefix is lowercase: '0\(Character(Unicode.Scalar(prefix | 0x20)))'")
         case _ where isDigit(prefix) || prefix == ASCII.underscore:
-            throw invalid(i, "a number can't have a leading zero")
+            throw invalid("a number can't have a leading zero")
         default:
             break
         }
@@ -144,7 +149,7 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
     i = first == ASCII.zero ? i + 1 : try digits(from: i, isDigit)
     if byte(i) == ASCII.dot {
         guard let d = byte(i + 1), isDigit(d) else {
-            throw invalid(i, "expected a digit after '.', found \(describe(i + 1))")
+            throw invalid("expected a digit after '.', found \(describe(i + 1))")
         }
         i = try digits(from: i + 1, isDigit)
     }
@@ -154,11 +159,10 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
         let plain = !b[start..<i].contains(ASCII.underscore)
         return (i, plain ? text(start, i) : String(decoding: withoutSeparators(start, i), as: UTF8.self))
     }
-    let exponentStart = i
     i += 1
     if let sign = byte(i), sign == ASCII.plus || sign == ASCII.minus { i += 1 }
     guard let d = byte(i), isDigit(d) else {
-        throw invalid(i, "expected a digit in the exponent, found \(describe(i))")
+        throw invalid("expected a digit in the exponent, found \(describe(i))")
     }
     let exponentDigits = i
     i = try digits(from: i, isDigit)
@@ -166,10 +170,12 @@ func scanNumber(_ b: Bytes, at pos: Int, limits: Limits) throws(NumberError) -> 
 
     // The exponent normalized: no `+`, no leading zeros, no `-` on zero.
     let significant = withoutSeparators(exponentDigits, i).drop { $0 == ASCII.zero }
-    guard significant.count <= 9, significant.reduce(0, { $0 * 10 + Int($1 - ASCII.zero) }) <= limits.maxExponent else {
+    if let limits,
+        significant.count > 9 || significant.reduce(0, { $0 * 10 + Int($1 - ASCII.zero) }) > limits.maxExponent
+    {
         throw NumberError(
             code: .exponentTooLarge, message: "the exponent is larger than the limit of \(limits.maxExponent)",
-            at: exponentStart)
+            at: start)
     }
     let exponentNegative = b[exponentDigits - 1] == ASCII.minus && !significant.isEmpty
     let mantissa = withoutSeparators(start, mantissaEnd)

@@ -1,0 +1,19 @@
+// A comment after the `}` of `Tag({ … })` moves to the end of the record
+// when the `}` isn't on the last entry's line; a blank line before it stays.
+[
+  S {
+    a: 1,
+
+    /* c */
+  },
+  T {
+    a: 1,
+    /* d */
+  },
+  U {
+    a: 1, /* e */
+  },
+  V {
+    a: 1,
+  }, /* after the parenthesis: the entry's own */
+]

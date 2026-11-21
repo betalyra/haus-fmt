@@ -7,13 +7,30 @@
  *   canonical(parse('Order { total: 19.90, id: 0xFF, "x-y": 1e+5 }'))
  *   // 'Order{id:255,total:19.90,"x-y":1e5}'
  *
- * They can't fail: every `Value` is a haus value (spec §12), checked when it
- * was built (value.ts) or read, with its numbers normalized. A value forged
- * past the constructors (with a cast) is not one, and what they do with it is
- * undefined (spec §11, "Values built in code").
+ * Every `Value` is a haus value (spec §12), checked when it was built
+ * (value.ts) or read, with its numbers normalized. They have one limit, the
+ * node limit (spec §7): a value whose parts share each other so much that its
+ * canonical form would hold more than `maxNodes` values (default 64 Mi) fails
+ * with HausEncodeError `too-many-nodes`. No other limit applies: a value
+ * deeper or longer than a writer's limits still has a canonical form. A value
+ * forged past the constructors (with a cast) is not one, and what they do
+ * with it is undefined (spec §11, "Values built in code").
  */
 import { escaped, toHex, writtenKey } from "./format.js"
+import { DEFAULT_LIMITS, type Limits } from "./reader.js"
 import type { Value } from "./value.js"
+import { checkNodes } from "./written.js"
+
+/** The one limit of the canonical form and hashing (spec §12): the node limit, default 64 Mi. */
+export type CanonicalLimits = Partial<Pick<Limits, "maxNodes">>
+
+/** The canonical form of `value`, its nodes checked first; `at` is its place for the error (`$`, or `$[i]` in `hashAll`). */
+const canonicalAt = (value: Value, maxNodes: number, at: readonly number[]): string => {
+  checkNodes(value, maxNodes, at)
+  const out: string[] = []
+  write(value, out)
+  return out.join("")
+}
 
 /**
  * Orders strings by code point, which is the order of their UTF-8 bytes.
@@ -93,18 +110,18 @@ function write(root: Value, out: string[]): void {
 }
 
 /**
- * The canonical form of a value (spec §12). Every value has one, without
- * limits: an integer of any size is written with all its decimal digits.
+ * The canonical form of a value (spec §12). Every value has one within the
+ * node limit (`limits.maxNodes`, default 64 Mi; beyond it HausEncodeError
+ * `too-many-nodes`), and no other limit: an integer of any size is written
+ * with all its decimal digits.
  */
-export function canonical(value: Value): string {
-  const out: string[] = []
-  write(value, out)
-  return out.join("")
+export function canonical(value: Value, limits: CanonicalLimits = {}): string {
+  return canonicalAt(value, limits.maxNodes ?? DEFAULT_LIMITS.maxNodes, [])
 }
 
-/** Whether two values are equal (spec §2): the same canonical form. */
-export function equals(a: Value, b: Value): boolean {
-  return canonical(a) === canonical(b)
+/** Whether two values are equal (spec §2): the same canonical form. Within the node limit, as `canonical`. */
+export function equals(a: Value, b: Value, limits: CanonicalLimits = {}): boolean {
+  return canonical(a, limits) === canonical(b, limits)
 }
 
 /**
@@ -112,16 +129,17 @@ export function equals(a: Value, b: Value): boolean {
  * order consistent with `equals`, for sorting (`values.sort(compare)`) and
  * ordered maps. Returns -1, 0 or 1. Not numeric order: `10` sorts before `9`.
  */
-export function compare(a: Value, b: Value): -1 | 0 | 1 {
-  return Math.sign(compareCodePoints(canonical(a), canonical(b))) as -1 | 0 | 1
+export function compare(a: Value, b: Value, limits: CanonicalLimits = {}): -1 | 0 | 1 {
+  return Math.sign(compareCodePoints(canonical(a, limits), canonical(b, limits))) as -1 | 0 | 1
 }
 
 /**
  * The SHA-256 digest of the canonical form, as 64 lowercase hex digits
- * (spec §12). Uses Web Crypto, so it is asynchronous.
+ * (spec §12). Uses Web Crypto, so it is asynchronous. Within the node limit,
+ * as `canonical`.
  */
-export async function hash(value: Value): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical(value)))
+export async function hash(value: Value, limits: CanonicalLimits = {}): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical(value, limits)))
   return toHex(new Uint8Array(digest))
 }
 
@@ -130,9 +148,12 @@ export async function hash(value: Value): Promise<string> {
  * digest of their canonical forms joined by `,`. A list of one value hashes
  * like the value: `hashAll([v])` is `hash(v)`. Uses Web Crypto, so it is
  * asynchronous. The items of a stream are hashed one by one with `hash`.
+ * The node limit applies to each value on its own (`too-many-nodes` at
+ * `$[i]` for value i).
  */
-export async function hashAll(values: Iterable<Value>): Promise<string> {
-  const text = Array.from(values, canonical).join(",")
+export async function hashAll(values: Iterable<Value>, limits: CanonicalLimits = {}): Promise<string> {
+  const maxNodes = limits.maxNodes ?? DEFAULT_LIMITS.maxNodes
+  const text = Array.from(values, (v, i) => canonicalAt(v, maxNodes, [i])).join(",")
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))
   return toHex(new Uint8Array(digest))
 }

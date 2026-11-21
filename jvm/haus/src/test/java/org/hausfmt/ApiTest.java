@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -40,6 +41,10 @@ class ApiTest {
       {"// c\n\"a\u0001b\"", 2, 3},
       {"\"\"\"\n  ok\n bad\n  \"\"\"", 3, 1},
       {"\"\"\"\n  😀 a\u0001\n  \"\"\"", 2, 6}, // inside a block string: at the character
+      {"\"\"\"", 1, 4}, // block-string-opening at the end of the input
+      {"[1,\r\n\"\"\"  ", 2, 6},
+      {"[ -1e6145 ]", 1, 3}, // every number error at the literal's first character
+      {"[ 1_ ]", 1, 3},
     };
     for (Object[] c : cases) {
       HausException e = assertThrows(HausException.class, () -> Haus.parseAll((String) c[0]));
@@ -72,18 +77,21 @@ class ApiTest {
     assertEquals(ErrorCode.INVALID_UTF8, code(() -> HausJson.importJson("\"\uD800\"")));
     assertEquals(ErrorCode.INVALID_UTF8, code(() -> HausJson.fromHausJson("{\"_haus\": 1, \"_value\": \"\uD800\"}")));
     assertEquals(ErrorCode.INVALID_UTF8, code(() -> Schema.parse("// \uD800\ntype A = String")));
-    // Values built in code: writers, the canonical form and hashes can't write one.
-    Value[] values = {
-      Value.string("x\uD800y"),
-      Value.record(Value.field("k\uDC00", Value.number(1))),
-      Value.array(Value.string("\uD800\uD800")),
-    };
-    for (Value v : values) {
-      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.write(v)));
-      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.canonical(v)));
-      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.hash(v)));
-      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.hashAll(List.of(v))));
+    // Values built in code: the constructors reject a string or key without a UTF-8 form (spec
+    // §11), with no place.
+    List<Executable> builds = List.of(
+        () -> Value.string("x\uD800y"),
+        () -> Value.string("\uD800\uD800"),
+        () -> Value.string("\uDC00\uD800"),
+        () -> Value.record(Value.field("k\uDC00", Value.number(1))),
+        () -> Value.record(Map.of("\uD800", Value.number(1))));
+    for (Executable build : builds) {
+      HausException e = assertThrows(HausException.class, build);
+      assertEquals(ErrorCode.CANNOT_ENCODE, e.code());
+      assertNull(e.path());
     }
+    // A pair is one character, which has a UTF-8 form.
+    assertEquals("\"\uD83D\uDE00\"", Haus.canonical(Value.string("\uD83D\uDE00")));
   }
 
   @Test
@@ -99,6 +107,132 @@ class ApiTest {
     assertEquals(Haus.hash(Value.number("1e5")), Haus.hash(Value.number("1E+05")));
     assertEquals("255", Haus.canonical(Value.number("0xFF")));
     assertEquals("1000", Haus.canonical(Value.number("1_000")));
+    // The constructor applies no limits (spec §11): a writer does.
+    String longNumber = "1" + repeat("0", 2000);
+    assertEquals(longNumber, Value.number(longNumber).literal());
+    assertEquals("1e99999999999", Value.number("1E+99999999999").literal());
+    assertEquals("1e-7", Value.number("1e-0000000000000000000007").literal());
+    Value.number("0x" + repeat("F", 900));
+    assertEquals("1e99999", Value.number(new BigDecimal("1E+99999")).literal());
+  }
+
+  /** A value built in code whose arrays share one another: n levels of [x, x], 2^(n+1)−1 values. */
+  private static Value shared(int n) {
+    Value v = Value.number(1);
+    for (int i = 0; i < n; i++) {
+      v = Value.array(v, v);
+    }
+    return v;
+  }
+
+  /**
+   * Writers, {@link Haus#check}, the canonical form and hashing count the values they write, each
+   * as often as it is written, for each top-level value on its own (spec §7, "Values written").
+   */
+  @Test
+  void nodeLimit() {
+    Value dag = shared(10); // 2047 values
+    Limits under = Limits.DEFAULT.withMaxNodes(2046);
+    Limits at = Limits.DEFAULT.withMaxNodes(2047);
+    for (Layout l : Layout.values()) {
+      HausException e = assertThrows(HausException.class, () -> Haus.write(dag, FormatOptions.of(l).withLimits(under)));
+      assertEquals(ErrorCode.TOO_MANY_NODES, e.code(), l.toString());
+      assertEquals("$", e.path(), l.toString());
+      Haus.write(dag, FormatOptions.of(l).withLimits(at));
+      Haus.writeAll(List.of(dag, dag), FormatOptions.of(l).withLimits(at)); // each value on its own
+      e = assertThrows(HausException.class,
+          () -> Haus.writeAll(List.of(Value.string("a"), dag), FormatOptions.of(l).withLimits(under)));
+      assertEquals(ErrorCode.TOO_MANY_NODES, e.code());
+      assertEquals("$[1]", e.path());
+    }
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.check(dag, under)));
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> HausJson.toHausJson(dag, under)));
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.canonical(dag, under)));
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.hash(dag, under)));
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.compare(dag, dag, under)));
+    Haus.hashAll(List.of(dag, dag), at);
+    // At the value given ($); hashAll at the value's index, even of one value.
+    assertEquals("$", assertThrows(HausException.class, () -> Haus.canonical(dag, under)).path());
+    assertEquals("$", assertThrows(HausException.class, () -> Haus.hash(dag, under)).path());
+    assertEquals("$[0]", assertThrows(HausException.class, () -> Haus.hashAll(List.of(dag), under)).path());
+    assertEquals(
+        "$[1]", assertThrows(HausException.class, () -> Haus.hashAll(List.of(Value.string("a"), dag), under)).path());
+    // Tag { … } writes the variant and its record: Tag { a: 1 } is three values.
+    Value payload = Value.variant("T", Value.record(Value.field("a", Value.number(1))));
+    Limits two = Limits.DEFAULT.withMaxNodes(2);
+    Limits three = Limits.DEFAULT.withMaxNodes(3);
+    for (Layout l : Layout.values()) {
+      assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.write(payload, FormatOptions.of(l).withLimits(two))));
+      Haus.write(payload, FormatOptions.of(l).withLimits(three));
+    }
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.check(payload, two)));
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.canonical(payload, two)));
+    Haus.check(payload, three);
+    Haus.canonical(payload, three);
+    // With the default limit, 2^27 values written is too many, though the value is small.
+    assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.hash(shared(26))));
+  }
+
+  /** A writer checks every limit a value built in code can break (spec §11), and check() the same. */
+  @Test
+  void writerLimits() {
+    Limits d = Limits.DEFAULT;
+    Object[][] cases = {
+      {Value.string("abc"), d.withMaxStringLength(2), ErrorCode.STRING_TOO_LONG},
+      {Value.string("éé"), d.withMaxStringLength(2), null},
+      {Value.string("😀😀"), d.withMaxStringLength(2), null},
+      {Value.string("😀😀😀"), d.withMaxStringLength(2), ErrorCode.STRING_TOO_LONG},
+      {Value.bytes(new byte[] {1, 2}), d.withMaxStringLength(3), ErrorCode.STRING_TOO_LONG},
+      {Value.bytes(new byte[] {1, 2}), d.withMaxStringLength(4), null},
+      {Value.record(Value.field("abc", Value.number(1))), d.withMaxStringLength(2), ErrorCode.KEY_TOO_LONG},
+      {Value.record(Value.field("a-c", Value.number(1))), d.withMaxStringLength(2), ErrorCode.KEY_TOO_LONG},
+      {Value.variant("Abc"), d.withMaxStringLength(2), ErrorCode.TAG_TOO_LONG},
+      {Value.number("123"), d.withMaxNumberLength(2), ErrorCode.NUMBER_TOO_LONG},
+      {Value.number("1e100"), d.withMaxExponent(99), ErrorCode.EXPONENT_TOO_LARGE},
+      {Value.array(Value.array()), d.withMaxDepth(1), ErrorCode.NESTING_TOO_DEEP},
+      {shared(3), d.withMaxNodes(14), ErrorCode.TOO_MANY_NODES},
+      {shared(3), d.withMaxNodes(15), null},
+    };
+    for (Object[] c : cases) {
+      Value v = (Value) c[0];
+      Limits lim = (Limits) c[1];
+      for (Layout l : Layout.values()) {
+        Executable write = () -> Haus.write(v, FormatOptions.of(l).withLimits(lim));
+        if (c[2] == null) {
+          Haus.write(v, FormatOptions.of(l).withLimits(lim));
+        } else {
+          assertEquals(c[2], code(write), v + " " + l);
+        }
+      }
+      if (c[2] == null) {
+        Haus.check(v, lim);
+      } else {
+        assertEquals(c[2], code(() -> Haus.check(v, lim)), v.toString());
+      }
+    }
+  }
+
+  /**
+   * The canonical form and hashing apply no limit but the node limit (spec §12): a value longer than
+   * a writer's limits still has a canonical form.
+   */
+  @Test
+  void canonicalAppliesOnlyTheNodeLimit() {
+    int max = Limits.DEFAULT.maxStringLength();
+    Value[] values = {
+      Value.string(repeat("é", max + 1)),
+      Value.record(Value.field(repeat("k", max + 1), Value.number(1))),
+      Value.variant("T" + repeat("a", max)),
+      Value.number("1" + repeat("0", Limits.DEFAULT.maxNumberLength())),
+      Value.number("1e99999"),
+      Value.bytes(new byte[max / 2 + 1]),
+    };
+    for (Value v : values) {
+      Haus.canonical(v);
+      Haus.hash(v);
+      assertThrows(HausException.class, () -> Haus.check(v, Limits.DEFAULT));
+      assertThrows(HausException.class, () -> Haus.write(v, FormatOptions.MINIMISED));
+    }
   }
 
   @Test
@@ -255,6 +389,10 @@ class ApiTest {
   void parseOne() {
     for (String text : new String[] {"", "// nothing", "1, 2", "1, 2,"}) {
       assertEquals(ErrorCode.NOT_ONE_VALUE, code(() -> Haus.parse(text)), text);
+      // At the end of the input (spec §8).
+      HausException e = assertThrows(HausException.class, () -> Haus.parse(text.getBytes(StandardCharsets.UTF_8)));
+      assertEquals(1, e.line());
+      assertEquals(text.length() + 1, e.column());
     }
     assertEquals(Value.number(1), Haus.parse("1,"));
   }
@@ -353,8 +491,6 @@ class ApiTest {
     assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", Haus.hashAll(Collections.emptyList()));
     Value v = Haus.parse("{ a: 1 }");
     assertEquals(Haus.hash(v), Haus.hashAll(Collections.singletonList(v)));
-    assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.canonical(Value.string("\uD800"))));
-    assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.canonical(Value.record(Value.field("\uDC00", Value.number(1))))));
   }
 
   @Test
@@ -362,7 +498,6 @@ class ApiTest {
     Limits d = Limits.DEFAULT;
     Object[][] cases = {
       {Value.string("ok"), d, null, null},
-      {Value.array(Value.string("ok"), Value.string("\uD800")), d, ErrorCode.CANNOT_ENCODE, "$[1]"},
       {Value.number("1e100"), d.withMaxExponent(99), ErrorCode.EXPONENT_TOO_LARGE, "$"},
       {Value.string("abc"), d.withMaxStringLength(2), ErrorCode.STRING_TOO_LONG, "$"},
       {Value.bytes(new byte[] {1, 2}), d.withMaxStringLength(3), ErrorCode.STRING_TOO_LONG, "$"},
@@ -484,7 +619,6 @@ class ApiTest {
       assertEquals(out, Haus.format(out, FormatOptions.of(l)));
       assertEquals(r, Haus.parse(out));
     }
-    assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.write(Value.string("\uD800"))));
     assertEquals(ErrorCode.NUMBER_TOO_LONG, code(() -> Haus.write(Value.number(BigInteger.TEN.pow(1000)))));
     // Every number, a decimal or an exponent too: what a parser with the same limits reads back.
     for (Layout l : Layout.values()) {

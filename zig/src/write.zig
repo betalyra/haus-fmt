@@ -12,7 +12,6 @@ const errors = @import("errors.zig");
 const Error = errors.Error;
 const canon = @import("canonical.zig");
 const WriteOptions = canon.WriteOptions;
-const number = @import("number.zig");
 
 pub const Layout = enum { pretty, compact, minimised };
 
@@ -153,14 +152,7 @@ const FromValues = struct {
         try b.checker.visit(val, depth);
         const inner = canon.Checker.childDepth(val, depth);
         const kind: Kind = switch (val) {
-            .number => |n| blk: {
-                if (number.integerDigits(n)) |digits| {
-                    if (digits + @intFromBool(n[0] == '-') > b.checker.options.limits.max_number_length) {
-                        return canon.failValue(b.checker.options.diagnostic, .@"number-too-long", "an integer of {d} digits is longer than the number limit ({d} characters)", .{ digits, b.checker.options.limits.max_number_length });
-                    }
-                }
-                break :blk .{ .atom = n };
-            },
+            .number => |n| .{ .atom = n },
             .string => |s| .{ .string = .{ .value = s } },
             .bytes => |bytes| blk: {
                 var out: std.ArrayList(u8) = .empty;
@@ -174,7 +166,7 @@ const FromValues = struct {
             .variant => |x| blk: {
                 if (x.args.len == 0) break :blk .{ .tag = x.tag };
                 if (x.args.len == 1 and x.args[0] == .record) {
-                    b.checker.nodes += 1;
+                    try b.checker.count();
                     break :blk .{ .record_payload = .{ .tag = x.tag, .body = try b.record(x.args[0].record, inner) } };
                 }
                 break :blk .{ .positional = .{ .tag = x.tag, .args = .{ .entries = try b.entries(x.args, inner) } } };
@@ -190,10 +182,8 @@ const FromValues = struct {
     }
 
     fn record(b: *FromValues, fields: []const v.Field, depth: u32) Error!Container {
-        for (fields) |f| {
-            if (!std.unicode.utf8ValidateSlice(f.key)) return canon.failValue(b.checker.options.diagnostic, .@"invalid-utf8", "a record key that isn't UTF-8", .{});
-        }
-        // Duplicate keys: checked on a sorted copy.
+        // Duplicate keys: checked on a sorted copy (the keys themselves are
+        // checked with their record, in `visit`).
         b.gpa.free(try canon.sortedFields(b.gpa, fields, b.checker.options.diagnostic));
         const out = try b.arena.alloc(Entry, fields.len);
         for (fields, 0..) |f, i| out[i] = .{ .key = f.key, .value = try b.node(f.value, depth) };
@@ -426,7 +416,7 @@ pub const Writer = struct {
 pub fn stringify(gpa: Allocator, val: Value, options: FormatOptions) Error![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    var b = FromValues{ .arena = arena_state.allocator(), .gpa = gpa, .checker = .{ .options = options.write } };
+    var b = FromValues{ .arena = arena_state.allocator(), .gpa = gpa, .checker = .{ .options = options.write, .writer = true } };
     const n = try b.node(val, 0);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
@@ -445,14 +435,48 @@ pub fn stringifyAll(gpa: Allocator, values: []const Value, options: FormatOption
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var b = FromValues{ .arena = arena, .gpa = gpa, .checker = .{ .options = options.write } };
     const entries = try arena.alloc(Entry, values.len);
-    for (values, 0..) |val, i| entries[i] = .{ .value = try b.node(val, 0) };
+    for (values, 0..) |val, i| {
+        // The limits apply to each value on its own (spec §7).
+        var b = FromValues{ .arena = arena, .gpa = gpa, .checker = .{ .options = options.write, .writer = true, .index = i } };
+        entries[i] = .{ .value = try b.node(val, 0) };
+    }
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var w = Writer{ .gpa = gpa, .out = &out, .indent = options.indent, .width = options.width };
     try w.file(.{ .entries = entries }, options.layout);
     return out.toOwnedSlice(gpa);
+}
+
+test "writers check every limit" {
+    const gpa = std.testing.allocator;
+    const Code = errors.Code;
+    var d: errors.Diagnostic = .{};
+    const small: v.Limits = .{ .max_string_length = 3, .max_number_length = 4, .max_exponent = 10, .max_depth = 1, .max_nodes = 5 };
+    const opts: FormatOptions = .{ .layout = .compact, .write = .{ .limits = small, .diagnostic = &d } };
+    const Case = struct { val: Value, code: Code };
+    const fields = [_]v.Field{.{ .key = "abcd", .value = .{ .number = "1" } }};
+    const nested = [_]Value{.{ .array = &.{} }};
+    const cases = [_]Case{
+        .{ .val = .{ .number = "1e11" }, .code = .@"exponent-too-large" },
+        .{ .val = .{ .number = "12345" }, .code = .@"number-too-long" },
+        .{ .val = .{ .number = "1.234" }, .code = .@"number-too-long" },
+        .{ .val = .{ .string = "abcd" }, .code = .@"string-too-long" },
+        .{ .val = .{ .bytes = "ab" }, .code = .@"string-too-long" },
+        .{ .val = Value.tag("Abcd"), .code = .@"tag-too-long" },
+        .{ .val = .{ .record = &fields }, .code = .@"key-too-long" },
+        .{ .val = .{ .array = &nested }, .code = .@"nesting-too-deep" },
+    };
+    for (cases) |c| {
+        try std.testing.expectError(error.Haus, stringify(gpa, c.val, opts));
+        try std.testing.expectEqual(c.code, d.code);
+    }
+    // The node limit, for each value of a file on its own: at `$[i]`.
+    const five = [_]Value{ .{ .number = "1" }, .{ .number = "2" }, .{ .number = "3" }, .{ .number = "4" }, .{ .number = "5" } };
+    const many = Value{ .variant = .{ .tag = "T", .args = &five } };
+    try std.testing.expectError(error.Haus, stringifyAll(gpa, &.{ .{ .number = "1" }, many }, .{ .write = .{ .limits = .{ .max_nodes = 5 }, .diagnostic = &d } }));
+    try std.testing.expectEqual(Code.@"too-many-nodes", d.code);
+    try std.testing.expectEqualStrings("$[1]", d.path());
 }
 
 test "stringify" {

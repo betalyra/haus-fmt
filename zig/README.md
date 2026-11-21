@@ -23,21 +23,28 @@ value is the binding's own `Decoded`, which keeps every value (§13.4,
 | Strings (§4) | UTF-8, escapes, block strings, control and bidi characters |
 | Parser (§1–§8, §17) | `parseAll` (a file), `parse` (one document, `not-one-value`), `parseDocument` (with positions and comments); every error with its code, line and column |
 | Streams (§6, §7) | `StreamReader`: chunks of bytes in, values out once their comma arrives; the value limit and strict mode; the same results for every way of cutting the input |
-| Limits (§7) | `Limits`, the spec's defaults, all configurable; the depth this binding supports is 4096 (`unsupported-depth` above) |
+| Limits (§7) | `Limits`, the spec's defaults, all configurable (the node limit for values written, `max_nodes`, included; the hex digit limit follows the number limit); the depth this binding supports is 4096 (`unsupported-depth` above) |
 | Layouts (§11) | `format` (a document's text, spellings as written, comments in pretty), `stringify`, `stringifyAll` (values); pretty with `indent` and `width`, compact, minimised |
 | Canonical form and hashes (§12) | `canonical`, `hash`, `hashAll` (SHA-256 of `std.crypto`) |
 | std/time (§13.2) | `time.check(kind, text)`: the std/time profile (spec/std/time.md) |
 | Schema files (§14) | `schema.load`: the grammar, names, arities, parameters, spreads (aliases and generic instances included), `Stream`, attributes, guarded and growing recursion; warnings (`unknown-attribute`, `deprecated`, `no-json-form`) with their line and column |
 | Decoding (§15) | `decoding.decode` to a `Decoded` (a `Secret` prints as `<redacted>`), `decoding.encode` (checked against the type), `decoding.decodeText` and `TypedStreamReader` (a `Stream a` read as it arrives, `$[i]` places), `decoding.check` (hints and the first error, as a checker reports them); floats in the one spelling of §15 |
 | JSON (§16) | `json.importJson` (§16.1), `json.toHausJson` / `fromHausJson` / `fromHausJsonLines` (§16.2), `json.toJson` / `fromJson` (§16.3); I-JSON, the limits on number tokens and on the resulting value, places in the JSON |
-| Packages (§13.3) | `packages.build(gpa, io, root, options)`: packages given by directory or folder, and with `npm` the `node_modules` rules; manifests, links, declarations, the version check, duplicates, cycles and the limits |
+| Packages (§13.3) | `packages.build(gpa, io, root, options)`: packages given by directory or folder, and with `npm` the `node_modules` rules; manifests, links, declarations, the version check (also of a package given explicitly, against a `package.json` beside its manifest), duplicates, cycles and the limits |
 | C ABI | `include/haus.h`, `src/c_api.zig` (below) |
 
-Values built in code are checked when written: a number that isn't a
-normalized literal (`invalid-number`), a string or key that isn't UTF-8,
-a tag that isn't one (`invalid-tag`), duplicate keys, nesting beyond the
-limit, an integer longer than the number limit (layouts only), and more
-than `max_nodes` nodes as written out (`too-many-nodes`).
+`Value` is a plain union, so a value built in code passes no constructor:
+it is checked where it is written (spec §11, "Values built in code"), with
+the codes a constructor would use: a number that isn't a normalized
+literal (`invalid-number`), a string or key that isn't UTF-8
+(`cannot-encode`), a tag that isn't one (`invalid-tag`) and duplicate keys
+(`duplicate-key`). The writers (`stringify`, `stringifyAll`, `toHausJson`,
+`decoding.encode`) also apply every limit of spec §7: the depth, the
+length of strings, keys and tags, the number and exponent limits, and the
+node limit `Limits.max_nodes` (`too-many-nodes`, at `$`, or `$[i]` for the
+i-th value of a file). The canonical form, `hash`, `hashAll`, `equals` and
+`compare` apply only the node limit (spec §12), and write with a stack of
+their own, so a value of any depth has a canonical form.
 
 ## Use
 

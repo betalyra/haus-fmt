@@ -20,20 +20,29 @@ from haus.schema import compile_schema
 
 RUNS = 5
 TRIES = 4
+MIN_RUN = 0.020
+"""The shortest time one measured run lasts, in seconds."""
 DEEP = Limits(max_depth=haus.MAX_SUPPORTED_DEPTH)
 
 
 def fastest(f: Callable[[], object]) -> float:
-    """The best of `RUNS` runs of `f`, with the garbage collector off as `timeit` has it: a
-    collection during a run costs time for every object alive, not for the work being timed."""
+    """The shortest time per call of `f` over `RUNS` runs, with the garbage collector off as `timeit`
+    has it: a collection during a run costs time for every object alive, not for the work being timed.
+
+    Each run starts after a collection, and repeats the call until it lasts at least `MIN_RUN`: a clock
+    that ticks coarsely (Windows) would measure a fast call as 0 and make any ratio huge.
+    """
     best = float("inf")
     collecting = gc.isenabled()
     gc.disable()
     try:
         for _ in range(RUNS):
-            start = time.perf_counter()
-            f()
-            best = min(best, time.perf_counter() - start)
+            gc.collect()
+            calls, start = 0, time.perf_counter()
+            while calls == 0 or time.perf_counter() - start < MIN_RUN:
+                f()
+                calls += 1
+            best = min(best, (time.perf_counter() - start) / calls)
     finally:
         if collecting:
             gc.enable()
@@ -42,6 +51,9 @@ def fastest(f: Callable[[], object]) -> float:
 
 def assert_linear(n: int, work: Callable[[int], Callable[[], object]]) -> None:
     small, large = work(n), work(4 * n)
+    # Warm up both sizes: caches (of key texts, compiled patterns) are filled before anything is timed.
+    small()
+    large()
     ratio = 0.0
     for _ in range(TRIES):
         ratio = fastest(large) / max(fastest(small), 1e-6)

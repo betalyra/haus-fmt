@@ -57,8 +57,8 @@ func suiteJSON(_ v: HausValue) -> String {
     case .bytes(let b): #"{"bytes":"\#(b.map { String(format: "%02x", $0) }.joined())"}"#
     case .array(let items): json(items.map(suiteJSON))
     case .record(let r): #"{"rec":{\#(r.map { json($0.key) + ":" + suiteJSON($0.value) }.joined(separator: ","))}}"#
-    case .variant(let tag, let args) where args.isEmpty: #"{"tag":\#(json(tag))}"#
-    case .variant(let tag, let args): #"{"tag":\#(json(tag)),"args":\#(json(args.map(suiteJSON)))}"#
+    case .variant(let tag, let args) where args.isEmpty: #"{"tag":\#(json(tag.name))}"#
+    case .variant(let tag, let args): #"{"tag":\#(json(tag.name)),"args":\#(json(args.map(suiteJSON)))}"#
     }
 }
 

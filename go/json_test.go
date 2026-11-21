@@ -27,7 +27,7 @@ func TestJSONErrorsHavePositions(t *testing.T) {
 		{"-", CodeJSONSyntax, 1, 2},
 		{"", CodeJSONSyntax, 1, 1},
 		{"[1] [2]", CodeJSONSyntax, 1, 5},
-		{"1e7000", CodeExponentTooLarge, 1, 2},
+		{"1e7000", CodeExponentTooLarge, 1, 1},
 	}
 	for _, tt := range tests {
 		_, err := ImportJSON([]byte(tt.json))
@@ -87,7 +87,7 @@ func TestSelfDescribingErrorPaths(t *testing.T) {
 }
 
 func TestToHausJSONEscapes(t *testing.T) {
-	got, err := ToHausJSON(Array{String("a\"\\\n\x01\u007f\u0085\u2028\u202e\u2066é😀"), Bytes{0xab}, Variant{Tag: "A"}})
+	got, err := ToHausJSON(Array{String("a\"\\\n\x01\u007f\u0085\u2028\u202e\u2066é😀"), Bytes{0xab}, Variant{Tag: MustTag("A")}})
 	if err != nil {
 		t.Fatal(err)
 	}

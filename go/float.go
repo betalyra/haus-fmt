@@ -39,7 +39,7 @@ func Float32Value(f float32) Value { return floatValue(float64(f), 32) }
 func floatValue(f float64, bitSize int) Value {
 	s := FormatFloat(f, bitSize)
 	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return Variant{Tag: s}
+		return Variant{Tag: Tag{name: s}}
 	}
 	return Number{lit: s}
 }

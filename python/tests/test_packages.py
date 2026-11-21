@@ -509,3 +509,39 @@ def test_a_major_version_is_compared_as_text(tmp_path: Path) -> None:
     resolver = FileResolver(tmp_path, [package(tmp_path / "money", "@acme/money", "1.0.0")])
     for major in ["18446744073709551617", "1" + "0" * 40]:
         assert "wants major version" in failure("import-version", f"import @acme/money@{major} (Money)", resolver)
+
+
+@pytest.mark.parametrize(
+    ("package_json", "error"),
+    [
+        ('{ "name": "@acme/money", "version": "1.0.0" }', None),
+        ('{ "name": "@acme/money" }', None),  # no version to check
+        ('{ "version": 2 }', None),  # checked only when it is a string
+        ('{ "version": "1.1.0" ', None),  # not JSON: no version
+        ('["1.1.0"]', None),  # not an object: no version
+        ('{ "version": "1.1.0" }', "its package.haus says version 1.0.0, its package.json version 1.1.0"),
+        ('{ "version": "1.0.0+build.5" }', "its package.json version 1.0.0+build.5"),  # compared as text
+        ('{ "version": "1.0.0 do-not-print" }', "a version that isn't a semantic version"),
+    ],
+)
+def test_the_version_of_a_package_json_next_to_the_manifest(
+    tmp_path: Path, package_json: str, error: str | None
+) -> None:
+    """Spec §13.3: a package given explicitly is checked against its package.json too."""
+    money = package(tmp_path / "money", "@acme/money", "1.0.0")
+    write(money / "package.json", package_json)
+    resolver = FileResolver(tmp_path, [money])
+    if error is None:
+        compile_schema(USE, resolver=resolver)
+    else:
+        reason = failure("package-version", USE, resolver)
+        assert error in reason and "do-not-print" not in reason
+
+
+@symlinks
+def test_a_package_json_next_to_the_manifest_is_a_regular_file(tmp_path: Path) -> None:
+    money = package(tmp_path / "money", "@acme/money", "1.0.0")
+    write(tmp_path / "secret" / "package.json", '{ "version": "9.9.9-do-not-print" }')
+    (money / "package.json").symlink_to(tmp_path / "secret" / "package.json")
+    reason = failure("package-path", USE, FileResolver(tmp_path, [money]))
+    assert "do-not-print" not in reason

@@ -840,6 +840,7 @@ impl Gen<'_> {
                     en: unwrap(&r.en),
                     from_json: format!("Ok({tag}({}?))", r.from_json.apply("j")),
                     to_json: unwrap(&r.to_json),
+                    no_value: false,
                 };
                 (format!("{head} := [{tag}({})]", r.ty), body)
             }
@@ -1401,6 +1402,7 @@ impl Gen<'_> {
                 check("FromJson")
             ),
             to_json: format!("ToJson.object(e, {})", parts.written),
+            no_value: false,
         };
         Ok((parts.ty, body))
     }
@@ -1678,13 +1680,24 @@ impl Gen<'_> {
                 arms(&from, "\t\t\t")
             )
         };
+        // A closed variant with no tags (`closed < ...E >`, E empty) has no values: decoding
+        // any tag is `unknown-tag` (above). Nothing can call its encoders with a value, and Roc
+        // has no empty `match`: they fail without looking at their arguments.
+        let no_value = closed && cases.is_empty();
+        let writes = |arms_: &[String]| match no_value {
+            true => {
+                format!("Err({{ code: \"cannot-encode\", reason: \"{} has no values\", path: \"\" }})", escape(owner))
+            }
+            false => format!("match v {{\n{}\t}}", arms(arms_, "\t\t")),
+        };
         Ok((
             format!("[{}]", tags.join(", ")),
             Bodies {
                 de: format!("match v.view() {{\n{}\t}}", arms(&de, "\t\t")),
-                en: format!("match v {{\n{}\t}}", arms(&en, "\t\t")),
+                en: writes(&en),
                 from_json,
-                to_json: format!("match v {{\n{}\t}}", arms(&to, "\t\t")),
+                to_json: writes(&to),
+                no_value,
             },
         ))
     }
@@ -1697,6 +1710,8 @@ struct Bodies {
     en: String,
     from_json: String,
     to_json: String,
+    /// A type with no values: its encoders take `_v, _e` and use neither.
+    no_value: bool,
 }
 
 impl Bodies {
@@ -1707,6 +1722,7 @@ impl Bodies {
             en: r.en.apply_at("v", "e"),
             from_json: r.from_json.apply("j"),
             to_json: r.to_json.apply_at("v", "e"),
+            no_value: false,
         }
     }
 }
@@ -1757,7 +1773,8 @@ fn functions(
     json: Json,
 ) -> String {
     let decl = if decl.is_empty() { String::new() } else { format!("\t{decl}\n\n") };
-    let Bodies { de, en, from_json, to_json } = body;
+    let Bodies { de, en, from_json, to_json, no_value } = body;
+    let (v, e) = if *no_value { ("_v", "_e") } else { (v, "e") };
     let decoders = match checked {
         true => format!(
             "\tdecode_{s} : Value -> Try({head}, Decode.Error)\n\tdecode_{s} = |v| Decode.within_depth(v, read_value_{s})\n\n\
@@ -1770,7 +1787,7 @@ fn functions(
     };
     let mut out = format!(
         "{doc}{decl}{decoders}\tencode_{s} : {head}, Encode.Encoder{} -> Try(Encode.Encoded(Value), Encode.Error)\n\
-         \tencode_{s} = |{v}, e{}| {en}\n",
+         \tencode_{s} = |{v}, {e}{}| {en}\n",
         p.en_types, p.en_args
     );
     match json {
@@ -1779,7 +1796,7 @@ fn functions(
             let _ = write!(
                 out,
                 "\n\tfrom_json_{s} : JsonValue{} -> Try({head}, Decode.Error)\n\tfrom_json_{s} = |j{}| {from_json}\n\n\
-                 \tto_json_{s} : {head}, Encode.Encoder{} -> Try(Encode.Encoded(JsonValue), Encode.Error)\n\tto_json_{s} = |{v}, e{}| {to_json}\n",
+                 \tto_json_{s} : {head}, Encode.Encoder{} -> Try(Encode.Encoded(JsonValue), Encode.Error)\n\tto_json_{s} = |{v}, {e}{}| {to_json}\n",
                 p.from_types, p.from_args, p.to_types, p.to_args
             );
         }
@@ -1789,7 +1806,7 @@ fn functions(
                 "\n\tfrom_json_{s} : JsonValue -> Try({head}, Decode.Error)\n\
                  \tfrom_json_{s} = |j| FromJson.within_depth(j, read_json_{s}, encode_{s})\n\n\
                  \tread_json_{s} : JsonValue -> Try({head}, Decode.Error)\n\tread_json_{s} = |j| {from_json}\n\n\
-                 \tto_json_{s} : {head}, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)\n\tto_json_{s} = |{v}, e| {to_json}\n",
+                 \tto_json_{s} : {head}, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)\n\tto_json_{s} = |{v}, {e}| {to_json}\n",
             );
         }
     }
@@ -2081,6 +2098,20 @@ mod tests {
         let code = roc("type F64 = Float64\ntype Box = { w: Int }\ntype Value = Box");
         assert!(code.contains("F64_ : F64") && code.contains("Box_ : { w : Int }"), "{code}");
         assert!(code.contains("Value_ : Box_") && code.contains("read_value_value = |v| read_value_box(v)"), "{code}");
+    }
+
+    #[test]
+    fn a_closed_variant_with_no_tags_has_no_values() {
+        // Roc has no empty `match`: decoding reads the tag and fails, encoding fails without a look.
+        let code = roc("type E = < >\ntype C = closed < ...E >");
+        assert!(code.contains("C := []"), "{code}");
+        assert!(code.contains("Tag(tag, _) => Decode.unknown_tag(tag, [])"), "{code}");
+        assert!(
+            code.contains(
+                "encode_c = |_v, _e| Err({ code: \"cannot-encode\", reason: \"C has no values\", path: \"\" })"
+            ),
+            "{code}"
+        );
     }
 
     #[test]

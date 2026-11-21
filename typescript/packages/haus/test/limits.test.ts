@@ -64,10 +64,12 @@ describe("MAX_SUPPORTED_DEPTH", () => {
 
   it("formats, writes canonically and hashes at it", async () => {
     const value = parse(tagged(MAX), limits)
-    expect(stringify(value, { style: "compact" })).toBe(tagged(MAX))
-    expect(canonical(parse(stringify(value), limits))).toBe(canonical(value))
+    expect(stringify(value, { style: "compact", limits })).toBe(tagged(MAX))
+    expect(canonical(parse(stringify(value, { limits }), limits))).toBe(canonical(value))
     const { values, comments } = parseDocument(`// deep\n${tagged(MAX)}`, limits)
-    expect(format(values, { source: `// deep\n${tagged(MAX)}`, comments })).toContain("// deep")
+    expect(format(values, { source: `// deep\n${tagged(MAX)}`, comments, limits })).toContain("// deep")
+    // A writer checks the depth with its own limits (spec §11): the default 256 is less.
+    expect(() => stringify(value)).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
     expect(canonical(value)).toBe("T{a:".repeat(MAX) + "1" + "}".repeat(MAX))
     expect(await hash(value)).toMatch(/^[0-9a-f]{64}$/)
   })
@@ -97,7 +99,7 @@ describe("MAX_SUPPORTED_DEPTH", () => {
     expect(canonical(fromHausJson(self, limits))).toBe(canonical(value))
     expect(canonical(fromHausJsonValue(toHausJsonValue(value, limits), limits))).toBe(canonical(value))
     const lines = await collect(toHausJsonLines([value], limits))
-    expect((await collect(fromHausJsonLines(lines, { limits }))).map(canonical)).toEqual([canonical(value)])
+    expect((await collect(fromHausJsonLines(lines, { limits }))).map((v) => canonical(v))).toEqual([canonical(value)])
     // An array at every level: one JSON level each, and the envelope.
     const arrays = `{"_haus":1,"_value":${nested(MAX)}}`
     expect(canonical(fromHausJson(arrays, limits))).toBe(nested(MAX))
@@ -105,7 +107,7 @@ describe("MAX_SUPPORTED_DEPTH", () => {
 
     expect(canonical(importJson(nested(MAX), limits))).toBe(nested(MAX))
     expect(canonical(importJsonValue(parseJson(nested(MAX), limits), limits))).toBe(nested(MAX))
-    expect((await collect(importJsonLines([`${nested(MAX)}\n`], { limits }))).map(canonical)).toEqual([nested(MAX)])
+    expect((await collect(importJsonLines([`${nested(MAX)}\n`], { limits }))).map((v) => canonical(v))).toEqual([nested(MAX)])
     // Raw JSON counts its own levels: up to hausJsonDepth(MAX), as self-describing JSON needs.
     const deepest = nested(hausJsonDepth(MAX))
     expect(stringifyJson(parseJson(deepest, { maxDepth: hausJsonDepth(MAX) }))).toBe(deepest)
@@ -115,10 +117,12 @@ describe("MAX_SUPPORTED_DEPTH", () => {
 
   it("formatting, the canonical form and JSON writing don't recurse: values built in code of any depth", () => {
     const deep = Array.from({ length: 20_000 }).reduce<Value>((inner) => variant("T", [rec(new Map([["a", inner]]))]), arr([]))
-    expect(stringify(deep, { style: "compact" })).toHaveLength(20_000 * "T { a:  }".length + 2)
+    // Writers take any depth they are given (they don't use the call stack); the canonical form has no depth limit.
+    expect(stringify(deep, { style: "compact", limits: { maxDepth: 20_001 } })).toHaveLength(20_000 * "T { a:  }".length + 2)
+    expect(() => stringify(deep, { style: "compact", limits: { maxDepth: 20_000 } })).toThrow(expect.objectContaining({ code: "nesting-too-deep" }))
     expect(canonical(deep)).toHaveLength(20_000 * "T{a:}".length + 2)
     // 2001 levels, one bracket per line but the innermost `[]`.
-    expect(stringify(Array.from({ length: 2_000 }).reduce<Value>((inner) => arr([inner]), arr([]))).split("\n")).toHaveLength(4_001)
+    expect(stringify(Array.from({ length: 2_000 }).reduce<Value>((inner) => arr([inner]), arr([])), { limits: { maxDepth: 2_001 } }).split("\n")).toHaveLength(4_001)
     const json = Array.from({ length: 20_000 }).reduce<Json>((inner) => [inner], [])
     expect(stringifyJson(json)).toBe(nested(20_001))
   })

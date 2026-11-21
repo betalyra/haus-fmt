@@ -541,7 +541,9 @@ export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<A
   const toValue = valueEncoder<S, []>(schema, codecs)
   return Effect.fn("Haus.encode")(function* (value: S["Type"], options?: EncodeOptions) {
     const [format, limits] = withOptions(defaults, options)
-    return stringify(yield* toValue(value, limits), { ...format, limits })
+    const written = yield* toValue(value, limits)
+    // The writer's limits (spec §11): a value the codecs built can still break the node limit.
+    return yield* fromSync(() => stringify(written, { ...format, limits }), jsonErrorOf)
   })
 }
 
@@ -563,7 +565,7 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toValue(value, limits).pipe(
-          Effect.map((v) => stringify(v, { style: "compact", ...format, limits }) + ",\n"),
+          Effect.flatMap((v) => fromSync(() => stringify(v, { style: "compact", ...format, limits }) + ",\n", jsonErrorOf)),
           Effect.mapError(atIndex(index)),
         )),
       Stream.withSpan("Haus.encodeStream"),

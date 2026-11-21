@@ -26,7 +26,7 @@ func TestEqualitySuite(t *testing.T) {
 		if !okA || !okB || !okEqual || !okOrder {
 			t.Fatalf("not a case: %v", v)
 		}
-		wantEqual := eq.Tag == "True"
+		wantEqual := eq.Tag.String() == "True"
 		n, _ := o.BigInt()
 		wantOrder := int(n.Int64())
 		name := mustCanonical(t, a) + " and " + mustCanonical(t, b)
@@ -36,10 +36,10 @@ func TestEqualitySuite(t *testing.T) {
 		if got := Equals(b, a); got != wantEqual {
 			t.Errorf("%s: Equals(b, a) = %v, want %v", name, got, wantEqual)
 		}
-		if got := sign(Compare(a, b)); got != wantOrder {
+		if got := sign(compare(t, a, b)); got != wantOrder {
 			t.Errorf("%s: Compare(a, b) = %d, want %d", name, got, wantOrder)
 		}
-		if got := sign(Compare(b, a)); got != -wantOrder {
+		if got := sign(compare(t, b, a)); got != -wantOrder {
 			t.Errorf("%s: Compare(b, a) = %d, want %d", name, got, -wantOrder)
 		}
 	}

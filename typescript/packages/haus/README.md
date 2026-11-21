@@ -313,10 +313,15 @@ does (`num("1E+05").text` is `"1e5"`, `num("0xFF").text` is `"255"`), with no
 limit on its length or exponent. `rec` takes a `Map`, `[key, value]` pairs or
 a plain object, in their order. Each copies what it is given (`arr` and
 `variant` freeze their copy), so a value can't change once built, nor contain
-itself. So writing a value, its canonical form, `hash`, `hashAll`, `equals`
-and `compare` can't fail for what it is; a writer still fails for a value
-beyond its limits (spec §7: `number-too-long` and the like), the canonical
-form has none. An object literal is not a `Value` (the type says so), and
+itself. A constructor checks only that a value is valid, never a limit: the
+limits belong to the writer (spec §11). So writing a value, its canonical
+form, `hash`, `hashAll`, `equals` and `compare` can't fail for what it is. A
+writer (`stringify`, `format`, `toHausJson`, the schema encoders) still fails
+for a value beyond its limits, with the limit's code: `nesting-too-deep`
+(a record payload `Tag { … }` counts as one level), `string-too-long`,
+`key-too-long`, `tag-too-long`, `number-too-long`, `exponent-too-large`, and
+`too-many-nodes`. The canonical form and hashing have only the last one, the
+node limit (below). An object literal is not a `Value` (the type says so), and
 `isValue(x)` tells one apart at run time. A value forged past the
 constructors with a cast is not a haus value: what this package does with it
 is undefined.
@@ -326,11 +331,23 @@ is undefined.
 Every reader, decoder and encoder takes the limits of spec §7, enforced while
 parsing: `maxDepth` (256 by default), `maxNumberLength` (1000),
 `maxExponent` (6144) and `maxStringLength` (16 Mi characters, for strings,
-record keys and tags), plus `maxSteps` for schemas.
+record keys and tags), plus `maxSteps` for schemas. Writers take them too
+(`stringify(value, { limits })`), so that what they write reads again with
+the same limits.
+
+`maxNodes` (64 Mi) is the node limit: the values written for one value, each
+as often as it is written. A `Value` built in code can hold one part in many
+places (`const a = arr([b, b])`, and so on): small in memory, it would expand
+exponentially when written. Writers, `canonical`, `hash`, `hashAll`, `equals`
+and `compare` fail beyond it with `too-many-nodes`, for each top-level value
+on its own (at `$`, or `$[i]` for value i of several). Parsing doesn't use
+it: a parsed value has fewer values than its text has characters.
 
 ```ts
 parse(text, { maxDepth: 512, maxStringLength: 1024 })
 h.decode(Order, value, { maxDepth: 64 })
+stringify(value, { limits: { maxDepth: 64 } })
+canonical(value, { maxNodes: 1_000_000 })
 ```
 
 `maxDepth` is at most `MAX_SUPPORTED_DEPTH`, 512: the parser, the schema
@@ -340,7 +357,9 @@ schema, overflows near 750). A larger `maxDepth` is a `RangeError` naming the
 maximum, thrown when the limits are given. Raw JSON (`parseJson`) counts JSON
 levels, up to `hausJsonDepth(512)`, 2050, as many as 512 haus levels take in
 self-describing JSON (`jsonDepth(512)`, 2049, in schema-based JSON).
-Formatting, the canonical form and hashing don't recurse: they take any depth.
+Formatting, the canonical form and hashing don't recurse: they take any
+depth (a writer, any `maxDepth` it is given; the canonical form has no depth
+limit).
 
 ## Workers
 

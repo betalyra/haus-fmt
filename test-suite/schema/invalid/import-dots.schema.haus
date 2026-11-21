@@ -1,0 +1,3 @@
+// A module that starts with "." but not with "./" or "../" is unknown-module (grammar.ebnf).
+import .../a (A)
+type B = { a: A }

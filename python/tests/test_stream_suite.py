@@ -75,7 +75,7 @@ def same(got: tuple[Value, ...] | str, want: tuple[Value, ...] | str) -> bool:
 
 
 def test_the_suite_has_all_its_cases() -> None:
-    assert len(CASES) == 24
+    assert len(CASES) == 26
 
 
 @pytest.mark.parametrize(

@@ -1,4 +1,4 @@
-import { checkWellFormed, HausSyntaxError } from "./errors.js"
+import { checkWellFormed, HausSyntaxError, locate, START } from "./errors.js"
 import { Parser, withDefaults, type Limits } from "./parser.js"
 import type { Value } from "./value.js"
 
@@ -51,11 +51,16 @@ export function parseDocument(text: string, limits: Partial<Limits> = {}): { val
   return { values, comments: parser.comments }
 }
 
-/** Parse a complete text that must contain exactly one value. */
+/**
+ * Parse a complete text that must contain exactly one value. Not one value
+ * (none, or several) is `not-one-value` at the end of the input (spec §8),
+ * once the whole text has parsed.
+ */
 export function parse(text: string, limits: Partial<Limits> = {}): Value {
   const values = parseAll(text, limits)
   if (values.length !== 1) {
-    throw new HausSyntaxError(`expected exactly one value, found ${values.length}`, 0, 1, 1, "not-one-value", { expected: "one value", found: `${values.length} values` })
+    const end = locate(text, text.length, START)
+    throw new HausSyntaxError(`expected exactly one value, found ${values.length}`, end.offset, end.line, end.column, "not-one-value", { expected: "one value", found: `${values.length} values` })
   }
   return values[0]!
 }

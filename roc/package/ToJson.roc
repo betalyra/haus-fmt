@@ -513,7 +513,8 @@ expect ToJson.value_with(dag(3), to_json_dag, budget(15)).is_ok() and ToJson.val
 # Scalars and raw values count too: a list of three numbers is four values, `[[], []]` three.
 expect ToJson.value_with([1.I32, 2, 3], |l, e| ToJson.list(l, e, ToJson.i32), budget(4)).is_ok() and ToJson.value_with([1.I32, 2, 3], |l, e| ToJson.list(l, e, ToJson.i32), budget(3)).is_err()
 expect ToJson.value_with(Value.arr([Value.arr([]), Value.arr([])]), ToJson.any, budget(3)).is_ok() and ToJson.value_with(Value.arr([Value.arr([]), Value.arr([])]), ToJson.any, budget(2)).is_err()
-# JSON built in code, shared as much: the JSON writer counts too.
+# JSON built in code, shared as much: the JSON writer counts the values it
+# writes against the node limit (spec §7, "Values written").
 expect {
 	var $j = Array([])
 	var $i = 0
@@ -521,5 +522,15 @@ expect {
 		$j = Array([$j, $j])
 		$i = $i + 1
 	}
-	JsonValue.to_str_with($j, budget(100_000)).map_err(|e| e.code) == Err("step-budget") and JsonValue.to_str_with(Array([Array([]), Null]), budget(3)).is_ok() and JsonValue.to_str_with(Array([Array([]), Null]), budget(2)).is_err()
+	nodes = |max| { ..Value.default_limits, max_nodes: max }
+	JsonValue.to_str_with($j, nodes(100_000)).map_err(|e| e.code) == Err("too-many-nodes")
+		and JsonValue.to_str_with(Array([Array([]), Null]), nodes(3)).is_ok()
+		and JsonValue.to_str_with(Array([Array([]), Null]), nodes(2)).map_err(|e| e.code) == Err("too-many-nodes")
+		and JsonValue.write_lines_with([Array([Array([]), Null]), Null, Array([Array([]), Null])], nodes(3)).is_ok()
+}
+# Self-describing JSON counts the haus values written: `{"_num":"1"}` is one.
+expect {
+	nodes = |max| { ..Value.default_limits, max_nodes: max }
+	v = Value.arr([Value.num("1") ?? Value.text(""), Value.arr([])])
+	JsonValue.to_haus_json_with(v, nodes(3)) == Ok("{\"_haus\":1,\"_value\":[{\"_num\":\"1\"},[]]}") and JsonValue.to_haus_json_with(v, nodes(2)).map_err(|e| e.code) == Err("too-many-nodes")
 }

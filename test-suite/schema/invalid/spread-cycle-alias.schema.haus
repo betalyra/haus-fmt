@@ -1,0 +1,3 @@
+// A spread cycle through an alias: Q spreads S, which is Q (spec §14).
+type Q = { x: < Y { ...S } > }
+type S = Q

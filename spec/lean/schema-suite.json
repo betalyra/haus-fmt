@@ -40,15 +40,22 @@
     ["User",{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"nick","optional":true,"type":{"builtin":"String"}},{"key":"note","optional":true,"type":{"maybe":{"builtin":"String"}}}]}}]
   ]},
   {"name": "spreads", "defs": [
+    ["AliasEvent",{"ref":"UserEvent"}],
     ["AppEvent",{"variant":{"closed":true,"cases":[{"tag":"UserCreated","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}},{"tag":"UserRenamed","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"to","optional":false,"type":{"builtin":"String"}}]}}},{"tag":"Heartbeat","payload":"none"}]}}],
     ["Base",{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"name","optional":false,"type":{"builtin":"String"}}]}}],
+    ["ClosedNoTags",{"variant":{"closed":true,"cases":[]}}],
     ["Extended",{"variant":{"closed":false,"cases":[{"tag":"A","payload":"none"},{"tag":"B","payload":{"positional":[{"builtin":"Int"}]}},{"tag":"C","payload":"none"}]}}],
     ["Fixed",{"variant":{"closed":true,"cases":[{"tag":"A","payload":"none"},{"tag":"B","payload":{"positional":[{"builtin":"Int"}]}}]}}],
+    ["IntPage",{"ref":"Page(Int)"}],
+    ["Listing",{"record":{"closed":true,"fields":[{"key":"items","optional":false,"type":{"array":{"builtin":"Int"}}},{"key":"total","optional":false,"type":{"builtin":"Int"}}]}}],
+    ["NoTags",{"variant":{"closed":false,"cases":[]}}],
+    ["Page(Int)",{"record":{"closed":false,"fields":[{"key":"items","optional":false,"type":{"array":{"builtin":"Int"}}}]}}],
     ["Person",{"record":{"closed":true,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"name","optional":false,"type":{"builtin":"String"}},{"key":"email","optional":false,"type":{"builtin":"String"}}]}}],
     ["Sealed",{"record":{"closed":true,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}],
     ["ServerEvent",{"variant":{"closed":false,"cases":[{"tag":"UserCreated","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}},{"tag":"UserRenamed","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"to","optional":false,"type":{"builtin":"String"}}]}}}]}}],
     ["Unsealed",{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"note","optional":true,"type":{"builtin":"String"}}]}}],
-    ["UserEvent",{"variant":{"closed":false,"cases":[{"tag":"UserCreated","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}},{"tag":"UserRenamed","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"to","optional":false,"type":{"builtin":"String"}}]}}}]}}]
+    ["UserEvent",{"variant":{"closed":false,"cases":[{"tag":"UserCreated","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}},{"tag":"UserRenamed","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"to","optional":false,"type":{"builtin":"String"}}]}}}]}}],
+    ["ViaAlias",{"variant":{"closed":true,"cases":[{"tag":"UserCreated","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}}]}}},{"tag":"UserRenamed","payload":{"record":{"closed":false,"fields":[{"key":"id","optional":false,"type":{"builtin":"Int"}},{"key":"to","optional":false,"type":{"builtin":"String"}}]}}},{"tag":"Ping","payload":"none"}]}}]
   ]},
   {"name": "time", "defs": [
     ["At",{"time":"Instant"}],
@@ -94,6 +101,7 @@
     ["ClosedPayload",{"variant":{"closed":true,"cases":[{"tag":"Circle","payload":{"record":{"closed":true,"fields":[{"key":"r","optional":false,"type":{"builtin":"Int"}}]}}}]}}],
     ["Holder",{"record":{"closed":false,"fields":[{"key":"shape","optional":false,"type":{"ref":"Shape"}},{"key":"any","optional":false,"type":{"array":{"ref":"AnyTag"}}}]}}],
     ["Level",{"variant":{"closed":true,"cases":[{"tag":"Debug","payload":"none"},{"tag":"Info","payload":"none"}]}}],
+    ["MapBox",{"variant":{"closed":false,"cases":[{"tag":"Box","payload":{"positional":[{"map":{"builtin":"Int"}}]}}]}}],
     ["Next",{"ref":"Node"}],
     ["Node",{"record":{"closed":false,"fields":[{"key":"s","optional":false,"type":{"variant":{"closed":false,"cases":[{"tag":"S","payload":{"record":{"closed":false,"fields":[{"key":"s","optional":false,"type":{"variant":{"closed":false,"cases":[{"tag":"S","payload":{"named":{"ref":"Next"}}},{"tag":"N","payload":"none"}]}}},{"key":"o","optional":true,"type":{"variant":{"closed":false,"cases":[{"tag":"T","payload":{"named":{"ref":"Next"}}}]}}}]},"named":{"ref":"Next"}}},{"tag":"N","payload":"none"}]}}},{"key":"o","optional":true,"type":{"variant":{"closed":false,"cases":[{"tag":"T","payload":{"record":{"closed":false,"fields":[{"key":"s","optional":false,"type":{"variant":{"closed":false,"cases":[{"tag":"S","payload":{"named":{"ref":"Next"}}},{"tag":"N","payload":"none"}]}}},{"key":"o","optional":true,"type":{"variant":{"closed":false,"cases":[{"tag":"T","payload":{"named":{"ref":"Next"}}}]}}}]},"named":{"ref":"Next"}}}]}}}]}}],
     ["Shape",{"variant":{"closed":false,"cases":[{"tag":"Circle","payload":{"record":{"closed":false,"fields":[{"key":"r","optional":false,"type":{"builtin":"Float64"}}]}}},{"tag":"Point","payload":{"positional":[{"builtin":"Float64"},{"builtin":"Float64"}]}},{"tag":"Empty","payload":"none"},{"tag":"Wrap","payload":{"record":{"closed":false,"fields":[{"key":"w","optional":false,"type":{"builtin":"Int"}}]},"named":{"ref":"Box"}}},{"tag":"Pair","payload":{"positional":[{"builtin":"Int"},{"builtin":"String"}]}}]}}],

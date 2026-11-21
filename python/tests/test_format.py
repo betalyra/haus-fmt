@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 import haus
-from haus import Array, Bytes, Limits, Number, Record, String, Style, Variant
+from haus import Array, Bytes, Limits, Number, Record, String, Style, Value, Variant
 from haus.schema import HausEncodeError
 
 SUITE = Path(__file__).resolve().parents[2] / "test-suite"
@@ -211,3 +211,46 @@ def test_values_outside_the_limits() -> None:
     # In a stream, the path starts with the value's index.
     e = encode_error([Variant("A"), Number("1e7000")])
     assert (e.code, e.path) == ("exponent-too-large", (1,))
+
+
+def test_writers_check_the_string_key_and_tag_lengths() -> None:
+    """Spec §11: in code points, as the parser counts them; a byte string as its hex digits."""
+    short = Limits(max_string_length=3)
+
+    def fails(value: Any, code: str, path: tuple[str | int, ...] = ()) -> None:
+        e = encode_error([value], short)
+        assert (e.code, e.path) == (code, path), e.reason
+
+    fails(Array((String("abcd"),)), "string-too-long", (0,))
+    fails(Record({"abcd": Number("1")}), "key-too-long")
+    fails(Record({"a": Variant("Abcd")}), "tag-too-long", ("a",))
+    fails(Variant("T", (Bytes(b"ab"),)), "string-too-long", (0,))
+    # An emoji is one character, also where a language stores it as two units.
+    within = Array((String("😀😀😀"), Bytes(b"a"), Variant("Abc"), Record({"abc": String("")})))
+    assert haus.stringify(within, style="minimised", limits=short) == '["😀😀😀",x"61",Abc,{abc:""}]'
+
+
+def shared(levels: int) -> Value:
+    """An array holding the same array twice, `levels` deep: small in memory, 2**(levels + 1) - 1 values written."""
+    v: Value = Array(())
+    for _ in range(levels):
+        v = Array((v, v))
+    return v
+
+
+def test_writers_count_each_place_a_shared_part_is_in() -> None:
+    """Spec §7, "Values written": the value, and every element, field value and argument, each as often
+    as it is written; at most `max_nodes` for each top-level value, else `too-many-nodes` at it."""
+    assert haus.stringify(shared(2), style="minimised", limits=Limits(max_nodes=7)) == "[[[],[]],[[],[]]]"
+    e = encode_error([shared(2)], Limits(max_nodes=6))
+    assert (e.code, e.path) == ("too-many-nodes", ())
+    # A record payload is an argument: `T { a: 1 }` writes three values.
+    payload = Variant("T", (Record({"a": Number("1")}),))
+    assert haus.stringify(payload, style="compact", limits=Limits(max_nodes=3)) == "T { a: 1 }"
+    assert encode_error([payload], Limits(max_nodes=2)).code == "too-many-nodes"
+    # Each top-level value on its own, at its index in a stream.
+    assert haus.stringify_all([shared(2), shared(2)], style="minimised", limits=Limits(max_nodes=7))
+    e = encode_error([Number("1"), shared(3)], Limits(max_nodes=7))
+    assert (e.code, e.path) == ("too-many-nodes", (1,))
+    # The default is 64 Mi values.
+    assert haus.DEFAULT_LIMITS.max_nodes == 64 * 1024 * 1024

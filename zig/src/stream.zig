@@ -120,6 +120,21 @@ pub const StreamReader = struct {
             r.seg_start = 0;
         }
         try r.buf.appendSlice(r.gpa, chunk);
+        // The text read so far is checked for UTF-8 before any of it is
+        // parsed (spec §4): invalid UTF-8 in this chunk comes before a
+        // syntax error in a value it completes.
+        {
+            var at = r.scanned;
+            while (at < r.buf.items.len) {
+                const len = std.unicode.utf8ByteSequenceLength(r.buf.items[at]) catch return r.fail(.@"invalid-utf8", at, "invalid UTF-8", .{});
+                if (at + len > r.buf.items.len) {
+                    if (!prefixValid(r.buf.items[at..])) return r.fail(.@"invalid-utf8", at, "invalid UTF-8", .{});
+                    break;
+                }
+                _ = std.unicode.utf8Decode(r.buf.items[at .. at + len]) catch return r.fail(.@"invalid-utf8", at, "invalid UTF-8", .{});
+                at += len;
+            }
+        }
         var out: std.ArrayList(Value) = .empty;
         errdefer out.deinit(arena);
         while (r.scanned < r.buf.items.len) {
@@ -145,7 +160,12 @@ pub const StreamReader = struct {
             }
             r.chars += 1;
             if (r.chars > r.options.limits.max_value_length) {
-                return r.fail(.@"value-too-long", at, "a value longer than {d} characters", .{r.options.limits.max_value_length});
+                // At the start of the value's text: after the previous
+                // top-level comma, or the start of the stream after a byte
+                // order mark (spec §8).
+                var start = r.seg_start;
+                if (r.first and std.mem.startsWith(u8, r.buf.items[start..], "\u{FEFF}")) start += 3;
+                return r.fail(.@"value-too-long", start, "a value longer than {d} characters", .{r.options.limits.max_value_length});
             }
         }
         return out.toOwnedSlice(arena);
@@ -345,4 +365,33 @@ test "errors at the same place as parsing the whole text" {
     try std.testing.expectEqual(@as(u32, 5), d.column);
     try std.testing.expectError(error.Haus, readAll(std.testing.allocator, arena, "1, 2", 2, .{ .strict = true, .diagnostic = &d }));
     try std.testing.expectEqual(errors.Code.@"stream-truncated", d.code);
+}
+
+test "a chunk is checked for UTF-8 before it is parsed" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var d: Diagnostic = .{};
+    try std.testing.expectError(error.Haus, readAll(std.testing.allocator, arena, "[1 2], \xff", 64, .{ .diagnostic = &d }));
+    try std.testing.expectEqual(errors.Code.@"invalid-utf8", d.code);
+}
+
+test "value-too-long is at the start of the value's text" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var d: Diagnostic = .{};
+    const limits: Limits = .{ .max_value_length = 5 };
+    const Case = struct { text: []const u8, line: u32, column: u32 };
+    for ([_]Case{
+        // The character after the comma: here the line break.
+        .{ .text = "1,\n 1234567,", .line = 1, .column = 3 },
+        .{ .text = "1, [1,,2,3,4]", .line = 1, .column = 3 },
+        .{ .text = "\u{FEFF}1234567", .line = 1, .column = 2 },
+    }) |c| for ([_]usize{ 1, 3, 64 }) |size| {
+        try std.testing.expectError(error.Haus, readAll(std.testing.allocator, arena, c.text, size, .{ .limits = limits, .diagnostic = &d }));
+        try std.testing.expectEqual(errors.Code.@"value-too-long", d.code);
+        try std.testing.expectEqual(c.line, d.line);
+        try std.testing.expectEqual(c.column, d.column);
+    };
 }

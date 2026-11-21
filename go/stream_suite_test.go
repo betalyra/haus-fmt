@@ -39,10 +39,10 @@ func toStreamCase(t *testing.T, v Value) streamCase {
 	if !okText || !okMax || !okResult || err != nil || len(res.Args) != 1 {
 		t.Fatalf("not a case: %v", v)
 	}
-	c := streamCase{text: string(s), max: limitValue, strict: Equals(strict, Variant{Tag: "True"})}
+	c := streamCase{text: string(s), max: limitValue, strict: Equals(strict, Variant{Tag: MustTag("True")})}
 	if whole, ok := r.Get("whole"); ok {
 		w, okWhole := whole.(Variant)
-		if !okWhole || w.Tag != "Ok" || len(w.Args) != 1 {
+		if !okWhole || w.Tag.String() != "Ok" || len(w.Args) != 1 {
 			t.Fatalf("not a whole result: %v", whole)
 		}
 		c.whole, okWhole = w.Args[0].(Array)
@@ -52,12 +52,12 @@ func toStreamCase(t *testing.T, v Value) streamCase {
 	}
 	switch arg := res.Args[0].(type) {
 	case Array:
-		if res.Tag == "Ok" {
+		if res.Tag.String() == "Ok" {
 			c.values = arg
 			return c
 		}
 	case String:
-		if res.Tag == "Err" {
+		if res.Tag.String() == "Err" {
 			c.code = string(arg)
 			return c
 		}
@@ -133,8 +133,8 @@ func readStreamSuite(t *testing.T, name string) []Value {
 // names another directory holding the suite's file.
 func TestStreamSuite(t *testing.T) {
 	vs := readStreamSuite(t, "limits.cases.haus")
-	if len(vs) != 24 {
-		t.Errorf("%d cases, want 24", len(vs))
+	if len(vs) != 26 {
+		t.Errorf("%d cases, want 26", len(vs))
 	}
 	for _, v := range vs {
 		c := toStreamCase(t, v)
@@ -216,9 +216,9 @@ func TestDocumentSuite(t *testing.T) {
 			t.Fatalf("not a case: %v", v)
 		}
 		var want string
-		if code, ok := res.Args[0].(String); res.Tag == "Err" && ok {
+		if code, ok := res.Args[0].(String); res.Tag.String() == "Err" && ok {
 			want = "Err " + string(code)
-		} else if res.Tag == "Ok" {
+		} else if res.Tag.String() == "Ok" {
 			want = "Ok " + mustCanonical(t, res.Args[0])
 		} else {
 			t.Fatalf("not a result: %v", result)

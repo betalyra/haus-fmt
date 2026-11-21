@@ -1,6 +1,6 @@
 //! Repeated record keys (spec §1), found in linear time whatever the keys
 //! (spec §9.8), for the parser and for records built in code
-//! ([`crate::Record`]).
+//! ([`crate::Record`], and JSON objects, [`crate::json::JsonObject`]).
 //!
 //! A few keys are compared with each other, and only when a key may repeat
 //! one: when another key before it has the same length, first and last byte
@@ -12,7 +12,6 @@
 //! [`MAX_CHAIN`] keys before that, so the work stays linear in the size of
 //! the keys.
 
-use crate::Value;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 
@@ -38,7 +37,7 @@ pub(crate) struct Keys {
 impl Keys {
     /// The keys of `fields`, which are unique, chained: for a record built
     /// in code that grows one key at a time ([`crate::Record::insert`]).
-    pub(crate) fn of(fields: &[(String, Value)]) -> Keys {
+    pub(crate) fn of<T>(fields: &[(String, T)]) -> Keys {
         let mut keys = Keys::default();
         keys.rebuild(fields, 4 * fields.len());
         keys
@@ -46,7 +45,7 @@ impl Keys {
 
     /// Adds `key`, the key of the field after `before` (whose keys were
     /// added before it), if none of them is the same: whether it is new.
-    pub(crate) fn insert(&mut self, before: &[(String, Value)], key: &str) -> bool {
+    pub(crate) fn insert<T>(&mut self, before: &[(String, T)], key: &str) -> bool {
         // The number of keys with this one.
         let count = before.len() + 1;
         if self.heads.is_empty() && count <= FEW {
@@ -76,7 +75,7 @@ impl Keys {
     }
 
     /// Chains `keys` again, in `size` (rounded up to a power of two) chains.
-    fn rebuild(&mut self, keys: &[(String, Value)], size: usize) {
+    fn rebuild<T>(&mut self, keys: &[(String, T)], size: usize) {
         self.heads.clear();
         self.heads.resize(size.next_power_of_two().max(64), END);
         self.next.clear();
@@ -103,7 +102,7 @@ impl Keys {
 }
 
 /// The first of `fields` whose key an earlier one has, if any.
-pub(crate) fn first_repeated(fields: &[(String, Value)]) -> Option<usize> {
+pub(crate) fn first_repeated<T>(fields: &[(String, T)]) -> Option<usize> {
     let mut keys = match fields.len() <= FEW {
         true => Keys::default(),
         false => Keys { heads: vec![END; (2 * fields.len()).next_power_of_two()], ..Keys::default() },

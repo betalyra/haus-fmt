@@ -66,12 +66,12 @@ const same = (got: Outcome, want: Case["result"]): boolean =>
     ? got.values.length === want.values.length && got.values.every((v, i) => equals(v, want.values[i]!))
     : !got.ok && !want.ok && got.code === want.code
 
-const show = (o: Outcome): string => (o.ok ? `Ok [${o.values.map(canonical).join(", ")}]` : `Err ${o.code}`)
+const show = (o: Outcome): string => (o.ok ? `Ok [${o.values.map((v) => canonical(v)).join(", ")}]` : `Err ${o.code}`)
 
 const cases = parseAll(readFileSync(CASES, "utf8")).map(toCase)
 
 describe("stream suite", () => {
-  it("has all its cases", () => expect(cases.length).toBe(24))
+  it("has all its cases", () => expect(cases.length).toBe(26))
   for (const c of cases) {
     it(`${JSON.stringify(c.text)} max ${c.maxValueLength}${c.strict ? " strict" : ""}`, () => {
       const failures = splits(c.text).flatMap(([how, chunks]) => {
@@ -93,7 +93,7 @@ describe("stream suite, parsed whole", () => {
     return [{ text: text.value, values: whole.args[0].items }]
   })
   it("has cases", () => expect(wholes.length).toBeGreaterThan(0))
-  it.each(wholes)("$text", ({ text, values }) => expect(parseAll(text).map(canonical)).toEqual(values.map(canonical)))
+  it.each(wholes)("$text", ({ text, values }) => expect(parseAll(text).map((v) => canonical(v))).toEqual(values.map((v) => canonical(v))))
 })
 
 /** document.cases.haus: single documents (spec §6). */

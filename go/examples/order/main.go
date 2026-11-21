@@ -65,7 +65,7 @@ func decodeOrder(t schema.Type, v haus.Value) (Order, error) {
 	total, _ := cents.Decode(get("total"))
 	at, _ := geoJSON.Decode(get("deliverTo"))
 	o.Placed, o.Total, o.DeliverTo = placed.(time.Time), total.(Amount), at.([2]float64)
-	switch s := get("status").(haus.Variant); s.Tag {
+	switch s := get("status").(haus.Variant); s.Tag.String() {
 	case "Pending":
 		o.Status = Pending{}
 	case "Cancelled":
@@ -94,16 +94,16 @@ func encodeOrder(t schema.Type, o Order) (haus.Value, error) {
 	var status haus.Value
 	switch s := o.Status.(type) {
 	case Pending:
-		status = haus.Variant{Tag: "Pending"}
+		status = haus.Variant{Tag: haus.MustTag("Pending")}
 	case Cancelled:
-		status = haus.Variant{Tag: "Cancelled"}
+		status = haus.Variant{Tag: haus.MustTag("Cancelled")}
 	case Shipped:
 		r, _ := haus.NewRecord(haus.Field{Key: "tracking", Value: haus.String(s.Tracking)})
-		status = haus.Variant{Tag: "Shipped", Args: []haus.Value{r}}
+		status = haus.Variant{Tag: haus.MustTag("Shipped"), Args: []haus.Value{r}}
 	}
 	v, err := haus.NewRecord(
 		haus.Field{Key: "id", Value: haus.NumberFromBigInt(o.ID)},
-		haus.Field{Key: "customer", Value: haus.Variant{Tag: "UserId", Args: []haus.Value{haus.String(o.Customer)}}},
+		haus.Field{Key: "customer", Value: haus.Variant{Tag: haus.MustTag("UserId"), Args: []haus.Value{haus.String(o.Customer)}}},
 		haus.Field{Key: "placed", Value: placed},
 		haus.Field{Key: "total", Value: total},
 		haus.Field{Key: "deliverTo", Value: at},
@@ -153,7 +153,7 @@ func main() {
 	}
 	get := func(k string) haus.Variant { x, _ := plain.(haus.Record).Get(k); return x.(haus.Variant) }
 	total := get("total")
-	fmt.Printf("plain:  %s pays %s %s\n", get("customer").Args[0].(haus.String), total.Args[0], total.Args[1].(haus.Variant).Tag)
+	fmt.Printf("plain:  %s pays %s %s\n", get("customer").Args[0].(haus.String), total.Args[0], total.Args[1].(haus.Variant).Tag.String())
 
 	// With codecs: the fields have the codecs' types.
 	typed, err := decodeOrder(rootType, parse(order))

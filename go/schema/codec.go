@@ -166,7 +166,7 @@ var InstantTime = NewCodec("std/time#Instant",
 		if y := t.Year(); y < 0 || y > 9999 {
 			return nil, newError(haus.CodeCannotEncode, "the year %d is outside 0000–9999", y)
 		}
-		return haus.Variant{Tag: "Instant", Args: []haus.Value{haus.String(t.Format(time.RFC3339Nano))}}, nil
+		return haus.Variant{Tag: haus.MustTag("Instant"), Args: []haus.Value{haus.String(t.Format(time.RFC3339Nano))}}, nil
 	})
 
 // Secret holds a value that must not end up in logs (spec §15), such as an

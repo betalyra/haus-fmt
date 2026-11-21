@@ -95,7 +95,9 @@ depth (`make_room`). A `max_depth` above this is rejected when the `Limits` are 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Limits:
-    """Resource limits, enforced while parsing (spec §7).
+    """Resource limits, enforced while parsing (spec §7), and by the writers of values (spec §11).
+
+    Writers of values built in code apply every limit; the canonical form and hashing only `max_nodes`.
 
     Raises `HausLimitsError` (a `ValueError`, code `unsupported-depth`) for a `max_depth` above
     `MAX_SUPPORTED_DEPTH` (512), or not a whole number.
@@ -109,6 +111,11 @@ class Limits:
     """Largest absolute exponent: 6144 allows `1e6144` but not `1e6145`."""
     max_string_length: int = 16 * 1024 * 1024
     """Characters in one decoded string, record key or tag, or between the quotes of a byte string."""
+    max_nodes: int = 64 * 1024 * 1024
+    """Values written for one top-level value (spec §7, "Values written"): the value and every element,
+    field value and argument inside it, each as often as it is written. Applied by the writers of values,
+    the canonical form and hashing (`too-many-nodes`), never by the parser: a value built in code whose
+    parts share each other would otherwise expand without bound when written."""
 
     def __post_init__(self) -> None:
         depth = cast("object", self.max_depth)  # whatever the caller passed
@@ -665,6 +672,9 @@ class Parser:
         for _ in self._items("{", "}"):
             key_pos = self.pos
             key = self._key()
+            # At the second key's name, before its colon and value (spec §8).
+            if key in fields:
+                self._fail("duplicate-key", f"duplicate key '{quote_for_message(key)}'", key_pos)
             self._skip_trivia()
             if (c := self._peek()) != ":":
                 found = _describe(c)
@@ -676,10 +686,7 @@ class Parser:
                 )
             self.pos += 1
             self._skip_trivia()
-            value = self._value()
-            if key in fields:
-                self._fail("duplicate-key", f"duplicate key '{quote_for_message(key)}'", key_pos)
-            fields[key] = self.last = value
+            fields[key] = self.last = self._value()
         return record_unchecked(fields)
 
     def _list(self, open_: str, close: str) -> tuple[Value, ...]:
@@ -854,11 +861,8 @@ class Parser:
         elif src.startswith("\n", self.pos):
             self.pos += 1
         else:
-            self._fail(
-                "block-string-opening",
-                'opening """ must be followed by a line break',
-                start if self._eof() else self.pos,
-            )
+            # At the first character after the quotes and their blanks, or the end of the input (spec §8).
+            self._fail("block-string-opening", 'opening """ must be followed by a line break', self.pos)
 
         content = self.pos
         close = _run(BLOCK_BODY, src, content).end()

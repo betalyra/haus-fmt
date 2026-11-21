@@ -62,10 +62,10 @@ func TestSchemaJSONSuite(t *testing.T) {
 				t.Fatal(err)
 			}
 			text := str(get(r, "json"))
-			name := x.Tag + " " + ty.Name() + " " + shortCase(text)
-			counts[x.Tag]++
+			name := x.Tag.String() + " " + ty.Name() + " " + shortCase(text)
+			counts[x.Tag.String()]++
 			got, readErr := ty.FromJSON([]byte(text))
-			switch x.Tag {
+			switch x.Tag.String() {
 			case "Ok":
 				input := get(r, "input")
 				decoded, err := ty.Decode(input)
@@ -94,7 +94,7 @@ func TestSchemaJSONSuite(t *testing.T) {
 					t.Errorf("%s: got the place %q, want %q (%v)", name, path, str(want), readErr)
 				}
 			default:
-				t.Fatalf("unknown case %s", x.Tag)
+				t.Fatalf("unknown case %s", x.Tag.String())
 			}
 		}
 		if !without {

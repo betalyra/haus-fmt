@@ -9,9 +9,10 @@ extension SchemaType {
     /// Writes `value` as the type's schema-based JSON (spec §16.3), on one
     /// line without spaces. The value is checked and encoded as
     /// ``encode(_:limits:)`` does first, so it can be a value built in code;
-    /// what an open record doesn't list is left out. A value of a record
-    /// case with a field named `_tag` or `_args` has no schema-based form
-    /// (`no-json-form`).
+    /// what an open record doesn't list is left out. Then the value written
+    /// is checked against every limit, as every writer does (spec §11,
+    /// ``checkValue(_:limits:)``). A value of a record case with a field
+    /// named `_tag` or `_args` has no schema-based form (`no-json-form`).
     public func toJSON(_ value: HausValue, limits: Limits = Limits()) throws(HausError) -> String {
         var out: [UInt8] = []
         try appendJSON(value, limits: limits, to: &out)
@@ -20,6 +21,7 @@ extension SchemaType {
 
     func appendJSON(_ value: HausValue, limits: Limits, to out: inout [UInt8]) throws(HausError) {
         let encoded = try encode(value, limits: limits)
+        try checkValue(encoded, limits: limits)
         var writer = SchemaJSONWriter()
         try writer.value(encoded, node)
         out += writer.out
@@ -106,7 +108,7 @@ extension SchemaWalker {
             return .done(try readBuiltin(j, b, t))
         case (.time(let name), .string(let s)):
             if let why = timeError(name, s) { throw fail(.invalidTime, why) }
-            return .done(.variant(name, [j]))
+            return .done(.variant(HausTag(valid: name), [j]))
         case (.time, _):
             throw jsonMismatch(j, t, "a string")
         case (.array(let element), .array(let items)):
@@ -286,7 +288,7 @@ extension SchemaWalker {
             }
             guard let c = shape.caseOf(s) else { throw unknownTag(s, shape) }
             try checkTagLength(c.tag)
-            return .done(.tag(c.tag))
+            return .done(.tag(c.hausTag))
         }
         guard case .record(let r) = j else { throw jsonMismatch(j, t, #"an object with "_tag""#) }
         let tag = try tagMember(r)
@@ -298,22 +300,22 @@ extension SchemaWalker {
         switch c.payload {
         case .none:
             try onlyMembers(r, nil)
-            return .done(.tag(c.tag))
+            return .done(.tag(c.hausTag))
         case .record(let fields):
             try checkReserved(c)
             // The record's fields beside "_tag", at the variant's level and place.
             try checkRequired(fields) { r[$0] != nil }
-            return .parts(Parts(.fields(r), .shape(fields, payload: true), .payload(c.tag), checkKeys: true))
+            return .parts(Parts(.fields(r), .shape(fields, payload: true), .payload(c.hausTag), checkKeys: true))
         case .named(let named):
             try checkReserved(c)
             let fields = HausValue.record(HausRecord(distinct: r.fields.filter { !sameCodePoints($0.key, "_tag") }))
-            return .payload(tag: c.tag, fields, named)
+            return .payload(tag: c.hausTag, fields, named)
         case .positional(let items) where items.count == 1:
             let x = try member(r, "value", tag)
-            return .parts(Parts(.items([x]), .each(items), .variant(c.tag), steps: .member(.key("value"))))
+            return .parts(Parts(.items([x]), .each(items), .variant(c.hausTag), steps: .member(.key("value"))))
         case .positional(let items):
             let args = try values(try member(r, "values", tag), items, tag)
-            return .parts(Parts(.items(args), .each(items), .variant(c.tag), prefix: .key("values")))
+            return .parts(Parts(.items(args), .each(items), .variant(c.hausTag), prefix: .key("values")))
         }
     }
 
@@ -352,14 +354,14 @@ extension SchemaWalker {
     /// its other members as a record payload, by the import.
     mutating func unknownJSON(_ tag: String, _ r: HausRecord) throws(HausError) -> HausValue {
         try checkTagLength(tag)
-        if r.count == 1 { return .tag(tag) }
+        if r.count == 1 { return .tag(HausTag(valid: tag)) }
         if r.count == 2, let args = r["_args"] {
             var form = SelfDescribing(limits: limits, path: path)
-            return try form.variant(tag, args, depth: depth)
+            return try form.variant(HausTag(valid: tag), args, depth: depth)
         }
         let payload = HausValue.record(HausRecord(distinct: r.fields.filter { !sameCodePoints($0.key, "_tag") }))
         try imported(payload, depth: depth)
-        return .variant(tag, [payload])
+        return .variant(HausTag(valid: tag), [payload])
     }
 
     /// Checks a value the import gave (§16.1) against the limits: its strings
@@ -516,7 +518,7 @@ struct SchemaJSONWriter {
         case (.secret(let item), _):
             return try open(v, item)
         case (.variant(let shape), .variant(let tag, let args)):
-            return try variant(tag, args, shape)
+            return try variant(tag.name, args, shape)
         default:
             try scalar(v, rt, t)
             return nil
@@ -545,7 +547,7 @@ struct SchemaJSONWriter {
         case (.builtin(.float32), .number(let n)), (.builtin(.float64), .number(let n)):
             out += n.literal.utf8
         case (.builtin(.float32), .variant(let tag, _)), (.builtin(.float64), .variant(let tag, _)):
-            appendJSONString(tag == "NegInfinity" ? "-Infinity" : tag, to: &out)
+            appendJSONString(tag == "NegInfinity" ? "-Infinity" : tag.name, to: &out)
         case (.builtin(.any), _):
             try appendSelfDescribing(v, to: &out)
         default:

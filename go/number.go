@@ -37,8 +37,18 @@ func isWordByte(c byte) bool {
 // scanNumber reads the number literal that starts at s[pos] (a '-' or a
 // digit, or a '+' or '.' to report). It returns the end of the literal and
 // its normalized text (spec §2), which is a slice of s when the literal is
-// already normalized.
+// already normalized. Every error is at the literal's first character
+// (spec §8). With lim nil no limits apply: a number built in code is checked
+// for validity only (spec §11, "Values built in code").
 func scanNumber(s string, pos int, lim *Limits) (end int, norm string, err *numError) {
+	end, norm, err = scanLiteral(s, pos, lim)
+	if err != nil {
+		err.pos = pos
+	}
+	return end, norm, err
+}
+
+func scanLiteral(s string, pos int, lim *Limits) (end int, norm string, err *numError) {
 	start := pos
 	bad := func(at int, format string, args ...any) (int, string, *numError) {
 		return 0, "", &numError{code: CodeInvalidNumber, msg: fmt.Sprintf(format, args...), pos: at}
@@ -91,11 +101,11 @@ func scanNumber(s string, pos int, lim *Limits) (end int, norm string, err *numE
 			if j < len(s) && isWordByte(s[j]) {
 				return bad(j, "a number can't be followed directly by %s", describeChar(s, j))
 			}
-			if j-start > lim.MaxNumberLength {
+			if lim != nil && j-start > lim.MaxNumberLength {
 				return 0, "", tooLong(start, j-start, lim)
 			}
 			text := strings.ReplaceAll(s[i:j], "_", "")
-			if base == 16 && len(text) > maxHexDigits(lim.MaxNumberLength) {
+			if lim != nil && base == 16 && len(text) > maxHexDigits(lim.MaxNumberLength) {
 				return 0, "", &numError{code: CodeNumberTooLong, pos: start,
 					msg: fmt.Sprintf("a hex literal with %d hex digits, more than the limit of %d",
 						len(text), maxHexDigits(lim.MaxNumberLength))}
@@ -156,7 +166,7 @@ func scanNumber(s string, pos int, lim *Limits) (end int, norm string, err *numE
 	if i < len(s) && isWordByte(s[i]) {
 		return bad(i, "a number can't be followed directly by %s", describeChar(s, i))
 	}
-	if i-start > lim.MaxNumberLength {
+	if lim != nil && i-start > lim.MaxNumberLength {
 		return 0, "", tooLong(start, i-start, lim)
 	}
 	if expStart < 0 {
@@ -176,8 +186,8 @@ func scanNumber(s string, pos int, lim *Limits) (end int, norm string, err *numE
 		ed = "0"
 		expNeg = false
 	}
-	if len(ed) > 9 || atoi(ed) > lim.MaxExponent {
-		return 0, "", &numError{code: CodeExponentTooLarge, pos: expStart,
+	if lim != nil && (len(ed) > 9 || atoi(ed) > lim.MaxExponent) {
+		return 0, "", &numError{code: CodeExponentTooLarge, pos: start,
 			msg: fmt.Sprintf("the exponent is larger than the limit of %d", lim.MaxExponent)}
 	}
 	mant := s[start:mantEnd]

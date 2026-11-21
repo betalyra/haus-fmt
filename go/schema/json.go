@@ -30,10 +30,10 @@ var (
 )
 
 var (
-	noneValue haus.Value = haus.Variant{Tag: "None"}
-	nanValue  haus.Value = haus.Variant{Tag: "NaN"}
-	infValue  haus.Value = haus.Variant{Tag: "Infinity"}
-	ninfValue haus.Value = haus.Variant{Tag: "NegInfinity"}
+	noneValue haus.Value = haus.Variant{Tag: haus.MustTag("None")}
+	nanValue  haus.Value = haus.Variant{Tag: haus.MustTag("NaN")}
+	infValue  haus.Value = haus.Variant{Tag: haus.MustTag("Infinity")}
+	ninfValue haus.Value = haus.Variant{Tag: haus.MustTag("NegInfinity")}
 )
 
 // ── the API ──────────────────────────────────────────────────
@@ -178,7 +178,7 @@ func (w *walker) readJSON(j haus.Value, rt, t *typ) (haus.Value, error) {
 		if err := CheckTime(rt.name, string(s)); err != nil {
 			return nil, w.fail(haus.CodeInvalidTime, "%v", err)
 		}
-		return haus.Variant{Tag: rt.name, Args: []haus.Value{s}}, nil
+		return haus.Variant{Tag: haus.MustTag(rt.name), Args: []haus.Value{s}}, nil
 	case kBytes:
 		s, ok := j.(haus.String)
 		if !ok {
@@ -193,7 +193,7 @@ func (w *walker) readJSON(j haus.Value, rt, t *typ) (haus.Value, error) {
 		}
 		return haus.Bytes(b), nil
 	case kBool:
-		if x, ok := j.(haus.Variant); ok && (x.Tag == "True" || x.Tag == "False") {
+		if x, ok := j.(haus.Variant); ok && (x.Tag.String() == "True" || x.Tag.String() == "False") {
 			return j, nil
 		}
 		return w.jsonMismatch(j, t, "true or false")
@@ -359,7 +359,7 @@ func (w *walker) readMaybe(j haus.Value, rt, t *typ) (haus.Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return haus.Variant{Tag: "Some", Args: []haus.Value{y}}, nil
+		return haus.Variant{Tag: haus.MustTag("Some"), Args: []haus.Value{y}}, nil
 	}
 	r, ok := j.(haus.Record)
 	if !ok {
@@ -384,7 +384,7 @@ func (w *walker) readMaybe(j haus.Value, rt, t *typ) (haus.Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return haus.Variant{Tag: "Some", Args: []haus.Value{y}}, nil
+		return haus.Variant{Tag: haus.MustTag("Some"), Args: []haus.Value{y}}, nil
 	}
 	return nil, w.fail(haus.CodeUnknownTag, "%s is not allowed here: expected None or Some", quote(tag))
 }
@@ -491,7 +491,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		if err := w.tagLength(c.tag); err != nil {
 			return nil, err
 		}
-		return haus.Variant{Tag: c.tag}, nil
+		return haus.Variant{Tag: haus.MustTag(c.tag)}, nil
 	}
 	r, ok := j.(haus.Record)
 	if !ok {
@@ -516,7 +516,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		if err := w.onlyMembers(r, ""); err != nil {
 			return nil, err
 		}
-		return haus.Variant{Tag: c.tag}, nil
+		return haus.Variant{Tag: haus.MustTag(c.tag)}, nil
 	case payloadRecord, payloadNamed:
 		if err := w.reserved(c); err != nil {
 			return nil, err
@@ -537,7 +537,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		if err != nil {
 			return nil, err
 		}
-		return haus.Variant{Tag: c.tag, Args: []haus.Value{y}}, nil
+		return haus.Variant{Tag: haus.MustTag(c.tag), Args: []haus.Value{y}}, nil
 	}
 	if len(c.items) == 1 {
 		x, err := w.member(r, "value", tag)
@@ -548,7 +548,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		if err != nil {
 			return nil, err
 		}
-		return haus.Variant{Tag: c.tag, Args: []haus.Value{y}}, nil
+		return haus.Variant{Tag: haus.MustTag(c.tag), Args: []haus.Value{y}}, nil
 	}
 	x, err := w.member(r, "values", tag)
 	if err != nil {
@@ -572,7 +572,7 @@ func (w *walker) readVariant(j haus.Value, vt *variantType, t *typ) (haus.Value,
 		args[i] = y
 	}
 	w.path = w.path[:len(w.path)-1]
-	return haus.Variant{Tag: c.tag, Args: args}, nil
+	return haus.Variant{Tag: haus.MustTag(c.tag), Args: args}, nil
 }
 
 // unknownJSON reads a tag an open variant doesn't list (§16.3): the bare
@@ -586,7 +586,7 @@ func (w *walker) unknownJSON(tag string, r haus.Record) (haus.Value, error) {
 		return nil, err
 	}
 	if r.Len() == 1 {
-		return haus.Variant{Tag: tag}, nil
+		return haus.Variant{Tag: haus.MustTag(tag)}, nil
 	}
 	if args, ok := r.Get("_args"); ok && r.Len() == 2 {
 		return selfDescribingArgs(tag, args, w.lim, w.depth, pathString(w.path))
@@ -601,7 +601,7 @@ func (w *walker) unknownJSON(tag string, r haus.Record) (haus.Value, error) {
 	if err := w.imported(payload, w.depth); err != nil {
 		return nil, err
 	}
-	return haus.Variant{Tag: tag, Args: []haus.Value{payload}}, nil
+	return haus.Variant{Tag: haus.MustTag(tag), Args: []haus.Value{payload}}, nil
 }
 
 // imported checks a value the import gave (§16.1) against the limits: its
@@ -678,7 +678,7 @@ func reservedField(c *caseType) string {
 
 func isNull(j haus.Value) bool {
 	x, ok := j.(haus.Variant)
-	return ok && x.Tag == "None"
+	return ok && x.Tag.String() == "None"
 }
 
 func isTagName(s string) bool {
@@ -813,7 +813,7 @@ func describeJSON(j haus.Value) string {
 		}
 		return "an object"
 	case haus.Variant:
-		switch j.Tag {
+		switch j.Tag.String() {
 		case "True":
 			return "true"
 		case "False":
@@ -867,7 +867,7 @@ func (jw *jsonWriter) value(v haus.Value, t *typ) error {
 		}
 	case kBool:
 		if x, ok := v.(haus.Variant); ok {
-			if x.Tag == "True" {
+			if x.Tag.String() == "True" {
 				jw.b = append(jw.b, "true"...)
 			} else {
 				jw.b = append(jw.b, "false"...)
@@ -890,7 +890,7 @@ func (jw *jsonWriter) value(v haus.Value, t *typ) error {
 			jw.b = append(jw.b, x.String()...)
 			return nil
 		case haus.Variant:
-			switch x.Tag {
+			switch x.Tag.String() {
 			case "NaN":
 				jw.quoted("NaN")
 			case "Infinity":
@@ -984,14 +984,14 @@ func (jw *jsonWriter) fields(first *bool, r haus.Record, rt *recordType) error {
 
 func (jw *jsonWriter) maybe(v haus.Value, rt *typ) error {
 	x, ok := v.(haus.Variant)
-	if !ok || x.Tag != "None" && len(x.Args) != 1 {
+	if !ok || x.Tag.String() != "None" && len(x.Args) != 1 {
 		return jw.fail(haus.CodeCannotEncode, "expected None or Some(…), found %s", found(v))
 	}
 	switch {
-	case x.Tag == "None" && rt.jsonNull:
+	case x.Tag.String() == "None" && rt.jsonNull:
 		jw.b = append(jw.b, "null"...)
 		return nil
-	case x.Tag == "None":
+	case x.Tag.String() == "None":
 		jw.b = append(jw.b, `{"_tag":"None"}`...)
 		return nil
 	}
@@ -1013,12 +1013,12 @@ func (jw *jsonWriter) maybe(v haus.Value, rt *typ) error {
 
 func (jw *jsonWriter) variant(x haus.Variant, vt *variantType) error {
 	if vt.enum {
-		jw.b = appendJSONString(jw.b, x.Tag)
+		jw.b = appendJSONString(jw.b, x.Tag.String())
 		return nil
 	}
 	jw.b = append(jw.b, `{"_tag":`...)
-	jw.b = appendJSONString(jw.b, x.Tag)
-	c := vt.caseOf(x.Tag)
+	jw.b = appendJSONString(jw.b, x.Tag.String())
+	c := vt.caseOf(x.Tag.String())
 	switch {
 	case c == nil && len(x.Args) > 0: // an unknown value
 		jw.b = append(jw.b, `,"_args":[`...)

@@ -156,15 +156,20 @@ func (n *node) hasComments() bool {
 // no source text, numbers are written normalized and in decimal, byte strings
 // in lowercase hex without spaces, and strings with the fewest escapes.
 //
-// It fails for values that have no text: a number longer than the number
-// limit (number-too-long, a decimal or exponent too, not only an integer),
-// an exponent larger than the exponent limit (exponent-too-large), nesting
-// deeper than the depth limit
-// (nesting-too-deep, a record payload counting one level), a tag that isn't
-// [A-Z][A-Za-z0-9_]* (invalid-tag), a string that isn't UTF-8
-// (cannot-encode), or a value that contains itself (cyclic-value). A
-// negative indent or width fails with [ErrInvalidOptions] before any value
-// is looked at.
+// It checks every limit of opts.Limits that a value can break (spec §11),
+// so that a parser with the same limits reads the text back: a number
+// longer than the number limit (number-too-long, a decimal or exponent too,
+// not only an integer), an exponent larger than the exponent limit
+// (exponent-too-large), nesting deeper than the depth limit
+// (nesting-too-deep, a record payload counting one level), a string, key,
+// tag or byte string longer than the string limit (string-too-long,
+// key-too-long, tag-too-long), and more values written than the node limit
+// (too-many-nodes, at the top-level value: a value whose parts share one
+// another is written once per place). It also fails for what Go lets code
+// build past the constructors: a nil value, the zero [Tag] or a string that
+// isn't UTF-8 (cannot-encode), and a value that contains itself
+// (cyclic-value). A negative indent or width fails with
+// [ErrInvalidOptions] before any value is looked at.
 func FormatValue(v Value, opts FormatOptions) ([]byte, error) {
 	return FormatValues([]Value{v}, opts)
 }
@@ -187,10 +192,7 @@ func FormatValues(vs []Value, opts FormatOptions) ([]byte, error) {
 	b := builder{writeCheck: writeCheck{lim: lim}}
 	f := &fileNode{items: make([]*item, len(vs))}
 	for i, v := range vs {
-		b.path = b.path[:0]
-		if len(vs) > 1 {
-			b.path = append(b.path, step{index: i})
-		}
+		b.start(i, len(vs) > 1)
 		n, err := b.node(v, 0)
 		if err != nil {
 			return nil, err
@@ -208,10 +210,84 @@ type writeCheck struct {
 	lim   Limits
 	path  []step
 	guard cycleGuard
+	// nodes counts the values written for the current top-level value, and
+	// top is the length of its path ($, or $[i] in a stream).
+	nodes, top int
 }
 
 func (c *writeCheck) fail(code ErrorCode, format string, args ...any) error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...), Path: pathString(c.path)}
+}
+
+// start starts the top-level value i, of a stream or alone.
+func (c *writeCheck) start(i int, stream bool) {
+	c.path = c.path[:0]
+	if stream {
+		c.path = append(c.path, step{index: i})
+	}
+	c.top = len(c.path)
+	c.nodes = 0
+}
+
+// count counts one more value written, against the node limit (spec §7,
+// "Values written"): too-many-nodes, at the top-level value. This check and
+// the ones below are small enough to be inlined where values are written;
+// their errors are built out of line.
+func (c *writeCheck) count() error {
+	c.nodes++
+	if c.nodes > c.lim.MaxNodes {
+		return c.tooManyNodes()
+	}
+	return nil
+}
+
+func (c *writeCheck) tooManyNodes() error {
+	return tooManyNodes(c.lim.MaxNodes, pathString(c.path[:c.top]))
+}
+
+func tooManyNodes(limit int, path string) *Error {
+	return &Error{Code: CodeTooManyNodes, Path: path,
+		Message: fmt.Sprintf("the value writes more than %d values, the node limit: its parts share one another", limit)}
+}
+
+// length checks a string or key against the string limit, in code points.
+func (c *writeCheck) length(s string, code ErrorCode, what string) error {
+	if len(s) > c.lim.MaxStringLength {
+		return c.tooLong(s, code, what)
+	}
+	return nil
+}
+
+func (c *writeCheck) tooLong(s string, code ErrorCode, what string) error {
+	if n := utf8.RuneCountInString(s); n > c.lim.MaxStringLength {
+		return c.fail(code, "a %s of %d characters, more than the limit of %d", what, n, c.lim.MaxStringLength)
+	}
+	return nil
+}
+
+// bytes checks a byte string against the string limit: two characters
+// between the quotes per byte.
+func (c *writeCheck) bytes(b Bytes) error {
+	if 2*len(b) > c.lim.MaxStringLength {
+		return c.fail(CodeStringTooLong, "a byte string of %d bytes, more than the limit of %d characters", len(b), c.lim.MaxStringLength)
+	}
+	return nil
+}
+
+// tag checks a variant's tag: the zero Tag holds none (cannot-encode), and
+// a tag is within the string limit (tag-too-long). Its characters are ASCII.
+func (c *writeCheck) tag(t Tag) error {
+	if t.IsZero() || len(t.name) > c.lim.MaxStringLength {
+		return c.badTag(t)
+	}
+	return nil
+}
+
+func (c *writeCheck) badTag(t Tag) error {
+	if t.IsZero() {
+		return c.fail(CodeCannotEncode, "a variant with the zero Tag, which holds no tag")
+	}
+	return c.fail(CodeTagTooLong, "a tag of %d characters, more than the limit of %d", len(t.name), c.lim.MaxStringLength)
 }
 
 // enter starts the container v at depth, one level deeper.
@@ -243,10 +319,6 @@ func (c *writeCheck) number(text string) error {
 	return nil
 }
 
-func (c *writeCheck) invalidTag(tag string) error {
-	return c.fail(CodeInvalidTag, "the tag %s isn't [A-Z][A-Za-z0-9_]*", quoteForMessage(tag))
-}
-
 func (c *writeCheck) unknownValue(v Value) error {
 	if v == nil {
 		return c.fail(CodeCannotEncode, "a nil value")
@@ -261,10 +333,16 @@ type builder struct {
 }
 
 func (b *builder) node(v Value, depth int) (*node, error) {
+	if err := b.count(); err != nil {
+		return nil, err
+	}
 	switch v := v.(type) {
 	case String:
 		if !utf8.ValidString(string(v)) {
 			return nil, b.invalidString()
+		}
+		if err := b.length(string(v), CodeStringTooLong, "string"); err != nil {
+			return nil, err
 		}
 		return &node{val: v}, nil
 	case Number:
@@ -274,6 +352,9 @@ func (b *builder) node(v Value, depth int) (*node, error) {
 		}
 		return &node{val: v, text: text}, nil
 	case Bytes:
+		if err := b.bytes(v); err != nil {
+			return nil, err
+		}
 		return &node{val: v, text: `x"` + hex.EncodeToString(v) + `"`}, nil
 	case Array:
 		if err := b.enter(v, depth); err != nil {
@@ -300,14 +381,19 @@ func (b *builder) node(v Value, depth int) (*node, error) {
 		b.guard.pop()
 		return n, nil
 	case Variant:
-		if !isTag(v.Tag) {
-			return nil, b.invalidTag(v.Tag)
+		if err := b.tag(v.Tag); err != nil {
+			return nil, err
 		}
 		if len(v.Args) == 0 {
 			return &node{val: v}, nil
 		}
 		if r, ok := v.Args[0].(Record); ok && len(v.Args) == 1 {
+			// Tag { … }: the record is the payload's one level, and one
+			// value written.
 			if err := b.enter(r, depth); err != nil {
+				return nil, err
+			}
+			if err := b.count(); err != nil {
 				return nil, err
 			}
 			n, err := b.fields(r, &node{val: v, form: formBraces}, depth)
@@ -349,6 +435,9 @@ func (b *builder) fields(r Record, n *node, depth int) (*node, error) {
 	for i, f := range r.fields {
 		if !utf8.ValidString(f.Key) {
 			return nil, b.invalidKey()
+		}
+		if err := b.length(f.Key, CodeKeyTooLong, "key"); err != nil {
+			return nil, err
 		}
 		c, err := b.child(step{key: f.Key, index: -1}, f.Value, depth+1)
 		if err != nil {
@@ -509,9 +598,9 @@ func (pr *printer) value(n *node, level, col, suffix int) {
 	case Variant:
 		switch n.form {
 		case formBare:
-			pr.b = append(pr.b, v.Tag...)
+			pr.b = append(pr.b, v.Tag.name...)
 		case formBraces:
-			pr.b = append(pr.b, v.Tag...)
+			pr.b = append(pr.b, v.Tag.name...)
 			pr.b = append(pr.b, ' ')
 			pr.container('{', '}', n, level)
 		case formParens:
@@ -519,7 +608,7 @@ func (pr *printer) value(n *node, level, col, suffix int) {
 				pr.compact(n)
 				return
 			}
-			pr.b = append(pr.b, v.Tag...)
+			pr.b = append(pr.b, v.Tag.name...)
 			pr.container('(', ')', n, level)
 		}
 	default:
@@ -578,17 +667,17 @@ func (pr *printer) measure(n *node) int {
 	case Variant:
 		switch n.form {
 		case formBare:
-			return len(v.Tag)
+			return len(v.Tag.name)
 		case formBraces:
 			if len(n.items) == 0 && len(n.dangling) == 0 {
-				return len(v.Tag) + 3
+				return len(v.Tag.name) + 3
 			}
 			return -1
 		}
 		if len(n.dangling) > 0 {
 			return -1
 		}
-		w := len(v.Tag) + 2 + 2*(len(n.items)-1)
+		w := len(v.Tag.name) + 2 + 2*(len(n.items)-1)
 		for _, it := range n.items {
 			if len(it.leading) > 0 || len(it.trailing) > 0 {
 				return -1
@@ -622,7 +711,7 @@ func (pr *printer) compact(n *node) {
 	case Array:
 		pr.compactItems('[', ']', n, minimised)
 	case Variant:
-		pr.b = append(pr.b, v.Tag...)
+		pr.b = append(pr.b, v.Tag.name...)
 		switch n.form {
 		case formBraces:
 			if !minimised {

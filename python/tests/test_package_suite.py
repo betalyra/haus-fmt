@@ -4,9 +4,9 @@ Each case is a file tree written into a fresh temporary directory, a root
 schema file loaded with `load_schema`, and the result. Python gives packages
 explicitly (`packages=`, `package_folders=`) and reads no `node_modules`, so
 it runs the `Explicit` cases and skips the `Npm` ones (also `Npm { packages,
-folders }`). Python has no package manager version to check a manifest
-against, so it would also skip the version cases (`should: True`); all of
-them are `Npm` cases. The skips are listed by pytest, and
+folders }`). Of the version cases (`should: True`), it runs the explicit
+one: the version of a `package.json` next to a given package's manifest is
+checked (spec §13.3). The skips are listed by pytest, and
 `test_the_suite_runs_explicit_cases` counts them.
 """
 
@@ -190,19 +190,13 @@ BROKEN: dict[str, str] = {}
 """Cases that are wrong, by name: they must fail until fixed (`strict`), then leave this list."""
 
 ALL = read_cases()
-SKIPPED = {
-    c.name: "Npm mode: Python reads no node_modules"
-    if isinstance(c.mode, Npm)
-    else "version check (should): Python has no package manager version to compare"
-    for c in ALL
-    if isinstance(c.mode, Npm) or c.should
-}
+SKIPPED = {c.name: "Npm mode: Python reads no node_modules" for c in ALL if isinstance(c.mode, Npm)}
 RUN = [c for c in ALL if c.name not in SKIPPED]
 
 
 def test_the_suite_runs_explicit_cases() -> None:
     print(f"package suite: {len(ALL)} cases, {len(RUN)} run (Explicit), {len(SKIPPED)} skipped (Npm)")
-    assert len(ALL) == 91, "test-suite/packages/cases.haus has 91 cases"
+    assert len(ALL) == 92, "test-suite/packages/cases.haus has 92 cases"
     assert len({c.name for c in ALL}) == len(ALL), "case names are unique"
     assert all(isinstance(c.mode, Explicit) for c in RUN)
 

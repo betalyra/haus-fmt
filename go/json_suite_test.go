@@ -48,7 +48,7 @@ func readJSONCases(t *testing.T, name string) []jsonCase {
 	cases := make([]jsonCase, len(values))
 	for i, v := range values {
 		x := v.(Variant)
-		cases[i] = jsonCase{x.Tag, x.Args[0].(Record)}
+		cases[i] = jsonCase{x.Tag.String(), x.Args[0].(Record)}
 	}
 	return cases
 }

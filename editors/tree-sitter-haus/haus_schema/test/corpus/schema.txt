@@ -336,3 +336,62 @@ type T = { type: String, import: Int, closed: Bool }
       (field_declaration
         key: (identifier)
         type: (type_name)))))
+
+================================================================================
+Package modules checked beyond the syntax
+================================================================================
+
+// A package module is one token up to a blank or "(" (grammar.ebnf):
+// its name and version are checked beyond the syntax (unknown-module,
+// import-version).
+import @haus-fmt/money@1.1.0 (Money)
+import @haus-fmt/money@01 (Money)
+import @haus-fmt/money@ (Money)
+import @haus-fmt/money@1@2 (Money)
+import @haus-fmt/money@1~x (Money)
+import @Haus/money (Money)
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (line_comment)
+  (line_comment)
+  (line_comment)
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name))
+  (import
+    module: (module)
+    name: (type_name)))
+
+================================================================================
+Space before an optional marker
+================================================================================
+
+type A = { a ?: Int, b /* why */ ?: Int }
+
+--------------------------------------------------------------------------------
+
+(schema_file
+  (type_definition
+    name: (type_name)
+    type: (record_type
+      (field_declaration
+        key: (identifier)
+        type: (type_name))
+      (field_declaration
+        key: (identifier)
+        (block_comment)
+        type: (type_name)))))

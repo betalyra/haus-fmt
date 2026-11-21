@@ -103,10 +103,31 @@ struct ValueTests {
             let error = #expect(throws: HausError.self) { try HausNumber(bad) }
             #expect(error?.code == .invalidNumber, "\(bad)")
         }
-        #expect((#expect(throws: HausError.self) { try HausNumber("1e6145") })?.code == .exponentTooLarge)
+        // A constructor applies no limit (spec §11): any length, any exponent.
+        #expect(try HausNumber("1e6145").literal == "1e6145")
+        #expect(try HausNumber("-1E+0012345678901").literal == "-1e12345678901")
         let hex = "0x" + String(repeating: "f", count: 829)
         #expect(try HausNumber(hex).literal.count == 999)
-        #expect((#expect(throws: HausError.self) { try HausNumber(hex + "f") })?.code == .numberTooLong)
+        #expect(try HausNumber(hex + "f").literal.count == 1000)
+        let long = String(repeating: "9", count: 5000)
+        #expect(try HausNumber(long).literal == long)
+    }
+
+    @Test func tags() throws {
+        #expect(try HausTag("Some_1").name == "Some_1")
+        for bad in ["", "lower", "_A", "1A", "A-B", "Ä", "A b"] {
+            let error = #expect(throws: HausError.self) { try HausTag(bad) }
+            #expect(error?.code == .invalidTag, "\(bad)")
+        }
+        let tag: HausTag = "Shipped"
+        #expect(tag == (try HausTag("Shipped")))
+        #expect(tag.description == "Shipped")
+        let (a, b, ba): (HausTag, HausTag, HausTag) = ("A", "B", "Ba")
+        #expect(a < b && b < ba && !(ba < b))
+        #expect(HausValue.variant(tag, []) == .tag("Shipped"))
+        // A tag of any length is one; a writer applies the limit.
+        let long = try HausTag("T" + String(repeating: "x", count: 100))
+        #expect(try canonical(.tag(long)).count == 101)
     }
 
     @Test func description() throws {

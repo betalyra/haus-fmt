@@ -31,7 +31,7 @@ func strs(v haus.Value) []string {
 func create(t *testing.T, root string, entry haus.Variant) {
 	t.Helper()
 	at := func(i int) string { return str(entry.Args[i]) }
-	switch entry.Tag {
+	switch entry.Tag.String() {
 	case "File":
 		write(t, filepath.Join(root, at(0)), at(1))
 	case "Package":
@@ -71,7 +71,7 @@ func create(t *testing.T, root string, entry haus.Variant) {
 			t.Fatal(err)
 		}
 	default:
-		t.Fatalf("unknown file entry %s", entry.Tag)
+		t.Fatalf("unknown file entry %s", entry.Tag.String())
 	}
 }
 
@@ -104,12 +104,12 @@ func load(root string, c haus.Record) ([]string, error) {
 		return nil, err
 	}
 	var packages schema.Locator = explicit
-	switch mode.Tag {
+	switch mode.Tag.String() {
 	case "Npm":
 		packages = schema.Or{First: explicit, Second: schema.NodeModules{}}
 	case "Explicit":
 	default:
-		return nil, fmt.Errorf("unknown mode %s", mode.Tag)
+		return nil, fmt.Errorf("unknown mode %s", mode.Tag.String())
 	}
 	s, err := schema.Load(filepath.Join(root, str(get(c, "root"))), schema.Options{Packages: packages})
 	if err != nil {
@@ -130,7 +130,7 @@ func writeTree(t *testing.T, root string, c haus.Record) {
 	for _, links := range []bool{false, true} {
 		for _, f := range files {
 			entry := f.(haus.Variant)
-			if (entry.Tag == "Link") == links {
+			if (entry.Tag.String() == "Link") == links {
 				create(t, root, entry)
 			}
 		}
@@ -145,9 +145,9 @@ func failure(t *testing.T, c haus.Record) string {
 	expect := get(c, "expect").(haus.Variant)
 	want := expect.Args[0].(haus.Record)
 	switch {
-	case expect.Tag == "Ok" && err != nil:
+	case expect.Tag.String() == "Ok" && err != nil:
 		return fmt.Sprintf("failed: %v", err)
-	case expect.Tag == "Ok":
+	case expect.Tag.String() == "Ok":
 		if w := strs(get(want, "packages")); !slices.Equal(reached, w) && (len(reached) != 0 || len(w) != 0) {
 			return fmt.Sprintf("reached %v, expected %v", reached, w)
 		}
@@ -186,7 +186,7 @@ func packageCases(t *testing.T) []haus.Record {
 	cases := make([]haus.Record, len(values))
 	for i, v := range values {
 		x, ok := v.(haus.Variant)
-		if !ok || x.Tag != "Case" {
+		if !ok || x.Tag.String() != "Case" {
 			t.Fatalf("every entry is Case { … }: %v", v)
 		}
 		cases[i] = x.Args[0].(haus.Record)
@@ -200,7 +200,7 @@ func TestPackageSuite(t *testing.T) {
 	cases := packageCases(t)
 	should := 0
 	for _, c := range cases {
-		if s, ok := get(c, "should").(haus.Variant); ok && s.Tag == "True" {
+		if s, ok := get(c, "should").(haus.Variant); ok && s.Tag.String() == "True" {
 			should++
 		}
 		name := str(get(c, "name"))
@@ -210,8 +210,8 @@ func TestPackageSuite(t *testing.T) {
 			}
 		})
 	}
-	if len(cases) != 91 {
-		t.Errorf("%d cases, expected 91", len(cases))
+	if len(cases) != 92 {
+		t.Errorf("%d cases, expected 92", len(cases))
 	}
 	t.Logf("package suite: %d cases run (%d of them the SHOULD version check), 0 skipped", len(cases), should)
 }

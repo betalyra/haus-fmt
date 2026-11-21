@@ -171,7 +171,8 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
         return h.Record(fields(t.fields), { closed: t.closed })
       case "variant": {
         if (isEnum(t.cases) && !t.open) return h.Enum(...t.cases.map((c) => c.tag))
-        if (t.cases.length === 0) return h.AnyTag // < >
+        // `< >` accepts any tag; a closed variant with no tags (`closed < ...E >`, E empty) accepts none.
+        if (t.cases.length === 0) return t.open ? h.AnyTag : h.Enum<string[]>()
         const cases = Object.fromEntries(t.cases.map((c) => {
           switch (c.payload.kind) {
             case "none":
@@ -321,7 +322,7 @@ export const schemaDeclarations = (file: SchemaFile, options: DeclarationOptions
         return record(t.fields)
       case "variant": {
         if (isEnum(t.cases) && !t.open) return t.cases.map((c) => deprecatedDoc(c.attributes) + JSON.stringify(c.tag)).join(" | ")
-        if (t.cases.length === 0) return "string | h$.Unknown"
+        if (t.cases.length === 0) return t.open ? "string | h$.Unknown" : "never"
         const cases = t.cases.map((c) => {
           const tag = `${deprecatedDoc(c.attributes)}readonly _tag: ${JSON.stringify(c.tag)}`
           switch (c.payload.kind) {

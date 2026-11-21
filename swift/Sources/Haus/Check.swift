@@ -1,8 +1,9 @@
 /// Checks that a value built in code can be written within the limits
-/// (spec §7, §9.8): tags are `[A-Z][A-Za-z0-9_]*` (`invalid-tag`); numbers,
-/// strings, keys, tags and byte strings are within their limits; nesting is
-/// within the depth limit (a record payload, `Tag { … }`, counting one level,
-/// as when writing); and the value has at most ``Limits/maxNodes`` nodes
+/// (spec §7, §11), as every writer of values does: numbers (length and
+/// exponent), strings, keys, tags and byte strings are within their limits;
+/// nesting is within the depth limit (a record payload, `Tag { … }`,
+/// counting one level, and an empty record, array or payload a level, as
+/// when parsing); and writing it takes at most ``Limits/maxNodes`` values
 /// (`too-many-nodes`). The error's ``HausError/path`` says where the problem
 /// is, such as `$.items[2]`. Values that ``parse(_:limits:)`` returns pass
 /// with the limits they were parsed with.
@@ -11,17 +12,9 @@
 /// a value built by nesting one array twice in another, again and again, has
 /// few arrays and very many nodes, which the node limit bounds.
 public func checkValue(_ value: HausValue, limits: Limits = Limits()) throws(HausError) {
-    var walk = Walk(NoSpelling(), checks: .value(try limits.checked()))
+    var walk = Walk(NoSpelling(), checks: .writer(try limits.checked()))
     var nothing: [UInt8] = []
     try walk.write(value, to: &nothing)
-}
-
-extension Limits {
-    /// The most values (nodes) ``checkValue(_:limits:)`` accepts in one value
-    /// built in code: 64 Mi, as many as the largest top-level value of a
-    /// stream can hold. It bounds the work of writing a value whose arrays
-    /// share their storage (spec §9.8).
-    public static let maxNodes = 64 << 20
 }
 
 /// The number of characters (code points) of `s` if there are more than

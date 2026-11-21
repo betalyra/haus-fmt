@@ -34,7 +34,7 @@ public final class Haus {
 
   /** {@link #parse(String)} with the given limits. */
   public static Value parse(String text, Limits limits) {
-    return one(parseAll(text, limits));
+    return parse(Source.of(text), limits);
   }
 
   /** {@link #parse(String)} of UTF-8 bytes. */
@@ -44,7 +44,17 @@ public final class Haus {
 
   /** {@link #parse(String)} of UTF-8 bytes, with the given limits. */
   public static Value parse(byte[] text, Limits limits) {
-    return one(parseAll(text, limits));
+    return parse(new Source(text), limits);
+  }
+
+  /** A single document: {@code not-one-value} at the end of the input (spec §8) unless one value. */
+  private static Value parse(Source src, Limits limits) {
+    List<Value> values = parseAll(src, limits);
+    if (values.size() != 1) {
+      throw src.error(new SyntaxError(Integer.MAX_VALUE, ErrorCode.NOT_ONE_VALUE,
+          "expected exactly one value, found " + values.size(), "one value", values.size() + " values"));
+    }
+    return values.get(0);
   }
 
   /**
@@ -77,10 +87,6 @@ public final class Haus {
     } catch (SyntaxError e) {
       throw src.error(e);
     }
-  }
-
-  private static Value one(List<Value> values) {
-    return one(values, null);
   }
 
   /**
@@ -178,9 +184,10 @@ public final class Haus {
    * Checks that a value built in code can be written within the limits (spec §7, §9.8): numbers,
    * strings, keys, tags and byte strings within their limits, nesting within the depth limit (a
    * record payload counting one level, an empty container one level), strings and keys with a
-   * UTF-8 form ({@code cannot-encode}), and at most 64 Mi nodes ({@code too-many-nodes}, for values
-   * that share containers many times). Values that {@link #parse} returns pass with the limits they
-   * were parsed with.
+   * UTF-8 form ({@code cannot-encode}), and at most {@link Limits#maxNodes} values written ({@code
+   * too-many-nodes}, at {@code $}, for values that share containers many times), as the writers
+   * check them (spec §11). Values that {@link #parse} returns pass with the limits they were parsed
+   * with.
    *
    * @throws HausException with the path of the problem, such as {@code $.items[2]}
    */
@@ -195,11 +202,24 @@ public final class Haus {
    * exactly when their canonical forms are identical. Records are sorted by key, numbers
    * normalized and in decimal, and there is no whitespace outside strings.
    *
-   * @throws HausException with the code {@code cannot-encode} for a string or key with an unpaired
-   *     surrogate, which has no text
+   * <p>One limit applies, the default node limit (spec §7; {@link #canonical(Value, Limits)} sets
+   * another): a value whose parts share one another so much that its canonical form would hold
+   * more values fails with {@code too-many-nodes}. No other limit applies: a value deeper or longer
+   * than a writer's limits still has a canonical form.
+   *
+   * @throws HausException with the code {@code too-many-nodes} above the node limit, or {@code
+   *     cannot-encode} for a string or key with an unpaired surrogate, which has no text
    */
   public static String canonical(Value value) {
-    return Canonical.of(value);
+    return canonical(value, Limits.DEFAULT);
+  }
+
+  /**
+   * The canonical form of a value with the node limit of {@code limits} ({@link
+   * Limits#maxNodes}); see {@link #canonical(Value)}. The other limits don't apply to it.
+   */
+  public static String canonical(Value value, Limits limits) {
+    return Canonical.of(value, limits);
   }
 
   /**
@@ -208,25 +228,44 @@ public final class Haus {
    * with private content (spec §9).
    */
   public static String hash(Value value) {
-    return Canonical.sha256(Canonical.of(value));
+    return hash(value, Limits.DEFAULT);
+  }
+
+  /** {@link #hash(Value)} with the node limit of {@code limits} ({@link Limits#maxNodes}). */
+  public static String hash(Value value, Limits limits) {
+    return Canonical.sha256(Canonical.of(value, limits));
   }
 
   /**
    * The hash of a list of values, such as a whole file (spec §12): the SHA-256 digest of their
    * canonical forms joined by {@code ,}. A list of one value hashes like the value, and the empty
    * list to the digest of the empty text. The items of a stream are hashed one by one with {@link
-   * #hash}.
+   * #hash}. The node limit applies to each value on its own: {@code too-many-nodes} at {@code
+   * $[i]} for value i.
    */
   public static String hashAll(List<Value> values) {
-    return Canonical.sha256(Canonical.ofAll(values));
+    return hashAll(values, Limits.DEFAULT);
+  }
+
+  /** {@link #hashAll(List)} with the node limit of {@code limits} ({@link Limits#maxNodes}). */
+  public static String hashAll(List<Value> values, Limits limits) {
+    return Canonical.sha256(Canonical.ofAll(values, limits));
   }
 
   /**
    * Orders values by the UTF-8 bytes of their canonical forms, shorter first when one is a prefix
    * of the other (spec §12): a total order consistent with equality, for sorting. It is not
    * numeric order: {@code 10} sorts before {@code 9}.
+   *
+   * @throws HausException with the code {@code too-many-nodes} for a value over the default node
+   *     limit, as {@link #canonical} does
    */
   public static int compare(Value a, Value b) {
-    return Canonical.compare(a, b);
+    return compare(a, b, Limits.DEFAULT);
+  }
+
+  /** {@link #compare(Value, Value)} with the node limit of {@code limits} ({@link Limits#maxNodes}). */
+  public static int compare(Value a, Value b, Limits limits) {
+    return Canonical.compare(a, b, limits);
   }
 }

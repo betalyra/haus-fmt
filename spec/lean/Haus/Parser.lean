@@ -435,17 +435,18 @@ mutual
       | [] => failAt .unclosedBracket "unclosed '{'" start
       | t =>
           let k ← key L
+          -- A duplicate key is reported at its name, before its value is read (§8).
+          if acc.any (·.1 == k) then failAt .duplicateKey s!"duplicate key '{msgText k}'" t
           ws
           expect ':' .missingColon s!"expected ':' after key '{msgText k}'"
           ws
           let v ← value L fuel budget
-          if acc.any (·.1 == k) then failAt .duplicateKey s!"duplicate key '{msgText k}'" t
           ws
           match ← get with
           | ',' :: r => set r; ws; fields L fuel budget start ((k, v) :: acc)
           | '}' :: r => set r; return ((k, v) :: acc).reverse
           | [] => failAt .unclosedBracket "unclosed '{'" start
-          | r => fail (separatorCode v r) s!"expected ',' or '}}', found {describe r}"
+          | r => fail (separatorCode v r) s!"expected ',' or '}', found {describe r}"
 
   /-- `[ … ]` or `( … )`: one level. -/
   def items (L : Limits) : Nat → Nat → Char → P (List Value)

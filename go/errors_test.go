@@ -86,7 +86,7 @@ func TestCatalogueExamples(t *testing.T) {
 		code, _ := rec.Get("code")
 		ex, _ := rec.Get("example")
 		example := ex.(haus.Variant)
-		if example.Tag != "Data" {
+		if example.Tag.String() != "Data" {
 			continue
 		}
 		n++
@@ -134,11 +134,11 @@ func TestErrorJSON(t *testing.T) {
 		t.Error("a path for an error in text")
 	}
 	// An error without a place in text has no line or column.
-	_, err = haus.Parse([]byte("1, 2"))
+	_, err = haus.ParseWith([]byte("1"), haus.Limits{MaxDepth: haus.MaxSupportedDepth + 1})
 	b, _ = json.Marshal(err)
 	var notOne map[string]any
 	_ = json.Unmarshal(b, &notOne)
-	if notOne["code"] != "not-one-value" || notOne["line"] != nil {
+	if notOne["code"] != "unsupported-depth" || notOne["line"] != nil {
 		t.Errorf("%s", b)
 	}
 }

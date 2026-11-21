@@ -1236,11 +1236,15 @@ impl Expander {
         Ok((out, kept))
     }
 
-    /// The expanded body of the type a spread names, following aliases.
+    /// The expanded body of the type a spread names, following aliases and
+    /// instances of generic types (spec §14): `type C = Page Int` is spread
+    /// as the body of `Page`, its parameters replaced by the arguments.
     /// `want`: a record or a variant, for errors.
     fn body(&mut self, s: &Spread, want: &str) -> Result<Ty, Fail> {
-        let mut name = s.name.clone();
-        loop {
+        let (mut name, mut args) = (s.name.clone(), Vec::new());
+        // Every hop goes to another definition, unless the names go round in
+        // a circle, which `guarded` would report later.
+        for _ in 0..=self.defs.len() {
             let Some(def) = self.defs.get(&name).cloned() else {
                 // A standard or built-in type is known, just not a record or variant.
                 let known = self.std.contains(&name) || PRELUDE.iter().any(|(n, _)| *n == name);
@@ -1260,13 +1264,22 @@ impl Expander {
                     (false, false) => Err((s.pos, Code::UnknownType, unknown_type(&name))),
                 };
             };
-            if !def.params.is_empty() {
+            if def.params.len() != args.len() {
                 let params = def.params.join(" ");
-                return Err((
-                    s.pos,
-                    Code::InvalidSpread,
-                    format!("{name} has parameters ({name} {params}); only a type without parameters can be spread"),
-                ));
+                return Err(match args.is_empty() {
+                    true => (
+                        s.pos,
+                        Code::InvalidSpread,
+                        format!(
+                            "{name} has parameters ({name} {params}); only a type without parameters can be spread"
+                        ),
+                    ),
+                    false => (
+                        s.pos,
+                        Code::WrongArity,
+                        format!("{name} takes {} argument(s), found {}", def.params.len(), args.len()),
+                    ),
+                });
             }
             let body = match self.done.get(&name) {
                 Some(t) => t.clone(),
@@ -1285,14 +1298,53 @@ impl Expander {
                     t
                 }
             };
-            match body {
-                Ty::Name { name: next, args, .. } if args.is_empty() && next != name => name = next,
+            let env: Vec<(String, Ty)> = def.params.iter().cloned().zip(args).collect();
+            match substitute(&body, &env) {
                 Ty::Name { name: stream, .. } if stream == "Stream" => {
                     return Err((s.pos, Code::InvalidSpread, format!("{} is a Stream and can't be spread", s.name)));
                 }
+                Ty::Name { name: next, args: next_args, .. } => (name, args) = (next, next_args),
                 other => return Ok(other),
             }
         }
+        let def = &self.defs[&s.name];
+        Err((
+            def.pos,
+            Code::UnguardedRecursion,
+            format!(
+                "{} refers to itself without a record field, array element or variant payload in between, \
+                 so decoding it would never end",
+                s.name
+            ),
+        ))
+    }
+}
+
+/// `t` with each type parameter that `env` names replaced by its argument.
+fn substitute(t: &Ty, env: &[(String, Ty)]) -> Ty {
+    if env.is_empty() {
+        return t.clone();
+    }
+    match t {
+        Ty::Param { name, .. } => env.iter().find(|(p, _)| p == name).map_or_else(|| t.clone(), |(_, a)| a.clone()),
+        Ty::Name { name, args, pos } => {
+            Ty::Name { name: name.clone(), args: args.iter().map(|a| substitute(a, env)).collect(), pos: *pos }
+        }
+        Ty::Record { closed, fields, spreads, pos } => Ty::Record {
+            closed: *closed,
+            fields: fields.iter().map(|f| Field { ty: substitute(&f.ty, env), ..f.clone() }).collect(),
+            spreads: spreads.clone(),
+            pos: *pos,
+        },
+        Ty::Variant { closed, cases, spreads, pos } => Ty::Variant {
+            closed: *closed,
+            cases: cases
+                .iter()
+                .map(|c| Case { payload: c.payload.iter().map(|p| substitute(p, env)).collect(), ..c.clone() })
+                .collect(),
+            spreads: spreads.clone(),
+            pos: *pos,
+        },
     }
 }
 

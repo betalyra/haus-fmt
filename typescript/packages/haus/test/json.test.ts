@@ -171,7 +171,7 @@ describe("self-describing (spec §16.2)", () => {
     const lines = await collect(toHausJsonLines(values))
     expect(lines).toEqual([`{"_haus":1,"_value":{"_num":"1"}}\n`, `{"_haus":1,"_value":{"_tag":"A","_args":[{"_rec":{"x":"y"}}]}}\n`])
     const back = await collect(fromHausJsonLines([lines.join("").slice(0, 7), lines.join("").slice(7)]))
-    expect(back.map(canonical)).toEqual(values.map(canonical))
+    expect(back.map((v) => canonical(v))).toEqual(values.map((v) => canonical(v)))
     await expect(collect(fromHausJsonLines([`${lines[0]}{"_num":"1"}\n`]))).rejects.toThrow(/expected the envelope .* at \$\[1\]$/)
   })
 })
@@ -191,7 +191,7 @@ describe("import (spec §16.1)", () => {
     for (const size of [1, 2, 5, bytes.length]) {
       const chunks: Uint8Array[] = []
       for (let i = 0; i < bytes.length; i += size) chunks.push(bytes.subarray(i, i + size))
-      expect((await collect(importJsonLines(chunks))).map(canonical)).toEqual([`{a:1}`, `[2,"😀"]`, `3`])
+      expect((await collect(importJsonLines(chunks))).map((v) => canonical(v))).toEqual([`{a:1}`, `[2,"😀"]`, `3`])
     }
   })
 

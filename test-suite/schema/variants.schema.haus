@@ -9,3 +9,6 @@ type Holder = { shape: Shape, any: Array AnyTag }
 // A record that reaches its own record case by name (found by the schema-file fuzzer).
 type Node = { s: < S Next | N >, o?: < T Next > }
 type Next = Node
+
+// `Map v` accepts a record, but a case with a Map argument is positional, not a record case (spec §15).
+type MapBox = < Box (Map Int) >

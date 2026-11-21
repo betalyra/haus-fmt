@@ -1,0 +1,14 @@
+// The lines of a block comment that spans lines are written as they are,
+// not indented again, when the comment moves to another level.
+{
+  a: [
+    /* first line
+   second line */
+    1,
+  ],
+  b: {
+    /* deep
+  shallow */
+    c: 2,
+  },
+}

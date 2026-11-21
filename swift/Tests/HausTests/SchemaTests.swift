@@ -329,10 +329,10 @@ struct SchemaTests {
         let vault = try HausSchema(parsing: "type Vault = { keys: Secret (Map Int), raw: Secret Any }").type("Vault")
         let leaky: [HausValue] = [
             try parse(#"{ keys: { "sk-live-123": "hunter2" }, raw: 1 }"#),
-            ["keys": [:], "raw": [.tag("sk-live-123 hunter2")]],
+            ["keys": [:], "raw": ["sk-live-123 hunter2"]],
         ]
         for v in leaky {
-            let error = #expect(throws: HausError.self) { try vault.decode(v) }
+            let error = #expect(throws: HausError.self) { try vault.decode(v, limits: Limits(maxStringLength: 5)) }
             #expect(error?.code == .invalidSecret)
             #expect(!(error?.json.contains("hunter2") ?? true) && !(error?.json.contains("sk-live") ?? true))
         }

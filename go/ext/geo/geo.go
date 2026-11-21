@@ -43,7 +43,7 @@ var Wgs84BBox = schema.NewCodec(BBoxID, decodeBBox, encodeBBox)
 
 func decodeLatLng(v haus.Value) (LatLng, error) {
 	x, ok := v.(haus.Variant)
-	if !ok || x.Tag != "LatLng" || len(x.Args) != 2 {
+	if !ok || x.Tag.String() != "LatLng" || len(x.Args) != 2 {
 		return LatLng{}, rejected("expected LatLng(lat, lng)")
 	}
 	lat, ok1 := float(x.Args[0])
@@ -62,12 +62,12 @@ func encodeLatLng(p LatLng) (haus.Value, error) {
 	if msg := p.problem(); msg != "" {
 		return nil, &haus.Error{Code: haus.CodeCannotEncode, Message: msg}
 	}
-	return haus.Variant{Tag: "LatLng", Args: []haus.Value{haus.FloatValue(p.Lat), haus.FloatValue(p.Lng)}}, nil
+	return haus.Variant{Tag: haus.MustTag("LatLng"), Args: []haus.Value{haus.FloatValue(p.Lat), haus.FloatValue(p.Lng)}}, nil
 }
 
 func decodeBBox(v haus.Value) (BBox, error) {
 	x, ok := v.(haus.Variant)
-	if !ok || x.Tag != "BBox" || len(x.Args) != 2 {
+	if !ok || x.Tag.String() != "BBox" || len(x.Args) != 2 {
 		return BBox{}, rejected("expected BBox(sw, ne)")
 	}
 	sw, err := decodeLatLng(x.Args[0])
@@ -97,7 +97,7 @@ func encodeBBox(b BBox) (haus.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	return haus.Variant{Tag: "BBox", Args: []haus.Value{sw, ne}}, nil
+	return haus.Variant{Tag: haus.MustTag("BBox"), Args: []haus.Value{sw, ne}}, nil
 }
 
 // float is a decoded Float64: a number in its one spelling, which reads

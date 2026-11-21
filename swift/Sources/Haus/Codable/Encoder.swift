@@ -66,15 +66,31 @@ enum Scalar {
     case float(Float)
 }
 
+extension Place {
+    /// The value of a scalar at the type `n`, at this place or `step` below
+    /// it: a `Secret` needs a ``Secret`` (`type-mismatch`), and a string for
+    /// a variant must be a tag (`invalid-tag`).
+    func scalarValue(_ s: Scalar, _ n: SchemaNode?, at step: PathStep? = nil) throws(HausError) -> HausValue {
+        let v: HausValue?
+        do {
+            v = try scalarOf(s, n)
+        } catch {
+            throw fail(error.code, error.message, at: step)
+        }
+        guard let v else { throw fail(.typeMismatch, secretNeeded, at: step) }
+        return v
+    }
+}
+
 /// The value of a scalar at the type `n`; nil at a `Secret`, which needs a ``Secret``.
-func scalarValue(_ s: Scalar, _ n: SchemaNode?) -> HausValue? {
+func scalarOf(_ s: Scalar, _ n: SchemaNode?) throws(HausError) -> HausValue? {
     let kind = n?.resolved.kind
-    if case .maybe(let element)? = kind { return scalarValue(s, element).map { .tag("Some", $0) } }
+    if case .maybe(let element)? = kind { return try scalarOf(s, element).map { .tag("Some", $0) } }
     switch (s, kind) {
     case (_, .secret?): return nil
     case (.bool(let b), _): return .tag(b ? "True" : "False")
-    case (.string(let text), .time(let name)?): return .tag(name, .string(text))
-    case (.string(let tag), .variant?): return .tag(tag)
+    case (.string(let text), .time(let name)?): return .tag(HausTag(valid: name), .string(text))
+    case (.string(let tag), .variant?): return .tag(try HausTag(tag))
     case (.string(let s), _): return .string(s)
     case (.integer(let n), _): return .number(n)
     case (.double(let d), .builtin(.float32)?): return floatValue(Double(Float(d)), .bits32)
@@ -147,8 +163,7 @@ final class SchemaEncoder: Place, Encoder, SingleValueEncodingContainer {
     }
 
     func scalar(_ s: Scalar) throws {
-        guard let v = scalarValue(s, node) else { throw place.fail(.typeMismatch, secretNeeded) }
-        stored = .value(v)
+        stored = .value(try place.scalarValue(s, node))
     }
 
     func encode(_ value: Bool) throws { try scalar(.bool(value)) }
@@ -182,14 +197,14 @@ final class SchemaEncoder: Place, Encoder, SingleValueEncodingContainer {
     /// The value of a keyed container: a record, or a variant.
     @inline(never)
     func fieldsValue(_ box: FieldsBox) throws -> HausValue {
-        if let chosen = box.chosen { return try chosen.value(state) }
+        if let chosen = box.chosen { return try chosen.value(state, at: place) }
         switch box.types {
         case .variant(let shape):
             // A struct for a variant of one case: its payload.
             guard shape.cases.count == 1 else {
                 throw place.fail(.typeMismatch, "a struct for \(shape.tagList): only a variant of one case can be one")
             }
-            return try Chosen(tag: shape.cases[0].tag, shape.cases[0], box).value(state)
+            return try Chosen(tag: shape.cases[0].tag, shape.cases[0], box).value(state, at: place)
         case .shape(let shape): return .record(try box.record(filling: shape))
         default: return .record(try box.record(filling: nil))
         }
@@ -295,8 +310,16 @@ struct Chosen {
         self.payload = payload
     }
 
-    func value(_ state: CodingState) throws -> HausValue {
-        guard let tag else { return try payload.entry("_0") ?? .tag("None") }
+    /// The variant, at `place`. A Swift case name that makes no tag fails
+    /// with `invalid-tag` (spec §11).
+    func value(_ state: CodingState, at place: Place) throws -> HausValue {
+        guard let name = tag else { return try payload.entry("_0") ?? .tag("None") }
+        let tag: HausTag
+        do {
+            tag = try HausTag(name)
+        } catch {
+            throw place.fail(error.code, error.message)
+        }
         switch self.case?.payload {
         case .none?: return .tag(tag)
         case .positional(let items)?: return .variant(tag, try arguments(items.count))
@@ -335,8 +358,7 @@ struct SchemaKeyedEncoding<Key: CodingKey>: KeyedEncodingContainerProtocol {
 
     mutating func scalar(_ s: Scalar, _ key: Key) throws {
         let (node, step) = box.types.entry(key.stringValue)
-        guard let v = scalarValue(s, node) else { throw encoder.place.fail(.typeMismatch, secretNeeded, at: step) }
-        box.set(key.stringValue, .value(v))
+        box.set(key.stringValue, .value(try encoder.place.scalarValue(s, node, at: step)))
     }
 
     /// `nil` for a field: `None` for a `Maybe`, and otherwise no field.
@@ -491,10 +513,7 @@ struct SchemaUnkeyedEncoding: UnkeyedEncodingContainer {
 
     mutating func append(_ s: Scalar) throws {
         guard !box.isBytes else { throw encoder.place.fail(.typeMismatch, "only UInt8 values make a byte string") }
-        guard let v = scalarValue(s, box.element) else {
-            throw encoder.place.fail(.typeMismatch, secretNeeded, at: .index(box.count))
-        }
-        box.items.append(.value(v))
+        box.items.append(.value(try encoder.place.scalarValue(s, box.element, at: .index(box.count))))
     }
 
     mutating func encodeNil() throws {

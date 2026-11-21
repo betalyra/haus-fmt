@@ -49,9 +49,9 @@ func jsonDepth(mode jsonMode, lim Limits) int {
 }
 
 var (
-	jsonTrue  Value = Variant{Tag: "True"}
-	jsonFalse Value = Variant{Tag: "False"}
-	jsonNull  Value = Variant{Tag: "None"}
+	jsonTrue  Value = Variant{Tag: Tag{name: "True"}}
+	jsonFalse Value = Variant{Tag: Tag{name: "False"}}
+	jsonNull  Value = Variant{Tag: Tag{name: "None"}}
 )
 
 // jsonReader reads one JSON text by recursive descent, over bytes.
@@ -527,7 +527,7 @@ func appendSelfDescribing(b []byte, v Value) []byte {
 		return append(b, "}}"...)
 	case Variant:
 		b = append(b, `{"_tag":`...)
-		b = appendJSONString(b, v.Tag)
+		b = appendJSONString(b, v.Tag.name)
 		if len(v.Args) > 0 {
 			b = append(b, `,"_args":`...)
 			b = appendSelfDescribingItems(b, v.Args)
@@ -668,7 +668,7 @@ func (s *selfDescribing) object(r Record, depth int) (Value, error) {
 		if err != nil {
 			return nil, err
 		}
-		return Variant{Tag: tag}, nil
+		return Variant{Tag: Tag{name: tag}}, nil
 	case len(f) == 2 && (f[0].Key == "_tag" && f[1].Key == "_args" || f[0].Key == "_args" && f[1].Key == "_tag"):
 		t, a := f[0].Value, f[1].Value
 		if f[0].Key == "_args" {
@@ -699,7 +699,7 @@ func (s *selfDescribing) variant(tag string, args Value, depth int) (Value, erro
 		}
 		s.pop()
 		s.pop()
-		return Variant{Tag: tag, Args: []Value{rec}}, nil
+		return Variant{Tag: Tag{name: tag}, Args: []Value{rec}}, nil
 	}
 	d, err := s.deeper(depth)
 	if err != nil {
@@ -710,7 +710,7 @@ func (s *selfDescribing) variant(tag string, args Value, depth int) (Value, erro
 		return nil, err
 	}
 	s.pop()
-	return Variant{Tag: tag, Args: out}, nil
+	return Variant{Tag: Tag{name: tag}, Args: out}, nil
 }
 
 func (s *selfDescribing) record(fields Value, depth int) (Value, error) {
@@ -841,7 +841,7 @@ func describeJSON(j Value) string {
 		}
 		return "an object with " + strings.Join(names, ", ")
 	case Variant:
-		switch j.Tag {
+		switch j.Tag.name {
 		case "True":
 			return "true"
 		case "False":

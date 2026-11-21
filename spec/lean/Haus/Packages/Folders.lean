@@ -301,6 +301,7 @@ structure Wider (V V' : View) : Prop where
   limits : V'.limits = V.limits
   npm : V'.mode.npm = V.mode.npm
   worldWritable : V'.worldWritable = V.worldWritable
+  checkVersions : V'.checkVersions = V.checkVersions
   given : ∀ g ∈ V.given, g ∈ V'.given
   byDir : ∀ g ∈ V'.given, g.byDir = true → g ∈ V.given
 
@@ -311,7 +312,7 @@ theorem Wider.manifestV (hw : Wider V V') (d : Path) : manifestV V' d = manifest
   unfold Haus.Packages.manifestV; rw [hw.tree, hw.limits]
 
 theorem Wider.npmOf (hw : Wider V V') (d : Path) : npmOf V' d = npmOf V d := by
-  unfold Haus.Packages.npmOf packageJsonV; rw [hw.tree, hw.limits, hw.npm]
+  unfold Haus.Packages.npmOf packageJsonV; rw [hw.tree, hw.limits, hw.npm, hw.checkVersions]
 
 theorem Wider.scan (hw : Wider V V') {T : Target} {importer : Importer} {imps : List Import} :
     Scan V' T importer imps ↔ Scan V T importer imps := by
@@ -861,6 +862,7 @@ structure MoreFolders (c c' : Config) : Prop where
   folders : ∀ f ∈ c.mode.folders, f ∈ c'.mode.folders
   limits : c'.limits = c.limits
   worldWritable : c'.worldWritable = c.worldWritable
+  checkVersions : c'.checkVersions = c.checkVersions
 
 /-- Two successful runs, the second with more folders, make the same packages, with the same versions. -/
 theorem runIn_folders {t : Tree} {c c' : Config} {root : Path} {w w' : Walk} (hm : MoreFolders c c')
@@ -886,6 +888,7 @@ theorem runIn_folders {t : Tree} {c c' : Config} {root : Path} {w w' : Walk} (hm
   have hw : Wider { tree := t, config := c, given := g, broken := b : Env }.view
       { tree := t, config := c', given := g', broken := b' : Env }.view :=
     { tree := rfl, limits := hm.limits, npm := hm.npm, worldWritable := hm.worldWritable,
+      checkVersions := hm.checkVersions,
       given := fun x hx => by
         rcases hok.sound x hx with ⟨-, d, hd, he⟩ | ⟨-, f, hf, he⟩
         · exact hok'.pkgs d (by rw [hm.packages]; exact hd) x (p1 d x he)
@@ -914,7 +917,7 @@ def Config.addFolders (c : Config) (fs : List Path) : Config :=
   { c with mode := { c.mode with folders := c.mode.folders ++ fs } }
 
 theorem moreFolders_add (c : Config) (fs : List Path) : MoreFolders c (c.addFolders fs) :=
-  ⟨rfl, rfl, fun _ h => List.mem_append_left _ h, rfl, rfl⟩
+  ⟨rfl, rfl, fun _ h => List.mem_append_left _ h, rfl, rfl, rfl⟩
 
 /--
 **Adding folders never changes a successful result** (R6, F2): with the

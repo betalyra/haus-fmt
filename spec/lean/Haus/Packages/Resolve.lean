@@ -537,9 +537,15 @@ def classify (c : Class) : M Nat := do
   | .ok (i, cs) => modify fun st => { st with classes := cs }; pure i
   | .error e => throw e
 
-/-- A copy's `package.json` with `npm`: what it declares, and the version its package manager gives it. -/
+/--
+A copy's `package.json`: what it declares, and the version its package
+manager gives it. Read with `npm`, and also without it when versions are
+checked (§13.3, "Package versions"): a package given explicitly is checked
+against the `package.json` next to its manifest too. Without `npm` only its
+version is used: explicit packages count as declared.
+-/
 def copyNpm (config : Config) (dir : Path) (owner : String) : M (Option NpmInfo) :=
-  if config.mode.npm then packageJsonOf dir owner else pure none
+  if config.mode.npm || config.checkVersions then packageJsonOf dir owner else pure none
 
 /-- The SHOULD check of "Package versions" (§13.3): the `package.json`'s version is the manifest's. -/
 def checkVersion (config : Config) (m : Manifest) (npm : Option NpmInfo) (owner : String) : M Unit := do

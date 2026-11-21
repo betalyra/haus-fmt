@@ -16,9 +16,19 @@ package org.hausfmt;
  *     between the quotes of a byte string. Default 16 Mi.
  * @param maxValueLength the most characters in one top-level value of a stream. Default 64 Mi.
  *     Only a {@link StreamReader} applies it; parsing a whole text doesn't (spec §7).
+ * @param maxNodes the most values written for one top-level value built in code: the value and
+ *     every element, field value and argument inside it, each as often as it is written (spec §7,
+ *     "Values written"). A value whose parts share one another is small in memory and can be
+ *     exponentially larger written out; the writers, {@link Haus#check}, the canonical form and
+ *     hashing stop at this limit with {@code too-many-nodes}. Default 64 Mi.
  */
 public record Limits(
-    int maxDepth, int maxNumberLength, int maxExponent, int maxStringLength, int maxValueLength) {
+    int maxDepth,
+    int maxNumberLength,
+    int maxExponent,
+    int maxStringLength,
+    int maxValueLength,
+    int maxNodes) {
 
   /**
    * The deepest nesting this binding supports (spec §7). The parser, the writers and the canonical
@@ -29,7 +39,7 @@ public record Limits(
   public static final int MAX_SUPPORTED_DEPTH = 256;
 
   /** The default limits of spec §7. */
-  public static final Limits DEFAULT = new Limits(256, 1000, 6144, 16 << 20, 64 << 20);
+  public static final Limits DEFAULT = new Limits(256, 1000, 6144, 16 << 20, 64 << 20, 64 << 20);
 
   /**
    * Checks the limits.
@@ -47,34 +57,39 @@ public record Limits(
               + " is outside the supported range, 1 to "
               + MAX_SUPPORTED_DEPTH);
     }
-    if (maxNumberLength < 1 || maxExponent < 0 || maxStringLength < 0 || maxValueLength < 1) {
+    if (maxNumberLength < 1 || maxExponent < 0 || maxStringLength < 0 || maxValueLength < 1 || maxNodes < 1) {
       throw new IllegalArgumentException("limits must be positive: " + this);
     }
   }
 
   /** These limits with another depth limit. */
   public Limits withMaxDepth(int value) {
-    return new Limits(value, maxNumberLength, maxExponent, maxStringLength, maxValueLength);
+    return new Limits(value, maxNumberLength, maxExponent, maxStringLength, maxValueLength, maxNodes);
   }
 
   /** These limits with another number length limit. */
   public Limits withMaxNumberLength(int value) {
-    return new Limits(maxDepth, value, maxExponent, maxStringLength, maxValueLength);
+    return new Limits(maxDepth, value, maxExponent, maxStringLength, maxValueLength, maxNodes);
   }
 
   /** These limits with another exponent limit. */
   public Limits withMaxExponent(int value) {
-    return new Limits(maxDepth, maxNumberLength, value, maxStringLength, maxValueLength);
+    return new Limits(maxDepth, maxNumberLength, value, maxStringLength, maxValueLength, maxNodes);
   }
 
   /** These limits with another string length limit. */
   public Limits withMaxStringLength(int value) {
-    return new Limits(maxDepth, maxNumberLength, maxExponent, value, maxValueLength);
+    return new Limits(maxDepth, maxNumberLength, maxExponent, value, maxValueLength, maxNodes);
   }
 
   /** These limits with another value length limit, for stream readers. */
   public Limits withMaxValueLength(int value) {
-    return new Limits(maxDepth, maxNumberLength, maxExponent, maxStringLength, value);
+    return new Limits(maxDepth, maxNumberLength, maxExponent, maxStringLength, value, maxNodes);
+  }
+
+  /** These limits with another node limit, for writers, the canonical form and hashing. */
+  public Limits withMaxNodes(int value) {
+    return new Limits(maxDepth, maxNumberLength, maxExponent, maxStringLength, maxValueLength, value);
   }
 
   /**

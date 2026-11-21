@@ -200,7 +200,8 @@ func fromSuiteJSON(_ j: JSON) throws -> HausValue {
                     UInt8(String(decoding: digits[$0..<($0 + 2)], as: UTF8.self), radix: 16)!
                 })
         }
-        if let tag = j["_tag"]?.string {
+        if let name = j["_tag"]?.string {
+            let tag = try HausTag(name)
             guard case .array(let args)? = j["_args"] else { return .variant(tag, []) }
             return .variant(tag, try args.map(fromSuiteJSON))
         }

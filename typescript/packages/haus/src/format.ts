@@ -14,15 +14,17 @@
  * comments too.
  *
  * Every `Value` is a haus value (value.ts: the constructors check what they
- * build), so writing one can't fail but for a bad option. A value forged past
- * the constructors (with a cast) is not one, and what the writers do with it
- * is undefined (spec §11, "Values built in code").
+ * build), and a value built in code is checked against the writer's limits
+ * before it is written (spec §11, written.ts): its depth, the length of its
+ * strings, keys and tags, its numbers, and the node limit. A value forged
+ * past the constructors (with a cast) is not one, and what the writers do
+ * with it is undefined (spec §11, "Values built in code").
  */
 import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB, unpairedSurrogate } from "./chars.js"
 import { HausEncodeError } from "./errors.js"
-import { numberLimitIssue } from "./number.js"
-import { DEFAULT_LIMITS, type Limits } from "./parser.js"
+import { DEFAULT_LIMITS } from "./parser.js"
 import type { HRecord, HVariant, Value } from "./value.js"
+import { checkWritable, type WriteLimits } from "./written.js"
 
 /**
  * The layouts of spec §11:
@@ -52,16 +54,24 @@ export interface FormatOptions {
   /** Comment spans from `parseDocument`; they are kept in the output. Needs `source`. */
   readonly comments?: readonly (readonly [number, number])[]
   /**
-   * The number limits (spec §7) a number written from its value must fit, so
-   * that a parser with these limits reads it back: its literal's length
-   * (`number-too-long`) and its exponent (`exponent-too-large`), a decimal's
-   * too (`1.000…`, `1e9999`). A limit not given is the parser's default.
+   * The limits (spec §7) a value must fit to be written, so that a parser
+   * with these limits reads it back (spec §11), each failing with its code
+   * (HausEncodeError): the nesting depth (`nesting-too-deep`, a record
+   * payload `Tag { … }` counted as one level), the length of each string,
+   * key and tag (`string-too-long`, `key-too-long`, `tag-too-long`), each
+   * number literal's length and exponent (`number-too-long`,
+   * `exponent-too-large`), and the values written for each top-level value
+   * (`too-many-nodes`, `maxNodes`: a value whose parts share each other
+   * expands when written). A limit not given is the default.
    */
-  readonly limits?: Partial<Pick<Limits, "maxNumberLength" | "maxExponent">>
+  readonly limits?: Partial<WriteLimits>
 }
 
 /** Format a whole file: one value, or a stream with a comma after each value. */
 export function format(values: readonly Value[], options: FormatOptions = {}): string {
+  const limits = writeLimits(options)
+  // A value's errors are at `$`, or at `$[i]` for value i of a stream.
+  values.forEach((v, i) => checkWritable(v, limits, values.length > 1 ? [i] : []))
   if (oneLine(options)) {
     const f = new Formatter(options)
     if (values.length === 0) return ""
@@ -75,6 +85,7 @@ export function format(values: readonly Value[], options: FormatOptions = {}): s
 
 /** Serialize one value (no trailing newline). */
 export function stringify(value: Value, options: FormatOptions = {}): string {
+  checkWritable(value, writeLimits(options))
   const f = new Formatter(options)
   return oneLine(options) ? f.line(value) : f.value(value)
 }
@@ -88,6 +99,9 @@ const wholeOption = (name: "indent" | "width", n: number): number => {
   if (!Number.isSafeInteger(n) || n < 0) throw new RangeError(`${name} must be a whole number of at least 0, not ${String(n)}`)
   return n
 }
+
+/** The limits a value is checked against before it is written: the options', the default for the others. */
+const writeLimits = (options: FormatOptions): WriteLimits => (options.limits === undefined ? DEFAULT_LIMITS : { ...DEFAULT_LIMITS, ...options.limits })
 
 /** Compact and minimised write every top-level item on one line. */
 const oneLine = (options: FormatOptions) => options.style === "compact" || options.style === "minimised"
@@ -159,7 +173,6 @@ class Formatter {
   private readonly width: number
   private readonly source: string | undefined
   private readonly comments: readonly Span[]
-  private readonly limits: Pick<Limits, "maxNumberLength" | "maxExponent">
   /** The spacing of a top-level item on one line: compact's, or none (minimised). */
   private readonly spacing: Spacing
 
@@ -168,7 +181,6 @@ class Formatter {
     this.step = " ".repeat(wholeOption("indent", options.indent ?? 2))
     this.width = wholeOption("width", options.width ?? 80)
     this.source = options.source
-    this.limits = { ...DEFAULT_LIMITS, ...options.limits }
     this.comments = options.source === undefined ? [] : [...(options.comments ?? [])].sort((a, b) => a[0] - b[0])
   }
 
@@ -465,17 +477,9 @@ class Formatter {
 
   // ── leaves ─────────────────────────────────────────────────
 
-  /** The source spelling when reformatting (`0xFF` stays `0xFF`), else the normalized literal, always decimal (spec §11). */
+  /** The source spelling when reformatting (`0xFF` stays `0xFF`), else the normalized literal, always decimal (spec §11; its limits are checked before, written.ts). */
   private number(v: Extract<Value, { kind: "number" }>): string {
-    const original = this.original(v)
-    if (original !== undefined) return original
-    const text = v.text
-    // Most numbers are short and have no exponent: nothing to check.
-    if (text.length > this.limits.maxNumberLength || text.includes("e")) {
-      const issue = numberLimitIssue(text, this.limits)
-      if (issue !== undefined) throw new HausEncodeError(issue.reason, [], issue.code)
-    }
-    return text
+    return this.original(v) ?? v.text
   }
 
   /** `x"…"`: the source spelling when reformatting (spaces kept), else lowercase hex. */

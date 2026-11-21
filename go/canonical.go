@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -14,25 +15,45 @@ import (
 // identical. Records are sorted by key, numbers normalized and in decimal,
 // and there is no whitespace outside strings.
 //
-// It fails only for values built in code that have no text: a tag that
-// isn't [A-Z][A-Za-z0-9_]* (invalid-tag), a string or key that isn't UTF-8
-// (cannot-encode), a value that contains itself (cyclic-value), or nesting
-// deeper than [MaxSupportedDepth] (nesting-too-deep).
+// It applies one limit, the node limit (spec §7, default
+// [DefaultMaxNodes]; [CanonicalWith] sets another): a value whose parts
+// share one another so much that its canonical form would hold more values
+// fails with too-many-nodes. No other limit applies: a value deeper or
+// longer than a writer's limits still has a canonical form. Besides that it
+// fails only for what Go lets code build past the constructors: a nil
+// [Value], the zero [Tag] or a [String] that isn't valid UTF-8
+// (cannot-encode), a value that contains itself (cyclic-value), and nesting
+// deeper than this binding supports, [MaxSupportedDepth] (nesting-too-deep).
 func Canonical(v Value) (string, error) {
-	b, err := AppendCanonical(nil, v)
-	return string(b), err
+	return CanonicalWith(v, Limits{})
+}
+
+// CanonicalWith is [Canonical] with the node limit of limits
+// ([Limits.MaxNodes]; zero takes the default). The other limits don't apply
+// to the canonical form.
+func CanonicalWith(v Value, limits Limits) (string, error) {
+	w := newCanonicalWriter(nil, limits)
+	err := w.top(v)
+	return string(w.b), err
 }
 
 // AppendCanonical appends the canonical form of a value to b. See [Canonical].
 func AppendCanonical(b []byte, v Value) ([]byte, error) {
-	w := canonicalWriter{b: b, check: true}
-	err := w.value(v, 0)
+	w := newCanonicalWriter(b, Limits{})
+	err := w.top(v)
 	return w.b, err
 }
 
 // Equals reports whether two values are equal (spec §2): numbers by their
 // normalized literals, strings by code points, records by their sets of keys
-// whatever the order, variants by tag and arguments.
+// whatever the order, variants by tag and arguments. It compares the values
+// themselves, not their canonical forms, so no limit applies.
+//
+// It compares structurally and applies no node limit: a value built in code
+// whose parts share each other heavily (an array holding the same array
+// twice, many levels deep) can take very long to compare, as long as writing
+// it out would. A parsed value can't share its parts, so it compares in time
+// linear in its size.
 //
 // Values nested deeper than [MaxSupportedDepth] compare unequal, which ends
 // the comparison of values that contain themselves.
@@ -85,49 +106,107 @@ func sameItems(a, b []Value) bool {
 // Compare orders values by the bytes of their canonical forms, shorter first
 // when one is a prefix of the other (spec §12). It is a total order
 // consistent with [Equals], for sorting; it is not numeric order (10 sorts
-// before 9). It returns -1, 0 or +1.
-func Compare(a, b Value) int {
-	wa := canonicalWriter{}
-	_ = wa.value(a, 0) // writes what it can of a value without text
-	wb := canonicalWriter{}
-	_ = wb.value(b, 0)
-	return bytes.Compare(wa.b, wb.b)
+// before 9). It returns -1, 0 or +1, and fails as [Canonical] does: with
+// too-many-nodes for a value over the node limit.
+func Compare(a, b Value) (int, error) {
+	ca, err := AppendCanonical(nil, a)
+	if err != nil {
+		return 0, err
+	}
+	cb, err := AppendCanonical(nil, b)
+	if err != nil {
+		return 0, err
+	}
+	return bytes.Compare(ca, cb), nil
 }
 
 // Hash returns the SHA-256 digest of the canonical form of a value, as 64
 // lowercase hex digits (spec §12). It fails as [Canonical] does.
 func Hash(v Value) (string, error) {
-	return HashAll([]Value{v})
+	return HashWith(v, Limits{})
+}
+
+// HashWith is [Hash] with the node limit of limits ([Limits.MaxNodes]).
+func HashWith(v Value, limits Limits) (string, error) {
+	w := newCanonicalWriter(nil, limits)
+	if err := w.top(v); err != nil {
+		return "", err
+	}
+	return w.digest(), nil
 }
 
 // HashAll returns the hash of a list of values, such as a whole file (spec
 // §12): the SHA-256 digest of their canonical forms joined by ",". A list of
 // one value hashes like the value, and the empty list to the digest of the
-// empty text. The items of a stream are hashed one by one with [Hash].
+// empty text. The items of a stream are hashed one by one with [Hash]. The
+// node limit applies to each value on its own: too-many-nodes at $[i] for
+// the i-th value.
 func HashAll(vs []Value) (string, error) {
-	w := canonicalWriter{check: true}
+	return HashAllWith(vs, Limits{})
+}
+
+// HashAllWith is [HashAll] with the node limit of limits ([Limits.MaxNodes]).
+func HashAllWith(vs []Value, limits Limits) (string, error) {
+	w := newCanonicalWriter(nil, limits)
 	for i, v := range vs {
 		if i > 0 {
 			w.b = append(w.b, ',')
 		}
-		if err := w.value(v, 0); err != nil {
+		w.index = i
+		if err := w.top(v); err != nil {
 			return "", err
 		}
 	}
-	sum := sha256.Sum256(w.b)
-	return hex.EncodeToString(sum[:]), nil
+	return w.digest(), nil
 }
 
-// canonicalWriter writes the canonical form. With check, it fails for values
-// without text; without, it writes what it can.
+// canonicalWriter writes the canonical form, within the node limit and the
+// depth this binding supports.
 type canonicalWriter struct {
-	b     []byte
-	check bool
-	guard cycleGuard
+	b        []byte
+	maxNodes int
+	nodes    int
+	guard    cycleGuard
+	// index is the place of the value being written among several
+	// ([HashAll]): too-many-nodes is at $[index]; -1 for one value, at $.
+	index int
 }
 
-// enter starts the container v at depth. Also without check, the depth
-// limit ends a value that contains itself.
+func newCanonicalWriter(b []byte, limits Limits) canonicalWriter {
+	maxNodes := limits.MaxNodes
+	if maxNodes <= 0 {
+		maxNodes = DefaultMaxNodes
+	}
+	return canonicalWriter{b: b, maxNodes: maxNodes, index: -1}
+}
+
+// digest is the SHA-256 digest of what was written, as 64 lowercase hex digits.
+func (w *canonicalWriter) digest() string {
+	sum := sha256.Sum256(w.b)
+	return hex.EncodeToString(sum[:])
+}
+
+// top writes one top-level value, which has the node limit to itself.
+func (w *canonicalWriter) top(v Value) error {
+	w.nodes = 0
+	return w.value(v, 0)
+}
+
+// count counts one more value written, against the node limit.
+func (w *canonicalWriter) count() error {
+	w.nodes++
+	if w.nodes > w.maxNodes {
+		place := "$"
+		if w.index >= 0 {
+			place = "$[" + strconv.Itoa(w.index) + "]"
+		}
+		return tooManyNodes(w.maxNodes, place)
+	}
+	return nil
+}
+
+// enter starts the container v at depth. The depth this binding supports
+// ends a value that contains itself (cyclic-value) and bounds the stack.
 func (w *canonicalWriter) enter(v Value, depth int) error {
 	if depth >= MaxSupportedDepth {
 		return w.guard.depthError(v, MaxSupportedDepth)
@@ -137,12 +216,15 @@ func (w *canonicalWriter) enter(v Value, depth int) error {
 }
 
 func (w *canonicalWriter) value(v Value, depth int) error {
+	if err := w.count(); err != nil {
+		return err
+	}
 	switch v := v.(type) {
 	case Number:
 		w.b = append(w.b, v.String()...)
 	case String:
-		if !utf8.ValidString(string(v)) && w.check {
-			return w.fail(newError(CodeCannotEncode, "a string that isn't valid UTF-8"))
+		if !utf8.ValidString(string(v)) {
+			return newError(CodeCannotEncode, "a string that isn't valid UTF-8")
 		}
 		w.b = appendQuoted(w.b, string(v))
 	case Bytes:
@@ -167,14 +249,17 @@ func (w *canonicalWriter) value(v Value, depth int) error {
 	case Record:
 		return w.record(v, depth)
 	case Variant:
-		if !isTag(v.Tag) && w.check {
-			return w.fail(newError(CodeInvalidTag, "the tag "+quoteForMessage(v.Tag)+" isn't [A-Z][A-Za-z0-9_]*"))
+		if v.Tag.IsZero() {
+			return newError(CodeCannotEncode, "a variant with the zero Tag, which holds no tag")
 		}
-		w.b = append(w.b, v.Tag...)
+		w.b = append(w.b, v.Tag.name...)
 		if len(v.Args) == 0 {
 			return nil
 		}
 		if r, ok := v.Args[0].(Record); ok && len(v.Args) == 1 {
+			if err := w.count(); err != nil {
+				return err
+			}
 			return w.record(r, depth)
 		}
 		if err := w.enter(v, depth); err != nil {
@@ -192,9 +277,7 @@ func (w *canonicalWriter) value(v Value, depth int) error {
 		w.b = append(w.b, ')')
 		w.guard.pop()
 	default:
-		if w.check {
-			return w.fail(newError(CodeCannotEncode, "a nil value"))
-		}
+		return newError(CodeCannotEncode, "a nil value")
 	}
 	return nil
 }
@@ -217,8 +300,8 @@ func (w *canonicalWriter) record(r Record, depth int) error {
 		if isIdent(f.Key) {
 			w.b = append(w.b, f.Key...)
 		} else {
-			if !utf8.ValidString(f.Key) && w.check {
-				return w.fail(newError(CodeCannotEncode, "a key that isn't valid UTF-8"))
+			if !utf8.ValidString(f.Key) {
+				return newError(CodeCannotEncode, "a key that isn't valid UTF-8")
 			}
 			w.b = appendQuoted(w.b, f.Key)
 		}
@@ -233,10 +316,3 @@ func (w *canonicalWriter) record(r Record, depth int) error {
 
 // compareKeys orders keys by their UTF-8 bytes, which is code point order.
 func compareKeys(a, b Field) int { return strings.Compare(a.Key, b.Key) }
-
-func (w *canonicalWriter) fail(err *Error) error {
-	if w.check {
-		return err
-	}
-	return nil
-}

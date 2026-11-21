@@ -16,11 +16,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// [`Encoder`] (spec §7, §9.8): the nesting depth before each container, so
 /// that a value nested deeper than the limit fails with the writer's error
 /// instead of recursing on, and every number, string and raw [`Value`] in it.
-/// It also counts the values it makes against a budget (16 Mi by default,
-/// see [`Encoder::with_max_steps`]), so that a value whose parts are shared
-/// (an `Rc` reached many times, a DAG) fails with `step-budget` instead of
-/// expanding without bound. An error inside a [`Secret`] is reported at the
-/// secret (spec §15).
+/// It also counts the values it makes against the node limit
+/// ([`Limits::max_nodes`], 64 Mi by default), so that a value whose parts are
+/// shared (an `Rc` reached many times, a DAG) fails with `too-many-nodes`
+/// instead of expanding without bound. An error inside a [`Secret`] is
+/// reported at the secret (spec §15).
 pub trait Encode {
     /// The haus value, checked for a writer with `e`'s limits, at `e`'s depth.
     fn encode_with(&self, e: Encoder) -> R;
@@ -44,13 +44,13 @@ type R = Result<Value, EncodeError>;
 /// many containers (records, arrays, payloads) it is inside, counted as the
 /// writer counts them. Encoding a container takes [`Encoder::nested`].
 ///
-/// Every value made counts one step against the budget of the encoding the
-/// encoder belongs to, which [`Encoder::new`] starts (spec §9.8): the
-/// encoders made from it by [`Encoder::nested`] share it. The count is kept
-/// per thread, for the encoding that counted last: start another encoding
-/// in the middle of one (a hand-written [`Encode`] that calls
-/// [`Encode::encode`] instead of passing its encoder on) and the outer one
-/// counts again from 0 when it continues.
+/// Every value made counts against the node limit ([`Limits::max_nodes`],
+/// spec §7, §9.8) of the encoding the encoder belongs to, which
+/// [`Encoder::new`] starts: the encoders made from it by [`Encoder::nested`]
+/// share the count. The count is kept per thread, for the encoding that
+/// counted last: start another encoding in the middle of one (a hand-written
+/// [`Encode`] that calls [`Encode::encode`] instead of passing its encoder
+/// on) and the outer one counts again from 0 when it continues.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Encoder {
     limits: Limits,
@@ -68,11 +68,7 @@ impl Default for Encoder {
     }
 }
 
-/// The most values one encoding makes by default (spec §9.8: TypeScript's
-/// 16 Mi steps when encoding): see [`Encoder::with_max_steps`].
-pub const DEFAULT_MAX_STEPS: u64 = 16 * 1024 * 1024;
-
-/// The budget of one encoding: its id, and the most steps it may take.
+/// The budget of one encoding: its id, and the most values it may make.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Budget {
     id: u64,
@@ -92,7 +88,7 @@ impl Budget {
         Budget { id: ENCODINGS.fetch_add(1, Ordering::Relaxed), max }
     }
 
-    /// Take `n` more steps: `step-budget` beyond the most.
+    /// Make `n` more values: `too-many-nodes` beyond the most.
     fn take(self, n: u64) -> Result<(), EncodeError> {
         let steps = STEPS.with(|cell| {
             let (id, steps) = cell.get();
@@ -101,37 +97,34 @@ impl Budget {
             steps
         });
         match steps > self.max {
-            true => Err(EncodeError::new(
-                Code::StepBudget,
-                format!(
-                    "encode budget of {} steps exceeded (a value whose parts are shared expands when written)",
-                    self.max
-                ),
-            )),
+            true => Err(too_many_nodes(self.max)),
             false => Ok(()),
         }
     }
 }
 
+/// The error for a value that writes more than `max` values (spec §7).
+#[cold]
+pub(crate) fn too_many_nodes(max: u64) -> EncodeError {
+    EncodeError::new(
+        Code::TooManyNodes,
+        format!("more than {max} values written for one value (a value whose parts are shared expands when written)"),
+    )
+}
+
+/// The node limit (spec §7), as a count.
+pub(crate) fn max_nodes(limits: &Limits) -> u64 {
+    u64::try_from(limits.max_nodes).unwrap_or(u64::MAX)
+}
+
 impl Encoder {
-    /// At the top, for a reader with `limits`, starting an encoding with a
-    /// budget of [`DEFAULT_MAX_STEPS`].
+    /// At the top, for a reader with `limits`, starting an encoding that may
+    /// make at most `limits.max_nodes` values.
     pub fn new(limits: &Limits) -> Encoder {
-        Encoder { limits: *limits, depth: 0, payload: false, budget: Budget::new(DEFAULT_MAX_STEPS) }
+        Encoder { limits: *limits, depth: 0, payload: false, budget: Budget::new(max_nodes(limits)) }
     }
 
-    /// The same encoding, with a budget of `max` steps, one per value made:
-    /// beyond it, encoding fails with `step-budget`.
-    pub fn with_max_steps(self, max: u64) -> Encoder {
-        Encoder { budget: Budget { max, ..self.budget }, ..self }
-    }
-
-    /// The most steps this encoding may take.
-    pub fn max_steps(&self) -> u64 {
-        self.budget.max
-    }
-
-    /// One more value made: `step-budget` beyond the budget. Encoders of
+    /// One more value made: `too-many-nodes` beyond the node limit. Encoders of
     /// values that are no container and use none of the [`Encoder`]'s
     /// methods (a `ToJson` for a number, say) take theirs here.
     pub fn step(&self) -> Result<(), EncodeError> {
@@ -226,7 +219,8 @@ impl Encoder {
             (true, Value::Record(_)) => self.depth - 1,
             _ => self.depth,
         };
-        let mut writer = Writer { out: &mut Discard, limits: &self.limits, spaced: true, values: 0 };
+        let mut sink = Discard;
+        let mut writer = Writer::new(&mut sink, &self.limits, true);
         writer.value(v, depth)?;
         self.budget.take(writer.values)
     }
@@ -480,10 +474,14 @@ pub fn write(v: &Value) -> Result<String, EncodeError> {
 }
 
 /// One value on one line, for a reader with `limits`. The value is checked
-/// against `limits` as it is written (spec §7, §9.8), since one built in code
-/// may be beyond them: the nesting depth, and the lengths of numbers, strings,
-/// keys and tags. Integers are written in decimal: one longer than
-/// `limits.max_number_length` is an error (`number-too-long`).
+/// against `limits` as it is written (spec §7, §11), since one built in code
+/// may be beyond them: the nesting depth (`nesting-too-deep`; a record that
+/// is a tag's only payload shares the payload's level), the length of each
+/// string, key and tag (`string-too-long`, `key-too-long`, `tag-too-long`),
+/// the length and exponent of each number (`number-too-long`,
+/// `exponent-too-large`) and the values written (`too-many-nodes`).
+/// Integers are written in decimal: one longer than
+/// `limits.max_number_length` is an error.
 pub fn write_with(v: &Value, limits: &Limits) -> Result<String, EncodeError> {
     write_line(v, limits, true)
 }
@@ -495,24 +493,14 @@ pub fn write_minimised_with(v: &Value, limits: &Limits) -> Result<String, Encode
     write_line(v, limits, false)
 }
 
-fn write_line(v: &Value, limits: &Limits, spaced: bool) -> Result<String, EncodeError> {
+/// One value on one line: compact if `spaced`, minimised otherwise. What
+/// [`crate::to_string_with`] and [`crate::to_string_minimised_with`] do for
+/// a [`Value`] (`Encoder::new(limits).value(v)`, then [`write_with`]), in
+/// one pass and without copying the value: the same text, and the same errors.
+pub(crate) fn write_line(v: &Value, limits: &Limits, spaced: bool) -> Result<String, EncodeError> {
     supported(limits)?;
     let mut out = String::new();
-    Writer { out: &mut out, limits, spaced, values: 0 }.value(v, 0)?;
-    Ok(out)
-}
-
-/// What [`crate::to_string_with`] and [`crate::to_string_minimised_with`]
-/// do for a [`Value`] (`Encoder::new(limits).value(v)`, then
-/// [`write_with`]), in one pass and without copying the value: the same
-/// text, and the same errors in the same order (the writer's first, then the
-/// step budget).
-pub(crate) fn write_value(v: &Value, limits: &Limits, spaced: bool) -> Result<String, EncodeError> {
-    supported(limits)?;
-    let mut out = String::new();
-    let mut writer = Writer { out: &mut out, limits, spaced, values: 0 };
-    writer.value(v, 0)?;
-    Budget::new(DEFAULT_MAX_STEPS).take(writer.values)?;
+    Writer::new(&mut out, limits, spaced).value(v, 0)?;
     Ok(out)
 }
 
@@ -563,16 +551,22 @@ struct Writer<'a, O: Sink> {
     spaced: bool,
     /// Values written so far.
     values: u64,
+    /// The most values it may write: the node limit (spec §7).
+    max_values: u64,
 }
 
 type W = Result<(), EncodeError>;
 
-impl<O: Sink> Writer<'_, O> {
+impl<'a, O: Sink> Writer<'a, O> {
+    fn new(out: &'a mut O, limits: &'a Limits, spaced: bool) -> Writer<'a, O> {
+        Writer { out, limits, spaced, values: 0, max_values: max_nodes(limits) }
+    }
+
     /// `v`, inside `depth` containers. The steps that don't recurse are
     /// functions of their own, so that this frame stays small (see
     /// [`crate::MAX_SUPPORTED_DEPTH`]).
     fn value(&mut self, v: &Value, depth: usize) -> W {
-        self.values += 1;
+        self.count()?;
         match v {
             Value::Array(items) => self.list('[', items, depth, ']'),
             Value::Record(r) => self.record(r.as_slice(), depth),
@@ -580,7 +574,9 @@ impl<O: Sink> Writer<'_, O> {
                 self.tag(tag)?;
                 match args.as_slice() {
                     [] => Ok(()),
+                    // The record is an argument: a value written, inside the payload's level.
                     [Value::Record(r)] => {
+                        self.count()?;
                         if self.spaced {
                             self.out.push(' ');
                         }
@@ -590,6 +586,16 @@ impl<O: Sink> Writer<'_, O> {
                 }
             }
             scalar => self.scalar(scalar),
+        }
+    }
+
+    /// One more value written: `too-many-nodes` beyond the node limit.
+    #[inline]
+    fn count(&mut self) -> W {
+        self.values += 1;
+        match self.values > self.max_values {
+            true => Err(too_many_nodes(self.max_values)),
+            false => Ok(()),
         }
     }
 

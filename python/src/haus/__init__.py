@@ -99,16 +99,18 @@ def parse_all(text: str, *, limits: Limits = DEFAULT_LIMITS) -> list[Value]:
 
 
 def parse(text: str, *, limits: Limits = DEFAULT_LIMITS) -> Value:
-    """Parse a text that must hold exactly one value (spec §6)."""
+    """Parse a text that must hold exactly one value (spec §6).
+
+    No value, or two or more, is `not-one-value`, at the end of the input (spec §8).
+    """
     values = parse_all(text, limits=limits)
     if len(values) != 1:
         n = len(values)
-        raise HausSyntaxError(
-            f"expected exactly one value, found {n}",
-            0,
-            1,
-            1,
+        raise HausSyntaxError.at(
+            text,
+            len(text),
             "not-one-value",
+            f"expected exactly one value, found {n}",
             expected="one value",
             found=f"{n} values",
         )

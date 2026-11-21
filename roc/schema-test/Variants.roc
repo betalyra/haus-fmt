@@ -198,6 +198,28 @@ Variants := [].{
 		Next(x) => encode_node(x, e)
 	}
 
+	## `Map v` accepts a record, but a case with a Map argument is positional, not a record case (spec §15).
+	##
+	## haus type `variants#MapBox`.
+	MapBox := [Box(List((Str, Int))), Unknown(Str, List(Value))]
+
+	decode_map_box : Value -> Try(MapBox, Decode.Error)
+	decode_map_box = |v| Decode.within_depth(v, read_value_map_box)
+
+	read_value_map_box : Value -> Try(MapBox, Decode.Error)
+	read_value_map_box = |v| match v.view() {
+		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, |x11| Decode.map(x11, Decode.int))?))
+		Tag("Box", _) => Decode.arity("Box", 1)
+		Tag(tag, args) => Ok(Unknown(tag, args))
+		_ => Decode.expected("a variant (MapBox)", v)
+	}
+
+	encode_map_box : MapBox, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_map_box = |v, e| match v {
+		Box(a0) => Encode.tagged("Box", e, |e12| Encode.map(a0, e12, Encode.int))
+		Unknown(tag, args) => Encode.unknown(tag, args, e)
+	}
+
 	decode_node_s : Value -> Try([S(Next), N, Unknown(Str, List(Value))], Decode.Error)
 	decode_node_s = |v| match v.view() {
 		Tag("S", [p]) => Ok(S(Decode.record_arg("S", p, read_value_next)?))

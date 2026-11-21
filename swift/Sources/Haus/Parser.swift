@@ -1,16 +1,16 @@
 /// Reads text that must hold exactly one value (spec §6). Two or more values,
-/// or none, fail with the code `not-one-value`.
+/// or none, fail with the code `not-one-value`, at the end of the input.
 ///
 /// ```swift
 /// let price = try parse("19.90") // .number(19.90): exact, never a float
 /// ```
 public func parse(_ text: String, limits: Limits = Limits()) throws(HausError) -> HausValue {
-    try single(parseAll(text, limits: limits))
+    try withUTF8(text) { (b) throws(HausError) in try parseOne(b, limits: limits) }
 }
 
 /// Reads UTF-8 text that must hold exactly one value. See ``parse(_:limits:)``.
 public func parse(bytes: some Collection<UInt8>, limits: Limits = Limits()) throws(HausError) -> HausValue {
-    try single(parseAll(bytes: bytes, limits: limits))
+    try withBytes(bytes) { (b) throws(HausError) in try parseOne(b, limits: limits) }
 }
 
 /// Reads a file (spec §1, §6): zero or more top-level values, separated by
@@ -33,10 +33,13 @@ public func parseAll(bytes: some Collection<UInt8>, limits: Limits = Limits()) t
     }
 }
 
-private func single(_ values: [HausValue]) throws(HausError) -> HausValue {
+/// The one value of a text: `not-one-value` at the end of the input otherwise (spec §8).
+private func parseOne(_ b: Bytes, limits: Limits) throws(HausError) -> HausValue {
+    var p = Parser(b, limits: try limits.checked(), keep: false)
+    let values = try p.file().values
     guard values.count == 1 else {
-        throw HausError(
-            .notOneValue, "expected exactly one value, found \(values.count)", expected: "one value",
+        throw p.fail(
+            b.count, .notOneValue, "expected exactly one value, found \(values.count)", expected: "one value",
             found: "\(values.count) values")
     }
     return values[0]
@@ -313,7 +316,7 @@ struct Parser {
             if end - start > limits.maxStringLength {
                 throw fail(start, .tagTooLong, "a tag longer than the limit of \(limits.maxStringLength) characters")
             }
-            let tag = String(decoding: Bytes(rebasing: b[start..<end]), as: UTF8.self)
+            let tag = HausTag(valid: String(decoding: Bytes(rebasing: b[start..<end]), as: UTF8.self))
             // A payload starts on the tag's line (spec §5).
             var j = end
             while let c = byte(j), c == ASCII.space || c == ASCII.tab { j += 1 }
@@ -412,7 +415,7 @@ struct Parser {
                 return fail(
                     pos, .payloadNewline,
                     // A tag needs no escapes, only the cap (spec §9).
-                    "the payload of \(capped(tag) { String($0) }) must start on its line: expected \(expected), found '\(found)'",
+                    "the payload of \(capped(tag.name) { String($0) }) must start on its line: expected \(expected), found '\(found)'",
                     expected: expected, found: "'\(found)'")
             }
         default: break
@@ -599,8 +602,8 @@ struct Parser {
         while let c = byte(i), c == ASCII.space || c == ASCII.tab { i += 1 }
         switch byte(i) {
         case nil:
-            // Nothing after the opening: no line break, at the block string.
-            throw fail(start, .blockStringOpening, #"the opening """ must be followed by a line break"#)
+            // Nothing after the opening: no line break, at the end of the input (spec §8).
+            throw fail(i, .blockStringOpening, #"the opening """ must be followed by a line break"#)
         case ASCII.lf:
             i += 1
         case ASCII.cr where byte(i + 1) == ASCII.lf:
@@ -721,9 +724,9 @@ struct Container {
         case record
         case array
         /// `Tag { … }`
-        case recordPayload(String)
+        case recordPayload(HausTag)
         /// `Tag( … )`
-        case payload(String)
+        case payload(HausTag)
     }
 
     let kind: Kind

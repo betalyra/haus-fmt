@@ -16,11 +16,12 @@ pub fn b(value: bool) -> Json {
 
 /// An object's members, in the order they are added.
 #[derive(Default)]
-pub struct Members(Vec<(String, Json)>);
+pub struct Members(haus::json::JsonObject);
 
 impl Members {
+    /// Adds a member; each name is added once.
     pub fn add(&mut self, name: &str, value: Json) {
-        self.0.push((name.to_owned(), value));
+        self.0.insert(name, value).unwrap_or_else(|e| panic!("writing JSON output: {e}"));
     }
 
     /// Adds the member if there is a value: members that don't apply are left out.

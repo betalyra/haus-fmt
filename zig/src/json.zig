@@ -705,7 +705,7 @@ pub fn appendHausValue(gpa: Allocator, out: *std.ArrayList(u8), val: Value) Allo
 pub fn toHausJson(gpa: Allocator, val: Value, options: canonical.WriteOptions) Error![]u8 {
     var sink: std.ArrayList(u8) = .empty;
     defer sink.deinit(gpa);
-    try canonical.appendCanonical(gpa, &sink, val, options);
+    try canonical.appendChecked(gpa, &sink, val, options, null);
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     try out.appendSlice(gpa, "{\"_haus\":1,\"_value\":");

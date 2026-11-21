@@ -26,7 +26,8 @@
  *   }
  *
  * Duplicate keys are the consumer's to detect (it knows which keys it has
- * seen), with `failDuplicate` after the value, as the generic parser does.
+ * seen): passed to `key`, they are reported at the key, before its value, as
+ * the generic parser does.
  */
 import * as chars from "./chars.js"
 import { codePoints, hex4, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper, quoteText } from "./chars.js"
@@ -50,6 +51,14 @@ export interface Limits {
   readonly maxExponent: number
   /** Characters in one decoded string, record key or tag (or between the quotes of a byte string). */
   readonly maxStringLength: number
+  /**
+   * Values written for one value built in code (spec §7, "Values written"):
+   * the value and every element, field value and argument, each as often as
+   * it is written. Writers, the canonical form and hashing fail beyond it
+   * with `too-many-nodes`; parsing doesn't use it (a parsed value has fewer
+   * values than its text has characters).
+   */
+  readonly maxNodes: number
 }
 
 /** The default nesting depth (spec §7). */
@@ -60,6 +69,7 @@ export const DEFAULT_LIMITS: Limits = {
   maxNumberLength: 1000,
   maxExponent: 6144,
   maxStringLength: 16 * 1024 * 1024,
+  maxNodes: 64 * 1024 * 1024,
 }
 
 // What `next` finds: the kind of the value that starts here.
@@ -302,6 +312,8 @@ export class Reader {
       const parenPos = this.pos
       this.openList()
       if (src.charCodeAt(this.pos) === CLOSE_PAREN) this.fail("empty-payload", `empty payload: write '${quoteText(tag)}' without parentheses`, parenPos, { hint: `Write ${quoteText(tag)} without parentheses.` })
+      // `Some(` at the end of the input: unclosed, as `[` is (spec §8, F6).
+      if (this.atEnd()) this.failUnclosed(CLOSE_PAREN)
       return ARGS
     }
     if (c === OPEN_BRACE) return PAYLOAD_RECORD
@@ -328,9 +340,12 @@ export class Reader {
   /**
    * The next key of the open record, with its `:` consumed (at the value), or
    * undefined at the record's end (the `}` consumed). `keyStart` and `keyEnd`
-   * say where the key is. After the value, `endField`.
+   * say where the key is. After the value, `endField`. Given the keys read
+   * before it in this record (`seen`), a key among them is a `duplicate-key`
+   * at its name, reported as soon as it is read, before its colon and value
+   * (spec §8).
    */
-  key(): string | undefined {
+  key(seen?: { has(key: string): boolean }): string | undefined {
     const src = this.src
     if (src.charCodeAt(this.pos) === CLOSE_BRACE) {
       this.pos++
@@ -341,6 +356,7 @@ export class Reader {
     this.keyStart = this.pos
     const key = this.readKey()
     this.keyEnd = this.pos
+    if (seen?.has(key) === true) this.failDuplicate(key)
     this.skipTrivia()
     if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${quoteText(key)}', found ${describe(this.src, this.pos)}`, this.pos, { expected: "':'", found: describe(this.src, this.pos) })
     this.pos++
@@ -382,7 +398,7 @@ export class Reader {
     }
   }
 
-  /** The key just read (at `keyStart`) was seen before in this record. */
+  /** The key just read (at `keyStart`) was seen before in this record: `duplicate-key` at its name. */
   failDuplicate(key: string): never {
     this.fail("duplicate-key", `duplicate key '${quoteText(key)}'`, this.keyStart)
   }
@@ -644,7 +660,8 @@ export class Reader {
     while (this.peek() === " " || this.peek() === "\t") this.pos++
     if (this.src.startsWith("\r\n", this.pos)) this.pos += 2
     else if (this.peek() === "\n") this.pos++
-    else this.fail("block-string-opening", 'opening """ must be followed by a line break', this.atEnd() ? open : this.pos)
+    // At the first character after the quotes and their blanks, or the end of the input (spec §8).
+    else this.fail("block-string-opening", 'opening """ must be followed by a line break', this.pos)
 
     // Find the closing """, skipping escaped characters.
     const contentStart = this.pos

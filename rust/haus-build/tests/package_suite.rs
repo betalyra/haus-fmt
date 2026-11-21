@@ -86,11 +86,14 @@ fn create(root: &Path, entry: &Value) {
             }
             for key in ["dependencies", "peerDependencies", "devDependencies", "optionalDependencies"] {
                 if let Some(names) = field(fields, key) {
-                    let deps = strings(Some(names)).into_iter().map(|n| (n, Json::String("*".into()))).collect();
-                    members.push((key.to_owned(), Json::Object(deps)));
+                    let deps = strings(Some(names)).into_iter().map(|n| (n, Json::String("*".into())));
+                    members.push((key.to_owned(), Json::object(deps).unwrap()));
                 }
             }
-            write(&root.join(string(dir)).join("package.json"), &haus::json::write(&Json::Object(members)).unwrap());
+            write(
+                &root.join(string(dir)).join("package.json"),
+                &haus::json::write(&Json::object(members).unwrap()).unwrap(),
+            );
         }
         ("Link", [path, target]) => {
             let path = root.join(string(path));
@@ -180,6 +183,6 @@ fn package_suite() {
         }
     }
     println!("package suite through the generators: {run} Explicit cases run, {} Npm cases skipped", skipped.len());
-    assert_eq!(cases.len(), 91, "the suite's cases");
+    assert_eq!(cases.len(), 92, "the suite's cases");
     assert!(failures.is_empty(), "{} of {run} cases fail:\n{}", failures.len(), failures.join("\n"));
 }

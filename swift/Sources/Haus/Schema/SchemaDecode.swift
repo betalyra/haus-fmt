@@ -59,7 +59,7 @@ struct SchemaWalker {
     }
 
     @inline(never)
-    func tooManyNodes() -> HausError { fail(.tooManyNodes, "the value has more than \(Limits.maxNodes) nodes") }
+    func tooManyNodes() -> HausError { fail(.tooManyNodes, "the value has more than \(limits.maxNodes) nodes") }
 
     // ── the recursion ───────────────────────────────────────────
 
@@ -71,7 +71,7 @@ struct SchemaWalker {
         case parts(Parts)
         /// A record case by name, `Tag R`: the record, decoded with `R` at
         /// the variant's level and place, is the payload of `tag`.
-        case payload(tag: String, HausValue, SchemaNode)
+        case payload(tag: HausTag, HausValue, SchemaNode)
         /// A `Secret a`: the value, decoded as `a`.
         case secret(HausValue, SchemaNode)
     }
@@ -126,7 +126,7 @@ struct SchemaWalker {
     mutating func enter(_ step: PathStep?) throws(HausError) {
         if depth >= limits.maxDepth { throw tooDeep() }
         nodes += 1
-        if nodes > Limits.maxNodes { throw tooManyNodes() }
+        if nodes > limits.maxNodes { throw tooManyNodes() }
         budget += Self.stepsPerValue
         if let step { path.append(step) }
         depth += 1
@@ -246,9 +246,9 @@ struct SchemaWalker {
 
     mutating func planVariant(_ v: HausValue, _ shape: VariantShape, _ t: SchemaNode) throws(HausError) -> Plan {
         guard case .variant(let tag, let args) = v else { throw mismatch(v, t) }
-        guard let c = shape.caseOf(tag) else {
+        guard let c = shape.caseOf(tag.name) else {
             if shape.open { return .done(try raw(v)) }
-            throw unknownTag(tag, shape)
+            throw unknownTag(tag.name, shape)
         }
         switch c.payload {
         case .none:
@@ -256,14 +256,14 @@ struct SchemaWalker {
             return .done(nil)
         case .record(let fields):
             // Tag { … }: the record is at the variant's level and place.
-            guard args.count == 1, case .record(let r) = args[0] else { throw notOneRecord(tag, args) }
+            guard args.count == 1, case .record(let r) = args[0] else { throw notOneRecord(tag.name, args) }
             try checkRequired(fields) { r[$0] != nil }
             return .parts(Parts(.fields(r), .shape(fields, payload: false), .payload(tag)))
         case .named(let named):
-            guard args.count == 1, case .record = args[0] else { throw notOneRecord(tag, args) }
+            guard args.count == 1, case .record = args[0] else { throw notOneRecord(tag.name, args) }
             return .payload(tag: tag, args[0], named)
         case .positional(let items):
-            if items.count != args.count { throw wrongArguments(tag, items, args.count) }
+            if items.count != args.count { throw wrongArguments(tag.name, items, args.count) }
             return .parts(Parts(.items(args), .each(items), .variant(tag)))
         }
     }
@@ -316,7 +316,7 @@ struct SchemaWalker {
     @inline(never)
     func notCase(_ v: HausValue, _ a: String, _ b: String, _ message: @autoclosure () -> String) -> HausError {
         guard case .variant(let tag, _) = v else { return fail(.typeMismatch, message()) }
-        return fail(tag == a || tag == b ? .wrongPayload : .unknownTag, message())
+        return fail(tag.name == a || tag.name == b ? .wrongPayload : .unknownTag, message())
     }
 
     // ── scalars ─────────────────────────────────────────────────
@@ -397,7 +397,7 @@ struct SchemaWalker {
     }
 
     mutating func time(_ v: HausValue, _ name: String, _ t: SchemaNode) throws(HausError) -> HausValue? {
-        guard case .variant(let tag, let args) = v, tag == name else { throw mismatch(v, t) }
+        guard case .variant(let tag, let args) = v, tag.name == name else { throw mismatch(v, t) }
         guard args.count == 1, case .string(let text) = args[0] else {
             throw fail(.typeMismatch, #"write \#(name)("…") with one string"#)
         }
@@ -444,6 +444,6 @@ func found(_ v: HausValue) -> String {
     case .bytes: "bytes"
     case .array: "an array"
     case .record: "a record"
-    case .variant(let tag, _): "the tag \(quoteForMessage(tag))"
+    case .variant(let tag, _): "the tag \(quoteForMessage(tag.name))"
     }
 }

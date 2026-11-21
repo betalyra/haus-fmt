@@ -194,36 +194,39 @@ fn errors_inside_a_secret_name_only_the_secret() {
 }
 
 #[test]
-fn shared_parts_expand_only_within_the_step_budget() {
+fn shared_parts_expand_only_within_the_node_limit() {
     // 2^41 − 1 values written out, from 41 in memory: the encoders stop at
-    // the budget (spec §9.8), one step per value made.
+    // the node limit (spec §7, §9.8), one per value made, at `$`.
     let dag = Dag::new(40);
-    let budget = |max: u64| Encoder::default().with_max_steps(max);
-    let reason = "encode budget of 100000 steps exceeded (a value whose parts are shared expands when written)";
-    let e = dag.encode_with(budget(100_000)).unwrap_err();
-    assert_eq!((e.code, e.reason.as_str()), (ErrorCode::StepBudget, reason));
-    assert!(e.to_string().starts_with("[0][0][0]") && e.to_string().ends_with(reason), "{e}");
-    let e = dag.to_json_with(budget(100_000)).unwrap_err();
-    assert_eq!((e.code, e.reason.as_str()), (ErrorCode::StepBudget, reason));
-    assert_eq!(Encoder::default().max_steps(), ser::DEFAULT_MAX_STEPS);
-    assert_eq!(ser::DEFAULT_MAX_STEPS, 16 * 1024 * 1024);
+    let budget = |max: usize| Encoder::new(&Limits { max_nodes: max, ..Limits::default() });
+    let reason = "more than 100000 values written for one value (a value whose parts are shared expands when written)";
+    for e in [dag.encode_with(budget(100_000)).unwrap_err(), dag.to_json_with(budget(100_000)).unwrap_err()] {
+        assert_eq!((e.code, e.reason.as_str(), e.place()), (ErrorCode::TooManyNodes, reason, "$".to_owned()));
+    }
+    assert_eq!(Limits::default().max_nodes, 64 * 1024 * 1024);
 
-    // Exactly as many steps as values: 2^4 − 1 for three levels.
+    // Exactly as many as values: 2^4 − 1 for three levels.
     assert_eq!(dag_text(3).matches('[').count(), 15);
     assert!(Dag::new(3).encode_with(budget(15)).is_ok() && Dag::new(3).to_json_with(budget(15)).is_ok());
-    assert_eq!(Dag::new(3).encode_with(budget(14)).unwrap_err().code, ErrorCode::StepBudget);
-    assert_eq!(Dag::new(3).to_json_with(budget(14)).unwrap_err().code, ErrorCode::StepBudget);
+    assert_eq!(Dag::new(3).encode_with(budget(14)).unwrap_err().code, ErrorCode::TooManyNodes);
+    assert_eq!(Dag::new(3).to_json_with(budget(14)).unwrap_err().code, ErrorCode::TooManyNodes);
     // Leaves and raw values count too: an array of nine numbers is ten values.
     assert!(vec![1u8; 9].encode_with(budget(10)).is_ok() && vec![1u8; 9].to_json_with(budget(10)).is_ok());
     assert!(vec![1u8; 10].encode_with(budget(10)).is_err() && vec![1u8; 10].to_json_with(budget(10)).is_err());
     let raw = Value::Array(vec![Value::from(1); 9]);
     assert!(raw.encode_with(budget(10)).is_ok() && raw.to_json_with(budget(10)).is_ok());
-    assert_eq!(raw.encode_with(budget(9)).unwrap_err().code, ErrorCode::StepBudget);
-    assert_eq!(raw.to_json_with(budget(9)).unwrap_err().code, ErrorCode::StepBudget);
-    // Each encoding has its own budget.
+    assert_eq!(raw.encode_with(budget(9)).unwrap_err().code, ErrorCode::TooManyNodes);
+    assert_eq!(raw.to_json_with(budget(9)).unwrap_err().code, ErrorCode::TooManyNodes);
+    // Each encoding has its own count.
     for _ in 0..3 {
         assert!(Dag::new(3).encode_with(budget(15)).is_ok());
     }
+    // The writers apply the limit set for them.
+    let fifteen = Limits { max_nodes: 15, ..Limits::default() };
+    assert!(haus::to_string_with(&Dag::new(3), &fifteen).is_ok());
+    let e = haus::to_string_with(&Dag::new(4), &fifteen).unwrap_err();
+    assert_eq!((e.code, e.place()), (ErrorCode::TooManyNodes, "$".to_owned()));
+    assert_eq!(json::to_string_with(&Dag::new(4), &fifteen).unwrap_err().code, ErrorCode::TooManyNodes);
 }
 
 /// The compact text of [`Dag::new`]`(levels)`.

@@ -8,9 +8,12 @@
 ##
 ## Every `Value` is a haus value: its constructors reject anything else
 ## (spec §11, "Values built in code"). So the writers check only that a
-## value is within what a reader takes (spec §7, §9.8): its nesting, the
-## length of its numbers, strings, keys and tags, its exponents, and the
-## steps it takes to write. The canonical form has no limits.
+## value is within what a reader takes, every limit of spec §7 it can break:
+## its nesting (a `Tag { … }` record payload one level, an empty container
+## a level), the length of its strings, keys and tags (a byte string two
+## characters per byte), the length and exponent of its numbers, and the
+## values written for it (the node limit, `max_nodes`). The canonical form,
+## hashing, equality and order apply only the node limit (spec §12).
 import ErrorCode
 import Int
 import Secret
@@ -30,10 +33,7 @@ Encode := [].{
 	## number limit is `number-too-long`. Fails if `limits.max_depth` is more
 	## than `Value.max_supported_depth`.
 	to_str_with : Value, Value.Limits -> Try(Str, Error)
-	to_str_with = |v, limits| {
-		supported(limits)?
-		line(v, 0, { limits, spaced: True }, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
-	}
+	to_str_with = |v, limits| written_line(v, { limits, spaced: True })
 
 	## One value on one line in the minimised layout (spec §11): the compact
 	## layout without the whitespace between tokens, for the wire and storage.
@@ -46,10 +46,7 @@ Encode := [].{
 
 	## `minimised` for a reader with other limits (see `to_str_with`).
 	minimised_with : Value, Value.Limits -> Try(Str, Error)
-	minimised_with = |v, limits| {
-		supported(limits)?
-		line(v, 0, { limits, spaced: False }, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
-	}
+	minimised_with = |v, limits| written_line(v, { limits, spaced: False })
 
 	## `.extra[1]: number literal longer than 1000 characters`, or just the
 	## reason at the root.
@@ -63,38 +60,50 @@ Encode := [].{
 	error_json = |e| ErrorCode.json({ code: e.code, message: e.reason, at: Path(e.path) })
 
 	## The canonical form (spec §12): one exact text per value, the same in
-	## every binding, so equal values (§2) give identical text. It has no
-	## limits: an integer is written in decimal with all its digits, however
-	## long, and any exponent goes. Every value has one, and a number built
-	## in another spelling is normalized already (`Value.num("0xFF")` is
-	## `255`). It fails only for a `Value` built in code that nests deeper
-	## than any parser takes, or shares its parts so much that its text would
-	## be enormous (spec §9.8): beyond `Value.max_supported_depth` levels
-	## with `nesting-too-deep`, and beyond `Value.max_nodes` values, a shared
-	## part counted each time it is reached, with `too-many-nodes` (see
-	## `Value.within_bounds`). A parsed value never fails.
+	## every binding, so equal values (§2) give identical text. Every value
+	## has one, and a number built in another spelling is normalized already
+	## (`Value.num("0xFF")` is `255`). Its one limit is the node limit (spec
+	## §7, `Value.max_nodes` by default): it fails with `too-many-nodes` only
+	## for a `Value` built in code whose parts share each other so much that
+	## its canonical form would hold more values than that, a shared part
+	## counted each time it is written. No other limit applies: an integer is
+	## written in decimal with all its digits, however long, any exponent
+	## goes, and a value of any depth or length has its canonical form
+	## (written with a list rather than recursion). A parsed value never fails.
 	##
 	##     Encode.canonical(Value.rec([("b", Value.num("1")?), ("a", Value.num("0xFF")?)])?)   # Ok("{a:255,b:1}")
 	canonical : Value -> Try(Str, Error)
-	canonical = |v| canonical_within(v, Value.max_nodes).map_ok(bytes_to_str)
+	canonical = |v| canonical_with(v, Value.default_limits)
+
+	## `canonical` with another node limit, `limits.max_nodes`; the other limits don't apply.
+	canonical_with : Value, Value.Limits -> Try(Str, Error)
+	canonical_with = |v, limits| canonical_within(v, limits.max_nodes).map_ok(bytes_to_str)
 
 	## The SHA-256 digest of the canonical form, as 64 lowercase hex digits
 	## (spec §12): the same whatever the layout, comments or key order. Fails
 	## as `canonical` does.
 	hash : Value -> Try(Str, Error)
-	hash = |v| canonical_within(v, Value.max_nodes).map_ok(|form| Crypto.SHA256.hash(form).to_hex())
+	hash = |v| hash_with(v, Value.default_limits)
+
+	## `hash` with another node limit, `limits.max_nodes`.
+	hash_with : Value, Value.Limits -> Try(Str, Error)
+	hash_with = |v, limits| canonical_within(v, limits.max_nodes).map_ok(|form| Crypto.SHA256.hash(form).to_hex())
 
 	## The hash of a list of values, such as a whole file (spec §12): the
 	## SHA-256 digest of their canonical forms joined by `,`. A list of one
 	## value hashes like the value: `hash_all([v])` is `hash(v)`. The items of
 	## a stream are hashed one by one with `hash`. Fails as `canonical` does,
-	## saying which value: `[3]`.
+	## for each value on its own, saying which value: `[3]`.
 	hash_all : List(Value) -> Try(Str, Error)
-	hash_all = |values| {
+	hash_all = |values| hash_all_with(values, Value.default_limits)
+
+	## `hash_all` with another node limit, `limits.max_nodes`, for each value.
+	hash_all_with : List(Value), Value.Limits -> Try(Str, Error)
+	hash_all_with = |values, limits| {
 		var $bytes = []
 		var $i = 0.U64
 		for v in values {
-			form = at_index(canonical_within(v, Value.max_nodes), $i, "")?
+			form = at_index(canonical_within(v, limits.max_nodes), $i, "")?
 			$bytes = if ($i > 0) $bytes.append(',').concat(form) else form
 			$i = $i + 1
 		}
@@ -104,17 +113,25 @@ Encode := [].{
 	## Whether two values are equal (spec §2): the same canonical form. Fails
 	## as `canonical` does.
 	equals : Value, Value -> Try(Bool, Error)
-	equals = |a, b| Ok(canonical_within(a, Value.max_nodes)? == canonical_within(b, Value.max_nodes)?)
+	equals = |a, b| equals_with(a, b, Value.default_limits)
+
+	## `equals` with another node limit, `limits.max_nodes`.
+	equals_with : Value, Value, Value.Limits -> Try(Bool, Error)
+	equals_with = |a, b, limits| Ok(canonical_within(a, limits.max_nodes)? == canonical_within(b, limits.max_nodes)?)
 
 	## Orders values by the bytes of their canonical forms (spec §12): a total
 	## order consistent with `equals`. Not numeric order: `10` sorts before
 	## `9`. Fails as `canonical` does. To sort values, which any parser gave,
 	## `values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
 	compare : Value, Value -> Try([Before, Same, After], Error)
-	compare = |a, b| Ok(compare_bytes(canonical_within(a, Value.max_nodes)?, canonical_within(b, Value.max_nodes)?))
+	compare = |a, b| compare_with(a, b, Value.default_limits)
+
+	## `compare` with another node limit, `limits.max_nodes`.
+	compare_with : Value, Value, Value.Limits -> Try([Before, Same, After], Error)
+	compare_with = |a, b, limits| Ok(compare_bytes(canonical_within(a, limits.max_nodes)?, canonical_within(b, limits.max_nodes)?))
 
 	## A stream: one value per line, each followed by a comma. Errors say
-	## which value: `[3].total`.
+	## which value: `[3].total`. The node limit applies to each value on its own.
 	stream : List(Value) -> Try(Str, Error)
 	stream = |values| stream_with(values, Value.default_limits)
 
@@ -391,17 +408,19 @@ Encode := [].{
 	unknown = |name, args, e| any(constructed(Value.tag(name, args))?, e)
 
 	## `Any`: the value as it was, checked as the writer checks it here, a
-	## step for each value in it.
+	## step for each value in it (`step-budget` beyond `limits.max_steps`).
 	any : Value, Encoder -> Try(Encoded(Value), Error)
 	any = |v, e| {
 		supported(e.limits)?
+		left = if (e.steps >= e.limits.max_steps) 0 else e.limits.max_steps - e.steps
+		made_here = Value.count_nodes(v, left).map_err(|_| over_budget(e.limits))?
 		# A record that is a tag's only argument shares the tag's level.
 		depth = match v.view() {
 			Rec(_) if e.payload => e.depth - 1
 			_ => e.depth
 		}
-		written_out = line(v, depth, { limits: e.limits, spaced: False }, { bytes: [], steps: e.steps })?
-		Ok({ value: v, steps: written_out.steps })
+		_ = line(v, depth, { limits: e.limits, spaced: False }, [])?
+		Ok({ value: v, steps: e.steps + made_here })
 	}
 
 	## `Secret a`: the value in full (the receiver needs it). An error inside
@@ -505,10 +524,24 @@ Encoded(a) : { value : a, steps : U64 }
 counted : U64, Value.Limits -> Try(U64, Error)
 counted = |steps, limits|
 	if steps >= limits.max_steps {
-		fail(ErrorCode.step_budget, "encode budget of ${limits.max_steps.to_str()} steps exceeded (a value whose parts are shared expands when written)")
+		Err(over_budget(limits))
 	} else {
 		Ok(steps + 1)
 	}
+
+over_budget : Value.Limits -> Error
+over_budget = |limits| { code: ErrorCode.step_budget, reason: "encode budget of ${limits.max_steps.to_str()} steps exceeded (a value whose parts are shared expands when written)", path: "" }
+
+## At most `max_nodes` values written for one value (spec §7, "Values
+## written"), a shared part counted each time: else `too-many-nodes` at the value.
+nodes_within : Value, U64 -> Try({}, Error)
+nodes_within = |v, max_nodes| match Value.count_nodes(v, max_nodes) {
+	Ok(_) => Ok({})
+	Err(TooManyNodes) => too_many_nodes(max_nodes)
+}
+
+too_many_nodes : U64 -> Try(a, Error)
+too_many_nodes = |max_nodes| fail(ErrorCode.too_many_nodes, "more than ${max_nodes.to_str()} values to write (a value whose parts are shared expands when written)")
 
 ## A field's value, under its key, with the key checked as the writer checks it.
 field : Str, Try(a, Error), Encoder -> Try(a, Error)
@@ -574,62 +607,70 @@ supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCo
 ## tokens (compact) or without (minimised).
 Writer : { limits : Value.Limits, spaced : Bool }
 
+## One value on one line, checked against the writer's limits: first the
+## values written for it (the node limit), then each limit a part of it can
+## break, as it is written.
+written_line : Value, Writer -> Try(Str, Error)
+written_line = |v, writer| {
+	supported(writer.limits)?
+	nodes_within(v, writer.limits.max_nodes)?
+	line(v, 0, writer, []).map_ok(bytes_to_str)
+}
+
 write_stream : List(Value), Writer -> Try(Str, Error)
 write_stream = |values, writer| {
 	supported(writer.limits)?
 	var $out = []
 	var $i = 0.U64
 	for v in values {
-		# Each value has a budget of its own.
-		written_out = within(line(v, 0, writer, { bytes: $out, steps: 0 }), "[${$i.to_str()}]")?
-		$out = written_out.bytes.concat([',', '\n'])
+		# The node limit applies to each value on its own.
+		within(nodes_within(v, writer.limits.max_nodes), "[${$i.to_str()}]")?
+		written_out = within(line(v, 0, writer, $out), "[${$i.to_str()}]")?
+		$out = written_out.concat([',', '\n'])
 		$i = $i + 1
 	}
 	Ok(bytes_to_str($out))
 }
 
-## The text written so far, and the values written (one step each).
-Out : { bytes : List(U8), steps : U64 }
-
 ## `value`, inside `depth` containers (records, arrays, payloads), written
-## after `out`: a step for it and each value in it (spec §9.8), so that a
-## value built in code whose parts are shared (a DAG) fails with
-## `step-budget` instead of expanding without bound.
-line : Value, U64, Writer, Out -> Try(Out, Error)
-line = |value, depth, writer, before| {
+## after `out`, checked against the writer's limits as it is written: the
+## depth (`Tag { … }` takes one level), the length of each string, key and
+## tag, and each number's length and exponent. The values written are
+## counted before (`nodes_within`), and the depth limit bounds the recursion.
+line : Value, U64, Writer, List(U8) -> Try(List(U8), Error)
+line = |value, depth, writer, out| {
 	limits = writer.limits
-	out = { ..before, steps: counted(before.steps, limits)? }
 	match value.view() {
 		Num(literal) => {
 			check_number(literal, limits)?
-			Ok({ ..out, bytes: out.bytes.concat(literal.to_utf8()) })
+			Ok(out.concat(literal.to_utf8()))
 		}
 		Text(s) => {
 			check_length(s, limits)?
-			Ok({ ..out, bytes: out.bytes.concat(quote(s)) })
+			Ok(out.concat(quote(s)))
 		}
 		Bytes(b) => {
 			check_bytes(b, limits)?
-			Ok({ ..out, bytes: out.bytes.concat("x\"".to_utf8()).concat(hex(b)).append('"') })
+			Ok(out.concat("x\"".to_utf8()).concat(hex(b)).append('"'))
 		}
 		Arr(items) => {
 			open(depth, limits)?
-			inside = items_line(items, depth + 1, writer, { ..out, bytes: out.bytes.append('[') })?
-			Ok({ ..inside, bytes: inside.bytes.append(']') })
+			inside = items_line(items, depth + 1, writer, out.append('['))?
+			Ok(inside.append(']'))
 		}
 		Rec(fields) => record_line(fields, depth, writer, out)
 		Tag(name, args) => {
 			check_text(name, "tag", limits)?
-			named = { ..out, bytes: out.bytes.concat(name.to_utf8()) }
+			named = out.concat(name.to_utf8())
 			if args.is_empty() {
 				return Ok(named)
 			}
 			match payload_fields(args) {
-				Ok(fields) => within(record_line(fields, depth, writer, { ..named, bytes: named.bytes.concat(space(writer)) }), "(${name})")
+				Ok(fields) => within(record_line(fields, depth, writer, named.concat(space(writer))), "(${name})")
 				Err(_) => {
 					open(depth, limits)?
-					inside = within(items_line(args, depth + 1, writer, { ..named, bytes: named.bytes.append('(') }), "(${name})")?
-					Ok({ ..inside, bytes: inside.bytes.append(')') })
+					inside = within(items_line(args, depth + 1, writer, named.append('(')), "(${name})")?
+					Ok(inside.append(')'))
 				}
 			}
 		}
@@ -656,36 +697,36 @@ open : U64, Value.Limits -> Try({}, Error)
 open = |depth, limits| if (depth >= limits.max_depth) fail(ErrorCode.nesting_too_deep, "nesting deeper than ${limits.max_depth.to_str()} levels") else Ok({})
 
 ## Items separated by `, ` (`,` minimised), each at `depth`.
-items_line : List(Value), U64, Writer, Out -> Try(Out, Error)
+items_line : List(Value), U64, Writer, List(U8) -> Try(List(U8), Error)
 items_line = |items, depth, writer, before| {
 	separator = [','].concat(space(writer))
 	var $out = before
 	var $i = 0.U64
 	for x in items {
-		$out = if ($i == 0) $out else { ..$out, bytes: $out.bytes.concat(separator) }
+		$out = if ($i == 0) $out else $out.concat(separator)
 		$out = within(line(x, depth, writer, $out), "[${$i.to_str()}]")?
 		$i = $i + 1
 	}
 	Ok($out)
 }
 
-record_line : List((Str, Value)), U64, Writer, Out -> Try(Out, Error)
+record_line : List((Str, Value)), U64, Writer, List(U8) -> Try(List(U8), Error)
 record_line = |fields, depth, writer, before| {
 	limits = writer.limits
 	open(depth, limits)?
 	if fields.is_empty() {
-		return Ok({ ..before, bytes: before.bytes.concat(['{', '}']) })
+		return Ok(before.concat(['{', '}']))
 	}
 	sp = space(writer)
-	var $out = { ..before, bytes: before.bytes.append('{').concat(sp) }
+	var $out = before.append('{').concat(sp)
 	var $first = True
 	for (k, v) in fields {
 		within(check_text(k, "key", limits), ErrorCode.path_key(k))?
-		separated = if ($first) $out.bytes else $out.bytes.append(',').concat(sp)
-		$out = within(line(v, depth + 1, writer, { ..$out, bytes: separated.concat(key(k)).append(':').concat(sp) }), ErrorCode.path_key(k))?
+		separated = if ($first) $out else $out.append(',').concat(sp)
+		$out = within(line(v, depth + 1, writer, separated.concat(key(k)).append(':').concat(sp)), ErrorCode.path_key(k))?
 		$first = False
 	}
-	Ok({ ..$out, bytes: $out.bytes.concat(sp).append('}') })
+	Ok($out.concat(sp).append('}'))
 }
 
 ## A string within the string limit, counted in code points.
@@ -722,38 +763,89 @@ check_number = |literal, limits| {
 	}
 }
 
-## The canonical form of a value with at most `max_nodes` values, nested at
-## most `Value.max_supported_depth` levels (spec §9.8), so that a value built
-## in code whose parts are shared (a DAG) fails at once, and the recursion of
-## `canonical_bytes` is bounded.
+## The canonical form (spec §12): no spaces, fields sorted by key, numbers
+## as their normalized literal, however long. Every value has one; its only
+## limit is the node limit (spec §7): `too-many-nodes` once more than
+## `max_nodes` values are written, a shared part counted each time, so a
+## value built in code whose parts share each other (a DAG) fails after at
+## most `max_nodes` values. Written with a list of what is left to write
+## rather than recursion, so a value of any depth has its canonical form.
 canonical_within : Value, U64 -> Try(List(U8), Error)
 canonical_within = |value, max_nodes| {
-	Value.within_bounds(value, Value.max_supported_depth, max_nodes)?
-	Ok(canonical_bytes(value))
-}
-
-## The canonical form: no spaces, fields sorted by key, numbers as their
-## normalized literal, however long. Every value has one.
-canonical_bytes : Value -> List(U8)
-canonical_bytes = |value| match value.view() {
-	Num(literal) => literal.to_utf8()
-	Text(s) => quote(s)
-	Bytes(b) => "x\"".to_utf8().concat(hex(b)).append('"')
-	Arr(items) => ['['].concat(comma_joined(items.map(canonical_bytes))).append(']')
-	Rec(fields) => canonical_record(fields)
-	Tag(name, []) => name.to_utf8()
-	Tag(name, args) =>
-		match payload_fields(args) {
-			Ok(fields) => name.to_utf8().concat(canonical_record(fields))
-			Err(_) => name.to_utf8().append('(').concat(comma_joined(args.map(canonical_bytes))).append(')')
+	# What is left to write, the next one last: a value, or text as it is.
+	var $todo = [Write(value)]
+	var $out = []
+	var $nodes = 0.U64
+	while True {
+		match $todo.last() {
+			Err(_) => return Ok($out)
+			Ok(Put(text)) => {
+				$todo = $todo.drop_last(1)
+				$out = $out.concat(text)
+			}
+			Ok(Write(v)) => {
+				$todo = $todo.drop_last(1)
+				$nodes = $nodes + 1
+				if $nodes > max_nodes {
+					return too_many_nodes(max_nodes)
+				}
+				match v.view() {
+					Num(literal) => {
+						$out = $out.concat(literal.to_utf8())
+					}
+					Text(s) => {
+						$out = $out.concat(quote(s))
+					}
+					Bytes(b) => {
+						$out = $out.concat("x\"".to_utf8()).concat(hex(b)).append('"')
+					}
+					Arr(items) => {
+						$out = $out.append('[')
+						$todo = $todo.concat(later(items.map(|x| [Write(x)]), ']'))
+					}
+					Rec(fields) => {
+						$out = $out.append('{')
+						$todo = $todo.concat(later(sorted_fields(fields), '}'))
+					}
+					Tag(name, args) => {
+						$out = $out.concat(name.to_utf8())
+						if payload_fields(args).is_ok() {
+							# `Tag{…}`: the record is the tag's argument, a value of its own.
+							$todo = $todo.concat(args.map(|x| Write(x)))
+						} else if !args.is_empty() {
+							$out = $out.append('(')
+							$todo = $todo.concat(later(args.map(|x| [Write(x)]), ')'))
+						}
+					}
+				}
+			}
 		}
+	}
 }
 
-## Fields sorted by their keys' UTF-8 bytes, which is the order of code points.
-canonical_record : List((Str, Value)) -> List(U8)
-canonical_record = |fields| {
+## What `canonical_within` takes to write `items`, each a value with the text
+## before it (in reverse: the value, then the text), separated by `,`, then
+## `close`: in reverse, as it takes the last first.
+later : List(List([Write(Value), Put(List(U8))])), U8 -> List([Write(Value), Put(List(U8))])
+later = |items, close| {
+	var $out = [Put([close])]
+	var $i = items.len()
+	while $i > 0 {
+		$i = $i - 1
+		if $i + 1 < items.len() {
+			$out = $out.append(Put([',']))
+		}
+		$out = $out.concat(items.get($i) ?? [])
+	}
+	$out
+}
+
+## A record's fields sorted by their keys' UTF-8 bytes, which is the order of
+## code points: each its value, then its key and `:` (in reverse, as `later` takes them).
+sorted_fields : List((Str, Value)) -> List(List([Write(Value), Put(List(U8))]))
+sorted_fields = |fields| {
 	sorted = fields.map(|(k, v)| (k.to_utf8(), k, v)).sort_with(|(a, _, _), (b, _, _)| compare_bytes(a, b))
-	['{'].concat(comma_joined(sorted.map(|(_, k, v)| key(k).append(':').concat(canonical_bytes(v))))).append('}')
+	sorted.map(|(_, k, v)| [Write(v), Put(key(k).append(':'))])
 }
 
 compare_bytes : List(U8), List(U8) -> [Before, Same, After]
@@ -1214,29 +1306,89 @@ expect {
 	e.map_err(|err| (err.code, err.reason)) == Err(("step-budget", "encode budget of 100000 steps exceeded (a value whose parts are shared expands when written)"))
 }
 expect Encode.value_with(dag(40), encode_dag, budget(1000)).map_err(|err| (err.code, err.path.starts_with("[0][0][0][0][0][0][0][0]"))).map_ok(|_| {}) == Err(("step-budget", True))
-# The writer counts the values it writes, and `Any` the values in it.
-expect Encode.to_str_with(shared(40), budget(100_000)).map_err(|err| err.code) == Err("step-budget") and Encode.minimised_with(shared(40), budget(1000)).map_err(|err| err.code) == Err("step-budget")
+# `Any` counts the values in it as steps of the encoder's budget.
 expect Encode.value_with(shared(40), Encode.any, budget(1000)).map_err(|err| err.code).map_ok(|_| {}) == Err("step-budget")
 # Exactly a step per value: 2^4 − 1 for three levels, at the budget and one under.
 expect Encode.value_with(dag(3), encode_dag, budget(15)).is_ok() and Encode.value_with(dag(3), encode_dag, budget(14)).is_err()
-expect Encode.to_str_with(shared(3), budget(15)).is_ok() and Encode.to_str_with(shared(3), budget(14)).is_err()
 expect Encode.value_with(shared(3), Encode.any, budget(15)).is_ok() and Encode.value_with(shared(3), Encode.any, budget(14)).is_err()
 expect Encode.value_with([1.I32, 2, 3], |l, e| Encode.list(l, e, |n, e1| Encode.number(n.to_str(), e1)), budget(4)).map_ok(canonical_text) == Ok("[1,2,3]")
-# Each value of a stream has a budget of its own.
-expect Encode.stream_with([shared(3), shared(3)], budget(15)).is_ok() and Encode.stream_with([num("1"), shared(3)], budget(14)).map_err(|err| (err.code, err.path.starts_with("[1][1]"))) == Err(("step-budget", True))
 
-# The canonical form, the hash and equality of a DAG (spec §9.8): `shared(n)` is
+# The node limit (spec §7, "Values written"): the writers count the values they
+# write for each top-level value, a shared part each time it is written, and
+# fail with `too-many-nodes` at the value above `max_nodes`.
+nodes : U64 -> Value.Limits
+nodes = |max| { ..Value.default_limits, max_nodes: max }
+
+expect Value.default_limits.max_nodes == 64 * 1024 * 1024 and Value.max_nodes == Value.default_limits.max_nodes
+expect {
+	e = Encode.to_str_with(shared(40), nodes(100_000))
+	e == Err({ code: "too-many-nodes", reason: "more than 100000 values to write (a value whose parts are shared expands when written)", path: "" })
+		and Encode.minimised_with(shared(40), nodes(1000)).map_err(|err| (err.code, err.path)) == Err(("too-many-nodes", ""))
+}
+# A list whose elements share one list many times: 1 + 1000 · 1001 values, from
+# 1001 lists in memory.
+expect {
+	inner = Value.arr(List.repeat(num("1"), 1000))
+	outer = Value.arr(List.repeat(inner, 1000))
+	Encode.to_str_with(outer, nodes(1_000_000)).map_err(|e| e.code) == Err("too-many-nodes")
+		and Encode.minimised_with(outer, nodes(1_001_001)).map_ok(|text| text.count_utf8_bytes()) == Ok(2 + 999 + 1000 * (2 + 999 + 1000))
+		and Encode.canonical_with(outer, nodes(1_001_000)).map_err(|e| e.code) == Err("too-many-nodes")
+		and Encode.hash_with(outer, nodes(1_001_001)).is_ok()
+}
+# Exactly one per value, `Tag { … }` two (the tag and its record): at the limit and one under.
+expect {
+	tree = variant("A", [rec([("a", Value.arr([num("1"), variant("B", [num("2")])]))])])
+	# A, its record, the array, 1, B, 2.
+	Encode.to_str_with(tree, nodes(6)) == Ok("A { a: [1, B(2)] }") and Encode.to_str_with(tree, nodes(5)).map_err(|e| e.code) == Err("too-many-nodes")
+		and Encode.canonical_with(tree, nodes(6)) == Ok("A{a:[1,B(2)]}") and Encode.canonical_with(tree, nodes(5)).map_err(|e| e.code) == Err("too-many-nodes")
+		and Encode.to_str_with(num("1"), nodes(1)).is_ok() and Encode.to_str_with(num("1"), nodes(0)).map_err(|e| e.code) == Err("too-many-nodes")
+}
+expect Encode.to_str_with(shared(3), nodes(15)).is_ok() and Encode.to_str_with(shared(3), nodes(14)).map_err(|e| e.code) == Err("too-many-nodes")
+# The limit applies to each value of a stream on its own, the error at the value.
+expect Encode.stream_with([shared(3), shared(3)], nodes(15)).is_ok() and Encode.stream_minimised_with([num("1"), shared(3)], nodes(14)).map_err(|err| (err.code, err.path)) == Err(("too-many-nodes", "[1]"))
+# The node limit comes first: a value over it fails with `too-many-nodes`, whatever else is wrong in it.
+expect Encode.to_str_with(Value.arr([num("1e9999"), shared(3)]), nodes(10)).map_err(|e| e.code) == Err("too-many-nodes")
+# Every other limit, for a value built in code, with small limits: each its own code.
+expect {
+	limits = { ..Value.default_limits, max_depth: 2, max_number_length: 4, max_exponent: 9, max_string_length: 4 }
+	codes = [
+		Value.arr([Value.arr([Value.arr([])])]),
+		variant("A", [rec([("b", variant("C", [rec([("d", Value.arr([]))])]))])]),
+		num("12345"),
+		num("1e10"),
+		Value.text("abcde"),
+		Value.bytes([1, 2, 3]),
+		rec([("abcde", num("1"))]),
+		variant("Abcde", []),
+	].map(|v| Encode.to_str_with(v, limits).map_err(|e| e.code).map_ok(|_| {}))
+	fits = [Value.arr([Value.arr([])]), variant("A", [rec([("b", variant("C", [rec([])]))])]), num("1234"), num("1e9"), Value.text("abcd"), Value.bytes([1, 2]), rec([("abcd", num("1"))]), variant("Abcd", [])]
+	codes == ["nesting-too-deep", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "string-too-long", "key-too-long", "tag-too-long"].map(|c| Err(c))
+		and fits.all(|v| Encode.to_str_with(v, limits).is_ok())
+}
+# A string, key and tag count code points, not bytes.
+expect Encode.to_str_with(Value.text("äöüß"), { ..Value.default_limits, max_string_length: 4 }) == Ok("\"äöüß\"") and Encode.to_str_with(variant("A", [Value.text("😀😀😀😀😀")]), { ..Value.default_limits, max_string_length: 4 }).map_err(|e| (e.code, e.path)) == Err(("string-too-long", "(A)[0]"))
+
+# The canonical form, the hash and equality of a DAG (spec §12): `shared(n)` is
 # n + 1 arrays in memory, but a tree of 2^(n + 1) − 1 values, which the canonical
-# form writes out. They are counted first, so 2^41 − 1 fail at the limit, before
-# anything is written. (At the default limit, `Value.max_nodes`, that
-# takes some 1.5 seconds built with `--opt=speed`, but half a minute in `roc
-# test`, so these tests take a smaller one.)
+# form writes out. They count the values they write and stop at the limit.
+# (At the default limit, `Value.max_nodes`, that takes some seconds built with
+# `--opt=speed`, but much longer in `roc test`, so these tests take a smaller one.)
 expect {
 	e = canonical_within(shared(40), 100_000).map_ok(|_| {})
-	e.map_err(|err| (err.code, err.reason, err.path.starts_with("[0][0][0][0][0][0][0][0]"))) == Err(("too-many-nodes", "value has more than 100000 nodes", True))
+	e == Err({ code: "too-many-nodes", reason: "more than 100000 values to write (a value whose parts are shared expands when written)", path: "" })
 }
 expect canonical_within(shared(40), 1000).map_err(|e| e.code).map_ok(|_| {}) == Err("too-many-nodes")
-# A shared part counts each time it is reached: as many values as the tree it
+expect {
+	limits = nodes(1000)
+	fails = |r| r.map_err(|e| e.code).map_ok(|_| {}) == Err("too-many-nodes")
+	fails(Encode.canonical_with(shared(40), limits))
+		and fails(Encode.hash_with(shared(40), limits))
+		and fails(Encode.hash_all_with([num("1"), shared(40)], limits))
+		and Encode.hash_all_with([num("1"), shared(40)], limits).map_err(|e| e.path) == Err("[1]")
+		and fails(Encode.equals_with(num("1"), shared(40), limits))
+		and fails(Encode.compare_with(shared(40), num("1"), limits))
+}
+# A shared part counts each time it is written: as many values as the tree it
 # stands for, 2^4 − 1 for three levels, at the limit and one under, and the
 # same canonical form, hash and order.
 expect {
@@ -1249,24 +1401,23 @@ expect {
 		and Encode.equals(shared(3), tree) == Ok(True)
 		and Encode.equals(shared(3), shared(2)) == Ok(False)
 		and Encode.compare(shared(2), tree) == Ok(After)
+		and Encode.hash_all_with([shared(3), shared(3)], nodes(15)).is_ok()
 }
 # `Tag { … }` is two values, the tag and its record, as the parser makes them.
 expect {
 	built = variant("A", [rec([("a", num("1"))])])
-	canonical_within(built, 3).map_ok(bytes_to_str) == Ok("A{a:1}") and canonical_within(built, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "(A).a"))
+	canonical_within(built, 3).map_ok(bytes_to_str) == Ok("A{a:1}") and canonical_within(built, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", ""))
 }
-# Nested deeper than any parser takes (`Value.max_supported_depth`, 1024 levels):
-# no canonical form, so no hash and no equality, rather than a deep recursion.
+# Only the node limit applies to the canonical form (spec §12): a value deeper
+# or longer than any writer's limits has one, and so a hash and equality.
 expect {
-	deep = wrapped(1024, Value.arr([]), |v| Value.arr([v]))
-	fails = |r| r.map_err(|e| (e.code, e.reason)).map_ok(|_| {}) == Err(("nesting-too-deep", "nesting deeper than 1024 levels"))
-	Encode.canonical(wrapped(1023, Value.arr([]), |v| Value.arr([v]))).is_ok()
-		and Encode.canonical(deep).map_err(|e| e.path) == Err("[0]".repeat(1024))
-		and fails(Encode.canonical(deep))
-		and fails(Encode.hash(deep))
-		and fails(Encode.hash_all([deep]))
-		and fails(Encode.equals(num("1"), deep))
-		and fails(Encode.compare(deep, num("1")))
-		and Encode.hash_all([num("1"), deep]).map_err(|e| (e.code, e.path.starts_with("[1][0][0]"))) == Err(("nesting-too-deep", True))
+	deep = wrapped(20_000, Value.arr([]), |v| Value.arr([v]))
+	form = "${"[".repeat(20_001)}${"]".repeat(20_001)}"
+	tiny = { ..Value.default_limits, max_depth: 1, max_number_length: 1, max_exponent: 1, max_string_length: 1 }
+	Encode.canonical(deep) == Ok(form)
+		and Encode.hash(deep) == Ok(Crypto.SHA256.hash(form.to_utf8()).to_hex())
+		and Encode.equals(deep, wrapped(20_000, Value.arr([]), |v| Value.arr([v]))) == Ok(True)
+		and Encode.compare(deep, num("1")) == Ok(After)
+		and Encode.canonical_with(rec([("long", Value.arr([Value.text("abc"), num("1e99"), num("12345")]))]), tiny) == Ok("{long:[\"abc\",1e99,12345]}")
+		and Encode.to_str(deep).map_err(|e| e.code) == Err("nesting-too-deep")
 }
-expect Value.max_nodes == 64 * 1024 * 1024

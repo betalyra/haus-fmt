@@ -28,7 +28,7 @@ fn sorted(json: Json) -> Json {
         Json::Object(members) => {
             let mut members: Vec<_> = members.into_iter().map(|(k, v)| (k, sorted(v))).collect();
             members.sort_by(|a, b| a.0.cmp(&b.0));
-            Json::Object(members)
+            Json::object(members).expect("names are unique")
         }
         other => other,
     }

@@ -19,7 +19,7 @@
 
 use crate::error::Position;
 use crate::parser::{parse_item, parse_rest, parse_single};
-use crate::{Decode, Encode, Error, ErrorCode, Limits, Segment, SyntaxError, Value, to_string_with};
+use crate::{Decode, Encode, Error, ErrorCode, Limits, SyntaxError, Value, to_string_with};
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 
@@ -362,7 +362,7 @@ pub fn encode_with<T: Encode, W: Write>(
     limits: &Limits,
 ) -> Result<(), Error> {
     for (i, v) in values.into_iter().enumerate() {
-        let line = to_string_with(&v, limits).map_err(|e| e.within(Segment::Index(i)))?;
+        let line = to_string_with(&v, limits).map_err(|e| e.item(i))?;
         writeln!(output, "{line},")?;
     }
     Ok(output.flush()?)

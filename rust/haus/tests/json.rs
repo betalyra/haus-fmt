@@ -27,7 +27,7 @@ fn the_reader_takes_i_json() {
         Json::Null,
         Json::String("é😀\n/".into()),
     ];
-    assert_eq!(json, Json::Object(vec![("a".into(), Json::Array(items.to_vec()))]));
+    assert_eq!(json, Json::object([("a", Json::Array(items.to_vec()))]).unwrap());
     // Numbers keep their text, however long.
     let digits = "1".repeat(1000);
     assert_eq!(parse(&digits).unwrap(), Json::Number(digits.parse().unwrap()));
@@ -234,7 +234,7 @@ fn the_writer_checks_what_it_writes() {
     let text = json::write(&Json::String(held.into())).unwrap();
     assert_eq!(text, "\"\\\"\\\\\\n\\r\\t\\b\\f\\u0001\\u007f\\u009f\\u202a\\u2069é\u{A0}\u{200F}\"");
     assert_eq!(parse(&text).unwrap(), Json::String(held.into()));
-    let named = json::write(&Json::Object(vec![("\u{202E}".into(), Json::Null)])).unwrap();
+    let named = json::write(&Json::object([("\u{202E}", Json::Null)]).unwrap()).unwrap();
     assert_eq!(named, r#"{"\u202e":null}"#);
     // A number built in code is a JSON number: its constructor checks that.
     for bad in ["1.", "01", "+1", "NaN", "0x1", "", "1_000"] {
@@ -243,8 +243,15 @@ fn the_writer_checks_what_it_writes() {
     assert_eq!(json::write(&Json::Number("-0.5E+3".parse().unwrap())).unwrap(), "-0.5E+3");
     let long = Json::Number("1".repeat(1001).parse().unwrap());
     assert_eq!(json::write(&long).unwrap_err().to_string(), "number literal longer than 1000 characters");
-    let twice = Json::Object(vec![("a".into(), Json::Null), ("a".into(), Json::Null)]);
-    assert_eq!(json::write(&twice).unwrap_err().to_string(), "a member name is used twice in an object");
+    // An object built in code has each name once: its constructors check that.
+    let twice = Json::object([("a", Json::Null), ("a", Json::Null)]).unwrap_err();
+    assert_eq!((twice.code, twice.to_string()), (ErrorCode::DuplicateKey, r#"duplicate member name "a""#.to_owned()));
+    let mut object = haus::json::JsonObject::new();
+    for i in 0..100 {
+        object.insert(format!("k{i}"), Json::Null).unwrap();
+    }
+    assert_eq!(object.insert("k42", Json::Null).unwrap_err().code, ErrorCode::DuplicateKey);
+    assert_eq!(object.len(), 100);
     assert!(json::write(&(0..1025).fold(Json::Null, |j, _| Json::Array(vec![j]))).is_ok());
     let deep = (0..1026).fold(Json::Null, |j, _| Json::Array(vec![j]));
     assert_eq!(json::write(&deep).unwrap_err().to_string(), "JSON nested deeper than 1025 levels");
@@ -256,7 +263,7 @@ fn line_and_paragraph_separators_are_written_escaped_and_read_raw() {
     let held = "a\u{2028}b\u{2029}c";
     let escaped = r#""a\u2028b\u2029c""#;
     assert_eq!(json::write(&Json::String(held.into())).unwrap(), escaped);
-    assert_eq!(json::write(&Json::Object(vec![(held.into(), Json::Null)])).unwrap(), format!("{{{escaped}:null}}"));
+    assert_eq!(json::write(&Json::object([(held, Json::Null)]).unwrap()).unwrap(), format!("{{{escaped}:null}}"));
     assert_eq!(to_string(&held.to_owned()).unwrap(), escaped);
     let value = haus::Value::record([(held, haus::Value::String(held.into()))]).unwrap();
     let text = haus::to_haus_json(&value).unwrap();

@@ -67,7 +67,7 @@ FromJson := [].{
 	## reading). Before reading, the JSON must nest at most 4·256 + 1 levels,
 	## as the parser takes it, so that JSON built in code nested deeper fails
 	## with `nesting-too-deep` instead of overflowing the stack, and have at
-	## most `Value.max_nodes` values, so that JSON built in code that shares
+	## most `max_nodes` values (64 Mi by default), so that JSON built in code that shares
 	## its parts (a DAG), which reading visits each time they are reached,
 	## fails with `too-many-nodes` instead of expanding without bound (spec
 	## §9.8). A generated `from_json_<name>` reads so; the readers it is built
@@ -87,7 +87,7 @@ FromJson := [].{
 	## `encode` checks it for these limits; like its errors inside a `Secret`,
 	## these say what, not where.
 	within_limits : JsonValue, (JsonValue -> Try(a, Decode.Error)), (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)), Value.Limits -> Try(a, Decode.Error)
-	within_limits = |json, reader, encode, limits| read_within(json, reader, encode, limits, Value.max_nodes)
+	within_limits = |json, reader, encode, limits| read_within(json, reader, encode, limits, limits.max_nodes)
 
 	# ── scalars ─────────────────────────────────────────────
 

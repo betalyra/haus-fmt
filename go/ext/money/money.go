@@ -49,7 +49,7 @@ var IsoCurrency = schema.NewCodec(CurrencyID, decodeCurrency, encodeCurrency)
 
 func decodeMoney(v haus.Value) (Money, error) {
 	x, ok := v.(haus.Variant)
-	if !ok || x.Tag != "Money" || len(x.Args) != 2 {
+	if !ok || x.Tag.String() != "Money" || len(x.Args) != 2 {
 		return Money{}, rejected("expected Money(amount, currency)")
 	}
 	amount, ok := x.Args[0].(haus.Number)
@@ -68,7 +68,7 @@ func encodeMoney(m Money) (haus.Value, error) {
 	if err != nil {
 		return nil, err
 	}
-	return haus.Variant{Tag: "Money", Args: []haus.Value{m.Amount, c}}, nil
+	return haus.Variant{Tag: haus.MustTag("Money"), Args: []haus.Value{m.Amount, c}}, nil
 }
 
 func decodeCurrency(v haus.Value) (Currency, error) {
@@ -77,11 +77,11 @@ func decodeCurrency(v haus.Value) (Currency, error) {
 	case !ok:
 		return "", rejected("a currency is a tag")
 	case len(x.Args) > 0:
-		return "", rejected(fmt.Sprintf("the currency %s has a payload; a currency is three letters A–Z (ISO 4217)", x.Tag))
-	case !isISO(x.Tag):
-		return "", rejected(fmt.Sprintf("%s is not a currency: three letters A–Z (ISO 4217)", short(x.Tag)))
+		return "", rejected(fmt.Sprintf("the currency %s has a payload; a currency is three letters A–Z (ISO 4217)", x.Tag.String()))
+	case !isISO(x.Tag.String()):
+		return "", rejected(fmt.Sprintf("%s is not a currency: three letters A–Z (ISO 4217)", short(x.Tag.String())))
 	}
-	return Currency(x.Tag), nil
+	return Currency(x.Tag.String()), nil
 }
 
 func encodeCurrency(c Currency) (haus.Value, error) {
@@ -89,7 +89,7 @@ func encodeCurrency(c Currency) (haus.Value, error) {
 		return nil, &haus.Error{Code: haus.CodeCannotEncode,
 			Message: fmt.Sprintf("%q is not a currency: three letters A–Z (ISO 4217)", short(string(c)))}
 	}
-	return haus.Variant{Tag: string(c)}, nil
+	return haus.Variant{Tag: haus.MustTag(string(c))}, nil
 }
 
 // isISO reports whether s is three capital letters A–Z.

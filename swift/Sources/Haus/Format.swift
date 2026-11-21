@@ -90,11 +90,17 @@ public func hasComments(_ text: String, limits: Limits = Limits()) throws(HausEr
 /// try stringify(["a": 1], FormatOptions(layout: .compact)) // "{ a: 1 }\n"
 /// ```
 ///
-/// It fails for values that have no text: a number longer than the number
-/// limit (`number-too-long`), an exponent over the exponent limit
-/// (`exponent-too-large`), nesting deeper than the depth limit
-/// (`nesting-too-deep`, a record payload counting one level), or a tag that
-/// isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`).
+/// It checks every limit of the options' ``FormatOptions/limits`` (spec §7,
+/// §11), so that a reader with those limits reads the text back: a number
+/// longer than the number limit (`number-too-long`) or with an exponent over
+/// the exponent limit (`exponent-too-large`), a string, byte string (two
+/// characters a byte), key or tag longer than the string limit
+/// (`string-too-long`, `key-too-long`, `tag-too-long`), nesting deeper than
+/// the depth limit (`nesting-too-deep`, a record payload counting one level
+/// and an empty container a level), and more values written than
+/// ``Limits/maxNodes`` (`too-many-nodes`, at `$`, for a value whose arrays
+/// share each other). In a stream each value has its own count, and errors
+/// are at its index (`$[3]`).
 public func stringify(_ value: HausValue, _ options: FormatOptions = FormatOptions()) throws(HausError) -> String {
     try stringifyAll([value], options)
 }
@@ -328,16 +334,16 @@ struct Printer {
         case .variant(let tag, _):
             switch node.form {
             case .bare:
-                out += tag.utf8
+                out += tag.name.utf8
             case .braces:
-                out += tag.utf8
+                out += tag.name.utf8
                 out.append(ASCII.space)
                 return true
             case .parens:
                 if let w = inlineWidth(node), column + w + suffix <= width {
                     compact(node)
                 } else {
-                    out += tag.utf8
+                    out += tag.name.utf8
                     return true
                 }
             }
@@ -410,11 +416,11 @@ struct Printer {
             return empty ? 2 : nil
         case .variant(let tag, _):
             switch node.form {
-            case .bare: return tag.utf8.count
-            case .braces: return empty ? tag.utf8.count + 3 : nil
+            case .bare: return tag.name.utf8.count
+            case .braces: return empty ? tag.name.utf8.count + 3 : nil
             case .parens:
                 guard node.dangling.isEmpty else { return nil }
-                var w = tag.utf8.count + 2 + 2 * (node.items.count - 1)
+                var w = tag.name.utf8.count + 2 + 2 * (node.items.count - 1)
                 for item in node.items {
                     guard item.leading.isEmpty, item.trailing.isEmpty, let a = inlineWidth(item.node) else {
                         return nil
@@ -463,7 +469,7 @@ struct Printer {
         case (.array, _):
             items(node)
         case (.variant(let tag, _), let form):
-            out += tag.utf8
+            out += tag.name.utf8
             switch form {
             case .bare: break
             case .braces:

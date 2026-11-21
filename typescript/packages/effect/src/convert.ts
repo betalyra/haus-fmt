@@ -11,7 +11,7 @@
  * the error with its path (errors.ts gives Effect's issues their codes).
  */
 import {
-  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
+  arr as vArr, bytes as vBytes, checkStdTime, DEFAULT_LIMITS, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
   payloadHint, quoteText, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
@@ -182,8 +182,8 @@ const maxNesting = (maxDepth: number): number => Math.max(2048, NESTING_PER_LEVE
 const STEPS_PER_VALUE = 16
 /** Default budget when encoding, which also bounds objects shared many times (a DAG). */
 const DEFAULT_ENCODE_STEPS = 16 * 1024 * 1024
-/** Values beyond this are rejected (the parser's 64 Mi characters can't produce more). */
-const MAX_VALUES = 64 * 1024 * 1024
+/** Values beyond the node limit (`maxNodes`, default 64 Mi, spec §7) are rejected: the parser's 64 Mi characters can't produce more. */
+const nodesOf = (limits: h.Limits): number => limits.maxNodes ?? DEFAULT_LIMITS.maxNodes
 
 /** The nesting limit of a call (spec §7): `maxDepth`, 256 by default. */
 const depthOf = (limits: h.Limits): number => limits.maxDepth ?? MAX_DEPTH
@@ -244,9 +244,9 @@ const OPEN = { size: 0, need: 0 }
  * its count and the levels it needs are remembered, so a DAG that expands
  * beyond the limit fails at once instead of after 64 Mi steps.
  */
-const countValues = (value: Value, maxDepth: number): number => {
+const countValues = (value: Value, maxDepth: number, maxNodes: number): number => {
   const tooMany = () => {
-    throw new ConversionError("value has too many nodes", "too-many-nodes")
+    throw new ConversionError(`value has more than ${maxNodes} nodes`, "too-many-nodes")
   }
   const tooDeep = () => {
     throw new ConversionError(`value nested deeper than ${maxDepth} levels (or cyclic)`, "nesting-too-deep")
@@ -277,12 +277,12 @@ const countValues = (value: Value, maxDepth: number): number => {
         if (parent === undefined) return top.size
         parent.size += top.size
         parent.need = Math.max(parent.need, top.depth - parent.depth + top.need)
-        if (parent.size > MAX_VALUES) tooMany()
+        if (parent.size > maxNodes) tooMany()
         continue
       }
     }
     if (!isNested(child)) {
-      if (++top.size > MAX_VALUES) tooMany()
+      if (++top.size > maxNodes) tooMany()
       continue
     }
     if (!top.holds) {
@@ -298,7 +298,7 @@ const countValues = (value: Value, maxDepth: number): number => {
       if (depth + seen.need > maxDepth) tooDeep()
       top.size += seen.size
       top.need = Math.max(top.need, depth - top.depth + seen.need)
-      if (top.size > MAX_VALUES) tooMany()
+      if (top.size > maxNodes) tooMany()
     }
   }
 }
@@ -308,7 +308,7 @@ const countValues = (value: Value, maxDepth: number): number => {
  * Fails on values too deep (beyond `maxDepth`) or too large to be parsed input.
  */
 const decodeBudget = (value: Value, limits: h.Limits): number => {
-  const budget = STEPS_PER_VALUE * countValues(value, depthOf(limits)) + 1024
+  const budget = STEPS_PER_VALUE * countValues(value, depthOf(limits), nodesOf(limits)) + 1024
   return limits.maxSteps ?? budget
 }
 
@@ -322,7 +322,7 @@ export const decoding = <R>(value: Value, limits: h.Limits, convert: (value: Val
  */
 export const encoding = (limits: h.Limits, encode: () => Value): Value => {
   const value = guarded(limits, limits.maxSteps ?? DEFAULT_ENCODE_STEPS, encode)
-  countValues(value, depthOf(limits))
+  countValues(value, depthOf(limits), nodesOf(limits))
   return value
 }
 
@@ -995,8 +995,10 @@ function compileUnion(ast: SchemaAST.Union): Converter {
   }
   // A value no member takes: Effect's Any / Unknown take anything, otherwise it is an error.
   const tags = [...byTag.keys()].filter((t) => t !== UNKNOWN_TAG)
+  // No members: a closed variant whose spreads copy no tag (`closed < ...E >`, E empty) takes no value.
+  const none = types.length === 0
   const expected = [
-    ...(open || anyTag ? ["a variant"] : tags.length > 0 ? [`one of the tags ${tags.join(", ")}`] : []),
+    ...(open || anyTag || none ? ["a variant"] : tags.length > 0 ? [`one of the tags ${tags.join(", ")}`] : []),
     ...literals.map(([written]) => describe(written)),
     ...others.map((m) => `a value of ${resolve(m)._tag}`),
   ].join(" or ")
@@ -1011,7 +1013,7 @@ function compileUnion(ast: SchemaAST.Union): Converter {
       if (Option.isSome(byKind.variant)) return byKind.variant.value(v)
       if (open) return { _tag: UNKNOWN_TAG, tag: v.tag, value: v }
       // Closed: no member takes this tag.
-      return mismatch(expected, v, tags.length > 0 ? "unknown-tag" : "type-mismatch")
+      return mismatch(none ? "no tag (a closed variant with no tags)" : expected, v, tags.length > 0 || none ? "unknown-tag" : "type-mismatch")
     }
     for (const [written, literal] of literals) if (equals(v, written)) return literal
     return Option.match(byKind[v.kind], { onSome: (convert) => convert(v), onNone: () => otherwise(v) })

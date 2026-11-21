@@ -14,7 +14,14 @@
 ## with a `ValueError` for a number text that isn't a number literal
 ## (`invalid-number`), a record with a key twice (`duplicate-key`) or a tag
 ## that isn't a tag name (`invalid-tag`); `text`, `bytes`, `arr` and `bool`
-## can't fail. A number is normalized as the parser reads it.
+## can't fail. A number is normalized as the parser reads it. Constructors
+## check only that a value is valid, never a limit (spec §7): limits are the
+## writer's (`Encode`), which checks every limit a value can break.
+##
+## `==` on values is structural: the same kinds, texts and tags, a record's
+## keys in the same order, numbers as their normalized literal. Haus
+## equality (spec §2), where the order of a record's fields doesn't matter,
+## is `Encode.equals`.
 ##
 ##     point = Value.tag("Point", [Value.num("1E+05")?, Value.num("0xFF")?])?
 ##     Encode.canonical(point)   # Ok("Point(1e5,255)")
@@ -118,10 +125,13 @@ Value :: [
 	## What `view` gives: one level of a value.
 	View : [Num(Str), Text(Str), Bytes(List(U8)), Arr(List(Value)), Rec(List((Str, Value))), Tag(Str, List(Value))]
 
-	## `==`: the same kind, text, tag, keys in the same order, and equal parts,
-	## as in Rust. Haus equality (spec §2), where the order of a record's
-	## fields doesn't matter, is `Encode.equals`. Compared with a list rather
-	## than recursion, so that values of any depth compare.
+	## `==` is structural, as in Rust: the same kind, text, tag, a record's
+	## keys in the same order, numbers with the same normalized literal as
+	## stored, and equal parts. It is not haus equality (spec §2), where the
+	## order of a record's fields doesn't matter: that is `Encode.equals`, so
+	## `{ a: 1, b: 2 }` and `{ b: 2, a: 1 }` differ with `==` and are equal
+	## with `Encode.equals`. Compared with a list rather than recursion, so
+	## that values of any depth compare.
 	is_eq : Value, Value -> Bool
 	is_eq = |a, b| {
 		# The pairs of parts still to compare.
@@ -202,8 +212,9 @@ Value :: [
 		Err(BadUtf8({ index, .. })) => Err(locate(input, { code: ErrorCode.invalid_utf8, reason: "invalid UTF-8", pos: index }))
 	}
 
-	## Parse a text that must contain exactly one value (`not-one-value` if it
-	## has none or several).
+	## Parse a text that must contain exactly one value: a single document
+	## (`not-one-value` at the end of the input if it has none or several,
+	## spec §8).
 	parse : Str -> Try(Value, ParseError)
 	parse = |input| parse_with(input, default_limits)
 
@@ -213,7 +224,10 @@ Value :: [
 		values = parse_all_with(input, limits)?
 		match values {
 			[v] => Ok(v)
-			_ => Err({ code: ErrorCode.not_one_value, reason: "expected exactly one value, found ${values.len().to_str()}", line: 1, column: 1 })
+			_ => {
+				src = input.to_utf8()
+				Err(locate(src, { code: ErrorCode.not_one_value, reason: "expected exactly one value, found ${values.len().to_str()}", pos: src.len() }))
+			}
 		}
 	}
 
@@ -227,14 +241,25 @@ Value :: [
 	## number literal, the largest absolute exponent (6144 allows `1e6144`, not
 	## `1e6145`), and characters (code points) in one decoded string, record
 	## key or tag, or between the quotes of a byte string. A value of exactly
-	## a limit is accepted. `max_steps` bounds the work of encoding and
-	## writing one value instead (spec §9.8): the values made or written, a
-	## step each, so that a value whose parts are shared (a DAG) fails with
-	## `step-budget` instead of expanding without bound; parsing and decoding
-	## don't use it.
+	## a limit is accepted. Writers check a value against the same limits.
+	##
+	## `max_nodes` is the node limit (spec §7, "Values written"): the values
+	## written for one value, the value itself and every element, field value
+	## and argument in it, a part that is shared (`Value.arr([w, w])`)
+	## counted each time it is written. Writers, the canonical form, hashing,
+	## equality and order fail with `too-many-nodes` above it, for each
+	## top-level value; so does decoding a `Value` built in code. Parsing
+	## doesn't use it: a parsed value has fewer values than its text has
+	## characters.
+	##
+	## `max_steps` bounds the work of encoding one native value with a
+	## generated `encode_<name>` (spec §9.8): the values it makes, a step
+	## each, so that a native value whose parts are shared (a DAG) fails with
+	## `step-budget` instead of expanding without bound; parsing, decoding and
+	## the writers of values don't use it.
 	##
 	##     Value.parse_all_with(text, { ..Value.default_limits, max_depth: 64 })
-	Limits : { max_depth : U64, max_number_length : U64, max_exponent : U64, max_string_length : U64, max_steps : U64 }
+	Limits : { max_depth : U64, max_number_length : U64, max_exponent : U64, max_string_length : U64, max_nodes : U64, max_steps : U64 }
 
 	## The largest `max_depth` this binding supports (spec §7): 1024. The
 	## parser, decoding, encoding and the JSON mappings recurse once per level
@@ -258,21 +283,53 @@ Value :: [
 		}
 
 	## The spec's defaults: depth 256, number literals of 1000 characters,
-	## exponents up to 6144, strings of 16 Mi characters. Every reader must
-	## take what is within them. Encoding and writing one value take at most
-	## 16 Mi steps, as in TypeScript and Rust.
+	## exponents up to 6144, strings of 16 Mi characters, 64 Mi values written
+	## for one value (`max_nodes`). Every reader must take what is within
+	## them. Encoding one native value takes at most 16 Mi steps, as in
+	## TypeScript and Rust.
 	default_limits : Limits
-	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024, max_steps: 16 * 1024 * 1024 }
+	default_limits = { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024, max_nodes: 64 * 1024 * 1024, max_steps: 16 * 1024 * 1024 }
 
-	## The most values (nodes) in one value that the canonical form, hashing,
-	## equality and decoding take (spec §9.8): 64 Mi, as in TypeScript and Go.
-	## A `Value` built in code may share its parts (`Value.arr([w, w])` holds `w`
-	## twice, not a copy), and a shared part counts each time it is reached,
-	## as these functions visit it: 40 levels that each hold the one below
-	## twice are 2^41 − 1 values, which fail with `too-many-nodes` instead of
-	## taking days. A parsed value is a tree, no larger than its text.
+	## The default node limit (spec §7, "Values written"), `max_nodes` of
+	## `default_limits`: 64 Mi (67,108,864) values written for one value. A
+	## `Value` built in code may share its parts (`Value.arr([w, w])` holds `w`
+	## twice, not a copy), and a shared part counts each time it is written:
+	## 40 levels that each hold the one below twice are 2^41 − 1 values, which
+	## fail with `too-many-nodes` instead of taking days. A parsed value is a
+	## tree, no larger than its text.
 	max_nodes : U64
 	max_nodes = 64 * 1024 * 1024
+
+	## `Ok(n)`: `v` writes `n` values, at most `limit` (spec §7, "Values
+	## written"): itself and every element, field value and argument in it,
+	## a shared part counted each time it is written, so `Tag { … }` is two
+	## (the tag and its record). `Err(TooManyNodes)` above the limit, found
+	## after at most `limit` steps however much `v` shares. Walked with a list
+	## rather than recursion, so any depth is counted.
+	##
+	##     Value.count_nodes(Value.arr([Value.text("a"), Value.text("b")]), 3)   # Ok(3)
+	count_nodes : Value, U64 -> Try(U64, [TooManyNodes])
+	count_nodes = |v, limit| {
+		var $todo = [v]
+		var $nodes = 0.U64
+		while True {
+			match $todo.last() {
+				Err(_) => return Ok($nodes)
+				Ok(x) => {
+					$nodes = $nodes + 1
+					if $nodes > limit {
+						return Err(TooManyNodes)
+					}
+					$todo = match x {
+						Arr(items) => $todo.drop_last(1).concat(items)
+						Rec(fields) => $todo.drop_last(1).concat(fields.map(|(_, f)| f))
+						Tag(_, args) => $todo.drop_last(1).concat(args)
+						_ => $todo.drop_last(1)
+					}
+				}
+			}
+		}
+	}
 
 	## `Ok({})` if `v` nests at most `max_depth` levels, counted as the parser
 	## counts them (each array, record and tag with arguments is a level, and
@@ -535,8 +592,11 @@ parse_record = |src, open, depth, limits| {
 		return Err(nesting_error(limits, open))
 	}
 	var $fields = []
-	# Each key and where it is; checked for repeats when the record ends, or
-	# before an error after them, which a repeated key comes before.
+	# Each key and where it is, taken as soon as the key is read, before its
+	# colon and value. A key that repeats an earlier one is reported at the
+	# second key, before any later error (spec §8), so the keys are checked
+	# for repeats when the record ends, or before an error after them. Sorted
+	# then, so a record takes O(n log n) whatever its keys (spec §7).
 	var $keys = []
 	var $pos = skip_trivia(src, open + 1)?
 	while at(src, $pos) != '}' {
@@ -544,12 +604,16 @@ parse_record = |src, open, depth, limits| {
 			return Err(repeated_first($keys, unclosed(src, open)))
 		}
 		key_pos = $pos
-		(key, value, after_value) = match record_entry(src, $pos, depth, limits) {
+		(key, after_key) = match parse_key(src, $pos, limits) {
+			Ok(read) => read
+			Err(e) => return Err(repeated_first($keys, e))
+		}
+		$keys = $keys.append((key, key_pos))
+		(value, after_value) = match record_value(src, key, after_key, depth, limits) {
 			Ok(entry) => entry
 			Err(e) => return Err(repeated_first($keys, e))
 		}
 		$fields = $fields.append((key, value))
-		$keys = $keys.append((key, key_pos))
 		$pos = match record_next(src, after_value, open, value) {
 			Ok(next) => next
 			Err(e) => return Err(repeated_first($keys, e))
@@ -561,16 +625,14 @@ parse_record = |src, open, depth, limits| {
 	}
 }
 
-## A record's entry at `pos`: its key, its value, and where the value ends.
-record_entry : List(U8), U64, U64, Value.Limits -> Try((Str, Value, U64), Fail)
-record_entry = |src, pos, depth, limits| {
-	(key, after_key) = parse_key(src, pos, limits)?
+## After a record's key: its colon, its value, and where the value ends.
+record_value : List(U8), Str, U64, U64, Value.Limits -> Try((Value, U64), Fail)
+record_value = |src, key, after_key, depth, limits| {
 	colon = skip_trivia(src, after_key)?
 	if at(src, colon) != ':' {
 		return Err({ code: ErrorCode.missing_colon, reason: "expected ':' after key '${ErrorCode.shown(key)}', found ${describe(src, colon)}", pos: colon })
 	}
-	(value, after_value) = parse_value(src, skip_trivia(src, colon + 1)?, depth + 1, limits)?
-	Ok((key, value, after_value))
+	parse_value(src, skip_trivia(src, colon + 1)?, depth + 1, limits)
 }
 
 ## After a record's entry: where the next one starts, or the closing `}`.
@@ -1035,7 +1097,7 @@ parse_block_string = |src, open, limits| {
 		} else if at(src, $p) == '\n' {
 			$p + 1
 		} else {
-			return Err({ code: ErrorCode.block_string_opening, reason: "opening \"\"\" must be followed by a line break", pos: if ($p >= src.len()) open else $p })
+			return Err({ code: ErrorCode.block_string_opening, reason: "opening \"\"\" must be followed by a line break", pos: $p })
 		}
 
 	# Find the closing """, skipping escaped characters.
@@ -1500,10 +1562,14 @@ expect code_at("x\"a") == "unterminated-bytes at 1:1" and code_at("x\"ab") == "u
 expect code_at("\"a\nb\"") == "string-line-break at 1:3" and code_at("\"a\tb\"") == "control-character at 1:3" and code_at("\"\u(202E)\"") == "bidi-control at 1:2"
 expect code_at("{ A: 1 }") == "uppercase-key at 1:3" and code_at("{ 1: 1 }") == "expected-key at 1:3" and code_at("{ a 1 }") == "missing-colon at 1:5"
 expect code_at("{ a: 1, a: 2 }") == "duplicate-key at 1:9" and code_at("{ \"\"\"\n\"\"\": 1 }") == "block-string-key at 1:3" and code_at("[1, 2") == "unclosed-bracket at 1:1"
+# `block-string-opening` at what follows the opening quotes and their spaces, or at the end of the input.
+expect code_at("\"\"\"") == "block-string-opening at 1:4" and code_at("[\"\"\"  ") == "block-string-opening at 1:7"
 expect code_at("A()") == "empty-payload at 1:2" and code_at("\"\"\"x\n\"\"\"") == "block-string-opening at 1:4" and code_at("\"\"\"\n  a\n b\"\"\"") == "block-string-closing at 3:3"
 # Invalid UTF-8 is reported where it is; exactly one value where one is expected.
 expect Value.parse_bytes([0x5B, 0x31, 0x0A, 0x22, 0xFF, 0x22, 0x5D]).map_ok(|_| {}).map_err(|e| (e.code, e.line, e.column)) == Err(("invalid-utf8", 2, 2))
 expect Value.parse("1, 2").map_ok(|_| {}).map_err(|e| e.code) == Err("not-one-value") and Value.parse("").map_ok(|_| {}).map_err(|e| e.code) == Err("not-one-value")
+# `not-one-value` is at the end of the input (spec §8).
+expect ["1, 2", "", "// c\n", "\u(FEFF)1,\n2 "].map(|text| Value.parse(text).map_ok(|_| {}).map_err(|e| (e.code, e.line, e.column))) == [(1, 5), (1, 1), (2, 1), (2, 3)].map(|(l, c)| Err(("not-one-value", l, c)))
 expect Value.parse_all("[1 2]").map_ok(|_| {}).map_err(Value.error_json) == Err("{\"code\":\"missing-comma\",\"message\":\"expected ',' or ']', found '2'\",\"line\":1,\"column\":4,\"hint\":\"Add a comma between the two values.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-comma\"}")
 
 # Duplicate keys (spec §7): keys are sorted and neighbours compared, so a
@@ -1525,8 +1591,12 @@ expect {
 		_ => Bool.False
 	}
 }
-# A repeated key is reported before an error after it, and after one before it.
-expect code_at("{ a: 1, b: 2, a: 3, c: }") == "duplicate-key at 1:15" and code_at("{ a: 1, a: [ }") == "expected-value at 1:14"
+# A repeated key is reported at the second key as soon as it is read, before
+# its colon and value (spec §8), and so before an error after it, and after
+# one before it.
+expect code_at("{ a: 1, b: 2, a: 3, c: }") == "duplicate-key at 1:15" and code_at("{ a: 1, a: [ }") == "duplicate-key at 1:9" and code_at("{ a: [, a: 1 }") == "expected-value at 1:7"
+expect code_at("{ a: 1, a: \"\\q\" }") == "duplicate-key at 1:9" and code_at("{ a: 1, a: [1 2] }") == "duplicate-key at 1:9" and code_at("{ a: 1,\n  \"a\" 2 }") == "duplicate-key at 2:3"
+expect code_at("[Point { x: 1, y: 2, x: \"\"\"\n }]") == "duplicate-key at 1:22" and code_at("Point({ x: 1, x: 1e99999 })") == "duplicate-key at 1:15" and code_at("{ a: 1, a }") == "duplicate-key at 1:9"
 expect code_at("{ a: 1, a: 2 x }") == "duplicate-key at 1:9" and code_at("{ a: 1, a: 2") == "duplicate-key at 1:9" and code_at("{ a: { b: 1, b: 2 }, a: 1 }") == "duplicate-key at 1:14"
 
 ## `{ k0: 0, k1: 1, … }` with `n` keys, then `more`.
@@ -1539,6 +1609,21 @@ many_keys = |n, more| {
 		$i = $i + 1
 	}
 	"{ ${Str.join_with($parts, ", ")}${more} }"
+}
+
+# `count_nodes` (spec §7, "Values written"): the value and every element,
+# field value and argument, `Tag { … }` two, a shared part each time.
+expect Value.count_nodes(Arr([Num("1"), Rec([("a", Text("x"))]), Tag("A", [Rec([("b", Num("1"))])])]), 7) == Ok(7) and Value.count_nodes(Arr([Arr([]), Arr([])]), 2) == Err(TooManyNodes)
+expect Value.count_nodes(Num("1"), 1) == Ok(1) and Value.count_nodes(Num("1"), 0) == Err(TooManyNodes) and Value.count_nodes(Tag("None", []), 1) == Ok(1)
+expect {
+	# 40 levels that each hold the one below twice: 2^41 − 1 values, stopped at the limit.
+	var $v = Arr([])
+	var $i = 0
+	while $i < 40 {
+		$v = Arr([$v, $v])
+		$i = $i + 1
+	}
+	Value.count_nodes($v, 100_000) == Err(TooManyNodes)
 }
 
 # `within_bounds` (spec §9.8): `Tag { … }` is two values, and the place of the first one beyond.
