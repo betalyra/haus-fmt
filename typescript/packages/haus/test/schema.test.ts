@@ -203,6 +203,19 @@ describe("errors", () => {
       const bad = { price: 1, sizes: [0.5] }
       expect(encoding(() => h.formatAll(Item, [item, item, item, bad]))).toEqual(["cannot-encode", "$[3].sizes[0]"])
     }))
+
+  it("a bad tag in an Any built in code is invalid-tag, as in spec/errors.haus", () => {
+    const U = h.Record({ v: h.Any })
+    const value = { v: { kind: "array", items: [{ kind: "variant", tag: "lower", args: [] }] } } as never
+    for (const write of [() => h.encode(U, value), () => h.stringify(U, value), () => h.toJson(U, value)]) {
+      try {
+        write()
+        expect.unreachable()
+      } catch (x) {
+        expect(x instanceof h.HausEncodeError ? [x.code, h.formatPath(x.path)] : x).toEqual(["invalid-tag", "$.v[0]"])
+      }
+    }
+  })
 })
 
 describe("encoding", () => {

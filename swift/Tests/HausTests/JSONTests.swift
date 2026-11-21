@@ -87,7 +87,9 @@ struct JSONSuiteTests {
         #expect(try fromHausJSONLines(text) == values)
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         for (value, line) in zip(values, lines) {
-            #expect(sameJSON(try toHausJSON(value), String(line)))
+            // The suite's JSON reader: importJSON stops at 256 JSON levels.
+            let written = try toHausJSON(value)
+            #expect(try onStack(kibibytes: suiteStack) { sameData(JSON.parse(written), JSON.parse(String(line))) })
         }
         #expect(try fromHausJSONLines(toHausJSONLines(values)) == values)
     }
