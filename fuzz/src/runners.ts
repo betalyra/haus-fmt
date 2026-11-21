@@ -59,13 +59,20 @@ function parseLine(line: string, format: Format): Result {
   return { ok: false, line: Number(m[1]), column: Number(m[2]), reason: m[3]! }
 }
 
+/** How long a runner may take for a batch of cases, and for one case, before
+ * it counts as hung: a hang is then reported, with its case, like a crash. */
+const BATCH_TIMEOUT = 300_000
+const CASE_TIMEOUT = 20_000
+
 /** A runner that is a separate program: `program [...args] DIR N`. */
 function external(name: string, program: string, args: readonly string[] = [], format: Format = {}): Runner {
   return {
     name,
     run(dir, cases) {
-      const p = spawnSync(program, [...args, dir, String(cases.length)], { maxBuffer: 1 << 30, encoding: "utf8" })
-      // A crash is a finding: run the cases one by one to see which one crashes.
+      const p = spawnSync(program, [...args, dir, String(cases.length)], { maxBuffer: 1 << 30, encoding: "utf8", timeout: BATCH_TIMEOUT })
+      // A crash or a hang is a finding: run the cases one by one to see which one it is.
+      if ((p.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT")
+        console.error(`${name}: no answer for ${cases.length} cases within ${BATCH_TIMEOUT / 1000} s; running them one by one`)
       if (p.status !== 0) return cases.map((c) => this.runOne(dir, c))
       const lines = p.stdout.split("\n").filter((l) => l !== "")
       if (lines.length !== cases.length) throw new Error(`${name}: ${lines.length} results for ${cases.length} cases`)
@@ -82,7 +89,8 @@ function external(name: string, program: string, args: readonly string[] = [], f
       rmSync(single, { recursive: true, force: true })
       mkdirSync(single, { recursive: true })
       writeFileSync(join(single, "00000.haus"), bytes)
-      const p = spawnSync(program, [...args, single, "1"], { encoding: "utf8" })
+      const p = spawnSync(program, [...args, single, "1"], { encoding: "utf8", timeout: CASE_TIMEOUT })
+      if ((p.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return { ok: false, line: -1, column: -1, reason: `HANG: no answer within ${CASE_TIMEOUT / 1000} s` }
       if (p.status !== 0) return { ok: false, line: -1, column: -1, reason: `CRASH: ${(p.stderr || String(p.signal)).trim().split("\n").slice(0, 3).join(" ")}` }
       return parseLine(p.stdout.trim(), format)
     },

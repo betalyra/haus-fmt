@@ -1,8 +1,10 @@
 # Tests for every binding, the Lean proofs, and differential fuzzing.
 #
 # Pull requests and pushes to main run everything with a modest fuzzing
-# budget; the nightly run fuzzes much longer. A fuzzing failure prints its
-# seed: `node fuzz/src/main.ts --seed S` (or fuzz/src/time.ts, fuzz/src/profiles.ts) repeats it.
+# budget; the nightly run fuzzes much longer, and so does a manual run with
+# `nightly` checked (`gh workflow run ci.yml -f nightly=true`). A fuzzing
+# failure prints its seed: `node fuzz/src/main.ts --seed S` (or
+# fuzz/src/time.ts, fuzz/src/profiles.ts) repeats it.
 name: CI
 
 on:
@@ -12,6 +14,11 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      nightly:
+        description: The nightly run's fuzzing budget
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,6 +46,7 @@ jobs:
       packages: ${{ steps.diff.outputs.packages }}
       tree_sitter: ${{ steps.diff.outputs.tree_sitter }}
       jvm: ${{ steps.diff.outputs.jvm }}
+      go: ${{ steps.diff.outputs.go }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -48,10 +56,10 @@ jobs:
           case "${{ github.event_name }}" in
             pull_request) range="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"; base="${{ github.event.pull_request.base.sha }}" ;;
             push) range="${{ github.event.before }}..${{ github.sha }}"; base="${{ github.event.before }}" ;;
-            *) printf 'code=true\npackages=true\ntree_sitter=true\njvm=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
+            *) printf 'code=true\npackages=true\ntree_sitter=true\njvm=true\ngo=true\n' >> "$GITHUB_OUTPUT"; exit 0 ;;
           esac
           # A new branch or a force push has no usable base: run everything.
-          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then printf 'code=true\npackages=true\ntree_sitter=true\njvm=true\n' >> "$GITHUB_OUTPUT"; exit 0; fi
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then printf 'code=true\npackages=true\ntree_sitter=true\njvm=true\ngo=true\n' >> "$GITHUB_OUTPUT"; exit 0; fi
           files=$(git diff --name-only "$range")
           printf '%s\n' "$files"
           if printf '%s\n' "$files" | grep -qvE '^(website/|docs/|plans/|[^/]+\.md$|$)'; then code=true; else code=false; fi
@@ -66,6 +74,9 @@ jobs:
           # The JVM binding: its sources, the suites and examples it runs, and the error catalogue it is generated from.
           if printf '%s\n' "$files" | grep -qE '^(jvm/|fuzz/jvm/|test-suite/|examples/|extensions/|spec/std/|spec/errors\.haus|spec/scripts/errors\.ts|\.github/workflows/ci\.yml)'; then jvm=true; else jvm=false; fi
           echo "jvm=$jvm" >> "$GITHUB_OUTPUT"
+          # Go's own fuzz targets (the differential fuzzer covers Go on every run).
+          if printf '%s\n' "$files" | grep -qE '^(go/|\.github/workflows/ci\.yml)'; then go=true; else go=false; fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
 
   docs:
     name: Generated docs are up to date
@@ -288,11 +299,12 @@ jobs:
       - name: Test with the race detector
         if: matrix.go == '1.27.x'
         run: go test -race -short ./...
+      # Pull requests: 10 s a target, and only when Go changed; nightly: 10 min.
       - name: Fuzz
-        if: matrix.go == '1.27.x'
+        if: matrix.go == '1.27.x' && (github.event_name != 'pull_request' || needs.changes.outputs.go == 'true')
         run: |
-          fuzztime=30s
-          if [ "${{ github.event_name }}" = schedule ]; then fuzztime=10m; fi
+          fuzztime=10s
+          if [ "${{ github.event_name == 'schedule' || inputs.nightly }}" = true ]; then fuzztime=10m; fi
           go test -run '^$' -fuzz '^FuzzParse$' -fuzztime "$fuzztime" .
           go test -run '^$' -fuzz '^FuzzStream$' -fuzztime "$fuzztime" .
           go test -run '^$' -fuzz '^FuzzFormatString$' -fuzztime "$fuzztime" .
@@ -532,75 +544,104 @@ jobs:
         # All of ./schema, the package suite (which makes symbolic links) included.
         run: go test ./schema
 
+  # Each part's runners are built on a runner of their own, in parallel; the
+  # fuzz jobs unpack all of them. Python needs no build (the fuzz jobs run uv sync).
   fuzz-build:
-    name: Fuzzing / build the runners
+    name: Fuzzing / build ${{ matrix.part }}
     needs: changes
     if: needs.changes.outputs.code == 'true'
     # The fuzz jobs run these binaries: the same image for all of them.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: lean
+            files: spec/lean/.lake/build/bin/haus-ref
+          - part: rust
+            files: >-
+              rust/target/release/examples/fuzz_runner rust/target/release/examples/time_runner
+              fuzz/schema-rust/target/release/schema_runner fuzz/schema-rust/target/release/json_runner
+              fuzz/schema-rust/target/release/check_runner fuzz/schema-rust/target/release/profile_runner
+              fuzz/schema-rust/target/release/schema_check_runner
+          - part: typescript
+            files: >-
+              typescript/packages/haus/dist typescript/packages/effect/dist typescript/packages/import/dist
+              extensions/money/dist extensions/geo/dist
+          - part: go zig
+            files: fuzz/.build/go-runner zig/zig-out/bin/zig-runner
+          # Built with the runner image's Swift, its standard library linked in, so the fuzz jobs don't need Swift.
+          - part: swift
+            files: fuzz/.build/swift-runner
+          # Installed by Gradle into fuzz/.build/jvm-runner, its jars with it.
+          - part: jvm
+            files: fuzz/.build/jvm-runner
+          - part: roc
+            files: fuzz/.build/roc-runner fuzz/.build/roc-time-runner fuzz/.build/roc-profile-runner fuzz/.build/roc-schema-runner fuzz/.build/roc-json-runner
     steps:
       - uses: actions/checkout@v5
-      - uses: leanprover/lean-action@v1
+      - if: matrix.part == 'lean'
+        uses: leanprover/lean-action@v1
         with:
           lake-package-directory: spec/lean
           auto-config: false
           build: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # Roc's schema and JSON runners are generated with haus-gen (Rust).
+      - if: matrix.part == 'rust' || matrix.part == 'roc'
+        uses: dtolnay/rust-toolchain@stable
+      - if: matrix.part == 'rust' || matrix.part == 'roc'
+        uses: Swatinem/rust-cache@v2
         with:
+          key: fuzz-${{ matrix.part }}
           workspaces: |
             rust
             fuzz/schema-rust
-      - uses: astral-sh/setup-uv@v10.3.3
-      # The Go runner (fuzz/go). The fuzz jobs only run it, a static binary, so they don't need Go.
-      - uses: actions/setup-go@v6.5.0
+      - if: matrix.part == 'go zig'
+        uses: actions/setup-go@v6.5.0
         with:
           go-version: "1.27.x"
           cache-dependency-path: fuzz/go/go.mod
-      # The JVM runner (fuzz/jvm), installed by Gradle into fuzz/.build/jvm-runner (its jars travel with fuzz/.build).
-      - uses: actions/setup-java@v5
+      - if: matrix.part == 'go zig'
+        uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.17.1
+      - if: matrix.part == 'jvm'
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "25"
-      - uses: gradle/actions/setup-gradle@v5
-      - uses: pnpm/action-setup@v6
+      - if: matrix.part == 'jvm'
+        uses: gradle/actions/setup-gradle@v5
+      - if: matrix.part == 'typescript'
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v5
+      - if: matrix.part == 'typescript' || matrix.part == 'roc'
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: typescript/pnpm-lock.yaml
-      - name: Install Roc
+      - if: matrix.part == 'typescript'
+        working-directory: typescript
+        run: pnpm install --frozen-lockfile
+      - if: matrix.part == 'roc'
+        name: Install Roc
         run: sh .github/install-roc.sh
-      # The Swift runner (fuzz/swift-runner) is built with the runner image's Swift, its standard
-      # library linked in (fuzz/build.sh), so the fuzz jobs don't need Swift.
-      - name: Swift
-        run: swift --version
-      # The Zig runner (zig/test/fuzz_runner.zig), built by fuzz/build.sh.
-      - uses: mlugg/setup-zig@v2.2.1
+      - if: matrix.part == 'swift'
+        uses: actions/cache@v4
         with:
-          version: 0.17.1
-      - name: Build the parsers and checkers under test
-        run: |
-          (cd typescript && pnpm install --frozen-lockfile)
-          sh fuzz/build.sh
+          path: fuzz/swift-runner/.build
+          key: fuzz-swift-${{ runner.os }}-${{ hashFiles('swift/Package.swift', 'swift/Sources/**', 'fuzz/swift-runner/Package.swift', 'fuzz/swift-runner/Sources/**') }}
+          restore-keys: fuzz-swift-${{ runner.os }}-
+      - name: Build
+        run: sh fuzz/build.sh ${{ matrix.part }}
       # Artifacts drop the executable bit, so the runners travel as a tarball.
-      - name: Pack the runners
-        run: |
-          tar -czf fuzz-runners.tgz \
-            spec/lean/.lake/build/bin/haus-ref \
-            rust/target/release/examples/fuzz_runner rust/target/release/examples/time_runner \
-            fuzz/schema-rust/target/release/schema_runner fuzz/schema-rust/target/release/json_runner fuzz/schema-rust/target/release/check_runner \
-            fuzz/schema-rust/target/release/profile_runner fuzz/schema-rust/target/release/schema_check_runner \
-            fuzz/.build zig/zig-out/bin/zig-runner \
-            typescript/packages/haus/dist typescript/packages/effect/dist typescript/packages/import/dist \
-            extensions/money/dist extensions/geo/dist
+      - name: Pack
+        run: tar -czf "fuzz-runners-$(echo '${{ matrix.part }}' | tr ' ' -).tgz" ${{ matrix.files }}
       - uses: actions/upload-artifact@v4
         with:
-          name: fuzz-runners
-          path: fuzz-runners.tgz
+          name: fuzz-runners-${{ strategy.job-index }}
+          path: fuzz-runners-*.tgz
           retention-days: 1
 
   fuzz:
@@ -612,18 +653,18 @@ jobs:
       fail-fast: false
       matrix:
         # Each mode runs on its own runner against the same binaries; `pr` and
-        # `nightly` are the case counts (std/time cases are cheap, so many more;
-        # 0: no count, the fuzzers' unit tests).
+        # `nightly` are the case counts, about a minute per mode on pull requests
+        # (std/time cases are cheap, so many more; 0: no count, the fuzzers' unit tests).
         include:
           - { mode: own-tests, run: "node --test fuzz/src/", pr: 0, nightly: 0 }
           - { mode: parser, run: "node fuzz/src/main.ts", pr: 100000, nightly: 1000000 }
           - { mode: canonical, run: "node fuzz/src/main.ts --canonical", pr: 100000, nightly: 1000000 }
-          - { mode: time, run: "node fuzz/src/time.ts", pr: 2000000, nightly: 20000000 }
+          - { mode: time, run: "node fuzz/src/time.ts", pr: 1000000, nightly: 20000000 }
           # Cases for each official profile (iso, wgs84), through every binding's codecs.
-          - { mode: profiles, run: "node fuzz/src/profiles.ts", pr: 200000, nightly: 2000000 }
+          - { mode: profiles, run: "node fuzz/src/profiles.ts", pr: 100000, nightly: 2000000 }
           - { mode: schema, run: "node fuzz/src/main.ts --schema", pr: 20000, nightly: 500000 }
           - { mode: json, run: "node fuzz/src/main.ts --json", pr: 4000, nightly: 50000 }
-          - { mode: format, run: "node fuzz/src/main.ts --format", pr: 20000, nightly: 200000 }
+          - { mode: format, run: "node fuzz/src/main.ts --format", pr: 5000, nightly: 200000 }
           # Schema files through every binding's schema-file checker (Roc has none of its own).
           - { mode: schema-check, run: "node fuzz/src/main.ts --schema-check", pr: 20000, nightly: 500000 }
     steps:
@@ -644,15 +685,16 @@ jobs:
           java-version: "25"
       - uses: actions/download-artifact@v4
         with:
-          name: fuzz-runners
+          pattern: fuzz-runners-*
+          merge-multiple: true
       - name: Unpack the runners
         run: |
-          tar -xzf fuzz-runners.tgz
+          for f in fuzz-runners-*.tgz; do tar -xzf "$f"; done
           (cd typescript && pnpm install --frozen-lockfile)
           (cd python && uv sync -q)
       - name: Fuzz
         run: |
-          count=${{ github.event_name == 'schedule' && matrix.nightly || matrix.pr }}
+          count=${{ (github.event_name == 'schedule' || inputs.nightly) && matrix.nightly || matrix.pr }}
           # A new seed every run, printed in the log; the same for every mode, as before.
           seed=$(( ${{ github.run_id }} % 1000000 ))
           if [ "$count" = 0 ]; then set -x; ${{ matrix.run }}; exit; fi
