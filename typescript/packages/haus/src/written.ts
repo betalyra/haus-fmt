@@ -142,19 +142,27 @@ const checkLeaf = (v: Value, limits: WriteLimits, root: Value, at: Path): void =
  * value is known to be within reach.
  */
 const pathTo = (root: Value, target: Value): Path => {
-  const stack: { readonly v: Value; readonly path: Path }[] = [{ v: root, path: [] }]
+  // Each entry links to its parent, so the path is built once, at the end:
+  // copying it at every level would take quadratic time for a deep value.
+  type Step = { readonly v: Value; readonly key: string | number; readonly parent: Step | undefined }
+  const stack: Step[] = [{ v: root, key: 0, parent: undefined }]
   while (stack.length > 0) {
-    const { v, path } = stack.pop()!
-    if (v === target) return path
+    const step = stack.pop()!
+    const { v } = step
+    if (v === target) {
+      const path: (string | number)[] = []
+      for (let s: Step | undefined = step; s?.parent !== undefined; s = s.parent) path.push(s.key)
+      return path.reverse()
+    }
     switch (v.kind) {
       case "array":
-        v.items.forEach((x, i) => stack.push({ v: x, path: [...path, i] }))
+        v.items.forEach((x, i) => stack.push({ v: x, key: i, parent: step }))
         break
       case "record":
-        for (const [k, x] of v.fields) stack.push({ v: x, path: [...path, k] })
+        for (const [k, x] of v.fields) stack.push({ v: x, key: k, parent: step })
         break
       case "variant":
-        v.args.forEach((x, i) => stack.push({ v: x, path: [...path, i] }))
+        v.args.forEach((x, i) => stack.push({ v: x, key: i, parent: step }))
     }
   }
   return []

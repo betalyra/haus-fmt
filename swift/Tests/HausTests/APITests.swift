@@ -147,7 +147,7 @@ struct APITests {
     /// break (spec §11), with the limit's code and the value's path.
     @Test func writersCheckEveryLimit() throws {
         let small = Limits(maxDepth: 2, maxNumberLength: 4, maxExponent: 9, maxStringLength: 3, maxNodes: 6)
-        let tooLong = try HausTag("Long")
+        let tooLong: HausTag = "Long"
         // Two places for one array: 9 values written, from 2 arrays, 2 levels.
         let three: HausValue = [1, 2, 3]
         let pair: HausValue = [three, three]
@@ -220,25 +220,39 @@ struct APITests {
         ]
         let text = try canonical(big, limits: tight)
         #expect(text == (try canonical(big)))
-        #expect(try hash(big, limits: tight) == (try hash(big)))
+        #if canImport(CryptoKit)
+            #expect(try hash(big, limits: tight) == (try hash(big)))
+        #endif
         #expect(throws: HausError.self) { try Haus.stringify(big, FormatOptions(layout: .minimised, limits: tight)) }
         // The node limit: 2^21 - 1 values written from 21 arrays.
         let dag = Self.shared(20)
         let nodes = Limits(maxNodes: 1 << 20)
         // At the value given (`$`); hashAll at the value's index, even of one value.
-        for (name, place, run) in [
-            ("canonical", "$", { () throws in _ = try canonical(dag, limits: nodes) }),
-            ("hash", "$", { () throws in _ = try hash(dag, limits: nodes) }),
-            ("hashAll", "$[0]", { () throws in _ = try hashAll([dag], limits: nodes) }),
-        ] as [(String, String, () throws -> Void)] {
+        let canonicalCall: [(String, String, () throws -> Void)] = [
+            ("canonical", "$", { () throws in _ = try canonical(dag, limits: nodes) })
+        ]
+        #if canImport(CryptoKit)
+            let calls =
+                canonicalCall + [
+                    ("hash", "$", { () throws in _ = try hash(dag, limits: nodes) }),
+                    ("hashAll", "$[0]", { () throws in _ = try hashAll([dag], limits: nodes) }),
+                ]
+        #else
+            let calls = canonicalCall
+        #endif
+        for (name, place, run) in calls {
             let error = #expect(throws: HausError.self, "\(name)") { try run() }
             #expect(error?.code == .tooManyNodes, "\(name)")
             #expect(error?.path == place, "\(name)")
         }
         #expect(try canonical(Self.shared(3), limits: Limits(maxNodes: 15)) == "[[[[],[]],[[],[]]],[[[],[]],[[],[]]]]")
         #expect(throws: HausError.self) { try canonical(Self.shared(3), limits: Limits(maxNodes: 14)) }
-        let item = #expect(throws: HausError.self) { try hashAll([[], Self.shared(3)], limits: Limits(maxNodes: 14)) }
-        #expect(item?.path == "$[1]")
+        #if canImport(CryptoKit)
+            let item = #expect(throws: HausError.self) {
+                try hashAll([[], Self.shared(3)], limits: Limits(maxNodes: 14))
+            }
+            #expect(item?.path == "$[1]")
+        #endif
         // A record payload counts its record: Tag { a: 1 } is 3 values.
         #expect(try canonical(.tag("T", ["a": 1]), limits: Limits(maxNodes: 3)) == "T{a:1}")
         #expect(throws: HausError.self) { try canonical(.tag("T", ["a": 1]), limits: Limits(maxNodes: 2)) }
