@@ -140,6 +140,9 @@ jobs:
       - name: Format options suite
         working-directory: spec/lean
         run: .lake/build/bin/haus-ref --format-options ../../test-suite/format/options.cases.haus
+      - name: Format suite
+        working-directory: spec/lean
+        run: .lake/build/bin/haus-ref --format-suite ../../test-suite/format
       - name: Profile vectors
         working-directory: spec/lean
         run: |
@@ -664,7 +667,7 @@ jobs:
           - { mode: profiles, run: "node fuzz/src/profiles.ts", pr: 100000, nightly: 2000000 }
           - { mode: schema, run: "node fuzz/src/main.ts --schema", pr: 20000, nightly: 500000 }
           - { mode: json, run: "node fuzz/src/main.ts --json", pr: 4000, nightly: 50000 }
-          - { mode: format, run: "node fuzz/src/main.ts --format", pr: 5000, nightly: 200000 }
+          - { mode: format, run: "node fuzz/src/main.ts --format", pr: 5000, nightly: 100000 }
           # Schema files through every binding's schema-file checker (Roc has none of its own).
           - { mode: schema-check, run: "node fuzz/src/main.ts --schema-check", pr: 20000, nightly: 500000 }
     steps:

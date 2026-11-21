@@ -90,6 +90,8 @@ import Haus.Layout.Compact
 import Haus.Layout.CompactRoundTrip
 import Haus.Layout.Pretty
 import Haus.Layout.PrettyRoundTrip
+import Haus.Layout.Format
+import Haus.Layout.FormatRoundTrip
 import Haus.Packages.Fs
 import Haus.Packages.Names
 import Haus.Packages.SchemaFile

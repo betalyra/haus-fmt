@@ -342,14 +342,15 @@ error codes compared, and `fuzz/.out/json/coverage.txt` has it per type for
 
 `--format` tests the standard layouts of spec §11 (audit item C2, phase L1
 of [`spec/lean/PLAN.md`](../spec/lean/PLAN.md)). Generated documents go
-through the TypeScript, Rust, Go, Swift, JVM and Python formatters in the pretty,
+through Lean's model of the formatter (`haus-ref --format-batch`, the reference)
+and the TypeScript, Rust, Go, Swift, JVM, Python and Zig formatters in the pretty,
 compact and minimised layouts; the values they hold go through the value writers
 of TypeScript, Rust, Roc, Go, Swift, the JVM and Python, which must write what
 Lean's layout writers write.
 
 ```sh
 sh fuzz/build.sh                               # haus-ref and the Rust, Roc, Go, Swift, JVM and Python runners
-node fuzz/src/main.ts --format --count 20000   # about a minute and a half
+node fuzz/src/main.ts --format --count 20000   # about four minutes
 node fuzz/src/main.ts --format --seed 7
 ```
 

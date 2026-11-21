@@ -16,7 +16,7 @@ and a reference parser that computes it.
 | [`Haus/Linear/`](Haus/Linear), [`Haus/Stream/Cost.lean`](Haus/Stream/Cost.lean) | Linear time (spec §7): a cost model (steps counted next to results), a reference parser with a trie of keys that returns what the parser returns and takes at most `256 · n + 68` steps, the stream reader's buffer in at most `3 · n + 3 · p + 6` steps, the design before S17 shown quadratic |
 | [`Haus/Canonical.lean`](Haus/Canonical.lean), [`Haus/RoundTrip/`](Haus/RoundTrip) | The canonical form (spec §12), and the proofs that it parses back and is unique |
 | [`Haus/Pretty/`](Haus/Pretty) | The block strings of the pretty layout (spec §4, §11), and the proofs that they parse back and that no line ends in a blank |
-| [`Haus/Layout/`](Haus/Layout) | The three layouts of spec §11 written from values, without comments: compact and minimised (one writer, the spacing a parameter; minimised is `Canonical.write`) and pretty, with the proofs that they parse back and that a compact or minimised stream splits by lines |
+| [`Haus/Layout/`](Haus/Layout) | The three layouts of spec §11 written from values, without comments: compact and minimised (one writer, the spacing a parameter; minimised is `Canonical.write`) and pretty, with the proofs that they parse back and that a compact or minimised stream splits by lines; and the standard formatter (`Format.lean`), which keeps comments, blank lines and spellings, on a concrete syntax tree, with the proof that its compact and minimised layouts keep the values |
 | [`Haus/Stream.lean`](Haus/Stream.lean), [`Haus/Stream/`](Haus/Stream) | A model of the bindings' stream readers (spec §6), and the proofs that the chunks don't matter and that it reads what `parse` does; the value limit (§7) and strict mode (§6) on top of it (`Stream/Limited.lean`) |
 | [`Haus/Time/`](Haus/Time) | The std/time profile ([`std/time.md`](../std/time.md)): the rules, a checker, and the proof that it computes them |
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
@@ -52,6 +52,8 @@ lake build
 .lake/build/bin/haus-ref --positions ../../test-suite/positions/cases.haus  # error lines and columns (spec §8)
 .lake/build/bin/haus-ref --equality ../../test-suite/equality/cases.haus    # equals and compare (spec §2, §12)
 .lake/build/bin/haus-ref --format-options ../../test-suite/format/options.cases.haus  # the pretty layout's options (spec §11)
+.lake/build/bin/haus-ref --format-suite ../../test-suite/format  # the format suite with the standard formatter (spec §11)
+.lake/build/bin/haus-ref --format-batch pretty 2 80 DIR N  # the standard formatter for fuzz/: each file reformatted, as JSON
 ```
 
 The other suites: `--stream-suite` reads each case of `limits.cases.haus`
@@ -265,6 +267,29 @@ options:
 | `Val.line_noLF`, `compactAll_split`, `minimisedAll_split` | A value's compact or minimised layout holds no line feed, so a stream in either layout, split at its line feeds, is one line per value, each parsing alone to its value (L3, like NDJSON) |
 | `parse_pretty` | The pretty layout of a parsed value parses back to exactly that value, at every indent and column, whichever way the width decides each payload (L5) |
 | `parse_prettyAll` | A parsed file or stream in the pretty layout parses back to the same values in the same order (L5) |
+
+**About the standard formatter** (spec §11), in
+[`Haus/Layout/Format.lean`](Haus/Layout/Format.lean): `format L style o
+input` reads the text into a concrete syntax tree (`read`: rejected exactly
+when `Parser.parse` rejects it; the gaps between tokens keep their comments,
+line breaks and blank lines, the leaves their spelling) and writes it in a
+layout, as the bindings' formatters do, the rules the spec leaves open
+included (`plans/zig-findings.md` F15–F20d; `#guard`s). `haus-ref
+--format-suite` runs every check of `test-suite/format/README.md` with it
+(all inputs and `options.cases.haus` pass), and it is the reference of the
+format fuzzer (`haus-ref --format-batch`). Proven in
+[`Layout/FormatRoundTrip.lean`](Haus/Layout/FormatRoundTrip.lean), for any
+limits and options:
+
+| Theorem | Says |
+|---|---|
+| `parse_format_compact`, `parse_format_minimised` | When the formatter writes a document in the compact or minimised layout, the text parses to exactly the document's values, in the same order (spellings kept, comments dropped) |
+| `Node.line_val` | The one-line layout of a tree is derived for its value wherever the value is derived (same depth), its leaves as spelled |
+
+Two facts about the tree are checked by `read`, not proven of the tree
+reader: its values are the parser's, and each leaf's spelling, read again
+alone by the parser's reader for its kind, gives its value. Not proven: the
+pretty layout's values, and idempotence (PLAN.md L6).
 
 The expected files of [`test-suite/format`](../../test-suite/format) are
 written by the formatter, which keeps source spellings (`0xFF`, `1_000`,
