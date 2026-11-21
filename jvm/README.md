@@ -2,7 +2,7 @@
 
 **A data format for humans: friendly to write, pleasant to read, and at home in your code.**
 
-> **Highly experimental.** The parser, the formatter, the stream reader, the canonical form and hashing, the three JSON forms, schemas (with std/time, schema packages and the official profiles), and typed codecs for records, sealed interfaces and Kotlin data classes. A benchmark comes next.
+> **Highly experimental.** The parser, the formatter, the stream reader, the canonical form and hashing, the three JSON forms, schemas (with std/time, schema packages and the official profiles), and typed codecs for records, sealed interfaces and Kotlin data classes, with a benchmark against Jackson.
 
 Two modules, for the JVM and Android:
 
@@ -171,6 +171,10 @@ The JSON import (§16.1) reads any JSON; self-describing JSON (§16.2) writes ev
 ## Examples
 
 [`examples`](examples) has the `quickstart` and `order` examples of the other bindings, in Java and Kotlin, on the shared files in [`../examples`](../examples): `./gradlew :examples:quickstart`, `:examples:order`, `:examples:quickstartKotlin`, `:examples:orderKotlin`. They check the files with their schemas, decode them into records and data classes, with codecs for `Money` and `LatLng` on top of the official profiles, and their output is compared with Go's line for line in `ExamplesTest`.
+
+## Speed
+
+Measured against Jackson's `JsonNode` tree in [`bench/speed/jvm`](../bench/speed/jvm) (JMH; see [`bench/README.md`](../bench/README.md#jvm)): on the seven corpora, parsing takes 0.8–1.6× Jackson's time and writing 0.6–1.5×; decoding with a schema 1.4–2.4× Jackson's untyped parse. The writers quote and check a string in one pass, the parser checks UTF-8 only in strings and comments (the whole text again only after an error, so the error is the same), and large records find repeated keys with `String.hashCode` until crafted keys collide, then with a hash seeded per process; `LinearTest` checks that parsing, writing, the canonical form and decoding stay linear in the input, also for keys made to collide.
 
 ## Building
 

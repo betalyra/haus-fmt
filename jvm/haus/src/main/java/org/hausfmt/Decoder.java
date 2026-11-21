@@ -46,6 +46,13 @@ final class Decoder {
   private int nodes;
   private int steps;
   private int budget = BUDGET_START;
+  /**
+   * The fields of the keys of the records being decoded, the innermost record's last: a record
+   * looks up each key's field once, before its values are decoded.
+   */
+  private FieldType[] fieldStack = new FieldType[16];
+
+  private int fieldTop;
 
   private Decoder(Limits lim, boolean encoding, boolean reading, Codecs codecs, String root) {
     this.lim = lim;
@@ -380,6 +387,15 @@ final class Decoder {
     if (length > 20) {
       return false;
     }
+    if (length <= 18) {
+      // Fits a long: every bound but UInt64's maximum does too.
+      long n = Long.parseLong(text);
+      int bits = bits(k);
+      if (signed(k)) {
+        return bits == 64 || n >= -1L << (bits - 1) && n <= (1L << (bits - 1)) - 1;
+      }
+      return bits == 64 || n <= (1L << bits) - 1;
+    }
     BigInteger n = new BigInteger(text);
     return n.compareTo(new BigInteger(low(k))) >= 0 && n.compareTo(new BigInteger(high(k))) <= 0;
   }
@@ -392,6 +408,9 @@ final class Decoder {
     number(n);
     boolean f32 = k == Kind.FLOAT32;
     String text = n.literal();
+    if (SchemaFloats.isOneSpelling(text, f32)) {
+      return n;
+    }
     double f = SchemaFloats.parse(text, f32);
     if (Double.isInfinite(f)) {
       throw fail(ErrorCode.OUT_OF_RANGE, shortNumber(text) + " is too large for " + k.builtin);
@@ -451,13 +470,13 @@ final class Decoder {
         out[i] = y;
       }
     }
-    return out == null ? r : new Value.Record(keys, out, Keys.of(keys, keys.length));
+    return out == null ? r : new Value.Record(keys, out, Keys.of(keys, keys.length), r.bareKeys());
   }
 
   private void missingFields(Value.Record r, RecordType rt) {
     List<String> missing = null;
-    for (FieldType f : rt.fields) {
-      if (!f.optional() && !r.containsKey(f.key())) {
+    for (FieldType f : rt.required) {
+      if (!r.containsKey(f.key())) {
         if (missing == null) {
           missing = new ArrayList<>();
         }
@@ -480,16 +499,33 @@ final class Decoder {
   }
 
   private Value record(Value.Record r, RecordType rt) {
-    missingFields(r, rt);
     String[] keys = r.unsafeKeys();
     Value[] values = r.unsafeValues();
+    // Each key's field, looked up once; the keys are distinct, so all required fields are there
+    // when as many keys name one. Missing fields are reported before anything else.
+    int base = fieldTop;
+    if (base + keys.length > fieldStack.length) {
+      fieldStack = Arrays.copyOf(fieldStack, Math.max(2 * fieldStack.length, base + keys.length));
+    }
+    int required = 0;
+    for (int i = 0; i < keys.length; i++) {
+      FieldType f = rt.field(keys[i]);
+      fieldStack[base + i] = f;
+      if (f != null && !f.optional()) {
+        required++;
+      }
+    }
+    if (required < rt.required.length) {
+      missingFields(r, rt);
+    }
+    fieldTop = base + keys.length;
     // Unchanged until a field is dropped or a value changes; then the fields kept so far are copied.
     String[] outKeys = null;
     Value[] outValues = null;
     int n = 0;
     for (int i = 0; i < keys.length; i++) {
       String k = keys[i];
-      FieldType f = rt.field(k);
+      FieldType f = fieldStack[base + i]; // the stack may have grown below: read the field
       if (f == null) {
         if (rt.closed) {
           throw unknownField(k);
@@ -501,7 +537,9 @@ final class Decoder {
         }
         continue;
       }
-      key(k);
+      if (!r.bareKeys()) {
+        key(k); // an identifier is ASCII
+      }
       Value y = childAt(k, values[i], f.typ());
       if (y != values[i] && outKeys == null) {
         outKeys = Arrays.copyOf(keys, keys.length);
@@ -513,19 +551,29 @@ final class Decoder {
         outValues[n++] = y;
       }
     }
+    fieldTop = base; // the schema's fields: nothing to let go of
     if (outKeys == null) {
       return r;
     }
-    return owned(outKeys, outValues, n);
+    if (n == keys.length) {
+      // The same keys in the same places: the record's index of them still holds.
+      return new Value.Record(outKeys, outValues, r.index(), r.bareKeys());
+    }
+    return owned(outKeys, outValues, n, r.bareKeys());
   }
 
   /** A record of the first {@code n} fields, whose keys are distinct. */
   static Value.Record owned(String[] keys, Value[] values, int n) {
+    return owned(keys, values, n, false);
+  }
+
+  /** {@link #owned(String[], Value[], int)}, and whether every key is known to be an identifier. */
+  private static Value.Record owned(String[] keys, Value[] values, int n, boolean bareKeys) {
     if (n < keys.length) {
       keys = Arrays.copyOf(keys, n);
       values = Arrays.copyOf(values, n);
     }
-    return new Value.Record(keys, values, Keys.of(keys, n));
+    return new Value.Record(keys, values, Keys.of(keys, n), bareKeys);
   }
 
   private Value variant(Value v, VariantType vt, Typ t) {

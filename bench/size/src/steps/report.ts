@@ -7,7 +7,7 @@
  * Reads each source's corpus.json (convert) and, when present, tokens.json
  * (tokens), compression.json (compress) and every language's
  * speed-<lang>.json (bench/speed/ts: the speed step; bench/speed/rust: cargo
- * bench). Results of another convert run (another sample) are left out, with
+ * bench; bench/speed/go and bench/speed/jvm: their runners). Results of another convert run (another sample) are left out, with
  * a warning. Sources are never merged.
  *
  * Size and token ratios are haus / JSON: below 1 means haus is smaller.
@@ -70,7 +70,7 @@ export const unions = (decisions: Readonly<Record<string, number>>): string => {
 const sameDocuments = (corpus: CorpusOut, ids: readonly string[]): boolean =>
   ids.length === corpus.documents.length && ids.every((id, i) => id === corpus.documents[i]!.id)
 
-const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go", python: "Python" }
+const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go", python: "Python", jvm: "JVM" }
 
 /**
  * haus's time against a JSON task's time on the same documents, from haus's
@@ -86,7 +86,7 @@ export const speedRatio = (hausMs: number, jsonMs: number): string => {
 /**
  * The JSON task a row is compared with: the language's plain JSON task of the
  * same input, parse (for typed too) or write: the first JSON row of that
- * group (JSON.parse, JSON.stringify; serde_json).
+ * group (JSON.parse, JSON.stringify; serde_json; Jackson).
  */
 const baselineOf = (rows: readonly SpeedRow[], r: SpeedRow): SpeedRow | undefined =>
   rows.find((x) => x.input === r.input && x.group === (r.group === "typed" ? "parse" : r.group) && x.format === "json")
@@ -101,6 +101,7 @@ const JSON_NOTES: Record<Lang, (n: number) => string> = {
   rust: (n) => `serde_json's \`Value\` wrote ${n} documents back as another document (numbers in another spelling; it also sorts members, which isn't counted).`,
   go: (n) => `encoding/json through \`any\` wrote ${n} documents back as another document (numbers as float64; it also sorts members, which isn't counted).`,
   python: (n) => `json.loads → json.dumps wrote ${n} documents back as another document (numbers as float).`,
+  jvm: (n) => `Jackson's \`JsonNode\` tree wrote ${n} documents back as another document (floating-point numbers as double).`,
 }
 
 const SAMPLE_NOTES: Record<Lang, string> = {
@@ -108,6 +109,7 @@ const SAMPLE_NOTES: Record<Lang, string> = {
   rust: "p75 and p99 are over criterion's samples (each the mean of a batch of calls). ",
   go: "p75 and p99 are over the samples (each the mean of one testing.Benchmark run); allocations are testing's (-benchmem). ",
   python: "p75 and p99 are over the samples (each the mean of a batch of calls). The Python binding has no compact or minimised writer yet: haus's write is `haus.canonical` (minimised, keys sorted). ",
+  jvm: "p75 and p99 are over the samples (each the mean of one JMH iteration, of every round); bytes allocated are JMH's gc profiler's (gc.alloc.rate.norm), the number of allocations isn't counted. ",
 }
 
 /** The schema-compiled JSON writers of the typed write, where a language has them. */
@@ -116,7 +118,9 @@ const JSON_WRITERS: Partial<Record<Lang, string>> = { typescript: "fast-json-str
 /** One language's speed table, with the machine and harness. Pure. */
 export const speedTable = (sp: SpeedOut): string[] => {
   const m = sp.machine
+  // Go counts allocations and bytes, the JVM bytes only.
   const allocs = sp.rows.some((r) => r.allocs !== undefined)
+  const allocBytes = sp.rows.some((r) => r.alloc_bytes !== undefined)
   const perDoc = (r: SpeedRow, x: number | undefined, digits: number) => (x === undefined ? "" : (x / r.docs).toFixed(digits))
   return [
     `### ${LANG_NAMES[sp.lang]}`,
@@ -127,10 +131,11 @@ export const speedTable = (sp: SpeedOut): string[] => {
     `${SAMPLE_NOTES[sp.lang]}${JSON_NOTES[sp.lang](sp.jsonNotStable)}`,
     "",
     ...table(
-      ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", ...(allocs ? ["allocs / doc", "KB allocated / doc"] : []), "vs JSON"],
+      ["Task", "Input", "Implementation", "MB/s", "µs / doc", "ops/s", "mean ms", "p75 ms", "p99 ms", ...(allocs ? ["allocs / doc"] : []), ...(allocBytes ? ["KB allocated / doc"] : []), "vs JSON"],
       sp.rows.map((r) => [
         r.group, r.input, r.impl, r.mb_s.toFixed(1), r.us_per_doc.toFixed(2), r.hz.toFixed(1), r.mean_ms.toFixed(3), r.p75_ms.toFixed(3), r.p99_ms.toFixed(3),
-        ...(allocs ? [perDoc(r, r.allocs, 0), perDoc(r, r.alloc_bytes === undefined ? undefined : r.alloc_bytes / 1024, 1)] : []),
+        ...(allocs ? [perDoc(r, r.allocs, 0)] : []),
+        ...(allocBytes ? [perDoc(r, r.alloc_bytes === undefined ? undefined : r.alloc_bytes / 1024, 1)] : []),
         versus(sp.rows, r),
       ]),
     ),
@@ -139,7 +144,7 @@ export const speedTable = (sp: SpeedOut): string[] => {
   ]
 }
 
-/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`; `write typed` (TypeScript's h.stringify, Python's SchemaType.canonical); `write canonical` (Python). */
+/** What a haus row measures, the same in every language: `parse`, `typed`, `write minimised`, `write compact`; `write typed` (TypeScript's h.stringify, Python's SchemaType.canonical, the JVM's SchemaType.encode + Haus.write); `write canonical` (Python, JVM). */
 const hausTask = (r: SpeedRow): string =>
   r.group !== "write" ? r.group
   : r.impl.includes("(typed)") ? "write typed"
@@ -345,7 +350,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const speedSection = speed.length === 0 ? [] : [
     "## Speed",
     "",
-    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Go also encoding/json and goccy/go-json into Go types generated from it, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Go typed: the Go types, Type.Format; in Python typed: pydantic, msgspec, SchemaType.canonical). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json into and from `any`, json.loads and json.dumps), \"≈ equal\" within 5%.",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Go also encoding/json and goccy/go-json into Go types generated from it, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Go typed: the Go types, Type.Format; in Python typed: pydantic, msgspec, SchemaType.canonical; on the JVM typed: SchemaType.encode + Haus.write, and the canonical form beside Jackson writing members sorted). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json into and from `any`, json.loads and json.dumps, Jackson), \"≈ equal\" within 5%.",
     "",
     ...(speed.length > 1 ? speedSummary(speed) : []),
     ...speed.flatMap(speedTable),

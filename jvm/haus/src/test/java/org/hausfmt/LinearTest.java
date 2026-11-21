@@ -99,9 +99,39 @@ class LinearTest {
             n -> parsing(joined(n, "[", "]", i -> "{ a: " + i + ", b: \"x\", c: None }"), d))),
         dynamicTest("long string", () -> assertLinear(200_000,
             n -> parsing("\"" + repeat("abc\\n\\u{1F600}é", n / 10) + "\"", d))),
+        // Strings and comments are checked to be UTF-8 as they are read.
+        dynamicTest("long string beyond ASCII", () -> assertLinear(100_000,
+            n -> parsing("\"" + repeat("日本語é\uD83D\uDE00", n / 5) + "\"", d))),
+        dynamicTest("long comments beyond ASCII", () -> assertLinear(100_000,
+            n -> parsing(repeat("// 日本語é\n/* ü \uD83D\uDE00 */\n", n / 20) + "1", d))),
+        dynamicTest("many small integers", () -> assertLinear(50_000, n -> parsing(joined(n, "[", "]", i -> String.valueOf(i % 100)), d))),
         dynamicTest("deep nesting", () -> assertLinear(60, n -> parsing(repeat("[", n) + repeat("]", n), deep))),
         dynamicTest("deep payloads", () -> assertLinear(60, n -> parsing(repeat("Some(", n) + "1" + repeat(")", n), deep))),
         dynamicTest("many short values", () -> assertLinear(50_000, n -> parsing(joined(n, "[", "]", i -> String.valueOf(i % 10)), d))));
+  }
+
+  @TestFactory
+  Stream<DynamicTest> decode() {
+    Schema s = Schema.parse("type M = Map Int\ntype Rs = Array R\ntype R = { a: Int, b: String, c?: Float64, d: Array Int32 }");
+    SchemaType map = s.type("M");
+    SchemaType records = s.type("Rs");
+    return Stream.of(
+        dynamicTest("many keys", () -> assertLinear(20_000, n -> {
+          Value v = Haus.parse(joined(n, "{ ", " }", i -> "k" + i + ": " + i));
+          return () -> map.decode(v);
+        })),
+        dynamicTest("keys with one String.hashCode", () -> assertLinear(8_192, n -> {
+          List<String> keys = colliding(n);
+          Value v = Haus.parse(joined(n, "{ ", " }", i -> keys.get(i) + ": 1"));
+          return () -> map.decode(v);
+        })),
+        dynamicTest("many records", () -> assertLinear(5_000, n -> {
+          Value v = Haus.parse(joined(n, "[", "]", i -> "{ a: " + i + ", b: \"x\", c: 1.50, d: [1, 2, " + i + "], e: 0 }"));
+          return () -> {
+            records.decode(v);
+            records.encode(v);
+          };
+        })));
   }
 
   @TestFactory
@@ -136,6 +166,28 @@ class LinearTest {
         return () -> Haus.write(v, o.withLimits(deep));
       })));
     }
+    tests.add(dynamicTest("long string", () -> assertLinear(100_000, n -> {
+      Value v = Value.string(repeat("abc\n\"日本\uD83D\uDE00\u2028é ", n / 10));
+      return () -> Haus.write(v, FormatOptions.MINIMISED);
+    })));
+    tests.add(dynamicTest("canonical, many keys", () -> assertLinear(10_000, n -> {
+      Value v = record.apply(n);
+      return () -> Haus.canonical(v);
+    })));
+    tests.add(dynamicTest("canonical, many small records", () -> assertLinear(5_000, n -> {
+      Value v = Haus.parse(joined(n, "[", "]", i -> "{ k" + (n - i) + ": 1, j: 2, \"x y\": 3, a: [" + i + "] }"));
+      return () -> Haus.canonical(v);
+    })));
+    tests.add(dynamicTest("lookups of keys with one String.hashCode", () -> assertLinear(8_192, n -> {
+      List<String> keys = colliding(n);
+      Value.Record r = (Value.Record) Haus.parse(joined(n, "{ ", " }", i -> keys.get(i) + ": 1"));
+      return () -> {
+        for (String k : keys) {
+          r.get(k);
+          r.get(k + "x");
+        }
+      };
+    })));
     tests.add(dynamicTest("record keys with one String.hashCode", () -> assertLinear(8_192, n -> {
       List<String> keys = colliding(n);
       return () -> {
