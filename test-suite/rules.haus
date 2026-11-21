@@ -179,6 +179,8 @@
 { rule: "format.pretty.line-endings", cases: ["format/cases/crlf", "format/cases/crlf-comments", "format/valid/comments-tabs-crlf", "format/valid/crlf-line-endings"] },
 { rule: "format.compact.single-line", cases: ["format/cases/containers", "format/cases/stream", "format/cases/ndjson-like"] },
 { rule: "format.compact.no-multiline-strings", cases: ["format/cases/ndjson-like", "format/cases/block-strings", "format/cases/line-separators"] },
+{ rule: "format.empty.file", cases: ["format/cases/empty", "format/cases/whitespace-only", "format/cases/comments-only"] },
+{ rule: "schema.types.max-nesting", cases: ["schema/invalid/parens-too-deep"] },
 { rule: "format.compact.stream-commas", cases: ["format/cases/stream", "format/cases/stream-no-trailing-comma", "format/cases/single-with-comma"] },
 { rule: "format.compact.comments-dropped", cases: ["format/cases/comments-stream", "format/cases/minimised-spellings"] },
 { rule: "format.compact.spellings-kept", cases: ["format/cases/spellings", "format/cases/minimised-spellings"] },
