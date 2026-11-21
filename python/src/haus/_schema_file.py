@@ -439,6 +439,10 @@ class _Token:
     kind: TokenKind
     value: str
     pos: int
+    error: HausSyntaxError | None = None
+    """A quoted key that doesn't read (`"a: Int, b: "" }`, its second '"' running into the line break)
+    carries its error, raised only when the parser takes it: a '"' where a key can't be is a syntax error
+    there, as in Lean, which reads a string only where one may be."""
 
 
 _PUNCT = ("...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/")
@@ -494,12 +498,16 @@ class _Lexer:
         self.quote_at = -1
         """Where the third '"' of a `\"\"\"` is: a token of its own (`next`)."""
 
+    def raise_(self, e: HausSyntaxError) -> Never:
+        """Fails with an error of the data parser (its code), where it is in the schema file."""
+        self.fail(e.code, e.reason, e.offset)
+
     def skip(self) -> None:
         """Skip whitespace and comments: those of data files (spec §14), read by the data parser."""
         try:
             self.pos = self.data.trivia_end(self.pos)
         except HausSyntaxError as e:
-            self.fail(e.code, e.reason, e.offset)
+            self.raise_(e)
 
     def next(self) -> _Token:
         self.skip()
@@ -526,7 +534,7 @@ class _Lexer:
             try:
                 value, self.pos = self.data.value_at(pos)
             except HausSyntaxError as e:
-                self.fail(e.code, e.reason, e.offset)
+                return _Token("string", "", pos, e)
             assert isinstance(value, String)
             return _Token("string", value.value, pos)
         for p in _PUNCT:
@@ -656,6 +664,8 @@ class _SchemaParser:
 
     def advance(self) -> _Token:
         t = self.tok
+        if t.error:
+            self.lexer.raise_(t.error)
         self.last_end = self.lexer.pos
         self.tok = self.lexer.next()
         return t
@@ -673,11 +683,13 @@ class _SchemaParser:
         return self.advance()
 
     def unexpected(self, what: str, code: ErrorCode = "schema-syntax") -> Never:
+        t = self.tok
         # A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
-        if self.tok.kind == "punct" and self.tok.value == "/":
-            self.fail("stray-slash", "unexpected '/' (comments are // or /* */)", self.tok.pos)
-        found = "end of file" if self.kind() == "eof" else f"'{quote(self.tok.value)}'"
-        self.fail(code, f"expected {what}, found {found}", self.tok.pos, expected=what, found=found)
+        if t.kind == "punct" and t.value == "/":
+            self.fail("stray-slash", "unexpected '/' (comments are // or /* */)", t.pos)
+        # A quoted key that doesn't read is found as its '"'.
+        found = "end of file" if t.kind == "eof" else "'\"'" if t.error else f"'{quote(t.value)}'"
+        self.fail(code, f"expected {what}, found {found}", t.pos, expected=what, found=found)
 
     def keyword(self) -> str | None:
         t = self.tok
@@ -762,7 +774,7 @@ class _SchemaParser:
             try:
                 value, lexer.pos = data.value_at(lexer.pos)
             except HausSyntaxError as e:
-                self.fail(e.code, e.reason, e.offset)
+                lexer.raise_(e)
             values.append(value)
             lexer.skip()
             if text.startswith(",", lexer.pos):

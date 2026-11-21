@@ -112,6 +112,9 @@ def test_rejects(text: str, reason: str) -> None:
         ('type A = { "a\nb": Int }', "string-line-break", (1, 14)),
         ('type A = { "a\\x41": Int }', "invalid-escape", (1, 14)),
         ('type A = { "a\\u{D800}": Int }', "invalid-unicode-escape", (1, 14)),
+        # A string is read only where one may be (as Lean): a '"' anywhere else is a syntax error, whatever follows it.
+        ('type A = { "a: Int, b: "" }\n', "schema-syntax", (1, 25)),
+        ('type A = { a: "b\n }', "schema-syntax", (1, 15)),
     ],
 )
 def test_comments_whitespace_and_strings_are_those_of_data_files(text: str, code: str, at: tuple[int, int]) -> None:

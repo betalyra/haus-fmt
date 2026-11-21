@@ -86,8 +86,11 @@ final class SchemaLoader {
     var byKey: [String: Int] = [:]
     /// The key of each record's and variant's shape, and of each record and variant: see `key`.
     var shapes: [String: String] = [:]
-    var recordKeys: [ObjectIdentifier: String] = [:]
-    var variantKeys: [ObjectIdentifier: String] = [:]
+    /// The key of each record and variant by its identity. The record or
+    /// variant is kept with its key: once freed, its identity could be
+    /// another's, which would get its key.
+    var recordKeys: [ObjectIdentifier: (shape: RecordShape, key: String)] = [:]
+    var variantKeys: [ObjectIdentifier: (shape: VariantShape, key: String)] = [:]
     /// The instances to evaluate, from `queueHead` on.
     var queue: [Int] = []
     var queueHead = 0
@@ -438,19 +441,19 @@ final class SchemaLoader {
     }
 
     func recordKey(_ r: RecordShape) -> String {
-        if let k = recordKeys[ObjectIdentifier(r)] { return k }
+        if let k = recordKeys[ObjectIdentifier(r)]?.key { return k }
         let fields = r.fields.map { f in
             var quoted: [UInt8] = []
             appendQuoted(f.key, to: &quoted)
             return String(decoding: quoted, as: UTF8.self) + (f.optional ? "?" : "") + ":" + key(f.type)
         }
         let k = shapeKey("{" + (r.closed ? "|" : "") + fields.joined(separator: ",") + "}")
-        recordKeys[ObjectIdentifier(r)] = k
+        recordKeys[ObjectIdentifier(r)] = (r, k)
         return k
     }
 
     func variantKey(_ v: VariantShape) -> String {
-        if let k = variantKeys[ObjectIdentifier(v)] { return k }
+        if let k = variantKeys[ObjectIdentifier(v)]?.key { return k }
         let cases = v.cases.map { c in
             switch c.payload {
             case .none: c.tag
@@ -461,7 +464,7 @@ final class SchemaLoader {
             }
         }
         let k = shapeKey("<" + cases.joined(separator: "|") + (v.open ? "|_" : "") + ">")
-        variantKeys[ObjectIdentifier(v)] = k
+        variantKeys[ObjectIdentifier(v)] = (v, k)
         return k
     }
 

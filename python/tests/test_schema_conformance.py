@@ -155,6 +155,7 @@ INVALID = {
     "secret-recursion": "type A refers to itself without a record, array or variant in between",
     "spread-cycle": "spreads itself",
     "spread-cycle-nested": "spreads itself",
+    "stray-quote-in-key": "expected ':', found '\"'",
     "stray-slash": "unexpected '/'",
     "stream-arity": "Stream needs 1 argument",
     "stream-arity-nested": "Stream needs 1 argument",

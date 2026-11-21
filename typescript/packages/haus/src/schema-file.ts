@@ -278,7 +278,14 @@ export interface SchemaFile {
 // ── lexer ────────────────────────────────────────────────────
 
 type Token =
-  | { readonly t: "upper" | "lower" | "string" | "attribute"; readonly value: string; readonly pos: number }
+  | { readonly t: "upper" | "lower" | "attribute"; readonly value: string; readonly pos: number }
+  /**
+   * A quoted key. One that doesn't read (`"a: Int, b: "" }`, its second '"'
+   * running into the line break) carries its error, raised only when the
+   * parser takes it: a '"' where a key can't be is a syntax error there, as
+   * in Lean, which reads a string only where one may be.
+   */
+  | { readonly t: "string"; readonly value: string; readonly pos: number; readonly error?: HausSyntaxError }
   | { readonly t: "punct"; readonly value: string; readonly pos: number }
   | { readonly t: "eof"; readonly value: ""; readonly pos: number }
 
@@ -318,19 +325,19 @@ class Lexer {
     this.data = new Parser(text, START, DEFAULT_LIMITS)
   }
 
-  /** Runs the data parser, its errors (with their codes) put where they are in the schema file. */
-  private read<R>(f: () => R): R {
-    try {
-      return f()
-    } catch (e) {
-      if (e instanceof HausSyntaxError) this.fail(e.code, e.reason, e.offset)
-      throw e
-    }
+  /** Fails with an error of the data parser (its code), where it is in the schema file. */
+  raise(e: HausSyntaxError): never {
+    return this.fail(e.code, e.reason, e.offset)
   }
 
   /** Skip whitespace and comments. */
   skip(): void {
-    this.pos = this.read(() => this.data.triviaEnd(this.pos))
+    try {
+      this.pos = this.data.triviaEnd(this.pos)
+    } catch (e) {
+      if (e instanceof HausSyntaxError) this.raise(e)
+      throw e
+    }
   }
 
   next(): Token {
@@ -361,10 +368,15 @@ class Lexer {
         this.pos = pos + 1
         return { t: "punct", value: '"', pos }
       }
-      const { value, end } = this.read(() => this.data.basicStringAt(pos))
-      if (end === pos + 2 && s[end] === '"') this.quoteAt = end
-      this.pos = end
-      return { t: "string", value, pos }
+      try {
+        const { value, end } = this.data.basicStringAt(pos)
+        if (end === pos + 2 && s[end] === '"') this.quoteAt = end
+        this.pos = end
+        return { t: "string", value, pos }
+      } catch (e) {
+        if (e instanceof HausSyntaxError) return { t: "string", value: "", pos, error: e }
+        throw e
+      }
     }
     for (const p of PUNCT) {
       if (s.startsWith(p, pos)) {
@@ -478,6 +490,7 @@ class SchemaParser {
 
   private advance(): Token {
     const t = this.tok
+    if (t.t === "string" && t.error) this.lexer.raise(t.error)
     this.lastEnd = this.lexer.pos
     this.tok = this.lexer.next()
     return t
@@ -498,10 +511,12 @@ class SchemaParser {
   }
 
   private unexpected(what: string, code: ErrorCode = "schema-syntax"): never {
+    const t = this.tok
     // A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
-    if (this.tok.t === "punct" && this.tok.value === "/") return this.fail("stray-slash", "unexpected '/' (comments are // or /* */)", this.tok.pos)
-    const found = this.tok.t === "eof" ? "end of file" : `'${quoteText(this.tok.value)}'`
-    return this.fail(code, `expected ${what}, found ${found}`, this.tok.pos, { expected: what, found })
+    if (t.t === "punct" && t.value === "/") return this.fail("stray-slash", "unexpected '/' (comments are // or /* */)", t.pos)
+    // A quoted key that doesn't read is found as its '"'.
+    const found = t.t === "eof" ? "end of file" : t.t === "string" && t.error ? `'"'` : `'${quoteText(t.value)}'`
+    return this.fail(code, `expected ${what}, found ${found}`, t.pos, { expected: what, found })
   }
 
   private keyword(): string | undefined {
@@ -589,7 +604,7 @@ class SchemaParser {
         values.push(value)
         lexer.pos = end
       } catch (e) {
-        if (e instanceof HausSyntaxError) this.fail(e.code, e.reason, e.offset)
+        if (e instanceof HausSyntaxError) lexer.raise(e)
         throw e
       }
       lexer.skip()

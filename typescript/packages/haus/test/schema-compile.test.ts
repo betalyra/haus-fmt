@@ -270,6 +270,9 @@ describe("comments, whitespace and strings are those of data files (spec §14)",
     ['type A = { "a\nb": Int }', "string-line-break", 1, 14],
     ['type A = { "a\\x41": Int }', "invalid-escape", 1, 14],
     ['type A = { "a\\u{D800}": Int }', "invalid-unicode-escape", 1, 14],
+    // A string is read only where one may be (as Lean): a '"' anywhere else is a syntax error, whatever follows it.
+    ['type A = { "a: Int, b: "" }\n', "schema-syntax", 1, 25],
+    ['type A = { a: "b\n }', "schema-syntax", 1, 15],
   ])("%j: %s", (text, code, line, column) => {
     expect(codeAt(text)).toEqual([code, line, column])
   })
