@@ -12,7 +12,7 @@ Logs := [].{
 	decode_level = |v| Decode.within_depth(v, read_value_level)
 
 	read_value_level : Value -> Try(Level, Decode.Error)
-	read_value_level = |v| match v {
+	read_value_level = |v| match v.view() {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Warn", []) => Ok(Warn)
@@ -43,7 +43,7 @@ Logs := [].{
 	decode_entry = |v| Decode.within_depth(v, read_value_entry)
 
 	read_value_entry : Value -> Try(Entry, Decode.Error)
-	read_value_entry = |v| match v {
+	read_value_entry = |v| match v.view() {
 		Tag("Log", [p]) => Decode.payload(
 			"Log",
 			p,

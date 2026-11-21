@@ -58,6 +58,9 @@ NUMBER_START: Final = frozenset("-" + string.digits)
 HEX_DIGITS: Final = frozenset(string.hexdigits)
 HEX_LITERAL: Final = re.compile(r"-?0x([0-9A-Fa-f](?:_?[0-9A-Fa-f])*+)")
 BIN_LITERAL: Final = re.compile(r"-?0b([01](?:_?[01])*+)")
+NORMALIZED_NUMBER: Final = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
+"""A normalized number literal (spec §2, with `fullmatch`): exactly what the parser stores, without
+`_`, `+`, `E`, hex or binary, or leading zeros in the integer part or the exponent."""
 DEC_LITERAL: Final = re.compile(r"-?(?:0|[1-9](?:_?[0-9])*+)(?:\.[0-9](?:_?[0-9])*+)?(?:[eE][+-]?[0-9](?:_?[0-9])*+)?")
 LITERAL_EXPONENT: Final = re.compile(r"[eE][+-]?([0-9_]++)$")
 

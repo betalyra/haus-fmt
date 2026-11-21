@@ -12,11 +12,11 @@
 import { hex4, isBidiControl, quoteText, TAG } from "./chars.js"
 import { checkWellFormed, HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
 import { toHex } from "./format.js"
-import { isNormalizedNumber, normalizeNumber, numberLimitIssue } from "./number.js"
+import { isNormalizedNumber, numberLimitIssue } from "./number.js"
 import { defineOwn } from "./own.js"
 import { checkLimits, longerThan, MAX_DEPTH, MAX_SUPPORTED_DEPTH, withDefaults, type Limits } from "./parser.js"
 import { chunks, type ChunkSource } from "./stream.js"
-import { arr, bytes as bytesValue, num, rec, str, variant, type Value } from "./value.js"
+import { uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedStr, uncheckedVariant, type Value } from "./value.js"
 
 // ── the JSON data model ──────────────────────────────────────
 
@@ -531,7 +531,7 @@ export const numberOfJson = (n: JsonNumber, limits: Limits, place: Place) => {
   if (!WHOLE_JSON_NUMBER.test(n.text)) throw new HausDecodeError(`not a JSON number: ${short(n.text)}`, place.path(), "invalid-number")
   const issue = jsonNumberIssue(n.text, limits)
   if (issue !== undefined) throw new HausDecodeError(issue.reason, place.path(), issue.code)
-  return num(normalizeJsonNumber(n.text))
+  return uncheckedNum(normalizeJsonNumber(n.text))
 }
 
 /** A member name as a record key, checked against the string limit (spec §7: it counts keys too). */
@@ -548,7 +548,7 @@ export const tagLengthIssue = (tag: string, limits: Limits): Problem | undefined
 export const stringOfJson = (s: string, limits: Limits, place: Place) => {
   if (longerThan(s, limits.maxStringLength)) throw new HausDecodeError(`string longer than ${limits.maxStringLength} characters`, place.path(), "string-too-long")
   if (LONE_SURROGATE.test(s)) throw new HausDecodeError("a string with an unpaired surrogate", place.path(), "unpaired-surrogate")
-  return str(s)
+  return uncheckedStr(s)
 }
 
 // ── §16.1: JSON import ───────────────────────────────────────
@@ -560,14 +560,14 @@ const imported = (j: Json, limits: Limits, depth: number, place: Place, places?:
 }
 
 const importedHere = (j: Json, limits: Limits, depth: number, place: Place, places: JsonPlaces | undefined): Value => {
-  if (j === null) return variant("None")
-  if (j === true || j === false) return variant(j ? "True" : "False")
+  if (j === null) return uncheckedVariant("None")
+  if (j === true || j === false) return uncheckedVariant(j ? "True" : "False")
   if (typeof j === "string") return stringOfJson(j, limits, place)
   if (j instanceof JsonNumber) return numberOfJson(j, limits, place)
   if (depth >= limits.maxDepth) throw new HausDecodeError(`nesting deeper than ${limits.maxDepth} levels`, place.path(), "nesting-too-deep")
-  if (Array.isArray(j)) return arr(j.map((x, i) => imported(x, limits, depth + 1, place.child(i), places)))
+  if (Array.isArray(j)) return uncheckedArr(j.map((x, i) => imported(x, limits, depth + 1, place.child(i), places)))
   if (typeof j !== "object") throw new HausDecodeError(`not a JSON value: ${typeof j}`, place.path(), "type-mismatch")
-  return rec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place.child(k)), imported((j as JsonObject)[k]!, limits, depth + 1, place.child(k), places)])))
+  return uncheckedRec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place.child(k)), imported((j as JsonObject)[k]!, limits, depth + 1, place.child(k), places)])))
 }
 
 /** JSON imported as a haus value (§16.1), from a place inside a larger conversion. */
@@ -599,33 +599,28 @@ const VERSION = "1"
  * The self-describing JSON of a value (spec §16.2), without the envelope (as
  * inside schema-based JSON): strings and arrays as themselves,
  * `{"_num": "19.90"}`, `{"_bytes": "0b34"}`, `{"_rec": {…}}`,
- * `{"_tag": "Circle", "_args": […]}`. A value built in code is checked
- * first: tag names, number literals (normalized as the parser would), the
- * limits.
+ * `{"_tag": "Circle", "_args": […]}`. Within the limits (spec §7): a value
+ * built in code can be outside them.
  */
 export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => {
   const fail = (reason: string, at: Place, code: ErrorCode = "cannot-encode"): never => {
     throw new HausEncodeError(reason, at.path(), code)
   }
   const write = (v: Value, depth: number, at: Place, payload: boolean): Json => {
-    if (typeof v !== "object" || v === null) return fail("not a haus value", at)
     const open = () => {
       if (!payload && depth >= limits.maxDepth) fail(`value nested deeper than ${limits.maxDepth} levels (or cyclic)`, at, "nesting-too-deep")
     }
     const inner = payload ? depth : depth + 1
     switch (v.kind) {
       case "string":
-        if (typeof v.value !== "string") return fail("not a haus value", at)
         if (longerThan(v.value, limits.maxStringLength)) fail(`string longer than ${limits.maxStringLength} characters`, at, "string-too-long")
         return v.value
       case "number": {
-        const text = typeof v.text !== "string" ? undefined : isNormalizedNumber(v.text) ? v.text : normalizeNumber(v.text, limits)
-        if (text === undefined) return fail("not a number literal", at)
-        const issue = numberLimitIssue(text, limits)
-        return issue === undefined ? jsonObject([["_num", text]]) : fail(issue.reason, at, issue.code)
+        const issue = numberLimitIssue(v.text, limits)
+        return issue === undefined ? jsonObject([["_num", v.text]]) : fail(issue.reason, at, issue.code)
       }
       case "bytes":
-        return v.bytes instanceof Uint8Array ? jsonObject([["_bytes", toHex(v.bytes)]]) : fail("not a haus value", at)
+        return jsonObject([["_bytes", toHex(v.bytes)]])
       case "array":
         open()
         return v.items.map((x, i) => write(x, inner, at.child(i), false))
@@ -636,7 +631,6 @@ export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => 
           return [k, write(x, inner, at.child(k), false)] as const
         }))]])
       case "variant": {
-        if (typeof v.tag !== "string" || !TAG.test(v.tag)) return fail("not a tag name", at, "invalid-tag")
         const tagIssue = tagLengthIssue(v.tag, limits)
         if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
         if (v.args.length === 0) return jsonObject([["_tag", v.tag]])
@@ -645,8 +639,6 @@ export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => 
         const single = v.args.length === 1 && v.args[0]!.kind === "record"
         return jsonObject([["_tag", v.tag], ["_args", v.args.map((x, i) => write(x, depth + 1, at.child(i), single))]])
       }
-      default:
-        return fail("not a haus value", at)
     }
   }
   return write(value, 0, place, false)
@@ -671,7 +663,7 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place, places
     if (typeof j === "string") return stringOfJson(j, limits, at)
     if (Array.isArray(j)) {
       open()
-      return arr(j.map((x, i) => read(x, inner, at.child(i), false)))
+      return uncheckedArr(j.map((x, i) => read(x, inner, at.child(i), false)))
     }
     if (!isJsonObject(j)) return fail(`not a self-describing form: ${describeJson(j)} (numbers are {"_num": "…"}, True is {"_tag": "True"}, None is {"_tag": "None"})`, at)
     const keys = Object.keys(j)
@@ -680,7 +672,7 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place, places
       const text = j["_num"]
       if (typeof text !== "string" || !isNormalizedNumber(text)) return fail(`"_num" must be a normalized number literal (spec §2), like "19.90" or "1e5"`, at.child("_num"), "haus-json-number")
       const issue = numberLimitIssue(text, limits)
-      return issue === undefined ? num(text) : fail(issue.reason, at.child("_num"), issue.code)
+      return issue === undefined ? uncheckedNum(text) : fail(issue.reason, at.child("_num"), issue.code)
     }
     if (only("_bytes")) {
       const hex = j["_bytes"]
@@ -688,14 +680,14 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place, places
       if (hex.length > limits.maxStringLength) fail(`byte string longer than ${limits.maxStringLength} characters`, at.child("_bytes"), "string-too-long")
       const out = new Uint8Array(hex.length / 2)
       for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16)
-      return bytesValue(out)
+      return uncheckedBytes(out)
     }
     if (only("_rec")) {
       const fields = j["_rec"]!
       const members = at.child("_rec")
       if (!isJsonObject(fields)) return fail(`"_rec" must be an object`, members)
       open()
-      return rec(new Map(Object.keys(fields).map((k) => [keyOfJson(k, limits, members.child(k)), read(fields[k]!, inner, members.child(k), false)] as const)))
+      return uncheckedRec(new Map(Object.keys(fields).map((k) => [keyOfJson(k, limits, members.child(k)), read(fields[k]!, inner, members.child(k), false)] as const)))
     }
     if (only("_tag") || only("_tag", "_args")) {
       const tag = j["_tag"]
@@ -705,13 +697,13 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place, places
       }
       const tagIssue = tagLengthIssue(tag, limits)
       if (tagIssue !== undefined) fail(tagIssue.reason, at, tagIssue.code)
-      if (!Object.hasOwn(j, "_args")) return variant(tag)
+      if (!Object.hasOwn(j, "_args")) return uncheckedVariant(tag)
       const args = j["_args"]!
       const items = at.child("_args")
       if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array (a tag without arguments has no "_args")`, items)
       open()
       const single = args.length === 1 && isJsonObject(args[0]!) && Object.hasOwn(args[0], "_rec")
-      return variant(tag, args.map((x, i) => read(x, depth + 1, items.child(i), single)))
+      return uncheckedVariant(tag, args.map((x, i) => read(x, depth + 1, items.child(i), single)))
     }
     const members = keys.slice(0, 5).map((k) => short(k)).join(", ")
     return fail(`not a self-describing form: an object with the members ${members}${keys.length > 5 ? ", …" : ""} (expected {"_num"}, {"_bytes"}, {"_rec"} or {"_tag"[, "_args"]})`, at)

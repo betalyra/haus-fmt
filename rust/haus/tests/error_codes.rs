@@ -22,14 +22,14 @@ struct Entry {
     fix: String,
 }
 
-fn text<'a>(fields: &'a [(String, Value)], key: &str) -> &'a str {
+fn text<'a>(fields: &'a haus::Record, key: &str) -> &'a str {
     match fields.iter().find(|(k, _)| k == key) {
         Some((_, Value::String(s))) => s,
         _ => panic!("spec/errors.haus: an entry has no string {key}"),
     }
 }
 
-fn field<'a>(fields: &'a [(String, Value)], key: &str) -> &'a Value {
+fn field<'a>(fields: &'a haus::Record, key: &str) -> &'a Value {
     fields.iter().find(|(k, _)| k == key).map(|(_, v)| v).unwrap_or_else(|| panic!("no field {key}"))
 }
 
@@ -43,7 +43,7 @@ fn catalogue() -> Vec<Entry> {
                 [Value::Record(fields)] => Entry {
                     code: text(fields, "code").to_owned(),
                     category: match field(fields, "category") {
-                        Value::Variant { tag, .. } => tag.clone(),
+                        Value::Variant { tag, .. } => tag.to_string(),
                         _ => panic!("a category is a tag"),
                     },
                     means: text(fields, "means").to_owned(),

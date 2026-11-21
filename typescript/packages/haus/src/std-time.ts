@@ -63,8 +63,8 @@ const zone = (z: string): string | undefined => {
   if (z.length > 255 || !ZONE_NAME.test(z) || z.split("/").some((p) => p === "." || p === "..")) {
     return `"${quoteText(z)}" is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)`
   }
-  // `Z` is the offset letter (UTC), not a zone name: write +00:00 or a name like Etc/UTC.
-  if (z === "Z") return "Z is the offset letter, not a zone name: write the offset +00:00 or a zone name like Etc/UTC"
+  // `Z` (or `z`) is the offset letter (UTC), not a zone name: write +00:00 or a name like Etc/UTC.
+  if (z === "Z" || z === "z") return `${z} is the offset letter, not a zone name: write the offset +00:00 or a zone name like Etc/UTC`
   return undefined
 }
 

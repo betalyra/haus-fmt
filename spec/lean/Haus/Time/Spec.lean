@@ -82,8 +82,8 @@ def ZonePart (p : Text) : Prop := p ≠ [] ∧ p ≠ ['.'] ∧ p ≠ ['.', '.'] 
 def ZoneName (z : Text) : Prop :=
   z.length ≤ 255 ∧ (∃ c r, z = c :: r ∧ isLetter c = true) ∧ ∀ p ∈ z.splitOn '/', ZonePart p
 
-/-- A zone name or an offset `±hh:mm`. Not `Z`: that is the offset letter, not a zone name. -/
-def Zone (z : Text) : Prop := NumOffset z ∨ (z ≠ ['Z'] ∧ ZoneName z)
+/-- A zone name or an offset `±hh:mm`. Not `Z` or `z`: that is the offset letter (in either case), not a zone name. -/
+def Zone (z : Text) : Prop := NumOffset z ∨ (z ≠ ['Z'] ∧ z ≠ ['z'] ∧ ZoneName z)
 
 /-- An `Instant` and exactly one zone in brackets. -/
 def ZonedDateTime (s : Text) : Prop := ∃ i z, s = i ++ '[' :: z ++ [']'] ∧ Instant i ∧ Zone z

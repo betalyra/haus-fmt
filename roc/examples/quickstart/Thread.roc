@@ -13,7 +13,7 @@ Thread := [].{
 	decode_comment = |v| Decode.within_depth(v, read_value_comment)
 
 	read_value_comment : Value -> Try(Comment, Decode.Error)
-	read_value_comment = |v| match v {
+	read_value_comment = |v| match v.view() {
 		Tag("Comment", [p]) => Decode.payload(
 			"Comment",
 			p,

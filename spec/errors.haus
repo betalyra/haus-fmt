@@ -124,7 +124,7 @@ Code {
 Code {
   code: "duplicate-key",
   category: Syntax,
-  means: "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).",
+  means: "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code with a key twice, rejected when it is built (§11).",
   example: Data("{ a: 1, a: 2 }"),
   fix: "Remove or rename one of the two.",
 },
@@ -138,7 +138,7 @@ Code {
 Code {
   code: "invalid-number",
   category: Syntax,
-  means: "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).",
+  means: "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`), rejected when it is built (§11).",
   example: Data("007"),
   fix: "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits.",
 },
@@ -745,7 +745,7 @@ Code {
 Code {
   code: "cannot-encode",
   category: Decoding,
-  means: "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.",
+  means: "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value (an object of another type where a value or a number is expected).",
   example: Text("encode(h.Int, 5): Int is a bigint, 5 is a number"),
   fix: "Pass a value of the host type the binding documents for the type.",
 },

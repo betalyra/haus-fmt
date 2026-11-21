@@ -321,12 +321,12 @@ ConformanceTest := [].{
 	catalogue = |text| match Value.parse_all(text) {
 		Ok(entries) => {
 			read = entries.map(
-				|entry| match entry {
-					Tag("Code", [Rec(fields)]) => match (field(fields, "code"), field(fields, "category"), field(fields, "fix")) {
+				|entry| match fields_of(entry, "Code") {
+					Ok(fields) => match (field(fields, "code").view(), field(fields, "category").view(), field(fields, "fix").view()) {
 						(Text(code), Tag(category, []), Text(fix)) => (code, category, fix)
 						_ => ("", "", "")
 					}
-					_ => ("", "", "")
+					Err(_) => ("", "", "")
 				},
 			)
 			codes = read.map(|(code, _, _)| code)
@@ -346,7 +346,17 @@ ConformanceTest := [].{
 field : List((Str, Value)), Str -> Value
 field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Ok((_, v)) => v
-	Err(_) => Text("")
+	Err(_) => Value.text("")
+}
+
+## The fields of `name { … }`.
+fields_of : Value, Str -> Try(List((Str, Value)), [NotThatCase])
+fields_of = |v, name| match v.view() {
+	Tag(tag, [payload]) if tag == name => match payload.view() {
+		Rec(fields) => Ok(fields)
+		_ => Err(NotThatCase)
+	}
+	_ => Err(NotThatCase)
 }
 
 ## The cases of a cases file all pass (and there are some); each failing
@@ -355,7 +365,7 @@ all_cases : Str, (List((Str, Value)) -> Try({}, Str)) -> Bool
 all_cases = |text, run_case| match Value.parse_all(text) {
 	Ok(cases) => {
 		failures = cases.keep_oks(
-			|c| match c {
+			|c| match c.view() {
 				Rec(fields) => match run_case(fields) {
 					Ok({}) => Err({})
 					Err(reason) => Ok(reason)
@@ -377,14 +387,14 @@ all_cases = |text, run_case| match Value.parse_all(text) {
 }
 
 position_case : List((Str, Value)) -> Try({}, Str)
-position_case = |fields| match (field(fields, "text"), field(fields, "code"), field(fields, "line"), field(fields, "column")) {
+position_case = |fields| match (field(fields, "text").view(), field(fields, "code").view(), field(fields, "line").view(), field(fields, "column").view()) {
 	(Text(text), Text(code), Num(line), Num(column)) => {
 		want = "${code} ${line}:${column}"
 		got = match Value.parse_all(text) {
 			Ok(_) => "parsed"
 			Err(e) => "${e.code} ${e.line.to_str()}:${e.column.to_str()}"
 		}
-		if (got == want) Ok({}) else Err("${Encode.canonical(Text(text)) ?? text}: ${got}, expected ${want}")
+		if (got == want) Ok({}) else Err("${Encode.canonical(Value.text(text)) ?? text}: ${got}, expected ${want}")
 	}
 	_ => Err("not a case")
 }
@@ -393,11 +403,11 @@ equality_case : List((Str, Value)) -> Try({}, Str)
 equality_case = |fields| {
 	a = field(fields, "a")
 	b = field(fields, "b")
-	equal = match field(fields, "equal") {
+	equal = match field(fields, "equal").view() {
 		Tag("True", []) => True
 		_ => False
 	}
-	order = match field(fields, "order") {
+	order = match field(fields, "order").view() {
 		Num("-1") => Before
 		Num("0") => Same
 		Num("1") => After

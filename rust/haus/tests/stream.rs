@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn tag(t: &str) -> Value {
-    Value::Variant { tag: t.into(), args: vec![] }
+    Value::variant(t, vec![]).unwrap()
 }
 
 /// All values of `bytes`, read in chunks of `size` bytes.

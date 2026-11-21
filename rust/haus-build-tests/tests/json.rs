@@ -71,7 +71,7 @@ fn variants() {
     assert_eq!(read_error::<Tree>(r#"{"_tag":"Leaf","value":1}"#), ".value: unexpected member \"value\"");
 
     // Unknown tags of an open variant: the arguments' self-describing values.
-    let hexagon = Shape::Unknown(Unknown { tag: "Hexagon".into(), args: vec![Value::Number("1".into())] });
+    let hexagon = Shape::Unknown(Unknown { tag: "Hexagon".parse().unwrap(), args: vec![Value::from(1)] });
     let json = r#"{"_tag":"Hexagon","_args":[{"_num":"1"}]}"#;
     assert_eq!(to_string(&hexagon).unwrap(), json);
     assert_eq!(from_str::<Shape>(json).unwrap(), hexagon);

@@ -36,7 +36,7 @@ fn outcome(v: &Value) -> Option<Outcome> {
 }
 
 fn case(v: &Value) -> Case {
-    let fail = || panic!("not a case: {}", canonical(v).unwrap());
+    let fail = || panic!("not a case: {}", canonical(v));
     let (Some(Value::String(text)), Some(Value::Number(max))) = (v.get("text"), v.get("maxValueLength")) else {
         fail()
     };
@@ -95,7 +95,7 @@ fn stream_suite() {
         for (how, chunks) in splits(&c.text) {
             let got = read(c, &chunks);
             if !same(&got, &c.result) {
-                let shown = got.map(|vs| vs.iter().map(|v| canonical(v).unwrap()).collect::<Vec<_>>());
+                let shown = got.map(|vs| vs.iter().map(canonical).collect::<Vec<_>>());
                 failures.push(format!("{:?} max {} strict {}, {how}: {shown:?}", c.text, c.max_value_length, c.strict));
             }
         }
@@ -114,7 +114,7 @@ fn parsed_whole() {
         .filter_map(|(c, want)| {
             let got: Outcome = haus::parse(&c.text).map_err(|e| e.code.to_string());
             (!same(&got, want)).then(|| {
-                let shown = got.map(|vs| vs.iter().map(|v| canonical(v).unwrap()).collect::<Vec<_>>());
+                let shown = got.map(|vs| vs.iter().map(canonical).collect::<Vec<_>>());
                 format!("{:?} parsed whole: {shown:?}", c.text)
             })
         })
@@ -133,12 +133,12 @@ fn single_documents() {
         .filter_map(|c| {
             let (Some(Value::String(text)), Some(Value::Variant { tag, args })) = (c.get("text"), c.get("result"))
             else {
-                panic!("not a case: {}", canonical(c).unwrap())
+                panic!("not a case: {}", canonical(c))
             };
             let want: Result<Value, String> = match (tag.as_str(), args.as_slice()) {
                 ("Ok", [value]) => Ok(value.clone()),
                 ("Err", [Value::String(code)]) => Err(code.clone()),
-                _ => panic!("not a case: {}", canonical(c).unwrap()),
+                _ => panic!("not a case: {}", canonical(c)),
             };
             let got = haus::from_str::<Value>(text);
             let pass = match (&got, &want) {
@@ -147,8 +147,8 @@ fn single_documents() {
                 _ => false,
             };
             (!pass).then(|| {
-                let shown = got.as_ref().map(|v| canonical(v).unwrap()).map_err(|e| format!("{:?} ({e})", e.code()));
-                format!("{text:?}: {shown:?}, expected {:?}", want.as_ref().map(|v| canonical(v).unwrap()))
+                let shown = got.as_ref().map(canonical).map_err(|e| format!("{:?} ({e})", e.code()));
+                format!("{text:?}: {shown:?}, expected {:?}", want.as_ref().map(canonical))
             })
         })
         .collect();

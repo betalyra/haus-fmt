@@ -8,9 +8,9 @@
 //! doesn't count: the member names of the form (`_tag`, `value`), and the
 //! strings that hold numbers (`Int`, `Decimal`, `Int64`, `"NaN"`).
 
-use super::{Json, ToJson, base64};
+use super::{Json, JsonNumber, ToJson, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::ser::{check_bytes, check_key, check_length, check_tag};
+use crate::ser::{check_bytes, check_key, check_length, check_number, check_tag, check_tag_length};
 use crate::{Codec, EncodeError, Encoder, ErrorCode, Secret, Segment, Value};
 use std::collections::BTreeMap;
 
@@ -107,8 +107,8 @@ pub(crate) fn no_json_form_reason(tag: &str, field: &str) -> String {
 /// An unknown value: `{"_tag": "Hexagon"}`, with `"_args"`, the arguments'
 /// self-describing values (without the envelope), if it has any (spec §16.3).
 pub fn unknown(u: &Unknown, e: Encoder) -> R {
-    check_tag(&u.tag, e.limits())?;
-    let tag = member("_tag", Json::String(u.tag.clone()));
+    check_tag_length(&u.tag, e.limits())?;
+    let tag = member("_tag", Json::String(u.tag.to_string()));
     if u.args.is_empty() {
         e.step()?;
         return Ok(Json::Object(vec![tag]));
@@ -255,7 +255,7 @@ impl ToJson for Unknown {
 impl ToJson for AnyTag {
     fn to_json_with(&self, e: Encoder) -> R {
         match self {
-            AnyTag::Bare(tag) => unknown(&Unknown { tag: tag.clone(), args: vec![] }, e),
+            AnyTag::Bare(tag) => unknown(&Unknown::new(tag.clone(), vec![]), e),
             AnyTag::Other(u) => unknown(u, e),
         }
     }
@@ -293,7 +293,7 @@ macro_rules! numbers {
         impl ToJson for $t {
             fn to_json_with(&self, e: Encoder) -> R {
                 e.step()?;
-                Ok(Json::Number(self.to_string()))
+                Ok(Json::Number(JsonNumber::from(*self)))
             }
         }
     )*};
@@ -315,16 +315,16 @@ strings!(i64, u64);
 impl ToJson for Int {
     fn to_json_with(&self, e: Encoder) -> R {
         e.step()?;
-        let n = crate::ser::normalized(self.as_str(), e.limits())?;
-        Ok(Json::String(n.into_owned()))
+        check_number(&self.0, e.limits())?;
+        Ok(Json::String(self.as_str().to_owned()))
     }
 }
 /// `Decimal`: a string, the normalized literal (`"19.90"`).
 impl ToJson for Decimal {
     fn to_json_with(&self, e: Encoder) -> R {
         e.step()?;
-        let n = crate::ser::normalized(self.as_str(), e.limits())?;
-        Ok(Json::String(n.into_owned()))
+        check_number(&self.0, e.limits())?;
+        Ok(Json::String(self.as_str().to_owned()))
     }
 }
 /// Floats in the spelling of spec §15, or `"NaN"`, `"Infinity"`, `"-Infinity"`.
@@ -337,7 +337,7 @@ macro_rules! floats {
                     x if x.is_nan() => Json::String("NaN".into()),
                     x if x.is_infinite() && *x > 0.0 => Json::String("Infinity".into()),
                     x if x.is_infinite() => Json::String("-Infinity".into()),
-                    x => Json::Number(crate::float::text(*x)),
+                    x => Json::Number(JsonNumber::from_valid(crate::float::text(*x))),
                 })
             }
         }

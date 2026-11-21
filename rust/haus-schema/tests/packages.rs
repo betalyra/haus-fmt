@@ -19,7 +19,7 @@ fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 fn string(v: &Value) -> &str {
     match v {
         Value::String(s) => s,
-        other => panic!("expected a string, found {}", haus::canonical(other).unwrap()),
+        other => panic!("expected a string, found {}", haus::canonical(other)),
     }
 }
 
@@ -27,7 +27,7 @@ fn strings(v: Option<&Value>) -> Vec<String> {
     match v {
         Some(Value::Array(items)) => items.iter().map(|s| string(s).to_owned()).collect(),
         None => vec![],
-        Some(other) => panic!("expected a list of strings, found {}", haus::canonical(other).unwrap()),
+        Some(other) => panic!("expected a list of strings, found {}", haus::canonical(other)),
     }
 }
 
@@ -35,7 +35,7 @@ fn strings(v: Option<&Value>) -> Vec<String> {
 fn variant(v: &Value) -> (&str, &[Value]) {
     match v {
         Value::Variant { tag, args } => (tag, args),
-        other => panic!("expected a variant, found {}", haus::canonical(other).unwrap()),
+        other => panic!("expected a variant, found {}", haus::canonical(other)),
     }
 }
 

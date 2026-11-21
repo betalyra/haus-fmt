@@ -56,7 +56,7 @@ function offset(r: Rng): string {
 }
 
 const ZONE_PARTS = ["Europe", "Lisbon", "America", "Argentina", "Buenos_Aires", "Etc", "GMT+5", "GMT-14", "UTC", "Z",
-  "Port-au-Prince", "a", "A1", ".", "..", "...", ".hidden", "x.y", "", "1abc", "_x", "-x", "é", "Ünicode", "a b", "]", "[", ":", "\\"]
+  "Port-au-Prince", "a", "A1", ".", "..", "...", ".hidden", "x.y", "", "1abc", "_x", "-x", "é", "Ünicode", "a b", "]", "[", ":", "\\", "z", "zulu"]
 
 function zone(r: Rng): string {
   if (r.chance(0.2)) return offset(r)

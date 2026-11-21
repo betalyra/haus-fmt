@@ -7,7 +7,7 @@ values alongside, finds the comments and line breaks around every entry and buil
 tree (`_Scanner`), which the printer writes in a layout (`_Printer`).
 
 `stringify` and `stringify_all` write values built in code: the same tree, built from the
-values (`_Builder`, which also checks that they can be written), through the same printer.
+values (`_Builder`, which checks that they are within the limits), through the same printer.
 
 Both passes and the printer recurse, a few Python frames per level of nesting; `make_room`
 raises Python's recursion limit for the depth the limits allow, as the parser does. A
@@ -28,12 +28,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Final, Literal, Never, cast
+from typing import Final, Literal, Never
 
-from ._decode import HausEncodeError
 from ._error_codes import ErrorCode
-from ._errors import HausSyntaxError, PathKey
-from ._number import UNLIMITED, normalize_number, number_limit_issue
+from ._errors import HausEncodeError, HausSyntaxError, PathKey
+from ._number import number_limit_issue
 from ._parser import DEFAULT_LIMITS, Limits, Parser, make_room
 from ._scan import (
     BIDI,
@@ -43,7 +42,6 @@ from ._scan import (
     HEX_LITERAL,
     IDENT_CHARS,
     LINE_SEPARATORS,
-    TAG,
     key_text,
     match_blanks,
     never_fails,
@@ -413,102 +411,58 @@ class _Scanner:
 
 # ── the tree of values built in code ─────────────────────────
 
-_SURROGATE: Final = re.compile(r"[\ud800-\udfff]")
-
 
 class _Builder:
-    """The tree of values built in code, checked to have a text (spec §11): a number within the number
-    limit, nesting within the depth limit (a record payload is one level), tags that are tags, strings
-    and keys that are Unicode text, and no value that contains itself."""
+    """The tree of values built in code, checked to be within the limits (spec §11): numbers within the
+    number limits, nesting within the depth limit (a record payload is one level). Values are haus values
+    by construction, so nothing else is checked."""
 
-    __slots__ = ("limits", "on_path", "path")
+    __slots__ = ("limits", "path")
 
     def __init__(self, limits: Limits) -> None:
         self.limits = limits
         self.path: list[PathKey] = []
-        self.on_path: list[int] = []
-        """The ids of the containers from the root to the value being built."""
 
     def fail(self, code: ErrorCode, reason: str) -> Never:
         raise HausEncodeError(reason, tuple(self.path), code)
 
-    def enter(self, container: object, depth: int) -> None:
-        """Start a container at `depth`, one level deeper. A value that contains itself ends up at the
-        depth limit: there it is `cyclic-value`, any other `nesting-too-deep`."""
+    def enter(self, depth: int) -> None:
+        """Start a container at `depth`, one level deeper."""
         if depth + 1 > self.limits.max_depth:
-            ids = self.on_path
-            if id(container) in ids or len(set(ids)) < len(ids):
-                self.fail("cyclic-value", "the value contains itself, so it has no finite text")
             self.fail("nesting-too-deep", f"nesting deeper than the limit of {self.limits.max_depth}")
-        self.on_path.append(id(container))
 
-    def string(self, s: object, what: str) -> str:
-        if not isinstance(s, str):
-            self.fail("cannot-encode", f"{what} that isn't a str: {type(s).__name__}")
-        if not s.isascii() and _SURROGATE.search(s):
-            self.fail("cannot-encode", f"{what} with a lone surrogate (not Unicode text)")
-        return s
-
-    def node(self, v: object, depth: int) -> _Node:
-        if isinstance(v, String):
-            node = _Node(_STRING)
-            node.string = self.string(v.value, "a string")
-            return node
-        if isinstance(v, Number):
-            text = cast("object", v.text)  # anything, in a value built in code
-            if not isinstance(text, str):
-                self.fail("cannot-encode", f"a number whose text isn't a str: {type(text).__name__}")
-            # Any literal is normalized; the limits are checked after.
-            normalized = normalize_number(text, UNLIMITED)
-            if normalized is None:
-                self.fail("invalid-number", f"a number that isn't a number literal: {text!r}")
-            if (issue := number_limit_issue(normalized, self.limits)) is not None:
-                self.fail(issue[0], f"{issue[1]}: {len(normalized)} characters")
-            return _Node(_NUMBER, normalized)
-        if isinstance(v, Bytes):
-            data = cast("object", v.data)
-            if not isinstance(data, bytes | bytearray):
-                self.fail("cannot-encode", f"bytes that aren't bytes: {type(data).__name__}")
-            return _Node(_BYTES, f'x"{data.hex()}"')
-        if isinstance(v, Array):
-            self.enter(v, depth)
-            node = self.sequence(self.values(v.items, "items"), _Node(_ARRAY), depth)
-            self.on_path.pop()
-            return node
-        if isinstance(v, Record):
-            self.enter(v, depth)
-            node = self.fields(v.fields, _Node(_RECORD), depth)
-            self.on_path.pop()
-            return node
-        if isinstance(v, Variant):
-            tag = cast("object", v.tag)
-            if not isinstance(tag, str) or not TAG.fullmatch(tag):
-                self.fail("invalid-tag", f"the tag {tag!r} isn't [A-Z][A-Za-z0-9_]*")
-            node = _Node(_VARIANT)
-            node.tag = tag
-            args = self.values(v.args, "arguments")
-            if not args:
+    def node(self, v: Value, depth: int) -> _Node:
+        match v:
+            case String(s):
+                node = _Node(_STRING)
+                node.string = s
                 return node
-            if len(args) == 1 and isinstance(record := args[0], Record):
-                # `Tag { … }`: the record is the payload's one level.
-                self.enter(record, depth)
-                node.form = _BRACES
-                node = self.fields(record.fields, node, depth)
-            else:
-                self.enter(v, depth)
+            case Number(text):
+                if (issue := number_limit_issue(text, self.limits)) is not None:
+                    self.fail(issue[0], f"{issue[1]}: {len(text)} characters")
+                return _Node(_NUMBER, text)
+            case Bytes(data):
+                return _Node(_BYTES, f'x"{data.hex()}"')
+            case Array(items):
+                self.enter(depth)
+                return self.sequence(items, _Node(_ARRAY), depth)
+            case Record(fields):
+                self.enter(depth)
+                return self.fields(fields, _Node(_RECORD), depth)
+            case Variant(tag, args):
+                node = _Node(_VARIANT)
+                node.tag = tag
+                if not args:
+                    return node
+                self.enter(depth)
+                if len(args) == 1 and type(record := args[0]) is Record:
+                    # `Tag { … }`: the record is the payload's one level.
+                    node.form = _BRACES
+                    return self.fields(record.fields, node, depth)
                 node.form = _PARENS
-                node = self.sequence(args, node, depth)
-            self.on_path.pop()
-            return node
-        self.fail("cannot-encode", f"not a haus value: {type(v).__name__}")
+                return self.sequence(args, node, depth)
 
-    def values(self, values: object, what: str) -> Sequence[object]:
-        """The elements of an array or arguments of a payload: a tuple (or a list)."""
-        if not isinstance(values, tuple | list):
-            self.fail("cannot-encode", f"{what} that aren't a tuple: {type(values).__name__}")
-        return cast("Sequence[object]", values)
-
-    def sequence(self, values: Sequence[object], node: _Node, depth: int) -> _Node:
+    def sequence(self, values: tuple[Value, ...], node: _Node, depth: int) -> _Node:
         items = node.items
         path = self.path
         for i, v in enumerate(values):
@@ -519,15 +473,13 @@ class _Builder:
             path.pop()
         return node
 
-    def fields(self, fields: object, node: _Node, depth: int) -> _Node:
-        if not isinstance(fields, Mapping):
-            self.fail("cannot-encode", f"fields that aren't a mapping: {type(fields).__name__}")
+    def fields(self, fields: Mapping[str, Value], node: _Node, depth: int) -> _Node:
         items = node.items
         path = self.path
-        for key, v in cast("Mapping[object, object]", fields).items():
+        for key, v in fields.items():
             item = _Item(False, [])
-            item.key = self.string(key, "a key")
-            path.append(item.key)
+            item.key = key
+            path.append(key)
             item.node = self.node(v, depth + 1)
             items.append(item)
             path.pop()
@@ -872,12 +824,10 @@ def stringify_all(
         >>> stringify_all([Variant("Ping"), Number("1E+05")], style="compact")
         'Ping,\\n1e5,\\n'
 
-    Raises `haus.schema.HausEncodeError` (a `ValueError`, with the `path` of the value) for a value
-    that has no text within `limits`: a number longer than the number limit (`number-too-long`) or with
-    a larger exponent (`exponent-too-large`), nesting deeper than the depth limit (`nesting-too-deep`; a
-    record payload is one level), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a number whose
-    text isn't a number literal (`invalid-number`), a value that contains itself (`cyclic-value`), or a
-    string or key with a lone surrogate or an object that isn't a haus value (`cannot-encode`).
+    Every value is a haus value (its constructors check it, spec §11), so the only errors are the
+    limits: `haus.HausEncodeError` (a `ValueError`, with the `path` of the value) for a number longer
+    than the number limit (`number-too-long`) or with a larger exponent (`exponent-too-large`), and for
+    nesting deeper than the depth limit (`nesting-too-deep`; a record payload is one level).
     """
     _options(style, indent, width)
     vs = list(values)

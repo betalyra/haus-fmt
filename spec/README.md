@@ -410,7 +410,7 @@ For people.
   <!-- rule: format.strings.form-change -->
   <!-- rule: format.numbers.serialized -->
   <!-- rule: format.numbers.too-long-unwritable -->
-- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the writer's number limit (§7, the default unless configured otherwise) can't be written (`number-too-long`), see "Values built in code" below.
+- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal, and only within the writer's number limits (§7, the defaults unless configured otherwise), so that a parser with the same limits reads them back: a normalized literal longer than the number limit, an integer, a decimal or one with an exponent (an integer of 1001 digits, `1.000…` with 1000 zeros), can't be written (`number-too-long`), nor one whose exponent is larger than the exponent limit (`1e9999`, `exponent-too-large`); see "Values built in code" below.
   <!-- rule: format.pretty.stream.commas -->
   <!-- rule: format.pretty.stream.blank-after-multiline -->
   <!-- rule: format.pretty.stream.trailing-comments -->
@@ -484,16 +484,14 @@ Person{name:"Jane Smith",age:28,type:Designer},
 - Encoders MAY offer minimised for the wire and storage; compact stays their default.
 
 <!-- rule: format.values.built-in-code -->
-**Values built in code.** A writer given values built in code, not parsed, writes only haus values (§1). Anything else is an error with the code of the mistake, never written as it is:
+**Values built in code.** A value built in code, not parsed, is checked when it is built: a binding's constructors build only haus values (§1) and reject anything else with the code of the mistake:
 
 - a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`;
-- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number, written normalized;
+- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A constructor MAY also apply the parser's number limits (§7: `number-too-long`, `exponent-too-large`); a writer checks them in any case (above);
 - a record with a key twice: `duplicate-key`;
-- a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or something that is no haus value at all: `cannot-encode`;
-- a value that contains itself: `cyclic-value`;
-- a value outside the writer's limits (§7): the limit's code (`nesting-too-deep`, `number-too-long`, `string-too-long`, `key-too-long`, `tag-too-long`).
+- a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
 
-A binding whose value types can't hold such a value (a record type that rejects a duplicate key when it is built) never meets the error. The canonical form and the hash fail the same way (§12).
+Values built so can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons. A writer still fails for a value outside its limits (§7), with the limit's code (`nesting-too-deep`, `number-too-long`, `exponent-too-large`, `string-too-long`, `key-too-long`, `tag-too-long`); the canonical form has no limits. A binding whose host language lets code forge a value past its constructors (a cast in TypeScript, a reflective write) MAY check again in its writers, with the same codes, and `cyclic-value` for a value that contains itself; a forged value is not a haus value, and what a binding does with it is otherwise undefined.
 
 <!-- rule: format.comments.refuse-pretty -->
 <!-- rule: format.comments.refuse-in-place -->
@@ -514,7 +512,7 @@ Bindings SHOULD provide `canonical(value)`, `equals(a, b)`,
 exactly, so that every binding gives the same bytes and the same hash.
 
 <!-- rule: canonical.api.values-only -->
-They are defined for haus values only. Given a value built in code that isn't one (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate), `canonical`, `hash`, `hashAll` and `compare` MUST fail with the error a writer gives for it (§11, "Values built in code"), and never write or hash it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
+They are defined for haus values only, and every value a binding's constructors build is one: what isn't (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate) is rejected when it is built (§11, "Values built in code"). So `canonical`, `equals`, `hash`, `hashAll` and `compare` can't fail for it, and a number built from another spelling (`Number("1E+05")`) is already normalized. A binding that checks forged values again (§11) fails for one with the error a writer gives for it, and never writes or hashes it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
 
 <!-- rule: canonical.form.text -->
 The canonical form of a value is UTF-8 without a byte order mark, with no

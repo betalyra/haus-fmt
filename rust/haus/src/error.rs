@@ -388,11 +388,12 @@ impl fmt::Display for DecodeError {
 
 impl std::error::Error for DecodeError {}
 
-/// A value that can't be written, with where it is: `.data[3]: not a number
-/// literal`, and its code (spec §17). Writing checks the whole value against
-/// the syntax and the limits (spec §7, §9.8), since a [`Value`](crate::Value)
-/// built in code, such as the raw value of an `Any` or an unknown variant,
-/// may hold anything.
+/// A value that can't be written, with where it is: `.data[3]: number literal
+/// longer than 100 characters`, and its code (spec §17). Every
+/// [`Value`](crate::Value) is a haus value (its constructors check that), so
+/// writing fails only for one beyond the writer's limits (spec §7, §9.8), or
+/// for a native value that has no haus form (a tag or number given as text
+/// that isn't one, a record payload with a reserved JSON key).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodeError {
     /// Which mistake it is.
@@ -447,6 +448,81 @@ impl fmt::Display for EncodeError {
 
 impl std::error::Error for EncodeError {}
 
+/// What isn't a haus value, rejected when a value is built in code (spec §11,
+/// "Values built in code"), with its code (spec §17): a number whose text
+/// isn't a number literal (`invalid-number`), a tag that isn't a tag name
+/// (`invalid-tag`), a record with a key twice (`duplicate-key`). Values
+/// built so are haus values: writing them fails only beyond the writer's
+/// limits, and their canonical form, hash, equality and order can't fail.
+///
+/// ```
+/// use haus::{ErrorCode, Number, Record, Tag, Value};
+/// assert_eq!(Number::new("01").unwrap_err().code, ErrorCode::InvalidNumber);
+/// assert_eq!(Tag::new("lower").unwrap_err().code, ErrorCode::InvalidTag);
+/// let mut r = Record::new();
+/// r.insert("a", Value::from(1)).unwrap();
+/// assert_eq!(r.insert("a", Value::from(2)).unwrap_err().to_string(), "duplicate key 'a'");
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueError {
+    /// Which mistake it is.
+    pub code: ErrorCode,
+    pub reason: String,
+}
+
+impl ValueError {
+    pub(crate) fn new(code: ErrorCode, reason: impl Into<String>) -> ValueError {
+        ValueError { code, reason: reason.into() }
+    }
+
+    /// The catalogue's fix for the code.
+    pub fn hint(&self) -> &str {
+        self.code.hint()
+    }
+
+    /// The documentation of the code: `https://haus-fmt.org/docs/errors#<code>`.
+    pub fn docs(&self) -> String {
+        self.code.docs()
+    }
+
+    /// The JSON form of spec §17: `{ code, message, hint, docs }`.
+    pub fn to_json(&self) -> String {
+        json_form(&ErrorJson {
+            code: self.code,
+            message: &self.reason,
+            position: None,
+            path: None,
+            expected: None,
+            found: None,
+            hint: self.hint(),
+        })
+    }
+}
+
+impl fmt::Display for ValueError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for ValueError {}
+
+/// The same mistake, in a value being encoded: at its root, until the
+/// encoder adds where.
+impl From<ValueError> for EncodeError {
+    fn from(e: ValueError) -> Self {
+        EncodeError::new(e.code, e.reason)
+    }
+}
+
+/// The same mistake, in a value being decoded: at its root, until the
+/// decoder adds where.
+impl From<ValueError> for DecodeError {
+    fn from(e: ValueError) -> Self {
+        DecodeError::new(e.code, e.reason)
+    }
+}
+
 /// Reading or writing a typed value: the input can't be read, isn't haus or
 /// doesn't match its type, or a value can't be written.
 #[derive(Debug)]
@@ -498,6 +574,12 @@ impl std::error::Error for Error {
             Error::Encode(e) => Some(e),
             Error::Io(e) => Some(e),
         }
+    }
+}
+
+impl From<ValueError> for Error {
+    fn from(e: ValueError) -> Self {
+        Error::Encode(e.into())
     }
 }
 

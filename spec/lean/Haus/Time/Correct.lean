@@ -339,7 +339,7 @@ theorem zoneNameOk_iff (z : Text) : zoneNameOk z = true ↔ ZoneName z := by
   · rintro ⟨hl, hf, hp⟩; exact ⟨⟨hl, hfirst.mpr hf⟩, fun p hp' => by have := hp p hp'; simp_all⟩
 
 theorem zoneOk_iff (z : Text) : zoneOk z = true ↔ Zone z := by
-  simp [zoneOk, Zone, numOffsetOk_iff, zoneNameOk_iff]
+  simp [zoneOk, Zone, numOffsetOk_iff, zoneNameOk_iff, and_assoc]
 
 theorem mem_intercalate {x c : Char} {ls : List Text} (h : c ∈ [x].intercalate ls) : c = x ∨ ∃ l ∈ ls, c ∈ l := by
   induction ls with
@@ -360,7 +360,7 @@ theorem mem_intercalate {x c : Char} {ls : List Text} (h : c ∈ [x].intercalate
 /-- A zone has no `]`, so the closing bracket of a `ZonedDateTime` is the first one. -/
 theorem zone_no_bracket {z : Text} (h : Zone z) : ']' ∉ z := by
   intro hm
-  rcases h with h | ⟨-, -, -, hp⟩
+  rcases h with h | ⟨-, -, -, -, hp⟩
   · obtain ⟨sg, a, b, rfl, hs, ha, hb, -⟩ := h
     simp only [List.cons_append, List.mem_cons, List.mem_append] at hm
     rcases hm with h | h | h | h

@@ -65,7 +65,7 @@ line = |result| match result {
 ## With `--canonical`: the canonical form of each value (spec §12), as JSON strings.
 canonical_line : Try(List(Value), Value.ParseError) -> Str
 canonical_line = |result| match result {
-	Ok(values) => "ok [${Str.join_with(values.map(|v| Value.to_test_json(Text(Encode.canonical(v) ?? "(no canonical form)"))), ",")}]"
+	Ok(values) => "ok [${Str.join_with(values.map(|v| Value.to_test_json(Value.text(Encode.canonical(v) ?? "(no canonical form)"))), ",")}]"
 	Err(e) => line(Err(e))
 }
 
@@ -77,8 +77,8 @@ write_line = |result, write, stream| match result {
 	Ok(values) =>
 		match (write_all(values, write), stream(values)) {
 			(Ok(lines), Ok(text)) => {
-				written = Str.join_with(lines.map(|l| Value.to_test_json(Text(l))), ",")
-				"ok {\"values\":[${written}],\"stream\":${Value.to_test_json(Text(text))}}"
+				written = Str.join_with(lines.map(|l| Value.to_test_json(Value.text(l))), ",")
+				"ok {\"values\":[${written}],\"stream\":${Value.to_test_json(Value.text(text))}}"
 			}
 			(Err({ code, reason, path: _ }), _) | (_, Err({ code, reason, path: _ })) => "err 0 0 ${code} ${reason.replace_each("\r", "\\r").replace_each("\n", "\\n")}"
 		}

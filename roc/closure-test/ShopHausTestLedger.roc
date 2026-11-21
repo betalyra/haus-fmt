@@ -45,7 +45,7 @@ ShopHausTestLedger := [].{
 	decode_move = |v| Decode.within_depth(v, read_value_move)
 
 	read_value_move : Value -> Try(Move, Decode.Error)
-	read_value_move = |v| match v {
+	read_value_move = |v| match v.view() {
 		Tag("Credit", [p]) => Ok(Credit(Decode.record_arg("Credit", p, |x3| Decode.codec(x3, HausTestMoney.read_value_money, Cents.decode))?))
 		Tag("Debit", [p]) => Decode.payload(
 			"Debit",

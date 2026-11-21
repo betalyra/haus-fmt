@@ -13,14 +13,19 @@
 //! With a schema, `haus-fmt-build` generates Rust types that implement [`Decode`]
 //! and [`Encode`], and [`from_str`] / [`to_string`] check every rule of the
 //! schema: closed records and variants, integer ranges, the std/time profile.
-//! Writing checks the value too, since a [`Value`] built in code (the raw
-//! value of an `Any`, say) may not be one a reader takes:
+//!
+//! A [`Value`] built in code (the raw value of an `Any`, say) is a haus value
+//! too: its constructors reject what isn't one, with the code of the mistake
+//! ([`ValueError`]), and normalize numbers as the parser reads them. Writing
+//! it fails only beyond the limits of the reader it is for; its canonical
+//! form, equality and hash can't fail (spec §11, §12):
 //!
 //! ```
-//! let fine = haus::Value::Number("1E5".into());
+//! use haus::{ErrorCode, Value};
+//! let fine = Value::number("1E5").unwrap();
 //! assert_eq!(haus::to_string(&fine).unwrap(), "1e5");
-//! let wrong = haus::Value::Number("abc".into());
-//! assert_eq!(haus::to_string(&wrong).unwrap_err().to_string(), "not a number literal");
+//! assert_eq!(Value::number("abc").unwrap_err().code, ErrorCode::InvalidNumber);
+//! assert_eq!(Value::variant("lower", vec![]).unwrap_err().code, ErrorCode::InvalidTag);
 //! ```
 //!
 //! [`json`] connects haus and JSON (spec §16): generated types implement
@@ -54,13 +59,15 @@ pub use canonical::{canonical, compare, equals};
 pub use canonical::{hash, hash_all};
 pub use codec::{Codec, same_id};
 pub use de::{AnyTag, Bytes, Decimal, Decode, Decoder, Int, Unknown};
-pub use error::{DecodeError, EncodeError, Error, ErrorCategory, ErrorCode, ErrorJson, Segment, SyntaxError};
+pub use error::{
+    DecodeError, EncodeError, Error, ErrorCategory, ErrorCode, ErrorJson, Segment, SyntaxError, ValueError,
+};
 pub use formatter::{FormatOptions, Style, format, has_comments};
 pub use json::{FromJson, Json, ToJson};
 pub use parser::{Limits, MAX_SUPPORTED_DEPTH, parse_with};
 pub use secret::Secret;
 pub use ser::{Encode, Encoder};
-pub use value::Value;
+pub use value::{Number, Record, Tag, Value};
 
 // Every type a program shares between threads is Send and Sync (checked
 // here, at compile time): values, options and limits are plain data, and
@@ -71,6 +78,10 @@ pub use value::Value;
 const _: () = {
     const fn shared<T: Send + Sync>() {}
     shared::<Value>();
+    shared::<Number>();
+    shared::<Tag>();
+    shared::<Record>();
+    shared::<ValueError>();
     shared::<Limits>();
     shared::<FormatOptions>();
     shared::<Style>();
@@ -151,8 +162,8 @@ pub fn from_str_all<T: Decode>(src: &str) -> Result<Vec<T>, Error> {
 /// Write one value on one line (the compact layout, spec §11). Fails if the
 /// value isn't one a reader with the default limits takes: one nested deeper
 /// than the depth limit (checked while encoding, so a deep native value fails
-/// at the limit), or a [`Value`] built in code that isn't valid, such as the
-/// raw value of an `Any` or an unknown variant (spec §9.8): see
+/// at the limit), or a number, string, key or tag longer than its limit, such
+/// as in the raw value of an `Any` or an unknown variant (spec §9.8): see
 /// [`ser::write_with`]. An error inside a [`Secret`] names only the secret.
 pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
     to_string_with(value, &Limits::default())
@@ -204,7 +215,7 @@ pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::import_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
-/// assert_eq!(haus::canonical(&v).unwrap(), "{note:None,paid:True,total:19.90}");
+/// assert_eq!(haus::canonical(&v), "{note:None,paid:True,total:19.90}");
 /// ```
 pub fn import_json(text: &str) -> Result<Value, Error> {
     json::import_json_with(text, &Limits::default())
@@ -213,8 +224,7 @@ pub fn import_json(text: &str) -> Result<Value, Error> {
 /// Write a value as self-describing JSON (spec §16.2), in its envelope:
 /// `19.90` is `{"_haus":1,"_value":{"_num":"19.90"}}`, `Some(1)` is
 /// `{"_haus":1,"_value":{"_tag":"Some","_args":[{"_num":"1"}]}}`. Fails,
-/// saying where, for a [`Value`] built in code that isn't a valid haus value
-/// within the limits.
+/// saying where, for a value beyond the limits.
 pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
     json::to_haus_json_with(value, &Limits::default())
 }
@@ -228,7 +238,7 @@ pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::from_haus_json(r#"{"_haus": 1, "_value": {"_num": "19.90"}}"#).unwrap();
-/// assert_eq!(haus::canonical(&v).unwrap(), "19.90");
+/// assert_eq!(haus::canonical(&v), "19.90");
 /// assert!(haus::from_haus_json(r#"{"_num": "19.90"}"#).is_err());
 /// ```
 pub fn from_haus_json(text: &str) -> Result<Value, Error> {

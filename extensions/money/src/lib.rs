@@ -4,7 +4,7 @@
 //! ```
 //! let m: haus_money::Money = haus::from_str("Money(19.90, EUR)").unwrap();
 //! assert_eq!(m.0.as_str(), "19.90");
-//! assert_eq!(m.1, haus::AnyTag::Bare("EUR".into()));
+//! assert_eq!(m.1, haus::AnyTag::Bare("EUR".parse().unwrap()));
 //! ```
 //!
 //! The profile `@haus-fmt/money/iso` (profiles/iso.md) is two codecs (spec

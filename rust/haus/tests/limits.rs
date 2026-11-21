@@ -19,12 +19,11 @@ fn in_small_thread(f: impl FnOnce() + Send + 'static) {
 /// Values `n` levels deep, of every kind of container: arrays, records,
 /// positional payloads, and record payloads.
 fn deep(n: usize) -> [(String, Value); 4] {
-    let one = Value::Number("1".into());
+    let one = Value::from(1);
     let array = (0..n).fold(one.clone(), |v, _| Value::Array(vec![v]));
-    let record = (0..n).fold(one.clone(), |v, _| Value::Record(vec![("a".into(), v)]));
-    let payload = (0..n).fold(one.clone(), |v, _| Value::Variant { tag: "A".into(), args: vec![v] });
-    let tagged =
-        (0..n).fold(one, |v, _| Value::Variant { tag: "A".into(), args: vec![Value::Record(vec![("a".into(), v)])] });
+    let record = (0..n).fold(one.clone(), |v, _| Value::record([("a", v)]).unwrap());
+    let payload = (0..n).fold(one.clone(), |v, _| Value::variant("A", vec![v]).unwrap());
+    let tagged = (0..n).fold(one, |v, _| Value::variant("A", vec![Value::record([("a", v)]).unwrap()]).unwrap());
     [
         (format!("{}1{}", "[".repeat(n), "]".repeat(n)), array),
         (format!("{}1{}", "{ a: ".repeat(n), " }".repeat(n)), record),
@@ -83,7 +82,7 @@ fn a_deeper_limit_is_rejected_naming_the_maximum() {
     // Writing haus.
     assert_eq!(haus::to_string_with(&value, &above).unwrap_err().to_string(), reason);
     assert_eq!(haus::to_string_with(&1u8, &above).unwrap_err().to_string(), reason);
-    assert_eq!(ser::write_with(&Value::Number("1".into()), &above).unwrap_err().to_string(), reason);
+    assert_eq!(ser::write_with(&Value::from(1), &above).unwrap_err().to_string(), reason);
     assert_eq!(value.encode_with(Encoder::new(&above)).unwrap_err().to_string(), reason);
     assert_eq!(vec![1u8].encode_with(Encoder::new(&above)).unwrap_err().to_string(), reason);
     let e = haus::stream::encode_with(Vec::new(), [&value], &above).unwrap_err();
@@ -171,8 +170,8 @@ fn keys_and_tags_count_against_the_string_limit() {
     assert_eq!(reader.push(b"1,\nAbcde,").unwrap_err().to_string(), "tag longer than 4 characters at 2:1");
 
     // Values built in code, written or encoded for such a reader.
-    let record = |k: &str| Value::Record(vec![(k.into(), Value::Number("1".into()))]);
-    let tag = |t: &str| Value::Variant { tag: t.into(), args: vec![] };
+    let record = |k: &str| Value::record([(k, Value::from(1))]).unwrap();
+    let tag = |t: &str| Value::variant(t, vec![]).unwrap();
     for v in [record("abcd"), record("äöüß"), tag("Abcd")] {
         assert!(ser::write_with(&v, &limits).is_ok() && json::to_self_describing(&v, &limits).is_ok(), "{v:?}");
         assert!(v.encode_with(Encoder::new(&limits)).is_ok());
@@ -180,7 +179,7 @@ fn keys_and_tags_count_against_the_string_limit() {
     let write = |v: &Value| ser::write_with(v, &limits).unwrap_err().to_string();
     assert_eq!(write(&record("abcde")), ".abcde: key longer than 4 characters");
     assert_eq!(write(&tag("Abcde")), "tag longer than 4 characters");
-    let payload = Value::Variant { tag: "A".into(), args: vec![tag("Abcde")] };
+    let payload = Value::variant("A", vec![tag("Abcde")]).unwrap();
     assert_eq!(write(&payload), "(A)[0]: tag longer than 4 characters");
     let encoded = tag("Abcde").encode_with(Encoder::new(&limits)).unwrap_err();
     assert_eq!(encoded.to_string(), "tag longer than 4 characters");
@@ -194,7 +193,7 @@ fn keys_and_tags_count_against_the_string_limit() {
     assert_eq!(haus::to_string_with(&map, &tiny).unwrap_err().to_string(), ".abcd: key longer than 3 characters");
 
     // JSON read into haus: member names become keys, "_tag" values tags.
-    let envelope = |j: Json| Json::Object(vec![("_haus".into(), Json::Number("1".into())), ("_value".into(), j)]);
+    let envelope = |j: Json| Json::Object(vec![("_haus".into(), Json::Number(1.into())), ("_value".into(), j)]);
     let read = |j: Json| json::from_self_describing(&envelope(j), &limits);
     let rec = |k: &str| Json::Object(vec![("_rec".into(), Json::Object(vec![(k.into(), Json::String("x".into()))]))]);
     let tag_json = |t: &str| Json::Object(vec![("_tag".into(), Json::String(t.into()))]);
@@ -219,6 +218,24 @@ fn the_hex_digit_limit_follows_from_the_number_limit() {
     }
     assert_eq!(hex(1_000_000_000), 830_482_022);
     assert_eq!(hex(usize::MAX), 15_319_689_349_413_178_108);
+}
+
+#[test]
+fn writers_check_every_number_a_decimal_and_an_exponent_too() {
+    // What a parser with the same limits reads back (spec §7): not only integers.
+    let code = |text: &str, limits: &Limits| {
+        let v = Value::number(text).expect("a number literal");
+        haus::to_string_with(&v, limits).map_err(|e| e.code.as_str().to_owned())
+    };
+    let long = format!("1.{}", "0".repeat(2000));
+    assert_eq!(code(&long, &Limits::default()), Err("number-too-long".to_owned()));
+    assert_eq!(code("1e9999", &Limits::default()), Err("exponent-too-large".to_owned()));
+    assert_eq!(code("1e6144", &Limits::default()), Ok("1e6144".to_owned()));
+    let wide = Limits { max_number_length: 2002, max_exponent: 9999, ..Limits::default() };
+    assert_eq!(code(&long, &wide), Ok(long.clone()));
+    assert_eq!(code("1e9999", &wide), Ok("1e9999".to_owned()));
+    // The canonical form has no limits (spec §12).
+    assert_eq!(haus::canonical(&Value::number(&long).unwrap()), long);
 }
 
 #[test]
@@ -295,6 +312,21 @@ fn messages_quote_tokens_escaped_and_short() {
     assert_eq!(reason(&format!("[{long}]")), unexpected);
     assert_eq!(reason(&format!("1{long}")), format!("invalid number '1{}…'", "k".repeat(38)));
     assert_eq!(reason(r#""\q""#), r"invalid escape '\q'");
-    let e = <i8 as Decode>::decode(&Value::Number("1".repeat(100))).unwrap_err();
+    let e = <i8 as Decode>::decode(&Value::number(&"1".repeat(100)).unwrap()).unwrap_err();
     assert_eq!(e.to_string(), format!("{}… is out of range for Int8 (-128 to 127)", "1".repeat(39)));
+    // Constructors quote what they reject the same way.
+    assert_eq!(
+        Value::number(&long).unwrap_err().reason,
+        format!("invalid number '{}…': not a number literal", "k".repeat(39))
+    );
+    assert_eq!(
+        haus::Record::from_fields([(long.as_str(), Value::from(1)), (long.as_str(), Value::from(2))])
+            .unwrap_err()
+            .reason,
+        format!("duplicate key '{}…'", "k".repeat(39))
+    );
+    assert_eq!(
+        Value::variant("A\u{202E}b", vec![]).unwrap_err().reason,
+        r"invalid tag 'A\u{202E}b': a tag is A to Z, then letters, digits and _"
+    );
 }

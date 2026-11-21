@@ -1,12 +1,14 @@
 /**
  * The generic parser: `readValue` builds the `Value` tree from the `Reader`
- * (reader.ts), which is the one parser of the format. `Parser` keeps the
+ * (reader.ts), which is the one parser of the format. What it reads is
+ * checked as it is read, so it builds values without the constructors'
+ * checks (value.ts). `Parser` keeps the
  * entry points the rest of the package uses (whole files, stream items,
  * values inside schema files, number literals). Also the limits (spec §7).
  */
 import { limitsError, START, type Origin } from "./errors.js"
 import { ARGS, ARRAY, BYTES, CLOSE_ARGS, CLOSE_ARRAY, DEFAULT_LIMITS, NUMBER, PAYLOAD_RECORD, Reader, RECORD, STRING, type Limits } from "./reader.js"
-import { arr, bytes, num, rec, str, variant, type HRecord, type Value } from "./value.js"
+import { uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedStr, uncheckedVariant, type HRecord, type Value } from "./value.js"
 
 export { DEFAULT_LIMITS, longerThan, MAX_DEPTH, maxHexDigits, Reader, type Limits } from "./reader.js"
 
@@ -69,9 +71,9 @@ const readAt = (r: Reader): Value => {
   switch (r.next()) {
     case RECORD: return readRecord(r)
     case ARRAY: return readArray(r)
-    case STRING: return str(r.string())
-    case NUMBER: return num(r.number())
-    case BYTES: return bytes(r.bytes())
+    case STRING: return uncheckedStr(r.string())
+    case NUMBER: return uncheckedNum(r.number())
+    case BYTES: return uncheckedBytes(r.bytes())
     default: return readVariantAfter(r, r.tag())
   }
 }
@@ -90,7 +92,7 @@ const readRecord = (r: Reader): HRecord => {
     if (fields.size === size) r.failDuplicate(key)
     r.endField()
   }
-  return keySpans ? { ...rec(fields), keySpans } : rec(fields)
+  return uncheckedRec(fields, keySpans)
 }
 
 const readArray = (r: Reader): Value => {
@@ -100,7 +102,7 @@ const readArray = (r: Reader): Value => {
     items.push(readValue(r))
     r.endItem(CLOSE_ARRAY)
   }
-  return arr(items)
+  return uncheckedArr(items)
 }
 
 /** After a variant's tag (`r.tag()`): its payload, and the variant. */
@@ -112,12 +114,12 @@ export const readVariantAfter = (r: Reader, tag: string): Value => {
         args.push(readValue(r))
         r.endItem(CLOSE_ARGS)
       } while (r.more(CLOSE_ARGS))
-      return variant(tag, args)
+      return uncheckedVariant(tag, args)
     }
     case PAYLOAD_RECORD:
-      return variant(tag, [readValue(r)])
+      return uncheckedVariant(tag, [readValue(r)])
     default:
-      return variant(tag)
+      return uncheckedVariant(tag)
   }
 }
 

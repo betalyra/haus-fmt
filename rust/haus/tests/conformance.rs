@@ -25,15 +25,15 @@ fn cases(dir: &str) -> Vec<PathBuf> {
 fn suite_json(v: &Value) -> Json {
     match v {
         Value::String(s) => json!(s),
-        Value::Number(n) => json!({ "_num": n }),
+        Value::Number(n) => json!({ "_num": n.as_str() }),
         Value::Bytes(b) => json!({ "_bytes": b.iter().map(|x| format!("{x:02x}")).collect::<String>() }),
         Value::Array(items) => Json::Array(items.iter().map(suite_json).collect()),
         Value::Record(fields) => {
             json!({ "_rec": fields.iter().map(|(k, v)| (k.clone(), suite_json(v))).collect::<Map<_, _>>() })
         }
-        Value::Variant { tag, args } if args.is_empty() => json!({ "_tag": tag }),
+        Value::Variant { tag, args } if args.is_empty() => json!({ "_tag": tag.as_str() }),
         Value::Variant { tag, args } => {
-            json!({ "_tag": tag, "_args": args.iter().map(suite_json).collect::<Vec<_>>() })
+            json!({ "_tag": tag.as_str(), "_args": args.iter().map(suite_json).collect::<Vec<_>>() })
         }
     }
 }
@@ -78,7 +78,7 @@ fn valid_canonical() {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
         let expected = fs::read_to_string(path.with_extension("canonical")).unwrap();
         let values = haus::parse_bytes(&fs::read(&path).unwrap()).unwrap();
-        let actual: String = values.iter().map(|v| haus::canonical(v).unwrap() + "\n").collect();
+        let actual: String = values.iter().map(|v| haus::canonical(v) + "\n").collect();
         if actual != expected {
             failures.push(format!("{name}: got {actual}"));
         }
@@ -96,11 +96,11 @@ fn valid_hash() {
         let name = path.file_stem().unwrap().to_string_lossy().into_owned();
         let expected = fs::read_to_string(path.with_extension("hash")).unwrap().trim().to_owned();
         let values = haus::parse_bytes(&fs::read(&path).unwrap()).unwrap();
-        let actual = haus::hash_all(&values).unwrap();
+        let actual = haus::hash_all(&values);
         if actual != expected {
             failures.push(format!("{name}: got {actual}"));
         }
-        if matches!(values.as_slice(), [v] if haus::hash(v).unwrap() != expected) {
+        if matches!(values.as_slice(), [v] if haus::hash(v) != expected) {
             failures.push(format!("{name}: hash of the only value differs"));
         }
     }

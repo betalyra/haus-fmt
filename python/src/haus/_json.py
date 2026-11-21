@@ -23,9 +23,23 @@ from ._error_codes import ErrorCode
 from ._errors import UNPAIRED_SURROGATE, HausJsonError, PathKey, unpaired_surrogate
 from ._number import number_limit_issue
 from ._parser import Limits
-from ._scan import TAG, quote_for_message
+from ._scan import NORMALIZED_NUMBER, TAG, quote_for_message
 from ._stream import Readable
-from ._value import Array, Bytes, Number, Record, String, Value, Variant
+from ._value import (
+    Array,
+    Bytes,
+    Number,
+    Record,
+    String,
+    Value,
+    Variant,
+    array_unchecked,
+    bytes_unchecked,
+    number_unchecked,
+    record_unchecked,
+    string_unchecked,
+    variant_unchecked,
+)
 
 R = TypeVar("R")
 
@@ -406,7 +420,6 @@ def _string(s: str) -> str:
 
 _TRUE, _FALSE, _NONE = Variant("True"), Variant("False"), Variant("None")
 _HEX_BYTES = re.compile(r"(?:[0-9a-f]{2})*+")
-_NORMALIZED = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
 _VERSION: Final = JsonNumber("1")
 """The version of self-describing JSON, `_haus` in its envelope (§16.2)."""
 
@@ -432,21 +445,21 @@ def imported(
         case str():
             if (issue := string_length_issue(j, limits)) is not None:
                 raise HausJsonError(issue[1], code=issue[0], path=path)
-            return String(j)
+            return string_unchecked(j)
         case JsonNumber(text):
-            return Number(text)
+            return number_unchecked(text)
         case list():
             items: list[Value] = []
             for i, x in enumerate(j):
                 items.append(imported(x, limits, max_depth, depth + 1, (*path, i)))
-            return Array(tuple(items))
+            return array_unchecked(tuple(items))
         case dict():
             fields: dict[str, Value] = {}
             for k, x in j.items():
                 if (issue := key_length_issue(k, limits)) is not None:
                     raise HausJsonError(issue[1], code=issue[0], path=path)
                 fields[k] = imported(x, limits, max_depth, depth + 1, (*path, k))
-            return Record(fields)
+            return record_unchecked(fields)
 
 
 def envelope(j: Json) -> Json:
@@ -532,9 +545,9 @@ class _SelfDescribing:
             case str():
                 if (issue := string_length_issue(j, self.limits)) is not None:
                     self.fail(issue[1], path, issue[0])
-                return String(j)
+                return string_unchecked(j)
             case list():
-                return Array(self.items(j, self.deeper(depth, path), path))
+                return array_unchecked(self.items(j, self.deeper(depth, path), path))
             case dict():
                 return self.object(j, depth, path)
             case _:
@@ -546,11 +559,11 @@ class _SelfDescribing:
             case {"_rec": fields} if len(j) == 1:
                 return self.record(fields, depth, path)
             case {"_num": text} if len(j) == 1:
-                if not isinstance(text, str) or not _NORMALIZED.fullmatch(text):
+                if not isinstance(text, str) or not NORMALIZED_NUMBER.fullmatch(text):
                     self.fail("expected a normalized number literal in '_num'", (*path, "_num"), "haus-json-number")
                 if (issue := number_limit_issue(text, self.limits)) is not None:
                     self.fail(issue[1], (*path, "_num"), issue[0])
-                return Number(text)
+                return number_unchecked(text)
             case {"_bytes": digits} if len(j) == 1:
                 if not isinstance(digits, str) or not _HEX_BYTES.fullmatch(digits):
                     self.fail(
@@ -559,9 +572,9 @@ class _SelfDescribing:
                 if len(digits) > self.limits.max_string_length:
                     limit = self.limits.max_string_length
                     self.fail(f"byte string longer than {limit} characters", (*path, "_bytes"), "string-too-long")
-                return Bytes(bytes.fromhex(digits))
+                return bytes_unchecked(bytes.fromhex(digits))
             case {"_tag": tag} if len(j) == 1:
-                return Variant(self.tag(tag, path))
+                return variant_unchecked(self.tag(tag, path))
             case {"_tag": tag, "_args": args} if len(j) == 2:
                 return self.variant(self.tag(tag, path), args, depth, path)
             case _:
@@ -575,9 +588,9 @@ class _SelfDescribing:
         match args:
             case [dict() as only] if len(only) == 1 and "_rec" in only:
                 # `Tag { … }` is one level, as in the parser.
-                return Variant(tag, (self.record(only["_rec"], depth, (*args_path, 0)),))
+                return variant_unchecked(tag, (self.record(only["_rec"], depth, (*args_path, 0)),))
             case _:
-                return Variant(tag, self.items(args, self.deeper(depth, path), args_path))
+                return variant_unchecked(tag, self.items(args, self.deeper(depth, path), args_path))
 
     def items(self, items: list[Json], depth: int, path: tuple[PathKey, ...]) -> tuple[Value, ...]:
         out: list[Value] = []
@@ -594,7 +607,7 @@ class _SelfDescribing:
             if (issue := key_length_issue(k, self.limits)) is not None:
                 self.fail(issue[1], (*path, "_rec"), issue[0])
             out[k] = self.value(x, d, (*path, "_rec", k))
-        return Record(out)
+        return record_unchecked(out)
 
     def tag(self, tag: Json, path: tuple[PathKey, ...]) -> str:
         if not isinstance(tag, str) or not TAG.fullmatch(tag):

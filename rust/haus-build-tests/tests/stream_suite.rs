@@ -65,7 +65,7 @@ fn decode(ty: &str, text: &str) -> Result<Value, (String, String)> {
 fn text<'a>(fields: &'a Value, key: &str) -> &'a str {
     match fields.get(key) {
         Some(Value::String(s)) => s,
-        _ => panic!("not a case: {}", canonical(fields).unwrap()),
+        _ => panic!("not a case: {}", canonical(fields)),
     }
 }
 
@@ -76,25 +76,23 @@ fn typed_streams() {
     let failures: Vec<String> = cases
         .iter()
         .filter_map(|c| {
-            let Value::Variant { tag, args } = c else { panic!("not a case: {}", canonical(c).unwrap()) };
-            let [fields] = args.as_slice() else { panic!("not a case: {}", canonical(c).unwrap()) };
+            let Value::Variant { tag, args } = c else { panic!("not a case: {}", canonical(c)) };
+            let [fields] = args.as_slice() else { panic!("not a case: {}", canonical(c)) };
             let (ty, source) = (text(fields, "type"), text(fields, "text"));
             let failure = match (tag.as_str(), decode(ty, source)) {
                 ("Ok", Ok(value)) => {
-                    let output =
-                        fields.get("output").unwrap_or_else(|| panic!("not a case: {}", canonical(c).unwrap()));
-                    (!equals(&value, output)).then(|| {
-                        format!("decoded as {}, expected {}", canonical(&value).unwrap(), canonical(output).unwrap())
-                    })
+                    let output = fields.get("output").unwrap_or_else(|| panic!("not a case: {}", canonical(c)));
+                    (!equals(&value, output))
+                        .then(|| format!("decoded as {}, expected {}", canonical(&value), canonical(output)))
                 }
                 ("Ok", Err((code, path))) => Some(format!("fails with {code} at {path}")),
-                ("Err", Ok(value)) => Some(format!("decoded as {}", canonical(&value).unwrap())),
+                ("Err", Ok(value)) => Some(format!("decoded as {}", canonical(&value))),
                 ("Err", Err(got)) => {
                     let want = (text(fields, "code").to_owned(), text(fields, "path").to_owned());
                     (got != want)
                         .then(|| format!("fails with {} at {}, expected {} at {}", got.0, got.1, want.0, want.1))
                 }
-                _ => panic!("not a case: {}", canonical(c).unwrap()),
+                _ => panic!("not a case: {}", canonical(c)),
             };
             failure.map(|why| format!("{tag} {ty} {source:?}: {why}"))
         })

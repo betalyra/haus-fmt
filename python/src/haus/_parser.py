@@ -69,7 +69,20 @@ from ._scan import (
     match_whitespace,
     quote_for_message,
 )
-from ._value import Array, Bytes, Number, Record, String, Value, Variant
+from ._value import (
+    Bytes,
+    Number,
+    Record,
+    String,
+    Value,
+    Variant,
+    array_unchecked,
+    bytes_unchecked,
+    number_unchecked,
+    record_unchecked,
+    string_unchecked,
+    variant_unchecked,
+)
 
 MAX_SUPPORTED_DEPTH: Final = 512
 """The deepest nesting this binding supports (spec §7): 512 levels.
@@ -365,15 +378,15 @@ class Parser:
                 tag: str | None = None
                 if c == '"':
                     if (m := plain_string(src, pos)) is not None and len(s := m[1]) <= max_string:
-                        v = String(s)
+                        v = string_unchecked(s)
                         pos = m.end()
                     else:
                         self.pos = pos
-                        v = self._block_string() if src.startswith('"""', pos) else String(self._string())
+                        v = self._block_string() if src.startswith('"""', pos) else string_unchecked(self._string())
                         pos = self.pos
                 elif c in number_start:
                     if (m := plain_number(src, pos)) is not None and m.end() - pos <= max_number:
-                        v = Number(m[0])
+                        v = number_unchecked(m[0])
                         pos = m.end()
                     else:
                         self.pos = pos
@@ -388,7 +401,7 @@ class Parser:
                     if closer := _PAYLOAD_CLOSERS.get(src[payload : payload + 1], ""):
                         pos = payload
                     else:
-                        v = Variant(tag)
+                        v = variant_unchecked(tag)
                 elif c == "{":
                     closer = "}"
                 elif c == "[":
@@ -396,7 +409,7 @@ class Parser:
                         numbers = m[1].split(",")
                         if len(stack) >= max_depth or (len(m[1]) > max_number and max(map(len, numbers)) > max_number):
                             raise _Reread
-                        v = Array(tuple(map(Number, map(str.strip, numbers))))
+                        v = array_unchecked(tuple(map(number_unchecked, map(str.strip, numbers))))
                         pos = m.end()
                     else:
                         closer = "]"
@@ -421,7 +434,13 @@ class Parser:
                     if closer == ")":
                         raise _Reread  # an empty payload
                     pos += 1
-                    v = Array(()) if closer == "]" else Record({}) if tag is None else Variant(tag, (Record({}),))
+                    v = (
+                        array_unchecked(())
+                        if closer == "]"
+                        else record_unchecked({})
+                        if tag is None
+                        else variant_unchecked(tag, (record_unchecked({}),))
+                    )
             # ── a value v ends at pos: an item of the innermost container, or a top-level value ──
             while stack:
                 frame = stack[-1]
@@ -448,13 +467,13 @@ class Parser:
                 pos += 1
                 stack.pop()
                 if closer == "]":
-                    v = Array(tuple(items))
+                    v = array_unchecked(tuple(items))
                 elif closer == ")":
-                    v = Variant(frame[2], tuple(items))
+                    v = variant_unchecked(frame[2], tuple(items))
                 elif (tag := frame[2]) is None:
-                    v = Record(items)
+                    v = record_unchecked(items)
                 else:
-                    v = Variant(tag, (Record(items),))
+                    v = variant_unchecked(tag, (record_unchecked(items),))
             else:
                 assert v is not None  # every way to here reads a value
                 values.append(v)
@@ -485,15 +504,15 @@ class Parser:
         while (m := field(src, pos)) is not None:
             key = m[1] or m[2]
             if (s := m[3]) is not None:
-                v: Value = String(s)
+                v: Value = string_unchecked(s)
                 value_end = m.end(3) + 1
             elif (n := m[4]) is not None:
                 if len(n) > max_number:
                     raise _Reread
-                v = Number(n)
+                v = number_unchecked(n)
                 value_end = m.end(4)
             else:
-                v = Variant(m[5])
+                v = variant_unchecked(m[5])
                 value_end = m.end(5)
             pos = m.end()
             if not m[6] or src[pos] in RUN_STOP:
@@ -511,15 +530,15 @@ class Parser:
         max_number = self.limits.max_number_length
         while (m := item(src, pos)) is not None:
             if (s := m[1]) is not None:
-                v: Value = String(s)
+                v: Value = string_unchecked(s)
                 value_end = m.end(1) + 1
             elif (n := m[2]) is not None:
                 if len(n) > max_number:
                     raise _Reread
-                v = Number(n)
+                v = number_unchecked(n)
                 value_end = m.end(2)
             else:
-                v = Variant(m[3])
+                v = variant_unchecked(m[3])
                 value_end = m.end(3)
             pos = m.end()
             if not m[4] or src[pos] in RUN_STOP:
@@ -579,11 +598,11 @@ class Parser:
             case "{":
                 return self._record()
             case "[":
-                return Array(self._list("[", "]"))
+                return array_unchecked(self._list("[", "]"))
             case '"' if self.src.startswith('"""', self.pos):
                 return self._block_string()
             case '"':
-                return String(self._string())
+                return string_unchecked(self._string())
             case "x" if self.src.startswith('"', self.pos + 1):
                 return self._bytes()
             case c if c in NUMBER_START:
@@ -661,7 +680,7 @@ class Parser:
             if key in fields:
                 self._fail("duplicate-key", f"duplicate key '{quote_for_message(key)}'", key_pos)
             fields[key] = self.last = value
-        return Record(fields)
+        return record_unchecked(fields)
 
     def _list(self, open_: str, close: str) -> tuple[Value, ...]:
         # A plain loop, not a comprehension: on Python 3.11 a comprehension is one more frame per level.
@@ -711,12 +730,12 @@ class Parser:
                         paren,
                         hint=f"Write {quote_for_message(tag)} without parentheses.",
                     )
-                return Variant(tag, args)
+                return variant_unchecked(tag, args)
             case "{":
-                return Variant(tag, (self._record(),))
+                return variant_unchecked(tag, (self._record(),))
             case _:
                 self.pos = after_tag
-                return Variant(tag)
+                return variant_unchecked(tag)
 
     # ── numbers ────────────────────────────────────────────────
 
@@ -743,10 +762,10 @@ class Parser:
         if radix is not None:
             n = int(m[1].replace("_", ""), radix)
             # The sign stays, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
-            return Number(("-" if src[start] == "-" else "") + _decimal_text(n))
+            return number_unchecked(("-" if src[start] == "-" else "") + _decimal_text(n))
         if (e := LITERAL_EXPONENT.search(m[0])) and _exceeds(e[1], self.limits.max_exponent):
             self._fail("exponent-too-large", f"exponent larger than {self.limits.max_exponent}", start)
-        return Number(_normalize_exponent(m[0].replace("_", "").replace("E", "e")))
+        return number_unchecked(_normalize_exponent(m[0].replace("_", "").replace("E", "e")))
 
     # ── bytes ──────────────────────────────────────────────────
 
@@ -780,7 +799,7 @@ class Parser:
                     "bytes-not-hex", f"invalid character {_describe(c)} in byte string (expected hex digits)", end
                 )
         self.pos = end + 1
-        return Bytes(bytes.fromhex(self.src[body:end]))
+        return bytes_unchecked(bytes.fromhex(self.src[body:end]))
 
     # ── strings ────────────────────────────────────────────────
 
@@ -866,7 +885,7 @@ class Parser:
             else:
                 self._fail("block-string-indent", 'line is indented less than the closing """', line_start)
         self.pos = close + 3
-        return String(self._checked("\n".join(out), start))
+        return string_unchecked(self._checked("\n".join(out), start))
 
     def _block_line(self, start: int, end: int) -> str:
         """One block string line without its indentation, escapes decoded."""

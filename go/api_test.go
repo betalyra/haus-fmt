@@ -517,6 +517,10 @@ func TestFormatValue(t *testing.T) {
 		{Variant{Tag: "bad"}, Limits{}, CodeInvalidTag},
 		{String("\xff"), Limits{}, CodeCannotEncode},
 		{NumberFromBigInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(1000), nil)), Limits{}, CodeNumberTooLong},
+		// Every number, a decimal or an exponent too: what a parser with the same limits reads back.
+		{mustNumber(t, "1.0000000000"), Limits{MaxNumberLength: 10}, CodeNumberTooLong},
+		{mustNumber(t, "1e100"), Limits{MaxExponent: 99}, CodeExponentTooLarge},
+		{mustNumber(t, "-1.5e-100"), Limits{MaxExponent: 99}, CodeExponentTooLarge},
 		{Array{Array{}}, Limits{MaxDepth: 1}, CodeNestingTooDeep},
 		{Variant{Tag: "Some", Args: []Value{mustRecord(t)}}, Limits{MaxDepth: 1}, ""},
 		{Array{nil}, Limits{}, CodeCannotEncode},

@@ -286,6 +286,41 @@ const { values, comments } = parseDocument(text)
 format(values, { source: text, comments })         // reformat a file, comments kept
 ```
 
+## Build values
+
+```ts
+import { arr, canonical, hash, num, rec, str, stringify, variant } from "@haus-fmt/haus"
+
+const order = rec({ id: num("0xFF"), status: variant("Shipped"), tags: arr([str("gift")]), at: variant("Point", [num("1E+05"), num("-2")]) })
+stringify(order, { style: "compact" })   // { id: 255, status: Shipped, tags: ["gift"], at: Point(1e5, -2) }
+canonical(order)                         // {at:Point(1e5,-2),id:255,status:Shipped,tags:["gift"]}
+await hash(order)                        // the SHA-256 of the canonical form
+```
+
+A `Value` is built by `num`, `str`, `bytes`, `arr`, `rec` and `variant` (or
+read by a parser), and these build only haus values (spec §11, "Values built
+in code"). They throw a `HausEncodeError` with the code of the mistake:
+
+| | |
+|---|---|
+| `num("01")`, `num("NaN")`, `num("")` | `invalid-number` |
+| `variant("lower")` | `invalid-tag` |
+| `rec([["a", x], ["a", y]])` | `duplicate-key` |
+| `str("\uD800")`, a key or tag with an unpaired surrogate, `arr([{ kind: "number", text: "1" }])` (not a value) | `cannot-encode` |
+
+`num` takes a number literal in any spelling and normalizes it as the parser
+does (`num("1E+05").text` is `"1e5"`, `num("0xFF").text` is `"255"`), with no
+limit on its length or exponent. `rec` takes a `Map`, `[key, value]` pairs or
+a plain object, in their order. Each copies what it is given (`arr` and
+`variant` freeze their copy), so a value can't change once built, nor contain
+itself. So writing a value, its canonical form, `hash`, `hashAll`, `equals`
+and `compare` can't fail for what it is; a writer still fails for a value
+beyond its limits (spec §7: `number-too-long` and the like), the canonical
+form has none. An object literal is not a `Value` (the type says so), and
+`isValue(x)` tells one apart at run time. A value forged past the
+constructors with a cast is not a haus value: what this package does with it
+is undefined.
+
 ## Limits
 
 Every reader, decoder and encoder takes the limits of spec §7, enforced while

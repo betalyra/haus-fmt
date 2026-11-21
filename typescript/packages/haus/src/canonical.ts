@@ -6,9 +6,13 @@
  *
  *   canonical(parse('Order { total: 19.90, id: 0xFF, "x-y": 1e+5 }'))
  *   // 'Order{id:255,total:19.90,"x-y":1e5}'
+ *
+ * They can't fail: every `Value` is a haus value (spec §12), checked when it
+ * was built (value.ts) or read, with its numbers normalized. A value forged
+ * past the constructors (with a cast) is not one, and what they do with it is
+ * undefined (spec §11, "Values built in code").
  */
-import { BARE_KEY } from "./chars.js"
-import { normalizedNumber, quote, toHex, writtenTag } from "./format.js"
+import { escaped, toHex, writtenKey } from "./format.js"
 import type { Value } from "./value.js"
 
 /**
@@ -48,7 +52,7 @@ function write(root: Value, out: string[]): void {
     work.push("}")
     for (let i = keys.length - 1; i >= 0; i--) {
       const k = keys[i]!
-      work.push(fields.get(k)!, `${i > 0 ? "," : ""}${BARE_KEY.test(k) ? k : quote(k)}:`)
+      work.push(fields.get(k)!, `${i > 0 ? "," : ""}${writtenKey(k)}:`)
     }
   }
   while (work.length > 0) {
@@ -60,11 +64,10 @@ function write(root: Value, out: string[]): void {
     switch (v.kind) {
       case "number":
         // The normalized literal, always decimal: every integer has a canonical form (spec §12).
-        // A number built in code that isn't normalized is (`1e+05` → `1e5`), one that isn't a literal is an error.
-        out.push(normalizedNumber(v.text))
+        out.push(v.text)
         break
       case "string":
-        out.push(quote(v.value))
+        out.push(escaped(v.value))
         break
       case "bytes":
         out.push(`x"${toHex(v.bytes)}"`)
@@ -77,7 +80,7 @@ function write(root: Value, out: string[]): void {
         record(v.fields)
         break
       case "variant": {
-        out.push(writtenTag(v.tag))
+        out.push(v.tag)
         const only = v.args.length === 1 ? v.args[0]! : undefined
         if (only?.kind === "record") record(only.fields)
         else if (v.args.length > 0) {
@@ -90,13 +93,8 @@ function write(root: Value, out: string[]): void {
 }
 
 /**
- * The canonical form of a value (spec §12). Every value has one: an integer
- * of any size is written with all its decimal digits. A value built in code
- * that no text spells is a HausEncodeError, here and in `equals`, `compare`,
- * `hash` and `hashAll` (spec §11, "Values built in code"): a number that
- * isn't a number literal (`invalid-number`), a string or key with an unpaired
- * surrogate (`cannot-encode`), a tag that isn't a tag (`invalid-tag`). A
- * number literal in another spelling is normalized (`1e+05` → `1e5`).
+ * The canonical form of a value (spec §12). Every value has one, without
+ * limits: an integer of any size is written with all its decimal digits.
  */
 export function canonical(value: Value): string {
   const out: string[] = []

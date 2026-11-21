@@ -160,13 +160,8 @@ fn pretty_output_survives_trimming_trailing_whitespace() {
         check_trimmed(&case.name, &input, &mut failures);
     }
     for (i, s) in strings_with_blanks().into_iter().enumerate() {
-        let value = Value::Record(vec![
-            ("s".into(), Value::String(s.clone())),
-            (
-                "nested".into(),
-                Value::Array(vec![Value::Variant { tag: "Note".into(), args: vec![Value::String(s.clone())] }]),
-            ),
-        ]);
+        let note = Value::variant("Note", vec![Value::String(s.clone())]).unwrap();
+        let value = Value::record([("s", Value::String(s.clone())), ("nested", Value::Array(vec![note]))]).unwrap();
         // From a value (written compact, so every string is a `"…"` string) ...
         check_trimmed(&format!("generated {i} {s:?}"), &haus::to_string(&value).unwrap(), &mut failures);
         // ... and from a block string whose source lines end in blanks.
@@ -313,26 +308,26 @@ fn format_options() {
         .iter()
         .filter_map(|c| {
             let (Some(Value::String(input)), Some(result)) = (c.get("input"), c.get("result")) else {
-                panic!("not a case: {}", haus::canonical(c).unwrap())
+                panic!("not a case: {}", haus::canonical(c))
             };
             // None: a negative number, which `usize` can't hold.
             let option = |key: &str| match c.get(key) {
                 Some(Value::Number(n)) => n.parse::<usize>().ok().map(Some),
                 None => Some(None),
-                _ => panic!("not a case: {}", haus::canonical(c).unwrap()),
+                _ => panic!("not a case: {}", haus::canonical(c)),
             };
             let (indent, width) = (option("indent"), option("width"));
             let expected = match result {
                 Value::Variant { tag, args } if tag == "Ok" => match args.as_slice() {
                     [Value::String(text)] => Some(text),
-                    _ => panic!("not a case: {}", haus::canonical(c).unwrap()),
+                    _ => panic!("not a case: {}", haus::canonical(c)),
                 },
                 Value::Variant { tag, args } if tag == "Rejected" && args.is_empty() => None,
-                _ => panic!("not a case: {}", haus::canonical(c).unwrap()),
+                _ => panic!("not a case: {}", haus::canonical(c)),
             };
             let (Some(indent), Some(width)) = (indent, width) else {
                 // Not expressible with these types: passes if it is to be rejected.
-                return expected.map(|_| format!("{}: options a usize can't hold", haus::canonical(c).unwrap()));
+                return expected.map(|_| format!("{}: options a usize can't hold", haus::canonical(c)));
             };
             let defaults = FormatOptions::default();
             let options = FormatOptions {

@@ -3,6 +3,7 @@
 ## (ShopHausTestOrders, ShopHausTestLedger); the packages' other types are
 ## their own modules' (HausTestOrders.Customer, HausTestLedger.Note).
 import haus.Decode
+import haus.Value
 import haus.Encode
 import haus.FromJson
 import haus.Int
@@ -79,4 +80,4 @@ expect {
 }
 
 # A copied type decodes on its own too.
-expect ShopHausTestLedger.decode_entry(Text("x")).is_err()
+expect ShopHausTestLedger.decode_entry(Value.text("x")).is_err()

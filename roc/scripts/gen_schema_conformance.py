@@ -78,10 +78,10 @@ VALUES_BUILT_IN_CODE = """
 # A value built far deeper than the parser takes (50,000 levels; `roc test`
 # can't drop much deeper ones of this shape): the decoder stops at the depth limit.
 expect {
-	var $v = Tag("Num", [Num("1")])
+	var $v = Value.tag("Num", [Value.num("1") ?? Value.text("")]) ?? Value.text("")
 	var $i = 0
 	while $i < 50_000 {
-		$v = Tag("Neg", [Rec([("of", $v)])])
+		$v = Value.tag("Neg", [Value.rec([("of", $v)]) ?? $v]) ?? $v
 		$i = $i + 1
 	}
 	Types.decode_expr($v).map_ok(|_| {}).map_err(|e| (e.code, e.path == "(Neg).of".repeat(256))) == Err(("nesting-too-deep", True))
@@ -191,10 +191,10 @@ typed_streams = |cases| match Value.parse_all(cases) {
 Typed : [Decoded(Try(Value, (Str, Str, Str))), NoType]
 
 typed_case : Value -> Try({}, Str)
-typed_case = |c| match c {
-	Tag(tag, [Rec(fields)]) => match (tag, field(fields, "type"), field(fields, "text")) {
-		("Ok", Ok(Text(ty)), Ok(Text(text))) => {
-			want = field(fields, "output") ?? Text("(no output)")
+typed_case = |c| match case_of(c) {
+	Ok((tag, fields)) => match (tag, text_field(fields, "type"), text_field(fields, "text")) {
+		("Ok", Ok(ty), Ok(text)) => {
+			want = field(fields, "output") ?? Value.text("(no output)")
 			match stream_typed(ty, text) {
 				Decoded(Ok(got)) if Encode.equals(got, want) == Ok(True) => Ok({})
 				Decoded(Ok(got)) => Err("wrote ${form(got)}")
@@ -202,8 +202,8 @@ typed_case = |c| match c {
 				NoType => Err("the schema has no type ${ty}")
 			}
 		}
-		("Err", Ok(Text(ty)), Ok(Text(text))) => match (field(fields, "code"), field(fields, "path")) {
-			(Ok(Text(code)), Ok(Text(path))) => match stream_typed(ty, text) {
+		("Err", Ok(ty), Ok(text)) => match (text_field(fields, "code"), text_field(fields, "path")) {
+			(Ok(code), Ok(path)) => match stream_typed(ty, text) {
 				Decoded(Err((got_code, got_place, _))) if got_code == code and got_place == path => Ok({})
 				Decoded(Err((got_code, got_place, message))) => Err("failed with ${got_code} at ${got_place}: ${message}")
 				Decoded(Ok(got)) => Err("decoded, and wrote ${form(got)}")
@@ -239,7 +239,7 @@ encoded_items = |decoded, encode| {
 	for x in items {
 		$out = $out.append(Encode.value(x, encode).map_err(|e| (e.code, "(encoding)", Encode.message(e)))?)
 	}
-	Ok(Arr($out))
+	Ok(Value.arr($out))
 }
 
 ## The decoded value, encoded again.
@@ -287,9 +287,9 @@ SchemaTest := [].{
 	check : Str, U64, (Str, Value -> Codec) -> Bool
 	check = |cases, i, codec| {
 		ok = match Value.parse_all(cases) {
-			Ok(values) => match values.get(i) {
-				Ok(Tag("Ok", [Rec(fields)])) => match (field(fields, "type"), field(fields, "input")) {
-					(Ok(Text(ty)), Ok(input)) => {
+			Ok(values) => match values.get(i).map_ok(case_of) {
+				Ok(Ok(("Ok", fields))) => match (text_field(fields, "type"), field(fields, "input")) {
+					(Ok(ty), Ok(input)) => {
 						want = field(fields, "output") ?? input
 						match codec(ty, input) {
 							# The writer takes it too (it checks what it writes).
@@ -301,8 +301,8 @@ SchemaTest := [].{
 					}
 					_ => Err("a case without a type or an input")
 				}
-				Ok(Tag("Err", [Rec(fields)])) => match (field(fields, "type"), field(fields, "input"), field(fields, "code"), field(fields, "path")) {
-					(Ok(Text(ty)), Ok(input), Ok(Text(code)), Ok(Text(path))) => match codec(ty, input) {
+				Ok(Ok(("Err", fields))) => match (text_field(fields, "type"), field(fields, "input"), text_field(fields, "code"), text_field(fields, "path")) {
+					(Ok(ty), Ok(input), Ok(code), Ok(path)) => match codec(ty, input) {
 						Decoded(Err(e)) if e.code == code and ErrorCode.place(e.path) == path => Ok({})
 						Decoded(Err(e)) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}, expected ${code} at ${path}: ${Decode.message(e)}")
 						Decoded(Ok(got)) => Err("decoded, and wrote ${form(got)}")
@@ -335,6 +335,23 @@ field : List((Str, Value)), Str -> Try(Value, [Missing])
 field = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Ok((_, v)) => Ok(v)
 	Err(_) => Err(Missing)
+}
+
+## A field that is a string.
+text_field : List((Str, Value)), Str -> Try(Str, [Missing])
+text_field = |fields, key| match field(fields, key).map_ok(Value.view) {
+	Ok(Text(s)) => Ok(s)
+	_ => Err(Missing)
+}
+
+## A case, `Ok { … }` or `Err { … }`: its tag and its fields.
+case_of : Value -> Try((Str, List((Str, Value))), [NotACase])
+case_of = |c| match c.view() {
+	Tag(tag, [payload]) => match payload.view() {
+		Rec(fields) => Ok((tag, fields))
+		_ => Err(NotACase)
+	}
+	_ => Err(NotACase)
 }
 
 ## The canonical form of a value that has one: every parsed or decoded value.

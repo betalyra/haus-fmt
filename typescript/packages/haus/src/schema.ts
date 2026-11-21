@@ -26,7 +26,7 @@ import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimi
 import { readStream, type ChunkSource, type ItemReader } from "./stream.js"
 import { checkStdTime, type StdTimeType } from "./std-time.js"
 import { floatValue, specialFloat, toFloat, type FloatType } from "./float.js"
-import { arr, bytes as bytesValue, num, rec, str, variant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
+import { isValue, uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedStr, uncheckedVariant, type HNumber, type HRecord, type HVariant, type Value } from "./value.js"
 import { issuesOf, type StandardSchemaV1 } from "./standard.js"
 import { decodeCompiled, decodeItem, encodeCompiled, unknownOf } from "./codec.js"
 import { defineOwn } from "./own.js"
@@ -232,7 +232,8 @@ const OPEN = { size: 0, need: 0 }
 /**
  * Count the values in a tree, failing beyond `maxDepth` or `cap` values. A
  * parsed value is a tree within the parser's limits; a `Value` built in code
- * might be deeper, share nodes (a DAG) or even contain itself. A shared
+ * might be deeper or share nodes (a DAG), and one forged past the
+ * constructors might even contain itself. A shared
  * value counts each time it is reached, as decoding visits it, but is walked
  * once: its count and the levels it needs are remembered, so a DAG that
  * expands beyond `cap` fails at once instead of after `cap` steps.
@@ -402,7 +403,7 @@ const standard = <A>(self: () => Schema<A>): StandardSchemaV1.Props<string | Val
   validate: (input) => {
     try {
       if (typeof input === "string") return { value: parse(self(), input) }
-      if (isValueNode(input)) return { value: decode(self(), input) }
+      if (isValue(input)) return { value: decode(self(), input) }
       return { issues: [{ message: "expected haus text or a parsed haus Value" }] }
     } catch (e) {
       return issuesOf(e)
@@ -544,10 +545,17 @@ const invalid = (what: string, value: unknown, at: At, code: ErrorCode = "cannot
 const string_ = make(
   "String",
   (v, p) => (v.kind === "string" ? v.value : mismatch("String", v, p)),
-  (s, p) => (typeof s === "string" ? str(s) : invalid("a string", s, p)),
+  (s, p) => (typeof s === "string" ? uncheckedStr(writable(s, "string", p)) : invalid("a string", s, p)),
   { kind: "string" },
   { kind: "string" },
 )
+
+/**
+ * A string or key of the application's data, as haus text: one with an
+ * unpaired surrogate has no UTF-8 form (spec §4), `cannot-encode` at `at`.
+ */
+const writable = (s: string, what: "string" | "key", at: At): string =>
+  unpairedSurrogate(s) < 0 ? s : at.reject("cannot-encode", `a ${what} with an unpaired surrogate, which has no UTF-8 form`)
 
 const short = (text: string) => quoteText(text)
 /** A type's description inside another's, at most 80 characters. */
@@ -558,7 +566,7 @@ const brief = (text: string) => (text.length > 80 ? text.slice(0, 79) + "…" : 
  * the number limit of the reader written for can't be written (spec §7).
  */
 const integer = (text: string, at: At): HNumber =>
-  text.length > at.limits.maxNumberLength ? at.reject("number-too-long", `number literal longer than ${at.limits.maxNumberLength} characters`) : num(text)
+  text.length > at.limits.maxNumberLength ? at.reject("number-too-long", `number literal longer than ${at.limits.maxNumberLength} characters`) : uncheckedNum(text)
 
 /** Any integer, as a bigint (the prelude's arbitrary-size `Int`). */
 const int = make(
@@ -637,7 +645,7 @@ const numberFromText = (text: unknown, expected: string, at: At): HNumber => {
   const normalized = typeof text === "string" ? normalizeNumber(text, at.limits) : undefined
   if (normalized === undefined) return invalid(expected, text, at)
   const issue = numberLimitIssue(normalized, at.limits)
-  return issue === undefined ? num(normalized) : at.reject(issue.code, issue.reason)
+  return issue === undefined ? uncheckedNum(normalized) : at.reject(issue.code, issue.reason)
 }
 
 const bool = make(
@@ -646,7 +654,7 @@ const bool = make(
     v.kind === "variant" && v.args.length === 0 && (v.tag === "True" || v.tag === "False")
       ? v.tag === "True"
       : notCase("Bool (True | False)", v, p, BOOL_TAGS),
-  (b, p) => (typeof b === "boolean" ? variant(b ? "True" : "False") : invalid("a boolean", b, p)),
+  (b, p) => (typeof b === "boolean" ? uncheckedVariant(b ? "True" : "False") : invalid("a boolean", b, p)),
   { kind: "bool" },
   { kind: "bool" },
 )
@@ -655,7 +663,7 @@ const bool = make(
 const bytes_ = make(
   "Bytes",
   (v, p) => (v.kind === "bytes" ? v.bytes : mismatch("Bytes", v, p)),
-  (b, p) => (b instanceof Uint8Array ? bytesValue(b) : invalid("a Uint8Array", b, p)),
+  (b, p) => (b instanceof Uint8Array ? uncheckedBytes(b) : invalid("a Uint8Array", b, p)),
   { kind: "bytes" },
   { kind: "bytes" },
 )
@@ -671,8 +679,8 @@ const taggedString = <A>(tag: string, format: RegExp, convert: (s: string) => A 
     return out
   }, (a, p) => {
     const text = toText(a)
-    if (!format.test(text) || convert(text) === undefined) return invalid(`a valid ${tag}`, text, p)
-    return variant(tag, [str(text)])
+    if (typeof text !== "string" || !format.test(text) || convert(text) === undefined) return invalid(`a valid ${tag}`, text, p)
+    return uncheckedVariant(tag, [uncheckedStr(text)])
   }, { kind: "time", tag }, { kind: "tagged", tag, format, convert, toText: toText as (a: never) => string })
 
 /** `Date("2026-11-07")`, returned as the validated ISO string. */
@@ -733,7 +741,7 @@ const array_ = <A>(item: Schema<A>): Schema<readonly A[]> =>
     (xs, p) => {
       if (!Array.isArray(xs)) return invalid("an array", xs, p)
       p.open()
-      return p.enter(xs, () => arr((xs as readonly A[]).map((x, i) => item.encode(x, p.child(i)))))
+      return p.enter(xs, () => uncheckedArr((xs as readonly A[]).map((x, i) => item.encode(x, p.child(i)))))
     },
     { kind: "array", item: jsonType(item) },
     { kind: "array", item },
@@ -759,9 +767,9 @@ const map_ = <A>(value: Schema<A>): Schema<ReadonlyMap<string, A>> =>
     (m, p) => {
       if (!(m instanceof Map)) return invalid("a Map", m, p)
       p.open()
-      return p.enter(m, () => rec(new Map([...m].map(([k, x]) => {
+      return p.enter(m, () => uncheckedRec(new Map([...m].map(([k, x]) => {
         if (typeof k !== "string") return invalid("string keys", k, p)
-        return [k, value.encode(x, p.child(k))] as const
+        return [writable(k, "key", p), value.encode(x, p.child(k))] as const
       }))))
     },
     { kind: "map", value: jsonType(value) },
@@ -800,8 +808,8 @@ const maybe_ = <A>(inner: Schema<A>): Schema<Maybe<A>> =>
     },
     (a, p) => {
       if (!isMaybe(a)) return invalid(`a Maybe ({ _tag: "None" } or { _tag: "Some", value })`, a, p)
-      if (a._tag === "None") return variant("None")
-      return p.enter(a, () => variant("Some", [inner.encode((a as { readonly value: A }).value, p.child(0))]))
+      if (a._tag === "None") return uncheckedVariant("None")
+      return p.enter(a, () => uncheckedVariant("Some", [inner.encode((a as { readonly value: A }).value, p.child(0))]))
     },
     { kind: "maybe", item: jsonType(inner) },
     { kind: "maybe", inner, none },
@@ -898,7 +906,7 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
         if (schema.optional && value === undefined) continue
         out.set(key, schema.encode(value, at.child(key)))
       }
-      return rec(out)
+      return uncheckedRec(out)
     })
   }
   const json: JsonRecordType = { kind: "record", fields: new globalThis.Map(entries.map(([k, s]) => [k, jsonType(s)])), closed: options.closed ?? false }
@@ -1065,20 +1073,20 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
     }
     const c = byTag().get(obj._tag)
     if (c === undefined) return invalid(`one of ${tagList(tags)}`, obj._tag, at)
-    if (c === Unit) return variant(obj._tag)
+    if (c === Unit) return uncheckedVariant(obj._tag)
     return at.enter(obj, () => {
       const tag = obj._tag as string
       if (isRecordSchema(c)) {
-        if (nestsPayload(c)) return variant(tag, [c.encodeRecord(obj.value, at)])
+        if (nestsPayload(c)) return uncheckedVariant(tag, [c.encodeRecord(obj.value, at)])
         const { _tag, ...fields } = obj as Record<string, unknown>
-        return variant(tag, [c.encodeRecord(fields, at)])
+        return uncheckedVariant(tag, [c.encodeRecord(fields, at)])
       }
       if (isTuple(c)) {
         const values = obj.values
         if (!Array.isArray(values) || values.length !== c.items.length) return invalid(`${c.items.length} values`, values, at)
-        return variant(tag, c.items.map((s, i) => s.encode(values[i], at.child(i))))
+        return uncheckedVariant(tag, c.items.map((s, i) => s.encode(values[i], at.child(i))))
       }
-      return variant(tag, [(c as AnySchema).encode(obj.value, at.child(0))])
+      return uncheckedVariant(tag, [(c as AnySchema).encode(obj.value, at.child(0))])
     })
   }, json, { kind: "variant", open, cases: () => new Map(written.map(([tag, c]) => [tag, caseShape(c)])) })
 }
@@ -1111,75 +1119,52 @@ const jsonCase = (c: Case): JsonCase => {
   return { kind: "positional", items: [jsonType(c as AnySchema)] }
 }
 
-const VALUE_KINDS: ReadonlySet<unknown> = new Set<Value["kind"]>(["number", "string", "bytes", "array", "record", "variant"])
-
-/** Whether `u` looks like a haus `Value` at its top (its kind); `checkedValue` checks the rest. */
-const isValueNode = (u: unknown): u is Value => typeof u === "object" && u !== null && VALUE_KINDS.has((u as { readonly kind?: unknown }).kind)
-
-/** `xs` mapped with `f`, or `xs` itself when `f` changed nothing. */
-const mapSame = <T>(xs: readonly T[], f: (x: T, i: number) => T): readonly T[] => {
-  const ys = xs.map(f)
-  return ys.every((y, i) => y === xs[i]) ? xs : ys
-}
-
 /**
  * A raw `Value` handed to the encoder (an `Any`, an Unknown's payload): a
- * haus value within the call's limits (spec §9.5, §9.8), checked node by
- * node: shape, depth, work, number literals, string lengths, tags. It is
- * written back as it is, except that number literals are normalized as the
- * parser would (`1E5` → `1e5`); parts without such a change are kept as they
- * are (the same objects), so a parsed value comes back unchanged.
+ * haus value (one the constructors built or a reader read, spec §11), within
+ * the call's limits (spec §9.5, §9.8), checked node by node: depth, work,
+ * the length and exponent of numbers, the length of strings, keys and tags.
+ * It is written back as it is: a value is already normalized.
  */
 export const checkedValue = (raw: unknown, at: At): Value => {
   at.step()
-  if (!isValueNode(raw)) return invalid("a haus value", raw, at)
+  if (!isValue(raw)) return invalid("a haus value", raw, at)
   const { maxStringLength } = at.limits
   /** A string, key or tag within the string limit (spec §7). */
-  const checkedString = (s: unknown, what: string, kind: "string" | "key" | "tag" = "string"): string => {
-    if (typeof s !== "string") return invalid(what, s, at)
-    if (unpairedSurrogate(s) >= 0) return at.reject("cannot-encode", `a ${kind} with an unpaired surrogate, which has no UTF-8 form`)
-    return longerThan(s, maxStringLength) ? at.reject(kind === "key" ? "key-too-long" : kind === "tag" ? "tag-too-long" : "string-too-long", `${kind} longer than ${maxStringLength} characters`) : s
+  const within = (s: string, kind: "string" | "key" | "tag"): void => {
+    if (longerThan(s, maxStringLength)) at.reject(kind === "key" ? "key-too-long" : kind === "tag" ? "tag-too-long" : "string-too-long", `${kind} longer than ${maxStringLength} characters`)
   }
   switch (raw.kind) {
     case "number": {
-      const n = numberFromText(raw.text, "a number literal", at)
-      return n.text === raw.text ? raw : n
+      const issue = numberLimitIssue(raw.text, at.limits)
+      if (issue !== undefined) at.reject(issue.code, issue.reason)
+      break
     }
     case "string":
-      checkedString(raw.value, "a string value")
-      return raw
+      within(raw.value, "string")
+      break
     case "bytes":
-      return raw.bytes instanceof Uint8Array ? raw : invalid("a Uint8Array", raw.bytes, at)
-    case "array": {
-      if (!Array.isArray(raw.items)) return invalid("an array of items", raw.items, at)
+      break
+    case "array":
       at.open()
-      const items = mapSame(raw.items, (x, i) => checkedValue(x, at.child(i)))
-      return items === raw.items ? raw : arr(items)
-    }
-    case "record": {
-      if (!(raw.fields instanceof globalThis.Map)) return invalid("a Map of fields", raw.fields, at)
+      raw.items.forEach((x, i) => checkedValue(x, at.child(i)))
+      break
+    case "record":
       at.open()
-      const fields = new globalThis.Map<string, Value>()
-      let changed = false
       for (const [k, x] of raw.fields) {
-        const y = checkedValue(x, at.child(checkedString(k, "a string key", "key")))
-        changed ||= y !== x
-        fields.set(k, y)
+        within(k, "key")
+        checkedValue(x, at.child(k))
       }
-      return changed ? rec(fields) : raw
-    }
+      break
     case "variant": {
-      if (typeof raw.tag !== "string" || !TAG.test(raw.tag)) return invalid("a tag name", raw.tag, at, "invalid-tag")
-      checkedString(raw.tag, "a tag name", "tag")
-      if (!Array.isArray(raw.args)) return invalid("an array of arguments", raw.args, at)
+      within(raw.tag, "tag")
       if (raw.args.length > 0) at.open()
       // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
-      const [first] = raw.args
-      const single = raw.args.length === 1 && isValueNode(first) && first.kind === "record"
-      const args = mapSame(raw.args, (x, i) => checkedValue(x, single ? at.payload(i) : at.child(i)))
-      return args === raw.args ? raw : variant(raw.tag, args)
+      const single = raw.args.length === 1 && raw.args[0]!.kind === "record"
+      raw.args.forEach((x, i) => checkedValue(x, single ? at.payload(i) : at.child(i)))
     }
   }
+  return raw
 }
 
 /** A closed variant: any other tag is an error. */
@@ -1197,7 +1182,7 @@ export const Enum = <const T extends readonly string[]>(...tags: T): Schema<T[nu
       v.kind === "variant" && v.args.length === 0 && known.has(v.tag)
         ? (v.tag as T[number])
         : notCase(`one of ${tagList(tags)}`, v, at, known),
-    (t, at) => (typeof t === "string" && known.has(t) ? variant(t) : invalid(`one of ${tagList(tags)}`, t, at)),
+    (t, at) => (typeof t === "string" && known.has(t) ? uncheckedVariant(t) : invalid(`one of ${tagList(tags)}`, t, at)),
     { kind: "variant", open: false, cases: new Map(tags.map((t) => [t, { kind: "unit" }])) },
     { kind: "enum", tags: known },
   )
@@ -1212,7 +1197,7 @@ export const AnyTag: Schema<string | Unknown> = make(
   "< >",
   (v, at) => (v.kind !== "variant" ? mismatch("a variant", v, at) : v.args.length === 0 ? v.tag : unknownOf(v)),
   (a, at) =>
-    typeof a === "string" ? (TAG.test(a) ? variant(a) : invalid("a tag name", a, at))
+    typeof a === "string" ? (TAG.test(a) ? uncheckedVariant(a) : invalid("a tag name", a, at))
     : isUnknown(a) ? checkedValue(a.value, at)
     : invalid("a tag name or an Unknown", a, at),
   { kind: "variant", open: true, cases: new Map() },
@@ -1519,7 +1504,7 @@ const lineCompiled = (schema: AnySchema, value: unknown, options: FormatOptions 
 
 /** Encode and write as haus text in the standard format (no trailing newline). */
 export const stringify = <A>(schema: Schema<A>, value: A, options: FormatOptions & Options = {}): string =>
-  lineCompiled(schema, value, options, options.style) ?? stringifyValue(encode(schema, value, options), options)
+  lineCompiled(schema, value, options, options.style) ?? stringifyValue(encode(schema, value, options), { ...options, limits: options })
 
 /** Encode several values as a stream file: a comma after every value. */
 export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: FormatOptions & Options = {}): string => {
@@ -1527,7 +1512,7 @@ export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: Fo
   const all = [...values]
   const lines = all.map((v) => lineCompiled(schema, v, options, options.style))
   if (lines.every((l) => l !== undefined)) return lines.length === 0 ? "" : lines.length === 1 ? `${lines[0]}\n` : lines.map((l) => `${l},\n`).join("")
-  return format(all.map((v, i) => schema.encode(v, encodeAt(options, i))), options)
+  return format(all.map((v, i) => schema.encode(v, encodeAt(options, i))), { ...options, limits: options })
 }
 
 /**
@@ -1543,7 +1528,7 @@ export async function* encodeStream<A>(
   // Streams default to compact: one item per line.
   const layout: FormatOptions & Options = { style: "compact", ...options }
   for await (const v of values) {
-    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyValue(schema.encode(v, encodeAt(options, i)), layout)) + ",\n"
+    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyValue(schema.encode(v, encodeAt(options, i)), { ...layout, limits: options })) + ",\n"
     i++
   }
 }

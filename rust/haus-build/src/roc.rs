@@ -1681,7 +1681,7 @@ impl Gen<'_> {
         Ok((
             format!("[{}]", tags.join(", ")),
             Bodies {
-                de: format!("match v {{\n{}\t}}", arms(&de, "\t\t")),
+                de: format!("match v.view() {{\n{}\t}}", arms(&de, "\t\t")),
                 en: format!("match v {{\n{}\t}}", arms(&en, "\t\t")),
                 from_json,
                 to_json: format!("match v {{\n{}\t}}", arms(&to, "\t\t")),

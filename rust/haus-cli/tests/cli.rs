@@ -566,7 +566,7 @@ fn examples_with_packages() -> tempfile::TempDir {
 fn the_repository_has_no_errors() {
     let no_errors = |json: &Json| {
         let summary = json.get("summary").unwrap();
-        assert_eq!(summary.get("errors"), Some(&Json::Number("0".into())), "{}", pretty(json));
+        assert_eq!(summary.get("errors"), Some(&Json::Number(0.into())), "{}", pretty(json));
     };
     let (code, json) = check_json(&repo(), &["test-suite/valid", "extensions"]);
     no_errors(&json);
@@ -756,7 +756,7 @@ fn canonical_and_hash_each_print_each_value_as_it_comes() {
     assert_eq!(live.line(), "B(2.50)");
     assert_eq!(live.close(), (vec![], 0));
 
-    let hash = |text: &str| haus::hash(&haus::parse(text).unwrap()[0]).unwrap();
+    let hash = |text: &str| haus::hash(&haus::parse(text).unwrap()[0]);
     let mut live = Live::start(&fixtures(), &["hash", "--each", "-"]);
     live.send("A { x: 1 },\n");
     assert_eq!(live.line(), hash("A { x: 1 }"));

@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest"
 import { BigDecimal, Cause, DateTime, Effect, Exit, Option, Redacted, Schema, Stream } from "effect"
-import { arr, type Value } from "@haus-fmt/haus"
+import { arr, parse, type Value } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import * as Haus from "../src/index.js"
 
@@ -59,9 +59,20 @@ const schemaError = (e: unknown): Haus.HausSchemaError => {
 }
 
 describe("values built in code", () => {
-  it("a cyclic Value fails instead of looping", () => {
-    const cyclic = arr([]) as { kind: "array"; items: Value[] }
-    cyclic.items.push(cyclic)
+  it("what the core's constructors reject is a HausSchemaError with its code, not a defect (spec §11)", () => {
+    const lower = Effect.runSync(Effect.flip(Haus.encodeValue(Schema.TaggedStruct("lower", {}))({ _tag: "lower" })))
+    expect(lower).toMatchObject({ _tag: "HausSchemaError", code: "invalid-tag" })
+    const lone = Effect.runSync(Effect.flip(Haus.encode(Schema.Struct({ s: Schema.String }))({ s: "x\uD800" })))
+    expect(lone).toMatchObject({ _tag: "HausSchemaError", code: "cannot-encode" })
+    const key = Effect.runSync(Effect.flip(Haus.encode(Schema.Record(Schema.String, Schema.Finite))({ "k\uDC00": 1 })))
+    expect(key).toMatchObject({ _tag: "HausSchemaError", code: "cannot-encode" })
+  })
+
+  it("a forged cyclic Value fails instead of looping", () => {
+    // The constructors can't build one (they copy and freeze): a parsed array changed with a cast.
+    const forged = parse("[]") as unknown as { items: unknown[] }
+    forged.items.push(forged)
+    const cyclic = forged as unknown as Value
     const exit = Effect.runSyncExit(Haus.decodeValue(Schema.Array(Schema.Unknown))(cyclic))
     expect(Exit.isFailure(exit)).toBe(true)
     if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("nested deeper than 256")

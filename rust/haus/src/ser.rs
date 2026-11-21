@@ -2,10 +2,9 @@
 //! (spec §11: one value per line, normal spacing), which checks what it writes.
 
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::keys::first_repeated;
-use crate::scan::{Special, is_ident, next_special, plain_decimal};
-use crate::{Codec, EncodeError, ErrorCode as Code, Limits, Secret, Segment, Value};
-use std::borrow::Cow;
+use crate::scan::{Special, is_ident, next_special};
+use crate::value::is_normalized;
+use crate::{Codec, EncodeError, ErrorCode as Code, Limits, Number, Record, Secret, Segment, Tag, Value};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -176,18 +175,25 @@ impl Encoder {
         }
     }
 
-    /// A number literal, if the writer takes it.
-    pub fn number(self, text: &str) -> R {
+    /// A number literal, normalized (`1E+05` is `1e5`), if it is one
+    /// (`invalid-number`) and the writer takes it.
+    pub fn number(self, literal: &str) -> R {
         self.step()?;
-        Ok(Value::Number(normalized(text, &self.limits)?.into_owned()))
+        Ok(Value::Number(number(literal, &self.limits)?))
+    }
+
+    /// A number, if the writer takes it.
+    pub(crate) fn number_value(self, n: Number) -> R {
+        self.step()?;
+        check_number(&n, &self.limits)?;
+        Ok(Value::Number(n))
     }
 
     /// A tag without a payload: `None`, `Circle`, if it is a tag name within
     /// the string limit.
     pub fn tag(self, tag: &str) -> R {
         self.step()?;
-        check_tag(tag, &self.limits)?;
-        Ok(variant(tag, vec![]))
+        Ok(tag_name(tag, &self.limits)?.into())
     }
 
     /// A string, if it is within the string limit.
@@ -241,25 +247,20 @@ pub(crate) fn supported(limits: &Limits) -> Result<(), EncodeError> {
     limits.unsupported().map_or(Ok(()), |reason| Err(EncodeError::new(Code::UnsupportedDepth, reason)))
 }
 
-/// A variant value. Doesn't check `tag`.
-pub fn variant(tag: &str, args: Vec<Value>) -> Value {
-    Value::Variant { tag: tag.to_owned(), args }
-}
-
 /// A case with `N` positional values: `Empty`, `Wrap(3)`, `Point(1, 2)`.
 /// The values are encoded inside the payload, which is a level of its own.
 pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder) -> [R; N]) -> R {
     if N == 0 {
         return e.tag(tag);
     }
-    check_tag(tag, &e.limits)?;
+    let tag = tag_name(tag, &e.limits)?;
     let inner = if N == 1 { e.payload()? } else { e.nested()? };
     let args = values(inner)
         .into_iter()
         .enumerate()
-        .map(|(i, v)| v.map_err(|e| e.within(Segment::Index(i)).within(Segment::Tag(tag.to_owned()))))
+        .map(|(i, v)| v.map_err(|e| e.within(Segment::Index(i)).within(Segment::Tag(tag.to_string()))))
         .collect::<Result<_, _>>()?;
-    Ok(variant(tag, args))
+    Ok(Value::Variant { tag, args })
 }
 
 /// A case with a record payload: `Circle { r: 1.5 }`. The record is the
@@ -269,22 +270,23 @@ pub fn tagged_record<'k, const N: usize>(
     e: Encoder,
     fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N],
 ) -> R {
-    check_tag(tag, &e.limits)?;
-    let payload = record(e, fields).map_err(|e| e.within(Segment::Tag(tag.to_owned())))?;
-    Ok(variant(tag, vec![payload]))
+    let tag = tag_name(tag, &e.limits)?;
+    let payload = record(e, fields).map_err(|e| e.within(Segment::Tag(tag.to_string())))?;
+    Ok(Value::Variant { tag, args: vec![payload] })
 }
 
-/// A record from fields in order, leaving out missing optional ones.
+/// A record from fields in order, leaving out missing optional ones. Fails
+/// for a key given twice (`duplicate-key`).
 pub fn record<'k, const N: usize>(e: Encoder, fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N]) -> R {
     let inner = e.record_level()?;
-    fields(inner)
+    let fields: Vec<(&str, Value)> = fields(inner)
         .into_iter()
         .filter_map(|(k, v)| {
-            let field = v?.and_then(|v| check_key(k, &inner.limits).map(|()| (k.to_owned(), v)));
+            let field = v?.and_then(|v| check_key(k, &inner.limits).map(|()| (k, v)));
             Some(field.map_err(|e| e.within(Segment::Field(k.to_owned()))))
         })
-        .collect::<Result<_, _>>()
-        .map(Value::Record)
+        .collect::<Result<_, _>>()?;
+    Ok(Record::from_fields(fields)?.into())
 }
 
 pub fn array<T>(items: &[T], e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
@@ -306,7 +308,7 @@ pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R)
             Ok((k.clone(), f(v, inner).map_err(within)?))
         })
         .collect::<Result<_, _>>()
-        .map(Value::Record)
+        .map(|fields| Value::Record(Record::from_unique(fields)))
 }
 
 pub fn maybe<T>(m: &Option<T>, e: Encoder, f: impl FnOnce(&T, Encoder) -> R) -> R {
@@ -421,7 +423,7 @@ macro_rules! integers {
     ($($t:ty),*) => {$(
         impl Encode for $t {
             fn encode_with(&self, e: Encoder) -> R {
-                e.number(&self.to_string())
+                e.number_value(Number::from(*self))
             }
         }
     )*};
@@ -445,18 +447,18 @@ macro_rules! floats {
 floats!(f32, f64);
 impl Encode for Int {
     fn encode_with(&self, e: Encoder) -> R {
-        e.number(self.as_str())
+        e.number_value(self.0.clone())
     }
 }
 impl Encode for Decimal {
     fn encode_with(&self, e: Encoder) -> R {
-        e.number(self.as_str())
+        e.number_value(self.0.clone())
     }
 }
-/// An unknown variant: its tag and payload, checked as the writer checks them.
+/// An unknown variant: its tag and payload, checked against the writer's limits.
 impl Encode for Unknown {
     fn encode_with(&self, e: Encoder) -> R {
-        let v = variant(&self.tag, self.args.clone());
+        let v = Value::Variant { tag: self.tag.clone(), args: self.args.clone() };
         e.check(&v)?;
         Ok(v)
     }
@@ -464,7 +466,7 @@ impl Encode for Unknown {
 impl Encode for AnyTag {
     fn encode_with(&self, e: Encoder) -> R {
         match self {
-            AnyTag::Bare(tag) => e.value(&variant(tag, vec![])),
+            AnyTag::Bare(tag) => e.value(&tag.clone().into()),
             AnyTag::Other(u) => u.encode_with(e),
         }
     }
@@ -477,11 +479,10 @@ pub fn write(v: &Value) -> Result<String, EncodeError> {
     write_with(v, &Limits::default())
 }
 
-/// One value on one line, for a reader with `limits`. The value is checked as
-/// it is written (spec §9.8), since one built in code may hold anything: number
-/// literals (normalized as the parser reads them: `1E5` is written `1e5`), tag
-/// names, unique keys, and the nesting depth and lengths of `limits`.
-/// Integers are written in decimal: one longer than
+/// One value on one line, for a reader with `limits`. The value is checked
+/// against `limits` as it is written (spec §7, §9.8), since one built in code
+/// may be beyond them: the nesting depth, and the lengths of numbers, strings,
+/// keys and tags. Integers are written in decimal: one longer than
 /// `limits.max_number_length` is an error (`number-too-long`).
 pub fn write_with(v: &Value, limits: &Limits) -> Result<String, EncodeError> {
     write_line(v, limits, true)
@@ -574,18 +575,18 @@ impl<O: Sink> Writer<'_, O> {
         self.values += 1;
         match v {
             Value::Array(items) => self.list('[', items, depth, ']'),
-            Value::Record(fields) => self.record(fields, depth),
+            Value::Record(r) => self.record(r.as_slice(), depth),
             Value::Variant { tag, args } => {
                 self.tag(tag)?;
                 match args.as_slice() {
                     [] => Ok(()),
-                    [Value::Record(fields)] => {
+                    [Value::Record(r)] => {
                         if self.spaced {
                             self.out.push(' ');
                         }
-                        self.record(fields, depth).map_err(|e| e.within(Segment::Tag(tag.clone())))
+                        self.record(r.as_slice(), depth).map_err(|e| e.within(Segment::Tag(tag.to_string())))
                     }
-                    _ => self.list('(', args, depth, ')').map_err(|e| e.within(Segment::Tag(tag.clone()))),
+                    _ => self.list('(', args, depth, ')').map_err(|e| e.within(Segment::Tag(tag.to_string()))),
                 }
             }
             scalar => self.scalar(scalar),
@@ -594,7 +595,10 @@ impl<O: Sink> Writer<'_, O> {
 
     fn scalar(&mut self, v: &Value) -> W {
         match v {
-            Value::Number(n) => self.out.push_str(&normalized(n, self.limits)?),
+            Value::Number(n) => {
+                check_number(n, self.limits)?;
+                self.out.push_str(n.as_str());
+            }
             Value::String(s) => {
                 check_length(s, self.limits)?;
                 self.out.quote(s);
@@ -610,9 +614,9 @@ impl<O: Sink> Writer<'_, O> {
         Ok(())
     }
 
-    /// A tag name within the string limit.
+    /// A tag within the string limit.
     fn tag(&mut self, tag: &str) -> W {
-        check_tag(tag, self.limits)?;
+        check_text(tag, Code::TagTooLong, self.limits)?;
         self.out.push_str(tag);
         Ok(())
     }
@@ -637,7 +641,6 @@ impl<O: Sink> Writer<'_, O> {
             self.out.push_str("{}");
             return Ok(());
         }
-        unique_keys(fields)?;
         self.out.push_str(self.gap("{ ", "{"));
         for (i, (k, v)) in fields.iter().enumerate() {
             self.key(i, k)?;
@@ -672,17 +675,8 @@ impl<O: Sink> Writer<'_, O> {
 pub(crate) fn size(v: &Value) -> u64 {
     match v {
         Value::Array(items) | Value::Variant { args: items, .. } => 1 + items.iter().map(size).sum::<u64>(),
-        Value::Record(fields) => 1 + fields.iter().map(|(_, x)| size(x)).sum::<u64>(),
+        Value::Record(r) => 1 + r.values().map(size).sum::<u64>(),
         _ => 1,
-    }
-}
-
-/// Keys are unique (spec §1): a record built in code might repeat one.
-pub(crate) fn unique_keys(fields: &[(String, Value)]) -> W {
-    match first_repeated(fields) {
-        Some(i) => Err(EncodeError::new(Code::DuplicateKey, "the key is used twice in this record")
-            .within(Segment::Field(fields[i].0.clone()))),
-        None => Ok(()),
     }
 }
 
@@ -691,11 +685,21 @@ pub(crate) fn check_key(k: &str, limits: &Limits) -> W {
     check_text(k, Code::KeyTooLong, limits)
 }
 
-/// Whether a tag is a tag name, within the string limit (spec §4, §7).
+/// The tag `name`, if it is a tag name (spec §4) within the string limit (§7).
+pub(crate) fn tag_name(name: &str, limits: &Limits) -> Result<Tag, EncodeError> {
+    let tag = Tag::new(name)?;
+    check_text(name, Code::TagTooLong, limits)?;
+    Ok(tag)
+}
+
+/// Whether `tag` is a tag name (spec §4) within the string limit (§7): for
+/// the JSON forms, which write it as a string.
 pub(crate) fn check_tag(tag: &str, limits: &Limits) -> W {
-    if !is_tag(tag) {
-        return Err(EncodeError::new(Code::InvalidTag, "not a tag name: A to Z, then letters, digits and _"));
-    }
+    tag_name(tag, limits).map(drop)
+}
+
+/// Whether a tag is within the string limit (§7).
+pub(crate) fn check_tag_length(tag: &Tag, limits: &Limits) -> W {
     check_text(tag, Code::TagTooLong, limits)
 }
 
@@ -728,11 +732,6 @@ pub(crate) fn check_bytes(b: &[u8], limits: &Limits) -> W {
     Ok(())
 }
 
-/// A tag name: `[A-Z][A-Za-z0-9_]*`.
-pub(crate) fn is_tag(tag: &str) -> bool {
-    tag.as_bytes().first().is_some_and(u8::is_ascii_uppercase) && tag.bytes().all(is_ident)
-}
-
 /// A key: bare if it is an identifier (`[a-z_][A-Za-z0-9_]*`), quoted otherwise.
 pub(crate) fn key(k: &str, out: &mut String) {
     if is_bare_key(k) { out.push_str(k) } else { quote(k, out) }
@@ -743,35 +742,29 @@ fn is_bare_key(k: &str) -> bool {
     k.as_bytes().first().is_some_and(|&c| c.is_ascii_lowercase() || c == b'_') && k.bytes().all(is_ident)
 }
 
-/// A number's normalized literal (spec §2), always in decimal, if it can be
-/// written for a reader with `limits`: `1E5` is `1e5`; `abc` is an error
-/// (`invalid-number`), and so is one longer than the number limit
-/// (`number-too-long`) or with a larger exponent (`exponent-too-large`).
-pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, EncodeError> {
-    let too_long = || {
-        let reason = format!("number literal longer than {} characters", limits.max_number_length);
-        EncodeError::new(Code::NumberTooLong, reason)
-    };
-    // The common case: a decimal without exponent, already normalized.
-    if plain_decimal(text.as_bytes()) == Some(text.len()) && text.len() <= limits.max_number_length {
-        return Ok(text.into());
+/// The number of a literal (`1E5` is `1e5`), if it is one (`invalid-number`)
+/// that can be written for a reader with `limits` (see [`check_number`]).
+/// Text longer than the number limit fails before it is converted, as the
+/// parser rejects it (a long hex literal takes long to convert).
+pub(crate) fn number(literal: &str, limits: &Limits) -> Result<Number, EncodeError> {
+    if literal.len() > limits.max_number_length && !is_normalized(literal) {
+        return Err(number_too_long(limits));
     }
-    let n: Cow<str> = if is_normalized(text) {
-        text.into()
-    } else if text.len() > limits.max_number_length {
-        return Err(too_long());
-    } else {
-        // The exponent is checked below, on the normalized literal.
-        let syntax = Limits { max_exponent: u64::MAX, ..*limits };
-        crate::parser::number_literal(text, &syntax)
-            .ok_or_else(|| EncodeError::new(Code::InvalidNumber, "not a number literal"))?
-            .into()
-    };
-    // The length first, as a parser meets it (spec §7).
-    if n.len() > limits.max_number_length {
-        return Err(too_long());
+    let n = Number::new(literal)?;
+    check_number(&n, limits)?;
+    Ok(n)
+}
+
+/// Whether a number can be written for a reader with `limits` (spec §7): one
+/// longer than the number limit is an error (`number-too-long`), and so is
+/// one with a larger exponent (`exponent-too-large`). The length first, as a
+/// parser meets it.
+pub(crate) fn check_number(n: &Number, limits: &Limits) -> W {
+    let text = n.as_str();
+    if text.len() > limits.max_number_length {
+        return Err(number_too_long(limits));
     }
-    if let Some((_, exp)) = n.split_once('e') {
+    if let Some((_, exp)) = text.split_once('e') {
         let digits = exp.trim_start_matches('-');
         if digits.len() > 19 || digits.parse::<u64>().map_or(true, |e| e > limits.max_exponent) {
             return Err(EncodeError::new(
@@ -780,35 +773,12 @@ pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, s
             ));
         }
     }
-    Ok(n)
+    Ok(())
 }
 
-/// A number's normalized literal (spec §2), always in decimal, without
-/// limits: for the canonical form (spec §12), which every haus number has.
-/// `1E+05` is `1e5`, `0xFF` is `255`; text that isn't a number literal is an
-/// error (`invalid-number`), as when writing.
-pub(crate) fn literal(text: &str) -> Result<Cow<'_, str>, EncodeError> {
-    if plain_decimal(text.as_bytes()) == Some(text.len()) || is_normalized(text) {
-        return Ok(text.into());
-    }
-    let any = Limits { max_number_length: usize::MAX, max_exponent: u64::MAX, ..Limits::default() };
-    crate::parser::number_literal(text, &any)
-        .map(Cow::Owned)
-        .ok_or_else(|| EncodeError::new(Code::InvalidNumber, "not a number literal"))
-}
-
-/// Whether `text` is a normalized literal (spec §2), as the parser gives it:
-/// `-?(0|[1-9][0-9]*)(.[0-9]+)?(e(0|-?[1-9][0-9]*))?`.
-pub(crate) fn is_normalized(text: &str) -> bool {
-    fn whole(s: &str) -> bool {
-        s == "0" || (s.starts_with(|c: char| ('1'..='9').contains(&c)) && s.bytes().all(|c| c.is_ascii_digit()))
-    }
-    let (mantissa, exp) = text.split_once('e').map_or((text, None), |(m, e)| (m, Some(e)));
-    let mantissa = mantissa.strip_prefix('-').unwrap_or(mantissa);
-    let (int, frac) = mantissa.split_once('.').map_or((mantissa, None), |(i, f)| (i, Some(f)));
-    whole(int)
-        && frac.is_none_or(|f| !f.is_empty() && f.bytes().all(|c| c.is_ascii_digit()))
-        && exp.is_none_or(|e| whole(e) || e.strip_prefix('-').is_some_and(|d| d != "0" && whole(d)))
+fn number_too_long(limits: &Limits) -> EncodeError {
+    let reason = format!("number literal longer than {} characters", limits.max_number_length);
+    EncodeError::new(Code::NumberTooLong, reason)
 }
 
 /// A `"…"` string with the minimal escapes: `\"`, `\\`, `\n`, `\r`, `\t`,

@@ -486,6 +486,13 @@ class ApiTest {
     }
     assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.write(Value.string("\uD800"))));
     assertEquals(ErrorCode.NUMBER_TOO_LONG, code(() -> Haus.write(Value.number(BigInteger.TEN.pow(1000)))));
+    // Every number, a decimal or an exponent too: what a parser with the same limits reads back.
+    for (Layout l : Layout.values()) {
+      FormatOptions small = FormatOptions.of(l).withLimits(Limits.DEFAULT.withMaxNumberLength(10).withMaxExponent(99));
+      assertEquals(ErrorCode.NUMBER_TOO_LONG, code(() -> Haus.write(Value.number("1.0000000000"), small)));
+      assertEquals(ErrorCode.EXPONENT_TOO_LARGE, code(() -> Haus.write(Value.number("1e100"), small)));
+      assertEquals(ErrorCode.EXPONENT_TOO_LARGE, code(() -> Haus.write(Value.number("-1.5e-100"), small)));
+    }
     assertEquals(ErrorCode.NESTING_TOO_DEEP,
         code(() -> Haus.write(Value.array(Value.array()), FormatOptions.PRETTY.withLimits(Limits.DEFAULT.withMaxDepth(1)))));
     Haus.write(Value.variant("Some", Value.record()), FormatOptions.PRETTY.withLimits(Limits.DEFAULT.withMaxDepth(1)));

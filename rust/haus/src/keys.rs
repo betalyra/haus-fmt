@@ -1,5 +1,6 @@
 //! Repeated record keys (spec §1), found in linear time whatever the keys
-//! (spec §9.8), for the parser and the writers.
+//! (spec §9.8), for the parser and for records built in code
+//! ([`crate::Record`]).
 //!
 //! A few keys are compared with each other, and only when a key may repeat
 //! one: when another key before it has the same length, first and last byte
@@ -16,7 +17,7 @@ use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 
 /// Records with at most this many keys compare a key with the ones before it.
-const FEW: usize = 32;
+pub(crate) const FEW: usize = 32;
 /// The longest chain walked by the cheap hash before switching to the seeded one.
 const MAX_CHAIN: usize = 8;
 const END: u32 = u32::MAX;
@@ -35,6 +36,14 @@ pub(crate) struct Keys {
 }
 
 impl Keys {
+    /// The keys of `fields`, which are unique, chained: for a record built
+    /// in code that grows one key at a time ([`crate::Record::insert`]).
+    pub(crate) fn of(fields: &[(String, Value)]) -> Keys {
+        let mut keys = Keys::default();
+        keys.rebuild(fields, 4 * fields.len());
+        keys
+    }
+
     /// Adds `key`, the key of the field after `before` (whose keys were
     /// added before it), if none of them is the same: whether it is new.
     pub(crate) fn insert(&mut self, before: &[(String, Value)], key: &str) -> bool {
@@ -134,7 +143,7 @@ mod tests {
     }
 
     /// The first key that repeats an earlier one, added one at a time, as
-    /// the parser adds them; the same as all at once, as the writers check.
+    /// the parser adds them; the same as all at once, as `Record::from_fields` checks.
     fn first_repeat(keys: &[String]) -> Option<usize> {
         let fields = fields(keys);
         let mut seen = Keys::default();

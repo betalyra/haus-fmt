@@ -1,5 +1,5 @@
 /** `Secret a`, `Any` and attributes through the Effect adapter (spec §14, §15). */
-import { canonical, equals, parse, parseSchemaFile, type Value } from "@haus-fmt/haus"
+import { canonical, equals, num, parse, parseSchemaFile, type Value } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit, Redacted, Schema } from "effect"
 import { inspect } from "node:util"
@@ -91,10 +91,13 @@ describe("Any", () => {
   })
 
   it("checks a value before writing it", () => {
-    const e = failure(Haus.encodeValue(Haus.Any)({ kind: "number", text: "1; 2" } as Value))
-    expect(e.message).toContain("expected a number literal")
-    // Number literals built in code are normalized as the parser would.
-    expect(Effect.runSync(Haus.encodeValue(Haus.Any)({ kind: "number", text: "1E5" }))).toEqual({ kind: "number", text: "1e5" })
+    const e = failure(Haus.encodeValue(Haus.Any)({ kind: "number", text: "1" } as unknown as Value))
+    expect(e.message).toContain("expected a haus value")
+    expect(failure(Haus.encodeValue(Haus.Any)(num("1e9999"))).code).toBe("exponent-too-large")
+    // Number literals built in code are normalized when they are built, as the parser would.
+    const built = num("1E5")
+    expect(Effect.runSync(Haus.encodeValue(Haus.Any)(built))).toBe(built)
+    expect(built.text).toBe("1e5")
     // An 829-digit hex literal, the longest there is, is written again (in decimal).
     const big = parse("0x" + "f".repeat(829))
     expect(Effect.runSync(Haus.encodeValue(Haus.Any)(big))).toBe(big)
@@ -105,7 +108,7 @@ describe("Any", () => {
     const decoded = Effect.runSync(Haus.decode(Event)("Other(1E5, [2])"))
     expect(Effect.runSync(Haus.encode(Event)(decoded, { style: "compact" }))).toBe("Other(1e5, [2])")
     const forged = { _tag: "@unknown", tag: "Other", value: { kind: "variant", tag: "lower", args: [] } } as const
-    expect(failure(Haus.encode(Event)(forged as never)).message).toContain("expected a tag name")
+    expect(failure(Haus.encode(Event)(forged as never)).message).toContain("expected a haus value")
   })
 })
 

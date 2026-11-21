@@ -36,7 +36,7 @@ Types := [].{
 	List_(a) := [Nil, Cons(a, List_(a)), Unknown(Str, List(Value))]
 
 	decode_list : Value, (Value -> Try(a, Decode.Error)) -> Try(List_(a), Decode.Error)
-	decode_list = |v, decode_a| match v {
+	decode_list = |v, decode_a| match v.view() {
 		Tag("Nil", []) => Ok(Nil)
 		Tag("Cons", [a0, a1]) => Ok(Cons(Decode.arg("Cons", 0, a0, decode_a)?, Decode.arg("Cons", 1, a1, |x1| decode_list(x1, decode_a))?))
 		Tag("Nil", _) => Decode.arity("Nil", 0)
@@ -86,7 +86,7 @@ Types := [].{
 	decode_expr = |v| Decode.within_depth(v, read_value_expr)
 
 	read_value_expr : Value -> Try(Expr, Decode.Error)
-	read_value_expr = |v| match v {
+	read_value_expr = |v| match v.view() {
 		Tag("Num", [a0]) => Ok(Num(Decode.arg("Num", 0, a0, Decode.int)?))
 		Tag("Add", [a0, a1]) => Ok(Add(Decode.arg("Add", 0, a0, read_value_expr)?, Decode.arg("Add", 1, a1, read_value_expr)?))
 		Tag("Neg", [p]) => Decode.payload(
@@ -196,7 +196,7 @@ Types := [].{
 	decode_code = |v| Decode.within_depth(v, read_value_code)
 
 	read_value_code : Value -> Try(Code, Decode.Error)
-	read_value_code = |v| match v {
+	read_value_code = |v| match v.view() {
 		Tag("Num", [a0]) => Ok(Num(Decode.arg("Num", 0, a0, Decode.int)?))
 		Tag("Call", [p]) => Ok(Call(Decode.record_arg("Call", p, |x18| decode_apply(x18, read_value_code))?))
 		Tag("Num", _) => Decode.arity("Num", 1)
@@ -228,7 +228,7 @@ Types := [].{
 	Swap(a, b) := [S(a, Swap(b, a)), E, Unknown(Str, List(Value))]
 
 	decode_swap : Value, (Value -> Try(a, Decode.Error)), (Value -> Try(b, Decode.Error)) -> Try(Swap(a, b), Decode.Error)
-	decode_swap = |v, decode_a, decode_b| match v {
+	decode_swap = |v, decode_a, decode_b| match v.view() {
 		Tag("S", [a0, a1]) => Ok(S(Decode.arg("S", 0, a0, decode_a)?, Decode.arg("S", 1, a1, |x22| decode_swap(x22, decode_b, decode_a))?))
 		Tag("E", []) => Ok(E)
 		Tag("S", _) => Decode.arity("S", 2)
@@ -260,7 +260,7 @@ Types := [].{
 	K(a) := [X(K(Int)), Y(a), Unknown(Str, List(Value))]
 
 	decode_k : Value, (Value -> Try(a, Decode.Error)) -> Try(K(a), Decode.Error)
-	decode_k = |v, decode_a| match v {
+	decode_k = |v, decode_a| match v.view() {
 		Tag("X", [a0]) => Ok(X(Decode.arg("X", 0, a0, |x25| decode_k(x25, Decode.int))?))
 		Tag("Y", [a0]) => Ok(Y(Decode.arg("Y", 0, a0, decode_a)?))
 		Tag("X", _) => Decode.arity("X", 1)
@@ -292,7 +292,7 @@ Types := [].{
 	Up(a) := [Lift(Down(List(a))), Unknown(Str, List(Value))]
 
 	decode_up : Value, (Value -> Try(a, Decode.Error)) -> Try(Up(a), Decode.Error)
-	decode_up = |v, decode_a| match v {
+	decode_up = |v, decode_a| match v.view() {
 		Tag("Lift", [a0]) => Ok(Lift(Decode.arg("Lift", 0, a0, |x30| decode_down(x30, |x28| Decode.list(x28, decode_a)))?))
 		Tag("Lift", _) => Decode.arity("Lift", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -309,7 +309,7 @@ Types := [].{
 	Down(b) := [Val(b), Restart(Up(Int)), Unknown(Str, List(Value))]
 
 	decode_down : Value, (Value -> Try(b, Decode.Error)) -> Try(Down(b), Decode.Error)
-	decode_down = |v, decode_b| match v {
+	decode_down = |v, decode_b| match v.view() {
 		Tag("Val", [a0]) => Ok(Val(Decode.arg("Val", 0, a0, decode_b)?))
 		Tag("Restart", [a0]) => Ok(Restart(Decode.arg("Restart", 0, a0, |x33| decode_up(x33, Decode.int))?))
 		Tag("Val", _) => Decode.arity("Val", 1)

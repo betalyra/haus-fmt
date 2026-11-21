@@ -335,8 +335,8 @@ zone = |s| {
 	if s.len() == 6 and (at(s, 0) == '+' or at(s, 0) == '-') and offset_end(s, 0) == Ok(6) {
 		return offset(s, 0, 6)
 	}
-	if s == ['Z'] {
-		return invalid("Z is the offset letter, not a zone: write an IANA zone name (like Europe/Lisbon) or an offset (like +00:00)")
+	if s == ['Z'] or s == ['z'] {
+		return invalid("\"${text(s, 0, 1)}\" is the offset letter, not a zone: write an IANA zone name (like Europe/Lisbon) or an offset (like +00:00)")
 	}
 	z = text(s, 0, s.len())
 	bad = invalid("\"${ErrorCode.shown(z)}\" is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)")

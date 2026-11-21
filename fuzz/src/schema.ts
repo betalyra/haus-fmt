@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
-import { canonical, parseAll, type Value } from "../../typescript/packages/haus/dist/index.js"
+import { arr, bytes, canonical, num, parseAll, rec, str, variant, type Value } from "../../typescript/packages/haus/dist/index.js"
 import { Rng } from "./generate.ts"
 import { caseRecord, Generator, onlyNamed, type Env, type Type } from "./schema-gen.ts"
 import { codecStats } from "./codec.ts"
@@ -360,39 +360,39 @@ function* smaller(v: Value): IterableIterator<Value> {
     case "string": {
       const cs = [...v.value]
       if (cs.length > 0) {
-        yield { kind: "string", value: "" }
-        yield { kind: "string", value: cs.slice(0, cs.length >> 1).join("") }
-        yield { kind: "string", value: cs.slice(cs.length >> 1).join("") }
-        for (let i = 0; i < cs.length && i < 40; i++) yield { kind: "string", value: [...cs.slice(0, i), ...cs.slice(i + 1)].join("") }
+        yield str("")
+        yield str(cs.slice(0, cs.length >> 1).join(""))
+        yield str(cs.slice(cs.length >> 1).join(""))
+        for (let i = 0; i < cs.length && i < 40; i++) yield str([...cs.slice(0, i), ...cs.slice(i + 1)].join(""))
       }
       return
     }
     case "bytes":
       if (v.bytes.length > 0) {
-        yield { kind: "bytes", bytes: v.bytes.subarray(0, v.bytes.length >> 1) }
-        yield { kind: "bytes", bytes: v.bytes.subarray(1) }
+        yield bytes(v.bytes.subarray(0, v.bytes.length >> 1))
+        yield bytes(v.bytes.subarray(1))
       }
       return
     case "number":
-      if (v.text !== "0") yield { kind: "number", text: "0" }
-      if (v.text.length > 1) yield { kind: "number", text: "1" }
+      if (v.text !== "0") yield num("0")
+      if (v.text.length > 1) yield num("1")
       return
     case "array":
       yield* v.items
-      for (let i = 0; i < v.items.length; i++) yield { kind: "array", items: v.items.filter((_, j) => j !== i) }
-      for (let i = 0; i < v.items.length; i++) for (const x of smaller(v.items[i]!)) yield { kind: "array", items: v.items.map((y, j) => (j === i ? x : y)) }
+      for (let i = 0; i < v.items.length; i++) yield arr(v.items.filter((_, j) => j !== i))
+      for (let i = 0; i < v.items.length; i++) for (const x of smaller(v.items[i]!)) yield arr(v.items.map((y, j) => (j === i ? x : y)))
       return
     case "record": {
       const fs = [...v.fields]
       yield* v.fields.values()
-      for (const [k] of fs) yield { kind: "record", fields: new Map(fs.filter(([j]) => j !== k)) }
-      for (const [k, x] of fs) for (const y of smaller(x)) yield { kind: "record", fields: new Map(fs.map(([j, z]) => [j, j === k ? y : z])) }
+      for (const [k] of fs) yield rec(fs.filter(([j]) => j !== k))
+      for (const [k, x] of fs) for (const y of smaller(x)) yield rec(fs.map(([j, z]) => [j, j === k ? y : z] as const))
       return
     }
     case "variant":
       yield* v.args
-      for (let i = 0; i < v.args.length; i++) yield { kind: "variant", tag: v.tag, args: v.args.filter((_, j) => j !== i) }
-      for (let i = 0; i < v.args.length; i++) for (const x of smaller(v.args[i]!)) yield { kind: "variant", tag: v.tag, args: v.args.map((y, j) => (j === i ? x : y)) }
+      for (let i = 0; i < v.args.length; i++) yield variant(v.tag, v.args.filter((_, j) => j !== i))
+      for (let i = 0; i < v.args.length; i++) for (const x of smaller(v.args[i]!)) yield variant(v.tag, v.args.map((y, j) => (j === i ? x : y)))
   }
 }
 

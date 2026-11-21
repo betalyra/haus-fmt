@@ -7,7 +7,7 @@
 //! them (a DAG) or contain itself, so it needs no node limit beyond the
 //! memory it takes, only the depth limit of [`Decoder`].
 
-use crate::{Codec, DecodeError, ErrorCode as Code, Limits, Secret, Value};
+use crate::{Codec, DecodeError, ErrorCode as Code, Limits, Number, Secret, Tag, Value};
 use std::collections::{BTreeMap, HashMap};
 
 type R<T> = Result<T, DecodeError>;
@@ -198,9 +198,9 @@ impl<'a> Record<'a> {
     /// `v` as a record, at `d`; `what` names the expected type in errors.
     pub fn new(v: &'a Value, d: Decoder, what: &str) -> R<Record<'a>> {
         match v {
-            Value::Record(fields) => {
-                let index = fields.iter().map(|(k, v)| (k.as_str(), v)).collect();
-                Ok(Record { fields, index, tag: None, d: d.record_level()? })
+            Value::Record(r) => {
+                let index = r.iter().map(|(k, v)| (k.as_str(), v)).collect();
+                Ok(Record { fields: r.as_slice(), index, tag: None, d: d.record_level()? })
             }
             _ => Err(mismatch(&format!("a record ({what})"), v)),
         }
@@ -248,7 +248,7 @@ impl<'a> Record<'a> {
 /// `v` as a variant: its tag and payload.
 pub fn variant<'a>(v: &'a Value, what: &str) -> R<(&'a str, &'a [Value])> {
     match v {
-        Value::Variant { tag, args } => Ok((tag, args)),
+        Value::Variant { tag, args } => Ok((tag.as_str(), args)),
         _ => Err(mismatch(&format!("a variant ({what})"), v)),
     }
 }
@@ -366,26 +366,29 @@ pub fn unknown_tag(tag: &str, known: &[&str]) -> DecodeError {
 /// A tag an open variant doesn't list: kept as it was (spec §9: untrusted).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unknown {
-    pub tag: String,
+    pub tag: Tag,
     pub args: Vec<Value>,
 }
 
 impl Unknown {
-    pub fn new(tag: &str, args: &[Value]) -> Unknown {
-        Unknown { tag: tag.to_owned(), args: args.to_vec() }
+    pub fn new(tag: Tag, args: Vec<Value>) -> Unknown {
+        Unknown { tag, args }
     }
 }
 
 /// A tag an open variant at `d` doesn't list, kept as it was if its payload
-/// nests within the depth limit (see [`within_depth`]).
+/// nests within the depth limit (see [`within_depth`]). Fails for a `tag`
+/// that isn't a tag name (`invalid-tag`), which no variant read has.
 pub fn unknown(tag: &str, args: &[Value], d: Decoder) -> R<Unknown> {
-    args_within_depth(tag, args, d).map(|()| Unknown::new(tag, args))
+    let tag = Tag::new(tag)?;
+    args_within_depth(&tag, args, d)?;
+    Ok(Unknown::new(tag, args.to_vec()))
 }
 
 /// `< >`: a variant with any tag. A bare tag is its name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnyTag {
-    Bare(String),
+    Bare(Tag),
     Other(Unknown),
 }
 
@@ -401,8 +404,14 @@ impl std::fmt::Display for AnyTag {
 
 impl Decode for AnyTag {
     fn decode_with(v: &Value, d: Decoder) -> R<Self> {
-        let (tag, args) = variant(v, "a tag")?;
-        Ok(if args.is_empty() { AnyTag::Bare(tag.to_owned()) } else { AnyTag::Other(unknown(tag, args, d)?) })
+        match v {
+            Value::Variant { tag, args } if args.is_empty() => Ok(AnyTag::Bare(tag.clone())),
+            Value::Variant { tag, args } => {
+                args_within_depth(tag, args, d)?;
+                Ok(AnyTag::Other(Unknown::new(tag.clone(), args.clone())))
+            }
+            _ => Err(mismatch("a variant (a tag)", v)),
+        }
     }
 }
 
@@ -613,7 +622,7 @@ floats!(f32 => "Float32", f64 => "Float64");
 /// `num_bigint::BigInt` with the `bigint` feature. For a native integer that
 /// must fit, the schema says `Int64` (decoded as `i64`, out of range is an error).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Int(pub(crate) String);
+pub struct Int(pub(crate) Number);
 
 impl Int {
     pub fn as_str(&self) -> &str {
@@ -632,7 +641,7 @@ impl Int {
 #[cfg(feature = "bigint")]
 impl From<num_bigint::BigInt> for Int {
     fn from(n: num_bigint::BigInt) -> Self {
-        Int(n.to_string())
+        Int(Number::from_normalized(n.to_string()))
     }
 }
 
@@ -653,13 +662,13 @@ impl From<Int> for num_bigint::BigInt {
 
 impl From<i64> for Int {
     fn from(n: i64) -> Self {
-        Int(n.to_string())
+        Int(n.into())
     }
 }
 
 impl From<i128> for Int {
     fn from(n: i128) -> Self {
-        Int(n.to_string())
+        Int(n.into())
     }
 }
 
@@ -667,7 +676,7 @@ impl Decode for Int {
     fn decode_with(v: &Value, _: Decoder) -> R<Self> {
         match v {
             Value::Number(text) => match whole(text) {
-                Some(n) => Ok(Int(n.to_owned())),
+                Some(n) => Ok(Int(Number::from_normalized(n.to_owned()))),
                 None => Err(not_whole("Int", text)),
             },
             _ => Err(mismatch("a number (Int)", v)),
@@ -677,7 +686,7 @@ impl Decode for Int {
 
 /// `Decimal`: an exact decimal as written, scale kept (`19.90` is not `19.9`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Decimal(pub(crate) String);
+pub struct Decimal(pub(crate) Number);
 
 impl Decimal {
     /// The literal: `19.90`, `-1e10`.
@@ -719,14 +728,25 @@ impl Decimal {
         let digits = format!("{:0>width$}", n.unsigned_abs(), width = scale as usize + 1);
         let (int, frac) = digits.split_at(digits.len() - scale as usize);
         let sign = if n < 0 { "-" } else { "" };
-        Decimal(if frac.is_empty() { format!("{sign}{int}") } else { format!("{sign}{int}.{frac}") })
+        let text = if frac.is_empty() { format!("{sign}{int}") } else { format!("{sign}{int}.{frac}") };
+        Decimal(Number::from_normalized(text))
     }
-    /// A decimal from a literal; None if `text` isn't a decimal number.
+
+    /// A decimal from a number literal, normalized (`1E+05` is `1e5`); None
+    /// if `text` isn't one (see [`Number::new`]).
     pub fn parse(text: &str) -> Option<Decimal> {
-        match crate::parse(text).ok()?.as_slice() {
-            [Value::Number(n)] => Some(Decimal(n.clone())),
-            _ => None,
-        }
+        Number::new(text).ok().map(Decimal)
+    }
+
+    /// The number.
+    pub fn as_number(&self) -> &Number {
+        &self.0
+    }
+}
+
+impl From<Number> for Decimal {
+    fn from(n: Number) -> Decimal {
+        Decimal(n)
     }
 }
 

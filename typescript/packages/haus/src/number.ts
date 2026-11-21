@@ -1,7 +1,7 @@
 /**
  * Number literals as values (spec §2, §3): the normalized text the parser
- * gives every number, and the checks a number built in code passes before it
- * is written (spec §9.8: the same limits as when parsing).
+ * and `num` give every number, and the limits a writer checks a number
+ * against (spec §9.8: the same limits as when parsing).
  */
 import { HausSyntaxError, START, type Problem } from "./errors.js"
 import { DEFAULT_LIMITS, Parser, type Limits } from "./parser.js"
@@ -33,13 +33,13 @@ export const normalizeNumber = (text: string, limits: Limits = DEFAULT_LIMITS): 
   }
 }
 
-/** No limits: the canonical form has none (spec §12). */
+/** No limits: a value has none, only the writers do (spec §11, §12). */
 const UNLIMITED: Limits = { ...DEFAULT_LIMITS, maxNumberLength: Infinity, maxExponent: Infinity }
 
 /**
- * The canonical form of a number built in code (spec §12): its normalized
- * literal, whatever its length or exponent, or undefined when `text` is not
- * exactly one number literal (`"01"`, `"NaN"`, `""`).
+ * The normalized literal of a number built in code (`num`, spec §11),
+ * whatever its length or exponent, or undefined when `text` is not exactly
+ * one number literal (`"01"`, `"NaN"`, `""`).
  */
 export const canonicalNumber = (text: string): string | undefined => normalizeNumber(text, UNLIMITED)
 
@@ -50,7 +50,7 @@ export const canonicalNumber = (text: string): string | undefined => normalizeNu
  * or an exponent larger than `maxExponent`. A number the parser produced
  * within `limits` is always within them.
  */
-export const numberLimitIssue = (text: string, limits: Limits): Problem | undefined => {
+export const numberLimitIssue = (text: string, limits: Pick<Limits, "maxNumberLength" | "maxExponent">): Problem | undefined => {
   // The length first, as a parser meets it (spec §7): a literal too long with an exponent too large is too long.
   if (text.length > limits.maxNumberLength) return { code: "number-too-long", reason: `number literal longer than ${limits.maxNumberLength} characters` }
   const exponent = /e-?(\d+)$/.exec(text)?.[1]

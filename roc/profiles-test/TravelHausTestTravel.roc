@@ -33,7 +33,7 @@ TravelHausTestTravel := [].{
 	decode_leg = |v| Decode.within_depth(v, read_value_leg)
 
 	read_value_leg : Value -> Try(Leg, Decode.Error)
-	read_value_leg = |v| match v {
+	read_value_leg = |v| match v.view() {
 		Tag("Walk", []) => Ok(Walk)
 		Tag("Ride", [p]) => Decode.payload(
 			"Ride",

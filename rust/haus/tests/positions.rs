@@ -24,7 +24,7 @@ fn error_positions() {
                 Some(Value::Number(column)),
             ) = (c.get("text"), c.get("code"), c.get("line"), c.get("column"))
             else {
-                panic!("not a case: {}", canonical(c).unwrap())
+                panic!("not a case: {}", canonical(c))
             };
             let want = format!("{code} at {line}:{column}");
             match haus::parse(text) {

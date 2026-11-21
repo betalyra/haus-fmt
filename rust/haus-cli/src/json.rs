@@ -7,7 +7,7 @@ pub fn s(text: &str) -> Json {
 }
 
 pub fn n(number: usize) -> Json {
-    Json::Number(number.to_string())
+    Json::Number(number.into())
 }
 
 pub fn b(value: bool) -> Json {

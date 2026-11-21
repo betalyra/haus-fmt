@@ -1,5 +1,5 @@
 /** Schema-based JSON (spec §16.3) for hand-written Effect schemas, and the forms without a schema. */
-import { canonical } from "@haus-fmt/haus"
+import { canonical, num } from "@haus-fmt/haus"
 import { describe, expect, it } from "@effect/vitest"
 import { BigDecimal, Effect, Option, Redacted, Schema, Stream } from "effect"
 import * as Haus from "../src/index.js"
@@ -123,7 +123,8 @@ describe("toJson / fromJson", () => {
       expect((yield* Effect.flip(Haus.fromHausJson(`{"_haus":2,"_value":"x"}`))).code).toBe("haus-json-version")
       const raw = yield* Effect.flip(Haus.fromHausJson(`{"_haus":1,"_value":"\u{202E}"}`))
       expect([raw._tag, raw.code]).toEqual(["HausParseError", "bidi-control"])
-      expect((yield* Effect.flip(Haus.toHausJson({ kind: "variant", tag: "lower", args: [] })))._tag).toBe("HausSchemaError")
+      // A value built in code is a haus value; only the limits can fail (spec §7).
+      expect((yield* Effect.flip(Haus.toHausJson(num("1".repeat(1001)))))).toMatchObject({ _tag: "HausSchemaError", code: "number-too-long" })
     }))
 })
 

@@ -51,7 +51,7 @@ import { readValue, readVariantAfter } from "./parser.js"
 import { ARGS, ARRAY, BYTES, CLOSE_ARGS, CLOSE_ARRAY, NO_PAYLOAD, NUMBER, PAYLOAD_RECORD, Reader, RECORD, STRING, VARIANT } from "./reader.js"
 import { At, checkedValue, decodeContext, decodeSteps, encodeContext, Maybe, recursionOf, shapeOf, type AnySchema, type CaseShape, type Context, type Limits, type Shape, type Unknown } from "./schema.js"
 import { Secret } from "./secret.js"
-import { variant, type HVariant, type Value } from "./value.js"
+import { uncheckedVariant, type HVariant, type Value } from "./value.js"
 
 /**
  * Reads one value at the reader's position, counting it as the generic parser
@@ -550,7 +550,7 @@ const floatRead = (name: FloatType): Read => (r, cx) => {
   if (kind !== VARIANT) fail()
   const tag = r.tag()
   if (r.payload(tag) !== NO_PAYLOAD) fail()
-  return specialFloat(variant(tag)) ?? fail()
+  return specialFloat(uncheckedVariant(tag)) ?? fail()
 }
 
 /**
@@ -794,7 +794,7 @@ export class WriteCompiler {
         return (w, a, cx) => {
           step(cx)
           const text = toText(a)
-          w.s += format.test(text) && convert(text) !== undefined ? `${tag}(${quote(text)})` : fail()
+          w.s += typeof text === "string" && format.test(text) && convert(text) !== undefined ? `${tag}(${quote(text)})` : fail()
         }
       }
       case "array": {

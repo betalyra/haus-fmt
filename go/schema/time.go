@@ -346,11 +346,11 @@ func (c *cursor) yearMonth() error {
 }
 
 // zone checks an IANA zone name by its syntax (it is never looked up), or
-// an offset. Z is the offset letter of an instant, not a zone: TimeZone("Z")
-// and …Z[Z] are rejected.
+// an offset. Z, in either case, is the offset letter of an instant, not a
+// zone: TimeZone("Z"), TimeZone("z"), …Z[Z] and …Z[z] are rejected.
 func zone(z string) error {
-	if z == "Z" {
-		return fmt.Errorf(`"Z" is the offset letter of an instant, not a zone; write an offset (+00:00) or a zone name (Etc/UTC)`)
+	if z == "Z" || z == "z" {
+		return fmt.Errorf(`%q is the offset letter of an instant, not a zone; write an offset (+00:00) or a zone name (Etc/UTC)`, z)
 	}
 	c := &cursor{s: z}
 	if o, err := c.offset(); err == nil && c.atEnd() {

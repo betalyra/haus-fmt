@@ -23,13 +23,17 @@ abstract class WriteCheck {
     }
   }
 
-  /** The literal of a number, which must fit the number limit. */
+  /**
+   * The literal of a number, which must fit the number limits: its length and its exponent, a
+   * decimal's too, so that a parser with the same limits reads it back.
+   */
   final String literal(Value.Number n) {
     String text = n.literal();
-    if (check && text.length() > lim.maxNumberLength()) {
-      throw path.error(
-          ErrorCode.NUMBER_TOO_LONG,
-          "a number of " + text.length() + " characters, more than the limit of " + lim.maxNumberLength());
+    if (check) {
+      HausException e = Numbers.overLimits(text, lim);
+      if (e != null) {
+        throw path.error(e.code(), e.reason());
+      }
     }
     return text;
   }

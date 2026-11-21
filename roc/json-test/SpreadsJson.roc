@@ -20,7 +20,7 @@ SpreadsJson := [].{
 	decode_user_event = |v| Decode.within_depth(v, read_value_user_event)
 
 	read_value_user_event : Value -> Try(UserEvent, Decode.Error)
-	read_value_user_event = |v| match v {
+	read_value_user_event = |v| match v.view() {
 		Tag("UserCreated", [p]) => Decode.payload(
 			"UserCreated",
 			p,
@@ -79,7 +79,7 @@ SpreadsJson := [].{
 	decode_app_event = |v| Decode.within_depth(v, read_value_app_event)
 
 	read_value_app_event : Value -> Try(AppEvent, Decode.Error)
-	read_value_app_event = |v| match v {
+	read_value_app_event = |v| match v.view() {
 		Tag("UserCreated", [p]) => Decode.payload(
 			"UserCreated",
 			p,
@@ -144,7 +144,7 @@ SpreadsJson := [].{
 	decode_server_event = |v| Decode.within_depth(v, read_value_server_event)
 
 	read_value_server_event : Value -> Try(ServerEvent, Decode.Error)
-	read_value_server_event = |v| match v {
+	read_value_server_event = |v| match v.view() {
 		Tag("UserCreated", [p]) => Decode.payload(
 			"UserCreated",
 			p,
@@ -315,7 +315,7 @@ SpreadsJson := [].{
 	decode_fixed = |v| Decode.within_depth(v, read_value_fixed)
 
 	read_value_fixed : Value -> Try(Fixed, Decode.Error)
-	read_value_fixed = |v| match v {
+	read_value_fixed = |v| match v.view() {
 		Tag("A", []) => Ok(A)
 		Tag("B", [a0]) => Ok(B(Decode.arg("B", 0, a0, Decode.int)?))
 		Tag("A", _) => Decode.arity("A", 0)
@@ -362,7 +362,7 @@ SpreadsJson := [].{
 	decode_extended = |v| Decode.within_depth(v, read_value_extended)
 
 	read_value_extended : Value -> Try(Extended, Decode.Error)
-	read_value_extended = |v| match v {
+	read_value_extended = |v| match v.view() {
 		Tag("A", []) => Ok(A)
 		Tag("B", [a0]) => Ok(B(Decode.arg("B", 0, a0, Decode.int)?))
 		Tag("C", []) => Ok(C)

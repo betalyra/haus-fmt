@@ -28,6 +28,18 @@ haus.parse_bytes(open("data.haus", "rb").read())  # UTF-8 checked, BOM skipped
 
 Values are `Number`, `String`, `Bytes`, `Array`, `Record` and `Variant`, frozen dataclasses you can `match` on. Equality follows the spec: record field order doesn't matter, `1.0 != 1`, and `Tag { … }` equals `Tag({ … })`.
 
+Their constructors build only haus values (spec §11): a number from any literal, normalized as the parser normalizes it with no limit on its length (`Number("1E+05").text == "1e5"`, `Number("0xFF").text == "255"`), `Array` and `Variant` from any iterable of values, `Record` from a mapping or `(key, value)` pairs, and `Bytes` from `bytes` (a `bytearray` or `memoryview` is copied). Anything else raises `haus.HausEncodeError` (a `ValueError`) at the path `$`, with the code of the mistake:
+
+```python
+Number("01")  # invalid-number: not a number literal (also "NaN", "")
+Variant("lower")  # invalid-tag: tags are [A-Z][A-Za-z0-9_]*
+Record([("a", Number("1")), ("a", Number("2"))])  # duplicate-key
+String("\ud800")  # cannot-encode: a lone surrogate has no UTF-8 form (in a key or tag too)
+Array([5])  # cannot-encode: not a haus value (so is Number(5))
+```
+
+So writing a value, its canonical form, hash and equality never fail for what it holds. Values are immutable: a record's `fields` is a read-only view of its own copy, so no value can contain itself, and the classes can't be subclassed. A value made past the constructors (`object.__new__`, `object.__setattr__`) isn't a haus value, and what any function does with one is undefined.
+
 Text given as a `str` is read as the UTF-8 it encodes to: a lone surrogate, which a `str` can hold and UTF-8 can't, is `invalid-utf8` at its line and column, as in bytes (also in `format`, the JSON readers and schema files).
 
 Errors are `haus.HausSyntaxError`, a `ValueError` with a `code`, `reason`, `line` and `column` (see [Error codes](#error-codes)):
@@ -89,7 +101,7 @@ haus.stringify(Record({"id": Number("7"), "at": Variant("Point", (Number("1E+05"
 haus.stringify_all([Variant("Ping"), Variant("Pong")], style="compact")  # 'Ping,\nPong,\n'
 ```
 
-A value with no text within the limits raises `haus.schema.HausEncodeError` with its `path`: a number longer than the number limit (`number-too-long`), nesting deeper than the depth limit (`nesting-too-deep`), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a number whose text isn't a number literal (`invalid-number`), a value that contains itself (`cyclic-value`), a string with a lone surrogate or anything that isn't a haus value (`cannot-encode`).
+A value outside the limits raises `haus.HausEncodeError` with its `path`: a number longer than the number limit (`number-too-long`) or with a larger exponent (`exponent-too-large`), nesting deeper than the depth limit (`nesting-too-deep`). Nothing else can fail: every value is a haus value.
 
 The formatter and the writers recurse a few Python frames per level, raising Python's recursion limit for the configured depth as the parser does, and take time linear in the text (`tests/test_linear.py`). They run in the [differential fuzzer](../fuzz) against the TypeScript reference, the other bindings and Lean's layout writers.
 
@@ -105,7 +117,7 @@ haus.equals(haus.parse("1.0"), haus.parse("1"))  # False: different numbers
 sorted(values, key=functools.cmp_to_key(haus.compare))  # by canonical form, not numeric: 10 before 9
 ```
 
-Every value has a canonical form: an integer is written in decimal with all its digits, however long (a parser with a larger number limit, or code, can make one longer than 1000 characters). A value built in code is checked as `stringify` checks it, without the limits: a number is written normalized (`Number("1E+05")` as `1e5`, equal to the parsed `1e5`), and one that has no text raises `haus.schema.HausEncodeError` with its `path` in `canonical`, `hash`, `hash_all`, `equals` and `compare`: a number whose text isn't a number literal (`Number("01")`, `invalid-number`), a string or key with a lone surrogate, or anything that isn't a haus value (`cannot-encode`), a tag that isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`), a value that contains itself (`cyclic-value`).
+Every value has a canonical form, so `canonical`, `hash`, `hash_all`, `equals` and `compare` never fail: an integer is written in decimal with all its digits, however long (a parser with a larger number limit, or code, can make one longer than 1000 characters), and the canonical form has no limits. A number built in code is normalized when it is built, so `Number("1E+05")` is written `1e5` and equals the parsed `1e5`.
 
 A whole file has one hash too: `haus.hash_all(values)` hashes the canonical forms joined by `,` (a file of one value hashes like the value). The items of a stream are hashed one by one with `haus.hash`.
 
@@ -312,14 +324,14 @@ except haus.HausError as e:
     print(json.dumps(e.to_json()))
 ```
 
-All errors derive from `haus.HausError` (a `ValueError`): `HausSyntaxError` (haus text, and `HausSchemaFileError` for schema files), `haus.HausJsonError` (JSON), `haus.schema.HausDecodeError` and `HausEncodeError` (values that don't fit a type), and `haus.HausLimitsError`. Each has
+All errors derive from `haus.HausError` (a `ValueError`): `HausSyntaxError` (haus text, and `HausSchemaFileError` for schema files), `haus.HausJsonError` (JSON), `haus.schema.HausDecodeError` (values that don't fit a type), `haus.HausEncodeError` (also `haus.schema.HausEncodeError`: what isn't a haus value when it is built, a value outside a writer's limits, a Python value that doesn't fit a type), and `haus.HausLimitsError`. Each has
 
 | Attribute | |
 |---|---|
 | `code` | the code, e.g. `payload-newline` |
 | `reason` | what went wrong, without the position |
 | `line`, `column` | the position, for errors in text (haus, a schema file, JSON text) |
-| `path` | the place in the value, for decoding errors: `("items", 2, "price")`, written `$.items[2].price` |
+| `path` | the place in the value, for decoding and encoding errors: `("items", 2, "price")`, written `$.items[2].price` |
 | `expected`, `found` | what should be there and what is, where that is natural (else `None`) |
 | `hint` | a concrete fix: the catalogue's fix for the code, or a better one for the case at hand |
 | `docs` | `https://haus-fmt.org/docs/errors#<code>` |

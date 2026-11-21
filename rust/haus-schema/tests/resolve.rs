@@ -24,7 +24,7 @@ fn value(text: &str) -> Value {
 /// The decoded value, canonical, or the error.
 fn decode(schema: &Schema, ty: &str, text: &str) -> String {
     match schema.decode(ty, &value(text)) {
-        Ok(v) => canonical(&v).unwrap(),
+        Ok(v) => canonical(&v),
         Err(e) => format!("error: {e}"),
     }
 }
@@ -433,20 +433,18 @@ fn streams_decode_each_value() {
         r#"expected Int, found the string "3" at $[2].n"#
     );
     let out = schema.decode_stream("Root", &values[..2]).unwrap();
-    assert_eq!(out.iter().map(|v| canonical(v).unwrap()).collect::<Vec<_>>(), ["{n:1}", "{n:2}"]);
+    assert_eq!(out.iter().map(canonical).collect::<Vec<_>>(), ["{n:1}", "{n:2}"]);
 }
 
 #[test]
 fn deep_values_built_in_code_and_the_limits() {
     let schema = Schema::parse("type Root = Any").unwrap();
-    let deep = (0..300).fold(Value::Number("1".into()), |v, _| Value::Array(vec![v]));
+    let deep = (0..300).fold(Value::from(1), |v, _| Value::Array(vec![v]));
     assert_eq!(schema.decode("Root", &deep).unwrap_err().message, "value nested deeper than 256 levels");
     // A recursive type: limited only by the depth (spec §9.9).
     let schema = Schema::parse("type Root = < Nil | Cons Int Root >").unwrap();
-    let list = (0..255).fold(Value::Variant { tag: "Nil".into(), args: vec![] }, |v, i| Value::Variant {
-        tag: "Cons".into(),
-        args: vec![Value::Number(i.to_string()), v],
-    });
+    let list = (0..255)
+        .fold(Value::variant("Nil", vec![]).unwrap(), |v, i| Value::variant("Cons", vec![Value::from(i), v]).unwrap());
     assert!(schema.decode("Root", &list).is_ok());
 }
 
