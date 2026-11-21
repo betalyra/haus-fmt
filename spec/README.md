@@ -132,6 +132,8 @@ Nesting depth is counted on the text as written, since it is checked while parsi
 
 A binding whose parser, decoder or encoder uses the call stack MAY support only a bounded nesting depth, of at least the default (256). It MUST document that maximum, and MUST reject a larger configured depth when the limits are set, with an error that names the maximum, rather than overflow its stack on deep input.
 
+**Portability.** A document within the default limits is read the same by every conforming implementation. One that needs higher limits is portable only to readers that are configured, and able, to accept it: a reader may be set to lower limits, and a binding's supported depth (above) may be lower than the depth a document needs.
+
 Parsing time MUST be linear in the input size for any input within the limits, also for input crafted against the implementation, with one allowance: duplicate keys (§3) MAY be found with a sorted structure in O(n log n). Otherwise they are found with a hash table whose hash an attacker can't predict (seeded at random per process, as SipHash in Rust, Python and JavaScript engines are); never with a list scan or a hash with a fixed seed, which crafted keys turn quadratic.
 
 ## 8. Error positions
@@ -176,9 +178,17 @@ Schema packages are versioned separately, with the rules of §13.3.
 
 ## 11. Standard format
 
-There are three official layouts, and like `gofmt` they have no other style
-options (indent width defaults to 2 spaces; line width, default 80, only
-affects positional payloads in pretty). Formatters MUST produce them exactly.
+There are three official layouts, and like `gofmt` they have no style options
+beyond two numbers for pretty: the indent, in spaces per level (default 2), and
+the line width (default 80), which only decides whether a positional payload
+fits on one line. Formatters MUST produce them exactly.
+
+Both numbers are whole numbers of zero or more, and mean what they say: indent 0
+writes every line without indentation, and width 0 is a width nothing fits in,
+so every positional payload gets one argument per line. A formatter MUST reject
+a negative indent or width rather than clamp it, and MUST NOT read 0 as "use the
+default": an API that needs a way to leave an option unset uses a separate value
+for it (an absent option, not 0). Compact and minimised take neither.
 
 | | Comments | Key order, number spellings | Whitespace | For |
 |---|---|---|---|---|
