@@ -437,7 +437,7 @@ SchemaBased := [].{
 	decode_level = |v| Decode.within_depth(v, read_value_level)
 
 	read_value_level : Value -> Try(Level, Decode.Error)
-	read_value_level = |v| match v {
+	read_value_level = |v| match v.view() {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Debug", _) => Decode.arity("Debug", 0)
@@ -478,7 +478,7 @@ SchemaBased := [].{
 	decode_shape = |v| Decode.within_depth(v, read_value_shape)
 
 	read_value_shape : Value -> Try(Shape, Decode.Error)
-	read_value_shape = |v| match v {
+	read_value_shape = |v| match v.view() {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -604,7 +604,7 @@ SchemaBased := [].{
 	decode_bits = |v| Decode.within_depth(v, read_value_bits)
 
 	read_value_bits : Value -> Try(Bits, Decode.Error)
-	read_value_bits = |v| match v {
+	read_value_bits = |v| match v.view() {
 		Tag("False", []) => Ok(False)
 		Tag("True", []) => Ok(True)
 		Tag("False", _) => Decode.arity("False", 0)
@@ -697,7 +697,7 @@ SchemaBased := [].{
 	decode_boxed = |v| Decode.within_depth(v, read_value_boxed)
 
 	read_value_boxed : Value -> Try(Boxed, Decode.Error)
-	read_value_boxed = |v| match v {
+	read_value_boxed = |v| match v.view() {
 		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, read_value_box_rec)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -756,7 +756,7 @@ SchemaBased := [].{
 	decode_paren_box = |v| Decode.within_depth(v, read_value_paren_box)
 
 	read_value_paren_box : Value -> Try(ParenBox, Decode.Error)
-	read_value_paren_box = |v| match v {
+	read_value_paren_box = |v| match v.view() {
 		Tag("Box", [p]) => Decode.payload(
 			"Box",
 			p,
@@ -802,7 +802,7 @@ SchemaBased := [].{
 	decode_alias_box = |v| Decode.within_depth(v, read_value_alias_box)
 
 	read_value_alias_box : Value -> Try(AliasBox, Decode.Error)
-	read_value_alias_box = |v| match v {
+	read_value_alias_box = |v| match v.view() {
 		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, read_value_box_alias)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -861,7 +861,7 @@ SchemaBased := [].{
 	decode_found = |v| Decode.within_depth(v, read_value_found)
 
 	read_value_found : Value -> Try(Found, Decode.Error)
-	read_value_found = |v| match v {
+	read_value_found = |v| match v.view() {
 		Tag("Found", [p]) => Ok(Found(Decode.record_arg("Found", p, |x22| decode_page(x22, Decode.i32))?))
 		Tag("Found", _) => Decode.arity("Found", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -896,7 +896,7 @@ SchemaBased := [].{
 	GenBox(a) := [Box(a), Unknown(Str, List(Value))]
 
 	decode_gen_box : Value, (Value -> Try(a, Decode.Error)) -> Try(GenBox(a), Decode.Error)
-	decode_gen_box = |v, decode_a| match v {
+	decode_gen_box = |v, decode_a| match v.view() {
 		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, decode_a)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -955,7 +955,7 @@ SchemaBased := [].{
 	decode_strict_box = |v| Decode.within_depth(v, read_value_strict_box)
 
 	read_value_strict_box : Value -> Try(StrictBox, Decode.Error)
-	read_value_strict_box = |v| match v {
+	read_value_strict_box = |v| match v.view() {
 		Tag("Box", [p]) => Ok(Box(Decode.record_arg("Box", p, read_value_strict)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -1014,7 +1014,7 @@ SchemaBased := [].{
 	decode_secret_box = |v| Decode.within_depth(v, read_value_secret_box)
 
 	read_value_secret_box : Value -> Try(SecretBox, Decode.Error)
-	read_value_secret_box = |v| match v {
+	read_value_secret_box = |v| match v.view() {
 		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, read_value_secret_rec)?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -1055,7 +1055,7 @@ SchemaBased := [].{
 	decode_inline_secret_box = |v| Decode.within_depth(v, read_value_inline_secret_box)
 
 	read_value_inline_secret_box : Value -> Try(InlineSecretBox, Decode.Error)
-	read_value_inline_secret_box = |v| match v {
+	read_value_inline_secret_box = |v| match v.view() {
 		Tag("Box", [a0]) => Ok(Box(Decode.arg("Box", 0, a0, |x28| Decode.secret(x28, "Secret { … }", decode_inline_secret_box_box))?))
 		Tag("Box", _) => Decode.arity("Box", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -1150,7 +1150,7 @@ SchemaBased := [].{
 	MyMaybe(a) := [None, Some(a)]
 
 	decode_my_maybe : Value, (Value -> Try(a, Decode.Error)) -> Try(MyMaybe(a), Decode.Error)
-	decode_my_maybe = |v, decode_a| match v {
+	decode_my_maybe = |v, decode_a| match v.view() {
 		Tag("None", []) => Ok(None)
 		Tag("Some", [a0]) => Ok(Some(Decode.arg("Some", 0, a0, decode_a)?))
 		Tag("None", _) => Decode.arity("None", 0)
@@ -1311,7 +1311,7 @@ SchemaBased := [].{
 	decode_no_form = |v| Decode.within_depth(v, read_value_no_form)
 
 	read_value_no_form : Value -> Try(NoForm, Decode.Error)
-	read_value_no_form = |v| match v {
+	read_value_no_form = |v| match v.view() {
 		Tag("Tagged", [p]) => Decode.payload(
 			"Tagged",
 			p,
@@ -1388,7 +1388,7 @@ SchemaBased := [].{
 	to_json_inline_secret_box_box = |v, e| ToJson.object(e, [("w", ToJson.required(v.w, ToJson.i32))])
 
 	decode_inner1 : Value, (Value -> Try(a, Decode.Error)) -> Try([X(a), Unknown(Str, List(Value))], Decode.Error)
-	decode_inner1 = |v, decode_a| match v {
+	decode_inner1 = |v, decode_a| match v.view() {
 		Tag("X", [a0]) => Ok(X(Decode.arg("X", 0, a0, decode_a)?))
 		Tag("X", _) => Decode.arity("X", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))
@@ -1420,7 +1420,7 @@ SchemaBased := [].{
 	}
 
 	decode_in_place_item : Value -> Try([None, Some(I32)], Decode.Error)
-	decode_in_place_item = |v| match v {
+	decode_in_place_item = |v| match v.view() {
 		Tag("None", []) => Ok(None)
 		Tag("Some", [a0]) => Ok(Some(Decode.arg("Some", 0, a0, Decode.i32)?))
 		Tag("None", _) => Decode.arity("None", 0)

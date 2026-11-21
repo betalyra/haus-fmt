@@ -1,12 +1,13 @@
 /**
- * Text from the language's strings and values built in code (spec §4, §12):
- * a JavaScript string can hold an unpaired surrogate, which has no UTF-8
- * form, and a value built in code can be one no text spells.
+ * Text from the language's strings and values built in code (spec §4, §11,
+ * §12): a JavaScript string can hold an unpaired surrogate, which has no
+ * UTF-8 form, and the constructors reject what no text spells, so what takes
+ * a value can't fail for it.
  */
 import { describe, expect, it } from "vitest"
 import {
-  arr, canonical, compare, equals, format, hash, hashAll, num, parse, parseAll, parseDocument, parseJson, parseJsonLines, parseSchemaFile, parseStream, quoteText, rec,
-  str, stringify, variant,
+  arr, bytes, canonical, compare, equals, format, hash, hashAll, isValue, num, parse, parseAll, parseDocument, parseJson, parseJsonLines, parseSchemaFile, parseStream,
+  quoteText, rec, str, stringify, variant, type Value,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
 
@@ -44,56 +45,148 @@ describe("text with an unpaired surrogate is invalid-utf8, at the first one (spe
   })
 })
 
-describe("writers reject what no text spells (spec §4, §12)", () => {
-  const encodeError = (code: string) => expect.objectContaining({ name: "HausEncodeError", code })
-  const writers: [string, (v: Parameters<typeof canonical>[0]) => unknown][] = [
-    ["canonical", canonical],
-    ["stringify", stringify],
-    ["stringify compact", (v) => stringify(v, { style: "compact" })],
-    ["format", (v) => format([v])],
-    ["equals", (v) => equals(v, v)],
-    ["compare", (v) => compare(v, v)],
-  ]
-  const bad: [string, Parameters<typeof canonical>[0], string][] = [
-    ["a number that isn't a literal", num("01"), "invalid-number"],
-    ["NaN", arr([num("NaN")]), "invalid-number"],
-    ["an empty number", num(""), "invalid-number"],
-    ["a tag that isn't a tag", variant("lower"), "invalid-tag"],
-    ["a lone surrogate in a string", str("x\uD800y"), "cannot-encode"],
-    ["a lone surrogate in a multi-line string", str("a\nb\uDC00"), "cannot-encode"],
-    ["a lone surrogate in a key", rec(new Map([["k\uD800", num("1")]])), "cannot-encode"],
-  ]
-  for (const [name, write] of writers) {
-    it.each(bad)(`${name}: %s`, (_, value, code) => {
-      expect(() => write(value)).toThrow(encodeError(code))
-    })
-  }
-
-  it("hash and hashAll", async () => {
-    await expect(hash(str("x\uD800y"))).rejects.toThrow(encodeError("cannot-encode"))
-    await expect(hashAll([num("1"), num("01")])).rejects.toThrow(encodeError("invalid-number"))
-    // No collision with U+FFFD, which a lone surrogate became when encoded.
-    expect(() => canonical(str("x\uD800y"))).toThrow()
+describe("constructors build only haus values (spec §11, values built in code)", () => {
+  const encodeError = (code: string) => expect.objectContaining({ name: "HausEncodeError", code, path: [] })
+  const one = num("1")
+  it.each<[string, () => unknown, string]>([
+    ["a number that isn't a literal", () => num("01"), "invalid-number"],
+    ["NaN", () => num("NaN"), "invalid-number"],
+    ["an empty number", () => num(""), "invalid-number"],
+    ["a number with spaces", () => num(" 1"), "invalid-number"],
+    ["two numbers", () => num("1 2"), "invalid-number"],
+    ["a number that isn't text", () => num(1 as unknown as string), "cannot-encode"],
+    ["a tag that isn't a tag", () => variant("lower"), "invalid-tag"],
+    ["an empty tag", () => variant(""), "invalid-tag"],
+    ["a tag with a lone surrogate", () => variant("A\uD800"), "cannot-encode"],
+    ["a key given twice", () => rec([["a", one], ["a", str("x")]]), "duplicate-key"],
+    ["a lone surrogate in a string", () => str("x\uD800y"), "cannot-encode"],
+    ["a lone surrogate in a multi-line string", () => str("a\nb\uDC00"), "cannot-encode"],
+    ["a lone surrogate in a key", () => rec(new Map([["k\uD800", one]])), "cannot-encode"],
+    ["a lone surrogate in a key of an object", () => rec({ "k\uDC00": one }), "cannot-encode"],
+    ["an object that looks like a value", () => arr([{ kind: "number", text: "1" } as unknown as Value]), "cannot-encode"],
+    ["an empty object as an item", () => arr([{} as unknown as Value]), "cannot-encode"],
+    ["something else as an argument", () => variant("Some", [1 as unknown as Value]), "cannot-encode"],
+    ["something else as a field", () => rec({ a: "x" as unknown as Value }), "cannot-encode"],
+    ["bytes that aren't a Uint8Array", () => bytes([1, 2] as unknown as Uint8Array), "cannot-encode"],
+    ["a string that isn't text", () => str(undefined as unknown as string), "cannot-encode"],
+  ])("%s", (_, build, code) => {
+    expect(build).toThrow(encodeError(code))
   })
 
-  it("normalizes a number literal built in code, so equal values hash equal (spec §2)", async () => {
-    expect(canonical(num("1e+05"))).toBe("1e5")
-    expect(canonical(num("1E5"))).toBe("1e5")
-    expect(canonical(num("0xFF"))).toBe("255")
-    expect(canonical(num("1_000"))).toBe("1000")
-    expect(canonical(num("-0x0"))).toBe("-0")
+  it("normalizes a number literal as the parser does, without limits", () => {
+    expect(num("1e+05").text).toBe("1e5")
+    expect(num("1E5").text).toBe("1e5")
+    expect(num("0xFF").text).toBe("255")
+    expect(num("1_000").text).toBe("1000")
+    expect(num("-0x0").text).toBe("-0")
+    expect(num("19.90").text).toBe("19.90")
+    expect(num(`1e${"9".repeat(30)}`).text).toBe(`1e${"9".repeat(30)}`)
+    expect(num("7".repeat(3000)).text).toBe("7".repeat(3000))
+    expect(num("1e+05")).toEqual(parse("1e5"))
+  })
+
+  it("accepts a Map, [key, value] pairs or an object, in their order", () => {
+    const fromMap = rec(new Map<string, Value>([["b", one], ["a", str("x")]]))
+    const fromPairs = rec([["b", one], ["a", str("x")]])
+    const fromObject = rec({ b: one, a: str("x") })
+    for (const r of [fromMap, fromPairs, fromObject]) expect([...r.fields.keys()]).toEqual(["b", "a"])
+    expect(stringify(fromObject, { style: "compact" })).toBe('{ b: 1, a: "x" }')
+    expect(stringify(rec({ __proto__: one } as unknown as Record<string, Value>), { style: "compact" })).toBe("{}")
+    expect(stringify(rec([["__proto__", one]]), { style: "compact" })).toBe("{ __proto__: 1 }")
+  })
+
+  it("copies what it is given, so a built value can't change", () => {
+    const items: Value[] = [one]
+    const a = arr(items)
+    items.push(str("later"))
+    expect(a.items).toEqual([one])
+    expect(Object.isFrozen(a.items)).toBe(true)
+    expect(() => (a.items as Value[]).push(a)).toThrow(TypeError)
+    const fields = new Map<string, Value>([["a", one]])
+    const r = rec(fields)
+    fields.set("b", one)
+    expect([...r.fields.keys()]).toEqual(["a"])
+    const args: Value[] = [one]
+    const v = variant("Some", args)
+    args[0] = str("later")
+    expect(v.args).toEqual([one])
+    const data = new Uint8Array([1, 2])
+    const b = bytes(data)
+    data[0] = 9
+    expect(b.bytes).toEqual(new Uint8Array([1, 2]))
+  })
+
+  it("isValue: built or parsed values only", () => {
+    expect(isValue(one)).toBe(true)
+    expect(isValue(parse("{ a: [1, X] }"))).toBe(true)
+    expect(isValue({ kind: "number", text: "1" })).toBe(false)
+    expect(isValue(structuredClone(one))).toBe(false)
+    expect(isValue(null)).toBe(false)
+  })
+
+  it("an object literal is not a Value (types)", () => {
+    // @ts-expect-error: a Value is built by a constructor, not written as an object
+    const forged: Value = { kind: "number", text: "01" }
+    // @ts-expect-error: the same inside a container
+    const inside = () => arr([{ kind: "string", value: "x" }])
+    expect(forged.kind).toBe("number")
+    expect(inside).toThrow(expect.objectContaining({ code: "cannot-encode" }))
+  })
+})
+
+describe("what takes a value can't fail for it (spec §12)", () => {
+  const built = rec([
+    ["n", num("1e+05")],
+    ["x", num("0xFF")],
+    ["s", str("😀 a\nb")],
+    ["k-y", arr([bytes(new Uint8Array([0, 255])), variant("None"), variant("Point", [num("1"), num("-0")])])],
+    ["big", num("9".repeat(1500))],
+  ])
+
+  it("canonical, equals, compare, hash and hashAll", async () => {
+    expect(canonical(built)).toBe(`{big:${"9".repeat(1500)},"k-y":[x"00ff",None,Point(1,-0)],n:1e5,s:"😀 a\\nb",x:255}`)
+    const parsed = parse(`{ x: 255, n: 1e5, s: "😀 a\\nb", "k-y": [x"00ff", None, Point(1, -0)], big: ${"9".repeat(1500)} }`, { maxNumberLength: 2000 })
+    expect(equals(built, parsed)).toBe(true)
+    expect(compare(built, parsed)).toBe(0)
+    expect(await hash(built)).toBe(await hash(parsed))
+    expect(await hashAll([built, num("1")])).toBe(await hashAll([parsed, parse("1")]))
     expect(equals(num("1e+05"), num("1e5"))).toBe(true)
     expect(await hash(num("1e+05"))).toBe(await hash(parse("1e5")))
-    // No limits: the canonical form has none (spec §12).
-    expect(canonical(num(`1e${"9".repeat(30)}`))).toBe(`1e${"9".repeat(30)}`)
-    // stringify writes a valid literal as it is.
-    expect(stringify(num("1e+05"))).toBe("1e+05")
   })
 
-  it("a typed value: Any checks with the place, String through the writer", () => {
-    expect(() => h.stringify(h.Any, arr([str("\uD800")]))).toThrow(expect.objectContaining({ code: "cannot-encode", path: [0] }))
-    expect(() => h.stringify(h.String, "\uDC00", { style: "compact" })).toThrow(encodeError("cannot-encode"))
-    expect(() => h.stringify(h.Map(h.Int32), new Map([["\uDC00", 1]]), { style: "compact" })).toThrow(encodeError("cannot-encode"))
+  it("writers write the normalized number; only their limits can fail (spec §7)", () => {
+    expect(stringify(num("1e+05"))).toBe("1e5")
+    expect(stringify(num("0xFF"), { style: "minimised" })).toBe("255")
+    expect(format([built, num("1")], { style: "compact", limits: { maxNumberLength: 2000 } })).toContain("big: 9999")
+    expect(() => format([built, num("1")], { style: "compact" })).toThrow(expect.objectContaining({ code: "number-too-long" }))
+  })
+
+  it("writers check every number against the number limits, a decimal or an exponent too (spec §7)", () => {
+    const long = num(`1.${"0".repeat(2000)}`)
+    for (const style of ["pretty", "compact", "minimised"] as const) {
+      expect(() => stringify(long, { style })).toThrow(expect.objectContaining({ code: "number-too-long" }))
+      expect(() => stringify(num("1e9999"), { style })).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+      expect(() => stringify(num(`1${"0".repeat(1000)}`), { style })).toThrow(expect.objectContaining({ code: "number-too-long" }))
+    }
+    expect(stringify(num("1e6144"))).toBe("1e6144")
+    expect(stringify(long, { limits: { maxNumberLength: 2002 } })).toBe(long.text)
+    expect(stringify(num("1e9999"), { limits: { maxExponent: 9999 } })).toBe("1e9999")
+    expect(() => h.stringify(h.Any, num("1e100"), { maxExponent: 99 })).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+    expect(h.stringify(h.Any, long, { maxNumberLength: 2002 })).toBe(long.text)
+    // The canonical form has no limits (spec §12).
+    expect(canonical(long)).toBe(long.text)
+  })
+
+  it("a typed value: Any checks the limits with the place, String and Map keys with the place", () => {
+    expect(() => h.stringify(h.Any, arr([str("x".repeat(20))]), { maxStringLength: 10 })).toThrow(expect.objectContaining({ code: "string-too-long", path: [0] }))
+    // Forged: a parsed array (not frozen) changed with a cast.
+    const forged = parse("[1]") as unknown as { items: unknown[] }
+    forged.items[0] = { kind: "string", value: "x" }
+    expect(() => h.stringify(h.Any, forged as unknown as Value)).toThrow(expect.objectContaining({ code: "cannot-encode", path: [0] }))
+    expect(() => h.stringify(h.String, "\uDC00", { style: "compact" })).toThrow(expect.objectContaining({ code: "cannot-encode", path: [] }))
+    expect(() => h.stringify(h.Record({ a: h.String }), { a: "x\uD800" })).toThrow(expect.objectContaining({ code: "cannot-encode", path: ["a"] }))
+    expect(() => h.stringify(h.Map(h.Int32), new Map([["\uDC00", 1]]), { style: "compact" })).toThrow(expect.objectContaining({ code: "cannot-encode" }))
+    expect(() => h.encode(h.Map(h.Int32), new Map([["\uDC00", 1]]))).toThrow(expect.objectContaining({ code: "cannot-encode", path: [] }))
   })
 })
 

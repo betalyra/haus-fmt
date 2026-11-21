@@ -30,7 +30,7 @@ Variants := [].{
 	decode_shape = |v| Decode.within_depth(v, read_value_shape)
 
 	read_value_shape : Value -> Try(Shape, Decode.Error)
-	read_value_shape = |v| match v {
+	read_value_shape = |v| match v.view() {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -68,7 +68,7 @@ Variants := [].{
 	decode_level = |v| Decode.within_depth(v, read_value_level)
 
 	read_value_level : Value -> Try(Level, Decode.Error)
-	read_value_level = |v| match v {
+	read_value_level = |v| match v.view() {
 		Tag("Debug", []) => Ok(Debug)
 		Tag("Info", []) => Ok(Info)
 		Tag("Debug", _) => Decode.arity("Debug", 0)
@@ -90,7 +90,7 @@ Variants := [].{
 	decode_strict = |v| Decode.within_depth(v, read_value_strict)
 
 	read_value_strict : Value -> Try(Strict, Decode.Error)
-	read_value_strict = |v| match v {
+	read_value_strict = |v| match v.view() {
 		Tag("A", []) => Ok(A)
 		Tag("B", [a0]) => Ok(B(Decode.arg("B", 0, a0, Decode.int)?))
 		Tag("C", [p]) => Decode.payload(
@@ -121,7 +121,7 @@ Variants := [].{
 	decode_closed_payload = |v| Decode.within_depth(v, read_value_closed_payload)
 
 	read_value_closed_payload : Value -> Try(ClosedPayload, Decode.Error)
-	read_value_closed_payload = |v| match v {
+	read_value_closed_payload = |v| match v.view() {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,
@@ -199,7 +199,7 @@ Variants := [].{
 	}
 
 	decode_node_s : Value -> Try([S(Next), N, Unknown(Str, List(Value))], Decode.Error)
-	decode_node_s = |v| match v {
+	decode_node_s = |v| match v.view() {
 		Tag("S", [p]) => Ok(S(Decode.record_arg("S", p, read_value_next)?))
 		Tag("N", []) => Ok(N)
 		Tag("S", _) => Decode.arity("S", 1)
@@ -216,7 +216,7 @@ Variants := [].{
 	}
 
 	decode_node_o : Value -> Try([T(Next), Unknown(Str, List(Value))], Decode.Error)
-	decode_node_o = |v| match v {
+	decode_node_o = |v| match v.view() {
 		Tag("T", [p]) => Ok(T(Decode.record_arg("T", p, read_value_next)?))
 		Tag("T", _) => Decode.arity("T", 1)
 		Tag(tag, args) => Ok(Unknown(tag, args))

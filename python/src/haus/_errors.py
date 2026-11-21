@@ -237,3 +237,40 @@ class HausLimitsError(HausError):
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason, code="unsupported-depth", reason=reason)
+
+
+class ErrorAtPath(HausError):
+    """An error at a place in a value: its `path`."""
+
+    path: tuple[PathKey, ...]
+    """Where the error is: `("items", 2, "price")`, written `$.items[2].price`."""
+
+    def __init__(
+        self,
+        reason: str,
+        path: tuple[PathKey, ...],
+        code: ErrorCode,
+        *,
+        hint: str | None = None,
+        expected: str | None = None,
+        found: str | None = None,
+    ) -> None:
+        super().__init__(
+            f"{reason} at {format_path(path)}", code=code, reason=reason, hint=hint, expected=expected, found=found
+        )
+        self.path = path
+
+    def _place(self) -> dict[str, object]:
+        return {"path": format_path(self.path)}
+
+
+class HausDecodeError(ErrorAtPath):
+    """A value the type doesn't accept, with the place of the failing value (spec §15)."""
+
+
+class HausEncodeError(ErrorAtPath):
+    """A value that can't be built or written, with its place (spec §11).
+
+    Raised by the value constructors for what isn't a haus value (`Number("01")`, at `$`), by the
+    writers for a value outside their limits, and by the encoders for a Python value that doesn't fit its type.
+    """

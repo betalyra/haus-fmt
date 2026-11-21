@@ -131,18 +131,18 @@ FromJson := [].{
 
 	## `Int64`: a string holding the decimal integer.
 	i64 : JsonValue -> Try(I64, Decode.Error)
-	i64 = |j| Decode.i64(Num(integer(j, "Int64")?))
+	i64 = |j| Decode.i64(built(Value.num(integer(j, "Int64")?))?)
 
 	## `UInt64`: a string holding the decimal integer.
 	u64 : JsonValue -> Try(U64, Decode.Error)
-	u64 = |j| Decode.u64(Num(integer(j, "UInt64")?))
+	u64 = |j| Decode.u64(built(Value.num(integer(j, "UInt64")?))?)
 
 	## `Int`: a string holding the decimal integer, of any size a haus literal can hold.
 	int : JsonValue -> Try(Int, Decode.Error)
 	int = |j| {
-		text = integer(j, "Int")?
-		_ = Encode.to_str(Num(text)).map_err(|e| { code: e.code, reason: e.reason, path: "" })?
-		Decode.int(Num(text))
+		v = built(Value.num(integer(j, "Int")?))?
+		_ = Encode.to_str(v).map_err(|e| { code: e.code, reason: e.reason, path: "" })?
+		Decode.int(v)
 	}
 
 	## `Float64`: a number rounded to the nearest binary64 value (spec §15), or
@@ -159,9 +159,9 @@ FromJson := [].{
 	decimal : JsonValue -> Try(Str, Decode.Error)
 	decimal = |j| match j {
 		String(s) if JsonValue.is_number(s) => {
-			text = JsonValue.normalize_number(s)
-			_ = Encode.to_str(Num(text)).map_err(|e| { code: e.code, reason: e.reason, path: "" })?
-			Ok(text)
+			v = built(Value.num(s))?
+			_ = Encode.to_str(v).map_err(|e| { code: e.code, reason: e.reason, path: "" })?
+			Decode.decimal(v)
 		}
 		String(_) => Decode.fail(ErrorCode.invalid_number, "expected a number in a string (Decimal)")
 		_ => expected("a string holding a number (Decimal)", j)
@@ -187,7 +187,7 @@ FromJson := [].{
 		(tag, members) = variant(j, "a tag")?
 		match unknown(tag, members)? {
 			[] => Ok(Bare(tag))
-			args => Ok(Other(tag, args))
+			values => Ok(Other(tag, values))
 		}
 	}
 
@@ -580,6 +580,10 @@ item = |j, i| match j {
 	_ => Err(OutOfBounds)
 }
 
+## A value a constructor built, or why it didn't, at the current place.
+built : Try(Value, Value.ValueError) -> Try(Value, Decode.Error)
+built = |result| result.map_err(|e| { code: e.code, reason: e.reason, path: "" })
+
 ## Prefix the path of an error coming out of a nested reader.
 at : Try(a, Decode.Error), Str -> Try(a, Decode.Error)
 at = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
@@ -591,7 +595,7 @@ expected = |what, j| Decode.fail(ErrorCode.type_mismatch, "expected ${what}, fou
 ## A small integer: a JSON number, whole by its spelling, in range.
 number : JsonValue, Str, (Value -> Try(n, Decode.Error)) -> Try(n, Decode.Error)
 number = |j, name, decode| match j {
-	Number(text) => decode(Num(text))
+	Number(text) => decode(built(Value.num(text))?)
 	_ => expected("a number (${name})", j)
 }
 
@@ -612,10 +616,10 @@ integer = |j, name| match j {
 ## A float as the haus value `Decode.f64` and `Decode.f32` read.
 float : JsonValue, Str -> Try(Value, Decode.Error)
 float = |j, name| match j {
-	Number(text) => Ok(Num(JsonValue.normalize_number(text)))
-	String("NaN") => Ok(Tag("NaN", []))
-	String("Infinity") => Ok(Tag("Infinity", []))
-	String("-Infinity") => Ok(Tag("NegInfinity", []))
+	Number(text) => built(Value.num(text))
+	String("NaN") => built(Value.tag("NaN", []))
+	String("Infinity") => built(Value.tag("Infinity", []))
+	String("-Infinity") => built(Value.tag("NegInfinity", []))
 	_ => expected("a number, \"NaN\", \"Infinity\" or \"-Infinity\" (${name})", j)
 }
 
@@ -640,26 +644,26 @@ expect FromJson.one("{\"_tag\": \"Ok\", \"value\": \"x\"}", |j| FromJson.result(
 ) == Err(".value: expected a number (Int32), found a string")
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"sides\": 6}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => canonical_text(Tag(tag, args))
+		Other(tag, args) => canonical_text(variant_of(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon{sides:6}")
 # `_args` alone: the arguments; beside other members, or `args`: a record payload.
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}, \"a\"]}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => canonical_text(Tag(tag, args))
+		Other(tag, args) => canonical_text(variant_of(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon(1,\"a\")")
 expect FromJson.one("{\"_tag\": \"Run\", \"args\": [1, 2]}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => canonical_text(Tag(tag, args))
+		Other(tag, args) => canonical_text(variant_of(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Run{args:[1,2]}")
 expect FromJson.one("{\"_tag\": \"Hexagon\", \"_args\": [{\"_num\": \"1\"}], \"x\": 2}", FromJson.any_tag).map_ok(
 	|t| match t {
-		Other(tag, args) => canonical_text(Tag(tag, args))
+		Other(tag, args) => canonical_text(variant_of(tag, args))
 		Bare(tag) => tag
 	},
 ) == Ok("Hexagon{_args:[{_num:\"1\"}],x:2}")
@@ -683,19 +687,19 @@ expect FromJson.lines("1\n2\n", FromJson.u8) == Ok([1, 2])
 expect code_of_lines("1\n2\n\"x\"\n", FromJson.u8) == "type-mismatch at $[2]"
 expect code_of_lines("{\"price\": 1}\n{\"price\": \"1\"}", |j| FromJson.field(FromJson.object(j, "Item")?, "price", FromJson.i32)) == "type-mismatch at $[1].price"
 expect code_of_lines("1\n\n2\n", FromJson.u8) == "json-syntax at line 2" and code_of_lines("1\r\n\u(FEFF)2\r\n", FromJson.u8) == "json-syntax at line 2"
-expect FromJson.within_depth(Null, |_| Ok(Arr([Rec([("a", Tag("Some", [Arr([])]))])])), Encode.any).map_ok(canonical_text) == Ok("[{a:Some([])}]")
+expect FromJson.within_depth(Null, |_| Ok(Value.arr([rec([("a", variant_of("Some", [Value.arr([])]))])])), Encode.any).map_ok(canonical_text) == Ok("[{a:Some([])}]")
 expect FromJson.within_depth(Null, |_| Ok(nest(256)), Encode.any).is_ok()
 expect FromJson.within_depth(Null, |_| Ok(nest(257)), Encode.any).map_ok(|_| {}).map_err(Decode.message) == Err("nesting deeper than 256 levels")
-expect FromJson.within_depth(Null, |_| Ok(Tag("Box", [Rec([("w", nest(255))])])), Encode.any).is_ok()
-expect FromJson.within_depth(Null, |_| Ok(Tag("Box", [Rec([("w", nest(256))])])), Encode.any).is_err()
+expect FromJson.within_depth(Null, |_| Ok(variant_of("Box", [rec([("w", nest(255))])])), Encode.any).is_ok()
+expect FromJson.within_depth(Null, |_| Ok(variant_of("Box", [rec([("w", nest(256))])])), Encode.any).is_err()
 
 ## `n` nested `Some(…)` around `None`.
 nest : U64 -> Value
 nest = |n| {
-	var $v = Tag("None", [])
+	var $v = variant_of("None", [])
 	var $i = 0.U64
 	while $i < n {
-		$v = Tag("Some", [$v])
+		$v = variant_of("Some", [$v])
 		$i = $i + 1
 	}
 	$v
@@ -761,8 +765,8 @@ expect FromJson.within_limits(Null, |_| Ok(nest(1)), Encode.any, too_deep).map_o
 loop : JsonValue -> Try(Value, Decode.Error)
 loop = |j| FromJson.maybe(j, True, loop).map_ok(
 	|m| match m {
-		None => Tag("None", [])
-		Some(v) => Tag("Some", [v])
+		None => variant_of("None", [])
+		Some(v) => variant_of("Some", [v])
 	},
 )
 
@@ -869,7 +873,7 @@ expect {
 		$j = Array([$j])
 		$i = $i + 1
 	}
-	FromJson.within_depth($j, |x| FromJson.list(x, |_| Ok({})), |_, e| Encode.made(Num("0"), e)).map_ok(|_| {}) == Err({ code: "nesting-too-deep", reason: "JSON nested deeper than 1025 levels", path: "" })
+	FromJson.within_depth($j, |x| FromJson.list(x, |_| Ok({})), |_, e| Encode.made(num("0"), e)).map_ok(|_| {}) == Err({ code: "nesting-too-deep", reason: "JSON nested deeper than 1025 levels", path: "" })
 }
 
 ## `n` nested `{"_tag": "Some", "value": …}` around `{"_tag": "None"}`.
@@ -920,3 +924,14 @@ expect {
 ## The canonical form of a value that has one: every parsed value.
 canonical_text : Value -> Str
 canonical_text = |v| Encode.canonical(v) ?? "(no canonical form)"
+
+# Values built in code, for the tests: the constructors' value, or a string
+# that says which one failed.
+num : Str -> Value
+num = |literal| Value.num(literal) ?? Value.text("(not a number: ${literal})")
+
+rec : List((Str, Value)) -> Value
+rec = |fields| Value.rec(fields) ?? Value.text("(not a record)")
+
+variant_of : Str, List(Value) -> Value
+variant_of = |name, args| Value.tag(name, args) ?? Value.text("(not a tag: ${name})")

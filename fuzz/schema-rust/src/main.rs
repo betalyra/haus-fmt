@@ -25,7 +25,7 @@ fn line(text: &str) -> String {
     };
     match schemas::roundtrip(suite, ty, &value) {
         None => format!("crash no type {suite}.{ty}"),
-        Some(Ok(encoded)) => format!("ok {}", haus::canonical(&encoded).expect("a value read or written has a canonical form")),
+        Some(Ok(encoded)) => format!("ok {}", haus::canonical(&encoded)),
         Some(Err(e)) => format!("err {} {} {}", e.place(), e.code, e.to_string().replace(['\n', '\r'], " ")),
     }
 }

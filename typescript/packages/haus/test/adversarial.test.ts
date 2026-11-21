@@ -155,8 +155,7 @@ describe("encoding hostile JS values", () => {
 
   it("the raw value of an Unknown is checked before it is written", () => {
     const Event = h.OpenVariant({ Ping: h.Unit })
-    const cyclic = arr([]) as { kind: "array"; items: Value[] }
-    cyclic.items.push(cyclic)
+    const cyclic = forgedCycle()
     const fake = { _tag: "@unknown", tag: "X", value: cyclic } as unknown as h.Unknown
     expect(errorOf(() => h.encode(Event, fake)).message).toContain("nesting deeper than 256")
     const notAValue = { _tag: "@unknown", tag: "X", value: { evil: true } } as unknown as h.Unknown
@@ -164,10 +163,19 @@ describe("encoding hostile JS values", () => {
   })
 })
 
+/**
+ * A value that contains itself. The constructors can't build one (they copy
+ * and freeze), so it is forged: a parsed array, changed with a cast.
+ */
+const forgedCycle = (): Value => {
+  const cyclic = parseAll("[]")[0] as unknown as { items: unknown[] }
+  cyclic.items.push(cyclic)
+  return cyclic as unknown as Value
+}
+
 describe("decoding values built in code", () => {
-  it("a cyclic Value is rejected before decoding", () => {
-    const cyclic = arr([]) as { kind: "array"; items: Value[] }
-    cyclic.items.push(cyclic)
+  it("a forged cyclic Value is rejected before decoding", () => {
+    const cyclic = forgedCycle()
     expect(errorOf(() => h.decode(h.Array(h.Int), cyclic)).message).toContain("nested deeper than 256")
   })
 

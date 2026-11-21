@@ -3,7 +3,7 @@ import { inspect } from "node:util"
 import { describe, expect, it } from "vitest"
 import {
   canonical, checkData, compileSchemaFile, deprecation, equals, hoverAt, hoverContext, hoverMarkdown, hoverText, parse, parseAll,
-  arr, num, parseSchemaFile, parseWithLocations, schemaDeclarations, Secret, StreamReader, variant, withoutAttributes, type RecordType, type Value, type VariantType,
+  arr, num, parseSchemaFile, parseWithLocations, rec, schemaDeclarations, Secret, str, StreamReader, variant, withoutAttributes, type RecordType, type Value, type VariantType,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
 
@@ -128,37 +128,31 @@ describe("Any", () => {
     expect(h.stringify(schemas.Root!, root, { style: "compact" })).toBe('{ kind: "x", payload: Order { id: 255, total: 19.90, tags: [A, B("c")] } }')
   })
 
-  it("checks a value before writing it", () => {
-    const bad: unknown[] = [
-      { kind: "number", text: "1; 2" },
-      { kind: "number", text: "1 " },
-      { kind: "number", text: "+1" },
-      { kind: "number", text: 1 },
-      { kind: "number", text: "1e99999" },
+  it("checks a value before writing it: a value, within the limits", () => {
+    const notValues: unknown[] = [
+      { kind: "number", text: "1" },
       { kind: "variant", tag: "lower", args: [] },
       { kind: "record", fields: { a: 1 } },
       { kind: "array", items: [{ kind: "nope" }] },
       "plain string",
+      undefined,
     ]
-    for (const value of bad) expect(() => h.encode(h.Any, value as Value)).toThrow(h.HausEncodeError)
-    const deep: Value = Array.from({ length: 300 }).reduce<Value>((v) => ({ kind: "array", items: [v] }), { kind: "number", text: "1" })
+    for (const value of notValues) expect(() => h.encode(h.Any, value as Value)).toThrow(expect.objectContaining({ code: "cannot-encode" }))
+    expect(() => h.encode(h.Any, num("1e99999"))).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
+    const deep: Value = Array.from({ length: 300 }).reduce<Value>((v) => arr([v]), num("1"))
     expect(() => h.encode(h.Any, deep)).toThrow(/nesting deeper/)
   })
 
-  it("normalizes number literals built in code, as the parser would", () => {
-    const n = (text: string) => h.encode(h.Any, { kind: "number", text })
-    expect(n("1E5")).toEqual({ kind: "number", text: "1e5" })
-    expect(n("1e+05")).toEqual({ kind: "number", text: "1e5" })
-    expect(n("0xFF")).toEqual({ kind: "number", text: "255" })
-    expect(n("1_000.50")).toEqual({ kind: "number", text: "1000.50" })
-    expect(n("-0")).toEqual({ kind: "number", text: "-0" })
-    // Unchanged parts are kept as they are; changed ones are copied.
-    const inner: Value = { kind: "array", items: [{ kind: "string", value: "a" }] }
-    const value: Value = { kind: "record", fields: new Map<string, Value>([["a", inner], ["b", { kind: "number", text: "1E2" }]]) }
-    const encoded = h.encode(h.Any, value) as Extract<Value, { kind: "record" }>
-    expect(encoded).not.toBe(value)
-    expect(encoded.fields.get("a")).toBe(inner)
-    expect(encoded.fields.get("b")).toEqual({ kind: "number", text: "1e2" })
+  it("writes a value built in code back as it is: its numbers are normalized when it is built", () => {
+    const n = (text: string) => h.encode(h.Any, num(text))
+    expect(n("1E5")).toEqual(parse("1e5"))
+    expect(n("1e+05")).toEqual(parse("1e5"))
+    expect(n("0xFF")).toEqual(parse("255"))
+    expect(n("1_000.50")).toEqual(parse("1000.50"))
+    expect(n("-0")).toEqual(parse("-0"))
+    const value = rec({ a: arr([str("a")]), b: num("1E2") })
+    expect(h.encode(h.Any, value)).toBe(value)
+    expect(h.stringify(h.Any, value, { style: "compact" })).toBe('{ a: ["a"], b: 1e2 }')
   })
 
   it("encodes every value the parser produced again, under the same limits", () => {
@@ -199,8 +193,8 @@ describe("Any", () => {
   // A DAG of depth 64 would expand to 2^64 nodes: the work is bounded by
   // counted steps, not by time. A small budget keeps the test fast under load.
   const shared = (depth: number): Value => {
-    let v: Value = { kind: "number", text: "1" }
-    for (let i = 0; i < depth; i++) v = { kind: "array", items: [v, v] }
+    let v: Value = num("1")
+    for (let i = 0; i < depth; i++) v = arr([v, v])
     return v
   }
 

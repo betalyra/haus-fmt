@@ -148,7 +148,7 @@ ToJson := [].{
 	decimal : Str, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	decimal = |text, e| {
 		n = Encode.decimal(text, e)?
-		match n.value {
+		match n.value.view() {
 			Num(literal) => Ok({ value: String(literal), steps: n.steps })
 			_ => Err({ code: ErrorCode.cannot_encode, reason: "not a number literal", path: "" })
 		}
@@ -169,8 +169,8 @@ ToJson := [].{
 	## `< >`: any tag, as an unknown value.
 	any_tag : [Bare(Str), Other(Str, List(Value))], Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	any_tag = |t, e| match t {
-		Bare(tag) => unknown(tag, [], e)
-		Other(tag, args) => unknown(tag, args, e)
+		Bare(name) => unknown(name, [], e)
+		Other(name, args) => unknown(name, args, e)
 	}
 
 	## `Secret a`: the value in full (the receiver needs it); an error says
@@ -312,9 +312,7 @@ ToJson := [].{
 	## §16.3), a step for each value in them.
 	unknown : Str, List(Value), Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	unknown = |name, args, e| {
-		if !JsonValue.is_tag_name(name) {
-			return Err({ code: ErrorCode.invalid_tag, reason: "not a tag name: A to Z, then letters, digits and _", path: "" })
-		}
+		variant = Value.tag(name, args).map_err(|err| { code: err.code, reason: err.reason, path: "" })?
 		if args.is_empty() {
 			return Encode.made(Object([("_tag", String(name))]), e)
 		}
@@ -325,7 +323,7 @@ ToJson := [].{
 			$i = $i + 1
 		}
 		# Counted, and its depth checked at its place, as the writer counts the variant.
-		checked = Encode.any(Tag(name, args), e)?
+		checked = Encode.any(variant, e)?
 		Ok({ value: Object([("_tag", String(name)), ("_args", Array($out))]), steps: checked.steps })
 	}
 
@@ -375,7 +373,7 @@ at_index = |result, i, prefix| match result {
 ## A float the haus encoder wrote, as JSON.
 float : Encode.Encoded(Value) -> Try(Encode.Encoded(JsonValue), Encode.Error)
 float = |v| Ok({
-	value: match v.value {
+	value: match v.value.view() {
 		Num(text) => Number(text)
 		Tag("NaN", []) => String("NaN")
 		Tag("Infinity", []) => String("Infinity")
@@ -397,9 +395,10 @@ expect ToJson.to_str(Ok(1), |r, e| ToJson.result(r, e, ToJson.i32, ToJson.str)) 
 expect ToJson.to_str({ id: 1, nick: Missing }, |u, e| ToJson.object(e, [("id", ToJson.required(u.id, ToJson.i32)), ("nick", ToJson.optional(u.nick, ToJson.str))])) == Ok("{\"id\":1}")
 expect ToJson.to_str((1, 2), |(a, b), e| ToJson.tagged_args("Point", e, [|inner| ToJson.i32(a, inner), |inner| ToJson.i32(b, inner)])) == Ok("{\"_tag\":\"Point\",\"values\":[1,2]}")
 expect ToJson.to_str({}, |_, e| ToJson.tag("Empty", e)) == Ok("{\"_tag\":\"Empty\"}")
-expect ToJson.unknown("Hexagon", [Num("1")], Encode.top).map_ok(|o| JsonValue.to_str(o.value)) == Ok(Ok("{\"_tag\":\"Hexagon\",\"_args\":[{\"_num\":\"1\"}]}"))
-expect ToJson.unknown("Hexagon", [Num("x")], Encode.top) == Err({ code: "invalid-number", reason: "not a number literal", path: "._args[0]" })
-expect ToJson.to_str(Tag("A", []), ToJson.any) == Ok("{\"_tag\":\"A\"}")
+expect ToJson.unknown("Hexagon", [Value.num("1") ?? Value.text("")], Encode.top).map_ok(|o| JsonValue.to_str(o.value)) == Ok(Ok("{\"_tag\":\"Hexagon\",\"_args\":[{\"_num\":\"1\"}]}"))
+expect ToJson.unknown("Hexagon", [Value.num("1e7000") ?? Value.text("")], Encode.top) == Err({ code: "exponent-too-large", reason: "exponent larger than 6144", path: "._args[0]" })
+expect ToJson.unknown("hexagon", [], Encode.top).map_ok(|_| {}) == Err({ code: "invalid-tag", reason: "invalid tag 'hexagon': a tag is A to Z, then letters, digits and _", path: "" })
+expect ToJson.to_str(Value.tag("A", []) ?? Value.text(""), ToJson.any) == Ok("{\"_tag\":\"A\"}")
 # DEL, C1 and bidi controls are escaped.
 expect ToJson.to_str("a\u(7F)\u(85)\u(202E)", ToJson.str) == Ok("\"a\\u007f\\u0085\\u202e\"")
 expect ToJson.lines([1, 2], ToJson.u8) == Ok("1\n2\n")
@@ -449,7 +448,7 @@ expect ToJson.unknown("hexagon", [], Encode.top).map_err(|e| e.code) == Err("inv
 expect ToJson.to_str(Secret.new("x"), |s, e| ToJson.secret(s, "Secret Decimal", e, ToJson.decimal)).map_err(|e| (e.code, e.reason)) == Err(("invalid-secret", "not a valid Secret Decimal (the value is hidden)"))
 expect ToJson.to_str([("pt-BR", "1E5x")], |m, e| ToJson.map(m, e, ToJson.decimal)).map_err(|e| (e.code, ErrorCode.place(e.path))) == Err(("cannot-encode", "$[\"pt-BR\"]"))
 # An error inside a Secret says nothing of the value: not a key of its Map, not where in its Any.
-expect ToJson.to_str(Secret.new([("alice-pw", Rec([("a", Num("1")), ("a", Num("2"))]))]), |s, e| ToJson.secret(s, "Secret (Map Any)", e, |m, e1| ToJson.map(m, e1, ToJson.any))) == Err({ code: "invalid-secret", reason: "not a valid Secret (Map Any) (the value is hidden)", path: "" })
+expect ToJson.to_str(Secret.new([("alice-pw", Value.num("1e7000") ?? Value.text(""))]), |s, e| ToJson.secret(s, "Secret (Map Any)", e, |m, e1| ToJson.map(m, e1, ToJson.any))) == Err({ code: "invalid-secret", reason: "not a valid Secret (Map Any) (the value is hidden)", path: "" })
 
 # A native value nested far deeper than the limit: the writer stops at the
 # limit of the haus value's depth, without recursing on (see Encode's tests).
@@ -513,7 +512,7 @@ expect ToJson.value_with(dag(40), to_json_dag, budget(100_000)).map_err(|e| (e.c
 expect ToJson.value_with(dag(3), to_json_dag, budget(15)).is_ok() and ToJson.value_with(dag(3), to_json_dag, budget(14)).map_err(|e| e.code).map_ok(|_| {}) == Err("step-budget")
 # Scalars and raw values count too: a list of three numbers is four values, `[[], []]` three.
 expect ToJson.value_with([1.I32, 2, 3], |l, e| ToJson.list(l, e, ToJson.i32), budget(4)).is_ok() and ToJson.value_with([1.I32, 2, 3], |l, e| ToJson.list(l, e, ToJson.i32), budget(3)).is_err()
-expect ToJson.value_with(Arr([Arr([]), Arr([])]), ToJson.any, budget(3)).is_ok() and ToJson.value_with(Arr([Arr([]), Arr([])]), ToJson.any, budget(2)).is_err()
+expect ToJson.value_with(Value.arr([Value.arr([]), Value.arr([])]), ToJson.any, budget(3)).is_ok() and ToJson.value_with(Value.arr([Value.arr([]), Value.arr([])]), ToJson.any, budget(2)).is_err()
 # JSON built in code, shared as much: the JSON writer counts too.
 expect {
 	var $j = Array([])

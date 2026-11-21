@@ -61,16 +61,14 @@ def test_a_single_document_holds_one_value(text: str) -> None:
     assert (e.value.code, format_path(e.value.path)) == ("not-one-value", "$")
 
 
-def test_a_number_built_in_code_must_be_a_literal() -> None:
-    """Spec §11: a number whose text isn't a literal is `invalid-number`; another spelling is normalized."""
+def test_a_number_built_in_code_is_normalized() -> None:
+    """Spec §11: a number built from another spelling is normalized; one whose text isn't a literal can't be built."""
     payload = SCHEMA["Payload"]
     assert payload.canonical(Array((Number("1E+05"), Number("0xFF")))) == "[1e5,255]"
+    assert haus.to_haus_json(Number("1_000")) == '{"_haus":1,"_value":{"_num":"1000"}}'
     with pytest.raises(HausEncodeError) as e:
-        payload.encode(Array((Number("1"), Number("01"))))
-    assert (e.value.code, format_path(e.value.path)) == ("invalid-number", "$[1]")
-    with pytest.raises(HausEncodeError) as j:
-        haus.to_haus_json(Number("NaN"))
-    assert j.value.code == "invalid-number"
+        Number("01")
+    assert (e.value.code, format_path(e.value.path)) == ("invalid-number", "$")
 
 
 def roundtrip(type_name: str, text: str, schema: Schema = SCHEMA) -> str:
@@ -163,10 +161,10 @@ def test_unknown_values_are_not_listed_cases() -> None:
 
 def test_unknown_values_are_checked_before_writing() -> None:
     t = SCHEMA["Shape"]
-    with pytest.raises(HausEncodeError, match="tag name"):
-        t.encode(Unknown(Variant("lower")))
-    with pytest.raises(HausEncodeError, match="number literal"):
-        t.encode(Unknown(Variant("X", (Number("1."),))))
+    with pytest.raises(HausEncodeError, match="tag longer than 3"):
+        t.encode(Unknown(Variant("Hexagon")), limits=Limits(max_string_length=3))
+    with pytest.raises(HausEncodeError, match="exponent"):
+        t.encode(Unknown(Variant("X", (Number("1e9999"),))))
     assert t.canonical(Unknown(Variant("X", (Number("1E+5"),)))) == "X(1e5)"
 
 
@@ -183,14 +181,12 @@ def test_any_is_checked_before_writing() -> None:
     t = SCHEMA["Payload"]
     with pytest.raises(HausEncodeError, match="haus value"):
         t.encode(42)
-    with pytest.raises(HausEncodeError, match="surrogate"):
-        t.encode(String("\ud800"))
     with pytest.raises(HausEncodeError, match="exponent"):
         t.encode(Number("1e9999"))
     with pytest.raises(HausEncodeError, match="longer than 3"):
         t.encode(String("abcd"), limits=Limits(max_string_length=3))
-    with pytest.raises(HausEncodeError, match="string key"):
-        t.encode(Record({1: Number("1")}))  # type: ignore[dict-item]
+    with pytest.raises(HausEncodeError, match="key longer than 3"):
+        t.encode(Record({"abcd": Number("1")}), limits=Limits(max_string_length=3))
     deep: haus.Value = Number("1")
     for _ in range(300):
         deep = Array((deep,))
@@ -284,7 +280,9 @@ def test_secret_encode_errors_never_show_the_value() -> None:
         t.encode({"name": "a", "key": "sk-plain-value"})
     assert "sk-plain-value" not in str(e.value)
     with pytest.raises(HausEncodeError) as e:
-        t.encode({"name": "a", "key": Secret("k"), "raw": Secret(String("\ud800 sk-raw"))})
+        t.encode(
+            {"name": "a", "key": Secret("k"), "raw": Secret(String("sk-raw-value"))}, limits=Limits(max_string_length=5)
+        )
     assert e.value.path == ("raw",) and "sk-raw" not in str(e.value)
 
 

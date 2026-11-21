@@ -11,8 +11,8 @@
  * the error with its path (errors.ts gives Effect's issues their codes).
  */
 import {
-  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as coreRec, specialFloat, str as coreStr, toFloat,
-  payloadHint, quoteText, unpairedSurrogate, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
+  arr as vArr, bytes as vBytes, checkStdTime, equals, floatValue as coreFloatValue, MAX_DEPTH, num as vNum, rec as vRec, specialFloat, str as vStr, toFloat,
+  payloadHint, quoteText, variant as vVariant, type CasePayload, type ErrorCode, type FloatType, type HVariant, type StdTimeType, type Value,
 } from "@haus-fmt/haus"
 import * as h from "@haus-fmt/haus/schema"
 import { Array as Arr, BigDecimal, DateTime, Duration, Match, Option, Predicate, Redacted, SchemaAST } from "effect"
@@ -79,20 +79,6 @@ export type NumberType = "Int" | FloatType
 export class ConversionError {
   /** `hint`: a concrete fix (`wrong-payload`: what the tag's case takes); without one, the catalogue's. */
   constructor(readonly message: string, readonly code: ErrorCode, readonly path: ReadonlyArray<string | number> = [], readonly hint?: string) {}
-}
-
-/**
- * A string or key of the host value, as it is written: an unpaired surrogate,
- * which a JavaScript string can hold, has no UTF-8 form (spec §4).
- */
-const writable = (s: string, what: "string" | "key"): string => {
-  if (unpairedSurrogate(s) >= 0) throw new ConversionError(`a ${what} with an unpaired surrogate, which has no UTF-8 form`, "cannot-encode")
-  return s
-}
-const vStr = (s: string): Value => coreStr(writable(s, "string"))
-const vRec = (fields: ReadonlyMap<string, Value>): Value => {
-  for (const k of fields.keys()) writable(k, "key")
-  return coreRec(fields)
 }
 
 /** Convert the value at `key`: an error inside names its place. */
@@ -1090,6 +1076,10 @@ function compileDeclaration(ast: SchemaAST.Declaration): Converter {
 }
 
 // ── encoding: JS (Effect's encoded form) → haus Value ────────
+// Built with the core's constructors, which build only haus values (spec
+// §11): what isn't one (a string with an unpaired surrogate, a schema's tag
+// such as `lower`, a number that isn't finite) is their HausEncodeError, with
+// its code, which `encodeValue` (index.ts) reports as a HausSchemaError.
 
 export type Encoder = (js: unknown) => Value
 

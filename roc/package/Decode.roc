@@ -90,21 +90,21 @@ Decode := [].{
 	# ── scalars ─────────────────────────────────────────────
 
 	str : Value -> Try(Str, Error)
-	str = |v| match v {
+	str = |v| match v.view() {
 		Text(s) => Ok(s)
 		_ => expected("String", v)
 	}
 
 	## A byte string: `x"9f86d081"`.
 	bytes : Value -> Try(List(U8), Error)
-	bytes = |v| match v {
+	bytes = |v| match v.view() {
 		Bytes(b) => Ok(b)
 		_ => expected("Bytes", v)
 	}
 
 	## `Int`: an integer of any size, kept as its digits (see `Int`).
 	int : Value -> Try(Int, Error)
-	int = |v| match v {
+	int = |v| match v.view() {
 		Num(text) => Int.from_str(text).map_err(|_| { code: ErrorCode.not_an_integer, reason: "expected a whole number (Int), found ${ErrorCode.shown(text)}", path: "" })
 		_ => expected("a number (Int)", v)
 	}
@@ -137,7 +137,7 @@ Decode := [].{
 	## and the tags `NaN`, `Infinity`, `NegInfinity`. A number too large for
 	## a Float64 is an error, not an infinity.
 	f64 : Value -> Try(F64, Error)
-	f64 = |v| match v {
+	f64 = |v| match v.view() {
 		Num(text) => F64.from_str(text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${ErrorCode.shown(text)} is too large for Float64", path: "" })
 		Tag("NaN", []) => Ok(0.0 / 0.0)
 		Tag("Infinity", []) => Ok(1.0 / 0.0)
@@ -149,7 +149,7 @@ Decode := [].{
 	## the nearest binary32 value (never through a binary64), and the tags
 	## `NaN`, `Infinity`, `NegInfinity`. Too large for a Float32 is an error.
 	f32 : Value -> Try(F32, Error)
-	f32 = |v| match v {
+	f32 = |v| match v.view() {
 		Num(text) => F32.from_str(text).map_err(|_| { code: ErrorCode.out_of_range, reason: "${ErrorCode.shown(text)} is too large for Float32", path: "" })
 		Tag("NaN", []) => Ok(0.0 / 0.0)
 		Tag("Infinity", []) => Ok(1.0 / 0.0)
@@ -160,14 +160,14 @@ Decode := [].{
 	## An exact decimal: any number, kept as its normalized literal, scale and
 	## exponent included (`19.90` stays "19.90", `1.5e3` stays "1.5e3").
 	decimal : Value -> Try(Str, Error)
-	decimal = |v| match v {
+	decimal = |v| match v.view() {
 		Num(text) => Ok(text)
 		_ => expected("a number", v)
 	}
 
 	## `True` / `False`.
 	bool : Value -> Try(Bool, Error)
-	bool = |v| match v {
+	bool = |v| match v.view() {
 		Tag("True", []) => Ok(True)
 		Tag("False", []) => Ok(False)
 		_ => not_case("True | False", v, ["True", "False"])
@@ -175,7 +175,7 @@ Decode := [].{
 
 	## A payload-less tag, returned as its name: `EUR` → "EUR".
 	tag_name : Value -> Try(Str, Error)
-	tag_name = |v| match v {
+	tag_name = |v| match v.view() {
 		Tag(name, []) => Ok(name)
 		_ => expected("a tag without payload", v)
 	}
@@ -199,7 +199,7 @@ Decode := [].{
 
 	## `< >`: a bare tag by its name, or any other variant as it was.
 	any_tag : Value -> Try([Bare(Str), Other(Str, List(Value))], Error)
-	any_tag = |v| match v {
+	any_tag = |v| match v.view() {
 		Tag(name, []) => Ok(Bare(name))
 		Tag(name, args) => Ok(Other(name, args))
 		_ => expected("a tag", v)
@@ -223,16 +223,20 @@ Decode := [].{
 
 	## The fields of a record, or of a variant's record payload (`Circle { … }`).
 	record : Value -> Try(List((Str, Value)), Error)
-	record = |v| match v {
+	record = |v| match v.view() {
 		Rec(fields) => Ok(fields)
-		Tag(_, [Rec(fields)]) => Ok(fields)
+		Tag(_, [payload_value]) =>
+			match payload_value.view() {
+				Rec(fields) => Ok(fields)
+				_ => expected("a record", v)
+			}
 		_ => expected("a record", v)
 	}
 
 	## The fields of a record, and only of a record: `User { … }` is a variant,
 	## not a record (spec §15). Generated decoders use this one.
 	strict_record : Value -> Try(List((Str, Value)), Error)
-	strict_record = |v| match v {
+	strict_record = |v| match v.view() {
 		Rec(fs) => Ok(fs)
 		_ => expected("a record", v)
 	}
@@ -256,7 +260,7 @@ Decode := [].{
 
 	## A `Maybe` value: `None` or `Some(x)`.
 	maybe : Value, (Value -> Try(a, Error)) -> Try([None, Some(a)], Error)
-	maybe = |v, decoder| match v {
+	maybe = |v, decoder| match v.view() {
 		Tag("None", []) => Ok(None)
 		Tag("Some", [inner]) => Ok(Some(at(decoder(inner), "[0]")?))
 		_ => not_case("None | Some(…)", v, ["None", "Some"])
@@ -271,7 +275,7 @@ Decode := [].{
 
 	## `Map v`: a record used as a dictionary.
 	map : Value, (Value -> Try(a, Error)) -> Try(List((Str, a)), Error)
-	map = |v, decoder| match v {
+	map = |v, decoder| match v.view() {
 		Rec(fields) => {
 			var $out = []
 			for (k, x) in fields {
@@ -284,7 +288,7 @@ Decode := [].{
 
 	## `Result e a`: `Ok(a)` or `Err(e)`.
 	result : Value, (Value -> Try(a, Error)), (Value -> Try(e, Error)) -> Try(Try(a, e), Error)
-	result = |v, ok, err| match v {
+	result = |v, ok, err| match v.view() {
 		Tag("Ok", [x]) => Ok(Ok(at(ok(x), "(Ok)[0]")?))
 		Tag("Err", [x]) => Ok(Err(at(err(x), "(Err)[0]")?))
 		_ => not_case("Ok(…) | Err(…)", v, ["Ok", "Err"])
@@ -298,7 +302,7 @@ Decode := [].{
 	## An argument that isn't a record (`Circle(1.5)`) is the wrong payload,
 	## a `wrong-payload` at the variant's place (spec §15).
 	payload : Str, Value, (List((Str, Value)) -> Try(a, Error)) -> Try(a, Error)
-	payload = |tag, v, decoder| match v {
+	payload = |tag, v, decoder| match v.view() {
 		Rec(fields) => at(decoder(fields), "(${tag})")
 		_ => fail(ErrorCode.wrong_payload, "${tag} takes one argument, a record, found ${describe(v)}: write `${tag} { … }`")
 	}
@@ -308,7 +312,7 @@ Decode := [].{
 	## `payload`, an argument that isn't a record (`Wrap(1)`) is the wrong
 	## payload, and errors inside it are under `(Tag)`.
 	record_arg : Str, Value, (Value -> Try(a, Error)) -> Try(a, Error)
-	record_arg = |tag, v, decoder| match v {
+	record_arg = |tag, v, decoder| match v.view() {
 		Rec(_) => at(decoder(v), "(${tag})")
 		_ => fail(ErrorCode.wrong_payload, "${tag} takes one argument, a record, found ${describe(v)}: write `${tag} { … }`")
 	}
@@ -338,7 +342,7 @@ Decode := [].{
 
 	## Each item of an array.
 	check_items : Value, (Value -> Try({}, Error)) -> Try({}, Error)
-	check_items = |v, check| match v {
+	check_items = |v, check| match v.view() {
 		Arr(items) => {
 			var $i = 0.U64
 			for x in items {
@@ -352,7 +356,7 @@ Decode := [].{
 
 	## Each entry of a `Map`.
 	check_entries : Value, (Value -> Try({}, Error)) -> Try({}, Error)
-	check_entries = |v, check| match v {
+	check_entries = |v, check| match v.view() {
 		Rec(fields) => {
 			for (k, x) in fields {
 				at(check(x), ErrorCode.path_key(k))?
@@ -364,7 +368,7 @@ Decode := [].{
 
 	## The fields of a record that have checks, where present.
 	check_fields : Value, List((Str, (Value -> Try({}, Error)))) -> Try({}, Error)
-	check_fields = |v, checks| match v {
+	check_fields = |v, checks| match v.view() {
 		Rec(fields) => {
 			for (k, x) in fields {
 				match checks.find_first(|(name, _)| name == k) {
@@ -380,7 +384,7 @@ Decode := [].{
 	## The payload of a variant's case: its positional values (`Args`), or
 	## the fields of its record (`Fields`), a step from the case itself.
 	check_cases : Value, List((Str, [Args(List((Value -> Try({}, Error)))), Fields(List((Str, (Value -> Try({}, Error)))))])) -> Try({}, Error)
-	check_cases = |v, cases| match v {
+	check_cases = |v, cases| match v.view() {
 		Tag(name, args) =>
 			match cases.find_first(|(tag, _)| tag == name) {
 				Ok((_, Args(checks))) if checks.len() == args.len() => {
@@ -421,7 +425,7 @@ Decode := [].{
 
 	## An array, decoding each item.
 	list : Value, (Value -> Try(a, Error)) -> Try(List(a), Error)
-	list = |v, decoder| match v {
+	list = |v, decoder| match v.view() {
 		Arr(items) => {
 			var $out = []
 			var $i = 0.U64
@@ -457,7 +461,7 @@ Decode := [].{
 
 ## A whole number in range for `name`, converted with `from_str`.
 whole : Value, Str, Str, Str, (Str -> Try(n, [BadNumStr])) -> Try(n, Error)
-whole = |v, name, min, max, from_str| match v {
+whole = |v, name, min, max, from_str| match v.view() {
 	Num(text) => {
 		digits = if (text.starts_with("-")) text.drop_prefix("-") else text
 		if digits.is_empty() or !digits.to_utf8().all(|b| b >= '0' and b <= '9') {
@@ -497,7 +501,7 @@ at = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
 not_case : Str, Value, List(Str) -> Try(a, Error)
 not_case = |what, v, known| {
 	reason = "expected ${what}, found ${describe(v)}"
-	match v {
+	match v.view() {
 		Tag(tag, _) if known.contains(tag) => Decode.fail(ErrorCode.wrong_payload, reason)
 		Tag(_, _) => Decode.fail(ErrorCode.unknown_tag, reason)
 		_ => Decode.fail(ErrorCode.type_mismatch, reason)
@@ -505,13 +509,17 @@ not_case = |what, v, known| {
 }
 
 tagged_string : Str, Value -> Try(Str, Error)
-tagged_string = |name, v| match v {
-	Tag(tag, [Text(s)]) if tag == name => Ok(s)
+tagged_string = |name, v| match v.view() {
+	Tag(tag, [payload_value]) if tag == name =>
+		match payload_value.view() {
+			Text(s) => Ok(s)
+			_ => Decode.expected("${name}(\"…\")", v)
+		}
 	_ => Decode.expected("${name}(\"…\")", v)
 }
 
 describe : Value -> Str
-describe = |v| match v {
+describe = |v| match v.view() {
 	Num(t) => "number ${ErrorCode.shown(t)}"
 	Text(_) => "a string"
 	Bytes(_) => "bytes"
@@ -521,6 +529,17 @@ describe = |v| match v {
 }
 
 # ── tests ────────────────────────────────────────────────────
+
+# Values built in code, for the tests: the constructors' value, or a string
+# that says which one failed.
+num : Str -> Value
+num = |literal| Value.num(literal) ?? Value.text("(not a number: ${literal})")
+
+rec : List((Str, Value)) -> Value
+rec = |fields| Value.rec(fields) ?? Value.text("(not a record)")
+
+variant : Str, List(Value) -> Value
+variant = |name, args| Value.tag(name, args) ?? Value.text("(not a tag: ${name})")
 
 Order : { id : U64, note : [Missing, Present(Str)], coupon : [None, Some(Str)], prices : List(Str), paid : Bool }
 
@@ -641,7 +660,7 @@ expect {
 	currency = |c| Decode.codec(
 		c,
 		Decode.any,
-		|x| match x {
+		|x| match x.view() {
 			Tag("EUR", []) => Ok({})
 			_ => Err("not a currency")
 		},
@@ -651,7 +670,7 @@ expect {
 		v,
 		check,
 		Decode.any,
-		|x| match x {
+		|x| match x.view() {
 			Tag("Money", [_, _]) => Ok({})
 			_ => Err("not money")
 		},
@@ -669,12 +688,12 @@ expect {
 		Ok({}) => "ok"
 		Err(e) => ErrorCode.place(e.path)
 	}
-	place(Arr([Num("1"), Num("2")]), |v| Decode.check_items(v, fails)) == "$[0]"
-		and place(Rec([("pt-BR", Num("1"))]), |v| Decode.check_entries(v, fails)) == "$[\"pt-BR\"]"
-		and place(Rec([("a", Num("1")), ("b", Num("2"))]), |v| Decode.check_fields(v, [("b", fails)])) == "$.b"
-		and place(Tag("Circle", [Rec([("r", Num("1"))])]), |v| Decode.check_cases(v, [("Circle", Fields([("r", fails)]))])) == "$.r"
-		and place(Num("1"), |v| Decode.check_items(v, fails)) == "ok"
-		and Decode.check_secret(Num("1"), "Secret Money", fails).map_err(|e| (e.code, e.path)) == Err(("invalid-secret", ""))
+	place(Value.arr([num("1"), num("2")]), |v| Decode.check_items(v, fails)) == "$[0]"
+		and place(rec([("pt-BR", num("1"))]), |v| Decode.check_entries(v, fails)) == "$[\"pt-BR\"]"
+		and place(rec([("a", num("1")), ("b", num("2"))]), |v| Decode.check_fields(v, [("b", fails)])) == "$.b"
+		and place(variant("Circle", [rec([("r", num("1"))])]), |v| Decode.check_cases(v, [("Circle", Fields([("r", fails)]))])) == "$.r"
+		and place(num("1"), |v| Decode.check_items(v, fails)) == "ok"
+		and Decode.check_secret(num("1"), "Secret Money", fails).map_err(|e| (e.code, e.path)) == Err(("invalid-secret", ""))
 }
 # A closed record: an unknown field at its place; keys that aren't identifiers quoted.
 expect {
@@ -687,14 +706,14 @@ expect {
 }
 expect Decode.one("{ \"pt-BR\": \"x\" }", |v| Decode.map(v, Decode.i32)) == Err(Decode({ code: "type-mismatch", reason: "expected a number (Int32), found a string", path: "[\"pt-BR\"]" }))
 expect {
-	shape = |v| match v {
+	shape = |v| match v.view() {
 		Tag("Shape", [p]) => Decode.payload("Shape", p, |fs| Decode.field(fs, "r", Decode.i32))
 		_ => Decode.expected("Shape { … }", v)
 	}
 	code_of("Shape { r: \"1\" }", shape) == "type-mismatch at $.r" and code_of("Shape(1)", shape) == "wrong-payload at $" and code_of("Shape([1])", shape) == "wrong-payload at $"
 }
 expect {
-	shape = |v| match v {
+	shape = |v| match v.view() {
 		Tag("Circle", [p]) => Decode.payload("Circle", p, |fs| Decode.field(fs, "r", Decode.f64))
 		_ => Decode.expected("Circle { … }", v)
 	}
@@ -702,16 +721,16 @@ expect {
 }
 expect Decode.error_json({ code: "missing-field", reason: "missing field 'id'", path: "[2](Item)" }) == "{\"code\":\"missing-field\",\"message\":\"missing field 'id'\",\"path\":\"$[2]\",\"hint\":\"Add the field, or mark it optional in the schema with `?` after its name.\",\"docs\":\"https://haus-fmt.org/docs/errors#missing-field\"}"
 # A record case by name: one record, as `Tag { … }`; anything else is the wrong payload.
-expect Decode.record_arg("Wrap", Rec([("w", Num("1"))]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)) == Ok(1)
-expect Decode.record_arg("Wrap", Num("1"), |v| Decode.i32(v)).map_err(|e| e.code) == Err("wrong-payload")
-expect Decode.record_arg("Wrap", Rec([]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)).map_err(|e| (e.code, e.path)) == Err(("missing-field", "(Wrap)"))
+expect Decode.record_arg("Wrap", rec([("w", num("1"))]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)) == Ok(1)
+expect Decode.record_arg("Wrap", num("1"), |v| Decode.i32(v)).map_err(|e| e.code) == Err("wrong-payload")
+expect Decode.record_arg("Wrap", rec([]), |v| Decode.field(Decode.record(v)?, "w", Decode.i32)).map_err(|e| (e.code, e.path)) == Err(("missing-field", "(Wrap)"))
 
 # A value built in code may nest deeper than any parser takes (spec §9.8):
 # `within_depth` checks the depth before the decoder recurses, as the parser
 # and the writer count it, and fails at the limit instead of overflowing.
 deep : U64, (Value -> Value) -> Value
 deep = |n, wrap| {
-	var $v = Arr([])
+	var $v = Value.arr([])
 	var $i = 0
 	while $i < n {
 		$v = wrap($v)
@@ -728,39 +747,39 @@ decode_nest = |v| Decode.list(v, decode_nest).map_ok(|items| Nest(items))
 # Far deeper than the call stack takes: about as deep as `roc test` drops a value
 # (an array 150,000 levels deep; 180,000 overflow its stack, as do 140,000 of `Some`).
 expect {
-	v = deep(150_000, |x| Arr([x]))
+	v = deep(150_000, |x| Value.arr([x]))
 	Decode.within_depth(v, decode_nest).map_err(|e| (e.code, e.reason, e.path == "[0]".repeat(256))).map_ok(|_| {}) == Err(("nesting-too-deep", "nesting deeper than 256 levels", True))
 }
-expect Decode.within_depth(deep(100_000, |x| Tag("Some", [x])), Decode.any).map_err(|e| e.path.count_utf8_bytes()).map_ok(|_| {}) == Err(256 * "(Some)[0]".count_utf8_bytes())
+expect Decode.within_depth(deep(100_000, |x| variant("Some", [x])), Decode.any).map_err(|e| e.path.count_utf8_bytes()).map_ok(|_| {}) == Err(256 * "(Some)[0]".count_utf8_bytes())
 # At the limit and one past it, at the place the writer names: arrays, records,
 # payloads, and records as a tag's only argument, which share its level (`Tag { … }`).
-expect [(|x| Arr([x]), "[0]"), (|x| Rec([("a", x)]), ".a"), (|x| Tag("Some", [x]), "(Some)[0]"), (|x| Tag("A", [Rec([("a", x)])]), "(A).a"), (|x| Tag("P", [Num("1"), x]), "(P)[1]")].all(
+expect [(|x| Value.arr([x]), "[0]"), (|x| rec([("a", x)]), ".a"), (|x| variant("Some", [x]), "(Some)[0]"), (|x| variant("A", [rec([("a", x)])]), "(A).a"), (|x| variant("P", [num("1"), x]), "(P)[1]")].all(
 	|(wrap, place)| {
 		at_limit = deep(255, wrap)
 		decoded = Decode.within_depth(wrap(at_limit), Decode.any).map_ok(|_| {})
 		Decode.within_depth(at_limit, Decode.any).is_ok() and decoded == Err({ code: "nesting-too-deep", reason: "nesting deeper than 256 levels", path: place.repeat(256) })
 	},
 )
-expect Decode.within_depth(deep(3, |x| Tag("A", [Rec([("pt-BR", x)])])), Decode.any).is_ok()
+expect Decode.within_depth(deep(3, |x| variant("A", [rec([("pt-BR", x)])])), Decode.any).is_ok()
 # Your own limits, at most `Value.max_supported_depth`.
 expect {
 	three = { ..Value.default_limits, max_depth: 3 }
-	ok = Decode.within_limits(deep(2, |x| Arr([x])), decode_nest, three).is_ok()
-	ok and Decode.within_limits(deep(3, |x| Arr([x])), decode_nest, three).map_ok(|_| {}) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 3 levels", path: "[0][0][0]" })
+	ok = Decode.within_limits(deep(2, |x| Value.arr([x])), decode_nest, three).is_ok()
+	ok and Decode.within_limits(deep(3, |x| Value.arr([x])), decode_nest, three).map_ok(|_| {}) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 3 levels", path: "[0][0][0]" })
 }
-expect Decode.within_limits(deep(1023, |x| Arr([x])), decode_nest, { ..Value.default_limits, max_depth: 1024 }).is_ok()
-expect Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code).map_ok(|_| {}) == Err("unsupported-depth")
+expect Decode.within_limits(deep(1023, |x| Value.arr([x])), decode_nest, { ..Value.default_limits, max_depth: 1024 }).is_ok()
+expect Decode.within_limits(num("1"), Decode.any, { ..Value.default_limits, max_depth: 1025 }).map_err(|e| e.code).map_ok(|_| {}) == Err("unsupported-depth")
 # An empty record, array or record payload is a level, as the parser counts it
 # (spec §7): a value built in code has the depth of the same value parsed.
 expect {
 	limits = |d| { ..Value.default_limits, max_depth: d }
 	built = |v, d| Decode.within_limits(v, Decode.any, limits(d)).is_ok()
 	parsed = |text, d| Value.parse_with(text, limits(d)).is_ok()
-	empties = [(Arr([]), "[]"), (Rec([]), "{}"), (Tag("A", [Rec([])]), "A {}"), (Tag("Some", [Arr([])]), "Some([])"), (Arr([Rec([])]), "[{}]")]
+	empties = [(Value.arr([]), "[]"), (rec([]), "{}"), (variant("A", [rec([])]), "A {}"), (variant("Some", [Value.arr([])]), "Some([])"), (Value.arr([rec([])]), "[{}]")]
 	empties.map(|(v, _)| (built(v, 0), built(v, 1), built(v, 2))) == [(False, True, True), (False, True, True), (False, True, True), (False, False, True), (False, False, True)]
 		and empties.all(|(v, text)| [0, 1, 2].all(|d| built(v, d) == parsed(text, d)))
 }
-expect Decode.within_limits(Arr([]), Decode.any, { ..Value.default_limits, max_depth: 0 }).map_err(|e| e.path).map_ok(|_| {}) == Err("") and Decode.within_limits(Num("1"), Decode.any, { ..Value.default_limits, max_depth: 0 }).is_ok()
+expect Decode.within_limits(Value.arr([]), Decode.any, { ..Value.default_limits, max_depth: 0 }).map_err(|e| e.path).map_ok(|_| {}) == Err("") and Decode.within_limits(num("1"), Decode.any, { ..Value.default_limits, max_depth: 0 }).is_ok()
 
 # A value built in code may share its parts (a DAG, spec §9.8): `deep(n, twice)`
 # is n + 1 arrays in memory but a tree of 2^(n + 1) − 1 values, which decoding
@@ -769,7 +788,7 @@ expect Decode.within_limits(Arr([]), Decode.any, { ..Value.default_limits, max_d
 # takes some 1.5 seconds built with `--opt=speed`, but half a minute in `roc
 # test`, so these tests take a smaller one.)
 twice : Value -> Value
-twice = |x| Arr([x, x])
+twice = |x| Value.arr([x, x])
 
 ## The values in nested arrays, as decoding visits them.
 values_in : Value -> Try(U64, Error)
@@ -784,7 +803,7 @@ expect decode_within(deep(40, twice), Decode.any, Value.default_limits, 1000).ma
 # A shared part counts each time it is reached: as many values as the tree it
 # stands for, and decoded as it is. 2^4 − 1 for three levels, at the limit and one under.
 expect {
-	tree = Value.parse("[[[[], []], [[], []]], [[[], []], [[], []]]]") ?? Num("0")
+	tree = Value.parse("[[[[], []], [[], []]], [[[], []], [[], []]]]") ?? num("0")
 	[deep(3, twice), tree].all(
 		|v| decode_within(v, values_in, Value.default_limits, 15) == Ok(15) and decode_within(v, values_in, Value.default_limits, 14).map_err(|e| e.code) == Err("too-many-nodes"),
 	)
@@ -792,8 +811,8 @@ expect {
 }
 # `Tag { … }` is two values, the tag and its record, as the parser makes them.
 expect {
-	built = Tag("A", [Rec([("a", Num("1"))])])
-	parsed = Value.parse("A { a: 1 }") ?? Num("0")
+	built = variant("A", [rec([("a", num("1"))])])
+	parsed = Value.parse("A { a: 1 }") ?? num("0")
 	[built, parsed].all(|v| decode_within(v, Decode.any, Value.default_limits, 3).is_ok() and decode_within(v, Decode.any, Value.default_limits, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "(A).a")))
 }
-expect decode_within(Arr([Num("1"), Rec([("pt-BR", Num("2"))])]), Decode.any, Value.default_limits, 3).map_err(|e| e.path).map_ok(|_| {}) == Err("[1][\"pt-BR\"]")
+expect decode_within(Value.arr([num("1"), rec([("pt-BR", num("2"))])]), Decode.any, Value.default_limits, 3).map_err(|e| e.path).map_ok(|_| {}) == Err("[1][\"pt-BR\"]")

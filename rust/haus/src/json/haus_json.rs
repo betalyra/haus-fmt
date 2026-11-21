@@ -15,22 +15,21 @@
 //! without the envelope: that is [`to_value_at`] and [`from_value_at`].
 
 use super::import::key;
-use super::{Json, decode_supported, open};
-use crate::ser::{check_bytes, check_key, check_length, check_tag, is_normalized, is_tag, normalized, supported};
-use crate::{DecodeError, EncodeError, ErrorCode as Code, Limits, Segment, Value};
+use super::{Json, JsonNumber, decode_supported, open};
+use crate::ser::{check_bytes, check_key, check_length, check_number, check_tag, check_tag_length, supported};
+use crate::value::{is_normalized, is_tag};
+use crate::{DecodeError, EncodeError, ErrorCode as Code, Limits, Number, Record, Segment, Tag, Value};
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
 /// The version of the form, the envelope's `_haus`.
 const VERSION: &str = "1";
 
-/// A value as self-describing JSON, in its envelope. A [`Value`] built in
-/// code is checked as the haus writer checks it: number literals
-/// (normalized: `1E5` is written `1e5`), tag names, unique keys, and the
-/// limits. Fails if `limits.max_depth` is more than [`crate::MAX_SUPPORTED_DEPTH`].
+/// A value as self-describing JSON, in its envelope, checked against the
+/// limits as the haus writer checks it. Fails if `limits.max_depth` is more than [`crate::MAX_SUPPORTED_DEPTH`].
 pub fn to_self_describing(value: &Value, limits: &Limits) -> Result<Json, EncodeError> {
     to_value_at(value, limits, 0).map(|value| {
-        Json::Object(vec![("_haus".to_owned(), Json::Number(VERSION.to_owned())), ("_value".to_owned(), value)])
+        Json::Object(vec![("_haus".to_owned(), Json::Number(JsonNumber::from(1u8))), ("_value".to_owned(), value)])
     })
 }
 
@@ -116,7 +115,7 @@ impl Writer<'_> {
     fn value(&self, value: &Value, depth: usize) -> W {
         match value {
             Value::Array(items) => self.items(items, depth).map(Json::Array),
-            Value::Record(fields) => self.record(fields, depth).map(|rec| object("_rec", rec)),
+            Value::Record(r) => self.record(r.as_slice(), depth).map(|rec| object("_rec", rec)),
             Value::Variant { tag, args } => self.variant(tag, args, depth),
             scalar => self.scalar(scalar),
         }
@@ -124,7 +123,10 @@ impl Writer<'_> {
 
     fn scalar(&self, value: &Value) -> W {
         Ok(match value {
-            Value::Number(n) => object("_num", Json::String(normalized(n, self.limits)?.into())),
+            Value::Number(n) => {
+                check_number(n, self.limits)?;
+                object("_num", Json::String(n.to_string()))
+            }
             Value::String(s) => {
                 check_length(s, self.limits)?;
                 Json::String(s.clone())
@@ -137,16 +139,16 @@ impl Writer<'_> {
         })
     }
 
-    fn variant(&self, tag: &str, args: &[Value], depth: usize) -> W {
-        check_tag(tag, self.limits)?;
-        let tag_json = ("_tag".to_owned(), Json::String(tag.to_owned()));
+    fn variant(&self, tag: &Tag, args: &[Value], depth: usize) -> W {
+        check_tag_length(tag, self.limits)?;
+        let tag_json = ("_tag".to_owned(), Json::String(tag.to_string()));
         let args = match args {
             [] => return Ok(Json::Object(vec![tag_json])),
             // `Tag { … }`: the record is the payload's only level.
-            [Value::Record(fields)] => self.record(fields, depth).map(|rec| vec![object("_rec", rec)]),
+            [Value::Record(r)] => self.record(r.as_slice(), depth).map(|rec| vec![object("_rec", rec)]),
             args => self.items(args, depth),
         };
-        let args = args.map_err(|e| e.within(Segment::Tag(tag.to_owned())))?;
+        let args = args.map_err(|e| e.within(Segment::Tag(tag.to_string())))?;
         Ok(Json::Object(vec![tag_json, ("_args".to_owned(), Json::Array(args))]))
     }
 
@@ -157,7 +159,6 @@ impl Writer<'_> {
 
     fn record(&self, fields: &[(String, Value)], depth: usize) -> W {
         let depth = crate::ser::open(self.limits, depth)?;
-        crate::ser::unique_keys(fields)?;
         fields
             .iter()
             .map(|(k, v)| {
@@ -225,10 +226,11 @@ impl Reader<'_> {
     /// `"19.90"`: a normalized literal (spec §2), within the limits.
     fn number(&self, json: &Json) -> R {
         match json {
-            Json::String(n) if is_normalized(n) => match normalized(n, self.limits) {
-                Ok(_) => Ok(Value::Number(n.clone())),
-                Err(e) => Err(e.into_decode()),
-            },
+            Json::String(n) if is_normalized(n) => {
+                let n = Number::from_normalized(n.clone());
+                check_number(&n, self.limits).map_err(EncodeError::into_decode)?;
+                Ok(Value::Number(n))
+            }
             Json::String(n) => Err(DecodeError::new(
                 Code::HausJsonNumber,
                 format!("\"{}\" is not a normalized number literal", crate::scan::shown(n)),
@@ -257,7 +259,7 @@ impl Reader<'_> {
                 )),
             })
             .collect::<Result<_, _>>()
-            .map(Value::Record)
+            .map(|fields| Value::Record(Record::from_unique(fields)))
     }
 
     fn variant(&self, tag: &Json, args: &Json, depth: usize) -> R {
@@ -299,10 +301,10 @@ fn mismatch(json: &Json) -> DecodeError {
 
 /// `"Circle"`: a tag name, within the string limit. Errors are at the
 /// variant, the object that holds `"_tag"`, as an unknown tag is (spec §15).
-pub(crate) fn tag_name(json: &Json, limits: &Limits) -> Result<String, DecodeError> {
+pub(crate) fn tag_name(json: &Json, limits: &Limits) -> Result<Tag, DecodeError> {
     match json {
         Json::String(t) if is_tag(t) => match check_tag(t, limits) {
-            Ok(()) => Ok(t.clone()),
+            Ok(()) => Ok(Tag::from_valid(t.clone())),
             Err(e) => Err(e.into_decode()),
         },
         Json::String(t) => {

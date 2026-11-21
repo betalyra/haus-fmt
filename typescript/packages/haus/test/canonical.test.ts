@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { canonical, compare, compareCodePoints, equals, hash, hashAll, parse, parseAll } from "../src/index.js"
+import { canonical, compare, compareCodePoints, equals, hash, hashAll, num, parse, parseAll } from "../src/index.js"
 
 const c = (src: string) => canonical(parse(src))
 
@@ -55,7 +55,7 @@ describe("canonical form (spec §12)", () => {
     const huge = parse(`{ a: [1, ${"9".repeat(1300)}] }`, limits)
     expect(canonical(huge)).toBe(`{a:[1,${"9".repeat(1300)}]}`)
     // Built in code: no limit applies.
-    const built = { kind: "number", text: "-" + "7".repeat(3000) } as const
+    const built = num("-" + "7".repeat(3000))
     expect(canonical(built)).toBe("-" + "7".repeat(3000))
   })
 

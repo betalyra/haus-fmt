@@ -28,7 +28,7 @@ nothing depends on a registry.
 | `ZonedDateTime` | `Instant` and one zone in brackets | `ZonedDateTime("2027-03-29T10:00:00+01:00[Europe/Lisbon]")` |
 | `Duration` | `-`? `P` [n`Y`] [n`M`] [n`W`] [n`D`] [`T` [n`H`] [n`M`] [n[.f]`S`]] | `Duration("PT1H30M")` |
 | `YearMonth` | `YYYY-MM` | `YearMonth("2026-11")` |
-| `TimeZone` | a zone name or an offset `±hh:mm` (not `Z`) | `TimeZone("Europe/Lisbon")`, `TimeZone("+01:00")` |
+| `TimeZone` | a zone name or an offset `±hh:mm` (not `Z` or `z`) | `TimeZone("Europe/Lisbon")`, `TimeZone("+01:00")` |
 
 ## Rules
 
@@ -54,7 +54,7 @@ nothing depends on a registry.
 | Fraction | 1–9 digits (nanoseconds), on seconds only | `12:00:00.1234567890`, `PT1.5H` |
 | Separators | upper-case `T` and `Z` | `t`, `z`, a space instead of `T` |
 | Offset | `Z` or `±hh:mm`, up to `±23:59` | `-00:00` (write `Z`), `+24:00`, `+0100` |
-| Zone | an IANA name by its syntax: at most 255 characters, parts of `A–Z a–z 0–9 . _ + -` separated by `/`, the first starting with a letter, no empty, `.` or `..` parts, and not `Z`, which is the offset letter, not a zone name; or an offset `±hh:mm` | `[!Europe/Lisbon]`, `[Europe/../etc]`, `[Europe//Lisbon]`, `TimeZone("Z")`, `…Z[Z]` |
+| Zone | an IANA name by its syntax: at most 255 characters, parts of `A–Z a–z 0–9 . _ + -` separated by `/`, the first starting with a letter, no empty, `.` or `..` parts, and not `Z` or `z`, which is the offset letter (in either case), not a zone name; or an offset `±hh:mm` | `[!Europe/Lisbon]`, `[Europe/../etc]`, `[Europe//Lisbon]`, `TimeZone("Z")`, `TimeZone("z")`, `…Z[Z]`, `…Z[z]` |
 | RFC 9557 tags | exactly one zone | `[Europe/Lisbon][u-ca=iso8601]`, other calendars |
 | Duration | at least one component; `T` followed by at least one; numbers without leading zeros; no component that is zero (the zero duration is `PT0S`); `-` only before a duration that isn't zero; years, months and weeks below 2³²; days and time together below 2⁵³ seconds, a fraction of a second not counted (`PT9007199254740991.999999999S` is valid) and weeks counted only toward their own bound | `P`, `PT`, `P1DT`, `+PT1H`, `p1d`, `P01D`, `P0D`, `P1DT0S`, `-PT0S` |
 | Other ISO 8601 forms | — | week dates (`2026-W45-1`), ordinal dates (`2026-313`), the basic format (`20261109`), intervals (`…/…`), repetitions (`R5/…`) |

@@ -91,7 +91,8 @@ public func hasComments(_ text: String, limits: Limits = Limits()) throws(HausEr
 /// ```
 ///
 /// It fails for values that have no text: a number longer than the number
-/// limit (`number-too-long`), nesting deeper than the depth limit
+/// limit (`number-too-long`), an exponent over the exponent limit
+/// (`exponent-too-large`), nesting deeper than the depth limit
 /// (`nesting-too-deep`, a record payload counting one level), or a tag that
 /// isn't `[A-Z][A-Za-z0-9_]*` (`invalid-tag`).
 public func stringify(_ value: HausValue, _ options: FormatOptions = FormatOptions()) throws(HausError) -> String {

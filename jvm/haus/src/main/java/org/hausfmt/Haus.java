@@ -153,7 +153,8 @@ public final class Haus {
    * with the fewest escapes. The text ends with a line break.
    *
    * @throws HausException for a value that has no text within the limits of {@code options}: a
-   *     number longer than the number limit ({@code number-too-long}), nesting deeper than the
+   *     number longer than the number limit ({@code number-too-long}) or with an exponent over the
+   *     exponent limit ({@code exponent-too-large}), nesting deeper than the
    *     depth limit ({@code nesting-too-deep}, a record payload counting one level), or a string or
    *     key with an unpaired surrogate ({@code cannot-encode}); the error's path says where
    */

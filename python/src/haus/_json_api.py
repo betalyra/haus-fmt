@@ -68,7 +68,7 @@ def to_haus_json(value: Value, *, limits: Limits = DEFAULT_LIMITS) -> str:
         >>> haus.to_haus_json(haus.parse('Circle { r: 1.50 }'))
         '{"_haus":1,"_value":{"_tag":"Circle","_args":[{"_rec":{"r":{"_num":"1.50"}}}]}}'
 
-    Raises `haus.schema.HausEncodeError` if a value built in code isn't valid haus within `limits`.
+    Raises `haus.HausEncodeError` for a value outside `limits`.
     """
     value = checked(value, limits, json=True)
     make_room(limits.max_depth)

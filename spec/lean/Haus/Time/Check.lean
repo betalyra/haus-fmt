@@ -68,7 +68,7 @@ def zoneNameOk (z : Text) : Bool :=
   z.length ≤ 255 && (match z with | c :: _ => isLetter c | [] => false) &&
     (z.splitOn '/').all fun p => p != [] && p != ['.'] && p != ['.', '.'] && p.all isZoneChar
 
-def zoneOk (z : Text) : Bool := numOffsetOk z || (z != ['Z'] && zoneNameOk z)
+def zoneOk (z : Text) : Bool := numOffsetOk z || (z != ['Z'] && z != ['z'] && zoneNameOk z)
 
 def checkDate (s : Text) : Bool :=
   match date? s with
@@ -235,8 +235,10 @@ private def no (ty : TimeType) (s : String) : Bool := !check ty s.toList
 #guard no .timeZone "Europe/../etc" && no .timeZone "./x" && no .timeZone "Europe//Lisbon"
 #guard no .timeZone "Europe/" && no .timeZone "1Europe" && no .timeZone ""
 #guard ok .timeZone "America/Argentina/Buenos_Aires" && ok .timeZone "Etc/GMT+5" && ok .timeZone "Zulu"
--- `Z` is the offset letter, not a zone name
+-- `Z` is the offset letter, not a zone name, and so is `z`
 #guard no .timeZone "Z" && no .zonedDateTime "2026-11-09T14:30:00Z[Z]" && no .zonedDateTime "2026-11-09T14:30:00+01:00[Z]"
+#guard no .timeZone "z" && no .zonedDateTime "2026-11-09T14:30:00Z[z]" && no .zonedDateTime "2026-11-09T14:30:00+01:00[z]"
+#guard ok .timeZone "zulu" && ok .zonedDateTime "2026-11-09T14:30:00Z[zulu]"
 #guard no .timeZone "-00:00" && no .timeZone "+24:00"
 #guard ok .timeZone (String.ofList (List.replicate 255 'a')) && no .timeZone (String.ofList (List.replicate 256 'a'))
 -- RFC 9557 tags

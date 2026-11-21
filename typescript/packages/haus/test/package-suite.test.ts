@@ -40,13 +40,13 @@ const TOTAL = 91
 
 // ── reading the cases ────────────────────────────────────────
 
-const bad = (v: Value): never => {
-  throw new Error(`unexpected value in cases.haus: ${canonical(v)}`)
+const bad = (v: Value | undefined): never => {
+  throw new Error(`unexpected value in cases.haus: ${v === undefined ? "none" : canonical(v)}`)
 }
 const fields = (v: Value | undefined): ReadonlyMap<string, Value> => (v?.kind === "record" ? v.fields : v ? bad(v) : new Map())
-const string = (v: Value | undefined): string => (v?.kind === "string" ? v.value : bad(v ?? { kind: "array", items: [] }))
+const string = (v: Value | undefined): string => (v?.kind === "string" ? v.value : bad(v))
 const strings = (v: Value | undefined): string[] => (v === undefined ? [] : v.kind === "array" ? v.items.map(string) : bad(v))
-const variant = (v: Value | undefined) => (v?.kind === "variant" ? v : bad(v ?? { kind: "array", items: [] }))
+const variant = (v: Value | undefined) => (v?.kind === "variant" ? v : bad(v))
 
 /** `Npm`'s dependency lists become objects from the names to "*". */
 const DEPENDENCIES = ["dependencies", "peerDependencies", "devDependencies", "optionalDependencies"]
@@ -76,7 +76,7 @@ const mode = (v: Value | undefined): Mode => {
     const f = fields(v.args[0])
     return { kind: v.tag, packages: strings(f.get("packages")), folders: strings(f.get("folders")) }
   }
-  return bad(v ?? { kind: "array", items: [] })
+  return bad(v)
 }
 
 const bool = (v: Value | undefined): boolean => (v === undefined ? false : v.kind === "variant" && (v.tag === "True" || v.tag === "False") ? v.tag === "True" : bad(v))

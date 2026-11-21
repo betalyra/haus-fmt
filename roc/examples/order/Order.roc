@@ -15,7 +15,7 @@ Order := [].{
 	decode_user_id = |v| Decode.within_depth(v, read_value_user_id)
 
 	read_value_user_id : Value -> Try(UserId, Decode.Error)
-	read_value_user_id = |v| match v {
+	read_value_user_id = |v| match v.view() {
 		Tag("UserId", [a0]) => Ok(UserId(Decode.arg("UserId", 0, a0, Decode.str)?))
 		Tag("UserId", _) => Decode.arity("UserId", 1)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["UserId"])
@@ -34,7 +34,7 @@ Order := [].{
 	decode_status = |v| Decode.within_depth(v, read_value_status)
 
 	read_value_status : Value -> Try(Status, Decode.Error)
-	read_value_status = |v| match v {
+	read_value_status = |v| match v.view() {
 		Tag("Pending", []) => Ok(Pending)
 		Tag("Shipped", [p]) => Decode.payload(
 			"Shipped",

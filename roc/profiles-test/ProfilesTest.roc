@@ -54,8 +54,9 @@ ProfilesTest := [].{
 
 ## The vector's codec, by its type.
 check : Value -> Try({}, Str)
-check = |vector| match vector {
-	Tag(tag, [Rec(fields)]) => {
+check = |vector| match vector.view() {
+	Tag(tag, [payload]) => {
+		fields = Decode.strict_record(payload).map_err(|_| "not a vector")?
 		ty = text(fields, "type")?
 		value = text(fields, "value")?
 		output = text(fields, "output") ?? value
@@ -71,14 +72,14 @@ check = |vector| match vector {
 }
 
 verdict : Value -> Str
-verdict = |v| match v {
+verdict = |v| match v.view() {
 	Tag(tag, _) => tag
 	_ => ""
 }
 
 text : List((Str, Value)), Str -> Try(Str, Str)
-text = |fields, key| match fields.find_first(|(k, _)| k == key) {
-	Ok((_, Text(s))) => Ok(s)
+text = |fields, key| match fields.find_first(|(k, _)| k == key).map_ok(|(_, v)| v.view()) {
+	Ok(Text(s)) => Ok(s)
 	_ => Err("no ${key}")
 }
 
@@ -152,7 +153,7 @@ expect !(["", "EU", "EURO", "Eur", "eur", "E1R", "@AA", "[AA", "ÄUR", "E_R", "E
 
 # A currency with a payload is rejected, alone and in a Money.
 expect money("Money(1, EUR(1))").is_err()
-expect IsoCurrency.decode(Other("CHF", [Num("1")])).is_err()
+expect IsoCurrency.decode(Other("CHF", [Value.num("1") ?? Value.text("")])).is_err()
 
 # ── the wgs84 rule's edge cases ──
 

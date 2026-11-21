@@ -7,7 +7,7 @@
 
 use super::{FromJson, Json, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
-use crate::{Codec, DecodeError, Decoder, EncodeError, ErrorCode as Code, Secret, Value};
+use crate::{Codec, DecodeError, Decoder, EncodeError, ErrorCode as Code, Number, Secret, Value};
 use std::collections::{BTreeMap, HashMap};
 
 type R<T> = Result<T, DecodeError>;
@@ -152,7 +152,7 @@ impl<'a> Object<'a> {
     /// import (§16.1), so that a newer writer's case `{"_tag": "Hexagon",
     /// "sides": 6}` reads as `Hexagon { sides: 6 }`.
     pub fn unknown(&self, tag: &str) -> R<Unknown> {
-        crate::ser::check_tag(tag, self.d.limits()).map_err(EncodeError::into_decode)?;
+        let tag = crate::ser::tag_name(tag, self.d.limits()).map_err(EncodeError::into_decode)?;
         let args = match (self.fields().collect::<Vec<_>>().as_slice(), self.index.get("_args")) {
             ([], _) => vec![],
             (["_args"], Some(Json::Array(items))) if !items.is_empty() => {
@@ -171,7 +171,7 @@ impl<'a> Object<'a> {
                 vec![super::import::import_at(&Json::Object(payload), limits, depth)?]
             }
         };
-        Ok(Unknown { tag: tag.to_owned(), args })
+        Ok(Unknown { tag, args })
     }
 }
 
@@ -181,7 +181,7 @@ impl<'a> Object<'a> {
 pub fn variant<'a>(json: &'a Json, d: Decoder, what: &str) -> R<(&'a str, Object<'a>)> {
     let object = Object::any(json, d, what)?;
     match object.index.get("_tag") {
-        Some(Json::String(tag)) if crate::ser::is_tag(tag) => {
+        Some(Json::String(tag)) if crate::value::is_tag(tag) => {
             Ok((tag, Object { tagged: true, in_tag: true, ..object }))
         }
         Some(other) => Err(super::haus_json::tag_name(other, d.limits())
@@ -212,7 +212,7 @@ pub fn record_case<T>(json: &Json, d: Decoder, f: impl FnOnce(&Json, Decoder) ->
 /// string that isn't a tag name is `invalid-tag`, as in `"_tag"` (spec §16.3).
 pub fn tag_name<'a>(json: &'a Json, what: &str) -> R<&'a str> {
     match json {
-        Json::String(tag) if crate::ser::is_tag(tag) => Ok(tag),
+        Json::String(tag) if crate::value::is_tag(tag) => Ok(tag),
         Json::String(_) => {
             let found = describe(json);
             let reason = format!("{found} is not a tag name (A to Z, then letters, digits and _); expected {what}");
@@ -465,9 +465,9 @@ strings!(i64 => "Int64", u64 => "UInt64");
 /// `Int`: a string, the decimal integer of any size (within the number limits).
 impl FromJson for Int {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
-        let n = integer_string(json, "Int")?;
-        crate::ser::normalized(n, d.limits()).map_err(number_error)?;
-        Ok(Int(n.to_owned()))
+        let n = Number::from_normalized(integer_string(json, "Int")?.to_owned());
+        crate::ser::check_number(&n, d.limits()).map_err(number_error)?;
+        Ok(Int(n))
     }
 }
 
@@ -476,8 +476,8 @@ impl FromJson for Decimal {
     fn from_json_with(json: &Json, d: Decoder) -> R<Self> {
         match json {
             Json::String(text) if super::is_number(text) => {
-                let n = super::import::normalize_number(text);
-                crate::ser::normalized(&n, d.limits()).map_err(number_error)?;
+                let n = Number::from_normalized(super::import::normalize_number(text));
+                crate::ser::check_number(&n, d.limits()).map_err(number_error)?;
                 Ok(Decimal(n))
             }
             Json::String(_) => Err(DecodeError::new(Code::InvalidNumber, "expected a number in a string (Decimal)")),

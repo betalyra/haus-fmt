@@ -346,7 +346,7 @@ describe("the deepest nesting the binding supports (spec §7)", () => {
         yield* Effect.flip(Stream.runCollect(Haus.decodeJsonLines(Nest)(chunked("[]\n"), over))),
         yield* Effect.flip(Stream.runCollect(Haus.encodeJsonLines(Nest)(Stream.make([]), over))),
         yield* Effect.flip(Haus.importJson("[]", over)),
-        yield* Effect.flip(Haus.toHausJson({ kind: "array", items: [] }, over)),
+        yield* Effect.flip(Haus.toHausJson(arr([]), over)),
         yield* Effect.flip(Haus.fromHausJson(`{"_haus":1,"_value":[]}`, over)),
       ]
       for (const e of errors) {

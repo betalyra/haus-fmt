@@ -35,9 +35,9 @@ impl Case {
         let fields = match v {
             Value::Variant { tag, args } if tag == "Ok" || tag == "Err" => match args.as_slice() {
                 [fields @ Value::Record(_)] => fields,
-                _ => return Err(format!("not a case: {}", canonical(v).unwrap())),
+                _ => return Err(format!("not a case: {}", canonical(v))),
             },
-            _ => return Err(format!("not a case: {}", canonical(v).unwrap())),
+            _ => return Err(format!("not a case: {}", canonical(v))),
         };
         let ok = matches!(v, Value::Variant { tag, .. } if tag == "Ok");
         match (fields.get("type"), fields.get("input")) {
@@ -49,21 +49,21 @@ impl Case {
                 code: match fields.get("code") {
                     Some(Value::String(code)) => code.clone(),
                     _ if ok => String::new(),
-                    _ => return Err(format!("an Err case without a code: {}", canonical(v).unwrap())),
+                    _ => return Err(format!("an Err case without a code: {}", canonical(v))),
                 },
                 path: match fields.get("path") {
                     Some(Value::String(path)) => path.clone(),
                     _ if ok => String::new(),
-                    _ => return Err(format!("an Err case without a path: {}", canonical(v).unwrap())),
+                    _ => return Err(format!("an Err case without a path: {}", canonical(v))),
                 },
             }),
-            _ => Err(format!("not a case: {}", canonical(v).unwrap())),
+            _ => Err(format!("not a case: {}", canonical(v))),
         }
     }
 
     /// `Ok F64 1.0`.
     fn name(&self) -> String {
-        format!("{} {} {}", if self.ok { "Ok" } else { "Err" }, self.ty, canonical(&self.input).unwrap())
+        format!("{} {} {}", if self.ok { "Ok" } else { "Err" }, self.ty, canonical(&self.input))
     }
 
     /// Runs the case: None if it passes, what went wrong otherwise.
@@ -72,8 +72,8 @@ impl Case {
         let errors = schema.check(&self.ty, std::slice::from_ref(&self.input));
         let errors: Vec<_> = errors.iter().filter(|i| i.severity == Severity::Error).collect();
         match (self.ok, decoded) {
-            (true, Ok(out)) if canonical(&out).unwrap() != canonical(&self.output).unwrap() => {
-                Some(format!("decoded as {}, expected {}", canonical(&out).unwrap(), canonical(&self.output).unwrap()))
+            (true, Ok(out)) if canonical(&out) != canonical(&self.output) => {
+                Some(format!("decoded as {}, expected {}", canonical(&out), canonical(&self.output)))
             }
             (true, Ok(out)) => match (haus::ser::write(&out), errors.first()) {
                 (Err(e), _) => Some(format!("decoded, but can't be written: {e}")),
@@ -81,7 +81,7 @@ impl Case {
                 _ => None,
             },
             (true, Err(e)) => Some(format!("failed to decode: {e}")),
-            (false, Ok(out)) => Some(format!("decoded, expected an error (as {})", canonical(&out).unwrap())),
+            (false, Ok(out)) => Some(format!("decoded, expected an error (as {})", canonical(&out))),
             (false, Err(_)) if errors.is_empty() => Some("fails to decode, but the check finds no error".into()),
             (false, Err(e)) if e.code.as_str() != self.code => {
                 Some(format!("fails with {} ({e}), expected {}", e.code, self.code))

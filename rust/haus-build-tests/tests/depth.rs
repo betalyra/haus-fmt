@@ -102,18 +102,18 @@ fn values_built_a_million_levels_deep_fail_at_the_depth_limit() {
     // recursive type stops at the depth limit instead of recursing on.
     in_small_thread(|| {
         use haus::{Decode, Value};
-        let leaf = || Value::Variant { tag: "Leaf".into(), args: vec![] };
+        let leaf = || Value::variant("Leaf", vec![]).unwrap();
         // `Node(Leaf, Node(Leaf, …))`, the deep side last, so the value is dropped from it.
-        let tree = (0..1_000_000).fold(leaf(), |t, _| Value::Variant { tag: "Node".into(), args: vec![leaf(), t] });
+        let tree = (0..1_000_000).fold(leaf(), |t, _| Value::variant("Node", vec![leaf(), t]).unwrap());
         let e = Tree::decode(&tree).map(|_| ());
         // Taken apart before checking, so that a failing check doesn't drop it recursively.
         let e = e.unwrap_err();
         assert_eq!(e.code, haus::ErrorCode::NestingTooDeep);
         assert_eq!(e.to_string(), format!("{}: nesting deeper than {MAX} levels", "(Node)[1]".repeat(MAX)));
         // `{ text: "", reply: Some { text: "", reply: … } }`: a level per reply (spec §7).
-        let reply = |v: Value| Value::Record(vec![("text".into(), Value::String(String::new())), ("reply".into(), v)]);
-        let thread = (0..1_000_000).fold(reply(Value::Variant { tag: "None".into(), args: vec![] }), |t, _| {
-            reply(Value::Variant { tag: "Some".into(), args: vec![t] })
+        let reply = |v: Value| Value::record([("text", Value::String(String::new())), ("reply", v)]).unwrap();
+        let thread = (0..1_000_000).fold(reply(Value::variant("None", vec![]).unwrap()), |t, _| {
+            reply(Value::variant("Some", vec![t]).unwrap())
         });
         let e = Thread::decode(&thread).map(|_| ());
         assert_eq!(

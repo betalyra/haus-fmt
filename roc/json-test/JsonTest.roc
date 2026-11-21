@@ -236,13 +236,14 @@ same_code : Str, Str, Str -> Try({}, Str)
 same_code = |want, got, message| if (got == want) Ok({}) else Err("failed with ${got}, expected ${want}: ${message}")
 
 lines_case : Value -> Try({}, Str)
-lines_case = |c| match c {
-	Tag(tag, [Rec(fields)]) => {
+lines_case = |c| match case_of(c) {
+	Ok((tag, fields)) => {
 		json = text(fields, "json")?
 		read_lines = JsonValue.from_haus_json_lines(json)
 		match (tag, read_lines) {
 			("Ok", Ok(got)) => {
-				want = match value(fields, "output")? {
+				output = value(fields, "output")?
+				want = match output.view() {
 					Arr(items) => items
 					_ => return Err("a case whose output isn't an array")
 				}
@@ -254,10 +255,10 @@ lines_case = |c| match c {
 			}
 			("Ok", Err(Syntax(e))) => Err("failed with ${e.code} at ${e.line.to_str()}:${e.column.to_str()}")
 			("Ok", Err(Decode(e))) => Err("failed with ${e.code} at ${ErrorCode.place(e.path)}")
-			(_, result) => rejected(result.map_ok(|vs| Arr(vs)), fields)
+			(_, result) => rejected(result.map_ok(Value.arr), fields)
 		}
 	}
-	_ => Err("not a case")
+	Err(_) => Err("not a case")
 }
 
 valid_case : List(U8), List(U8) -> Try({}, Str)
@@ -452,8 +453,8 @@ compare = |a, b| {
 ## Case `i` of a cases file: its tag and fields.
 case : Str, U64 -> Try((Str, List((Str, Value))), Str)
 case = |cases, i| match Value.parse_all(cases) {
-	Ok(values) => match values.get(i) {
-		Ok(Tag(tag, [Rec(fields)])) => Ok((tag, fields))
+	Ok(values) => match values.get(i).map_ok(case_of) {
+		Ok(Ok(found)) => Ok(found)
 		_ => Err("no case ${i.to_str()}")
 	}
 	Err(e) => Err("the cases don't parse: ${e.reason}")
@@ -465,10 +466,27 @@ value = |fields, key| match fields.find_first(|(k, _)| k == key) {
 	Err(_) => Err("a case without ${key}")
 }
 
+## A case, `Ok { … }` or `Err { … }`: its tag and its fields.
+case_of : Value -> Try((Str, List((Str, Value))), [NotACase])
+case_of = |c| match c.view() {
+	Tag(tag, [payload]) => match payload.view() {
+		Rec(fields) => Ok((tag, fields))
+		_ => Err(NotACase)
+	}
+	_ => Err(NotACase)
+}
+
+## The one value of a text.
+parsed : Str -> Value
+parsed = |source| Value.parse(source) ?? Value.text("(not one value: ${source})")
+
 text : List((Str, Value)), Str -> Try(Str, Str)
-text = |fields, key| match value(fields, key)? {
-	Text(s) => Ok(s)
-	_ => Err("a case whose ${key} isn't a string")
+text = |fields, key| {
+	v = value(fields, key)?
+	match v.view() {
+		Text(s) => Ok(s)
+		_ => Err("a case whose ${key} isn't a string")
+	}
 }
 
 report : Try({}, Str) -> Bool
@@ -1378,13 +1396,13 @@ expect JsonTest.somes("OptLoop", 256) == Err("nesting deeper than 256 levels")
 
 # record cases: the same JSON and Roc record, however the record is written
 expect {
-	v = Tag("Box", [Rec([("w", Num("1"))])])
+	v = parsed("Box { w: 1 }")
 	json = written(SchemaBased.decode_boxed(v), SchemaBased.to_json_boxed)
 	other_forms = written(SchemaBased.decode_paren_box(v), SchemaBased.to_json_paren_box) == json and written(SchemaBased.decode_alias_box(v), SchemaBased.to_json_alias_box) == json
 	json == Ok("{\"_tag\":\"Box\",\"w\":1}") and other_forms
 }
 expect {
-	v = Tag("Box", [Rec([("w", Num("1"))])])
+	v = parsed("Box { w: 1 }")
 	boxed = match SchemaBased.decode_boxed(v) {
 		Ok(Box(r)) => Ok(r)
 		_ => Err({})
@@ -1399,10 +1417,10 @@ expect {
 	}
 	boxed == Ok({ w: 1 }) and paren == boxed and alias == boxed
 }
-expect written(SchemaBased.decode_found(Tag("Found", [Rec([("items", Arr([Num("1")]))])])), SchemaBased.to_json_found) == Ok("{\"_tag\":\"Found\",\"items\":[1]}")
-expect written(SchemaBased.decode_gen_rec(Tag("Box", [Rec([("w", Num("1"))])])), SchemaBased.to_json_gen_rec) == Ok("{\"_tag\":\"Box\",\"value\":{\"w\":1}}")
+expect written(SchemaBased.decode_found(parsed("Found { items: [1] }")), SchemaBased.to_json_found) == Ok("{\"_tag\":\"Found\",\"items\":[1]}")
+expect written(SchemaBased.decode_gen_rec(parsed("Box { w: 1 }")), SchemaBased.to_json_gen_rec) == Ok("{\"_tag\":\"Box\",\"value\":{\"w\":1}}")
 # by name, any payload but one record is the wrong payload, as inline
-expect [SchemaBased.decode_boxed(Tag("Box", [Num("1")])), SchemaBased.decode_boxed(Tag("Box", [])), SchemaBased.decode_boxed(Tag("Box", [Num("1"), Num("2")]))].map(|r| r.map_ok(|_| {}).map_err(|e| e.code)) == [Err("wrong-payload"), Err("wrong-payload"), Err("wrong-payload")]
+expect [SchemaBased.decode_boxed(parsed("Box(1)")), SchemaBased.decode_boxed(parsed("Box")), SchemaBased.decode_boxed(parsed("Box(1, 2)"))].map(|r| r.map_ok(|_| {}).map_err(|e| e.code)) == [Err("wrong-payload"), Err("wrong-payload"), Err("wrong-payload")]
 
 # json/lines.cases.haus
 expect JsonTest.lines(lines_cases)

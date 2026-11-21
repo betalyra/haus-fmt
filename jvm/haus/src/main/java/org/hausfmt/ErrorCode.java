@@ -31,11 +31,11 @@ public enum ErrorCode {
   BLOCK_STRING_KEY("block-string-key", ErrorCategory.SYNTAX, "Write the key as a basic string, `\"…\"`."),
   /** {@code missing-colon}: A record key is not followed by `:`. */
   MISSING_COLON("missing-colon", ErrorCategory.SYNTAX, "Add `:` between the key and its value."),
-  /** {@code duplicate-key}: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12). */
+  /** {@code duplicate-key}: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code with a key twice, rejected when it is built (§11). */
   DUPLICATE_KEY("duplicate-key", ErrorCategory.SYNTAX, "Remove or rename one of the two."),
   /** {@code empty-payload}: A tag with empty parentheses, `Tag()`. A tag without arguments is written without them. */
   EMPTY_PAYLOAD("empty-payload", ErrorCategory.SYNTAX, "Remove the empty parentheses after the tag."),
-  /** {@code invalid-number}: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12). */
+  /** {@code invalid-number}: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`), rejected when it is built (§11). */
   INVALID_NUMBER("invalid-number", ErrorCategory.SYNTAX, "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits."),
   /** {@code unterminated-string}: A string has no closing `"` (in haus or JSON). */
   UNTERMINATED_STRING("unterminated-string", ErrorCategory.SYNTAX, "Add the closing quote. A quote inside the string is written `\\\"`."),
@@ -195,7 +195,7 @@ public enum ErrorCode {
   INVALID_SECRET("invalid-secret", ErrorCategory.DECODING, "Write a value of the secret's type; the value isn't shown, so check it where it comes from."),
   /** {@code codec-rejected}: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `&#64;haus-fmt/money/iso` profile. At the place of the codec's type. */
   CODEC_REJECTED("codec-rejected", ErrorCategory.DECODING, "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which."),
-  /** {@code cannot-encode}: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value. */
+  /** {@code cannot-encode}: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value (an object of another type where a value or a number is expected). */
   CANNOT_ENCODE("cannot-encode", ErrorCategory.DECODING, "Pass a value of the host type the binding documents for the type."),
   /** {@code cyclic-value}: Encoding: a value contains itself, so it has no finite text. */
   CYCLIC_VALUE("cyclic-value", ErrorCategory.DECODING, "Break the cycle before encoding."),

@@ -34,8 +34,8 @@ from typing import Any
 from . import _decode
 from ._canonical import canonical as _canonical
 from ._codecs import CodecGroup, DateCodec, DecimalCodec, InstantCodec, optional_codecs
-from ._decode import Codec, HausDecodeError, HausEncodeError
-from ._errors import HausJsonError, format_path
+from ._decode import Codec
+from ._errors import HausDecodeError, HausEncodeError, HausJsonError, format_path
 from ._host import Maybe, Nothing, Secret, Some, Tagged, Unknown
 from ._json import Json, read_json, read_lines, schema_json_depth, write_json
 from ._parser import DEFAULT_LIMITS, Limits, Parser

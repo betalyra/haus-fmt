@@ -2,7 +2,7 @@
  * Floats with a schema (spec §15): decoding a number literal to the nearest
  * binary64 or binary32 value, and writing a float in its one spelling.
  */
-import { num, variant, type HNumber, type HVariant, type Value } from "./value.js"
+import { uncheckedNum, uncheckedVariant, type HNumber, type HVariant, type Value } from "./value.js"
 
 export type FloatType = "Float64" | "Float32"
 
@@ -86,11 +86,11 @@ export const specialFloat = (v: Value): number | undefined =>
  * binary32 value of `x`. Undefined when `x` is out of the type's range.
  */
 export const floatValue = (x: number, type: FloatType): HNumber | HVariant | undefined => {
-  if (Number.isNaN(x)) return variant("NaN")
-  if (x === Infinity) return variant("Infinity")
-  if (x === -Infinity) return variant("NegInfinity")
+  if (Number.isNaN(x)) return uncheckedVariant("NaN")
+  if (x === Infinity) return uncheckedVariant("Infinity")
+  if (x === -Infinity) return uncheckedVariant("NegInfinity")
   const rounded = type === "Float32" ? Math.fround(x) : x
-  return Number.isFinite(rounded) ? num(floatText(rounded, type)) : undefined
+  return Number.isFinite(rounded) ? uncheckedNum(floatText(rounded, type)) : undefined
 }
 
 /** JavaScript's layout without the exponent's `+`: 1e+21 → 1e21. */

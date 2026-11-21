@@ -1,14 +1,33 @@
 ## The haus data model and parser.
 ##
-## `Value.parse_all(text)` parses a whole file: a sequence of top-level values.
-## Numbers are kept as exact literal text, variants are generic: applying a
-## schema (decoding into your own tag unions) happens afterwards.
+## A `Value` is a haus value (spec §1): a number, a string, a byte string, an
+## array, a record or a variant. Numbers are kept as their normalized literal
+## text (`1e5`, `19.90`), variants are generic: applying a schema (decoding
+## into your own tag unions) happens afterwards.
 ##
-## A syntax error is a `ParseError`: its `code` (spec §17, see `ErrorCode`),
-## a `reason` for people, and the `line` and `column` where it is.
+## `Value.parse_all(text)` parses a whole file: a sequence of top-level
+## values. A syntax error is a `ParseError`: its `code` (spec §17, see
+## `ErrorCode`), a `reason` for people, and the `line` and `column` where it is.
+##
+## In code, values are built with the constructors, which build only haus
+## values (spec §11, "Values built in code"): `num`, `rec` and `tag` fail
+## with a `ValueError` for a number text that isn't a number literal
+## (`invalid-number`), a record with a key twice (`duplicate-key`) or a tag
+## that isn't a tag name (`invalid-tag`); `text`, `bytes`, `arr` and `bool`
+## can't fail. A number is normalized as the parser reads it.
+##
+##     point = Value.tag("Point", [Value.num("1E+05")?, Value.num("0xFF")?])?
+##     Encode.canonical(point)   # Ok("Point(1e5,255)")
+##
+## `view` shows the outermost level of a value, to match on:
+##
+##     match point.view() {
+##         Tag(name, args) => "${name} with ${args.len().to_str()} arguments"
+##         _ => "something else"
+##     }
 import ErrorCode
 
-Value := [
+Value :: [
 	Num(Str),
 	Text(Str),
 	Bytes(List(U8)),
@@ -17,15 +36,129 @@ Value := [
 	Tag(Str, List(Value)),
 ].{
 
+	# ── building and viewing values ─────────────────────────
+
+	## A number from a number literal in any spelling (spec §2), normalized as
+	## the parser reads it: `num("1E+05")` is the number `1e5`, `num("0xFF")`
+	## `255`, `num("1_000")` `1000`; the scale stays (`19.90`). A text that
+	## isn't one number literal (`01`, `NaN`, `1.`, ` 1`, the empty text) is
+	## `invalid-number`. There is no limit on its length or exponent: limits
+	## are a writer's (spec §7).
+	num : Str -> Try(Value, ValueError)
+	num = |literal| {
+		src = literal.to_utf8()
+		match number_end(src, 0) {
+			Ok((end, radix)) if end == src.len() => Ok(Num(number_text(src, 0, end, radix)))
+			_ => Err({ code: ErrorCode.invalid_number, reason: "invalid number '${ErrorCode.shown(literal)}': not a number literal" })
+		}
+	}
+
+	## A string.
+	text : Str -> Value
+	text = |s| Text(s)
+
+	## A byte string: `x"0b34"` is `bytes([0x0B, 0x34])`.
+	bytes : List(U8) -> Value
+	bytes = |b| Bytes(b)
+
+	## An array.
+	arr : List(Value) -> Value
+	arr = |items| Arr(items)
+
+	## A record, its fields in order. A key used twice is `duplicate-key`
+	## (spec §1: keys are unique).
+	rec : List((Str, Value)) -> Try(Value, ValueError)
+	rec = |fields| {
+		var $keys = List.with_capacity(fields.len())
+		for (k, _) in fields {
+			$keys = $keys.append((k, $keys.len()))
+		}
+		match Value.first_repeated($keys) {
+			Ok((k, _)) => Err({ code: ErrorCode.duplicate_key, reason: "duplicate key '${ErrorCode.shown(k)}'" })
+			Err(_) => Ok(Rec(fields))
+		}
+	}
+
+	## A variant: a tag (`[A-Z][A-Za-z0-9_]*`, else `invalid-tag`) and its
+	## arguments: `tag("None", [])`, `tag("Some", [x])`, and
+	## `tag("Circle", [r])` for `Circle { … }` when `r` is a record.
+	tag : Str, List(Value) -> Try(Value, ValueError)
+	tag = |name, args| {
+		b = name.to_utf8()
+		if is_upper(at(b, 0)) and b.all(is_ident_char) {
+			Ok(Tag(name, args))
+		} else {
+			Err({ code: ErrorCode.invalid_tag, reason: "invalid tag '${ErrorCode.shown(name)}': a tag is A to Z, then letters, digits and _" })
+		}
+	}
+
+	## `True` or `False` (spec §1: booleans are tags).
+	bool : Bool -> Value
+	bool = |b| Tag(if (b) "True" else "False", [])
+
+	## The outermost level of a value, to match on: its kind and its parts,
+	## which are values again. A record that is a tag's only argument is
+	## `Tag(name, [r])`, with `r` viewing as `Rec(fields)`.
+	##
+	##     match v.view() {
+	##         Num(literal) => literal
+	##         Tag("Some", [x]) => …
+	##         _ => …
+	##     }
+	view : Value -> View
+	view = |v| match v {
+		Num(literal) => Num(literal)
+		Text(s) => Text(s)
+		Bytes(b) => Bytes(b)
+		Arr(items) => Arr(items)
+		Rec(fields) => Rec(fields)
+		Tag(name, args) => Tag(name, args)
+	}
+
+	## What `view` gives: one level of a value.
+	View : [Num(Str), Text(Str), Bytes(List(U8)), Arr(List(Value)), Rec(List((Str, Value))), Tag(Str, List(Value))]
+
+	## `==`: the same kind, text, tag, keys in the same order, and equal parts,
+	## as in Rust. Haus equality (spec §2), where the order of a record's
+	## fields doesn't matter, is `Encode.equals`. Compared with a list rather
+	## than recursion, so that values of any depth compare.
+	is_eq : Value, Value -> Bool
+	is_eq = |a, b| {
+		# The pairs of parts still to compare.
+		var $todo = [(a, b)]
+		while True {
+			match $todo.last() {
+				Err(_) => return True
+				Ok((x, y)) => {
+					(same, parts) = match (x, y) {
+						(Num(p), Num(q)) => (p == q, [])
+						(Text(p), Text(q)) => (p == q, [])
+						(Bytes(p), Bytes(q)) => (p == q, [])
+						(Arr(p), Arr(q)) => (p.len() == q.len(), p.map2(q, |i, j| (i, j)))
+						(Rec(p), Rec(q)) => (p.len() == q.len() and p.map2(q, |(k, _), (l, _)| k == l).all(|same_key| same_key), p.map2(q, |(_, i), (_, j)| (i, j)))
+						(Tag(s, p), Tag(t, q)) => (s == t and p.len() == q.len(), p.map2(q, |i, j| (i, j)))
+						_ => (False, [])
+					}
+					if !same {
+						return False
+					}
+					$todo = $todo.drop_last(1).concat(parts)
+				}
+			}
+		}
+	}
+
+	# ── parsing ─────────────────────────────────────────────
+
 	## Parse a whole file into its top-level values.
 	parse_all : Str -> Try(List(Value), ParseError)
-	parse_all = |text| parse_all_with(text, default_limits)
+	parse_all = |input| parse_all_with(input, default_limits)
 
 	## `parse_all` with your own limits.
 	parse_all_with : Str, Limits -> Try(List(Value), ParseError)
-	parse_all_with = |text, limits| {
+	parse_all_with = |input, limits| {
 		check_limits(limits).map_err(unsupported)?
-		src = text.to_utf8()
+		src = input.to_utf8()
 		start = if (src.starts_with([0xEF, 0xBB, 0xBF])) 3 else 0
 		# Reserved for a version directive (spec §10): `#haus 2`.
 		if starts_at(src, start, "#haus") {
@@ -38,21 +171,21 @@ Value := [
 	## so a byte order mark is not skipped (the stream reader removes the one at
 	## the start).
 	parse_rest : Str -> Try(List(Value), ParseError)
-	parse_rest = |text| parse_rest_with(text, default_limits)
+	parse_rest = |input| parse_rest_with(input, default_limits)
 
 	## `parse_rest` with your own limits.
 	parse_rest_with : Str, Limits -> Try(List(Value), ParseError)
-	parse_rest_with = |text, limits| {
+	parse_rest_with = |input, limits| {
 		check_limits(limits).map_err(unsupported)?
-		src = text.to_utf8()
+		src = input.to_utf8()
 		parse_sequence(src, 0, limits).map_err(|f| locate(src, f))
 	}
 
-	## Whether a file that starts with `text` needs a newer version of haus:
+	## Whether a file that starts with `input` needs a newer version of haus:
 	## it starts with a version directive (`#haus 2`, spec §10). The reason to
 	## report then is `Value.newer_version_reason`.
 	starts_with_directive : Str -> Bool
-	starts_with_directive = |text| text.starts_with("#haus")
+	starts_with_directive = |input| input.starts_with("#haus")
 
 	newer_version_reason : Str
 	newer_version_reason = "the file starts with a version directive (#haus): it needs a newer version of haus"
@@ -60,24 +193,24 @@ Value := [
 	## Parse raw bytes, which must be valid UTF-8 (`invalid-utf8` where they
 	## aren't).
 	parse_bytes : List(U8) -> Try(List(Value), ParseError)
-	parse_bytes = |bytes| parse_bytes_with(bytes, default_limits)
+	parse_bytes = |input| parse_bytes_with(input, default_limits)
 
 	## `parse_bytes` with your own limits.
 	parse_bytes_with : List(U8), Limits -> Try(List(Value), ParseError)
-	parse_bytes_with = |bytes, limits| match Str.from_utf8(bytes) {
-		Ok(text) => parse_all_with(text, limits)
-		Err(BadUtf8({ index, .. })) => Err(locate(bytes, { code: ErrorCode.invalid_utf8, reason: "invalid UTF-8", pos: index }))
+	parse_bytes_with = |input, limits| match Str.from_utf8(input) {
+		Ok(decoded) => parse_all_with(decoded, limits)
+		Err(BadUtf8({ index, .. })) => Err(locate(input, { code: ErrorCode.invalid_utf8, reason: "invalid UTF-8", pos: index }))
 	}
 
 	## Parse a text that must contain exactly one value (`not-one-value` if it
 	## has none or several).
 	parse : Str -> Try(Value, ParseError)
-	parse = |text| parse_with(text, default_limits)
+	parse = |input| parse_with(input, default_limits)
 
 	## `parse` with your own limits.
 	parse_with : Str, Limits -> Try(Value, ParseError)
-	parse_with = |text, limits| {
-		values = parse_all_with(text, limits)?
+	parse_with = |input, limits| {
+		values = parse_all_with(input, limits)?
 		match values {
 			[v] => Ok(v)
 			_ => Err({ code: ErrorCode.not_one_value, reason: "expected exactly one value, found ${values.len().to_str()}", line: 1, column: 1 })
@@ -133,7 +266,7 @@ Value := [
 
 	## The most values (nodes) in one value that the canonical form, hashing,
 	## equality and decoding take (spec §9.8): 64 Mi, as in TypeScript and Go.
-	## A `Value` built in code may share its parts (`Arr([w, w])` holds `w`
+	## A `Value` built in code may share its parts (`Value.arr([w, w])` holds `w`
 	## twice, not a copy), and a shared part counts each time it is reached,
 	## as these functions visit it: 40 levels that each hold the one below
 	## twice are 2^41 − 1 values, which fail with `too-many-nodes` instead of
@@ -152,7 +285,7 @@ Value := [
 	## without overflowing the stack, a step per value counted, so that it
 	## stops after at most `max_nodes` steps however much it shares.
 	##
-	##     Value.within_bounds(Arr([Num("1")]), 256, Value.max_nodes)   # Ok({})
+	##     Value.within_bounds(Value.arr([Value.text("a")]), 256, Value.max_nodes)   # Ok({})
 	within_bounds : Value, U64, U64 -> Try({}, { code : Str, reason : Str, path : Str })
 	within_bounds = |v, depth_limit, node_limit| {
 		too_many = |path| Err({ code: ErrorCode.too_many_nodes, reason: "value has more than ${node_limit.to_str()} nodes", path })
@@ -240,7 +373,7 @@ Value := [
 	to_test_json = |value| match value {
 		Num(t) => "{\"num\":${json_str(t)}}"
 		Text(s) => json_str(s)
-		Bytes(bytes) => "{\"bytes\":\"${hex_lower(bytes)}\"}"
+		Bytes(b) => "{\"bytes\":\"${hex_lower(b)}\"}"
 		Arr(items) => "[${Str.join_with(items.map(to_test_json), ",")}]"
 		Rec(fields) => {
 			parts = fields.map(|(k, v)| "${json_str(k)}:${to_test_json(v)}")
@@ -254,6 +387,10 @@ Value := [
 ## A syntax error: its code (spec §17, `ErrorCode`), what is wrong, and where
 ## (1-based, columns in code points).
 ParseError : { code : Str, reason : Str, line : U64, column : U64 }
+
+## Why a constructor didn't build a value: its code (spec §17, `ErrorCode`:
+## `invalid-number`, `invalid-tag` or `duplicate-key`) and what is wrong.
+ValueError : { code : Str, reason : Str }
 
 Fail : { code : Str, reason : Str, pos : U64 }
 
@@ -362,8 +499,8 @@ parse_value = |src, pos, depth, limits| {
 		(s, after) = (if (starts_at(src, pos, "\"\"\"")) parse_block_string(src, pos, limits) else parse_basic_string(src, pos, limits))?
 		Ok((Text(s), after))
 	} else if c == 'x' and at(src, pos + 1) == '"' {
-		(bytes, after) = parse_bytes_literal(src, pos, limits)?
-		Ok((Bytes(bytes), after))
+		(content, after) = parse_bytes_literal(src, pos, limits)?
+		Ok((Bytes(content), after))
 	} else if c == '-' or is_digit(c) {
 		parse_number(src, pos, limits)
 	} else if is_upper(c) {
@@ -511,7 +648,7 @@ parse_list = |src, open, depth, close, limits| {
 
 parse_variant : List(U8), U64, U64, Value.Limits -> Try((Value, U64), Fail)
 parse_variant = |src, pos, depth, limits| {
-	(tag, after_tag) = name(src, pos, "tag", limits)?
+	(tag_name, after_tag) = name(src, pos, "tag", limits)?
 	# The payload must follow on the same line: only spaces and tabs in between.
 	var $p = after_tag
 	while at(src, $p) == ' ' or at(src, $p) == '\t' {
@@ -521,15 +658,15 @@ parse_variant = |src, pos, depth, limits| {
 	if at(src, p) == '(' {
 		(args, after) = parse_list(src, p, depth, ')', limits)?
 		if args.is_empty() {
-			Err({ code: ErrorCode.empty_payload, reason: "empty payload: write '${ErrorCode.shown(tag)}' without parentheses", pos: p })
+			Err({ code: ErrorCode.empty_payload, reason: "empty payload: write '${ErrorCode.shown(tag_name)}' without parentheses", pos: p })
 		} else {
-			Ok((Tag(tag, args), after))
+			Ok((Tag(tag_name, args), after))
 		}
 	} else if at(src, p) == '{' {
 		(fields, after) = parse_record(src, p, depth, limits)?
-		Ok((Tag(tag, [Rec(fields)]), after))
+		Ok((Tag(tag_name, [Rec(fields)]), after))
 	} else {
-		Ok((Tag(tag, []), after_tag))
+		Ok((Tag(tag_name, []), after_tag))
 	}
 }
 
@@ -540,8 +677,29 @@ parse_number = |src, start, limits| {
 	# Checked in the reference's order: the literal (a linear scan), what
 	# follows it, its length, its exponent. Converted only then, so huge
 	# literals stay cheap.
-	neg = at(src, start) == '-'
-	digits_start = if (neg) start + 1 else start
+	(end, radix) = number_end(src, start)?
+	if end - start > limits.max_number_length {
+		return Err({ code: ErrorCode.number_too_long, reason: "number literal longer than ${limits.max_number_length.to_str()} characters", pos: start })
+	}
+	# More hex digits would make an integer longer than the limit in decimal (spec §7).
+	if radix == 16 {
+		most = max_hex_digits(limits.max_number_length)
+		digits_start = (if (at(src, start) == '-') start + 1 else start) + 2
+		if src.sublist({ start: digits_start, len: end - digits_start }).count_if(|b| b != '_') > most {
+			return Err({ code: ErrorCode.number_too_long, reason: "hex literal with more than ${most.to_str()} hex digits", pos: start })
+		}
+	}
+	if radix == 10 and exponent_larger(src.sublist({ start, len: end - start }), limits.max_exponent) {
+		return Err({ code: ErrorCode.exponent_too_large, reason: "exponent larger than ${limits.max_exponent.to_str()}", pos: start })
+	}
+	Ok((Num(number_text(src, start, end, radix)), end))
+}
+
+## Where the number literal at `start` ends, and its radix (10, 16 or 2):
+## the literal, and nothing that would make it another token after it.
+number_end : List(U8), U64 -> Try((U64, U64), Fail)
+number_end = |src, start| {
+	digits_start = if (at(src, start) == '-') start + 1 else start
 	radix = if (starts_at(src, digits_start, "0x")) 16 else if (starts_at(src, digits_start, "0b")) 2 else 10
 	is_valid = |b| if (radix == 16) is_hex(b) else b == '0' or b == '1'
 	end =
@@ -554,21 +712,15 @@ parse_number = |src, start, limits| {
 	if is_ident_char(next) or next == '.' {
 		return Err(invalid_number(src, start))
 	}
-	if end - start > limits.max_number_length {
-		return Err({ code: ErrorCode.number_too_long, reason: "number literal longer than ${limits.max_number_length.to_str()} characters", pos: start })
-	}
-	# More hex digits would make an integer longer than the limit in decimal (spec §7).
-	if radix == 16 {
-		most = max_hex_digits(limits.max_number_length)
-		if src.sublist({ start: digits_start + 2, len: end - digits_start - 2 }).count_if(|b| b != '_') > most {
-			return Err({ code: ErrorCode.number_too_long, reason: "hex literal with more than ${most.to_str()} hex digits", pos: start })
-		}
-	}
-	if radix == 10 and exponent_larger(src.sublist({ start, len: end - start }), limits.max_exponent) {
-		return Err({ code: ErrorCode.exponent_too_large, reason: "exponent larger than ${limits.max_exponent.to_str()}", pos: start })
-	}
-	text = if (radix == 10) decimal_text(src, start, end) else radix_text(src, digits_start + 2, end, radix, neg)
-	Ok((Num(text), end))
+	Ok((end, radix))
+}
+
+## The normalized text (spec §2) of the number literal from `start` to `end`.
+number_text : List(U8), U64, U64, U64 -> Str
+number_text = |src, start, end, radix| {
+	neg = at(src, start) == '-'
+	digits_start = if (neg) start + 1 else start
+	if (radix == 10) decimal_text(src, start, end) else radix_text(src, digits_start + 2, end, radix, neg)
 }
 
 ## The most hex digits in one hex literal for the number limit `n` (spec §7):
@@ -664,11 +816,11 @@ decimal_end = |src, start, digits_start| {
 ## exponent as its value.
 decimal_text : List(U8), U64, U64 -> Str
 decimal_text = |src, start, end| {
-	text = src
+	literal = src
 		.sublist({ start, len: end - start })
 		.keep_if(|b| b != '_')
 		.map(|b| if (b == 'E') 'e' else b)
-	bytes_to_str(normalize_exponent(text))
+	bytes_to_str(normalize_exponent(literal))
 }
 
 ## Whether a decimal literal's exponent is larger than `max`.
@@ -691,16 +843,16 @@ exponent_larger = |literal, max| match literal.find_first_index(|b| b == 'e' or 
 
 ## The exponent of a decimal literal as its value (§2): `1e+05` is `1e5`, `1e-0` is `1e0`.
 normalize_exponent : List(U8) -> List(U8)
-normalize_exponent = |text| {
+normalize_exponent = |literal| {
 	var $at = 0
-	while $at < text.len() and at(text, $at) != 'e' {
+	while $at < literal.len() and at(literal, $at) != 'e' {
 		$at = $at + 1
 	}
-	if $at == text.len() {
-		return text
+	if $at == literal.len() {
+		return literal
 	}
-	mantissa = text.sublist({ start: 0, len: $at + 1 })
-	rest = text.sublist({ start: $at + 1, len: text.len() - $at - 1 })
+	mantissa = literal.sublist({ start: 0, len: $at + 1 })
+	rest = literal.sublist({ start: $at + 1, len: literal.len() - $at - 1 })
 	negative = at(rest, 0) == '-'
 	var $p = if (at(rest, 0) == '+' or negative) 1 else 0
 	while $p + 1 < rest.len() and at(rest, $p) == '0' {
@@ -793,9 +945,9 @@ bidi_error : U64 -> Fail
 bidi_error = |pos| { code: ErrorCode.bidi_control, reason: "raw bidirectional control character (write it as an escape, e.g. \\u{202E})", pos }
 
 check_string_length : List(U8), U64, Value.Limits -> Try({}, Fail)
-check_string_length = |bytes, open, limits| {
+check_string_length = |decoded, open, limits| {
 	# Count code points: every byte that isn't a UTF-8 continuation byte.
-	chars = bytes.keep_if(|b| b < 0x80 or b >= 0xC0).len()
+	chars = decoded.keep_if(|b| b < 0x80 or b >= 0xC0).len()
 	if chars > limits.max_string_length {
 		Err({ code: ErrorCode.string_too_long, reason: "string longer than ${limits.max_string_length.to_str()} characters", pos: open })
 	} else {
@@ -813,8 +965,8 @@ parse_basic_string = |src, open, limits| {
 		}
 		c = at(src, $pos)
 		if c == '\\' {
-			(bytes, after) = read_escape(src, $pos)?
-			$out = $out.concat(bytes)
+			(escaped, after) = read_escape(src, $pos)?
+			$out = $out.concat(escaped)
 			$pos = after
 		} else if c == '\n' {
 			return Err({ code: ErrorCode.string_line_break, reason: "line break in string (use \\n or a \"\"\" block string)", pos: $pos })
@@ -947,8 +1099,8 @@ decode_block_line = |src, start, end| {
 	while $p < end {
 		c = at(src, $p)
 		if c == '\\' {
-			(bytes, after) = read_escape(src, $p)?
-			$out = $out.concat(bytes)
+			(escaped, after) = read_escape(src, $p)?
+			$out = $out.concat(escaped)
 			$p = after
 		} else if c != '\t' and control_at(src, $p) {
 			return Err(control_error($p, "block string"))
@@ -1000,10 +1152,10 @@ parse_bytes_literal = |src, start, limits| {
 }
 
 hex_lower : List(U8) -> Str
-hex_lower = |bytes| {
+hex_lower = |content| {
 	digits = "0123456789abcdef".to_utf8()
 	var $out = []
-	for b in bytes {
+	for b in content {
 		$out = $out.append(at(digits, (b // 16).to_u64())).append(at(digits, (b % 16).to_u64()))
 	}
 	bytes_to_str($out)
@@ -1089,8 +1241,8 @@ at = |src, pos| match src.get(pos) {
 
 starts_at : List(U8), U64, Str -> Bool
 starts_at = |src, pos, prefix| {
-	bytes = prefix.to_utf8()
-	src.sublist({ start: pos, len: bytes.len() }) == bytes
+	expected = prefix.to_utf8()
+	src.sublist({ start: pos, len: expected.len() }) == expected
 }
 
 ## An identifier key or a tag (`what`) at `start`, within the string limit
@@ -1127,7 +1279,7 @@ is_ident_char = |b| is_digit(b) or is_upper(b) or is_lower_start(b)
 
 is_hex = |b| is_digit(b) or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 
-is_blank = |bytes| bytes.all(|b| b == ' ' or b == '\t')
+is_blank = |content| content.all(|b| b == ' ' or b == '\t')
 
 hex_value : U8 -> U64
 hex_value = |b|
@@ -1157,7 +1309,7 @@ utf8_encode = |cp|
 	}
 
 bytes_to_str : List(U8) -> Str
-bytes_to_str = |bytes| match Str.from_utf8(bytes) {
+bytes_to_str = |content| match Str.from_utf8(content) {
 	Ok(s) => s
 	Err(_) => "" # unreachable: input is valid UTF-8 and escapes are encoded correctly
 }
@@ -1258,7 +1410,7 @@ small : Value.Limits
 small = { ..Value.default_limits, max_depth: 3, max_number_length: 8, max_exponent: 99, max_string_length: 4 }
 
 within_small : Str -> Try(U64, Str)
-within_small = |text| Value.parse_all_with(text, small).map_ok(|vs| vs.len()).map_err(|e| "${e.code}: ${e.reason} at ${e.line.to_str()}:${e.column.to_str()}")
+within_small = |input| Value.parse_all_with(input, small).map_ok(|vs| vs.len()).map_err(|e| "${e.code}: ${e.reason} at ${e.line.to_str()}:${e.column.to_str()}")
 
 expect within_small("[[[1]]], { a: { b: [] } }, A(B(C(1))), A { b: B { c: [] } }") == Ok(4)
 expect within_small("[[[[1]]]]") == Err("nesting-too-deep: nesting deeper than 3 levels at 1:4")
@@ -1316,7 +1468,7 @@ expect Value.parse_all("${"[".repeat(256)}${"]".repeat(256)}").is_ok() and Value
 
 # Error codes (spec §17), decided as the reference parser decides.
 code_at : Str -> Str
-code_at = |text| match Value.parse_all(text) {
+code_at = |input| match Value.parse_all(input) {
 	Ok(_) => "ok"
 	Err(e) => "${e.code} at ${e.line.to_str()}:${e.column.to_str()}"
 }
@@ -1367,9 +1519,9 @@ expect {
 	}
 }
 expect {
-	text = many_keys(100000, ", k99999: 0")
-	match Value.parse_all(text) {
-		Err({ code, column, .. }) => code == "duplicate-key" and column == text.count_utf8_bytes() - 10
+	input = many_keys(100000, ", k99999: 0")
+	match Value.parse_all(input) {
+		Err({ code, column, .. }) => code == "duplicate-key" and column == input.count_utf8_bytes() - 10
 		_ => Bool.False
 	}
 }
@@ -1393,3 +1545,48 @@ many_keys = |n, more| {
 expect Value.within_bounds(Arr([Num("1")]), 256, Value.max_nodes) == Ok({})
 expect Value.within_bounds(Tag("A", [Rec([("b", Num("1"))])]), 1, 3) == Ok({}) and Value.within_bounds(Tag("A", [Rec([("b", Num("1"))])]), 1, 2) == Err({ code: "too-many-nodes", reason: "value has more than 2 nodes", path: "(A).b" })
 expect Value.within_bounds(Arr([Rec([("pt-BR", Arr([]))])]), 2, 9) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 2 levels", path: "[0][\"pt-BR\"]" })
+
+# Values built in code (spec §11): the constructors build only haus values, a
+# number normalized as the parser reads it, without limits.
+expect ["1E+05", "0xFF", "1_000", "-0x0", "1e-0", "19.90", "0b101", "1e+0005", "-1.5E-07"].map(|n| Value.num(n).map_ok(Value.view)) == ["1e5", "255", "1000", "-0", "1e0", "19.90", "5", "1e5", "-1.5e-7"].map(|n| Ok(Num(n)))
+expect ["01", "NaN", "", "1.", " 1", "1 ", "1 // c", "+1", ".5", "-", "0x", "1e", "1e5.5", "abc", "--1", "1,", "1e5x"].all(|n| Value.num(n).map_ok(|_| {}).map_err(|e| e.code) == Err("invalid-number"))
+expect Value.num("01").map_ok(|_| {}) == Err({ code: "invalid-number", reason: "invalid number '01': not a number literal" })
+expect {
+	long = "9".repeat(2000)
+	huge_exponent = "1e99999999999999999999999"
+	Value.num(long).map_ok(Value.view) == Ok(Num(long)) and Value.num(huge_exponent).map_ok(Value.view) == Ok(Num(huge_exponent)) and Value.num("0x${"F".repeat(1200)}").is_ok()
+}
+expect ["A", "Z9", "Some_thing", "NaN"].all(|t| Value.tag(t, []).map_ok(Value.view) == Ok(Tag(t, [])))
+expect ["lower", "", "_A", "9A", "A-B", "Ä", "A b"].all(|t| Value.tag(t, []).map_ok(|_| {}).map_err(|e| e.code) == Err("invalid-tag"))
+expect Value.tag("lower", []).map_ok(|_| {}) == Err({ code: "invalid-tag", reason: "invalid tag 'lower': a tag is A to Z, then letters, digits and _" })
+expect Value.rec([("a", Value.text("x")), ("b", Value.bool(True)), ("a", Value.arr([]))]).map_ok(|_| {}) == Err({ code: "duplicate-key", reason: "duplicate key 'a'" })
+expect match Value.rec([("b", Value.text("x")), ("a", Value.bytes([0x0B]))]).map_ok(Value.view) {
+	Ok(Rec([("b", x), ("a", y)])) => Value.to_test_json(x) == "\"x\"" and Value.to_test_json(y) == "{\"bytes\":\"0b\"}"
+	_ => False
+}
+expect [Value.bool(True), Value.bool(False)].map(Value.to_test_json) == ["{\"tag\":\"True\"}", "{\"tag\":\"False\"}"]
+# A value built in code is the same value parsed.
+expect match (Value.num("0x10"), Value.parse("[Point(16, \"a\"), x\"ff\"]")) {
+	(Ok(n), Ok(parsed)) =>
+		match Value.tag("Point", [n, Value.text("a")]) {
+			Ok(point) => Value.arr([point, Value.bytes([0xFF])]) == parsed
+			Err(_) => False
+		}
+	_ => False
+}
+# `==` is structural: keys in the same order (haus equality is `Encode.equals`), and any depth.
+expect Value.parse("{ a: 1E5, b: [Some(x\"FF\")] }") == Value.parse("{a:1e5,b:[Some(x\"ff\")]}") and Value.parse("{ a: 1, b: 2 }") != Value.parse("{ b: 2, a: 1 }")
+expect Value.parse("[1.0, A(1)]") != Value.parse("[1, A(1)]") and Value.parse("A(1)") != Value.parse("A(1, 2)") and Value.parse("\"a\"") != Value.parse("x\"61\"")
+expect nest_arrays(100_000, Text("a")) == nest_arrays(100_000, Text("a")) and nest_arrays(100_000, Text("a")) != nest_arrays(100_000, Text("b"))
+
+## `leaf` in `n` arrays.
+nest_arrays : U64, Value -> Value
+nest_arrays = |n, leaf| {
+	var $v = leaf
+	var $i = 0
+	while $i < n {
+		$v = Arr([$v])
+		$i = $i + 1
+	}
+	$v
+}

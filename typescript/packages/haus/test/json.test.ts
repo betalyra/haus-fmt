@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   canonical, compileSchemaFile, equalsJson, fromBase64, fromHausJson, fromHausJsonLines, fromHausJsonValue, HausDecodeError, HausEncodeError, HausSyntaxError,
-  importJson, importJsonLines, JsonNumber, jsonObject, parse, parseJson, parseJsonLines, stringifyJson, toBase64, toHausJson, toHausJsonLines, type Json,
+  importJson, importJsonLines, JsonNumber, jsonObject, num, parse, parseJson, parseJsonLines, str, stringifyJson, toBase64, toHausJson, toHausJsonLines, type Json,
 } from "../src/index.js"
 import * as h from "../src/schema.js"
 
@@ -106,10 +106,10 @@ describe("self-describing (spec §16.2)", () => {
     expect(canonical(fromHausJson(toHausJson(v)))).toBe(canonical(v))
   })
 
-  it("normalizes numbers built in code and checks tags", () => {
-    expect(toHausJson({ kind: "number", text: "1E+05" })).toBe(`{"_haus":1,"_value":{"_num":"1e5"}}`)
-    expect(() => toHausJson({ kind: "variant", tag: "lower", args: [] })).toThrow(HausEncodeError)
-    expect(() => toHausJson({ kind: "number", text: "1.2.3" })).toThrow(HausEncodeError)
+  it("writes numbers built in code normalized, within the limits", () => {
+    expect(toHausJson(num("1E+05"))).toBe(`{"_haus":1,"_value":{"_num":"1e5"}}`)
+    expect(toHausJson(num("0xFF"))).toBe(`{"_haus":1,"_value":{"_num":"255"}}`)
+    expect(() => toHausJson(num("1".repeat(1001)))).toThrow(expect.objectContaining({ name: "HausEncodeError", code: "number-too-long" }))
   })
 
   it.each([
@@ -367,7 +367,7 @@ describe("schema-based (spec §16.3), hand-written schemas", () => {
     const Custom = h.withStandard<string, Omit<h.Schema<string>, "~standard">>({
       expected: "Custom",
       decode: (v, at) => (v.kind === "string" ? v.value : at.fail("expected a string")),
-      encode: (s) => ({ kind: "string", value: s }),
+      encode: (s) => str(s),
     })
     expect(() => h.toJson(h.Record({ c: Custom }), { c: "x" })).toThrow(/Custom has no schema-based JSON form at \$\.c/)
     const WithJson = h.withStandard<string, Omit<h.Schema<string>, "~standard">>({ ...Custom, json: { kind: "string" } })

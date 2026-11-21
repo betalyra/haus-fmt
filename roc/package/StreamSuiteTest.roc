@@ -6,6 +6,7 @@
 ## limits) to those values. document.cases.haus: single documents
 ## (`Value.parse`). The typed streams (typed.cases.haus) need generated
 ## decoders, so they run in schema-test (roc/scripts/gen_schema_conformance.py).
+import Decode
 import Encode
 import Streaming
 import Value
@@ -22,23 +23,16 @@ expect {
 ## A case of the stream suite: Ok, or the ways of reading it that went wrong.
 stream_case : Value -> Try({}, List(Str))
 stream_case = |c| {
-	field = |key| match c {
-		Rec(fields) => fields.find_first(|(k, _)| k == key).map_ok(|(_, v)| v)
-		_ => Err(NotFound)
-	}
-	case = (field("text"), field("maxValueLength"), field("result"))
+	case = (field_of(c, "text", Decode.str), field_of(c, "maxValueLength", Decode.u64), field_of(c, "result", |r| Decode.result(r, |v| Decode.list(v, Decode.any), Decode.str)))
 	(text, max, want) = match case {
-		(Ok(Text(t)), Ok(Num(n)), Ok(Tag("Ok", [Arr(values)]))) => (t, n, Ok(values.map(Value.to_test_json)))
-		(Ok(Text(t)), Ok(Num(n)), Ok(Tag("Err", [Text(code)]))) => (t, n, Err(code))
+		(Ok(t), Ok(n), Ok(Ok(values))) => (t, n, Ok(values.map(Value.to_test_json)))
+		(Ok(t), Ok(n), Ok(Err(code))) => (t, n, Err(code))
 		_ => return Err(["not a case: ${Value.to_test_json(c)}"])
 	}
 	options = {
 		..Streaming.defaults,
-		max_value_length: U64.from_str(max) ?? 0,
-		require_terminator: match field("strict") {
-			Ok(Tag("True", [])) => True
-			_ => False
-		},
+		max_value_length: max,
+		require_terminator: field_of(c, "strict", Decode.bool) == Ok(True),
 	}
 	read = |chunks| {
 		var $state = Streaming.reader(options)
@@ -79,7 +73,7 @@ stream_case = |c| {
 # `whole`: parsing the whole text doesn't apply the value limit (spec §7).
 expect {
 	cases = Value.parse_bytes(stream_suite) ?? []
-	wholes = cases.keep_if(|c| field_of(c, "whole").is_ok())
+	wholes = cases.keep_if(|c| field_of(c, "whole", Decode.any).is_ok())
 	failures = wholes.keep_if(|c| whole_case(c).is_err())
 	if !failures.is_empty() {
 		dbg failures.map(|c| whole_case(c))
@@ -97,17 +91,14 @@ expect {
 	!cases.is_empty() and failures.is_empty()
 }
 
-## A field of a case.
-field_of : Value, Str -> Try(Value, [NotFound])
-field_of = |c, key| match c {
-	Rec(fields) => fields.find_first(|(k, _)| k == key).map_ok(|(_, v)| v)
-	_ => Err(NotFound)
-}
+## A field of a case, decoded with `decoder`.
+field_of : Value, Str, (Value -> Try(a, Decode.Error)) -> Try(a, Decode.Error)
+field_of = |c, key, decoder| Decode.field(Decode.strict_record(c)?, key, decoder)
 
 ## A case with `whole: Ok([values])`: `Value.parse_all` gives these values.
 whole_case : Value -> Try({}, Str)
-whole_case = |c| match (field_of(c, "text"), field_of(c, "whole")) {
-	(Ok(Text(text)), Ok(Tag("Ok", [Arr(want)]))) => match Value.parse_all(text) {
+whole_case = |c| match (field_of(c, "text", Decode.str), field_of(c, "whole", |w| Decode.result(w, |v| Decode.list(v, Decode.any), Decode.any))) {
+	(Ok(text), Ok(Ok(want))) => match Value.parse_all(text) {
 		Ok(got) if got.len() == want.len() and got.map2(want, |a, b| Encode.equals(a, b) == Ok(True)).all(|same| same) => Ok({})
 		Ok(got) => Err("${text}: parsed whole as [${Str.join_with(got.map(Value.to_test_json), ",")}], expected [${Str.join_with(want.map(Value.to_test_json), ",")}]")
 		Err(e) => Err("${text}: failed whole with ${e.code}")
@@ -118,13 +109,13 @@ whole_case = |c| match (field_of(c, "text"), field_of(c, "whole")) {
 ## A case of document.cases.haus: `Value.parse` gives `Ok(value)`, compared
 ## as values (spec §2), or fails with `Err("code")`.
 document_case : Value -> Try({}, Str)
-document_case = |c| match (field_of(c, "text"), field_of(c, "result")) {
-	(Ok(Text(text)), Ok(Tag("Ok", [want]))) => match Value.parse(text) {
+document_case = |c| match (field_of(c, "text", Decode.str), field_of(c, "result", |r| Decode.result(r, Decode.any, Decode.str))) {
+	(Ok(text), Ok(Ok(want))) => match Value.parse(text) {
 		Ok(got) if Encode.equals(got, want) == Ok(True) => Ok({})
 		Ok(got) => Err("${text}: parsed as ${Value.to_test_json(got)}, expected ${Value.to_test_json(want)}")
 		Err(e) => Err("${text}: failed with ${e.code}, expected ${Value.to_test_json(want)}")
 	}
-	(Ok(Text(text)), Ok(Tag("Err", [Text(code)]))) => match Value.parse(text) {
+	(Ok(text), Ok(Err(code))) => match Value.parse(text) {
 		Err(e) if e.code == code => Ok({})
 		Err(e) => Err("${text}: failed with ${e.code}, expected ${code}")
 		Ok(got) => Err("${text}: parsed as ${Value.to_test_json(got)}, expected ${code}")

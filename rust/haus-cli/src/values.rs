@@ -20,23 +20,16 @@ use std::path::Path;
 pub fn canonical(args: &CanonicalArgs, color: Color) -> Status {
     let colored = output::colored(color, &stdout());
     each_value(args.file.as_deref(), &args.limits, color, |out, v| match colored {
-        true => writeln!(out, "{}", highlight(&form(v))),
-        false => writeln!(out, "{}", form(v)),
+        true => writeln!(out, "{}", highlight(&haus::canonical(v))),
+        false => writeln!(out, "{}", haus::canonical(v)),
     })
-}
-
-/// A parsed value's canonical form: every haus value has one.
-fn form(v: &Value) -> String {
-    haus::canonical(v).expect("a parsed value has a canonical form")
 }
 
 /// Print `hashAll` of the values, or with --each the hash of each value.
 pub fn hash(args: &HashArgs, color: Color) -> Status {
     let file = args.file.as_deref();
     if args.each {
-        return each_value(file, &args.limits, color, |out, v| {
-            writeln!(out, "{}", haus::hash(v).expect("a parsed value has a canonical form"))
-        });
+        return each_value(file, &args.limits, color, |out, v| writeln!(out, "{}", haus::hash(v)));
     }
     let mut values = Vec::new();
     let add = |_: &mut dyn Write, v: &Value| {
@@ -45,8 +38,7 @@ pub fn hash(args: &HashArgs, color: Color) -> Status {
     };
     match each_value(file, &args.limits, color, add) {
         Status::Ok => {
-            output::print(&format!("{}\n", haus::hash_all(&values).expect("parsed values have a canonical form")))
-                .map_or_else(output::fail, |()| Status::Ok)
+            output::print(&format!("{}\n", haus::hash_all(&values))).map_or_else(output::fail, |()| Status::Ok)
         }
         status => status,
     }

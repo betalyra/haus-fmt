@@ -190,7 +190,7 @@
 { rule: "format.numbers.source-spelling", cases: ["format/cases/spellings", "format/cases/minimised-spellings"] },
 { rule: "format.strings.source-spelling", cases: ["format/cases/spellings", "format/cases/minimised-spellings"] },
 { rule: "format.strings.form-change", cases: ["format/cases/block-strings", "format/cases/top-level-block-string", "format/cases/ndjson-like"] },
-{ rule: "format.numbers.too-long-unwritable", cases: [], untestable: True, note: "only values built in code, or a reader with a lower configured limit, exceed the limit (binding tests; plan B1)" },
+{ rule: "format.numbers.too-long-unwritable", cases: [], untestable: True, note: "only values built in code, or a writer with a lower configured limit, exceed the number limits (an integer, a decimal or an exponent): binding tests; plan B1" },
 { rule: "format.pretty.stream.commas", cases: ["format/cases/stream", "format/cases/single-with-comma", "format/cases/stream-no-trailing-comma", "format/cases/width-single"] },
 { rule: "format.pretty.stream.blank-after-multiline", cases: ["format/cases/already-formatted", "format/cases/comments-stream"] },
 { rule: "format.pretty.stream.multiline-by-value", cases: ["format/cases/stream-multiline-comment"] },
@@ -222,7 +222,7 @@
 { rule: "format.minimised.encoder-may", cases: [], untestable: True, note: "MAY: encoder API" },
 { rule: "format.comments.refuse-pretty", cases: [], untestable: True, note: "tool behaviour (CLI, editors): CLI tests" },
 { rule: "format.comments.refuse-in-place", cases: [], untestable: True, note: "tool behaviour (in-place rewrite): CLI tests" },
-{ rule: "format.values.built-in-code", cases: [], untestable: True, note: "values built in code: binding tests; no suite format holds a value that isn't a haus value" },
+{ rule: "format.values.built-in-code", cases: [], untestable: True, note: "values built in code are checked by the constructors: binding tests; no suite format holds a value that isn't a haus value" },
 
 // ── §12 Canonical form, equality and hashing ──
 { rule: "canonical.form.equal-iff-identical", cases: ["valid/variants", "valid/keys", "valid/numbers"] },
@@ -230,7 +230,7 @@
 { rule: "canonical.api.exact", cases: ["valid/numbers", "valid/strings", "valid/keys", "valid/stream"] },
 { rule: "canonical.api.equals", cases: ["equality/cases"] },
 { rule: "canonical.api.compare", cases: ["equality/cases"] },
-{ rule: "canonical.api.values-only", cases: [], untestable: True, note: "values built in code (Number(\"01\"), a lowercase tag, duplicate keys, an unpaired surrogate): binding tests" },
+{ rule: "canonical.api.values-only", cases: [], untestable: True, note: "values built in code (Number(\"01\"), a lowercase tag, duplicate keys, an unpaired surrogate) are rejected by the constructors: binding tests" },
 { rule: "canonical.form.text", cases: ["valid/bom", "valid/comments", "valid/single-record"] },
 { rule: "canonical.form.number", cases: ["valid/numbers", "valid/exponents", "valid/negative-zero-hex", "valid/limits-boundary"] },
 { rule: "canonical.form.string", cases: ["valid/escaped-controls", "valid/strings", "valid/bidi-escaped", "valid/line-separators", "valid/unicode-edges"] },

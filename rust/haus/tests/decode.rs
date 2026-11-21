@@ -46,16 +46,16 @@ fn array(v: Value) -> Value {
 }
 
 fn some(v: Value) -> Value {
-    Value::Variant { tag: "Some".into(), args: vec![v] }
+    Value::variant("Some", vec![v]).unwrap()
 }
 
 fn record(v: Value) -> Value {
-    Value::Record(vec![("a".into(), v)])
+    Value::record([("a", v)]).unwrap()
 }
 
 /// `A { a: … }`: a record payload, one level (spec §7).
 fn tagged_record(v: Value) -> Value {
-    Value::Variant { tag: "A".into(), args: vec![record(v)] }
+    Value::variant("A", vec![record(v)]).unwrap()
 }
 
 /// A [`Json`] dropped level by level, without recursion.
@@ -88,7 +88,7 @@ fn a_value_built_a_million_levels_deep_fails_at_the_depth_limit() {
     let Value::Variant { tag, args } = &chain else { unreachable!() };
     let unknown = de::unknown(tag, args, Decoder::default()).unwrap_err();
     assert_eq!(unknown.to_string(), deeper(&"(Some)[0]".repeat(256)));
-    let wrapped = Value::Record(vec![("raw".into(), v)]);
+    let wrapped = Value::record([("raw", v)]).unwrap();
     let e = <std::collections::BTreeMap<String, Value>>::decode(&wrapped).unwrap_err();
     assert_eq!(e.to_string(), deeper(&format!(".raw{}", "[0]".repeat(255))));
 }
@@ -109,7 +109,7 @@ fn decoding_counts_levels_as_the_parser_does() {
     // A configured limit, here 3: `[[[]]]` is fine, `[[[[]]]]` isn't.
     let small = Decoder::new(&Limits { max_depth: 3, ..Limits::default() });
     assert_eq!(Nest::decode_with(&deep(2, array), small).unwrap().0.len(), 1);
-    let none = Value::Variant { tag: "None".into(), args: vec![] };
+    let none = Value::variant("None", vec![]).unwrap();
     assert!(Chain::decode_with(&some(none), small).unwrap().0.is_some_and(|inner| inner.0.is_none()));
     let e = Nest::decode_with(&deep(3, array), small).unwrap_err();
     assert_eq!(e.to_string(), "[0][0][0]: nesting deeper than 3 levels");
@@ -117,12 +117,12 @@ fn decoding_counts_levels_as_the_parser_does() {
     assert_eq!(e.to_string(), "(A).a(A).a(A).a: nesting deeper than 3 levels");
     // A tag's arguments are a level: `Some(…)` at the limit isn't, `None` is.
     let at_zero = Decoder::new(&Limits { max_depth: 0, ..Limits::default() });
-    assert!(Option::<u8>::decode_with(&Value::Variant { tag: "None".into(), args: vec![] }, at_zero).is_ok());
-    let e = Option::<u8>::decode_with(&some(Value::Number("1".into())), at_zero).unwrap_err();
+    assert!(Option::<u8>::decode_with(&Value::variant("None", vec![]).unwrap(), at_zero).is_ok());
+    let e = Option::<u8>::decode_with(&some(Value::from(1)), at_zero).unwrap_err();
     assert_eq!(e.code, ErrorCode::NestingTooDeep);
-    let date = Value::Variant { tag: "Date".into(), args: vec![Value::String("2026-11-18".into())] };
+    let date = Value::variant("Date", vec![Value::String("2026-11-18".into())]).unwrap();
     assert_eq!(haus::time::Date::decode_with(&date, at_zero).unwrap_err().code, ErrorCode::NestingTooDeep);
-    let u = Unknown { tag: "X".into(), args: vec![Value::Number("1".into())] };
+    let u = Unknown { tag: "X".parse().unwrap(), args: vec![Value::from(1)] };
     assert!(de::unknown(&u.tag, &u.args, at_zero).is_err() && de::unknown("X", &[], at_zero).is_ok());
 }
 

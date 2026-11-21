@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Stream } from "effect"
+import { arr, str, variant } from "../src/index.js"
 import * as h from "../src/schema.js"
 
 /** Run a throwing schema call, failing with HausDecodeError. */
@@ -204,15 +205,17 @@ describe("errors", () => {
       expect(encoding(() => h.formatAll(Item, [item, item, item, bad]))).toEqual(["cannot-encode", "$[3].sizes[0]"])
     }))
 
-  it("a bad tag in an Any built in code is invalid-tag, as in spec/errors.haus", () => {
+  it("a bad tag built in code is invalid-tag when it is built, as in spec/errors.haus; an Any is checked for the limits, at its place", () => {
+    expect(() => arr([variant("lower")])).toThrow(expect.objectContaining({ name: "HausEncodeError", code: "invalid-tag" }))
     const U = h.Record({ v: h.Any })
-    const value = { v: { kind: "array", items: [{ kind: "variant", tag: "lower", args: [] }] } } as never
-    for (const write of [() => h.encode(U, value), () => h.stringify(U, value), () => h.toJson(U, value)]) {
+    const value = { v: arr([str("x".repeat(20))]) }
+    const limits = { maxStringLength: 10 }
+    for (const write of [() => h.encode(U, value, limits), () => h.stringify(U, value, limits), () => h.toJson(U, value, limits)]) {
       try {
         write()
         expect.unreachable()
       } catch (x) {
-        expect(x instanceof h.HausEncodeError ? [x.code, h.formatPath(x.path)] : x).toEqual(["invalid-tag", "$.v[0]"])
+        expect(x instanceof h.HausEncodeError ? [x.code, h.formatPath(x.path)] : x).toEqual(["string-too-long", "$.v[0]"])
       }
     }
   })

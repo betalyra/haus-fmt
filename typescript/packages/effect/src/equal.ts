@@ -1,7 +1,7 @@
 /**
  * haus equality (spec §2) and order (§12) as Effect instances.
  *
- * Effect's default `Equal.equals` compares plain objects structurally. On
+ * Effect's default `Equal.equals` compares objects structurally. On
  * values from `parse` that agrees with haus equality, but not on values
  * that carry source locations (`parseWithLocations`, `parseDocument`): the
  * same value at two places differs. These instances compare canonical

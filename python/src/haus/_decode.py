@@ -19,7 +19,7 @@ from decimal import Decimal
 from typing import Any, Final, Never, Protocol, TypeVar, cast
 
 from ._error_codes import ErrorCode
-from ._errors import HausError, HausJsonError, PathKey, format_path
+from ._errors import HausDecodeError, HausEncodeError, HausJsonError, PathKey
 from ._float import FloatKind, float_text, to_float32, to_float64
 from ._host import Nothing, Secret, Some, Tagged, Unknown
 from ._json import (
@@ -55,7 +55,21 @@ from ._schema_file import (
 )
 from ._schema_file import Instance as _Instance
 from ._time import check as check_time
-from ._value import Array, Bytes, Number, Record, String, Value, Variant
+from ._value import (
+    Array,
+    Bytes,
+    Number,
+    Record,
+    String,
+    Value,
+    Variant,
+    array_unchecked,
+    bytes_unchecked,
+    number_unchecked,
+    record_unchecked,
+    string_unchecked,
+    variant_unchecked,
+)
 
 _SURROGATE = re.compile(r"[\ud800-\udfff]")
 
@@ -65,39 +79,6 @@ V = TypeVar("V")
 STEPS_PER_VALUE: Final = 16
 DEFAULT_ENCODE_STEPS: Final = 16 * 1024 * 1024
 _MAX_VALUES: Final = 64 * 1024 * 1024
-
-
-class _ValueError(HausError):
-    """An error at a place in a value: its `path`."""
-
-    path: tuple[PathKey, ...]
-    """Where the error is: `("items", 2, "price")`, written `$.items[2].price`."""
-
-    def __init__(
-        self,
-        reason: str,
-        path: tuple[PathKey, ...],
-        code: ErrorCode,
-        *,
-        hint: str | None = None,
-        expected: str | None = None,
-        found: str | None = None,
-    ) -> None:
-        super().__init__(
-            f"{reason} at {format_path(path)}", code=code, reason=reason, hint=hint, expected=expected, found=found
-        )
-        self.path = path
-
-    def _place(self) -> dict[str, object]:
-        return {"path": format_path(self.path)}
-
-
-class HausDecodeError(_ValueError):
-    """A value the type doesn't accept, with the place of the failing value (spec §15)."""
-
-
-class HausEncodeError(_ValueError):
-    """A Python value that doesn't fit its type when encoding."""
 
 
 class Codec(Protocol):
@@ -360,78 +341,64 @@ def _mapping(x: object, at: _At, what: str) -> Mapping[object, object]:
 def _checked_tag(tag: object, at: _At) -> str:
     if not isinstance(tag, str) or not TAG.fullmatch(tag):
         _invalid("a tag name", tag, at, "invalid-tag")
+    return _tag_within(tag, at)
+
+
+def _tag_within(tag: str, at: _At) -> str:
     if len(tag) > at.ctx.limits.max_string_length:
         at.fail(f"tag longer than {at.ctx.limits.max_string_length} characters", code="tag-too-long")
     return tag
 
 
 def checked_value(raw: object, at: _At) -> Value:
-    """A raw `Value` to write again (an `Any`, an unknown value): a haus value within the limits.
+    """A `Value` to write again (an `Any`, an unknown value), checked to be within the limits.
 
-    A `Value` built in code may hold anything, so it is checked node by node; number
-    literals are normalized as the parser would. Parts without a change are kept as
-    they are, so a parsed value comes back unchanged (the same objects).
+    A `Value` is a haus value by construction (spec §11), so only the limits are checked,
+    and it comes back as it is: the same object.
     """
     at.step()
     match raw:
         case Number(text):
-            # A `Number` whose text isn't a literal (spec §11, values built in code).
-            normalized = _checked_number(text, at, "a number literal", "invalid-number")
-            return raw if normalized == text else Number(normalized)
+            if (issue := number_limit_issue(text, at.ctx.limits)) is not None:
+                at.fail(issue[1], code=issue[0])
+            return raw
         case String(s):
             _checked_string(s, at)
             return raw
         case Bytes(data):
-            return raw if _checked_bytes(data, at) is data else Bytes(bytes(data))
+            _checked_bytes(data, at)
+            return raw
         case Array(items):
             at.container()  # an empty array is a level too, as in the parser
-            new_items = _checked_items(raw, _sequence(items, at, "a tuple of items"), at)
-            return raw if new_items is None else Array(new_items)
-        case Record():
-            return _checked_record(raw, at)
+            _checked_items(items, at)
+            return raw
+        case Record(fields):
+            _checked_fields(fields, at)
+            return raw
+        case Variant(tag, (Record(fields),)):
+            # `Tag { … }` is one level, as in the parser.
+            _tag_within(tag, at)
+            _checked_fields(fields, at)
+            return raw
         case Variant(tag, args):
-            _checked_tag(tag, at)
-            match _sequence(args, at, "a tuple of arguments"):
-                case (Record() as record,):
-                    # `Tag { … }` is one level, as in the parser.
-                    checked = _checked_record(record, at)
-                    return raw if checked is record else Variant(tag, (checked,))
-                case values:
-                    new_args = _checked_items(raw, values, at)
-                    return raw if new_args is None else Variant(tag, new_args)
+            _tag_within(tag, at)
+            _checked_items(args, at)
+            return raw
         case _:
             _invalid("a haus value", raw, at)
 
 
-def _checked_items(raw: Value, items: Sequence[object], at: _At) -> tuple[Value, ...] | None:
-    """The elements or arguments of `raw`, checked; None when nothing changed."""
+def _checked_items(items: tuple[Value, ...], at: _At) -> None:
     if items:
         at.container()
-    at.enter(raw)
-    out: list[Value] = []
     for i, x in enumerate(items):
-        out.append(checked_value(x, at.child(i)))
-    at.leave(raw)
-    return None if isinstance(items, tuple) and all(map(_same, out, items)) else tuple(out)
+        checked_value(x, at.child(i))
 
 
-def _same(a: object, b: object) -> bool:
-    return a is b
-
-
-def _checked_record(raw: Record, at: _At) -> Record:
-    fields = _mapping(raw.fields, at, "a mapping of fields")
+def _checked_fields(fields: Mapping[str, Value], at: _At) -> None:
     at.container()
-    at.enter(raw)
-    out: dict[str, Value] = {}
-    changed = False
     for k, x in fields.items():
-        key = _checked_string(k, at, "a string key", "key")
-        y = checked_value(x, at.child(key))
-        changed = changed or y is not x
-        out[key] = y
-    at.leave(raw)
-    return Record(out) if changed else raw
+        checked_value(x, at.child(_checked_string(k, at, "a string key", "key")))
 
 
 # ── nodes ────────────────────────────────────────────────────
@@ -484,7 +451,7 @@ class _String(_Node):
         _mismatch("String", v, at)
 
     def encode(self, x: object, at: _At) -> Value:
-        return String(self.write_json(x, at))
+        return string_unchecked(self.write_json(x, at))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -508,7 +475,7 @@ class _Bytes(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        return Bytes(_checked_bytes(x, at))
+        return bytes_unchecked(_checked_bytes(x, at))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -620,7 +587,7 @@ class _Int(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        return Number(self._text(x, at))
+        return number_unchecked(self._text(x, at))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -714,7 +681,7 @@ class _Float(_Node):
             return _NAN
         if math.isinf(f):
             return _INFINITY if f > 0 else _NEG_INFINITY
-        return Number(float_text(f, self.kind))
+        return number_unchecked(float_text(f, self.kind))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -752,7 +719,7 @@ class _Decimal(_Node):
         _mismatch("Decimal", v, at)
 
     def encode(self, x: object, at: _At) -> Value:
-        return Number(self.write_json(x, at))
+        return number_unchecked(self.write_json(x, at))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -804,7 +771,7 @@ class _StdTime(_Node):
                 _mismatch(f'{self.expected}("…")', v, at)
 
     def encode(self, x: object, at: _At) -> Value:
-        return Variant(self.expected, (String(self.write_json(x, at)),))
+        return variant_unchecked(self.expected, (string_unchecked(self.write_json(x, at)),))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -880,7 +847,7 @@ class _Array(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        return Array(tuple(_each_item(x, at, self.item.encode)))
+        return array_unchecked(tuple(_each_item(x, at, self.item.encode)))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -936,7 +903,7 @@ class _Map(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        return Record(_each_entry(x, at, self.value.encode))
+        return record_unchecked(_each_entry(x, at, self.value.encode))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -1001,7 +968,7 @@ class _Maybe(_Node):
         at.step()
         if (value := self._some(x, at)) is _NOTHING:
             return _NONE
-        return Variant("Some", (self.item.encode(value, at.child(0)),))
+        return variant_unchecked("Some", (self.item.encode(value, at.child(0)),))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -1153,7 +1120,7 @@ class _Record(_Node):
 
     def encode(self, x: object, at: _At) -> Value:
         at.step()
-        return Record(self.write_fields(x, at, self.encoders))
+        return record_unchecked(self.write_fields(x, at, self.encoders))
 
     def write_fields(self, x: object, at: _At, writers: _Entries) -> dict[str, Any]:
         """The fields of a Python mapping, each written with its type: haus values or JSON."""
@@ -1309,9 +1276,8 @@ class _Variant(_Node):
             _invalid("a Variant in the Unknown", raw, at)
         if raw.tag in self.cases:
             at.fail(f"an Unknown with the listed tag '{_short(raw.tag)}': write it as Tagged")
-        checked = checked_value(raw, at)
-        assert isinstance(checked, Variant)
-        return checked
+        checked_value(raw, at)
+        return raw
 
     def _tagged(self, x: object, at: _At) -> tuple[str, object, _CasePayload]:
         """A `Tagged` to write: its tag, payload and case."""
@@ -1337,9 +1303,9 @@ class _Variant(_Node):
             return self._unknown(cast("object", x.value), at)
         tag, given, case = self._tagged(x, at)
         if case is None:
-            return Variant(tag)
+            return variant_unchecked(tag)
         if isinstance(case, _RecordCase):
-            return Variant(tag, (Record(case.write_fields(given, at, _encoders)),))
+            return variant_unchecked(tag, (record_unchecked(case.write_fields(given, at, _encoders)),))
         args = self._arguments(tag, given, case, at)
         at.container()
         at.enter(given)
@@ -1347,7 +1313,7 @@ class _Variant(_Node):
         for i, node in enumerate(case):
             out.append(node.encode(args[i], at.child(i)))
         at.leave(given)
-        return Variant(tag, tuple(out))
+        return variant_unchecked(tag, tuple(out))
 
     def read_json(self, j: Json, at: _At) -> object:
         at.step()
@@ -1402,14 +1368,14 @@ class _Variant(_Node):
         `{"_tag": "Hexagon", "sides": 6}` is `Hexagon { sides: 6 }`.
         """
         if len(j) == 1:
-            return Variant(tag)
+            return variant_unchecked(tag)
         if len(j) == 2 and "_args" in j:
             args = j["_args"]
             return _read_at(at, lambda: self_describing_arguments(tag, args, at.ctx.limits, at.depth))
         members: dict[str, Json] = {k: x for k, x in j.items() if k != "_tag"}
         # `Tag { … }` is one level, as in the parser.
         payload = _read_at(at, lambda: imported(members, at.ctx.limits, at.ctx.limits.max_depth, at.depth))
-        return Variant(tag, (payload,))
+        return variant_unchecked(tag, (payload,))
 
     def write_json(self, x: object, at: _At) -> Json:
         at.step()
@@ -1838,7 +1804,7 @@ def to_schema_json(node: _Node, x: object, limits: Limits, max_steps: int | None
 
 
 def checked(value: object, limits: Limits, key: PathKey | None = None, *, json: bool = False) -> Value:
-    """A `Value` built in code, checked to be a haus value within `limits` (as `Any` encodes it).
+    """A `Value`, checked to be within `limits` (as `Any` encodes it); anything else is `cannot-encode`.
 
     With `json`, for its self-describing JSON: what has no JSON form is `no-json-form`.
     """

@@ -4,7 +4,7 @@
 //! apply. Lengths of strings, keys, tags and bytes are checked on the haus
 //! value that results, by the reader of each form.
 
-use super::Json;
+use super::{Json, JsonNumber};
 use crate::scan::{is_bidi, is_control};
 use crate::{ErrorCode as Code, Limits, SyntaxError};
 use std::collections::HashSet;
@@ -249,7 +249,7 @@ impl Reader<'_> {
                 format!("exponent larger than {}", self.limits.max_exponent),
             ));
         }
-        Ok(Json::Number(text.to_owned()))
+        Ok(Json::Number(JsonNumber::from_valid(text.to_owned())))
     }
 
     fn digits(&mut self) {

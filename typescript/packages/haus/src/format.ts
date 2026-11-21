@@ -12,10 +12,16 @@
  * above the entry that follows it, a comment after an entry on the same line
  * stays after that entry's comma. The output has LF line endings only, in
  * comments too.
+ *
+ * Every `Value` is a haus value (value.ts: the constructors check what they
+ * build), so writing one can't fail but for a bad option. A value forged past
+ * the constructors (with a cast) is not one, and what the writers do with it
+ * is undefined (spec §11, "Values built in code").
  */
-import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, quoteText, TAB, TAG, unpairedSurrogate } from "./chars.js"
+import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB, unpairedSurrogate } from "./chars.js"
 import { HausEncodeError } from "./errors.js"
-import { canonicalNumber, isNormalizedNumber } from "./number.js"
+import { numberLimitIssue } from "./number.js"
+import { DEFAULT_LIMITS, type Limits } from "./parser.js"
 import type { HRecord, HVariant, Value } from "./value.js"
 
 /**
@@ -45,6 +51,13 @@ export interface FormatOptions {
   readonly source?: string
   /** Comment spans from `parseDocument`; they are kept in the output. Needs `source`. */
   readonly comments?: readonly (readonly [number, number])[]
+  /**
+   * The number limits (spec §7) a number written from its value must fit, so
+   * that a parser with these limits reads it back: its literal's length
+   * (`number-too-long`) and its exponent (`exponent-too-large`), a decimal's
+   * too (`1.000…`, `1e9999`). A limit not given is the parser's default.
+   */
+  readonly limits?: Partial<Pick<Limits, "maxNumberLength" | "maxExponent">>
 }
 
 /** Format a whole file: one value, or a stream with a comma after each value. */
@@ -146,6 +159,7 @@ class Formatter {
   private readonly width: number
   private readonly source: string | undefined
   private readonly comments: readonly Span[]
+  private readonly limits: Pick<Limits, "maxNumberLength" | "maxExponent">
   /** The spacing of a top-level item on one line: compact's, or none (minimised). */
   private readonly spacing: Spacing
 
@@ -154,6 +168,7 @@ class Formatter {
     this.step = " ".repeat(wholeOption("indent", options.indent ?? 2))
     this.width = wholeOption("width", options.width ?? 80)
     this.source = options.source
+    this.limits = { ...DEFAULT_LIMITS, ...options.limits }
     this.comments = options.source === undefined ? [] : [...(options.comments ?? [])].sort((a, b) => a[0] - b[0])
   }
 
@@ -206,7 +221,7 @@ class Formatter {
         const next = x.fields.next()
         if (!next.done) {
           const [k, value] = next.value
-          out += x.first ? keyText(k) + colon : comma + keyText(k) + colon
+          out += x.first ? writtenKey(k) + colon : comma + writtenKey(k) + colon
           x.first = false
           work.push(x, value)
         }
@@ -238,7 +253,7 @@ class Formatter {
           case "variant": {
             const args = x.args
             const first = args[0]
-            out += writtenTag(x.tag)
+            out += x.tag
             if (args.length === 1 && first!.kind === "record") {
               out += spacing.tag
               work.push(first!) // the record, next
@@ -304,7 +319,7 @@ class Formatter {
       case "number":
         return void out.push(this.number(v))
       case "string":
-        return void out.push(v.value.includes("\n") ? blockString(writable(v.value), ind + this.step) : this.basicString(v))
+        return void out.push(v.value.includes("\n") ? blockString(v.value, ind + this.step) : this.basicString(v))
       case "bytes":
         return void out.push(this.bytes(v))
       case "array":
@@ -313,7 +328,7 @@ class Formatter {
         return this.record(v, ind, out, tasks)
       case "variant": {
         const [first] = v.args
-        out.push(writtenTag(v.tag))
+        out.push(v.tag)
         if (v.args.length === 0) return
         if (v.args.length === 1 && first?.kind === "record") {
           out.push(" ")
@@ -331,7 +346,7 @@ class Formatter {
     for (const [k, v] of r.fields) {
       // A bare key is ASCII: its width is its length.
       const bare = BARE_KEY.test(k)
-      const prefix = `${bare ? k : quote(k)}: `
+      const prefix = `${bare ? k : escaped(k)}: `
       const prefixWidth = bare ? k.length + 2 : codePoints(prefix)
       entries.push({ start: r.keySpans?.get(k)?.[0] ?? v.start, end: v.end, valueStart: v.start, prefix, prefixWidth, value: v })
     }
@@ -452,7 +467,15 @@ class Formatter {
 
   /** The source spelling when reformatting (`0xFF` stays `0xFF`), else the normalized literal, always decimal (spec §11). */
   private number(v: Extract<Value, { kind: "number" }>): string {
-    return this.original(v) ?? writtenNumber(v.text)
+    const original = this.original(v)
+    if (original !== undefined) return original
+    const text = v.text
+    // Most numbers are short and have no exponent: nothing to check.
+    if (text.length > this.limits.maxNumberLength || text.includes("e")) {
+      const issue = numberLimitIssue(text, this.limits)
+      if (issue !== undefined) throw new HausEncodeError(issue.reason, [], issue.code)
+    }
+    return text
   }
 
   /** `x"…"`: the source spelling when reformatting (spaces kept), else lowercase hex. */
@@ -466,7 +489,7 @@ class Formatter {
     const original = this.original(v)
     return original !== undefined && original.startsWith('"') && !original.startsWith('"""')
       ? original.replace(SEPARATORS, (ch) => hexEscape(ch.charCodeAt(0)))
-      : quote(v.value)
+      : escaped(v.value)
   }
 
   /** The value's source text, when formatting a parsed document. */
@@ -524,45 +547,16 @@ const firstAtOrAfter = (comments: readonly (readonly [number, number])[], offset
   return lo
 }
 
-// ── values built in code (spec §4, §12) ─────────────────────
+// ── keys and strings ─────────────────────────────────────────
+
+/** A record key of a value as every writer writes it: bare if it can be, else quoted. */
+export const writtenKey = (k: string): string => (BARE_KEY.test(k) ? k : escaped(k))
 
 /**
- * Text that can be written: without an unpaired surrogate, which a
- * JavaScript string can hold and UTF-8 can't (spec §4). Else
- * HausEncodeError `cannot-encode`.
+ * Any string as a record key, as `writtenKey` writes it (for the compiled
+ * codecs, which write the application's strings, not values): one with an
+ * unpaired surrogate is HausEncodeError `cannot-encode`.
  */
-export const writable = (s: string): string => {
-  if (unpairedSurrogate(s) >= 0) throw new HausEncodeError("a string or key with an unpaired surrogate, which has no UTF-8 form", [], "cannot-encode")
-  return s
-}
-
-/**
- * A number built in code, as written: its text if that is a number literal
- * (spec §3), else HausEncodeError `invalid-number` (`"01"`, `"NaN"`, `""`; spec §11).
- */
-export const writtenNumber = (text: string): string => {
-  if (!isNormalizedNumber(text) && canonicalNumber(text) === undefined) throw notALiteral(text)
-  return text
-}
-
-/**
- * A number built in code in the canonical form (spec §12): its normalized
- * literal (`1e+05` → `1e5`, `0xFF` → `255`), else HausEncodeError
- * `invalid-number`. Without limits.
- */
-export const normalizedNumber = (text: string): string => (isNormalizedNumber(text) ? text : (canonicalNumber(text) ?? notALiteral(text)))
-
-const notALiteral = (text: string): never => {
-  throw new HausEncodeError(`a number that isn't a number literal: '${quoteText(text)}'`, [], "invalid-number")
-}
-
-/** A tag built in code, as written: `[A-Z][A-Za-z0-9_]*` (spec §4), else HausEncodeError `invalid-tag`. */
-export const writtenTag = (tag: string): string => {
-  if (!TAG.test(tag)) throw new HausEncodeError(`the tag '${quoteText(tag)}' isn't [A-Z][A-Za-z0-9_]*`, [], "invalid-tag")
-  return tag
-}
-
-/** A record key as every writer writes it: bare if it can be, else quoted. */
 export const keyText = (k: string): string => (BARE_KEY.test(k) ? k : quote(k))
 
 /** The line and paragraph separators (`isLineSeparator`), to escape in a string's original spelling. */
@@ -579,15 +573,19 @@ export function toHex(data: Uint8Array): string {
 }
 
 /**
- * A `"…"` string with the minimal escapes. A string with an unpaired
- * surrogate has no UTF-8 form (spec §4), so it can't be written:
+ * Any string as a `"…"` string with the minimal escapes. A string with an
+ * unpaired surrogate has no UTF-8 form (spec §4), so it can't be written:
  * HausEncodeError `cannot-encode`.
  */
 export function quote(s: string): string {
-  return escaped(writable(s))
+  if (unpairedSurrogate(s) >= 0) throw new HausEncodeError("a string or key with an unpaired surrogate, which has no UTF-8 form", [], "cannot-encode")
+  return escaped(s)
 }
 
-/** `quote` without the check, for messages (a key in an error's path). */
+/**
+ * `quote` without the check: for the strings of values (which have a UTF-8
+ * form), and for messages (a key in an error's path).
+ */
 export function escaped(s: string): string {
   // Hot: most strings need no escape at all (the regex scan is native, much faster than a loop here).
   if (!NEEDS_ESCAPE.test(s)) return `"${s}"`

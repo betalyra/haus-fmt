@@ -58,6 +58,7 @@ pub mod ser;
 use crate::error::Position;
 use crate::{
     DecodeError, Decoder, Encode, EncodeError, Encoder, Error, ErrorCode, Limits, Segment, SyntaxError, Value,
+    ValueError,
 };
 use read::Form;
 use std::io::{BufRead, Read, Write};
@@ -72,7 +73,7 @@ pub enum Json {
     Null,
     Bool(bool),
     /// The number as written: `19.90`, `-1E+5`.
-    Number(String),
+    Number(JsonNumber),
     String(String),
     Array(Vec<Json>),
     Object(Vec<(String, Json)>),
@@ -88,6 +89,108 @@ impl Json {
     }
 }
 
+/// A JSON number, as written: `19.90`, `-1E+5` (RFC 8259,
+/// `-?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?`). It derefs to its text.
+///
+/// ```
+/// use haus::json::JsonNumber;
+/// assert_eq!(JsonNumber::new("-1E+5").unwrap(), "-1E+5");
+/// assert!(JsonNumber::new("01").is_err() && JsonNumber::new("0x1F").is_err() && JsonNumber::new("NaN").is_err());
+/// ```
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct JsonNumber(String);
+
+impl JsonNumber {
+    /// The number `text`. Fails if it isn't a JSON number (`invalid-number`).
+    /// There is no limit on its length or exponent: those are the writer's.
+    pub fn new(text: &str) -> Result<JsonNumber, ValueError> {
+        match is_number(text) {
+            true => Ok(JsonNumber(text.to_owned())),
+            false => {
+                let reason = format!("invalid number '{}': not a JSON number", crate::scan::shown(text));
+                Err(ValueError::new(ErrorCode::InvalidNumber, reason))
+            }
+        }
+    }
+
+    /// Text the reader or a writer knows is a JSON number.
+    pub(crate) fn from_valid(text: String) -> JsonNumber {
+        debug_assert!(is_number(&text), "{text:?} is a JSON number");
+        JsonNumber(text)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+macro_rules! integers {
+    ($($t:ty),*) => {$(
+        impl From<$t> for JsonNumber {
+            fn from(n: $t) -> JsonNumber {
+                JsonNumber(n.to_string())
+            }
+        }
+    )*};
+}
+integers!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize);
+
+impl std::str::FromStr for JsonNumber {
+    type Err = ValueError;
+    fn from_str(text: &str) -> Result<JsonNumber, ValueError> {
+        JsonNumber::new(text)
+    }
+}
+
+impl TryFrom<&str> for JsonNumber {
+    type Error = ValueError;
+    fn try_from(text: &str) -> Result<JsonNumber, ValueError> {
+        JsonNumber::new(text)
+    }
+}
+
+impl std::ops::Deref for JsonNumber {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl AsRef<str> for JsonNumber {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for JsonNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// The text, as it is written: `Number(-1E+5)` in a [`Json`].
+impl std::fmt::Debug for JsonNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl PartialEq<str> for JsonNumber {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == other
+    }
+}
+
+impl PartialEq<&str> for JsonNumber {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
 /// A Rust type written as schema-based JSON (spec §16.3). haus-fmt-build implements it
 /// for the types it generates.
 pub trait ToJson {
@@ -98,9 +201,9 @@ pub trait ToJson {
     /// The schema-based JSON, for a reader with `e`'s limits, at `e`'s depth. Fails
     /// only for a value that has none: one nested deeper than the depth limit
     /// as a haus value (checked before each container, so a deep value fails
-    /// instead of recursing on), a [`Value`] built in code that
-    /// isn't a valid haus value (the raw value of an `Any` or an unknown
-    /// variant), or a record payload with a field named `_tag` or `_args`. An error inside
+    /// instead of recursing on), a number, string, key or tag beyond its
+    /// limit (in the raw value of an `Any` or an unknown variant, say), or a
+    /// record payload with a field named `_tag` or `_args`. An error inside
     /// a `Secret` is reported at the secret (spec §15).
     fn to_json_with(&self, e: Encoder) -> Result<Json, EncodeError>;
 
@@ -160,8 +263,9 @@ pub fn write(json: &Json) -> Result<String, EncodeError> {
 }
 
 /// Write JSON on one line, for a reader with `limits`. A [`Json`] built in
-/// code is checked as it is written: numbers must be JSON numbers within the
-/// number limits, and the nesting within what the reader takes. These errors
+/// code is checked as it is written: numbers must be within the number
+/// limits, an object may have each member name once, and the nesting must
+/// be within what the reader takes. These errors
 /// say what, not where: the place could be inside a `Secret`. Lengths count
 /// on the haus value, not on the JSON (spec §16 "Limits"), so the forms check
 /// them where they build the JSON, as the readers do: a string's characters,
@@ -245,11 +349,8 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
     Ok(out)
 }
 
-/// Whether `n` is a JSON number within the number limits.
-fn check_number(n: &str, limits: &Limits) -> Result<(), EncodeError> {
-    if !is_number(n) {
-        return Err(EncodeError::new(ErrorCode::InvalidNumber, "not a JSON number"));
-    }
+/// Whether `n` is within the number limits.
+fn check_number(n: &JsonNumber, limits: &Limits) -> Result<(), EncodeError> {
     if n.len() > limits.max_number_length {
         let reason = format!("number literal longer than {} characters", limits.max_number_length);
         return Err(EncodeError::new(ErrorCode::NumberTooLong, reason));

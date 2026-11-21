@@ -4,7 +4,7 @@
 
 use super::{Json, decode_supported, open};
 use crate::ser::check_key;
-use crate::{DecodeError, Limits, Value};
+use crate::{DecodeError, Limits, Number, Record, Tag, Value};
 
 type R = Result<Value, DecodeError>;
 
@@ -52,7 +52,9 @@ impl Import<'_> {
             key(k, self.limits)?;
             Ok((k.clone(), self.value(v, depth).map_err(|e| e.field(k))?))
         });
-        fields.collect::<Result<_, _>>().map(Value::Record)
+        let fields = fields.collect::<Result<Vec<_>, DecodeError>>()?;
+        // The reader takes no member twice; a Json built in code may have one twice.
+        Ok(Value::Record(Record::from_fields(fields)?))
     }
 }
 
@@ -60,7 +62,7 @@ fn scalar_value(json: &Json, limits: &Limits) -> R {
     Ok(match json {
         Json::Bool(true) => tag("True"),
         Json::Bool(false) => tag("False"),
-        Json::Number(n) => Value::Number(normalize_number(n)),
+        Json::Number(n) => Value::Number(Number::from_normalized(normalize_number(n))),
         Json::String(s) => {
             crate::ser::check_length(s, limits).map_err(crate::EncodeError::into_decode)?;
             Value::String(s.clone())
@@ -70,7 +72,7 @@ fn scalar_value(json: &Json, limits: &Limits) -> R {
 }
 
 fn tag(name: &str) -> Value {
-    Value::Variant { tag: name.to_owned(), args: vec![] }
+    Tag::from_valid(name.to_owned()).into()
 }
 
 /// A member name as a record key: within the string limit (spec §7).

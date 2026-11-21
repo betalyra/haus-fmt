@@ -55,8 +55,8 @@ fn recursion_and_generics() {
 #[test]
 fn open_variants_keep_unknown_tags() {
     let shape: Shape = from_str("Triangle(1, 2, 3)").unwrap();
-    let three = ["1", "2", "3"].map(|n| Value::Number(n.into())).to_vec();
-    assert_eq!(shape, Shape::Unknown(Unknown { tag: "Triangle".into(), args: three }));
+    let three = ["1", "2", "3"].map(|n| Value::number(n).unwrap()).to_vec();
+    assert_eq!(shape, Shape::Unknown(Unknown { tag: "Triangle".parse().unwrap(), args: three }));
     assert_eq!(to_string(&shape).unwrap(), "Triangle(1, 2, 3)");
 }
 
@@ -178,27 +178,23 @@ fn deprecated_single_tag_variants_still_decode() {
 }
 
 #[test]
-fn raw_values_are_checked_before_they_are_written() {
-    // Any and unknown variants hold a haus::Value, which code can build with anything.
+fn raw_values_are_checked_against_the_limits_before_they_are_written() {
+    // Any and unknown variants hold a haus::Value: a haus value, whose
+    // constructors reject what isn't one, but maybe beyond the writer's limits.
     let login = |extra: Value| Login { extra: Some(extra), ..from_str(r#"{ user: "ada", password: "x" }"#).unwrap() };
     let error = |v: &dyn haus::Encode| to_string(v).unwrap_err().to_string();
-    let number = |n: &str| Value::Number(n.into());
-    let tag = |t: &str, args: Vec<Value>| Value::Variant { tag: t.into(), args };
+    let number = |n: &str| Value::number(n).unwrap();
 
-    // Numbers are written normalized, as the parser reads them.
+    // Numbers are normalized when they are built, as the parser reads them.
     assert_eq!(
         to_string(&login(Value::Array(vec![number("1E5"), number("0xFF"), number("1_000")]))).unwrap(),
         r#"{ user: "ada", password: "x", extra: [1e5, 255, 1000] }"#
     );
-    assert_eq!(error(&login(Value::Array(vec![number("1"), number("abc")]))), ".extra[1]: not a number literal");
-    assert_eq!(error(&login(number("1.e5"))), ".extra: not a number literal");
-    assert_eq!(error(&login(number("1e6145"))), ".extra: exponent larger than 6144");
-    assert_eq!(error(&login(number(&"1.5".repeat(400)))), ".extra: number literal longer than 1000 characters");
-    assert_eq!(error(&login(tag("lower", vec![]))), ".extra: not a tag name: A to Z, then letters, digits and _");
     assert_eq!(
-        error(&login(Value::Record(vec![("a".into(), number("1")), ("a".into(), number("2"))]))),
-        ".extra.a: the key is used twice in this record"
+        error(&login(Value::Array(vec![number("1"), number("1e6145")]))),
+        ".extra[1]: exponent larger than 6144"
     );
+    assert_eq!(error(&login(number(&"1".repeat(1001)))), ".extra: number literal longer than 1000 characters");
     let deep = (0..256).fold(number("1"), |v, _| Value::Array(vec![v]));
     assert_eq!(
         error(&login(deep)).split_once(": ").map(|(_, why)| why.to_owned()),
@@ -208,17 +204,11 @@ fn raw_values_are_checked_before_they_are_written() {
     assert_eq!(error(&login(huge)), ".extra: string longer than 16777216 characters");
 
     // An unknown variant's tag and payload, inside its own payload's path.
-    let shape = Shape::Unknown(Unknown { tag: "Hexagon".into(), args: vec![number("1"), number("--1")] });
-    assert_eq!(error(&shape), "(Hexagon)[1]: not a number literal");
-    assert_eq!(
-        error(&Shape::Unknown(Unknown { tag: "hexagon".into(), args: vec![] })),
-        "not a tag name: A to Z, then letters, digits and _"
-    );
-    let shape = Shape::Unknown(Unknown {
-        tag: "Hexagon".into(),
-        args: vec![Value::Record(vec![("side".into(), number("x"))])],
-    });
-    assert_eq!(error(&shape), "(Hexagon).side: not a number literal");
+    let shape = Shape::Unknown(Unknown { tag: "Hexagon".parse().unwrap(), args: vec![number("1"), number("1e9999")] });
+    assert_eq!(error(&shape), "(Hexagon)[1]: exponent larger than 6144");
+    let side = Value::record([("side", Value::String("x".repeat(16 * 1024 * 1024 + 1)))]).unwrap();
+    let shape = Shape::Unknown(Unknown { tag: "Hexagon".parse().unwrap(), args: vec![side] });
+    assert_eq!(error(&shape), "(Hexagon).side: string longer than 16777216 characters");
 
     // A reader with lower limits: an integer longer than its number limit can't be written.
     let small = haus::Limits { max_number_length: 20, ..haus::Limits::default() };
@@ -236,12 +226,11 @@ fn vault(value: Value) -> Vault {
 
 #[test]
 fn encode_errors_inside_a_secret_name_only_the_secret() {
-    let ok = vault(Value::Number("1E5".into()));
+    let ok = vault(Value::number("1E5").unwrap());
     assert_eq!(to_string(&ok).unwrap(), r#"{ owner: "ada", keys: { hunter2: 1e5 } }"#);
     let hidden = ".keys: not a valid Secret Map Any (the value is hidden)";
     let deep = (0..300).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
-    let twice = Value::Record(vec![("a".into(), Value::Array(vec![])), ("a".into(), Value::Array(vec![]))]);
-    for bad in [Value::Number("abc".into()), Value::Variant { tag: "lower".into(), args: vec![] }, twice, deep] {
+    for bad in [Value::number("1e9999").unwrap(), Value::number(&"1".repeat(1001)).unwrap(), deep] {
         let v = vault(bad);
         for e in [to_string(&v).unwrap_err(), haus::json::to_string(&v).unwrap_err()] {
             assert_eq!(e.to_string(), hidden);

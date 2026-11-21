@@ -77,8 +77,8 @@ func (w *lineWriter) value(v Value, depth int) error {
 		}
 	case Number:
 		text := v.String()
-		if len(text) > w.lim.MaxNumberLength {
-			return w.numberTooLong(text)
+		if err := w.number(text); err != nil {
+			return err
 		}
 		w.b = append(w.b, text...)
 	case Bytes:

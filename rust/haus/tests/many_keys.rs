@@ -7,7 +7,7 @@
 //! well within a bound that a list scan or a hash with a known seed would
 //! miss by orders of magnitude.
 
-use haus::{ErrorCode, Value};
+use haus::{ErrorCode, Record, Value};
 use std::time::{Duration, Instant};
 
 const N: usize = 100_000;
@@ -60,12 +60,17 @@ fn self_describing_json_with_many_keys() {
     let text = format!("{{\"_haus\":1,\"_value\":{record}}}");
     let value = timed("self-describing JSON", || haus::from_haus_json(&text)).unwrap();
     assert!(matches!(&value, Value::Record(fields) if fields.len() == N));
-    // Writing checks a record built in code for repeated keys the same way.
-    let fields: Vec<(String, Value)> = (0..N).map(|i| (format!("k{i}"), Value::Number(i.to_string()))).collect();
-    let written = timed("writing", || haus::to_string(&Value::Record(fields.clone()))).unwrap();
+    // A record built in code is checked for repeated keys the same way.
+    let fields: Vec<(String, Value)> = (0..N).map(|i| (format!("k{i}"), Value::from(i))).collect();
+    let record = timed("building", || Record::from_fields(fields.clone())).unwrap();
+    let written = timed("writing", || haus::to_string(&Value::Record(record))).unwrap();
     assert!(written.len() > N);
     let mut repeated = fields;
-    repeated.push(("k7".into(), Value::Number("0".into())));
-    let e = timed("writing a repeated key", || haus::to_string(&Value::Record(repeated))).unwrap_err();
+    repeated.push(("k7".into(), Value::from(0)));
+    let e = timed("building with a repeated key", || Record::from_fields(repeated)).unwrap_err();
     assert_eq!(e.code, ErrorCode::DuplicateKey);
+    // One key at a time too.
+    let mut one_by_one = Record::new();
+    timed("inserting", || (0..N).try_for_each(|i| one_by_one.insert(format!("k{i}"), i))).unwrap();
+    assert_eq!(one_by_one.insert("k7", 0).unwrap_err().code, ErrorCode::DuplicateKey);
 }

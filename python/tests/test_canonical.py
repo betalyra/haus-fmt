@@ -10,8 +10,7 @@ from typing import cast
 import pytest
 
 import haus
-from haus import Array, Limits, Number, Record, String, Value, Variant
-from haus.schema import HausEncodeError
+from haus import Array, Bytes, HausEncodeError, Limits, Number, Record, String, Value, Variant
 
 
 def c(text: str) -> str:
@@ -150,7 +149,7 @@ def test_hash_is_the_same_for_equal_values() -> None:
     assert haus.hash(a) == haus.hash(b)
 
 
-# ── values built in code: checked as `stringify` checks them, without its limits ──
+# ── values built in code: normalized and checked by the constructors (spec §11), so nothing here fails ──
 
 
 @pytest.mark.parametrize(
@@ -165,64 +164,95 @@ def test_hash_is_the_same_for_equal_values() -> None:
         (Number("1e99999"), "1e99999"),  # beyond the writer's exponent limit: the canonical form has none
     ],
 )
-def test_normalizes_numbers_built_in_code(value: Value, text: str) -> None:
+def test_numbers_built_in_code_are_normalized(value: Value, text: str) -> None:
     parsed = haus.parse(text, limits=Limits(max_exponent=1 << 20))
     assert haus.canonical(value) == text
+    assert value == parsed
     assert haus.equals(value, parsed)
     assert haus.hash(value) == haus.hash(parsed)
 
 
+def test_built_values_have_a_canonical_form_hash_and_order() -> None:
+    v = Record(
+        [
+            ("b", Array([Number("1"), String("x\u2028y"), Bytes(bytearray(b"\x0b"))])),
+            ("a", Variant("Tag", [Record({"z": Number("0b11")})])),
+        ]
+    )
+    assert haus.canonical(v) == '{a:Tag{z:3},b:[1,"x\\u{2028}y",x"0b"]}'
+    assert haus.equals(v, haus.parse(haus.canonical(v)))
+    assert haus.hash(v) == haus.hash_all([v])
+    assert haus.compare(v, v) == 0
+
+
 @pytest.mark.parametrize(
-    ("value", "code", "path"),
+    ("build", "code"),
     [
-        (Number("01"), "invalid-number", ()),
-        (Number("NaN"), "invalid-number", ()),
-        (Number(""), "invalid-number", ()),
-        (Number("1\x002"), "invalid-number", ()),
-        (Record({"b": Number("1"), "a": Array((Number("1"), Number("01")))}), "invalid-number", ("a", 1)),
-        (Variant("lower"), "invalid-tag", ()),
-        (Variant("A", (Number("1"), Variant("b"))), "invalid-tag", (1,)),
-        (String("x\ud800y"), "cannot-encode", ()),
-        (Variant("A", (Record({"x": String("\udc00")}),)), "cannot-encode", ("x",)),
-        (Record({"a\ud800": Number("1")}), "cannot-encode", ()),
-        (Record(cast("dict[str, Value]", {1: Number("1")})), "cannot-encode", ()),
-        (Array(cast("tuple[Value, ...]", (1,))), "cannot-encode", (0,)),
+        (lambda: Number("01"), "invalid-number"),
+        (lambda: Number("NaN"), "invalid-number"),
+        (lambda: Number(""), "invalid-number"),
+        (lambda: Number("1\x002"), "invalid-number"),
+        (lambda: Number(cast("str", 5)), "cannot-encode"),
+        (lambda: Number(cast("str", 1.5)), "cannot-encode"),
+        (lambda: Number("1\ud800"), "cannot-encode"),
+        (lambda: Variant("lower"), "invalid-tag"),
+        (lambda: Variant(""), "invalid-tag"),
+        (lambda: Variant("A-B"), "invalid-tag"),
+        (lambda: Variant("A\ud800"), "cannot-encode"),
+        (lambda: Variant(cast("str", None)), "cannot-encode"),
+        (lambda: Variant("A", cast("tuple[Value, ...]", (1,))), "cannot-encode"),
+        (lambda: Record([("a", Number("1")), ("a", Number("2"))]), "duplicate-key"),
+        (lambda: Record({"a\ud800": Number("1")}), "cannot-encode"),
+        (lambda: Record([("\udc00", Number("1"))]), "cannot-encode"),
+        (lambda: Record(cast("dict[str, Value]", {1: Number("1")})), "cannot-encode"),
+        (lambda: Record(cast("dict[str, Value]", {"a": 1})), "cannot-encode"),
+        (lambda: Record(cast("list[tuple[str, Value]]", [("a", Number("1"), Number("2"))])), "cannot-encode"),
+        (lambda: Record(cast("dict[str, Value]", 5)), "cannot-encode"),
+        (lambda: String("x\ud800y"), "cannot-encode"),
+        (lambda: String("\udc00"), "cannot-encode"),
+        (lambda: String(cast("str", b"x")), "cannot-encode"),
+        (lambda: Bytes(cast("bytes", "x")), "cannot-encode"),
+        (lambda: Array(cast("tuple[Value, ...]", (object(),))), "cannot-encode"),
+        (lambda: Array(cast("tuple[Value, ...]", (Number("1"), "2"))), "cannot-encode"),
+        (lambda: Array(cast("tuple[Value, ...]", 5)), "cannot-encode"),
     ],
 )
-def test_a_value_built_in_code_without_a_text_has_the_writers_error(
-    value: Value, code: str, path: tuple[str | int, ...]
-) -> None:
-    calls: list[Callable[[Value], object]] = [
-        haus.canonical,
-        haus.hash,
-        lambda v: haus.equals(v, v),
-        lambda v: haus.compare(v, v),
-    ]
-    for f in calls:
-        with pytest.raises(HausEncodeError) as e:
-            f(value)
-        assert (e.value.code, e.value.path) == (code, path)
-    with pytest.raises(HausEncodeError) as w:
-        haus.stringify(value)
-    assert w.value.code == code
-    with pytest.raises(HausEncodeError) as a:
-        haus.hash_all([Number("1"), value])
-    assert (a.value.code, a.value.path) == (code, (1, *path))
+def test_a_constructor_rejects_what_is_no_haus_value(build: Callable[[], Value], code: str) -> None:
+    with pytest.raises(HausEncodeError) as e:
+        build()
+    assert (e.value.code, e.value.path) == (code, ())
+
+
+def test_constructors_take_any_iterable_and_keep_their_own_copy() -> None:
+    items = [Number("1")]
+    fields = {"a": Number("1")}
+    a, r, v = Array(items), Record(fields), Variant("T", iter(items))
+    items.append(Number("2"))
+    fields["b"] = Number("2")
+    assert (a.items, v.args, dict(r.fields)) == ((Number("1"),), (Number("1"),), {"a": Number("1")})
+    assert Record([("a", Number("1"))]) == r == Record({"a": Number("1")})
+    assert Bytes(memoryview(b"ab")).data == b"ab"
+    assert type(Bytes(bytearray(b"ab")).data) is bytes
+
+
+def test_a_value_never_changes() -> None:
+    r = Record({"a": Number("1")})
+    with pytest.raises(TypeError):
+        cast("dict[str, Value]", r.fields)["a"] = r  # a read-only view: no record can contain itself
+    with pytest.raises(AttributeError):
+        r.fields = {}  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        Number("1").text = "01"  # type: ignore[misc]
+    with pytest.raises(TypeError):
+
+        class _Mine(Number):  # type: ignore[misc]
+            pass
 
 
 def test_a_lone_surrogate_never_hashes_like_its_replacement() -> None:
     with pytest.raises(HausEncodeError):
-        haus.hash(String("x\ud800y"))
+        String("x\ud800y")
     assert haus.hash(String("x�y")) == hashlib.sha256('"x�y"'.encode()).hexdigest()
-
-
-def test_a_value_that_contains_itself_is_cyclic() -> None:
-    fields: dict[str, Value] = {}
-    r = Record(fields)
-    fields["a"] = Array((r,))
-    with pytest.raises(HausEncodeError) as e:
-        haus.canonical(r)
-    assert (e.value.code, e.value.path) == ("cyclic-value", ("a", 0))
 
 
 def test_a_value_built_in_code_may_nest_any_depth() -> None:
@@ -230,9 +260,4 @@ def test_a_value_built_in_code_may_nest_any_depth() -> None:
     for _ in range(100_000):
         v = Array((v,))
     assert haus.canonical(v) == "[" * 100_000 + "1" + "]" * 100_000
-    bad: Value = Number("01")
-    for _ in range(10_000):
-        bad = Variant("T", (bad, Number("2")))
-    with pytest.raises(HausEncodeError) as e:
-        haus.canonical(bad)
-    assert (e.value.code, e.value.path) == ("invalid-number", (0,) * 10_000)
+    assert haus.equals(v, v)

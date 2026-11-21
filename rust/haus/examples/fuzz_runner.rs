@@ -24,14 +24,16 @@ use std::{env, fs};
 fn canonical(v: &Value) -> Json {
     match v {
         Value::String(s) => json!(s),
-        Value::Number(n) => json!({ "num": n }),
+        Value::Number(n) => json!({ "num": n.as_str() }),
         Value::Bytes(b) => json!({ "bytes": b.iter().map(|x| format!("{x:02x}")).collect::<String>() }),
         Value::Array(items) => Json::Array(items.iter().map(canonical).collect()),
         Value::Record(fields) => {
             json!({ "rec": fields.iter().map(|(k, v)| (k.clone(), canonical(v))).collect::<Map<_, _>>() })
         }
-        Value::Variant { tag, args } if args.is_empty() => json!({ "tag": tag }),
-        Value::Variant { tag, args } => json!({ "tag": tag, "args": args.iter().map(canonical).collect::<Vec<_>>() }),
+        Value::Variant { tag, args } if args.is_empty() => json!({ "tag": tag.as_str() }),
+        Value::Variant { tag, args } => {
+            json!({ "tag": tag.as_str(), "args": args.iter().map(canonical).collect::<Vec<_>>() })
+        }
     }
 }
 
@@ -70,15 +72,7 @@ fn streamed(bytes: &[u8], i: usize) -> Result<Vec<Value>, haus::SyntaxError> {
 /// With `--canonical`: the canonical form of each value (spec §12), as JSON strings.
 fn canonical_line(result: Result<Vec<Value>, haus::SyntaxError>) -> String {
     match result {
-        Ok(values) => format!(
-            "ok {}",
-            Json::Array(
-                values
-                    .iter()
-                    .map(|v| json!(haus::canonical(v).expect("a value read or written has a canonical form")))
-                    .collect()
-            )
-        ),
+        Ok(values) => format!("ok {}", Json::Array(values.iter().map(|v| json!(haus::canonical(v))).collect())),
         Err(e) => line(Err(e)),
     }
 }

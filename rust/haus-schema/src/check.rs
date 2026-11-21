@@ -18,7 +18,7 @@
 use crate::locate::{Lines, Node, locate};
 use crate::resolve::{Schema, tags};
 use crate::types::{Builtin, Case, Instance, Payload, Record, Type, Variant};
-use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Value};
+use haus::{Encode, EncodeError, Encoder, ErrorCode as Code, Limits, Number, Tag, Value};
 use std::fmt;
 use std::ops::Range;
 
@@ -126,7 +126,7 @@ impl Issue {
                 Segment::Index(i) => out.push_str(&format!("[{i}]")),
                 Segment::Field(k) if is_word(k) => out.push_str(&format!(".{k}")),
                 Segment::Field(k) => {
-                    let quoted = haus::canonical(&Value::String(k.clone())).expect("every string has a canonical form");
+                    let quoted = haus::canonical(&Value::String(k.clone()));
                     out.push_str(&format!("[{quoted}]"))
                 }
             }
@@ -610,7 +610,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                             self.child(Step::Field(k), |w| w.value(x, value, at)).map(|x| (k.clone(), x))
                         })
                         .collect();
-                    out.into_iter().collect::<Option<Vec<_>>>().map(|fs| self.out(|| Value::Record(fs)))
+                    out.into_iter().collect::<Option<Vec<_>>>().map(|fs| self.out(|| Value::Record(unique(fs))))
                 }
                 _ => self.mismatch(v, ty, loc),
             },
@@ -618,7 +618,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 Value::Variant { tag, args } if tag == "None" && args.is_empty() => Some(self.keep(v)),
                 Value::Variant { tag, args } if tag == "Some" && args.len() == 1 => {
                     let x = self.child(Step::Index(0), |w| w.value(&args[0], item, item_of(loc, 0)))?;
-                    Some(self.out(|| haus::ser::variant("Some", vec![x])))
+                    Some(self.out(|| Value::Variant { tag: tag.clone(), args: vec![x] }))
                 }
                 _ => {
                     let message =
@@ -636,7 +636,7 @@ impl<'s, 'v> Walker<'s, 'v> {
             },
             Type::Secret(item) => self.secret(v, item, loc),
             Type::Record(r) => match v {
-                Value::Record(fields) => self.record(fields, r, loc),
+                Value::Record(fields) => self.record(fields.as_slice(), r, loc),
                 _ => self.mismatch(v, ty, loc),
             },
             Type::Variant(var) => self.variant(v, var, ty, loc),
@@ -704,7 +704,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 Err(_) => self.mismatch(v, ty, loc),
             },
             (Builtin::Int, Value::Number(text)) => match whole(text) {
-                Some(n) => Some(self.out(|| Value::Number(n.to_owned()))),
+                Some(n) => Some(self.out(|| Value::Number(integer(text, n)))),
                 None => self.not_whole(name, text, loc),
             },
             (_, Value::Number(text)) if range(b).is_some() => {
@@ -713,7 +713,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 };
                 let (min, max) = range(b).unwrap_or((0, 0));
                 match n.parse::<i128>() {
-                    Ok(x) if (min..=max).contains(&x) => Some(self.out(|| Value::Number(n.to_owned()))),
+                    Ok(x) if (min..=max).contains(&x) => Some(self.out(|| Value::Number(integer(text, n)))),
                     _ => {
                         let message = format!("{} is out of range for {name} ({min} to {max})", short(text));
                         self.error(Code::OutOfRange, message, loc)
@@ -857,7 +857,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 }
             }
         }
-        ok.then(|| self.out(|| Value::Record(out)))
+        ok.then(|| self.out(|| Value::Record(unique(out))))
     }
 
     fn variant(&mut self, v: &'v Value, var: &Variant, ty: &Type, loc: Loc) -> Option<Value> {
@@ -897,9 +897,9 @@ impl<'s, 'v> Walker<'s, 'v> {
         self.wrong_payload(format!("{tag} takes one argument, a record; found {got}"), fix, loc)
     }
 
-    fn payload(&mut self, tag: &str, args: &'v [Value], case: &Case, loc: Loc) -> Option<Value> {
+    fn payload(&mut self, tag: &Tag, args: &'v [Value], case: &Case, loc: Loc) -> Option<Value> {
         match &case.payload {
-            Payload::None if args.is_empty() => Some(self.out(|| haus::ser::variant(tag, vec![]))),
+            Payload::None if args.is_empty() => Some(self.out(|| Value::from(tag.clone()))),
             Payload::None => {
                 let fix = self.payload_fix(tag, &case.payload);
                 self.wrong_payload(format!("{tag} takes no payload"), fix, loc)
@@ -907,8 +907,8 @@ impl<'s, 'v> Walker<'s, 'v> {
             Payload::Record(r) => match args {
                 // `Tag { … }`: the record is at the variant's level and place.
                 [Value::Record(fields)] => {
-                    let x = self.record(fields, r, item_of(loc, 0))?;
-                    Some(self.out(|| haus::ser::variant(tag, vec![x])))
+                    let x = self.record(fields.as_slice(), r, item_of(loc, 0))?;
+                    Some(self.out(|| Value::Variant { tag: tag.clone(), args: vec![x] }))
                 }
                 // Anything else, `Circle(1.5)` too, is the wrong payload (spec §15).
                 _ => self.not_one_record(tag, args, case, loc),
@@ -917,7 +917,7 @@ impl<'s, 'v> Walker<'s, 'v> {
             Payload::Named(t) => match args {
                 [x @ Value::Record(_)] => {
                     let x = self.value(x, t, item_of(loc, 0))?;
-                    Some(self.out(|| haus::ser::variant(tag, vec![x])))
+                    Some(self.out(|| Value::Variant { tag: tag.clone(), args: vec![x] }))
                 }
                 _ => self.not_one_record(tag, args, case, loc),
             },
@@ -936,7 +936,9 @@ impl<'s, 'v> Walker<'s, 'v> {
                     .enumerate()
                     .map(|(i, (x, t))| self.child(Step::Index(i), |w| w.value(x, t, item_of(loc, i))))
                     .collect();
-                out.into_iter().collect::<Option<Vec<_>>>().map(|xs| self.out(|| haus::ser::variant(tag, xs)))
+                out.into_iter()
+                    .collect::<Option<Vec<_>>>()
+                    .map(|xs| self.out(|| Value::Variant { tag: tag.clone(), args: xs }))
             }
         }
     }
@@ -1026,6 +1028,19 @@ fn whole(text: &str) -> Option<&str> {
     let digits = text.strip_prefix('-').unwrap_or(text);
     let is_whole = !digits.is_empty() && digits.bytes().all(|c| c.is_ascii_digit());
     is_whole.then_some(if digits.bytes().all(|c| c == b'0') { "0" } else { text })
+}
+
+/// The number [`whole`] gave for `text`: `text` itself, or 0 for `-0`.
+fn integer(text: &Number, whole: &str) -> Number {
+    match whole.len() == text.len() {
+        true => text.clone(),
+        false => Number::from(0),
+    }
+}
+
+/// A record of fields taken from a record read, whose keys are unique.
+fn unique(fields: Vec<(String, Value)>) -> haus::Record {
+    haus::Record::from_fields(fields).expect("the keys of a record read are unique")
 }
 
 /// Whether the number literal `text` is the one spelling (spec §15) of the
@@ -1193,7 +1208,7 @@ mod tests {
     /// The literals `spelled` takes are what reading and writing the float gives.
     #[test]
     fn spelled_floats_are_written_as_they_are() {
-        let written = |v: Result<Value, EncodeError>| v.ok().map(|v| haus::canonical(&v).unwrap());
+        let written = |v: Result<Value, EncodeError>| v.ok().map(|v| haus::canonical(&v));
         let (mut f64s, mut f32s) = (0, 0);
         for text in literals().take(400_000) {
             if spelled(&text, 15) {

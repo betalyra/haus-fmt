@@ -1,8 +1,8 @@
 //! JSON (spec §16): the reader and writer, the prelude types' schema-based
 //! JSON, self-describing JSON of values built in code, and the import.
 
-use haus::json::{self, Json, from_str, parse, to_string};
-use haus::{Bytes, Decimal, Error, Int, Limits, Secret, Value};
+use haus::json::{self, Json, JsonNumber, from_str, parse, to_string};
+use haus::{Bytes, Decimal, Error, ErrorCode, Int, Limits, Secret, Value};
 use std::collections::BTreeMap;
 
 fn syntax_error(text: &str) -> String {
@@ -20,8 +20,8 @@ fn read_error<T: haus::FromJson + haus::Encode + std::fmt::Debug>(json: &str) ->
 fn the_reader_takes_i_json() {
     let json = parse(" {\"a\": [1, -0.5e+3, true, false, null, \"\\u00e9\\ud83d\\ude00\\n\\/\"]}\r\n").unwrap();
     let items = [
-        Json::Number("1".into()),
-        Json::Number("-0.5e+3".into()),
+        Json::Number(1.into()),
+        Json::Number("-0.5e+3".parse().unwrap()),
         Json::Bool(true),
         Json::Bool(false),
         Json::Null,
@@ -30,7 +30,7 @@ fn the_reader_takes_i_json() {
     assert_eq!(json, Json::Object(vec![("a".into(), Json::Array(items.to_vec()))]));
     // Numbers keep their text, however long.
     let digits = "1".repeat(1000);
-    assert_eq!(parse(&digits).unwrap(), Json::Number(digits));
+    assert_eq!(parse(&digits).unwrap(), Json::Number(digits.parse().unwrap()));
     // Noncharacters and raw controls beyond U+001F are fine in JSON, except
     // in self-describing JSON, which only haus writes, escaping them.
     assert_eq!(parse("\"\u{10FFFF}\u{7F}\u{202E}\"").unwrap(), Json::String("\u{10FFFF}\u{7F}\u{202E}".into()));
@@ -76,7 +76,7 @@ fn the_reader_rejects_what_i_json_forbids() {
     assert!(parse("1e6144").is_ok() && parse("1e-0006144").is_ok());
     assert_eq!(json::parse_bytes(b"\"\xff\"").unwrap_err().to_string(), "invalid UTF-8 at 1:2");
     // A byte order mark is ignored at the start, and only there.
-    assert_eq!(parse("\u{FEFF}1").unwrap(), Json::Number("1".into()));
+    assert_eq!(parse("\u{FEFF}1").unwrap(), Json::Number(1.into()));
     assert_eq!(syntax_error("1\u{FEFF}"), "unexpected '\u{FEFF}' after the JSON value at 1:2");
 }
 
@@ -203,17 +203,17 @@ fn writers_count_lengths_on_the_haus_value() {
     // Keys and tags, with their own codes.
     let map = |k: &str| written(json::to_string_with(&BTreeMap::from([(k.to_owned(), 1)]), &four));
     assert_eq!((map("abcd"), map("abcde")), ("ok".into(), "key-too-long".into()));
-    let record = |k: &str| Value::Record(vec![(k.to_owned(), Value::Number("1".into()))]);
+    let record = |k: &str| Value::record([(k, Value::from(1))]).unwrap();
     assert_eq!(described(record("abcd"), &four), "ok");
     assert_eq!(described(record("abcde"), &four), "key-too-long");
-    let tag = |t: &str| Value::Variant { tag: t.to_owned(), args: vec![] };
+    let tag = |t: &str| Value::variant(t, vec![]).unwrap();
     assert_eq!(described(tag("Abcd"), &four), "ok");
     assert_eq!(described(tag("Abcde"), &four), "tag-too-long");
     // What isn't a string of the value doesn't count: the forms' member names
     // (`_haus`, `_value`, `_num`), and numbers held in strings, which the
     // number limit bounds.
     assert_eq!(described(Value::String("ab".into()), &two), "ok");
-    assert_eq!(described(Value::Number("123456".into()), &two), "ok");
+    assert_eq!(described(Value::from(123456), &two), "ok");
     assert_eq!(written(json::to_string_with(&123456i64, &two)), "ok");
     assert_eq!(written(json::to_string_with(&Int::from(123456i64), &two)), "ok");
     assert_eq!(written(json::to_string_with(&f64::INFINITY, &two)), "ok");
@@ -236,9 +236,13 @@ fn the_writer_checks_what_it_writes() {
     assert_eq!(parse(&text).unwrap(), Json::String(held.into()));
     let named = json::write(&Json::Object(vec![("\u{202E}".into(), Json::Null)])).unwrap();
     assert_eq!(named, r#"{"\u202e":null}"#);
-    for bad in ["1.", "01", "+1", "NaN", "0x1", ""] {
-        assert_eq!(json::write(&Json::Number(bad.into())).unwrap_err().to_string(), "not a JSON number", "{bad:?}");
+    // A number built in code is a JSON number: its constructor checks that.
+    for bad in ["1.", "01", "+1", "NaN", "0x1", "", "1_000"] {
+        assert_eq!(JsonNumber::new(bad).unwrap_err().code, ErrorCode::InvalidNumber, "{bad:?}");
     }
+    assert_eq!(json::write(&Json::Number("-0.5E+3".parse().unwrap())).unwrap(), "-0.5E+3");
+    let long = Json::Number("1".repeat(1001).parse().unwrap());
+    assert_eq!(json::write(&long).unwrap_err().to_string(), "number literal longer than 1000 characters");
     let twice = Json::Object(vec![("a".into(), Json::Null), ("a".into(), Json::Null)]);
     assert_eq!(json::write(&twice).unwrap_err().to_string(), "a member name is used twice in an object");
     assert!(json::write(&(0..1025).fold(Json::Null, |j, _| Json::Array(vec![j]))).is_ok());
@@ -254,7 +258,7 @@ fn line_and_paragraph_separators_are_written_escaped_and_read_raw() {
     assert_eq!(json::write(&Json::String(held.into())).unwrap(), escaped);
     assert_eq!(json::write(&Json::Object(vec![(held.into(), Json::Null)])).unwrap(), format!("{{{escaped}:null}}"));
     assert_eq!(to_string(&held.to_owned()).unwrap(), escaped);
-    let value = haus::Value::Record(vec![(held.into(), haus::Value::String(held.into()))]);
+    let value = haus::Value::record([(held, haus::Value::String(held.into()))]).unwrap();
     let text = haus::to_haus_json(&value).unwrap();
     assert_eq!(text, format!(r#"{{"_haus":1,"_value":{{"_rec":{{{escaped}:{escaped}}}}}}}"#));
     assert!(!text.contains(['\u{2028}', '\u{2029}']));
@@ -392,26 +396,20 @@ fn any_is_its_self_describing_value_without_the_envelope() {
     let e = from_str::<Value>(r#"{"_haus":1,"_value":"x"}"#).unwrap_err();
     assert_eq!(e.code().map(|c| c.as_str()), Some("haus-json-form"));
 
-    let any = haus::AnyTag::Bare("EUR".into());
+    let any = haus::AnyTag::Bare("EUR".parse().unwrap());
     assert_eq!(to_string(&any).unwrap(), r#"{"_tag":"EUR"}"#);
     assert_eq!(from_str::<haus::AnyTag>(r#"{"_tag":"EUR"}"#).unwrap(), any);
 }
 
 #[test]
-fn self_describing_json_checks_values_built_in_code() {
+fn self_describing_json_checks_values_built_in_code_against_the_limits() {
     let error = |v: Value| haus::to_haus_json(&v).unwrap_err().to_string();
-    let number = |n: &str| Value::Number(n.into());
+    let number = |n: &str| Value::number(n).unwrap();
     assert_eq!(haus::to_haus_json(&number("1E+05")).unwrap(), r#"{"_haus":1,"_value":{"_num":"1e5"}}"#);
     assert_eq!(haus::to_haus_json(&number("0xFF")).unwrap(), r#"{"_haus":1,"_value":{"_num":"255"}}"#);
-    assert_eq!(error(Value::Array(vec![number("1"), number("abc")])), "[1]: not a number literal");
-    assert_eq!(
-        error(Value::Variant { tag: "x".into(), args: vec![] }),
-        "not a tag name: A to Z, then letters, digits and _"
-    );
-    let twice = Value::Record(vec![("a".into(), number("1")), ("a".into(), number("2"))]);
-    assert_eq!(error(twice), ".a: the key is used twice in this record");
-    let payload = Value::Variant { tag: "P".into(), args: vec![Value::Record(vec![("x".into(), number("-"))])] };
-    assert_eq!(error(payload), "(P).x: not a number literal");
+    assert_eq!(error(Value::Array(vec![number("1"), number("1e6145")])), "[1]: exponent larger than 6144");
+    let payload = Value::variant("P", vec![Value::record([("x", number(&"9".repeat(1001)))]).unwrap()]).unwrap();
+    assert_eq!(error(payload), "(P).x: number literal longer than 1000 characters");
     let deep = (0..257).fold(number("1"), |v, _| Value::Array(vec![v]));
     assert!(error(deep).ends_with("nesting deeper than 256 levels"));
 
@@ -452,7 +450,7 @@ fn self_describing_json_reads_one_form_per_value() {
 
 #[test]
 fn the_import_reads_any_json() {
-    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap()).unwrap();
+    let read = |text: &str| haus::canonical(&haus::import_json(text).unwrap());
     assert_eq!(read(r#"{"_tag": "Circle", "r": 1E+0}"#), r#"{_tag:"Circle",r:1e0}"#);
     assert_eq!(read(r#"{"_haus": 1, "_value": {"_num": "1"}}"#), r#"{_haus:1,_value:{_num:"1"}}"#);
     assert_eq!(read("\"\u{7F}\u{202E}\""), "\"\\u{7F}\\u{202E}\"");

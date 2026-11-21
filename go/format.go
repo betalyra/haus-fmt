@@ -157,7 +157,9 @@ func (n *node) hasComments() bool {
 // in lowercase hex without spaces, and strings with the fewest escapes.
 //
 // It fails for values that have no text: a number longer than the number
-// limit (number-too-long), nesting deeper than the depth limit
+// limit (number-too-long, a decimal or exponent too, not only an integer),
+// an exponent larger than the exponent limit (exponent-too-large), nesting
+// deeper than the depth limit
 // (nesting-too-deep, a record payload counting one level), a tag that isn't
 // [A-Z][A-Za-z0-9_]* (invalid-tag), a string that isn't UTF-8
 // (cannot-encode), or a value that contains itself (cyclic-value). A
@@ -232,9 +234,13 @@ func (c *writeCheck) invalidKey() error {
 	return c.fail(CodeCannotEncode, "a key that isn't valid UTF-8")
 }
 
-func (c *writeCheck) numberTooLong(text string) error {
-	return c.fail(CodeNumberTooLong,
-		"a number of %d characters, more than the limit of %d", len(text), c.lim.MaxNumberLength)
+// number checks a number against the number limits (§7): number-too-long
+// or exponent-too-large, for a value built in code (a parsed one is within).
+func (c *writeCheck) number(text string) error {
+	if code, msg := numberLimits(text, c.lim); code != "" {
+		return c.fail(code, "%s", msg)
+	}
+	return nil
 }
 
 func (c *writeCheck) invalidTag(tag string) error {
@@ -263,8 +269,8 @@ func (b *builder) node(v Value, depth int) (*node, error) {
 		return &node{val: v}, nil
 	case Number:
 		text := v.String()
-		if len(text) > b.lim.MaxNumberLength {
-			return nil, b.numberTooLong(text)
+		if err := b.number(text); err != nil {
+			return nil, err
 		}
 		return &node{val: v, text: text}, nil
 	case Bytes:

@@ -87,15 +87,40 @@ without bound (spec §9.8). `Decode::decode_with` takes a `haus::Decoder` in
 the same way: a `Value` built in code, which no parser limited, fails with
 `nesting-too-deep` at the depth limit before decoding recurses past it, also
 inside an `Any` or the payload of an unknown tag. Any
-other failure comes from a `haus::Value`
-built in code, the raw value of an `Any` or an unknown variant (spec §9.8):
-`Value::Number("abc".into())` is an `EncodeError` (`.extra: not a number
-literal`), as are a tag that isn't a tag name, a key used twice in a record,
-and nesting, strings and numbers beyond the limits. Number literals are
-written as the parser reads them (`1E5` as `1e5`). For a reader with other
-limits, `haus::to_string_with(&value, &limits)` checks those: integers are
-written in decimal, and one longer than its number limit is an `EncodeError`
+other failure comes from a `haus::Value` built in code, the raw value of an
+`Any` or an unknown variant, beyond the limits (spec §9.8): nesting, strings,
+keys, tags and numbers (`.extra: number literal longer than 1000
+characters`). For a reader with other limits,
+`haus::to_string_with(&value, &limits)` checks those: integers are written in
+decimal, and one longer than its number limit is an `EncodeError`
 (`number-too-long`).
+
+### Values built in code
+
+A `haus::Value` is always a haus value (spec §11, "Values built in code"):
+its parts' constructors reject what isn't one with a `haus::ValueError` and
+the code of the mistake, so nothing built can fail later for that reason.
+
+```rust
+use haus::{Number, Record, Tag, Value};
+
+let mut order = Record::new();
+order.insert("id", 255)?;                                  // integers, strings, bytes, arrays, bools: `From`
+order.insert("total", Value::number("19.90")?)?;           // invalid-number: "01", "NaN", ""
+order.insert("status", Value::variant("Paid", vec![])?)?;  // invalid-tag: "paid", "A-B"
+order.insert("id", 1).unwrap_err();                        // duplicate-key
+let order = Value::from(order);
+Number::new("1E+05")?;                                     // normalized as the parser reads it: 1e5
+Record::from_fields([("a", Value::from(1)), ("b", Value::from(Tag::new("None")?))])?;
+```
+
+`Number::new` normalizes the literal as the parser does (`1E+05` is `1e5`,
+`0xFF` is `255`, `1_000` is `1000`), with no limit on its length or
+exponent: limits are the writer's. `Record::insert` takes time linear in
+the key, also for records with many keys. `Number` and `Tag` deref to their
+text, and a `Tag` compares with a `&str` (`tag == "None"`). The JSON value
+type is checked the same way: `haus::json::JsonNumber::new` takes only a JSON
+number.
 
 `haus::Int` is an integer of any size, kept as its digits and written back
 unchanged. `to_i64()` / `to_i128()` give it as a native integer when it fits; the
@@ -251,23 +276,19 @@ binding; hashes are SHA-256 of it (the `hash` feature):
 
 ```rust
 let v = haus::parse(r#"Order { total: 19.90, id: 0xFF }"#)?.remove(0);
-haus::canonical(&v)?;                  // String: Order{id:255,total:19.90}
-haus::hash(&v)?;                       // String: 64 lowercase hex digits
-haus::hash_all(&values)?;              // a whole file: the forms joined by `,`
+haus::canonical(&v);                   // String: Order{id:255,total:19.90}
+haus::hash(&v);                        // String: 64 lowercase hex digits
+haus::hash_all(&values);               // a whole file: the forms joined by `,`
 haus::equals(&a, &b);                  // bool
-haus::compare(&a, &b)?;                // Ordering, by the canonical bytes
+haus::compare(&a, &b);                 // Ordering, by the canonical bytes
 ```
 
-Every haus value has a canonical form, so for a parsed value these never
-fail: numbers are written in decimal, an integer of any size with all its
-digits, also one parsed with a larger `max_number_length`. A `Value` built
-in code may not be a haus value; `canonical`, `hash`, `hash_all` and
-`compare` then fail with the writer's `EncodeError`, saying where: a number
-that isn't a number literal (`"01"`, `"NaN"`: `invalid-number`), a tag that
-isn't a tag (`invalid-tag`), a repeated key (`duplicate-key`). A literal that
-isn't normalized (`"1E+05"`, `"0xFF"`) is normalized (`1e5`, `255`), so it
-hashes as the value parsed from it. Such a value equals nothing (`equals` is
-false), not even itself.
+Every value has a canonical form, also one built in code (its constructors
+take only haus values, see above), and none of these fail: numbers are
+written in decimal, an integer of any size with all its digits, also one
+built in code or parsed with a larger `max_number_length`. A number built
+from another spelling (`Number::new("1E+05")`) is normalized already, so it
+hashes as the value parsed from it.
 
 A `Value` built in code may nest any depth: the canonical form, `==`,
 `clone` and dropping it take a stack on the heap, not one call per level

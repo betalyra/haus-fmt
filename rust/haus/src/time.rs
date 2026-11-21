@@ -269,12 +269,12 @@ fn offset(o: &str) -> Check {
 }
 
 /// An IANA zone name by its syntax (not looked up), or an offset `±hh:mm`.
-/// `Z` is neither: it is the offset letter, not a zone name.
+/// `Z` (or `z`) is neither: it is the offset letter, not a zone name.
 fn zone(z: &str) -> Check {
-    if z == "Z" {
-        return invalid(
-            "Z is an offset, not a zone: write a zone name (like Europe/Lisbon) or an offset (like +00:00)",
-        );
+    if z.eq_ignore_ascii_case("Z") {
+        return invalid(format!(
+            "{z} is an offset, not a zone: write a zone name (like Europe/Lisbon) or an offset (like +00:00)"
+        ));
     }
     let mut c = Cursor { s: z.as_bytes(), i: 0 };
     if let Ok(o) = c.offset()

@@ -125,6 +125,17 @@ struct APITests {
             (#expect(throws: HausError.self) {
                 try Haus.stringify(long, FormatOptions(limits: Limits(maxNumberLength: 10)))
             })?.code == .numberTooLong)
+        // Every number, a decimal or an exponent too: what a parser with the same limits reads back.
+        for layout in [Layout.pretty, .compact, .minimised] {
+            let small = FormatOptions(layout: layout, limits: Limits(maxNumberLength: 10, maxExponent: 99))
+            for (literal, code) in [
+                ("1.0000000000", HausError.Code.numberTooLong), ("1e100", .exponentTooLarge),
+                ("-1.5e-100", .exponentTooLarge),
+            ] {
+                let n = HausValue.number(try HausNumber(literal))
+                #expect((#expect(throws: HausError.self) { try Haus.stringify(n, small) })?.code == code)
+            }
+        }
     }
 
     /// Indent and width are taken literally (spec §11): 0 is 0, and options

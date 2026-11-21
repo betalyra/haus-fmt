@@ -12,7 +12,7 @@ Shop := [].{
 	## The server decodes only the user events it handles. Any other tag in
 	## the stream lands in `Unknown`, the open part of the variant.
 	decode_user_event : Value -> Try(UserEvent, Decode.Error)
-	decode_user_event = |v| match v {
+	decode_user_event = |v| match v.view() {
 		Tag("UserCreated", _) => {
 			fs = Decode.record(v)?
 			Ok(UserCreated({ id: Decode.field(fs, "id", Decode.u64)?, email: Decode.field(fs, "email", Decode.str)?, at: Decode.field(fs, "at", Decode.instant)? }))
@@ -27,7 +27,7 @@ Shop := [].{
 
 	## A consumer that knows more tags, e.g. an analytics service.
 	decode_app_event : Value -> Try(AppEvent, Decode.Error)
-	decode_app_event = |v| match v {
+	decode_app_event = |v| match v.view() {
 		Tag("PaymentReceived", _) => {
 			fs = Decode.record(v)?
 			Ok(PaymentReceived({ id: Decode.field(fs, "id", Decode.u64)?, amount: Decode.field(fs, "amount", money)?, at: Decode.field(fs, "at", Decode.instant)? }))
@@ -60,7 +60,7 @@ Shop := [].{
 ## `Money(19.99, EUR)` as a record. (The full @haus-fmt/money package, generated
 ## from its schema, is in extensions/money/roc; see examples/order.)
 money : Value -> Try({ amount : Str, currency : Str }, Decode.Error)
-money = |v| match v {
+money = |v| match v.view() {
 	Tag("Money", [amount, currency]) => Ok({ amount: Decode.arg("Money", 0, amount, Decode.decimal)?, currency: Decode.arg("Money", 1, currency, Decode.tag_name)? })
 	_ => Decode.expected("Money(Decimal, Currency)", v)
 }

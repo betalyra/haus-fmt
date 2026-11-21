@@ -151,6 +151,14 @@ const conversionErrorOf = (input?: Value) => (e: unknown): Option.Option<HausSch
   e instanceof ConversionError ? Option.some(conversionError(e, input)) : Option.none()
 
 /**
+ * An encoding error as a HausSchemaError: a conversion error, or what the
+ * core's constructors reject as no haus value (spec §11: a string with an
+ * unpaired surrogate, a schema's tag that isn't one), with its code.
+ */
+const encodeErrorOf = (e: unknown): Option.Option<HausSchemaError> =>
+  e instanceof HausEncodeError ? Option.some(jsonError(e)) : conversionErrorOf()(e)
+
+/**
  * A synchronous step of the core or the converters (which report errors by
  * throwing), at the boundary to Effect: the exceptions `expected` recognizes
  * fail with its typed error; any other exception is a bug and stays a defect.
@@ -487,7 +495,7 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
       fromSync(() => checkEncodable(value, s.ast, limits), conversionErrorOf()).pipe(
         Effect.flatMap(() => encode(value, { errors: "first" })),
         Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "encode"))),
-        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), conversionErrorOf())),
+        Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), encodeErrorOf)),
       ),
     ) as Effect.Effect<Value, HausSchemaError | HausLimitsError, S["EncodingServices"]>
 }
@@ -533,9 +541,7 @@ export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<A
   const toValue = valueEncoder<S, []>(schema, codecs)
   return Effect.fn("Haus.encode")(function* (value: S["Type"], options?: EncodeOptions) {
     const [format, limits] = withOptions(defaults, options)
-    const v = yield* toValue(value, limits)
-    // A raw value (`Haus.Any`) the writer can't write (spec §4, §12) is an error, not a defect.
-    return yield* fromSync(() => stringify(v, format), jsonErrorOf)
+    return stringify(yield* toValue(value, limits), { ...format, limits })
   })
 }
 
@@ -557,7 +563,7 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toValue(value, limits).pipe(
-          Effect.flatMap((v) => fromSync(() => stringify(v, { style: "compact", ...format }) + ",\n", jsonErrorOf)),
+          Effect.map((v) => stringify(v, { style: "compact", ...format, limits }) + ",\n"),
           Effect.mapError(atIndex(index)),
         )),
       Stream.withSpan("Haus.encodeStream"),

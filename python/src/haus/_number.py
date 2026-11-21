@@ -1,5 +1,5 @@
-"""Number literals built in code (spec §9.8): normalized as the parser would,
-and checked against the same limits before they are written.
+"""Number literals built in code (spec §11): normalized as the parser would when a
+`Number` is built (without limits), and checked against the limits when they are written.
 
     >>> normalize_number("1E+05"), normalize_number("0xFF"), normalize_number("1.")
     ('1e5', '255', None)
@@ -12,21 +12,20 @@ from decimal import Decimal
 
 from ._error_codes import ErrorCode
 from ._parser import DEFAULT_LIMITS, Limits, Parser
+from ._scan import NORMALIZED_NUMBER
 
 INTEGER = re.compile(r"-?[0-9]+")
 """A normalized literal that is a whole number: digits with an optional `-` (`-0` included)."""
 
-# Exactly what the parser writes: no `_`, `+`, `E`, hex or binary, no leading zeros in the exponent.
-_NORMALIZED = re.compile(r"-?(?:0|[1-9][0-9]*+)(?:\.[0-9]++)?(?:e(?:0|-?[1-9][0-9]*+))?")
 _EXPONENT = re.compile(r"e-?([0-9]+)$")
 
 UNLIMITED = Limits(max_number_length=1 << 62, max_exponent=1 << 62)
-"""Limits that let `normalize_number` read any literal: for the canonical form, which has none (spec §12)."""
+"""Limits that let `normalize_number` read any literal: for `Number`, which has none (spec §11)."""
 
 
 def normalize_number(text: str, limits: Limits = DEFAULT_LIMITS) -> str | None:
     """The normalized text of one number literal (`1_000` → `1000`), or None if `text` isn't one."""
-    if _NORMALIZED.fullmatch(text):
+    if NORMALIZED_NUMBER.fullmatch(text):
         return text
     return Parser(text, limits).number_literal()
 

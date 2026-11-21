@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use haus::{AnyTag, Codec, Decimal};
+use haus::{AnyTag, Codec, Decimal, Tag};
 
 use crate::{Currency, Money};
 
@@ -55,7 +55,7 @@ impl FromStr for CurrencyCode {
 
 impl From<CurrencyCode> for Currency {
     fn from(code: CurrencyCode) -> Currency {
-        AnyTag::Bare(code.as_str().to_owned())
+        AnyTag::Bare(Tag::new(code.as_str()).expect("three letters A–Z are a tag name"))
     }
 }
 

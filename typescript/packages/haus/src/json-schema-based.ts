@@ -19,7 +19,7 @@ import {
 } from "./json.js"
 import { numberLimitIssue } from "./number.js"
 import { longerThan, withDefaults, type Limits } from "./parser.js"
-import { arr, bytes as bytesValue, num, rec, variant, type HVariant, type Value } from "./value.js"
+import { uncheckedArr, uncheckedBytes, uncheckedNum, uncheckedRec, uncheckedVariant, type HVariant, type Value } from "./value.js"
 
 // ── JSON types ───────────────────────────────────────────────
 
@@ -234,13 +234,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
     : v.kind === "number" ? "a number" : v.kind === "string" ? "a string" : v.kind === "bytes" ? "bytes" : `an ${v.kind}`
   const mismatch = (expected: string, v: Value, at: Place, code: ErrorCode = "type-mismatch"): never =>
     fail(`expected ${expected}, found ${describe(v)}`, at, code, { expected, found: describe(v) })
-  const text = (s: string, at: Place): string => {
-    if (/\p{Cs}/u.test(s)) fail("a string with an unpaired surrogate has no JSON form (I-JSON)", at, "no-json-form")
-    return s
-  }
-
   const write = (t: JsonType, v: Value, at: Place, depth: number, hops: number): Json => {
-    if (typeof v !== "object" || v === null) return fail("not a haus value", at, "cannot-encode")
     if (depth > maxDepth) fail(`value nested deeper than ${l.maxDepth} levels (or cyclic)`, at, "nesting-too-deep")
     const hop = () => (hops < MAX_HOPS ? hops + 1 : fail("a type that refers only to itself (unguarded recursion)", at, "unguarded-recursion"))
     switch (t.kind) {
@@ -249,7 +243,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
       case "secret":
         return concealed(t, at, false, () => write(t.item, v, at, depth, hop()))
       case "string":
-        return v.kind === "string" ? text(v.value, at) : mismatch("a string", v, at)
+        return v.kind === "string" ? v.value : mismatch("a string", v, at)
       case "bytes":
         return v.kind === "bytes" ? toBase64(v.bytes) : mismatch("bytes", v, at)
       case "bool":
@@ -264,7 +258,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
         return v.kind === "number" ? v.text : mismatch("a number", v, at)
       case "time": {
         const [arg] = v.kind === "variant" && v.tag === t.tag && v.args.length === 1 ? v.args : []
-        return arg?.kind === "string" ? text(arg.value, at) : mismatch(`${t.tag}("…")`, v, at)
+        return arg?.kind === "string" ? arg.value : mismatch(`${t.tag}("…")`, v, at)
       }
       case "any":
         return hausJsonOf(v, l, at)
@@ -278,7 +272,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
       }
       case "map":
         if (v.kind !== "record") return mismatch("a record", v, at)
-        return jsonObject([...v.fields].map(([k, x]) => [text(k, at), write(t.value, x, at.child(k), depth + 1, 0)] as const))
+        return jsonObject([...v.fields].map(([k, x]) => [k, write(t.value, x, at.child(k), depth + 1, 0)] as const))
       case "record":
         if (v.kind !== "record") return mismatch("a record", v, at)
         return jsonObject(fields(t, v.fields, at, depth))
@@ -300,7 +294,7 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
     [...fs].map(([k, x]) => {
       const type = t.fields.get(k)
       if (type === undefined) return fail(`field '${quoteText(k)}' is not in the record type`, at, "unknown-field")
-      return [text(k, at), write(type, x, at.child(k), depth + 1, 0)]
+      return [k, write(type, x, at.child(k), depth + 1, 0)]
     })
 
   const writeVariant = (t: JsonVariantType, v: HVariant, at: Place, depth: number): Json => {
@@ -357,7 +351,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     const normalized = isJsonNumber(s) ? normalizeJsonNumber(s) : undefined
     if (normalized === undefined) return fail(`expected a number literal in the string, found ${describeJson(s)}`, at, "invalid-number")
     const issue = numberLimitIssue(normalized, l)
-    if (issue === undefined) return num(normalized)
+    if (issue === undefined) return uncheckedNum(normalized)
     return bounded ? fail(`a whole number of ${s.length} characters is out of range`, at, "out-of-range") : fail(issue.reason, at, issue.code)
   }
   const object = (j: Json, expected: string, at: Place): JsonObject => (isJsonObject(j) ? j : mismatch(expected, j, at))
@@ -396,44 +390,44 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
         if (typeof j !== "string") return mismatch("a base64 string", j, at)
         const data = fromBase64(j)
         if (data === undefined) return fail("expected base64 with padding (RFC 4648 §4)", at, "invalid-base64")
-        return data.length * 2 > l.maxStringLength ? fail(`byte string longer than ${l.maxStringLength} characters`, at, "string-too-long") : bytesValue(data)
+        return data.length * 2 > l.maxStringLength ? fail(`byte string longer than ${l.maxStringLength} characters`, at, "string-too-long") : uncheckedBytes(data)
       }
       case "bool":
-        return typeof j === "boolean" ? variant(j ? "True" : "False") : mismatch("true or false", j, at)
+        return typeof j === "boolean" ? uncheckedVariant(j ? "True" : "False") : mismatch("true or false", j, at)
       case "integer":
         if (!t.quoted) return j instanceof JsonNumber ? numberOfJson(j, l, at) : mismatch("a number", j, at)
         if (typeof j !== "string") return mismatch("a whole number in a string", j, at)
         return SMALL_INTEGER.test(j) ? numberText(j, at, t.bounded) : fail(`expected a whole number in a string, found ${describeJson(j)}`, at, isJsonNumber(j) ? "not-an-integer" : "invalid-number")
       case "float":
         if (j instanceof JsonNumber) return numberOfJson(j, l, at)
-        return (typeof j === "string" ? FLOAT_TAGS.get(j) : undefined) !== undefined ? variant(FLOAT_TAGS.get(j as string)!)
+        return (typeof j === "string" ? FLOAT_TAGS.get(j) : undefined) !== undefined ? uncheckedVariant(FLOAT_TAGS.get(j as string)!)
           : mismatch(`a number, "NaN", "Infinity" or "-Infinity"`, j, at)
       case "decimal":
         return typeof j === "string" ? numberText(j, at) : mismatch(`a decimal in a string ("19.90")`, j, at)
       case "time":
-        return typeof j === "string" ? variant(t.tag, [stringOfJson(j, l, at)]) : mismatch(`a ${t.tag} string`, j, at)
+        return typeof j === "string" ? uncheckedVariant(t.tag, [stringOfJson(j, l, at)]) : mismatch(`a ${t.tag} string`, j, at)
       case "any":
         return valueOfHausJson(j, l, at, places)
       case "array":
         if (!Array.isArray(j)) return mismatch("an array", j, at)
-        return arr(j.map((x, i) => read(t.item, x, at.child(i), depth + 1, 0)))
+        return uncheckedArr(j.map((x, i) => read(t.item, x, at.child(i), depth + 1, 0)))
       case "tuple": {
         if (!Array.isArray(j)) return mismatch("an array", j, at)
         if (j.length < t.items.length || (t.rest === undefined && j.length > t.items.length)) fail(`expected ${t.items.length} elements, found ${j.length}`, at)
-        return arr(j.map((x, i) => read(t.items[i] ?? t.rest!, x, at.child(i), depth + 1, 0)))
+        return uncheckedArr(j.map((x, i) => read(t.items[i] ?? t.rest!, x, at.child(i), depth + 1, 0)))
       }
       case "map": {
         const o = object(j, "an object", at)
-        return rec(new Map(Object.keys(o).map((k) => [key(k, at.child(k)), read(t.value, o[k]!, at.child(k), depth + 1, 0)] as const)))
+        return uncheckedRec(new Map(Object.keys(o).map((k) => [key(k, at.child(k)), read(t.value, o[k]!, at.child(k), depth + 1, 0)] as const)))
       }
       case "record":
-        return rec(fields(t, object(j, "an object", at), [], at, depth))
+        return uncheckedRec(fields(t, object(j, "an object", at), [], at, depth))
       case "maybe": {
-        if (usesNull(t)) return j === null ? variant("None") : variant("Some", [read(t.item, j, at, depth, hop())])
+        if (usesNull(t)) return j === null ? uncheckedVariant("None") : uncheckedVariant("Some", [read(t.item, j, at, depth, hop())])
         const o = object(j, `{"_tag": "None"} or {"_tag": "Some", "value": …}`, at)
         const tag = tagOf(o, `"None" or "Some"`, at)
-        if (tag === "None") return only(o, [], tag, at), variant("None")
-        if (tag === "Some") return only(o, ["value"], tag, at), variant("Some", [read(t.item, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
+        if (tag === "None") return only(o, [], tag, at), uncheckedVariant("None")
+        if (tag === "Some") return only(o, ["value"], tag, at), uncheckedVariant("Some", [read(t.item, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
         return fail(`expected "_tag": "None" or "Some"`, at, "unknown-tag")
       }
       case "variant":
@@ -466,7 +460,7 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     if (isEnum(t)) {
       if (typeof j !== "string") return mismatch(`one of the strings ${tagList(t.cases.keys())}`, j, at)
       if (!TAG.test(j)) return fail(`not a tag name: ${describeJson(j)}`, at, "invalid-tag")
-      return t.cases.has(j) ? variant(tagWithin(j, at)) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
+      return t.cases.has(j) ? uncheckedVariant(tagWithin(j, at)) : fail(`unknown tag ${describeJson(j)}, expected one of ${tagList(t.cases.keys())}`, at, "unknown-tag")
     }
     const o = object(j, `an object with "_tag"`, at)
     const tag = tagOf(o, "the tag, a string", at)
@@ -476,30 +470,30 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     if (c === undefined) {
       // An unknown value (spec §16.3).
       const members = Object.keys(o).filter((k) => k !== "_tag")
-      if (members.length === 0) return variant(tag)
+      if (members.length === 0) return uncheckedVariant(tag)
       // As written: the arguments, self-describing (without the envelope).
       if (members.length === 1 && members[0] === "_args") {
         const args = o["_args"]!
         const place = at.child("_args")
         if (!Array.isArray(args) || args.length === 0) return fail(`"_args" must be a non-empty array`, place, "haus-json-form")
-        return variant(tag, args.map((x, i) => valueOfHausJson(x, l, place.child(i), places)))
+        return uncheckedVariant(tag, args.map((x, i) => valueOfHausJson(x, l, place.child(i), places)))
       }
       // A newer writer's case: its other members are a record payload, imported (§16.1).
-      return variant(tag, [rec(new Map(members.map((k) => [key(k, at.child(k)), importedValue(o[k]!, l, at.child(k), places)] as const)))])
+      return uncheckedVariant(tag, [uncheckedRec(new Map(members.map((k) => [key(k, at.child(k)), importedValue(o[k]!, l, at.child(k), places)] as const)))])
     }
-    if (isUnitCase(c)) return only(o, [], tag, at), variant(tag)
+    if (isUnitCase(c)) return only(o, [], tag, at), uncheckedVariant(tag)
     if (c.kind === "record") {
       const reserved = RESERVED_FIELDS.find((k) => c.record.fields.has(k))
       if (reserved !== undefined) return fail(`'${tag}' has a field named ${reserved}: a record payload with one has no schema-based JSON form`, at, "no-json-form")
-      return variant(tag, [rec(fields(c.record, o, ["_tag"], at, depth))])
+      return uncheckedVariant(tag, [uncheckedRec(fields(c.record, o, ["_tag"], at, depth))])
     }
     const { items } = c as Extract<JsonCase, { kind: "positional" }>
-    if (items.length === 1) return only(o, ["value"], tag, at), variant(tag, [read(items[0]!, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
+    if (items.length === 1) return only(o, ["value"], tag, at), uncheckedVariant(tag, [read(items[0]!, member(o, "value", tag, at), at.child("value"), depth + 1, 0)])
     only(o, ["values"], tag, at)
     const values = member(o, "values", tag, at)
     if (!Array.isArray(values) || values.length !== items.length) return fail(`'${tag}' needs "values", an array of ${items.length}`, at, "wrong-payload")
     const place = at.child("values")
-    return variant(tag, values.map((x, i) => read(items[i]!, x, place.child(i), depth + 2, 0)))
+    return uncheckedVariant(tag, values.map((x, i) => read(items[i]!, x, place.child(i), depth + 2, 0)))
   }
 
   return read(type, json, place, 0, 0)

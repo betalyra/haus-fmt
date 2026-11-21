@@ -4,12 +4,12 @@ and values built in code."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
 import haus
-from haus import Array, Bytes, Limits, Number, Record, String, Style, Value, Variant
+from haus import Array, Bytes, Limits, Number, Record, String, Style, Variant
 from haus.schema import HausEncodeError
 
 SUITE = Path(__file__).resolve().parents[2] / "test-suite"
@@ -197,35 +197,17 @@ def encode_error(values: list[Any], limits: Limits = haus.DEFAULT_LIMITS) -> Hau
     return e.value
 
 
-def test_values_without_a_text() -> None:
+def test_values_outside_the_limits() -> None:
+    # Values are haus values by construction (spec §11): what fails is the limits.
     def fails(value: Any, code: str, path: tuple[str | int, ...] = (), limits: Limits = haus.DEFAULT_LIMITS) -> None:
         e = encode_error([value], limits)
         assert (e.code, e.path) == (code, path), e.reason
 
-    fails(Record({"a": Variant("lower")}), "invalid-tag", ("a",))
     fails(Array((Number("1" * 1001),)), "number-too-long", (0,))
     fails(Number("1e7000"), "exponent-too-large")
-    fails(Number("1.5.5"), "invalid-number")
-    fails(Number(cast(Any, 15)), "cannot-encode")
-    fails(String("\ud800"), "cannot-encode")
-    fails(Record({"\udfff": Number("1")}), "cannot-encode")
-    fails(Record({"a": cast(Any, 1)}), "cannot-encode", ("a",))
-    fails(Array((cast(Any, ()),)), "cannot-encode", (0,))
     fails(Array((Array(()),)), "nesting-too-deep", (0,), Limits(max_depth=1))
     fails(Variant("T", (Record({"a": Array(())}),)), "nesting-too-deep", ("a",), Limits(max_depth=1))
     assert haus.stringify(Variant("T", (Record({}),)), limits=Limits(max_depth=1)) == "T {}"
-    # A value that contains itself.
-    items: list[Value] = []
-    looped = Array(items)  # type: ignore[arg-type]
-    items.append(looped)
-    e = encode_error([looped])
-    assert e.code == "cyclic-value"
-    assert set(e.path) == {0}
-    fields: dict[str, Value] = {}
-    record = Record(fields)
-    fields["self"] = Variant("Some", (record,))
-    e = encode_error([record])
-    assert e.code == "cyclic-value"
     # In a stream, the path starts with the value's index.
-    e = encode_error([Variant("A"), Variant("b")])
-    assert (e.code, e.path) == ("invalid-tag", (1,))
+    e = encode_error([Variant("A"), Number("1e7000")])
+    assert (e.code, e.path) == ("exponent-too-large", (1,))

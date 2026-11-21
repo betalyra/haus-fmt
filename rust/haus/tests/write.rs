@@ -1,4 +1,5 @@
-//! The compact and minimised writers check what they write (spec §9.8):
+//! The compact and minimised writers check what they write against the
+//! limits (spec §7, §9.8):
 //! every value the parser gives is written again, under the same limits,
 //! and parses back.
 
@@ -29,8 +30,8 @@ fn minimised_has_no_whitespace_between_tokens() {
         haus::to_string(&value).unwrap(),
         r#"Person { name: "Ada Lovelace", tags: [1, Tag {}], at: Point(1, 2), b: x"9f86" }"#
     );
-    let wrong = Value::Array(vec![Value::Number("abc".into())]);
-    assert_eq!(haus::to_string_minimised(&wrong).unwrap_err().to_string(), "[0]: not a number literal");
+    let wrong = Value::Array(vec![Value::number("1e6145").unwrap()]);
+    assert_eq!(haus::to_string_minimised(&wrong).unwrap_err().to_string(), "[0]: exponent larger than 6144");
 }
 
 #[test]
@@ -67,11 +68,12 @@ fn values_beyond_the_limits_are_not_written() {
     assert_eq!(error(&Value::Bytes(vec![1, 2, 3]), &small), "byte string longer than 4 characters");
     let nested = Value::Array(vec![Value::Array(vec![Value::Array(vec![])])]);
     assert_eq!(error(&nested, &small), "[0][0]: nesting deeper than 2 levels");
-    let key = Value::Record(vec![("abcde".into(), Value::Number("1".into()))]);
+    let key = Value::record([("abcde", Value::from(1))]).unwrap();
     assert_eq!(error(&key, &small), ".abcde: key longer than 4 characters");
     for n in ["", "-", "1.", ".5", "01", "1e", "+1", "0x", "1 ", "1 // c", "NaN", "1e5.5"] {
-        assert_eq!(error(&Value::Number(n.into()), &Limits::default()), "not a number literal", "{n:?}");
+        assert_eq!(Value::number(n).unwrap_err().code, haus::ErrorCode::InvalidNumber, "{n:?}");
     }
+    // Numbers are normalized when they are built, and written so.
     for (n, written) in [
         ("1E+05", "1e5"),
         ("1e-0", "1e0"),
@@ -81,21 +83,21 @@ fn values_beyond_the_limits_are_not_written() {
         ("0b101", "5"),
         ("-1_0.5_0", "-10.50"),
     ] {
-        assert_eq!(ser::write(&Value::Number(n.into())).as_deref(), Ok(written), "{n:?}");
+        assert_eq!(ser::write(&Value::number(n).unwrap()).as_deref(), Ok(written), "{n:?}");
     }
 }
 
 #[test]
 fn integers_longer_than_the_number_limit_are_not_written() {
     // Integers are written in decimal (spec §11): one longer than the limit written for can't be.
-    let fits = Value::Number(format!("-{}", "9".repeat(999)));
-    let long = Value::Number("9".repeat(1001));
+    let fits = Value::number(&format!("-{}", "9".repeat(999))).unwrap();
+    let long = Value::number(&"9".repeat(1001)).unwrap();
     let too_long = "number literal longer than 1000 characters";
     let raised = Limits { max_number_length: 2000, ..Limits::default() };
     assert_eq!(ser::write(&fits), Ok(format!("-{}", "9".repeat(999))));
     assert_eq!(ser::write(&long).unwrap_err().to_string(), too_long);
     assert_eq!(ser::write_with(&long, &raised), Ok("9".repeat(1001)));
-    let in_array = Value::Array(vec![Value::Number("1".into()), long.clone()]);
+    let in_array = Value::Array(vec![Value::from(1), long.clone()]);
     let e = haus::to_string(&in_array).unwrap_err();
     assert_eq!((e.code.as_str(), e.place()), ("number-too-long", "$[1]".to_owned()));
     let mut out = Vec::new();

@@ -14,7 +14,7 @@ HausFmtGeo := [].{
 	decode_lat_lng = |v| Decode.within_depth(v, read_value_lat_lng)
 
 	read_value_lat_lng : Value -> Try(LatLng, Decode.Error)
-	read_value_lat_lng = |v| match v {
+	read_value_lat_lng = |v| match v.view() {
 		Tag("LatLng", [a0, a1]) => Ok(LatLng(Decode.arg("LatLng", 0, a0, Decode.f64)?, Decode.arg("LatLng", 1, a1, Decode.f64)?))
 		Tag("LatLng", _) => Decode.arity("LatLng", 2)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["LatLng"])
@@ -35,7 +35,7 @@ HausFmtGeo := [].{
 	decode_b_box = |v| Decode.within_depth(v, read_value_b_box)
 
 	read_value_b_box : Value -> Try(BBox, Decode.Error)
-	read_value_b_box = |v| match v {
+	read_value_b_box = |v| match v.view() {
 		Tag("BBox", [a0, a1]) => Ok(BBox(Decode.arg("BBox", 0, a0, read_value_lat_lng)?, Decode.arg("BBox", 1, a1, read_value_lat_lng)?))
 		Tag("BBox", _) => Decode.arity("BBox", 2)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["BBox"])

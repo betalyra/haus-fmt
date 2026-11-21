@@ -14,7 +14,7 @@ HausFmtMoney := [].{
 	decode_money = |v| Decode.within_depth(v, read_value_money)
 
 	read_value_money : Value -> Try(Money, Decode.Error)
-	read_value_money = |v| match v {
+	read_value_money = |v| match v.view() {
 		Tag("Money", [a0, a1]) => Ok(Money(Decode.arg("Money", 0, a0, Decode.decimal)?, Decode.arg("Money", 1, a1, read_value_currency)?))
 		Tag("Money", _) => Decode.arity("Money", 2)
 		Tag(tag, _) => Decode.unknown_tag(tag, ["Money"])

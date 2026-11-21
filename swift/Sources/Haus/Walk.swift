@@ -33,7 +33,7 @@ enum Opening {
 enum WalkChecks {
     /// Tags, and nesting within ``Limits/maxSupportedDepth``: the canonical form.
     case canonical
-    /// Tags, nesting, and the length of numbers, within the limits: the
+    /// Tags, nesting, and numbers (length and exponent), within the limits: the
     /// writers of a layout.
     case writer(Limits)
     /// Every limit, and the number of nodes: ``checkValue(_:limits:)``.
@@ -214,13 +214,8 @@ struct Walk<S: Spelling> {
     @inline(never)
     private func checkLeaf(_ v: HausValue) throws(HausError) {
         switch v {
-        case .number(let n) where level == .writer:
-            if n.literal.utf8.count > limits.maxNumberLength {
-                throw fail(
-                    .numberTooLong,
-                    "a number of \(n.literal.utf8.count) characters, more than the limit of \(limits.maxNumberLength)")
-            }
-        case .number(let n) where level == .value:
+        case .number(let n):
+            // Any literal, a decimal or an exponent too: what a parser with these limits reads back.
             if let (code, message) = numberLimitError(n.literal, limits) { throw fail(code, message) }
         case .string(let s) where level == .value:
             if let n = longerThan(s, limits.maxStringLength) {

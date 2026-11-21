@@ -29,7 +29,7 @@
 ## They fail if d is more than `Value.max_supported_depth`.
 ##
 ##     JsonValue.parse("{\"a\": [1, null]}")  # Ok(Object([("a", Array([Number("1"), Null]))]))
-##     JsonValue.to_haus_json(Num("19.90"))  # Ok("{\"_haus\":1,\"_value\":{\"_num\":\"19.90\"}}")
+##     JsonValue.to_haus_json(Value.num("19.90")?)  # Ok("{\"_haus\":1,\"_value\":{\"_num\":\"19.90\"}}")
 ##
 ## Errors have codes (spec §17, `ErrorCode`): `json-syntax` for text that
 ## isn't JSON, `duplicate-key`, `unpaired-surrogate`, the codes of the limits,
@@ -207,20 +207,16 @@ JsonValue := [
 	## schema-based JSON (`Any`, an unknown value's `_args`):
 	## `{"_num": "19.90"}`, `{"_bytes": "0b34"}`, `{"_rec": {…}}`,
 	## `{"_tag": "Some", "_args": […]}`; strings and arrays as themselves.
-	## The value is checked as `Encode.to_str` checks it, and numbers are
-	## written normalized (`Num("1E5")` as `{"_num": "1e5"}`).
+	## The value is checked against the limits as `Encode.to_str` checks it;
+	## its numbers are normalized (`Value.num("1E5")` is `{"_num": "1e5"}`).
 	haus_json_value : Value -> Try(JsonValue, Encode.Error)
 	haus_json_value = |value| haus_json_value_with(value, Value.default_limits)
 
 	## `haus_json_value` for a reader with other limits.
 	haus_json_value_with : Value, Value.Limits -> Try(JsonValue, Encode.Error)
 	haus_json_value_with = |value, limits| {
-		# The writer checks the value; reading what it wrote normalizes it.
-		text = Encode.to_str_with(value, limits)?
-		match Value.parse_with(text, limits) {
-			Ok(normalized) => Ok(self_describing(normalized))
-			Err(e) => Err({ code: e.code, reason: e.reason, path: "" })
-		}
+		_ = Encode.to_str_with(value, limits)?
+		Ok(self_describing(value))
 	}
 
 	## A value from its self-describing form without the envelope, as inside
@@ -265,23 +261,6 @@ JsonValue := [
 	is_number : Str -> Bool
 	is_number = |text| number_end(text.to_utf8(), 0) == Ok(text.count_utf8_bytes())
 
-	## A JSON number as a normalized haus literal (spec §2): `1E+05` is `1e5`.
-	normalize_number : Str -> Str
-	normalize_number = |text| {
-		b = text.to_utf8()
-		match b.find_first_index(|c| c == 'e' or c == 'E') {
-			Err(_) => text
-			Ok(i) => {
-				exp = b.drop_first(i + 1)
-				negative = exp.first() == Ok('-')
-				digits = exp.drop_if(|c| c == '+' or c == '-').drop_first(0)
-				trimmed = drop_leading_zeros(digits)
-				sign = if (negative and trimmed != ['0']) ['-'] else []
-				bytes_to_str(b.take_first(i).append('e').concat(sign).concat(trimmed))
-			}
-		}
-	}
-
 	## Base64 with padding (RFC 4648 §4).
 	base64 : List(U8) -> Str
 	base64 = |bytes| base64_encode(bytes)
@@ -322,7 +301,7 @@ read_json = |text, limits, max, { bom, strict }| {
 	(value, after) = read_value(src, skip_ws(src, start), 0, { max, limits, strict }).map_err(|f| locate(src, f))?
 	end = skip_ws(src, after)
 	if end < src.len() {
-		Err(locate(src, syntax("unexpected ${describe(src, end)} after the JSON value", end)))
+		Err(locate(src, syntax("unexpected ${found_at(src, end)} after the JSON value", end)))
 	} else {
 		Ok(value)
 	}
@@ -378,7 +357,7 @@ read_value = |src, pos, depth, r| {
 	} else if starts_at(src, pos, "null") {
 		Ok((Null, pos + 4))
 	} else {
-		Err(syntax("expected a JSON value, found ${describe(src, pos)}", pos))
+		Err(syntax("expected a JSON value, found ${found_at(src, pos)}", pos))
 	}
 }
 
@@ -395,7 +374,7 @@ read_object = |src, open, depth, r| {
 	var $done = at(src, $pos) == '}'
 	while !$done {
 		if at(src, $pos) != '"' {
-			return Err(repeated_first($names, syntax("expected a member name, found ${describe(src, $pos)}", $pos)))
+			return Err(repeated_first($names, syntax("expected a member name, found ${found_at(src, $pos)}", $pos)))
 		}
 		name_pos = $pos
 		(name, after_name) = match read_string(src, $pos, r) {
@@ -423,7 +402,7 @@ member_rest : List(U8), U64, U64, Reader -> Try((JsonValue, U64, Bool), Fail)
 member_rest = |src, after_name, depth, r| {
 	colon = skip_ws(src, after_name)
 	if at(src, colon) != ':' {
-		return Err(syntax("expected ':', found ${describe(src, colon)}", colon))
+		return Err(syntax("expected ':', found ${found_at(src, colon)}", colon))
 	}
 	(value, after_value) = read_value(src, skip_ws(src, colon + 1), depth + 1, r)?
 	p = skip_ws(src, after_value)
@@ -432,7 +411,7 @@ member_rest = |src, after_name, depth, r| {
 	} else if at(src, p) == '}' {
 		Ok((value, p, True))
 	} else {
-		Err(syntax("expected ',' or '}', found ${describe(src, p)}", p))
+		Err(syntax("expected ',' or '}', found ${found_at(src, p)}", p))
 	}
 }
 
@@ -475,7 +454,7 @@ read_array = |src, open, depth, r| {
 			$pos = p
 			$done = True
 		} else {
-			return Err(syntax("expected ',' or ']', found ${describe(src, p)}", p))
+			return Err(syntax("expected ',' or ']', found ${found_at(src, p)}", p))
 		}
 	}
 	Ok((Array($items), $pos + 1))
@@ -783,11 +762,10 @@ escaped = |b, pos| {
 ## JSON imported (§16.1), at `depth` haus levels.
 imported : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
 imported = |json, depth, limits| match json {
-	Null => Ok(Tag("None", []))
-	Boolean(True) => Ok(Tag("True", []))
-	Boolean(False) => Ok(Tag("False", []))
-	Number(n) => Ok(Num(JsonValue.normalize_number(n)))
-	String(s) => text_within(s, "string", limits).map_ok(|_| Text(s))
+	Null => built(Value.tag("None", []))
+	Boolean(b) => Ok(Value.bool(b))
+	Number(n) => built(Value.num(n))
+	String(s) => text_within(s, "string", limits).map_ok(|_| Value.text(s))
 	Array(items) => {
 		enter(depth, limits)?
 		var $out = []
@@ -796,7 +774,7 @@ imported = |json, depth, limits| match json {
 			$out = $out.append(within(imported(x, depth + 1, limits), "[${$i.to_str()}]")?)
 			$i = $i + 1
 		}
-		Ok(Arr($out))
+		Ok(Value.arr($out))
 	}
 	Object(members) => {
 		enter(depth, limits)?
@@ -805,9 +783,14 @@ imported = |json, depth, limits| match json {
 			within(key(k, limits), ErrorCode.path_key(k))?
 			$out = $out.append((k, within(imported(x, depth + 1, limits), ErrorCode.path_key(k))?))
 		}
-		Ok(Rec($out))
+		built(Value.rec($out))
 	}
 }
+
+## A value a constructor built, or why it didn't (a `JsonValue` built in
+## code may hold what is no haus value), at the current place.
+built : Try(Value, Value.ValueError) -> Try(Value, Decode.Error)
+built = |result| result.map_err(|e| { code: e.code, reason: e.reason, path: "" })
 
 ## A member name as a record key: within the string limit (spec §7).
 key : Str, Value.Limits -> Try({}, Decode.Error)
@@ -828,10 +811,10 @@ enter = |depth, limits| if (depth >= limits.max_depth) Decode.fail(ErrorCode.nes
 within : Try(a, Decode.Error), Str -> Try(a, Decode.Error)
 within = |result, segment| result.map_err(|e| { ..e, path: "${segment}${e.path}" })
 
-## The self-describing form of a value the parser gave (so it is valid and
-## normalized), without the envelope.
+## The self-describing form of a value (its numbers are normalized), without
+## the envelope.
 self_describing : Value -> JsonValue
-self_describing = |value| match value {
+self_describing = |value| match value.view() {
 	Num(n) => Object([("_num", String(n))])
 	Text(s) => String(s)
 	Bytes(b) => Object([("_bytes", String(hex_lower(b)))])
@@ -866,15 +849,15 @@ forms = "a self-describing value: a string, an array, or an object {\"_num\"}, {
 ## the haus writer counts them: `Tag { … }` is one level).
 described : JsonValue, U64, Value.Limits -> Try(Value, Decode.Error)
 described = |json, depth, limits| match json {
-	String(s) => text_within(s, "string", limits).map_ok(|_| Text(s))
+	String(s) => text_within(s, "string", limits).map_ok(|_| Value.text(s))
 	Array(items) => {
 		enter(depth, limits)?
-		Ok(Arr(described_items(items, depth + 1, limits)?))
+		Ok(Value.arr(described_items(items, depth + 1, limits)?))
 	}
 	Object([("_num", n)]) => within(described_number(n, limits), "._num")
 	Object([("_bytes", h)]) => within(described_bytes(h, limits), "._bytes")
 	Object([("_rec", r)]) => within(described_record(r, depth, limits), "._rec")
-	Object([("_tag", t)]) => Ok(Tag(described_tag(t, limits)?, []))
+	Object([("_tag", t)]) => built(Value.tag(described_tag(t, limits)?, []))
 	Object([("_tag", t), ("_args", a)]) => described_variant(t, a, depth, limits)
 	Object([("_args", a), ("_tag", t)]) => described_variant(t, a, depth, limits)
 	_ => Decode.fail(ErrorCode.haus_json_form, "expected ${forms}, found ${describe_json(json)}")
@@ -895,16 +878,15 @@ described_items = |items, depth, limits| {
 described_number : JsonValue, Value.Limits -> Try(Value, Decode.Error)
 described_number = |json, limits| match json {
 	String(n) => {
-		# Writing it and reading it back gives the same text only if it is normalized.
-		same = match Encode.to_str_with(Num(n), limits) {
-			Ok(written) => match Value.parse_with(written, limits) {
-				Ok(Num(m)) => m == n
-				_ => Bool.False
+		v = Value.num(n) ?? Value.text("")
+		match v.view() {
+			Num(normalized) if normalized == n => {
+				# A literal beyond the limits has the limit's code.
+				_ = Encode.to_str_with(v, limits).map_err(|e| { code: e.code, reason: e.reason, path: "" })?
+				Ok(v)
 			}
-			# A literal beyond the limits has the limit's code.
-			Err(e) => return Decode.fail(if (e.code == ErrorCode.invalid_number) ErrorCode.haus_json_number else e.code, e.reason)
+			_ => Decode.fail(ErrorCode.haus_json_number, "${quote_str(n)} is not a normalized number literal")
 		}
-		if (same) Ok(Num(n)) else Decode.fail(ErrorCode.haus_json_number, "${quote_str(n)} is not a normalized number literal")
 	}
 	_ => Decode.fail(ErrorCode.haus_json_number, "expected a string, found ${describe_json(json)}")
 }
@@ -927,7 +909,7 @@ described_bytes = |json, limits| match json {
 				$out = $out.append((hex_value(at(b, $i)) * 16 + hex_value(at(b, $i + 1))).to_u8_wrap())
 				$i = $i + 2
 			}
-			Ok(Bytes($out))
+			Ok(Value.bytes($out))
 		}
 	}
 	_ => Decode.fail(ErrorCode.haus_json_bytes, "expected a string, found ${describe_json(json)}")
@@ -948,7 +930,7 @@ described_record = |json, depth, limits| match json {
 			within(key(k, limits), ErrorCode.path_key(k))?
 			$out = $out.append((k, within(described(x, depth + 1, limits), ErrorCode.path_key(k))?))
 		}
-		Ok(Rec($out))
+		built(Value.rec($out))
 	}
 	_ => Decode.fail(ErrorCode.haus_json_form, "expected an object, found ${describe_json(json)}")
 }
@@ -975,7 +957,7 @@ described_variant = |tag, args, depth, limits| {
 		}
 		_ => return within(Decode.fail(ErrorCode.haus_json_form, "expected an array, found ${describe_json(args)}"), "._args")
 	}
-	Ok(Tag(name, values))
+	built(Value.tag(name, values))
 }
 
 ## What a JSON value is, for messages; never the content of a string.
@@ -1138,8 +1120,8 @@ quote_str : Str -> Str
 quote_str = |s| "\"${ErrorCode.shown(s)}\""
 
 ## What is at `pos`, for messages: a whole character, escaped as messages show text (spec §9).
-describe : List(U8), U64 -> Str
-describe = |src, pos| {
+found_at : List(U8), U64 -> Str
+found_at = |src, pos| {
 	c = at(src, pos)
 	if pos >= src.len() {
 		"end of input"
@@ -1196,7 +1178,7 @@ expect JsonValue.to_str(String("\"\\\n\r\t\u(8)\u(C)\u(1)\u(7F)é")) == Ok("\"\\
 expect JsonValue.to_str(Object([("a\u(85)", String("\u(9F)\u(A0)\u(202A)\u(202E)\u(202F)\u(2066)\u(2069)\u(206A)"))])) == Ok("{\"a\\u0085\":\"\\u009f\u(A0)\\u202a\\u202e\u(202F)\\u2066\\u2069\u(206A)\"}")
 # And U+2028 and U+2029, at which some software splits lines; their neighbours stay raw.
 expect JsonValue.to_str(Object([("\u(2028)", String("a\u(2027)\u(2028)\u(2029)\u(202A)b"))])) == Ok("{\"\\u2028\":\"a\u(2027)\\u2028\\u2029\\u202ab\"}")
-expect JsonValue.to_haus_json(Text("\u(2028)\u(2029)")) == Ok("{\"_haus\":1,\"_value\":\"\\u2028\\u2029\"}")
+expect JsonValue.to_haus_json(Value.text("\u(2028)\u(2029)")) == Ok("{\"_haus\":1,\"_value\":\"\\u2028\\u2029\"}")
 expect JsonValue.write_lines([String("\u(2029)")]) == Ok("\"\\u2029\"\n")
 expect JsonValue.to_str(Object([("a", Array([Number("1.5"), Null, Boolean(True)]))])) == Ok("{\"a\":[1.5,null,true]}")
 expect JsonValue.to_str(Number("01")) == Err({ code: "cannot-encode", reason: "not a JSON number", path: "" })
@@ -1215,10 +1197,10 @@ env = |value| "{\"_haus\": 1, \"_value\": ${value}}"
 enveloped_as_written : Str -> Str
 enveloped_as_written = |value| "{\"_haus\":1,\"_value\":${value}}"
 
-expect JsonValue.to_haus_json(Tag("Point", [Num("1"), Num("2.50")])) == Ok(enveloped_as_written("{\"_tag\":\"Point\",\"_args\":[{\"_num\":\"1\"},{\"_num\":\"2.50\"}]}"))
-expect JsonValue.to_haus_json(Num("1E5")) == Ok(enveloped_as_written("{\"_num\":\"1e5\"}"))
-expect JsonValue.haus_json_value(Num("1E5")) == Ok(Object([("_num", String("1e5"))]))
-expect JsonValue.to_haus_json(Arr([Num("1"), Num("abc")])) == Err({ code: "invalid-number", reason: "not a number literal", path: "[1]" })
+expect JsonValue.to_haus_json(variant("Point", [num("1"), num("2.50")])) == Ok(enveloped_as_written("{\"_tag\":\"Point\",\"_args\":[{\"_num\":\"1\"},{\"_num\":\"2.50\"}]}"))
+expect JsonValue.to_haus_json(num("1E5")) == Ok(enveloped_as_written("{\"_num\":\"1e5\"}"))
+expect JsonValue.haus_json_value(num("1E5")) == Ok(Object([("_num", String("1e5"))]))
+expect JsonValue.to_haus_json(Value.arr([num("1"), num("1e7000")])) == Err({ code: "exponent-too-large", reason: "exponent larger than 6144", path: "[1]" })
 expect JsonValue.from_haus_json(env("{\"_num\": \"1E5\"}")).is_err()
 expect JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": []}")).is_err()
 expect JsonValue.from_haus_json(env("{\"_args\": [{\"_num\": \"1\"}], \"_tag\": \"T\"}")).map_ok(canonical_text) == Ok("T(1)")
@@ -1230,9 +1212,6 @@ expect JsonValue.from_base64("Zg==") == Ok("f".to_utf8())
 expect JsonValue.from_base64("CzQ=") == Ok([0x0B, 0x34])
 expect JsonValue.from_base64("CzQ").is_err() and JsonValue.from_base64("CzR=").is_err() and JsonValue.from_base64("Zg==Zg==").is_err() and JsonValue.from_base64("-_8=").is_err()
 
-expect JsonValue.normalize_number("1E+05") == "1e5"
-expect JsonValue.normalize_number("-0.5e-0") == "-0.5e0"
-expect JsonValue.normalize_number("19.90") == "19.90"
 expect JsonValue.lines("1\n[2]\n") == Ok([Number("1"), Array([Number("2")])])
 expect JsonValue.lines("1\n{oops}\n").map_err(|e| (e.line, e.column)) == Err((2, 2))
 expect JsonValue.lines("\u(FEFF)1\r\n2") == Ok([Number("1"), Number("2")])
@@ -1293,18 +1272,18 @@ expect JsonValue.to_str_with(Array([Array([Array([Array([Array([Array([Array([Ar
 expect JsonValue.to_str_with(Array([Array([Array([Array([Array([Array([Array([Array([Array([Array([Null])])])])])])])])])]), small) == Err({ code: "nesting-too-deep", reason: "JSON nested deeper than 9 levels", path: "" })
 expect JsonValue.write_lines_with([Number("1"), String("abcde")], small) == Ok("1\n\"abcde\"\n")
 expect JsonValue.write_lines_with([Number("1"), Number("12345")], small) == Err({ code: "number-too-long", reason: "number literal longer than 4 characters", path: "[1]" })
-expect JsonValue.to_haus_json_with(Arr([Arr([Num("1")])]), small6) == Ok(enveloped_as_written("[[{\"_num\":\"1\"}]]"))
-expect JsonValue.to_haus_json_with(Arr([Arr([Arr([Num("1")])])]), small) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 2 levels", path: "[0][0]" })
-expect JsonValue.to_haus_json_with(Rec([("abcde", Num("1"))]), small) == Err({ code: "key-too-long", reason: "key longer than 4 characters", path: ".abcde" })
+expect JsonValue.to_haus_json_with(Value.arr([Value.arr([num("1")])]), small6) == Ok(enveloped_as_written("[[{\"_num\":\"1\"}]]"))
+expect JsonValue.to_haus_json_with(Value.arr([Value.arr([Value.arr([num("1")])])]), small) == Err({ code: "nesting-too-deep", reason: "nesting deeper than 2 levels", path: "[0][0]" })
+expect JsonValue.to_haus_json_with(rec([("abcde", num("1"))]), small) == Err({ code: "key-too-long", reason: "key longer than 4 characters", path: ".abcde" })
 # Self-describing JSON counts lengths on the haus value too: a string's characters,
 # not its escapes; bytes two characters per byte; a number's literal by the
 # number limit, although `_num` spells it as a string. At the limit, and one over.
-expect JsonValue.to_haus_json_with(Text("\u(E9)\n\t\""), small) == Ok(enveloped_as_written("\"\u(E9)\\n\\t\\\"\""))
-expect JsonValue.to_haus_json_with(Text("\u(E9)\n\t\"x"), small) == Err({ code: "string-too-long", reason: "string longer than 4 characters", path: "" })
-expect JsonValue.to_haus_json_with(Bytes([0x0B, 0x34]), small) == Ok(enveloped_as_written("{\"_bytes\":\"0b34\"}"))
-expect JsonValue.to_haus_json_with(Bytes([0x0B, 0x34, 0xFF]), small) == Err({ code: "string-too-long", reason: "byte string longer than 4 characters", path: "" })
-expect JsonValue.to_haus_json_with(Num("123456"), { ..small, max_string_length: 2, max_number_length: 6 }) == Ok(enveloped_as_written("{\"_num\":\"123456\"}"))
-expect JsonValue.to_haus_json_with(Tag("Abcd", []), small) == Ok(enveloped_as_written("{\"_tag\":\"Abcd\"}")) and JsonValue.to_haus_json_with(Tag("Abcde", []), small) == Err({ code: "tag-too-long", reason: "tag longer than 4 characters", path: "" })
+expect JsonValue.to_haus_json_with(Value.text("\u(E9)\n\t\""), small) == Ok(enveloped_as_written("\"\u(E9)\\n\\t\\\"\""))
+expect JsonValue.to_haus_json_with(Value.text("\u(E9)\n\t\"x"), small) == Err({ code: "string-too-long", reason: "string longer than 4 characters", path: "" })
+expect JsonValue.to_haus_json_with(Value.bytes([0x0B, 0x34]), small) == Ok(enveloped_as_written("{\"_bytes\":\"0b34\"}"))
+expect JsonValue.to_haus_json_with(Value.bytes([0x0B, 0x34, 0xFF]), small) == Err({ code: "string-too-long", reason: "byte string longer than 4 characters", path: "" })
+expect JsonValue.to_haus_json_with(num("123456"), { ..small, max_string_length: 2, max_number_length: 6 }) == Ok(enveloped_as_written("{\"_num\":\"123456\"}"))
+expect JsonValue.to_haus_json_with(variant("Abcd", []), small) == Ok(enveloped_as_written("{\"_tag\":\"Abcd\"}")) and JsonValue.to_haus_json_with(variant("Abcde", []), small) == Err({ code: "tag-too-long", reason: "tag longer than 4 characters", path: "" })
 # Up to the supported depth; a deeper limit is an error that names the maximum.
 deepest : Value.Limits
 deepest = { ..Value.default_limits, max_depth: Value.max_supported_depth }
@@ -1328,7 +1307,7 @@ expect JsonValue.import_json_with("1", too_deep).map_ok(|_| {}) == Err(Syntax({ 
 expect JsonValue.from_haus_json_with(env("\"a\""), too_deep).map_ok(|_| {}) == Err(Syntax({ code: "unsupported-depth", reason: unsupported, line: 1, column: 1 }))
 expect JsonValue.to_str_with(Null, too_deep) == Err({ code: "unsupported-depth", reason: unsupported, path: "" })
 expect JsonValue.write_lines_with([], too_deep) == Err({ code: "unsupported-depth", reason: unsupported, path: "" })
-expect JsonValue.to_haus_json_with(Num("1"), too_deep) == Err({ code: "unsupported-depth", reason: unsupported, path: "" })
+expect JsonValue.to_haus_json_with(num("1"), too_deep) == Err({ code: "unsupported-depth", reason: unsupported, path: "" })
 
 expect JsonValue.from_haus_json_with(env("{\"_num\": \"1e10\"}"), small6).map_ok(|_| {}).map_err(
 	|e| match e {
@@ -1354,7 +1333,7 @@ expect match Value.parse("0x${"f".repeat(829)}") {
 	Err(_) => False
 }
 expect json_code(JsonValue.from_haus_json(env("{\"_num\": \"1${"0".repeat(1000)}\"}"))) == "number-too-long at $._value._num"
-expect JsonValue.to_haus_json_with(Num("1000000000000"), { ..Value.default_limits, max_number_length: 12 }).map_err(|e| e.code) == Err("number-too-long")
+expect JsonValue.to_haus_json_with(num("1000000000000"), { ..Value.default_limits, max_number_length: 12 }).map_err(|e| e.code) == Err("number-too-long")
 expect json_code(JsonValue.import_json("[1,]")) == "json-syntax at 1:4" and json_code(JsonValue.import_json("NaN")) == "json-syntax at 1:1" and json_code(JsonValue.import_json("1 2")) == "json-syntax at 1:3"
 expect json_code(JsonValue.import_json("\"\\ud83d\"")) == "unpaired-surrogate at 1:2" and json_code(JsonValue.import_json("\"\\u12\"")) == "invalid-unicode-escape at 1:4"
 expect json_code(JsonValue.import_json("\"\\ud83d\\u12\"")) == "invalid-unicode-escape at 1:10" and json_code(JsonValue.import_json("\"\\ud83d\\u0041\"")) == "unpaired-surrogate at 1:2" and json_code(JsonValue.import_json("\"\\x\"")) == "invalid-escape at 1:2"
@@ -1370,7 +1349,7 @@ expect json_code(JsonValue.from_haus_json(env("{\"_rec\": {\"a\": 1}}"))) == "ha
 expect json_code(JsonValue.from_haus_json(env("{\"_tag\": 1}"))) == "invalid-tag at $._value" and json_code(JsonValue.from_haus_json(env("[{\"_tag\": null, \"_args\": [\"a\"]}]"))) == "invalid-tag at $._value[0]"
 expect json_code(JsonValue.from_haus_json(env("{\"_tag\": \"T\", \"_args\": [\"a\", {\"_num\": \"1\"}, {\"_num\": \"01\"}]}"))) == "haus-json-number at $._value._args[2]._num"
 expect JsonValue.from_haus_json_value(Object([("_rec", Object([("a", String("x")), ("a", String("y"))]))])).map_ok(|_| {}).map_err(|e| (e.code, e.path)) == Err(("duplicate-key", "._rec.a"))
-expect JsonValue.to_haus_json(Tag("lower", [])).map_err(|e| e.code) == Err("invalid-tag")
+expect JsonValue.import_value(Object([("a", Number("01"))])).map_err(|e| e.code).map_ok(|_| {}) == Err("invalid-number") and JsonValue.import_value(Object([("a", Null), ("a", Null)])).map_err(|e| e.code).map_ok(|_| {}) == Err("duplicate-key")
 
 # The envelope (spec §16.2): exactly `_haus` and `_value`, version 1, read in any order.
 expect JsonValue.from_haus_json("{\"_value\": \"a\", \"_haus\": 1}").map_ok(canonical_text) == Ok("\"a\"")
@@ -1391,9 +1370,9 @@ expect JsonValue.from_haus_json_value(Object([("_haus", Number("1")), ("_value",
 # The import reads the envelope as a record.
 expect JsonValue.import_json(env("{\"_num\": \"1\"}")).map_ok(canonical_text) == Ok("{_haus:1,_value:{_num:\"1\"}}")
 # Self-describing JSON Lines: an envelope per line.
-expect JsonValue.to_haus_json_lines([Num("1"), Text("a")]) == Ok("${enveloped_as_written("{\"_num\":\"1\"}")}\n${enveloped_as_written("\"a\"")}\n")
+expect JsonValue.to_haus_json_lines([num("1"), Value.text("a")]) == Ok("${enveloped_as_written("{\"_num\":\"1\"}")}\n${enveloped_as_written("\"a\"")}\n")
 expect JsonValue.to_haus_json_lines([]) == Ok("")
-expect JsonValue.to_haus_json_lines([Text("a"), Num("x")]).map_err(|e| e.path) == Err("[1]")
+expect JsonValue.to_haus_json_lines([Value.text("a"), num("1e7000")]).map_err(|e| e.path) == Err("[1]")
 expect JsonValue.from_haus_json_lines("\u(FEFF)${env("\"a\"")}\r\n${env("[]")}").map_ok(|vs| vs.map(canonical_text)) == Ok(["\"a\"", "[]"])
 expect JsonValue.from_haus_json_lines("").map_ok(List.len) == Ok(0)
 # An empty line, and a byte order mark at the start of a line after the
@@ -1449,3 +1428,14 @@ many_members = |n, more| {
 ## The canonical form of a value that has one: every parsed value.
 canonical_text : Value -> Str
 canonical_text = |v| Encode.canonical(v) ?? "(no canonical form)"
+
+# Values built in code, for the tests: the constructors' value, or a string
+# that says which one failed.
+num : Str -> Value
+num = |literal| Value.num(literal) ?? Value.text("(not a number: ${literal})")
+
+rec : List((Str, Value)) -> Value
+rec = |fields| Value.rec(fields) ?? Value.text("(not a record)")
+
+variant : Str, List(Value) -> Value
+variant = |name, args| Value.tag(name, args) ?? Value.text("(not a tag: ${name})")

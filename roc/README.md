@@ -107,20 +107,22 @@ shares its parts 2^40 times fails only after counting 64 Mi values: some 1.5
 seconds in a program built with `--opt=speed`, half a minute in `roc test`.
 A parsed value is a tree, no larger than its text.
 
-Encoders and writers check what they build and write (spec §9.8), so they
-return a `Try(…, Encode.Error)`. What can fail is a `Value` built in code, the
-raw value of an `Any` or an unknown variant: `Num("abc")` is an error
-(`.extra: not a number literal`), as are a tag that isn't a tag name, a key
-used twice in a record or map, and nesting, strings and numbers beyond the
-limits. The encoder checks at each place, so a container fails with
-`nesting-too-deep` at the depth limit before its contents are encoded (a
-native value nested deeper never recurses past it), and an error inside a
-`Secret` says nothing of the value, not even a key of its `Map` or a place in
-its `Any`. Encode for the limits you write with: the writer checks again, and
-it doesn't know where the secrets are. Number literals are written as the
-parser reads them (`Num("1E5")` as `1e5`), integers always in decimal: one
-longer than the number limit is `number-too-long`. `Encode.message(e)` gives
-the error with its path.
+Encoders and writers check what they build and write against the limits of
+the reader (spec §7, §9.8), so they return a `Try(…, Encode.Error)`: nesting,
+strings, keys, tags and numbers beyond the limits, and steps beyond the
+budget. Every `Value` is a haus value (see [Values](#values)), so nothing else
+about one can fail; an encoder that builds one checks it as the constructors
+do: a tag name of an unknown variant or a `< >` that isn't one is
+`invalid-tag`, a key used twice in a `Map` `duplicate-key`, and a `Decimal`
+whose text isn't a number literal `cannot-encode`. The encoder checks at
+each place, so a container fails with `nesting-too-deep` at the depth limit
+before its contents are encoded (a native value nested deeper never recurses
+past it), and an error inside a `Secret` says nothing of the value, not even
+a key of its `Map` or a place in its `Any`. Encode for the limits you write
+with: the writer checks again, and it doesn't know where the secrets are.
+Numbers are written as their normalized literal, integers always in
+decimal: one longer than the number limit is `number-too-long`.
+`Encode.message(e)` gives the error with its path.
 
 `Encode.to_str` and `Encode.stream` write the compact layout (spec §11), with
 spaces: `Person { name: "Ada", age: 36 }`. `Encode.minimised` and
@@ -170,6 +172,45 @@ haus-gen roc app.schema.haus --module App --out App.roc \
 [`profiles-test`](profiles-test) checks them against the profiles' test
 vectors, and inside the types of a package that uses the official ones.
 
+## Values
+
+A `Value` is a haus value (spec §1), as the parser gives it or as you build
+it. The type is opaque: its constructors build only haus values (spec §11,
+"Values built in code") and reject anything else with the code of the
+mistake, in a `Value.ValueError` (`code`, `reason`):
+
+| Constructor | Builds | Fails with |
+|---|---|---|
+| `Value.num(literal)` | a number, normalized as the parser reads it: `"1E+05"` is `1e5`, `"0xFF"` `255`, `"1_000"` `1000` | `invalid-number` for a text that isn't a number literal (`01`, `NaN`, the empty text) |
+| `Value.text(s)`, `Value.bytes(b)`, `Value.arr(items)`, `Value.bool(b)` | a string, a byte string, an array, `True` / `False` | never |
+| `Value.rec(fields)` | a record, its fields in order | `duplicate-key` for a key used twice |
+| `Value.tag(name, args)` | a variant: `Value.tag("None", [])`, `Value.tag("Some", [x])`, `Circle { … }` when its one argument is a record | `invalid-tag` for a name that isn't `[A-Z][A-Za-z0-9_]*` |
+
+A number has no limit on its length or exponent when it is built: limits
+are a writer's (spec §7). `v.view()` shows one level of a value to match on,
+`[Num(Str), Text(Str), Bytes(List(U8)), Arr(List(Value)), Rec(List((Str, Value))), Tag(Str, List(Value))]`,
+its parts values again:
+
+```roc
+point = Value.tag("Point", [Value.num("1E+05")?, Value.num("0xFF")?])?
+Encode.canonical(point)   # Ok("Point(1e5,255)")
+
+match point.view() {
+    Tag(name, args) => "${name} with ${args.len().to_str()} arguments"
+    _ => "something else"
+}
+```
+
+So writing a value, its canonical form, hash, equality and order can't fail
+for what it holds (see [Canonical form and hashing](#canonical-form-and-hashing)).
+`==` on values is structural, as in Rust: the same kinds, texts and tags,
+keys in the same order; haus equality, where the order of a record's fields
+doesn't matter (spec §2), is `Encode.equals`.
+
+The parser builds values directly, without the constructors' checks: it
+has made them already. The package's other modules (decoding, encoding, the
+JSON mappings) build values with the constructors, like any code.
+
 ## Error codes
 
 Every error has a code (spec §17): a short name for the mistake, such as
@@ -179,6 +220,7 @@ Every error has a code (spec §17): a short name for the mistake, such as
 | Error | Fields | Code, for example |
 |---|---|---|
 | `Value.ParseError` (parser, stream reader, JSON text) | `code`, `reason`, `line`, `column` | `missing-comma`, `null-literal`, `json-syntax` |
+| `Value.ValueError` (building a value) | `code`, `reason` | `invalid-number`, `invalid-tag`, `duplicate-key` |
 | `Decode.Error` (decoding, reading JSON) | `code`, `reason`, `path` | `type-mismatch`, `unknown-tag`, `missing-member` |
 | `Encode.Error` (writing haus or JSON) | `code`, `reason`, `path` | `cannot-encode`, `invalid-tag`, `string-too-long` |
 
@@ -253,14 +295,17 @@ from the package's other modules.)
 `Encode.compare` use it. `Encode.hash(v)` is the SHA-256 digest of the
 canonical form as 64 lowercase hex digits, and `Encode.hash_all(values)` the
 hash of a list, such as a file or a stream: the canonical forms joined by `,`
-(`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`. Every
-parsed value has a canonical form, whatever the limits it was parsed with: an
-integer is written in decimal with all its digits, however long. A `Value`
-built in code may not (spec §9.8): nested deeper than
-`Value.max_supported_depth` it fails with `nesting-too-deep`, and with more
-than `Value.max_nodes` values, a shared part counted each time it is reached
-(`x = Arr([y, y])`), with `too-many-nodes`, before anything is written. So
-each of them gives a `Try`: `Encode.equals(a, b) == Ok(True)`, and to sort,
+(`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`. The
+canonical form has no limits: an integer is written in decimal with all its
+digits, however long, and any exponent goes. Every value is a haus value
+(see [Values](#values)), with its numbers normalized when it was built, so
+nothing it holds makes these fail (spec §12). Only its shape can (spec §9.8):
+these functions recurse once per level, so a `Value` built in code nested
+deeper than `Value.max_supported_depth` fails with `nesting-too-deep`, and
+one with more than `Value.max_nodes` values, a shared part counted each time
+it is reached (`x = Value.arr([y, y])`), with `too-many-nodes`, before
+anything is written. A parsed value never fails. So each of them gives a
+`Try`: `Encode.equals(a, b) == Ok(True)`, and to sort,
 `values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
 `Value.within_bounds(v, max_depth, max_nodes)` is the check they make, for a
 value built in code, with your own bounds.

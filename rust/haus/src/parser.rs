@@ -3,7 +3,7 @@
 
 use crate::keys::Keys;
 use crate::scan::{Special, ident_end, is_bidi, is_control, is_ident, next_special, plain_decimal, shown};
-use crate::{ErrorCode as Code, SyntaxError as Error, Value};
+use crate::{ErrorCode as Code, Number, Record, SyntaxError as Error, Tag, Value};
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
@@ -96,10 +96,10 @@ pub(crate) fn parse_item(src: &str, limits: &Limits, at_start: bool) -> Result<V
 /// `text` as exactly one number literal (`1E5`, `0xFF`, `1_000`), normalized
 /// as the parser reads it (`1e5`, `255`, `1000`); None if it isn't one or is
 /// beyond the limits.
-pub(crate) fn number_literal(text: &str, limits: &Limits) -> Option<String> {
+pub(crate) fn number_literal(text: &str, limits: &Limits) -> Option<Number> {
     let mut p = Parser::build(text, limits, 0, None);
     match p.number() {
-        Ok(Value::Number(ref mut n)) if p.pos == text.len() => Some(std::mem::take(n)),
+        Ok(n) if p.pos == text.len() => Some(n),
         _ => None,
     }
 }
@@ -261,8 +261,8 @@ impl<'a> Parser<'a> {
             Some(b'"') if self.b[self.pos..].starts_with(b"\"\"\"") => self.block_string().map(Value::String),
             Some(b'"') => self.basic_string().map(Value::String),
             Some(b'-' | b'0'..=b'9') => match self.plain_number() {
-                Some(n) => Ok(n),
-                None => self.number(),
+                Some(n) => Ok(Value::Number(n)),
+                None => self.number().map(Value::Number),
             },
             Some(b'x') if self.at(1) == Some(b'"') => self.bytes(),
             Some(c) if c.is_ascii_uppercase() => self.variant(),
@@ -333,7 +333,7 @@ impl<'a> Parser<'a> {
         }
         self.pos += 1; // }
         self.depth -= 1;
-        Ok(Value::Record(self.fields.drain(base..).collect()))
+        Ok(Value::Record(Record::from_unique(self.fields.drain(base..).collect())))
     }
 
     /// A field's key and the `:` after it, with where the key starts.
@@ -496,7 +496,7 @@ impl<'a> Parser<'a> {
             }
             None => Vec::new(),
         };
-        Ok(Value::Variant { tag, args })
+        Ok(Value::Variant { tag: Tag::from_valid(tag), args })
     }
 
     /// After a tag: `(` or `{` if a payload starts here, at it. The payload
@@ -529,7 +529,7 @@ impl<'a> Parser<'a> {
     /// the limits, as the reference does (a literal that runs into a letter
     /// is invalid however long it is). Converted only within the limits, so
     /// huge literals stay cheap.
-    fn number(&mut self) -> R<Value> {
+    fn number(&mut self) -> R<Number> {
         let start = self.pos;
         let neg = self.peek() == Some(b'-');
         let body = start + usize::from(neg);
@@ -562,7 +562,7 @@ impl<'a> Parser<'a> {
             }
             None => normalize_exponent(self.src[start..end].replace('_', "").replace('E', "e")),
         };
-        Ok(Value::Number(text))
+        Ok(Number::from_normalized(text))
     }
 
     /// The common case of [`Parser::number`], in one pass: a decimal
@@ -570,7 +570,7 @@ impl<'a> Parser<'a> {
     /// length limit and not running into a letter, digit or `.`, which is
     /// already its normalized text. None for anything else, which
     /// [`Parser::number`] reads (and rejects) as before.
-    fn plain_number(&mut self) -> Option<Value> {
+    fn plain_number(&mut self) -> Option<Number> {
         let start = self.pos;
         let end = start + plain_decimal(&self.b[start..])?;
         if matches!(self.b.get(end), Some(&c) if is_ident(c) || c == b'.')
@@ -579,7 +579,7 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.pos = end;
-        Some(Value::Number(self.src[start..end].to_owned()))
+        Some(Number::from_normalized(self.src[start..end].to_owned()))
     }
 
     /// `0x…` or `0b…` at `i`: the radix and where the literal ends.

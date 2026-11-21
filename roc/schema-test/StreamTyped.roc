@@ -28,7 +28,7 @@ StreamTyped := [].{
 	decode_level = |v| Decode.within_depth(v, read_value_level)
 
 	read_value_level : Value -> Try(Level, Decode.Error)
-	read_value_level = |v| match v {
+	read_value_level = |v| match v.view() {
 		Tag("Info", []) => Ok(Info)
 		Tag("Warn", []) => Ok(Warn)
 		Tag("Error", []) => Ok(Error)

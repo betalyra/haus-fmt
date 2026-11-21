@@ -98,7 +98,7 @@ fn native_values_beyond_the_depth_limit_fail_at_the_limit() {
     assert_eq!(error.to_string(), format!("{}: nesting deeper than 3 levels", path(3)));
 
     // `Some` and payloads are levels too, as the writer counts them.
-    let options = (0..256).fold(Value::Number("1".into()), |v, _| Value::Variant { tag: "Some".into(), args: vec![v] });
+    let options = (0..256).fold(Value::from(1), |v, _| Value::variant("Some", vec![v]).unwrap());
     assert!(haus::to_string(&options).is_ok());
     let one_more = Some(options.clone());
     assert!(haus::to_string(&one_more).unwrap_err().to_string().ends_with("nesting deeper than 256 levels"));
@@ -121,7 +121,7 @@ fn very_deep_native_values_fail_without_overflowing_the_stack() {
 fn very_deep_values_built_in_code_have_a_canonical_form() {
     // The canonical form takes no call stack per level: it has no limit (spec §12).
     let deep = (0..1_000_000).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]));
-    let text = haus::canonical(&deep).unwrap();
+    let text = haus::canonical(&deep);
     assert_eq!(text.len(), 2 * 1_000_001);
     assert!(text.starts_with("[[[") && text.ends_with("]]]"));
     assert!(haus::equals(&deep, &deep));
@@ -133,10 +133,10 @@ fn very_deep_values_built_in_code_have_a_canonical_form() {
 
 /// A [`Value`] built in code a million levels deep, of every kind of container.
 fn very_deep(bottom: &str) -> Value {
-    (0..1_000_000).fold(Value::Number(bottom.into()), |v, i| match i % 3 {
+    (0..1_000_000).fold(Value::number(bottom).unwrap(), |v, i| match i % 3 {
         0 => Value::Array(vec![Value::Bytes(vec![1]), v]),
-        1 => Value::Record(vec![("a".into(), v), ("b".into(), Value::String("x".into()))]),
-        _ => Value::Variant { tag: "Some".into(), args: vec![v] },
+        1 => Value::record([("a", v), ("b", Value::String("x".into()))]).unwrap(),
+        _ => Value::variant("Some", vec![v]).unwrap(),
     })
 }
 
@@ -159,17 +159,16 @@ fn very_deep_values_built_in_code_drop_clone_and_compare_without_recursion() {
 
 /// A record with a key that names the secret, and a value the writer rejects.
 fn leaky(bad: Value) -> Value {
-    Value::Record(vec![("hunter2".into(), bad)])
+    Value::record([("hunter2", bad)]).unwrap()
 }
 
 #[test]
 fn errors_inside_a_secret_name_only_the_secret() {
     let hidden = "not a valid Secret (the value is hidden)";
     let bad_values = [
-        leaky(Value::Number("abc".into())),
-        leaky(Value::Number("1e6145".into())),
-        leaky(Value::Variant { tag: "lower".into(), args: vec![] }),
-        Value::Record(vec![("hunter2".into(), Value::Array(vec![])), ("hunter2".into(), Value::Array(vec![]))]),
+        leaky(Value::number("1e6145").unwrap()),
+        leaky(Value::number(&"1".repeat(1001)).unwrap()),
+        leaky(Value::String("x".repeat(16 * 1024 * 1024 + 1))),
         leaky((0..300).fold(Value::Array(vec![]), |v, _| Value::Array(vec![v]))),
     ];
     for bad in bad_values {
@@ -217,7 +216,7 @@ fn shared_parts_expand_only_within_the_step_budget() {
     // Leaves and raw values count too: an array of nine numbers is ten values.
     assert!(vec![1u8; 9].encode_with(budget(10)).is_ok() && vec![1u8; 9].to_json_with(budget(10)).is_ok());
     assert!(vec![1u8; 10].encode_with(budget(10)).is_err() && vec![1u8; 10].to_json_with(budget(10)).is_err());
-    let raw = Value::Array(vec![Value::Number("1".into()); 9]);
+    let raw = Value::Array(vec![Value::from(1); 9]);
     assert!(raw.encode_with(budget(10)).is_ok() && raw.to_json_with(budget(10)).is_ok());
     assert_eq!(raw.encode_with(budget(9)).unwrap_err().code, ErrorCode::StepBudget);
     assert_eq!(raw.to_json_with(budget(9)).unwrap_err().code, ErrorCode::StepBudget);

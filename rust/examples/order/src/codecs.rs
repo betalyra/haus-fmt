@@ -2,7 +2,7 @@
 //! decodes the type's base value first, so the schema's rules always run,
 //! and encodes back to it, so the haus text never changes (spec §13.4).
 
-use haus::{AnyTag, Codec, Decimal, time};
+use haus::{AnyTag, Codec, Decimal, Tag, time};
 use haus_geo::LatLng;
 use haus_money::Money;
 
@@ -10,8 +10,8 @@ use haus_money::Money;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Amount {
     pub cents: i128,
-    /// An ISO 4217 code: three letters A–Z.
-    pub currency: String,
+    /// An ISO 4217 code: three letters A–Z, a tag.
+    pub currency: Tag,
 }
 
 /// `Money(44.40, EUR)` ↔ `Amount { cents: 4440, currency: "EUR" }`. More than
@@ -34,7 +34,7 @@ impl Codec for Cents {
 }
 
 /// The @haus-fmt/money iso profile: a currency is three letters A–Z.
-fn iso(currency: AnyTag) -> Result<String, String> {
+fn iso(currency: AnyTag) -> Result<Tag, String> {
     match currency {
         AnyTag::Bare(code) if code.len() == 3 && code.bytes().all(|b| b.is_ascii_uppercase()) => Ok(code),
         other => Err(format!("{other} is not a currency: three letters A–Z (ISO 4217)")),

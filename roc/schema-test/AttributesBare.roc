@@ -30,7 +30,7 @@ AttributesBare := [].{
 	decode_shape = |v| Decode.within_depth(v, read_value_shape)
 
 	read_value_shape : Value -> Try(Shape, Decode.Error)
-	read_value_shape = |v| match v {
+	read_value_shape = |v| match v.view() {
 		Tag("Circle", [p]) => Decode.payload(
 			"Circle",
 			p,

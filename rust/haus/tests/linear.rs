@@ -8,7 +8,7 @@
 //! keys, also keys made to collide in a cheap hash, long strings, many short
 //! values, deep nesting.
 
-use haus::Value;
+use haus::{Record, Value};
 use std::time::{Duration, Instant};
 
 /// The best of five runs of `run` on `input`.
@@ -106,32 +106,47 @@ fn written(v: &Value) {
 }
 
 fn record_value(n: usize, key: impl Fn(usize) -> String) -> Value {
-    Value::Record((0..n).map(|i| (key(i), Value::Number(i.to_string()))).collect())
+    Value::record((0..n).map(|i| (key(i), Value::from(i)))).unwrap()
 }
 
 #[test]
 fn writing() {
     linear("ordinary keys", 20_000, |n| record_value(n, |i| format!("k{i}")), written);
     linear("colliding keys", 20_000, |n| record_value(n, colliding), written);
-    let repeated = |n| {
-        let mut v = record_value(n, colliding);
-        let Value::Record(fields) = &mut v else { unreachable!() };
-        fields.push((colliding(n / 2), Value::Number("0".into())));
-        v
-    };
-    linear("a repeated colliding key", 20_000, repeated, |v| assert!(haus::to_string(v).is_err()));
     let string = |piece: &'static str| move |n: usize| Value::String(piece.repeat(n));
     linear("a long string", 200_000, string("abcdefgh"), written);
     linear("a string to escape", 50_000, string("a\"b\\c\nd\u{7}\u{202E}é中"), written);
-    let numbers = |n: usize| Value::Array((0..n).map(|i| Value::Number(format!("-{i}.5"))).collect());
+    let numbers = |n: usize| Value::Array((0..n).map(|i| Value::number(&format!("-{i}.5")).unwrap()).collect());
     linear("numbers", 100_000, numbers, written);
-    let unnormalized = |n: usize| Value::Array((0..n).map(|i| Value::Number(format!("{i}E+05"))).collect());
-    linear("numbers to normalize", 20_000, unnormalized, written);
+}
+
+/// Fields with keys made to collide, and one of them again at the end.
+fn repeated(n: usize) -> Vec<(String, Value)> {
+    let mut fields: Vec<(String, Value)> = (0..n).map(|i| (colliding(i), Value::from(i))).collect();
+    fields.push((colliding(n / 2), Value::from(0)));
+    fields
+}
+
+#[test]
+fn building_values() {
+    // A repeated key is found in linear time, whatever the keys: all at once ...
+    let at_once = |fields: &Vec<(String, Value)>| assert!(Record::from_fields(fields.iter().cloned()).is_err());
+    linear("a repeated colliding key", 20_000, repeated, at_once);
+    // ... or one key at a time.
+    let inserted = |fields: &Vec<(String, Value)>| {
+        let mut r = Record::new();
+        let added = fields.iter().cloned().map(|(k, v)| r.insert(k, v)).take_while(Result::is_ok).count();
+        assert_eq!(added, fields.len() - 1);
+    };
+    linear("a repeated colliding key, inserted", 20_000, repeated, inserted);
+    let literals = |n: usize| (0..n).map(|i| format!("{i}E+05")).collect::<Vec<_>>();
+    let normalized = |ns: &Vec<String>| assert!(ns.iter().all(|n| Value::number(n).is_ok()));
+    linear("numbers to normalize", 20_000, literals, normalized);
 }
 
 #[test]
 fn checking_a_value_for_an_any() {
-    // A raw value is checked as the writer checks it (spec §9.8).
+    // A raw value is checked against the writer's limits (spec §9.8).
     let check = |v: &Value| assert!(haus::Encoder::default().check(v).is_ok());
     linear("colliding keys", 20_000, |n| record_value(n, colliding), check);
 }
