@@ -578,6 +578,10 @@ jobs:
       # library linked in (fuzz/build.sh), so the fuzz jobs don't need Swift.
       - name: Swift
         run: swift --version
+      # The Zig runner (zig/test/fuzz_runner.zig), built by fuzz/build.sh.
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.17.1
       - name: Build the parsers and checkers under test
         run: |
           (cd typescript && pnpm install --frozen-lockfile)
@@ -590,7 +594,7 @@ jobs:
             rust/target/release/examples/fuzz_runner rust/target/release/examples/time_runner \
             fuzz/schema-rust/target/release/schema_runner fuzz/schema-rust/target/release/json_runner fuzz/schema-rust/target/release/check_runner \
             fuzz/schema-rust/target/release/profile_runner fuzz/schema-rust/target/release/schema_check_runner \
-            fuzz/.build \
+            fuzz/.build zig/zig-out/bin/zig-runner \
             typescript/packages/haus/dist typescript/packages/effect/dist typescript/packages/import/dist \
             extensions/money/dist extensions/geo/dist
       - uses: actions/upload-artifact@v4
