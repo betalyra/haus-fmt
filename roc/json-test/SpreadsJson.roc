@@ -412,4 +412,215 @@ SpreadsJson := [].{
 		Unknown(tag, args) => ToJson.unknown(tag, args, e)
 	}
 
+	## A spread through other names: an alias, an instance of a generic type (spec §14, "Spreads").
+	##
+	## haus type `spreads#AliasEvent`.
+	AliasEvent : UserEvent
+
+	decode_alias_event : Value -> Try(AliasEvent, Decode.Error)
+	decode_alias_event = |v| Decode.within_depth(v, read_value_alias_event)
+
+	read_value_alias_event : Value -> Try(AliasEvent, Decode.Error)
+	read_value_alias_event = |v| read_value_user_event(v)
+
+	encode_alias_event : AliasEvent, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_alias_event = |v, e| encode_user_event(v, e)
+
+	from_json_alias_event : JsonValue -> Try(AliasEvent, Decode.Error)
+	from_json_alias_event = |j| FromJson.within_depth(j, read_json_alias_event, encode_alias_event)
+
+	read_json_alias_event : JsonValue -> Try(AliasEvent, Decode.Error)
+	read_json_alias_event = |j| read_json_user_event(j)
+
+	to_json_alias_event : AliasEvent, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_alias_event = |v, e| to_json_user_event(v, e)
+
+	## haus type `spreads#ViaAlias`.
+	ViaAlias := [UserCreated({ id : Int }), UserRenamed({ id : Int, to : Str }), Ping]
+
+	decode_via_alias : Value -> Try(ViaAlias, Decode.Error)
+	decode_via_alias = |v| Decode.within_depth(v, read_value_via_alias)
+
+	read_value_via_alias : Value -> Try(ViaAlias, Decode.Error)
+	read_value_via_alias = |v| match v.view() {
+		Tag("UserCreated", [p]) => Decode.payload(
+			"UserCreated",
+			p,
+			|fs| {
+				Ok(UserCreated({ id: Decode.field(fs, "id", Decode.int)? }))
+			},
+		)
+		Tag("UserRenamed", [p]) => Decode.payload(
+			"UserRenamed",
+			p,
+			|fs| {
+				Ok(UserRenamed({ id: Decode.field(fs, "id", Decode.int)?, to: Decode.field(fs, "to", Decode.str)? }))
+			},
+		)
+		Tag("Ping", []) => Ok(Ping)
+		Tag("UserCreated", _) => Decode.arity("UserCreated", 1)
+		Tag("UserRenamed", _) => Decode.arity("UserRenamed", 1)
+		Tag("Ping", _) => Decode.arity("Ping", 0)
+		Tag(tag, _) => Decode.unknown_tag(tag, ["UserCreated", "UserRenamed", "Ping"])
+		_ => Decode.expected("a variant (ViaAlias)", v)
+	}
+
+	encode_via_alias : ViaAlias, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_via_alias = |v, e| match v {
+		UserCreated(r) => Encode.tagged_record("UserCreated", e, [("id", Encode.required(r.id, Encode.int))])
+		UserRenamed(r) => Encode.tagged_record("UserRenamed", e, [("id", Encode.required(r.id, Encode.int)), ("to", Encode.required(r.to, Encode.str))])
+		Ping => Encode.tag("Ping", e)
+	}
+
+	from_json_via_alias : JsonValue -> Try(ViaAlias, Decode.Error)
+	from_json_via_alias = |j| FromJson.within_depth(j, read_json_via_alias, encode_via_alias)
+
+	read_json_via_alias : JsonValue -> Try(ViaAlias, Decode.Error)
+	read_json_via_alias = |j| {
+		(tag, ms) = FromJson.variant(j, "ViaAlias")?
+		match tag {
+			"UserCreated" => {
+				Ok(UserCreated({ id: FromJson.field(ms, "id", FromJson.int)? }))
+			}
+			"UserRenamed" => {
+				Ok(UserRenamed({ id: FromJson.field(ms, "id", FromJson.int)?, to: FromJson.field(ms, "to", FromJson.str)? }))
+			}
+			"Ping" => match FromJson.args(ms, 0)? {
+				[] => Ok(Ping)
+				_ => FromJson.arity("Ping", 0)
+			}
+			_ => Decode.unknown_tag(tag, ["UserCreated", "UserRenamed", "Ping"])
+		}
+	}
+
+	to_json_via_alias : ViaAlias, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_via_alias = |v, e| match v {
+		UserCreated(r) => ToJson.tagged_object("UserCreated", e, [("id", ToJson.required(r.id, ToJson.int))])
+		UserRenamed(r) => ToJson.tagged_object("UserRenamed", e, [("id", ToJson.required(r.id, ToJson.int)), ("to", ToJson.required(r.to, ToJson.str))])
+		Ping => ToJson.tag("Ping", e)
+	}
+
+	## haus type `spreads#Page`.
+	Page(a) : { items : List(a) }
+
+	decode_page : Value, (Value -> Try(a, Decode.Error)) -> Try(Page(a), Decode.Error)
+	decode_page = |v, decode_a| {
+		fs = Decode.strict_record(v)?
+		Ok({ items: Decode.field(fs, "items", |x3| Decode.list(x3, decode_a))? })
+	}
+
+	encode_page : Page(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_page = |v, e, encode_a| Encode.record(e, [("items", Present(|e4| Encode.list(v.items, e4, encode_a)))])
+
+	from_json_page : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Page(a), Decode.Error)
+	from_json_page = |j, from_json_a, _nullable_a| {
+		fs = FromJson.object(j, "Page")?
+		Ok({ items: FromJson.field(fs, "items", |y3| FromJson.list(y3, from_json_a))? })
+	}
+
+	to_json_page : Page(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_page = |v, e, to_json_a, _nullable_a| ToJson.object(e, [("items", Present(|e4| ToJson.list(v.items, e4, to_json_a)))])
+
+	## haus type `spreads#IntPage`.
+	IntPage : Page(Int)
+
+	decode_int_page : Value -> Try(IntPage, Decode.Error)
+	decode_int_page = |v| Decode.within_depth(v, read_value_int_page)
+
+	read_value_int_page : Value -> Try(IntPage, Decode.Error)
+	read_value_int_page = |v| decode_page(v, Decode.int)
+
+	encode_int_page : IntPage, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_int_page = |v, e| encode_page(v, e, Encode.int)
+
+	from_json_int_page : JsonValue -> Try(IntPage, Decode.Error)
+	from_json_int_page = |j| FromJson.within_depth(j, read_json_int_page, encode_int_page)
+
+	read_json_int_page : JsonValue -> Try(IntPage, Decode.Error)
+	read_json_int_page = |j| from_json_page(j, FromJson.int, False)
+
+	to_json_int_page : IntPage, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_int_page = |v, e| to_json_page(v, e, ToJson.int, False)
+
+	## haus type `spreads#Listing`.
+	Listing : { items : List(Int), total : Int }
+
+	decode_listing : Value -> Try(Listing, Decode.Error)
+	decode_listing = |v| Decode.within_depth(v, read_value_listing)
+
+	read_value_listing : Value -> Try(Listing, Decode.Error)
+	read_value_listing = |v| {
+		fs = Decode.strict_record(v)?
+		Decode.closed(fs, ["items", "total"])?
+		Ok({ items: Decode.field(fs, "items", |x5| Decode.list(x5, Decode.int))?, total: Decode.field(fs, "total", Decode.int)? })
+	}
+
+	encode_listing : Listing, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_listing = |v, e| Encode.record(e, [("items", Present(|e6| Encode.list(v.items, e6, Encode.int))), ("total", Encode.required(v.total, Encode.int))])
+
+	from_json_listing : JsonValue -> Try(Listing, Decode.Error)
+	from_json_listing = |j| FromJson.within_depth(j, read_json_listing, encode_listing)
+
+	read_json_listing : JsonValue -> Try(Listing, Decode.Error)
+	read_json_listing = |j| {
+		fs = FromJson.object(j, "Listing")?
+		FromJson.closed(fs, ["items", "total"])?
+		Ok({ items: FromJson.field(fs, "items", |y5| FromJson.list(y5, FromJson.int))?, total: FromJson.field(fs, "total", FromJson.int)? })
+	}
+
+	to_json_listing : Listing, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_listing = |v, e| ToJson.object(e, [("items", Present(|e6| ToJson.list(v.items, e6, ToJson.int))), ("total", ToJson.required(v.total, ToJson.int))])
+
+	## A closed variant of spreads that copy no tag: accepted as written, it accepts no tag (spec §14).
+	##
+	## haus type `spreads#NoTags`.
+	NoTags : [Bare(Str), Other(Str, List(Value))]
+
+	decode_no_tags : Value -> Try(NoTags, Decode.Error)
+	decode_no_tags = |v| Decode.within_depth(v, read_value_no_tags)
+
+	read_value_no_tags : Value -> Try(NoTags, Decode.Error)
+	read_value_no_tags = |v| Decode.any_tag(v)
+
+	encode_no_tags : NoTags, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_no_tags = |v, e| Encode.any_tag(v, e)
+
+	from_json_no_tags : JsonValue -> Try(NoTags, Decode.Error)
+	from_json_no_tags = |j| FromJson.within_depth(j, read_json_no_tags, encode_no_tags)
+
+	read_json_no_tags : JsonValue -> Try(NoTags, Decode.Error)
+	read_json_no_tags = |j| FromJson.any_tag(j)
+
+	to_json_no_tags : NoTags, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_no_tags = |v, e| ToJson.any_tag(v, e)
+
+	## haus type `spreads#ClosedNoTags`.
+	ClosedNoTags := []
+
+	decode_closed_no_tags : Value -> Try(ClosedNoTags, Decode.Error)
+	decode_closed_no_tags = |v| Decode.within_depth(v, read_value_closed_no_tags)
+
+	read_value_closed_no_tags : Value -> Try(ClosedNoTags, Decode.Error)
+	read_value_closed_no_tags = |v| match v.view() {
+		Tag(tag, _) => Decode.unknown_tag(tag, [])
+		_ => Decode.expected("a variant (ClosedNoTags)", v)
+	}
+
+	encode_closed_no_tags : ClosedNoTags, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_closed_no_tags = |_v, _e| Err({ code: "cannot-encode", reason: "ClosedNoTags has no values", path: "" })
+
+	from_json_closed_no_tags : JsonValue -> Try(ClosedNoTags, Decode.Error)
+	from_json_closed_no_tags = |j| FromJson.within_depth(j, read_json_closed_no_tags, encode_closed_no_tags)
+
+	read_json_closed_no_tags : JsonValue -> Try(ClosedNoTags, Decode.Error)
+	read_json_closed_no_tags = |j| {
+		tag = FromJson.tag_name(j, "ClosedNoTags")?
+		match tag {
+			_ => Decode.unknown_tag(tag, [])
+		}
+	}
+
+	to_json_closed_no_tags : ClosedNoTags, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_closed_no_tags = |_v, _e| Err({ code: "cannot-encode", reason: "ClosedNoTags has no values", path: "" })
+
 }

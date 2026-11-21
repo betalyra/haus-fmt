@@ -86,7 +86,7 @@ const enums = new WeakMap<JsonVariantType, boolean>()
 /** A closed variant whose tags have no payload: written as a string (spec §16.3). Bool has its own kind. */
 const isEnum = (t: JsonVariantType): boolean => {
   let known = enums.get(t)
-  if (known === undefined) enums.set(t, (known = !t.open && t.cases.size > 0 && [...t.cases.values()].every(isUnitCase)))
+  if (known === undefined) enums.set(t, (known = !t.open && [...t.cases.values()].every(isUnitCase)))
   return known
 }
 

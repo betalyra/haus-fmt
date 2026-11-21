@@ -7,21 +7,15 @@ import (
 	"unicode/utf8"
 )
 
-// MaxNodes is the most values (nodes) [CheckValue] accepts in one value built
-// in code. A value whose arrays or records share one another many times (a
-// DAG) expands when written out; this bounds the work of writing it
-// (spec §9.8). 64 Mi, as many as the largest top-level value of a stream can
-// hold.
-const MaxNodes = 64 << 20
-
 // CheckValue checks that a value built in code can be written within the
-// limits (spec §7, §9.8): strings and keys are valid UTF-8 (cannot-encode),
-// tags are [A-Z][A-Za-z0-9_]* (invalid-tag), numbers, strings, keys, tags
-// and byte strings are within their limits, nesting is within the depth
-// limit (a record payload, Tag { … }, counting one level, as when writing,
-// and an empty record or array one level, as when parsing),
-// it has at most [MaxNodes] nodes (too-many-nodes), and it doesn't contain
-// itself (cyclic-value). Fields left at zero in limits take their defaults.
+// limits (spec §7, §11), as the writers check it: strings and keys are valid
+// UTF-8 (cannot-encode), no variant has the zero [Tag] (cannot-encode),
+// numbers, strings, keys, tags and byte strings are within their limits,
+// nesting is within the depth limit (a record payload, Tag { … }, counting
+// one level, as when writing, and an empty record or array one level, as
+// when parsing), it writes at most [Limits.MaxNodes] values
+// (too-many-nodes, at $), and it doesn't contain itself (cyclic-value).
+// Fields left at zero in limits take their defaults.
 //
 // The error's Path says where the problem is, such as $.items[2]. Values
 // that [Parse] returns pass with the limits they were parsed with.
@@ -143,9 +137,8 @@ func (c *valueChecker) fail(code ErrorCode, format string, args ...any) error {
 }
 
 func (c *valueChecker) value(v Value, depth int) error {
-	c.nodes++
-	if c.nodes > MaxNodes {
-		return c.fail(CodeTooManyNodes, "the value has more than %d nodes", MaxNodes)
+	if err := c.count(); err != nil {
+		return err
 	}
 	switch v := v.(type) {
 	case Number:
@@ -180,10 +173,10 @@ func (c *valueChecker) value(v Value, depth int) error {
 		c.guard.pop()
 		return nil
 	case Variant:
-		if !isTag(v.Tag) {
-			return c.fail(CodeInvalidTag, "the tag %s isn't [A-Z][A-Za-z0-9_]*", quoteForMessage(v.Tag))
+		if v.Tag.IsZero() {
+			return c.fail(CodeCannotEncode, "a variant with the zero Tag, which holds no tag")
 		}
-		if len(v.Tag) > c.lim.MaxStringLength {
+		if len(v.Tag.name) > c.lim.MaxStringLength {
 			return c.fail(CodeTagTooLong, "a tag longer than the limit of %d characters", c.lim.MaxStringLength)
 		}
 		if len(v.Args) == 0 {
@@ -194,7 +187,9 @@ func (c *valueChecker) value(v Value, depth int) error {
 			if err := c.enter(r, depth); err != nil {
 				return err
 			}
-			c.nodes++
+			if err := c.count(); err != nil {
+				return err
+			}
 			if err := c.fields(r, depth); err != nil {
 				return err
 			}
@@ -217,6 +212,15 @@ func (c *valueChecker) value(v Value, depth int) error {
 		return c.fail(CodeCannotEncode, "a nil value")
 	}
 	return c.fail(CodeCannotEncode, "an unknown kind of value")
+}
+
+// count counts one more value written, against the node limit.
+func (c *valueChecker) count() error {
+	c.nodes++
+	if c.nodes > c.lim.MaxNodes {
+		return tooManyNodes(c.lim.MaxNodes, "$")
+	}
+	return nil
 }
 
 // enter starts the container v at depth, one level deeper.

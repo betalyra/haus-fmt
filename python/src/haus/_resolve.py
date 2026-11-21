@@ -15,16 +15,19 @@ ships one, without importing it. A package directory holds a manifest,
     { name: "@haus-fmt/money", version: "1.2.0" }
 
 The manifest gives types their identity in every language (`@haus-fmt/money@1#Money`).
+A package that is also an npm package has a `package.json` next to its manifest: its
+`version`, when it is a string, must be the manifest's (`package-version`), so that a
+package published with two versions is caught; nothing else in it is read.
 A package's schema imports other packages by name, never files. Files outside
 a schema package are identified by the nearest `pyproject.toml` project name
 and their path (`my-app/schemas/order#Root`), or without a project by their
 path relative to the root schema file's directory (`billing/common#Address`);
 their relative imports can't reach into a package directory.
 
-Files are read as spec §13.3 says: a package's `package.haus` and
-`schema.haus` are regular files, never links (its directory may be one), opened
-without following links, checked on the opened file and read from it; a
-schema file is at most 1 MiB (`file-too-large`), and each file is read once,
+Files are read as spec §13.3 says: a package's `package.haus`, `schema.haus`
+and `package.json` are regular files, never links (its directory may be one),
+opened without following links, checked on the opened file and read from it; a
+schema file and a `package.json` are at most 1 MiB (`file-too-large`), and each file is read once,
 by its real path, also when it is needed in two roles (a `pyproject.toml` that
 is a link to a schema file): every use sees the same bytes, and the checks of
 each role still apply to it.
@@ -34,6 +37,7 @@ from __future__ import annotations
 
 import errno
 import importlib.util
+import json
 import os
 import re
 import stat
@@ -60,10 +64,14 @@ MANIFEST = "package.haus"
 """The file name of a schema package's manifest."""
 PACKAGE_SCHEMA = "schema.haus"
 """The file name of a schema package's one schema file, next to its manifest."""
+PACKAGE_JSON = "package.json"
+"""The file name of npm's package file, which may sit next to a manifest: its `version` is checked."""
 MAX_MANIFEST_SIZE = 64 * 1024
 """A manifest is at most 64 KiB (spec §13.3, `package-manifest`)."""
 MAX_SCHEMA_SIZE = 1024 * 1024
 """A schema file is at most 1 MiB (spec §13.3, `file-too-large`)."""
+MAX_PACKAGE_JSON_SIZE = 1024 * 1024
+"""A `package.json` is at most 1 MiB (spec §13.3, `file-too-large`)."""
 MAX_FOLDER_ENTRIES = 4096
 """A folder of packages has at most 4096 entries (spec §13.3, `too-many-files`)."""
 EXTENSION = ".schema.haus"
@@ -494,6 +502,8 @@ class FileResolver:
                     f"{escape(str(g.manifest.dir / MANIFEST))} names the package {quote(g.manifest.name)},"
                     f" not {quote(name)}"
                 )
+        for g in given:
+            self._check_version(g.manifest)
         # Each copy's files are read once; equal bytes are one package.
         copies = [(g.manifest, self._package_files(g.manifest)) for g in given]
         (first, files), *others = copies
@@ -509,6 +519,44 @@ class FileResolver:
         module = ResolvedModule(str(key), f"{name}@{first.major}", text, first.version)
         self._modules[name] = module
         return module
+
+    def _check_version(self, manifest: Manifest) -> None:
+        """The version of the `package.json` next to the manifest, if it has one, is the manifest's (spec §13.3).
+
+        A package given explicitly is checked too, as npm would install it. The `package.json` is read as
+        the package's other files are (a regular file, not a link: `package-path`; at most 1 MiB:
+        `file-too-large`). One that isn't valid JSON or isn't an object gives no version, nor does a
+        `version` that isn't a string. A different version is `package-version`, quoted only when it is a
+        semantic version.
+        """
+        path = manifest.dir / PACKAGE_JSON
+        if not os.path.lexists(path):
+            return
+        data = self._files.read(
+            path,
+            MAX_PACKAGE_JSON_SIZE,
+            f"{quote(manifest.name)}: its {PACKAGE_JSON}",
+            irregular="package-path",
+            too_large="file-too-large",
+        )
+        try:
+            package = json.loads(data.decode("utf-8"))
+        except (ValueError, RecursionError):  # JSONDecodeError and UnicodeDecodeError too
+            return
+        match package:
+            case {"version": str(version)} if version != manifest.version:
+                theirs = (
+                    f"version {quote(version)}"
+                    if _SEMVER.fullmatch(version)
+                    else "a version that isn't a semantic version"
+                )
+                raise ModuleError(
+                    "package-version",
+                    f"{quote(manifest.name)}: its {MANIFEST} says version {quote(manifest.version)},"
+                    f" its {PACKAGE_JSON} {theirs} ({escape(str(manifest.dir))})",
+                )
+            case _:
+                return
 
     def _package_files(self, manifest: Manifest) -> tuple[bytes, bytes]:
         """The bytes of a package's `package.haus` and `schema.haus`, regular files that aren't links."""

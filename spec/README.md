@@ -117,6 +117,8 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
 <!-- rule: strings.utf8.reject-invalid -->
 <!-- rule: strings.utf8.bom-ignored -->
 - **Encoding:** input is UTF-8. Invalid UTF-8 MUST be rejected. A leading byte order mark is ignored.
+  <!-- rule: strings.utf8.checked-first -->
+  Text is checked for valid UTF-8 before it is parsed, so invalid UTF-8 is reported before any syntax error in the same text (`1 2` followed by an invalid byte is `invalid-utf8`). A stream reader does this for each chunk as it arrives: it checks the text read so far.
   <!-- rule: strings.utf8.host-strings -->
 - **Host strings:** a parser that takes the language's string type instead of bytes (UTF-16 in JavaScript and Java, Python's `str`) MUST reject an unpaired surrogate in it as `invalid-utf8`, at its position (one column, §8), as it rejects invalid UTF-8: the string has no UTF-8 form, so no other reader could read it. This holds for data and schema files alike. A JSON reader reports one in a JSON string as `unpaired-surrogate` (§16).
   <!-- rule: strings.escapes.set -->
@@ -159,7 +161,15 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
 - **Which error.** A raw control character in a string, block string or comment is `control-character`, and so is a carriage return in a `"…"` string, also one directly before a line feed; a raw line feed in a `"…"` string is `string-line-break`. A carriage return not followed by a line feed in whitespace or a comment is `lone-carriage-return`. Outside strings and comments a control or bidi character is not a token, so the error is the one for that place: `expected-value` where a value is expected, `expected-key` where a key is, `missing-comma` after a value.
   <!-- rule: strings.error.block-opening -->
   <!-- rule: strings.error.bytes-not-hex -->
-  The opening line of a block string is empty: anything but spaces and tabs after the opening `"""` on its line, a control character or a lone carriage return included, is `block-string-opening`. Inside a byte string, any character other than hex digits, spaces and tabs, a line break or a control or bidi character included, is `bytes-not-hex`.
+  The opening line of a block string is empty: anything but spaces and tabs after the opening `"""` on its line, a control character or a lone carriage return included, is `block-string-opening`, and so is the end of the input right after it. Inside a byte string, a byte's first hex digit followed by anything but a second one (a space, the closing quote or a line break included) is `bytes-odd-digits`, at that lone digit; anywhere else, any character other than hex digits, spaces and tabs, a line break or a control or bidi character included, is `bytes-not-hex`.
+  <!-- rule: strings.error.escape-at-end -->
+  A backslash at the end of the input, in a `"…"` string, is `invalid-escape` at the backslash, not `unterminated-string` (in a block string, the missing closing quotes come first: below).
+  <!-- rule: strings.error.block-order -->
+  A block string is checked in two steps, and an error of the first is reported before any error of the second:
+  1. The closing quotes are found first: the first `"""` after the opening line that isn't escaped. Text before them on their line is `block-string-closing`, at their first quote; no closing quotes is `unterminated-block-string`, at the opening `"""`.
+  2. Then the content lines, in order. For each line, its indent comes first (`block-string-indent`, at column 1 of the line), then its characters and escapes, each at its own place (§8).
+
+  So a block string whose closing `"""` is indented two spaces, with a line indented one space followed by a line with a raw control character, is `block-string-indent` at the first of the two lines; and a block string that is never closed is `unterminated-block-string` whatever its lines hold.
   <!-- rule: strings.bidi.reject -->
   <!-- rule: strings.bidi.escapes-allowed -->
 - **Bidirectional controls:** the raw characters U+202A–U+202E and U+2066–U+2069 MUST NOT appear anywhere in the input, including strings, block strings and comments. They can make source text display differently from what is parsed ("Trojan Source"). Inside strings, write them as escapes, e.g. `\u{202E}`.
@@ -212,21 +222,30 @@ Implementations MUST enforce limits while parsing and MUST let users configure t
 | absolute exponent | 6144 |
 | characters in one string (its value, after escapes and a block string's indent are processed), record key or tag, or between the quotes of a byte string | 16 Mi (16,777,216) |
 | characters in one top-level value of a stream | 64 Mi (67,108,864) |
+| values written for one value built in code (writers, canonical form, hashing; below) | 64 Mi (67,108,864) |
 
 <!-- rule: limits.characters.code-points -->
 <!-- rule: limits.number.whole-literal -->
 <!-- rule: limits.hex.both-limits -->
 **Characters** are Unicode code points throughout this specification, whatever a language uses for its strings: an emoji is one character, also where the language stores it as two UTF-16 units. A number literal's characters are all of it as written: its sign, `0x` or `0b` prefix, digit separators `_` and exponent count. A hex literal stays within both of its limits: at most 829 hex digits (its `_` not counted) and at most 1000 characters as a whole (its `_` counted).
+<!-- rule: limits.hex.derived -->
+The hex digit limit is not a setting of its own: it follows the number limit, and changes with it.
 
 <!-- rule: limits.value.counting -->
 <!-- rule: limits.value.stream-only -->
 A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: everything between the two commas counts, whitespace and comments before and after the value included, and the commas don't. A value of exactly the limit is accepted.
 <!-- rule: limits.value.after-last-comma -->
 After the last comma, the text up to the end of the stream counts too, also when it holds no value (only whitespace or comments): a stream reader can't know that no value follows, and must bound what it holds while it waits. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
+<!-- rule: limits.value.before-syntax -->
+A stream reader counts a value's characters before it parses the value, so a value that is over the limit and also has a syntax error is `value-too-long` there, while parsing the whole text reports the syntax error.
 
 <!-- rule: limits.depth.counting -->
 <!-- rule: limits.depth.values-in-code -->
 Nesting depth is counted on the text as written, since it is checked while parsing: each record, array and parenthesized payload `Tag( … )` is one level, and so is a record payload written without parentheses, `Tag { … }`. A value outside any of them, like `1`, is at depth 0. So `Some(1)`, `[1]` and `Some { a: 1 }` need depth 1, while `Some({ a: 1 })`, `Some([])` and `A(B(1))` need 2, although `Some({ a: 1 })` and `Some { a: 1 }` are the same value. Writers and checks of values built in code count a record payload as one level, the shorter spelling, which is also the one the canonical form uses (§12), and count an empty record, array or payload as a level as parsing does, so a value built in code and the same value parsed have the same depth.
+
+<!-- rule: limits.nodes.default -->
+<!-- rule: limits.nodes.counting -->
+**Values written.** A value built in code can hold the same part in several places (a value whose arrays share an element, a DAG): it is small in memory, and written out it can be exponentially larger, since each place writes the part again. So writers of values (§11), the canonical form and hashing (§12) count the values they write for one value, each as often as it is written: the value itself and every element, field value and argument inside it, at any depth. They stop at the limit with `too-many-nodes`. The limit applies to each top-level value on its own, also when a file or stream of them is written or hashed, and can be configured like the others. A parsed value has fewer values than its text has characters, so every value a stream reader accepts with the default limits (64 Mi characters) is within it.
 
 <!-- rule: limits.depth.binding-maximum -->
 <!-- rule: limits.depth.reject-unsupported -->
@@ -252,6 +271,23 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
 
 <!-- rule: positions.error.in-strings -->
 An error inside a string is at the character that is wrong, in a block string too: a control or bidi character, or a bad escape, at that character; a content line indented less than the closing `"""` at the start of that line; text before the closing `"""` on its line at the closing `"""`. Only an error about the string as a whole is at its opening quotes: one that isn't closed, or is longer than the string limit (§7).
+
+<!-- rule: positions.error.normative -->
+<!-- rule: positions.error.catalogue -->
+**Where each error is.** The place of an error is part of the specification, as its code is: for the same input, every implementation reports the same line and column. The catalogue ([`errors.md`](errors.md), §17) gives the place of each code in its column "Reported at". In short:
+
+- An error about a character or token is at its first character: a control or bidi character, a lone carriage return, a stray `/`, a character that can't be in a byte string, a word such as `null`, a key or tag, an empty payload's `(`, a closing bracket that doesn't fit, a payload on a later line at its `(` or `{`. An escape is at its backslash. Every number error (`invalid-number`, `number-too-long`, `exponent-too-large`) is at the literal's first character, a sign or a leading `.` included.
+- An error about something that isn't closed is at its opening: `unclosed-bracket` at the bracket, `unterminated-string`, `unterminated-bytes` and `unterminated-block-string` at the opening quote, `unterminated-comment` at the outermost `/*`.
+- An error about something missing is at what stands in its place: `missing-comma`, `missing-colon`, `expected-value` and `expected-key` at the next token, or at the end of the input. `bytes-odd-digits` is at the lone hex digit.
+- `nesting-too-deep` is at the opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. The length limits are at the start of the string, key or tag (above).
+- `duplicate-key` is at the second key, as soon as the key is read, before its colon and its value: `{ a: 1, a: "\q" }` is `duplicate-key`, not `invalid-escape`. JSON is read the same way (§16).
+- `not-one-value` is at the end of the input.
+- In a stream reader, `value-too-long` is at the start of the value's text (the character after the previous top-level comma, or the start of the stream), and `stream-truncated` at the end of the stream.
+- An error in JSON text (§16) is at `$`, with the line and column of its place in the text, found as in haus text: a duplicate member name at the second name, a number at its first character, an unterminated string at its opening quote, an escape at its backslash, a syntax error at the token found or at the end of the text.
+- A schema file's errors (§14, §13.3) are at what they are about: a name, parameter, field, tag or attribute (a second one at the second), a definition as a whole at its `type`, a module at its `import`. These places are informative for now, and so is the catalogue's column for them: they come from one checker, and become normative once the fuzzer has compared them across bindings. Warnings about schema files (§14) are not affected: the conformance suite pins their places.
+
+<!-- rule: positions.error.one-of-several -->
+When an input has several mistakes, which is reported is not fixed (§17), except where this specification says which comes first: invalid UTF-8 (§4), a block string's (§4) and a duplicate key (above).
 
 ## 9. Security considerations
 
@@ -282,7 +318,7 @@ An error inside a string is at the character that is wrong, in a block string to
      <!-- rule: security.decode.work-budget -->
    - limit the total work of one decode to a constant times the number of values in the input (a *work budget*; TypeScript uses 16 steps per value). The budget ends any schema mistake, such as a combinator that decodes a value twice, before it can grow with the input;
      <!-- rule: security.encode.cycles-and-work -->
-   - when encoding, detect values that contain themselves, and limit the total work, since objects shared many times (a DAG) expand when written out;
+   - when encoding, detect values that contain themselves, and limit the total work, since objects shared many times (a DAG) expand when written out (the node limit of §7);
      <!-- rule: security.encode.unknown-limits -->
    - check a raw value kept for an unknown variant (item 5) with the same limits before writing it again;
      <!-- rule: security.errors.constant-time -->
@@ -416,13 +452,15 @@ For people.
   <!-- rule: format.pretty.stream.trailing-comments -->
   <!-- rule: format.pretty.stream.multiline-by-value -->
 - **Streams:** a file with more than one top-level item puts a comma after every item, with a blank line after each multi-line item that another item follows (an item is multi-line when its value is written over more than one line; comments after it don't make it so). A single item is written without a comma. Comments after the last item follow it directly, unless the source has a blank line there.
+  <!-- rule: format.pretty.stream.blank-placement -->
+  The blank line after a multi-line item comes after the comments that stay on the item's line and before the comments above the next item; one the source has there is not doubled. Only comments after the last item, or nothing, following a multi-line item get no blank line from this rule.
 - **Comments** are kept (they are part of the layout, not of the data model):
   <!-- rule: format.comments.own-line -->
   - A comment on its own line stays above the entry that follows it.
     <!-- rule: format.comments.after-entry -->
-  - A comment after an entry on the same line stays after that entry's comma.
+  - A comment after an entry on the same line stays after that entry's comma. Of the comments between an entry and the next one (or the closing bracket), those before the first line break stay there, wherever the comma is (`1 /* a */, // b` keeps both); the others go on their own lines, above the next entry or at the end of the container.
     <!-- rule: format.comments.after-multiline-comment -->
-  - Once such a comment spans lines (a block comment with a line break), the comments that follow it lead the next entry instead.
+  - Once such a comment spans lines (a block comment with a line break), the comments that follow it lead the next entry instead: a comment with a line break in it counts as one comment before the first line break.
     <!-- rule: format.comments.before-closer -->
   - Comments before a closing bracket stay at the end of the container.
     <!-- rule: format.comments.after-opener -->
@@ -432,13 +470,25 @@ For people.
     <!-- rule: format.comments.moved-blank-line -->
   - When comments move above an entry (from between its key and value, or out of `Tag( … )`, below), a blank line the entry had above it goes before the moved comments.
     <!-- rule: format.comments.paren-record -->
-  - `Tag({ … })` is written `Tag { … }`: comments inside its parentheses but outside the braces move inside the braces. A comment after the closing `)` on the same line stays after the last entry when the `}` was on that entry's line, and otherwise goes at the end of the container.
+  - `Tag({ … })` is written `Tag { … }`: comments inside its parentheses but outside the braces move inside the braces, as the record's own (between `(` and `{` as after the opening bracket, between `}` and `)` as before the closing one). A comment after the closing `}`, before the `)`, on the `}`'s line stays after the last entry when the `}` was on that entry's line, and otherwise goes at the end of the container. A comment after the `)` belongs to the entry that holds `Tag( … )`, as after any other value.
     <!-- rule: format.comments.width-excluded -->
   - A comment after an entry's comma doesn't count toward the line width (above).
     <!-- rule: format.comments.payload-never-fits -->
-  - A positional payload that holds a comment or a multi-line string never fits on one line.
+  - A positional payload that holds a comment or a multi-line string never fits on one line. Blank lines inside it don't count: `N(7,⏎⏎1)` is written `N(7, 1)` when it fits.
+    <!-- rule: format.comments.verbatim -->
+  - A comment's text is written as in the source, apart from CR LF (below). The lines of a block comment that spans lines are not indented again when the comment moves to another level.
   <!-- rule: format.pretty.blank-lines -->
 - **Blank lines** between entries (and between comments and entries) are kept, at most one. Blank lines right after an opening bracket or right before a closing one are dropped.
+  <!-- rule: format.pretty.blank-line-definition -->
+  - A blank line is two line breaks with only spaces and tabs between them. Between two entries it counts wherever it is, before or after the comma (`[1⏎⏎,2]` keeps one); a comma on a line of its own between two line breaks makes none (`[1⏎,⏎2]` keeps none).
+    <!-- rule: format.pretty.blank-lines-follow-source -->
+  - A comment on its own line, and an entry, follow a blank line exactly when the source has one right before them (since the previous comment or entry), never as the first line of a container or of the file. Comments that move to the end of a container keep a blank line the source has before them: `S({ a: 1⏎⏎} /* c */)` is written with a blank line between `a: 1,` and `/* c */`.
+    <!-- rule: format.pretty.blank-lines-moved -->
+  - An entry with comments moved above it has no blank line of its own: one it had above it, or one between its key and the first moved comment, goes before the moved comments (not as the first line of a container).
+    <!-- rule: format.pretty.blank-lines-inside-entry -->
+  - Other blank lines inside an entry, between its key, its colon and its value, are dropped.
+    <!-- rule: format.pretty.blank-lines-file-ends -->
+  - Blank lines at the start and the end of the file are dropped, as at the start and end of a container.
   <!-- rule: format.pretty.line-endings -->
 - **Line endings:** LF everywhere, inside comments too (a CR LF in a comment is written as LF; block strings already join their lines with LF), and a file with anything in it ends with a line break (empty files above).
 
@@ -479,19 +529,23 @@ Person{name:"Jane Smith",age:28,type:Designer},
 - **Literals stay as written:** digit separators (`1_000`), the case of hex digits, and the blanks inside a byte string (`x"9f86 d081"`) are spelling, not whitespace between tokens. When serializing values with no source text, they are written as in pretty.
   <!-- rule: format.minimised.comments-dropped -->
   <!-- rule: format.minimised.pretty-round-trip -->
-- **Comments are dropped,** as in compact. Key order and number spellings are kept, so formatting a minimised file as pretty gives back the pretty file without its comments and blank lines.
+- **Comments are dropped,** as in compact. Key order and number spellings are kept, so formatting a minimised file as pretty gives what formatting its source as pretty with the comments dropped gives, apart from blank lines. (Dropping the comments from the pretty file isn't the same: a comment can make a payload break over lines, or keep an empty container open.)
   <!-- rule: format.minimised.encoder-may -->
 - Encoders MAY offer minimised for the wire and storage; compact stays their default.
 
 <!-- rule: format.values.built-in-code -->
-**Values built in code.** A value built in code, not parsed, is checked when it is built: a binding's constructors build only haus values (§1) and reject anything else with the code of the mistake:
+**Values built in code.** A value built in code, not parsed, is checked when it is built: a binding's constructors build only haus values (§1) and reject anything else with the code of the mistake. A constructor checks only that a value is valid, never a limit (§7): limits belong to the writer, and two writers may be configured with different ones.
 
 - a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`;
-- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A constructor MAY also apply the parser's number limits (§7: `number-too-long`, `exponent-too-large`); a writer checks them in any case (above);
+- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A number longer than the number limit is still a number: the writer rejects it (above);
 - a record with a key twice: `duplicate-key`;
 - a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
 
-Values built so can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons. A writer still fails for a value outside its limits (§7), with the limit's code (`nesting-too-deep`, `number-too-long`, `exponent-too-large`, `string-too-long`, `key-too-long`, `tag-too-long`); the canonical form has no limits. A binding whose host language lets code forge a value past its constructors (a cast in TypeScript, a reflective write) MAY check again in its writers, with the same codes, and `cyclic-value` for a value that contains itself; a forged value is not a haus value, and what a binding does with it is otherwise undefined.
+Values built so can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons.
+
+<!-- rule: format.values.writer-limits -->
+<!-- rule: format.values.node-limit -->
+A writer checks every limit of §7 that a value can break, whoever built the value: the nesting depth (counted as for values built in code), the length of each string, key and tag, the number and exponent limits (above), and the node limit, which ends a value whose parts share each other and would expand without bound when written. It fails with the limit's code: `nesting-too-deep`, `string-too-long`, `key-too-long`, `tag-too-long`, `number-too-long`, `exponent-too-large`, `too-many-nodes`. The canonical form and hashing apply only the node limit (§12): every other value has a canonical form. A binding whose host language lets code forge a value past its constructors (a cast in TypeScript, a reflective write) MAY check again in its writers, with the same codes, and `cyclic-value` for a value that contains itself; a forged value is not a haus value, and what a binding does with it is otherwise undefined.
 
 <!-- rule: format.comments.refuse-pretty -->
 <!-- rule: format.comments.refuse-in-place -->
@@ -512,7 +566,9 @@ Bindings SHOULD provide `canonical(value)`, `equals(a, b)`,
 exactly, so that every binding gives the same bytes and the same hash.
 
 <!-- rule: canonical.api.values-only -->
-They are defined for haus values only, and every value a binding's constructors build is one: what isn't (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate) is rejected when it is built (§11, "Values built in code"). So `canonical`, `equals`, `hash`, `hashAll` and `compare` can't fail for it, and a number built from another spelling (`Number("1E+05")`) is already normalized. A binding that checks forged values again (§11) fails for one with the error a writer gives for it, and never writes or hashes it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
+They are defined for haus values only, and every value a binding's constructors build is one: what isn't (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate) is rejected when it is built (§11, "Values built in code"). So `canonical`, `equals`, `hash`, `hashAll` and `compare` can't fail for it, and a number built from another spelling (`Number("1E+05")`) is already normalized.
+<!-- rule: canonical.api.node-limit -->
+They have one limit, the node limit (§7): `canonical`, `hash` and `hashAll` fail with `too-many-nodes` for a value whose parts share each other so much that its canonical form would hold more values than the limit, and so do `equals` and `compare` where they compare canonical forms. A binding whose values can't share their parts (each part owned by one value, as in Rust) can't reach this limit, and need not check it there: its `canonical`, `hash`, `hashAll`, `equals` and `compare` can't fail. No other limit applies to them: a value deeper or longer than a writer's limits still has a canonical form. A binding that checks forged values again (§11) fails for one with the error a writer gives for it, and never writes or hashes it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
 
 <!-- rule: canonical.form.text -->
 The canonical form of a value is UTF-8 without a byte order mark, with no
@@ -671,7 +727,7 @@ Where an implementation looks for packages is part of the security model (§9.2)
 <!-- rule: packages.explicit.folder-children -->
 <!-- rule: packages.explicit.directory-wins -->
 <!-- rule: packages.explicit.folder-no-override -->
-- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. A subdirectory of such a folder whose manifest can't be read or breaks the rules (below) is skipped, not rejected, and named when an import isn't found; a package given by its directory with such a manifest is rejected. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
+- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. A subdirectory of such a folder whose manifest can't be read or breaks the rules (below) is skipped, not rejected, and named when an import isn't found, by the folder's last name and its own (`schemas/broken`), however the folder was given; a package given by its directory with such a manifest is rejected. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
   <!-- rule: packages.lookup.build-dependencies -->
 - the dependencies of the build, as its package manager installed them: `node_modules` (below), the crate's dependencies (Cargo);
 
@@ -696,6 +752,8 @@ and never in global or environment-wide locations (npm's global folder, `NODE_PA
 
 <!-- rule: packages.version.check-manager -->
 **Package versions** (`package-version`): implementations SHOULD check that a package's manifest `version` equals the version the package manager gives it, where it gives one (the `version` of npm's `package.json`, Cargo's package version). The check catches publishing mistakes and doesn't change what a schema means.
+<!-- rule: packages.version.explicit-too -->
+This holds for packages given explicitly too: an implementation that finds a version next to the manifest (the `version` of a `package.json` beside the `package.haus`, Cargo's package version) checks it, and reports `package-version` when it differs.
 
 <!-- rule: packages.files.regular-not-links -->
 <!-- rule: packages.files.no-follow -->
@@ -825,6 +883,8 @@ Codecs are part of the application, not of the schema. Two applications reading 
 <!-- rule: schema.lexical.as-data -->
 <!-- rule: schema.keys.escapes -->
 A schema file (`.schema.haus`, grammar in [`grammar.ebnf`](grammar.ebnf)) is a list of imports (§13) and type definitions. It has the same comments, whitespace and quoted strings as data files (§4 and the grammar), with the same rules and error codes: a lone carriage return, a raw control or bidi character in a comment, invalid UTF-8, an unterminated string or comment, and a bad escape in a quoted field key are reported as in data (`lone-carriage-return`, `control-character`, `bidi-control`, `invalid-utf8`, `unterminated-string`, `unterminated-comment`, `invalid-escape`), and a quoted field key takes every escape a data string does.
+<!-- rule: schema.lexical.no-directive -->
+The version directive of §10 is a rule of data files: a schema file starting with `#haus` is `schema-syntax`, as one starting with any other `#` is.
 
 <!-- rule: schema.types.max-nesting -->
 Type expressions nest at most 128 levels deep, a fixed limit: each parenthesized type, record `{ … }` and variant `< … >` is one level, and deeper nesting is `type-too-deep`.
@@ -837,6 +897,8 @@ Type expressions nest at most 128 levels deep, a fixed limit: each parenthesized
 <!-- rule: schema.check.closed-errors -->
 <!-- rule: schema.check.open-hints -->
 Tools that check a file against its schema (editors, `haus check`) MUST report what a closed type forbids as an error, and SHOULD mark fields and tags an open type doesn't list as a hint ("not in the schema"), without failing the check.
+<!-- rule: schema.check.no-hints-in-secret -->
+Inside a `Secret` (§15) they report no hints: no `unlisted-field`, `unlisted-tag` or `deprecated` at a place inside the secret, as an error inside one is reported at the secret itself. A path into a secret could reveal it.
 
 <!-- rule: schema.spread.copies -->
 **Spreads.** `...Name` copies the tags of the named variant into a variant, or the fields of the named record into a record, at the place where it is written. Whether the result is open or closed is decided by its own `closed` alone, never by the type it copies from:
@@ -853,6 +915,8 @@ type Person = closed { ...Base, name: String }
 <!-- rule: schema.spread.named-only -->
 <!-- rule: schema.spread.row-parameter -->
 Only a named type without parameters can be spread; to reuse a structure with a part left open, use a type parameter (`type Envelope e = { id: String, event: e }`). There are no row parameters: `...r` is reserved and MUST be rejected.
+<!-- rule: schema.spread.through-names -->
+The name may stand for its record or variant through other names: an alias (`type C = B`) or an instance of a generic type (`type C = Page Int`, with `type Page a = { items: Array a }`) is spread as what it stands for, and the copied fields are read with the instance's arguments (`items: Array Int`). The prelude's types can't be spread, not even `Bool`, although the prelude writes it as a variant: `< ...Bool >` is `invalid-spread`.
 
 <!-- rule: schema.attributes.syntax -->
 **Attributes.** An attribute gives tools information about a type, field or tag. It is written before it:
@@ -881,6 +945,9 @@ An attribute is added to this list only if it passes three tests: it doesn't cha
 <!-- rule: schema.attributes.none-of-own -->
 Tools MUST accept an attribute this version doesn't define, MUST NOT give it a meaning, and SHOULD warn about it, so that a schema using an attribute of a later version still works with older tools. Implementations MUST NOT define attributes of their own.
 
+<!-- rule: schema.warnings.places -->
+A warning about a schema file is at what it is about (§8): an unknown attribute at its `@`, a use of a deprecated type at the type's name (after `...` for a spread), a case without a schema-based JSON form (`no-json-form`, §16.3) at its tag. A case copied by a spread is warned about once, where it is defined.
+
 Implementations MUST reject:
 
 <!-- rule: schema.reject.unknown-type -->
@@ -895,15 +962,15 @@ Implementations MUST reject:
   <!-- rule: schema.reject.duplicate-via-spread -->
 - duplicate fields in a record and duplicate tags in a variant, also those copied in by a spread;
   <!-- rule: schema.reject.closed-empty-variant -->
-- `closed < >`;
+- `closed < >`, as written: a closed variant that holds only spreads is accepted even when they copy no tag (`closed < ...E >` with `type E = < >`), and accepts no tag;
   <!-- rule: schema.reject.invalid-spread -->
 - a spread of something other than a named variant (in a variant) or a named record (in a record), of a type with parameters, or of a `Stream`;
   <!-- rule: schema.reject.spread-cycle -->
-- a type that spreads itself, directly or through other types, however deep the spreads are written (`type A = < ...B >`, `type B = < ...A >`; `type P = { x: { ...R } }`, `type R = { y: { ...P } }`);
+- a type that spreads itself, directly or through other types, however deep the spreads are written (`type A = < ...B >`, `type B = < ...A >`; `type P = { x: { ...R } }`, `type R = { y: { ...P } }`). The names a spread goes through count too: with `type S = Q`, `type Q = { x: < Y { ...S } > }` spreads itself;
 - `...r`: row parameters are not part of the language;
   <!-- rule: schema.reject.attribute-arguments -->
   <!-- rule: schema.reject.attribute-twice -->
-- an attribute this version defines with arguments it doesn't take (`@deprecated(1)`), or twice on one type, field or tag (attributes it doesn't define are accepted as they are when they follow the grammar, §14 above: `@foo()`, with no value in the parentheses, is `attribute-arguments`);
+- an attribute this version defines with arguments it doesn't take (`@deprecated(1)`), or twice on one type, field or tag (attributes it doesn't define are accepted as they are when they follow the grammar, §14 above, also twice, each with its own warning: `@since @since x: Int` loads; `@foo()`, with no value in the parentheses, is `attribute-arguments`);
   <!-- rule: schema.reject.unguarded-recursion -->
 - recursion that doesn't pass through a record field, array element or variant payload (`type A = B`, `type B = A`), §9.9, in every type defined, used or not (`type Q a = Q a`). `Secret a` is not a step of its own: `type A = Secret A` is unguarded;
   <!-- rule: schema.reject.growing-recursion -->
@@ -984,7 +1051,7 @@ A value outside an integer type's range is an error, never wrapped or clamped. F
 | `Map v` | a record with any keys, whose values `v` all accept. As for records (§2), the order of its entries carries no meaning. |
 | `Any` | any value, kept exactly as parsed: the binding's value tree (§9.5 applies, as for unknown values). Encoding writes it back unchanged, after checking it is a value within the limits (§9.8). |
 | `Secret a` | exactly what `a` accepts, decoded as `a` decodes it, in a host type that hides it (below) |
-| `Date`, `Time`, … (std/time) | the type's own tag with exactly one string argument that the [std/time profile](std/time.md) accepts: `Date("2026-11-13")`. `Instant("2026-11-13T10:00:00Z")` is not a `Date`. |
+| `Date`, `Time`, … (std/time) | the type's own tag with exactly one string argument that the [std/time profile](std/time.md) accepts: `Date("2026-11-13")`. `Instant("2026-11-13T10:00:00Z")` is not a `Date`. These types are built in: any other value is `type-mismatch` at the value (`Date(1)` and `Instant("…")` for a `Date` at `$`, not `unknown-tag` or `wrong-payload` as the module's schema text would say), and a string the profile rejects is `invalid-time` at the string (`$[0]`). |
 
 **Records.** `{ … }` accepts a record in which:
 
@@ -1008,7 +1075,7 @@ A value outside an integer type's range is an error, never wrapped or clamped. F
 | `Tag T1 … Tn` | exactly n arguments, the i-th accepted by `Ti`. With `type Order = { … }`, the case `Ok Order` accepts `Ok { … }`. |
 
 <!-- rule: decode.variant.record-case-identity -->
-A case with one argument whose type is a record is a **record case**, however the record is written: `Circle { r: Float64 }`, `Circle ({ r: Float64 })`, and `Circle Disc` with `type Disc = { r: Float64 }` (or a name applied to arguments that gives a record, `Found (Page Int)`) are the same case, so naming a record type changes nothing. A type parameter is not a record, even where the argument given for it is one: in `type Result e a = < Err e | Ok a >`, `Ok a` is never a record case. Nor is `Secret R`, `Maybe R` or any other type around a record: `Box S` with `type S = Secret { … }` has one positional argument.
+A case with one argument whose type is a record is a **record case**, however the record is written: `Circle { r: Float64 }`, `Circle ({ r: Float64 })`, and `Circle Disc` with `type Disc = { r: Float64 }` (or a name applied to arguments that gives a record, `Found (Page Int)`) are the same case, so naming a record type changes nothing. A type parameter is not a record, even where the argument given for it is one: in `type Result e a = < Err e | Ok a >`, `Ok a` is never a record case. Nor is `Secret R`, `Maybe R`, `Map v` (which accepts a record) or any other type around a record: `Box S` with `type S = Secret { … }` and `Box (Map Int)` have one positional argument, so `Box { a: "x" }` fails at `$[0].a` for the second.
 
 <!-- rule: decode.variant.wrong-payload -->
 <!-- rule: decode.variant.unlisted-tag -->
@@ -1107,6 +1174,9 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 <!-- rule: json.read.self-describing-controls -->
 <!-- rule: json.read.raw-controls-accepted -->
 **JSON that is read.** Readers read JSON (RFC 8259) restricted to I-JSON (RFC 7493): UTF-8, no duplicate member names (`duplicate-key`), no unpaired surrogates in `\u` escapes. A leading byte order mark is ignored, as in haus. Numbers keep their exact text: a reader MUST NOT round them through a binary float, except where schema-based JSON says a float. JSON is compared as data: member order and whitespace don't matter. The self-describing reader also rejects raw DEL, C1 and bidi controls (§4) in strings and member names (`control-character`, `bidi-control`), as only haus tools write that form and they escape them. The schema-based reader and the import accept them raw, as other software writes them so (`JSON.stringify` does).
+<!-- rule: json.read.text-errors -->
+<!-- rule: json.read.duplicate-at-name -->
+Errors in the JSON text itself have the codes of haus text where the mistake is the same: a string that isn't closed is `unterminated-string`, and a backslash before the end of the text or before a character that starts no escape is `invalid-escape`. A duplicate member name is reported as soon as the name is read, before its value (`{"a": "", "a": 1e99999}` is `duplicate-key`, not `exponent-too-large`), as a duplicate key is in haus text (§8). These errors are at `$`, with the line and column of their place in the text (§8).
 
 <!-- rule: json.write.escapes -->
 <!-- rule: json.read.raw-separators -->
@@ -1116,7 +1186,7 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 <!-- rule: json.limits.number-tokens -->
 <!-- rule: json.limits.lengths-on-value -->
 <!-- rule: json.limits.nesting -->
-**Limits.** The limits of §7 apply to the haus value that results (with a type: the value the decoded result encodes to), and the number limits (characters in a number literal, and the absolute exponent) also to JSON number tokens as written, as to haus number literals: `1e-7000` is `exponent-too-large` whatever the type, as it is in haus text. Lengths are counted on that value, not on the JSON text: a string's characters after its escapes are read (`"\u00e9"` is one character), a key or tag as a haus key or tag (a member name too long for a key is `key-too-long`, a `_tag` or a closed enum's string too long for a tag `tag-too-long`), and bytes as two characters per byte, as in the hex of a haus byte string, whether the JSON spells them in hex (`_bytes`) or base64. A member that an open record ignores is not part of that value, so its name and content are not counted (its number tokens still are, as written). A form can need several JSON levels for one haus level (`Tag { … }` is `{"_tag": …, "_args": [{"_rec": {…}}]}`), so the JSON nesting is limited to 4·d + 1, where d is the depth limit of §7, plus 1 for the envelope of self-describing JSON, and the depth of the resulting haus value is then checked against d, counted as §7 counts values built in code (`Tag { … }` is one level). The import's JSON nesting is limited to d.
+**Limits.** The limits of §7 apply to the haus value that results (with a type: the value the decoded result encodes to), and the number limits (characters in a number literal, and the absolute exponent) also to JSON number tokens as written, as to haus number literals: `1e-7000` is `exponent-too-large` whatever the type, as it is in haus text. They apply too to a number in a string that a type reads as one (`Int`, `Int64`, `UInt64`, `Decimal`): `"1e-7000"` for a `Decimal` is `exponent-too-large`. Lengths are counted on that value, not on the JSON text: a string's characters after its escapes are read (`"\u00e9"` is one character), a key or tag as a haus key or tag (a member name too long for a key is `key-too-long`, a `_tag` or a closed enum's string too long for a tag `tag-too-long`), and bytes as two characters per byte, as in the hex of a haus byte string, whether the JSON spells them in hex (`_bytes`) or base64. A member that an open record ignores is not part of that value, so its name and content are not counted (its number tokens still are, as written). A form can need several JSON levels for one haus level (`Tag { … }` is `{"_tag": …, "_args": [{"_rec": {…}}]}`), so the JSON nesting is limited to 4·d + 1, where d is the depth limit of §7, plus 1 for the envelope of self-describing JSON, and the depth of the resulting haus value is then checked against d, counted as §7 counts values built in code (`Tag { … }` is one level). The import's JSON nesting is limited to d.
 
 <!-- rule: json.lines.format -->
 <!-- rule: json.lines.reader-tolerance -->
@@ -1186,14 +1256,16 @@ With a schema type, the decoded value (§15) is written as:
 | `Array a` | an array |
 | `Map v`, records | an object; a missing optional field is a missing member |
 | `Maybe a` (the prelude's; a schema's own `closed < None \| Some a >` is a variant like any other) | `null` for `None` and the value for `Some(x)`, when `a`'s JSON can't be `null`; otherwise `{"_tag": "None"}` and `{"_tag": "Some", "value": x}` |
-| a closed variant whose tags have no payload (other than `Bool`) | a string: the tag (`"Debug"`) |
+| a closed variant whose tags have no payload (other than `Bool`), also one that lists no tags | a string: the tag (`"Debug"`) |
 | other variants (`Result` too) | an object with the tag as `"_tag"`: `{"_tag": "Empty"}`; for a record case (§15: one argument whose type is a record, written inline or by name), the record's fields beside it (`{"_tag": "Circle", "r": 1.5}`, also for `Circle Disc` with `type Disc = { r: Float64 }`); one other argument as `"value"`, also where a type parameter stands for a record (`Ok a` of `Result`); several as `"values"`, an array. The schema's case decides, not the value. |
 | an unknown value (§15) | `{"_tag": "<Tag>"}`, with `"_args"`, the arguments' self-describing values (16.2), if it has any |
 
 <!-- rule: json.schema.maybe-null-rule -->
 <!-- rule: json.schema.no-form -->
 <!-- rule: json.schema.no-form-warn -->
-A type's JSON can be `null` only if it is a `Maybe` that uses `null`, directly or through a named type or `Secret`. A `Maybe` that reaches itself only through `Maybe`, `Secret` and names (`type T = Maybe T`) always uses the tagged form, so the answer never depends on where one starts. A `Maybe` is identified by where it is written, not by its shape: with `type D = Maybe T`, `D` doesn't reach itself, `T`'s JSON can't be `null`, so `D` uses `null`. So `Maybe (Maybe Int32)` writes `None`, `Some(None)` and `Some(Some(5))` as `{"_tag": "None"}`, `{"_tag": "Some", "value": null}` and `{"_tag": "Some", "value": 5}`. The type decides the form, never the value. A record payload with a field named `_tag` or `_args` has no schema-based form. The schema is still valid, and so are its other cases: converters report the error only when writing or reading a value of that case. Tools that check schema files SHOULD warn about such a case already (`no-json-form`), without failing the check, so that it is found while the schema is written.
+A type's JSON can be `null` only if it is a `Maybe` that uses `null`, directly or through a named type or `Secret`. A `Maybe` that reaches itself only through `Maybe`, `Secret` and names (`type T = Maybe T`) always uses the tagged form, so the answer never depends on where one starts. A `Maybe` is identified by where it is written, not by its shape: with `type D = Maybe T`, `D` doesn't reach itself, `T`'s JSON can't be `null`, so `D` uses `null`.
+<!-- rule: json.schema.maybe-per-instance -->
+A `Maybe` written in a generic definition is decided for each instance, with its arguments: with `type Opt a = Maybe a`, `Opt Int32` uses `null`, and `Opt (Maybe Int32)` uses the tagged form, since its argument's JSON can be `null`. So `Maybe (Maybe Int32)` writes `None`, `Some(None)` and `Some(Some(5))` as `{"_tag": "None"}`, `{"_tag": "Some", "value": null}` and `{"_tag": "Some", "value": 5}`. The type decides the form, never the value. A record payload with a field named `_tag` or `_args` has no schema-based form. The schema is still valid, and so are its other cases: converters report the error only when writing or reading a value of that case. Tools that check schema files SHOULD warn about such a case already (`no-json-form`), without failing the check, so that it is found while the schema is written.
 
 <!-- rule: json.schema.read-rules -->
 <!-- rule: json.schema.read-unknown-tag -->
@@ -1238,7 +1310,7 @@ The catalogue is [`errors.md`](errors.md), generated from its machine-readable s
   <!-- rule: errors.code.one-mistake -->
 - A code names one mistake that its user can fix, not one message: a missing comma between two values is `missing-comma`, and a payload on the line after its tag is `payload-newline`, although both are found as "no comma where one is needed".
   <!-- rule: errors.code.same-everywhere -->
-- Which error is reported when an input has several is not fixed. For an input with one mistake, every implementation reports the same code; the conformance suite checks this (test-suite/README.md).
+- Which error is reported when an input has several is not fixed, except where this specification fixes it: invalid UTF-8 is reported before anything in the text it is found in (§4); a block string's errors come in a fixed order (§4); and a duplicate key is reported at its name, before its value, in haus text and in JSON (§8, §16). For an input with one mistake, every implementation reports the same code, at the same place (§8); the conformance suite checks this (test-suite/README.md).
 
 <!-- rule: errors.json.object -->
 **JSON form.** An implementation that reports errors to programs, as a library or a command-line tool, SHOULD offer each error as a JSON object:

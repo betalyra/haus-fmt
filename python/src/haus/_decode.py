@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import re
 import struct
+import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from decimal import Decimal
 from typing import Any, Final, Never, Protocol, TypeVar, cast
@@ -78,7 +79,6 @@ V = TypeVar("V")
 
 STEPS_PER_VALUE: Final = 16
 DEFAULT_ENCODE_STEPS: Final = 16 * 1024 * 1024
-_MAX_VALUES: Final = 64 * 1024 * 1024
 
 
 class Codec(Protocol):
@@ -98,7 +98,7 @@ class Codec(Protocol):
 
 
 class _Context:
-    __slots__ = ("ancestors", "decoding", "json", "limits", "max_steps", "steps")
+    __slots__ = ("ancestors", "decoding", "json", "limits", "max_steps", "nodes", "steps")
 
     def __init__(self, *, decoding: bool, limits: Limits, max_steps: int, json: bool = False) -> None:
         self.decoding = decoding
@@ -107,6 +107,8 @@ class _Context:
         self.limits = limits
         self.max_steps = max_steps
         self.steps = 0
+        self.nodes = 0
+        """Encoding: the values of `Value`s written again so far (an `Any`), for the node limit (spec §7)."""
         self.ancestors: set[int] = set()
         """Encoding: the ids of the containers on the current path, to detect values that contain themselves."""
 
@@ -157,6 +159,21 @@ class _At:
             self.fail(
                 f"{mode} budget of {ctx.max_steps} steps exceeded (a schema doing more work than the input)",
                 code="step-budget",
+            )
+
+    def written(self) -> None:
+        """Encoding: one more value of a `Value` written again, at most `max_nodes` for the top-level value
+        (spec §7), each place a shared part is in counted. Above it, `too-many-nodes` at the top-level value."""
+        ctx = self.ctx
+        ctx.nodes += 1
+        if ctx.nodes > ctx.limits.max_nodes:
+            top = self
+            while top.parent is not None:
+                top = top.parent
+            raise HausEncodeError(
+                f"more than {ctx.limits.max_nodes} values to write (parts that share each other are written each time)",
+                () if top.key is None else (top.key,),
+                "too-many-nodes",
             )
 
     def path(self) -> tuple[PathKey, ...]:
@@ -357,6 +374,7 @@ def checked_value(raw: object, at: _At) -> Value:
     and it comes back as it is: the same object.
     """
     at.step()
+    at.written()
     match raw:
         case Number(text):
             if (issue := number_limit_issue(text, at.ctx.limits)) is not None:
@@ -376,8 +394,9 @@ def checked_value(raw: object, at: _At) -> Value:
             _checked_fields(fields, at)
             return raw
         case Variant(tag, (Record(fields),)):
-            # `Tag { … }` is one level, as in the parser.
+            # `Tag { … }` is one level, as in the parser; the record is one value written.
             _tag_within(tag, at)
+            at.written()
             _checked_fields(fields, at)
             return raw
         case Variant(tag, args):
@@ -1698,16 +1717,17 @@ def _is_container(v: Value) -> bool:
     return isinstance(v, Array | Record) or (isinstance(v, Variant) and bool(v.args))
 
 
-def _count_values(root: Value, max_depth: int, at: _At) -> int:
-    """The values in a tree, level by level, failing beyond `max_depth` (a Value built in code may be
-    deeper than parsed ones)."""
+def _count_values(root: Value, limits: Limits, at: _At) -> int:
+    """The values in a tree, level by level, each place a shared part is in counted: failing beyond
+    `max_depth` (a Value built in code may be deeper than parsed ones) and `max_nodes` (spec §7)."""
+    max_depth, max_nodes = limits.max_depth, limits.max_nodes
     count = 0
     level: list[Value] = [root]
     depth = 0
     while level:
         count += len(level)
-        if count > _MAX_VALUES:
-            at.fail(f"value has more than {_MAX_VALUES} nodes", code="too-many-nodes")
+        if count > max_nodes:
+            at.fail(f"value has more than {max_nodes} nodes", code="too-many-nodes")
         # A container here is one level more (empty or not), as the parser counts it.
         if depth >= max_depth and any(_is_container(v) for v in level):
             at.fail(f"value nested deeper than {max_depth} levels", code="nesting-too-deep")
@@ -1740,10 +1760,8 @@ def _too_deep(at: _At) -> Never:
 
 def decode(node: _Node, value: Value, limits: Limits, max_steps: int | None, key: PathKey | None = None) -> object:
     make_room(limits.max_depth)
-    probe = _At(_Context(decoding=True, limits=limits, max_steps=_MAX_VALUES), None, key, 0)
-    steps = (
-        max_steps if max_steps is not None else STEPS_PER_VALUE * _count_values(value, limits.max_depth, probe) + 1024
-    )
+    probe = _At(_Context(decoding=True, limits=limits, max_steps=limits.max_nodes), None, key, 0)
+    steps = max_steps if max_steps is not None else STEPS_PER_VALUE * _count_values(value, limits, probe) + 1024
     at = _At(_Context(decoding=True, limits=limits, max_steps=steps), None, key, 0)
     try:
         return node.decode(value, at)
@@ -1806,6 +1824,7 @@ def to_schema_json(node: _Node, x: object, limits: Limits, max_steps: int | None
 def checked(value: object, limits: Limits, key: PathKey | None = None, *, json: bool = False) -> Value:
     """A `Value`, checked to be within `limits` (as `Any` encodes it); anything else is `cannot-encode`.
 
-    With `json`, for its self-describing JSON: what has no JSON form is `no-json-form`.
+    With `json`, for its self-describing JSON: what has no JSON form is `no-json-form`. The work is
+    bounded by the node limit (`too-many-nodes`), not by a step budget: one step per value written.
     """
-    return encode(_BUILTINS["Any"], value, limits, None, key, json=json)
+    return encode(_BUILTINS["Any"], value, limits, sys.maxsize, key, json=json)

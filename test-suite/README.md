@@ -119,7 +119,12 @@ their own), so that the index comes from the binding.
 `positions/cases.haus` checks the line and column of errors (spec §8). Each
 case: `text`, with one mistake at one character, and the `code`, `line` and
 `column` it must be rejected with when the whole text is parsed (as
-`parseAll`). Lines and columns are 1-based; columns count code points (an
+`parseAll`), or, when the case says `document: True`, when it is read as a
+single document (as `parse`; `not-one-value` is at the end of the input).
+The cases of the file's last section have two mistakes each, where the spec
+fixes which is reported: a duplicate key at its name, before its colon and
+value (§8), and a block string's closing quotes, then its lines in order,
+each line's indent before its characters (§4). Lines and columns are 1-based; columns count code points (an
 emoji is one column, and so is each combining mark), a byte order mark at the
 start is column 1, and only a line feed (or CR LF) ends a line: U+2028 and
 U+2029 don't. An error inside a block string is at the offending character,

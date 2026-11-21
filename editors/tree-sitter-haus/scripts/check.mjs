@@ -68,7 +68,6 @@ const SYNTAX_SCHEMA_CODES = new Set([
   'attribute-space',
   'attribute-on-spread',
   'row-parameter',
-  'import-version',
   // Comments, whitespace and quoted keys are those of data files, with their
   // codes (spec §14).
   'unterminated-string',
@@ -88,10 +87,14 @@ const SYNTAX_SCHEMA_CODES = new Set([
 ]);
 
 // Schema error codes that are syntax errors for some files and not for
-// others: `unknown-module` is a package name the grammar's `segment` rules out
-// (`@Haus/money`, spec §13.3) or a module it allows that doesn't exist
-// (`std/money`); `unknown-import` is an empty list of names, which the grammar
-// rules out (`import std/time ()`), or a name the module doesn't have
+// others: a package module is one token up to a blank or `(` (grammar.ebnf,
+// module_char), whose name and version are checked beyond the syntax
+// (`@Haus/money` is `unknown-module`, `@a/b@1.1` `import-version`, which is
+// never a syntax error), so `unknown-module` is a syntax error only for a
+// module the grammar rules out (`.../a`), and otherwise a module that doesn't
+// exist (`std/money`) or a package name that isn't a lowercase `@org/name`;
+// `unknown-import` is an empty list of names, which the grammar rules out
+// (`import std/time ()`), or a name the module doesn't have
 // (`import std/time (Moment)`); `invalid-parameter` is a parameter the grammar
 // rules out (`type A _x = …`) or one declared twice (`type A a a = …`).
 const EITHER_SCHEMA_CODES = new Set(['unknown-module', 'unknown-import', 'invalid-parameter']);

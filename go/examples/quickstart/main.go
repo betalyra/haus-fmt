@@ -96,7 +96,7 @@ func main() {
 		}
 	}
 	liked, _ := haus.NewRecord(fields...)
-	encoded, err := commentType.Encode(haus.Variant{Tag: "Comment", Args: []haus.Value{liked}})
+	encoded, err := commentType.Encode(haus.Variant{Tag: haus.MustTag("Comment"), Args: []haus.Value{liked}})
 	if err != nil {
 		log.Fatal(err)
 	}

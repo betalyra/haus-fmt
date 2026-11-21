@@ -275,14 +275,14 @@ func (c *checker) value(v haus.Value, t *typ, l *loc) {
 	case kMaybe:
 		x, ok := v.(haus.Variant)
 		switch {
-		case ok && x.Tag == "None" && len(x.Args) == 0:
-		case ok && x.Tag == "Some" && len(x.Args) == 1:
+		case ok && x.Tag.String() == "None" && len(x.Args) == 0:
+		case ok && x.Tag.String() == "Some" && len(x.Args) == 1:
 			c.child(step{index: 0}, x.Args[0], rt.elem, l.item(0))
 		default:
 			fix := ""
-			if ok && x.Tag == "None" {
+			if ok && x.Tag.String() == "None" {
 				fix = payloadFix("None", &caseType{tag: "None"})
-			} else if ok && x.Tag == "Some" {
+			} else if ok && x.Tag.String() == "Some" {
 				fix = payloadFix("Some", &caseType{tag: "Some", payload: payloadPositional, items: []*typ{rt.elem}})
 			}
 			c.report(SeverityError, notCase(v, "None", "Some"),
@@ -417,38 +417,38 @@ func (c *checker) variant(v haus.Value, vt *variantType, t *typ, l *loc) {
 	if l != nil {
 		tagSpan = span{l.start, l.tagEnd}
 	}
-	cs := vt.caseOf(x.Tag)
+	cs := vt.caseOf(x.Tag.String())
 	if cs == nil {
 		names := make([]string, len(vt.cases))
 		for i, k := range vt.cases {
 			names[i] = k.tag
 		}
-		hint := suggest(x.Tag, names)
+		hint := suggest(x.Tag.String(), names)
 		if vt.open {
 			// < > lists no tags: any tag is meant, so there is nothing to hint.
 			if len(vt.cases) > 0 {
 				c.report(SeverityHint, haus.CodeUnlistedTag,
-					fmt.Sprintf("%s is not in the schema; a reader keeps it as an unknown value.%s", x.Tag, hint), "", tagSpan)
+					fmt.Sprintf("%s is not in the schema; a reader keeps it as an unknown value.%s", x.Tag.String(), hint), "", tagSpan)
 			}
 			c.scalar(v, &typ{kind: kAny}, t, l)
 			return
 		}
-		c.report(SeverityError, haus.CodeUnknownTag, fmt.Sprintf("%s is not allowed here: expected %s.%s", quote(x.Tag), tags(vt), hint), "", tagSpan)
+		c.report(SeverityError, haus.CodeUnknownTag, fmt.Sprintf("%s is not allowed here: expected %s.%s", quote(x.Tag.String()), tags(vt), hint), "", tagSpan)
 		return
 	}
 	if cs.deprecated != nil {
-		c.report(SeverityHint, haus.CodeDeprecated, cs.deprecated.note(x.Tag), "", tagSpan)
+		c.report(SeverityHint, haus.CodeDeprecated, cs.deprecated.note(x.Tag.String()), "", tagSpan)
 	}
 	switch cs.payload {
 	case payloadNone:
 		if len(x.Args) > 0 {
-			c.report(SeverityError, haus.CodeWrongPayload, x.Tag+" takes no payload", payloadFix(x.Tag, cs), spanOf(l))
+			c.report(SeverityError, haus.CodeWrongPayload, x.Tag.String()+" takes no payload", payloadFix(x.Tag.String(), cs), spanOf(l))
 		}
 	case payloadRecord, payloadNamed:
 		r, ok := oneRecord(x.Args)
 		if !ok {
 			c.report(SeverityError, haus.CodeWrongPayload,
-				fmt.Sprintf("%s takes one argument, a record; found %s", x.Tag, foundArgs(x.Args)), payloadFix(x.Tag, cs), spanOf(l))
+				fmt.Sprintf("%s takes one argument, a record; found %s", x.Tag.String(), foundArgs(x.Args)), payloadFix(x.Tag.String(), cs), spanOf(l))
 			return
 		}
 		// Tag { … }: the record is at the variant's level and place.
@@ -468,7 +468,7 @@ func (c *checker) variant(v haus.Value, vt *variantType, t *typ, l *loc) {
 				s = ""
 			}
 			c.report(SeverityError, haus.CodeWrongPayload, fmt.Sprintf("%s takes %d argument%s (%s), found %d",
-				x.Tag, len(cs.items), s, strings.Join(described, ", "), len(x.Args)), payloadFix(x.Tag, cs), spanOf(l))
+				x.Tag.String(), len(cs.items), s, strings.Join(described, ", "), len(x.Args)), payloadFix(x.Tag.String(), cs), spanOf(l))
 			return
 		}
 		for i, a := range x.Args {

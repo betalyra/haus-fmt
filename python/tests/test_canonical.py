@@ -11,6 +11,7 @@ import pytest
 
 import haus
 from haus import Array, Bytes, HausEncodeError, Limits, Number, Record, String, Value, Variant
+from haus.schema import compile_schema
 
 
 def c(text: str) -> str:
@@ -261,3 +262,59 @@ def test_a_value_built_in_code_may_nest_any_depth() -> None:
         v = Array((v,))
     assert haus.canonical(v) == "[" * 100_000 + "1" + "]" * 100_000
     assert haus.equals(v, v)
+
+
+def test_only_the_node_limit_applies() -> None:
+    """Spec §12: a value deeper or longer than a writer's limits still has a canonical form."""
+    tight = Limits(max_depth=1, max_string_length=1, max_number_length=2, max_exponent=1)
+    v = Record({"key": Array((Array((String("long"), Number("1e99"), Variant("Tag"))),))})
+    assert haus.canonical(v, limits=tight) == '{key:[["long",1e99,Tag]]}'
+    assert haus.hash(v, limits=tight) == haus.hash(v)
+
+
+def shared(levels: int) -> Value:
+    """An array holding the same array twice, `levels` deep: small in memory, 2**(levels + 1) - 1 values written."""
+    v: Value = Array(())
+    for _ in range(levels):
+        v = Array((v, v))
+    return v
+
+
+def node_error(f: Callable[[], object]) -> tuple[str, tuple[str | int, ...]]:
+    with pytest.raises(HausEncodeError) as e:
+        f()
+    return e.value.code, e.value.path
+
+
+def test_the_node_limit_counts_each_place_a_shared_part_is_in() -> None:
+    """Spec §7, "Values written": `too-many-nodes`, at the value, above `max_nodes`."""
+    seven, six = Limits(max_nodes=7), Limits(max_nodes=6)
+    assert haus.canonical(shared(2), limits=seven) == "[[[],[]],[[],[]]]"
+    assert node_error(lambda: haus.canonical(shared(2), limits=six)) == ("too-many-nodes", ())
+    assert node_error(lambda: haus.hash(shared(2), limits=six)) == ("too-many-nodes", ())
+    assert node_error(lambda: haus.equals(shared(2), shared(2), limits=six)) == ("too-many-nodes", ())
+    assert node_error(lambda: haus.compare(shared(2), shared(1), limits=six)) == ("too-many-nodes", ())
+    # Each value of a list on its own, at its index.
+    assert haus.hash_all([shared(2), shared(2)], limits=seven) == haus.hash_all([shared(2), shared(2)])
+    assert node_error(lambda: haus.hash_all([shared(1), shared(2)], limits=six)) == ("too-many-nodes", (1,))
+    # Numbers, written at once, count too; a record payload is one value, its field values more.
+    assert node_error(lambda: haus.canonical(Array((Number("1"),) * 7), limits=seven)) == ("too-many-nodes", ())
+    payload = Variant("T", (Record({"a": Number("1"), "b": Number("2")}),))
+    assert haus.canonical(payload, limits=Limits(max_nodes=4)) == "T{a:1,b:2}"
+    assert node_error(lambda: haus.canonical(payload, limits=Limits(max_nodes=3)))[0] == "too-many-nodes"
+    assert haus.DEFAULT_LIMITS.max_nodes == 64 * 1024 * 1024
+
+
+def test_encoders_with_a_schema_have_the_node_limit_too() -> None:
+    t = compile_schema("type T = Any")["T"]
+    assert t.canonical(shared(2), limits=Limits(max_nodes=7)) == "[[[],[]],[[],[]]]"
+    assert node_error(lambda: t.canonical(shared(2), limits=Limits(max_nodes=6))) == ("too-many-nodes", ())
+    items = t.encode_all([shared(1), shared(2)], limits=Limits(max_nodes=6))
+    assert node_error(lambda: list(items)) == ("too-many-nodes", (1,))
+
+
+def test_the_json_writer_has_the_node_limit_too() -> None:
+    assert haus.to_haus_json(shared(1), limits=Limits(max_nodes=3)) == '{"_haus":1,"_value":[[],[]]}'
+    assert node_error(lambda: haus.to_haus_json(shared(2), limits=Limits(max_nodes=6))) == ("too-many-nodes", ())
+    lines = haus.to_haus_json_lines([shared(1), shared(2)], limits=Limits(max_nodes=6))
+    assert node_error(lambda: list(lines)) == ("too-many-nodes", (1,))

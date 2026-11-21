@@ -806,8 +806,8 @@ final class Parser {
       i++;
     }
     if (i >= end) {
-      // Nothing after the opening: no line break, at the block string.
-      throw fail(start, ErrorCode.BLOCK_STRING_OPENING, "the opening \"\"\" must be followed by a line break");
+      // Nothing after the opening: no line break, at the end of the input (spec §8).
+      throw fail(i, ErrorCode.BLOCK_STRING_OPENING, "the opening \"\"\" must be followed by a line break");
     } else if (s[i] == '\n') {
       i++;
     } else if (s[i] == '\r' && i + 1 < end && s[i + 1] == '\n') {

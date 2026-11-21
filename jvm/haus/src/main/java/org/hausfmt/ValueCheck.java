@@ -5,27 +5,14 @@ package org.hausfmt;
  * Haus#check} documents.
  */
 final class ValueCheck extends WriteCheck {
-  /**
-   * The most values (nodes) one value built in code may have. A value whose arrays or records
-   * share one another many times expands when written out; this bounds the work of writing it
-   * (spec §9.8). 64 Mi, as many as the largest top-level value of a stream can hold.
-   */
-  static final int MAX_NODES = 64 << 20;
-
-  private int nodes;
-
   private ValueCheck(Limits lim) {
     super(lim, true);
   }
 
   static void check(Value v, Limits lim) {
-    new ValueCheck(lim).value(v, 0);
-  }
-
-  private void node() {
-    if (++nodes > MAX_NODES) {
-      throw path.error(ErrorCode.TOO_MANY_NODES, "the value has more than " + MAX_NODES + " nodes");
-    }
+    ValueCheck c = new ValueCheck(lim);
+    c.start(0, false);
+    c.value(v, 0);
   }
 
   private void value(Value v, int depth) {
@@ -40,17 +27,10 @@ final class ValueCheck extends WriteCheck {
       case STRING:
         String s = ((Value.Text) v).value();
         checkString(s);
-        if (s.length() > lim.maxStringLength() && s.codePointCount(0, s.length()) > lim.maxStringLength()) {
-          throw path.error(ErrorCode.STRING_TOO_LONG,
-              "a string of " + s.codePointCount(0, s.length()) + " characters, more than the limit of " + lim.maxStringLength());
-        }
+        checkLength(s, ErrorCode.STRING_TOO_LONG, "string");
         break;
       case BYTES:
-        int n = ((Value.Bytes) v).size();
-        if (2L * n > lim.maxStringLength()) {
-          throw path.error(ErrorCode.STRING_TOO_LONG,
-              "a byte string of " + n + " bytes, more than the limit of " + lim.maxStringLength() + " characters");
-        }
+        checkBytes((Value.Bytes) v);
         break;
       case ARRAY:
         enter(depth);
@@ -62,9 +42,7 @@ final class ValueCheck extends WriteCheck {
         break;
       case VARIANT:
         Value.Variant variant = (Value.Variant) v;
-        if (variant.tag().length() > lim.maxStringLength()) {
-          throw path.error(ErrorCode.TAG_TOO_LONG, "a tag longer than the limit of " + lim.maxStringLength() + " characters");
-        }
+        checkTag(variant.tag());
         if (variant.size() == 0) {
           break;
         }
@@ -93,9 +71,7 @@ final class ValueCheck extends WriteCheck {
       String key = r.keyAt(i);
       path.key(key);
       checkKey(key);
-      if (key.length() > lim.maxStringLength() && key.codePointCount(0, key.length()) > lim.maxStringLength()) {
-        throw path.error(ErrorCode.KEY_TOO_LONG, "a key longer than the limit of " + lim.maxStringLength() + " characters");
-      }
+      checkLength(key, ErrorCode.KEY_TOO_LONG, "key");
       value(r.valueAt(i), depth + 1);
       path.pop();
     }

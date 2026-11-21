@@ -33,6 +33,7 @@ from typing import Any
 
 from . import _decode
 from ._canonical import canonical as _canonical
+from ._canonical import canonical_at
 from ._codecs import CodecGroup, DateCodec, DecimalCodec, InstantCodec, optional_codecs
 from ._decode import Codec
 from ._errors import HausDecodeError, HausEncodeError, HausJsonError, format_path
@@ -201,7 +202,7 @@ class SchemaType:
 
     def canonical(self, value: object, *, limits: Limits = DEFAULT_LIMITS) -> str:
         """Encode, and write the result in canonical form (spec §12): valid haus text, on one line."""
-        return _canonical(self.encode(value, limits=limits))
+        return _canonical(self.encode(value, limits=limits), limits=limits)
 
     def decode_all(self, values: Iterable[Value], *, limits: Limits = DEFAULT_LIMITS) -> Iterator[Any]:
         """Decode each value of a stream on its own; errors carry its index first in their path."""
@@ -225,7 +226,7 @@ class SchemaType:
     def encode_all(self, values: Iterable[object], *, limits: Limits = DEFAULT_LIMITS) -> Iterator[str]:
         """Encode values as stream items, each in canonical form followed by `,\\n`."""
         for i, v in enumerate(values):
-            yield _canonical(_decode.encode(self._node, v, limits, None, i)) + ",\n"
+            yield canonical_at(_decode.encode(self._node, v, limits, None, i), limits.max_nodes, (i,)) + ",\n"
 
     # ── JSON (spec §16.3) ──
 

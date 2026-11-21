@@ -145,7 +145,7 @@ func TestWriteIsLinear(t *testing.T) {
 	nested := func(n int) Value {
 		var v Value = Array{}
 		for range n {
-			v = Variant{Tag: "Some", Args: []Value{Array{v}}}
+			v = Variant{Tag: MustTag("Some"), Args: []Value{Array{v}}}
 		}
 		return v
 	}

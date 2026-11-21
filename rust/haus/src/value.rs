@@ -639,7 +639,8 @@ impl Record {
     }
 
     /// Adds a field after the others. Fails if the record has the key
-    /// already (`duplicate-key`), leaving it as it was. Takes time linear
+    /// already (`duplicate-key`), leaving it as it was: it never replaces a
+    /// field's value (use [`Record::get_mut`] for that). Takes time linear
     /// in the key, not in the record.
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<Value>) -> Result<(), ValueError> {
         let key = key.into();

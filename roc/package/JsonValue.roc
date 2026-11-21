@@ -67,8 +67,10 @@ JsonValue := [
 
 	## Write JSON on one line, without spaces. A `JsonValue` built in code is checked
 	## as it is written: numbers must be JSON numbers within the number limits,
-	## member names unique and the nesting within what the reader takes. These
-	## errors say what, not where (the place could be inside a `Secret`).
+	## member names unique, the nesting within what the reader takes, and at
+	## most `max_nodes` JSON values written (`too-many-nodes` above it, a
+	## shared part counted each time it is written, spec §7). These errors
+	## say what, not where (the place could be inside a `Secret`).
 	## Lengths count on the haus value, not on the JSON (spec §16, "Limits"),
 	## so the forms check them: `to_haus_json` on the value it writes, and
 	## `ToJson.to_str_with` on the value `encode_<name>` gives.
@@ -81,7 +83,7 @@ JsonValue := [
 	to_str_with : JsonValue, Value.Limits -> Try(Str, Encode.Error)
 	to_str_with = |json, limits| {
 		supported(limits)?
-		write(json, 0, json_depth(limits), limits, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
+		write(json, 0, json_depth(limits), limits, { bytes: [], nodes: 0 }).map_ok(|out| bytes_to_str(out.bytes))
 	}
 
 	## The same JSON: the same members in the same order.
@@ -149,7 +151,9 @@ JsonValue := [
 	to_haus_json_with : Value, Value.Limits -> Try(Str, Encode.Error)
 	to_haus_json_with = |value, limits| {
 		envelope = Object([("_haus", Number("1")), ("_value", haus_json_value_with(value, limits)?)])
-		write(envelope, 0, haus_json_depth(limits), limits, { bytes: [], steps: 0 }).map_ok(|out| bytes_to_str(out.bytes))
+		# The values written are counted on the haus value (`haus_json_value_with`):
+		# its JSON form takes a few JSON values for some of them.
+		write(envelope, 0, haus_json_depth(limits), { ..limits, max_nodes: 18_446_744_073_709_551_615 }, { bytes: [], nodes: 0 }).map_ok(|out| bytes_to_str(out.bytes))
 	}
 
 	## Read self-describing JSON, and nothing else: a text without the
@@ -250,7 +254,8 @@ JsonValue := [
 		var $out = []
 		var $i = 0.U64
 		for v in values {
-			line = write(v, 0, json_depth(limits), limits, { bytes: $out, steps: 0 }).map_err(|e| { ..e, path: "[${$i.to_str()}]${e.path}" })?
+			# The node limit applies to each value on its own.
+			line = write(v, 0, json_depth(limits), limits, { bytes: $out, nodes: 0 }).map_err(|e| { ..e, path: "[${$i.to_str()}]${e.path}" })?
 			$out = line.bytes.append('\n')
 			$i = $i + 1
 		}
@@ -629,16 +634,19 @@ skip_digits = |src, start| {
 supported : Value.Limits -> Try({}, Encode.Error)
 supported = |limits| Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })
 
-## The JSON written so far, and the values written (one step each).
-Out : { bytes : List(U8), steps : U64 }
+## The JSON written so far, and the JSON values written.
+Out : { bytes : List(U8), nodes : U64 }
 
 ## `json` at `depth`, nested at most `max` levels, written after `before`:
-## a step for it and each value in it (spec §9.8), so that JSON built in
-## code whose parts are shared (a DAG) fails with `step-budget` instead of
-## expanding without bound.
+## counting it and each value in it against `limits.max_nodes` (spec §7,
+## "Values written"), so that JSON built in code whose parts are shared (a
+## DAG) fails with `too-many-nodes` instead of expanding without bound.
 write : JsonValue, U64, U64, Value.Limits, Out -> Try(Out, Encode.Error)
 write = |json, depth, max, limits, before| {
-	out = { ..before, steps: Encode.step({ ..Encode.top_with(limits), steps: before.steps })? }
+	if before.nodes >= limits.max_nodes {
+		return fail(ErrorCode.too_many_nodes, "more than ${limits.max_nodes.to_str()} JSON values to write (JSON whose parts are shared expands when written)")
+	}
+	out = { ..before, nodes: before.nodes + 1 }
 	match json {
 		Null => Ok({ ..out, bytes: out.bytes.concat("null".to_utf8()) })
 		Boolean(b) => Ok({ ..out, bytes: out.bytes.concat((if (b) "true" else "false").to_utf8()) })

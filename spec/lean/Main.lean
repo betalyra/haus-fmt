@@ -65,7 +65,8 @@ import Lean.Data.Json
                                   with DIR/typed.schema.haus (spec §15, "Streams"); then
                                   DIR/document.cases.haus, each text as a single document
     haus-ref --positions FILE            the error positions FILE (test-suite/positions/cases.haus,
-                                  spec §8): code, line and column of each text parsed whole
+                                  spec §8): code, line and column of each text parsed whole,
+                                  or as a single document where the case says `document: True`
     haus-ref --equality FILE             equals and compare (test-suite/equality/cases.haus, spec
                                   §2, §12) in both directions; compare from the canonical forms
     haus-ref --format-options FILE       the pretty layout's options (test-suite/format/
@@ -1068,14 +1069,18 @@ def runCases (file : System.FilePath) (check : Value → Verdict) : IO UInt32 :=
 
 /--
 A case of `positions/cases.haus` (spec §8): `text`, with one mistake, parsed
-whole (`Parser.parse`, as `parseAll`) must be rejected with `code` at `line`
-and `column` (1-based, columns in code points: `position`).
+whole (`Parser.parse`, as `parseAll`), or as a single document
+(`Parser.parseDocument`, as `parse`) when the case says `document: True`,
+must be rejected with `code` at `line` and `column` (1-based, columns in code
+points: `position`).
 -/
 def positionCase : Value → Verdict
   | .record fs =>
+    let document := fs.lookup "document" == some (.variant "True" [])
+    let parsed : Text → Except Parser.Error (List Value) := fun t => if document then (Parser.parseDocument {} t).map ([·]) else Parser.parse {} t
     match strField fs "text", strField fs "code", natField? fs "line", natField? fs "column" with
     | some text, some code, some (some line), some (some column) =>
-      match Parser.parse {} text.toList with
+      match parsed text.toList with
       | .ok vs => .wrong s!"accepted: {vs.map canonicalText}"
       | .error e =>
         let (l, c) := position text.toList e

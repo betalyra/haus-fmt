@@ -582,7 +582,7 @@ pub fn encode(arena: Allocator, def: *const Def, d: Decoded, options: EncodeOpti
     const val = try toValue(arena, d);
     // The limits of values built in code (§9 item 8): checked as written.
     var sink: std.ArrayList(u8) = .empty;
-    canonical.appendCanonical(arena, &sink, val, .{ .limits = options.limits, .diagnostic = options.diagnostic }) catch |e| return e;
+    try canonical.appendChecked(arena, &sink, val, .{ .limits = options.limits, .diagnostic = options.diagnostic }, null);
     var inner: Diagnostic = .{};
     _ = decode(arena, def, val, .{ .diagnostic = &inner }) catch |e| switch (e) {
         error.Haus => {

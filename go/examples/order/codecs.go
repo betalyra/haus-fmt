@@ -88,5 +88,5 @@ var date = schema.NewCodec("std/time#Date",
 		if y := t.Year(); y < 0 || y > 9999 {
 			return nil, errors.New("the year is outside 0000–9999")
 		}
-		return haus.Variant{Tag: "Date", Args: []haus.Value{haus.String(t.Format(time.DateOnly))}}, nil
+		return haus.Variant{Tag: haus.MustTag("Date"), Args: []haus.Value{haus.String(t.Format(time.DateOnly))}}, nil
 	})

@@ -1,0 +1,2 @@
+// The prelude's types can't be spread, not even Bool, which the prelude writes as a variant (spec §14).
+type V = < ...Bool | Maybe >

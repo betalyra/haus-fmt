@@ -11,7 +11,8 @@ import org.junit.jupiter.api.TestFactory;
 
 /**
  * The positions suite (test-suite/README.md, "Error positions"): the code, line and column of the
- * error when the whole text is parsed.
+ * error when the whole text is parsed (as a single document when the case says {@code document:
+ * True}).
  */
 class PositionsSuiteTest {
 
@@ -26,7 +27,11 @@ class PositionsSuiteTest {
       return dynamicTest(c.toString(), () -> {
         String got;
         try {
-          Haus.parseAll(text);
+          if (Value.bool(true).equals(r.get("document"))) {
+            Haus.parse(text); // a single document
+          } else {
+            Haus.parseAll(text);
+          }
           got = "parsed";
         } catch (HausException e) {
           got = e.code().code() + " " + e.line() + ":" + e.column();

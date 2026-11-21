@@ -6,6 +6,13 @@
 /// their keys and values whatever the order, and `Tag { … }` the same as
 /// `Tag({ … })`, both a variant with one record argument.
 ///
+/// Every value of this type is a haus value (spec §11, "Values built in
+/// code"): a ``HausTag`` is checked when it is built (`invalid-tag`), a
+/// ``HausNumber`` from text too (`invalid-number`), a ``HausRecord`` has no
+/// key twice (`duplicate-key`), and Swift's strings are always Unicode
+/// scalars. So the canonical form, hashing and equality fail for no value;
+/// writers check the limits (spec §7).
+///
 /// Equality doesn't recurse, and hashing covers the first
 /// ``hashedLevels`` levels; releasing a value recurses once per level of
 /// nesting: the parser never gives values deeper than
@@ -31,12 +38,12 @@ public enum HausValue: Sendable {
     case record(HausRecord)
     /// A tag with zero or more arguments: `None`, `Some(1)`, `Circle { r: 1 }`
     /// (one record argument).
-    case variant(String, [HausValue])
+    case variant(HausTag, [HausValue])
 }
 
 extension HausValue {
     /// The variant `tag(args…)`: `.tag("None")`, `.tag("Some", 1)`.
-    public static func tag(_ tag: String, _ args: HausValue...) -> HausValue {
+    public static func tag(_ tag: HausTag, _ args: HausValue...) -> HausValue {
         .variant(tag, args)
     }
 
@@ -83,7 +90,7 @@ extension HausValue: Hashable {
         case (.bytes(let x), .bytes(let y)): return x == y
         case (.array(let x), .array(let y)): return sameItems(x, y, adding: &pending)
         case (.variant(let t, let x), .variant(let u, let y)):
-            return sameCodePoints(t, u) && sameItems(x, y, adding: &pending)
+            return t == u && sameItems(x, y, adding: &pending)
         case (.record(let x), .record(let y)):
             guard x.count == y.count else { return false }
             for (key, value) in x.fields {
@@ -123,7 +130,7 @@ extension HausValue: Hashable {
             r.hash(into: &hasher, levels: levels)
         case .variant(let tag, let args):
             hasher.combine(5)
-            hashCodePoints(tag, into: &hasher)
+            hasher.combine(tag)
             hashItems(args, into: &hasher, levels: levels)
         }
     }
@@ -164,6 +171,53 @@ struct CodePointKey: Hashable, Sendable {
 
     static func == (a: CodePointKey, b: CodePointKey) -> Bool { sameCodePoints(a.string, b.string) }
     func hash(into hasher: inout Hasher) { hashCodePoints(string, into: &hasher) }
+}
+
+// ── tags ────────────────────────────────────────────────────────
+
+/// A tag (spec §4): `[A-Z][A-Za-z0-9_]*`, such as `Some` or `Shipped`. It is
+/// checked when it is built, so every tag of a ``HausValue`` can be written.
+///
+/// ```swift
+/// let tag = try HausTag(name)                // invalid-tag if name isn't a tag
+/// let none: HausValue = .tag("None")         // a literal: checked when it is made
+/// ```
+///
+/// A string literal is a tag too, for readability (`.variant("Some", [1])`,
+/// `case .variant("Some", let args)`): it is checked when the literal is
+/// made, and a literal that isn't a tag stops the program
+/// (`preconditionFailure`), as a mistake in the code. Use the throwing
+/// ``init(_:)`` for tags that come from data.
+public struct HausTag: Sendable, Hashable, Comparable, CustomStringConvertible, ExpressibleByStringLiteral {
+    /// The tag's name: `Some`. It is ASCII, so Swift's `==` compares it exactly.
+    public let name: String
+
+    /// The tag `name`. It fails with `invalid-tag` if `name` isn't
+    /// `[A-Z][A-Za-z0-9_]*`. It applies no limit: a writer rejects a tag
+    /// longer than its string limit (`tag-too-long`).
+    public init(_ name: String) throws(HausError) {
+        guard isTag(name) else { throw HausError(.invalidTag, invalidTag(name)) }
+        self.name = name
+    }
+
+    /// A tag known to be one: read by a parser, or a schema's.
+    init(valid name: String) { self.name = name }
+
+    /// The tag of a string literal, which must be one (see above).
+    public init(stringLiteral value: String) {
+        guard isTag(value) else { preconditionFailure(invalidTag(value)) }
+        name = value
+    }
+
+    public var description: String { name }
+
+    /// By code point (spec §12), which for a tag is by its ASCII bytes.
+    public static func < (a: HausTag, b: HausTag) -> Bool { precedes(a.name, b.name) }
+}
+
+/// The message of `invalid-tag`.
+func invalidTag(_ tag: String) -> String {
+    "the tag \(quoteForMessage(tag)) isn't [A-Z][A-Za-z0-9_]*"
 }
 
 // ── literals ────────────────────────────────────────────────────

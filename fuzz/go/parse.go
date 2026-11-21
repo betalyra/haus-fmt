@@ -138,9 +138,9 @@ func suiteJSON(v haus.Value) any {
 		return map[string]any{"rec": rec}
 	case haus.Variant:
 		if len(x.Args) == 0 {
-			return map[string]any{"tag": x.Tag}
+			return map[string]any{"tag": x.Tag.String()}
 		}
-		return map[string]any{"tag": x.Tag, "args": mapValues(x.Args, suiteJSON)}
+		return map[string]any{"tag": x.Tag.String(), "args": mapValues(x.Args, suiteJSON)}
 	}
 	panic(fmt.Sprintf("not a value: %T", v))
 }

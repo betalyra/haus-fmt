@@ -159,6 +159,23 @@ fn spreads_of_types_that_are_not_records_or_variants() {
 }
 
 #[test]
+fn spreads_through_aliases_and_generic_instances() {
+    // An instance is spread as its type's body, read with its arguments (spec §14).
+    let schema = Schema::parse(
+        "type Page a = { items: Array a }\ntype Wrap a = Page (Maybe a)\ntype IntPage = Wrap Int\n\
+         type Listing = closed { ...IntPage, total: Int }",
+    )
+    .unwrap();
+    assert_eq!(decode(&schema, "Listing", "{ items: [Some(1), None], total: 2 }"), "{items:[Some(1),None],total:2}");
+    assert!(decode(&schema, "Listing", r#"{ items: [Some("a")], total: 1 }"#).starts_with("error: "));
+    assert!(decode(&schema, "Listing", "{ items: [], total: 0, more: 1 }").starts_with("error: "));
+    // Names that go round in a circle end, with the error of the recursion.
+    assert!(error("type A = B\ntype B = A\ntype T = { ...A }").contains("refers to itself"));
+    assert!(error("type P a = P (Array a)\ntype I = P Int\ntype T = { ...I }").contains("refers to itself"));
+    assert!(error("type A = A\ntype T = { ...A }").contains("refers to itself"));
+}
+
+#[test]
 fn rules_about_names_and_types() {
     assert_eq!(error("type A = Strin"), "1:10: unknown type Strin");
     assert_eq!(

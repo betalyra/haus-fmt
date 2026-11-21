@@ -757,10 +757,14 @@ def readJson (L : Limits) (env : Env) (t : Ty) (text : Text) : Except Error Type
 **Encoding within the limits** (§9.8, §15): the value a decoded result
 encodes to, checked against the limits before it is written. A value built in
 code may be outside them, and so may an `Any` or an unknown value kept from
-input read with larger limits (§9.5); the error is the limit's code.
+input read with larger limits (§9.5); the error is the limit's code. The node
+limit (§7) comes first: a writer counts the values it writes, and stops at
+the limit before it has written a deeper or longer part.
 -/
 def encodeChecked (L : Limits) (x : Typed) : Except Error Value :=
-  if (encode x).fits L then .ok (encode x)
+  if (encode x).nodes > L.maxNodes then
+    .error { path := [], reason := s!"more than {L.maxNodes} values to write", code := some .tooManyNodes }
+  else if (encode x).fits L then .ok (encode x)
   else .error { path := [], reason := "outside the limits", code := some ((encode x).limitCode L) }
 
 /-- The text of a decoded value's schema-based JSON. -/
@@ -843,6 +847,10 @@ private def encodeCode (L : Limits) (x : Typed) : Option Code :=
 #guard encodeCode { maxDepth := 3 } (.any (.arr [.arr [.arr []]])) == none
 #guard encodeCode { maxStringLength := 3 } (.unknown "Abcd" []) == some .tagTooLong
 #guard encodeCode {} (.int (10 ^ 1000)) == some .numberTooLong && encodeCode {} (.int (10 ^ 999)) == none
+-- The node limit: every value written counts, the containers too (`[[], []]` is three).
+#guard encodeCode { maxNodes := 2 } (.any (.arr [.arr [], .arr []])) == some .tooManyNodes
+#guard encodeCode { maxNodes := 3 } (.any (.arr [.arr [], .arr []])) == none
+#guard encodeCode { maxNodes := 3, maxDepth := 1 } (.any (.arr [.arr [], .arr []])) == some .nestingTooDeep
 -- Lengths are counted on the value the result encodes to (§16, "Limits"): a member name as a key, a
 -- `"_tag"` and the string of a closed enum as a tag, a string as a string.
 private def limitEnv : Env := ⟨[("M", .map .string), ("Open", .variant false [.bare "A"]),

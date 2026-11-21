@@ -409,9 +409,21 @@ impl EncodeError {
         EncodeError { code, path: Vec::new(), reason: reason.into(), details: Details::default() }
     }
 
-    /// The same error, one step further out (errors are built from the inside out).
+    /// The same error, one step further out (errors are built from the
+    /// inside out). `too-many-nodes` stays at the value given to the writer,
+    /// not a place in it (spec §17).
     pub fn within(mut self, segment: Segment) -> EncodeError {
-        self.path.insert(0, segment);
+        if self.code != ErrorCode::TooManyNodes {
+            self.path.insert(0, segment);
+        }
+        self
+    }
+
+    /// The same error, about value `i` of a stream or a file of several
+    /// values: `$[i]`, followed by its place in the value. Every error
+    /// says which value, `too-many-nodes` too.
+    pub fn item(mut self, i: usize) -> EncodeError {
+        self.path.insert(0, Segment::Index(i));
         self
     }
 

@@ -205,7 +205,7 @@ struct Slot {
         switch try present() {
         case .string(let s): return s
         // A tag without payload (a closed enum, an unknown value), or a std/time value's text.
-        case .variant(let tag, let args) where args.isEmpty: return tag
+        case .variant(let tag, let args) where args.isEmpty: return tag.name
         case .variant(_, let args) where args.count == 1:
             if case .string(let text) = args[0], isTime { return text }
         default: break
@@ -357,7 +357,7 @@ struct SchemaKeyedDecoding<Key: CodingKey>: KeyedDecodingContainerProtocol {
 
     var allKeys: [Key] {
         if let variant { return [variant.key] }
-        if case .variant(let tag, _) = decoder.value, decoder.missingCase == nil { decoder.missingCase = tag }
+        if case .variant(let tag, _) = decoder.value, decoder.missingCase == nil { decoder.missingCase = tag.name }
         return entries.keys.compactMap(Key.init(stringValue:))
     }
 
@@ -431,9 +431,9 @@ func keyedEntries<Key: CodingKey>(_ decoder: SchemaDecoder, _: Key.Type) throws 
     case (.map(let element)?, .record(let r)):
         return (Entries(source: .record(r), types: .element(element)), nil)
     case (.variant(let shape)?, .variant(let tag, let args)):
-        guard let c = shape.caseOf(tag) else { return unknown(decoder, Key.self) }
+        guard let c = shape.caseOf(tag.name) else { return unknown(decoder, Key.self) }
         let payload = payloadEntries(c, args)
-        let key = Key(stringValue: decoder.state.name(tag)) ?? Key(stringValue: tag)
+        let key = Key(stringValue: decoder.state.name(tag.name)) ?? Key(stringValue: tag.name)
         return (payload, key.map { ($0, payload) })
     case (nil, .record), (nil, .variant), (.builtin(.any)?, .record), (.builtin(.any)?, .variant):
         guard case .variant = v else { return (Entries.of(v), nil) }
@@ -463,7 +463,9 @@ func payloadEntries(_ c: CaseType, _ args: [HausValue]) -> Entries {
 func unknown<Key: CodingKey>(_ decoder: SchemaDecoder, _: Key.Type) -> (Entries, (key: Key, entries: Entries)?) {
     guard case .variant(let tag, _) = decoder.value else { return (.none, nil) }
     let payload = Entries.of(decoder.value)
-    if let key = Key(stringValue: decoder.state.name(tag)) ?? Key(stringValue: tag) { return (payload, (key, payload)) }
+    if let key = Key(stringValue: decoder.state.name(tag.name)) ?? Key(stringValue: tag.name) {
+        return (payload, (key, payload))
+    }
     if let key = Key(stringValue: "unknown") {
         return (payload, (key, Entries(source: .args([]), types: .untyped, whole: (decoder.value, nil))))
     }

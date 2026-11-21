@@ -13,15 +13,21 @@ struct ErrorCodeTests {
         let code: String
         let category: String
         let means: String
+        /// Where it is reported (spec §8), the catalogue's "Reported at".
+        let at: String
         let fix: String
+
+        /// Whether the place is informative, not yet normative (spec §8): in schema files and imports.
+        var informative: Bool { ["SchemaFiles", "Imports"].contains(category) }
     }
 
     static func entries() throws -> [Entry] {
         try parseAll(readText(repository.appendingPathComponent("spec/errors.haus"))).map { v in
             guard case .string(let code)? = v["code"], case .variant(let category, _)? = v["category"],
-                case .string(let means)? = v["means"], case .string(let fix)? = v["fix"]
+                case .string(let means)? = v["means"], case .string(let at)? = v["at"],
+                case .string(let fix)? = v["fix"]
             else { fatalError("not an entry: \(v)") }
-            return Entry(code: code, category: category, means: means, fix: fix)
+            return Entry(code: code, category: category.name, means: means, at: at, fix: fix)
         }
     }
 
@@ -50,7 +56,11 @@ struct ErrorCodeTests {
             "    public enum Code: String, Sendable, CaseIterable {",
         ]
         for e in entries {
-            lines += ["        /// `\(e.code)`: \(e.means)", "        case \(caseName(e.code)) = \(literal(e.code))"]
+            lines += [
+                "        /// `\(e.code)`: \(e.means)", "        ///",
+                "        /// Reported at\(e.informative ? " (informative)" : ""): \(e.at)",
+                "        case \(caseName(e.code)) = \(literal(e.code))",
+            ]
         }
         lines += [
             "    }", "", "    /// The part of the catalogue a code belongs to (spec §17).",

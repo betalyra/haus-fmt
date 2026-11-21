@@ -11,9 +11,69 @@ abstract class WriteCheck {
   /** Whether to check; without, the writer writes what it can (for {@link Value#toString}). */
   final boolean check;
 
+  /** The values written for the current top-level value, against the node limit. */
+  private int nodes;
+  /** The steps of the current top-level value's path: 0, or 1 in a stream ({@code $[i]}). */
+  private int top;
+
   WriteCheck(Limits lim, boolean check) {
     this.lim = lim;
     this.check = check;
+  }
+
+  /** Starts the top-level value {@code i}, of a stream or alone. */
+  final void start(int i, boolean stream) {
+    path.clear();
+    if (stream) {
+      path.index(i);
+    }
+    top = path.size();
+    nodes = 0;
+  }
+
+  /**
+   * Counts one more value written (spec §7, "Values written"): {@code too-many-nodes} above the
+   * node limit, at the top-level value.
+   */
+  final void node() {
+    if (++nodes > lim.maxNodes() && check) {
+      path.truncate(top);
+      throw tooManyNodes(path, lim);
+    }
+  }
+
+  static HausException tooManyNodes(Path at, Limits lim) {
+    return at.error(
+        ErrorCode.TOO_MANY_NODES,
+        "the value writes more than " + lim.maxNodes() + " values, the node limit: its parts share one another");
+  }
+
+  /** A string or key within the string limit, in code points. */
+  final void checkLength(String s, ErrorCode code, String what) {
+    if (check && s.length() > lim.maxStringLength() && s.codePointCount(0, s.length()) > lim.maxStringLength()) {
+      throw path.error(
+          code,
+          "a " + what + " of " + s.codePointCount(0, s.length()) + " characters, more than the limit of "
+              + lim.maxStringLength());
+    }
+  }
+
+  /** A tag within the string limit; its characters are ASCII. */
+  final void checkTag(String tag) {
+    if (check && tag.length() > lim.maxStringLength()) {
+      throw path.error(
+          ErrorCode.TAG_TOO_LONG,
+          "a tag of " + tag.length() + " characters, more than the limit of " + lim.maxStringLength());
+    }
+  }
+
+  /** A byte string within the string limit: two characters between the quotes per byte. */
+  final void checkBytes(Value.Bytes v) {
+    if (check && 2L * v.size() > lim.maxStringLength()) {
+      throw path.error(
+          ErrorCode.STRING_TOO_LONG,
+          "a byte string of " + v.size() + " bytes, more than the limit of " + lim.maxStringLength() + " characters");
+    }
   }
 
   /** Starts a container at {@code depth} (its parent's), one level deeper. */

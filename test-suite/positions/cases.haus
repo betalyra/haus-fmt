@@ -4,9 +4,11 @@
 // Basic Multilingual Plane is one column, and so is each combining mark. A
 // byte order mark at the start is the first column. Only a line feed ends a
 // line: a carriage return before it belongs to that line break, and U+2028
-// and U+2029 start no line. Parse the whole text (as `parseAll`).
+// and U+2029 start no line. Parse the whole text (as `parseAll`), or, for
+// a case with `document: True`, read it as a single document (as `parse`).
 // Most cases put a raw control character (`\u{1}`, U+0001) inside a string,
-// which is rejected at that character.
+// which is rejected at that character. The cases of the last section have two
+// mistakes each, where the spec says which is reported (§4, §8).
 
 // ── lines and columns ──
 { text: "\"\u{1}\"", code: "control-character", line: 1, column: 2 },
@@ -51,3 +53,66 @@
 { text: "\"\"\"\n  a\\q\n  \"\"\"", code: "invalid-escape", line: 2, column: 4 },
 { text: "\"\"\"\n  a\n b\n  \"\"\"", code: "block-string-indent", line: 3, column: 1 },
 { text: "\"\"\"\n  a\n  x\"\"\"", code: "block-string-closing", line: 3, column: 4 },
+
+// ── where each error is (spec §8, errors.md "Reported at") ──
+// Something that isn't closed: at its opening.
+{ text: "[1,", code: "unclosed-bracket", line: 1, column: 1 },
+{ text: "[1, { a: 1", code: "unclosed-bracket", line: 1, column: 5 },
+{ text: "Some(", code: "unclosed-bracket", line: 1, column: 5 },
+{ text: "[ \"abc", code: "unterminated-string", line: 1, column: 3 },
+{ text: "[ x\"ab", code: "unterminated-bytes", line: 1, column: 3 },
+{ text: "[ \"\"\"\n  a", code: "unterminated-block-string", line: 1, column: 3 },
+// A block string's opening `"""` with nothing after it: at the end of the input.
+{ text: "\"\"\"", code: "block-string-opening", line: 1, column: 4 },
+{ text: "[\"\"\"", code: "block-string-opening", line: 1, column: 5 },
+{ text: "\"\"\"  ", code: "block-string-opening", line: 1, column: 6 },
+{ text: "1 /* a /* b */", code: "unterminated-comment", line: 1, column: 3 },
+// A number error: at the literal's first character, a sign or a leading `.` included.
+{ text: "[ 007 ]", code: "invalid-number", line: 1, column: 3 },
+{ text: "[ +1 ]", code: "invalid-number", line: 1, column: 3 },
+{ text: "[ .5 ]", code: "invalid-number", line: 1, column: 3 },
+{ text: "[ -1e6145 ]", code: "exponent-too-large", line: 1, column: 3 },
+{ text: "[ -10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 ]", code: "number-too-long", line: 1, column: 3 },
+// Nesting: at the opening bracket of the first level too deep.
+{ text: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[Tag(1)]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", code: "nesting-too-deep", line: 1, column: 260 },
+{ text: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[Tag { a: 1 }]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", code: "nesting-too-deep", line: 1, column: 261 },
+// Something missing: at the next token, or at the end of the input.
+{ text: "{ a 1 }", code: "missing-colon", line: 1, column: 5 },
+{ text: "{ a", code: "missing-colon", line: 1, column: 4 },
+{ text: "[1 2]", code: "missing-comma", line: 1, column: 4 },
+{ text: "{ a: 1 }\n  { b: 2 }", code: "missing-comma", line: 2, column: 3 },
+{ text: "{ a: }", code: "expected-value", line: 1, column: 6 },
+{ text: "{ a:", code: "expected-value", line: 1, column: 5 },
+{ text: "[1, }", code: "expected-value", line: 1, column: 5 },
+{ text: "{ ] }", code: "expected-key", line: 1, column: 3 },
+// A token that doesn't fit: at its first character.
+{ text: "[1}", code: "unexpected-closer", line: 1, column: 3 },
+{ text: "A\n  (1)", code: "payload-newline", line: 2, column: 3 },
+{ text: "[ null ]", code: "null-literal", line: 1, column: 3 },
+{ text: "Some()", code: "empty-payload", line: 1, column: 5 },
+{ text: "1 /", code: "stray-slash", line: 1, column: 3 },
+{ text: "\u{FEFF}#haus 2", code: "version-directive", line: 1, column: 2 },
+{ text: "\"\\", code: "invalid-escape", line: 1, column: 2 },
+// In a byte string: a lone hex digit, or a character that can't be there.
+{ text: "x\"abc\"", code: "bytes-odd-digits", line: 1, column: 5 },
+{ text: "x\"a b\"", code: "bytes-odd-digits", line: 1, column: 3 },
+{ text: "x\"ab z\"", code: "bytes-not-hex", line: 1, column: 6 },
+// A single document (`document: True`, parsed as `parse`): not one value, at the end of the input.
+{ text: "1, 2", document: True, code: "not-one-value", line: 1, column: 5 },
+{ text: "", document: True, code: "not-one-value", line: 1, column: 1 },
+{ text: "// c\n", document: True, code: "not-one-value", line: 2, column: 1 },
+
+// ── which error comes first, where the spec says (§4, §8) ──
+// These texts have two mistakes each.
+// A duplicate key is reported at its name, as soon as it is read: an error after it is never reached.
+{ text: "{ a: 1, a: \"\\q\" }", code: "duplicate-key", line: 1, column: 9 },
+{ text: "{ a: 1, a: [1 2] }", code: "duplicate-key", line: 1, column: 9 },
+{ text: "{ a: 1,\n  \"a\" 2 }", code: "duplicate-key", line: 2, column: 3 },
+{ text: "[Point { x: 1, y: 2, x: \"\"\"\n }]", code: "duplicate-key", line: 1, column: 22 },
+{ text: "Point({ x: 1, x: 1e99999 })", code: "duplicate-key", line: 1, column: 15 },
+// A block string: its closing quotes first, then line by line, the indent before the characters.
+{ text: "\"\"\"\n  \u{1}\n  x\"\"\"", code: "block-string-closing", line: 3, column: 4 },
+{ text: "\"\"\"\n  a\u{1}\n", code: "unterminated-block-string", line: 1, column: 1 },
+{ text: "\"\"\"\n b\n  a\u{1}\n  \"\"\"", code: "block-string-indent", line: 2, column: 1 },
+{ text: "\"\"\"\n  a\u{1}\n b\n  \"\"\"", code: "control-character", line: 2, column: 4 },
+{ text: "\"\"\"\n\u{2066}\n \"\"\"", code: "block-string-indent", line: 2, column: 1 },

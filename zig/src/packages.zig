@@ -375,7 +375,11 @@ pub const Build = struct {
         const nv = parseManifest(b.arena(), manifest) orelse return b.fail(.@"package-manifest", "the package.haus of {s} is not a valid manifest {{ name: \"@org/name\", version: \"1.2.0\" }}", .{b.quote(shown)});
         const p = try b.arena().create(Package);
         p.* = .{ .dir = dir, .shown = shown, .name = nv.name, .version = nv.version, .manifest = manifest };
-        if (b.options.npm) try b.readOwnPackageJson(p);
+        if (b.options.npm) {
+            try b.readOwnPackageJson(p);
+        } else if (b.options.check_versions) {
+            try b.checkVersionBeside(p);
+        }
         try b.by_dir.put(b.arena(), dir, p);
         return p;
     }
@@ -395,7 +399,24 @@ pub const Build = struct {
             return;
         };
         p.declared = try declarations(b.arena(), j, false);
-        if (b.options.check_versions) if (j.get("version")) |ver| if (ver == .string) {
+        if (b.options.check_versions) try b.checkVersion(p, j);
+    }
+
+    /// A package given explicitly, without npm: the version of a
+    /// `package.json` beside its manifest, when there is one that can be
+    /// read, is checked as npm's is (spec §13.3, "Package versions").
+    fn checkVersionBeside(b: *Build, p: *Package) Error!void {
+        const path = try std.fs.path.join(b.arena(), &.{ p.dir, "package.json" });
+        const bytes = switch (b.readPackageFile(path, b.options.max_file)) {
+            .bytes => |t| t,
+            else => return,
+        };
+        const j = json.parse(b.arena(), b.gpa, bytes, 512, .{}) catch return;
+        try b.checkVersion(p, j);
+    }
+
+    fn checkVersion(b: *Build, p: *Package, j: json.Json) Error!void {
+        if (j.get("version")) |ver| if (ver == .string) {
             if (!std.mem.eql(u8, ver.string, p.version)) {
                 if (validSemver(ver.string)) return b.fail(.@"package-version", "the package.haus of {s} says {s}, its package.json {s}", .{ b.quote(p.name), b.quote(p.version), b.quote(ver.string) });
                 return b.fail(.@"package-version", "the package.haus of {s} says {s}, its package.json another version that isn't a valid version", .{ b.quote(p.name), b.quote(p.version) });
@@ -488,8 +509,11 @@ pub const Build = struct {
             const manifest = try std.fs.path.join(b.arena(), &.{ sub, "package.haus" });
             if (b.kindOf(manifest, false) == null) continue;
             const real = b.realPath(sub) orelse continue;
-            // Named by the folder's last name and the subdirectory's (`schemas/broken`).
-            const shown = b.shownPath(try std.fs.path.join(b.arena(), &.{ std.fs.path.basename(path), n }));
+            // Named by the folder's last name and the subdirectory's
+            // (`schemas/broken`), however the folder was given (`.`,
+            // `schemas/`, an absolute path): the last name of its real path.
+            const folder_name = std.fs.path.basename(b.realPath(path) orelse path);
+            const shown = b.shownPath(try std.fs.path.join(b.arena(), &.{ folder_name, n }));
             // A subdirectory whose manifest can't be read is skipped, not rejected.
             var inner: Diagnostic = .{};
             const saved = b.options.diagnostic;

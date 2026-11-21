@@ -21,7 +21,7 @@ func showEntry(t *testing.T, v haus.Value) string {
 	if !ok {
 		t.Fatalf("not an entry: %v", v)
 	}
-	parts := []string{x.Tag}
+	parts := []string{x.Tag.String()}
 	for _, a := range x.Args {
 		switch a := a.(type) {
 		case haus.String:
@@ -66,7 +66,7 @@ func TestCheckSuite(t *testing.T) {
 	}
 	for _, v := range values {
 		x, ok := v.(haus.Variant)
-		if !ok || x.Tag != "Schema" && x.Tag != "Data" || len(x.Args) != 1 {
+		if !ok || x.Tag.String() != "Schema" && x.Tag.String() != "Data" || len(x.Args) != 1 {
 			t.Fatalf("not a case: %v", v)
 		}
 		r := x.Args[0].(haus.Record)
@@ -78,7 +78,7 @@ func TestCheckSuite(t *testing.T) {
 		}
 		var got, want []string
 		var name string
-		switch x.Tag {
+		switch x.Tag.String() {
 		case "Schema":
 			name = fmt.Sprintf("schema %q", text)
 			want = showEntries(t, get(r, "warnings"))

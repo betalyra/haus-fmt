@@ -1,0 +1,10 @@
+// More than one blank line collapses to one, also after a trailing comment.
+A, // after A
+
+
+
+B, /* after B */
+
+
+// above C
+C,

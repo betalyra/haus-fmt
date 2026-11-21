@@ -25,8 +25,6 @@ use std::ops::Range;
 /// At most this many issues are reported for one file.
 pub const MAX_ISSUES: usize = 200;
 const STEPS_PER_VALUE: usize = 16;
-/// Values beyond this are rejected before decoding (the parser's 64 Mi characters can't produce more).
-const MAX_VALUES: usize = 64 * 1024 * 1024;
 
 /// How bad an issue is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -376,11 +374,11 @@ impl<'s, 'v> Walker<'s, 'v> {
 
     /// Sets the work budget: 16 steps per value of the input, and 1024.
     /// Fails for a value built in code that is deeper than the limit or has
-    /// more than 64 Mi values.
+    /// more values than the node limit (`Limits::max_nodes`, 64 Mi by default).
     ///
     /// Counted by going through the containers only. Which error a value
     /// with both problems gets depends on the order values are counted in,
-    /// so beyond 64 Mi values they are counted again, one by one, in the
+    /// so beyond the node limit they are counted again, one by one, in the
     /// order that decides it ([`Walker::count_all`]).
     fn budget(&mut self, values: &[Value]) -> Result<(), (Code, String)> {
         let max = self.limits.max_depth;
@@ -405,7 +403,7 @@ impl<'s, 'v> Walker<'s, 'v> {
                 },
                 _ => {}
             }
-            if count > MAX_VALUES {
+            if count > self.limits.max_nodes {
                 return self.count_all(values);
             }
         }
@@ -416,7 +414,7 @@ impl<'s, 'v> Walker<'s, 'v> {
         Ok(())
     }
 
-    /// [`Walker::budget`] for more than 64 Mi values: every value counted
+    /// [`Walker::budget`] for more values than the node limit: every value counted
     /// on its own, in order, failing at the first problem.
     #[cold]
     fn count_all(&mut self, values: &[Value]) -> Result<(), (Code, String)> {
@@ -425,8 +423,9 @@ impl<'s, 'v> Walker<'s, 'v> {
         let mut stack: Vec<(&Value, usize)> = values.iter().map(|v| (v, 0)).collect();
         while let Some((v, depth)) = stack.pop() {
             count += 1;
-            if count > MAX_VALUES {
-                return Err((Code::TooManyNodes, format!("value has more than {MAX_VALUES} nodes")));
+            if count > self.limits.max_nodes {
+                let max = self.limits.max_nodes;
+                return Err((Code::TooManyNodes, format!("value has more than {max} nodes")));
             }
             let container = matches!(v, Value::Array(_) | Value::Record(_))
                 || matches!(v, Value::Variant { args, .. } if !args.is_empty());

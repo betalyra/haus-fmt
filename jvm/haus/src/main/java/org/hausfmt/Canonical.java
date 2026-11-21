@@ -15,25 +15,33 @@ final class Canonical {
   private final StringBuilder b = new StringBuilder();
   /** Whether to fail for a string or key without a UTF-8 form; without, it is written as U+FFFD. */
   private final boolean check;
+  /** The node limit (spec §7), the one limit of the canonical form (spec §12). */
+  private final Limits lim;
+  /** The values written for the current top-level value. */
+  private int nodes;
+  /** Where the current top-level value is: {@code $}, or {@code $[i]} for value i of {@code hashAll}. */
+  private String place = "$";
 
-  private Canonical(boolean check) {
+  private Canonical(boolean check, Limits lim) {
     this.check = check;
+    this.lim = lim;
   }
 
-  static String of(Value v) {
-    Canonical c = new Canonical(true);
-    c.value(v);
+  static String of(Value v, Limits lim) {
+    Canonical c = new Canonical(true, lim);
+    c.top(v);
     return c.b.toString();
   }
 
   /** The values' canonical forms joined by {@code ,} (spec §12, {@code hashAll}). */
-  static String ofAll(List<Value> values) {
-    Canonical c = new Canonical(true);
+  static String ofAll(List<Value> values, Limits lim) {
+    Canonical c = new Canonical(true, lim);
     for (int i = 0; i < values.size(); i++) {
       if (i > 0) {
         c.b.append(',');
       }
-      c.value(values.get(i));
+      c.place = "$[" + i + "]";
+      c.top(values.get(i));
     }
     return c.b.toString();
   }
@@ -52,17 +60,35 @@ final class Canonical {
 
   /**
    * Orders values by the UTF-8 bytes of their canonical forms, shorter first when one is a prefix
-   * of the other (spec §12). A string without a UTF-8 form sorts as if it held U+FFFD there.
+   * of the other (spec §12). A string without a UTF-8 form sorts as if it held U+FFFD there. The
+   * node limit applies to each value.
    */
-  static int compare(Value x, Value y) {
-    Canonical cx = new Canonical(false);
-    cx.value(x);
-    Canonical cy = new Canonical(false);
-    cy.value(y);
+  static int compare(Value x, Value y, Limits lim) {
+    Canonical cx = new Canonical(false, lim);
+    cx.top(x);
+    Canonical cy = new Canonical(false, lim);
+    cy.top(y);
     return Scan.compareCodePoints(cx.b.toString(), cy.b.toString());
   }
 
+  /** Writes one top-level value, which has the node limit to itself. */
+  private void top(Value v) {
+    nodes = 0;
+    value(v);
+  }
+
+  /**
+   * Counts one more value written: {@code too-many-nodes} above the node limit, at {@code $}, or at
+   * {@code $[i]} for value i of {@code hashAll}.
+   */
+  private void node() {
+    if (++nodes > lim.maxNodes()) {
+      throw WriteCheck.tooManyNodes(new Path(place), lim);
+    }
+  }
+
   private void value(Value v) {
+    node();
     switch (v.kind()) {
       case NUMBER:
         b.append(((Value.Number) v).literal());
@@ -83,6 +109,7 @@ final class Canonical {
         Value.Variant variant = (Value.Variant) v;
         b.append(variant.tag());
         if (variant.payload() != null) {
+          node(); // Tag { … }: the record is one value written
           record(variant.payload());
         } else if (variant.size() > 0) {
           items('(', ')', variant.unsafeArgs());

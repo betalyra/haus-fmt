@@ -243,6 +243,7 @@ impl LimitArgs {
             max_number_length: size(self.max_number_length, default.max_number_length),
             max_exponent: self.max_exponent.unwrap_or(default.max_exponent),
             max_string_length: size(self.max_string_length, default.max_string_length),
+            ..default
         }
     }
 }

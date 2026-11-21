@@ -24,29 +24,21 @@ enum Opening {
     /// A record, and whether it has no fields.
     case record(empty: Bool)
     /// `Tag(…)`
-    case payload(tag: String)
+    case payload(tag: HausTag)
     /// `Tag { … }`, and whether the record has no fields.
-    case recordPayload(tag: String, empty: Bool)
+    case recordPayload(tag: HausTag, empty: Bool)
 }
 
-/// What a walk checks (spec §7, §9.8).
+/// What a walk checks (spec §7, §11, §12).
 enum WalkChecks {
-    /// Tags, and nesting within ``Limits/maxSupportedDepth``: the canonical form.
-    case canonical
-    /// Tags, nesting, and numbers (length and exponent), within the limits: the
-    /// writers of a layout.
+    /// The node limit only: the canonical form and hashing (spec §12).
+    case canonical(Limits)
+    /// Every limit a value can break: nesting, the lengths of numbers,
+    /// exponents, strings, keys, tags and byte strings, and the node limit.
+    /// The writers of values and ``checkValue(_:limits:)`` (spec §11).
     case writer(Limits)
-    /// Every limit, and the number of nodes: ``checkValue(_:limits:)``.
-    case value(Limits)
-    /// Nesting within ``Limits/maxSupportedDepth`` only: values checked already.
+    /// Nothing: values checked already.
     case none
-
-    var maxDepth: Int {
-        switch self {
-        case .canonical, .none: Limits.maxSupportedDepth
-        case .writer(let limits), .value(let limits): limits.maxDepth
-        }
-    }
 }
 
 /// Writes a value with a spelling, checking it as it goes. Errors have the
@@ -55,8 +47,6 @@ enum WalkChecks {
 struct Walk<S: Spelling> {
     private(set) var spelling: S
     let prefix: [PathStep]
-    /// The most nodes, for ``WalkChecks/value(_:)``; tests make it smaller.
-    var maxNodes = Limits.maxNodes
     /// The checks, taken apart once: the loop below reads them for every value.
     private let level: Level
     private let limits: Limits
@@ -64,21 +54,20 @@ struct Walk<S: Spelling> {
     /// The innermost container being written, and the ones around it.
     private var top: Frame?
     private var stack: [Frame] = []
+    /// The values written so far, for the node limit.
     private var nodes = 0
 
     private enum Level {
-        case canonical, writer, value, none
+        case canonical, writer, none
     }
 
     init(_ spelling: S, checks: WalkChecks, prefix: [PathStep] = []) {
         self.spelling = spelling
         self.prefix = prefix
-        maxDepth = checks.maxDepth
         switch checks {
-        case .canonical: (level, limits) = (.canonical, Limits())
-        case .writer(let l): (level, limits) = (.writer, l)
-        case .value(let l): (level, limits) = (.value, l)
-        case .none: (level, limits) = (.none, Limits())
+        case .canonical(let l): (level, limits, maxDepth) = (.canonical, l, Int.max)
+        case .writer(let l): (level, limits, maxDepth) = (.writer, l, l.maxDepth)
+        case .none: (level, limits, maxDepth) = (.none, Limits(), Int.max)
         }
     }
 
@@ -105,27 +94,23 @@ struct Walk<S: Spelling> {
 
     /// Writes a value without items, or opens a container.
     private mutating func enter(_ v: HausValue, _ out: inout [UInt8]) throws(HausError) {
-        if level == .value { try count() }
+        if level != .none { try count() }
         switch v {
         case .array(let items):
             try push(.array, values: items, &out)
         case .record(let r):
             try push(.record(empty: r.isEmpty), fields: fields(r), &out)
         case .variant(let tag, let args) where !args.isEmpty:
-            try checkTag(tag)
+            if level == .writer { try checkTag(tag) }
             if args.count == 1, case .record(let r) = args[0] {
-                // Tag { … }: the record is the payload's one level.
-                if level == .value { try count() }
+                // Tag { … }: the record is the payload's one level, and a value written.
+                if level != .none { try count() }
                 try push(.recordPayload(tag: tag, empty: r.isEmpty), fields: fields(r), &out)
             } else {
                 try push(.payload(tag: tag), values: args, &out)
             }
         default:
-            if case .variant(let tag, _) = v {
-                try checkTag(tag)
-            } else if level == .writer || level == .value {
-                try checkLeaf(v)
-            }
+            if level == .writer { try checkLeaf(v) }
             spelling.leaf(v, to: &out)
         }
     }
@@ -143,7 +128,7 @@ struct Walk<S: Spelling> {
             if i > 0 { spelling.separator(to: &out) }
             guard !top!.fields.isEmpty else { return top!.values[i] }
             let key = top!.fields[i].key
-            if level == .value { try checkKey(key) }
+            if level == .writer { try checkKey(key) }
             spelling.key(key, to: &out)
             return top!.fields[i].value
         }
@@ -189,43 +174,53 @@ struct Walk<S: Spelling> {
         fail(.nestingTooDeep, "nesting deeper than the limit of \(maxDepth)")
     }
 
+    /// Counts a value written (spec §7, "Values written"). Above the limit,
+    /// the error is at the value given to the writer, not at a part of it.
     private mutating func count() throws(HausError) {
         nodes += 1
-        if nodes > maxNodes { throw fail(.tooManyNodes, "the value has more than \(maxNodes) nodes") }
+        if nodes > limits.maxNodes { throw tooManyNodes() }
     }
 
-    private func checkTag(_ tag: String) throws(HausError) {
-        guard level != .none else { return }
-        if !isTag(tag) { throw fail(.invalidTag, invalidTag(tag)) }
-        if level == .value && tag.utf8.count > limits.maxStringLength {
+    @inline(never)
+    private func tooManyNodes() -> HausError {
+        HausError(
+            .tooManyNodes, "more than the limit of \(limits.maxNodes) values to write", path: pathString(prefix))
+    }
+
+    @inline(never)
+    private func checkTag(_ tag: HausTag) throws(HausError) {
+        // A tag is ASCII: its bytes are its characters.
+        if tag.name.utf8.count > limits.maxStringLength {
             throw fail(.tagTooLong, "a tag longer than the limit of \(limits.maxStringLength) characters")
         }
     }
 
     @inline(never)
     private func checkKey(_ key: String) throws(HausError) {
-        if longerThan(key, limits.maxStringLength) != nil {
-            throw fail(.keyTooLong, "a key longer than the limit of \(limits.maxStringLength) characters")
+        if let n = longerThan(key, limits.maxStringLength) {
+            throw fail(.keyTooLong, "a key of \(n) characters, more than the limit of \(limits.maxStringLength)")
         }
     }
 
-    /// Checks a number, string or byte string for the writers' and the
-    /// value checker's limits.
+    /// Checks a number, string, byte string or tag without arguments for the
+    /// writers' limits.
     @inline(never)
     private func checkLeaf(_ v: HausValue) throws(HausError) {
         switch v {
         case .number(let n):
             // Any literal, a decimal or an exponent too: what a parser with these limits reads back.
             if let (code, message) = numberLimitError(n.literal, limits) { throw fail(code, message) }
-        case .string(let s) where level == .value:
+        case .string(let s):
             if let n = longerThan(s, limits.maxStringLength) {
                 throw fail(
                     .stringTooLong, "a string of \(n) characters, more than the limit of \(limits.maxStringLength)")
             }
-        case .bytes(let b) where level == .value && 2 * b.count > limits.maxStringLength:
+        case .bytes(let b) where 2 * b.count > limits.maxStringLength:
             throw fail(
                 .stringTooLong,
                 "a byte string of \(b.count) bytes, more than the limit of \(limits.maxStringLength) characters")
+        case .variant(let tag, _):
+            try checkTag(tag)
         default:
             break
         }
@@ -253,7 +248,7 @@ struct HausSpelling: Spelling {
             out += #"x""#.utf8
             appendHex(bytes, to: &out)
             out.append(ASCII.quote)
-        case .variant(let tag, _): out += tag.utf8
+        case .variant(let tag, _): out += tag.name.utf8
         case .array, .record: break
         }
     }
@@ -263,10 +258,10 @@ struct HausSpelling: Spelling {
         case .array: out.append(ASCII.openBracket)
         case .record(let empty): openBrace(empty, &out)
         case .payload(let tag):
-            out += tag.utf8
+            out += tag.name.utf8
             out.append(ASCII.openParen)
         case .recordPayload(let tag, let empty):
-            out += tag.utf8
+            out += tag.name.utf8
             if spaces { out.append(ASCII.space) }
             openBrace(empty, &out)
         }
@@ -324,9 +319,9 @@ struct SelfDescribingSpelling: Spelling {
     }
 
     /// `{"_tag":"Tag"`.
-    private func tagMember(_ tag: String, _ out: inout [UInt8]) {
+    private func tagMember(_ tag: HausTag, _ out: inout [UInt8]) {
         out += #"{"_tag":"#.utf8
-        appendJSONString(tag, to: &out)
+        appendJSONString(tag.name, to: &out)
     }
 
     func open(_ c: Opening, to out: inout [UInt8]) {

@@ -23,10 +23,7 @@ final class LineWriter extends WriteCheck {
     LineWriter w = new LineWriter(b, lim, true, minimised);
     boolean stream = values.size() > 1;
     for (int i = 0; i < values.size(); i++) {
-      w.path.clear();
-      if (stream) {
-        w.path.index(i);
-      }
+      w.start(i, stream);
       w.value(values.get(i), 0);
       if (stream) {
         b.append(',');
@@ -57,8 +54,11 @@ final class LineWriter extends WriteCheck {
   // The kinds by their classes, the most common first: a class test is cheaper than kind(), which
   // each kind implements.
   void value(Value v, int depth) {
+    node();
     if (v instanceof Value.Text) {
-      appendString(b, ((Value.Text) v).value());
+      String s = ((Value.Text) v).value();
+      appendString(b, s);
+      checkLength(s, ErrorCode.STRING_TOO_LONG, "string");
     } else if (v instanceof Value.Number) {
       b.append(literal((Value.Number) v));
     } else if (v instanceof Value.Record) {
@@ -70,19 +70,22 @@ final class LineWriter extends WriteCheck {
       enter(depth);
       items('[', ']', ((Value.Array) v).unsafeItems(), depth);
     } else {
+      checkBytes((Value.Bytes) v);
       appendBytes(b, (Value.Bytes) v);
     }
   }
 
   private void variant(Value.Variant v, int depth) {
+    checkTag(v.tag());
     b.append(v.tag());
     if (v.size() == 0) {
       return;
     }
     Value.Record payload = v.payload();
     if (payload != null) {
-      // Tag { … }: the record is the payload's one level.
+      // Tag { … }: the record is the payload's one level, and one value written.
       enter(depth);
+      node();
       space();
       fields(payload, depth);
       return;
@@ -124,6 +127,7 @@ final class LineWriter extends WriteCheck {
       } else {
         appendCheckedKey(b, key);
       }
+      checkLength(key, ErrorCode.KEY_TOO_LONG, "key");
       b.append(':');
       space();
       path.key(key);

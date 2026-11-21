@@ -193,14 +193,15 @@ fn keys_and_tags_count_against_the_string_limit() {
     assert_eq!(haus::to_string_with(&map, &tiny).unwrap_err().to_string(), ".abcd: key longer than 3 characters");
 
     // JSON read into haus: member names become keys, "_tag" values tags.
-    let envelope = |j: Json| Json::Object(vec![("_haus".into(), Json::Number(1.into())), ("_value".into(), j)]);
+    let obj = |members: Vec<(String, Json)>| Json::object(members).unwrap();
+    let envelope = |j: Json| obj(vec![("_haus".into(), Json::Number(1.into())), ("_value".into(), j)]);
     let read = |j: Json| json::from_self_describing(&envelope(j), &limits);
-    let rec = |k: &str| Json::Object(vec![("_rec".into(), Json::Object(vec![(k.into(), Json::String("x".into()))]))]);
-    let tag_json = |t: &str| Json::Object(vec![("_tag".into(), Json::String(t.into()))]);
+    let rec = |k: &str| obj(vec![("_rec".into(), obj(vec![(k.into(), Json::String("x".into()))]))]);
+    let tag_json = |t: &str| obj(vec![("_tag".into(), Json::String(t.into()))]);
     assert!(read(rec("abcd")).is_ok() && read(tag_json("Abcd")).is_ok());
     assert_eq!(read(rec("abcde")).unwrap_err().to_string(), "._value._rec.abcde: key longer than 4 characters");
     assert_eq!(read(tag_json("Abcde")).unwrap_err().to_string(), "._value: tag longer than 4 characters");
-    let imported = Json::Object(vec![("abcde".into(), Json::Null)]);
+    let imported = obj(vec![("abcde".into(), Json::Null)]);
     assert_eq!(json::import(&imported, &limits).unwrap_err().to_string(), ".abcde: key longer than 4 characters");
     // The JSON text reader leaves lengths to the forms, which count them on the
     // haus value (spec §16): a member name is a key only where it becomes one.

@@ -157,7 +157,7 @@ describe("encoding hostile JS values", () => {
     const Event = h.OpenVariant({ Ping: h.Unit })
     const cyclic = forgedCycle()
     const fake = { _tag: "@unknown", tag: "X", value: cyclic } as unknown as h.Unknown
-    expect(errorOf(() => h.encode(Event, fake)).message).toContain("nesting deeper than 256")
+    expect(errorOf(() => h.encode(Event, fake)).message).toContain("deeper than 256")
     const notAValue = { _tag: "@unknown", tag: "X", value: { evil: true } } as unknown as h.Unknown
     expect(errorOf(() => h.encode(Event, notAValue)).message).toContain("expected a haus value")
   })

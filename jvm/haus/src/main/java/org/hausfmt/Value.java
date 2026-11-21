@@ -49,10 +49,11 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
   /**
    * The number written {@code literal} in any spelling: {@code "19.90"}, {@code "0xFF"}, {@code
-   * "1_000"}, {@code "1E+05"} (spec §3), within the default limits.
+   * "1_000"}, {@code "1E+05"} (spec §3), normalized as the parser does ({@code 255} for {@code
+   * "0xFF"}). No limit applies (spec §11, "Values built in code"): a number longer than the number
+   * limit, or with a larger exponent, is still a number, which a writer with those limits rejects.
    *
-   * @throws HausException if it isn't a number literal ({@code invalid-number}) or exceeds the
-   *     limits
+   * @throws HausException if it isn't a number literal ({@code invalid-number})
    */
   static Number number(String literal) {
     return Number.parse(literal);
@@ -97,9 +98,23 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     return new Number(SchemaFloats.format(f, float32));
   }
 
-  /** The string {@code s}. */
+  /**
+   * The string {@code s}.
+   *
+   * @throws HausException with the code {@code cannot-encode} if {@code s} has an unpaired
+   *     surrogate, which has no UTF-8 form (spec §11)
+   */
   static Text string(String s) {
-    return new Text(s);
+    return new Text(encodable(Objects.requireNonNull(s, "value"), "string"));
+  }
+
+  /** {@code s}, if it has a UTF-8 form: else {@code cannot-encode}, with no place (spec §11). */
+  private static String encodable(String s, String what) {
+    if (Quoting.hasLoneSurrogate(s)) {
+      throw HausException.of(
+          ErrorCode.CANNOT_ENCODE, "a " + what + " with an unpaired surrogate, which has no UTF-8 form");
+    }
+    return s;
   }
 
   /** The byte string holding a copy of {@code bytes}. */
@@ -125,7 +140,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
   /**
    * The record of {@code fields}, in order.
    *
-   * @throws HausException with the code {@code duplicate-key} if two fields have the same key
+   * @throws HausException with the code {@code duplicate-key} if two fields have the same key, or
+   *     {@code cannot-encode} if a key has an unpaired surrogate
    */
   static Record record(Field... fields) {
     return record(Arrays.asList(fields));
@@ -134,7 +150,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
   /**
    * The record of {@code fields}, in order.
    *
-   * @throws HausException with the code {@code duplicate-key} if two fields have the same key
+   * @throws HausException with the code {@code duplicate-key} if two fields have the same key, or
+   *     {@code cannot-encode} if a key has an unpaired surrogate
    */
   static Record record(List<Field> fields) {
     int n = fields.size();
@@ -142,20 +159,24 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     Value[] values = new Value[n];
     for (int i = 0; i < n; i++) {
       Field f = fields.get(i);
-      keys[i] = f.key();
+      keys[i] = encodable(f.key(), "key");
       values[i] = f.value();
     }
     return supported(Record.withUniqueKeys(keys, values));
   }
 
-  /** The record of the entries of {@code fields}, in its order. */
+  /**
+   * The record of the entries of {@code fields}, in its order.
+   *
+   * @throws HausException with the code {@code cannot-encode} if a key has an unpaired surrogate
+   */
   static Record record(Map<String, ? extends Value> fields) {
     int n = fields.size();
     String[] keys = new String[n];
     Value[] values = new Value[n];
     int i = 0;
     for (Map.Entry<String, ? extends Value> e : fields.entrySet()) {
-      keys[i] = Objects.requireNonNull(e.getKey(), "key");
+      keys[i] = encodable(Objects.requireNonNull(e.getKey(), "key"), "key");
       values[i] = Objects.requireNonNull(e.getValue(), "value");
       i++;
     }
@@ -229,7 +250,7 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     static Number parse(String literal) {
       byte[] bytes = Source.utf8(literal);
       try {
-        Numbers.Scanned n = Numbers.scan(bytes, 0, bytes.length, Limits.DEFAULT);
+        Numbers.Scanned n = Numbers.scan(bytes, 0, bytes.length, null);
         if (n.end() != bytes.length) {
           throw new SyntaxError(
               n.end(), ErrorCode.INVALID_NUMBER, "not a number literal: " + Quoting.forMessage(literal));
@@ -306,8 +327,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
   }
 
   /**
-   * A string: a sequence of Unicode code points. A string with an unpaired surrogate can be built,
-   * but not written ({@code cannot-encode}): it has no UTF-8 form.
+   * A string: a sequence of Unicode code points. {@link Value#string} rejects a string with an
+   * unpaired surrogate ({@code cannot-encode}): it has no UTF-8 form.
    */
   final class Text implements Value {
     private final String value;

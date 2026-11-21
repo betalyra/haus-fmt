@@ -68,7 +68,8 @@ Decode := [].{
 
 	## What `decoder` (a generated `read_value_<name>`) gives for `v`, if `v`
 	## nests at most 256 levels (spec §7, §9.8), counted as the parser counts
-	## them, and has at most `Value.max_nodes` values: else `nesting-too-deep`,
+	## them, and has at most `max_nodes` values (64 Mi by default, spec §7),
+	## a shared part counted each time it is reached: else `nesting-too-deep`,
 	## at the first container too deep, or `too-many-nodes`. A parsed value is
 	## within the parser's limits, but a `Value` built in code may nest
 	## arbitrarily deep, and decoders recurse once per level, so the depth is
@@ -81,11 +82,11 @@ Decode := [].{
 	within_depth = |v, decoder| within_limits(v, decoder, Value.default_limits)
 
 	## `within_depth` for the depth limit of `limits`, which must be at most
-	## `Value.max_supported_depth`:
+	## `Value.max_supported_depth`, and its node limit, `limits.max_nodes`:
 	##
 	##     Decode.within_limits(value, Order.read_value_order, limits)
 	within_limits : Value, (Value -> Try(a, Error)), Value.Limits -> Try(a, Error)
-	within_limits = |v, decoder, limits| decode_within(v, decoder, limits, Value.max_nodes)
+	within_limits = |v, decoder, limits| decode_within(v, decoder, limits, limits.max_nodes)
 
 	# ── scalars ─────────────────────────────────────────────
 

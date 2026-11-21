@@ -1,6 +1,7 @@
 //! Error positions (test-suite/positions/cases.haus, test-suite/README.md
 //! "Error positions", spec §8): each case's text, parsed whole, is rejected
-//! with its code at its line and column (1-based, columns in code points).
+//! with its code at its line and column (1-based, columns in code points). A
+//! case with `document: True` is read as a single document ([`haus::parse_one`]).
 
 use haus::{Value, canonical};
 use std::path::{Path, PathBuf};
@@ -27,7 +28,12 @@ fn error_positions() {
                 panic!("not a case: {}", canonical(c))
             };
             let want = format!("{code} at {line}:{column}");
-            match haus::parse(text) {
+            let document = matches!(c.get("document"), Some(Value::Variant { tag, .. }) if tag == "True");
+            let parsed = match document {
+                true => haus::parse_one(text).map(|v| vec![v]),
+                false => haus::parse(text),
+            };
+            match parsed {
                 Ok(values) => Some(format!("{text:?}: accepted as {values:?}, expected {want}")),
                 Err(e) => {
                     let got = format!("{} at {}:{}", e.code, e.line, e.column);
@@ -37,4 +43,21 @@ fn error_positions() {
         })
         .collect();
     assert!(failures.is_empty(), "{} of {} cases failed:\n{}", failures.len(), cases.len(), failures.join("\n"));
+}
+
+/// `block-string-opening` is at the first character after the opening `"""` and its blanks, or
+/// at the end of the input when nothing follows (spec §8; the suite has no case for it yet).
+#[test]
+fn block_string_opening_is_after_the_quotes() {
+    for (text, want) in [
+        ("\"\"\"", (1, 4)),
+        ("\"\"\"x", (1, 4)),
+        ("\"\"\"  x", (1, 6)),
+        ("[\"\"\"", (1, 5)),
+        ("\"\"\"  ", (1, 6)),
+        ("\"\"\"\r", (1, 4)),
+    ] {
+        let e = haus::parse(text).unwrap_err();
+        assert_eq!((e.code.to_string(), (e.line, e.column)), ("block-string-opening".to_owned(), want), "{text:?}");
+    }
 }

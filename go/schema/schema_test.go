@@ -359,9 +359,9 @@ func TestSecretErrors(t *testing.T) {
 	s := mustSchema(t, "type Vault = { keys: Secret (Map Int), raw: Secret Any }")
 	vault := mustType(t, s, "Vault")
 	leaky, _ := haus.NewRecord(haus.Field{Key: "keys", Value: parse(t, "{}")},
-		haus.Field{Key: "raw", Value: haus.Array{haus.Variant{Tag: "sk-live-123 hunter2"}}})
+		haus.Field{Key: "raw", Value: haus.Array{haus.String("sk-live-123 hunter2")}})
 	for _, v := range []haus.Value{parse(t, `{ keys: { "sk-live-123": "hunter2" }, raw: 1 }`), leaky} {
-		_, err := vault.Decode(v)
+		_, err := vault.DecodeWith(v, schema.DecodeOptions{Limits: haus.Limits{MaxStringLength: 10}})
 		code, path := codeAndPath(err)
 		j, _ := json.Marshal(err)
 		if code != "invalid-secret" || strings.Contains(err.Error(), "sk-live") || strings.Contains(err.Error(), "hunter2") ||

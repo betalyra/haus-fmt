@@ -21,7 +21,16 @@ use std::fmt::Write as _;
 /// proportion to the type's size: see the README.
 pub const MAX_SUPPORTED_DEPTH: usize = 256;
 
-/// Resource limits, enforced while parsing (spec §7).
+/// Resource limits (spec §7): enforced while parsing, and by the writers,
+/// which check a value against the limits of the reader it is for (§11).
+/// The canonical form and hashing apply none of them (§12).
+///
+/// ```
+/// let limits = haus::Limits { max_nodes: 3, ..haus::Limits::default() };
+/// let v = haus::parse("[1, [2, 3]]").unwrap().remove(0);
+/// let e = haus::to_string_with(&v, &limits).unwrap_err();
+/// assert_eq!(e.code, haus::ErrorCode::TooManyNodes);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// Nesting depth of records, arrays and payloads: at most
@@ -37,6 +46,14 @@ pub struct Limits {
     /// Characters (code points) in one decoded string, record key or tag,
     /// or between the quotes of a byte string.
     pub max_string_length: usize,
+    /// Values written for one value (spec §7, "Values written"): the value
+    /// itself and every element, field value and argument in it, each as
+    /// often as it is written. Writers of values and encoding fail with
+    /// `too-many-nodes` beyond it, for each top-level value on its own: it
+    /// ends a native value whose parts are shared (an `Rc`), which expands
+    /// when written. Parsing, the canonical form and hashing don't use it: a
+    /// [`Value`] owns its parts, so it can't share them. 64 Mi (67,108,864).
+    pub max_nodes: usize,
 }
 
 impl Limits {
@@ -62,7 +79,13 @@ impl Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_depth: 256, max_number_length: 1000, max_exponent: 6144, max_string_length: 16 * 1024 * 1024 }
+        Limits {
+            max_depth: 256,
+            max_number_length: 1000,
+            max_exponent: 6144,
+            max_string_length: 16 * 1024 * 1024,
+            max_nodes: 64 * 1024 * 1024,
+        }
     }
 }
 
@@ -326,9 +349,9 @@ impl<'a> Parser<'a> {
         let mut keys = Keys::default();
         self.trivia()?;
         while self.more(open, b'}')? {
-            let (key_pos, key) = self.field_key()?;
+            let key = self.field_key(base, &mut keys)?;
             let value = self.value()?;
-            self.add_field(base, &mut keys, key_pos, key, value)?;
+            self.fields.push((key.into_owned(), value));
             self.separator(open, b'}', Within::Record)?;
         }
         self.pos += 1; // }
@@ -336,10 +359,15 @@ impl<'a> Parser<'a> {
         Ok(Value::Record(Record::from_unique(self.fields.drain(base..).collect())))
     }
 
-    /// A field's key and the `:` after it, with where the key starts.
-    fn field_key(&mut self) -> R<(usize, Cow<'a, str>)> {
+    /// A field's key and the `:` after it, in the record whose fields start
+    /// at `base`. The key must be new (spec §1): a duplicate is reported at
+    /// its name as soon as it is read, before its colon and value (§17).
+    fn field_key(&mut self, base: usize, keys: &mut Keys) -> R<Cow<'a, str>> {
         let key_pos = self.pos;
         let key = self.key()?;
+        if !keys.insert(&self.fields[base..], &key) {
+            return Err(self.fail_at(key_pos, Code::DuplicateKey, format!("duplicate key '{}'", shown(&key))));
+        }
         self.trivia()?;
         if self.peek() != Some(b':') {
             let found = describe(self.peek_char());
@@ -349,17 +377,7 @@ impl<'a> Parser<'a> {
         }
         self.pos += 1;
         self.trivia()?;
-        Ok((key_pos, key))
-    }
-
-    /// Adds a field to the record whose fields start at `base`, if its key
-    /// is new (spec §1).
-    fn add_field(&mut self, base: usize, keys: &mut Keys, key_pos: usize, key: Cow<'a, str>, value: Value) -> R<()> {
-        if !keys.insert(&self.fields[base..], &key) {
-            return Err(self.fail_at(key_pos, Code::DuplicateKey, format!("duplicate key '{}'", shown(&key))));
-        }
-        self.fields.push((key.into_owned(), value));
-        Ok(())
+        Ok(key)
     }
 
     fn key(&mut self) -> R<Cow<'a, str>> {
@@ -827,8 +845,12 @@ impl<'a> Parser<'a> {
         } else if self.peek() == Some(b'\n') {
             self.pos += 1;
         } else {
-            let at = if self.eof() { open } else { self.pos };
-            return Err(self.fail_at(at, Code::BlockStringOpening, "opening \"\"\" must be followed by a line break"));
+            // At the first character after the quotes and their blanks, or the end of the input (spec §8).
+            return Err(self.fail_at(
+                self.pos,
+                Code::BlockStringOpening,
+                "opening \"\"\" must be followed by a line break",
+            ));
         }
 
         // Find the closing """, skipping escaped characters.

@@ -151,7 +151,7 @@ func FuzzFormatString(f *testing.F) {
 			return
 		}
 		rec, _ := NewRecord(Field{"note", String(s)}, Field{"list", Array{String(s), String(s + "\n")}})
-		values := []Value{String(s), rec, Variant{Tag: "Note", Args: []Value{String(s), String(s)}}}
+		values := []Value{String(s), rec, Variant{Tag: MustTag("Note"), Args: []Value{String(s), String(s)}}}
 		for _, vs := range [][]Value{values, values[:1], values[1:2]} {
 			for _, l := range []Layout{Pretty, Compact, Minimised} {
 				out, err := FormatValues(vs, inLayout(l))

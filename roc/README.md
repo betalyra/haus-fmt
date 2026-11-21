@@ -94,23 +94,36 @@ value or a `Value` whose parts are shared (`x = Two(y, y)`, a DAG, which Roc
 can't tell from a tree) expands when written out, so encoding fails with
 `step-budget` past `limits.max_steps`, 16 Mi by default, as in TypeScript and
 Rust. A record's fields and a tag's arguments are encoded one after the
-other for that (`Encode.record(e, [("id", Encode.required(u.id, Encode.int)), …])`),
-and the writers count the values they write too (`Encode.to_str`,
-`JsonValue.to_str`), each value of a stream with a budget of its own.
+other for that (`Encode.record(e, [("id", Encode.required(u.id, Encode.int)), …])`).
+
+The writers of values count the values they write for each top-level value,
+the node limit of spec §7 ("Values written"): the value and every element,
+field value and argument in it, a shared part each time it is written
+(`Value.arr([w, w])` writes `w` twice), `Tag { … }` two (the tag and its
+record). Past `limits.max_nodes`, 64 Mi (67,108,864) by default, they fail
+with `too-many-nodes` at the value, before writing anything: `Encode.to_str`,
+`Encode.minimised`, `Encode.stream` (each value of a stream on its own), the
+self-describing JSON of `JsonValue`, and `JsonValue.to_str` for JSON built in
+code. `Value.count_nodes(v, limit)` counts them.
 
 Decoding a `Value` built in code, and reading a `JsonValue` built in code
 (`decode_<name>`, `from_json_<name>`), count its values first, a shared part
-each time it is reached, as decoding visits it: past `Value.max_nodes`, 64 Mi
-as in TypeScript and Go, they fail with `too-many-nodes` before decoding
-anything. Roc has no way to tell a shared part from a copy, so a value that
+each time it is reached, as decoding visits it: past `limits.max_nodes`, 64 Mi
+by default as in TypeScript and Go, they fail with `too-many-nodes` before
+decoding anything. Roc has no way to tell a shared part from a copy, so a value that
 shares its parts 2^40 times fails only after counting 64 Mi values: some 1.5
 seconds in a program built with `--opt=speed`, half a minute in `roc test`.
 A parsed value is a tree, no larger than its text.
 
 Encoders and writers check what they build and write against the limits of
-the reader (spec §7, §9.8), so they return a `Try(…, Encode.Error)`: nesting,
-strings, keys, tags and numbers beyond the limits, and steps beyond the
-budget. Every `Value` is a haus value (see [Values](#values)), so nothing else
+the reader (spec §7, §11), whoever built the value, so they return a
+`Try(…, Encode.Error)`: the nesting depth (`nesting-too-deep`; a `Tag { … }`
+record payload is one level, an empty record, array or payload a level),
+the length of each string, key and tag in code points (`string-too-long`,
+`key-too-long`, `tag-too-long`; a byte string two characters per byte), the
+length and exponent of each number (`number-too-long`,
+`exponent-too-large`), the values written (`too-many-nodes`), and for an
+encoder the steps beyond its budget (`step-budget`). Every `Value` is a haus value (see [Values](#values)), so nothing else
 about one can fail; an encoder that builds one checks it as the constructors
 do: a tag name of an unknown variant or a `< >` that isn't one is
 `invalid-tag`, a key used twice in a `Map` `duplicate-key`, and a `Decimal`
@@ -204,8 +217,11 @@ match point.view() {
 So writing a value, its canonical form, hash, equality and order can't fail
 for what it holds (see [Canonical form and hashing](#canonical-form-and-hashing)).
 `==` on values is structural, as in Rust: the same kinds, texts and tags,
-keys in the same order; haus equality, where the order of a record's fields
-doesn't matter (spec §2), is `Encode.equals`.
+a record's keys in the same order, numbers as their normalized literal as
+stored (`Value.num("1.0")` and `Value.num("1.00")` differ, as they do in
+haus). It is not haus equality (spec §2), where the order of a record's
+fields doesn't matter: that is `Encode.equals`, so `{ a: 1, b: 2 }` and
+`{ b: 2, a: 1 }` differ with `==` and are equal with `Encode.equals`.
 
 The parser builds values directly, without the constructors' checks: it
 has made them already. The package's other modules (decoding, encoding, the
@@ -296,19 +312,19 @@ from the package's other modules.)
 canonical form as 64 lowercase hex digits, and `Encode.hash_all(values)` the
 hash of a list, such as a file or a stream: the canonical forms joined by `,`
 (`hash_all([v]) == hash(v)`). Both use Roc's builtin `Crypto.SHA256`. The
-canonical form has no limits: an integer is written in decimal with all its
-digits, however long, and any exponent goes. Every value is a haus value
-(see [Values](#values)), with its numbers normalized when it was built, so
-nothing it holds makes these fail (spec §12). Only its shape can (spec §9.8):
-these functions recurse once per level, so a `Value` built in code nested
-deeper than `Value.max_supported_depth` fails with `nesting-too-deep`, and
-one with more than `Value.max_nodes` values, a shared part counted each time
-it is reached (`x = Value.arr([y, y])`), with `too-many-nodes`, before
-anything is written. A parsed value never fails. So each of them gives a
-`Try`: `Encode.equals(a, b) == Ok(True)`, and to sort,
-`values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
-`Value.within_bounds(v, max_depth, max_nodes)` is the check they make, for a
-value built in code, with your own bounds.
+canonical form's one limit is the node limit (spec §7, §12): an integer is
+written in decimal with all its digits, however long, any exponent goes, and
+a value of any depth has its canonical form (it is written with a list, not
+recursion). Every value is a haus value (see [Values](#values)), with its
+numbers normalized when it was built, so nothing it holds makes these fail.
+Only a `Value` built in code whose parts share each other can: one that
+writes more than `max_nodes` values (64 Mi by default), a shared part counted
+each time it is written (`x = Value.arr([y, y])`), fails with
+`too-many-nodes`; `hash_all` counts each value on its own. A parsed value
+never fails. So each of them gives a `Try`: `Encode.equals(a, b) == Ok(True)`,
+and to sort, `values.sort_with(|a, b| Encode.compare(a, b) ?? Same)`.
+`Encode.canonical_with`, `hash_with`, `hash_all_with`, `equals_with` and
+`compare_with` take a `Value.Limits` and use only its `max_nodes`.
 
 ## Threads
 
@@ -334,6 +350,7 @@ Value.parse_all_with(text, limits)
 | JSON | `JsonValue.parse_with`, `JsonValue.lines_with`, `JsonValue.import_json_with`, `JsonValue.from_haus_json_with`, `JsonValue.from_haus_json_lines_with`, `FromJson.one_with`, `FromJson.lines_with` |
 | decoding a `Value` built in code | `Decode.within_limits(value, read_value_<name>, limits)` |
 | writing haus for such a reader | `Encode.value_with`, `Encode.to_str_with`, `Encode.stream_with`, `Encode.minimised_with`, `Encode.stream_minimised_with` |
+| the canonical form, hashing, equality and order (`max_nodes` only) | `Encode.canonical_with`, `Encode.hash_with`, `Encode.hash_all_with`, `Encode.equals_with`, `Encode.compare_with` |
 | writing JSON for such a reader | `JsonValue.to_str_with`, `JsonValue.write_lines_with`, `JsonValue.to_haus_json_with`, `JsonValue.to_haus_json_lines_with`, `JsonValue.haus_json_value_with`, `ToJson.to_str_with`, `ToJson.lines_with` |
 
 `Value.max_supported_depth` is 1024: the parser, decoding, encoding and the
@@ -344,8 +361,8 @@ if `max_depth` is larger, with an error that names the maximum (`max_depth
 says so too. With basic-cli 0.26 a program overflows its stack only past about
 24,000 levels on the deepest path (the self-describing JSON of nested variants,
 measured on aarch64 macOS, optimized and dev builds alike), so 1024 leaves a
-wide margin; the canonical form, the hash and `Encode.equals` stop at
-`Value.max_supported_depth` too. Encoders stop at the depth limit
+wide margin. The canonical form, the hash and `Encode.equals` don't
+recurse, and take a value of any depth. Encoders stop at the depth limit
 however deep a native value is, and decoders and JSON readers at the depth
 limit however deep a `Value` or `JsonValue` built in code is; Roc itself
 frees a value recursively, so a value nested some hundred thousand levels
@@ -353,10 +370,13 @@ deep overflows the stack when it is dropped (about 250,000 links of a list,
 150,000 levels of `Arr`, fewer than 140,000 of `Tag("Some", …)` under `roc
 test`), whatever haus does with it.
 
-`max_steps` in `Value.Limits` bounds the work of encoding and writing one
-value (16 Mi steps by default, `step-budget` past it); parsing and decoding
-don't use it. Decoding, the canonical form, the hash and equality take at
-most `Value.max_nodes` values (64 Mi, `too-many-nodes` past it).
+`max_nodes` in `Value.Limits` is the node limit (spec §7, "Values
+written"): the writers, the canonical form, the hash, equality and order, and
+decoding a `Value` built in code take at most that many values for one value
+(64 Mi by default, `too-many-nodes` past it); parsing doesn't use it.
+`max_steps` bounds the work of encoding one native value with an
+`encode_<name>` or `to_json_<name>` (16 Mi steps by default, `step-budget`
+past it); parsing, decoding and the writers of values don't use it.
 
 A generated `from_json_<name>` checks the depth of what it read against 256;
 for another depth limit, check with

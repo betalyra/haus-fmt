@@ -5,7 +5,7 @@
 //! decoding haus, reading is linear in the input: objects are indexed once,
 //! and a variant's case is chosen by its `"_tag"`.
 
-use super::{FromJson, Json, base64};
+use super::{FromJson, Json, JsonObject, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
 use crate::{Codec, DecodeError, Decoder, EncodeError, ErrorCode as Code, Number, Secret, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -168,7 +168,7 @@ impl<'a> Object<'a> {
             _ => {
                 let payload = self.members.iter().filter(|(k, _)| k != "_tag").cloned().collect();
                 let (limits, depth) = (self.d.limits(), self.d.depth());
-                vec![super::import::import_at(&Json::Object(payload), limits, depth)?]
+                vec![super::import::import_at(&Json::Object(JsonObject::from_unique(payload)), limits, depth)?]
             }
         };
         Ok(Unknown { tag, args })

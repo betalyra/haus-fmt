@@ -2,7 +2,8 @@
 """Update the generated part of roc/package/ErrorCode.roc from spec/errors.haus.
 
 The catalogue of error codes (spec §17) is the single source: this writes a
-constant per code (`ErrorCode.payload_newline == "payload-newline"`), `all`,
+constant per code (`ErrorCode.payload_newline == "payload-newline"`), its doc
+comment the catalogue's meaning and place ("Reported at", spec §8), `all`,
 `hint` (the catalogue's fix) and `category` between the module's
 "generated" markers, and leaves the rest of the module alone. A test in
 ConformanceTest.roc (gen_conformance.py) reads the catalogue with the Roc
@@ -43,16 +44,21 @@ def kebab(tag: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "-", tag).lower()
 
 
+# Categories whose places are informative, not yet normative (spec §8), as
+# INFORMATIVE_PLACES in spec/scripts/errors.ts.
+INFORMATIVE_PLACES = {"schema-files", "imports"}
+
+
 def entries() -> list[dict[str, str]]:
     text = SOURCE.read_text(encoding="utf-8")
     out = []
     # Each entry starts a line with `Code {`; its fields are on lines of their own.
     for block in re.split(r"^Code \{", text, flags=re.M)[1:]:
         field = lambda key, value: re.search(rf"^\s*{key}: {value},?$", block, re.M)
-        code, category, means, fix = field("code", STRING), field("category", r"([A-Z]\w*)"), field("means", STRING), field("fix", STRING)
-        if not (code and category and means and fix):
+        code, category, means, at, fix = field("code", STRING), field("category", r"([A-Z]\w*)"), field("means", STRING), field("at", STRING), field("fix", STRING)
+        if not (code and category and means and at and fix):
             raise SystemExit(f"spec/errors.haus: can't read the entry {block[:60]!r}")
-        out.append({"code": unescape(code[1]), "category": kebab(category[1]), "means": unescape(means[1]), "fix": unescape(fix[1])})
+        out.append({"code": unescape(code[1]), "category": kebab(category[1]), "means": unescape(means[1]), "at": unescape(at[1]), "fix": unescape(fix[1])})
     return out
 
 
@@ -60,7 +66,8 @@ codes = entries()
 lines = [BEGIN, ""]
 for e in codes:
     name = e["code"].replace("-", "_")
-    lines += [f"## `{e['code']}` ({e['category']}): {e['means']}", f"{name} : Str", f"{name} = {roc_str(e['code'])}", ""]
+    reported = "Reported at (informative)" if e["category"] in INFORMATIVE_PLACES else "Reported at"
+    lines += [f"## `{e['code']}` ({e['category']}): {e['means']} {reported}: {e['at']}", f"{name} : Str", f"{name} = {roc_str(e['code'])}", ""]
 lines += [
     "## Every code, in the catalogue's order.",
     "all : List(Str)",

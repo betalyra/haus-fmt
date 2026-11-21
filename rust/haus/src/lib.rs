@@ -16,9 +16,10 @@
 //!
 //! A [`Value`] built in code (the raw value of an `Any`, say) is a haus value
 //! too: its constructors reject what isn't one, with the code of the mistake
-//! ([`ValueError`]), and normalize numbers as the parser reads them. Writing
-//! it fails only beyond the limits of the reader it is for; its canonical
-//! form, equality and hash can't fail (spec §11, §12):
+//! ([`ValueError`]), and normalize numbers as the parser reads them.
+//! Constructors check only that a value is valid, never a limit: writing it
+//! fails only beyond the limits of the reader it is for ([`Limits`]); its
+//! canonical form, equality and hash can't fail (spec §11, §12):
 //!
 //! ```
 //! use haus::{ErrorCode, Value};
@@ -93,6 +94,7 @@ const _: () = {
     shared::<Decoder>();
     shared::<Encoder>();
     shared::<Json>();
+    shared::<json::JsonObject>();
     shared::<Int>();
     shared::<Decimal>();
     shared::<Bytes>();
@@ -118,6 +120,34 @@ macro_rules! include_schema {
 /// Parse a file: zero or more top-level values, separated by commas.
 pub fn parse(src: &str) -> Result<Vec<Value>, SyntaxError> {
     parse_with(src, &Limits::default())
+}
+
+/// Parse a single document: exactly one value, with an optional comma after
+/// it (spec §6). An input with no value, or with more than one, is
+/// `not-one-value`, reported at the end of the input; any syntax error in it
+/// comes first.
+///
+/// ```
+/// assert_eq!(haus::parse_one("1,").unwrap(), haus::Value::from(1));
+/// let e = haus::parse_one("1, 2").unwrap_err();
+/// assert_eq!((e.code, e.line, e.column), (haus::ErrorCode::NotOneValue, 1, 5));
+/// ```
+pub fn parse_one(src: &str) -> Result<Value, SyntaxError> {
+    parse_one_with(src, &Limits::default())
+}
+
+/// [`parse_one`] with the given limits.
+pub fn parse_one_with(src: &str, limits: &Limits) -> Result<Value, SyntaxError> {
+    let mut values = parse_with(src, limits)?;
+    match values.len() {
+        1 => Ok(values.swap_remove(0)),
+        n => Err(SyntaxError::at(
+            src,
+            src.len(),
+            ErrorCode::NotOneValue,
+            format!("expected one value, found {}", if n == 0 { "none".to_owned() } else { n.to_string() }),
+        )),
+    }
 }
 
 /// Parse raw bytes, which must be UTF-8.
@@ -173,7 +203,7 @@ pub fn to_string<T: Encode + ?Sized>(value: &T) -> Result<String, EncodeError> {
 /// integers included, which are written in decimal.
 pub fn to_string_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
     match value.as_value() {
-        Some(v) => ser::write_value(v, limits, true),
+        Some(v) => ser::write_line(v, limits, true),
         None => ser::write_with(&value.encode_with(Encoder::new(limits))?, limits),
     }
 }
@@ -193,18 +223,14 @@ pub fn to_string_minimised<T: Encode + ?Sized>(value: &T) -> Result<String, Enco
 /// [`to_string_minimised`], for a reader with `limits` (see [`to_string_with`]).
 pub fn to_string_minimised_with<T: Encode + ?Sized>(value: &T, limits: &Limits) -> Result<String, EncodeError> {
     match value.as_value() {
-        Some(v) => ser::write_value(v, limits, false),
+        Some(v) => ser::write_line(v, limits, false),
         None => ser::write_minimised_with(&value.encode_with(Encoder::new(limits))?, limits),
     }
 }
 
 /// Write a stream: one value per line, each followed by `,`. Errors say which value: `[3].total: …`.
 pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
-    values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| to_string(v).map(|line| line + ",\n").map_err(|e| e.within(Segment::Index(i))))
-        .collect()
+    values.iter().enumerate().map(|(i, v)| to_string(v).map(|line| line + ",\n").map_err(|e| e.item(i))).collect()
 }
 
 /// Read any JSON as a haus value, without a schema (JSON import, spec

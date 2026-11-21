@@ -1,0 +1,17 @@
+// Blank lines inside an entry are dropped; one between the key and a comment
+// that moves above the entry goes before the moved comment, except as the
+// first line of a container (spec §11).
+{
+  // first entry: no blank line after the opening bracket
+  e: 1,
+  a: 2,
+
+  // moved, after a blank line
+  b: 3,
+
+  /* moved, after a blank line */
+  c: 4,
+
+  // a blank line above the entry goes first
+  d: 5,
+}

@@ -138,3 +138,27 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
       - name: Build and test
         run: ./gradlew build --no-daemon
+
+  zig:
+    name: Zig (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: zig
+    steps:
+      - run: git config --global core.autocrlf false
+        working-directory: .
+      - uses: actions/checkout@v5
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.17.1
+      # The unit tests, the C ABI's tests and the conformance suite, in a safe
+      # build mode, then the suite in debug (as ci.yml runs them on Linux).
+      - name: Test
+        run: zig build test -Doptimize=ReleaseSafe --summary all
+      - name: Conformance suite (debug)
+        run: zig build suite

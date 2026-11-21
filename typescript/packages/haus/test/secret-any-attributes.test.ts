@@ -140,7 +140,7 @@ describe("Any", () => {
     for (const value of notValues) expect(() => h.encode(h.Any, value as Value)).toThrow(expect.objectContaining({ code: "cannot-encode" }))
     expect(() => h.encode(h.Any, num("1e99999"))).toThrow(expect.objectContaining({ code: "exponent-too-large" }))
     const deep: Value = Array.from({ length: 300 }).reduce<Value>((v) => arr([v]), num("1"))
-    expect(() => h.encode(h.Any, deep)).toThrow(/nesting deeper/)
+    expect(() => h.encode(h.Any, deep)).toThrow(/deeper than 256 levels/)
   })
 
   it("writes a value built in code back as it is: its numbers are normalized when it is built", () => {
@@ -190,24 +190,25 @@ describe("Any", () => {
     expect(() => h.encode(h.Decimal, "1".repeat(2500))).toThrow(/longer than 1000/)
   })
 
-  // A DAG of depth 64 would expand to 2^64 nodes: the work is bounded by
-  // counted steps, not by time. A small budget keeps the test fast under load.
+  // A DAG of depth 64 would expand to 2^64 nodes: the node limit (spec §7)
+  // ends it before any work, its shared parts counted once each.
   const shared = (depth: number): Value => {
     let v: Value = num("1")
     for (let i = 0; i < depth; i++) v = arr([v, v])
     return v
   }
 
-  it("bounds the work for values that share parts", () => {
-    expect(() => h.encode(h.Any, shared(64), { maxSteps: 4096 })).toThrow(/encode budget of 4096 steps exceeded/)
-    // Within the budget, the same kind of value encodes (2^11 - 1 nodes).
-    expect(h.encode(h.Any, shared(10), { maxSteps: 4096 }).kind).toBe("array")
+  it("bounds the work for values that share parts: the node limit", () => {
+    expect(() => h.encode(h.Any, shared(64))).toThrow(expect.objectContaining({ code: "too-many-nodes", path: [] }))
+    // 2^11 - 1 nodes: within a limit of that many, and not one fewer.
+    expect(h.encode(h.Any, shared(10), { maxNodes: 2047 }).kind).toBe("array")
+    expect(() => h.encode(h.Any, shared(10), { maxNodes: 2046 })).toThrow(expect.objectContaining({ code: "too-many-nodes" }))
+    expect(() => h.stringify(h.Any, shared(10), { maxNodes: 2046 })).toThrow(expect.objectContaining({ code: "too-many-nodes" }))
   })
 
-  // The default budget (16 Mi steps) takes a few seconds to use up: a generous
-  // timeout, so a loaded machine doesn't fail it.
-  it("bounds the work for values that share parts by default", { timeout: 120_000 }, () => {
-    expect(() => h.encode(h.Any, shared(64))).toThrow(/encode budget of 16777216 steps exceeded/)
+  it("bounds the work for values that share parts: the step budget", () => {
+    expect(() => h.encode(h.Any, shared(10), { maxSteps: 1000 })).toThrow(/encode budget of 1000 steps exceeded/)
+    expect(h.encode(h.Any, shared(10), { maxSteps: 4096 }).kind).toBe("array")
   })
 })
 

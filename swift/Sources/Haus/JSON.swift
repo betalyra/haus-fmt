@@ -73,7 +73,7 @@ public func fromHausJSON(bytes: some Collection<UInt8>, limits: Limits = Limits(
 /// checking it against `limits`.
 func appendHausJSON(_ value: HausValue, limits: Limits, to out: inout [UInt8]) throws(HausError) {
     out += #"{"_haus":1,"_value":"#.utf8
-    var walk = Walk(SelfDescribingSpelling(), checks: .value(limits))
+    var walk = Walk(SelfDescribingSpelling(), checks: .writer(limits))
     try walk.write(value, to: &out)
     out.append(ASCII.closeBrace)
 }
@@ -531,14 +531,14 @@ struct SelfDescribing {
 
     /// The value of `{"_tag": tag, "_args": args}`, inside containers
     /// `depth` levels deep.
-    mutating func variant(_ tag: String, _ args: HausValue, depth: Int) throws(HausError) -> HausValue {
+    mutating func variant(_ tag: HausTag, _ args: HausValue, depth: Int) throws(HausError) -> HausValue {
         try read(.arguments(tag, args), depth: depth)
     }
 
     /// What is read next: a form, or the `_args` of a tag.
     enum Next {
         case form(HausValue)
-        case arguments(String, HausValue)
+        case arguments(HausTag, HausValue)
     }
 
     /// A container of the form being read: the forms of its items, and the
@@ -549,9 +549,9 @@ struct SelfDescribing {
             /// The fields of `{"_rec": …}`, which has their keys.
             case record(HausRecord)
             /// The arguments of a tag.
-            case arguments(String)
+            case arguments(HausTag)
             /// The fields of a tag's record payload, which has their keys.
-            case recordPayload(String, HausRecord)
+            case recordPayload(HausTag, HausRecord)
         }
 
         let kind: Kind
@@ -638,7 +638,7 @@ struct SelfDescribing {
     }
 
     /// The `_args` of `tag`.
-    mutating func arguments(_ tag: String, _ args: HausValue, depth: Int, _ stack: inout [Frame]) throws(HausError)
+    mutating func arguments(_ tag: HausTag, _ args: HausValue, depth: Int, _ stack: inout [Frame]) throws(HausError)
         -> HausValue?
     {
         path.append(.key("_args"))
@@ -681,7 +681,7 @@ struct SelfDescribing {
         /// `{"_rec": …}`, with the member's value.
         case record(HausValue)
         /// `{"_tag": …, "_args": …}`, with the tag and the arguments' member.
-        case variant(String, HausValue)
+        case variant(HausTag, HausValue)
     }
 
     /// The form of an object: `{"_rec": …}`, `{"_num": …}`, `{"_bytes": …}`,
@@ -756,14 +756,14 @@ struct SelfDescribing {
 
     /// A `_tag`; its errors are at the variant, the object that holds it.
     @inline(never)
-    func tag(_ j: HausValue) throws(HausError) -> String {
+    func tag(_ j: HausValue) throws(HausError) -> HausTag {
         guard case .string(let t) = j, isTag(t) else {
             throw fail(.invalidTag, "expected a tag ([A-Z][A-Za-z0-9_]*) in '_tag', found \(describeJSON(j))")
         }
         if t.utf8.count > limits.maxStringLength {
             throw fail(.tagTooLong, "a tag longer than the limit of \(limits.maxStringLength) characters")
         }
-        return t
+        return HausTag(valid: t)
     }
 }
 

@@ -7,8 +7,8 @@ import (
 )
 
 // TestPositionsSuite runs positions/cases.haus (spec §8): each text, parsed
-// whole, fails with the code at the line and column (1-based, columns in
-// code points).
+// whole (as a single document when the case says document: True), fails
+// with the code at the line and column (1-based, columns in code points).
 func TestPositionsSuite(t *testing.T) {
 	vs, err := ParseAll(readSuite(t, "positions", "cases.haus"))
 	if err != nil {
@@ -32,7 +32,12 @@ func TestPositionsSuite(t *testing.T) {
 			t.Fatalf("not a case: %v", v)
 		}
 		want := fmt.Sprintf("%s at %s:%s", c, l, col)
-		_, err := ParseAll([]byte(s))
+		var err error
+		if doc, _ := r.Get("document"); Equals(doc, Variant{Tag: MustTag("True")}) {
+			_, err = Parse([]byte(s)) // a single document
+		} else {
+			_, err = ParseAll([]byte(s))
+		}
 		var e *Error
 		if !errors.As(err, &e) {
 			t.Errorf("%q: got %v, want %s", string(s), err, want)

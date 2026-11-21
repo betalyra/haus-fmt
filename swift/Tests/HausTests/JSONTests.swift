@@ -8,7 +8,7 @@ struct SuiteCase: CustomTestStringConvertible, Sendable {
     let tag: String
     let fields: HausRecord
 
-    var testDescription: String { (try? canonical(.variant(tag, [.record(fields)]))) ?? tag }
+    var testDescription: String { (try? canonical(.variant(HausTag(valid: tag), [.record(fields)]))) ?? tag }
 
     func string(_ key: String) -> String? {
         if case .string(let s)? = fields[key] { return s }
@@ -22,7 +22,7 @@ struct SuiteCase: CustomTestStringConvertible, Sendable {
             guard case .variant(let tag, let args) = v, args.count == 1, case .record(let r) = args[0] else {
                 fatalError("not a case: \(v)")
             }
-            return SuiteCase(tag: tag, fields: r)
+            return SuiteCase(tag: tag.name, fields: r)
         }
     }
 
@@ -165,17 +165,21 @@ struct JSONTests {
     }
 
     @Test func writingChecksTheValue() {
-        let error = #expect(throws: HausError.self) { try toHausJSON(["a": [.tag("lower")]]) }
-        #expect(error?.code == .invalidTag)
+        let error = #expect(throws: HausError.self) {
+            try toHausJSON(["a": [.string("abcd")]], limits: Limits(maxStringLength: 3))
+        }
+        #expect(error?.code == .stringTooLong)
         #expect(error?.path == "$.a[0]")
-        // Arrays that share their storage: 2^21 nodes in 21 arrays.
+        // Arrays that share their storage: 3 * 2^20 - 1 nodes in 21 arrays.
         var shared: HausValue = [1]
         for _ in 0..<20 { shared = [shared, shared] }
-        var walk = Walk(NoSpelling(), checks: .value(Limits()))
-        walk.maxNodes = 1 << 20
-        var nothing: [UInt8] = []
-        let many = #expect(throws: HausError.self) { try walk.write(shared, to: &nothing) }
+        let many = #expect(throws: HausError.self) { try toHausJSON(shared, limits: Limits(maxNodes: 1 << 20)) }
         #expect(many?.code == .tooManyNodes)
+        #expect(many?.path == "$")
+        let lines = #expect(throws: HausError.self) {
+            try toHausJSONLines([1, shared], limits: Limits(maxNodes: 1 << 20))
+        }
+        #expect(lines?.code == .tooManyNodes)
     }
 
     @Test func importLimits() {
@@ -239,7 +243,9 @@ struct JSONTests {
             try fromHausJSONLines("{\"_haus\":1,\"_value\":\"a\"}\n{\"_haus\":1,\"_value\":{\"_num\":\"01\"}}\n")
         }
         #expect(path?.path == "$[1]._value._num")
-        let written = #expect(throws: HausError.self) { try toHausJSONLines([1, .tag("x")]) }
+        let written = #expect(throws: HausError.self) {
+            try toHausJSONLines([1, "abcd"], limits: Limits(maxStringLength: 3))
+        }
         #expect(written?.path == "$[1]")
     }
 

@@ -125,8 +125,9 @@ a haus `Value` (spec §16.1). The caller says which form it reads: only
 
 Decoders take limits (spec §7) with their input, encoders with their value.
 They are the core's: `maxDepth` (256 by default), `maxNumberLength`,
-`maxExponent`, `maxStringLength`, and `maxSteps` for the conversion (and for
-the walk over a value before encoding, below).
+`maxExponent`, `maxStringLength`, `maxNodes` (the values written for one
+value, 64 Mi by default: `too-many-nodes` beyond it), and `maxSteps` for the
+conversion (and for the walk over a value before encoding, below).
 
 ```ts
 const order = yield* Haus.decode(Order)(text, { maxDepth: 64 })

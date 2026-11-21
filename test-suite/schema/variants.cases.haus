@@ -69,3 +69,8 @@ Ok { type: "Node", input: { s: S { s: S { s: N }, o: T { s: N } } } },
 Ok { type: "Next", input: { s: S { s: N, x: 1 } }, output: { s: S { s: N } } },
 Err { type: "Node", input: { s: S { s: 1 } }, code: "type-mismatch", path: "$.s.s" },
 Err { type: "Node", input: { s: S(1) }, code: "wrong-payload", path: "$.s" },
+
+// rule: decode.variant.record-case-identity
+// A Map argument is positional: its entries are steps from the argument, $[0].
+Ok { type: "MapBox", input: Box({ a: 1 }) },
+Err { type: "MapBox", input: Box { a: "x" }, code: "type-mismatch", path: "$[0].a" },

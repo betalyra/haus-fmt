@@ -39,7 +39,7 @@ func (t Type) ParseWith(src []byte, opts DecodeOptions) (haus.Value, error) {
 	w.plain = opts.Codecs.none()
 	// A text of n bytes holds at most n values, so CheckValue's node limit
 	// can't be reached either.
-	w.parsed = len(src) <= haus.MaxNodes
+	w.parsed = len(src) <= lim.MaxNodes
 	out, _, err := w.value(v, t.t)
 	w.release()
 	if err != nil {
@@ -84,7 +84,7 @@ func (t Type) formatOnePass(v haus.Value, opts haus.FormatOptions) ([]byte, bool
 	w := newWalker(lim, v, nil)
 	defer w.release()
 	w.encoding, w.writing, w.minimised = true, true, opts.Layout == haus.Minimised
-	if _, _, err := w.value(v, t.t); err != nil {
+	if _, _, err := w.value(v, t.t); err != nil || w.tooLong {
 		return nil, false
 	}
 	w.b = append(w.b, '\n')

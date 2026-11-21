@@ -69,9 +69,9 @@ theorem CandOk.mono {V : View} {P P' : Target → Prop} {imp : Import} {name : S
   obtain ⟨m, h1, h2, h3, h4, h5⟩ := h
   exact ⟨m, h1, h2, h3, hP _ h4, h5⟩
 
-/-- What a copy's `package.json` declares, if `npm` is on. -/
+/-- What a copy's `package.json` declares, if `npm` is on or versions are checked. -/
 def npmOf (V : View) (dir : Path) : Option (Option NpmInfo) :=
-  if V.mode.npm = true then packageJsonV V dir else some none
+  if (V.mode.npm || V.checkVersions) = true then packageJsonV V dir else some none
 
 /-- The SHOULD check of "Package versions" (§13.3) passes. -/
 def VersionOk (V : View) (m : Manifest) (npm : Option NpmInfo) : Prop :=

@@ -19,7 +19,7 @@ if err != nil {
 }
 order := v.(haus.Record)
 if s, ok := order.Get("status"); ok {
-	if st, ok := s.(haus.Variant); ok && st.Tag == "Shipped" {
+	if st, ok := s.(haus.Variant); ok && st.Tag.String() == "Shipped" {
 		tracking, _ := st.Args[0].(haus.Record).Get("tracking")
 		fmt.Println("shipped:", tracking) // DE-4711
 	}
@@ -32,6 +32,15 @@ values, err := haus.ParseAll([]byte("Log { a: 1 },\nHeartbeat,\n")) // a stream:
 ```
 
 Values are `haus.Number`, `haus.String`, `haus.Bytes`, `haus.Array`, `haus.Record` and `haus.Variant`, the six kinds of spec §1, behind the sealed interface `haus.Value`; use a type switch to tell them apart. A `Number` keeps its normalized literal (`0xFF` is `255`, `1E+05` is `1e5`, `19.90` stays `19.90`); `BigInt` gives an integer as a `*big.Int`, and converting to a float is up to you. A `Record` keeps its fields in source order, with `Get`, `Len`, `All` and `Fields`. `haus.Equals` is equality as in spec §2: field order doesn't matter, `1.0` and `1` differ, and `Tag { … }` equals `Tag({ … })`.
+
+Values built in code are checked when they are built (spec §11), for validity only, never against a limit: `haus.ParseNumber("0xFF")` gives `255` and fails only for text that isn't a number literal (`invalid-number`), however long it is; `haus.NewRecord` rejects a key twice (`duplicate-key`) or a key that isn't UTF-8 (`cannot-encode`); and a variant's tag is a `haus.Tag`, made by `haus.NewTag(name)` (`invalid-tag` unless it matches `[A-Z][A-Za-z0-9_]*`) or `haus.MustTag("Some")` for tags known when the program is written:
+
+```go
+some := haus.Variant{Tag: haus.MustTag("Some"), Args: []haus.Value{haus.NumberFromInt(1)}}
+if some.Tag == haus.MustTag("Some") { /* tags compare by name; some.Tag.String() is "Some" */ }
+```
+
+So a variant with an invalid tag can't be built. Go still lets code build a few things past the constructors: a nil `Value`, a `Variant` with the zero `Tag`, a `haus.String` that isn't UTF-8, an array that contains itself. Writers and the canonical form reject those (`cannot-encode`, `cyclic-value`).
 
 ## Errors
 
@@ -56,7 +65,7 @@ if errors.As(err, &e) {
 
 ## Limits
 
-`haus.ParseAllWith(src, haus.Limits{MaxDepth: 64})` sets limits (spec §7); fields left at zero keep their defaults (`haus.DefaultLimits()`): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string (counted on the value, after escapes; for a byte string, between the quotes), and 64 Mi characters per top-level value of a stream (`MaxValueLength`, which only the stream reader applies: it bounds the reader's memory, while `ParseAll` already holds the whole text). `MaxDepth` can be at most `haus.MaxSupportedDepth`, 10000: the parser, the formatter and the canonical form recurse once per level, and a larger limit is rejected with the code `unsupported-depth`.
+`haus.ParseAllWith(src, haus.Limits{MaxDepth: 64})` sets limits (spec §7); fields left at zero keep their defaults (`haus.DefaultLimits()`): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string (counted on the value, after escapes; for a byte string, between the quotes), and 64 Mi characters per top-level value of a stream (`MaxValueLength`, which only the stream reader applies: it bounds the reader's memory, while `ParseAll` already holds the whole text). `MaxNodes` (64 Mi values written per top-level value) is the writers' (below). `MaxDepth` can be at most `haus.MaxSupportedDepth`, 10000: the parser, the formatter and the canonical form recurse once per level, and a larger limit is rejected with the code `unsupported-depth`.
 
 ## Streams
 
@@ -78,7 +87,7 @@ Errors have the same codes and positions as when the whole input is parsed at on
 
 `haus.Format(src, haus.DefaultFormatOptions())` rewrites text in one of the three layouts of spec §11: `Pretty` keeps comments and blank lines, `Compact` writes one item per line, and `Minimised` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. `Indent` and `Width` are the only options, taken literally: indent 0 indents nothing, and with width 0 nothing fits, so every positional payload is written one argument per line. `DefaultFormatOptions()` is indent 2, width 80; the zero `FormatOptions{}` is not. A negative indent or width fails with `haus.ErrInvalidOptions`, a plain error without a code. Compact and minimised ignore both, so `haus.FormatOptions{Layout: haus.Compact}` is enough. `haus.HasComments` tells a tool that rewrites files in place in the compact or minimised layout whether it would drop comments.
 
-`haus.FormatValue(v, opts)` and `haus.FormatValues(vs, opts)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes, and a stream with a comma after every value.
+`haus.FormatValue(v, opts)` and `haus.FormatValues(vs, opts)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes, and a stream with a comma after every value. They check every limit of `opts.Limits` a value can break, so that a parser with the same limits reads the text back (spec §11): the depth (`Tag { … }` counting one level), the length of each string, key, tag and byte string, the number length and exponent, and the node limit. The node limit (`Limits.MaxNodes`, default 64 Mi) counts the values written for each top-level value, each as often as it is written: a value whose arrays share one another is small in memory but can be exponentially larger written out, and fails with `too-many-nodes`. `haus.CheckValue(v, limits)` makes the same checks without writing.
 
 ## Canonical form and hashing
 
@@ -88,7 +97,7 @@ s, _ := haus.Canonical(v) // Order{id:255,total:19.90,"x-y":1e5}
 h, _ := haus.Hash(v)      // SHA-256 of the canonical form, 64 hex digits
 ```
 
-`haus.HashAll(values)` hashes a whole file; the items of a stream are hashed one by one with `haus.Hash`. `haus.Compare` orders values by their canonical forms. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
+`haus.HashAll(values)` hashes a whole file; the items of a stream are hashed one by one with `haus.Hash`. `haus.Compare` orders values by their canonical forms (and returns an error as `Canonical` does). The canonical form and hashing apply only the node limit (spec §12; `haus.CanonicalWith`, `haus.HashWith` and `haus.HashAllWith` take `Limits` for it): a value deeper or longer than a writer's limits still has a canonical form, up to the depth this binding supports, `haus.MaxSupportedDepth`. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
 
 ## Goroutines
 

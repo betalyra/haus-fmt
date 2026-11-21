@@ -34,6 +34,9 @@
 // one mistake each: a value over the limit before a valid one, a syntax error within the limit
 { text: "1234567, [1,2]", maxValueLength: 5, result: Err("value-too-long") },
 { text: "[1,,2], 1", maxValueLength: 9, result: Err("expected-value") },
+// a value over the limit is counted before it is parsed: its syntax error is never reached (§7)
+{ text: "[1,,2,3,4]", maxValueLength: 5, result: Err("value-too-long") },
+{ text: "1, [1,,2,3,4],", maxValueLength: 5, result: Err("value-too-long") },
 
 // ── strict mode: a value after the last comma means the stream was cut off ──
 { text: "1, 2,", maxValueLength: 64, strict: True, result: Ok([1, 2]) },

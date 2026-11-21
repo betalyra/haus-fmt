@@ -1,0 +1,3 @@
+// A package module is one token up to a blank or "(": "1@2" is no major version (grammar.ebnf).
+import @haus-fmt/money@1@2 (Money)
+type A = { total: Money }

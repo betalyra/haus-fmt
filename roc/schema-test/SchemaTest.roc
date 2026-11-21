@@ -159,6 +159,12 @@ SchemaTest := [].{
 		"Unsealed" => Decoded(encoded(Spreads.decode_unsealed(v), Spreads.encode_unsealed))
 		"Fixed" => Decoded(encoded(Spreads.decode_fixed(v), Spreads.encode_fixed))
 		"Extended" => Decoded(encoded(Spreads.decode_extended(v), Spreads.encode_extended))
+		"AliasEvent" => Decoded(encoded(Spreads.decode_alias_event(v), Spreads.encode_alias_event))
+		"ViaAlias" => Decoded(encoded(Spreads.decode_via_alias(v), Spreads.encode_via_alias))
+		"IntPage" => Decoded(encoded(Spreads.decode_int_page(v), Spreads.encode_int_page))
+		"Listing" => Decoded(encoded(Spreads.decode_listing(v), Spreads.encode_listing))
+		"NoTags" => Decoded(encoded(Spreads.decode_no_tags(v), Spreads.encode_no_tags))
+		"ClosedNoTags" => Decoded(encoded(Spreads.decode_closed_no_tags(v), Spreads.encode_closed_no_tags))
 		_ => NoType
 	}
 
@@ -205,6 +211,7 @@ SchemaTest := [].{
 		"Holder" => Decoded(encoded(Variants.decode_holder(v), Variants.encode_holder))
 		"Node" => Decoded(encoded(Variants.decode_node(v), Variants.encode_node))
 		"Next" => Decoded(encoded(Variants.decode_next(v), Variants.encode_next))
+		"MapBox" => Decoded(encoded(Variants.decode_map_box(v), Variants.encode_map_box))
 		_ => NoType
 	}
 }
@@ -919,7 +926,7 @@ expect SchemaTest.check(records_cases, 26, SchemaTest.records)
 expect SchemaTest.check(records_cases, 27, SchemaTest.records)
 
 # spreads.cases.haus
-expect SchemaTest.count(spreads_cases) == 19
+expect SchemaTest.count(spreads_cases) == 26
 
 # Ok { type: "AppEvent", input: UserCreated { id: 1 } },
 expect SchemaTest.check(spreads_cases, 0, SchemaTest.spreads)
@@ -977,6 +984,27 @@ expect SchemaTest.check(spreads_cases, 17, SchemaTest.spreads)
 
 # Err { type: "Extended", input: B("x"), code: "type-mismatch", path: "$[0]" },
 expect SchemaTest.check(spreads_cases, 18, SchemaTest.spreads)
+
+# Ok { type: "ViaAlias", input: UserCreated { id: 1 } },
+expect SchemaTest.check(spreads_cases, 19, SchemaTest.spreads)
+
+# Ok { type: "ViaAlias", input: Ping },
+expect SchemaTest.check(spreads_cases, 20, SchemaTest.spreads)
+
+# Err { type: "ViaAlias", input: Heartbeat, code: "unknown-tag", path: "$" },
+expect SchemaTest.check(spreads_cases, 21, SchemaTest.spreads)
+
+# Ok { type: "Listing", input: { items: [1, 2], total: 2 } },
+expect SchemaTest.check(spreads_cases, 22, SchemaTest.spreads)
+
+# Err { type: "Listing", input: { items: ["x"], total: 1 }, code: "type-mismatch", path: "$.items[0]" },
+expect SchemaTest.check(spreads_cases, 23, SchemaTest.spreads)
+
+# Err { type: "Listing", input: { items: [], total: 0, more: 1 }, code: "unknown-field", path: "$.more" },
+expect SchemaTest.check(spreads_cases, 24, SchemaTest.spreads)
+
+# Err { type: "ClosedNoTags", input: A, code: "unknown-tag", path: "$" },
+expect SchemaTest.check(spreads_cases, 25, SchemaTest.spreads)
 
 # time.cases.haus
 expect SchemaTest.count(time_cases) == 139
@@ -1489,7 +1517,7 @@ expect SchemaTest.check(types_cases, 27, SchemaTest.types)
 expect SchemaTest.check(types_cases, 28, SchemaTest.types)
 
 # variants.cases.haus
-expect SchemaTest.count(variants_cases) == 57
+expect SchemaTest.count(variants_cases) == 59
 
 # Ok { type: "Shape", input: Circle { r: 1.5 } },
 expect SchemaTest.check(variants_cases, 0, SchemaTest.variants)
@@ -1661,6 +1689,12 @@ expect SchemaTest.check(variants_cases, 55, SchemaTest.variants)
 
 # Err { type: "Node", input: { s: S(1) }, code: "wrong-payload", path: "$.s" },
 expect SchemaTest.check(variants_cases, 56, SchemaTest.variants)
+
+# Ok { type: "MapBox", input: Box({ a: 1 }) },
+expect SchemaTest.check(variants_cases, 57, SchemaTest.variants)
+
+# Err { type: "MapBox", input: Box { a: "x" }, code: "type-mismatch", path: "$[0].a" },
+expect SchemaTest.check(variants_cases, 58, SchemaTest.variants)
 
 # stream/typed.cases.haus
 expect typed_streams(typed_cases)

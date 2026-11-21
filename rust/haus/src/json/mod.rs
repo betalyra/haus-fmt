@@ -56,9 +56,9 @@ mod read;
 pub mod ser;
 
 use crate::error::Position;
+use crate::keys::{FEW, Keys, first_repeated};
 use crate::{
-    DecodeError, Decoder, Encode, EncodeError, Encoder, Error, ErrorCode, Limits, Segment, SyntaxError, Value,
-    ValueError,
+    DecodeError, Decoder, Encode, EncodeError, Encoder, Error, ErrorCode, Limits, SyntaxError, Value, ValueError,
 };
 use read::Form;
 use std::io::{BufRead, Read, Write};
@@ -67,7 +67,7 @@ pub use haus_json::{from_self_describing, to_self_describing};
 pub use import::import;
 
 /// A JSON value. Numbers are kept as their exact text, and objects as their
-/// members in order (names are unique in what the reader gives).
+/// members in order, each name once (I-JSON, RFC 7493).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Json {
     Null,
@@ -76,16 +76,160 @@ pub enum Json {
     Number(JsonNumber),
     String(String),
     Array(Vec<Json>),
-    Object(Vec<(String, Json)>),
+    Object(JsonObject),
 }
 
 impl Json {
+    /// An object of `members`, in order: see [`JsonObject::from_members`].
+    pub fn object<K: Into<String>>(members: impl IntoIterator<Item = (K, Json)>) -> Result<Json, ValueError> {
+        JsonObject::from_members(members).map(Json::Object)
+    }
+
     /// A member of an object.
     pub fn get(&self, name: &str) -> Option<&Json> {
         match self {
-            Json::Object(members) => members.iter().find(|(k, _)| k == name).map(|(_, v)| v),
+            Json::Object(members) => members.get(name),
             _ => None,
         }
+    }
+}
+
+/// A JSON object: members in order, each name once (I-JSON, RFC 7493, as
+/// spec §16 reads JSON). Its constructors reject a name given twice
+/// (`duplicate-key`), as [`crate::Record`]'s reject a key given twice, so
+/// writing an object never meets one. It derefs to its members.
+///
+/// ```
+/// use haus::json::{Json, JsonObject};
+/// let mut o = JsonObject::new();
+/// o.insert("a", Json::Null).unwrap();
+/// assert!(o.insert("a", Json::Bool(true)).is_err());
+/// assert_eq!(o.get("a"), Some(&Json::Null));
+/// assert!(Json::object([("b", Json::Null), ("b", Json::Null)]).is_err());
+/// ```
+#[derive(Default)]
+pub struct JsonObject {
+    members: Vec<(String, Json)>,
+    /// The names, chained, once [`JsonObject::insert`] grew the object
+    /// beyond a few: each insert then compares its name with a few others only.
+    names: Option<Box<Keys>>,
+}
+
+impl JsonObject {
+    /// An object without members.
+    pub fn new() -> JsonObject {
+        JsonObject::default()
+    }
+
+    /// An object of `members`, in order. Fails if a name is there twice
+    /// (`duplicate-key`); finding that takes time linear in the names.
+    pub fn from_members<K: Into<String>>(
+        members: impl IntoIterator<Item = (K, Json)>,
+    ) -> Result<JsonObject, ValueError> {
+        let members: Vec<(String, Json)> = members.into_iter().map(|(k, v)| (k.into(), v)).collect();
+        match first_repeated(&members) {
+            Some(i) => Err(duplicate_name(&members[i].0)),
+            None => Ok(JsonObject { members, names: None }),
+        }
+    }
+
+    /// Members whose names are known to be unique.
+    pub(crate) fn from_unique(members: Vec<(String, Json)>) -> JsonObject {
+        JsonObject { members, names: None }
+    }
+
+    /// Adds a member after the others. Fails if the object has the name
+    /// already (`duplicate-key`), leaving it as it was. Takes time linear
+    /// in the name, not in the object.
+    pub fn insert(&mut self, name: impl Into<String>, value: Json) -> Result<(), ValueError> {
+        let name = name.into();
+        let new = match &mut self.names {
+            Some(names) => names.insert(&self.members, &name),
+            None if self.members.len() < FEW => !self.members.iter().any(|(k, _)| *k == name),
+            None => {
+                let mut names = Box::new(Keys::of(&self.members));
+                let new = names.insert(&self.members, &name);
+                self.names = Some(names);
+                new
+            }
+        };
+        if !new {
+            return Err(duplicate_name(&name));
+        }
+        self.members.push((name, value));
+        Ok(())
+    }
+
+    /// The value of member `name`.
+    pub fn get(&self, name: &str) -> Option<&Json> {
+        self.members.iter().find(|(k, _)| k == name).map(|(_, v)| v)
+    }
+
+    /// The members, in order.
+    pub fn as_slice(&self) -> &[(String, Json)] {
+        &self.members
+    }
+
+    /// The members, in order.
+    pub fn into_members(self) -> Vec<(String, Json)> {
+        self.members
+    }
+}
+
+fn duplicate_name(name: &str) -> ValueError {
+    ValueError::new(ErrorCode::DuplicateKey, format!("duplicate member name \"{}\"", crate::scan::shown(name)))
+}
+
+/// The members, in order.
+impl std::ops::Deref for JsonObject {
+    type Target = [(String, Json)];
+    fn deref(&self) -> &[(String, Json)] {
+        &self.members
+    }
+}
+
+/// A copy of the members (the chained names are made again if needed).
+impl Clone for JsonObject {
+    fn clone(&self) -> JsonObject {
+        JsonObject::from_unique(self.members.clone())
+    }
+}
+
+/// The same members in the same order.
+impl PartialEq for JsonObject {
+    fn eq(&self, other: &JsonObject) -> bool {
+        self.members == other.members
+    }
+}
+
+impl Eq for JsonObject {}
+
+impl std::fmt::Debug for JsonObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.members.iter().map(|(k, v)| (k, v))).finish()
+    }
+}
+
+impl TryFrom<Vec<(String, Json)>> for JsonObject {
+    type Error = ValueError;
+    fn try_from(members: Vec<(String, Json)>) -> Result<JsonObject, ValueError> {
+        JsonObject::from_members(members)
+    }
+}
+
+impl IntoIterator for JsonObject {
+    type Item = (String, Json);
+    type IntoIter = std::vec::IntoIter<(String, Json)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.members.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a JsonObject {
+    type Item = &'a (String, Json);
+    type IntoIter = std::slice::Iter<'a, (String, Json)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.members.iter()
     }
 }
 
@@ -329,10 +473,6 @@ fn write_form(json: &Json, limits: &Limits, form: Form) -> Result<String, Encode
                         format!("JSON nested deeper than {max} levels"),
                     ));
                 }
-                let mut seen = std::collections::HashSet::with_capacity(members.len());
-                if !members.iter().all(|(k, _)| seen.insert(k.as_str())) {
-                    return Err(EncodeError::new(ErrorCode::DuplicateKey, "a member name is used twice in an object"));
-                }
                 depth += 1;
                 out.push('{');
                 todo.push(Next::Close('}'));
@@ -470,11 +610,7 @@ pub fn to_haus_json_lines(values: &[Value]) -> Result<String, EncodeError> {
 
 /// Each value written by `write`, followed by a line feed.
 fn lines<T>(values: &[T], write: impl Fn(&T) -> Result<String, EncodeError>) -> Result<String, EncodeError> {
-    values
-        .iter()
-        .enumerate()
-        .map(|(i, v)| write(v).map(|line| line + "\n").map_err(|e| e.within(Segment::Index(i))))
-        .collect()
+    values.iter().enumerate().map(|(i, v)| write(v).map(|line| line + "\n").map_err(|e| e.item(i))).collect()
 }
 
 /// Read schema-based JSON Lines: every line a JSON text read as a `T`. The
@@ -548,7 +684,7 @@ fn line_json<T>(
 /// stops the output before it, with an error that says which: `[3].total: …`.
 pub fn encode<T: ToJson, W: Write>(mut output: W, values: impl IntoIterator<Item = T>) -> Result<(), Error> {
     for (i, v) in values.into_iter().enumerate() {
-        let line = to_string(&v).map_err(|e| e.within(Segment::Index(i)))?;
+        let line = to_string(&v).map_err(|e| e.item(i))?;
         writeln!(output, "{line}")?;
     }
     Ok(output.flush()?)

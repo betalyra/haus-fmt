@@ -122,9 +122,9 @@ describe("JSON Lines (spec §16, \"Streams\")", () => {
       if (c.kind !== "Err") throw e
       return rejects(() => { throw e }, c)
     }
-    expect(c.kind, values.map(canonical).join(", ")).toBe("Ok")
+    expect(c.kind, values.map((v) => canonical(v)).join(", ")).toBe("Ok")
     const output = c.output
-    expect(output?.kind === "array" && output.items.length === values.length && values.every((v, i) => equals(v, output.items[i]!)), values.map(canonical).join(", ")).toBe(true)
+    expect(output?.kind === "array" && output.items.length === values.length && values.every((v, i) => equals(v, output.items[i]!)), values.map((v) => canonical(v)).join(", ")).toBe(true)
   })
 })
 
@@ -141,6 +141,6 @@ describe("valid/NAME.jsonl as self-describing cases", () => {
     written.forEach((w, i) => expectJson(parseJson(w, { maxDepth: 2000 }), lines[i]!))
     // Reading: each line gives an equal value.
     const back = await collect(fromHausJsonLines([jsonl]))
-    expect(back.map(canonical)).toEqual(values.map(canonical))
+    expect(back.map((v) => canonical(v))).toEqual(values.map((v) => canonical(v)))
   })
 })

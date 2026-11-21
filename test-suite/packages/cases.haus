@@ -397,6 +397,20 @@ Case {
   expect: Err { code: "package-version", mentions: ["1.0.0", "1.1.0"] },
 },
 
+Case {
+  name: "version-differs-explicit",
+  should: True,
+  about: "the same package given explicitly: the version of the package.json next to its manifest is checked too",
+  files: [
+    File("app/app.schema.haus", "import @acme/common@1 (Address)\ntype Root = { home: Address }"),
+    Package("vendor/common", "@acme/common", "1.0.0", "type Address = { city: String }"),
+    Npm("vendor/common", { name: "@acme/common", version: "1.1.0" }),
+  ],
+  root: "app/app.schema.haus",
+  mode: Explicit { packages: ["vendor/common"] },
+  expect: Err { code: "package-version", mentions: ["1.0.0", "1.1.0"] },
+},
+
 // ── files outside packages (D5) ─────────────────────────────────────────────
 
 Case {

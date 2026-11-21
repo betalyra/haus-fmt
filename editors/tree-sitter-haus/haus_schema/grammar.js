@@ -37,15 +37,12 @@ module.exports = grammar({
         choice(
           // A standard module.
           seq('std/', LOWER_IDENTIFIER),
-          // A schema package, with npm's rules for scoped names in lowercase,
-          // and optionally a major version without leading zeros.
-          seq(
-            '@',
-            /[a-z0-9][a-z0-9._-]*/,
-            '/',
-            /[a-z0-9][a-z0-9._-]*/,
-            optional(seq('@', choice('0', /[1-9][0-9]*/))),
-          ),
+          // A schema package is one token: everything up to the first space,
+          // tab, line break or `(` (grammar.ebnf, module_char). Whether it is
+          // `@org/name` with npm's rules for scoped names in lowercase, and
+          // a major version without leading zeros, is checked beyond the
+          // syntax (`unknown-module`, `import-version`).
+          /@[^ \t\r\n(]+/,
           // A schema file next to this one, without `.schema.haus`.
           seq(choice('./', '../'), /[A-Za-z0-9_.\/-]*/),
         ),
@@ -86,12 +83,12 @@ module.exports = grammar({
     // Open unless closed: other fields are ignored.
     record_type: ($) => seq(optional('closed'), '{', optional(commaList(choice($.field_declaration, $.spread))), '}'),
 
-    // key: T, or key?: T for a field that may be missing.
+    // key: T, or key?: T for a field that may be missing (key ?: T too).
     field_declaration: ($) =>
       seq(
         repeat($.attribute),
         field('key', choice($.identifier, $.string)),
-        optional(token.immediate('?')),
+        optional('?'),
         ':',
         field('type', $._type),
       ),

@@ -51,3 +51,21 @@ Data { schema: "type Root = < Some Int | @deprecated Gone { a: Int } >", type: "
 // ── a field or tag copied by a spread keeps its attributes ──
 Data { schema: "type Base = { @deprecated x?: Int }\ntype Root = { ...Base, y: Int }", type: "Root", data: "{ x: 1, y: 2 }", issues: [Hint("deprecated", "$.x")] },
 Data { schema: "type Base = < @deprecated Old | New >\ntype Root = < ...Base | Other >", type: "Root", data: "Old", issues: [Hint("deprecated", "$")] },
+
+// ── attributes this version doesn't define: accepted twice, a warning each ──
+Schema { schema: "type A = { @since @since x: Int }", warnings: [Warning("unknown-attribute", 1, 12), Warning("unknown-attribute", 1, 19)] },
+
+// ── a blank between a field's key and its `?` (grammar.ebnf) ──
+Schema { schema: "type A = { x ?: Int, y? : Int }", warnings: [] },
+
+// ── a case copied by a spread is warned about once, where it is defined ──
+Schema { schema: "type Odd = < Box { _tag: Int32 } | Fine >\ntype V = < ...Odd | X >", warnings: [Warning("no-json-form", 1, 14)] },
+
+// ── nothing is pointed out inside a Secret (spec §14, §15): no hints, and an error at the secret ──
+Data { schema: "type Root = { key: Secret { a: Int } }", type: "Root", data: "{ key: { a: 1, b: 2 } }", issues: [] },
+Data { schema: "type Root = { key: Secret (Array { a: Int }) }", type: "Root", data: "{ key: [{ a: 1, zz: 2 }] }", issues: [] },
+Data { schema: "type Root = { key: Secret < A | B > }", type: "Root", data: "{ key: C }", issues: [] },
+Data { schema: "type Root = { key: Secret { @deprecated a?: Int } }", type: "Root", data: "{ key: { a: 1 } }", issues: [] },
+Data { schema: "type Root = Secret < @deprecated Old | New >", type: "Root", data: "Old", issues: [] },
+Data { schema: "type Root = { @deprecated key?: Secret Int }", type: "Root", data: "{ key: 1 }", issues: [Hint("deprecated", "$.key")] },
+Data { schema: "type Root = { key: Secret closed { a: Int } }", type: "Root", data: "{ key: { a: 1, b: 2 } }", issues: [Error("invalid-secret", "$.key")] },

@@ -413,18 +413,42 @@ class _Scanner:
 
 
 class _Builder:
-    """The tree of values built in code, checked to be within the limits (spec §11): numbers within the
-    number limits, nesting within the depth limit (a record payload is one level). Values are haus values
-    by construction, so nothing else is checked."""
+    """The tree of values built in code, checked against every limit a value can break (spec §11): the
+    depth (a record payload is one level, an empty container is one too), the length of each string, key,
+    tag and byte string, the number limits, and the node limit for each top-level value (`value`). Values
+    are haus values by construction, so nothing else is checked."""
 
-    __slots__ = ("limits", "path")
+    __slots__ = ("limits", "nodes", "path", "root")
 
     def __init__(self, limits: Limits) -> None:
         self.limits = limits
         self.path: list[PathKey] = []
+        self.root: tuple[PathKey, ...] = ()
+        """The path of the top-level value being written: where `too-many-nodes` is reported."""
+        self.nodes = 0
+        """The values written so far for the top-level value."""
 
     def fail(self, code: ErrorCode, reason: str) -> Never:
         raise HausEncodeError(reason, tuple(self.path), code)
+
+    def value(self, v: Value, root: tuple[PathKey, ...]) -> _Node:
+        """The tree of one top-level value, at `root`: its nodes are counted on their own."""
+        self.root = root
+        self.path = list(root)
+        self.nodes = 0
+        self.count(1)
+        return self.node(v, 0)
+
+    def count(self, n: int) -> None:
+        """`n` more values written (spec §7): counted a container's children at a time, before they are built."""
+        self.nodes += n
+        if self.nodes > self.limits.max_nodes:
+            raise HausEncodeError(
+                f"more than {self.limits.max_nodes} values to write (parts that share each other are written"
+                " each time)",
+                self.root,
+                "too-many-nodes",
+            )
 
     def enter(self, depth: int) -> None:
         """Start a container at `depth`, one level deeper."""
@@ -434,6 +458,8 @@ class _Builder:
     def node(self, v: Value, depth: int) -> _Node:
         match v:
             case String(s):
+                if len(s) > self.limits.max_string_length:
+                    self.fail("string-too-long", f"string longer than {self.limits.max_string_length} characters")
                 node = _Node(_STRING)
                 node.string = s
                 return node
@@ -442,6 +468,8 @@ class _Builder:
                     self.fail(issue[0], f"{issue[1]}: {len(text)} characters")
                 return _Node(_NUMBER, text)
             case Bytes(data):
+                if 2 * len(data) > self.limits.max_string_length:
+                    self.fail("string-too-long", f"byte string longer than {self.limits.max_string_length} characters")
                 return _Node(_BYTES, f'x"{data.hex()}"')
             case Array(items):
                 self.enter(depth)
@@ -450,19 +478,23 @@ class _Builder:
                 self.enter(depth)
                 return self.fields(fields, _Node(_RECORD), depth)
             case Variant(tag, args):
+                if len(tag) > self.limits.max_string_length:
+                    self.fail("tag-too-long", f"tag longer than {self.limits.max_string_length} characters")
                 node = _Node(_VARIANT)
                 node.tag = tag
                 if not args:
                     return node
                 self.enter(depth)
                 if len(args) == 1 and type(record := args[0]) is Record:
-                    # `Tag { … }`: the record is the payload's one level.
+                    # `Tag { … }`: the record is the payload's one level, and one value written.
                     node.form = _BRACES
+                    self.count(1)
                     return self.fields(record.fields, node, depth)
                 node.form = _PARENS
                 return self.sequence(args, node, depth)
 
     def sequence(self, values: tuple[Value, ...], node: _Node, depth: int) -> _Node:
+        self.count(len(values))
         items = node.items
         path = self.path
         for i, v in enumerate(values):
@@ -474,12 +506,16 @@ class _Builder:
         return node
 
     def fields(self, fields: Mapping[str, Value], node: _Node, depth: int) -> _Node:
+        self.count(len(fields))
         items = node.items
         path = self.path
+        max_key = self.limits.max_string_length
         for key, v in fields.items():
+            if len(key) > max_key:
+                self.fail("key-too-long", f"key longer than {max_key} characters")
+            path.append(key)
             item = _Item(False, [])
             item.key = key
-            path.append(key)
             item.node = self.node(v, depth + 1)
             items.append(item)
             path.pop()
@@ -825,9 +861,13 @@ def stringify_all(
         'Ping,\\n1e5,\\n'
 
     Every value is a haus value (its constructors check it, spec §11), so the only errors are the
-    limits: `haus.HausEncodeError` (a `ValueError`, with the `path` of the value) for a number longer
-    than the number limit (`number-too-long`) or with a larger exponent (`exponent-too-large`), and for
-    nesting deeper than the depth limit (`nesting-too-deep`; a record payload is one level).
+    limits of `limits` (spec §7), `haus.HausEncodeError` (a `ValueError`, with the `path` of the value):
+    a number longer than the number limit (`number-too-long`) or with a larger exponent
+    (`exponent-too-large`); a string or byte string (`string-too-long`), key (`key-too-long`) or tag
+    (`tag-too-long`) longer than the string limit; nesting deeper than the depth limit
+    (`nesting-too-deep`; a record payload is one level, an empty container is one too); and a value that
+    would write more values than `max_nodes` (`too-many-nodes`, at the top-level value: its parts share
+    each other, and each place writes them again). The node limit applies to each value on its own.
     """
     _options(style, indent, width)
     vs = list(values)
@@ -835,9 +875,8 @@ def stringify_all(
     builder = _Builder(limits)
     items: list[_Item] = []
     for i, v in enumerate(vs):
-        builder.path = [i] if len(vs) > 1 else []
         item = _Item(False, [])
-        item.node = builder.node(v, 0)
+        item.node = builder.value(v, (i,) if len(vs) > 1 else ())
         items.append(item)
     printer = _Printer(style, indent, width)
     return printer.pretty(items, []) if style == "pretty" else printer.lines(items)

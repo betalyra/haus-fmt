@@ -128,6 +128,11 @@ export class At {
     if (this.depth >= this.ctx.maxDepth) this.reject("nesting-too-deep", `nesting deeper than ${this.ctx.maxDepth} levels`)
   }
 
+  /** @internal The call's nesting limit (spec §7), for checking raw values. */
+  get maxDepth(): number {
+    return this.ctx.maxDepth
+  }
+
   /** The parser's limits for this call, for checking raw values (spec §9.8). */
   get limits(): ValueLimits {
     return this.ctx.values
@@ -238,7 +243,7 @@ const OPEN = { size: 0, need: 0 }
  * once: its count and the levels it needs are remembered, so a DAG that
  * expands beyond `cap` fails at once instead of after `cap` steps.
  */
-const countValues = (root: Value, maxDepth: number, cap: number, at: At): number => {
+const countValues = (root: Value, maxDepth: number, cap: number, at: At, depth = 0): number => {
   const tooMany = () => at.reject("too-many-nodes", `value has more than ${cap} nodes`)
   const tooDeep = () => at.reject("nesting-too-deep", `value nested deeper than ${maxDepth} levels`)
   if (!isContainer(root)) return 1
@@ -253,7 +258,7 @@ const countValues = (root: Value, maxDepth: number, cap: number, at: At): number
     const payload = v.kind === "variant" && v.args.length === 1 && v.args[0]!.kind === "record"
     stack.push({ value: v, depth, items, fields, next: 0, payload, size: 1, need: 1, holds: false })
   }
-  enter(root, 0)
+  enter(root, depth)
   for (;;) {
     const top = stack[stack.length - 1]!
     let child: Value
@@ -294,14 +299,12 @@ const countValues = (root: Value, maxDepth: number, cap: number, at: At): number
   }
 }
 
-/** Values beyond this are rejected before decoding (the parser's 64 Mi characters can't produce more). */
-const MAX_VALUES = 64 * 1024 * 1024
-
+/** A value built in code is decoded within the node limit (`maxNodes`, default 64 Mi, spec §7): the parser's 64 Mi characters can't produce more. */
 const decodeAt = (value: Value, limits: Limits, key?: string | number): At => {
   if (limits.maxSteps !== undefined) return decodeWithin(limits, 0, key)
   const maxDepth = limits.maxDepth ?? DEFAULT_MAX_DEPTH
   const probe = At.root(context("decode", Infinity, limits), key)
-  return decodeWithin(limits, countValues(value, maxDepth, MAX_VALUES, probe), key)
+  return decodeWithin(limits, countValues(value, maxDepth, probe.limits.maxNodes, probe), key)
 }
 
 /** Decoding a value of `size` values (counted by `countValues`, or by the parser that read it: a tree within the limits). */
@@ -1122,11 +1125,20 @@ const jsonCase = (c: Case): JsonCase => {
 /**
  * A raw `Value` handed to the encoder (an `Any`, an Unknown's payload): a
  * haus value (one the constructors built or a reader read, spec §11), within
- * the call's limits (spec §9.5, §9.8), checked node by node: depth, work,
- * the length and exponent of numbers, the length of strings, keys and tags.
- * It is written back as it is: a value is already normalized.
+ * the call's limits (spec §9.5, §9.8, §11), checked node by node: depth,
+ * work, the length and exponent of numbers, the length of strings, keys and
+ * tags; and first the node limit (`maxNodes`, spec §7): a value whose parts
+ * share each other would expand when written. It is written back as it is:
+ * a value is already normalized.
  */
 export const checkedValue = (raw: unknown, at: At): Value => {
+  // Counted with shared parts remembered: a DAG over the limit, or a forged value that contains itself, fails at once.
+  if (isValue(raw)) countValues(raw, at.maxDepth, at.limits.maxNodes, at, at.depth)
+  return checkedTree(raw, at)
+}
+
+/** `checkedValue` below its node count. */
+const checkedTree = (raw: unknown, at: At): Value => {
   at.step()
   if (!isValue(raw)) return invalid("a haus value", raw, at)
   const { maxStringLength } = at.limits
@@ -1147,13 +1159,13 @@ export const checkedValue = (raw: unknown, at: At): Value => {
       break
     case "array":
       at.open()
-      raw.items.forEach((x, i) => checkedValue(x, at.child(i)))
+      raw.items.forEach((x, i) => checkedTree(x, at.child(i)))
       break
     case "record":
       at.open()
       for (const [k, x] of raw.fields) {
         within(k, "key")
-        checkedValue(x, at.child(k))
+        checkedTree(x, at.child(k))
       }
       break
     case "variant": {
@@ -1161,7 +1173,7 @@ export const checkedValue = (raw: unknown, at: At): Value => {
       if (raw.args.length > 0) at.open()
       // `Tag { … }` is one level, as in the parser; `Tag(a, b)` nests its arguments.
       const single = raw.args.length === 1 && raw.args[0]!.kind === "record"
-      raw.args.forEach((x, i) => checkedValue(x, single ? at.payload(i) : at.child(i)))
+      raw.args.forEach((x, i) => checkedTree(x, single ? at.payload(i) : at.child(i)))
     }
   }
   return raw

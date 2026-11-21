@@ -4,7 +4,7 @@
 //! apply. Lengths of strings, keys, tags and bytes are checked on the haus
 //! value that results, by the reader of each form.
 
-use super::{Json, JsonNumber};
+use super::{Json, JsonNumber, JsonObject};
 use crate::scan::{is_bidi, is_control};
 use crate::{ErrorCode as Code, Limits, SyntaxError};
 use std::collections::HashSet;
@@ -105,7 +105,7 @@ impl Reader<'_> {
                         continue;
                     }
                     self.depth -= 1;
-                    Json::Object(Vec::new())
+                    Json::Object(JsonObject::new())
                 }
                 _ => self.scalar()?,
             };
@@ -137,7 +137,7 @@ impl Reader<'_> {
                                 *name = self.member_name(seen)?;
                                 break;
                             }
-                            Some(false) => done = Json::Object(std::mem::take(members)),
+                            Some(false) => done = Json::Object(JsonObject::from_unique(std::mem::take(members))),
                             None => {
                                 return Err(self
                                     .fail(Code::JsonSyntax, format!("expected ',' or '}}', found {}", self.found())));

@@ -18,8 +18,11 @@ For each input:
   `NAME.minimised`.
 - Format each result again in the same layout: it must not change
   (idempotence), and it must parse to the same values as the input.
-- Format the minimised result in the pretty layout: it must equal the pretty
-  file without its comments and blank lines (spec §11).
+- Format the minimised result in the pretty layout: it must equal the input
+  formatted in the pretty layout with its comments dropped, compared without
+  blank lines (spec §11). Removing the comments from `NAME.pretty` isn't the
+  same: a comment can make a payload break over lines, or keep an empty
+  container open (`cases/comments-containers`, `cases/comments-payload-parens`).
 - Remove the spaces and tabs at the end of every line of the pretty result,
   as an editor that trims trailing whitespace does: it must still parse to
   the same values. No line of the pretty result ends in a space or tab,
@@ -74,8 +77,26 @@ wrong:
   item adds no blank line (`cases/stream-multiline-comment`); the comments
   after such a comment lead the next entry (`cases/comments-after-multiline`).
 - Comments moved above an entry go after the blank line it had above it
-  (`cases/comments-moved-blank-line`).
+  (`cases/comments-moved-blank-line`), and so does a blank line between the
+  key and the moved comment, except as a container's first line; other blank
+  lines inside an entry are dropped (`cases/blank-lines-inside-entry`).
+- A blank line is two line breaks with only spaces and tabs between them,
+  before or after the comma; a comma on its own line between two line breaks
+  makes none (`cases/blank-lines-commas`). Blank lines at the start and end of
+  a file are dropped (`cases/blank-lines-file-ends`), and more than one
+  collapses to one, also after a trailing comment (`cases/blank-lines-stream-comments`).
+- Comments before the first line break after an entry stay after its comma,
+  wherever the comma is; the others lead the next entry (`cases/comments-around-comma`).
+- A comment after the `}` of `Tag({ … })` goes to the end of the record when
+  the `}` isn't on the last entry's line, after the blank line before it; one
+  after the `)` is the entry's own (`cases/comments-moved-to-end`).
+- A block comment over several lines is written as it is, its later lines not
+  indented again (`cases/comments-block-verbatim`).
+- Blank lines inside a positional payload don't keep it from fitting
+  (`cases/payload-blank-lines`).
 - An indent or width of 0 is taken literally, not as the default: indent 0
   indents nothing, and with width 0 every positional payload is written one
   argument per line (`cases/indent-zero`, `cases/width-zero`). Their options
   files name one option each; the other keeps its default.
+- In `options.cases.haus`, an option given alone leaves the other at its
+  default, and a negative option is rejected also next to a valid one.

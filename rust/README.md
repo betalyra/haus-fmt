@@ -80,17 +80,21 @@ storage, with the same checks.
 which carries the limits and counts the depth while the native value is
 traversed: a value nested deeper than the limit fails there with the writer's
 error (`[0][0]…: nesting deeper than 256 levels`), however deep it goes. It
-also counts the values it makes, against a budget of 16 Mi
-(`Encoder::with_max_steps` sets another): a value whose parts are shared, an
-`Rc` reached many times (a DAG), fails with `step-budget` instead of expanding
-without bound (spec §9.8). `Decode::decode_with` takes a `haus::Decoder` in
+also counts the values it makes, against the node limit
+(`Limits::max_nodes`, 64 Mi): a value whose parts are shared, an `Rc`
+reached many times (a DAG), fails with `too-many-nodes` instead of expanding
+without bound (spec §7, §9.8). `Decode::decode_with` takes a `haus::Decoder` in
 the same way: a `Value` built in code, which no parser limited, fails with
 `nesting-too-deep` at the depth limit before decoding recurses past it, also
 inside an `Any` or the payload of an unknown tag. Any
 other failure comes from a `haus::Value` built in code, the raw value of an
-`Any` or an unknown variant, beyond the limits (spec §9.8): nesting, strings,
-keys, tags and numbers (`.extra: number literal longer than 1000
-characters`). For a reader with other limits,
+`Any` or an unknown variant, beyond the limits (spec §7, §11): nesting
+(`nesting-too-deep`, a record that is a tag's only payload sharing the
+payload's level), the length of strings, keys and tags (`string-too-long`,
+`key-too-long`, `tag-too-long`), the length and exponent of numbers
+(`.extra: number literal longer than 1000 characters`,
+`exponent-too-large`), and the values written (`too-many-nodes`, at `$`).
+For a reader with other limits,
 `haus::to_string_with(&value, &limits)` checks those: integers are written in
 decimal, and one longer than its number limit is an `EncodeError`
 (`number-too-long`).
@@ -116,11 +120,16 @@ Record::from_fields([("a", Value::from(1)), ("b", Value::from(Tag::new("None")?)
 
 `Number::new` normalizes the literal as the parser does (`1E+05` is `1e5`,
 `0xFF` is `255`, `1_000` is `1000`), with no limit on its length or
-exponent: limits are the writer's. `Record::insert` takes time linear in
-the key, also for records with many keys. `Number` and `Tag` deref to their
+exponent: constructors check only that a value is valid, and limits are the
+writer's. `Record::insert` rejects a key the record has already
+(`duplicate-key`, leaving the record as it was) rather than replacing its
+value; to change a field, use `Record::get_mut`. It takes time linear in the
+key, also for records with many keys. `Number` and `Tag` deref to their
 text, and a `Tag` compares with a `&str` (`tag == "None"`). The JSON value
 type is checked the same way: `haus::json::JsonNumber::new` takes only a JSON
-number.
+number, and a `haus::json::JsonObject` (`Json::Object`) has each member name
+once (`JsonObject::insert`, `JsonObject::from_members` and `Json::object`
+reject a name twice with `duplicate-key`).
 
 `haus::Int` is an integer of any size, kept as its digits and written back
 unchanged. `to_i64()` / `to_i128()` give it as a native integer when it fits; the
@@ -199,7 +208,9 @@ line (`encode_with` for other limits). `haus::stream::Reader` does no I/O itself
 the completed values), so an async adapter is a short loop around it.
 
 Without a schema, `haus::parse` reads any haus text into `Value`s: a parser in
-the sense of spec §13.1, which knows no types.
+the sense of spec §13.1, which knows no types. `haus::parse_one` reads a
+single document: exactly one value, or `not-one-value` at the end of the
+input (spec §6).
 
 ## Error codes
 
@@ -288,7 +299,12 @@ take only haus values, see above), and none of these fail: numbers are
 written in decimal, an integer of any size with all its digits, also one
 built in code or parsed with a larger `max_number_length`. A number built
 from another spelling (`Number::new("1E+05")`) is normalized already, so it
-hashes as the value parsed from it.
+hashes as the value parsed from it. No limit applies: a value deeper or
+longer than a writer's limits still has a canonical form. Nor does the node
+limit of spec §7: a `Value` owns its parts, so it can't share them and
+expand when written; its canonical form is linear in the memory it takes.
+`equals` compares the values themselves, records whatever the order of
+their keys, without writing their canonical forms.
 
 A `Value` built in code may nest any depth: the canonical form, `==`,
 `clone` and dropping it take a stack on the heap, not one call per level
@@ -306,8 +322,16 @@ Every type you share is `Send` and `Sync`, checked at compile time: values, `Lim
 Reading enforces the limits of spec §7, `haus::Limits`: by default a depth of
 256, number literals of 1000 characters (hex literals of at most 829 hex
 digits, `Limits::max_hex_digits()`, so that every integer fits in decimal),
-exponents up to 6144, and strings, record keys and tags of 16 Mi characters. Every reader and writer has a
-version that takes other limits:
+exponents up to 6144, and strings, record keys and tags of 16 Mi characters.
+Writers check the same limits for the value they write, and also the node
+limit, `max_nodes`: at most 64 Mi values written for one value (spec §7,
+"Values written"), which ends a native value whose parts are shared (an
+`Rc` reached many times) and would expand without bound. The node limit
+applies to writers only: a `Value` owns its parts, so it can't share them,
+and the canonical form and hashing need no limit. A writer of several
+values (a stream, `to_string_all`, JSON Lines) counts each on its own and
+reports an error in value i at `$[i]`. Every reader and writer has a version that takes
+other limits:
 
 | | With limits |
 |---|---|

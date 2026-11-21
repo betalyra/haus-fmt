@@ -17,9 +17,20 @@ final class Numbers {
    * Reads the number literal that starts at {@code s[pos]} (a {@code -} or a digit, or a {@code +}
    * or {@code .} to report).
    *
-   * @throws SyntaxError for a literal that breaks the grammar or the limits
+   * @param lim the limits, or {@code null} for none: a number built in code is checked for validity
+   *     only (spec §11, "Values built in code")
+   * @throws SyntaxError for a literal that breaks the grammar or the limits, at the literal's first
+   *     character (spec §8)
    */
   static Scanned scan(byte[] s, int pos, int end, Limits lim) {
+    try {
+      return literal(s, pos, end, lim);
+    } catch (SyntaxError e) {
+      throw e.pos == pos ? e : new SyntaxError(pos, e.code, e.reason, e.expected, e.found);
+    }
+  }
+
+  private static Scanned literal(byte[] s, int pos, int end, Limits lim) {
     int start = pos;
     if (pos < end && (s[pos] == '+' || s[pos] == '.')) {
       throw invalid(pos, "a number can't start with '" + (char) s[pos] + "'");
@@ -66,7 +77,7 @@ final class Numbers {
       i = digits(s, i, end, 10);
     }
     followed(s, i, end);
-    if (i - start > lim.maxNumberLength()) {
+    if (lim != null && i - start > lim.maxNumberLength()) {
       throw tooLong(start, i - start, lim);
     }
     if (exponentAt < 0) {
@@ -75,9 +86,9 @@ final class Numbers {
     // The exponent: no '+', no leading zeros, no '-' on zero.
     String exponent = stripZeros(withoutSeparators(s, exponentDigits, i));
     boolean negativeExponent = s[exponentDigits - 1] == '-' && !exponent.equals("0");
-    if (exponent.length() > 9 || Integer.parseInt(exponent) > lim.maxExponent()) {
+    if (lim != null && (exponent.length() > 9 || Integer.parseInt(exponent) > lim.maxExponent())) {
       throw new SyntaxError(
-          exponentAt, ErrorCode.EXPONENT_TOO_LARGE, "the exponent is larger than the limit of " + lim.maxExponent());
+          start, ErrorCode.EXPONENT_TOO_LARGE, "the exponent is larger than the limit of " + lim.maxExponent());
     }
     String mantissa = withoutSeparators(s, start, mantissaEnd);
     return new Scanned(i, mantissa + (negativeExponent ? "e-" : "e") + exponent);
@@ -90,11 +101,11 @@ final class Numbers {
     }
     int j = digits(s, i, end, base);
     followed(s, j, end);
-    if (j - start > lim.maxNumberLength()) {
+    if (lim != null && j - start > lim.maxNumberLength()) {
       throw tooLong(start, j - start, lim);
     }
     String text = withoutSeparators(s, i, j);
-    if (base == 16 && text.length() > lim.maxHexDigits()) {
+    if (lim != null && base == 16 && text.length() > lim.maxHexDigits()) {
       throw new SyntaxError(
           start,
           ErrorCode.NUMBER_TOO_LONG,

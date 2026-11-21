@@ -74,7 +74,7 @@ describe("canonical form (spec §12)", () => {
 describe("compare (spec §12)", () => {
   it("orders by the bytes of the canonical forms", () => {
     const vs = parseAll('9, 10, [], "\u{FFFD}", "😀", { b: 1, a: 2 }, { a: 2, b: 1 }, Some(1), -1')
-    expect([...vs].sort(compare).map(canonical)).toEqual(['"\u{FFFD}"', '"😀"', "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}", "{a:2,b:1}"])
+    expect([...vs].sort(compare).map((v) => canonical(v))).toEqual(['"\u{FFFD}"', '"😀"', "-1", "10", "9", "Some(1)", "[]", "{a:2,b:1}", "{a:2,b:1}"])
     expect(compare(vs[5]!, vs[6]!)).toBe(0)
     expect(compare(parse("1.0"), parse("1"))).toBe(1)
   })

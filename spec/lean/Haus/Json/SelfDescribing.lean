@@ -83,6 +83,28 @@ def depthFields : List (String × Value) → Nat
 end
 
 mutual
+/--
+The values written for a value (§7, the node limit): the value itself and,
+inside it, every element, field value and argument, each as often as it is
+written. A value built in code whose parts share each other writes each
+shared part once for every place it is in.
+-/
+def nodes : Value → Nat
+  | .arr xs => nodesList xs + 1
+  | .record fs => nodesFields fs + 1
+  | .variant _ xs => nodesList xs + 1
+  | _ => 1
+
+def nodesList : List Value → Nat
+  | [] => 0
+  | x :: xs => nodes x + nodesList xs
+
+def nodesFields : List (String × Value) → Nat
+  | [] => 0
+  | (_, x) :: fs => nodes x + nodesFields fs
+end
+
+mutual
 /-- Every number, string, byte string, record key and tag within the limits. -/
 def leaves (L : Limits) : Value → Bool
   | .num s => JSON.numberFits L s.toList

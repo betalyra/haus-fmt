@@ -10,7 +10,7 @@ import (
 
 // Parse reads text that must hold exactly one value (spec §6), with the
 // default limits. Two or more values, or none, fail with the code
-// not-one-value.
+// not-one-value, at the end of the input.
 func Parse(src []byte) (Value, error) {
 	return ParseWith(src, Limits{})
 }
@@ -22,7 +22,9 @@ func ParseWith(src []byte, limits Limits) (Value, error) {
 		return nil, err
 	}
 	if len(vs) != 1 {
-		return nil, &Error{Code: CodeNotOneValue,
+		// At the end of the input (spec §8).
+		line, col := position(string(src), len(src))
+		return nil, &Error{Code: CodeNotOneValue, Line: line, Column: col,
 			Message:  fmt.Sprintf("expected exactly one value, found %d", len(vs)),
 			Expected: "one value", Found: fmt.Sprintf("%d values", len(vs))}
 	}
@@ -703,7 +705,7 @@ func (p *parser) variant() (Value, *node, error) {
 	}
 	if j >= len(s) || s[j] != '(' && s[j] != '{' {
 		p.pos = end
-		v := Variant{Tag: tag}
+		v := Variant{Tag: Tag{name: tag}}
 		if p.keep {
 			return v, &node{val: v}, nil
 		}
@@ -715,7 +717,7 @@ func (p *parser) variant() (Value, *node, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		v := Variant{Tag: tag, Args: []Value{r}}
+		v := Variant{Tag: Tag{name: tag}, Args: []Value{r}}
 		if p.keep {
 			rn.val = v
 			rn.form = formBraces
@@ -726,7 +728,7 @@ func (p *parser) variant() (Value, *node, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	v := Variant{Tag: tag, Args: args}
+	v := Variant{Tag: Tag{name: tag}, Args: args}
 	if p.keep {
 		syn.val = v
 		syn.form = formParens
@@ -859,8 +861,8 @@ func (p *parser) blockString() (Value, *node, error) {
 	}
 	switch {
 	case i >= len(s):
-		// Nothing after the opening: no line break, at the block string.
-		return nil, nil, p.fail(start, CodeBlockStringOpening, `the opening """ must be followed by a line break`)
+		// Nothing after the opening: no line break, at the end of the input (spec §8).
+		return nil, nil, p.fail(i, CodeBlockStringOpening, `the opening """ must be followed by a line break`)
 	case s[i] == '\n':
 		i++
 	case s[i] == '\r' && i+1 < len(s) && s[i+1] == '\n':

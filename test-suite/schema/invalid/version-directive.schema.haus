@@ -1,0 +1,3 @@
+#haus 2
+// The version directive is a rule of data files: in a schema file, #haus is a syntax error (spec §14).
+type A = Int

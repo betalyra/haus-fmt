@@ -25,3 +25,15 @@ Ok { type: "Extended", input: B(1) },
 Ok { type: "Extended", input: C },
 Ok { type: "Extended", input: D(1) },
 Err { type: "Extended", input: B("x"), code: "type-mismatch", path: "$[0]" },
+
+// rule: schema.spread.through-names
+// A spread of an alias copies what the alias stands for.
+Ok { type: "ViaAlias", input: UserCreated { id: 1 } },
+Ok { type: "ViaAlias", input: Ping },
+Err { type: "ViaAlias", input: Heartbeat, code: "unknown-tag", path: "$" },
+// A spread of a generic instance copies its fields with the instance's arguments.
+Ok { type: "Listing", input: { items: [1, 2], total: 2 } },
+Err { type: "Listing", input: { items: ["x"], total: 1 }, code: "type-mismatch", path: "$.items[0]" },
+Err { type: "Listing", input: { items: [], total: 0, more: 1 }, code: "unknown-field", path: "$.more" },
+// rule: schema.reject.closed-empty-variant
+Err { type: "ClosedNoTags", input: A, code: "unknown-tag", path: "$" },

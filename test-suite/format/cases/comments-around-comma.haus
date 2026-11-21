@@ -1,0 +1,10 @@
+// Comments before the first line break after an entry stay after its comma,
+// wherever the comma is; the others go above the next entry.
+[
+  1 /* before the comma */, // after the comma
+  2 // no comma yet
+  , /* after a comma on the next line */ 3,
+  4, /* spans
+  lines */ // leads the next entry
+  5,
+]

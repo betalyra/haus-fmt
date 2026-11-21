@@ -36,7 +36,7 @@ String text = Haus.write(order, FormatOptions.COMPACT);               // one lin
 
 Values are `Value.Number`, `Value.Text`, `Value.Bytes`, `Value.Array`, `Value.Record` and `Value.Variant`, the six kinds of spec §1, behind the sealed interface `Value`; `kind()` gives the kind for a `switch`. Values are immutable. A `Number` keeps its normalized literal (`0xFF` is `255`, `1E+05` is `1e5`, `19.90` stays `19.90`); `toBigInteger()` and `toBigDecimal()` convert it, and converting to a float is up to you. A `Record` keeps its fields in source order, with `get` (null for a missing key), `size`, `keys`, `fields` and `toMap`. `equals` is equality as in spec §2: field order doesn't matter, `1.0` and `1` differ, and `Tag { … }` equals `Tag({ … })`. `toString()` is the value in the compact layout.
 
-Build values with `Value.number(…)`, `Value.string(…)`, `Value.bytes(…)`, `Value.array(…)`, `Value.record(Value.field(k, v), …)` and `Value.variant(tag, args…)`. A repeated key is `duplicate-key`, a tag that isn't `[A-Z][A-Za-z0-9_]*` is `invalid-tag`.
+Build values with `Value.number(…)`, `Value.string(…)`, `Value.bytes(…)`, `Value.array(…)`, `Value.record(Value.field(k, v), …)` and `Value.variant(tag, args…)`. A repeated key is `duplicate-key`, a tag that isn't `[A-Z][A-Za-z0-9_]*` is `invalid-tag`, and `Value.number("01")` is `invalid-number`. The constructors check only that a value is valid, never a limit (spec §11): `Value.number` takes a literal of any length and exponent, normalized as the parser does, and the writers apply the limits.
 
 ## Kotlin
 
@@ -122,7 +122,7 @@ try {
 
 ## Limits
 
-`Haus.parse(text, Limits.DEFAULT.withMaxDepth(64))` sets limits (spec §7): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string, and 64 Mi characters per top-level value of a stream (which only the stream reader applies). `maxDepth` can be at most `Limits.MAX_SUPPORTED_DEPTH`, 256 (the default, as in Rust): the parser, the writers, the canonical form and the JSON conversions recurse once per level (self-describing JSON up to four times), and 256 levels stay well within the default stack of any thread, Android's included. A larger limit is rejected with the code `unsupported-depth`, and no value, parsed or built in code, is nested deeper. Duplicate keys are found in linear time also for keys made to collide: large records use a table with a hash seeded at random per process.
+`Haus.parse(text, Limits.DEFAULT.withMaxDepth(64))` sets limits (spec §7): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string, and 64 Mi characters per top-level value of a stream (which only the stream reader applies). `withMaxNodes` sets the node limit (64 Mi), which the writers, `Haus.check`, the canonical form and hashing apply to a value built in code: they count the values they write, each as often as it is written, so a value whose arrays share one another, small in memory but exponentially larger written out, fails with `too-many-nodes`. The writers check every limit a value built in code can break (depth, string, key, tag and byte string lengths, number length and exponent, nodes), so that a parser with the same limits reads the text back. `maxDepth` can be at most `Limits.MAX_SUPPORTED_DEPTH`, 256 (the default, as in Rust): the parser, the writers, the canonical form and the JSON conversions recurse once per level (self-describing JSON up to four times), and 256 levels stay well within the default stack of any thread, Android's included. A larger limit is rejected with the code `unsupported-depth`, and no value, parsed or built in code, is nested deeper. Duplicate keys are found in linear time also for keys made to collide: large records use a table with a hash seeded at random per process.
 
 ## Streams
 
@@ -152,7 +152,7 @@ Haus.canonical(v);   // Order{id:255,total:19.90,"x-y":1e5}
 Haus.hash(v);        // SHA-256 of the canonical form (java.security.MessageDigest), 64 hex digits
 ```
 
-`Haus.hashAll(values)` hashes a whole file; `Haus.compare` orders values by their canonical forms. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
+`Haus.hashAll(values)` hashes a whole file; `Haus.compare` orders values by their canonical forms. They apply only the node limit (spec §12; overloads take `Limits` for it): a value longer than a writer's limits still has a canonical form. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
 
 ## Threads
 

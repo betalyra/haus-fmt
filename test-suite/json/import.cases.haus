@@ -11,6 +11,13 @@ Err { json: "\"\\ud83d\"", code: "unpaired-surrogate" },
 Err { json: "\"\\ud83d\\u\"", code: "invalid-unicode-escape" },
 Err { json: "[1,]", code: "json-syntax" },
 Err { json: "NaN", code: "json-syntax" },
+// Strings and escapes fail with the codes of haus text (spec §16, "JSON that is read").
+Err { json: "\"abc", code: "unterminated-string" },
+Err { json: "[\"abc", code: "unterminated-string" },
+Err { json: "\"\\", code: "invalid-escape" },
+Err { json: "\"\\q\"", code: "invalid-escape" },
+// A duplicate member name is found when the name is read, before its value (spec §16).
+Err { json: "{\"tag\": \"\", \"tag\": 0e99999}", code: "duplicate-key" },
 Read { json: "\u{FEFF}[1]", output: [1] },
 Read { json: "{\"_tag\": \"Circle\", \"r\": 1}", output: { _tag: "Circle", r: 1 } },
 Read { json: "{\"_haus\": 1, \"_value\": {\"_num\": \"1\"}}", output: { _haus: 1, _value: { _num: "1" } } },

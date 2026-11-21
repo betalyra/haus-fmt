@@ -303,22 +303,22 @@ mutual
       | [] => failAtC .unclosedBracket "unclosed '{'" start
       | t =>
           let k ← keyC L
-          wsC
-          expectC ':' .missingColon s!"expected ':' after key '{msgText k}'"
-          wsC
-          let v ← valueC L fuel budget
           let p := keyBits k.toList
           tick (p.length + 1)
           tick (ks.memC p).2
           if (ks.memC p).1 then failAtC .duplicateKey s!"duplicate key '{msgText k}'" t
           tick (ks.insertC p).2
           wsC
+          expectC ':' .missingColon s!"expected ':' after key '{msgText k}'"
+          wsC
+          let v ← valueC L fuel budget
+          wsC
           tick 1
           match ← get with
           | ',' :: r => set r; wsC; fieldsC L fuel budget start ((k, v) :: acc) (ks.insertC p).1
           | '}' :: r => set r; tick (acc.length + 2); return ((k, v) :: acc).reverse
           | [] => failAtC .unclosedBracket "unclosed '{'" start
-          | r => failC (separatorCode v r) s!"expected ',' or '}}', found {describe r}"
+          | r => failC (separatorCode v r) s!"expected ',' or '}', found {describe r}"
 
   def itemsC (L : Limits) : Nat → Nat → Char → PC (List Value)
     | 0, _, _ => failC .outOfFuel "out of fuel"

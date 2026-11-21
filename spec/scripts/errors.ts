@@ -43,6 +43,8 @@ export interface Entry {
   readonly code: string
   readonly category: (typeof CATEGORIES)[number][1]
   readonly means: string
+  /** Where the error is reported (spec §8): the catalogue's column "Reported at". */
+  readonly at: string
   readonly example: Example
   readonly fix: string
 }
@@ -87,11 +89,21 @@ export function readCatalogue(source = readFileSync(join(root, "spec/errors.haus
     seen.add(code)
     const cat = field(r, "category")
     const category = CATEGORIES.find(([tag]) => cat.kind === "variant" && cat.tag === tag)?.[1] ?? fail(`${code}: unknown category`)
-    return { code, category, means: text(field(r, "means"), code), example: example(field(r, "example"), code), fix: text(field(r, "fix"), code) }
+    return { code, category, means: text(field(r, "means"), code), at: text(field(r, "at"), code), example: example(field(r, "example"), code), fix: text(field(r, "fix"), code) }
   })
 }
 
 export const DOCS = "https://haus-fmt.org/docs/errors"
+
+/**
+ * Categories whose places are informative, not yet normative (spec §8): the
+ * places of errors in schema files and imports come from one checker, and
+ * become normative once the fuzzer has compared them across bindings.
+ */
+export const INFORMATIVE_PLACES: ReadonlySet<string> = new Set(["schema-files", "imports"])
+const informative = (e: Entry) => INFORMATIVE_PLACES.has(e.category)
+/** The place, marked when it is informative. */
+const placeText = (e: Entry) => (informative(e) ? `${e.at} *(Informative, §8.)*` : e.at)
 
 // ── spec/errors.md ───────────────────────────────────────────
 
@@ -129,14 +141,16 @@ export function specMarkdown(entries: readonly Entry[]): string {
     "every binding; a code is never renamed, removed or reused after 1.0, only added. Each code has a page section at",
     `\`${DOCS}#<code>\`. The machine-readable source is [\`errors.haus\`](errors.haus).`,
     "",
+    "\"Reported at\" is the place of the error (§8): for an error in text, the character its line and column point to; for an error in a value, its path (§15, §16.3). The place is part of the specification, as the code is, except where it is marked *Informative*: the places of errors in schema files and imports are not yet checked across bindings (§8).",
+    "",
     `${entries.length} codes in ${CATEGORIES.length} categories:`,
     "",
     ...CATEGORIES.map(([, id, title]) => `- [${title}](#${id}): ${entries.filter((e) => e.category === id).length}`),
   ]
   for (const [, id, title, intro] of CATEGORIES) {
-    out.push("", `## ${title}`, "", `<a id="${id}"></a>${intro}`, "", "| Code | Meaning | Example | Fix |", "|---|---|---|---|")
+    out.push("", `## ${title}`, "", `<a id="${id}"></a>${intro}`, "", "| Code | Meaning | Reported at | Example | Fix |", "|---|---|---|---|---|")
     for (const e of entries.filter((x) => x.category === id)) {
-      out.push(`| \`${e.code}\` | ${cell(e.means)} | ${cell(inlineExample(e.example))} | ${cell(e.fix)} |`)
+      out.push(`| \`${e.code}\` | ${cell(e.means)} | ${cell(placeText(e))} | ${cell(inlineExample(e.example))} | ${cell(e.fix)} |`)
     }
   }
   return out.join("\n") + "\n"
@@ -197,7 +211,7 @@ export function docsMarkdown(entries: readonly Entry[]): string {
   ]
   for (const e of entries) {
     const category = CATEGORIES.find(([, id]) => id === e.category)![2]
-    out.push(`## ${e.code}`, "", `*${category}.* ${e.means}`, "", docsExample(e.example), "", `**Fix:** ${e.fix}`, "")
+    out.push(`## ${e.code}`, "", `*${category}.* ${e.means}`, "", `**Reported at:** ${placeText(e)}`, "", docsExample(e.example), "", `**Fix:** ${e.fix}`, "")
   }
   return out.join("\n")
 }
@@ -239,7 +253,7 @@ export function javaEnum(entries: readonly Entry[]): string {
     "/** The error codes of the catalogue (spec §17): stable, the same in every binding. */",
     "public enum ErrorCode {",
     entries
-      .map((e) => `  /** {@code ${e.code}}: ${javadoc(e.means)} */\n  ${javaName(e.code)}(${JSON.stringify(e.code)}, ErrorCategory.${javaName(e.category)}, ${JSON.stringify(e.fix)})`)
+      .map((e) => `  /** {@code ${e.code}}: ${javadoc(e.means)} Reported at${informative(e) ? " (informative)" : ""}: ${javadoc(e.at)} */\n  ${javaName(e.code)}(${JSON.stringify(e.code)}, ErrorCategory.${javaName(e.category)}, ${JSON.stringify(e.fix)})`)
       .join(",\n") + ";",
     "",
     "  private final String code;",

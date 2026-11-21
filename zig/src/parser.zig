@@ -403,6 +403,12 @@ pub const Parser = struct {
             if (p.peek() == '}') break;
             const key_start = p.pos;
             const key = try p.parseKey();
+            // A duplicate is reported as soon as its key is read, before its
+            // colon and value (spec §8).
+            if (!try p.insertKey(root, key)) {
+                var buf: [64]u8 = undefined;
+                return p.fail(.@"duplicate-key", key_start, "duplicate key {s}", .{errors.quoteText(&buf, key)});
+            }
             if (p.syntax) |s| try s.keys.append(p.gpa, .{ .start = @intCast(key_start), .end = @intCast(p.pos) });
             try p.skipWs();
             if (p.eof() or p.peek() != ':') {
@@ -414,12 +420,6 @@ pub const Parser = struct {
             try p.skipWs();
             if (p.eof()) return p.fail(.@"expected-value", p.pos, "expected a value, found end of input", .{});
             const val = try p.value();
-            // Checked once the field is read, as the reference parser does;
-            // reported at the key.
-            if (!try p.insertKey(root, key)) {
-                var buf: [64]u8 = undefined;
-                return p.fail(.@"duplicate-key", key_start, "duplicate key {s}", .{errors.quoteText(&buf, key)});
-            }
             try p.fields.append(p.gpa, .{ .key = key, .value = val });
             try p.skipWs();
             if (p.eof()) return p.fail(.@"unclosed-bracket", open, "unclosed '{{'", .{});

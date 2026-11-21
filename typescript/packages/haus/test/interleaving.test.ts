@@ -110,7 +110,7 @@ describe("no call leaves state behind", () => {
     }
     const results = await Promise.all(Array.from({ length: 8 }, read))
     for (const r of results) expect(r).toEqual(want)
-    const hashes = await Promise.all(Array.from({ length: 8 }, () => Promise.all(parseAll(TEXT).map(hash))))
+    const hashes = await Promise.all(Array.from({ length: 8 }, () => Promise.all(parseAll(TEXT).map((v) => hash(v)))))
     for (const r of hashes) expect(r).toEqual(hashes[0])
   })
 })

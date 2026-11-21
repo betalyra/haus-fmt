@@ -1273,6 +1273,65 @@ SchemaBased := [].{
 	to_json_u64 : U64_, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
 	to_json_u64 = |v, e| ToJson.u64(v, e)
 
+	## a Maybe written in a generic definition: whether it uses null depends on the instance (spec §16.3)
+	##
+	## haus type `schema-based#Opt2`.
+	Opt2(a) : [None, Some(a)]
+
+	decode_opt2 : Value, (Value -> Try(a, Decode.Error)) -> Try(Opt2(a), Decode.Error)
+	decode_opt2 = |v, decode_a| Decode.maybe(v, decode_a)
+
+	encode_opt2 : Opt2(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)) -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_opt2 = |v, e, encode_a| Encode.maybe(v, e, encode_a)
+
+	from_json_opt2 : JsonValue, (JsonValue -> Try(a, Decode.Error)), Bool -> Try(Opt2(a), Decode.Error)
+	from_json_opt2 = |j, from_json_a, nullable_a| FromJson.maybe(j, nullable_a, from_json_a)
+
+	to_json_opt2 : Opt2(a), Encode.Encoder, (a, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)), Bool -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_opt2 = |v, e, to_json_a, nullable_a| ToJson.maybe(v, e, nullable_a, to_json_a)
+
+	## haus type `schema-based#OptInt`.
+	OptInt : Opt2(I32)
+
+	decode_opt_int : Value -> Try(OptInt, Decode.Error)
+	decode_opt_int = |v| Decode.within_depth(v, read_value_opt_int)
+
+	read_value_opt_int : Value -> Try(OptInt, Decode.Error)
+	read_value_opt_int = |v| decode_opt2(v, Decode.i32)
+
+	encode_opt_int : OptInt, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_opt_int = |v, e| encode_opt2(v, e, |x36, e36| Encode.number(x36.to_str(), e36))
+
+	from_json_opt_int : JsonValue -> Try(OptInt, Decode.Error)
+	from_json_opt_int = |j| FromJson.within_depth(j, read_json_opt_int, encode_opt_int)
+
+	read_json_opt_int : JsonValue -> Try(OptInt, Decode.Error)
+	read_json_opt_int = |j| from_json_opt2(j, FromJson.i32, False)
+
+	to_json_opt_int : OptInt, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_opt_int = |v, e| to_json_opt2(v, e, ToJson.i32, False)
+
+	## haus type `schema-based#OptOpt`.
+	OptOpt : Opt2([None, Some(I32)])
+
+	decode_opt_opt : Value -> Try(OptOpt, Decode.Error)
+	decode_opt_opt = |v| Decode.within_depth(v, read_value_opt_opt)
+
+	read_value_opt_opt : Value -> Try(OptOpt, Decode.Error)
+	read_value_opt_opt = |v| decode_opt2(v, |x38| Decode.maybe(x38, Decode.i32))
+
+	encode_opt_opt : OptOpt, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
+	encode_opt_opt = |v, e| encode_opt2(v, e, |x39, e39| Encode.maybe(x39, e39, |x37, e37| Encode.number(x37.to_str(), e37)))
+
+	from_json_opt_opt : JsonValue -> Try(OptOpt, Decode.Error)
+	from_json_opt_opt = |j| FromJson.within_depth(j, read_json_opt_opt, encode_opt_opt)
+
+	read_json_opt_opt : JsonValue -> Try(OptOpt, Decode.Error)
+	read_json_opt_opt = |j| from_json_opt2(j, |y24| FromJson.maybe(y24, False, FromJson.i32), True)
+
+	to_json_opt_opt : OptOpt, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
+	to_json_opt_opt = |v, e| to_json_opt2(v, e, |y25, e25| ToJson.maybe(y25, e25, False, ToJson.i32), True)
+
 	## a document for the places of errors (spec §16.3 "Places")
 	##
 	## haus type `schema-based#Doc`.
@@ -1284,11 +1343,11 @@ SchemaBased := [].{
 	read_value_doc : Value -> Try(Doc, Decode.Error)
 	read_value_doc = |v| {
 		fs = Decode.strict_record(v)?
-		Ok({ shape: Decode.optional_field(fs, "shape", read_value_shape)?, maybe: Decode.optional_field(fs, "maybe", read_value_nested)?, users: Decode.optional_field(fs, "users", |x36| Decode.list(x36, read_value_user))?, strict: Decode.optional_field(fs, "strict", read_value_strict)?, counts: Decode.optional_field(fs, "counts", read_value_counts)?, raw: Decode.optional_field(fs, "raw", read_value_raw)?, key: Decode.optional_field(fs, "key", read_value_key)?, boxed: Decode.optional_field(fs, "boxed", read_value_gen_rec)?, level: Decode.optional_field(fs, "level", read_value_level)?, bits: Decode.optional_field(fs, "bits", read_value_bits)? })
+		Ok({ shape: Decode.optional_field(fs, "shape", read_value_shape)?, maybe: Decode.optional_field(fs, "maybe", read_value_nested)?, users: Decode.optional_field(fs, "users", |x40| Decode.list(x40, read_value_user))?, strict: Decode.optional_field(fs, "strict", read_value_strict)?, counts: Decode.optional_field(fs, "counts", read_value_counts)?, raw: Decode.optional_field(fs, "raw", read_value_raw)?, key: Decode.optional_field(fs, "key", read_value_key)?, boxed: Decode.optional_field(fs, "boxed", read_value_gen_rec)?, level: Decode.optional_field(fs, "level", read_value_level)?, bits: Decode.optional_field(fs, "bits", read_value_bits)? })
 	}
 
 	encode_doc : Doc, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
-	encode_doc = |v, e| Encode.record(e, [("shape", Encode.optional(v.shape, encode_shape)), ("maybe", Encode.optional(v.maybe, encode_nested)), ("users", Encode.optional(v.users, |x37, e37| Encode.list(x37, e37, encode_user))), ("strict", Encode.optional(v.strict, encode_strict)), ("counts", Encode.optional(v.counts, encode_counts)), ("raw", Encode.optional(v.raw, encode_raw)), ("key", Encode.optional(v.key, encode_key)), ("boxed", Encode.optional(v.boxed, encode_gen_rec)), ("level", Encode.optional(v.level, encode_level)), ("bits", Encode.optional(v.bits, encode_bits))])
+	encode_doc = |v, e| Encode.record(e, [("shape", Encode.optional(v.shape, encode_shape)), ("maybe", Encode.optional(v.maybe, encode_nested)), ("users", Encode.optional(v.users, |x41, e41| Encode.list(x41, e41, encode_user))), ("strict", Encode.optional(v.strict, encode_strict)), ("counts", Encode.optional(v.counts, encode_counts)), ("raw", Encode.optional(v.raw, encode_raw)), ("key", Encode.optional(v.key, encode_key)), ("boxed", Encode.optional(v.boxed, encode_gen_rec)), ("level", Encode.optional(v.level, encode_level)), ("bits", Encode.optional(v.bits, encode_bits))])
 
 	from_json_doc : JsonValue -> Try(Doc, Decode.Error)
 	from_json_doc = |j| FromJson.within_depth(j, read_json_doc, encode_doc)
@@ -1296,11 +1355,11 @@ SchemaBased := [].{
 	read_json_doc : JsonValue -> Try(Doc, Decode.Error)
 	read_json_doc = |j| {
 		fs = FromJson.object(j, "Doc")?
-		Ok({ shape: FromJson.optional_field(fs, "shape", read_json_shape)?, maybe: FromJson.optional_field(fs, "maybe", read_json_nested)?, users: FromJson.optional_field(fs, "users", |y24| FromJson.list(y24, read_json_user))?, strict: FromJson.optional_field(fs, "strict", read_json_strict)?, counts: FromJson.optional_field(fs, "counts", read_json_counts)?, raw: FromJson.optional_field(fs, "raw", read_json_raw)?, key: FromJson.optional_field(fs, "key", read_json_key)?, boxed: FromJson.optional_field(fs, "boxed", read_json_gen_rec)?, level: FromJson.optional_field(fs, "level", read_json_level)?, bits: FromJson.optional_field(fs, "bits", read_json_bits)? })
+		Ok({ shape: FromJson.optional_field(fs, "shape", read_json_shape)?, maybe: FromJson.optional_field(fs, "maybe", read_json_nested)?, users: FromJson.optional_field(fs, "users", |y26| FromJson.list(y26, read_json_user))?, strict: FromJson.optional_field(fs, "strict", read_json_strict)?, counts: FromJson.optional_field(fs, "counts", read_json_counts)?, raw: FromJson.optional_field(fs, "raw", read_json_raw)?, key: FromJson.optional_field(fs, "key", read_json_key)?, boxed: FromJson.optional_field(fs, "boxed", read_json_gen_rec)?, level: FromJson.optional_field(fs, "level", read_json_level)?, bits: FromJson.optional_field(fs, "bits", read_json_bits)? })
 	}
 
 	to_json_doc : Doc, Encode.Encoder -> Try(Encode.Encoded(JsonValue), Encode.Error)
-	to_json_doc = |v, e| ToJson.object(e, [("shape", ToJson.optional(v.shape, to_json_shape)), ("maybe", ToJson.optional(v.maybe, to_json_nested)), ("users", ToJson.optional(v.users, |y25, e25| ToJson.list(y25, e25, to_json_user))), ("strict", ToJson.optional(v.strict, to_json_strict)), ("counts", ToJson.optional(v.counts, to_json_counts)), ("raw", ToJson.optional(v.raw, to_json_raw)), ("key", ToJson.optional(v.key, to_json_key)), ("boxed", ToJson.optional(v.boxed, to_json_gen_rec)), ("level", ToJson.optional(v.level, to_json_level)), ("bits", ToJson.optional(v.bits, to_json_bits))])
+	to_json_doc = |v, e| ToJson.object(e, [("shape", ToJson.optional(v.shape, to_json_shape)), ("maybe", ToJson.optional(v.maybe, to_json_nested)), ("users", ToJson.optional(v.users, |y27, e27| ToJson.list(y27, e27, to_json_user))), ("strict", ToJson.optional(v.strict, to_json_strict)), ("counts", ToJson.optional(v.counts, to_json_counts)), ("raw", ToJson.optional(v.raw, to_json_raw)), ("key", ToJson.optional(v.key, to_json_key)), ("boxed", ToJson.optional(v.boxed, to_json_gen_rec)), ("level", ToJson.optional(v.level, to_json_level)), ("bits", ToJson.optional(v.bits, to_json_bits))])
 
 	## a record case with a field named _tag has no schema-based form; the other cases have (spec §16.3)
 	##
@@ -1336,9 +1395,9 @@ SchemaBased := [].{
 
 	encode_no_form : NoForm, Encode.Encoder -> Try(Encode.Encoded(Value), Encode.Error)
 	encode_no_form = |v, e| match v {
-		Tagged(r) => Encode.tagged_record("Tagged", e, [("_tag", Present(|e38| Encode.number(r.tag.to_str(), e38)))])
+		Tagged(r) => Encode.tagged_record("Tagged", e, [("_tag", Present(|e42| Encode.number(r.tag.to_str(), e42)))])
 		Plain => Encode.tag("Plain", e)
-		Fine(r) => Encode.tagged_record("Fine", e, [("tag", Present(|e39| Encode.number(r.tag.to_str(), e39)))])
+		Fine(r) => Encode.tagged_record("Fine", e, [("tag", Present(|e43| Encode.number(r.tag.to_str(), e43)))])
 		Unknown(tag, args) => Encode.unknown(tag, args, e)
 	}
 

@@ -1220,6 +1220,33 @@ impl<'a> Gen<'a> {
             true => quote!(let tag = ::haus::json::de::tag_name(j, #label)?;),
             false => quote!(let (tag, r) = ::haus::json::de::variant(j, __d, #label)?;),
         };
+        if closed && arms.is_empty() {
+            // A closed variant without tags (`closed < ...NoTags >`, spec
+            // §14): a type with no values, which decoding never makes.
+            return Ok(item.implement(
+                item.header(&[]),
+                quote!(pub enum #name #g {}),
+                quote! {
+                    let (tag, _) = ::haus::de::variant(v, #label)?;
+                    ::std::result::Result::Err(#unknown_tag)
+                },
+                quote!(match *self {}),
+                Json {
+                    nullable: None,
+                    from: match names_only {
+                        true => quote! {
+                            let tag = ::haus::json::de::tag_name(j, #label)?;
+                            ::std::result::Result::Err(#unknown_tag)
+                        },
+                        false => quote! {
+                            let (tag, _) = ::haus::json::de::variant(j, __d, #label)?;
+                            ::std::result::Result::Err(#unknown_tag)
+                        },
+                    },
+                    to: quote!(match *self {}),
+                },
+            ));
+        }
         Ok(item.implement(
             item.header(&[]),
             quote!(pub enum #name #g { #(#decls,)* #other_decl }),

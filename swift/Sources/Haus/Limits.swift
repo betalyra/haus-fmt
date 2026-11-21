@@ -1,18 +1,21 @@
-/// The resource limits of spec §7, enforced while parsing. The defaults are
-/// the spec's; with them, every input within them is accepted.
+/// The resource limits of spec §7, enforced while parsing and by the writers
+/// of values (spec §11). The defaults are the spec's; with them, every input
+/// within them is accepted. The canonical form and hashing apply only
+/// ``maxNodes`` (spec §12).
 ///
 /// ```swift
 /// let values = try parseAll(text, limits: Limits(maxDepth: 64))
 /// ```
 public struct Limits: Sendable, Hashable {
     /// The deepest nesting supported: 256, the spec's minimum and the
-    /// default. The parser and the JSON reader don't recurse, but the
-    /// writers, the canonical form, equality, releasing a value, the JSON
-    /// forms and decoding with a schema do, once per level; self-describing
-    /// JSON takes up to 4·d + 2 JSON levels for d levels (spec §16). Each of
-    /// them handles this depth within 512 KiB of stack, the size of the
-    /// threads of Swift's concurrency pool, also in a debug build. A larger
-    /// ``maxDepth`` is rejected with the code `unsupported-depth` (spec §7).
+    /// default. The parser, the JSON reader, the one-line writers and the
+    /// canonical form don't recurse, but the pretty writer, releasing a
+    /// value, the JSON forms with a schema and decoding with a schema do,
+    /// once per level; self-describing JSON takes up to 4·d + 2 JSON levels
+    /// for d levels (spec §16). Each of them handles this depth within
+    /// 512 KiB of stack, the size of the threads of Swift's concurrency pool,
+    /// also in a debug build. A larger ``maxDepth`` is rejected with the code
+    /// `unsupported-depth` (spec §7).
     public static let maxSupportedDepth = 256
 
     /// The deepest nesting of records, arrays and payloads, counted on the
@@ -33,16 +36,25 @@ public struct Limits: Sendable, Hashable {
     /// as it bounds the reader's memory; ``parseAll(_:limits:)`` and the
     /// others given the whole text don't.
     public var maxValueLength: Int
+    /// The most values a writer, the canonical form or a hash writes for one
+    /// top-level value (spec §7, "Values written"): the value and every
+    /// element, field value and argument in it, each as often as it is
+    /// written (`Tag { … }` counts its record too). Default 64 Mi. Swift's
+    /// arrays share their storage, so a value small in memory can hold one
+    /// array in many places and be very large written out; above the limit
+    /// they fail with `too-many-nodes`.
+    public var maxNodes: Int
 
     public init(
         maxDepth: Int = 256, maxNumberLength: Int = 1000, maxExponent: Int = 6144,
-        maxStringLength: Int = 16 << 20, maxValueLength: Int = 64 << 20
+        maxStringLength: Int = 16 << 20, maxValueLength: Int = 64 << 20, maxNodes: Int = 64 << 20
     ) {
         self.maxDepth = maxDepth
         self.maxNumberLength = maxNumberLength
         self.maxExponent = maxExponent
         self.maxStringLength = maxStringLength
         self.maxValueLength = maxValueLength
+        self.maxNodes = maxNodes
     }
 
     /// The most hex digits (leading zeros counted, `_` not) in one hex

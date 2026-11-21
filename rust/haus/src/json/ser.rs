@@ -8,7 +8,7 @@
 //! doesn't count: the member names of the form (`_tag`, `value`), and the
 //! strings that hold numbers (`Int`, `Decimal`, `Int64`, `"NaN"`).
 
-use super::{Json, JsonNumber, ToJson, base64};
+use super::{Json, JsonNumber, JsonObject, ToJson, base64};
 use crate::de::{AnyTag, Bytes, Decimal, Int, Unknown};
 use crate::ser::{check_bytes, check_key, check_length, check_number, check_tag, check_tag_length};
 use crate::{Codec, EncodeError, Encoder, ErrorCode, Secret, Segment, Value};
@@ -30,8 +30,8 @@ pub fn object<'k, const N: usize>(e: Encoder, fields: impl FnOnce(Encoder) -> [(
             let field = v?.and_then(|v| check_key(k, inner.limits()).map(|()| member(k, v)));
             Some(field.map_err(|e| e.within(Segment::Field(k.to_owned()))))
         })
-        .collect::<Result<_, _>>()
-        .map(Json::Object)
+        .collect::<Result<Vec<_>, _>>()
+        .and_then(|members| Ok(Json::object(members)?))
 }
 
 /// A case with a record payload: `{"_tag": "Circle", "r": 1.5}`.
@@ -42,9 +42,7 @@ pub fn tagged_object<'k, const N: usize>(
 ) -> R {
     check_tag(tag, e.limits())?;
     match object(e, fields)? {
-        Json::Object(members) => {
-            Ok(Json::Object([member("_tag", Json::String(tag.to_owned()))].into_iter().chain(members).collect()))
-        }
+        Json::Object(members) => Ok(with_tag(tag, members)?),
         other => Ok(other),
     }
 }
@@ -55,14 +53,17 @@ pub fn tagged_object<'k, const N: usize>(
 pub fn record_case(tag: &str, e: Encoder, record: R) -> R {
     check_tag(tag, e.limits())?;
     match record? {
-        Json::Object(members) => {
-            Ok(Json::Object([member("_tag", Json::String(tag.to_owned()))].into_iter().chain(members).collect()))
-        }
+        Json::Object(members) => Ok(with_tag(tag, members)?),
         other => Err(EncodeError::new(
             ErrorCode::CannotEncode,
             format!("{tag} takes a record, whose JSON is an object; found {}", super::de::describe(&other)),
         )),
     }
+}
+
+/// `{"_tag": tag}` and `members`: none of them may be named `_tag`.
+fn with_tag(tag: &str, members: JsonObject) -> Result<Json, crate::ValueError> {
+    Json::object([member("_tag", Json::String(tag.to_owned()))].into_iter().chain(members))
 }
 
 /// A case with `N` positional values: `{"_tag": "Empty"}`, `{"_tag": "Wrap",
@@ -73,7 +74,7 @@ pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder
     let tag_member = member("_tag", Json::String(tag.to_owned()));
     if N == 0 {
         e.step()?;
-        return Ok(Json::Object(vec![tag_member]));
+        return Ok(Json::Object(JsonObject::from_unique(vec![tag_member])));
     }
     let mut values = values(if N == 1 { e.payload()? } else { e.nested()? }).into_iter().enumerate().map(|(i, v)| {
         v.map_err(|e| match N {
@@ -81,10 +82,10 @@ pub fn tagged<const N: usize>(tag: &str, e: Encoder, values: impl FnOnce(Encoder
             _ => e.within(Segment::Index(i)).within(Segment::Field("values".into())),
         })
     });
-    Ok(Json::Object(match N {
+    Ok(Json::Object(JsonObject::from_unique(match N {
         1 => vec![tag_member, member("value", values.next().unwrap_or(Ok(Json::Null))?)],
         _ => vec![tag_member, member("values", Json::Array(values.collect::<Result<_, _>>()?))],
-    }))
+    })))
 }
 
 /// A closed variant whose tags have no payload: the tag as a string.
@@ -111,7 +112,7 @@ pub fn unknown(u: &Unknown, e: Encoder) -> R {
     let tag = member("_tag", Json::String(u.tag.to_string()));
     if u.args.is_empty() {
         e.step()?;
-        return Ok(Json::Object(vec![tag]));
+        return Ok(Json::Object(JsonObject::from_unique(vec![tag])));
     }
     // `Tag { … }`: the record is the payload's only level.
     let inner = match u.args.as_slice() {
@@ -129,7 +130,7 @@ pub fn unknown(u: &Unknown, e: Encoder) -> R {
         .collect::<Result<_, _>>()?;
     // Checked against the depth limit above, so counting doesn't recurse deeper.
     e.steps(1 + u.args.iter().map(crate::ser::size).sum::<u64>())?;
-    Ok(Json::Object(vec![tag, member("_args", Json::Array(args))]))
+    Ok(Json::Object(JsonObject::from_unique(vec![tag, member("_args", Json::Array(args))])))
 }
 
 pub fn array<T>(items: &[T], e: Encoder, f: impl Fn(&T, Encoder) -> R) -> R {
@@ -151,7 +152,7 @@ pub fn map<T>(m: &BTreeMap<String, T>, e: Encoder, f: impl Fn(&T, Encoder) -> R)
             Ok((k.clone(), f(v, inner).map_err(within)?))
         })
         .collect::<Result<_, _>>()
-        .map(Json::Object)
+        .map(|members| Json::Object(JsonObject::from_unique(members)))
 }
 
 /// `Maybe a`: `null` or `a`, when `a`'s JSON can't be `null` (`nullable` is

@@ -30,7 +30,7 @@ func Read(src []byte) ([]Entry, error) {
 	entries := make([]Entry, 0, len(values))
 	for i, v := range values {
 		code, ok := v.(haus.Variant)
-		if !ok || code.Tag != "Code" || len(code.Args) != 1 {
+		if !ok || code.Tag.String() != "Code" || len(code.Args) != 1 {
 			return nil, fmt.Errorf("entry %d is not Code { … }", i)
 		}
 		rec, ok := code.Args[0].(haus.Record)
@@ -60,7 +60,7 @@ func Read(src []byte) ([]Entry, error) {
 		if !isTag || len(c.Args) != 0 {
 			return nil, fmt.Errorf("entry %d: category is not a tag", i)
 		}
-		e.Category = c.Tag
+		e.Category = c.Tag.String()
 		entries = append(entries, e)
 	}
 	return entries, nil

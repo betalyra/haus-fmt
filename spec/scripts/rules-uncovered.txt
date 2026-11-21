@@ -3,7 +3,6 @@
 # that isn't listed, and on a listed rule that is covered now.
 limits.string.default
 limits.value.default
-format.options.reject-negative
 format.bytes.serialized
 format.numbers.serialized
 canonical.form.parses-back

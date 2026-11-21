@@ -73,7 +73,7 @@ func fromSuiteJSON(t *testing.T, j any) Value {
 			}
 			return Bytes(b)
 		case j["_tag"] != nil:
-			v := Variant{Tag: j["_tag"].(string)}
+			v := Variant{Tag: MustTag(j["_tag"].(string))}
 			if args, ok := j["_args"].([]any); ok {
 				for _, a := range args {
 					v.Args = append(v.Args, fromSuiteJSON(t, a))
@@ -412,7 +412,7 @@ func TestFormatOptionsSuite(t *testing.T) {
 		}
 		name := mustCanonical(t, v)
 		got, err := Format([]byte(src), o)
-		switch res.Tag {
+		switch res.Tag.String() {
 		case "Ok":
 			want := res.Args[0].(String)
 			if err != nil {

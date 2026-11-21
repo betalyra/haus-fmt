@@ -21,10 +21,7 @@ func writeLines(vs []Value, lim Limits, minimised bool) ([]byte, error) {
 	w := lineWriter{writeCheck: writeCheck{lim: lim}, b: (*buf)[:0], minimised: minimised}
 	stream := len(vs) > 1
 	for i, v := range vs {
-		w.path = w.path[:0]
-		if stream {
-			w.path = append(w.path, step{index: i})
-		}
+		w.start(i, stream)
 		if err := w.value(v, 0); err != nil {
 			lineBuffers.Put(buf)
 			return nil, err
@@ -69,11 +66,17 @@ func (w *lineWriter) separator() {
 }
 
 func (w *lineWriter) value(v Value, depth int) error {
+	if err := w.count(); err != nil {
+		return err
+	}
 	switch v := v.(type) {
 	case String:
 		var ok bool
 		if w.b, ok = appendQuotedValid(w.b, string(v)); !ok {
 			return w.invalidString()
+		}
+		if err := w.length(string(v), CodeStringTooLong, "string"); err != nil {
+			return err
 		}
 	case Number:
 		text := v.String()
@@ -82,6 +85,9 @@ func (w *lineWriter) value(v Value, depth int) error {
 		}
 		w.b = append(w.b, text...)
 	case Bytes:
+		if err := w.bytes(v); err != nil {
+			return err
+		}
 		w.b = append(w.b, `x"`...)
 		w.b = hex.AppendEncode(w.b, v)
 		w.b = append(w.b, '"')
@@ -102,16 +108,20 @@ func (w *lineWriter) value(v Value, depth int) error {
 		}
 		w.guard.pop()
 	case Variant:
-		if !isTag(v.Tag) {
-			return w.invalidTag(v.Tag)
+		if err := w.tag(v.Tag); err != nil {
+			return err
 		}
-		w.b = append(w.b, v.Tag...)
+		w.b = append(w.b, v.Tag.name...)
 		if len(v.Args) == 0 {
 			return nil
 		}
 		if r, ok := v.Args[0].(Record); ok && len(v.Args) == 1 {
-			// Tag { … }: the record is the payload's one level.
+			// Tag { … }: the record is the payload's one level, and one
+			// value written.
 			if err := w.enter(r, depth); err != nil {
+				return err
+			}
+			if err := w.count(); err != nil {
 				return err
 			}
 			if !w.minimised {
@@ -175,6 +185,9 @@ func (w *lineWriter) fields(r Record, depth int) error {
 			return w.invalidKey()
 		default:
 			w.b = appendQuoted(w.b, f.Key)
+		}
+		if err := w.length(f.Key, CodeKeyTooLong, "key"); err != nil {
+			return err
 		}
 		w.b = append(w.b, ':')
 		if !w.minimised {

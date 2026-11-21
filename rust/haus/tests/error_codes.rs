@@ -18,6 +18,8 @@ struct Entry {
     code: String,
     category: String,
     means: String,
+    /// Where the error is reported (spec §8): the catalogue's "Reported at".
+    at: String,
     example: Value,
     fix: String,
 }
@@ -47,6 +49,7 @@ fn catalogue() -> Vec<Entry> {
                         _ => panic!("a category is a tag"),
                     },
                     means: text(fields, "means").to_owned(),
+                    at: text(fields, "at").to_owned(),
                     example: field(fields, "example").clone(),
                     fix: text(fields, "fix").to_owned(),
                 },
@@ -79,6 +82,9 @@ const CATEGORIES: [(&str, &str); 8] = [
     ("Hints", "hints"),
 ];
 
+/// Categories whose places are informative, not yet normative (spec §8).
+const INFORMATIVE_PLACES: [&str; 2] = ["SchemaFiles", "Imports"];
+
 /// A doc comment line: the text, with what rustdoc would read as a link escaped.
 fn doc(s: &str) -> String {
     s.replace('[', "\\[").replace(']', "\\]").replace('\n', " ")
@@ -99,7 +105,8 @@ fn generate(entries: &[Entry]) -> String {
     line("#[non_exhaustive]");
     line("pub enum ErrorCode {");
     for e in entries {
-        line(&format!("    /// `{}`: {}", e.code, doc(&e.means)));
+        let informative = if INFORMATIVE_PLACES.contains(&e.category.as_str()) { " (informative)" } else { "" };
+        line(&format!("    /// `{}`: {} Reported at{informative}: {}", e.code, doc(&e.means), doc(&e.at)));
         line(&format!("    {},", variant(&e.code)));
     }
     line("}");

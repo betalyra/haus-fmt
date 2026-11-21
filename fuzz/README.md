@@ -1,7 +1,7 @@
 # Differential testing
 
 Generated inputs go through every haus parser: the Lean reference parser
-(`spec/lean`), Rust, Roc, TypeScript, Python, Go, Swift and the JVM (and, with `--schema`,
+(`spec/lean`), Rust, Roc, TypeScript, Python, Go, Swift, the JVM and Zig (and, with `--schema`,
 through every schema decoder: see [Schema decoding](#schema-decoding); with
 `--json`, through every JSON converter: see [JSON](#json); with `--format`,
 through the formatters and value writers: see [Formatters](#formatters); with
@@ -18,7 +18,7 @@ node fuzz/src/main.ts --seed 7         # repeat a run
 ```
 
 Needs Node 23.6 or later (it runs the TypeScript directly), Lean (elan),
-Rust, Roc, Python (uv), Go, Swift and a JDK 17 or later (`JAVA_HOME`). The Go runner, [`go/`](go), is one program
+Rust, Roc, Python (uv), Go, Swift, Zig 0.17.1 and a JDK 17 or later (`JAVA_HOME`). The Go runner, [`go/`](go), is one program
 for every fuzzer (`go-runner MODE …`), a module of its own that builds
 against the checkout; it finds the schema files and extensions through the
 path it was built from, as the Rust runners do. The JVM runner, [`jvm/`](jvm),
@@ -32,7 +32,7 @@ a failure prints the seed and keeps the shrunk inputs as an artifact.
 | Step | |
 |---|---|
 | Generate | [`src/generate.ts`](src/generate.ts): random haus text with varied formatting (spacing, comments, CRLF, byte order mark, number spellings, quoted keys, block strings, both payload forms, trailing commas), values at and just past the limits, the conformance suite as seeds. Half of the inputs are then mutated: bytes deleted, edge characters inserted (quotes, `*/`, control and bidi characters, invalid UTF-8), slices duplicated, cut short. |
-| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python, Go, Swift and the JVM run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
+| Run | [`src/runners.ts`](src/runners.ts): each parser reads a batch of files and prints one line per file, `ok <values>` in the test-suite JSON encoding or `err <line> <column> <reason>`. The stream readers of Rust, Roc, TypeScript, Python, Go, Swift, the JVM and Zig run too, on the same inputs cut into chunks (sizes 1, 2, 3, 5, 8, 13, 64 in turn), and must give what parsing the whole input gives. A runner that crashes is rerun case by case, and the crash counts as a disagreement. |
 | Compare | [`src/main.ts`](src/main.ts): accept/reject and the values must agree, and so must the error codes (spec §17) of runners that report them, wherever two report an error at the same position. |
 | Shrink | A disagreeing input is cut down to the smallest input that still disagrees, and saved to `.out/failures/` with every parser's result. |
 
@@ -56,6 +56,7 @@ them report codes.
 | Go | [`go/`](go) (`go-runner`) |
 | Swift | [`swift-runner/`](swift-runner): a package of its own on [`../swift`](../swift) (a directory named `swift` would clash with it: SwiftPM names packages by their directory) |
 | JVM | [`jvm/`](jvm) (`jvm-runner`) |
+| Zig | [`zig/test/fuzz_runner.zig`](../zig/test/fuzz_runner.zig) (`zig-runner`, built by `zig build fuzz-runner`) |
 | Stream readers | the same runners with `--stream` (TypeScript: in this process) |
 
 A new binding needs a program that reads `DIR/00000.haus` … `DIR/{N-1}.haus`
@@ -104,7 +105,7 @@ through `haus-ref --canonical-batch`, the others through their runners with
 The same idea for the std/time checkers (spec §13.2,
 [`std/time.md`](../spec/std/time.md)): generated strings through the Lean
 model ([`spec/lean/Haus/Time`](../spec/lean/Haus/Time), proven to compute
-the rules) and the TypeScript, Rust, Roc, Python, Go, Swift and JVM checkers, which must agree on
+the rules) and the TypeScript, Rust, Roc, Python, Go, Swift, JVM and Zig checkers, which must agree on
 every one.
 
 ```sh
@@ -132,6 +133,7 @@ above.
 | Go | [`go-runner --time`](go/time.go): `schema.CheckTime` |
 | Swift | [`swift-runner --time`](swift-runner/Sources/swift-runner/Lines.swift): `checkTime` |
 | JVM | [`jvm-runner --time`](jvm/src/main/java/org/hausfmt/fuzz/TimeMode.java): `StdTime.check` |
+| Zig | [`zig-runner --time`](../zig/test/fuzz_schema.zig): `time.check` |
 
 ## Profiles
 
@@ -242,6 +244,7 @@ tests the check: `node --test fuzz/src/`.
 | Go | [`go-runner --schema`](go/schema.go): package schema's `Parse`, `Type.Decode`, `Type.Encode` |
 | Swift | [`swift-runner --schema`](swift-runner/Sources/swift-runner/Lines.swift): `HausSchema(bytes:)`, `SchemaType.decode`, `encode` |
 | JVM | [`jvm-runner --schema`](jvm/src/main/java/org/hausfmt/fuzz/SchemaModes.java): `Schema.parse`, `SchemaType.decode`, `SchemaType.encode` |
+| Zig | [`zig-runner --schema`](../zig/test/fuzz_schema.zig): `schema.load`, `decoding.decode`, `decoding.encode` |
 
 Nothing is masked: every binding's default host types keep the value (spec
 §13.4), so every runner must agree with Lean exactly. Where Lean and another
@@ -249,7 +252,7 @@ runner both report an error code (spec §17) at the same place, the codes must
 agree too: Lean's `--schema-batch` prints `err <place> <code> <reason>`, and a
 runner made with `external(…, codes = true)` in
 [`src/schema-runners.ts`](src/schema-runners.ts) is read the same way
-(TypeScript and Effect report codes in this process, and Python, Roc, Go, Swift and both Rust runners are made so). Lossy host types (Effect's
+(TypeScript and Effect report codes in this process, and Python, Roc, Go, Swift, Zig and both Rust runners are made so). Lossy host types (Effect's
 `BigDecimal` and `DateTime`) are opt-in codecs that the runners don't use.
 
 ## JSON
@@ -324,6 +327,7 @@ members, elements and characters, haus as for schema decoding.
 | Go | [`go-runner --json MODE`](go/json.go): `Type.Decode` and `Type.ToJSON`, `Type.FromJSON` and `Type.Encode`, `haus.ToHausJSON`, `FromHausJSON`, `ImportJSON` |
 | JVM | [`jvm-runner --json MODE`](jvm/src/main/java/org/hausfmt/fuzz/SchemaModes.java): `SchemaType.decode` and `toJson`, `fromJson` and `encode`, `HausJson.toHausJson`, `fromHausJson`, `importJson` |
 | Swift | [`swift-runner --json MODE`](swift-runner/Sources/swift-runner/Lines.swift): `SchemaType.decode` and `toJSON`, `fromJSON` and `encode`, `toHausJSON`, `fromHausJSON`, `importJSON` |
+| Zig | [`zig-runner --json MODE`](../zig/test/fuzz_schema.zig): `decoding.decode` and `json.toJson`, `json.fromJson` and `decoding.encode`, `json.toHausJson`, `fromHausJson`, `importJson` |
 
 Every runner prints an error as `err <place> <code> <reason>`: the place in
 the value (`$.items[2].price`), `$` for an error in the JSON text, and `-` for
@@ -403,6 +407,7 @@ checks.
 | Swift | `stringify` in every layout | the file: `stringifyAll` |
 | JVM | `Haus.write` in every layout, every option | the file: `Haus.writeAll` |
 | Python | `haus.stringify` in every layout, every option (0 included) | the file: `haus.stringify_all` |
+| Zig | `stringify` in every layout, every option | the file: `stringifyAll` |
 
 A failing input is shrunk to the smallest input that still fails the same
 check (at most three per check), and saved to `.out/format/failures/` with
@@ -418,6 +423,7 @@ the check, what was seen, and every formatter's output in every layout.
 | Swift | [`swift-runner`](swift-runner/Sources/swift-runner/main.swift) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
 | JVM | [`jvm-runner`](jvm/src/main/java/org/hausfmt/fuzz/Runner.java) `--format STYLE --indent N --width N`: `Haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
 | Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) `--format STYLE --indent N --width N`: `haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
+| Zig | [`zig-runner`](../zig/test/fuzz_runner.zig) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
 
 [`src/format.test.ts`](src/format.test.ts) tests the generator and the
 checks (`node --test fuzz/src/`): the format suite's expected files keep
@@ -474,6 +480,7 @@ smallest text with the same pattern of disagreement.
 | Go | [`go-runner --schema-check`](go/check.go): `schema.Parse` |
 | Swift | [`swift-runner --schema-check`](swift-runner/Sources/swift-runner/Lines.swift): `HausSchema(bytes:)` |
 | JVM | [`jvm-runner --schema-check`](jvm/src/main/java/org/hausfmt/fuzz/SchemaModes.java): `Schema.parse` |
+| Zig | [`zig-runner --schema-check`](../zig/test/fuzz_schema.zig): `schema.load` |
 
 Roc has no schema-file checker of its own (its types are generated by
 `haus-gen`, TypeScript's), so it sits out.

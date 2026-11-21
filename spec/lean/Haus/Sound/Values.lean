@@ -208,6 +208,14 @@ theorem fields_step (L : Limits) (fuel : Nat) (hv : ValueOk L fuel) (hf : Fields
       obtain ⟨k, r1⟩ := res
       obtain ⟨xk, hxk, hkey⟩ := key_sound L t r1 k hk
       simp only [hk, run_bind] at h
+      by_cases hdup : (acc.any fun x => x.fst == k) = true
+      · simp [hdup] at h
+      have hk' : k ∉ acc.map Prod.fst := by
+        intro hm
+        apply hdup
+        obtain ⟨⟨k', v'⟩, hmem, rfl⟩ := List.mem_map.mp hm
+        exact List.any_eq_true.mpr ⟨(k', v'), hmem, by simp⟩
+      simp only [hdup, Bool.false_eq_true, ↓reduceIte, run_bind] at h
       cases hw1 : ws.run r1 with
       | error e => simp [hw1] at h
       | ok res =>
@@ -234,48 +242,40 @@ theorem fields_step (L : Limits) (fuel : Nat) (hv : ValueOk L fuel) (hf : Fields
               obtain ⟨w1, hr1, hW1⟩ := ws_ws hw1 (by simp [hr2])
               obtain ⟨w2, hr3, hW2⟩ := ws_ws hw2 hr4
               have hfield := Field.mk budget xk w1 w2 xv k v hkey hW1 hW2 hval
-              by_cases hdup : (acc.any fun x => x.fst == k) = true
-              · simp [hdup] at h
-              · have hk' : k ∉ acc.map Prod.fst := by
-                  intro hm
-                  apply hdup
-                  obtain ⟨⟨k', v'⟩, hmem, rfl⟩ := List.mem_map.mp hm
-                  exact List.any_eq_true.mpr ⟨(k', v'), hmem, by simp⟩
-                simp only [hdup, Bool.false_eq_true, ↓reduceIte, run_bind] at h
-                cases hw3 : ws.run r5 with
-                | error e => simp [hw3] at h
-                | ok res =>
-                  obtain ⟨⟨⟩, r6⟩ := res
-                  simp only [hw3, run_get] at h
-                  split at h
-                  · -- a comma: more fields, or the closing brace after a trailing comma
-                    rename_i r7
-                    simp only [run_bind, run_set] at h
-                    cases hw4 : ws.run r7 with
-                    | error e => simp [hw4] at h
-                    | ok res =>
-                      obtain ⟨⟨⟩, r8⟩ := res
-                      simp only [hw4] at h
-                      obtain ⟨inner', fs'', hr8, hfs, hnd', hcases⟩ :=
-                        hf budget start ((k, v) :: acc) r8 fs rest (List.nodup_cons.mpr ⟨hk', hnd⟩) h
-                      obtain ⟨w3, hr5, hW3⟩ := ws_ws hw3 (by simp)
-                      obtain ⟨w4, hr7, hW4⟩ := ws_ws hw4 (by simp [hr8])
-                      refine ⟨(xk ++ w1 ++ ':' :: w2 ++ xv) ++ w3 ++ ',' :: w4 ++ inner', (k, v) :: fs'',
-                        by simp [hxk, hr1, hr2, hr3, hxv, hr5, hr7, hr8], by simp [hfs], hnd', .inr ?_⟩
-                      rcases hcases with ⟨rfl, rfl⟩ | hff
-                      · simpa using FieldsFrom.lastComma budget _ w3 w4 (k, v) hfield hW3 hW4
-                      · exact FieldsFrom.cons budget _ w3 w4 inner' (k, v) fs'' hfield hW3 hW4 hff
-                  · -- the closing brace
-                    rename_i r7
-                    simp at h
-                    obtain ⟨rfl, rfl⟩ := h
+              cases hw3 : ws.run r5 with
+              | error e => simp [hw3] at h
+              | ok res =>
+                obtain ⟨⟨⟩, r6⟩ := res
+                simp only [hw3, run_get] at h
+                split at h
+                · -- a comma: more fields, or the closing brace after a trailing comma
+                  rename_i r7
+                  simp only [run_bind, run_set] at h
+                  cases hw4 : ws.run r7 with
+                  | error e => simp [hw4] at h
+                  | ok res =>
+                    obtain ⟨⟨⟩, r8⟩ := res
+                    simp only [hw4] at h
+                    obtain ⟨inner', fs'', hr8, hfs, hnd', hcases⟩ :=
+                      hf budget start ((k, v) :: acc) r8 fs rest (List.nodup_cons.mpr ⟨hk', hnd⟩) h
                     obtain ⟨w3, hr5, hW3⟩ := ws_ws hw3 (by simp)
-                    refine ⟨(xk ++ w1 ++ ':' :: w2 ++ xv) ++ w3, [(k, v)],
-                      by simp [hxk, hr1, hr2, hr3, hxv, hr5], rfl, ?_, .inr (FieldsFrom.last budget _ w3 (k, v) hfield hW3)⟩
-                    simpa [List.map_reverse, List.nodup_append] using
-                      (List.nodup_cons.mpr ⟨hk', hnd⟩ |> nodup_reverse)
-                  · simp at h
-                  · simp at h
+                    obtain ⟨w4, hr7, hW4⟩ := ws_ws hw4 (by simp [hr8])
+                    refine ⟨(xk ++ w1 ++ ':' :: w2 ++ xv) ++ w3 ++ ',' :: w4 ++ inner', (k, v) :: fs'',
+                      by simp [hxk, hr1, hr2, hr3, hxv, hr5, hr7, hr8], by simp [hfs], hnd', .inr ?_⟩
+                    rcases hcases with ⟨rfl, rfl⟩ | hff
+                    · simpa using FieldsFrom.lastComma budget _ w3 w4 (k, v) hfield hW3 hW4
+                    · exact FieldsFrom.cons budget _ w3 w4 inner' (k, v) fs'' hfield hW3 hW4 hff
+                · -- the closing brace
+                  rename_i r7
+                  simp at h
+                  obtain ⟨rfl, rfl⟩ := h
+                  obtain ⟨w3, hr5, hW3⟩ := ws_ws hw3 (by simp)
+                  refine ⟨(xk ++ w1 ++ ':' :: w2 ++ xv) ++ w3, [(k, v)],
+                    by simp [hxk, hr1, hr2, hr3, hxv, hr5], rfl, ?_, .inr (FieldsFrom.last budget _ w3 (k, v) hfield hW3)⟩
+                  simpa [List.map_reverse, List.nodup_append] using
+                    (List.nodup_cons.mpr ⟨hk', hnd⟩ |> nodup_reverse)
+                · simp at h
+                · simp at h
 
 /-- The tag at the start of `c :: t0`, when `c` is uppercase. -/
 theorem tag_takeWhile {c : Char} {t0 : Text} (hc : isUpper c = true) : Tag ((c :: t0).takeWhile isIdentChar) := by

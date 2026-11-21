@@ -21,6 +21,13 @@ structure Limits where
   maxExponent : Nat := 6144
   /-- Characters in one decoded string, or between the quotes of a byte string. -/
   maxStringLength : Nat := 16 * 1024 * 1024
+  /--
+  Values written for one value, counted as they are written (§7): bounds a
+  writer, the canonical form and hashing for a value built in code whose
+  parts share each other. A parser never needs it: a parsed value has fewer
+  values than characters.
+  -/
+  maxNodes : Nat := 64 * 1024 * 1024
   deriving Repr, Inhabited
 
 /--

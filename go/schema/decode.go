@@ -107,7 +107,7 @@ func (t Type) DecodeWith(v haus.Value, opts DecodeOptions) (haus.Value, error) {
 // value to write (spec §15): what Decode gives for it. Besides Decode's
 // errors, it detects a value that contains itself (cyclic-value), strings
 // and keys that aren't UTF-8 (cannot-encode), and values that share nodes
-// so much that writing them would take more than [haus.MaxNodes] nodes
+// so much that writing them would take more than [haus.Limits.MaxNodes] values
 // (too-many-nodes).
 func (t Type) Encode(v haus.Value) (haus.Value, error) {
 	return t.EncodeWith(v, DecodeOptions{})
@@ -199,6 +199,7 @@ func resolveLimits(l haus.Limits) (haus.Limits, error) {
 		MaxExponent:     pick(l.MaxExponent, d.MaxExponent),
 		MaxStringLength: pick(l.MaxStringLength, d.MaxStringLength),
 		MaxValueLength:  pick(l.MaxValueLength, d.MaxValueLength),
+		MaxNodes:        pick(l.MaxNodes, d.MaxNodes),
 	}
 	if r.MaxDepth > haus.MaxSupportedDepth {
 		return r, newError(haus.CodeUnsupportedDepth, "MaxDepth %d is more than the supported maximum, %d", r.MaxDepth, haus.MaxSupportedDepth)
@@ -242,7 +243,7 @@ type walker struct {
 	encoding bool
 	reading  bool // v is JSON read as by the import: schema-based JSON (§16.3)
 	// parsed is set when v is what the parser read with lim from a text of
-	// at most haus.MaxNodes bytes: its raw parts pass haus.CheckValue.
+	// at most lim.MaxNodes bytes: its raw parts pass haus.CheckValue.
 	parsed bool
 	// plain is set when decoding without codecs (not encoding, reading
 	// JSON or writing): scalars decoded as they are take a shorter way.
@@ -264,6 +265,25 @@ type walker struct {
 	writing   bool
 	minimised bool
 	b         []byte
+	// tooLong is set when a writing walk wrote a string, key, tag or byte
+	// string longer than the string limit: the two passes report it.
+	tooLong bool
+}
+
+// writeTag writes a tag, noting one longer than the string limit.
+func (w *walker) writeTag(tag string) {
+	if len(tag) > w.lim.MaxStringLength {
+		w.tooLong = true
+	}
+	w.b = append(w.b, tag...)
+}
+
+// writeLength notes a string or key longer than the string limit, in code
+// points.
+func (w *walker) writeLength(s string) {
+	if len(s) > w.lim.MaxStringLength && utf8.RuneCountInString(s) > w.lim.MaxStringLength {
+		w.tooLong = true
+	}
 }
 
 // errTwoPasses is what a writing walk gives up with where the value is
@@ -311,7 +331,7 @@ func (w *walker) fail(code haus.ErrorCode, format string, args ...any) error {
 func (w *walker) child(s step, v haus.Value, t *typ) (haus.Value, bool, error) {
 	// A scalar decoded as it is takes a shorter way, with the same counts
 	// (nest, value): nothing in it can fail or nest.
-	if (w.plain || w.writing) && w.depth < w.lim.MaxDepth && w.nodes < haus.MaxNodes && w.steps < w.budget+stepsPerValue {
+	if (w.plain || w.writing) && w.depth < w.lim.MaxDepth && w.nodes < w.lim.MaxNodes && w.steps < w.budget+stepsPerValue {
 		rt := resolve(t)
 		var done bool
 		if w.plain {
@@ -339,12 +359,13 @@ func (w *walker) writeScalar(v haus.Value, rt *typ) bool {
 	}
 	switch v := v.(type) {
 	case haus.String:
+		w.writeLength(string(v))
 		var valid bool
 		if w.b, valid = appendQuoted(w.b, string(v)); !valid {
 			w.b = nil
 		}
 	case haus.Variant:
-		w.b = append(w.b, v.Tag...)
+		w.writeTag(v.Tag.String())
 	case haus.Number:
 		text := v.String()
 		if len(text) > w.lim.MaxNumberLength || strings.IndexByte(text, 'e') >= 0 {
@@ -369,11 +390,11 @@ func plainScalar(v haus.Value, rt *typ) bool {
 		}
 		switch rt.kind {
 		case kBool:
-			return v.Tag == "True" || v.Tag == "False"
+			return v.Tag.String() == "True" || v.Tag.String() == "False"
 		case kMaybe:
-			return v.Tag == "None"
+			return v.Tag.String() == "None"
 		case kVariant:
-			c := rt.vrt.caseOf(v.Tag)
+			c := rt.vrt.caseOf(v.Tag.String())
 			return c != nil && c.payload == payloadNone
 		}
 	case haus.Number:
@@ -437,8 +458,9 @@ func (w *walker) nest(v haus.Value, t *typ, pop int) (haus.Value, bool, error) {
 		return nil, false, w.fail(code, "nesting deeper than %d levels", w.lim.MaxDepth)
 	}
 	w.nodes++
-	if w.nodes > haus.MaxNodes {
-		return nil, false, w.fail(haus.CodeTooManyNodes, "the value has more than %d nodes", haus.MaxNodes)
+	if w.nodes > w.lim.MaxNodes {
+		return nil, false, &haus.Error{Code: haus.CodeTooManyNodes, Path: pathString(nil),
+			Message: fmt.Sprintf("the value writes more than %d values, the node limit: its parts share one another", w.lim.MaxNodes)}
 	}
 	w.budget += stepsPerValue
 	w.depth++
@@ -607,15 +629,15 @@ func (w *walker) resolved(v haus.Value, rt, t *typ) (haus.Value, bool, error) {
 	case kMaybe:
 		x, ok := v.(haus.Variant)
 		switch {
-		case ok && x.Tag == "None" && len(x.Args) == 0:
+		case ok && x.Tag.String() == "None" && len(x.Args) == 0:
 			if w.writing {
-				w.b = append(w.b, "None"...)
+				w.writeTag("None")
 			}
 			return v, false, nil
-		case ok && x.Tag == "Some" && len(x.Args) == 1:
+		case ok && x.Tag.String() == "Some" && len(x.Args) == 1:
 			var record bool
 			if w.writing {
-				w.b = append(w.b, "Some"...)
+				w.writeTag("Some")
 				record = w.payloadStart(x.Args[0])
 			}
 			y, changed, err := w.child(step{index: 0}, x.Args[0], rt.elem)
@@ -628,7 +650,7 @@ func (w *walker) resolved(v haus.Value, rt, t *typ) (haus.Value, bool, error) {
 			if err != nil || !changed {
 				return v, false, err
 			}
-			return haus.Variant{Tag: "Some", Args: []haus.Value{y}}, true, nil
+			return haus.Variant{Tag: haus.MustTag("Some"), Args: []haus.Value{y}}, true, nil
 		}
 		return nil, false, w.fail(notCase(v, "None", "Some"), "expected None or Some(…) (%s), found %s", describe(t), found(v))
 	case kSecret:
@@ -662,7 +684,7 @@ func notCase(v haus.Value, tags ...string) haus.ErrorCode {
 	switch {
 	case !ok:
 		return haus.CodeTypeMismatch
-	case x.Tag == tags[0] || x.Tag == tags[1]:
+	case x.Tag.String() == tags[0] || x.Tag.String() == tags[1]:
 		return haus.CodeWrongPayload
 	}
 	return haus.CodeUnknownTag
@@ -696,6 +718,7 @@ func (w *walker) text(s string) error {
 
 // writeString writes a string, which must be valid UTF-8 (text).
 func (w *walker) writeString(s string) error {
+	w.writeLength(s)
 	var valid bool
 	if w.b, valid = appendQuoted(w.b, s); !valid {
 		return w.fail(haus.CodeCannotEncode, "a string that isn't valid UTF-8")
@@ -720,6 +743,9 @@ func (w *walker) builtin(v haus.Value, k kind, t *typ) (haus.Value, bool, error)
 	case kBytes:
 		if b, ok := v.(haus.Bytes); ok {
 			if w.writing {
+				if 2*len(b) > w.lim.MaxStringLength {
+					w.tooLong = true
+				}
 				w.b = append(w.b, `x"`...)
 				w.b = hex.AppendEncode(w.b, b)
 				w.b = append(w.b, '"')
@@ -729,20 +755,20 @@ func (w *walker) builtin(v haus.Value, k kind, t *typ) (haus.Value, bool, error)
 	case kBool:
 		if x, ok := v.(haus.Variant); ok {
 			switch {
-			case (x.Tag == "True" || x.Tag == "False") && len(x.Args) == 0:
+			case (x.Tag.String() == "True" || x.Tag.String() == "False") && len(x.Args) == 0:
 				if w.writing {
-					w.b = append(w.b, x.Tag...)
+					w.writeTag(x.Tag.String())
 				}
 				return v, false, nil
-			case x.Tag == "True" || x.Tag == "False":
+			case x.Tag.String() == "True" || x.Tag.String() == "False":
 				return nil, false, w.fail(haus.CodeWrongPayload, "expected %s, found %s with a payload", describe(t), found(v))
 			}
 			return nil, false, w.fail(haus.CodeUnknownTag, "expected %s (True or False), found %s", describe(t), found(v))
 		}
 	case kFloat32, kFloat64:
-		if x, ok := v.(haus.Variant); ok && len(x.Args) == 0 && (x.Tag == "NaN" || x.Tag == "Infinity" || x.Tag == "NegInfinity") {
+		if x, ok := v.(haus.Variant); ok && len(x.Args) == 0 && (x.Tag.String() == "NaN" || x.Tag.String() == "Infinity" || x.Tag.String() == "NegInfinity") {
 			if w.writing {
-				w.b = append(w.b, x.Tag...)
+				w.writeTag(x.Tag.String())
 			}
 			return v, false, nil
 		}
@@ -917,7 +943,7 @@ func (w *walker) raw(v haus.Value) (haus.Value, bool, error) {
 
 func (w *walker) time(v haus.Value, name string, t *typ) (haus.Value, bool, error) {
 	x, ok := v.(haus.Variant)
-	if !ok || x.Tag != name {
+	if !ok || x.Tag.String() != name {
 		return w.mismatch(v, t)
 	}
 	var s haus.String
@@ -935,8 +961,9 @@ func (w *walker) time(v haus.Value, name string, t *typ) (haus.Value, bool, erro
 		return nil, false, w.fail(haus.CodeInvalidTime, "%v", err)
 	}
 	if w.writing {
-		w.b = append(w.b, name...)
+		w.writeTag(name)
 		w.b = append(w.b, '(')
+		w.writeLength(string(s))
 		w.b, _ = appendQuoted(w.b, string(s))
 		w.b = append(w.b, ')')
 	}
@@ -958,6 +985,7 @@ func (w *walker) writeKey(n int, key string, quote bool) {
 	} else {
 		w.space()
 	}
+	w.writeLength(key)
 	if quote {
 		w.b, _ = appendQuoted(w.b, key)
 	} else {
@@ -1113,29 +1141,29 @@ func (w *walker) variant(v haus.Value, vt *variantType, t *typ) (haus.Value, boo
 	if !ok {
 		return w.mismatch(v, t)
 	}
-	c := vt.caseOf(x.Tag)
+	c := vt.caseOf(x.Tag.String())
 	if c == nil {
 		if vt.open {
 			return w.raw(v)
 		}
-		return nil, false, w.fail(haus.CodeUnknownTag, "%s is not allowed here: expected %s", quote(x.Tag), tags(vt))
+		return nil, false, w.fail(haus.CodeUnknownTag, "%s is not allowed here: expected %s", quote(x.Tag.String()), tags(vt))
 	}
 	switch c.payload {
 	case payloadNone:
 		if len(x.Args) == 0 {
 			if w.writing {
-				w.b = append(w.b, x.Tag...)
+				w.writeTag(x.Tag.String())
 			}
 			return v, false, nil
 		}
-		return nil, false, w.fail(haus.CodeWrongPayload, "%s takes no payload", x.Tag)
+		return nil, false, w.fail(haus.CodeWrongPayload, "%s takes no payload", x.Tag.String())
 	case payloadRecord, payloadNamed:
 		r, ok := oneRecord(x.Args)
 		if !ok {
-			return nil, false, w.fail(haus.CodeWrongPayload, "%s takes one argument, a record; found %s", x.Tag, foundArgs(x.Args))
+			return nil, false, w.fail(haus.CodeWrongPayload, "%s takes one argument, a record; found %s", x.Tag.String(), foundArgs(x.Args))
 		}
 		if w.writing {
-			w.b = append(w.b, x.Tag...)
+			w.writeTag(x.Tag.String())
 			w.space()
 		}
 		// Tag { … }: the record is at the variant's level and place.
@@ -1152,7 +1180,7 @@ func (w *walker) variant(v haus.Value, vt *variantType, t *typ) (haus.Value, boo
 		if err != nil || !changed || w.writing {
 			return v, false, err
 		}
-		return haus.Variant{Tag: x.Tag, Args: []haus.Value{y}}, true, nil
+		return haus.Variant{Tag: haus.MustTag(x.Tag.String()), Args: []haus.Value{y}}, true, nil
 	}
 	if len(c.items) != len(x.Args) {
 		described := make([]string, len(c.items))
@@ -1164,11 +1192,11 @@ func (w *walker) variant(v haus.Value, vt *variantType, t *typ) (haus.Value, boo
 			s = ""
 		}
 		return nil, false, w.fail(haus.CodeWrongPayload, "%s takes %d argument%s (%s), found %d",
-			x.Tag, len(c.items), s, strings.Join(described, ", "), len(x.Args))
+			x.Tag.String(), len(c.items), s, strings.Join(described, ", "), len(x.Args))
 	}
 	record := false
 	if w.writing {
-		w.b = append(w.b, x.Tag...)
+		w.writeTag(x.Tag.String())
 		if len(x.Args) == 1 {
 			record = w.payloadStart(x.Args[0])
 		} else {
@@ -1199,7 +1227,7 @@ func (w *walker) variant(v haus.Value, vt *variantType, t *typ) (haus.Value, boo
 		return v, false, nil
 	}
 	if out != nil {
-		return haus.Variant{Tag: x.Tag, Args: out}, true, nil
+		return haus.Variant{Tag: haus.MustTag(x.Tag.String()), Args: out}, true, nil
 	}
 	return v, false, nil
 }
@@ -1247,7 +1275,7 @@ func found(v haus.Value) string {
 	case haus.Record:
 		return "a record"
 	case haus.Variant:
-		return "the tag " + quote(v.Tag)
+		return "the tag " + quote(v.Tag.String())
 	}
 	return "nothing"
 }

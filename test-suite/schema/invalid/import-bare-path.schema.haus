@@ -1,0 +1,3 @@
+// A module is std/…, a package @org/name or a file ./name or ../name: any other word is a syntax error (grammar.ebnf).
+import foo/bar (A)
+type B = { a: A }

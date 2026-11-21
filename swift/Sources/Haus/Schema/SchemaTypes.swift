@@ -172,6 +172,9 @@ struct CaseType: Sendable {
     let payload: Payload
     let deprecated: Deprecation?
 
+    /// The tag in a value: the schema's reader read it as one.
+    var hausTag: HausTag { HausTag(valid: tag) }
+
     /// The record of a record case, or nil.
     var record: RecordShape? {
         switch payload {
