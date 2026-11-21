@@ -134,7 +134,7 @@ export const speedTable = (sp: SpeedOut): string[] => {
         versus(sp.rows, r),
       ]),
     ),
-    // Only TypeScript and Python have JSON baselines that check or write with the schema.
+    // TypeScript, Go and Python have JSON baselines that check or write with the schema.
     ...(sp.typedBaselines ? typedVersusTable(sp) : []),
   ]
 }
@@ -148,8 +148,9 @@ const hausTask = (r: SpeedRow): string =>
 
 /**
  * The typed tasks against the JSON baselines that check or use the same
- * schema (TypeScript: JSON.parse + Zod, Ajv, TypeBox; fast-json-stringify;
- * Python: pydantic, msgspec),
+ * schema (TypeScript: JSON.parse + Zod, Ajv, TypeBox; fast-json-stringify; Go:
+ * encoding/json and goccy/go-json into and from generated Go types; Python:
+ * pydantic, msgspec),
  * and against the plain JSON task. "haus vs JSON" compares the times on the
  * same documents, so it is the comparison; MB/s is each format's own bytes. Pure.
  */
@@ -162,11 +163,24 @@ export const typedVersusTable = (sp: SpeedOut): string[] => {
   })
   if (pairs.length === 0) return []
   const b = sp.typedBaselines
+  // Go's baselines are Go types generated from the JSON Schema, which don't reject every mutated document (`mutated` says how many were made).
+  const go = sp.lang === "go"
+  const mutated = b?.mutated
+  const rejected = (r: Readonly<Record<string, number>>) =>
+    mutated ? `rejected ${Object.entries(mutated).map(([k, n]) => `${r[k] ?? 0} of ${n} mutated (${k})`).join(", ")}` : `rejected ${Object.entries(r).map(([k, n]) => `${n} mutated (${k})`).join(", ")}`
+  const roundTrip = b?.roundTrip
+    ? `; the typed JSON round trip (decode into the Go types, encode) gives the members the schema lists with the same values, but ${Object.entries(b.roundTrip).map(([lib, r]) =>
+      `${lib} rounds numbers in ${r.numbersRounded}, respells date-times in ${r.timesRespelled} and drops optional members that are null in ${r.nullsDropped} documents`).join("; ")}`
+    : ""
   return [
-    `haus typed against JSON with the same schema (${LANG_NAMES[sp.lang]}): the validators and the writer are built from the JSON Schema convert derives from the haus schema (\`corpus/<source>.schema.json\`).` +
-      (b ? ` Before timing, every validator accepted every document and rejected ${Object.entries(b.rejected).map(([k, n]) => `${n} mutated (${k})`).join(", ")}; ` +
-        `the typed haus write writes other text than the document (members in the schema's order, members it doesn't list dropped) for ${b.typedWriteOtherText} documents, ${JSON_WRITERS[sp.lang]} writes other text than ${sp.lang === "python" ? "the document" : "JSON.stringify"} for ${b.jsonWriterOtherText}` +
+    `haus typed against JSON with the same schema (${LANG_NAMES[sp.lang]}): ` +
+      (go ? "the Go types (decoded and encoded by encoding/json and by goccy/go-json) are generated from" : "the validators and the writer are built from") +
+      ` the JSON Schema convert derives from the haus schema (\`corpus/<source>.schema.json\`).` +
+      (b ? ` Before timing, every ${go ? "baseline" : "validator"} accepted every document and ${rejected(b.rejected)}; ` +
+        `the typed haus write writes other text than the document (members in the schema's order, members it doesn't list dropped) for ${b.typedWriteOtherText} documents, ` +
+        (go ? `encoding/json's write of the Go types other text than the document for ${b.jsonWriterOtherText}` : `${JSON_WRITERS[sp.lang]} writes other text than ${sp.lang === "python" ? "the document" : "JSON.stringify"} for ${b.jsonWriterOtherText}`) +
         (b.jsonWriterKeyedAsAny ? `; fast-json-stringify writes the unions told apart by keys as JSON.stringify does (it can't build them) for ${b.jsonWriterKeyedAsAny.join(", ")}` : "") +
+        roundTrip +
         `. ${Object.entries(b.versions).map(([k, v]) => `${k} ${v}`).join(", ")}.` : ""),
     "",
     ...table(["Task", "Input", "haus", "JSON", "JSON MB/s", "haus MB/s", "haus vs JSON"], pairs),
@@ -175,7 +189,7 @@ export const typedVersusTable = (sp: SpeedOut): string[] => {
 
 /** haus in every language side by side: MB/s, and how fast against the language's JSON. Pure. */
 export const speedSummary = (speed: readonly SpeedOut[]): string[] => {
-  // (The typed writes of TypeScript and Python have no counterpart in the other languages yet: they are in the typed table.)
+  // (The typed writes are in the typed tables: Rust has none yet.)
   const keys = [...new Set(speed.flatMap((sp) => sp.rows.filter((r) => r.format === "haus" && hausTask(r) !== "write typed").map((r) => `${hausTask(r)}|${r.input}`)))]
   return [
     "haus in each language (MB/s of haus text; faster or slower than the language's JSON task of the same input):",
@@ -331,7 +345,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const speedSection = speed.length === 0 ? [] : [
     "## Speed",
     "",
-    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Python typed: pydantic, msgspec, SchemaType.canonical). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json, json.loads and json.dumps), \"≈ equal\" within 5%.",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Go also encoding/json and goccy/go-json into Go types generated from it, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Go typed: the Go types, Type.Encode; in Python typed: pydantic, msgspec, SchemaType.canonical). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json into and from `any`, json.loads and json.dumps), \"≈ equal\" within 5%.",
     "",
     ...(speed.length > 1 ? speedSummary(speed) : []),
     ...speed.flatMap(speedTable),

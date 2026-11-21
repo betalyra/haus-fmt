@@ -25,7 +25,7 @@ func BenchmarkSpeed(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if _, err := in.Check(); err != nil {
+		if _, _, err := in.Check(); err != nil {
 			b.Fatalf("%s: %v", source, err)
 		}
 		tasks, err := in.Tasks()

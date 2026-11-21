@@ -174,22 +174,33 @@ export const SpeedOut = Schema.Struct({
    */
   jsonNotStable: Schema.Finite,
   /**
-   * TypeScript: the checks of the JSON baselines of the typed tasks (JSON.parse
-   * + a validator, a schema-compiled JSON writer), built from the source's JSON
-   * Schema (bench/speed/ts/validators.ts); Python: pydantic and msgspec, models
-   * generated from the same JSON Schema (bench/speed/py, models.py).
+   * The checks of the JSON baselines of the typed tasks, built from the
+   * source's JSON Schema. TypeScript: JSON.parse + a validator, a
+   * schema-compiled JSON writer (bench/speed/ts/validators.ts). Go: Go types
+   * generated from it, decoded and encoded by encoding/json and goccy/go-json
+   * (bench/speed/go/cmd/jsontypes). Python: pydantic and msgspec, models
+   * generated from it (bench/speed/py, models.py).
    */
   typedBaselines: Schema.optionalKey(Schema.Struct({
     /** The libraries and their versions. */
     versions: Schema.Record(Schema.String, Schema.String),
-    /** Mutated documents every validator rejected, by kind of mutation (bench/speed/ts/mutate.ts; Python: bench/speed/py, mutate.py). */
+    /** Mutated documents every validator rejected, by kind of mutation (bench/speed/ts/mutate.ts, bench/speed/go/mutate.go; Python: bench/speed/py, mutate.py). */
     rejected: Schema.Record(Schema.String, Schema.Finite),
+    /** Go: the mutated documents made, by kind (the Go types don't reject every one: TypeScript's validators must). */
+    mutated: Schema.optionalKey(Schema.Record(Schema.String, Schema.Finite)),
     /** Documents whose typed haus write isn't the document's text: members in the schema's order, members it doesn't list dropped (decoding drops them). */
     typedWriteOtherText: Schema.Finite,
-    /** Documents whose fast-json-stringify text isn't JSON.stringify's (members the schema doesn't list, member order). */
+    /** Documents whose typed JSON write isn't the reference text: TypeScript, fast-json-stringify's against JSON.stringify's (members the schema doesn't list, member order); Go, encoding/json's write of the Go types against the document. */
     jsonWriterOtherText: Schema.Finite,
     /** Root types whose fast-json-stringify writer writes the variants by keys as JSON.stringify does: it can't build them (bench/speed/ts/validators.ts). */
     jsonWriterKeyedAsAny: Schema.optionalKey(Schema.Array(Schema.String)),
+    /** Go: each library's typed round trip (decode into the Go types, encode), by what changes in documents (bench/speed/go/typed.go). */
+    roundTrip: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({
+      numbersRounded: Schema.Finite,
+      timesRespelled: Schema.Finite,
+      nullsDropped: Schema.Finite,
+      otherText: Schema.Finite,
+    }))),
   })),
   rows: Schema.Array(SpeedRow),
   checksum: Schema.Finite,
