@@ -177,8 +177,23 @@ func formatCases(t *testing.T) []formatCase {
 	return cases
 }
 
+// inLayout is the default options in layout l.
+func inLayout(l Layout) FormatOptions {
+	o := DefaultFormatOptions()
+	o.Layout = l
+	return o
+}
+
+// withLimits is o with the limits lim.
+func withLimits(o FormatOptions, lim Limits) FormatOptions {
+	o.Limits = lim
+	return o
+}
+
+// formatOptions reads the case's options file: the options it names, the
+// defaults for the others.
 func formatOptions(t *testing.T, c formatCase) FormatOptions {
-	var o FormatOptions
+	o := DefaultFormatOptions()
 	b, err := os.ReadFile(filepath.Join(suite, c.expected+".options"))
 	if err != nil {
 		return o
@@ -260,6 +275,106 @@ func TestFormatSuite(t *testing.T) {
 			}
 			sameValues(t, "pretty with trailing blanks trimmed", trailingBlanks.ReplaceAll(outs[Pretty], nil), input)
 		})
+	}
+}
+
+// DefaultFormatOptions is what the zero FormatOptions used to mean (indent
+// 2, width 80, the default limits): over the whole format suite, every case
+// without an options file comes out as its expected files, written with
+// those defaults, byte for byte.
+func TestDefaultFormatOptions(t *testing.T) {
+	if got, want := DefaultFormatOptions(), (FormatOptions{Layout: Pretty, Indent: 2, Width: 80}); got != want {
+		t.Fatalf("DefaultFormatOptions() = %+v, want %+v", got, want)
+	}
+	for _, c := range formatCases(t) {
+		if _, err := os.Stat(filepath.Join(suite, c.expected+".options")); err == nil {
+			continue
+		}
+		input := readSuite(t, c.input)
+		for _, l := range []Layout{Pretty, Compact, Minimised} {
+			if got, want := run(t, input, DefaultFormatOptions(), l), readSuite(t, c.expected+"."+l.String()); !bytes.Equal(got, want) {
+				t.Errorf("%s %s:\n--- got\n%s\n--- want\n%s", c.name, l, got, want)
+			}
+		}
+	}
+}
+
+// Indent and width are taken literally, 0 included (spec §11): the zero
+// options are not the defaults.
+func TestFormatZeroOptions(t *testing.T) {
+	cases := []struct {
+		name string
+		opts FormatOptions
+	}{
+		{"indent-zero", FormatOptions{Indent: 0, Width: 80}},
+		{"width-zero", FormatOptions{Indent: 2, Width: 0}},
+	}
+	for _, c := range cases {
+		input := readSuite(t, "format", "cases", c.name+".haus")
+		values, err := ParseAll(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range []Layout{Pretty, Compact, Minimised} {
+			want := readSuite(t, "format", "cases", c.name+"."+l.String())
+			if got := run(t, input, c.opts, l); !bytes.Equal(got, want) {
+				t.Errorf("%s %s:\n--- got\n%s\n--- want\n%s", c.name, l, got, want)
+			}
+			// The values written alone: what the formatter writes of the
+			// minimised text, which has no comments nor blank lines.
+			o := c.opts
+			o.Layout = l
+			got, err := FormatValues(values, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := run(t, run(t, input, c.opts, Minimised), c.opts, l); !bytes.Equal(got, want) {
+				t.Errorf("%s FormatValues %s:\n--- got\n%s\n--- want\n%s", c.name, l, got, want)
+			}
+		}
+		if bytes.Equal(run(t, input, c.opts, Pretty), run(t, input, DefaultFormatOptions(), Pretty)) {
+			t.Errorf("%s: written as with the default options", c.name)
+		}
+	}
+	// The zero value: no indentation, and nothing fits on one line.
+	got, err := Format([]byte(`{ a: [P(1, 2)] }`), FormatOptions{})
+	if want := "{\na: [\nP(\n1,\n2,\n),\n],\n}\n"; err != nil || string(got) != want {
+		t.Errorf("zero options: %q, %v; want %q", got, err, want)
+	}
+}
+
+// A negative indent or width is a mistake in the calling program: a plain
+// error wrapping ErrInvalidOptions, without a code, returned before the text
+// or the values are looked at.
+func TestFormatNegativeOptions(t *testing.T) {
+	bad := []FormatOptions{{Indent: -1, Width: 80}, {Indent: 2, Width: -1}, {Indent: -4, Width: -80}}
+	cyclic := Array{nil}
+	cyclic[0] = cyclic
+	for _, o := range bad {
+		for _, l := range []Layout{Pretty, Compact, Minimised} {
+			o.Layout = l
+			check := func(what string, err error) {
+				t.Helper()
+				var e *Error
+				if !errors.Is(err, ErrInvalidOptions) || errors.As(err, &e) {
+					t.Errorf("%s %+v: %v, want ErrInvalidOptions without a code", what, o, err)
+				}
+			}
+			_, err := Format([]byte("{ a: 1 }"), o)
+			check("Format", err)
+			_, err = Format([]byte("{ a: "), o)
+			check("Format of a syntax error", err)
+			_, err = FormatValue(NumberFromInt(1), o)
+			check("FormatValue", err)
+			_, err = FormatValue(cyclic, o)
+			check("FormatValue of a cyclic value", err)
+			_, err = FormatValues([]Value{String("a"), String("b")}, o)
+			check("FormatValues", err)
+			check("Check", o.Check())
+		}
+	}
+	if err := (FormatOptions{}).Check(); err != nil {
+		t.Errorf("zero options: %v", err)
 	}
 }
 

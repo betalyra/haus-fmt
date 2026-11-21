@@ -372,7 +372,7 @@ For every input, and each layout:
 
 | Check | |
 |---|---|
-| Same bytes | TypeScript, Rust, Go, Swift, the JVM and Python write the same text, or all reject the input; a crash is a finding. Go's options take 0 as the default, so Go sits out the batches with an indent or width of 0. |
+| Same bytes | TypeScript, Rust, Go, Swift, the JVM and Python write the same text, or all reject the input; a crash is a finding. |
 | Values | The output parses to the input's values (compared by their canonical forms, spec §12). |
 | Idempotence | Formatting the output again in the same layout gives it back, in every formatter. |
 | Comments | Pretty keeps every comment, in order (a CR LF in one is written as LF); compact and minimised have none. |
@@ -397,7 +397,7 @@ checks.
 | TypeScript | `stringify(v, { style, indent, width })`, in this process | the file: `format(values, { style, indent, width })` |
 | Rust | `haus::to_string`, `to_string_minimised` (no pretty writer from values) | a stream: `haus::to_string_all` (compact) |
 | Roc | `Encode.to_str`, `Encode.minimised` (no pretty writer from values) | a stream: `Encode.stream`, `Encode.stream_minimised` |
-| Go | `haus.FormatValue` in every layout; it takes 0 as the default indent and width, so it sits out pretty in the batches with a 0 | the file: `haus.FormatValues` |
+| Go | `haus.FormatValue` in every layout, with every option | the file: `haus.FormatValues` |
 | Swift | `stringify` in every layout | the file: `stringifyAll` |
 | JVM | `Haus.write` in every layout, every option | the file: `Haus.writeAll` |
 | Python | `haus.stringify` in every layout, every option (0 included) | the file: `haus.stringify_all` |
@@ -412,7 +412,7 @@ the check, what was seen, and every formatter's output in every layout.
 | Lean | `haus-ref --write-batch LAYOUT DIR N` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `ok {"values": […], "file": …}` |
 | Rust | [`fuzz_runner`](../rust/haus/examples/fuzz_runner.rs) `--format STYLE --indent N --width N`: `haus::format`; `--write STYLE`: `ok {"values": […], "stream": …}` |
 | Roc | [`runner.roc`](../roc/fuzz/runner.roc) `--write STYLE`: `ok {"values": […], "stream": …}` |
-| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE [--indent N --width N]`: `ok {"values": […], "file": …}` |
+| Go | [`go-runner`](go/parse.go) `--format STYLE --indent N --width N`: `haus.Format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
 | Swift | [`swift-runner`](swift-runner/Sources/swift-runner/main.swift) `--format STYLE --indent N --width N`: `format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}` |
 | JVM | [`jvm-runner`](jvm/src/main/java/org/hausfmt/fuzz/Runner.java) `--format STYLE --indent N --width N`: `Haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |
 | Python | [`python/fuzz/runner.py`](../python/fuzz/runner.py) `--format STYLE --indent N --width N`: `haus.format`; `--write STYLE --indent N --width N`: `ok {"values": […], "file": …}`, every option, 0 included |

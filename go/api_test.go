@@ -291,7 +291,7 @@ func TestCyclicValues(t *testing.T) {
 			t.Errorf("%s: Hash: %v", name, err)
 		}
 		for _, l := range []Layout{Pretty, Compact, Minimised} {
-			if _, err := FormatValue(v, FormatOptions{Layout: l}); codeOf(err) != CodeCyclicValue {
+			if _, err := FormatValue(v, inLayout(l)); codeOf(err) != CodeCyclicValue {
 				t.Errorf("%s: FormatValue %s: %v", name, l, err)
 			}
 		}
@@ -301,7 +301,7 @@ func TestCyclicValues(t *testing.T) {
 	}
 	// Deep but acyclic values keep the depth error.
 	deep := deepValue(DefaultMaxDepth + 1)
-	if _, err := FormatValue(deep, FormatOptions{}); codeOf(err) != CodeNestingTooDeep {
+	if _, err := FormatValue(deep, DefaultFormatOptions()); codeOf(err) != CodeNestingTooDeep {
 		t.Errorf("deep FormatValue: %v", err)
 	}
 	if err := CheckValue(deep, Limits{}); codeOf(err) != CodeNestingTooDeep {
@@ -379,7 +379,7 @@ func TestCheckValue(t *testing.T) {
 		if err := CheckValue(c.v, one); codeOf(err) != CodeNestingTooDeep || err.(*Error).Path != c.path {
 			t.Errorf("check %s: %v", text, err)
 		}
-		if _, err := FormatValue(c.v, FormatOptions{Limits: one}); codeOf(err) != CodeNestingTooDeep {
+		if _, err := FormatValue(c.v, withLimits(DefaultFormatOptions(), one)); codeOf(err) != CodeNestingTooDeep {
 			t.Errorf("format %s: %v", text, err)
 		}
 		if _, err := AppendHausJSON(nil, c.v, one); codeOf(err) != CodeNestingTooDeep {
@@ -454,7 +454,7 @@ func TestFormatComments(t *testing.T) {
 		{"{b:{b:\"\"},\n\na://\n\"x\"}", "{\n  b: {\n    b: \"\",\n  },\n\n  //\n  a: \"x\",\n}\n"},
 	}
 	for _, c := range cases {
-		got, err := Format([]byte(c.in), FormatOptions{})
+		got, err := Format([]byte(c.in), DefaultFormatOptions())
 		if err != nil || string(got) != c.want {
 			t.Errorf("Format(%q) = %q, %v; want %q", c.in, got, err, c.want)
 		}
@@ -488,7 +488,7 @@ func TestFormatValue(t *testing.T) {
   list: [],
 }
 `
-	got, err := FormatValue(r, FormatOptions{})
+	got, err := FormatValue(r, DefaultFormatOptions())
 	if err != nil || string(got) != want {
 		t.Errorf("pretty:\n%s%v", got, err)
 	}
@@ -499,8 +499,8 @@ func TestFormatValue(t *testing.T) {
 	}
 	// Formatting the output again changes nothing, and it parses back.
 	for _, l := range []Layout{Pretty, Compact, Minimised} {
-		out, _ := FormatValue(r, FormatOptions{Layout: l})
-		again, err := Format(out, FormatOptions{Layout: l})
+		out, _ := FormatValue(r, inLayout(l))
+		again, err := Format(out, inLayout(l))
 		if err != nil || string(again) != string(out) {
 			t.Errorf("%s: %s %v", l, again, err)
 		}
@@ -522,7 +522,7 @@ func TestFormatValue(t *testing.T) {
 		{Array{nil}, Limits{}, CodeCannotEncode},
 	}
 	for _, c := range bad {
-		_, err := FormatValue(c.v, FormatOptions{Limits: c.lim})
+		_, err := FormatValue(c.v, withLimits(DefaultFormatOptions(), c.lim))
 		if codeOf(err) != c.code {
 			t.Errorf("%#v: %v, want %q", c.v, err, c.code)
 		}

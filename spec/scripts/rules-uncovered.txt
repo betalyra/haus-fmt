@@ -11,9 +11,7 @@ positions.text.line-column
 positions.text.code-points
 positions.text.bom-column
 positions.text.line-breaks
-format.options.zero-literal
 format.options.reject-negative
-format.options.zero-not-default
 format.bytes.serialized
 format.numbers.serialized
 canonical.form.parses-back

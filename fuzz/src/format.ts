@@ -336,28 +336,23 @@ interface Formatter {
   readonly program: string
   /** Arguments before the mode's: the script, for a program that runs one. */
   readonly script?: readonly string[]
-  /** Whether it can be given these options. */
-  readonly takes: (options: Options) => boolean
 }
 
 /**
  * The formatters compared with TypeScript's: Rust's (`fuzz_runner --format`),
  * Go's (`go-runner --format`, `haus.Format`), Swift's (`swift-runner
  * --format`, `format`), the JVM's (`jvm-runner --format`, `Haus.format`) and
- * Python's (`python/fuzz/runner.py --format`, `haus.format`). Go's options
- * take 0 as the default (indent 2, width 80), so it can't be given an indent
- * or width of 0 and sits out those batches; the JVM and Python take every
- * option.
+ * Python's (`python/fuzz/runner.py --format`, `haus.format`). Every one
+ * takes every option, an indent or width of 0 included (spec §11: taken
+ * literally, not as the default).
  */
 const FORMATTERS: readonly Formatter[] = [
-  { name: "rust", program: RUST, takes: () => true },
-  { name: "go", program: GO, takes: (o) => o.indent > 0 && o.width > 0 },
-  { name: "swift", program: SWIFT, takes: () => true },
-  { name: "jvm", program: JVM, takes: () => true },
-  { name: "python", program: PYTHON, script: [PYTHON_RUNNER], takes: () => true },
+  { name: "rust", program: RUST },
+  { name: "go", program: GO },
+  { name: "swift", program: SWIFT },
+  { name: "jvm", program: JVM },
+  { name: "python", program: PYTHON, script: [PYTHON_RUNNER] },
 ]
-
-const formattersFor = (options: Options) => FORMATTERS.filter((f) => f.takes(options))
 
 /** An external formatter's outputs. */
 function externalFormat(f: Formatter, dir: string, cases: readonly Uint8Array[], style: Style, options: Options): Out[] {
@@ -383,21 +378,20 @@ const same = (a: Out, b: Out) => (a.ok && b.ok ? a.text === b.text : a.ok === b.
  */
 export function checkFormat(dir: string, cases: readonly Uint8Array[], options: Options): Failure[][] {
   const failures: Failure[][] = cases.map(() => [])
-  const formatters = formattersFor(options)
   /** A failure for each external formatter whose output differs from TypeScript's. */
   const compare = (i: number, what: string, t: Out, others: readonly Out[]) =>
-    formatters.forEach((f, k) => {
+    FORMATTERS.forEach((f, k) => {
       const o = others[k]!
       if (!same(t, o)) failures[i]!.push({ check: `${f.name} ≠ typescript: ${what}`, detail: `typescript ${describeOut(t)}\n${f.name.padEnd(10)} ${describeOut(o)}` })
     })
   const outs = new Map<Style, Out[]>()
   for (const style of STYLES) {
     const ts = cases.map((c) => tsFormat(c, style, options))
-    const others = formatters.map((f) => externalFormat(f, join(dir, "input"), cases, style, options))
+    const others = FORMATTERS.map((f) => externalFormat(f, join(dir, "input"), cases, style, options))
     outs.set(style, ts)
     ts.forEach((t, i) => {
       if (t.crash) failures[i]!.push({ check: `crash: typescript ${style}`, detail: t.crash })
-      formatters.forEach((f, k) => {
+      FORMATTERS.forEach((f, k) => {
         const crash = others[k]![i]!.crash
         if (crash) failures[i]!.push({ check: `crash: ${f.name} ${style}`, detail: crash })
       })
@@ -415,14 +409,14 @@ export function checkFormat(dir: string, cases: readonly Uint8Array[], options: 
     const inputs = inputsOf.get(input) ?? accepted.map((i) => enc.encode(text(input, i)))
     inputsOf.set(input, inputs)
     const ts = inputs.map((c) => tsFormat(c, style, options))
-    const others = formatters.map((f) => externalFormat(f, join(dir, input), inputs, style, options))
+    const others = FORMATTERS.map((f) => externalFormat(f, join(dir, input), inputs, style, options))
     return accepted.map((i, k) => {
       const all = [ts[k]!, ...others.map((o) => o[k]!)]
       compare(i, `${input} → ${style}`, all[0]!, all.slice(1))
       return all
     })
   }
-  const names = ["typescript", ...formatters.map((f) => f.name)]
+  const names = ["typescript", ...FORMATTERS.map((f) => f.name)]
   for (const style of STYLES) {
     again(style, style).forEach((all, k) => {
       const i = accepted[k]!
@@ -488,8 +482,7 @@ interface Writer {
  * `Encode.to_str`, `Encode.minimised`, `Encode.stream` and
  * `Encode.stream_minimised` (`runner.roc --write`), neither with a pretty
  * writer from values; and Go's `FormatValue` and `FormatValues` in every
- * layout (`go-runner --write`; its options take 0 as the default, so it sits
- * out pretty with an indent or width of 0); Swift's `stringify` and
+ * layout, with every option (`go-runner --write`); Swift's `stringify` and
  * `stringifyAll` in every layout (`swift-runner --write`); and the JVM's
  * `Haus.write` and `Haus.writeAll` in every layout, with every option
  * (`jvm-runner --write`); and Python's `haus.stringify` and
@@ -499,11 +492,7 @@ interface Writer {
 const WRITERS: readonly Writer[] = [
   { name: "rust", program: RUST, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
   { name: "roc", program: ROC, args: (s) => (s === "pretty" ? undefined : ["--write", s]) },
-  {
-    name: "go",
-    program: GO,
-    args: (s, o) => (s !== "pretty" ? ["--write", s] : o.indent > 0 && o.width > 0 ? ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] : undefined),
-  },
+  { name: "go", program: GO, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "swift", program: SWIFT, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "jvm", program: JVM, args: (s, o) => ["--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
   { name: "python", program: PYTHON, args: (s, o) => [PYTHON_RUNNER, "--write", s, "--indent", String(o.indent), "--width", String(o.width)] },
@@ -605,7 +594,7 @@ const dir = (name: string) => join(outDir, "format", name)
 function outputs(bytes: Uint8Array, options: Options): string {
   return STYLES.flatMap((style) => {
     const t = tsFormat(bytes, style, options)
-    const others = formattersFor(options).map((f) => `  ${"".padEnd(9)} ${f.name.padEnd(10)} ${describeOut(externalFormat(f, dir("report"), [bytes], style, options)[0])}`)
+    const others = FORMATTERS.map((f) => `  ${"".padEnd(9)} ${f.name.padEnd(10)} ${describeOut(externalFormat(f, dir("report"), [bytes], style, options)[0])}`)
     return [`  ${style.padEnd(9)} typescript ${describeOut(t)}`, ...others]
   }).join("\n")
 }

@@ -36,7 +36,8 @@ func checkFormat(t *testing.T, label string, ty schema.Type, v haus.Value) {
 	t.Helper()
 	for _, lim := range onePassLimits {
 		for _, layout := range []haus.Layout{haus.Minimised, haus.Compact, haus.Pretty} {
-			opts := haus.FormatOptions{Layout: layout, Limits: lim}
+			opts := withLayout(layout)
+			opts.Limits = lim
 			var want []byte
 			enc, werr := ty.EncodeWith(v, schema.DecodeOptions{Limits: lim})
 			if werr == nil {
@@ -74,7 +75,7 @@ func checkOnePass(t *testing.T, label string, ty schema.Type, v haus.Value) {
 	t.Helper()
 	checkFormat(t, label, ty, v)
 	for _, layout := range []haus.Layout{haus.Minimised, haus.Pretty} {
-		if text, err := haus.FormatValue(v, haus.FormatOptions{Layout: layout}); err == nil {
+		if text, err := haus.FormatValue(v, withLayout(layout)); err == nil {
 			checkParse(t, label, ty, text)
 		}
 	}
@@ -122,6 +123,34 @@ func TestOnePassSuite(t *testing.T) {
 		t.Fatal("no cases")
 	}
 	t.Logf("one pass: %d values and types", count)
+}
+
+// TestFormatOptions: Type.Format takes an indent and width of 0 literally,
+// and rejects a negative one with haus.ErrInvalidOptions, without a code,
+// before it looks at the value (here one the type rejects).
+func TestFormatOptions(t *testing.T) {
+	s, err := schema.Parse([]byte(`type P = { a: Array Int }`), schema.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ty, _ := s.Type("P")
+	v, _ := haus.Parse([]byte(`{ a: [1, 2] }`))
+	got, err := ty.Format(v, haus.FormatOptions{})
+	if want := "{\na: [\n1,\n2,\n],\n}\n"; err != nil || string(got) != want {
+		t.Errorf("zero options: %q, %v; want %q", got, err, want)
+	}
+	for _, o := range []haus.FormatOptions{{Indent: -1, Width: 80}, {Indent: 2, Width: -1}} {
+		for _, l := range []haus.Layout{haus.Pretty, haus.Compact, haus.Minimised} {
+			o.Layout = l
+			for _, v := range []haus.Value{v, haus.String("not a record")} {
+				_, err := ty.Format(v, o)
+				var e *haus.Error
+				if !errors.Is(err, haus.ErrInvalidOptions) || errors.As(err, &e) {
+					t.Errorf("%+v: %v, want ErrInvalidOptions without a code", o, err)
+				}
+			}
+		}
+	}
 }
 
 // FuzzOnePass: for any text and any type of the suite's schemas, Type.Parse

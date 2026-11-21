@@ -68,3 +68,7 @@ wrong:
   after such a comment lead the next entry (`cases/comments-after-multiline`).
 - Comments moved above an entry go after the blank line it had above it
   (`cases/comments-moved-blank-line`).
+- An indent or width of 0 is taken literally, not as the default: indent 0
+  indents nothing, and with width 0 every positional payload is written one
+  argument per line (`cases/indent-zero`, `cases/width-zero`). Their options
+  files name one option each; the other keeps its default.

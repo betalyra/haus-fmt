@@ -8,7 +8,7 @@
 go get github.com/betalyra/haus-fmt/go
 ```
 
-It follows the [specification](https://github.com/betalyra/haus-fmt/tree/main/spec): exact numbers, limits enforced while parsing, error positions in code points, and an error code from the catalogue on every error. It needs Go 1.24 or later and uses only the standard library.
+It follows the [specification](https://github.com/betalyra/haus-fmt/tree/main/spec): exact numbers, limits enforced while parsing, error positions in code points, and an error code from the catalogue on every error. It needs Go 1.26 or later and uses only the standard library.
 
 ```go
 import haus "github.com/betalyra/haus-fmt/go"
@@ -76,7 +76,7 @@ Errors have the same codes and positions as when the whole input is parsed at on
 
 ## Formatting
 
-`haus.Format(src, haus.FormatOptions{Layout: haus.Pretty})` rewrites text in one of the three layouts of spec §11: `Pretty` keeps comments and blank lines, `Compact` writes one item per line, and `Minimised` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. `Indent` (default 2) and `Width` (default 80) are the only options. `haus.HasComments` tells a tool that rewrites files in place in the compact or minimised layout whether it would drop comments.
+`haus.Format(src, haus.DefaultFormatOptions())` rewrites text in one of the three layouts of spec §11: `Pretty` keeps comments and blank lines, `Compact` writes one item per line, and `Minimised` drops the whitespace between tokens. Numbers, byte strings and `"…"` strings keep their spelling. `Indent` and `Width` are the only options, taken literally: indent 0 indents nothing, and with width 0 nothing fits, so every positional payload is written one argument per line. `DefaultFormatOptions()` is indent 2, width 80; the zero `FormatOptions{}` is not. A negative indent or width fails with `haus.ErrInvalidOptions`, a plain error without a code. Compact and minimised ignore both, so `haus.FormatOptions{Layout: haus.Compact}` is enough. `haus.HasComments` tells a tool that rewrites files in place in the compact or minimised layout whether it would drop comments.
 
 `haus.FormatValue(v, opts)` and `haus.FormatValues(vs, opts)` write values built in code: numbers normalized, byte strings in lowercase hex, strings with the fewest escapes, and a stream with a comma after every value.
 

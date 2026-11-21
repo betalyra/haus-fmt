@@ -78,13 +78,15 @@ func fileMode(flags []string) (func([]byte, int) string, error) {
 	return nil, errors.New(usage)
 }
 
-// formatOptions reads `STYLE [--indent N] [--width N]`.
+// formatOptions reads `STYLE [--indent N] [--width N]`, the indent and width
+// taken literally (0 included), 2 and 80 when not given.
 func formatOptions(flags []string) (haus.FormatOptions, error) {
 	layout, err := layoutOf(flags[0])
 	if err != nil {
 		return haus.FormatOptions{}, err
 	}
-	opts := haus.FormatOptions{Layout: layout}
+	opts := haus.DefaultFormatOptions()
+	opts.Layout = layout
 	rest := flags[1:]
 	for ; len(rest) >= 2; rest = rest[2:] {
 		v, err := strconv.Atoi(rest[1])

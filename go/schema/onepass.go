@@ -47,8 +47,12 @@ func (t Type) ParseWith(src []byte, opts DecodeOptions) (haus.Value, error) {
 // it alone, with opts.Limits the limits of both: the text and the error of
 // [Type.Encode] followed by [haus.FormatValue]. In the compact and
 // minimised layouts the value is written as it is checked, in one pass,
-// without building the encoded value.
+// without building the encoded value. A negative indent or width fails
+// with [haus.ErrInvalidOptions] before v is looked at.
 func (t Type) Format(v haus.Value, opts haus.FormatOptions) ([]byte, error) {
+	if err := opts.Check(); err != nil {
+		return nil, err
+	}
 	if text, ok := t.formatOnePass(v, opts); ok {
 		return text, nil
 	}
