@@ -1,0 +1,4 @@
+// rule: prelude.std.import-no-version
+// Imports of standard modules carry no version (spec §13.2).
+import std/time@1 (Date)
+type A = { day: Date }

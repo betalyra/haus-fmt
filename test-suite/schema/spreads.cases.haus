@@ -1,0 +1,27 @@
+// Decoding through spreads (spec §14 "Spreads", §15).
+
+// rule: schema.spread.copies
+// A closed variant with the copied tags and one of its own: exactly these three.
+Ok { type: "AppEvent", input: UserCreated { id: 1 } },
+Ok { type: "AppEvent", input: UserRenamed { id: 1, to: "Ada" } },
+Ok { type: "AppEvent", input: Heartbeat },
+Err { type: "AppEvent", input: UserDeleted { id: 1 }, code: "unknown-tag", path: "$" },
+// The copied case keeps its payload.
+Err { type: "AppEvent", input: UserCreated { id: "1" }, code: "type-mismatch", path: "$.id" },
+Err { type: "AppEvent", input: Heartbeat(1), code: "wrong-payload", path: "$" },
+// An open variant with the copied tags: other tags are unknown values, kept as they are.
+Ok { type: "ServerEvent", input: UserCreated { id: 1, by: "Ada" }, output: UserCreated { id: 1 } },
+Ok { type: "ServerEvent", input: Heartbeat },
+Ok { type: "ServerEvent", input: UserDeleted { id: 1 } },
+// A closed record with the copied fields and one of its own.
+Ok { type: "Person", input: { id: 1, name: "Ada", email: "ada@example.com" } },
+Err { type: "Person", input: { id: 1, name: "Ada", email: "ada@example.com", age: 36 }, code: "unknown-field", path: "$.age" },
+Err { type: "Person", input: { name: "Ada", email: "ada@example.com" }, code: "missing-field", path: "$" },
+Err { type: "Person", input: { id: 1.5, name: "Ada", email: "ada@example.com" }, code: "not-an-integer", path: "$.id" },
+// Copied from a closed type into an open one: open, as its own `closed` says.
+Ok { type: "Unsealed", input: { id: 1, extra: 2 }, output: { id: 1 } },
+Ok { type: "Unsealed", input: { id: 1, note: "x" } },
+Ok { type: "Extended", input: B(1) },
+Ok { type: "Extended", input: C },
+Ok { type: "Extended", input: D(1) },
+Err { type: "Extended", input: B("x"), code: "type-mismatch", path: "$[0]" },

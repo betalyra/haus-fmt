@@ -1,0 +1,5 @@
+// rule: prelude.std.money-moved
+// std/money is a former standard module, now the package @haus-fmt/money
+// (spec §13.2): an unknown module.
+import std/money (Money)
+type A = { price: Money }

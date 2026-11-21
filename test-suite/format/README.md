@@ -61,3 +61,10 @@ wrong:
 - Compact and minimised write a single top-level item without a comma, and
   every item of a stream with one (`cases/single-with-comma`,
   `cases/stream-no-trailing-comma`).
+- A comment after an entry's comma doesn't count toward the width: an entry
+  of exactly 80 columns with its comma stays inline (`cases/width-comment-excluded`).
+- An item is multi-line by its value: a multi-line comment after a one-line
+  item adds no blank line (`cases/stream-multiline-comment`); the comments
+  after such a comment lead the next entry (`cases/comments-after-multiline`).
+- Comments moved above an entry go after the blank line it had above it
+  (`cases/comments-moved-blank-line`).

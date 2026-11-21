@@ -1,0 +1,5 @@
+// rule: schema.spread.named-only
+// rule: schema.reject.invalid-spread
+// Only a named type without parameters can be spread (spec §14).
+type P a = { x: a }
+type A = { ...P }

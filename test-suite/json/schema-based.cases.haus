@@ -244,3 +244,18 @@ Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": []}}", 
 Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": 5}}", code: "haus-json-form", path: "$.shape._args" },
 Err { type: "Doc", json: "{\"shape\": {\"_tag\": \"Hexagon\", \"_args\": null}}", code: "haus-json-form", path: "$.shape._args" },
 Err { type: "Doc", json: "{\"raw\": {\"_tag\": \"T\", \"_args\": {}}}", code: "haus-json-form", path: "$.raw._args" },
+
+// ── the schema-based reader accepts raw DEL, C1 and bidi controls, as other software writes them (§16) ──
+Read { type: "S", json: "\"a\u{7F}\u{85}\u{202E}b\"", output: "a\u{7F}\u{85}\u{202E}b" },
+
+// ── readers accept raw U+2028 and U+2029 in strings (§16) ──
+Ok { type: "S", input: "a\u{2028}b\u{2029}c", json: "\"a\u{2028}b\u{2029}c\"" },
+
+// ── the resulting haus value is checked against the depth limit (§16): 257 arrays ──
+Err { type: "Raw", json: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]", code: "nesting-too-deep" },
+
+// ── a record payload with a field named _tag has no schema-based form (§16.3); the
+// schema is valid, and its other cases convert ──
+Ok { type: "NoForm", input: Plain, json: "{\"_tag\": \"Plain\"}" },
+Ok { type: "NoForm", input: Fine { tag: 1 }, json: "{\"_tag\": \"Fine\", \"tag\": 1}" },
+Err { type: "NoForm", json: "{\"_tag\": \"Tagged\"}", code: "no-json-form" },

@@ -1,0 +1,5 @@
+// rule: packages.imports.reject-duplicate-name
+// A name imported and also defined (spec §13.3, Imports).
+import std/time (Date)
+type Date = String
+type A = { day: Date }

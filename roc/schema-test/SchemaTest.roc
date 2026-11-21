@@ -9,12 +9,16 @@ import AttributesBare
 import Builtins
 import Numbers
 import Records
+import Spreads
+import Time
 import Types
 import Variants
 import "../../test-suite/schema/attributes.cases.haus" as attributes_cases : Str
 import "../../test-suite/schema/builtins.cases.haus" as builtins_cases : Str
 import "../../test-suite/schema/numbers.cases.haus" as numbers_cases : Str
 import "../../test-suite/schema/records.cases.haus" as records_cases : Str
+import "../../test-suite/schema/spreads.cases.haus" as spreads_cases : Str
+import "../../test-suite/schema/time.cases.haus" as time_cases : Str
 import "../../test-suite/schema/types.cases.haus" as types_cases : Str
 import "../../test-suite/schema/variants.cases.haus" as variants_cases : Str
 
@@ -136,7 +140,37 @@ SchemaTest := [].{
 		"Strict" => Decoded(encoded(Records.decode_strict(v), Records.encode_strict))
 		"Outer" => Decoded(encoded(Records.decode_outer(v), Records.encode_outer))
 		"Empty" => Decoded(encoded(Records.decode_empty(v), Records.encode_empty))
+		"Profile" => Decoded(encoded(Records.decode_profile(v), Records.encode_profile))
 		"Quoted" => Decoded(encoded(Records.decode_quoted(v), Records.encode_quoted))
+		_ => NoType
+	}
+
+	## Decode a value with a type of spreads.schema.haus, and encode the result.
+	spreads : Str, Value -> Codec
+	spreads = |ty, v| match ty {
+		"UserEvent" => Decoded(encoded(Spreads.decode_user_event(v), Spreads.encode_user_event))
+		"AppEvent" => Decoded(encoded(Spreads.decode_app_event(v), Spreads.encode_app_event))
+		"ServerEvent" => Decoded(encoded(Spreads.decode_server_event(v), Spreads.encode_server_event))
+		"Base" => Decoded(encoded(Spreads.decode_base(v), Spreads.encode_base))
+		"Person" => Decoded(encoded(Spreads.decode_person(v), Spreads.encode_person))
+		"Sealed" => Decoded(encoded(Spreads.decode_sealed(v), Spreads.encode_sealed))
+		"Unsealed" => Decoded(encoded(Spreads.decode_unsealed(v), Spreads.encode_unsealed))
+		"Fixed" => Decoded(encoded(Spreads.decode_fixed(v), Spreads.encode_fixed))
+		"Extended" => Decoded(encoded(Spreads.decode_extended(v), Spreads.encode_extended))
+		_ => NoType
+	}
+
+	## Decode a value with a type of time.schema.haus, and encode the result.
+	time : Str, Value -> Codec
+	time = |ty, v| match ty {
+		"Day" => Decoded(encoded(Time.decode_day(v), Time.encode_day))
+		"Clock" => Decoded(encoded(Time.decode_clock(v), Time.encode_clock))
+		"Local" => Decoded(encoded(Time.decode_local(v), Time.encode_local))
+		"At" => Decoded(encoded(Time.decode_at(v), Time.encode_at))
+		"Zoned" => Decoded(encoded(Time.decode_zoned(v), Time.encode_zoned))
+		"Span" => Decoded(encoded(Time.decode_span(v), Time.encode_span))
+		"Month" => Decoded(encoded(Time.decode_month(v), Time.encode_month))
+		"Zone" => Decoded(encoded(Time.decode_zone(v), Time.encode_zone))
 		_ => NoType
 	}
 
@@ -779,7 +813,7 @@ expect SchemaTest.check(numbers_cases, 89, SchemaTest.numbers)
 expect SchemaTest.check(numbers_cases, 90, SchemaTest.numbers)
 
 # records.cases.haus
-expect SchemaTest.count(records_cases) == 24
+expect SchemaTest.count(records_cases) == 28
 
 # Ok { type: "User", input: { id: 1, name: "Ada" } },
 expect SchemaTest.check(records_cases, 0, SchemaTest.records)
@@ -844,14 +878,473 @@ expect SchemaTest.check(records_cases, 19, SchemaTest.records)
 # Err { type: "Empty", input: [], code: "type-mismatch", path: "$" },
 expect SchemaTest.check(records_cases, 20, SchemaTest.records)
 
-# Ok { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "smile\u{1F600}": True, "q\"\\": 3 } },
+# Ok { type: "Profile", input: { nickname: None } },
 expect SchemaTest.check(records_cases, 21, SchemaTest.records)
 
-# Ok { type: "Quoted", input: { "content-type": "a", "tab\u{9}here": 1, "line\u{A}break": 2, "smile😀": True, "q\u{22}\u{5C}": 3 } },
+# Ok { type: "Profile", input: { nickname: Some("ada") } },
 expect SchemaTest.check(records_cases, 22, SchemaTest.records)
 
-# Err { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "q\"\\": 3 }, code: "missing-field", path: "$" },
+# Err { type: "Profile", input: {}, code: "missing-field", path: "$" },
 expect SchemaTest.check(records_cases, 23, SchemaTest.records)
+
+# Err { type: "Profile", input: { nickname: "ada" }, code: "type-mismatch", path: "$.nickname" },
+expect SchemaTest.check(records_cases, 24, SchemaTest.records)
+
+# Ok { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "smile\u{1F600}": True, "q\"\\": 3 } },
+expect SchemaTest.check(records_cases, 25, SchemaTest.records)
+
+# Ok { type: "Quoted", input: { "content-type": "a", "tab\u{9}here": 1, "line\u{A}break": 2, "smile😀": True, "q\u{22}\u{5C}": 3 } },
+expect SchemaTest.check(records_cases, 26, SchemaTest.records)
+
+# Err { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "q\"\\": 3 }, code: "missing-field", path: "$" },
+expect SchemaTest.check(records_cases, 27, SchemaTest.records)
+
+# spreads.cases.haus
+expect SchemaTest.count(spreads_cases) == 19
+
+# Ok { type: "AppEvent", input: UserCreated { id: 1 } },
+expect SchemaTest.check(spreads_cases, 0, SchemaTest.spreads)
+
+# Ok { type: "AppEvent", input: UserRenamed { id: 1, to: "Ada" } },
+expect SchemaTest.check(spreads_cases, 1, SchemaTest.spreads)
+
+# Ok { type: "AppEvent", input: Heartbeat },
+expect SchemaTest.check(spreads_cases, 2, SchemaTest.spreads)
+
+# Err { type: "AppEvent", input: UserDeleted { id: 1 }, code: "unknown-tag", path: "$" },
+expect SchemaTest.check(spreads_cases, 3, SchemaTest.spreads)
+
+# Err { type: "AppEvent", input: UserCreated { id: "1" }, code: "type-mismatch", path: "$.id" },
+expect SchemaTest.check(spreads_cases, 4, SchemaTest.spreads)
+
+# Err { type: "AppEvent", input: Heartbeat(1), code: "wrong-payload", path: "$" },
+expect SchemaTest.check(spreads_cases, 5, SchemaTest.spreads)
+
+# Ok { type: "ServerEvent", input: UserCreated { id: 1, by: "Ada" }, output: UserCreated { id: 1 } },
+expect SchemaTest.check(spreads_cases, 6, SchemaTest.spreads)
+
+# Ok { type: "ServerEvent", input: Heartbeat },
+expect SchemaTest.check(spreads_cases, 7, SchemaTest.spreads)
+
+# Ok { type: "ServerEvent", input: UserDeleted { id: 1 } },
+expect SchemaTest.check(spreads_cases, 8, SchemaTest.spreads)
+
+# Ok { type: "Person", input: { id: 1, name: "Ada", email: "ada@example.com" } },
+expect SchemaTest.check(spreads_cases, 9, SchemaTest.spreads)
+
+# Err { type: "Person", input: { id: 1, name: "Ada", email: "ada@example.com", age: 36 }, code: "unknown-field", path: "$.age" },
+expect SchemaTest.check(spreads_cases, 10, SchemaTest.spreads)
+
+# Err { type: "Person", input: { name: "Ada", email: "ada@example.com" }, code: "missing-field", path: "$" },
+expect SchemaTest.check(spreads_cases, 11, SchemaTest.spreads)
+
+# Err { type: "Person", input: { id: 1.5, name: "Ada", email: "ada@example.com" }, code: "not-an-integer", path: "$.id" },
+expect SchemaTest.check(spreads_cases, 12, SchemaTest.spreads)
+
+# Ok { type: "Unsealed", input: { id: 1, extra: 2 }, output: { id: 1 } },
+expect SchemaTest.check(spreads_cases, 13, SchemaTest.spreads)
+
+# Ok { type: "Unsealed", input: { id: 1, note: "x" } },
+expect SchemaTest.check(spreads_cases, 14, SchemaTest.spreads)
+
+# Ok { type: "Extended", input: B(1) },
+expect SchemaTest.check(spreads_cases, 15, SchemaTest.spreads)
+
+# Ok { type: "Extended", input: C },
+expect SchemaTest.check(spreads_cases, 16, SchemaTest.spreads)
+
+# Ok { type: "Extended", input: D(1) },
+expect SchemaTest.check(spreads_cases, 17, SchemaTest.spreads)
+
+# Err { type: "Extended", input: B("x"), code: "type-mismatch", path: "$[0]" },
+expect SchemaTest.check(spreads_cases, 18, SchemaTest.spreads)
+
+# time.cases.haus
+expect SchemaTest.count(time_cases) == 128
+
+# Ok { type: "Day", input: Date("2026-11-09") },
+expect SchemaTest.check(time_cases, 0, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-11-09T14:30:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 1, SchemaTest.time)
+
+# Ok { type: "Clock", input: Time("14:30:00.250") },
+expect SchemaTest.check(time_cases, 2, SchemaTest.time)
+
+# Ok { type: "Clock", input: Time("00:00:00") },
+expect SchemaTest.check(time_cases, 3, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("14:30:00Z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 4, SchemaTest.time)
+
+# Err { type: "Clock", input: Date("2026-11-09"), code: "type-mismatch", path: "$" },
+expect SchemaTest.check(time_cases, 5, SchemaTest.time)
+
+# Ok { type: "Local", input: DateTime("2026-11-09T14:30:00") },
+expect SchemaTest.check(time_cases, 6, SchemaTest.time)
+
+# Err { type: "Local", input: DateTime("2026-11-09T14:30:00Z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 7, SchemaTest.time)
+
+# Err { type: "Local", input: DateTime("2026-11-09"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 8, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("2026-11-09T14:30:00Z") },
+expect SchemaTest.check(time_cases, 9, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T14:30:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 10, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2027-03-29T10:00:00+01:00[Europe/Lisbon]") },
+expect SchemaTest.check(time_cases, 11, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[America/Argentina/Buenos_Aires]") },
+expect SchemaTest.check(time_cases, 12, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00+01:00[+01:00]") },
+expect SchemaTest.check(time_cases, 13, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2027-03-29T10:00:00+01:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 14, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2027-03-29T10:00:00[Europe/Lisbon]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 15, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("P1Y2M3W4DT5H6M7.5S") },
+expect SchemaTest.check(time_cases, 16, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("PT1H30M") },
+expect SchemaTest.check(time_cases, 17, SchemaTest.time)
+
+# Ok { type: "Month", input: YearMonth("2026-11") },
+expect SchemaTest.check(time_cases, 18, SchemaTest.time)
+
+# Err { type: "Month", input: YearMonth("2026-11-01"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 19, SchemaTest.time)
+
+# Err { type: "Month", input: YearMonth("202611"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 20, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("Europe/Lisbon") },
+expect SchemaTest.check(time_cases, 21, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("+01:00") },
+expect SchemaTest.check(time_cases, 22, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("UTC") },
+expect SchemaTest.check(time_cases, 23, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("Europe//Lisbon"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 24, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("[Europe/Lisbon]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 25, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("Z") },
+expect SchemaTest.check(time_cases, 26, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("+00:00") },
+expect SchemaTest.check(time_cases, 27, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("-00:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 28, SchemaTest.time)
+
+# Ok { type: "Day", input: Date("0000-01-01") },
+expect SchemaTest.check(time_cases, 29, SchemaTest.time)
+
+# Ok { type: "Day", input: Date("9999-12-31") },
+expect SchemaTest.check(time_cases, 30, SchemaTest.time)
+
+# Ok { type: "Month", input: YearMonth("0000-01") },
+expect SchemaTest.check(time_cases, 31, SchemaTest.time)
+
+# Err { type: "Day", input: Date("+12026-11-09"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 32, SchemaTest.time)
+
+# Err { type: "Day", input: Date("-0001-01-01"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 33, SchemaTest.time)
+
+# Err { type: "Day", input: Date("26-11-09"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 34, SchemaTest.time)
+
+# Err { type: "Month", input: YearMonth("+2026-11"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 35, SchemaTest.time)
+
+# Ok { type: "Day", input: Date("2000-02-29") },
+expect SchemaTest.check(time_cases, 36, SchemaTest.time)
+
+# Ok { type: "Day", input: Date("0000-02-29") },
+expect SchemaTest.check(time_cases, 37, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-02-29"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 38, SchemaTest.time)
+
+# Err { type: "Day", input: Date("1900-02-29"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 39, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-04-31"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 40, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-11-00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 41, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-13-01"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 42, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-00-10"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 43, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-1-09"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 44, SchemaTest.time)
+
+# Err { type: "Month", input: YearMonth("2026-13"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 45, SchemaTest.time)
+
+# Err { type: "Month", input: YearMonth("2026-00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 46, SchemaTest.time)
+
+# Ok { type: "Clock", input: Time("23:59:59") },
+expect SchemaTest.check(time_cases, 47, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("14:30"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 48, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("24:00:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 49, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("12:60:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 50, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("1:00:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 51, SchemaTest.time)
+
+# Err { type: "Local", input: DateTime("2026-11-09T24:00:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 52, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("23:59:60"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 53, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("12:00:60"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 54, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-12-31T23:59:60Z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 55, SchemaTest.time)
+
+# Ok { type: "Clock", input: Time("12:00:00.123456789") },
+expect SchemaTest.check(time_cases, 56, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("PT0.000000001S") },
+expect SchemaTest.check(time_cases, 57, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("12:00:00.1234567890"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 58, SchemaTest.time)
+
+# Err { type: "Clock", input: Time("12:00:00."), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 59, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T12:00:00.1234567890Z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 60, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("PT1.5H"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 61, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("PT1.1234567890S"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 62, SchemaTest.time)
+
+# Err { type: "Local", input: DateTime("2026-11-09t14:30:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 63, SchemaTest.time)
+
+# Err { type: "Local", input: DateTime("2026-11-09 14:30:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 64, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09t14:30:00Z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 65, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T14:30:00z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 66, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09 14:30:00Z"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 67, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("2026-11-09T14:30:00-23:59") },
+expect SchemaTest.check(time_cases, 68, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T13:30:00-00:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 69, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T14:30:00+24:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 70, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T14:30:00+01:60"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 71, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T14:30:00+0100"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 72, SchemaTest.time)
+
+# Err { type: "At", input: Instant("2026-11-09T14:30:00+01"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 73, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Etc/GMT+1]") },
+expect SchemaTest.check(time_cases, 74, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb]") },
+expect SchemaTest.check(time_cases, 75, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") },
+expect SchemaTest.check(time_cases, 76, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 77, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("Abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 78, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[!Europe/Lisbon]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 79, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Europe/../etc]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 80, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Europe//Lisbon]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 81, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Europe/.]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 82, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Europe/Lisbon/]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 83, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[1Europe]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 84, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Europe Lisbon]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 85, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 86, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[-00:00]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 87, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("/Europe"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 88, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("Europe/.."), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 89, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("+24:00"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 90, SchemaTest.time)
+
+# Err { type: "Zone", input: TimeZone("+0100"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 91, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00+01:00[Europe/Lisbon][u-ca=iso8601]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 92, SchemaTest.time)
+
+# Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00+01:00[Europe/Lisbon][Europe/Paris]"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 93, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("P4294967295Y") },
+expect SchemaTest.check(time_cases, 94, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("P104249991374D") },
+expect SchemaTest.check(time_cases, 95, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("PT9007199254740991S") },
+expect SchemaTest.check(time_cases, 96, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P4294967296Y"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 97, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P104249991375D"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 98, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("PT9007199254740992S"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 99, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 100, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("PT"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 101, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P1DT"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 102, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("+PT1H"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 103, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("p1d"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 104, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P1DT0S"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 105, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P1Y0M"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 106, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("-PT0S"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 107, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-W45-1"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 108, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-313"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 109, SchemaTest.time)
+
+# Err { type: "Day", input: Date("20261109"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 110, SchemaTest.time)
+
+# Err { type: "Day", input: Date("2026-11-09/2026-11-10"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 111, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("R5/P1D"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 112, SchemaTest.time)
+
+# Err { type: "Span", input: Duration("P1D/P2D"), code: "invalid-time", path: "$[0]" },
+expect SchemaTest.check(time_cases, 113, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Europe/Atlantis]") },
+expect SchemaTest.check(time_cases, 114, SchemaTest.time)
+
+# Ok { type: "Zone", input: TimeZone("Europe/Atlantis") },
+expect SchemaTest.check(time_cases, 115, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-07-01T10:00:00+05:00[Europe/Lisbon]") },
+expect SchemaTest.check(time_cases, 116, SchemaTest.time)
+
+# Ok { type: "Clock", input: Time("12:00:00.000") },
+expect SchemaTest.check(time_cases, 117, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("2026-11-09T10:00:00.000Z") },
+expect SchemaTest.check(time_cases, 118, SchemaTest.time)
+
+# Ok { type: "Span", input: Duration("PT1.50S") },
+expect SchemaTest.check(time_cases, 119, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("2026-11-09T13:30:00+00:00") },
+expect SchemaTest.check(time_cases, 120, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T13:30:00+00:00[Europe/London]") },
+expect SchemaTest.check(time_cases, 121, SchemaTest.time)
+
+# Ok { type: "Local", input: DateTime("0000-01-01T00:00:00") },
+expect SchemaTest.check(time_cases, 122, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("0001-01-01T00:00:00+01:00") },
+expect SchemaTest.check(time_cases, 123, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("0000-01-01T00:00:00+01:00") },
+expect SchemaTest.check(time_cases, 124, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("9999-12-31T23:59:59-01:00") },
+expect SchemaTest.check(time_cases, 125, SchemaTest.time)
+
+# Ok { type: "At", input: Instant("9999-12-31T23:59:59.999999999Z") },
+expect SchemaTest.check(time_cases, 126, SchemaTest.time)
+
+# Ok { type: "Zoned", input: ZonedDateTime("0000-01-01T00:00:00+01:00[Europe/Lisbon]") },
+expect SchemaTest.check(time_cases, 127, SchemaTest.time)
 
 # types.cases.haus
 expect SchemaTest.count(types_cases) == 29

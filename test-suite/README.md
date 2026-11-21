@@ -77,6 +77,11 @@ Conformance is tested with the default limits from the spec:
 `valid/limits-boundary.haus` sits exactly at the number limits (its hex
 literals have 829 hex digits, and canonical form and JSON write them in
 decimal), and `invalid/*-too-*.haus` goes one past them.
+`valid/limits-separators.haus` has literals of exactly 1000 characters
+counting the sign, the `0x` prefix, digit separators and the exponent, which
+all count toward the number limit (spec §7); `invalid/too-deep-by-one.haus`
+has 257 levels, and `invalid/too-deep-paren-record.haus` 257 counted as §7
+does (each `Tag({ … })` is two levels).
 
 ## Stream suite
 

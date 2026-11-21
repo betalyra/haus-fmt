@@ -28,6 +28,12 @@ Ok { type: "Empty", input: {} },
 Ok { type: "Empty", input: { a: 1 }, output: {} },
 Err { type: "Empty", input: [], code: "type-mismatch", path: "$" },
 
+// rule: data.absence.maybe-required
+Ok { type: "Profile", input: { nickname: None } },
+Ok { type: "Profile", input: { nickname: Some("ada") } },
+Err { type: "Profile", input: {}, code: "missing-field", path: "$" },
+Err { type: "Profile", input: { nickname: "ada" }, code: "type-mismatch", path: "$.nickname" },
+
 // quoted keys with escapes: the same keys whether the data escapes them or not
 Ok { type: "Quoted", input: { "content-type": "a", "tab\there": 1, "line\nbreak": 2, "smile\u{1F600}": True, "q\"\\": 3 } },
 Ok { type: "Quoted", input: { "content-type": "a", "tab\u{9}here": 1, "line\u{A}break": 2, "smile😀": True, "q\u{22}\u{5C}": 3 } },

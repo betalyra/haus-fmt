@@ -1,0 +1,3 @@
+// U+FF61 sorts before U+1F600 by code point (and UTF-8 bytes); by UTF-16
+// units, the emoji's surrogates (D83D DE00) would come first (spec §12).
+{ "\u{1F600}": 2, "\u{FF61}": 1 }
