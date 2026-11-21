@@ -109,7 +109,9 @@ func TestTypedIsLinear(t *testing.T) {
 				return fmt.Sprintf("k%d: { f%d: %d, unknown%d: 1, f%d: 2 }", i, i%40, i, i, (i+1)%40)
 			})
 		}, haus.Limits{}, false},
-		{"deep", "Deep", 2_000, func(n int) string {
+		// 500 and 2000 levels: at 8000 levels the recursion's stack outgrows the
+		// CPU caches of CI runners, which made a linear Format look 9× slower.
+		{"deep", "Deep", 500, func(n int) string {
 			return strings.Repeat("Node(", n) + "Leaf" + strings.Repeat(")", n)
 		}, deep, false},
 		{"large any", "Raw", 20_000, func(n int) string {
