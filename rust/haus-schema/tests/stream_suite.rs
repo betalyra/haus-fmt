@@ -13,14 +13,18 @@ use haus::{Value, canonical, equals};
 use haus_schema::Schema;
 use std::path::{Path, PathBuf};
 
+/// The suite's file `file`; `HAUS_STREAM_SUITE` names another directory holding them.
 fn suite(file: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite/stream").join(file)
+    std::env::var_os("HAUS_STREAM_SUITE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite/stream"))
+        .join(file)
 }
 
 fn text<'a>(fields: &'a Value, key: &str) -> &'a str {
     match fields.get(key) {
         Some(Value::String(s)) => s,
-        _ => panic!("not a case: {}", canonical(fields)),
+        _ => panic!("not a case: {}", canonical(fields).unwrap()),
     }
 }
 
@@ -52,29 +56,32 @@ fn typed_streams() {
     let failures: Vec<String> = cases
         .iter()
         .filter_map(|c| {
-            let Value::Variant { tag, args } = c else { panic!("not a case: {}", canonical(c)) };
-            let [fields] = args.as_slice() else { panic!("not a case: {}", canonical(c)) };
+            let Value::Variant { tag, args } = c else { panic!("not a case: {}", canonical(c).unwrap()) };
+            let [fields] = args.as_slice() else { panic!("not a case: {}", canonical(c).unwrap()) };
             let (ty, source) = (text(fields, "type"), text(fields, "text"));
             let got = decode(&schema, ty, source);
             let failure = match (tag.as_str(), &got) {
                 ("Ok", Ok(value)) => {
-                    let output = fields.get("output").unwrap_or_else(|| panic!("not a case: {}", canonical(c)));
+                    let output =
+                        fields.get("output").unwrap_or_else(|| panic!("not a case: {}", canonical(c).unwrap()));
                     match haus::ser::write(value) {
                         Err(e) => Some(format!("decoded, but can't be written: {e}")),
-                        Ok(_) if !equals(value, output) => {
-                            Some(format!("decoded as {}, expected {}", canonical(value), canonical(output)))
-                        }
+                        Ok(_) if !equals(value, output) => Some(format!(
+                            "decoded as {}, expected {}",
+                            canonical(value).unwrap(),
+                            canonical(output).unwrap()
+                        )),
                         Ok(_) => None,
                     }
                 }
                 ("Ok", Err((code, path))) => Some(format!("fails with {code} at {path}")),
-                ("Err", Ok(value)) => Some(format!("decoded as {}", canonical(value))),
+                ("Err", Ok(value)) => Some(format!("decoded as {}", canonical(value).unwrap())),
                 ("Err", Err(got)) => {
                     let want = (text(fields, "code").to_owned(), text(fields, "path").to_owned());
                     (got != &want)
                         .then(|| format!("fails with {} at {}, expected {} at {}", got.0, got.1, want.0, want.1))
                 }
-                _ => panic!("not a case: {}", canonical(c)),
+                _ => panic!("not a case: {}", canonical(c).unwrap()),
             };
             failure.map(|why| format!("{tag} {ty} {source:?}: {why}"))
         })

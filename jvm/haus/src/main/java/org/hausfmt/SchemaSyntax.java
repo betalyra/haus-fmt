@@ -404,8 +404,11 @@ final class SchemaSyntax {
         }
         pos += peekWord().length();
       } else if (at(pos, '@') || at(pos, '.')) {
+        // A package module's version may hold a `~` (`@a/b@1~x`: import-version); a file path
+        // (grammar `path`) has none, so `./a~b` ends before it, a syntax error.
+        String more = at(pos, '@') ? "_.-/@~" : "_.-/@";
         pos++;
-        while (pos < s.length() && (isWord(s.charAt(pos)) || "_.-/@~".indexOf(s.charAt(pos)) >= 0)) {
+        while (pos < s.length() && (isWord(s.charAt(pos)) || more.indexOf(s.charAt(pos)) >= 0)) {
           pos++;
         }
         if (pos == start + 1) {

@@ -29,7 +29,7 @@
  * seen), with `failDuplicate` after the value, as the generic parser does.
  */
 import * as chars from "./chars.js"
-import { codePoints, hex4, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper } from "./chars.js"
+import { codePoints, hex4, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper, quoteText } from "./chars.js"
 import { HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin } from "./errors.js"
 
 // Hot: the character codes as constants of this module. V8 reads an imported
@@ -143,8 +143,11 @@ const STARTS = (() => {
   return t
 })()
 
-const describe = (c: string | undefined) =>
-  c === undefined ? "end of input" : c === "\n" ? "line break" : `'${c}'`
+/** The character at `pos` of `src`, as a message shows it (spec §9.2): `'x'`, a line break or the end. */
+const describe = (src: string, pos: number) => {
+  const c = src.codePointAt(pos)
+  return c === undefined ? "end of input" : c === 0x0a ? "line break" : `'${quoteText(String.fromCodePoint(c))}'`
+}
 
 /**
  * A pull parser over one complete piece of text (see the module comment).
@@ -260,11 +263,11 @@ export class Reader {
         word === "true" || word === "false" ? ["boolean-literal", " (booleans are the variants True / False)"]
         : word === "null" ? ["null-literal", " (use the variant None)"]
         : ["bare-identifier", ""]
-      this.fail(code, `unexpected identifier '${word}': lowercase identifiers can only be record keys${hint}`, this.pos - word.length, { expected: "a value", found: `'${word}'` })
+      this.fail(code, `unexpected identifier '${quoteText(word)}': lowercase identifiers can only be record keys${hint}`, this.pos - word.length, { expected: "a value", found: `'${quoteText(word)}'` })
     }
     // `+1` and `.5`: a number written the way other languages allow.
     const code = this.peek() === "+" || this.peek() === "." ? "invalid-number" : "expected-value"
-    this.fail(code, `expected a value, found ${describe(this.peek())}`, this.pos, { expected: "a value", found: describe(this.peek()) })
+    this.fail(code, `expected a value, found ${describe(this.src, this.pos)}`, this.pos, { expected: "a value", found: describe(this.src, this.pos) })
   }
 
   /** At `"`: a basic or block string's value. */
@@ -298,7 +301,7 @@ export class Reader {
     if (c === OPEN_PAREN) {
       const parenPos = this.pos
       this.openList()
-      if (src.charCodeAt(this.pos) === CLOSE_PAREN) this.fail("empty-payload", `empty payload: write '${tag}' without parentheses`, parenPos, { hint: `Write ${tag} without parentheses.` })
+      if (src.charCodeAt(this.pos) === CLOSE_PAREN) this.fail("empty-payload", `empty payload: write '${quoteText(tag)}' without parentheses`, parenPos, { hint: `Write ${quoteText(tag)} without parentheses.` })
       return ARGS
     }
     if (c === OPEN_BRACE) return PAYLOAD_RECORD
@@ -339,7 +342,7 @@ export class Reader {
     const key = this.readKey()
     this.keyEnd = this.pos
     this.skipTrivia()
-    if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${key}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) })
+    if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${quoteText(key)}', found ${describe(this.src, this.pos)}`, this.pos, { expected: "':'", found: describe(this.src, this.pos) })
     this.pos++
     this.skipTrivia()
     return key
@@ -360,7 +363,7 @@ export class Reader {
     this.keyEnd = end
     this.pos = end
     this.skipTrivia()
-    if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${name}', found ${describe(this.peek())}`, this.pos, { expected: "':'", found: describe(this.peek()) })
+    if (src.charCodeAt(this.pos) !== COLON) this.fail("missing-colon", `expected ':' after key '${quoteText(name)}', found ${describe(this.src, this.pos)}`, this.pos, { expected: "':'", found: describe(this.src, this.pos) })
     this.pos++
     this.skipTrivia()
     return true
@@ -381,7 +384,7 @@ export class Reader {
 
   /** The key just read (at `keyStart`) was seen before in this record. */
   failDuplicate(key: string): never {
-    this.fail("duplicate-key", `duplicate key '${key}'`, this.keyStart)
+    this.fail("duplicate-key", `duplicate key '${quoteText(key)}'`, this.keyStart)
   }
 
   /**
@@ -435,9 +438,9 @@ export class Reader {
     if (isLowerStart(c)) return this.checkWordLength(this.readIdent(), "key")
     if (isUpper(c)) {
       const word = this.readIdent()
-      this.fail("uppercase-key", `record keys must start with a lowercase letter or '_'; quote it: "${word}"`, this.pos - word.length, { hint: `Quote the key: "${word}".` })
+      this.fail("uppercase-key", `record keys must start with a lowercase letter or '_'; quote it: "${quoteText(word)}"`, this.pos - word.length, { hint: `Quote the key: "${quoteText(word)}".` })
     }
-    this.fail("expected-key", `expected a record key, found ${describe(this.peek())}`, this.pos, { expected: "a record key", found: describe(this.peek()) })
+    this.fail("expected-key", `expected a record key, found ${describe(this.src, this.pos)}`, this.pos, { expected: "a record key", found: describe(this.src, this.pos) })
   }
 
   // ── numbers ────────────────────────────────────────────────
@@ -446,7 +449,7 @@ export class Reader {
   numberLiteral(): string {
     if (!/[-0-9]/.test(this.src[0] ?? "")) this.fail("invalid-number", "expected a number")
     const text = this.number()
-    if (!this.atEnd()) this.fail("invalid-number", `expected the end of the number, found ${describe(this.peek())}`)
+    if (!this.atEnd()) this.fail("invalid-number", `expected the end of the number, found ${describe(this.src, this.pos)}`)
     return text
   }
 
@@ -503,7 +506,7 @@ export class Reader {
     if (continuesNumber(this.src.charCodeAt(end))) {
       let to = end
       while (continuesNumber(this.src.charCodeAt(to))) to++
-      this.fail("invalid-number", `invalid number '${this.src.slice(start, to)}'`, start)
+      this.fail("invalid-number", `invalid number '${quoteText(this.src.slice(start, to))}'`, start)
     }
     const literal = this.src.slice(start, end)
     if (literal.length > this.limits.maxNumberLength) {
@@ -549,7 +552,7 @@ export class Reader {
         this.fail(
           "bytes-not-hex",
           c === LF || c === CR ? "line break in byte string (keep x\"…\" on one line)"
-          : `invalid character ${describe(this.src[this.pos]!)} in byte string (expected hex digits)`,
+          : `invalid character ${describe(this.src, this.pos)} in byte string (expected hex digits)`,
         )
       }
       const lo = hexValue(this.src.charCodeAt(this.pos + 1))
@@ -631,7 +634,8 @@ export class Reader {
         return String.fromCodePoint(cp)
       }
     }
-    this.fail("invalid-escape", `invalid escape '\\${e ?? ""}'`, start)
+    const after = this.src.codePointAt(start + 1)
+    this.fail("invalid-escape", `invalid escape '\\${after === undefined ? "" : quoteText(String.fromCodePoint(after))}'`, start)
   }
 
   private blockString(): string {
@@ -841,7 +845,7 @@ export class Reader {
    */
   private failSeparator(message: string, close?: string): never {
     const c = this.peek()
-    const found = describe(c)
+    const found = describe(this.src, this.pos)
     const reason = `${message}, found ${found}`
     if ((c === "(" || c === "{") && this.afterBareTag()) {
       this.fail("payload-newline", reason, this.pos, { expected: "','", found, hint: `Put the payload on the same line as ${this.bareTag}, or add a comma if they are two values.` })

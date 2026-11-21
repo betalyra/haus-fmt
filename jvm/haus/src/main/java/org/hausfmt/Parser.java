@@ -127,7 +127,7 @@ final class Parser {
       return new SyntaxError(
           pos,
           ErrorCode.PAYLOAD_NEWLINE,
-          "the payload of " + ((Value.Variant) v).tag() + " must start on its line: expected " + expected + ", found '" + c + "'",
+          "the payload of " + SchemaText.quote(((Value.Variant) v).tag()) + " must start on its line: expected " + expected + ", found '" + c + "'",
           expected,
           "'" + c + "'");
     }

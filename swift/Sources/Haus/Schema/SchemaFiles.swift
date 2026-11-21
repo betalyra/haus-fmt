@@ -202,6 +202,9 @@ struct PackageJSON {
     let dependencies: [String: Set<String>]
     let isValid: Bool
 
+    /// A package.json that can't be read (not a regular file): it declares nothing.
+    static let unreadable = PackageJSON([])
+
     init(_ bytes: [UInt8]) {
         let valid = bytes.withUnsafeBufferPointer(firstInvalidUTF8) == nil
         let doc = valid ? try? JSONSerialization.jsonObject(with: Data(bytes), options: [.fragmentsAllowed]) : nil

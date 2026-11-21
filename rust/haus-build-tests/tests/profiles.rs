@@ -36,7 +36,7 @@ fn vectors(text: &str) -> Vec<Vector> {
     haus::parse(text)
         .expect("the vectors parse")
         .into_iter()
-        .map(|v| match v {
+        .map(|v| match &v {
             Value::Variant { tag, args } if (tag == "Accept" || tag == "Reject") && args.len() == 1 => Vector {
                 accept: tag == "Accept",
                 ty: string(&args[0], "type").expect("a type"),
@@ -64,7 +64,7 @@ where
     let value = &haus::parse(&v.value).map_err(|e| e.to_string())?[0];
     let decoded = haus::de::codec::<C>(value, haus::Decoder::default());
     match (v.accept, decoded) {
-        (false, Err(e)) if e.code == haus::ErrorCode::TypeMismatch => Ok(()),
+        (false, Err(e)) if e.code == haus::ErrorCode::CodecRejected => Ok(()),
         (false, Err(e)) => Err(format!("rejected with {:?}: {e}", e.code)),
         (false, Ok(x)) => Err(format!("accepted: {x:?}")),
         (true, Err(e)) => Err(format!("rejected: {e}")),
@@ -170,7 +170,7 @@ fn the_profiles_reject_inside_another_packages_types() {
         assert_ne!(text, TRAVEL, "{from}");
         match haus::from_str::<travel::Travel>(&text) {
             Err(haus::Error::Decode(e)) => {
-                assert_eq!(e.code, haus::ErrorCode::TypeMismatch, "{e}");
+                assert_eq!(e.code, haus::ErrorCode::CodecRejected, "{e}");
                 e.place()
             }
             other => panic!("{to}: {other:?}"),
@@ -191,7 +191,7 @@ fn the_profiles_reject_inside_another_packages_types() {
         assert_ne!(text, json, "{from}");
         match haus::json::from_str::<travel::Travel>(&text) {
             Err(haus::Error::Decode(e)) => {
-                assert_eq!(e.code, haus::ErrorCode::TypeMismatch, "{e}");
+                assert_eq!(e.code, haus::ErrorCode::CodecRejected, "{e}");
                 e.place()
             }
             other => panic!("{to}: {other:?}"),

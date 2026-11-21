@@ -1,5 +1,6 @@
+import { unpairedSurrogate } from "./chars.js"
 import { ERROR_CODES, type ErrorCode } from "./error-codes.js"
-import { quote } from "./format.js"
+import { escaped } from "./format.js"
 
 export { ERROR_CODES, type ErrorCategory, type ErrorCode } from "./error-codes.js"
 
@@ -125,6 +126,18 @@ export class HausSyntaxError extends Error {
 }
 
 /**
+ * Text given as a string, before it is read as haus or JSON: an unpaired
+ * surrogate has no UTF-8 form, so it is rejected as invalid UTF-8 is
+ * (`invalid-utf8`, spec §4), at the first one, whatever comes before it.
+ */
+export function checkWellFormed(text: string, origin: Origin = START): void {
+  const at = unpairedSurrogate(text)
+  if (at < 0) return
+  const p = locate(text, at, origin)
+  throw new HausSyntaxError("an unpaired surrogate, which has no UTF-8 form", p.offset, p.line, p.column, "invalid-utf8")
+}
+
+/**
  * Position of `pos` within `text`, given that `text` starts at `origin`.
  * Columns count Unicode code points (spec), so a surrogate pair is one column.
  */
@@ -151,7 +164,7 @@ export type Path = readonly (string | number)[]
  * identifier as a haus string in canonical form (§12).
  */
 export const formatPath = (path: Path) =>
-  "$" + path.map((p) => (typeof p === "number" ? `[${p}]` : /^[a-z_]\w*$/.test(p) ? `.${p}` : `[${quote(p)}]`)).join("")
+  "$" + path.map((p) => (typeof p === "number" ? `[${p}]` : /^[a-z_]\w*$/.test(p) ? `.${p}` : `[${escaped(p)}]`)).join("")
 
 /** Valid input (haus or JSON) that doesn't fit what is expected: a schema, or a JSON mapping (spec §15, §16). */
 export class HausDecodeError extends Error {

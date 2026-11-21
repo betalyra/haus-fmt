@@ -1,0 +1,3 @@
+// A file path in an import has only A-Z, a-z, 0-9, _, ., / and - (grammar.ebnf, path).
+import ./a~b (A)
+type B = { a: A }

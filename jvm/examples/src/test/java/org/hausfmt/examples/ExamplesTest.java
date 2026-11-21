@@ -27,9 +27,9 @@ class ExamplesTest {
           + "deliverTo: LatLng(38.7223, -9.1393), status: Shipped { tracking: \"DE-4711\" } }",
       "Eur without codecs: accepted",
       "Eur with codecs: $.total: @haus-fmt/money@1#Money rejects the value: Eur is not a currency: three letters A–Z "
-          + "(ISO 4217) [type-mismatch]",
+          + "(ISO 4217) [codec-rejected]",
       "44.405 with codecs: $.total: @haus-fmt/money@1#Money rejects the value: 44.405 has more than 2 decimal places "
-          + "[type-mismatch]",
+          + "[codec-rejected]",
       "");
 
   private static String output(Runnable main) {

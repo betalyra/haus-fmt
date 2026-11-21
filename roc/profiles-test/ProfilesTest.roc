@@ -100,7 +100,7 @@ run = |tag, value, output, decode_base, encode_base, decode, encode| {
 	# Every vector is valid under the schema: what the codec rejects, the profile rejects.
 	written = normal(value)?
 	match (tag, coded(value)) {
-		("Reject", Err(Decode(e))) if e.code == "type-mismatch" => Ok({})
+		("Reject", Err(Decode(e))) if e.code == "codec-rejected" => Ok({})
 		("Reject", Err(Decode(e))) => Err("rejected with ${e.code}: ${Decode.message(e)}")
 		("Reject", Ok(_)) => Err("accepted")
 		("Accept", Ok(x)) => {
@@ -226,7 +226,7 @@ expect {
 # from the inside out (spec §13.4): a currency's codec runs before the codec of
 # the Money that holds it, and rejects at the currency's own place.
 rejected_at = |from, to| match Decode.one(ProfilesTest.travel.replace_first(from, to), Travel.decode_travel) {
-	Err(Decode({ path, code, .. })) if code == "type-mismatch" => ErrorCode.place(path)
+	Err(Decode({ path, code, .. })) if code == "codec-rejected" => ErrorCode.place(path)
 	_ => "accepted"
 }
 expect rejected_at("Money(3.10, EUR)", "Money(3.10, Eur)") == "$.trips[0].legs[1].fare[1]"

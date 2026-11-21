@@ -75,8 +75,8 @@ fn not_an_envelope(json: &Json) -> DecodeError {
 /// `2`, `"1"`: a `_haus` that isn't 1, for messages.
 fn describe_version(json: &Json) -> String {
     match json {
-        Json::Number(n) => n.clone(),
-        Json::String(s) if s.len() <= 20 => format!("{s:?}"),
+        Json::Number(n) => crate::scan::shown(n),
+        Json::String(s) if s.len() <= 20 => format!("\"{}\"", crate::scan::shown(s)),
         other => super::de::describe(other),
     }
 }
@@ -229,9 +229,10 @@ impl Reader<'_> {
                 Ok(_) => Ok(Value::Number(n.clone())),
                 Err(e) => Err(e.into_decode()),
             },
-            Json::String(n) => {
-                Err(DecodeError::new(Code::HausJsonNumber, format!("{n:?} is not a normalized number literal")))
-            }
+            Json::String(n) => Err(DecodeError::new(
+                Code::HausJsonNumber,
+                format!("\"{}\" is not a normalized number literal", crate::scan::shown(n)),
+            )),
             _ => Err(super::de::mismatch("a string", json).with_code(Code::HausJsonNumber)),
         }
     }
@@ -250,7 +251,10 @@ impl Reader<'_> {
                     key(k, self.limits)?;
                     Ok((k.clone(), self.value(v, depth).map_err(|e| e.field(k))?))
                 }
-                false => Err(DecodeError::new(Code::DuplicateKey, format!("the key {k:?} is used twice"))),
+                false => Err(DecodeError::new(
+                    Code::DuplicateKey,
+                    format!("the key \"{}\" is used twice", crate::scan::shown(k)),
+                )),
             })
             .collect::<Result<_, _>>()
             .map(Value::Record)
@@ -302,7 +306,8 @@ pub(crate) fn tag_name(json: &Json, limits: &Limits) -> Result<String, DecodeErr
             Err(e) => Err(e.into_decode()),
         },
         Json::String(t) => {
-            let reason = format!("{t:?} is not a tag name (A to Z, then letters, digits and _)");
+            let reason =
+                format!("\"{}\" is not a tag name (A to Z, then letters, digits and _)", crate::scan::shown(t));
             Err(DecodeError::new(Code::InvalidTag, reason))
         }
         _ => Err(super::de::mismatch(r#"a tag name in a string ("_tag")"#, json).with_code(Code::InvalidTag)),

@@ -179,8 +179,9 @@ written with `h.*`, the packages export the types with their profile too:
 
 A codec is `{ id, apply }`: `apply` builds the host type's schema from the
 type's own one, for example with `h.refine(base, check)`, which adds a rule
-(`check` returns why it rejects a value, or `undefined`) and checks it when
-encoding too. Codecs for types the schema doesn't contain are ignored; two for
+(`check` returns why it rejects a value, or `undefined`): a value the schema
+accepts and the rule rejects is `codec-rejected`, and encoding one is
+`cannot-encode`. Codecs for types the schema doesn't contain are ignored; two for
 one type are an error, and so is one for a record that a variant uses as a
 record case (`< Box R >`), whose fields sit beside `_tag` (`codec-unreachable`).
 

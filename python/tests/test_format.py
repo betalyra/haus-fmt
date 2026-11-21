@@ -68,6 +68,8 @@ def test_width_counts_code_points_and_the_comma() -> None:
         ({"width": -1}, "width must be"),
         ({"indent": True}, "indent must be"),
         ({"width": 1.5}, "width must be"),
+        ({"indent": 1.5}, "indent must be"),
+        ({"indent": -2, "width": 40}, "indent must be"),
     ],
 )
 def test_options_are_checked(options: dict[str, Any], message: str) -> None:
@@ -203,7 +205,7 @@ def test_values_without_a_text() -> None:
     fails(Record({"a": Variant("lower")}), "invalid-tag", ("a",))
     fails(Array((Number("1" * 1001),)), "number-too-long", (0,))
     fails(Number("1e7000"), "exponent-too-large")
-    fails(Number("1.5.5"), "cannot-encode")
+    fails(Number("1.5.5"), "invalid-number")
     fails(Number(cast(Any, 15)), "cannot-encode")
     fails(String("\ud800"), "cannot-encode")
     fails(Record({"\udfff": Number("1")}), "cannot-encode")

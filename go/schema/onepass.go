@@ -20,6 +20,11 @@ func (t Type) Parse(src []byte) (haus.Value, error) {
 func (t Type) ParseWith(src []byte, opts DecodeOptions) (haus.Value, error) {
 	v, err := haus.ParseWith(src, opts.Limits)
 	if err != nil {
+		// A text that doesn't hold one value is wrong as a whole: the
+		// error is at the value's root, $ (spec §15).
+		if e, ok := err.(*haus.Error); ok && e.Code == haus.CodeNotOneValue && e.Path == "" {
+			e.Path = "$"
+		}
 		return nil, err
 	}
 	if t.t == nil {

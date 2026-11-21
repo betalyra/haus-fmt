@@ -42,7 +42,8 @@ describe("the wgs84 vectors", () => {
         // Every vector is valid under the schema: what a codec rejects, the profile rejects.
         expect(() => h.parse(base[v.type]!, v.value)).not.toThrow()
         if (v._tag === "Reject") {
-          expect(() => h.parse(schema, v.value)).toThrow(h.HausDecodeError)
+          // The schema accepts it and the profile's codec doesn't (spec §13.4, §17).
+          expect(() => h.parse(schema, v.value)).toThrow(expect.objectContaining({ name: "HausDecodeError", code: "codec-rejected" }))
           return
         }
         const decoded = h.parse(schema, v.value)
@@ -63,6 +64,7 @@ describe("the wgs84 vectors", () => {
         const exit = Effect.runSyncExit(Haus.decode(schema, wgs84Effect)(v.value))
         if (v._tag === "Reject") {
           expect(Exit.isFailure(exit)).toBe(true)
+          expect(Effect.runSync(Effect.flip(Haus.decode(schema, wgs84Effect)(v.value)))).toMatchObject({ code: "codec-rejected" })
           return
         }
         const decoded = Effect.runSync(Haus.decode(schema, wgs84Effect)(v.value))

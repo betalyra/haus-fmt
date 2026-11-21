@@ -158,7 +158,7 @@ def translate (F : Source) : Nat → Subst → Tm → C Ty
   | f + 1, σ, .var p =>
     match σ.lookup p with
     | some u => translate F f [] u
-    | none => err .unknownParameter s!"unknown type parameter {p}"
+    | none => err .unknownParameter s!"unknown type parameter {msgText p}"
   | f + 1, σ, .ref n as =>
     match n, as with
     | "Array", [a] => return .array (← translate F f σ a)
@@ -170,7 +170,7 @@ def translate (F : Source) : Nat → Subst → Tm → C Ty
       if F.defined n then return .ref (key (n, as.map (·.subst σ)))
       else match builtinTy F n with
         | some t => pure t
-        | none => err .unknownType s!"unknown type {n}"
+        | none => err .unknownType s!"unknown type {msgText n}"
   | f + 1, σ, .node (.record c ms) ks => return .record c (← fields F f σ ms ks)
   | f + 1, σ, .node (.variant c as) ks => return .variant c (← cases F f σ as ks)
 
@@ -217,7 +217,7 @@ def Source.fuel (F : Source) : Nat :=
 def Source.instTy (F : Source) (i : Inst) : C Ty :=
   match F.lookup i.1 with
   | some d => translate F F.fuel (d.params.zip i.2) d.body
-  | none => err .unknownType s!"unknown type {i.1}"
+  | none => err .unknownType s!"unknown type {msgText i.1}"
 
 /-- The environment of the instances `S`: each under its name. -/
 def Source.envOf (F : Source) (S : List Inst) : C Env := do
@@ -268,7 +268,7 @@ are closed under the instances they mention), and is checked here.
 def closedEnv (env : Env) : C Unit :=
   match env.defs.find? fun p => (tyNames p.2).any fun n => (env.lookup n).isNone with
   | none => pure ()
-  | some (n, _) => err .unknownType s!"{n} refers to a type that is not defined"
+  | some (n, _) => err .unknownType s!"{msgText n} refers to a type that is not defined"
 
 /-- `parse`, its error as a schema-file error. -/
 def parseC (text : Text) : C Parsed :=

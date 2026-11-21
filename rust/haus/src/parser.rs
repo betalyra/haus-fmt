@@ -2,7 +2,7 @@
 //! TypeScript reference parser (typescript/packages/haus/src/parser.ts).
 
 use crate::keys::Keys;
-use crate::scan::{Special, ident_end, is_bidi, is_control, is_ident, next_special, plain_decimal};
+use crate::scan::{Special, ident_end, is_bidi, is_control, is_ident, next_special, plain_decimal, shown};
 use crate::{ErrorCode as Code, SyntaxError as Error, Value};
 use std::borrow::Cow;
 use std::fmt::Write as _;
@@ -99,7 +99,7 @@ pub(crate) fn parse_item(src: &str, limits: &Limits, at_start: bool) -> Result<V
 pub(crate) fn number_literal(text: &str, limits: &Limits) -> Option<String> {
     let mut p = Parser::build(text, limits, 0, None);
     match p.number() {
-        Ok(Value::Number(n)) if p.pos == text.len() => Some(n),
+        Ok(Value::Number(ref mut n)) if p.pos == text.len() => Some(std::mem::take(n)),
         _ => None,
     }
 }
@@ -186,7 +186,7 @@ fn describe(c: Option<char>) -> String {
     match c {
         None => "end of input".into(),
         Some('\n') => "line break".into(),
-        Some(c) => format!("'{c}'"),
+        Some(c) => format!("'{}'", shown(c.encode_utf8(&mut [0; 4]))),
     }
 }
 
@@ -287,9 +287,12 @@ impl<'a> Parser<'a> {
                 self.fail_at(
                     start,
                     code,
-                    format!("unexpected identifier '{word}': lowercase identifiers can only be record keys{hint}"),
+                    format!(
+                        "unexpected identifier '{}': lowercase identifiers can only be record keys{hint}",
+                        shown(word)
+                    ),
                 )
-                .with_expected_found("a value", format!("'{word}'"))
+                .with_expected_found("a value", format!("'{}'", shown(word)))
             }
             // Reserved for a version directive (spec §10): `#haus 2`.
             Some(b'#') if self.file_start == Some(self.pos) && self.b[self.pos..].starts_with(b"#haus") => self.fail(
@@ -341,7 +344,7 @@ impl<'a> Parser<'a> {
         if self.peek() != Some(b':') {
             let found = describe(self.peek_char());
             return Err(self
-                .fail(Code::MissingColon, format!("expected ':' after key '{key}', found {found}"))
+                .fail(Code::MissingColon, format!("expected ':' after key '{}', found {found}", shown(&key)))
                 .with_expected_found("':'", found));
         }
         self.pos += 1;
@@ -353,7 +356,7 @@ impl<'a> Parser<'a> {
     /// is new (spec §1).
     fn add_field(&mut self, base: usize, keys: &mut Keys, key_pos: usize, key: Cow<'a, str>, value: Value) -> R<()> {
         if !keys.insert(&self.fields[base..], &key) {
-            return Err(self.fail_at(key_pos, Code::DuplicateKey, format!("duplicate key '{key}'")));
+            return Err(self.fail_at(key_pos, Code::DuplicateKey, format!("duplicate key '{}'", shown(&key))));
         }
         self.fields.push((key.into_owned(), value));
         Ok(())
@@ -374,9 +377,9 @@ impl<'a> Parser<'a> {
                     .fail_at(
                         start,
                         Code::UppercaseKey,
-                        format!("record keys must start with a lowercase letter or '_'; quote it: \"{word}\""),
+                        format!("record keys must start with a lowercase letter or '_'; quote it: \"{}\"", shown(word)),
                     )
-                    .with_hint(format!("Quote the key: \"{word}\".")))
+                    .with_hint(format!("Quote the key: \"{}\".", shown(word))))
             }
             _ => {
                 let found = describe(self.peek_char());
@@ -516,8 +519,8 @@ impl<'a> Parser<'a> {
 
     #[cold]
     fn empty_payload(&self, paren: usize, tag: &str) -> Error {
-        self.fail_at(paren, Code::EmptyPayload, format!("empty payload: write '{tag}' without parentheses"))
-            .with_hint(format!("Write {tag} without parentheses."))
+        self.fail_at(paren, Code::EmptyPayload, format!("empty payload: write '{}' without parentheses", shown(tag)))
+            .with_hint(format!("Write {} without parentheses.", shown(tag)))
     }
 
     // ── numbers ────────────────────────────────────────────────
@@ -542,7 +545,11 @@ impl<'a> Parser<'a> {
             while matches!(self.b.get(to), Some(&c) if is_ident(c) || c == b'.') {
                 to += 1;
             }
-            return Err(self.fail_at(start, Code::InvalidNumber, format!("invalid number '{}'", &self.src[start..to])));
+            return Err(self.fail_at(
+                start,
+                Code::InvalidNumber,
+                format!("invalid number '{}'", shown(&self.src[start..to])),
+            ));
         }
         self.check_number_limits(start, end, radix)?;
         self.pos = end;
@@ -800,7 +807,11 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let e = self.src[start + 1..].chars().next().map(String::from).unwrap_or_default();
-                return Err(self.fail_at(start, Code::InvalidEscape, format!("invalid escape '\\{e}'")));
+                return Err(self.fail_at(
+                    start,
+                    Code::InvalidEscape,
+                    format!("invalid escape '{}'", shown(&format!("\\{e}"))),
+                ));
             }
         })
     }

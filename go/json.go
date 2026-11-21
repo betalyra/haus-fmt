@@ -3,7 +3,6 @@ package haus
 import (
 	"encoding/hex"
 	"fmt"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -838,7 +837,7 @@ func describeJSON(j Value) string {
 				names = append(names, "…")
 				break
 			}
-			names = append(names, strconv.Quote(f.Key))
+			names = append(names, quoteForMessage(f.Key))
 		}
 		return "an object with " + strings.Join(names, ", ")
 	case Variant:

@@ -75,11 +75,11 @@ def importVersion? (m : String) : Option String :=
       let rest := v.drop ds.length
       let major := String.ofList (match ds.dropWhile (· == '0') with | [] => ['0'] | m => m)
       if ds.isEmpty || !(rest.isEmpty || rest.head? == some '.') then
-        some s!"{name}@{version}: expected a major version after '@', like {name}@1"
+        some s!"{msgText name}@{msgText version}: expected a major version after '@', like {msgText name}@1"
       else if !rest.isEmpty then
-        some s!"{name}@{version}: an import names only the major version ({name}@{major})"
+        some s!"{msgText name}@{msgText version}: an import names only the major version ({msgText name}@{msgText major})"
       else if ds.length != major.length then
-        some s!"{name}@{version}: a major version has no leading zeros ({name}@{major})"
+        some s!"{msgText name}@{msgText version}: a major version has no leading zeros ({msgText name}@{msgText major})"
       else none
     | _ => none
   | _ => none
@@ -97,18 +97,18 @@ bindings' text loaders, it is `import-unavailable`.
 def checkModule (m : String) : C Unit := do
   if let some e := importVersion? m then err .importVersion e
   if m.startsWith "@" && !Packages.isPackageName (packageOf m) then
-    err .unknownModule s!"unknown module {m}: a package is @org/name, in lowercase letters, digits, -, . and _ (not node_modules)"
+    err .unknownModule s!"unknown module {msgText m}: a package is @org/name, in lowercase letters, digits, -, . and _ (not node_modules)"
   if !((m.startsWith "@" && m.contains '/') || m.startsWith "./" || m.startsWith "../") then
-    err .unknownModule s!"unknown module {m}: import std/…, a package @org/name or a file ./name"
-  err .importUnavailable s!"can't import {m}: no module resolver (only std modules are found here)"
+    err .unknownModule s!"unknown module {msgText m}: import std/…, a package @org/name or a file ./name"
+  err .importUnavailable s!"can't import {msgText m}: no module resolver (only std modules are found here)"
 
 /-- The names a `std/time` import brings in, after those of `std`: each a std/time type, none twice. -/
 def stdNames (m : String) : List String → List String → C (List String)
   | std, [] => pure std
   | std, n :: ns =>
     if !(stdTime.any (·.1 == n)) then
-      err .unknownImport s!"{m} has no type {n} (it has {", ".intercalate (stdTime.map (·.1))})"
-    else if std.contains n then err .duplicateImport s!"{n} is imported twice"
+      err .unknownImport s!"{msgText m} has no type {msgText n} (it has {", ".intercalate (stdTime.map (·.1))})"
+    else if std.contains n then err .duplicateImport s!"{msgText n} is imported twice"
     else stdNames m (std ++ [n]) ns
 
 /-- The std/time types the imports bring in, after those of `std`, in order. -/
@@ -116,7 +116,7 @@ def declareImports : List String → List Import → C (List String)
   | std, [] => pure std
   | std, i :: is =>
     if i.module.startsWith "std/" then
-      if i.module != "std/time" then err .unknownModule s!"unknown module {i.module}: the standard modules are std/time"
+      if i.module != "std/time" then err .unknownModule s!"unknown module {msgText i.module}: the standard modules are std/time"
       else do declareImports (← stdNames i.module std i.names) is
     else do checkModule i.module; declareImports std is
 
@@ -127,11 +127,11 @@ The definitions, after those named `seen`: none twice, none imported
 def declareDefs (std : List String) : List String → List Def → C Unit
   | _, [] => pure ()
   | seen, d :: ds =>
-    if seen.contains d.name then err .duplicateType s!"type {d.name} is defined twice"
-    else if std.contains d.name then err .duplicateType s!"type {d.name} is already imported"
-    else if preludeNames.contains d.name then err .redefinePrelude s!"{d.name} is a prelude type and can't be redefined"
+    if seen.contains d.name then err .duplicateType s!"type {msgText d.name} is defined twice"
+    else if std.contains d.name then err .duplicateType s!"type {msgText d.name} is already imported"
+    else if preludeNames.contains d.name then err .redefinePrelude s!"{msgText d.name} is a prelude type and can't be redefined"
     else match firstDup d.params with
-      | some p => err .invalidParameter s!"parameter {p} appears twice"
+      | some p => err .invalidParameter s!"parameter {msgText p} appears twice"
       | none => declareDefs std (seen ++ [d.name]) ds
 
 /--
@@ -157,7 +157,7 @@ mutual
 /-- Every name in a type, with its arguments: defined, of the right arity, not a stream. -/
 def checkNames (F : Source) (d : Def) : Tm → C Unit
   | .var p =>
-    if d.params.contains p then pure () else err .unknownParameter s!"unknown type parameter {p}"
+    if d.params.contains p then pure () else err .unknownParameter s!"unknown type parameter {msgText p}"
   | .ref n as => do
     -- Arity first, then where it is: `type Q = Stream` is `wrong-arity`.
     if n == "Stream" then
@@ -165,16 +165,16 @@ def checkNames (F : Source) (d : Def) : Tm → C Unit
       err .misplacedStream "Stream can only be the whole type of a definition: type Events = Stream Event"
     match preludeGeneric.lookup n with
     | some k =>
-      if as.length != k then err .wrongArity s!"{n} needs {k} argument{if k == 1 then "" else "s"}"
+      if as.length != k then err .wrongArity s!"{msgText n} needs {k} argument{if k == 1 then "" else "s"}"
     | none =>
       if builtins.contains n || F.std.contains n then
-        if !as.isEmpty then err .wrongArity s!"{n} takes no arguments"
+        if !as.isEmpty then err .wrongArity s!"{msgText n} takes no arguments"
       else match F.lookup n with
         | some d' =>
           if as.length != d'.params.length then
-            err .wrongArity s!"{n} needs {d'.params.length} argument{if d'.params.length == 1 then "" else "s"}, got {as.length}"
-          if d'.stream then err .misplacedStream s!"{n} is a Stream; a stream can only be the whole file, not part of a type"
-        | none => err .unknownType s!"unknown type {n}"
+            err .wrongArity s!"{msgText n} needs {d'.params.length} argument{if d'.params.length == 1 then "" else "s"}, got {as.length}"
+          if d'.stream then err .misplacedStream s!"{msgText n} is a Stream; a stream can only be the whole file, not part of a type"
+        | none => err .unknownType s!"unknown type {msgText n}"
     checkNamesList F d (as.map fun _ => false) as
   | .node l ks => checkNamesList F d l.spreadKids ks
 
@@ -210,16 +210,16 @@ def spreadTarget (F : Source) (want : String) (n : String) : C (Label × List Tm
   match F.lookup n with
   | none =>
     if builtins.contains n || F.std.contains n || (preludeGeneric.lookup n).isSome then
-      err .invalidSpread s!"{n} is not a {want}, so it can't be spread here"
-    else err .unknownType s!"unknown type {n}"
+      err .invalidSpread s!"{msgText n} is not a {want}, so it can't be spread here"
+    else err .unknownType s!"unknown type {msgText n}"
   | some d =>
     if !d.params.isEmpty then
-      err .invalidSpread s!"{n} has parameters; only a type without parameters can be spread"
-    if d.stream then err .invalidSpread s!"{n} is a Stream and can't be spread"
+      err .invalidSpread s!"{msgText n} has parameters; only a type without parameters can be spread"
+    if d.stream then err .invalidSpread s!"{msgText n} is a Stream and can't be spread"
     match ← unalias F (F.defs.length + 1) d.body with
-    | .node l@(.record _ _) ks => if want == "record" then pure (l, ks) else err .invalidSpread s!"{n} is not a {want}, so it can't be spread here"
-    | .node l@(.variant _ _) ks => if want == "variant" then pure (l, ks) else err .invalidSpread s!"{n} is not a {want}, so it can't be spread here"
-    | _ => err .invalidSpread s!"{n} is not a {want}, so it can't be spread here"
+    | .node l@(.record _ _) ks => if want == "record" then pure (l, ks) else err .invalidSpread s!"{msgText n} is not a {want}, so it can't be spread here"
+    | .node l@(.variant _ _) ks => if want == "variant" then pure (l, ks) else err .invalidSpread s!"{msgText n} is not a {want}, so it can't be spread here"
+    | _ => err .invalidSpread s!"{msgText n} is not a {want}, so it can't be spread here"
 
 /-- The keys of a record's members, `spread` giving those of a spread's kid. -/
 def memberNames (spread : Tm → C (List String)) : List Member → List Tm → C (List String)
@@ -245,7 +245,7 @@ def names (F : Source) (visiting : List String) : Nat → Label → List Tm → 
     let want := match l with | .record _ _ => "record" | .variant _ _ => "variant"
     let spread (k : Tm) : C (List String) := match k with
       | .ref n [] => do
-        if visiting.contains n then err .spreadCycle s!"type {n} spreads itself (directly or through another type)"
+        if visiting.contains n then err .spreadCycle s!"type {msgText n} spreads itself (directly or through another type)"
         let (l', ks') ← spreadTarget F want n
         names F (n :: visiting) fuel l' ks'
       | _ => err .invalidSpread "a spread names a type"
@@ -262,8 +262,8 @@ def checkSpreads (F : Source) (d : Def) : Tm → C Unit
     let ns ← names F [d.name] (F.defs.length + 1) l ks
     if let some k := firstDup ns then
       match l with
-      | .record _ _ => err .duplicateField s!"field {k} appears twice"
-      | .variant _ _ => err .duplicateTag s!"tag {k} appears twice"
+      | .record _ _ => err .duplicateField s!"field {msgText k} appears twice"
+      | .variant _ _ => err .duplicateTag s!"tag {msgText k} appears twice"
     checkSpreadsList F d ks
 
 def checkSpreadsList (F : Source) (d : Def) : List Tm → C Unit
@@ -322,9 +322,9 @@ def checkGrowth (F : Source) (growth : Bool := true) : C Unit :=
   | none => pure ()
   | some ((a, v), (b, q)) =>
     if (a, v) == (b, q) then
-      err .growingRecursion s!"{a} passes its parameter {v} to itself inside a bigger type: instances could grow without bound"
+      err .growingRecursion s!"{msgText a} passes its parameter {msgText v} to itself inside a bigger type: instances could grow without bound"
     else
-      err .growingRecursion s!"{a} passes its parameter {v} to {if a == b then "itself" else b} inside a bigger type, and it comes back: instances could grow without bound"
+      err .growingRecursion s!"{msgText a} passes its parameter {msgText v} to {if a == b then "itself" else msgText b} inside a bigger type, and it comes back: instances could grow without bound"
 
 /-! ## Spread cycles (§14)
 
@@ -391,14 +391,14 @@ def Source.spreadCycle? (F : Source) : Option String :=
 def checkSpreadCycles (F : Source) : C Unit :=
   match F.spreadCycle? with
   | none => pure ()
-  | some n => err .spreadCycle s!"type {n} spreads itself (directly or through another type)"
+  | some n => err .spreadCycle s!"type {msgText n} spreads itself (directly or through another type)"
 
 /-! ## All of them -/
 
 /-- The definitions' parameters: every one a type uses is declared. -/
 def checkParams (d : Def) : C Unit :=
   match d.body.vars.find? (!d.params.contains ·) with
-  | some p => err .unknownParameter s!"unknown type parameter {p}"
+  | some p => err .unknownParameter s!"unknown type parameter {msgText p}"
   | none => pure ()
 
 /--

@@ -21,6 +21,24 @@ def format_path(path: Iterable[PathKey]) -> str:
     return "$" + "".join(parts)
 
 
+UNPAIRED_SURROGATE = "an unpaired surrogate, which has no UTF-8 form"
+"""The reason of `invalid-utf8` for text given as a `str` (spec §4)."""
+
+
+def unpaired_surrogate(text: str) -> int | None:
+    """Where the first surrogate code point of `text` is, or None: a `str` can hold one, UTF-8 can't (spec §4).
+
+    Text given as a `str` is read as the UTF-8 it encodes to, so one is `invalid-utf8` there.
+    """
+    if text.isascii():  # a flag of the str: no scan
+        return None
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as e:
+        return e.start
+    return None
+
+
 def is_error_code(s: object) -> bool:
     """Whether `s` is an error code of the catalogue (spec §17)."""
     return isinstance(s, str) and s in ERROR_CODES

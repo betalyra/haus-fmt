@@ -6,7 +6,7 @@ extension HausError {
     /// An error code (spec §17): which mistake an error is. Stable, and the same in every binding.
     /// Its raw value is its name, `payload-newline`; ``hint`` is the usual fix.
     public enum Code: String, Sendable, CaseIterable {
-        /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.
+        /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.
         case invalidUtf8 = "invalid-utf8"
         /// `version-directive`: The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.
         case versionDirective = "version-directive"
@@ -34,11 +34,11 @@ extension HausError {
         case blockStringKey = "block-string-key"
         /// `missing-colon`: A record key is not followed by `:`.
         case missingColon = "missing-colon"
-        /// `duplicate-key`: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16).
+        /// `duplicate-key`: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).
         case duplicateKey = "duplicate-key"
         /// `empty-payload`: A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.
         case emptyPayload = "empty-payload"
-        /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
+        /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).
         case invalidNumber = "invalid-number"
         /// `unterminated-string`: A string has no closing `"` (in haus or JSON).
         case unterminatedString = "unterminated-string"
@@ -84,7 +84,7 @@ extension HausError {
         case keyTooLong = "key-too-long"
         /// `tag-too-long`: A tag has more characters than the string limit (default 16 Mi).
         case tagTooLong = "tag-too-long"
-        /// `value-too-long`: One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).
+        /// `value-too-long`: One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).
         case valueTooLong = "value-too-long"
         /// `unsupported-depth`: The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input.
         case unsupportedDepth = "unsupported-depth"
@@ -196,7 +196,9 @@ extension HausError {
         case invalidTime = "invalid-time"
         /// `invalid-secret`: A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).
         case invalidSecret = "invalid-secret"
-        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.
+        /// `codec-rejected`: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
+        case codecRejected = "codec-rejected"
+        /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.
         case cannotEncode = "cannot-encode"
         /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
         case cyclicValue = "cyclic-value"
@@ -258,7 +260,7 @@ extension HausError.Code {
         case .notOneValue, .streamTruncated: .streams
         case .schemaSyntax, .unknownType, .wrongArity, .duplicateType, .redefinePrelude, .unknownParameter, .invalidParameter, .underscoreType, .duplicateField, .duplicateTag, .closedEmptyVariant, .invalidSpread, .spreadCycle, .rowParameter, .misplacedStream, .unguardedRecursion, .growingRecursion, .typeTooDeep, .attributeArguments, .attributeTwice, .attributeSpace, .attributeOnSpread: .schemaFiles
         case .unknownModule, .unknownImport, .duplicateImport, .importUnavailable, .importNotFound, .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest, .packageVersion, .packagePath, .packageName, .packageCrate, .packageInstallScript, .packageFiles, .profileVectors, .packageWrapper, .codecUnreachable, .fileTooLarge, .tooManyFiles: .imports
-        case .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag, .wrongPayload, .invalidTime, .invalidSecret, .cannotEncode, .cyclicValue, .stepBudget, .tooManyNodes: .decoding
+        case .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag, .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .cannotEncode, .cyclicValue, .stepBudget, .tooManyNodes: .decoding
         case .jsonSyntax, .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes, .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm: .json
         case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag: .hints
         }
@@ -362,6 +364,7 @@ extension HausError.Code {
         case .wrongPayload: "Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which."
         case .invalidTime: "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type."
         case .invalidSecret: "Write a value of the secret's type; the value isn't shown, so check it where it comes from."
+        case .codecRejected: "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which."
         case .cannotEncode: "Pass a value of the host type the binding documents for the type."
         case .cyclicValue: "Break the cycle before encoding."
         case .stepBudget: "Simplify the schema, or raise the step limit if the work is expected."

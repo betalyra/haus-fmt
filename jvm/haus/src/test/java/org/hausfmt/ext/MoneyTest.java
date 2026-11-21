@@ -85,10 +85,10 @@ class MoneyTest {
     return cases.map(c -> dynamicTest(c.text + " with " + c.codecs, () -> {
       DecodeOptions options = DecodeOptions.DEFAULT.withCodecs(c.codecs);
       HausException e = assertThrows(HausException.class, () -> c.ty.decode(Haus.parse(c.text), options));
-      assertEquals(ErrorCode.TYPE_MISMATCH, e.code(), e.getMessage());
+      assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
       assertEquals(c.path, e.path(), e.getMessage());
       e = assertThrows(HausException.class, () -> c.ty.fromJson(c.json.getBytes(StandardCharsets.UTF_8), options));
-      assertEquals(ErrorCode.TYPE_MISMATCH, e.code(), e.getMessage());
+      assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
       assertEquals(c.inJson, e.path(), e.getMessage());
     }));
   }

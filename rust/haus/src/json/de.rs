@@ -18,7 +18,7 @@ pub fn describe(json: &Json) -> String {
     match json {
         Json::Null => "null".into(),
         Json::Bool(b) => b.to_string(),
-        Json::Number(n) => format!("the number {n}"),
+        Json::Number(n) => format!("the number {}", crate::scan::shown(n)),
         Json::String(_) => "a string".into(),
         Json::Array(_) => "an array".into(),
         Json::Object(_) => "an object".into(),
@@ -31,12 +31,10 @@ pub fn mismatch(what: &str, json: &Json) -> DecodeError {
     DecodeError::new(Code::TypeMismatch, format!("expected {what}, found {found}")).with_expected_found(what, found)
 }
 
-/// A number literal read from JSON that the limits don't take, or that isn't one.
+/// A number literal read from JSON that the limits don't take, or that isn't
+/// one (`invalid-number`, as the writer says).
 fn number_error(e: EncodeError) -> DecodeError {
-    match e.code {
-        Code::CannotEncode => e.into_decode().with_code(Code::InvalidNumber),
-        _ => e.into_decode(),
-    }
+    e.into_decode()
 }
 
 // ── objects ──────────────────────────────────────────────────
@@ -89,9 +87,11 @@ impl<'a> Object<'a> {
     pub fn closed(&self, known: &[&str]) -> R<()> {
         match self.fields().find(|k| !known.contains(k)) {
             // At the member, as when decoding (spec §17).
-            Some(k) => {
-                Err(DecodeError::new(Code::UnknownField, format!("unknown member {k:?} in a closed record")).field(k))
-            }
+            Some(k) => Err(DecodeError::new(
+                Code::UnknownField,
+                format!("unknown member \"{}\" in a closed record", crate::scan::shown(k)),
+            )
+            .field(k)),
             None => Ok(()),
         }
     }
@@ -119,7 +119,11 @@ impl<'a> Object<'a> {
         };
         if let Some(other) = self.fields().find(|k| Some(*k) != name) {
             // At the member, as an unknown field of a closed record is (spec §15).
-            return Err(DecodeError::new(Code::UnexpectedMember, format!("unexpected member {other:?}")).field(other));
+            return Err(DecodeError::new(
+                Code::UnexpectedMember,
+                format!("unexpected member \"{}\"", crate::scan::shown(other)),
+            )
+            .field(other));
         }
         let values: Vec<&Json> = match (name, name.and_then(|n| self.index.get(n))) {
             (None, _) => vec![],
@@ -304,7 +308,7 @@ pub fn codec<C: Codec>(json: &Json, d: Decoder) -> R<C::Target>
 where
     C::Base: FromJson,
 {
-    C::decode(C::Base::from_json_with(json, d)?).map_err(|reason| DecodeError::new(Code::TypeMismatch, reason))
+    C::decode(C::Base::from_json_with(json, d)?).map_err(|reason| DecodeError::new(Code::CodecRejected, reason))
 }
 
 /// [`codec`] for a type that contains other codecs' types, which run first
@@ -418,7 +422,7 @@ macro_rules! numbers {
             fn from_json_with(json: &Json, _: Decoder) -> R<Self> {
                 let Json::Number(text) = json else { return Err(mismatch(concat!("a number (", $name, ")"), json)) };
                 let n = integer(text).ok_or_else(|| {
-                    DecodeError::new(Code::NotAnInteger, format!("expected a whole number ({}), found {text}", $name))
+                    DecodeError::new(Code::NotAnInteger, format!("expected a whole number ({}), found {}", $name, crate::scan::shown(text)))
                         .with_expected_found($name, text.as_str())
                 })?;
                 n.parse().map_err(|_| out_of_range(text, $name, <$t>::MIN, <$t>::MAX))
@@ -431,7 +435,8 @@ numbers!(i8 => "Int8", i16 => "Int16", i32 => "Int32", u8 => "UInt8", u16 => "UI
 /// `text` is out of `name`'s range, `min` to `max`.
 fn out_of_range(text: &str, name: &str, min: impl std::fmt::Display, max: impl std::fmt::Display) -> DecodeError {
     let range = format!("{name} ({min} to {max})");
-    DecodeError::new(Code::OutOfRange, format!("{text} is out of range for {range}")).with_expected_found(range, text)
+    DecodeError::new(Code::OutOfRange, format!("{} is out of range for {range}", crate::scan::shown(text)))
+        .with_expected_found(range, text)
 }
 
 /// The decimal integer in a JSON string (`Int`, `Int64`, `UInt64`).
@@ -491,9 +496,9 @@ macro_rules! floats {
                 match json {
                     Json::Number(text) => match text.parse::<$t>() {
                         Ok(x) if x.is_finite() => Ok(x),
-                        Ok(_) => Err(DecodeError::new(Code::OutOfRange, format!("{text} is too large for {}", $name))
+                        Ok(_) => Err(DecodeError::new(Code::OutOfRange, format!("{} is too large for {}", crate::scan::shown(text), $name))
                             .with_expected_found($name, text.as_str())),
-                        Err(_) => Err(DecodeError::new(Code::TypeMismatch, format!("{text} is not a {}", $name))),
+                        Err(_) => Err(DecodeError::new(Code::TypeMismatch, format!("{} is not a {}", crate::scan::shown(text), $name))),
                     },
                     Json::String(s) if s == "NaN" => Ok(<$t>::NAN),
                     Json::String(s) if s == "Infinity" => Ok(<$t>::INFINITY),

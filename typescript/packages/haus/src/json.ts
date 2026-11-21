@@ -9,8 +9,8 @@
  * Schema-based JSON with a schema type (§16.3) is in json-schema-based.ts,
  * and in `h.toJson` / `h.fromJson` for schemas.
  */
-import { hex4, isBidiControl, TAG } from "./chars.js"
-import { HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
+import { hex4, isBidiControl, quoteText, TAG } from "./chars.js"
+import { checkWellFormed, HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
 import { toHex } from "./format.js"
 import { isNormalizedNumber, normalizeNumber, numberLimitIssue } from "./number.js"
 import { defineOwn } from "./own.js"
@@ -96,7 +96,7 @@ export const normalizeJsonNumber = (text: string): string => {
   return exponent === undefined ? mantissa! : `${mantissa}e${sign === "-" && exponent !== "0" ? "-" : ""}${exponent}`
 }
 
-const short = (s: string) => JSON.stringify(s.length > 30 ? s.slice(0, 30) + "…" : s)
+const short = (s: string) => `"${quoteText(s)}"`
 
 /**
  * What JSON writers escape besides what JSON.stringify does (spec §16): DEL,
@@ -140,7 +140,7 @@ class Reader {
   private found(): string {
     if (this.pos >= this.src.length) return "end of input"
     const c = this.src.codePointAt(this.pos)!
-    return c < 0x20 ? `U+${hex4(c)}` : `'${String.fromCodePoint(c)}'`
+    return c < 0x20 ? `U+${hex4(c)}` : `'${quoteText(String.fromCodePoint(c))}'`
   }
 
   private space() {
@@ -315,6 +315,7 @@ class Reader {
  * controls in strings are errors, as in self-describing JSON (§16).
  */
 export const readJson = (text: string, limits: Limits, origin: Origin = START, rejectControls = false): Json => {
+  checkWellFormed(text, origin)
   // A leading byte order mark is ignored, as in haus (spec §4).
   if (origin.offset === 0 && text.charCodeAt(0) === 0xfeff) return new Reader(text.slice(1), limits, { offset: 1, line: 1, column: 2 }, rejectControls).document()
   return new Reader(text, limits, origin, rejectControls).document()
@@ -521,7 +522,7 @@ export const describeJson = (j: Json): string =>
   j === null ? "null"
   : typeof j === "boolean" ? String(j)
   : typeof j === "string" ? `the string ${short(j)}`
-  : j instanceof JsonNumber ? `the number ${j.text.length > 30 ? j.text.slice(0, 30) + "…" : j.text}`
+  : j instanceof JsonNumber ? `the number ${quoteText(j.text)}`
   : Array.isArray(j) ? "an array"
   : "an object"
 
@@ -771,10 +772,11 @@ export const fromHausJson = (text: string, limits: Partial<Limits> = {}): Value 
 // ── JSON Lines (spec §16: a stream is one JSON text per value) ─
 
 export interface JsonLinesOptions {
-  /** Limits per value (spec §7); unspecified ones use the defaults. */
+  /**
+   * Limits per value (spec §7); unspecified ones use the defaults. A line
+   * has no length limit of its own (§16): its value has these.
+   */
   readonly limits?: Partial<Limits>
-  /** Most characters in one line (default 64 Mi, the stream limit of §7). */
-  readonly maxLineLength?: number
   /**
    * Require a line feed after the last value. A stream that ends without one
    * is reported as truncated instead of yielding a possibly cut-off last
@@ -793,15 +795,10 @@ export async function* readLines<T>(
   options: JsonLinesOptions,
   read: (text: string, origin: Origin, index: number) => T,
 ): AsyncGenerator<T, void, undefined> {
-  const maxLineLength = options.maxLineLength ?? 64 * 1024 * 1024
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
   let pending: string[] = []
-  let pendingLength = 0
   let origin: Origin = START
   let index = 0
-  const tooLong = () => {
-    throw new HausSyntaxError(`JSON Lines: line longer than ${maxLineLength} characters`, origin.offset, origin.line, origin.column, "value-too-long")
-  }
   const line = (text: string): T => {
     // A byte order mark at the very start is ignored; at the start of a later line, as an
     // empty line, it is no JSON text (spec §16, "Streams"): errors that name the line.
@@ -818,22 +815,16 @@ export async function* readLines<T>(
   const push = function* (chunk: string): Generator<T> {
     let start = 0
     for (let nl = chunk.indexOf("\n"); nl >= 0; nl = chunk.indexOf("\n", start)) {
-      if (pendingLength + nl - start > maxLineLength) tooLong()
       const text = pending.length === 0 ? chunk.slice(start, nl) : pending.join("") + chunk.slice(start, nl)
       pending = []
-      pendingLength = 0
       start = nl + 1
       yield line(text)
     }
-    if (start < chunk.length) {
-      pending.push(chunk.slice(start))
-      pendingLength += chunk.length - start
-      if (pendingLength > maxLineLength) tooLong()
-    }
+    if (start < chunk.length) pending.push(chunk.slice(start))
   }
   for await (const chunk of chunks(source)) yield* push(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true }))
   yield* push(decoder.decode())
-  if (pendingLength > 0) {
+  if (pending.length > 0) {
     if (options.requireTerminator) {
       throw new HausSyntaxError("JSON Lines: the stream ended without a line feed after the last value (truncated?)", origin.offset, origin.line, origin.column, "stream-truncated")
     }

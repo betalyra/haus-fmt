@@ -219,12 +219,14 @@ impl Document {
 fn strings_in_order(values: Vec<Value>) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack: Vec<Value> = values.into_iter().rev().collect();
-    while let Some(v) = stack.pop() {
-        match v {
-            Value::String(s) => out.push(s),
-            Value::Array(items) | Value::Variant { args: items, .. } => stack.extend(items.into_iter().rev()),
+    while let Some(mut v) = stack.pop() {
+        match &mut v {
+            Value::String(s) => out.push(std::mem::take(s)),
+            Value::Array(items) | Value::Variant { args: items, .. } => {
+                stack.extend(std::mem::take(items).into_iter().rev())
+            }
             Value::Record(fields) => {
-                for (k, v) in fields.into_iter().rev() {
+                for (k, v) in std::mem::take(fields).into_iter().rev() {
                     stack.push(v);
                     stack.push(Value::String(k));
                 }

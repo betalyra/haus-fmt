@@ -18,8 +18,8 @@
  * dispatch on the tag, depth is limited, and every call has a work budget.
  * Types that contain themselves are declared with `h.Recursive`.
  */
-import { TAG } from "./chars.js"
-import { HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
+import { quoteText, TAG, unpairedSurrogate } from "./chars.js"
+import { checkWellFormed, HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
@@ -352,19 +352,19 @@ export type AnySchema = Schema<any>
 
 const describe = (v: Value): string => {
   switch (v.kind) {
-    case "number": return `number ${v.text.length > 30 ? v.text.slice(0, 30) + "…" : v.text}`
-    case "string": return `string ${JSON.stringify(v.value.length > 30 ? v.value.slice(0, 30) + "…" : v.value)}`
+    case "number": return `number ${quoteText(v.text)}`
+    case "string": return `string "${quoteText(v.value)}"`
     case "bytes": return `bytes (${v.bytes.length})`
     case "array": return "array"
     case "record": return "record"
-    case "variant": return `variant ${v.tag}`
+    case "variant": return `variant ${quoteText(v.tag)}`
   }
 }
 
 /** A short description of a JS value for encode errors. Never calls the value's own methods. */
 const describeJs = (value: unknown): string => {
   switch (typeof value) {
-    case "string": return JSON.stringify(value.length > 30 ? value.slice(0, 30) + "…" : value)
+    case "string": return `"${quoteText(value)}"`
     case "number":
     case "bigint":
     case "boolean":
@@ -418,9 +418,10 @@ export const withStandard = <A, S extends Omit<Schema<A>, "~standard">>(schema: 
 
 /**
  * `schema` with a rule beyond it, as a codec adds one (spec §13.4): a value
- * that `check` rejects is an error when decoding (`type-mismatch`) and when
- * encoding (`cannot-encode`). `check` returns undefined, or why it rejects
- * the value. Accepted values are written as `schema` writes them.
+ * that `check` rejects is an error when decoding (`codec-rejected`: the
+ * schema accepted it, the rule doesn't) and when encoding (`cannot-encode`).
+ * `check` returns undefined, or why it rejects the value. Accepted values are
+ * written as `schema` writes them.
  *
  *   const Currency = h.refine(h.AnyTag, (c) => (typeof c === "string" && /^[A-Z]{3}$/.test(c) ? undefined : "three letters A–Z"))
  */
@@ -431,7 +432,7 @@ export const refine = <A>(schema: Schema<A>, check: (value: A) => string | undef
     decode: (v, at) => {
       const a = schema.decode(v, at)
       const why = check(a)
-      return why === undefined ? a : at.fail(why)
+      return why === undefined ? a : at.reject("codec-rejected", why)
     },
     encode: (a, at) => {
       const why = check(a)
@@ -548,7 +549,7 @@ const string_ = make(
   { kind: "string" },
 )
 
-const short = (text: string) => (text.length > 30 ? text.slice(0, 30) + "…" : text)
+const short = (text: string) => quoteText(text)
 /** A type's description inside another's, at most 80 characters. */
 const brief = (text: string) => (text.length > 80 ? text.slice(0, 79) + "…" : text)
 
@@ -666,7 +667,7 @@ const taggedString = <A>(tag: string, format: RegExp, convert: (s: string) => A 
     const arg = v.args[0]
     if (v.args.length !== 1 || arg?.kind !== "string") return mismatch(`${tag}("…")`, v, p)
     const out = format.test(arg.value) ? convert(arg.value) : undefined
-    if (out === undefined) return p.reject("invalid-time", `invalid ${tag} ${JSON.stringify(arg.value.length > 40 ? arg.value.slice(0, 40) + "…" : arg.value)}`, { key: 0 })
+    if (out === undefined) return p.reject("invalid-time", `invalid ${tag} "${quoteText(arg.value)}"`, { key: 0 })
     return out
   }, (a, p) => {
     const text = toText(a)
@@ -877,11 +878,11 @@ const record_ = <F extends Fields>(fields: F, options: { closed?: boolean } = {}
     for (const [key, schema] of entries) {
       const field = v.fields.get(key)
       if (field !== undefined) setOwn(out, key, schema.decode(field, at.child(key)))
-      else if (!schema.optional) at.reject("missing-field", `missing field '${key}'`, { expected: `the field '${key}'` })
+      else if (!schema.optional) at.reject("missing-field", `missing field '${quoteText(key)}'`, { expected: `the field '${quoteText(key)}'` })
     }
     if (options.closed) {
       for (const key of v.fields.keys()) {
-        if (!Object.hasOwn(fields, key)) at.reject("unknown-field", `unexpected field '${key}' (record is closed)`, { key })
+        if (!Object.hasOwn(fields, key)) at.reject("unknown-field", `unexpected field '${quoteText(key)}' (record is closed)`, { key })
       }
     }
     return out as RecordOf<F>
@@ -1025,10 +1026,10 @@ const variantSchema = <C extends Cases, A>(cases: C, open: boolean): Schema<A> =
     const c = byTag().get(v.tag)
     if (c === undefined) {
       if (open) return unknownOf(v) as A
-      return at.reject("unknown-tag", `unknown tag '${v.tag}', expected one of ${tagList(tags)}`, { expected: `one of ${tagList(tags)}`, found: v.tag })
+      return at.reject("unknown-tag", `unknown tag '${quoteText(v.tag)}', expected one of ${tagList(tags)}`, { expected: `one of ${tagList(tags)}`, found: quoteText(v.tag) })
     }
     const wrong = (shape: string, takes: CasePayload): never =>
-      at.reject("wrong-payload", `'${v.tag}' expects ${shape}, found ${payloadFound(v)}`, { expected: shape, found: payloadFound(v), hint: payloadHint(v.tag, takes) })
+      at.reject("wrong-payload", `'${quoteText(v.tag)}' expects ${shape}, found ${payloadFound(v)}`, { expected: shape, found: payloadFound(v), hint: payloadHint(v.tag, takes) })
     const arity = (n: number, shape: string, takes: CasePayload) => {
       if (v.args.length !== n) wrong(shape, takes)
     }
@@ -1136,6 +1137,7 @@ export const checkedValue = (raw: unknown, at: At): Value => {
   /** A string, key or tag within the string limit (spec §7). */
   const checkedString = (s: unknown, what: string, kind: "string" | "key" | "tag" = "string"): string => {
     if (typeof s !== "string") return invalid(what, s, at)
+    if (unpairedSurrogate(s) >= 0) return at.reject("cannot-encode", `a ${kind} with an unpaired surrogate, which has no UTF-8 form`)
     return longerThan(s, maxStringLength) ? at.reject(kind === "key" ? "key-too-long" : kind === "tag" ? "tag-too-long" : "string-too-long", `${kind} longer than ${maxStringLength} characters`) : s
   }
   switch (raw.kind) {
@@ -1459,6 +1461,7 @@ export const optimize = <S extends AnySchema>(schema: S): S => {
  * compiled reader when it has one (see `Options`).
  */
 export const parse = <A>(schema: Schema<A>, text: string, options: Options = {}): A => {
+  checkWellFormed(text)
   const read = readerFor(schema, codecOf(options))
   const decoded = read === undefined ? undefined : decodeCompiled(read, text, options)
   // Undefined: not compiled, or anything at all is wrong; the generic path reports it.

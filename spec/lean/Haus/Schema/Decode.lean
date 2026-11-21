@@ -154,11 +154,11 @@ def whnf (env : Env) : Nat → Ty → Except String (Nat × Ty)
     match peel t with
     | (s, .ref n) =>
       match fuel with
-      | 0 => .error s!"type {n} refers to itself without a record, array or variant in between"
+      | 0 => .error s!"type {msgText n} refers to itself without a record, array or variant in between"
       | fuel + 1 =>
         match env.lookup n with
         | some t => (whnf env fuel t).map fun (s', c) => (s + s', c)
-        | none => .error s!"unknown type {n}"
+        | none => .error s!"unknown type {msgText n}"
     | r => .ok r
 
 /-- The field of a record type with this key. -/
@@ -266,7 +266,7 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
     | .map t, .record fs => (decodeEntries env t fs).map .map
     | .record closed fields, .record fs =>
       match missing? fields fs with
-      | some k => reject .missingField s!"missing field {k}"
+      | some k => reject .missingField s!"missing field {msgText k}"
       | none => (decodeFields env closed fields fs).map .record
     | .variant closed cases, .variant tag args =>
       match caseOf? env cases tag, args with
@@ -277,12 +277,12 @@ def decode (env : Env) (t : Ty) (v : Value) : Except Error Typed :=
         (decode env (.record cl fields) (.record fs)).map fun x => .case tag [x]
       | some (.positional _ ts), args =>
         if args.length = ts.length then (decodeArgs env tag 0 ts args).map (.case tag)
-        else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
-      | some (.bare _), _ => reject .wrongPayload s!"{tag} takes no arguments"
-      | some (.record _ _ _), _ => reject .wrongPayload s!"{tag} takes one argument, a record"
+        else reject .wrongPayload s!"{msgText tag} takes {ts.length} arguments"
+      | some (.bare _), _ => reject .wrongPayload s!"{msgText tag} takes no arguments"
+      | some (.record _ _ _), _ => reject .wrongPayload s!"{msgText tag} takes one argument, a record"
       -- `caseOf?` resolves every `Tag T` to one of the forms above.
-      | some (.named _ _), _ => reject .wrongPayload s!"{tag} takes one argument"
-      | none, args => if closed then reject .unknownTag s!"unknown tag {tag}" else .ok (.unknown tag args)
+      | some (.named _ _), _ => reject .wrongPayload s!"{msgText tag} takes one argument"
+      | none, args => if closed then reject .unknownTag s!"unknown tag {msgText tag}" else .ok (.unknown tag args)
     | c, _ => reject .typeMismatch s!"expected {c.name}"
 
 def decodeItems (env : Env) (t : Ty) (i : Nat) : List Value → Except Error (List Typed)

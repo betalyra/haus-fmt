@@ -50,7 +50,7 @@ public final class MoneyCodecs {
       throw rejected("a currency is a tag");
     }
     if (x.size() > 0) {
-      throw rejected("the currency " + x.tag() + " has a payload; a currency is three letters A–Z (ISO 4217)");
+      throw rejected("the currency " + shortened(x.tag()) + " has a payload; a currency is three letters A–Z (ISO 4217)");
     }
     if (!isIso(x.tag())) {
       throw rejected(shortened(x.tag()) + " is not a currency: three letters A–Z (ISO 4217)");
@@ -80,7 +80,7 @@ public final class MoneyCodecs {
     return s.codePointCount(0, s.length()) <= 20 ? s : s.substring(0, s.offsetByCodePoints(0, 20)) + "…";
   }
 
-  /** A value the profile rejects: the decoder reports it as {@code type-mismatch}, at the value. */
+  /** A value the profile rejects: the decoder reports it as {@code codec-rejected}, at the value. */
   private static IllegalArgumentException rejected(String message) {
     return new IllegalArgumentException(message);
   }

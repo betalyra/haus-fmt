@@ -91,7 +91,7 @@ public final class SchemaType {
   public List<Value> decodeAll(List<Value> values) {
     if (!isStream()) {
       if (values.size() != 1) {
-        throw HausException.of(ErrorCode.NOT_ONE_VALUE,
+        throw HausException.at("$", ErrorCode.NOT_ONE_VALUE,
             name + " is not a Stream: expected one value, found " + values.size());
       }
       return List.of(decode(values.get(0)));
@@ -177,10 +177,11 @@ public final class SchemaType {
 
   /**
    * A reader of JSON Lines from {@code in}, each line the schema-based JSON of a value of the type,
-   * holding one line at a time, at most {@link Limits#maxValueLength()} characters.
+   * holding one line at a time; each value is read within the options' limits (a line has no
+   * length limit of its own).
    */
   public JsonLinesReader jsonLinesReader(InputStream in, DecodeOptions options) {
-    return new JsonLinesReader(in, options.limits().maxValueLength(), jsonLine(options));
+    return new JsonLinesReader(in, jsonLine(options));
   }
 
   private JsonLinesReader.Converter jsonLine(DecodeOptions options) {

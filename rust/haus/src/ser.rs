@@ -745,7 +745,7 @@ fn is_bare_key(k: &str) -> bool {
 
 /// A number's normalized literal (spec §2), always in decimal, if it can be
 /// written for a reader with `limits`: `1E5` is `1e5`; `abc` is an error
-/// (`cannot-encode`), and so is one longer than the number limit
+/// (`invalid-number`), and so is one longer than the number limit
 /// (`number-too-long`) or with a larger exponent (`exponent-too-large`).
 pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, str>, EncodeError> {
     let too_long = || {
@@ -764,7 +764,7 @@ pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, s
         // The exponent is checked below, on the normalized literal.
         let syntax = Limits { max_exponent: u64::MAX, ..*limits };
         crate::parser::number_literal(text, &syntax)
-            .ok_or_else(|| EncodeError::new(Code::CannotEncode, "not a number literal"))?
+            .ok_or_else(|| EncodeError::new(Code::InvalidNumber, "not a number literal"))?
             .into()
     };
     // The length first, as a parser meets it (spec §7).
@@ -781,6 +781,20 @@ pub(crate) fn normalized<'a>(text: &'a str, limits: &Limits) -> Result<Cow<'a, s
         }
     }
     Ok(n)
+}
+
+/// A number's normalized literal (spec §2), always in decimal, without
+/// limits: for the canonical form (spec §12), which every haus number has.
+/// `1E+05` is `1e5`, `0xFF` is `255`; text that isn't a number literal is an
+/// error (`invalid-number`), as when writing.
+pub(crate) fn literal(text: &str) -> Result<Cow<'_, str>, EncodeError> {
+    if plain_decimal(text.as_bytes()) == Some(text.len()) || is_normalized(text) {
+        return Ok(text.into());
+    }
+    let any = Limits { max_number_length: usize::MAX, max_exponent: u64::MAX, ..Limits::default() };
+    crate::parser::number_literal(text, &any)
+        .map(Cow::Owned)
+        .ok_or_else(|| EncodeError::new(Code::InvalidNumber, "not a number literal"))
 }
 
 /// Whether `text` is a normalized literal (spec §2), as the parser gives it:

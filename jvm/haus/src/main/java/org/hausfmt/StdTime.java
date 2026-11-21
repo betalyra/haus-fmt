@@ -465,6 +465,9 @@ public final class StdTime {
    * so its length in chars is its length in UTF-8 bytes.
    */
   private static String zone(String z) {
+    if (z.equals("Z")) {
+      return "\"Z\" is the offset letter, not a zone: write an IANA zone name (like Europe/Lisbon) or an offset (like +00:00)";
+    }
     Cursor c = new Cursor(z);
     try {
       String o = c.offset();

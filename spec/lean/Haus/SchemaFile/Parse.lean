@@ -64,7 +64,7 @@ def startsAtom (t : Text) : Bool :=
 def found (t : Text) : String :=
   match t with
   | [] => "end of file"
-  | _ => let w := ident t; if w.isEmpty then describe t else s!"'{String.ofList w}'"
+  | _ => let w := ident t; if w.isEmpty then describe t else s!"'{msgText (String.ofList w)}'"
 
 def unexpected {α : Type} (what : String) (code : Code := .schemaSyntax) : P α := do
   fail code s!"expected {what}, found {found (← get)}"
@@ -131,7 +131,7 @@ def attr : P Attr := do
   match ← get with
   | t@('(' :: r) =>
     if t.length != afterName.length then
-      failAt .attributeSpace s!"no space is allowed between @{name} and '('" afterName
+      failAt .attributeSpace s!"no space is allowed between @{msgText name} and '('" afterName
     set r
     return ⟨name, ← attrArgs t (r.length + 1) [], start⟩
   | _ => set afterName; return ⟨name, [], start⟩
@@ -142,7 +142,7 @@ once per type, field or tag. Any other is accepted as it is.
 -/
 def checkAttr (before : List Attr) (a : Attr) : P Unit := do
   if !defined.contains a.name then return
-  if before.any (·.name == a.name) then failAt .attributeTwice s!"@{a.name} appears twice here" a.at_
+  if before.any (·.name == a.name) then failAt .attributeTwice s!"@{msgText a.name} appears twice here" a.at_
   match a.args with
   | [] | [.str _] => return
   | _ =>
@@ -170,7 +170,7 @@ def spread : P String := do
   match t with
   | c :: _ =>
     if isLowerIdentStart c && !isKeyword w then
-      fail .rowParameter s!"row parameters (...{String.ofList w}) aren't supported; spread a named type instead: ...UserEvent"
+      fail .rowParameter s!"row parameters (...{msgText (String.ofList w)}) aren't supported; spread a named type instead: ...UserEvent"
     else if isUpper c then return String.ofList (← takeWhile isIdentChar)
     else unexpected "a type name after '...': ...UserEvent"
   | [] => unexpected "a type name after '...': ...UserEvent"

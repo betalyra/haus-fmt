@@ -60,7 +60,7 @@ func TestTimeProfile(t *testing.T) {
 		{"Duration", "-PT0.001S"}, {"Duration", "-P10D"},
 		{"Duration", "P4294967295Y"}, {"Duration", "PT9007199254740991S"}, {"Duration", "P104249991374D"},
 		{"YearMonth", "2026-11"},
-		{"TimeZone", "Europe/Lisbon"}, {"TimeZone", "UTC"}, {"TimeZone", "Etc/GMT+1"}, {"TimeZone", "-03:30"},
+		{"TimeZone", "Europe/Lisbon"}, {"TimeZone", "Europe/Z"}, {"TimeZone", "UTC"}, {"TimeZone", "Etc/GMT+1"}, {"TimeZone", "-03:30"},
 	}
 	for _, c := range valid {
 		if err := schema.CheckTime(c[0], c[1]); err != nil {
@@ -123,6 +123,10 @@ func TestTimeProfile(t *testing.T) {
 		{"Duration", "P1Y0W", "a duration leaves out components that are zero"},
 		{"Duration", "PT0H1S", "a duration leaves out components that are zero"},
 		{"Duration", "PT0M0S", "a duration leaves out components that are zero"},
+		// Z is the offset letter, not a zone name.
+		{"TimeZone", "Z", "offset letter"},
+		{"ZonedDateTime", "2026-11-09T14:30:00Z[Z]", "offset letter"},
+		{"ZonedDateTime", "2026-11-09T14:30:00+00:00[Z]", "offset letter"},
 		{"YearMonth", "2026-13", "month 13 doesn't exist"},
 		{"YearMonth", "2026-1", "write it like"},
 		{"TimeZone", "europe lisbon", "not an IANA zone name"},
@@ -185,6 +189,11 @@ func TestSchemaErrors(t *testing.T) {
 		{"import std/time (Date)\ntype Date = Int", "duplicate-type"},
 		{"import ./common (A)\ntype B = A", "import-unavailable"},
 		{"import @acme/common (A)\ntype B = A", "import-unavailable"},
+		// A file path has no '~' (grammar path): the module ends before it.
+		{"import ./a~b (A)\ntype B = A", "schema-syntax"},
+		{"import ../x~y (A)\ntype B = A", "schema-syntax"},
+		// A package module is read with its version, which isn't a major.
+		{"import @a/b@1~x (A)\ntype B = A", "import-version"},
 		{"import @Acme/common (A)\ntype B = A", "unknown-module"},
 		{"import acme (A)\ntype B = A", "schema-syntax"},
 		{"type A = { ...r }", "row-parameter"},
@@ -393,7 +402,7 @@ func TestCodecs(t *testing.T) {
 		t.Errorf("even: %v", err)
 	}
 	_, err = pair.DecodeWith(parse(t, `{ a: 3, at: Instant("2026-11-13T10:00:00Z") }`), opts)
-	if code, path := codeAndPath(err); code != "type-mismatch" || path != "$.a" {
+	if code, path := codeAndPath(err); code != "codec-rejected" || path != "$.a" {
 		t.Errorf("odd: %v", err)
 	}
 	// Without codecs, 3 is an Int.
@@ -596,5 +605,32 @@ func TestDeeplyNestedArguments(t *testing.T) {
 		if d := time.Since(start); d > time.Second {
 			t.Errorf("took %v", d)
 		}
+	}
+}
+
+// A '~' after a file path is a syntax error at the '~' (grammar path), as
+// in the reference.
+func TestTildeInFilePath(t *testing.T) {
+	_, err := schema.Parse([]byte("import ./a~b (A)\ntype B = A"), schema.Options{})
+	var e *haus.Error
+	if !asError(err, &e) || e.Code != haus.CodeSchemaSyntax || e.Line != 1 || e.Column != 11 {
+		t.Errorf("got %v", err)
+	}
+}
+
+// A typed single document that doesn't hold one value is not-one-value at
+// $, as in the other bindings (stream/typed.cases.haus).
+func TestTypedNotOneValue(t *testing.T) {
+	s := mustSchema(t, "type Point = { x: Int, y: Int }")
+	point := mustType(t, s, "Point")
+	for _, text := range []string{"{ x: 1, y: 2 }, { x: 1, y: 2 }", "", "// nothing"} {
+		_, err := point.Parse([]byte(text))
+		if code, path := codeAndPath(err); code != haus.CodeNotOneValue || path != "$" {
+			t.Errorf("%q: got %v (path %q)", text, err, path)
+		}
+	}
+	_, err := point.DecodeAll([]haus.Value{})
+	if code, path := codeAndPath(err); code != haus.CodeNotOneValue || path != "$" {
+		t.Errorf("DecodeAll: got %v (path %q)", err, path)
 	}
 }

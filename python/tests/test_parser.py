@@ -10,6 +10,7 @@ from typing import TypeVar
 import pytest
 
 import haus
+import haus.schema
 from haus import Array, Bytes, Limits, Number, Record, String, Variant
 from haus._parser import max_hex_digits
 
@@ -196,3 +197,69 @@ def test_many_keys_parse_in_linear_time() -> None:
         haus.parse(text[:-1] + ",k0:0}")  # a duplicate at the very end is still found
     assert e.value.code == "duplicate-key"
     assert time.perf_counter() - start < 20
+
+
+# ── text given as a str (spec §4): a lone surrogate has no UTF-8 form ──
+
+
+@pytest.mark.parametrize(
+    ("text", "line", "column"),
+    [
+        ('"x\ud800y"', 1, 3),
+        ('{ a: 1,\n  "\U0001f600 x\udc00": 2 }', 2, 7),  # an astral character is one column
+        ("1 // \udfff", 1, 6),
+        ('"\ud83d\ude00"', 1, 2),  # in a str, a surrogate pair is two lone surrogates
+        ("{ a: } \ud800", 1, 8),  # before any other error, as invalid UTF-8 bytes
+    ],
+)
+def test_a_lone_surrogate_in_a_str_is_invalid_utf8(text: str, line: int, column: int) -> None:
+    calls: list[Callable[[str], object]] = [
+        haus.parse_all,
+        haus.format,
+        haus.has_comments,
+        haus.import_json,
+        lambda t: haus.schema.compile_schema("type T = Any")["T"].parse(t),
+    ]
+    for f in calls[:3] + calls[4:]:
+        with pytest.raises(haus.HausSyntaxError) as e:
+            f(text)
+        assert (e.value.code, e.value.line, e.value.column) == ("invalid-utf8", line, column), f
+    assert haus.parse_all('"x\U0001f600y"') == [String("x\U0001f600y")]
+
+
+def test_a_lone_surrogate_in_json_text_is_invalid_utf8() -> None:
+    for f in (haus.import_json, haus.from_haus_json):
+        with pytest.raises(haus.HausJsonError) as e:
+            f('{"_haus": 1,\n "_value": "a\ud800"}')
+        assert (e.value.code, e.value.line, e.value.column) == ("invalid-utf8", 2, 14)
+    with pytest.raises(haus.HausJsonError) as j:
+        list(haus.import_json_lines('"a"\n"b\udc00"\n'))
+    assert (j.value.code, j.value.line, j.value.column) == ("invalid-utf8", 2, 3)
+
+
+def test_a_lone_surrogate_in_a_stream_of_str_is_invalid_utf8_after_the_values_before_it() -> None:
+    reader = haus.StreamReader()
+    assert reader.push("1, 2,\n") == [Number("1"), Number("2")]
+    with pytest.raises(haus.HausSyntaxError) as e:
+        reader.push('"a\ud800",')
+    assert (e.value.code, e.value.line, e.value.column) == ("invalid-utf8", 2, 3)
+
+
+# ── messages show text from the input escaped, at most 40 characters (spec §9.2) ──
+
+
+@pytest.mark.parametrize(
+    ("text", "shown"),
+    [
+        ('{ "a\\u{1B}[2J": 1, "a\\u{1B}[2J": 2 }', "duplicate key 'a\\u{1B}[2J'"),
+        ('{ "\\u{202E}x" 1 }', "after key '\\u{202E}x'"),
+        ("[1, " + "a" * 60 + "]", "unexpected identifier '" + "a" * 39 + "…'"),
+        ("{ " + "A" * 60 + ": 1 }", 'quote it: "' + "A" * 39 + '…"'),
+        ("1" + "x" * 60, "invalid number '1" + "x" * 38 + "…'"),
+        ('"\\\u202e"', "invalid escape '\\\\u{202E}'"),
+    ],
+)
+def test_messages_escape_then_cut_what_they_quote(text: str, shown: str) -> None:
+    with pytest.raises(haus.HausSyntaxError) as e:
+        haus.parse(text)
+    assert shown in e.value.reason, e.value.reason

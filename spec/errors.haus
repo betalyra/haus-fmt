@@ -19,7 +19,7 @@
 Code {
   code: "invalid-utf8",
   category: Syntax,
-  means: "The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.",
+  means: "The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.",
   example: Text("the bytes 22 FF 22: a quote, a byte that never starts a character, a quote"),
   fix: "Save the file as UTF-8.",
 },
@@ -124,7 +124,7 @@ Code {
 Code {
   code: "duplicate-key",
   category: Syntax,
-  means: "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16).",
+  means: "A record has the same key twice, after escapes are read (`a` and `\"a\"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).",
   example: Data("{ a: 1, a: 2 }"),
   fix: "Remove or rename one of the two.",
 },
@@ -138,7 +138,7 @@ Code {
 Code {
   code: "invalid-number",
   category: Syntax,
-  means: "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).",
+  means: "A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).",
   example: Data("007"),
   fix: "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits.",
 },
@@ -319,7 +319,7 @@ Code {
 Code {
   code: "value-too-long",
   category: Limits,
-  means: "One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).",
+  means: "One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).",
   example: Text("a stream whose second value is 64 Mi characters long"),
   fix: "Send smaller values, or raise the value length limit.",
 },
@@ -736,9 +736,16 @@ Code {
   fix: "Write a value of the secret's type; the value isn't shown, so check it where it comes from.",
 },
 Code {
+  code: "codec-rejected",
+  category: Decoding,
+  means: "A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.",
+  example: Text("Money(1, US) decoded with the codec of the profile @haus-fmt/money/iso: US is no ISO 4217 currency"),
+  fix: "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which.",
+},
+Code {
   code: "cannot-encode",
   category: Decoding,
-  means: "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.",
+  means: "Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.",
   example: Text("encode(h.Int, 5): Int is a bigint, 5 is a number"),
   fix: "Pass a value of the host type the binding documents for the type.",
 },

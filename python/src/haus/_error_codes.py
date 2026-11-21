@@ -111,6 +111,7 @@ ErrorCode: TypeAlias = Literal[
     "wrong-payload",
     "invalid-time",
     "invalid-secret",
+    "codec-rejected",
     "cannot-encode",
     "cyclic-value",
     "step-budget",
@@ -338,6 +339,10 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
         ),
         "invalid-secret": ErrorInfo(
             "decoding", "Write a value of the secret's type; the value isn't shown, so check it where it comes from."
+        ),
+        "codec-rejected": ErrorInfo(
+            "decoding",
+            "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which.",
         ),
         "cannot-encode": ErrorInfo("decoding", "Pass a value of the host type the binding documents for the type."),
         "cyclic-value": ErrorInfo("decoding", "Break the cycle before encoding."),

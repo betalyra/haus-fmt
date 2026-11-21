@@ -98,6 +98,8 @@ def _zone(z: str) -> str | None:
     """An IANA zone name by its syntax (never looked up), or an offset."""
     if _NUM_OFFSET.fullmatch(z):
         return _offset(z)
+    if z == "Z":
+        return "Z is the offset letter, not a zone name: write an IANA name (like Etc/UTC) or an offset (like +00:00)"
     parts = z.split("/")
     if len(z) <= 255 and _LETTER.match(z) and all(p not in (".", "..") and _ZONE_PART.fullmatch(p) for p in parts):
         return None

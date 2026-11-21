@@ -202,6 +202,7 @@ of Effect's own decoder, also in schemas you write by hand:
 | a missing key / an unknown field of a closed record | `missing-field` / `unknown-field` |
 | std/time text that the profile rejects (`Date("2026-02-30")`) | `invalid-time` |
 | anything inside a `Schema.Redacted` (a `Secret`): the error names its type, never the value | `invalid-secret` |
+| a check or issue annotated `Haus.CODEC_REJECTED`: a codec rejecting a value the schema accepts (the profiles' codecs, `DateTime` for a zone `Intl` doesn't know) | `codec-rejected` |
 | any other check or transformation that fails | `type-mismatch` |
 | encoding a value the schema can't write | `cannot-encode` |
 | more than one value where one is expected | `not-one-value` |
@@ -244,6 +245,10 @@ import * as money from "@haus-fmt/money/schema.haus"
 const cents = Haus.codec(money.Money, (base) => base.pipe(Schema.decodeTo(Cents, toCents)))
 const order = yield* Haus.decode(Order, cents)(text)   // order.total: Cents
 ```
+
+A value the schema accepts and the codec rejects is `codec-rejected` when the
+codec's check says so: `Schema.refine(isCents, { message: "…", ...Haus.CODEC_REJECTED })`
+(otherwise Effect's failure is `type-mismatch`).
 
 See the [order example](../../examples/order) for a complete one.
 

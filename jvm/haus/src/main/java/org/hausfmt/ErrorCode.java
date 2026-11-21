@@ -3,7 +3,7 @@ package org.hausfmt;
 
 /** The error codes of the catalogue (spec §17): stable, the same in every binding. */
 public enum ErrorCode {
-  /** {@code invalid-utf8}: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. */
+  /** {@code invalid-utf8}: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes. */
   INVALID_UTF8("invalid-utf8", ErrorCategory.SYNTAX, "Save the file as UTF-8."),
   /** {@code version-directive}: The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus. */
   VERSION_DIRECTIVE("version-directive", ErrorCategory.SYNTAX, "Read the file with a version of haus that supports it."),
@@ -31,11 +31,11 @@ public enum ErrorCode {
   BLOCK_STRING_KEY("block-string-key", ErrorCategory.SYNTAX, "Write the key as a basic string, `\"…\"`."),
   /** {@code missing-colon}: A record key is not followed by `:`. */
   MISSING_COLON("missing-colon", ErrorCategory.SYNTAX, "Add `:` between the key and its value."),
-  /** {@code duplicate-key}: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16). */
+  /** {@code duplicate-key}: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12). */
   DUPLICATE_KEY("duplicate-key", ErrorCategory.SYNTAX, "Remove or rename one of the two."),
   /** {@code empty-payload}: A tag with empty parentheses, `Tag()`. A tag without arguments is written without them. */
   EMPTY_PAYLOAD("empty-payload", ErrorCategory.SYNTAX, "Remove the empty parentheses after the tag."),
-  /** {@code invalid-number}: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3). */
+  /** {@code invalid-number}: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12). */
   INVALID_NUMBER("invalid-number", ErrorCategory.SYNTAX, "Write a decimal number (optional `-`, fraction and exponent) or a hex or binary integer, with `_` only between digits."),
   /** {@code unterminated-string}: A string has no closing `"` (in haus or JSON). */
   UNTERMINATED_STRING("unterminated-string", ErrorCategory.SYNTAX, "Add the closing quote. A quote inside the string is written `\\\"`."),
@@ -81,7 +81,7 @@ public enum ErrorCode {
   KEY_TOO_LONG("key-too-long", ErrorCategory.LIMITS, "Use a shorter key, or raise the string length limit."),
   /** {@code tag-too-long}: A tag has more characters than the string limit (default 16 Mi). */
   TAG_TOO_LONG("tag-too-long", ErrorCategory.LIMITS, "Use a shorter tag, or raise the string length limit."),
-  /** {@code value-too-long}: One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi). */
+  /** {@code value-too-long}: One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16). */
   VALUE_TOO_LONG("value-too-long", ErrorCategory.LIMITS, "Send smaller values, or raise the value length limit."),
   /** {@code unsupported-depth}: The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input. */
   UNSUPPORTED_DEPTH("unsupported-depth", ErrorCategory.LIMITS, "Configure a depth limit within the binding's documented maximum."),
@@ -193,7 +193,9 @@ public enum ErrorCode {
   INVALID_TIME("invalid-time", ErrorCategory.DECODING, "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type."),
   /** {@code invalid-secret}: A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15). */
   INVALID_SECRET("invalid-secret", ErrorCategory.DECODING, "Write a value of the secret's type; the value isn't shown, so check it where it comes from."),
-  /** {@code cannot-encode}: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. */
+  /** {@code codec-rejected}: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `&#64;haus-fmt/money/iso` profile. At the place of the codec's type. */
+  CODEC_REJECTED("codec-rejected", ErrorCategory.DECODING, "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which."),
+  /** {@code cannot-encode}: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value. */
   CANNOT_ENCODE("cannot-encode", ErrorCategory.DECODING, "Pass a value of the host type the binding documents for the type."),
   /** {@code cyclic-value}: Encoding: a value contains itself, so it has no finite text. */
   CYCLIC_VALUE("cyclic-value", ErrorCategory.DECODING, "Break the cycle before encoding."),

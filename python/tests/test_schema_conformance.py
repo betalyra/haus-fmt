@@ -144,6 +144,7 @@ INVALID = {
     "import-no-names": "expected a type name",
     "import-not-a-version": "expected a major version after '@'",
     "import-package-uppercase": "a package name is @org/name in lowercase",
+    "import-path-tilde": 'unexpected character "~"',
     "import-space": "expected a module like std/time, @org/name or ./file",
     "import-std-money": "std/money is no longer a standard module; it is the package @haus-fmt/money",
     "import-std-version": "expected an attribute name after '@'",

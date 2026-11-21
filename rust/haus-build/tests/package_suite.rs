@@ -25,7 +25,7 @@ fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
 fn string(v: &Value) -> &str {
     match v {
         Value::String(s) => s,
-        other => panic!("expected a string, found {}", haus::canonical(other)),
+        other => panic!("expected a string, found {}", haus::canonical(other).unwrap()),
     }
 }
 
@@ -33,7 +33,7 @@ fn strings(v: Option<&Value>) -> Vec<String> {
     match v {
         Some(Value::Array(items)) => items.iter().map(|s| string(s).to_owned()).collect(),
         None => vec![],
-        Some(other) => panic!("expected a list of strings, found {}", haus::canonical(other)),
+        Some(other) => panic!("expected a list of strings, found {}", haus::canonical(other).unwrap()),
     }
 }
 
@@ -41,7 +41,7 @@ fn strings(v: Option<&Value>) -> Vec<String> {
 fn variant(v: &Value) -> (&str, &[Value]) {
     match v {
         Value::Variant { tag, args } => (tag, args),
-        other => panic!("expected a variant, found {}", haus::canonical(other)),
+        other => panic!("expected a variant, found {}", haus::canonical(other).unwrap()),
     }
 }
 
@@ -180,6 +180,6 @@ fn package_suite() {
         }
     }
     println!("package suite through the generators: {run} Explicit cases run, {} Npm cases skipped", skipped.len());
-    assert_eq!(cases.len(), 85, "the suite's cases");
+    assert_eq!(cases.len(), 91, "the suite's cases");
     assert!(failures.is_empty(), "{} of {run} cases fail:\n{}", failures.len(), failures.join("\n"));
 }

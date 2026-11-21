@@ -173,4 +173,47 @@ def noTripleQuote : Text → Bool
   | _ :: rest => noTripleQuote rest
   | [] => true
 
+/-! ## Text quoted in messages (§9.2) -/
+
+/-- A character as a message shows it (§9.2): control, bidi and line-separator
+characters as `\u{…}`, in uppercase hex as the canonical form writes them (§12). -/
+def shownChar (c : Char) : List Char :=
+  if isRawControl c || isBidi c || isLineSep c then
+    s!"\\u\{{String.ofList ((Nat.toDigits 16 c.toNat).map Char.toUpper)}}".toList
+  else [c]
+
+/-- The pieces that fit in `n` characters, from the front, whole: a cut never
+falls inside an escape. -/
+def keepPieces : Nat → List (List Char) → List Char
+  | _, [] => []
+  | n, p :: ps => if p.length ≤ n then p ++ keepPieces (n - p.length) ps else []
+
+/-- Text from the input, for a message (§9.2): control and bidi characters
+escaped, and at most 40 characters as shown, after escaping. A longer text is
+cut to whole characters in 39 and marked with `…`, which is within the 40. -/
+def quoteBody (s : String) : List Char :=
+  if (s.toList.map shownChar).flatten.length ≤ 40 then (s.toList.map shownChar).flatten
+  else keepPieces 39 (s.toList.map shownChar) ++ ['…']
+
+theorem keepPieces_length_le (n : Nat) (ps : List (List Char)) : (keepPieces n ps).length ≤ n := by
+  induction ps generalizing n with
+  | nil => simp [keepPieces]
+  | cons p ps ih =>
+    unfold keepPieces
+    split
+    · have := ih (n - p.length); simp; omega
+    · simp
+
+/-- What a message shows of a text is at most 40 characters, the `…` included (§9.2). -/
+theorem quoteBody_length_le (s : String) : (quoteBody s).length ≤ 40 := by
+  unfold quoteBody
+  split
+  · assumption
+  · have := keepPieces_length_le 39 (s.toList.map shownChar); simp; omega
+
+/-- `quoteBody` as a string: what a message shows of a token, a key, a name or a version from the input. -/
+def msgText (s : String) : String := String.ofList (quoteBody s)
+
+#guard msgText "a\x1bb" = "a\\u{1B}b"
+
 end Haus

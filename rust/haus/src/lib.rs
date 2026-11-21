@@ -120,6 +120,19 @@ pub fn parse_bytes(src: &[u8]) -> Result<Vec<Value>, SyntaxError> {
     }
 }
 
+/// Text from data as error messages show it (spec §9): control, bidi and
+/// line-separator characters as `\u{…}`, then at most 40 characters as
+/// shown, a longer text cut and marked with `…`. For the messages of codecs,
+/// which quote what they reject as the binding's own messages do.
+///
+/// ```
+/// assert_eq!(haus::for_message("a\u{202E}b"), r"a\u{202E}b");
+/// assert_eq!(haus::for_message(&"x".repeat(50)), format!("{}…", "x".repeat(39)));
+/// ```
+pub fn for_message(text: &str) -> String {
+    scan::shown(text)
+}
+
 /// Read a file holding one value of type `T`.
 pub fn from_str<T: Decode>(src: &str) -> Result<T, Error> {
     match parse(src)?.as_slice() {
@@ -191,7 +204,7 @@ pub fn to_string_all<T: Encode>(values: &[T]) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::import_json(r#"{"total": 19.90, "paid": true, "note": null}"#).unwrap();
-/// assert_eq!(haus::canonical(&v), "{note:None,paid:True,total:19.90}");
+/// assert_eq!(haus::canonical(&v).unwrap(), "{note:None,paid:True,total:19.90}");
 /// ```
 pub fn import_json(text: &str) -> Result<Value, Error> {
     json::import_json_with(text, &Limits::default())
@@ -215,7 +228,7 @@ pub fn to_haus_json(value: &Value) -> Result<String, EncodeError> {
 ///
 /// ```
 /// let v = haus::from_haus_json(r#"{"_haus": 1, "_value": {"_num": "19.90"}}"#).unwrap();
-/// assert_eq!(haus::canonical(&v), "19.90");
+/// assert_eq!(haus::canonical(&v).unwrap(), "19.90");
 /// assert!(haus::from_haus_json(r#"{"_num": "19.90"}"#).is_err());
 /// ```
 pub fn from_haus_json(text: &str) -> Result<Value, Error> {

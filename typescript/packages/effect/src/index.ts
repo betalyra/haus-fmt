@@ -80,6 +80,15 @@ export { MAX_SUPPORTED_DEPTH }
 // ── errors ───────────────────────────────────────────────────
 
 export { errorJson, HausLimitsError, HausParseError, HausSchemaError, type HausError } from "./errors.js"
+
+/**
+ * Annotations for a codec's own checks (spec §13.4): a value the type's
+ * schema accepts and the codec rejects is `codec-rejected` (spec §17), not
+ * `type-mismatch`. On a filter or an issue:
+ *
+ *   base.pipe(Schema.refine(isCurrency, { message: "a currency: three letters A–Z", ...Haus.CODEC_REJECTED }))
+ */
+export const CODEC_REJECTED = { [CODE]: "codec-rejected" } as const
 export type { ErrorCode, ErrorJson } from "@haus-fmt/haus"
 
 /**
@@ -267,7 +276,7 @@ const asDateTimeUtc = <S extends Schema.Codec<string, string>>(base: S) =>
       SchemaTransformation.transformEffect({
         decode: (s: string) =>
           Option.match(EffectDateTime.make(s), {
-            onNone: () => Effect.fail(new SchemaIssue.InvalidValue({ message: `${s} is not a DateTime.Utc` })),
+            onNone: () => Effect.fail(new SchemaIssue.InvalidValue({ message: `${s} is not a DateTime.Utc`, ...CODEC_REJECTED })),
             onSome: (d) => Effect.succeed(EffectDateTime.toUtc(d)),
           }),
         encode: writeDateTime,
@@ -282,7 +291,7 @@ const asDateTimeZoned = <S extends Schema.Codec<string, string>>(base: S) =>
       SchemaTransformation.transformEffect({
         decode: (s: string) =>
           Option.match(EffectDateTime.makeZonedFromString(s), {
-            onNone: () => Effect.fail(new SchemaIssue.InvalidValue({ message: `${s}: a zone that Intl doesn't know` })),
+            onNone: () => Effect.fail(new SchemaIssue.InvalidValue({ message: `${s}: a zone that Intl doesn't know`, ...CODEC_REJECTED })),
             onSome: Effect.succeed,
           }),
         encode: writeDateTime,
@@ -524,7 +533,9 @@ export function encode<S extends Schema.Top>(schema: S, ...args: ReadonlyArray<A
   const toValue = valueEncoder<S, []>(schema, codecs)
   return Effect.fn("Haus.encode")(function* (value: S["Type"], options?: EncodeOptions) {
     const [format, limits] = withOptions(defaults, options)
-    return stringify(yield* toValue(value, limits), format)
+    const v = yield* toValue(value, limits)
+    // A raw value (`Haus.Any`) the writer can't write (spec §4, §12) is an error, not a defect.
+    return yield* fromSync(() => stringify(v, format), jsonErrorOf)
   })
 }
 
@@ -546,7 +557,7 @@ export function encodeStream<S extends Schema.Top>(schema: S, ...args: ReadonlyA
       Stream.zipWithIndex,
       Stream.mapEffect(([value, index]) =>
         toValue(value, limits).pipe(
-          Effect.map((v) => stringify(v, { style: "compact", ...format }) + ",\n"),
+          Effect.flatMap((v) => fromSync(() => stringify(v, { style: "compact", ...format }) + ",\n", jsonErrorOf)),
           Effect.mapError(atIndex(index)),
         )),
       Stream.withSpan("Haus.encodeStream"),

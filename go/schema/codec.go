@@ -20,7 +20,7 @@ type Codec interface {
 	TypeID() string
 	// Decode turns a value the type's schema decoded into the host value,
 	// or rejects it. An *haus.Error keeps its code; any other error is
-	// type-mismatch.
+	// codec-rejected.
 	Decode(v haus.Value) (any, error)
 	// Encode turns a host value back into a value of the type.
 	Encode(x any) (haus.Value, error)
@@ -88,7 +88,7 @@ func (w *walker) applyCodec(codec Codec, v haus.Value, changed bool) (haus.Value
 	if _, err := codec.Decode(v); err != nil {
 		code := codeOf(err)
 		if code == "" {
-			code = haus.CodeTypeMismatch
+			code = haus.CodeCodecRejected
 		}
 		return nil, false, w.fail(code, "%s rejects the value: %s", codec.TypeID(), messageOf(err))
 	}
@@ -120,7 +120,7 @@ func DecodeAs[T any](t Type, v haus.Value, codec Codec) (T, error) {
 	if err != nil {
 		code := codeOf(err)
 		if code == "" {
-			code = haus.CodeTypeMismatch
+			code = haus.CodeCodecRejected
 		}
 		return zero, &haus.Error{Code: code, Message: fmt.Sprintf("%s rejects the value: %s", codec.TypeID(), messageOf(err)), Path: "$"}
 	}

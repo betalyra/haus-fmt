@@ -113,7 +113,11 @@ def Vector.run (p : Profile) (vec : Vector) : Except String String := do
     | .ok _ => "rejected by the profile"
   match p.decode vec.type check v, vec.accept with
   | .error e, true => throw (why e)
-  | .error e, false => return why e
+  | .error e, false =>
+    -- The profile's rejection has the code `codec-rejected` (§13.4).
+    if (Schema.decode p.env (.ref vec.type) v).toBool && e.code != some .codecRejected then
+      throw s!"rejected by the profile with {errorText e}, not codec-rejected"
+    return why e
   | .ok x, false => throw s!"accepted, writes {canonicalText (Schema.encode x)}"
   | .ok x, true =>
     let wrote := canonicalText (Schema.encode x)

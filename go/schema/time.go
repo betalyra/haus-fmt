@@ -56,9 +56,9 @@ func CheckTime(typeName, text string) error {
 	case nil:
 		return nil
 	case errShape:
-		return fmt.Errorf("%s is not a %s; write it like %s", strconv.Quote(quote(text)), typeName, example)
+		return fmt.Errorf("%s is not a %s; write it like %s", `"`+quote(text)+`"`, typeName, example)
 	}
-	return fmt.Errorf("%s is not a valid %s: %v", strconv.Quote(quote(text)), typeName, err)
+	return fmt.Errorf("%s is not a valid %s: %v", `"`+quote(text)+`"`, typeName, err)
 }
 
 type cursor struct {
@@ -346,8 +346,12 @@ func (c *cursor) yearMonth() error {
 }
 
 // zone checks an IANA zone name by its syntax (it is never looked up), or
-// an offset.
+// an offset. Z is the offset letter of an instant, not a zone: TimeZone("Z")
+// and …Z[Z] are rejected.
 func zone(z string) error {
+	if z == "Z" {
+		return fmt.Errorf(`"Z" is the offset letter of an instant, not a zone; write an offset (+00:00) or a zone name (Etc/UTC)`)
+	}
 	c := &cursor{s: z}
 	if o, err := c.offset(); err == nil && c.atEnd() {
 		return checkOffset(o)
@@ -370,7 +374,7 @@ func zone(z string) error {
 	if ok {
 		return nil
 	}
-	return fmt.Errorf("%s is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)", strconv.Quote(quote(z)))
+	return fmt.Errorf("%s is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)", `"`+quote(z)+`"`)
 }
 
 // component reads a duration component, digits (and a fraction, if

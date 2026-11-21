@@ -10,8 +10,8 @@ import Haus.Lexical
 - `isSemver`: a semantic version (SemVer 2.0.0): `MAJOR.MINOR.PATCH`, numbers
   without leading zeros, an optional pre-release and build. ASCII only.
 - `isMajor`: the major version of an import, `0` or `[1-9][0-9]*`.
-- `quote`: text from a file in a message (§9.2): control and bidirectional
-  characters escaped, at most 40 characters.
+- `quote`: text from a file in a message (§9.2), `Haus.quoteBody` between
+  quotes: control and bidirectional characters escaped, at most 40 characters.
 -/
 
 namespace Haus.Packages
@@ -75,44 +75,8 @@ def majorOf (v : String) : String := (v.splitOn ".").headD v
 /-- The major version an import names: `0` or `[1-9][0-9]*`. -/
 def isMajor (s : String) : Bool := isNumeric s
 
-/-- A character as a message shows it (§9.2): control, bidi and line-separator
-characters as `\u{…}`, in uppercase hex as the canonical form writes them (§12). -/
-def shownChar (c : Char) : List Char :=
-  if isRawControl c || isBidi c || isLineSep c then
-    s!"\\u\{{String.ofList ((Nat.toDigits 16 c.toNat).map Char.toUpper)}}".toList
-  else [c]
-
-/-- The pieces that fit in `n` characters, from the front, whole: a cut never
-falls inside an escape. -/
-def keepPieces : Nat → List (List Char) → List Char
-  | _, [] => []
-  | n, p :: ps => if p.length ≤ n then p ++ keepPieces (n - p.length) ps else []
-
-/-- Text from a file, for a message (§9.2): control and bidi characters
-escaped, and at most 40 characters as shown, after escaping. A longer text is
-cut to whole characters in 39 and marked with `…`, which is within the 40. -/
-def quoteBody (s : String) : List Char :=
-  if (s.toList.map shownChar).flatten.length ≤ 40 then (s.toList.map shownChar).flatten
-  else keepPieces 39 (s.toList.map shownChar) ++ ['…']
-
 /-- `quoteBody` between quotes. -/
 def quote (s : String) : String := "\"" ++ String.ofList (quoteBody s) ++ "\""
-
-theorem keepPieces_length_le (n : Nat) (ps : List (List Char)) : (keepPieces n ps).length ≤ n := by
-  induction ps generalizing n with
-  | nil => simp [keepPieces]
-  | cons p ps ih =>
-    unfold keepPieces
-    split
-    · have := ih (n - p.length); simp; omega
-    · simp
-
-/-- What a message shows of a text is at most 40 characters, the `…` included (§9.2). -/
-theorem quoteBody_length_le (s : String) : (quoteBody s).length ≤ 40 := by
-  unfold quoteBody
-  split
-  · assumption
-  · have := keepPieces_length_le 39 (s.toList.map shownChar); simp; omega
 
 #guard isPackageName "@haus-fmt/money"
 #guard isPackageName "@acme/l00a"

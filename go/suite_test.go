@@ -430,6 +430,52 @@ func TestFormatOptionsSuite(t *testing.T) {
 	}
 }
 
+// The format option cases held back from the suite while the bindings
+// disagreed: options taken literally, negative ones refused.
+func TestFormatOptionsHeldCases(t *testing.T) {
+	ok := []struct {
+		input         string
+		indent, width int
+		want          string
+	}{
+		{"{ a: { b: [1] } }", 0, 80, "{\na: {\nb: [\n1,\n],\n},\n}\n"},
+		{"Point(1, 2)", 2, 0, "Point(\n  1,\n  2,\n)\n"},
+		{"Point(1, 2)", 0, 0, "Point(\n1,\n2,\n)\n"},
+		{"{ a: Point(1, 2) }", 2, 0, "{\n  a: Point(\n    1,\n    2,\n  ),\n}\n"},
+	}
+	for _, c := range ok {
+		got, err := Format([]byte(c.input), FormatOptions{Indent: c.indent, Width: c.width})
+		if err != nil || string(got) != c.want {
+			t.Errorf("%q indent %d width %d: %q, %v; want %q", c.input, c.indent, c.width, got, err, c.want)
+		}
+	}
+	for _, o := range []FormatOptions{{Indent: 2, Width: -1}, {Indent: -1, Width: 80}, {Indent: -2, Width: 40}} {
+		if _, err := Format([]byte("{ a: Point(1, 2) }"), o); !errors.Is(err, ErrInvalidOptions) {
+			t.Errorf("%+v: %v, want ErrInvalidOptions", o, err)
+		}
+	}
+}
+
+// Text quoted in a message is escaped first and then cut to 40 characters
+// as shown, never inside an escape (spec §9).
+func TestQuoteForMessage(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"abc", `"abc"`},
+		{strings.Repeat("a", 40), `"` + strings.Repeat("a", 40) + `"`},
+		{strings.Repeat("a", 41), `"` + strings.Repeat("a", 39) + `…"`},
+		// 10 escapes of 6 characters: 60 as shown, cut to 6 whole ones.
+		{strings.Repeat("\x1b", 10), `"` + strings.Repeat(`\u{1B}`, 6) + `…"`},
+		{strings.Repeat("a", 36) + "\u202e", `"` + strings.Repeat("a", 36) + `…"`},
+		{strings.Repeat("a", 32) + "\u202e", `"` + strings.Repeat("a", 32) + `\u{202E}"`},
+		{"a\xffb", `"a\u{FFFD}b"`},
+	}
+	for _, c := range cases {
+		if got := quoteForMessage(c.in); got != c.want {
+			t.Errorf("%q: got %s, want %s", c.in, got, c.want)
+		}
+	}
+}
+
 // withoutComments formats src as pretty with its comments removed.
 func withoutComments(t *testing.T, src []byte, o FormatOptions) []byte {
 	p := newParser(string(src), DefaultLimits(), true)

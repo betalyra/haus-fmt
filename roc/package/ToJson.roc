@@ -398,7 +398,7 @@ expect ToJson.to_str({ id: 1, nick: Missing }, |u, e| ToJson.object(e, [("id", T
 expect ToJson.to_str((1, 2), |(a, b), e| ToJson.tagged_args("Point", e, [|inner| ToJson.i32(a, inner), |inner| ToJson.i32(b, inner)])) == Ok("{\"_tag\":\"Point\",\"values\":[1,2]}")
 expect ToJson.to_str({}, |_, e| ToJson.tag("Empty", e)) == Ok("{\"_tag\":\"Empty\"}")
 expect ToJson.unknown("Hexagon", [Num("1")], Encode.top).map_ok(|o| JsonValue.to_str(o.value)) == Ok(Ok("{\"_tag\":\"Hexagon\",\"_args\":[{\"_num\":\"1\"}]}"))
-expect ToJson.unknown("Hexagon", [Num("x")], Encode.top) == Err({ code: "cannot-encode", reason: "not a number literal", path: "._args[0]" })
+expect ToJson.unknown("Hexagon", [Num("x")], Encode.top) == Err({ code: "invalid-number", reason: "not a number literal", path: "._args[0]" })
 expect ToJson.to_str(Tag("A", []), ToJson.any) == Ok("{\"_tag\":\"A\"}")
 # DEL, C1 and bidi controls are escaped.
 expect ToJson.to_str("a\u(7F)\u(85)\u(202E)", ToJson.str) == Ok("\"a\\u007f\\u0085\\u202e\"")

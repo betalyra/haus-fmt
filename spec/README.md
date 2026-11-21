@@ -102,6 +102,8 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
   <!-- rule: numbers.schemaless.no-size-rejection -->
   <!-- rule: numbers.schemaless.type-from-type -->
 - **Without a schema:** a decoder that turns values into native types without a schema MUST NOT lose precision, and MUST NOT reject a number for its size within the limits (§7). Every integer becomes an arbitrary-size integer type (`bigint` in JavaScript), and every other number an exact decimal or its literal text, never a rounded binary float. A decoder MUST NOT choose the type by looking at the data, such as a JavaScript `number` for a field whose integers all fit one: types must not depend on the document, and a stream reader can't look ahead at later values.
+  <!-- rule: numbers.schemaless.negative-zero-int -->
+  `-0` converted to an integer type that has no negative zero (a JavaScript `bigint`, a Python `int`, a Rust integer type) is 0, as an `Int` decodes it (§15). The haus value keeps `-0`: parsing, writing, the canonical form and the hash don't change.
   <!-- rule: numbers.int.arbitrary -->
 - **`Int`:** decodes to an arbitrary-size integer in every binding. For a native fixed-size integer, the schema says `Int32`, `Int64` and so on, and a value out of range is an error.
   <!-- rule: numbers.float.special-tags -->
@@ -115,6 +117,8 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
 <!-- rule: strings.utf8.reject-invalid -->
 <!-- rule: strings.utf8.bom-ignored -->
 - **Encoding:** input is UTF-8. Invalid UTF-8 MUST be rejected. A leading byte order mark is ignored.
+  <!-- rule: strings.utf8.host-strings -->
+- **Host strings:** a parser that takes the language's string type instead of bytes (UTF-16 in JavaScript and Java, Python's `str`) MUST reject an unpaired surrogate in it as `invalid-utf8`, at its position (one column, §8), as it rejects invalid UTF-8: the string has no UTF-8 form, so no other reader could read it. This holds for data and schema files alike. A JSON reader reports one in a JSON string as `unpaired-surrogate` (§16).
   <!-- rule: strings.escapes.set -->
   <!-- rule: strings.escapes.scalar-value -->
 - **Escapes:** `\"`, `\\`, `\n`, `\r`, `\t` and `\u{1–6 hex digits}`. A `\u{…}` escape MUST denote a Unicode scalar value, so surrogates are rejected.
@@ -181,7 +185,7 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
 <!-- rule: streams.writers.comma-after-every -->
 - **Separators:** top-level values are separated by commas, and a trailing comma is allowed. Writers of streams SHOULD put a comma after every value, including the last. Then appending to a file, `tail -f` and concatenating files all produce valid streams, and a reader knows a value is complete when it sees the comma.
   <!-- rule: streams.truncation.strict-mode -->
-- **Truncation:** a cut-off last value can look valid, e.g. `100` instead of `1000`. Readers of network streams SHOULD offer a strict mode that requires the comma after the last value and reports a truncated stream otherwise.
+- **Truncation:** a cut-off last value can look valid, e.g. `100` instead of `1000`. Stream readers MUST offer a strict mode that requires the comma after the last value and reports a stream that ends without it as truncated (`stream-truncated`). Readers of network streams SHOULD use it. A single document can't show that it was cut off: a transport that may cut data sends its length, or the value as a stream with its comma.
   <!-- rule: streams.document.one-value -->
   <!-- rule: streams.document.no-value -->
   <!-- rule: streams.document.trailing-comma -->
@@ -227,6 +231,8 @@ Nesting depth is counted on the text as written, since it is checked while parsi
 <!-- rule: limits.depth.binding-maximum -->
 <!-- rule: limits.depth.reject-unsupported -->
 A binding whose parser, decoder or encoder uses the call stack MAY support only a bounded nesting depth, of at least the default (256). It MUST document that maximum, and MUST reject a larger configured depth when the limits are set, with an error that names the maximum, rather than overflow its stack on deep input.
+<!-- rule: limits.depth.stack-documented -->
+It SHOULD also document the stack it needs at that maximum, so that an application that runs it on a thread with a smaller stack than the main one can give that thread enough.
 
 <!-- rule: limits.portability.defaults -->
 **Portability.** A document within the default limits is read the same by every conforming implementation. One that needs higher limits is portable only to readers that are configured, and able, to accept it: a reader may be set to lower limits, and a binding's supported depth (above) may be lower than the depth a document needs.
@@ -244,6 +250,9 @@ Parsing time MUST be linear in the input size for any input within the limits, a
 <!-- rule: positions.error.code -->
 Errors report a 1-based line and column. Columns count **Unicode code points**, so a character outside the Basic Multilingual Plane, such as an emoji, is one column. A byte order mark at the start is a character too: the first character after it is in column 2. A line ends at a line feed; a carriage return before it belongs to that line break, and no other character (not U+2028 or U+2029) starts a new line. Every error also has a code that names the mistake, the same in every implementation (§17).
 
+<!-- rule: positions.error.in-strings -->
+An error inside a string is at the character that is wrong, in a block string too: a control or bidi character, or a bad escape, at that character; a content line indented less than the closing `"""` at the start of that line; text before the closing `"""` on its line at the closing `"""`. Only an error about the string as a whole is at its opening quotes: one that isn't closed, or is longer than the string limit (§7).
+
 ## 9. Security considerations
 
 <!-- rule: security.tags.data-only -->
@@ -254,7 +263,7 @@ Errors report a 1-based line and column. Columns count **Unicode code points**, 
    <!-- rule: security.errors.quoted-text-escaped -->
    <!-- rule: security.errors.version-quoted-if-valid -->
    <!-- rule: security.packages.declared-places -->
-2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that errors quote from files (a token, a name, a version) is escaped (control and bidirectional characters) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40; a version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used.
+2. **No references, includes or remote schemas.** The format has no anchors, references, includes or imports, and parsing never touches the network or the file system. Schemas belong to the reader. Schema imports (§13.3) are resolved when a schema is built, from packages the application's package manager installed and pinned, never while parsing. A package is data: implementations read only its `package.haus`, `schema.haus` and `package.json`, which are never symbolic links, and its schema imports packages, never files (§13.3). So a package can't make a build read other files, and errors never show the content of a file they refused to read. Text that an error message quotes from its input (a token, a key, a tag, a name, a version) is escaped (control and bidirectional characters, and U+2028 and U+2029) and at most 40 characters long as shown, after escaping, a cut marked with `…` within those 40. This holds for every message: of the data parser, the schema reader and checker, the decoders, the JSON readers and package resolution alike, whatever the input (data, a schema file, a manifest, a `package.json`). A version from a `package.json` is quoted only if it is a valid version. Packages are looked for only among those given explicitly and the build's own dependencies, never in global locations or over the network, so a package planted in a shared folder is never used.
    <!-- rule: security.limits.while-parsing -->
 3. **Enforce limits while parsing** (§7), not afterwards.
    <!-- rule: security.keys.data-only -->
@@ -401,7 +410,7 @@ For people.
   <!-- rule: format.strings.form-change -->
   <!-- rule: format.numbers.serialized -->
   <!-- rule: format.numbers.too-long-unwritable -->
-- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the writer's number limit (§7, the default unless configured otherwise) can't be written (`number-too-long`).
+- **Numbers keep their source spelling** when a document is reformatted (`0xFF` stays `0xFF`). **Strings** keep theirs only where the layout writes them in the same form: a `"…"` string stays as written (`"\u{41}"` stays `"\u{41}"`) unless pretty turns it into a block string because it holds a line feed. A string that changes form is written from its value: in pretty, a `"…"` string with a line feed becomes a block string and a block string without one becomes `"…"`; compact and minimised write every block string as `"…"`. When serializing values with no source text, numbers are written in normalized form, always in decimal; an integer whose decimal form is longer than the writer's number limit (§7, the default unless configured otherwise) can't be written (`number-too-long`), see "Values built in code" below.
   <!-- rule: format.pretty.stream.commas -->
   <!-- rule: format.pretty.stream.blank-after-multiline -->
   <!-- rule: format.pretty.stream.trailing-comments -->
@@ -474,6 +483,18 @@ Person{name:"Jane Smith",age:28,type:Designer},
   <!-- rule: format.minimised.encoder-may -->
 - Encoders MAY offer minimised for the wire and storage; compact stays their default.
 
+<!-- rule: format.values.built-in-code -->
+**Values built in code.** A writer given values built in code, not parsed, writes only haus values (§1). Anything else is an error with the code of the mistake, never written as it is:
+
+- a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`;
+- a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number, written normalized;
+- a record with a key twice: `duplicate-key`;
+- a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or something that is no haus value at all: `cannot-encode`;
+- a value that contains itself: `cyclic-value`;
+- a value outside the writer's limits (§7): the limit's code (`nesting-too-deep`, `number-too-long`, `string-too-long`, `key-too-long`, `tag-too-long`).
+
+A binding whose value types can't hold such a value (a record type that rejects a duplicate key when it is built) never meets the error. The canonical form and the hash fail the same way (§12).
+
 <!-- rule: format.comments.refuse-pretty -->
 <!-- rule: format.comments.refuse-in-place -->
 **Comments and layouts.** Tools that cannot keep comments MUST refuse to format in the pretty layout rather than drop them. A tool that rewrites a file in place in the compact or minimised layout MUST refuse when the file has comments, unless the user asked to drop them; writing to standard output or another file needs no such check.
@@ -491,6 +512,9 @@ values in tests; for people there are the layouts of §11.
 Bindings SHOULD provide `canonical(value)`, `equals(a, b)`,
 `hash(value)` and `hashAll(values)`, and MAY provide `compare(a, b)`. A binding that provides any of them MUST follow this section
 exactly, so that every binding gives the same bytes and the same hash.
+
+<!-- rule: canonical.api.values-only -->
+They are defined for haus values only. Given a value built in code that isn't one (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate), `canonical`, `hash`, `hashAll` and `compare` MUST fail with the error a writer gives for it (§11, "Values built in code"), and never write or hash it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
 
 <!-- rule: canonical.form.text -->
 The canonical form of a value is UTF-8 without a byte order mark, with no
@@ -586,7 +610,7 @@ There are two conformance classes:
 - A **schema binding** decodes values with a schema. It MUST support the prelude and every standard module completely, and MUST check their rules: `Int8(300)` and `Date("2026-02-30")` are errors. Applications MAY choose other host types for standard types (§13.4), but never change what is valid.
 
 <!-- rule: prelude.rules.equality-unchanged -->
-Rules about values never change haus equality (§2), the canonical form or the hash (§12): those compare values as written. Two strings a standard type considers the same time (`.250` and `.25`) are different haus values, as `19.90` and `19.9` are different numbers that a `Float64` decodes alike.
+Rules about values never change haus equality (§2), the canonical form or the hash (§12): those compare values as written. Two strings a standard type considers the same time (`.250` and `.25`, or the offsets `Z` and `+00:00`) are different haus values, as `19.90` and `19.9` are different numbers that a `Float64` decodes alike.
 
 ### 13.2 Standard modules
 
@@ -662,7 +686,7 @@ and never in global or environment-wide locations (npm's global folder, `NODE_PA
 <!-- rule: packages.npm.declaration-source -->
 <!-- rule: packages.npm.declared-fields -->
 <!-- rule: packages.npm.explicit-declared -->
-- A file imports only packages it declares, and the implementation checks this before it looks. For a package's `schema.haus`, the declarations are in the package's own `package.json`. For other files, they are in the nearest `package.json` above the file's real path, skipping one that has neither a `name` nor a dependency field (such as `{ "type": "module" }`). The declared packages are those in `dependencies`, `peerDependencies` and `optionalDependencies`, and for every file other than a package's `schema.haus` also `devDependencies`. Without such a `package.json`, a file declares nothing. Explicit packages count as declared. Otherwise: `undeclared-package`.
+- A file imports only packages it declares, and the implementation checks this before it looks. For a package's `schema.haus`, the declarations are in the package's own `package.json`. For other files, they are in the nearest `package.json` above the file's real path, skipping one that is valid JSON but not an object, or an object with neither a `name` nor a dependency field (such as `{ "type": "module" }`). The search stops at a `package.json` that isn't valid JSON or isn't a regular file (a directory, a broken link): that one declares nothing. The declared packages are the member names of `dependencies`, `peerDependencies` and `optionalDependencies`, and for every file other than a package's `schema.haus` also `devDependencies`; a dependency field that isn't an object declares nothing, and still makes the file a project's. Without such a `package.json`, a file declares nothing. Explicit packages count as declared. Otherwise: `undeclared-package`.
   <!-- rule: packages.npm.search-upward -->
   <!-- rule: packages.npm.skip-node-modules-dirs -->
   <!-- rule: packages.npm.skip-world-writable -->
@@ -692,7 +716,7 @@ and never in global or environment-wide locations (npm's global folder, `NODE_PA
 | schema files in one schema, the root included (manifests and `package.json` don't count) | 256 | `too-many-files` |
 
 <!-- rule: packages.package-json.invalid -->
-A `package.json` that isn't valid JSON declares nothing and gives no version to check.
+A `package.json` that isn't valid JSON, or isn't an object, declares nothing and gives no version to check. Its `version` is checked only when it is a string.
 
 **Distribution.** There is no haus registry. Authors publish schema packages however their users install dependencies: language registries (npm, crates.io, PyPI, …), private registries, git dependencies, workspaces, or copies in the project (vendored, still imported by name). Codec libraries for registries that reject git dependencies (crates.io, PyPI) can carry the schema text they target.
 
@@ -778,7 +802,8 @@ An import names at most a major version, `@N` without leading zeros. A minimum m
 A schema binding MAY let applications choose the host type of a named type without arguments: a **codec**, selected by the type's id. A codec:
 
 <!-- rule: codecs.rules.after-schema -->
-- runs after the type's schema: it can reject more values, never fewer;
+<!-- rule: codecs.rules.rejected-code -->
+- runs after the type's schema: it can reject more values, never fewer. A value the schema accepts and the codec rejects is the error `codec-rejected`, at the place of the codec's type (§15), and so is a value a profile's rule rejects;
   <!-- rule: codecs.rules.round-trip -->
 - encodes back to the type's values, so that decoding what it encoded gives the same result: decode, encode, decode is the same as decode;
   <!-- rule: codecs.rules.meaning-kept -->
@@ -1023,6 +1048,8 @@ Tools that show data, such as editors and `haus check`, SHOULD mask values of a 
 
 <!-- rule: decode.types.stream -->
 **Streams.** `Stream a` describes a file: each top-level value decodes as an `a`, on its own, as it is read. An error names the value's index in the stream.
+<!-- rule: decode.types.single-document -->
+Any other type describes a single document (§6): a text with no value, or with two or more, is `not-one-value`, at `$`.
 
 <!-- rule: decode.encode.fits-decoding -->
 **Encoding.** A binding that encodes writes values that the type accepts, and encoding fits decoding: for every value `v` that a type accepts, decoding `encode(decode(v))` gives the same result as decoding `v`. `encode(decode(v))` is equal to `v` (§2), except where decoding drops information by design:
@@ -1033,6 +1060,9 @@ Tools that show data, such as editors and `haus check`, SHOULD mask values of a 
 - the spelling of a float: `0.10` decodes as `Float64` to the float 0.1, which is written `0.1`;
   <!-- rule: decode.encode.negative-zero-int -->
 - `-0` decoded as an integer, which is written `0`.
+
+<!-- rule: decode.encode.proxy -->
+So a service that decodes with a schema and encodes again drops the fields its schema doesn't list, also those a newer minor version of the schema added (§13.3). A proxy that passes data on forwards the original bytes, or keeps the parts it doesn't own as `Any`.
 
 <!-- rule: decode.encode.integers-decimals -->
 Integers are written as decimal integers, and decimals as their literal, scale included (§3).
@@ -1093,6 +1123,8 @@ Schema-based JSON is not a pass-through format. Read without its schema (by the 
 <!-- rule: json.lines.format -->
 <!-- rule: json.lines.reader-tolerance -->
 **Streams.** A stream maps to JSON Lines: one JSON text per value, each followed by a line feed. In self-describing JSON each line is an envelope of its own, so lines stay independent for appending and tailing (§6). Readers accept a missing line feed after the last value and CR LF line ends; an empty line is an error (`json-syntax`: it is no JSON text). A byte order mark is ignored only at the start of the stream, as in haus (§4), not at the start of each line, where it is `json-syntax` too. These errors name the line.
+<!-- rule: json.lines.no-value-limit -->
+The value limit of §7 counts haus text and applies to haus stream readers only: a line of JSON Lines has no length limit of its own. The limits on the value a line holds apply, as for any JSON text.
 
 ### 16.1 JSON import
 
@@ -1170,6 +1202,16 @@ A type's JSON can be `null` only if it is a `Maybe` that uses `null`, directly o
 <!-- rule: json.schema.read-invalid-tag -->
 <!-- rule: json.schema.read-values -->
 **Reading** with a type accepts the forms above and the rules of §15 apply: an open record or record payload ignores members it doesn't list, a closed one rejects them, and every other object (a tagged `Maybe`, a case without payload or with positional arguments) rejects members besides its own; an integer type accepts only a whole number by spelling (`1.0` is not one); a float type rounds as in §15, and a number too large for it is an error; a `"_tag"` an open variant doesn't list reads as an unknown value, and MUST be a tag (§4): with no other member, the bare tag; with `"_args"` and no other member, its arguments read as self-describing values, and an `"_args"` that isn't a non-empty array is an error (`haus-json-form`); otherwise all its other members read as a record payload by the import (16.1): `{"_tag": "Hexagon", "sides": 6}` reads as `Hexagon { sides: 6 }`. Anything else is an error. A `"_tag"` that isn't a string, or isn't a tag (§4), is `invalid-tag`. The string of a closed variant whose tags have no payload reads as a `"_tag"` does: one that isn't a tag (`"debug"`, `""`, `"1A"`) is `invalid-tag`, a tag the variant doesn't list (`"Warn"`) is `unknown-tag`. A positional case whose `"values"` isn't an array, or has the wrong number of elements, is `wrong-payload`, as in haus text (§15).
+
+<!-- rule: json.schema.one-form -->
+**One form per value.** A reader accepts the one JSON form of each value (above), not the other forms common JSON producers write for it, so no data is read in two ways:
+
+- `1e-7000`, valid RFC 8259 JSON, is `exponent-too-large` in every form (Limits, above), as in haus text.
+- `1.0` for an integer type is `not-an-integer`, as in haus text (§15), although some producers write whole numbers so.
+- `null` for an optional field (`x?: T`) is `type-mismatch`, unless `T` is a `Maybe` that uses `null`, where it is `None`: a field without a value is a missing member.
+- A JSON number for `Int`, `Int64` or `UInt64` is `type-mismatch`, however small: these are strings (above).
+
+JSON in such forms is converted before a haus reader reads it.
 
 <!-- rule: json.places.json-root -->
 <!-- rule: json.places.lines-index -->

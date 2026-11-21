@@ -167,7 +167,7 @@ for _, issue := range s.CheckText("Root", text) {
 
 ```go
 codecs, _ := schema.NewCodecs(money.Iso, geo.Wgs84)
-v, err := order.DecodeWith(value, schema.DecodeOptions{Codecs: codecs}) // $.total: … Eur is not a currency [type-mismatch]
+v, err := order.DecodeWith(value, schema.DecodeOptions{Codecs: codecs}) // $.total: … Eur is not a currency [codec-rejected]
 ```
 
 ## Examples

@@ -14,11 +14,15 @@
  *   types nested in themselves       → named type aliases (type Comment = …)
  */
 import { defineOwn } from "./own.js"
+import { checkWellFormed } from "./errors.js"
 import { Parser } from "./parser.js"
 import { infer, isMaybeShape, printShape, recursiveNames, resolve, type RecordShape, type Shape, type VariantShape } from "./infer.js"
 import type { Value } from "./value.js"
 
-const parseAll = (text: string): Value[] => new Parser(text).parseSequence()
+const parseAll = (text: string): Value[] => {
+  checkWellFormed(text)
+  return new Parser(text).parseSequence()
+}
 const INTEGER = /^-?\d+$/
 
 const TIME_TAGS = new Set(["Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone"])

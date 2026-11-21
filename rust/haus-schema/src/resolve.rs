@@ -610,7 +610,7 @@ impl<'a> Loader<'a> {
                     return Err(self.lift(at(Code::UnknownModule, reason)));
                 }
                 if module != "time" {
-                    let reason = format!("unknown standard module {} (there is std/time)", imp.module);
+                    let reason = format!("unknown standard module {} (there is std/time)", quote(&imp.module));
                     return Err(self.lift(at(Code::UnknownModule, reason)));
                 }
                 for (n, pos) in &imp.names {
@@ -626,8 +626,10 @@ impl<'a> Loader<'a> {
                 || imp.module.starts_with("./")
                 || imp.module.starts_with("../");
             if !is_module {
-                let reason =
-                    format!("unknown module {}: import std/…, a package @org/name or a file ./name", imp.module);
+                let reason = format!(
+                    "unknown module {}: import std/…, a package @org/name or a file ./name",
+                    quote(&imp.module)
+                );
                 return Err(self.lift(at(Code::UnknownModule, reason)));
             }
             let dep = self.import(unit, imp)?;
@@ -636,7 +638,7 @@ impl<'a> Loader<'a> {
                     let mut has: Vec<&str> = self.units[dep].file.types.iter().map(|t| t.name.as_str()).collect();
                     has.dedup();
                     let list = if has.is_empty() { String::new() } else { format!(" (it has {})", has.join(", ")) };
-                    let reason = format!("{} has no type {n}{list}", imp.module);
+                    let reason = format!("{} has no type {n}{list}", quote(&imp.module));
                     return Err(self.lift(Fail { unit, pos: *pos, code: Code::UnknownImport, reason }));
                 };
                 self.bring(unit, n, *pos, Some((dep, d)), None)?;

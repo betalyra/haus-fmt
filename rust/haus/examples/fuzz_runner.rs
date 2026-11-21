@@ -70,7 +70,15 @@ fn streamed(bytes: &[u8], i: usize) -> Result<Vec<Value>, haus::SyntaxError> {
 /// With `--canonical`: the canonical form of each value (spec §12), as JSON strings.
 fn canonical_line(result: Result<Vec<Value>, haus::SyntaxError>) -> String {
     match result {
-        Ok(values) => format!("ok {}", Json::Array(values.iter().map(|v| json!(haus::canonical(v))).collect())),
+        Ok(values) => format!(
+            "ok {}",
+            Json::Array(
+                values
+                    .iter()
+                    .map(|v| json!(haus::canonical(v).expect("a value read or written has a canonical form")))
+                    .collect()
+            )
+        ),
         Err(e) => line(Err(e)),
     }
 }

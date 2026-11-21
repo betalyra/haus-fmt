@@ -404,7 +404,7 @@ def npmLookup (start : Path) (name : String) : M (Option Path) := do
     match ← look (·.realPath p) with
     | .ok real =>
       if (← look (·.childKind? real "package.haus")).isSome then return some real
-      fail .importNotFound s!"{name}: {showPath p} has no package.haus (not a schema package); the search stops there"
+      fail .importNotFound s!"{msgText name}: {showPath p} has no package.haus (not a schema package); the search stops there"
     | .error _ => continue
   return none
 
@@ -434,14 +434,14 @@ def candidates (importer : Importer) (name : String) : M (List (Path × String))
       let start := match importer with | .app p => p.dropLast | .pkg dir _ _ => dir
       pure ((← npmLookup start name).toList.map fun d => (d, showPath d))
     else if inFolders.isEmpty then
-      fail .undeclaredPackage s!"{importer.show} imports {name}, but {where_}"
+      fail .undeclaredPackage s!"{importer.show} imports {msgText name}, but {where_}"
     else pure []
   let all := inFolders ++ fromNpm.filter fun (d, _) => !inFolders.any (·.1 == d)
   if all.isEmpty then
     let broken ← ask (·.broken)
     let broken := if broken.isEmpty then "" else
       s!"; these entries of the folders given have no valid package.haus: {", ".intercalate broken}"
-    fail .importNotFound s!"{importer.show} imports {name}, which isn't found{broken}"
+    fail .importNotFound s!"{importer.show} imports {msgText name}, which isn't found{broken}"
   return all
 
 /--
@@ -453,19 +453,19 @@ def resolveImport (loadFn : Target → M Loaded) (importer : Importer) (imp : Im
   | .std _ => pure none  -- checked by `scan`
   | .file path =>
     match importer with
-    | .pkg _ name _ => fail .packagePath s!"the schema of {name} imports the file {path}; a package imports only packages, by name"
+    | .pkg _ name _ => fail .packagePath s!"the schema of {name} imports the file {msgText path}; a package imports only packages, by name"
     | .app p =>
       let comps := splitPath path
       let comps := comps.dropLast ++ [comps.getLastD "" ++ ".schema.haus"]
       match ← look (resolve · maxLinks p.dropLast comps) with
-      | .error _ => fail .importNotFound s!"{showPath p} imports {path}, which isn't found"
+      | .error _ => fail .importNotFound s!"{showPath p} imports {msgText path}, which isn't found"
       | .ok real =>
         if let some d ← look (inPackage · real) then
-          fail .packagePath s!"{showPath p} imports {path}, a file in the package directory {showPath d}; import the package by its name"
+          fail .packagePath s!"{showPath p} imports {msgText path}, a file in the package directory {showPath d}; import the package by its name"
         if !(real.getLast?.any (·.endsWith ".schema.haus")) then
-          fail .importNotFound s!"{showPath p} imports {path}, which is not a schema file (its real path doesn't end in .schema.haus); it is not read"
+          fail .importNotFound s!"{showPath p} imports {msgText path}, which is not a schema file (its real path doesn't end in .schema.haus); it is not read"
         if (← look (·.kindAt? real)) != some .file then
-          fail .importNotFound s!"{showPath p} imports {path}, which is not a regular file; it is not read"
+          fail .importNotFound s!"{showPath p} imports {msgText path}, which is not a regular file; it is not read"
         let r ← loadFn (.file real)
         checkNames imp r.types path
         pure none
@@ -474,12 +474,12 @@ def resolveImport (loadFn : Target → M Loaded) (importer : Importer) (imp : Im
     let mut cls : Option Nat := none
     for (dir, shown) in cands do
       let some m ← manifestOf dir shown
-        | fail .importNotFound s!"{importer.show} imports {name}: {shown} has no package.haus"
+        | fail .importNotFound s!"{importer.show} imports {msgText name}: {shown} has no package.haus"
       if m.name != name then
-        fail .importNotFound s!"{importer.show} imports {name}: the package in {shown} is {m.name}"
+        fail .importNotFound s!"{importer.show} imports {msgText name}: the package in {shown} is {msgText m.name}"
       if let some n := major then
         if majorOf m.version != n then
-          fail .importVersion s!"{importer.show} imports {name}@{n}, and {shown} has version {m.version}"
+          fail .importVersion s!"{importer.show} imports {msgText name}@{msgText n}, and {shown} has version {msgText m.version}"
       let r ← loadFn (.copy dir)
       if cls.isNone then cls := r.cls
       checkNames imp r.types name
@@ -528,7 +528,7 @@ def addClass (c : Class) (cs : Classes) : Except Err (Nat × Classes) :=
     match h : cs.list.find? (·.name == c.name) with
     | some d =>
       let differ := if d.version == c.version then ", with other files" else ""
-      .error ⟨.duplicatePackage, s!"two packages named {c.name}: {d.version} in {showPath d.dir} and {c.version} in {showPath c.dir}{differ}"⟩
+      .error ⟨.duplicatePackage, s!"two packages named {msgText c.name}: {msgText d.version} in {showPath d.dir} and {msgText c.version} in {showPath c.dir}{differ}"⟩
     | none => .ok (cs.list.length, cs.push c (not_named h))
 
 /-- `addClass` on the run's classes. -/

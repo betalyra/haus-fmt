@@ -378,7 +378,7 @@ parse_value = |src, pos, depth, limits| {
 			} else {
 				(ErrorCode.bare_identifier, "")
 			}
-		Err({ code, reason: "unexpected identifier '${word}': lowercase identifiers can only be record keys${hint}", pos })
+		Err({ code, reason: "unexpected identifier '${ErrorCode.shown(word)}': lowercase identifiers can only be record keys${hint}", pos })
 	} else {
 		# `+1` and `.5`: a number written the way other languages allow.
 		code = if (c == '+' or c == '.') ErrorCode.invalid_number else ErrorCode.expected_value
@@ -430,7 +430,7 @@ record_entry = |src, pos, depth, limits| {
 	(key, after_key) = parse_key(src, pos, limits)?
 	colon = skip_trivia(src, after_key)?
 	if at(src, colon) != ':' {
-		return Err({ code: ErrorCode.missing_colon, reason: "expected ':' after key '${key}', found ${describe(src, colon)}", pos: colon })
+		return Err({ code: ErrorCode.missing_colon, reason: "expected ':' after key '${ErrorCode.shown(key)}', found ${describe(src, colon)}", pos: colon })
 	}
 	(value, after_value) = parse_value(src, skip_trivia(src, colon + 1)?, depth + 1, limits)?
 	Ok((key, value, after_value))
@@ -460,7 +460,7 @@ repeated_first = |keys, e| match Value.first_repeated(keys) {
 }
 
 duplicate_key : Str, U64 -> Fail
-duplicate_key = |key, pos| { code: ErrorCode.duplicate_key, reason: "duplicate key '${key}'", pos }
+duplicate_key = |key, pos| { code: ErrorCode.duplicate_key, reason: "duplicate key '${ErrorCode.shown(key)}'", pos }
 
 parse_key : List(U8), U64, Value.Limits -> Try((Str, U64), Fail)
 parse_key = |src, pos, limits| {
@@ -475,7 +475,7 @@ parse_key = |src, pos, limits| {
 		name(src, pos, "key", limits)
 	} else if is_upper(c) {
 		(word, _) = read_ident(src, pos)
-		Err({ code: ErrorCode.uppercase_key, reason: "record keys must start with a lowercase letter or '_'; quote it: \"${word}\"", pos })
+		Err({ code: ErrorCode.uppercase_key, reason: "record keys must start with a lowercase letter or '_'; quote it: \"${ErrorCode.shown(word)}\"", pos })
 	} else {
 		Err({ code: ErrorCode.expected_key, reason: "expected a record key, found ${describe(src, pos)}", pos })
 	}
@@ -521,7 +521,7 @@ parse_variant = |src, pos, depth, limits| {
 	if at(src, p) == '(' {
 		(args, after) = parse_list(src, p, depth, ')', limits)?
 		if args.is_empty() {
-			Err({ code: ErrorCode.empty_payload, reason: "empty payload: write '${tag}' without parentheses", pos: p })
+			Err({ code: ErrorCode.empty_payload, reason: "empty payload: write '${ErrorCode.shown(tag)}' without parentheses", pos: p })
 		} else {
 			Ok((Tag(tag, args), after))
 		}
@@ -628,7 +628,7 @@ invalid_number = |src, start| {
 	while is_ident_char(at(src, $e)) or at(src, $e) == '.' {
 		$e = $e + 1
 	}
-	{ code: ErrorCode.invalid_number, reason: "invalid number '${slice_str(src, start, $e)}'", pos: start }
+	{ code: ErrorCode.invalid_number, reason: "invalid number '${ErrorCode.shown(slice_str(src, start, $e))}'", pos: start }
 }
 
 ## Where the decimal literal at `start` (digits from `digits_start`) ends:
@@ -863,11 +863,11 @@ read_escape = |src, start| {
 			return Err(bad)
 		}
 		if $cp > 0x10FFFF or ($cp >= 0xD800 and $cp <= 0xDFFF) {
-			return Err({ code: ErrorCode.invalid_unicode_escape, reason: "\\u{${slice_str(src, start + 3, $p)}} is not a Unicode scalar value", pos: start })
+			return Err({ code: ErrorCode.invalid_unicode_escape, reason: "\\u{${ErrorCode.shown(slice_str(src, start + 3, $p))}} is not a Unicode scalar value", pos: start })
 		}
 		Ok((utf8_encode($cp), $p + 1))
 	} else {
-		Err({ code: ErrorCode.invalid_escape, reason: "invalid escape '\\${byte_str(e)}'", pos: start })
+		Err({ code: ErrorCode.invalid_escape, reason: "invalid escape '\\${ErrorCode.shown(char_str(src, start + 1))}'", pos: start })
 	}
 }
 
@@ -1186,6 +1186,14 @@ compare_bytes = |a, b| {
 byte_str : U8 -> Str
 byte_str = |b| bytes_to_str([b])
 
+## The whole character that starts at `pos`.
+char_str : List(U8), U64 -> Str
+char_str = |src, pos| {
+	c = at(src, pos)
+	len = if (c < 0x80) 1 else if (c < 0xE0) 2 else if (c < 0xF0) 3 else 4
+	bytes_to_str(src.sublist({ start: pos, len }))
+}
+
 describe : List(U8), U64 -> Str
 describe = |src, pos|
 	if pos >= src.len() {
@@ -1193,7 +1201,7 @@ describe = |src, pos|
 	} else if at(src, pos) == '\n' {
 		"line break"
 	} else {
-		"'${byte_str(at(src, pos))}'"
+		"'${ErrorCode.shown(char_str(src, pos))}'"
 	}
 
 ## Line and column (1-based, in code points) of a byte position.

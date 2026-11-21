@@ -53,7 +53,7 @@ def codePoint (c : Char) : String :=
 def describe : Text → String
   | [] => "end of input"
   | '\n' :: _ => "line break"
-  | c :: _ => if isRawControl c || isBidi c then codePoint c else s!"'{c}'"
+  | c :: _ => if isRawControl c || isBidi c || isLineSep c then codePoint c else s!"'{c}'"
 
 def expect (c : Char) (code : Code) (what : String) : P Unit := do
   match ← get with
@@ -273,16 +273,35 @@ def blockLine (indent line : Text) : Except Error Text :=
   else if line.all isBlank then .ok []
   else .error (.at .blockStringIndent "line is indented less than the closing \"\"\"" line)
 
+/-- A content line without the carriage return of its CR LF, as `blockLine` reads it. -/
+def lineText (line : Text) : Text := if line.getLast? == some '\r' then line.dropLast else line
+
+/--
+The error of the first content line that fails, placed in the input (§8): at
+the offending character, or at the start of a line indented less than the
+closing quotes. `t` is the input at the start of the first line of `ls`.
+`blockLine` places its error in the line (the characters left in it), so
+the line's place in the input is added.
+-/
+def placeLineError (indent : Text) (e : Error) : Text → List Text → Error
+  | _, [] => e
+  | t, l :: ls =>
+    match blockLine indent l with
+    | .error e' => { e' with remaining := t.length - ((lineText l).length - e'.remaining) }
+    | .ok _ => placeLineError indent e (t.drop (l.length + 1)) ls
+
 /-- After the opening line of the block string at `start`: the content up to and including the closing quotes. -/
 def blockBody (L : Limits) (start : Text) : P String := do
-  let some (content, rest) := findClose (← get) | failAt .unterminatedBlockString "unterminated block string" start
+  let t ← get
+  let some (content, rest) := findClose t | failAt .unterminatedBlockString "unterminated block string" start
   let lines := splitLines content
   let indent := lines.getLast?.getD []
-  if !indent.all isBlank then failAt .blockStringClosing "closing \"\"\" must be on its own line" start
-  -- Errors inside the content are reported at the start of the block string.
+  -- Text before the closing quotes on their line: at the closing quotes.
+  if !indent.all isBlank then throw ⟨.blockStringClosing, "closing \"\"\" must be on its own line", rest.length + 3⟩
+  -- An error inside the content is placed at the offending character (§8).
   let decoded ← match (lines.dropLast).mapM (blockLine indent) with
     | .ok ds => pure ds
-    | .error e => failAt e.code e.reason start
+    | .error e => throw (placeLineError indent e t lines.dropLast)
   set rest
   checkLength L (List.intercalate ['\n'] decoded) start
 
@@ -331,7 +350,7 @@ def key (L : Limits) : P String := do
   | t@(c :: _) =>
       if isLowerStart c then checkName L "key" (← takeWhile isIdentChar) t
       else if isUpper c then fail .uppercaseKey "record keys must start with a lowercase letter or '_'; quote it"
-      else fail .expectedKey s!"expected a record key, found '{c}'"
+      else fail .expectedKey s!"expected a record key, found {describe t}"
   | [] => fail .expectedKey "expected a record key, found end of input"
 
 /-- The error for a lowercase word where a value should be. -/
@@ -340,7 +359,7 @@ def identifierError (word : String) : String :=
     if word == "true" || word == "false" then " (booleans are the variants True / False)"
     else if word == "null" then " (use the variant None)"
     else ""
-  s!"unexpected identifier '{word}': lowercase identifiers can only be record keys{hint}"
+  s!"unexpected identifier '{msgText word}': lowercase identifiers can only be record keys{hint}"
 
 /-- Its code: `true` and `false` aren't booleans, `null` isn't a value, other words aren't strings. -/
 def identifierCode (word : String) : Code :=
@@ -393,7 +412,7 @@ mutual
       match ← get with
       | t@('(' :: _) =>
           let xs ← items L fuel budget ')'
-          if xs.isEmpty then failAt .emptyPayload s!"empty payload: write '{name}' without parentheses" t
+          if xs.isEmpty then failAt .emptyPayload s!"empty payload: write '{msgText name}' without parentheses" t
           return .variant name xs
       | '{' :: _ => return .variant name [.record (← record L fuel budget)]
       | _ => set afterTag; return .variant name []
@@ -417,10 +436,10 @@ mutual
       | t =>
           let k ← key L
           ws
-          expect ':' .missingColon s!"expected ':' after key '{k}'"
+          expect ':' .missingColon s!"expected ':' after key '{msgText k}'"
           ws
           let v ← value L fuel budget
-          if acc.any (·.1 == k) then failAt .duplicateKey s!"duplicate key '{k}'" t
+          if acc.any (·.1 == k) then failAt .duplicateKey s!"duplicate key '{msgText k}'" t
           ws
           match ← get with
           | ',' :: r => set r; ws; fields L fuel budget start ((k, v) :: acc)

@@ -251,16 +251,30 @@ binding; hashes are SHA-256 of it (the `hash` feature):
 
 ```rust
 let v = haus::parse(r#"Order { total: 19.90, id: 0xFF }"#)?.remove(0);
-haus::canonical(&v);                   // String: Order{id:255,total:19.90}
-haus::hash(&v);                        // String: 64 lowercase hex digits
-haus::hash_all(&values);               // a whole file: the forms joined by `,`
+haus::canonical(&v)?;                  // String: Order{id:255,total:19.90}
+haus::hash(&v)?;                       // String: 64 lowercase hex digits
+haus::hash_all(&values)?;              // a whole file: the forms joined by `,`
 haus::equals(&a, &b);                  // bool
-haus::compare(&a, &b);                 // Ordering, by the canonical bytes
+haus::compare(&a, &b)?;                // Ordering, by the canonical bytes
 ```
 
-Every value has a canonical form, and none of these fail: numbers are
-written in decimal, an integer of any size with all its digits, also one
-built in code or parsed with a larger `max_number_length`.
+Every haus value has a canonical form, so for a parsed value these never
+fail: numbers are written in decimal, an integer of any size with all its
+digits, also one parsed with a larger `max_number_length`. A `Value` built
+in code may not be a haus value; `canonical`, `hash`, `hash_all` and
+`compare` then fail with the writer's `EncodeError`, saying where: a number
+that isn't a number literal (`"01"`, `"NaN"`: `invalid-number`), a tag that
+isn't a tag (`invalid-tag`), a repeated key (`duplicate-key`). A literal that
+isn't normalized (`"1E+05"`, `"0xFF"`) is normalized (`1e5`, `255`), so it
+hashes as the value parsed from it. Such a value equals nothing (`equals` is
+false), not even itself.
+
+A `Value` built in code may nest any depth: the canonical form, `==`,
+`clone` and dropping it take a stack on the heap, not one call per level
+(`{:?}` and the writers recurse; the writers stop at the depth limit). As
+`Value` implements `Drop`, take its parts out with a reference
+(`if let Value::Array(items) = &mut v { std::mem::take(items) }`) rather than
+by moving them out of a `match`.
 
 ## Threads
 

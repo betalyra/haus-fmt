@@ -103,18 +103,20 @@ func streamed(_ bytes: [UInt8], _ i: Int) throws(HausError) -> [HausValue] {
 /// `STYLE [--indent N] [--width N]`.
 func formatOptions(_ flags: ArraySlice<String>) -> FormatOptions {
     guard let style = flags.first, let layout = Layout(rawValue: style) else { fail(usage) }
-    var options = FormatOptions(layout: layout)
+    var (indent, width) = (2, 80)
     var rest = flags.dropFirst()
     while rest.count >= 2 {
         let (flag, value) = (rest.first!, Int(rest.dropFirst().first!))
         switch (flag, value) {
-        case ("--indent", let n?): options.indent = n
-        case ("--width", let n?): options.width = n
+        case ("--indent", let n?): indent = n
+        case ("--width", let n?): width = n
         default: fail(usage)
         }
         rest = rest.dropFirst(2)
     }
-    guard rest.isEmpty else { fail(usage) }
+    guard rest.isEmpty, let options = try? FormatOptions(layout: layout, indent: indent, width: width) else {
+        fail(usage)
+    }
     return options
 }
 

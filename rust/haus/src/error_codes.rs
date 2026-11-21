@@ -6,7 +6,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum ErrorCode {
-    /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.
+    /// `invalid-utf8`: The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.
     InvalidUtf8,
     /// `version-directive`: The file starts with a `#haus` version directive (§10): it was written for a later, incompatible version of haus.
     VersionDirective,
@@ -34,11 +34,11 @@ pub enum ErrorCode {
     BlockStringKey,
     /// `missing-colon`: A record key is not followed by `:`.
     MissingColon,
-    /// `duplicate-key`: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16).
+    /// `duplicate-key`: A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).
     DuplicateKey,
     /// `empty-payload`: A tag with empty parentheses, `Tag()`. A tag without arguments is written without them.
     EmptyPayload,
-    /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
+    /// `invalid-number`: A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).
     InvalidNumber,
     /// `unterminated-string`: A string has no closing `"` (in haus or JSON).
     UnterminatedString,
@@ -84,7 +84,7 @@ pub enum ErrorCode {
     KeyTooLong,
     /// `tag-too-long`: A tag has more characters than the string limit (default 16 Mi).
     TagTooLong,
-    /// `value-too-long`: One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).
+    /// `value-too-long`: One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).
     ValueTooLong,
     /// `unsupported-depth`: The configured depth limit is above the deepest nesting the binding supports, or isn't a whole number (§7). Raised when the limits are set, not by any input.
     UnsupportedDepth,
@@ -196,7 +196,9 @@ pub enum ErrorCode {
     InvalidTime,
     /// `invalid-secret`: A value of a `Secret` type that its type doesn't accept, when decoding, or that can't be written, when encoding. The error names the place and the type only, never the value or why it failed (§15).
     InvalidSecret,
-    /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.
+    /// `codec-rejected`: A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
+    CodecRejected,
+    /// `cannot-encode`: Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.
     CannotEncode,
     /// `cyclic-value`: Encoding: a value contains itself, so it has no finite text.
     CyclicValue,
@@ -268,7 +270,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 114] = [
+    pub const ALL: [ErrorCode; 115] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -364,6 +366,7 @@ impl ErrorCode {
         ErrorCode::WrongPayload,
         ErrorCode::InvalidTime,
         ErrorCode::InvalidSecret,
+        ErrorCode::CodecRejected,
         ErrorCode::CannotEncode,
         ErrorCode::CyclicValue,
         ErrorCode::StepBudget,
@@ -483,6 +486,7 @@ impl ErrorCode {
             ErrorCode::WrongPayload => "wrong-payload",
             ErrorCode::InvalidTime => "invalid-time",
             ErrorCode::InvalidSecret => "invalid-secret",
+            ErrorCode::CodecRejected => "codec-rejected",
             ErrorCode::CannotEncode => "cannot-encode",
             ErrorCode::CyclicValue => "cyclic-value",
             ErrorCode::StepBudget => "step-budget",
@@ -603,6 +607,7 @@ impl ErrorCode {
             ErrorCode::WrongPayload => ErrorCategory::Decoding,
             ErrorCode::InvalidTime => ErrorCategory::Decoding,
             ErrorCode::InvalidSecret => ErrorCategory::Decoding,
+            ErrorCode::CodecRejected => ErrorCategory::Decoding,
             ErrorCode::CannotEncode => ErrorCategory::Decoding,
             ErrorCode::CyclicValue => ErrorCategory::Decoding,
             ErrorCode::StepBudget => ErrorCategory::Decoding,
@@ -723,6 +728,7 @@ impl ErrorCode {
             ErrorCode::WrongPayload => "Write the payload the schema gives the tag: none, one record, or its positional arguments; the message says which.",
             ErrorCode::InvalidTime => "Write the date or time as the std/time profile says (spec/std/time.md); the message names the type.",
             ErrorCode::InvalidSecret => "Write a value of the secret's type; the value isn't shown, so check it where it comes from.",
+            ErrorCode::CodecRejected => "Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which.",
             ErrorCode::CannotEncode => "Pass a value of the host type the binding documents for the type.",
             ErrorCode::CyclicValue => "Break the cycle before encoding.",
             ErrorCode::StepBudget => "Simplify the schema, or raise the step limit if the work is expected.",

@@ -16,16 +16,16 @@ use std::path::Path;
 fn text<'a>(fields: &'a Value, key: &str) -> &'a str {
     match fields.get(key) {
         Some(Value::String(s)) => s,
-        _ => panic!("not a case: {}", canonical(fields)),
+        _ => panic!("not a case: {}", canonical(fields).unwrap()),
     }
 }
 
 /// `Tag(a, b, …)` as `Tag a b …`: strings and numbers as their text.
 fn show(v: &Value) -> String {
-    let Value::Variant { tag, args } = v else { panic!("not an entry: {}", canonical(v)) };
+    let Value::Variant { tag, args } = v else { panic!("not an entry: {}", canonical(v).unwrap()) };
     let args = args.iter().map(|a| match a {
         Value::String(s) | Value::Number(s) => s.clone(),
-        other => canonical(other),
+        other => canonical(other).unwrap(),
     });
     std::iter::once(tag.clone()).chain(args).collect::<Vec<_>>().join(" ")
 }
@@ -34,7 +34,7 @@ fn show(v: &Value) -> String {
 fn entries(fields: &Value, key: &str) -> Vec<String> {
     match fields.get(key) {
         Some(Value::Array(items)) => items.iter().map(show).collect(),
-        _ => panic!("not a case: {}", canonical(fields)),
+        _ => panic!("not a case: {}", canonical(fields).unwrap()),
     }
 }
 
@@ -75,8 +75,8 @@ fn checker_suite() {
     let failures: Vec<String> = cases
         .iter()
         .filter_map(|c| {
-            let Value::Variant { tag, args } = c else { panic!("not a case: {}", canonical(c)) };
-            let [fields] = args.as_slice() else { panic!("not a case: {}", canonical(c)) };
+            let Value::Variant { tag, args } = c else { panic!("not a case: {}", canonical(c).unwrap()) };
+            let [fields] = args.as_slice() else { panic!("not a case: {}", canonical(c).unwrap()) };
             let source = text(fields, "schema");
             let schema = match Schema::parse(source) {
                 Ok(schema) => schema,
@@ -85,10 +85,10 @@ fn checker_suite() {
             let (got, want) = match tag.as_str() {
                 "Schema" => (warnings(&schema), entries(fields, "warnings")),
                 "Data" => (issues(&schema, text(fields, "type"), text(fields, "data")), entries(fields, "issues")),
-                _ => panic!("not a case: {}", canonical(c)),
+                _ => panic!("not a case: {}", canonical(c).unwrap()),
             };
             (got != want).then(|| {
-                let data = fields.get("data").map(|d| format!(" data {}", canonical(d))).unwrap_or_default();
+                let data = fields.get("data").map(|d| format!(" data {}", canonical(d).unwrap())).unwrap_or_default();
                 format!("{tag} {source:?}{data}: got {got:?}, expected {want:?}")
             })
         })

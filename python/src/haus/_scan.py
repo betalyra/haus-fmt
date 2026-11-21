@@ -140,6 +140,47 @@ def quote(s: str) -> str:
     return '"' + ESCAPED.sub(_escape, s) + '"'
 
 
+_UNSAFE: Final = re.compile(f"[{CONTROLS}\\u061c\\u200e\\u200f{LINE_SEPARATORS}{BIDI}\\ud800-\\udfff]")
+"""What a message never shows raw (spec §9.2): control and bidirectional characters, which a terminal or a
+log would act on, the line and paragraph separators, and lone surrogates, which no output can encode."""
+MAX_QUOTED: Final = 40
+"""Text quoted from a file is at most 40 characters long in a message, as shown (spec §9.2)."""
+
+
+def _shown(m: re.Match[str]) -> str:
+    return f"\\u{{{ord(m[0]):X}}}"
+
+
+def escape_for_message(text: str) -> str:
+    r"""`text` with control and bidirectional characters escaped as `\u{…}`, for a message (spec §9.2).
+
+    >>> escape_for_message("a\x1b[31mb\u202e")
+    'a\\u{1B}[31mb\\u{202E}'
+    """
+    return _UNSAFE.sub(_shown, text)
+
+
+def quote_for_message(text: str, most: int = MAX_QUOTED) -> str:
+    """Text from a file (a token, a key, a name, a version) as a message shows it (spec §9.2): escaped,
+    then at most `most` characters, a longer text cut between characters (never inside an escape) and
+    marked with `…`, which counts.
+
+    >>> quote_for_message("x" * 50)
+    'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…'
+    """
+    escaped = escape_for_message(text)
+    if len(escaped) <= most:
+        return escaped
+    out: list[str] = []
+    size = 0
+    for piece in map(escape_for_message, text[:most]):
+        if size + len(piece) > most - 1:
+            break
+        out.append(piece)
+        size += len(piece)
+    return "".join(out) + "…"
+
+
 def key_text(k: str) -> str:
     """A record key as written: bare if it can be, else quoted."""
     return k if BARE_KEY.fullmatch(k) else quote(k)

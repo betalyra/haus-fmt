@@ -17,11 +17,11 @@ import { BBOX_ID, bboxProblem, LATLNG_ID, latLngProblem, type BBox, type LatLng 
 export { BBOX_ID, bboxProblem, isBBox, isLatLng, LATLNG_ID, latLngProblem, type BBox, type LatLng } from "./index.js"
 
 const latLng: Haus.Codec<{ readonly [LATLNG_ID]: LatLng }, typeof LATLNG_ID> = {
-  [Haus.CodecTypeId]: [{ id: LATLNG_ID, apply: (base) => base.pipe(Schema.check(Schema.makeFilter(latLngProblem))) }],
+  [Haus.CodecTypeId]: [{ id: LATLNG_ID, apply: (base) => base.pipe(Schema.check(Schema.makeFilter(latLngProblem, Haus.CODEC_REJECTED))) }],
 }
 
 const bbox: Haus.Codec<{ readonly [BBOX_ID]: BBox }, typeof BBOX_ID> = {
-  [Haus.CodecTypeId]: [{ id: BBOX_ID, apply: (base) => base.pipe(Schema.check(Schema.makeFilter(bboxProblem))) }],
+  [Haus.CodecTypeId]: [{ id: BBOX_ID, apply: (base) => base.pipe(Schema.check(Schema.makeFilter(bboxProblem, Haus.CODEC_REJECTED))) }],
 }
 
 /**

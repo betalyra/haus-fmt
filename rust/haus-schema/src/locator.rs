@@ -359,8 +359,9 @@ fn declared(name: &str, from: Option<&Path>, dir: &Path, files: &mut FileCache) 
 }
 
 /// The nearest `package.json` above the directory `dir` that has a `name`
-/// or a dependency field: the project's. One that isn't valid JSON (read as
-/// `null`) is the project's too, and declares nothing: the search stops there.
+/// or a dependency field: the project's. One that isn't valid JSON or isn't
+/// a regular file (read as `null`) is the project's too, and declares
+/// nothing: the search stops there.
 fn project(dir: &Path, files: &mut FileCache) -> Result<Option<(PathBuf, Rc<Json>)>> {
     for d in dir.ancestors() {
         let path = d.join("package.json");

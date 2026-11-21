@@ -39,6 +39,7 @@ class ApiTest {
       {"{\n  a: 1,\n  b: x }", 3, 6},
       {"// c\n\"a\u0001b\"", 2, 3},
       {"\"\"\"\n  ok\n bad\n  \"\"\"", 3, 1},
+      {"\"\"\"\n  😀 a\u0001\n  \"\"\"", 2, 6}, // inside a block string: at the character
     };
     for (Object[] c : cases) {
       HausException e = assertThrows(HausException.class, () -> Haus.parseAll((String) c[0]));
@@ -49,6 +50,113 @@ class ApiTest {
     assertEquals(ErrorCode.INVALID_UTF8, e.code());
     assertEquals(5, e.column());
     assertEquals(ErrorCode.INVALID_UTF8, code(() -> Haus.parseAll("\"a\uD800\"")));
+  }
+
+  @Test
+  void unpairedSurrogatesInStrings() {
+    // Checked over the whole text first: the first unpaired surrogate, in code points of its line.
+    Object[][] cases = {
+      {"\"x\uD800y\"", 1, 3},
+      {"{ a: 1,\n  \"😀 x\uDC00\": 2 }", 2, 7},
+      {"[1 2, \"\uD800\"]", 1, 8}, // before the syntax error
+      {"// \uDBFF\n1", 1, 4},
+    };
+    for (Object[] c : cases) {
+      HausException e = assertThrows(HausException.class, () -> Haus.parseAll((String) c[0]));
+      assertEquals(ErrorCode.INVALID_UTF8, e.code(), e.getMessage());
+      assertEquals(c[1], e.line(), e.getMessage());
+      assertEquals(c[2], e.column(), e.getMessage());
+    }
+    assertEquals(ErrorCode.INVALID_UTF8, code(() -> Haus.parse("\"\uD800\"")));
+    assertEquals(ErrorCode.INVALID_UTF8, code(() -> Haus.format("\"\uD800\"", FormatOptions.PRETTY)));
+    assertEquals(ErrorCode.INVALID_UTF8, code(() -> HausJson.importJson("\"\uD800\"")));
+    assertEquals(ErrorCode.INVALID_UTF8, code(() -> HausJson.fromHausJson("{\"_haus\": 1, \"_value\": \"\uD800\"}")));
+    assertEquals(ErrorCode.INVALID_UTF8, code(() -> Schema.parse("// \uD800\ntype A = String")));
+    // Values built in code: writers, the canonical form and hashes can't write one.
+    Value[] values = {
+      Value.string("x\uD800y"),
+      Value.record(Value.field("k\uDC00", Value.number(1))),
+      Value.array(Value.string("\uD800\uD800")),
+    };
+    for (Value v : values) {
+      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.write(v)));
+      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.canonical(v)));
+      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.hash(v)));
+      assertEquals(ErrorCode.CANNOT_ENCODE, code(() -> Haus.hashAll(List.of(v))));
+    }
+  }
+
+  @Test
+  void valuesBuiltInCodeAreChecked() {
+    assertEquals(ErrorCode.INVALID_NUMBER, code(() -> Value.number("01")));
+    assertEquals(ErrorCode.INVALID_NUMBER, code(() -> Value.number("NaN")));
+    assertEquals(ErrorCode.INVALID_NUMBER, code(() -> Value.number("")));
+    assertEquals(ErrorCode.INVALID_TAG, code(() -> Value.variant("lower")));
+    assertEquals(ErrorCode.DUPLICATE_KEY,
+        code(() -> Value.record(Value.field("a", Value.number(1)), Value.field("a", Value.number(2)))));
+    // A literal that isn't normalized is the value of its normalized literal (spec §2).
+    assertEquals("1e5", Haus.canonical(Value.number("1e+05")));
+    assertEquals(Haus.hash(Value.number("1e5")), Haus.hash(Value.number("1E+05")));
+    assertEquals("255", Haus.canonical(Value.number("0xFF")));
+    assertEquals("1000", Haus.canonical(Value.number("1_000")));
+  }
+
+  @Test
+  void formatOptionsAreTakenLiterally() {
+    assertEquals("{\na: {\nb: [\n1,\n],\n},\n}\n", Haus.format("{ a: { b: [1] } }", FormatOptions.PRETTY.withIndent(0)));
+    assertEquals("Point(\n  1,\n  2,\n)\n", Haus.format("Point(1, 2)", FormatOptions.PRETTY.withWidth(0)));
+    assertEquals("Point(\n1,\n2,\n)\n", Haus.format("Point(1, 2)", FormatOptions.PRETTY.withIndent(0).withWidth(0)));
+    assertEquals("{\n  a: Point(\n    1,\n    2,\n  ),\n}\n", Haus.format("{ a: Point(1, 2) }", FormatOptions.PRETTY.withWidth(0)));
+    assertThrows(IllegalArgumentException.class, () -> FormatOptions.PRETTY.withWidth(-1));
+    assertThrows(IllegalArgumentException.class, () -> FormatOptions.PRETTY.withIndent(-1));
+    assertThrows(IllegalArgumentException.class, () -> new FormatOptions(Layout.PRETTY, -2, 40, Limits.DEFAULT));
+  }
+
+  @Test
+  void quotedTokensInMessages() {
+    // Escaped first, then at most 40 characters as shown between the quotes, a cut never inside
+    // an escape (spec §9).
+    assertEquals("\"" + repeat("a", 40) + "\"", Quoting.forMessage(repeat("a", 40)));
+    assertEquals("\"" + repeat("a", 39) + "…\"", Quoting.forMessage(repeat("a", 41)));
+    assertEquals("\"" + repeat("\\u{1}", 7) + "…\"", Quoting.forMessage(repeat("\u0001", 10)));
+    assertEquals("\"" + repeat("a", 36) + "…\"", Quoting.forMessage(repeat("a", 36) + "\u0001bcd"));
+    assertEquals("\"" + repeat("a", 35) + "\\u{1}\"", Quoting.forMessage(repeat("a", 35) + "\u0001"));
+    HausException e = assertThrows(HausException.class, () -> Haus.parseAll("{ " + repeat("b", 100) + ": 1, "
+        + repeat("b", 100) + ": 2 }"));
+    assertEquals(ErrorCode.DUPLICATE_KEY, e.code());
+    assertTrue(e.reason().contains("\"" + repeat("b", 39) + "…\""), e.reason());
+    e = assertThrows(HausException.class, () -> Haus.parseAll(repeat("A", 100) + "\n{ a: 1 }"));
+    assertEquals(ErrorCode.PAYLOAD_NEWLINE, e.code());
+    assertTrue(e.reason().contains(repeat("A", 39) + "…"), e.reason());
+    assertFalse(e.reason().contains(repeat("A", 40)), e.reason());
+  }
+
+  @Test
+  void tildeEndsAFilePath() {
+    // A file path has no `~` (grammar `path`): the module ends before it, a syntax error there.
+    Object[][] cases = {
+      {"import ./a~b (A)\ntype T = A", ErrorCode.SCHEMA_SYNTAX, 11},
+      {"import ../x~y (A)\ntype T = A", ErrorCode.SCHEMA_SYNTAX, 12},
+      {"import @a/b@1~x (A)\ntype T = A", ErrorCode.IMPORT_VERSION, 8},
+    };
+    for (Object[] c : cases) {
+      HausException e = assertThrows(HausException.class, () -> Schema.parse((String) c[0]));
+      assertEquals(c[1], e.code(), e.getMessage());
+      if (c[1] == ErrorCode.SCHEMA_SYNTAX) {
+        assertEquals(1, e.line(), e.getMessage());
+        assertEquals(c[2], e.column(), e.getMessage());
+      }
+    }
+  }
+
+  @Test
+  void jsonLinesHaveNoLineLimit() throws java.io.IOException {
+    String line = "{\"_haus\": 1, \"_value\": \"" + repeat("a", 100) + "\"}\n";
+    Limits small = Limits.DEFAULT.withMaxValueLength(50);
+    try (JsonLinesReader r = HausJson.hausJsonLinesReader(new java.io.ByteArrayInputStream(line.getBytes(java.nio.charset.StandardCharsets.UTF_8)), small)) {
+      assertEquals(Value.string(repeat("a", 100)), r.read());
+      assertNull(r.read());
+    }
   }
 
   @Test

@@ -138,12 +138,13 @@ func TestJSONLines(t *testing.T) {
 			t.Errorf("%q: got %v (line %d, path %q)", tt.text, err, e.Line, e.Path)
 		}
 	}
-	// A stream reader bounds its lines.
+	// JSON Lines has no value limit (spec §7): a line longer than
+	// MaxValueLength is read, and the value's own limits apply.
 	lim := JSONLinesOptions{Limits: Limits{MaxValueLength: 30}}
 	long := "{\"_haus\":1,\"_value\":\"abcdefghijklmnop\"}\n"
-	for _, err := range ReadHausJSONLines(strings.NewReader(long), lim) {
-		if errorCode(err) != CodeValueTooLong {
-			t.Errorf("long line: %v", err)
+	for v, err := range ReadHausJSONLines(strings.NewReader(long), lim) {
+		if err != nil || v != String("abcdefghijklmnop") {
+			t.Errorf("long line: %v %v", v, err)
 		}
 	}
 	for _, text := range []string{"1\n\n2\n", "1\n\uFEFF2\n", "1\r\n\r\n"} {

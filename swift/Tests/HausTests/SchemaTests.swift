@@ -102,7 +102,8 @@ struct SchemaJSONSuiteTests {
 /// Typed streams (test-suite/stream/typed.schema.haus and typed.cases.haus,
 /// spec §15 "Streams"): a `Stream a` type decodes the text's values with
 /// `SchemaType.decodeAll`, which puts the item's index in an error's path;
-/// any other type decodes the text's one value (`parse`, then `decode`).
+/// any other type decodes the text's one value (`decodeAll` too: none, or
+/// two or more, is `not-one-value` at `$`).
 /// Encoding the decoded values gives `output` (an array for a stream).
 struct TypedStreamSuiteTests {
     static let dir = suite.appendingPathComponent("stream")
@@ -132,12 +133,24 @@ struct TypedStreamSuiteTests {
                 let items = try type.decodeAll(parseAll(text))
                 got = "Ok \(try canonical(.array(try items.map { (v) throws(HausError) in try type.encode(v) })))"
             } else {
-                got = "Ok \(try canonical(type.encode(type.decode(parse(text)))))"
+                got = "Ok \(try canonical(type.encode(type.decodeAll(parseAll(text))[0])))"
             }
         } catch {
             got = "Err \(error.code.rawValue) \(error.path ?? "-")"
         }
         #expect(got == (try Self.want(c)), "got \(got)")
+    }
+
+    /// A type that isn't a `Stream` reads one value: none, or two, is
+    /// `not-one-value` at the path `$`, as a value and as a Swift type.
+    @Test(arguments: ["{ x: 1, y: 2 }, { x: 1, y: 2 }", ""])
+    func notOneValue(_ text: String) throws {
+        struct Point: Codable { let x: Int32, y: Int32 }
+        let type = try Self.schema.type("Point")
+        let error = #expect(throws: HausError.self) { try type.decodeAll(parseAll(text)) }
+        #expect(error?.code == .notOneValue && error?.path == "$", "\(String(describing: error))")
+        let typed = #expect(throws: HausError.self) { try type.decode(Point.self, fromText: text) }
+        #expect(typed?.code == .notOneValue && typed?.path == "$", "\(String(describing: typed))")
     }
 }
 
@@ -193,6 +206,10 @@ struct SchemaTests {
         ("import @acme/common (A)\ntype B = A", "import-unavailable"),
         ("import @Acme/common (A)\ntype B = A", "unknown-module"),
         ("import acme (A)\ntype B = A", "schema-syntax"),
+        // A file path has no `~` (grammar `path`); a package's version may, and is checked as one.
+        ("import ./a~b (A)\ntype B = A", "schema-syntax"),
+        ("import ../x~y (A)\ntype B = A", "schema-syntax"),
+        ("import @a/b@1~x (A)\ntype B = A", "import-version"),
         ("type A = { ...r }", "row-parameter"),
         ("type A = closed < >", "closed-empty-variant"),
     ]
@@ -207,6 +224,14 @@ struct SchemaTests {
     @Test func invalidUTF8() {
         let error = #expect(throws: HausError.self) { try HausSchema(bytes: Array("type A = ".utf8) + [0xFF]) }
         #expect(error?.code == .invalidUtf8)
+    }
+
+    /// `./a~b` ends before the `~`, which the grammar's `path` doesn't have:
+    /// the `(` is missing there.
+    @Test func tildeEndsAFilePath() {
+        let error = #expect(throws: HausError.self) { try HausSchema(parsing: "import ./a~b (A)\ntype B = A") }
+        #expect(error?.position == SourcePosition(line: 1, column: 11))
+        #expect(error?.message.hasSuffix("found '~'") == true, "\(String(describing: error))")
     }
 
     @Test func spreads() throws {
@@ -354,7 +379,8 @@ struct SchemaTests {
             ("Duration", "PT0.000S"), ("Duration", "P1DT0.5S"), ("Duration", "PT0.5S"), ("Duration", "PT0.05S"),
             ("Duration", "-PT0.001S"), ("Duration", "-P10D"), ("Duration", "P4294967295Y"),
             ("Duration", "PT9007199254740991S"), ("Duration", "P104249991374D"), ("YearMonth", "2026-11"),
-            ("TimeZone", "Europe/Lisbon"), ("TimeZone", "UTC"), ("TimeZone", "Etc/GMT+1"), ("TimeZone", "-03:30"),
+            ("TimeZone", "Europe/Lisbon"), ("TimeZone", "Europe/Z"), ("TimeZone", "UTC"), ("TimeZone", "Etc/GMT+1"),
+            ("TimeZone", "-03:30"),
         ]
         for (type, text) in valid {
             #expect(throws: Never.self, "\(type) \(text)") { try checkTime(type, text) }
@@ -404,6 +430,10 @@ struct SchemaTests {
             ("TimeZone", "europe lisbon", "not an IANA zone name"), ("TimeZone", "/Lisbon", "not an IANA zone name"),
             ("TimeZone", String(repeating: "a", count: 256), "not an IANA zone name"),
             ("TimeZone", "Europe//Lisbon", "not an IANA zone name"),
+            // `Z` is the offset letter, not a zone name.
+            ("TimeZone", "Z", "Z is an offset letter"),
+            ("ZonedDateTime", "2026-11-09T14:30:00Z[Z]", "Z is an offset letter"),
+            ("ZonedDateTime", "2026-11-09T14:30:00+00:00[Z]", "Z is an offset letter"),
         ]
         for (type, text, why) in invalid {
             let error = #expect(throws: HausError.self, "\(type) \(text)") { try checkTime(type, text) }

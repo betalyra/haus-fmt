@@ -39,3 +39,15 @@
 { text: "\"a\u{2029}b\u{1}\"", code: "control-character", line: 1, column: 5 },
 { text: "/* \u{2028} */ \"\u{1}\"", code: "control-character", line: 1, column: 10 },
 { text: "1, // a\u{2028}b\n\"\u{1}\"", code: "control-character", line: 2, column: 2 },
+
+// ── inside a block string: at the offending character (spec §8) ──
+// A character or escape in a content line is placed where it is, a line
+// indented less than the closing quotes at its start, and text before the
+// closing quotes on their line at the closing quotes.
+{ text: "\"\"\"\n  \u{1F600} a\u{1}\n  \"\"\"", code: "control-character", line: 2, column: 6 },
+{ text: "\"\"\"\r\n  a\r\n  b\u{1}\r\n  \"\"\"", code: "control-character", line: 3, column: 4 },
+{ text: "\"\"\"\n  a\rb\n  \"\"\"", code: "control-character", line: 2, column: 4 },
+{ text: "\"\"\"\n  a\u{202E}\n  \"\"\"", code: "bidi-control", line: 2, column: 4 },
+{ text: "\"\"\"\n  a\\q\n  \"\"\"", code: "invalid-escape", line: 2, column: 4 },
+{ text: "\"\"\"\n  a\n b\n  \"\"\"", code: "block-string-indent", line: 3, column: 1 },
+{ text: "\"\"\"\n  a\n  x\"\"\"", code: "block-string-closing", line: 3, column: 4 },

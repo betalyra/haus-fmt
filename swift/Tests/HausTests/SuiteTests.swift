@@ -82,7 +82,7 @@ struct FormatSuiteTests {
     static func options(_ c: Case) throws -> FormatOptions {
         let file = c.expected.appendingPathExtension("options")
         guard exists(file), case .record(let r) = try parse(readText(file)) else { return FormatOptions() }
-        return FormatOptions(
+        return try FormatOptions(
             indent: r["indent"].flatMap { if case .number(let n) = $0 { n.integer() } else { nil } } ?? 2,
             width: r["width"].flatMap { if case .number(let n) = $0 { n.integer() } else { nil } } ?? 80)
     }
@@ -175,7 +175,7 @@ struct FormatSuiteTests {
     }
 
     /// The options of the pretty layout themselves (format/README.md): 0 is 0,
-    /// and a negative number is rejected (`format` throws).
+    /// and a negative number is rejected (`FormatOptions` throws).
     @Test(arguments: optionsCases)
     func options(_ c: OptionsCase) async throws {
         let (input, indent, width) = (c.input, c.indent ?? 2, c.width ?? 80)
@@ -183,6 +183,7 @@ struct FormatSuiteTests {
             #expect(try Haus.format(input, FormatOptions(indent: indent, width: width)) == c.result)
             return
         }
+        #expect(throws: FormatOptionsError.self) { try FormatOptions(indent: indent, width: width) }
         // Rejected: in a process of its own, so that a formatter that traps on
         // the options fails this case and not the whole run. Exit code 0:
         // rejected (thrown); 2: formatted anyway; a signal: it trapped.

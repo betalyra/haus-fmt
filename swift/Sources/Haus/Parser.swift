@@ -411,7 +411,8 @@ struct Parser {
             if case .variant(let tag, let args) = v, args.isEmpty {
                 return fail(
                     pos, .payloadNewline,
-                    "the payload of \(tag) must start on its line: expected \(expected), found '\(found)'",
+                    // A tag needs no escapes, only the cap (spec §9).
+                    "the payload of \(capped(tag) { String($0) }) must start on its line: expected \(expected), found '\(found)'",
                     expected: expected, found: "'\(found)'")
             }
         default: break

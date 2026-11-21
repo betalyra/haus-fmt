@@ -45,9 +45,14 @@ Ok { type: "Zone", input: TimeZone("+01:00") },
 Ok { type: "Zone", input: TimeZone("UTC") },
 Err { type: "Zone", input: TimeZone("Europe//Lisbon"), code: "invalid-time", path: "$[0]" },
 Err { type: "Zone", input: TimeZone("[Europe/Lisbon]"), code: "invalid-time", path: "$[0]" },
-// A zone name or an offset ±hh:mm: "Z" is a zone name by its syntax (a part
-// that starts with a letter), +00:00 an offset, and -00:00 is no offset.
-Ok { type: "Zone", input: TimeZone("Z") },
+// A zone name or an offset ±hh:mm: +00:00 is an offset, -00:00 is no offset,
+// and "Z" is neither: it is the offset letter, not a zone name, also in a
+// ZonedDateTime's brackets. A longer name that starts with Z is a zone name.
+Err { type: "Zone", input: TimeZone("Z"), code: "invalid-time", path: "$[0]" },
+Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Z]"), code: "invalid-time", path: "$[0]" },
+Err { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00+01:00[Z]"), code: "invalid-time", path: "$[0]" },
+Ok { type: "Zone", input: TimeZone("Zulu") },
+Ok { type: "Zoned", input: ZonedDateTime("2026-11-09T14:30:00Z[Zulu]") },
 Ok { type: "Zone", input: TimeZone("+00:00") },
 Err { type: "Zone", input: TimeZone("-00:00"), code: "invalid-time", path: "$[0]" },
 

@@ -209,6 +209,12 @@ describe("codecs", () => {
     expect(() => h.stringify(order([capitals]), { total: { _tag: "Money", values: ["1", "eur"] }, paid: [] })).toThrow(/three letters/)
   })
 
+  it("a value the schema accepts and the codec rejects is codec-rejected; encoding it, cannot-encode", () => {
+    const text = `{ total: Money(19.90, EUR), paid: [Money(1, Usd)] }`
+    expect(() => h.parse(order([capitals]), text)).toThrow(expect.objectContaining({ code: "codec-rejected", path: ["paid", 0, 1] }))
+    expect(() => h.stringify(order([capitals]), { total: { _tag: "Money", values: ["1", "eur"] }, paid: [] })).toThrow(expect.objectContaining({ code: "cannot-encode" }))
+  })
+
   it("for types the schema doesn't contain are ignored; two for one type are an error", () => {
     const other: Codec = { id: "@haus-fmt/geo@1#LatLng", apply: (base) => base }
     expect(() => order([capitals, other])).not.toThrow()
@@ -279,6 +285,21 @@ describe("comments, whitespace and strings are those of data files (spec §14)",
 
   it("a byte order mark at the start, CRLF line breaks and tabs in comments are fine", () => {
     expect(() => parseSchemaFile("\ufeff// a\tb\r\ntype A = Int\r\n")).not.toThrow()
+  })
+
+  it("a file path has no ~ (grammar path); a package's version may (finding #30)", () => {
+    const syntax = (code: string, column: number) => expect.objectContaining({ code, line: 1, column })
+    expect(() => parseSchemaFile("import ./a~b (A)\ntype T = A")).toThrow(syntax("schema-syntax", 11))
+    expect(() => parseSchemaFile("import ../x~y (A)\ntype T = A")).toThrow(syntax("schema-syntax", 12))
+    expect(() => parseSchemaFile("import @a/b@1~x (A)\ntype T = A")).toThrow(expect.objectContaining({ code: "import-version" }))
+    expect(() => parseSchemaFile("import ./a (A)\ntype T = A")).toThrow(expect.objectContaining({ code: "import-unavailable" }))
+  })
+
+  it("a typed single document holds one value: not-one-value at $", () => {
+    const { schemas } = compileSchemaFile("type Point = { x: Int32, y: Int32 }")
+    for (const text of ["{ x: 1, y: 2 }, { x: 1, y: 2 }", ""]) {
+      expect(() => h.parse(schemas.Point!, text)).toThrow(expect.objectContaining({ code: "not-one-value", path: [] }))
+    }
   })
 
   it("quoted keys take every escape of data strings", () => {

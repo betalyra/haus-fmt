@@ -5,9 +5,13 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from functools import cmp_to_key
+from typing import cast
+
+import pytest
 
 import haus
-from haus import Number, Record, String
+from haus import Array, Limits, Number, Record, String, Value, Variant
+from haus.schema import HausEncodeError
 
 
 def c(text: str) -> str:
@@ -144,3 +148,91 @@ def test_hash_is_sha256_of_the_canonical_form() -> None:
 def test_hash_is_the_same_for_equal_values() -> None:
     a, b = haus.parse_all("{ x: 1, y: [2] }, { y: [ 2, ], x: 1 }")
     assert haus.hash(a) == haus.hash(b)
+
+
+# ── values built in code: checked as `stringify` checks them, without its limits ──
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (Number("1e+05"), "1e5"),
+        (Number("1E5"), "1e5"),
+        (Number("0xFF"), "255"),
+        (Number("-0x0"), "-0"),
+        (Number("1_000"), "1000"),
+        (Array((Number("1"), Number("1e+05"))), "[1,1e5]"),
+        (Number("1e99999"), "1e99999"),  # beyond the writer's exponent limit: the canonical form has none
+    ],
+)
+def test_normalizes_numbers_built_in_code(value: Value, text: str) -> None:
+    parsed = haus.parse(text, limits=Limits(max_exponent=1 << 20))
+    assert haus.canonical(value) == text
+    assert haus.equals(value, parsed)
+    assert haus.hash(value) == haus.hash(parsed)
+
+
+@pytest.mark.parametrize(
+    ("value", "code", "path"),
+    [
+        (Number("01"), "invalid-number", ()),
+        (Number("NaN"), "invalid-number", ()),
+        (Number(""), "invalid-number", ()),
+        (Number("1\x002"), "invalid-number", ()),
+        (Record({"b": Number("1"), "a": Array((Number("1"), Number("01")))}), "invalid-number", ("a", 1)),
+        (Variant("lower"), "invalid-tag", ()),
+        (Variant("A", (Number("1"), Variant("b"))), "invalid-tag", (1,)),
+        (String("x\ud800y"), "cannot-encode", ()),
+        (Variant("A", (Record({"x": String("\udc00")}),)), "cannot-encode", ("x",)),
+        (Record({"a\ud800": Number("1")}), "cannot-encode", ()),
+        (Record(cast("dict[str, Value]", {1: Number("1")})), "cannot-encode", ()),
+        (Array(cast("tuple[Value, ...]", (1,))), "cannot-encode", (0,)),
+    ],
+)
+def test_a_value_built_in_code_without_a_text_has_the_writers_error(
+    value: Value, code: str, path: tuple[str | int, ...]
+) -> None:
+    calls: list[Callable[[Value], object]] = [
+        haus.canonical,
+        haus.hash,
+        lambda v: haus.equals(v, v),
+        lambda v: haus.compare(v, v),
+    ]
+    for f in calls:
+        with pytest.raises(HausEncodeError) as e:
+            f(value)
+        assert (e.value.code, e.value.path) == (code, path)
+    with pytest.raises(HausEncodeError) as w:
+        haus.stringify(value)
+    assert w.value.code == code
+    with pytest.raises(HausEncodeError) as a:
+        haus.hash_all([Number("1"), value])
+    assert (a.value.code, a.value.path) == (code, (1, *path))
+
+
+def test_a_lone_surrogate_never_hashes_like_its_replacement() -> None:
+    with pytest.raises(HausEncodeError):
+        haus.hash(String("x\ud800y"))
+    assert haus.hash(String("x�y")) == hashlib.sha256('"x�y"'.encode()).hexdigest()
+
+
+def test_a_value_that_contains_itself_is_cyclic() -> None:
+    fields: dict[str, Value] = {}
+    r = Record(fields)
+    fields["a"] = Array((r,))
+    with pytest.raises(HausEncodeError) as e:
+        haus.canonical(r)
+    assert (e.value.code, e.value.path) == ("cyclic-value", ("a", 0))
+
+
+def test_a_value_built_in_code_may_nest_any_depth() -> None:
+    v: Value = Number("1")
+    for _ in range(100_000):
+        v = Array((v,))
+    assert haus.canonical(v) == "[" * 100_000 + "1" + "]" * 100_000
+    bad: Value = Number("01")
+    for _ in range(10_000):
+        bad = Variant("T", (bad, Number("2")))
+    with pytest.raises(HausEncodeError) as e:
+        haus.canonical(bad)
+    assert (e.value.code, e.value.path) == ("invalid-number", (0,) * 10_000)

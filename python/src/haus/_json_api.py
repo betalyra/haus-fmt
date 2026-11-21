@@ -21,7 +21,7 @@ from ._json import (
     write_json,
 )
 from ._parser import DEFAULT_LIMITS, Limits, make_room
-from ._stream import DEFAULT_MAX_VALUE_LENGTH, Readable
+from ._stream import Readable
 from ._value import Value
 
 # ── the JSON import (§16.1) ──────────────────────────────────
@@ -48,7 +48,6 @@ def import_json_lines(
     source: str | bytes | Readable | Iterable[str | bytes],
     *,
     limits: Limits = DEFAULT_LIMITS,
-    max_line_length: int = DEFAULT_MAX_VALUE_LENGTH,
 ) -> Iterator[Value]:
     """Each line of JSON Lines as a haus value (spec §16.1), from a text, a file or chunks split anywhere."""
 
@@ -56,7 +55,7 @@ def import_json_lines(
         make_room(limits.max_depth)
         return imported(j, limits, path=(i,))
 
-    return read_lines(source, limits, limits.max_depth, convert, max_line_length)
+    return read_lines(source, limits, limits.max_depth, convert)
 
 
 # ── self-describing JSON (§16.2) ─────────────────────────────
@@ -99,7 +98,6 @@ def from_haus_json_lines(
     source: str | bytes | Readable | Iterable[str | bytes],
     *,
     limits: Limits = DEFAULT_LIMITS,
-    max_line_length: int = DEFAULT_MAX_VALUE_LENGTH,
 ) -> Iterator[Value]:
     """Each line of self-describing JSON Lines (an envelope each) as a haus value.
 
@@ -110,4 +108,4 @@ def from_haus_json_lines(
         make_room(limits.max_depth)
         return from_envelope(j, limits, (i,))
 
-    return read_lines(source, limits, haus_json_depth(limits), convert, max_line_length, strict=True)
+    return read_lines(source, limits, haus_json_depth(limits), convert, strict=True)

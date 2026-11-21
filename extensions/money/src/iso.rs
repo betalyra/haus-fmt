@@ -17,7 +17,9 @@ impl CurrencyCode {
     pub fn new(code: &str) -> Result<CurrencyCode, String> {
         match code.as_bytes() {
             &[a, b, c] if [a, b, c].iter().all(u8::is_ascii_uppercase) => Ok(CurrencyCode([a, b, c])),
-            _ => Err(format!("{code:?} is not a currency of the iso profile: three letters A–Z")),
+            _ => {
+                Err(format!("\"{}\" is not a currency of the iso profile: three letters A–Z", haus::for_message(code)))
+            }
         }
     }
 
@@ -26,7 +28,8 @@ impl CurrencyCode {
         match currency {
             AnyTag::Bare(code) => CurrencyCode::new(code),
             AnyTag::Other(_) => Err(format!(
-                "{currency} is not a currency of the iso profile: a tag of three letters A–Z, without payload"
+                "{} is not a currency of the iso profile: a tag of three letters A–Z, without payload",
+                haus::for_message(&currency.to_string())
             )),
         }
     }
@@ -147,5 +150,14 @@ mod tests {
         let money = decode("Money(19.90, USD)").unwrap();
         assert_eq!(money, IsoMoney { amount: Decimal::parse("19.90").unwrap(), currency: "USD".parse().unwrap() });
         assert_eq!(Iso::decode(Iso::encode(&money)), Ok(money));
+    }
+
+    /// Messages quote the rejected code as the binding's messages do (spec §9).
+    #[test]
+    fn messages_quote_the_code_escaped_and_short() {
+        let e = CurrencyCode::new(&"A".repeat(100)).unwrap_err();
+        assert_eq!(e, format!("\"{}…\" is not a currency of the iso profile: three letters A–Z", "A".repeat(39)));
+        let e = CurrencyCode::new("E\u{202E}R").unwrap_err();
+        assert!(e.starts_with(r#""E\u{202E}R""#), "{e}");
     }
 }

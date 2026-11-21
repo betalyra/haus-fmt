@@ -39,9 +39,9 @@ fn cases(file: &str) -> Vec<(String, Value)> {
     assert!(!values.is_empty(), "no cases in {}", path.display());
     values
         .into_iter()
-        .map(|v| match v {
-            Value::Variant { tag, mut args } if args.len() == 1 => (tag, args.remove(0)),
-            v => panic!("{file}: not a case: {}", canonical(&v)),
+        .map(|mut v| match &mut v {
+            Value::Variant { tag, args } if args.len() == 1 => (std::mem::take(tag), args.remove(0)),
+            _ => panic!("{file}: not a case: {}", canonical(&v).unwrap()),
         })
         .collect()
 }
@@ -49,7 +49,7 @@ fn cases(file: &str) -> Vec<(String, Value)> {
 fn text(fields: &Value, key: &str) -> String {
     match fields.get(key) {
         Some(Value::String(s)) => s.clone(),
-        _ => panic!("not a case: {}", canonical(fields)),
+        _ => panic!("not a case: {}", canonical(fields).unwrap()),
     }
 }
 
@@ -59,7 +59,7 @@ fn rejected(result: Result<Value, haus::Error>, fields: &Value) -> Option<String
     let code = text(fields, "code");
     let path = fields.get("path").map(|_| text(fields, "path"));
     match result {
-        Ok(v) => Some(format!("read as {}", canonical(&v))),
+        Ok(v) => Some(format!("read as {}", canonical(&v).unwrap())),
         Err(e) if e.code().map(|c| c.as_str()) != Some(code.as_str()) => {
             Some(format!("{:?} ({e}), expected {code}", e.code()))
         }
@@ -95,12 +95,12 @@ fn self_describing() {
                     Ok(written) if !same_json(&written, &json) => Some(format!("written as {written}")),
                     Ok(_) => match haus::from_haus_json(&json) {
                         Ok(v) if haus::equals(&v, input) => None,
-                        Ok(v) => Some(format!("read as {}", canonical(&v))),
+                        Ok(v) => Some(format!("read as {}", canonical(&v).unwrap())),
                         Err(e) => Some(format!("can't read it: {e}")),
                     },
                 },
                 ("Err", None) => rejected(haus::from_haus_json(&json), fields),
-                _ => panic!("not a case: {}", canonical(fields)),
+                _ => panic!("not a case: {}", canonical(fields).unwrap()),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))
         })
@@ -119,11 +119,11 @@ fn import() {
             let failure = match (tag.as_str(), fields.get("output")) {
                 ("Read", Some(output)) => match haus::import_json(&json) {
                     Ok(v) if haus::equals(&v, output) => None,
-                    Ok(v) => Some(format!("read as {}", canonical(&v))),
+                    Ok(v) => Some(format!("read as {}", canonical(&v).unwrap())),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
                 ("Err", None) => rejected(haus::import_json(&json), fields),
-                _ => panic!("not a case: {}", canonical(fields)),
+                _ => panic!("not a case: {}", canonical(fields).unwrap()),
             };
             failure.map(|why| format!("{tag} {json}: {why}"))
         })
@@ -144,11 +144,11 @@ fn json_lines() {
             let failure = match (tag.as_str(), fields.get("output")) {
                 ("Ok", Some(Value::Array(output))) => match read {
                     Ok(v) if v.len() == output.len() && v.iter().zip(output).all(|(a, b)| haus::equals(a, b)) => None,
-                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)))),
+                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)).unwrap())),
                     Err(e) => Some(format!("can't read it: {:?} ({e})", e.code())),
                 },
                 ("Err", None) => rejected(read.map(Value::Array), fields),
-                _ => panic!("not a case: {}", canonical(fields)),
+                _ => panic!("not a case: {}", canonical(fields).unwrap()),
             };
             failure.map(|why| format!("{tag} {json:?}: {why}"))
         })
@@ -198,7 +198,7 @@ fn compare_valid_files() {
                 }
                 Ok(_) => match haus::json::from_haus_json_lines(&expected) {
                     Ok(v) if v.len() == values.len() && v.iter().zip(&values).all(|(a, b)| haus::equals(a, b)) => None,
-                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)))),
+                    Ok(v) => Some(format!("read as {}", canonical(&Value::Array(v)).unwrap())),
                     Err(e) => Some(format!("can't read it: {e}")),
                 },
             };

@@ -36,6 +36,20 @@ expect Time.check("TimeZone", "Europe/Lisbon") == Ok({})
 expect Time.check("TimeZone", "UTC") == Ok({})
 expect Time.check("TimeZone", "Etc/GMT+1") == Ok({})
 expect Time.check("TimeZone", "-03:30") == Ok({})
+expect Time.check("TimeZone", "Europe/Z") == Ok({})
+# Z is the offset letter, not a zone name.
+expect ["Z", "2027-03-29T10:00:00Z[Z]", "2027-03-29T10:00:00+00:00[Z]"].map(
+	|t| match Time.check(if (t == "Z") "TimeZone" else "ZonedDateTime", t) {
+		Ok(_) => False
+		Err(e) => e.contains("the offset letter")
+	},
+) == [True, True, True]
+# Messages show the text escaped and at most 40 characters long (spec §9).
+expect Time.check("Date", "\u(1B)[31m") == Err("\"\\u{1B}[31m\" is not a Date; write it like 2026-11-09")
+expect match Time.check("TimeZone", Str.repeat("a", 300)) {
+	Ok(_) => False
+	Err(e) => e.starts_with("\"${Str.repeat("a", 39)}…\" is not a valid TimeZone")
+}
 
 expect match Time.check("Date", "2026-02-30") {
 	Ok(_) => False

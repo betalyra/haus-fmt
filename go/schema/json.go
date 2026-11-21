@@ -26,7 +26,7 @@ var (
 	selfDescribingArgs   = hooks.SelfDescribingArgs.(func(string, haus.Value, haus.Limits, int, string) (haus.Value, error))
 	appendSelfDescribing = hooks.AppendSelfDescribing.(func([]byte, haus.Value) []byte)
 	appendJSONString     = hooks.AppendJSONString.(func([]byte, string) []byte)
-	jsonLines            = hooks.JSONLines.(func(io.Reader, int, func(string, int) (haus.Value, error)) iter.Seq2[haus.Value, error])
+	jsonLines            = hooks.JSONLines.(func(io.Reader, func(string, int) (haus.Value, error)) iter.Seq2[haus.Value, error])
 )
 
 var (
@@ -118,7 +118,7 @@ func (t Type) ToJSONLines(values []haus.Value) ([]byte, error) {
 // [Type.ReadJSONLines]): every value, or the first error.
 func (t Type) FromJSONLines(data []byte) ([]haus.Value, error) {
 	var out []haus.Value
-	for v, err := range t.readJSONLines(bytes.NewReader(data), DecodeOptions{}, false) {
+	for v, err := range t.readJSONLines(bytes.NewReader(data), DecodeOptions{}) {
 		if err != nil {
 			return nil, err
 		}
@@ -129,25 +129,20 @@ func (t Type) FromJSONLines(data []byte) ([]haus.Value, error) {
 
 // ReadJSONLines reads JSON Lines from r (spec §16, "Streams"), each line
 // the schema-based JSON of a value of the type (of a stream's value, for a
-// Stream definition). It holds one line at a time, at most
-// opts.Limits.MaxValueLength characters (value-too-long). Errors in a
-// line's text have the line's number; errors in a value have a path that
+// Stream definition). It holds one line at a time; JSON Lines has no value
+// limit (spec §7), the limits of a JSON value apply. Errors in a line's text have the line's number; errors in a value have a path that
 // starts with its index, $[3].total. The iteration stops after the first
 // error.
 func (t Type) ReadJSONLines(r io.Reader, opts DecodeOptions) iter.Seq2[haus.Value, error] {
-	return t.readJSONLines(r, opts, true)
+	return t.readJSONLines(r, opts)
 }
 
-func (t Type) readJSONLines(r io.Reader, opts DecodeOptions, bounded bool) iter.Seq2[haus.Value, error] {
+func (t Type) readJSONLines(r io.Reader, opts DecodeOptions) iter.Seq2[haus.Value, error] {
 	lim, err := resolveLimits(opts.Limits)
 	if err != nil {
 		return func(yield func(haus.Value, error) bool) { yield(nil, err) }
 	}
-	maxLine := 0
-	if bounded {
-		maxLine = lim.MaxValueLength
-	}
-	return jsonLines(r, maxLine, func(line string, i int) (haus.Value, error) {
+	return jsonLines(r, func(line string, i int) (haus.Value, error) {
 		return t.fromJSON(line, lim, opts, i == 0, nil)
 	})
 }

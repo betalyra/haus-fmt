@@ -36,7 +36,7 @@ interface Case {
 }
 
 /** The number of cases in cases.haus: a reader that drops some fails. */
-const TOTAL = 85
+const TOTAL = 91
 
 // ── reading the cases ────────────────────────────────────────
 

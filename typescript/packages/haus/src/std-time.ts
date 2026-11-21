@@ -19,6 +19,7 @@
  * Nothing here depends on a registry: whether a zone exists, or whether an
  * offset matches its zone at that time, is up to the application.
  */
+import { quoteText } from "./chars.js"
 
 export const STD_TIME_TYPES = ["Date", "Time", "DateTime", "Instant", "ZonedDateTime", "Duration", "YearMonth", "TimeZone"] as const
 export type StdTimeType = (typeof STD_TIME_TYPES)[number]
@@ -60,8 +61,10 @@ const ZONE_NAME = /^[A-Za-z][A-Za-z0-9._+-]*(\/[A-Za-z0-9._+-]+)*$/
 const zone = (z: string): string | undefined => {
   if (/^[+-]\d{2}:\d{2}$/.test(z)) return offset(z)
   if (z.length > 255 || !ZONE_NAME.test(z) || z.split("/").some((p) => p === "." || p === "..")) {
-    return `${JSON.stringify(z)} is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)`
+    return `"${quoteText(z)}" is not an IANA zone name (like Europe/Lisbon) or an offset (like +01:00)`
   }
+  // `Z` is the offset letter (UTC), not a zone name: write +00:00 or a name like Etc/UTC.
+  if (z === "Z") return "Z is the offset letter, not a zone name: write the offset +00:00 or a zone name like Etc/UTC"
   return undefined
 }
 
@@ -118,9 +121,9 @@ const shapes: Record<StdTimeType, { readonly re: RegExp; readonly example: strin
 export function checkStdTime(type: StdTimeType, text: string): string | undefined {
   const shape = shapes[type]
   const m = shape.re.exec(text)
-  if (!m) return `${JSON.stringify(text)} is not a ${type}; write it like ${shape.example}`
+  if (!m) return `"${quoteText(text)}" is not a ${type}; write it like ${shape.example}`
   const reason = shape.check(m)
-  return reason === undefined ? undefined : `${JSON.stringify(text)} is not a valid ${type}: ${reason}`
+  return reason === undefined ? undefined : `"${quoteText(text)}" is not a valid ${type}: ${reason}`
 }
 
 export const isStdTimeType = (name: string): name is StdTimeType => (STD_TIME_TYPES as readonly string[]).includes(name)

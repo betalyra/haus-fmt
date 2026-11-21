@@ -36,9 +36,11 @@
  *   `schema.haus` in the package's own package.json (`dependencies`,
  *   `peerDependencies`, `optionalDependencies`), other files in the nearest
  *   package.json above their real path that has a `name` or a dependency field
- *   (`devDependencies` count too). Given packages always count as declared.
- * - When the package's directory has a package.json with a `version`, it must
- *   be the manifest's.
+ *   (`devDependencies` count too); one that isn't valid JSON or isn't a
+ *   regular file ends the search and declares nothing, one that is valid JSON
+ *   but not an object is skipped. Given packages always count as declared.
+ * - When the package's directory has a package.json with a `version` that is
+ *   a string, it must be the manifest's.
  *
  * A package's `package.haus`, `schema.haus` and `package.json` must be regular
  * files, never links (the package directory may be one). They are opened
@@ -298,8 +300,13 @@ export function readManifest(path: string, read: Reader = reader()): Manifest {
 
 type PackageJson =
   | { readonly kind: "missing" }
-  /** Not valid JSON, or not an object: declares nothing, gives no version. */
+  /**
+   * Not valid JSON, or not a regular file: declares nothing, gives no
+   * version, and ends the search for the nearest one (spec §13.3).
+   */
   | { readonly kind: "invalid" }
+  /** Valid JSON but not an object: declares nothing, gives no version; the search goes on above it. */
+  | { readonly kind: "notObject" }
   | { readonly kind: "json"; readonly json: Readonly<Record<string, unknown>> }
 
 /**
@@ -317,7 +324,7 @@ const readPackageJson = (dir: string, read: Reader): PackageJson => {
   if (got.kind === "large") throw new ModuleError("file-too-large", `${shown(path)} is larger than ${MAX_PACKAGE_JSON_BYTES / 1024 / 1024} MiB. It is not read`)
   try {
     const json: unknown = JSON.parse(got.text)
-    return typeof json === "object" && json !== null && !Array.isArray(json) ? { kind: "json", json: json as Record<string, unknown> } : { kind: "invalid" }
+    return typeof json === "object" && json !== null && !Array.isArray(json) ? { kind: "json", json: json as Record<string, unknown> } : { kind: "notObject" }
   } catch {
     return { kind: "invalid" }
   }
@@ -637,8 +644,8 @@ const checkDeclared = (module: string, from: string, read: Reader): void => {
   }
   for (const d of ancestors(dir)) {
     const p = readPackageJson(d, read)
-    if (p.kind === "missing") continue
-    // Not a project's: a marker such as { "type": "module" }.
+    // Not a project's: valid JSON that isn't an object, or a marker such as { "type": "module" }.
+    if (p.kind === "missing" || p.kind === "notObject") continue
     if (p.kind === "json" && !Object.hasOwn(p.json, "name") && !ALL_DEPENDENCIES.some((f) => Object.hasOwn(p.json, f))) continue
     if (p.kind === "json" && ALL_DEPENDENCIES.some((f) => declares(p.json, f, module))) return
     throw new ModuleError("undeclared-package", `${module} is imported by ${shown(from)}, but ${shown(join(d, "package.json"))} doesn't declare it: add it to its dependencies`)

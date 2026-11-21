@@ -3,11 +3,15 @@
 //! with its code at its line and column (1-based, columns in code points).
 
 use haus::{Value, canonical};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn error_positions() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite/positions/cases.haus");
+    // `HAUS_SUITE` names another directory holding the suite.
+    let path = std::env::var_os("HAUS_SUITE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite"))
+        .join("positions/cases.haus");
     let cases = haus::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert!(!cases.is_empty(), "no cases in {}", path.display());
     let failures: Vec<String> = cases
@@ -20,7 +24,7 @@ fn error_positions() {
                 Some(Value::Number(column)),
             ) = (c.get("text"), c.get("code"), c.get("line"), c.get("column"))
             else {
-                panic!("not a case: {}", canonical(c))
+                panic!("not a case: {}", canonical(c).unwrap())
             };
             let want = format!("{code} at {line}:{column}");
             match haus::parse(text) {

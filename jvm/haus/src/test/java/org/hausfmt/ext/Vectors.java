@@ -44,7 +44,7 @@ final class Vectors {
    *   <li>{@code Accept}: {@code value} (haus text of {@code type}) is accepted, and encoding what
    *       the codec decoded writes exactly {@code output}, or {@code value} when there is none;
    *   <li>{@code Reject}: {@code value} is valid for the schema of {@code type}, and the codec
-   *       rejects it with {@code type-mismatch}, at the value.
+   *       rejects it with {@code codec-rejected}, at the value.
    * </ul>
    */
   static Stream<DynamicTest> run(String extension, String profile, Map<String, Codec<?>> codecs) {
@@ -78,10 +78,10 @@ final class Vectors {
             // With the type's own codec, at the value; with all of them, a codec of a part may
             // reject it first, at the part.
             HausException e = assertThrows(HausException.class, () -> ty.decode(parsed, own));
-            assertEquals(ErrorCode.TYPE_MISMATCH, e.code(), e.getMessage());
+            assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
             assertTrue(e.path() == null || e.path().equals("$"), e.getMessage());
             e = assertThrows(HausException.class, () -> ty.decode(parsed, DecodeOptions.DEFAULT.withCodecs(all)));
-            assertEquals(ErrorCode.TYPE_MISMATCH, e.code(), e.getMessage());
+            assertEquals(ErrorCode.CODEC_REJECTED, e.code(), e.getMessage());
             break;
           default:
             throw new AssertionError("unknown vector " + x.tag());

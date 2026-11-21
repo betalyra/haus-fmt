@@ -114,9 +114,10 @@ fn writing() {
     linear("ordinary keys", 20_000, |n| record_value(n, |i| format!("k{i}")), written);
     linear("colliding keys", 20_000, |n| record_value(n, colliding), written);
     let repeated = |n| {
-        let Value::Record(mut fields) = record_value(n, colliding) else { unreachable!() };
+        let mut v = record_value(n, colliding);
+        let Value::Record(fields) = &mut v else { unreachable!() };
         fields.push((colliding(n / 2), Value::Number("0".into())));
-        Value::Record(fields)
+        v
     };
     linear("a repeated colliding key", 20_000, repeated, |v| assert!(haus::to_string(v).is_err()));
     let string = |piece: &'static str| move |n: usize| Value::String(piece.repeat(n));

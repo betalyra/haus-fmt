@@ -121,23 +121,42 @@ func sourcePosition(of i: Int, in b: Bytes, from start: SourcePosition = SourceP
 // ── text for messages ───────────────────────────────────────────
 
 /// `text` quoted for an error message: quotes and backslashes escaped,
-/// control, bidi and line-separator characters as `\u{…}`, and cut to 40
-/// characters (spec §9).
+/// control, bidi and line-separator characters as `\u{…}`, and at most 40
+/// characters between the quotes as shown, after escaping (spec §9).
 func quoteForMessage(_ text: String) -> String {
-    let maxCharacters = 40
-    var out = "\""
-    for (n, c) in text.unicodeScalars.enumerated() {
-        if n == maxCharacters {
-            out += "…"
-            break
-        }
+    let body = capped(text) { c in
         switch c {
-        case "\"", "\\": out += "\\\(c)"
-        case _ where needsEscape(c.value): out += unicodeEscape(c.value)
-        default: out.unicodeScalars.append(c)
+        case "\"", "\\": "\\\(c)"
+        case _ where needsEscape(c.value): unicodeEscape(c.value)
+        default: String(c)
         }
     }
-    return out + "\""
+    return "\"" + body + "\""
+}
+
+/// `text` as a message shows it (spec §9): each character as `shown` writes
+/// it, and at most 40 characters as shown. A longer text keeps the whole
+/// pieces that fit in 39 and ends with `…`, so a cut never falls inside an
+/// escape.
+func capped(_ text: String, _ shown: (Unicode.Scalar) -> String) -> String {
+    let maxCharacters = 40
+    var pieces: [String] = []
+    var used = 0
+    for c in text.unicodeScalars {
+        let piece = shown(c)
+        used += piece.unicodeScalars.count
+        // Past 40 as shown: cut, keeping what fits in 39.
+        if used > maxCharacters {
+            var kept = 0
+            let fits = pieces.prefix { p in
+                kept += p.unicodeScalars.count
+                return kept < maxCharacters
+            }
+            return fits.joined() + "…"
+        }
+        pieces.append(piece)
+    }
+    return pieces.joined()
 }
 
 /// `\u{…}` with uppercase hex digits and no leading zeros (spec §12).

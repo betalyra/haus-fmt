@@ -190,7 +190,7 @@ class StreamSuiteTest {
             got = "Ok(" + Haus.canonical(t.encode(schema.codec(t.name(), Value.class).decode(text))) + ")";
           }
         } catch (HausException e) {
-          got = "Err(" + e.code().code() + " at " + (e.path() == null ? "$" : e.path()) + ")";
+          got = "Err(" + e.code().code() + " at " + (e.path() == null ? "(no path)" : e.path()) + ")";
         }
         assertEquals(want, got);
       });

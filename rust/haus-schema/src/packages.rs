@@ -359,7 +359,8 @@ pub fn imports_no_files(manifest: &Manifest, file: &syntax::File, text: &str) ->
         Some(imp) => {
             let reason = format!(
                 "can't import {}: the schema of {} can't import files, only packages by name",
-                imp.module, manifest.name
+                crate::quote(&imp.module),
+                crate::quote(&manifest.name)
             );
             Err(syntax::error(text, imp.pos, ErrorCode::PackagePath, reason).into())
         }

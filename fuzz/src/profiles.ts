@@ -543,12 +543,12 @@ function runAll(p: Profile, cases: readonly Case[]): Outcome[][] {
 // ── comparing ────────────────────────────────────────────────
 
 /** Lean rejects the value by the profile's rule (the schema accepts it). */
-const byProfile = (o: Outcome) => o.kind === "err" && o.code === "-" && o.reason.startsWith("not accepted by")
+const byProfile = (o: Outcome) => o.kind === "err" && o.code === "codec-rejected" && o.reason.startsWith("not accepted by")
 
 /**
  * What is wrong with a runner's outcome, against Lean's, or undefined. The
  * text written must be the same; error codes are compared where both give
- * one at the same place; a value the profile rejects is a `type-mismatch`
+ * one at the same place; a value the profile rejects is `codec-rejected`
  * (profiles/*.md, "Encoding"), wherever the binding reports it. Reasons are
  * not compared.
  */
@@ -557,7 +557,7 @@ function problem(lean: Outcome, o: Outcome): string | undefined {
   if (o.kind === "crash") return "crash"
   if (lean.kind === "ok") return o.kind === "ok" ? (o.text === lean.text ? undefined : "writes another value") : "rejects"
   if (o.kind === "ok") return byProfile(lean) ? "accepts what the profile rejects" : "accepts what the schema rejects"
-  if (byProfile(lean)) return o.code === "type-mismatch" ? undefined : `rejects with ${o.code}, not type-mismatch`
+  if (byProfile(lean)) return o.code === "codec-rejected" ? undefined : `rejects with ${o.code}, not codec-rejected`
   if (lean.code !== "-" && o.code !== "-" && lean.place === o.place && lean.code !== o.code) return `code ${o.code}, Lean ${lean.code}`
   return undefined
 }

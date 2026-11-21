@@ -34,7 +34,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 **Imports:** [unknown-module](#unknown-module), [unknown-import](#unknown-import), [duplicate-import](#duplicate-import), [import-unavailable](#import-unavailable), [import-not-found](#import-not-found), [import-version](#import-version), [import-cycle](#import-cycle), [duplicate-package](#duplicate-package), [undeclared-package](#undeclared-package), [package-manifest](#package-manifest), [package-version](#package-version), [package-path](#package-path), [package-name](#package-name), [package-crate](#package-crate), [package-install-script](#package-install-script), [package-files](#package-files), [profile-vectors](#profile-vectors), [package-wrapper](#package-wrapper), [codec-unreachable](#codec-unreachable), [file-too-large](#file-too-large), [too-many-files](#too-many-files)
 
-**Decoding and encoding:** [type-mismatch](#type-mismatch), [not-an-integer](#not-an-integer), [out-of-range](#out-of-range), [missing-field](#missing-field), [unknown-field](#unknown-field), [unknown-tag](#unknown-tag), [wrong-payload](#wrong-payload), [invalid-time](#invalid-time), [invalid-secret](#invalid-secret), [cannot-encode](#cannot-encode), [cyclic-value](#cyclic-value), [step-budget](#step-budget), [too-many-nodes](#too-many-nodes)
+**Decoding and encoding:** [type-mismatch](#type-mismatch), [not-an-integer](#not-an-integer), [out-of-range](#out-of-range), [missing-field](#missing-field), [unknown-field](#unknown-field), [unknown-tag](#unknown-tag), [wrong-payload](#wrong-payload), [invalid-time](#invalid-time), [invalid-secret](#invalid-secret), [codec-rejected](#codec-rejected), [cannot-encode](#cannot-encode), [cyclic-value](#cyclic-value), [step-budget](#step-budget), [too-many-nodes](#too-many-nodes)
 
 **JSON:** [json-syntax](#json-syntax), [unpaired-surrogate](#unpaired-surrogate), [haus-json-form](#haus-json-form), [haus-json-version](#haus-json-version), [haus-json-number](#haus-json-number), [haus-json-bytes](#haus-json-bytes), [invalid-tag](#invalid-tag), [invalid-base64](#invalid-base64), [missing-member](#missing-member), [unexpected-member](#unexpected-member), [no-json-form](#no-json-form)
 
@@ -42,7 +42,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 ## invalid-utf8
 
-*Syntax.* The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate.
+*Syntax.* The input is not valid UTF-8 (§4): a byte sequence that encodes no character, an overlong form or a surrogate. Also an unpaired surrogate in a string of the language (UTF-16) given to a parser instead of bytes.
 
 For example: the bytes 22 FF 22: a quote, a byte that never starts a character, a quote.
 
@@ -184,7 +184,7 @@ Heartbeat
 
 ## duplicate-key
 
-*Syntax.* A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16).
+*Syntax.* A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code that a writer, the canonical form or the hash is given (§11, §12).
 
 ```haus
 { a: 1, a: 2 }
@@ -204,7 +204,7 @@ Some()
 
 ## invalid-number
 
-*Syntax.* A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3).
+*Syntax.* A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`) that a writer, the canonical form or the hash is given (§11, §12).
 
 ```haus
 007
@@ -425,7 +425,7 @@ For example: a tag of 16,777,217 characters.
 
 ## value-too-long
 
-*Limits.* One top-level value of a stream (or one line of JSON Lines) has more characters than the limit (default 64 Mi).
+*Limits.* One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).
 
 For example: a stream whose second value is 64 Mi characters long.
 
@@ -990,9 +990,17 @@ type Root = { key: Secret String }
 
 **Fix:** Write a value of the secret's type; the value isn't shown, so check it where it comes from.
 
+## codec-rejected
+
+*Decoding and encoding.* A value its type's schema accepts and a codec rejects (§13.4), such as an amount whose currency isn't in ISO 4217 for the `@haus-fmt/money/iso` profile. At the place of the codec's type.
+
+For example: Money(1, US) decoded with the codec of the profile @haus-fmt/money/iso: US is no ISO 4217 currency.
+
+**Fix:** Write a value the codec accepts; the profile's rule (profiles/<name>.md) or the codec's documentation says which.
+
 ## cannot-encode
 
-*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`.
+*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Writing a value built in code (§11, §12): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value.
 
 For example: encode(h.Int, 5): Int is a bigint, 5 is a number.
 

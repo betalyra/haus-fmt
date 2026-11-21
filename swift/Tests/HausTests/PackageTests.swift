@@ -29,7 +29,7 @@ struct PackageSuiteTests {
     }()
 
     @Test func everyCase() {
-        #expect(Self.cases.count == 85)
+        #expect(Self.cases.count == 91)
     }
 
     @Test(arguments: cases)
@@ -205,6 +205,16 @@ struct SchemaFileTests {
         }
         #expect(quoteFromFile("a\u{202E}b") == #"a\u{202E}b"#)
         #expect(quoteFromFile(String(repeating: "x", count: 50)) == String(repeating: "x", count: 39) + "…")
+        // Escaped first, then cut within 40 as shown, never inside an escape (spec §9).
+        #expect(quoteFromFile(String(repeating: "x", count: 40)) == String(repeating: "x", count: 40))
+        let escapes = String(repeating: "\u{1B}", count: 10)
+        #expect(quoteFromFile(escapes) == String(repeating: #"\u{1B}"#, count: 6) + "…")
+        #expect(quoteForMessage(escapes) == "\"" + String(repeating: #"\u{1B}"#, count: 6) + "…\"")
+        #expect(quoteForMessage("x" + escapes) == "\"x" + String(repeating: #"\u{1B}"#, count: 6) + "…\"")
+        #expect(
+            quoteForMessage(String(repeating: "\"", count: 20)) == "\"" + String(repeating: #"\""#, count: 20) + "\"")
+        #expect(
+            quoteForMessage(String(repeating: "\"", count: 21)) == "\"" + String(repeating: #"\""#, count: 19) + "…\"")
         #expect(isSemanticVersion("1.0.0-rc.1+build.5") && !isSemanticVersion("1.0.0-01"))
     }
 }

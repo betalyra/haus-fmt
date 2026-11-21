@@ -28,5 +28,5 @@ A codec writes back exactly what it decoded: the amount as the `Decimal` it
 was (its scale kept, `19.90` stays `19.90`, spec §15) and the currency tag.
 
 A value that breaks the rule is a decoding error with the code
-`type-mismatch`, at the value's place (spec §15). A codec checks the rule when
+`codec-rejected`, at the value's place (spec §13.4, §15). A codec checks the rule when
 encoding too: a host value that breaks it is not written (`cannot-encode`).

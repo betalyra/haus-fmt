@@ -601,7 +601,7 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
   | .map t, .obj ms => (readEntries env F o t ms).map .map
   | .record closed fields, .obj ms =>
     match missingJ? fields ms with
-    | some k => reject .missingField s!"missing field {k}"
+    | some k => reject .missingField s!"missing field {msgText k}"
     | none => (readFields env F o closed fields false ms).map .record
   | .variant closed cases, j =>
     if b then
@@ -615,7 +615,7 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
         if !isTag tag.toList then reject .invalidTag "not a tag" else
         match caseOf? env cases tag with
         | some (.bare _) => .ok (.case tag [])
-        | _ => reject .unknownTag s!"unknown tag {tag}"
+        | _ => reject .unknownTag s!"unknown tag {msgText tag}"
       | _ => reject .typeMismatch "expected a string: a tag"
     else
       match j with
@@ -625,24 +625,24 @@ def readCore (env : Env) (F : Nat) (b : Bool) (o : String) (c : Ty) (j : JSON) :
         | some (.str tag) =>
           if !isTag tag.toList then reject .invalidTag "_tag: not a tag" else
           match caseOf? env cases tag with
-          | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else memberError "_tag" ms s!"{tag} takes no arguments"
+          | some (.bare _) => if ms.length = 1 then .ok (.case tag []) else memberError "_tag" ms s!"{msgText tag} takes no arguments"
           | some (.record _ cl fields) =>
             -- The payload's fields are members of the variant's own object: no step for the payload.
             if hasReservedField fields then reject .noJsonForm reservedFieldReason else
             match missingJ? fields ms with
-            | some k => reject .missingField s!"missing field {k}"
+            | some k => reject .missingField s!"missing field {msgText k}"
             | none => (readFields env F o cl fields true ms).map fun ys => .case tag [.record ys]
-          | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else memberError "_tag" ms s!"{tag} takes no arguments"
+          | some (.positional _ []) => if ms.length = 1 then .ok (.case tag []) else memberError "_tag" ms s!"{msgText tag} takes no arguments"
           | some (.positional _ [t1]) =>
             if ms.length = 2 then (atExtra "value" ms (memberValue env F o tag t1 ms)).map fun y => .case tag [y]
-            else memberError "value" ms s!"{tag} takes one argument, as value"
+            else memberError "value" ms s!"{msgText tag} takes one argument, as value"
           | some (.positional _ ts) =>
             if ms.length = 2 then (atExtra "values" ms (memberValues env F o tag ts ms)).map (.case tag)
-            else memberError "values" ms s!"{tag} takes {ts.length} arguments, as values"
+            else memberError "values" ms s!"{msgText tag} takes {ts.length} arguments, as values"
           -- `caseOf?` resolves every `Tag T` to one of the forms above.
-          | some (.named _ _) => reject .wrongPayload s!"{tag} takes one argument"
+          | some (.named _ _) => reject .wrongPayload s!"{msgText tag} takes one argument"
           | none =>
-            if closed then reject .unknownTag s!"unknown tag {tag}"
+            if closed then reject .unknownTag s!"unknown tag {msgText tag}"
             else
               -- An unlisted tag (§16.3): bare, its `_args` as self-describing values, or a newer writer's record payload.
               match ms.filter (·.1 != "_tag") with
@@ -715,7 +715,7 @@ termination_by (sizeOf xs, 0)
 def memberValue (env : Env) (F : Nat) (o : String) (tag : String) (t : Ty) (ms : List (String × JSON)) :
     Except Error Typed :=
   match ms with
-  | [] => reject .unexpectedMember s!"{tag} takes one argument, as value"
+  | [] => reject .unexpectedMember s!"{msgText tag} takes one argument, as value"
   | (k, x) :: ms =>
     if k = "value" then under (.key "value") (fromJsonF env F o t x) else memberValue env F o tag t ms
 termination_by (sizeOf ms, 0)
@@ -724,13 +724,13 @@ termination_by (sizeOf ms, 0)
 def memberValues (env : Env) (F : Nat) (o : String) (tag : String) (ts : List Ty) (ms : List (String × JSON)) :
     Except Error (List Typed) :=
   match ms with
-  | [] => reject .unexpectedMember s!"{tag} takes {ts.length} arguments, as values"
+  | [] => reject .unexpectedMember s!"{msgText tag} takes {ts.length} arguments, as values"
   | (k, x) :: ms =>
     if k = "values" then
       match x with
       | .arr xs =>
         if xs.length = ts.length then under (.key "values") (readArgs env F o tag 0 ts xs)
-        else reject .wrongPayload s!"{tag} takes {ts.length} arguments"
+        else reject .wrongPayload s!"{msgText tag} takes {ts.length} arguments"
       | _ => reject .wrongPayload "values: not an array"
     else memberValues env F o tag ts ms
 termination_by (sizeOf ms, 0)

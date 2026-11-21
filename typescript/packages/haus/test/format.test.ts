@@ -213,3 +213,21 @@ describe("infer", () => {
     expect(inferSchema(parseAll("A, B"))).toContain("type Root = Stream Item")
   })
 })
+
+describe("format options are taken literally (spec §11)", () => {
+  const pretty = (text: string, options: { indent?: number; width?: number }) => format(parseAll(text), options)
+  it("indent and width 0 mean 0", () => {
+    expect(pretty("{ a: { b: [1] } }", { indent: 0 })).toBe("{\na: {\nb: [\n1,\n],\n},\n}\n")
+    expect(pretty("Point(1, 2)", { width: 0 })).toBe("Point(\n  1,\n  2,\n)\n")
+    expect(pretty("Point(1, 2)", { indent: 0, width: 0 })).toBe("Point(\n1,\n2,\n)\n")
+    expect(pretty("{ a: Point(1, 2) }", { width: 0 })).toBe("{\n  a: Point(\n    1,\n    2,\n  ),\n}\n")
+  })
+
+  it.each([{ width: -1 }, { indent: -1 }, { indent: -2, width: 40 }, { indent: 1.5 }, { width: 0.5 }, { width: NaN }, { indent: Infinity }])(
+    "rejects %j, a misuse (no §17 code)",
+    (options) => {
+      expect(() => pretty("{ a: Point(1, 2) }", options)).toThrow(RangeError)
+      expect(() => stringify(parse("{ a: Point(1, 2) }"), options)).toThrow(/must be a whole number of at least 0/)
+    },
+  )
+})

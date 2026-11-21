@@ -19,7 +19,7 @@ export { CURRENCY_ID, isCurrency, MONEY_ID, type Currency, type Money } from "./
 const currency: Haus.Codec<{ readonly [CURRENCY_ID]: Currency }, typeof CURRENCY_ID> = {
   [Haus.CodecTypeId]: [{
     id: CURRENCY_ID,
-    apply: (base) => base.pipe(Schema.refine((c: unknown): c is Currency => isCurrency(c), { message: "a currency of the iso profile: a tag of three letters A–Z" })),
+    apply: (base) => base.pipe(Schema.refine((c: unknown): c is Currency => isCurrency(c), { message: "a currency of the iso profile: a tag of three letters A–Z", ...Haus.CODEC_REJECTED })),
   }],
 }
 

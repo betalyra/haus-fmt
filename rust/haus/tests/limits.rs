@@ -281,3 +281,20 @@ fn empty_containers_built_in_code_are_levels() {
     assert_eq!(json::to_string_with(&empty, &limits).unwrap_err().code.as_str(), "nesting-too-deep");
     assert!(haus::to_string_with(&vec![Vec::<u8>::new()], &limits).is_ok());
 }
+
+/// Messages quote text from the input escaped, then at most 40 characters as
+/// shown (spec §9): a long or invisible token can't flood or hide a message.
+#[test]
+fn messages_quote_tokens_escaped_and_short() {
+    let long = "k".repeat(100);
+    let reason = |text: &str| haus::parse(text).unwrap_err().reason;
+    assert_eq!(reason(&format!("{{ {long}: 1, {long}: 2 }}")), format!("duplicate key '{}…'", "k".repeat(39)));
+    assert_eq!(reason(r#"{ "a\u{202E}b": 1, "a\u{202E}b": 2 }"#), r"duplicate key 'a\u{202E}b'");
+    let unexpected =
+        format!("unexpected identifier '{}…': lowercase identifiers can only be record keys", "k".repeat(39));
+    assert_eq!(reason(&format!("[{long}]")), unexpected);
+    assert_eq!(reason(&format!("1{long}")), format!("invalid number '1{}…'", "k".repeat(38)));
+    assert_eq!(reason(r#""\q""#), r"invalid escape '\q'");
+    let e = <i8 as Decode>::decode(&Value::Number("1".repeat(100))).unwrap_err();
+    assert_eq!(e.to_string(), format!("{}… is out of range for Int8 (-128 to 127)", "1".repeat(39)));
+}

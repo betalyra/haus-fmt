@@ -29,7 +29,7 @@ def npmFind (t : Tree) (name : String) : List Path → Except Err (Option Path)
     match t.realPath p with
     | .ok real =>
       if (t.childKind? real "package.haus").isSome then .ok (some real)
-      else .error ⟨.importNotFound, s!"{name}: {showPath p} has no package.haus (not a schema package); the search stops there"⟩
+      else .error ⟨.importNotFound, s!"{msgText name}: {showPath p} has no package.haus (not a schema package); the search stops there"⟩
     | .error _ => npmFind t name ps
 
 /-- The npm walk is `npmFind` on `walk`: it reads no file and changes nothing of the state. -/

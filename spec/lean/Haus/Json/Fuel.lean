@@ -31,7 +31,7 @@ def whnfNames (env : Env) : Nat → Ty → List String
 
 theorem whnf_zero (t : Ty) : whnf env 0 t =
     match peel t with
-    | (_, .ref n) => .error s!"type {n} refers to itself without a record, array or variant in between"
+    | (_, .ref n) => .error s!"type {msgText n} refers to itself without a record, array or variant in between"
     | r => .ok r := by
   rw [whnf]; generalize peel t = p; rcases p with ⟨s, c⟩; cases c <;> rfl
 
@@ -40,7 +40,7 @@ theorem whnf_succ_eq (f : Nat) (t : Ty) : whnf env (f + 1) t =
     | (s, .ref n) =>
       match env.lookup n with
       | some t => (whnf env f t).map fun (s', c) => (s + s', c)
-      | none => .error s!"unknown type {n}"
+      | none => .error s!"unknown type {msgText n}"
     | r => .ok r := by
   rw [whnf]; generalize peel t = p; rcases p with ⟨s, c⟩; cases c <;> rfl
 
@@ -80,7 +80,7 @@ theorem whnf_ref_zero {t : Ty} {s : Nat} {n : String} (h : peel t = (s, .ref n))
 theorem whnf_ref {t : Ty} {s : Nat} {n : String} (h : peel t = (s, .ref n)) (f : Nat) :
     whnf env (f + 1) t = match env.lookup n with
       | some t => (whnf env f t).map fun (s', c) => (s + s', c)
-      | none => .error s!"unknown type {n}" := by
+      | none => .error s!"unknown type {msgText n}" := by
   rw [whnf_succ_eq]; simp [h]
 
 theorem whnfNames_ref {t : Ty} {s : Nat} {n : String} (h : peel t = (s, .ref n)) (f : Nat) :

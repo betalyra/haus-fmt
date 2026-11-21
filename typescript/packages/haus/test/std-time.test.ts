@@ -34,6 +34,7 @@ const valid: ReadonlyArray<readonly [StdTimeType, string]> = [
   ["TimeZone", "UTC"],
   ["TimeZone", "Etc/GMT+1"],
   ["TimeZone", "-03:30"],
+  ["TimeZone", "Europe/Z"],
 ]
 
 const invalid: ReadonlyArray<readonly [StdTimeType, string, string]> = [
@@ -92,6 +93,10 @@ const invalid: ReadonlyArray<readonly [StdTimeType, string, string]> = [
   ["YearMonth", "2026-1", "write it like"],
   ["TimeZone", "europe lisbon", "not an IANA zone name"],
   ["TimeZone", "/Lisbon", "not an IANA zone name"],
+  // Z is the offset letter, not a zone name.
+  ["TimeZone", "Z", "offset letter"],
+  ["ZonedDateTime", "2024-01-01T00:00:00Z[Z]", "offset letter"],
+  ["ZonedDateTime", "2024-01-01T00:00:00+00:00[Z]", "offset letter"],
 ]
 
 describe("std/time profile", () => {

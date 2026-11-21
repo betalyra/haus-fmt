@@ -11,23 +11,58 @@ public enum Layout: String, Sendable, Hashable, CaseIterable {
 
 /// How to write text: the layout, and in the pretty layout the indentation
 /// and line width.
+///
+/// `indent` and `width` are whole numbers of zero or more, taken literally
+/// (spec §11): 0 is 0. Options with a negative one can't be made: the
+/// initializer that takes them throws ``FormatOptionsError``.
+///
+/// ```swift
+/// let options = try FormatOptions(indent: 4, width: 100)
+/// ```
 public struct FormatOptions: Sendable, Hashable {
     public var layout: Layout
     /// The number of spaces per level in the pretty layout. Default 2.
-    public var indent: Int
+    public private(set) var indent: Int
     /// The line width in code points, which only decides whether a
     /// positional payload fits on one line in the pretty layout. Default 80.
-    public var width: Int
+    public private(set) var width: Int
     /// The limits of the text read (``format(_:_:)``), or of the reader the
     /// text is written for (``stringify(_:_:)``, ``stringifyAll(_:_:)``).
     public var limits: Limits
 
-    public init(layout: Layout = .pretty, indent: Int = 2, width: Int = 80, limits: Limits = Limits()) {
+    /// Options with the default indent (2) and width (80).
+    public init(layout: Layout = .pretty, limits: Limits = Limits()) {
+        self.layout = layout
+        self.indent = 2
+        self.width = 80
+        self.limits = limits
+    }
+
+    /// Options with an indent and a width: whole numbers of zero or more. A
+    /// negative one is a misuse of the API and throws ``FormatOptionsError``
+    /// (it has no error code of spec §17).
+    public init(layout: Layout = .pretty, indent: Int = 2, width: Int = 80, limits: Limits = Limits())
+        throws(FormatOptionsError)
+    {
+        guard indent >= 0 else { throw FormatOptionsError("indent must be 0 or more, not \(indent)") }
+        guard width >= 0 else { throw FormatOptionsError("width must be 0 or more, not \(width)") }
         self.layout = layout
         self.indent = indent
         self.width = width
         self.limits = limits
     }
+}
+
+/// Format options that can't be used: a negative indent or width (spec §11).
+/// A misuse of the API, not a mistake in text, so it is no ``HausError`` and
+/// has no error code.
+public struct FormatOptionsError: Error, Sendable, Hashable, CustomStringConvertible {
+    /// What is wrong: `indent must be 0 or more, not -1`.
+    public let message: String
+
+    init(_ message: String) { self.message = message }
+
+    public var description: String { message }
 }
 
 /// Reformats haus text in a standard layout (spec §11). Numbers, byte

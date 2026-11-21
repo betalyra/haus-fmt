@@ -360,7 +360,7 @@ theorem mem_intercalate {x c : Char} {ls : List Text} (h : c ∈ [x].intercalate
 /-- A zone has no `]`, so the closing bracket of a `ZonedDateTime` is the first one. -/
 theorem zone_no_bracket {z : Text} (h : Zone z) : ']' ∉ z := by
   intro hm
-  rcases h with h | ⟨-, -, hp⟩
+  rcases h with h | ⟨-, -, -, hp⟩
   · obtain ⟨sg, a, b, rfl, hs, ha, hb, -⟩ := h
     simp only [List.cons_append, List.mem_cons, List.mem_append] at hm
     rcases hm with h | h | h | h

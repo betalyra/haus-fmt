@@ -125,7 +125,10 @@ impl Issue {
             match s {
                 Segment::Index(i) => out.push_str(&format!("[{i}]")),
                 Segment::Field(k) if is_word(k) => out.push_str(&format!(".{k}")),
-                Segment::Field(k) => out.push_str(&format!("[{}]", haus::canonical(&Value::String(k.clone())))),
+                Segment::Field(k) => {
+                    let quoted = haus::canonical(&Value::String(k.clone())).expect("every string has a canonical form");
+                    out.push_str(&format!("[{quoted}]"))
+                }
             }
         }
         out
@@ -784,11 +787,7 @@ impl<'s, 'v> Walker<'s, 'v> {
         match haus::time::check(name, s) {
             Ok(()) => Some(self.keep(v)),
             Err(reason) => {
-                // Bounded messages (§9.8): a long string is shown shortened.
-                let reason = match s.chars().count() > 40 {
-                    true => reason.replacen(&format!("{s:?}"), &json_quote(&shorten(s, 40)), 1),
-                    false => reason,
-                };
+                // The reason shows the string as messages do (§9): escaped, and shortened if long.
                 self.child(Step::Index(0), |w| w.error::<Value>(Code::InvalidTime, reason, item_of(loc, 0)));
                 None
             }
@@ -1194,7 +1193,7 @@ mod tests {
     /// The literals `spelled` takes are what reading and writing the float gives.
     #[test]
     fn spelled_floats_are_written_as_they_are() {
-        let written = |v: Result<Value, EncodeError>| v.ok().map(|v| haus::canonical(&v));
+        let written = |v: Result<Value, EncodeError>| v.ok().map(|v| haus::canonical(&v).unwrap());
         let (mut f64s, mut f32s) = (0, 0);
         for text in literals().take(400_000) {
             if spelled(&text, 15) {

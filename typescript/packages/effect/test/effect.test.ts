@@ -132,7 +132,11 @@ describe("decode", () => {
       const year10000 = { ...v, i: DateTime.makeUnsafe("+010000-01-01T00:00:00Z") }
       expect((yield* Effect.flip(Haus.encode(S)(year10000))).message).toContain("Instant")
       const unknownZone = '{ i: Instant("2026-11-07T10:00:00Z"), z: ZonedDateTime("2026-11-07T10:00:00+01:00[Europe/Atlantis]") }'
-      expect((yield* Effect.flip(Haus.decode(S)(unknownZone))).message).toContain("Europe/Atlantis")
+      const rejected = yield* Effect.flip(Haus.decode(S)(unknownZone))
+      expect(rejected.message).toContain("Europe/Atlantis")
+      // std/time accepts the zone, the codec's host type can't hold it (spec §13.4).
+      expect(rejected).toMatchObject({ code: "codec-rejected" })
+      expect((yield* Effect.flip(Haus.encode(S)(year10000))).code).toBe("cannot-encode")
     }))
 
   it.effect("Schema.DateTimeZoned with an offset zone writes the zone (std/time needs one)", () =>

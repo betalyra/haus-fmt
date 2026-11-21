@@ -46,12 +46,14 @@ pub fn import_version(module: &str) -> Option<String> {
     let major = digits.trim_start_matches('0');
     let major = if major.is_empty() { "0" } else { major };
     let rest = &version[digits.len()..];
+    // Quoted as messages quote text from files (spec §9): at most 40 characters.
+    let (shown, like) = (quote(module), |major: &str| quote(&format!("@{name}@{major}")));
     if digits.is_empty() || !(rest.is_empty() || rest.starts_with('.')) {
-        Some(format!("@{name}@{version}: expected a major version after '@', like @{name}@1"))
+        Some(format!("{shown}: expected a major version after '@', like {}", like("1")))
     } else if !rest.is_empty() {
-        Some(format!("@{name}@{version}: an import names only the major version (@{name}@{major})"))
+        Some(format!("{shown}: an import names only the major version ({})", like(major)))
     } else if digits.len() != major.len() {
-        Some(format!("@{name}@{version}: a major version has no leading zeros (@{name}@{major})"))
+        Some(format!("{shown}: a major version has no leading zeros ({})", like(major)))
     } else {
         None
     }
@@ -581,11 +583,10 @@ fn file(i: &mut Input) -> ModalResult<File> {
 fn import(i: &mut Input) -> ModalResult<Import> {
     let module = alt((
         preceded("std/", lower).map(|m| format!("std/{m}")),
-        token(
-            (one_of(['@', '.']), take_while(1.., |c: char| c.is_ascii_alphanumeric() || "_.-/@~".contains(c)))
-                .take()
-                .map(str::to_owned),
-        ),
+        // A package's version may hold `~` (`@a/b@1~x`, an `import-version`); a
+        // file path can't (grammar `path`): `./a~b` ends before it.
+        token(('@', take_while(1.., |c: char| module_char(c) || c == '~')).take().map(str::to_owned)),
+        token(('.', take_while(1.., module_char)).take().map(str::to_owned)),
     ))
     .context(expected("a module (std/time, @org/name, ./file)"));
     // At least one, which `check` says.
@@ -594,6 +595,11 @@ fn import(i: &mut Input) -> ModalResult<Import> {
         (pos, preceded(keyword("import"), cut_err((module, delimited(sym("("), names, (opt(sym(",")), sym(")")))))))
             .parse_next(i)?;
     Ok(Import { module, names, pos })
+}
+
+/// A character of a module after its first: `[A-Za-z0-9_./@-]`.
+fn module_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "_.-/@".contains(c)
 }
 
 fn typedef(i: &mut Input) -> ModalResult<TypeDef> {
@@ -858,7 +864,8 @@ fn check(file: &File) -> Result<Vec<Fail>, Fail> {
         return Err((d.pos, Code::RedefinePrelude, format!("{} is a prelude type and can't be redefined", d.name)));
     }
     if let Some(imp) = file.imports.iter().find(|imp| imp.names.is_empty()) {
-        let reason = format!("import {} names no type: import {} (Name, …)", imp.module, imp.module);
+        let module = quote(&imp.module);
+        let reason = format!("import {module} names no type: import {module} (Name, …)");
         return Err((imp.pos, Code::UnknownImport, reason));
     }
     if let Some((imp, reason)) = file.imports.iter().find_map(|imp| Some((imp, import_version(&imp.module)?))) {
