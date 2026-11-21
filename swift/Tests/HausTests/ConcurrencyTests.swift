@@ -82,7 +82,9 @@ struct ConcurrencyTests {
         }
         for (i, v) in values.enumerated() {
             add("canonical") { try canonical(v) }
-            add("hash") { try hash(v) }
+            #if canImport(CryptoKit)
+                add("hash") { try hash(v) }
+            #endif
             add("equals") { v == values[0] }
             add("hash value") { v.hashValue == values[0].hashValue }
             add("check") { try checkValue(v, limits: Limits(maxDepth: 3)) }
