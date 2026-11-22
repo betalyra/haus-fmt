@@ -3,12 +3,12 @@
  * file has, the declarations of a data file checked against it, and the
  * module source that rebuilds a schema file's schemas at runtime.
  */
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { basename, dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule, type SchemaFile } from "@haus-fmt/haus"
+import { checkData, definitionDoc, fromSchemaFile, HausSyntaxError, ModuleError, parseSchemaFile, parseWithLocations, type ParseSchemaOptions, type ResolvedModule, type SchemaFile } from "@haus-fmt/haus"
 import { generateCodecs } from "@haus-fmt/haus/codegen"
-import { isSchemaFile, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
+import { isSchemaFile, readSchemaFile, type NodeResolverOptions } from "@haus-fmt/haus/node"
 import { resolverOf } from "./runtime/shared.js"
 
 export interface Diagnostic {
@@ -67,9 +67,11 @@ export function dataModule(text: string, fileName: string, link: SchemaLink, pac
   if (!existsSync(link.path)) return fallback(`schema file not found: ${link.path}`)
   let file
   try {
-    file = parseSchemaFile(readFileSync(link.path, "utf8"), schemaOptions(link.path, packages))
+    // Read as every file of the schema is: a regular file, opened without blocking.
+    const { text: schemaText, options } = readSchemaFile(link.path, packages)
+    file = parseSchemaFile(schemaText, options)
   } catch (e) {
-    if (e instanceof HausSyntaxError) return fallback(`${schemaName}: ${e.message}`)
+    if (e instanceof HausSyntaxError || e instanceof ModuleError) return fallback(`${schemaName}: ${e.message}`)
     throw e
   }
   const definition = file.definition(link.type)
@@ -90,12 +92,11 @@ export function dataModule(text: string, fileName: string, link: SchemaLink, pac
 // ── runtime modules ──────────────────────────────────────────
 
 /**
- * Parse options for a schema file that also record every import the
+ * Parse options for a schema file (`base`, from readSchemaFile) that also record every import the
  * resolver finds, under short keys (no absolute paths end up in a bundle).
  * The recorded modules let the runtime rebuild the schema without a file system.
  */
-function recording(path: string, packages: NodeResolverOptions) {
-  const base = schemaOptions(path, packages)
+function recording(base: ParseSchemaOptions) {
   const short = new Map<string, string>()
   const real = new Map<string, string>()
   const shorten = (key: string) => {
@@ -130,8 +131,9 @@ function recording(path: string, packages: NodeResolverOptions) {
  * options that parse it as the runtime does.
  */
 function compiledSchema(schemaPath: string, runtime: string, packages: NodeResolverOptions): { code: string; files: string[]; file: SchemaFile; text: string; options: ParseSchemaOptions } {
-  const text = readFileSync(schemaPath, "utf8")
-  const r = recording(schemaPath, packages)
+  // Read as every file of the schema is: a regular file, opened without blocking.
+  const { text, options: base } = readSchemaFile(schemaPath, packages)
+  const r = recording(base)
   const file = parseSchemaFile(text, r.options) // resolves (and records) every import, and reports errors now
   return {
     code: `import { compiled, decodeData } from ${JSON.stringify(runtime)};\n` +

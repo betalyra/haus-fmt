@@ -5,9 +5,13 @@ import Haus.Canonical
 # The package suite (`test-suite/packages/cases.haus`)
 
 Each `Case` (format in `test-suite/README.md`, "Package suite") becomes a
-`Tree`, with no real file system: `File`, `Package`, `Npm` and `Link` map to
-entries (parent directories made as needed), the tree's root being the
-adapter's empty temporary directory. `Package(dir, name, version, schema)`
+`Tree`, with no real file system: `File`, `Package`, `Npm`, `Link`, `Fifo`
+(an `Entry.other`) and `Large` (a file of spaces) map to entries (parent
+directories made as needed), the tree's root being the adapter's empty
+temporary directory. The tree has no permissions: a case with a `Mode` entry
+is marked `unmodelled`, and `haus-ref --packages` skips it. The case's
+`rootDir` is the build's `root` option, and its `ecosystem` must agree with
+its mode (`npm` exactly when `Npm`). `Package(dir, name, version, schema)`
 writes `dir/package.haus` as the record `{ name, version }` in canonical
 form, and `Npm(dir, {…})` writes `dir/package.json` with each dependency
 list as an object from the names to `"*"`.
@@ -36,6 +40,12 @@ structure Case where
   mode : Mode
   should : Bool
   expect : Expect
+  /-- The build's `root` option (`rootDir`), if given. -/
+  rootDir : Option Path := none
+  /-- `core`, `npm` or `cargo`: which implementations run the case. -/
+  ecosystem : String := "core"
+  /-- Why the reference doesn't run the case (`unmodelled`), if it doesn't: it has a `Mode` entry. -/
+  unmodelled : Option String := none
   deriving Inhabited
 
 abbrev D := Except String
@@ -80,7 +90,19 @@ def addFile (es : List (Path × Entry)) : Value → D (List (Path × Entry))
     put es (splitPath dir ++ ["schema.haus"]) (.file (bytesOf schema))
   | .variant "Npm" [.str dir, .record fs] => do
     put es (splitPath dir ++ ["package.json"]) (.file (bytesOf (← packageJson fs)))
+  -- A FIFO: neither a directory, a regular file nor a link (`Entry.other`).
+  | .variant "Fifo" [.str p] => put es (splitPath p) .other
+  -- A file of `n` spaces.
+  | .variant "Large" [.str p, .num n] =>
+    match n.toNat? with
+    | some k => put es (splitPath p) (.file (List.replicate k 32))
+    | none => .error s!"Large: not a size: {n}"
+  -- Permissions, which the model doesn't have: a case with one is `unmodelled` (checked in `decode`).
+  | .variant "Mode" [.str _, .str _] => pure es
   | v => .error s!"not a file: {repr v}"
+
+/-- Whether a list of files has a `Mode` entry. -/
+def hasMode (files : List Value) : Bool := files.any fun | .variant "Mode" _ => true | _ => false
 
 def mode : Value → D Mode
   | .variant "Explicit" [.record fs] => do
@@ -107,9 +129,29 @@ def decode : Value → D Case
     let some m := field fs "mode" | .error s!"{name}: no mode"
     let some e := field fs "expect" | .error s!"{name}: no expect"
     let tree ← files.foldlM addFile []
-    pure { name, tree := ⟨tree⟩, root := splitPath root, mode := ← mode m,
+    let mode ← mode m
+    let some (.str ecosystem) := field fs "ecosystem" | .error s!"{name}: no ecosystem"
+    if ecosystem ∉ ["core", "npm", "cargo"] then .error s!"{name}: ecosystem {ecosystem}, not core, npm or cargo"
+    if (ecosystem == "npm") != mode.npm then .error s!"{name}: ecosystem {ecosystem} with mode {if mode.npm then "Npm" else "Explicit"}"
+    let os ← match field fs "os" with
+      | none => pure none
+      | some (.str "unix") => pure (some "unix")
+      | some v => .error s!"{name}: os {repr v}, not \"unix\""
+    let unmodelled ← match field fs "unmodelled" with
+      | none => pure none
+      | some (.str why) => pure (some why)
+      | some v => .error s!"{name}: unmodelled {repr v}, not a string"
+    if hasMode files && (unmodelled.isNone || os.isNone) then
+      .error s!"{name}: a Mode entry needs os: \"unix\" and unmodelled"
+    if files.any (fun | .variant "Fifo" _ => true | _ => false) && os.isNone then
+      .error s!"{name}: a Fifo entry needs os: \"unix\""
+    let rootDir ← match field fs "rootDir" with
+      | none => pure none
+      | some (.str d) => pure (some (splitPath d))
+      | some v => .error s!"{name}: rootDir {repr v}, not a string"
+    pure { name, tree := ⟨tree⟩, root := splitPath root, mode,
            should := field fs "should" == some (.variant "True" []),
-           expect := ← expect e }
+           expect := ← expect e, rootDir, ecosystem, unmodelled }
   | v => .error s!"not a case: {repr v}"
 
 def contains (s part : String) : Bool := (s.splitOn part).length > 1
@@ -126,7 +168,7 @@ def allowedRead (p : Path) : Bool :=
 
 /-- Runs a case: `none` if it passes, else why not. Also the outcome, for printing. -/
 def check (c : Case) : Option String × Outcome :=
-  let o := resolveIn c.tree { mode := c.mode } c.root
+  let o := resolveIn c.tree { mode := c.mode, root := c.rootDir } c.root
   let bad := o.reads.filter (!allowedRead ·)
   let twice := o.reads.filter fun p => o.reads.count p > 1
   let verdict :=
@@ -156,11 +198,11 @@ private def lnk (p target : String) : Value := .variant "Link" [.str p, .str tar
 
 /-- The code of the result of resolving `app/app.schema.haus` in the tree of `files` plus `extra`. -/
 private def codeOf (files : List Value) (extra : List (Path × Entry) := []) (mode : Mode := { npm := false, packages := [["vendor", "common"]] })
-    (limits : Limits := {}) : String :=
+    (limits : Limits := {}) (root : Option Path := none) : String :=
   match files.foldlM addFile [] with
   | .error e => s!"bad tree: {e}"
   | .ok es =>
-    match (resolveIn ⟨es ++ extra⟩ { mode, limits } ["app", "app.schema.haus"]).result with
+    match (resolveIn ⟨es ++ extra⟩ { mode, limits, root } ["app", "app.schema.haus"]).result with
     | .ok ps => s!"ok {ps}"
     | .error e => e.code.name
 
@@ -178,8 +220,13 @@ private def common : Value := pkg "vendor/common" "@acme/common" "1.0.0" "type A
 #guard codeOf [.variant "Npm" [.str "app", .record [("dependencies", .arr [.str "@acme/common"])]],
   app "import @acme/common@1 (Address)\ntype Root = Address",
   lnk "app/node_modules/@acme/common" "common"] (mode := { npm := true }) == "import-not-found"
--- An application file importing itself, through a link.
-#guard codeOf [app "import ./self (Root)", lnk "app/self.schema.haus" "app.schema.haus"] (mode := { npm := false }) == "import-cycle"
+-- An application file importing itself through a link: a relative import follows no link.
+#guard codeOf [app "import ./self (Root)", lnk "app/self.schema.haus" "app.schema.haus"] (mode := { npm := false }) == "import-not-found"
+-- A link in the middle of a relative import's path, to a directory inside the root: not followed.
+#guard codeOf [app "import ./lib/x (X)\ntype Root = X", lnk "app/lib" "shared", f "app/shared/x.schema.haus" "type X = Int"]
+  (mode := { npm := false }) == "import-not-found"
+#guard codeOf [app "import ./shared/x (X)\ntype Root = X", lnk "app/lib" "shared", f "app/shared/x.schema.haus" "type X = Int"]
+  (mode := { npm := false }) == "ok []"
 -- An imported type the package doesn't define.
 #guard codeOf [app "import @acme/common@1 (Adress)\ntype Root = Adress", common] == "unknown-import"
 -- The limits: schema files, their size, entries in a folder.
@@ -191,7 +238,17 @@ private def common : Value := pkg "vendor/common" "@acme/common" "1.0.0" "type A
 -- A manifest of more than 64 KiB.
 #guard codeOf [app "import @acme/common@1 (Address)\ntype Root = Address", common] (limits := { manifest := 10 }) == "package-manifest"
 -- A relative import of a file next to a package directory, whose name starts like it: not in the package.
-#guard codeOf [app "import ../vendor/common-extra/x (X)\ntype Root = X", common, f "vendor/common-extra/x.schema.haus" "type X = Int"] == "ok []"
+#guard codeOf [app "import ../vendor/common-extra/x (X)\ntype Root = X", common, f "vendor/common-extra/x.schema.haus" "type X = Int"] (root := some []) == "ok []"
+-- The root (§13.3): by default the entry file's directory; `..` above it is rejected before anything is looked at.
+#guard codeOf [app "import ../vendor/common-extra/x (X)\ntype Root = X", common, f "vendor/common-extra/x.schema.haus" "type X = Int"] == "import-outside-root"
+#guard codeOf [app "import ../nowhere/x (X)\ntype Root = X"] (mode := { npm := false }) == "import-outside-root"
+-- A root option that doesn't contain the entry file.
+#guard codeOf [app "type Root = Int", common] (root := some ["vendor"]) == "import-outside-root"
+-- A cycle of links on the npm walk's way stops it (§13.3).
+#guard codeOf [.variant "Npm" [.str "app", .record [("dependencies", .arr [.str "@acme/common"])]],
+  app "import @acme/common@1 (Address)\ntype Root = Address",
+  lnk "app/node_modules" "node_modules",
+  pkg "node_modules/@acme/common" "@acme/common" "1.0.0" "type Address = { city: String }"] (mode := { npm := true }) == "import-not-found"
 
 end Examples
 

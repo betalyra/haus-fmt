@@ -351,7 +351,8 @@ def module : P String := do
       return "std/" ++ String.ofList (c :: w)
     else unexpected "a module like std/time, @org/name or ./file"
   | c :: r =>
-    let m := r.takeWhile (if c == '@' then isPackageModuleChar else isModuleChar)
+    -- A file path has no `@` (grammar `path`): `./a@1` is `./a` followed by `@`, a syntax error.
+    let m := r.takeWhile (if c == '@' then isPackageModuleChar else Packages.isPathChar)
     if (c == '@' || c == '.') && !m.isEmpty then
       set (r.drop m.length)
       return String.ofList (c :: m)

@@ -14,7 +14,7 @@ use crate::pieces::Pieces;
 use haus::json::Json;
 use haus::{ErrorCode, Limits, Value};
 use haus_schema::packages::{MANIFEST, SCHEMA, is_package_name};
-use haus_schema::{Explicit, Locator, Manifest, NodeModules, Schema, syntax};
+use haus_schema::{Explicit, Locator, Manifest, Schema, syntax};
 use ignore::Match;
 use ignore::gitignore::GitignoreBuilder;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -1196,7 +1196,8 @@ impl Hatch {
 
 /// The packages imports are found in: those given, the path dependencies
 /// of the package's wrappers that are schema packages, and theirs (so that
-/// a package's dependencies find their own), then node_modules. Explicit
+/// a package's dependencies find their own). Never node_modules (spec
+/// §13.3: only implementations of the npm ecosystem look there). Explicit
 /// packages count as declared: whether the package declares them is
 /// checked for each wrapper.
 fn packages(given: &Explicit, declared: &[Declared]) -> impl Locator + use<> {
@@ -1215,7 +1216,7 @@ fn packages(given: &Explicit, declared: &[Declared]) -> impl Locator + use<> {
         }
         queue.extend(path_deps(&real));
     }
-    explicit.or(NodeModules)
+    explicit
 }
 
 /// A TOML document as a table, if it is valid.
@@ -1237,7 +1238,9 @@ fn path_deps(dir: &Path) -> Vec<PathBuf> {
     {
         deps.extend(python_deps(&root, dir));
     }
-    if let Some(Json::Object(json)) = read("package.json").and_then(|text| haus::json::parse(&text).ok()) {
+    if let Some(json) = read("package.json").and_then(|text| haus::json::parse(&text).ok())
+        && let Json::Object(json) = &json
+    {
         let fields: BTreeMap<&str, &Json> = json.iter().map(|(k, v)| (k.as_str(), v)).collect();
         for field in NPM_FIELDS {
             if let Some(Json::Object(members)) = fields.get(field) {

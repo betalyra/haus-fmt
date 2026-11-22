@@ -1,12 +1,22 @@
 //! Schema imports of packages and files (spec §13.3): building a schema
-//! from a root file, finding the packages it imports among those given
-//! explicitly and, with `npm`, in `node_modules` by the npm rules, with the
-//! checks of §13.3 (manifests, links, declarations, versions, duplicates,
-//! cycles, limits).
+//! from an entry file, finding the packages it imports among those given
+//! explicitly (directories, folders of packages and file trees given in
+//! code), with the checks of §13.3 (the root, manifests, links, spelling,
+//! versions, duplicates, cycles, limits).
 //!
-//! Every file is read at most once, by its real path. A package's
-//! `package.haus`, `schema.haus` and `package.json` are opened without
-//! following links and checked on the opened file.
+//! This binding belongs to no package manager's ecosystem: it never looks
+//! in `node_modules` (spec §13.3, "Installed packages"), and so never reads
+//! a project's `package.json` either. Packages are the ones given.
+//!
+//! Every file is read at most once, by its real path, and is a regular
+//! file opened without following a link at its last name and without
+//! blocking (`files.zig`). Every name the build looks up (the names of a
+//! relative import, `package.haus`, `schema.haus`, `package.json`) is
+//! matched against its directory's listing, spelled exactly. Only the
+//! entry file and the `root` option are resolved to real paths (they may
+//! be reached through links); a relative import follows no link anywhere
+//! on its path. Messages show paths relative to the build's root, never
+//! absolute ones.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -19,15 +29,24 @@ const schema_mod = @import("schema.zig");
 const Schema = schema_mod.Schema;
 const Module = schema_mod.Module;
 const json = @import("json.zig");
+const files = @import("files.zig");
+const Read = files.Read;
 
 pub const Options = struct {
     /// Packages given by their directory: used instead of any other one
     /// with the same name.
     packages: []const []const u8 = &.{},
+    /// Packages given as file trees provided by code (spec §13.3,
+    /// `packages.explicit.file-tree`), the same as `packages` otherwise.
+    trees: []const Tree = &.{},
     /// Folders whose subdirectories with a `package.haus` are packages.
     folders: []const []const u8 = &.{},
-    /// Also look in `node_modules`, by the npm rules (spec §13.3).
-    npm: bool = false,
+    /// The build's root (spec §13.3, "The root"): a directory that contains
+    /// the entry file. Relative imports stay inside it. A relative `root`
+    /// is relative to the entry file's real directory (`".."` is the
+    /// directory above it), whatever the working directory. Without it,
+    /// the root is the directory of the entry file's real path.
+    root: ?[]const u8 = null,
     /// Check a manifest's version against its `package.json` (SHOULD).
     check_versions: bool = true,
     max_manifest: usize = 64 * 1024,
@@ -37,17 +56,42 @@ pub const Options = struct {
     diagnostic: ?*Diagnostic = null,
 };
 
+/// A package given as a read-only tree of files that code provides (spec
+/// §13.3, `packages.explicit.file-tree`), so that a schema package can ship
+/// inside a Zig package: files embedded in the program (`@embedFile`), or
+/// a directory handle, such as a build dependency's directory. The tree is
+/// a package under the rules of a directory: its `package.haus` and
+/// `schema.haus` (and a `package.json` beside them for the version check),
+/// spelled exactly, regular files and no links, within the limits.
+pub const Tree = struct {
+    /// How messages name the package (`@acme/orders (embedded)`).
+    shown: []const u8,
+    source: Source,
+
+    pub const File = struct { name: []const u8, bytes: []const u8 };
+
+    pub const Source = union(enum) {
+        /// The files at the package's top level, by their exact names.
+        /// Such a tree can't hold links.
+        files: []const File,
+        /// A directory: its files are read as a package directory's are,
+        /// without following links. It must have been opened with
+        /// `.iterate = true`, and stays open while the build runs.
+        dir: Io.Dir,
+    };
+};
+
 const Package = struct {
-    /// The real path of its directory.
+    /// The real path of its directory; for a tree, a name of its own.
     dir: []const u8,
+    /// The tree its files come from, if it was given as one.
+    tree: ?*const Tree = null,
     /// How it was given, for messages (`schemas/broken`).
     shown: []const u8,
     name: []const u8,
     version: []const u8,
     manifest: []const u8,
     schema_text: ?[]const u8 = null,
-    /// The declarations of its own `package.json` (npm).
-    declared: ?std.StringHashMapUnmanaged(void) = null,
     explicit: bool = false,
     schema: ?*Schema = null,
 };
@@ -64,13 +108,17 @@ const Importer = struct {
     package: ?*Package,
 };
 
-/// A schema built from a root file and what it imports.
+const Names = std.StringHashMapUnmanaged(void);
+
+/// A schema built from an entry file and what it imports.
 pub const Build = struct {
     gpa: Allocator,
     io: Io,
     arena_state: std.heap.ArenaAllocator,
     options: Options,
     root: *Schema = undefined,
+    /// The real path of the build's root directory.
+    root_dir: []const u8 = "",
     files: std.StringHashMapUnmanaged(*FileState) = .empty,
     schema_files: usize = 0,
     /// Packages by the real path of their directory.
@@ -82,6 +130,8 @@ pub const Build = struct {
     /// Folder subdirectories whose manifest can't be read: named when an
     /// import isn't found.
     skipped: std.ArrayList([]const u8) = .empty,
+    /// What each directory lists (null: it can't be listed), read once.
+    listings: std.StringHashMapUnmanaged(?Names) = .empty,
     schemas: std.ArrayList(*Schema) = .empty,
 
     fn arena(b: *Build) Allocator {
@@ -136,6 +186,20 @@ pub const Build = struct {
         return out;
     }
 
+    /// A path for messages: relative to the build's root (`../vendor/x`
+    /// for one outside it), never absolute (spec §13.3, "The root"). A
+    /// relative path given that doesn't exist is shown as given.
+    fn display(b: *Build, path: []const u8) []const u8 {
+        const abs = b.realPath(path) orelse (if (std.fs.path.isAbsolute(path)) path else return b.shownPath(path));
+        return b.displayReal(abs);
+    }
+
+    /// `display` of a path that is real already: nothing is looked at.
+    fn displayReal(b: *Build, abs: []const u8) []const u8 {
+        const rel = std.fs.path.relativeAlloc(b.arena(), b.root_dir, null, b.root_dir, abs) catch return b.shownPath(std.fs.path.basename(abs));
+        return b.shownPath(if (rel.len == 0) "." else rel);
+    }
+
     // ── files ────────────────────────────────────────────────
 
     fn realPath(b: *Build, path: []const u8) ?[]const u8 {
@@ -143,50 +207,60 @@ pub const Build = struct {
         return r;
     }
 
-    fn kindOf(b: *Build, path: []const u8, follow: bool) ?Io.File.Kind {
-        const st = Io.Dir.cwd().statFile(b.io, path, .{ .follow_symlinks = follow }) catch return null;
-        return st.kind;
+    fn isDirectory(b: *Build, path: []const u8) bool {
+        const st = Io.Dir.cwd().statFile(b.io, path, .{}) catch return false;
+        return st.kind == .directory;
     }
 
-    const Read = union(enum) { missing, link, not_regular, too_large, bytes: []const u8 };
-
-    /// Reads a file of a package: a regular file, not a link (checked on
-    /// the opened file), at most `limit` bytes.
-    fn readPackageFile(b: *Build, path: []const u8, limit: usize) Read {
-        const kind = b.kindOf(path, false) orelse return .missing;
-        if (kind == .sym_link) return .link;
-        if (kind != .file) return .not_regular;
-        const file = Io.Dir.cwd().openFile(b.io, path, .{ .follow_symlinks = false, .allow_directory = false }) catch return .not_regular;
-        defer file.close(b.io);
-        const st = file.stat(b.io) catch return .not_regular;
-        if (st.kind != .file) return .not_regular;
-        if (st.size > limit) return .too_large;
-        const buf = b.arena().alloc(u8, @intCast(st.size)) catch return .too_large;
-        const n = file.readPositionalAll(b.io, buf, 0) catch return .not_regular;
-        return .{ .bytes = buf[0..n] };
-    }
-
-    /// Reads an application's file (links followed), at most `limit` bytes.
-    fn readAppFile(b: *Build, path: []const u8, limit: usize) Read {
-        const file = Io.Dir.cwd().openFile(b.io, path, .{ .allow_directory = false }) catch return .missing;
-        defer file.close(b.io);
-        const st = file.stat(b.io) catch return .not_regular;
-        if (st.kind != .file) return .not_regular;
-        if (st.size > limit) return .too_large;
-        const buf = b.arena().alloc(u8, @intCast(st.size)) catch return .too_large;
-        const n = file.readPositionalAll(b.io, buf, 0) catch return .not_regular;
-        return .{ .bytes = buf[0..n] };
-    }
-
-    /// The directory of a package that a real path is in: the nearest
-    /// directory above it with a `package.haus`.
-    fn packageDirOf(b: *Build, real: []const u8) ?[]const u8 {
-        var dir = std.fs.path.dirname(real);
-        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-            const manifest = std.fs.path.join(b.arena(), &.{ d, "package.haus" }) catch return null;
-            if (b.kindOf(manifest, false) != null) return d;
+    /// What the directory `dir` lists, read once; null if it can't be
+    /// listed.
+    fn listing(b: *Build, dir: []const u8) Error!?Names {
+        const gop = try b.listings.getOrPut(b.arena(), dir);
+        if (!gop.found_existing) {
+            gop.key_ptr.* = try b.arena().dupe(u8, dir);
+            gop.value_ptr.* = try files.list(b.io, b.arena(), Io.Dir.cwd(), dir);
         }
-        return null;
+        return gop.value_ptr.*;
+    }
+
+    /// Whether the directory `dir` lists an entry spelled exactly `name`.
+    /// A directory that can't be listed lists nothing (spec §13.3,
+    /// "Spelling").
+    fn listed(b: *Build, dir: []const u8, name: []const u8) Error!bool {
+        const names = try b.listing(dir) orelse return false;
+        return names.contains(name);
+    }
+
+    /// Reads the file `name` of the real directory `dir`: listed with that
+    /// spelling, a regular file, not a link.
+    fn readIn(b: *Build, dir: []const u8, name: []const u8, limit: usize) Error!Read {
+        if (!try b.listed(dir, name)) return .missing;
+        const path = try std.fs.path.join(b.arena(), &.{ dir, name });
+        return files.readRegular(b.io, b.arena(), Io.Dir.cwd(), path, limit);
+    }
+
+    /// Reads a file of a package (`package.haus`, `schema.haus`,
+    /// `package.json`), from its directory or its tree.
+    fn readPackageFile(b: *Build, p: *const Package, name: []const u8, limit: usize) Error!Read {
+        const tree = p.tree orelse return b.readIn(p.dir, name, limit);
+        return b.readTreeFile(tree, name, limit);
+    }
+
+    fn readTreeFile(b: *Build, tree: *const Tree, name: []const u8, limit: usize) Error!Read {
+        switch (tree.source) {
+            .files => |list| {
+                for (list) |f| if (std.mem.eql(u8, f.name, name)) {
+                    if (f.bytes.len > limit) return .too_large;
+                    return .{ .bytes = f.bytes };
+                };
+                return .missing;
+            },
+            .dir => |dir| {
+                const names = try files.list(b.io, b.arena(), dir, ".") orelse return .missing;
+                if (!names.contains(name)) return .missing;
+                return files.readRegular(b.io, b.arena(), dir, name, limit);
+            },
+        }
     }
 
     // ── schema files ─────────────────────────────────────────
@@ -221,80 +295,92 @@ pub const Build = struct {
         const b = imp.build;
         return switch (module) {
             .file => |rel| b.resolveFile(imp, rel),
-            .package => |p| b.resolvePackage(imp, p.name, p.major),
+            .package => |p| b.resolvePackage(p.name, p.major),
             .std => unreachable,
         };
     }
 
     /// `import ./x`: the file `x.schema.haus` next to the importing file,
-    /// each name spelled as its directory lists it.
+    /// inside the build's root (spec §13.3, "Resolution" and "The root").
+    /// The path is a valid `path` of the grammar (the schema reader checked
+    /// it): `..` names only at its start, then names. The checks come in
+    /// the order of `packages.relative.check-order`: `..` names above the
+    /// root, the walk down the names, a target in a package's directory,
+    /// then opening the file.
     fn resolveFile(b: *Build, imp: *Importer, rel: []const u8) Error!*const Schema {
+        // Only a package's own `schema.haus` imports no files.
         if (imp.package) |p| {
             return b.fail(.@"package-path", "the package {s} imports a file ({s}): a package imports other packages by name", .{ b.quote(p.name), b.quote(rel) });
         }
-        var dir: []const u8 = std.fs.path.dirname(imp.real) orelse "/";
-        var parts = std.mem.splitScalar(u8, rel, '/');
-        var names: std.ArrayList([]const u8) = .empty;
-        while (parts.next()) |part| try names.append(b.arena(), part);
-        for (names.items, 0..) |part, i| {
-            const last = i + 1 == names.items.len;
-            if (part.len == 0 or std.mem.eql(u8, part, ".")) {
-                if (last) return b.fail(.@"import-not-found", "can't import {s}: no such file", .{b.quote(rel)});
-                continue;
-            }
-            if (std.mem.eql(u8, part, "..")) {
-                if (last) return b.fail(.@"import-not-found", "can't import {s}: no such file", .{b.quote(rel)});
-                dir = std.fs.path.dirname(dir) orelse dir;
-                continue;
-            }
+        const from = b.quote(b.displayReal(imp.real));
+        // The `..` names first, on the importing file's real directory
+        // alone (it has no links): one that goes above the root looks at
+        // nothing.
+        var dir: []const u8 = std.fs.path.dirname(imp.real) orelse imp.real;
+        var rest = rel;
+        if (std.mem.startsWith(u8, rest, "./")) {
+            rest = rest[2..];
+        } else while (std.mem.startsWith(u8, rest, "../")) {
+            rest = rest[3..];
+            dir = std.fs.path.dirname(dir) orelse dir;
+        }
+        if (!within(b.root_dir, dir)) {
+            return b.fail(.@"import-outside-root", "{s} imports {s}, which goes above the build's root", .{ from, b.quote(rel) });
+        }
+        // The walk down the names: each listed by its directory with that
+        // spelling, none a link (not followed: nothing behind one is looked
+        // at), each but the last a directory. The path reached is real, and
+        // inside the root.
+        var names = std.mem.splitScalar(u8, rest, '/');
+        while (names.next()) |part| {
+            const last = names.peek() == null;
             const name = if (last) try std.fmt.allocPrint(b.arena(), "{s}.schema.haus", .{part}) else part;
-            if (!b.listed(dir, name)) return b.fail(.@"import-not-found", "can't import {s}: no file spelled so", .{b.quote(rel)});
-            dir = try std.fs.path.join(b.arena(), &.{ dir, name });
+            if (!try b.listed(dir, name)) return b.fail(.@"import-not-found", "{s} imports {s}, which isn't found (no file spelled so)", .{ from, b.quote(rel) });
+            const path = try std.fs.path.join(b.arena(), &.{ dir, name });
+            const kind = files.kindAt(b.io, Io.Dir.cwd(), path) orelse return b.fail(.@"import-not-found", "{s} imports {s}, which isn't found", .{ from, b.quote(rel) });
+            switch (kind) {
+                .link => return b.fail(.@"import-not-found", "{s} imports {s}, in which {s} is a symbolic link; a relative import follows no link, and nothing behind it is read", .{ from, b.quote(rel), b.quote(name) }),
+                .directory => {},
+                .file, .other => if (!last) return b.fail(.@"import-not-found", "{s} imports {s}, which isn't found ({s} is not a directory)", .{ from, b.quote(rel), b.quote(name) }),
+            }
+            dir = path;
         }
-        const real = b.realPath(dir) orelse return b.fail(.@"import-not-found", "can't import {s}: no such file", .{b.quote(rel)});
-        if (b.packageDirOf(real) != null) {
-            return b.fail(.@"package-path", "{s} is in a package's directory: import the package by name", .{b.quote(rel)});
-        }
-        if (!std.mem.endsWith(u8, real, ".schema.haus")) {
-            return b.fail(.@"import-not-found", "can't import {s}: it is not a schema file", .{b.quote(rel)});
-        }
-        const text = switch (b.readAppFile(real, b.options.max_file)) {
+        const real = dir;
+        try b.checkOutsidePackages(real, from, rel);
+        // The path has no links: its last name is opened, not followed.
+        const text = switch (try files.readRegular(b.io, b.arena(), Io.Dir.cwd(), real, b.options.max_file)) {
             .bytes => |t| t,
-            .too_large => return b.fail(.@"file-too-large", "{s} is larger than {d} bytes", .{ b.quote(rel), b.options.max_file }),
-            else => return b.fail(.@"import-not-found", "can't import {s}: no such file", .{b.quote(rel)}),
+            .too_large => return b.fail(.@"file-too-large", "{s} imports {s}, which is larger than {d} bytes; it is not read", .{ from, b.quote(rel), b.options.max_file }),
+            else => return b.fail(.@"import-not-found", "{s} imports {s}, which is not a regular file; it is not read", .{ from, b.quote(rel) }),
         };
         return b.loadFile(real, null, text);
     }
 
-    /// Whether `dir` lists an entry spelled exactly `name`.
-    fn listed(b: *Build, dir: []const u8, name: []const u8) bool {
-        var d = Io.Dir.cwd().openDir(b.io, dir, .{ .iterate = true }) catch return false;
-        defer d.close(b.io);
-        var it = d.iterate();
-        while (it.next(b.io) catch return false) |entry| {
-            if (std.mem.eql(u8, entry.name, name)) return true;
+    /// A relative import doesn't reach into a package's directory (spec
+    /// §13.3, "Imports"): the directories from the target's up to the
+    /// build's root, the root included, nearest first, each a package's
+    /// when it lists `package.haus`. One that can't be listed can't show
+    /// whether it is a package's: the import fails (it fails closed).
+    fn checkOutsidePackages(b: *Build, target: []const u8, from: []const u8, rel: []const u8) Error!void {
+        var dir = std.fs.path.dirname(target);
+        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
+            if (!within(b.root_dir, d)) return;
+            const names = try b.listing(d) orelse return b.fail(.@"import-not-found", "{s} imports {s}, and whether {s} is a package's directory can't be checked (it can't be listed); it is not read", .{ from, b.quote(rel), b.quote(b.displayReal(d)) });
+            if (names.contains("package.haus")) return b.fail(.@"package-path", "{s} imports {s}, a file in the package directory {s}: import the package by name", .{ from, b.quote(rel), b.quote(b.displayReal(d)) });
         }
-        return false;
     }
 
     // ── packages ─────────────────────────────────────────────
 
-    fn resolvePackage(b: *Build, imp: *Importer, name: []const u8, major: ?[]const u8) Error!*const Schema {
-        if (b.options.npm and !b.explicit.contains(name) and !b.folder.contains(name)) {
-            if (!try b.declares(imp, name)) {
-                if (imp.package) |p| return b.fail(.@"undeclared-package", "the package {s} imports {s}, which its package.json doesn't declare", .{ b.quote(p.name), b.quote(name) });
-                return b.fail(.@"undeclared-package", "{s} is imported but not declared in the project's package.json", .{b.quote(name)});
-            }
-        }
-        const p = try b.findPackage(imp, name);
+    fn resolvePackage(b: *Build, name: []const u8, major: ?[]const u8) Error!*const Schema {
+        const p = try b.findPackage(name);
         if (major) |m| {
             const have = p.version[0 .. std.mem.indexOfScalar(u8, p.version, '.') orelse p.version.len];
-            if (!std.mem.eql(u8, have, m)) return b.fail(.@"import-version", "{s}@{s} is imported, and {s} is installed", .{ b.quote(name), m, p.version });
+            if (!std.mem.eql(u8, have, m)) return b.fail(.@"import-version", "{s}@{s} is imported, and {s} is given", .{ b.quote(name), m, p.version });
         }
         try b.register(p);
         if (p.schema) |s| return s;
-        const schema_path = try std.fs.path.join(b.arena(), &.{ p.dir, "schema.haus" });
-        const text = switch (b.readPackageFile(schema_path, b.options.max_file)) {
+        const text = switch (try b.readPackageFile(p, "schema.haus", b.options.max_file)) {
             .bytes => |t| t,
             .too_large => return b.fail(.@"file-too-large", "the schema.haus of {s} is larger than {d} bytes", .{ b.quote(name), b.options.max_file }),
             .missing => return b.fail(.@"import-not-found", "the package {s} has no schema.haus", .{b.quote(name)}),
@@ -302,20 +388,15 @@ pub const Build = struct {
         };
         p.schema_text = text;
         try b.checkIdentical(p);
-        const s = try b.loadFile(schema_path, p, text);
+        const s = try b.loadFile(try std.fs.path.join(b.arena(), &.{ p.dir, "schema.haus" }), p, text);
         p.schema = s;
         return s;
     }
 
-    /// The package an import of `name` means.
-    fn findPackage(b: *Build, imp: *Importer, name: []const u8) Error!*Package {
+    /// The package an import of `name` means: one given by its directory
+    /// (or as a tree), else one found in a folder given.
+    fn findPackage(b: *Build, name: []const u8) Error!*Package {
         if (b.explicit.get(name)) |p| return p;
-        if (b.options.npm) {
-            if (try b.npmLookup(imp, name)) |p| {
-                if (b.folder.get(name)) |f| try b.sameOrDuplicate(p, f);
-                return p;
-            }
-        }
         if (b.folder.get(name)) |p| return p;
         if (b.skipped.items.len > 0) {
             var list: std.ArrayList(u8) = .empty;
@@ -323,9 +404,9 @@ pub const Build = struct {
                 if (i > 0) try list.appendSlice(b.arena(), ", ");
                 try list.appendSlice(b.arena(), b.quote(s));
             }
-            return b.fail(.@"import-not-found", "{s} is not installed (manifests that can't be read: {s})", .{ b.quote(name), list.items });
+            return b.fail(.@"import-not-found", "{s} is not given (manifests that can't be read: {s})", .{ b.quote(name), list.items });
         }
-        return b.fail(.@"import-not-found", "{s} is not installed", .{b.quote(name)});
+        return b.fail(.@"import-not-found", "{s} is not given", .{b.quote(name)});
     }
 
     /// Two packages with one name: one package if their manifests and
@@ -342,8 +423,7 @@ pub const Build = struct {
 
     fn schemaText(b: *Build, p: *Package) Error!?[]const u8 {
         if (p.schema_text) |t| return t;
-        const path = try std.fs.path.join(b.arena(), &.{ p.dir, "schema.haus" });
-        return switch (b.readPackageFile(path, b.options.max_file)) {
+        return switch (try b.readPackageFile(p, "schema.haus", b.options.max_file)) {
             .bytes => |t| blk: {
                 p.schema_text = t;
                 break :blk t;
@@ -362,60 +442,37 @@ pub const Build = struct {
         try b.sameOrDuplicate(first, p);
     }
 
-    /// Reads the package in `dir` (a real path); `shown` for messages.
-    fn openPackage(b: *Build, dir: []const u8, shown: []const u8) Error!*Package {
+    /// Reads the package in `dir` (a real path, or a tree's own name with
+    /// `tree`); `shown` for messages.
+    fn openPackage(b: *Build, dir: []const u8, tree: ?*const Tree, shown: []const u8) Error!*Package {
         if (b.by_dir.get(dir)) |p| return p;
-        const manifest_path = try std.fs.path.join(b.arena(), &.{ dir, "package.haus" });
-        const manifest = switch (b.readPackageFile(manifest_path, b.options.max_manifest)) {
+        const p = try b.arena().create(Package);
+        p.* = .{ .dir = dir, .tree = tree, .shown = shown, .name = "", .version = "", .manifest = "" };
+        const manifest = switch (try b.readPackageFile(p, "package.haus", b.options.max_manifest)) {
             .bytes => |t| t,
             .too_large => return b.fail(.@"package-manifest", "the package.haus of {s} is larger than {d} bytes", .{ b.quote(shown), b.options.max_manifest }),
             .missing => return b.fail(.@"import-not-found", "{s} has no package.haus", .{b.quote(shown)}),
             .link, .not_regular => return b.fail(.@"package-path", "the package.haus of {s} is a link or not a regular file: it is not read", .{b.quote(shown)}),
         };
         const nv = parseManifest(b.arena(), manifest) orelse return b.fail(.@"package-manifest", "the package.haus of {s} is not a valid manifest {{ name: \"@org/name\", version: \"1.2.0\" }}", .{b.quote(shown)});
-        const p = try b.arena().create(Package);
-        p.* = .{ .dir = dir, .shown = shown, .name = nv.name, .version = nv.version, .manifest = manifest };
-        if (b.options.npm) {
-            try b.readOwnPackageJson(p);
-        } else if (b.options.check_versions) {
-            try b.checkVersionBeside(p);
-        }
+        p.name = nv.name;
+        p.version = nv.version;
+        p.manifest = manifest;
+        if (b.options.check_versions) try b.checkVersionBeside(p);
         try b.by_dir.put(b.arena(), dir, p);
         return p;
     }
 
-    /// A package's own `package.json` (npm): its declarations, and the
-    /// version check (`package-version`).
-    fn readOwnPackageJson(b: *Build, p: *Package) Error!void {
-        const path = try std.fs.path.join(b.arena(), &.{ p.dir, "package.json" });
-        const bytes = switch (b.readPackageFile(path, b.options.max_file)) {
-            .bytes => |t| t,
-            .missing => return,
-            .too_large => return b.fail(.@"file-too-large", "the package.json of {s} is larger than {d} bytes", .{ b.quote(p.name), b.options.max_file }),
-            .link, .not_regular => return b.fail(.@"package-path", "the package.json of {s} is a link or not a regular file: it is not read", .{b.quote(p.name)}),
-        };
-        const j = json.parse(b.arena(), b.gpa, bytes, 512, .{}) catch {
-            p.declared = .empty;
-            return;
-        };
-        p.declared = try declarations(b.arena(), j, false);
-        if (b.options.check_versions) try b.checkVersion(p, j);
-    }
-
-    /// A package given explicitly, without npm: the version of a
-    /// `package.json` beside its manifest, when there is one that can be
-    /// read, is checked as npm's is (spec §13.3, "Package versions").
+    /// The version of a `package.json` beside the manifest, read leniently
+    /// (spec §13.3, "Package versions"): one that can't be read (a link,
+    /// not a regular file, too large, not JSON) is ignored; one whose
+    /// `version` is a string other than the manifest's is `package-version`.
     fn checkVersionBeside(b: *Build, p: *Package) Error!void {
-        const path = try std.fs.path.join(b.arena(), &.{ p.dir, "package.json" });
-        const bytes = switch (b.readPackageFile(path, b.options.max_file)) {
+        const bytes = switch (try b.readPackageFile(p, "package.json", b.options.max_file)) {
             .bytes => |t| t,
             else => return,
         };
         const j = json.parse(b.arena(), b.gpa, bytes, 512, .{}) catch return;
-        try b.checkVersion(p, j);
-    }
-
-    fn checkVersion(b: *Build, p: *Package, j: json.Json) Error!void {
         if (j.get("version")) |ver| if (ver == .string) {
             if (!std.mem.eql(u8, ver.string, p.version)) {
                 if (validSemver(ver.string)) return b.fail(.@"package-version", "the package.haus of {s} says {s}, its package.json {s}", .{ b.quote(p.name), b.quote(p.version), b.quote(ver.string) });
@@ -424,64 +481,7 @@ pub const Build = struct {
         };
     }
 
-    /// Whether the importing file declares the package (npm, spec §13.3).
-    fn declares(b: *Build, imp: *Importer, name: []const u8) Error!bool {
-        if (imp.package) |p| {
-            const d = p.declared orelse return false;
-            return d.contains(name);
-        }
-        var dir = std.fs.path.dirname(imp.real);
-        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-            const path = try std.fs.path.join(b.arena(), &.{ d, "package.json" });
-            const kind = b.kindOf(path, true) orelse {
-                // A broken link declares nothing and ends the search.
-                if (b.kindOf(path, false) != null) return false;
-                continue;
-            };
-            if (kind != .file) return false;
-            const bytes = switch (b.readAppFile(path, b.options.max_file)) {
-                .bytes => |t| t,
-                .too_large => return b.fail(.@"file-too-large", "{s} is larger than {d} bytes", .{ b.quote(path), b.options.max_file }),
-                else => return false,
-            };
-            const j = json.parse(b.arena(), b.gpa, bytes, 512, .{}) catch return false;
-            if (j != .object) continue;
-            const fields = [_][]const u8{ "name", "dependencies", "peerDependencies", "optionalDependencies", "devDependencies" };
-            const project = for (fields) |f| {
-                if (j.get(f) != null) break true;
-            } else false;
-            if (!project) continue;
-            const decl = try declarations(b.arena(), j, true);
-            return decl.contains(name);
-        }
-        return false;
-    }
-
-    /// `D/node_modules/@org/name` for each directory `D` from the importing
-    /// file's up (spec §13.3, npm): the first that exists is the package.
-    fn npmLookup(b: *Build, imp: *Importer, name: []const u8) Error!?*Package {
-        var dir = std.fs.path.dirname(imp.real);
-        while (dir) |d| : (dir = std.fs.path.dirname(d)) {
-            const base = std.fs.path.basename(d);
-            if (std.mem.eql(u8, base, "node_modules")) continue;
-            if (base.len > 0 and base[0] == '@') {
-                if (std.fs.path.dirname(d)) |parent| if (std.mem.eql(u8, std.fs.path.basename(parent), "node_modules")) continue;
-            }
-            const candidate = try std.fs.path.join(b.arena(), &.{ d, "node_modules", name });
-            if (b.kindOf(candidate, true) == null) continue;
-            const real = b.realPath(candidate) orelse continue;
-            const manifest = try std.fs.path.join(b.arena(), &.{ real, "package.haus" });
-            if (b.kindOf(manifest, false) == null) return b.fail(.@"import-not-found", "{s} in node_modules is not a schema package (no package.haus)", .{b.quote(name)});
-            const p = try b.openPackage(real, candidate);
-            if (!std.mem.eql(u8, p.name, name)) return b.fail(.@"import-not-found", "node_modules/{s} holds the package {s}", .{ b.quote(name), b.quote(p.name) });
-            return p;
-        }
-        return null;
-    }
-
-    fn addExplicit(b: *Build, path: []const u8) Error!void {
-        const real = b.realPath(path) orelse return b.fail(.@"import-not-found", "the package {s} doesn't exist", .{b.quote(b.shownPath(path))});
-        const p = try b.openPackage(real, b.shownPath(path));
+    fn addExplicit(b: *Build, p: *Package) Error!void {
         p.explicit = true;
         const gop = try b.explicit.getOrPut(b.arena(), p.name);
         if (gop.found_existing) {
@@ -489,13 +489,25 @@ pub const Build = struct {
         } else gop.value_ptr.* = p;
     }
 
+    fn addDirectory(b: *Build, path: []const u8) Error!void {
+        const real = b.realPath(path) orelse return b.fail(.@"import-not-found", "the package {s} doesn't exist", .{b.quote(b.display(path))});
+        try b.addExplicit(try b.openPackage(real, null, b.display(real)));
+    }
+
+    fn addTree(b: *Build, tree: *const Tree, index: usize) Error!void {
+        // A name no real path has: a tree is a package of its own.
+        const id = try std.fmt.allocPrint(b.arena(), "<tree {d}>", .{index});
+        try b.addExplicit(try b.openPackage(id, tree, tree.shown));
+    }
+
     fn addFolder(b: *Build, path: []const u8) Error!void {
-        var d = Io.Dir.cwd().openDir(b.io, path, .{ .iterate = true }) catch return b.fail(.@"import-not-found", "the folder {s} doesn't exist", .{b.quote(b.shownPath(path))});
+        const real_folder = b.realPath(path) orelse return b.fail(.@"import-not-found", "the folder {s} doesn't exist", .{b.quote(b.display(path))});
+        var d = Io.Dir.cwd().openDir(b.io, real_folder, .{ .iterate = true }) catch return b.fail(.@"import-not-found", "the folder {s} can't be read", .{b.quote(b.display(path))});
         defer d.close(b.io);
         var names: std.ArrayList([]const u8) = .empty;
         var it = d.iterate();
-        while (it.next(b.io) catch return b.fail(.@"import-not-found", "the folder {s} can't be read", .{b.quote(b.shownPath(path))})) |entry| {
-            if (names.items.len >= b.options.max_folder_entries) return b.fail(.@"too-many-files", "the folder {s} has more than {d} entries", .{ b.quote(b.shownPath(path)), b.options.max_folder_entries });
+        while (it.next(b.io) catch return b.fail(.@"import-not-found", "the folder {s} can't be read", .{b.quote(b.display(path))})) |entry| {
+            if (names.items.len >= b.options.max_folder_entries) return b.fail(.@"too-many-files", "the folder {s} has more than {d} entries", .{ b.quote(b.display(path)), b.options.max_folder_entries });
             try names.append(b.arena(), try b.arena().dupe(u8, entry.name));
         }
         std.sort.pdq([]const u8, names.items, {}, struct {
@@ -503,22 +515,19 @@ pub const Build = struct {
                 return std.mem.order(u8, x, y) == .lt;
             }
         }.less);
+        // Named by the folder's last name and the subdirectory's
+        // (`schemas/broken`), however the folder was given (`.`,
+        // `schemas/`, a link): the last name of its real path.
+        const folder_name = std.fs.path.basename(real_folder);
         for (names.items) |n| {
-            const sub = try std.fs.path.join(b.arena(), &.{ path, n });
-            if (b.kindOf(sub, true) != .directory) continue;
-            const manifest = try std.fs.path.join(b.arena(), &.{ sub, "package.haus" });
-            if (b.kindOf(manifest, false) == null) continue;
-            const real = b.realPath(sub) orelse continue;
-            // Named by the folder's last name and the subdirectory's
-            // (`schemas/broken`), however the folder was given (`.`,
-            // `schemas/`, an absolute path): the last name of its real path.
-            const folder_name = std.fs.path.basename(b.realPath(path) orelse path);
+            const real = b.realPath(try std.fs.path.join(b.arena(), &.{ real_folder, n })) orelse continue;
+            if (!b.isDirectory(real) or !try b.listed(real, "package.haus")) continue;
             const shown = b.shownPath(try std.fs.path.join(b.arena(), &.{ folder_name, n }));
             // A subdirectory whose manifest can't be read is skipped, not rejected.
             var inner: Diagnostic = .{};
             const saved = b.options.diagnostic;
             b.options.diagnostic = &inner;
-            const p = b.openPackage(real, shown) catch |e| switch (e) {
+            const p = b.openPackage(real, null, shown) catch |e| switch (e) {
                 error.Haus => {
                     b.options.diagnostic = saved;
                     try b.skipped.append(b.arena(), shown);
@@ -533,23 +542,39 @@ pub const Build = struct {
             } else gop.value_ptr.* = p;
         }
     }
+
+    /// The `root` option as a path to resolve: a relative one is relative
+    /// to the entry file's real directory, whatever the working directory
+    /// (spec §13.3, "The root"). Without an entry file, as given.
+    fn rootOption(b: *Build, real_entry: ?[]const u8) Error!?[]const u8 {
+        const option = b.options.root orelse return null;
+        if (std.fs.path.isAbsolute(option)) return option;
+        const entry = real_entry orelse return option;
+        const dir = std.fs.path.dirname(entry) orelse entry;
+        return try std.fs.path.join(b.arena(), &.{ dir, option });
+    }
+
+    /// The build's root (spec §13.3, "The root"), for the entry file whose
+    /// real path is `real`: the `root` option's real path `real_root`, a
+    /// directory that contains it, or the directory of `real`.
+    fn checkRoot(b: *Build, real: []const u8, real_root: ?[]const u8) Error![]const u8 {
+        const default = std.fs.path.dirname(real) orelse real;
+        const option = b.options.root orelse return default;
+        b.root_dir = default; // for the messages below
+        const r = real_root orelse return b.fail(.@"import-not-found", "the root {s} given doesn't exist", .{b.quote(b.display(option))});
+        if (!b.isDirectory(r) or !within(r, real)) {
+            return b.fail(.@"import-outside-root", "the schema file {s} is not inside the root {s} given", .{ b.quote(std.fs.path.basename(real)), b.quote(b.displayReal(r)) });
+        }
+        return r;
+    }
 };
 
-/// The declared packages of a `package.json`: the member names of
-/// `dependencies`, `peerDependencies`, `optionalDependencies` and, for a
-/// project's file, `devDependencies`. A field that isn't an object
-/// declares nothing.
-fn declarations(arena: Allocator, j: json.Json, dev: bool) Allocator.Error!std.StringHashMapUnmanaged(void) {
-    var set: std.StringHashMapUnmanaged(void) = .empty;
-    if (j != .object) return set;
-    const fields = [_][]const u8{ "dependencies", "peerDependencies", "optionalDependencies", "devDependencies" };
-    for (fields) |f| {
-        if (!dev and std.mem.eql(u8, f, "devDependencies")) continue;
-        const deps = j.get(f) orelse continue;
-        if (deps != .object) continue;
-        for (deps.object) |m| try set.put(arena, m.name, {});
-    }
-    return set;
+/// Whether the real path `path` is the directory `root` or inside it.
+fn within(root: []const u8, path: []const u8) bool {
+    if (!std.mem.startsWith(u8, path, root)) return false;
+    if (path.len == root.len) return true;
+    if (root.len > 0 and std.fs.path.isSep(root[root.len - 1])) return true;
+    return std.fs.path.isSep(path[root.len]);
 }
 
 const NameVersion = struct { name: []const u8, version: []const u8 };
@@ -619,19 +644,33 @@ pub fn validSemver(v: []const u8) bool {
     return true;
 }
 
-/// Builds the schema of `root_path` (a schema file) with its imports.
-pub fn build(gpa: Allocator, io: Io, root_path: []const u8, options: Options) Error!*Build {
+/// Builds the schema of the entry file `entry` (a schema file) with its
+/// imports.
+pub fn build(gpa: Allocator, io: Io, entry: []const u8, options: Options) Error!*Build {
     const b = try gpa.create(Build);
     b.* = .{ .gpa = gpa, .io = io, .arena_state = .init(gpa), .options = options };
     errdefer b.deinit();
-    for (options.packages) |p| try b.addExplicit(p);
-    for (options.folders) |f| try b.addFolder(f);
-    const real = b.realPath(root_path) orelse return b.fail(.@"import-not-found", "the schema file {s} doesn't exist", .{b.quote(b.shownPath(root_path))});
-    const text = switch (b.readAppFile(real, options.max_file)) {
-        .bytes => |t| t,
-        .too_large => return b.fail(.@"file-too-large", "{s} is larger than {d} bytes", .{ b.quote(b.shownPath(root_path)), options.max_file }),
-        else => return b.fail(.@"import-not-found", "the schema file {s} can't be read", .{b.quote(b.shownPath(root_path))}),
+    // The entry file and the root option are resolved to real paths once,
+    // here (they may be reached through links); nothing a relative import
+    // names is. The root, for the messages about the packages given: the
+    // checks come once those are read.
+    const real_entry = b.realPath(entry);
+    const real_root = if (try b.rootOption(real_entry)) |r| b.realPath(r) else null;
+    b.root_dir = blk: {
+        if (real_root) |r| break :blk r;
+        if (real_entry) |r| break :blk std.fs.path.dirname(r) orelse r;
+        break :blk b.realPath(".") orelse "";
     };
+    for (options.packages) |p| try b.addDirectory(p);
+    for (options.trees, 0..) |*t, i| try b.addTree(t, i);
+    for (options.folders) |f| try b.addFolder(f);
+    const real = real_entry orelse return b.fail(.@"import-not-found", "the schema file {s} doesn't exist", .{b.quote(b.display(entry))});
+    const text = switch (try files.readRegular(io, b.arena(), Io.Dir.cwd(), real, options.max_file)) {
+        .bytes => |t| t,
+        .too_large => return b.fail(.@"file-too-large", "the schema file {s} is larger than {d} bytes", .{ b.quote(std.fs.path.basename(real)), options.max_file }),
+        else => return b.fail(.@"import-not-found", "the schema file {s} is not a regular file", .{b.quote(std.fs.path.basename(real))}),
+    };
+    b.root_dir = try b.checkRoot(real, real_root);
     b.root = try b.loadFile(real, null, text);
     return b;
 }
@@ -643,4 +682,121 @@ test "semantic versions" {
     try std.testing.expect(!validSemver("v1.0.0"));
     try std.testing.expect(!validSemver("01.0.0"));
     try std.testing.expect(!validSemver("1.0.0\n"));
+}
+
+test "a root contains itself and what is below it" {
+    try std.testing.expect(within("/a/b", "/a/b"));
+    try std.testing.expect(within("/a/b", "/a/b/c.schema.haus"));
+    try std.testing.expect(!within("/a/b", "/a/bc/x"));
+    try std.testing.expect(!within("/a/b", "/a"));
+    try std.testing.expect(within("/", "/a"));
+}
+
+test "a package given as embedded files" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer {
+        tmp.dir.close(io);
+        tmp.parent_dir.close(io);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "app.schema.haus", .data = "import @acme/orders@1 (Order)\ntype Root = { order: Order }" });
+    const entry = try tmp.dir.realPathFileAlloc(io, "app.schema.haus", testing.allocator);
+    defer testing.allocator.free(entry);
+    const tree: Tree = .{ .shown = "@acme/orders (embedded)", .source = .{ .files = &.{
+        .{ .name = "package.haus", .bytes = "{ name: \"@acme/orders\", version: \"1.2.0\" }" },
+        .{ .name = "schema.haus", .bytes = "type Order = { id: Int }" },
+    } } };
+    const b = try build(testing.allocator, io, entry, .{ .trees = &.{tree} });
+    defer b.deinit();
+    const list = try b.packageList(b.arena());
+    try testing.expectEqual(@as(usize, 1), list.len);
+    try testing.expectEqualStrings("@acme/orders@1.2.0", list[0]);
+
+    // Names are exact: `Schema.haus` is not `schema.haus`.
+    const wrong: Tree = .{ .shown = "@acme/orders (embedded)", .source = .{ .files = &.{
+        .{ .name = "package.haus", .bytes = "{ name: \"@acme/orders\", version: \"1.2.0\" }" },
+        .{ .name = "Schema.haus", .bytes = "type Order = { id: Int }" },
+    } } };
+    var d: Diagnostic = .{};
+    try testing.expectError(error.Haus, build(testing.allocator, io, entry, .{ .trees = &.{wrong}, .diagnostic = &d }));
+    try testing.expectEqual(Code.@"import-not-found", d.code);
+
+    // The version beside the manifest is checked, as in a directory.
+    const versioned: Tree = .{ .shown = "@acme/orders (embedded)", .source = .{ .files = &.{
+        .{ .name = "package.haus", .bytes = "{ name: \"@acme/orders\", version: \"1.2.0\" }" },
+        .{ .name = "schema.haus", .bytes = "type Order = { id: Int }" },
+        .{ .name = "package.json", .bytes = "{ \"version\": \"1.3.0\" }" },
+    } } };
+    try testing.expectError(error.Haus, build(testing.allocator, io, entry, .{ .trees = &.{versioned}, .diagnostic = &d }));
+    try testing.expectEqual(Code.@"package-version", d.code);
+}
+
+test "messages show paths relative to the root" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer {
+        tmp.dir.close(io);
+        tmp.parent_dir.close(io);
+    }
+    try tmp.dir.createDirPath(io, "proj/app");
+    try tmp.dir.writeFile(io, .{ .sub_path = "proj/app/a.schema.haus", .data = "import ./missing (X)\ntype Root = { x: X }" });
+    const entry = try tmp.dir.realPathFileAlloc(io, "proj/app/a.schema.haus", testing.allocator);
+    defer testing.allocator.free(entry);
+    const root = try tmp.dir.realPathFileAlloc(io, "proj", testing.allocator);
+    defer testing.allocator.free(root);
+    var d: Diagnostic = .{};
+    try testing.expectError(error.Haus, build(testing.allocator, io, entry, .{ .root = root, .diagnostic = &d }));
+    try testing.expectEqual(Code.@"import-not-found", d.code);
+    try testing.expect(std.mem.indexOf(u8, d.message(), "'app/a.schema.haus'") != null);
+    try testing.expect(std.mem.indexOf(u8, d.message(), root) == null);
+}
+
+test "a relative root is relative to the entry file's real directory" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer {
+        tmp.dir.close(io);
+        tmp.parent_dir.close(io);
+    }
+    try tmp.dir.createDirPath(io, "proj/app");
+    try tmp.dir.createDirPath(io, "proj/shared");
+    try tmp.dir.writeFile(io, .{ .sub_path = "proj/app/a.schema.haus", .data = "import ../shared/x (X)\ntype Root = { x: X }" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "proj/shared/x.schema.haus", .data = "type X = Int" });
+    const entry = try tmp.dir.realPathFileAlloc(io, "proj/app/a.schema.haus", testing.allocator);
+    defer testing.allocator.free(entry);
+    // Not the working directory's `..`.
+    const b = try build(testing.allocator, io, entry, .{ .root = ".." });
+    b.deinit();
+    var d: Diagnostic = .{};
+    try testing.expectError(error.Haus, build(testing.allocator, io, entry, .{ .root = ".", .diagnostic = &d }));
+    try testing.expectEqual(Code.@"import-outside-root", d.code);
+}
+
+test "a relative import follows no link" {
+    const testing = std.testing;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer {
+        tmp.dir.close(io);
+        tmp.parent_dir.close(io);
+    }
+    try tmp.dir.createDirPath(io, "app/real");
+    try tmp.dir.writeFile(io, .{ .sub_path = "app/real/x.schema.haus", .data = "type X = Int" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "app/a.schema.haus", .data = "import ./real/x (X)\ntype Root = { x: X }" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "app/b.schema.haus", .data = "import ./via/x (X)\ntype Root = { x: X }" });
+    tmp.dir.symLink(io, "real", "app/via", .{ .is_directory = true }) catch return error.SkipZigTest;
+    const a = try tmp.dir.realPathFileAlloc(io, "app/a.schema.haus", testing.allocator);
+    defer testing.allocator.free(a);
+    const ok = try build(testing.allocator, io, a, .{});
+    ok.deinit();
+    const entry = try tmp.dir.realPathFileAlloc(io, "app/b.schema.haus", testing.allocator);
+    defer testing.allocator.free(entry);
+    var d: Diagnostic = .{};
+    try testing.expectError(error.Haus, build(testing.allocator, io, entry, .{ .diagnostic = &d }));
+    try testing.expectEqual(Code.@"import-not-found", d.code);
+    try testing.expect(std.mem.indexOf(u8, d.message(), "'via' is a symbolic link") != null);
+    try testing.expect(std.mem.indexOf(u8, d.message(), "real") == null);
 }

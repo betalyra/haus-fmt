@@ -26,10 +26,18 @@ var generic = map[string]int{"Array": 1, "Map": 1, "Maybe": 1, "Result": 2, "Sec
 
 // Options say how to load a schema.
 type Options struct {
-	// Packages finds the packages imports name (spec §13.3): [NodeModules],
-	// an [*Explicit] set, or both with [Or]. Nil finds none: a schema that
+	// Packages finds the packages imports name (spec §13.3): an
+	// [*Explicit] set, or two with [Or]. Nil finds none: a schema that
 	// imports a package fails with the code import-unavailable.
 	Packages Locator
+	// Root is the build's root directory (spec §13.3, "The root"), resolved
+	// to its real path once: relative imports never go above it
+	// (import-outside-root) and follow no symbolic link (import-not-found),
+	// and messages show paths relative to it. Default: the directory of the
+	// real path of the file [Load] starts from; a relative Root is relative
+	// to that directory. A Root that doesn't contain that file is
+	// import-outside-root.
+	Root string
 	// ID is the root file's id, for the ids of its types (shop/order gives
 	// shop/order#Order). Default: from its manifest for a package's
 	// schema.haus, else as for any file outside packages.
@@ -82,23 +90,42 @@ type Schema struct {
 // import-unavailable, as it has no place among files; packages are found by
 // opts.Packages.
 func Parse(src []byte, opts Options) (*Schema, error) {
-	l := newLoader(&opts, newFileCache())
+	l := newLoader(&opts, newFileCache(""))
 	return l.run(string(src), "")
 }
 
-// Load reads the schema file at path, its relative imports next to it and
-// the packages it imports found by opts.Packages. Errors in an imported
-// file are reported at the import, with their place in that file.
+// Load reads the schema file at path (the entry file, read at its real
+// path, a regular file), its relative imports next to it, inside the root
+// (opts.Root), and the packages it imports found by opts.Packages. Errors
+// in an imported file are reported at the import, with their place in that
+// file; messages show paths relative to the root.
 func Load(path string, opts Options) (*Schema, error) {
-	files := newFileCache()
-	resolved, text, err := rootSource(path, files)
+	resolved, err := realPath(path)
 	if err != nil {
-		return nil, err
+		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: errorText(err), File: shown(filepath.Base(path))}
+	}
+	root := filepath.Dir(resolved)
+	if opts.Root != "" {
+		given := opts.Root
+		if !filepath.IsAbs(given) {
+			given = filepath.Join(root, given)
+		}
+		r, err := realPath(given)
+		if err != nil || !inside(r, resolved) {
+			return nil, newError(haus.CodeImportOutsideRoot, "the root option doesn't name a directory that contains %s, "+
+				"the schema file the build starts from", shown(filepath.Base(resolved)))
+		}
+		root = r
+	}
+	files := newFileCache(root)
+	text, err := files.entryText(resolved)
+	if err != nil {
+		return nil, inFile(err, files.show(resolved))
 	}
 	l := newLoader(&opts, files)
 	s, err := l.run(text, resolved)
 	if err != nil {
-		return nil, inFile(err, path)
+		return nil, inFile(err, files.show(resolved))
 	}
 	return s, nil
 }
@@ -343,12 +370,17 @@ func (l *loader) definition(name string, at defRef) Definition {
 }
 
 // appID is the id of a file outside packages (spec §13.3): different for
-// different files.
+// different files, and never of the form of a package's id, @org/name@N:
+// one that would start with @ (a project called @acme) starts with ./.
 func (l *loader) appID(path string) string {
+	id := filepath.ToSlash(path)
 	if l.hasBase {
-		return l.base + relativeID(l.baseDir, path)
+		id = l.base + relativeID(l.baseDir, path)
 	}
-	return filepath.ToSlash(path)
+	if strings.HasPrefix(id, "@") {
+		id = "./" + id
+	}
+	return id
 }
 
 func (l *loader) defID(u, d int) string {
@@ -487,7 +519,7 @@ func (l *loader) importFrom(u, pos int, module, label, from string) (int, error)
 	if strings.HasPrefix(name, "@") {
 		found, err = openPackageFor(l.packages, name, from, l.files)
 	} else {
-		found, err = openRelative(name, from, l.files)
+		found, err = l.files.openRelative(name, from, l.units[u].pkg)
 	}
 	if err != nil {
 		return 0, at(codeOf(err), "can't import %s: %s", label, messageOf(err))
@@ -507,7 +539,7 @@ func (l *loader) importFrom(u, pos int, module, label, from string) (int, error)
 			case old.pkg.manifestText == found.pkg.manifestText && old.text == found.text:
 				copyPath, path = found.path, old.path
 			default:
-				e := duplicate(old.pkg.manifest, old.pkg.dir, found.pkg.manifest, found.pkg.dir)
+				e := duplicate(old.pkg.manifest, l.files.show(old.pkg.dir), found.pkg.manifest, l.files.show(found.pkg.dir))
 				return 0, at(e.Code, "can't import %s: %s", label, e.Message)
 			}
 		}
@@ -557,7 +589,7 @@ func (l *loader) copyImports(u, pos int, label string, original int, copyPath st
 	if len(l.units)+len(l.copies) > MaxFiles {
 		return l.lift(failIn(u, pos, haus.CodeTooManyFiles, "more than %d schema files are imported", MaxFiles))
 	}
-	dir := shown(filepath.Dir(copyPath))
+	dir := l.files.show(filepath.Dir(copyPath))
 	for _, imp := range l.units[original].file.imports {
 		if !strings.HasPrefix(imp.module, "@") {
 			continue

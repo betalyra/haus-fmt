@@ -179,7 +179,48 @@ pub const DecodeOptions = struct {
     hints: ?*std.ArrayList(Issue) = null,
     /// The path the decoded value is at (for the items of a stream).
     base: ?*const Path = null,
+    /// The depth limit (spec §7, §9 item 8): a value nested deeper, such
+    /// as one built in code, is `nesting-too-deep` at its path before it
+    /// is decoded, since the decoder recurses once per level.
+    limits: v.Limits = .{},
 };
+
+/// Whether `val` is nested deeper than `max` levels, as values built in
+/// code count them (spec §7: a record payload is one level). It looks at
+/// most `max + 1` levels down, so its own recursion is bounded.
+fn deeperThan(val: Value, max: u32) bool {
+    if (max == 0) return switch (val) {
+        .array, .record => true,
+        .variant => |x| x.args.len > 0,
+        else => false,
+    };
+    return switch (val) {
+        .array => |items| for (items) |x| {
+            if (deeperThan(x, max - 1)) break true;
+        } else false,
+        .record => |fields| for (fields) |f| {
+            if (deeperThan(f.value, max - 1)) break true;
+        } else false,
+        .variant => |x| blk: {
+            if (x.args.len == 1 and x.args[0] == .record) {
+                for (x.args[0].record) |f| if (deeperThan(f.value, max - 1)) break :blk true;
+                break :blk false;
+            }
+            for (x.args) |a| if (deeperThan(a, max - 1)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn checkDepth(c: *Ctx, val: Value, limits: v.Limits, path: *const Path) Error!void {
+    if (limits.max_depth > v.Limits.supported_depth) {
+        return c.fail(.@"unsupported-depth", path, "a depth limit of {d} is above the {d} levels this binding supports", .{ limits.max_depth, v.Limits.supported_depth });
+    }
+    if (deeperThan(val, limits.max_depth)) {
+        return c.fail(.@"nesting-too-deep", path, "the value is nested deeper than {d} levels", .{limits.max_depth});
+    }
+}
 
 const Ctx = struct {
     /// Allocates the decoded result (an arena is the usual choice).
@@ -189,7 +230,9 @@ const Ctx = struct {
     /// Inside a `Secret`: no hints, and errors are rewritten at the secret.
     secret_depth: u32 = 0,
 
-    fn fail(c: *Ctx, code: Code, path: *const Path, comptime fmt: []const u8, args: anytype) Error {
+    /// Never inlined: its buffer would grow the frames of the recursive
+    /// decoder (spec §7, the stack needed at the supported depth).
+    noinline fn fail(c: *Ctx, code: Code, path: *const Path, comptime fmt: []const u8, args: anytype) Error {
         if (c.diag) |d| {
             d.set(code, fmt, args);
             d.line = 0;
@@ -464,6 +507,7 @@ pub fn unfoldRecord(arena: Allocator, e0: *const Expr, env0: ?*const Env) Alloca
 pub fn decode(arena: Allocator, def: *const Def, val: Value, options: DecodeOptions) Error!Decoded {
     var c: Ctx = .{ .arena = arena, .diag = options.diagnostic, .hints = options.hints };
     const base = options.base orelse &Path.root;
+    try checkDepth(&c, val, options.limits, base);
     return c.decode(def.body, null, val, base);
 }
 
@@ -471,7 +515,9 @@ pub fn decode(arena: Allocator, def: *const Def, val: Value, options: DecodeOpti
 /// build types of their own from a schema's).
 pub fn decodeExpr(arena: Allocator, e: *const Expr, env: ?*const Env, val: Value, options: DecodeOptions) Error!Decoded {
     var c: Ctx = .{ .arena = arena, .diag = options.diagnostic, .hints = options.hints };
-    return c.decode(e, env, val, options.base orelse &Path.root);
+    const base = options.base orelse &Path.root;
+    try checkDepth(&c, val, options.limits, base);
+    return c.decode(e, env, val, base);
 }
 
 // ── encoding ─────────────────────────────────────────────────
@@ -584,7 +630,7 @@ pub fn encode(arena: Allocator, def: *const Def, d: Decoded, options: EncodeOpti
     var sink: std.ArrayList(u8) = .empty;
     try canonical.appendChecked(arena, &sink, val, .{ .limits = options.limits, .diagnostic = options.diagnostic }, null);
     var inner: Diagnostic = .{};
-    _ = decode(arena, def, val, .{ .diagnostic = &inner }) catch |e| switch (e) {
+    _ = decode(arena, def, val, .{ .diagnostic = &inner, .limits = options.limits }) catch |e| switch (e) {
         error.Haus => {
             if (options.diagnostic) |dg| {
                 if (inner.code == .@"invalid-secret") {
@@ -624,6 +670,7 @@ pub const TypedStreamReader = struct {
     index: usize = 0,
     diag: ?*Diagnostic,
     hints: ?*std.ArrayList(Issue),
+    limits: v.Limits,
 
     pub fn init(gpa: Allocator, def: *const Def, options: TextOptions) Error!TypedStreamReader {
         const item = streamItem(def) orelse unreachable;
@@ -632,6 +679,7 @@ pub const TypedStreamReader = struct {
             .item = item,
             .diag = options.diagnostic,
             .hints = options.hints,
+            .limits = options.limits,
         };
     }
 
@@ -643,7 +691,7 @@ pub const TypedStreamReader = struct {
         const out = try arena.alloc(Decoded, vals.len);
         for (vals, 0..) |val, i| {
             const p = Path.root.index(r.index);
-            out[i] = try decodeExpr(arena, r.item, null, val, .{ .diagnostic = r.diag, .hints = r.hints, .base = &p });
+            out[i] = try decodeExpr(arena, r.item, null, val, .{ .diagnostic = r.diag, .hints = r.hints, .base = &p, .limits = r.limits });
             r.index += 1;
         }
         return out;
@@ -685,7 +733,7 @@ pub fn decodeText(gpa: Allocator, arena: Allocator, def: *const Def, text: []con
         }
         return error.Haus;
     }
-    return decode(arena, def, parsed.value[0], .{ .diagnostic = options.diagnostic, .hints = options.hints });
+    return decode(arena, def, parsed.value[0], .{ .diagnostic = options.diagnostic, .hints = options.hints, .limits = options.limits });
 }
 
 /// Encodes what `decodeText` gave: an array of the items' values for a
@@ -695,7 +743,7 @@ pub fn encodeText(arena: Allocator, def: *const Def, d: Decoded, options: Encode
     const out = try arena.alloc(Value, d.array.len);
     for (d.array, 0..) |x, i| {
         out[i] = try toValue(arena, x);
-        _ = decodeExpr(arena, item, null, out[i], .{ .diagnostic = options.diagnostic }) catch |e| switch (e) {
+        _ = decodeExpr(arena, item, null, out[i], .{ .diagnostic = options.diagnostic, .limits = options.limits }) catch |e| switch (e) {
             error.Haus => {
                 if (options.diagnostic) |dg| dg.code = .@"cannot-encode";
                 return e;

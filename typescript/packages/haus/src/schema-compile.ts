@@ -2,7 +2,8 @@
  * Schemas from schema files: the types of a `.schema.haus` file as haus
  * schemas (schema.ts), which are also Standard Schemas.
  *
- *   const { schemas } = compileSchemaFile(text, schemaOptions(path))
+ *   const { text, options } = readSchemaFile(path)   // from @haus-fmt/haus/node
+ *   const { schemas } = compileSchemaFile(text, options)
  *   const order = h.parse(schemas.Order, data)
  *
  * and the matching TypeScript declarations (`schemaDeclarations`), for typed
@@ -28,7 +29,7 @@
  *
  * Codecs (spec §13.4) choose another host type for named types, by id:
  *
- *   compileSchemaFile(text, { ...schemaOptions(path), codecs: iso })   // iso from @haus-fmt/money
+ *   compileSchemaFile(text, { ...options, codecs: iso })   // iso from @haus-fmt/money
  */
 import { groupSchemas } from "./codegen.js"
 import * as h from "./schema.js"

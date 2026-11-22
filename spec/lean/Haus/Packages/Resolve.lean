@@ -33,6 +33,29 @@ found (security review Q5). An import `@org/name` from a file:
 3. Every candidate is loaded, its own imports resolved (F4); candidates that
    aren't one package are `duplicate-package`.
 
+The model is one resolver for every ecosystem (§13.3): the core rules, and
+the npm lookup as an option (`Mode.npm`). The npm walk takes the first
+`node_modules/@org/name` that is there as `lstat` sees it; one that is there
+but can't be followed (a dangling link, a cycle of links) stops it
+(`Tree.stops`). The tree has no permissions, so `EACCES` is not modelled.
+
+**Relative imports** (`fileTarget`, `resolveImport`): a path goes up with
+`..` only at its start (grammar `path`, checked by `Haus.Packages.isRelPath`
+when the file is scanned), from the directory of the importing file's real
+path, then down its names, one at a time (`walkNames`): each listed in its
+directory with that spelling, and none a symbolic link, which is never
+followed. Only the entry file and the `root` option are resolved to real
+paths, once, at the start (`main`, `baseOf`). The checks of a relative
+import come in the order of §13.3: its syntax (when the file is scanned);
+`..` names that go above the build's root (`Env.base`: the directory of the
+entry file's real path, or the `root` option), before anything is looked at
+(`import-outside-root`); the walk (`import-not-found`); the target in a
+package's directory, looked for from its directory up to the root, failing
+closed on a directory that can't be listed (`inPackage`); and opening the
+file. Every file read is a regular file, opened in a real directory without
+following a link: the project's `package.json` too (§13.3, "Files read"),
+which declares nothing when it isn't one.
+
 **One package per name.** Copies are compared after their imports are
 resolved: a copy's *class* is its name, its `package.haus` and `schema.haus`
 bytes, and the classes its imports reach, in order. Copies of one class are
@@ -44,8 +67,7 @@ imports reach the same packages").
 **Each file is read at most once** (`St.files`, `St.copies`, `St.manifests`,
 `St.npm`), so the diamond of 2^24 paths reads 49 files. `openFile` also
 keeps the paths it opened, and doesn't open one twice: the caches are kept
-by kind, and one file can be of two kinds (a project's `package.json` that
-is a link to a schema file; a root that is a `package.json`).
+by kind, and one file can be of two kinds (a root that is a `package.json`).
 
 Recursion: `load` takes fuel, `Limits.files` plus one. Each call on the
 stack has counted its schema file (`countFile`) before it loads the file's
@@ -83,6 +105,12 @@ structure Config where
   worldWritable : Path → Bool := fun _ => false
   /-- Whether the SHOULD check of "Package versions" (§13.3) is made. -/
   checkVersions : Bool := true
+  /--
+  The build's `root` option (§13.3, "The root"): a directory that contains
+  the entry file. Without it, the root is the directory of the entry file's
+  real path.
+  -/
+  root : Option Path := none
 
 /--
 The order in which a schema file's imports are walked, as a function of its
@@ -154,6 +182,8 @@ structure Env where
   given : List Given := []
   /-- Folder entries whose `package.haus` could not be read, as shown. -/
   broken : List String := []
+  /-- The real path of the build's root (§13.3): relative imports stay inside it. -/
+  base : Path := []
 
 /--
 The classes made so far, with distinct names: one package per name. The
@@ -334,29 +364,22 @@ def packageJsonOf (dir : Path) (owner : String) : M (Option NpmInfo) := do
 /--
 The `package.json` that speaks for a file outside a package (§13.3): the
 nearest above its real path `p`, skipping one that has neither a `name` nor
-a dependency field. It is opened like any file (following links): the spec
-puts no rule on it. Not valid JSON, or not a regular file: it declares nothing.
+a dependency field. Like every file a build reads ("Files read"), it is
+opened without following a link, and must be a regular file: one that isn't
+(a link, a directory, a FIFO) declares nothing and is not read, and so does
+one that isn't valid JSON. The directories above a real path are real, so
+it is read as a package's `package.json` is (`packageJsonOf`), once.
 Returns where it is, and what it declares (with `devDependencies`; `none`: nothing, as it can't be read).
 -/
 def projectOf (p : Path) : M (Option (Path × Option (List String))) := do
-  let limit := (← cfg).limits.packageJson
   for d in ancestors p.dropLast do
-    if (← look (·.childKind? d "package.json")).isNone then continue
-    match ← look (·.realPath (d ++ ["package.json"])) with
-    | .ok real =>
-      if (← look (·.kindAt? real)) != some .file then return some (d, none)
-      let info ← match (← get).npm.lookup real with
-        | some r => pure r
-        | none => do
-          let bytes ← openFile real limit fun size =>
-            ⟨.fileTooLarge, s!"{showPath (d ++ ["package.json"])} has {size} bytes, more than {limit}; it is not read"⟩
-          let r := parseNpm bytes
-          modify fun s => { s with npm := (real, r) :: s.npm }
-          pure r
-      match info with
+    match ← look (·.childKind? d "package.json") with
+    | none => continue
+    | some .file =>
+      match ← packageJsonOf d (showPath d) with
       | none => return some (d, none)
       | some i => if i.project then return some (d, some (i.deps ++ i.dev)) else continue
-    | .error _ => return some (d, none)
+    | some _ => return some (d, none)
   return none
 
 /-! ## Finding packages -/
@@ -394,28 +417,124 @@ skipping the directories of `skipped`.
 def walk (worldWritable : Path → Bool) (start : Path) (name : String) : List Path :=
   ((ancestors start).filter fun d => !skipped worldWritable d).map (· ++ "node_modules" :: splitPath name)
 
+/-- The directory `D` of a place `D/node_modules/@org/n` of `walk` for `name`. -/
+def placeDir (name : String) (p : Path) : Path := p.take (p.length - ((splitPath name).length + 1))
+
 /--
 The npm walk (§13.3) for the package `name` (`@org/n`) from the directory
 `start` (a real path): the first place of `walk` that exists. Its real
-path; an error if it has no `package.haus`; `none` if there is none.
+path; an error if it has no `package.haus`, or if it is there but can't be
+followed (a dangling link, a cycle of links: `Tree.stops`); `none` if there
+is none. Only a place that isn't there lets the walk go on. A directory `D`
+on the way up that can't be listed can't show whether it has a
+`node_modules`: it stops the walk too (it fails closed). The model has no
+permissions (`Tree.listable`), so this names the rule; the bindings' tests
+check it.
 -/
 def npmLookup (start : Path) (name : String) : M (Option Path) := do
   for p in walk (← cfg).worldWritable start name do
+    if !(← look (·.listable (placeDir name p))) then
+      fail .importNotFound s!"{msgText name}: {showPath (placeDir name p)} can't be listed, so whether it has a node_modules can't be told; the search stops there"
     match ← look (·.realPath p) with
     | .ok real =>
       if (← look (·.childKind? real "package.haus")).isSome then return some real
       fail .importNotFound s!"{msgText name}: {showPath p} has no package.haus (not a schema package); the search stops there"
-    | .error _ => continue
+    | .error f =>
+      if ← look (·.stops p f) then
+        fail .importNotFound s!"{msgText name}: {showPath p} is there but can't be followed (a broken link or a cycle of links); the search stops there"
+      continue
   return none
 
-/-- Is the real path `p` in a package's directory: a directory above it with a `package.haus`? -/
-def inPackage (t : Tree) (p : Path) : Option Path :=
-  (ancestors p.dropLast).find? fun d => (t.childKind? d "package.haus").isSome
+/-- A directory that stops a relative import into it (§13.3, "Imports"). -/
+inductive Stop where
+  /-- A package's directory: it has a `package.haus`. -/
+  | pkg (d : Path)
+  /-- A directory that can't be listed, so whether it is a package's can't be checked. -/
+  | unchecked (d : Path)
+
+def Stop.code : Stop → Code
+  | .pkg _ => .packagePath
+  | .unchecked _ => .importNotFound
+
+/-- The message of a relative import `path` of the file `p` that `stop` stops. -/
+def Stop.message (stop : Stop) (p : Path) (path : String) : String :=
+  match stop with
+  | .pkg d => s!"{showPath p} imports {msgText path}, a file in the package directory {showPath d}; import the package by its name"
+  | .unchecked d => s!"{showPath p} imports {msgText path}, and whether {showPath d} is a package's directory can't be checked (it can't be listed); it is not read"
+
+/--
+Is the real path `p`, inside the build's root `base`, in a package's
+directory (§13.3, "Imports")? The directories from `p`'s up to the root, the
+root included, nearest first: the first that has a `package.haus`, or that
+can't be listed (it fails closed: it is never taken as not a package's).
+-/
+def inPackage (t : Tree) (base p : Path) : Option Stop :=
+  ((ancestors p.dropLast).filter base.isPrefixOf).findSome? fun d =>
+    if !t.listable d then some (.unchecked d)
+    else if (t.childKind? d "package.haus").isSome then some (.pkg d) else none
 
 /-- What loading gives: the types defined, and for a package, its class. -/
 structure Loaded where
   types : List String
   cls : Option Nat := none
+
+/-- How many `..` names a path starts with: how far it goes up (`..` appears only at the start, grammar `path`). -/
+def upCount (comps : List String) : Nat := (comps.takeWhile (· == "..")).length
+
+/-- The names of a schema file an import of a file names (`./x` is `x.schema.haus`). -/
+def fileComps (path : String) : List String :=
+  (splitPath path).dropLast ++ [(splitPath path).getLastD "" ++ ".schema.haus"]
+
+/-- Why a relative import leads to no file (§13.3). -/
+inductive FileFault where
+  /-- Its `..` names go above the root: nothing is looked at. -/
+  | above
+  /-- The name is a symbolic link, which is not followed: nothing behind it is looked at. -/
+  | link (name : String)
+  /-- The name is not listed in its directory with that spelling, or a name before the last isn't a directory. -/
+  | missing (name : String)
+  deriving DecidableEq
+
+/--
+The walk down a relative import's names (§13.3, "Resolution") from the real
+directory `d`: each name must be an entry its directory lists with that
+spelling, and not a symbolic link (as `lstat` sees it, not following it);
+each name but the last a directory. The path reached, which has no links.
+What the last name is (a regular file or not) is checked when it is opened.
+-/
+def walkNames (t : Tree) (d : Path) : List String → Except FileFault Path
+  | [] => .ok d
+  | n :: rest =>
+    match t.childKind? d n with
+    | none => .error (.missing n)
+    | some (.link _) => .error (.link n)
+    | some .dir => walkNames t (d ++ [n]) rest
+    | some _ => if rest.isEmpty then .ok (d ++ [n]) else .error (.missing n)
+
+/--
+Where the relative import `path` of the file `p` (a real path) leads, in a
+build whose root is `base` (§13.3, "Resolution" and "The root"): the path of
+the file it names, inside the root, with no links. The `..` names are
+checked first, on `p`'s real directory alone, before anything is looked at;
+then the other names are walked down from there (`walkNames`). As no link is
+followed, the path reached is the directory the `..` names lead to with the
+import's names: inside the root.
+-/
+def fileTarget (t : Tree) (base p : Path) (path : String) : Except FileFault Path :=
+  let up := upCount (splitPath path)
+  let start := p.dropLast.take (p.dropLast.length - up)
+  if !base.isPrefixOf start then .error .above
+  else walkNames t start ((fileComps path).dropWhile fun c => c == "." || c == "..")
+
+def FileFault.code : FileFault → Code
+  | .above => .importOutsideRoot
+  | .link _ | .missing _ => .importNotFound
+
+def FileFault.message (f : FileFault) (p base : Path) (path : String) : String :=
+  match f with
+  | .above => s!"{showPath p} imports {msgText path}, which goes above the build's root {showPath base}"
+  | .link n => s!"{showPath p} imports {msgText path}, in which {msgText n} is a symbolic link; a relative import follows no link, and nothing behind it is read"
+  | .missing _ => s!"{showPath p} imports {msgText path}, which isn't found"
 
 def checkNames (imp : Import) (types : List String) (what : String) : M Unit := do
   if let some n := imp.names.find? (· ∉ types) then
@@ -455,15 +574,15 @@ def resolveImport (loadFn : Target → M Loaded) (importer : Importer) (imp : Im
     match importer with
     | .pkg _ name _ => fail .packagePath s!"the schema of {name} imports the file {msgText path}; a package imports only packages, by name"
     | .app p =>
-      let comps := splitPath path
-      let comps := comps.dropLast ++ [comps.getLastD "" ++ ".schema.haus"]
-      match ← look (resolve · maxLinks p.dropLast comps) with
-      | .error _ => fail .importNotFound s!"{showPath p} imports {msgText path}, which isn't found"
+      let base ← ask (·.base)
+      match ← look (fileTarget · base p path) with
+      | .error f => fail f.code (f.message p base path)
       | .ok real =>
-        if let some d ← look (inPackage · real) then
-          fail .packagePath s!"{showPath p} imports {msgText path}, a file in the package directory {showPath d}; import the package by its name"
+        if let some stop ← look (inPackage · base real) then
+          fail stop.code (stop.message p path)
+        -- Always true: the walk gives the import's names, the last spelled with `.schema.haus` (`fileComps`); R7 (`Haus.Packages.Reads`) uses it.
         if !(real.getLast?.any (·.endsWith ".schema.haus")) then
-          fail .importNotFound s!"{showPath p} imports {msgText path}, which is not a schema file (its real path doesn't end in .schema.haus); it is not read"
+          fail .importNotFound s!"{showPath p} imports {msgText path}, which is not a schema file; it is not read"
         if (← look (·.kindAt? real)) != some .file then
           fail .importNotFound s!"{showPath p} imports {msgText path}, which is not a regular file; it is not read"
         let r ← loadFn (.file real)
@@ -540,22 +659,32 @@ def classify (c : Class) : M Nat := do
 /--
 A package's own `package.json`, read leniently: one that can't be read (a
 symbolic link, not a regular file, too large) is ignored, as one that isn't
-JSON is (§13.3, "Package versions": outside npm mode it only gives a version).
+JSON is (§13.3, "Package versions": beside a package given by its directory, it
+only catches a version that differs, and, with `npm`, declares the package's own
+dependencies).
 -/
 def lenientNpm (dir : Path) (owner : String) : M (Option NpmInfo) :=
   tryCatch (packageJsonOf dir owner) fun _ => pure none
 
 /--
 A copy's `package.json`: what it declares, and the version its package
-manager gives it. Read with `npm` (under the rule of a package's files), and
-also without it when versions are checked (§13.3, "Package versions"): a
-package given explicitly is checked against the `package.json` next to its
-manifest too, read leniently (`lenientNpm`). Without `npm` only its version
-is used: explicit packages count as declared.
+manager gives it. With `npm`, a package the npm walk found, or found in a
+folder given, reads it under the rule of a package's files (§13.3, npm; a
+folder's `package.json` was read leniently when the folder was read, for its
+version). A package given by its directory reads it leniently (`lenientNpm`),
+in every ecosystem: with `npm`, for what it declares and its version;
+without, for its version only, when versions are checked ("Package
+versions"). Explicit packages count as declared.
+
+Only a package given by its directory is read leniently with `npm`, not one
+found in a folder: so a folder doesn't change how a package that the npm
+walk finds inside it is read, and folders stay conservative (R6,
+`Haus.Packages.Folders`).
 -/
-def copyNpm (config : Config) (dir : Path) (owner : String) : M (Option NpmInfo) :=
-  if config.mode.npm then packageJsonOf dir owner
-  else if config.checkVersions then lenientNpm dir owner
+def copyNpm (config : Config) (dir : Path) (owner : String) : M (Option NpmInfo) := do
+  let given ← ask (·.given)
+  if config.mode.npm && !given.any (fun g => g.byDir && g.dir == dir) then packageJsonOf dir owner
+  else if config.mode.npm || config.checkVersions then lenientNpm dir owner
   else pure none
 
 /-- The SHOULD check of "Package versions" (§13.3): the `package.json`'s version is the manifest's. -/
@@ -680,6 +809,28 @@ structure Outcome where
 def Outcome.of (p : Except Err Unit × St) : Outcome :=
   ⟨p.1.map fun _ => packagesOf p.2.classes.list, p.2.reads, p.2.classes⟩
 
+/--
+The build's root (§13.3, "The root"), for the entry file `root` whose real
+path is `real`: the directory of `real`, or the real path of the `root`
+option, which must be a directory that contains `real`.
+-/
+def baseRes (t : Tree) (option : Option Path) (root real : Path) : Except Err Path :=
+  match option with
+  | none => .ok real.dropLast
+  | some r =>
+    match t.realPath r with
+    | .ok rr =>
+      if t.isDir rr && rr.isPrefixOf real then .ok rr
+      else .error ⟨.importOutsideRoot, s!"the schema file {showPath root} is not inside the root {showPath r} given"⟩
+    | .error _ => .error ⟨.importNotFound, s!"the root {showPath r} given doesn't exist"⟩
+
+/-- `baseRes` in the run: the tree and the `root` option of the settings. -/
+def baseOf (root real : Path) : M Path := do
+  let option := (← cfg).root
+  match ← look (baseRes · option root real) with
+  | .ok b => pure b
+  | .error e => throw e
+
 /-- The whole run: the explicit packages, then the schema file `root` and everything it imports. -/
 def main (root : Path) (w : Walk := .file) : M Unit := do
   let (given, broken) ← givenPackages
@@ -689,8 +840,9 @@ def main (root : Path) (w : Walk := .file) : M Unit := do
       | .error _ => fail .importNotFound s!"the schema file {showPath root} doesn't exist"
     if (← look (·.kindAt? real)) != some .file then
       fail .importNotFound s!"the schema file {showPath root} is not a regular file"
+    let base ← baseOf root real
     let fuel := (← cfg).limits.files + 1
-    let _ ← load w fuel (.file real)
+    let _ ← withReader (fun e => { e with base }) (load w fuel (.file real))
 
 /--
 Loads the schema file `root` of `tree` and everything it imports. On success,

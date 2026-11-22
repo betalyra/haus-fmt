@@ -1,11 +1,8 @@
 //! Decoding values built in code (spec §9.8): a [`Value`] or [`Json`] can be
 //! nested far deeper than any parser allows, so decoding checks the depth
 //! before each container and fails at the limit with `nesting-too-deep`
-//! instead of overflowing the stack, also inside an `Any`.
-//!
-//! A [`Value`] drops without recursion; Rust drops a deeply nested [`Json`]
-//! recursively, so these tests take deep JSON apart in a loop
-//! ([`dismantle_json`]) rather than dropping it.
+//! instead of overflowing the stack, also inside an `Any`. A [`Value`] and a
+//! [`Json`] drop without recursion.
 
 use haus::json::{self, Json};
 use haus::{Decode, DecodeError, Decoder, ErrorCode, FromJson, Limits, Unknown, Value, de};
@@ -56,16 +53,6 @@ fn record(v: Value) -> Value {
 /// `A { a: … }`: a record payload, one level (spec §7).
 fn tagged_record(v: Value) -> Value {
     Value::variant("A", vec![record(v)]).unwrap()
-}
-
-/// A [`Json`] dropped level by level, without recursion.
-fn dismantle_json(mut j: Json) {
-    while let Json::Array(mut items) = j {
-        match items.pop() {
-            Some(inner) => j = inner,
-            None => break,
-        }
-    }
 }
 
 fn deeper(path: &str) -> String {
@@ -132,5 +119,4 @@ fn json_built_a_million_levels_deep_fails_at_the_depth_limit() {
     let e = Nest::from_json_with(&j, Decoder::default()).unwrap_err();
     assert_eq!(e.to_string(), deeper(&"[0]".repeat(256)));
     assert!(json::import(&j, &Limits::default()).is_err());
-    dismantle_json(j);
 }

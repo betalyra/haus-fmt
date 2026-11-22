@@ -589,7 +589,7 @@ fn import(i: &mut Input) -> ModalResult<Import> {
         // A package's version may hold `~` (`@a/b@1~x`, an `import-version`); a
         // file path can't (grammar `path`): `./a~b` ends before it.
         token(('@', take_while(1.., |c: char| module_char(c) || c == '~')).take().map(str::to_owned)),
-        token(('.', take_while(1.., module_char)).take().map(str::to_owned)),
+        token(file_path),
     ))
     .context(expected("a module (std/time, @org/name, ./file)"));
     // At least one, which `check` says.
@@ -600,9 +600,50 @@ fn import(i: &mut Input) -> ModalResult<Import> {
     Ok(Import { module, names, pos })
 }
 
-/// A character of a module after its first: `[A-Za-z0-9_./@-]`.
+/// A character of a package module after its first: `[A-Za-z0-9_./@-]`.
 fn module_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || "_.-/@".contains(c)
+}
+
+/// A module that starts with `.`: up to the first character that is not
+/// one of `[A-Za-z0-9_./-]` (a path has no `@`, `~`, `\`, `:`, `%`). One that
+/// starts with `./` or `../` must be a path (grammar `path`, spec §13.3):
+/// `./a/../b`, `./a/`, `./a//b`, `./.x` and `./` are syntax errors. One that
+/// starts with `.` otherwise (`.../a`) is an unknown module, said when it is
+/// resolved.
+fn file_path(i: &mut Input) -> ModalResult<String> {
+    let start = i.checkpoint();
+    let module: &str =
+        ('.', take_while(1.., |c: char| c.is_ascii_alphanumeric() || "_.-/".contains(c))).take().parse_next(i)?;
+    if (module.starts_with("./") || module.starts_with("../")) && !is_path(module) {
+        i.reset(&start);
+        return cut_err(fail.context(expected(NOT_A_PATH))).parse_next(i);
+    }
+    Ok(module.to_owned())
+}
+
+const NOT_A_PATH: &str = "a file path: ./ or ../ (repeated), then names of A-Z, a-z, 0-9, _, . and - that don't \
+                          start with '.', with one '/' between them and none at the end";
+
+/// Whether `module` is a path (grammar `path`): `./` or one or more `../`,
+/// then names, each starting with `[A-Za-z0-9_-]` and made of
+/// `[A-Za-z0-9_.-]`, separated by single `/`s.
+pub fn is_path(module: &str) -> bool {
+    let names = match module.strip_prefix("./") {
+        Some(rest) => Some(rest),
+        None => {
+            let mut rest = module.strip_prefix("../");
+            while let Some(up) = rest.and_then(|r| r.strip_prefix("../")) {
+                rest = Some(up);
+            }
+            rest
+        }
+    };
+    let name = |n: &str| {
+        n.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            && n.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+    };
+    names.is_some_and(|names| names.split('/').all(name))
 }
 
 fn typedef(i: &mut Input) -> ModalResult<TypeDef> {

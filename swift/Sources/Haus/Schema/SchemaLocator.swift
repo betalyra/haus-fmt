@@ -1,25 +1,25 @@
 import Foundation
 
-/// Finds the schema packages imports name (spec §13.3), for one package
-/// manager: the directory of the package an import names, and whether the
-/// importing file declares it. Everything else is the same for every package
-/// manager and is checked when a schema is loaded: the manifest, its name
-/// and version, the `@major` of the import, containment, one package per
-/// name, cycles and ids.
+/// Finds the schema packages imports name (spec §13.3): the directory of the
+/// package an import names. Everything else is checked when a schema is
+/// loaded: the manifest, its name and version, the `@major` of the import,
+/// containment, one package per name, cycles and ids.
 ///
 /// ```swift
-/// let packages = try PackageLocator.explicit(folders: ["../extensions"]).or(.nodeModules)
+/// let packages = try PackageLocator.explicit(folders: ["../extensions"])
 /// let schema = try HausSchema(contentsOf: "order.schema.haus", options: .init(packages: packages))
 /// ```
 ///
-/// Packages are never looked for anywhere else: not in global or
-/// environment-wide places (`NODE_PATH`, npm's global folder), and never
+/// Packages are given explicitly: as directories on disk, or as a file tree
+/// that code provides, such as a SwiftPM resource bundle
+/// (`explicit(in:packages:folders:)`). They are never looked
+/// for anywhere else: not in `node_modules` (only implementations of the npm
+/// ecosystem look there), not in global or environment-wide places, and never
 /// over the network.
 public struct PackageLocator: Sendable {
     indirect enum Kind: Sendable {
         case none
         case explicit(ExplicitPackages)
-        case nodeModules
         case or(Kind, Kind)
     }
 
@@ -28,23 +28,6 @@ public struct PackageLocator: Sendable {
     /// Finds no packages: a schema that imports one fails with the code
     /// `import-unavailable`.
     public static let none = PackageLocator(kind: .none)
-
-    /// Finds packages in `node_modules`, by the npm rules of spec §13.3.
-    ///
-    /// A file imports only the packages it declares, checked before anything
-    /// is looked for (`undeclared-package`): for a package's `schema.haus`,
-    /// those in `dependencies`, `peerDependencies` and `optionalDependencies`
-    /// of the package's own `package.json`; for other files, those and
-    /// `devDependencies` of the nearest `package.json` above the file,
-    /// skipping one with neither a name nor a dependency field.
-    ///
-    /// `@org/name` is then `D/node_modules/@org/name` for the nearest
-    /// directory `D` from the importing file's real path up (a schema read
-    /// from text starts at the working directory), skipping a `D` named
-    /// `node_modules`, a scope directory inside one and a directory everyone
-    /// may write to, such as `/tmp`. The first one that exists is the
-    /// package: without a `package.haus` the import is not found.
-    public static let nodeModules = PackageLocator(kind: .nodeModules)
 
     /// Packages given explicitly (spec §13.3): each of `packages` is a
     /// package's directory; each of `folders` a directory whose
@@ -59,12 +42,47 @@ public struct PackageLocator: Sendable {
     /// subdirectory of a folder whose manifest is invalid is left out; an
     /// import that isn't found names it. Two packages with one name are
     /// `duplicate-package`, unless they are copies (the same `package.haus`
-    /// and `schema.haus`).
+    /// and `schema.haus`). A `package.json` beside a manifest is read only
+    /// for its version (`package-version` if it differs), and ignored if it
+    /// can't be read.
     public static func explicit(packages: [String] = [], folders: [String] = []) throws(HausError) -> PackageLocator {
         var given = ExplicitPackages()
-        for dir in packages { try given.addPackage(dir) }
-        for folder in folders { try given.addFolder(folder) }
+        for dir in packages { try given.addPackage(dir, tree: nil) }
+        for folder in folders { try given.addFolder(folder, tree: nil) }
         return PackageLocator(kind: .explicit(given))
+    }
+
+    /// Packages given explicitly in a read-only file tree, the directory
+    /// `tree`: `packages` and `folders` are paths inside it, such as
+    /// `"money"` or `"schemas"` (`.` for the tree itself), with the rules of
+    /// ``explicit(packages:folders:)``. A tree follows no links (spec
+    /// §13.3): a package or folder given that is a link, or reached through
+    /// one, is `package-path`, and a subdirectory of a folder that is a link
+    /// is left out, named when an import isn't found. A path that leaves the
+    /// tree (`..`, `/…`) is `package-path`.
+    public static func explicit(in tree: URL, packages: [String] = [], folders: [String] = []) throws(HausError)
+        -> PackageLocator
+    {
+        guard let base = realPath(tree.path) else {
+            throw notFound("the package tree \(shown(tree.lastPathComponent)): \(systemError())")
+        }
+        var given = ExplicitPackages()
+        for dir in packages { try given.addPackage(try inTree(base, dir), tree: base) }
+        for folder in folders { try given.addFolder(try inTree(base, folder), tree: base) }
+        return PackageLocator(kind: .explicit(given))
+    }
+
+    /// Packages given explicitly in a bundle's resources, such as SwiftPM's
+    /// `Bundle.module`: `explicit(in:packages:folders:)` with the
+    /// bundle's resource directory as the tree.
+    ///
+    /// ```swift
+    /// let packages = try PackageLocator.explicit(in: Bundle.module, folders: ["schemas"])
+    /// ```
+    public static func explicit(in bundle: Bundle, packages: [String] = [], folders: [String] = []) throws(HausError)
+        -> PackageLocator
+    {
+        try explicit(in: bundle.resourceURL ?? bundle.bundleURL, packages: packages, folders: folders)
     }
 
     /// This locator, then `next` for the packages this one doesn't find. A
@@ -76,13 +94,23 @@ public struct PackageLocator: Sendable {
     }
 }
 
+/// The path `relative` inside the tree `base` (a real path): names only, no
+/// `..`, not absolute (`package-path` otherwise).
+private func inTree(_ base: String, _ relative: String) throws(HausError) -> String {
+    let names = FilePath.elements(relative).filter { $0 != "." }
+    guard relative.utf8.first != ASCII.slash, !names.contains("..") else {
+        throw HausError(.packagePath, "\(shown(relative)) is not a path inside the package tree")
+    }
+    return FilePath.join(base, names.joined(separator: "/"))
+}
+
 /// A package directory a locator found.
 struct Location {
     /// It has package.haus and schema.haus.
     let dir: String
-    /// The version the package manager gives the package (the version of
-    /// npm's package.json), if it gives one: the manifest's must be the same
-    /// (`package-version`).
+    /// The version the package manager gives the package (the version of a
+    /// package.json beside it), if it gives one: the manifest's must be the
+    /// same (`package-version`).
     let version: String?
     /// Found by scanning a folder: it doesn't replace a package the next
     /// locator finds.
@@ -102,8 +130,6 @@ extension PackageLocator.Kind {
             throw HausError(.importUnavailable, "no package locator (only std modules and files can be imported here)")
         case .explicit(let given):
             return try given.locate(name, files: files)
-        case .nodeModules:
-            return try locateInNodeModules(name, from: from, files: files)
         case .or(let first, let second):
             return try either(first, second, name, from: from, files: files)
         }
@@ -129,7 +155,7 @@ extension PackageLocator.Kind {
             var other = try second.locate(name, from: from, files: files)
             other.sameAs = found.dir
             return other
-        } catch  where error.code == .importNotFound || error.code == .undeclaredPackage {
+        } catch  where error.code == .importNotFound {
             return found
         }
     }
@@ -149,9 +175,29 @@ struct ExplicitPackages: Sendable {
     /// when an import isn't found.
     var unreadable: [(dir: String, error: HausError)] = []
 
-    mutating func addPackage(_ dir: String) throws(HausError) {
-        guard let resolved = realPath(dir) else { throw notFound("\(shown(dir)): \(systemError())") }
-        try add(readManifest(resolved), resolved, scanned: false)
+    /// `dir` with every link resolved; in a tree (`tree` is its real path),
+    /// one without links, inside it.
+    private static func resolve(_ dir: String, tree: String?, files: SchemaFiles) throws(HausError) -> String {
+        guard let resolved = realPath(dir) else { throw notFound("\(files.show(dir)): \(systemError())") }
+        if let tree, !(sameCodePoints(resolved, dir) && FilePath.isInside(resolved, tree)) {
+            throw HausError(
+                .packagePath,
+                "\(files.show(dir)) is a symbolic link or reached through one; a package tree follows none")
+        }
+        return resolved
+    }
+
+    /// Paths in messages about what is given: from the tree, or else from the
+    /// directory a package or folder given is in (`common/package.haus`).
+    private static func display(_ dir: String, tree: String?) -> SchemaFiles {
+        let absolute = dir.utf8.first == ASCII.slash ? dir : FilePath.join(currentDirectory(), dir)
+        return SchemaFiles(root: tree ?? FilePath.dir(absolute))
+    }
+
+    mutating func addPackage(_ dir: String, tree: String?) throws(HausError) {
+        let resolved = try Self.resolve(dir, tree: tree, files: Self.display(dir, tree: tree))
+        let files = Self.display(resolved, tree: tree)
+        try add(files.manifest(resolved).manifest, resolved, scanned: false, files: files)
     }
 
     /// Adds the packages in `folder`. A subdirectory whose manifest can't be
@@ -159,19 +205,21 @@ struct ExplicitPackages: Sendable {
     /// named when an import isn't found by the last name of the folder's real
     /// path and its own (`schemas/broken`), however the folder was given
     /// (spec §13.3).
-    mutating func addFolder(_ folder: String) throws(HausError) {
+    mutating func addFolder(_ folder: String, tree: String?) throws(HausError) {
         let limit = SchemaFileLimits.maxFolderEntries
-        guard let real = realPath(folder), let names = directoryEntries(real, limit: limit + 1) else {
-            throw notFound("\(shown(folder)): \(systemError())")
+        let real = try Self.resolve(folder, tree: tree, files: Self.display(folder, tree: tree))
+        let files = Self.display(real, tree: tree)
+        guard let names = directoryEntries(real, limit: limit + 1) else {
+            throw notFound("\(files.show(folder)): \(systemError())")
         }
         guard names.count <= limit else {
-            throw HausError(.tooManyFiles, "\(shown(folder)): the folder of packages has more than \(limit) entries")
+            throw HausError(
+                .tooManyFiles, "\(files.show(folder)): the folder of packages has more than \(limit) entries")
         }
-        let files = SchemaFiles()
-        let entries = names.filter { exists(FilePath.join(real, $0, PackageFile.manifest)) }
+        let entries = names.filter { files.hasManifest(FilePath.join(real, $0)) }
         for name in entries.sorted(by: precedes) {
-            switch Self.manifest(FilePath.join(real, name), files: files) {
-            case .success(let (manifest, resolved)): try add(manifest, resolved, scanned: true)
+            switch Self.manifest(FilePath.join(real, name), tree: tree, files: files) {
+            case .success(let (manifest, resolved)): try add(manifest, resolved, scanned: true, files: files)
             case .failure(let error): unreadable.append((FilePath.join(FilePath.base(real), name), error))
             }
         }
@@ -179,10 +227,12 @@ struct ExplicitPackages: Sendable {
 
     /// The manifest of the package in `dir`, and its real path; a
     /// package.json beside it with another version is `package-version`.
-    private static func manifest(_ dir: String, files: SchemaFiles) -> Result<(HausManifest, String), HausError> {
+    private static func manifest(_ dir: String, tree: String?, files: SchemaFiles)
+        -> Result<(HausManifest, String), HausError>
+    {
         Result { () throws(HausError) in
-            guard let resolved = realPath(dir) else { throw notFound("\(shown(dir)): \(systemError())") }
-            let manifest = try readManifest(resolved)
+            let resolved = try resolve(dir, tree: tree, files: files)
+            let manifest = try files.manifest(resolved).manifest
             if let version = lenientVersion(resolved, files: files), version != manifest.version {
                 throw HausError(
                     .packageVersion,
@@ -193,14 +243,14 @@ struct ExplicitPackages: Sendable {
         }
     }
 
-    private mutating func add(_ m: HausManifest, _ dir: String, scanned: Bool) throws(HausError) {
+    private mutating func add(_ m: HausManifest, _ dir: String, scanned: Bool, files: SchemaFiles) throws(HausError) {
         guard let i = packages.firstIndex(where: { $0.manifest.name == m.name }) else {
             packages.append(Given(manifest: m, dir: dir, scanned: scanned))
             return
         }
         let given = packages[i]
-        guard given.dir == dir || sameFiles(given.dir, dir) else {
-            throw duplicatePackage(given.manifest, given.dir, m, dir)
+        guard given.dir == dir || sameFiles(given.dir, dir, files: files) else {
+            throw files.duplicatePackage(given.manifest, given.dir, m, dir)
         }
         packages[i].scanned = given.scanned && scanned
     }
@@ -215,92 +265,11 @@ struct ExplicitPackages: Sendable {
     }
 }
 
-// ── node_modules ────────────────────────────────────────────────
-
-/// The dependency fields of a package.json: all four count for a project's
-/// files, the first three for a package's schema.haus.
-let dependencyFields = ["dependencies", "peerDependencies", "optionalDependencies", "devDependencies"]
-
-func locateInNodeModules(_ name: String, from: String?, files: SchemaFiles) throws(HausError) -> Location {
-    let start = from.map(FilePath.dir) ?? FileManager.default.currentDirectoryPath
-    try checkDeclared(name, from: from, dir: start, files: files)
-    let candidates = ancestors(of: start).lazy.filter(isSearched).map { FilePath.join($0, "node_modules", name) }
-    guard let installed = candidates.first(where: exists) else {
-        throw notFound("package \(name) is not installed (no node_modules/\(name) in \(shown(start)) or above)")
-    }
-    guard exists(FilePath.join(installed, PackageFile.manifest)) else {
-        throw notFound(
-            "\(shown(installed)) is not a schema package: it has no \(PackageFile.manifest) (the nearest node_modules/\(name) is the package)"
-        )
-    }
-    guard let dir = realPath(installed) else { throw notFound("\(shown(installed)): \(systemError())") }
-    return Location(dir: dir, version: try npmVersion(dir, files: files))
-}
-
-/// Whether `node_modules` is looked for in `dir` (spec §13.3).
-func isSearched(_ dir: String) -> Bool {
-    let base = FilePath.base(dir)
-    let scope = base.hasPrefix("@") && FilePath.base(FilePath.dir(dir)) == "node_modules"
-    return base != "node_modules" && !scope && !isWorldWritable(dir)
-}
-
-/// Checks that the file at `from` (in `dir`) declares `name`
-/// (`undeclared-package` if not).
-func checkDeclared(_ name: String, from: String?, dir: String, files: SchemaFiles) throws(HausError) {
-    let file = from.map(shown) ?? "the schema"
-    let declaring: (path: String, doc: PackageJSON, fields: ArraySlice<String>)
-    if let from, FilePath.base(from) == PackageFile.schema, exists(FilePath.join(dir, PackageFile.manifest)) {
-        let path = FilePath.join(dir, "package.json")
-        guard let doc = try files.packageJSON(path, .packageJSON) else {
-            throw HausError(
-                .undeclaredPackage,
-                "the package in \(shown(dir)) has no package.json, so it declares no packages: \(name) isn't declared")
-        }
-        declaring = (path, doc, dependencyFields.prefix(3))
-    } else {
-        guard let (path, doc) = try project(above: dir, files: files) else {
-            throw HausError(
-                .undeclaredPackage,
-                "no package.json above \(file) declares \(name): list it in the dependencies of a package.json, or give the package explicitly"
-            )
-        }
-        declaring = (path, doc, dependencyFields[...])
-    }
-    guard declaring.fields.contains(where: { declaring.doc.dependencies[$0]?.contains(name) ?? false }) else {
-        throw HausError(
-            .undeclaredPackage,
-            "\(file) doesn't declare \(name): \(shown(declaring.path)) doesn't list it in \(declaring.fields.joined(separator: ", "))"
-        )
-    }
-}
-
-/// The nearest package.json above `dir` that has a name or a dependency
-/// field: the project's. One that isn't valid JSON, or isn't a regular file
-/// (a directory, a broken link), is the project's too, and declares nothing:
-/// the search stops there.
-func project(above dir: String, files: SchemaFiles) throws(HausError) -> (path: String, doc: PackageJSON)? {
-    for d in ancestors(of: dir) {
-        let path = FilePath.join(d, "package.json")
-        guard exists(path) else { continue }
-        guard let doc = try files.packageJSON(path, .projectJSON) else { return (path, PackageJSON.unreadable) }
-        if !doc.isValid || doc.members.contains("name") || dependencyFields.contains(where: doc.members.contains) {
-            return (path, doc)
-        }
-    }
-    return nil
-}
-
-/// The version of the package.json in the package directory `dir`, if it
-/// has one that is a string.
-func npmVersion(_ dir: String, files: SchemaFiles) throws(HausError) -> String? {
-    try files.packageJSON(FilePath.join(dir, "package.json"), .packageJSON)?.version
-}
-
 /// The version of the package.json beside the manifest of a package given
-/// explicitly (`dir` is its real path), if it gives one. Outside npm mode such
-/// a package.json only gives a version: one that can't be read (a link, not
-/// a regular file, too large, not JSON) is ignored, and is no error (spec
-/// §13.3, "Package versions").
+/// explicitly (`dir` is its real path), if it gives one. Such a package.json
+/// only gives a version: one that can't be read (a link, not a regular file,
+/// too large, not JSON) is ignored, and is no error (spec §13.3, "Package
+/// versions").
 func lenientVersion(_ dir: String, files: SchemaFiles) -> String? {
-    (try? files.packageJSON(FilePath.join(dir, "package.json"), .packageJSON))??.version
+    (try? files.packageJSON(FilePath.join(dir, "package.json")))??.version
 }

@@ -218,9 +218,10 @@ starts with it (`$[3].price`).
 ## Schema files
 
 ```ts
-import { schemaOptions } from "@haus-fmt/haus/node"
+import { readSchemaFile } from "@haus-fmt/haus/node"
 
-const { schemas } = Haus.compileSchemaFile(text, schemaOptions("order.schema.haus"))
+const { text, options } = readSchemaFile("order.schema.haus")
+const { schemas } = Haus.compileSchemaFile(text, options)
 const order = yield* Haus.decode(schemas.Order!)(data)
 ```
 

@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
@@ -298,7 +299,7 @@ class ManifestTest {
     write(app.resolve("billing/common.schema.haus"), "type Iban = { number: String }");
     write(app.resolve("shared.schema.haus"), "type Address = { city: String }");
     SchemaFiles files = new SchemaFiles();
-    String[] root = files.rootSource(app.resolve("app.schema.haus").toString());
+    String[] root = files.rootSource(app.resolve("app.schema.haus").toString(), temp.toString());
     assertEquals("import ./billing/common (Iban)", root[1]);
     assertNull(files.packageOfFile(root[0]));
     SchemaFiles.Source common = files.openRelative("./billing/common", root[0]);
@@ -312,11 +313,12 @@ class ManifestTest {
     // Names are spelled as the directory lists them, also where the file system ignores case.
     HausException e = fails("import-not-found", () -> files.openRelative("./Billing/common", root[0]));
     assertTrue(e.reason().contains("\"Billing\""), e.reason());
-    // A file whose real path doesn't end in .schema.haus is not read.
+    // A relative import follows no link: nothing behind it is read, and the message doesn't say where it points.
     write(temp.resolve("secret/creds.txt"), "API_TOKEN=do-not-print");
     Files.createSymbolicLink(app.resolve("pins.schema.haus"), Paths.get("../secret/creds.txt"));
     e = fails("import-not-found", () -> files.openRelative("./pins", root[0]));
-    assertFalse(e.getMessage().contains("do-not-print"), e.getMessage());
+    assertTrue(e.getMessage().contains("pins.schema.haus is a symbolic link"), e.getMessage());
+    assertFalse(e.getMessage().contains("do-not-print") || e.getMessage().contains("creds"), e.getMessage());
   }
 
   @Test
@@ -331,8 +333,12 @@ class ManifestTest {
     assertEquals("{ name: \"@acme/orders\", version: \"1.0.0\" }", pkg.manifestText);
     HausException e = fails("package-path", () -> files.openRelative("./common", root[0]));
     assertTrue(e.reason().contains("@acme/orders"), e.reason());
-    String[] app = files.rootSource(temp.resolve("app/app.schema.haus").toString());
+    // With the root at temp, ../vendor is inside it.
+    String[] app = files.rootSource(temp.resolve("app/app.schema.haus").toString(), temp.toString());
     fails("package-path", () -> files.openRelative("../vendor/orders/common", app[0]));
+    // With the default root, app, ../vendor is above it: nothing is looked at.
+    String[] alone = files.rootSource(temp.resolve("app/app.schema.haus").toString());
+    fails("import-outside-root", () -> files.openRelative("../vendor/orders/common", alone[0]));
   }
 
   // ── messages ──
@@ -352,5 +358,135 @@ class ManifestTest {
     Manifest b = Manifest.parse(utf8("{ name: \"@acme/ids\", version: \"3.1.0\" }"));
     assertEquals("two packages are called \"@acme/ids\": \"3.1.0\" in /a and \"3.1.0\" in /b (two copies of \"3.1.0\" "
         + "whose files or imports differ)", SchemaFiles.duplicate(a, "/a", b, "/b").reason());
+  }
+
+  /** Messages of a load show paths relative to the root, never absolute ones (spec §13.3, "The root"). */
+  @Test
+  void messagesShowPathsFromTheRoot() throws IOException {
+    write(temp.resolve("proj/app/a.schema.haus"), "import ./sub/b (B)\ntype Root = { b: B }");
+    write(temp.resolve("proj/app/sub/b.schema.haus"), "import ../../shared/missing (M)\ntype B = { m: M }");
+    pkg(temp.resolve("vendor/common"), "@acme/common", "1.0.0", "import ./x (X)\ntype Address = { city: String }");
+    String abs = temp.toRealPath().toString();
+    SchemaOptions root = SchemaOptions.DEFAULT.withRoot(temp.resolve("proj"));
+    HausException e = fails("import-not-found", () -> Schema.load(temp.resolve("proj/app/a.schema.haus"), root));
+    assertTrue(e.getMessage().contains("shared/missing.schema.haus"), e.getMessage());
+    assertFalse(e.getMessage().contains(abs), e.getMessage());
+    // Without the option, ../../shared goes above the root, app.
+    e = fails("import-outside-root", () -> Schema.load(temp.resolve("proj/app/a.schema.haus")));
+    assertFalse(e.getMessage().contains(abs), e.getMessage());
+    // A package outside the root is shown from the root: ../../vendor/common.
+    write(temp.resolve("proj/app/c.schema.haus"), "import @acme/common@1 (Address)\ntype C = { a: Address }");
+    SchemaOptions withPackage = root.withPackages(PackageLocator.explicit().packageDir(temp.resolve("vendor/common")));
+    e = fails("package-path", () -> Schema.load(temp.resolve("proj/app/c.schema.haus"), withPackage));
+    assertFalse(e.getMessage().contains(abs), e.getMessage());
+    // A root option that doesn't contain the entry file.
+    e = fails("import-outside-root",
+        () -> Schema.load(temp.resolve("proj/app/a.schema.haus"), SchemaOptions.DEFAULT.withRoot(temp.resolve("vendor"))));
+    assertFalse(e.getMessage().contains(abs), e.getMessage());
+    assertEquals(0, e.line());
+  }
+
+  /**
+   * A relative root option is from the entry file's real directory, not from the current
+   * directory or the path the entry file is given by (spec §13.3, "The root").
+   */
+  @Test
+  void relativeRootOption() throws IOException {
+    write(temp.resolve("proj/app/a.schema.haus"), "import ../shared/s (S)\ntype Root = { s: S }");
+    write(temp.resolve("proj/shared/s.schema.haus"), "type S = Int");
+    Files.createSymbolicLink(temp.resolve("current"), Paths.get("proj/app"));
+    Path entry = temp.resolve("current/a.schema.haus");
+    for (String given : List.of("..", "../../proj")) {
+      Schema schema = Schema.load(entry, SchemaOptions.DEFAULT.withRoot(Paths.get(given)));
+      assertEquals(1, schema.imported().size(), given);
+    }
+    HausException e = fails("import-outside-root", () -> Schema.load(entry, SchemaOptions.DEFAULT.withRoot(Paths.get("."))));
+    assertEquals(1, e.line());
+    e = fails("import-outside-root", () -> Schema.load(entry, SchemaOptions.DEFAULT.withRoot(Paths.get("../shared"))));
+    assertEquals(0, e.line());
+  }
+
+  /** The names a build looks up itself are spelled exactly (spec §13.3, "Spelling"). */
+  @Test
+  void exactNames() {
+    Path orders = temp.resolve("vendor/orders");
+    write(orders.resolve("Package.haus"), "{ name: \"@acme/orders\", version: \"1.0.0\" }");
+    write(orders.resolve("schema.haus"), "type Order = { id: Int }");
+    fails("import-not-found", () -> PackageLocator.explicit().packageDir(orders));
+    // Package.haus doesn't make a package directory: ./lib/x is a file outside packages.
+    write(temp.resolve("app/lib/Package.haus"), "{ name: \"@acme/lib\", version: \"1.0.0\" }");
+    write(temp.resolve("app/lib/x.schema.haus"), "type X = Int");
+    write(temp.resolve("app/a.schema.haus"), "import ./lib/x (X)\ntype Root = { x: X }");
+    Schema.load(temp.resolve("app/a.schema.haus"));
+  }
+
+  /** A file's id never has the form of a package's id, @org/name@N (spec §13.3, "Identity"). */
+  @Test
+  void fileIdsAreNotPackageIds() {
+    write(temp.resolve("app/orders@1.schema.haus"), "type T = Int");
+    Schema s = Schema.load(temp.resolve("app/orders@1.schema.haus"),
+        SchemaOptions.DEFAULT.withProject("@acme", temp.resolve("app").toString()));
+    assertEquals("./@acme/orders@1#T", s.definitions().get(0).id());
+    assertEquals("./@x", SchemaFiles.fileId("@x"));
+    assertEquals("billing/common", SchemaFiles.fileId("billing/common"));
+  }
+
+  /** Writes a jar with the entries, a name ending in / for a directory. */
+  private Path jar(String name, String... entries) throws IOException {
+    Path jar = temp.resolve(name);
+    try (java.util.jar.JarOutputStream out = new java.util.jar.JarOutputStream(Files.newOutputStream(jar))) {
+      for (int i = 0; i < entries.length; i += 2) {
+        out.putNextEntry(new java.util.jar.JarEntry(entries[i]));
+        out.write(utf8(entries[i + 1]));
+        out.closeEntry();
+      }
+    }
+    return jar;
+  }
+
+  /** A package given as classpath resources in a jar (spec §13.3, a file tree given by code). */
+  @Test
+  void packagesAsClasspathResources() throws IOException {
+    Path jar = jar("schemas.jar",
+        "schemas/orders/package.haus", "{ name: \"@acme/orders\", version: \"1.0.0\" }",
+        "schemas/orders/schema.haus", "import @acme/common@1 (Address)\ntype Order = { to: Address }",
+        "schemas/common/package.haus", "{ name: \"@acme/common\", version: \"1.0.0\" }",
+        "schemas/common/schema.haus", "type Address = { city: String }",
+        "schemas/common/package.json", "{ \"version\": \"1.0.0\" }",
+        "schemas/files/package.haus", "{ name: \"@acme/files\", version: \"1.0.0\" }",
+        "schemas/files/schema.haus", "import ./x (X)\ntype F = { x: X }",
+        "schemas/files/x.schema.haus", "type X = Int",
+        "schemas/dir/package.haus", "{ name: \"@acme/dir\", version: \"1.0.0\" }",
+        "schemas/dir/schema.haus/", "",
+        "schemas/case/package.haus", "{ name: \"@acme/case\", version: \"1.0.0\" }",
+        "schemas/case/Schema.haus", "type C = Int",
+        "schemas/version/package.haus", "{ name: \"@acme/version\", version: \"1.0.0\" }",
+        "schemas/version/schema.haus", "type V = Int",
+        "schemas/version/package.json", "{ \"version\": \"1.1.0\" }");
+    write(temp.resolve("app/a.schema.haus"), "import @acme/orders@1 (Order)\ntype Root = { o: Order }");
+    try (java.net.URLClassLoader loader = new java.net.URLClassLoader(new java.net.URL[] {jar.toUri().toURL()}, null)) {
+      ExplicitPackages packages = PackageLocator.explicit()
+          .resources(loader, "schemas/orders").resources(loader, "/schemas/common/");
+      Schema s = Schema.load(temp.resolve("app/a.schema.haus"), SchemaOptions.DEFAULT.withPackages(packages));
+      assertEquals(2, s.packages().size());
+      assertTrue(s.packages().get(0).dir().startsWith("jar:"), s.packages().get(0).dir());
+      // A package imports no files; a directory is no schema.haus; Schema.haus is not schema.haus.
+      for (String[] c : new String[][] {
+        {"files", "package-path"}, {"dir", "package-path"}, {"case", "import-not-found"}, {"version", "package-version"},
+      }) {
+        write(temp.resolve("app/" + c[0] + ".schema.haus"), "import @acme/" + c[0] + "@1 (X)\ntype Root = { x: X }");
+        ExplicitPackages p = PackageLocator.explicit().resources(loader, "schemas/" + c[0]);
+        HausException e = fails(c[1], () -> Schema.load(temp.resolve("app/" + c[0] + ".schema.haus"),
+            SchemaOptions.DEFAULT.withPackages(p)));
+        assertTrue(e.getMessage().contains("classpath:schemas/" + c[0]) || c[0].equals("files"), e.getMessage());
+        assertFalse(e.getMessage().contains(temp.toString()), e.getMessage());
+      }
+      fails("import-not-found", () -> PackageLocator.explicit().resources(loader, "schemas/missing"));
+      // The same package from a jar and from a directory: copies, one package.
+      Path common = pkg(temp.resolve("vendor/common"), "@acme/common", "1.0.0", "type Address = { city: String }");
+      packages.packageDir(common);
+      Path other = pkg(temp.resolve("vendor/other"), "@acme/common", "1.0.0", "type Address = { street: String }");
+      fails("duplicate-package", () -> packages.packageDir(other));
+    }
   }
 }

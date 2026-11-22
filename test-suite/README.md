@@ -206,6 +206,7 @@ Case {
     Link("app/node_modules/@acme/x", "../../../vendor/x"),       // a symbolic link
   ],
   root: "app/app.schema.haus",
+  ecosystem: "npm",
   mode: Npm,
   expect: Err { code: "undeclared-package", mentions: ["@acme/orders"] },
 },
@@ -222,20 +223,64 @@ An adapter writes the tree into an empty temporary directory, then loads
   to `"*"`. Fields that are missing are left out.
 - `Link(path, target)` makes `path` a symbolic link to `target`, relative to
   the link's directory (as `ln -s target path`).
+- `Fifo(path)` makes `path` a FIFO, a named pipe (`mkfifo path`). Nothing
+  ever writes to it: a resolver that opens it blocking would hang, so
+  adapters run these cases with a timeout (a few seconds) and fail on it.
+  Only on Unix (the case has `os: "unix"`).
+- `Large(path, bytes)` writes a file of `bytes` spaces (U+0020) to `path`.
+- `Mode(path, mode)` sets the permissions of `path`, a directory written
+  above, to `mode` in octal (`chmod 311 path`: the owner, who runs the
+  tests, may enter and write it but not list it), after the whole tree is
+  written. Adapters give back the owner's permissions (`chmod -R u+rwx`)
+  before they remove the temporary directory. Only on Unix (`os: "unix"`),
+  and not when the tests run as root (uid 0), which permissions don't stop:
+  adapters skip these cases then, and say so.
 
 Paths use `/` and are relative to the temporary directory. Parent directories
 are created as needed.
+
+`root` is the schema file the build starts from (the entry file). `rootDir`,
+if there, is the build's `root` option (spec §13.3, "The root"), a directory
+relative to the temporary directory; without it the build's root is the
+directory of `root`'s real path, as by default. A binding without a `root`
+option skips the cases with `rootDir` and says so.
 
 `mode` says how packages are found:
 
 - `Explicit { packages?, folders? }`: the packages are given explicitly, and
   nothing else is looked at (no `node_modules`). Each of `packages` is a
   package's directory; each of `folders` is a directory whose subdirectories
-  with a `package.haus` are packages. Their manifests name them. Every
-  binding runs these cases.
+  with a `package.haus` are packages. Their manifests name them.
 - `Npm` or `Npm { packages?, folders? }`: from `node_modules` by the npm
   rules of spec §13.3, together with the packages given explicitly, if any.
-  Only bindings that read `node_modules` run these cases.
+
+`ecosystem` says which implementations run a case (spec §13.3, "Installed
+packages"):
+
+- `"core"`: every implementation of every ecosystem, on every OS (`mode` is
+  `Explicit`). A binding whose packages given explicitly can also be a file
+  tree given in code (a Go `fs.FS`, a Swift `Bundle`, classpath resources, a
+  Python `Traversable`) runs these cases that way too where it is cheap.
+- `"npm"`: implementations of the npm ecosystem, which look in
+  `node_modules` (`mode` is `Npm`): the TypeScript binding, under Node, Bun
+  and Deno. Every other binding skips them, with a count; it MUST NOT read
+  `node_modules`, which the core cases check.
+- `"cargo"`: code generators that take packages from Cargo (`haus-build`).
+  No case has it yet: Cargo passes packages through build-script metadata,
+  which a file tree can't express, and `haus-build` runs the core cases.
+
+There are 133 cases: 87 `"core"` and 46 `"npm"`; 6 of them have
+`os: "unix"` (4 core, 2 npm), and 3 `unmodelled` (below).
+
+The Lean reference (`haus-ref --packages`) runs every case of every
+ecosystem: it has one resolver, with the npm lookup as an option.
+
+`os: "unix"` marks a case that only Unix runs (a `Fifo` or `Mode` entry);
+adapters on Windows skip it and say so. Cases that bite only on
+case-insensitive file systems (macOS, Windows) or only on Windows (device
+names such as `con`, a name ending in `.`) run, and must pass, everywhere.
+`unmodelled: "why"` marks a case the Lean reference can't run (its file tree
+has no permissions); it skips it and names it, and the bindings run it.
 
 `expect` is the result:
 

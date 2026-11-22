@@ -1,12 +1,22 @@
-// Reading the files imports name (spec §13.3), the same for every package
-// manager: a ``PackageLocator`` says where a package is, and the rules here
-// say whether it may be read. Resolution happens when a schema is loaded,
-// never while data is parsed, and never over the network (§9.2).
+// Reading the files imports name (spec §13.3): a ``PackageLocator`` says
+// where a package is, and the rules here say whether it may be read.
+// Resolution happens when a schema is loaded, never while data is parsed,
+// and never over the network (§9.2).
 //
-// A package's package.haus, schema.haus and package.json are opened without
-// following links (O_NOFOLLOW, and O_NONBLOCK so that a FIFO can't block the
-// open); their type and size are checked on the opened file, and they are
-// read from it, so the file checked is the file read.
+// Every file read (the entry file, the files of relative imports, a
+// package's package.haus, schema.haus and package.json) is a regular file:
+// it is opened by its real path, or in a real directory, without following a
+// link at its last name (O_NOFOLLOW) and without blocking (O_NONBLOCK, so
+// that a FIFO can't block the open), its type and identity are checked on
+// the opened file (fstat: a regular file with the device and inode `lstat`
+// saw), and it is read from that file, so the file checked is the file read
+// (spec §13.3, "Files read").
+//
+// The entry file and the root are resolved to real paths once, at the start.
+// A relative import follows no link: it walks down its names from the
+// importing file's real directory, so it stays inside the build's root when
+// its `..` names do (spec §13.3, "Resolution" and "The root"). Messages show
+// paths relative to the root, never absolute ones.
 
 import Foundation
 
@@ -74,6 +84,38 @@ enum FilePath {
         let parts = Array(repeating: "..", count: from.count - common) + to[common...]
         return parts.isEmpty ? "." : parts.joined(separator: "/")
     }
+
+    /// Whether the absolute path `path` is `dir` or inside it, compared by
+    /// names, not as text (`/a/bc` is not inside `/a/b`).
+    static func isInside(_ path: String, _ dir: String) -> Bool {
+        let (p, d) = (elements(path), elements(dir))
+        return p.count >= d.count && zip(p, d).allSatisfy { sameCodePoints($0, $1) }
+    }
+}
+
+/// Whether `module` is a file path of the grammar (`path`, spec §13.3):
+/// `./` or one or more `../`, then names separated by `/`, each starting
+/// with a letter, digit, `_` or `-` and made of those and `.`. So `..` comes
+/// only at the start, and a path has no `.` name, no empty name and no `/` at
+/// its end.
+func isFilePath(_ module: String) -> Bool {
+    var rest = Substring(module)
+    if rest.hasPrefix("./") {
+        rest = rest.dropFirst(2)
+    } else {
+        guard rest.hasPrefix("../") else { return false }
+        while rest.hasPrefix("../") { rest = rest.dropFirst(3) }
+    }
+    let names = rest.split(separator: "/", omittingEmptySubsequences: false)
+    return names.allSatisfy { name in
+        guard let first = name.utf8.first, isPathNameStart(first) else { return false }
+        return name.utf8.allSatisfy { isPathNameStart($0) || $0 == ASCII.dot }
+    }
+}
+
+/// `[A-Za-z0-9_-]`: what a name of a path starts with.
+private func isPathNameStart(_ c: UInt8) -> Bool {
+    isLower(c) || isUpper(c) || isDigit(c) || c == ASCII.underscore || c == ASCII.minus
 }
 
 /// The absolute path with every link resolved; nil if there is nothing there.
@@ -81,6 +123,12 @@ func realPath(_ path: String) -> String? {
     guard let resolved = realpath(path, nil) else { return nil }
     defer { free(resolved) }
     return String(cString: resolved)
+}
+
+/// The real path of the current directory.
+func currentDirectory() -> String {
+    let cwd = FileManager.default.currentDirectoryPath
+    return realPath(cwd) ?? cwd
 }
 
 /// The type of what is at `path`, without following a link; nil if nothing is.
@@ -107,34 +155,28 @@ func directoryEntries(_ path: String, limit: Int = .max) -> [String]? {
     return names
 }
 
-/// Whether everyone may write to `dir`, such as `/tmp`: a `node_modules`
-/// there is never used (spec §13.3).
-func isWorldWritable(_ dir: String) -> Bool {
-    let permissions = (try? FileManager.default.attributesOfItem(atPath: dir))?[.posixPermissions] as? NSNumber
-    return (permissions?.intValue ?? 0) & 0o002 != 0
-}
-
 /// The text of the last system error.
 func systemError() -> String { String(cString: strerror(errno)) }
 
 // ── reading files ───────────────────────────────────────────────
 
-/// Which file is read, and so how.
+/// Which file is read, and so its limit.
 enum FileKind {
-    /// A package's package.haus: never through a link, at most 64 KiB.
+    /// A package's package.haus: at most 64 KiB.
     case manifest
-    /// A package's schema.haus: never through a link.
+    /// A package's schema.haus.
     case packageSchema
-    /// A package's package.json: never through a link.
+    /// A package's package.json.
     case packageJSON
     /// A schema file outside packages, read at its real path.
     case schema
-    /// The package.json of a project (not a package's).
-    case projectJSON
-
-    var followsLinks: Bool { self == .schema || self == .projectJSON }
 
     var limit: Int { self == .manifest ? HausManifest.maxSize : SchemaFileLimits.maxFile }
+
+    /// Whether its name is one the build looks up itself (`package.haus`,
+    /// `schema.haus`, `package.json`), which must be spelled as its
+    /// directory lists it (spec §13.3, "Spelling").
+    var isFixedName: Bool { self != .schema }
 }
 
 /// What opening a file gave.
@@ -153,19 +195,30 @@ enum Opened {
     }
 }
 
-/// Opens the file at `path`, following a link or not, and reads it: a
-/// regular file of at most `limit` bytes, checked on the opened file.
-func readFile(_ path: String, follow: Bool, limit: Int) -> Opened {
-    let fd = open(path, O_RDONLY | O_NONBLOCK | (follow ? 0 : O_NOFOLLOW))
+/// Opens the file at `path` without following a link at its last name and
+/// without blocking, and reads it: a regular file of at most `limit` bytes,
+/// checked on the opened file to be the regular file `lstat` saw (the same
+/// device and inode), so that a file swapped between the two is not read.
+func readFile(_ path: String, limit: Int) -> Opened {
+    var seen = stat()
+    guard lstat(path, &seen) == 0 else {
+        let code = errno
+        return code == ENOENT || code == ENOTDIR ? .missing : .failed(systemError())
+    }
+    guard seen.st_mode & S_IFMT == S_IFREG else { return .notRegular }
+    let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY)
     guard fd >= 0 else {
-        let (code, why) = (errno, systemError())
-        if let type = fileType(path), type != .typeRegular { return .notRegular }
-        return code == ENOENT ? .missing : .failed(why)
+        let code = errno
+        // Swapped for a link since lstat.
+        if code == ELOOP { return .notRegular }
+        return code == ENOENT || code == ENOTDIR ? .missing : .failed(systemError())
     }
     defer { close(fd) }
     var info = stat()
     guard fstat(fd, &info) == 0 else { return .failed(systemError()) }
-    guard info.st_mode & S_IFMT == S_IFREG else { return .notRegular }
+    guard info.st_mode & S_IFMT == S_IFREG, info.st_dev == seen.st_dev, info.st_ino == seen.st_ino else {
+        return .notRegular
+    }
     guard Int(info.st_size) <= limit else { return .tooLarge(Int(info.st_size)) }
     // Up to one byte more than the limit, to see a file that grew since fstat.
     var out: [UInt8] = []
@@ -191,119 +244,167 @@ private func readBytes(_ fd: Int32, _ buffer: UnsafeMutableRawPointer, _ count: 
     #endif
 }
 
-/// A package.json as far as resolution reads it: nil members for one that
-/// isn't valid JSON, which declares nothing and gives no version.
+/// A package.json as far as resolution reads it: beside a package's
+/// manifest, only for its version.
 struct PackageJSON {
-    /// The names of its members, if it is an object.
-    let members: Set<String>
     /// Its `version`, if it is a string.
     let version: String?
-    /// The names each dependency field lists.
-    let dependencies: [String: Set<String>]
-    let isValid: Bool
-
-    /// A package.json that can't be read (not a regular file): it declares nothing.
-    static let unreadable = PackageJSON([])
 
     init(_ bytes: [UInt8]) {
         let valid = bytes.withUnsafeBufferPointer(firstInvalidUTF8) == nil
         let doc = valid ? try? JSONSerialization.jsonObject(with: Data(bytes), options: [.fragmentsAllowed]) : nil
-        let object = doc as? [String: Any] ?? [:]
-        isValid = doc != nil
-        members = Set(object.keys)
-        version = object["version"] as? String
-        dependencies = object.compactMapValues { ($0 as? [String: Any]).map { Set($0.keys) } }
+        version = (doc as? [String: Any])?["version"] as? String
     }
 }
 
-/// The files one schema reads, each once (spec §13.3), by real path: a file
-/// needed in two roles (a package.json that is a link to a schema file) is
-/// read once, and every use sees the same bytes. Each use keeps its own
-/// checks: a package's files are never read through a link, and each kind of
-/// file has its own size limit.
+/// The files one schema reads, each once (spec §13.3), and the build's root:
+/// a file needed in two roles is read once, and every use sees the same
+/// bytes; each kind of file has its own size limit.
 final class SchemaFiles {
+    /// The build's root directory, a real path (spec §13.3, "The root"):
+    /// relative imports stay inside it, and messages show paths from it.
+    let root: String
     private var opened: [String: Opened] = [:]
     private var json: [String: PackageJSON] = [:]
+    private var listings: [String: [String]?] = [:]
 
-    /// Reads the file at `path` as `kind` says, and returns the path it is cached by.
-    func read(_ path: String, _ kind: FileKind) -> (key: String, opened: Opened) {
-        if !kind.followsLinks {
-            switch fileType(path) {
-            case .typeSymbolicLink?: return (path, .notRegular)
-            case nil: return (path, .missing)
-            default: break
-            }
-        }
-        let key = realPath(path) ?? path
-        if let known = opened[key] { return (key, known.within(kind)) }
-        let read = readFile(path, follow: kind.followsLinks, limit: max(SchemaFileLimits.maxFile, HausManifest.maxSize))
-        opened[key] = read
-        return (key, read.within(kind))
+    /// Files read for a build whose root is `root` (a real path); the
+    /// current directory for a schema read from text, or for packages given
+    /// before any build.
+    init(root: String = currentDirectory()) {
+        self.root = root
     }
 
-    /// The package.json at `path` (`kind` says whose); nil if there is none
-    /// (or, for a project's, it isn't a regular file).
-    func packageJSON(_ path: String, _ kind: FileKind) throws(HausError) -> PackageJSON? {
-        let (key, opened) = read(path, kind)
-        switch opened {
+    /// A path for a message: relative to the root (`../vendor/x` for a
+    /// package outside it), with its control and bidirectional characters
+    /// escaped (spec §9.2, §13.3).
+    func show(_ path: String) -> String {
+        shown(path.utf8.first == ASCII.slash ? FilePath.relative(from: root, to: path) : path)
+    }
+
+    /// The names in the directory `dir`; nil if it can't be listed.
+    func listing(_ dir: String) -> [String]? {
+        if let known = listings[dir] { return known }
+        let names = directoryEntries(dir)
+        listings[dir] = names
+        return names
+    }
+
+    /// Whether the directory `dir` lists `name`, spelled so, code point for
+    /// code point; false if it can't be listed.
+    func lists(_ dir: String, _ name: String) -> Bool {
+        listing(dir)?.contains { sameCodePoints($0, name) } ?? false
+    }
+
+    /// Whether `dir` has a package.haus: one its listing spells so. A
+    /// directory that can't be listed (only entered) has one if something
+    /// is there, so that it never passes for a directory outside packages.
+    func hasManifest(_ dir: String) -> Bool {
+        guard listing(dir) != nil else { return exists(FilePath.join(dir, PackageFile.manifest)) }
+        return lists(dir, PackageFile.manifest)
+    }
+
+    /// Reads the file at `path` (a real path, or a name in a real directory)
+    /// as `kind` says, and returns the path it is cached by.
+    func read(_ path: String, _ kind: FileKind) -> Opened {
+        if kind.isFixedName && !lists(FilePath.dir(path), FilePath.base(path)) { return .missing }
+        if let known = opened[path] { return known.within(kind) }
+        let read = readFile(path, limit: max(SchemaFileLimits.maxFile, HausManifest.maxSize))
+        opened[path] = read
+        return read.within(kind)
+    }
+
+    /// The package.json beside a package's manifest at `path`; nil if there
+    /// is none. One that can't be read throws.
+    func packageJSON(_ path: String) throws(HausError) -> PackageJSON? {
+        switch read(path, .packageJSON) {
         case .missing: return nil
         case .notRegular:
-            if kind == .projectJSON { return nil }
-            throw HausError(.packagePath, "\(shown(path)) is a symbolic link or not a regular file; it is not read")
+            throw HausError(.packagePath, "\(show(path)) is a symbolic link or not a regular file; it is not read")
         case .tooLarge(let size): throw tooLargeError(path, size)
-        case .failed(let why): throw notFound("\(shown(path)): \(why)")
+        case .failed(let why): throw notFound("\(show(path)): \(why)")
         case .bytes(let bytes):
-            if let known = json[key] { return known }
+            if let known = json[path] { return known }
             let doc = PackageJSON(bytes)
-            json[key] = doc
+            json[path] = doc
             return doc
         }
     }
 
     /// Reads and checks the manifest of the package in `dir` (a real path).
     func manifest(_ dir: String) throws(HausError) -> (manifest: HausManifest, text: [UInt8]) {
-        try manifestOf(dir, read(FilePath.join(dir, PackageFile.manifest), .manifest).opened)
+        let path = FilePath.join(dir, PackageFile.manifest)
+        let invalid = { (why: String) in HausError(.packageManifest, "\(self.show(path)): \(why)") }
+        switch read(path, .manifest) {
+        case .missing: throw notFound("\(show(dir)) is not a schema package: it has no \(PackageFile.manifest)")
+        case .notRegular:
+            throw HausError(
+                .packagePath, "the manifest \(show(path)) is a symbolic link or not a regular file; it is not read")
+        case .tooLarge(let size): throw invalid("the manifest has \(size) bytes, more than 64 KiB")
+        case .failed(let why): throw HausError(.importNotFound, "\(show(path)): \(why)")
+        case .bytes(let text):
+            guard text.withUnsafeBufferPointer(firstInvalidUTF8) == nil else {
+                throw invalid("the manifest is not UTF-8")
+            }
+            switch HausManifest.parse(text) {
+            case .success(let m): return (m, text)
+            case .failure(let why): throw invalid(why.message)
+            }
+        }
     }
 
     /// Reads a schema file: a package's schema.haus, or a file outside
     /// packages at its real path. `missing` says why a missing one is missing.
     func schemaText(_ path: String, _ kind: FileKind, missing: () -> String) throws(HausError) -> [UInt8] {
-        switch read(path, kind).opened {
+        switch read(path, kind) {
         case .bytes(let text): return text
         case .missing: throw notFound(missing())
         case .notRegular where kind == .packageSchema:
-            throw HausError(.packagePath, "\(shown(path)) is a symbolic link or not a regular file; it is not read")
-        case .notRegular: throw notFound("\(shown(path)) is not a regular file")
+            throw HausError(.packagePath, "\(show(path)) is a symbolic link or not a regular file; it is not read")
+        case .notRegular: throw notFound("\(show(path)) is not a regular file; it is not read")
         case .tooLarge(let size): throw tooLargeError(path, size)
-        case .failed(let why): throw notFound("\(shown(path)): \(why)")
+        case .failed(let why): throw notFound("\(show(path)): \(why)")
         }
+    }
+
+    func tooLargeError(_ path: String, _ size: Int) -> HausError {
+        HausError(.fileTooLarge, "\(show(path)) has \(size) bytes, more than 1 MiB; it is not read")
+    }
+
+    /// `duplicate-package`: two packages with one name.
+    func duplicatePackage(_ a: HausManifest, _ aDir: String, _ b: HausManifest, _ bDir: String) -> HausError {
+        let copies =
+            a.version == b.version ? " (two copies of \(quoteFromFile(a.version)) whose files or imports differ)" : ""
+        return HausError(
+            .duplicatePackage,
+            "two packages are called \(quoteFromFile(a.name)): \(quoteFromFile(a.version)) in \(show(aDir)) and \(quoteFromFile(b.version)) in \(show(bDir))\(copies)"
+        )
     }
 }
 
-/// Checks the manifest at `dir/package.haus`, opened.
-func manifestOf(_ dir: String, _ opened: Opened) throws(HausError) -> (manifest: HausManifest, text: [UInt8]) {
-    let path = FilePath.join(dir, PackageFile.manifest)
-    let invalid = { (why: String) in HausError(.packageManifest, "\(shown(path)): \(why)") }
-    switch opened {
-    case .missing: throw notFound("\(shown(dir)) is not a schema package: it has no \(PackageFile.manifest)")
-    case .notRegular:
+// ── the root ────────────────────────────────────────────────────
+
+/// The root of a build that starts from the file whose real path is `entry`
+/// (spec §13.3, "The root"): the directory `root` names (a relative one from
+/// the entry file's real directory), resolved to its real path once, which
+/// must contain the entry file (`import-outside-root`, at no place), or else
+/// the entry file's directory.
+func buildRoot(entry: String, option root: String?) throws(HausError) -> String {
+    guard let root else { return FilePath.dir(entry) }
+    let given = root.utf8.first == ASCII.slash ? root : FilePath.join(FilePath.dir(entry), root)
+    guard let real = realPath(given), fileType(real) == .typeDirectory, FilePath.isInside(entry, real) else {
         throw HausError(
-            .packagePath, "the manifest \(shown(path)) is a symbolic link or not a regular file; it is not read")
-    case .tooLarge(let size): throw invalid("the manifest has \(size) bytes, more than 64 KiB")
-    case .failed(let why): throw HausError(.importNotFound, "\(shown(path)): \(why)")
-    case .bytes(let text):
-        guard text.withUnsafeBufferPointer(firstInvalidUTF8) == nil else { throw invalid("the manifest is not UTF-8") }
-        switch HausManifest.parse(text) {
-        case .success(let m): return (m, text)
-        case .failure(let why): throw invalid(why.message)
-        }
+            .importOutsideRoot,
+            "the root option is not a directory that contains the schema file the build starts from")
     }
+    return real
 }
 
-/// Reads the manifest of the package in `dir`, on its own.
-func readManifest(_ dir: String) throws(HausError) -> HausManifest {
-    let path = FilePath.join(dir, PackageFile.manifest)
-    return try manifestOf(dir, readFile(path, follow: false, limit: HausManifest.maxSize)).manifest
+/// Reads the entry file, whose real path is `path`: a package's schema.haus
+/// is read as one.
+func entryText(_ path: String, files: SchemaFiles) throws(HausError) -> [UInt8] {
+    let kind: FileKind = isPackageSchema(path, files: files) ? .packageSchema : .schema
+    return try files.schemaText(path, kind) { "file not found: \(files.show(path))" }
 }
 
 // ── sources ─────────────────────────────────────────────────────
@@ -330,7 +431,7 @@ struct SchemaSource {
 /// schema given as text) with `locator` and checks it: the manifest
 /// (`package-manifest`) and its name (`import-not-found`), its version
 /// (`package-version`), its files (`package-path`, `file-too-large`), and that
-/// a package found in a folder that the package manager has too is the same
+/// a package found in a folder that another locator has too is the same
 /// (`duplicate-package`).
 func openPackage(
     for name: String, from: String?, with locator: PackageLocator, files: SchemaFiles
@@ -341,7 +442,7 @@ func openPackage(
     let copy = try openPackage(other, name: name, version: nil, files: files)
     let (a, b) = (source.package!, copy.package!)
     if a.dir != b.dir && (a.manifestText != b.manifestText || source.text != copy.text) {
-        throw duplicatePackage(a.manifest, a.dir, b.manifest, b.dir)
+        throw files.duplicatePackage(a.manifest, a.dir, b.manifest, b.dir)
     }
     return source
 }
@@ -351,10 +452,10 @@ func openPackage(
 func openPackage(_ dir: String, name: String, version: String?, files: SchemaFiles) throws(HausError)
     -> SchemaSource
 {
-    guard let resolved = realPath(dir) else { throw notFound("\(shown(dir)): \(systemError())") }
+    guard let resolved = realPath(dir) else { throw notFound("\(files.show(dir)): \(systemError())") }
     let (m, text) = try files.manifest(resolved)
     guard m.name == name else {
-        let at = shown(FilePath.join(resolved, PackageFile.manifest))
+        let at = files.show(FilePath.join(resolved, PackageFile.manifest))
         throw notFound("\(at) names the package \(quoteFromFile(m.name)), not \(name)")
     }
     if let given = version, given != m.version {
@@ -364,99 +465,128 @@ func openPackage(_ dir: String, name: String, version: String?, files: SchemaFil
             : "and the version its package manager gives isn't a semantic version"
         throw HausError(
             .packageVersion,
-            "the package.haus of \(name) says version \(quoteFromFile(m.version)), \(other) (\(shown(resolved)))")
+            "the package.haus of \(name) says version \(quoteFromFile(m.version)), \(other) (\(files.show(resolved)))")
     }
     let path = FilePath.join(resolved, PackageFile.schema)
     let schema = try files.schemaText(path, .packageSchema) {
-        "\(name) has no \(PackageFile.schema) next to its manifest (\(shown(resolved)))"
+        "\(name) has no \(PackageFile.schema) next to its manifest (\(files.show(resolved)))"
     }
     return SchemaSource(path: path, text: schema, package: FoundPackage(manifest: m, dir: resolved, manifestText: text))
 }
 
-/// Reads the file `module` (`./common`, `../shared/money`) imports, next to
-/// the file at `from` (a real path; nil for a schema given as text, which
-/// imports no files). A package imports no files, and a file outside a
-/// package no file inside one (`package-path`). Each name in the path is
-/// spelled as its directory lists it, and the file's real path ends in
-/// `.schema.haus` (`import-not-found`, the file not read).
-func openRelative(_ module: String, from: String?, files: SchemaFiles) throws(HausError) -> SchemaSource {
+/// Reads the file `module` (`./common`, `../shared/money`, a path of the
+/// grammar) imports, next to the file at `from` (a real path; nil for a
+/// schema given as text, which imports no files). A package (`fromPackage`)
+/// imports no files (`package-path`). The other checks come in the order of
+/// spec §13.3 ("Resolution"), the first that fails giving the error: the
+/// `..` names stay inside the root, checked on the text before anything is
+/// looked at (`import-outside-root`); the walk down the names, each listed
+/// with that spelling and none a symbolic link (`import-not-found`); a
+/// target outside a package's directory (`package-path`); then the file,
+/// regular and within its limit.
+func openRelative(_ module: String, from: String?, fromPackage: Bool, files: SchemaFiles) throws(HausError)
+    -> SchemaSource
+{
     guard let from else {
         throw HausError(.importUnavailable, "a schema read from text imports no files (load it from its file)")
     }
-    if let package = packageDir(of: from) {
-        let name = (try? files.manifest(package).manifest.name) ?? shown(package)
+    if fromPackage {
+        let name = (try? files.manifest(FilePath.dir(from)).manifest.name) ?? files.show(FilePath.dir(from))
         throw HausError(.packagePath, "the schema of \(name) can't import files, only packages by name")
     }
     let dir = FilePath.dir(from)
-    let relative = module + PackageFile.schemaExtension
-    let path = FilePath.join(dir, relative)
-    if let name = misspelled(dir, relative) {
-        throw notFound(
-            "file not found: \(shown(path)) (no \(quoteFromFile(name)) in its directory: names are spelled as the directory lists them)"
-        )
-    }
-    let resolved = realPath(path)
-    if let into = resolved.flatMap(packageDir(of:)) ?? packageDir(of: path) {
+    // `..` only at the start (grammar `path`), and no link is followed: going
+    // up from the real directory of the importing file means the same on the
+    // text and on the file system.
+    let names = FilePath.elements(module + PackageFile.schemaExtension)
+    let ups = names.prefix { $0 == ".." }.count
+    let top = (0..<ups).reduce(dir) { d, _ in FilePath.dir(d) }
+    guard ups <= FilePath.elements(dir).count, FilePath.isInside(top, files.root) else {
         throw HausError(
-            .packagePath, "the file is in the package directory \(shown(into)): import the package by its name")
-    }
-    guard let resolved else { throw notFound("file not found: \(shown(path))") }
-    guard FilePath.base(resolved).hasSuffix(PackageFile.schemaExtension) else {
-        throw notFound(
-            "\(shown(path)) is not a schema file: its real path \(shown(resolved)) doesn't end in \(PackageFile.schemaExtension); it is not read"
+            .importOutsideRoot,
+            "\(module) goes above the build's root (the directory of the schema file it starts from, or its root option)"
         )
     }
-    let text = try files.schemaText(resolved, .schema) { "file not found: \(shown(path))" }
-    return SchemaSource(path: resolved, text: text, package: nil)
+    let path = try walkNames(names.drop { $0 == "." || $0 == ".." }, from: top, files: files)
+    try checkOutsidePackages(path, files: files)
+    let text = try files.schemaText(path, .schema) { "file not found: \(files.show(path))" }
+    return SchemaSource(path: path, text: text, package: nil)
 }
 
-/// The first name in `relative` (from `dir`) that its directory doesn't
-/// list byte for byte: on file systems that ignore case or Unicode
-/// normalization, `./Billing/common` finds `billing/common.schema.haus`.
-func misspelled(_ dir: String, _ relative: String) -> String? {
+/// The walk down the names of a relative import (spec §13.3, "Resolution")
+/// from the real directory `dir`: each name must be an entry its directory
+/// lists with that exact spelling, also on file systems that ignore case or
+/// Unicode normalization, and not a symbolic link (seen without following
+/// it); each name but the last a directory. A directory that can't be listed
+/// can't show how a name is spelled. Nothing behind a link is looked at, and
+/// a message about one doesn't say where it points. The path reached has no
+/// links; what its last name is (a regular file or not) is checked when it is
+/// opened.
+func walkNames(_ names: some Collection<String>, from dir: String, files: SchemaFiles) throws(HausError) -> String {
+    // The file the import names, for messages.
+    let target = files.show(FilePath.join(dir, names.joined(separator: "/")))
     var at = dir
-    for part in FilePath.elements(relative) {
-        switch part {
-        case ".": continue
-        case "..":
-            at = FilePath.join(at, "..")
-            continue
-        default: break
+    for (i, name) in names.enumerated() {
+        let path = FilePath.join(at, name)
+        guard files.listing(at) != nil else {
+            throw notFound(
+                "file not found: \(target) (\(files.show(at)) can't be listed, so how \(quoteFromFile(name)) is spelled can't be checked)"
+            )
         }
-        // A directory that can't be listed: the file isn't found later.
-        guard let entries = directoryEntries(at) else { return nil }
-        guard entries.contains(where: { sameCodePoints($0, part) }) else { return part }
-        at = FilePath.join(at, part)
+        guard files.lists(at, name) else {
+            throw notFound(
+                "file not found: \(target) (no \(quoteFromFile(name)) in its directory: names are spelled as the directory lists them)"
+            )
+        }
+        switch fileType(path) {
+        case .typeSymbolicLink?:
+            throw notFound(
+                "\(files.show(path)) is a symbolic link: a relative import follows no link, and nothing behind it is read"
+            )
+        case .typeDirectory?: break
+        default:
+            guard i == names.count - 1 else {
+                throw notFound("file not found: \(target) (\(files.show(path)) is not a directory)")
+            }
+        }
+        at = path
     }
-    return nil
+    return at
 }
 
-/// Reads the root schema file at `path`: its real path and text. A
-/// package's schema.haus is read as one (never through a link).
-func rootSource(_ path: String, files: SchemaFiles) throws(HausError) -> (path: String, text: [UInt8]) {
-    guard let resolved = realPath(path) else { throw HausError(.importNotFound, "\(shown(path)): \(systemError())") }
-    let kind: FileKind = isPackageSchema(resolved) ? .packageSchema : .schema
-    return (resolved, try files.schemaText(resolved, kind) { "file not found: \(shown(path))" })
+/// Checks that the file at `path` (reached by a relative import, inside the
+/// root) is in no package's directory (spec §13.3, "Imports"): the
+/// directories from its own up to the root, the root included, each a
+/// package's when it lists `package.haus` (`package-path`). One that can't be
+/// listed can't show whether it is a package's: the import fails
+/// (`import-not-found`), and never passes as one outside a package.
+func checkOutsidePackages(_ path: String, files: SchemaFiles) throws(HausError) {
+    for dir in ancestors(of: FilePath.dir(path)).prefix(while: { FilePath.isInside($0, files.root) }) {
+        guard let names = files.listing(dir) else {
+            throw notFound(
+                "whether \(files.show(dir)) is a package's directory can't be checked (it can't be listed); \(files.show(path)) is not read"
+            )
+        }
+        if names.contains(where: { sameCodePoints($0, PackageFile.manifest) }) {
+            throw HausError(
+                .packagePath,
+                "the file is in the package directory \(files.show(dir)): import the package by its name")
+        }
+    }
 }
 
 /// Whether the file at `path` is a package's schema.haus: next to a package.haus.
-func isPackageSchema(_ path: String) -> Bool {
-    FilePath.base(path) == PackageFile.schema && exists(FilePath.join(FilePath.dir(path), PackageFile.manifest))
+func isPackageSchema(_ path: String, files: SchemaFiles) -> Bool {
+    FilePath.base(path) == PackageFile.schema && files.hasManifest(FilePath.dir(path))
 }
 
 /// The package whose schema.haus is the file at `path` (a real path), if it
 /// is one, with its manifest checked.
 func packageOfFile(_ path: String, files: SchemaFiles) throws(HausError) -> FoundPackage? {
-    guard isPackageSchema(path) else { return nil }
+    guard isPackageSchema(path, files: files) else { return nil }
     let dir = FilePath.dir(path)
     let (m, text) = try files.manifest(dir)
     return FoundPackage(manifest: m, dir: dir, manifestText: text)
-}
-
-/// The package directory a file is in: the nearest directory above it with a
-/// manifest, or nil.
-func packageDir(of path: String) -> String? {
-    ancestors(of: FilePath.dir(path)).first { exists(FilePath.join($0, PackageFile.manifest)) }
 }
 
 /// `dir` and the directories above it, nearest first.
@@ -470,31 +600,17 @@ func ancestors(of dir: String) -> some Sequence<String> {
 /// Whether the packages in `a` and `b` are copies of one package: their
 /// manifests and schema files are the same, byte for byte, and regular files
 /// (spec §13.3).
-func sameFiles(_ a: String, _ b: String) -> Bool {
-    func files(_ dir: String) -> (manifest: [UInt8], schema: [UInt8])? {
-        let m = readFile(FilePath.join(dir, PackageFile.manifest), follow: false, limit: HausManifest.maxSize)
-        let s = readFile(FilePath.join(dir, PackageFile.schema), follow: false, limit: SchemaFileLimits.maxFile)
+func sameFiles(_ a: String, _ b: String, files: SchemaFiles) -> Bool {
+    func read(_ dir: String) -> (manifest: [UInt8], schema: [UInt8])? {
+        let m = files.read(FilePath.join(dir, PackageFile.manifest), .manifest)
+        let s = files.read(FilePath.join(dir, PackageFile.schema), .packageSchema)
         guard case .bytes(let manifest) = m, case .bytes(let schema) = s else { return nil }
         return (manifest, schema)
     }
-    guard let x = files(a), let y = files(b) else { return false }
+    guard let x = read(a), let y = read(b) else { return false }
     return x.manifest == y.manifest && x.schema == y.schema
 }
 
 // ── errors ──────────────────────────────────────────────────────
 
 func notFound(_ message: String) -> HausError { HausError(.importNotFound, message) }
-
-func tooLargeError(_ path: String, _ size: Int) -> HausError {
-    HausError(.fileTooLarge, "\(shown(path)) has \(size) bytes, more than 1 MiB; it is not read")
-}
-
-/// `duplicate-package`: two packages with one name.
-func duplicatePackage(_ a: HausManifest, _ aDir: String, _ b: HausManifest, _ bDir: String) -> HausError {
-    let copies =
-        a.version == b.version ? " (two copies of \(quoteFromFile(a.version)) whose files or imports differ)" : ""
-    return HausError(
-        .duplicatePackage,
-        "two packages are called \(quoteFromFile(a.name)): \(quoteFromFile(a.version)) in \(shown(aDir)) and \(quoteFromFile(b.version)) in \(shown(bDir))\(copies)"
-    )
-}

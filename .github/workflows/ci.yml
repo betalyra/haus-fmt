@@ -171,6 +171,11 @@ jobs:
       - name: Test
         working-directory: rust
         run: cargo test --workspace --all-features
+      # Spec §7's small stack applies to optimised builds: the 512 KiB thread
+      # tests are ignored in debug builds and run here, in release.
+      - name: Test the 512 KiB stack (release)
+        working-directory: rust
+        run: cargo test --workspace --all-features --release -- 512_kib_thread
 
   typescript:
     name: TypeScript

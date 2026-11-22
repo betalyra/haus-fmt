@@ -41,10 +41,11 @@ pub fn tagged_object<'k, const N: usize>(
     fields: impl FnOnce(Encoder) -> [(&'k str, Option<R>); N],
 ) -> R {
     check_tag(tag, e.limits())?;
-    match object(e, fields)? {
-        Json::Object(members) => Ok(with_tag(tag, members)?),
-        other => Ok(other),
+    let mut json = object(e, fields)?;
+    if let Json::Object(members) = &mut json {
+        return Ok(with_tag(tag, std::mem::take(members))?);
     }
+    Ok(json)
 }
 
 /// A record case whose record is a named type (spec §15: `Box BoxRec`): the
@@ -52,11 +53,11 @@ pub fn tagged_object<'k, const N: usize>(
 /// w: Int32 }`. `record` is the record written with `e`, the tag's encoder.
 pub fn record_case(tag: &str, e: Encoder, record: R) -> R {
     check_tag(tag, e.limits())?;
-    match record? {
-        Json::Object(members) => Ok(with_tag(tag, members)?),
+    match &mut record? {
+        Json::Object(members) => Ok(with_tag(tag, std::mem::take(members))?),
         other => Err(EncodeError::new(
             ErrorCode::CannotEncode,
-            format!("{tag} takes a record, whose JSON is an object; found {}", super::de::describe(&other)),
+            format!("{tag} takes a record, whose JSON is an object; found {}", super::de::describe(other)),
         )),
     }
 }

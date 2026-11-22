@@ -1,8 +1,11 @@
 //! Code generation for languages without build scripts.
 //!
-//!     haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--package DIR=ALIAS]... [--packages DIR]... [--codec ID=MODULE]... [--json]
+//!     haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--root DIR] [--package DIR=ALIAS]... [--packages DIR]... [--codec ID=MODULE]... [--json]
 //!     haus-gen roc-package DIR [--out FILE] [--package DIR=ALIAS]... [--packages DIR]... [--json]
 //!
+//! `--root DIR`: the build's root (spec §13.3), a directory that contains
+//! SCHEMA, which its relative imports stay inside; by default SCHEMA's real
+//! directory. A relative DIR is relative to SCHEMA's real directory.
 //! `--package DIR=ALIAS`: a schema package (its directory), and the alias the
 //! Roc app or package imports its Roc package under. `--packages DIR`: the
 //! schema packages in DIR (its subdirectories with a `package.haus`), each
@@ -26,7 +29,7 @@ use std::process::ExitCode;
 use std::{env, fs};
 
 const USAGE: &str =
-    "usage: haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--package DIR=ALIAS]... [--packages DIR]... [--codec ID=MODULE]... [--json]
+    "usage: haus-gen roc SCHEMA --module NAME [--out FILE] [--id ID] [--root DIR] [--package DIR=ALIAS]... [--packages DIR]... [--codec ID=MODULE]... [--json]
        haus-gen roc-package DIR [--out FILE] [--package DIR=ALIAS]... [--packages DIR]... [--json]";
 
 fn main() -> ExitCode {
@@ -74,6 +77,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 args.config = args.config.package(dir, alias);
             }
             "--packages" => args.config = args.config.folder(value),
+            "--root" => args.config = args.config.root(value),
             "--codec" => {
                 let (id, module) = value.split_once('=').ok_or("--codec takes ID=MODULE")?;
                 args.config = args.config.codec(id, module);
@@ -87,11 +91,15 @@ fn run(args: &[String]) -> Result<(), String> {
             let name = schema.file_name().and_then(|f| f.to_str()).unwrap_or_default();
             let id = args.id.unwrap_or_else(|| name.trim_end_matches(".schema.haus").to_owned());
             let module = args.module.ok_or("--module is required")?;
-            let text = fs::read_to_string(schema).map_err(|e| format!("{}: {e}", schema.display()))?;
-            for w in haus_build::check(&text).unwrap_or_default().into_iter().filter(|_| !args.quiet) {
-                eprintln!("haus-gen: warning: {}:{w}", schema.display());
+            // Loaded first: the schema file is checked to be a regular file before it is read again here.
+            let modules = args.config.modules(schema, &module, &id);
+            if modules.is_ok() && !args.quiet {
+                let text = fs::read_to_string(schema).map_err(|e| format!("{}: {e}", schema.display()))?;
+                for w in haus_build::check(&text).unwrap_or_default() {
+                    eprintln!("haus-gen: warning: {}:{w}", schema.display());
+                }
             }
-            args.config.modules(schema, &module, &id)
+            modules
         }
         "roc-package" => args.config.generate_package(Path::new(input)).map(|module| vec![module]),
         _ => return Err(USAGE.into()),

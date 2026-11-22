@@ -78,6 +78,28 @@ def isMajor (s : String) : Bool := isNumeric s
 /-- `quoteBody` between quotes. -/
 def quote (s : String) : String := "\"" ++ String.ofList (quoteBody s) ++ "\""
 
+/-- A character of a file path (grammar `path`): `A–Z`, `a–z`, `0–9`, `_`, `.`, `/` and `-`. -/
+def isPathChar (c : Char) : Bool :=
+  ('A' ≤ c && c ≤ 'Z') || ('a' ≤ c && c ≤ 'z') || ('0' ≤ c && c ≤ '9') || c == '_' || c == '.' || c == '/' || c == '-'
+
+/-- A name of a path (grammar `path_name`): not empty, and not starting with `.` (so not `.` or `..`). -/
+def isPathName (s : String) : Bool :=
+  match s.toList with
+  | c :: r => c != '.' && c != '/' && isPathChar c && r.all fun c => c != '/' && isPathChar c
+  | [] => false
+
+/--
+A file path (grammar `path`, §13.3): `./` or one or more `../`, then names.
+`..` only at the start; no `.` name, no empty name, no `/` at the end.
+-/
+def isRelPath (m : String) : Bool :=
+  match m.splitOn "/" with
+  | "." :: names => !names.isEmpty && names.all isPathName
+  | segs =>
+    let ups := segs.takeWhile (· == "..")
+    let names := segs.drop ups.length
+    !ups.isEmpty && !names.isEmpty && names.all isPathName
+
 #guard isPackageName "@haus-fmt/money"
 #guard isPackageName "@acme/l00a"
 #guard !isPackageName "@Acme/Common"
@@ -107,5 +129,9 @@ def quote (s : String) : String := "\"" ++ String.ofList (quoteBody s) ++ "\""
 #guard quote (String.ofList (List.replicate 41 '\x01')) = "\"" ++ String.join (List.replicate 7 "\\u{1}") ++ "…\""
 #guard quote (String.ofList (List.replicate 36 'a' ++ ['\x01'])) = "\"" ++ String.ofList (List.replicate 36 'a') ++ "…\""
 #guard quote "\x1b[2J" = "\"\\u{1B}[2J\""
+#guard isRelPath "./common" && isRelPath "../../shared/money" && isRelPath "./a.b/c-d_e" && isRelPath "./-x"
+#guard !isRelPath "./a/../b" && !isRelPath "./a/" && !isRelPath "./a//b" && !isRelPath "./" && !isRelPath "../"
+#guard !isRelPath "./../a" && !isRelPath "./.x" && !isRelPath "../.." && !isRelPath "./a/./b" && !isRelPath ".//etc/y"
+#guard !isRelPath "./a@1" && !isRelPath "./a~b" && !isRelPath ".../a" && !isRelPath "a/b"
 
 end Haus.Packages

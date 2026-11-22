@@ -140,7 +140,10 @@ def isPathChar (c : Char) : Bool := isIdentChar c || c == '.' || c == '/' || c =
 def module (m : String) : R Module :=
   if m.startsWith "std/" then .ok (.std (m.drop 4).toString)
   else if m.startsWith "./" || m.startsWith "../" then
-    if m.all isPathChar then .ok (.file m) else syntaxErr s!"a path with characters other than A–Z, a–z, 0–9, _, ., / and -"
+    if !m.all isPathChar then syntaxErr s!"a path with characters other than A–Z, a–z, 0–9, _, ., / and -"
+    else if !Haus.Packages.isRelPath m then
+      syntaxErr s!"a path goes up with .. only at its start, then names: no . or empty name, no .. after a name, no / at its end"
+    else .ok (.file m)
   else if m.startsWith "@" then
     match ((m.drop 1).toString.splitOn "@") with
     | [n] => if isPackageName ("@" ++ n) then .ok (.pkg ("@" ++ n) none)

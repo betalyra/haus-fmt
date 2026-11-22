@@ -158,6 +158,15 @@ class Array:
     def __init_subclass__(cls) -> None:
         _sealed(cls)
 
+    def __eq__(self, other: object) -> bool:
+        return _equal(self, other) if type(other) is Array else NotImplemented
+
+    def __hash__(self) -> int:
+        return _hash(self)
+
+    def __repr__(self) -> str:
+        return _repr(self)
+
 
 @final
 @dataclass(frozen=True, slots=True, init=False, repr=False)
@@ -181,8 +190,11 @@ class Record:
     def __init_subclass__(cls) -> None:
         _sealed(cls)
 
+    def __eq__(self, other: object) -> bool:
+        return _equal(self, other) if type(other) is Record else NotImplemented
+
     def __repr__(self) -> str:
-        return f"Record(fields={dict(self.fields)!r})"
+        return _repr(self)
 
     def __reduce__(self) -> tuple[type[Record], tuple[dict[str, Value]]]:
         return Record, (dict(self.fields),)
@@ -236,10 +248,115 @@ class Variant:
     def __init_subclass__(cls) -> None:
         _sealed(cls)
 
+    def __eq__(self, other: object) -> bool:
+        return _equal(self, other) if type(other) is Variant else NotImplemented
+
+    def __hash__(self) -> int:
+        return _hash(self)
+
+    def __repr__(self) -> str:
+        return _repr(self)
+
 
 Value: TypeAlias = Number | String | Bytes | Array | Record | Variant
 
 _VALUE_TYPES: Final = frozenset({Number, String, Bytes, Array, Record, Variant})
+
+
+# ── `==` and `hash` without recursion (spec §7: values built in code may be of any depth) ──
+
+_ABSENT: Final = object()
+
+
+def _equal(a: Value, b: Value) -> bool:
+    """`a == b` by spec §2 (fields in any order), with a stack of pairs instead of recursion."""
+    pairs: list[tuple[object, object]] = [(a, b)]
+    while pairs:
+        x, y = pairs.pop()
+        if x is y:
+            continue
+        kind = type(x)
+        if kind is not type(y):
+            return False
+        if kind is Array:
+            xs, ys = cast(Array, x).items, cast(Array, y).items
+            if len(xs) != len(ys):
+                return False
+            pairs.extend(zip(xs, ys, strict=True))
+        elif kind is Variant:
+            vx, vy = cast(Variant, x), cast(Variant, y)
+            if vx.tag != vy.tag or len(vx.args) != len(vy.args):
+                return False
+            pairs.extend(zip(vx.args, vy.args, strict=True))
+        elif kind is Record:
+            fx, fy = cast(Record, x).fields, cast(Record, y).fields
+            if len(fx) != len(fy):
+                return False
+            for key, value in fx.items():
+                if (other := fy.get(key, _ABSENT)) is _ABSENT:
+                    return False
+                pairs.append((value, other))
+        elif x != y:  # Number, String, Bytes: their one field
+            return False
+    return True
+
+
+def _hash(v: Array | Variant) -> int:
+    """`hash(v)`, from its values in pre-order, with a stack instead of recursion. A record is unhashable."""
+    parts: list[object] = []
+    todo: list[Value] = [v]
+    while todo:
+        x = todo.pop()
+        match x:
+            case Array(items):
+                parts += (Array, len(items))
+                todo.extend(reversed(items))
+            case Variant(tag, args):
+                parts += (Variant, tag, len(args))
+                todo.extend(reversed(args))
+            case Record():
+                raise TypeError("unhashable type: 'Record'")
+            case _:
+                parts.append(x)  # Number, String, Bytes: hashable themselves
+    return hash(tuple(parts))
+
+
+def _repr(v: Array | Record | Variant) -> str:
+    """`repr(v)` as a dataclass writes it (`Array(items=(Number(text='1'),))`), with a stack instead of recursion.
+
+    The stack holds values to write and text (a `str`) to write as it is."""
+    out: list[str] = []
+    todo: list[Value | str] = [v]
+
+    def tuple_of(values: Sequence[Value | str], end: str) -> None:
+        """`(a, b)`, `(a,)` or `()`, then `end`, pushed to be written in order."""
+        todo.append(("," if len(values) == 1 else "") + ")" + end)
+        for i in reversed(range(len(values))):
+            todo.append(values[i])
+            if i:
+                todo.append(", ")
+
+    while todo:
+        x = todo.pop()
+        match x:
+            case str():
+                out.append(x)
+            case Array(items):
+                out.append("Array(items=(")
+                tuple_of(items, ")")
+            case Variant(tag, args):
+                out.append(f"Variant(tag={tag!r}, args=(")
+                tuple_of(args, ")")
+            case Record(fields):
+                out.append("Record(fields={")
+                todo.append("})")
+                pairs = list(fields.items())
+                for i in reversed(range(len(pairs))):
+                    key, value = pairs[i]
+                    todo += (value, f"{', ' if i else ''}{key!r}: ")
+            case _:
+                out.append(repr(x))  # Number, String, Bytes: one field
+    return "".join(out)
 
 
 def _setter(cls: type, name: str) -> Callable[[object, object], None]:

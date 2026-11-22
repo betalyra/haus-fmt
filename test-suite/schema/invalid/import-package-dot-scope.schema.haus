@@ -1,0 +1,3 @@
+// A package's scope starts with a letter or digit (spec §13.3): @../x is no package.
+import @../x (A)
+type B = { a: A }

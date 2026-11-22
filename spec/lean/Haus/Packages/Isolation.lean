@@ -26,11 +26,17 @@ namespace Haus.Packages
 def npmFind (t : Tree) (name : String) : List Path → Except Err (Option Path)
   | [] => .ok none
   | p :: ps =>
+    if !t.listable (placeDir name p) then
+      .error ⟨.importNotFound, s!"{msgText name}: {showPath (placeDir name p)} can't be listed, so whether it has a node_modules can't be told; the search stops there"⟩
+    else
     match t.realPath p with
     | .ok real =>
       if (t.childKind? real "package.haus").isSome then .ok (some real)
       else .error ⟨.importNotFound, s!"{msgText name}: {showPath p} has no package.haus (not a schema package); the search stops there"⟩
-    | .error _ => npmFind t name ps
+    | .error f =>
+      if t.stops p f then
+        .error ⟨.importNotFound, s!"{msgText name}: {showPath p} is there but can't be followed (a broken link or a cycle of links); the search stops there"⟩
+      else npmFind t name ps
 
 /-- The npm walk is `npmFind` on `walk`: it reads no file and changes nothing of the state. -/
 theorem npmLookup_eq (env : Env) (s : St) (start : Path) (name : String) :
@@ -42,26 +48,37 @@ theorem npmLookup_eq (env : Env) (s : St) (start : Path) (name : String) :
   | nil => simp [npmFind]
   | cons p ps ih =>
     rw [List.forIn_cons]
-    simp only [go_bind, go_look, npmFind]
+    simp only [go_bind, go_look, npmFind, Tree.listable, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
     rcases hr : env.tree.realPath p with f | real
-    · simpa [go_bind] using ih
+    · by_cases hs : env.tree.stops p f
+      · simp [hs, go_bind, go_map]
+      · simpa [hs, go_bind, Tree.listable] using ih
     · by_cases hk : (env.tree.childKind? real "package.haus").isSome
       · simp [hk, go_bind]
       · simp [hk, go_bind, go_map]
 
-/-- What the walk finds depends only on the real path of each place and whether that has a `package.haus`. -/
+/--
+What the walk finds depends only on the real path of each place, whether
+that has a `package.haus`, and whether the place is there (`Tree.present`).
+-/
 theorem npmFind_congr {t t' : Tree} {name : String} {ps : List Path}
     (h : ∀ p ∈ ps, t.realPath p = t'.realPath p ∧
-      ∀ r, t.realPath p = .ok r → (t.childKind? r "package.haus").isSome = (t'.childKind? r "package.haus").isSome) :
+      (∀ r, t.realPath p = .ok r → (t.childKind? r "package.haus").isSome = (t'.childKind? r "package.haus").isSome) ∧
+      t.present p = t'.present p) :
     npmFind t name ps = npmFind t' name ps := by
   induction ps with
   | nil => rfl
   | cons p ps ih =>
-    obtain ⟨h1, h2⟩ := h p List.mem_cons_self
-    simp only [npmFind, ← h1]
+    obtain ⟨h1, h2, h3⟩ := h p List.mem_cons_self
+    simp only [npmFind, Tree.listable, Bool.not_true, Bool.false_eq_true, ↓reduceIte, ← h1]
     split
     · rename_i r hr; rw [h2 r hr]
-    · exact ih fun q hq => h q (List.mem_cons_of_mem _ hq)
+    · rename_i f _
+      simp only [Tree.stops, h3]
+      by_cases hc : (f == Fault.loop || t'.present p) = true
+      · simp only [hc, ↓reduceIte]
+      · simp only [hc, ↓reduceIte, Bool.false_eq_true]
+        exact ih fun q hq => h q (List.mem_cons_of_mem _ hq)
 
 /--
 **Name isolation** (R5): the npm walk for `name` from `start` gives the same
@@ -71,8 +88,9 @@ whether those have a `package.haus`; it reads no file.
 theorem npmLookup_isolated {env env' : Env} {s : St} {start : Path} {name : String}
     (hc : env'.config.worldWritable = env.config.worldWritable)
     (h : ∀ p ∈ walk env.config.worldWritable start name, env.tree.realPath p = env'.tree.realPath p ∧
-      ∀ r, env.tree.realPath p = .ok r →
-        (env.tree.childKind? r "package.haus").isSome = (env'.tree.childKind? r "package.haus").isSome) :
+      (∀ r, env.tree.realPath p = .ok r →
+        (env.tree.childKind? r "package.haus").isSome = (env'.tree.childKind? r "package.haus").isSome) ∧
+      env.tree.present p = env'.tree.present p) :
     go (npmLookup start name) env' s = go (npmLookup start name) env s := by
   rw [npmLookup_eq, npmLookup_eq, hc, npmFind_congr h]
 

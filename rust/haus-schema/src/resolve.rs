@@ -45,6 +45,17 @@ pub struct Options<'a> {
     /// `dir/src/common.schema.haus` the id `shop/src/common`. None: the path
     /// from the root file's directory (`common`, `billing/common`).
     pub project: Option<(&'a str, &'a Path)>,
+    /// The build's root (spec §13.3, "The root"): a directory that contains
+    /// the root file, to widen the root, such as a repository whose schemas
+    /// share files across folders, resolved to its real path once; a
+    /// relative one is relative to the directory of the root file's real
+    /// path. Relative imports never go above it (`import-outside-root`) and
+    /// follow no symbolic link (`import-not-found`), and messages show
+    /// paths relative to it. None: the directory of the root file's real
+    /// path. A root that doesn't contain the root file is
+    /// `import-outside-root` (without a place), one that doesn't exist
+    /// `import-not-found`.
+    pub root: Option<&'a Path>,
     /// Leave the attributes of every file out, as if they weren't written:
     /// decoding is the same (spec §15). For tests of that.
     pub without_attributes: bool,
@@ -52,7 +63,7 @@ pub struct Options<'a> {
 
 impl Default for Options<'_> {
     fn default() -> Self {
-        Options { packages: &NoImports, path: None, id: None, project: None, without_attributes: false }
+        Options { packages: &NoImports, path: None, id: None, project: None, root: None, without_attributes: false }
     }
 }
 
@@ -155,8 +166,10 @@ impl Schema {
     pub fn load_with(path: impl AsRef<Path>, options: &Options) -> Result<Schema> {
         let path = path.as_ref();
         let mut files = FileCache::new();
-        let (_, text) = files::root(path, &mut files)?;
-        Loader::new(&Options { path: Some(path), ..*options }, files)
+        let (real, text) = files::root(path, &mut files)?;
+        // A root option that doesn't contain the file is reported at no place.
+        let root = files::build_root(&real, options.root)?;
+        Loader::new(&Options { path: Some(path), root: Some(&root), ..*options }, files)
             .run(&text)
             .map_err(|e| if e.path().is_some() { e } else { e.in_file(path) })
     }
@@ -379,6 +392,9 @@ impl<'a> Loader<'a> {
 
     fn run(mut self, text: &str) -> Result<Schema> {
         let path = self.options.path.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_owned()));
+        if let Some(path) = &path {
+            self.files.set_root(files::build_root(path, self.options.root)?);
+        }
         let package = match &path {
             Some(path) => files::package_of(path, &mut self.files)?,
             None => None,
@@ -389,7 +405,8 @@ impl<'a> Loader<'a> {
             None => path.as_deref().and_then(Path::parent).map(|dir| (String::new(), dir.to_owned())),
         };
         let id = match (self.options.id, &package, &path) {
-            (Some(id), _, _) => Some(id.to_owned()),
+            (Some(id), Some(_), _) => Some(id.to_owned()),
+            (Some(id), None, _) => Some(files::file_id(id.to_owned())),
             (None, Some(found), _) => Some(found.manifest.id()),
             (None, None, Some(path)) => Some(self.app_id(path)),
             (None, None, None) => None,
@@ -524,8 +541,8 @@ impl<'a> Loader<'a> {
     /// The id of a file outside packages (spec §13.3): different for different files.
     fn app_id(&self, path: &Path) -> String {
         match &self.base {
-            Some((prefix, dir)) => format!("{prefix}{}", files::relative_id(dir, path)),
-            None => path.display().to_string(),
+            Some((prefix, dir)) => files::file_id(format!("{prefix}{}", files::relative_id(dir, path))),
+            None => files::file_id(path.display().to_string()),
         }
     }
 
@@ -701,7 +718,7 @@ impl<'a> Loader<'a> {
         };
         let found = match name.starts_with('@') {
             true => files::package(self.options.packages, name, from.as_deref(), &mut self.files),
-            false => files::file(name, from.as_deref(), &mut self.files),
+            false => files::file(name, from.as_deref(), self.units[unit].package.as_deref(), &mut self.files),
         };
         let found = found.map_err(|e| self.lift(at(e.code(), format!("can't import {label}: {}", e.reason()))))?;
         if let (Some(wanted), Some(package)) = (wanted, &found.package) {
@@ -722,7 +739,8 @@ impl<'a> Loader<'a> {
                     old.path.clone()
                 }
                 Some(Reached { found: old, .. }) => {
-                    let e = duplicate((&old.manifest, &old.dir), (&new.manifest, &new.dir));
+                    let (old_dir, new_dir) = (self.files.shown(&old.dir), self.files.shown(&new.dir));
+                    let e = duplicate((&old.manifest, &old_dir), (&new.manifest, &new_dir));
                     return Err(self.lift(at(e.code(), format!("can't import {label}: {}", e.reason()))));
                 }
                 None => found.path.clone(),

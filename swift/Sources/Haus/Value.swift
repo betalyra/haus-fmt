@@ -13,11 +13,13 @@
 /// scalars. So the canonical form, hashing and equality fail for no value;
 /// writers check the limits (spec §7).
 ///
-/// Equality doesn't recurse, and hashing covers the first
-/// ``hashedLevels`` levels; releasing a value recurses once per level of
-/// nesting: the parser never gives values deeper than
-/// ``Limits/maxSupportedDepth``, and values built in code should stay within
-/// it too.
+/// Equality doesn't recurse, hashing covers the first ``hashedLevels``
+/// levels, and ``description`` is the compact layout, which a value deeper
+/// than ``Limits/maxSupportedDepth`` doesn't have (it shows the error).
+/// Swift releases an enum's payloads itself, once per level of nesting, on
+/// the call stack: the parser never gives values deeper than
+/// ``Limits/maxSupportedDepth``, which any stack holds, and a value built in
+/// code deeper than that is released with ``release()``, a level at a time.
 ///
 /// ```swift
 /// let order = try parse(#"{ id: 7, status: Shipped { tracking: "DE-4711" } }"#)
@@ -64,6 +66,31 @@ extension HausValue {
         switch self {
         case .array(let items), .variant(_, let items): items.indices.contains(index) ? items[index] : nil
         default: nil
+        }
+    }
+
+    /// Releases the value without recursion, however deep it is, and leaves
+    /// the empty array in its place (spec §7: freeing a value built in code
+    /// doesn't overflow the stack). Swift releases a value it drops one level
+    /// per call; this takes the items of each level out first, so that no
+    /// level is freed while it still holds the next one. Parts the value
+    /// shares with other values are left to them.
+    ///
+    /// ```swift
+    /// var deep: HausValue = 0
+    /// for _ in 0..<1_000_000 { deep = [deep] }
+    /// deep.release()
+    /// ```
+    public mutating func release() {
+        var pending = [self]
+        self = .array([])
+        while let value = pending.popLast() {
+            switch value {
+            case .array(let items), .variant(_, let items): pending += items
+            case .record(let r): pending += r.fields.lazy.map(\.value)
+            case .number, .string, .bytes: break
+            }
+            // `value` is freed here: its items are in `pending`, so none of them is.
         }
     }
 }

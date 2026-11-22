@@ -19,7 +19,7 @@
  * Types that contain themselves are declared with `h.Recursive`.
  */
 import { quoteText, TAG, unpairedSurrogate } from "./chars.js"
-import { checkWellFormed, HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
+import { checkWellFormed, decodeTooDeep, encodeTooDeep, guardStack, HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, stringifyAt, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
@@ -328,6 +328,16 @@ export const decodeContext = (limits: Limits, size: number): Context => context(
 export const encodeContext = (limits: Limits): Context => context("encode", DEFAULT_ENCODE_STEPS, limits)
 
 const encodeAt = (limits: Limits, key?: string | number): At => At.root(encodeContext(limits), key)
+
+/**
+ * `schema.decode(value, at)` from an entry point: the engine's stack overflow
+ * (a small stack, JavaScript can't choose its own) is `nesting-too-deep` at
+ * `at` (spec §7), not a RangeError.
+ */
+const decodeFrom = <A>(schema: Schema<A>, value: Value, at: At): A => guardStack(() => schema.decode(value, at), decodeTooDeep(at.path()))
+
+/** `schema.encode(value, at)` from an entry point, as `decodeFrom`. */
+const encodeFrom = <A>(schema: Schema<A>, value: A, at: At): Value => guardStack(() => schema.encode(value, at), encodeTooDeep(at.path()))
 
 /**
  * Every schema is also a Standard Schema (standard.ts), so it plugs into
@@ -1421,7 +1431,7 @@ export function Recursive<A>(name: string, build: (self: Schema<A>) => Schema<A>
 
 // ── entry points ─────────────────────────────────────────────
 
-export const decode = <A>(schema: Schema<A>, value: Value, limits: Limits = {}): A => schema.decode(value, decodeAt(value, limits))
+export const decode = <A>(schema: Schema<A>, value: Value, limits: Limits = {}): A => decodeFrom(schema, value, decodeAt(value, limits))
 
 /**
  * Options of the typed entry points (`parse`, `stringify`, `formatAll`,
@@ -1480,7 +1490,7 @@ const parseGeneric = <A>(schema: Schema<A>, text: string, limits: Limits): A => 
   const values = parser.parseSequence()
   if (values.length !== 1) throw new HausDecodeError(`expected exactly one value, found ${values.length}`, [], "not-one-value", { expected: "one value", found: `${values.length} values` })
   // Hot: the parser counted the values as it read them (a tree, within the same depth limit), so they needn't be counted again.
-  return schema.decode(values[0]!, decodeWithin(limits, parser.valueCount))
+  return decodeFrom(schema, values[0]!, decodeWithin(limits, parser.valueCount))
 }
 
 /**
@@ -1502,13 +1512,13 @@ export async function* decodeStream<A>(schema: Schema<A>, source: ChunkSource, o
   }
   let i = 0
   for await (const item of readStream(source, { limits: options }, items)) {
-    yield item.decoded ? item.value : schema.decode(item.value, decodeAt(item.value, options, i))
+    yield item.decoded ? item.value : decodeFrom(schema, item.value, decodeAt(item.value, options, i))
     i++
   }
 }
 
 /** Encode a typed value into a haus `Value`. */
-export const encode = <A>(schema: Schema<A>, value: A, limits: Limits = {}): Value => schema.encode(value, encodeAt(limits))
+export const encode = <A>(schema: Schema<A>, value: A, limits: Limits = {}): Value => encodeFrom(schema, value, encodeAt(limits))
 
 /**
  * `value` as one line of compact or minimised text by the schema's compiled
@@ -1532,7 +1542,7 @@ export const formatAll = <A>(schema: Schema<A>, values: Iterable<A>, options: Fo
   const all = [...values]
   const lines = all.map((v) => lineCompiled(schema, v, options, options.style))
   if (lines.every((l) => l !== undefined)) return lines.length === 0 ? "" : lines.length === 1 ? `${lines[0]}\n` : lines.map((l) => `${l},\n`).join("")
-  return format(all.map((v, i) => schema.encode(v, encodeAt(options, i))), { ...options, limits: options })
+  return format(all.map((v, i) => encodeFrom(schema, v, encodeAt(options, i))), { ...options, limits: options })
 }
 
 /**
@@ -1549,7 +1559,7 @@ export async function* encodeStream<A>(
   const layout: FormatOptions & Options = { style: "compact", ...options }
   for await (const v of values) {
     // Value i's errors are at `$[i]`, the writer's too.
-    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyAt(schema.encode(v, encodeAt(options, i)), { ...layout, limits: options }, [i])) + ",\n"
+    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyAt(encodeFrom(schema, v, encodeAt(options, i)), { ...layout, limits: options }, [i])) + ",\n"
     i++
   }
 }
@@ -1621,7 +1631,7 @@ export async function* decodeJsonLines<A>(
     const json = readJson(text, jsonTextLimits(limits), origin)
     const read = (places?: JsonPlaces) => fromSchemaBasedJson(type, json, options, Place.root(i), places)
     const value = read()
-    return decodeRead(() => schema.decode(value, decodeAt(value, options, i)), read, 1)
+    return decodeRead(() => decodeFrom(schema, value, decodeAt(value, options, i)), read, 1)
   })
 }
 
@@ -1635,6 +1645,6 @@ export async function* encodeJsonLines<A>(
   let i = 0
   for await (const v of values) {
     const place = Place.root(i)
-    yield stringifyJson(toSchemaBasedJson(type, schema.encode(v, encodeAt(limits, i++)), limits, place)) + "\n"
+    yield stringifyJson(toSchemaBasedJson(type, encodeFrom(schema, v, encodeAt(limits, i++)), limits, place)) + "\n"
   }
 }

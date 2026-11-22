@@ -405,8 +405,9 @@ final class SchemaSyntax {
         pos += peekWord().length();
       } else if (at(pos, '@') || at(pos, '.')) {
         // A package module's version may hold a `~` (`@a/b@1~x`: import-version); a file path
-        // (grammar `path`) has none, so `./a~b` ends before it, a syntax error.
-        String more = at(pos, '@') ? "_.-/@~" : "_.-/@";
+        // (grammar `path`) has only A-Z, a-z, 0-9, _, ., / and -, so `./a~b` and `./a@1` end
+        // before the `~` and the `@`, a syntax error.
+        String more = at(pos, '@') ? "_.-/@~" : "_.-/";
         pos++;
         while (pos < s.length() && (isWord(s.charAt(pos)) || more.indexOf(s.charAt(pos)) >= 0)) {
           pos++;
@@ -414,6 +415,12 @@ final class SchemaSyntax {
         if (pos == start + 1) {
           pos = start;
           throw expected(what);
+        }
+        String module = s.substring(start, pos);
+        if ((module.startsWith("./") || module.startsWith("../")) && !isPath(module)) {
+          throw new Fail(start, ErrorCode.SCHEMA_SYNTAX, "expected a path (./name, ../name/name), found "
+              + SchemaText.quote(module) + ": .. names come only at its start, and every other name starts with a"
+              + " letter, digit, _ or - (no . name, no empty name, no / at the end)");
         }
       } else {
         throw expected(what);
@@ -1102,6 +1109,37 @@ final class SchemaSyntax {
       return name + "@" + v + ": a major version has no leading zeros (" + name + "@" + major + ")";
     }
     return null;
+  }
+
+  /**
+   * Whether a module is a path (grammar.ebnf {@code path}, spec §13.3): {@code ./} or one or more
+   * {@code ../}, then names separated by {@code /}, each starting with a letter, digit, {@code _}
+   * or {@code -}. So {@code ..} comes only at the start, and there is no {@code .} name, no empty
+   * name and no {@code /} at the end. The lexer has taken only A-Z, a-z, 0-9, _, ., / and -.
+   */
+  static boolean isPath(String module) {
+    int i;
+    if (module.startsWith("./")) {
+      i = 2;
+    } else {
+      i = 0;
+      while (module.startsWith("../", i)) {
+        i += 3;
+      }
+      if (i == 0) {
+        return false;
+      }
+    }
+    while (true) {
+      if (i >= module.length() || module.charAt(i) == '.' || module.charAt(i) == '/') {
+        return false;
+      }
+      int slash = module.indexOf('/', i);
+      if (slash < 0) {
+        return true;
+      }
+      i = slash + 1;
+    }
   }
 
   /** The package a package import names, without its {@code @major}. */

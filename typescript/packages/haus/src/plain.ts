@@ -14,7 +14,7 @@
  *   types nested in themselves       → named type aliases (type Comment = …)
  */
 import { defineOwn } from "./own.js"
-import { checkWellFormed } from "./errors.js"
+import { checkWellFormed, decodeTooDeep, guardStack } from "./errors.js"
 import { Parser } from "./parser.js"
 import { infer, isMaybeShape, printShape, recursiveNames, resolve, type RecordShape, type Shape, type VariantShape } from "./infer.js"
 import type { Value } from "./value.js"
@@ -197,8 +197,11 @@ function fields(r: Extract<Value, { kind: "record" }>, rs: RecordShape): Record<
 
 /** Values in the plain view, typed by what all of them have in common. */
 export function toPlain(values: readonly Value[]): unknown[] {
-  const { root } = infer(values)
-  return values.map((v) => plain(v, root))
+  // The engine's stack overflow is `nesting-too-deep` at `$` (spec §7).
+  return guardStack(() => {
+    const { root } = infer(values)
+    return values.map((v) => plain(v, root))
+  }, decodeTooDeep())
 }
 
 /** A file's values in the plain view: its one value, or an array for a stream. */

@@ -293,9 +293,13 @@ ErrorCode := [].{
 	import_unavailable : Str
 	import_unavailable = "import-unavailable"
 
-	## `import-not-found` (imports): An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest. Reported at (informative): The import, at its `import`.
+	## `import-not-found` (imports): An imported package or file can't be found: it is not installed, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package found names another package in its manifest. With npm, also a `node_modules/@org/name` that is there but can't be used (a dangling link, a cycle of links, a directory that can't be entered): the search stops there (§13.3). Reported at (informative): The import, at its `import`.
 	import_not_found : Str
 	import_not_found = "import-not-found"
+
+	## `import-outside-root` (imports): A relative import reaches a file outside the build's root directory (§13.3): by default the directory of the schema file the build starts from, or the directory given as the build's `root` option. Its `..` names go above the root: it is rejected before anything is looked at (a relative import follows no symbolic link, so it can't leave the root otherwise). Also a `root` option that doesn't contain the schema file the build starts from. Reported at (informative): The import, at its `import`. A `root` option that doesn't contain the entry file: no place.
+	import_outside_root : Str
+	import_outside_root = "import-outside-root"
 
 	## `import-version` (imports): An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf). Reported at (informative): The import, at its `import`.
 	import_version : Str
@@ -317,7 +321,7 @@ ErrorCode := [].{
 	package_manifest : Str
 	package_manifest = "package-manifest"
 
-	## `package-version` (imports): A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored. Reported at (informative): The import that reaches the package; the message names both versions.
+	## `package-version` (imports): A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation. Reported at (informative): The import that reaches the package; the message names both versions.
 	package_version : Str
 	package_version = "package-version"
 
@@ -479,7 +483,7 @@ ErrorCode := [].{
 
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -556,6 +560,7 @@ ErrorCode := [].{
 		"duplicate-import" => "Import each name once."
 		"import-unavailable" => "Read the schema with a resolver that loads imports (from files or packages), or inline the types."
 		"import-not-found" => "Install the package, or fix the path."
+		"import-outside-root" => "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package."
 		"import-version" => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
 		"import-cycle" => "Move the shared types to a file both import."
 		"duplicate-package" => "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`."
@@ -679,6 +684,7 @@ ErrorCode := [].{
 		"duplicate-import" => "imports"
 		"import-unavailable" => "imports"
 		"import-not-found" => "imports"
+		"import-outside-root" => "imports"
 		"import-version" => "imports"
 		"import-cycle" => "imports"
 		"duplicate-package" => "imports"

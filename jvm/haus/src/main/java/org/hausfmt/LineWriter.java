@@ -10,11 +10,18 @@ import java.util.List;
 final class LineWriter extends WriteCheck {
   private final StringBuilder b;
   private final boolean minimised;
+  /** The depth at which a container is written as {@code …}: for {@link Value#toString}, which doesn't throw. */
+  private final int cutAt;
 
   private LineWriter(StringBuilder b, Limits lim, boolean check, boolean minimised) {
+    this(b, lim, check, minimised, Integer.MAX_VALUE);
+  }
+
+  private LineWriter(StringBuilder b, Limits lim, boolean check, boolean minimised, int cutAt) {
     super(lim, check);
     this.b = b;
     this.minimised = minimised;
+    this.cutAt = cutAt;
   }
 
   /** Values as a file in the compact or minimised layout; {@code indexed}: errors at {@code $[i]}. */
@@ -33,10 +40,15 @@ final class LineWriter extends WriteCheck {
     return b.toString();
   }
 
-  /** A value on one line in the compact layout, written as far as it can be: for {@link Value#toString}. */
+  /**
+   * A value on one line in the compact layout, written as far as it can be: for {@link
+   * Value#toString}. A container deeper than {@link Limits#MAX_SUPPORTED_DEPTH} levels is written
+   * {@code …} (spec §7: debug output may be cut off), so that the walk, which recurses once per
+   * level, stays within the stack for a value built in code of any depth.
+   */
   static String toText(Value v) {
     StringBuilder b = new StringBuilder();
-    new LineWriter(b, Limits.DEFAULT, false, false).value(v, 0);
+    new LineWriter(b, Limits.DEFAULT, false, false, Limits.MAX_SUPPORTED_DEPTH).value(v, 0);
     return b.toString();
   }
 
@@ -55,6 +67,10 @@ final class LineWriter extends WriteCheck {
   // each kind implements.
   void value(Value v, int depth) {
     node();
+    if (depth >= cutAt && v.depth() > 0) {
+      b.append('…');
+      return;
+    }
     if (v instanceof Value.Text) {
       String s = ((Value.Text) v).value();
       appendString(b, s);

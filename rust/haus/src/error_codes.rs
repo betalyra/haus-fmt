@@ -144,8 +144,10 @@ pub enum ErrorCode {
     DuplicateImport,
     /// `import-unavailable`: The schema imports a package or file, and the tool reading it has no way to find one (no module resolver): only standard modules can be imported there. Reported at (informative): The import, at its `import`.
     ImportUnavailable,
-    /// `import-not-found`: An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest. Reported at (informative): The import, at its `import`.
+    /// `import-not-found`: An imported package or file can't be found: it is not installed, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package found names another package in its manifest. With npm, also a `node_modules/@org/name` that is there but can't be used (a dangling link, a cycle of links, a directory that can't be entered): the search stops there (§13.3). Reported at (informative): The import, at its `import`.
     ImportNotFound,
+    /// `import-outside-root`: A relative import reaches a file outside the build's root directory (§13.3): by default the directory of the schema file the build starts from, or the directory given as the build's `root` option. Its `..` names go above the root: it is rejected before anything is looked at (a relative import follows no symbolic link, so it can't leave the root otherwise). Also a `root` option that doesn't contain the schema file the build starts from. Reported at (informative): The import, at its `import`. A `root` option that doesn't contain the entry file: no place.
+    ImportOutsideRoot,
     /// `import-version`: An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf). Reported at (informative): The import, at its `import`.
     ImportVersion,
     /// `import-cycle`: Schema files import each other in a cycle. Reported at (informative): The import that closes the cycle, at its `import`.
@@ -156,7 +158,7 @@ pub enum ErrorCode {
     UndeclaredPackage,
     /// `package-manifest`: A package's `package.haus` is not a valid manifest: not one record, a `name` that isn't a lowercase `@org/name` (or has the part `node_modules`), a `version` that isn't a semantic version, or more than 64 KiB. Reported at (informative): The import that reaches the package; the message names the manifest. A package given by its directory: no place.
     PackageManifest,
-    /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored. Reported at (informative): The import that reaches the package; the message names both versions.
+    /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation. Reported at (informative): The import that reaches the package; the message names both versions.
     PackageVersion,
     /// `package-path`: A schema package refers to a file it may not: its `schema.haus` imports a file (`import ./x`) instead of a package; its `package.haus`, `schema.haus` or `package.json` is a symbolic link or not a regular file; or a file outside any package imports a file in a package's directory (`import ./node_modules/x/y`). The file is not read. Reported at (informative): The import that reaches the file; the message names the file.
     PackagePath,
@@ -270,7 +272,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 115] = [
+    pub const ALL: [ErrorCode; 116] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -341,6 +343,7 @@ impl ErrorCode {
         ErrorCode::DuplicateImport,
         ErrorCode::ImportUnavailable,
         ErrorCode::ImportNotFound,
+        ErrorCode::ImportOutsideRoot,
         ErrorCode::ImportVersion,
         ErrorCode::ImportCycle,
         ErrorCode::DuplicatePackage,
@@ -461,6 +464,7 @@ impl ErrorCode {
             ErrorCode::DuplicateImport => "duplicate-import",
             ErrorCode::ImportUnavailable => "import-unavailable",
             ErrorCode::ImportNotFound => "import-not-found",
+            ErrorCode::ImportOutsideRoot => "import-outside-root",
             ErrorCode::ImportVersion => "import-version",
             ErrorCode::ImportCycle => "import-cycle",
             ErrorCode::DuplicatePackage => "duplicate-package",
@@ -582,6 +586,7 @@ impl ErrorCode {
             ErrorCode::DuplicateImport => ErrorCategory::Imports,
             ErrorCode::ImportUnavailable => ErrorCategory::Imports,
             ErrorCode::ImportNotFound => ErrorCategory::Imports,
+            ErrorCode::ImportOutsideRoot => ErrorCategory::Imports,
             ErrorCode::ImportVersion => ErrorCategory::Imports,
             ErrorCode::ImportCycle => ErrorCategory::Imports,
             ErrorCode::DuplicatePackage => ErrorCategory::Imports,
@@ -703,6 +708,7 @@ impl ErrorCode {
             ErrorCode::DuplicateImport => "Import each name once.",
             ErrorCode::ImportUnavailable => "Read the schema with a resolver that loads imports (from files or packages), or inline the types.",
             ErrorCode::ImportNotFound => "Install the package, or fix the path.",
+            ErrorCode::ImportOutsideRoot => "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package.",
             ErrorCode::ImportVersion => "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",
             ErrorCode::ImportCycle => "Move the shared types to a file both import.",
             ErrorCode::DuplicatePackage => "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`.",

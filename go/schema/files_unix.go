@@ -3,26 +3,24 @@
 package schema
 
 import (
+	"io/fs"
 	"os"
 	"syscall"
 )
 
-// openFile opens a file to read: without following a link at path when
-// follow is false (O_NOFOLLOW), and without blocking on a FIFO (O_NONBLOCK).
-func openFile(path string, follow bool) (*os.File, error) {
-	flags := os.O_RDONLY | syscall.O_NONBLOCK
-	if !follow {
-		flags |= syscall.O_NOFOLLOW
-	}
-	return os.OpenFile(path, flags, 0)
+// isLink reports whether os.Lstat saw a symbolic link.
+func isLink(fi fs.FileInfo) bool { return fi.Mode()&fs.ModeSymlink != 0 }
+
+// openFile opens a file to read without following a link at its last name
+// (O_NOFOLLOW), without blocking on a FIFO or a device (O_NONBLOCK), and
+// without making a terminal the controlling one (O_NOCTTY). The caller
+// checks the opened file (spec §13.3, "Files read").
+func openFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 }
 
-// worldWritable reports whether everyone may write to dir, such as /tmp: a
-// node_modules there is never used (spec §13.3).
-func worldWritable(dir string) bool {
-	fi, err := os.Stat(dir)
-	return err == nil && fi.Mode().Perm()&0o002 != 0
+// openDir opens a directory to list it, without blocking if it is a FIFO
+// (listing one then fails).
+func openDir(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 }
-
-// driveRoot reports whether dir is the root of a Windows drive.
-func driveRoot(string) bool { return false }

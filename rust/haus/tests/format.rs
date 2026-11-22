@@ -366,10 +366,10 @@ fn deep_text(depth: usize) -> String {
     format!("// deep\n{head}\"\"\"\n  a\n  b\n  \"\"\"{tail}, 1,\n")
 }
 
-#[test]
-fn the_supported_depth_formats_in_a_small_thread() {
+/// Formats text at the supported depth in a thread with a stack of `kib` KiB.
+fn format_at_the_supported_depth(kib: usize) {
     std::thread::Builder::new()
-        .stack_size(2 * 1024 * 1024)
+        .stack_size(kib * 1024)
         .spawn(|| {
             let text = deep_text(MAX_SUPPORTED_DEPTH);
             let values = haus::parse(&text).unwrap();
@@ -389,4 +389,17 @@ fn the_supported_depth_formats_in_a_small_thread() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn the_supported_depth_formats_in_a_small_thread() {
+    format_at_the_supported_depth(2 * 1024);
+}
+
+/// In a 512 KiB thread (spec §7), in an optimized build: a debug build's
+/// parser needs more at 256 levels (see tests/limits.rs).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "a debug build needs more than 512 KiB at 256 levels: run with --release")]
+fn the_supported_depth_formats_in_a_512_kib_thread() {
+    format_at_the_supported_depth(512);
 }

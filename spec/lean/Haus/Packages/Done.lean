@@ -39,10 +39,6 @@ def typesV (V : View) : Target → Option (List String)
     | some (some bs) => (decodeV bs).map (·.types)
     | _ => none
 
-/-- The names of a schema file an import of a file names (`./x` is `x.schema.haus`). -/
-def fileComps (path : String) : List String :=
-  (splitPath path).dropLast ++ [(splitPath path).getLastD "" ++ ".schema.haus"]
-
 /-- A candidate `dir` for the import `imp` of `name`: its package has that name and major, and the names. -/
 def CandOk (V : View) (P : Target → Prop) (imp : Import) (name : String) (major : Option String) (dir : Path) :
     Prop :=
@@ -59,8 +55,8 @@ def ImpOk (V : View) (P : Target → Prop) (importer : Importer) (imp : Import) 
   | .file path =>
     match importer with
     | .pkg .. => False
-    | .app p => ∃ real, resolve V.tree maxLinks p.dropLast (fileComps path) = .ok real ∧
-        inPackage V.tree real = none ∧ (real.getLast?.any (·.endsWith ".schema.haus")) = true ∧
+    | .app p => ∃ real, fileTarget V.tree V.base p path = .ok real ∧
+        inPackage V.tree V.base real = none ∧ (real.getLast?.any (·.endsWith ".schema.haus")) = true ∧
         V.tree.kindAt? real = some .file ∧ P (.file real) ∧ ∃ ts, typesV V (.file real) = some ts ∧ namesOk imp ts
   | .pkg name major => ∃ cands, candV V importer name = some cands ∧ ∀ c ∈ cands, CandOk V P imp name major c.1
 
@@ -70,12 +66,13 @@ theorem CandOk.mono {V : View} {P P' : Target → Prop} {imp : Import} {name : S
   exact ⟨m, h1, h2, h3, hP _ h4, h5⟩
 
 /--
-What a copy's `package.json` declares: if `npm` is on, under the rule of a
-package's files; else, if versions are checked, read leniently (`lenientNpmV`).
+What a copy's `package.json` declares: if `npm` is on and the copy wasn't
+given by its directory, under the rule of a package's files; else, if `npm`
+is on or versions are checked, read leniently (`lenientNpmV`).
 -/
 def npmOf (V : View) (dir : Path) : Option (Option NpmInfo) :=
-  if V.mode.npm = true then packageJsonV V dir
-  else if V.checkVersions = true then some (lenientNpmV V dir) else some none
+  if (V.mode.npm && !V.given.any (fun g => g.byDir && g.dir == dir)) = true then packageJsonV V dir
+  else if (V.mode.npm || V.checkVersions) = true then some (lenientNpmV V dir) else some none
 
 /-- The SHOULD check of "Package versions" (§13.3) passes. -/
 def VersionOk (V : View) (m : Manifest) (npm : Option NpmInfo) : Prop :=
@@ -532,6 +529,7 @@ variable {env : Env} {κ : Core}
 
 theorem Pure.copyNpm {dir : Path} {owner : String} : Pure env (copyNpm env.config dir owner) (npmOf env.view dir) := by
   unfold Haus.Packages.copyNpm npmOf
+  apply Pure.bind_ask
   exact Pure.ite2 (fun _ => Pure.packageJsonOf) (fun _ => Pure.ite2 (fun _ => Pure.lenientNpm) (fun _ => Pure.ret))
 
 theorem checkVersion_atA {m : Manifest} {npm : Option NpmInfo} {owner : String} :
@@ -679,6 +677,7 @@ theorem resolveImport_good {loadFn : Target → M Loaded} {importer : Importer} 
     split
     · exact Triple.fail fun _ _ => True.intro
     rename_i p
+    apply Triple.bind_ask
     apply Triple.bind_look
     split
     · exact Triple.fail fun _ _ => True.intro
@@ -702,8 +701,8 @@ theorem resolveImport_good {loadFn : Target → M Loaded} {importer : Importer} 
     rw [hs.2]
     refine ⟨real, hreal, ?_, by simpa using hend, by simpa [Env.view_tree] using hkind, hret.1, r.types, hret.2.1,
       namesOk_of hn⟩
-    show inPackage env.tree real = none
-    cases h : inPackage env.tree real
+    show inPackage env.tree env.base real = none
+    cases h : inPackage env.tree env.base real
     · rfl
     · exact absurd h (hin _)
   · rename_i name major heq

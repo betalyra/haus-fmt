@@ -12,7 +12,7 @@
  *   an unknown value → {"_tag": "Hexagon", "_args": [self-describing…]}
  */
 import { quoteText, TAG } from "./chars.js"
-import { HausDecodeError, HausEncodeError, type ErrorCode, type ErrorDetails } from "./errors.js"
+import { decodeTooDeep, encodeTooDeep, guardStack, HausDecodeError, HausEncodeError, type ErrorCode, type ErrorDetails } from "./errors.js"
 import {
   describeJson, hausJsonOf, importedValue, isJsonNumber, jsonDepth, isJsonObject, jsonObject, JsonNumber, numberOfJson, Place, stringOfJson, tagLengthIssue, valueOfHausJson,
   type Json, type JsonObject, type JsonPlaces, normalizeJsonNumber,
@@ -322,7 +322,8 @@ export const toSchemaBasedJson = (type: JsonType, value: Value, limits: Partial<
     return jsonObject([tag, ["values", v.args.map((x, i) => write(items[i]!, x, values.child(i), depth + 2, 0))]])
   }
 
-  return write(type, value, place, 0, 0)
+  // The engine's stack overflow is `nesting-too-deep` at `place` (spec §7).
+  return guardStack(() => write(type, value, place, 0, 0), encodeTooDeep(place.path()))
 }
 
 // ── reading: schema-based JSON → haus value ──────────────────
@@ -496,5 +497,6 @@ export const fromSchemaBasedJson = (type: JsonType, json: Json, limits: Partial<
     return uncheckedVariant(tag, values.map((x, i) => read(items[i]!, x, place.child(i), depth + 2, 0)))
   }
 
-  return read(type, json, place, 0, 0)
+  // The engine's stack overflow is `nesting-too-deep` at `place` (spec §7).
+  return guardStack(() => read(type, json, place, 0, 0), decodeTooDeep(place.path()))
 }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { HausSchemaFileError, ModuleError, parseSchemaFile } from "../src/index.js"
-import { identify, isSchemaFile, nodeResolver, schemaOptions } from "../src/node.js"
+import { identify, isSchemaFile, nodeResolver, readSchemaFile, schemaOptions } from "../src/node.js"
 import { quoteText } from "../src/schema-file.js"
 
 /** A directory with these files (paths relative to it). */
@@ -112,21 +112,50 @@ describe("node resolver: a package is package.haus and schema.haus (spec §13.3)
     }
   })
 
-  it("rejects relative imports of app files into a package directory, also through links", () => {
+  it("rejects relative imports of app files into a package directory; a link on the way is not followed", () => {
     const vendor = "app/vendor/evil"
     const files = { [`${vendor}/package.haus`]: manifest("@acme/evil"), [`${vendor}/schema.haus`]: money, [`${vendor}/sub/extra.schema.haus`]: money }
     const direct = app(files, "import ./vendor/evil/sub/extra (Money)\ntype Root = Money")
     expect(rejected(direct)).toMatch(/is in the package directory .*: import the package by its name/)
+    // The walk comes before the package-directory check, and follows no link (spec §13.3, check-order).
     const linked = app(files, "import ./link/extra (Money)\ntype Root = Money")
     symlinkSync(join(linked, vendor, "sub"), join(linked, "app/link"))
-    expect(rejected(linked)).toMatch(/is in the package directory/)
+    const message = rejected(linked, "import-not-found")
+    expect(message).toMatch(/"link" is a symbolic link/)
+    expect(message).not.toContain("vendor")
+  })
+
+  it("reaches no file through a link in a relative import, inside the root too", () => {
+    const files = { "app/real/x.schema.haus": "type X = Int" }
+    const middle = app(files, "import ./via/x (X)\ntype Root = X")
+    symlinkSync(join(middle, "app/real"), join(middle, "app/via"))
+    expect(rejected(middle, "import-not-found")).toMatch(/"via" is a symbolic link/)
+    const last = app(files, "import ./y (X)\ntype Root = X")
+    symlinkSync(join(last, "app/real/x.schema.haus"), join(last, "app/y.schema.haus"))
+    expect(rejected(last, "import-not-found")).toMatch(/"y.schema.haus" is a symbolic link/)
+  })
+
+  it("fails closed when a directory between the target and the root can't be listed", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return
+    const root = tree({ "app/sub/main.schema.haus": "import ./x (X)\ntype Root = X", "app/sub/x.schema.haus": "type X = Int" })
+    const path = join(root, "app/sub/main.schema.haus")
+    chmodSync(join(root, "app"), 0o311)
+    try {
+      const { text, options } = readSchemaFile(path, { root: "../.." })
+      expect(() => parseSchemaFile(text, options)).toThrow(/whether app is a package's directory can't be checked/)
+    } finally {
+      chmodSync(join(root, "app"), 0o755)
+    }
   })
 
   it("keeps relative imports of app files, always to .schema.haus files", () => {
     const root = app({ "shared/money.schema.haus": money }, "import ../shared/money (Money)\ntype Root = { m: Money }")
-    expect(load(root).imported.get("Money")).toBeDefined()
+    // ../shared is above the entry file's directory, the default root: the root option widens it (spec §13.3).
+    expect(rejected(root, "import-outside-root")).toMatch(/goes above the build's root/)
+    const path = join(root, "app/main.schema.haus")
+    expect(parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, { root: ".." })).imported.get("Money")).toBeDefined()
     // The extension is always added: `./x.schema.haus` is x.schema.haus.schema.haus.
-    const twice = app({ "shared/money.schema.haus": money }, "import ../shared/money.schema.haus (Money)\ntype Root = Money")
+    const twice = app({ "app/shared/money.schema.haus": money }, "import ./shared/money.schema.haus (Money)\ntype Root = Money")
     expect(rejected(twice, "import-not-found")).toMatch(/money.schema.haus.schema.haus/)
   })
 
@@ -338,5 +367,76 @@ describe("identical copies (spec §13.3)", () => {
     const message = rejected(copies(main), "duplicate-package")
     expect(message).toContain("1.2.0")
     expect(message).toContain("1.4.0")
+  })
+})
+
+describe("the root, files read and names (spec §13.3)", () => {
+  const codeOf = (f: () => unknown): { code: string; message: string } => {
+    try {
+      f()
+    } catch (e) {
+      if (e instanceof HausSchemaFileError || e instanceof ModuleError) return { code: e.code, message: e.message }
+      throw e
+    }
+    throw new Error("accepted")
+  }
+  const loadAt = (path: string, options: Parameters<typeof readSchemaFile>[1] = {}) => {
+    const { text, options: parse } = readSchemaFile(path, options)
+    return parseSchemaFile(text, parse)
+  }
+
+  it("takes a root option relative to the entry file's directory, which must contain the entry file", () => {
+    const root = tree({ "proj/app/a.schema.haus": "import ../shared/s (S)\ntype Root = { s: S }", "proj/shared/s.schema.haus": "type S = Int", "lib/x": "" })
+    const entry = join(root, "proj/app/a.schema.haus")
+    expect(codeOf(() => loadAt(entry)).code).toBe("import-outside-root")
+    expect(loadAt(entry, { root: ".." }).imported.get("S")).toBeDefined()
+    const outside = codeOf(() => loadAt(entry, { root: "../../lib" }))
+    expect(outside.code).toBe("import-outside-root")
+    expect(outside.message).not.toContain(root)
+    expect(codeOf(() => loadAt(entry, { root: "../nowhere" })).code).toBe("import-not-found")
+    // From the entry file's real directory, whatever `base` is, and through a link to the entry file too (spec §13.3).
+    expect(loadAt(entry, { root: "..", base: join(root, "lib") }).imported.get("S")).toBeDefined()
+    symlinkSync(join(root, "proj/app/a.schema.haus"), join(root, "lib/a.schema.haus"))
+    expect(loadAt(join(root, "lib/a.schema.haus"), { root: ".." }).imported.get("S")).toBeDefined()
+  })
+
+  it("shows paths relative to the root, never absolute ones", () => {
+    const root = tree({
+      "app/a.schema.haus": "import @acme/x@1 (X)\ntype Root = { x: X }",
+      "vendor/x/package.haus": `{ name: "@acme/x", version: "1.0.0" }`,
+      "vendor/x/schema.haus": "type X = Int",
+      "vendor/x/package.json": `{ "version": "1.1.0" }`,
+    })
+    const { code, message } = codeOf(() => loadAt(join(root, "app/a.schema.haus"), { packages: [join(root, "vendor/x")], npm: false }))
+    expect(code).toBe("package-version")
+    expect(message).toContain("../vendor/x")
+    expect(message).not.toContain(root)
+    expect(message).not.toContain(realpathSync(root))
+  })
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("finds nothing in a directory that can't be listed", () => {
+    const root = tree({ "app/a.schema.haus": "import ./sub/x (X)\ntype Root = { x: X }", "app/sub/x.schema.haus": "type X = Int" })
+    chmodSync(join(root, "app/sub"), 0o311)
+    try {
+      expect(codeOf(() => loadAt(join(root, "app/a.schema.haus"))).code).toBe("import-not-found")
+    } finally {
+      chmodSync(join(root, "app/sub"), 0o755)
+    }
+    expect(loadAt(join(root, "app/a.schema.haus")).imported.get("X")).toBeDefined()
+  })
+
+  it.skipIf(process.platform === "win32")("reads an entry file only if it is a regular file, without blocking on a FIFO", () => {
+    const root = tree({ "app/real.schema.haus": "type A = Int" })
+    execFileSync("mkfifo", [join(root, "app/fifo.schema.haus")])
+    expect(codeOf(() => readSchemaFile(join(root, "app/fifo.schema.haus"))).code).toBe("import-not-found")
+    // A link to the entry file is read by its real path.
+    symlinkSync("real.schema.haus", join(root, "app/link.schema.haus"))
+    expect(loadAt(join(root, "app/link.schema.haus")).definition("A")).toBeDefined()
+  })
+
+  it("never gives a file the id of a package (@org/name@N)", () => {
+    const root = tree({ "@acme/x@1.schema.haus": "type A = Int", "p/package.json": `{ "name": "@acme" }`, "p/x@1.schema.haus": "type A = Int" })
+    expect(identify(join(root, "@acme/x@1.schema.haus"), root)).toBe("./@acme/x@1")
+    expect(identify(join(root, "p/x@1.schema.haus"))).toBe("./@acme/x@1")
   })
 })

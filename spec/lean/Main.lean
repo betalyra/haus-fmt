@@ -775,7 +775,9 @@ def schemaCheckLine (line : String) : String :=
 `--packages FILE [NAME]`: every case of the package suite in FILE
 (`test-suite/packages/cases.haus`), or only the case NAME, with its message
 and the files read. Cases marked `should` are run: the reference makes the
-version check.
+version check. Every ecosystem's cases are run (the npm lookup is an option of
+the one resolver); a case marked `unmodelled` (permissions, which the model's
+file tree doesn't have) is skipped and named.
 -/
 def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := do
   let vs ← match parseBytes (← IO.FS.readBinFile file) with
@@ -788,6 +790,9 @@ def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := d
     | .error e => IO.println s!"FAIL (case not read): {e}"; failed := failed + 1; count := count + 1
     | .ok c =>
       if only.any (· != c.name) then continue
+      if let some why := c.unmodelled then
+        IO.println s!"skip {c.name}: {why}"
+        continue
       count := count + 1
       let (verdict, o) := Packages.Suite.check c
       let should := if c.should then " (should)" else ""

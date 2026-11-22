@@ -65,7 +65,7 @@ pub use error::{
 };
 pub use formatter::{FormatOptions, Style, format, has_comments};
 pub use json::{FromJson, Json, ToJson};
-pub use parser::{Limits, MAX_SUPPORTED_DEPTH, parse_with};
+pub use parser::{DEBUG_DEPTH, Limits, MAX_SUPPORTED_DEPTH, parse_with};
 pub use secret::Secret;
 pub use ser::{Encode, Encoder};
 pub use value::{Number, Record, Tag, Value};

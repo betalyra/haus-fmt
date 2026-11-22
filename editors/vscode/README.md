@@ -33,7 +33,13 @@ Schema packages are found in `node_modules`, from the real path of the schema fi
 "haus.packages": ["vendor/money", "schemas"]
 ```
 
-Paths in workspace settings must stay inside the workspace folder (symbolic links resolved); only your user settings may point elsewhere on your computer. Network paths (`\\host\share`) are never used. In a workspace you haven't trusted, its `haus.packages` is ignored (Workspace Trust).
+Relative imports in schema files (`import ../shared/money`) stay inside a root: by default the workspace folder that has the schema file (a schema file in no workspace folder: its own directory). `haus.root` gives another one, relative to the workspace folder; it must contain the schema files:
+
+```jsonc
+"haus.root": "schemas"
+```
+
+Paths in workspace settings (`haus.packages`, `haus.root`) must stay inside the workspace folder (symbolic links resolved); only your user settings may point elsewhere on your computer. Network paths (`\\host\share`) are never used. In a workspace you haven't trusted, its `haus.packages` and `haus.root` are ignored (Workspace Trust).
 
 ## Develop
 

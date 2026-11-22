@@ -20,8 +20,24 @@ export { DEFAULT_LIMITS, longerThan, MAX_DEPTH, maxHexDigits, Reader, type Limit
  * deep input. Measured to fit Node's default stack with room to spare (the
  * shallowest path, encoding with a schema, overflows near 750 levels).
  * Formatting, the canonical form and hashing don't recurse: any depth works.
+ * The stack it needs at this depth: STACK_NEEDED_MB. JavaScript can't set
+ * the stack it runs on, so on a smaller one (a worker thread's) a path that
+ * runs out of stack before the depth limit fails with `nesting-too-deep`,
+ * never with the engine's RangeError (spec §7).
  */
 export const MAX_SUPPORTED_DEPTH = 512
+
+/**
+ * The stack, in MiB, that every path needs at MAX_SUPPORTED_DEPTH (spec §7),
+ * as a worker thread's `resourceLimits.stackSizeMb` (of which Node keeps
+ * 192 KiB for native code): measured with V8's interpreter frames, called
+ * from 200 frames deep (test/stack.test.ts). The main thread's stack (about
+ * 1 MiB of JavaScript stack) is enough. A worker with a smaller stack can
+ * overflow on deep input: give it this much, or lower `maxDepth`. At
+ * 512 KiB (Node: `stackSizeMb: 0.5`), every path works up to 128 levels;
+ * at 1 MiB, up to 256 (the default limit).
+ */
+export const STACK_NEEDED_MB = 1.5
 
 /**
  * Why `limits` can't be used, or undefined if they can: a `maxDepth` that
@@ -158,7 +174,7 @@ export class Parser {
     const out: Value[] = []
     r.begin()
     if (!r.atEnd()) {
-      do out.push(readValue(r))
+      do out.push(r.guarded(() => readValue(r)))
       while (r.nextTop())
     }
     return out
@@ -173,7 +189,7 @@ export class Parser {
   parseSingle(): Value {
     const r = this.r
     r.begin()
-    const v = readValue(r)
+    const v = r.guarded(() => readValue(r))
     r.endSingle()
     return v
   }
@@ -185,7 +201,7 @@ export class Parser {
    */
   valueAt(start: number): { readonly value: Value; readonly end: number } {
     this.r.pos = start
-    const value = readValue(this.r)
+    const value = this.r.guarded(() => readValue(this.r))
     return { value, end: this.r.pos }
   }
 

@@ -37,9 +37,13 @@
 //! - [`Schema::check_text`] and [`Schema::check`]: every problem in a data file
 //!   (up to 200), with positions, and hints for fields and tags an open type
 //!   doesn't list and for deprecated ones: what `haus check` and editors show.
-//! - [`Locator`]: where packages are, for one package manager:
-//!   [`NodeModules`], [`Explicit`] (packages given by the user), and
-//!   [`Packages`] (a Cargo crate's direct dependencies).
+//! - [`Locator`]: where packages are: [`Explicit`] (packages given by the
+//!   user) and [`Packages`] (a Cargo crate's direct dependencies). This
+//!   binding never looks in `node_modules` (spec §13.3, "Installed packages").
+//! - Relative imports stay inside the build's root ([`Options::root`]: by
+//!   default the directory of the schema file loaded), and every file is
+//!   read as a regular file, by its real path, without following a link at
+//!   its last name and without blocking (spec §13.3, "Files read").
 //! - [`syntax`]: the syntax tree of one schema file, and [`packages`]: the
 //!   manifest and the rules of package files. haus-fmt-build generates code
 //!   from these.
@@ -55,7 +59,7 @@ mod types;
 
 pub use check::{Issue, MAX_ISSUES, Position, Segment, Severity};
 pub use files::FileCache;
-pub use locator::{Explicit, Location, Locator, NoImports, NodeModules, Or};
+pub use locator::{Explicit, Location, Locator, NoImports, Or};
 pub use packages::{Manifest, Packages};
 pub use resolve::{Definition, Options, Schema, SchemaFile, SchemaPackage};
 pub use types::{Builtin, Case, Deprecation, Field, Instance, InstanceId, Payload, Record, Type, Variant};
@@ -78,7 +82,6 @@ const _: () = {
     shared::<Manifest>();
     shared::<Packages>();
     shared::<Explicit>();
-    shared::<NodeModules>();
     shared::<syntax::File>();
 };
 

@@ -68,7 +68,13 @@ pub use import::import;
 
 /// A JSON value. Numbers are kept as their exact text, and objects as their
 /// members in order, each name once (I-JSON, RFC 7493).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// A value built in code may nest any depth (spec §7): dropping, cloning
+/// and comparing with `==` take a heap stack rather than recursion, and
+/// `{:?}` shows the first [`crate::DEBUG_DEPTH`] levels, then `…`. As `Json`
+/// implements `Drop`, take its parts out with a reference
+/// (`if let Json::Array(items) = &mut j { std::mem::take(items) }`) rather
+/// than by moving them out of a `match`.
 pub enum Json {
     Null,
     Bool(bool),
@@ -91,6 +97,186 @@ impl Json {
             Json::Object(members) => members.get(name),
             _ => None,
         }
+    }
+
+    /// Whether it is an array or object with at least one element or member.
+    fn has_parts(&self) -> bool {
+        match self {
+            Json::Array(items) => !items.is_empty(),
+            Json::Object(o) => !o.members.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Moves its elements or member values onto `stack`, leaving it without parts.
+    fn move_parts(&mut self, stack: &mut Vec<Json>) {
+        match self {
+            Json::Array(items) => stack.append(items),
+            Json::Object(o) => {
+                o.names = None;
+                stack.extend(o.members.drain(..).map(|(_, v)| v));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Without recursion: a value nested deeper than one level hands its parts to
+/// a stack, which takes theirs in turn, so each part is dropped without parts.
+impl Drop for Json {
+    fn drop(&mut self) {
+        let nested = match self {
+            Json::Array(items) => items.iter().any(Json::has_parts),
+            Json::Object(o) => o.members.iter().any(|(_, v)| v.has_parts()),
+            _ => false,
+        };
+        if !nested {
+            return;
+        }
+        let mut stack = Vec::new();
+        self.move_parts(&mut stack);
+        while let Some(mut j) = stack.pop() {
+            j.move_parts(&mut stack);
+        }
+    }
+}
+
+/// Structural equality without recursion: the same kind, text, member
+/// names in the same order and equal parts.
+impl PartialEq for Json {
+    fn eq(&self, other: &Json) -> bool {
+        let mut todo = vec![(self, other)];
+        while let Some((a, b)) = todo.pop() {
+            let same = match (a, b) {
+                (Json::Null, Json::Null) => true,
+                (Json::Bool(x), Json::Bool(y)) => x == y,
+                (Json::Number(x), Json::Number(y)) => x == y,
+                (Json::String(x), Json::String(y)) => x == y,
+                (Json::Array(x), Json::Array(y)) => {
+                    x.len() == y.len() && {
+                        todo.extend(x.iter().zip(y));
+                        true
+                    }
+                }
+                (Json::Object(x), Json::Object(y)) => {
+                    x.members.len() == y.members.len()
+                        && x.members.iter().zip(&y.members).all(|((k, v), (l, w))| {
+                            todo.push((v, w));
+                            k == l
+                        })
+                }
+                _ => false,
+            };
+            if !same {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl Eq for Json {}
+
+/// A copy, without recursion: arrays and objects are rebuilt from a stack of
+/// the ones being copied, each finished when its last part is.
+impl Clone for Json {
+    fn clone(&self) -> Json {
+        /// An array or object being copied: its parts so far, and the ones left.
+        enum Frame<'a> {
+            Array(Vec<Json>, std::slice::Iter<'a, Json>),
+            Object(Vec<(String, Json)>, std::slice::Iter<'a, (String, Json)>),
+        }
+        /// A copy of a value without parts, or the frame that copies its parts.
+        fn start(j: &Json) -> Result<Json, Frame<'_>> {
+            match j {
+                Json::Null => Ok(Json::Null),
+                Json::Bool(b) => Ok(Json::Bool(*b)),
+                Json::Number(n) => Ok(Json::Number(n.clone())),
+                Json::String(s) => Ok(Json::String(s.clone())),
+                Json::Array(items) => Err(Frame::Array(Vec::with_capacity(items.len()), items.iter())),
+                Json::Object(o) => Err(Frame::Object(Vec::with_capacity(o.members.len()), o.members.iter())),
+            }
+        }
+        let mut stack = match start(self) {
+            Ok(j) => return j,
+            Err(frame) => vec![frame],
+        };
+        loop {
+            let top = stack.last_mut().expect("a frame is open");
+            let next = match top {
+                Frame::Array(_, rest) => rest.next(),
+                Frame::Object(done, rest) => rest.next().map(|(k, v)| {
+                    done.push((k.clone(), Json::Null));
+                    v
+                }),
+            };
+            let copy = match next {
+                Some(part) => match start(part) {
+                    Ok(j) => j,
+                    Err(frame) => {
+                        stack.push(frame);
+                        continue;
+                    }
+                },
+                None => match stack.pop().expect("a frame is open") {
+                    Frame::Array(done, _) => Json::Array(done),
+                    Frame::Object(done, _) => Json::Object(JsonObject::from_unique(done)),
+                },
+            };
+            // A finished part: the next part of the container below, or the copy.
+            match stack.last_mut() {
+                None => return copy,
+                Some(Frame::Array(done, _)) => done.push(copy),
+                Some(Frame::Object(done, _)) => done.last_mut().expect("its name was pushed").1 = copy,
+            }
+        }
+    }
+}
+
+/// As derived (`Array([Number(1)])`), but only the first
+/// [`crate::DEBUG_DEPTH`] levels: deeper arrays and objects are `…`, so that
+/// printing a value of any depth takes a bounded stack (spec §7).
+impl std::fmt::Debug for Json {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&DebugAt(self, 0), f)
+    }
+}
+
+/// A value at `depth` levels, for `{:?}`.
+struct DebugAt<'a>(&'a Json, usize);
+
+impl std::fmt::Debug for DebugAt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let DebugAt(j, depth) = *self;
+        if depth >= crate::DEBUG_DEPTH && j.has_parts() {
+            return f.write_str("…");
+        }
+        match j {
+            Json::Null => f.write_str("Null"),
+            Json::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
+            Json::Number(n) => f.debug_tuple("Number").field(n).finish(),
+            Json::String(s) => f.debug_tuple("String").field(s).finish(),
+            Json::Array(items) => f.debug_tuple("Array").field(&ItemsAt(items, depth + 1)).finish(),
+            Json::Object(o) => f.debug_tuple("Object").field(&MembersAt(o, depth + 1)).finish(),
+        }
+    }
+}
+
+/// Elements at `depth` levels, for `{:?}`.
+struct ItemsAt<'a>(&'a [Json], usize);
+
+impl std::fmt::Debug for ItemsAt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.iter().map(|j| DebugAt(j, self.1))).finish()
+    }
+}
+
+/// Members whose values are at `depth` levels, for `{:?}`.
+struct MembersAt<'a>(&'a JsonObject, usize);
+
+impl std::fmt::Debug for MembersAt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.0.members.iter().map(|(k, v)| (k, DebugAt(v, self.1)))).finish()
     }
 }
 
@@ -204,9 +390,10 @@ impl PartialEq for JsonObject {
 
 impl Eq for JsonObject {}
 
+/// The members, as a map: the first [`crate::DEBUG_DEPTH`] levels (see [`Json`]).
 impl std::fmt::Debug for JsonObject {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_map().entries(self.members.iter().map(|(k, v)| (k, v))).finish()
+        std::fmt::Debug::fmt(&MembersAt(self, 0), f)
     }
 }
 

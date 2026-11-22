@@ -76,29 +76,47 @@ Schemas from `.schema.haus` files:
 
 ```ts
 import { compileSchemaFile } from "@haus-fmt/haus"
-import { schemaOptions } from "@haus-fmt/haus/node"   // resolves imports from the file system
+import { readSchemaFile } from "@haus-fmt/haus/node"   // reads the file and resolves imports from the file system
 
-const { schemas } = compileSchemaFile(text, schemaOptions("order.schema.haus"))
+const { text, options } = readSchemaFile("order.schema.haus")
+const { schemas } = compileSchemaFile(text, options)
 const order = h.parse(schemas.Order!, data)
 ```
 
-`schemaOptions` finds packages in `node_modules` as Node does, from the real
-path of the importing file, after checking that the file declares the package
-in its `package.json` (spec §13.3); never in `NODE_PATH`, global folders or
-directories everyone may write to. Packages can also be given explicitly:
-package directories, or folders whose subdirectories are packages (relative to
-the schema file's directory). A package directory is used instead of the
-installed one; a package from a folder must have the same files as the
-installed one, if any. With `npm: false`, only the given packages exist:
+`readSchemaFile` reads the schema file and gives the options that resolve its
+imports (`schemaOptions` gives only the options). It finds packages in
+`node_modules` as Node does, from the real path of the importing file, after
+checking that the file declares the package in its `package.json` (spec
+§13.3); never in `NODE_PATH`, global folders or directories everyone may write
+to. Packages can also be given explicitly: package directories, or folders
+whose subdirectories are packages (relative to the schema file's directory). A
+package directory is used instead of the installed one; a package from a
+folder must have the same files as the installed one, if any. With
+`npm: false`, only the given packages exist:
 
 ```ts
-schemaOptions("order.schema.haus", { packages: ["../vendor/money"], folders: ["../schemas"] })
-schemaOptions("order.schema.haus", { folders: ["../schemas"], npm: false })
+readSchemaFile("order.schema.haus", { packages: ["../vendor/money"], folders: ["../schemas"] })
+readSchemaFile("order.schema.haus", { folders: ["../schemas"], npm: false })
 ```
 
-A package's `package.haus`, `schema.haus` and `package.json` must be regular
-files, not links. Schema files and `package.json` are read up to 1 MiB
-(`file-too-large`), and one schema reads at most 256 schema files
+Relative imports stay inside the build's root: by default the directory of the
+schema file's real path, so `import ../shared/money` needs a `root` option that
+contains both files (`import-outside-root`). A relative import follows no
+symbolic link: a link anywhere on its path is `import-not-found` (the schema
+file and the root themselves may be reached through links). Messages show
+paths relative to the root:
+
+```ts
+readSchemaFile("schemas/app/order.schema.haus", { root: ".." })   // schemas/, relative to the directory of the file's real path
+```
+
+Every file read (the schema file, its imports, a package's `package.haus`,
+`schema.haus` and `package.json`, a project's `package.json`) must be a regular
+file: it is opened without following a link at its last name and without
+blocking, and checked on the open handle; a project's `package.json` that is a
+link declares nothing. Names are matched as their directory lists them, also
+on file systems that ignore case. Schema files and `package.json` are read up
+to 1 MiB (`file-too-large`), and one schema reads at most 256 schema files
 (`too-many-files`).
 
 | schema file | `h.` schema | TypeScript |
@@ -360,6 +378,12 @@ self-describing JSON (`jsonDepth(512)`, 2049, in schema-based JSON).
 Formatting, the canonical form and hashing don't recurse: they take any
 depth (a writer, any `maxDepth` it is given; the canonical form has no depth
 limit).
+
+The stack every path needs at 512 levels is `STACK_NEEDED_MB`, 1.5 MiB as a
+worker's `resourceLimits.stackSizeMb`; the main thread's stack is enough. A
+worker with a smaller stack works to fewer levels (with 512 KiB, to 128):
+deeper input fails with `nesting-too-deep`, at the place the parser got to or
+at the value (`$`), never with the engine's `RangeError`.
 
 ## Workers
 

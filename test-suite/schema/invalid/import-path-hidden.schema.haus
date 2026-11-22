@@ -1,0 +1,4 @@
+// rule: packages.relative.leading-dotdot
+// A name of a path doesn't start with "." (grammar.ebnf, path_name): ./.env is not a path.
+import ./.env (A)
+type B = { a: A }

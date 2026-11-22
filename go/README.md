@@ -110,7 +110,8 @@ Package `schema` reads schema files (`.schema.haus`, spec §14) with their impor
 ```go
 import "github.com/betalyra/haus-fmt/go/schema"
 
-s, err := schema.Load("order.schema.haus", schema.Options{Packages: schema.NodeModules{}})
+packages, err := schema.NewExplicit().Folder("schemas") // the packages in schemas/, each a directory
+s, err := schema.Load("order.schema.haus", schema.Options{Packages: packages})
 if err != nil {
 	log.Fatal(err) // order.schema.haus:3:12: unknown type Strin [unknown-type]
 }
@@ -132,7 +133,7 @@ decoded, err := order.Parse([]byte(`{ id: 0x10, total: 19.90 }`))
 text, err := order.Format(decoded, haus.FormatOptions{Layout: haus.Minimised}) // {id:16,total:19.90}
 ```
 
-Every rule of spec §14 and §13.3 is checked when a schema loads: names, arities, spreads, guarded and non-growing recursion, attributes, imports. `std/time` is built in (`schema.CheckTime` is its profile). Packages are found by a `Locator`: `schema.NodeModules{}` (the npm rules of spec §13.3), `schema.NewExplicit().Package(dir)` and `.Folder(dir)` (packages given explicitly), or both with `schema.Or{First: explicit, Second: schema.NodeModules{}}`. A package's files are opened without following links and read once, within the limits of spec §13.3 (64 KiB manifests, 1 MiB schema files, 256 files, 4096 entries per folder). `schema.Parse` reads a schema from text; it imports std/time and packages, but no files.
+Every rule of spec §14 and §13.3 is checked when a schema loads: names, arities, spreads, guarded and non-growing recursion, attributes, imports. `std/time` is built in (`schema.CheckTime` is its profile). Packages are found by a `Locator`: `schema.NewExplicit().Package(dir)` and `.Folder(dir)` (packages given explicitly, on disk), `.PackageFS(fsys, dir)` and `.FolderFS(fsys, dir)` (the same in an `fs.FS`, such as the schema package a Go module embeds with `//go:embed`), or two locators with `schema.Or`. This binding doesn't look in `node_modules`: only implementations of the npm ecosystem do (spec §13.3), and a Go build declares its dependencies in `go.mod`. Relative imports stay inside the build's root (`Options.Root`, by default the real directory of the file `Load` starts from, a relative one relative to that directory; `..` names above it are `import-outside-root`, before anything is looked at), and messages show paths relative to it. The entry file and the root are resolved to real paths once; a relative import follows no symbolic link: each name of its path must be listed by its directory with that spelling and must not be a link (`import-not-found`, without saying where it points), and a file in a package's directory, looked for up to the root, is `package-path` (a directory there that can't be listed is `import-not-found`). Every file is a regular file, opened without following a link at its last name and without blocking (`O_NOFOLLOW | O_NONBLOCK` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows) and checked on the opened file; names are spelled as their directories list them; each file is read once, within the limits of spec §13.3 (64 KiB manifests, 1 MiB schema files, 256 files, 4096 entries per folder). A file tree follows no links. `schema.Parse` reads a schema from text; it imports std/time and packages, but no files.
 
 Codecs (`schema.Codec`, spec §13.4) choose host types for named types by their id; with the `Value` API they run after the schema and may reject more values (`DecodeOptions{Codecs: …}`), and `schema.DecodeAs` gives the host value. `schema.InstantTime` is an opt-in codec from `Instant` to `time.Time`, which keeps the instant and its offset but not the spelling. `schema.Secret[T]` holds a value that prints, formats, logs and marshals as `<redacted>`, until `Reveal`.
 
@@ -172,7 +173,7 @@ for _, issue := range s.CheckText("Root", text) {
 
 ## The official extensions
 
-`github.com/betalyra/haus-fmt/go/ext/money` and `…/ext/geo` hold the codecs of the profiles `@haus-fmt/money/iso` (`money.Iso`, `money.IsoCurrency`) and `@haus-fmt/geo/wgs84` (`geo.Wgs84`, `geo.Wgs84BBox`), tested against the profiles' vectors. The schemas themselves are found like any package's: in `node_modules`, or with `schema.NewExplicit()`.
+`github.com/betalyra/haus-fmt/go/ext/money` and `…/ext/geo` hold the codecs of the profiles `@haus-fmt/money/iso` (`money.Iso`, `money.IsoCurrency`) and `@haus-fmt/geo/wgs84` (`geo.Wgs84`, `geo.Wgs84BBox`), tested against the profiles' vectors. The schemas themselves are given like any package's, with `schema.NewExplicit()`.
 
 ```go
 codecs, _ := schema.NewCodecs(money.Iso, geo.Wgs84)

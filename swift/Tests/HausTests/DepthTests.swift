@@ -80,21 +80,23 @@ struct DepthTests {
         return v
     }
 
-    /// Releases a deep value a level at a time: releasing it at once
-    /// recurses once per level (see ``HausValue``).
-    static func dismantle(_ value: inout HausValue) {
-        var v = value
-        value = .array([])
-        while true {
-            let next: HausValue? =
-                switch v {
-                case .array(let items): items.first
-                case .variant(_, let args): args.first
-                case .record(let r): r["next"]
-                default: nil
-                }
-            guard let next else { return }
-            v = next
+    /// Values built in code of any depth are freed without overflowing the
+    /// stack (spec §7, `limits.depth.host-hooks`): ``HausValue/release()``
+    /// on a 512 KiB thread, with parts shared with a value kept.
+    @Test func releaseAnyDepth() throws {
+        try onStack(kibibytes: 512) { () throws in
+            var v = Self.veryDeep(100_000, 1)
+            v.release()
+            #expect(v == [])
+            var record: HausValue = "leaf"
+            for _ in 0..<100_000 { record = ["next": record] }
+            var shared = HausValue.array([record])
+            var outer = HausValue.tag("Pair", shared, record)
+            outer.release()
+            #expect(shared[0]?["next"]?["next"] != nil)
+            // The last holder releases it: `record` first, then `shared`, which still holds it.
+            record.release()
+            shared.release()
         }
     }
 
@@ -125,9 +127,9 @@ struct DepthTests {
                 #expect(ha != hc)
                 #expect(try hashAll([a, c]).count == 64)
             #endif
-            Self.dismantle(&a)
-            Self.dismantle(&b)
-            Self.dismantle(&c)
+            a.release()
+            b.release()
+            c.release()
         }
     }
 

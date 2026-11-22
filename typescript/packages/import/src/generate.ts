@@ -15,9 +15,9 @@
  * with a schema are decoded with it.
  */
 import { parseSchemaFile, schemaDeclarations } from "@haus-fmt/haus"
-import { existsSync, readFileSync, realpathSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { resolve } from "node:path"
-import { isSchemaFile, nodeResolver, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
+import { isSchemaFile, nodeResolver, readSchemaFile, schemaOptions, type NodeResolverOptions } from "@haus-fmt/haus/node"
 import { parsePlain, plainDeclarations } from "@haus-fmt/haus/plain"
 import { dataModule, dataModuleSource, schemaFor, schemaModuleSource, specifier, type Diagnostic } from "./schemas.js"
 
@@ -40,6 +40,13 @@ export interface ImportOptions {
   readonly folders?: readonly string[]
   /** Look for packages in node_modules too (default true). With `false`, only `packages` and `folders`. */
   readonly npm?: boolean
+  /**
+   * The root directory of schema builds, relative to the project root (spec
+   * §13.3, "The root"): relative imports of a schema file can't reach a file
+   * outside it. Default: the directory of each schema file, so `../shared`
+   * needs a root that contains both, such as `"src"` or `"."`.
+   */
+  readonly root?: string
   /**
    * Plain target, Node loader and Vite plugin: types to build generated code
    * for, by schema file (relative to the project root), e.g.
@@ -67,13 +74,16 @@ const paths = (value: unknown, what: string): readonly string[] => {
  * against `root` (the project root: Vite's root, the tsconfig.json's
  * directory, or the working directory).
  */
-export const packagesOf = (options: { readonly packages?: unknown; readonly folders?: unknown; readonly npm?: unknown } | undefined, root: string): NodeResolverOptions => {
+export const packagesOf = (options: { readonly packages?: unknown; readonly folders?: unknown; readonly npm?: unknown; readonly root?: unknown } | undefined, root: string): NodeResolverOptions => {
   const npm = options?.npm ?? true
   if (typeof npm !== "boolean") throw new Error(`@haus-fmt/import: npm must be true or false, found ${JSON.stringify(npm)}`)
+  const buildRoot = options?.root
+  if (buildRoot !== undefined && typeof buildRoot !== "string") throw new Error(`@haus-fmt/import: root must be a path, found ${JSON.stringify(buildRoot)}`)
   return {
     packages: paths(options?.packages, "packages").map((p) => resolve(root, p)),
     folders: paths(options?.folders, "folders").map((f) => resolve(root, f)),
     npm,
+    ...(buildRoot === undefined ? {} : { root: resolve(root, buildRoot) }),
   }
 }
 
@@ -98,7 +108,8 @@ const optimizedTypes = (optimize: OptimizeOption, packages: NodeResolverOptions)
   for (const { key, path, types } of optimize) {
     if (!existsSync(path)) throw new Error(`@haus-fmt/import: optimize: the schema file ${key} doesn't exist (${path})`)
     if (!isSchemaFile(path)) throw new Error(`@haus-fmt/import: optimize: ${key} is not a schema file (.schema.haus)`)
-    const definitions = parseSchemaFile(readFileSync(path, "utf8"), schemaOptions(path, packages)).definitions
+    const { text, options } = readSchemaFile(path, packages)
+    const definitions = parseSchemaFile(text, options).definitions
     for (const t of types) {
       const d = definitions.find((d) => d.name === t)
       if (d === undefined) throw new Error(`@haus-fmt/import: optimize: ${key} has no type ${t}`)

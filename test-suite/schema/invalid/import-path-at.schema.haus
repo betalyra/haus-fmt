@@ -1,0 +1,3 @@
+// A file path has no "@" (grammar.ebnf, path): ./a@b is ./a followed by "@", a syntax error.
+import ./a@b (A)
+type B = { a: A }

@@ -465,6 +465,28 @@ const Reader = struct {
         return validSegment(name[1..slash]) and validSegment(name[slash + 1 ..]);
     }
 
+    /// A file path of an import (grammar.ebnf, `path`): `./` or one or
+    /// more `../`, then names `[A-Za-z0-9_-][A-Za-z0-9_.-]*` separated by
+    /// `/`. So no `.` or `..` name after the start, no empty name and no
+    /// `/` at the end.
+    pub fn validPath(path: []const u8) bool {
+        var rest = path;
+        if (std.mem.startsWith(u8, rest, "./")) {
+            rest = rest[2..];
+        } else {
+            while (std.mem.startsWith(u8, rest, "../")) rest = rest[3..];
+            if (rest.len == path.len) return false;
+        }
+        var names = std.mem.splitScalar(u8, rest, '/');
+        while (names.next()) |name| {
+            if (name.len == 0) return false;
+            const c = name[0];
+            if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) return false;
+            for (name) |x| if (!(std.ascii.isAlphanumeric(x) or x == '_' or x == '-' or x == '.')) return false;
+        }
+        return true;
+    }
+
     pub fn validMajor(s: []const u8) bool {
         if (s.len == 0) return false;
         if (s[0] == '0') return s.len == 1;
@@ -507,6 +529,9 @@ const Reader = struct {
                 r.p.pos = i;
                 if (!std.mem.startsWith(u8, path, "./") and !std.mem.startsWith(u8, path, "../")) {
                     return r.fail(.@"unknown-module", module_at, "unknown module {s}: import std/…, a package @org/name or a file ./name", .{errors.quoteText(&buf, path)});
+                }
+                if (!validPath(path)) {
+                    return r.fail(.@"schema-syntax", module_at, "{s} is not a path: '..' only at its start, then names that start with a letter, digit, _ or -, and no '/' at its end", .{errors.quoteText(&buf, path)});
                 }
                 break :blk .{ .file = path };
             }

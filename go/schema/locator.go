@@ -4,7 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"io/fs"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,16 +13,19 @@ import (
 	haus "github.com/betalyra/haus-fmt/go"
 )
 
-// Locator finds the packages imports name, for one package manager (spec
-// §13.3): the directory of the package an import names, and whether the
-// importing file declares it. Everything else is the same for every package
-// manager and is checked when a schema is loaded: the manifest, its name and
-// version, the @major of the import, containment, one package per name,
-// cycles and ids.
+// Locator finds the packages imports name (spec §13.3): the directory of the
+// package an import names. Everything else is checked when a schema is
+// loaded: the manifest, its name and version, the @major of the import,
+// containment, one package per name, cycles and ids.
 //
-// The locators are [NodeModules], [*Explicit] (packages given by the user)
-// and [Or], which combines two. A nil Locator finds no packages: a schema
-// that imports one fails with the code import-unavailable.
+// The locators are [*Explicit] (packages given by the application) and
+// [Or], which combines two. This binding doesn't look in node_modules: only
+// implementations of the npm ecosystem (JavaScript runtimes) do, and a Go
+// build declares its dependencies in go.mod (spec §13.3, "Installed
+// packages"). A Go module publishes a schema package by embedding it
+// (//go:embed) and giving it with [Explicit.PackageFS]. A nil Locator finds
+// no packages: a schema that imports one fails with the code
+// import-unavailable.
 type Locator interface {
 	// locate finds the package name (@org/name, without @major) for the
 	// file at from (its real path; "" for a schema given as text). A
@@ -32,11 +36,11 @@ type Locator interface {
 
 // Location is a package directory a [Locator] found.
 type Location struct {
-	// Dir has package.haus and schema.haus.
+	// Dir has package.haus and schema.haus: a real path, or the key of a
+	// directory in a file tree (fs1:money).
 	Dir string
-	// Version is the version the package manager gives the package (the
-	// version of npm's package.json), if it gives one: the manifest's must
-	// be the same (package-version).
+	// Version is the version a package.json beside the manifest gives, if
+	// it gives one: the manifest's must be the same (package-version).
 	Version    string
 	hasVersion bool
 	// scanned is set for a package found by scanning a folder: it doesn't
@@ -44,8 +48,12 @@ type Location struct {
 	scanned bool
 	// sameAs is a package with the same name found by scanning a folder:
 	// its files must be the same as this one's (duplicate-package).
-	sameAs string
+	sameAs *Location
+	tree   *tree
+	inner  string
 }
+
+func (l Location) place() place { return place{dir: l.Dir, tree: l.tree, inner: l.inner} }
 
 // noImports is the locator of a schema without one.
 type noImports struct{}
@@ -75,7 +83,7 @@ func (o Or) locate(name, from string, files *fileCache) (Location, error) {
 		found, err2 := locatorOf(o.Second).locate(name, from, files)
 		switch {
 		case err2 == nil:
-			found.sameAs = first.Dir
+			found.sameAs = &first
 			return found, nil
 		case codeOf(err2) == haus.CodeImportNotFound || codeOf(err2) == haus.CodeUndeclaredPackage:
 			return first, nil
@@ -93,15 +101,18 @@ func locatorOf(l Locator) Locator {
 }
 
 // Explicit is packages given explicitly (spec §13.3): each by its directory
-// ([Explicit.Package]), or the packages in a folder ([Explicit.Folder]).
+// ([Explicit.Package]) or a directory of a file tree ([Explicit.PackageFS]),
+// or the packages in a folder ([Explicit.Folder], [Explicit.FolderFS]).
 // Their manifests name them, whatever the directories are called. They count
 // as declared wherever they are imported. A package given by its directory
 // comes before other locators for its name ([Or]); one found in a folder
 // doesn't: if the next locator finds a package with its name and other
-// files, the schema has two packages with one name.
+// files, the schema has two packages with one name. A package.json beside
+// a manifest is read leniently: only for a version that differs
+// (package-version), and ignored if it can't be read.
 //
 //	packages, err := schema.NewExplicit().Package("../extensions/money")
-//	s, err := schema.Load("app.schema.haus", schema.Options{Packages: schema.Or{First: packages, Second: schema.NodeModules{}}})
+//	s, err := schema.Load("app.schema.haus", schema.Options{Packages: packages})
 type Explicit struct {
 	packages []given
 	// unreadable is the subdirectories of folders whose manifest couldn't be
@@ -111,7 +122,7 @@ type Explicit struct {
 
 type given struct {
 	manifest Manifest
-	dir      string // its real path
+	at       place
 	scanned  bool
 }
 
@@ -126,17 +137,44 @@ func NewExplicit() *Explicit { return &Explicit{} }
 // Package adds the package in dir. Its manifest is read and checked now: a
 // directory without one is import-not-found. Two packages with one name
 // are duplicate-package, unless they are copies (the same package.haus and
-// schema.haus).
+// schema.haus). Messages show its files relative to dir's parent
+// (money/package.haus).
 func (e *Explicit) Package(dir string) (*Explicit, error) {
 	resolved, err := realPath(dir)
 	if err != nil {
-		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(dir)}
+		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: errorText(err), File: shown(filepath.Base(dir))}
 	}
-	m, err := readManifest(resolved)
+	files := newFileCache(filepath.Dir(resolved))
+	m, _, err := files.manifest(onDisk(resolved))
 	if err != nil {
 		return nil, err
 	}
-	return e.add(m, resolved, false)
+	return e.add(m, onDisk(resolved), false)
+}
+
+// PackageFS adds the package in the directory dir of the file tree fsys
+// (an [fs.FS] path, "." for its root), such as the schema package a Go
+// module embeds:
+//
+//	//go:embed money
+//	var money embed.FS
+//
+//	packages, err := schema.NewExplicit().PackageFS(money, "money")
+//
+// The tree is read under the rules of a directory on disk (spec §13.3),
+// and follows no links. Messages and [Package.Dir] name its files by a key
+// of the tree (fs1:money/schema.haus).
+func (e *Explicit) PackageFS(fsys fs.FS, dir string) (*Explicit, error) {
+	t := newTree(fsys)
+	if !t.isDir(dir) {
+		return nil, notFound("%s is not a directory of the file tree (reached without links)", quote(dir))
+	}
+	at := t.at(dir)
+	m, _, err := newFileCache("").manifest(at)
+	if err != nil {
+		return nil, err
+	}
+	return e.add(m, at, false)
 }
 
 // Folder adds the packages in folder: its subdirectories (or links to
@@ -149,43 +187,96 @@ func (e *Explicit) Package(dir string) (*Explicit, error) {
 func (e *Explicit) Folder(folder string) (*Explicit, error) {
 	resolvedFolder, err := realPath(folder)
 	if err != nil {
-		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(folder)}
+		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: errorText(err), File: shown(filepath.Base(folder))}
 	}
-	f, err := os.Open(resolvedFolder)
+	base := filepath.Base(resolvedFolder)
+	f, err := openDir(resolvedFolder)
 	if err != nil {
-		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(folder)}
+		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: errorText(err), File: shown(base)}
 	}
 	names, err := f.Readdirnames(MaxFolderEntries + 1)
 	_ = f.Close()
 	if err != nil && len(names) == 0 && !isEOF(err) {
-		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(folder)}
+		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: errorText(err), File: shown(base)}
 	}
 	if len(names) > MaxFolderEntries {
-		return nil, &haus.Error{Code: haus.CodeTooManyFiles, File: shown(folder),
+		return nil, &haus.Error{Code: haus.CodeTooManyFiles, File: shown(base),
 			Message: fmt.Sprintf("the folder of packages has more than %d entries", MaxFolderEntries)}
 	}
 	slices.Sort(names)
-	files := newFileCache()
+	files := newFileCache(filepath.Dir(resolvedFolder))
 	for _, n := range names {
 		dir := filepath.Join(resolvedFolder, n)
-		if !exists(filepath.Join(dir, ManifestFile)) {
+		if !files.hasManifest(dir) {
 			continue
 		}
 		resolved, err := realPath(dir)
 		var m Manifest
 		if err == nil {
-			m, err = readManifest(resolved)
+			m, _, err = files.manifest(onDisk(resolved))
 		} else {
-			err = &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(dir)}
+			err = &haus.Error{Code: haus.CodeImportNotFound, Message: errorText(err), File: shown(filepath.Join(base, n))}
 		}
 		if err == nil {
-			err = folderVersion(m, resolved, files)
+			err = folderVersion(m, onDisk(resolved), files)
 		}
 		if err != nil {
-			e.unreadable = append(e.unreadable, unreadable{filepath.Join(filepath.Base(resolvedFolder), n), err})
+			e.unreadable = append(e.unreadable, unreadable{filepath.Join(base, n), err})
 			continue
 		}
-		if e, err = e.add(m, resolved, true); err != nil {
+		if e, err = e.add(m, onDisk(resolved), true); err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
+// FolderFS adds the packages in the directory folder of the file tree fsys
+// ("." for its root), as [Explicit.Folder] does on disk: its subdirectories
+// (not links) that have a package.haus.
+func (e *Explicit) FolderFS(fsys fs.FS, folder string) (*Explicit, error) {
+	t := newTree(fsys)
+	if !t.isDir(folder) {
+		return nil, notFound("%s is not a directory of the file tree (reached without links)", quote(folder))
+	}
+	base := path.Base(folder)
+	f, err := fsys.Open(folder)
+	if err != nil {
+		return nil, notFound("%s: %s", quote(folder), errorText(err))
+	}
+	var entries []fs.DirEntry
+	if rd, ok := f.(fs.ReadDirFile); ok {
+		entries, err = rd.ReadDir(MaxFolderEntries + 1)
+	} else {
+		entries, err = fs.ReadDir(fsys, folder)
+	}
+	_ = f.Close()
+	if err != nil && len(entries) == 0 && !isEOF(err) {
+		return nil, notFound("%s: %s", quote(folder), errorText(err))
+	}
+	if len(entries) > MaxFolderEntries {
+		return nil, newError(haus.CodeTooManyFiles, "the folder of packages %s has more than %d entries", quote(folder), MaxFolderEntries)
+	}
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
+	files := newFileCache("")
+	for _, x := range entries {
+		inner := path.Join(folder, x.Name())
+		if !x.Type().IsDir() {
+			continue
+		}
+		if _, ok, err := t.entry(path.Join(inner, ManifestFile)); err != nil || !ok {
+			continue
+		}
+		at := t.at(inner)
+		m, _, err := files.manifest(at)
+		if err == nil {
+			err = folderVersion(m, at, files)
+		}
+		if err != nil {
+			e.unreadable = append(e.unreadable, unreadable{path.Join(base, x.Name()), err})
+			continue
+		}
+		if e, err = e.add(m, at, true); err != nil {
 			return nil, err
 		}
 	}
@@ -194,26 +285,36 @@ func (e *Explicit) Folder(folder string) (*Explicit, error) {
 
 func isEOF(err error) bool { return errors.Is(err, io.EOF) }
 
-func (e *Explicit) add(m Manifest, dir string, scanned bool) (*Explicit, error) {
+// lastNames is a package's directory for a message given before any
+// build: its last two names (vendor/money), or a tree's key.
+func lastNames(dir string) string {
+	if isTreeKey(dir) {
+		return shown(dir)
+	}
+	return shown(filepath.Join(filepath.Base(filepath.Dir(dir)), filepath.Base(dir)))
+}
+
+func (e *Explicit) add(m Manifest, at place, scanned bool) (*Explicit, error) {
 	for i, g := range e.packages {
 		if g.manifest.Name != m.Name {
 			continue
 		}
-		if g.dir == dir || sameFiles(g.dir, dir) {
+		if g.at.dir == at.dir || sameFiles(g.at, at) {
 			e.packages[i].scanned = g.scanned && scanned
 			return e, nil
 		}
-		return nil, duplicate(g.manifest, g.dir, m, dir)
+		return nil, duplicate(g.manifest, lastNames(g.at.dir), m, lastNames(at.dir))
 	}
-	e.packages = append(e.packages, given{manifest: m, dir: dir, scanned: scanned})
+	e.packages = append(e.packages, given{manifest: m, at: at, scanned: scanned})
 	return e, nil
 }
 
 func (e *Explicit) locate(name, _ string, files *fileCache) (Location, error) {
 	for _, g := range e.packages {
 		if g.manifest.Name == name {
-			version, has := files.lenientVersion(g.dir)
-			return Location{Dir: g.dir, Version: version, hasVersion: has, scanned: g.scanned}, nil
+			version, has := files.lenientVersion(g.at)
+			return Location{Dir: g.at.dir, Version: version, hasVersion: has, scanned: g.scanned,
+				tree: g.at.tree, inner: g.at.inner}, nil
 		}
 	}
 	why := fmt.Sprintf("package %s is not among the packages given", name)
@@ -227,179 +328,13 @@ func (e *Explicit) locate(name, _ string, files *fileCache) (Location, error) {
 	return Location{}, notFound("%s", why)
 }
 
-// NodeModules finds packages in node_modules, by the npm rules of spec §13.3.
-//
-// A file imports only the packages it declares, checked before anything is
-// looked for (undeclared-package): for a package's schema.haus, those in
-// dependencies, peerDependencies and optionalDependencies of the package's
-// own package.json; for other files, those and devDependencies of the
-// nearest package.json above the file, skipping one with neither a name nor
-// a dependency field. Without one, a file declares nothing.
-//
-// @org/name is then D/node_modules/@org/name for the nearest directory D
-// from the importing file's real path up, as Node finds packages (so pnpm's
-// links and workspace links find each package's own dependencies),
-// skipping a D named node_modules, a scope directory inside one
-// (node_modules/@acme), a drive root (Windows) and a world-writable D such
-// as /tmp (Unix). The first one that exists is the package: without a
-// package.haus the import is not found. Nothing else is read: not
-// NODE_PATH, npm's global folder or ~/.node_modules.
-type NodeModules struct{}
-
-func (NodeModules) locate(name, from string, files *fileCache) (Location, error) {
-	start := ""
-	if from != "" {
-		start = filepath.Dir(from)
-	} else {
-		wd, err := os.Getwd()
-		if err != nil {
-			return Location{}, notFound("%v", err)
-		}
-		start = wd
-	}
-	if err := declared(name, from, start, files); err != nil {
-		return Location{}, err
-	}
-	installed := ""
-	for d := start; ; {
-		if searched(d) {
-			candidate := filepath.Join(append([]string{d, "node_modules"}, strings.Split(name, "/")...)...)
-			if exists(candidate) {
-				installed = candidate
-				break
-			}
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
-	}
-	if installed == "" {
-		return Location{}, notFound("package %s is not installed (no node_modules/%s in %s or above)", name, name, shown(start))
-	}
-	if !exists(filepath.Join(installed, ManifestFile)) {
-		return Location{}, notFound("%s is not a schema package: it has no %s (the nearest node_modules/%s is the package)",
-			shown(installed), ManifestFile, name)
-	}
-	dir, err := realPath(installed)
-	if err != nil {
-		return Location{}, notFound("%s: %v", shown(installed), err)
-	}
-	version, has, err := npmVersion(dir, files)
-	if err != nil {
-		return Location{}, err
-	}
-	return Location{Dir: dir, Version: version, hasVersion: has}, nil
-}
-
-// searched reports whether node_modules is looked for in dir (spec §13.3).
-func searched(dir string) bool {
-	base := filepath.Base(dir)
-	scope := strings.HasPrefix(base, "@") && filepath.Base(filepath.Dir(dir)) == "node_modules"
-	return base != "node_modules" && !scope && !driveRoot(dir) && !worldWritable(dir)
-}
-
-// dependencyFields are the dependency fields of a package.json: all four
-// count for a project's files, the first three for a package's schema.haus.
-var dependencyFields = []string{"dependencies", "peerDependencies", "optionalDependencies", "devDependencies"}
-
-// declared checks that the file at from (in dir) declares name
-// (undeclared-package if not).
-func declared(name, from, dir string, files *fileCache) error {
-	file := "the schema"
-	if from != "" {
-		file = shown(from)
-	}
-	var (
-		path   string
-		doc    any
-		fields []string
-	)
-	if from != "" && filepath.Base(from) == SchemaFile && exists(filepath.Join(dir, ManifestFile)) {
-		path = filepath.Join(dir, "package.json")
-		v, present, err := files.packageJSON(path, kindPackageJSON)
-		if err != nil {
-			return err
-		}
-		if !present {
-			return newError(haus.CodeUndeclaredPackage,
-				"the package in %s has no package.json, so it declares no packages: %s isn't declared", shown(dir), name)
-		}
-		doc, fields = v, dependencyFields[:3]
-	} else {
-		p, v, ok, err := project(dir, files)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return newError(haus.CodeUndeclaredPackage, "no package.json above %s declares %s: list it in the dependencies "+
-				"of a package.json, or give the package explicitly", file, name)
-		}
-		path, doc, fields = p, v, dependencyFields
-	}
-	for _, f := range fields {
-		if deps, ok := member(doc, f).(map[string]any); ok {
-			if _, ok := deps[name]; ok {
-				return nil
-			}
-		}
-	}
-	return newError(haus.CodeUndeclaredPackage, "%s doesn't declare %s: %s doesn't list it in %s",
-		file, name, shown(path), strings.Join(fields, ", "))
-}
-
-// project finds the nearest package.json above dir that has a name or a
-// dependency field: the project's. One that is valid JSON but not an
-// object is skipped. One that isn't valid JSON or isn't a regular file (a
-// directory, a broken link) is the project's too, and declares nothing:
-// the search stops there.
-func project(dir string, files *fileCache) (path string, doc any, ok bool, err error) {
-	for d := dir; ; {
-		path = filepath.Join(d, "package.json")
-		v, present, err := files.packageJSON(path, kindProjectJSON)
-		if err != nil {
-			return "", nil, false, err
-		}
-		if present {
-			if v == notAPackageJSON || hasMember(v, "name") {
-				return path, v, true, nil
-			}
-			for _, f := range dependencyFields {
-				if hasMember(v, f) {
-					return path, v, true, nil
-				}
-			}
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return "", nil, false, nil
-		}
-		d = parent
-	}
-}
-
-// npmVersion returns the version of the package.json in the package
-// directory dir, if there is one.
-func npmVersion(dir string, files *fileCache) (version string, ok bool, err error) {
-	v, _, err := files.packageJSON(filepath.Join(dir, "package.json"), kindPackageJSON)
-	if err != nil {
-		return "", false, err
-	}
-	s, ok := member(v, "version").(string)
-	return s, ok, nil
-}
-
 // lenientVersion returns the version of the package.json beside the manifest
-// of a package given explicitly (dir is its real path), if it gives one.
-// Outside npm mode such a package.json only gives a version: one that can't
-// be read (a link, not a regular file, too large, not JSON) is ignored, and
-// is no error (spec §13.3, "Package versions").
-func (c *fileCache) lenientVersion(dir string) (version string, ok bool) {
-	v, _, err := c.packageJSON(filepath.Join(dir, "package.json"), kindPackageJSON)
-	if err != nil {
-		return "", false
-	}
+// of a package given explicitly, if it gives one. Such a package.json only
+// gives a version: one that can't be read (a link, not a regular file, too
+// large, not JSON) is ignored, and is no error (spec §13.3, "Package
+// versions").
+func (c *fileCache) lenientVersion(at place) (version string, ok bool) {
+	v, _ := c.packageJSON(at)
 	version, ok = member(v, "version").(string)
 	return version, ok
 }
@@ -407,8 +342,8 @@ func (c *fileCache) lenientVersion(dir string) (version string, ok bool) {
 // folderVersion checks a package found in a folder against the version of
 // the package.json beside its manifest, read leniently: a subdirectory with
 // another version is skipped like one with a broken manifest (spec §13.3).
-func folderVersion(m Manifest, dir string, files *fileCache) error {
-	if version, ok := files.lenientVersion(dir); ok && version != m.Version {
+func folderVersion(m Manifest, at place, files *fileCache) error {
+	if version, ok := files.lenientVersion(at); ok && version != m.Version {
 		return newError(haus.CodePackageVersion, "the package.haus of %s says version %s, the package.json next to it %s",
 			m.Name, quote(m.Version), quote(version))
 	}
@@ -422,15 +357,6 @@ func member(doc any, key string) any {
 		return obj[key]
 	}
 	return nil
-}
-
-// hasMember reports whether a JSON object has the member key.
-func hasMember(doc any, key string) bool {
-	obj, ok := doc.(map[string]any)
-	if ok {
-		_, ok = obj[key]
-	}
-	return ok
 }
 
 func codeOf(err error) haus.ErrorCode {

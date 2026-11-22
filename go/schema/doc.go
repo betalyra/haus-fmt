@@ -3,12 +3,14 @@
 // (spec §15).
 //
 // [Load] reads a schema file, its relative imports next to it and the
-// packages it imports found by a [Locator]: [NodeModules], packages given
-// explicitly ([Explicit]), or both ([Or]). [Parse] reads a schema from text.
-// Every rule of spec §14 and §13.3 is checked when a schema is loaded, so
-// a [Schema] that loads decodes in time linear in the input.
+// packages it imports found by a [Locator]: packages given explicitly
+// ([Explicit]), as directories or as file trees ([fs.FS]), or two locators
+// ([Or]). [Parse] reads a schema from text. Every rule of spec §14 and
+// §13.3 is checked when a schema is loaded, so a [Schema] that loads
+// decodes in time linear in the input.
 //
-//	s, err := schema.Load("order.schema.haus", schema.Options{Packages: schema.NodeModules{}})
+//	packages, err := schema.NewExplicit().Folder("schemas")
+//	s, err := schema.Load("order.schema.haus", schema.Options{Packages: packages})
 //	order, err := s.Type("Order")
 //	v, _ := haus.Parse(src)
 //	decoded, err := order.Decode(v)

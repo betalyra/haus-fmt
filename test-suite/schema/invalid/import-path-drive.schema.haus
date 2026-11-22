@@ -1,0 +1,3 @@
+// A file path has no ":" (grammar.ebnf, path): no drive letters or alternate data streams.
+import ./C:/x (A)
+type B = { a: A }

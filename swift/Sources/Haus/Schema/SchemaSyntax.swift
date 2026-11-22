@@ -335,6 +335,8 @@ struct SchemaParser {
     }
 
     static let moduleBytes = Set("_.-/@~".utf8)
+    /// The bytes of a file path (grammar `path`).
+    static let pathBytes = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./-".utf8)
 
     mutating func importDecl() throws(SchemaFailure) -> ImportDecl {
         let at = pos
@@ -345,19 +347,25 @@ struct SchemaParser {
             pos += 4
             guard let c = byte(pos), isLower(c) || c == ASCII.underscore else { throw expected(noModule) }
             pos = wordEnd(pos)
-        } else if let c = byte(pos), c == UInt8(ascii: "@") || c == ASCII.dot {
-            // A package's version may hold `~` (`@a/b@1~x` is `import-version`); a
-            // file path can't (grammar `path`): `./a~b` ends before it.
-            let package = c == UInt8(ascii: "@")
+        } else if byte(pos) == UInt8(ascii: "@") {
+            // A package's version may hold `~` (`@a/b@1~x` is `import-version`).
             pos += 1
-            while let c = byte(pos), classOf(c).contains(.ident) || Self.moduleBytes.contains(c),
-                package || c != UInt8(ascii: "~")
-            {
-                pos += 1
-            }
+            while let c = byte(pos), classOf(c).contains(.ident) || Self.moduleBytes.contains(c) { pos += 1 }
             if pos == start + 1 {
                 pos = start
                 throw expected(noModule)
+            }
+        } else if byte(pos) == ASCII.dot {
+            // A file path has only A-Z, a-z, 0-9, _, ., / and - (grammar `path`):
+            // `./a~b` and `./a@1` end before the `~` and the `@`.
+            pos += 1
+            while let c = byte(pos), Self.pathBytes.contains(c) { pos += 1 }
+            let path = text(start, pos)
+            if path.hasPrefix("./") || path.hasPrefix("../"), !isFilePath(path) {
+                throw SchemaFailure(
+                    start, .schemaSyntax,
+                    "\(quoteForMessage(path)) is not a file path: `..` only at its start, then names that start with a letter, digit, _ or - (./common, ../shared/money)"
+                )
             }
         } else {
             throw expected(noModule)

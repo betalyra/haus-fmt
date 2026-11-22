@@ -79,17 +79,126 @@ final class JsonReader {
     }
   }
 
+  /** An object or array being read: its members so far. */
+  private static final class Open {
+    final boolean object;
+    final List<String> keys;
+    final List<Value> values = new ArrayList<>();
+    Keys index;
+
+    Open(boolean object) {
+      this.object = object;
+      this.keys = object ? new ArrayList<>() : null;
+    }
+
+    Value close() {
+      return object
+          ? new Value.Record(keys.toArray(new String[0]), values.toArray(new Value[0]), index)
+          : new Value.Array(values.toArray(new Value[0]));
+    }
+  }
+
+  /**
+   * Reads one JSON value. Objects and arrays are kept on a stack on the heap, not the call stack:
+   * self-describing JSON nests up to 4·d+2 levels (spec §16.2), which a thread with a small stack
+   * couldn't recurse through (§7).
+   */
   private Value value() {
+    java.util.ArrayDeque<Open> open = new java.util.ArrayDeque<>();
+    while (true) {
+      Value done = start(open);
+      // A value is read: it is the next member of the container that is open, or the result.
+      while (done != null) {
+        Open top = open.peek();
+        if (top == null) {
+          return done;
+        }
+        top.values.add(done);
+        done = null;
+        ws();
+        if (pos < end && s[pos] == ',') {
+          pos++;
+          ws();
+          if (top.object) {
+            member(top);
+          }
+          break;
+        }
+        if (pos < end && s[pos] == (top.object ? '}' : ']')) {
+          pos++;
+          depth--;
+          open.pop();
+          done = top.close();
+          continue;
+        }
+        throw top.object ? syntax("',' or '}'", "expected ',' or '}'") : syntax("',' or ']'", "expected ',' or ']'");
+      }
+    }
+  }
+
+  /**
+   * Starts a value at {@code pos}: a scalar, or an empty object or array, is read and returned; a
+   * container with members is pushed on {@code open}, and null returned.
+   */
+  private Value start(java.util.ArrayDeque<Open> open) {
     if (pos >= end) {
       throw syntax("a JSON value", "unexpected end of the JSON text, expected a value");
     }
     int c = s[pos];
     if (c == '{') {
-      return object();
+      enter();
+      if (pos < end && s[pos] == '}') {
+        pos++;
+        depth--;
+        return new Value.Record(new String[0], new Value[0], null);
+      }
+      Open o = new Open(true);
+      member(o);
+      open.push(o);
+      return null;
     }
     if (c == '[') {
-      return array();
+      enter();
+      if (pos < end && s[pos] == ']') {
+        pos++;
+        depth--;
+        return new Value.Array(new Value[0]);
+      }
+      open.push(new Open(false));
+      return null;
     }
+    return scalar();
+  }
+
+  /** Reads a member name of the object {@code o} and the {@code :} after it. */
+  private void member(Open o) {
+    if (pos >= end || s[pos] != '"') {
+      throw syntax("a member name", "expected a member name (a string)");
+    }
+    int at = pos;
+    String key = string(ErrorCode.KEY_TOO_LONG);
+    List<String> keys = o.keys;
+    if (o.index == null && keys.size() + 1 >= Keys.FEW) {
+      o.index = new Keys(Keys.FEW);
+      for (int i = 0; i < keys.size(); i++) {
+        o.index.add(keys.get(i), i);
+      }
+    }
+    if (o.index != null ? !o.index.add(key, keys.size()) : keys.contains(key)) {
+      throw new SyntaxError(at, ErrorCode.DUPLICATE_KEY, "duplicate member name " + Quoting.forMessage(key));
+    }
+    ws();
+    if (pos >= end || s[pos] != ':') {
+      throw syntax("':'", "expected ':' after the member name");
+    }
+    pos++;
+    ws();
+    keys.add(key);
+  }
+
+  /** A string, number, true, false or null at {@code pos}. */
+  private Value scalar() {
+    int c = s[pos];
     if (c == '"') {
       return new Value.Text(string(ErrorCode.STRING_TOO_LONG));
     }
@@ -121,78 +230,6 @@ final class JsonReader {
     ws();
   }
 
-  private Value object() {
-    enter();
-    List<String> keys = new ArrayList<>();
-    List<Value> values = new ArrayList<>();
-    Keys index = null;
-    if (pos < end && s[pos] == '}') {
-      pos++;
-      depth--;
-      return new Value.Record(new String[0], new Value[0], null);
-    }
-    while (true) {
-      if (pos >= end || s[pos] != '"') {
-        throw syntax("a member name", "expected a member name (a string)");
-      }
-      int at = pos;
-      String key = string(ErrorCode.KEY_TOO_LONG);
-      if (index == null && keys.size() + 1 >= Keys.FEW) {
-        index = new Keys(Keys.FEW);
-        for (int i = 0; i < keys.size(); i++) {
-          index.add(keys.get(i), i);
-        }
-      }
-      if (index != null ? !index.add(key, keys.size()) : keys.contains(key)) {
-        throw new SyntaxError(at, ErrorCode.DUPLICATE_KEY, "duplicate member name " + Quoting.forMessage(key));
-      }
-      ws();
-      if (pos >= end || s[pos] != ':') {
-        throw syntax("':'", "expected ':' after the member name");
-      }
-      pos++;
-      ws();
-      keys.add(key);
-      values.add(value());
-      ws();
-      if (pos < end && s[pos] == ',') {
-        pos++;
-        ws();
-        continue;
-      }
-      if (pos < end && s[pos] == '}') {
-        pos++;
-        depth--;
-        return new Value.Record(keys.toArray(new String[0]), values.toArray(new Value[0]), index);
-      }
-      throw syntax("',' or '}'", "expected ',' or '}'");
-    }
-  }
-
-  private Value array() {
-    enter();
-    List<Value> items = new ArrayList<>();
-    if (pos < end && s[pos] == ']') {
-      pos++;
-      depth--;
-      return new Value.Array(new Value[0]);
-    }
-    while (true) {
-      items.add(value());
-      ws();
-      if (pos < end && s[pos] == ',') {
-        pos++;
-        ws();
-        continue;
-      }
-      if (pos < end && s[pos] == ']') {
-        pos++;
-        depth--;
-        return new Value.Array(items.toArray(new Value[0]));
-      }
-      throw syntax("',' or ']'", "expected ',' or ']'");
-    }
-  }
 
   /** Reads a JSON number token and normalizes it (spec §2), within the number limits (§16, "Limits"). */
   private Value number() {

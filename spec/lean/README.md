@@ -569,7 +569,11 @@ it: the packages a run makes have distinct names, and on success they are
 the result (`one_package_per_name`, `resolveIn_ok`); a copy is one package
 with another only if its `package.haus`, `schema.haus` and imports are the
 same (`addClass_same`); and type ids `@org/name@N#Type` are injective
-(`typeId_injective`).
+(`typeId_injective`). A relative import follows no link: its names are
+walked down from the importer's real directory (`walkNames`), and its checks
+come in the order of §13.3 (`fileTarget`, `inPackage`, `resolveImport`). The
+tree has no permissions (`Tree.listable` holds of every directory), so the
+suite's cases with a `Mode` entry are not run.
 
 The resolver sees the tree only through `look`, which tells kinds, names,
 links and real paths but never a file's bytes, and `openFile`, which records

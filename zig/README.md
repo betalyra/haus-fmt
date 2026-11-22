@@ -23,14 +23,14 @@ value is the binding's own `Decoded`, which keeps every value (§13.4,
 | Strings (§4) | UTF-8, escapes, block strings, control and bidi characters |
 | Parser (§1–§8, §17) | `parseAll` (a file), `parse` (one document, `not-one-value`), `parseDocument` (with positions and comments); every error with its code, line and column |
 | Streams (§6, §7) | `StreamReader`: chunks of bytes in, values out once their comma arrives; the value limit and strict mode; the same results for every way of cutting the input |
-| Limits (§7) | `Limits`, the spec's defaults, all configurable (the node limit for values written, `max_nodes`, included; the hex digit limit follows the number limit); the depth this binding supports is 4096 (`unsupported-depth` above) |
+| Limits (§7) | `Limits`, the spec's defaults, all configurable (the node limit for values written, `max_nodes`, included; the hex digit limit follows the number limit); the depth this binding supports is 256, the default (`unsupported-depth` above): the parser, writers, formatter, decoder and JSON readers recurse once per level, and at 256 all of them run on a thread with a 512 KiB stack in the release modes (tested); a Debug build needs about 2 MiB there. `canonical`, `hash`, `equals` and `compare` take any depth |
 | Layouts (§11) | `format` (a document's text, spellings as written, comments in pretty), `stringify`, `stringifyAll` (values); pretty with `indent` and `width`, compact, minimised |
 | Canonical form and hashes (§12) | `canonical`, `hash`, `hashAll` (SHA-256 of `std.crypto`) |
 | std/time (§13.2) | `time.check(kind, text)`: the std/time profile (spec/std/time.md) |
 | Schema files (§14) | `schema.load`: the grammar, names, arities, parameters, spreads (aliases and generic instances included), `Stream`, attributes, guarded and growing recursion; warnings (`unknown-attribute`, `deprecated`, `no-json-form`) with their line and column |
 | Decoding (§15) | `decoding.decode` to a `Decoded` (a `Secret` prints as `<redacted>`), `decoding.encode` (checked against the type), `decoding.decodeText` and `TypedStreamReader` (a `Stream a` read as it arrives, `$[i]` places), `decoding.check` (hints and the first error, as a checker reports them); floats in the one spelling of §15 |
 | JSON (§16) | `json.importJson` (§16.1), `json.toHausJson` / `fromHausJson` / `fromHausJsonLines` (§16.2), `json.toJson` / `fromJson` (§16.3); I-JSON, the limits on number tokens and on the resulting value, places in the JSON |
-| Packages (§13.3) | `packages.build(gpa, io, root, options)`: packages given by directory or folder, and with `npm` the `node_modules` rules; manifests, links, declarations, the version check (also of a package given explicitly, against a `package.json` beside its manifest), duplicates, cycles and the limits |
+| Packages (§13.3) | `packages.build(gpa, io, entry, options)`: packages given by directory, by folder, or as a file tree in code (`packages.Tree`: files embedded with `@embedFile`, or a directory handle such as a build dependency's); the build's root (`options.root`, by default the entry file's directory; a relative one is relative to the entry file's real directory: relative imports stay inside it, `import-outside-root`); a relative import follows no symbolic link (each name of its path is checked with `lstat`; a link is `import-not-found`), and a directory between its file and the root that can't be listed fails it (whether it is a package's directory can't be checked); every file read is a regular file, opened without following a link at its last name and without blocking, checked on the open handle (`files.zig`); every name spelled as its directory lists it; manifests, the version check (against a `package.json` beside the manifest, read leniently), duplicates, cycles and the limits; messages show paths relative to the root. This binding belongs to no package manager's ecosystem: it never reads `node_modules` or a project's `package.json` |
 | C ABI | `include/haus.h`, `src/c_api.zig` (below) |
 
 `Value` is a plain union, so a value built in code passes no constructor:
@@ -86,9 +86,12 @@ the format suite (`cases/`, `examples/`, `valid/`, `options.cases.haus`) with
 its idempotence and round-trip checks; then `schema/invalid/`, `schema/*.cases.haus`
 (also with every attribute removed), `stream/typed.cases.haus`, `check/cases.haus`
 (`Schema` and `Data` cases), `json/` (and every `valid/*.jsonl` as
-self-describing JSON) and `packages/cases.haus` (`Explicit` and `Npm` cases,
-the version check included; the trees are written into a fresh directory
-under `$TMPDIR`, which is left in place).
+self-describing JSON) and `packages/cases.haus` (the `core` cases, the
+version check included, and again with their packages given as file trees;
+the `npm` and `cargo` cases and, on Windows, the `os: "unix"` ones are
+skipped with a count; a case with a FIFO runs on a thread of its own with a
+timeout; the trees are written into a fresh directory under `$TMPDIR`,
+which is left in place).
 
 ## C ABI
 

@@ -12,7 +12,7 @@ use crate::pieces::{Piece, Pieces};
 use annotate_snippets::Renderer;
 use haus::json::Json;
 use haus::{ErrorCode, Limits};
-use haus_schema::{Explicit, Locator, Manifest, NodeModules, Or, Schema, Segment};
+use haus_schema::{Explicit, Manifest, Schema, Segment};
 use std::collections::HashMap;
 use std::io::{self, Read, stdout};
 use std::ops::Range;
@@ -82,8 +82,8 @@ struct Checker {
     no_schema: bool,
     /// The schema given with --schema.
     forced: Option<(PathBuf, String)>,
-    /// Packages given with --package and --packages, then node_modules.
-    packages: Or<Explicit, NodeModules>,
+    /// Packages given with --package and --packages (never node_modules, spec §13.3).
+    packages: Explicit,
     /// Schemas loaded so far, by canonical path.
     schemas: HashMap<PathBuf, Loaded>,
 }
@@ -105,7 +105,7 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
         }
         forced => forced,
     };
-    let packages = match packages(&args.packages) {
+    let packages = match explicit(&args.packages) {
         Ok(packages) => packages,
         Err(failure) => return fail(args.json, failure),
     };
@@ -140,11 +140,6 @@ fn fail(json: bool, failure: Failure) -> Status {
         },
         false => output::fail(failure.message),
     }
-}
-
-/// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`, then node_modules.
-fn packages(args: &PackageArgs) -> Result<Or<Explicit, NodeModules>, Failure> {
-    explicit(args).map(|explicit| explicit.or(NodeModules))
 }
 
 /// The packages given with `--package [NAME=]DIR` and `--packages FOLDER`.

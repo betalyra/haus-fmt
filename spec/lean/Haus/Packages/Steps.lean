@@ -27,9 +27,10 @@ structure View where
   checkVersions : Bool
   given : List Given
   broken : List String
+  base : Path
 
 def Env.view (e : Env) : View :=
-  ⟨e.tree, e.config.mode, e.config.limits, e.config.worldWritable, e.config.checkVersions, e.given, e.broken⟩
+  ⟨e.tree, e.config.mode, e.config.limits, e.config.worldWritable, e.config.checkVersions, e.given, e.broken, e.base⟩
 
 section
 variable (e : Env)
@@ -40,11 +41,12 @@ theorem Env.view_worldWritable : e.view.worldWritable = e.config.worldWritable :
 theorem Env.view_checkVersions : e.view.checkVersions = e.config.checkVersions := rfl
 theorem Env.view_given : e.view.given = e.given := rfl
 theorem Env.view_broken : e.view.broken = e.broken := rfl
+theorem Env.view_base : e.view.base = e.base := rfl
 end
 
 /-- Rewrites the parts of `env.view` to those of `env`. -/
 macro "view" : tactic => `(tactic| simp only [Env.view_tree, Env.view_mode, Env.view_limits,
-  Env.view_worldWritable, Env.view_checkVersions, Env.view_given, Env.view_broken])
+  Env.view_worldWritable, Env.view_checkVersions, Env.view_given, Env.view_broken, Env.view_base])
 
 /-! ## The values -/
 
@@ -84,16 +86,14 @@ def lenientNpmV (V : View) (dir : Path) : Option NpmInfo := (packageJsonV V dir)
 /-- What the body of `projectOf`'s loop gives for the directory `d`. -/
 def projectStep (V : View) (d : Path) :
     Option (ForInStep (Option (Option (Path × Option (List String))) × Unit)) :=
-  if (V.tree.childKind? d "package.json").isNone then some (.yield (none, ())) else
-  match V.tree.realPath (d ++ ["package.json"]) with
-  | .ok real =>
-    if (V.tree.kindAt? real != some .file) = true then some (.done (some (some (d, none)), ())) else
-    (fileBytes V.tree real V.limits.packageJson).bind fun bytes =>
-      match parseNpm bytes with
+  match V.tree.childKind? d "package.json" with
+  | none => some (.yield (none, ()))
+  | some .file =>
+    (packageJsonV V d).bind fun
       | none => some (.done (some (some (d, none)), ()))
       | some i => if i.project = true then some (.done (some (some (d, some (i.deps ++ i.dev))), ()))
         else some (.yield (none, ()))
-  | .error _ => some (.done (some (some (d, none)), ()))
+  | some _ => some (.done (some (some (d, none)), ()))
 
 /-- A `for` loop's value, from the values of its body. -/
 def forInV {γ β : Type} (fv : γ → β → Option (ForInStep β)) : List γ → β → Option β
@@ -434,54 +434,21 @@ theorem Pure.lenientNpm {dir : Path} {owner : String} :
 
 theorem Pure.projectOf {p : Path} : Pure env (projectOf p) (projectV env.view p) := by
   unfold Haus.Packages.projectOf projectV
-  simp only [Env.view]
-  apply Pure.bind_cfg
-  try dsimp only
   rw [Option.map_eq_bind]
   refine Pure.bind (Pure.forIn fun d _ => ?_) fun r _ => ?_
   · unfold projectStep
     apply Pure.bind_look
-    try dsimp only
-    by_cases h1 : (env.tree.childKind? d "package.json").isNone = true
-    · simp only [h1, ↓reduceIte]; exact Pure.ret
-    simp only [h1]
-    apply Pure.bind_look
-    try dsimp only
-    rcases env.tree.realPath (d ++ ["package.json"]) with e | real
+    simp only [Env.view_tree]
+    rcases env.tree.childKind? d "package.json" with _ | k
     · exact Pure.ret
-    try dsimp only
-    apply Pure.bind_look
-    try dsimp only
-    by_cases h2 : (env.tree.kindAt? real != some Kind.file) = true
-    · simp only [h2, ↓reduceIte]; exact Pure.ret
-    simp only [h2]
-    have tail : ∀ info : Option NpmInfo, Pure env
-        (match info with
-          | none => pure (ForInStep.done (some (some (d, none)), ()))
-          | some i =>
-            if i.project = true then pure (ForInStep.done (some (some (d, some (i.deps ++ i.dev))), ()))
-            else pure (ForInStep.yield (none, ())))
-        (match info with
-          | none => some (ForInStep.done (some (some (d, none)), ()))
-          | some i => if i.project = true then some (ForInStep.done (some (some (d, some (i.deps ++ i.dev))), ()))
-            else some (ForInStep.yield (none, ()))) := by
-      intro info
+    cases k
+    · exact Pure.ret
+    · refine Pure.bind Pure.packageJsonOf fun info _ => ?_
       rcases info with _ | i
       · exact Pure.ret
       · dsimp only; split <;> exact Pure.ret
-    apply Pure.bind_get
-    intro s htr
-    split
-    · rename_i r hr
-      obtain ⟨bs, hb, hp⟩ := htr.npm _ r (lookup_mem hr)
-      refine Pure.bind_pure (Pure.congr (tail r) ?_)
-      change fileBytes env.tree real env.config.limits.packageJson = some bs at hb
-      rw [hb]; subst hp; rfl
-    · refine Pure.bind Pure.openFile fun bytes hb => ?_
-      refine Pure.bind_modify (fun s h => ⟨⟨h.manifests, fun q r hq => ?_⟩, rfl⟩) (Pure.bind_pure (tail _))
-      rcases List.mem_cons.mp hq with e | hq
-      · cases e; exact ⟨bytes, hb, rfl⟩
-      · exact h.npm q r hq
+    · exact Pure.ret
+    · exact Pure.ret
   · rcases r with ⟨_ | r, _⟩ <;> exact Pure.ret
 
 theorem Pure.declared {imp : Importer} : Pure env (declared imp) (declaredV env.view imp) := by

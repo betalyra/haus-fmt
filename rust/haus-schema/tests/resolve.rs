@@ -532,15 +532,48 @@ fn files_outside_packages_have_ids_from_their_paths() {
         ids.sort();
         ids
     };
+    // ../shared is outside the default root (shop): the root is the temporary directory.
+    let root = Some(dir.path());
     assert_eq!(
-        ids(&Options::default()),
+        ids(&Options { root, ..Options::default() }),
         ["../shared/money#Money", "app#Root", "billing/common#Iban", "shipping/common#Address"]
     );
     let project = dir.path().join("shop");
     assert_eq!(
-        ids(&Options { project: Some(("shop", &project)), ..Options::default() }),
+        ids(&Options { project: Some(("shop", &project)), root, ..Options::default() }),
         ["shop/../shared/money#Money", "shop/app#Root", "shop/billing/common#Iban", "shop/shipping/common#Address"]
     );
+    // An id never has the form of a package's id (spec §13.3, "Identity").
+    write("shop/x@1.schema.haus", "type X = Int");
+    let path = dir.path().join("shop/x@1.schema.haus");
+    let schema = Schema::load_with(&path, &Options { project: Some(("@acme", &project)), ..Options::default() });
+    assert_eq!(schema.unwrap().definitions()[0].id, "./@acme/x@1#X");
+}
+
+#[test]
+fn an_entry_file_below_a_package_directory_imports_files() {
+    // Only a file read as a package's schema imports no files; a target's package
+    // directory is looked for up to the root only (spec §13.3,
+    // `packages.imports.into-package-checked`), not above it.
+    let dir = tempfile::tempdir().unwrap();
+    let write = |path: &str, text: &str| {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    write("package.haus", "{ name: \"@acme/evil\", version: \"1.2.0\" }");
+    write("schema.haus", "type Money = Decimal");
+    write("app/main/common.schema.haus", "type Money = Decimal");
+    write("app/main/main.schema.haus", "import ./common (Money)\ntype Root = Money");
+    let path = dir.path().join("app/main/main.schema.haus");
+    let options = Options { root: Some(Path::new("..")), ..Options::default() };
+    let schema = Schema::load_with(&path, &options).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(schema.imported()[0].id, "common#Money");
+    // The package's own schema, read as the entry file, still imports no files.
+    write("schema.haus", "import ./app/main/common (Money)\ntype Root = Money");
+    let e = Schema::load_with(dir.path().join("schema.haus"), &Options::default()).expect_err("rejected");
+    assert_eq!(e.code(), haus::ErrorCode::PackagePath, "{e}");
+    assert!(e.to_string().contains("can't import files"), "{e}");
 }
 
 /// The payload of `tag` in the variant `ty`: "record", "named", "positional" or "none".

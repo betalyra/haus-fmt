@@ -114,13 +114,15 @@ struct ValueTests {
     }
 
     @Test func tags() throws {
-        #expect(try HausTag("Some_1").name == "Some_1")
+        // Names in variables: `HausTag("…")` with a literal is the literal's init, which doesn't throw.
+        let (some, shipped) = ("Some_1", "Shipped")
+        #expect(try HausTag(some).name == "Some_1")
         for bad in ["", "lower", "_A", "1A", "A-B", "Ä", "A b"] {
             let error = #expect(throws: HausError.self) { try HausTag(bad) }
             #expect(error?.code == .invalidTag, "\(bad)")
         }
         let tag: HausTag = "Shipped"
-        #expect(tag == (try HausTag("Shipped")))
+        #expect(tag == (try HausTag(shipped)))
         #expect(tag.description == "Shipped")
         let (a, b, ba): (HausTag, HausTag, HausTag) = ("A", "B", "Ba")
         #expect(a < b && b < ba && !(ba < b))

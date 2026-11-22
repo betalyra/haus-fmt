@@ -10,7 +10,7 @@
  * and in `h.toJson` / `h.fromJson` for schemas.
  */
 import { hex4, isBidiControl, quoteText, TAG } from "./chars.js"
-import { checkWellFormed, HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
+import { checkWellFormed, decodeTooDeep, encodeTooDeep, guardStack, HausDecodeError, HausEncodeError, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin, type Path, type Problem } from "./errors.js"
 import { toHex } from "./format.js"
 import { isNormalizedNumber, numberLimitIssue } from "./number.js"
 import { defineOwn } from "./own.js"
@@ -127,7 +127,11 @@ class Reader {
 
   document(): Json {
     this.space()
-    const value = this.value(0)
+    // The engine's stack overflow is `nesting-too-deep` where the reader got to (spec §7).
+    const value = guardStack(() => this.value(0), (reason) => {
+      const p = locate(this.src, this.pos, this.origin)
+      return new HausSyntaxError(`JSON: ${reason}`, p.offset, p.line, p.column, "nesting-too-deep")
+    })
     this.space()
     if (this.pos < this.src.length) this.fail("json-syntax", `unexpected ${this.found()} after the JSON value`, this.pos, { expected: "the end of the JSON text", found: this.found() })
     return value
@@ -571,8 +575,12 @@ const importedHere = (j: Json, limits: Limits, depth: number, place: Place, plac
   return uncheckedRec(new Map(Object.keys(j).map((k) => [keyOfJson(k, limits, place.child(k)), imported((j as JsonObject)[k]!, limits, depth + 1, place.child(k), places)])))
 }
 
-/** JSON imported as a haus value (§16.1), from a place inside a larger conversion. */
-export const importedValue = (j: Json, limits: Limits, place: Place, places?: JsonPlaces): Value => imported(j, limits, 0, place, places)
+/**
+ * JSON imported as a haus value (§16.1), from a place inside a larger
+ * conversion. The engine's stack overflow is `nesting-too-deep` at `place` (spec §7).
+ */
+export const importedValue = (j: Json, limits: Limits, place: Place, places?: JsonPlaces): Value =>
+  guardStack(() => imported(j, limits, 0, place, places), decodeTooDeep(place.path()))
 
 /**
  * Import JSON text as a haus value, without a schema (spec §16.1): an object
@@ -583,11 +591,11 @@ export const importedValue = (j: Json, limits: Limits, place: Place, places?: Js
  */
 export const importJson = (text: string, limits: Partial<Limits> = {}): Value => {
   const l = withDefaults(limits)
-  return imported(readJson(text, importTextLimits(l)), l, 0, Place.root())
+  return importedValue(readJson(text, importTextLimits(l)), l, Place.root())
 }
 
 /** `importJson` for a JSON value that is already parsed. */
-export const importJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => imported(json, withDefaults(limits), 0, Place.root())
+export const importJsonValue = (json: Json, limits: Partial<Limits> = {}): Value => importedValue(json, withDefaults(limits), Place.root())
 
 // ── §16.2: self-describing JSON ──────────────────────────────
 
@@ -644,7 +652,8 @@ export const hausJsonOf = (value: Value, limits: Limits, place: Place): Json => 
   }
   // A value whose parts share each other expands when written: the node limit first (spec §7).
   if (!nodesWithin(value, limits.maxNodes)) fail(tooManyNodes(limits.maxNodes), place, "too-many-nodes")
-  return write(value, 0, place, false)
+  // The engine's stack overflow is `nesting-too-deep` at `place` (spec §7).
+  return guardStack(() => write(value, 0, place, false), encodeTooDeep(place.path()))
 }
 
 /** A haus value from its self-describing JSON without the envelope (spec §16.2, as inside schema-based JSON); any other JSON is an error. */
@@ -711,7 +720,8 @@ export const valueOfHausJson = (json: Json, limits: Limits, place: Place, places
     const members = keys.slice(0, 5).map((k) => short(k)).join(", ")
     return fail(`not a self-describing form: an object with the members ${members}${keys.length > 5 ? ", …" : ""} (expected {"_num"}, {"_bytes"}, {"_rec"} or {"_tag"[, "_args"]})`, at)
   }
-  return read(json, 0, place, false)
+  // The engine's stack overflow is `nesting-too-deep` at `place` (spec §7).
+  return guardStack(() => read(json, 0, place, false), decodeTooDeep(place.path()))
 }
 
 /** The envelope of self-describing JSON (spec §16.2): `{"_haus": 1, "_value": …}`. */
@@ -840,7 +850,7 @@ export const parseJsonLines = (source: ChunkSource, options: JsonLinesOptions = 
 /** Import a JSON Lines stream as haus values, without a schema (§16.1). Errors name the line's index. */
 export const importJsonLines = (source: ChunkSource, options: JsonLinesOptions = {}): AsyncGenerator<Value, void, undefined> => {
   const limits = withDefaults(options.limits ?? {})
-  return readLines(source, options, (text, origin, i) => imported(readJson(text, importTextLimits(limits), origin), limits, 0, Place.root(i)))
+  return readLines(source, options, (text, origin, i) => importedValue(readJson(text, importTextLimits(limits), origin), limits, Place.root(i)))
 }
 
 /** Read a JSON Lines stream of self-describing JSON (§16.2), an envelope per line, as haus values. Errors name the line's index. */

@@ -1,14 +1,15 @@
 //! The package suite (test-suite/packages, spec §13.3) through both
-//! generators: the cases that give packages explicitly (`Explicit`), loaded
-//! by haus-fmt-schema as `Config::compile` and `haus-gen roc` load them,
-//! must generate code (`Ok`) or fail with the case's error (`Err`).
+//! generators: the `core` cases (packages given explicitly), loaded by
+//! haus-fmt-schema as `Config::compile` and `haus-gen roc` load them, must
+//! generate code (`Ok`) or fail with the case's error (`Err`).
 //!
-//! The `Npm` cases are not run: neither generator reads node_modules (Cargo
+//! The `npm` cases are not run: neither generator reads node_modules (Cargo
 //! gives a build script its dependencies; haus-gen takes packages
-//! explicitly). haus-fmt-schema's own adapter runs every case, with
-//! `NodeModules` too (haus-schema/tests/packages.rs). It runs on Unix and
-//! Windows (where making links needs Developer Mode or an administrator, as
-//! on CI).
+//! explicitly). The `cargo` cases (none yet) would be this suite's own:
+//! Cargo passes packages through build-script metadata, which a file tree
+//! can't express, so the crates of haus-build-tests test that. It runs on
+//! Unix and Windows (where making links needs Developer Mode or an
+//! administrator, as on CI); Windows skips the cases with `os: "unix"`.
 #![cfg(any(unix, windows))]
 
 use haus::Value;
@@ -16,7 +17,12 @@ use haus::json::Json;
 use haus_build::roc::RocConfig;
 use haus_build::{Config, Error, Explicit, Options};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
+
+/// How long a case may take: a resolver that opened a FIFO blocking would hang.
+const TIMEOUT: Duration = Duration::from_secs(10);
 
 fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
     v.get(key)
@@ -27,6 +33,10 @@ fn string(v: &Value) -> &str {
         Value::String(s) => s,
         other => panic!("expected a string, found {}", haus::canonical(other)),
     }
+}
+
+fn text<'a>(case: &'a Value, key: &str) -> Option<&'a str> {
+    field(case, key).map(string)
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -100,30 +110,91 @@ fn create(root: &Path, entry: &Value) {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             symlink(string(target), &path).unwrap();
         }
+        ("Large", [path, Value::Number(bytes)]) => {
+            let bytes: usize = bytes.as_str().parse().expect("a size");
+            write(&root.join(string(path)), &" ".repeat(bytes));
+        }
+        #[cfg(unix)]
+        ("Fifo", [path]) => {
+            let path = root.join(string(path));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let made = std::process::Command::new("mkfifo").arg(&path).status().expect("mkfifo");
+            assert!(made.success(), "mkfifo {}", path.display());
+        }
+        // After the tree is written (`modes`).
+        ("Mode", [_, _]) => {}
         (tag, _) => panic!("unknown file entry {tag}"),
     }
 }
 
-/// Generates the case's root with both generators: the first error, if any.
-fn generate(root: &Path, case: &Value, given: Option<&Value>) -> Result<(), Error> {
-    let path = root.join(string(field(case, "root").expect("root")));
+/// The `Mode(path, mode)` entries of a case: the directories and their modes.
+fn modes(root: &Path, files: &[Value]) -> Vec<(PathBuf, u32)> {
+    files
+        .iter()
+        .filter_map(|entry| match variant(entry) {
+            ("Mode", [path, mode]) => {
+                Some((root.join(string(path)), u32::from_str_radix(string(mode), 8).expect("an octal mode")))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn chmod(_path: &Path, _mode: u32) {
+    unreachable!("Mode entries are in cases for Unix only");
+}
+
+/// Whether the tests run as root (uid 0), which permissions don't stop.
+#[cfg(unix)]
+fn as_root() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let dir = tempfile::tempdir().unwrap();
+    fs::metadata(dir.path()).unwrap().uid() == 0
+}
+
+#[cfg(not(unix))]
+fn as_root() -> bool {
+    false
+}
+
+/// Generates the case's root with both generators, with its `rootDir` as
+/// the build's root: the first error, if any.
+fn generate(root: &Path, case: &Value) -> Result<(), Error> {
+    let path = root.join(text(case, "root").expect("root"));
+    let given = match variant(field(case, "mode").expect("mode")) {
+        ("Explicit", given) => given.first(),
+        (mode, _) => panic!("mode {mode} in a core case"),
+    };
     let packages = strings(given.and_then(|g| field(g, "packages")));
     let folders = strings(given.and_then(|g| field(g, "folders")));
+    let root_dir = text(case, "rootDir").map(|dir| root.join(dir));
 
     let explicit = packages.iter().try_fold(Explicit::new(), |e, dir| e.package(root.join(dir)))?;
     let explicit = folders.iter().try_fold(explicit, |e, dir| e.folder(root.join(dir)))?;
     let krate = |name: &str| name.trim_start_matches('@').replace(['/', '-', '.', '~'], "_");
-    Config::new().generate(&path, &Options { packages: &explicit, ..Options::default() }, &krate)?;
+    let options = Options { packages: &explicit, root: root_dir.as_deref(), ..Options::default() };
+    Config::new().generate(&path, &options, &krate)?;
 
     let roc =
         packages.iter().enumerate().fold(RocConfig::new(), |c, (i, dir)| c.package(root.join(dir), format!("p{i}")));
     let roc = folders.iter().fold(roc, |c, dir| c.folder(root.join(dir)));
+    let roc = match root_dir {
+        Some(dir) => roc.root(dir),
+        None => roc,
+    };
     roc.modules(&path, "Root", "root")?;
     Ok(())
 }
 
-/// Runs an `Explicit` case: None if it passes, what went wrong otherwise.
-fn failure(case: &Value, given: Option<&Value>) -> Option<String> {
+/// Runs a core case: None if it passes, what went wrong otherwise.
+fn failure(case: &Value) -> Option<String> {
     let dir = tempfile::tempdir().unwrap();
     let files = match field(case, "files") {
         Some(Value::Array(files)) => files,
@@ -134,7 +205,12 @@ fn failure(case: &Value, given: Option<&Value>) -> Option<String> {
         .filter(|e| variant(e).0 != "Link")
         .chain(files.iter().filter(|e| variant(e).0 == "Link"))
         .for_each(|entry| create(dir.path(), entry));
-    match (variant(field(case, "expect").expect("expect")), generate(dir.path(), case, given)) {
+    let modes = modes(dir.path(), files);
+    modes.iter().for_each(|(path, mode)| chmod(path, *mode));
+    let result = generate(dir.path(), case);
+    // The owner's permissions back (chmod -R u+rwx), so the directory can be removed.
+    modes.iter().for_each(|(path, mode)| chmod(path, mode | 0o700));
+    match (variant(field(case, "expect").expect("expect")), result) {
         (("Ok", _), Ok(())) => None,
         (("Ok", _), Err(e)) => Some(format!("failed with {}: {e}", e.code())),
         (("Err", [want]), Ok(())) => Some(format!("generated code, expected {}", string(field(want, "code").unwrap()))),
@@ -158,6 +234,21 @@ fn failure(case: &Value, given: Option<&Value>) -> Option<String> {
     }
 }
 
+/// [`failure`] on a thread of its own, which must finish within [`TIMEOUT`].
+fn failure_in_time(case: &Value) -> Option<String> {
+    let (send, receive) = mpsc::channel();
+    let case = case.clone();
+    std::thread::spawn(move || send.send(failure(&case)));
+    match receive.recv_timeout(TIMEOUT) {
+        Ok(failure) => failure,
+        Err(mpsc::RecvTimeoutError::Timeout) => Some(format!("took more than {TIMEOUT:?} (an open that blocks?)")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Some("panicked".into()),
+    }
+}
+
+/// Cases that are wrong in the suite, and why: they are expected to fail here until the suite is fixed.
+const BROKEN: &[(&str, &str)] = &[];
+
 #[test]
 fn package_suite() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../test-suite/packages/cases.haus");
@@ -169,20 +260,36 @@ fn package_suite() {
             _ => panic!("every entry is Case {{ … }}"),
         })
         .collect();
-    let (mut run, mut skipped, mut failures) = (0, vec![], vec![]);
-    for case in &cases {
-        let name = string(field(case, "name").expect("name"));
-        match variant(field(case, "mode").expect("mode")) {
-            ("Explicit", given) => {
-                run += 1;
-                if let Some(f) = failure(case, given.first()) {
-                    failures.push(format!("{name}: {f}"));
-                }
+    let of = |ecosystem: &str| cases.iter().filter(|c| text(c, "ecosystem") == Some(ecosystem)).collect::<Vec<_>>();
+    let (core, npm, cargo) = (of("core"), of("npm"), of("cargo"));
+    let has_mode = |c: &Value| match field(c, "files") {
+        Some(Value::Array(files)) => files.iter().any(|e| variant(e).0 == "Mode"),
+        _ => false,
+    };
+    let (unix, root) = (cfg!(unix), as_root());
+    let (run, skipped): (Vec<&Value>, Vec<&Value>) =
+        core.iter().partition(|c| (unix || text(c, "os") != Some("unix")) && !(root && has_mode(c)));
+    // A case broken in the suite is expected to fail; once it passes, it is a failure to drop it from BROKEN.
+    let failures: Vec<String> = run
+        .iter()
+        .filter_map(|case| {
+            let name = text(case, "name").expect("name");
+            match (failure_in_time(case), BROKEN.iter().any(|(b, _)| *b == name)) {
+                (Some(f), false) => Some(format!("{name}: {f}")),
+                (None, true) => Some(format!("{name}: passes, but is listed as broken in the suite")),
+                _ => None,
             }
-            _ => skipped.push(name),
-        }
-    }
-    println!("package suite through the generators: {run} Explicit cases run, {} Npm cases skipped", skipped.len());
-    assert_eq!(cases.len(), 99, "the suite's cases");
-    assert!(failures.is_empty(), "{} of {run} cases fail:\n{}", failures.len(), failures.join("\n"));
+        })
+        .collect();
+    println!(
+        "package suite through the generators: {} core cases run, {} skipped here ({}), {} npm cases skipped, \
+         {} cargo cases",
+        run.len(),
+        skipped.len(),
+        if unix { "Mode cases as root" } else { "os: unix" },
+        npm.len(),
+        cargo.len(),
+    );
+    assert_eq!((cases.len(), core.len(), npm.len(), cargo.len()), (133, 87, 46, 0), "the suite's cases");
+    assert!(failures.is_empty(), "{} of {} cases fail:\n{}", failures.len(), run.len(), failures.join("\n"));
 }

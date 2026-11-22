@@ -296,11 +296,25 @@ theorem resolveImport_closed {env : Env} {loadFn : Target → M Loaded} {importe
   unfold resolveImport
   split
   · exact Triple.pure fun s hs => ⟨hs, by simp⟩
-  · repeat (first
-      | (with_reducible apply Triple.pure; exact fun _ h => ⟨h, fun _ e => nomatch e⟩)
-      | refine Triple.bind (R := fun _ => Closed L) (Triple.mono (hload _ L) (fun _ h => h) (fun _ _ h => h.1)
-          (fun _ h => h)) fun _ => ?_
-      | cstep)
+  · split
+    · exact Triple.fail fun _ h => h
+    apply Triple.bind_ask
+    apply Triple.bind_look
+    split
+    · exact Triple.fail fun _ h => h
+    apply Triple.bind_look
+    dsimp only
+    split
+    · exact Triple.bind_fail fun _ h => h
+    split
+    · exact Triple.bind_fail fun _ h => h
+    apply Triple.bind_look
+    split
+    · exact Triple.bind_fail fun _ h => h
+    refine Triple.bind (R := fun _ => Closed L) (Triple.mono (hload _ L) (fun _ h => h) (fun _ _ h => h.1)
+      (fun _ h => h)) fun _ => ?_
+    refine Triple.bind (Keeps.checkNames _) fun _ => ?_
+    exact Triple.pure fun _ h => ⟨h, fun _ e => nomatch e⟩
   · rename_i name major _
     refine Triple.bind (Keeps.candidates _) fun cands => ?_
     dsimp only
@@ -414,13 +428,17 @@ theorem Keeps.givenPackages {L : Nat} : Keeps (Closed L) givenPackages := by
   unfold Haus.Packages.givenPackages
   repeat (first | with_reducible exact Keeps.manifestOf | with_reducible exact Keeps.folderVersion | kstep)
 
+theorem Keeps.baseOf {P : St → Prop} {root real : Path} : Keeps P (baseOf root real) := by
+  unfold Haus.Packages.baseOf; keeps
+
 theorem main_closed {env : Env} {root : Path} {w : Walk} : Triple env (Closed 0) (main root w) (fun _ => Closed 0) (Closed 0) := by
   unfold main
   refine Triple.bind (Keeps.givenPackages env) fun _ => ?_
   dsimp only
   refine Triple.withReader ?_
   repeat (first
-    | exact Triple.bind (Triple.mono (load_closed _ _ 0) (fun _ h => h) (fun _ _ h => h.1) (fun _ h => h))
+    | refine Triple.bind (Keeps.baseOf _) fun _ => ?_
+    | exact Triple.bind (Triple.withReader (Triple.mono (load_closed _ _ 0) (fun _ h => h) (fun _ _ h => h.1) (fun _ h => h)))
         fun _ => Triple.pure fun _ h => h
     | cstep)
 

@@ -86,6 +86,7 @@ Python project) are given with the same options everywhere:
 | `packages` | package directories (with `package.haus` and `schema.haus`), used instead of an installed package with the same name |
 | `folders` | folders whose direct subdirectories with a `package.haus` are packages; one also installed in `node_modules` must have the same files |
 | `npm` | `false`: only `packages` and `folders`, never `node_modules` (default `true`) |
+| `root` | the directory relative imports of schema files stay in (default: each schema file's directory); `"src"` lets `src/app/order.schema.haus` import `../shared/money` |
 
 Paths are relative to the project root: the directory of `tsconfig.json` for
 the content mapper, Vite's `root` for the plugin, the working directory for the

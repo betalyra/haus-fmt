@@ -7,10 +7,11 @@
 // code (extensions/money/profiles/iso.md). Whether the code is assigned is
 // not checked.
 //
-// The schema itself is found like any package's (spec §13.3), for example
-// in node_modules or given with [schema.Explicit]:
+// The schema itself is given like any package's (spec §13.3), with
+// [schema.Explicit]:
 //
-//	s, err := schema.Load("order.schema.haus", schema.Options{Packages: schema.NodeModules{}})
+//	packages, err := schema.NewExplicit().Package("schemas/money")
+//	s, err := schema.Load("order.schema.haus", schema.Options{Packages: packages})
 //	codecs, _ := schema.NewCodecs(money.Iso, money.IsoCurrency)
 //	v, err := order.DecodeWith(value, schema.DecodeOptions{Codecs: codecs})
 package money

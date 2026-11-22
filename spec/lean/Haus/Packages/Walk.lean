@@ -350,6 +350,7 @@ theorem resolveImport_sim {loadFn : Target → M Loaded} {importer : Importer} {
     · exact himp.elim
     rename_i p
     obtain ⟨real, hres, hin, hend, hkind, hP, ts, hts, hn⟩ := himp
+    apply Triple.bind_ask
     apply Triple.bind_look
     split
     · rename_i e he
@@ -754,19 +755,32 @@ theorem runIn_walk {t : Tree} {c : Config} {root : Path} {w₁ w₂ : Walk} (h :
     by_cases hk : (t.kindAt? real != some Kind.file) = true
     · simp [hk, go_bind, go_fail] at h
     simp only [hk, Bool.false_eq_true, ↓reduceIte, go_bind, go_cfg] at h hc1 ⊢
-    rcases hl : go (load w₁ (c.limits.files + 1) (.file real)) { tree := t, config := c, given := g, broken := b } s₁
-      with ⟨rl, S⟩
-    try rw [hl] at h
-    try rw [hl] at hc1
-    cases rl with
+    have hbs := baseOf_spec (env := { tree := t, config := c, given := g, broken := b }) (root := root) (real := real)
+      (P := fun s => s = s₁) s₁ rfl
+    rcases hbase : go (baseOf root real) { tree := t, config := c, given := g, broken := b } s₁ with ⟨rb, sb⟩
+    rw [hbase] at hbs
+    try rw [hbase] at h
+    try rw [hbase] at hc1
+    try rw [hbase]
+    cases rb with
     | error e => simp at h
-    | ok r =>
-      simp only [go_pure] at hc1
-      obtain ⟨htr, hcore⟩ := hgiven
-      obtain ⟨r', S', hB, hin⟩ := load_walk (env := { tree := t, config := c, given := g, broken := b }) (w₂ := w₂)
-        (Tr.of_view htr rfl rfl) hcore hc1 hl
-      rw [hB]
-      exact ⟨rfl, hin⟩
+    | ok base =>
+      simp only at hbs
+      subst hbs
+      simp only [go_withReader, go_pure] at h hc1 ⊢
+      rcases hl : go (load w₁ (c.limits.files + 1) (.file real))
+          { tree := t, config := c, given := g, broken := b, base } sb with ⟨rl, S⟩
+      try rw [hl] at h
+      try rw [hl] at hc1
+      cases rl with
+      | error e => simp at h
+      | ok r =>
+        try simp only at hc1
+        obtain ⟨htr, hcore⟩ := hgiven
+        obtain ⟨r', S', hB, hin⟩ := load_walk (env := { tree := t, config := c, given := g, broken := b, base })
+          (w₂ := w₂) (Tr.of_view htr rfl rfl) hcore hc1 hl
+        rw [hB]
+        exact ⟨rfl, hin⟩
 
 theorem nodup_pairs : ∀ {l : List Class}, (l.map (·.name)).Nodup → (l.map fun c => (c.name, c.version)).Nodup
   | [], _ => List.nodup_nil

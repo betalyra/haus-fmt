@@ -170,6 +170,13 @@ def make_room(max_depth: int) -> None:
     The parser, the decoders and the JSON mappings recurse a few frames per level: Python's
     default limit of 1000 frames holds neither 512 levels nor, called from deep inside an
     application, the default 256. The limit is only ever raised, never lowered.
+
+    The limit is process-wide (`sys.setrecursionlimit`): it stays raised for the whole
+    application, at most a few thousand frames above the caller for `MAX_SUPPORTED_DEPTH`.
+    Python frames don't use the thread's C stack on CPython 3.11 and later, and haus's own
+    recursive paths are tested at the maximum depth on a thread with a 512 KiB stack
+    (tests/test_canonical.py); other code that recurses through C (a container's `repr`, say)
+    on a thread with a small stack can overflow it before reaching a raised limit.
     """
     depth = 0
     frame = inspect.currentframe()

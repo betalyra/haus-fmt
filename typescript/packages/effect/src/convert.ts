@@ -190,12 +190,27 @@ const depthOf = (limits: h.Limits): number => limits.maxDepth ?? MAX_DEPTH
 
 let guard: Guard = { steps: 0, maxSteps: Infinity, depth: 0, maxNesting: maxNesting(MAX_DEPTH), limits: {} }
 
-/** Run `f` with a fresh budget of `maxSteps`, within `limits`. */
+/**
+ * The engine's stack overflow: V8's and JavaScriptCore's RangeError "Maximum
+ * call stack size exceeded", SpiderMonkey's InternalError "too much recursion"
+ * (haus's own RangeErrors have a code).
+ */
+export const isStackOverflow = (e: unknown): boolean =>
+  e instanceof Error && (e as { code?: unknown }).code === undefined && (e instanceof RangeError || e.name === "InternalError") && /call stack|recursion/i.test(e.message)
+
+/**
+ * Run `f` with a fresh budget of `maxSteps`, within `limits`. The engine's
+ * stack overflow (on a small stack: JavaScript can't choose its own) is
+ * `nesting-too-deep` (spec §7), not a RangeError.
+ */
 const guarded = <R>(limits: h.Limits, maxSteps: number, f: () => R): R => {
   const saved = guard
   guard = { steps: 0, maxSteps, depth: 0, maxNesting: maxNesting(depthOf(limits)), limits }
   try {
     return f()
+  } catch (e) {
+    if (isStackOverflow(e)) throw new ConversionError("value nested too deep for the stack it runs on", "nesting-too-deep")
+    throw e
   } finally {
     guard = saved
   }

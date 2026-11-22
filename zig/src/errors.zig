@@ -84,6 +84,7 @@ pub const Code = enum {
     @"duplicate-import",
     @"import-unavailable",
     @"import-not-found",
+    @"import-outside-root",
     @"import-version",
     @"import-cycle",
     @"duplicate-package",

@@ -388,7 +388,9 @@ pub fn parse(arena: Allocator, gpa: Allocator, text: []const u8, max_depth: u32,
 
 // ── mapping errors ───────────────────────────────────────────
 
-fn failAt(diag: ?*Diagnostic, code: Code, path: *const Path, comptime fmt: []const u8, args: anytype) Error {
+/// Never inlined: its buffer would grow the frames of the recursive
+/// readers that call it (spec §7, the stack needed at the supported depth).
+noinline fn failAt(diag: ?*Diagnostic, code: Code, path: *const Path, comptime fmt: []const u8, args: anytype) Error {
     if (diag) |d| {
         d.set(code, fmt, args);
         d.line = 0;
