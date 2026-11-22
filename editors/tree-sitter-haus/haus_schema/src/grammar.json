@@ -656,29 +656,20 @@
       ]
     },
     "spread": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "..."
-        },
-        {
-          "type": "FIELD",
-          "name": "name",
-          "content": {
-            "type": "ALIAS",
-            "content": {
-              "type": "IMMEDIATE_TOKEN",
-              "content": {
-                "type": "PATTERN",
-                "value": "[A-Z][A-Za-z0-9_]*"
-              }
-            },
-            "named": true,
-            "value": "type_name"
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "..."
+          },
+          {
+            "type": "PATTERN",
+            "value": "[A-Z][A-Za-z0-9_]*"
           }
-        }
-      ]
+        ]
+      }
     },
     "type_parameter": {
       "type": "PATTERN",

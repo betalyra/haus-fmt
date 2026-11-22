@@ -53,8 +53,8 @@
 ((tag) @constant.builtin
   (#eq? @constant.builtin "None"))
 
-(spread
-  "..." @operator)
+; ...Name is one token (spec §14).
+(spread) @type
 
 ; Fields: key: T, or key?: T for a field that may be missing
 (field_declaration

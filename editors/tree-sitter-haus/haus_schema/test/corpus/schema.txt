@@ -124,8 +124,7 @@ type Person = closed {
         key: (string
           (string_content))
         type: (type_name))
-      (spread
-        name: (type_name)))))
+      (spread))))
 
 ================================================================================
 Variant types
@@ -175,8 +174,7 @@ type Shape = <
         tag: (tag)
         argument: (type_name)
         argument: (type_name))
-      (spread
-        name: (type_name)))))
+      (spread))))
 
 ================================================================================
 Variants with any tags
