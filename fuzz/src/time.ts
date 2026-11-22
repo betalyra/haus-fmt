@@ -217,6 +217,9 @@ console.log(`seed ${seed}: ${count} std/time cases through ${runners.map((r) => 
 const accepted = new Map(STD_TIME_TYPES.map((t) => [t, 0]))
 const total = new Map(STD_TIME_TYPES.map((t) => [t, 0]))
 const found = new Map<string, Outcome[]>()
+const MAX_SHRUNK = 10
+let shrunk = 0
+let unshrunk = 0
 for (let done = 0; done < count; done += BATCH) {
   const cases = Array.from({ length: Math.min(BATCH, count - done) }, () => generate(rng))
   runAll(cases).forEach((rs, i) => {
@@ -224,6 +227,11 @@ for (let done = 0; done < count; done += BATCH) {
     total.set(c.type, total.get(c.type)! + 1)
     if (rs[0] === "ok") accepted.set(c.type, accepted.get(c.type)! + 1)
     if (!disagrees(rs)) return
+    // A few shrunk examples are enough; the rest are counted (a binding wrong
+    // on a common input would otherwise keep the run busy for hours).
+    if (shrunk >= MAX_SHRUNK) return void unshrunk++
+    shrunk++
+    console.error(`disagreement on ${c.type}(${JSON.stringify(c.text)}); shrinking`)
     const small = shrink(c)
     const key = `${small.type}(${JSON.stringify(small.text)})`
     if (!found.has(key)) found.set(key, runAll([small])[0]!)
@@ -234,6 +242,7 @@ console.log(`${sum(accepted)} accepted, ${count - sum(accepted)} rejected (by le
 for (const type of STD_TIME_TYPES) console.log(`  ${type.padEnd(14)} ${accepted.get(type)} accepted of ${total.get(type)}`)
 
 if (found.size === 0) console.log("no disagreements")
+if (unshrunk > 0) console.log(`${unshrunk} more disagreements, not shrunk (only the first ${MAX_SHRUNK} are)`)
 for (const [key, rs] of found) {
   console.log(`\nDISAGREEMENT (shrunk): ${key}\n${rs.map((o, i) => `  ${runners[i]!.name.padEnd(10)} ${o}`).join("\n")}`)
 }
