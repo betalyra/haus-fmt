@@ -29,7 +29,9 @@ go() {
 }
 
 # The Zig runner (zig/test/fuzz_runner.zig): zig/zig-out/bin/zig-runner.
-zig() { (cd zig && command zig build fuzz-runner -Doptimize=ReleaseSafe); }
+# For the baseline CPU, not the build machine's (Zig's default): in CI the
+# fuzz jobs run on other machines, and a newer instruction there is SIGILL.
+zig() { (cd zig && command zig build fuzz-runner -Doptimize=ReleaseSafe -Dcpu=baseline); }
 
 swift() {
   mkdir -p fuzz/.build
