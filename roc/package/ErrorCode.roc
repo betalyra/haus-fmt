@@ -73,7 +73,7 @@ ErrorCode := [].{
 	missing_colon : Str
 	missing_colon = "missing-colon"
 
-	## `duplicate-key` (syntax): A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code with a key twice, rejected when it is built (§11). Reported at: The second key, as soon as it is read, before its colon and value: an error in the value is never reached. In JSON, the second name, the same way (§16). Built in code: no place.
+	## `duplicate-key` (syntax): A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code with a key twice, rejected when it is built or, at the latest, when it is written, canonicalised or hashed (§11). Reported at: The second key, as soon as it is read, before its colon and value: an error in the value is never reached. In JSON, the second name, the same way (§16). Built in code: informative (§11).
 	duplicate_key : Str
 	duplicate_key = "duplicate-key"
 
@@ -81,7 +81,7 @@ ErrorCode := [].{
 	empty_payload : Str
 	empty_payload = "empty-payload"
 
-	## `invalid-number` (syntax): A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`), rejected when it is built (§11). Reported at: The literal's first character, a sign or a leading `.` included.
+	## `invalid-number` (syntax): A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`), rejected when it is built or, at the latest, when it is written, canonicalised or hashed (§11). Reported at: The literal's first character, a sign or a leading `.` included. Built in code: informative (§11).
 	invalid_number : Str
 	invalid_number = "invalid-number"
 
@@ -149,15 +149,15 @@ ErrorCode := [].{
 	stray_slash : Str
 	stray_slash = "stray-slash"
 
-	## `nesting-too-deep` (limits): Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16). Reported at: The opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. Writing a value: its place, or no place.
+	## `nesting-too-deep` (limits): Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16). Reported at: The opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. Writing a value: its place, or no place; in the i-th value of a stream written, a place that starts with `$[i]` (§11).
 	nesting_too_deep : Str
 	nesting_too_deep = "nesting-too-deep"
 
-	## `number-too-long` (limits): A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7). Reported at: The literal's first character. In JSON, the number token's first character, or the string's place for a string read as a number (§16).
+	## `number-too-long` (limits): A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7). A writer measures a number built in code on its normalized literal (§11); one over both the number and the exponent limit may fail with either code. Reported at: The literal's first character. In JSON, the number token's first character, or the string's place for a string read as a number (§16).
 	number_too_long : Str
 	number_too_long = "number-too-long"
 
-	## `exponent-too-large` (limits): A number's exponent is larger than the limit (default 6144), in either direction. Reported at: The literal's first character. In JSON, as `number-too-long`.
+	## `exponent-too-large` (limits): A number's exponent is larger than the limit (default 6144), in either direction. A writer measures a number built in code on its normalized literal (§11), as for `number-too-long`. Reported at: The literal's first character. In JSON, as `number-too-long`.
 	exponent_too_large : Str
 	exponent_too_large = "exponent-too-large"
 
@@ -173,7 +173,7 @@ ErrorCode := [].{
 	tag_too_long : Str
 	tag_too_long = "tag-too-long"
 
-	## `value-too-long` (limits): One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16). Reported at: The start of the value's text: the character after the previous top-level comma, or the start of the stream (after a byte order mark).
+	## `value-too-long` (limits): One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16). Reported at: The start of the value's text: the character after the previous top-level comma, whatever it is (`1,⏎ 1234567`: line 1, column 3, the line break), or the start of the stream, after a byte order mark (column 2).
 	value_too_long : Str
 	value_too_long = "value-too-long"
 
@@ -317,7 +317,7 @@ ErrorCode := [].{
 	package_manifest : Str
 	package_manifest = "package-manifest"
 
-	## `package-version` (imports): A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly that has a `package.json` next to its manifest. Reported at (informative): The import that reaches the package; the message names both versions.
+	## `package-version` (imports): A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored. Reported at (informative): The import that reaches the package; the message names both versions.
 	package_version : Str
 	package_version = "package-version"
 
@@ -401,7 +401,7 @@ ErrorCode := [].{
 	codec_rejected : Str
 	codec_rejected = "codec-rejected"
 
-	## `cannot-encode` (decoding): Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value (an object of another type where a value or a number is expected). Reported at: The place of the value in the type being encoded. Building a value in code: no place.
+	## `cannot-encode` (decoding): Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed. Reported at: The place of the value in the type being encoded. Building a value in code: informative (§11).
 	cannot_encode : Str
 	cannot_encode = "cannot-encode"
 
@@ -413,7 +413,7 @@ ErrorCode := [].{
 	step_budget : Str
 	step_budget = "step-budget"
 
-	## `too-many-nodes` (decoding): A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it. Reported at: `$`: the value given to the writer, the canonical form or the hash; `$[i]` for the i-th value of a stream written, or of `hashAll`.
+	## `too-many-nodes` (decoding): A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it. Reported at: `$`: the value given to the writer, the canonical form or the hash, or to an encoder or decoder with a schema (§15); `$[i]` for the i-th value of a stream written, or of `hashAll`, also when the stream has one value (`$[0]`). From `equals` or `compare`: `$`, and the message says which operand.
 	too_many_nodes : Str
 	too_many_nodes = "too-many-nodes"
 
@@ -441,7 +441,7 @@ ErrorCode := [].{
 	haus_json_bytes : Str
 	haus_json_bytes = "haus-json-bytes"
 
-	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code. Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: no place.
+	## `invalid-tag` (json): A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11). Reported at: The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
 	invalid_tag : Str
 	invalid_tag = "invalid-tag"
 

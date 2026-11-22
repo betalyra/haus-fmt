@@ -65,7 +65,7 @@ if errors.As(err, &e) {
 
 ## Limits
 
-`haus.ParseAllWith(src, haus.Limits{MaxDepth: 64})` sets limits (spec §7); fields left at zero keep their defaults (`haus.DefaultLimits()`): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string (counted on the value, after escapes; for a byte string, between the quotes), and 64 Mi characters per top-level value of a stream (`MaxValueLength`, which only the stream reader applies: it bounds the reader's memory, while `ParseAll` already holds the whole text). `MaxNodes` (64 Mi values written per top-level value) is the writers' (below). `MaxDepth` can be at most `haus.MaxSupportedDepth`, 10000: the parser, the formatter and the canonical form recurse once per level, and a larger limit is rejected with the code `unsupported-depth`.
+`haus.ParseAllWith(src, haus.Limits{MaxDepth: 64})` sets limits (spec §7); fields left at zero keep their defaults (`haus.DefaultLimits()`): depth 256, 1000 characters per number literal (and so 829 hex digits), exponents up to ±6144, 16 Mi characters per string, key, tag or byte string (counted on the value, after escapes; for a byte string, between the quotes), and 64 Mi characters per top-level value of a stream (`MaxValueLength`, which only the stream reader applies: it bounds the reader's memory, while `ParseAll` already holds the whole text). `MaxNodes` (64 Mi values written per top-level value) is the writers' (below). `MaxDepth` can be at most `haus.MaxSupportedDepth`, 10000: the parser and the formatter recurse once per level, and a larger limit is rejected with the code `unsupported-depth`.
 
 ## Streams
 
@@ -97,7 +97,7 @@ s, _ := haus.Canonical(v) // Order{id:255,total:19.90,"x-y":1e5}
 h, _ := haus.Hash(v)      // SHA-256 of the canonical form, 64 hex digits
 ```
 
-`haus.HashAll(values)` hashes a whole file; the items of a stream are hashed one by one with `haus.Hash`. `haus.Compare` orders values by their canonical forms (and returns an error as `Canonical` does). The canonical form and hashing apply only the node limit (spec §12; `haus.CanonicalWith`, `haus.HashWith` and `haus.HashAllWith` take `Limits` for it): a value deeper or longer than a writer's limits still has a canonical form, up to the depth this binding supports, `haus.MaxSupportedDepth`. The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
+`haus.HashAll(values)` hashes a whole file; the items of a stream are hashed one by one with `haus.Hash`. `haus.Compare` orders values by their canonical forms (and returns an error as `Canonical` does). The canonical form and hashing apply only the node limit (spec §12; `haus.CanonicalWith`, `haus.HashWith` and `haus.HashAllWith` take `Limits` for it): a value deeper or longer than a writer's limits still has a canonical form, at any depth (they don't use the call stack for nesting, and neither do `haus.Equals` and `haus.Compare`). The hash is unkeyed: don't publish the hash of a document with private content (spec §9).
 
 ## Goroutines
 

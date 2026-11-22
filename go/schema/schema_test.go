@@ -634,3 +634,49 @@ func TestTypedNotOneValue(t *testing.T) {
 		t.Errorf("DecodeAll: got %v (path %q)", err, path)
 	}
 }
+
+// sharedTree is n levels of [x, x] around [], which encodes and decodes
+// 2^(n+1)−1 values with the type Tree.
+func sharedTree(n int) haus.Value {
+	v := haus.Value(haus.Array{})
+	for range n {
+		v = haus.Array{v, v}
+	}
+	return v
+}
+
+// TestTooManyNodesPlace: too-many-nodes from encoding or decoding a value
+// built in code is at $, the value given, wherever the walk is, and at $[i]
+// for the i-th value of a stream (spec §7, §15).
+func TestTooManyNodesPlace(t *testing.T) {
+	s := mustSchema(t, "type Tree = Array Tree\ntype Root = { a: { b: Tree } }\ntype Trees = Stream Tree")
+	inner, err := haus.NewRecord(haus.Field{Key: "b", Value: sharedTree(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := haus.NewRecord(haus.Field{Key: "a", Value: inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := schema.DecodeOptions{Limits: haus.Limits{MaxNodes: 100}}
+	r := mustType(t, s, "Root")
+	if _, err := r.DecodeWith(root, opts); !isAt(err, haus.CodeTooManyNodes, "$") {
+		t.Errorf("DecodeWith: %v", err)
+	}
+	if _, err := r.EncodeWith(root, opts); !isAt(err, haus.CodeTooManyNodes, "$") {
+		t.Errorf("EncodeWith: %v", err)
+	}
+	if testing.Short() {
+		return // the default node limit takes a while to reach
+	}
+	trees := mustType(t, s, "Trees")
+	if _, err := trees.DecodeAll([]haus.Value{haus.Array{}, sharedTree(26)}); !isAt(err, haus.CodeTooManyNodes, "$[1]") {
+		t.Errorf("DecodeAll: %v", err)
+	}
+}
+
+// isAt reports whether err has the code and the path.
+func isAt(err error, code haus.ErrorCode, path string) bool {
+	c, p := codeAndPath(err)
+	return c == code && p == path
+}

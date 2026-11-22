@@ -51,6 +51,11 @@ public final class HausException extends RuntimeException {
     return new HausException(code, reason, line, column, newPath, expected, found);
   }
 
+  /** The error with another message for people. */
+  HausException withReason(String newReason) {
+    return new HausException(code, newReason, line, column, path, expected, found);
+  }
+
   /** The error at another place in text. */
   HausException withPosition(int newLine, int newColumn) {
     return new HausException(code, reason, newLine, newColumn, path, expected, found);

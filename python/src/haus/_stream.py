@@ -161,8 +161,9 @@ class StreamReader:
         text = "".join(self._done) + self._buf
         # The scan checks a value's length before each character, so the last value,
         # with no comma after it, is checked here, after its last character (§7).
-        if len(text) - (self._first and text.startswith("\ufeff")) > self._max_value_length:
-            raise self._origin.error("value-too-long", f"value longer than {self._max_value_length} characters")
+        bom = self._first and text.startswith("\ufeff")
+        if len(text) - bom > self._max_value_length:
+            raise self._too_long(bom)
         rest = self._parse(text)
         if rest and self._require_terminator:
             raise self._origin.after(text).error(
@@ -178,6 +179,12 @@ class StreamReader:
             self._decoder.decode(b"", final=True)
         except UnicodeDecodeError:
             raise self._end().error("invalid-utf8", "invalid UTF-8") from None
+
+    def _too_long(self, bom: bool) -> HausSyntaxError:
+        """`value-too-long`, at the first character counted: after the previous top-level comma, or the
+        start of the stream after a byte order mark (column 2, spec §7)."""
+        start = self._origin.after(chr(0xFEFF)) if bom else self._origin
+        return start.error("value-too-long", f"value longer than {self._max_value_length} characters")
 
     def _end(self) -> _Position:
         """Where the text received so far ends."""
@@ -207,7 +214,7 @@ class StreamReader:
             bom = self._first and (self._done[0] if self._done else buf[start:])[:1] == "\ufeff"
             limit = start + self._max_value_length + bom - self._done_length
             if i > limit:
-                raise self._origin.error("value-too-long", f"value longer than {self._max_value_length} characters")
+                raise self._too_long(bom)
             end = min(n, limit + 1)
             match self._mode:
                 case _Mode.NORMAL:
@@ -297,8 +304,10 @@ class StreamReader:
                             i += 3
                         else:
                             i += 1
-        self._done.append(buf[start:i])
-        self._done_length += i - start
+        # Only text: the first piece is where a byte order mark would be.
+        if i > start:
+            self._done.append(buf[start:i])
+            self._done_length += i - start
         self._buf = buf[i:]
         return out
 

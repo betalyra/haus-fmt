@@ -738,8 +738,14 @@ class SchemaParser {
     return this.unexpected("a type")
   }
 
-  /** `...Name`, after the `...`. */
+  /** `...Name`, at the `...`: one token, nothing between `...` and the name (spec §14). */
   private parseSpread(at: number): SpreadNode {
+    const dots = this.tok.pos
+    // Checked before the next token is read, which would skip whitespace and comments.
+    if (/[ \t\n\r/]/.test(this.lexer.text[dots + 3] ?? "")) {
+      return this.fail("schema-syntax", "expected a type name after '...', with nothing between them: ...Name is one word (...UserEvent)", dots + 3)
+    }
+    this.advance()
     const t = this.tok
     if (t.t === "lower" && !this.keyword()) {
       return this.fail("row-parameter", `row parameters (...${t.value}) aren't supported; spread a named type instead: ...UserEvent`, t.pos)
@@ -758,7 +764,6 @@ class SchemaParser {
       const attributes = this.parseAttributes()
       if (this.is("...")) {
         if (attributes.length > 0) this.fail("attribute-on-spread", "attributes can't be put on a spread: the fields it copies keep their own", attributes[0]!.pos)
-        this.advance()
         spreads.push(this.parseSpread(fields.length))
       } else {
         const k = this.tok
@@ -791,7 +796,6 @@ class SchemaParser {
         cases.push({ tag: tag.value, args, pos: tag.pos, attributes: attributes.map(attributeOf) })
       } else if (this.is("...")) {
         if (attributes.length > 0) this.fail("attribute-on-spread", "attributes can't be put on a spread: the tags it copies keep their own", attributes[0]!.pos)
-        this.advance()
         spreads.push(this.parseSpread(cases.length))
       } else this.unexpected(attributes.length > 0 ? "a tag after the attribute" : "a tag, ...Name or '>'")
       if (this.is(">")) break

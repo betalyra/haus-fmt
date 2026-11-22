@@ -608,11 +608,12 @@ final class SchemaSyntax {
 
     /** {@code ...Name} (a lowercase name is read too, for the checks to reject). */
     SpreadDef spread(int at, List<Attribute> attrs) {
+      // ...Name is one token: nothing may come between the dots and the name (spec §14).
       pos += 3;
-      ws();
       int start = pos;
       if (pos >= s.length() || !isUpper(s.charAt(pos)) && !isLower(s.charAt(pos)) && s.charAt(pos) != '_') {
-        throw expected("a type name after '...': ...UserEvent");
+        throw new Fail(pos, ErrorCode.SCHEMA_SYNTAX,
+            "expected a type name right after '...', with nothing between: ...UserEvent, found " + found(pos));
       }
       String name = peekWord();
       pos += name.length();

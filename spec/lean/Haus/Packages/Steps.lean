@@ -78,6 +78,9 @@ def packageJsonV (V : View) (dir : Path) : Option (Option NpmInfo) :=
     | none => none
     | some bytes => parseNpm bytes
 
+/-- What `lenientNpm dir` gives: a `package.json` that can't be read declares nothing. -/
+def lenientNpmV (V : View) (dir : Path) : Option NpmInfo := (packageJsonV V dir).getD none
+
 /-- What the body of `projectOf`'s loop gives for the directory `d`. -/
 def projectStep (V : View) (d : Path) :
     Option (ForInStep (Option (Option (Path × Option (List String))) × Unit)) :=
@@ -241,6 +244,12 @@ theorem bind_throw' {e : Err} {f : α → M β} : Pure env (MonadExcept.throw e 
 
 theorem bind_fail {c : Code} {m : String} {f : α → M β} : Pure env (Haus.Packages.fail c m >>= f) none := by
   intro κ s hs; rw [go_bind]; exact ⟨hs, rfl⟩
+
+/-- `x`, with its error replaced by `d`. -/
+theorem tryCatch_pure {x : M α} {v : Option α} {d : α} (hx : Pure env x v) :
+    Pure env (tryCatch x fun _ => (Pure.pure d : M α)) (some (v.getD d)) := fun κ =>
+  Triple.tryCatch (Triple.mono (hx κ) (fun _ h => h) (fun _ _ h => ⟨h.1, by rw [h.2]; rfl⟩) (fun _ h => h))
+    fun _ => Triple.pure fun _ h => ⟨h.1, by rw [h.2]; rfl⟩
 
 theorem forIn {xs : List γ} {b : β} {f : γ → β → M (ForInStep β)} {fv : γ → β → Option (ForInStep β)}
     (h : ∀ a b, Pure env (f a b) (fv a b)) : Pure env (ForIn.forIn xs b f) (forInV fv xs b) := by
@@ -417,6 +426,11 @@ theorem Pure.packageJsonOf {dir : Path} {owner : String} :
           intro h1 h2; subst h2; exact h1
         · simp at hr
       · exact h.npm p r hp
+
+theorem Pure.lenientNpm {dir : Path} {owner : String} :
+    Pure env (lenientNpm dir owner) (some (lenientNpmV env.view dir)) := by
+  unfold Haus.Packages.lenientNpm lenientNpmV
+  exact Pure.tryCatch_pure Pure.packageJsonOf
 
 theorem Pure.projectOf {p : Path} : Pure env (projectOf p) (projectV env.view p) := by
   unfold Haus.Packages.projectOf projectV

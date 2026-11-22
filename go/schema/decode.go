@@ -459,7 +459,7 @@ func (w *walker) nest(v haus.Value, t *typ, pop int) (haus.Value, bool, error) {
 	}
 	w.nodes++
 	if w.nodes > w.lim.MaxNodes {
-		return nil, false, &haus.Error{Code: haus.CodeTooManyNodes, Path: pathString(nil),
+		return nil, false, &haus.Error{Code: haus.CodeTooManyNodes, Path: pathString(w.path[:w.prefix]),
 			Message: fmt.Sprintf("the value writes more than %d values, the node limit: its parts share one another", w.lim.MaxNodes)}
 	}
 	w.budget += stepsPerValue

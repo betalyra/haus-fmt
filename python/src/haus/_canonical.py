@@ -17,7 +17,9 @@ They have one limit, the node limit (spec §7, `Limits.max_nodes`): a value buil
 parts share each other (an array holding the same array twice, nested) is small in memory but
 writes each shared part once for every place it is in. Above the limit, `HausEncodeError` with
 the code `too-many-nodes`, at the value. No other limit applies: a value deeper or longer than a
-writer's limits still has a canonical form.
+writer's limits still has a canonical form. There is no maximum depth: `canonical`, `hash`,
+`hash_all`, `equals` and `compare` walk a value with a stack of their own, not Python's call
+stack, so any depth works (spec §7, §12).
 """
 
 from __future__ import annotations
@@ -76,9 +78,9 @@ def _numbers(values: tuple[Value, ...]) -> list[str] | None:
     return texts if len(texts) == len(values) else None
 
 
-def _too_many(max_nodes: int, path: tuple[PathKey, ...]) -> HausEncodeError:
+def _too_many(max_nodes: int, path: tuple[PathKey, ...], operand: str) -> HausEncodeError:
     return HausEncodeError(
-        f"more than {max_nodes} values to write (parts that share each other are written each time)",
+        f"{operand}more than {max_nodes} values to write (parts that share each other are written each time)",
         path,
         "too-many-nodes",
     )
@@ -96,11 +98,13 @@ def canonical(value: Value, *, limits: Limits = DEFAULT_LIMITS) -> str:
     return canonical_at(value, limits.max_nodes, ())
 
 
-def canonical_at(value: Value, max_nodes: int, path: tuple[PathKey, ...]) -> str:
-    """`canonical`, with the node limit, failing at `path`. The values are counted a container's children at a time."""
+def canonical_at(value: Value, max_nodes: int, path: tuple[PathKey, ...], operand: str = "") -> str:
+    """`canonical`, with the node limit, failing at `path`. The values are counted a container's children at a time.
+
+    `operand` starts the error's message: which value of `equals` or `compare` it is."""
     nodes = 1  # the value itself
     if nodes > max_nodes:
-        raise _too_many(max_nodes, path)
+        raise _too_many(max_nodes, path, operand)
     out: list[str] = []
     write = out.append
     escaped = ESCAPED.search
@@ -148,7 +152,7 @@ def canonical_at(value: Value, max_nodes: int, path: tuple[PathKey, ...]) -> str
                 write(f'x"{v.data.hex()}"')
                 continue
             if nodes > max_nodes:
-                raise _too_many(max_nodes, path)
+                raise _too_many(max_nodes, path, operand)
             stack.append((children, closer))
             children, closer = inner, inner_closer
             break
@@ -162,9 +166,11 @@ def canonical_at(value: Value, max_nodes: int, path: tuple[PathKey, ...]) -> str
 def equals(a: Value, b: Value, *, limits: Limits = DEFAULT_LIMITS) -> bool:
     """Whether two values are equal (spec §2): the same normalized literals, and so the same canonical form.
 
-    Compares canonical forms, so it has their node limit (`too-many-nodes`, see `canonical`).
+    Compares canonical forms, so it has their node limit (`too-many-nodes` at `$`, its message
+    saying which value, see `canonical`).
     """
-    return canonical(a, limits=limits) == canonical(b, limits=limits)
+    max_nodes = limits.max_nodes
+    return canonical_at(a, max_nodes, (), "the first value: ") == canonical_at(b, max_nodes, (), "the second value: ")
 
 
 def compare(a: Value, b: Value, *, limits: Limits = DEFAULT_LIMITS) -> int:
@@ -172,9 +178,10 @@ def compare(a: Value, b: Value, *, limits: Limits = DEFAULT_LIMITS) -> int:
 
     A total order consistent with `equals`, for sorting
     (`sorted(values, key=functools.cmp_to_key(compare))`) and ordered maps.
-    Not numeric order: `10` sorts before `9`. Has the node limit of `canonical`.
+    Not numeric order: `10` sorts before `9`. Has the node limit of `canonical` (as `equals`).
     """
-    x, y = canonical(a, limits=limits), canonical(b, limits=limits)
+    max_nodes = limits.max_nodes
+    x, y = canonical_at(a, max_nodes, (), "the first value: "), canonical_at(b, max_nodes, (), "the second value: ")
     return (x > y) - (x < y)
 
 

@@ -99,21 +99,28 @@ public func hasComments(_ text: String, limits: Limits = Limits()) throws(HausEr
 /// the depth limit (`nesting-too-deep`, a record payload counting one level
 /// and an empty container a level), and more values written than
 /// ``Limits/maxNodes`` (`too-many-nodes`, at `$`, for a value whose arrays
-/// share each other). In a stream each value has its own count, and errors
-/// are at its index (`$[3]`).
+/// share each other).
 public func stringify(_ value: HausValue, _ options: FormatOptions = FormatOptions()) throws(HausError) -> String {
-    try stringifyAll([value], options)
+    try write([value], options, indexed: false)
 }
 
 /// Writes values as a file (spec §6): one value alone, two or more as a
-/// stream with a comma after each. See ``stringify(_:_:)``.
+/// stream with a comma after each. See ``stringify(_:_:)``. Each value has
+/// its own node count, and an error in the i-th value is at its index
+/// (`$[3]`), also when there is one value (`$[0]`, spec §11).
 public func stringifyAll(_ values: [HausValue], _ options: FormatOptions = FormatOptions()) throws(HausError) -> String
 {
+    try write(values, options, indexed: true)
+}
+
+/// Writes values as a file; with `indexed`, an error's path starts with the
+/// index of its value.
+private func write(_ values: [HausValue], _ options: FormatOptions, indexed: Bool) throws(HausError) -> String {
     let limits = try options.limits.checked()
-    guard options.layout == .pretty else { return try writeLines(values, options.layout, limits) }
+    guard options.layout == .pretty else { return try writeLines(values, options.layout, limits, indexed: indexed) }
     var file = FileNode()
     for (i, value) in values.enumerated() {
-        var walk = Walk(TreeSpelling(), checks: .writer(limits), prefix: values.count > 1 ? [.index(i)] : [])
+        var walk = Walk(TreeSpelling(), checks: .writer(limits), prefix: indexed ? [.index(i)] : [])
         var nothing: [UInt8] = []
         try walk.write(value, to: &nothing)
         file.items.append(Item(node: walk.spelling.root!))
@@ -123,12 +130,14 @@ public func stringifyAll(_ values: [HausValue], _ options: FormatOptions = Forma
 
 /// Writes values in the compact or minimised layout, directly: one line per
 /// value, with a comma after each in a stream.
-private func writeLines(_ values: [HausValue], _ layout: Layout, _ limits: Limits) throws(HausError) -> String {
+private func writeLines(
+    _ values: [HausValue], _ layout: Layout, _ limits: Limits, indexed: Bool
+) throws(HausError) -> String {
     let spelling = layout == .compact ? HausSpelling.compact : .minimised
     let stream = values.count > 1
     var out: [UInt8] = []
     for (i, value) in values.enumerated() {
-        var walk = Walk(spelling, checks: .writer(limits), prefix: stream ? [.index(i)] : [])
+        var walk = Walk(spelling, checks: .writer(limits), prefix: indexed ? [.index(i)] : [])
         try walk.write(value, to: &out)
         if stream { out.append(ASCII.comma) }
         out.append(ASCII.lf)

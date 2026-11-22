@@ -843,8 +843,10 @@ def runProfileBatch (name : String) (file : System.FilePath) : IO UInt32 := do
 A case of the stream suite: the text, the reader's options, the values or the
 error code, and `whole`, where given: the values of parsing the whole text
 instead (with the default limits; the value limit is a stream reader's only).
+An error case may give its `line` and `column` (both, 1-based, as the positions
+suite counts them), which every split must report.
 -/
-def streamCase : Value → Option (String × Haus.Stream.Options × Except String (List Value) × Option (List Value))
+def streamCase : Value → Option (String × Haus.Stream.Options × Except String (List Value) × Option (List Value) × Option (Nat × Nat))
   | .record fs => do
     let .str text ← fs.lookup "text" | none
     let .num n ← fs.lookup "maxValueLength" | none
@@ -860,7 +862,11 @@ def streamCase : Value → Option (String × Haus.Stream.Options × Except Strin
       | none => some none
       | some (.variant "Ok" [.arr vs]) => some (some vs)
       | some _ => none
-    return (text, { maxValueLength := max, strict }, result, whole)
+    let place ← match fs.lookup "line", fs.lookup "column" with
+      | none, none => some none
+      | some (.num l), some (.num c) => do some (some (← l.toNat?, ← c.toNat?))
+      | _, _ => none
+    return (text, { maxValueLength := max, strict }, result, whole, place)
   | _ => none
 
 
@@ -1006,16 +1012,16 @@ def runStreamSuite (dir : System.FilePath) : IO UInt32 := do
   let mut wholeFailed := 0
   for v in vs do
     let shown := oneLine (canonicalText v)
-    let some (text, o, want, whole) := streamCase v
+    let some (text, o, want, whole, place) := streamCase v
       | failed := failed + 1; IO.println s!"FAIL (not a case): {shown}"
     let wrong := (streamSplits text.toList).filterMap fun (how, chunks) =>
       let (got, err) := Haus.Stream.readWith o {} chunks
       let same := match want, err with
         | .ok ws, none => valuesEquiv got ws
-        | .error code, some e => e.code.name == code
+        | .error code, some e => e.code.name == code && place.all (position text.toList e == ·)
         | _, _ => false
       if same then none
-      else some s!"{how}: {match err with | some e => e.code.name | none => toString (got.map canonicalText)}"
+      else some s!"{how}: {match err with | some e => s!"{e.code.name} at {position text.toList e}" | none => toString (got.map canonicalText)}"
     match wrong with
     | [] => IO.println s!"ok   {shown}"
     | w :: _ => failed := failed + 1; IO.println s!"FAIL {shown}: {wrong.length} ways, {w}"

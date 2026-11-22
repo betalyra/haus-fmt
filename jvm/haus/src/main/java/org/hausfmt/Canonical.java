@@ -3,6 +3,7 @@ package org.hausfmt;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.List;
 
@@ -10,6 +11,9 @@ import java.util.List;
  * The canonical form (spec §12): one exact text per value, so that two values are equal exactly
  * when their canonical forms are identical. Records are sorted by key code points, numbers
  * normalized and in decimal, and there is no whitespace outside strings.
+ *
+ * <p>The canonical form, hashing, equality and order work at any depth: they walk a value with a
+ * stack of their own, not the thread's, so the depth is bounded only by memory.
  */
 final class Canonical {
   private final StringBuilder b = new StringBuilder();
@@ -61,14 +65,21 @@ final class Canonical {
   /**
    * Orders values by the UTF-8 bytes of their canonical forms, shorter first when one is a prefix
    * of the other (spec §12). A string without a UTF-8 form sorts as if it held U+FFFD there. The
-   * node limit applies to each value.
+   * node limit applies to each value; its error is at {@code $}, and its message says which value.
    */
   static int compare(Value x, Value y, Limits lim) {
-    Canonical cx = new Canonical(false, lim);
-    cx.top(x);
-    Canonical cy = new Canonical(false, lim);
-    cy.top(y);
-    return Scan.compareCodePoints(cx.b.toString(), cy.b.toString());
+    return Scan.compareCodePoints(operand(x, lim, "first"), operand(y, lim, "second"));
+  }
+
+  /** The canonical form of an operand of {@link #compare}; an error's message names the operand. */
+  private static String operand(Value v, Limits lim, String which) {
+    Canonical c = new Canonical(false, lim);
+    try {
+      c.top(v);
+    } catch (HausException e) {
+      throw e.withReason("the " + which + " value: " + e.reason());
+    }
+    return c.b.toString();
   }
 
   /** Writes one top-level value, which has the node limit to itself. */
@@ -87,35 +98,119 @@ final class Canonical {
     }
   }
 
-  private void value(Value v) {
-    node();
-    switch (v.kind()) {
-      case NUMBER:
-        b.append(((Value.Number) v).literal());
-        break;
-      case STRING:
-        string(((Value.Text) v).value(), "string");
-        break;
-      case BYTES:
-        WriteCheck.appendBytes(b, (Value.Bytes) v);
-        break;
-      case ARRAY:
-        items('[', ']', ((Value.Array) v).unsafeItems());
-        break;
-      case RECORD:
-        record((Value.Record) v);
-        break;
-      case VARIANT:
-        Value.Variant variant = (Value.Variant) v;
-        b.append(variant.tag());
-        if (variant.payload() != null) {
-          node(); // Tag { … }: the record is one value written
-          record(variant.payload());
-        } else if (variant.size() > 0) {
-          items('(', ')', variant.unsafeArgs());
-        }
-        break;
+  /**
+   * A container being written: its items, or a record's keys in code point order, the next one
+   * to write, and its closing bracket.
+   */
+  private static final class Frame {
+    final Value[] items;
+    final Value.Record record;
+    final int[] order;
+    final char closer;
+    int next;
+
+    Frame(Value[] items, char closer) {
+      this.items = items;
+      this.record = null;
+      this.order = null;
+      this.closer = closer;
     }
+
+    Frame(Value.Record record) {
+      this.items = null;
+      this.record = record;
+      this.order = sortedOrder(record.unsafeKeys());
+      this.closer = '}';
+    }
+
+    int size() {
+      return items != null ? items.length : order.length;
+    }
+  }
+
+  /**
+   * Writes a value with a stack of its own rather than recursion, so that any depth works (spec
+   * §12): the depth is bounded only by memory, never by the thread's stack.
+   */
+  private void value(Value root) {
+    ArrayDeque<Frame> stack = new ArrayDeque<>();
+    Value v = root;
+    while (true) {
+      node();
+      Frame opened = null;
+      switch (v.kind()) {
+        case NUMBER:
+          b.append(((Value.Number) v).literal());
+          break;
+        case STRING:
+          string(((Value.Text) v).value(), "string");
+          break;
+        case BYTES:
+          WriteCheck.appendBytes(b, (Value.Bytes) v);
+          break;
+        case ARRAY:
+          b.append('[');
+          opened = new Frame(((Value.Array) v).unsafeItems(), ']');
+          break;
+        case RECORD:
+          b.append('{');
+          opened = new Frame((Value.Record) v);
+          break;
+        case VARIANT:
+          Value.Variant variant = (Value.Variant) v;
+          b.append(variant.tag());
+          if (variant.payload() != null) {
+            node(); // Tag { … }: the record is one value written
+            b.append('{');
+            opened = new Frame(variant.payload());
+          } else if (variant.size() > 0) {
+            b.append('(');
+            opened = new Frame(variant.unsafeArgs(), ')');
+          }
+          break;
+      }
+      if (opened != null) {
+        if (opened.size() == 0) {
+          b.append(opened.closer);
+        } else {
+          stack.push(opened);
+        }
+      }
+      // The next value: the next item of the innermost container not done, after closing those done.
+      v = null;
+      while (v == null) {
+        Frame top = stack.peek();
+        if (top == null) {
+          return;
+        }
+        if (top.next == top.size()) {
+          b.append(top.closer);
+          stack.pop();
+          continue;
+        }
+        if (top.next > 0) {
+          b.append(',');
+        }
+        int at = top.next++;
+        if (top.items != null) {
+          v = top.items[at];
+        } else {
+          v = field(top.record, top.order[at]);
+        }
+      }
+    }
+  }
+
+  /** Writes the key of field i of a record and its colon, and returns the field's value. */
+  private Value field(Value.Record r, int i) {
+    String key = r.unsafeKeys()[i];
+    if (r.bareKeys() || Scan.isIdent(key)) {
+      b.append(key);
+    } else {
+      string(key, "key");
+    }
+    b.append(':');
+    return r.valueAt(i);
   }
 
   private void string(String s, String what) {
@@ -124,36 +219,95 @@ final class Canonical {
     }
   }
 
-  private void items(char open, char closer, Value[] vs) {
-    b.append(open);
-    for (int i = 0; i < vs.length; i++) {
-      if (i > 0) {
-        b.append(',');
-      }
-      value(vs[i]);
+  /** A pair of containers being compared by {@link #equal}, and the next item to compare. */
+  private static final class Pair {
+    final Value[] xs;
+    final Value[] ys;
+    final Value.Record rx;
+    final Value.Record ry;
+    int next;
+
+    Pair(Value[] xs, Value[] ys, Value.Record rx, Value.Record ry) {
+      this.xs = xs;
+      this.ys = ys;
+      this.rx = rx;
+      this.ry = ry;
     }
-    b.append(closer);
+
+    int size() {
+      return xs != null ? xs.length : rx.size();
+    }
   }
 
-  private void record(Value.Record r) {
-    String[] keys = r.unsafeKeys();
-    int[] order = sortedOrder(keys);
-    boolean bare = r.bareKeys();
-    b.append('{');
-    for (int k = 0; k < order.length; k++) {
-      if (k > 0) {
-        b.append(',');
+  /**
+   * Haus equality (spec §2), with a stack of its own rather than recursion, so that any depth
+   * works: numbers by their normalized literals, strings by code points, records by their keys and
+   * values whatever the order, variants by tag and arguments.
+   */
+  static boolean equal(Value x, Value y) {
+    ArrayDeque<Pair> stack = new ArrayDeque<>();
+    while (true) {
+      if (x != y) {
+        if (y == null || x.kind() != y.kind()) {
+          return false;
+        }
+        Pair opened = null;
+        switch (x.kind()) {
+          case NUMBER:
+          case STRING:
+          case BYTES:
+            if (!x.equals(y)) {
+              return false;
+            }
+            break;
+          case ARRAY:
+            opened = new Pair(((Value.Array) x).unsafeItems(), ((Value.Array) y).unsafeItems(), null, null);
+            break;
+          case RECORD:
+            opened = new Pair(null, null, (Value.Record) x, (Value.Record) y);
+            if (opened.rx.size() != opened.ry.size()) {
+              return false;
+            }
+            break;
+          case VARIANT:
+            Value.Variant vx = (Value.Variant) x;
+            Value.Variant vy = (Value.Variant) y;
+            if (!vx.tag().equals(vy.tag())) {
+              return false;
+            }
+            opened = new Pair(vx.unsafeArgs(), vy.unsafeArgs(), null, null);
+            break;
+        }
+        if (opened != null) {
+          if (opened.xs != null && opened.xs.length != opened.ys.length) {
+            return false;
+          }
+          if (opened.size() > 0) {
+            stack.push(opened);
+          }
+        }
       }
-      String key = keys[order[k]];
-      if (bare || Scan.isIdent(key)) {
-        b.append(key);
-      } else {
-        string(key, "key");
+      // The next pair: the next items of the innermost containers not done.
+      x = null;
+      while (x == null) {
+        Pair top = stack.peek();
+        if (top == null) {
+          return true;
+        }
+        if (top.next == top.size()) {
+          stack.pop();
+          continue;
+        }
+        int at = top.next++;
+        if (top.xs != null) {
+          x = top.xs[at];
+          y = top.ys[at];
+        } else {
+          x = top.rx.valueAt(at);
+          y = top.ry.get(top.rx.unsafeKeys()[at]);
+        }
       }
-      b.append(':');
-      value(r.valueAt(order[k]));
     }
-    b.append('}');
   }
 
   /** Records with at most this many keys are sorted by insertion. */

@@ -312,7 +312,7 @@ theorem Wider.manifestV (hw : Wider V V') (d : Path) : manifestV V' d = manifest
   unfold Haus.Packages.manifestV; rw [hw.tree, hw.limits]
 
 theorem Wider.npmOf (hw : Wider V V') (d : Path) : npmOf V' d = npmOf V d := by
-  unfold Haus.Packages.npmOf packageJsonV; rw [hw.tree, hw.limits, hw.npm, hw.checkVersions]
+  unfold Haus.Packages.npmOf lenientNpmV packageJsonV; rw [hw.tree, hw.limits, hw.npm, hw.checkVersions]
 
 theorem Wider.scan (hw : Wider V V') {T : Target} {importer : Importer} {imps : List Import} :
     Scan V' T importer imps ↔ Scan V T importer imps := by
@@ -594,15 +594,20 @@ def PkgEntry (V : View) (d : Path) (g : Given) : Prop :=
   ∃ real m, V.tree.realPath d = .ok real ∧ manifestV V real = some (some m) ∧
     g = { dir := real, shown := showPath d, name := m.name, byDir := true }
 
-/-- The package of the entry `n` of the folder `f`, whose real path is `real`. -/
-def FolderAt (V : View) (f real : Path) (n : String) (g : Given) : Prop :=
+/--
+The package of the entry `n` of a folder whose real path is `real`:
+a valid manifest, and (when versions are checked) no other version in a
+`package.json` beside it (§13.3). Shown by `real`'s last name and `n`.
+-/
+def FolderAt (V : View) (real : Path) (n : String) (g : Given) : Prop :=
   ∃ sub m, V.tree.realPath (real ++ [n]) = .ok sub ∧ V.tree.isDir sub = true ∧
     (V.tree.childKind? sub "package.haus").isSome = true ∧ manifestV V sub = some (some m) ∧
-    g = { dir := sub, shown := showPath (f ++ [n]), name := m.name, byDir := false }
+    VersionOk V m (lenientNpmV V sub) ∧
+    g = { dir := sub, shown := showPath (real.getLast?.toList ++ [n]), name := m.name, byDir := false }
 
 /-- A package in the folder `f`. -/
 def FolderEntry (V : View) (f : Path) (g : Given) : Prop :=
-  ∃ real n, V.tree.realPath f = .ok real ∧ n ∈ V.tree.list real ∧ FolderAt V f real n g
+  ∃ real n, V.tree.realPath f = .ok real ∧ n ∈ V.tree.list real ∧ FolderAt V real n g
 
 /-- The packages given in a successful run: each given by a directory or in a folder, and all of them. -/
 structure GivenOk (V : View) (md : Mode) (gs : List Given) : Prop where
@@ -618,10 +623,10 @@ theorem PkgEntry.unique {V : View} {d : Path} {g g' : Given} (h : PkgEntry V d g
   rw [h2] at h2'; cases h2'
   rfl
 
-theorem FolderAt.unique {V : View} {f real : Path} {n : String} {g g' : Given} (h : FolderAt V f real n g)
-    (h' : FolderAt V f real n g') : g' = g := by
-  obtain ⟨r, m, h1, -, -, h2, rfl⟩ := h
-  obtain ⟨r', m', h1', -, -, h2', rfl⟩ := h'
+theorem FolderAt.unique {V : View} {real : Path} {n : String} {g g' : Given} (h : FolderAt V real n g)
+    (h' : FolderAt V real n g') : g' = g := by
+  obtain ⟨r, m, h1, -, -, h2, -, rfl⟩ := h
+  obtain ⟨r', m', h1', -, -, h2', -, rfl⟩ := h'
   rw [h1] at h1'; cases h1'
   rw [h2] at h2'; cases h2'
   rfl
@@ -694,7 +699,7 @@ theorem givenPackages_ok {env : Env} {κ : Core} :
               (∀ d ∈ env.config.mode.packages, ∀ g, PkgEntry env.view d g → g ∈ bn.1) ∧
               (∀ f ∈ pre, ∀ g, FolderEntry env.view f g → g ∈ bn.1) ∧
               ∃ preN, preN ++ restN = (env.tree.list r).mergeSort (fun x1 x2 => decide (x1 ≤ x2)) ∧
-                ∀ n ∈ preN, ∀ g, FolderAt env.view f r n g → g ∈ bn.1)) ?_
+                ∀ n ∈ preN, ∀ g, FolderAt env.view r n g → g ∈ bn.1)) ?_
               fun _ _ h => h) ?_ (fun _ _ h => h) (fun _ h => h)) fun gb => ?_
           · intro n restN bn hsufN
             apply Triple.pre_and
@@ -702,14 +707,14 @@ theorem givenPackages_ok {env : Env} {κ : Core} :
             have hn : n ∈ env.tree.list r :=
               (List.mergeSort_perm _ _).mem_iff.mp (hpreN ▸ List.mem_append_right _ List.mem_cons_self)
             -- The entries before `n`, with `n` itself, given `n`'s own result.
-            have step : ∀ (gs : List Given), (∀ g, FolderAt env.view f r n g → g ∈ gs) → bn.1 ⊆ gs →
+            have step : ∀ (gs : List Given), (∀ g, FolderAt env.view r n g → g ∈ gs) → bn.1 ⊆ gs →
                 (∀ g ∈ gs, g ∉ bn.1 → g.byDir = false ∧ ∃ f ∈ env.config.mode.folders, FolderEntry env.view f g) →
                 ((∀ g ∈ gs, (g.byDir = true ∧ ∃ d ∈ env.config.mode.packages, PkgEntry env.view d g) ∨
                   (g.byDir = false ∧ ∃ f ∈ env.config.mode.folders, FolderEntry env.view f g)) ∧
                 (∀ d ∈ env.config.mode.packages, ∀ g, PkgEntry env.view d g → g ∈ gs) ∧
                 (∀ f ∈ pre, ∀ g, FolderEntry env.view f g → g ∈ gs) ∧
                 ∃ preN, preN ++ restN = (env.tree.list r).mergeSort (fun x1 x2 => decide (x1 ≤ x2)) ∧
-                  ∀ n ∈ preN, ∀ g, FolderAt env.view f r n g → g ∈ gs) := by
+                  ∀ n ∈ preN, ∀ g, FolderAt env.view r n g → g ∈ gs) := by
               intro gs hown hsub hnew
               refine ⟨fun g hg => ?_, fun d hd g hg => hsub (j2 d hd g hg), fun f' hf' g hg => hsub (j3 f' hf' g hg),
                 preN ++ [n], by rw [← hpreN]; simp, fun n' hn' g hg => ?_⟩
@@ -736,25 +741,30 @@ theorem givenPackages_ok {env : Env} {κ : Core} :
                 rw [hdir] at hskip
                 cases h : env.tree.childKind? sub "package.haus" <;> simp_all
               · rename_i hkeep
-                refine Triple.bind (Triple.tryCatch (R := fun s => At env κ s ∧ manifestV env.view sub = none)
+                refine Triple.bind (Triple.tryCatch (R := fun s => At env κ s ∧ ∀ m,
+                    manifestV env.view sub = some (some m) → ¬VersionOk env.view m (lenientNpmV env.view sub))
                   (Q := fun p s => At env κ s ∧ ((∀ g ∈ p.2.1, (g.byDir = true ∧ ∃ d ∈ env.config.mode.packages,
                       PkgEntry env.view d g) ∨ (g.byDir = false ∧ ∃ f ∈ env.config.mode.folders, FolderEntry env.view f g)) ∧
                     (∀ d ∈ env.config.mode.packages, ∀ g, PkgEntry env.view d g → g ∈ p.2.1) ∧
                     (∀ f ∈ pre, ∀ g, FolderEntry env.view f g → g ∈ p.2.1) ∧
                     ∃ preN, preN ++ restN = (env.tree.list r).mergeSort (fun x1 x2 => decide (x1 ≤ x2)) ∧
-                      ∀ n ∈ preN, ∀ g, FolderAt env.view f r n g → g ∈ p.2.1)) ?_ fun _ => ?_)
+                      ∀ n ∈ preN, ∀ g, FolderAt env.view r n g → g ∈ p.2.1)) ?_ fun _ => ?_)
                   fun p => Triple.pure fun s hs => hs
                 · have hdir : env.tree.isDir sub = true := by
                     cases h : env.tree.isDir sub <;> simp_all
                   have hk : (env.tree.childKind? sub "package.haus").isSome = true := by
                     cases h : env.tree.childKind? sub "package.haus" <;> simp_all
                   refine Triple.bind (Triple.mono (Pure.manifestOf (env := env) (dir := sub)
-                    (shown := showPath (f ++ [n])) κ) (fun _ h => h) (fun _ _ h => h) (fun _ h => h))
+                    (shown := showPath (r.getLast?.toList ++ [n])) κ) (fun _ h => h) (fun _ _ h => h)
+                    (fun _ h => ⟨h.1, fun m hm' => by rw [h.2] at hm'; cases hm'⟩))
                     fun mo => Triple.pre_and fun hm => ?_
                   split
                   · rename_i m
-                    have hown : FolderAt env.view f r n ⟨sub, showPath (f ++ [n]), m.name, false⟩ :=
-                      ⟨sub, m, hsub, hdir, hk, hm, rfl⟩
+                    refine Triple.bind (Triple.mono folderVersion_iff (fun _ h => h) (fun _ _ h => h)
+                      (fun _ h => ⟨h.1, fun m' hm' => by rw [hm] at hm'; cases hm'; exact h.2⟩))
+                      fun _ => Triple.pre_and fun hv => ?_
+                    have hown : FolderAt env.view r n ⟨sub, showPath (r.getLast?.toList ++ [n]), m.name, false⟩ :=
+                      ⟨sub, m, hsub, hdir, hk, hm, hv, rfl⟩
                     refine Triple.pure fun s hs => ⟨hs, step _ (fun g hg => by rw [hown.unique hg]; simp)
                       (fun _ h => List.mem_append_left _ h) (fun g hg hgb => ?_)⟩
                     rcases List.mem_append.mp hg with hg | hg
@@ -773,11 +783,10 @@ theorem givenPackages_ok {env : Env} {κ : Core} :
                     exact absurd rfl (hnone m)
                 · refine Triple.pure fun s hs => ⟨hs.1, step bn.1 (fun g hg => ?_) (fun _ h => h)
                     (fun g _ h => absurd ‹_› h)⟩
-                  obtain ⟨sub', m, hsub', -, -, hm', -⟩ := hg
+                  obtain ⟨sub', m, hsub', -, -, hm', hv, -⟩ := hg
                   rw [Env.view_tree, hsub] at hsub'
                   cases hsub'
-                  rw [hs.2] at hm'
-                  cases hm'
+                  exact absurd hv (hs.2 m hm')
             · refine Triple.pure fun s hs =>
                   ⟨hs, step bn.1 (fun g hg => ?_) (fun _ h => h) (fun g _ h => absurd ‹_› h)⟩
               obtain ⟨sub', m, hsub', -⟩ := hg
@@ -817,11 +826,13 @@ theorem PkgEntry.congr {V V' : View} (ht : V'.tree = V.tree) (hl : V'.limits = V
   obtain ⟨r, m, h1, h2, h3⟩ := h
   exact ⟨r, m, by rw [ht]; exact h1, by rw [manifestV_congr ht hl]; exact h2, h3⟩
 
-theorem FolderEntry.congr {V V' : View} (ht : V'.tree = V.tree) (hl : V'.limits = V.limits) {f : Path} {g : Given}
+theorem FolderEntry.congr {V V' : View} (ht : V'.tree = V.tree) (hl : V'.limits = V.limits)
+    (hc : V'.checkVersions = V.checkVersions) {f : Path} {g : Given}
     (h : FolderEntry V f g) : FolderEntry V' f g := by
-  obtain ⟨r, n, h1, h2, sub, m, h3, h4, h5, h6, h7⟩ := h
+  obtain ⟨r, n, h1, h2, sub, m, h3, h4, h5, h6, h7, h8⟩ := h
+  have hn : lenientNpmV V' sub = lenientNpmV V sub := by unfold lenientNpmV packageJsonV; rw [ht, hl]
   exact ⟨r, n, by rw [ht]; exact h1, by rw [ht]; exact h2, sub, m, by rw [ht]; exact h3, by rw [ht]; exact h4,
-    by rw [ht]; exact h5, by rw [manifestV_congr ht hl]; exact h6, h7⟩
+    by rw [ht]; exact h5, by rw [manifestV_congr ht hl]; exact h6, by unfold VersionOk; rw [hn, hc]; exact h7, h8⟩
 
 /-! ## Two whole runs -/
 
@@ -884,7 +895,8 @@ theorem runIn_folders {t : Tree} {c c' : Config} {root : Path} {w w' : Walk} (hm
   have p2 : ∀ d x, PkgEntry ({ tree := t, config := c' } : Env).view d x →
       PkgEntry ({ tree := t, config := c } : Env).view d x := fun _ _ he => he.congr (by rfl) hm.limits.symm
   have f1 : ∀ f x, FolderEntry ({ tree := t, config := c } : Env).view f x →
-      FolderEntry ({ tree := t, config := c' } : Env).view f x := fun _ _ he => he.congr (by rfl) hm.limits
+      FolderEntry ({ tree := t, config := c' } : Env).view f x := fun _ _ he =>
+    he.congr (by rfl) hm.limits hm.checkVersions
   have hw : Wider { tree := t, config := c, given := g, broken := b : Env }.view
       { tree := t, config := c', given := g', broken := b' : Env }.view :=
     { tree := rfl, limits := hm.limits, npm := hm.npm, worldWritable := hm.worldWritable,

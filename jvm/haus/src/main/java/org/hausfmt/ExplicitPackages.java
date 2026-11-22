@@ -70,7 +70,9 @@ public final class ExplicitPackages extends PackageLocator {
    * The set with the packages in {@code folder} added: its subdirectories (or links to
    * directories) that have a {@code package.haus}, not deeper. A folder that can't be read is
    * {@code import-not-found}, one with more than 4096 entries {@code too-many-files}. A
-   * subdirectory whose manifest is invalid is left out; an import that isn't found names it.
+   * subdirectory whose manifest is invalid, or whose {@code package.json} gives another version,
+   * is left out; an import that isn't found names it by the last name of the folder's real path
+   * and its own ({@code schemas/broken}), however the folder was given.
    *
    * @throws HausException if the folder can't be read, or two packages share a name
    */
@@ -78,7 +80,14 @@ public final class ExplicitPackages extends PackageLocator {
     String shownFolder = SchemaFiles.shown(folder.toString());
     List<String> dirs = new ArrayList<>();
     int entries = 0;
-    try (DirectoryStream<Path> listing = Files.newDirectoryStream(folder)) {
+    Path real;
+    try {
+      real = Path.of(SchemaFiles.realPath(folder.toString()));
+    } catch (IOException e) {
+      throw HausException.of(ErrorCode.IMPORT_NOT_FOUND, shownFolder + ": " + SchemaFiles.describe(e));
+    }
+    Path realName = real.getFileName();
+    try (DirectoryStream<Path> listing = Files.newDirectoryStream(real)) {
       for (Path entry : listing) {
         if (++entries > SchemaFiles.MAX_FOLDER_ENTRIES) {
           throw HausException.of(ErrorCode.TOO_MANY_FILES, shownFolder
@@ -96,22 +105,38 @@ public final class ExplicitPackages extends PackageLocator {
     }
     Collections.sort(dirs);
     Builder b = new Builder(this);
+    SchemaFiles files = new SchemaFiles();
     for (String dir : dirs) {
+      Path entryName = Path.of(dir).getFileName();
+      String named = realName == null ? entryName.toString() : realName.resolve(entryName).toString();
       Manifest m;
       String resolved;
       try {
         resolved = SchemaFiles.realPath(dir);
         m = SchemaFiles.readManifest(resolved);
+        checkVersion(m, files.lenientVersion(resolved));
       } catch (IOException e) {
-        b.unreadable.add(new Unreadable(dir, SchemaFiles.describe(e)));
+        b.unreadable.add(new Unreadable(named, SchemaFiles.describe(e)));
         continue;
       } catch (HausException e) {
-        b.unreadable.add(new Unreadable(dir, e.reason()));
+        b.unreadable.add(new Unreadable(named, e.reason()));
         continue;
       }
       b.add(m, resolved, true);
     }
     return b.build();
+  }
+
+  /**
+   * The version check of a package found in a folder: a package.json beside its manifest, read
+   * leniently, that gives another version is {@code package-version}, and the subdirectory is
+   * skipped (spec §13.3).
+   */
+  private static void checkVersion(Manifest m, SchemaFiles.Version version) {
+    if (version.present() && !version.text().equals(m.version())) {
+      throw HausException.of(ErrorCode.PACKAGE_VERSION, "the package.haus of " + m.name() + " says version "
+          + Quoting.forMessage(m.version()) + ", the package.json next to it " + Quoting.forMessage(version.text()));
+    }
   }
 
   /** A new set, built from a copy of one: each call copies the set once. */
@@ -144,7 +169,7 @@ public final class ExplicitPackages extends PackageLocator {
   Location locate(String name, String from, SchemaFiles files) {
     Given g = packages.get(name);
     if (g != null) {
-      SchemaFiles.Version version = files.npmVersion(g.dir());
+      SchemaFiles.Version version = files.lenientVersion(g.dir());
       return new Location(g.dir(), version.text(), version.present(), g.scanned(), null);
     }
     StringBuilder why = new StringBuilder("package ").append(name).append(" is not among the packages given");

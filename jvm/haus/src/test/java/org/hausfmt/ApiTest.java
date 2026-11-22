@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
@@ -144,7 +145,16 @@ class ApiTest {
           () -> Haus.writeAll(List.of(Value.string("a"), dag), FormatOptions.of(l).withLimits(under)));
       assertEquals(ErrorCode.TOO_MANY_NODES, e.code());
       assertEquals("$[1]", e.path());
+      // A writer of several values gives $[0] for a stream of one (spec §11).
+      e = assertThrows(HausException.class, () -> Haus.writeAll(List.of(dag), FormatOptions.of(l).withLimits(under)));
+      assertEquals("$[0]", e.path(), l.toString());
     }
+    // compare: at $, and the message says which value (spec §12).
+    HausException second = assertThrows(HausException.class, () -> Haus.compare(Value.number(1), dag, under));
+    assertEquals("$", second.path());
+    assertTrue(second.reason().startsWith("the second value"), second.reason());
+    assertTrue(assertThrows(HausException.class, () -> Haus.compare(dag, Value.number(1), under)).reason()
+        .startsWith("the first value"));
     assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.check(dag, under)));
     assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> HausJson.toHausJson(dag, under)));
     assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.canonical(dag, under)));
@@ -171,6 +181,58 @@ class ApiTest {
     Haus.canonical(payload, three);
     // With the default limit, 2^27 values written is too many, though the value is small.
     assertEquals(ErrorCode.TOO_MANY_NODES, code(() -> Haus.hash(shared(26))));
+  }
+
+  /**
+   * A value {@code n} levels deep, by turns an array, a variant with arguments and a variant with a
+   * record payload, around {@code inner}. The constructors build no value deeper than {@link
+   * Limits#MAX_SUPPORTED_DEPTH}; the arrays here are built with the package's constructor that
+   * takes a depth known already, given 1, so that the value can be deeper than that.
+   */
+  private static Value veryDeep(int n, Value inner) {
+    Value v = inner;
+    for (int i = 0; i < n; i++) {
+      switch (i % 3) {
+        case 0 -> v = new Value.Array(new Value[] {v}, 1);
+        case 1 -> v = Value.variant("Some", v, Value.number(i));
+        default -> v = Value.variant("Node", Value.record(Value.field("next", v), Value.field("a b", Value.string("x"))));
+      }
+    }
+    return v;
+  }
+
+  /**
+   * The canonical form, hashing, equality and order work at any depth (spec §12), on a thread with
+   * the default stack: 100,000 levels.
+   */
+  @Test
+  void anyDepth() throws InterruptedException {
+    AtomicReference<Throwable> failed = new AtomicReference<>();
+    Thread thread = new Thread(() -> {
+      try {
+        Value a = veryDeep(100_000, Value.number(1));
+        Value b = veryDeep(100_000, Value.number(1));
+        Value c = veryDeep(100_000, Value.number(2));
+        String ca = Haus.canonical(a);
+        assertTrue(ca.startsWith("[Node{\"a b\":\"x\",next:Some([Node{\"a b\":\"x\",next:"), ca.substring(0, 40));
+        assertEquals(ca, Haus.canonical(b));
+        assertNotEquals(ca, Haus.canonical(c));
+        assertEquals(Haus.hash(a), Haus.hash(b));
+        assertNotEquals(Haus.hash(a), Haus.hash(c));
+        assertEquals(64, Haus.hashAll(List.of(a, c)).length());
+        assertTrue(a.equals(b));
+        assertFalse(a.equals(c));
+        assertEquals(0, Haus.compare(a, b));
+        assertTrue(Haus.compare(a, c) < 0);
+      } catch (Throwable e) {
+        failed.set(e);
+      }
+    });
+    thread.start();
+    thread.join();
+    if (failed.get() != null) {
+      throw new AssertionError(failed.get());
+    }
   }
 
   /** A writer checks every limit a value built in code can break (spec §11), and check() the same. */

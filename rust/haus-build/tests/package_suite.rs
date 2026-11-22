@@ -183,6 +183,6 @@ fn package_suite() {
         }
     }
     println!("package suite through the generators: {run} Explicit cases run, {} Npm cases skipped", skipped.len());
-    assert_eq!(cases.len(), 92, "the suite's cases");
+    assert_eq!(cases.len(), 99, "the suite's cases");
     assert!(failures.is_empty(), "{} of {run} cases fail:\n{}", failures.len(), failures.join("\n"));
 }

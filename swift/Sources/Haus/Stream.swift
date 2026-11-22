@@ -163,9 +163,12 @@ public struct StreamReader: Sendable {
             characters += skipped
             i += 1 + skipped
             if characters > limits.maxValueLength {
+                // At the first character counted: after the previous comma, or the
+                // first of the stream, after a byte order mark (spec §7).
+                let bom = first && start == 0 && buffer.starts(with: byteOrderMark) ? 1 : 0
                 throw HausError(
                     .valueTooLong, "a top-level value of more than \(limits.maxValueLength) characters",
-                    position: SourcePosition(line: line, column: column))
+                    position: SourcePosition(line: line, column: column + bom))
             }
         }
         return nil

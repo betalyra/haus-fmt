@@ -210,8 +210,8 @@ func TestPackageSuite(t *testing.T) {
 			}
 		})
 	}
-	if len(cases) != 92 {
-		t.Errorf("%d cases, expected 92", len(cases))
+	if len(cases) != 99 {
+		t.Errorf("%d cases, expected 99", len(cases))
 	}
 	t.Logf("package suite: %d cases run (%d of them the SHOULD version check), 0 skipped", len(cases), should)
 }

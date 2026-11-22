@@ -24,6 +24,8 @@ struct SchemaWalker {
     let encoding: Bool
     let reading: Bool
     var path: [PathStep]
+    /// The steps of `path` before the value given: a stream item's index.
+    let rootSteps: Int
     var depth = 0
     var nodes = 0
     var steps = 0
@@ -34,6 +36,7 @@ struct SchemaWalker {
         self.encoding = encoding
         self.reading = reading
         self.path = path
+        self.rootSteps = path.count
     }
 
     // ── errors ──────────────────────────────────────────────────
@@ -59,7 +62,12 @@ struct SchemaWalker {
     }
 
     @inline(never)
-    func tooManyNodes() -> HausError { fail(.tooManyNodes, "the value has more than \(limits.maxNodes) nodes") }
+    func tooManyNodes() -> HausError {
+        // At the value given, `$` (`$[i]` for a stream's item), wherever the walk is (spec §7, §15).
+        HausError(
+            .tooManyNodes, "the value has more than \(limits.maxNodes) nodes",
+            path: pathString(Array(path.prefix(rootSteps))))
+    }
 
     // ── the recursion ───────────────────────────────────────────
 

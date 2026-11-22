@@ -744,13 +744,12 @@ func (p *parser) atom() (*ty, *synErr) {
 
 // spread reads ...Name (a lowercase name is read too, for check to reject).
 func (p *parser) spread(at int, attrs []attribute) (spreadDef, *synErr) {
+	// ...Name is one token: nothing may come between the dots and the name (spec §14).
 	p.pos += 3
-	if err := p.ws(); err != nil {
-		return spreadDef{}, err
-	}
 	pos := p.pos
 	if p.pos >= len(p.src) || !isUpper(p.src[p.pos]) && !isLower(p.src[p.pos]) && p.src[p.pos] != '_' {
-		return spreadDef{}, p.expected("a type name after '...': ...UserEvent")
+		return spreadDef{}, failAt(p.pos, haus.CodeSchemaSyntax,
+			"expected a type name right after '...', with nothing between: ...UserEvent, found %s", p.found(p.pos))
 	}
 	name := p.peekWord()
 	p.pos += len(name)

@@ -188,13 +188,26 @@ def test_written_values() -> None:
 
 
 def encode_error(values: list[Any], limits: Limits = haus.DEFAULT_LIMITS) -> HausEncodeError:
-    with pytest.raises(HausEncodeError) as e:
-        haus.stringify_all(values, limits=limits)
+    """The error writing `values`: one value with `stringify` (at `$`), several with `stringify_all`
+    (at `$[i]`), in every style. `stringify_all` of one value puts the error under `$[0]` (spec §11)."""
+
+    def write(style: haus.Style) -> HausEncodeError:
+        with pytest.raises(HausEncodeError) as e:
+            if len(values) == 1:
+                haus.stringify(values[0], style=style, limits=limits)
+            else:
+                haus.stringify_all(values, style=style, limits=limits)
+        return e.value
+
+    e = write("pretty")
     for style in ("compact", "minimised"):
-        with pytest.raises(HausEncodeError) as again:
-            haus.stringify_all(values, style=style, limits=limits)
-        assert (again.value.code, again.value.path) == (e.value.code, e.value.path)
-    return e.value
+        again = write(style)
+        assert (again.code, again.path) == (e.code, e.path)
+    if len(values) == 1:
+        with pytest.raises(HausEncodeError) as all_:
+            haus.stringify_all(values, limits=limits)
+        assert (all_.value.code, all_.value.path) == (e.code, (0, *e.path))
+    return e
 
 
 def test_values_outside_the_limits() -> None:

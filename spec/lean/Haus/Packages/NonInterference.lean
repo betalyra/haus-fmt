@@ -365,14 +365,29 @@ theorem NI.packageJsonOf {dir : Path} {owner : String} : NI D (packageJsonOf dir
     | with_reducible exact NI.openPackageFile
     | nistep)
 
-theorem NI.copyNpm {config : Config} {dir : Path} {owner : String} : NI D (copyNpm config dir owner) := by
-  unfold Haus.Packages.copyNpm
+theorem NI.lenientNpm {dir : Path} {owner : String} : NI D (lenientNpm dir owner) := by
+  unfold Haus.Packages.lenientNpm
   repeat (first
     | with_reducible exact NI.packageJsonOf
     | nistep)
 
+theorem NI.copyNpm {config : Config} {dir : Path} {owner : String} : NI D (copyNpm config dir owner) := by
+  unfold Haus.Packages.copyNpm
+  repeat (first
+    | with_reducible exact NI.packageJsonOf
+    | with_reducible exact NI.lenientNpm
+    | nistep)
+
 theorem NI.checkVersion {config : Config} {m : Manifest} {npm : Option NpmInfo} {owner : String} :
     NI D (checkVersion config m npm owner) := by unfold Haus.Packages.checkVersion; ni
+
+theorem NI.folderVersion {config : Config} {m : Manifest} {sub : Path} {shown : String} :
+    NI D (folderVersion config m sub shown) := by
+  unfold Haus.Packages.folderVersion
+  repeat (first
+    | with_reducible exact NI.lenientNpm
+    | with_reducible exact NI.checkVersion
+    | nistep)
 
 theorem NI.checkNoFiles {m : Manifest} {sc : Scanned} : NI D (checkNoFiles m sc) := by
   unfold Haus.Packages.checkNoFiles; ni
@@ -447,6 +462,7 @@ theorem NI.givenPackages : NI D givenPackages := by
   unfold Haus.Packages.givenPackages
   repeat (first
     | with_reducible exact NI.manifestOf
+    | with_reducible exact NI.folderVersion
     | nistep)
 
 theorem NI.main {root : Path} {w : Walk} : NI D (main root w) := by

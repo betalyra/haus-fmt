@@ -483,7 +483,7 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     @Override
     public boolean equals(Object o) {
-      return o instanceof Array && Arrays.equals(((Array) o).items, items);
+      return o instanceof Array && Canonical.equal(this, (Array) o);
     }
 
     @Override
@@ -650,16 +650,7 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     @Override
     public boolean equals(Object o) {
-      if (!(o instanceof Record) || ((Record) o).size() != size()) {
-        return false;
-      }
-      Record other = (Record) o;
-      for (int i = 0; i < keys.length; i++) {
-        if (!values[i].equals(other.get(keys[i]))) {
-          return false;
-        }
-      }
-      return true;
+      return o instanceof Record && Canonical.equal(this, (Record) o);
     }
 
     @Override
@@ -761,7 +752,7 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     @Override
     public boolean equals(Object o) {
-      return o instanceof Variant && ((Variant) o).tag.equals(tag) && Arrays.equals(((Variant) o).args, args);
+      return o instanceof Variant && Canonical.equal(this, (Variant) o);
     }
 
     @Override

@@ -391,8 +391,11 @@ public final class StreamReader implements Iterator<Value>, Closeable {
           break;
       }
       if (chars > limit) {
+        // At the first character counted: after the previous comma, or the first of the
+        // stream, after a byte order mark (spec §7).
+        int bom = first && start == 0 && Scan.isBom(buf, 0, len) ? 1 : 0;
         throw new HausException(ErrorCode.VALUE_TOO_LONG, "a top-level value of more than " + limit + " characters",
-            line, column, null, null, null);
+            line, column + bom, null, null, null);
       }
     }
     pos = i;

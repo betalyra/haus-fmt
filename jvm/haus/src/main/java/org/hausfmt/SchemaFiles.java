@@ -292,6 +292,20 @@ final class SchemaFiles {
     return Version.NONE;
   }
 
+  /**
+   * The version the package.json beside the manifest of a package given explicitly (dir is its
+   * real path) gives, if it gives one. Outside npm mode such a package.json only gives a version:
+   * one that can't be read (a link, not a regular file, too large, not JSON) is ignored, and is no
+   * error (spec §13.3, "Package versions").
+   */
+  Version lenientVersion(String dir) {
+    try {
+      return npmVersion(dir);
+    } catch (HausException e) {
+      return Version.NONE;
+    }
+  }
+
   /** Reads and checks the manifest of the package in dir (a real path). */
   private FoundPackage manifest(String dir) {
     return manifestOf(dir, open(join(dir, MANIFEST_FILE), Kind.MANIFEST).file());

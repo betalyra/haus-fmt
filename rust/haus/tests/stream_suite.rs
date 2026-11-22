@@ -40,10 +40,26 @@ fn case(v: &Value) -> Case {
     let (Some(Value::String(text)), Some(Value::Number(max))) = (v.get("text"), v.get("maxValueLength")) else {
         fail()
     };
-    let Some(result) = v.get("result").and_then(outcome) else { fail() };
+    let Some(mut result) = v.get("result").and_then(outcome) else { fail() };
+    // `line` and `column`, both or neither: where the error is, for every split.
+    match (v.get("line"), v.get("column"), &mut result) {
+        (Some(Value::Number(line)), Some(Value::Number(column)), Err(code)) => {
+            *code = format!("{code} at {line}:{column}")
+        }
+        (None, None, _) => {}
+        _ => fail(),
+    }
     let whole = v.get("whole").map(|w| outcome(w).unwrap_or_else(|| fail()));
     let strict = matches!(v.get("strict"), Some(Value::Variant { tag, .. }) if tag == "True");
     Case { text: text.clone(), max_value_length: max.parse().unwrap(), strict, result, whole }
+}
+
+/// The error's code, with its place if the case gives one.
+fn error_of(c: &Case, e: haus::SyntaxError) -> String {
+    match &c.result {
+        Err(want) if want.contains(" at ") => format!("{} at {}:{}", e.code, e.line, e.column),
+        _ => e.code.to_string(),
+    }
 }
 
 /// The values of the suite's file `name`.
@@ -64,9 +80,9 @@ fn read(c: &Case, chunks: &[&str]) -> Outcome {
     let mut reader = Reader::new(options);
     let mut values = Vec::new();
     for chunk in chunks {
-        values.extend(reader.push(chunk.as_bytes()).map_err(|e| e.code.to_string())?);
+        values.extend(reader.push(chunk.as_bytes()).map_err(|e| error_of(c, e))?);
     }
-    values.extend(reader.finish().map_err(|e| e.code.to_string())?);
+    values.extend(reader.finish().map_err(|e| error_of(c, e))?);
     Ok(values)
 }
 
@@ -89,7 +105,8 @@ fn same(got: &Outcome, want: &Outcome) -> bool {
 #[test]
 fn stream_suite() {
     let cases = cases();
-    assert_eq!(cases.len(), 26, "the suite's cases");
+    assert_eq!(cases.len(), 32, "the suite's cases");
+    assert!(cases.iter().any(|c| matches!(&c.result, Err(e) if e.contains(" at "))), "no cases with a place");
     let mut failures = Vec::new();
     for c in &cases {
         for (how, chunks) in splits(&c.text) {

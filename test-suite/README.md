@@ -96,7 +96,13 @@ way of splitting `text` into chunks: run each case at least whole, one
 character at a time, and split at every position. The value limit applies to
 stream readers only; parsing the whole text doesn't apply it: a case with
 `whole: Ok([values])` must also parse whole (as `parseAll`, default limits)
-to these values.
+to these values. An `Err` case may also give `line` and `column` (both or
+neither, 1-based, counted as in the positions suite below): the reader's error
+must be there for every split. `value-too-long` is at the first character the
+value limit counts, the one after the previous top-level comma (`1,⏎ 1234567`:
+line 1, column 3, the line break), or the start of the stream after a byte
+order mark (column 2). Runners that ignored unknown fields must now read these
+two, or say they skip the places.
 
 `stream/document.cases.haus` checks readers of a single document (spec §6,
 as `parse`): `text`, and `result`: `Ok(value)` or `Err("code")`. One value,

@@ -142,10 +142,16 @@ func (e *Explicit) Package(dir string) (*Explicit, error) {
 // Folder adds the packages in folder: its subdirectories (or links to
 // directories) that have a package.haus, not deeper. A folder that can't be
 // read is import-not-found, one with more than [MaxFolderEntries] entries
-// too-many-files. A subdirectory whose manifest is invalid is left out; an
-// import that isn't found names it.
+// too-many-files. A subdirectory whose manifest is invalid, or whose
+// package.json gives another version, is left out; an import that isn't
+// found names it by the last name of the folder's real path and its own
+// (schemas/broken), however the folder was given.
 func (e *Explicit) Folder(folder string) (*Explicit, error) {
-	f, err := os.Open(folder)
+	resolvedFolder, err := realPath(folder)
+	if err != nil {
+		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(folder)}
+	}
+	f, err := os.Open(resolvedFolder)
 	if err != nil {
 		return nil, &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(folder)}
 	}
@@ -158,15 +164,13 @@ func (e *Explicit) Folder(folder string) (*Explicit, error) {
 		return nil, &haus.Error{Code: haus.CodeTooManyFiles, File: shown(folder),
 			Message: fmt.Sprintf("the folder of packages has more than %d entries", MaxFolderEntries)}
 	}
-	var dirs []string
+	slices.Sort(names)
+	files := newFileCache()
 	for _, n := range names {
-		dir := filepath.Join(folder, n)
-		if exists(filepath.Join(dir, ManifestFile)) {
-			dirs = append(dirs, dir)
+		dir := filepath.Join(resolvedFolder, n)
+		if !exists(filepath.Join(dir, ManifestFile)) {
+			continue
 		}
-	}
-	slices.Sort(dirs)
-	for _, dir := range dirs {
 		resolved, err := realPath(dir)
 		var m Manifest
 		if err == nil {
@@ -174,8 +178,11 @@ func (e *Explicit) Folder(folder string) (*Explicit, error) {
 		} else {
 			err = &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(dir)}
 		}
+		if err == nil {
+			err = folderVersion(m, resolved, files)
+		}
 		if err != nil {
-			e.unreadable = append(e.unreadable, unreadable{dir, err})
+			e.unreadable = append(e.unreadable, unreadable{filepath.Join(filepath.Base(resolvedFolder), n), err})
 			continue
 		}
 		if e, err = e.add(m, resolved, true); err != nil {
@@ -205,10 +212,7 @@ func (e *Explicit) add(m Manifest, dir string, scanned bool) (*Explicit, error) 
 func (e *Explicit) locate(name, _ string, files *fileCache) (Location, error) {
 	for _, g := range e.packages {
 		if g.manifest.Name == name {
-			version, has, err := npmVersion(g.dir, files)
-			if err != nil {
-				return Location{}, err
-			}
+			version, has := files.lenientVersion(g.dir)
 			return Location{Dir: g.dir, Version: version, hasVersion: has, scanned: g.scanned}, nil
 		}
 	}
@@ -384,6 +388,31 @@ func npmVersion(dir string, files *fileCache) (version string, ok bool, err erro
 	}
 	s, ok := member(v, "version").(string)
 	return s, ok, nil
+}
+
+// lenientVersion returns the version of the package.json beside the manifest
+// of a package given explicitly (dir is its real path), if it gives one.
+// Outside npm mode such a package.json only gives a version: one that can't
+// be read (a link, not a regular file, too large, not JSON) is ignored, and
+// is no error (spec §13.3, "Package versions").
+func (c *fileCache) lenientVersion(dir string) (version string, ok bool) {
+	v, _, err := c.packageJSON(filepath.Join(dir, "package.json"), kindPackageJSON)
+	if err != nil {
+		return "", false
+	}
+	version, ok = member(v, "version").(string)
+	return version, ok
+}
+
+// folderVersion checks a package found in a folder against the version of
+// the package.json beside its manifest, read leniently: a subdirectory with
+// another version is skipped like one with a broken manifest (spec §13.3).
+func folderVersion(m Manifest, dir string, files *fileCache) error {
+	if version, ok := files.lenientVersion(dir); ok && version != m.Version {
+		return newError(haus.CodePackageVersion, "the package.haus of %s says version %s, the package.json next to it %s",
+			m.Name, quote(m.Version), quote(version))
+	}
+	return nil
 }
 
 // member returns the member key of a JSON object (the last one, as

@@ -280,6 +280,27 @@ def shared(levels: int) -> Value:
     return v
 
 
+def deep(levels: int, innermost: str) -> Value:
+    """A value built in code `levels` deep: arrays and variants with record payloads, in turn."""
+    v: Value = String(innermost)
+    for i in range(levels):
+        v = Array((v,)) if i % 2 == 0 else Variant("T", (Record({"a": v}),))
+    return v
+
+
+def test_any_depth_has_a_canonical_form_a_hash_and_an_order() -> None:
+    """Spec §12: canonical, hash, hash_all, equals and compare work at any depth (no maximum)."""
+    a, b, c = deep(100_000, "x"), deep(100_000, "x"), deep(100_000, "y")
+    text = haus.canonical(a)
+    assert text == "T{a:[" * 50_000 + '"x"' + "]}" * 50_000
+    assert haus.hash(a) == haus.hash(b) == haus.hash_all([a])
+    assert haus.equals(a, b)
+    assert not haus.equals(a, c)
+    assert haus.compare(a, b) == 0
+    assert haus.compare(a, c) == -1
+    assert haus.compare(c, a) == 1
+
+
 def node_error(f: Callable[[], object]) -> tuple[str, tuple[str | int, ...]]:
     with pytest.raises(HausEncodeError) as e:
         f()
@@ -294,6 +315,11 @@ def test_the_node_limit_counts_each_place_a_shared_part_is_in() -> None:
     assert node_error(lambda: haus.hash(shared(2), limits=six)) == ("too-many-nodes", ())
     assert node_error(lambda: haus.equals(shared(2), shared(2), limits=six)) == ("too-many-nodes", ())
     assert node_error(lambda: haus.compare(shared(2), shared(1), limits=six)) == ("too-many-nodes", ())
+    # The message says which operand (spec §12).
+    with pytest.raises(HausEncodeError, match="second"):
+        haus.equals(shared(1), shared(2), limits=six)
+    with pytest.raises(HausEncodeError, match="first"):
+        haus.compare(shared(2), shared(1), limits=six)
     # Each value of a list on its own, at its index.
     assert haus.hash_all([shared(2), shared(2)], limits=seven) == haus.hash_all([shared(2), shared(2)])
     assert node_error(lambda: haus.hash_all([shared(1), shared(2)], limits=six)) == ("too-many-nodes", (1,))

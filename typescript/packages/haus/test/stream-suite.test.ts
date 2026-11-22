@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { arr, canonical, compileSchemaFile, equals, errorCode, formatPath, HausDecodeError, parse, parseAll, StreamReader, type Value } from "../src/index.js"
+import { arr, canonical, compileSchemaFile, equals, errorCode, formatPath, HausDecodeError, HausSyntaxError, parse, parseAll, StreamReader, type Value } from "../src/index.js"
 import * as h from "../src/schema.js"
 
 /** HAUS_STREAM_SUITE: another directory with the suite's limits.cases.haus. */
@@ -12,7 +12,7 @@ interface Case {
   readonly text: string
   readonly maxValueLength: number
   readonly strict: boolean
-  readonly result: { readonly ok: true; readonly values: readonly Value[] } | { readonly ok: false; readonly code: string }
+  readonly result: { readonly ok: true; readonly values: readonly Value[] } | { readonly ok: false; readonly code: string; readonly at?: string }
 }
 
 const field = (v: Value, key: string): Value | undefined => (v.kind === "record" ? v.fields.get(key) : undefined)
@@ -22,6 +22,11 @@ const toCase = (v: Value): Case => {
   const max = field(v, "maxValueLength")
   const strict = field(v, "strict")
   const result = field(v, "result")
+  const line = field(v, "line")
+  const column = field(v, "column")
+  // `line` and `column`, both or neither: where the error is, for every split.
+  if ((line === undefined) !== (column === undefined)) throw new Error(`line without column: ${canonical(v)}`)
+  const at = line?.kind === "number" && column?.kind === "number" ? `${line.text}:${column.text}` : undefined
   if (text?.kind !== "string" || max?.kind !== "number" || result?.kind !== "variant") throw new Error(`not a case: ${canonical(v)}`)
   const arg = result.args[0]
   return {
@@ -32,12 +37,12 @@ const toCase = (v: Value): Case => {
       result.tag === "Ok" && arg?.kind === "array"
         ? { ok: true, values: arg.items }
         : result.tag === "Err" && arg?.kind === "string"
-          ? { ok: false, code: arg.value }
+          ? { ok: false, code: arg.value, ...(at === undefined ? {} : { at }) }
           : (() => { throw new Error(`not a result: ${canonical(result)}`) })(),
   }
 }
 
-type Outcome = { readonly ok: true; readonly values: readonly Value[] } | { readonly ok: false; readonly code: string }
+type Outcome = { readonly ok: true; readonly values: readonly Value[] } | { readonly ok: false; readonly code: string; readonly at?: string }
 
 const read = (c: Case, chunks: readonly string[]): Outcome => {
   const reader = new StreamReader({ maxValueLength: c.maxValueLength, requireTerminator: c.strict })
@@ -47,7 +52,7 @@ const read = (c: Case, chunks: readonly string[]): Outcome => {
     values.push(...reader.end())
     return { ok: true, values }
   } catch (e) {
-    return { ok: false, code: errorCode(e) ?? String(e) }
+    return { ok: false, code: errorCode(e) ?? String(e), ...(e instanceof HausSyntaxError ? { at: `${e.line}:${e.column}` } : {}) }
   }
 }
 
@@ -64,14 +69,15 @@ const splits = (text: string): [string, readonly string[]][] => {
 const same = (got: Outcome, want: Case["result"]): boolean =>
   got.ok && want.ok
     ? got.values.length === want.values.length && got.values.every((v, i) => equals(v, want.values[i]!))
-    : !got.ok && !want.ok && got.code === want.code
+    : !got.ok && !want.ok && got.code === want.code && (want.at === undefined || got.at === want.at)
 
-const show = (o: Outcome): string => (o.ok ? `Ok [${o.values.map((v) => canonical(v)).join(", ")}]` : `Err ${o.code}`)
+const show = (o: Outcome): string => (o.ok ? `Ok [${o.values.map((v) => canonical(v)).join(", ")}]` : `Err ${o.code} at ${o.at ?? "?"}`)
 
 const cases = parseAll(readFileSync(CASES, "utf8")).map(toCase)
 
 describe("stream suite", () => {
-  it("has all its cases", () => expect(cases.length).toBe(26))
+  it("has all its cases", () => expect(cases.length).toBe(32))
+  it("has cases with a place", () => expect(cases.filter((c) => !c.result.ok && c.result.at !== undefined).length).toBeGreaterThan(0))
   for (const c of cases) {
     it(`${JSON.stringify(c.text)} max ${c.maxValueLength}${c.strict ? " strict" : ""}`, () => {
       const failures = splits(c.text).flatMap(([how, chunks]) => {

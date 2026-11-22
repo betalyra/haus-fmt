@@ -293,14 +293,16 @@ fn parse_file(text: &str, imported_spreads: bool) -> Result<File, Error> {
         });
         // Reached the lexical mistake (attribute arguments without their `)`
         // are one, which `lexis` describes).
+        // Whatever follows `...` without a name, a comment too, is the spread's mistake (§14).
+        let spread = expected.as_deref() == Some(SPREAD_ONE_WORD);
         if let Some((pos, code, reason)) = &lexical
-            && (e.offset() >= *pos || expected.as_deref() == Some(ATTRIBUTE_CLOSE))
+            && (e.offset() > *pos || (e.offset() == *pos && !spread) || expected.as_deref() == Some(ATTRIBUTE_CLOSE))
         {
             return error(text, *pos, *code, reason.clone());
         }
         let rest = &text[e.offset()..];
         // A '/' that doesn't start a comment, where whitespace may be: as in data (§14).
-        if rest.starts_with('/') {
+        if rest.starts_with('/') && !spread {
             return error(text, e.offset(), Code::StraySlash, "unexpected '/' (comments are // or /* */)");
         }
         let found = found(rest);
@@ -373,6 +375,7 @@ const COMMENT_END: &str = "*/ closing the comment";
 const STRING_END: &str = "'\"' closing the string";
 const ATTRIBUTE_CLOSE: &str = "')' closing the attribute's arguments";
 const ATTRIBUTE_PAREN: &str = "'(' right after the attribute's name, without a space";
+const SPREAD_ONE_WORD: &str = "the type name right after '...' (...Name is one word)";
 
 /// What the parser stopped at, for messages.
 fn found(rest: &str) -> String {
@@ -786,10 +789,14 @@ enum Member<T> {
     Spread(String, usize),
 }
 
-/// `...Name`, after which [`check`] rejects a lower-case `...r`.
+/// `...Name`, after which [`check`] rejects a lower-case `...r`. One token (spec §14): no
+/// whitespace, line break or comment between `...` and the name, `schema-syntax` after `...`.
 fn spread<T>(i: &mut Input) -> ModalResult<Member<T>> {
     let name = word(|c| c.is_ascii_alphabetic() || c == '_').context(expected("a type name after '...': ...UserEvent"));
-    preceded(sym("..."), cut_err((pos, name))).map(|(pos, name)| Member::Spread(name, pos)).parse_next(i)
+    let joined = peek(one_of(|c: char| c.is_ascii_alphabetic() || c == '_')).context(expected(SPREAD_ONE_WORD));
+    preceded(literal("..."), cut_err(preceded(joined, (pos, name))))
+        .map(|(pos, name)| Member::Spread(name, pos))
+        .parse_next(i)
 }
 
 /// Own entries and spreads, each spread remembering how many entries came before it.

@@ -154,28 +154,42 @@ struct ExplicitPackages: Sendable {
         try add(readManifest(resolved), resolved, scanned: false)
     }
 
+    /// Adds the packages in `folder`. A subdirectory whose manifest can't be
+    /// read, or whose package.json gives another version, is skipped, and
+    /// named when an import isn't found by the last name of the folder's real
+    /// path and its own (`schemas/broken`), however the folder was given
+    /// (spec §13.3).
     mutating func addFolder(_ folder: String) throws(HausError) {
         let limit = SchemaFileLimits.maxFolderEntries
-        guard let names = directoryEntries(folder, limit: limit + 1) else {
+        guard let real = realPath(folder), let names = directoryEntries(real, limit: limit + 1) else {
             throw notFound("\(shown(folder)): \(systemError())")
         }
         guard names.count <= limit else {
             throw HausError(.tooManyFiles, "\(shown(folder)): the folder of packages has more than \(limit) entries")
         }
-        let dirs = names.map { FilePath.join(folder, $0) }.filter { exists(FilePath.join($0, PackageFile.manifest)) }
-        for dir in dirs.sorted(by: precedes) {
-            switch Self.manifest(dir) {
+        let files = SchemaFiles()
+        let entries = names.filter { exists(FilePath.join(real, $0, PackageFile.manifest)) }
+        for name in entries.sorted(by: precedes) {
+            switch Self.manifest(FilePath.join(real, name), files: files) {
             case .success(let (manifest, resolved)): try add(manifest, resolved, scanned: true)
-            case .failure(let error): unreadable.append((dir, error))
+            case .failure(let error): unreadable.append((FilePath.join(FilePath.base(real), name), error))
             }
         }
     }
 
-    /// The manifest of the package in `dir`, and its real path.
-    private static func manifest(_ dir: String) -> Result<(HausManifest, String), HausError> {
+    /// The manifest of the package in `dir`, and its real path; a
+    /// package.json beside it with another version is `package-version`.
+    private static func manifest(_ dir: String, files: SchemaFiles) -> Result<(HausManifest, String), HausError> {
         Result { () throws(HausError) in
             guard let resolved = realPath(dir) else { throw notFound("\(shown(dir)): \(systemError())") }
-            return (try readManifest(resolved), resolved)
+            let manifest = try readManifest(resolved)
+            if let version = lenientVersion(resolved, files: files), version != manifest.version {
+                throw HausError(
+                    .packageVersion,
+                    "the package.haus of \(manifest.name) says version \(quoteFromFile(manifest.version)), "
+                        + "the package.json next to it \(quoteFromFile(version))")
+            }
+            return (manifest, resolved)
         }
     }
 
@@ -197,7 +211,7 @@ struct ExplicitPackages: Sendable {
             let why = unreadable.isEmpty ? "" : " (packages in the folders given that could not be read: \(unread))"
             throw notFound("package \(name) is not among the packages given\(why)")
         }
-        return Location(dir: given.dir, version: try npmVersion(given.dir, files: files), scanned: given.scanned)
+        return Location(dir: given.dir, version: lenientVersion(given.dir, files: files), scanned: given.scanned)
     }
 }
 
@@ -280,4 +294,13 @@ func project(above dir: String, files: SchemaFiles) throws(HausError) -> (path: 
 /// has one that is a string.
 func npmVersion(_ dir: String, files: SchemaFiles) throws(HausError) -> String? {
     try files.packageJSON(FilePath.join(dir, "package.json"), .packageJSON)?.version
+}
+
+/// The version of the package.json beside the manifest of a package given
+/// explicitly (`dir` is its real path), if it gives one. Outside npm mode such
+/// a package.json only gives a version: one that can't be read (a link, not
+/// a regular file, too large, not JSON) is ignored, and is no error (spec
+/// §13.3, "Package versions").
+func lenientVersion(_ dir: String, files: SchemaFiles) -> String? {
+    (try? files.packageJSON(FilePath.join(dir, "package.json"), .packageJSON))??.version
 }

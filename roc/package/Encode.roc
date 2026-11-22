@@ -117,7 +117,7 @@ Encode := [].{
 
 	## `equals` with another node limit, `limits.max_nodes`.
 	equals_with : Value, Value, Value.Limits -> Try(Bool, Error)
-	equals_with = |a, b, limits| Ok(canonical_within(a, limits.max_nodes)? == canonical_within(b, limits.max_nodes)?)
+	equals_with = |a, b, limits| Ok(operand(a, "first", limits)? == operand(b, "second", limits)?)
 
 	## Orders values by the bytes of their canonical forms (spec §12): a total
 	## order consistent with `equals`. Not numeric order: `10` sorts before
@@ -128,7 +128,7 @@ Encode := [].{
 
 	## `compare` with another node limit, `limits.max_nodes`.
 	compare_with : Value, Value, Value.Limits -> Try([Before, Same, After], Error)
-	compare_with = |a, b, limits| Ok(compare_bytes(canonical_within(a, limits.max_nodes)?, canonical_within(b, limits.max_nodes)?))
+	compare_with = |a, b, limits| Ok(compare_bytes(operand(a, "first", limits)?, operand(b, "second", limits)?))
 
 	## A stream: one value per line, each followed by a comma. Errors say
 	## which value: `[3].total`. The node limit applies to each value on its own.
@@ -563,6 +563,11 @@ unique_keys = |keys| {
 		Err(_) => Ok({})
 	}
 }
+
+## The canonical form of an operand of `equals` or `compare`: an error is at
+## the value given, and its reason says which one (spec §12).
+operand : Value, Str, Value.Limits -> Try(List(U8), Error)
+operand = |v, which, limits| canonical_within(v, limits.max_nodes).map_err(|e| { ..e, reason: "the ${which} value: ${e.reason}" })
 
 ## The result of item `i`, with `[i]` after `prefix` in the path of an error.
 at_index : Try(a, Error), U64, Str -> Try(a, Error)
@@ -1285,6 +1290,31 @@ dag = |levels| {
 }
 
 ## A DAG of Values built in code, as `dag`.
+# Any depth (spec §12): the canonical form, hashing, equality and order of a
+# value built in code 100,000 levels deep, arrays and variants with record
+# payloads in turn, with no maximum.
+deep_value : U64, Str -> Value
+deep_value = |levels, innermost| {
+	var $v = Value.text(innermost)
+	var $i = 0.U64
+	while $i < levels {
+		$v = if ($i % 2 == 0) Value.arr([$v]) else variant("T", [rec([("a", $v)])])
+		$i = $i + 1
+	}
+	$v
+}
+
+expect {
+	(a, b, c) = (deep_value(100_000, "x"), deep_value(100_000, "x"), deep_value(100_000, "y"))
+	Encode.canonical(a) == Ok("${"T{a:[".repeat(50_000)}\"x\"${"]}".repeat(50_000)}")
+		and Encode.hash(a) == Encode.hash(b)
+		and Encode.hash_all([a]) == Encode.hash(a)
+		and Encode.equals(a, b) == Ok(True)
+		and Encode.equals(a, c) == Ok(False)
+		and Encode.compare(a, b) == Ok(Same)
+		and Encode.compare(a, c) == Ok(Before)
+}
+
 shared : U64 -> Value
 shared = |levels| {
 	var $v = Value.arr([])
@@ -1346,6 +1376,12 @@ expect {
 expect Encode.to_str_with(shared(3), nodes(15)).is_ok() and Encode.to_str_with(shared(3), nodes(14)).map_err(|e| e.code) == Err("too-many-nodes")
 # The limit applies to each value of a stream on its own, the error at the value.
 expect Encode.stream_with([shared(3), shared(3)], nodes(15)).is_ok() and Encode.stream_minimised_with([num("1"), shared(3)], nodes(14)).map_err(|err| (err.code, err.path)) == Err(("too-many-nodes", "[1]"))
+# A stream of one value too: `[0]` (spec §11), and `hash_all` the same way (§12).
+expect Encode.stream_with([shared(3)], nodes(14)).map_err(|err| (err.code, err.path)) == Err(("too-many-nodes", "[0]"))
+expect Encode.hash_all_with([shared(3)], nodes(14)).map_err(|err| (err.code, err.path)) == Err(("too-many-nodes", "[0]"))
+# `equals` and `compare`: at the value given, the reason saying which operand (spec §12).
+expect Encode.equals_with(num("1"), shared(3), nodes(14)).map_err(|err| (err.code, err.path, err.reason.starts_with("the second value"))) == Err(("too-many-nodes", "", True))
+expect Encode.compare_with(shared(3), num("1"), nodes(14)).map_err(|err| (err.code, err.path, err.reason.starts_with("the first value"))) == Err(("too-many-nodes", "", True))
 # The node limit comes first: a value over it fails with `too-many-nodes`, whatever else is wrong in it.
 expect Encode.to_str_with(Value.arr([num("1e9999"), shared(3)]), nodes(10)).map_err(|e| e.code) == Err("too-many-nodes")
 # Every other limit, for a value built in code, with small limits: each its own code.

@@ -326,6 +326,10 @@ func TestNodeLimit(t *testing.T) {
 		if _, err := FormatValues([]Value{String("a"), dag}, withLimits(inLayout(l), lim)); codeOf(err) != CodeTooManyNodes || err.(*Error).Path != "$[1]" {
 			t.Errorf("%s stream: %v", l, err)
 		}
+		// A writer of several values gives $[0] for a stream of one (spec §11).
+		if _, err := FormatValues([]Value{dag}, withLimits(inLayout(l), lim)); codeOf(err) != CodeTooManyNodes || err.(*Error).Path != "$[0]" {
+			t.Errorf("%s stream of one: %v", l, err)
+		}
 	}
 	if err := CheckValue(dag, lim); codeOf(err) != CodeTooManyNodes {
 		t.Errorf("CheckValue: %v", err)
@@ -345,6 +349,9 @@ func TestNodeLimit(t *testing.T) {
 	}
 	if _, err := HashAllWith([]Value{dag, dag}, Limits{MaxNodes: 2047}); err != nil {
 		t.Errorf("HashAllWith: %v", err)
+	}
+	if _, err := HashAllWith([]Value{dag}, lim); codeOf(err) != CodeTooManyNodes || err.(*Error).Path != "$[0]" {
+		t.Errorf("HashAllWith one value: %v", err)
 	}
 	// Tag { … } writes the variant and its record: Tag{a:1} is three values.
 	payload := Variant{Tag: MustTag("T"), Args: []Value{mustRecord(t, Field{"a", NumberFromInt(1)})}}
@@ -368,8 +375,12 @@ func TestNodeLimit(t *testing.T) {
 	if _, err := Hash(shared(26)); codeOf(err) != CodeTooManyNodes {
 		t.Errorf("default limit: %v", err)
 	}
-	if _, err := Compare(shared(26), dag); codeOf(err) != CodeTooManyNodes {
+	if _, err := Compare(shared(26), dag); codeOf(err) != CodeTooManyNodes || err.(*Error).Path != "$" ||
+		!strings.Contains(err.(*Error).Message, "first") {
 		t.Errorf("Compare: %v", err)
+	}
+	if _, err := Compare(dag, shared(26)); codeOf(err) != CodeTooManyNodes || !strings.Contains(err.(*Error).Message, "second") {
+		t.Errorf("Compare, the second: %v", err)
 	}
 }
 
@@ -489,10 +500,20 @@ func TestCyclicValues(t *testing.T) {
 		t.Errorf("deep CheckValue: %v", err)
 	}
 	if _, err := Canonical(deep); err != nil {
-		t.Errorf("deep Canonical (below the supported maximum): %v", err)
+		t.Errorf("deep Canonical: %v", err)
 	}
-	if _, err := Canonical(deepValue(MaxSupportedDepth + 1)); codeOf(err) != CodeNestingTooDeep {
-		t.Errorf("too deep Canonical: %v", err)
+	// A cycle below a deep start is found too.
+	tail := Array{nil}
+	tail[0] = Array{Array{tail}}
+	var deepCyclic Value = tail
+	for range 5000 {
+		deepCyclic = Array{deepCyclic}
+	}
+	if _, err := Canonical(deepCyclic); codeOf(err) != CodeCyclicValue {
+		t.Errorf("deep cyclic Canonical: %v", err)
+	}
+	if Equals(deepCyclic, Array{deepCyclic}) {
+		t.Error("deep cyclic Equals: true")
 	}
 	// A value shared many times (a DAG) is not a cycle.
 	shared := Array{String("x")}
@@ -503,6 +524,76 @@ func TestCyclicValues(t *testing.T) {
 	if err := CheckValue(dag, Limits{}); err != nil {
 		t.Errorf("dag: %v", err)
 	}
+}
+
+// veryDeep is a value built in code n levels deep, by turns an array, a
+// variant with arguments and a variant with a record payload, around inner.
+func veryDeep(t *testing.T, n int, inner Value) Value {
+	t.Helper()
+	v := inner
+	for i := range n {
+		switch i % 3 {
+		case 0:
+			v = Array{v}
+		case 1:
+			v = Variant{Tag: MustTag("Some"), Args: []Value{v, NumberFromInt(int64(i))}}
+		default:
+			r, err := NewRecord(Field{Key: "next", Value: v}, Field{Key: "a b", Value: String("x")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			v = Variant{Tag: MustTag("Node"), Args: []Value{r}}
+		}
+	}
+	return v
+}
+
+// TestAnyDepth: canonical, hash, hashAll, equals and compare work for a
+// value of any depth, bounded only by memory (spec §12), on a goroutine of
+// its own.
+func TestAnyDepth(t *testing.T) {
+	const depth = 100_000
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a := veryDeep(t, depth, NumberFromInt(1))
+		b := veryDeep(t, depth, NumberFromInt(1))
+		c := veryDeep(t, depth, NumberFromInt(2))
+		ca, err := Canonical(a)
+		if err != nil {
+			t.Errorf("Canonical: %v", err)
+			return
+		}
+		if cb, err := Canonical(b); err != nil || cb != ca {
+			t.Errorf("Canonical of a copy: %v", err)
+		}
+		if !strings.HasPrefix(ca, `[Node{"a b":"x",next:Some([Node{"a b":"x",next:`) {
+			t.Errorf("Canonical: %.40s", ca)
+		}
+		ha, err := Hash(a)
+		if hb, errB := Hash(b); err != nil || errB != nil || ha != hb {
+			t.Errorf("Hash: %v %v", err, errB)
+		}
+		if hc, err := Hash(c); err != nil || hc == ha {
+			t.Errorf("Hash of another value: %v", err)
+		}
+		if _, err := HashAll([]Value{a, c}); err != nil {
+			t.Errorf("HashAll: %v", err)
+		}
+		if !Equals(a, b) {
+			t.Error("Equals of two copies: false")
+		}
+		if Equals(a, c) {
+			t.Error("Equals with another innermost value: true")
+		}
+		if n, err := Compare(a, b); err != nil || n != 0 {
+			t.Errorf("Compare of two copies: %d %v", n, err)
+		}
+		if n, err := Compare(a, c); err != nil || n != -1 {
+			t.Errorf("Compare: %d %v", n, err)
+		}
+	}()
+	<-done
 }
 
 func TestCheckValue(t *testing.T) {

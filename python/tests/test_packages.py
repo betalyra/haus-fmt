@@ -539,9 +539,10 @@ def test_the_version_of_a_package_json_next_to_the_manifest(
 
 
 @symlinks
-def test_a_package_json_next_to_the_manifest_is_a_regular_file(tmp_path: Path) -> None:
+def test_a_package_json_next_to_the_manifest_that_is_a_link_is_ignored(tmp_path: Path) -> None:
+    """Spec §13.3: outside npm mode (Python has none) it only gives a version, and one that can't be read
+    gives none: the link is not followed, and the package is used."""
     money = package(tmp_path / "money", "@acme/money", "1.0.0")
     write(tmp_path / "secret" / "package.json", '{ "version": "9.9.9-do-not-print" }')
     (money / "package.json").symlink_to(tmp_path / "secret" / "package.json")
-    reason = failure("package-path", USE, FileResolver(tmp_path, [money]))
-    assert "do-not-print" not in reason
+    compile_schema(USE, resolver=FileResolver(tmp_path, [money]))

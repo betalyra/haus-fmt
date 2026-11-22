@@ -212,9 +212,9 @@ Heartbeat
 
 ## duplicate-key
 
-*Syntax.* A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code with a key twice, rejected when it is built (§11).
+*Syntax.* A record has the same key twice, after escapes are read (`a` and `"a"` are the same key). Also a JSON object with the same member name twice (§16), and a record built in code with a key twice, rejected when it is built or, at the latest, when it is written, canonicalised or hashed (§11).
 
-**Reported at:** The second key, as soon as it is read, before its colon and value: an error in the value is never reached. In JSON, the second name, the same way (§16). Built in code: no place.
+**Reported at:** The second key, as soon as it is read, before its colon and value: an error in the value is never reached. In JSON, the second name, the same way (§16). Built in code: informative (§11).
 
 ```haus
 { a: 1, a: 2 }
@@ -236,9 +236,9 @@ Some()
 
 ## invalid-number
 
-*Syntax.* A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`), rejected when it is built (§11).
+*Syntax.* A number literal that doesn't follow the grammar (§3): a leading zero, a `+`, a `.` without digits on both sides, a misplaced `_`, an uppercase `0X`, digits followed by letters. Also a string that should hold a number literal and doesn't (a `Decimal` in schema-based JSON, §16.3), and a number built in code whose text isn't a literal (`01`, `NaN`), rejected when it is built or, at the latest, when it is written, canonicalised or hashed (§11).
 
-**Reported at:** The literal's first character, a sign or a leading `.` included.
+**Reported at:** The literal's first character, a sign or a leading `.` included. Built in code: informative (§11).
 
 ```haus
 007
@@ -443,7 +443,7 @@ For example: 1,⟨CR⟩2: a carriage return on its own.
 
 *Limits.* Records, arrays and payloads are nested deeper than the depth limit (default 256). In JSON, deeper than its JSON limit (§16).
 
-**Reported at:** The opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. Writing a value: its place, or no place.
+**Reported at:** The opening bracket of the first level too deep: the `(` of `Tag(`, the `{` of `Tag {`. Writing a value: its place, or no place; in the i-th value of a stream written, a place that starts with `$[i]` (§11).
 
 For example: [[[[ … ]]]]: 257 levels.
 
@@ -451,7 +451,7 @@ For example: [[[[ … ]]]]: 257 levels.
 
 ## number-too-long
 
-*Limits.* A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7).
+*Limits.* A number literal has more characters than the limit (default 1000), or a hex literal more hex digits than the number limit allows (default 829), so that every integer fits the limit in decimal (§7). A writer measures a number built in code on its normalized literal (§11); one over both the number and the exponent limit may fail with either code.
 
 **Reported at:** The literal's first character. In JSON, the number token's first character, or the string's place for a string read as a number (§16).
 
@@ -461,7 +461,7 @@ For example: a number with 1001 digits.
 
 ## exponent-too-large
 
-*Limits.* A number's exponent is larger than the limit (default 6144), in either direction.
+*Limits.* A number's exponent is larger than the limit (default 6144), in either direction. A writer measures a number built in code on its normalized literal (§11), as for `number-too-long`.
 
 **Reported at:** The literal's first character. In JSON, as `number-too-long`.
 
@@ -505,7 +505,7 @@ For example: a tag of 16,777,217 characters.
 
 *Limits.* One top-level value of a haus stream has more characters than the limit (default 64 Mi). A line of JSON Lines has no such limit (§16).
 
-**Reported at:** The start of the value's text: the character after the previous top-level comma, or the start of the stream (after a byte order mark).
+**Reported at:** The start of the value's text: the character after the previous top-level comma, whatever it is (`1,⏎ 1234567`: line 1, column 3, the line break), or the start of the stream, after a byte order mark (column 2).
 
 For example: a stream whose second value is 64 Mi characters long.
 
@@ -927,7 +927,7 @@ For example: a package.haus with { name: "@Acme/Orders", version: "1" }.
 
 ## package-version
 
-*Imports.* A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly that has a `package.json` next to its manifest.
+*Imports.* A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored.
 
 **Reported at:** The import that reaches the package; the message names both versions. *(Informative, §8.)*
 
@@ -1192,9 +1192,9 @@ For example: Money(1, US) decoded with the codec of the profile @haus-fmt/money/
 
 ## cannot-encode
 
-*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or something that is no haus value (an object of another type where a value or a number is expected).
+*Decoding and encoding.* Encoding: a value of the program's language that the type can't write, such as a JavaScript number for an `Int` that expects a bigint, or a string that is no valid `Date`. Building a value in code (§11): a string, key or tag with an unpaired surrogate, which has no UTF-8 form, or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value (an object of another type where a value or a number is expected). Rejected when the value is built or, at the latest, when it is written, canonicalised or hashed.
 
-**Reported at:** The place of the value in the type being encoded. Building a value in code: no place.
+**Reported at:** The place of the value in the type being encoded. Building a value in code: informative (§11).
 
 For example: encode(h.Int, 5): Int is a bigint, 5 is a number.
 
@@ -1224,7 +1224,7 @@ For example: a hand-written schema that decodes each value many times.
 
 *Decoding and encoding.* A value built in code (not parsed) would write more values than the node limit allows (default 64 Mi, §7): its parts share each other so much that it expands when written, counted as writers, the canonical form and hashing write it.
 
-**Reported at:** `$`: the value given to the writer, the canonical form or the hash; `$[i]` for the i-th value of a stream written, or of `hashAll`.
+**Reported at:** `$`: the value given to the writer, the canonical form or the hash, or to an encoder or decoder with a schema (§15); `$[i]` for the i-th value of a stream written, or of `hashAll`, also when the stream has one value (`$[0]`). From `equals` or `compare`: `$`, and the message says which operand.
 
 For example: a value built in code whose arrays share one another a million times.
 
@@ -1316,9 +1316,9 @@ Read as self-describing JSON:
 
 ## invalid-tag
 
-*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code.
+*JSON.* A tag name that isn't `[A-Z][A-Za-z0-9_]*`, or a `"_tag"` that isn't a string: in a `_tag` of either JSON form, in the string of a closed variant whose tags have no payload in schema-based JSON (`"debug"`, §16.3), or in a value built in code (rejected when it is built or, at the latest, when it is written, canonicalised or hashed, §11).
 
-**Reported at:** The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: no place.
+**Reported at:** The object that holds the `"_tag"`, or the string of a closed enum (§16.3, "Places"). Built in code: informative (§11).
 
 Read as self-describing JSON:
 

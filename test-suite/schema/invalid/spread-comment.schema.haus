@@ -1,0 +1,3 @@
+// ...Name is one word: no comment between ... and the name (spec §14).
+type B = < X >
+type A = < .../* the base */B | Y >

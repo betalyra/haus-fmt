@@ -69,9 +69,13 @@ theorem CandOk.mono {V : View} {P P' : Target → Prop} {imp : Import} {name : S
   obtain ⟨m, h1, h2, h3, h4, h5⟩ := h
   exact ⟨m, h1, h2, h3, hP _ h4, h5⟩
 
-/-- What a copy's `package.json` declares, if `npm` is on or versions are checked. -/
+/--
+What a copy's `package.json` declares: if `npm` is on, under the rule of a
+package's files; else, if versions are checked, read leniently (`lenientNpmV`).
+-/
 def npmOf (V : View) (dir : Path) : Option (Option NpmInfo) :=
-  if (V.mode.npm || V.checkVersions) = true then packageJsonV V dir else some none
+  if V.mode.npm = true then packageJsonV V dir
+  else if V.checkVersions = true then some (lenientNpmV V dir) else some none
 
 /-- The SHOULD check of "Package versions" (§13.3) passes. -/
 def VersionOk (V : View) (m : Manifest) (npm : Option NpmInfo) : Prop :=
@@ -528,7 +532,7 @@ variable {env : Env} {κ : Core}
 
 theorem Pure.copyNpm {dir : Path} {owner : String} : Pure env (copyNpm env.config dir owner) (npmOf env.view dir) := by
   unfold Haus.Packages.copyNpm npmOf
-  exact Pure.ite2 (fun _ => Pure.packageJsonOf) (fun _ => Pure.ret)
+  exact Pure.ite2 (fun _ => Pure.packageJsonOf) (fun _ => Pure.ite2 (fun _ => Pure.lenientNpm) (fun _ => Pure.ret))
 
 theorem checkVersion_atA {m : Manifest} {npm : Option NpmInfo} {owner : String} :
     Triple env (At env κ) (checkVersion env.config m npm owner)
@@ -544,6 +548,39 @@ theorem checkVersion_atA {m : Manifest} {npm : Option NpmInfo} {owner : String} 
         exact Triple.pure fun s hs => ⟨hs, fun _ v' hv' => by rw [hv] at hv'; cases hv'; simpa using hne⟩
     · rename_i hv
       exact Triple.pure fun s hs => ⟨hs, fun _ v' hv' => absurd hv' (hv v')⟩
+  · rename_i hc
+    exact Triple.pure fun s hs => ⟨hs, fun h => absurd h hc⟩
+
+/-- `checkVersion` passes exactly when the version is OK. -/
+theorem checkVersion_iff {m : Manifest} {npm : Option NpmInfo} {owner : String} :
+    Triple env (At env κ) (checkVersion env.config m npm owner)
+      (fun _ s => At env κ s ∧ VersionOk env.view m npm) (fun s => At env κ s ∧ ¬VersionOk env.view m npm) := by
+  unfold checkVersion VersionOk
+  split
+  · rename_i hc
+    split
+    · rename_i v hv
+      split
+      · rename_i hne
+        exact Triple.fail fun _ hs => ⟨hs, fun h => by simp [h hc v hv] at hne⟩
+      · rename_i hne
+        exact Triple.pure fun s hs => ⟨hs, fun _ v' hv' => by rw [hv] at hv'; cases hv'; simpa using hne⟩
+    · rename_i hv
+      exact Triple.pure fun s hs => ⟨hs, fun _ v' hv' => absurd hv' (hv v')⟩
+  · rename_i hc
+    exact Triple.pure fun s hs => ⟨hs, fun h => absurd h hc⟩
+
+/-- The version check of a package in a folder passes exactly when its version is OK. -/
+theorem folderVersion_iff {m : Manifest} {sub : Path} {shown : String} :
+    Triple env (At env κ) (folderVersion env.config m sub shown)
+      (fun _ s => At env κ s ∧ VersionOk env.view m (lenientNpmV env.view sub))
+      (fun s => At env κ s ∧ ¬VersionOk env.view m (lenientNpmV env.view sub)) := by
+  unfold folderVersion
+  split
+  · refine Triple.bind (Triple.mono (Pure.lenientNpm (env := env) (dir := sub) (owner := shown) κ) (fun _ h => h)
+      (fun _ _ h => h) (fun _ h => nomatch h.2)) fun npm => Triple.pre_and fun hn => ?_
+    obtain rfl := Option.some.inj hn
+    exact checkVersion_iff
   · rename_i hc
     exact Triple.pure fun s hs => ⟨hs, fun h => absurd h hc⟩
 
@@ -910,6 +947,8 @@ theorem givenPackages_at {κ : Core} : Triple env (At env κ) givenPackages (fun
         | (intro n rest b _)
         | refine (Triple.bind (R := fun _ => At env κ) (Triple.tryCatch (R := At env κ) ?_ fun _ => ?_) fun _ => ?_)
         | with_reducible refine (Triple.bind (Pure.keep Pure.manifestOf) fun _ => ?_)
+        | with_reducible refine (Triple.bind (Triple.mono folderVersion_iff (fun _ h => h) (fun _ _ h => h.1)
+            (fun _ h => h.1)) fun _ => ?_)
         | tstep)
     · tdone
 

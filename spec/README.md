@@ -118,7 +118,7 @@ Two values (whose records have unique keys, §1) are equal when they have the sa
 <!-- rule: strings.utf8.bom-ignored -->
 - **Encoding:** input is UTF-8. Invalid UTF-8 MUST be rejected. A leading byte order mark is ignored.
   <!-- rule: strings.utf8.checked-first -->
-  Text is checked for valid UTF-8 before it is parsed, so invalid UTF-8 is reported before any syntax error in the same text (`1 2` followed by an invalid byte is `invalid-utf8`). A stream reader does this for each chunk as it arrives: it checks the text read so far.
+  Text is checked for valid UTF-8 before it is parsed, so invalid UTF-8 is reported before any syntax error in the same text (`1 2` followed by an invalid byte is `invalid-utf8`). A stream reader does this for each chunk as it arrives: it checks the text read so far. So with input in chunks, which error is reported can depend on where the chunks are cut: a syntax error in an earlier chunk can be reported before invalid UTF-8 in a later one, where a reader given the whole text reports the invalid UTF-8. The conformance suites and the fuzzer don't compare such inputs across ways of cutting them.
   <!-- rule: strings.utf8.host-strings -->
 - **Host strings:** a parser that takes the language's string type instead of bytes (UTF-16 in JavaScript and Java, Python's `str`) MUST reject an unpaired surrogate in it as `invalid-utf8`, at its position (one column, §8), as it rejects invalid UTF-8: the string has no UTF-8 form, so no other reader could read it. This holds for data and schema files alike. A JSON reader reports one in a JSON string as `unpaired-surrogate` (§16).
   <!-- rule: strings.escapes.set -->
@@ -234,6 +234,8 @@ The hex digit limit is not a setting of its own: it follows the number limit, an
 <!-- rule: limits.value.counting -->
 <!-- rule: limits.value.stream-only -->
 A stream reader counts a value's characters from the previous top-level comma (or the start of the stream, after a byte order mark) up to the next one: everything between the two commas counts, whitespace and comments before and after the value included, and the commas don't. A value of exactly the limit is accepted.
+<!-- rule: limits.value.error-place -->
+`value-too-long` is at the first character counted: the character after the previous top-level comma, whatever it is (in `1,⏎ 1234567` with a limit of 5, line 1, column 3: the line break), or the first character of the stream, after a byte order mark (column 2).
 <!-- rule: limits.value.after-last-comma -->
 After the last comma, the text up to the end of the stream counts too, also when it holds no value (only whitespace or comments): a stream reader can't know that no value follows, and must bound what it holds while it waits. This limit applies to stream readers only, which hold one value at a time while they read: it bounds their memory. A parser given the whole text already holds it, and doesn't apply this limit (all the others apply). So a file with one value larger than the limit parses as a whole and fails in a stream reader with `value-too-long`; a stream reader that must read such files needs a larger limit.
 <!-- rule: limits.value.before-syntax -->
@@ -245,11 +247,15 @@ Nesting depth is counted on the text as written, since it is checked while parsi
 
 <!-- rule: limits.nodes.default -->
 <!-- rule: limits.nodes.counting -->
-**Values written.** A value built in code can hold the same part in several places (a value whose arrays share an element, a DAG): it is small in memory, and written out it can be exponentially larger, since each place writes the part again. So writers of values (§11), the canonical form and hashing (§12) count the values they write for one value, each as often as it is written: the value itself and every element, field value and argument inside it, at any depth. They stop at the limit with `too-many-nodes`. The limit applies to each top-level value on its own, also when a file or stream of them is written or hashed, and can be configured like the others. A parsed value has fewer values than its text has characters, so every value a stream reader accepts with the default limits (64 Mi characters) is within it.
+**Values written.** A value built in code can hold the same part in several places (a value whose arrays share an element, a DAG): it is small in memory, and written out it can be exponentially larger, since each place writes the part again. So writers of values (§11), the canonical form and hashing (§12) count the values they write for one value, each as often as it is written: the value itself and every element, field value and argument inside it, at any depth. So `T { a: 1 }` is 3 values (the variant, its record payload and `1`; keys are not values), and so are `T(1, 2)` and `[[1]]`. They stop at the limit with `too-many-nodes`. The limit applies to each top-level value on its own, also when a file or stream of them is written or hashed, and can be configured like the others. A parsed value has fewer values than its text has characters, so every value a stream reader accepts with the default limits (64 Mi characters) is within it.
+<!-- rule: limits.nodes.schema-place -->
+Encoding and decoding with a schema (§15) count the same way where they write or walk a value built in code, and `too-many-nodes` raised there is at `$`, the value given, as for writers.
 
 <!-- rule: limits.depth.binding-maximum -->
 <!-- rule: limits.depth.reject-unsupported -->
 A binding whose parser, decoder or encoder uses the call stack MAY support only a bounded nesting depth, of at least the default (256). It MUST document that maximum, and MUST reject a larger configured depth when the limits are set, with an error that names the maximum, rather than overflow its stack on deep input.
+<!-- rule: limits.depth.canonical-any-depth -->
+`canonical`, `hash`, `hashAll`, `equals` and `compare` (§12) have no depth limit and no maximum: they MUST work for a value of any depth, bounded only by memory, without overflowing the stack or giving a wrong answer. They take values built in code, which no parser's depth limit bounds, so they can't use the call stack for nesting.
 <!-- rule: limits.depth.stack-documented -->
 It SHOULD also document the stack it needs at that maximum, so that an application that runs it on a thread with a smaller stack than the main one can give that thread enough.
 
@@ -534,18 +540,27 @@ Person{name:"Jane Smith",age:28,type:Designer},
 - Encoders MAY offer minimised for the wire and storage; compact stays their default.
 
 <!-- rule: format.values.built-in-code -->
-**Values built in code.** A value built in code, not parsed, is checked when it is built: a binding's constructors build only haus values (§1) and reject anything else with the code of the mistake. A constructor checks only that a value is valid, never a limit (§7): limits belong to the writer, and two writers may be configured with different ones.
+**Values built in code.** A value built in code, not parsed, must be a haus value (§1). The rule is stated by what can be observed: building a value and then writing it, or taking its canonical form or hash (§12), fails for a value that isn't one with the code of its mistake (below), whether the binding checks when the value is built or when it is used; a valid value never fails there, except on a limit (§7).
+<!-- rule: format.values.check-when-built -->
+<!-- rule: format.values.place-informative -->
+Bindings SHOULD check when the value is built, so that the mistake is reported where it is made: their constructors then build only haus values. Where these errors are reported, by the constructor or by the writer, and the place they name, is informative. Checking that a value is valid is never checking a limit: limits belong to the writer, and two writers may be configured with different ones.
 
 - a tag that doesn't match `[A-Z][A-Za-z0-9_]*` (§4): `invalid-tag`;
 - a number whose text isn't a number literal (`01`, `NaN`, empty): `invalid-number`. A literal in another spelling (`1E+05`, `0xFF`) is a number: the constructor normalizes it as the parser does (`1e5`, `255`). A number longer than the number limit is still a number: the writer rejects it (above);
 - a record with a key twice: `duplicate-key`;
-- a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
+  <!-- rule: format.values.bytes-strings-utf8 -->
+- a string, key or tag with an unpaired surrogate, which has no UTF-8 form (§4), or, in a binding whose strings are bytes, one that isn't valid UTF-8; or something that is no haus value at all (an object of another type where a value or a number is expected): `cannot-encode`.
 
-Values built so can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons.
+Values checked when they are built can't contain themselves, and need no other check: writing them, their canonical form, hash, equality and order (§12) can't fail for any of these reasons.
 
 <!-- rule: format.values.writer-limits -->
 <!-- rule: format.values.node-limit -->
-A writer checks every limit of §7 that a value can break, whoever built the value: the nesting depth (counted as for values built in code), the length of each string, key and tag, the number and exponent limits (above), and the node limit, which ends a value whose parts share each other and would expand without bound when written. It fails with the limit's code: `nesting-too-deep`, `string-too-long`, `key-too-long`, `tag-too-long`, `number-too-long`, `exponent-too-large`, `too-many-nodes`. The canonical form and hashing apply only the node limit (§12): every other value has a canonical form. A binding whose host language lets code forge a value past its constructors (a cast in TypeScript, a reflective write) MAY check again in its writers, with the same codes, and `cyclic-value` for a value that contains itself; a forged value is not a haus value, and what a binding does with it is otherwise undefined.
+A writer checks every limit of §7 that a value can break, whoever built the value: the nesting depth (counted as for values built in code), the length of each string, key and tag, the number and exponent limits (above), and the node limit, which ends a value whose parts share each other and would expand without bound when written. It fails with the limit's code: `nesting-too-deep`, `string-too-long`, `key-too-long`, `tag-too-long`, `number-too-long`, `exponent-too-large`, `too-many-nodes`.
+<!-- rule: format.values.number-limits-written -->
+The number and exponent limits are measured on the literal as it would be written, the normalized form (§2), not on the text the number was built from; a number that breaks both may fail with either code.
+<!-- rule: format.values.stream-place -->
+An error in the i-th value of a stream written (a writer of several values, such as a file or JSON Lines, §16) is at `$[i]`, counted from 0, also when the stream has one value (`$[0]`); an error writing one value is at `$`.
+The canonical form and hashing apply only the node limit (§12), at any depth (§7): every other value has a canonical form. A binding whose host language lets code forge a value past its constructors (a cast in TypeScript, a reflective write) MAY check again in its writers, with the same codes, and `cyclic-value` for a value that contains itself; a forged value is not a haus value, and what a binding does with it is otherwise undefined.
 
 <!-- rule: format.comments.refuse-pretty -->
 <!-- rule: format.comments.refuse-in-place -->
@@ -566,9 +581,13 @@ Bindings SHOULD provide `canonical(value)`, `equals(a, b)`,
 exactly, so that every binding gives the same bytes and the same hash.
 
 <!-- rule: canonical.api.values-only -->
-They are defined for haus values only, and every value a binding's constructors build is one: what isn't (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate) is rejected when it is built (§11, "Values built in code"). So `canonical`, `equals`, `hash`, `hashAll` and `compare` can't fail for it, and a number built from another spelling (`Number("1E+05")`) is already normalized.
+They are defined for haus values only (§11, "Values built in code"). For what isn't one (a number whose text isn't a literal, such as `Number("01")`; a tag such as `lower`; a record with a key twice; a string with an unpaired surrogate, or that isn't UTF-8) building it and then taking its canonical form or hash gives the constructor's error code, `invalid-number`, `invalid-tag`, `duplicate-key` or `cannot-encode`, whether the binding rejects it when it is built (as it SHOULD) or here. For a haus value they never fail except on a limit (below), and a number built from another spelling (`Number("1E+05")`) is the normalized number.
 <!-- rule: canonical.api.node-limit -->
-They have one limit, the node limit (§7): `canonical`, `hash` and `hashAll` fail with `too-many-nodes` for a value whose parts share each other so much that its canonical form would hold more values than the limit, and so do `equals` and `compare` where they compare canonical forms. A binding whose values can't share their parts (each part owned by one value, as in Rust) can't reach this limit, and need not check it there: its `canonical`, `hash`, `hashAll`, `equals` and `compare` can't fail. No other limit applies to them: a value deeper or longer than a writer's limits still has a canonical form. A binding that checks forged values again (§11) fails for one with the error a writer gives for it, and never writes or hashes it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
+They have one limit, the node limit (§7): `canonical`, `hash` and `hashAll` fail with `too-many-nodes` for a value whose parts share each other so much that its canonical form would hold more values than the limit, and so do `equals` and `compare` where they compare canonical forms. A binding whose values can't share their parts (each part owned by one value, as in Rust) can't reach this limit, and need not check it there.
+<!-- rule: canonical.api.any-depth -->
+They work at any depth (§7): no depth limit or maximum applies to them. No other limit applies to them either: a value longer than a writer's limits, or deeper than its depth limit, still has a canonical form.
+<!-- rule: canonical.api.error-place -->
+These errors are at `$`, the value given; for `equals` and `compare`, `too-many-nodes` is at `$` too, and the message (informative) says which operand. An error in the i-th value given to `hashAll` is at `$[i]`, also when there is one value (`$[0]`). A binding that checks forged values again (§11) fails for one with the error a writer gives for it, and never writes or hashes it as it is: such a form wouldn't parse back, and another binding would give another hash or none.
 
 <!-- rule: canonical.form.text -->
 The canonical form of a value is UTF-8 without a byte order mark, with no
@@ -727,7 +746,7 @@ Where an implementation looks for packages is part of the security model (§9.2)
 <!-- rule: packages.explicit.folder-children -->
 <!-- rule: packages.explicit.directory-wins -->
 <!-- rule: packages.explicit.folder-no-override -->
-- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. A subdirectory of such a folder whose manifest can't be read or breaks the rules (below) is skipped, not rejected, and named when an import isn't found, by the folder's last name and its own (`schemas/broken`), however the folder was given; a package given by its directory with such a manifest is rejected. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
+- packages given to it explicitly: a package's directory, or a folder whose subdirectories with a `package.haus` are packages. A subdirectory of such a folder whose manifest can't be read or breaks the rules (below) is skipped, not rejected, and named when an import isn't found, by the folder's last name and its own (`schemas/broken`), however the folder was given: the folder's last name is the last name of its real path (`./schemas/` and a link to `schemas` are both `schemas`; for `.`, the current directory's own name). A subdirectory whose `package.json` gives another version than its manifest, where versions are checked ("Package versions" below), is skipped the same way. A package given by its directory with such a manifest is rejected, with such a version `package-version`. Tools and runtime loaders MUST accept these; a code generator whose output uses the packages' own generated code takes them from the package manager instead. A package given by its directory is used instead of any other one with the same name. A package found in a folder is not: if the importer's dependencies hold another package with its name and other files, the schema has two packages with one name;
   <!-- rule: packages.lookup.build-dependencies -->
 - the dependencies of the build, as its package manager installed them: `node_modules` (below), the crate's dependencies (Cargo);
 
@@ -753,7 +772,9 @@ and never in global or environment-wide locations (npm's global folder, `NODE_PA
 <!-- rule: packages.version.check-manager -->
 **Package versions** (`package-version`): implementations SHOULD check that a package's manifest `version` equals the version the package manager gives it, where it gives one (the `version` of npm's `package.json`, Cargo's package version). The check catches publishing mistakes and doesn't change what a schema means.
 <!-- rule: packages.version.explicit-too -->
-This holds for packages given explicitly too: an implementation that finds a version next to the manifest (the `version` of a `package.json` beside the `package.haus`, Cargo's package version) checks it, and reports `package-version` when it differs.
+This holds for packages given explicitly too: an implementation that finds a version next to the manifest (the `version` of a `package.json` beside the `package.haus`, Cargo's package version) checks it, and reports `package-version` when it differs for a package given by its directory; a subdirectory of a folder with such a version is skipped (above).
+<!-- rule: packages.version.explicit-unreadable -->
+Outside npm mode, a `package.json` beside a package given explicitly that can't be read (a symbolic link or not a regular file, larger than its limit, not JSON) is ignored: it gives no version, and is no error.
 
 <!-- rule: packages.files.regular-not-links -->
 <!-- rule: packages.files.no-follow -->
@@ -817,7 +838,7 @@ What this means for users:
   <!-- rule: packages.imports.reject-relative-into-package -->
 - a relative import from a file outside a package to a file in a package's directory (import the package by name);
   <!-- rule: packages.imports.reject-links -->
-- a package's `package.haus`, `schema.haus` or `package.json` that is a symbolic link or not a regular file. Such a file is not read;
+- a package's `package.haus`, `schema.haus` or `package.json` that is a symbolic link or not a regular file (outside npm mode, a `package.json` beside a package given explicitly is ignored instead, "Package versions" above). Such a file is not read;
   <!-- rule: packages.imports.reject-non-schema-file -->
 - a relative import whose file isn't a schema file (its real path doesn't end in `.schema.haus`) or that spells a name differently from its directory. Such a file is not read. A real path inside a package's directory is checked first: it is the error above, whatever the file's name;
   <!-- rule: packages.imports.reject-cycles -->
@@ -911,6 +932,9 @@ type ServerEvent = < ...UserEvent >                   // the user events; other 
 type Base = { id: Int, createdAt: Instant }
 type Person = closed { ...Base, name: String }
 ```
+
+<!-- rule: schema.spread.one-token -->
+`...Name` is written as one token: no whitespace, line break or comment may come between `...` and the name. `... Name` and `.../*c*/Name` are `schema-syntax`, at the character after `...`.
 
 <!-- rule: schema.spread.named-only -->
 <!-- rule: schema.spread.row-parameter -->
@@ -1006,6 +1030,8 @@ A schema binding (§13.1) decodes a value with a type. The result is a value of 
   <!-- rule: decode.path.secret -->
   <!-- rule: decode.path.stream-index -->
   An error about a value as a whole is at that value: a wrong kind of value, a missing field (at the record), a wrong payload or an unknown tag (at the variant). An unknown field of a closed record is at the field. An error inside a `Secret` is at the secret, with no step into it (`Secret` below). In a stream (§6), the path of an error in an item starts with the item's index, `$[3].price`.
+  <!-- rule: decode.path.too-many-nodes -->
+  `too-many-nodes` (§7), raised while encoding or decoding a value built in code, is at `$`, the value given (`$[i]` for the i-th item of a stream), as for writers (§11).
   <!-- rule: decode.general.linear -->
 - Decoding is linear in the input whatever the schema, within the limits of §9.8 and §9.9.
 

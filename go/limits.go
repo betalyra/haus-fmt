@@ -6,8 +6,9 @@ import (
 )
 
 // MaxSupportedDepth is the deepest nesting this binding supports (spec §7).
-// The parser, the formatter and the canonical form recurse once per level of
-// nesting; Go stacks grow on demand, so this is far above the default of 256,
+// The parser and the formatter recurse once per level of nesting (the
+// canonical form, hashing, [Equals] and [Compare] don't: they work at any
+// depth); Go stacks grow on demand, so this is far above the default of 256,
 // but bounded so that a configured limit can't make hostile input use
 // unbounded stack. A larger [Limits.MaxDepth] is rejected with the code
 // unsupported-depth.

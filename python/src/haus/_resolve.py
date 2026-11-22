@@ -441,9 +441,12 @@ class FileResolver:
         return Path(os.path.abspath(self.base / path))
 
     def _scan(self, folder: Path) -> list[Path]:
-        """The direct subdirectories of `folder` (links to directories too) that have a `package.haus`."""
+        """The direct subdirectories of `folder` (links to directories too) that have a `package.haus`.
+
+        Under the folder's real path, so that a skipped one is named by its last name however the folder
+        was given (`./schemas/` and a link to `schemas` are both `schemas`, spec §13.3)."""
         found: list[Path] = []
-        with os.scandir(folder) as entries:
+        with os.scandir(os.path.realpath(folder)) as entries:
             for count, entry in enumerate(entries, 1):
                 if count > MAX_FOLDER_ENTRIES:
                     raise ModuleError(
@@ -475,6 +478,10 @@ class FileResolver:
                 except (OSError, ModuleError):
                     self._invalid.append(directory)
                     continue
+                # Another version in its package.json: skipped the same way (spec §13.3).
+                if self._version_mismatch(manifest) is not None:
+                    self._invalid.append(directory)
+                    continue
                 in_folders.setdefault(manifest.name, []).append(_Given(manifest, None))
         # A package given by its directory is used instead of the ones in folders with its name.
         self._by_name = in_folders | direct
@@ -487,7 +494,10 @@ class FileResolver:
         if self._invalid:
             dirs = ", ".join(escape(str(d)) for d in self._invalid[:10])
             more = f" and {len(self._invalid) - 10} more" if len(self._invalid) > 10 else ""
-            message += f"; these package directories have no valid {MANIFEST}: {dirs}{more}"
+            message += (
+                f"; these package directories were skipped (no valid {MANIFEST},"
+                f" or another version in their {PACKAGE_JSON}): {dirs}{more}"
+            )
         return LookupError(message)
 
     def _package(self, name: str) -> ResolvedModule:
@@ -523,26 +533,34 @@ class FileResolver:
     def _check_version(self, manifest: Manifest) -> None:
         """The version of the `package.json` next to the manifest, if it has one, is the manifest's (spec §13.3).
 
-        A package given explicitly is checked too, as npm would install it. The `package.json` is read as
-        the package's other files are (a regular file, not a link: `package-path`; at most 1 MiB:
-        `file-too-large`). One that isn't valid JSON or isn't an object gives no version, nor does a
-        `version` that isn't a string. A different version is `package-version`, quoted only when it is a
-        semantic version.
+        A package given explicitly is checked too, as npm would install it. A different version is
+        `package-version` (see `_version_mismatch`).
+        """
+        if (mismatch := self._version_mismatch(manifest)) is not None:
+            raise ModuleError("package-version", mismatch)
+
+    def _version_mismatch(self, manifest: Manifest) -> str | None:
+        """Why the `package.json` next to the manifest gives another version, or None if it doesn't.
+
+        Python has no npm mode, so the `package.json` only gives a version, and one that can't be read is
+        ignored (spec §13.3, "Package versions"): a link or not a regular file, larger than 1 MiB, not
+        valid JSON, not an object, or a `version` that isn't a string gives no version. The message
+        quotes the version only when it is a semantic version.
         """
         path = manifest.dir / PACKAGE_JSON
         if not os.path.lexists(path):
-            return
-        data = self._files.read(
-            path,
-            MAX_PACKAGE_JSON_SIZE,
-            f"{quote(manifest.name)}: its {PACKAGE_JSON}",
-            irregular="package-path",
-            too_large="file-too-large",
-        )
+            return None
         try:
+            data = self._files.read(
+                path,
+                MAX_PACKAGE_JSON_SIZE,
+                f"{quote(manifest.name)}: its {PACKAGE_JSON}",
+                irregular="package-path",
+                too_large="file-too-large",
+            )
             package = json.loads(data.decode("utf-8"))
-        except (ValueError, RecursionError):  # JSONDecodeError and UnicodeDecodeError too
-            return
+        except (OSError, ModuleError, ValueError, RecursionError):  # JSONDecodeError and UnicodeDecodeError too
+            return None
         match package:
             case {"version": str(version)} if version != manifest.version:
                 theirs = (
@@ -550,13 +568,12 @@ class FileResolver:
                     if _SEMVER.fullmatch(version)
                     else "a version that isn't a semantic version"
                 )
-                raise ModuleError(
-                    "package-version",
+                return (
                     f"{quote(manifest.name)}: its {MANIFEST} says version {quote(manifest.version)},"
-                    f" its {PACKAGE_JSON} {theirs} ({escape(str(manifest.dir))})",
+                    f" its {PACKAGE_JSON} {theirs} ({escape(str(manifest.dir))})"
                 )
             case _:
-                return
+                return None
 
     def _package_files(self, manifest: Manifest) -> tuple[bytes, bytes]:
         """The bytes of a package's `package.haus` and `schema.haus`, regular files that aren't links."""
