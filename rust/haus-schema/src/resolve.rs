@@ -169,9 +169,12 @@ impl Schema {
         let (real, text) = files::root(path, &mut files)?;
         // A root option that doesn't contain the file is reported at no place.
         let root = files::build_root(&real, options.root)?;
+        // An error in the entry file names it relative to the root, like every
+        // other path in messages (spec §13.3, packages.root.relative-messages).
+        let shown = files::relative(&root, &real);
         Loader::new(&Options { path: Some(path), root: Some(&root), ..*options }, files)
             .run(&text)
-            .map_err(|e| if e.path().is_some() { e } else { e.in_file(path) })
+            .map_err(|e| if e.path().is_some() { e } else { e.in_file(&shown) })
     }
 
     /// Every schema package the schema reaches, by name.
