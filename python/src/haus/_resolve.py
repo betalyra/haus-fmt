@@ -237,14 +237,14 @@ class _Files:
 
     def relative(self, path: StrPath, given: StrPath | None = None) -> str:
         """`path` as messages show it, from its real directory, relative to the root (`../vendor/x` outside it)
-        (spec §13.3, "The root"). On another drive than the root (Windows), as the application gave it (`given`,
-        else `path`): never made absolute."""
+        (spec §13.3, "The root"), with `/` between names on every system, like import paths. On another drive than
+        the root (Windows), as the application gave it (`given`, else `path`): never made absolute."""
         if self.root is None:
             return str(path)
         absolute = os.path.abspath(path)
         real = os.path.join(os.path.realpath(os.path.dirname(absolute)), os.path.basename(absolute))
         try:
-            return os.path.relpath(real, self.root)
+            return os.path.relpath(real, self.root).replace(os.sep, "/")
         except ValueError:  # another drive
             return str(given if given is not None else path)
 
