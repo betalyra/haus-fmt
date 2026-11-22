@@ -85,7 +85,8 @@ fn same_items<'a>(x: &'a [Value], y: &'a [Value], todo: &mut Vec<(&'a Value, &'a
 
 /// Whether two records have the same keys: then the values of each key are
 /// left to compare. Keys are unique, so records whose keys are in another
-/// order are compared sorted.
+/// order are compared by looking each key of `x` up in `y`: linear time
+/// (sorting both was n log n, and slow on large records).
 fn same_fields<'a>(x: &'a [(String, Value)], y: &'a [(String, Value)], todo: &mut Vec<(&'a Value, &'a Value)>) -> bool {
     if x.len() != y.len() {
         return false;
@@ -94,15 +95,13 @@ fn same_fields<'a>(x: &'a [(String, Value)], y: &'a [(String, Value)], todo: &mu
         todo.extend(x.iter().zip(y).map(|((_, v), (_, w))| (v, w)));
         return true;
     }
-    let sorted = |fields: &'a [(String, Value)]| {
-        let mut sorted: Vec<&'a (String, Value)> = fields.iter().collect();
-        sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-        sorted
-    };
-    let (x, y) = (sorted(x), sorted(y));
-    x.iter().zip(&y).all(|((k, v), (l, w))| {
-        todo.push((v, w));
-        k == l
+    let by_key: std::collections::HashMap<&str, &'a Value> = y.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    x.iter().all(|(k, v)| match by_key.get(k.as_str()) {
+        Some(w) => {
+            todo.push((v, w));
+            true
+        }
+        None => false,
     })
 }
 
