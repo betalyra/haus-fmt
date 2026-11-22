@@ -100,8 +100,9 @@ module.exports = grammar({
     // Tag { … }: named fields; Tag A B: positional.
     case: ($) => seq(repeat($.attribute), field('tag', $.tag), repeat(field('argument', $._atom))),
 
-    // ...UserEvent: copy the named type's tags or fields here.
-    spread: ($) => seq('...', field('name', alias(token.immediate(UPPER_IDENTIFIER), $.type_name))),
+    // ...UserEvent: copy the named type's tags or fields here. One token
+    // (spec §14): no whitespace and no comment between `...` and the name.
+    spread: (_) => token(seq('...', UPPER_IDENTIFIER)),
 
     // Not "type", "import" or "closed", which are keywords.
     type_parameter: (_) => /[a-z][A-Za-z0-9_]*/,
