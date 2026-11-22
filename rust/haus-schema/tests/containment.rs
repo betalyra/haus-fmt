@@ -261,11 +261,14 @@ fn relative_imports_stay_inside_the_root() {
     assert!(e.to_string().contains("creds.schema.haus is a symbolic link"), "{e}");
     assert!(!e.to_string().contains("API_TOKEN") && !e.to_string().contains("secret"), "{e}");
     // Messages show paths relative to the root, never the directories above it.
+    // Both spellings of the temporary directory: on macOS /var/… is a link to /private/var/….
     let tmp = app.dir.path().canonicalize().unwrap();
-    assert!(!e.to_string().contains(tmp.to_str().unwrap()), "{e}");
+    let given = app.dir.path().to_path_buf();
+    let hidden = |e: &haus_schema::Error| [&tmp, &given].iter().all(|d| !e.to_string().contains(d.to_str().unwrap()));
+    assert!(hidden(&e), "{e}");
     write(&app.path("app/main.schema.haus"), "import ./sub/other (X)\ntype R = X");
     let e = Schema::load(app.path("app/main.schema.haus"), &Explicit::new()).unwrap_err();
-    assert!(e.to_string().contains("sub/other.schema.haus") && !e.to_string().contains(tmp.to_str().unwrap()), "{e}");
+    assert!(e.to_string().contains("sub/other.schema.haus") && hidden(&e), "{e}");
     // A relative root option is relative to the entry file's real directory (here app/), not the working directory.
     write(&app.path("app/main.schema.haus"), "import ../shared/money (Money)\ntype R = Money");
     let options = Options { root: Some(Path::new("..")), ..Options::default() };
