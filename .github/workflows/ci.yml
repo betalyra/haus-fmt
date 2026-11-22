@@ -653,7 +653,9 @@ jobs:
     name: Fuzzing / ${{ matrix.mode }}
     needs: fuzz-build
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # A pull request's fuzzing takes a minute or two per mode: a stall fails after
+    # 15 minutes instead of an hour (the nightly counts take longer).
+    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.nightly) && 60 || 15 }}
     strategy:
       fail-fast: false
       matrix:

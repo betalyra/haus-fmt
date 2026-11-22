@@ -15,7 +15,6 @@
  * Effect run in this process; the others are the programs built by build.sh
  * (Lean: `haus-ref`'s JSON batch modes; the rest take `MODE FILE`).
  */
-import { spawnSync } from "node:child_process"
 import { writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { join } from "node:path"
@@ -25,6 +24,7 @@ import {
 } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 import { parseOutcome, type Outcome } from "./schema-runners.ts"
+import { runProgram, timeoutFor } from "./spawn.ts"
 
 export type Mode = "write" | "read" | "haus-json-write" | "haus-json-read" | "import"
 export const MODES: readonly Mode[] = ["write", "read", "haus-json-write", "haus-json-read", "import"]
@@ -66,7 +66,7 @@ function external(name: string, command: (mode: Mode, file: string) => readonly 
     const part = `${file}.${name}`
     writeFileSync(part, cases.map((c) => caseLine(c) + "\n").join(""))
     const [program, args] = command(mode, part)
-    const p = spawnSync(program, args, { maxBuffer: 1 << 30, encoding: "utf8", timeout: 600_000 })
+    const p = runProgram(name, program, args, timeoutFor(cases.length))
     const lines = (p.stdout ?? "").split("\n").filter((l) => l !== "")
     if (p.status === 0 && lines.length === cases.length) return lines.map((l) => parseOutcome(l, codes))
     if (cases.length === 1) {
