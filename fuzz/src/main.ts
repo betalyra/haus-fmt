@@ -121,6 +121,9 @@ function runParsers() {
   let accepted = 0
   let positionMismatches = 0
   let compared = 0
+  let shrunk = 0
+  let unshrunk = 0
+  const MAX_SHRUNK = 10
   const positionExamples: Uint8Array[] = []
 
   console.log(`seed ${seed}: ${count} cases through ${runners.map((r) => r.name).join(", ")}`)
@@ -131,6 +134,12 @@ function runParsers() {
       if (rs[0]!.ok) accepted++
       if (codesCompared(rs)) compared++
       if (disagrees(rs)) {
+        // Shrinking runs every parser many times: a few examples are enough,
+        // the rest are counted (a binding wrong on a common input would
+        // otherwise keep the run busy for hours).
+        if (shrunk >= MAX_SHRUNK) return void unshrunk++
+        shrunk++
+        console.error(`disagreement on case ${done + i}; shrinking`)
         const small = shrink(cases[i]!)
         const key = show(small)
         if (!seen.has(key)) {
@@ -147,6 +156,7 @@ function runParsers() {
   console.log(`${accepted} accepted, ${count - accepted} rejected (by lean); error codes compared in ${compared}`)
   mkdirSync(join(out, "failures"), { recursive: true })
   if (failures.length === 0) console.log("no disagreements")
+  if (unshrunk > 0) console.log(`${unshrunk} more disagreements, not shrunk (only the first ${MAX_SHRUNK} are)`)
   failures.forEach((f, i) => {
     const report = describe(f)
     writeFileSync(join(out, "failures", `${i}.haus`), f)
