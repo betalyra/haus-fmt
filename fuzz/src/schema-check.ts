@@ -9,13 +9,13 @@
  *
  *   node fuzz/src/main.ts --schema-check [--count N] [--seed S] [--out DIR] [--runners lean,typescript,…]
  */
-import { spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { pathToFileURL } from "node:url"
 import { compileSchemaFile } from "../../typescript/packages/haus/dist/index.js"
 import { Rng } from "./generate.ts"
+import { runProgram, timeoutFor } from "./spawn.ts"
 import { schemaFile, type SchemaFileCase } from "./schema-check-gen.ts"
 
 const root = new URL("../..", import.meta.url).pathname
@@ -46,7 +46,7 @@ function external(name: string, program: string, args: readonly string[], positi
   const run = (file: string, cases: readonly Uint8Array[]): Outcome[] => {
     const part = `${file}.${name}`
     writeFileSync(part, cases.map((c) => hex(c) + "\n").join(""))
-    const p = spawnSync(program, [...args, part], { maxBuffer: 1 << 30, encoding: "utf8", timeout: 600_000 })
+    const p = runProgram(name, program, [...args, part], timeoutFor(cases.length))
     const lines = (p.stdout ?? "").split("\n").filter((l) => l !== "")
     if (p.status === 0 && lines.length === cases.length) return lines.map((l) => parseOutcome(l, positions))
     if (cases.length === 1) {

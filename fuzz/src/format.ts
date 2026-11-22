@@ -11,13 +11,13 @@
  *
  *   node fuzz/src/main.ts --format [--count N] [--seed S] [--out DIR]
  */
-import { spawnSync } from "node:child_process"
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { canonical, format, parseAll, parseDocument, stringify, type Value } from "../../typescript/packages/haus/dist/index.js"
 import { formatInput } from "./format-gen.ts"
 import { Rng } from "./generate.ts"
+import { runProgram, timeoutFor } from "./spawn.ts"
 
 export const STYLES = ["pretty", "compact", "minimised"] as const
 export type Style = (typeof STYLES)[number]
@@ -322,10 +322,10 @@ function external(program: string, args: readonly string[], dir: string, cases: 
     writeCases(dir, cases)
     written.set(dir, cases)
   }
-  // A hang counts as a crash: a batch gets 5 minutes, one case 20 seconds.
-  const timeout = cases.length === 1 ? 20_000 : 300_000
-  const p = spawnSync(program, [...args, dir, String(cases.length)], { maxBuffer: 1 << 30, encoding: "utf8", timeout })
-  const hung = (p.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT"
+  // A hang counts as a crash: a batch gets up to 5 minutes (20 s and 100 ms per case), one case 20 seconds.
+  const timeout = cases.length === 1 ? 20_000 : timeoutFor(cases.length, 300_000)
+  const p = runProgram(program, program, [...args, dir, String(cases.length)], timeout)
+  const hung = p.hung
   if (p.error && !hung) throw new Error(`${program}: ${p.error.message} (run sh fuzz/build.sh)`)
   if (hung && cases.length > 1) console.error(`${program}: no answer for ${cases.length} cases within ${timeout / 1000} s; running them one by one`)
   if (p.status === 0) {

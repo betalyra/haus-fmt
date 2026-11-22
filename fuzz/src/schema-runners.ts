@@ -6,7 +6,6 @@
  * TypeScript and Effect run in this process; the others are the programs
  * built by build.sh.
  */
-import { spawnSync } from "node:child_process"
 import { readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { join } from "node:path"
@@ -14,6 +13,7 @@ import { pathToFileURL } from "node:url"
 import { canonical, compileSchemaFile, HausSyntaxError, parseAll } from "../../typescript/packages/haus/dist/index.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 import { checkCase } from "./codec.ts"
+import { runProgram, timeoutFor } from "./spawn.ts"
 
 /**
  * `ok` with the canonical form of the encoded result, `err` (any reason), or
@@ -64,7 +64,7 @@ function external(name: string, program: string, args: readonly string[] = [], c
   const runRange = (file: string, cases: readonly SchemaCase[]): Outcome[] => {
     const part = `${file}.${name}`
     writeLines(part, cases)
-    const p = spawnSync(program, [...args, part], { maxBuffer: 1 << 30, encoding: "utf8", timeout: 600_000 })
+    const p = runProgram(name, program, [...args, part], timeoutFor(cases.length))
     const lines = (p.stdout ?? "").split("\n").filter((l) => l !== "")
     if (p.status === 0 && lines.length === cases.length) return lines.map((l) => parseOutcome(l, codes))
     if (cases.length === 1) {

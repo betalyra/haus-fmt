@@ -5,12 +5,12 @@
  *
  *   node fuzz/src/time.ts [--count N] [--seed S] [--out DIR] [--runners lean,go,…]
  */
-import { spawnSync } from "node:child_process"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { checkStdTime, STD_TIME_TYPES, type StdTimeType } from "../../typescript/packages/haus/dist/index.js"
 import { Rng } from "./generate.ts"
+import { runProgram, timeoutFor } from "./spawn.ts"
 
 const { values: args } = parseArgs({
   options: {
@@ -154,7 +154,7 @@ const hex = (s: string) => Buffer.from(s, "utf8").toString("hex")
 /** A runner that is a separate program: `program [...args] FILE`, one line per case. */
 function external(program: string, args: readonly string[] = []): (file: string, cases: readonly Case[]) => Outcome[] {
   return (file, cases) => {
-    const p = spawnSync(program, [...args, file], { maxBuffer: 1 << 30, encoding: "utf8" })
+    const p = runProgram(program, program, [...args, file], timeoutFor(cases.length))
     if (p.status !== 0) return cases.map(() => `CRASH: ${(p.stderr || String(p.signal)).trim().split("\n")[0]}`)
     const lines = p.stdout.split("\n").filter((l) => l !== "")
     if (lines.length !== cases.length) throw new Error(`${program}: ${lines.length} results for ${cases.length} cases`)

@@ -9,7 +9,6 @@
  *
  * `--count` is the number of cases for each profile.
  */
-import { spawnSync } from "node:child_process"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { join } from "node:path"
@@ -19,6 +18,7 @@ import { canonical, compileSchemaFile, parseAll } from "../../typescript/package
 import { schemaOptions } from "../../typescript/packages/haus/dist/node.js"
 import * as h from "../../typescript/packages/haus/dist/schema.js"
 import { COMMENTS, Rng } from "./generate.ts"
+import { runProgram, timeoutFor } from "./spawn.ts"
 
 const { values: args } = parseArgs({
   options: {
@@ -406,7 +406,7 @@ function external(name: string, program: string, args: (p: Profile) => readonly 
   const run = (p: Profile, file: string, cases: readonly Case[]): Outcome[] => {
     const part = `${file}.${name}`
     writeCases(part, cases)
-    const r = spawnSync(program, [...args(p), part], { maxBuffer: 1 << 30, encoding: "utf8", timeout: 600_000 })
+    const r = runProgram(name, program, [...args(p), part], timeoutFor(cases.length))
     const lines = (r.stdout ?? "").split("\n").filter((l) => l !== "")
     if (r.status === 0 && lines.length === cases.length) return lines.map(parseOutcome)
     if (cases.length === 1) {

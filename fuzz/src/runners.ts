@@ -3,10 +3,10 @@
  * returns one result per case. TypeScript runs in this process; the others
  * are the binaries built by build.sh.
  */
-import { spawnSync } from "node:child_process"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { canonical, HausSyntaxError, parseAll, StreamReader } from "../../typescript/packages/haus/dist/index.js"
+import { runProgram, timeoutFor } from "./spawn.ts"
 
 /** An error has the error code of spec §17 when its runner reports codes (`code` undefined otherwise). */
 export type Result =
@@ -69,10 +69,9 @@ function external(name: string, program: string, args: readonly string[] = [], f
   return {
     name,
     run(dir, cases) {
-      const p = spawnSync(program, [...args, dir, String(cases.length)], { maxBuffer: 1 << 30, encoding: "utf8", timeout: BATCH_TIMEOUT })
+      const p = runProgram(name, program, [...args, dir, String(cases.length)], timeoutFor(cases.length, BATCH_TIMEOUT))
       // A crash or a hang is a finding: run the cases one by one to see which one it is.
-      if ((p.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT")
-        console.error(`${name}: no answer for ${cases.length} cases within ${BATCH_TIMEOUT / 1000} s; running them one by one`)
+      if (p.hung) console.error(`${name}: running the ${cases.length} cases one by one`)
       if (p.status !== 0) return cases.map((c) => this.runOne(dir, c))
       const lines = p.stdout.split("\n").filter((l) => l !== "")
       if (lines.length !== cases.length) throw new Error(`${name}: ${lines.length} results for ${cases.length} cases`)
@@ -89,8 +88,8 @@ function external(name: string, program: string, args: readonly string[] = [], f
       rmSync(single, { recursive: true, force: true })
       mkdirSync(single, { recursive: true })
       writeFileSync(join(single, "00000.haus"), bytes)
-      const p = spawnSync(program, [...args, single, "1"], { encoding: "utf8", timeout: CASE_TIMEOUT })
-      if ((p.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return { ok: false, line: -1, column: -1, reason: `HANG: no answer within ${CASE_TIMEOUT / 1000} s` }
+      const p = runProgram(name, program, [...args, single, "1"], CASE_TIMEOUT)
+      if (p.hung) return { ok: false, line: -1, column: -1, reason: `HANG: no answer within ${CASE_TIMEOUT / 1000} s` }
       if (p.status !== 0) return { ok: false, line: -1, column: -1, reason: `CRASH: ${(p.stderr || String(p.signal)).trim().split("\n").slice(0, 3).join(" ")}` }
       return parseLine(p.stdout.trim(), format)
     },
