@@ -544,13 +544,15 @@ const given = (base: string, options: NodeResolverOptions): Given => {
       // Doesn't exist.
     }
     if (!isDir) return configError(`the folder of packages ${shown(folder)} doesn't exist`)
-    const entries = readdirSync(folder)
+    // Its entries are named under its real path: `./schemas/` and a link to `schemas` are both `schemas` (spec §13.3).
+    const realFolder = realpathSync(folder)
+    const entries = readdirSync(realFolder)
     if (entries.length > MAX_FOLDER_ENTRIES) {
       throw new ModuleError("too-many-files", `the folder of packages ${shown(folder)} has ${entries.length} entries, more than ${MAX_FOLDER_ENTRIES}`)
     }
     return entries
       .sort()
-      .map((entry) => join(folder, entry))
+      .map((entry) => join(realFolder, entry))
       .filter((dir) => {
         try {
           return statSync(dir).isDirectory() && present(join(dir, MANIFEST))
@@ -584,6 +586,12 @@ const explicitPackages = ({ dirs, named, scanned }: Given, read: Reader): Explic
       invalid.push(`${shown(dir)} (${e instanceof Error ? e.message : String(e)})`)
       continue
     }
+    // Another version in its package.json: skipped the same way (spec §13.3).
+    const mismatch = versionMismatch(manifest, lenientVersion(dir, read))
+    if (mismatch !== undefined) {
+      invalid.push(`${shown(dir)} (${mismatch})`)
+      continue
+    }
     // A package given by its directory is used instead of one found in a folder.
     if (!givenByName.has(manifest.name)) add(found, manifest)
   }
@@ -597,16 +605,40 @@ const explicitPackages = ({ dirs, named, scanned }: Given, read: Reader): Explic
 
 // ── the resolver ─────────────────────────────────────────────
 
-/** The schema of the package in `manifest.dir`, imported as `module`, after the checks of spec §13.3. */
-const packageSchema = (manifest: Manifest, module: string, read: Reader): ResolvedModule => {
-  if (manifest.name !== module) throw new Error(`${shown(manifest.dir)} holds the package ${manifest.name}, not ${module}`)
-  // The version npm gives the package, where it gives one (SHOULD, spec §13.3). Quoted only when it is a version.
-  const npm = readPackageJson(manifest.dir, read)
-  const npmVersion = npm.kind === "json" ? npm.json.version : undefined
-  if (typeof npmVersion === "string" && npmVersion !== manifest.version) {
-    const theirs = SEMVER.test(npmVersion) ? `version ${quoteText(npmVersion)}` : "a version that is not a semantic version"
-    throw new ModuleError("package-version", `${manifest.name}: its package.haus says version ${quoteText(manifest.version)}, its package.json ${theirs} (${shown(manifest.dir)})`)
+/** The `version` of a package.json, if it gives one. */
+const versionOf = (npm: PackageJson): unknown => (npm.kind === "json" ? npm.json.version : undefined)
+
+/**
+ * The version of the package.json beside a package's manifest, read
+ * leniently: outside npm mode one that can't be read (a link, not a regular
+ * file, too large, not JSON) is ignored and gives no version (spec §13.3).
+ */
+const lenientVersion = (dir: string, read: Reader): unknown => {
+  try {
+    return versionOf(readPackageJson(dir, read))
+  } catch {
+    return undefined
   }
+}
+
+/** The `package-version` message if the package.json gives another version than the manifest (SHOULD, spec §13.3). Quoted only when it is a version. */
+const versionMismatch = (manifest: Manifest, npmVersion: unknown): string | undefined => {
+  if (typeof npmVersion !== "string" || npmVersion === manifest.version) return undefined
+  const theirs = SEMVER.test(npmVersion) ? `version ${quoteText(npmVersion)}` : "a version that is not a semantic version"
+  return `${manifest.name}: its package.haus says version ${quoteText(manifest.version)}, its package.json ${theirs} (${shown(manifest.dir)})`
+}
+
+/**
+ * The schema of the package in `manifest.dir`, imported as `module`, after
+ * the checks of spec §13.3. With `npm`, its package.json is read as its other
+ * files are (a link is `package-path`); without, it only gives a version, and
+ * one that can't be read is ignored.
+ */
+const packageSchema = (manifest: Manifest, module: string, read: Reader, npm: boolean): ResolvedModule => {
+  if (manifest.name !== module) throw new Error(`${shown(manifest.dir)} holds the package ${manifest.name}, not ${module}`)
+  const npmVersion = npm ? versionOf(readPackageJson(manifest.dir, read)) : lenientVersion(manifest.dir, read)
+  const mismatch = versionMismatch(manifest, npmVersion)
+  if (mismatch !== undefined) throw new ModuleError("package-version", mismatch)
   const key = join(manifest.dir, PACKAGE_SCHEMA)
   const got = read(key, MAX_SCHEMA_BYTES)
   if (got.kind === "missing") throw new Error(`${manifest.name} has no ${PACKAGE_SCHEMA} next to its manifest (${shown(manifest.dir)})`)
@@ -706,11 +738,11 @@ const resolverReading = (options: NodeResolverOptions, read: Reader): ModuleReso
       const clash = ex.clashes.get(module)
       if (clash !== undefined) throw new ModuleError("duplicate-package", clash)
       const own = ex.given.get(module)
-      if (own) return packageSchema(own, module, read)
+      if (own) return packageSchema(own, module, read, npm)
       const wrong = ex.misnamed.get(module)
       if (wrong !== undefined) throw new Error(wrong)
       const inFolder = ex.found.get(module)
-      if (!npm) return inFolder ? packageSchema(inFolder, module, read) : notFound(`package not found: ${module} is not among the packages given`, ex)
+      if (!npm) return inFolder ? packageSchema(inFolder, module, read, npm) : notFound(`package not found: ${module} is not among the packages given`, ex)
       const importer = origin ?? join(base, "_")
       // Given packages count as declared; others must be, before anything is looked for.
       if (inFolder === undefined) checkDeclared(module, importer, read)
@@ -734,12 +766,12 @@ const resolverReading = (options: NodeResolverOptions, read: Reader): ModuleReso
             )
           }
         }
-        return packageSchema(inFolder, module, read)
+        return packageSchema(inFolder, module, read, npm)
       }
       if (installed === undefined) return notFound(`package not found (no node_modules/${module} above ${shown(dirname(importer))})`, ex)
       // The first one found is the package: no looking further up.
       if (!present(join(installed, MANIFEST))) throw new Error(`${shown(installed)} is not a schema package: it has no ${MANIFEST}`)
-      return packageSchema(readManifest(join(installed, MANIFEST), read), module, read)
+      return packageSchema(readManifest(join(installed, MANIFEST), read), module, read, npm)
     },
   }
 }

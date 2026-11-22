@@ -217,6 +217,8 @@ struct StreamSuiteTests {
         let result: Outcome
         /// `whole`: the values of parsing the whole text, which doesn't apply the value limit.
         let whole: [HausValue]?
+        /// `line` and `column`: where the error is, for every split, when the case gives them.
+        let place: [Int]?
         var testDescription: String { "\(text.debugDescription) max \(maxValueLength)\(strict ? " strict" : "")" }
     }
 
@@ -239,14 +241,20 @@ struct StreamSuiteTests {
                     if case .array(let values) = args[0] { values } else { fatalError("not a whole: \(v)") }
                 default: fatalError("not a whole: \(v)")
                 }
+            let place: [Int]? =
+                switch (v["line"], v["column"]) {
+                case (nil, nil): nil
+                case (.number(let line)?, .number(let column)?): [line.integer()!, column.integer()!]
+                default: fatalError("not a place: \(v)")
+                }
             return Case(
                 text: text, maxValueLength: max.integer()!, strict: v["strict"] == .tag("True"), result: result,
-                whole: whole)
+                whole: whole, place: place)
         }
     }()
 
-    /// Reads the pieces as one stream: the values, or the error's code.
-    static func read(_ c: Case, _ pieces: [[UInt8]]) -> Outcome {
+    /// Reads the pieces as one stream: the values, or the error's code and place.
+    static func read(_ c: Case, _ pieces: [[UInt8]]) -> (Outcome, place: [Int]?) {
         var reader = StreamReader(limits: Limits(maxValueLength: c.maxValueLength), strict: c.strict)
         var values: [HausValue] = []
         do {
@@ -256,14 +264,15 @@ struct StreamSuiteTests {
             }
             reader.finish()
             while let v = try reader.next() { values.append(v) }
-            return .values(values)
+            return (.values(values), nil)
         } catch {
-            return .error(error.code)
+            return (.error(error.code), error.position.map { [$0.line, $0.column] })
         }
     }
 
     @Test func count() {
-        #expect(Self.cases.count == 26)
+        #expect(Self.cases.count == 32)
+        #expect(Self.cases.contains { $0.place != nil })
     }
 
     @Test(arguments: cases)
@@ -272,7 +281,11 @@ struct StreamSuiteTests {
         var splits: [[[UInt8]]] = [[bytes], c.text.unicodeScalars.map { Array(String($0).utf8) }]
         splits += (0...bytes.count).map { [Array(bytes[..<$0]), Array(bytes[$0...])] }
         for pieces in splits {
-            #expect(Self.read(c, pieces) == c.result, "\(pieces)")
+            let (got, place) = Self.read(c, pieces)
+            #expect(got == c.result, "\(pieces)")
+            if let want = c.place {
+                #expect(place == want, "\(pieces)")
+            }
         }
     }
 

@@ -5,9 +5,12 @@
  * built in code may be deeper, longer, or share its parts with each other (a
  * DAG), which written out expands: every place writes the shared part again.
  *
- * Both checks walk the value once before it is written, iteratively (any
- * depth works without the call stack), and count every value as often as it
- * is written: the value itself and every element, field value and argument.
+ * Both checks walk the value once, iteratively (any depth works without the
+ * call stack), and count every value as often as it is written: the value
+ * itself and every element, field value and argument. The formatter
+ * (format.ts) checks the same limits as it writes, and calls
+ * `checkWritable` only once it has found one broken, to report it: which
+ * error, if there are several, is the one found here.
  */
 import { HausEncodeError, type ErrorCode, type Path } from "./errors.js"
 import { numberLimitIssue } from "./number.js"

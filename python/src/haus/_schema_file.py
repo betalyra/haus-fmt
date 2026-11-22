@@ -894,6 +894,16 @@ class _SchemaParser:
             self.depth -= 1
 
     def parse_spread(self, at: int) -> _Spread:
+        """`...Name`, at the `...`: one token, nothing between `...` and the name (spec §14)."""
+        dots = self.tok.pos
+        # Checked before the next token is read, which would skip whitespace and comments.
+        if self.text[dots + 3 : dots + 4] in (" ", "\t", "\n", "\r", "/"):
+            self.fail(
+                "schema-syntax",
+                "...Name is one word: nothing may come between '...' and the type name (...UserEvent)",
+                dots + 3,
+            )
+        self.advance()
         t = self.tok
         if t.kind == "lower" and not self.keyword():
             self.fail(
@@ -921,7 +931,6 @@ class _SchemaParser:
                         "attributes can't be put on a spread: the fields it copies keep their own",
                         attributes[0].pos,
                     )
-                self.advance()
                 spreads.append(self.parse_spread(len(fields)))
             else:
                 k = self.tok
@@ -966,7 +975,6 @@ class _SchemaParser:
                         "attributes can't be put on a spread: the tags it copies keep their own",
                         attributes[0].pos,
                     )
-                self.advance()
                 spreads.append(self.parse_spread(len(cases)))
             else:
                 self.unexpected("a tag after the attribute" if attributes else "a tag, ...Name or '>'")

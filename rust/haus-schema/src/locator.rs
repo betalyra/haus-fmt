@@ -168,10 +168,13 @@ impl Explicit {
     /// With the packages in `folder`: its subdirectories (or links to
     /// directories) that have a `package.haus`, not deeper. A folder that
     /// can't be read is `import-not-found`, one with more than 4096 entries
-    /// `too-many-files`. A subdirectory whose manifest is invalid is left
-    /// out; an import that isn't found names it.
+    /// `too-many-files`. A subdirectory whose manifest is invalid, or whose
+    /// `package.json` gives another version, is left out; an import that
+    /// isn't found names it, under the folder's real path (`./schemas/` and
+    /// a link to `schemas` are both `schemas`, spec §13.3).
     pub fn folder(mut self, folder: impl AsRef<Path>) -> Result<Explicit> {
-        let folder = folder.as_ref();
+        let given = folder.as_ref();
+        let folder = &given.canonicalize().map_err(|e| Error::at(given, ErrorCode::ImportNotFound, e))?;
         let entries = fs::read_dir(folder).map_err(|e| Error::at(folder, ErrorCode::ImportNotFound, e))?;
         let mut dirs = vec![];
         for (i, entry) in entries.enumerate() {
@@ -188,7 +191,15 @@ impl Explicit {
         for dir in dirs {
             let read = dir.canonicalize().map_err(|e| Error::at(&dir, ErrorCode::ImportNotFound, e));
             match read.and_then(|real| Ok((Manifest::read(&real)?, real))) {
-                Ok((manifest, real)) => self = self.add(manifest, real, true)?,
+                Ok((manifest, real)) => match explicit_version(&real, &mut FileCache::new()) {
+                    // Skipped as one with an invalid manifest is (spec §13.3).
+                    Some(version) if version != manifest.version => {
+                        let (says, theirs) = (quote(&manifest.version), quote(&version));
+                        let reason = format!("its package.haus says version {says}, its package.json {theirs}");
+                        self.unreadable.push((dir, Error::new(ErrorCode::PackageVersion, reason)));
+                    }
+                    _ => self = self.add(manifest, real, true)?,
+                },
                 Err(e) => self.unreadable.push((dir, e)),
             }
         }
@@ -208,7 +219,7 @@ impl Explicit {
 impl Locator for Explicit {
     fn locate_in(&self, name: &str, _from: Option<&Path>, files: &mut FileCache) -> Result<Location> {
         if let Some(given) = self.packages.iter().find(|g| g.manifest.name == name) {
-            let version = npm_version(&given.dir, files)?;
+            let version = explicit_version(&given.dir, files);
             return Ok(Location { version, scanned: given.scanned, ..Location::new(&given.dir) });
         }
         let mut reason = format!("package {name} is not among the packages given");
@@ -381,6 +392,14 @@ fn npm_version(dir: &Path, files: &mut FileCache) -> Result<Option<String>> {
         Some(Json::String(v)) => Some(v.clone()),
         _ => None,
     }))
+}
+
+/// The version of the `package.json` beside a package given explicitly. It
+/// only gives a version: one that can't be read (a symbolic link or not a
+/// regular file, too large, not JSON) is ignored (spec §13.3, "Package
+/// versions"). Read so also when [`Explicit`] comes before [`NodeModules`].
+fn explicit_version(dir: &Path, files: &mut FileCache) -> Option<String> {
+    npm_version(dir, files).ok().flatten()
 }
 
 /// The member `key` of a JSON object: the last one, as `JSON.parse` keeps.

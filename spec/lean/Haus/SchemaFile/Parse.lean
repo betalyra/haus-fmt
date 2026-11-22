@@ -162,9 +162,12 @@ def attributes : Nat → List Attr → P (List Attr)
 
 /-! ## Types -/
 
-/-- `...Name`, after the `...`. -/
+/--
+`...Name`, after the `...`. Spec §14: `...Name` is one token, so nothing may come
+between `...` and the name: `... Name` and `.../*c*/Name` are `schema-syntax`,
+at the character after `...`.
+-/
 def spread : P String := do
-  ws
   let t ← get
   let w := ident t
   match t with
@@ -172,6 +175,8 @@ def spread : P String := do
     if isLowerIdentStart c && !isKeyword w then
       fail .rowParameter s!"row parameters (...{msgText (String.ofList w)}) aren't supported; spread a named type instead: ...UserEvent"
     else if isUpper c then return String.ofList (← takeWhile isIdentChar)
+    else if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '/' then
+      fail .schemaSyntax "...Name is one word: nothing may come between '...' and the type name (...UserEvent)"
     else unexpected "a type name after '...': ...UserEvent"
   | [] => unexpected "a type name after '...': ...UserEvent"
 
@@ -439,6 +444,10 @@ private def codeOf (src : String) : Option Code :=
 #guard codeOf "type B = { x: Int }\ntype A = { @deprecated ...B }" == some .attributeOnSpread
 #guard codeOf "type A = closed < >" == some .closedEmptyVariant
 #guard codeOf "type A r = { x: Int, ...r }" == some .rowParameter
+#guard codeOf "type B = { x: Int }\ntype A = { ... B }" == some .schemaSyntax
+#guard codeOf "type B = { x: Int }\ntype A = { .../*c*/B }" == some .schemaSyntax
+#guard codeOf "type B = < X >\ntype A = < ...\nB >" == some .schemaSyntax
+#guard codeOf "type B = < X >\ntype A = < ...B | Y >" == none
 #guard codeOf "type P _x = { a: _x }" == some .invalidParameter
 #guard codeOf "type A = < Y | >" == some .schemaSyntax
 #guard codeOf "type A = < | Y >" == none

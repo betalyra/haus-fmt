@@ -867,16 +867,21 @@ def stringify_all(
     (`tag-too-long`) longer than the string limit; nesting deeper than the depth limit
     (`nesting-too-deep`; a record payload is one level, an empty container is one too); and a value that
     would write more values than `max_nodes` (`too-many-nodes`, at the top-level value: its parts share
-    each other, and each place writes them again). The node limit applies to each value on its own.
+    each other, and each place writes them again). The node limit applies to each value on its own. An
+    error in the i-th value is at `$[i]`, also when there is one value (`$[0]`, spec §11).
     """
+    return _written(values, style, indent, width, limits, indexed=True)
+
+
+def _written(values: Iterable[Value], style: Style, indent: int, width: int, limits: Limits, *, indexed: bool) -> str:
+    """`stringify_all`; its errors under `$[i]` if `indexed`, else (one value, `stringify`) under `$`."""
     _options(style, indent, width)
-    vs = list(values)
     make_room(limits.max_depth)
     builder = _Builder(limits)
     items: list[_Item] = []
-    for i, v in enumerate(vs):
+    for i, v in enumerate(values):
         item = _Item(False, [])
-        item.node = builder.value(v, (i,) if len(vs) > 1 else ())
+        item.node = builder.value(v, (i,) if indexed else ())
         items.append(item)
     printer = _Printer(style, indent, width)
     return printer.pretty(items, []) if style == "pretty" else printer.lines(items)
@@ -904,4 +909,4 @@ def stringify(
 
     See `stringify_all` for the options and errors.
     """
-    return stringify_all((value,), style=style, indent=indent, width=width, limits=limits)[:-1]
+    return _written((value,), style, indent, width, limits, indexed=False)[:-1]

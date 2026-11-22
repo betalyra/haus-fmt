@@ -13,7 +13,7 @@ import (
 // so the values are written as they are checked, without building a syntax
 // tree; the checks are the pretty layout's, in its order (writeCheck), so a
 // value that can't be written fails with the same error in every layout.
-func writeLines(vs []Value, lim Limits, minimised bool) ([]byte, error) {
+func writeLines(vs []Value, lim Limits, minimised, indexed bool) ([]byte, error) {
 	if len(vs) == 0 {
 		return nil, nil // an empty file
 	}
@@ -21,7 +21,7 @@ func writeLines(vs []Value, lim Limits, minimised bool) ([]byte, error) {
 	w := lineWriter{writeCheck: writeCheck{lim: lim}, b: (*buf)[:0], minimised: minimised}
 	stream := len(vs) > 1
 	for i, v := range vs {
-		w.start(i, stream)
+		w.start(i, indexed)
 		if err := w.value(v, 0); err != nil {
 			lineBuffers.Put(buf)
 			return nil, err

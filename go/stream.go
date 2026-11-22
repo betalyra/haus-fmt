@@ -347,7 +347,13 @@ func (s *StreamReader) findComma() (int, error) {
 			}
 		}
 		if s.chars > limit {
-			return -1, &Error{Code: CodeValueTooLong, Line: s.line, Column: s.col,
+			// At the first character counted: after the previous comma, or
+			// the first of the stream, after a byte order mark (spec §7).
+			col := s.col
+			if s.first && s.start == 0 && len(b) >= 3 && string(b[:3]) == bom {
+				col++
+			}
+			return -1, &Error{Code: CodeValueTooLong, Line: s.line, Column: col,
 				Message: fmt.Sprintf("a top-level value of more than %d characters", limit)}
 		}
 	}

@@ -11,15 +11,19 @@
  * (value.ts) or read, with its numbers normalized. They have one limit, the
  * node limit (spec §7): a value whose parts share each other so much that its
  * canonical form would hold more than `maxNodes` values (default 64 Mi) fails
- * with HausEncodeError `too-many-nodes`. No other limit applies: a value
- * deeper or longer than a writer's limits still has a canonical form. A value
+ * with HausEncodeError `too-many-nodes`, at `$` (`$[i]` in `hashAll`; from
+ * `equals` and `compare` the message says which operand). No other limit
+ * applies: a value deeper or longer than a writer's limits still has a
+ * canonical form, and there is no maximum depth: they walk a value with a
+ * stack of their own, not the call stack, so any depth works. A value
  * forged past the constructors (with a cast) is not one, and what they do
  * with it is undefined (spec §11, "Values built in code").
  */
 import { escaped, toHex, writtenKey } from "./format.js"
 import { DEFAULT_LIMITS, type Limits } from "./reader.js"
 import type { Value } from "./value.js"
-import { checkNodes } from "./written.js"
+import { HausEncodeError } from "./errors.js"
+import { checkNodes, nodesWithin, tooManyNodes } from "./written.js"
 
 /** The one limit of the canonical form and hashing (spec §12): the node limit, default 64 Mi. */
 export type CanonicalLimits = Partial<Pick<Limits, "maxNodes">>
@@ -27,6 +31,15 @@ export type CanonicalLimits = Partial<Pick<Limits, "maxNodes">>
 /** The canonical form of `value`, its nodes checked first; `at` is its place for the error (`$`, or `$[i]` in `hashAll`). */
 const canonicalAt = (value: Value, maxNodes: number, at: readonly number[]): string => {
   checkNodes(value, maxNodes, at)
+  const out: string[] = []
+  write(value, out)
+  return out.join("")
+}
+
+/** The canonical form of an operand of `equals` or `compare`: `too-many-nodes` at `$`, the message saying which operand (spec §12). */
+const operand = (value: Value, which: "first" | "second", limits: CanonicalLimits): string => {
+  const maxNodes = limits.maxNodes ?? DEFAULT_LIMITS.maxNodes
+  if (!nodesWithin(value, maxNodes)) throw new HausEncodeError(`the ${which} value: ${tooManyNodes(maxNodes)}`, [], "too-many-nodes")
   const out: string[] = []
   write(value, out)
   return out.join("")
@@ -121,7 +134,7 @@ export function canonical(value: Value, limits: CanonicalLimits = {}): string {
 
 /** Whether two values are equal (spec §2): the same canonical form. Within the node limit, as `canonical`. */
 export function equals(a: Value, b: Value, limits: CanonicalLimits = {}): boolean {
-  return canonical(a, limits) === canonical(b, limits)
+  return operand(a, "first", limits) === operand(b, "second", limits)
 }
 
 /**
@@ -130,7 +143,7 @@ export function equals(a: Value, b: Value, limits: CanonicalLimits = {}): boolea
  * ordered maps. Returns -1, 0 or 1. Not numeric order: `10` sorts before `9`.
  */
 export function compare(a: Value, b: Value, limits: CanonicalLimits = {}): -1 | 0 | 1 {
-  return Math.sign(compareCodePoints(canonical(a, limits), canonical(b, limits))) as -1 | 0 | 1
+  return Math.sign(compareCodePoints(operand(a, "first", limits), operand(b, "second", limits))) as -1 | 0 | 1
 }
 
 /**

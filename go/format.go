@@ -171,13 +171,21 @@ func (n *node) hasComments() bool {
 // (cyclic-value). A negative indent or width fails with
 // [ErrInvalidOptions] before any value is looked at.
 func FormatValue(v Value, opts FormatOptions) ([]byte, error) {
-	return FormatValues([]Value{v}, opts)
+	return formatValues([]Value{v}, opts, false)
 }
 
 // FormatValues writes values as a file (spec §6): one value alone, two or
 // more as a stream with a comma after each. See [FormatValue]. A value that
-// contains itself fails with the code cyclic-value.
+// contains itself fails with the code cyclic-value. An error in the i-th
+// value is at $[i], also when there is one value ($[0]); [FormatValue]'s
+// are at $.
 func FormatValues(vs []Value, opts FormatOptions) ([]byte, error) {
+	return formatValues(vs, opts, true)
+}
+
+// formatValues writes values as a file; indexed puts the index of each
+// value first in an error's path (spec §11, "Values built in code").
+func formatValues(vs []Value, opts FormatOptions, indexed bool) ([]byte, error) {
 	if err := opts.Check(); err != nil {
 		return nil, err
 	}
@@ -187,12 +195,12 @@ func FormatValues(vs []Value, opts FormatOptions) ([]byte, error) {
 	}
 	if opts.Layout != Pretty {
 		// No layout decisions to make: written as the values are checked.
-		return writeLines(vs, lim, opts.Layout == Minimised)
+		return writeLines(vs, lim, opts.Layout == Minimised, indexed)
 	}
 	b := builder{writeCheck: writeCheck{lim: lim}}
 	f := &fileNode{items: make([]*item, len(vs))}
 	for i, v := range vs {
-		b.start(i, len(vs) > 1)
+		b.start(i, indexed)
 		n, err := b.node(v, 0)
 		if err != nil {
 			return nil, err
@@ -219,10 +227,10 @@ func (c *writeCheck) fail(code ErrorCode, format string, args ...any) error {
 	return &Error{Code: code, Message: fmt.Sprintf(format, args...), Path: pathString(c.path)}
 }
 
-// start starts the top-level value i, of a stream or alone.
-func (c *writeCheck) start(i int, stream bool) {
+// start starts the top-level value i: at $[i] if indexed, else at $.
+func (c *writeCheck) start(i int, indexed bool) {
 	c.path = c.path[:0]
-	if stream {
+	if indexed {
 		c.path = append(c.path, step{index: i})
 	}
 	c.top = len(c.path)

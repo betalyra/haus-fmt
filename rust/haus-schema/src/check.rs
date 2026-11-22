@@ -237,10 +237,26 @@ impl Schema {
             Err(e) => return vec![Issue::error(e)],
         };
         let mut w = Walker::new(self, *limits, Mode::Check, nodes);
-        if let Err(e) = w.budget(values) {
-            return vec![Issue::error(e)];
-        }
         let node = |i: usize| nodes.and_then(|n| n.get(i));
+        // The node limit applies to each value of a stream on its own, its error at `$[i]` (spec §7, §15).
+        let budget = match root.stream {
+            true => values
+                .iter()
+                .enumerate()
+                .try_fold(0usize, |steps, (i, v)| match w.budget(std::slice::from_ref(v)) {
+                    Ok(()) => Ok(steps.saturating_add(w.max_steps)),
+                    Err(e) => Err(Issue {
+                        path: vec![Segment::Index(i)],
+                        span: node(i).map(|n| n.start..n.end),
+                        ..Issue::error(e)
+                    }),
+                })
+                .map(|steps| w.max_steps = steps),
+            false => w.budget(values).map_err(Issue::error),
+        };
+        if let Err(e) = budget {
+            return vec![e];
+        }
         if root.stream {
             for (i, v) in values.iter().enumerate() {
                 w.path.push(Step::Index(i));

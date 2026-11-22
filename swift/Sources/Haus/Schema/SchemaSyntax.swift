@@ -562,11 +562,13 @@ struct SchemaParser {
     /// `...Name` (a lowercase name is read too, for the checks to reject).
     @inline(never)
     mutating func spread(at: Int, _ attrs: [Attribute]) throws(SchemaFailure) -> SpreadDef {
+        // `...Name` is one token: nothing may come between the dots and the name (spec §14).
         pos += 3
-        try ws()
         let start = pos
         guard let c = byte(pos), isUpper(c) || isLower(c) || c == ASCII.underscore else {
-            throw expected("a type name after '...': ...UserEvent")
+            throw SchemaFailure(
+                pos, .schemaSyntax,
+                "expected a type name right after '...', with nothing between: ...UserEvent, found \(found(pos))")
         }
         let name = peekWord()
         pos += name.utf8.count

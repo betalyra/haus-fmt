@@ -1,0 +1,3 @@
+// ...Name is one word: no space between ... and the name (spec §14).
+type B = { x: Int }
+type A = { ... B, y: Int }

@@ -114,13 +114,22 @@ theorem Keeps.packageJsonOf {dir : Path} {owner : String} : Keeps (Closed L) (pa
   unfold Haus.Packages.packageJsonOf
   repeat (first | with_reducible exact Keeps.openPackageFile | kstep)
 
+theorem Keeps.lenientNpm {dir : Path} {owner : String} : Keeps (Closed L) (lenientNpm dir owner) := by
+  unfold Haus.Packages.lenientNpm
+  repeat (first | with_reducible exact Keeps.packageJsonOf | kstep)
+
 theorem Keeps.copyNpm {config : Config} {dir : Path} {owner : String} : Keeps (Closed L) (copyNpm config dir owner) := by
   unfold Haus.Packages.copyNpm
-  repeat (first | with_reducible exact Keeps.packageJsonOf | kstep)
+  repeat (first | with_reducible exact Keeps.packageJsonOf | with_reducible exact Keeps.lenientNpm | kstep)
 
 theorem Keeps.checkVersion {config : Config} {m : Manifest} {npm : Option NpmInfo} {owner : String} :
     Keeps (Closed L) (checkVersion config m npm owner) := by
   unfold Haus.Packages.checkVersion; keeps
+
+theorem Keeps.folderVersion {config : Config} {m : Manifest} {sub : Path} {shown : String} :
+    Keeps (Closed L) (folderVersion config m sub shown) := by
+  unfold Haus.Packages.folderVersion
+  repeat (first | with_reducible exact Keeps.lenientNpm | with_reducible exact Keeps.checkVersion | kstep)
 
 theorem Keeps.checkNoFiles {m : Manifest} {sc : Scanned} : Keeps (Closed L) (checkNoFiles m sc) := by
   unfold Haus.Packages.checkNoFiles; keeps
@@ -403,7 +412,7 @@ theorem load_closed {env : Env} {w : Walk} : ∀ (n : Nat) (T : Target) (L : Nat
 
 theorem Keeps.givenPackages {L : Nat} : Keeps (Closed L) givenPackages := by
   unfold Haus.Packages.givenPackages
-  repeat (first | with_reducible exact Keeps.manifestOf | kstep)
+  repeat (first | with_reducible exact Keeps.manifestOf | with_reducible exact Keeps.folderVersion | kstep)
 
 theorem main_closed {env : Env} {root : Path} {w : Walk} : Triple env (Closed 0) (main root w) (fun _ => Closed 0) (Closed 0) := by
   unfold main

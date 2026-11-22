@@ -196,6 +196,34 @@ struct APITests {
         let stream = #expect(throws: HausError.self) { try stringifyAll([three, pair], compact) }
         #expect(stream?.code == .tooManyNodes)
         #expect(stream?.path == "$[1]")
+        // A writer of several values gives `$[0]` for a stream of one (spec §11).
+        for layout in [Layout.pretty, .compact, .minimised] {
+            let one = #expect(throws: HausError.self) {
+                try stringifyAll([pair], FormatOptions(layout: layout, limits: small))
+            }
+            #expect(one?.path == "$[0]", "\(layout)")
+        }
+        // Encoding and decoding with a schema: at `$` wherever the walk is,
+        // `$[i]` for a stream's item (spec §7, §15).
+        let trees = try HausSchema(
+            parsing: "type Tree = Array Tree\ntype Root = { a: { b: Tree } }\ntype Trees = Stream Tree")
+        let shared = Self.shared(10)
+        let nested: HausValue = ["a": ["b": shared]]
+        let few = Limits(maxNodes: 100)
+        let root = try trees.type("Root")
+        for (name, run) in [
+            ("decode", { () throws in _ = try root.decode(nested, limits: few) }),
+            ("encode", { () throws in _ = try root.encode(nested, limits: few) }),
+        ] as [(String, () throws -> Void)] {
+            let error = #expect(throws: HausError.self, "\(name)") { try run() }
+            #expect(error?.code == .tooManyNodes, "\(name)")
+            #expect(error?.path == "$", "\(name)")
+        }
+        let item = #expect(throws: HausError.self) {
+            try trees.type("Trees").decodeAll([[], shared], limits: few)
+        }
+        #expect(item?.code == .tooManyNodes)
+        #expect(item?.path == "$[1]")
         // Schema-based JSON checks the value it writes too.
         let type = try HausSchema(parsing: "type S = { s: String, k: Map Int, t: < Long > }").type("S")
         for (value, code, path) in [

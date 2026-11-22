@@ -17,18 +17,30 @@ StreamSuiteTest := [].{}
 
 expect {
 	cases = Value.parse_bytes(stream_suite) ?? []
-	cases.len() == 26 and cases.all(|c| stream_case(c).is_ok())
+	cases.len() == 32 and cases.all(|c| stream_case(c).is_ok())
+}
+
+# Some cases give where the error is (`line` and `column`): they are checked too.
+expect {
+	cases = Value.parse_bytes(stream_suite) ?? []
+	cases.any(|c| field_of(c, "line", Decode.u64).is_ok() and field_of(c, "column", Decode.u64).is_ok())
 }
 
 ## A case of the stream suite: Ok, or the ways of reading it that went wrong.
 stream_case : Value -> Try({}, List(Str))
 stream_case = |c| {
 	case = (field_of(c, "text", Decode.str), field_of(c, "maxValueLength", Decode.u64), field_of(c, "result", |r| Decode.result(r, |v| Decode.list(v, Decode.any), Decode.str)))
+	# Where the error is, for every split, if the case says (`line` and `column`).
+	at = match (field_of(c, "line", Decode.u64), field_of(c, "column", Decode.u64)) {
+		(Ok(line), Ok(column)) => " at ${line.to_str()}:${column.to_str()}"
+		_ => ""
+	}
 	(text, max, want) = match case {
 		(Ok(t), Ok(n), Ok(Ok(values))) => (t, n, Ok(values.map(Value.to_test_json)))
-		(Ok(t), Ok(n), Ok(Err(code))) => (t, n, Err(code))
+		(Ok(t), Ok(n), Ok(Err(code))) => (t, n, Err("${code}${at}"))
 		_ => return Err(["not a case: ${Value.to_test_json(c)}"])
 	}
+	placed = |e| if (at == "") e.code else "${e.code} at ${e.line.to_str()}:${e.column.to_str()}"
 	options = {
 		..Streaming.defaults,
 		max_value_length: max,
@@ -43,12 +55,12 @@ stream_case = |c| {
 					$state = next
 					$out = $out.concat(values)
 				}
-				Err(e) => return Err(e.code)
+				Err(e) => return Err(placed(e))
 			}
 		}
 		match Streaming.finish($state) {
 			Ok(last) => Ok($out.concat(last).map(Value.to_test_json))
-			Err(e) => Err(e.code)
+			Err(e) => Err(placed(e))
 		}
 	}
 	bytes = text.to_utf8()

@@ -230,13 +230,13 @@ class ManifestTest {
     HausException e = fails("package-path", () -> PackageLocator.explicit().packageDir(linked));
     assertFalse(e.getMessage().contains("do-not-print"), e.getMessage());
 
-    // A package.json that is a link isn't read either.
+    // A package.json that is a link isn't read either: beside a package given explicitly (outside
+    // npm mode) it gives no version, and is no error (spec §13.3).
     Path common = pkg(temp.resolve("vendor/common"), "@acme/common", "1.0.0", "type Address = { city: String }");
     write(temp.resolve("secret/package.json"), "{ \"version\": \"9.9.9-do-not-print\" }");
     Files.createSymbolicLink(common.resolve("package.json"), Paths.get("../../secret/package.json"));
     ExplicitPackages withJson = PackageLocator.explicit().packageDir(common);
-    HausException j = fails("package-path", () -> new SchemaFiles().openPackageFor(withJson, "@acme/common", null));
-    assertFalse(j.getMessage().contains("do-not-print"), j.getMessage());
+    new SchemaFiles().openPackageFor(withJson, "@acme/common", null);
   }
 
   @Test
@@ -256,8 +256,9 @@ class ManifestTest {
     new SchemaFiles().openPackageFor(packages, "@acme/common", null);
     write(common.resolve("package.json"), "{ \"version\": \"1.0.0\" }");
     new SchemaFiles().openPackageFor(packages, "@acme/common", null);
-    write(common.resolve("package.json"), "{\"version\": \"1.0.0\", \"x\": \"" + "x".repeat(1 << 20) + "\"}");
-    fails("file-too-large", () -> new SchemaFiles().openPackageFor(packages, "@acme/common", null));
+    // Larger than its limit: beside a package given explicitly, ignored (spec §13.3).
+    write(common.resolve("package.json"), "{\"version\": \"1.1.0\", \"x\": \"" + "x".repeat(1 << 20) + "\"}");
+    new SchemaFiles().openPackageFor(packages, "@acme/common", null);
   }
 
   @Test

@@ -15,16 +15,20 @@
  *
  * Every `Value` is a haus value (value.ts: the constructors check what they
  * build), and a value built in code is checked against the writer's limits
- * before it is written (spec §11, written.ts): its depth, the length of its
- * strings, keys and tags, its numbers, and the node limit. A value forged
- * past the constructors (with a cast) is not one, and what the writers do
- * with it is undefined (spec §11, "Values built in code").
+ * as it is written (spec §11, written.ts): its depth, the length of its
+ * strings, keys and tags, its numbers, and the node limit. The writer's walk
+ * only notices that a limit is broken; written.ts's `checkWritable` then
+ * reports it, so the error (and which one, if several) is the same as if the
+ * value had been checked before it was written, and nothing is returned. A
+ * value forged past the constructors (with a cast) is not one, and what the
+ * writers do with it is undefined (spec §11, "Values built in code").
  */
 import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB, unpairedSurrogate } from "./chars.js"
-import { HausEncodeError } from "./errors.js"
-import { DEFAULT_LIMITS } from "./parser.js"
+import { HausEncodeError, type Path } from "./errors.js"
+import { numberLimitIssue } from "./number.js"
+import { DEFAULT_LIMITS, longerThan } from "./reader.js"
 import type { HRecord, HVariant, Value } from "./value.js"
-import { checkWritable, type WriteLimits } from "./written.js"
+import { checkWritable, nodesWithin, type WriteLimits } from "./written.js"
 
 /**
  * The layouts of spec §11:
@@ -69,26 +73,50 @@ export interface FormatOptions {
 
 /** Format a whole file: one value, or a stream with a comma after each value. */
 export function format(values: readonly Value[], options: FormatOptions = {}): string {
-  const limits = writeLimits(options)
-  // A value's errors are at `$`, or at `$[i]` for value i of a stream.
-  values.forEach((v, i) => checkWritable(v, limits, values.length > 1 ? [i] : []))
+  // A value's errors are at `$[i]`, value i of the stream (of one value too).
+  const f = formatter(options, values, (i) => [i])
   if (oneLine(options)) {
-    const f = new Formatter(options)
     if (values.length === 0) return ""
-    if (values.length === 1) return f.line(values[0]!) + "\n"
-    return values.map((v) => f.line(v) + ",\n").join("")
+    if (values.length === 1) return f.line(values[0]!, [0]) + "\n"
+    return values.map((v, i) => f.line(v, [i]) + ",\n").join("")
   }
-  const f = new Formatter(options)
   const text = f.file(values)
   return text === "" ? "" : text + "\n"
 }
 
 /** Serialize one value (no trailing newline). */
 export function stringify(value: Value, options: FormatOptions = {}): string {
-  checkWritable(value, writeLimits(options))
-  const f = new Formatter(options)
-  return oneLine(options) ? f.line(value) : f.value(value)
+  return stringifyAt(value, options, [])
 }
+
+/** `stringify`, with the value's errors under `at` (`$[i]` for value i of a stream written a value at a time). */
+export const stringifyAt = (value: Value, options: FormatOptions, at: Path): string => {
+  const f = formatter(options, [value], () => at)
+  return oneLine(options) ? f.line(value, at) : f.value(value, at)
+}
+
+/**
+ * The formatter for `options`. An option that is a misuse of the API (a
+ * `RangeError`) is reported after the values' own errors, as when the values
+ * were checked before anything else.
+ */
+const formatter = (options: FormatOptions, values: readonly Value[], at: (i: number) => Path): Formatter => {
+  const limits = writeLimits(options)
+  try {
+    return new Formatter(options, limits)
+  } catch (e) {
+    values.forEach((v, i) => checkWritable(v, limits, at(i)))
+    throw e
+  }
+}
+
+/**
+ * The writer counts the values it writes for a top-level value: up to the
+ * node limit, or up to this many, after which it counts the whole value once
+ * (`nodesWithin`, without writing). A value whose parts share each other
+ * (spec §7) is so rejected before much of its expansion is written.
+ */
+const NODES_WRITTEN_BEFORE_COUNTING = 1 << 20
 
 /**
  * An indent or width as given (spec §11): a whole number of at least 0,
@@ -149,6 +177,10 @@ interface EntryList {
   readonly leading: readonly (readonly Span[])[]
   readonly trailing: readonly (readonly Span[])[]
   readonly dangling: readonly Span[]
+  /** The depth of the entries (spec §7, as written.ts counts it). */
+  readonly depth: number
+  /** The top-level values of a file: each is checked on its own, at its index. */
+  readonly top: boolean
   /** The next entry to write. */
   next: number
   /** Source offset after what was written last, to keep a blank line before the next entry. */
@@ -164,7 +196,7 @@ interface EntryList {
  */
 type Task =
   | { readonly kind: "text"; readonly text: string }
-  | { readonly kind: "value"; readonly value: Value; readonly ind: string; readonly used: number }
+  | { readonly kind: "value"; readonly value: Value; readonly ind: string; readonly used: number; readonly depth: number }
   | { readonly kind: "entries"; readonly list: EntryList }
   | { readonly kind: "entryEnd"; readonly list: EntryList; readonly index: number; readonly mark: number }
 
@@ -175,104 +207,198 @@ class Formatter {
   private readonly comments: readonly Span[]
   /** The spacing of a top-level item on one line: compact's, or none (minimised). */
   private readonly spacing: Spacing
+  private readonly limits: WriteLimits
 
-  constructor(options: FormatOptions) {
+  // The writer's checks (spec §11): the top-level value being written, where its errors are, and the values written for it.
+  private root: Value | undefined
+  private at: Path = []
+  private nodes = 0
+  /** Nodes written beyond which they are counted all (`overNodes`); Infinity once they have been. */
+  private nodeLimit = 0
+
+  constructor(options: FormatOptions, limits: WriteLimits) {
     this.spacing = options.style === "minimised" ? TIGHT : SPACED
     this.step = " ".repeat(wholeOption("indent", options.indent ?? 2))
     this.width = wholeOption("width", options.width ?? 80)
     this.source = options.source
     this.comments = options.source === undefined ? [] : [...(options.comments ?? [])].sort((a, b) => a[0] - b[0])
+    this.limits = limits
   }
 
   // ── entry points ───────────────────────────────────────────
 
+  /** Pretty: the values of a file, value i's errors at `$[i]`. */
   file(values: readonly Value[]): string {
     const stream = values.length > 1
     const entries = values.map(entryOf)
     const end = this.source?.length ?? 0
-    const list = this.entryList(0, end, entries, "", stream ? "," : "", stream)
+    const list = this.entryList(0, end, entries, "", stream ? "," : "", stream, 0, true)
     return this.run({ kind: "entries", list }).replace(/\n$/, "")
   }
 
-  /** Pretty: `v` at indentation 0. */
-  value(v: Value): string {
-    return this.run({ kind: "value", value: v, ind: "", used: 0 })
+  /** Pretty: `v` at indentation 0, its errors under `at`. */
+  value(v: Value, at: Path): string {
+    this.begin(v, at)
+    return this.run({ kind: "value", value: v, ind: "", used: 0, depth: 0 })
   }
 
   /**
    * Compact and minimised: the value on one line, with spaces between tokens
-   * (compact) or without (minimised). Multi-line strings use `\n` escapes, so
-   * a stream has exactly one item per line (like NDJSON).
+   * (compact) or without (minimised), its errors under `at`. Multi-line
+   * strings use `\n` escapes, so a stream has exactly one item per line
+   * (like NDJSON).
    */
-  line(v: Value): string {
-    return this.inline(v, false, Infinity, this.spacing)!
+  line(v: Value, at: Path): string {
+    this.begin(v, at)
+    return this.inline(v, false, Infinity, 0, this.spacing)!
+  }
+
+  // ── checks ─────────────────────────────────────────────────
+
+  /** Start writing the top-level value `root`, its errors under `at`. */
+  private begin(root: Value, at: Path): void {
+    this.root = root
+    this.at = at
+    this.nodes = 0
+    this.nodeLimit = Math.min(this.limits.maxNodes, NODES_WRITTEN_BEFORE_COUNTING)
+  }
+
+  /**
+   * A limit is broken (or more values are written than `nodeLimit`, and
+   * they are over the node limit): report it as written.ts finds it, with
+   * nothing written.
+   */
+  private fail(): never {
+    checkWritable(this.root!, this.limits, this.at)
+    throw new Error("haus: the writer found a limit broken that written.ts does not")
+  }
+
+  /** More values written than `nodeLimit`: count them all, once; the next limit to check against (Infinity). */
+  private overNodes(): number {
+    if (!nodesWithin(this.root!, this.limits.maxNodes)) this.fail()
+    return (this.nodeLimit = Infinity)
+  }
+
+  /** One more value written that is not on one line (`inline` counts its own). */
+  private written(): void {
+    if (++this.nodes > this.nodeLimit) this.overNodes()
+  }
+
+  /** A number, string, byte string or tag over its limit (as written.ts's `checkLeaf`)? Hot: most need one comparison. */
+  private leafOver(v: Value): boolean {
+    const max = this.limits.maxStringLength
+    switch (v.kind) {
+      case "number":
+        return (v.text.length > this.limits.maxNumberLength || v.text.includes("e")) && numberLimitIssue(v.text, this.limits) !== undefined
+      case "string":
+        return longerThan(v.value, max)
+      case "bytes":
+        return v.bytes.length * 2 > max
+      case "variant":
+        return v.tag.length > max
+      default:
+        return false
+    }
   }
 
   // ── single line ────────────────────────────────────────────
 
   /**
-   * `v` on one line, or undefined if it is longer than `budget`. Pretty: also
-   * undefined if it can't be written on one line there (a block string, a
-   * non-empty record or array). Iterative, like `run`.
+   * `v` (at `depth`) on one line, or undefined if it is longer than
+   * `budget`. Pretty: also undefined if it can't be written on one line
+   * there (a block string, a non-empty record or array). Iterative, like
+   * `run`. Checks every value it writes; their count is added to `nodes`
+   * only if the line is written.
    */
-  private inline(v: Value, pretty: boolean, budget: number, spacing: Spacing = SPACED): string | undefined {
+  private inline(v: Value, pretty: boolean, budget: number, depth: number, spacing: Spacing = SPACED): string | undefined {
     // Pretty: a non-empty record or array is always broken over lines.
     if (pretty && (v.kind === "array" ? v.items.length > 0 : v.kind === "record" && v.fields.size > 0)) return undefined
     const { comma, colon } = spacing
+    const { maxDepth, maxStringLength, maxNumberLength } = this.limits
     let out = ""
     // The width is in code points: `out.length` less the high surrogates in
     // `out`. Those are counted only once the length is over the budget, each
     // part of `out` once (up to `counted`).
     let highs = 0
     let counted = 0
+    // Values written on this line, and how many more fit before `nodeLimit`.
+    let nodes = 0
+    let room = this.nodeLimit - this.nodes
     const work: Pending[] = [v]
     while (work.length > 0) {
       const x = work.pop()!
       if (typeof x === "string") out += x
-      else if (x instanceof FieldsLeft) {
-        const next = x.fields.next()
-        if (!next.done) {
-          const [k, value] = next.value
-          out += x.first ? writtenKey(k) + colon : comma + writtenKey(k) + colon
-          x.first = false
-          work.push(x, value)
+      else switch (x.kind) {
+        case "string":
+          if (++nodes > room) room = this.overNodes()
+          if (longerThan(x.value, maxStringLength)) this.fail()
+          if (pretty && x.value.includes("\n")) return undefined
+          out += this.basicString(x)
+          break
+        case "fields": {
+          const next = x.fields.next()
+          if (!next.done) {
+            const [k, value] = next.value
+            if (k.length > maxStringLength && longerThan(k, maxStringLength)) this.fail()
+            out += x.first ? writtenKey(k) + colon : comma + writtenKey(k) + colon
+            x.first = false
+            work.push(x, value)
+          }
+          break
         }
-      } else {
-        switch (x.kind) {
-          case "number":
-            out += this.number(x)
-            break
-          case "string":
-            if (pretty && x.value.includes("\n")) return undefined
-            out += this.basicString(x)
-            break
-          case "bytes":
-            out += this.bytes(x)
-            break
-          case "array":
-            if (pretty && x.items.length > 0) return undefined // pretty: one item per line
+        case "number":
+          if (++nodes > room) room = this.overNodes() // Infinity
+          // Most numbers are short and have no exponent: nothing to check (as written.ts's `checkLeaf`).
+          if ((x.text.length > maxNumberLength || x.text.includes("e")) && numberLimitIssue(x.text, this.limits) !== undefined) this.fail()
+          out += this.number(x)
+          break
+        case "close":
+          out += x.text
+          depth--
+          break
+        case "bytes":
+          if (++nodes > room) room = this.overNodes()
+          if (x.bytes.length * 2 > maxStringLength) this.fail()
+          out += this.bytes(x)
+          break
+        case "array":
+          if (++nodes > room) room = this.overNodes()
+          if (depth >= maxDepth) this.fail()
+          if (x.items.length === 0) out += "[]"
+          else if (pretty) return undefined // pretty: one item per line
+          else {
             out += "["
-            pushItems(work, x.items, comma, "]")
-            break
-          case "record":
-            if (x.fields.size === 0) out += "{}"
-            else if (pretty) return undefined // pretty: one field per line
-            else {
-              out += spacing.open
-              work.push(spacing.close, new FieldsLeft(x.fields.entries()))
-            }
-            break
-          case "variant": {
-            const args = x.args
-            const first = args[0]
-            out += x.tag
-            if (args.length === 1 && first!.kind === "record") {
-              out += spacing.tag
-              work.push(first!) // the record, next
-            } else if (args.length > 0) {
-              out += "("
-              pushItems(work, args, comma, ")")
-            }
+            depth++
+            pushItems(work, x.items, comma, CLOSE_ARRAY)
+          }
+          break
+        case "record":
+          if (++nodes > room) room = this.overNodes()
+          if (depth >= maxDepth) this.fail()
+          if (x.fields.size === 0) out += "{}"
+          else if (pretty) return undefined // pretty: one field per line
+          else {
+            out += spacing.open
+            depth++
+            work.push(spacing === TIGHT ? CLOSE_TIGHT : CLOSE_SPACED, new FieldsLeft(x.fields.entries()))
+          }
+          break
+        case "variant": {
+          if (++nodes > room) room = this.overNodes()
+          const args = x.args
+          const first = args[0]
+          if (x.tag.length > maxStringLength) this.fail()
+          out += x.tag
+          if (args.length === 0) break
+          if (depth >= maxDepth) this.fail()
+          // `Tag { … }` is one level, the record's (spec §7): the record is next, at this depth.
+          if (args.length === 1 && first!.kind === "record") {
+            out += spacing.tag
+            work.push(first!)
+          } else {
+            out += "("
+            depth++
+            pushItems(work, args, comma, CLOSE_ARGS)
           }
         }
       }
@@ -284,6 +410,7 @@ class Formatter {
         if (out.length - highs > budget) return undefined
       }
     }
+    this.nodes += nodes
     return out
   }
 
@@ -300,7 +427,7 @@ class Formatter {
           out.push(t.text)
           break
         case "value":
-          this.writeValue(t.value, t.ind, t.used, out, tasks)
+          this.writeValue(t.value, t.ind, t.used, t.depth, out, tasks)
           break
         case "entries":
           this.nextEntry(t.list, out, tasks)
@@ -319,14 +446,21 @@ class Formatter {
     return out.join("")
   }
 
-  /** `v` at indentation `ind`, with `used` columns already taken on the current line: inline if it fits, else broken. */
-  private writeValue(v: Value, ind: string, used: number, out: string[], tasks: Task[]): void {
+  /**
+   * `v` (at `depth`) at indentation `ind`, with `used` columns already
+   * taken on the current line: inline if it fits, else broken (its entries
+   * written as tasks, at `depth + 1`).
+   */
+  private writeValue(v: Value, ind: string, used: number, depth: number, out: string[], tasks: Task[]): void {
     // A number, string or byte string is written the same whether it fits or not: nothing to try.
     const leaf = v.kind === "number" || v.kind === "string" || v.kind === "bytes"
     if (!leaf && !this.hasComments(v.start, v.end)) {
-      const flat = this.inline(v, true, this.width - used)
+      const flat = this.inline(v, true, this.width - used, depth)
       if (flat !== undefined) return void out.push(flat)
     }
+    // Not on one line: the value is checked here, its entries as they are written.
+    this.written()
+    if (leaf || v.kind === "variant" ? this.leafOver(v) : depth >= this.limits.maxDepth) this.fail()
     switch (v.kind) {
       case "number":
         return void out.push(this.number(v))
@@ -335,54 +469,69 @@ class Formatter {
       case "bytes":
         return void out.push(this.bytes(v))
       case "array":
-        return this.container("[", "]", inside(v), v.items.map(entryOf), ind, out, tasks)
+        return this.container("[", "]", inside(v), v.items.map(entryOf), ind, depth + 1, out, tasks)
       case "record":
-        return this.record(v, ind, out, tasks)
+        return this.record(v, ind, depth + 1, out, tasks)
       case "variant": {
         const [first] = v.args
         out.push(v.tag)
         if (v.args.length === 0) return
+        if (depth >= this.limits.maxDepth) this.fail()
         if (v.args.length === 1 && first?.kind === "record") {
+          // `Tag { … }` is one level, the record's (spec §7); the record is a value written.
+          this.written()
           out.push(" ")
           // In `Tag({ … })`, comments between the parentheses and the braces move inside the braces.
-          return this.record(first, ind, out, tasks, this.argsSpan(v) ?? inside(first))
+          return this.record(first, ind, depth + 1, out, tasks, this.argsSpan(v) ?? inside(first))
         }
-        return this.container("(", ")", this.argsSpan(v), v.args.map(entryOf), ind, out, tasks)
+        return this.container("(", ")", this.argsSpan(v), v.args.map(entryOf), ind, depth + 1, out, tasks)
       }
     }
   }
 
-  /** `r` broken over lines; `span` is where its comments are (default: between its braces). */
-  private record(r: HRecord, ind: string, out: string[], tasks: Task[], span: Span | undefined = inside(r)): void {
+  /** `r` broken over lines, its entries at `depth`; `span` is where its comments are (default: between its braces). */
+  private record(r: HRecord, ind: string, depth: number, out: string[], tasks: Task[], span: Span | undefined = inside(r)): void {
+    const max = this.limits.maxStringLength
     const entries: Entry[] = []
     for (const [k, v] of r.fields) {
+      if (k.length > max && longerThan(k, max)) this.fail()
       // A bare key is ASCII: its width is its length.
       const bare = BARE_KEY.test(k)
       const prefix = `${bare ? k : escaped(k)}: `
       const prefixWidth = bare ? k.length + 2 : codePoints(prefix)
       entries.push({ start: r.keySpans?.get(k)?.[0] ?? v.start, end: v.end, valueStart: v.start, prefix, prefixWidth, value: v })
     }
-    this.container("{", "}", span, entries, ind, out, tasks)
+    this.container("{", "}", span, entries, ind, depth, out, tasks)
   }
 
-  /** `open` + one entry per line (comments and blank lines kept) + `close`. */
-  private container(open: string, close: string, span: Span | undefined, entries: Entry[], ind: string, out: string[], tasks: Task[]): void {
+  /** `open` + one entry per line (comments and blank lines kept) + `close`; the entries at `depth`. */
+  private container(open: string, close: string, span: Span | undefined, entries: Entry[], ind: string, depth: number, out: string[], tasks: Task[]): void {
     const [from, to] = span ?? [undefined, undefined]
     if (entries.length === 0 && !this.hasComments(from, to)) return void out.push(open + close)
     out.push(`${open}\n`)
-    tasks.push({ kind: "text", text: ind + close }, { kind: "entries", list: this.entryList(from, to, entries, ind + this.step, ",", false) })
+    tasks.push({ kind: "text", text: ind + close }, { kind: "entries", list: this.entryList(from, to, entries, ind + this.step, ",", false, depth, false) })
   }
 
   /**
-   * Entries at indentation `ind`, each to be written on its own line(s)
-   * ending in "\n", with the comments in [from, to) placed next to them.
+   * Entries at indentation `ind` (and `depth`), each to be written on its
+   * own line(s) ending in "\n", with the comments in [from, to) placed next
+   * to them. `top`: the top-level values of a file.
    */
-  private entryList(from: number | undefined, to: number | undefined, entries: readonly Entry[], ind: string, sep: string, blankAfterMultiline: boolean): EntryList {
+  private entryList(
+    from: number | undefined,
+    to: number | undefined,
+    entries: readonly Entry[],
+    ind: string,
+    sep: string,
+    blankAfterMultiline: boolean,
+    depth: number,
+    top: boolean,
+  ): EntryList {
     const src = this.source
     if (src === undefined || from === undefined || to === undefined || this.comments.length === 0) {
       // No comments to place: every entry shares one empty list.
       const none = new Array<readonly Span[]>(entries.length).fill(NO_SPANS)
-      return { entries, ind, sep, blankAfterMultiline, leading: none, trailing: none, dangling: NO_SPANS, next: 0, cursor: from, first: true, prevMultiline: false }
+      return { entries, ind, sep, blankAfterMultiline, depth, top, leading: none, trailing: none, dangling: NO_SPANS, next: 0, cursor: from, first: true, prevMultiline: false }
     }
     const leading: Span[][] = entries.map(() => [])
     const trailing: Span[][] = entries.map(() => [])
@@ -412,7 +561,7 @@ class Formatter {
       else if (next >= 0) leading[next]!.push(c)
       else dangling.push(c)
     }
-    return { entries, ind, sep, blankAfterMultiline, leading, trailing, dangling, next: 0, cursor: from, first: true, prevMultiline: false }
+    return { entries, ind, sep, blankAfterMultiline, depth, top, leading, trailing, dangling, next: 0, cursor: from, first: true, prevMultiline: false }
   }
 
   /** Write the next entry of `list` (its leading comments, then the entry), or the comments after the last one. */
@@ -426,13 +575,15 @@ class Formatter {
         list.cursor = c[1]
       }
       const e = entries[i]!
+      // A top-level value of a file: checked on its own, its errors at its index.
+      if (list.top) this.begin(e.value, [i])
       this.startLine(list, e.start, out)
       out.push(ind + e.prefix)
       tasks.push(
         { kind: "entries", list },
         { kind: "entryEnd", list, index: i, mark: out.length },
         // The comma after the entry counts towards the width.
-        { kind: "value", value: e.value, ind, used: ind.length + e.prefixWidth + list.sep.length },
+        { kind: "value", value: e.value, ind, used: ind.length + e.prefixWidth + list.sep.length, depth: list.depth },
       )
       return
     }
@@ -504,15 +655,27 @@ class Formatter {
 
 /** The fields of a record being written on one line, from the next one on. */
 class FieldsLeft {
+  readonly kind = "fields"
   first = true
   constructor(readonly fields: Iterator<[string, Value]>) {}
 }
 
-/** What `inline` has left to write: text, a value, or the rest of a record's fields. */
-type Pending = Value | string | FieldsLeft
+/** The end of a container being written on one line: its closing bracket, and one level less deep. */
+class Close {
+  readonly kind = "close"
+  constructor(readonly text: string) {}
+}
+
+const CLOSE_ARRAY = new Close("]")
+const CLOSE_ARGS = new Close(")")
+const CLOSE_SPACED = new Close(SPACED.close)
+const CLOSE_TIGHT = new Close(TIGHT.close)
+
+/** What `inline` has left to write: text, a value, the end of a container, or the rest of a record's fields. */
+type Pending = Value | string | Close | FieldsLeft
 
 /** `values` next on the `work` stack, separated by commas, then `close`. */
-const pushItems = (work: Pending[], values: readonly Value[], comma: string, close: string): void => {
+const pushItems = (work: Pending[], values: readonly Value[], comma: string, close: Close): void => {
   work.push(close)
   for (let i = values.length - 1; i >= 0; i--) {
     work.push(values[i]!)

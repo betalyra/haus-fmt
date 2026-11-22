@@ -28,17 +28,25 @@ class Case:
     max_value_length: int
     strict: bool
     result: tuple[Value, ...] | str
-    """The values read, or the code of the error."""
+    """The values read, or the code of the error, with its place (`code at line:column`) where the case gives one."""
 
 
 def case(v: Value) -> Case:
     if isinstance(v, Record):
         f = v.fields
+        # `line` and `column`, both or neither: where the error is, for every split.
+        match f.get("line"), f.get("column"):
+            case Number(line), Number(column):
+                at = f" at {line}:{column}"
+            case None, None:
+                at = ""
+            case _:
+                raise AssertionError(f"line without column: {haus.canonical(v)}")
         match f.get("text"), f.get("maxValueLength"), f.get("result"):
-            case String(text), Number(limit), Variant("Ok", (Array(values),)):
+            case String(text), Number(limit), Variant("Ok", (Array(values),)) if not at:
                 return Case(text, int(limit), f.get("strict") == Variant("True"), values)
             case String(text), Number(limit), Variant("Err", (String(code),)):
-                return Case(text, int(limit), f.get("strict") == Variant("True"), code)
+                return Case(text, int(limit), f.get("strict") == Variant("True"), code + at)
             case _:
                 pass
     raise AssertionError(f"not a case: {haus.canonical(v)}")
@@ -56,7 +64,13 @@ def splits(text: str) -> list[tuple[str, list[str]]]:
     ]
 
 
+def placed(c: Case) -> bool:
+    """Whether the case gives where its error is."""
+    return isinstance(c.result, str) and " at " in c.result
+
+
 def read(c: Case, chunks: list[str]) -> tuple[Value, ...] | str:
+    """The values read, or the error's code (with its place if the case gives one)."""
     reader = haus.StreamReader(max_value_length=c.max_value_length, require_terminator=c.strict)
     values: list[Value] = []
     try:
@@ -64,7 +78,7 @@ def read(c: Case, chunks: list[str]) -> tuple[Value, ...] | str:
             values += reader.push(chunk)
         values += reader.finish()
     except haus.HausSyntaxError as e:
-        return e.code
+        return f"{e.code} at {e.line}:{e.column}" if placed(c) else e.code
     return tuple(values)
 
 
@@ -75,7 +89,11 @@ def same(got: tuple[Value, ...] | str, want: tuple[Value, ...] | str) -> bool:
 
 
 def test_the_suite_has_all_its_cases() -> None:
-    assert len(CASES) == 26
+    assert len(CASES) == 32
+
+
+def test_the_suite_has_cases_with_a_place() -> None:
+    assert any(placed(c) for c in CASES)
 
 
 @pytest.mark.parametrize(

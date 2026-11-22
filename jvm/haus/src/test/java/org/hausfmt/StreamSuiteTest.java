@@ -60,13 +60,18 @@ class StreamSuiteTest {
 
   /** The values read, or the code of the error, as a string to compare. */
   static String read(List<byte[]> pieces, StreamOptions options) {
+    return read(pieces, options, false);
+  }
+
+  /** The values read, or the code of the error and, with {@code place}, where it is. */
+  static String read(List<byte[]> pieces, StreamOptions options, boolean place) {
     List<Value> values = new ArrayList<>();
     try (StreamReader r = new StreamReader(new Pieces(pieces), options)) {
       for (Value v; (v = r.read()) != null; ) {
         values.add(v);
       }
     } catch (HausException e) {
-      return "Err(" + e.code() + ")";
+      return "Err(" + e.code() + ")" + (place ? " at " + e.line() + ":" + e.column() : "");
     } catch (IOException e) {
       throw new AssertionError(e);
     }
@@ -89,19 +94,27 @@ class StreamSuiteTest {
   @TestFactory
   Stream<DynamicTest> limits() {
     List<Value> cases = Haus.parseAll(Suite.bytes(Suite.suite("stream", "limits.cases.haus")));
-    assertEquals(26, cases.size());
+    assertEquals(32, cases.size());
+    assertTrue(cases.stream().anyMatch(c -> ((Value.Record) c).get("line") != null), "no cases with a place");
     return cases.stream().map(c -> {
       Value.Record r = (Value.Record) c;
       String text = ((Value.Text) r.get("text")).value();
       int max = ((Value.Number) r.get("maxValueLength")).toBigInteger().intValueExact();
       boolean strict = Value.bool(true).equals(r.get("strict"));
       Value.Variant result = (Value.Variant) r.get("result");
+      // An error case may give its line and column (both or neither): the error is there for every split.
+      Value line = r.get("line");
+      Value column = r.get("column");
+      assertEquals(line == null, column == null, "line and column, both or neither");
+      boolean place = line != null;
       String want = result.tag().equals("Ok")
           ? "Ok(" + ((Value.Array) result.get(0)).items() + ")"
-          : "Err(" + ((Value.Text) result.get(0)).value() + ")";
+          : "Err(" + ((Value.Text) result.get(0)).value() + ")"
+              + (place ? " at " + ((Value.Number) line).toBigInteger() + ":" + ((Value.Number) column).toBigInteger()
+                  : "");
       StreamOptions options = new StreamOptions(Limits.DEFAULT.withMaxValueLength(max), strict);
       return dynamicTest(c.toString(), () -> splits(text.getBytes(StandardCharsets.UTF_8))
-          .forEach((how, pieces) -> assertEquals(want, read(pieces, options), how)));
+          .forEach((how, pieces) -> assertEquals(want, read(pieces, options, place), how)));
     });
   }
 

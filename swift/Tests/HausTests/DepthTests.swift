@@ -66,6 +66,71 @@ struct DepthTests {
                 == .unsupportedDepth)
     }
 
+    /// A value built in code `n` levels deep, by turns an array, a variant
+    /// with arguments and a variant with a record payload, around `inner`.
+    static func veryDeep(_ n: Int, _ inner: HausValue) -> HausValue {
+        var v = inner
+        for i in 0..<n {
+            switch i % 3 {
+            case 0: v = .array([v])
+            case 1: v = .tag("Some", v, .number(HausNumber(i)))
+            default: v = .tag("Node", ["next": v, "a b": "x"])
+            }
+        }
+        return v
+    }
+
+    /// Releases a deep value a level at a time: releasing it at once
+    /// recurses once per level (see ``HausValue``).
+    static func dismantle(_ value: inout HausValue) {
+        var v = value
+        value = .array([])
+        while true {
+            let next: HausValue? =
+                switch v {
+                case .array(let items): items.first
+                case .variant(_, let args): args.first
+                case .record(let r): r["next"]
+                default: nil
+                }
+            guard let next else { return }
+            v = next
+        }
+    }
+
+    /// The canonical form, hashing and equality work at any depth, bounded
+    /// only by memory (spec §12), on a thread with the default stack of a
+    /// secondary thread (512 KiB): 100,000 levels, far deeper than the parser's
+    /// maximum.
+    @Test func anyDepthInCode() throws {
+        try onStack(kibibytes: 512) { () throws in
+            var a = Self.veryDeep(100_000, 1)
+            var b = Self.veryDeep(100_000, 1)
+            var c = Self.veryDeep(100_000, 2)
+            let ca = try canonical(a)
+            let cb = try canonical(b)
+            let cc = try canonical(c)
+            #expect(ca.hasPrefix(#"[Node{"a b":"x",next:Some([Node{"a b":"x",next:"#))
+            #expect(ca == cb)
+            #expect(ca != cc)
+            let same = a == b
+            let differs = a == c
+            #expect(same)
+            #expect(!differs)
+            #if canImport(CryptoKit)
+                let ha = try hash(a)
+                let hb = try hash(b)
+                let hc = try hash(c)
+                #expect(ha == hb)
+                #expect(ha != hc)
+                #expect(try hashAll([a, c]).count == 64)
+            #endif
+            Self.dismantle(&a)
+            Self.dismantle(&b)
+            Self.dismantle(&c)
+        }
+    }
+
     /// Typed values (Codable) of recursive types, as deep as the depth limit,
     /// decoded and encoded on the small stack: a variant of one positional
     /// payload per level, and a record and an array per level.

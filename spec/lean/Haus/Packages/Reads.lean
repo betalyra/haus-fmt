@@ -362,16 +362,30 @@ theorem classify_spec {c : Class} :
   · tmod; tdone
   · tdone
 
+theorem lenientNpm_spec {dir : Path} {owner : String} (hd : PkgDir env.tree dir) :
+    Triple env (K env root j) (lenientNpm dir owner) (fun _ => K env root j) (K env root j) := by
+  unfold lenientNpm
+  exact Triple.tryCatch (packageJsonOf_spec hd) fun _ => Triple.pure fun _ h => h
+
 theorem copyNpm_spec {config : Config} {dir : Path} {owner : String} (hd : PkgDir env.tree dir) :
     Triple env (K env root j) (copyNpm config dir owner) (fun _ => K env root j) (K env root j) := by
   unfold copyNpm
   split
   · exact packageJsonOf_spec hd
-  · exact Triple.pure fun _ h => h
+  · split
+    · exact lenientNpm_spec hd
+    · exact Triple.pure fun _ h => h
 
 theorem checkVersion_spec {P : St → Prop} {config : Config} {m : Manifest} {npm : Option NpmInfo} {owner : String} :
     Triple env P (checkVersion config m npm owner) (fun _ => P) P := by
   unfold checkVersion; tdone
+
+theorem folderVersion_spec {config : Config} {m : Manifest} {sub : Path} {shown : String} (hd : PkgDir env.tree sub) :
+    Triple env (K env root j) (folderVersion config m sub shown) (fun _ => K env root j) (K env root j) := by
+  unfold folderVersion
+  split
+  · exact Triple.bind (lenientNpm_spec hd) fun _ => checkVersion_spec
+  · exact Triple.pure fun _ h => h
 
 theorem checkNoFiles_spec {P : St → Prop} {m : Manifest} {sc : Scanned} :
     Triple env P (checkNoFiles m sc) (fun _ => P) P := by
@@ -460,6 +474,8 @@ theorem givenPackages_spec :
         | (intro n rest b _)
         | refine (Triple.bind (R := fun _ => K env root j) (Triple.tryCatch (R := K env root j) ?_ fun _ => ?_) fun _ => ?_)
         | with_reducible refine (Triple.bind manifestOf_spec fun _ => ?_)
+        | with_reducible refine (Triple.bind (folderVersion_spec (‹Option.isSome (some _) = true → PkgDir _ _› rfl))
+            fun _ => ?_)
         | (apply Triple.pre_and; intro _)
         | tstep)
     · tdone

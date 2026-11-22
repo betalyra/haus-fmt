@@ -16,11 +16,11 @@ final class TreeBuilder extends WriteCheck {
   }
 
   /** The values as a file: one alone, two or more as a stream. */
-  static Syntax.File file(List<Value> values, Limits lim) {
+  static Syntax.File file(List<Value> values, Limits lim, boolean indexed) {
     TreeBuilder builder = new TreeBuilder(lim);
     Syntax.File f = new Syntax.File();
     for (int i = 0; i < values.size(); i++) {
-      builder.start(i, values.size() > 1);
+      builder.start(i, indexed);
       Item it = new Item();
       it.node = builder.node(values.get(i), 0);
       f.items.add(it);

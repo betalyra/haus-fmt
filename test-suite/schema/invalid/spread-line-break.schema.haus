@@ -1,0 +1,7 @@
+// ...Name is one word: no line break between ... and the name (spec §14).
+type B = { x: Int }
+type A = {
+  ...
+  B,
+  y: Int,
+}

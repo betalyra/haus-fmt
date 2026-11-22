@@ -188,3 +188,30 @@ fn number_literals_built_in_code_are_normalized() {
     let long = format!("1{}e+0", "0".repeat(2000));
     assert_eq!(canonical(&num(&long)), format!("1{}e0", "0".repeat(2000)));
 }
+
+/// A value built in code `levels` deep: arrays and variants with record payloads, in turn.
+fn deep(levels: usize, innermost: &str) -> Value {
+    (0..levels).fold(Value::String(innermost.into()), |v, i| match i % 2 {
+        0 => Value::Array(vec![v]),
+        _ => Value::variant("T", vec![Value::record([("a", v)]).unwrap()]).unwrap(),
+    })
+}
+
+/// Spec §12: the canonical form, hashing, equality and order work at any
+/// depth, with no maximum; building and dropping such a value takes no call
+/// stack per level either (on a test thread's small stack).
+#[test]
+fn any_depth() {
+    let (a, b, c) = (deep(100_000, "x"), deep(100_000, "x"), deep(100_000, "y"));
+    assert_eq!(canonical(&a), format!("{}\"x\"{}", "T{a:[".repeat(50_000), "]}".repeat(50_000)));
+    assert!(equals(&a, &b));
+    assert!(!equals(&a, &c));
+    assert_eq!(haus::compare(&a, &b), std::cmp::Ordering::Equal);
+    assert_eq!(haus::compare(&a, &c), std::cmp::Ordering::Less);
+    #[cfg(feature = "hash")]
+    {
+        assert_eq!(haus::hash(&a), haus::hash(&b));
+        assert_eq!(haus::hash_all([&a]), haus::hash(&a));
+        assert_ne!(haus::hash(&a), haus::hash(&c));
+    }
+}

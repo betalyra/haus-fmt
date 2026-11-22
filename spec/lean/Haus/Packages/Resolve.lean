@@ -538,14 +538,25 @@ def classify (c : Class) : M Nat := do
   | .error e => throw e
 
 /--
+A package's own `package.json`, read leniently: one that can't be read (a
+symbolic link, not a regular file, too large) is ignored, as one that isn't
+JSON is (§13.3, "Package versions": outside npm mode it only gives a version).
+-/
+def lenientNpm (dir : Path) (owner : String) : M (Option NpmInfo) :=
+  tryCatch (packageJsonOf dir owner) fun _ => pure none
+
+/--
 A copy's `package.json`: what it declares, and the version its package
-manager gives it. Read with `npm`, and also without it when versions are
-checked (§13.3, "Package versions"): a package given explicitly is checked
-against the `package.json` next to its manifest too. Without `npm` only its
-version is used: explicit packages count as declared.
+manager gives it. Read with `npm` (under the rule of a package's files), and
+also without it when versions are checked (§13.3, "Package versions"): a
+package given explicitly is checked against the `package.json` next to its
+manifest too, read leniently (`lenientNpm`). Without `npm` only its version
+is used: explicit packages count as declared.
 -/
 def copyNpm (config : Config) (dir : Path) (owner : String) : M (Option NpmInfo) :=
-  if config.mode.npm || config.checkVersions then packageJsonOf dir owner else pure none
+  if config.mode.npm then packageJsonOf dir owner
+  else if config.checkVersions then lenientNpm dir owner
+  else pure none
 
 /-- The SHOULD check of "Package versions" (§13.3): the `package.json`'s version is the manifest's. -/
 def checkVersion (config : Config) (m : Manifest) (npm : Option NpmInfo) (owner : String) : M Unit := do
@@ -610,7 +621,21 @@ def load (w : Walk) : Nat → Target → M Loaded
 
 /-! ## The explicit packages, and the whole -/
 
-/-- Reads the manifests of the packages given explicitly (§13.3), at the start. -/
+/--
+The version check of a package in a folder (§13.3), when versions are
+checked: its `package.json`, read leniently, gives no other version than its
+manifest `m`. If it does, the subdirectory is skipped.
+-/
+def folderVersion (config : Config) (m : Manifest) (sub : Path) (shown : String) : M Unit := do
+  if config.checkVersions then checkVersion config m (← lenientNpm sub shown) shown
+
+/--
+Reads the manifests of the packages given explicitly (§13.3), at the start.
+A subdirectory of a folder whose manifest can't be read or breaks the rules,
+or (when versions are checked) whose `package.json` gives another version,
+is skipped, not rejected: it is named in `broken`, by the last name of the
+folder's real path and its own (`schemas/broken`), however the folder was given.
+-/
 def givenPackages : M (List Given × List String) := do
   let config ← cfg
   let mut given : List Given := []
@@ -630,11 +655,12 @@ def givenPackages : M (List Given × List String) := do
     if names.length > config.limits.folderEntries then
       fail .tooManyFiles s!"the folder of packages {showPath f} has {names.length} entries, more than {config.limits.folderEntries}"
     for n in names.mergeSort (· ≤ ·) do
-      let shown := showPath (f ++ [n])
+      let shown := showPath (real.getLast?.toList ++ [n])
       let .ok sub ← look (·.realPath (real ++ [n])) | continue
       if !(← look (·.isDir sub)) || (← look (·.childKind? sub "package.haus")).isNone then continue
       try
         if let some m ← manifestOf sub shown then
+          folderVersion config m sub shown
           given := given ++ [{ dir := sub, shown, name := m.name, byDir := false }]
       catch _ => broken := broken ++ [shown]
   return (given, broken)

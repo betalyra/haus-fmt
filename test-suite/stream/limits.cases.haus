@@ -7,7 +7,10 @@
 // same result for every way of splitting `text` into chunks. `whole`, where
 // given, is the result of parsing the whole text instead (as `parseAll`, with
 // the default limits): the value limit applies to stream readers only, so a
-// value over it parses whole (`limits.value.stream-only`).
+// value over it parses whole (`limits.value.stream-only`). An error case may
+// give the `line` and `column` of the error (1-based, counted as in the positions
+// suite): `value-too-long` is at the first character counted, the one after the
+// previous top-level comma, or the start after a byte order mark (§7).
 
 // ── at the limit and one over ──
 { text: "12345", maxValueLength: 5, result: Ok([12345]) },
@@ -37,6 +40,14 @@
 // a value over the limit is counted before it is parsed: its syntax error is never reached (§7)
 { text: "[1,,2,3,4]", maxValueLength: 5, result: Err("value-too-long") },
 { text: "1, [1,,2,3,4],", maxValueLength: 5, result: Err("value-too-long") },
+
+// ── where value-too-long is: the character after the previous top-level comma (§7) ──
+{ text: "123456", maxValueLength: 5, result: Err("value-too-long"), line: 1, column: 1 },
+{ text: "\u{FEFF}123456", maxValueLength: 5, result: Err("value-too-long"), line: 1, column: 2 },
+{ text: "1,\n 1234567", maxValueLength: 5, result: Err("value-too-long"), line: 1, column: 3 },
+{ text: "1,1234567,2", maxValueLength: 5, result: Err("value-too-long"), line: 1, column: 3 },
+{ text: "1,\n2,\n  [1, 2, 3],", maxValueLength: 8, result: Err("value-too-long"), line: 2, column: 3 },
+{ text: "1,      ", maxValueLength: 5, result: Err("value-too-long"), line: 1, column: 3 },
 
 // ── strict mode: a value after the last comma means the stream was cut off ──
 { text: "1, 2,", maxValueLength: 64, strict: True, result: Ok([1, 2]) },

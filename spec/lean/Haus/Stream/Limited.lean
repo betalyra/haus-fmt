@@ -66,8 +66,16 @@ def restOf : Res → Text
   | .ok _ cur buf => cur ++ buf
   | .unbalanced t => t
 
-def tooLongError (o : Options) (p : Text) : Error :=
-  .at .valueTooLong s!"value longer than {o.maxValueLength} characters" p
+/-- The characters after a piece: a comma and the next piece for each piece after it, then the rest. -/
+def after (ps : List Text) (res : Res) : Nat := (ps.map (·.length + 1)).sum + (restOf res).length
+
+/--
+`value-too-long` at the start of the value's text (§7, errors.md): the character
+after the previous top-level comma, or the start of the stream after a byte order
+mark. `n` is the number of characters of the whole text from there to the end.
+-/
+def tooLongError (o : Options) (n : Nat) : Error :=
+  ⟨.valueTooLong, s!"value longer than {o.maxValueLength} characters", n⟩
 
 /-- At the end of the input. -/
 def truncatedError : Error := ⟨.streamTruncated, "stream ended without ',' after the last value (truncated?)", 0⟩
@@ -79,13 +87,13 @@ is an error.
 -/
 def decodeWith (o : Options) (L : Limits) : Bool → List Text → Res → List Value × Option Error
   | first, p :: ps, res =>
-    if o.maxValueLength < valueChars first p then ([], some (tooLongError o p)) else
+    if o.maxValueLength < valueChars first p then ([], some (tooLongError o (valueChars first p + 1 + after ps res))) else
     match parsePiece L first p with
     | .ok [v] => let x := decodeWith o L false ps res; (v :: x.1, x.2)
     | .ok _ => ([], some (.at .expectedValue "expected a value before ','" p))
     | .error e => ([], some e)
   | first, [], res =>
-    if o.maxValueLength < valueChars first (restOf res) then ([], some (tooLongError o (restOf res))) else
+    if o.maxValueLength < valueChars first (restOf res) then ([], some (tooLongError o (valueChars first (restOf res)))) else
     let x := decode L first [] res
     if o.strict && x.2.isNone && !x.1.isEmpty then ([], some truncatedError) else x
 
@@ -177,14 +185,14 @@ theorem decodeWith_of_ok (o : Options) (L : Limits) : ∀ (first : Bool) (ps : L
   | first, [], res, vs, h => by
     simp only [decodeWith, lengths, restValues, List.all_cons, List.all_nil, Bool.and_true, h]
     by_cases hl : o.maxValueLength < valueChars first (restOf res)
-    · simp [hl, tooLongError, Error.at]
+    · simp [hl, tooLongError]
     · simp only [hl, ↓reduceIte, decide_eq_true (Nat.not_lt.mp hl), Option.isNone_none, Bool.and_true]
       split <;> simp [truncatedError]
   | first, p :: ps, res, vs, h => by
     obtain ⟨v, vs', hp, hd, rfl⟩ := decode_cons h
     simp only [decodeWith, lengths, restValues, List.all_cons]
     by_cases hl : o.maxValueLength < valueChars first p
-    · simp [hl, Nat.not_le.mpr hl, tooLongError, Error.at]
+    · simp [hl, Nat.not_le.mpr hl, tooLongError]
     · simp only [hl, ↓reduceIte, decide_eq_true (Nat.not_lt.mp hl), Bool.true_and, hp]
       exact decodeWith_of_ok o L false ps res vs' hd
 

@@ -20,7 +20,7 @@
  */
 import { quoteText, TAG, unpairedSurrogate } from "./chars.js"
 import { checkWellFormed, HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
-import { format, stringify as stringifyValue, type FormatOptions } from "./format.js"
+import { format, stringify as stringifyValue, stringifyAt, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
 import { readStream, type ChunkSource, type ItemReader } from "./stream.js"
@@ -145,6 +145,13 @@ export class At {
     }
   }
 
+  /** @internal The place of the value given to the call: `$`, or `$[i]` for item i of a stream. */
+  top(): At {
+    let at: At = this
+    while (at.parent !== undefined) at = at.parent
+    return at
+  }
+
   path(): Path {
     const out: (string | number)[] = []
     for (let at: At | undefined = this; at; at = at.parent) if (at.key !== undefined) out.push(at.key)
@@ -244,7 +251,8 @@ const OPEN = { size: 0, need: 0 }
  * expands beyond `cap` fails at once instead of after `cap` steps.
  */
 const countValues = (root: Value, maxDepth: number, cap: number, at: At, depth = 0): number => {
-  const tooMany = () => at.reject("too-many-nodes", `value has more than ${cap} nodes`)
+  // At the value given, wherever the raw value is in it (spec §15, `decode.path.too-many-nodes`).
+  const tooMany = () => at.top().reject("too-many-nodes", `value has more than ${cap} nodes`)
   const tooDeep = () => at.reject("nesting-too-deep", `value nested deeper than ${maxDepth} levels`)
   if (!isContainer(root)) return 1
   /** Containers holding containers, counted (or `OPEN`, being counted). */
@@ -1540,7 +1548,8 @@ export async function* encodeStream<A>(
   // Streams default to compact: one item per line.
   const layout: FormatOptions & Options = { style: "compact", ...options }
   for await (const v of values) {
-    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyValue(schema.encode(v, encodeAt(options, i)), { ...layout, limits: options })) + ",\n"
+    // Value i's errors are at `$[i]`, the writer's too.
+    yield (lineCompiled(schema, v, layout, layout.style) ?? stringifyAt(schema.encode(v, encodeAt(options, i)), { ...layout, limits: options }, [i])) + ",\n"
     i++
   }
 }

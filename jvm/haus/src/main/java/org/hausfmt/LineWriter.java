@@ -17,13 +17,13 @@ final class LineWriter extends WriteCheck {
     this.minimised = minimised;
   }
 
-  /** Values as a file in the compact or minimised layout. */
-  static String file(List<Value> values, Limits lim, boolean minimised) {
+  /** Values as a file in the compact or minimised layout; {@code indexed}: errors at {@code $[i]}. */
+  static String file(List<Value> values, Limits lim, boolean minimised, boolean indexed) {
     StringBuilder b = new StringBuilder();
     LineWriter w = new LineWriter(b, lim, true, minimised);
     boolean stream = values.size() > 1;
     for (int i = 0; i < values.size(); i++) {
-      w.start(i, stream);
+      w.start(i, indexed);
       w.value(values.get(i), 0);
       if (stream) {
         b.append(',');

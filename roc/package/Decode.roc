@@ -484,11 +484,12 @@ Error : { code : Str, reason : Str, path : Str }
 ## and the writer count them, and has at most `max_nodes` values, a part
 ## shared in a value built in code counted each time it is reached, as
 ## decoding visits it (spec §9.8): `nesting-too-deep` or `too-many-nodes`
-## otherwise (see `Value.within_bounds`).
+## otherwise (see `Value.within_bounds`). `too-many-nodes` is at the value
+## given (`$`, or `[i]` for item `i` of a stream), not a place in it (spec §15).
 decode_within : Value, (Value -> Try(a, Error)), Value.Limits, U64 -> Try(a, Error)
 decode_within = |v, decoder, limits, max_nodes| {
 	Value.check_limits(limits).map_err(|reason| { code: ErrorCode.unsupported_depth, reason, path: "" })?
-	Value.within_bounds(v, limits.max_depth, max_nodes)?
+	Value.within_bounds(v, limits.max_depth, max_nodes).map_err(|e| if (e.code == ErrorCode.too_many_nodes) { ..e, path: "" } else e)?
 	decoder(v)
 }
 
@@ -798,7 +799,7 @@ values_in = |v| Decode.list(v, values_in).map_ok(|counts| counts.fold(1, |a, b| 
 expect Value.max_nodes == 64 * 1024 * 1024
 expect {
 	e = decode_within(deep(40, twice), values_in, Value.default_limits, 100_000).map_ok(|_| {})
-	e.map_err(|err| (err.code, err.reason, err.path.starts_with("[0][0][0][0][0][0][0][0]"))) == Err(("too-many-nodes", "value has more than 100000 nodes", True))
+	e.map_err(|err| (err.code, err.reason, err.path)) == Err(("too-many-nodes", "value has more than 100000 nodes", ""))
 }
 expect decode_within(deep(40, twice), Decode.any, Value.default_limits, 1000).map_err(|e| e.code).map_ok(|_| {}) == Err("too-many-nodes")
 # A shared part counts each time it is reached: as many values as the tree it
@@ -814,6 +815,8 @@ expect {
 expect {
 	built = variant("A", [rec([("a", num("1"))])])
 	parsed = Value.parse("A { a: 1 }") ?? num("0")
-	[built, parsed].all(|v| decode_within(v, Decode.any, Value.default_limits, 3).is_ok() and decode_within(v, Decode.any, Value.default_limits, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "(A).a")))
+	[built, parsed].all(|v| decode_within(v, Decode.any, Value.default_limits, 3).is_ok() and decode_within(v, Decode.any, Value.default_limits, 2).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "")))
 }
-expect decode_within(Value.arr([num("1"), rec([("pt-BR", num("2"))])]), Decode.any, Value.default_limits, 3).map_err(|e| e.path).map_ok(|_| {}) == Err("[1][\"pt-BR\"]")
+# At the value given, not a place in it (spec §15); in a stream, at the item.
+expect decode_within(Value.arr([num("1"), rec([("pt-BR", num("2"))])]), Decode.any, Value.default_limits, 3).map_err(|e| e.path).map_ok(|_| {}) == Err("")
+expect Decode.item(Value.arr([num("1"), num("2")]), 3, |v| decode_within(v, Decode.any, Value.default_limits, 2)).map_err(|e| (e.code, e.path)).map_ok(|_| {}) == Err(("too-many-nodes", "[3]"))

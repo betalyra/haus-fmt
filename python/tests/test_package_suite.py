@@ -196,7 +196,7 @@ RUN = [c for c in ALL if c.name not in SKIPPED]
 
 def test_the_suite_runs_explicit_cases() -> None:
     print(f"package suite: {len(ALL)} cases, {len(RUN)} run (Explicit), {len(SKIPPED)} skipped (Npm)")
-    assert len(ALL) == 92, "test-suite/packages/cases.haus has 92 cases"
+    assert len(ALL) == 99, "test-suite/packages/cases.haus has 99 cases"
     assert len({c.name for c in ALL}) == len(ALL), "case names are unique"
     assert all(isinstance(c.mode, Explicit) for c in RUN)
 

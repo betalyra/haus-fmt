@@ -20,6 +20,8 @@ type streamCase struct {
 	strict bool
 	values []Value
 	code   string
+	// line and column are the error's place, when the case gives it (1-based); 0 otherwise.
+	line, column int
 	// whole is the values of parsing the text whole (ParseAll, default
 	// limits), when the case gives them; nil otherwise.
 	whole []Value
@@ -59,6 +61,7 @@ func toStreamCase(t *testing.T, v Value) streamCase {
 	case String:
 		if res.Tag.String() == "Err" {
 			c.code = string(arg)
+			c.line, c.column = placeOf(t, r)
 			return c
 		}
 	}
@@ -81,21 +84,43 @@ func (c *chunks) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// readCase reads the pieces as one stream: the values, or the error's code.
-func readCase(c streamCase, pieces []string) (values []Value, code string) {
+// placeOf reads a case's optional line and column (both or neither).
+func placeOf(t *testing.T, r Record) (line, column int) {
+	t.Helper()
+	l, okLine := r.Get("line")
+	c, okColumn := r.Get("column")
+	if okLine != okColumn {
+		t.Fatalf("a case with only one of line and column: %v", r)
+	}
+	if !okLine {
+		return 0, 0
+	}
+	ln, okL := l.(Number)
+	cn, okC := c.(Number)
+	line, errL := strconv.Atoi(ln.String())
+	column, errC := strconv.Atoi(cn.String())
+	if !okL || !okC || errL != nil || errC != nil {
+		t.Fatalf("not a place: %v", r)
+	}
+	return line, column
+}
+
+// readCase reads the pieces as one stream: the values, or the error's code
+// and place.
+func readCase(c streamCase, pieces []string) (values []Value, code string, line, column int) {
 	src := chunks(append([]string(nil), pieces...))
 	r := NewStreamReader(&src, StreamOptions{Limits: Limits{MaxValueLength: c.max}, Strict: c.strict})
 	for v, err := range r.All() {
 		if err != nil {
 			var e *Error
 			if errors.As(err, &e) {
-				return nil, string(e.Code)
+				return nil, string(e.Code), e.Line, e.Column
 			}
-			return nil, err.Error()
+			return nil, err.Error(), 0, 0
 		}
 		values = append(values, v)
 	}
-	return values, ""
+	return values, "", 0, 0
 }
 
 // streamSplits gives the text whole, one character at a time, and in two pieces split at every character.
@@ -133,22 +158,31 @@ func readStreamSuite(t *testing.T, name string) []Value {
 // names another directory holding the suite's file.
 func TestStreamSuite(t *testing.T) {
 	vs := readStreamSuite(t, "limits.cases.haus")
-	if len(vs) != 26 {
-		t.Errorf("%d cases, want 26", len(vs))
+	if len(vs) != 32 {
+		t.Errorf("%d cases, want 32", len(vs))
 	}
+	places := 0
 	for _, v := range vs {
 		c := toStreamCase(t, v)
 		name := fmt.Sprintf("%q max %d strict %v", c.text, c.max, c.strict)
 		for how, pieces := range streamSplits(c.text) {
-			values, code := readCase(c, pieces)
-			same := code == c.code && len(values) == len(c.values)
+			values, code, line, column := readCase(c, pieces)
+			same := code == c.code && len(values) == len(c.values) &&
+				(c.line == 0 || line == c.line && column == c.column)
 			for i := 0; same && i < len(values); i++ {
 				same = Equals(values[i], c.values[i])
 			}
 			if !same {
-				t.Errorf("%s, %s: %v %q", name, how, values, code)
+				t.Errorf("%s, %s: %v %q at %d:%d", name, how, values, code, line, column)
 			}
 		}
+		if c.line > 0 {
+			places++
+		}
+	}
+	t.Logf("%d cases with a place", places)
+	if places == 0 {
+		t.Error("no cases with a place")
 	}
 }
 
