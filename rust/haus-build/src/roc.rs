@@ -109,6 +109,8 @@ pub struct RocConfig {
     folders: Vec<PathBuf>,
     without_attributes: bool,
     json: bool,
+    /// The build's root ([`RocConfig::root`]).
+    root: Option<PathBuf>,
 }
 
 impl RocConfig {
@@ -138,6 +140,15 @@ impl RocConfig {
         self
     }
 
+    /// The build's root (spec §13.3, "The root"): a directory that contains
+    /// the schema, which its relative imports stay inside
+    /// (`import-outside-root`). By default the schema's real directory; a
+    /// relative one is relative to the schema's real directory.
+    pub fn root(mut self, dir: impl Into<PathBuf>) -> RocConfig {
+        self.root = Some(dir.into());
+        self
+    }
+
     /// Leave the schema's attributes out, as if they weren't written: the
     /// module decodes and encodes the same (spec §15). For tests of that.
     #[doc(hidden)]
@@ -164,6 +175,7 @@ impl RocConfig {
             packages: &given.explicit,
             id: Some(id),
             without_attributes: self.without_attributes,
+            root: self.root.as_deref(),
             ..LoadOptions::default()
         };
         let loaded = Schema::load_with(schema, &options)?;

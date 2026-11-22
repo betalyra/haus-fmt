@@ -49,6 +49,7 @@ from ._resolve import (
     FileResolver,
     Manifest,
     Packages,
+    PackageSource,
     StrPath,
     identify,
     installed_package,
@@ -127,6 +128,7 @@ __all__ = [
     "ModuleResolver",
     "NoPayload",
     "Nothing",
+    "PackageSource",
     "Packages",
     "ParamType",
     "Payload",
@@ -329,23 +331,30 @@ def load_schema(
     path: StrPath,
     *,
     packages: Packages | None = None,
-    package_folders: Iterable[StrPath] = (),
+    package_folders: Iterable[PackageSource] = (),
     codecs: Mapping[str, Codec] | None = None,
+    root: StrPath | None = None,
 ) -> Schema:
     """Read a schema file, with its relative imports next to it and the schema packages it is given.
 
     `packages` are package directories, each named by its manifest, or a mapping
     from each package name to its directory (the name must be the manifest's).
     Each of `package_folders` is a directory whose direct subdirectories with a
-    `package.haus` are packages. Relative directories are relative to the schema
-    file's directory. Raises `HausSchemaFileError`, also for a package directory
-    without `package.haus` or a folder that doesn't exist (at 1:1, before any
+    `package.haus` are packages. A package or a folder may also be a read-only
+    file tree given in code, an `importlib.resources` `Traversable`. `root` is the
+    build's root directory (spec §13.3): relative imports reach only files inside
+    it (`import-outside-root`) and follow no symbolic link (`import-not-found`);
+    by default the schema file's real directory, and it must contain the schema
+    file. A relative `root` and relative directories are
+    relative to the schema file's real directory. Raises `HausSchemaFileError`,
+    also for a package directory without `package.haus`, a folder that doesn't
+    exist or a `root` that doesn't contain the schema file (at 1:1, before any
     import), and `OSError` for a schema file that can't be read.
 
     schema = load_schema("order.schema.haus", packages=["vendor/money"], package_folders=["schemas"])
     """
     try:
-        module, resolver = FileResolver.for_root(path, packages or (), folders=package_folders)
+        module, resolver = FileResolver.for_root(path, packages or (), folders=package_folders, root=root)
     except ModuleError as e:  # the root file (too large, not a file) or the configuration
         raise HausSchemaFileError(str(e), 0, 1, 1, e.code) from None
     return compile_schema(module.text, resolver=resolver, key=module.key, id=module.id, codecs=codecs)

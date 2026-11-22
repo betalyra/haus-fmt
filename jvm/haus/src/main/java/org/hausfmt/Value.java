@@ -20,8 +20,12 @@ import java.util.Objects;
  * Tag({ … })} alike. {@code toString} is the value in the compact layout, on one line.
  *
  * <p>Values are built with the static methods, {@code Value.record(Value.field("id",
- * Value.number(7)))}, or read by {@link Haus#parse}. No value is nested deeper than {@link
- * Limits#MAX_SUPPORTED_DEPTH}: building one fails with the code {@code nesting-too-deep}.
+ * Value.number(7)))}, or read by {@link Haus#parse}. A value built in code may nest as deeply as
+ * memory allows (spec §7): {@code equals}, {@code hashCode} (computed once per container, without
+ * recursion), {@link Haus#canonical canonical}, {@link Haus#hash hash} and {@link Haus#compare
+ * compare} take any depth, {@code toString} writes containers deeper than {@link
+ * Limits#MAX_SUPPORTED_DEPTH} as {@code …}, and the writers, checks and codecs, which recurse once
+ * per level, reject one deeper than their depth limit with {@code nesting-too-deep}.
  */
 public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Value.Array, Value.Record, Value.Variant {
 
@@ -124,12 +128,12 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
   /** The array of {@code items}. */
   static Array array(Value... items) {
-    return supported(new Array(copyOf(items)));
+    return new Array(copyOf(items));
   }
 
   /** The array of {@code items}. */
   static Array array(List<? extends Value> items) {
-    return supported(new Array(copyOf(items.toArray(new Value[0]))));
+    return new Array(copyOf(items.toArray(new Value[0])));
   }
 
   /** A field of a record. */
@@ -162,7 +166,7 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
       keys[i] = encodable(f.key(), "key");
       values[i] = f.value();
     }
-    return supported(Record.withUniqueKeys(keys, values));
+    return Record.withUniqueKeys(keys, values);
   }
 
   /**
@@ -180,7 +184,7 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
       values[i] = Objects.requireNonNull(e.getValue(), "value");
       i++;
     }
-    return supported(new Record(keys, values, Keys.of(keys, n)));
+    return new Record(keys, values, Keys.of(keys, n));
   }
 
   /**
@@ -191,12 +195,12 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
    *     [A-Z][A-Za-z0-9_]*}
    */
   static Variant variant(String tag, Value... args) {
-    return supported(new Variant(Variant.checkTag(tag), copyOf(args)));
+    return new Variant(Variant.checkTag(tag), copyOf(args));
   }
 
   /** The variant {@code tag} with the arguments {@code args}. See {@link #variant(String, Value...)}. */
   static Variant variant(String tag, List<? extends Value> args) {
-    return supported(new Variant(Variant.checkTag(tag), copyOf(args.toArray(new Value[0]))));
+    return new Variant(Variant.checkTag(tag), copyOf(args.toArray(new Value[0])));
   }
 
   /** The tag {@code True} or {@code False} of the prelude's {@code Bool}. */
@@ -221,14 +225,97 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     return deepest + 1;
   }
 
-  /** A value built in code, which may not be nested deeper than the binding supports. */
-  private static <V extends Value> V supported(V v) {
-    if (v.depth() > Limits.MAX_SUPPORTED_DEPTH) {
-      throw HausException.of(
-          ErrorCode.NESTING_TOO_DEEP,
-          "nesting deeper than the supported maximum, " + Limits.MAX_SUPPORTED_DEPTH);
+  /** The hash code of a value whose containers below have theirs: a container's stored one. */
+  private static int storedHash(Value v) {
+    if (v instanceof Array a) {
+      return a.hash;
     }
-    return v;
+    if (v instanceof Record r) {
+      return r.hash;
+    }
+    if (v instanceof Variant x) {
+      return x.hash;
+    }
+    return v.hashCode();
+  }
+
+  /** The children of a container; empty for the other kinds. */
+  private static Value[] children(Value v) {
+    if (v instanceof Array a) {
+      return a.unsafeItems();
+    }
+    if (v instanceof Record r) {
+      return r.unsafeValues();
+    }
+    if (v instanceof Variant x) {
+      return x.unsafeArgs();
+    }
+    return new Value[0];
+  }
+
+  /**
+   * The hash code of a container whose children's hash codes are known: {@code Arrays.hashCode}
+   * of an array's items, the sum of {@code key.hashCode() ^ value.hashCode()} over a record's
+   * fields (whatever their order), {@code 31 * tag.hashCode()} plus the arguments' {@code
+   * Arrays.hashCode} for a variant. 0 is taken as 1, so that 0 can mean "not computed yet".
+   */
+  private static int combine(Value v) {
+    int h;
+    if (v instanceof Record r) {
+      h = 0;
+      String[] keys = r.unsafeKeys();
+      Value[] values = r.unsafeValues();
+      for (int i = 0; i < keys.length; i++) {
+        h += keys[i].hashCode() ^ storedHash(values[i]);
+      }
+    } else {
+      h = 1;
+      for (Value c : children(v)) {
+        h = 31 * h + storedHash(c);
+      }
+      if (v instanceof Variant x) {
+        h += 31 * x.tag().hashCode();
+      }
+    }
+    return h == 0 ? 1 : h;
+  }
+
+  /**
+   * The hash code of a container (spec §7, "host hooks"): computed once, from the children's, which
+   * are computed first, with a stack on the heap instead of recursion, so that a value built in
+   * code of any depth has one. It is kept in the container, as {@link String} keeps its own: a
+   * race computes the same number twice.
+   */
+  private static int hashOf(Value root) {
+    java.util.ArrayDeque<Value> stack = new java.util.ArrayDeque<>();
+    stack.push(root);
+    while (!stack.isEmpty()) {
+      Value top = stack.peek();
+      if (storedHash(top) != 0) {
+        stack.pop();
+        continue;
+      }
+      boolean ready = true;
+      for (Value c : children(top)) {
+        boolean container = c instanceof Array || c instanceof Record || c instanceof Variant;
+        if (container && storedHash(c) == 0) {
+          stack.push(c);
+          ready = false;
+        }
+      }
+      if (ready) {
+        stack.pop();
+        int h = combine(top);
+        if (top instanceof Array a) {
+          a.hash = h;
+        } else if (top instanceof Record r) {
+          r.hash = h;
+        } else {
+          ((Variant) top).hash = h;
+        }
+      }
+    }
+    return storedHash(root);
   }
 
   // ── The kinds ──
@@ -435,6 +522,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
   final class Array implements Value, Iterable<Value> {
     private final Value[] items;
     private final int depth;
+    /** The hash code, once computed; 0 before. */
+    int hash;
 
     /** An array that keeps {@code items}, which nothing else changes. */
     Array(Value[] items) {
@@ -488,7 +577,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     @Override
     public int hashCode() {
-      return Arrays.hashCode(items);
+      int h = hash;
+      return h != 0 ? h : hashOf(this);
     }
 
     @Override
@@ -521,6 +611,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
      * false where that isn't known, and each key is looked at when it is written.
      */
     private final boolean bareKeys;
+    /** The hash code, once computed; 0 before. */
+    int hash;
 
     /** A record that keeps its arrays, whose keys are distinct and which nothing else changes. */
     Record(String[] keys, Value[] values, Keys index) {
@@ -655,11 +747,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     @Override
     public int hashCode() {
-      int h = 0;
-      for (int i = 0; i < keys.length; i++) {
-        h += keys[i].hashCode() ^ values[i].hashCode();
-      }
-      return h;
+      int h = hash;
+      return h != 0 ? h : hashOf(this);
     }
 
     @Override
@@ -680,6 +769,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
     private final String tag;
     private final Value[] args;
     private final int depth;
+    /** The hash code, once computed; 0 before. */
+    int hash;
 
     /** A variant that keeps {@code args}, which nothing else changes; the tag is valid. */
     Variant(String tag, Value[] args) {
@@ -757,7 +848,8 @@ public sealed interface Value permits Value.Number, Value.Text, Value.Bytes, Val
 
     @Override
     public int hashCode() {
-      return 31 * tag.hashCode() + Arrays.hashCode(args);
+      int h = hash;
+      return h != 0 ? h : hashOf(this);
     }
 
     @Override

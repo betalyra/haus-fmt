@@ -318,7 +318,7 @@ fn directories_respect_gitignore_and_skip_other_files() {
 
 #[cfg(unix)]
 #[test]
-fn packages_in_node_modules() {
+fn packages_and_their_files() {
     let dir = tempfile::tempdir().unwrap();
     let write = |path: &str, text: &str| {
         let path = dir.path().join(path);
@@ -328,30 +328,27 @@ fn packages_in_node_modules() {
     let manifest = |name: &str| format!("{{ name: \"{name}\", version: \"1.2.0\" }}");
     write("secret/creds.txt", "API_TOKEN=hunter2");
     write("secret/creds.schema.haus", "API_TOKEN=hunter2");
-    // A package that works: app → @acme/orders → @haus-fmt/money, hoisted,
-    // each declaring what it imports.
-    let deps = r#"{ "@acme/orders": "*", "@evil/link": "*", "@evil/import": "*", "@evil/near": "*" }"#;
-    write("app/package.json", &format!(r#"{{ "name": "app", "dependencies": {deps} }}"#));
-    write(
-        "app/node_modules/@acme/orders/package.json",
-        r#"{ "name": "@acme/orders", "version": "1.2.0", "peerDependencies": { "@haus-fmt/money": "*" } }"#,
-    );
-    write("app/node_modules/@haus-fmt/money/package.haus", &manifest("@haus-fmt/money"));
-    write("app/node_modules/@haus-fmt/money/schema.haus", "type Money = closed < Money Decimal String >");
-    write("app/node_modules/@acme/orders/package.haus", &manifest("@acme/orders"));
-    write(
-        "app/node_modules/@acme/orders/schema.haus",
-        "import @haus-fmt/money@1 (Money)\ntype Order = { total: Money }",
-    );
+    // A package that works: app → @acme/orders → @haus-fmt/money, given in a folder.
+    write("vendor/money/package.haus", &manifest("@haus-fmt/money"));
+    write("vendor/money/schema.haus", "type Money = closed < Money Decimal String >");
+    write("vendor/orders/package.haus", &manifest("@acme/orders"));
+    write("vendor/orders/schema.haus", "import @haus-fmt/money@1 (Money)\ntype Order = { total: Money }");
     write("app/order.schema.haus", "import @acme/orders (Order)\ntype Root = Order");
     write("app/order.haus", "{ total: Money(19.99, \"EUR\") }");
-    let (code, json) = check_json(dir.path(), &["app"]);
+    let (code, json) = check_json(dir.path(), &["--packages", "vendor", "app"]);
     assert_eq!(code, 0, "{}", pretty(&json));
     // A package's schema.haus is a schema file.
-    let (code, json) = check_json(dir.path(), &["app/node_modules/@acme/orders"]);
+    let (code, json) = check_json(dir.path(), &["--packages", "vendor", "vendor/orders"]);
     assert_eq!(code, 0, "{}", pretty(&json));
     let kinds: Vec<&str> = array(&json, "files").iter().map(|f| str_of(f, "kind")).collect();
     assert_eq!(kinds, ["data", "schema"], "package.haus, schema.haus");
+    // node_modules is never read (spec §13.3: only the npm ecosystem looks there).
+    write("app/package.json", r#"{ "name": "app", "dependencies": { "@acme/orders": "*" } }"#);
+    write("app/node_modules/@acme/orders/package.haus", &manifest("@acme/orders"));
+    write("app/node_modules/@acme/orders/schema.haus", "type Order = Int");
+    let (code, json) = check_json(dir.path(), &["app/order.schema.haus"]);
+    assert_eq!(code, 1, "{}", pretty(&json));
+    assert_eq!(str_of(&array(&array(&json, "files")[0], "diagnostics")[0], "code"), "import-not-found");
     // Packages that read files outside themselves, each imported by an app schema.
     let evil = [
         ("link", "", Some("secret/creds.schema.haus")),
@@ -359,7 +356,7 @@ fn packages_in_node_modules() {
         ("near", "import ./near (T)\ntype U = T", None),
     ];
     for (name, schema, link) in evil {
-        let package = format!("app/node_modules/@evil/{name}");
+        let package = format!("evil/{name}");
         write(&format!("{package}/package.haus"), &manifest(&format!("@evil/{name}")));
         write(&format!("{package}/near.schema.haus"), "type T = Int");
         match link {
@@ -370,19 +367,25 @@ fn packages_in_node_modules() {
             None => write(&format!("{package}/schema.haus"), schema),
         }
         write(&format!("app/{name}.schema.haus"), &format!("import @evil/{name} (T)\ntype Root = T"));
-        let (code, json) = check_json(dir.path(), &[&format!("app/{name}.schema.haus")]);
+        let (code, json) = check_json(dir.path(), &["--packages", "evil", &format!("app/{name}.schema.haus")]);
         assert_eq!(code, 1, "{name}");
         let diagnostic = &array(&array(&json, "files")[0], "diagnostics")[0];
         assert_eq!(str_of(diagnostic, "code"), "package-path", "{name}: {}", pretty(&json));
         assert!(!pretty(&json).contains("API_TOKEN"), "{name}: {}", pretty(&json));
     }
     // An app file that imports a file inside a package directory.
-    write("app/into.schema.haus", "import ./node_modules/x/near (T)\ntype Root = T");
-    write("app/node_modules/x/package.haus", &manifest("@evil/x"));
-    write("app/node_modules/x/near.schema.haus", "type T = Int");
+    write("app/into.schema.haus", "import ./vendored/x/near (T)\ntype Root = T");
+    write("app/vendored/x/package.haus", &manifest("@evil/x"));
+    write("app/vendored/x/near.schema.haus", "type T = Int");
     let (code, json) = check_json(dir.path(), &["app/into.schema.haus"]);
     assert_eq!(code, 1);
     assert_eq!(str_of(&array(&array(&json, "files")[0], "diagnostics")[0], "code"), "package-path");
+    // A relative import stays inside the root: the directory of the schema file.
+    write("app/up.schema.haus", "import ../secret/creds (T)\ntype Root = T");
+    let (code, json) = check_json(dir.path(), &["app/up.schema.haus"]);
+    assert_eq!(code, 1);
+    assert_eq!(str_of(&array(&array(&json, "files")[0], "diagnostics")[0], "code"), "import-outside-root");
+    assert!(!pretty(&json).contains("API_TOKEN"), "{}", pretty(&json));
 }
 
 #[cfg(unix)]
@@ -409,7 +412,7 @@ fn packages_given_with_flags() {
     write("app/package.json", r#"{ "name": "app", "dependencies": { "@acme/money": "*", "@acme/geo": "*" } }"#);
     let first_code = |json: &Json| str_of(&array(&array(json, "files")[0], "diagnostics")[0], "code").to_owned();
 
-    // Not in node_modules, not given.
+    // Not given.
     let (code, json) = check_json(dir.path(), &["app/order.haus"]);
     assert_eq!((code, first_code(&json)), (1, "import-not-found".into()), "{}", pretty(&json));
     // --package DIR and --packages FOLDER, also as NAME=DIR.
@@ -418,11 +421,11 @@ fn packages_given_with_flags() {
         assert_eq!(code, 0, "{}", pretty(&json));
         assert_eq!(array(&json, "files").len(), 2);
     }
-    // A package given comes before node_modules for its name.
+    // node_modules is never read, even when the app's package.json declares the package.
     write("app/node_modules/@acme/money/package.haus", &manifest("@acme/money", "1.9.0"));
     write("app/node_modules/@acme/money/schema.haus", "type Money = Int");
     let (code, json) = check_json(dir.path(), &["--packages", "lib", "app/order.haus"]);
-    assert_eq!((code, first_code(&json)), (1, "type-mismatch".into()), "{}", pretty(&json));
+    assert_eq!((code, first_code(&json)), (1, "import-not-found".into()), "{}", pretty(&json));
     let (code, json) = check_json(dir.path(), &["--package", "vendor/money-v1", "--packages", "lib", "app/order.haus"]);
     assert_eq!(code, 0, "{}", pretty(&json));
 
@@ -539,9 +542,10 @@ fn colors() {
 
 // ── the conformance suite and the repository ─────────────────────
 
-/// The repository's `examples` as CI sees them, without `pnpm install`: the
-/// files copied into a temporary directory, with the official packages they
-/// import in a `node_modules` of their own, taken from `extensions`.
+/// The repository's `examples`: the files copied into a temporary
+/// directory, with the official packages they import in a folder of
+/// packages, `packages`, taken from `extensions` (given with `--packages`:
+/// this binding never reads `node_modules`).
 fn examples_with_packages() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let examples = dir.path().join("examples");
@@ -553,7 +557,7 @@ fn examples_with_packages() -> tempfile::TempDir {
         }
     }
     for name in ["money", "geo"] {
-        let package = examples.join("node_modules/@haus-fmt").join(name);
+        let package = dir.path().join("packages").join(name);
         fs::create_dir_all(&package).unwrap();
         for file in ["package.haus", "schema.haus"] {
             fs::copy(repo().join("extensions").join(name).join(file), package.join(file)).unwrap();
@@ -574,7 +578,7 @@ fn the_repository_has_no_errors() {
     let suite = array(&json, "files").len();
 
     let examples = examples_with_packages();
-    let (code, json) = check_json(examples.path(), &["examples"]);
+    let (code, json) = check_json(examples.path(), &["--packages", "packages", "examples"]);
     no_errors(&json);
     assert_eq!(code, 0);
     assert!(suite + array(&json, "files").len() > 40);

@@ -1,7 +1,8 @@
 /**
  * Effect schemas from haus schema files (`.schema.haus`).
  *
- *   const { schemas } = Haus.compileSchemaFile(text, schemaOptions(path))
+ *   const { text, options } = readSchemaFile(path)   // from @haus-fmt/haus/node
+ *   const { schemas } = Haus.compileSchemaFile(text, options)
  *   const order = yield* Haus.decode(schemas.Order)(data)
  *
  * and the matching TypeScript declarations, for typed imports of schema files
@@ -56,9 +57,10 @@ export interface FromSchemaFileOptions {
 }
 
 /**
- * Parse a schema file and build Effect schemas for its types. Pass the
- * options of `schemaOptions(path)` (from `@haus-fmt/haus/node`) to import
- * packages and files. Throws HausSchemaFileError.
+ * Parse a schema file and build Effect schemas for its types. Read the file
+ * and its options with `readSchemaFile(path)` (from `@haus-fmt/haus/node`),
+ * which reads it as every file of the schema is read, to import packages
+ * and files. Throws HausSchemaFileError.
  */
 export const compileSchemaFile = (text: string, options: ParseSchemaOptions = {}): CompiledSchemaFile =>
   fromSchemaFile(parseSchemaFile(text, options))

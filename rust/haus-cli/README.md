@@ -57,17 +57,14 @@ file can't make `haus check` read another file. Comments in it mean nothing.
 
 Imports in schemas resolve as in the other bindings (spec §13.3): `std/time`,
 files next to the schema (`import ./common (Address)`), and schema packages.
-A file imports only the packages it declares: those in the nearest
-`package.json` above it (for a package's `schema.haus`, the package's own,
-without `devDependencies`), checked before anything is looked for
-(`undeclared-package`). A declared package `@org/name` is found in
-`node_modules/@org/name` in the directory of the importing file's real path
-or above it, as Node finds packages (so pnpm and workspace links work),
-skipping directories inside `node_modules` and world-writable ones such as
-`/tmp`; the nearest one is the package. Nothing else is looked at: not
-`NODE_PATH`, not npm's global folder. Packages can also be given explicitly;
-they count as declared, and a package given by its directory is used instead
-of `node_modules` for its name:
+A relative import stays inside the build's root, the real directory of the
+schema file loaded: `..` names that go above it are `import-outside-root`,
+before anything is looked at. A relative import follows no symbolic link: a
+link anywhere on its path is `import-not-found` (the message doesn't say
+where it points), and nothing behind it is read. Schema packages
+are given explicitly; this tool never looks in `node_modules` (only
+JavaScript runtimes, the npm ecosystem, do), nor anywhere else: not
+`NODE_PATH`, not npm's global folder. Packages given count as declared:
 
 ```sh
 haus check --package vendor/money order.haus             # a package's directory
@@ -76,9 +73,7 @@ haus check --packages schemas/ order.haus                # every subdirectory wi
 ```
 
 Both options can be repeated. Their manifests name the packages, not the
-directory names. A package found in a folder doesn't replace one installed
-in `node_modules`: if the two have other files, that is `duplicate-package`.
-A package given that can't be used (a directory without `package.haus`, an
+directory names. A package given that can't be used (a directory without `package.haus`, an
 invalid manifest, two packages with one name, a folder that doesn't exist or
 has more than 4096 entries) stops the check before anything is checked, with
 exit code 2. A subdirectory of a folder whose manifest is invalid is left
@@ -86,15 +81,15 @@ out; an import that isn't found names it.
 
 The checks of §13.3 apply wherever a package is found: its manifest is valid
 (`package-manifest`) and has the imported name (`import-not-found`) and
-major version (`import-version`); in `node_modules`, the importing file
-declares it in the nearest `package.json` (`undeclared-package`) and the
-`version` of the package's `package.json` is the manifest's
-(`package-version`); one schema reaches one package of each name
-(`duplicate-package`, unless the copies are byte for byte the same and their
-imports reach the same packages); a package's `package.haus`, `schema.haus`
-and `package.json` are regular files, not links (`package-path`); a relative
-import spells each name as its directory lists it and reaches a
-`.schema.haus` file (`import-not-found`). A schema file and a `package.json`
+major version (`import-version`); the `version` of a `package.json` next to
+it, if one can be read, is the manifest's (`package-version`); one schema
+reaches one package of each name (`duplicate-package`, unless the copies are
+byte for byte the same and their imports reach the same packages); a
+package's `package.haus` and `schema.haus` are regular files, not links
+(`package-path`), spelled exactly so; a relative import spells each name as
+its directory lists it (a directory that can't be listed lists nothing) and
+reaches a regular `.schema.haus` file (`import-not-found`), opened without
+following a link and without blocking. A schema file and a `package.json`
 are at most 1 MiB (`file-too-large`), and a schema reaches at most 256 schema
 files (`too-many-files`).
 

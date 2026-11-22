@@ -22,6 +22,7 @@ pub const schema = @import("schema.zig");
 pub const decoding = @import("decode.zig");
 pub const json = @import("json.zig");
 pub const packages = @import("packages.zig");
+pub const files = @import("files.zig");
 
 pub const Value = value.Value;
 pub const Field = value.Field;
@@ -160,6 +161,77 @@ test {
     _ = decoding;
     _ = json;
     _ = packages;
+    _ = files;
+}
+
+/// Every path that recurses per level, at the supported depth (spec §7,
+/// `limits.depth.small-stack-tested`). Returns the first that fails.
+fn atSupportedDepth() !void {
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const depth = Limits.supported_depth;
+    const limits: Limits = .{ .max_depth = depth };
+    // `A([` is two levels: 127 of them around `A([])` make `depth` levels.
+    var text: std.ArrayList(u8) = .empty;
+    for (0..depth / 2 - 1) |_| try text.appendSlice(arena, "A([");
+    try text.appendSlice(arena, "A([])");
+    for (0..depth / 2 - 1) |_| try text.appendSlice(arena, "])");
+    const val = (try parse(arena, text.items, .{ .limits = limits })).value;
+    for ([_]Layout{ .pretty, .compact, .minimised }) |layout| {
+        _ = try format(arena, text.items, .{ .layout = layout, .write = .{ .limits = limits } });
+        _ = try stringify(arena, val, .{ .layout = layout, .write = .{ .limits = limits } });
+    }
+    _ = try canonical(arena, val, .{ .limits = limits });
+    _ = try hash(arena, val, .{ .limits = limits });
+    // Self-describing JSON nests up to 4·depth+2 levels (§16.2).
+    const hj = try json.toHausJson(arena, val, .{ .limits = limits });
+    _ = try json.fromHausJson(arena, arena, hj, .{ .limits = limits });
+    var plain: std.ArrayList(u8) = .empty;
+    try plain.appendNTimes(arena, '[', depth);
+    try plain.appendNTimes(arena, ']', depth);
+    _ = try json.importJson(arena, arena, plain.items, .{ .limits = limits });
+    const s = try schema.load(arena, "type T = < A (Array T) | B Int >", .{});
+    const def = s.get("T").?;
+    const decoded = try decoding.decode(arena, def, val, .{ .limits = limits });
+    _ = try decoding.encode(arena, def, decoded, .{ .limits = limits });
+    _ = try decoding.decodeText(arena, arena, def, text.items, .{ .limits = limits });
+    const sj = try json.toJson(arena, def, decoded, .{});
+    _ = try json.fromJson(arena, arena, def, sj, .{ .limits = limits });
+}
+
+test "the supported depth on a thread with a 512 KiB stack" {
+    // A Debug build's frames are larger: it needs about 2 MiB there.
+    if (@import("builtin").mode == .debug) return error.SkipZigTest;
+    const Run = struct {
+        result: anyerror!void = {},
+        fn run(r: *@This()) void {
+            r.result = atSupportedDepth();
+        }
+    };
+    var r: Run = .{};
+    const t = try std.Thread.spawn(.{ .stack_size = 512 * 1024 }, Run.run, .{&r});
+    t.join();
+    try r.result;
+}
+
+test "a value built in code deeper than the limit is not decoded" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // 100,000 levels: the decoder would overflow its stack.
+    var val: Value = .{ .array = &.{} };
+    for (0..100_000) |_| {
+        const items = try arena.alloc(Value, 1);
+        items[0] = val;
+        val = .{ .array = items };
+    }
+    const s = try schema.load(arena, "type T = Array T", .{});
+    var d: Diagnostic = .{};
+    try std.testing.expectError(error.Haus, decoding.decode(arena, s.get("T").?, val, .{ .diagnostic = &d }));
+    try std.testing.expectEqual(Code.@"nesting-too-deep", d.code);
+    try std.testing.expectEqualStrings("$", d.path());
+    _ = try canonical(arena, val, .{});
 }
 
 test "parse and canonical" {

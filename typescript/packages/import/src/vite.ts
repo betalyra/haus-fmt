@@ -15,6 +15,7 @@
  */
 import type { Plugin } from "vite"
 import { readFileSync } from "node:fs"
+import { isSchemaFile } from "@haus-fmt/haus/node"
 import { backend, moduleFor, optimizeOf, packagesOf, targetOf, type Backend, type ImportOptions } from "./generate.js"
 
 export default function haus(options: ImportOptions = {}): Plugin {
@@ -35,7 +36,8 @@ export default function haus(options: ImportOptions = {}): Plugin {
       const path = id.split("?")[0]!
       if (!path.endsWith(".haus")) return null
       b ??= backend(target, packagesOf(options, root), optimizeOf(options, root))
-      const { code, files } = moduleFor(readFileSync(path, "utf8"), path, await b, (p) => `@haus-fmt/import/${p}`)
+      // A schema file is read by the resolver, as every file of its schema (a regular file, without blocking).
+      const { code, files } = moduleFor(isSchemaFile(path) ? "" : readFileSync(path, "utf8"), path, await b, (p) => `@haus-fmt/import/${p}`)
       for (const f of files) this.addWatchFile(f)
       return { code, map: null }
     },

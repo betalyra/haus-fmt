@@ -1,0 +1,4 @@
+// rule: packages.relative.leading-dotdot
+// "../" alone names no file (grammar.ebnf, path): a path ends in a name.
+import ../ (A)
+type B = { a: A }

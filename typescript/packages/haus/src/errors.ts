@@ -228,6 +228,40 @@ export class HausEncodeError extends Error {
   }
 }
 
+/**
+ * Whether `e` is the engine's stack overflow: V8's and JavaScriptCore's
+ * RangeError "Maximum call stack size exceeded", SpiderMonkey's InternalError
+ * "too much recursion". This package's own RangeErrors have a code, and are not.
+ */
+export const isStackOverflow = (e: unknown): boolean =>
+  e instanceof Error &&
+  (e as { code?: unknown }).code === undefined &&
+  (e instanceof RangeError || e.name === "InternalError") &&
+  /call stack|recursion/i.test(e.message)
+
+/** Why a value is `nesting-too-deep` when the stack ran out before the depth limit was reached (spec §7). */
+export const STACK_EXHAUSTED = "nesting too deep for the stack it runs on (512 levels, MAX_SUPPORTED_DEPTH, need STACK_NEEDED_MB of stack)"
+
+/**
+ * `run()`, with the engine's stack overflow reported as the error `tooDeep`
+ * makes (`nesting-too-deep`, spec §7) instead of a RangeError: JavaScript
+ * code can't set the size of the stack it runs on (a worker thread's may be
+ * small), so a deep value on a small stack fails as too deep, never as a crash.
+ */
+export const guardStack = <T>(run: () => T, tooDeep: (reason: string) => Error): T => {
+  try {
+    return run()
+  } catch (e) {
+    throw isStackOverflow(e) ? tooDeep(STACK_EXHAUSTED) : e
+  }
+}
+
+/** `nesting-too-deep` in a value read (decoding, JSON mappings), at `path` (`$` when the place isn't known). */
+export const decodeTooDeep = (path: Path = []) => (reason: string): HausDecodeError => new HausDecodeError(reason, path, "nesting-too-deep")
+
+/** `nesting-too-deep` in a value written (writers, encoding), at `path` (`$` when the place isn't known). */
+export const encodeTooDeep = (path: Path = []) => (reason: string): HausEncodeError => new HausEncodeError(reason, path, "nesting-too-deep")
+
 /** A RangeError for limits a binding can't use (spec §7), with the code `unsupported-depth`. */
 export const limitsError = (message: string): RangeError & { readonly code: ErrorCode } =>
   Object.assign(new RangeError(message), { code: "unsupported-depth" as const })

@@ -31,10 +31,20 @@ public struct HausSchema: Sendable {
         /// finds none: a schema that imports one fails with the code
         /// `import-unavailable`.
         public var packages: PackageLocator
+        /// The build's root directory (spec §13.3, "The root"): relative
+        /// imports reach no file outside it (`import-outside-root`), and
+        /// messages show paths relative to it. By default (nil) it is the
+        /// directory of the schema file's real path; a root given here (a
+        /// relative one is from that directory) is resolved to its real path
+        /// once, must contain that file (`import-outside-root`), and widens
+        /// it, such as to a repository whose schemas share files across
+        /// folders.
+        public var root: String?
 
-        public init(withoutAttributes: Bool = false, packages: PackageLocator = .none) {
+        public init(withoutAttributes: Bool = false, packages: PackageLocator = .none, root: String? = nil) {
             self.withoutAttributes = withoutAttributes
             self.packages = packages
+            self.root = root
         }
     }
 
@@ -44,7 +54,9 @@ public struct HausSchema: Sendable {
         public let name: String
         /// Its id (spec §13.3): `@haus-fmt/money@1#Money`, `billing/common#Address`
         /// for a file outside packages (its path from the root file's
-        /// directory), or its name for a schema read from text.
+        /// directory, with `./` before one that would start with `@`, so that
+        /// it never has a package's form), or its name for a schema read
+        /// from text.
         public let id: String
         /// Its type parameters.
         public let params: [String]
@@ -91,15 +103,17 @@ public struct HausSchema: Sendable {
         try self.init(text: Array(bytes), path: nil, options: options, files: SchemaFiles())
     }
 
-    /// Reads the schema file at `path`, its relative imports next to it, and
-    /// the packages it imports found by ``Options/packages`` (spec §13.3).
-    /// Each file is read once, by its real path; a package's files are never
-    /// read through a link. Errors in an imported file are reported at the
-    /// import, with their place in that file.
+    /// Reads the schema file at `path`, its relative imports next to it
+    /// (inside ``Options/root``), and the packages it imports found by
+    /// ``Options/packages`` (spec §13.3). Each file is read once, and only if
+    /// it is a regular file, checked on the opened file; a relative import
+    /// follows no link, and a package's files are never read through one.
+    /// `path` may be reached through links. Errors in an imported
+    /// file are reported at the import, with their place in that file.
     public init(contentsOf path: String, options: Options = Options()) throws(HausError) {
-        let files = SchemaFiles()
-        let root = try rootSource(path, files: files)
-        try self.init(text: root.text, path: root.path, options: options, files: files)
+        guard let entry = realPath(path) else { throw HausError(.importNotFound, "\(shown(path)): \(systemError())") }
+        let files = SchemaFiles(root: try buildRoot(entry: entry, option: options.root))
+        try self.init(text: try entryText(entry, files: files), path: entry, options: options, files: files)
     }
 
     private init(text: [UInt8], path: String?, options: Options, files: SchemaFiles) throws(HausError) {

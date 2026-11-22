@@ -48,7 +48,8 @@ import {
 } from "./errors.js"
 import { withCodecs } from "./schema-file.js"
 import {
-  checkEncodable, checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decoding, encoding, NUMBER, POSITIONAL, PRELUDE_TAG, UNKNOWN_TAG, VALUE,
+  checkEncodable, checkSchema, compile, compileEncoder, ConversionError, dateTimeText, DECIMAL, decimalText, decoding, encoding, isStackOverflow, NUMBER, POSITIONAL, PRELUDE_TAG, UNKNOWN_TAG,
+  VALUE,
 } from "./convert.js"
 import { jsonTypeOf } from "./json.js"
 
@@ -166,6 +167,18 @@ const encodeErrorOf = (e: unknown): Option.Option<HausSchemaError> =>
 const fromSync = <A, E>(f: () => A, expected: (e: unknown) => Option.Option<E>): Effect.Effect<A, E> =>
   Effect.sync(f).pipe(
     Effect.catchDefect((defect) => Option.match(expected(defect), { onNone: () => Effect.die(defect), onSome: Effect.fail })),
+  )
+
+/**
+ * Effect's own decoder or encoder, which recurses per level: the engine's
+ * stack overflow (a small stack: JavaScript can't choose its own) fails with
+ * `nesting-too-deep` (spec §7) instead of being a defect.
+ */
+const withinStack = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E | HausSchemaError, R> =>
+  effect.pipe(
+    Effect.catchDefect((defect) =>
+      isStackOverflow(defect) ? Effect.fail(conversionError(new ConversionError("value nested too deep for the stack it runs on", "nesting-too-deep"))) : Effect.die(defect),
+    ),
   )
 
 // ── open unions ──────────────────────────────────────────────
@@ -363,7 +376,7 @@ export const decodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
       limits,
       // Conversion work is bounded by the size of the input (see convert.ts).
       fromSync(() => decoding(value, limits, convert), conversionErrorOf(value)).pipe(
-        Effect.flatMap((encoded) => decode(encoded, decodeOptions)),
+        Effect.flatMap((encoded) => withinStack(decode(encoded, decodeOptions))),
         Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, value, "decode"))),
       ),
     ) as Effect.Effect<Decoded<S, C>, HausSchemaError | HausLimitsError, S["DecodingServices"]>
@@ -405,9 +418,9 @@ export const convert = <S extends Schema.Top, const C extends ReadonlyArray<AnyC
   return (value: S["Type"]): Effect.Effect<Decoded<S, C>, HausSchemaError> =>
     // Bounded before Effect's encoder walks the value (see `checkEncodable`).
     fromSync(() => checkEncodable(value, schema.ast, {}), conversionErrorOf()).pipe(
-      Effect.flatMap(() => encode(value)),
+      Effect.flatMap(() => withinStack(encode(value))),
       Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "encode"))),
-      Effect.flatMap((encoded) => decode(encoded, decodeOptions).pipe(Effect.mapError((e) => issueError(e, undefined, "decode")))),
+      Effect.flatMap((encoded) => withinStack(decode(encoded, decodeOptions)).pipe(Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "decode"))))),
     ) as Effect.Effect<Decoded<S, C>, HausSchemaError>
 }
 
@@ -493,7 +506,7 @@ export const encodeValue = <S extends Schema.Top, const C extends ReadonlyArray<
       limits,
       // Effect's encoder has no budget: the value is checked first (see `checkEncodable`).
       fromSync(() => checkEncodable(value, s.ast, limits), conversionErrorOf()).pipe(
-        Effect.flatMap(() => encode(value, { errors: "first" })),
+        Effect.flatMap(() => withinStack(encode(value, { errors: "first" }))),
         Effect.mapError((e) => (e instanceof HausSchemaError ? e : issueError(e, undefined, "encode"))),
         Effect.flatMap((encoded) => fromSync(() => encoding(limits, () => toValue(encoded)), encodeErrorOf)),
       ),

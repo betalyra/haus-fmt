@@ -31,7 +31,7 @@
  */
 import * as chars from "./chars.js"
 import { codePoints, hex4, hexValue, isBidiControl, isControl, isDigit, isIdentChar, isLowerStart, isUpper, quoteText } from "./chars.js"
-import { HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin } from "./errors.js"
+import { guardStack, HausSyntaxError, locate, START, type ErrorCode, type ErrorDetails, type Origin } from "./errors.js"
 
 // Hot: the character codes as constants of this module. V8 reads an imported
 // binding through its module cell at every use, which measured 3-5% slower
@@ -875,8 +875,21 @@ export class Reader {
 
   /** Throw a HausSyntaxError at `at` (default: here). */
   fail(code: ErrorCode, reason: string, at: number = this.pos, details?: ErrorDetails): never {
+    throw this.error(code, reason, at, details)
+  }
+
+  /** A HausSyntaxError at `at` (default: here). */
+  error(code: ErrorCode, reason: string, at: number = this.pos, details?: ErrorDetails): HausSyntaxError {
     const p = locate(this.src, at, this.origin)
-    throw new HausSyntaxError(reason, p.offset, p.line, p.column, code, details)
+    return new HausSyntaxError(reason, p.offset, p.line, p.column, code, details)
+  }
+
+  /**
+   * `read()`, with the engine's stack overflow reported as `nesting-too-deep`
+   * where the reader got to (spec §7), not as a RangeError.
+   */
+  guarded<T>(read: () => T): T {
+    return guardStack(read, (reason) => this.error("nesting-too-deep", reason))
   }
 }
 

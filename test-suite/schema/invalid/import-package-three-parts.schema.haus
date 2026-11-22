@@ -1,0 +1,3 @@
+// A package is @organisation/name, two parts (spec §13.3): @acme/x/y is no package.
+import @acme/x/y (A)
+type B = { a: A }

@@ -1,0 +1,4 @@
+// rule: packages.relative.leading-dotdot
+// A path doesn't end in "/" (grammar.ebnf, path; spec §13.3).
+import ./a/ (A)
+type B = { a: A }

@@ -32,9 +32,10 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "In a workspace you don't trust, haus ignores the workspace's haus.packages setting: packages come only from node_modules and your user settings.",
+      "description": "In a workspace you don't trust, haus ignores the workspace's haus.packages and haus.root settings: packages come only from node_modules and your user settings, and the root of relative imports is the workspace folder or your user setting.",
       "restrictedConfigurations": [
-        "haus.packages"
+        "haus.packages",
+        "haus.root"
       ]
     }
   },
@@ -164,6 +165,12 @@
           "default": [],
           "scope": "resource",
           "markdownDescription": "Schema packages for `import @org/name`, as paths relative to the workspace folder. Each path is a package directory (with `package.haus`) or a folder whose subdirectories are packages. They count as declared dependencies; a package directory is used instead of the one in `node_modules`. Paths in workspace settings must stay inside the workspace folder (symbolic links resolved); paths in user settings may be anywhere on this computer. Network paths (`\\\\host\\share`) are never used. Ignored in workspace settings of an untrusted workspace."
+        },
+        "haus.root": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "The root of relative imports in schema files (`import ../shared/money`), as a path relative to the workspace folder: a schema file's relative imports can't go above it, and it must contain the schema file. Empty (the default): the workspace folder that has the schema file (a file in no workspace folder: its own directory). A path in workspace settings must stay inside the workspace folder (symbolic links resolved); a path in user settings may be anywhere on this computer, such as `..` to share files with a sibling folder. Network paths (`\\\\host\\share`) are never used. Ignored in workspace settings of an untrusted workspace."
         }
       }
     },

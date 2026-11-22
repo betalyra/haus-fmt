@@ -32,7 +32,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 **Schema files:** [schema-syntax](#schema-syntax), [unknown-type](#unknown-type), [wrong-arity](#wrong-arity), [duplicate-type](#duplicate-type), [redefine-prelude](#redefine-prelude), [unknown-parameter](#unknown-parameter), [invalid-parameter](#invalid-parameter), [underscore-type](#underscore-type), [duplicate-field](#duplicate-field), [duplicate-tag](#duplicate-tag), [closed-empty-variant](#closed-empty-variant), [invalid-spread](#invalid-spread), [spread-cycle](#spread-cycle), [row-parameter](#row-parameter), [misplaced-stream](#misplaced-stream), [unguarded-recursion](#unguarded-recursion), [growing-recursion](#growing-recursion), [type-too-deep](#type-too-deep), [attribute-arguments](#attribute-arguments), [attribute-twice](#attribute-twice), [attribute-space](#attribute-space), [attribute-on-spread](#attribute-on-spread)
 
-**Imports:** [unknown-module](#unknown-module), [unknown-import](#unknown-import), [duplicate-import](#duplicate-import), [import-unavailable](#import-unavailable), [import-not-found](#import-not-found), [import-version](#import-version), [import-cycle](#import-cycle), [duplicate-package](#duplicate-package), [undeclared-package](#undeclared-package), [package-manifest](#package-manifest), [package-version](#package-version), [package-path](#package-path), [package-name](#package-name), [package-crate](#package-crate), [package-install-script](#package-install-script), [package-files](#package-files), [profile-vectors](#profile-vectors), [package-wrapper](#package-wrapper), [codec-unreachable](#codec-unreachable), [file-too-large](#file-too-large), [too-many-files](#too-many-files)
+**Imports:** [unknown-module](#unknown-module), [unknown-import](#unknown-import), [duplicate-import](#duplicate-import), [import-unavailable](#import-unavailable), [import-not-found](#import-not-found), [import-outside-root](#import-outside-root), [import-version](#import-version), [import-cycle](#import-cycle), [duplicate-package](#duplicate-package), [undeclared-package](#undeclared-package), [package-manifest](#package-manifest), [package-version](#package-version), [package-path](#package-path), [package-name](#package-name), [package-crate](#package-crate), [package-install-script](#package-install-script), [package-files](#package-files), [profile-vectors](#profile-vectors), [package-wrapper](#package-wrapper), [codec-unreachable](#codec-unreachable), [file-too-large](#file-too-large), [too-many-files](#too-many-files)
 
 **Decoding and encoding:** [type-mismatch](#type-mismatch), [not-an-integer](#not-an-integer), [out-of-range](#out-of-range), [missing-field](#missing-field), [unknown-field](#unknown-field), [unknown-tag](#unknown-tag), [wrong-payload](#wrong-payload), [invalid-time](#invalid-time), [invalid-secret](#invalid-secret), [codec-rejected](#codec-rejected), [cannot-encode](#cannot-encode), [cyclic-value](#cyclic-value), [step-budget](#step-budget), [too-many-nodes](#too-many-nodes)
 
@@ -864,13 +864,23 @@ type A = Address
 
 ## import-not-found
 
-*Imports.* An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.
+*Imports.* An imported package or file can't be found: it is not installed, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package found names another package in its manifest. With npm, also a `node_modules/@org/name` that is there but can't be used (a dangling link, a cycle of links, a directory that can't be entered): the search stops there (§13.3).
 
 **Reported at:** The import, at its `import`. *(Informative, §8.)*
 
 For example: import @acme/geo (LatLng), with @acme/geo not installed.
 
 **Fix:** Install the package, or fix the path.
+
+## import-outside-root
+
+*Imports.* A relative import reaches a file outside the build's root directory (§13.3): by default the directory of the schema file the build starts from, or the directory given as the build's `root` option. Its `..` names go above the root: it is rejected before anything is looked at (a relative import follows no symbolic link, so it can't leave the root otherwise). Also a `root` option that doesn't contain the schema file the build starts from.
+
+**Reported at:** The import, at its `import`. A `root` option that doesn't contain the entry file: no place. *(Informative, §8.)*
+
+For example: app/a.schema.haus has import ../../shared/money (Money), and the build starts from app/a.schema.haus.
+
+**Fix:** Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package.
 
 ## import-version
 
@@ -927,7 +937,7 @@ For example: a package.haus with { name: "@Acme/Orders", version: "1" }.
 
 ## package-version
 
-*Imports.* A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored.
+*Imports.* A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.
 
 **Reported at:** The import that reaches the package; the message names both versions. *(Informative, §8.)*
 

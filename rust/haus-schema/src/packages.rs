@@ -51,12 +51,13 @@ impl Manifest {
     /// regular file `package-path` (not read), and one that isn't a valid
     /// manifest `package-manifest`.
     pub fn read(dir: &Path) -> Result<Manifest> {
-        Manifest::read_text(dir).map(|(manifest, _)| manifest)
+        Manifest::read_as(dir, &shown(dir))
     }
 
-    /// The manifest and its text.
-    pub(crate) fn read_text(dir: &Path) -> Result<(Manifest, String)> {
-        files::manifest(dir, files::open(&dir.join(MANIFEST), Kind::Manifest))
+    /// [`Manifest::read`], with the directory shown as `shown` in messages.
+    pub(crate) fn read_as(dir: &Path, shown: &str) -> Result<Manifest> {
+        let opened = files::open(&dir.join(MANIFEST), Kind::Manifest);
+        files::manifest(dir, shown, opened).map(|(manifest, _)| manifest)
     }
 
     /// The manifest written as `text`: one record, with a lowercase `name`
@@ -88,20 +89,22 @@ impl Manifest {
     }
 
     /// The package's schema file, `schema.haus` in its directory `dir`
-    /// (spec §13.3). Checked, not read: a missing file is `import-not-found`,
-    /// a symbolic link or a file that isn't a regular file `package-path`.
+    /// (spec §13.3). Checked, not read: a missing file (or one its directory
+    /// doesn't list with that spelling) is `import-not-found`, a symbolic
+    /// link or a file that isn't a regular file `package-path`.
     pub fn schema_path(&self, dir: &Path) -> Result<PathBuf> {
         let path = dir.join(SCHEMA);
+        let listed = files::listed(dir, SCHEMA.as_ref());
         match path.symlink_metadata() {
-            Ok(meta) if meta.is_file() => Ok(path),
-            Ok(_) => {
+            Ok(meta) if listed && meta.is_file() => Ok(path),
+            Ok(_) if listed => {
                 let reason = format!(
                     "{}: its {SCHEMA} is a symbolic link or not a regular file; it is not read",
                     quote(&self.name)
                 );
                 Err(Error::new(ErrorCode::PackagePath, reason))
             }
-            Err(_) => {
+            _ => {
                 let reason = format!("{} has no {SCHEMA} next to its manifest ({})", quote(&self.name), shown(dir));
                 Err(Error::new(ErrorCode::ImportNotFound, reason))
             }
@@ -375,9 +378,11 @@ pub fn package_of(path: &Path) -> Option<(&Path, Result<Manifest>)> {
     Some((dir, Manifest::read(dir)))
 }
 
-/// The package directory a file is in: the nearest directory above it with a manifest.
-pub fn package_dir_of(path: &Path) -> Option<&Path> {
-    path.ancestors().skip(1).find(|d| d.join(MANIFEST).symlink_metadata().is_ok())
+/// Whether the directory `dir` has a `package.haus`: one it lists with
+/// that spelling (`Package.haus` makes no package, spec §13.3, "Spelling"),
+/// whatever it is (a link or a directory is rejected when it is read).
+pub fn has_manifest(dir: &Path) -> bool {
+    dir.join(MANIFEST).symlink_metadata().is_ok() && files::listed(dir, MANIFEST.as_ref())
 }
 
 /// Whether the packages in `a` and `b` are copies of one package: their

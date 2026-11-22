@@ -24,7 +24,7 @@
  * writers do with it is undefined (spec §11, "Values built in code").
  */
 import { BACKSLASH, BARE_KEY, codePoints, CR, highSurrogates, isBidiControl, isControl, isLineSeparator, LF, QUOTE, TAB, unpairedSurrogate } from "./chars.js"
-import { HausEncodeError, type Path } from "./errors.js"
+import { encodeTooDeep, guardStack, HausEncodeError, type Path } from "./errors.js"
 import { numberLimitIssue } from "./number.js"
 import { DEFAULT_LIMITS, longerThan } from "./reader.js"
 import type { HRecord, HVariant, Value } from "./value.js"
@@ -233,13 +233,13 @@ class Formatter {
     const entries = values.map(entryOf)
     const end = this.source?.length ?? 0
     const list = this.entryList(0, end, entries, "", stream ? "," : "", stream, 0, true)
-    return this.run({ kind: "entries", list }).replace(/\n$/, "")
+    return guardStack(() => this.run({ kind: "entries", list }), encodeTooDeep()).replace(/\n$/, "")
   }
 
   /** Pretty: `v` at indentation 0, its errors under `at`. */
   value(v: Value, at: Path): string {
     this.begin(v, at)
-    return this.run({ kind: "value", value: v, ind: "", used: 0, depth: 0 })
+    return guardStack(() => this.run({ kind: "value", value: v, ind: "", used: 0, depth: 0 }), encodeTooDeep(at))
   }
 
   /**
@@ -250,7 +250,8 @@ class Formatter {
    */
   line(v: Value, at: Path): string {
     this.begin(v, at)
-    return this.inline(v, false, Infinity, 0, this.spacing)!
+    // The engine's stack overflow is `nesting-too-deep` at the value (spec §7).
+    return guardStack(() => this.inline(v, false, Infinity, 0, this.spacing)!, encodeTooDeep(at))
   }
 
   // ── checks ─────────────────────────────────────────────────

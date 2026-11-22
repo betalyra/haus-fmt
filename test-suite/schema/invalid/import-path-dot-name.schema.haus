@@ -1,0 +1,4 @@
+// rule: packages.relative.leading-dotdot
+// A path has no "." name (grammar.ebnf, path; spec §13.3): ./a/./b is not a path.
+import ./a/./b (A)
+type B = { a: A }

@@ -3,6 +3,7 @@
 //! prints how many passed; a failing case is printed and fails the test.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const haus = @import("haus");
 const build_options = @import("build_options");
 const Value = haus.Value;
@@ -897,15 +898,60 @@ fn writeCaseFile(dir: std.Io.Dir, sub: []const u8, bytes: []const u8) !void {
     try dir.writeFile(io, .{ .sub_path = sub, .data = bytes });
 }
 
-fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?[]const u8 {
-    const case_dir = try std.fmt.allocPrint(arena, "{s}/{d}", .{ base, index });
+const is_windows = builtin.os.tag == .windows;
+
+/// Makes `sub` (in `dir`) a FIFO, as `mkfifo` does (Unix only).
+fn makeFifo(dir: std.Io.Dir, sub: []const u8) !void {
+    if (is_windows) return error.Unsupported;
+    var buf: [std.posix.PATH_MAX]u8 = undefined;
+    if (sub.len >= buf.len) return error.NameTooLong;
+    @memcpy(buf[0..sub.len], sub);
+    buf[sub.len] = 0;
+    const z: [*:0]const u8 = buf[0..sub.len :0];
+    if (builtin.os.tag == .linux) {
+        const linux = std.os.linux;
+        if (linux.errno(linux.mknodat(dir.handle, z, linux.S.IFIFO | 0o644, 0)) != .SUCCESS) return error.MkfifoFailed;
+    } else {
+        const c = struct {
+            extern "c" fn mkfifoat(fd: std.c.fd_t, path: [*:0]const u8, mode: std.c.mode_t) c_int;
+        };
+        if (c.mkfifoat(dir.handle, z, 0o644) != 0) return error.MkfifoFailed;
+    }
+}
+
+/// Whether the tests run as root, whom permissions don't stop.
+fn runningAsRoot() bool {
+    if (is_windows) return false;
+    if (builtin.os.tag == .linux) return std.os.linux.geteuid() == 0;
+    return std.c.geteuid() == 0;
+}
+
+fn setMode(dir: std.Io.Dir, sub: []const u8, mode: u32) !void {
+    if (is_windows) return error.Unsupported;
+    try dir.setFilePermissions(io, sub, @fromBackingInt(@intCast(mode)), .{});
+}
+
+/// Writes the file tree of a case into `case_dir`. Returns the paths
+/// whose permissions a `Mode` entry changed.
+fn writeTree(arena: Allocator, case_dir: []const u8, case: Value) ![]const []const u8 {
     try std.Io.Dir.cwd().createDirPath(io, case_dir);
     var dir = try std.Io.Dir.cwd().openDir(io, case_dir, .{});
     defer dir.close(io);
     var links: std.ArrayList(haus.Variant) = .empty;
+    var modes: std.ArrayList(haus.Variant) = .empty;
     for (get(case, "files").?.array) |f| {
         const x = f.variant;
-        if (std.mem.eql(u8, x.tag, "File")) {
+        if (std.mem.eql(u8, x.tag, "Fifo")) {
+            if (std.fs.path.dirname(x.args[0].string)) |parent| try dir.createDirPath(io, parent);
+            try makeFifo(dir, x.args[0].string);
+        } else if (std.mem.eql(u8, x.tag, "Large")) {
+            const n = try std.fmt.parseInt(usize, x.args[1].number, 10);
+            const spaces = try arena.alloc(u8, n);
+            @memset(spaces, ' ');
+            try writeCaseFile(dir, x.args[0].string, spaces);
+        } else if (std.mem.eql(u8, x.tag, "Mode")) {
+            try modes.append(arena, x);
+        } else if (std.mem.eql(u8, x.tag, "File")) {
             try writeCaseFile(dir, x.args[0].string, x.args[1].string);
         } else if (std.mem.eql(u8, x.tag, "Package")) {
             var manifest: std.ArrayList(u8) = .empty;
@@ -929,7 +975,7 @@ fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?
             try writeCaseFile(dir, try std.fmt.allocPrint(arena, "{s}/package.json", .{x.args[0].string}), out.items);
         } else if (std.mem.eql(u8, x.tag, "Link")) {
             try links.append(arena, x);
-        } else return try std.fmt.allocPrint(arena, "unknown file entry {s}", .{x.tag});
+        } else return error.UnknownFileEntry;
     }
     // The links last, in order, once what they point to is there: Windows
     // needs to know whether a link is to a directory when it is made.
@@ -941,17 +987,52 @@ fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?
         const is_directory = if (dir.statFile(io, target, .{})) |st| st.kind == .directory else |_| false;
         try dir.symLink(io, x.args[1].string, path, .{ .is_directory = is_directory });
     }
+    // The permissions last, once the whole tree is written.
+    var changed: std.ArrayList([]const u8) = .empty;
+    for (modes.items) |x| {
+        try setMode(dir, x.args[0].string, try std.fmt.parseInt(u32, x.args[1].string, 8));
+        try changed.append(arena, x.args[0].string);
+    }
+    return changed.items;
+}
+
+/// Gives the owner back their permissions on what `writeTree` changed
+/// (`chmod u+rwx`), so that the tree left in place can be removed.
+fn restoreModes(case_dir: []const u8, changed: []const []const u8) void {
+    var dir = std.Io.Dir.cwd().openDir(io, case_dir, .{}) catch return;
+    defer dir.close(io);
+    for (changed) |sub| setMode(dir, sub, 0o755) catch {};
+}
+
+/// Runs a case on its tree in `case_dir`: null if it passed, else why
+/// not. With `as_trees`, each package given by its directory is given as
+/// a file tree (a directory handle) instead (spec §13.3,
+/// `packages.explicit.file-tree`); null is returned as `skipped` when the
+/// case has none that can be opened.
+fn runCase(arena: Allocator, case_dir: []const u8, case: Value, as_trees: bool) !?[]const u8 {
     var options: haus.packages.Options = .{};
     const mode = get(case, "mode").?.variant;
-    options.npm = std.mem.eql(u8, mode.tag, "Npm");
     var packages: std.ArrayList([]const u8) = .empty;
+    var trees: std.ArrayList(haus.packages.Tree) = .empty;
+    var opened: std.ArrayList(std.Io.Dir) = .empty;
+    defer for (opened.items) |d| d.close(io);
     var folders: std.ArrayList([]const u8) = .empty;
     if (mode.args.len > 0) {
-        if (get(mode.args[0], "packages")) |ps| for (ps.array) |p| try packages.append(arena, try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, p.string }));
+        if (get(mode.args[0], "packages")) |ps| for (ps.array) |p| {
+            const path = try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, p.string });
+            if (as_trees) {
+                const d = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return skipped;
+                try opened.append(arena, d);
+                try trees.append(arena, .{ .shown = p.string, .source = .{ .dir = d } });
+            } else try packages.append(arena, path);
+        };
         if (get(mode.args[0], "folders")) |fs| for (fs.array) |p| try folders.append(arena, try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, p.string }));
     }
+    if (as_trees and trees.items.len == 0) return skipped;
     options.packages = packages.items;
+    options.trees = trees.items;
     options.folders = folders.items;
+    if (get(case, "rootDir")) |r| options.root = try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, r.string });
     var d: haus.Diagnostic = .{};
     options.diagnostic = &d;
     const root = try std.fmt.allocPrint(arena, "{s}/{s}", .{ case_dir, get(case, "root").?.string });
@@ -974,7 +1055,9 @@ fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?
         return try std.fmt.allocPrint(arena, "accepted, want {s}", .{code});
     } else |_| {}
     if (!std.mem.eql(u8, d.code.name(), code)) return try std.fmt.allocPrint(arena, "{f}, want {s}", .{ d, code });
-    const message = d.message();
+    // Paths in `mentions` use `/`: every `\` of the message is read as one.
+    const message = try arena.dupe(u8, d.message());
+    std.mem.replaceScalar(u8, message, '\\', '/');
     if (get(expect.args[0], "mentions")) |ms| for (ms.array) |m| {
         if (std.mem.indexOf(u8, message, m.string) == null) return try std.fmt.allocPrint(arena, "{f}: doesn't mention {s}", .{ d, m.string });
     };
@@ -984,22 +1067,108 @@ fn packageCase(arena: Allocator, base: []const u8, index: usize, case: Value) !?
     return null;
 }
 
+/// What `runCase` gives for a case that doesn't apply.
+const skipped: []const u8 = "(skipped)";
+
+fn isSkipped(why: ?[]const u8) bool {
+    return if (why) |w| w.ptr == skipped.ptr else false;
+}
+
+/// A case run on a thread of its own, so that a resolver that blocks (on
+/// a FIFO) fails the case after a timeout instead of hanging the suite.
+const Job = struct {
+    arena_state: std.heap.ArenaAllocator,
+    case_dir: []const u8,
+    case: Value,
+    why: ?[]const u8 = null,
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn run(job: *Job) void {
+        const a = job.arena_state.allocator();
+        job.why = runCase(a, job.case_dir, job.case, false) catch |e| blk: {
+            const why: []const u8 = std.fmt.allocPrint(a, "adapter error {s}", .{@errorName(e)}) catch "adapter error";
+            break :blk why;
+        };
+        job.done.store(true, .release);
+    }
+};
+
+fn runWithTimeout(arena: Allocator, case_dir: []const u8, case: Value, seconds: i64) !?[]const u8 {
+    // Not freed if the case hangs: the thread may still use it.
+    const job = try std.heap.page_allocator.create(Job);
+    job.* = .{ .arena_state = .init(std.heap.page_allocator), .case_dir = case_dir, .case = case };
+    const thread = try std.Thread.spawn(.{}, Job.run, .{job});
+    var waited: i64 = 0;
+    while (!job.done.load(.acquire)) : (waited += 10) {
+        if (waited >= seconds * 1000) {
+            thread.detach();
+            return try std.fmt.allocPrint(arena, "timed out after {d} s (the build blocks)", .{seconds});
+        }
+        try io.sleep(.fromMilliseconds(10), .awake);
+    }
+    thread.join();
+    defer {
+        job.arena_state.deinit();
+        std.heap.page_allocator.destroy(job);
+    }
+    return if (job.why) |w| try arena.dupe(u8, w) else null;
+}
+
+fn hasEntry(case: Value, tag: []const u8) bool {
+    for (get(case, "files").?.array) |f| if (std.mem.eql(u8, f.variant.tag, tag)) return true;
+    return false;
+}
+
 fn packagesSuite() !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var tally = Tally{ .name = "packages/cases.haus" };
+    var as_trees = Tally{ .name = "packages/cases.haus, packages given as file trees" };
+    var other_ecosystem: usize = 0;
+    var other_os: usize = 0;
+    var as_root: usize = 0;
     // A fresh directory for the trees (left in place: nothing is deleted).
     const tmp = environ.get("TMPDIR") orelse environ.get("TEMP") orelse environ.get("TMP") orelse "/tmp";
     const now = std.Io.Clock.real.now(io).nanoseconds;
-    const base = try std.fmt.allocPrint(arena, "{s}/haus-zig-packages-{d}", .{ std.mem.trimEnd(u8, tmp, "/"), now });
-    for (try readCases(arena, "packages/cases.haus"), 0..) |case, i| {
+    const base = try std.fmt.allocPrint(arena, "{s}/haus-zig-packages-{d}", .{ std.mem.trimEnd(u8, tmp, "/\\"), now });
+    const cases = try readCases(arena, "packages/cases.haus");
+    for (cases, 0..) |case, i| {
         const fields = case.variant.args[0];
         const name = get(fields, "name").?.string;
-        const why = packageCase(arena, base, i, fields) catch |e| try std.fmt.allocPrint(arena, "adapter error {s}", .{@errorName(e)});
+        // Only the core rules: this binding belongs to no package
+        // manager's ecosystem, and never reads node_modules.
+        if (!std.mem.eql(u8, get(fields, "ecosystem").?.string, "core")) {
+            other_ecosystem += 1;
+            continue;
+        }
+        if (get(fields, "os")) |os| if (std.mem.eql(u8, os.string, "unix") and is_windows) {
+            other_os += 1;
+            continue;
+        };
+        if (hasEntry(fields, "Mode") and runningAsRoot()) {
+            as_root += 1;
+            continue;
+        }
+        const case_dir = try std.fmt.allocPrint(arena, "{s}/{d}", .{ base, i });
+        const changed = writeTree(arena, case_dir, fields) catch |e| {
+            tally.check(false, "{s}: adapter error {s}", .{ name, @errorName(e) });
+            continue;
+        };
+        defer restoreModes(case_dir, changed);
+        const why = if (hasEntry(fields, "Fifo"))
+            try runWithTimeout(arena, case_dir, fields, 5)
+        else
+            runCase(arena, case_dir, fields, false) catch |e| try std.fmt.allocPrint(arena, "adapter error {s}", .{@errorName(e)});
         tally.check(why == null, "{s}: {s}", .{ name, why orelse "" });
+        // The same case with its packages given as file trees.
+        if (hasEntry(fields, "Fifo")) continue;
+        const why_tree = runCase(arena, case_dir, fields, true) catch |e| try std.fmt.allocPrint(arena, "adapter error {s}", .{@errorName(e)});
+        if (!isSkipped(why_tree)) as_trees.check(why_tree == null, "{s}: {s}", .{ name, why_tree orelse "" });
     }
+    try stdout.print("  ({d} cases of other ecosystems (npm, cargo), {d} Unix-only cases on Windows, {d} permission cases as root: skipped)\n", .{ other_ecosystem, other_os, as_root });
     try tally.report();
+    try as_trees.report();
 }
 
 pub fn main(init: std.process.Init) !void {

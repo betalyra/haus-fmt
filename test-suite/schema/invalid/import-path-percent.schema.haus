@@ -1,0 +1,3 @@
+// A file path has no "%" (grammar.ebnf, path): nothing in it is decoded.
+import ./%2e%2e/x (A)
+type B = { a: A }

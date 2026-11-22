@@ -115,6 +115,22 @@ def Tree.at? (t : Tree) (p : Path) : Option Entry :=
   | some n, d => t.child? d n
   | none, _ => some .dir
 
+/--
+Whether the entry at `p` itself is there, as `lstat` sees it: its directory
+resolves, and lists its last name. A dangling link is there.
+-/
+def Tree.present (t : Tree) (p : Path) : Bool :=
+  match p.getLast?, t.realPath p.dropLast with
+  | some n, .ok d => (t.child? d n).isSome
+  | _, _ => false
+
+/--
+Whether a place of the npm walk whose real path failed with `f` stops the
+walk (§13.3): it is there but can't be followed (a dangling link), or a cycle
+of links is on its way. Only a place that isn't there lets the walk go on.
+-/
+def Tree.stops (t : Tree) (p : Path) (f : Fault) : Bool := f == .loop || t.present p
+
 /-- The directories from `d` up to the root, nearest first. -/
 def ancestors (d : Path) : List Path := (List.range (d.length + 1)).reverse.map d.take
 
@@ -122,6 +138,18 @@ def ancestors (d : Path) : List Path := (List.range (d.length + 1)).reverse.map 
 
 /-- Whether a real path is a directory. -/
 def Tree.isDir (t : Tree) (p : Path) : Bool := t.at? p == some .dir
+
+/--
+Whether the directory `d` can be listed. The model has no permissions, so
+every directory can: this names the case so that the checks that need a
+listing say what they do without one (§13.3, "Spelling" and "Imports"). A
+binding's directory that can't be listed (`EACCES`) shows no name, and the
+check of a relative import's target for a package's directory fails closed
+on it (`Haus.Packages.inPackage`), as the npm walk does on a directory on
+its way up (`Haus.Packages.npmLookup`); the suite's cases with a `Mode`
+entry, which the reference doesn't run, test that.
+-/
+def Tree.listable (_t : Tree) (_d : Path) : Bool := true
 
 /--
 An entry without a file's bytes: what `lstat` tells about it. Everything the
@@ -163,6 +191,8 @@ private def ex : Tree := ⟨[
 #guard (match ex.realPath ["a", "f.txt", "x"] with | .error f => f == .notDir | .ok _ => false)
 #guard (match ex.realPath ["A", "f.txt"] with | .error f => f == .missing | .ok _ => false)
 #guard ex.list ["a"] = ["f.txt", "up", "loop", "dangling"]
+#guard ex.present ["a", "dangling"] && ex.present ["a", "loop"] && !ex.present ["a", "missing"]
+#guard !ex.present ["c", "x"] && ex.stops ["a", "dangling"] .missing && !ex.stops ["c", "x"] .missing
 
 end Examples
 

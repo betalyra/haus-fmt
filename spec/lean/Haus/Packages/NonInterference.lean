@@ -178,9 +178,38 @@ theorem at? (h : Same D t t') (p : Path) :
 
 theorem realPath (h : Same D t t') (p : Path) : t.realPath p = t'.realPath p := h.resolve _ _ _
 
-theorem inPackage (h : Same D t t') (p : Path) : Haus.Packages.inPackage t p = Haus.Packages.inPackage t' p := by
+theorem inPackage (h : Same D t t') (base p : Path) :
+    Haus.Packages.inPackage t base p = Haus.Packages.inPackage t' base p := by
   unfold Haus.Packages.inPackage
-  simp only [h.childKind]
+  congr 1
+  funext d
+  rw [h.childKind]
+  rfl
+
+theorem present (h : Same D t t') (p : Path) : t.present p = t'.present p := by
+  have hc : ∀ d n, (t.child? d n).isSome = (t'.child? d n).isSome := fun d n => by
+    simpa [Tree.childKind?] using congrArg Option.isSome (h.childKind d n)
+  unfold Tree.present
+  rw [h.realPath]
+  cases p.getLast? <;> cases t'.realPath p.dropLast <;> simp [hc]
+
+theorem stops (h : Same D t t') (p : Path) (f : Fault) : t.stops p f = t'.stops p f := by
+  unfold Tree.stops; rw [h.present]
+
+theorem baseRes (h : Same D t t') (o : Option Path) (root real : Path) :
+    Haus.Packages.baseRes t o root real = Haus.Packages.baseRes t' o root real := by
+  unfold Haus.Packages.baseRes; simp only [h.realPath, h.isDir]
+
+theorem walkNames (h : Same D t t') (d : Path) (names : List String) :
+    Haus.Packages.walkNames t d names = Haus.Packages.walkNames t' d names := by
+  induction names generalizing d with
+  | nil => rfl
+  | cons n rest ih =>
+    simp only [Haus.Packages.walkNames, h.childKind, ih]
+
+theorem fileTarget (h : Same D t t') (base p : Path) (path : String) :
+    Haus.Packages.fileTarget t base p path = Haus.Packages.fileTarget t' base p path := by
+  unfold Haus.Packages.fileTarget; simp only [h.walkNames]
 
 end Same
 
@@ -261,6 +290,13 @@ theorem withReader {x : M α} (hx : NI D x) (g : List Given) (b : List String) :
   rw [go_withReader, go_withReader]
   exact this
 
+theorem withReaderBase {x : M α} (hx : NI D x) (b : Path) :
+    NI D (MonadWithReader.withReader (fun (e : Env) => { e with base := b }) x) := by
+  intro env t' s h
+  have := hx { env with base := b } t' s h
+  rw [go_withReader, go_withReader]
+  exact this
+
 theorem forIn {xs : List γ} {b : β} {f : γ → β → M (ForInStep β)} (h : ∀ a b, NI D (f a b)) :
     NI D (ForIn.forIn xs b f) := by
   induction xs generalizing b with
@@ -322,7 +358,10 @@ macro "look_ok" : tactic => `(tactic| first
   | exact fun _ _ h => h.isDir _
   | exact fun _ _ h => h.list _
   | exact fun _ _ h => h.resolve _ _ _
-  | exact fun _ _ h => h.inPackage _
+  | exact fun _ _ h => h.inPackage _ _
+  | exact fun _ _ h => h.stops _ _
+  | exact fun _ _ h => h.fileTarget _ _ _
+  | exact fun _ _ h => h.baseRes _ _ _
   | exact fun _ _ h => congrArg (· + 1) h.length)
 
 macro "nistep" : tactic => `(tactic| first
@@ -340,6 +379,7 @@ macro "nistep" : tactic => `(tactic| first
   | with_reducible refine NI.tryCatch ?_ fun _ => ?_
   | with_reducible refine NI.map ?_
   | with_reducible refine NI.withReader ?_ _ _
+  | with_reducible refine NI.withReaderBase ?_ _
   | split
   | dsimp only
   | exact NI.pure

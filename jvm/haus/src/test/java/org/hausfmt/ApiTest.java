@@ -185,15 +185,14 @@ class ApiTest {
 
   /**
    * A value {@code n} levels deep, by turns an array, a variant with arguments and a variant with a
-   * record payload, around {@code inner}. The constructors build no value deeper than {@link
-   * Limits#MAX_SUPPORTED_DEPTH}; the arrays here are built with the package's constructor that
-   * takes a depth known already, given 1, so that the value can be deeper than that.
+   * record payload, around {@code inner}, built with the public constructors, which take any depth
+   * (spec §7).
    */
-  private static Value veryDeep(int n, Value inner) {
+  static Value veryDeep(int n, Value inner) {
     Value v = inner;
     for (int i = 0; i < n; i++) {
       switch (i % 3) {
-        case 0 -> v = new Value.Array(new Value[] {v}, 1);
+        case 0 -> v = Value.array(v);
         case 1 -> v = Value.variant("Some", v, Value.number(i));
         default -> v = Value.variant("Node", Value.record(Value.field("next", v), Value.field("a b", Value.string("x"))));
       }
@@ -441,7 +440,12 @@ class ApiTest {
       v = Value.array(v);
     }
     Value deepestValue = v;
-    assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Value.array(deepestValue)));
+    // A value built in code may be deeper than the supported depth (spec §7); the writers and
+    // check() reject it.
+    Value deeper = Value.array(deepestValue);
+    assertEquals(Limits.MAX_SUPPORTED_DEPTH + 1, deeper.depth());
+    assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Haus.write(deeper, FormatOptions.of(Layout.COMPACT).withLimits(deepest))));
+    assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Haus.check(deeper, deepest)));
     // A configured depth below the value's depth is reported by the writers.
     FormatOptions shallower = FormatOptions.of(Layout.COMPACT).withLimits(Limits.DEFAULT.withMaxDepth(Limits.MAX_SUPPORTED_DEPTH - 1));
     assertEquals(ErrorCode.NESTING_TOO_DEEP, code(() -> Haus.write(deepestValue, shallower)));

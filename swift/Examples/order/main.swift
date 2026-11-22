@@ -42,7 +42,8 @@ struct Order: Codable {
 
 do {
     // The packages the schema imports, @haus-fmt/money and @haus-fmt/geo,
-    // given by their directories (.nodeModules finds them in node_modules instead).
+    // given in a folder (a Swift package can ship them as resources:
+    // PackageLocator.explicit(in: Bundle.module, folders: […])).
     let packages = try PackageLocator.explicit(folders: [root.appendingPathComponent("extensions").path])
     let schema = try HausSchema(
         contentsOf: root.appendingPathComponent("examples/order.schema.haus").path,

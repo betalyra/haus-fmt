@@ -21,6 +21,11 @@ use std::fmt::Write as _;
 /// proportion to the type's size: see the README.
 pub const MAX_SUPPORTED_DEPTH: usize = 256;
 
+/// How many levels of a [`crate::Value`] or [`crate::Json`] `{:?}` shows:
+/// deeper arrays, records, arguments and objects are `…`, so that printing
+/// a value built in code of any depth takes a bounded stack (spec §7).
+pub const DEBUG_DEPTH: usize = 64;
+
 /// Resource limits (spec §7): enforced while parsing, and by the writers,
 /// which check a value against the limits of the reader it is for (§11).
 /// The canonical form and hashing apply none of them (§12).

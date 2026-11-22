@@ -40,6 +40,7 @@ inductive Code
   | schemaSyntax | unknownModule | unknownImport | duplicateImport | duplicateType
   | importNotFound | importVersion | importCycle | duplicatePackage | undeclaredPackage
   | packageManifest | packageVersion | packagePath | fileTooLarge | tooManyFiles
+  | importOutsideRoot
   -- the static rules of schema files (§14), as the schema-file checker reports them
   | wrongArity | redefinePrelude | unknownParameter | invalidParameter | underscoreType
   | duplicateField | duplicateTag | closedEmptyVariant | invalidSpread | spreadCycle
@@ -133,6 +134,7 @@ def Code.name : Code → String
   | .packagePath => "package-path"
   | .fileTooLarge => "file-too-large"
   | .tooManyFiles => "too-many-files"
+  | .importOutsideRoot => "import-outside-root"
   | .wrongArity => "wrong-arity"
   | .redefinePrelude => "redefine-prelude"
   | .unknownParameter => "unknown-parameter"
@@ -172,7 +174,7 @@ def Code.all : List Code := [
   .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm, .schemaSyntax,
   .unknownModule, .unknownImport, .duplicateImport, .duplicateType, .importNotFound,
   .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest,
-  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles, .wrongArity, .redefinePrelude,
+  .packageVersion, .packagePath, .fileTooLarge, .tooManyFiles, .importOutsideRoot, .wrongArity, .redefinePrelude,
   .unknownParameter, .invalidParameter, .underscoreType, .duplicateField, .duplicateTag,
   .closedEmptyVariant, .invalidSpread, .spreadCycle, .rowParameter, .misplacedStream,
   .growingRecursion, .typeTooDeep, .attributeArguments, .attributeTwice, .attributeSpace,

@@ -45,10 +45,13 @@ fn app(root: &Path) -> std::path::PathBuf {
     main
 }
 
-/// The Rust code for the schema at `path`, packages given explicitly, in crates named after them.
+/// The Rust code for the schema at `path`, packages given explicitly, in
+/// crates named after them. The build's root is the directory above the
+/// schema's, so that the app's `../` imports stay inside it (spec §13.3).
 fn rust(config: &Config, path: &Path, packages: &Explicit) -> Result<String, haus_build::Error> {
     let krate = |name: &str| name.trim_start_matches('@').replace(['/', '-', '.'], "_");
-    config.generate(path, &Options { packages, ..Options::default() }, &krate)
+    let root = path.parent().and_then(Path::parent);
+    config.generate(path, &Options { packages, root, ..Options::default() }, &krate)
 }
 
 #[test]
@@ -76,7 +79,7 @@ fn an_application_split_into_files_in_rust() {
 #[test]
 fn an_application_split_into_files_in_roc() {
     let dir = tempfile::tempdir().unwrap();
-    let modules = RocConfig::new().modules(&app(dir.path()), "Order", "order").unwrap();
+    let modules = RocConfig::new().root(dir.path()).modules(&app(dir.path()), "Order", "order").unwrap();
     let names: Vec<&str> = modules.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["Order", "OrderUpBillingCommon", "OrderUpSharedMoney", "OrderUpShippingCommon"]);
     let code = |name: &str| modules.iter().find(|(n, _)| n == name).map(|(_, c)| c.as_str()).unwrap();
@@ -94,8 +97,11 @@ fn an_application_split_into_files_in_roc() {
     assert!(billing.contains("haus type `../billing/common#Address`"), "{billing}");
     assert!(code("OrderUpShippingCommon").contains("haus type `../shipping/common#Address`"));
     // One module has no room for the others.
-    let e = RocConfig::new().generate(&app(dir.path()), "Order", "order").unwrap_err();
+    let e = RocConfig::new().root(dir.path()).generate(&app(dir.path()), "Order", "order").unwrap_err();
     assert_eq!(e.code(), ErrorCode::ImportUnavailable, "{e}");
+    // By default the root is the schema's directory: ../billing goes above it.
+    let e = RocConfig::new().modules(&app(dir.path()), "Order", "order").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ImportOutsideRoot, "{e}");
 }
 
 #[test]
@@ -105,13 +111,23 @@ fn haus_gen_writes_the_modules_of_imported_files_next_to_out() {
     fs::create_dir_all(out.parent().unwrap()).unwrap();
     let haus_gen = |args: &[&str]| Command::new(env!("CARGO_BIN_EXE_haus-gen")).args(args).output().unwrap();
     let schema = app(dir.path());
-    let run = haus_gen(&["roc", schema.to_str().unwrap(), "--module", "Order", "--out", out.to_str().unwrap()]);
+    let root = dir.path().to_str().unwrap();
+    let run = haus_gen(&[
+        "roc",
+        schema.to_str().unwrap(),
+        "--module",
+        "Order",
+        "--root",
+        root,
+        "--out",
+        out.to_str().unwrap(),
+    ]);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     for module in ["Order", "OrderUpBillingCommon", "OrderUpShippingCommon", "OrderUpSharedMoney"] {
         assert!(dir.path().join(format!("roc/{module}.roc")).is_file(), "{module}");
     }
     // Without --out there is nowhere to write them.
-    let run = haus_gen(&["roc", schema.to_str().unwrap(), "--module", "Order"]);
+    let run = haus_gen(&["roc", schema.to_str().unwrap(), "--module", "Order", "--root", root]);
     assert!(!run.status.success());
     assert!(String::from_utf8_lossy(&run.stderr).contains("give --out"));
 }
@@ -360,7 +376,11 @@ fn a_codec_for_a_type_of_an_imported_file() {
     let main = app(dir.path());
     let code = rust(&Config::new().codec("../shared/money#Money", "crate::Cents"), &main, &Explicit::new()).unwrap();
     assert!(code.contains("pub owes: ::std::option::Option<<crate::Cents as ::haus::Codec>::Target>"), "{code}");
-    let modules = RocConfig::new().codec("../shared/money#Money", "Cents").modules(&main, "Order", "order").unwrap();
+    let modules = RocConfig::new()
+        .root(dir.path())
+        .codec("../shared/money#Money", "Cents")
+        .modules(&main, "Order", "order")
+        .unwrap();
     for (name, code) in &modules {
         let uses = code.contains("Cents.decode");
         assert_eq!(code.contains("import Cents\n"), uses, "{name}: {code}");
@@ -452,7 +472,7 @@ fn spreads_of_imported_types_in_rust() {
 #[test]
 fn spreads_of_imported_types_in_roc() {
     let dir = tempfile::tempdir().unwrap();
-    let modules = RocConfig::new().json().modules(&spreads(dir.path()), "Order", "order").unwrap();
+    let modules = RocConfig::new().root(dir.path()).json().modules(&spreads(dir.path()), "Order", "order").unwrap();
     let order = &modules.iter().find(|(n, _)| n == "Order").unwrap().1;
     for part in [
         // Order imports no Money: the copied field brings its module in.

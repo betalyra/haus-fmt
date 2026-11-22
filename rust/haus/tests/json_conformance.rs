@@ -12,15 +12,15 @@ fn suite(path: &str) -> PathBuf {
 }
 
 /// JSON with every object's members sorted, to compare as data.
-fn sorted(json: Json) -> Json {
-    match json {
-        Json::Array(items) => Json::Array(items.into_iter().map(sorted).collect()),
+fn sorted(mut json: Json) -> Json {
+    match &mut json {
+        Json::Array(items) => Json::Array(std::mem::take(items).into_iter().map(sorted).collect()),
         Json::Object(members) => {
-            let mut members: Vec<_> = members.into_iter().map(|(k, v)| (k, sorted(v))).collect();
+            let mut members: Vec<_> = std::mem::take(members).into_iter().map(|(k, v)| (k, sorted(v))).collect();
             members.sort_by(|a, b| a.0.cmp(&b.0));
             Json::object(members).expect("names are unique")
         }
-        other => other,
+        _ => json,
     }
 }
 

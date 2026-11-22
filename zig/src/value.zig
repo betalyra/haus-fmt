@@ -54,8 +54,12 @@ pub const Limits = struct {
     max_nodes: u64 = 64 * 1024 * 1024,
 
     /// The deepest nesting this binding supports (spec §7): the parser,
-    /// writers and formatter recurse, one call per level.
-    pub const supported_depth: u32 = 4096;
+    /// writers, formatter, decoder and JSON readers recurse, one call per
+    /// level. At 256, every one of them runs on a thread with a 512 KiB
+    /// stack in the release modes (tested in root.zig); a Debug build
+    /// needs about 2 MiB there (its frames are larger). 512 overflowed the
+    /// decoder on 512 KiB in ReleaseSafe, 4096 the parser.
+    pub const supported_depth: u32 = 256;
 
     /// The largest h with 16^h ≤ 10^(n−1): every integer of h hex digits has
     /// a decimal form of at most n characters, sign included (spec §7).

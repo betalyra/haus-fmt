@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	haus "github.com/betalyra/haus-fmt/go"
 	"github.com/betalyra/haus-fmt/go/schema"
@@ -15,8 +19,10 @@ import (
 
 // The package suite (test-suite/packages, spec §13.3): each case is a file
 // tree, written into a temporary directory, a schema file loaded from it
-// with packages found in node_modules (Npm) or given explicitly (Explicit),
-// and the result. See test-suite/README.md, "Package suite".
+// with packages given explicitly, and the result. See test-suite/README.md,
+// "Package suite". This binding implements the core rules: it runs the
+// cases of the ecosystem "core" and skips the npm ones, as it doesn't look
+// in node_modules.
 
 func strs(v haus.Value) []string {
 	a, _ := v.(haus.Array)
@@ -34,6 +40,13 @@ func create(t *testing.T, root string, entry haus.Variant) {
 	switch entry.Tag.String() {
 	case "File":
 		write(t, filepath.Join(root, at(0)), at(1))
+	case "Large":
+		size, _ := entry.Args[1].(haus.Number)
+		n, err := strconv.Atoi(size.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		write(t, filepath.Join(root, at(0)), strings.Repeat(" ", n))
 	case "Package":
 		dir := filepath.Join(root, at(0))
 		name, _ := json.Marshal(at(1))
@@ -59,59 +72,88 @@ func create(t *testing.T, root string, entry haus.Variant) {
 		}
 		b, _ := json.Marshal(doc)
 		write(t, filepath.Join(root, at(0), "package.json"), string(b))
+	case "Fifo":
+		fifo := filepath.Join(root, at(0))
+		if err := os.MkdirAll(filepath.Dir(fifo), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := mkfifo(fifo); err != nil {
+			t.Fatal(err)
+		}
 	case "Link":
 		// On Windows, making links needs Developer Mode or an administrator
 		// (as on CI); os.Symlink writes the target with \ and makes a link to
 		// a directory as one if the directory exists: links are made last.
-		path := filepath.Join(root, at(0))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		link := filepath.Join(root, at(0))
+		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(at(1), path); err != nil {
+		if err := os.Symlink(at(1), link); err != nil {
 			t.Fatal(err)
 		}
+	case "Mode":
+		// Set after the whole tree is written (writeTree).
 	default:
 		t.Fatalf("unknown file entry %s", entry.Tag.String())
 	}
 }
 
+// how says where a case's packages come from: from disk, or from file trees
+// over the same directories (os.DirFS), given in code.
+type how int
+
+const (
+	fromDisk how = iota
+	fromTree
+)
+
 // given returns the packages a case gives explicitly ({ packages?, folders? }).
-func given(root string, args []haus.Value) (*schema.Explicit, error) {
+func given(root string, args []haus.Value, h how) (*schema.Explicit, error) {
 	e := schema.NewExplicit()
 	if len(args) == 0 {
 		return e, nil
 	}
 	r := args[0].(haus.Record)
+	fsys := os.DirFS(root)
 	var err error
 	for _, dir := range strs(get(r, "packages")) {
-		if e, err = e.Package(filepath.Join(root, dir)); err != nil {
+		if h == fromTree {
+			e, err = e.PackageFS(fsys, path.Clean(dir))
+		} else {
+			e, err = e.Package(filepath.Join(root, dir))
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
 	for _, dir := range strs(get(r, "folders")) {
-		if e, err = e.Folder(filepath.Join(root, dir)); err != nil {
+		if h == fromTree {
+			e, err = e.FolderFS(fsys, path.Clean(dir))
+		} else {
+			e, err = e.Folder(filepath.Join(root, dir))
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
 	return e, nil
 }
 
-// load loads the case's root in its mode: the packages reached, or the error.
-func load(root string, c haus.Record) ([]string, error) {
+// load loads the case's root: the packages reached, or the error.
+func load(root string, c haus.Record, h how) ([]string, error) {
 	mode := get(c, "mode").(haus.Variant)
-	explicit, err := given(root, mode.Args)
+	if mode.Tag.String() != "Explicit" {
+		return nil, fmt.Errorf("mode %s: this binding reads no node_modules", mode.Tag.String())
+	}
+	explicit, err := given(root, mode.Args, h)
 	if err != nil {
 		return nil, err
 	}
-	var packages schema.Locator = explicit
-	switch mode.Tag.String() {
-	case "Npm":
-		packages = schema.Or{First: explicit, Second: schema.NodeModules{}}
-	case "Explicit":
-	default:
-		return nil, fmt.Errorf("unknown mode %s", mode.Tag.String())
+	opts := schema.Options{Packages: explicit}
+	if dir, ok := get(c, "rootDir").(haus.String); ok {
+		opts.Root = filepath.Join(root, string(dir))
 	}
-	s, err := schema.Load(filepath.Join(root, str(get(c, "root"))), schema.Options{Packages: packages})
+	s, err := schema.Load(filepath.Join(root, str(get(c, "root"))), opts)
 	if err != nil {
 		return nil, err
 	}
@@ -123,25 +165,66 @@ func load(root string, c haus.Record) ([]string, error) {
 	return reached, nil
 }
 
+// entries returns the case's file entries tagged tag.
+func entries(c haus.Record, tag string) []haus.Variant {
+	var out []haus.Variant
+	for _, f := range get(c, "files").(haus.Array) {
+		if e := f.(haus.Variant); e.Tag.String() == tag {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // writeTree writes a case's files under root: links last, once their
-// targets exist.
+// targets exist, then the modes. Directories whose mode is set get their
+// owner's permissions back before the temporary directory is removed.
 func writeTree(t *testing.T, root string, c haus.Record) {
-	files := get(c, "files").(haus.Array)
 	for _, links := range []bool{false, true} {
-		for _, f := range files {
+		for _, f := range get(c, "files").(haus.Array) {
 			entry := f.(haus.Variant)
 			if (entry.Tag.String() == "Link") == links {
 				create(t, root, entry)
 			}
 		}
 	}
+	for _, m := range entries(c, "Mode") {
+		dir := filepath.Join(root, str(m.Args[0]))
+		mode, err := strconv.ParseUint(str(m.Args[1]), 8, 32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, os.FileMode(mode)); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	}
 }
 
+// caseTimeout bounds a case: a resolver that opens a FIFO blocking would
+// hang.
+const caseTimeout = 10 * time.Second
+
 // failure runs a case: "" if it passes, what went wrong otherwise.
-func failure(t *testing.T, c haus.Record) string {
+func failure(t *testing.T, c haus.Record, h how) string {
 	root := t.TempDir()
 	writeTree(t, root, c)
-	reached, err := load(root, c)
+	type result struct {
+		reached []string
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		reached, err := load(root, c, h)
+		done <- result{reached, err}
+	}()
+	var r result
+	select {
+	case r = <-done:
+	case <-time.After(caseTimeout):
+		return fmt.Sprintf("no result after %v (a blocking open?)", caseTimeout)
+	}
+	reached, err := r.reached, r.err
 	expect := get(c, "expect").(haus.Variant)
 	want := expect.Args[0].(haus.Record)
 	switch {
@@ -171,6 +254,28 @@ func failure(t *testing.T, c haus.Record) string {
 			return fmt.Sprintf("the message shows %q: %s", h, message)
 		}
 	}
+	// Messages show paths relative to the root, never absolute ones (spec
+	// §13.3, "The root").
+	resolved, _ := filepath.EvalSymlinks(root)
+	for _, abs := range []string{root, resolved} {
+		if abs != "" && strings.Contains(message, abs) {
+			return fmt.Sprintf("the message shows the absolute path %s: %s", abs, message)
+		}
+	}
+	return ""
+}
+
+// skipped says why a case doesn't run here, or "".
+func skipped(c haus.Record) string {
+	if eco := str(get(c, "ecosystem")); eco != "core" {
+		return eco
+	}
+	if s, ok := get(c, "os").(haus.String); ok && string(s) == "unix" && runtime.GOOS == "windows" {
+		return "unix"
+	}
+	if len(entries(c, "Mode")) > 0 && os.Geteuid() == 0 {
+		return "root"
+	}
 	return ""
 }
 
@@ -194,48 +299,61 @@ func packageCases(t *testing.T) []haus.Record {
 	return cases
 }
 
-// TestPackageSuite runs every case: this binding reads node_modules, takes
-// packages explicitly and makes the SHOULD version check (should: True).
+// TestPackageSuite runs every case of the ecosystem "core" (spec §13.3):
+// this binding takes packages explicitly, reads no node_modules and makes
+// the SHOULD version check (should: True).
 func TestPackageSuite(t *testing.T) {
 	cases := packageCases(t)
-	should := 0
+	ran, should := 0, 0
+	skips := map[string]int{}
 	for _, c := range cases {
+		name := str(get(c, "name"))
+		if why := skipped(c); why != "" {
+			skips[why]++
+			continue
+		}
+		ran++
 		if s, ok := get(c, "should").(haus.Variant); ok && s.Tag.String() == "True" {
 			should++
 		}
-		name := str(get(c, "name"))
 		t.Run(name, func(t *testing.T) {
-			if why := failure(t, c); why != "" {
+			if why := failure(t, c, fromDisk); why != "" {
 				t.Error(why)
 			}
 		})
 	}
-	if len(cases) != 99 {
-		t.Errorf("%d cases, expected 99", len(cases))
+	if len(cases) != 133 || skips["npm"] != 46 {
+		t.Errorf("%d cases, %d npm, expected 133 and 46", len(cases), skips["npm"])
 	}
-	t.Logf("package suite: %d cases run (%d of them the SHOULD version check), 0 skipped", len(cases), should)
+	t.Logf("package suite: %d cases run (%d of them the SHOULD version check), skipped: %v", ran, should, skips)
 }
 
-// TestCopiesInEitherOrder: copies are one package only if their imports
-// reach the same packages, whichever copy is loaded first (spec §13.3).
-func TestCopiesInEitherOrder(t *testing.T) {
-	var c haus.Record
-	for _, x := range packageCases(t) {
-		if str(get(x, "name")) == "identical-copies-different-dependencies" {
-			c = x
+// TestPackageSuiteFromTrees runs the core cases that give packages again,
+// with each package and folder given as a file tree over the same directory
+// (os.DirFS, spec §13.3 packages.explicit.file-tree): the same results,
+// except where a case has links, which a tree follows none of.
+func TestPackageSuiteFromTrees(t *testing.T) {
+	ran, withLinks := 0, 0
+	for _, c := range packageCases(t) {
+		mode := get(c, "mode").(haus.Variant)
+		name := str(get(c, "name"))
+		if skipped(c) != "" || len(mode.Args) == 0 {
+			continue
 		}
-	}
-	for _, text := range []string{
-		"import @acme/orders@1 (Order)\nimport @acme/billing@1 (Bill)\ntype Root = { order: Order, bill: Bill }",
-		"import @acme/billing@1 (Bill)\nimport @acme/orders@1 (Order)\ntype Root = { order: Order, bill: Bill }",
-	} {
-		root := t.TempDir()
-		writeTree(t, root, c)
-		write(t, filepath.Join(root, "app", "app.schema.haus"), text)
-		_, err := load(root, c)
-		code, _ := codeAndPath(err)
-		if code != haus.CodeDuplicatePackage || !strings.Contains(err.Error(), "1.2.0") || !strings.Contains(err.Error(), "1.4.0") {
-			t.Errorf("%q: %v", text, err)
+		r := mode.Args[0].(haus.Record)
+		if len(strs(get(r, "packages")))+len(strs(get(r, "folders"))) == 0 {
+			continue
 		}
+		if len(entries(c, "Link")) > 0 {
+			withLinks++
+			continue
+		}
+		ran++
+		t.Run(name, func(t *testing.T) {
+			if why := failure(t, c, fromTree); why != "" {
+				t.Error(why)
+			}
+		})
 	}
+	t.Logf("package suite from file trees: %d cases run, %d with links left out", ran, withLinks)
 }

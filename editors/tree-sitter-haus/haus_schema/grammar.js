@@ -15,6 +15,8 @@ const { LOWER_IDENTIFIER, UPPER_IDENTIFIER, commaList, externals, extras, rules,
 // A type name is lexed like a tag (`[A-Z][A-Za-z0-9_]*`): one token, named by
 // where it stands.
 const typeName = ($) => alias($.tag, $.type_name);
+/** A name in a file path (grammar.ebnf, path_name): not `.`, `..` or a hidden name. */
+const PATH_NAME = /[A-Za-z0-9_-][A-Za-z0-9_.-]*/;
 
 module.exports = grammar({
   name: 'haus_schema',
@@ -43,8 +45,11 @@ module.exports = grammar({
           // a major version without leading zeros, is checked beyond the
           // syntax (`unknown-module`, `import-version`).
           /@[^ \t\r\n(]+/,
-          // A schema file next to this one, without `.schema.haus`.
-          seq(choice('./', '../'), /[A-Za-z0-9_.\/-]*/),
+          // A schema file, without `.schema.haus` (grammar.ebnf, path):
+          // `./` or `../`s, then names that start with a letter, digit, `_`
+          // or `-`, so `..` only at the start, no `.` name, no empty name
+          // and no `/` at the end (`./a/../b`, `./a/`, `./` are errors).
+          seq(choice('./', repeat1('../')), PATH_NAME, repeat(seq('/', PATH_NAME))),
         ),
       ),
 

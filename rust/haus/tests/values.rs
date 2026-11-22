@@ -112,3 +112,61 @@ fn constructor_errors_have_the_form_of_spec_17() {
     assert_eq!((encode.code, encode.place()), (ErrorCode::InvalidNumber, "$".to_owned()));
     assert_eq!(haus::Error::from(e).code(), Some(ErrorCode::InvalidNumber));
 }
+
+/// Runs `f` in a thread with a 512 KiB stack (a secondary thread's default on macOS).
+fn in_512_kib_thread(f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new().stack_size(512 * 1024).spawn(f).unwrap().join().unwrap();
+}
+
+/// The host's hooks on a value built in code of any depth (spec §7) don't
+/// overflow a small stack: dropping, cloning, `==` and `{:?}`, which shows
+/// the first `DEBUG_DEPTH` levels.
+#[test]
+fn a_million_levels_drop_clone_compare_and_print_in_a_small_thread() {
+    in_512_kib_thread(|| {
+        let deep = |n: usize| {
+            (0..n).fold(Value::from(1), |v, i| match i % 3 {
+                0 => Value::Array(vec![v]),
+                1 => Value::record([("a", v)]).unwrap(),
+                _ => Value::variant("A", vec![v]).unwrap(),
+            })
+        };
+        let (a, b) = (deep(1_000_000), deep(1_000_000));
+        let copy = a.clone();
+        assert!(copy == a && a == b && a != deep(999_999));
+        let shown = format!("{a:?}");
+        assert!(shown.contains('…') && shown.len() < 10_000, "{shown:.100}");
+        assert!(format!("{a:#?}").contains('…'));
+        drop((a, b, copy));
+    });
+}
+
+#[test]
+fn a_million_levels_of_json_drop_clone_compare_and_print_in_a_small_thread() {
+    use haus::json::Json;
+    in_512_kib_thread(|| {
+        let deep = |n: usize| {
+            (0..n).fold(Json::Null, |j, i| match i % 2 {
+                0 => Json::Array(vec![j]),
+                _ => Json::object([("a", j)]).unwrap(),
+            })
+        };
+        let (a, b) = (deep(1_000_000), deep(1_000_000));
+        let copy = a.clone();
+        assert!(copy == a && a == b && a != deep(999_999));
+        assert!(format!("{a:?}").contains('…') && format!("{a:#?}").contains('…'));
+        drop((a, b, copy));
+    });
+}
+
+/// `{:?}` shows the first `DEBUG_DEPTH` levels as derived, then `…`.
+#[test]
+fn debug_output_is_cut_at_debug_depth() {
+    let deep = (0..haus::DEBUG_DEPTH + 1).fold(Value::from(1), |v, _| Value::Array(vec![v]));
+    let shown = format!("{deep:?}");
+    let opened = "Array([".repeat(haus::DEBUG_DEPTH);
+    assert_eq!(shown, format!("{opened}…{}", "])".repeat(haus::DEBUG_DEPTH)));
+    // Within the depth, as derived.
+    let shallow = (0..haus::DEBUG_DEPTH).fold(Value::from(1), |v, _| Value::Array(vec![v]));
+    assert!(!format!("{shallow:?}").contains('…'));
+}

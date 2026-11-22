@@ -100,6 +100,8 @@ def checkModule (m : String) : C Unit := do
     err .unknownModule s!"unknown module {msgText m}: a package is @org/name, in lowercase letters, digits, -, . and _ (not node_modules)"
   if !((m.startsWith "@" && m.contains '/') || m.startsWith "./" || m.startsWith "../") then
     err .unknownModule s!"unknown module {msgText m}: import std/…, a package @org/name or a file ./name"
+  if !m.startsWith "@" && !Packages.isRelPath m then
+    err .schemaSyntax s!"{msgText m} is not a path: .. only at its start, then names; no . or empty name, no .. after a name, no / at its end"
   err .importUnavailable s!"can't import {msgText m}: no module resolver (only std modules are found here)"
 
 /-- The names a `std/time` import brings in, after those of `std`: each a std/time type, none twice. -/

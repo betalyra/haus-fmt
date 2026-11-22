@@ -72,6 +72,7 @@ export const ERROR_CODES = {
   "duplicate-import": { category: "imports", hint: "Import each name once." },
   "import-unavailable": { category: "imports", hint: "Read the schema with a resolver that loads imports (from files or packages), or inline the types." },
   "import-not-found": { category: "imports", hint: "Install the package, or fix the path." },
+  "import-outside-root": { category: "imports", hint: "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package." },
   "import-version": { category: "imports", hint: "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range." },
   "import-cycle": { category: "imports", hint: "Move the shared types to a file both import." },
   "duplicate-package": { category: "imports", hint: "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`." },

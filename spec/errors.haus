@@ -625,10 +625,18 @@ Code {
 Code {
   code: "import-not-found",
   category: Imports,
-  means: "An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.",
+  means: "An imported package or file can't be found: it is not installed, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package found names another package in its manifest. With npm, also a `node_modules/@org/name` that is there but can't be used (a dangling link, a cycle of links, a directory that can't be entered): the search stops there (§13.3).",
   at: "The import, at its `import`.",
   example: Text("import @acme/geo (LatLng), with @acme/geo not installed"),
   fix: "Install the package, or fix the path.",
+},
+Code {
+  code: "import-outside-root",
+  category: Imports,
+  means: "A relative import reaches a file outside the build's root directory (§13.3): by default the directory of the schema file the build starts from, or the directory given as the build's `root` option. Its `..` names go above the root: it is rejected before anything is looked at (a relative import follows no symbolic link, so it can't leave the root otherwise). Also a `root` option that doesn't contain the schema file the build starts from.",
+  at: "The import, at its `import`. A `root` option that doesn't contain the entry file: no place.",
+  example: Text("app/a.schema.haus has import ../../shared/money (Money), and the build starts from app/a.schema.haus"),
+  fix: "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package.",
 },
 Code {
   code: "import-version",
@@ -673,7 +681,7 @@ Code {
 Code {
   code: "package-version",
   category: Imports,
-  means: "A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored.",
+  means: "A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.",
   at: "The import that reaches the package; the message names both versions.",
   example: Text("package.haus says 1.2.0, the package.json next to it 1.3.0"),
   fix: "Release both with the same version: change them together.",

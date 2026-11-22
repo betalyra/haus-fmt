@@ -86,6 +86,7 @@ ErrorCode: TypeAlias = Literal[
     "duplicate-import",
     "import-unavailable",
     "import-not-found",
+    "import-outside-root",
     "import-version",
     "import-cycle",
     "duplicate-package",
@@ -269,6 +270,10 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
             "Read the schema with a resolver that loads imports (from files or packages), or inline the types.",
         ),
         "import-not-found": ErrorInfo("imports", "Install the package, or fix the path."),
+        "import-outside-root": ErrorInfo(
+            "imports",
+            "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package.",
+        ),
         "import-version": ErrorInfo(
             "imports",
             "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range.",

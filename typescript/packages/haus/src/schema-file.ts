@@ -297,6 +297,9 @@ const PUNCT = ["...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/"
 /** The version an import may name: a major version, without leading zeros (spec §13.3). */
 const MAJOR = /^(?:0|[1-9][0-9]*)$/
 
+/** A file path (grammar `path`): `./` or `../`s, then names, `..` only at the start (spec §13.3). */
+const PATH = /^(?:\.\/|(?:\.\.\/)+)[A-Za-z0-9_-][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$/
+
 /** `@haus-fmt/money@1.1`, `@01`, `@x`: an import names only a major version (code `import-version`). */
 const importVersionError = (fail: Fail, name: string, version: string, pos: number): never => {
   const digits = /^([0-9]+)(\.|$)/.exec(version)
@@ -627,19 +630,29 @@ class SchemaParser {
    * a module). Read from the text, as the lexer doesn't know modules; what
    * it names is checked when the import is loaded. A package module reads
    * `~` too, so that what follows its version's `@` (`@a/b@1~x`) is the
-   * version (`import-version`); a file path has none (grammar `path`), so
-   * `./a~b` ends before it.
+   * version (`import-version`); a file path has none, nor `@` (grammar
+   * `path`), so `./a~b` and `./a@1` end before it. A module that starts with
+   * `./` or `../` must then be a path: `..` names only at its start, names
+   * starting with a letter, digit, `_` or `-`, no empty name and no `/` at
+   * its end (`./a/../b`, `./a/`, `./a//b`, `./.x`, `./` are schema-syntax).
    */
   private parseModule(): string {
     const lexer = this.lexer
     lexer.skip()
     const start = lexer.pos
-    const module = /std\/[a-z_][A-Za-z0-9_]*|@[A-Za-z0-9_.\-/@~]+|\.[A-Za-z0-9_.\-/@]+/y
+    const module = /std\/[a-z_][A-Za-z0-9_]*|@[A-Za-z0-9_.\-/@~]+|\.[A-Za-z0-9_.\-/]+/y
     module.lastIndex = start
     const m = module.exec(this.text)
     if (!m) {
       this.tok = lexer.next()
       return this.unexpected("a module like std/time, @org/name or ./file")
+    }
+    if ((m[0].startsWith("./") || m[0].startsWith("../")) && !PATH.test(m[0])) {
+      this.fail(
+        "schema-syntax",
+        `${quoteText(m[0])} is not a file path: a path is ./ or ../ (only at its start, repeated), then names separated by single slashes, each starting with a letter, digit, _ or -`,
+        start,
+      )
     }
     // `@org/name@V`: an import names only a major version (spec §13.3).
     const at = m[0].startsWith("@") ? m[0].indexOf("@", 1) : -1

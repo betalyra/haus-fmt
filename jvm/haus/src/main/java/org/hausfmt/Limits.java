@@ -31,10 +31,13 @@ public record Limits(
     int maxNodes) {
 
   /**
-   * The deepest nesting this binding supports (spec §7). The parser, the writers and the canonical
-   * form recurse once per level of nesting, so the depth limit is bounded to keep them within the
-   * default stack of a thread; a larger {@link #maxDepth} is rejected with the code {@code
-   * unsupported-depth}. No value, parsed or built in code, is nested deeper.
+   * The deepest nesting this binding supports (spec §7). The parser, the writers, the checks and
+   * the schema codecs recurse once per level of nesting, so the depth limit is bounded to keep
+   * them within a thread's stack (256 levels fit in 512 KiB, which the tests check); a larger
+   * {@link #maxDepth} is rejected with the code {@code unsupported-depth}. No parsed value is
+   * nested deeper. A value built in code may be: the writers and checks reject it ({@code
+   * nesting-too-deep}), and equality, hash codes, the canonical form, hashing and comparison take
+   * any depth.
    */
   public static final int MAX_SUPPORTED_DEPTH = 256;
 

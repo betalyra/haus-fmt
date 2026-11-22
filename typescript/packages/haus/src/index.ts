@@ -13,7 +13,7 @@ export {
 export {
   fromBase64, fromSchemaBasedJson, toBase64, toSchemaBasedJson, type JsonCase, type JsonRecordType, type JsonType, type JsonVariantType,
 } from "./json-schema-based.js"
-export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, type Limits } from "./parser.js"
+export { DEFAULT_LIMITS, limitsIssue, MAX_DEPTH, MAX_SUPPORTED_DEPTH, STACK_NEEDED_MB, type Limits } from "./parser.js"
 export { parseStream, StreamReader, type ChunkSource, type StreamOptions } from "./stream.js"
 export { arr, bytes, isValue, num, rec, str, variant, type HArray, type HBytes, type HNumber, type HRecord, type HString, type HVariant, type Located, type Value } from "./value.js"
 export { format, quote, stringify, type FormatOptions, type FormatStyle } from "./format.js"

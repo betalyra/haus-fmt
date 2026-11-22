@@ -353,6 +353,8 @@ class ResolvedModule:
     text: str
     version: str | None = None
     """The package version (semver), checked against an `@major` in the import."""
+    path: str | None = None
+    """Where the file is, for messages (such as its path relative to the build's root); by default `key`."""
 
 
 class ModuleResolver(Protocol):
@@ -420,11 +422,15 @@ class _Token:
 
 _PUNCT = ("...", "{", "}", "<", ">", "(", ")", "|", ":", "?", ",", "=", "/")
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_MODULE = re.compile(r"std/[a-z_][A-Za-z0-9_]*|@[A-Za-z0-9_.\-/@~]+|\.[A-Za-z0-9_.\-/@]+")
+_MODULE = re.compile(r"std/[a-z_][A-Za-z0-9_]*|@[A-Za-z0-9_.\-/@~]+|\.[A-Za-z0-9_.\-/]+")
 """The module of an import as written (grammar `module`), no whitespace inside; what it names is checked on loading.
 
 A package (`@org/name@1`) is read to the end of its version, so `@a/b@1~x` names the version `1~x`
-(`import-version`); a file path (`./name`) has no `~` (grammar `path`), so `./a~b` ends before it."""
+(`import-version`); a file path (`./name`) has only A-Z, a-z, 0-9, `_`, `.`, `/` and `-` (grammar `path`),
+so `./a~b` and `./a@1` end before the `~` and the `@`."""
+_PATH_NAME = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
+FILE_PATH = re.compile(rf"(?:\./|(?:\.\./)+){_PATH_NAME}(?:/{_PATH_NAME})*")
+"""A file path (grammar `path`): `..` only at its start, then names; no `.` name, no empty name, no `/` at the end."""
 _MAJOR_VERSION = re.compile(r"0|[1-9][0-9]*")
 """The version an import may name: a major version, without leading zeros (spec §13.3)."""
 _VERSION_DIGITS = re.compile(r"([0-9]+)(\.|$)")
@@ -786,6 +792,14 @@ class _SchemaParser:
         at = module.find("@", 1) if module.startswith("@") else -1
         if at >= 0 and not _MAJOR_VERSION.fullmatch(module[at + 1 :]):
             _import_version_error(self.fail, module[:at], module[at + 1 :], start)
+        # `./a/../b`, `./a/`, `./a//b`, `./.x`, `./`: not a path (grammar `path`, spec §13.3).
+        if module.startswith(("./", "../")) and not FILE_PATH.fullmatch(module):
+            self.fail(
+                "schema-syntax",
+                f"{module} is not a file path: it goes up with .. only at its start, then names files and"
+                " directories; a name starts with a letter, a digit, _ or -, and the path doesn't end in /",
+                start,
+            )
         lexer.pos = m.end()
         self.last_end = lexer.pos
         self.tok = lexer.next()
@@ -1260,8 +1274,8 @@ class _Checker:
         self.units: dict[str, _Unit] = {}
         self.loading: list[str] = []
         self.all_defs: list[_Def] = []
-        self.packages: dict[str, tuple[str, str]] = {}
-        """The key and version of the package with each name: one schema reaches one package per name."""
+        self.packages: dict[str, ResolvedModule] = {}
+        """The package with each name: one schema reaches one package per name."""
         self.instances: dict[str, Instance] = {}
         self.instance_ids: dict[Instance, int] = {}
         self.shapes: dict[str, str] = {}
@@ -1347,7 +1361,8 @@ class _Checker:
                 f"can't import {quote(imp.module)}: no module resolver (only std modules can be imported here)",
                 imp.pos,
             )
-        module = re.sub(r"@[0-9]+\Z", "", imp.module)
+        # A package's major version is checked below; a file path has no `@` (grammar `path`).
+        module = re.sub(r"@[0-9]+\Z", "", imp.module) if imp.module.startswith("@") else imp.module
         try:
             r = self.resolver.resolve(module, from_key)
         except Exception as e:  # the resolver's own errors, reported at the import
@@ -1367,14 +1382,15 @@ class _Checker:
             return cached
         if r.version is not None and (package := _PACKAGE_ID.fullmatch(r.id)):
             name = package[1]
-            if (seen := self.packages.get(name)) is not None and seen[0] != r.key:
+            if (seen := self.packages.get(name)) is not None and seen.key != r.key:
                 fail(
                     "duplicate-package",
-                    f"{quote(imp.module)}: two packages are called {quote(name)}: {quote(seen[1])} ({escape(seen[0])})"
-                    f" and {quote(r.version)} ({escape(r.key)}); install one copy",
+                    f"{quote(imp.module)}: two packages are called {quote(name)}: {quote(seen.version or '?')}"
+                    f" ({escape(seen.path or seen.key)}) and {quote(r.version)} ({escape(r.path or r.key)});"
+                    " install one copy",
                     imp.pos,
                 )
-            self.packages[name] = (r.key, r.version)
+            self.packages[name] = r
 
         # Errors inside an imported file are reported at the import, with their place in that file.
         def nested(

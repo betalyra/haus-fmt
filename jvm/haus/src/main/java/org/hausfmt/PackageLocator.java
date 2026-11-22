@@ -10,8 +10,9 @@ import java.util.Objects;
  *
  * <p>The locators are {@link #none()}, which finds no packages (a schema that imports one fails
  * with the code {@code import-unavailable}), {@link ExplicitPackages}, the packages given
- * explicitly, and {@link #or}, which combines two. This binding doesn't read {@code
- * node_modules}: the JVM's packages are given explicitly.
+ * explicitly (directories, folders of them, or classpath resources), and {@link #or}, which
+ * combines two. This binding doesn't read {@code node_modules}, and MUST NOT (§13.3: only
+ * implementations of the npm ecosystem do): the JVM's packages are given explicitly.
  */
 public abstract sealed class PackageLocator permits ExplicitPackages, PackageLocator.None, PackageLocator.Or {
   PackageLocator() {}
@@ -50,11 +51,14 @@ public abstract sealed class PackageLocator permits ExplicitPackages, PackageLoc
    * ({@code package-version}). {@code scanned} is set for a package found by scanning a folder:
    * it doesn't replace a package the next locator of {@link #or} finds. {@code sameAs} is a
    * package with the same name found by scanning a folder, or null: its files must be the same as
-   * this one's ({@code duplicate-package}).
+   * this one's ({@code duplicate-package}). {@code resources} is set for a package of classpath
+   * resources in a jar, whose files are read from the class loader ({@code dir} is then the URL
+   * of its directory).
    */
-  record Location(String dir, String version, boolean hasVersion, boolean scanned, String sameAs) {
+  record Location(
+      String dir, String version, boolean hasVersion, boolean scanned, String sameAs, SchemaFiles.Resources resources) {
     Location withSameAs(String other) {
-      return new Location(dir, version, hasVersion, scanned, other);
+      return new Location(dir, version, hasVersion, scanned, other, resources);
     }
   }
 

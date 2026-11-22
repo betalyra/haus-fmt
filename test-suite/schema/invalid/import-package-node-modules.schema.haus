@@ -1,0 +1,3 @@
+// A package name's part is not node_modules (spec §13.3).
+import @acme/node_modules (A)
+type B = { a: A }

@@ -12,8 +12,8 @@ every run, proven a function at a time with `Triple` (`Haus.Packages.Run`),
   `package.json` (a regular file directly in a directory with a
   `package.haus`, never through a link: `PkgFile`), a schema file (a regular
   file whose real path ends in `.schema.haus`, or the root: `SchemaFile`),
-  or the real path of `D/package.json` for a directory `D` above a schema
-  file (`ProjectJson`, opened following links, as §13.3 puts no rule on it).
+  or `D/package.json` for a directory `D` above a schema file, a regular
+  file and not a link (`ProjectJson`, §13.3 "Files read").
 - **Each file once** (R4, P3), `reads_nodup`; so at most as many as the tree
   has files (`reads_length_le`).
 - **The limits** (R4): `count_le`, at most `Limits.files` schema files, the
@@ -45,10 +45,14 @@ def PkgFile (t : Tree) (p : Path) : Prop :=
 def SchemaFile (t : Tree) (root : Path) (p : Path) : Prop :=
   t.kindAt? p = some .file ∧ (p.getLast?.any (·.endsWith ".schema.haus") = true ∨ t.realPath root = .ok p)
 
-/-- A project's `package.json`: the real path of `D/package.json`, a regular file, for a directory `D` above a schema file. -/
+/-- A project's `package.json`: `D/package.json`, a regular file (not a link), for a directory `D` above a schema file. -/
 def ProjectJson (t : Tree) (root : Path) (p : Path) : Prop :=
-  ∃ f d, SchemaFile t root f ∧ d ∈ ancestors f.dropLast ∧ t.realPath (d ++ ["package.json"]) = .ok p ∧
-    t.kindAt? p = some .file
+  ∃ f d, SchemaFile t root f ∧ d ∈ ancestors f.dropLast ∧ p = d ++ ["package.json"] ∧
+    t.childKind? d "package.json" = some .file
+
+/-- A directory whose `package.json` may be read: a package's, or one above a schema file. -/
+def JsonDir (t : Tree) (root : Path) (d : Path) : Prop :=
+  PkgDir t d ∨ ∃ f, SchemaFile t root f ∧ d ∈ ancestors f.dropLast
 
 /-- What the resolver may open (R7). -/
 def Allowed (t : Tree) (root : Path) (p : Path) : Prop :=
@@ -134,7 +138,7 @@ theorem openFile_spec {p : Path} {limit : Nat} {tl : Nat → Err} (hp : Allowed 
 
 theorem openPackageFile_spec {dir : Path} {name : String} {limit : Nat} {code : Code} {owner : String}
     (hname : name = "package.haus" ∨ name = "schema.haus" ∨ name = "package.json")
-    (hdir : name = "package.haus" ∨ PkgDir env.tree dir) :
+    (hdir : name = "package.haus" ∨ PkgDir env.tree dir ∨ (name = "package.json" ∧ JsonDir env.tree root dir)) :
     Triple env (K env root j) (openPackageFile dir name limit code owner)
       (fun r s => K env root j s ∧ (r.isSome → env.tree.childKind? dir name = some .file)) (K env root j) := by
   unfold openPackageFile
@@ -142,10 +146,12 @@ theorem openPackageFile_spec {dir : Path} {name : String} {limit : Nat} {code : 
   split
   · exact Triple.pure fun s hs => ⟨hs, by simp⟩
   · rename_i heq
-    refine Triple.bind (openFile_spec (Or.inl ⟨dir, name, rfl, hname, heq, ?_⟩)) fun bs => Triple.pure fun s hs => ⟨hs.1, fun _ => heq⟩
-    rcases hdir with rfl | h
-    · exact heq
-    · exact h
+    refine Triple.bind (openFile_spec ?_) fun bs => Triple.pure fun s hs => ⟨hs.1, fun _ => heq⟩
+    rcases hdir with rfl | h | ⟨rfl, h | ⟨f, hf, hd⟩⟩
+    · exact Or.inl ⟨dir, _, rfl, hname, heq, heq⟩
+    · exact Or.inl ⟨dir, name, rfl, hname, heq, h⟩
+    · exact Or.inl ⟨dir, _, rfl, hname, heq, h⟩
+    · exact Or.inr (Or.inr ⟨f, dir, hf, hd, rfl, heq⟩)
   · exact Triple.fail fun _ h => h
   · exact Triple.fail fun _ h => h
 
@@ -177,7 +183,7 @@ theorem manifestOf_spec {dir : Path} {shown : String} :
         · exact hm d m' hd
       · exact Triple.bind_throw fun _ h => h
 
-theorem packageJsonOf_spec {dir : Path} {owner : String} (hd : PkgDir env.tree dir) :
+theorem packageJsonOf_spec {dir : Path} {owner : String} (hd : JsonDir env.tree root dir) :
     Triple env (K env root j) (packageJsonOf dir owner) (fun _ => K env root j) (K env root j) := by
   unfold packageJsonOf
   apply Triple.bind_get'
@@ -185,7 +191,7 @@ theorem packageJsonOf_spec {dir : Path} {owner : String} (hd : PkgDir env.tree d
   split
   · exact Triple.pure fun _ h => h
   · apply Triple.bind_cfg
-    refine Triple.bind (openPackageFile_spec (Or.inr (Or.inr rfl)) (Or.inr hd)) fun r => ?_
+    refine Triple.bind (openPackageFile_spec (Or.inr (Or.inr rfl)) (Or.inr (Or.inr ⟨rfl, hd⟩))) fun r => ?_
     split
     · exact Triple.pure fun _ h => h.1
     · exact Triple.bind_modify' (fun _ h => ⟨K.congr h.1 rfl rfl rfl rfl rfl rfl rfl, h.2⟩) (Triple.pure fun _ h => h.1)
@@ -193,30 +199,13 @@ theorem packageJsonOf_spec {dir : Path} {owner : String} (hd : PkgDir env.tree d
 theorem projectOf_spec {p : Path} (hp : SchemaFile env.tree root p) :
     Triple env (K env root j) (projectOf p) (fun _ => K env root j) (K env root j) := by
   unfold projectOf
-  apply Triple.bind_cfg
-  dsimp only
   refine Triple.bind (Triple.forIn (fun _ _ => K env root j) ?_ fun _ _ h => h) fun r => ?_
   · intro d rest b hd
     have hd : d ∈ ancestors p.dropLast := hd.subset List.mem_cons_self
     apply Triple.bind_look
     split
     · tdone
-    apply Triple.bind_look
-    split
-    next real hreal =>
-      apply Triple.bind_look
-      split
-      · tdone
-      next hkind =>
-      apply Triple.bind_get'
-      intro s₀ _
-      split
-      · tdone
-      refine Triple.bind (openFile_spec (Or.inr (Or.inr ⟨p, d, hp, hd, hreal, ?_⟩))) fun bytes => ?_
-      · simpa using hkind
-      apply Triple.pre_and; intro _
-      tmod
-      tdone
+    · exact Triple.bind (packageJsonOf_spec (Or.inr ⟨p, hp, hd⟩)) fun _ => by tdone
     · tdone
   · tdone
 
@@ -240,13 +229,7 @@ theorem npmLookup_spec {P : St → Prop} {start : Path} {name : String} :
   apply Triple.bind_cfg
   refine Triple.bind (Triple.forIn (fun _ _ => P) ?_ fun _ _ h => h) fun r => ?_
   · intro d rest b _
-    apply Triple.bind_look
-    split
-    · apply Triple.bind_look
-      split
-      · tdone
-      · exact Triple.bind_fail fun _ h => h
-    · tdone
+    tdone
   · tdone
 
 theorem candidates_spec {imp : Importer} {name : String} (h : GoodImporter env root imp) :
@@ -300,6 +283,7 @@ theorem resolveImport_spec {loadFn : Target → M Loaded} {importer : Importer} 
     split
     · tdone
     · rename_i p
+      apply Triple.bind_ask
       apply Triple.bind_look
       split
       · tdone
@@ -365,13 +349,14 @@ theorem classify_spec {c : Class} :
 theorem lenientNpm_spec {dir : Path} {owner : String} (hd : PkgDir env.tree dir) :
     Triple env (K env root j) (lenientNpm dir owner) (fun _ => K env root j) (K env root j) := by
   unfold lenientNpm
-  exact Triple.tryCatch (packageJsonOf_spec hd) fun _ => Triple.pure fun _ h => h
+  exact Triple.tryCatch (packageJsonOf_spec (Or.inl hd)) fun _ => Triple.pure fun _ h => h
 
 theorem copyNpm_spec {config : Config} {dir : Path} {owner : String} (hd : PkgDir env.tree dir) :
     Triple env (K env root j) (copyNpm config dir owner) (fun _ => K env root j) (K env root j) := by
   unfold copyNpm
+  apply Triple.bind_ask
   split
-  · exact packageJsonOf_spec hd
+  · exact packageJsonOf_spec (Or.inl hd)
   · split
     · exact lenientNpm_spec hd
     · exact Triple.pure fun _ h => h
@@ -439,7 +424,7 @@ theorem load_spec : ∀ (n : Nat) (T : Target) (j : Nat), GoodTarget env root T 
         | with_reducible refine Triple.bind (Triple.mono checkNoFiles_spec (fun _ h => h) (fun _ _ h => h)
             (fun _ h => K.weaken h)) fun _ => ?_
         | tstep
-        | (with_reducible refine (Triple.bind (openPackageFile_spec (Or.inr (Or.inl rfl)) (Or.inr hdir)) fun _ => ?_)
+        | (with_reducible refine (Triple.bind (openPackageFile_spec (Or.inr (Or.inl rfl)) (Or.inr (Or.inl hdir))) fun _ => ?_)
            apply Triple.pre_and; intro _)
         | with_reducible refine Triple.bind countFile_spec fun _ => ?_
         | with_reducible refine (Triple.bind (decodeScan_spec (P := fun s => K env root j s ∧ s.scanned < s.count)
@@ -480,6 +465,10 @@ theorem givenPackages_spec :
         | tstep)
     · tdone
 
+/-- `baseOf` reads no file and changes nothing of the state. -/
+theorem baseOf_spec {P : St → Prop} {real : Path} : Triple env P (baseOf root real) (fun _ => P) P := by
+  unfold baseOf; tdone
+
 theorem main_spec : Triple env (K env root 0) (main root w) (fun _ => K env root 0) (K env root 0) := by
   unfold main
   refine Triple.bind givenPackages_spec fun r => ?_
@@ -493,8 +482,9 @@ theorem main_spec : Triple env (K env root 0) (main root w) (fun _ => K env root
     split
     · tdone
     · rename_i hkind
+      refine Triple.bind baseOf_spec fun base => ?_
       apply Triple.bind_cfg
-      exact Triple.bind (load_spec _ _ 0 ⟨by simpa using hkind, Or.inr hreal⟩) fun _ => Triple.pure fun _ h => h
+      exact Triple.bind (Triple.withReader (load_spec _ _ 0 ⟨by simpa using hkind, Or.inr hreal⟩)) fun _ => Triple.pure fun _ h => h
   · intro s hs
     rw [go_bind]
     exact hs
@@ -573,10 +563,10 @@ theorem kindAt_file_mem {t : Tree} {p : Path} (h : t.kindAt? p = some .file) : p
     · simp at h
 
 theorem Allowed.file {t : Tree} {root p : Path} (h : Allowed t root p) : t.kindAt? p = some .file := by
-  rcases h with ⟨dir, name, rfl, -, hk, -⟩ | ⟨hk, -⟩ | ⟨-, -, -, -, -, hk⟩
+  rcases h with ⟨dir, name, rfl, -, hk, -⟩ | ⟨hk, -⟩ | ⟨-, dir, -, -, rfl, hk⟩
   · simpa [Tree.kindAt?, Tree.at?, Tree.childKind?] using hk
   · exact hk
-  · exact hk
+  · simpa [Tree.kindAt?, Tree.at?, Tree.childKind?] using hk
 
 /-- A run opens at most as many files as the tree has entries (R4). -/
 theorem reads_length_le (t : Tree) (c : Config) (root : Path) :

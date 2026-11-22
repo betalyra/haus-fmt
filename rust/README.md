@@ -145,6 +145,24 @@ path from the schema's directory: `order::common::Address`,
 their paths in the crate (`my-app/src/billing/common#Address`), so two
 `common.schema.haus` in different folders are different files. Two schemas
 compiled separately each get their own copy of a file both import.
+Relative imports stay inside the build's root (spec §13.3): for
+`Config::compile`, the crate's directory (`CARGO_MANIFEST_DIR`, for a schema
+inside the crate; `Config::root` widens it, relative to the crate's
+directory, such as `.root("..")` to share files with a sibling crate); for
+`haus_schema::Schema` and `haus-gen`, the schema's real directory unless
+`Options::root` or `--root` says otherwise (a relative one is relative to
+the schema's real directory). The schema and the root are resolved to real
+paths once, at the start. `..` names above the root are
+`import-outside-root`, rejected before anything is looked at; a relative
+import follows no symbolic link: each name of its path must be listed by
+its directory with that spelling and must not be a link
+(`import-not-found`, without saying where the link points), and a file in
+a package's directory, looked for up to the root, is `package-path` (a
+directory there that can't be listed is `import-not-found`). Messages show
+paths relative to the root. Every schema
+file is read as a regular file, opened by its real path without following
+a link and without blocking. Packages are given explicitly or come from
+Cargo: this binding never looks in `node_modules`.
 
 Schema packages are ordinary dependencies: a crate with `package.haus` and
 `schema.haus`, `links = "<its library name>"`, `haus_build::package()` in its
@@ -306,12 +324,17 @@ expand when written; its canonical form is linear in the memory it takes.
 `equals` compares the values themselves, records whatever the order of
 their keys, without writing their canonical forms.
 
-A `Value` built in code may nest any depth: the canonical form, `==`,
-`clone` and dropping it take a stack on the heap, not one call per level
-(`{:?}` and the writers recurse; the writers stop at the depth limit). As
-`Value` implements `Drop`, take its parts out with a reference
+A `Value` or `haus::Json` built in code may nest any depth (spec §7): the
+canonical form, `==`, `clone` and dropping it take a stack on the heap, not
+one call per level, and `{:?}` shows the first `haus::DEBUG_DEPTH` (64)
+levels, then `…` (the writers recurse, and stop at the depth limit). Tested
+with a million levels in a 512 KiB thread. As `Value` and `Json` implement
+`Drop`, take their parts out with a reference
 (`if let Value::Array(items) = &mut v { std::mem::take(items) }`) rather than
-by moving them out of a `match`.
+by moving them out of a `match`. Types that haus-fmt-build generates for a
+recursive schema type (`Box<Tree>`) drop the way Rust drops them, one call
+per level: a value built in code far deeper than the depth limit can
+overflow the stack when dropped (decoding never builds one).
 
 ## Threads
 
@@ -348,10 +371,14 @@ error that names the maximum: `max_depth 300 is more than the supported
 maximum, 256`. The JSON reader and writer and the canonical form use no call
 stack per level.
 
-At 256 levels, the deepest path, the self-describing JSON of nested variants,
-takes about 1.2 MiB of stack in a debug build and 0.3 MiB in a release build
-(measured on aarch64 macOS): well within the 2 MiB stack of a spawned thread,
-a test thread or an async task, and the 8 MiB of a main thread. Code that
+At 256 levels, the deepest paths, the parser and the self-describing JSON of
+nested variants, take up to about 1.5 MiB of stack in a debug build and less
+than 0.5 MiB in a release build (measured on aarch64 macOS): within the 2 MiB
+stack of a spawned thread, a test thread or an async task, and the 8 MiB of a
+main thread. In a release build every path also fits a 512 KiB thread (a
+secondary thread's default on macOS), as spec §7 asks to test (`cargo test
+--release` runs those tests; a debug build skips them, and 256 is the least
+maximum the spec allows, so it can't be lowered to fit). Code that
 haus-fmt-build generates for a recursive type takes stack in proportion to the
 type's size: a record of 30 fields that holds itself in a `Maybe` takes about
 18 KiB per record to encode in a debug build (7 KiB in a release build), so

@@ -282,10 +282,14 @@ extension HausError {
         ///
         /// Reported at (informative): The import, at its `import`.
         case importUnavailable = "import-unavailable"
-        /// `import-not-found`: An imported package or file can't be found: it is not installed, the path is wrong, or the package found names another package in its manifest.
+        /// `import-not-found`: An imported package or file can't be found: it is not installed, the path is wrong, the file is not a regular file (a directory, a FIFO, a device) or is spelled otherwise than its directory lists it, a directory on its way can't be listed, a name on a relative import's path is a symbolic link (which a relative import never follows), whether the file is in a package's directory can't be checked (a directory between it and the build's root can't be listed), or the package found names another package in its manifest. With npm, also a `node_modules/@org/name` that is there but can't be used (a dangling link, a cycle of links, a directory that can't be entered): the search stops there (§13.3).
         ///
         /// Reported at (informative): The import, at its `import`.
         case importNotFound = "import-not-found"
+        /// `import-outside-root`: A relative import reaches a file outside the build's root directory (§13.3): by default the directory of the schema file the build starts from, or the directory given as the build's `root` option. Its `..` names go above the root: it is rejected before anything is looked at (a relative import follows no symbolic link, so it can't leave the root otherwise). Also a `root` option that doesn't contain the schema file the build starts from.
+        ///
+        /// Reported at (informative): The import, at its `import`. A `root` option that doesn't contain the entry file: no place.
+        case importOutsideRoot = "import-outside-root"
         /// `import-version`: An import asks for a major version (`@org/name@2`) and another one is installed, or names something other than a major version: `@1.1`, `@1.1.0`, `@01`, `@x`, `@1~x`, `@1@2` (a package module is one token up to a blank or `(`, grammar.ebnf).
         ///
         /// Reported at (informative): The import, at its `import`.
@@ -306,7 +310,7 @@ extension HausError {
         ///
         /// Reported at (informative): The import that reaches the package; the message names the manifest. A package given by its directory: no place.
         case packageManifest = "package-manifest"
-        /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; outside npm mode, a `package.json` beside an explicit package that can't be read is ignored.
+        /// `package-version`: A package's `package.haus` has another version than the package manager gives the package (the `version` of its `package.json`, its Cargo version). A check implementations SHOULD make (§13.3), also for a package given explicitly by its directory that has a `package.json` next to its manifest. A subdirectory of a folder of packages with such a version is skipped instead, like one with a broken manifest, and named when an import isn't found; a `package.json` beside a package given by its directory that can't be read is ignored, by every implementation.
         ///
         /// Reported at (informative): The import that reaches the package; the message names both versions.
         case packageVersion = "package-version"
@@ -489,7 +493,7 @@ extension HausError.Code {
         case .nestingTooDeep, .numberTooLong, .exponentTooLarge, .stringTooLong, .keyTooLong, .tagTooLong, .valueTooLong, .unsupportedDepth: .limits
         case .notOneValue, .streamTruncated: .streams
         case .schemaSyntax, .unknownType, .wrongArity, .duplicateType, .redefinePrelude, .unknownParameter, .invalidParameter, .underscoreType, .duplicateField, .duplicateTag, .closedEmptyVariant, .invalidSpread, .spreadCycle, .rowParameter, .misplacedStream, .unguardedRecursion, .growingRecursion, .typeTooDeep, .attributeArguments, .attributeTwice, .attributeSpace, .attributeOnSpread: .schemaFiles
-        case .unknownModule, .unknownImport, .duplicateImport, .importUnavailable, .importNotFound, .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest, .packageVersion, .packagePath, .packageName, .packageCrate, .packageInstallScript, .packageFiles, .profileVectors, .packageWrapper, .codecUnreachable, .fileTooLarge, .tooManyFiles: .imports
+        case .unknownModule, .unknownImport, .duplicateImport, .importUnavailable, .importNotFound, .importOutsideRoot, .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest, .packageVersion, .packagePath, .packageName, .packageCrate, .packageInstallScript, .packageFiles, .profileVectors, .packageWrapper, .codecUnreachable, .fileTooLarge, .tooManyFiles: .imports
         case .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag, .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .cannotEncode, .cyclicValue, .stepBudget, .tooManyNodes: .decoding
         case .jsonSyntax, .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes, .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm: .json
         case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag: .hints
@@ -569,6 +573,7 @@ extension HausError.Code {
         case .duplicateImport: "Import each name once."
         case .importUnavailable: "Read the schema with a resolver that loads imports (from files or packages), or inline the types."
         case .importNotFound: "Install the package, or fix the path."
+        case .importOutsideRoot: "Give the build a `root` option that contains both files (such as the repository's schema directory), or move the shared file inside the root; publish types used across projects as a schema package."
         case .importVersion: "Install the major version the schema asks for, or update the import. An import names only the major version (`@1`); the minimum minor goes in your package manager's dependency range."
         case .importCycle: "Move the shared types to a file both import."
         case .duplicatePackage: "Install one copy of the package: align the version ranges and deduplicate (`npm dedupe`). On npm, declare schema packages a package imports as `peerDependencies`."

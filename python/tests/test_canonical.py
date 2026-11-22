@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 from collections.abc import Callable
 from functools import cmp_to_key
 from typing import cast
@@ -299,6 +301,81 @@ def test_any_depth_has_a_canonical_form_a_hash_and_an_order() -> None:
     assert haus.compare(a, b) == 0
     assert haus.compare(a, c) == -1
     assert haus.compare(c, a) == 1
+
+
+def test_any_depth_has_python_equality_hash_and_repr() -> None:
+    """Spec §7: `==`, `hash` and `repr` of a value built in code don't recurse, and freeing it doesn't either."""
+    a, b, c = deep(100_000, "x"), deep(100_000, "x"), deep(100_000, "y")
+    assert a == b and a != c and b != c
+    x: Value = Number("1")
+    y: Value = Number("1")
+    for i in range(100_000):
+        x, y = (Array((x,)), Array((y,))) if i % 2 else (Variant("T", (x,)), Variant("T", (y,)))
+    assert hash(x) == hash(y)
+    with pytest.raises(TypeError, match="unhashable"):
+        hash(a)  # it holds records
+    text = repr(a)
+    assert text.startswith("Variant(tag='T', args=(Record(fields={'a': Array(items=(Variant(")
+    assert text.endswith("String(value='x')" + ",))}),))" * 50_000)
+    del a, b, c, x, y  # freed without recursion (CPython's trashcan)
+
+
+def test_equality_hash_and_repr_are_the_dataclass_ones() -> None:
+    v = haus.parse('[1, { a: "x", b: [T, U(1, x"00")], c: {} }, [], [[]], V { k: 1 }]')
+    assert repr(v) == (
+        "Array(items=(Number(text='1'), Record(fields={'a': String(value='x'), 'b': Array(items=(Variant(tag='T',"
+        " args=()), Variant(tag='U', args=(Number(text='1'), Bytes(data=b'\\x00'))))), 'c': Record(fields={})}),"
+        " Array(items=()), Array(items=(Array(items=()),)), Variant(tag='V', args=(Record(fields={'k':"
+        " Number(text='1')}),))))"
+    )
+    assert Record({"a": Number("1"), "b": String("x")}) == Record({"b": String("x"), "a": Number("1")})
+    assert Record({"a": Number("1")}) != Record({"b": Number("1")})
+    assert Record({"a": Number("1")}) != Record({"a": Number("1.0")})
+    assert Array(()) != Variant("T") and Array((Number("1"),)) != (Number("1"),)
+    assert Variant("T", (Number("1"),)) != Variant("U", (Number("1"),))
+    assert Variant("T", (Number("1"),)) != Variant("T", (Number("1"), Number("1")))
+    assert len({Array((String("x"),)), Array((String("x"),)), Variant("T"), Variant("T")}) == 2
+
+
+SMALL_STACK = """
+import sys, threading
+import haus
+from haus import Array, Number, Variant
+
+MAX = haus.Limits(max_depth=haus.MAX_SUPPORTED_DEPTH)
+done = []
+
+def run():
+    text = "[" * 512 + "]" * 512
+    haus.stringify(haus.parse(text, limits=MAX), limits=MAX)
+    haus.format(text, limits=MAX)
+    try:  # read by recursive descent, which raises the recursion limit
+        haus.parse("[" * 511 + "x" + "]" * 511, limits=MAX)
+    except haus.HausSyntaxError:
+        pass
+    haus.from_haus_json(haus.to_haus_json(haus.parse(text, limits=MAX), limits=MAX), limits=MAX)
+    a, b = Number("1"), Number("1")
+    for i in range(100_000):
+        a, b = (Array((a,)), Array((b,))) if i % 2 else (Variant("T", (a,)), Variant("T", (b,)))
+    assert a == b and hash(a) == hash(b) and repr(a).endswith("))")
+    haus.canonical(a)
+    del a, b
+    done.append(sys.getrecursionlimit())
+
+threading.stack_size(512 * 1024)
+t = threading.Thread(target=run)
+t.start()
+t.join()
+assert done and done[0] > 1000, done
+"""
+
+
+def test_the_supported_depth_on_a_small_stack() -> None:
+    """Spec §7: the parser, the writers, the formatter and the JSON mappings at the maximum depth, and `==`, `hash`
+    and `repr` of a deep value built in code, on a thread with a 512 KiB stack, after the recursion limit was raised
+    for the maximum depth. In a process of its own: a stack overflow kills it."""
+    run = subprocess.run([sys.executable, "-c", SMALL_STACK], capture_output=True, text=True, timeout=300)
+    assert run.returncode == 0, run.stderr[-2000:]
 
 
 def node_error(f: Callable[[], object]) -> tuple[str, tuple[str | int, ...]]:

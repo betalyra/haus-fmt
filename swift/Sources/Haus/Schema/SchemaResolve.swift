@@ -42,6 +42,8 @@ final class SchemaLoader {
         /// The id of its types (spec §13.3): `@haus-fmt/money@1`, `billing/common`;
         /// "" for a schema given as text, whose types are known by their names.
         let id: String
+        /// Whether it is a package's schema.haus, which imports no files.
+        let isPackage: Bool
         let origin: Origin?
         /// Its own definitions: what other files can import.
         var own: [String: Int] = [:]
@@ -50,11 +52,12 @@ final class SchemaLoader {
         /// The types imported from std/time.
         var std: [String: String] = [:]
 
-        init(text: [UInt8], file: SchemaFile, path: String?, id: String, origin: Origin?) {
+        init(text: [UInt8], file: SchemaFile, path: String?, id: String, isPackage: Bool, origin: Origin?) {
             self.text = text
             self.file = file
             self.path = path
             self.id = id
+            self.isPackage = isPackage
             self.origin = origin
         }
     }
@@ -142,21 +145,27 @@ final class SchemaLoader {
             reached[package.manifest.name] = Reached(path: path, package: package, text: text)
         }
         let id = package?.manifest.id ?? path.map(appID) ?? ""
-        try load(text, path: path, id: id, origin: nil)
+        try load(text, path: path, id: id, isPackage: package != nil, origin: nil)
         try evaluateAll()
     }
 
     /// The id of a file outside packages (spec §13.3): its path from the
-    /// root file's directory, without the extension (`billing/common`).
+    /// root file's directory, without the extension (`billing/common`). An
+    /// id that would start with `@`, and so could have the form of a
+    /// package's id (`@org/name@1`, a file reached through a link or an entry
+    /// file named so), starts with `./` instead (`./@org/name@1`), so that a
+    /// file's types never have a package's ids.
     func appID(_ path: String) -> String {
         let relative = baseDir.map { FilePath.relative(from: $0, to: path) } ?? path
-        return relative.hasSuffix(PackageFile.schemaExtension)
+        let id =
+            relative.hasSuffix(PackageFile.schemaExtension)
             ? String(relative.dropLast(PackageFile.schemaExtension.count)) : relative
+        return id.hasPrefix("@") ? "./" + id : id
     }
 
     /// Parses a file, loads its imports and puts its types in scope.
     @discardableResult
-    func load(_ text: [UInt8], path: String?, id: String, origin: Origin?) throws(HausError) -> Int {
+    func load(_ text: [UInt8], path: String?, id: String, isPackage: Bool, origin: Origin?) throws(HausError) -> Int {
         let parsed: SchemaFile
         do throws(SchemaFailure) {
             parsed = try parseSchemaFile(text)
@@ -169,7 +178,7 @@ final class SchemaLoader {
         let u = units.count
         if let path { byPath[CodePointKey(string: path)] = u }
         let file = options.withoutAttributes ? parsed.withoutAttributes() : parsed
-        units.append(Unit(text: text, file: file, path: path, id: id, origin: origin))
+        units.append(Unit(text: text, file: file, path: path, id: id, isPackage: isPackage, origin: origin))
         loading.append(u)
         defer { loading.removeLast() }
         try imports(u)
@@ -257,7 +266,7 @@ final class SchemaLoader {
             found =
                 name.hasPrefix("@")
                 ? try openPackage(for: name, from: from, with: options.packages, files: files)
-                : try openRelative(name, from: from, files: files)
+                : try openRelative(name, from: from, fromPackage: units[u].isPackage, files: files)
         } catch {
             throw at(error.code, "can't import \(label): \(error.message)")
         }
@@ -272,7 +281,7 @@ final class SchemaLoader {
         var copyPath: String?
         if let p = found.package, let old = reached[p.manifest.name], !sameCodePoints(old.path, found.path) {
             guard old.package.manifestText == p.manifestText && old.text == found.text else {
-                let e = duplicatePackage(old.package.manifest, old.package.dir, p.manifest, p.dir)
+                let e = files.duplicatePackage(old.package.manifest, old.package.dir, p.manifest, p.dir)
                 throw at(e.code, "can't import \(label): \(e.message)")
             }
             (copyPath, path) = (found.path, old.path)
@@ -288,9 +297,11 @@ final class SchemaLoader {
             throw at(.tooManyFiles, "more than \(SchemaFileLimits.maxFiles) schema files are imported")
         }
         let origin = Origin(unit: u, pos: pos, label: label)
-        guard let p = found.package else { return try load(found.text, path: path, id: appID(path), origin: origin) }
+        guard let p = found.package else {
+            return try load(found.text, path: path, id: appID(path), isPackage: false, origin: origin)
+        }
         reached[p.manifest.name] = Reached(path: path, package: p, text: found.text)
-        return try load(found.text, path: path, id: p.manifest.id, origin: origin)
+        return try load(found.text, path: path, id: p.manifest.id, isPackage: true, origin: origin)
     }
 
     /// Resolves the imports of a copy of a package (its schema.haus at
@@ -301,7 +312,7 @@ final class SchemaLoader {
         guard units.count + copies.count <= SchemaFileLimits.maxFiles else {
             throw fail(u, pos, .tooManyFiles, "more than \(SchemaFileLimits.maxFiles) schema files are imported")
         }
-        let dir = shown(FilePath.dir(copyPath))
+        let dir = files.show(FilePath.dir(copyPath))
         for imp in units[original].file.imports where imp.module.hasPrefix("@") {
             let label = "\(label) (its copy in \(dir) imports \(imp.module))"
             _ = try importFrom(u, pos: pos, module: imp.module, label: label, from: copyPath)

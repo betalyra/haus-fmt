@@ -10,7 +10,7 @@
 #![cfg(unix)]
 
 use haus::ErrorCode;
-use haus_schema::{Error, NodeModules, Packages, Schema};
+use haus_schema::{Error, Explicit, Options, Packages, Schema};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use tempfile::TempDir;
 const SECRET: &str = "API_TOKEN=hunter2";
 const MONEY: &str = "type Money = closed < Money Decimal Currency >\ntype Currency = < >";
 const MANIFEST: &str = "{ name: \"@acme/evil\", version: \"1.2.0\" }";
-const PKG: &str = "app/node_modules/@acme/evil";
+const PKG: &str = "vendor/evil";
 
 fn write(path: &Path, text: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -38,8 +38,6 @@ impl App {
         write(&app.path("secret/creds.txt"), SECRET);
         write(&app.path("secret/creds.schema.haus"), SECRET);
         fs::create_dir_all(app.path(PKG)).unwrap();
-        // The app declares the package it imports (spec §13.3, npm).
-        write(&app.path("app/package.json"), r#"{ "name": "app", "dependencies": { "@acme/evil": "*" } }"#);
         for (path, text) in files {
             write(&app.path(path), text);
         }
@@ -58,8 +56,15 @@ impl App {
         self.dir.path().join(path)
     }
 
+    /// Loads `app/main.schema.haus` with the package in `vendor/evil` given
+    /// (if it has a manifest) and the temporary directory as the build's root.
     fn load(&self) -> Result<Schema, Error> {
-        Schema::load(self.path("app/main.schema.haus"), &NodeModules)
+        let packages = match self.path(PKG).join("package.haus").symlink_metadata() {
+            Ok(_) => Explicit::new().package(self.path(PKG))?,
+            Err(_) => Explicit::new(),
+        };
+        let options = Options { packages: &packages, root: Some(self.dir.path()), ..Options::default() };
+        Schema::load_with(self.path("app/main.schema.haus"), &options)
     }
 
     /// The error, which must be `code` and must not quote the secret.
@@ -138,7 +143,9 @@ fn app_files_import_no_files_inside_a_package() {
     assert!(message.contains("is in the package directory") && message.contains("import the package by its name"));
     let linked = App::new(&files, "import ./link/extra (Money)\ntype Root = Money");
     symlink(linked.path("app/vendor/evil/sub"), linked.path("app/link")).unwrap();
-    assert!(linked.rejected(ErrorCode::PackagePath).contains("is in the package directory"));
+    // No link is followed: the walk stops at it, before the package's directory is looked for.
+    let message = linked.rejected(ErrorCode::ImportNotFound);
+    assert!(message.contains("link is a symbolic link") && !message.contains("evil"), "{message}");
 }
 
 #[test]
@@ -195,8 +202,9 @@ fn schema_files_and_package_json_have_a_size_limit() {
     let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", &big)]);
     assert!(app.rejected(ErrorCode::FileTooLarge).contains("more than 1 MiB"));
     let json = format!(r#"{{ "name": "@acme/evil", "version": "1.2.0", "x": "{}" }}"#, "x".repeat(1024 * 1024));
+    // A package.json beside a package given explicitly that is too large is ignored (spec §13.3).
     let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", MONEY), ("package.json", &json)]);
-    app.rejected(ErrorCode::FileTooLarge);
+    app.load().unwrap();
     let app = App::new(&[("app/big.schema.haus", &big)], "import ./big (Money)\ntype Root = Money");
     app.rejected(ErrorCode::FileTooLarge);
     // The root too.
@@ -205,13 +213,88 @@ fn schema_files_and_package_json_have_a_size_limit() {
 }
 
 #[test]
-fn a_package_json_that_isnt_json_declares_nothing_and_gives_no_version() {
+fn a_package_json_beside_a_package_given_is_read_leniently() {
     let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", MONEY), ("package.json", "{ not json")]);
     app.load().unwrap();
-    write(&app.path("app/package.json"), "{ not json");
-    // The project's package.json isn't JSON: it declares nothing, and the
-    // search doesn't go on above it (case package-json-not-json).
-    assert!(app.rejected(ErrorCode::UndeclaredPackage).contains("package.json"));
+    // A link is ignored too, and never followed.
+    let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", MONEY)]);
+    symlink(app.path("secret/creds.txt"), app.path(PKG).join("package.json")).unwrap();
+    app.load().unwrap();
+    // One that is read gives the version, which the manifest's must be.
+    let json = r#"{ "name": "@acme/evil", "version": "1.3.0" }"#;
+    let app = App::importing(&[("package.haus", MANIFEST), ("schema.haus", MONEY), ("package.json", json)]);
+    app.rejected(ErrorCode::PackageVersion);
+}
+
+/// This binding never looks in `node_modules` (spec §13.3, "Installed
+/// packages"), nor at a project's `package.json`: a package there is not
+/// found, whatever declares it.
+#[test]
+fn node_modules_is_never_read() {
+    let files = [
+        ("app/package.json", r#"{ "name": "app", "dependencies": { "@acme/evil": "*" } }"#),
+        ("app/node_modules/@acme/evil/package.haus", MANIFEST),
+        ("app/node_modules/@acme/evil/schema.haus", MONEY),
+    ];
+    let app = App::new(&files, "import @acme/evil (Money)\ntype Root = { m: Money }");
+    assert!(app.rejected(ErrorCode::ImportNotFound).contains("not among the packages given"));
+}
+
+/// Relative imports stay inside the build's root (spec §13.3, "The root"):
+/// by default the directory of the file loaded, or the root option.
+#[test]
+fn relative_imports_stay_inside_the_root() {
+    let app = App::new(&[("shared/money.schema.haus", MONEY)], "import ../shared/money (Money)\ntype R = Money");
+    // The root option is the temporary directory: ../shared is inside it.
+    app.load().unwrap();
+    // By default the root is app: ../shared goes above it, and nothing is looked at.
+    let e = Schema::load(app.path("app/main.schema.haus"), &Explicit::new()).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ImportOutsideRoot, "{e}");
+    assert!(e.to_string().contains("go above the build's root"), "{e}");
+    // A link out of the root is not followed, nor looked behind: not found,
+    // without saying where it points.
+    fs::create_dir_all(app.path("app/sub")).unwrap();
+    symlink(app.path("secret/creds.schema.haus"), app.path("app/sub/creds.schema.haus")).unwrap();
+    write(&app.path("app/main.schema.haus"), "import ./sub/creds (X)\ntype R = X");
+    let e = Schema::load(app.path("app/main.schema.haus"), &Explicit::new()).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ImportNotFound, "{e}");
+    assert!(e.to_string().contains("creds.schema.haus is a symbolic link"), "{e}");
+    assert!(!e.to_string().contains("API_TOKEN") && !e.to_string().contains("secret"), "{e}");
+    // Messages show paths relative to the root, never the directories above it.
+    let tmp = app.dir.path().canonicalize().unwrap();
+    assert!(!e.to_string().contains(tmp.to_str().unwrap()), "{e}");
+    write(&app.path("app/main.schema.haus"), "import ./sub/other (X)\ntype R = X");
+    let e = Schema::load(app.path("app/main.schema.haus"), &Explicit::new()).unwrap_err();
+    assert!(e.to_string().contains("sub/other.schema.haus") && !e.to_string().contains(tmp.to_str().unwrap()), "{e}");
+    // A relative root option is relative to the entry file's real directory (here app/), not the working directory.
+    write(&app.path("app/main.schema.haus"), "import ../shared/money (Money)\ntype R = Money");
+    let options = Options { root: Some(Path::new("..")), ..Options::default() };
+    Schema::load_with(app.path("app/main.schema.haus"), &options).unwrap();
+    // A root option that doesn't contain the file: no place.
+    let elsewhere = app.path("secret");
+    let options = Options { root: Some(&elsewhere), ..Options::default() };
+    let e = Schema::load_with(app.path("app/main.schema.haus"), &options).unwrap_err();
+    assert_eq!((e.code(), e.path(), e.position()), (ErrorCode::ImportOutsideRoot, None, None), "{e}");
+}
+
+/// A directory that can't be listed can't show how a name in it is spelled:
+/// the name is not found there (spec §13.3, "Spelling"). Permissions don't
+/// stop root (uid 0).
+#[test]
+fn an_unlistable_directory_lists_nothing() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let app = App::new(&[("app/sub/x.schema.haus", MONEY)], "import ./sub/x (Money)\ntype R = Money");
+    if fs::metadata(app.path("app")).unwrap().uid() == 0 {
+        return;
+    }
+    app.load().unwrap();
+    // Searchable (x), not readable (r): the file can be opened, not listed.
+    fs::set_permissions(app.path("app/sub"), fs::Permissions::from_mode(0o311)).unwrap();
+    let result = app.load();
+    fs::set_permissions(app.path("app/sub"), fs::Permissions::from_mode(0o755)).unwrap();
+    let e = result.unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ImportNotFound, "{e}");
+    assert!(e.to_string().contains("can't be listed"), "{e}");
 }
 
 #[test]

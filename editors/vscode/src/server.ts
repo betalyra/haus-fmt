@@ -105,28 +105,42 @@ function schemaText(path: string): string | undefined {
 // ── packages ─────────────────────────────────────────────────
 
 /**
- * The setting `haus.packages` of each workspace folder (sent by the client
- * as absolute paths): each path is a package directory when it has a
- * package.haus, otherwise a folder of packages.
+ * The settings of a workspace folder, sent by the client as real absolute
+ * paths: `haus.packages` (each a package directory when it has a
+ * package.haus, otherwise a folder of packages) and the build's root, the
+ * folder itself unless `haus.root` gives another directory.
  */
-let packageSettings: Readonly<Record<string, readonly string[]>> = {}
+interface FolderSettings {
+  readonly packages: readonly string[]
+  readonly root: string
+}
 
-/** The paths `haus.packages` gives for the file at `path`: those of the innermost workspace folder that has it. */
-const packagesFor = (path: string): readonly string[] => {
+/** The settings of each workspace folder, by the folder's path. */
+let folderSettings: Readonly<Record<string, FolderSettings>> = {}
+
+/** The settings for the file at `path`: those of the innermost workspace folder that has it, if any. */
+const settingsFor = (path: string): FolderSettings | undefined => {
   const contains = (folder: string) => {
     const rel = relative(folder, path)
     return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
   }
-  const folder = Object.keys(packageSettings).filter(contains).sort((a, b) => b.length - a.length)[0]
-  return folder === undefined ? [] : packageSettings[folder]!
+  const folder = Object.keys(folderSettings).filter(contains).sort((a, b) => b.length - a.length)[0]
+  return folder === undefined ? undefined : folderSettings[folder]
 }
 
-/** Parse options for the schema file at `path`: node_modules, plus the packages of `haus.packages`. */
+/**
+ * Parse options for the schema file at `path`: node_modules, plus the
+ * packages of `haus.packages`. Its relative imports stay inside the build's
+ * root (spec §13.3, "The root"): the workspace folder that has the file, or
+ * `haus.root`; a file in no workspace folder has its own directory.
+ */
 function optionsFor(path: string) {
-  const given = packagesFor(path)
+  const settings = settingsFor(path)
+  const given = settings?.packages ?? []
   const options: NodeResolverOptions = {
     packages: given.filter((p) => existsSync(join(p, MANIFEST))),
     folders: given.filter((p) => !existsSync(join(p, MANIFEST))),
+    ...(settings === undefined ? {} : { root: settings.root }),
   }
   return schemaOptions(path, options)
 }
@@ -171,15 +185,28 @@ function compileSchema(text: string, path: string): SchemaFile {
   return file
 }
 
-/** All open documents, checked again (after `haus.packages` changed). */
+/** All open documents, checked again (after `haus.packages` or `haus.root` changed). */
 const validateAll = () => {
   schemaCache.clear()
   for (const document of documents.all()) validate(document)
 }
 
-connection.onNotification("haus/packages", (settings: Record<string, string[]>) => {
+/**
+ * An error of the settings, before any import: the build's root (`haus.root`,
+ * or the workspace folder) that doesn't contain the file or isn't there, or
+ * packages of `haus.packages` that can't be used.
+ */
+const settingsMessage = (e: ModuleError): string =>
+  `${e.code === "import-outside-root" || e.message.startsWith("the build's root") ? "haus.root" : "haus.packages"}: ${e.message}`
+
+/** A network path (`\\host\share`, `//host/share`): never used. */
+const isNetworkPath = (path: string): boolean => /^[\\/]{2}/.test(path)
+
+connection.onNotification("haus/settings", (settings: Record<string, FolderSettings>) => {
   // The client checked them (trust, inside the workspace folder); network paths are never used.
-  packageSettings = Object.fromEntries(Object.entries(settings).map(([folder, paths]) => [folder, paths.filter((p) => !/^[\\/]{2}/.test(p))]))
+  folderSettings = Object.fromEntries(
+    Object.entries(settings).map(([folder, s]) => [folder, { packages: s.packages.filter((p) => !isNetworkPath(p)), root: isNetworkPath(s.root) ? folder : s.root }]),
+  )
   validateAll()
 })
 
@@ -196,7 +223,7 @@ function schemaDiagnostics(document: TextDocument, values: Value[]): Diagnostic[
   try {
     file = compileSchema(text, link.path)
   } catch (e) {
-    if (e instanceof ModuleError) return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `haus.packages: ${e.message}` }]
+    if (e instanceof ModuleError) return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: settingsMessage(e) }]
     if (!(e instanceof HausSyntaxError)) throw e
     return [{ range: at, severity: DiagnosticSeverity.Error, source: "haus", message: `${name}: ${e.message}` }]
   }
@@ -265,9 +292,9 @@ function validate(document: TextDocument): void {
       diagnostics.push(...schemaDiagnostics(document, values))
     }
   } catch (e) {
-    // The packages or folders of haus.packages can't be used (one was removed, say).
+    // The packages or folders of haus.packages can't be used (one was removed, say), or the root doesn't contain the file.
     if (e instanceof ModuleError) {
-      diagnostics.push({ range: { start: document.positionAt(0), end: document.positionAt(0) }, severity: DiagnosticSeverity.Error, source: "haus", message: `haus.packages: ${e.message}` })
+      diagnostics.push({ range: { start: document.positionAt(0), end: document.positionAt(0) }, severity: DiagnosticSeverity.Error, source: "haus", message: settingsMessage(e) })
       void connection.sendDiagnostics({ uri: document.uri, diagnostics })
       return
     }

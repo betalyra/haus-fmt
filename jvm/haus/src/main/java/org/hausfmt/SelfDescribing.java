@@ -63,7 +63,108 @@ final class SelfDescribing {
     return depth + 1;
   }
 
+  /** What a container being read is: an array, a record's fields, or a variant's arguments. */
+  private enum Kind { ARRAY, RECORD, ARGS }
+
+  /**
+   * A container being read, on a stack on the heap: self-describing JSON nests up to four levels
+   * per haus level (spec §16.2), which a thread with a small stack couldn't recurse through (§7).
+   */
+  private static final class Open {
+    final Kind kind;
+    final Value[] items;
+    /** The keys of a record's fields. */
+    final String[] keys;
+    final Value[] out;
+    /** The depth of the items. */
+    final int depth;
+    /** The tag of a variant's arguments, or of a record that is a variant's payload, {@code Tag { … }}. */
+    final String tag;
+    int next;
+
+    Open(Kind kind, Value[] items, String[] keys, int depth, String tag) {
+      this.kind = kind;
+      this.items = items;
+      this.keys = keys;
+      this.out = new Value[items.length];
+      this.depth = depth;
+      this.tag = tag;
+    }
+  }
+
+  private final java.util.ArrayDeque<Open> open = new java.util.ArrayDeque<>();
+
+  /**
+   * Reads the self-describing value {@code j} at {@code depth}, in the order a recursive walk would
+   * (so that the first mistake is the one reported, at its path).
+   */
   private Value value(Value j, int depth) {
+    return walk(start(j, depth));
+  }
+
+  /**
+   * Finishes the walk that {@code first} began: a value read, or null when a container was
+   * opened.
+   */
+  private Value walk(Value first) {
+    Value done = first;
+    while (true) {
+      if (done == null) {
+        Open f = open.peek();
+        if (f.next < f.items.length) {
+          // The next item: its path, then the item.
+          if (f.kind == Kind.RECORD) {
+            String key = f.keys[f.next];
+            if (key.length() > lim.maxStringLength() && key.codePointCount(0, key.length()) > lim.maxStringLength()) {
+              throw fail(ErrorCode.KEY_TOO_LONG, "a key longer than the limit of " + lim.maxStringLength() + " characters");
+            }
+            path.key(key);
+          } else {
+            path.index(f.next);
+          }
+          done = start(f.items[f.next], f.depth);
+          continue;
+        }
+        open.pop();
+        done = close(f);
+      }
+      Open parent = open.peek();
+      if (parent == null) {
+        return done;
+      }
+      path.pop();
+      parent.out[parent.next++] = done;
+      done = null;
+    }
+  }
+
+  /** The value a container read gives, its path steps taken back. */
+  private Value close(Open f) {
+    switch (f.kind) {
+      case ARRAY:
+        return new Value.Array(f.out);
+      case ARGS:
+        path.pop(); // _args
+        return new Value.Variant(f.tag, f.out);
+      default: {
+        path.pop(); // _rec
+        Value rec = new Value.Record(f.keys, f.out, Keys.of(f.keys, f.keys.length));
+        if (f.tag == null) {
+          return rec;
+        }
+        // Tag { … }: the payload at _args[0].
+        path.pop();
+        path.pop();
+        return new Value.Variant(f.tag, new Value[] {rec});
+      }
+    }
+  }
+
+  /**
+   * Starts reading {@code j} at {@code depth}: a value that has no items is read and returned; a
+   * container is opened (pushed), and null returned.
+   */
+  private Value start(Value j, int depth) {
     if (j instanceof Value.Text) {
       String s = ((Value.Text) j).value();
       if (s.length() > lim.maxStringLength() && s.codePointCount(0, s.length()) > lim.maxStringLength()) {
@@ -72,7 +173,9 @@ final class SelfDescribing {
       return j;
     }
     if (j instanceof Value.Array) {
-      return new Value.Array(items(((Value.Array) j).unsafeItems(), deeper(depth)));
+      int d = deeper(depth);
+      open.push(new Open(Kind.ARRAY, ((Value.Array) j).unsafeItems(), null, d, null));
+      return null;
     }
     if (j instanceof Value.Record) {
       return object((Value.Record) j, depth);
@@ -80,21 +183,11 @@ final class SelfDescribing {
     throw fail(ErrorCode.HAUS_JSON_FORM, "expected the self-describing form of a haus value, found " + describe(j));
   }
 
-  private Value[] items(Value[] items, int depth) {
-    Value[] out = new Value[items.length];
-    for (int i = 0; i < items.length; i++) {
-      path.index(i);
-      out[i] = value(items[i], depth);
-      path.pop();
-    }
-    return out;
-  }
-
   /** Reads {@code {"_rec": …}}, {@code {"_num": …}}, {@code {"_bytes": …}}, {@code {"_tag": …}} or {@code {"_tag": …, "_args": […]}}. */
   private Value object(Value.Record r, int depth) {
     String first = r.size() > 0 ? r.keyAt(0) : null;
     if (r.size() == 1 && first.equals("_rec")) {
-      return record(r.valueAt(0), depth);
+      return record(r.valueAt(0), depth, null);
     }
     if (r.size() == 1 && first.equals("_num")) {
       return number(r.valueAt(0));
@@ -107,7 +200,7 @@ final class SelfDescribing {
     }
     if (r.size() == 2 && r.containsKey("_tag") && r.containsKey("_args")) {
       String tag = tag(r.get("_tag"));
-      return variant(tag, r.get("_args"), depth);
+      return startVariant(tag, r.get("_args"), depth);
     }
     throw fail(ErrorCode.HAUS_JSON_FORM, "expected the self-describing form of a haus value, found " + describe(r));
   }
@@ -153,8 +246,13 @@ final class SelfDescribing {
     return true;
   }
 
-  /** Reads the {@code _args} of {@code tag}. */
+  /** Reads the {@code _args} of {@code tag} (whole, through the walk). */
   private Value variant(String tag, Value args, int depth) {
+    return walk(startVariant(tag, args, depth));
+  }
+
+  /** Starts the {@code _args} of {@code tag}: opens the arguments, or the record of {@code Tag { … }}. */
+  private Value startVariant(String tag, Value args, int depth) {
     path.key("_args");
     if (!(args instanceof Value.Array) || ((Value.Array) args).size() == 0) {
       throw fail(ErrorCode.HAUS_JSON_FORM, "'_args' must be a non-empty array (a tag without arguments has no '_args')");
@@ -165,37 +263,24 @@ final class SelfDescribing {
       if (r.size() == 1 && r.keyAt(0).equals("_rec")) {
         // Tag { … } is one level, as in the parser.
         path.index(0);
-        Value rec = record(r.valueAt(0), depth);
-        path.pop();
-        path.pop();
-        return new Value.Variant(tag, new Value[] {rec});
+        return record(r.valueAt(0), depth, tag);
       }
     }
-    Value[] out = items(items, deeper(depth));
-    path.pop();
-    return new Value.Variant(tag, out);
+    int d = deeper(depth);
+    open.push(new Open(Kind.ARGS, items, null, d, tag));
+    return null;
   }
 
-  private Value record(Value fields, int depth) {
+  /** Opens the fields of a record; {@code tag} is the variant whose payload it is, or null. */
+  private Value record(Value fields, int depth, String tag) {
     path.key("_rec");
     if (!(fields instanceof Value.Record)) {
       throw fail(ErrorCode.HAUS_JSON_FORM, "expected the fields of a record (an object), found " + describe(fields));
     }
     Value.Record r = (Value.Record) fields;
     int d = deeper(depth);
-    Value[] out = new Value[r.size()];
-    for (int i = 0; i < r.size(); i++) {
-      String key = r.keyAt(i);
-      if (key.length() > lim.maxStringLength() && key.codePointCount(0, key.length()) > lim.maxStringLength()) {
-        throw fail(ErrorCode.KEY_TOO_LONG, "a key longer than the limit of " + lim.maxStringLength() + " characters");
-      }
-      path.key(key);
-      out[i] = value(r.valueAt(i), d);
-      path.pop();
-    }
-    path.pop();
-    String[] keys = r.unsafeKeys();
-    return new Value.Record(keys, out, Keys.of(keys, keys.length));
+    open.push(new Open(Kind.RECORD, r.unsafeValues(), r.unsafeKeys(), d, tag));
+    return null;
   }
 
   /** Reads a {@code _tag}; its errors are at the variant, the object that holds it. */

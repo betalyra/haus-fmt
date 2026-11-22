@@ -45,7 +45,7 @@ def Scan (V : View) : Target → Importer → List Import → Prop
 /-- A target that the import `imp` of `importer` loads: the file it names, or a candidate. -/
 def Res (V : View) (importer : Importer) (imp : Import) (T : Target) : Prop :=
   match imp.module, importer with
-  | .file path, .app p => ∃ real, resolve V.tree maxLinks p.dropLast (fileComps path) = .ok real ∧ T = .file real
+  | .file path, .app p => ∃ real, fileTarget V.tree V.base p path = .ok real ∧ T = .file real
   | .pkg name _, _ => ∃ cands, candV V importer name = some cands ∧ ∃ c ∈ cands, T = .copy c.1
   | _, _ => False
 
@@ -112,6 +112,7 @@ theorem resolveImport_reach {loadFn : Target → M Loaded} {importer : Importer}
     split
     · exact Triple.fail fun _ _ => True.intro
     rename_i p
+    apply Triple.bind_ask
     apply Triple.bind_look
     split
     · exact Triple.fail fun _ _ => True.intro
@@ -302,6 +303,7 @@ structure Wider (V V' : View) : Prop where
   npm : V'.mode.npm = V.mode.npm
   worldWritable : V'.worldWritable = V.worldWritable
   checkVersions : V'.checkVersions = V.checkVersions
+  base : V'.base = V.base
   given : ∀ g ∈ V.given, g ∈ V'.given
   byDir : ∀ g ∈ V'.given, g.byDir = true → g ∈ V.given
 
@@ -311,8 +313,18 @@ variable {V V' : View}
 theorem Wider.manifestV (hw : Wider V V') (d : Path) : manifestV V' d = manifestV V d := by
   unfold Haus.Packages.manifestV; rw [hw.tree, hw.limits]
 
+/-- The packages given by their directory are the same with the folders (a folder adds none). -/
+theorem Wider.byDirAny (hw : Wider V V') (d : Path) :
+    V'.given.any (fun g => g.byDir && g.dir == d) = V.given.any (fun g => g.byDir && g.dir == d) := by
+  apply Bool.eq_iff_iff.mpr
+  simp only [List.any_eq_true, Bool.and_eq_true, beq_iff_eq]
+  constructor
+  · rintro ⟨g, hg, hb, hd⟩; exact ⟨g, hw.byDir g hg hb, hb, hd⟩
+  · rintro ⟨g, hg, hb, hd⟩; exact ⟨g, hw.given g hg, hb, hd⟩
+
 theorem Wider.npmOf (hw : Wider V V') (d : Path) : npmOf V' d = npmOf V d := by
-  unfold Haus.Packages.npmOf lenientNpmV packageJsonV; rw [hw.tree, hw.limits, hw.npm, hw.checkVersions]
+  unfold Haus.Packages.npmOf lenientNpmV packageJsonV
+  rw [hw.tree, hw.limits, hw.npm, hw.checkVersions, hw.byDirAny]
 
 theorem Wider.scan (hw : Wider V V') {T : Target} {importer : Importer} {imps : List Import} :
     Scan V' T importer imps ↔ Scan V T importer imps := by
@@ -323,7 +335,7 @@ theorem Wider.corr (hw : Wider V V') {d : Path} {c : Class} : Corr V' d c ↔ Co
 
 theorem Wider.declaredV (hw : Wider V V') (importer : Importer) :
     Haus.Packages.declaredV V' importer = Haus.Packages.declaredV V importer := by
-  cases importer <;> simp only [Haus.Packages.declaredV, projectV, projectStep, hw.tree, hw.limits]
+  cases importer <;> simp only [Haus.Packages.declaredV, projectV, projectStep, packageJsonV, hw.tree, hw.limits]
 
 /-- Every candidate without the folders is one with them (by its directory). -/
 theorem Wider.cand (hw : Wider V V') {importer : Importer} {name : String} {cands cands' : List (Path × String)}
@@ -414,7 +426,7 @@ theorem Good.loads_wider (hw : Wider V V') {κ : Core} (h : Good V' 0 κ) {T T' 
     · exact himp.elim
     · obtain ⟨real, h1, -, -, -, h5, -⟩ := himp
       obtain ⟨real', h1', rfl⟩ := hr
-      rw [hw.tree] at h1; rw [h1] at h1'; cases h1'
+      rw [hw.tree, hw.base] at h1; rw [h1] at h1'; cases h1'
       exact h5.1
   · rename_i name major heq
     rw [heq] at hr
@@ -565,7 +577,7 @@ theorem load_wider {env env' : Env} {w w' : Walk} {T₀ : Target} {n n' : Nat} {
           unfold ImpOk at himpE
           rw [hmod] at himpE
           obtain ⟨real', h1, -, -, -, h5, -⟩ := himpE
-          rw [hw.tree] at hreal; rw [hreal] at h1; cases h1
+          rw [hw.tree, hw.base] at hreal; rw [hreal] at h1; cases h1
           exact h5.1
   refine ⟨fun c hc => ?_, fun c hc => ?_⟩
   · obtain ⟨d, hd, hcd⟩ := hg.clsFin c hc
@@ -837,10 +849,16 @@ theorem FolderEntry.congr {V V' : View} (ht : V'.tree = V.tree) (hl : V'.limits 
 /-! ## Two whole runs -/
 
 /-- What a successful run does: it reads the packages given, then loads the root's real path. -/
+theorem go_baseOf {env : Env} {s : St} {root real : Path} :
+    go (baseOf root real) env s = (baseRes env.tree env.config.root root real, s) := by
+  unfold baseOf
+  simp only [go_bind, go_cfg, go_look]
+  split <;> rename_i h <;> simp [h]
+
 theorem runIn_load {t : Tree} {c : Config} {root : Path} {w : Walk} {S : St} (h : runIn t c root w = (.ok (), S)) :
-    ∃ g b s₁ real r, go givenPackages { tree := t, config := c } {} = (.ok (g, b), s₁) ∧
-      t.realPath root = .ok real ∧
-      go (load w (c.limits.files + 1) (.file real)) { tree := t, config := c, given := g, broken := b } s₁ =
+    ∃ g b s₁ real base r, go givenPackages { tree := t, config := c } {} = (.ok (g, b), s₁) ∧
+      t.realPath root = .ok real ∧ baseRes t c.root root real = .ok base ∧
+      go (load w (c.limits.files + 1) (.file real)) { tree := t, config := c, given := g, broken := b, base } s₁ =
         (.ok r, S) := by
   unfold runIn main at h
   simp only [go_bind] at h
@@ -856,15 +874,18 @@ theorem runIn_load {t : Tree} {c : Config} {root : Path} {w : Walk} {S : St} (h 
     simp only [hreal, go_pure, go_bind, go_look] at h
     by_cases hk : (t.kindAt? real != some Kind.file) = true
     · simp [hk, go_bind, go_fail] at h
-    simp only [hk, Bool.false_eq_true, ↓reduceIte, go_bind, go_cfg] at h
-    rcases hl : go (load w (c.limits.files + 1) (.file real)) { tree := t, config := c, given := g, broken := b } s₁
-      with ⟨rl, S'⟩
+    simp only [hk, Bool.false_eq_true, ↓reduceIte, go_bind, go_cfg, go_baseOf] at h
+    rcases hb : baseRes t c.root root real with e | base
+    · simp [hb] at h
+    simp only [hb, go_withReader] at h
+    rcases hl : go (load w (c.limits.files + 1) (.file real))
+        { tree := t, config := c, given := g, broken := b, base } s₁ with ⟨rl, S'⟩
     rw [hl] at h
     cases rl with
     | error e => simp at h
     | ok r =>
       simp only [go_pure, Prod.mk.injEq] at h
-      exact ⟨g, b, s₁, real, r, rfl, rfl, by rw [hl, h.2]⟩
+      exact ⟨g, b, s₁, real, base, r, rfl, rfl, hb, by rw [hl, h.2]⟩
 
 /-- `c'` is `c` with more folders of packages: everything else the same, every folder of `c` one of `c'`. -/
 structure MoreFolders (c c' : Config) : Prop where
@@ -874,16 +895,18 @@ structure MoreFolders (c c' : Config) : Prop where
   limits : c'.limits = c.limits
   worldWritable : c'.worldWritable = c.worldWritable
   checkVersions : c'.checkVersions = c.checkVersions
+  root : c'.root = c.root
 
 /-- Two successful runs, the second with more folders, make the same packages, with the same versions. -/
 theorem runIn_folders {t : Tree} {c c' : Config} {root : Path} {w w' : Walk} (hm : MoreFolders c c')
     (h : (runIn t c root w).1 = .ok ()) (h' : (runIn t c' root w').1 = .ok ()) :
     ClassesIn (runIn t c root w).2 (runIn t c' root w').2 ∧ ClassesIn (runIn t c' root w').2 (runIn t c root w).2 := by
-  obtain ⟨g, b, s₁, real, r, hg, hr, hl⟩ := runIn_load (S := (runIn t c root w).2)
+  obtain ⟨g, b, s₁, real, base, r, hg, hr, hb, hl⟩ := runIn_load (S := (runIn t c root w).2)
     (by rw [← h])
-  obtain ⟨g', b', s₁', real', r', hg', hr', hl'⟩ := runIn_load (S := (runIn t c' root w').2)
+  obtain ⟨g', b', s₁', real', base', r', hg', hr', hb', hl'⟩ := runIn_load (S := (runIn t c' root w').2)
     (by rw [← h'])
   rw [hr] at hr'; cases hr'
+  rw [hm.root, hb] at hb'; cases hb'
   have gA := givenPackages_ok (env := { tree := t, config := c }) (κ := ({} : St).core) {} ⟨Tr.empty, rfl⟩
   rw [hg] at gA
   obtain ⟨⟨htr, hcore⟩, hok⟩ := gA
@@ -897,10 +920,10 @@ theorem runIn_folders {t : Tree} {c c' : Config} {root : Path} {w w' : Walk} (hm
   have f1 : ∀ f x, FolderEntry ({ tree := t, config := c } : Env).view f x →
       FolderEntry ({ tree := t, config := c' } : Env).view f x := fun _ _ he =>
     he.congr (by rfl) hm.limits hm.checkVersions
-  have hw : Wider { tree := t, config := c, given := g, broken := b : Env }.view
-      { tree := t, config := c', given := g', broken := b' : Env }.view :=
+  have hw : Wider { tree := t, config := c, given := g, broken := b, base : Env }.view
+      { tree := t, config := c', given := g', broken := b', base : Env }.view :=
     { tree := rfl, limits := hm.limits, npm := hm.npm, worldWritable := hm.worldWritable,
-      checkVersions := hm.checkVersions,
+      checkVersions := hm.checkVersions, base := rfl,
       given := fun x hx => by
         rcases hok.sound x hx with ⟨-, d, hd, he⟩ | ⟨-, f, hf, he⟩
         · exact hok'.pkgs d (by rw [hm.packages]; exact hd) x (p1 d x he)
@@ -929,7 +952,7 @@ def Config.addFolders (c : Config) (fs : List Path) : Config :=
   { c with mode := { c.mode with folders := c.mode.folders ++ fs } }
 
 theorem moreFolders_add (c : Config) (fs : List Path) : MoreFolders c (c.addFolders fs) :=
-  ⟨rfl, rfl, fun _ h => List.mem_append_left _ h, rfl, rfl, rfl⟩
+  ⟨rfl, rfl, fun _ h => List.mem_append_left _ h, rfl, rfl, rfl, rfl⟩
 
 /--
 **Adding folders never changes a successful result** (R6, F2): with the

@@ -34,7 +34,10 @@
 //!
 //! Imports are loaded and checked by haus-fmt-schema (spec §13.3); files
 //! the schema imports (`import ./common (Address)`) are generated into the
-//! same output, as modules ([`Config::compile`]).
+//! same output, as modules ([`Config::compile`]). The build's root, which
+//! relative imports stay inside, is by default the crate's directory
+//! (`CARGO_MANIFEST_DIR`), for the Cargo ecosystem: a crate's schemas share
+//! files across its folders, not with other crates ([`Config::root`]).
 
 mod codegen;
 mod graph;
@@ -71,6 +74,8 @@ pub struct Config {
     codecs: Vec<Codec>,
     quiet: bool,
     without_attributes: bool,
+    /// The build's root, relative to the crate's directory ([`Config::root`]).
+    root: Option<PathBuf>,
 }
 
 impl Config {
@@ -82,6 +87,20 @@ impl Config {
     /// with this id: `.codec("std/time#Date", "crate::codecs::JiffDate")`.
     pub fn codec(mut self, id: impl Into<String>, path: impl Into<String>) -> Config {
         self.codecs.push(Codec { id: id.into(), path: path.into() });
+        self
+    }
+
+    /// The build's root (spec §13.3, "The root"), relative to the crate's
+    /// directory: a directory that contains the schemas compiled, resolved
+    /// to its real path once. Their relative imports never go above it
+    /// (`import-outside-root`) and follow no symbolic link
+    /// (`import-not-found`). By default the crate's directory
+    /// (`CARGO_MANIFEST_DIR`), for a schema inside it (a schema elsewhere:
+    /// its own real directory), so that a crate's schemas share files across
+    /// its folders but not with other crates; to share files with a sibling
+    /// crate, give the directory above both: `.root("..")`.
+    pub fn root(mut self, dir: impl Into<PathBuf>) -> Config {
+        self.root = Some(dir.into());
         self
     }
 
@@ -132,8 +151,17 @@ impl Config {
             Err(_) => stem(&path),
         };
         let packages = Packages::from_env()?;
-        let options =
-            Options { packages: &packages, id: Some(&id), project: Some((&krate, &crate_dir)), ..Options::default() };
+        let root = match &self.root {
+            Some(root) => Some(crate_dir.join(root)),
+            None => path.starts_with(&crate_dir).then(|| crate_dir.clone()),
+        };
+        let options = Options {
+            packages: &packages,
+            id: Some(&id),
+            project: Some((&krate, &crate_dir)),
+            root: root.as_deref(),
+            ..Options::default()
+        };
         self.emit(&path, &options, &packages, name, "").map(|_| ())
     }
 

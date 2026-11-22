@@ -14,15 +14,27 @@ import (
 	haus "github.com/betalyra/haus-fmt/go"
 )
 
-// Reading the files imports name (spec §13.3), the same for every package
-// manager: a [Locator] says where a package is, and the rules here say
-// whether it may be read. Resolution happens when a schema is loaded, never
-// while data is parsed, and never over the network (§9.2).
+// Reading the files imports name (spec §13.3): a [Locator] says where a
+// package is, and the rules here say whether it may be read. Resolution
+// happens when a schema is loaded, never while data is parsed, and never
+// over the network (§9.2).
 //
-// A package's package.haus, schema.haus and package.json are opened without
-// following links (O_NOFOLLOW, and O_NONBLOCK so that a FIFO can't block the
-// open, on Unix); their type and size are checked on the opened file, and
-// they are read from it, so the file checked is the file read.
+// Every file is a regular file, read the same way (spec §13.3, "Files
+// read"): lstat the path, open it without following a link at its last name
+// and without blocking (O_NOFOLLOW | O_NONBLOCK | O_NOCTTY on Unix;
+// FILE_FLAG_OPEN_REPARSE_POINT on Windows), check on the opened file that it
+// is a regular file, the same one the path named, and read from it, so the
+// file checked is the file read. A schema file outside packages is opened
+// by its real path. Each name a build looks up itself (package.haus,
+// schema.haus, package.json) and each name of a relative import is spelled
+// as its directory lists it; a directory that can't be listed lists nothing.
+//
+// Only the entry file and the root option are resolved to real paths
+// (filepath.EvalSymlinks), once, at the start, and package directories, which
+// may be links. A relative import follows no link: it is walked down name by
+// name from the importing file's real directory, none a symbolic link
+// (os.Lstat), so the path reached is a real path and its root check is on
+// the text.
 
 // The limits of spec §13.3.
 const (
@@ -36,18 +48,15 @@ const (
 	MaxFiles = 256
 )
 
-// fileKind is which file is read, and so how.
+// fileKind is which file is read, and so its limit.
 type fileKind uint8
 
 const (
-	kindManifest      fileKind = iota // a package's package.haus: never through a link, at most 64 KiB
-	kindPackageSchema                 // a package's schema.haus: never through a link
-	kindPackageJSON                   // a package's package.json: never through a link
+	kindManifest      fileKind = iota // a package's package.haus: at most 64 KiB
+	kindPackageSchema                 // a package's schema.haus
+	kindPackageJSON                   // the package.json beside a package's manifest
 	kindSchema                        // a schema file outside packages, read at its real path
-	kindProjectJSON                   // the package.json of a project (not a package's)
 )
-
-func (k fileKind) followsLinks() bool { return k == kindSchema || k == kindProjectJSON }
 
 func (k fileKind) limit() int64 {
 	if k == kindManifest {
@@ -74,39 +83,72 @@ type openResult struct {
 	err   string
 }
 
-// readFile opens the file at path, following a link or not, and reads it:
-// a regular file of at most limit bytes, checked on the opened file.
-func readFile(path string, follow bool, limit int64) openResult {
-	f, err := openFile(path, follow)
+// errNotRegular is an open that found something other than a regular file.
+var errNotRegular = errors.New("not a regular file")
+
+// readFile reads the regular file at path, of at most limit bytes: never
+// through a link at its last name, never blocking on a FIFO or a device,
+// and checked on the opened file (the same file as the path's, a regular
+// one).
+func readFile(path string, limit int64) openResult {
+	before, err := os.Lstat(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return openResult{state: missing}
+	case err != nil:
+		return openResult{state: failed, err: errorText(err)}
+	case !before.Mode().IsRegular():
+		return openResult{state: notRegular}
+	}
+	f, err := openFile(path)
 	if err != nil {
-		fi, lerr := os.Lstat(path)
-		switch {
-		case lerr == nil && !fi.Mode().IsRegular():
-			return openResult{state: notRegular}
-		case errors.Is(err, fs.ErrNotExist):
+		if errors.Is(err, fs.ErrNotExist) {
 			return openResult{state: missing}
 		}
-		return openResult{state: failed, err: err.Error()}
+		if fi, lerr := os.Lstat(path); errors.Is(err, errNotRegular) || lerr == nil && !fi.Mode().IsRegular() {
+			return openResult{state: notRegular}
+		}
+		return openResult{state: failed, err: errorText(err)}
 	}
 	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
-		return openResult{state: failed, err: err.Error()}
+		return openResult{state: failed, err: errorText(err)}
 	}
-	if !fi.Mode().IsRegular() {
+	if !fi.Mode().IsRegular() || !os.SameFile(before, fi) {
 		return openResult{state: notRegular}
 	}
-	if fi.Size() > limit {
-		return openResult{state: tooLarge, size: fi.Size()}
+	return readOpened(f, fi.Size(), limit)
+}
+
+// readOpened reads an opened regular file of the given size: at most limit
+// bytes, and one more to see that there is no more.
+func readOpened(f io.Reader, size, limit int64) openResult {
+	if size > limit {
+		return openResult{state: tooLarge, size: size}
 	}
 	b, err := io.ReadAll(io.LimitReader(f, limit+1))
 	switch {
 	case err != nil:
-		return openResult{state: failed, err: err.Error()}
+		return openResult{state: failed, err: errorText(err)}
 	case int64(len(b)) > limit:
 		return openResult{state: tooLarge, size: int64(len(b))}
 	}
 	return openResult{state: opened, bytes: b}
+}
+
+// errorText is an error without the path it names (an absolute path, which
+// messages don't show).
+func errorText(err error) string {
+	var pe *fs.PathError
+	if errors.As(err, &pe) {
+		return pe.Err.Error()
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return le.Err.Error()
+	}
+	return err.Error()
 }
 
 // within is a file read for one use, as another use with its own limit sees it.
@@ -126,15 +168,87 @@ func realPath(path string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 
-// exists reports whether something is at path, without following a link.
-func exists(path string) bool {
-	_, err := os.Lstat(path)
-	return err == nil
+// inside reports whether path is dir or inside it, by names (vendor/common-x
+// is not inside vendor/common).
+func inside(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// shown is a path for a message, as the platform writes it (C:\app\x on
-// Windows, as the other bindings show it), with its control and
-// bidirectional characters escaped (spec §9.2).
+// fileCache is the files one schema reads, each once (spec §13.3), by real
+// path (or, in a file tree, by its key): every use sees the same bytes, and
+// each kind of file keeps its own size limit. root is the directory paths
+// in messages are relative to (spec §13.3, "The root").
+type fileCache struct {
+	root     string
+	opened   map[string]openResult
+	json     map[string]any // parsed package.json files; nil for one that isn't JSON
+	listings map[string]listing
+}
+
+func newFileCache(root string) *fileCache {
+	return &fileCache{root: root, opened: map[string]openResult{}, json: map[string]any{}, listings: map[string]listing{}}
+}
+
+// listing is the names a directory lists, or why it can't be listed.
+type listing struct {
+	names map[string]bool
+	err   error
+}
+
+func listDir(dir string) listing {
+	f, err := openDir(dir)
+	if err != nil {
+		return listing{err: err}
+	}
+	defer func() { _ = f.Close() }()
+	names := map[string]bool{}
+	for {
+		batch, err := f.Readdirnames(256)
+		for _, n := range batch {
+			names[n] = true
+		}
+		switch {
+		case errors.Is(err, io.EOF):
+			return listing{names: names}
+		case err != nil:
+			return listing{err: err}
+		}
+	}
+}
+
+// lists reports whether dir lists name, spelled byte for byte. An error
+// says that dir can't be listed: then it shows no name (spec §13.3,
+// "Spelling"). A load lists each directory once (c may be nil: then
+// nothing is kept).
+func (c *fileCache) lists(dir, name string) (bool, error) {
+	var l listing
+	if c == nil {
+		l = listDir(dir)
+	} else if cached, ok := c.listings[dir]; ok {
+		l = cached
+	} else {
+		l = listDir(dir)
+		c.listings[dir] = l
+	}
+	return l.names[name], l.err
+}
+
+// hasManifest reports whether dir has a package.haus, spelled so. A
+// directory that can't be listed has one if something is there by that
+// name: it may be a package, whose files are then not imported.
+func (c *fileCache) hasManifest(dir string) bool {
+	ok, err := c.lists(dir, ManifestFile)
+	if err != nil {
+		_, lerr := os.Lstat(filepath.Join(dir, ManifestFile))
+		return lerr == nil
+	}
+	return ok
+}
+
+// shown is a path for a message, as the platform writes it (app\x on
+// Windows), with its control and bidirectional characters escaped (spec
+// §9.2).
 func shown(path string) string {
 	var b strings.Builder
 	for _, r := range path {
@@ -147,103 +261,71 @@ func shown(path string) string {
 	return b.String()
 }
 
-// fileCache is the files one schema reads, each once (spec §13.3), by real
-// path: a file needed in two roles (a package.json that is a link to a
-// schema file) is read once, and every use sees the same bytes. Each use
-// keeps its own checks: a package's files are never read through a link,
-// and each kind of file has its own size limit.
-type fileCache struct {
-	opened map[string]openResult
-	json   map[string]any // parsed package.json files; nil for one that isn't JSON
-}
-
-func newFileCache() *fileCache {
-	return &fileCache{opened: map[string]openResult{}, json: map[string]any{}}
-}
-
-// open reads the file at path as kind says, and returns the path it is
-// cached by.
-func (c *fileCache) open(path string, kind fileKind) (string, openResult) {
-	if !kind.followsLinks() {
-		fi, err := os.Lstat(path)
-		switch {
-		case err == nil && fi.Mode()&fs.ModeSymlink != 0:
-			return path, openResult{state: notRegular}
-		case errors.Is(err, fs.ErrNotExist):
-			return path, openResult{state: missing}
+// show is a path for a message: relative to the root (../vendor/x for one
+// outside it), never absolute; a file tree's paths as their keys
+// (fs1:money/schema.haus).
+func (c *fileCache) show(path string) string {
+	if c.root != "" && !isTreeKey(path) {
+		if rel, err := filepath.Rel(c.root, path); err == nil {
+			return shown(rel)
 		}
 	}
-	key, err := realPath(path)
-	if err != nil {
-		key = path
-	}
+	return shown(path)
+}
+
+// open reads the file name in the package or directory at, as kind says,
+// and returns the key it is cached by.
+func (c *fileCache) open(at place, name string, kind fileKind) (string, openResult) {
+	key := at.file(name)
 	r, ok := c.opened[key]
 	if !ok {
-		r = readFile(path, kind.followsLinks(), max(MaxFile, MaxManifest))
+		r = at.read(c, name, max(MaxFile, MaxManifest))
 		c.opened[key] = r
 	}
 	return key, within(r, kind)
 }
 
-// notAPackageJSON is the value of a package.json that isn't valid JSON, or (a
-// project's) isn't a regular file: it declares nothing and gives no
-// version, and a project's ends the search for one (spec §13.3).
+// notAPackageJSON is the value of a package.json that isn't valid JSON: it
+// gives no version.
 var notAPackageJSON any = notJSON{}
 
 type notJSON struct{}
 
-// packageJSON reads a package.json (kind says whose). present is false if
-// there is none; the value is notAPackageJSON if it isn't valid JSON or, for a
-// project's, isn't a regular file (a directory, a broken link).
-func (c *fileCache) packageJSON(path string, kind fileKind) (value any, present bool, err error) {
-	key, r := c.open(path, kind)
-	switch r.state {
-	case missing:
-		return nil, false, nil
-	case notRegular:
-		if kind == kindProjectJSON {
-			return notAPackageJSON, true, nil
-		}
-		return nil, false, newError(haus.CodePackagePath, "%s is a symbolic link or not a regular file; it is not read", shown(path))
-	case tooLarge:
-		return nil, false, tooLargeError(path, r.size)
-	case failed:
-		return nil, false, notFound("%s: %s", shown(path), r.err)
+// packageJSON reads the package.json in at. present is false if there is
+// none, or it can't be read (a link, not a regular file, too large); the
+// value is notAPackageJSON if it isn't valid JSON.
+func (c *fileCache) packageJSON(at place) (value any, present bool) {
+	key, r := c.open(at, "package.json", kindPackageJSON)
+	if r.state != opened {
+		return nil, false
 	}
 	if v, ok := c.json[key]; ok {
-		return v, true, nil
+		return v, true
 	}
 	var v any
 	if !utf8.Valid(r.bytes) || json.Unmarshal(r.bytes, &v) != nil {
 		v = notAPackageJSON
 	}
 	c.json[key] = v
-	return v, true, nil
+	return v, true
 }
 
-// manifest reads and checks the manifest of the package in dir (a real path).
-func (c *fileCache) manifest(dir string) (Manifest, string, error) {
-	path := filepath.Join(dir, ManifestFile)
-	_, r := c.open(path, kindManifest)
-	return manifestOf(dir, r)
-}
-
-// manifestOf checks the manifest at dir/package.haus, opened.
-func manifestOf(dir string, r openResult) (Manifest, string, error) {
-	path := filepath.Join(dir, ManifestFile)
+// manifest reads and checks the manifest of the package at at.
+func (c *fileCache) manifest(at place) (Manifest, string, error) {
+	path, r := c.open(at, ManifestFile, kindManifest)
 	invalid := func(why string) error {
-		return &haus.Error{Code: haus.CodePackageManifest, Message: why, File: shown(path)}
+		return &haus.Error{Code: haus.CodePackageManifest, Message: why, File: c.show(path)}
 	}
 	switch r.state {
 	case missing:
-		return Manifest{}, "", notFound("%s is not a schema package: it has no %s", shown(dir), ManifestFile)
+		return Manifest{}, "", notFound("%s is not a schema package: it has no %s", c.show(at.dir), ManifestFile)
 	case notRegular:
 		return Manifest{}, "", newError(haus.CodePackagePath,
-			"the manifest %s is a symbolic link or not a regular file; it is not read", shown(path))
+			"the manifest %s is a symbolic link or not a regular file; it is not read", c.show(path))
 	case tooLarge:
 		return Manifest{}, "", invalid(fmt.Sprintf("the manifest has %d bytes, more than 64 KiB", r.size))
 	case failed:
-		return Manifest{}, "", &haus.Error{Code: haus.CodeImportNotFound, Message: r.err, File: shown(path)}
+		return Manifest{}, "", &haus.Error{Code: haus.CodeImportNotFound, Message: r.err, File: c.show(path)}
 	}
 	if !utf8.Valid(r.bytes) {
 		return Manifest{}, "", invalid("the manifest is not UTF-8")
@@ -255,16 +337,10 @@ func manifestOf(dir string, r openResult) (Manifest, string, error) {
 	return m, string(r.bytes), nil
 }
 
-// readManifest reads the manifest of the package in dir, on its own.
-func readManifest(dir string) (Manifest, error) {
-	m, _, err := manifestOf(dir, readFile(filepath.Join(dir, ManifestFile), false, MaxManifest))
-	return m, err
-}
-
 // schemaText reads a schema file: a package's schema.haus, or a file outside
 // packages at its real path. missingWhy says why a missing one is missing.
-func (c *fileCache) schemaText(path string, kind fileKind, missingWhy func() string) (string, error) {
-	_, r := c.open(path, kind)
+func (c *fileCache) schemaText(at place, name string, kind fileKind, missingWhy func() string) (string, error) {
+	path, r := c.open(at, name, kind)
 	switch r.state {
 	case opened:
 		return string(r.bytes), nil
@@ -272,18 +348,18 @@ func (c *fileCache) schemaText(path string, kind fileKind, missingWhy func() str
 		return "", notFound("%s", missingWhy())
 	case notRegular:
 		if kind == kindPackageSchema {
-			return "", newError(haus.CodePackagePath, "%s is a symbolic link or not a regular file; it is not read", shown(path))
+			return "", newError(haus.CodePackagePath, "%s is a symbolic link or not a regular file; it is not read", c.show(path))
 		}
-		return "", notFound("%s is not a regular file", shown(path))
+		return "", notFound("%s is not a regular file; it is not read", c.show(path))
 	case tooLarge:
-		return "", tooLargeError(path, r.size)
+		return "", newError(haus.CodeFileTooLarge, "%s has %d bytes, more than 1 MiB; it is not read", c.show(path), r.size)
 	}
-	return "", notFound("%s: %s", shown(path), r.err)
+	return "", notFound("%s: %s", c.show(path), r.err)
 }
 
 // source is a schema file an import names, read.
 type source struct {
-	path string // its real path: two imports reach the same file when it is the same
+	path string // its real path (or key): two imports reach the same file when it is the same
 	text string
 	pkg  *foundPackage // for a package's schema.haus
 }
@@ -291,7 +367,7 @@ type source struct {
 // foundPackage is a package, with its manifest checked.
 type foundPackage struct {
 	manifest     Manifest
-	dir          string // its real path
+	dir          string // its real path, or its key in a file tree
 	manifestText string // copies of a package have the same
 }
 
@@ -299,194 +375,202 @@ type foundPackage struct {
 // with the locator and checks it: the manifest (package-manifest) and its
 // name (import-not-found), its version (package-version), its files
 // (package-path, file-too-large), and that a package found in a folder that
-// the package manager has too is the same (duplicate-package).
+// another locator has too is the same (duplicate-package).
 func openPackageFor(packages Locator, name, from string, files *fileCache) (*source, error) {
 	loc, err := packages.locate(name, from, files)
 	if err != nil {
 		return nil, err
 	}
-	src, err := openPackage(loc.Dir, name, loc.Version, loc.hasVersion, files)
+	src, err := openPackage(loc.place(), name, loc.Version, loc.hasVersion, files)
 	if err != nil {
 		return nil, err
 	}
-	if loc.sameAs != "" {
-		other, err := openPackage(loc.sameAs, name, "", false, files)
+	if loc.sameAs != nil {
+		other, err := openPackage(loc.sameAs.place(), name, "", false, files)
 		if err != nil {
 			return nil, err
 		}
 		a, b := src.pkg, other.pkg
 		if a.dir != b.dir && (a.manifestText != b.manifestText || src.text != other.text) {
-			return nil, duplicate(a.manifest, a.dir, b.manifest, b.dir)
+			return nil, duplicate(a.manifest, files.show(a.dir), b.manifest, files.show(b.dir))
 		}
 	}
 	return src, nil
 }
 
-// openPackage reads the package in dir, which must be called name, with the
+// openPackage reads the package at at, which must be called name, with the
 // version its package manager gives it, if any.
-func openPackage(dir, name, version string, hasVersion bool, files *fileCache) (*source, error) {
-	resolved, err := realPath(dir)
-	if err != nil {
-		return nil, notFound("%s: %v", shown(dir), err)
-	}
-	m, text, err := files.manifest(resolved)
+func openPackage(at place, name, version string, hasVersion bool, files *fileCache) (*source, error) {
+	m, text, err := files.manifest(at)
 	if err != nil {
 		return nil, err
 	}
 	if m.Name != name {
-		return nil, notFound("%s names the package %s, not %s", shown(filepath.Join(resolved, ManifestFile)), quote(m.Name), name)
+		return nil, notFound("%s names the package %s, not %s", files.show(at.file(ManifestFile)), quote(m.Name), name)
 	}
 	if hasVersion && version != m.Version {
 		if isSemver(version) {
 			return nil, newError(haus.CodePackageVersion, "the package.haus of %s says version %s, its package manager %s (%s)",
-				name, quote(m.Version), quote(version), shown(resolved))
+				name, quote(m.Version), quote(version), files.show(at.dir))
 		}
 		return nil, newError(haus.CodePackageVersion, "the package.haus of %s says version %s, and the version its package "+
-			"manager gives isn't a semantic version (%s)", name, quote(m.Version), shown(resolved))
+			"manager gives isn't a semantic version (%s)", name, quote(m.Version), files.show(at.dir))
 	}
-	path := filepath.Join(resolved, SchemaFile)
-	schema, err := files.schemaText(path, kindPackageSchema, func() string {
-		return fmt.Sprintf("%s has no %s next to its manifest (%s)", name, SchemaFile, shown(resolved))
+	schema, err := files.schemaText(at, SchemaFile, kindPackageSchema, func() string {
+		return fmt.Sprintf("%s has no %s next to its manifest (%s)", name, SchemaFile, files.show(at.dir))
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &source{path: path, text: schema, pkg: &foundPackage{manifest: m, dir: resolved, manifestText: text}}, nil
+	return &source{path: at.file(SchemaFile), text: schema, pkg: &foundPackage{manifest: m, dir: at.dir, manifestText: text}}, nil
 }
 
-// openFile reads the file module (./common, ../shared/money) imports, next to
-// the file at from (a real path; "" for a schema given as text, which
-// imports no files). A package imports no files, and a file outside a
-// package no file inside one (package-path). Each name in the path is
-// spelled as its directory lists it, and the file's real path ends in
-// .schema.haus (import-not-found, the file not read).
-func openRelative(module, from string, files *fileCache) (*source, error) {
+// openRelative reads the file module (./common, ../shared/money, of the
+// grammar's path, checked when the importing file was parsed) imports, next
+// to the file at from (a real path inside the root; "" for a schema given as
+// text, which imports no files), in the order of spec §13.3 ("Resolution"):
+//
+//   - a package imports no files (package-path): pkg is the name of the
+//     package whose schema.haus the importing file was read as, or "" (what
+//     is above it on the disk doesn't matter: an application's file may sit
+//     in a package's directory);
+//   - a path whose ".." names go above the root is import-outside-root,
+//     checked on the text, before anything is looked at;
+//   - the walk down its names from the importing file's real directory: each
+//     name listed by its directory with that spelling, and none a symbolic
+//     link, checked without following it (import-not-found; nothing behind a
+//     link is looked at), so the path reached is a real path inside the root;
+//   - the directories from the file's up to the root, the root included,
+//     aren't a package's (package-path: a file outside a package imports no
+//     file inside one), and can be listed to check that (import-not-found);
+//   - the file is opened: a regular file (import-not-found), within its limit.
+func (c *fileCache) openRelative(module, from, pkg string) (*source, error) {
 	if from == "" {
 		return nil, newError(haus.CodeImportUnavailable, "a schema read from text imports no files (load it from its file)")
 	}
-	if pkg := packageDirOf(from); pkg != "" {
-		name := shown(pkg)
-		if m, _, err := files.manifest(pkg); err == nil {
-			name = m.Name
+	if pkg != "" {
+		return nil, newError(haus.CodePackagePath, "the schema of %s can't import files, only packages by name", pkg)
+	}
+	if isTreeKey(from) {
+		// Only packages are in file trees.
+		return nil, newError(haus.CodePackagePath, "the schema of the package in %s can't import files, only packages by name",
+			c.show(filepath.Dir(from)))
+	}
+	// The grammar's path: "./" or "../"…, then names (no ".", "..", empty).
+	names := strings.Split(module+Extension, "/")
+	if names[0] == "." {
+		names = names[1:]
+	}
+	base := filepath.Dir(from)
+	for len(names) > 0 && names[0] == ".." {
+		if base == c.root || !inside(c.root, base) {
+			return nil, newError(haus.CodeImportOutsideRoot, "%s goes above the root directory of the build: a relative import "+
+				"stays inside it (give the build a root option that contains both files, or import a package)", quote(module))
 		}
-		return nil, newError(haus.CodePackagePath, "the schema of %s can't import files, only packages by name", name)
+		base, names = filepath.Dir(base), names[1:]
 	}
-	dir := filepath.Dir(from)
-	relative := module + Extension
-	path := filepath.Join(dir, filepath.FromSlash(relative))
-	if name, ok := misspelled(dir, relative); ok {
-		return nil, notFound("file not found: %s (no %s in its directory: names are spelled as the directory lists them)",
-			shown(path), quote(name))
-	}
-	resolved, rerr := realPath(path)
-	into := ""
-	if rerr == nil {
-		into = packageDirOf(resolved)
-	}
-	if into == "" {
-		into = packageDirOf(path)
-	}
-	if into != "" {
-		return nil, newError(haus.CodePackagePath, "the file is in the package directory %s: import the package by its name", shown(into))
-	}
-	if rerr != nil {
-		return nil, notFound("file not found: %s", shown(path))
-	}
-	if !strings.HasSuffix(filepath.Base(resolved), Extension) {
-		return nil, notFound("%s is not a schema file: its real path %s doesn't end in %s; it is not read",
-			shown(path), shown(resolved), Extension)
-	}
-	text, err := files.schemaText(resolved, kindSchema, func() string { return "file not found: " + shown(path) })
+	path, err := c.walk(base, names)
 	if err != nil {
 		return nil, err
 	}
-	return &source{path: resolved, text: text}, nil
-}
-
-// misspelled returns the first name in relative (from dir) that its
-// directory doesn't list byte for byte: on file systems that ignore case or
-// Unicode normalization, ./Billing/common finds billing/common.schema.haus.
-func misspelled(dir, relative string) (string, bool) {
-	at := dir
-	for _, part := range strings.Split(relative, "/") {
-		switch part {
-		case "", ".":
-			continue
-		case "..":
-			at = filepath.Join(at, "..")
-			continue
-		}
-		entries, err := os.ReadDir(at)
-		if err != nil {
-			// A directory that can't be listed: the file isn't found later.
-			return "", false
-		}
-		listed := false
-		for _, e := range entries {
-			if e.Name() == part {
-				listed = true
-				break
-			}
-		}
-		if !listed {
-			return part, true
-		}
-		at = filepath.Join(at, part)
+	// An application's file doesn't reach into a package: it imports the package by name.
+	if err := c.inPackage(path); err != nil {
+		return nil, err
 	}
-	return "", false
-}
-
-// rootSource reads the root schema file at path: its real path and text. A
-// package's schema.haus is read as one (never through a link).
-func rootSource(path string, files *fileCache) (resolved, text string, err error) {
-	resolved, err = realPath(path)
+	text, err := c.schemaText(onDisk(filepath.Dir(path)), filepath.Base(path), kindSchema,
+		func() string { return "file not found: " + c.show(path) })
 	if err != nil {
-		return "", "", &haus.Error{Code: haus.CodeImportNotFound, Message: err.Error(), File: shown(path)}
+		return nil, err
 	}
+	return &source{path: path, text: text}, nil
+}
+
+// walk returns the path names lead to from the real directory dir, walked
+// down one name at a time (spec §13.3, "Resolution"): each name listed by
+// its directory byte for byte (on file systems that ignore case or Unicode
+// normalization, ./Billing/common would find billing/common.schema.haus,
+// and on Windows ./sub./x would find sub/x; a directory that can't be listed
+// lists no name), and none a symbolic link, checked without following it
+// (os.Lstat), so nothing behind a link is looked at; each name but the last
+// a directory. The path reached has no links: it is a real path.
+func (c *fileCache) walk(dir string, names []string) (string, error) {
+	wanted := filepath.Join(append([]string{dir}, names...)...)
+	at := dir
+	for i, name := range names {
+		ok, err := c.lists(at, name)
+		switch {
+		case err != nil:
+			return "", notFound("file not found: %s (the directory of %s can't be listed: %s)",
+				c.show(wanted), quote(name), errorText(err))
+		case !ok:
+			return "", notFound("file not found: %s (no %s in its directory: names are spelled as the directory lists them)",
+				c.show(wanted), quote(name))
+		}
+		at = filepath.Join(at, name)
+		fi, err := os.Lstat(at)
+		switch {
+		case err != nil:
+			return "", notFound("file not found: %s: %s", c.show(wanted), errorText(err))
+		case isLink(fi):
+			return "", notFound("%s is a symbolic link: a relative import follows no link, and nothing behind it is read",
+				quote(name))
+		case i < len(names)-1 && !fi.IsDir():
+			return "", notFound("file not found: %s (%s is not a directory)", c.show(wanted), quote(name))
+		}
+	}
+	return at, nil
+}
+
+// inPackage fails if the file at path (a real path inside the root) is in a
+// package's directory (spec §13.3, "Imports"): the directories from its own
+// up to the root, the root included, each a package's when it lists
+// package.haus. One that can't be listed can't show whether it is a
+// package's: the import fails (import-not-found), never passes as one
+// outside a package.
+func (c *fileCache) inPackage(path string) error {
+	for d := filepath.Dir(path); inside(c.root, d); d = filepath.Dir(d) {
+		ok, err := c.lists(d, ManifestFile)
+		switch {
+		case err != nil:
+			return notFound("whether %s is a package's directory can't be checked (it can't be listed); it is not read", c.show(d))
+		case ok:
+			return newError(haus.CodePackagePath, "the file is in the package directory %s: import the package by its name", c.show(d))
+		case d == c.root || filepath.Dir(d) == d:
+			return nil
+		}
+	}
+	return nil
+}
+
+// entryText reads the entry file at its real path: a package's schema.haus
+// is read as one.
+func (c *fileCache) entryText(resolved string) (string, error) {
 	kind := kindSchema
-	if isPackageSchema(resolved) {
+	if c.isPackageSchema(resolved) {
 		kind = kindPackageSchema
 	}
-	text, err = files.schemaText(resolved, kind, func() string { return "file not found: " + shown(path) })
-	if err != nil {
-		return "", "", inFile(err, path)
-	}
-	return resolved, text, nil
+	return c.schemaText(onDisk(filepath.Dir(resolved)), filepath.Base(resolved), kind,
+		func() string { return "file not found: " + c.show(resolved) })
 }
 
 // isPackageSchema reports whether the file at path is a package's
 // schema.haus: next to a package.haus.
-func isPackageSchema(path string) bool {
-	return filepath.Base(path) == SchemaFile && exists(filepath.Join(filepath.Dir(path), ManifestFile))
+func (c *fileCache) isPackageSchema(path string) bool {
+	return filepath.Base(path) == SchemaFile && c.hasManifest(filepath.Dir(path))
 }
 
 // packageOfFile returns the package whose schema.haus is the file at path
 // (a real path), if it is one, with its manifest checked.
 func packageOfFile(path string, files *fileCache) (*foundPackage, error) {
-	if !isPackageSchema(path) {
+	if !files.isPackageSchema(path) {
 		return nil, nil
 	}
 	dir := filepath.Dir(path)
-	m, text, err := files.manifest(dir)
+	m, text, err := files.manifest(onDisk(dir))
 	if err != nil {
 		return nil, err
 	}
 	return &foundPackage{manifest: m, dir: dir, manifestText: text}, nil
-}
-
-// packageDirOf returns the package directory a file is in: the nearest
-// directory above it with a manifest, or "".
-func packageDirOf(path string) string {
-	for d := filepath.Dir(path); ; {
-		if exists(filepath.Join(d, ManifestFile)) {
-			return d
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return ""
-		}
-		d = parent
-	}
 }
 
 // relativeID returns the id of a file outside packages: its path from
@@ -500,13 +584,13 @@ func relativeID(base, path string) string {
 	return strings.TrimSuffix(filepath.ToSlash(rel), Extension)
 }
 
-// sameFiles reports whether the packages in a and b are copies of one
+// sameFiles reports whether the packages at a and b are copies of one
 // package: their manifests and schema files are the same, byte for byte,
 // and regular files (spec §13.3).
-func sameFiles(a, b string) bool {
-	read := func(dir string) ([]byte, []byte, bool) {
-		m := readFile(filepath.Join(dir, ManifestFile), false, MaxManifest)
-		s := readFile(filepath.Join(dir, SchemaFile), false, MaxFile)
+func sameFiles(a, b place) bool {
+	read := func(at place) ([]byte, []byte, bool) {
+		m := at.read(nil, ManifestFile, MaxManifest)
+		s := at.read(nil, SchemaFile, MaxFile)
 		return m.bytes, s.bytes, m.state == opened && s.state == opened
 	}
 	am, as, ok := read(a)
@@ -525,27 +609,24 @@ func notFound(format string, args ...any) *haus.Error {
 	return newError(haus.CodeImportNotFound, format, args...)
 }
 
-func tooLargeError(path string, size int64) *haus.Error {
-	return newError(haus.CodeFileTooLarge, "%s has %d bytes, more than 1 MiB; it is not read", shown(path), size)
-}
-
 // inFile sets the file of an error that has none.
-func inFile(err error, path string) error {
+func inFile(err error, shownPath string) error {
 	var e *haus.Error
 	if errors.As(err, &e) && e.File == "" {
 		c := *e
-		c.File = shown(path)
+		c.File = shownPath
 		return &c
 	}
 	return err
 }
 
-// duplicate is duplicate-package: two packages with one name.
+// duplicate is duplicate-package: two packages with one name, in the
+// directories shown as aDir and bDir.
 func duplicate(a Manifest, aDir string, b Manifest, bDir string) *haus.Error {
 	copies := ""
 	if a.Version == b.Version {
 		copies = fmt.Sprintf(" (two copies of %s whose files or imports differ)", quote(a.Version))
 	}
 	return newError(haus.CodeDuplicatePackage, "two packages are called %s: %s in %s and %s in %s%s",
-		quote(a.Name), quote(a.Version), shown(aDir), quote(b.Version), shown(bDir), copies)
+		quote(a.Name), quote(a.Version), aDir, quote(b.Version), bDir, copies)
 }

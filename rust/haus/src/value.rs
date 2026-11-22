@@ -39,9 +39,9 @@ use std::str::FromStr;
 /// stack per level (a parsed value nests at most [`crate::MAX_SUPPORTED_DEPTH`]
 /// levels). `==` compares the values as they are: the same kind, text, tag,
 /// keys in the same order and equal parts; [`crate::equals`] is haus
-/// equality (spec §2), for which key order doesn't matter. `{:?}` recurses,
-/// one call per level.
-#[derive(Debug)]
+/// equality (spec §2), for which key order doesn't matter. `{:?}` shows the
+/// first [`crate::DEBUG_DEPTH`] levels, then `…`, so that printing a value
+/// of any depth takes a bounded stack (spec §7).
 pub enum Value {
     /// A number literal, normalized (spec §2): `19.90`, `-1e10`, `255`.
     Number(Number),
@@ -221,6 +221,54 @@ impl Drop for Value {
         while let Some(mut v) = stack.pop() {
             v.move_parts(&mut stack);
         }
+    }
+}
+
+/// As derived (`Variant { tag: Some, args: [Number(1)] }`), but only the
+/// first [`crate::DEBUG_DEPTH`] levels: deeper containers are `…`.
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&DebugAt(self, 0), f)
+    }
+}
+
+/// A value at `depth` levels, for `{:?}`.
+struct DebugAt<'a>(&'a Value, usize);
+
+impl fmt::Debug for DebugAt<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let DebugAt(v, depth) = *self;
+        if depth >= crate::DEBUG_DEPTH && v.has_parts() {
+            return f.write_str("…");
+        }
+        match v {
+            Value::Number(n) => f.debug_tuple("Number").field(n).finish(),
+            Value::String(s) => f.debug_tuple("String").field(s).finish(),
+            Value::Bytes(b) => f.debug_tuple("Bytes").field(b).finish(),
+            Value::Array(items) => f.debug_tuple("Array").field(&ItemsAt(items, depth + 1)).finish(),
+            Value::Record(r) => f.debug_tuple("Record").field(&FieldsAt(r, depth + 1)).finish(),
+            Value::Variant { tag, args } => {
+                f.debug_struct("Variant").field("tag", tag).field("args", &ItemsAt(args, depth + 1)).finish()
+            }
+        }
+    }
+}
+
+/// Elements or arguments at `depth` levels, for `{:?}`.
+struct ItemsAt<'a>(&'a [Value], usize);
+
+impl fmt::Debug for ItemsAt<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.0.iter().map(|v| DebugAt(v, self.1))).finish()
+    }
+}
+
+/// Fields whose values are at `depth` levels, for `{:?}`.
+struct FieldsAt<'a>(&'a Record, usize);
+
+impl fmt::Debug for FieldsAt<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.0.fields.iter().map(|(k, v)| (k, DebugAt(v, self.1)))).finish()
     }
 }
 
@@ -735,9 +783,10 @@ impl PartialEq for Record {
 impl Eq for Record {}
 
 /// `{"name": String("Ada"), …}`.
+/// The fields, as a map: the first [`crate::DEBUG_DEPTH`] levels (see [`Value`]).
 impl fmt::Debug for Record {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_map().entries(self.fields.iter().map(|(k, v)| (k, v))).finish()
+        fmt::Debug::fmt(&FieldsAt(self, 1), f)
     }
 }
 

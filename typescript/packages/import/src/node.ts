@@ -11,6 +11,7 @@
 import { readFileSync } from "node:fs"
 import { registerHooks } from "node:module"
 import { fileURLToPath } from "node:url"
+import { isSchemaFile } from "@haus-fmt/haus/node"
 import { backend, moduleFor, optimizeOf, packagesOf, targetOf, type ImportOptions } from "./generate.js"
 
 export async function register(options: ImportOptions = {}): Promise<void> {
@@ -20,7 +21,8 @@ export async function register(options: ImportOptions = {}): Promise<void> {
     load(url, context, nextLoad) {
       if (!url.startsWith("file:") || !url.endsWith(".haus")) return nextLoad(url, context)
       const path = fileURLToPath(url)
-      const { code } = moduleFor(readFileSync(path, "utf8"), path, b, importRuntime)
+      // A schema file is read by the resolver, as every file of its schema (a regular file, without blocking).
+      const { code } = moduleFor(isSchemaFile(path) ? "" : readFileSync(path, "utf8"), path, b, importRuntime)
       return { format: "module", source: code, shortCircuit: true }
     },
   })

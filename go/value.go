@@ -50,6 +50,14 @@ func (k Kind) String() string {
 //	case haus.Variant:
 //		fmt.Println(v.Tag, len(v.Args))
 //	}
+//
+// A value built in code may be nested as deep as memory allows (spec §7):
+// [Canonical], [Hash], [Equals] and [Compare] work at any depth, and the
+// writers and checks stop at the depth limit with nesting-too-deep. Go's
+// own hooks recurse: fmt's %v and reflect.DeepEqual walk a value once per
+// level, on a goroutine stack that grows up to its maximum (1 GB on 64-bit
+// platforms, runtime/debug.SetMaxStack), so a value millions of levels
+// deep can exhaust it; use [Equals] to compare, and a writer to print.
 type Value interface {
 	// Kind reports which of the six kinds the value is.
 	Kind() Kind

@@ -121,22 +121,29 @@ schema_file ::= ws ( ( import | typedef ) ws )*
 import      ::= "import" ws module ws "(" ws type_name ( ws "," ws type_name )* ws [ "," ws ] ")"
 module      ::= "std/" ident                              (* a standard module: std/time *)
               | "@" module_char+                          (* a schema package: @haus-fmt/money, @haus-fmt/money@1 *)
-              | ( "./" | "../" ) path                     (* a schema file, without .schema.haus: ./common *)
+              | path                                      (* a schema file, without .schema.haus: ./common, ../shared/common *)
 module_char ::= [^ \t#x0A#x0D(]
                 (* A package module is one token: everything up to the first
                    space, tab, line break or "(". The token is then checked
                    against package_module below. A name that breaks it is
                    unknown-module (@Haus/money); a version that breaks it is
                    import-version (@a/b@1~x, @a/b@, @a/b@01, @a/b@1@2). A file
-                   path, unlike a package, ends at the first character outside
-                   path (./a~b is ./a followed by "~", a syntax error). A
-                   module that starts with "." but not with "./" or "../"
+                   path, unlike a package, ends at the first character that
+                   isn't one of A-Z, a-z, 0-9, _, ., / and - (./a~b is ./a
+                   followed by "~", ./a@1 is ./a followed by "@": syntax
+                   errors). A module that starts with "./" or "../" and isn't
+                   a path (./a/../b, ./a/, ./a//b, ./.x, ./) is a syntax error;
+                   one that starts with "." but not with "./" or "../"
                    (.../a) is unknown-module; any other word where a module
                    belongs (foo/bar) is a syntax error. *)
 package_module ::= "@" segment "/" segment [ "@" major ]
 segment     ::= [a-z0-9] [a-z0-9._-]*                    (* npm's rules for scoped names, lowercase; not node_modules *)
 major       ::= "0" | [1-9] [0-9]*                        (* a major version only: not @1.1, not @01 *)
-path        ::= [A-Za-z0-9_./-]*
+(* rule: grammar.schema.paths *)
+path        ::= ( "./" | ( "../" )+ ) path_name ( "/" path_name )*
+                (* ".." only at the start, then names: no ".", no ".." after
+                   a name, no empty name, no "/" at the end (spec §13.3) *)
+path_name   ::= [A-Za-z0-9_-] [A-Za-z0-9_.-]*
 (* rule: grammar.schema.typedefs *)
 typedef     ::= ( attribute ws )* "type" ws type_name ( ws param )* ws "=" ws type
 attribute   ::= "@" ident [ "(" ws value ( ws "," ws value )* ws [ "," ws ] ")" ]

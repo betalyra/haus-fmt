@@ -109,11 +109,11 @@ final class SchemaLoader {
   /** Reads the schema file at {@code path}, its imports, and the packages it imports. */
   static Schema load(String path, SchemaOptions opts) {
     SchemaFiles files = new SchemaFiles();
-    String[] root = files.rootSource(path);
+    String[] root = files.rootSource(path, opts.root());
     try {
       return new SchemaLoader(opts, files).run(root[1], root[0]);
     } catch (HausException e) {
-      throw SchemaFiles.inFile(e, path);
+      throw files.inFile(e);
     }
   }
 
@@ -218,12 +218,15 @@ final class SchemaLoader {
     templates.add(instances.get(byKey.get(templateKey(at.u, at.d, def.params))));
   }
 
-  /** The id of a file outside packages (spec §13.3): different for different files. */
+  /**
+   * The id of a file outside packages (spec §13.3): different for different files, and never of
+   * the form of a package's id.
+   */
   private String appId(String path) {
     if (hasBase) {
-      return base + SchemaFiles.relativeID(baseDir, path);
+      return SchemaFiles.fileId(base + SchemaFiles.relativeID(baseDir, path));
     }
-    return path.replace('\\', '/');
+    return SchemaFiles.fileId(path.replace('\\', '/'));
   }
 
   private String defId(int u, int d) {
@@ -366,7 +369,7 @@ final class SchemaLoader {
           copyPath = found.path;
           path = old.path;
         } else {
-          HausException e = SchemaFiles.duplicate(old.pkg.manifest, old.pkg.dir, found.pkg.manifest, found.pkg.dir);
+          HausException e = files.duplicate(old.pkg, found.pkg);
           throw lift(failIn(u, pos, e.code(), "can't import " + label + ": " + e.reason()));
         }
       }
@@ -415,7 +418,7 @@ final class SchemaLoader {
     if (units.size() + copies.size() > SchemaFiles.MAX_FILES) {
       throw lift(failIn(u, pos, ErrorCode.TOO_MANY_FILES, "more than " + SchemaFiles.MAX_FILES + " schema files are imported"));
     }
-    String dir = SchemaFiles.shown(parent(copyPath));
+    String dir = files.showDirOf(copyPath);
     for (SchemaSyntax.ImportDecl imp : units.get(original).file.imports) {
       if (imp.module.startsWith("@")) {
         importFrom(u, pos, imp.module, label + " (its copy in " + dir + " imports " + imp.module + ")", copyPath);

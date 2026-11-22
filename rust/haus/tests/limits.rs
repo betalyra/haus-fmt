@@ -13,7 +13,12 @@ const MAX: usize = MAX_SUPPORTED_DEPTH;
 
 /// Runs `f` in a thread with a 2 MiB stack.
 fn in_small_thread(f: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new().stack_size(2 * 1024 * 1024).spawn(f).unwrap().join().unwrap();
+    in_thread(2 * 1024, f);
+}
+
+/// Runs `f` in a thread with a stack of `kib` KiB.
+fn in_thread(kib: usize, f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new().stack_size(kib * 1024).spawn(f).unwrap().join().unwrap();
 }
 
 /// Values `n` levels deep, of every kind of container: arrays, records,
@@ -34,7 +39,12 @@ fn deep(n: usize) -> [(String, Value); 4] {
 
 #[test]
 fn every_path_takes_the_supported_depth_in_a_small_thread() {
-    in_small_thread(|| {
+    in_small_thread(every_path_at_the_supported_depth);
+}
+
+/// Every recursive path at the supported depth (spec §7).
+fn every_path_at_the_supported_depth() {
+    {
         let limits = Limits { max_depth: MAX, ..Limits::default() };
         for (text, value) in deep(MAX) {
             assert_eq!(haus::parse_with(&text, &limits).unwrap(), std::slice::from_ref(&value), "{text:.20}");
@@ -60,7 +70,19 @@ fn every_path_takes_the_supported_depth_in_a_small_thread() {
         let imported = (0..MAX).fold(Json::Null, |j, _| Json::Array(vec![j]));
         let text = json::write_with(&imported, &limits).unwrap();
         assert!(json::import(&imported, &limits).is_ok() && json::import_json_with(&text, &limits).is_ok());
-    });
+    }
+}
+
+/// The same in a thread with a 512 KiB stack (a secondary thread's default
+/// on macOS), as spec §7 asks: in an optimized build. A debug build needs
+/// up to about 1.5 MiB at 256 levels (the parser and the self-describing
+/// JSON, measured on aarch64 macOS), and 256 is the least maximum spec §7
+/// allows, so there it can't be lowered to fit: `cargo test --release`
+/// runs this test.
+#[test]
+#[cfg_attr(debug_assertions, ignore = "a debug build needs more than 512 KiB at 256 levels: run with --release")]
+fn every_path_takes_the_supported_depth_in_a_512_kib_thread() {
+    in_thread(512, every_path_at_the_supported_depth);
 }
 
 #[test]

@@ -13,7 +13,12 @@ use haus::{Encode, Limits, MAX_SUPPORTED_DEPTH as MAX, json};
 
 /// Runs `f` in a thread with a 2 MiB stack.
 fn in_small_thread(f: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new().stack_size(2 * 1024 * 1024).spawn(f).unwrap().join().unwrap();
+    in_thread(2 * 1024, f);
+}
+
+/// Runs `f` in a thread with a stack of `kib` KiB.
+fn in_thread(kib: usize, f: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new().stack_size(kib * 1024).spawn(f).unwrap().join().unwrap();
 }
 
 /// `Node(Node(…, Leaf), Leaf)`: each `Node` is a level.
@@ -39,7 +44,19 @@ fn thread(replies: usize) -> (String, Thread) {
 
 #[test]
 fn recursive_types_at_the_supported_depth() {
-    in_small_thread(|| {
+    in_small_thread(recursive_types_at_max);
+}
+
+/// The same in a 512 KiB thread (spec §7), in an optimized build: a debug
+/// build's parser needs more at 256 levels (see haus/tests/limits.rs).
+#[test]
+#[cfg_attr(debug_assertions, ignore = "a debug build needs more than 512 KiB at 256 levels: run with --release")]
+fn recursive_types_at_the_supported_depth_in_a_512_kib_thread() {
+    in_thread(512, recursive_types_at_max);
+}
+
+fn recursive_types_at_max() {
+    {
         let limits = Limits { max_depth: MAX, ..Limits::default() };
         let (text, value) = tree(MAX);
         assert_eq!(haus::from_str::<Tree>(&text).unwrap(), value);
@@ -69,7 +86,7 @@ fn recursive_types_at_the_supported_depth() {
         assert!(json::to_string_with(&value, &limits).unwrap_err().to_string().ends_with(&deeper));
         let (_, value) = thread(MAX - 1);
         assert!(haus::to_string_with(&value, &limits).is_ok());
-    });
+    }
 }
 
 #[test]

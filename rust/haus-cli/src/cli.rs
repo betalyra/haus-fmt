@@ -44,8 +44,8 @@ pub enum Command {
     /// searched for `*.haus` files (schema files included), respecting
     /// .gitignore. Standard input is checked value by value: each value is
     /// reported as soon as the comma after it arrives (`tail -f x.haus | haus
-    /// check -`). Schema packages are found in `node_modules`, from each schema
-    /// file's real path, or given with --package and --packages.
+    /// check -`). Schema packages are given with --package and --packages
+    /// (never looked for in `node_modules`).
     Check(CheckArgs),
     /// Rewrite data files in the standard layout (spec §11).
     ///
@@ -99,11 +99,10 @@ pub struct CheckArgs {
     pub limits: LimitArgs,
 }
 
-/// Where the schema packages that schemas import are (spec §13.3): by
-/// default in `node_modules`, from each schema file's real path, as Node
-/// finds them, for the packages the nearest package.json declares. A
-/// package given by its directory comes first, for its name; one found in a
-/// folder doesn't replace an installed one with other files.
+/// Where the schema packages that schemas import are (spec §13.3): given
+/// explicitly, each by its directory or in a folder of packages. This tool
+/// never looks in `node_modules` (only JavaScript runtimes, the npm
+/// ecosystem, do).
 #[derive(Debug, Args)]
 #[command(next_help_heading = "Packages")]
 pub struct PackageArgs {

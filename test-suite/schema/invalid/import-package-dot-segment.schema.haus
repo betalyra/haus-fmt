@@ -1,0 +1,3 @@
+// A package name's parts start with a letter or digit (spec §13.3): @acme/.. is no package.
+import @acme/.. (A)
+type B = { a: A }

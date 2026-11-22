@@ -70,9 +70,16 @@ public final class Schema {
    * Reads the schema file at {@code path}, its relative imports next to it, and the packages it
    * imports, found by {@code options}' locator. Errors in an imported file are reported at the
    * import, with their place in that file.
+   *
+   * <p>Relative imports stay inside the build's root (spec §13.3): the directory of the file's
+   * real path, or {@code options}' {@link SchemaOptions#root() root}; one that leaves it is {@code
+   * import-outside-root}. Messages show paths relative to the root. Every file read is a regular
+   * file, opened without following a link at its last name; the type is checked just before the
+   * open, as Java can't open a file without blocking, so a file swapped for a FIFO in between can
+   * block the load (only someone who may write to the schema's directories can do that).
    */
   public static Schema load(Path path, SchemaOptions options) {
-    return SchemaLoader.load(path.toAbsolutePath().toString(), Objects.requireNonNull(options, "options"));
+    return SchemaLoader.load(path.toString(), Objects.requireNonNull(options, "options"));
   }
 
   /** {@link #load(Path, SchemaOptions)} with the default options: no packages. */

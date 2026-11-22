@@ -395,9 +395,10 @@ func (p *parser) importDecl() (importDecl, *synErr) {
 		p.pos += len(p.peekWord())
 	case p.pos < len(s) && (s[p.pos] == '@' || s[p.pos] == '.'):
 		// A package module (@org/name@1) is read to its end with its
-		// version, so that @a/b@1~x is import-version; a file path has no
-		// '~' (grammar path), so ./a~b ends before it, a syntax error.
-		chars := "_.-/@"
+		// version, so that @a/b@1~x is import-version; a file path has only
+		// A-Z, a-z, 0-9, _, ., / and - (grammar path), so ./a~b and ./a@1
+		// end before the '~' and the '@', syntax errors.
+		chars := "_.-/"
 		if s[p.pos] == '@' {
 			chars = "_.-/@~"
 		}
@@ -408,6 +409,10 @@ func (p *parser) importDecl() (importDecl, *synErr) {
 		if p.pos == start+1 {
 			p.pos = start
 			return imp, p.expected("a module (std/time, @org/name, ./file)")
+		}
+		if m := s[start:p.pos]; (strings.HasPrefix(m, "./") || strings.HasPrefix(m, "../")) && !isPath(m) {
+			return imp, failAt(start, haus.CodeSchemaSyntax, "%s is not a file path: '..' only at its start, then names "+
+				"that start with a letter, a digit, '_' or '-', with no empty name and no '/' at the end (./common, ../shared/money)", quote(m))
 		}
 	default:
 		return imp, p.expected("a module (std/time, @org/name, ./file)")
@@ -440,6 +445,33 @@ func (p *parser) importDecl() (importDecl, *synErr) {
 		return imp, err
 	}
 	return imp, nil
+}
+
+// isPath reports whether module is a file path of grammar.ebnf: "./" or
+// one or more "../", then names separated by '/', each starting with a
+// letter, a digit, '_' or '-' (spec §13.3): no "." or ".." name after the
+// start, no empty name, no '/' at the end.
+func isPath(module string) bool {
+	rest, ok := strings.CutPrefix(module, "./")
+	if !ok {
+		for {
+			r, up := strings.CutPrefix(module, "../")
+			if !up {
+				break
+			}
+			module, ok = r, true
+		}
+		rest = module
+	}
+	if !ok || rest == "" {
+		return false
+	}
+	for _, name := range strings.Split(rest, "/") {
+		if name == "" || !isWord(name[0]) && name[0] != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *parser) typeDef() (*typeDef, *synErr) {

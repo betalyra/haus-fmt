@@ -129,8 +129,8 @@ func floats(xs [2]float64) string {
 
 func main() {
 	// The packages the schema imports, @haus-fmt/money and @haus-fmt/geo,
-	// given by their directories (schema.NodeModules{} finds them in
-	// node_modules instead).
+	// given by the folder of their directories (a Go module that embeds a
+	// package gives it with PackageFS instead).
 	packages, err := schema.NewExplicit().Folder(filepath.Join(root(), "extensions"))
 	if err != nil {
 		log.Fatal(err)
