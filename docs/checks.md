@@ -59,7 +59,7 @@ Never an attribute. haus has no `@min`, `@max`, `@pattern` or `@default`, and wo
 
 The prelude's rules and the `std/time` profile are in the spec. A profile's rule is written in prose in its package (`profiles/iso.md`), and that text is the definition; its test vectors only test it, so where the two disagree, the vectors are wrong.
 
-`std/time` and the official profiles, `iso` and `wgs84`, each have a reference checker in Lean, proven to compute exactly their rule. In CI, generated values are fuzzed through the reference checker and through every binding's `std/time` check or profile codecs (TypeScript, Effect, Rust, Python, Go, JVM and Roc for the profiles). Swift and Zig ship no profile codecs yet.
+`std/time` and the official profiles, `iso` and `wgs84`, each have a reference checker in Lean, proven to compute exactly their rule. In CI, generated values are fuzzed through the reference checker and through every binding's `std/time` check or profile codecs (TypeScript, Effect, Rust, Python, Go, JVM and Roc for the profiles). Zig's profile codecs pass the vectors and are not fuzzed yet; Swift ships none yet.
 
 ## Where a type goes
 

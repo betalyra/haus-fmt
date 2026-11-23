@@ -45,7 +45,7 @@ New kinds of events can show up later: a reader that only cares about users just
 
 - **Try it in the browser:** the [playground](https://haus-fmt.org/play) needs nothing installed.
 - **VS Code:** install **haus** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=betalyra.haus), or run `code --install-extension betalyra.haus`. You get highlighting, errors as you type, types on hover, formatting and schema inference.
-- **In your code:** libraries for [TypeScript](typescript/packages/haus) (with an [Effect adapter](typescript/packages/effect) and [typed imports](typescript/packages/import)), [Rust](rust), [Roc](roc), [Python](python) and [Go](go). See [Install](https://haus-fmt.org/docs/install).
+- **In your code:** libraries for [TypeScript](typescript/packages/haus) (with an [Effect adapter](typescript/packages/effect) and [typed imports](typescript/packages/import)), [Rust](rust), [Roc](roc), [Python](python), [Go](go) and [Zig](zig) (with a C ABI). See [Install](https://haus-fmt.org/docs/install).
 
 ## Learn more
 
@@ -70,6 +70,7 @@ The documentation lives at [haus-fmt.org/docs](https://haus-fmt.org/docs):
 | [`go/`](go) | Parser, formatter, streams, canonical form and hashing, JSON, schemas and checks, the official profiles' codecs, examples |
 | [`swift/`](swift) | Parser, formatter, streams, canonical form and hashing, JSON, schemas and typed decoding (Codable), examples |
 | [`jvm/`](jvm) | Java core and Kotlin wrapper (JVM, Android): parser, formatter, streams, canonical form, hashing, JSON, schemas, the official profiles' codecs, typed codecs (records, Kotlin data classes), examples |
+| [`zig/`](zig) | Written from the spec and the suites only, to check them: parser, formatter, streams, canonical form and hashing, JSON, schemas and packages, codecs (std/time, the official profiles), a C ABI (`libhaus`, `haus.h`), examples |
 | [`extensions/`](extensions) | Official schema packages (`@haus-fmt/money`, `@haus-fmt/geo`) |
 | [`editors/vscode/`](editors/vscode) | The VS Code extension |
 | [`fuzz/`](fuzz) | Differential fuzzing of all implementations against each other and `haus-ref` |
@@ -86,7 +87,8 @@ cd python && uv run pytest                        # Python
 cd go && go test ./...                            # Go
 cd swift && swift test                            # Swift
 cd jvm && ./gradlew build                         # Java and Kotlin
+cd zig && zig build test examples                 # Zig, the C ABI and its examples
 cd spec/lean && lake build --wfail                # the proofs and haus-ref
 ```
 
-TypeScript, Rust and Roc have the same three examples (quickstart, order, logs), and Go the first two; see their READMEs for how to run them.
+TypeScript, Rust and Roc have the same three examples (quickstart, order, logs), and Go and Zig the first two (Zig also the quickstart in C); see their READMEs for how to run them.

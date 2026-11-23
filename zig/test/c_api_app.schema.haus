@@ -1,0 +1,5 @@
+// For test/c_api_test.c: a schema that imports a package given as files
+// in memory (haus_package_tree).
+import @acme/units (Meters)
+
+type Run = { distance: Meters }

@@ -360,9 +360,9 @@ jobs:
         working-directory: .
         run: swift build -Xswiftc -warnings-as-errors
 
-  # The Zig binding (zig/, a clean-room implementation from the spec and the
-  # suites: the data format, schemas, decoding, JSON and packages). zig/** counts
-  # as code in `changes`.
+  # The Zig binding (zig/, written from the spec and the suites only, so that it
+  # checks them: the data format, schemas, decoding, JSON, packages, codecs and
+  # the C ABI). zig/** counts as code in `changes`.
   zig:
     name: Zig
     needs: changes
@@ -377,15 +377,27 @@ jobs:
         with:
           version: 0.17.1
       - name: Format
-        run: zig fmt --check build.zig src test
-      # The unit tests, the C ABI's tests and the conformance suite (data, format, schema,
-      # schema/invalid, stream/typed, check, json and packages), in a safe build mode.
+        run: zig fmt --check build.zig build.zig.zon src test examples
+      # The unit tests, the C ABI's tests (in Zig and from C), the official profiles'
+      # vectors and the conformance suite (data, format, schema, schema/invalid,
+      # stream/typed, check, json and packages), in a safe build mode.
       - name: Test
         run: zig build test -Doptimize=ReleaseSafe --summary all
       - name: Conformance suite (debug)
         run: zig build suite
-      - name: Build the library, the header and the fuzz runner
-        run: zig build fuzz-runner install -Doptimize=ReleaseSafe
+      # The quickstart and order examples (Zig) and the quickstart in C, their output checked.
+      - name: Examples
+        run: zig build examples --summary all
+      - name: Build the libraries, the header and the fuzz runner
+        run: |
+          zig build fuzz-runner install -Doptimize=ReleaseSafe -Dcpu=baseline
+          zig build install -Doptimize=ReleaseSafe -Dlinkage=dynamic
+          ls -l zig-out/lib zig-out/include
+      # libhaus linked by the system's C compiler, as a C project would.
+      - name: The C example with cc
+        run: |
+          cc -std=c11 -Wall -Werror examples/c/quickstart.c -Izig-out/include zig-out/lib/libhaus.a -o quickstart-c
+          ./quickstart-c ../examples | diff - examples/quickstart.out
 
   jvm:
     name: JVM (Java and Kotlin)

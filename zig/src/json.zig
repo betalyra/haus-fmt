@@ -969,14 +969,17 @@ pub const WriteJsonOptions = struct {
     diagnostic: ?*Diagnostic = null,
 };
 
-/// Writes a decoded value of `def` as schema-based JSON (§16.3).
+/// Writes a decoded value of `def` as schema-based JSON (§16.3). It may
+/// hold codecs' host values (§13.4).
 pub fn toJson(gpa: Allocator, def: *const Def, d: Decoded, options: WriteJsonOptions) Error![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var w: Writer = .{ .arena = arena_state.allocator(), .gpa = gpa, .out = &out, .diag = options.diagnostic };
-    try w.write(.{ .e = def.body, .env = null }, d, &Path.root);
+    // Host values of codecs (§13.4) are written as their codec encodes them.
+    const plain = try decode_mod.lower(arena_state.allocator(), d, options.diagnostic);
+    try w.write(.{ .e = def.body, .env = null }, plain, &Path.root);
     return out.toOwnedSlice(gpa);
 }
 

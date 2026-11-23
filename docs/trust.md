@@ -36,7 +36,7 @@ The proofs use only Lean's standard axioms.
 
 ### What is not proven
 
-- **The bindings you use.** TypeScript, Rust, Python, Go and Roc are separate programs. They are tested against the reference, as described [below](#the-same-everywhere), but testing is not proof.
+- **The bindings you use.** TypeScript, Rust, Python, Go, Zig and Roc are separate programs. They are tested against the reference, as described [below](#the-same-everywhere), but testing is not proof.
 - **Running time in the bindings.** The linear bound is about the reference parser in its cost model. The bindings' own speed is not proven; they have tests with hostile inputs that would make a quadratic implementation slow. Converting a long hex literal to decimal is quadratic in its digits, which the number limit keeps small.
 - **Some parts below the model.** The model reads Unicode code points, so UTF-8 decoding isn't covered, and neither are error positions. The hash proofs are about the text that is hashed, not SHA-256 itself.
 - **Imports in schema files.** Finding packages is modelled and proven on its own, but the Lean schema-file reader doesn't bring in the definitions of imported packages.
@@ -45,7 +45,7 @@ The proofs use only Lean's standard axioms.
 
 ## The same everywhere
 
-A proof about the reference parser only helps you if the library you use behaves the same way. haus has bindings for TypeScript (with an adapter for Effect), Rust, Python, Go and Roc. Two things keep them in line with the reference and with each other.
+A proof about the reference parser only helps you if the library you use behaves the same way. haus has bindings for TypeScript (with an adapter for Effect), Rust, Python, Go, Zig (with a C ABI) and Roc. Two things keep them in line with the reference and with each other. The Zig binding is written from the specification and the suite alone, without reading the other bindings' code, so it also checks that the specification says enough.
 
 ### One conformance suite
 

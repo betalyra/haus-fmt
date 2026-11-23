@@ -1,4 +1,7 @@
 .{
+    // `zig fetch --save=haus <release tarball URL>`, then in build.zig:
+    // `b.dependency("haus", .{ .target = target, .optimize = optimize }).module("haus")`
+    // (and `.artifact("haus")` for libhaus, the C ABI). See README.md.
     .name = .haus,
     .version = "0.1.0",
     .minimum_zig_version = "0.17.1",
@@ -9,6 +12,8 @@
         "build.zig.zon",
         "src",
         "include",
+        "examples",
         "README.md",
+        "LICENSE",
     },
 }

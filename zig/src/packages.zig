@@ -277,9 +277,17 @@ pub const Build = struct {
         try b.files.put(b.arena(), real, st);
         const importer = try b.arena().create(Importer);
         importer.* = .{ .build = b, .real = real, .package = package };
+        // The ids of its types (§13.3, "Identity"): a package's name and
+        // major version, or `./` and the file's path from the root, which
+        // has no `@` at its start, so it never has a package's form.
+        const module = if (package) |p|
+            try std.fmt.allocPrint(b.arena(), "{s}@{s}", .{ p.name, p.version[0 .. std.mem.indexOfScalar(u8, p.version, '.') orelse p.version.len] })
+        else
+            try std.fmt.allocPrint(b.arena(), "./{s}", .{b.displayReal(real)});
         const s = try schema_mod.load(b.gpa, text, .{
             .diagnostic = b.options.diagnostic,
             .resolver = .{ .context = importer, .resolve = resolve },
+            .module = module,
         });
         b.schemas.append(b.gpa, s) catch |e| {
             s.deinit();
