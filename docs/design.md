@@ -39,14 +39,9 @@ type Order = { id: UInt64, coupon: Maybe String, note?: String }
 
 A schema says which fields a record has, which tags a variant takes, and which type each value is. It has no syntax for rules about values: no `@min`, `@max`, patterns or defaults. The only rules about values are those of the built-in types, such as the range of `UInt8` or the [std/time profile](/docs/spec/time). The spec fixes them, they run in linear time, and they mean the same in every language.
 
-Rules beyond that are left out on purpose. Every rule a schema could hold would have to behave the same in every binding: regex dialects differ between languages, and a backtracking regex can take exponential time on hostile input. And rules like "at most 9 passengers" or "only these currencies" change with your business, more often than the shape of your data does. They belong to the application that knows them.
+The line is this: haus decides what a value is; your application decides whether it accepts it. `2026-02-30` is no date anywhere, so haus rejects it. "At most 9 passengers" or "only the currencies we sell in" is your business's choice, changes more often than the shape of your data, and belongs to the application that knows it. Rules in a schema would also have to behave the same in every binding: regex dialects differ between languages, and a backtracking regex can take exponential time on hostile input.
 
-What to do instead:
-
-- **Pick a tighter type.** `UInt8` for 0 to 255, a closed variant instead of a string with allowed values, `Date` instead of a string with a date pattern.
-- **Check in your application**, after decoding, or in a **codec**: it runs after the schema and can reject more values, never fewer ([§13.4](/docs/spec#134-codecs)).
-- **Share rules through a package profile.** A schema package can define profiles: rules that codecs implement, defined by test vectors. `@haus-fmt/money/iso` says a currency code is three letters A–Z ([§13.3](/docs/spec#133-schema-packages)).
-- **Write a comment** for the people who read the schema.
+What to do instead: pick a tighter type (`UInt8`, a closed variant, `Date`), check in your application or in a codec, use a package's profile where one defines the type (`@haus-fmt/money/iso`: a currency code is three letters A–Z), and write a comment for the people who read the schema. Which rules haus has, and where the others go: [What haus checks and what it doesn't](/docs/checks).
 
 ```haus-schema
 import std/time (Date)
@@ -134,7 +129,7 @@ The writer may mean something by it: `19.90` is a price with cents, `1.0` a meas
 
 ### Why no min/max, regex or default values in schemas?
 
-The schema describes shape, and rules about values go to codecs, package profiles or your application: see [the schema describes shape](#the-schema-describes-shape) above. Defaults have a second problem: what a missing field means depends on the reader. In a config, it may mean a default; in a partial update, "leave it as it is". So decoders keep the field missing and let the application decide. [§1](/docs/spec#1-data-model)
+Because "at most 100" is your application's rule, not part of what a number is: see [the schema describes shape](#the-schema-describes-shape) above, and [What haus checks and what it doesn't](/docs/checks). Defaults have a second problem: what a missing field means depends on the reader. In a config, it may mean a default; in a partial update, "leave it as it is". So decoders keep the field missing and let the application decide. [§1](/docs/spec#1-data-model)
 
 ### Why only one attribute, `@deprecated`?
 
@@ -144,7 +139,7 @@ An attribute must pass three tests: it doesn't change which data is valid or wha
 type Client = { id: Int, @deprecated("use email") mail?: String, email?: String }
 ```
 
-`@min` and `@default` fail the first test. Text for people belongs in comments. Tools accept attributes they don't know and warn about them, so a schema written for a later version still works with older tools. [§14](/docs/spec#14-schema-files)
+`@min` and `@default` fail the first test: such rules are your application's ([What haus checks](/docs/checks)). Text for people belongs in comments. Tools accept attributes they don't know and warn about them, so a schema written for a later version still works with older tools. [§14](/docs/spec#14-schema-files)
 
 ### Why no sets?
 
@@ -164,7 +159,7 @@ Not yet. The spec is draft 0.1, and anything may still change, so don't build on
 
 ### Can I use my own types for dates or money?
 
-Yes, with a codec: your application chooses the host type of a named type, such as Python's `datetime.date` for a `Date` or `decimal.Decimal` for a `Decimal`. A codec runs after the schema, can reject more values but never fewer, and never changes what a value means. Every binding's default host types keep the value exactly, so decoding and encoding give back an equal value. A host type that keeps less, like a JavaScript `Date`, which forgets the offset an instant was written with, is always a choice you make explicitly (`h.InstantAsDate` in TypeScript), and its documentation says what it drops. [§13.4](/docs/spec#134-codecs)
+Yes, with a codec: your application chooses the host type of a named type, such as Python's `datetime.date` for a `Date` or `decimal.Decimal` for a `Decimal`. A codec runs after the schema, can reject more values but never fewer, and never changes what a value means. Every binding's default host types keep the value exactly, so decoding and encoding give back an equal value. A host type that keeps less, like a JavaScript `Date`, which forgets the offset an instant was written with, is always a choice you make explicitly (`h.InstantAsDate` in TypeScript), and its documentation says what it drops. The host types of each binding: [Where types come from](/docs/types#host-types-in-each-language). [§13.4](/docs/spec#134-codecs)
 
 ### How do I keep secrets out of logs?
 

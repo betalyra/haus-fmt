@@ -287,11 +287,14 @@
 { rule: "prelude.packages.codecs-optional", cases: [], untestable: True, note: "MAY: codecs for extensions and community packages" },
 { rule: "prelude.scope.import", cases: ["schema/builtins"], note: "the prelude needs no import; std/time is imported" },
 { rule: "prelude.binding.checks-rules", cases: ["schema/numbers", "schema/builtins", "schema/time"] },
+{ rule: "prelude.rules.line", cases: [], untestable: True, note: "policy for the specification and for profiles: which checks are haus's" },
 { rule: "prelude.parser.no-value-rules", cases: ["valid/value-rules-not-parsed"] },
 { rule: "prelude.binding.host-types", cases: [], untestable: True, note: "MAY: host type choice; validity unchanged" },
 { rule: "prelude.rules.equality-unchanged", cases: ["schema/builtins"], note: "Instant(\"…10:00:00.250+01:00\") encodes back with its fraction and offset as written" },
 { rule: "prelude.std.versioned-with-spec", cases: [], untestable: True, note: "policy" },
 { rule: "prelude.std.time-profile", cases: ["schema/builtins", "schema/time"] },
+{ rule: "prelude.rules.admission", cases: [], untestable: True, note: "policy for the specification and for profiles; Lean proves that a given type follows it (one spelling: T6, X4; reference checkers: X2), not the rule itself" },
+{ rule: "prelude.std.admission", cases: [], untestable: True, note: "policy for the specification" },
 { rule: "prelude.std.import-no-version", cases: ["schema/invalid/import-std-version"], note: "the grammar allows no @ after std/NAME: schema-syntax in every binding" },
 { rule: "prelude.std.money-moved", cases: ["schema/invalid/import-std-money"], note: "only the code (unknown-module); the SHOULD about naming @haus-fmt/money in the message is not compared" },
 
@@ -382,8 +385,10 @@
 { rule: "packages.versions.newer-data-older-reader", cases: ["schema/records", "schema/variants", "json/schema-based"], note: "open records ignore new fields, open variants keep new tags as unknown values" },
 { rule: "packages.versions.unlisted-reserved", cases: [], untestable: True, note: "SHOULD NOT: advice to writers" },
 { rule: "packages.imports.major-only", cases: ["schema/invalid/import-leading-zero", "schema/invalid/import-minor", "schema/invalid/import-full-version", "schema/invalid/import-empty-version", "schema/invalid/import-not-a-version"] },
+{ rule: "packages.profiles.definitions", cases: [], untestable: True, note: "policy for package authors: what a profile is" },
 { rule: "packages.profiles.vectors", cases: ["../extensions/money/profiles/iso.vectors", "../extensions/geo/profiles/wgs84.vectors"], note: "profile vectors live with the extensions, outside test-suite/" },
 { rule: "packages.profiles.rule-over-vectors", cases: [], untestable: True, note: "how to resolve a disagreement between a rule and its vectors" },
+{ rule: "packages.profiles.spellings", cases: [], untestable: True, note: "a duty of profile authors, decided before a package is published; a profile's own vectors test the spellings it accepts" },
 
 // ── §13.4 Codecs ──
 { rule: "codecs.api.optional", cases: [], untestable: True, note: "MAY: codec API" },

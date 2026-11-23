@@ -3,7 +3,7 @@ title: Where types come from
 description: The prelude, standard modules and schema packages, and how a schema uses each.
 ---
 
-Data never imports anything. `Date("2027-03-15")` and `Money(19.90, EUR)` are valid haus with a schema or without one: to a parser, each is just a tag with its arguments. Imports only appear in schema files, and they decide which rules a schema binding checks.
+Data never imports anything. `Date("2027-03-15")` and `Money(19.90, EUR)` are valid haus with a schema or without one: to a parser, each is just a tag with its arguments. Imports only appear in schema files, and they bring types, not rules: every schema binding checks the rules of the prelude and `std/time`, and a package adds none until your application adds its codecs ([What haus checks](/docs/checks)).
 
 ```haus title="workshop.haus"
 {
@@ -29,7 +29,7 @@ type Root = { signupBy: Date, price: Money, seats: UInt16 }
 | Defined by | the spec | the spec | package authors: `@haus-fmt/` for the official extensions, anyone else under a name they own |
 | Versions | fixed from haus 1.0 on | versioned with the spec; a module only gains types | its own semantic version |
 | Comes with every schema binding | yes | yes | no: you add it as a dependency, from npm, crates.io, PyPI, … |
-| Rules beyond the shape | built in: integer ranges, exact decimals | built in: the [std/time profile](/docs/spec/time) | none in the schema; profiles that codecs can check |
+| Rules beyond the shape | built in: integer ranges, exact decimals | built in: the [std/time profile](/docs/spec/time) | none in the schema; profiles, checked where you add their codecs |
 | Your schema can define a type with the same name | no | yes, if it doesn't import it | yes, if it doesn't import it |
 
 ## The prelude
@@ -74,7 +74,7 @@ Everything else is a schema package: an ordinary schema file, `schema.haus`, wit
 | [`@haus-fmt/money`](https://github.com/betalyra/haus-fmt/tree/main/extensions/money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
 | [`@haus-fmt/geo`](https://github.com/betalyra/haus-fmt/tree/main/extensions/geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |
 
-The schema says a `Money` is a `Decimal` and a currency tag. Whether `XYZ` counts as a currency is up to the codec your application chooses; a profile is the recommended rule, defined by test vectors that codecs implement.
+The schema says a `Money` is a `Decimal` and a currency tag. Which tags count as currencies has more than one answer (ISO 4217, your shop's list, crypto currencies), so the schema doesn't decide it. A profile is one answer: a definition of the type, written as a rule in prose, which test vectors test. Your application picks one by adding its codec; until then, `Money(19.90, Xyz)` decodes. Like `std/time`, each official profile has a reference checker in Lean, and the codecs of every binding that ships them are fuzzed against that checker in CI (the table below).
 
 An import can name the major version it expects: `import @haus-fmt/money@1 (Money)`.
 
@@ -97,10 +97,48 @@ There is no haus registry. Publish wherever your users install dependencies from
 
 For types shared within one project, you don't need a package: `import ./common (Address)` imports `common.schema.haus` from the same folder. Relative imports are for your own files: a package is imported by its name, never by a path into its folder.
 
+## Host types in each language
+
+What a value becomes in your code. Every default keeps the value exactly: encoding what was decoded gives back an equal value. The choices marked as lossy keep less, and their documentation says what they drop.
+
+### The prelude
+
+| | `Int` | `Int8` … `UInt64` | `Decimal` | `Bytes` | `Maybe a` |
+|---|---|---|---|---|---|
+| TypeScript | `bigint` | `number`; `bigint` for `Int64`, `UInt64` | `string`, the exact literal | `Uint8Array` | `h.Maybe<A>` |
+| Effect | `bigint` | `number`; `bigint` for `Int64`, `UInt64` | `string`, the exact literal; `BigDecimal` with `Haus.DecimalAsBigDecimal` (lossy) | `Uint8Array` | `Option<A>` |
+| Rust | `haus::Int` | `i8` … `u64` | `haus::Decimal`, the exact literal | `haus::Bytes` | `Option<A>` |
+| Python | `int` | `int` | `str`, the exact literal; `decimal.Decimal` with `DecimalCodec` (lossy) | `bytes` | `Some(x)`, `Nothing()` |
+| Go | `haus.Number`, the literal (`BigInt()` for a `*big.Int`) | `haus.Number` | `haus.Number`, the literal | `haus.Bytes` | the `haus.Variant` |
+| Swift | `HausNumber`, or a fixed-width integer | `Int8` … `UInt64`, or any fixed-width integer | `HausNumber`, the exact literal | `[UInt8]` | `Optional` |
+| JVM | `BigInteger`, `long`, `int`, … | `long`, `int`, `short`, `byte`, `BigInteger` | `Value.Number`, the exact literal; `BigDecimal` (lossy) | `byte[]` | `Optional<A>`, or `null` |
+| Roc | `Int`, the exact digits | `I8` … `U64` | `Str`, the exact literal | `List(U8)` | `[None, Some(a)]` |
+| Zig | `Decoded` | `Decoded` | `Decoded` | `Decoded` | `Decoded` |
+
+Go decodes to checked `haus.Value`s (`schema.DecodeAs` gives a codec's host type), and Zig to its own `Decoded`, which keeps every value. In Swift and on the JVM, you choose among the listed types when you write your `Codable` types or records; a value that doesn't fit is `out-of-range`.
+
+### std/time and the official packages
+
+| | std/time | std/time, other host types | `@haus-fmt/money` (`iso`), `@haus-fmt/geo` (`wgs84`) |
+|---|---|---|---|
+| TypeScript | `string`, the checked text | `h.InstantAsDate`: a `Date`, in `h.*` schemas (lossy) | `iso`, `wgs84`: the same values, checked |
+| Effect | `string`, the checked text | `Haus.InstantAsDateTime`, `Haus.ZonedDateTimeAsDateTime`: `DateTime` (lossy) | `iso`, `wgs84` from `./effect`: the same values, checked |
+| Rust | `haus::time::Date`, …: the checked text | a codec of your own (to `jiff`, say) | `Iso` → `IsoMoney`, `IsoCurrency` → `CurrencyCode`, `Wgs84` → `Point`, `Wgs84BBox` → `Bounds` |
+| Python | `str`, the checked text | `DateCodec` → `datetime.date`, `InstantCodec` → `datetime.datetime` (lossy) | `haus_money.iso`, `haus_geo.wgs84`: the same values, a currency as `"EUR"` |
+| Go | the checked `haus.Value` | `schema.InstantTime` → `time.Time` (lossy) | `money.Iso` → `money.Money`, `geo.Wgs84` → `geo.LatLng`, `geo.Wgs84BBox` → `geo.BBox` |
+| Swift | `String`, the checked text | a `HausCodec` of your own (Foundation's `Date`, say) | none yet |
+| JVM | `String`, the checked text | `LocalDate`, `YearMonth`, `LocalTime`, `LocalDateTime`, `Instant`, `OffsetDateTime`, `ZoneId` (lossy) | `MoneyCodecs.ISO` → `Money`, `GeoCodecs.WGS84` → `LatLng`, `WGS84_BBOX` → `BBox` |
+| Roc | `Str`, the checked text | a codec module of your own | `Iso` → `{ amount : Str, currency : Str }`, `Wgs84` → `{ lat : F64, lng : F64 }`, `Wgs84BBox` |
+| Zig | `Decoded` | none: no codecs yet | none yet |
+
+Without a codec, a package's type decodes like any type of its schema: a `Money` is a variant with a `Decimal` and a tag, and a currency of `Xyz` passes. Codecs for JavaScript's Temporal are planned after 1.0.
+
 ## Why three?
 
 **Why isn't time in the prelude?** Prelude names are reserved in every schema. With `Time` in the prelude, a schema that has its own `Time` type would have to rename it. In a module, a name is only taken when you import it. And from 1.0 on, the prelude is fixed: new built-in types only go into modules, so no existing schema ever breaks.
 
-**Why isn't money a standard module?** A standard module has to pass three tests: the prelude can't express it, nearly every domain needs it, and a fixed, published grammar defines it. Time passes all three. Money passes the second only partly, `Decimal` already keeps amounts exact, and currencies are a registry that changes. So money is a package, versioned on its own. The tests are in [spec §13.2](/docs/spec#132-standard-modules).
+**Why is time a standard module, and money a package?** The tiers differ in who checks a type's rule. Every schema binding checks the rules of `std/time`, always, and they never change. A package's rule is checked where your application adds its codec, and can change with a major version of the package. A type goes into a standard module only when its rule has one definition that everyone shares, nearly every domain needs it, and its rule must be on everywhere. Time passes: `2027-02-30` is no date anywhere, and a service that let it through would disagree with the others about what the data says. Money doesn't: which codes are currencies has several legitimate answers, so each is a profile and your application picks one, and `Decimal` already keeps amounts exact. Coordinates have one definition but few domains need them. The rules are in [spec §13.2](/docs/spec#132-standard-modules), and in plain words in [What haus checks](/docs/checks).
 
-**Why can't a schema say "at most 100"?** A schema describes shape; rules about values go to codecs, package profiles or your application. More in [Design and FAQ](/docs/design#the-schema-describes-shape).
+**Can a package become a standard module later?** Your data wouldn't notice: it never names where a type comes from, and a schema would change an import line. Your code would: codecs and generated code refer to a type by its id (`@haus-fmt/money@1#Money`), which names its package. So when in doubt, a type is a package.
+
+**Why can't a schema say "at most 100"?** Because that is your application's rule, not part of what a number is. Where such rules go: [What haus checks and what it doesn't](/docs/checks).
