@@ -278,8 +278,7 @@ pub const Codecs = struct {
     }
 };
 
-/// What a checker points out (spec §14): a hint, or the error that ends
-/// the check, at its place.
+/// What a checker points out (spec §14): a hint, or an error, at its place.
 pub const Issue = struct {
     kind: enum { hint, err },
     code: Code,
@@ -388,7 +387,7 @@ fn deeperThan(val: Value, max: u32) bool {
     };
 }
 
-fn checkDepth(c: *Ctx, val: Value, limits: v.Limits, path: *const Path) Error!void {
+fn checkDepth(c: anytype, val: Value, limits: v.Limits, path: *const Path) Error!void {
     if (limits.max_depth > v.Limits.supported_depth) {
         return c.fail(.@"unsupported-depth", path, "a depth limit of {d} is above the {d} levels this binding supports", .{ limits.max_depth, v.Limits.supported_depth });
     }
@@ -397,339 +396,418 @@ fn checkDepth(c: *Ctx, val: Value, limits: v.Limits, path: *const Path) Error!vo
     }
 }
 
-const Ctx = struct {
-    /// Allocates the decoded result (an arena is the usual choice).
-    arena: Allocator,
-    diag: ?*Diagnostic,
-    hints: ?*std.ArrayList(Issue),
-    /// Inside a `Secret`: no hints, and errors are rewritten at the secret.
-    secret_depth: u32 = 0,
-    codecs: ?*const Codecs = null,
+/// The decoder: the first error ends it.
+const Ctx = CtxOf(false);
+/// A checker reporting every error (spec §14, "Every error"): each error
+/// is added to `hints` (with the hints), and a record, an array, a map and
+/// a positional payload go on past a part that failed. A separate
+/// instance, so that the decoder's code and frames stay as they are.
+const AllCtx = CtxOf(true);
 
-    /// A named type without arguments, decoded and then given to its
-    /// codec, if the application has one (spec §13.4).
-    noinline fn named(c: *Ctx, ref: schema_mod.Ref, val: Value, path: *const Path) Error!Decoded {
-        // Nothing inlined here: this is a step of the recursion.
-        const id, const d = switch (ref) {
-            .builtin => |b| .{ schema_mod.builtinId(b), try @call(.never_inline, Ctx.builtin, .{ c, b, &.{}, null, val, path }) },
-            .time => |k| .{ schema_mod.timeId(k), try @call(.never_inline, Ctx.timeValue, .{ c, k, val, path }) },
-            .def => |def| .{ def.id, try @call(.never_inline, Ctx.decode, .{ c, def.body, null, val, path }) },
-            .unresolved => unreachable,
-        };
-        const cs = c.codecs orelse return d;
-        const codec = cs.get(id) orelse return d;
-        return c.applyCodec(codec, d, path);
-    }
+fn CtxOf(comptime all_mode: bool) type {
+    return struct {
+        const Self = @This();
 
-    /// Runs the codec for the type `id`, if the application has one, on
-    /// what the schema decoded (spec §13.4): a rejection is
-    /// `codec-rejected` at the type's place.
-    fn withCodec(c: *Ctx, id: []const u8, d: Decoded, path: *const Path) Error!Decoded {
-        const cs = c.codecs orelse return d;
-        const codec = cs.get(id) orelse return d;
-        return c.applyCodec(codec, d, path);
-    }
+        /// Allocates the decoded result (an arena is the usual choice).
+        arena: Allocator,
+        diag: ?*Diagnostic,
+        hints: ?*std.ArrayList(Issue),
+        /// Inside a `Secret`: no hints, and errors are rewritten at the
+        /// secret. With `all_mode`, nothing is collected inside one: its
+        /// first error is one `invalid-secret` at the secret.
+        secret_depth: u32 = 0,
+        codecs: ?*const Codecs = null,
+        /// With `all_mode`: the count and the cap (must be set).
+        all: ?*AllErrors = null,
 
-    noinline fn applyCodec(c: *Ctx, codec: *const AnyCodec, d: Decoded, path: *const Path) Error!Decoded {
-        var reason: Reason = .{};
-        var out = codec.decode(c.arena, d, &reason) catch |e| switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.Rejected => return c.fail(.@"codec-rejected", path, "{s} rejects the value: {s}", .{ codec.id, reason.message() }),
-        };
-        if (out == .host) out.host.codec = codec;
-        return out;
-    }
-
-    /// Never inlined: its buffer would grow the frames of the recursive
-    /// decoder (spec §7, the stack needed at the supported depth).
-    noinline fn fail(c: *Ctx, code: Code, path: *const Path, comptime fmt: []const u8, args: anytype) Error {
-        if (c.diag) |d| {
-            d.set(code, fmt, args);
-            d.line = 0;
-            d.column = 0;
-            d.offset = 0;
-            var buf: [Diagnostic.path_capacity]u8 = undefined;
-            var fba = std.heap.FixedBufferAllocator.init(&buf);
-            const a = fba.allocator();
-            var out: std.ArrayList(u8) = .empty;
-            path.write(a, &out) catch {};
-            d.setPath(out.items);
+        fn collecting(c: *const Self) bool {
+            return all_mode and c.secret_depth == 0;
         }
-        return error.Haus;
-    }
 
-    fn hint(c: *Ctx, code: Code, path: *const Path) Error!void {
-        if (c.secret_depth > 0) return;
-        const list = c.hints orelse return;
-        try list.append(c.arena, .{ .kind = .hint, .code = code, .path = try path.toOwned(c.arena) });
-    }
-
-    fn kindName(val: Value) []const u8 {
-        return switch (val) {
-            .number => "a number",
-            .string => "a string",
-            .bytes => "bytes",
-            .array => "an array",
-            .record => "a record",
-            .variant => "a variant",
-        };
-    }
-
-    fn mismatch(c: *Ctx, path: *const Path, comptime expected: []const u8, val: Value) Error {
-        return c.fail(.@"type-mismatch", path, "expected " ++ expected ++ ", found {s}", .{kindName(val)});
-    }
-
-    fn decode(c: *Ctx, e: *const Expr, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
-        switch (e.kind) {
-            .paren => |inner| return c.decode(inner, env, val, path),
-            .param => |p| {
-                const en = env.?;
-                return c.decode(en.args[p.index], en.parent, val, path);
-            },
-            .record => |rec| return c.record(rec, env, val, path),
-            .variant => |vt| return c.variant(vt, env, val, path),
-            .name => |n| {
-                // With codecs, a step of its own (it keeps the frame of
-                // this recursive function as small as without, spec §7).
-                if (c.codecs != null and n.args.len == 0) return c.named(n.ref, val, path);
-                switch (n.ref) {
-                    .builtin => |b| return c.builtin(b, n.args, env, val, path),
-                    .time => |k| return c.timeValue(k, val, path),
-                    .def => |d| {
-                        const inner_env: ?*const Env = if (n.args.len > 0) blk: {
-                            const en = try c.arena.create(Env);
-                            en.* = .{ .args = n.args, .parent = env };
-                            break :blk en;
-                        } else null;
-                        return c.decode(d.body, inner_env, val, path);
-                    },
-                    .unresolved => unreachable,
-                }
-            },
+        /// With `all_mode`, after `e`, a part of a container that failed:
+        /// whether to go on (outside a `Secret`, below the cap).
+        noinline fn goOn(c: *Self, e: Error) Error!void {
+            if (e != error.Haus or !c.collecting() or c.all.?.stopped) return e;
         }
-    }
 
-    /// The codecs of the named types a record case's payload is written
-    /// with (`Shipped Address`, `type Address = Base`), applied from the
-    /// inside out: the payload is a decoded value of its own here, so a
-    /// codec reaches it (never `codec-unreachable`, spec §13.4).
-    noinline fn payloadCodecs(c: *Ctx, e0: *const Expr, env0: ?*const Env, slot: *Decoded, path: *const Path) Error!void {
-        var ids: std.ArrayList([]const u8) = .empty;
-        var e = e0;
-        var env = env0;
-        while (true) switch (e.kind) {
-            .paren => |inner| e = inner,
-            .param => |p| {
-                const en = env.?;
-                e = en.args[p.index];
-                env = en.parent;
-            },
-            .name => |n| {
-                const d = n.ref.def;
-                if (n.args.len > 0) {
-                    const en = try c.arena.create(Env);
-                    en.* = .{ .args = n.args, .parent = env };
-                    env = en;
-                } else {
-                    try ids.append(c.arena, d.id);
-                    env = null;
-                }
-                e = d.body;
-            },
-            else => break,
-        };
-        var i = ids.items.len;
-        while (i > 0) {
-            i -= 1;
-            slot.* = try c.withCodec(ids.items[i], slot.*, path);
+        /// Adds the error `fail` has just set in the diagnostic, at its full
+        /// place (the diagnostic's may be cut short).
+        noinline fn collect(c: *Self, path: *const Path) Allocator.Error!void {
+            const all = c.all.?;
+            const d = c.diag.?;
+            try c.hints.?.append(c.arena, .{ .kind = .err, .code = d.code, .path = try path.toOwned(c.arena), .message = try c.arena.dupe(u8, d.message()) });
+            all.count += 1;
+            if (all.max != 0 and all.count >= all.max) all.stopped = true;
         }
-    }
 
-    fn builtin(c: *Ctx, b: schema_mod.Builtin, args: []const *Expr, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
-        switch (b) {
-            .String => return if (val == .string) .{ .string = val.string } else c.mismatch(path, "a string", val),
-            .Bytes => return if (val == .bytes) .{ .bytes = val.bytes } else c.mismatch(path, "bytes", val),
-            .Any => return .{ .any = val },
-            .Int, .Int8, .Int16, .Int32, .Int64, .UInt8, .UInt16, .UInt32, .UInt64 => return c.integer(b, val, path),
-            .Float64 => return c.float(f64, val, path),
-            .Float32 => return c.float(f32, val, path),
-            .Decimal => return if (val == .number) .{ .decimal = val.number } else c.mismatch(path, "a number", val),
-            .Array => {
-                if (val != .array) return c.mismatch(path, "an array", val);
-                const out = try c.arena.alloc(Decoded, val.array.len);
-                for (val.array, 0..) |item, i| {
-                    const p = path.index(i);
-                    out[i] = try c.decode(args[0], env, item, &p);
-                }
-                return .{ .array = out };
-            },
-            .Map => {
-                if (val != .record) return c.mismatch(path, "a record (a Map)", val);
-                const out = try c.arena.alloc(Decoded.Entry, val.record.len);
-                for (val.record, 0..) |f, i| {
-                    const p = path.key(f.key);
-                    out[i] = .{ .key = f.key, .value = try c.decode(args[0], env, f.value, &p) };
-                }
-                return .{ .map = out };
-            },
-            .Secret => {
-                c.secret_depth += 1;
-                defer c.secret_depth -= 1;
-                const inner = c.decode(args[0], env, val, path) catch |err| switch (err) {
-                    error.Haus => return c.fail(.@"invalid-secret", path, "the value of this Secret is not valid for its type (the value is not shown)", .{}),
-                    else => return err,
-                };
-                const box = try c.arena.create(Decoded);
-                box.* = inner;
-                return .{ .secret = box };
-            },
-            .Stream => return c.fail(.@"type-mismatch", path, "a Stream describes a whole file, not one value", .{}),
+        /// A named type without arguments, decoded and then given to its
+        /// codec, if the application has one (spec §13.4).
+        noinline fn named(c: *Self, ref: schema_mod.Ref, val: Value, path: *const Path) Error!Decoded {
+            // Nothing inlined here: this is a step of the recursion.
+            const id, const d = switch (ref) {
+                .builtin => |b| .{ schema_mod.builtinId(b), try @call(.never_inline, Self.builtin, .{ c, b, &.{}, null, val, path }) },
+                .time => |k| .{ schema_mod.timeId(k), try @call(.never_inline, Self.timeValue, .{ c, k, val, path }) },
+                .def => |def| .{ def.id, try @call(.never_inline, Self.decode, .{ c, def.body, null, val, path }) },
+                .unresolved => unreachable,
+            };
+            const cs = c.codecs orelse return d;
+            const codec = cs.get(id) orelse return d;
+            return c.applyCodec(codec, d, path);
         }
-    }
 
-    fn integer(c: *Ctx, b: schema_mod.Builtin, val: Value, path: *const Path) Error!Decoded {
-        if (val != .number) return c.mismatch(path, "an integer", val);
-        const lit = val.number;
-        if (std.mem.indexOfAny(u8, lit, ".eE") != null) {
-            var buf: [64]u8 = undefined;
-            return c.fail(.@"not-an-integer", path, "expected an integer, found {s} (not a whole number by its spelling)", .{errors.quoteText(&buf, lit)});
+        /// Runs the codec for the type `id`, if the application has one, on
+        /// what the schema decoded (spec §13.4): a rejection is
+        /// `codec-rejected` at the type's place.
+        fn withCodec(c: *Self, id: []const u8, d: Decoded, path: *const Path) Error!Decoded {
+            const cs = c.codecs orelse return d;
+            const codec = cs.get(id) orelse return d;
+            return c.applyCodec(codec, d, path);
         }
-        const text = if (std.mem.eql(u8, lit, "-0")) "0" else lit;
-        const range: ?struct { min: i128, max: i128 } = switch (b) {
-            .Int => null,
-            .Int8 => .{ .min = -(1 << 7), .max = (1 << 7) - 1 },
-            .Int16 => .{ .min = -(1 << 15), .max = (1 << 15) - 1 },
-            .Int32 => .{ .min = -(1 << 31), .max = (1 << 31) - 1 },
-            .Int64 => .{ .min = -(1 << 63), .max = (1 << 63) - 1 },
-            .UInt8 => .{ .min = 0, .max = (1 << 8) - 1 },
-            .UInt16 => .{ .min = 0, .max = (1 << 16) - 1 },
-            .UInt32 => .{ .min = 0, .max = (1 << 32) - 1 },
-            .UInt64 => .{ .min = 0, .max = (1 << 64) - 1 },
-            else => unreachable,
-        };
-        if (range) |r| {
-            const digits = if (text[0] == '-') text.len - 1 else text.len;
-            const n: ?i128 = if (digits > 30) null else std.fmt.parseInt(i128, text, 10) catch null;
-            if (n == null or n.? < r.min or n.? > r.max) {
-                var buf: [64]u8 = undefined;
-                return c.fail(.@"out-of-range", path, "{s} is outside the range of {s} ({d} to {d})", .{ errors.quoteText(&buf, text), @tagName(b), r.min, r.max });
+
+        noinline fn applyCodec(c: *Self, codec: *const AnyCodec, d: Decoded, path: *const Path) Error!Decoded {
+            var reason: Reason = .{};
+            var out = codec.decode(c.arena, d, &reason) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.Rejected => return c.fail(.@"codec-rejected", path, "{s} rejects the value: {s}", .{ codec.id, reason.message() }),
+            };
+            if (out == .host) out.host.codec = codec;
+            return out;
+        }
+
+        /// Never inlined: its buffer would grow the frames of the recursive
+        /// decoder (spec §7, the stack needed at the supported depth).
+        noinline fn fail(c: *Self, code: Code, path: *const Path, comptime fmt: []const u8, args: anytype) Error {
+            if (c.diag) |d| {
+                d.set(code, fmt, args);
+                d.line = 0;
+                d.column = 0;
+                d.offset = 0;
+                var buf: [Diagnostic.path_capacity]u8 = undefined;
+                var fba = std.heap.FixedBufferAllocator.init(&buf);
+                const a = fba.allocator();
+                var out: std.ArrayList(u8) = .empty;
+                path.write(a, &out) catch {};
+                d.setPath(out.items);
+            }
+            if (c.collecting()) c.collect(path) catch return error.OutOfMemory;
+            return error.Haus;
+        }
+
+        fn hint(c: *Self, code: Code, path: *const Path) Error!void {
+            if (c.secret_depth > 0) return;
+            const list = c.hints orelse return;
+            try list.append(c.arena, .{ .kind = .hint, .code = code, .path = try path.toOwned(c.arena) });
+        }
+
+        fn kindName(val: Value) []const u8 {
+            return switch (val) {
+                .number => "a number",
+                .string => "a string",
+                .bytes => "bytes",
+                .array => "an array",
+                .record => "a record",
+                .variant => "a variant",
+            };
+        }
+
+        fn mismatch(c: *Self, path: *const Path, comptime expected: []const u8, val: Value) Error {
+            return c.fail(.@"type-mismatch", path, "expected " ++ expected ++ ", found {s}", .{kindName(val)});
+        }
+
+        fn decode(c: *Self, e: *const Expr, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
+            switch (e.kind) {
+                .paren => |inner| return c.decode(inner, env, val, path),
+                .param => |p| {
+                    const en = env.?;
+                    return c.decode(en.args[p.index], en.parent, val, path);
+                },
+                .record => |rec| return c.record(rec, env, val, path),
+                .variant => |vt| return c.variant(vt, env, val, path),
+                .name => |n| {
+                    // With codecs, a step of its own (it keeps the frame of
+                    // this recursive function as small as without, spec §7).
+                    if (c.codecs != null and n.args.len == 0) return c.named(n.ref, val, path);
+                    switch (n.ref) {
+                        .builtin => |b| return c.builtin(b, n.args, env, val, path),
+                        .time => |k| return c.timeValue(k, val, path),
+                        .def => |d| {
+                            const inner_env: ?*const Env = if (n.args.len > 0) blk: {
+                                const en = try c.arena.create(Env);
+                                en.* = .{ .args = n.args, .parent = env };
+                                break :blk en;
+                            } else null;
+                            return c.decode(d.body, inner_env, val, path);
+                        },
+                        .unresolved => unreachable,
+                    }
+                },
             }
         }
-        return .{ .int = text };
-    }
 
-    fn float(c: *Ctx, comptime F: type, val: Value, path: *const Path) Error!Decoded {
-        switch (val) {
-            .number => |lit| {
-                const x = std.fmt.parseFloat(F, lit) catch return c.fail(.@"type-mismatch", path, "not a number", .{});
-                if (std.math.isInf(x)) {
+        /// The codecs of the named types a record case's payload is written
+        /// with (`Shipped Address`, `type Address = Base`), applied from the
+        /// inside out: the payload is a decoded value of its own here, so a
+        /// codec reaches it (never `codec-unreachable`, spec §13.4).
+        noinline fn payloadCodecs(c: *Self, e0: *const Expr, env0: ?*const Env, slot: *Decoded, path: *const Path) Error!void {
+            var ids: std.ArrayList([]const u8) = .empty;
+            var e = e0;
+            var env = env0;
+            while (true) switch (e.kind) {
+                .paren => |inner| e = inner,
+                .param => |p| {
+                    const en = env.?;
+                    e = en.args[p.index];
+                    env = en.parent;
+                },
+                .name => |n| {
+                    const d = n.ref.def;
+                    if (n.args.len > 0) {
+                        const en = try c.arena.create(Env);
+                        en.* = .{ .args = n.args, .parent = env };
+                        env = en;
+                    } else {
+                        try ids.append(c.arena, d.id);
+                        env = null;
+                    }
+                    e = d.body;
+                },
+                else => break,
+            };
+            var i = ids.items.len;
+            while (i > 0) {
+                i -= 1;
+                slot.* = try c.withCodec(ids.items[i], slot.*, path);
+            }
+        }
+
+        fn builtin(c: *Self, b: schema_mod.Builtin, args: []const *Expr, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
+            switch (b) {
+                .String => return if (val == .string) .{ .string = val.string } else c.mismatch(path, "a string", val),
+                .Bytes => return if (val == .bytes) .{ .bytes = val.bytes } else c.mismatch(path, "bytes", val),
+                .Any => return .{ .any = val },
+                .Int, .Int8, .Int16, .Int32, .Int64, .UInt8, .UInt16, .UInt32, .UInt64 => return c.integer(b, val, path),
+                .Float64 => return c.float(f64, val, path),
+                .Float32 => return c.float(f32, val, path),
+                .Decimal => return if (val == .number) .{ .decimal = val.number } else c.mismatch(path, "a number", val),
+                .Array => {
+                    if (val != .array) return c.mismatch(path, "an array", val);
+                    const out = try c.arena.alloc(Decoded, val.array.len);
+                    var failed = false;
+                    for (val.array, 0..) |item, i| {
+                        const p = path.index(i);
+                        out[i] = c.decode(args[0], env, item, &p) catch |e| {
+                            if (!all_mode) return e;
+                            try c.goOn(e);
+                            failed = true;
+                            continue;
+                        };
+                    }
+                    if (failed) return error.Haus;
+                    return .{ .array = out };
+                },
+                .Map => {
+                    if (val != .record) return c.mismatch(path, "a record (a Map)", val);
+                    const out = try c.arena.alloc(Decoded.Entry, val.record.len);
+                    var failed = false;
+                    for (val.record, 0..) |f, i| {
+                        const p = path.key(f.key);
+                        const d = c.decode(args[0], env, f.value, &p) catch |e| {
+                            if (!all_mode) return e;
+                            try c.goOn(e);
+                            failed = true;
+                            continue;
+                        };
+                        out[i] = .{ .key = f.key, .value = d };
+                    }
+                    if (failed) return error.Haus;
+                    return .{ .map = out };
+                },
+                .Secret => {
+                    // Inside, the first error ends the check (nothing is
+                    // collected): it is one `invalid-secret` at the secret.
+                    c.secret_depth += 1;
+                    const inner = c.decode(args[0], env, val, path) catch |err| {
+                        c.secret_depth -= 1;
+                        return switch (err) {
+                            error.Haus => c.fail(.@"invalid-secret", path, "the value of this Secret is not valid for its type (the value is not shown)", .{}),
+                            else => err,
+                        };
+                    };
+                    c.secret_depth -= 1;
+                    const box = try c.arena.create(Decoded);
+                    box.* = inner;
+                    return .{ .secret = box };
+                },
+                .Stream => return c.fail(.@"type-mismatch", path, "a Stream describes a whole file, not one value", .{}),
+            }
+        }
+
+        fn integer(c: *Self, b: schema_mod.Builtin, val: Value, path: *const Path) Error!Decoded {
+            if (val != .number) return c.mismatch(path, "an integer", val);
+            const lit = val.number;
+            if (std.mem.indexOfAny(u8, lit, ".eE") != null) {
+                var buf: [64]u8 = undefined;
+                return c.fail(.@"not-an-integer", path, "expected an integer, found {s} (not a whole number by its spelling)", .{errors.quoteText(&buf, lit)});
+            }
+            const text = if (std.mem.eql(u8, lit, "-0")) "0" else lit;
+            const range: ?struct { min: i128, max: i128 } = switch (b) {
+                .Int => null,
+                .Int8 => .{ .min = -(1 << 7), .max = (1 << 7) - 1 },
+                .Int16 => .{ .min = -(1 << 15), .max = (1 << 15) - 1 },
+                .Int32 => .{ .min = -(1 << 31), .max = (1 << 31) - 1 },
+                .Int64 => .{ .min = -(1 << 63), .max = (1 << 63) - 1 },
+                .UInt8 => .{ .min = 0, .max = (1 << 8) - 1 },
+                .UInt16 => .{ .min = 0, .max = (1 << 16) - 1 },
+                .UInt32 => .{ .min = 0, .max = (1 << 32) - 1 },
+                .UInt64 => .{ .min = 0, .max = (1 << 64) - 1 },
+                else => unreachable,
+            };
+            if (range) |r| {
+                const digits = if (text[0] == '-') text.len - 1 else text.len;
+                const n: ?i128 = if (digits > 30) null else std.fmt.parseInt(i128, text, 10) catch null;
+                if (n == null or n.? < r.min or n.? > r.max) {
                     var buf: [64]u8 = undefined;
-                    return c.fail(.@"out-of-range", path, "{s} is too large for {s}", .{ errors.quoteText(&buf, lit), if (F == f64) "Float64" else "Float32" });
+                    return c.fail(.@"out-of-range", path, "{s} is outside the range of {s} ({d} to {d})", .{ errors.quoteText(&buf, text), @tagName(b), r.min, r.max });
                 }
-                return if (F == f64) .{ .float64 = x } else .{ .float32 = x };
-            },
-            .variant => |x| {
-                if (x.args.len == 0) {
-                    const special: ?F = if (std.mem.eql(u8, x.tag, "NaN")) std.math.nan(F) else if (std.mem.eql(u8, x.tag, "Infinity")) std.math.inf(F) else if (std.mem.eql(u8, x.tag, "NegInfinity")) -std.math.inf(F) else null;
-                    if (special) |s| return if (F == f64) .{ .float64 = s } else .{ .float32 = s };
+            }
+            return .{ .int = text };
+        }
+
+        fn float(c: *Self, comptime F: type, val: Value, path: *const Path) Error!Decoded {
+            switch (val) {
+                .number => |lit| {
+                    const x = std.fmt.parseFloat(F, lit) catch return c.fail(.@"type-mismatch", path, "not a number", .{});
+                    if (std.math.isInf(x)) {
+                        var buf: [64]u8 = undefined;
+                        return c.fail(.@"out-of-range", path, "{s} is too large for {s}", .{ errors.quoteText(&buf, lit), if (F == f64) "Float64" else "Float32" });
+                    }
+                    return if (F == f64) .{ .float64 = x } else .{ .float32 = x };
+                },
+                .variant => |x| {
+                    if (x.args.len == 0) {
+                        const special: ?F = if (std.mem.eql(u8, x.tag, "NaN")) std.math.nan(F) else if (std.mem.eql(u8, x.tag, "Infinity")) std.math.inf(F) else if (std.mem.eql(u8, x.tag, "NegInfinity")) -std.math.inf(F) else null;
+                        if (special) |s| return if (F == f64) .{ .float64 = s } else .{ .float32 = s };
+                    }
+                    return c.mismatch(path, "a number, NaN, Infinity or NegInfinity", val);
+                },
+                else => return c.mismatch(path, "a number", val),
+            }
+        }
+
+        fn timeValue(c: *Self, k: time.Kind, val: Value, path: *const Path) Error!Decoded {
+            const name = k.typeName();
+            if (val != .variant or !std.mem.eql(u8, val.variant.tag, name) or val.variant.args.len != 1 or val.variant.args[0] != .string) {
+                return c.fail(.@"type-mismatch", path, "expected {s}(\"…\"), the tag {s} around one string", .{ name, name });
+            }
+            const text = val.variant.args[0].string;
+            if (!time.check(k, text)) {
+                const p = path.index(0);
+                return c.fail(.@"invalid-time", &p, "not a valid {s} of the std/time profile", .{name});
+            }
+            return .{ .time = .{ .kind = k, .text = text } };
+        }
+
+        fn record(c: *Self, rec: *const RecordType, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
+            if (val != .record) return c.mismatch(path, "a record", val);
+            const data = val.record;
+            // Which listed fields are present.
+            const present = try c.arena.alloc(i32, rec.fields.len);
+            @memset(present, -1);
+            // Each field's place in the type (-1: not listed), looked up once.
+            const slots = try c.arena.alloc(i32, data.len);
+            for (data, slots, 0..) |f, *slot, i| {
+                slot.* = -1;
+                if (rec.index.get(f.key)) |k| {
+                    present[k] = @intCast(i);
+                    slot.* = @intCast(k);
                 }
-                return c.mismatch(path, "a number, NaN, Infinity or NegInfinity", val);
-            },
-            else => return c.mismatch(path, "a number", val),
-        }
-    }
-
-    fn timeValue(c: *Ctx, k: time.Kind, val: Value, path: *const Path) Error!Decoded {
-        const name = k.typeName();
-        if (val != .variant or !std.mem.eql(u8, val.variant.tag, name) or val.variant.args.len != 1 or val.variant.args[0] != .string) {
-            return c.fail(.@"type-mismatch", path, "expected {s}(\"…\"), the tag {s} around one string", .{ name, name });
-        }
-        const text = val.variant.args[0].string;
-        if (!time.check(k, text)) {
-            const p = path.index(0);
-            return c.fail(.@"invalid-time", &p, "not a valid {s} of the std/time profile", .{name});
-        }
-        return .{ .time = .{ .kind = k, .text = text } };
-    }
-
-    fn record(c: *Ctx, rec: *const RecordType, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
-        if (val != .record) return c.mismatch(path, "a record", val);
-        const data = val.record;
-        // Which listed fields are present.
-        const present = try c.arena.alloc(i32, rec.fields.len);
-        @memset(present, -1);
-        // Each field's place in the type (-1: not listed), looked up once.
-        const slots = try c.arena.alloc(i32, data.len);
-        for (data, slots, 0..) |f, *slot, i| {
-            slot.* = -1;
-            if (rec.index.get(f.key)) |k| {
-                present[k] = @intCast(i);
-                slot.* = @intCast(k);
             }
-        }
-        for (rec.fields, 0..) |f, k| {
-            if (!f.optional and present[k] < 0) {
-                var buf: [64]u8 = undefined;
-                return c.fail(.@"missing-field", path, "missing field {s}", .{errors.quoteText(&buf, f.key)});
-            }
-        }
-        var out: std.ArrayList(Decoded.Entry) = .empty;
-        try out.ensureTotalCapacity(c.arena, rec.fields.len);
-        for (data, slots) |f, slot| {
-            const p = path.key(f.key);
-            if (slot >= 0) {
-                const field = rec.fields[@intCast(slot)];
-                if (field.deprecated != null) try c.hint(.deprecated, &p);
-                const d = try c.decode(field.type, field.env orelse env, f.value, &p);
-                out.appendAssumeCapacity(.{ .key = f.key, .value = d });
-            } else if (rec.closed) {
-                return c.fail(.@"unknown-field", &p, "not a field of this closed record", .{});
-            } else {
-                try c.hint(.@"unlisted-field", &p);
-            }
-        }
-        return .{ .record = out.items };
-    }
-
-    fn variant(c: *Ctx, vt: *const VariantType, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
-        if (val != .variant) return c.mismatch(path, "a variant", val);
-        const x = val.variant;
-        const k = vt.index.get(x.tag) orelse {
-            if (vt.closed) {
-                var buf: [64]u8 = undefined;
-                return c.fail(.@"unknown-tag", path, "{s} is not a tag of this closed variant", .{errors.quoteText(&buf, x.tag)});
-            }
-            try c.hint(.@"unlisted-tag", path);
-            return .{ .unknown = x };
-        };
-        const case = vt.cases[k];
-        if (case.deprecated != null) try c.hint(.deprecated, path);
-        const case_env = case.env orelse env;
-        switch (case.form) {
-            .none => {
-                if (x.args.len != 0) return c.fail(.@"wrong-payload", path, "{s} takes no payload", .{case.tag});
-                return .{ .variant = .{ .tag = x.tag } };
-            },
-            .record => {
-                if (x.args.len != 1 or x.args[0] != .record) return c.fail(.@"wrong-payload", path, "{s} takes one record", .{case.tag});
-                const target = unfoldRecord(c.arena, case.args[0], case_env) catch return error.OutOfMemory;
-                const args = try c.arena.alloc(Decoded, 1);
-                args[0] = try c.record(target.rec, target.env, x.args[0], path);
-                if (c.codecs != null) try c.payloadCodecs(case.args[0], case_env, &args[0], path);
-                return .{ .variant = .{ .tag = x.tag, .args = args } };
-            },
-            .positional => {
-                if (x.args.len != case.args.len) return c.fail(.@"wrong-payload", path, "{s} takes {d} arguments", .{ case.tag, case.args.len });
-                const args = try c.arena.alloc(Decoded, x.args.len);
-                for (x.args, 0..) |a, i| {
-                    const p = path.index(i);
-                    args[i] = try c.decode(case.args[i], case_env, a, &p);
+            // Collecting every error, a record checks every field (spec §14):
+            // each missing one at the record, the others each at its own place.
+            var failed = false;
+            for (rec.fields, 0..) |f, k| {
+                if (!f.optional and present[k] < 0) {
+                    var buf: [64]u8 = undefined;
+                    const e = c.fail(.@"missing-field", path, "missing field {s}", .{errors.quoteText(&buf, f.key)});
+                    if (!all_mode) return e;
+                    try c.goOn(e);
+                    failed = true;
                 }
-                return .{ .variant = .{ .tag = x.tag, .args = args } };
-            },
+            }
+            var out: std.ArrayList(Decoded.Entry) = .empty;
+            try out.ensureTotalCapacity(c.arena, rec.fields.len);
+            for (data, slots) |f, slot| {
+                const p = path.key(f.key);
+                if (slot >= 0) {
+                    const field = rec.fields[@intCast(slot)];
+                    if (field.deprecated != null) try c.hint(.deprecated, &p);
+                    const d = c.decode(field.type, field.env orelse env, f.value, &p) catch |e| {
+                        if (!all_mode) return e;
+                        try c.goOn(e);
+                        failed = true;
+                        continue;
+                    };
+                    out.appendAssumeCapacity(.{ .key = f.key, .value = d });
+                } else if (rec.closed) {
+                    const e = c.fail(.@"unknown-field", &p, "not a field of this closed record", .{});
+                    if (!all_mode) return e;
+                    try c.goOn(e);
+                    failed = true;
+                } else {
+                    try c.hint(.@"unlisted-field", &p);
+                }
+            }
+            if (failed) return error.Haus;
+            return .{ .record = out.items };
         }
-    }
-};
+
+        fn variant(c: *Self, vt: *const VariantType, env: ?*const Env, val: Value, path: *const Path) Error!Decoded {
+            if (val != .variant) return c.mismatch(path, "a variant", val);
+            const x = val.variant;
+            const k = vt.index.get(x.tag) orelse {
+                if (vt.closed) {
+                    var buf: [64]u8 = undefined;
+                    return c.fail(.@"unknown-tag", path, "{s} is not a tag of this closed variant", .{errors.quoteText(&buf, x.tag)});
+                }
+                try c.hint(.@"unlisted-tag", path);
+                return .{ .unknown = x };
+            };
+            const case = vt.cases[k];
+            if (case.deprecated != null) try c.hint(.deprecated, path);
+            const case_env = case.env orelse env;
+            switch (case.form) {
+                .none => {
+                    if (x.args.len != 0) return c.fail(.@"wrong-payload", path, "{s} takes no payload", .{case.tag});
+                    return .{ .variant = .{ .tag = x.tag } };
+                },
+                .record => {
+                    if (x.args.len != 1 or x.args[0] != .record) return c.fail(.@"wrong-payload", path, "{s} takes one record", .{case.tag});
+                    const target = unfoldRecord(c.arena, case.args[0], case_env) catch return error.OutOfMemory;
+                    const args = try c.arena.alloc(Decoded, 1);
+                    args[0] = try c.record(target.rec, target.env, x.args[0], path);
+                    if (c.codecs != null) try c.payloadCodecs(case.args[0], case_env, &args[0], path);
+                    return .{ .variant = .{ .tag = x.tag, .args = args } };
+                },
+                .positional => {
+                    if (x.args.len != case.args.len) return c.fail(.@"wrong-payload", path, "{s} takes {d} arguments", .{ case.tag, case.args.len });
+                    const args = try c.arena.alloc(Decoded, x.args.len);
+                    var failed = false;
+                    for (x.args, 0..) |a, i| {
+                        const p = path.index(i);
+                        args[i] = c.decode(case.args[i], case_env, a, &p) catch |e| {
+                            if (!all_mode) return e;
+                            try c.goOn(e);
+                            failed = true;
+                            continue;
+                        };
+                    }
+                    if (failed) return error.Haus;
+                    return .{ .variant = .{ .tag = x.tag, .args = args } };
+                },
+            }
+        }
+    };
+}
 
 /// The record type a record case's argument is, with the arguments its
 /// names were applied to.
@@ -1118,7 +1196,8 @@ pub fn encodeText(arena: Allocator, def: *const Def, d: Decoded, options: Encode
 }
 
 /// Checks a text against a definition as a tool does (spec §14): the
-/// hints, and the error that ends the check, in the order of their places.
+/// hints and every error (spec §14, "Every error"), in the order of their
+/// places in the text (a record's `missing-field` before its fields).
 pub fn check(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8) Error![]const Issue {
     return checkWith(gpa, arena, def, text, .{});
 }
@@ -1127,17 +1206,190 @@ pub const CheckOptions = struct {
     limits: v.Limits = .{},
     /// Codecs whose rules the check applies too (`codec-rejected`).
     codecs: ?*const Codecs = null,
+    /// Stop at the first error (`haus check --first`): the hints found
+    /// before it, and that error.
+    first: bool = false,
+    /// Reporting every error, the check stops after this many errors in
+    /// one value (spec §14, "Every error": bounded work on hostile input)
+    /// and says so (`CheckReport.stopped`). 0: no cap.
+    max_errors: u32 = default_max_errors,
+
+    pub const default_max_errors = 200;
 };
 
-/// `check` with limits and codecs.
+/// What a check found.
+pub const CheckReport = struct {
+    /// The hints and errors, in the order of their places in the text.
+    issues: []const Issue,
+    /// The check stopped at `CheckOptions.max_errors` errors in one value:
+    /// the rest of the text was not checked, and may have more.
+    stopped: bool = false,
+};
+
+/// The state of a check reporting every error.
+const AllErrors = struct {
+    /// The cap per value (0: none).
+    max: u32,
+    /// The errors of the value being checked.
+    count: u32 = 0,
+    stopped: bool = false,
+};
+
+/// `check` with limits, codecs, the first-error mode and the cap.
 pub fn checkWith(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions) Error![]const Issue {
+    return (try checkReport(gpa, arena, def, text, options)).issues;
+}
+
+/// `checkWith`, and whether the check stopped at the cap.
+///
+/// The text is parsed first: a syntax or limit error is the only issue
+/// (spec §14, "Every error"), for a stream too. Then every value is checked:
+/// each failing place once; nothing below a value that failed at its own
+/// level (another kind, an unknown tag of a closed variant, a wrong
+/// payload, a value its type or a codec rejects); a record checks every
+/// field, an array, a map, a stream and a positional payload every
+/// element; inside a `Secret`, the first error is one `invalid-secret` at
+/// the secret, and no hints.
+pub fn checkReport(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions) Error!CheckReport {
     var issues: std.ArrayList(Issue) = .empty;
     var d: Diagnostic = .{};
-    _ = decodeText(gpa, arena, def, text, .{ .diagnostic = &d, .hints = &issues, .limits = options.limits, .codecs = options.codecs }) catch |e| switch (e) {
-        error.Haus => try issues.append(arena, .{ .kind = .err, .code = d.code, .path = try arena.dupe(u8, d.path()), .message = try arena.dupe(u8, d.message()), .line = d.line, .column = d.column }),
+    const values = parseForCheck(gpa, arena, def, text, options, &d) catch |e| switch (e) {
+        error.Haus => {
+            try appendDiag(arena, &issues, &d);
+            return .{ .issues = issues.items };
+        },
         else => return e,
     };
-    return issues.items;
+    var all: AllErrors = .{ .max = options.max_errors };
+    for (values, 0..) |val, i| {
+        all.count = 0;
+        const item_path = Path.root.index(i);
+        const path = if (def.stream) &item_path else &Path.root;
+        const result = if (options.first) blk: {
+            var c: Ctx = .{ .arena = arena, .diag = &d, .hints = &issues, .codecs = options.codecs };
+            break :blk checkOne(&c, def, val, path, options.limits);
+        } else blk: {
+            var c: AllCtx = .{ .arena = arena, .diag = &d, .hints = &issues, .codecs = options.codecs, .all = &all };
+            break :blk checkOne(&c, def, val, path, options.limits);
+        };
+        result catch |e| switch (e) {
+            error.Haus => {
+                // Collected where it was found, unless it is the first-error
+                // mode (or an error that didn't come through `fail`).
+                if (options.first or all.count == 0) try appendDiag(arena, &issues, &d);
+                if (options.first or all.stopped) break;
+            },
+            else => return e,
+        };
+    }
+    return .{ .issues = issues.items, .stopped = all.stopped };
+}
+
+fn appendDiag(arena: Allocator, issues: *std.ArrayList(Issue), d: *const Diagnostic) Allocator.Error!void {
+    try issues.append(arena, .{ .kind = .err, .code = d.code, .path = try arena.dupe(u8, d.path()), .message = try arena.dupe(u8, d.message()), .line = d.line, .column = d.column });
+}
+
+/// The values of a text, parsed whole before any is checked: the one value
+/// of a document, or every value of a stream.
+fn parseForCheck(gpa: Allocator, arena: Allocator, def: *const Def, text: []const u8, options: CheckOptions, d: *Diagnostic) Error![]const Value {
+    if (def.stream) {
+        var r = try StreamReader.init(gpa, .{ .limits = options.limits, .diagnostic = d });
+        defer r.deinit();
+        var out: std.ArrayList(Value) = .empty;
+        try out.appendSlice(arena, try r.push(arena, text));
+        if (try r.end(arena)) |last| try out.append(arena, last);
+        return out.items;
+    }
+    const root = @import("root.zig");
+    const parsed = try root.parseAll(arena, text, .{ .limits = options.limits, .diagnostic = d });
+    if (parsed.value.len != 1) {
+        d.set(.@"not-one-value", "expected one value, found {s}", .{if (parsed.value.len == 0) "none" else "more than one"});
+        d.line = 0;
+        d.column = 0;
+        d.setPath("$");
+        return error.Haus;
+    }
+    return parsed.value;
+}
+
+/// One value of a checked text, as `decodeText` decodes it.
+fn checkOne(c: anytype, def: *const Def, val: Value, path: *const Path, limits: v.Limits) Error!void {
+    if (streamItem(def)) |item| {
+        try checkDepth(c, val, limits, path);
+        _ = try c.decode(item, null, val, path);
+        return;
+    }
+    // The parser has checked the depth limit, as for `decodeText`.
+    const d = try c.decode(def.body, null, val, path);
+    if (def.params.len == 0) _ = try c.withCodec(def.id, d, path);
+}
+
+/// The issues of a check as `Error code path; Hint code path; `.
+fn issuesText(arena: Allocator, issues: []const Issue) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (issues) |i| try out.print(arena, "{s} {s} {s}; ", .{ if (i.kind == .hint) "Hint" else "Error", i.code.name(), i.path });
+    return out.items;
+}
+
+fn checkText(arena: Allocator, schema_text: []const u8, name: []const u8, text: []const u8, options: CheckOptions) !struct { []const u8, bool } {
+    const s = try schema_mod.load(arena, schema_text, .{});
+    const r = try checkReport(std.testing.allocator, arena, s.get(name).?, text, options);
+    return .{ try issuesText(arena, r.issues), r.stopped };
+}
+
+test "every error, and the first-error mode" {
+    var state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const t = std.testing;
+    const sch = "type Root = { a: Int, b: < P Int String | Q >, c: Secret { x: Int, y: Int }, d: Secret (Secret Int) }";
+    const bad = "{ a: \"x\", b: P(\"1\", 2), c: { x: \"1\", y: \"2\" }, d: \"z\", e: 1 }";
+    // Each positional argument; one `invalid-secret` per secret, however
+    // many errors are inside, nested secrets too.
+    try t.expectEqualStrings("Error type-mismatch $.a; Error type-mismatch $.b[0]; Error type-mismatch $.b[1]; Error invalid-secret $.c; Error invalid-secret $.d; Hint unlisted-field $.e; ", (try checkText(a, sch, "Root", bad, .{}))[0]);
+    // The first error, and the hints found before it.
+    try t.expectEqualStrings("Error type-mismatch $.a; ", (try checkText(a, sch, "Root", bad, .{ .first = true }))[0]);
+    try t.expectEqualStrings("Hint unlisted-field $.z; Error type-mismatch $.a; ", (try checkText(a, "type R = { a: Int, b: Int }", "R", "{ z: 1, a: \"x\", b: \"y\", w: 2 }", .{ .first = true }))[0]);
+    try t.expectEqualStrings("Hint unlisted-field $.z; Error type-mismatch $.a; Error type-mismatch $.b; Hint unlisted-field $.w; ", (try checkText(a, "type R = { a: Int, b: Int }", "R", "{ z: 1, a: \"x\", b: \"y\", w: 2 }", .{}))[0]);
+    // Each missing field is reported, at the record.
+    try t.expectEqualStrings("Error missing-field $; Error missing-field $; ", (try checkText(a, "type R = { a: Int, b: Int }", "R", "{}", .{}))[0]);
+    // A codec-free value its type rejects: nothing below it is looked at.
+    try t.expectEqualStrings("Error invalid-time $.t[0]; Error out-of-range $.n; ", (try checkText(a, "import std/time (Date)\ntype R = { t: Date, n: UInt8 }", "R", "{ t: Date(\"2023-02-30\"), n: 256 }", .{}))[0]);
+}
+
+test "every error of a stream, after the whole text parses" {
+    var state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const t = std.testing;
+    const sch = "type Log = Stream { n: Int }";
+    try t.expectEqualStrings("Error type-mismatch $[0].n; Hint unlisted-field $[1].z; Error missing-field $[2]; ", (try checkText(a, sch, "Log", "{ n: \"a\" },\n{ n: 1, z: 2 },\n{},\n", .{}))[0]);
+    try t.expectEqualStrings("Error type-mismatch $[0].n; ", (try checkText(a, sch, "Log", "{ n: \"a\" },\n{},\n", .{ .first = true }))[0]);
+    // A syntax error is the only issue, wherever it is.
+    const r = try checkText(a, sch, "Log", "{ n: \"a\", z: 1 },\n{ n: },\n", .{});
+    try t.expect(std.mem.startsWith(u8, r[0], "Error "));
+    try t.expectEqual(1, std.mem.count(u8, r[0], ";"));
+    try t.expect(std.mem.indexOf(u8, r[0], "type-mismatch") == null);
+}
+
+test "every error stops at the cap, and says so" {
+    var state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer state.deinit();
+    const a = state.allocator();
+    const t = std.testing;
+    var text: std.ArrayList(u8) = .empty;
+    try text.append(a, '[');
+    for (0..300) |_| try text.appendSlice(a, "\"x\", ");
+    try text.append(a, ']');
+    const all = try checkText(a, "type R = Array Int", "R", text.items, .{});
+    try t.expect(all[1]);
+    try t.expectEqual(CheckOptions.default_max_errors, std.mem.count(u8, all[0], ";"));
+    const no_cap = try checkText(a, "type R = Array Int", "R", text.items, .{ .max_errors = 0 });
+    try t.expect(!no_cap[1]);
+    try t.expectEqual(300, std.mem.count(u8, no_cap[0], ";"));
+    // Below the cap, it hasn't stopped.
+    const few = try checkText(a, "type R = Array Int", "R", "[\"x\", 1, \"y\"]", .{});
+    try t.expect(!few[1]);
 }
 
 test "float spelling" {

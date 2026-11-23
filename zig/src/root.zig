@@ -204,6 +204,11 @@ fn atSupportedDepth() !void {
     const decoded = try decoding.decode(arena, def, val, .{ .limits = limits });
     _ = try decoding.encode(arena, def, decoded, .{ .limits = limits });
     _ = try decoding.decodeText(arena, arena, def, text.items, .{ .limits = limits });
+    // A checker, reporting every error or the first.
+    for ([_]bool{ false, true }) |first| {
+        const r = try decoding.checkReport(arena, arena, def, text.items, .{ .limits = limits, .first = first });
+        try std.testing.expectEqual(0, r.issues.len);
+    }
     const sj = try json.toJson(arena, def, decoded, .{});
     _ = try json.fromJson(arena, arena, def, sj, .{ .limits = limits });
 }
@@ -242,6 +247,7 @@ fn withCodecsAtSupportedDepth() !void {
     var cs = try Codecs.init(arena, &.{&rule});
     const decoded = try decoding.decodeText(arena, arena, def, text.items, .{ .codecs = &cs });
     _ = try decoding.encode(arena, def, decoded, .{ .codecs = &cs });
+    try std.testing.expectEqual(0, (try decoding.checkReport(arena, arena, def, text.items, .{ .codecs = &cs })).issues.len);
 }
 
 test "the supported depth with codecs, on a thread with a 1 MiB stack" {

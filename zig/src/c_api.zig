@@ -1017,27 +1017,46 @@ pub export fn haus_encode(t: ?*const haus_type, value: ?*const haus_value, out_d
     return HAUS_OK;
 }
 
+comptime {
+    // HAUS_CHECK_MAX_ERRORS in include/haus.h.
+    std.debug.assert(haus.decoding.CheckOptions.default_max_errors == 200);
+}
+
 const Issues = struct {
     arena: std.heap.ArenaAllocator,
     list: []const haus.decoding.Issue,
+    stopped: bool,
 };
 
 /// Checks a text against a type as a tool does (spec §14): the hints
-/// (`unlisted-field`, `unlisted-tag`, `deprecated`) and the error that ends
-/// the check, if any, in `*out`. HAUS_OK when the check ran, whatever it
-/// found.
+/// (`unlisted-field`, `unlisted-tag`, `deprecated`) and every error
+/// (spec §14, "Every error"), in `*out`, in the order of their places in
+/// the text. At most `HAUS_CHECK_MAX_ERRORS` errors per value
+/// (`haus_issues_stopped`). HAUS_OK when the check ran, whatever it found.
 pub export fn haus_check_text(t: ?*const haus_type, text: ?[*]const u8, len: usize, out: ?*?*haus_issues, err: ?*haus_error) c_int {
+    return checkText(t, text, len, out, err, false);
+}
+
+/// `haus_check_text` that stops at the first error: the hints found
+/// before it, and that error.
+pub export fn haus_check_text_first(t: ?*const haus_type, text: ?[*]const u8, len: usize, out: ?*?*haus_issues, err: ?*haus_error) c_int {
+    return checkText(t, text, len, out, err, true);
+}
+
+fn checkText(t: ?*const haus_type, text: ?[*]const u8, len: usize, out: ?*?*haus_issues, err: ?*haus_error, first: bool) c_int {
     clear(err);
     const def = defOf(t) orelse return HAUS_INVALID_ARGUMENT;
     const s = input(text, len) orelse return HAUS_INVALID_ARGUMENT;
     const o = out orelse return HAUS_INVALID_ARGUMENT;
     const h = allocator.create(Issues) catch return HAUS_OUT_OF_MEMORY;
-    h.* = .{ .arena = .init(allocator), .list = &.{} };
-    h.list = haus.decoding.check(allocator, h.arena.allocator(), def, s) catch {
+    h.* = .{ .arena = .init(allocator), .list = &.{}, .stopped = false };
+    const found = haus.decoding.checkReport(allocator, h.arena.allocator(), def, s, .{ .first = first }) catch {
         h.arena.deinit();
         allocator.destroy(h);
         return HAUS_OUT_OF_MEMORY;
     };
+    h.list = found.issues;
+    h.stopped = found.stopped;
     o.* = @ptrCast(h);
     return HAUS_OK;
 }
@@ -1045,6 +1064,13 @@ pub export fn haus_check_text(t: ?*const haus_type, text: ?[*]const u8, len: usi
 pub export fn haus_issues_count(issues: ?*const haus_issues) usize {
     const h: *const Issues = @ptrCast(@alignCast(issues orelse return 0));
     return h.list.len;
+}
+
+/// 1 when the check stopped at `HAUS_CHECK_MAX_ERRORS` errors in one
+/// value: the rest of the text was not checked. 0 otherwise.
+pub export fn haus_issues_stopped(issues: ?*const haus_issues) c_int {
+    const h: *const Issues = @ptrCast(@alignCast(issues orelse return 0));
+    return @intFromBool(h.stopped);
 }
 
 /// The i-th issue; its strings are borrowed from `issues`.
