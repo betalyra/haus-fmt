@@ -157,8 +157,12 @@ pub fn build(b: *std.Build) void {
     b.step("quickstart-c", "Run examples/c/quickstart.c").dependOn(&run_c_example.step);
     const checked_c = b.addRunArtifact(c_example);
     checked_c.addDirectoryArg(b.path("../examples"));
-    // The same output as the Zig quickstart.
-    checked_c.expectStdOutEqual(quickstart_out);
+    // The same output as the Zig quickstart. On Windows, C's stdout is in
+    // text mode and ends lines with \r\n.
+    checked_c.expectStdOutEqual(if (target.result.os.tag == .windows)
+        std.mem.replaceOwned(u8, b.graph.arena, quickstart_out, "\n", "\r\n") catch @panic("OOM")
+    else
+        quickstart_out);
     examples_step.dependOn(&checked_c.step);
 
     // The runner of the differential fuzzer (../fuzz). It finds the schema
