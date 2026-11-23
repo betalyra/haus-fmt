@@ -770,14 +770,10 @@ pub(crate) fn check_number(n: &Number, limits: &Limits) -> W {
     if text.len() > limits.max_number_length {
         return Err(number_too_long(limits));
     }
-    if let Some((_, exp)) = text.split_once('e') {
-        let digits = exp.trim_start_matches('-');
-        if digits.len() > 19 || digits.parse::<u64>().map_or(true, |e| e > limits.max_exponent) {
-            return Err(EncodeError::new(
-                Code::ExponentTooLarge,
-                format!("exponent larger than {}", limits.max_exponent),
-            ));
-        }
+    if let Some((_, exp)) = text.split_once('e')
+        && limits.exponent_exceeds(exp.trim_start_matches('-'))
+    {
+        return Err(EncodeError::new(Code::ExponentTooLarge, format!("exponent larger than {}", limits.max_exponent)));
     }
     Ok(())
 }

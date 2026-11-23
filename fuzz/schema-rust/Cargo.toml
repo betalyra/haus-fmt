@@ -28,8 +28,17 @@ path = "src/profile_runner.rs"
 name = "schema_check_runner"
 path = "src/schema_check_runner.rs"
 
+[[bin]]
+name = "build_runner"
+path = "src/build_runner.rs"
+
+[[bin]]
+name = "import_runner"
+path = "src/import_runner.rs"
+
 [dependencies]
-haus = { package = "haus-fmt", path = "../../rust/haus" }
+# `hash` for build_runner, which compares haus::hash with the other bindings' hashes.
+haus = { package = "haus-fmt", path = "../../rust/haus", features = ["hash"] }
 haus-schema = { package = "haus-fmt-schema", path = "../../rust/haus-schema" }
 # The official packages, with their profiles' codecs (profile_runner).
 haus-fmt-money = { path = "../../extensions/money" }

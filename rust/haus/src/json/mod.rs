@@ -683,7 +683,7 @@ fn check_number(n: &JsonNumber, limits: &Limits) -> Result<(), EncodeError> {
         return Err(EncodeError::new(ErrorCode::NumberTooLong, reason));
     }
     match n.split_once(['e', 'E']).map(|(_, e)| e.trim_start_matches(['+', '-']).trim_start_matches('0')) {
-        Some(e) if e.len() > 19 || e.parse::<u64>().unwrap_or(0) > limits.max_exponent => {
+        Some(e) if limits.exponent_exceeds(e) => {
             Err(EncodeError::new(ErrorCode::ExponentTooLarge, format!("exponent larger than {}", limits.max_exponent)))
         }
         _ => Ok(()),

@@ -6,7 +6,9 @@ through every schema decoder: see [Schema decoding](#schema-decoding); with
 `--json`, through every JSON converter: see [JSON](#json); with `--format`,
 through the formatters and value writers: see [Formatters](#formatters); with
 `--schema-check`, through every schema-file checker: see
-[Schema files](#schema-files)). They must agree on every input:
+[Schema files](#schema-files); with `--build`, `--imports` and `--strings`,
+through the APIs that take no bytes: see [Values built in code](#values-built-in-code),
+[Relative imports](#relative-imports) and [String APIs](#string-apis)). They must agree on every input:
 accepted with the same values, or rejected. A disagreement is a bug in at
 least one of them, or a gap in the spec.
 
@@ -16,6 +18,10 @@ sh fuzz/build.sh lean rust             # or only some (parts: lean rust typescri
 node fuzz/src/main.ts --count 100000   # about a minute
 node fuzz/src/main.ts --seed 7         # repeat a run
 ```
+
+The modes with their own sections below run their own runners and say which
+binding sits out; Zig, Swift and Roc are missing from `--build`, `--imports`
+and `--strings` (TODO: [Not in these three modes yet](#not-in-these-three-modes-yet)).
 
 Needs Node 23.6 or later (it runs the TypeScript directly), Lean (elan),
 Rust, Roc, Python (uv), Go, Swift, Zig 0.17.1 and a JDK 17 or later (`JAVA_HOME`). The Go runner, [`go/`](go), is one program
@@ -91,6 +97,7 @@ in `runners.ts`.
 | Rust and Go read an attribute's arguments as a file of their own: a byte order mark at their start was skipped (`@deprecated(` U+FEFF `"x")` accepted), and `#haus` there was `version-directive`; both are `expected-value` | fixed (`--schema-check`) |
 | Go read `{"_tag": "A", "": 0}` for a tag without payload as `A`: a member named `""` passed as the payload member a tag without one doesn't have | fixed: `unexpected-member` (`--json`) |
 | Go's stream reader reported `#haus` after a comma (`1,#haus 2`) as `version-directive`, not `expected-value` | fixed (found with the above) |
+| Rust's `Number::new` and Python's `Number` rejected a literal whose exponent doesn't fit 64 bits (`3E70955681357760880162`) as `invalid-number` | fixed (`--build`) |
 
 ## Canonical forms
 
@@ -501,6 +508,165 @@ after a variant's last alternative is a syntax error, as in the grammar;
 bindings check it (`@Haus/money` is `unknown-module`). A module is one word,
 as in the grammar (`import std/ time` and `import foo/bar` are syntax
 errors), in every checker.
+
+## Values built in code
+
+`--build` tests spec §11 "Values built in code" and §12 (Zig finding Z1 of
+`plans/zig-recheck-findings.md`): generated value trees are given to each
+binding as build instructions, built with its constructors, and written: the
+canonical form, the hash and the compact writer. A value that isn't a haus
+value must fail there with the code of its mistake, whether the constructor
+or the writer finds it; one that is must not, except on a writer's limit
+(§7).
+
+```sh
+sh fuzz/build.sh lean rust typescript python go jvm
+node fuzz/src/main.ts --build --count 20000      # about twenty seconds
+node fuzz/src/main.ts --build --seed 7 --runners lean,typescript,go
+```
+
+[`src/build.ts`](src/build.ts) generates trees of numbers (the parser
+fuzzer's literals and spellings such as `1E+05`, `0xFF`, `-0.0`, `1_000`,
+and numbers past the writers' limits: 1001 digits, `1e6145`, 830 hex
+digits, exponents past 64 bits), strings (escapes and controls, `U+2028`, `U+FEFF`, astral and
+combining characters), byte strings, keys (`""`, `__proto__`, NFC and NFD
+`é`), tags, and chains of containers 128 to 1000 deep. Half of them then get
+one mistake or several: a literal that isn't one (`01`, `NaN`, `" 1"`, `1.`,
+`１`, mutated literals), a lone surrogate in a string or a key, a key
+twice, a tag that isn't one (`lower`, `A-B`, `É`, one with a lone
+surrogate). Where the generator knows the answer it is checked too: a valid
+value has a canonical form and a hash, a value with one mistake gives that
+mistake's code everywhere. Codes are compared where a value has at most one
+mistake (and, for the writer, limit) and nothing with two codes: a tag with
+a lone surrogate is both `invalid-tag` and `cannot-encode` (finding F1 of
+round C, below).
+
+The instructions, one value per line in prefix order: `n:HEX` a number from
+a literal's text, `s:HEX` a string, `b:HEX` a byte string, `a:N` an array of
+the N values that follow, `r:N` a record of N fields (`k:HEX` and a value
+each), `v:HEX:N` a variant with N arguments. Text is hex of generalized
+UTF-8, a lone surrogate as the three bytes UTF-8 would give it. A runner
+prints `err CODE` if a constructor rejects the value, else `ok C H W`, each
+`!CODE` if it fails, or `na` if its strings can't hold the text.
+
+| Constructors | Runner |
+|---|---|
+| Lean | no constructors: `haus-ref --canonical-batch` on the value written as text, where every runner built it (its canonical form must be the runners'), and on the compact writer's text (it must hold the same value); a literal every runner rejects with `invalid-number`, written as one token, must not parse |
+| TypeScript | in this process: `num`, `str`, `bytes`, `arr`, `rec`, `variant`; `canonical`, `hash`, `stringify` |
+| Rust | [`schema-rust/src/build_runner.rs`](schema-rust/src/build_runner.rs): `Value::number`, `Value::record`, `Value::variant`; `canonical`, `hash`, `to_string` (`na` for a lone surrogate) |
+| Python | [`python/fuzz/api_runner.py --build`](../python/fuzz/api_runner.py): `Number`, `String`, `Bytes`, `Array`, `Record`, `Variant`; `canonical`, `hash`, `stringify` |
+| Go | [`go-runner --build`](go/api.go): `ParseNumber`, `NewRecord`, `NewTag`, `String`; `Canonical`, `Hash`, `FormatValue` (a lone surrogate's bytes are a `String` that isn't UTF-8) |
+| JVM | [`jvm-runner --build`](jvm/src/main/java/org/hausfmt/fuzz/ApiModes.java): `Value.number`, `string`, `bytes`, `array`, `record`, `variant`; `Haus.canonical`, `hash`, `write` |
+
+## Relative imports
+
+`--imports` tests relative imports on real file trees (spec §13.3,
+"Resolution", "The root", "Files read"): each case is a small tree of schema
+files written into a directory of its own under `$TMPDIR` (a directory per
+run, `haus-imports-*`, which the fuzzer never deletes), and each binding
+builds the schema of its entry file with no packages. They must agree with
+each other on the outcome (built with the same own and imported type names,
+or the error code), and with the Lean resolver on a model of the same tree
+(`haus-ref --packages-batch`, the cases in the package suite's format). Unix
+only: on Windows it skips (links).
+
+```sh
+node fuzz/src/main.ts --imports --count 1000     # about a minute and a half (Lean's resolver is the slowest)
+node fuzz/src/main.ts --imports --seed 7 --runners lean,typescript,go
+```
+
+[`src/imports.ts`](src/imports.ts) puts one to four schema files in the
+entry file's directory, below it, above it, beside it and outside it, which
+import each other with `./` and `../` paths (a cycle now and then), and
+misspells some imports: a name in another case (`Common`, `Lib` beside
+`lib`: macOS file systems ignore case), a name in another script, a `/` at
+the end, `//`, a `.` or `..` inside, `./` or `../` alone, `.schema.haus`
+added, a bare word, too many `..`. Some trees have links: a directory link on
+an import's path, a file link as the imported file, a dangling one, the entry
+file or its directory reached through a link. Some have a package's directory
+(an import into it is `package-path`) or a directory named `x.schema.haus`.
+Most builds get a `root` option: an ancestor of the entry file, one reached
+through a link, or a directory that doesn't contain the entry file. Codes are
+compared where a tree has at most one import that may fail (which mistake a
+file with several reports first is not fixed, §17).
+
+A runner reads lines `ENTRY ROOT` (absolute paths as hex of UTF-8, `-` for no
+root option) and prints `ok OWN IMPORTED` (type names, sorted, joined by `,`)
+or `err CODE`.
+
+| Loader | Runner |
+|---|---|
+| Lean | `haus-ref --packages-batch FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)): `Packages.resolveIn` on the case's tree; `ok` or `err CODE` (no type names) |
+| TypeScript | in this process: `readSchemaFile` (`@haus-fmt/haus/node`) and `parseSchemaFile` |
+| Effect | in this process: `readSchemaFile` and `Haus.compileSchemaFile` |
+| Rust | [`schema-rust/src/import_runner.rs`](schema-rust/src/import_runner.rs): `Schema::load_with` |
+| Python | [`python/fuzz/api_runner.py --imports`](../python/fuzz/api_runner.py): `haus.schema.load_schema` |
+| Go | [`go-runner --imports`](go/api.go): `schema.Load` |
+| JVM | [`jvm-runner --imports`](jvm/src/main/java/org/hausfmt/fuzz/ApiModes.java): `Schema.load` |
+
+Known, not counted: Lean's resolver reads imports with a scanner of its own
+([`Haus/Packages/SchemaFile.lean`](../spec/lean/Haus/Packages/SchemaFile.lean)),
+which reports a word that is no module (`import Lib/x`, `import .`) as
+`unknown-module`, where Lean's schema-file checker and every binding report
+`schema-syntax` (finding F2 of round C, below).
+
+## String APIs
+
+`--strings` tests the APIs that take the language's string instead of bytes
+(spec §4 "Host strings", §11, §12; gap G1 of
+`plans/notes/haus-json-issues-analysis.md`), in the bindings whose strings
+can hold an unpaired surrogate: TypeScript and Effect (UTF-16), Python
+(`str`) and the JVM (UTF-16). Rust, Go, Swift, Roc and Zig strings are UTF-8
+or bytes and can't hold one; the byte fuzzers cover them. Generated data
+files, schema files and JSON get lone surrogates put anywhere in them (in
+strings, keys, comments, between tokens), a pair now and then, or none, and
+go through the parser (`P`), the formatter (`F`), the schema-file reader
+(`S`) and the JSON import (`J`); strings with them are built into a string, a
+key and a tag and written (`W`). The runners must agree, and with the spec:
+text with an unpaired surrogate is `invalid-utf8`, at the surrogate's place,
+when read; a value holding one is `cannot-encode` when written, hashed or put
+in canonical form (or its constructor rejects it so). Where the text has no
+lone surrogate only accepting or rejecting is compared (the byte fuzzers
+compare the codes).
+
+```sh
+node fuzz/src/main.ts --strings --count 20000    # about ten seconds
+```
+
+A runner reads lines `KIND HEX`, the text as hex of its UTF-16 code units;
+[`src/strings.ts`](src/strings.ts) lists what each kind prints.
+
+| String API | Runner |
+|---|---|
+| TypeScript | in this process: `parseAll`, `parseDocument` and `format`, `compileSchemaFile`, `importJson`; `str`, `rec`, `variant` with `canonical` and `stringify` |
+| Effect | in this process: `Haus.compileSchemaFile` (`S` only) |
+| Python | [`python/fuzz/api_runner.py --strings`](../python/fuzz/api_runner.py): `parse_all`, `format`, `compile_schema`, `import_json`; `String`, `Record`, `Variant` with `canonical`, `hash`, `stringify` |
+| JVM | [`jvm-runner --strings`](jvm/src/main/java/org/hausfmt/fuzz/ApiModes.java): `Haus.parseAll(String)`, `Haus.format(String, …)`, `Schema.parse(String)`, `HausJson.importJson(String)`; `Value.string`, `record`, `variant` with `Haus.canonical`, `hash`, `write` |
+
+### Not in these three modes yet
+
+- **Zig** (TODO): `zig-runner` needs `--build` (values built from the
+  instructions, through the C ABI's builders or Zig's `Value`, which checks
+  in its writers, Z1) and `--imports` (`schema.load` with a root option);
+  then an entry in `runner()` of `build.ts` and `imports.ts`. Zig strings are
+  bytes: like Go, it builds a lone surrogate's bytes and its writers must
+  reject them (`cannot-encode`, Z2). It sits out `--strings`.
+- **Swift**: SwiftPM executables can't be linked in the sandbox these modes
+  were written in; `swift-runner` needs the same two modes.
+- **Roc**: its runners don't build with Roc nightlies newer than CI's; Roc's
+  values are built by generated code, so `--build` would need a Roc runner of
+  its own.
+
+### Round C (2026-11-23)
+
+Seeds and counts: see the report of that round. Every binding agreed with the
+spec and with each other except:
+
+| | |
+|---|---|
+| F3 | Rust's `Number::new` and Python's `Number` rejected a literal whose exponent doesn't fit 64 bits (`3E70955681357760880162`, `1e+99999999999999999999`) as `invalid-number`; TypeScript, Go and the JVM build it, and the writers reject it (`exponent-too-large`), as §11 says (a number past a limit is still a number). Only the normalized spelling (`1e9999…`) was built. Fixed: an exponent limit of `u64::MAX` is none in Rust's checks (`Limits::exponent_exceeds`), and Python's parser reads any exponent with the constructors' limits (`UNLIMITED`); unit tests in `rust/haus/tests/values.rs` and `python/tests/test_canonical.py`. |
+| F1 | A tag with an unpaired surrogate (`variant("\uD800")`): TypeScript and Python report `cannot-encode`, Go and the JVM `invalid-tag`. §11 lists both (a tag that isn't `[A-Z][A-Za-z0-9_]*`; a tag with an unpaired surrogate) and orders neither. Compared as the same until the spec decides. |
+| F2 | Lean's package resolver calls `import Lib/x` and `import .` `unknown-module`; its schema-file checker and every binding `schema-syntax`. For `Lib/x` the grammar agrees with them ("any other word where a module belongs (foo/bar) is a syntax error"); for `.` alone its comment reads the other way ("one that starts with "." but not with "./" or "../" … is unknown-module"), while every checker makes `..` and `.x` `unknown-module` and `.` `schema-syntax`. Known, not counted, in `--imports`. |
 
 ## When it finds something
 

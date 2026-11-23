@@ -29,6 +29,21 @@ fn numbers_are_normalized_when_built() {
     let long = Number::new(&format!("0x{}", "f".repeat(2000))).unwrap();
     assert!(long.len() > 2000 && long.bytes().all(|d| d.is_ascii_digit()));
     assert_eq!(Number::new("1e99999999999999999999").unwrap(), "1e99999999999999999999");
+    // In any spelling: an exponent past u64 is still a literal (fuzz round C, F3; it was invalid-number).
+    for (literal, normal) in [
+        ("3E70955681357760880162", "3e70955681357760880162"),
+        ("1e+99999999999999999999", "1e99999999999999999999"),
+        ("1_0e-0099999999999999999999", "10e-99999999999999999999"),
+    ] {
+        let n = Number::new(literal).unwrap();
+        assert_eq!(n, normal, "{literal}");
+        assert_eq!(canonical(&Value::Number(n.clone())), normal);
+        // The writer has the exponent limit.
+        assert_eq!(haus::to_string(&Value::Number(n)).unwrap_err().code, ErrorCode::ExponentTooLarge, "{literal}");
+    }
+    // A parser keeps it: u64::MAX alone is no limit.
+    let near = haus::Limits { max_exponent: u64::MAX - 1, ..haus::Limits::default() };
+    assert_eq!(haus::parse_with("1e99999999999999999999", &near).unwrap_err().code, ErrorCode::ExponentTooLarge);
 }
 
 #[test]

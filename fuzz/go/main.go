@@ -9,6 +9,8 @@
 //	go-runner --schema FILE                          decoding with a schema (package schema)
 //	go-runner --json MODE FILE                       the JSON mappings
 //	go-runner --schema-check FILE                    schema files, as schema.Parse reads them
+//	go-runner --build FILE                           values built in code, then written (api.go)
+//	go-runner --imports FILE                         relative imports, schema.Load on file trees (api.go)
 //
 // The modes with DIR N read DIR/00000.haus … DIR/{N-1}.haus, the others a
 // FILE of lines; each prints one line per case, as the other bindings'
@@ -29,7 +31,7 @@ import (
 )
 
 const usage = "usage: go-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N" +
-	" | --time FILE | --profile FILE | --schema FILE | --json MODE FILE | --schema-check FILE"
+	" | --time FILE | --profile FILE | --schema FILE | --json MODE FILE | --schema-check FILE | --build FILE | --imports FILE"
 
 // root is the checkout this program was built from: the schema files and
 // extensions it reads are found there.
@@ -61,6 +63,10 @@ func run(args []string, out *bufio.Writer) error {
 		return withLines(args[1:], out, schemaLines)
 	case "--schema-check":
 		return perLine(args[1:], out, checkLine)
+	case "--build":
+		return perLine(args[1:], out, buildLine)
+	case "--imports":
+		return perLine(args[1:], out, importLine)
 	case "--json":
 		if len(args) != 3 {
 			return errors.New(usage)

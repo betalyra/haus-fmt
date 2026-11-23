@@ -47,6 +47,7 @@ pub struct Limits {
     /// integer has a decimal form within this limit.
     pub max_number_length: usize,
     /// Largest absolute exponent: 6144 allows `1e6144` but not `1e6145`.
+    /// `u64::MAX` is no limit: an exponent of any size is read.
     pub max_exponent: u64,
     /// Characters (code points) in one decoded string, record key or tag,
     /// or between the quotes of a byte string.
@@ -72,6 +73,13 @@ impl Limits {
     /// ```
     pub fn max_hex_digits(&self) -> usize {
         max_hex_digits(self.max_number_length)
+    }
+
+    /// Whether an exponent, its decimal digits without sign, `_` or leading
+    /// zeros, is above the exponent limit. `u64::MAX` is no limit, so that an
+    /// exponent of any length can be read (`Number::new`, spec §11).
+    pub(crate) fn exponent_exceeds(&self, digits: &str) -> bool {
+        self.max_exponent != u64::MAX && (digits.len() > 19 || digits.parse::<u64>().unwrap_or(0) > self.max_exponent)
     }
 
     /// Why this binding can't use these limits: a depth limit above
@@ -675,8 +683,7 @@ impl<'a> Parser<'a> {
         }
         if let Some(exp) = decimal_exponent(&self.src[start..end]).filter(|_| radix.is_none()) {
             let digits: String = exp.chars().filter(|&c| c != '_').collect();
-            let digits = digits.trim_start_matches('0');
-            if digits.len() > 19 || digits.parse::<u64>().unwrap_or(0) > self.limits.max_exponent {
+            if self.limits.exponent_exceeds(digits.trim_start_matches('0')) {
                 let reason = format!("exponent larger than {}", self.limits.max_exponent);
                 return Err(self.fail_at(start, Code::ExponentTooLarge, reason));
             }
