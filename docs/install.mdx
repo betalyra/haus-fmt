@@ -62,6 +62,12 @@ The libraries arrive on npm, crates.io and PyPI with the first release. Until th
     ```
     Imported as `haus`. The parser, formatter, streams, canonical form, JSON, and schemas with checks (package `schema`). See the [Go README](https://github.com/betalyra/haus-fmt/tree/main/go).
   </TabItem>
+  <TabItem label="Zig">
+    ```sh
+    zig fetch --save=haus https://github.com/betalyra/haus-fmt/releases/download/zig-v0.1.0/haus-zig-0.1.0.tar.gz
+    ```
+    For Zig 0.17. In `build.zig`, import `b.dependency("haus", .{}).module("haus")`. The parser, formatter, streams, canonical form, JSON, schemas with packages, and codecs. It also builds `libhaus` with a C header, `haus.h`, for C and other languages. See the [Zig README](https://github.com/betalyra/haus-fmt/tree/main/zig).
+  </TabItem>
 </Tabs>
 
 ## On the command line

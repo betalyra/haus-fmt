@@ -1,0 +1,74 @@
+# A release of the Zig binding (zig/): pushed as a tag zig-vX.Y.Z whose version
+# is the one in zig/build.zig.zon. It attaches to a GitHub release:
+#   - haus-zig-X.Y.Z.tar.gz, the Zig package (zig/ alone, so that
+#     `zig fetch --save=haus <its URL>` works: Zig packages can't be fetched
+#     from a subdirectory of a repository), with its hash in the notes;
+#   - libhaus for a few targets, static and shared, with haus.h and haus.pc.
+# Nothing else is published: there is no Zig package registry.
+name: Zig release
+
+on:
+  push:
+    tags: ["zig-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "An existing tag zig-vX.Y.Z to build the release of"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TAG }}
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.17.1
+      - name: The tag's version is the package's
+        run: |
+          version="${TAG#zig-v}"
+          grep -q "\.version = \"$version\"" zig/build.zig.zon || { echo "zig/build.zig.zon is not version $version"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Test
+        working-directory: zig
+        run: |
+          zig build test -Doptimize=ReleaseSafe --summary all
+          zig build examples
+      - name: The package
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz --prefix="haus-zig-$VERSION/" "HEAD:zig" > "dist/haus-zig-$VERSION.tar.gz"
+          # The hash a dependent's build.zig.zon records.
+          (cd "$RUNNER_TEMP" && zig init -m >/dev/null && zig fetch "$GITHUB_WORKSPACE/dist/haus-zig-$VERSION.tar.gz") > dist/hash.txt
+          cat dist/hash.txt
+      - name: libhaus for each target
+        working-directory: zig
+        run: |
+          for target in x86_64-linux-gnu aarch64-linux-gnu x86_64-linux-musl aarch64-macos x86_64-macos x86_64-windows-gnu aarch64-windows-gnu; do
+            for linkage in static dynamic; do
+              prefix="$RUNNER_TEMP/libhaus-$VERSION-$target-$linkage"
+              zig build install -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget="$target" -Dlinkage="$linkage" --prefix "$prefix"
+              cp LICENSE "$prefix/"
+              tar -C "$RUNNER_TEMP" -czf "$GITHUB_WORKSPACE/dist/libhaus-$VERSION-$target-$linkage.tar.gz" "libhaus-$VERSION-$target-$linkage"
+            done
+          done
+          ls -l "$GITHUB_WORKSPACE/dist"
+      - name: The GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          hash="$(cat dist/hash.txt)"
+          url="https://github.com/${{ github.repository }}/releases/download/$TAG/haus-zig-$VERSION.tar.gz"
+          notes="The Zig binding $VERSION (Zig 0.17.1).
+
+          zig fetch --save=haus $url
+
+          Hash: \`$hash\`. libhaus (the C ABI, include/haus.h) is attached for several targets, static and shared."
+          gh release create "$TAG" dist/*.tar.gz --title "Zig binding $VERSION" --notes "$notes" --verify-tag

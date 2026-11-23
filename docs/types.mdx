@@ -129,7 +129,7 @@ Go decodes to checked `haus.Value`s (`schema.DecodeAs` gives a codec's host type
 | Swift | `String`, the checked text | a `HausCodec` of your own (Foundation's `Date`, say) | none yet |
 | JVM | `String`, the checked text | `LocalDate`, `YearMonth`, `LocalTime`, `LocalDateTime`, `Instant`, `OffsetDateTime`, `ZoneId` (lossy) | `MoneyCodecs.ISO` → `Money`, `GeoCodecs.WGS84` → `LatLng`, `WGS84_BBOX` → `BBox` |
 | Roc | `Str`, the checked text | a codec module of your own | `Iso` → `{ amount : Str, currency : Str }`, `Wgs84` → `{ lat : F64, lng : F64 }`, `Wgs84BBox` |
-| Zig | `Decoded` | none: no codecs yet | none yet |
+| Zig | `Decoded`, the checked text | `haus.codecs.time`: `date`, `year_month`, `time_of_day`, `date_time`, `instant`; `instant_timestamp` → `std.Io.Timestamp` and `duration` → `std.Io.Duration` (lossy) | `haus.codecs.money.iso`, `haus.codecs.geo.wgs84`: the same values, checked |
 
 Without a codec, a package's type decodes like any type of its schema: a `Money` is a variant with a `Decimal` and a tag, and a currency of `Xyz` passes. Codecs for JavaScript's Temporal are planned after 1.0.
 

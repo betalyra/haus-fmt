@@ -23,6 +23,9 @@ pub const decoding = @import("decode.zig");
 pub const json = @import("json.zig");
 pub const packages = @import("packages.zig");
 pub const files = @import("files.zig");
+/// Codecs this binding ships: std/time as Zig values, and the official
+/// profiles' rules (spec §13.3, §13.4).
+pub const codecs = @import("codecs.zig");
 
 pub const Value = value.Value;
 pub const Field = value.Field;
@@ -35,6 +38,10 @@ pub const WriteOptions = canonical_form.WriteOptions;
 pub const StreamReader = stream.StreamReader;
 pub const Layout = write.Layout;
 pub const FormatOptions = write.FormatOptions;
+pub const Decoded = decoding.Decoded;
+pub const Codec = decoding.Codec;
+pub const AnyCodec = decoding.AnyCodec;
+pub const Codecs = decoding.Codecs;
 
 pub const canonical = canonical_form.canonical;
 pub const hash = canonical_form.hash;
@@ -162,6 +169,7 @@ test {
     _ = json;
     _ = packages;
     _ = files;
+    _ = codecs;
 }
 
 /// Every path that recurses per level, at the supported depth (spec §7,
@@ -211,6 +219,41 @@ test "the supported depth on a thread with a 512 KiB stack" {
     };
     var r: Run = .{};
     const t = try std.Thread.spawn(.{ .stack_size = 512 * 1024 }, Run.run, .{&r});
+    t.join();
+    try r.result;
+}
+
+/// Decoding with codecs (§13.4) at the supported depth: every named type
+/// is a step of its own, and the codecs run as the decoder returns.
+fn withCodecsAtSupportedDepth() !void {
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const depth = Limits.supported_depth;
+    var text: std.ArrayList(u8) = .empty;
+    for (0..depth / 2 - 1) |_| try text.appendSlice(arena, "A([");
+    try text.appendSlice(arena, "A([])");
+    for (0..depth / 2 - 1) |_| try text.appendSlice(arena, "])");
+    const s = try schema.load(arena, "type T = < A (Array T) | B Int >", .{});
+    const def = s.get("T").?;
+    const rule = decoding.rule("local#T", struct {
+        fn ok(_: Decoded, _: *decoding.Reason) error{Rejected}!void {}
+    }.ok);
+    var cs = try Codecs.init(arena, &.{&rule});
+    const decoded = try decoding.decodeText(arena, arena, def, text.items, .{ .codecs = &cs });
+    _ = try decoding.encode(arena, def, decoded, .{ .codecs = &cs });
+}
+
+test "the supported depth with codecs, on a thread with a 1 MiB stack" {
+    if (@import("builtin").mode == .debug) return error.SkipZigTest;
+    const Run = struct {
+        result: anyerror!void = {},
+        fn run(r: *@This()) void {
+            r.result = withCodecsAtSupportedDepth();
+        }
+    };
+    var r: Run = .{};
+    const t = try std.Thread.spawn(.{ .stack_size = 1024 * 1024 }, Run.run, .{&r});
     t.join();
     try r.result;
 }

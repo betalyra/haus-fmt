@@ -223,6 +223,11 @@ pub const Def = struct {
     stream: bool = false,
     head: Visit = .unvisited,
     head_result: Head = .guarded,
+    /// The type's id (spec §13.3, "Identity"): `@haus-fmt/money@1#Money`
+    /// for a package's type, `prelude#Bool` for the prelude's, and the
+    /// schema's `module` and the name otherwise (`local#Order`). Codecs
+    /// (§13.4) are selected by it.
+    id: []const u8 = "",
 };
 
 pub const Visit = enum { unvisited, visiting, done };
@@ -255,6 +260,8 @@ pub const Schema = struct {
     prelude_defs: [3]*Def = undefined,
     /// The names the file imports.
     imported: std.StringHashMapUnmanaged(void) = .empty,
+    /// What its types' ids start with (`LoadOptions.module`).
+    module: []const u8 = "local",
 
     pub fn deinit(s: *Schema) void {
         const gpa = s.arena.child_allocator;
@@ -294,7 +301,34 @@ pub const Module = union(enum) {
 pub const LoadOptions = struct {
     diagnostic: ?*Diagnostic = null,
     resolver: ?Resolver = null,
+    /// What the ids of the file's types start with (spec §13.3,
+    /// "Identity"): `@org/name@N` for a package's `schema.haus` (set by
+    /// `packages.build`), and for a file outside a package an id of this
+    /// binding's choosing: `local` for a schema loaded from text, and
+    /// `./` and the file's path from the build's root for a file of a
+    /// build. A file's id must not have the form of a package's (§13.3):
+    /// give `@org/name@N` only for a package's own `schema.haus`.
+    module: []const u8 = "local",
 };
+
+/// The id of a type of the module `module` (spec §13.3, "Identity").
+pub fn typeId(arena: Allocator, module: []const u8, name: []const u8) Allocator.Error![]const u8 {
+    return std.fmt.allocPrint(arena, "{s}#{s}", .{ module, name });
+}
+
+/// The ids of the prelude's and std/time's types, which take no arguments
+/// (`prelude#Decimal`, `std/time#Instant`).
+pub fn builtinId(b: Builtin) []const u8 {
+    return switch (b) {
+        inline else => |x| "prelude#" ++ @tagName(x),
+    };
+}
+
+pub fn timeId(k: time.Kind) []const u8 {
+    return switch (k) {
+        inline else => |x| "std/time#" ++ @tagName(x),
+    };
+}
 
 const Import = struct {
     module: Module,
@@ -1475,6 +1509,7 @@ pub fn load(gpa: Allocator, text: []const u8, options: LoadOptions) Error!*Schem
         const kinds = [_]Prelude{ .Bool, .Maybe, .Result };
         for (pr.defs.items, 0..) |d, i| {
             d.prelude = kinds[i];
+            d.id = try typeId(arena, "prelude", d.name);
             s.prelude_defs[i] = d;
             try s.scope.put(arena, d.name, .{ .def = d });
         }
@@ -1527,7 +1562,9 @@ pub fn load(gpa: Allocator, text: []const u8, options: LoadOptions) Error!*Schem
         }
     }
 
-    // Definitions: unique, not the prelude's.
+    // Definitions: unique, not the prelude's. Their ids (§13.3).
+    const module = try arena.dupe(u8, options.module);
+    s.module = module;
     for (r.defs.items) |d| {
         if (isPreludeName(d.name)) return c.fail(.@"redefine-prelude", d.at, "{s} is a prelude type: give your type another name", .{d.name});
         const gop = try s.scope.getOrPut(arena, d.name);
@@ -1535,6 +1572,7 @@ pub fn load(gpa: Allocator, text: []const u8, options: LoadOptions) Error!*Schem
             return c.fail(.@"duplicate-type", d.at, "{s} is {s}", .{ d.name, if (imported.contains(d.name)) "imported, and also defined" else "defined twice" });
         }
         gop.value_ptr.* = .{ .def = d };
+        d.id = try typeId(arena, module, d.name);
         const body = d.body.strip();
         d.stream = body.kind == .name and std.mem.eql(u8, body.kind.name.name, "Stream");
     }

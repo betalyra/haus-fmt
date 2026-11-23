@@ -1,18 +1,43 @@
 # haus for Zig
 
-A **clean-room** binding of the haus data format, written in Zig 0.17.1 from
-the specification ([`../spec`](../spec)) and the conformance suite
-([`../test-suite`](../test-suite)) only, without reading any other binding's
-code. Its purpose is to test whether the spec is complete and unambiguous:
-where it wasn't, the choice made is noted (and checked against the Lean
-reference, `haus-ref`, as a black box).
+The Zig binding of the haus data format, for Zig 0.17, with a C ABI
+(`libhaus`, [`include/haus.h`](include/haus.h)) for C and every language that
+calls C.
 
-Phase 1 covered the data format, spec §1–§12 and §17. Phase 2 adds the
-prelude and std/time (§13), schema files (§14), decoding and encoding with
-a schema (§15), the three JSON mappings (§16) and schema packages with
-their resolution (§13.3). Codecs (§13.4) are not offered: the decoded
-value is the binding's own `Decoded`, which keeps every value (§13.4,
-"default host types").
+It is also the project's check of its specification. It is written from the
+specification ([`../spec`](../spec)) and the conformance suite
+([`../test-suite`](../test-suite)) only, never from another binding's code:
+where the spec wasn't complete or clear, the choice made is noted (and checked
+against the Lean reference, `haus-ref`, as a black box). For the shape of its
+public API, it looked at the other bindings' READMEs and examples, nothing else.
+
+## Install
+
+There is no Zig package registry: each release is a tarball on GitHub.
+
+```sh
+zig fetch --save=haus https://github.com/betalyra/haus-fmt/releases/download/zig-v0.1.0/haus-zig-0.1.0.tar.gz
+```
+
+```zig
+// build.zig
+const haus = b.dependency("haus", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("haus", haus.module("haus"));
+// libhaus and haus.h, for C code in the same build:
+exe.root_module.linkLibrary(haus.artifact("haus"));
+```
+
+A C project builds the library from this directory (or takes it from the
+release, built for several targets):
+
+```sh
+zig build -Doptimize=ReleaseFast                       # zig-out/lib/libhaus.a, zig-out/include/haus.h
+zig build -Doptimize=ReleaseFast -Dlinkage=dynamic     # libhaus.so / .dylib / haus.dll
+cc app.c $(PKG_CONFIG_PATH=zig-out/lib/pkgconfig pkg-config --cflags --libs haus)
+```
+
+The static library carries Zig's compiler runtime, so any C toolchain links
+it; it needs no libc.
 
 ## What is implemented
 
@@ -23,28 +48,22 @@ value is the binding's own `Decoded`, which keeps every value (§13.4,
 | Strings (§4) | UTF-8, escapes, block strings, control and bidi characters |
 | Parser (§1–§8, §17) | `parseAll` (a file), `parse` (one document, `not-one-value`), `parseDocument` (with positions and comments); every error with its code, line and column |
 | Streams (§6, §7) | `StreamReader`: chunks of bytes in, values out once their comma arrives; the value limit and strict mode; the same results for every way of cutting the input |
-| Limits (§7) | `Limits`, the spec's defaults, all configurable (the node limit for values written, `max_nodes`, included; the hex digit limit follows the number limit); the depth this binding supports is 256, the default (`unsupported-depth` above): the parser, writers, formatter, decoder and JSON readers recurse once per level, and at 256 all of them run on a thread with a 512 KiB stack in the release modes (tested); a Debug build needs about 2 MiB there. `canonical`, `hash`, `equals` and `compare` take any depth |
+| Limits (§7) | `Limits`, the spec's defaults, all configurable; the depth this binding supports is 256 (`unsupported-depth` above): the parser, writers, formatter, decoder and JSON readers recurse once per level, and at 256 all of them run on a thread with a 512 KiB stack in ReleaseSafe and ReleaseFast (tested; decoding with codecs needs 1 MiB there, also tested); ReleaseSmall needs more than 512 KiB, and a Debug build about 2 MiB. `canonical`, `hash`, `equals` and `compare` take any depth |
 | Layouts (§11) | `format` (a document's text, spellings as written, comments in pretty), `stringify`, `stringifyAll` (values); pretty with `indent` and `width`, compact, minimised |
 | Canonical form and hashes (§12) | `canonical`, `hash`, `hashAll` (SHA-256 of `std.crypto`) |
-| std/time (§13.2) | `time.check(kind, text)`: the std/time profile (spec/std/time.md) |
-| Schema files (§14) | `schema.load`: the grammar, names, arities, parameters, spreads (aliases and generic instances included), `Stream`, attributes, guarded and growing recursion; warnings (`unknown-attribute`, `deprecated`, `no-json-form`) with their line and column |
-| Decoding (§15) | `decoding.decode` to a `Decoded` (a `Secret` prints as `<redacted>`), `decoding.encode` (checked against the type), `decoding.decodeText` and `TypedStreamReader` (a `Stream a` read as it arrives, `$[i]` places), `decoding.check` (hints and the first error, as a checker reports them); floats in the one spelling of §15 |
-| JSON (§16) | `json.importJson` (§16.1), `json.toHausJson` / `fromHausJson` / `fromHausJsonLines` (§16.2), `json.toJson` / `fromJson` (§16.3); I-JSON, the limits on number tokens and on the resulting value, places in the JSON |
-| Packages (§13.3) | `packages.build(gpa, io, entry, options)`: packages given by directory, by folder, or as a file tree in code (`packages.Tree`: files embedded with `@embedFile`, or a directory handle such as a build dependency's); the build's root (`options.root`, by default the entry file's directory; a relative one is relative to the entry file's real directory: relative imports stay inside it, `import-outside-root`); a relative import follows no symbolic link (each name of its path is checked with `lstat`; a link is `import-not-found`), and a directory between its file and the root that can't be listed fails it (whether it is a package's directory can't be checked); every file read is a regular file, opened without following a link at its last name and without blocking, checked on the open handle (`files.zig`); every name spelled as its directory lists it; manifests, the version check (against a `package.json` beside the manifest, read leniently), duplicates, cycles and the limits; messages show paths relative to the root. This binding belongs to no package manager's ecosystem: it never reads `node_modules` or a project's `package.json` |
+| std/time (§13.2) | `time.check(kind, text)`: the std/time profile |
+| Schema files (§14) | `schema.load`: the grammar, names, arities, parameters, spreads, `Stream`, attributes, guarded and growing recursion; warnings (`unknown-attribute`, `deprecated`, `no-json-form`) with their line and column; every type's id (`Def.id`, §13.3 "Identity") |
+| Decoding (§15) | `decoding.decode` to a `Decoded` (a `Secret` prints as `<redacted>`, `reveal()` gives it out), `decoding.encode`, `decoding.decodeText`, `TypedStreamReader` (`$[i]` places), `decoding.check` (hints and the first error, as a checker reports them) |
+| Codecs (§13.4) | `Codec(T)`, `decoding.rule`, `Codecs` by type id; std/time as Zig values and the official profiles' rules in `codecs` (below) |
+| JSON (§16) | `json.importJson` (§16.1), `json.toHausJson` / `fromHausJson` / `fromHausJsonLines` (§16.2), `json.toJson` / `fromJson` (§16.3) |
+| Packages (§13.3) | `packages.build(gpa, io, entry, options)`: packages given by directory, by folder, or as file trees in code (`packages.Tree`: files embedded with `@embedFile`, or a directory handle); the build's root (`import-outside-root`); no links followed in relative imports; regular files only, checked on the open handle; names spelled as their directory lists them; manifests, the version check, duplicates, cycles and the limits; messages show paths relative to the root. This binding belongs to no package manager's ecosystem: it never reads `node_modules` |
 | C ABI | `include/haus.h`, `src/c_api.zig` (below) |
 
-`Value` is a plain union, so a value built in code passes no constructor:
-it is checked where it is written (spec §11, "Values built in code"), with
-the codes a constructor would use: a number that isn't a normalized
-literal (`invalid-number`), a string or key that isn't UTF-8
-(`cannot-encode`), a tag that isn't one (`invalid-tag`) and duplicate keys
-(`duplicate-key`). The writers (`stringify`, `stringifyAll`, `toHausJson`,
-`decoding.encode`) also apply every limit of spec §7: the depth, the
-length of strings, keys and tags, the number and exponent limits, and the
-node limit `Limits.max_nodes` (`too-many-nodes`, at `$`, or `$[i]` for the
-i-th value of a file). The canonical form, `hash`, `hashAll`, `equals` and
-`compare` apply only the node limit (spec §12), and write with a stack of
-their own, so a value of any depth has a canonical form.
+`Value` is a plain union, so a value built in code passes no constructor: it is
+checked where it is written (spec §11, "Values built in code"), with the codes a
+constructor would use (`invalid-number`, `cannot-encode`, `invalid-tag`,
+`duplicate-key`). The writers apply every limit of spec §7, the canonical form,
+`hash`, `equals` and `compare` only the node limit.
 
 ## Use
 
@@ -65,64 +84,187 @@ const pretty = try haus.format(gpa, text, .{ .indent = 2, .width = 80 });
 defer gpa.free(pretty);
 ```
 
-Every function that allocates takes an allocator. Errors are `error.Haus`
-(a mistake with a code of spec §17, described by the `Diagnostic` passed in
-the options) or `error.OutOfMemory`.
+With a schema and the packages it imports:
+
+```zig
+const build = try haus.packages.build(gpa, io, "order.schema.haus", .{ .folders = &.{"vendor/haus"} });
+defer build.deinit();
+const root = build.root.get("Root").?;
+const order = try haus.decoding.decodeText(gpa, arena, root, text, .{ .diagnostic = &d });
+const total = order.get("total").?; // a Decoded
+```
+
+Every function that allocates takes an allocator. Errors are `error.Haus` (a
+mistake with a code of spec §17, described by the `Diagnostic` passed in the
+options; a decoder's error has its place, `d.path()`, `$.lines[0].qty`) or
+`error.OutOfMemory`.
+
+## Codecs
+
+A codec (spec §13.4) lets the application choose the Zig type of a named type
+without arguments. It is selected by the type's **id**: `@haus-fmt/money@1#Money`
+for a package's type, `std/time#Date`, `prelude#Decimal`, and, for a file
+outside a package, `local#Name` (a schema loaded from text) or
+`./path/from/root.schema.haus#Name` (a file of a build). Without a codec a value
+decodes to its default host type, which keeps the value: a `Decimal` as its
+exact text, a std/time value as its checked text.
+
+```zig
+const Amount = struct { cents: i128, currency: [3]u8 };
+
+const cents = haus.Codec(Amount).init("@haus-fmt/money@1#Money", decodeAmount, encodeAmount);
+// fn decodeAmount(arena: Allocator, d: Decoded, reason: *Reason) CodecError!Amount
+// fn encodeAmount(arena: Allocator, a: Amount, reason: *Reason) CodecError!Decoded
+
+var codecs = try haus.Codecs.init(gpa, &.{ cents.erased(), haus.codecs.time.date.erased() });
+defer codecs.deinit(gpa);
+const d = try haus.decoding.decodeText(gpa, arena, root, text, .{ .codecs = &codecs });
+const amount: Amount = cents.get(d.get("total").?).?;
+// Encoding: put host values back with `wrap`, then encode with the same codecs.
+const total = try cents.wrap(arena, amount);
+```
+
+The contract, as this binding keeps it:
+
+- A codec runs after the type's schema, on what the schema decoded: it can
+  reject more values, never fewer. A rejection (`return reason.reject("…", .{})`)
+  is `codec-rejected` at the type's place, with the message
+  `<id> rejects the value: <reason>`. Inside a `Secret` it is `invalid-secret`
+  at the secret, as every error there is.
+- Codecs run from the inside out: a codec receives the host values of the
+  codecs inside its type (a `Money` codec sees the `Currency` codec's value).
+  The first rejection, the innermost, is the error.
+- A codec applies wherever its type occurs: inside imported packages' types,
+  for a record case's payload (`Shipped Address`), in typed streams. A decoded
+  value always has a place of its own for a host value (`Decoded.host`), so
+  `codec-unreachable` never happens here.
+- `encode` writes a host value with its codec's `encode`, then checks the
+  value written with the type and the codecs passed (`.codecs`): a value a
+  codec rejects is `cannot-encode`, so decode, encode, decode is the same as
+  decode.
+- `decoding.rule(id, accepts)` is a codec that keeps the default host type and
+  adds a rule (a profile). `Codecs.init` rejects two codecs for one id
+  (`error.DuplicateCodec`).
+- `json.toJson` takes host values (it encodes them first); `json.fromJson`
+  gives the default host types: `decoding.applyCodecs` runs the codecs on its
+  result.
+
+### Codecs this binding ships (`haus.codecs`)
+
+None is on unless the application lists it.
+
+| Codec | Type | Zig type | Drops (spec §13.4) |
+|---|---|---|---|
+| `time.date` | `std/time#Date` | `Date` (year, `std.time.epoch.Month`, day; `epochDay`, `weekday`) | nothing |
+| `time.year_month` | `std/time#YearMonth` | `YearMonth` | nothing |
+| `time.time_of_day` | `std/time#Time` | `TimeOfDay` (nanoseconds) | trailing zeros of a fraction (`.250` is written `.25`) |
+| `time.date_time` | `std/time#DateTime` | `DateTime` | the same |
+| `time.instant` | `std/time#Instant` | `Instant` (with its offset; `timestamp()`) | the same, and `+00:00` is written `Z` |
+| `time.instant_timestamp` | `std/time#Instant` | `std.Io.Timestamp` (UTC) | also the offset: written with `Z` |
+| `time.duration` | `std/time#Duration` | `std.Io.Duration` | how the time is split (`PT90M` is written `PT1H30M`); rejects years, months, weeks and days, which have no fixed length |
+| `money.iso_money`, `money.iso_currency` (`money.iso`) | `@haus-fmt/money@1#Money`, `#Currency` | the default | nothing: the rule of `@haus-fmt/money/iso` |
+| `geo.wgs84_lat_lng`, `geo.wgs84_bbox` (`geo.wgs84`) | `@haus-fmt/geo@1#LatLng`, `#BBox` | the default | nothing: the rule of `@haus-fmt/geo/wgs84` |
+
+Where a codec drops something, encoding writes a value that means the same but
+isn't equal, with another canonical form and hash: hash and sign parsed values.
+The profile codecs pass their vectors (`../extensions/*/profiles/*.vectors.haus`,
+run by `zig build test`), and their rules are public (`money.acceptsMoney`,
+`geo.acceptsLatLng`, …) so that an application's own codec can build on them,
+as `examples/order.zig` does.
+
+## C ABI
+
+[`include/haus.h`](include/haus.h) documents every function. In short:
+
+| | |
+|---|---|
+| Text in, text out | `haus_canonical`, `haus_hash_all`, `haus_format` |
+| Docs and values | `haus_parse`, `haus_parse_all`, `haus_doc_count`, `haus_doc_value`; `haus_kind`, `haus_number` (the normalized literal), `haus_string`, `haus_bytes`, `haus_len`, `haus_array_get`, `haus_record_key`, `haus_record_value`, `haus_record_get`, `haus_variant_tag`, `haus_variant_arg`, `haus_secret_reveal`, `haus_number_int64`, `haus_number_double` |
+| Building | `haus_doc_new`; `haus_new_number` (any spelling, `invalid-number`), `haus_new_string` (`cannot-encode`), `haus_new_bytes`, `haus_new_array`, `haus_new_record` (`duplicate-key`), `haus_new_variant` (`invalid-tag`) |
+| Writing, comparing | `haus_stringify` (layout, indent, width), `haus_stringify_doc`, `haus_value_canonical`, `haus_value_hash`, `haus_value_equals`, `haus_value_compare` |
+| JSON | `haus_import_json`, `haus_to_haus_json`, `haus_from_haus_json`; with a type `haus_type_to_json`, `haus_type_from_json` |
+| Schemas | `haus_schema_load` (text), `haus_schema_build` (a file, with packages by directory, folder or in-memory trees, and a root), `haus_schema_warning_count`/`_warning`, `haus_schema_type`, `haus_type_id`, `haus_type_is_stream`; `haus_decode`, `haus_decode_text`, `haus_encode`, `haus_check_text` (all hints and the first error), and the one-call `haus_check`, `haus_to_json`, `haus_from_json` |
+| Streams | `haus_stream_new` (strict or not), `haus_typed_stream_new` (a `Stream` type), `haus_stream_push`, `haus_stream_end` |
+
+**Statuses.** `HAUS_OK`, `HAUS_ERROR` (the `haus_error` has the code of §17,
+line, column, message and, for a decoder, encoder or JSON reader, the place:
+`$.lines[0].qty`), `HAUS_OUT_OF_MEMORY`, `HAUS_INVALID_ARGUMENT` (a NULL
+pointer, a negative indent or width, an unknown layout, a type that doesn't fit
+the call, such as a `Stream` type for `haus_decode`) and `HAUS_SCHEMA_ERROR`
+(a mistake in a schema file or a build). The error pointer may be NULL.
+
+**Ownership.** Text the library returns is freed with `haus_free(ptr, len)`.
+Every handle has its own free function (`haus_doc_free`, `haus_schema_free`,
+`haus_stream_free`, `haus_issues_free`; NULL is fine). A `haus_value` is
+borrowed from the `haus_doc` that holds it: values are never freed one by one.
+Builders share the values they are given, and `haus_decode`/`haus_encode` may
+share parts of their input: keep those docs alive while the new value is used.
+A `haus_type` is borrowed from its schema; docs that schema functions return
+don't refer to the schema.
+
+**Threads.** No global state. Every function may run on several threads at
+once; a schema, its types and a doc no longer built into may be read from
+several threads; a doc being built into, and a stream, belong to one thread at
+a time. Codecs are a Zig API only.
+
+In what `haus_decode`, `haus_decode_text`, `haus_type_from_json` and typed
+streams give, a `Secret` is a value of its own kind, `HAUS_SECRET` (spec §15):
+the accessors see nothing in it, every writer, the canonical form and the hash
+reject it (`invalid-tag`), and `haus_secret_reveal` is the one call that gives
+out its value. `haus_encode` gives the data to write, in full. The C ABI is tested
+from C, every function and status ([`test/c_api_test.c`](test/c_api_test.c)),
+and from Zig.
+
+## Examples
+
+[`examples/`](examples): the same steps and files as the other bindings'
+examples (`../examples`).
+
+- [`quickstart.zig`](examples/quickstart.zig): a thread checked by its
+  schema, a comment decoded, changed and encoded, an error with its place.
+- [`order.zig`](examples/order.zig): an order with `@haus-fmt/money` and
+  `@haus-fmt/geo`, decoded plainly and with the application's codecs (cents,
+  GeoJSON order, a `Date`), encoded back, and the codecs' rules rejecting.
+- [`c/quickstart.c`](examples/c/quickstart.c): the quickstart in C through
+  `haus.h`, with the same output.
+
+```sh
+zig build quickstart        # or: order, quickstart-c
+zig build examples          # all of them, their output checked against examples/*.out
+```
 
 ## Build and test
 
 ```sh
-zig build test     # unit tests, the C ABI's tests and the conformance suite
-zig build suite    # the conformance suite alone, with a count per file kind
-zig build fuzz-runner -Doptimize=ReleaseSafe   # zig-out/bin/zig-runner, for ../fuzz
-zig build          # zig-out/lib/libhaus.a and zig-out/include/haus.h
+zig build test      # unit tests, the C ABI's tests (Zig and C), the profiles' vectors, the conformance suite
+zig build suite     # the conformance suite alone, with a count per file kind
+zig build examples  # the examples, their output checked
+zig build fuzz-runner -Doptimize=ReleaseSafe -Dcpu=baseline   # zig-out/bin/zig-runner, for ../fuzz
+zig build           # zig-out/lib/libhaus.a, zig-out/include/haus.h, zig-out/lib/pkgconfig/haus.pc
 ```
 
-The suite runner (`test/suite.zig`) runs `valid/` (values against the
-`.jsonl`, `.canonical`, `.hash`), `invalid/` (codes), `positions/`,
-`equality/`, `stream/limits.cases.haus` (whole, byte by byte, character by
-character, and split at every position), `stream/document.cases.haus`, and
-the format suite (`cases/`, `examples/`, `valid/`, `options.cases.haus`) with
-its idempotence and round-trip checks; then `schema/invalid/`, `schema/*.cases.haus`
-(also with every attribute removed), `stream/typed.cases.haus`, `check/cases.haus`
-(`Schema` and `Data` cases), `json/` (and every `valid/*.jsonl` as
-self-describing JSON) and `packages/cases.haus` (the `core` cases, the
-version check included, and again with their packages given as file trees;
-the `npm` and `cargo` cases and, on Windows, the `os: "unix"` ones are
-skipped with a count; a case with a FIFO runs on a thread of its own with a
-timeout; the trees are written into a fresh directory under `$TMPDIR`,
-which is left in place).
+The suite runner (`test/suite.zig`) runs `valid/`, `invalid/`, `positions/`,
+`equality/`, the stream cases (whole, byte by byte, character by character, and
+split at every position), the format suite with its idempotence and round-trip
+checks, `schema/invalid/`, `schema/*.cases.haus` (also with every attribute
+removed), `stream/typed.cases.haus`, `check/cases.haus`, `json/` and
+`packages/cases.haus` (the `core` cases, and again with their packages given as
+file trees; the `npm` and `cargo` cases and, on Windows, the `os: "unix"` ones
+are skipped with a count).
 
-## C ABI
+## Releases
 
-```c
-int haus_canonical(const char *text, size_t len, char **out, size_t *out_len, haus_error *err);
-int haus_hash_all(const char *text, size_t len, char out[65], haus_error *err);
-int haus_format(const char *text, size_t len, int layout, int indent, int width,
-                char **out, size_t *out_len, haus_error *err);
-int haus_check(const char *schema, size_t schema_len, const char *type_name,
-               const char *text, size_t len, haus_error *err);
-int haus_to_json(const char *schema, size_t schema_len, const char *type_name,
-                 const char *text, size_t len, char **out, size_t *out_len, haus_error *err);
-int haus_from_json(const char *schema, size_t schema_len, const char *type_name,
-                   const char *json, size_t len, char **out, size_t *out_len, haus_error *err);
-void haus_free(char *ptr, size_t len);
-```
-
-Statuses are `HAUS_OK`, `HAUS_ERROR` (the `haus_error` has the code, line,
-column and message), `HAUS_OUT_OF_MEMORY` and `HAUS_INVALID_ARGUMENT` (a
-negative indent or width, as spec §11 asks, an unknown layout, or an
-unknown or generic type) and `HAUS_SCHEMA_ERROR` (a mistake in the schema
-file). An error in a value has its place in `haus_error.path`
-(`$.lines[0].qty`).
+A tag `zig-vX.Y.Z` (the version of `build.zig.zon`) runs
+[`.github/workflows/zig-release.yml`](../.github/workflows/zig-release.yml): it
+tests, packs `zig/` as `haus-zig-X.Y.Z.tar.gz` (Zig can't fetch a package from
+a subdirectory of a repository) with its hash in the release notes, and attaches
+`libhaus` for Linux (glibc, musl), macOS and Windows, static and shared.
 
 ## Fuzzing
 
-`zig-out/bin/zig-runner` speaks the protocol of [`../fuzz`](../fuzz): the
-parser, the stream reader, the canonical form, the formatter (`--format`)
-and the value writers (`--write`), and the schema modes: `--schema FILE`
-(decode and encode), `--schema-check FILE` (schema files), `--time FILE`
-(std/time) and `--json MODE FILE` (all five JSON modes). It finds the schema
-files of those fuzzers in the checkout it was built from. It is registered
-as `zig` and `zig-stream` in `fuzz/src/runners.ts` and `fuzz/src/format.ts`,
-and as `zig` in `schema.ts`, `schema-check.ts`, `time.ts` and `json.ts`.
+`zig-out/bin/zig-runner` speaks the protocol of [`../fuzz`](../fuzz): the parser,
+the stream reader, the canonical form, the formatter (`--format`), the value
+writers (`--write`), and the schema modes `--schema FILE`, `--schema-check FILE`,
+`--time FILE` and `--json MODE FILE`. It is registered as `zig` and
+`zig-stream` in `fuzz/src/runners.ts` and `fuzz/src/format.ts`, and as `zig` in
+`schema.ts`, `schema-check.ts`, `time.ts` and `json.ts`.
