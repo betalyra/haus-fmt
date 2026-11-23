@@ -98,8 +98,15 @@ pub fn isKeyStart(c: u8) bool {
     return (c >= 'a' and c <= 'z') or c == '_';
 }
 pub fn isIdentChar(c: u8) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+    return ident_chars[c];
 }
+
+/// `[A-Za-z0-9_]`, by byte.
+const ident_chars: [256]bool = blk: {
+    var t: [256]bool = @splat(false);
+    for (0..256) |c| t[c] = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+    break :blk t;
+};
 
 /// A bare key: `[a-z_][A-Za-z0-9_]*`.
 pub fn isBareKey(s: []const u8) bool {
@@ -122,6 +129,70 @@ pub fn decode(s: []const u8, i: usize) struct { cp: u21, len: u3 } {
     if (c < 0xE0) return .{ .cp = (@as(u21, c & 0x1F) << 6) | (s[i + 1] & 0x3F), .len = 2 };
     if (c < 0xF0) return .{ .cp = (@as(u21, c & 0x0F) << 12) | (@as(u21, s[i + 1] & 0x3F) << 6) | (s[i + 2] & 0x3F), .len = 3 };
     return .{ .cp = (@as(u21, c & 0x07) << 18) | (@as(u21, s[i + 1] & 0x3F) << 12) | (@as(u21, s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F), .len = 4 };
+}
+
+/// Whether `s` is UTF-8 (RFC 3629: no overlong forms, no surrogates,
+/// nothing above U+10FFFF), as `std.unicode.utf8ValidateSlice`. Runs of
+/// ASCII are skipped eight bytes at a time, also after the first character
+/// that isn't ASCII.
+pub fn validUtf8(s: []const u8) bool {
+    const V = @Vector(16, u8);
+    var i: usize = 0;
+    while (i < s.len) {
+        while (i + 16 <= s.len and @reduce(.Max, @as(V, s[i..][0..16].*)) < 0x80) i += 16;
+        while (i + 8 <= s.len and std.mem.readInt(u64, s[i..][0..8], .little) & 0x8080_8080_8080_8080 == 0) i += 8;
+        while (i < s.len and s[i] < 0x80) i += 1;
+        if (i == s.len) return true;
+        i += utf8Sequence(s, i) orelse return false;
+    }
+    return true;
+}
+
+/// The length of the UTF-8 sequence of a non-ASCII character at `s[i]`, or
+/// null if there is none there.
+fn utf8Sequence(s: []const u8, i: usize) ?usize {
+    const c = s[i];
+    const len: usize = if (c < 0xC2) return null else if (c < 0xE0) 2 else if (c < 0xF0) 3 else if (c < 0xF5) 4 else return null;
+    if (i + len > s.len) return null;
+    for (s[i + 1 .. i + len]) |b| if (b & 0xC0 != 0x80) return null;
+    const b1 = s[i + 1];
+    switch (c) {
+        0xE0 => if (b1 < 0xA0) return null, // overlong
+        0xED => if (b1 > 0x9F) return null, // a surrogate
+        0xF0 => if (b1 < 0x90) return null, // overlong
+        0xF4 => if (b1 > 0x8F) return null, // above U+10FFFF
+        else => {},
+    }
+    return len;
+}
+
+test "validUtf8 agrees with the standard library" {
+    const cases = [_][]const u8{
+        "",                 "plain ascii text, longer than eight bytes", "caf\xc3\xa9 and more ascii after it",
+        "\xc3",             "\xc0\x80",                                  "\xe0\x80\x80",
+        "\xe0\xa0\x80",     "\xed\x9f\xbf",                              "\xed\xa0\x80",
+        "\xef\xbf\xbf",     "\xf0\x8f\xbf\xbf",                          "\xf0\x90\x80\x80",
+        "\xf4\x8f\xbf\xbf", "\xf4\x90\x80\x80",                          "\xf5\x80\x80\x80",
+        "\x80",             "abcdefgh\xff",                              "abcdefg\xe2\x80\xa8xyz",
+        "\xe2\x80",         "\xf0\x9f\x98\x80\xf0\x9f\x98",
+    };
+    for (cases) |s| try std.testing.expectEqual(std.unicode.utf8ValidateSlice(s), validUtf8(s));
+    // Every one- and two-byte input.
+    var buf: [2]u8 = undefined;
+    for (0..256) |a| {
+        buf[0] = @intCast(a);
+        try std.testing.expectEqual(std.unicode.utf8ValidateSlice(buf[0..1]), validUtf8(buf[0..1]));
+        for (0..256) |b| {
+            buf[1] = @intCast(b);
+            try std.testing.expectEqual(std.unicode.utf8ValidateSlice(&buf), validUtf8(&buf));
+        }
+    }
+    // Every three-byte input starting with a lead byte of three or four.
+    var buf3: [3]u8 = undefined;
+    for (0xE0..0x100) |a| for (0x70..0xC0) |b| for (0x70..0xC0) |c| {
+        buf3 = .{ @intCast(a), @intCast(b), @intCast(c) };
+        try std.testing.expectEqual(std.unicode.utf8ValidateSlice(&buf3), validUtf8(&buf3));
+    };
 }
 
 /// The number of code points in valid UTF-8.

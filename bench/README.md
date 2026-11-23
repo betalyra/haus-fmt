@@ -3,7 +3,7 @@
 A first, small benchmark of haus against JSON:
 
 1. **Size, tokens and compression**: bytes, LLM tokens and compressed bytes of the same documents as JSON and as haus. These depend only on the text, which is the same in every binding (canonical form and layouts are fuzzed byte for byte against the Lean reference), so they are measured once, in TypeScript (`size/`).
-2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` and goccy/go-json, into `any` and into Go types generated from the same schema (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`), the JVM against Jackson (`speed/jvm/`). Every language reads the same documents, which `convert` exports as plain files.
+2. **Speed**: parsing and writing with each binding against its language's JSON library, per language (`speed/<lang>/`): TypeScript against `JSON.parse` and `JSON.stringify`, and haus's typed parse and write against JSON with a validator or writer built from the same schema (Zod, Ajv, TypeBox, fast-json-stringify; `speed/ts/`), Rust against `serde_json` (`speed/rust/`), Go against `encoding/json` and goccy/go-json, into `any` and into Go types generated from the same schema (`speed/go/`), Python against `json` and orjson, and its typed parse and write against pydantic and msgspec models generated from the same schema (`speed/py/`), the JVM against Jackson (`speed/jvm/`), Zig against `std.json` (`speed/zig/`). Every language reads the same documents, which `convert` exports as plain files.
 
 ```
 bench/
@@ -16,6 +16,7 @@ bench/
     go/                   Go speed: testing.B (its own Go module, outside go/'s)
     py/                   Python speed: its own uv project, outside python/ (json, orjson, pydantic, msgspec)
     jvm/                  JVM speed: JMH (its own Gradle build, outside jvm/'s)
+    zig/                  Zig speed: its own timer (its own Zig package, outside zig/'s; std.json)
   .data/                  downloads (git-ignored)
   .out/<source>/          results (git-ignored); corpus/ is the exported corpus every language's speed benchmark reads
 ```
@@ -63,6 +64,7 @@ Or step by step:
 | speed (Go) | `pnpm --filter haus-bench speed-go`, or `go generate` then `go run ./cmd/speed` in `bench/speed/go/` | ~10 min (20 tasks × ~4 s × 7 sources; generating the Go types a few seconds) | `bench/speed/go/jsontypes/gen/`, `jsontypes_gen.go` (the Go types, git-ignored); `bench/.out/<source>/speed-go.json` |
 | speed (Python) | `pnpm --filter haus-bench speed-py`, or `uv run python -m haus_bench_speed` in `bench/speed/py/` | ~15 min (19 tasks × ~3.5 s × 7 sources, and building and checking the models) | `bench/.out/<source>/speed-python.json` |
 | speed (JVM) | `pnpm --filter haus-bench speed-jvm`, or `../../../jvm/gradlew run` in `bench/speed/jvm/` | ~20 min (14 tasks × 7 sources, a fork of ~12 s each: start, reading the corpus, 2 s of warm-up, 3 s measured, a collection between iterations; `HAUS_BENCH_ROUNDS=3` ~1 hour); `HAUS_BENCH_QUICK=1` ~10 min | `bench/.out/<source>/speed-jvm.json` |
+| speed (Zig) | `pnpm --filter haus-bench speed-zig`, or `zig build run` in `bench/speed/zig/` | ~5 min (12 tasks × 4 s × 6 sources, and the first build; gh-archive not measured) | `bench/.out/<source>/speed-zig.json` |
 | report | `pnpm --filter haus-bench report` | < 1 s | prints the tables (every language's speed results that are there); `bench/.out/results.md`, `bench/.out/results.haus` (one section, one record per source) |
 
 `convert` and `speed` build `@haus-fmt/haus` and `@haus-fmt/effect` first: they measure the built `dist/`, which git ignores, so after switching branches an old build would otherwise be measured. When running `main.node.ts` directly (Bun, Deno), run `prepare-haus` first.
@@ -126,6 +128,17 @@ HAUS_BENCH_TASKS=parse-doc-json,parse-doc-haus HAUS_BENCH_PROFILERS=stack ../../
 ```
 
 `HAUS_BENCH_ROUNDS` sets the number of rounds (default 1; 3 rounds take three times as long and give each haus task's ratio to its baseline in three forks). `HAUS_BENCH_TASKS`, `HAUS_BENCH_PROFILERS` (JMH's profilers with their options as on its command line: `stack:lines=4`, `gc`, …) and `HAUS_BENCH_JVM_ARGS` (more options for the forks, such as `-XX:StartFlightRecording=settings=profile,filename=fork-%p.jfr` for a Flight Recorder profile per fork, read with `jfr view hot-methods`) are for looking closer; a run with any of them writes no results file.
+
+The Zig benchmark, the same way (Zig 0.17.1, the version `zig/` asks for; `pnpm --filter haus-bench speed-zig` runs the first line):
+
+```sh
+cd bench/speed/zig
+zig build run                                                   # every source but gh-archive; writes speed-zig.json (ReleaseFast)
+HAUS_BENCH_SOURCES=vega-lite,geojson zig build run
+HAUS_BENCH_QUICK=1 zig build run                                # 10 samples in 0.3 s per task: checks the harness, not for publishing
+HAUS_BENCH_TASKS=parse-doc-json,parse-doc-haus zig build run    # only these tasks; no results written
+HAUS_BENCH_TIME_MS=1000 HAUS_BENCH_WARMUP_MS=300 HAUS_BENCH_TAG=after ./zig-out/bin/haus-bench-speed   # shorter settings; results as speed-zig.after.json (for comparing two builds; the report reads speed-zig.json only)
+```
 
 ### Node, Bun and Deno
 
@@ -447,6 +460,26 @@ The JVM benchmark (JMH 1.37, Temurin 25.0.5, M1 Max, shared with builds and fuzz
 - **The canonical form** sorts a record's keys by insertion up to 24 keys (no boxing) and skips the identifier check for bare keys.
 - Tried and left out: a table of the keys and tags read, so a repeated key is one string (Jackson does this): 12% slower on GitHub's and Stripe's documents, the same on GH Archive; starting the writer's buffer at 16 KiB (GH Archive per document 1.49× instead of 1.59×, GitHub 1.12× instead of ≈ equal).
 
+### Zig
+
+The Zig benchmark ([below](#speed-zig), Zig 0.17.1 ReleaseFast, M1 Max, shared with builds of other work while it ran), haus's time against `std.json`'s for the same task and input (below 1: haus is faster; typed against std.json's plain parse, typed write against its plain write), before → after the optimisations below: the two builds run alternately twice (A B A B) with short settings (1 s per task after 0.3 s of warm-up), each cell the geometric mean of its two runs. `gh-archive` isn't measured in Zig (personal data).
+
+| Source | parse corpus | parse doc | typed doc | write corpus | write doc | typed write doc |
+|---|---:|---:|---:|---:|---:|---:|
+| `github-rest` | 1.36 → 0.56 | 1.43 → 0.64 | 1.86 → 0.92 | 3.19 → 1.14 | 3.45 → 1.15 | 6.34 → 2.21 |
+| `vega-lite` | 0.89 → 0.62 | 0.98 → 0.68 | 1.38 → 1.00 | 2.84 → 1.21 | 2.54 → 1.14 | 6.02 → 2.71 |
+| `kubernetes` | 0.87 → 0.56 | 0.99 → 0.64 | 1.42 → 1.01 | 2.42 → 1.02 | 2.24 → 1.14 | 5.43 → 2.64 |
+| `stripe` | 0.99 → 0.64 | 1.14 → 0.73 | 1.89 → 1.32 | 2.48 → 1.32 | 2.39 → 1.36 | 6.52 → 3.63 |
+| `bfcl` | 1.15 → 0.49 | 1.16 → 0.52 | 1.53 → 0.85 | 2.91 → 0.99 | 2.63 → 0.88 | 6.08 → 1.73 |
+| `geojson`* | 1.10 → 0.92 | 0.94 → 0.72 | 1.35 → 0.96 | 2.28 → 1.18 | 2.25 → 1.56 | 6.13 → 4.19 |
+
+\* GeoJSON's two after runs differ by up to 1.7× (machine noise); read its row as a range.
+
+- **Parsing**: the duplicate-key trie had a node per key byte and was about half the parse time; it is now a radix trie (edges labelled with parts of the record's keys, at most two nodes per key, still linear in the worst case: spec §7). Strings are checked sixteen printable ASCII bytes at a time and copied in one piece unless they have escapes; number literals already in their normalized spelling are kept as they are; the UTF-8 check of the text skips ASCII runs after the first non-ASCII character too.
+- **Writing**: the compact and minimised layouts were written through the pretty layout's tree (a node per value, widths of every string); they are now written straight from the values, with the same checks of values built in code in the same order. A record's keys are checked for duplicates pairwise up to 16 keys (a sorted copy beyond, and for the error), strings are copied in runs that need no escape, and the limits of numbers and strings are only counted where the length can break them.
+- **Typed**: encoding checked the value by writing its canonical form (sorting every record) into a buffer it threw away; it now walks the value with the same checks (and writes the canonical form only to report a mistake), and `encode` and `decodeText` skip the decoder's depth walk where the depth limit was just checked the same way. A record looks up each key's field once.
+- std.json keeps strings without escapes as slices of the input and writes a `Value` without checking it; haus copies every string and checks every value it writes (spec §11).
+
 ### TypeScript: typed against JSON with validation
 
 haus's typed parse reads and checks in one pass; the fair JSON counterpart is `JSON.parse` followed by a validator of the same schema, and for writing, a JSON writer compiled from the same schema ([the baselines](#the-json-baselines-of-the-typed-tasks)). Per document, Node 26 (M1 Max, shared with other benchmarks while it ran): the median of three full runs, the range of the three in parentheses where it matters. Ratios are haus's time over the JSON task's time on the same documents (below 1: haus is faster); MB/s is each format's own bytes.
@@ -713,6 +746,23 @@ Parse and write on the corpus and per document, the others per document. The typ
 Timing: JMH, average time, a fork per task with a fixed heap (`-Xms2g -Xmx2g`, the default collector), garbage collected between iterations (`gc: true`), the outputs consumed by JMH's `Blackhole`. A run is one round by default (`HAUS_BENCH_ROUNDS` for more); each round runs every task in order, a JSON task and then its haus counterparts, each in a fork of its own, so the pairs follow each other closely. A fork warms up for 4 iterations of 500 ms and measures 6 of 500 ms (5 s of timing per task, about the other languages' budget); every measured iteration is one sample (the mean of its calls), so a row has 6 per round. The mean is JMH's score over all of them, p75 and p99 are over the samples, and bytes allocated per iteration come from JMH's gc profiler (`gc.alloc.rate.norm`; the number of allocations isn't counted). Besides the results file, the terminal shows each haus task against its baseline: with several rounds, the median of the rounds' time ratios and their range. Most of a fork's time is starting it and reading the corpus (each task's bytes are only computed by the runner, not in the forks).
 
 The checks before timing, in Java: every haus document parses to a value that `Haus.write` (minimised) writes back as the same text (and a line feed), its pretty text reads as a value written the same way, its canonical form reads back as the same value and the same form, it decodes with its type (`<source>.schema.haus`, the document's root) and the typed write reads back as the decoded value, which decodes to itself, `all.haus` reads as the documents' values and is what `Haus.writeAll` writes for them; Jackson reads every JSON document and `all.json` (an array of the same trees), and its sorted writer writes the same tree with every object's members in order. `jsonNotStable` counts the documents Jackson writes back through its tree as another document by haus's equality (`HausJson.importJson` of both texts: exact numbers, member order aside). Each task runs once untimed, and its output's size goes into the checksum. Results: `speed-jvm.json`, the shape of the others (`lang: "jvm"`, the JDK as `machine.runtime`).
+
+### Speed (Zig)
+
+`bench/speed/zig/`, a Zig package of its own (`haus_bench_speed`, outside `zig/`'s build, so `zig/`'s CI doesn't build it), with the binding as a path dependency (`.haus = .{ .path = "../../../zig" }`). No dependencies besides the binding: the JSON baseline is the standard library's `std.json` (Zig 0.17.1), and the harness is a timer of its own (Zig has no benchmark library in its standard library). `zig build run` builds it with `-Doptimize=fast` (ReleaseFast) unless asked otherwise. The same tasks as the other languages, on the same files:
+
+| Task | JSON | haus |
+|---|---|---|
+| parse | `std.json.parseFromSlice(std.json.Value, …)` | `haus.parse` (per document), `haus.parseAll` (the corpus): text → `haus.Value`, no schema |
+| typed | (the plain parse) | `haus.decoding.decodeText` with the document's type (parse and decode, per document), `haus.parseAll` + `haus.decoding.decode` of each (the corpus) |
+| write | `std.json.Stringify.valueAlloc` of the `std.json.Value` | `haus.stringify` minimised and compact, `haus.stringifyAll` minimised (the corpus as a stream) |
+| write, typed | | `haus.decoding.encode` of the decoded value (the check of a value built in code) + `haus.stringify` minimised (per document) |
+
+Parse and write on the corpus and per document, the typed tasks as listed. The typed tasks have no JSON counterpart, as in Rust and on the JVM: `std.json` into Zig structs would need Zig types for the six schemas (and the sources' JSON mappings: enum strings, discriminators, the keyed unions), so their baseline is the plain parse (and write). Both libraries allocate with `std.heap.smp_allocator`; each parse goes into an arena that is freed before the next call (`std.json`'s `Parsed`, haus's `Parsed`; the typed tasks an arena per document). `std.json` keeps strings without escapes as slices of the input and numbers as `i64`/`f64` (others as text); haus copies every string into its arena (a `Value` doesn't refer to the text it was read from) and keeps every number's text. `std.json`'s writer writes a `Value` as it is; haus's writers check the value first (spec §11, "Values built in code": numbers normalized, strings UTF-8, tags, duplicate keys, every limit).
+
+Timing: per task, warm-up for `warmup_ms`, then 30 samples (10 with `HAUS_BENCH_QUICK`), each a batch of equal size, sized from the warm-up so that all samples take about `time_ms`; the mean is the total time over the total calls, p75 and p99 are over the samples (each the mean of its batch). Every output's size goes through `std.mem.doNotOptimizeAway` and, once untimed, into the checksum. The checks before timing are Rust's, in Zig: every haus document parses to a value that `stringify` (minimised) writes back as the same text, its pretty text reads as the same value (`haus.equals`), it decodes with its type and the typed write reads back and decodes, `all.haus` reads as the documents' values and is what `stringifyAll` writes for them; `std.json` reads every JSON document and `all.json`. `jsonNotStable` counts the documents `std.json` writes back through its `Value` as another document by haus's equality (`haus.json.importJson` of both texts: exact numbers, member order aside). Results: `speed-zig.json`, the shape of the others (`lang: "zig"`, `zig 0.17.1 (fast)` as `machine.runtime`).
+
+**`gh-archive` is not measured in Zig**: its documents are public GitHub events with user names in them, and the benchmark's corpora are to have an open-source licence and no personal data. The runner leaves it out of the default sources and refuses it in `HAUS_BENCH_SOURCES`.
 
 ## Caveats
 

@@ -76,7 +76,7 @@ pub const Checker = struct {
                 var buf: [64]u8 = undefined;
                 return failValue(diag, .@"invalid-number", "{s} is not a normalized number literal", .{errors.quoteText(&buf, n)});
             },
-            .string => |s| if (!std.unicode.utf8ValidateSlice(s)) return failValue(diag, .@"cannot-encode", "a string that isn't UTF-8", .{}),
+            .string => |s| if (!v.validUtf8(s)) return failValue(diag, .@"cannot-encode", "a string that isn't UTF-8", .{}),
             .variant => |x| if (!v.isTag(x.tag)) {
                 var buf: [64]u8 = undefined;
                 return failValue(diag, .@"invalid-tag", "{s} is not a tag", .{errors.quoteText(&buf, x.tag)});
@@ -86,14 +86,17 @@ pub const Checker = struct {
         if (c.writer) {
             if (childDepth(val, depth) > limits.max_depth) return failValue(diag, .@"nesting-too-deep", "nesting deeper than {d} levels", .{limits.max_depth});
             switch (val) {
-                .number => |n| switch (number.scan(n, 0, limits)) {
+                // A normalized literal is decimal, without separators: only
+                // its length and exponent can break a limit.
+                .number => |n| if (n.len > limits.max_number_length or std.mem.indexOfScalar(u8, n, 'e') != null) switch (number.scan(n, 0, limits)) {
                     .err => |code| return switch (code) {
                         .@"exponent-too-large" => failValue(diag, code, "exponent larger than {d}", .{limits.max_exponent}),
                         else => failValue(diag, .@"number-too-long", "number longer than {d} characters", .{limits.max_number_length}),
                     },
                     .ok => {},
                 },
-                .string => |s| if (v.countCodePoints(s) > limits.max_string_length) return failValue(diag, .@"string-too-long", "string longer than {d} characters", .{limits.max_string_length}),
+                // No more characters than bytes: only a long string is counted.
+                .string => |s| if (s.len > limits.max_string_length and v.countCodePoints(s) > limits.max_string_length) return failValue(diag, .@"string-too-long", "string longer than {d} characters", .{limits.max_string_length}),
                 .bytes => |b| if (2 * @as(u64, b.len) > limits.max_string_length) return failValue(diag, .@"string-too-long", "byte string longer than {d} characters", .{limits.max_string_length}),
                 .variant => |x| if (x.tag.len > limits.max_string_length) return failValue(diag, .@"tag-too-long", "tag longer than {d} characters", .{limits.max_string_length}),
                 .array, .record => {},
@@ -111,8 +114,8 @@ pub const Checker = struct {
     fn checkKeys(c: *Checker, fields: []const Field) Error!void {
         const limits = c.options.limits;
         for (fields) |f| {
-            if (!std.unicode.utf8ValidateSlice(f.key)) return failValue(c.options.diagnostic, .@"cannot-encode", "a record key that isn't UTF-8", .{});
-            if (c.writer and v.countCodePoints(f.key) > limits.max_string_length) return failValue(c.options.diagnostic, .@"key-too-long", "record key longer than {d} characters", .{limits.max_string_length});
+            if (!v.validUtf8(f.key)) return failValue(c.options.diagnostic, .@"cannot-encode", "a record key that isn't UTF-8", .{});
+            if (c.writer and f.key.len > limits.max_string_length and v.countCodePoints(f.key) > limits.max_string_length) return failValue(c.options.diagnostic, .@"key-too-long", "record key longer than {d} characters", .{limits.max_string_length});
         }
     }
 
@@ -147,6 +150,22 @@ pub fn sortedFields(gpa: Allocator, fields: []const Field, diag: ?*Diagnostic) E
     return sorted;
 }
 
+/// `duplicate-key` if two keys of a record are equal, as `sortedFields`
+/// reports it. A few keys are compared pairwise (no copy, no sort; a value
+/// built in code is checked once per write, not parsed, so spec §7's rule
+/// for reading crafted input doesn't apply, and the pairs are at most 120),
+/// more on a sorted copy.
+pub fn checkUniqueKeys(gpa: Allocator, fields: []const Field, diag: ?*Diagnostic) Error!void {
+    const pairwise = 16;
+    if (fields.len > pairwise) return gpa.free(try sortedFields(gpa, fields, diag));
+    for (fields, 0..) |a, i| {
+        for (fields[i + 1 ..]) |b| {
+            // The error `sortedFields` gives: the first duplicate in key order.
+            if (std.mem.eql(u8, a.key, b.key)) return gpa.free(try sortedFields(gpa, fields, diag));
+        }
+    }
+}
+
 /// Whether a character is written as an escape in every string (spec §11,
 /// §12): control characters, bidi controls, U+2028 and U+2029.
 pub fn mustEscape(cp: u21) bool {
@@ -156,13 +175,28 @@ pub fn mustEscape(cp: u21) bool {
 /// Appends a string as `"…"` with the minimal escapes of spec §12 (the
 /// same in every layout, spec §11).
 pub fn appendQuoted(gpa: Allocator, out: *std.ArrayList(u8), s: []const u8) Allocator.Error!void {
-    try out.append(gpa, '"');
+    try out.ensureUnusedCapacity(gpa, s.len + 2);
+    out.appendAssumeCapacity('"');
+    // `s[run..i]` needs no escape: it is copied as it is.
+    var run: usize = 0;
     var i: usize = 0;
     while (i < s.len) {
+        const c = s[i];
+        if (c >= 0x20 and c < 0x7F and c != '"' and c != '\\') {
+            i += 1;
+            continue;
+        }
         const d = v.decode(s, i);
+        if (c >= 0x80 and !mustEscape(d.cp)) {
+            i += d.len;
+            continue;
+        }
+        try out.appendSlice(gpa, s[run..i]);
         try appendEscaped(gpa, out, d.cp, s[i .. i + d.len]);
         i += d.len;
+        run = i;
     }
+    try out.appendSlice(gpa, s[run..]);
     try out.append(gpa, '"');
 }
 
@@ -291,6 +325,44 @@ pub fn appendCanonical(gpa: Allocator, out: *std.ArrayList(u8), val: Value, opti
 pub fn appendChecked(gpa: Allocator, out: *std.ArrayList(u8), val: Value, options: WriteOptions, index: ?usize) Error!void {
     var checker = Checker{ .options = options, .writer = true, .index = index };
     try writeCanonical(gpa, out, val, &checker);
+}
+
+/// Checks a value as `appendChecked` does (every limit of spec §7, what a
+/// value built in code can get wrong), without writing it. The walk finds
+/// the same mistakes; when there is one, `appendChecked` runs to report it
+/// as it does (it checks a record's fields in key order).
+pub fn checkWritable(gpa: Allocator, val: Value, options: WriteOptions) Error!void {
+    // The walk recurses once per level: only within the depth this binding supports.
+    if (options.limits.max_depth <= Limits.supported_depth) {
+        var checker = Checker{ .options = .{ .limits = options.limits }, .writer = true };
+        if (checkTree(gpa, &checker, val, 0)) |_| return else |e| switch (e) {
+            error.OutOfMemory => return e,
+            error.Haus => {},
+        }
+    }
+    var sink: std.ArrayList(u8) = .empty;
+    defer sink.deinit(gpa);
+    try appendChecked(gpa, &sink, val, options, null);
+}
+
+fn checkTree(gpa: Allocator, checker: *Checker, val: Value, depth: u32) Error!void {
+    try checker.visit(val, depth);
+    const inner = Checker.childDepth(val, depth);
+    switch (val) {
+        .array => |items| for (items) |x| try checkTree(gpa, checker, x, inner),
+        .record => |fields| try checkFields(gpa, checker, fields, inner),
+        .variant => |x| if (x.args.len == 1 and x.args[0] == .record) {
+            // One more value written, at the payload's level (as `openValue`).
+            try checker.count();
+            try checkFields(gpa, checker, x.args[0].record, inner);
+        } else for (x.args) |a| try checkTree(gpa, checker, a, inner),
+        else => {},
+    }
+}
+
+fn checkFields(gpa: Allocator, checker: *Checker, fields: []const Field, depth: u32) Error!void {
+    try checkUniqueKeys(gpa, fields, null);
+    for (fields) |f| try checkTree(gpa, checker, f.value, depth);
 }
 
 /// The canonical form of a value (spec §12). The caller owns the result.

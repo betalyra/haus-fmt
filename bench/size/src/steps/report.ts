@@ -7,7 +7,7 @@
  * Reads each source's corpus.json (convert) and, when present, tokens.json
  * (tokens), compression.json (compress) and every language's
  * speed-<lang>.json (bench/speed/ts: the speed step; bench/speed/rust: cargo
- * bench; bench/speed/go and bench/speed/jvm: their runners). Results of another convert run (another sample) are left out, with
+ * bench; bench/speed/go, bench/speed/jvm and bench/speed/zig: their runners). Results of another convert run (another sample) are left out, with
  * a warning. Sources are never merged.
  *
  * Size and token ratios are haus / JSON: below 1 means haus is smaller.
@@ -70,7 +70,7 @@ export const unions = (decisions: Readonly<Record<string, number>>): string => {
 const sameDocuments = (corpus: CorpusOut, ids: readonly string[]): boolean =>
   ids.length === corpus.documents.length && ids.every((id, i) => id === corpus.documents[i]!.id)
 
-const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go", python: "Python", jvm: "JVM" }
+const LANG_NAMES: Record<Lang, string> = { typescript: "TypeScript", rust: "Rust", go: "Go", python: "Python", jvm: "JVM", zig: "Zig" }
 
 /**
  * haus's time against a JSON task's time on the same documents, from haus's
@@ -102,6 +102,7 @@ const JSON_NOTES: Record<Lang, (n: number) => string> = {
   go: (n) => `encoding/json through \`any\` wrote ${n} documents back as another document (numbers as float64; it also sorts members, which isn't counted).`,
   python: (n) => `json.loads → json.dumps wrote ${n} documents back as another document (numbers as float).`,
   jvm: (n) => `Jackson's \`JsonNode\` tree wrote ${n} documents back as another document (floating-point numbers as double).`,
+  zig: (n) => `std.json's \`Value\` wrote ${n} documents back as another document (numbers as i64 or f64).`,
 }
 
 const SAMPLE_NOTES: Record<Lang, string> = {
@@ -110,6 +111,7 @@ const SAMPLE_NOTES: Record<Lang, string> = {
   go: "p75 and p99 are over the samples (each the mean of one testing.Benchmark run); allocations are testing's (-benchmem). ",
   python: "p75 and p99 are over the samples (each the mean of a batch of calls). The Python binding has no compact or minimised writer yet: haus's write is `haus.canonical` (minimised, keys sorted). ",
   jvm: "p75 and p99 are over the samples (each the mean of one JMH iteration, of every round); bytes allocated are JMH's gc profiler's (gc.alloc.rate.norm), the number of allocations isn't counted. ",
+  zig: "p75 and p99 are over the samples (each the mean of a batch of calls). gh-archive is not measured (personal data). ",
 }
 
 /** The schema-compiled JSON writers of the typed write, where a language has them. */
@@ -125,7 +127,7 @@ export const speedTable = (sp: SpeedOut): string[] => {
   return [
     `### ${LANG_NAMES[sp.lang]}`,
     "",
-    `${m.cpu} (${m.cores} cores, ${m.memory_gb} GB), ${m.os}, ${m.runtime}` + (sp.lang !== "rust" ? `, GC between tasks: ${m.gc ? "yes" : "no"}` : "") +
+    `${m.cpu} (${m.cores} cores, ${m.memory_gb} GB), ${m.os}, ${m.runtime}` + (sp.lang !== "rust" && sp.lang !== "zig" ? `, GC between tasks: ${m.gc ? "yes" : "no"}` : "") +
       `. ${sp.harness}, ${sp.options.time_ms} ms per task after ${sp.options.warmup_ms} ms warm-up.` +
       (sp.options.quick ? " **Quick run: a harness check, not a measurement.**" : ""),
     `${SAMPLE_NOTES[sp.lang]}${JSON_NOTES[sp.lang](sp.jsonNotStable)}`,
@@ -350,7 +352,7 @@ export const renderReport = (corpus: CorpusOut, tokensRead: Option.Option<Tokens
   const speedSection = speed.length === 0 ? [] : [
     "## Speed",
     "",
-    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Go also encoding/json and goccy/go-json into Go types generated from it, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Go typed: the Go types, Type.Format; in Python typed: pydantic, msgspec, SchemaType.canonical; on the JVM typed: SchemaType.encode + Haus.write, and the canonical form beside Jackson writing members sorted). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json into and from `any`, json.loads and json.dumps, Jackson), \"≈ equal\" within 5%.",
+    "Each language's own benchmark, on the same documents (the files convert exports to `corpus/`): parse (text → the binding's generic value), typed (parse and decode with the document's schema; in TypeScript also JSON.parse + a validator of the same schema, in Go also encoding/json and goccy/go-json into Go types generated from it, in Python pydantic and msgspec models of it), write (value → text; in TypeScript also typed: fast-json-stringify, h.stringify; in Go typed: the Go types, Type.Format; in Python typed: pydantic, msgspec, SchemaType.canonical; on the JVM typed: SchemaType.encode + Haus.write, and the canonical form beside Jackson writing members sorted; in Zig typed: decoding.encode + stringify). MB/s is against each format's own bytes; \"vs JSON\" says how much faster or slower haus is than the language's plain JSON task of the same input (its parse for parse and typed, its write for write: JSON.parse and JSON.stringify, serde_json, encoding/json into and from `any`, json.loads and json.dumps, Jackson, std.json into and from `std.json.Value`), \"≈ equal\" within 5%.",
     "",
     ...(speed.length > 1 ? speedSummary(speed) : []),
     ...speed.flatMap(speedTable),

@@ -90,7 +90,7 @@ fn invalidUtf8(diag: ?*Diagnostic) Error {
 /// Parses a file: zero or more values separated by commas (spec §1, §6).
 pub fn parseAll(gpa: Allocator, text: []const u8, options: ParseOptions) Error!Parsed([]const Value) {
     try checkLimits(options.limits, options.diagnostic);
-    if (!std.unicode.utf8ValidateSlice(text)) return invalidUtf8(options.diagnostic);
+    if (!value.validUtf8(text)) return invalidUtf8(options.diagnostic);
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
@@ -139,7 +139,7 @@ pub const Document = struct {
 /// Parses a file keeping the positions of its values, keys and comments.
 pub fn parseDocument(gpa: Allocator, text: []const u8, options: ParseOptions) Error!Document {
     try checkLimits(options.limits, options.diagnostic);
-    if (!std.unicode.utf8ValidateSlice(text)) return invalidUtf8(options.diagnostic);
+    if (!value.validUtf8(text)) return invalidUtf8(options.diagnostic);
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);

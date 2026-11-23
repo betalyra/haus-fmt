@@ -191,6 +191,87 @@ const FromValues = struct {
     }
 };
 
+// ── compact and minimised, straight from values ──────────────
+
+/// The compact and minimised layouts of a value, written as it is walked:
+/// they need no layout tree (no widths, no comments). The checks are those
+/// of `FromValues`, in its order (the value, then a record's keys, then
+/// what is inside), so a value with a mistake fails the same way.
+const Flat = struct {
+    gpa: Allocator,
+    out: *std.ArrayList(u8),
+    checker: canon.Checker,
+    minimised: bool,
+
+    fn put(f: *Flat, s: []const u8) Allocator.Error!void {
+        try f.out.appendSlice(f.gpa, s);
+    }
+
+    /// Punctuation: a byte or two, appended without a call to copy them.
+    inline fn lit(f: *Flat, comptime s: []const u8) Allocator.Error!void {
+        try f.out.ensureUnusedCapacity(f.gpa, s.len);
+        inline for (s) |c| f.out.appendAssumeCapacity(c);
+    }
+
+    /// Punctuation of the layout: `minimised` or `compact`.
+    inline fn punct(f: *Flat, comptime minimised: []const u8, comptime compact: []const u8) Allocator.Error!void {
+        if (f.minimised) try f.lit(minimised) else try f.lit(compact);
+    }
+
+    fn value(f: *Flat, val: Value, depth: u32) Error!void {
+        try f.checker.visit(val, depth);
+        const inner = canon.Checker.childDepth(val, depth);
+        switch (val) {
+            .number => |n| try f.put(n),
+            .string => |s| try canon.appendQuoted(f.gpa, f.out, s),
+            .bytes => |bytes| {
+                try f.lit("x\"");
+                try canon.appendHex(f.gpa, f.out, bytes);
+                try f.lit("\"");
+            },
+            .array => |items| {
+                try f.lit("[");
+                try f.values(items, inner);
+                try f.lit("]");
+            },
+            .record => |fields| try f.record(fields, inner),
+            .variant => |x| {
+                if (x.args.len == 0) return f.put(x.tag);
+                if (x.args.len == 1 and x.args[0] == .record) {
+                    try f.checker.count();
+                    try f.put(x.tag);
+                    try f.punct("", " ");
+                    return f.record(x.args[0].record, inner);
+                }
+                try f.put(x.tag);
+                try f.lit("(");
+                try f.values(x.args, inner);
+                try f.lit(")");
+            },
+        }
+    }
+
+    fn values(f: *Flat, items: []const Value, depth: u32) Error!void {
+        for (items, 0..) |item, i| {
+            if (i > 0) try f.punct(",", ", ");
+            try f.value(item, depth);
+        }
+    }
+
+    fn record(f: *Flat, fields: []const v.Field, depth: u32) Error!void {
+        try canon.checkUniqueKeys(f.gpa, fields, f.checker.options.diagnostic);
+        if (fields.len == 0) return f.lit("{}");
+        try f.punct("{", "{ ");
+        for (fields, 0..) |field, i| {
+            if (i > 0) try f.punct(",", ", ");
+            try canon.appendKey(f.gpa, f.out, field.key);
+            try f.punct(":", ": ");
+            try f.value(field.value, depth);
+        }
+        try f.punct("}", " }");
+    }
+};
+
 // ── writing ──────────────────────────────────────────────────
 
 pub const Writer = struct {
@@ -414,6 +495,13 @@ pub const Writer = struct {
 
 /// One value in a layout (spec §11), without a line break after it.
 pub fn stringify(gpa: Allocator, val: Value, options: FormatOptions) Error![]u8 {
+    if (options.layout != .pretty) {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(gpa);
+        var f = Flat{ .gpa = gpa, .out = &out, .checker = .{ .options = options.write, .writer = true }, .minimised = options.layout == .minimised };
+        try f.value(val, 0);
+        return out.toOwnedSlice(gpa);
+    }
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     var b = FromValues{ .arena = arena_state.allocator(), .gpa = gpa, .checker = .{ .options = options.write, .writer = true } };
@@ -432,6 +520,20 @@ pub fn stringify(gpa: Allocator, val: Value, options: FormatOptions) Error![]u8 
 /// Values as a file (spec §6, §11): one value alone, more each followed by
 /// a comma; a line break at the end unless there are none.
 pub fn stringifyAll(gpa: Allocator, values: []const Value, options: FormatOptions) Error![]u8 {
+    if (options.layout != .pretty) {
+        // As `Writer.file`: each value on its line, a comma after each when
+        // there are several.
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(gpa);
+        for (values, 0..) |val, i| {
+            // The limits apply to each value on its own (spec §7).
+            var f = Flat{ .gpa = gpa, .out = &out, .checker = .{ .options = options.write, .writer = true, .index = i }, .minimised = options.layout == .minimised };
+            try f.value(val, 0);
+            if (values.len > 1) try out.append(gpa, ',');
+            try out.append(gpa, '\n');
+        }
+        return out.toOwnedSlice(gpa);
+    }
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

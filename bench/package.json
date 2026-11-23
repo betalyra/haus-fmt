@@ -1,7 +1,7 @@
 {
   "name": "haus-bench",
   "private": true,
-  "description": "Benchmarks: haus against JSON on real data: size, tokens and compression (size/), TypeScript speed (speed/ts/); Rust speed is speed/rust/ (cargo bench), Go speed speed/go/ (go run ./cmd/speed), Python speed speed/py/ (uv run python -m haus_bench_speed), JVM speed speed/jvm/ (JMH, gradlew run)",
+  "description": "Benchmarks: haus against JSON on real data: size, tokens and compression (size/), TypeScript speed (speed/ts/); Rust speed is speed/rust/ (cargo bench), Go speed speed/go/ (go run ./cmd/speed), Python speed speed/py/ (uv run python -m haus_bench_speed), JVM speed speed/jvm/ (JMH, gradlew run), Zig speed speed/zig/ (zig build run)",
   "type": "module",
   "scripts": {
     "prepare-haus": "pnpm --dir ../typescript --filter @haus-fmt/haus --filter @haus-fmt/effect build",
@@ -15,6 +15,7 @@
     "speed-go": "go -C speed/go generate && go -C speed/go run ./cmd/speed",
     "speed-py": "uv run --directory speed/py python -m haus_bench_speed",
     "speed-jvm": "../jvm/gradlew -p speed/jvm --quiet run",
+    "speed-zig": "zig build --build-file speed/zig/build.zig run",
     "report": "node main.node.ts report",
     "all": "pnpm run prepare-haus && node --use-env-proxy --expose-gc main.node.ts all",
     "smoke": "pnpm run prepare-haus && node --use-env-proxy --expose-gc main.node.ts smoke",
