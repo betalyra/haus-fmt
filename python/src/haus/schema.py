@@ -309,6 +309,7 @@ PROFILED_TYPES: Mapping[str, tuple[str, ...]] = {
     "@haus-fmt/money@1#Currency": ("iso",),
     "@haus-fmt/geo@1#LatLng": ("wgs84",),
     "@haus-fmt/geo@1#BBox": ("wgs84",),
+    "@haus-fmt/uuid@1#Uuid": ("rfc9562",),
 }
 """The types official profiles have a rule for, by id, with the profiles (spec §13.4). `iso`'s rule for
 `Money` is its currency's, so `Currency` stands for it. A build reads only a package's `package.haus` and

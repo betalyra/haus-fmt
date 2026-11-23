@@ -34,6 +34,7 @@ haus-schema = { package = "haus-fmt-schema", path = "../../rust/haus-schema" }
 # The official packages, with their profiles' codecs (profile_runner).
 haus-fmt-money = { path = "../../extensions/money" }
 haus-fmt-geo = { path = "../../extensions/geo" }
+haus-fmt-uuid = { path = "../../extensions/uuid" }
 
 [build-dependencies]
 haus-fmt-build = { path = "../../rust/haus-build" }

@@ -1,0 +1,29 @@
+// Test vectors for the profile @haus-fmt/uuid/rfc9562, version 1. The rule is
+// in rfc9562.md; these are examples of it (spec §13.3).
+//
+// Accept: `value` (haus text for `type`) is accepted, and encoding what the
+// codec decoded writes exactly the text `output`, or `value` when there is no
+// `output`. Reject: `value` is valid for the schema of `type` (the shape), and
+// the codec rejects it (the rule).
+
+Accept { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57\")", note: "version 7" },
+Accept { type: "Uuid", value: "Uuid(\"f47ac10b-58cc-4372-a567-0e02b2c3d479\")", note: "version 4" },
+Accept { type: "Uuid", value: "Uuid(\"6ba7b810-9dad-11d1-80b4-00c04fd430c8\")", note: "version 1" },
+Accept { type: "Uuid", value: "Uuid(\"00000000-0000-0000-0000-000000000000\")", note: "the nil UUID" },
+Accept { type: "Uuid", value: "Uuid(\"ffffffff-ffff-ffff-ffff-ffffffffffff\")", note: "the max UUID" },
+Accept { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-0d3f-0a41-6c2e8f1b0d57\")", note: "no version or variant check: version 0, variant 0" },
+Accept { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-fd3f-ea41-6c2e8f1b0d57\")", note: "version 15, variant 0b111" },
+Accept { type: "Uuid", value: "Uuid(\"0190c7a8\\u{2d}5b6e-7d3f-9a41-6c2e8f1b0d57\")", output: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57\")", note: "checked on the decoded string: an escaped hyphen" },
+Reject { type: "Uuid", value: "Uuid(\"0190C7A8-5B6E-7D3F-9A41-6C2E8F1B0D57\")", note: "uppercase" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d5F\")", note: "one uppercase digit" },
+Reject { type: "Uuid", value: "Uuid(\"{0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57}\")", note: "braces" },
+Reject { type: "Uuid", value: "Uuid(\"urn:uuid:0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57\")", note: "the URN prefix" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a85b6e7d3f9a416c2e8f1b0d57\")", note: "no hyphens" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a-85b6e-7d3f-9a41-6c2e8f1b0d57\")", note: "a hyphen in another place" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d5\")", note: "35 characters" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d570\")", note: "37 characters" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0g57\")", note: "not a hexadecimal digit" },
+Reject { type: "Uuid", value: "Uuid(\" 0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57\")", note: "a space before" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57\\n\")", note: "a line break after" },
+Reject { type: "Uuid", value: "Uuid(\"0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d5٧\")", note: "a digit that isn't ASCII" },
+Reject { type: "Uuid", value: "Uuid(\"\")", note: "empty" },

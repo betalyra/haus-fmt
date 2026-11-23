@@ -1,0 +1,3 @@
+// The manifest of a schema package: its name and version are the identity of
+// its types in every language (@haus-fmt/uuid@1#Uuid).
+{ name: "@haus-fmt/uuid", version: "1.0.0" }

@@ -1,11 +1,12 @@
 /**
  * Differential testing of the official profiles' codecs (spec §13.3, §13.4;
- * extensions/money/profiles/iso.md, extensions/geo/profiles/wgs84.md):
+ * extensions/money/profiles/iso.md, extensions/geo/profiles/wgs84.md,
+ * extensions/uuid/profiles/rfc9562.md):
  * generated values and near misses through the Lean reference checkers
  * (spec/lean/Haus/Profiles, proven to compute the rules) and every binding's
  * codecs, reporting where they disagree. See ../README.md, "Profiles".
  *
- *   node fuzz/src/profiles.ts [--count N] [--seed S] [--profiles iso,wgs84] [--runners lean,rust,…] [--out DIR]
+ *   node fuzz/src/profiles.ts [--count N] [--seed S] [--profiles iso,wgs84,rfc9562] [--runners lean,rust,…] [--out DIR]
  *
  * `--count` is the number of cases for each profile.
  */
@@ -48,6 +49,7 @@ interface Profile {
 const PROFILES: readonly Profile[] = [
   { name: "@haus-fmt/money/iso", short: "iso", dir: "money", types: ["Money", "Currency"] },
   { name: "@haus-fmt/geo/wgs84", short: "wgs84", dir: "geo", types: ["LatLng", "BBox"] },
+  { name: "@haus-fmt/uuid/rfc9562", short: "rfc9562", dir: "uuid", types: ["Uuid"] },
 ]
 
 interface Case {
@@ -355,6 +357,98 @@ function money(r: Rng): string {
   ])
 }
 
+// ── generating: uuids ────────────────────────────────────────
+
+const HEX = "0123456789abcdef"
+/** Where the text form has its hyphens. */
+const HYPHENS = [8, 13, 18, 23]
+
+/** A UUID's text: lowercase, any version and variant, sometimes the nil or the max UUID. */
+function uuidText(r: Rng): string {
+  if (r.chance(0.05)) return r.pick(["00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff"])
+  let s = ""
+  for (let i = 0; i < 36; i++) s += HYPHENS.includes(i) ? "-" : r.pick([...HEX])
+  return s
+}
+
+/** Characters that are near a lowercase hexadecimal digit or a hyphen, and aren't one. */
+const NOT_HEX = ["A", "B", "F", "G", "g", "z", "/", ":", "`", "@", "_", " ", "\t", "\n", "\0", "٧", "０", "ａ", "é", "‐", "−", "–", "{", "}"]
+
+/** A near miss of a text: a character off, a hyphen moved or gone, a length off, another spelling. */
+function nearUuid(r: Rng, s: string): string {
+  const cs = [...s]
+  switch (r.int(10)) {
+    case 0: {
+      // One digit or all of them in uppercase.
+      if (r.chance(0.5)) return s.toUpperCase()
+      const i = r.pick([...cs.keys()].filter((k) => !HYPHENS.includes(k)))
+      cs[i] = cs[i]!.toUpperCase() === cs[i] ? "A" : cs[i]!.toUpperCase()
+      return cs.join("")
+    }
+    case 1:
+      cs[r.int(cs.length)] = r.pick(NOT_HEX)
+      return cs.join("")
+    case 2: {
+      // A hyphen moved, or a digit in its place.
+      const h = r.pick(HYPHENS)
+      cs[h] = r.pick([...HEX])
+      if (r.chance(0.5)) cs[r.int(cs.length)] = "-"
+      return cs.join("")
+    }
+    case 3:
+      return r.chance(0.5) ? s.slice(0, 35) : s + r.pick([...HEX, "-"])
+    case 4:
+      return r.chance(0.5) ? s.slice(1) : r.pick([...HEX]) + s
+    case 5:
+      return r.pick([`{${s}}`, `urn:uuid:${s}`, `URN:UUID:${s}`, `(${s})`])
+    case 6:
+      return s.replaceAll("-", r.chance(0.8) ? "" : "_")
+    case 7:
+      return r.pick([" ", "\n", "\t", "\r\n"]) + s + r.pick(["", " "])
+    case 8:
+      return r.pick(["", "-", "0", "uuid", "nil", "0".repeat(36), "-".repeat(36), "0".repeat(32), s + s])
+    default:
+      // The same length, everything shifted by one: hyphens in the wrong places.
+      return s.slice(1) + r.pick([...HEX])
+  }
+}
+
+/** A haus string for `s`: plain, or with some characters escaped (the rule is on the decoded string). */
+function quoted(r: Rng, s: string): string {
+  const k = r.next()
+  const escape = (c: string) => {
+    if (c === '"') return '\\"'
+    if (c === "\\") return "\\\\"
+    if (c === "\n") return r.chance(0.5) ? "\\n" : "\\u{a}"
+    if (c === "\t") return "\\t"
+    if (c === "\r") return "\\r"
+    const cp = c.codePointAt(0)!
+    // Controls and bidi controls can't be raw in a string (spec §4).
+    if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || (cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069)) return `\\u{${cp.toString(16)}}`
+    return c
+  }
+  if (k < 0.85) return `"${[...s].map(escape).join("")}"`
+  // Some characters as \u{…}, in either case and with leading zeros.
+  return `"${[...s].map((c) => (r.chance(0.2) ? `\\u{${r.pick(["", "0", "00"])}${c.codePointAt(0)!.toString(16)[r.chance(0.5) ? "toUpperCase" : "toLowerCase"]()}}` : escape(c))).join("")}"`
+}
+
+function uuid(r: Rng): string {
+  const k = r.next()
+  const text = uuidText(r)
+  const s = k < 0.45 ? text : k < 0.93 ? nearUuid(r, text) : r.pick(["", "x", "0190c7a8-5b6e-7d3f-9a41", text.toUpperCase(), "\u{202E}" + text])
+  if (r.chance(0.92)) return call(r, "Uuid", [quoted(r, s)])
+  return r.pick([
+    call(r, "Uuid", []),
+    call(r, "Uuid", [quoted(r, s), quoted(r, s)]),
+    call(r, r.pick(["uuid", "UUID", "Guid", "Id"]), [quoted(r, s)]),
+    call(r, "Uuid", [r.pick(OTHER_KINDS)]),
+    call(r, "Uuid", [`x"${"00".repeat(16)}"`]),
+    `Uuid${tagSp(r)}{ text: ${quoted(r, s)} }`,
+    quoted(r, s),
+    "Uuid",
+  ])
+}
+
 // ── generating: cases ────────────────────────────────────────
 
 const valueFor: Record<string, (r: Rng) => string> = {
@@ -362,6 +456,7 @@ const valueFor: Record<string, (r: Rng) => string> = {
   Currency: currency,
   LatLng: (r) => latLng(r),
   BBox: bbox,
+  Uuid: uuid,
 }
 
 function generate(r: Rng, p: Profile): Case {
@@ -468,19 +563,20 @@ function hRoundtrip(schema: h.Schema<unknown> | undefined, value: any): Outcome 
 const schemaPath = (p: Profile) => join(root, "extensions", p.dir, "schema.haus")
 const extension = (p: Profile, entry: string) => import(pathToFileURL(join(root, "extensions", p.dir, "dist", entry)).href)
 
-/** @haus-fmt/money and @haus-fmt/geo: the schema file compiled with the profile's codecs (`compileSchemaFile(…, { codecs })`). */
+/** @haus-fmt/money, @haus-fmt/geo and @haus-fmt/uuid: the schema file compiled with the profile's codecs (`compileSchemaFile(…, { codecs })`). */
 async function typescriptRunner(): Promise<Runner> {
   const compiled = new Map<string, Record<string, h.Schema<unknown>>>()
   for (const p of PROFILES) {
     const m = await extension(p, "index.js")
-    const codecs = p.short === "iso" ? m.iso : m.wgs84
+    // Each package exports its profile's codecs by the profile's short name: iso, wgs84, rfc9562.
+    const codecs = m[p.short]
     const text = readFileSync(schemaPath(p), "utf8")
     compiled.set(p.name, compileSchemaFile(text, { ...schemaOptions(schemaPath(p)), codecs }).schemas as Record<string, h.Schema<unknown>>)
   }
   return inProcess("typescript", (p, type, value) => hRoundtrip(compiled.get(p.name)![type], value))
 }
 
-/** The same packages' `h.*` schemas (`Money`, `Currency`, `LatLng`, `BBox`), for schemas written in TypeScript. */
+/** The same packages' `h.*` schemas (`Money`, `Currency`, `LatLng`, `BBox`, `Uuid`), for schemas written in TypeScript. */
 async function typescriptHRunner(): Promise<Runner> {
   const schemas = new Map<string, Record<string, h.Schema<unknown>>>()
   for (const p of PROFILES) {
@@ -498,7 +594,8 @@ async function effectRunner(): Promise<Runner> {
   const coders = new Map<string, Record<string, { decode: (v: unknown) => unknown; encode: (v: unknown) => unknown }>>()
   for (const p of PROFILES) {
     const m = await extension(p, "effect.js")
-    const codecs = p.short === "iso" ? m.iso : m.wgs84
+    // Each package exports its profile's codecs by the profile's short name: iso, wgs84, rfc9562.
+    const codecs = m[p.short]
     const schemas = Haus.compileSchemaFile(readFileSync(schemaPath(p), "utf8"), schemaOptions(schemaPath(p))).schemas
     coders.set(p.name, Object.fromEntries(p.types.map((t) => [t, { decode: Haus.decodeValue(schemas[t], codecs), encode: Haus.encodeValue(schemas[t], codecs) }])))
   }

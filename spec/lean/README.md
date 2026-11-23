@@ -22,7 +22,7 @@ and a reference parser that computes it.
 | [`Haus/Schema/`](Haus/Schema) | Decoding with a schema (spec §15): resolved types, exact float rounding and spelling, the reference decoder and encoder, the rules they follow, and the round trip |
 | [`Haus/SchemaFile/`](Haus/SchemaFile) | Schema files (spec §14): types as written, a reader for `.schema.haus` text, the checker of §14's static rules, instances of generic types and their resolved types (`load`: text to the environment decoding reads); the proofs that a checked file has finitely many instances (§9.10, with a bound) and that decoding with what `load` returns never fails because of the schema |
 | [`Haus/Schema/Codec.lean`](Haus/Schema/Codec.lean) | Codecs (spec §13.4): a codec as a check on the value the schema decoded, and the laws of §13.4 proven once for every codec |
-| [`Haus/Profiles/`](Haus/Profiles) | The official profiles (spec §13.3) `@haus-fmt/money/iso` and `@haus-fmt/geo/wgs84`: each rule as a definition, a checker proven to compute it, the profile as a codec, and the runner of their test vectors |
+| [`Haus/Profiles/`](Haus/Profiles) | The official profiles (spec §13.3) `@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84` and `@haus-fmt/uuid/rfc9562`: each rule as a definition, a checker proven to compute it, the profile as a codec, and the runner of their test vectors |
 | [`Haus/Version.lean`](Haus/Version.lean) | Versions (spec §10): `Extends old new`, with the JSON mappings, the hash, the default limits and the error codes |
 | [`Haus/Json/`](Haus/Json) | The JSON mappings (spec §16): JSON as data and as text, base64 and hex, the JSON import, self-describing and schema-based JSON, and the proofs that they round-trip and are unique, that naming a record case's record changes nothing, that an older reader reads a newer writer's JSON (§13.3), and that the readers return no duplicate keys |
 | [`Haus/Packages/`](Haus/Packages) | Package resolution (spec §13.3): a file tree with symbolic links, the reference resolver, the package suite's runner; one package per name and injective ids, the read set and non-interference, bounded work, name isolation, order independence, and folders that never change a successful result |
@@ -48,6 +48,7 @@ lake build
 .lake/build/bin/haus-ref --packages ../../test-suite/packages/cases.haus  # the package suite (spec §13.3)
 .lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus  # a profile's vectors
 .lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
+.lake/build/bin/haus-ref --profile @haus-fmt/uuid/rfc9562 ../../extensions/uuid/profiles/rfc9562.vectors.haus
 .lake/build/bin/haus-ref --stream-suite ../../test-suite/stream  # the stream suite (spec §6, §7, §15 "Streams")
 .lake/build/bin/haus-ref --positions ../../test-suite/positions/cases.haus  # error lines and columns (spec §8)
 .lake/build/bin/haus-ref --equality ../../test-suite/equality/cases.haus    # equals and compare (spec §2, §12)
@@ -410,8 +411,8 @@ every check does):
 
 The official profiles ([`Haus/Profiles/`](Haus/Profiles)) state their
 rules (`extensions/*/profiles/*.md`) on the decoded value, with a checker
-proven to compute each (`Money.check_iff`, `Geo.check_iff`), and are codecs
-(`Money.codec_decode`, `Geo.codec_decode`: the codec accepts exactly the
+proven to compute each (`Money.check_iff`, `Geo.check_iff`, `Uuid.check_iff`), and are codecs
+(`Money.codec_decode`, `Geo.codec_decode`, `Uuid.codec_decode`: the codec accepts exactly the
 values the schema decodes that the rule accepts, kept as decoded; with
 `codec_keeps`, every law above). `@haus-fmt/money/iso`: a `Currency` is a
 bare tag of three capitals `A`–`Z`, a `Money` any `Decimal` with such a
@@ -422,15 +423,19 @@ codec of `Money` alone accepts (`Money.decodeInsideOut_ok`).
 `@haus-fmt/geo/wgs84`: the ranges are stated on the exact value of
 the decoded float as a rational number (`Geo.toRat?`; `NaN` and the
 infinities have none, so they are rejected), and checked with products of
-integers; `BBox` also needs `sw.lat ≤ ne.lat`. The packages' schemas are
-written in Lean (`Money.env`, `Geo.env`), as `scripts/schema-types.ts`
+integers; `BBox` also needs `sw.lat ≤ ne.lat`. `@haus-fmt/uuid/rfc9562`:
+the string of a `Uuid` fits the pattern 8-4-4-4-12, a hyphen or a digit
+`0`–`9`, `a`–`f` at each place (`Uuid.check_iff`), and two accepted texts
+with the same 32 digit values are the same text (`Uuid.one_spelling`, X4),
+so each UUID has one spelling. The packages' schemas are
+written in Lean (`Money.env`, `Geo.env`, `Uuid.env`), as `scripts/schema-types.ts`
 resolves `extensions/*/schema.haus` (compared by hand, not in CI). `haus-ref --profile NAME FILE` runs a vectors file: an
 `Accept` passes when the codec accepts `value` and writes back the same
 value as `output` (or `value`), and exactly `output` when one is given; a
 `Reject` when `value` is valid for the schema of its type (the shape) and
 the profile rejects it, so the rejection comes from the rule: a `Reject` the
-schema already rejects fails, with the schema's error. Both vectors files
-pass.
+schema already rejects fails, with the schema's error. All three vectors
+files pass.
 
 **About JSON** (spec §16), in [`Haus/Json/`](Haus/Json). JSON is modelled
 as data (`JSON`): numbers keep their text, and `JSON.Equiv` compares as §16

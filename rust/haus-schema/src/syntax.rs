@@ -132,6 +132,9 @@ pub fn unknown_type(name: &str) -> String {
         "LatLng" | "BBox" => format!(
             "unknown type {name} (import it with: import @haus-fmt/geo ({name}), and install @haus-fmt/geo with your package manager)"
         ),
+        "Uuid" => format!(
+            "unknown type {name} (import it with: import @haus-fmt/uuid ({name}), and install @haus-fmt/uuid with your package manager)"
+        ),
         _ if STD_TIME.contains(&name) => format!("unknown type {name} (import it with: import std/time ({name}))"),
         _ => format!("unknown type {name}"),
     }

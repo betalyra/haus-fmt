@@ -148,6 +148,7 @@ jobs:
         run: |
           .lake/build/bin/haus-ref --profile @haus-fmt/money/iso ../../extensions/money/profiles/iso.vectors.haus
           .lake/build/bin/haus-ref --profile @haus-fmt/geo/wgs84 ../../extensions/geo/profiles/wgs84.vectors.haus
+          .lake/build/bin/haus-ref --profile @haus-fmt/uuid/rfc9562 ../../extensions/uuid/profiles/rfc9562.vectors.haus
 
   rust:
     name: Rust
@@ -206,7 +207,7 @@ jobs:
         run: pnpm lint
       - name: Extensions lint (@effect/tsgo)
         working-directory: typescript
-        run: pnpm --filter @haus-fmt/money --filter @haus-fmt/geo lint
+        run: pnpm --filter @haus-fmt/money --filter @haus-fmt/geo --filter @haus-fmt/uuid lint
       - name: Lean schema types are up to date
         run: |
           node spec/lean/scripts/schema-types.ts > spec/lean/schema-suite.json
@@ -266,10 +267,10 @@ jobs:
       - name: Test
         working-directory: python
         run: uv run pytest
-      # The official extensions' Python packages (haus-fmt-money, haus-fmt-geo).
+      # The official extensions' Python packages (haus-fmt-money, haus-fmt-geo, haus-fmt-uuid).
       - name: Extensions, lint, type check and test
         run: |
-          for dir in extensions/money/python extensions/geo/python; do
+          for dir in extensions/money/python extensions/geo/python extensions/uuid/python; do
             (cd "$dir" && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pyright && uv run pytest)
           done
 
@@ -590,7 +591,7 @@ jobs:
           - part: typescript
             files: >-
               typescript/packages/haus/dist typescript/packages/effect/dist typescript/packages/import/dist
-              extensions/money/dist extensions/geo/dist
+              extensions/money/dist extensions/geo/dist extensions/uuid/dist
           - part: go zig
             files: fuzz/.build/go-runner zig/zig-out/bin/zig-runner
           # Built with the runner image's Swift, its standard library linked in, so the fuzz jobs don't need Swift.
@@ -684,7 +685,7 @@ jobs:
           - { mode: parser, run: "node fuzz/src/main.ts", pr: 100000, nightly: 1000000 }
           - { mode: canonical, run: "node fuzz/src/main.ts --canonical", pr: 100000, nightly: 1000000 }
           - { mode: time, run: "node fuzz/src/time.ts", pr: 1000000, nightly: 20000000 }
-          # Cases for each official profile (iso, wgs84), through every binding's codecs.
+          # Cases for each official profile (iso, wgs84, rfc9562), through every binding's codecs.
           - { mode: profiles, run: "node fuzz/src/profiles.ts", pr: 100000, nightly: 2000000 }
           - { mode: schema, run: "node fuzz/src/main.ts --schema", pr: 20000, nightly: 500000 }
           - { mode: json, run: "node fuzz/src/main.ts --json", pr: 4000, nightly: 50000 }

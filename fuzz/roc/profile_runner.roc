@@ -3,13 +3,14 @@
 ## hex-encoded UTF-8), decodes the value with the codec of the official
 ## profile for the type, as generated code runs a codec (`Decode.codec`):
 ## money.Iso for `Money`, money.IsoCurrency for `Currency`, geo.Wgs84 for
-## `LatLng`, geo.Wgs84BBox for `BBox`. It encodes the result and prints one
+## `LatLng`, geo.Wgs84BBox for `BBox`, uuid.Rfc9562 for `Uuid`. It encodes the result and prints one
 ## line each: `ok <canonical form>` or `err <place> <code> <reason>` (`-` for
 ## an input that isn't one value).
 app [main!] {
 	haus: "../../roc/package/main.roc",
 	money: "../../extensions/money/roc/main.roc",
 	geo: "../../extensions/geo/roc/main.roc",
+	uuid: "../../extensions/uuid/roc/main.roc",
 	pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.26.0/GddgvsGjiNXrHFW6au5i5dUDbTs8FinQdrgE2Gqmw53t.tar.zst",
 }
 
@@ -26,6 +27,8 @@ import money.IsoCurrency
 import geo.HausFmtGeo
 import geo.Wgs84
 import geo.Wgs84BBox
+import uuid.HausFmtUuid
+import uuid.Rfc9562
 
 main! : List(OsStr) => Try({}, _)
 main! = |args| {
@@ -67,6 +70,7 @@ run = |line| {
 				"Currency" => coded(v, HausFmtMoney.decode_currency, HausFmtMoney.encode_currency, IsoCurrency.decode, IsoCurrency.encode)
 				"LatLng" => coded(v, HausFmtGeo.decode_lat_lng, HausFmtGeo.encode_lat_lng, Wgs84.decode, Wgs84.encode)
 				"BBox" => coded(v, HausFmtGeo.decode_b_box, HausFmtGeo.encode_b_box, Wgs84BBox.decode, Wgs84BBox.encode)
+				"Uuid" => coded(v, HausFmtUuid.decode_uuid, HausFmtUuid.encode_uuid, Rfc9562.decode, Rfc9562.encode)
 				_ => "crash no type ${ty}"
 			}
 			_ => "err $ - not a single value"

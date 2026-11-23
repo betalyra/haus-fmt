@@ -659,7 +659,7 @@ Types come from three tiers:
 |---|---|---|---|
 | **Prelude** ([`prelude.schema.haus`](prelude.schema.haus)) | the data model: `Bool`, `Maybe`, `Result`, `String`, `Bytes`, `Array a`, `Map v`, records, `Stream a` (only as the whole type of a definition, §14), `Int`, `Int8`…`UInt64`, `Float32`, `Float64`, `Decimal`, `Any`, `Secret a` | built in (ranges of `Int8`…) | MUST support |
 | **Standard modules** ([`std/`](std)) | [`std/time`](std/time.schema.haus) only | built in: the [std/time profile](std/time.md) | MUST support |
-| **Schema packages** (§13.3) | the official extensions ([`../extensions`](../extensions)): `@haus-fmt/money`, `@haus-fmt/geo`; packages of any other organisation | none in the schema; profiles, which codecs implement | MAY offer codecs |
+| **Schema packages** (§13.3) | the official extensions ([`../extensions`](../extensions)): `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`; packages of any other organisation | none in the schema; profiles, which codecs implement | MAY offer codecs |
 
 The official extensions are schema packages like any other, under the scope `@haus-fmt/`, which is reserved for them (§13.3).
 
@@ -983,6 +983,7 @@ Codecs are part of the application, not of the schema. Two applications reading 
 | `@haus-fmt/money@1#Currency` | `iso` |
 | `@haus-fmt/geo@1#LatLng` | `wgs84` |
 | `@haus-fmt/geo@1#BBox` | `wgs84` |
+| `@haus-fmt/uuid@1#Uuid` | `rfc9562` |
 
 (`iso`'s rule for `Money` is its currency's, so `Currency` stands for it.) Only the types the decoded type reaches count (a binding that builds every type of a schema file at once: the types the file's own definitions reach), and a type reached only inside a type that has a codec doesn't: that codec decides which values it holds (a codec for `Money` covers its `Currency`). The warning is reported where the binding learns which codecs are set (when a set of codecs is built, a schema is compiled with them, or decoding starts), once per type id, at no place, through the channel of the binding's other schema warnings (`unknown-attribute`, `deprecated`, `no-json-form`). Its message names the type's id and its profiles: `@haus-fmt/money@1#Currency has profiles (iso), but no codec is set for it: its values are checked for their shape only`. It is a warning, never an error: decoding is unchanged. Tools that have no codecs (`haus check`, editors) report instead, with the same code as a note of the lowest severity (a hint), once per import of a package that has such a type, at the import: `the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec`.
 

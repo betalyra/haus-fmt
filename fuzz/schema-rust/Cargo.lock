@@ -44,6 +44,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "haus-fmt-uuid"
+version = "1.0.0"
+dependencies = [
+ "haus-fmt",
+ "haus-fmt-build",
+]
+
+[[package]]
 name = "haus-schema-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -52,6 +60,7 @@ dependencies = [
  "haus-fmt-geo",
  "haus-fmt-money",
  "haus-fmt-schema",
+ "haus-fmt-uuid",
 ]
 
 [[package]]

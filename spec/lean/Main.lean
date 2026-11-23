@@ -81,7 +81,8 @@ import Lean.Data.Json
                                   `Format.format`: every check of its README, for cases/,
                                   examples/ and valid/, and options.cases.haus
     haus-ref --profile NAME FILE         run the test vectors FILE of the official profile NAME
-                                  (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`; spec §13.3)
+                                  (`@haus-fmt/money/iso`, `@haus-fmt/geo/wgs84`,
+                                  `@haus-fmt/uuid/rfc9562`; spec §13.3)
                                   with its reference checker (Haus/Profiles/)
     haus-ref --profile-batch NAME FILE   for each line `TYPE HEX` of FILE (a value's haus text
                                   as hex-encoded UTF-8): decode with the type of the profile's

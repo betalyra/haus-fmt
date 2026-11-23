@@ -184,16 +184,18 @@ profiles:
 ```ts
 import { iso } from "@haus-fmt/money"   // the profile @haus-fmt/money/iso: currencies are three letters A–Z
 import { wgs84 } from "@haus-fmt/geo"   // the profile @haus-fmt/geo/wgs84: latitudes and longitudes in range
+import { rfc9562 } from "@haus-fmt/uuid"   // the profile @haus-fmt/uuid/rfc9562: a UUID's text, lowercase
 
-const { schemas } = compileSchemaFile(text, { ...schemaOptions("order.schema.haus"), codecs: [...iso, ...wgs84] })
+const { schemas } = compileSchemaFile(text, { ...schemaOptions("order.schema.haus"), codecs: [...iso, ...wgs84, ...rfc9562] })
 h.parse(schemas.Order!, data)   // Money(1, Eur) or LatLng(91, 0): HausDecodeError
 ```
 
 They keep the value and the host type: a `Money` is still
 `{ _tag: "Money", values: ["19.90", "EUR"] }` (its currency always a tag,
-never an `Unknown`), a `LatLng` its two floats, `-0` included. For schemas
+never an `Unknown`), a `LatLng` its two floats, `-0` included. `rfc9562`
+gives a `Uuid` as its checked text, a `string`, as std/time types are. For schemas
 written with `h.*`, the packages export the types with their profile too:
-`h.Record({ total: Money, to: LatLng })`.
+`h.Record({ total: Money, to: LatLng, id: Uuid })`.
 
 A codec is `{ id, apply }`: `apply` builds the host type's schema from the
 type's own one, with `h.refine` or `h.transform`:

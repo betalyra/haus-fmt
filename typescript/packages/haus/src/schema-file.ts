@@ -85,6 +85,7 @@ export type StdType = (typeof STD_MODULES)[keyof typeof STD_MODULES][number]
 export const OFFICIAL_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
   "@haus-fmt/money": ["Money", "Currency"],
   "@haus-fmt/geo": ["LatLng", "BBox"],
+  "@haus-fmt/uuid": ["Uuid"],
 }
 
 /** The standard module or official extension that has a type of this name. */

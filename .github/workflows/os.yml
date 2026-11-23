@@ -92,7 +92,7 @@ jobs:
         run: uv run pytest
       - name: Extensions
         run: |
-          for dir in extensions/money/python extensions/geo/python; do
+          for dir in extensions/money/python extensions/geo/python extensions/uuid/python; do
             (cd "$dir" && uv run pytest)
           done
 

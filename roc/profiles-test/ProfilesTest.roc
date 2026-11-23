@@ -10,10 +10,13 @@ import money.IsoCurrency
 import geo.HausFmtGeo
 import geo.Wgs84
 import geo.Wgs84BBox
+import uuid.HausFmtUuid
+import uuid.Rfc9562
 import travel.HausTestTravel
 import Travel
 import "../../extensions/money/profiles/iso.vectors.haus" as iso_vectors : Str
 import "../../extensions/geo/profiles/wgs84.vectors.haus" as wgs84_vectors : Str
+import "../../extensions/uuid/profiles/rfc9562.vectors.haus" as rfc9562_vectors : Str
 
 ProfilesTest := [].{
 
@@ -46,6 +49,9 @@ ProfilesTest := [].{
 	wgs84 : Str
 	wgs84 = wgs84_vectors
 
+	rfc9562 : Str
+	rfc9562 = rfc9562_vectors
+
 	## The same travel as rust/haus-build-tests/tests/profiles.rs.
 	travel : Str
 	travel =
@@ -65,6 +71,7 @@ check = |vector| match vector.view() {
 			"Currency" => run(tag, value, output, HausFmtMoney.decode_currency, HausFmtMoney.encode_currency, IsoCurrency.decode, IsoCurrency.encode)
 			"LatLng" => run(tag, value, output, HausFmtGeo.decode_lat_lng, HausFmtGeo.encode_lat_lng, Wgs84.decode, Wgs84.encode)
 			"BBox" => run(tag, value, output, HausFmtGeo.decode_b_box, HausFmtGeo.encode_b_box, Wgs84BBox.decode, Wgs84BBox.encode)
+			"Uuid" => run(tag, value, output, HausFmtUuid.decode_uuid, HausFmtUuid.encode_uuid, Rfc9562.decode, Rfc9562.encode)
 			_ => Err("no codec for ${ty}")
 		}
 	}
@@ -130,10 +137,19 @@ run = |tag, value, output, decode_base, encode_base, decode, encode| {
 
 expect ProfilesTest.failures(ProfilesTest.iso) == []
 expect ProfilesTest.failures(ProfilesTest.wgs84) == []
+expect ProfilesTest.failures(ProfilesTest.rfc9562) == []
 expect {
 	((iso_accepted, iso_rejected), (wgs84_accepted, wgs84_rejected)) = (ProfilesTest.counts(ProfilesTest.iso), ProfilesTest.counts(ProfilesTest.wgs84))
-	iso_accepted > 0 and iso_rejected > 0 and wgs84_accepted > 0 and wgs84_rejected > 0
+	(rfc9562_accepted, rfc9562_rejected) = ProfilesTest.counts(ProfilesTest.rfc9562)
+	iso_accepted > 0 and iso_rejected > 0 and wgs84_accepted > 0 and wgs84_rejected > 0 and rfc9562_accepted > 0 and rfc9562_rejected > 0
 }
+
+# ── the rfc9562 rule's edge cases ──
+
+# Lowercase only, any version, the nil and the max UUID.
+expect ["0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57", "00000000-0000-0000-0000-000000000000", "ffffffff-ffff-ffff-ffff-ffffffffffff", "0190c7a8-5b6e-fd3f-ea41-6c2e8f1b0d57"].all(Rfc9562.is_text)
+expect !(["0190C7A8-5B6E-7D3F-9A41-6C2E8F1B0D57", "{0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57}", "0190c7a85b6e7d3f9a416c2e8f1b0d57", "0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d5٧", "0190c7a805b6e-7d3f-9a41-6c2e8f1b0d57", ""].any(Rfc9562.is_text))
+expect Rfc9562.decode(Uuid("0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57")) == Ok("0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57")
 
 # ── the iso rule's edge cases ──
 

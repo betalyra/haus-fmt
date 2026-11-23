@@ -17,6 +17,8 @@ haus-test-travel = { path = "packages/travel" }
 
 [dev-dependencies]
 haus-fmt-build = { path = "../haus-build" }
+# The rfc9562 profile's codec (tests/profiles.rs).
+haus-fmt-uuid = { path = "../../extensions/uuid" }
 
 [build-dependencies]
 haus-fmt-build = { path = "../haus-build" }
