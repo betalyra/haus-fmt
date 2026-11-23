@@ -680,7 +680,17 @@ A domain goes in a module even when it is built in: the prelude reserves its nam
 **The schema language has no syntax for rules about values.** A schema describes structure (§9.10). The only rules about values are those of built-in types: the range of `UInt8`, the digits of a `Decimal`, the std/time profile. They are fixed by this specification, run in linear time, and mean the same in every implementation.
 
 <!-- rule: prelude.rules.line -->
-**The line.** A rule about values, at every tier (the prelude, a standard module, a package's profile, §13.3), decides what a value is, never whether an application accepts it: haus decides what a value is; the application decides whether it accepts it. The test: if two services disagreed about a check, would they disagree about what the data is (a rule for haus, admitted by §13.2), or only about whether it is acceptable (the application's)? Bounds and relations that are a choice (at most 9 passengers, a booking's end after its start), patterns, lists of allowed values, and checks against the clock, a database or a locale are the application's, which checks them after decoding or in a codec (§13.4), never with attributes (§14).
+**The line.** A rule about values, at every tier (the prelude, a standard module, a package's profile, §13.3), decides what a value is, never whether an application accepts it: haus decides what a value is; the application decides whether it accepts it. The test: if two services disagreed about a check, would they disagree about what the data is (a rule for haus, which follows the four rules below), or only about whether it is acceptable (the application's)? Bounds and relations that are a choice (at most 9 passengers, a booking's end after its start), patterns, lists of allowed values, and checks against the clock, a database or a locale are the application's, which checks them after decoding or in a codec (§13.4), never with attributes (§14).
+
+<!-- rule: prelude.rules.admission -->
+**What a rule about values is.** Every rule about values that haus has, at every tier (the prelude, a standard module, a package's profile), follows four rules:
+
+1. **It defines the type.** Without it, the text is no value of the type: no such date (`2026-02-30`), no such `Int8` (`300`), no such point on earth (a latitude of 91). It rests on the published definition of the thing, not on a host type (those differ between languages), and not on a subset someone prefers (UUIDs of version 7 only).
+2. **It needs only the one value.** No other field, clock, database, locale or registry lookup. Relations inside the one value count: a `BBox`'s south edge is not north of its north edge.
+3. **It is specified exactly.** A rule in prose defines it, and test vectors test it; it runs in linear time and gives the same result in every binding.
+4. **One spelling per value where possible.** A rule never changes equality, the canonical form or the hash (below), so two spellings of one value that it accepts stay two haus values. Its grammar leaves one spelling per value, with the exceptions it lists, as the std/time profile does.
+
+A check that has several legitimate definitions (which codes are currencies: ISO 4217, a shop's own list, crypto currencies) has a rule per definition, each a profile of a package (§13.3), and the application picks one. A check that is a preference (at most 9 passengers, UUIDs of version 7 only, email addresses of one domain) is the application's. Which tier a type's rule belongs to is §13.2's question.
 
 There are two conformance classes:
 
@@ -702,18 +712,8 @@ Standard modules ship with this specification and are versioned with it. A modul
 <!-- rule: prelude.std.time-profile -->
 - [`std/time`](std/time.schema.haus): `Date`, `Time`, `DateTime`, `Instant`, `ZonedDateTime`, `Duration`, `YearMonth`, `TimeZone`, the model of JavaScript's Temporal and java.time. Values are a tag around a string; the strings a schema binding accepts are defined by the [std/time profile](std/time.md), a strict subset of RFC 3339, RFC 9557 and ISO 8601. Nothing in it depends on a registry: zone names are checked for their syntax, never looked up.
 
-<!-- rule: prelude.rules.admission -->
-**What a rule about values is.** Every rule about values that haus has, at every tier (the prelude, a standard module, a package's profile), follows four rules:
-
-1. **It defines the type.** Without it, the text is no value of the type: no such date (`2026-02-30`), no such `Int8` (`300`), no such point on earth (a latitude of 91). It rests on the published definition of the thing, not on a host type (those differ between languages), and not on a subset someone prefers (UUIDs of version 7 only).
-2. **It needs only the one value.** No other field, clock, database, locale or registry lookup. Relations inside the one value count: a `BBox`'s south edge is not north of its north edge.
-3. **It is specified exactly.** A rule in prose defines it, and test vectors test it; it runs in linear time and gives the same result in every binding.
-4. **One spelling per value where possible.** A rule never changes equality, the canonical form or the hash (§13.1), so two spellings of one value that it accepts stay two haus values. Its grammar leaves one spelling per value, with the exceptions it lists, as the std/time profile does.
-
-A check that has several legitimate definitions (which codes are currencies: ISO 4217, a shop's own list, crypto currencies) has a rule per definition, each a profile of a package (§13.3), and the application picks one. A check that is a preference (at most 9 passengers, UUIDs of version 7 only, email addresses of one domain) is the application's (§13.1).
-
 <!-- rule: prelude.std.admission -->
-**When a type goes into a standard module.** Its rule follows the four rules with one definition that everyone shares; the type is universal enough to charge every schema binding with it; and its rule must be checked everywhere, always. That is what a standard module gives and a package doesn't: a standard type's rule is checked by every schema binding and never changes (§10), while a package's rule is checked only where the application adds its codec (§13.4), and can change with a major version. Today only time passes. Which codes are currencies has several legitimate definitions, so money is the package `@haus-fmt/money`, with each definition a profile (`iso` is one), and `Decimal` already keeps amounts exact. Coordinates have one definition but are not universal: `@haus-fmt/geo`.
+**When a type goes into a standard module.** Its rule follows the four rules of §13.1 with one definition that everyone shares; the type is universal enough to charge every schema binding with it; and its rule must be checked everywhere, always. That is what a standard module gives and a package doesn't: a standard type's rule is checked by every schema binding and never changes (§10), while a package's rule is checked only where the application adds its codec (§13.4), and can change with a major version. Today only time passes. Which codes are currencies has several legitimate definitions, so money is the package `@haus-fmt/money`, with each definition a profile (`iso` is one), and `Decimal` already keeps amounts exact. Coordinates have one definition but are not universal: `@haus-fmt/geo`.
 
 When in doubt, a type is a package. Data never names where a type comes from, so data stays valid when a package's type later moves into a standard module, and a schema changes an import line. Code is not as free: a type's id names its package or module (`@haus-fmt/money@1#Money`, `std/time#Instant`, §13.3), and bindings select codecs and generate code by id (§13.4), so moving a type breaks the codec registrations and generated code of applications that use it. Nothing can leave a standard module after 1.0.
 
@@ -940,7 +940,7 @@ A field or tag that an open type doesn't list is reserved for later versions of 
 An import names at most a major version, `@N` without leading zeros. A minimum minor version (a package relying on a type, field or tag added in 1.2) goes in the package manager's dependency range: `^1.2` (npm), `1.2` (Cargo), `>=1.2,<2` (Python).
 
 <!-- rule: packages.profiles.definitions -->
-**Profiles.** A package MAY define profiles, named like `@haus-fmt/money/iso`. A profile is a definition of the package's types: which of the values its schema accepts are values of the type. It follows the four rules of §13.2, as every rule about values does. A package has one profile when its domain has one definition (`@haus-fmt/geo/wgs84`), and several when its domain has several (which codes are currencies). Codecs implement profiles (§13.4), and the application picks one. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
+**Profiles.** A package MAY define profiles, named like `@haus-fmt/money/iso`. A profile is a definition of the package's types: which of the values its schema accepts are values of the type. It follows the four rules of §13.1, as every rule about values does. A package has one profile when its domain has one definition (`@haus-fmt/geo/wgs84`), and several when its domain has several (which codes are currencies). Codecs implement profiles (§13.4), and the application picks one. Profiles are how the official extensions say what "valid money" means without putting rules into the schema language.
 
 <!-- rule: packages.profiles.vectors -->
 <!-- rule: packages.profiles.rule-over-vectors -->
@@ -1038,7 +1038,7 @@ Attributes are metadata: they never change which data a type accepts or what it 
 - `@deprecated` or `@deprecated("why, and what to use instead")`: the type, field or tag will be removed in a later major version of its package (§13.3). Tools that check data against a schema SHOULD mark a deprecated field or tag the data uses with a hint (not an error), at the field's value or the tagged value (`$.lines[0].count`), as `unlisted-field` is; tools SHOULD mark a schema's use of a deprecated type, a spread of it (`...OldEvent`) included, once where it is written; code generators SHOULD emit the language's own marker, such as `#[deprecated]` in Rust or `@deprecated` in JSDoc. A field or tag copied by a spread keeps its attributes.
 
 <!-- rule: schema.attributes.admission -->
-An attribute is added to this list only if it passes three tests: it doesn't change which data is valid or what it decodes to; tools act on it the same way in every language (text for people belongs in comments); and most target languages have a counterpart for it. Rules about values (`@min`, `@pattern`, `@default`) never pass the first test (§9.10): they belong to a type's definition (§13.2) or to the application (§13.1).
+An attribute is added to this list only if it passes three tests: it doesn't change which data is valid or what it decodes to; tools act on it the same way in every language (text for people belongs in comments); and most target languages have a counterpart for it. Rules about values (`@min`, `@pattern`, `@default`) never pass the first test (§9.10): they belong to a type's definition or to the application (§13.1).
 
 <!-- rule: schema.attributes.unknown-accepted -->
 <!-- rule: schema.attributes.unknown-warn -->
