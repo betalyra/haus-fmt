@@ -2,22 +2,42 @@
 import Logo from "./Logo.astro";
 import { links } from "@/lib/links";
 
+/** A language's guide in the docs. */
+const guide = (label: string, page: string) => ({ label, href: `${links.languages}/${page}` });
+
 const columns = [
   {
     title: "Read",
     items: [
+      { label: "Docs", href: links.docs },
+      { label: "A tour of haus", href: links.tour },
       { label: "Specification, draft 0.1", href: links.spec },
       { label: "Examples", href: links.examples },
       { label: "Conformance suite", href: links.testSuite },
     ],
   },
   {
+    title: "Languages",
+    items: [
+      guide("TypeScript", "typescript"),
+      guide("Effect", "effect"),
+      guide("Rust", "rust"),
+      guide("Python", "python"),
+      guide("Go", "go"),
+      guide("Swift", "swift"),
+      guide("Java", "jvm"),
+      guide("Kotlin", "jvm"),
+      guide("Roc", "roc"),
+      guide("Zig", "zig"),
+      guide("C", "zig#from-c"),
+    ],
+    split: true,
+  },
+  {
     title: "Use",
     items: [
-      { label: "TypeScript", href: links.typescript },
-      { label: "Rust", href: links.rust },
-      { label: "Roc", href: links.roc },
-      { label: "Go", href: links.go },
+      { label: "Install", href: links.install },
+      { label: "Playground", href: links.play },
       { label: "Editors", href: links.editors },
       { label: "Tools", href: links.tools },
       { label: "Extensions", href: links.extensions },
@@ -27,8 +47,8 @@ const columns = [
 ---
 
 <footer class="mt-8 border-t border-line">
-  <div class="mx-auto grid w-full max-w-6xl grid-cols-2 gap-x-8 gap-y-12 px-6 pt-16 pb-14 sm:grid-cols-[1.6fr_1fr_1fr] lg:pt-20">
-    <div class="col-span-2 max-w-[24rem] sm:col-span-1">
+  <div class="mx-auto grid w-full max-w-6xl grid-cols-2 gap-x-8 gap-y-12 px-6 pt-16 pb-14 md:grid-cols-[1.4fr_1fr_1.4fr_1fr] lg:pt-20">
+    <div class="col-span-2 max-w-[24rem] md:col-span-1">
       <div class="flex items-center gap-2.5">
         <Logo size={32} />
         <span class="font-heading text-[1.35rem] leading-none font-semibold tracking-[-0.025em] text-ink">haus</span>
@@ -40,9 +60,9 @@ const columns = [
     </div>
 
     {columns.map((col) => (
-      <div>
+      <div class:list={[col.split && "col-span-2 md:col-span-1"]}>
         <h2 class="text-[1rem] text-ink">{col.title}</h2>
-        <ul class="mt-4 space-y-2.5 text-[0.98rem]">
+        <ul class:list={["mt-4 text-[0.98rem]", col.split ? "grid grid-flow-col grid-rows-6 gap-x-6 gap-y-2.5" : "space-y-2.5"]}>
           {col.items.map((item) => (
             <li>
               <a href={item.href} class="brush-hover text-ink-2 hover:text-ink">
