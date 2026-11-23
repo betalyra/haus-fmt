@@ -8,7 +8,7 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 
 "Reported at" is the place of the error (§8): for an error in text, the character its line and column point to; for an error in a value, its path (§15, §16.3). The place is part of the specification, as the code is, except where it is marked *Informative*: the places of errors in schema files and imports are not yet checked across bindings (§8).
 
-116 codes in 8 categories:
+117 codes in 8 categories:
 
 - [Syntax](#syntax): 33
 - [Limits](#limits): 8
@@ -17,7 +17,7 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 - [Imports](#imports): 22
 - [Decoding and encoding](#decoding): 14
 - [JSON](#json): 11
-- [Hints and warnings](#hints): 4
+- [Hints and warnings](#hints): 5
 
 ## Syntax
 
@@ -182,7 +182,7 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 
 ## Hints and warnings
 
-<a id="hints"></a>Reported by checkers and editors without failing (§14).
+<a id="hints"></a>Reported without failing, by checkers and editors (§14) and by schema bindings (§13.4).
 
 | Code | Meaning | Reported at | Example | Fix |
 |---|---|---|---|---|
@@ -190,3 +190,4 @@ every binding; a code is never renamed, removed or reused after 1.0, only added.
 | `deprecated` | A hint: the schema or the data uses a type, field or tag marked `@deprecated` (§14). | In a schema, the type's name where it is used (after `...` for a spread); in data, the field's value or the tagged value: `$.lines[0].count`. | `{ mail: "a@b.c" }` with `type Root = { @deprecated("use email") mail?: String, email?: String }` | Use what the deprecation note says instead. |
 | `unlisted-field` | A hint: a field an open record doesn't list. A reader ignores it, but it may be a typo. | The field: `$.nmae`. Never inside a `Secret` (§14). | `{ name: "a", nmae: "b" }` with `type Root = { name: String }` | Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers. |
 | `unlisted-tag` | A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo. | The variant. Never inside a `Secret` (§14). | `Gren` with `type Root = < Red \| Green >` | Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers. |
+| `missing-codec` | A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. | Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package. | a schema with `import @haus-fmt/money (Money)`, compiled without the iso codec: `@haus-fmt/money@1#Currency` has profiles (iso), but no codec is set for it | Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type. |

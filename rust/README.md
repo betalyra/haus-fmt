@@ -33,6 +33,15 @@ for issue in schema.check_text("Root", &text) {                  // every proble
 let value = schema.decode("Root", &haus::parse(&text)?[0])?;     // spec §15: the value an encoder writes back
 ```
 
+`check_text` reports every error (spec §14, "Every error") and the hints, up
+to `MAX_ISSUES` (200): each failing place once, nothing below a value that
+failed at its own level (a wrong kind or tag), an error inside a `Secret` once
+at the secret, and after a syntax or limit error that one error. The issues
+are a set: their order is not part of the result. `check_text_report` (and
+`check_report` for parsed values) takes `CheckOptions { first, limits }`,
+`first` to stop at the first error with the hints before it, and returns a
+`CheckReport` whose `stopped` says that the check stopped at the cap.
+
 ## Use
 
 ```rust
@@ -70,7 +79,13 @@ deprecation warnings only where it touches them. Attributes haus doesn't
 define (`@since`) are accepted and reported as Cargo warnings, as are uses of
 deprecated types in a schema and record cases with a field named `_tag` or
 `_args`, which have no schema-based JSON form (`no-json-form`);
-`Config::quiet()` turns them off.
+`Config::quiet()` turns them off. So is `missing-codec` (spec §13.4): the
+schema's types reach a type that an official profile has a rule for
+(`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`,
+`@haus-fmt/geo@1#BBox`) with no `.codec(…)` for its id, so its values are
+checked for their shape only. A type reached only inside a type with a codec
+doesn't count: a codec for `Money` (`haus_money::Iso`) covers its `Currency`.
+`haus-gen roc` prints the same warning for its `--codec`s.
 
 Writing checks what it writes, so `haus::to_string` returns a `Result`.
 `haus::to_string_minimised` writes the minimised layout of spec §11

@@ -171,6 +171,8 @@ for _, issue := range s.CheckText("Root", text) {
 
 `Schema.Check` does the same for values without text; `Issue` has `Severity`, `Code`, `Message`, `Path`, `Line`, `Column`, byte `Offset` and `End`, and marshals to the JSON form of spec §17.
 
+The errors are those of spec §14, "Every error": each failing place once, nothing below a value that failed at its own level, an error inside a `Secret` once at the secret, and after a syntax or limit error that one error; the issues are a set, their order is not part of the result. A check reports at most `MaxIssues` (200). `Schema.CheckTextResult(typeName, text, schema.CheckOptions{First: true})` (and `CheckValues` for values) stops at the first error, with the hints found before it; its `CheckResult` has the `Issues` and `Stopped`, set when the check stopped at the cap with more to report.
+
 ## The official extensions
 
 `github.com/betalyra/haus-fmt/go/ext/money` and `…/ext/geo` hold the codecs of the profiles `@haus-fmt/money/iso` (`money.Iso`, `money.IsoCurrency`) and `@haus-fmt/geo/wgs84` (`geo.Wgs84`, `geo.Wgs84BBox`), tested against the profiles' vectors. The schemas themselves are given like any package's, with `schema.NewExplicit()`.
@@ -179,6 +181,8 @@ for _, issue := range s.CheckText("Root", text) {
 codecs, _ := schema.NewCodecs(money.Iso, geo.Wgs84)
 v, err := order.DecodeWith(value, schema.DecodeOptions{Codecs: codecs}) // $.total: … Eur is not a currency [codec-rejected]
 ```
+
+A package's rule is checked only where its codec is set. Codecs are given to each call, so ask for the warnings with them: `order.MissingCodecs(codecs)` (or `s.MissingCodecs(codecs)` for every type of the file) returns a `missing-codec` warning, like those of `Schema.Warnings`, for each type an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `schema.ProfiledTypes`) that the type reaches without a codec, so that its values are checked for their shape only (spec §13.4). A type reached only inside a type with a codec doesn't count: `money.Iso` covers the `Currency` of a `Money`.
 
 ## Examples
 

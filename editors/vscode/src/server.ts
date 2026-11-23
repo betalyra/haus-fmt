@@ -22,7 +22,9 @@ import {
   moduleOfType,
   parseDocument,
   parseSchemaFile,
+  uncheckedProfiles,
   type ImportEdit,
+  type ProfileNote,
   type MissingImport,
   type SchemaFile,
   type SchemaWarning,
@@ -274,6 +276,15 @@ const warningDiagnostic = (document: TextDocument) => (w: SchemaWarning): Diagno
   ...(w.kind === "deprecated" ? { tags: [DiagnosticTag.Deprecated] } : {}),
 })
 
+/** An import of an official package with profiles, whose rules the editor (it has no codecs) doesn't check (`missing-codec`, spec §13.4). */
+const profileDiagnostic = (document: TextDocument) => (n: ProfileNote): Diagnostic => ({
+  range: { start: document.positionAt(n.offset), end: document.positionAt(n.end) },
+  severity: DiagnosticSeverity.Information,
+  source: "haus",
+  code: n.code,
+  message: n.message,
+})
+
 /** The code of a schema file's error for a known type used without its import; its data is the MissingImport. */
 const MISSING_IMPORT = "missing-import"
 
@@ -285,6 +296,7 @@ function validate(document: TextDocument): void {
       const file = parseSchemaFile(document.getText(), options)
       schemas.set(document.uri, file)
       diagnostics.push(...file.warnings.map(warningDiagnostic(document)))
+      diagnostics.push(...uncheckedProfiles(document.getText()).map(profileDiagnostic(document)))
     }
     else {
       const { values, comments } = parseDocument(document.getText())

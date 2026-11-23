@@ -45,12 +45,21 @@ haus check order.haus              # one file
 haus check .                       # every .haus file below the current directory
 haus check --json data/ > report.json
 cat order.haus | haus check -      # standard input, a data file
+haus check --first order.haus      # stop at the first error
 ```
 
 A **data file** is first parsed. If it is valid and has a schema, it is
-checked against it: every error (up to 200 per file), and hints for fields
-and tags an open type doesn't list and for deprecated ones the data uses.
-Hints never fail a check. The schema is, in this order:
+checked against it: every error, and hints for fields and tags an open type
+doesn't list and for deprecated ones the data uses. Hints never fail a check.
+The errors are those of spec §14, "Every error": each failing place once,
+nothing below a value that failed at its own level (a string where a record
+is expected is one error, its contents aren't looked at), and an error inside
+a `Secret` once, at the secret. A file with a syntax error has that one
+error. The check stops after 200 problems per file (errors and hints) and
+then says so (`note: order.haus: stopped after 200 problems; there may be
+more`, and `"stopped": true` with `--json`). `--first` stops at the first
+error of each file instead, keeping the hints found before it; on standard
+input, at the first error of the stream. The schema is, in this order:
 
 1. the one given with `--schema FILE[#Type]` (type default `Root`), for every data file checked;
 2. `x.schema.haus` next to `x.haus`, type `Root`;
@@ -81,7 +90,12 @@ check with exit code 2.
 
 A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
-define, uses of deprecated types), which don't fail the check.
+define, uses of deprecated types), which don't fail the check. An import of
+an official package with profiles (`@haus-fmt/money`, `@haus-fmt/geo`) gets a
+hint (`missing-codec`): `haus check` has no codecs, so it checks the
+package's types for their shape only, not its profiles' rules (`the rules of
+@haus-fmt/money (profiles: iso) are not checked here; your application checks
+them by adding a codec`, spec §13.4).
 
 ```text
 error[type-mismatch]: expected Int, found the string "7"
@@ -116,7 +130,7 @@ column in the whole input, so `tail -f events.haus | haus check -` reports
 each bad event as it arrives (see "Streams and `tail -f`" below). Its schema
 is the one given with `--schema`, loaded once the first value is complete.
 Against a `Stream` type every value is checked (`at: $[3].status`) and the
-limit of 200 errors is per value; against any other type the first value is
+limit of 200 problems is per value; against any other type the first value is
 checked, and a second one is an error (`not-one-value`). An excerpt shows
 the value's last line up to its comma. A syntax error ends the check, since
 nothing after it can be trusted.
@@ -165,7 +179,8 @@ value by value.
 | `files[].ok` | the file has no errors |
 | `files[].error` | why the file couldn't be read (then the exit code is 2) |
 | `files[].diagnostics[]` | the error form of spec §17, with `severity` first |
-| `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files) |
+| `files[].stopped` | `true` when the check stopped after 200 problems: the file may have more; absent otherwise |
+| `severity` | `"error"` (fails the check), `"warning"` (schema files) or `"hint"` (data files, and imports whose profiles aren't checked, in schema files) |
 | `code`, `message`, `hint`, `docs` | always: the [error code](/docs/errors), the message, a fix, its documentation |
 | `file` | when the place is in another file than the one checked: the data file's schema, when that schema is broken |
 | `line`, `column` | the place in the text, when there is one |

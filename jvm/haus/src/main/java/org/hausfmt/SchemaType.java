@@ -46,6 +46,17 @@ public final class SchemaType {
   }
 
   /**
+   * The {@code missing-codec} warnings for decoding with this type and {@code codecs} (spec §13.4):
+   * one for each type an official profile has a rule for ({@link Profiles#PROFILED_TYPES}) that the
+   * type reaches without a codec, so that its values are checked for their shape only. A type
+   * reached only inside a type that has a codec doesn't count: a codec for {@code Money} covers its
+   * {@code Currency}. Sorted by id, at no place, like {@link Schema#warnings()}.
+   */
+  public List<HausException> missingCodecs(Codecs codecs) {
+    return Profiles.missingCodecs(List.of(t), Objects.requireNonNull(codecs, "codecs"));
+  }
+
+  /**
    * Whether the type is a {@code Stream} definition, {@code type Events = Stream Event}: it
    * describes a file, each of whose values {@link #decode} decodes as an {@code Event}.
    */

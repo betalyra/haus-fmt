@@ -470,6 +470,10 @@ extension HausError {
         ///
         /// Reported at: The variant. Never inside a `Secret` (§14).
         case unlistedTag = "unlisted-tag"
+        /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
+        ///
+        /// Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
+        case missingCodec = "missing-codec"
     }
 
     /// The part of the catalogue a code belongs to (spec §17).
@@ -496,7 +500,7 @@ extension HausError.Code {
         case .unknownModule, .unknownImport, .duplicateImport, .importUnavailable, .importNotFound, .importOutsideRoot, .importVersion, .importCycle, .duplicatePackage, .undeclaredPackage, .packageManifest, .packageVersion, .packagePath, .packageName, .packageCrate, .packageInstallScript, .packageFiles, .profileVectors, .packageWrapper, .codecUnreachable, .fileTooLarge, .tooManyFiles: .imports
         case .typeMismatch, .notAnInteger, .outOfRange, .missingField, .unknownField, .unknownTag, .wrongPayload, .invalidTime, .invalidSecret, .codecRejected, .cannotEncode, .cyclicValue, .stepBudget, .tooManyNodes: .decoding
         case .jsonSyntax, .unpairedSurrogate, .hausJsonForm, .hausJsonVersion, .hausJsonNumber, .hausJsonBytes, .invalidTag, .invalidBase64, .missingMember, .unexpectedMember, .noJsonForm: .json
-        case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag: .hints
+        case .unknownAttribute, .deprecated, .unlistedField, .unlistedTag, .missingCodec: .hints
         }
     }
 
@@ -619,6 +623,7 @@ extension HausError.Code {
         case .deprecated: "Use what the deprecation note says instead."
         case .unlistedField: "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
         case .unlistedTag: "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
+        case .missingCodec: "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."
         }
     }
 }

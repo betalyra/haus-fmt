@@ -238,6 +238,8 @@ pub enum ErrorCode {
     UnlistedField,
     /// `unlisted-tag`: A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo. Reported at: The variant. Never inside a `Secret` (§14).
     UnlistedTag,
+    /// `missing-codec`: A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
+    MissingCodec,
 }
 
 /// The category of an error code (spec §17).
@@ -272,7 +274,7 @@ impl ErrorCategory {
 
 impl ErrorCode {
     /// Every code, in the catalogue's order.
-    pub const ALL: [ErrorCode; 116] = [
+    pub const ALL: [ErrorCode; 117] = [
         ErrorCode::InvalidUtf8,
         ErrorCode::VersionDirective,
         ErrorCode::ExpectedValue,
@@ -389,6 +391,7 @@ impl ErrorCode {
         ErrorCode::Deprecated,
         ErrorCode::UnlistedField,
         ErrorCode::UnlistedTag,
+        ErrorCode::MissingCodec,
     ];
 
     /// The code: `payload-newline`.
@@ -510,6 +513,7 @@ impl ErrorCode {
             ErrorCode::Deprecated => "deprecated",
             ErrorCode::UnlistedField => "unlisted-field",
             ErrorCode::UnlistedTag => "unlisted-tag",
+            ErrorCode::MissingCodec => "missing-codec",
         }
     }
 
@@ -632,6 +636,7 @@ impl ErrorCode {
             ErrorCode::Deprecated => ErrorCategory::Hints,
             ErrorCode::UnlistedField => ErrorCategory::Hints,
             ErrorCode::UnlistedTag => ErrorCategory::Hints,
+            ErrorCode::MissingCodec => ErrorCategory::Hints,
         }
     }
 
@@ -754,6 +759,7 @@ impl ErrorCode {
             ErrorCode::Deprecated => "Use what the deprecation note says instead.",
             ErrorCode::UnlistedField => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers.",
             ErrorCode::UnlistedTag => "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers.",
+            ErrorCode::MissingCodec => "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.",
         }
     }
 }

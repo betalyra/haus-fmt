@@ -31,7 +31,7 @@ export const CATEGORIES = [
   ["Imports", "imports", "Imports", "Standard modules, schema packages and files (§13.3)."],
   ["Decoding", "decoding", "Decoding and encoding", "Values that don't fit a schema type (§15), and values a program can't encode."],
   ["Json", "json", "JSON", "The JSON mappings (§16)."],
-  ["Hints", "hints", "Hints and warnings", "Reported by checkers and editors without failing (§14)."],
+  ["Hints", "hints", "Hints and warnings", "Reported without failing, by checkers and editors (§14) and by schema bindings (§13.4)."],
 ] as const
 
 export type Example =

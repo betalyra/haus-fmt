@@ -237,6 +237,8 @@ const (
 	CodeUnlistedField ErrorCode = "unlisted-field"
 	// CodeUnlistedTag is "unlisted-tag": A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo.
 	CodeUnlistedTag ErrorCode = "unlisted-tag"
+	// CodeMissingCodec is "missing-codec": A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
+	CodeMissingCodec ErrorCode = "missing-codec"
 )
 
 // The categories of the catalogue.
@@ -368,6 +370,7 @@ var errorCodeList = []ErrorCode{
 	CodeDeprecated,
 	CodeUnlistedField,
 	CodeUnlistedTag,
+	CodeMissingCodec,
 }
 
 var errorCatalogue = map[ErrorCode]ErrorInfo{
@@ -487,4 +490,5 @@ var errorCatalogue = map[ErrorCode]ErrorInfo{
 	CodeDeprecated:              {CategoryHints, "A hint: the schema or the data uses a type, field or tag marked `@deprecated` (§14).", "Use what the deprecation note says instead."},
 	CodeUnlistedField:           {CategoryHints, "A hint: a field an open record doesn't list. A reader ignores it, but it may be a typo.", "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."},
 	CodeUnlistedTag:             {CategoryHints, "A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo.", "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."},
+	CodeMissingCodec:            {CategoryHints, "A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.", "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."},
 }

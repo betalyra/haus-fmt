@@ -37,6 +37,12 @@
 //! - [`Schema::check_text`] and [`Schema::check`]: every problem in a data file
 //!   (up to 200), with positions, and hints for fields and tags an open type
 //!   doesn't list and for deprecated ones: what `haus check` and editors show.
+//!   Every error, as a set (spec §14, "Every error"); [`Schema::check_text_report`]
+//!   and [`Schema::check_report`] also stop at the first one if asked
+//!   ([`CheckOptions::first`]) and say whether they stopped at the cap.
+//! - [`Schema::missing_codecs`]: the `missing-codec` warnings for code
+//!   generated with a set of codecs, and [`profiles::unchecked_profiles`]
+//!   the notes of tools without codecs (spec §13.4).
 //! - [`Locator`]: where packages are: [`Explicit`] (packages given by the
 //!   user) and [`Packages`] (a Cargo crate's direct dependencies). This
 //!   binding never looks in `node_modules` (spec §13.3, "Installed packages").
@@ -53,11 +59,12 @@ mod files;
 mod locate;
 mod locator;
 pub mod packages;
+pub mod profiles;
 mod resolve;
 pub mod syntax;
 mod types;
 
-pub use check::{Issue, MAX_ISSUES, Position, Segment, Severity};
+pub use check::{CheckOptions, CheckReport, Issue, MAX_ISSUES, Position, Segment, Severity};
 pub use files::FileCache;
 pub use locator::{Explicit, Location, Locator, NoImports, Or};
 pub use packages::{Manifest, Packages};
@@ -78,6 +85,7 @@ const _: () = {
     shared::<Record>();
     shared::<Variant>();
     shared::<Issue>();
+    shared::<CheckReport>();
     shared::<Error>();
     shared::<Manifest>();
     shared::<Packages>();

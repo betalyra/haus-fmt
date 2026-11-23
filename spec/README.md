@@ -975,6 +975,17 @@ When codecs apply at several places in one value (a codec for `Currency` inside 
 
 Codecs are part of the application, not of the schema. Two applications reading the same file with different codecs agree on what the file says, and may disagree only on what they accept. A codec for a standard type changes the host type only (§13.1).
 
+<!-- rule: packages.codecs.missing-warning -->
+**A profile without its codec.** A package's rule is checked only where a codec applies it: without one, the values of its types are checked for their shape only (`Money(19.90, Eur)` decodes). So a schema binding SHOULD report the warning `missing-codec` when a type it decodes reaches a type that an official profile has a rule for, and no codec is set for that type's id. These types are:
+
+| Type | Profiles |
+|---|---|
+| `@haus-fmt/money@1#Currency` | `iso` |
+| `@haus-fmt/geo@1#LatLng` | `wgs84` |
+| `@haus-fmt/geo@1#BBox` | `wgs84` |
+
+(`iso`'s rule for `Money` is its currency's, so `Currency` stands for it.) Only the types the decoded type reaches count (a binding that builds every type of a schema file at once: the types the file's own definitions reach), and a type reached only inside a type that has a codec doesn't: that codec decides which values it holds (a codec for `Money` covers its `Currency`). The warning is reported where the binding learns which codecs are set (when a set of codecs is built, a schema is compiled with them, or decoding starts), once per type id, at no place, through the channel of the binding's other schema warnings (`unknown-attribute`, `deprecated`, `no-json-form`). Its message names the type's id and its profiles: `@haus-fmt/money@1#Currency has profiles (iso), but no codec is set for it: its values are checked for their shape only`. It is a warning, never an error: decoding is unchanged. Tools that have no codecs (`haus check`, editors) report instead, with the same code as a note of the lowest severity (a hint), once per import of a package that has such a type, at the import: `the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec`.
+
 ## 14. Schema files
 
 <!-- rule: schema.lexical.as-data -->
@@ -996,6 +1007,22 @@ Type expressions nest at most 128 levels deep, a fixed limit: each parenthesized
 Tools that check a file against its schema (editors, `haus check`) MUST report what a closed type forbids as an error, and SHOULD mark fields and tags an open type doesn't list as a hint ("not in the schema"), without failing the check.
 <!-- rule: schema.check.no-hints-in-secret -->
 Inside a `Secret` (§15) they report no hints: no `unlisted-field`, `unlisted-tag` or `deprecated` at a place inside the secret, as an error inside one is reported at the secret itself. A path into a secret could reveal it.
+
+<!-- rule: schema.check.all-errors -->
+**Every error.** Tools that check data against a schema (`haus check`, editors) SHOULD report every error of the data, not only the first, and MAY offer to stop at the first (`haus check --first`). A decoder (§15) MAY offer the same mode, beside its first error; one that does reports the same errors. Which errors are reported is fixed, so that every tool reports the same ones:
+
+<!-- rule: schema.check.all-errors-parse-first -->
+- Only after a successful parse: text with a syntax or limit error has that one error, as when stopping at the first.
+  <!-- rule: schema.check.all-errors-once -->
+- Each failing place once, at its place of §15 (`$.items[2].price`).
+  <!-- rule: schema.check.all-errors-nothing-below -->
+- Nothing below a value that failed at its own level: a value of another kind (an array where a record is expected), an unknown tag of a closed variant, a tag with another payload than its case takes, or a value its type rejects (a number out of range, a `Date` that doesn't exist) is one error, and what it holds is not looked at. A record checks every field: each missing one is `missing-field` at the record, each one a closed record doesn't list `unknown-field` at the field, and the others are checked. An array, a map and a stream check every element. A `Secret` with any error inside is one `invalid-secret` at the secret (§15).
+  <!-- rule: schema.check.all-errors-no-order -->
+- No order: which errors are reported is specified, their order is not, and a tool may sort them by place for display. The error of a check that stops at the first is one of them.
+  <!-- rule: schema.check.all-errors-cap -->
+- A tool MAY stop after a number of errors it documents, at least 100 per value, so that hostile input costs bounded work (§9), and SHOULD then say that it stopped.
+
+Hints (`unlisted-field`, `unlisted-tag`, `deprecated`) are reported the same in both modes, never inside a `Secret`.
 
 <!-- rule: schema.spread.copies -->
 **Spreads.** `...Name` copies the tags of the named variant into a variant, or the fields of the named record into a record, at the place where it is written. Whether the result is open or closed is decided by its own `closed` alone, never by the type it copies from:

@@ -153,6 +153,12 @@ export interface CheckOptions {
    * A secret's value is passed twice: with its `Secret` type, then with the type inside.
    */
   readonly onValue?: (value: Value, type: Type, secret: boolean) => void
+  /**
+   * Stop at the first error (`haus check --first`), with the hints found
+   * before it. By default every error is reported (spec §14, "Every error"),
+   * up to 200 issues per call.
+   */
+  readonly first?: boolean
 }
 
 export function checkData(file: SchemaFile, typeName: string, values: readonly Value[], options: CheckOptions = {}): CheckIssue[] {
@@ -164,8 +170,10 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
   const root: Instance = definition.template
   const issues: CheckIssue[] = []
 
+  /** Whether checking stops: at the cap, or after the first error when asked to. */
+  const done = (): boolean => issues.length >= MAX_ISSUES || (options.first === true && issues.some((i) => i.severity === "error"))
   const report = (severity: CheckIssue["severity"], code: ErrorCode, message: string, start = 0, end = start + 1, hint?: string) => {
-    if (issues.length < MAX_ISSUES) issues.push({ severity, code, message, ...(hint === undefined ? {} : { hint }), start, end: Math.max(end, start + 1) })
+    if (!done()) issues.push({ severity, code, message, ...(hint === undefined ? {} : { hint }), start, end: Math.max(end, start + 1) })
   }
   /** A known tag with another payload than its case takes: the hint names the case. */
   const wrongPayload = (v: HVariant, message: string, takes: CasePayload) => report("error", "wrong-payload", message, ...at(v), payloadHint(v.tag, takes))
@@ -187,7 +195,7 @@ export function checkData(file: SchemaFile, typeName: string, values: readonly V
   const check = (v: Value, type: Type): void => {
     const t = resolve(type)
     options.onValue?.(v, type, hidden > 0 || t.kind === "secret")
-    if (issues.length >= MAX_ISSUES) return
+    if (done()) return
     switch (t.kind) {
       case "builtin":
         return builtin(v, t.name, type)

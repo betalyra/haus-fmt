@@ -118,6 +118,7 @@ export const ERROR_CODES = {
   "deprecated": { category: "hints", hint: "Use what the deprecation note says instead." },
   "unlisted-field": { category: "hints", hint: "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers." },
   "unlisted-tag": { category: "hints", hint: "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers." },
+  "missing-codec": { category: "hints", hint: "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type." },
 } as const
 
 /** An error code (spec §17): stable, the same in every binding. */

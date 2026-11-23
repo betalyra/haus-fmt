@@ -16,7 +16,7 @@ public enum ErrorCategory {
   DECODING("decoding"),
   /** The JSON mappings (§16). */
   JSON("json"),
-  /** Reported by checkers and editors without failing (§14). */
+  /** Reported without failing, by checkers and editors (§14) and by schema bindings (§13.4). */
   HINTS("hints");
 
   private final String id;

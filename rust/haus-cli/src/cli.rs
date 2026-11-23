@@ -88,6 +88,11 @@ pub struct CheckArgs {
     #[arg(long)]
     pub no_schema: bool,
 
+    /// Stop at the first error of each data file (with the hints found
+    /// before it), instead of reporting every error.
+    #[arg(long)]
+    pub first: bool,
+
     /// Print one JSON document instead of text, once everything is checked.
     #[arg(long)]
     pub json: bool,

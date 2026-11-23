@@ -1,6 +1,7 @@
 package org.hausfmt;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -145,5 +146,17 @@ public final class Schema {
    */
   public List<HausException> warnings() {
     return warnings;
+  }
+
+  /**
+   * The {@code missing-codec} warnings of {@link SchemaType#missingCodecs} for every type the file's
+   * own definitions reach, decoded with {@code codecs} (spec §13.4).
+   */
+  public List<HausException> missingCodecs(Codecs codecs) {
+    List<SchemaTypes.Typ> roots = new ArrayList<>();
+    for (Instance template : templates.subList(0, own)) {
+      roots.add(template.body);
+    }
+    return Profiles.missingCodecs(roots, Objects.requireNonNull(codecs, "codecs"));
   }
 }

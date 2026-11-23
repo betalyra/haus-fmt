@@ -12,7 +12,8 @@ use crate::pieces::{Piece, Pieces};
 use annotate_snippets::Renderer;
 use haus::json::Json;
 use haus::{ErrorCode, Limits};
-use haus_schema::{Explicit, Manifest, Schema, Segment};
+use haus_schema::profiles::unchecked_profiles;
+use haus_schema::{CheckOptions, Explicit, MAX_ISSUES, Manifest, Schema, Segment};
 use std::collections::HashMap;
 use std::io::{self, Read, stdout};
 use std::ops::Range;
@@ -28,6 +29,8 @@ struct Report {
     /// Why the file couldn't be read.
     error: Option<String>,
     diagnostics: Vec<Diagnostic>,
+    /// The check stopped at the cap ([`MAX_ISSUES`]): the file may have more.
+    stopped: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -38,7 +41,7 @@ enum Kind {
 
 impl Report {
     fn new(name: String, kind: Kind) -> Report {
-        Report { name, kind, schema: None, error: None, diagnostics: vec![] }
+        Report { name, kind, schema: None, error: None, diagnostics: vec![], stopped: false }
     }
 
     fn errors(&self) -> usize {
@@ -67,8 +70,22 @@ impl Report {
         m.add("ok", b(self.ok()));
         m.opt("error", self.error.as_deref().map(s));
         m.add("diagnostics", Json::Array(self.diagnostics.iter().map(Diagnostic::to_json).collect()));
+        // Only when it did, so that the document of a complete check stays as it was.
+        m.opt("stopped", self.stopped.then(|| b(true)));
         m.into()
     }
+}
+
+/// What checking standard input shows as it goes.
+enum Shown<'a> {
+    Diagnostic(&'a Diagnostic),
+    /// The value starting on this line had more issues than the cap.
+    Stopped(usize),
+}
+
+/// The note that a check stopped at the cap (spec §14, "Every error").
+fn stopped_note(name: &str) -> String {
+    format!("note: {name}: stopped after {MAX_ISSUES} problems; there may be more\n\n")
 }
 
 /// Where a data file's schema is.
@@ -80,6 +97,8 @@ struct SchemaRef {
 struct Checker {
     limits: Limits,
     no_schema: bool,
+    /// --first: stop at the first error of each data file.
+    first: bool,
     /// The schema given with --schema.
     forced: Option<(PathBuf, String)>,
     /// Packages given with --package and --packages (never node_modules, spec §13.3).
@@ -109,8 +128,14 @@ pub fn run(args: &CheckArgs, color: Color) -> Status {
         Ok(packages) => packages,
         Err(failure) => return fail(args.json, failure),
     };
-    let mut checker =
-        Checker { limits: args.limits.limits(), no_schema: args.no_schema, forced, packages, schemas: HashMap::new() };
+    let mut checker = Checker {
+        limits: args.limits.limits(),
+        no_schema: args.no_schema,
+        first: args.first,
+        forced,
+        packages,
+        schemas: HashMap::new(),
+    };
     let targets = input::collect(&args.paths, input::is_haus);
     if !args.json {
         return text(&mut checker, &targets, &output::renderer(output::colored(color, &stdout())));
@@ -178,9 +203,12 @@ fn text(checker: &mut Checker, targets: &[Target], renderer: &Renderer) -> Statu
         let name = target.name();
         let shown = match target {
             Target::Stdin => {
-                let mut show = |d: &Diagnostic| {
-                    tally.add(d);
-                    output::write(&render(d, &name))
+                let mut show = |shown: Shown| match shown {
+                    Shown::Diagnostic(d) => {
+                        tally.add(d);
+                        output::write(&render(d, &name))
+                    }
+                    Shown::Stopped(line) => output::write(&stopped_note(&format!("{name}:{line}"))),
                 };
                 match checker.check_stream(io::stdin().lock(), &mut show) {
                     Ok(Some(e)) => {
@@ -200,6 +228,9 @@ fn text(checker: &mut Checker, targets: &[Target], renderer: &Renderer) -> Statu
                 for d in &report.diagnostics {
                     tally.add(d);
                     out.push_str(&render(d, &name));
+                }
+                if report.stopped {
+                    out.push_str(&stopped_note(&name));
                 }
                 output::write(&out)
             }
@@ -283,13 +314,15 @@ impl Checker {
                     Target::File(path) => adjacent_schema(path),
                     _ => None,
                 };
-                (report.schema, report.diagnostics) = self.check_data(adjacent, &bytes);
+                (report.schema, report.diagnostics, report.stopped) = self.check_data(adjacent, &bytes);
             }
         }
         report
     }
 
-    /// A schema file: its errors, or its warnings.
+    /// A schema file: its errors, or its warnings, and a note at each import
+    /// of an official package with profiles, whose rules this tool (it has
+    /// no codecs) doesn't check (`missing-codec`, spec §13.4).
     fn check_schema(&mut self, path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {
         let text = String::from_utf8_lossy(bytes);
         match self.load(path) {
@@ -297,26 +330,37 @@ impl Checker {
             // Shown in the text the schema was loaded from.
             Ok(schema) => {
                 let text = &schema.files()[0].text;
-                schema.warnings().iter().map(|w| Diagnostic::schema(w, Severity::Warning, Some(text))).collect()
+                let warnings = schema.warnings().iter().map(|w| Diagnostic::schema(w, Severity::Warning, Some(text)));
+                let notes =
+                    unchecked_profiles(text).into_iter().map(|n| Diagnostic::schema(&n, Severity::Hint, Some(text)));
+                let mut all: Vec<Diagnostic> = warnings.chain(notes).collect();
+                // In the order of their places (a stable sort: warnings first at one place).
+                all.sort_by_key(|d| d.position);
+                all
             }
         }
     }
 
-    /// A data file: syntax errors, then what its schema finds.
-    fn check_data(&mut self, adjacent: Option<PathBuf>, bytes: &[u8]) -> (Option<String>, Vec<Diagnostic>) {
+    fn options(&self) -> CheckOptions {
+        CheckOptions { first: self.first, limits: self.limits }
+    }
+
+    /// A data file: syntax errors, then what its schema finds, and whether
+    /// that stopped at the cap.
+    fn check_data(&mut self, adjacent: Option<PathBuf>, bytes: &[u8]) -> (Option<String>, Vec<Diagnostic>, bool) {
         let text = match diagnostic::utf8(bytes) {
             Ok(text) => text,
-            Err(d) => return (None, vec![*d]),
+            Err(d) => return (None, vec![*d], false),
         };
         if let Err(e) = haus::parse_with(text, &self.limits) {
-            return (None, vec![Diagnostic::syntax(&e, Some(text))]);
+            return (None, vec![Diagnostic::syntax(&e, Some(text))], false);
         }
         match self.checking(adjacent) {
-            None => (None, vec![]),
-            Some((label, Err(diagnostics))) => (Some(label), diagnostics),
+            None => (None, vec![], false),
+            Some((label, Err(diagnostics))) => (Some(label), diagnostics, false),
             Some((label, Ok(c))) => {
-                let issues = c.schema.check_text_with(&c.type_name, text, &self.limits);
-                (Some(label), issues.iter().map(|i| Diagnostic::issue(i, text)).collect())
+                let report = c.schema.check_text_report(&c.type_name, text, &self.options());
+                (Some(label), report.issues.iter().map(|i| Diagnostic::issue(i, text)).collect(), report.stopped)
             }
         }
     }
@@ -354,12 +398,14 @@ impl Checker {
     /// as its value is complete, with its place in the whole stream. Its
     /// schema is the one given with --schema, loaded once the first value
     /// is complete. A type that isn't a
-    /// `Stream` gets the first value, and an error at the second. Returns
-    /// why the input couldn't be read, if it couldn't; fails if `show` does.
+    /// `Stream` gets the first value, and an error at the second. `stopped`
+    /// is told when a value's check stopped at the cap (the line it starts
+    /// on). Returns why the input couldn't be read, if it couldn't; fails if
+    /// `show` does.
     fn check_stream(
         &mut self,
         input: impl Read,
-        show: &mut dyn FnMut(&Diagnostic) -> io::Result<()>,
+        show: &mut dyn FnMut(Shown) -> io::Result<()>,
     ) -> io::Result<Option<String>> {
         let options = haus::stream::Options { limits: self.limits, ..Default::default() };
         let mut pieces = Pieces::new(input, options);
@@ -370,7 +416,7 @@ impl Checker {
             let piece = match piece {
                 Ok(piece) => piece,
                 Err(haus::Error::Syntax(e)) => {
-                    show(&pieces.diagnostic(&e))?;
+                    show(Shown::Diagnostic(&pieces.diagnostic(&e)))?;
                     break;
                 }
                 Err(e) => return Ok(Some(e.to_string())),
@@ -381,13 +427,18 @@ impl Checker {
                     Some((_, Err(diagnostics))) => (None, diagnostics),
                     None => (None, vec![]),
                 };
-                diagnostics.iter().try_for_each(&mut *show)?;
+                diagnostics.iter().try_for_each(|d| show(Shown::Diagnostic(d)))?;
                 checking = Some(found);
             }
             if let Some(Some(c)) = &checking {
-                let (diagnostics, more) = self.check_piece(c, &piece, seen);
-                diagnostics.iter().try_for_each(&mut *show)?;
-                if !more {
+                let (diagnostics, more, stopped) = self.check_piece(c, &piece, seen);
+                diagnostics.iter().try_for_each(|d| show(Shown::Diagnostic(d)))?;
+                if stopped {
+                    show(Shown::Stopped(piece.line))?;
+                }
+                // --first: the stream's first error ends its checks.
+                let failed = diagnostics.iter().any(|d| d.severity == Severity::Error);
+                if !more || (self.first && failed) {
                     checking = Some(None);
                 }
             }
@@ -397,24 +448,25 @@ impl Checker {
     }
 
     /// What the schema finds in a value of the stream, after `seen` others;
-    /// and whether the values after it are still to be checked.
-    fn check_piece(&self, c: &Checking, piece: &Piece, seen: usize) -> (Vec<Diagnostic>, bool) {
-        let Some(def) = c.schema.definition(&c.type_name) else { return (vec![], false) };
+    /// whether the values after it are still to be checked; and whether its
+    /// check stopped at the cap.
+    fn check_piece(&self, c: &Checking, piece: &Piece, seen: usize) -> (Vec<Diagnostic>, bool, bool) {
+        let Some(def) = c.schema.definition(&c.type_name) else { return (vec![], false, false) };
         let stream = c.schema.instance(def.template).stream;
         // A type with parameters can't describe a whole file: said once, at the first value.
         let more = def.params.is_empty() && (stream || seen == 0);
         if piece.values.is_empty() && seen > 0 {
-            return (vec![], more);
+            return (vec![], more, false);
         }
         if !stream && seen > 0 {
             let message = format!("expected one value ({} is not a Stream), found more than one", c.type_name);
             let mut d = Diagnostic::new(Severity::Error, ErrorCode::NotOneValue, message);
             d.path = Some("$".to_owned());
-            return (vec![piece.place(d, value_span(&piece.text))], false);
+            return (vec![piece.place(d, value_span(&piece.text))], false, false);
         }
-        let diagnostics = c
-            .schema
-            .check_text_with(&c.type_name, &piece.text, &self.limits)
+        let report = c.schema.check_text_report(&c.type_name, &piece.text, &self.options());
+        let diagnostics = report
+            .issues
             .into_iter()
             .map(|mut i| {
                 if let (true, Some(Segment::Index(j))) = (stream, i.path.first_mut()) {
@@ -424,7 +476,7 @@ impl Checker {
                 piece.place(Diagnostic::issue(&i, &piece.text), span)
             })
             .collect();
-        (diagnostics, more)
+        (diagnostics, more, report.stopped)
     }
 
     /// The schema of a data file: --schema, else `x.schema.haus` next to

@@ -112,7 +112,7 @@ export const checkChain = (s: AnySchema): void => {
       if (recursive) throw new NotCompilable("a Recursive reaches a schema written by hand without consuming a value")
       return
     }
-    if (shape.kind === "secret" || shape.kind === "refine") x = shape.inner
+    if (shape.kind === "secret" || shape.kind === "refine" || shape.kind === "transform") x = shape.inner
     else if (shape.kind === "recursive") {
       recursive = true
       x = shape.body()
@@ -435,6 +435,20 @@ export class ReadCompiler {
           return check(a) === undefined ? a : fail()
         }
       }
+      case "transform": {
+        checkChain(s)
+        const inner = this.read(shape.inner)
+        const decode = shape.decode as (a: unknown) => unknown
+        // A decode that throws: the generic path reports it (codec-rejected, or rethrows a stack overflow).
+        return (r, cx, depth) => {
+          const a = inner(r, cx, depth)
+          try {
+            return decode(a)
+          } catch {
+            return fail()
+          }
+        }
+      }
       case "recursive": {
         checkChain(s)
         const body = this.read(shape.body())
@@ -710,6 +724,7 @@ export const argumentForm = (s: AnySchema, seen: Set<AnySchema> = new Set()): Ar
       return "record"
     case "secret":
     case "refine":
+    case "transform":
       return argumentForm(shape.inner, seen)
     case "recursive":
       return argumentForm(shape.body(), seen)
@@ -884,6 +899,20 @@ export class WriteCompiler {
         const inner = this.write(shape.inner)
         const check = shape.check as (a: unknown) => string | undefined
         return (w, a, cx, depth) => (check(a) === undefined ? inner(w, a, cx, depth) : fail())
+      }
+      case "transform": {
+        checkChain(s)
+        const inner = this.write(shape.inner)
+        const encode = shape.encode as (b: unknown) => unknown
+        return (w, b, cx, depth) => {
+          let a: unknown
+          try {
+            a = encode(b)
+          } catch {
+            return fail()
+          }
+          inner(w, a, cx, depth)
+        }
       }
       case "recursive": {
         checkChain(s)

@@ -251,7 +251,7 @@ class Instance:
         return f"Instance({self.key})"
 
 
-WarningKind: TypeAlias = Literal["unknown-attribute", "deprecated", "no-json-form"]
+WarningKind: TypeAlias = Literal["unknown-attribute", "deprecated", "no-json-form", "missing-codec"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,12 +260,14 @@ class SchemaWarning:
 
     kind: WarningKind
     """`unknown-attribute`: `@since(…)` and the like; `deprecated`: a use of a `@deprecated` type;
-    `no-json-form`: a record case with a field `_tag` or `_args`, which has no schema-based JSON form (spec §16)."""
+    `no-json-form`: a record case with a field `_tag` or `_args`, which has no schema-based JSON form (spec §16);
+    `missing-codec`: a type of an official package with profiles that has no codec (spec §13.4)."""
     message: str
     offset: int
     """Code point offsets into the schema file, `end` exclusive."""
     end: int
     line: int
+    """1-based; 0 for a warning about no place in the file (`missing-codec`: about the codecs)."""
     column: int
 
     @property
@@ -284,15 +286,10 @@ class SchemaWarning:
         return error_docs(self.kind)
 
     def to_json(self) -> dict[str, object]:
-        """The JSON form of spec §17: `{ code, message, line, column, hint, docs }`."""
-        return {
-            "code": self.kind,
-            "message": self.message,
-            "line": self.line,
-            "column": self.column,
-            "hint": self.hint,
-            "docs": self.docs,
-        }
+        """The JSON form of spec §17: `{ code, message, line, column, hint, docs }`, without `line` and
+        `column` for a warning about no place."""
+        place: dict[str, object] = {"line": self.line, "column": self.column} if self.line else {}
+        return {"code": self.kind, "message": self.message, **place, "hint": self.hint, "docs": self.docs}
 
 
 @dataclass(frozen=True, slots=True)

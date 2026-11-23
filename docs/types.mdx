@@ -121,7 +121,7 @@ Go decodes to checked `haus.Value`s (`schema.DecodeAs` gives a codec's host type
 
 | | std/time | std/time, other host types | `@haus-fmt/money` (`iso`), `@haus-fmt/geo` (`wgs84`) |
 |---|---|---|---|
-| TypeScript | `string`, the checked text | `h.InstantAsDate`: a `Date`, in `h.*` schemas (lossy) | `iso`, `wgs84`: the same values, checked |
+| TypeScript | `string`, the checked text | `h.InstantAsDate`: a `Date`, in `h.*` schemas (lossy); a codec of your own with `h.transform` | `iso`, `wgs84`: the same values, checked |
 | Effect | `string`, the checked text | `Haus.InstantAsDateTime`, `Haus.ZonedDateTimeAsDateTime`: `DateTime` (lossy) | `iso`, `wgs84` from `./effect`: the same values, checked |
 | Rust | `haus::time::Date`, …: the checked text | a codec of your own (to `jiff`, say) | `Iso` → `IsoMoney`, `IsoCurrency` → `CurrencyCode`, `Wgs84` → `Point`, `Wgs84BBox` → `Bounds` |
 | Python | `str`, the checked text | `DateCodec` → `datetime.date`, `InstantCodec` → `datetime.datetime` (lossy) | `haus_money.iso`, `haus_geo.wgs84`: the same values, a currency as `"EUR"` |
@@ -131,7 +131,7 @@ Go decodes to checked `haus.Value`s (`schema.DecodeAs` gives a codec's host type
 | Roc | `Str`, the checked text | a codec module of your own | `Iso` → `{ amount : Str, currency : Str }`, `Wgs84` → `{ lat : F64, lng : F64 }`, `Wgs84BBox` |
 | Zig | `Decoded`, the checked text | `haus.codecs.time`: `date`, `year_month`, `time_of_day`, `date_time`, `instant`; `instant_timestamp` → `std.Io.Timestamp` and `duration` → `std.Io.Duration` (lossy) | `haus.codecs.money.iso`, `haus.codecs.geo.wgs84`: the same values, checked |
 
-Without a codec, a package's type decodes like any type of its schema: a `Money` is a variant with a `Decimal` and a tag, and a currency of `Xyz` passes. Codecs for JavaScript's Temporal are planned after 1.0.
+Without a codec, a package's type decodes like any type of its schema: a `Money` is a variant with a `Decimal` and a tag, and a currency of `Xyz` passes; schema bindings warn about it (`missing-codec`). Codecs for JavaScript's Temporal are planned after 1.0.
 
 ## Why three?
 

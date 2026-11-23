@@ -160,7 +160,7 @@ order = s["Order"].parse('{ id: 7, total: 44.40, status: Shipped { tracking: "DE
 s["Order"].decode(value)  # a parsed haus.Value
 s["Order"].encode(order)  # back to a haus.Value
 s["Order"].canonical(order)  # … written in canonical form: valid haus text
-s.warnings  # unknown attributes, uses of @deprecated types, cases without schema-based JSON
+s.warnings  # unknown attributes, uses of @deprecated types, cases without schema-based JSON, missing-codec
 ```
 
 Errors are `HausSchemaFileError` (a `HausSyntaxError`, with line and column in the schema file), `HausDecodeError` and `HausEncodeError` (`ValueError`s with `reason` and `path`): `expected Decimal, found string "3" at $.items[2].price`.
@@ -308,6 +308,8 @@ s = schema.load_schema(
 )
 s["Order"].parse(text)  # Money(1, Eur) or LatLng(91, 0): HausDecodeError
 ```
+
+A package's rule is checked only where its codec is set. When the schema file's definitions reach a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`) without a codec for it, `s.warnings` ends with a `missing-codec` warning for that id (spec §13.4), at no place (`line` 0): its values are checked for their shape only. A type reached only inside a type with a codec doesn't count (a codec for `Money` covers its `Currency`). Decoding is the same with or without the warning.
 
 ### Schema files for tools
 

@@ -15,6 +15,22 @@ const issues = (schema: string, data: string, type = "Root") =>
   checkData(parseSchemaFile(schema), type, parseWithLocations(data)).map((i) => `${i.severity} ${data.slice(i.start, i.end)}: ${i.message}`)
 
 describe("checkData", () => {
+  it("reports every error by default, and only the first with `first` (spec §14, \"Every error\")", () => {
+    const file = parseSchemaFile("type Root = { a: Int, b: String, c: Array Int8, k: Secret { x: Int } }")
+    const data = parseWithLocations(`{ nb: 1, a: "x", c: [1, 300, "y"], k: { x: "z" } }`)
+    const all = checkData(file, "Root", data)
+    expect(all.map((i) => `${i.severity} ${i.code}`)).toEqual([
+      "error missing-field", "hint unlisted-field", "error type-mismatch", "error out-of-range", "error type-mismatch", "error invalid-secret",
+    ])
+    const first = checkData(file, "Root", data, { first: true })
+    expect(first.filter((i) => i.severity === "error")).toHaveLength(1)
+    // The first error is one of all of them.
+    expect(all).toContainEqual(first.find((i) => i.severity === "error"))
+    // A secret's error stays one error at the secret, in either mode.
+    const secret = checkData(parseSchemaFile("type Root = { k: Secret { x: Int, y: Int } }"), "Root", parseWithLocations(`{ k: { x: "a", y: "b" } }`), { first: true })
+    expect(secret.map((i) => i.code)).toEqual(["invalid-secret"])
+  })
+
   it("accepts the examples", () => {
     for (const name of ["thread", "syntax-tour"]) {
       const path = `examples/${name}.schema.haus`

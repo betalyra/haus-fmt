@@ -19,7 +19,7 @@
  * Types that contain themselves are declared with `h.Recursive`.
  */
 import { quoteText, TAG, unpairedSurrogate } from "./chars.js"
-import { checkWellFormed, decodeTooDeep, encodeTooDeep, guardStack, HausDecodeError, HausEncodeError, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
+import { checkWellFormed, decodeTooDeep, encodeTooDeep, guardStack, HausDecodeError, HausEncodeError, isStackOverflow, payloadHint, START, type CasePayload, type ErrorCode, type ErrorDetails, type Path } from "./errors.js"
 import { format, stringify as stringifyValue, stringifyAt, type FormatOptions } from "./format.js"
 import { INTEGER, normalizeNumber, numberLimitIssue } from "./number.js"
 import { checkLimits, longerThan, Parser, withDefaults, type Limits as ValueLimits } from "./parser.js"
@@ -462,6 +462,43 @@ export const refine = <A>(schema: Schema<A>, check: (value: A) => string | undef
     },
   }), { kind: "refine", inner: schema, check: check as (a: never) => string | undefined })
 
+/** Runs a codec's function; what it throws (other than haus's own errors and a stack overflow) is `onError` with its message. */
+const attempt = <T>(f: () => T, onError: (why: string) => never): T => {
+  try {
+    return f()
+  } catch (e) {
+    if (e instanceof HausDecodeError || e instanceof HausEncodeError || isStackOverflow(e)) throw e
+    return onError(e instanceof Error ? e.message : String(e))
+  }
+}
+
+/**
+ * `schema` with another host type, as a codec chooses one (spec §13.4):
+ * `decode` turns what `schema` decoded into the host value, and `encode` turns
+ * a host value back into one that `schema` encodes. Like `h.refine`, it runs
+ * after `schema`, so it can reject more values, never fewer: when `decode`
+ * throws, the value is `codec-rejected` at its place, with the error's
+ * message; when `encode` throws, `cannot-encode`.
+ *
+ * Decoding what `encode` gave must give the same value (decode, encode,
+ * decode is the same as decode), and `decode` must not change what a value
+ * means. A host type that keeps less than the value (a `Date` forgets the
+ * offset) changes what is written back: say so where it is offered.
+ *
+ *   // A URL object; "not a url" is codec-rejected (new URL throws). Written back as its href.
+ *   const Link = h.transform(h.String, (s) => new URL(s), (u) => u.href)
+ */
+export const transform = <A, B>(schema: Schema<A>, decode: (value: A) => B, encode: (value: B) => A): Schema<B> =>
+  shaped(withStandard<B, Omit<Schema<B>, "~standard">>({
+    expected: schema.expected,
+    json: schema.json,
+    decode: (v, at) => {
+      const a = schema.decode(v, at)
+      return attempt(() => decode(a), (why) => at.reject("codec-rejected", why))
+    },
+    encode: (b, at) => schema.encode(attempt(() => encode(b), (why) => at.reject("cannot-encode", why)), at),
+  }), { kind: "transform", inner: schema, decode: decode as (a: never) => unknown, encode: encode as (b: never) => unknown })
+
 // ── shapes, for the compiled codecs ──────────────────────────
 
 /**
@@ -490,6 +527,7 @@ export type Shape =
   | { readonly kind: "enum"; readonly tags: ReadonlySet<string> }
   | { readonly kind: "secret"; readonly inner: AnySchema }
   | { readonly kind: "refine"; readonly inner: AnySchema; readonly check: (a: never) => string | undefined }
+  | { readonly kind: "transform"; readonly inner: AnySchema; readonly decode: (a: never) => unknown; readonly encode: (b: never) => unknown }
   | {
     readonly kind: "recursive"
     /** The key of its bookkeeping (`recursionOf`). */
@@ -708,20 +746,6 @@ const taggedString = <A>(tag: string, format: RegExp, convert: (s: string) => A 
 const date = taggedString("Date", /^\d{4}-\d{2}-\d{2}$/, (s) => (checkStdTime("Date", s) === undefined ? s : undefined), (s) => s)
 
 /**
- * `Instant("2026-11-07T10:00:00Z")` as a JS Date, for applications that want
- * one. Lossy (spec §13.4): a Date keeps the instant in milliseconds, not the
- * offset or the fraction as written, so `Instant("…10:00:00.250+01:00")` is
- * written back as `Instant("…09:00:00.250Z")`, a different haus value with
- * another hash. `h.Instant` keeps the text.
- */
-export const InstantAsDate: Schema<globalThis.Date> = taggedString(
-  "Instant",
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/,
-  (s) => (checkStdTime("Instant", s) === undefined ? new globalThis.Date(s) : undefined),
-  (d) => (d instanceof globalThis.Date && !isNaN(d.getTime()) ? d.toISOString() : String(d)),
-)
-
-/**
  * Any std/time type as its validated text, exactly as written:
  * `Time("09:30:00")` → "09:30:00", `Duration("PT48H")` → "PT48H". Encoding
  * writes it back unchanged, offsets and fractions included.
@@ -731,6 +755,23 @@ export const StdTime = (type: StdTimeType): Schema<string> =>
 
 /** `Instant("2026-11-07T10:00:00.250+01:00")` → "2026-11-07T10:00:00.250+01:00", as written. For a JS Date, `h.InstantAsDate`. */
 const instant = StdTime("Instant")
+
+/**
+ * `Instant("2026-11-07T10:00:00Z")` as a JS Date, for applications that want
+ * one: `h.Instant` with `h.transform`. Lossy (spec §13.4): a Date keeps the
+ * instant in milliseconds, not the offset or the fraction as written, so
+ * `Instant("…10:00:00.250+01:00")` is written back as
+ * `Instant("…09:00:00.250Z")`, a different haus value with another hash.
+ * `h.Instant` keeps the text.
+ */
+export const InstantAsDate: Schema<globalThis.Date> = transform(
+  instant,
+  (s) => new globalThis.Date(s),
+  (d) => {
+    if (!(d instanceof globalThis.Date) || isNaN(d.getTime())) throw new Error(`expected a valid Date, got ${describeJs(d)}`)
+    return d.toISOString()
+  },
+)
 
 export {
   bigint_ as BigInt,

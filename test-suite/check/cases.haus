@@ -61,6 +61,17 @@ Schema { schema: "type A = { x ?: Int, y? : Int }", warnings: [] },
 // ── a case copied by a spread is warned about once, where it is defined ──
 Schema { schema: "type Odd = < Box { _tag: Int32 } | Fine >\ntype V = < ...Odd | X >", warnings: [Warning("no-json-form", 1, 14)] },
 
+// ── every error (spec §14, "Every error"): each failing place once, nothing below a value that failed ──
+Data { schema: "type Root = { a: Int, b: String, c: Bool }", type: "Root", data: "{ a: \"x\", b: 1, c: True }", issues: [Error("type-mismatch", "$.a"), Error("type-mismatch", "$.b")] },
+Data { schema: "type Root = closed { a: Int, b: Int }", type: "Root", data: "{ a: \"x\", z: 1 }", issues: [Error("missing-field", "$"), Error("type-mismatch", "$.a"), Error("unknown-field", "$.z")] },
+Data { schema: "type Root = { items: Array { id: Int } }", type: "Root", data: "{ items: { id: \"x\" } }", issues: [Error("type-mismatch", "$.items")] },
+Data { schema: "type Root = Array Int8", type: "Root", data: "[1, 300, \"x\", -200]", issues: [Error("out-of-range", "$[1]"), Error("type-mismatch", "$[2]"), Error("out-of-range", "$[3]")] },
+Data { schema: "type Root = Map Int", type: "Root", data: "{ a: \"x\", b: 2, c: \"y\" }", issues: [Error("type-mismatch", "$.a"), Error("type-mismatch", "$.c")] },
+Data { schema: "type Root = closed < A { x: Int } >", type: "Root", data: "B { x: \"y\" }", issues: [Error("unknown-tag", "$")] },
+Data { schema: "type Root = Array (closed < P { x: Int } | Q >)", type: "Root", data: "[P { x: \"a\" }, P { x: 1 }, Q(1), P { x: \"b\" }]", issues: [Error("type-mismatch", "$[0].x"), Error("wrong-payload", "$[2]"), Error("type-mismatch", "$[3].x")] },
+Data { schema: "type Root = { k: Secret { a: Int, b: Int }, n: Int }", type: "Root", data: "{ k: { a: \"x\", b: \"y\" }, n: \"z\" }", issues: [Error("invalid-secret", "$.k"), Error("type-mismatch", "$.n")] },
+Data { schema: "type Root = { name: String, n: Int }", type: "Root", data: "{ nmae: \"a\", n: \"x\" }", issues: [Error("missing-field", "$"), Hint("unlisted-field", "$.nmae"), Error("type-mismatch", "$.n")] },
+
 // ── nothing is pointed out inside a Secret (spec §14, §15): no hints, and an error at the secret ──
 Data { schema: "type Root = { key: Secret { a: Int } }", type: "Root", data: "{ key: { a: 1, b: 2 } }", issues: [] },
 Data { schema: "type Root = { key: Secret (Array { a: Int }) }", type: "Root", data: "{ key: [{ a: 1, zz: 2 }] }", issues: [] },

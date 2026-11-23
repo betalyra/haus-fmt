@@ -103,8 +103,8 @@ const published: Record<Kind, WeakMap<AnySchema, unknown>> = { read: new WeakMap
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 const STEP = "if (++cx.steps > cx.maxSteps) fail()"
 
-/** Shapes read and written by codec.ts's closures (no structure to generate). */
-const LEAVES: ReadonlySet<Shape["kind"]> = new Set(["string", "int", "smallInt", "bigInt", "float", "decimal", "bool", "bytes", "tagged", "enum", "anyTag", "any"])
+/** Shapes read and written by codec.ts's closures (no structure to generate; a transform calls the application's functions). */
+const LEAVES: ReadonlySet<Shape["kind"]> = new Set(["string", "int", "smallInt", "bigInt", "float", "decimal", "bool", "bytes", "tagged", "enum", "anyTag", "any", "transform"])
 
 /** A leaf as the source names it, so that comparing sources (built-ahead code) covers what each runtime object is. */
 const leafNote = (s: AnySchema, shape: Shape | undefined): string => {

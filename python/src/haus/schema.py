@@ -102,6 +102,7 @@ __all__ = [
     "MAX_MANIFEST_SIZE",
     "MAX_SCHEMA_SIZE",
     "PACKAGE_SCHEMA",
+    "PROFILED_TYPES",
     "STD_MODULES",
     "ArrayType",
     "Attribute",
@@ -157,6 +158,7 @@ __all__ = [
     "identify",
     "installed_package",
     "load_schema",
+    "missing_codecs",
     "parse_schema_file",
     "read_manifest",
     "read_module",
@@ -282,6 +284,10 @@ class Schema:
     file: SchemaFile
     types: Mapping[str, SchemaType]
     """The types without parameters, own and imported, by name."""
+    codec_warnings: tuple[SchemaWarning, ...] = ()
+    """`missing-codec` (spec §13.4): a type an official profile has a rule for that the file's own
+    definitions reach, with no codec for its id, so its values are checked for their shape only. One per
+    id, sorted by id, at no place in the file (`line` 0)."""
 
     def __getitem__(self, name: str) -> SchemaType:
         try:
@@ -294,13 +300,82 @@ class Schema:
 
     @property
     def warnings(self) -> tuple[SchemaWarning, ...]:
-        return self.file.warnings
+        """The schema file's warnings (unknown attributes, uses of deprecated types, cases without a
+        schema-based JSON form), then `missing-codec` for the codecs it was built with."""
+        return self.file.warnings + self.codec_warnings
+
+
+PROFILED_TYPES: Mapping[str, tuple[str, ...]] = {
+    "@haus-fmt/money@1#Currency": ("iso",),
+    "@haus-fmt/geo@1#LatLng": ("wgs84",),
+    "@haus-fmt/geo@1#BBox": ("wgs84",),
+}
+"""The types official profiles have a rule for, by id, with the profiles (spec §13.4). `iso`'s rule for
+`Money` is its currency's, so `Currency` stands for it. A build reads only a package's `package.haus` and
+`schema.haus`, so the binding keeps this table itself."""
+
+
+def missing_codecs(file: SchemaFile, codecs: Iterable[str]) -> tuple[SchemaWarning, ...]:
+    """`missing-codec` (spec §13.4): the types of `PROFILED_TYPES` that the file's own definitions reach
+    without a codec in `codecs` (ids), once per id, sorted by id, at no place (`line` 0). A type reached
+    only inside a type that has a codec doesn't count: that codec decides which values it holds (a codec
+    for `Money` covers its `Currency`)."""
+    coded = set(codecs)
+    missing: set[str] = set()
+    seen: set[int] = set()
+    stack: list[Type] = [inst.body for d in file.definitions if (inst := file.instances.get(d.name)) is not None]
+    # An explicit stack: types nest as deep as schema files allow, and instances form cycles.
+    while stack:
+        t = stack.pop()
+        if id(t) in seen:
+            continue
+        seen.add(id(t))
+        match t:
+            case RefType(inst):
+                if id(inst) in seen:
+                    continue
+                seen.add(id(inst))
+                type_id = inst.definition.id
+                if not inst.args and type_id in coded:
+                    continue
+                if not inst.args and type_id in PROFILED_TYPES:
+                    missing.add(type_id)
+                stack.append(inst.body)
+            case ArrayType(item) | MaybeType(item) | SecretType(item):
+                stack.append(item)
+            case MapType(value):
+                stack.append(value)
+            case RecordType(fields):
+                stack.extend(f.type for f in fields)
+            case VariantType(cases):
+                for c in cases:
+                    match c.payload:
+                        case RecordPayload(record):
+                            stack.append(record)
+                        case PositionalPayload(items):
+                            stack.extend(items)
+                        case NoPayload():
+                            pass
+            case _:
+                pass
+    return tuple(missing_codec(i) for i in sorted(missing))
+
+
+def missing_codec(type_id: str) -> SchemaWarning:
+    """The `missing-codec` warning for a type of `PROFILED_TYPES` that has no codec."""
+    profiles = ", ".join(PROFILED_TYPES[type_id])
+    message = (
+        f"{type_id} has profiles ({profiles}), but no codec is set for it: its values are checked for their shape only"
+    )
+    return SchemaWarning("missing-codec", message, 0, 0, 0, 0)
 
 
 def from_schema_file(file: SchemaFile, *, codecs: Mapping[str, Codec] | None = None) -> Schema:
     """The decoders of a checked schema file. `codecs` choose host types by type id (spec §13.4).
 
     A codec for a type the schema doesn't have is a `ValueError`, unless it is in a `CodecGroup`.
+    A type an official profile has a rule for that the file's definitions reach without its codec
+    gets a `missing-codec` warning in `Schema.warnings` (`missing_codecs`).
     """
     builder = _decode.Builder(codecs or {})
     types: dict[str, SchemaType] = {}
@@ -309,7 +384,7 @@ def from_schema_file(file: SchemaFile, *, codecs: Mapping[str, Codec] | None = N
             types[name] = SchemaType(name, inst.definition.id, inst.stream, builder.ref(inst))
     if unused := set(builder.codecs) - builder.used - optional_codecs(builder.codecs):
         raise ValueError(f"codecs for {', '.join(sorted(unused))}, but the schema has no such type")
-    return Schema(file, types)
+    return Schema(file, types, missing_codecs(file, builder.codecs))
 
 
 def compile_schema(

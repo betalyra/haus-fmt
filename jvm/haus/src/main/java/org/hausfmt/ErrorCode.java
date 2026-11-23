@@ -234,7 +234,9 @@ public enum ErrorCode {
   /** {@code unlisted-field}: A hint: a field an open record doesn't list. A reader ignores it, but it may be a typo. Reported at: The field: `$.nmae`. Never inside a `Secret` (§14). */
   UNLISTED_FIELD("unlisted-field", ErrorCategory.HINTS, "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."),
   /** {@code unlisted-tag}: A hint: a tag an open variant doesn't list. A reader keeps it as an unknown value, but it may be a typo. Reported at: The variant. Never inside a `Secret` (§14). */
-  UNLISTED_TAG("unlisted-tag", ErrorCategory.HINTS, "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers.");
+  UNLISTED_TAG("unlisted-tag", ErrorCategory.HINTS, "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."),
+  /** {@code missing-codec}: A warning: the schema reaches a type that an official profile has a rule for (`&#64;haus-fmt/money&#64;1#Currency`, `&#64;haus-fmt/geo&#64;1#LatLng`, `&#64;haus-fmt/geo&#64;1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package. */
+  MISSING_CODEC("missing-codec", ErrorCategory.HINTS, "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.");
 
   private final String code;
   private final ErrorCategory category;
