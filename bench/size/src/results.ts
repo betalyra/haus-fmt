@@ -137,7 +137,7 @@ export const Machine = Schema.Struct({
   cores: Schema.Finite,
   memory_gb: Schema.Finite,
   os: Schema.String,
-  /** `node v26.13.1`, `bun 1.4.0`, `rustc 1.99.0 (…)`, `go1.27.4`, `java 25.0.1+8-LTS (…)`. */
+  /** `node v26.13.1`, `bun 1.4.0`, `rustc 1.99.0 (…)`, `go1.27.4`, `java 25.0.1+8-LTS (…)`, `zig 0.17.1 (fast)`. */
   runtime: Schema.String,
   /** Garbage collected before each task (false where there is no collector: Rust; Go's testing collects before each run, JMH between iterations). */
   gc: Schema.Boolean,
@@ -145,7 +145,7 @@ export const Machine = Schema.Struct({
 export type Machine = typeof Machine.Type
 
 /** The languages with a speed benchmark (bench/speed/<lang>/), in report order. */
-export const LANGS = ["typescript", "rust", "go", "python", "jvm"] as const
+export const LANGS = ["typescript", "rust", "go", "python", "jvm", "zig"] as const
 export const Lang = Schema.Literals(LANGS)
 export type Lang = typeof Lang.Type
 
@@ -153,7 +153,8 @@ export type Lang = typeof Lang.Type
  * One language's speed results on one source, the same shape for every
  * language: speed-typescript.json (bench/speed/ts), speed-rust.json
  * (bench/speed/rust), speed-go.json (bench/speed/go), speed-python.json
- * (bench/speed/py), speed-jvm.json (bench/speed/jvm).
+ * (bench/speed/py), speed-jvm.json (bench/speed/jvm), speed-zig.json
+ * (bench/speed/zig).
  */
 export const SpeedOut = Schema.Struct({
   lang: Lang,
@@ -217,7 +218,7 @@ export interface ResultsFile<S extends Schema.Codec<any, any>> {
 
 export const CORPUS = { file: "corpus.json", schema: CorpusOut } as const satisfies ResultsFile<typeof CorpusOut>
 export const TOKENS = { file: "tokens.json", schema: TokensOut } as const satisfies ResultsFile<typeof TokensOut>
-/** A language's speed results: `speed-typescript.json`, `speed-rust.json`, `speed-go.json`, `speed-python.json`, `speed-jvm.json`. */
+/** A language's speed results: `speed-typescript.json`, `speed-rust.json`, `speed-go.json`, `speed-python.json`, `speed-jvm.json`, `speed-zig.json`. */
 export const speedFile = (lang: Lang) => ({ file: `speed-${lang}.json`, schema: SpeedOut, indent: 2 }) as const satisfies ResultsFile<typeof SpeedOut>
 export const COMPRESSION = { file: "compression.json", schema: CompressionOut, indent: 2 } as const satisfies ResultsFile<typeof CompressionOut>
 

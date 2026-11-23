@@ -658,8 +658,14 @@ const Ctx = struct {
         // Which listed fields are present.
         const present = try c.arena.alloc(i32, rec.fields.len);
         @memset(present, -1);
-        for (data, 0..) |f, i| {
-            if (rec.index.get(f.key)) |k| present[k] = @intCast(i);
+        // Each field's place in the type (-1: not listed), looked up once.
+        const slots = try c.arena.alloc(i32, data.len);
+        for (data, slots, 0..) |f, *slot, i| {
+            slot.* = -1;
+            if (rec.index.get(f.key)) |k| {
+                present[k] = @intCast(i);
+                slot.* = @intCast(k);
+            }
         }
         for (rec.fields, 0..) |f, k| {
             if (!f.optional and present[k] < 0) {
@@ -669,10 +675,10 @@ const Ctx = struct {
         }
         var out: std.ArrayList(Decoded.Entry) = .empty;
         try out.ensureTotalCapacity(c.arena, rec.fields.len);
-        for (data) |f| {
+        for (data, slots) |f, slot| {
             const p = path.key(f.key);
-            if (rec.index.get(f.key)) |k| {
-                const field = rec.fields[k];
+            if (slot >= 0) {
+                const field = rec.fields[@intCast(slot)];
                 if (field.deprecated != null) try c.hint(.deprecated, &p);
                 const d = try c.decode(field.type, field.env orelse env, f.value, &p);
                 out.appendAssumeCapacity(.{ .key = f.key, .value = d });
@@ -761,6 +767,16 @@ pub fn decode(arena: Allocator, def: *const Def, val: Value, options: DecodeOpti
     try checkDepth(&c, val, options.limits, base);
     const d = try c.decode(def.body, null, val, base);
     // The definition's own codec (§13.4), as where its name is used.
+    return if (def.params.len == 0 and !def.stream) c.withCodec(def.id, d, base) else d;
+}
+
+/// `decode` of a value already known to be within the depth limit, which
+/// is at most the supported depth.
+fn decodeWithin(arena: Allocator, def: *const Def, val: Value, options: DecodeOptions) Error!Decoded {
+    std.debug.assert(options.limits.max_depth <= v.Limits.supported_depth);
+    var c: Ctx = .{ .arena = arena, .diag = options.diagnostic, .hints = options.hints, .codecs = options.codecs };
+    const base = options.base orelse &Path.root;
+    const d = try c.decode(def.body, null, val, base);
     return if (def.params.len == 0 and !def.stream) c.withCodec(def.id, d, base) else d;
 }
 
@@ -956,10 +972,15 @@ pub const EncodeOptions = struct {
 pub fn encode(arena: Allocator, def: *const Def, d: Decoded, options: EncodeOptions) Error!Value {
     const val = try valueAt(arena, d, options.diagnostic, &Path.root);
     // The limits of values built in code (§9 item 8): checked as written.
-    var sink: std.ArrayList(u8) = .empty;
-    try canonical.appendChecked(arena, &sink, val, .{ .limits = options.limits, .diagnostic = options.diagnostic }, null);
+    try canonical.checkWritable(arena, val, .{ .limits = options.limits, .diagnostic = options.diagnostic });
     var inner: Diagnostic = .{};
-    _ = decode(arena, def, val, .{ .diagnostic = &inner, .limits = options.limits, .codecs = options.codecs }) catch |e| switch (e) {
+    // `checkWritable` has checked the depth limit as `decode` does: within
+    // the supported depth, `decode` needn't walk the value for it again.
+    const decoded = if (options.limits.max_depth <= v.Limits.supported_depth)
+        decodeWithin(arena, def, val, .{ .diagnostic = &inner, .limits = options.limits, .codecs = options.codecs })
+    else
+        decode(arena, def, val, .{ .diagnostic = &inner, .limits = options.limits, .codecs = options.codecs });
+    _ = decoded catch |e| switch (e) {
         error.Haus => {
             if (options.diagnostic) |dg| {
                 if (inner.code == .@"invalid-secret") {
@@ -1072,7 +1093,9 @@ pub fn decodeText(gpa: Allocator, arena: Allocator, def: *const Def, text: []con
         }
         return error.Haus;
     }
-    return decode(arena, def, parsed.value[0], .{ .diagnostic = options.diagnostic, .hints = options.hints, .limits = options.limits, .codecs = options.codecs });
+    // The parser has checked the depth limit (at most the supported depth,
+    // or it would have failed), counting levels as `decode` does.
+    return decodeWithin(arena, def, parsed.value[0], .{ .diagnostic = options.diagnostic, .hints = options.hints, .limits = options.limits, .codecs = options.codecs });
 }
 
 /// Encodes what `decodeText` gave: an array of the items' values for a

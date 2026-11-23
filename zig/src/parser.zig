@@ -36,13 +36,23 @@ pub const Syntax = struct {
 
 const bom = "\xEF\xBB\xBF";
 
-/// One node of the trie that finds duplicate keys in linear time (spec §7):
-/// children are a list of siblings, at most 256 long.
+/// One node of the trie that finds duplicate keys in linear time (spec §7),
+/// a radix trie: each edge is labelled with a part of a key (a slice of a
+/// key the record already has), its children are a list of siblings whose
+/// labels start with different bytes, so at most 256 long. Every step down
+/// consumes at least one byte of the key.
 const TrieNode = struct {
+    label: [*]const u8 = undefined,
+    label_len: u32 = 0,
+    /// The label's first byte, kept here for the walk along the siblings.
+    first: u8 = 0,
     child: u32 = 0,
     sibling: u32 = 0,
-    byte: u8 = 0,
     terminal: bool = false,
+
+    fn labelSlice(n: TrieNode) []const u8 {
+        return n.label[0..n.label_len];
+    }
 };
 
 pub const Parser = struct {
@@ -352,6 +362,9 @@ pub const Parser = struct {
             },
             .ok => |s| {
                 p.pos = s.end;
+                // Most literals are written normalized already (`12`, `-0.5`, `1e-9`).
+                const literal = p.text[start..s.end];
+                if (number.isNormalized(literal)) return p.arena.dupe(u8, literal);
                 var out: std.ArrayList(u8) = .empty;
                 errdefer out.deinit(p.arena);
                 try number.appendNormalized(p.arena, &out, p.text[start..s.end]);
@@ -436,21 +449,46 @@ pub const Parser = struct {
         return p.arena.dupe(Field, p.fields.items[base..]);
     }
 
-    /// Inserts a key into the record's trie; false if it was there.
+    /// Inserts a key into the record's trie; false if it was there. `name`
+    /// must stay where it is while the record is read (the arena's copy):
+    /// the trie's labels are slices of it.
     fn insertKey(p: *Parser, root: u32, name: []const u8) Error!bool {
+        // At most two nodes are added.
+        try p.trie.ensureUnusedCapacity(p.gpa, 2);
+        const nodes = p.trie.items.ptr;
         var node = root;
-        for (name) |b| {
-            var child = p.trie.items[node].child;
-            while (child != 0 and p.trie.items[child].byte != b) child = p.trie.items[child].sibling;
+        var rest = name;
+        while (rest.len > 0) {
+            var child = nodes[node].child;
+            while (child != 0 and nodes[child].first != rest[0]) child = nodes[child].sibling;
             if (child == 0) {
-                child = @intCast(p.trie.items.len);
-                try p.trie.append(p.gpa, .{ .byte = b, .sibling = p.trie.items[node].child });
-                p.trie.items[node].child = child;
+                // No label starts with this byte: the rest of the key is a new leaf.
+                const leaf: u32 = @intCast(p.trie.items.len);
+                p.trie.appendAssumeCapacity(.{ .label = rest.ptr, .label_len = @intCast(rest.len), .first = rest[0], .sibling = nodes[node].child, .terminal = true });
+                nodes[node].child = leaf;
+                return true;
+            }
+            const label = nodes[child].labelSlice();
+            const common = std.mem.indexOfDiff(u8, label, rest) orelse label.len;
+            if (common < label.len) {
+                // The key leaves the label after `common` bytes (at least
+                // one): split the edge there, the old node below.
+                const lower: u32 = @intCast(p.trie.items.len);
+                var tail = nodes[child];
+                tail.label += common;
+                tail.label_len -= @intCast(common);
+                tail.first = tail.label[0];
+                tail.sibling = 0;
+                p.trie.appendAssumeCapacity(tail);
+                nodes[child].label_len = @intCast(common);
+                nodes[child].child = lower;
+                nodes[child].terminal = false;
             }
             node = child;
+            rest = rest[common..];
         }
-        if (p.trie.items[node].terminal) return false;
-        p.trie.items[node].terminal = true;
+        if (nodes[node].terminal) return false;
+        nodes[node].terminal = true;
         return true;
     }
 
@@ -557,32 +595,63 @@ pub const Parser = struct {
         };
     }
 
-    /// `"…"`.
+    /// `"…"`. The characters are checked one by one; runs of them are
+    /// copied as they are, and only a string with escapes is built in
+    /// `chars`.
     pub fn basicString(p: *Parser, kind: StringKind) Error![]const u8 {
         const open = p.pos;
-        p.chars.clearRetainingCapacity();
+        const max = p.limits.max_string_length;
         var count: usize = 0;
         var i = open + 1;
+        // `text[run..i]` is taken as it is; once an escape is met, `chars`
+        // holds what comes before `run`.
+        var run = i;
+        var escaped = false;
         while (true) {
+            // Sixteen printable ASCII characters at a time (no quote,
+            // backslash or control character), while within the limit.
+            while (i + plain_chunk <= p.end and count + plain_chunk <= max and plainAscii(p.text[i..][0..plain_chunk].*)) {
+                i += plain_chunk;
+                count += plain_chunk;
+            }
             if (i >= p.end) return p.fail(.@"unterminated-string", open, "unterminated string", .{});
             const c = p.text[i];
             if (c == '"') break;
             if (c == '\\') {
+                if (!escaped) {
+                    p.chars.clearRetainingCapacity();
+                    escaped = true;
+                }
+                try p.chars.appendSlice(p.gpa, p.text[run..i]);
                 i = try p.escape(i);
+                run = i;
             } else if (c == '\n') {
                 return p.fail(.@"string-line-break", i, "a raw line break in a string: write \\n, or use a block string", .{});
+            } else if (c >= 0x20 and c < 0x7F) {
+                i += 1;
             } else {
                 const d = v.decode(p.text, i);
                 if (v.isControl(d.cp)) return p.fail(.@"control-character", i, "raw control character U+{X:0>4} in a string: write it as an escape", .{d.cp});
                 if (v.isBidi(d.cp)) return p.fail(.@"bidi-control", i, "raw bidirectional control U+{X:0>4} in a string: write it as an escape", .{d.cp});
-                try p.chars.appendSlice(p.gpa, p.text[i .. i + d.len]);
                 i += d.len;
             }
             count += 1;
-            if (count > p.limits.max_string_length) return p.tooLong(kind, open);
+            if (count > max) return p.tooLong(kind, open);
         }
         p.pos = i + 1;
+        if (!escaped) return p.arena.dupe(u8, p.text[run..i]);
+        try p.chars.appendSlice(p.gpa, p.text[run..i]);
         return p.arena.dupe(u8, p.chars.items);
+    }
+
+    const plain_chunk = 16;
+
+    /// Whether every byte is printable ASCII other than `"` and `\`.
+    inline fn plainAscii(chunk: @Vector(plain_chunk, u8)) bool {
+        const printable = (chunk -% @as(@Vector(plain_chunk, u8), @splat(0x20))) < @as(@Vector(plain_chunk, u8), @splat(0x7F - 0x20));
+        const quote = chunk == @as(@Vector(plain_chunk, u8), @splat('"'));
+        const backslash = chunk == @as(@Vector(plain_chunk, u8), @splat('\\'));
+        return @reduce(.And, printable) and !@reduce(.Or, quote) and !@reduce(.Or, backslash);
     }
 
     /// The escape at `text[at]` (a backslash), appended to `chars`;
@@ -739,3 +808,47 @@ pub const Parser = struct {
         return p.arena.dupe(u8, p.chars.items);
     }
 };
+
+test "duplicate keys, whatever their common prefixes" {
+    const root = @import("root.zig");
+    const gpa = std.testing.allocator;
+    const fine = [_][]const u8{
+        "{ abc: 1, ab: 2, a: 3, abd: 4, b: 5, \"\": 6, abcd: 7, x: { ab: 1, abc: 2 }, abce: 8 }",
+        "{ \"key\\u{20}\": 1, key: 2, \"k\": 3, ke: 4 }",
+    };
+    for (fine) |text| {
+        const parsed = try root.parse(gpa, text, .{});
+        parsed.deinit();
+    }
+    const dups = [_][]const u8{ "{ abc: 1, ab: 2, abc: 3 }", "{ ab: 1, abc: 2, ab: 3 }", "{ a: 1, b: 2, \"a\": 3 }", "{ \"\": 1, \"\": 2 }", "{ abcd: 1, abce: 2, abc: 3, abcd: 4 }" };
+    for (dups) |text| {
+        var d: Diagnostic = .{};
+        try std.testing.expectError(error.Haus, root.parse(gpa, text, .{ .diagnostic = &d }));
+        try std.testing.expectEqual(Code.@"duplicate-key", d.code);
+    }
+}
+
+test "strings: runs, escapes and the length limit" {
+    const root = @import("root.zig");
+    const gpa = std.testing.allocator;
+    const parsed = try root.parse(gpa, "[\"0123456789abcdef0123456789\\n\\u{e9}xyz\", \"caf\u{e9} 0123456789abcdef\", \"\\\"\"]", .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("0123456789abcdef0123456789\n\u{e9}xyz", parsed.value.array[0].string);
+    try std.testing.expectEqualStrings("caf\u{e9} 0123456789abcdef", parsed.value.array[1].string);
+    try std.testing.expectEqualStrings("\"", parsed.value.array[2].string);
+    // The limit counts characters exactly, also across runs of sixteen.
+    const text = "\"0123456789abcdef0123456789abcdef\"";
+    for ([_]u32{ 31, 32, 33 }) |max| {
+        var d: Diagnostic = .{};
+        const result = root.parse(gpa, text, .{ .limits = .{ .max_string_length = max }, .diagnostic = &d });
+        if (max < 32) {
+            try std.testing.expectError(error.Haus, result);
+            try std.testing.expectEqual(Code.@"string-too-long", d.code);
+        } else (try result).deinit();
+    }
+    // A control character after a run is found where it is.
+    var d: Diagnostic = .{};
+    try std.testing.expectError(error.Haus, root.parse(gpa, "\"0123456789abcdef01\x01\"", .{ .diagnostic = &d }));
+    try std.testing.expectEqual(Code.@"control-character", d.code);
+    try std.testing.expectEqual(@as(u32, 20), d.column);
+}

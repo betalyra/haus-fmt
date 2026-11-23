@@ -1,0 +1,16 @@
+.{
+    // The Zig speed benchmark: its own package, outside zig/'s build, with
+    // the binding as a path dependency (bench/README.md, "Speed (Zig)").
+    .name = .haus_bench_speed,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.1",
+    .fingerprint = 0x30763613b955dbe,
+    .dependencies = .{
+        .haus = .{ .path = "../../../zig" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
