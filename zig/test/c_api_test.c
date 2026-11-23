@@ -390,7 +390,7 @@ static void test_schema(void) {
     haus_doc_free(p);
     haus_doc_free(b);
 
-    /* Checking: the hints and the error that ends the check. */
+    /* Checking: the hints and the errors. */
     haus_issues *issues = NULL;
     CHECK(haus_check_text(order, S("{ id: 1, placed: Date(\"2026-11-09\"), note: \"x\", lines: [{ sku: \"a\", qty: 1, color: 1 }, { sku: 1, qty: 1 }] }"),
                           &issues, &err) == HAUS_OK);
@@ -401,7 +401,35 @@ static void test_schema(void) {
     CHECK(haus_issues_get(issues, 2, &is) == HAUS_OK && is.is_error && strcmp(is.code, "type-mismatch") == 0);
     CHECK(eq(is.path, is.path_len, "$.lines[1].sku") && is.message_len > 0);
     CHECK(haus_issues_get(issues, 3, &is) == HAUS_INVALID_ARGUMENT);
+    CHECK(haus_issues_stopped(issues) == 0);
     haus_issues_free(issues);
+    /* Every error; nothing inside a Secret but "invalid-secret" at it. */
+    static const char many[] = "{ id: \"1\", lines: [{ sku: 1, qty: 300 }, { sku: \"b\", qty: 1 }, 2], pin: 5, zz: 1 }";
+    CHECK(haus_check_text(order, S(many), &issues, &err) == HAUS_OK);
+    static const char *const want[][2] = {
+        {"missing-field", "$"}, {"type-mismatch", "$.id"}, {"type-mismatch", "$.lines[0].sku"},
+        {"out-of-range", "$.lines[0].qty"}, {"type-mismatch", "$.lines[2]"}, {"invalid-secret", "$.pin"}, {"unknown-field", "$.zz"},
+    };
+    CHECK(haus_issues_count(issues) == 7);
+    for (size_t i = 0; i < 7; i++) {
+        CHECK(haus_issues_get(issues, i, &is) == HAUS_OK && is.is_error && strcmp(is.code, want[i][0]) == 0 && eq(is.path, is.path_len, want[i][1]));
+    }
+    haus_issues_free(issues);
+    /* Stopping at the first error. */
+    CHECK(haus_check_text_first(order, S(many), &issues, &err) == HAUS_OK);
+    CHECK(haus_issues_count(issues) == 1 && haus_issues_get(issues, 0, &is) == HAUS_OK && strcmp(is.code, "missing-field") == 0);
+    haus_issues_free(issues);
+    /* The cap: HAUS_CHECK_MAX_ERRORS errors in one value, and it says so. */
+    {
+        char big[4096];
+        size_t n = 0;
+        n += (size_t)snprintf(big + n, sizeof big - n, "{ id: 1, placed: Date(\"2026-11-09\"), lines: [");
+        for (int i = 0; i < 250; i++) n += (size_t)snprintf(big + n, sizeof big - n, "1, ");
+        n += (size_t)snprintf(big + n, sizeof big - n, "] }");
+        CHECK(haus_check_text(order, big, n, &issues, &err) == HAUS_OK);
+        CHECK(haus_issues_count(issues) == HAUS_CHECK_MAX_ERRORS && haus_issues_stopped(issues) == 1);
+        haus_issues_free(issues);
+    }
     CHECK(haus_check_text(order, S("{ id: 1"), &issues, &err) == HAUS_OK);
     CHECK(haus_issues_count(issues) == 1 && haus_issues_get(issues, 0, &is) == HAUS_OK && is.line == 1 && strcmp(is.code, "unclosed-bracket") == 0);
     haus_issues_free(issues);

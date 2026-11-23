@@ -261,12 +261,22 @@ int haus_decode_text(const haus_type *t, const char *text, size_t len, haus_doc 
 int haus_encode(const haus_type *t, const haus_value *v, haus_doc **out_doc, const haus_value **out, haus_error *err);
 
 /* Checks a text as a tool does (spec §14): the hints ("unlisted-field",
- * "unlisted-tag", "deprecated") and the error that ends the check, if any,
- * in the order of their places. HAUS_OK when the check ran. */
+ * "unlisted-tag", "deprecated") and every error (spec §14, "Every error"),
+ * in the order of their places in the text. A syntax or limit error is the
+ * only issue. Each failing place once; nothing below a value that failed at
+ * its own level; a record reports each missing field ("missing-field" at
+ * the record) and checks every other field; any error inside a Secret is
+ * one "invalid-secret" at the secret, and there are no hints inside one.
+ * The check stops after HAUS_CHECK_MAX_ERRORS errors in one value and then
+ * says so (haus_issues_stopped). HAUS_OK when the check ran. */
+#define HAUS_CHECK_MAX_ERRORS 200
 int haus_check_text(const haus_type *t, const char *text, size_t len, haus_issues **out, haus_error *err);
+/* The same, stopping at the first error: the hints found before it, and
+ * that error (one of those haus_check_text reports). */
+int haus_check_text_first(const haus_type *t, const char *text, size_t len, haus_issues **out, haus_error *err);
 
 typedef struct haus_issue {
-    int is_error;           /* 1: the error that ended the check; 0: a hint */
+    int is_error;           /* 1: an error; 0: a hint */
     const char *code;       /* NUL-terminated */
     const char *path; size_t path_len;
     const char *message; size_t message_len;  /* empty for a hint */
@@ -274,6 +284,9 @@ typedef struct haus_issue {
 } haus_issue;
 
 size_t haus_issues_count(const haus_issues *issues);
+/* 1 when the check stopped at HAUS_CHECK_MAX_ERRORS errors in one value
+ * (the rest of the text was not checked); 0 otherwise. */
+int haus_issues_stopped(const haus_issues *issues);
 int haus_issues_get(const haus_issues *issues, size_t i, haus_issue *out); /* strings borrowed from issues */
 void haus_issues_free(haus_issues *issues);
 

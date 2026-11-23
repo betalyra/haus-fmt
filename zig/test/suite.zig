@@ -651,6 +651,10 @@ fn typedSuite() !void {
     try tally.report();
 }
 
+fn lessString(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
+
 fn checkSuite() !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -674,9 +678,31 @@ fn checkSuite() !void {
             for (get(fields, "warnings").?.array) |w| try want.print(arena, "{s} {s}:{s}; ", .{ w.variant.args[0].string, w.variant.args[1].number, w.variant.args[2].number });
         } else {
             const def = s.get(get(fields, "type").?.string).?;
-            const issues = try haus.decoding.check(gpa, arena, def, get(fields, "data").?.string);
-            for (issues) |i| try got.print(arena, "{s} {s} {s}; ", .{ if (i.kind == .hint) "Hint" else "Error", i.code.name(), i.path });
-            for (get(fields, "issues").?.array) |i| try want.print(arena, "{s} {s} {s}; ", .{ i.variant.tag, i.variant.args[0].string, i.variant.args[1].string });
+            const data = get(fields, "data").?.string;
+            const report = try haus.decoding.checkReport(gpa, arena, def, data, .{});
+            // Which issues, not their order (spec §14, "Every error"):
+            // both lists compared sorted.
+            var got_list: std.ArrayList([]const u8) = .empty;
+            var want_list: std.ArrayList([]const u8) = .empty;
+            for (report.issues) |i| try got_list.append(arena, try std.fmt.allocPrint(arena, "{s} {s} {s}; ", .{ if (i.kind == .hint) "Hint" else "Error", i.code.name(), i.path }));
+            for (get(fields, "issues").?.array) |i| try want_list.append(arena, try std.fmt.allocPrint(arena, "{s} {s} {s}; ", .{ i.variant.tag, i.variant.args[0].string, i.variant.args[1].string }));
+            for ([_]*std.ArrayList([]const u8){ &got_list, &want_list }, [_]*std.ArrayList(u8){ &got, &want }) |list, out| {
+                std.mem.sort([]const u8, list.items, {}, lessString);
+                for (list.items) |item| try out.appendSlice(arena, item);
+            }
+            // The first-error mode: at most one error, there if and only if
+            // there are errors, and every issue one of the full list's.
+            const first = try haus.decoding.checkReport(gpa, arena, def, data, .{ .first = true });
+            var first_errors: usize = 0;
+            var first_ok = !report.stopped;
+            for (first.issues) |i| {
+                first_errors += @intFromBool(i.kind == .err);
+                const line = try std.fmt.allocPrint(arena, "{s} {s} {s}; ", .{ if (i.kind == .hint) "Hint" else "Error", i.code.name(), i.path });
+                if (std.mem.indexOf(u8, got.items, line) == null) first_ok = false;
+            }
+            const has_errors = std.mem.indexOf(u8, got.items, "Error ") != null;
+            if (first_errors != @intFromBool(has_errors)) first_ok = false;
+            if (!first_ok) try got.appendSlice(arena, "(and the first-error mode differs)");
         }
         tally.check(std.mem.eql(u8, got.items, want.items), "{any}: got [{s}], want [{s}]", .{ text, got.items, want.items });
     }
