@@ -3,7 +3,7 @@ title: Install
 description: Editor support for haus, the libraries for your language, and what's coming next.
 ---
 
-import { Tabs, TabItem, LinkCard } from "../website/src/components/docs/starlight";
+import { CardGrid, LinkCard } from "../website/src/components/docs/starlight";
 
 The quickest start needs nothing at all: the [playground](/play) runs in your browser.
 
@@ -31,44 +31,22 @@ Cursor, VSCodium and Windsurf install extensions from Open VSX; haus is coming t
 ## Your language
 
 :::note[Not published yet]
-The libraries arrive on npm, crates.io and PyPI with the first release. Until then, use them from the [repository](https://github.com/betalyra/haus-fmt). The commands below are the ones you'll use then.
+The libraries arrive on npm, crates.io, PyPI and the other registries with the first release. Until then, use them from the [repository](https://github.com/betalyra/haus-fmt). The commands below are the ones you'll use then.
 :::
 
-<Tabs syncKey="lang">
-  <TabItem label="TypeScript">
-    ```sh
-    npm install @haus-fmt/haus
-    ```
-    Parser, writer, streams, schemas, and every [Standard Schema](https://standardschema.dev) library (Zod, Valibot, ArkType). For Effect, add `@haus-fmt/effect`.
-  </TabItem>
-  <TabItem label="Rust">
-    ```sh
-    cargo add haus-fmt
-    ```
-    Imported as `haus`. Add `haus-fmt-build` (imported as `haus_build`) to generate Rust types from your schemas.
-  </TabItem>
-  <TabItem label="Python">
-    ```sh
-    pip install haus-fmt
-    ```
-    The parser, the stream reader, decoding with a schema file (`haus.schema`), JSON and the canonical form.
-  </TabItem>
-  <TabItem label="Roc">
-    A Roc package with decoding, encoding and streams. See the [Roc README](https://github.com/betalyra/haus-fmt/tree/main/roc).
-  </TabItem>
-  <TabItem label="Go">
-    ```sh
-    go get github.com/betalyra/haus-fmt/go
-    ```
-    Imported as `haus`. The parser, formatter, streams, canonical form, JSON, and schemas with checks (package `schema`). See the [Go README](https://github.com/betalyra/haus-fmt/tree/main/go).
-  </TabItem>
-  <TabItem label="Zig">
-    ```sh
-    zig fetch --save=haus https://github.com/betalyra/haus-fmt/releases/download/zig-v0.1.0/haus-zig-0.1.0.tar.gz
-    ```
-    For Zig 0.17. In `build.zig`, import `b.dependency("haus", .{}).module("haus")`. The parser, formatter, streams, canonical form, JSON, schemas with packages, and codecs. It also builds `libhaus` with a C header, `haus.h`, for C and other languages. See the [Zig README](https://github.com/betalyra/haus-fmt/tree/main/zig).
-  </TabItem>
-</Tabs>
+Each page has the install command, a first example, and what the library offers in that language. To compare them: [Languages](/docs/languages).
+
+<CardGrid>
+  <LinkCard title="TypeScript" description="npm install @haus-fmt/haus" href="/docs/languages/typescript" />
+  <LinkCard title="Effect" description="npm install @haus-fmt/effect effect" href="/docs/languages/effect" />
+  <LinkCard title="Rust" description="cargo add haus-fmt" href="/docs/languages/rust" />
+  <LinkCard title="Python" description="pip install haus-fmt" href="/docs/languages/python" />
+  <LinkCard title="Go" description="go get github.com/betalyra/haus-fmt/go" href="/docs/languages/go" />
+  <LinkCard title="Swift" description="Swift Package Manager: github.com/betalyra/haus-fmt" href="/docs/languages/swift" />
+  <LinkCard title="Java and Kotlin" description="A Gradle build in jvm/, for the JVM and Android" href="/docs/languages/jvm" />
+  <LinkCard title="Roc" description="The package in roc/package, for the Roc nightly" href="/docs/languages/roc" />
+  <LinkCard title="Zig and C" description="zig fetch a release; libhaus and haus.h for C" href="/docs/languages/zig" />
+</CardGrid>
 
 ## On the command line
 

@@ -1,10 +1,22 @@
 import type { ReactNode } from "react";
-import { PiBirdLight } from "react-icons/pi";
-import { SiEffect, SiGo, SiPython, SiRust, SiTypescript } from "react-icons/si";
+import { PiArrowRightLight, PiBirdLight } from "react-icons/pi";
+import { SiC, SiEffect, SiGo, SiKotlin, SiOpenjdk, SiPython, SiRust, SiSwift, SiTypescript, SiZig } from "react-icons/si";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 /** Language marks for the tabs, by name (an island's props must be serializable). Roc has no mark in the set: its bird. */
-const icons = { typescript: SiTypescript, effect: SiEffect, rust: SiRust, python: SiPython, go: SiGo, roc: PiBirdLight } as const;
+const icons = {
+  typescript: SiTypescript,
+  effect: SiEffect,
+  rust: SiRust,
+  python: SiPython,
+  go: SiGo,
+  swift: SiSwift,
+  java: SiOpenjdk,
+  kotlin: SiKotlin,
+  roc: PiBirdLight,
+  zig: SiZig,
+  c: SiC,
+} as const;
 
 export interface Tab {
   /** Also the name of the Astro slot holding this tab's pre-highlighted code. */
@@ -12,6 +24,8 @@ export interface Tab {
   label: string;
   caption?: string;
   icon?: keyof typeof icons;
+  /** A page to read more, shown after the caption: its link text and address. */
+  more?: { label: string; href: string };
 }
 
 type Props = { tabs: Tab[] } & Record<string, ReactNode | Tab[]>;
@@ -25,7 +39,7 @@ const panel =
 export default function CodeTabs({ tabs, ...slots }: Props) {
   return (
     <Tabs defaultValue={tabs[0].value} className="min-w-0 gap-4">
-      <TabsList variant="line" className="h-auto gap-5 p-0">
+      <TabsList variant="line" className="h-auto flex-wrap justify-start gap-x-5 gap-y-2 p-0 group-data-horizontal/tabs:h-auto">
         {tabs.map((t) => {
           const Icon = t.icon && icons[t.icon];
           return (
@@ -40,7 +54,20 @@ export default function CodeTabs({ tabs, ...slots }: Props) {
         {tabs.map((t) => (
           <TabsContent key={t.value} value={t.value} forceMount className={panel}>
             {slots[t.value] as ReactNode}
-            {t.caption && <p className="mt-4 text-[0.92rem] text-ink-3">{t.caption}</p>}
+            {(t.caption || t.more) && (
+              <p className="mt-4 text-[0.92rem] text-ink-3">
+                {t.caption}
+                {t.more && (
+                  <>
+                    {t.caption && " "}
+                    <a href={t.more.href} className="prose-link inline-flex items-center gap-1 whitespace-nowrap text-ink">
+                      {t.more.label}
+                      <PiArrowRightLight aria-hidden="true" className="size-[0.9em]" />
+                    </a>
+                  </>
+                )}
+              </p>
+            )}
           </TabsContent>
         ))}
       </div>

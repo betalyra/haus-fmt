@@ -6,6 +6,7 @@ export const links = {
   docs: "/docs",
   tour: "/docs/tour",
   install: "/docs/install",
+  languages: "/docs/languages",
   play: "/play",
   tools: "/tools",
   quickstart: "/docs/install",

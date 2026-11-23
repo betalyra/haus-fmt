@@ -25,7 +25,7 @@ In VS Code, rust-analyzer needs the build scripts to have run. If it reports
 ## Checking data at runtime
 
 ```rust
-let schema = haus_schema::Schema::load("order.schema.haus", &haus_schema::FileResolver::new())?;
+let schema = haus_schema::Schema::load("order.schema.haus", &haus_schema::NoImports)?;
 for issue in schema.check_text("Root", &text) {                  // every problem, with positions and hints
     let at = issue.position.unwrap();
     println!("{}:{}: {} {}", at.line, at.column, issue.severity, issue);

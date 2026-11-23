@@ -45,7 +45,7 @@ The proofs use only Lean's standard axioms.
 
 ## The same everywhere
 
-A proof about the reference parser only helps you if the library you use behaves the same way. haus has bindings for TypeScript (with an adapter for Effect), Rust, Python, Go, Zig (with a C ABI) and Roc. Two things keep them in line with the reference and with each other. The Zig binding is written from the specification and the suite alone, without reading the other bindings' code, so it also checks that the specification says enough.
+A proof about the reference parser only helps you if the library you use behaves the same way. haus has [bindings](/docs/languages) for TypeScript (with an adapter for Effect), Rust, Python, Go, Swift, Java and Kotlin, Zig (with a C ABI) and Roc. Two things keep them in line with the reference and with each other. The Zig binding is written from the specification and the suite alone, without reading the other bindings' code, so it also checks that the specification says enough.
 
 ### One conformance suite
 
