@@ -119,6 +119,7 @@ export default defineConfig({
             { label: 'Design and FAQ', slug: 'docs/design' },
             { label: 'Why you can trust haus', slug: 'docs/trust' },
             { label: 'Where types come from', slug: 'docs/types' },
+            { label: 'What haus checks', slug: 'docs/checks' },
             { label: 'Error codes', slug: 'docs/errors' },
             { label: 'Specification', slug: 'docs/spec' },
             { label: 'std/time', slug: 'docs/spec/time' },

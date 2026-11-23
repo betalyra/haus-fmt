@@ -7,8 +7,8 @@ language-neutral package:
 |---|---|
 | `package.haus` | The manifest: name and version. They make the identity of its types, the same in every language: `@haus-fmt/money@1#Money`. |
 | `schema.haus` | The schema, the package's one schema file. Shape only, like every haus schema. |
-| `profiles/<name>.md` | A profile's rule: what a codec implementing it accepts, beyond the shape (spec §13.3). |
-| `profiles/<name>.vectors.haus` | The profile's test vectors: examples of the rule that every codec must pass. |
+| `profiles/<name>.md` | A profile's rule: a definition of the package's types, beyond the shape, which defines what a codec implementing it accepts (spec §13.3). |
+| `profiles/<name>.vectors.haus` | The profile's test vectors: examples of the rule that every codec must pass. They test the rule and don't define it. |
 
 The same schema is published for each language from this one source: the
 `package.json` publishes it to npm, the `Cargo.toml` makes it a crate (its

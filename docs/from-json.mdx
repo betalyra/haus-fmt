@@ -104,6 +104,26 @@ Not any more. Three flags become **one variant**, and the time moves inside `Shi
 | one array per file | a stream: one value per entry |
 | no comments | `//` and `/* */` |
 | a password is just a string | `Secret String` in the schema keeps it out of logs ([tour](/docs/tours/secrets)) |
+| `1794129120000` (milliseconds since 1970) | `Instant("2026-11-08T09:12:00Z")`, or a tagged `Int64` (below) |
+
+## Timestamps as numbers
+
+Many JSON APIs send a time as a number: `"shippedAt": 1794129120000`, milliseconds since 1970. You have two ways to bring it over:
+
+- **Convert it to an `Instant`** where the data enters your system. `Instant("2026-11-08T09:12:00Z")` says what it is, every schema binding checks it, and the conversion is exact.
+- **Keep the number** as an `Int64`, and name its unit with a tag of your own, so that no reader takes milliseconds for seconds:
+
+```haus-schema
+type EpochMillis = closed < EpochMillis Int64 >
+
+type Order = { id: UInt64, shippedAt: EpochMillis }
+```
+
+```haus
+{ id: 1042, shippedAt: EpochMillis(1794129120000) }
+```
+
+`std/time` has no epoch type on purpose: such a number has no rule beyond the range of an `Int64`, and an `Instant` already holds the same moment. In code, a [codec](/docs/spec#134-codecs) can give either one as your language's time type.
 
 Next: the [tour](/docs/tour) shows what you can build with variants.
 
