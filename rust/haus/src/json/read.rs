@@ -241,7 +241,7 @@ impl Reader<'_> {
             ));
         }
         if let Some(exp) = exponent.map(|e| e.trim_start_matches('0'))
-            && (exp.len() > 19 || exp.parse::<u64>().unwrap_or(0) > self.limits.max_exponent)
+            && self.limits.exponent_exceeds(exp)
         {
             return Err(self.fail_at(
                 start,

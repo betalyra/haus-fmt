@@ -38,6 +38,9 @@ import org.hausfmt.Value;
  * jvm-runner --schema-check FILE                                  schema files, as Schema.parse reads them
  * jvm-runner --time FILE                                          StdTime.check (TimeMode)
  * jvm-runner --profile FILE                                       the codecs of ext.money and ext.geo (ProfileMode)
+ * jvm-runner --build FILE                                         values built in code, then written (ApiModes)
+ * jvm-runner --imports FILE                                       relative imports, Schema.load on file trees (ApiModes)
+ * jvm-runner --strings FILE                                       the APIs that take a String (ApiModes)
  * </pre>
  *
  * <p>The modes with DIR N read DIR/00000.haus … DIR/{N-1}.haus; --json, --time and --profile read
@@ -63,7 +66,8 @@ import org.hausfmt.Value;
 public final class Runner {
   private static final String USAGE =
       "usage: jvm-runner [--stream | --canonical | --format STYLE [--indent N] [--width N] | --write STYLE [--indent N] [--width N]] DIR N"
-          + " | --json MODE FILE | --time FILE | --profile FILE | --schema FILE | --schema-check FILE";
+          + " | --json MODE FILE | --time FILE | --profile FILE | --schema FILE | --schema-check FILE"
+          + " | --build FILE | --imports FILE | --strings FILE";
   private static final int[] CHUNKS = {1, 2, 3, 5, 8, 13, 64};
 
   private Runner() {}
@@ -99,6 +103,18 @@ public final class Runner {
     }
     if (args[0].equals("--profile") && args.length == 2) {
       perLine(Paths.get(args[1]), ProfileMode.lines(), out);
+      return;
+    }
+    if (args.length == 2 && args[0].equals("--build")) {
+      perLine(Paths.get(args[1]), ApiModes::buildLine, out);
+      return;
+    }
+    if (args.length == 2 && args[0].equals("--imports")) {
+      perLine(Paths.get(args[1]), ApiModes::importLine, out);
+      return;
+    }
+    if (args.length == 2 && args[0].equals("--strings")) {
+      perLine(Paths.get(args[1]), ApiModes::stringsLine, out);
       return;
     }
     if (args.length == 2 && (args[0].equals("--schema") || args[0].equals("--schema-check"))) {

@@ -129,6 +129,10 @@ class Limits:
 
 DEFAULT_LIMITS = Limits()
 
+UNLIMITED = Limits(max_number_length=1 << 62, max_exponent=1 << 62)
+"""Limits that let `normalize_number` read any literal: for `Number`, which has none (spec §11).
+A parser with these very limits reads an exponent of any size, also beyond `max_exponent`."""
+
 
 _PRECISE = Context(prec=60)
 _LOG16_10 = _PRECISE.divide(Decimal(10).ln(_PRECISE), Decimal(16).ln(_PRECISE))
@@ -777,7 +781,8 @@ class Parser:
             n = int(m[1].replace("_", ""), radix)
             # The sign stays, also on zero: `-0x0` is `-0`, as `-0` is (spec §2).
             return number_unchecked(("-" if src[start] == "-" else "") + _decimal_text(n))
-        if (e := LITERAL_EXPONENT.search(m[0])) and _exceeds(e[1], self.limits.max_exponent):
+        e = LITERAL_EXPONENT.search(m[0])
+        if e and self.limits is not UNLIMITED and _exceeds(e[1], self.limits.max_exponent):
             self._fail("exponent-too-large", f"exponent larger than {self.limits.max_exponent}", start)
         return number_unchecked(_normalize_exponent(m[0].replace("_", "").replace("E", "e")))
 

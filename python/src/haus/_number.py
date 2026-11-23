@@ -11,16 +11,15 @@ import re
 from decimal import Decimal
 
 from ._error_codes import ErrorCode
-from ._parser import DEFAULT_LIMITS, Limits, Parser
+from ._parser import DEFAULT_LIMITS, UNLIMITED, Limits, Parser
 from ._scan import NORMALIZED_NUMBER
+
+__all__ = ["INTEGER", "UNLIMITED", "int_text", "normalize_number", "number_limit_issue", "to_int"]
 
 INTEGER = re.compile(r"-?[0-9]+")
 """A normalized literal that is a whole number: digits with an optional `-` (`-0` included)."""
 
 _EXPONENT = re.compile(r"e-?([0-9]+)$")
-
-UNLIMITED = Limits(max_number_length=1 << 62, max_exponent=1 << 62)
-"""Limits that let `normalize_number` read any literal: for `Number`, which has none (spec §11)."""
 
 
 def normalize_number(text: str, limits: Limits = DEFAULT_LIMITS) -> str | None:

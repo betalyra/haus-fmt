@@ -7,6 +7,9 @@
  *   node fuzz/src/main.ts --json [--count N] [--seed S] [--modes …] [--runners …]   the JSON mappings (json.ts)
  *   node fuzz/src/main.ts --format [--count N] [--seed S]   the formatters and value writers (format.ts)
  *   node fuzz/src/main.ts --schema-check [--count N] [--seed S] [--runners …]   the schema-file checkers (schema-check.ts)
+ *   node fuzz/src/main.ts --build [--count N] [--seed S] [--runners …]   values built in code (build.ts)
+ *   node fuzz/src/main.ts --imports [--count N] [--seed S] [--runners …]   relative imports on real file trees (imports.ts)
+ *   node fuzz/src/main.ts --strings [--count N] [--seed S] [--runners …]   the string APIs, lone surrogates (strings.ts)
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -17,6 +20,9 @@ import { run as runFormat } from "./format.ts"
 import { run as runJson } from "./json.ts"
 import { run as runSchema } from "./schema.ts"
 import { run as runSchemaCheck } from "./schema-check.ts"
+import { run as runBuild } from "./build.ts"
+import { run as runImports } from "./imports.ts"
+import { run as runStrings } from "./strings.ts"
 
 const { values: args } = parseArgs({
   options: {
@@ -33,13 +39,18 @@ const { values: args } = parseArgs({
     format: { type: "boolean", default: false },
     // The schema-file checkers instead (schema-check.ts).
     "schema-check": { type: "boolean", default: false },
+    // Values built in code (build.ts), relative imports (imports.ts), the string APIs (strings.ts) instead.
+    build: { type: "boolean", default: false },
+    imports: { type: "boolean", default: false },
+    strings: { type: "boolean", default: false },
     modes: { type: "string" },
     runners: { type: "string" },
     batch: { type: "string" },
   },
 })
 if (args.canonical) useCanonical()
-if (args.runners && !args.schema && !args.json && !args.format && !args["schema-check"]) selectRunners(args.runners.split(","))
+const otherMode = args.schema || args.json || args.format || args["schema-check"] || args.build || args.imports || args.strings
+if (args.runners && !otherMode) selectRunners(args.runners.split(","))
 const runners = activeRunners()
 const count = Number(args.count)
 const seed = Number(args.seed)
@@ -108,6 +119,9 @@ if (args.schema) process.exitCode = await runSchema(process.argv.slice(2))
 else if (args.json) process.exitCode = await runJson(process.argv.slice(2))
 else if (args.format) process.exitCode = await runFormat(process.argv.slice(2))
 else if (args["schema-check"]) process.exitCode = await runSchemaCheck(process.argv.slice(2))
+else if (args.build) process.exitCode = await runBuild(process.argv.slice(2))
+else if (args.imports) process.exitCode = await runImports(process.argv.slice(2))
+else if (args.strings) process.exitCode = await runStrings(process.argv.slice(2))
 else runParsers()
 
 function runParsers() {

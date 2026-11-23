@@ -58,6 +58,8 @@ import Lean.Data.Json
     haus-ref --packages FILE [CASE]      run the package suite FILE (test-suite/packages/cases.haus,
                                   spec §13.3) with the reference resolver, or only the case
                                   CASE, printing its result and the files it read
+    haus-ref --packages-batch FILE       the import fuzzer: each case of FILE (that format, `expect`
+                                  ignored) as `ok [packages]`, `err <code>` or `skip <why>`
     haus-ref --stream-suite DIR          run the stream suite DIR/limits.cases.haus (spec §6, §7)
                                   with the reference stream reader, each case whole, one
                                   character at a time and split at every position, and
@@ -805,6 +807,27 @@ def runPackages (file : System.FilePath) (only : Option String) : IO UInt32 := d
   IO.println s!"{count - failed}/{count} passed"
   return if failed == 0 then 0 else 1
 
+/--
+`--packages-batch FILE`: the import fuzzer (`fuzz/src/imports.ts`). FILE holds
+cases in the package suite's format (their `expect` is ignored); for each
+one line: `ok` and the packages reached, `err CODE`, `skip` and why the
+reference can't run it, or `bad` and why the case can't be read.
+-/
+def runPackagesBatch (file : System.FilePath) : IO UInt32 := do
+  let vs ← match parseBytes (← IO.FS.readBinFile file) with
+    | .ok vs => pure vs
+    | .error e => IO.eprintln s!"{file}: {e}"; return 2
+  let out ← IO.getStdout
+  for v in vs do
+    match Packages.Suite.decode v with
+    | .error e => out.putStrLn s!"bad {(e.replace "\n" " ")}"
+    | .ok c =>
+      if let some why := c.unmodelled then out.putStrLn s!"skip {why}"
+      else match (Packages.resolveIn c.tree { mode := c.mode, root := c.rootDir } c.root).result with
+        | .ok ps => out.putStrLn s!"ok {ps}"
+        | .error e => out.putStrLn s!"err {e.code.name}"
+  return 0
+
 /-! ## Profiles (spec §13.3) -/
 
 /-- `--profile NAME FILE`: every vector of FILE, with the reference checker of the profile NAME. -/
@@ -1371,6 +1394,7 @@ def main : List String → IO UInt32
   | ["--profile-batch", name, file] => runProfileBatch name file
   | ["--packages", file] => runPackages file none
   | ["--packages", file, name] => runPackages file (some name)
+  | ["--packages-batch", file] => runPackagesBatch file
   | ["--suite", dir] => runSuite dir
   | ["--batch", dir, n] => runBatch batchLine dir n.toNat!
   | ["--canonical-batch", dir, n] => runBatch canonicalLine dir n.toNat!
@@ -1423,4 +1447,4 @@ def main : List String → IO UInt32
       match parseBytes (← IO.FS.readBinFile file) with
       | .ok vs => IO.print (String.ofList (Haus.JSON.writeHausJsonLines vs)); return 0
       | .error e => IO.eprintln s!"error: {e}"; return 1
-  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE | --format-suite DIR | --format-batch STYLE INDENT WIDTH DIR N"; return 2
+  | _ => do IO.eprintln "usage: haus-ref FILE | --document FILE | --suite DIR | --batch DIR N | --canonical FILE | --compact FILE | --minimised FILE | --pretty FILE [INDENT WIDTH] | --canonical-batch DIR N | --write-batch LAYOUT DIR N | --time TYPE TEXT | --time-batch FILE | --schema-suite DIR [TYPES] | --schema-batch TYPES FILE | --json-suite DIR [TYPES] | --json-batch TYPES FILE | --json-read-batch TYPES FILE | --haus-json-batch FILE | --haus-json-read-batch FILE | --import-batch FILE | --schema-check-batch FILE | --packages FILE [CASE] | --packages-batch FILE | --profile NAME FILE | --profile-batch NAME FILE | --stream-suite DIR | --positions FILE | --equality FILE | --format-options FILE | --format-suite DIR | --format-batch STYLE INDENT WIDTH DIR N"; return 2

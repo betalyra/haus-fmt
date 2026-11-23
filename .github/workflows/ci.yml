@@ -587,6 +587,7 @@ jobs:
               fuzz/schema-rust/target/release/schema_runner fuzz/schema-rust/target/release/json_runner
               fuzz/schema-rust/target/release/check_runner fuzz/schema-rust/target/release/profile_runner
               fuzz/schema-rust/target/release/schema_check_runner
+              fuzz/schema-rust/target/release/build_runner fuzz/schema-rust/target/release/import_runner
           - part: typescript
             files: >-
               typescript/packages/haus/dist typescript/packages/effect/dist typescript/packages/import/dist
@@ -691,6 +692,12 @@ jobs:
           - { mode: format, run: "node fuzz/src/main.ts --format", pr: 5000, nightly: 100000 }
           # Schema files through every binding's schema-file checker (Roc has none of its own).
           - { mode: schema-check, run: "node fuzz/src/main.ts --schema-check", pr: 20000, nightly: 500000 }
+          # Values built with each binding's constructors, then written (spec §11 "Values built in code").
+          - { mode: build, run: "node fuzz/src/main.ts --build", pr: 50000, nightly: 1000000 }
+          # Relative imports on file trees with links, through every binding's schema loader (Unix).
+          - { mode: imports, run: "node fuzz/src/main.ts --imports", pr: 1500, nightly: 20000 }
+          # Text with lone surrogates through the string APIs of TypeScript, Effect, Python and the JVM.
+          - { mode: strings, run: "node fuzz/src/main.ts --strings", pr: 100000, nightly: 2000000 }
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v10.3.3

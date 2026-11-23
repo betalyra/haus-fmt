@@ -175,6 +175,28 @@ def test_numbers_built_in_code_are_normalized(value: Value, text: str) -> None:
     assert haus.hash(value) == haus.hash(parsed)
 
 
+@pytest.mark.parametrize(
+    ("literal", "text"),
+    [
+        ("3E70955681357760880162", "3e70955681357760880162"),
+        ("1e+99999999999999999999", "1e99999999999999999999"),
+        ("1_0e-0099999999999999999999", "10e-99999999999999999999"),
+    ],
+)
+def test_numbers_built_in_code_have_exponents_of_any_size(literal: str, text: str) -> None:
+    # An exponent past 2^62 is still a literal: the writer has the limit (fuzz round C, F3; it was invalid-number).
+    n = Number(literal)
+    assert haus.canonical(n) == text
+    assert n == Number(text)
+    with pytest.raises(HausEncodeError) as e:
+        haus.stringify(n)
+    assert e.value.code == "exponent-too-large"
+    # A parser with limits of its own keeps them.
+    with pytest.raises(haus.HausSyntaxError) as p:
+        haus.parse(literal, limits=Limits(max_exponent=1 << 62))
+    assert p.value.code == "exponent-too-large"
+
+
 def test_built_values_have_a_canonical_form_hash_and_order() -> None:
     v = Record(
         [
