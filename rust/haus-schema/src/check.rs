@@ -26,6 +26,35 @@ use std::ops::Range;
 pub const MAX_ISSUES: usize = 200;
 const STEPS_PER_VALUE: usize = 16;
 
+/// How to check ([`Schema::check_report`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CheckOptions {
+    /// Stop at the first error (`haus check --first`), with the hints found
+    /// before it. By default every error is reported (spec §14, "Every
+    /// error"), up to [`MAX_ISSUES`] issues.
+    pub first: bool,
+    /// The parser's limits, also the depth limit and the limits raw values
+    /// are checked against.
+    pub limits: Limits,
+}
+
+/// What a check found ([`Schema::check_report`]): the issues, as a set
+/// (which issues is specified, their order is not, spec §14), and whether
+/// it stopped at [`MAX_ISSUES`] with more to report.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CheckReport {
+    pub issues: Vec<Issue>,
+    /// The check stopped at [`MAX_ISSUES`] issues: there are more.
+    pub stopped: bool,
+}
+
+impl CheckReport {
+    /// No errors: the data decodes with the type (hints don't count).
+    pub fn ok(&self) -> bool {
+        self.issues.iter().all(|i| i.severity == Severity::Hint)
+    }
+}
+
 /// How bad an issue is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Severity {
@@ -196,7 +225,42 @@ impl Schema {
     /// `name`: a `Stream` checks each value, any other type expects exactly
     /// one. Errors and hints, without positions.
     pub fn check(&self, name: &str, values: &[Value]) -> Vec<Issue> {
-        self.check_located(name, values, None, &Limits::default())
+        self.check_report(name, values, &CheckOptions::default()).issues
+    }
+
+    /// [`Schema::check`] with options: every error (spec §14, "Every
+    /// error") or only the first, and whether it stopped at [`MAX_ISSUES`].
+    pub fn check_report(&self, name: &str, values: &[Value], options: &CheckOptions) -> CheckReport {
+        self.check_mode(name, values, None, options)
+    }
+
+    /// [`Schema::check_text`] with options: every error (spec §14, "Every
+    /// error") or only the first, and whether it stopped at [`MAX_ISSUES`].
+    /// A syntax or limit error of the text is its only issue.
+    pub fn check_text_report(&self, name: &str, text: &str, options: &CheckOptions) -> CheckReport {
+        let values = match haus::parse_with(text, &options.limits) {
+            Ok(values) => values,
+            Err(e) => {
+                let end = text[e.offset..].chars().next().map_or(e.offset, |c| e.offset + c.len_utf8());
+                let issue = Issue {
+                    span: Some(e.offset..end.max(e.offset)),
+                    position: Some(Position { line: e.line, column: e.column }),
+                    ..Issue::new(Severity::Error, e.code, e.reason, vec![])
+                };
+                return CheckReport { issues: vec![issue], stopped: false };
+            }
+        };
+        let nodes = locate(text).filter(|n| n.len() == values.len());
+        let lines = Lines::new(text);
+        let mut report = self.check_mode(name, &values, nodes.as_deref(), options);
+        for i in &mut report.issues {
+            // No span: the start of the file (an empty file, say).
+            let span = i.span.clone().unwrap_or(0..text.chars().next().map_or(0, char::len_utf8));
+            let (line, column) = lines.position(span.start);
+            i.position = Some(Position { line, column });
+            i.span = Some(span);
+        }
+        report
     }
 
     /// Every problem with the data file `text` as the type `name`, with
@@ -207,36 +271,16 @@ impl Schema {
 
     /// [`Schema::check_text`], parsing with `limits`.
     pub fn check_text_with(&self, name: &str, text: &str, limits: &Limits) -> Vec<Issue> {
-        let values = match haus::parse_with(text, limits) {
-            Ok(values) => values,
-            Err(e) => {
-                let end = text[e.offset..].chars().next().map_or(e.offset, |c| e.offset + c.len_utf8());
-                return vec![Issue {
-                    span: Some(e.offset..end.max(e.offset)),
-                    position: Some(Position { line: e.line, column: e.column }),
-                    ..Issue::new(Severity::Error, e.code, e.reason, vec![])
-                }];
-            }
-        };
-        let nodes = locate(text).filter(|n| n.len() == values.len());
-        let lines = Lines::new(text);
-        let mut issues = self.check_located(name, &values, nodes.as_deref(), limits);
-        for i in &mut issues {
-            // No span: the start of the file (an empty file, say).
-            let span = i.span.clone().unwrap_or(0..text.chars().next().map_or(0, char::len_utf8));
-            let (line, column) = lines.position(span.start);
-            i.position = Some(Position { line, column });
-            i.span = Some(span);
-        }
-        issues
+        self.check_text_report(name, text, &CheckOptions { first: false, limits: *limits }).issues
     }
 
-    fn check_located(&self, name: &str, values: &[Value], nodes: Option<&[Node]>, limits: &Limits) -> Vec<Issue> {
+    fn check_mode(&self, name: &str, values: &[Value], nodes: Option<&[Node]>, options: &CheckOptions) -> CheckReport {
         let root = match self.root(name) {
             Ok(root) => root,
-            Err(e) => return vec![Issue::error(e)],
+            Err(e) => return CheckReport { issues: vec![Issue::error(e)], stopped: false },
         };
-        let mut w = Walker::new(self, *limits, Mode::Check, nodes);
+        let mode = if options.first { Mode::First } else { Mode::Check };
+        let mut w = Walker::new(self, options.limits, mode, nodes);
         let node = |i: usize| nodes.and_then(|n| n.get(i));
         // The node limit applies to each value of a stream on its own, its error at `$[i]` (spec §7, §15).
         let budget = match root.stream {
@@ -255,7 +299,7 @@ impl Schema {
             false => w.budget(values).map_err(Issue::error),
         };
         if let Err(e) = budget {
-            return vec![e];
+            return CheckReport { issues: vec![e], stopped: false };
         }
         if root.stream {
             for (i, v) in values.iter().enumerate() {
@@ -270,7 +314,7 @@ impl Schema {
         } else {
             w.value(&values[0], &root.body, node(0));
         }
-        w.issues
+        CheckReport { issues: w.issues, stopped: w.capped }
     }
 
     /// The instance a whole file is checked with: a definition without parameters.
@@ -287,8 +331,10 @@ impl Schema {
 enum Mode {
     /// Stop at the first error; build the decoded value.
     Decode,
-    /// Report every problem and the hints.
+    /// Report every problem and the hints, up to [`MAX_ISSUES`] in all.
     Check,
+    /// Check, and stop at the first error, keeping the hints before it.
+    First,
 }
 
 type Loc<'n> = Option<&'n Node>;
@@ -305,6 +351,10 @@ struct Walker<'s, 'v> {
     max_steps: usize,
     /// The work budget or the depth limit is exceeded: nothing more is checked.
     fatal: bool,
+    /// The errors in `issues`.
+    errors: usize,
+    /// An issue past [`MAX_ISSUES`] was found: nothing more is checked.
+    capped: bool,
     located: bool,
     /// Which fields the records being walked have.
     marks: Marks,
@@ -383,6 +433,8 @@ impl<'s, 'v> Walker<'s, 'v> {
             steps: 0,
             max_steps: 0,
             fatal: false,
+            errors: 0,
+            capped: false,
             located: nodes.is_some(),
             marks: Marks::default(),
         }
@@ -467,10 +519,13 @@ impl<'s, 'v> Walker<'s, 'v> {
         self.mode == Mode::Decode
     }
 
-    /// Whether to stop: after a fatal error, the first error when decoding,
-    /// or [`MAX_ISSUES`] issues.
+    /// Whether to stop: after a fatal error, the first error when decoding
+    /// or with [`CheckOptions::first`], or an issue past [`MAX_ISSUES`].
     fn stopped(&self) -> bool {
-        self.fatal || self.issues.len() >= MAX_ISSUES || (self.decoding() && !self.issues.is_empty())
+        self.fatal
+            || self.capped
+            || (self.mode == Mode::First && self.errors > 0)
+            || (self.decoding() && !self.issues.is_empty())
     }
 
     fn report(&mut self, severity: Severity, code: Code, message: String, span: Option<Range<usize>>) {
@@ -488,7 +543,11 @@ impl<'s, 'v> Walker<'s, 'v> {
         if severity == Severity::Hint && self.decoding() {
             return;
         }
-        if self.issues.len() < MAX_ISSUES {
+        if self.issues.len() >= MAX_ISSUES {
+            // One more than the cap: say that the check stopped (spec §14, "Every error").
+            self.capped = true;
+        } else {
+            self.errors += usize::from(severity == Severity::Error);
             let span = span.filter(|_| self.located).map(|s| s.start..s.end.max(s.start + 1));
             self.issues.push(Issue {
                 span,
@@ -683,7 +742,9 @@ impl<'s, 'v> Walker<'s, 'v> {
         let before = self.issues.len();
         let out = self.value(v, item, loc);
         let inside: Vec<Issue> = self.issues.drain(before..).collect();
-        if inside.iter().any(|i| i.severity == Severity::Error) {
+        let errors = inside.iter().filter(|i| i.severity == Severity::Error).count();
+        self.errors -= errors;
+        if errors > 0 {
             let message = format!("expected {} (a Secret: the value is not shown)", self.schema.describe(item));
             return self.error(Code::InvalidSecret, message, loc);
         }

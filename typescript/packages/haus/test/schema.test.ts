@@ -260,6 +260,24 @@ describe("encoding", () => {
     expect(h.parse(Order, text)).toEqual(order)
   })
 
+  it("h.transform changes the host type: a throwing decode is codec-rejected, a throwing encode cannot-encode", () => {
+    const Link = h.transform(h.String, (s) => new URL(s), (u) => u.href)
+    const Page = h.Record({ links: h.Array(Link) })
+    const page = h.parse(Page, `{ links: ["https://haus-fmt.org/docs"] }`)
+    expect(page.links[0]).toBeInstanceOf(URL)
+    expect(h.stringify(Page, page, { style: "compact" })).toBe(`{ links: ["https://haus-fmt.org/docs"] }`)
+    expect(() => h.parse(Page, `{ links: ["https://a.b", "not a url"] }`)).toThrow(expect.objectContaining({ code: "codec-rejected", path: ["links", 1] }))
+    // What the base schema rejects stays its error.
+    expect(() => h.parse(Page, `{ links: [1] }`)).toThrow(expect.objectContaining({ code: "type-mismatch" }))
+    const Strict = h.transform(h.Int32, (n) => n, (n: number) => {
+      if (n < 0) throw new Error("negative")
+      return n
+    })
+    expect(() => h.stringify(h.Array(Strict), [1, -1])).toThrow(expect.objectContaining({ code: "cannot-encode", path: [1] }))
+    // h.InstantAsDate is h.Instant with h.transform: an invalid Date can't be written.
+    expect(() => h.stringify(h.InstantAsDate, new Date(NaN))).toThrow(expect.objectContaining({ code: "cannot-encode" }))
+  })
+
   it("round-trips every variant case and Unknown", () => {
     const shapes = [{ _tag: "Circle", radius: 2 }, { _tag: "Point", values: [1, 2] }, { _tag: "Label", value: "hi" }] as const
     expect(h.stringify(h.Array(Shape), [...shapes], { style: "compact" })).toBe('[Circle { radius: 2 }, Point(1, 2), Label("hi")]')

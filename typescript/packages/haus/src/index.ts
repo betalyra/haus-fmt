@@ -71,6 +71,7 @@ export {
 } from "./schema-file.js"
 export { importHint, moduleOfType, OFFICIAL_EXTENSIONS, quoteText, schemaOutline, type MissingImport, type SchemaOutline } from "./schema-file.js"
 export { importEdits, missingImports, type ImportEdit } from "./schema-imports.js"
+export { missingCodecMessage, missingCodecs, packageProfiles, PROFILED_TYPES, uncheckedProfiles, type CodecWarning, type ProfileNote } from "./profiles.js"
 export { Secret } from "./secret.js"
 export { checkStdTime, isStdTimeType, STD_TIME_TYPES, type StdTimeType } from "./std-time.js"
 export { checkData, describeType, type CheckIssue, type CheckOptions } from "./check.js"

@@ -21,6 +21,10 @@
 //! schema's attributes out, for tests that they don't matter (spec §15).
 //! `--json` also generates each type's schema-based JSON reader and writer
 //! (`from_json_<name>`, `to_json_<name>`, spec §16.3).
+//!
+//! Warnings go to standard error: the schema's own, and `missing-codec` for
+//! each type of an official package with profiles that the schema reaches
+//! without a `--codec` for it (spec §13.4).
 
 use haus_build::roc::RocConfig;
 use std::io::{self, Write};
@@ -92,14 +96,18 @@ fn run(args: &[String]) -> Result<(), String> {
             let id = args.id.unwrap_or_else(|| name.trim_end_matches(".schema.haus").to_owned());
             let module = args.module.ok_or("--module is required")?;
             // Loaded first: the schema file is checked to be a regular file before it is read again here.
-            let modules = args.config.modules(schema, &module, &id);
-            if modules.is_ok() && !args.quiet {
-                let text = fs::read_to_string(schema).map_err(|e| format!("{}: {e}", schema.display()))?;
-                for w in haus_build::check(&text).unwrap_or_default() {
-                    eprintln!("haus-gen: warning: {}:{w}", schema.display());
+            let loaded = args.config.modules_and_warnings(schema, &module, &id);
+            if let Ok((_, missing)) = &loaded {
+                if !args.quiet {
+                    let text = fs::read_to_string(schema).map_err(|e| format!("{}: {e}", schema.display()))?;
+                    for w in haus_build::check(&text).unwrap_or_default() {
+                        eprintln!("haus-gen: warning: {}:{w}", schema.display());
+                    }
                 }
+                // Not about attributes: reported also with --without-attributes (spec §13.4, `missing-codec`).
+                missing.iter().for_each(|w| eprintln!("haus-gen: warning: {w}"));
             }
-            modules
+            loaded.map(|(modules, _)| modules)
         }
         "roc-package" => args.config.generate_package(Path::new(input)).map(|module| vec![module]),
         _ => return Err(USAGE.into()),

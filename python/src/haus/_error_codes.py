@@ -132,6 +132,7 @@ ErrorCode: TypeAlias = Literal[
     "deprecated",
     "unlisted-field",
     "unlisted-tag",
+    "missing-codec",
 ]
 """An error code (spec §17): stable, the same in every binding."""
 
@@ -374,6 +375,10 @@ ERROR_CODES: Final[Mapping[ErrorCode, ErrorInfo]] = MappingProxyType(
         ),
         "unlisted-tag": ErrorInfo(
             "hints", "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
+        ),
+        "missing-codec": ErrorInfo(
+            "hints",
+            "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.",
         ),
     }
 )

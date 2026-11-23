@@ -38,7 +38,7 @@ Bindings also give each error as JSON, so tools and agents can act on it:
 
 **JSON:** [json-syntax](#json-syntax), [unpaired-surrogate](#unpaired-surrogate), [haus-json-form](#haus-json-form), [haus-json-version](#haus-json-version), [haus-json-number](#haus-json-number), [haus-json-bytes](#haus-json-bytes), [invalid-tag](#invalid-tag), [invalid-base64](#invalid-base64), [missing-member](#missing-member), [unexpected-member](#unexpected-member), [no-json-form](#no-json-form)
 
-**Hints and warnings:** [unknown-attribute](#unknown-attribute), [deprecated](#deprecated), [unlisted-field](#unlisted-field), [unlisted-tag](#unlisted-tag)
+**Hints and warnings:** [unknown-attribute](#unknown-attribute), [deprecated](#deprecated), [unlisted-field](#unlisted-field), [unlisted-tag](#unlisted-tag), [missing-codec](#missing-codec)
 
 ## invalid-utf8
 
@@ -1456,3 +1456,13 @@ Gren
 ```
 
 **Fix:** Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers.
+
+## missing-codec
+
+*Hints and warnings.* A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package.
+
+**Reported at:** Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
+
+For example: a schema with `import @haus-fmt/money (Money)`, compiled without the iso codec: `@haus-fmt/money@1#Currency` has profiles (iso), but no codec is set for it.
+
+**Fix:** Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type.

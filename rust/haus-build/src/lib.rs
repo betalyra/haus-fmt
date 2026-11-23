@@ -162,7 +162,12 @@ impl Config {
             root: root.as_deref(),
             ..Options::default()
         };
-        self.emit(&path, &options, &packages, name, "").map(|_| ())
+        let schema = self.emit(&path, &options, &packages, name, "")?;
+        if !self.quiet {
+            // An application's codecs (a package crate has none): spec §13.4, `missing-codec`.
+            self.missing_codecs(&schema).iter().for_each(|w| println!("cargo::warning={w}"));
+        }
+        Ok(())
     }
 
     /// For a schema package crate: generate the types of its `schema.haus`
@@ -211,6 +216,16 @@ impl Config {
     #[doc(hidden)]
     pub fn generate(&self, path: &Path, options: &Options, krate: &dyn Fn(&str) -> String) -> Result<String> {
         self.load(path, options, krate).map(|(_, code)| code)
+    }
+
+    /// The `missing-codec` warnings (spec §13.4) of an application's schema
+    /// built with these codecs: one for each type that an official profile
+    /// has a rule for (`@haus-fmt/money@1#Currency`), that the types of its
+    /// files reach, not only inside a type with a codec, and that has no
+    /// codec, whose values are then checked for their shape only.
+    /// [`Config::compile`] reports them to Cargo, unless [`Config::quiet`].
+    pub fn missing_codecs(&self, schema: &Schema) -> Vec<Warning> {
+        schema.missing_codecs(codec_ids(&self.codecs))
     }
 
     /// The schema at `path`, and its code.

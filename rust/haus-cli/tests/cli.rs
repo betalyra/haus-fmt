@@ -218,6 +218,111 @@ fn check_syntax_only() {
     haus().args(["check", "--no-schema", "syntax/null.haus"]).assert().code(1);
 }
 
+/// The (severity, code, path) of each diagnostic of the first file.
+fn found(json: &Json) -> Vec<(String, String, String)> {
+    let path = |d: &Json| d.get("path").map(|_| str_of(d, "path").to_owned()).unwrap_or_default();
+    array(&array(json, "files")[0], "diagnostics")
+        .iter()
+        .map(|d| (str_of(d, "severity").to_owned(), str_of(d, "code").to_owned(), path(d)))
+        .collect()
+}
+
+#[test]
+fn check_reports_every_error_or_the_first() {
+    // Spec §14, "Every error": by default every error; --first stops at the first, with the hints before it.
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("x.schema.haus"), "type Root = { a: Int, b: Int, c: Int }\n").unwrap();
+    fs::write(dir.path().join("x.haus"), "{ zz: 1, a: \"x\", b: \"y\", c: \"z\" }\n").unwrap();
+    let (code, all) = check_json(dir.path(), &["x.haus"]);
+    assert_eq!(code, 1);
+    let row = |s: &str, c: &str, p: &str| (s.to_owned(), c.to_owned(), p.to_owned());
+    let mut every = found(&all);
+    every.sort();
+    assert_eq!(
+        every,
+        [
+            row("error", "type-mismatch", "$.a"),
+            row("error", "type-mismatch", "$.b"),
+            row("error", "type-mismatch", "$.c"),
+            row("hint", "unlisted-field", "$.zz"),
+        ]
+    );
+    assert!(array(&all, "files")[0].get("stopped").is_none());
+    let (code, first) = check_json(dir.path(), &["--first", "x.haus"]);
+    assert_eq!(code, 1);
+    let first = found(&first);
+    assert_eq!(first.iter().filter(|(s, _, _)| s == "error").count(), 1, "{first:?}");
+    assert!(first.iter().all(|d| every.contains(d)), "{first:?}");
+    // On standard input, --first ends the checks of a stream at its first error.
+    let stream = "type Events = Stream { n: Int }\n";
+    fs::write(dir.path().join("e.schema.haus"), stream).unwrap();
+    let out = haus()
+        .current_dir(dir.path())
+        .args(["check", "--first", "--schema", "e.schema.haus#Events", "-"])
+        .write_stdin("{ n: \"a\" },\n{ n: \"b\" },\n")
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    assert!(String::from_utf8(out).unwrap().ends_with("Checked 1 file: 1 error.\n"));
+}
+
+#[test]
+fn check_says_when_it_stopped_at_the_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("x.schema.haus"), "type Root = Array Int\n").unwrap();
+    fs::write(dir.path().join("x.haus"), format!("[{}]\n", vec!["\"x\""; 250].join(", "))).unwrap();
+    let (code, json) = check_json(dir.path(), &["x.haus"]);
+    assert_eq!(code, 1);
+    let file = &array(&json, "files")[0];
+    assert_eq!(array(file, "diagnostics").len(), 200);
+    assert_eq!(file.get("stopped"), Some(&Json::Bool(true)));
+    haus()
+        .current_dir(dir.path())
+        .args(["check", "x.haus"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("note: x.haus: stopped after 200 problems; there may be more"));
+}
+
+#[test]
+fn check_notes_imports_of_packages_whose_profiles_it_does_not_check() {
+    // Spec §13.4: a tool without codecs notes each import of an official package with profiles.
+    let dir = tempfile::tempdir().unwrap();
+    let schema =
+        "import @haus-fmt/money (Money)\nimport @haus-fmt/geo (LatLng)\ntype Root = { total: Money, at: LatLng }\n";
+    fs::write(dir.path().join("x.schema.haus"), schema).unwrap();
+    let money = repo().join("extensions/money");
+    let geo = repo().join("extensions/geo");
+    let packages = ["--package", money.to_str().unwrap(), "--package", geo.to_str().unwrap()];
+    let (code, json) = check_json(dir.path(), &[&packages[..], &["x.schema.haus"]].concat());
+    assert_eq!(code, 0, "notes don't fail: {json:?}");
+    let notes: Vec<(&str, &str, &str)> = array(&array(&json, "files")[0], "diagnostics")
+        .iter()
+        .map(|d| (str_of(d, "severity"), str_of(d, "code"), str_of(d, "message")))
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            (
+                "hint",
+                "missing-codec",
+                "the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec"
+            ),
+            (
+                "hint",
+                "missing-codec",
+                "the rules of @haus-fmt/geo (profiles: wgs84) are not checked here; your application checks them by adding a codec"
+            ),
+        ]
+    );
+    // Not on the data files checked against it.
+    fs::write(dir.path().join("x.haus"), "{ total: Money(1, EUR), at: LatLng(1, 2) }\n").unwrap();
+    let (code, json) = check_json(dir.path(), &[&packages[..], &["x.haus"]].concat());
+    assert_eq!((code, found(&json)), (0, vec![]));
+}
+
 #[test]
 fn check_a_schema_file_shows_its_warnings() {
     let (code, json) = check_json(&fixtures(), &["schemas/old.schema.haus"]);

@@ -89,7 +89,7 @@
 use crate::codegen::unknown_type;
 use crate::graph::{self, Origin, Unit};
 use crate::schema::{self, Attribute, Case, Field, Ty, TypeDef, deprecation, error};
-use crate::{Error, Result};
+use crate::{Error, Result, Warning};
 use haus::ErrorCode as Code;
 use haus_schema::packages::MANIFEST;
 use haus_schema::{Explicit, InstanceId, Manifest, Options as LoadOptions, Packages, Schema, Type};
@@ -97,6 +97,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Roc modules, as (name, code).
+pub type Modules = Vec<(String, String)>;
 
 /// How to generate a Roc module.
 #[derive(Debug, Clone, Default)]
@@ -169,6 +172,16 @@ impl RocConfig {
     /// named `module`, then one for each file it imports, directly or not
     /// (`OrderCommon`), as (name, code).
     pub fn modules(&self, schema: &Path, module: &str, id: &str) -> Result<Vec<(String, String)>> {
+        self.modules_and_warnings(schema, module, id).map(|(modules, _)| modules)
+    }
+
+    /// [`RocConfig::modules`], and the `missing-codec` warnings (spec
+    /// §13.4): one for each type that an official profile has a rule for
+    /// (`@haus-fmt/money@1#Currency`), that the types of the application's
+    /// files reach and that has no codec, whose values are then checked for
+    /// their shape only. What is inside a type with a codec doesn't count:
+    /// that codec decides (`money.Iso` checks the currency of a `Money`).
+    pub fn modules_and_warnings(&self, schema: &Path, module: &str, id: &str) -> Result<(Modules, Vec<Warning>)> {
         let packages = self.packages.iter().map(|(dir, alias)| (dir.as_path(), alias.as_str()));
         let given = Given::new(packages, &self.folders)?;
         let options = LoadOptions {
@@ -180,7 +193,8 @@ impl RocConfig {
         };
         let loaded = Schema::load_with(schema, &options)?;
         let units = graph::units(&loaded, self.without_attributes, &codec_ids(&self.codecs))?;
-        generate_units(&loaded, &units, module, &given, &self.codecs, self.json)
+        let modules = generate_units(&loaded, &units, module, &given, &self.codecs, self.json)?;
+        Ok((modules, loaded.missing_codecs(codec_ids(&self.codecs))))
     }
 
     /// The module for an application's schema file, named `module`, with id

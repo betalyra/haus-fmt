@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { canonical, compileSchemaFile, HausSchemaFileError, parseSchemaFile, schemaDeclarations, type Codec, type StandardSchemaV1 } from "../src/index.js"
+import { canonical, compileSchemaFile, HausSchemaFileError, parseSchemaFile, schemaDeclarations, uncheckedProfiles, type Codec, type StandardSchemaV1 } from "../src/index.js"
 import { nodeResolver, schemaOptions } from "../src/node.js"
 import * as h from "../src/schema.js"
 
@@ -221,6 +221,31 @@ describe("codecs", () => {
     expect(() => order([capitals, capitals])).toThrow("two codecs for @haus-fmt/money@1#Currency")
   })
 
+  it("missing for a type of an official profile: the warning missing-codec, once per id (spec §13.4)", () => {
+    const compiled = (text: string, codecs: readonly Codec[], more: Record<string, string> = {}) =>
+      compileSchemaFile(text, { resolver: nodeResolver({ packages: { ...packages, ...more } }), codecs })
+    const orderText = `import @haus-fmt/money (Money)\ntype Order = { total: Money, paid: Array Money }`
+    expect(compiled(orderText, []).warnings).toEqual([{
+      code: "missing-codec",
+      id: "@haus-fmt/money@1#Currency",
+      profiles: ["iso"],
+      message: "@haus-fmt/money@1#Currency has profiles (iso), but no codec is set for it: its values are checked for their shape only",
+    }])
+    // With the codec, none; decoding is the same either way.
+    expect(compiled(orderText, [capitals]).warnings).toEqual([])
+    // A codec for Money covers its Currency; a Currency outside a Money still needs one.
+    const money: Codec = { id: "@haus-fmt/money@1#Money", apply: (base) => base }
+    expect(compiled(orderText, [money]).warnings).toEqual([])
+    expect(compiled(`import @haus-fmt/money (Money, Currency)\ntype Order = { total: Money, shown: Currency }`, [money]).warnings.map((w) => w.id)).toEqual(["@haus-fmt/money@1#Currency"])
+    // Only what the file's types reach counts: an import alone is no use.
+    expect(compiled(`import @haus-fmt/money (Money)\ntype Order = { n: Int }`, []).warnings).toEqual([])
+    // geo: BBox and LatLng each have a rule; a codec for BBox covers the corners inside it.
+    const geo = { "@haus-fmt/geo": join(repo, "extensions/geo") }
+    const box: Codec = { id: "@haus-fmt/geo@1#BBox", apply: (base) => base }
+    expect(compiled(`import @haus-fmt/geo (BBox)\ntype Area = { view: BBox }`, [], geo).warnings.map((w) => w.id)).toEqual(["@haus-fmt/geo@1#BBox", "@haus-fmt/geo@1#LatLng"])
+    expect(compiled(`import @haus-fmt/geo (BBox)\ntype Area = { view: BBox }`, [box], geo).warnings).toEqual([])
+  })
+
   it("apply to recursive types", () => {
     const shallow: Codec = { id: "Tree", apply: (base) => h.refine(base, (t) => ((t as { kids: unknown[] }).kids.length <= 1 ? undefined : "at most one child")) }
     const { schemas } = compileSchemaFile(`type Tree = { kids: Array Tree }`, { codecs: [shallow] })
@@ -231,6 +256,42 @@ describe("codecs", () => {
   it("can't apply to a record case by name: codec-unreachable", () => {
     const rec: Codec = { id: "R", apply: (base) => base }
     expect(() => compileSchemaFile(`type R = { w: Int32 }\ntype V = < Box R >`, { codecs: [rec] })).toThrow(expect.objectContaining({ code: "codec-unreachable" }))
+  })
+
+  it("can change the host type with h.transform; a decode that throws is codec-rejected at the value's place", () => {
+    type Amount = { readonly _tag: "Money"; readonly values: readonly [string, string] }
+    const cents: Codec = {
+      id: "@haus-fmt/money@1#Money",
+      apply: (base) => h.transform(base as h.Schema<Amount>, ({ values: [amount, currency] }) => {
+        if (!/^-?\d+\.\d\d$/.test(amount)) throw new Error(`${amount} doesn't have two decimal places`)
+        return { cents: BigInt(amount.replace(".", "")), currency }
+      }, ({ cents, currency }): Amount => {
+        const sign = cents < 0n ? "-" : ""
+        const abs = cents < 0n ? -cents : cents
+        return { _tag: "Money", values: [`${sign}${abs / 100n}.${String(abs % 100n).padStart(2, "0")}`, currency] }
+      }),
+    }
+    const schema = order([cents])
+    const text = `{ total: Money(19.90, EUR), paid: [Money(-0.05, USD)] }`
+    const value = h.parse(schema, text)
+    expect(value).toEqual({ total: { cents: 1990n, currency: "EUR" }, paid: [{ cents: -5n, currency: "USD" }] })
+    expect(h.stringify(schema, value, { style: "compact" })).toBe(text)
+    expect(() => h.parse(schema, `{ total: Money(19.9, EUR), paid: [] }`)).toThrow(expect.objectContaining({ code: "codec-rejected", path: ["total"], message: expect.stringContaining("19.9 doesn't have two decimal places") }))
+    // It runs after the schema: what the schema rejects stays the schema's error.
+    expect(() => h.parse(schema, `{ total: Money("x", EUR), paid: [] }`)).toThrow(expect.objectContaining({ code: "type-mismatch" }))
+  })
+})
+
+describe("tools without codecs (spec §13.4)", () => {
+  it("note each import of an official package with profiles, at the import", () => {
+    const text = `import std/time (Date)\nimport @haus-fmt/money@1 (Money)\nimport @haus-fmt/geo (LatLng)\nimport @acme/ids (Id)\ntype A = Int`
+    const notes = uncheckedProfiles(text)
+    expect(notes.map(({ module, profiles, message }) => ({ module, profiles, message }))).toEqual([
+      { module: "@haus-fmt/money", profiles: ["iso"], message: "the rules of @haus-fmt/money (profiles: iso) are not checked here; your application checks them by adding a codec" },
+      { module: "@haus-fmt/geo", profiles: ["wgs84"], message: "the rules of @haus-fmt/geo (profiles: wgs84) are not checked here; your application checks them by adding a codec" },
+    ])
+    expect(text.slice(notes[0]!.offset, notes[0]!.end)).toBe("import @haus-fmt/money@1 (Money)")
+    expect(notes.every((n) => n.code === "missing-codec")).toBe(true)
   })
 })
 

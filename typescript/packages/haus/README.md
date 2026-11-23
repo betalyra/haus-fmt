@@ -196,12 +196,38 @@ written with `h.*`, the packages export the types with their profile too:
 `h.Record({ total: Money, to: LatLng })`.
 
 A codec is `{ id, apply }`: `apply` builds the host type's schema from the
-type's own one, for example with `h.refine(base, check)`, which adds a rule
-(`check` returns why it rejects a value, or `undefined`): a value the schema
-accepts and the rule rejects is `codec-rejected`, and encoding one is
+type's own one, with `h.refine` or `h.transform`:
+
+- `h.refine(base, check)` adds a rule and keeps the host type (`check` returns
+  why it rejects a value, or `undefined`);
+- `h.transform(base, decode, encode)` changes the host type: `decode` turns
+  what `base` decoded into your value, `encode` turns it back (`h.InstantAsDate`
+  is `h.Instant` with a transform to a `Date`). When `decode` throws, the value
+  is rejected with the error's message; when `encode` throws, it can't be written.
+  Decoding what `encode` gives must give the same value again.
+
+```ts
+const cents: Codec = {
+  id: "@haus-fmt/money@1#Money",
+  apply: (base) => h.transform(base as h.Schema<{ _tag: "Money"; values: readonly [string, string] }>,
+    ({ values: [amount, currency] }) => {
+      if (!/^\d+\.\d\d$/.test(amount)) throw new Error("two decimal places")
+      return { cents: BigInt(amount.replace(".", "")), currency }
+    },
+    ({ cents, currency }) => ({ _tag: "Money", values: [`${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`, currency] as const })),
+}
+```
+
+Either way it runs after the schema: a value the schema accepts and the codec
+rejects is `codec-rejected`, at the value's place, and encoding one is
 `cannot-encode`. Codecs for types the schema doesn't contain are ignored; two for
 one type are an error, and so is one for a record that a variant uses as a
 record case (`< Box R >`), whose fields sit beside `_tag` (`codec-unreachable`).
+
+A package's rule is checked only where its codec is set. `compileSchemaFile`
+warns when your schema reaches a type of an official profile without one:
+`compiled.warnings` lists `missing-codec` for `@haus-fmt/money@1#Currency`
+without `iso`, for example. Decoding is the same with or without the warning.
 
 A `Secret` hides its value from `console.log`, `String()` and
 `JSON.stringify`, and errors inside one name its place and type, never the

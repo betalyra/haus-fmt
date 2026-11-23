@@ -79,7 +79,7 @@ func (i Issue) MarshalJSON() ([]byte, error) { return i.Err().MarshalJSON() }
 // type name: a Stream definition checks each value, any other type expects
 // exactly one. Errors and hints, without positions, at most [MaxIssues].
 func (s *Schema) Check(name string, values []haus.Value) []Issue {
-	return s.check(name, values, nil, haus.Limits{})
+	return s.CheckValues(name, values, CheckOptions{}).Issues
 }
 
 // CheckText returns every problem of the data file text as the type name,
@@ -90,31 +90,76 @@ func (s *Schema) CheckText(name string, text []byte) []Issue {
 
 // CheckTextWith is [Schema.CheckText], parsing and checking with limits.
 func (s *Schema) CheckTextWith(name string, text []byte, limits haus.Limits) []Issue {
+	return s.CheckTextResult(name, text, CheckOptions{Limits: limits}).Issues
+}
+
+// CheckOptions configure [Schema.CheckValues] and [Schema.CheckTextResult].
+type CheckOptions struct {
+	// First stops at the first error (haus check --first), with the hints
+	// found before it. By default every error is reported (spec §14,
+	// "Every error"), up to [MaxIssues] issues.
+	First bool
+	// Limits are the parser's limits, also the depth limit and the limits
+	// raw values are checked against. Zero fields take their defaults.
+	Limits haus.Limits
+}
+
+// CheckResult is what a check found: the issues, a set (which issues is
+// specified, their order is not, spec §14), and whether it stopped at
+// [MaxIssues] with more to report.
+type CheckResult struct {
+	Issues []Issue
+	// Stopped is set when the check stopped at [MaxIssues] issues: there
+	// are more.
+	Stopped bool
+}
+
+// OK reports whether the result has no errors (hints don't count): the
+// data decodes with the type.
+func (r CheckResult) OK() bool {
+	for _, i := range r.Issues {
+		if i.Severity == SeverityError {
+			return false
+		}
+	}
+	return true
+}
+
+// CheckValues is [Schema.Check] with options: every error (spec §14,
+// "Every error") or only the first, and whether it stopped at [MaxIssues].
+func (s *Schema) CheckValues(name string, values []haus.Value, opts CheckOptions) CheckResult {
+	return s.check(name, values, nil, opts)
+}
+
+// CheckTextResult is [Schema.CheckText] with options: every error (spec
+// §14, "Every error") or only the first, and whether it stopped at
+// [MaxIssues]. A syntax or limit error of the text is its only issue.
+func (s *Schema) CheckTextResult(name string, text []byte, opts CheckOptions) CheckResult {
 	src := string(text)
 	ls := newLines(src)
-	values, err := haus.ParseAllWith(text, limits)
+	values, err := haus.ParseAllWith(text, opts.Limits)
 	if err != nil {
 		e, ok := err.(*haus.Error)
 		if !ok {
-			return []Issue{{Code: haus.CodeInvalidUTF8, Message: err.Error()}}
+			return CheckResult{Issues: []Issue{{Code: haus.CodeInvalidUTF8, Message: err.Error()}}}
 		}
 		at := ls.offset(e.Line, e.Column)
-		return []Issue{{Code: e.Code, Message: e.Message, Line: e.Line, Column: e.Column,
-			Offset: at, End: at + charLen(src, at), Fix: e.Hint}}
+		return CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message, Line: e.Line, Column: e.Column,
+			Offset: at, End: at + charLen(src, at), Fix: e.Hint}}}
 	}
 	locs := locate(src)
 	if len(locs) != len(values) {
 		locs = nil
 	}
-	issues := s.check(name, values, locs, limits)
-	for i := range issues {
-		is := &issues[i]
+	r := s.check(name, values, locs, opts)
+	for i := range r.Issues {
+		is := &r.Issues[i]
 		if is.End == 0 { // no span: the start of the file
 			is.Offset, is.End = 0, charLen(src, 0)
 		}
 		is.Line, is.Column = ls.position(is.Offset)
 	}
-	return issues
+	return r
 }
 
 // charLen is the length of the character at s[i], at least 1 within s.
@@ -139,7 +184,7 @@ func (l *lines) offset(line, col int) int {
 	return i
 }
 
-func (s *Schema) check(name string, values []haus.Value, locs []*loc, limits haus.Limits) []Issue {
+func (s *Schema) check(name string, values []haus.Value, locs []*loc, opts CheckOptions) CheckResult {
 	at := func(i int) *loc {
 		if i < len(locs) {
 			return locs[i]
@@ -149,14 +194,14 @@ func (s *Schema) check(name string, values []haus.Value, locs []*loc, limits hau
 	t, err := s.Type(name)
 	if err != nil {
 		e := err.(*haus.Error)
-		return []Issue{{Code: e.Code, Message: e.Message}}
+		return CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message}}}
 	}
-	lim, err := resolveLimits(limits)
+	lim, err := resolveLimits(opts.Limits)
 	if err != nil {
 		e := err.(*haus.Error)
-		return []Issue{{Code: e.Code, Message: e.Message}}
+		return CheckResult{Issues: []Issue{{Code: e.Code, Message: e.Message}}}
 	}
-	c := checker{located: locs != nil}
+	c := checker{located: locs != nil, first: opts.First}
 	c.w = walker{lim: lim, budget: budgetStart, path: make([]step, 0, 16)}
 	switch {
 	case t.stream:
@@ -177,7 +222,7 @@ func (s *Schema) check(name string, values []haus.Value, locs []*loc, limits hau
 		c.w.root = values[0]
 		c.value(values[0], t.t, at(0))
 	}
-	return c.issues
+	return CheckResult{Issues: c.issues, Stopped: c.capped}
 }
 
 // span is a part of the text; zero when there is none.
@@ -193,23 +238,36 @@ func spanOf(l *loc) span {
 type checker struct {
 	w       walker // its path is the checker's; it checks scalars as decoding does
 	issues  []Issue
+	errors  int // the errors among issues
 	fatal   bool
 	located bool
+	first   bool // stop at the first error
+	capped  bool // an issue past MaxIssues was found: nothing more is checked
 }
 
-func (c *checker) stopped() bool { return c.fatal || len(c.issues) >= MaxIssues }
+func (c *checker) stopped() bool { return c.fatal || c.capped || (c.first && c.errors > 0) }
 
-func (c *checker) report(sev Severity, code haus.ErrorCode, msg, fix string, sp span) {
+// add adds an issue, unless there are MaxIssues already: then the check
+// stops, and says so (spec §14, "Every error").
+func (c *checker) add(is Issue) {
 	if len(c.issues) >= MaxIssues {
+		c.capped = true
 		return
 	}
+	if is.Severity == SeverityError {
+		c.errors++
+	}
+	c.issues = append(c.issues, is)
+}
+
+func (c *checker) report(sev Severity, code haus.ErrorCode, msg, fix string, sp span) {
 	if !c.located {
 		sp = span{}
 	}
 	if sp.end <= sp.start && sp != (span{}) {
 		sp.end = sp.start + 1
 	}
-	c.issues = append(c.issues, Issue{Severity: sev, Code: code, Message: msg, Path: pathString(c.w.path),
+	c.add(Issue{Severity: sev, Code: code, Message: msg, Path: pathString(c.w.path),
 		Offset: sp.start, End: sp.end, Fix: fix})
 }
 
@@ -321,16 +379,12 @@ func (c *checker) scalar(v haus.Value, rt, t *typ, l *loc) {
 	if e.Code == haus.CodeInvalidTime && l.item(0) != nil {
 		at = l.item(0) // the string of Date("…")
 	}
-	if c.len() < MaxIssues {
-		sp := spanOf(at)
-		if !c.located {
-			sp = span{}
-		}
-		c.issues = append(c.issues, Issue{Code: e.Code, Message: e.Message, Path: e.Path, Offset: sp.start, End: sp.end})
+	sp := spanOf(at)
+	if !c.located {
+		sp = span{}
 	}
+	c.add(Issue{Code: e.Code, Message: e.Message, Path: e.Path, Offset: sp.start, End: sp.end})
 }
-
-func (c *checker) len() int { return len(c.issues) }
 
 func (c *checker) mismatch(v haus.Value, t *typ, l *loc) {
 	c.errorAt(haus.CodeTypeMismatch, fmt.Sprintf("expected %s, found %s", describe(t), found(v)), l)
@@ -344,7 +398,10 @@ func (c *checker) secret(v haus.Value, item *typ, l *loc) {
 	c.value(v, item, l)
 	inside := false
 	for _, is := range c.issues[before:] {
-		inside = inside || is.Severity == SeverityError
+		if is.Severity == SeverityError {
+			inside = true
+			c.errors--
+		}
 	}
 	c.issues = c.issues[:before]
 	if inside {

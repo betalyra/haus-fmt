@@ -32,6 +32,7 @@
  *   compileSchemaFile(text, { ...options, codecs: iso })   // iso from @haus-fmt/money
  */
 import { groupSchemas } from "./codegen.js"
+import { missingCodecs, type CodecWarning } from "./profiles.js"
 import * as h from "./schema.js"
 import {
   deprecation, HausSchemaFileError, parseSchemaFile, type Attribute, type Builtin, type Case, type Definition, type Field, type Instance, type ParseSchemaOptions, type SchemaFile, type Type,
@@ -43,6 +44,14 @@ export interface CompiledSchemaFile {
   readonly schemas: Readonly<Record<string, h.Schema<unknown>>>
   /** Types that describe a whole file as a stream of values (`type Events = Stream Event`). */
   readonly streams: ReadonlySet<string>
+  /**
+   * Warnings about the codecs given (spec §13.4): `missing-codec` for each
+   * type of an official profile that the file's types reach without its codec
+   * (`@haus-fmt/money@1#Currency` without `iso`), whose values are then checked
+   * for their shape only. Decoding is the same with or without them. The
+   * warnings of the schema text itself are `file.warnings`.
+   */
+  readonly warnings: readonly CodecWarning[]
 }
 
 /**
@@ -207,7 +216,7 @@ export const fromSchemaFile = (file: SchemaFile, options: FromSchemaFileOptions 
   }
   // Generated together when one of them is first used (codegen.ts).
   groupSchemas(schemas)
-  return { file, schemas, streams }
+  return { file, schemas, streams, warnings: missingCodecs(file, (id) => byId.has(id)) }
 }
 
 // ── TypeScript declarations ──────────────────────────────────

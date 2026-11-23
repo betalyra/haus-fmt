@@ -401,6 +401,7 @@
 { rule: "codecs.apply.everywhere", cases: [], untestable: True, note: "codec configuration API; no suite format" },
 { rule: "codecs.apply.unreachable", cases: [], untestable: True, note: "binding-specific (codec-unreachable): depends on the host representation" },
 { rule: "codecs.apply.inside-out", cases: [], untestable: True, note: "codec configuration API; no suite format" },
+{ rule: "packages.codecs.missing-warning", cases: [], untestable: True, note: "SHOULD: depends on which codecs the application set, and the suite has no way to set codecs (no suite format, as codecs.apply.everywhere); the official packages aren't in the package suite either. Binding tests: a schema reaching each listed type warns once without its codec, not with it, and not inside a type that has a codec; tools without codecs note it once per import" },
 
 // ── §14 Schema files ──
 { rule: "schema.lexical.as-data", cases: ["schema/invalid/lone-carriage-return", "schema/invalid/control-in-comment", "schema/invalid/bidi-in-comment", "schema/invalid/invalid-utf8", "schema/invalid/unterminated-string", "schema/invalid/unterminated-comment", "schema/invalid/invalid-escape-in-key", "schema/invalid/control-in-key", "schema/invalid/bidi-in-key", "schema/invalid/key-line-break", "schema/invalid/stray-slash"] },
@@ -414,6 +415,12 @@
 { rule: "schema.check.closed-errors", cases: ["schema/records", "schema/variants"], note: "decode errors unknown-field and unknown-tag; a separate checker mode is not run" },
 { rule: "schema.check.open-hints", cases: ["check/cases"] },
 { rule: "schema.check.no-hints-in-secret", cases: ["check/cases"] },
+{ rule: "schema.check.all-errors", cases: ["check/cases"], note: "Data cases list every issue; `--first` and a decoder's all-errors mode are binding APIs (binding tests)" },
+{ rule: "schema.check.all-errors-parse-first", cases: [], untestable: True, note: "Data cases are valid text; text with a syntax error is the parser suite's (invalid/), which has one error per file" },
+{ rule: "schema.check.all-errors-once", cases: ["check/cases"] },
+{ rule: "schema.check.all-errors-nothing-below", cases: ["check/cases"] },
+{ rule: "schema.check.all-errors-no-order", cases: ["check/cases"], note: "runners compare the issues sorted by place" },
+{ rule: "schema.check.all-errors-cap", cases: [], untestable: True, note: "MAY: the cap is the tool's own, documented (bounded work, §9); binding tests" },
 { rule: "schema.warnings.places", cases: ["check/cases"] },
 { rule: "schema.spread.row-parameter", cases: ["schema/invalid/row-parameter"] },
 { rule: "schema.lexical.no-directive", cases: ["schema/invalid/version-directive"] },

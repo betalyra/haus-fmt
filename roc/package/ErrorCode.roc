@@ -481,9 +481,13 @@ ErrorCode := [].{
 	unlisted_tag : Str
 	unlisted_tag = "unlisted-tag"
 
+	## `missing-codec` (hints): A warning: the schema reaches a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`), and no codec is set for it, so the rule is not checked: its values are checked for their shape only (§13.4). Decoding is unchanged. Tools without codecs (`haus check`, editors) report it as a note, once per import of such a package. Reported at: Nowhere: it is about the codecs the application set, reported once per type id. From a tool without codecs: the import of the package.
+	missing_codec : Str
+	missing_codec = "missing-codec"
+
 	## Every code, in the catalogue's order.
 	all : List(Str)
-	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag"]
+	all = ["invalid-utf8", "version-directive", "expected-value", "missing-comma", "payload-newline", "unexpected-closer", "unclosed-bracket", "null-literal", "boolean-literal", "bare-identifier", "expected-key", "uppercase-key", "block-string-key", "missing-colon", "duplicate-key", "empty-payload", "invalid-number", "unterminated-string", "string-line-break", "control-character", "bidi-control", "invalid-escape", "invalid-unicode-escape", "block-string-opening", "block-string-closing", "block-string-indent", "unterminated-block-string", "unterminated-bytes", "bytes-not-hex", "bytes-odd-digits", "lone-carriage-return", "unterminated-comment", "stray-slash", "nesting-too-deep", "number-too-long", "exponent-too-large", "string-too-long", "key-too-long", "tag-too-long", "value-too-long", "unsupported-depth", "not-one-value", "stream-truncated", "schema-syntax", "unknown-type", "wrong-arity", "duplicate-type", "redefine-prelude", "unknown-parameter", "invalid-parameter", "underscore-type", "duplicate-field", "duplicate-tag", "closed-empty-variant", "invalid-spread", "spread-cycle", "row-parameter", "misplaced-stream", "unguarded-recursion", "growing-recursion", "type-too-deep", "attribute-arguments", "attribute-twice", "attribute-space", "attribute-on-spread", "unknown-module", "unknown-import", "duplicate-import", "import-unavailable", "import-not-found", "import-outside-root", "import-version", "import-cycle", "duplicate-package", "undeclared-package", "package-manifest", "package-version", "package-path", "package-name", "package-crate", "package-install-script", "package-files", "profile-vectors", "package-wrapper", "codec-unreachable", "file-too-large", "too-many-files", "type-mismatch", "not-an-integer", "out-of-range", "missing-field", "unknown-field", "unknown-tag", "wrong-payload", "invalid-time", "invalid-secret", "codec-rejected", "cannot-encode", "cyclic-value", "step-budget", "too-many-nodes", "json-syntax", "unpaired-surrogate", "haus-json-form", "haus-json-version", "haus-json-number", "haus-json-bytes", "invalid-tag", "invalid-base64", "missing-member", "unexpected-member", "no-json-form", "unknown-attribute", "deprecated", "unlisted-field", "unlisted-tag", "missing-codec"]
 
 	## The catalogue's fix for a code, which errors report as their hint:
 	## `ErrorCode.hint("missing-comma")` is "Add a comma between the two values.".
@@ -606,6 +610,7 @@ ErrorCode := [].{
 		"deprecated" => "Use what the deprecation note says instead."
 		"unlisted-field" => "Fix the spelling, add the field to the schema, or leave it if it is meant for newer readers."
 		"unlisted-tag" => "Fix the spelling, add the tag to the schema, or leave it if it is meant for newer readers."
+		"missing-codec" => "Add the codec of the profile your application uses (`iso` from `@haus-fmt/money`), or your own codec for the type."
 		_ => ""
 	}
 
@@ -730,6 +735,7 @@ ErrorCode := [].{
 		"deprecated" => "hints"
 		"unlisted-field" => "hints"
 		"unlisted-tag" => "hints"
+		"missing-codec" => "hints"
 		_ => ""
 	}
 
