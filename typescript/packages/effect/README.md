@@ -260,10 +260,11 @@ that lacks some of their types takes them too):
 ```ts
 import { iso } from "@haus-fmt/money/effect"   // @haus-fmt/money/iso: currencies are three letters A–Z
 import { wgs84 } from "@haus-fmt/geo/effect"   // @haus-fmt/geo/wgs84: latitudes and longitudes in range
+import { rfc9562 } from "@haus-fmt/uuid/effect"   // @haus-fmt/uuid/rfc9562: a UUID's text, lowercase
 
-const order = yield* Haus.decode(Order, iso, wgs84)(text)   // Money(1, Eur) or LatLng(91, 0) fails
+const order = yield* Haus.decode(Order, iso, wgs84, rfc9562)(text)   // Money(1, Eur) or LatLng(91, 0) fails
 ```
 
 They keep the value: a `Money` is still `{ _tag: "Money", values: ["19.90", "EUR"] }`,
-its currency typed `string` (a tag, never a `Haus.Unknown`), and a `LatLng` its
-two floats, `-0` included.
+its currency typed `string` (a tag, never a `Haus.Unknown`), a `LatLng` its
+two floats, `-0` included, and a `Uuid` its checked text, a `string`.

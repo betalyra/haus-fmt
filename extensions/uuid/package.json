@@ -1,0 +1,53 @@
+{
+  "name": "@haus-fmt/uuid",
+  "version": "1.0.0",
+  "description": "haus schema package: universally unique identifiers",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./effect": {
+      "types": "./dist/effect.d.ts",
+      "default": "./dist/effect.js"
+    },
+    "./package.haus": "./package.haus",
+    "./schema.haus": "./schema.haus",
+    "./profiles/*": "./profiles/*",
+    "./package.json": "./package.json"
+  },
+  "files": ["package.haus", "schema.haus", "profiles", "dist"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "effect-tsgo tsc@7.0.2 -p tsconfig.json --noEmit"
+  },
+  "peerDependencies": {
+    "@haus-fmt/effect": "workspace:*",
+    "@haus-fmt/haus": "workspace:*",
+    "effect": "^4.0.6"
+  },
+  "peerDependenciesMeta": {
+    "@haus-fmt/effect": {
+      "optional": true
+    },
+    "@haus-fmt/haus": {
+      "optional": true
+    },
+    "effect": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/tsgo": "0.69.0",
+    "@haus-fmt/effect": "workspace:*",
+    "@haus-fmt/haus": "workspace:*",
+    "@types/node": "24.10.1",
+    "effect": "4.0.6",
+    "typescript": "5.9.3",
+    "vitest": "5.0.5"
+  }
+}

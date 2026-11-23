@@ -8,6 +8,7 @@ gen() { cargo run -q --manifest-path ../../rust/Cargo.toml -p haus-fmt-build --b
 # The official schema packages, as Roc packages.
 gen roc-package ../../extensions/money --out ../../extensions/money/roc/HausFmtMoney.roc
 gen roc-package ../../extensions/geo --out ../../extensions/geo/roc/HausFmtGeo.roc
+gen roc-package ../../extensions/uuid --out ../../extensions/uuid/roc/HausFmtUuid.roc
 
 # The examples, from the shared files in ../../examples.
 gen roc ../../examples/thread.schema.haus --module Thread --out quickstart/Thread.roc
@@ -49,6 +50,6 @@ for f in $profiles/travel/HausTestTravel.roc $profiles/Travel.roc $profiles/Trav
   roc fmt "$f" >/dev/null
 done
 
-for f in ../../extensions/money/roc/HausFmtMoney.roc ../../extensions/geo/roc/HausFmtGeo.roc quickstart/Thread.roc logs/Logs.roc order/Order.roc order/Typed.roc; do
+for f in ../../extensions/money/roc/HausFmtMoney.roc ../../extensions/geo/roc/HausFmtGeo.roc ../../extensions/uuid/roc/HausFmtUuid.roc quickstart/Thread.roc logs/Logs.roc order/Order.roc order/Typed.roc; do
   roc fmt "$f" >/dev/null
 done

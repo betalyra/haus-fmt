@@ -175,14 +175,14 @@ The errors are those of spec §14, "Every error": each failing place once, nothi
 
 ## The official extensions
 
-`github.com/betalyra/haus-fmt/go/ext/money` and `…/ext/geo` hold the codecs of the profiles `@haus-fmt/money/iso` (`money.Iso`, `money.IsoCurrency`) and `@haus-fmt/geo/wgs84` (`geo.Wgs84`, `geo.Wgs84BBox`), tested against the profiles' vectors. The schemas themselves are given like any package's, with `schema.NewExplicit()`.
+`github.com/betalyra/haus-fmt/go/ext/money`, `…/ext/geo` and `…/ext/uuid` hold the codecs of the profiles `@haus-fmt/money/iso` (`money.Iso`, `money.IsoCurrency`), `@haus-fmt/geo/wgs84` (`geo.Wgs84`, `geo.Wgs84BBox`) and `@haus-fmt/uuid/rfc9562` (`uuid.Rfc9562`, whose host type `uuid.UUID` is the checked text), tested against the profiles' vectors. The schemas themselves are given like any package's, with `schema.NewExplicit()`.
 
 ```go
 codecs, _ := schema.NewCodecs(money.Iso, geo.Wgs84)
 v, err := order.DecodeWith(value, schema.DecodeOptions{Codecs: codecs}) // $.total: … Eur is not a currency [codec-rejected]
 ```
 
-A package's rule is checked only where its codec is set. Codecs are given to each call, so ask for the warnings with them: `order.MissingCodecs(codecs)` (or `s.MissingCodecs(codecs)` for every type of the file) returns a `missing-codec` warning, like those of `Schema.Warnings`, for each type an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `schema.ProfiledTypes`) that the type reaches without a codec, so that its values are checked for their shape only (spec §13.4). A type reached only inside a type with a codec doesn't count: `money.Iso` covers the `Currency` of a `Money`.
+A package's rule is checked only where its codec is set. Codecs are given to each call, so ask for the warnings with them: `order.MissingCodecs(codecs)` (or `s.MissingCodecs(codecs)` for every type of the file) returns a `missing-codec` warning, like those of `Schema.Warnings`, for each type an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`, `schema.ProfiledTypes`) that the type reaches without a codec, so that its values are checked for their shape only (spec §13.4). A type reached only inside a type with a codec doesn't count: `money.Iso` covers the `Currency` of a `Money`.
 
 ## Examples
 

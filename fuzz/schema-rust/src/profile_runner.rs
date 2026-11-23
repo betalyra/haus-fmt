@@ -3,7 +3,8 @@
 //! hex-encoded UTF-8), decodes the value with the codec of the official
 //! profile for the type, as generated code runs a codec (`haus::de::codec`):
 //! `haus_money::Iso` for `Money`, `haus_money::IsoCurrency` for `Currency`,
-//! `haus_geo::Wgs84` for `LatLng`, `haus_geo::Wgs84BBox` for `BBox`. It
+//! `haus_geo::Wgs84` for `LatLng`, `haus_geo::Wgs84BBox` for `BBox`,
+//! `haus_uuid::Rfc9562` for `Uuid`. It
 //! encodes the result and prints one line each: `ok <canonical form>` or
 //! `err <place> <code> <reason>`, the place as `$[1]` and the code of spec
 //! §17 (`-` for none).
@@ -43,6 +44,7 @@ fn line(text: &str) -> String {
         "Currency" => run::<haus_money::IsoCurrency>(&value),
         "LatLng" => run::<haus_geo::Wgs84>(&value),
         "BBox" => run::<haus_geo::Wgs84BBox>(&value),
+        "Uuid" => run::<haus_uuid::Rfc9562>(&value),
         _ => format!("crash no type {ty}"),
     }
 }

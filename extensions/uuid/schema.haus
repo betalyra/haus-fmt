@@ -1,0 +1,12 @@
+// @haus-fmt/uuid: universally unique identifiers.
+//
+//   import @haus-fmt/uuid (Uuid)
+//
+// An official extension: an ordinary schema, maintained with haus. It fixes
+// the shape only; the text form of RFC 9562, in lowercase, is the rfc9562
+// profile (profiles/rfc9562.md), checked by codecs. Every version is the same
+// type: a schema that wants version 7 only says so in a comment, and the
+// application checks it.
+
+// A UUID: Uuid("0190c7a8-5b6e-7d3f-9a41-6c2e8f1b0d57").
+type Uuid = closed < Uuid String >

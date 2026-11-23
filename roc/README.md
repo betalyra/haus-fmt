@@ -174,6 +174,7 @@ They reject what the profile rejects and keep the value (spec §13.4):
 | `extensions/money/roc` | `IsoCurrency` | `@haus-fmt/money@1#Currency` | `Str`: three letters A–Z |
 | `extensions/geo/roc` | `Wgs84` | `@haus-fmt/geo@1#LatLng` | `{ lat : F64, lng : F64 }`: the floats as decoded, `-0` kept |
 | `extensions/geo/roc` | `Wgs84BBox` | `@haus-fmt/geo@1#BBox` | `{ sw : Wgs84.Target, ne : Wgs84.Target }` |
+| `extensions/uuid/roc` | `Rfc9562` | `@haus-fmt/uuid@1#Uuid` | `Str`: the text, lowercase, any version |
 
 ```sh
 haus-gen roc app.schema.haus --module App --out App.roc \

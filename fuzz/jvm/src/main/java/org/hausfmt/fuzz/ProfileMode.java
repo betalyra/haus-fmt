@@ -14,13 +14,15 @@ import org.hausfmt.SchemaType;
 import org.hausfmt.Value;
 import org.hausfmt.ext.geo.GeoCodecs;
 import org.hausfmt.ext.money.MoneyCodecs;
+import org.hausfmt.ext.uuid.UuidCodecs;
 
 /**
  * The profile fuzzer's mode ({@code profiles.ts}), as the Go runner's (fuzz/go/profile.go): lines
  * {@code TYPE HEX} (a value's haus text as hex UTF-8). The value is decoded with the type of its
- * package's schema (extensions/money, extensions/geo) and the codecs of the official profile
- * ({@link MoneyCodecs#ISO} and {@link MoneyCodecs#ISO_CURRENCY}, {@link GeoCodecs#WGS84} and {@link
- * GeoCodecs#WGS84_BBOX}), turned into the host value by the type's codec and encoded again: {@code
+ * package's schema (extensions/money, extensions/geo, extensions/uuid) and the codecs of the
+ * official profile ({@link MoneyCodecs#ISO} and {@link MoneyCodecs#ISO_CURRENCY}, {@link
+ * GeoCodecs#WGS84} and {@link GeoCodecs#WGS84_BBOX}, {@link UuidCodecs#RFC9562_AS_UUID}, which
+ * runs the rule and {@code java.util.UUID} both ways), turned into the host value by the type's codec and encoded again: {@code
  * ok <canonical form>}, or {@code err <place> <code> <reason>}. Encoding what was decoded must
  * work, so an encoding error is {@code crash …}.
  */
@@ -35,7 +37,8 @@ final class ProfileMode {
 
   private static final List<Extension> EXTENSIONS = List.of(
       new Extension("money", Map.of("Money", MoneyCodecs.ISO, "Currency", MoneyCodecs.ISO_CURRENCY)),
-      new Extension("geo", Map.of("LatLng", GeoCodecs.WGS84, "BBox", GeoCodecs.WGS84_BBOX)));
+      new Extension("geo", Map.of("LatLng", GeoCodecs.WGS84, "BBox", GeoCodecs.WGS84_BBOX)),
+      new Extension("uuid", Map.of("Uuid", UuidCodecs.RFC9562_AS_UUID)));
 
   /** Each package's schema with its profile's codecs, by type name. */
   private static Map<String, Profiled> types() {

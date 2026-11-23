@@ -24,6 +24,7 @@ var ProfiledTypes = map[string][]string{
 	"@haus-fmt/money@1#Currency": {"iso"},
 	"@haus-fmt/geo@1#LatLng":     {"wgs84"},
 	"@haus-fmt/geo@1#BBox":       {"wgs84"},
+	"@haus-fmt/uuid@1#Uuid":      {"rfc9562"},
 }
 
 // MissingCodecs returns the missing-codec warnings for decoding with the

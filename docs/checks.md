@@ -13,7 +13,7 @@ haus decides what a value is; your application decides whether it accepts it.
 |---|---|---|
 | A parser, without a schema | the syntax only: `Date("2026-02-30")` is just a tag with a string | always |
 | A schema binding | the shape (fields, tags, the type of each value), the prelude's rules (`300` is no `UInt8`, a `Decimal` keeps its digits), and the [std/time profile](/docs/spec/time) | always, in every language |
-| A package's profile | the rule of its type: `@haus-fmt/money/iso` (a currency is three letters A–Z), `@haus-fmt/geo/wgs84` (latitudes and longitudes in range) | when your application adds the profile's codec |
+| A package's profile | the rule of its type: `@haus-fmt/money/iso` (a currency is three letters A–Z), `@haus-fmt/geo/wgs84` (latitudes and longitudes in range), `@haus-fmt/uuid/rfc9562` (a UUID in its lowercase text form) | when your application adds the profile's codec |
 
 A package's types are shape until you add a codec: without the `iso` codec, `Money(19.90, Eur)` decodes, since the schema only says that a currency is a tag. How to add one in each language is in [Where types come from](/docs/types#host-types-in-each-language). So that this is never silent, schema bindings warn with [`missing-codec`](/docs/errors#missing-codec) when your schema reaches a type of an official profile without its codec, and `haus check` and the editor note once per such import that its rules aren't checked there. [§13.4](/docs/spec#134-codecs)
 
@@ -59,7 +59,7 @@ Never an attribute. haus has no `@min`, `@max`, `@pattern` or `@default`, and wo
 
 The prelude's rules and the `std/time` profile are in the spec. A profile's rule is written in prose in its package (`profiles/iso.md`), and that text is the definition; its test vectors only test it, so where the two disagree, the vectors are wrong.
 
-`std/time` and the official profiles, `iso` and `wgs84`, each have a reference checker in Lean, proven to compute exactly their rule. In CI, generated values are fuzzed through the reference checker and through every binding's `std/time` check or profile codecs (TypeScript, Effect, Rust, Python, Go, JVM and Roc for the profiles). Zig's profile codecs pass the vectors and are not fuzzed yet; Swift ships none yet.
+`std/time` and the official profiles, `iso`, `wgs84` and `rfc9562`, each have a reference checker in Lean, proven to compute exactly their rule. In CI, generated values are fuzzed through the reference checker and through every binding's `std/time` check or profile codecs (TypeScript, Effect, Rust, Python, Go, JVM and Roc for the profiles). Zig's profile codecs (`iso` and `wgs84`) pass the vectors and are not fuzzed yet; Swift ships none yet.
 
 ## Where a type goes
 

@@ -18,7 +18,7 @@ rust() {
 
 typescript() {
   (cd typescript && pnpm --filter ./packages/haus build >/dev/null && pnpm --filter ./packages/effect build >/dev/null && pnpm --filter ./packages/import build >/dev/null)
-  (cd typescript && pnpm --filter ../extensions/money --filter ../extensions/geo build >/dev/null)
+  (cd typescript && pnpm --filter ../extensions/money --filter ../extensions/geo --filter ../extensions/uuid build >/dev/null)
 }
 
 python() { (cd python && uv sync -q); }

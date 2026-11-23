@@ -1322,6 +1322,8 @@ func unknownType(name string) string {
 		return fmt.Sprintf("unknown type %s (import it with: import @haus-fmt/money (%s), and install @haus-fmt/money with your package manager)", name, name)
 	case name == "LatLng" || name == "BBox":
 		return fmt.Sprintf("unknown type %s (import it with: import @haus-fmt/geo (%s), and install @haus-fmt/geo with your package manager)", name, name)
+	case name == "Uuid":
+		return fmt.Sprintf("unknown type %s (import it with: import @haus-fmt/uuid (%s), and install @haus-fmt/uuid with your package manager)", name, name)
 	case stdTime[name]:
 		return fmt.Sprintf("unknown type %s (import it with: import std/time (%s))", name, name)
 	}

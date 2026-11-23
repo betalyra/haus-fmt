@@ -224,6 +224,8 @@ func unknownTypeMessage(_ name: String) -> String {
         "unknown type \(name) (import it with: import @haus-fmt/money (\(name)), and install @haus-fmt/money with your package manager)"
     case "LatLng", "BBox":
         "unknown type \(name) (import it with: import @haus-fmt/geo (\(name)), and install @haus-fmt/geo with your package manager)"
+    case "Uuid":
+        "unknown type \(name) (import it with: import @haus-fmt/uuid (\(name)), and install @haus-fmt/uuid with your package manager)"
     case _ where timeTypes.contains(name):
         "unknown type \(name) (import it with: import std/time (\(name)))"
     default:

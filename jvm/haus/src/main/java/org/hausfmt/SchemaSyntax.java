@@ -1158,6 +1158,10 @@ final class SchemaSyntax {
       return "unknown type " + name + " (import it with: import @haus-fmt/geo (" + name
           + "), and install @haus-fmt/geo with your package manager)";
     }
+    if (name.equals("Uuid")) {
+      return "unknown type " + name + " (import it with: import @haus-fmt/uuid (" + name
+          + "), and install @haus-fmt/uuid with your package manager)";
+    }
     if (StdTime.isType(name)) {
       return "unknown type " + name + " (import it with: import std/time (" + name + "))";
     }

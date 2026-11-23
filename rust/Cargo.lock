@@ -336,6 +336,7 @@ dependencies = [
  "haus-fmt-build",
  "haus-fmt-geo",
  "haus-fmt-money",
+ "haus-fmt-uuid",
  "haus-test-money",
  "haus-test-orders",
  "haus-test-travel",
@@ -432,6 +433,14 @@ dependencies = [
  "libc",
  "tempfile",
  "winnow",
+]
+
+[[package]]
+name = "haus-fmt-uuid"
+version = "1.0.0"
+dependencies = [
+ "haus-fmt",
+ "haus-fmt-build",
 ]
 
 [[package]]

@@ -91,7 +91,7 @@ check with exit code 2.
 A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 (spec §14): its errors, and its warnings (attributes this version doesn't
 define, uses of deprecated types), which don't fail the check. An import of
-an official package with profiles (`@haus-fmt/money`, `@haus-fmt/geo`) gets a
+an official package with profiles (`@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid`) gets a
 hint (`missing-codec`): `haus check` has no codecs, so it checks the
 package's types for their shape only, not its profiles' rules (`the rules of
 @haus-fmt/money (profiles: iso) are not checked here; your application checks

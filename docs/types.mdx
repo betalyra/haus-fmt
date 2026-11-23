@@ -73,6 +73,7 @@ Everything else is a schema package: an ordinary schema file, `schema.haus`, wit
 |---|---|---|
 | [`@haus-fmt/money`](https://github.com/betalyra/haus-fmt/tree/main/extensions/money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
 | [`@haus-fmt/geo`](https://github.com/betalyra/haus-fmt/tree/main/extensions/geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |
+| [`@haus-fmt/uuid`](https://github.com/betalyra/haus-fmt/tree/main/extensions/uuid) | `Uuid` | `rfc9562`: the RFC 9562 text form in lowercase, any version |
 
 The schema says a `Money` is a `Decimal` and a currency tag. Which tags count as currencies has more than one answer (ISO 4217, your shop's list, crypto currencies), so the schema doesn't decide it. A profile is one answer: a definition of the type, written as a rule in prose, which test vectors test. Your application picks one by adding its codec; until then, `Money(19.90, Xyz)` decodes. Like `std/time`, each official profile has a reference checker in Lean, and the codecs of every binding that ships them are fuzzed against that checker in CI (the table below).
 
@@ -130,6 +131,20 @@ Go decodes to checked `haus.Value`s (`schema.DecodeAs` gives a codec's host type
 | JVM | `String`, the checked text | `LocalDate`, `YearMonth`, `LocalTime`, `LocalDateTime`, `Instant`, `OffsetDateTime`, `ZoneId` (lossy) | `MoneyCodecs.ISO` → `Money`, `GeoCodecs.WGS84` → `LatLng`, `WGS84_BBOX` → `BBox` |
 | Roc | `Str`, the checked text | a codec module of your own | `Iso` → `{ amount : Str, currency : Str }`, `Wgs84` → `{ lat : F64, lng : F64 }`, `Wgs84BBox` |
 | Zig | `Decoded`, the checked text | `haus.codecs.time`: `date`, `year_month`, `time_of_day`, `date_time`, `instant`; `instant_timestamp` → `std.Io.Timestamp` and `duration` → `std.Io.Duration` (lossy) | `haus.codecs.money.iso`, `haus.codecs.geo.wgs84`: the same values, checked |
+
+| | `@haus-fmt/uuid` (`rfc9562`) |
+|---|---|
+| TypeScript | `rfc9562`: `string`, the checked text |
+| Effect | `rfc9562` from `./effect`: `string`, the checked text |
+| Rust | `Rfc9562` → `UuidText`, the checked text |
+| Python | `haus_uuid.rfc9562`: `str`, the checked text; `haus_uuid.rfc9562_as_uuid` → `uuid.UUID` |
+| Go | `uuid.Rfc9562` → `uuid.UUID`, the checked text |
+| Swift | none yet |
+| JVM | `UuidCodecs.RFC9562` → `String`, the checked text; `UuidCodecs.RFC9562_AS_UUID` → `java.util.UUID` |
+| Roc | `Rfc9562` → `Str`, the checked text |
+| Zig | none yet |
+
+Python's `uuid.UUID` and Java's `java.util.UUID` keep the value too: the profile allows one spelling per UUID, and that is the one they write.
 
 Without a codec, a package's type decodes like any type of its schema: a `Money` is a variant with a `Decimal` and a tag, and a currency of `Xyz` passes; schema bindings warn about it (`missing-codec`). Codecs for JavaScript's Temporal are planned after 1.0.
 

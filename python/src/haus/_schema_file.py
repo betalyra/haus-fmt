@@ -1544,6 +1544,8 @@ class _Checker:
             module = "@haus-fmt/money"
         if name in ("LatLng", "BBox"):
             module = "@haus-fmt/geo"
+        if name == "Uuid":
+            module = "@haus-fmt/uuid"
         if module is None:
             self.fail("unknown-type", f"unknown type {name}", pos)
         how = f"import it with: import {module} ({name})" + (

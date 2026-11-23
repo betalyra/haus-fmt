@@ -82,7 +82,7 @@ deprecated types in a schema and record cases with a field named `_tag` or
 `Config::quiet()` turns them off. So is `missing-codec` (spec §13.4): the
 schema's types reach a type that an official profile has a rule for
 (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`,
-`@haus-fmt/geo@1#BBox`) with no `.codec(…)` for its id, so its values are
+`@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`) with no `.codec(…)` for its id, so its values are
 checked for their shape only. A type reached only inside a type with a codec
 doesn't count: a codec for `Money` (`haus_money::Iso`) covers its `Currency`.
 `haus-gen roc` prints the same warning for its `--codec`s.
@@ -222,6 +222,7 @@ reject what the profile rejects and keep the value (spec §13.4):
 | `haus_money` | `IsoCurrency` | `@haus-fmt/money@1#Currency` | `CurrencyCode`: three letters A–Z |
 | `haus_geo` | `Wgs84` | `@haus-fmt/geo@1#LatLng` | `Point` (`lat()`, `lng()`): the floats as decoded, `-0` kept |
 | `haus_geo` | `Wgs84BBox` | `@haus-fmt/geo@1#BBox` | `Bounds` (`sw()`, `ne()`, `crosses_antimeridian()`) |
+| `haus_uuid` | `Rfc9562` | `@haus-fmt/uuid@1#Uuid` | `UuidText` (`as_str()`): the text, lowercase, any version |
 
 ```rust
 haus_build::Config::new()
@@ -229,6 +230,7 @@ haus_build::Config::new()
     .codec("@haus-fmt/money@1#Currency", "haus_money::IsoCurrency")
     .codec("@haus-fmt/geo@1#LatLng", "haus_geo::Wgs84")
     .codec("@haus-fmt/geo@1#BBox", "haus_geo::Wgs84BBox")
+    .codec("@haus-fmt/uuid@1#Uuid", "haus_uuid::Rfc9562")
     .compile("app.schema.haus")?;
 ```
 

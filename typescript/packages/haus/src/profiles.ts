@@ -18,6 +18,7 @@ export const PROFILED_TYPES: ReadonlyMap<string, readonly string[]> = new Map([
   ["@haus-fmt/money@1#Currency", ["iso"]],
   ["@haus-fmt/geo@1#LatLng", ["wgs84"]],
   ["@haus-fmt/geo@1#BBox", ["wgs84"]],
+  ["@haus-fmt/uuid@1#Uuid", ["rfc9562"]],
 ])
 
 /** The package of a type id: `@haus-fmt/money` for `@haus-fmt/money@1#Currency`. */

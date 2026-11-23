@@ -107,7 +107,7 @@ A **schema file** (`*.schema.haus`) is loaded with its imports and checked
 define, uses of deprecated types, record cases with a field named `_tag` or
 `_args`, which have no schema-based JSON form), which don't fail the check.
 An import of an official package with profiles (`@haus-fmt/money`,
-`@haus-fmt/geo`) gets a hint (`missing-codec`): `haus check` has no codecs,
+`@haus-fmt/geo`, `@haus-fmt/uuid`) gets a hint (`missing-codec`): `haus check` has no codecs,
 so it checks the package's types for their shape only, not its profiles'
 rules (spec §13.4).
 

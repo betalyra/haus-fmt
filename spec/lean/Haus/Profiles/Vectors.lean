@@ -1,5 +1,6 @@
 import Haus.Profiles.Money
 import Haus.Profiles.Geo
+import Haus.Profiles.Uuid
 import Haus.Parser
 
 /-!
@@ -50,7 +51,12 @@ def geo : Profile where
   env := Geo.env
   checks := Geo.Type_.all.map fun t => (t.name, Geo.check t)
 
-def all : List Profile := [money, geo]
+def uuid : Profile where
+  name := "@haus-fmt/uuid/rfc9562"
+  env := Uuid.env
+  checks := Uuid.Type_.all.map fun t => (t.name, Uuid.check t)
+
+def all : List Profile := [money, geo, uuid]
 
 def find? (name : String) : Option Profile := all.find? (·.name == name)
 

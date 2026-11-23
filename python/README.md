@@ -296,7 +296,7 @@ s = schema.compile_schema(
 
 A codec is any object with `decode(value)` and `encode(value)` working on the default host type; raise `ValueError` to reject, which `HausDecodeError` reports with the code `codec-rejected`. Codecs for your own types use their ids (`my-app/order#Money`). A codec for a type the schema doesn't have is a `ValueError`, except in a `schema.CodecGroup`: codecs given together, such as a profile's, combined with `|`.
 
-The official packages ship the codecs of their profiles: [`haus-fmt-money`](../extensions/money/python) (`haus_money.iso`: currencies are three letters A–Z) and [`haus-fmt-geo`](../extensions/geo/python) (`haus_geo.wgs84`: latitudes and longitudes in range). They keep the value: a currency becomes its tag (`"EUR"`, instead of an `Unknown`), a `LatLng` stays `Tagged("LatLng", (lat, lng))`, `-0.0` included.
+The official packages ship the codecs of their profiles: [`haus-fmt-money`](../extensions/money/python) (`haus_money.iso`: currencies are three letters A–Z), [`haus-fmt-geo`](../extensions/geo/python) (`haus_geo.wgs84`: latitudes and longitudes in range) and [`haus-fmt-uuid`](../extensions/uuid/python) (`haus_uuid.rfc9562`: a UUID in its lowercase text form, any version). They keep the value: a currency becomes its tag (`"EUR"`, instead of an `Unknown`), a `LatLng` stays `Tagged("LatLng", (lat, lng))`, `-0.0` included, and a `Uuid` becomes its text, a `str` (`haus_uuid.rfc9562_as_uuid`: a `uuid.UUID`).
 
 ```python
 import haus_geo, haus_money
@@ -309,7 +309,7 @@ s = schema.load_schema(
 s["Order"].parse(text)  # Money(1, Eur) or LatLng(91, 0): HausDecodeError
 ```
 
-A package's rule is checked only where its codec is set. When the schema file's definitions reach a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`) without a codec for it, `s.warnings` ends with a `missing-codec` warning for that id (spec §13.4), at no place (`line` 0): its values are checked for their shape only. A type reached only inside a type with a codec doesn't count (a codec for `Money` covers its `Currency`). Decoding is the same with or without the warning.
+A package's rule is checked only where its codec is set. When the schema file's definitions reach a type that an official profile has a rule for (`@haus-fmt/money@1#Currency`, `@haus-fmt/geo@1#LatLng`, `@haus-fmt/geo@1#BBox`, `@haus-fmt/uuid@1#Uuid`) without a codec for it, `s.warnings` ends with a `missing-codec` warning for that id (spec §13.4), at no place (`line` 0): its values are checked for their shape only. A type reached only inside a type with a codec doesn't count (a codec for `Money` covers its `Currency`). Decoding is the same with or without the warning.
 
 ### Schema files for tools
 

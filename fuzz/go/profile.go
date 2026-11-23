@@ -2,8 +2,9 @@ package main
 
 // The profile fuzzer (`profiles.ts`): lines `TYPE HEX` (a value's haus text
 // as hex UTF-8). The value is decoded with the type of its package's schema
-// (extensions/money, extensions/geo) and the codecs of the official profile
-// (ext/money's Iso and IsoCurrency, ext/geo's Wgs84 and Wgs84BBox), and what
+// (extensions/money, extensions/geo, extensions/uuid) and the codecs of the
+// official profile (ext/money's Iso and IsoCurrency, ext/geo's Wgs84 and
+// Wgs84BBox, ext/uuid's Rfc9562), and what
 // was decoded is encoded again: `ok <canonical form>`, or
 // `err <place> <code> <reason>`. Encoding what was decoded must work, so an
 // encoding error is `crash …`.
@@ -16,6 +17,7 @@ import (
 	haus "github.com/betalyra/haus-fmt/go"
 	"github.com/betalyra/haus-fmt/go/ext/geo"
 	"github.com/betalyra/haus-fmt/go/ext/money"
+	"github.com/betalyra/haus-fmt/go/ext/uuid"
 	"github.com/betalyra/haus-fmt/go/schema"
 )
 
@@ -35,6 +37,7 @@ func profileTypes() (map[string]profiled, error) {
 	}{
 		{"money", []string{"Money", "Currency"}, []schema.Codec{money.Iso, money.IsoCurrency}},
 		{"geo", []string{"LatLng", "BBox"}, []schema.Codec{geo.Wgs84, geo.Wgs84BBox}},
+		{"uuid", []string{"Uuid"}, []schema.Codec{uuid.Rfc9562}},
 	}
 	for _, p := range packages {
 		s, err := schema.Load(filepath.Join(root, "extensions", p.dir, "schema.haus"), schema.Options{})

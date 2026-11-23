@@ -110,4 +110,5 @@ import Haus.Packages.Walk
 import Haus.Packages.Folders
 import Haus.Profiles.Money
 import Haus.Profiles.Geo
+import Haus.Profiles.Uuid
 import Haus.Profiles.Vectors

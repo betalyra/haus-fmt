@@ -1,5 +1,6 @@
 //! The official profiles' codecs (spec §13.3, §13.4): `haus_money::Iso`,
-//! `haus_money::IsoCurrency`, `haus_geo::Wgs84` and `haus_geo::Wgs84BBox`.
+//! `haus_money::IsoCurrency`, `haus_geo::Wgs84`, `haus_geo::Wgs84BBox` and
+//! `haus_uuid::Rfc9562`.
 //!
 //! Every test vector of extensions/*/profiles/*.vectors.haus, and the codecs
 //! in an application (travel.schema.haus) whose package (packages/travel)
@@ -18,6 +19,7 @@ use haus_money::{CurrencyCode, Iso, IsoCurrency, IsoMoney};
 
 const MONEY: &str = include_str!("../../../extensions/money/profiles/iso.vectors.haus");
 const GEO: &str = include_str!("../../../extensions/geo/profiles/wgs84.vectors.haus");
+const UUID: &str = include_str!("../../../extensions/uuid/profiles/rfc9562.vectors.haus");
 
 /// A test vector: `Accept { type, value, output?, note? }` or `Reject { type, value, note? }`.
 #[derive(Debug)]
@@ -118,6 +120,15 @@ fn the_wgs84_vectors() {
     let (accepted, rejected) = run(GEO, |v| match v.ty.as_str() {
         "LatLng" => check::<Wgs84>(v),
         "BBox" => check::<Wgs84BBox>(v),
+        other => Err(format!("no codec for {other}")),
+    });
+    assert!(accepted > 0 && rejected > 0, "{accepted} accepted, {rejected} rejected");
+}
+
+#[test]
+fn the_rfc9562_vectors() {
+    let (accepted, rejected) = run(UUID, |v| match v.ty.as_str() {
+        "Uuid" => check::<haus_uuid::Rfc9562>(v),
         other => Err(format!("no codec for {other}")),
     });
     assert!(accepted > 0 && rejected > 0, "{accepted} accepted, {rejected} rejected");

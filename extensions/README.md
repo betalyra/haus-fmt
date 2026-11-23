@@ -20,13 +20,14 @@ Each package also ships the codecs of its profiles, tested against the vectors:
 
 | Language | Package | Codecs |
 |---|---|---|
-| TypeScript, `h.*` schemas | `@haus-fmt/money`, `@haus-fmt/geo` (`ts/`) | `import { iso } from "@haus-fmt/money"`, `{ wgs84 }` from `"@haus-fmt/geo"`: `compileSchemaFile(text, { …, codecs: [...iso, ...wgs84] })` |
-| TypeScript, Effect | the same, `/effect` | `import { iso } from "@haus-fmt/money/effect"`: `Haus.decode(Order, iso, wgs84)` |
-| Python | `haus-fmt-money`, `haus-fmt-geo` (`python/`), imported as `haus_money`, `haus_geo` | `load_schema(path, packages=[haus_money.PACKAGE], codecs=haus_money.iso \| haus_geo.wgs84)` |
-| Rust | the crates `haus-fmt-money`, `haus-fmt-geo` (`src/`), imported as `haus_money`, `haus_geo` | in `build.rs`: `.codec("@haus-fmt/money@1#Money", "haus_money::Iso")`, `haus_money::IsoCurrency`, `haus_geo::Wgs84`, `haus_geo::Wgs84BBox` ([rust/README.md](../rust/README.md)) |
-| Roc | the Roc packages (`roc/`) | modules `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox`: `haus-gen roc … --codec "@haus-fmt/money@1#Money=money.Iso"` ([roc/README.md](../roc/README.md)) |
-| Go | `github.com/betalyra/haus-fmt/go/ext/money`, `…/ext/geo` (in the Go module, `go/ext/`) | `schema.NewCodecs(money.Iso, money.IsoCurrency, geo.Wgs84, geo.Wgs84BBox)`, passed as `DecodeOptions{Codecs: …}` ([go/README.md](../go/README.md)); the schemas are found like any package's |
-| Zig | in the Zig package (`zig/src/codecs.zig`) | `haus.Codecs.init(gpa, &(haus.codecs.money.iso ++ haus.codecs.geo.wgs84))`, passed as `.codecs = &codecs` ([zig/README.md](../zig/README.md)); the schemas are given as packages (`packages.Options.folders`, or embedded as a `packages.Tree`) |
+| TypeScript, `h.*` schemas | `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid` (`ts/`) | `import { iso } from "@haus-fmt/money"`, `{ wgs84 }` from `"@haus-fmt/geo"`, `{ rfc9562 }` from `"@haus-fmt/uuid"`: `compileSchemaFile(text, { …, codecs: [...iso, ...wgs84, ...rfc9562] })` |
+| TypeScript, Effect | the same, `/effect` | `import { iso } from "@haus-fmt/money/effect"`: `Haus.decode(Order, iso, wgs84, rfc9562)` |
+| Python | `haus-fmt-money`, `haus-fmt-geo`, `haus-fmt-uuid` (`python/`), imported as `haus_money`, `haus_geo`, `haus_uuid` | `load_schema(path, packages=[haus_money.PACKAGE], codecs=haus_money.iso \| haus_geo.wgs84 \| haus_uuid.rfc9562)` |
+| Rust | the crates `haus-fmt-money`, `haus-fmt-geo`, `haus-fmt-uuid` (`src/`), imported as `haus_money`, `haus_geo`, `haus_uuid` | in `build.rs`: `.codec("@haus-fmt/money@1#Money", "haus_money::Iso")`, `haus_money::IsoCurrency`, `haus_geo::Wgs84`, `haus_geo::Wgs84BBox`, `haus_uuid::Rfc9562` ([rust/README.md](../rust/README.md)) |
+| Roc | the Roc packages (`roc/`) | modules `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox`, `Rfc9562`: `haus-gen roc … --codec "@haus-fmt/money@1#Money=money.Iso"` ([roc/README.md](../roc/README.md)) |
+| Go | `github.com/betalyra/haus-fmt/go/ext/money`, `…/ext/geo`, `…/ext/uuid` (in the Go module, `go/ext/`) | `schema.NewCodecs(money.Iso, money.IsoCurrency, geo.Wgs84, geo.Wgs84BBox, uuid.Rfc9562)`, passed as `DecodeOptions{Codecs: …}` ([go/README.md](../go/README.md)); the schemas are found like any package's |
+| JVM | in the `haus` library (`org.hausfmt.ext.*`) | `Codecs.of(MoneyCodecs.ISO, MoneyCodecs.ISO_CURRENCY, GeoCodecs.WGS84, GeoCodecs.WGS84_BBOX, UuidCodecs.RFC9562)`, passed as `DecodeOptions.DEFAULT.withCodecs(…)` ([jvm/README.md](../jvm/README.md)) |
+| Zig | in the Zig package (`zig/src/codecs.zig`) | `haus.Codecs.init(gpa, &(haus.codecs.money.iso ++ haus.codecs.geo.wgs84))`, passed as `.codecs = &codecs` ([zig/README.md](../zig/README.md)); the schemas are given as packages (`packages.Options.folders`, or embedded as a `packages.Tree`); none for `@haus-fmt/uuid` yet |
 
 There is no haus registry (spec §13.3, *Distribution*). Anyone can publish a
 schema package as an ordinary dependency: to npm, crates.io, PyPI or a private
@@ -38,3 +39,4 @@ scripts, and publish every language from one source.
 |---|---|---|
 | [`@haus-fmt/money`](money) | `Money`, `Currency` | `iso`: currency codes are three letters A–Z |
 | [`@haus-fmt/geo`](geo) | `LatLng`, `BBox` | `wgs84`: latitude and longitude in range |
+| [`@haus-fmt/uuid`](uuid) | `Uuid` | `rfc9562`: the RFC 9562 text form in lowercase, any version |

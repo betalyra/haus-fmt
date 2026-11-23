@@ -139,8 +139,9 @@ above.
 
 The same idea for the codecs of the official profiles (spec §13.3, §13.4;
 audit plan X3): `@haus-fmt/money/iso`
-([`iso.md`](../extensions/money/profiles/iso.md)) and `@haus-fmt/geo/wgs84`
-([`wgs84.md`](../extensions/geo/profiles/wgs84.md)). Generated values and
+([`iso.md`](../extensions/money/profiles/iso.md)), `@haus-fmt/geo/wgs84`
+([`wgs84.md`](../extensions/geo/profiles/wgs84.md)) and `@haus-fmt/uuid/rfc9562`
+([`rfc9562.md`](../extensions/uuid/profiles/rfc9562.md)). Generated values and
 near misses of each type go through the Lean reference checkers
 ([`spec/lean/Haus/Profiles`](../spec/lean/Haus/Profiles), proven to compute
 the rules) and every binding's codecs, which decode the value with the
@@ -165,7 +166,12 @@ a hair either side, literals that round onto a bound
 spelling, `NaN` and the infinities, overflow, underflow to zero and
 subnormals, integers and floats, hex and binary, hundreds of digits; boxes
 with the latitudes in and out of order, equal, `-0` against `0` and one float
-apart, across the antimeridian and at ±180. Near misses: the wrong number of
+apart, across the antimeridian and at ±180. For `Uuid`: texts of any version
+and variant, the nil and the max UUID, and near misses of them (uppercase
+digits, one or all; a character that is no lowercase digit, non-ASCII digits
+and hyphens among them; hyphens moved, missing or replaced; one character
+more or less; braces, `urn:uuid:`, space around), some characters written as
+escapes. Near misses: the wrong number of
 arguments, record payloads, other tags, other kinds of values, the other type
 of the profile; a few are mutated as text. A disagreeing case is shrunk as
 for std/time, to the smallest text with the same pattern of disagreement.
@@ -181,14 +187,14 @@ code; reasons are not compared.
 | Codecs | Runner (`FILE` of lines `TYPE HEX`, the value's text as hex UTF-8; prints `ok <canonical>` or `err <place> <code> <reason>`) |
 |---|---|
 | Lean | `haus-ref --profile-batch NAME FILE` ([`spec/lean/Main.lean`](../spec/lean/Main.lean)) |
-| TypeScript | in this process: `@haus-fmt/money`'s `iso` and `@haus-fmt/geo`'s `wgs84` with `compileSchemaFile(schema.haus, { codecs })`, `h.decode`, `h.encode` |
-| TypeScript (`typescript-h`) | in this process: the packages' `h.*` schemas `Money`, `Currency`, `LatLng`, `BBox` |
+| TypeScript | in this process: `@haus-fmt/money`'s `iso`, `@haus-fmt/geo`'s `wgs84` and `@haus-fmt/uuid`'s `rfc9562` with `compileSchemaFile(schema.haus, { codecs })`, `h.decode`, `h.encode` |
+| TypeScript (`typescript-h`) | in this process: the packages' `h.*` schemas `Money`, `Currency`, `LatLng`, `BBox`, `Uuid` |
 | Effect | in this process: the packages' `./effect` codec groups with `Haus.decodeValue(schema, codecs)`, `Haus.encodeValue(schema, codecs)` |
-| Rust | [`schema-rust/src/profile_runner.rs`](schema-rust/src/profile_runner.rs): `haus_money::{Iso, IsoCurrency}`, `haus_geo::{Wgs84, Wgs84BBox}` as generated code runs a codec (`haus::de::codec`) |
-| Roc | [`roc/profile_runner.roc`](roc/profile_runner.roc): `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox` of `extensions/*/roc` with `Decode.codec` |
-| Python | [`python/fuzz/profile_runner.py`](../python/fuzz/profile_runner.py): `haus_money.iso` and `haus_geo.wgs84` with `haus.schema.load_schema(…, codecs=…)` |
-| Go | [`go-runner --profile`](go/profile.go): `ext/money`'s `Iso`, `IsoCurrency` and `ext/geo`'s `Wgs84`, `Wgs84BBox` with `Type.DecodeWith` and `EncodeWith` |
-| JVM | [`jvm-runner --profile`](jvm/src/main/java/org/hausfmt/fuzz/ProfileMode.java): `MoneyCodecs.ISO`, `ISO_CURRENCY` and `GeoCodecs.WGS84`, `WGS84_BBOX` (`org.hausfmt.ext`) with `SchemaType.decode`, the codec's `decode` and `encode`, and `SchemaType.encode` |
+| Rust | [`schema-rust/src/profile_runner.rs`](schema-rust/src/profile_runner.rs): `haus_money::{Iso, IsoCurrency}`, `haus_geo::{Wgs84, Wgs84BBox}`, `haus_uuid::Rfc9562` as generated code runs a codec (`haus::de::codec`) |
+| Roc | [`roc/profile_runner.roc`](roc/profile_runner.roc): `Iso`, `IsoCurrency`, `Wgs84`, `Wgs84BBox`, `Rfc9562` of `extensions/*/roc` with `Decode.codec` |
+| Python | [`python/fuzz/profile_runner.py`](../python/fuzz/profile_runner.py): `haus_money.iso`, `haus_geo.wgs84` and `haus_uuid.rfc9562` with `haus.schema.load_schema(…, codecs=…)` |
+| Go | [`go-runner --profile`](go/profile.go): `ext/money`'s `Iso`, `IsoCurrency`, `ext/geo`'s `Wgs84`, `Wgs84BBox` and `ext/uuid`'s `Rfc9562` with `Type.DecodeWith` and `EncodeWith` |
+| JVM | [`jvm-runner --profile`](jvm/src/main/java/org/hausfmt/fuzz/ProfileMode.java): `MoneyCodecs.ISO`, `ISO_CURRENCY`, `GeoCodecs.WGS84`, `WGS84_BBOX` and `UuidCodecs.RFC9562_AS_UUID` (`org.hausfmt.ext`) with `SchemaType.decode`, the codec's `decode` and `encode`, and `SchemaType.encode` |
 
 So far every binding agrees with Lean on every case generated.
 

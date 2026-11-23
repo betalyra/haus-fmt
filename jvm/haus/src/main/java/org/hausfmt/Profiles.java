@@ -34,7 +34,8 @@ public final class Profiles {
       Map.of(
           "@haus-fmt/money@1#Currency", List.of("iso"),
           "@haus-fmt/geo@1#LatLng", List.of("wgs84"),
-          "@haus-fmt/geo@1#BBox", List.of("wgs84"));
+          "@haus-fmt/geo@1#BBox", List.of("wgs84"),
+          "@haus-fmt/uuid@1#Uuid", List.of("rfc9562"));
 
   /**
    * The {@code missing-codec} warnings for decoding the types {@code roots} with {@code codecs}:

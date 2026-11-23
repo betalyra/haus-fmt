@@ -2,7 +2,7 @@
 reads lines `TYPE HEX` (a value's haus text as hex-encoded UTF-8), decodes the
 value with the type of its package's schema and the codecs of the official
 profile (haus_money.iso for Money and Currency, haus_geo.wgs84 for LatLng and
-BBox), encodes the result, and prints one line each: `ok <canonical form>` or
+BBox, haus_uuid.rfc9562 for Uuid), encodes the result, and prints one line each: `ok <canonical form>` or
 `err <place> <code> <reason>` (`-` for an input that isn't one value). Encoding
 what was decoded must work, so an encode error is printed as `crash …`."""
 
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def package(name: str, codecs: str) -> tuple[Path, CodecGroup]:
-    """An extension's Python package (haus_money, haus_geo), from the checkout: its directory, its codecs."""
+    """An extension's Python package (haus_money, haus_geo, haus_uuid), from the checkout: its directory, its codecs."""
     sys.path.insert(0, str(ROOT / "extensions" / name.removeprefix("haus_") / "python" / "src"))
     module = import_module(name)
     return module.PACKAGE, getattr(module, codecs)
@@ -32,7 +32,15 @@ def schemas() -> dict[str, SchemaType]:
     geo_dir, wgs84 = package("haus_geo", "wgs84")
     money = schema.load_schema(money_dir / "schema.haus", codecs=iso)
     geo = schema.load_schema(geo_dir / "schema.haus", codecs=wgs84)
-    return {"Money": money["Money"], "Currency": money["Currency"], "LatLng": geo["LatLng"], "BBox": geo["BBox"]}
+    uuid_dir, rfc9562 = package("haus_uuid", "rfc9562")
+    uuid = schema.load_schema(uuid_dir / "schema.haus", codecs=rfc9562)
+    return {
+        "Money": money["Money"],
+        "Currency": money["Currency"],
+        "LatLng": geo["LatLng"],
+        "BBox": geo["BBox"],
+        "Uuid": uuid["Uuid"],
+    }
 
 
 def outcome(types: dict[str, SchemaType], line: str) -> str:
