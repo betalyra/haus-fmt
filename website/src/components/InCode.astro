@@ -3,9 +3,23 @@ import SectionHeading from "./SectionHeading.astro";
 import Code from "./Code.astro";
 import CodeTabs from "./CodeTabs";
 import Wash from "./Wash.astro";
-import { codeGo, codePython, codeRoc, codeRust, codeTs, codeTsPlain, schemaHaus, threadHaus } from "@/content/samples";
-import type { Tab } from "./CodeTabs";
+import {
+  codeC,
+  codeGo,
+  codeJava,
+  codeKotlin,
+  codePython,
+  codeRoc,
+  codeRust,
+  codeSwift,
+  codeTs,
+  codeTsPlain,
+  codeZig,
+  schemaHaus,
+  threadHaus,
+} from "@/content/samples";
 import { links } from "@/lib/links";
+import type { Tab } from "./CodeTabs";
 import type { Pigment } from "@/lib/pigments";
 
 const fileTabs: Tab[] = [
@@ -13,13 +27,21 @@ const fileTabs: Tab[] = [
   { value: "schema", label: "Schema", caption: "Its schema. Comment refers to itself, so threads can nest." },
 ];
 
+/** The link after a tab's caption: that language's guide. */
+const guide = (label: string, page: string) => ({ label: `${label} guide`, href: `${links.languages}/${page}` });
+
 const languageTabs: Tab[] = [
-  { value: "ts", icon: "typescript", label: "TypeScript", caption: "haus schemas are Standard Schemas, so Zod, Valibot and ArkType work too." },
-  { value: "effect", icon: "effect", label: "Effect", caption: "The Effect binding: Int becomes bigint, Instant stays its exact text. DateTime is an opt-in." },
-  { value: "rust", icon: "rust", label: "Rust", caption: "haus-fmt-build generates the types at compile time." },
-  { value: "python", icon: "python", label: "Python", caption: "The parser and streams today, with pattern matching. Typed decoding is on its way." },
-  { value: "go", icon: "go", label: "Go", caption: "Package schema loads the schema and checks values with it at run time." },
-  { value: "roc", icon: "roc", label: "Roc", caption: "haus-gen generates the types. The Roc parser is still in progress." },
+  { value: "ts", icon: "typescript", label: "TypeScript", caption: "haus schemas are Standard Schemas, so Zod, Valibot and ArkType work too.", more: guide("TypeScript", "typescript") },
+  { value: "effect", icon: "effect", label: "Effect", caption: "Int becomes bigint, Instant stays its exact text. DateTime is an opt-in.", more: guide("Effect", "effect") },
+  { value: "rust", icon: "rust", label: "Rust", caption: "haus-fmt-build generates the types at compile time.", more: guide("Rust", "rust") },
+  { value: "python", icon: "python", label: "Python", caption: "Values you can match on. With a schema file, haus.schema decodes into dicts and tagged values.", more: guide("Python", "python") },
+  { value: "go", icon: "go", label: "Go", caption: "Package schema loads the schema and checks values with it at run time.", more: guide("Go", "go") },
+  { value: "swift", icon: "swift", label: "Swift", caption: "Decode straight into your Codable structs.", more: guide("Swift", "swift") },
+  { value: "java", icon: "java", label: "Java", caption: "Decode into records and sealed interfaces; java.time is an opt-in.", more: guide("Java", "jvm") },
+  { value: "kotlin", icon: "kotlin", label: "Kotlin", caption: "Decode into data classes, with the same library as Java.", more: guide("Kotlin", "jvm") },
+  { value: "roc", icon: "roc", label: "Roc", caption: "haus-gen generates the types and their decoders from the schema.", more: guide("Roc", "roc") },
+  { value: "zig", icon: "zig", label: "Zig", caption: "A Decoded keeps every value exactly; codecs give you Zig types.", more: guide("Zig", "zig") },
+  { value: "c", icon: "c", label: "C", caption: "libhaus and haus.h, built from the Zig library, for C and anything that calls C.", more: guide("C", "zig#from-c") },
 ];
 
 const notes: { term: string; rest: string; color: Pigment }[] = [
@@ -35,10 +57,7 @@ const notes: { term: string; rest: string; color: Pigment }[] = [
     <p class="mt-5 text-[1.12rem] text-ink-2">
       Any haus file parses on its own, just like JSON. When you want types, put a
       <code class="inline-code">.schema.haus</code> file next to your data: your build reads it and gives you
-      <strong>real types</strong>. Today in <a href={links.typescript} class="prose-link">TypeScript</a>,
-      <a href={links.effect} class="prose-link">Effect</a>, <a href={links.rust} class="prose-link">Rust</a>,
-      <a href={links.python} class="prose-link">Python</a>, <a href={links.go} class="prose-link">Go</a> and
-      <a href={links.roc} class="prose-link">Roc</a>.
+      <strong>real types</strong>.
     </p>
   </div>
 
@@ -56,18 +75,26 @@ const notes: { term: string; rest: string; color: Pigment }[] = [
     <div class="relative min-w-0 lg:col-span-5">
       <CodeTabs client:idle tabs={fileTabs}>
         <Fragment slot="data"><Code code={threadHaus} lang="haus" label="thread.haus" size="sm" schema={{ text: schemaHaus }} /></Fragment>
-        <Fragment slot="schema"><Code code={schemaHaus} lang="haus" label="thread.schema.haus" size="sm" /></Fragment>
+        <Fragment slot="schema"><Code code={schemaHaus} lang="haus" label="thread.schema.haus" size="sm" fixed /></Fragment>
       </CodeTabs>
     </div>
     <div class="relative min-w-0 lg:col-span-7">
       <CodeTabs client:idle tabs={languageTabs}>
-        <Fragment slot="ts"><Code code={codeTsPlain} lang="ts" label="main.ts" size="sm" /></Fragment>
-        <Fragment slot="effect"><Code code={codeTs} lang="ts" label="main.ts" size="sm" /></Fragment>
-        <Fragment slot="rust"><Code code={codeRust} lang="rust" label="main.rs" size="sm" /></Fragment>
-        <Fragment slot="python"><Code code={codePython} lang="python" label="main.py" size="sm" /></Fragment>
-        <Fragment slot="go"><Code code={codeGo} lang="go" label="main.go" size="sm" /></Fragment>
-        <Fragment slot="roc"><Code code={codeRoc} lang="python" label="main.roc" size="sm" /></Fragment>
+        <Fragment slot="ts"><Code code={codeTsPlain} lang="ts" label="main.ts" size="sm" fixed /></Fragment>
+        <Fragment slot="effect"><Code code={codeTs} lang="ts" label="main.ts" size="sm" fixed /></Fragment>
+        <Fragment slot="rust"><Code code={codeRust} lang="rust" label="main.rs" size="sm" fixed /></Fragment>
+        <Fragment slot="python"><Code code={codePython} lang="python" label="main.py" size="sm" fixed /></Fragment>
+        <Fragment slot="go"><Code code={codeGo} lang="go" label="main.go" size="sm" fixed /></Fragment>
+        <Fragment slot="swift"><Code code={codeSwift} lang="swift" label="main.swift" size="sm" fixed /></Fragment>
+        <Fragment slot="java"><Code code={codeJava} lang="java" label="Main.java" size="sm" fixed /></Fragment>
+        <Fragment slot="kotlin"><Code code={codeKotlin} lang="kotlin" label="Main.kt" size="sm" fixed /></Fragment>
+        <Fragment slot="roc"><Code code={codeRoc} lang="python" label="main.roc" size="sm" fixed /></Fragment>
+        <Fragment slot="zig"><Code code={codeZig} lang="zig" label="main.zig" size="sm" fixed /></Fragment>
+        <Fragment slot="c"><Code code={codeC} lang="c" label="main.c" size="sm" fixed /></Fragment>
       </CodeTabs>
+      <p class="mt-5 text-[0.92rem]">
+        <a href={links.languages} class="prose-link text-ink">All languages, side by side</a>
+      </p>
     </div>
   </div>
 

@@ -84,7 +84,7 @@ export default defineConfig({
         starlightLlmsTxt({
           projectName: 'haus',
           description:
-            'haus is a data format for humans: records, variants instead of null, exact numbers, dates and times, streams of values, and optional schemas. It has bindings for TypeScript, Effect, Rust, Roc, Python and Go.',
+            'haus is a data format for humans: records, variants instead of null, exact numbers, dates and times, streams of values, and optional schemas. It has bindings for TypeScript, Effect, Rust, Python, Go, Swift, Java and Kotlin, Roc, and Zig (with a C ABI).',
           rawContent: true,
           // The cheat sheet right after the welcome page, so agents read it first.
           promote: ['index*', 'docs', 'docs/cheat-sheet'],
@@ -101,6 +101,21 @@ export default defineConfig({
             { label: 'Coming from JSON', slug: 'docs/from-json' },
             { label: 'Cheat sheet', slug: 'docs/cheat-sheet' },
             { label: 'Using haus with agents', slug: 'docs/using-agents' },
+          ],
+        },
+        {
+          label: 'Languages',
+          items: [
+            { label: 'Overview', slug: 'docs/languages' },
+            { label: 'TypeScript', slug: 'docs/languages/typescript' },
+            { label: 'Effect', slug: 'docs/languages/effect' },
+            { label: 'Rust', slug: 'docs/languages/rust' },
+            { label: 'Python', slug: 'docs/languages/python' },
+            { label: 'Go', slug: 'docs/languages/go' },
+            { label: 'Swift', slug: 'docs/languages/swift' },
+            { label: 'Java and Kotlin', slug: 'docs/languages/jvm' },
+            { label: 'Roc', slug: 'docs/languages/roc' },
+            { label: 'Zig and C', slug: 'docs/languages/zig' },
           ],
         },
         {

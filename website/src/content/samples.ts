@@ -100,7 +100,7 @@ import thread from "./thread.haus"     // checked against its schema
 import { Comment } from "./thread.schema.haus"
 
 thread.author      // String        → string
-thread.at          // Instant       → Date
+thread.at          // Instant       → string, checked and exact
 thread.likes       // Int           → bigint, no size limit
 thread.replies     // Array Comment → Comment[]
 
@@ -166,6 +166,7 @@ fmt.Println(author, likes, len(replies.(haus.Array))) // ada 0 1
 export const codeRoc = `
 import haus.Decode
 import haus.Encode
+import haus.Int
 import Thread
 
 path : Path
@@ -173,13 +174,123 @@ path = "thread.haus"
 thread = Decode.one(path.read_utf8!()?, Thread.decode_root)?
 
 # author  : Str            String
-# likes   : I128           Int
+# likes   : Int            Int, no size limit
 # replies : List(Comment)  Array Comment
 
 liked = match thread {
-    Comment(c) => Comment({ ..c, likes: c.likes + 1 })
+    Comment(c) => Comment({ ..c, likes: Int.from_i128((c.likes.to_i128() ?? 0) + 1) })
 }
 Stdout.line!(Encode.to_str(Encode.value(liked, Thread.encode_comment)?)?)?
+`;
+
+/** After swift/Examples/quickstart/main.swift. */
+export const codeSwift = `
+import Haus
+
+struct Comment: Codable {      // from thread.schema.haus
+    let author: String         // String        → String
+    let at: String             // Instant       → String, checked and exact
+    let text: String
+    var likes: Int             // Int           → Int, range checked
+    let replies: [Comment]     // Array Comment → [Comment]
+}
+
+let schema = try HausSchema(contentsOf: "thread.schema.haus")
+let root = try schema.type("Root")
+let data = try String(contentsOfFile: "thread.haus", encoding: .utf8)
+var thread = try root.decode(Comment.self, fromText: data)  // checked against its schema
+
+thread.likes += 1
+print(try root.stringify(thread, FormatOptions(layout: .compact)))
+`;
+
+/** After jvm/examples/…/Quickstart.java. */
+export const codeJava = `
+import org.hausfmt.FormatOptions;
+import org.hausfmt.HausCodec;
+import org.hausfmt.Schema;
+
+record Comment(                 // from thread.schema.haus
+    String author,              // String        → String
+    String at,                  // Instant       → String, checked and exact
+    String text,
+    BigInteger likes,           // Int           → BigInteger, no size limit
+    List<Comment> replies) {}   // Array Comment → List<Comment>
+
+Schema schema = Schema.load(Path.of("thread.schema.haus"));
+HausCodec<Comment> comments = schema.codec("Root", Comment.class);
+Comment thread = comments.decode(Files.readString(Path.of("thread.haus")));  // checked
+
+Comment liked = new Comment(thread.author(), thread.at(), thread.text(),
+    thread.likes().add(BigInteger.ONE), thread.replies());
+System.out.print(comments.encode(liked, FormatOptions.COMPACT));
+`;
+
+/** After jvm/examples/…/quickstart/Quickstart.kt. */
+export const codeKotlin = `
+import org.hausfmt.FormatOptions
+import org.hausfmt.Schema
+import org.hausfmt.kotlin.codec
+
+data class Comment(             // from thread.schema.haus
+    val author: String,         // String        → String
+    val at: String,             // Instant       → String, checked and exact
+    val text: String,
+    val likes: BigInteger,      // Int           → BigInteger, no size limit
+    val replies: List<Comment>, // Array Comment → List<Comment>
+)
+
+val schema = Schema.load(Path("thread.schema.haus"))
+val comments = schema.codec<Comment>("Root")
+val thread = comments.decode(Path("thread.haus").readText())  // checked against its schema
+
+val liked = thread.copy(likes = thread.likes + BigInteger.ONE)
+print(comments.encode(liked, FormatOptions.COMPACT))
+`;
+
+/** After zig/examples/quickstart.zig. */
+export const codeZig = `
+const haus = @import("haus");
+
+const build = try haus.packages.build(gpa, io, "thread.schema.haus", .{});
+defer build.deinit();
+const root = build.root.get("Root").?;
+
+// checked against its schema; a Decoded keeps every value exactly
+const thread = try haus.decoding.decodeText(gpa, arena, root, text, .{});
+const c = thread.variant.args[0];      // Comment { … }
+
+_ = c.get("author").?.string;          // String        → []const u8
+_ = c.get("likes").?.int;              // Int           → its digits, no size limit
+_ = c.get("replies").?.array;          // Array Comment → []const Decoded
+
+const value = try haus.decoding.encode(arena, root, thread, .{});
+std.debug.print("{s}\\n", .{try haus.stringify(arena, value, .{ .layout = .compact })});
+`;
+
+/** After zig/examples/c/quickstart.c: libhaus and haus.h, built from zig/. */
+export const codeC = `
+#include "haus.h"
+
+haus_error err;
+haus_schema *schema = NULL;
+haus_schema_build("thread.schema.haus", NULL, &schema, &err);
+const haus_type *root = haus_schema_type(schema, "Root");
+
+/* checked against its schema; an error says where: $.likes: … [type-mismatch] */
+haus_doc *doc = NULL;
+const haus_value *thread = NULL;
+if (haus_decode_text(root, text, len, &doc, &thread, &err) == HAUS_ERROR)
+    printf("%s: %s [%s]\\n", err.path, err.message, err.code);
+
+/* Comment { … }: its record, then fields by key */
+const haus_value *c = haus_variant_arg(thread, 0);
+size_t n;
+const char *author = haus_string(haus_record_get(c, "author", 6), &n);  /* "ada" */
+const char *likes = haus_number(haus_record_get(c, "likes", 5), &n);    /* "0" */
+
+haus_doc_free(doc);
+haus_schema_free(schema);
 `;
 
 export const features = [

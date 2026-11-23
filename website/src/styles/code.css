@@ -39,6 +39,22 @@ figure.code--sm pre {
   line-height: 1.65;
 }
 
+/* A fixed height of 15 lines, as tall as the thread example: tabs of different
+   lengths keep one size. Longer code scrolls inside the card; long lines wrap,
+   continuing indented, instead of scrolling sideways. */
+figure.code--fixed pre {
+  height: 15lh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+figure.code--fixed pre .line {
+  display: inline-block;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}
+
 /* Phones: a little smaller, so typical lines fit without scrolling. */
 @media (max-width: 639px) {
   figure.code,
