@@ -72,16 +72,41 @@ public final class Runner {
 
   private Runner() {}
 
-  public static void main(String[] args) throws IOException {
+  /**
+   * The stack of the thread the modes run on. The build mode's values nest up to 1000 deep and
+   * the runner builds them recursively, which overflows the JVM's default stack (smaller on CI's
+   * machines than locally); the library itself needs no deep stack.
+   */
+  private static final long STACK_BYTES = 256L << 20;
+
+  public static void main(String[] args) throws Exception {
     PrintStream out = new PrintStream(new FileOutputStream(FileDescriptor.out), false, "UTF-8");
-    try {
-      run(args, out);
-    } catch (IllegalArgumentException e) {
-      out.flush();
+    Throwable[] failure = {null};
+    Thread worker =
+        new Thread(
+            null,
+            () -> {
+              try {
+                run(args, out);
+              } catch (Throwable t) {
+                failure[0] = t;
+              }
+            },
+            "runner",
+            STACK_BYTES);
+    worker.start();
+    worker.join();
+    out.flush();
+    if (failure[0] instanceof IllegalArgumentException e) {
       System.err.println(e.getMessage());
       System.exit(2);
     }
-    out.flush();
+    if (failure[0] instanceof Exception e) {
+      throw e;
+    }
+    if (failure[0] instanceof Error e) {
+      throw e;
+    }
   }
 
   private static void run(String[] args, PrintStream out) throws IOException {
