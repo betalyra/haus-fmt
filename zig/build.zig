@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/c_api.zig"),
         .target = target,
         .optimize = optimize,
+        // Position-independent, so that a C program built as PIE (the
+        // default of most Linux compilers) can link the static library.
+        .pic = true,
         .imports = &.{.{ .name = "haus", .module = haus }},
     });
     const c_lib = b.addLibrary(.{
