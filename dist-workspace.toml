@@ -35,3 +35,6 @@ pr-run-mode = "skip"
 # Started by the Rust release (rust-release.yml) once haus-fmt-cli is on
 # crates.io, with the tag to make: haus-fmt-cli-vX.Y.Z.
 dispatch-releases = true
+# Steps run before each build: an up-to-date Rust (the runners' can be older
+# than rust-version).
+github-build-setup = "../build-setup.yml"
