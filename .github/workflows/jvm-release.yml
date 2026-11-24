@@ -1,0 +1,69 @@
+# A release of the JVM libraries, org.haus-fmt:haus and org.haus-fmt:haus-kotlin,
+# to Maven Central. A push to main that changes jvm/build.gradle.kts
+# publishes when its version isn't on Maven Central yet: bumping the version
+# in a PR is the decision to release. It tests, builds the libraries signed,
+# and uploads them to the Central Portal, which publishes them once valid.
+#
+# Central has no trusted publishing, so this workflow needs secrets: the
+# portal's user token (CENTRAL_USERNAME, CENTRAL_PASSWORD) and the signing key
+# (SIGNING_KEY, armored, and SIGNING_PASSWORD), in the environment
+# maven-central, which allows deployments from main only. They come from
+# 1Password (PUBLISHING.md); the token expires and is renewed there and here.
+name: JVM release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "jvm/build.gradle.kts"
+      - ".github/workflows/jvm-release.yml"
+  # A re-run, e.g. after a failed upload: a version on Central is skipped.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jvm-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: maven-central
+    defaults:
+      run:
+        working-directory: jvm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Is this version new?
+        id: version
+        run: |
+          version=$(sed -n 's/^    version = "\(.*\)"$/\1/p' build.gradle.kts)
+          [ -n "$version" ] || { echo "no version in build.gradle.kts"; exit 1; }
+          status=$(curl -s -o /dev/null -w '%{http_code}' "https://repo1.maven.org/maven2/org/haus-fmt/haus/$version/haus-$version.pom")
+          case "$status" in
+            200) echo "$version is on Maven Central already: nothing to release"; echo "new=false" >> "$GITHUB_OUTPUT" ;;
+            404) echo "$version is new"; echo "new=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Maven Central answered $status"; exit 1 ;;
+          esac
+      - uses: actions/setup-java@v5
+        if: steps.version.outputs.new == 'true'
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.version.outputs.new == 'true'
+      - name: Test and build, signed
+        if: steps.version.outputs.new == 'true'
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: ./gradlew clean build publishAllPublicationsToStagingRepository -Prelease --no-daemon
+      - name: Publish to Maven Central
+        if: steps.version.outputs.new == 'true'
+        env:
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          CENTRAL_PUBLISHING_TYPE: AUTOMATIC
+        run: sh scripts/central-upload.sh

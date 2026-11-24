@@ -13,7 +13,7 @@ supports it, so no registry token is stored in the repository's secrets.
 | Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | a version bump merged to main, [python-release.yml](.github/workflows/python-release.yml) | `haus-fmt-geo` and `-uuid` 1.0.0 published by hand; `haus-fmt` 0.1.0 and `-money` 1.0.0 with the workflow |
 | Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | tag `go/vX.Y.Z` | v0.1.0 |
 | Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | tag `vX.Y.Z` | 0.1.0 |
-| JVM | `org.haus-fmt:haus`, `org.haus-fmt:haus-kotlin` | Maven Central | by hand, `jvm/scripts/central-upload.sh` | not yet |
+| JVM | `org.haus-fmt:haus`, `org.haus-fmt:haus-kotlin` | Maven Central | a version bump merged to main, [jvm-release.yml](.github/workflows/jvm-release.yml) (secrets, no OIDC) | 0.1.0 by hand |
 | Roc | the Roc packages | GitHub release | | not yet |
 | Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | published, 0.2.0 (by the workflow) |
 
@@ -235,11 +235,15 @@ tags.
 `org.haus-fmt:haus` and `org.haus-fmt:haus-kotlin`, from the Gradle build in
 `jvm/`, go to Maven Central through the Central Portal (central.sonatype.com,
 namespace `org.haus-fmt`, verified). Central has no trusted publishing: it
-takes a user token and signed files. Both stay on the releasing machine, so a
-release is done by hand; nothing secret is stored in GitHub.
+takes a user token and signed files. Both are kept in 1Password, and copied
+into the GitHub environment `maven-central` (main only) as secrets for the
+release workflow.
 
-The key and the token are kept in 1Password and given to the build only for
-the release command (`op run`): nothing is written to disk.
+A release is a PR that bumps the version in `jvm/build.gradle.kts`. Merged,
+it runs [jvm-release.yml](.github/workflows/jvm-release.yml): when that version
+isn't on Maven Central yet, it tests, builds the libraries signed and uploads
+them; the portal publishes them once they are valid, and the workflow waits
+for that. A failed release: run the workflow by hand.
 
 Once:
 
@@ -265,8 +269,17 @@ Once:
    `op`'s assignments a dot separates section and field, so the key is the
    file `asc` in the section `signing-key`:
    `op://Employee/haus-signing-key/signing-key/asc`.
+3. The four secrets of the environment `maven-central`, straight from
+   1Password (again when the token is renewed: it expires):
 
-A release: the version in `jvm/build.gradle.kts`, then from `jvm/`:
+   ```sh
+   op read "op://Employee/haus-signing-key/signing-key/asc" | gh secret set SIGNING_KEY --env maven-central --repo betalyra/haus-fmt
+   op read "op://Employee/haus-signing-key/password" | gh secret set SIGNING_PASSWORD --env maven-central --repo betalyra/haus-fmt
+   op read "op://Employee/haus-sonatype-publishing/username" | gh secret set CENTRAL_USERNAME --env maven-central --repo betalyra/haus-fmt
+   op read "op://Employee/haus-sonatype-publishing/password" | gh secret set CENTRAL_PASSWORD --env maven-central --repo betalyra/haus-fmt
+   ```
+
+By hand, without the workflow (e.g. when GitHub Actions is down), from `jvm/`:
 
 ```sh
 SIGNING_KEY="$(op read 'op://Employee/haus-signing-key/signing-key/asc')" \
@@ -279,9 +292,10 @@ op run -- sh -c './gradlew clean test publishAllPublicationsToStagingRepository 
 `op run` resolves fields only, so the key, a file in the item, is read by
 `op read`; both leave it in the environment of this one command. The build
 signs every file in memory (`-Prelease`; without it nothing is signed,
-to check the layout in `build/staging`). The script uploads the bundle as a
-deployment to check: the portal validates it, and it goes to Central when you
-press Publish (central.sonatype.com → Deployments). It is on Maven Central
+to check the layout in `build/staging`). By hand, the script uploads the
+bundle as a deployment to check: the portal validates it, and it goes to
+Central when you press Publish (central.sonatype.com → Deployments); the
+workflow sets `CENTRAL_PUBLISHING_TYPE=AUTOMATIC` instead. It is on Maven Central
 within about 30 minutes; a version can't be changed or removed afterwards.
 
 ## Not published yet
