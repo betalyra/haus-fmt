@@ -11,9 +11,9 @@ supports it, so no registry token is stored in the repository's secrets.
 | Zig, C | the Zig package, `libhaus` | GitHub release | tag `zig-vX.Y.Z`, [zig-release.yml](.github/workflows/zig-release.yml) | ready, not released yet |
 | Rust | `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build`, `haus-fmt-cli`; `haus-fmt-money`, `-geo`, `-uuid` | crates.io | a version bump merged to main, [rust-release.yml](.github/workflows/rust-release.yml) | `haus-fmt` 0.1.0 published by hand (outdated); 0.2.0 being set up |
 | Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | a version bump merged to main, [python-release.yml](.github/workflows/python-release.yml) | `haus-fmt-geo` and `-uuid` 1.0.0 published by hand; `haus-fmt` 0.1.0 and `-money` 1.0.0 with the workflow |
-| Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | | not yet |
-| Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | | not yet |
-| JVM | `org.haus-fmt:haus`, `haus-kotlin` | Maven Central | | not yet |
+| Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | tag `go/vX.Y.Z` | v0.1.0 |
+| Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | tag `vX.Y.Z` | 0.1.0 |
+| JVM | `org.haus-fmt:haus`, `org.haus-fmt:haus-kotlin` | Maven Central | by hand, `jvm/scripts/central-upload.sh` | not yet |
 | Roc | the Roc packages | GitHub release | | not yet |
 | Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | published, 0.2.0 (by the workflow) |
 
@@ -203,17 +203,91 @@ token from an earlier upload and then not ask; passing it as above avoids a
 stale one. The GitHub environment `pypi` allows deployments from the branch
 `main` only.
 
+## Go
+
+Nothing is uploaded: the module `github.com/betalyra/haus-fmt/go` is in a
+subdirectory, so its versions are tags `go/vX.Y.Z`. The Go proxy fetches a
+version the first time someone asks for it, and pkg.go.dev lists it then.
+
+```sh
+git tag -s go/vX.Y.Z -m "Go module X.Y.Z" && git push origin go/vX.Y.Z
+GOPROXY=https://proxy.golang.org go list -m github.com/betalyra/haus-fmt/go@vX.Y.Z   # asks the proxy once
+```
+
+The module has no dependencies; a `replace` in `go/go.mod` would keep it from
+being used as a dependency.
+
+## Swift
+
+Nothing is uploaded: SwiftPM depends on the repository and reads plain semver
+tags at its root (`vX.Y.Z`), against the root `Package.swift` (the sources are
+in `swift/`).
+
+```sh
+git tag -s vX.Y.Z -m "Swift package X.Y.Z" && git push origin vX.Y.Z
+```
+
+Tags of this form are the Swift package's only: other languages use prefixed
+tags.
+
+## Java and Kotlin
+
+`org.haus-fmt:haus` and `org.haus-fmt:haus-kotlin`, from the Gradle build in
+`jvm/`, go to Maven Central through the Central Portal (central.sonatype.com,
+namespace `org.haus-fmt`, verified). Central has no trusted publishing: it
+takes a user token and signed files. Both stay on the releasing machine, so a
+release is done by hand; nothing secret is stored in GitHub.
+
+The key and the token are kept in 1Password and given to the build only for
+the release command (`op run`): nothing is written to disk.
+
+Once:
+
+1. A user token from the portal (account → Generate User Token), saved as a
+   1Password item `haus-sonatype-publishing` (username, password) in the vault `Employee`.
+2. A signing key, made in a keyring that is thrown away afterwards, with a
+   passphrase from 1Password, and saved in the same item as the passphrase:
+
+   ```sh
+   op item create --category password --title haus-signing-key --vault Employee --generate-password=40,letters,digits
+   mkdir -m 700 /tmp/haus-gpg && export GNUPGHOME=/tmp/haus-gpg
+   op read "op://Employee/haus-signing-key/password" |
+     gpg --batch --pinentry-mode loopback --passphrase-fd 0 --quick-gen-key "haus-fmt releases" rsa4096 sign 2y
+   FPR=$(gpg --list-keys --with-colons | awk -F: '/^fpr/ { print $10; exit }')
+   op read "op://Employee/haus-signing-key/password" |
+     gpg --batch --pinentry-mode loopback --passphrase-fd 0 --armor --export-secret-keys "$FPR" > /tmp/haus-gpg/signing-key.asc
+   op item edit haus-signing-key --vault Employee "signing-key.asc[file]=/tmp/haus-gpg/signing-key.asc" "fingerprint[text]=$FPR"
+   gpg --keyserver keyserver.ubuntu.com --send-keys "$FPR"
+   gpgconf --kill gpg-agent; rm -rP /tmp/haus-gpg; unset GNUPGHOME FPR
+   ```
+
+   Central checks the signatures against the public key on the keyserver. In
+   `op`'s assignments a dot separates section and field, so the key is the
+   file `asc` in the section `signing-key`:
+   `op://Employee/haus-signing-key/signing-key/asc`.
+
+A release: the version in `jvm/build.gradle.kts`, then from `jvm/`:
+
+```sh
+SIGNING_KEY="$(op read 'op://Employee/haus-signing-key/signing-key/asc')" \
+SIGNING_PASSWORD="op://Employee/haus-signing-key/password" \
+CENTRAL_USERNAME="op://Employee/haus-sonatype-publishing/username" \
+CENTRAL_PASSWORD="op://Employee/haus-sonatype-publishing/password" \
+op run -- sh -c './gradlew clean test publishAllPublicationsToStagingRepository -Prelease && sh scripts/central-upload.sh'
+```
+
+`op run` resolves fields only, so the key, a file in the item, is read by
+`op read`; both leave it in the environment of this one command. The build
+signs every file in memory (`-Prelease`; without it nothing is signed,
+to check the layout in `build/staging`). The script uploads the bundle as a
+deployment to check: the portal validates it, and it goes to Central when you
+press Publish (central.sonatype.com → Deployments). It is on Maven Central
+within about 30 minutes; a version can't be changed or removed afterwards.
+
 ## Not published yet
 
-To be filled in as each one is set up. What's known:
+- **Roc:** Roc packages are URLs of bundles (`.tar.br`), built with
+  `roc build --bundle`, attached to a GitHub release.
 
-- **Go:** a module in a subdirectory is versioned by tags `go/vX.Y.Z`; the Go
-  proxy picks them up, nothing is uploaded.
-- **Swift:** SwiftPM reads plain semver tags (`X.Y.Z` or `vX.Y.Z`) at the
-  repository root, against the root `Package.swift`.
-- **JVM:** Maven Central has no trusted publishing: it needs a token and a
-  signing key as secrets, and the namespace `org.haus-fmt` verified through a
-  DNS record on haus-fmt.org.
-
-The plan is one version for all bindings, kept by changesets: the release PR
-then also copies `@haus-fmt/haus`'s version into each binding's manifest.
+Each language has its own version and releases on its own; the schema
+packages have the version of their npm package in every language.

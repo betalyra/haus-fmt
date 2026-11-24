@@ -27,3 +27,6 @@ bench/speed/py/**/__pycache__/
 # Copies of LICENSE made by typescript/scripts/license.mts
 typescript/packages/*/LICENSE
 extensions/*/LICENSE
+# Gradle state of the fuzzer's JVM runner (built from jvm/)
+fuzz/jvm/.gradle/
+fuzz/jvm/build/
