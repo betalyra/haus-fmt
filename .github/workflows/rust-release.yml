@@ -1,0 +1,84 @@
+# A release of the Rust crates. A push to main that changes a Cargo.toml
+# publishes, in dependency order, every crate whose version isn't on crates.io
+# yet: bumping a version in a PR is the decision to release. The core crates
+# (haus-fmt, haus-fmt-schema, haus-fmt-build, haus-fmt-cli) share the version
+# in rust/Cargo.toml; the schema crates (haus-fmt-money, -geo, -uuid) have
+# their own, which the npm release PR sets (typescript/scripts/sync-versions.mts).
+#
+# Trusted publishing: crates-io-auth-action exchanges this workflow's OIDC token
+# for a crates.io token that lives 30 minutes, so no token is stored. Each crate
+# lists this repository, this file and the environment crates-io as its trusted
+# publisher (on crates.io, the crate's settings). See PUBLISHING.md.
+name: Rust release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "rust/Cargo.toml"
+      - "rust/*/Cargo.toml"
+      - "extensions/*/Cargo.toml"
+      - ".github/workflows/rust-release.yml"
+  # A re-run, e.g. to finish a partial release: published versions are skipped.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-release
+  cancel-in-progress: false
+
+env:
+  # The published crates, each after the ones it depends on.
+  CRATES: "haus-fmt haus-fmt-schema haus-fmt-build haus-fmt-cli haus-fmt-money haus-fmt-geo haus-fmt-uuid"
+  # crates.io asks API clients to say who they are.
+  USER_AGENT: "haus-fmt release workflow (github.com/betalyra/haus-fmt)"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: Which versions are new?
+        id: new
+        run: |
+          versions=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | "\(.name) \(.version)"')
+          new=""
+          for crate in $CRATES; do
+            version=$(awk -v c="$crate" '$1 == c { print $2 }' <<< "$versions")
+            [ -n "$version" ] || { echo "$crate isn't in the workspace"; exit 1; }
+            status=$(curl -s -o /dev/null -w '%{http_code}' -A "$USER_AGENT" "https://crates.io/api/v1/crates/$crate/$version")
+            case "$status" in
+              200) echo "$crate $version: on crates.io already" ;;
+              404) echo "$crate $version: new"; new="$new $crate" ;;
+              *) echo "$crate $version: crates.io answered $status"; exit 1 ;;
+            esac
+          done
+          echo "crates=${new# }" >> "$GITHUB_OUTPUT"
+      - name: Test
+        if: steps.new.outputs.crates != ''
+        run: cargo test --workspace --all-features
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.new.outputs.crates != ''
+        id: auth
+      - name: Publish
+        if: steps.new.outputs.crates != ''
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          NEW: ${{ steps.new.outputs.crates }}
+        run: |
+          for crate in $NEW; do
+            cargo publish -p "$crate"
+          done

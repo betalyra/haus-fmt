@@ -4,19 +4,22 @@ version = "1.0.0"
 description = "@haus-fmt/uuid: Universally unique identifiers (a haus schema package)"
 edition = "2024"
 license = "MIT"
+readme = "README.rust.md"
+repository = "https://github.com/betalyra/haus-fmt"
+homepage = "https://haus-fmt.org"
 # Tested with the Rust workspace (cargo test --workspace in rust/).
 workspace = "../../rust"
 # Its library name: tells crates that depend on this one where its schema is,
 # and which crate has its types (haus_build::package).
 links = "haus_uuid"
-include = ["Cargo.toml", "build.rs", "src", "package.haus", "schema.haus", "profiles"]
+include = ["/Cargo.toml", "/build.rs", "/src", "/package.haus", "/schema.haus", "/profiles", "/README.rust.md"]
 
 # Imported as haus_uuid (the crate is haus-fmt-uuid: crates.io has no scopes).
 [lib]
 name = "haus_uuid"
 
 [dependencies]
-haus = { package = "haus-fmt", path = "../../rust/haus", version = "0.1.0" }
+haus = { package = "haus-fmt", path = "../../rust/haus", version = "0.2.0" }
 
 [build-dependencies]
-haus-fmt-build = { path = "../../rust/haus-build", version = "0.1.0" }
+haus-fmt-build = { path = "../../rust/haus-build", version = "0.2.0" }

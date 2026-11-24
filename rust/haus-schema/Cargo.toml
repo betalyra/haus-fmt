@@ -1,6 +1,6 @@
 [package]
 name = "haus-fmt-schema"
-version = "0.1.0"
+version.workspace = true
 description = "haus schema files: parse, resolve and check them, and check data against them at runtime"
 readme = "../README.md"
 keywords = ["haus", "schema", "validation", "data-format"]
@@ -16,7 +16,7 @@ homepage.workspace = true
 name = "haus_schema"
 
 [dependencies]
-haus = { package = "haus-fmt", path = "../haus", version = "0.1.0" }
+haus = { package = "haus-fmt", path = "../haus", version = "0.2.0" }
 winnow = "1.0.5"
 
 # O_NOFOLLOW and O_NONBLOCK, to open package files without following links (spec §13.3).

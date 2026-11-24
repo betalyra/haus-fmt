@@ -3,6 +3,9 @@ resolver = "3"
 members = ["haus", "haus-schema", "haus-build", "haus-cli", "haus-build-tests", "examples/quickstart", "examples/order", "examples/logs", "../extensions/money", "../extensions/geo", "../extensions/uuid"]
 
 [workspace.package]
+# The version of haus-fmt, haus-fmt-schema, haus-fmt-build and haus-fmt-cli. The
+# schema crates (extensions/) have their own, kept by sync-versions.mts.
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.99"
 license = "MIT"

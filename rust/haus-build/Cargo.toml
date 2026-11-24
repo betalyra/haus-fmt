@@ -1,6 +1,6 @@
 [package]
 name = "haus-fmt-build"
-version = "0.1.0"
+version.workspace = true
 description = "Rust types from haus schemas, generated in build.rs"
 readme = "../README.md"
 keywords = ["haus", "codegen", "build-script", "schema"]
@@ -16,8 +16,8 @@ homepage.workspace = true
 name = "haus_build"
 
 [dependencies]
-haus = { package = "haus-fmt", path = "../haus", version = "0.1.0" }
-haus-schema = { package = "haus-fmt-schema", path = "../haus-schema", version = "0.1.0" }
+haus = { package = "haus-fmt", path = "../haus", version = "0.2.0" }
+haus-schema = { package = "haus-fmt-schema", path = "../haus-schema", version = "0.2.0" }
 prettyplease = "0.3.0"
 proc-macro2 = "1.0.107"
 quote = "1.0.47"
