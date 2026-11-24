@@ -7,12 +7,12 @@ requires-python = ">=3.11"
 license = "MIT"
 keywords = ["haus", "schema", "geo", "wgs84"]
 classifiers = [
-  "Development Status :: 1 - Planning",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Typing :: Typed",
 ]
-dependencies = ["haus-fmt"]
+dependencies = ["haus-fmt>=0.1"]
 
 [project.urls]
 Homepage = "https://haus-fmt.org"

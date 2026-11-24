@@ -10,7 +10,7 @@ supports it, so no registry token is stored in the repository's secrets.
 | Schema packages | `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid` | npm | the same | published, 1.0.0 |
 | Zig, C | the Zig package, `libhaus` | GitHub release | tag `zig-vX.Y.Z`, [zig-release.yml](.github/workflows/zig-release.yml) | ready, not released yet |
 | Rust | `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build`, `haus-fmt-cli`; `haus-fmt-money`, `-geo`, `-uuid` | crates.io | a version bump merged to main, [rust-release.yml](.github/workflows/rust-release.yml) | `haus-fmt` 0.1.0 published by hand (outdated); 0.2.0 being set up |
-| Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | | not yet (the name `haus-fmt` is held) |
+| Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | a version bump merged to main, [python-release.yml](.github/workflows/python-release.yml) | `haus-fmt-geo` and `-uuid` 1.0.0 published by hand; `haus-fmt` 0.1.0 and `-money` 1.0.0 with the workflow |
 | Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | | not yet |
 | Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | | not yet |
 | JVM | `org.haus-fmt:haus`, `haus-kotlin` | Maven Central | | not yet |
@@ -155,18 +155,58 @@ cargo publish -p <crate>
 cargo logout
 ```
 
-Crates that depend on it go after it. Then, on crates.io, in the crate's
+Crates that depend on it go after it. The token needs `publish-update` too
+when a crate it publishes exists already; a pattern `haus-fmt*` limits it to
+ours. crates.io limits new crates per account (`429 Too Many Requests` after
+about six in a row): wait for the time the error names, then publish the rest
+with `cargo publish -p`. Then, on crates.io, in the crate's
 settings → Trusted Publishing → Add: GitHub, owner `betalyra`, repository
 `haus-fmt`, workflow `rust-release.yml`, environment `crates-io`. The GitHub
 environment `crates-io` (Settings → Environments) allows deployments from the
 branch `main` only. Add the new crate to `CRATES` in the workflow, in
 dependency order.
 
+## Python
+
+Four projects: `haus-fmt` (`python/`, built with uv) and the schema packages
+`haus-fmt-money`, `-geo` and `-uuid` (`extensions/*/python/`, built with
+hatchling, which copies the schema files into the module). The schema packages
+have the version of their npm package, which the npm release PR writes into
+their `pyproject.toml`.
+
+A release is a PR that bumps a version. Merged, it runs
+[python-release.yml](.github/workflows/python-release.yml): it checks PyPI for
+each project's version, and for each new one runs its tests and builds it.
+A second job, the only one with the OIDC permission, uploads what was built,
+with attestations. A failed release: run the workflow by hand (Actions →
+Python release → Run workflow).
+
+### A new project
+
+PyPI can set up trusted publishing before a project exists, as a *pending
+publisher* (Account → Publishing): GitHub, owner `betalyra`, repository
+`haus-fmt`, workflow `python-release.yml`, environment `pypi`. The first upload
+by the workflow creates the project. But a pending publisher's configuration
+must be unique: only one project at a time can be pending with the same
+workflow and environment. For more at once, publish the others by hand once
+and give them ordinary publishers (the project's settings → Publishing), which
+may share a configuration:
+
+```sh
+cd extensions/<name>/python && uv build
+read -rs "UV_PUBLISH_TOKEN?PyPI token: " && echo && UV_PUBLISH_TOKEN=$UV_PUBLISH_TOKEN uv publish dist/*; unset UV_PUBLISH_TOKEN
+```
+
+The token: pypi.org → Account settings → API tokens, scope "Entire account"
+for a project that doesn't exist yet; delete it afterwards. uv may keep a
+token from an earlier upload and then not ask; passing it as above avoids a
+stale one. The GitHub environment `pypi` allows deployments from the branch
+`main` only.
+
 ## Not published yet
 
 To be filled in as each one is set up. What's known:
 
-- **Python:** PyPI supports trusted publishing.
 - **Go:** a module in a subdirectory is versioned by tags `go/vX.Y.Z`; the Go
   proxy picks them up, nothing is uploaded.
 - **Swift:** SwiftPM reads plain semver tags (`X.Y.Z` or `vX.Y.Z`) at the
