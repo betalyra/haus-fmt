@@ -15,6 +15,7 @@ supports it, so no registry token is stored in the repository's secrets.
 | Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | tag `vX.Y.Z` | 0.1.0 |
 | JVM | `org.haus-fmt:haus`, `org.haus-fmt:haus-kotlin` | Maven Central | a version bump merged to main, [jvm-release.yml](.github/workflows/jvm-release.yml) (secrets, no OIDC) | 0.1.0 by hand |
 | Roc | the Roc packages | GitHub release | | not yet |
+| Command line | `haus` (crate `haus-fmt-cli`): binaries, installers, Homebrew | GitHub release, tap `betalyra/homebrew-tap` | with the crate's release, [haus-fmt-cli-release.yml](.github/workflows/haus-fmt-cli-release.yml) (dist) | being set up |
 | Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | published, 0.2.0 (by the workflow) |
 
 ## npm
@@ -165,6 +166,34 @@ settings → Trusted Publishing → Add: GitHub, owner `betalyra`, repository
 environment `crates-io` (Settings → Environments) allows deployments from the
 branch `main` only. Add the new crate to `CRATES` in the workflow, in
 dependency order.
+
+## The command line
+
+`haus` (`rust/haus-cli`, the crate `haus-fmt-cli`) is also released as
+binaries, built by [dist](https://github.com/axodotdev/cargo-dist) from
+[dist-workspace.toml](dist-workspace.toml): macOS, Linux (glibc and musl) and
+Windows, on x86-64 and ARM, on a GitHub release tagged `haus-fmt-cli-vX.Y.Z`,
+with checksums, attestations, shell and PowerShell installers, and the
+formula `haus` in the tap `betalyra/homebrew-tap`:
+
+```sh
+brew install betalyra/tap/haus
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/betalyra/haus-fmt/releases/latest/download/haus-fmt-cli-installer.sh | sh
+```
+
+When the Rust release publishes a new `haus-fmt-cli`, it starts
+[haus-fmt-cli-release.yml](.github/workflows/haus-fmt-cli-release.yml), which
+makes the tag and the release. By hand (a failed or the first release):
+`gh workflow run haus-fmt-cli-release.yml -f tag=haus-fmt-cli-vX.Y.Z`.
+
+The workflow is generated: after a change to `dist-workspace.toml` (or a new
+dist), run `dist generate` and commit what it writes; it fails CI when it is
+out of date. It is named after `tag-namespace`, so it doesn't touch the npm
+`release.yml`.
+
+The formula is pushed to the tap with `HOMEBREW_TAP_TOKEN`, a repository
+secret: a fine-grained token that can write the contents of
+`betalyra/homebrew-tap` only, kept in 1Password and renewed before it expires.
 
 ## Python
 

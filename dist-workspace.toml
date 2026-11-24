@@ -1,0 +1,37 @@
+# The haus command line (rust/haus-cli, crate haus-fmt-cli, command `haus`):
+# binaries for each platform on a GitHub release, shell and PowerShell
+# installers, and the formula in the Homebrew tap betalyra/homebrew-tap
+# (PUBLISHING.md, "The command line"). Built by dist; its workflow is
+# .github/workflows/haus-fmt-cli-release.yml
+# (named after tag-namespace; `dist generate` rewrites it, `dist generate
+# --check` says when it is out of date).
+[workspace]
+members = ["cargo:rust"]
+
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.34.0"
+ci = "github"
+installers = ["shell", "powershell", "homebrew"]
+tap = "betalyra/homebrew-tap"
+formula = "haus"
+publish-jobs = ["homebrew"]
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+]
+install-path = "CARGO_HOME"
+install-updater = false
+github-attestations = true
+# Only the command line's tags (haus-fmt-cli-vX.Y.Z), not the other languages'.
+tag-namespace = "haus-fmt-cli"
+# Not on pull requests: CI builds and tests the command line already.
+pr-run-mode = "skip"
+# Started by the Rust release (rust-release.yml) once haus-fmt-cli is on
+# crates.io, with the tag to make: haus-fmt-cli-vX.Y.Z.
+dispatch-releases = true

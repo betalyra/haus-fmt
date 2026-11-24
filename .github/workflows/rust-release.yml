@@ -42,6 +42,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    outputs:
+      crates: ${{ steps.new.outputs.crates }}
+      cli-version: ${{ steps.new.outputs.cli-version }}
     defaults:
       run:
         working-directory: rust
@@ -67,6 +70,7 @@ jobs:
             esac
           done
           echo "crates=${new# }" >> "$GITHUB_OUTPUT"
+          echo "cli-version=$(awk '$1 == "haus-fmt-cli" { print $2 }' <<< "$versions")" >> "$GITHUB_OUTPUT"
       - name: Test
         if: steps.new.outputs.crates != ''
         run: cargo test --workspace --all-features
@@ -82,3 +86,18 @@ jobs:
           for crate in $NEW; do
             cargo publish -p "$crate"
           done
+
+  # A new haus-fmt-cli also gets its binaries, installers and Homebrew formula:
+  # the dist workflow, which tags the release haus-fmt-cli-vX.Y.Z.
+  cli:
+    needs: release
+    if: contains(format(' {0} ', needs.release.outputs.crates), ' haus-fmt-cli ')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Start the command line's release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: haus-fmt-cli-v${{ needs.release.outputs.cli-version }}
+        run: gh workflow run haus-fmt-cli-release.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" -f tag="$TAG"

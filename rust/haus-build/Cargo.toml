@@ -25,3 +25,7 @@ syn = { version = "3.0.10", default-features = false, features = ["full", "parsi
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Not released as binaries by dist (dist-workspace.toml): only the command line is.
+[package.metadata.dist]
+dist = false
