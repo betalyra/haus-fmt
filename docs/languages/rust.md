@@ -12,7 +12,7 @@ cargo add haus-fmt                  # imported as haus
 cargo add --build haus-fmt-build    # imported as haus_build: Rust types from schema files
 ```
 
-`haus-fmt-schema` (imported as `haus_schema`) checks data against a schema at run time, without generated types. Not on crates.io yet: until the first release, use the crates in [`rust/`](https://github.com/betalyra/haus-fmt/tree/main/rust) by path.
+`haus-fmt-schema` (imported as `haus_schema`) checks data against a schema at run time, without generated types.
 
 ## Read and write
 
@@ -99,5 +99,5 @@ Without them, the build prints a [`missing-codec`](/docs/errors#missing-codec) C
 
 - [README of the Rust crates](https://github.com/betalyra/haus-fmt/tree/main/rust): generated code, packages, limits and threads in full.
 - [Examples](https://github.com/betalyra/haus-fmt/tree/main/rust/examples): `quickstart`, `order` (codecs) and `logs` (a stream). Run `cargo run -p haus-example-order` in `rust/`.
-- The [`haus` command](/docs/cli) is built on these crates: `cargo install haus-fmt-cli`.
+- The [`haus` command](/docs/cli) is built on these crates: `brew install betalyra/tap/haus` or `cargo install haus-fmt-cli`.
 - [A tour of haus](/docs/tour) and [From schema to code](/docs/tours/typed).

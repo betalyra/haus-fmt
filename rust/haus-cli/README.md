@@ -11,11 +11,14 @@ comes with a stable code, a fix hint and a link to its documentation.
 ## Install
 
 ```sh
-cargo install haus-fmt-cli    # installs the `haus` command
+brew install betalyra/tap/haus     # macOS and Linux
+cargo install haus-fmt-cli         # anywhere with Rust
 ```
 
+Prebuilt binaries for macOS, Linux and Windows, with shell and PowerShell
+installers, are on each [release](https://github.com/betalyra/haus-fmt/releases?q=haus-fmt-cli).
 `haus --version` prints the version and the spec version it implements:
-`haus 0.1.0 (spec draft 0.1)`.
+`haus 0.2.0 (spec draft 0.1)`.
 
 ## Commands
 

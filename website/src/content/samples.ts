@@ -293,6 +293,23 @@ haus_doc_free(doc);
 haus_schema_free(schema);
 `;
 
+/** The command line on the thread example with one bad value: the real output of haus check (CommandLine.astro). */
+export const cliSession = `
+$ brew install betalyra/tap/haus
+$ haus check thread.haus
+error[type-mismatch]: expected Int, found the string "lots"
+  --> thread.haus:11:14
+   |
+11 |       likes: "lots",
+   |              ^^^^^^
+   |
+   = at: $.replies[0].likes
+   = hint: Write a value of the expected type; the message says which.
+   = docs: https://haus-fmt.org/docs/errors#type-mismatch
+
+Checked 1 file: 1 error.
+`;
+
 export const features = [
   {
     key: "write",

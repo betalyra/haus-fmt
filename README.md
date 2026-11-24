@@ -45,7 +45,8 @@ New kinds of events can show up later: a reader that only cares about users just
 
 - **Try it in the browser:** the [playground](https://haus-fmt.org/play) needs nothing installed.
 - **VS Code:** install **haus** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=betalyra.haus), or run `code --install-extension betalyra.haus`. You get highlighting, errors as you type, types on hover, formatting and schema inference.
-- **In your code:** libraries for [TypeScript](typescript/packages/haus) (with an [Effect adapter](typescript/packages/effect) and [typed imports](typescript/packages/import)), [Rust](rust), [Roc](roc), [Python](python), [Go](go) and [Zig](zig) (with a C ABI). See [Install](https://haus-fmt.org/docs/install).
+- **In your code:** libraries for [TypeScript](typescript/packages/haus) (with an [Effect adapter](typescript/packages/effect) and [typed imports](typescript/packages/import)), [Rust](rust), [Python](python), [Go](go), [Swift](swift), [Java and Kotlin](jvm), [Zig](zig) (with a C ABI) and [Roc](roc), on npm, crates.io, PyPI, Maven Central and the other registries. See [Install](https://haus-fmt.org/docs/install).
+- **On the command line:** `brew install betalyra/tap/haus` (or `cargo install haus-fmt-cli`) checks files against their schemas, formats them and hashes them.
 
 ## Learn more
 

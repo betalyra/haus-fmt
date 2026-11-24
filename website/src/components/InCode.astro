@@ -31,17 +31,17 @@ const fileTabs: Tab[] = [
 const guide = (label: string, page: string) => ({ label: `${label} guide`, href: `${links.languages}/${page}` });
 
 const languageTabs: Tab[] = [
-  { value: "ts", icon: "typescript", label: "TypeScript", caption: "haus schemas are Standard Schemas, so Zod, Valibot and ArkType work too.", more: guide("TypeScript", "typescript") },
-  { value: "effect", icon: "effect", label: "Effect", caption: "Int becomes bigint, Instant stays its exact text. DateTime is an opt-in.", more: guide("Effect", "effect") },
-  { value: "rust", icon: "rust", label: "Rust", caption: "haus-fmt-build generates the types at compile time.", more: guide("Rust", "rust") },
-  { value: "python", icon: "python", label: "Python", caption: "Values you can match on. With a schema file, haus.schema decodes into dicts and tagged values.", more: guide("Python", "python") },
-  { value: "go", icon: "go", label: "Go", caption: "Package schema loads the schema and checks values with it at run time.", more: guide("Go", "go") },
-  { value: "swift", icon: "swift", label: "Swift", caption: "Decode straight into your Codable structs.", more: guide("Swift", "swift") },
-  { value: "java", icon: "java", label: "Java", caption: "Decode into records and sealed interfaces; java.time is an opt-in.", more: guide("Java", "jvm") },
-  { value: "kotlin", icon: "kotlin", label: "Kotlin", caption: "Decode into data classes, with the same library as Java.", more: guide("Kotlin", "jvm") },
-  { value: "roc", icon: "roc", label: "Roc", caption: "haus-gen generates the types and their decoders from the schema.", more: guide("Roc", "roc") },
-  { value: "zig", icon: "zig", label: "Zig", caption: "A Decoded keeps every value exactly; codecs give you Zig types.", more: guide("Zig", "zig") },
-  { value: "c", icon: "c", label: "C", caption: "libhaus and haus.h, built from the Zig library, for C and anything that calls C.", more: guide("C", "zig#from-c") },
+  { value: "ts", icon: "typescript", label: "TypeScript", caption: "haus schemas are Standard Schemas, so Zod, Valibot and ArkType work too.", more: guide("TypeScript", "typescript"), install: { kind: "shell", text: "npm install @haus-fmt/haus" } },
+  { value: "effect", icon: "effect", label: "Effect", caption: "Int becomes bigint, Instant stays its exact text. DateTime is an opt-in.", more: guide("Effect", "effect"), install: { kind: "shell", text: "npm install @haus-fmt/effect effect" } },
+  { value: "rust", icon: "rust", label: "Rust", caption: "haus-fmt-build generates the types at compile time.", more: guide("Rust", "rust"), install: { kind: "shell", text: "cargo add haus-fmt && cargo add --build haus-fmt-build" } },
+  { value: "python", icon: "python", label: "Python", caption: "Values you can match on. With a schema file, haus.schema decodes into dicts and tagged values.", more: guide("Python", "python"), install: { kind: "shell", text: "pip install haus-fmt" } },
+  { value: "go", icon: "go", label: "Go", caption: "Package schema loads the schema and checks values with it at run time.", more: guide("Go", "go"), install: { kind: "shell", text: "go get github.com/betalyra/haus-fmt/go" } },
+  { value: "swift", icon: "swift", label: "Swift", caption: "Decode straight into your Codable structs.", more: guide("Swift", "swift"), install: { kind: "file", text: ".package(url: \"https://github.com/betalyra/haus-fmt\", from: \"0.1.0\")" } },
+  { value: "java", icon: "java", label: "Java", caption: "Decode into records and sealed interfaces; java.time is an opt-in.", more: guide("Java", "jvm"), install: { kind: "file", text: "implementation(\"org.haus-fmt:haus:0.1.0\")" } },
+  { value: "kotlin", icon: "kotlin", label: "Kotlin", caption: "Decode into data classes, with the same library as Java.", more: guide("Kotlin", "jvm"), install: { kind: "file", text: "implementation(\"org.haus-fmt:haus-kotlin:0.1.0\")" } },
+  { value: "roc", icon: "roc", label: "Roc", caption: "haus-gen generates the types and their decoders from the schema.", more: guide("Roc", "roc"), install: { kind: "note", text: "The package is in roc/package in the repository, for the Roc nightly." } },
+  { value: "zig", icon: "zig", label: "Zig", caption: "A Decoded keeps every value exactly; codecs give you Zig types.", more: guide("Zig", "zig"), install: { kind: "shell", text: "zig fetch --save=haus https://github.com/betalyra/haus-fmt/releases/download/zig-v0.1.0/haus-zig-0.1.0.tar.gz" } },
+  { value: "c", icon: "c", label: "C", caption: "libhaus and haus.h, built from the Zig library, for C and anything that calls C.", more: guide("C", "zig#from-c"), install: { kind: "note", text: "To download: libhaus, static or shared, for macOS, Linux and Windows, on the Zig release." } },
 ];
 
 const notes: { term: string; rest: string; color: Pigment }[] = [

@@ -17,7 +17,7 @@ The `haus` plugin adds a skill that Claude loads whenever a task touches `.haus`
 The skill holds the [cheat sheet](/docs/cheat-sheet), the check loop below, how to read `haus check --json`, a guide to designing schemas, and what to watch when converting JSON. It runs the [`haus` command](/docs/cli), so install that too:
 
 ```sh
-cargo install haus-fmt-cli
+brew install betalyra/tap/haus     # or: cargo install haus-fmt-cli
 ```
 
 The plugin also checks every `.haus` and `.schema.haus` file Claude writes or edits: after each change it runs `haus check` and hands any errors straight back to Claude, so invalid data can't slip through. It stays quiet when the file is valid or the `haus` command isn't installed.
@@ -75,5 +75,5 @@ After changing a `.haus` or `.schema.haus` file:
 
 `x.haus` is checked against `x.schema.haus` next to it; for another schema, pass `--schema file.schema.haus#Type`.
 Fix the data, not the schema, unless the task is to change the schema.
-Install the checker with `cargo install haus-fmt-cli`.
+Install the checker with `brew install betalyra/tap/haus` or `cargo install haus-fmt-cli`.
 ```

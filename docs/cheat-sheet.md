@@ -95,7 +95,7 @@ Also in the prelude: `String`, `Bool`, `Result e a`, and `Stream a` for a whole 
 
 ## The loop
 
-Install the [`haus` command](/docs/cli) with `cargo install haus-fmt-cli`.
+Install the [`haus` command](/docs/cli) with `brew install betalyra/tap/haus` or `cargo install haus-fmt-cli`.
 
 1. Write the `.haus` file, and a `.schema.haus` when the data has a fixed shape.
 2. `haus check order.haus` reports syntax errors with line and column. With a schema (`order.schema.haus` next to it, or `--schema s.schema.haus#Type`), it also reports values the schema rejects. `haus check .` checks a whole directory; `haus check --json` gives one JSON document with each error's `code`, `line`, `column`, `path` and `hint`. Exit code 0 is valid (hints allowed), 1 invalid, 2 a usage or I/O error.

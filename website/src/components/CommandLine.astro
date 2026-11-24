@@ -1,0 +1,43 @@
+---
+/** "On the command line.": the haus command, how to install it, and what an error looks like. */
+import SectionHeading from "./SectionHeading.astro";
+import Code from "./Code.astro";
+import Wash from "./Wash.astro";
+import { PiArrowRightLight } from "react-icons/pi";
+import { cliSession } from "@/content/samples";
+import { links } from "@/lib/links";
+---
+
+<section class="relative mx-auto w-full max-w-6xl px-6 py-20 lg:py-32" aria-labelledby="command-line">
+  <div class="grid grid-cols-[minmax(0,1fr)] items-center gap-12 lg:grid-cols-12 lg:gap-8">
+    <div class="lg:col-span-5">
+      <SectionHeading id="command-line">On the command line.</SectionHeading>
+      <p class="mt-5 max-w-[30rem] text-[1.12rem] text-ink-2">
+        <code class="inline-code">haus</code> checks your files against their schemas, formats them, and prints canonical
+        forms and hashes. Every error says where it is, has a code and a hint, and links to its docs. With
+        <code class="inline-code">--json</code>, scripts and agents get the same.
+      </p>
+      <p class="mt-5 max-w-[30rem] text-[0.98rem] text-ink-2">
+        Also <code class="inline-code">cargo install haus-fmt-cli</code>, or a
+        <a href="https://github.com/betalyra/haus-fmt/releases?q=haus-fmt-cli" class="prose-link text-ink">binary for Windows, macOS and Linux</a>.
+      </p>
+      <p class="mt-6 text-[0.98rem]">
+        <a href={links.cli} class="prose-link inline-flex items-center gap-1 text-ink">
+          Command line
+          <PiArrowRightLight aria-hidden="true" class="size-[0.9em]" />
+        </a>
+      </p>
+    </div>
+    <div class="relative isolate min-w-0 lg:col-span-7">
+      <Wash
+        seed={83}
+        class="-top-10 -left-10 -z-10 hidden h-[calc(100%+5rem)] w-[calc(100%+5rem)] lg:block"
+        strokes={[
+          { x: 0.04, y: 0.7, rx: 0.07, ry: 0.15, color: "sap", strength: 0.8 },
+          { x: 0.97, y: 0.25, rx: 0.05, ry: 0.12, color: "cerulean", strength: 0.85 },
+        ]}
+      />
+      <Code code={cliSession} lang="shellsession" label="terminal" size="sm" />
+    </div>
+  </div>
+</section>

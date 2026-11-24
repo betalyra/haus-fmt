@@ -11,8 +11,6 @@ Parse haus into plain JavaScript values, or decode it with a schema into typed o
 npm install @haus-fmt/haus
 ```
 
-Not on npm yet: until the first release, use [`typescript/packages/haus`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/haus) from the repository.
-
 ## Read and write
 
 ```ts
