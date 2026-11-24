@@ -15,7 +15,7 @@ supports it, so no registry token is stored in the repository's secrets.
 | Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | | not yet |
 | JVM | `org.haus-fmt:haus`, `haus-kotlin` | Maven Central | | not yet |
 | Roc | the Roc packages | GitHub release | | not yet |
-| Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | | not yet |
+| Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | 0.1.0 published by hand; the workflow is being set up |
 
 ## npm
 
@@ -89,6 +89,36 @@ shared. There is no Zig registry.
 git tag -s zig-vX.Y.Z -m "Zig binding X.Y.Z" && git push origin zig-vX.Y.Z
 ```
 
+## VS Code
+
+The extension (`editors/vscode`, its own pnpm workspace) goes to the Visual
+Studio Marketplace as `betalyra.haus`. A release is a PR that bumps the
+version in `editors/vscode/package.json` and moves the CHANGELOG's
+"Unreleased" under it. Merged, it runs
+[vscode-release.yml](.github/workflows/vscode-release.yml): when that version
+isn't on the Marketplace yet, it typechecks, packages the `.vsix`, publishes it
+and makes a GitHub release with it, tagged `vscode-vX.Y.Z`. A failed release:
+run the workflow by hand without "whoami".
+
+No secret. The job signs in to Microsoft Entra with its GitHub OIDC token, as
+an app that is a member of the Marketplace publisher. The setup, once:
+
+1. Entra (Azure portal → Microsoft Entra ID → App registrations): an app
+   `haus-vscode-publish`, single tenant. Under Certificates & secrets →
+   Federated credentials, a credential "GitHub Actions deploying Azure
+   resources": organization `betalyra`, repository `haus-fmt`, entity type
+   Environment, `vscode-marketplace`, audience `api://AzureADTokenExchange`.
+   The form asks for the numeric IDs too; GitHub's tokens for this repository
+   name them (`repo:betalyra@<org id>/haus-fmt@<repo id>:environment:vscode-marketplace`),
+   from `gh api orgs/betalyra` and `gh api repos/betalyra/haus-fmt`.
+2. GitHub (Settings → Environments): the environment `vscode-marketplace`,
+   deployments from the branch `main` only, with the variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` (the app's
+   client ID and the directory's tenant ID; identifiers, not secrets).
+3. Marketplace: run the workflow by hand with "whoami" (Actions → VS Code
+   release → Run workflow). It prints the app's Marketplace user ID; add that
+   ID as a Contributor on the publisher's Members page
+   (marketplace.visualstudio.com/manage/publishers/betalyra).
+
 ## Not published yet
 
 To be filled in as each one is set up. What's known:
@@ -104,8 +134,6 @@ To be filled in as each one is set up. What's known:
 - **JVM:** Maven Central has no trusted publishing: it needs a token and a
   signing key as secrets, and the namespace `org.haus-fmt` verified through a
   DNS record on haus-fmt.org.
-- **VS Code:** the Marketplace needs a personal access token for the
-  publisher `betalyra`.
 
 The plan is one version for all bindings, kept by changesets: the release PR
 then also copies `@haus-fmt/haus`'s version into each binding's manifest.

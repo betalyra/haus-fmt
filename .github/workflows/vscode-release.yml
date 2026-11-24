@@ -1,0 +1,119 @@
+# A release of the VS Code extension (editors/vscode). A push to main that
+# changes editors/vscode/package.json publishes, when its version isn't on the
+# Visual Studio Marketplace yet: bumping the version in a PR is the decision to
+# release. It typechecks, packages the extension, publishes the .vsix, and makes
+# a GitHub release with it, tagged vscode-vX.Y.Z.
+#
+# No secret: the job signs in to Microsoft Entra with this workflow's OIDC
+# token (an app registration with a federated credential for the environment
+# vscode-marketplace), and that app is a member of the Marketplace publisher
+# betalyra. The environment holds AZURE_CLIENT_ID and AZURE_TENANT_ID as
+# variables. See PUBLISHING.md.
+#
+# Run by hand: "whoami" prints the app's Marketplace user ID (what the
+# publisher's member list takes); otherwise it releases main's version if
+# it's new, e.g. to finish a failed release.
+name: VS Code release
+
+on:
+  push:
+    branches: [main]
+    paths: ["editors/vscode/package.json"]
+  workflow_dispatch:
+    inputs:
+      whoami:
+        description: "Only print the app's Marketplace user ID"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: vscode-release
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "26"
+  PNPM_VERSION: "12.4.1"
+  # The Azure DevOps resource the Marketplace accepts tokens for.
+  MARKETPLACE_RESOURCE: "499b84ac-1321-427f-aa17-267ca6975798"
+
+jobs:
+  whoami:
+    if: github.event_name == 'workflow_dispatch' && inputs.whoami
+    runs-on: ubuntu-latest
+    environment: vscode-marketplace
+    steps:
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: The app's Marketplace user ID
+        run: |
+          az rest -u https://app.vssps.visualstudio.com/_apis/profile/profiles/me --resource "$MARKETPLACE_RESOURCE" \
+            --query '{id: id, displayName: displayName}'
+
+  release:
+    if: github.event_name == 'push' || !inputs.whoami
+    runs-on: ubuntu-latest
+    environment: vscode-marketplace
+    permissions:
+      contents: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: editors/vscode/pnpm-lock.yaml
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Is this version new?
+        id: version
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          # Fails the job when the Marketplace doesn't answer, rather than taking the version for new.
+          published=$(pnpm exec vsce show betalyra.haus --json | jq -r '.versions[].version')
+          [ -n "$published" ] || { echo "no versions from the Marketplace"; exit 1; }
+          echo "On the Marketplace: $(echo $published)"
+          if printf '%s\n' "$published" | grep -qxF "$version"; then
+            echo "$version is on the Marketplace already: nothing to release"
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Typecheck
+        if: steps.version.outputs.new == 'true'
+        run: pnpm typecheck
+      - name: Package
+        if: steps.version.outputs.new == 'true'
+        run: pnpm package
+      - uses: azure/login@v2
+        if: steps.version.outputs.new == 'true'
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Publish to the Marketplace
+        if: steps.version.outputs.new == 'true'
+        run: pnpm exec vsce publish --azure-credential --packagePath haus.vsix
+      - name: The GitHub release, tagged vscode-vX.Y.Z
+        if: steps.version.outputs.new == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp haus.vsix "haus-$VERSION.vsix"
+          gh release create "vscode-v$VERSION" "haus-$VERSION.vsix" --target "$GITHUB_SHA" \
+            --title "VS Code extension $VERSION" \
+            --notes "The haus extension for VS Code $VERSION: https://marketplace.visualstudio.com/items?itemName=betalyra.haus"
