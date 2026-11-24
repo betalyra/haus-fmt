@@ -24,3 +24,6 @@ bench/.data/
 bench/.out/
 bench/speed/py/.venv/
 bench/speed/py/**/__pycache__/
+# Copies of LICENSE made by typescript/scripts/license.mts
+typescript/packages/*/LICENSE
+extensions/*/LICENSE

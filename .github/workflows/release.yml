@@ -1,0 +1,71 @@
+# The npm release (typescript/.changeset/README.md). On a push to main with
+# changesets pending, it opens or updates the release PR ("Release: npm"), which
+# bumps the versions and writes the changelogs. Merging that PR publishes every
+# package whose version isn't on npm yet and tags it (@haus-fmt/haus@0.2.0).
+#
+# Trusted publishing: npm takes this workflow's OIDC token, so no npm token is
+# stored in GitHub, and adds provenance. Each package lists this repository and
+# this file, release.yml, as its trusted publisher (on npmjs.com, the package's
+# settings): renaming the file means setting that again for every package. A
+# new package is published once by hand first (`pnpm release` after
+# `npm login`), since npm sets a trusted publisher only for an existing one.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "typescript/**"
+      - "extensions/**"
+      - ".github/workflows/release.yml"
+  # A re-run, e.g. to finish a partial publish: published versions are skipped.
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "26"
+  PNPM_VERSION: "12.4.1"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+          cache-dependency-path: typescript/pnpm-lock.yaml
+      - name: Install
+        working-directory: typescript
+        run: pnpm install --frozen-lockfile
+      - name: Test
+        working-directory: typescript
+        run: pnpm test
+      - name: Open the release PR, or publish
+        uses: changesets/action@v1
+        with:
+          cwd: typescript
+          version: pnpm version-packages
+          publish: pnpm release
+          title: "Release: npm"
+          commit: "Release: npm"
+          # GitHub makes the commit, signed, so it shows as verified.
+          commitMode: github-api
+          # Tags only; a GitHub release per package would be noise.
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

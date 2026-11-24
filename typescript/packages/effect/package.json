@@ -2,6 +2,21 @@
   "name": "@haus-fmt/effect",
   "version": "0.1.0",
   "description": "Decode haus data with Effect schemas",
+  "keywords": [
+    "haus",
+    "data-format",
+    "effect",
+    "schema",
+    "parser"
+  ],
+  "license": "MIT",
+  "homepage": "https://haus-fmt.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/betalyra/haus-fmt.git",
+    "directory": "typescript/packages/effect"
+  },
+  "bugs": "https://github.com/betalyra/haus-fmt/issues",
   "type": "module",
   "exports": {
     ".": {
@@ -10,7 +25,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "sideEffects": false,
   "scripts": {
@@ -20,7 +36,7 @@
     "lint": "effect-tsgo tsc@7.0.2 -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@haus-fmt/haus": "workspace:*"
+    "@haus-fmt/haus": "workspace:^"
   },
   "peerDependencies": {
     "effect": "^4.0.6"
@@ -32,5 +48,8 @@
     "effect": "4.0.6",
     "typescript": "5.9.3",
     "vitest": "5.0.5"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
