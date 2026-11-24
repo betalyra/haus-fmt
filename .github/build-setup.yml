@@ -1,0 +1,6 @@
+# Steps that dist (dist-workspace.toml, github-build-setup) puts before the
+# build in each job of haus-fmt-cli-release.yml: the runners' Rust can be
+# older than the workspace's rust-version (rust/Cargo.toml).
+- name: Rust stable
+  shell: bash
+  run: rustup update stable --no-self-update && rustup default stable && rustc --version
