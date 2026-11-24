@@ -9,13 +9,13 @@ supports it, so no registry token is stored in the repository's secrets.
 | TypeScript | `@haus-fmt/haus`, `@haus-fmt/effect`, `@haus-fmt/import` | npm | changesets, [release.yml](.github/workflows/release.yml) | published, 0.1.0 |
 | Schema packages | `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid` | npm | the same | published, 1.0.0 |
 | Zig, C | the Zig package, `libhaus` | GitHub release | tag `zig-vX.Y.Z`, [zig-release.yml](.github/workflows/zig-release.yml) | ready, not released yet |
-| Rust | `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build`, `haus-fmt-cli`; `haus-fmt-money`, `-geo`, `-uuid` | crates.io | | not yet (the name `haus-fmt` is held) |
+| Rust | `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build`, `haus-fmt-cli`; `haus-fmt-money`, `-geo`, `-uuid` | crates.io | a version bump merged to main, [rust-release.yml](.github/workflows/rust-release.yml) | `haus-fmt` 0.1.0 published by hand (outdated); 0.2.0 being set up |
 | Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | | not yet (the name `haus-fmt` is held) |
 | Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | | not yet |
 | Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | | not yet |
 | JVM | `org.haus-fmt:haus`, `haus-kotlin` | Maven Central | | not yet |
 | Roc | the Roc packages | GitHub release | | not yet |
-| Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | 0.1.0 published by hand; the workflow is being set up |
+| Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | published, 0.2.0 (by the workflow) |
 
 ## npm
 
@@ -119,13 +119,53 @@ an app that is a member of the Marketplace publisher. The setup, once:
    ID as a Contributor on the publisher's Members page
    (marketplace.visualstudio.com/manage/publishers/betalyra).
 
+## Rust
+
+Seven crates from the Cargo workspace in `rust/`:
+
+- `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build` and `haus-fmt-cli` share the
+  version in `rust/Cargo.toml` (`workspace.package.version`). Their
+  dependencies on each other name it too (`version = "0.2.0"` next to
+  `path`): bump those with it.
+- The schema crates `haus-fmt-money`, `-geo` and `-uuid` (in `extensions/`)
+  have the version of their npm package, which the npm release PR writes into
+  their `Cargo.toml`. Their README on crates.io is `README.rust.md`.
+
+A release is a PR that bumps a version. Merged, it runs
+[rust-release.yml](.github/workflows/rust-release.yml): it checks crates.io for
+each crate's version, and when one is new, runs the Rust tests and publishes
+the new ones, each after the crates it depends on. Merging the npm release PR
+that bumps a schema package publishes its crate the same way. A failed
+release: run the workflow by hand (Actions → Rust release → Run workflow).
+
+Before a PR: `cargo publish --workspace --dry-run` in `rust/` packages and
+builds every crate as crates.io would, against the workspace's unpublished
+versions.
+
+### A new crate
+
+crates.io sets up trusted publishing only for a crate that exists, so a new
+crate is published once by hand, from a clean main, with a token from
+crates.io (Account Settings → API Tokens, scope `publish-new`, short expiry):
+
+```sh
+cd rust
+cargo login            # paste the token
+cargo publish -p <crate>
+cargo logout
+```
+
+Crates that depend on it go after it. Then, on crates.io, in the crate's
+settings → Trusted Publishing → Add: GitHub, owner `betalyra`, repository
+`haus-fmt`, workflow `rust-release.yml`, environment `crates-io`. The GitHub
+environment `crates-io` (Settings → Environments) allows deployments from the
+branch `main` only. Add the new crate to `CRATES` in the workflow, in
+dependency order.
+
 ## Not published yet
 
 To be filled in as each one is set up. What's known:
 
-- **Rust:** crates.io supports trusted publishing. The crates depend on each
-  other, so they go out in order: `haus-fmt`, `haus-fmt-schema`,
-  `haus-fmt-build`, `haus-fmt-cli`, then the schema crates.
 - **Python:** PyPI supports trusted publishing.
 - **Go:** a module in a subdirectory is versioned by tags `go/vX.Y.Z`; the Go
   proxy picks them up, nothing is uploaded.

@@ -1,7 +1,7 @@
 [package]
 # Published as haus-fmt (the name haus is taken on crates.io), imported as haus.
 name = "haus-fmt"
-version = "0.1.0"
+version.workspace = true
 description = "The haus data format: parser and data model"
 readme = "../README.md"
 keywords = ["haus", "data-format", "parser", "serialization", "schema"]
