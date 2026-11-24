@@ -2,6 +2,22 @@
   "name": "@haus-fmt/haus",
   "version": "0.1.0",
   "description": "The haus data format: parser, writer, streams, schemas and Standard Schema support",
+  "keywords": [
+    "haus",
+    "data-format",
+    "parser",
+    "serialization",
+    "schema",
+    "standard-schema"
+  ],
+  "license": "MIT",
+  "homepage": "https://haus-fmt.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/betalyra/haus-fmt.git",
+    "directory": "typescript/packages/haus"
+  },
+  "bugs": "https://github.com/betalyra/haus-fmt/issues",
   "type": "module",
   "exports": {
     ".": {
@@ -26,7 +42,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "sideEffects": false,
   "scripts": {
@@ -42,5 +59,8 @@
     "typescript": "5.9.3",
     "vitest": "5.0.5",
     "zod": "4.1.12"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

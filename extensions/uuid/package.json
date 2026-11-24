@@ -2,6 +2,21 @@
   "name": "@haus-fmt/uuid",
   "version": "1.0.0",
   "description": "haus schema package: universally unique identifiers",
+  "keywords": [
+    "haus",
+    "data-format",
+    "uuid",
+    "rfc9562",
+    "schema"
+  ],
+  "license": "MIT",
+  "homepage": "https://haus-fmt.org",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/betalyra/haus-fmt.git",
+    "directory": "extensions/uuid"
+  },
+  "bugs": "https://github.com/betalyra/haus-fmt/issues",
   "type": "module",
   "exports": {
     ".": {
@@ -17,7 +32,13 @@
     "./profiles/*": "./profiles/*",
     "./package.json": "./package.json"
   },
-  "files": ["package.haus", "schema.haus", "profiles", "dist"],
+  "files": [
+    "package.haus",
+    "schema.haus",
+    "profiles",
+    "dist",
+    "ts/src"
+  ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -26,8 +47,8 @@
     "lint": "effect-tsgo tsc@7.0.2 -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "@haus-fmt/effect": "workspace:*",
-    "@haus-fmt/haus": "workspace:*",
+    "@haus-fmt/effect": ">=0.1.0",
+    "@haus-fmt/haus": ">=0.1.0",
     "effect": "^4.0.6"
   },
   "peerDependenciesMeta": {
@@ -49,5 +70,8 @@
     "effect": "4.0.6",
     "typescript": "5.9.3",
     "vitest": "5.0.5"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

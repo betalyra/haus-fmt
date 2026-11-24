@@ -4,6 +4,12 @@
   "scripts": {
     "build": "pnpm --filter './packages/*' build",
     "test": "pnpm build && pnpm --filter './packages/*' --filter '../extensions/*' test",
-    "typecheck": "pnpm build && pnpm -r typecheck"
+    "typecheck": "pnpm build && pnpm -r typecheck",
+    "changeset": "changeset",
+    "version-packages": "changeset version && node scripts/sync-versions.mts && pnpm install --lockfile-only",
+    "release": "pnpm build && pnpm --filter \"../extensions/*\" build && node scripts/sync-versions.mts --check && node scripts/license.mts && changeset publish"
+  },
+  "devDependencies": {
+    "@changesets/cli": "3.0.3"
   }
 }
