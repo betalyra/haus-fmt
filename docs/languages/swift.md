@@ -11,12 +11,10 @@ Add the repository with Swift Package Manager; its manifest is at the root:
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/betalyra/haus-fmt", branch: "main"),
+.package(url: "https://github.com/betalyra/haus-fmt", from: "0.1.0"),
 // and in your target:
 .product(name: "Haus", package: "haus-fmt"),
 ```
-
-No version is tagged yet, so depend on a branch or a commit.
 
 ## Read and write
 

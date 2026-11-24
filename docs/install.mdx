@@ -30,10 +30,6 @@ Cursor, VSCodium and Windsurf install extensions from Open VSX; haus is coming t
 
 ## Your language
 
-:::note[Not published yet]
-The libraries arrive on npm, crates.io, PyPI and the other registries with the first release. Until then, use them from the [repository](https://github.com/betalyra/haus-fmt). The commands below are the ones you'll use then.
-:::
-
 Each page has the install command, a first example, and what the library offers in that language. To compare them: [Languages](/docs/languages).
 
 <CardGrid>
@@ -42,8 +38,8 @@ Each page has the install command, a first example, and what the library offers 
   <LinkCard title="Rust" description="cargo add haus-fmt" href="/docs/languages/rust" />
   <LinkCard title="Python" description="pip install haus-fmt" href="/docs/languages/python" />
   <LinkCard title="Go" description="go get github.com/betalyra/haus-fmt/go" href="/docs/languages/go" />
-  <LinkCard title="Swift" description="Swift Package Manager: github.com/betalyra/haus-fmt" href="/docs/languages/swift" />
-  <LinkCard title="Java and Kotlin" description="A Gradle build in jvm/, for the JVM and Android" href="/docs/languages/jvm" />
+  <LinkCard title="Swift" description="Swift Package Manager: github.com/betalyra/haus-fmt, from 0.1.0" href="/docs/languages/swift" />
+  <LinkCard title="Java and Kotlin" description="org.haus-fmt:haus on Maven Central, for the JVM and Android" href="/docs/languages/jvm" />
   <LinkCard title="Roc" description="The package in roc/package, for the Roc nightly" href="/docs/languages/roc" />
   <LinkCard title="Zig and C" description="zig fetch a release; libhaus and haus.h for C" href="/docs/languages/zig" />
 </CardGrid>
@@ -51,10 +47,11 @@ Each page has the install command, a first example, and what the library offers 
 ## On the command line
 
 ```sh
-cargo install haus-fmt-cli
+brew install betalyra/tap/haus     # macOS and Linux
+cargo install haus-fmt-cli         # anywhere with Rust
 ```
 
-The `haus` command checks files against their schemas, formats them, and prints canonical forms and hashes, with JSON output for scripts and agents. See [Command line](/docs/cli).
+The `haus` command checks files against their schemas, formats them, and prints canonical forms and hashes, with JSON output for scripts and agents. Binaries for Windows and the rest are on the [releases](https://github.com/betalyra/haus-fmt/releases?q=haus-fmt-cli); see [Command line](/docs/cli).
 
 ## Next
 

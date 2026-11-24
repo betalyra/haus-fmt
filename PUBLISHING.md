@@ -8,15 +8,15 @@ supports it, so no registry token is stored in the repository's secrets.
 |---|---|---|---|---|
 | TypeScript | `@haus-fmt/haus`, `@haus-fmt/effect`, `@haus-fmt/import` | npm | changesets, [release.yml](.github/workflows/release.yml) | published, 0.1.0 |
 | Schema packages | `@haus-fmt/money`, `@haus-fmt/geo`, `@haus-fmt/uuid` | npm | the same | published, 1.0.0 |
-| Zig, C | the Zig package, `libhaus` | GitHub release | tag `zig-vX.Y.Z`, [zig-release.yml](.github/workflows/zig-release.yml) | ready, not released yet |
-| Rust | `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build`, `haus-fmt-cli`; `haus-fmt-money`, `-geo`, `-uuid` | crates.io | a version bump merged to main, [rust-release.yml](.github/workflows/rust-release.yml) | `haus-fmt` 0.1.0 published by hand (outdated); 0.2.0 being set up |
-| Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | a version bump merged to main, [python-release.yml](.github/workflows/python-release.yml) | `haus-fmt-geo` and `-uuid` 1.0.0 published by hand; `haus-fmt` 0.1.0 and `-money` 1.0.0 with the workflow |
-| Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | tag `go/vX.Y.Z` | v0.1.0 |
-| Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | tag `vX.Y.Z` | 0.1.0 |
-| JVM | `org.haus-fmt:haus`, `org.haus-fmt:haus-kotlin` | Maven Central | a version bump merged to main, [jvm-release.yml](.github/workflows/jvm-release.yml) (secrets, no OIDC) | 0.1.0 by hand |
-| Roc | the Roc packages | GitHub release | | not yet |
-| Command line | `haus` (crate `haus-fmt-cli`): binaries, installers, Homebrew | GitHub release, tap `betalyra/homebrew-tap` | with the crate's release, [haus-fmt-cli-release.yml](.github/workflows/haus-fmt-cli-release.yml) (dist) | being set up |
-| Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | published, 0.2.0 (by the workflow) |
+| Zig, C | the Zig package, `libhaus` | GitHub release | tag `zig-vX.Y.Z`, [zig-release.yml](.github/workflows/zig-release.yml) | published, 0.1.0 |
+| Rust | `haus-fmt`, `haus-fmt-schema`, `haus-fmt-build`, `haus-fmt-cli`; `haus-fmt-money`, `-geo`, `-uuid` | crates.io | a version bump merged to main, [rust-release.yml](.github/workflows/rust-release.yml) | published, 0.2.0 (schema crates 1.0.0) |
+| Python | `haus-fmt`; `haus-fmt-money`, `-geo`, `-uuid` | PyPI | a version bump merged to main, [python-release.yml](.github/workflows/python-release.yml) | published, 0.1.0 (schema packages 1.0.0) |
+| Go | `github.com/betalyra/haus-fmt/go` | the Go proxy, from git tags | tag `go/vX.Y.Z` | published, v0.1.0 |
+| Swift | `Haus` (root `Package.swift`) | SwiftPM, from git tags | tag `vX.Y.Z` | published, 0.1.0 |
+| JVM | `org.haus-fmt:haus`, `org.haus-fmt:haus-kotlin` | Maven Central | a version bump merged to main, [jvm-release.yml](.github/workflows/jvm-release.yml) (secrets, no OIDC) | published, 0.1.0 |
+| Roc | the Roc packages | GitHub release | | not yet, deferred |
+| Command line | `haus` (crate `haus-fmt-cli`): binaries, installers, Homebrew | GitHub release, tap `betalyra/homebrew-tap` | with the crate's release, [haus-fmt-cli-release.yml](.github/workflows/haus-fmt-cli-release.yml) (dist) | published, 0.2.0 |
+| Editors | VS Code extension `betalyra.haus` | VS Code Marketplace | a version bump merged to main, [vscode-release.yml](.github/workflows/vscode-release.yml) | published, 0.2.0 |
 
 ## npm
 
@@ -178,7 +178,7 @@ formula `haus` in the tap `betalyra/homebrew-tap`:
 
 ```sh
 brew install betalyra/tap/haus
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/betalyra/haus-fmt/releases/latest/download/haus-fmt-cli-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/betalyra/haus-fmt/releases/download/haus-fmt-cli-vX.Y.Z/haus-fmt-cli-installer.sh | sh
 ```
 
 When the Rust release publishes a new `haus-fmt-cli`, it starts

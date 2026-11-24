@@ -11,7 +11,7 @@ Decode haus with the Effect schemas you already write, or with schemas from `.sc
 npm install @haus-fmt/effect effect
 ```
 
-Not on npm yet: until the first release, use [`typescript/packages/effect`](https://github.com/betalyra/haus-fmt/tree/main/typescript/packages/effect) from the repository. It builds on [`@haus-fmt/haus`](/docs/languages/typescript).
+It builds on [`@haus-fmt/haus`](/docs/languages/typescript).
 
 ## Decode and encode
 

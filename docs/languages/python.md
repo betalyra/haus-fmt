@@ -11,8 +11,6 @@ Parse haus into frozen dataclasses you can `match` on, or decode it with a schem
 pip install haus-fmt
 ```
 
-Not on PyPI yet: until the first release, install [`python/`](https://github.com/betalyra/haus-fmt/tree/main/python) from the repository.
-
 ## Read and write
 
 ```python

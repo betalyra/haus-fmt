@@ -12,7 +12,24 @@ Parse haus into `Value`s, or decode it with a schema straight into your Java rec
 | `haus` | `org.hausfmt` | Java, and every JVM language |
 | `haus-kotlin` | `org.hausfmt.kotlin` | Kotlin extensions over it |
 
-Not on Maven Central yet: build both from [`jvm/`](https://github.com/betalyra/haus-fmt/tree/main/jvm) in the repository with `./gradlew build` (group `org.haus-fmt`).
+Both are on Maven Central:
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    implementation("org.haus-fmt:haus:0.1.0")
+    implementation("org.haus-fmt:haus-kotlin:0.1.0")   // for Kotlin
+}
+```
+
+```xml
+<!-- pom.xml -->
+<dependency>
+  <groupId>org.haus-fmt</groupId>
+  <artifactId>haus</artifactId>
+  <version>0.1.0</version>
+</dependency>
+```
 
 ## Read and write
 
