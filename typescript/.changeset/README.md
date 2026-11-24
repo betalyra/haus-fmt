@@ -11,3 +11,5 @@ collects them into a release PR; merging it publishes.
   bump is a new package version in the spec's sense, so only for a change that
   breaks its schema. `pnpm version-packages` copies their version into
   `package.haus`, `Cargo.toml` and `python/pyproject.toml`.
+
+The whole process, for every language: [PUBLISHING.md](../../PUBLISHING.md).
