@@ -237,7 +237,8 @@ extension Secret: Encodable where Wrapped: Encodable {
                 "<redacted>",
                 EncodingError.Context(
                     codingPath: encoder.codingPath,
-                    debugDescription: "a Secret is written only with its schema (SchemaType.encode): its value is not shown"
+                    debugDescription:
+                        "a Secret is written only with its schema (SchemaType.encode): its value is not shown"
                 ))
         }
         var container = encoder.singleValueContainer()
